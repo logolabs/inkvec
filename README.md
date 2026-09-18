@@ -11,6 +11,7 @@
   <a href="LICENSE"><img alt="Apache-2.0" src="https://img.shields.io/badge/licence-Apache--2.0-blue"></a>
   <a href="https://huggingface.co/spaces/logolabs/inkvec"><img alt="demo" src="https://img.shields.io/badge/🤗_demo-HuggingFace-orange"></a>
   <a href="https://huggingface.co/Logolabs/inkvec-denoiser-001"><img alt="model" src="https://img.shields.io/badge/model-inkvec--denoiser--001-yellow"></a>
+  <a href="https://huggingface.co/Logolabs/inkvec-sr-001"><img alt="model" src="https://img.shields.io/badge/model-inkvec--sr--001-yellow"></a>
 </p>
 
 Inkvec reads a PNG, JPEG, WebP, GIF, BMP or TIFF and writes an SVG whose geometry is decided by the evidence in the pixels:
@@ -134,6 +135,12 @@ inkvec <input> [-o <output.svg>] [OPTIONS]
 | `--minify` | off | No ids, no groups, no trailing zeros — ~10% smaller, identical geometry. |
 
 Run `inkvec --help` for the full list.
+
+### Shape harmonization (on by default)
+
+After fitting, marks that repeat across the drawing — a run of identical tabs, segmented rings, tiled glyphs — are matched by affine-normalized outline similarity (IoU threshold `--harmonize-threshold`, default 0.92) and redrawn from one consensus geometry per cluster. The pass exists to save parameters: on the 246-icon screen set it trims the parameter ratio from 1.466× to 1.457× the artist's count (−0.6%), concentrated in a couple of dozen drawings with genuinely repeated compound shapes (`osano` halves its path budget; disabling costs the most on `osano`, `badge-russian-ruble`, `perm_media`, `rule_folder`).
+
+The known cost is fidelity on fine-line art. The consensus averages the cluster's members, and on marks near the resolution of the raster — hairlines, thin rings, small rounded details — that average displaces thin lines by about a pixel and stamps rounded details toward the cluster's consensus shape. On the screen set it raises mean dE00 from **0.151** with the flag off to **0.299** with it on: 63 of 246 icons get measurably worse, 4 get better, and the other 179 are untouched (per-icon median 0.110 → 0.125). The worst cases are exactly the repeated-shape drawings the pass exists for — `rule_folder`, `perm_media`, `report`, `badge-russian-ruble`, `cat` — which is why those dominate the Results note above. On artwork of this kind, opt out with `--no-harmonize`. (The 0.149 pre-release mean quoted under Results predates this pass — measured on a build where it did not exist; this build measures 0.151 with the flag off, so the whole 0.15→0.30 move on that set is this pass.)
 
 ---
 

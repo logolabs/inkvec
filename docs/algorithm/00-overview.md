@@ -4,9 +4,9 @@
 > model-selection problem under one description-length objective.
 
 **Source:** the whole tree; this page indexes it.
-**Entry points:** `inkvec_trace::trace_color_full_with_alpha` (`crates/inkvec-trace/src/lib.rs:256`,
-called via `trace_color_full` at `lib.rs:245`) for the raster-to-planar-map half;
-`inkvec_cli::trace_image` (`crates/inkvec-cli/src/lib.rs:196`) for the whole command, intake
+**Entry points:** `inkvec_trace::trace_color_full_with_alpha` (`crates/inkvec-trace/src/lib.rs:275`,
+called via `trace_color_full` at `lib.rs:264`) for the raster-to-planar-map half;
+`inkvec_cli::trace_image` (`crates/inkvec-cli/src/lib.rs:242`) for the whole command, intake
 through SVG text.
 **Pipeline position:** none — this is the front door. Every numbered stage document assumes
 the reader has this one.
@@ -57,18 +57,18 @@ boundary is held to a tighter standard than a badly-localized one); `params` cou
 numbers written into the SVG; `lambda` is the exchange rate between a nat of residual and
 a nat of description length.
 
-`lambda` is not tuned by taste. `FitConfig::from_precision` (`crates/inkvec-fit/src/lib.rs:74-80`)
+`lambda` is not tuned by taste. `FitConfig::from_precision` (`crates/inkvec-fit/src/lib.rs:95`)
 derives it from what a coordinate actually costs to write down: a value confined to a range
 `extent` and stored to resolution `precision` carries `ln(extent / precision)` nats of
 information (clamped so the ratio is never below `e`, i.e. `lambda >= 1`). For a 256px
 canvas at 0.1px precision that is `ln(2560) ≈ 7.85` nats per coordinate pair — not the 1.0 a
 first guess suggests, and the difference is "roughly a factor of two in emitted segment
 count" per the doc comment. The fill-selection variant of the same idea is
-`gradient::bic_lambda(n) = 0.5 * ln(n)` (`crates/inkvec-trace/src/gradient.rs:292-298`), the
+`gradient::bic_lambda(n) = 0.5 * ln(n)` (`crates/inkvec-trace/src/gradient.rs:328-330`), the
 Bayesian information criterion value: a large region has to earn a gradient with
 proportionally more evidence than a small one does.
 
-`FitConfig::lambda`'s own doc comment (`inkvec-fit/src/lib.rs:52-59`) calls it "the constant
+`FitConfig::lambda`'s own doc comment (`crates/inkvec-fit/src/lib.rs:73-82`) calls it "the constant
 most likely to be mis-set in a way that looks like a pipeline defect" — worth remembering
 when a stage's output looks wrong and the fix turns out to be a units problem, not a logic
 one.
@@ -84,33 +84,33 @@ image -> intake -> trace -> fit -> repair -> emit -> post -> SVG
 ```
 
 The colour path proper — `trace_color_full_with_alpha` — runs the marks below, in order,
-each timed by the `Stopwatch` (`crates/inkvec-trace/src/lib.rs:1241-1260`, printed under
+each timed by the `Stopwatch` (`crates/inkvec-trace/src/lib.rs:1030-1055`, printed under
 `INKVEC_TIMING`):
 
 | mark | line | stage | what it decides |
 |---|---|---|---|
-| — | `inkvec-cli/src/lib.rs:196` | **intake** | decode, unblock a nearest-neighbour upscale, optional SR clean-up, resolution normalisation, alpha matting — doc `01-intake.md` |
-| `palette` | `trace/lib.rs:311` (`color::extract_palette_mdl`) | palette | how many inks, and which colours, by MDL against measured pixel noise |
-| `labels` | `trace/lib.rs:321` (`color::label_image`) | labels | which ink each pixel is assigned to |
-| `despeckle` | `trace/lib.rs:324` | despeckle | absorb regions below `min_region` into their most common neighbour |
-| `blend_absorb` | `trace/lib.rs:345` (`absorb_blend_slivers` / `reassign_blend_pixels`) | blend absorption | anti-aliased pixels between two inks are not a third ink; stop them minting sliver faces |
-| `merge_bands` | `trace/lib.rs:373` (`gradient::merge_gradient_bands_with_ink`) | gradient bands | whether adjacent palette bands are really one gradient |
-| `carve` | `trace/lib.rs:396` (`gradient::carve_residual_features`) | carve | cut out a feature the palette quantised into its surroundings before a gradient is asked to explain it |
-| `split` | `trace/lib.rs:409` (`split_components`) | split | a face is a *connected* region, not "everywhere this colour appears" |
-| `saddles` | `trace/lib.rs:451` (`merge_saddle_faces`) | saddle join | resolve the one ambiguity labels cannot: four pixels meeting diagonally at one corner |
-| `build_map` | `trace/lib.rs:454` (`planar::build`) | planar map | shared edges between exactly two faces, from the exact integer label grid |
-| `symmetry_detect` | `trace/lib.rs:458` (`symmetry::detect`) | symmetry detect | find mirror/rotation pairs on the label lattice, where the comparison is exact |
-| `refine_subpix` | `trace/lib.rs:461` (`planar::refine_subpixel`) | sub-pixel | slide each boundary point along its local normal to the measured 0.5-coverage level |
-| `refine_junc` | `trace/lib.rs:463` (`planar::refine_junctions`) | junctions | settle shared endpoints |
-| `boundary_opt` | `trace/lib.rs:473` (`boundary_opt::optimise`) | boundary solve | move every boundary point at once so the *rendered* partition matches the image |
-| `decode` | `trace/lib.rs:489` (`decode::decode_faces`) | decode | order-first colour/geometry fix for faces too thin to own a fully-covered pixel; off unless `INKVEC_DECODE` is set |
-| `symmetry` | `trace/lib.rs:495` (`symmetry::enforce`) | symmetry enforce | put back the exactness every upstream tie-break quietly broke |
-| — | `cli/lib.rs:829` (`trace_total`) | — | end of the `inkvec_trace` half |
-| — | `cli/lib.rs:899` (`fit_dp`) | curve fit | one global DP per boundary, `{line, cubic}` alphabet, MDL cost, primitives offered as an alternative and taken when they cost less |
-| — | `cli/lib.rs:992` (`repair`) | repair | close self-crossing rings the independent per-edge fits can produce |
-| — | `cli/lib.rs:1065` (`fills`) | fills | per-face fill model already chosen upstream; demote imperceptible gradients to flat here |
-| — | `cli/lib.rs:1179` (`emit`) | emit | fitted geometry to SVG text; layers vs. flat form costed against each other |
-| — | `cli/src/post.rs` | post | viewBox retarget, background knock-out, margin, minify |
+| — | `crates/inkvec-cli/src/lib.rs:242` | **intake** | decode, unblock a nearest-neighbour upscale, optional SR clean-up, resolution normalisation, alpha matting — doc `01-intake.md` |
+| `palette` | `crates/inkvec-trace/src/lib.rs:385` (`color::extract_palette_mdl` :372) | palette | how many inks, and which colours, by MDL against measured pixel noise |
+| `labels` | `crates/inkvec-trace/src/lib.rs:502` (`color::label_image` :387) | labels | which ink each pixel is assigned to |
+| `despeckle` | `crates/inkvec-trace/src/lib.rs:505` | despeckle | absorb regions below `min_region` into their most common neighbour |
+| `blend_absorb` | `crates/inkvec-trace/src/lib.rs:542` (`absorb_blend_slivers` / `reassign_blend_pixels`) | blend absorption | anti-aliased pixels between two inks are not a third ink; stop them minting sliver faces |
+| `merge_bands` | `crates/inkvec-trace/src/lib.rs:570` (`gradient::merge_gradient_bands_with_ink`) | gradient bands | whether adjacent palette bands are really one gradient |
+| `carve` | `crates/inkvec-trace/src/lib.rs:633` (`gradient::carve_residual_features`) | carve | cut out a feature the palette quantised into its surroundings before a gradient is asked to explain it |
+| `split` | `crates/inkvec-trace/src/lib.rs:646` (`split_components`) | split | a face is a *connected* region, not "everywhere this colour appears" |
+| `saddles` | `crates/inkvec-trace/src/lib.rs:965` (`merge_saddle_faces`) | saddle join | resolve the one ambiguity labels cannot: four pixels meeting diagonally at one corner |
+| `build_map` | `crates/inkvec-trace/src/lib.rs:968` (`planar::build`) | planar map | shared edges between exactly two faces, from the exact integer label grid |
+| `symmetry_detect` | `crates/inkvec-trace/src/lib.rs:972` (`symmetry::detect`) | symmetry detect | find mirror/rotation pairs on the label lattice, where the comparison is exact |
+| `refine_subpix` | `crates/inkvec-trace/src/lib.rs:975` (`planar::refine_subpixel`) | sub-pixel | slide each boundary point along its local normal to the measured 0.5-coverage level |
+| `refine_junc` | `crates/inkvec-trace/src/lib.rs:977` (`planar::refine_junctions`) | junctions | settle shared endpoints |
+| `boundary_opt` | `crates/inkvec-trace/src/lib.rs:987` (`boundary_opt::optimise`) | boundary solve | move every boundary point at once so the *rendered* partition matches the image |
+| `decode` | `crates/inkvec-trace/src/lib.rs:1003` (`decode::decode_faces`) | decode | order-first colour/geometry fix for faces too thin to own a fully-covered pixel; off unless `INKVEC_DECODE` is set |
+| `symmetry` | `crates/inkvec-trace/src/lib.rs:1013` (`symmetry::enforce`) | symmetry enforce | put back the exactness every upstream tie-break quietly broke |
+| — | `crates/inkvec-cli/src/pipeline.rs:363` (`trace_total`) | — | end of the `inkvec_trace` half |
+| — | `crates/inkvec-cli/src/pipeline.rs:585` (`fit_dp`) | curve fit | one global DP per boundary, `{line, cubic}` alphabet, MDL cost, primitives offered as an alternative and taken when they cost less |
+| — | `crates/inkvec-cli/src/pipeline.rs:699` (`repair`) | repair | close self-crossing rings the independent per-edge fits can produce |
+| — | `crates/inkvec-cli/src/pipeline.rs:774` (`fills`) | fills | per-face fill model already chosen upstream; demote imperceptible gradients to flat here |
+| — | `crates/inkvec-cli/src/pipeline.rs:894` (`emit`) | emit | fitted geometry to SVG text; layers vs. flat form costed against each other |
+| — | `crates/inkvec-cli/src/post.rs` | post | viewBox retarget, background knock-out, margin, minify |
 
 Crates: `inkvec-core` (geometry primitives), `inkvec-trace` (raster → planar map),
 `inkvec-fit` (points → curves), `inkvec-sr` (super-resolution pre-pass), `inkvec-cli`
@@ -125,14 +125,14 @@ verbatim because it is the whole design in one sentence:
 
 ```text
 bytes
-  -> Rgba                    (crates/inkvec-trace/src/coverage.rs:120-127; straight RGBA f32, [0,1])
-  -> Palette                 (crates/inkvec-trace/src/color.rs:569-581; Oklab colours + rgb + weight + alpha)
+  -> Rgba                    (crates/inkvec-trace/src/coverage.rs:128; straight RGBA f32, [0,1])
+  -> Palette                 (crates/inkvec-trace/src/color.rs:679; Oklab colours + rgb + weight + alpha)
   -> Vec<u16> labels         (per-pixel face id, NOT a palette index — split_components makes that so)
   -> PlanarMap { edges: Vec<Edge>, n_labels, width, height }
        Edge { points: Vec<Point>, sigma: Vec<f64>, left: u16, right: u16,
-              start_node, end_node, closed }   (crates/inkvec-trace/src/planar.rs:28-53)
-  -> FillFit { model: FillModel, chi2, params, cost }   (crates/inkvec-trace/src/gradient.rs:281-290)
-       FillModel::Flat | Linear | Radial       (gradient.rs:98-134)
+              start_node, end_node, closed }   (crates/inkvec-trace/src/planar.rs:29)
+  -> FillFit { model: FillModel, chi2, params, cost }   (crates/inkvec-trace/src/gradient.rs:311)
+       FillModel::Flat | Linear | Radial       (gradient.rs:101)
   -> Polyline (per edge, in content units)  -> FittedPath { start, segments: Vec<Segment>, closed }
        Segment::Line | Cubic | (Primitive fits carried alongside: PrimitiveFit)
   -> FaceRings (which edges each face walks, and which way)  -> SVG path strings (emit.rs)

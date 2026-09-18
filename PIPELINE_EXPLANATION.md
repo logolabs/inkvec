@@ -85,8 +85,8 @@ Inkvec sits at the intersection of classical computational geometry, perceptual 
 
 #### SuperSVG & Optimize-and-Reduce (O&R)
 * **Citations:** 
-  * *SuperSVG*, CVPR 2024 (arXiv:2406.09794)
-  * *Optimize and Reduce: Scalable Vector Graphics Generation with Optimization*, arXiv:2312.11334
+  * *SuperSVG: Superpixel-based Scalable Vector Graphics Synthesis*, CVPR 2024 (arXiv:2406.09794)
+  * *Optimize and Reduce: A Top-Down Approach for Image Vectorization*, arXiv:2312.11334
   * *DiffVG: Differentiable Vector Graphics Rasterization*, Li et al., ACM TOG 2020
   * *LIVE: Towards Layer-wise Image Vectorization*, Ma et al., CVPR 2022
 * **Core Insight:** Differentiable rasterizers compute gradients of pixel color with respect to control point positions $\frac{\partial I}{\partial P}$. While mathematically elegant, naive differentiable rendering entangles topology with continuous curve parameters. When left unconstrained, paths self-intersect, edges sprout redundant handles, and geometry collapses into uneditable "blobs".
@@ -645,7 +645,7 @@ All graphics and diagrams generated for Inkvec adhere strictly to the **LogoLabs
 1. **Ahn, S. J.** (2004). *Least Squares Orthogonal Distance Fitting of Curves and Surfaces in Space*. Lecture Notes in Computer Science, Vol. 3151. Springer. [DOI: 10.1007/b99424](https://doi.org/10.1007/b99424)
 2. **Ahn, S. J., Rauh, W., & Warnecke, H. J.** (2001). *Least-squares orthogonal distances fitting of circle, sphere, ellipse, hyperbola, and parabola*. Pattern Recognition, 34(12), 2283–2296.
 3. **Chakraborty, S., et al.** (2025). *Image Vectorization via Gradient Reconstruction*. Computer Graphics Forum (CGF 2025).
-4. **Du, Y., et al.** (2023). *Image vectorization and editing via linear gradient layer decomposition*. ACM Transactions on Graphics (SIGGRAPH 2023).
+4. **Du, Z.-J., et al.** (2023). *Image vectorization and editing via linear gradient layer decomposition*. ACM Transactions on Graphics (SIGGRAPH 2023).
 5. **Guo, H., et al.** (2024). *MambaIR: A Simple Baseline for Image Restoration with State-Space Model*. European Conference on Computer Vision (ECCV 2024). [arXiv:2402.15648](https://arxiv.org/abs/2402.15648)
 6. **Levien, R.** (2021). *Fitting cubic Bézier curves*. [Online Article](https://raphlinus.github.io/curves/2021/03/11/bezier-fitting.html).
 7. **Levien, R.** (2023). *Simplifying Bézier paths*. [Online Article](https://raphlinus.github.io/curves/2023/04/18/bezpath-simplify.html).
@@ -655,15 +655,15 @@ All graphics and diagrams generated for Inkvec adhere strictly to the **LogoLabs
 11. **Ottosson, B.** (2020). *A perceptual color space for computer graphics (OKLab)*. [Online Article](https://bottosson.github.io/posts/oklab/).
 12. **Rissanen, J.** (1978). *Modeling by shortest data description*. Automatica, 14(5), 465–471.
 13. **Schneider, P. J.** (1990). *An Algorithm for Automatically Fitting Digitized Curves*. Graphics Gems, Academic Press, 612–626.
-14. **Schwarz, G.** (1978). *Estimating the Dimension of a Model*. The Annals of Statistics, 6(2), 461–464.
+14. **Schwarz, G.** (1978). *Estimating the Dimension of a Model*. The Annals of Statistics, 461–464.
 15. **Selinger, P.** (2003). *Potrace: a polygon-based tracing algorithm*. [Technical Report](https://potrace.sourceforge.net/potrace.pdf).
 16. **Shewchuk, J. R.** (1997). *Adaptive Precision Floating-Point Arithmetic and Fast Robust Geometric Predicates*. Discrete & Computational Geometry, 18(3), 305–363.
 17. **Taubin, G.** (1991). *Estimation of planar curves, surfaces, and nonplanar space curves defined by implicit equations with applications to edge and range image segmentation*. IEEE TPAMI, 13(11), 1115–1138.
-18. **Yang, S., et al.** (2023). *Subpixel Deblurring of Anti-Aliased Raster Clip-Art*. Computer Graphics Forum, 42(2), 227–238.
+18. **Yang, J., et al.** (2023). *Subpixel Deblurring of Anti-Aliased Raster Clip-Art*. Computer Graphics Forum, 42(2), 227–238.
 19. *AnchorFlow: Editable SVG Reconstruction via Sparse Anchor Point Fields*, [arXiv:2605.19551](https://arxiv.org/abs/2605.19551) (May 2026).
 20. *VectorArk: Enhancing Vector Graphic Generation via Structural Priors*, [arXiv:2605.24398](https://arxiv.org/abs/2605.24398) (CVPR 2026).
-21. *SuperSVG: Superpixel-based Dynamic Vectorization*, [arXiv:2406.09794](https://arxiv.org/abs/2406.09794) (CVPR 2024).
-22. *Optimize and Reduce: Scalable Vector Graphics Generation with Optimization*, [arXiv:2312.11334](https://arxiv.org/abs/2312.11334).
+21. *SuperSVG: Superpixel-based Scalable Vector Graphics Synthesis*, [arXiv:2406.09794](https://arxiv.org/abs/2406.09794) (CVPR 2024).
+22. *Optimize and Reduce: A Top-Down Approach for Image Vectorization*, [arXiv:2312.11334](https://arxiv.org/abs/2312.11334).
 23. *LayerPeeler: Layered Vector Graphics Decomposition via Occlusion Reasoning*, [arXiv:2505.23740](https://arxiv.org/abs/2505.23740).
 24. *AmodalSVG: Occlusion-Aware Primitive Vectorization and Layer Inpainting*, [arXiv:2604.10940](https://arxiv.org/abs/2604.10940).
 25. *VectorGym: A Benchmark for Structural and Multitask Vector Graphics*, [arXiv:2603.29852](https://arxiv.org/abs/2603.29852).

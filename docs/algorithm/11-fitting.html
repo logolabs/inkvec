@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Curve fitting — inkvec</title>
+<link rel="stylesheet" href="assets/doc.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="masthead">
+    <p class="eyebrow">Stage 11 of 14</p>
+    <h1>Choosing the fewest shapes that still tell the truth</h1>
+    <p class="standfirst">A boundary arrives as hundreds of measured points, each with its
+      own honest uncertainty. This stage decides how to draw it — straight lines, curves, or
+      arcs — using as few of them as the measurement allows, and not one fewer.</p>
+    <p class="pairlink">Technical reference: <a href="11-fitting.md">11-fitting.md</a></p>
+  </header>
+  <main>
+
+    <section>
+      <h2>The problem with "trace every point"</h2>
+      <p>The most literal way to redraw a boundary is to visit every point the earlier
+        stages measured and connect them with straight lines. That produces a shape made of
+        hundreds of tiny segments — technically accurate, and useless. Every jitter in the
+        original measurement becomes a visible kink. A circle drawn this way is not a circle;
+        it is a many-sided polygon wearing a circle's outline.</p>
+      <p>The opposite mistake is just as real. Describe the same boundary with too few
+        shapes — one long curve standing in for what was actually three — and the drawing
+        drifts visibly away from the true edge. Too many shapes wastes effort recording noise.
+        Too few loses the picture. This stage finds the point in between: the fewest shapes
+        that still explain what was actually measured.</p>
+      <figure>
+        <svg viewBox="0 0 640 260" role="img" aria-label="The same curved boundary described three ways: too many segments, too few, and the optimum">
+          <text x="20" y="22" class="fig-label-strong">The same edge, described three ways</text>
+
+          <g transform="translate(20,40)">
+            <text x="0" y="0" class="fig-label">Too many shapes — chases every wobble</text>
+            <polyline points="0,60 8,52 15,49 24,44 34,42 45,40 58,39 70,41 82,45 92,50 100,57 106,64 108,72 106,80 100,87 90,92 78,95 64,96 50,95 38,92 26,87 16,80 8,72 3,63 0,60"
+              fill="none" class="fig-accent-stroke" stroke-width="1.5"/>
+            <text x="130" y="65" class="fig-label">every jitter becomes a corner</text>
+          </g>
+
+          <g transform="translate(220,40)">
+            <text x="0" y="0" class="fig-label">Too few shapes — misses the shape</text>
+            <ellipse cx="55" cy="68" rx="30" ry="20" fill="none" class="fig-accent-stroke" stroke-width="1.5"/>
+            <path d="M 25,55 Q 55,20 90,55" fill="none" stroke="var(--ink-faint)" stroke-width="1.2" stroke-dasharray="3 3"/>
+            <text x="130" y="65" class="fig-label">the true bulge is gone</text>
+          </g>
+
+          <g transform="translate(420,40)">
+            <text x="0" y="0" class="fig-label">The optimum — as few as it can afford</text>
+            <path d="M 25,68 C 25,48 40,38 55,38 C 70,38 85,48 85,68 C 85,88 70,98 55,98 C 40,98 25,88 25,68 Z"
+              fill="none" class="fig-accent-stroke" stroke-width="1.8"/>
+            <circle cx="25" cy="68" r="2.5" class="fig-accent"/>
+            <circle cx="55" cy="38" r="2.5" class="fig-accent"/>
+            <circle cx="85" cy="68" r="2.5" class="fig-accent"/>
+            <circle cx="55" cy="98" r="2.5" class="fig-accent"/>
+            <text x="130" y="65" class="fig-label">four points, smooth curves</text>
+          </g>
+
+          <text x="20" y="230" class="fig-label" fill="var(--ink-soft)">Each dot in the third panel is a
+            deliberate decision. Nothing is left to the shape of the noise.</text>
+        </svg>
+        <figcaption>The first panel is faithful to the noise. The second is faithful to
+          nothing. The third is faithful to the boundary, at the smallest cost in numbers.
+        </figcaption>
+      </figure>
+    </section>
+
+    <section>
+      <h2>A single rule that trades honesty for economy</h2>
+      <p>Every candidate description — a line here, a curve there, a break at this point or
+        that one — is priced by one rule: how well it matches what was measured, plus a fixed
+        charge for every number it takes to write down. A description that matches slightly
+        worse but needs six fewer numbers can still win, if the six numbers cost more than the
+        small mismatch is worth. A description that matches almost perfectly but needs twenty
+        extra numbers to do it usually loses.</p>
+      <p>This is the same idea as writing a good summary of a long report. A summary that
+        keeps every sentence is not a summary. A summary that drops the argument to save a
+        paragraph is not faithful. The useful summary sits between the two, and the test for
+        where to stop is whether the next sentence you could add is worth the space it takes.
+        This stage runs that test formally, on every possible boundary and every possible
+        shape, rather than by feel.</p>
+      <div class="aside">The charge per number is not picked by taste. It comes from how big
+        the picture is and how precisely coordinates will eventually be written — a
+        calculation the code does once, honestly, rather than a knob someone tunes until the
+        picture looks right.</div>
+    </section>
+
+    <section>
+      <h2>The most surprising fact in this stage</h2>
+      <p>It would be reasonable to expect that charge-per-number to be a sensitive knob —
+        turn it up, get a much simpler drawing; turn it down, get a much more detailed one.
+        It is not. The charge enters the trade-off under a square root, and the charge itself
+        is a logarithm of image size divided by output precision. Two dampening effects,
+        stacked.</p>
+      <p>Concretely: doubling the charge per number widens how far a curve is allowed to
+        drift from the measured points by only about 41%, not 100%. And getting the charge to
+        double in the first place needs the image to become ten times bigger, or the output
+        precision to become ten times finer. Put together, changing the output precision by a
+        factor of ten moves the actual shape of the drawing by only about 13%.</p>
+      <p>That is the opposite of what a "quality knob" is supposed to do, and it is
+        deliberate rather than accidental — a genuine measurement of how flat this trade-off
+        is was made on the real corpus, and it stayed flat across a wide range of settings
+        that looked, on paper, very different. The two real levers this stage has are how
+        precisely each point was actually measured — inherited from earlier stages, not set
+        here — and the fixed price of each kind of shape in the alphabet. Turning the
+        headline knob is close to turning nothing at all.</p>
+      <figure>
+        <svg viewBox="0 0 640 190" role="img" aria-label="A square root dampens how much the number-charge affects the curve; a tenfold change in precision moves the shape by about thirteen percent">
+          <text x="20" y="22" class="fig-label-strong">Why the knob barely turns anything</text>
+          <g transform="translate(30,50)">
+            <text x="0" y="0" class="fig-label">precision changes 10x</text>
+            <rect x="0" y="10" width="140" height="14" fill="var(--copper-soft)"/>
+            <rect x="0" y="10" width="140" height="14" fill="none" stroke="var(--rule)"/>
+            <text x="150" y="21" class="fig-label">full swing</text>
+          </g>
+          <g transform="translate(30,90)">
+            <text x="0" y="0" class="fig-label">-&gt; the charge per number changes ~2.3x (a logarithm)</text>
+            <rect x="0" y="10" width="60" height="14" fill="var(--copper-soft)"/>
+            <rect x="0" y="10" width="140" height="14" fill="none" stroke="var(--rule)" stroke-dasharray="2 2"/>
+            <text x="150" y="21" class="fig-label">already much less</text>
+          </g>
+          <g transform="translate(30,130)">
+            <text x="0" y="0" class="fig-label">-&gt; the drawing itself changes ~13% (a square root on top)</text>
+            <rect x="0" y="10" width="18" height="14" class="fig-accent"/>
+            <rect x="0" y="10" width="140" height="14" fill="none" stroke="var(--rule)" stroke-dasharray="2 2"/>
+            <text x="150" y="21" class="fig-label" fill="var(--copper)">what you actually see</text>
+          </g>
+        </svg>
+        <figcaption>Two separate dampening effects — a logarithm, then a square root — sit
+          between the setting a person turns and the shape they see change.</figcaption>
+      </figure>
+    </section>
+
+    <section>
+      <h2>Searching every possible place to break the line</h2>
+      <p>Deciding where to put the joins between shapes is not a matter of eyeballing corners.
+        The method considers every possible split of the boundary into pieces, and for every
+        piece, every shape in the alphabet that could describe it, and finds the single
+        combination that adds up to the lowest total price. This sounds like it should be
+        catastrophically slow — checking every combination of every split — but the trick is
+        that the best way to reach any given point on the boundary only ever depends on the
+        best way to reach some earlier point, never on guessing the whole path at once. That
+        lets the search build its answer forward, point by point, keeping only the best route
+        to each point rather than re-exploring the world from the start every time.</p>
+      <p>This is checked, not just argued: an independent brute-force search that genuinely
+        tries every combination is run on hundreds of small test shapes, and its answer is
+        required to match the fast method's answer, on the nose, every time.</p>
+    </section>
+
+    <section>
+      <h2>What the alphabet contains, and what each letter costs</h2>
+      <p>A straight line is the cheapest shape — two numbers, an endpoint. A smooth curve
+        costs six numbers — two control handles plus an endpoint — because it can bend in
+        ways a line cannot. A circular arc sits in between at five numbers, and it earns its
+        place honestly: many real logos and icons are drawn from actual circles, and an arc
+        describes that shape exactly, at less cost than the curve that would otherwise be
+        needed to approximate it.</p>
+      <p>Lines alone hit a wall no amount of clever placement can fix. Approximating a circle
+        with straight chords needs dozens of short segments to stay accurate; four well-placed
+        curves do the same job to a fraction of a percent of error. So the alphabet has to
+        include curves and arcs, not because lines are wrong, but because some shapes simply
+        cannot be told cheaply in a language that only has straight lines.</p>
+      <div class="aside">One curious refinement: when a stretch of straight-seeming boundary
+        turns out to fit a circle four times better than it fits a line, that consistent bulge
+        is itself treated as evidence against the line — even before the circle wins outright.
+        A boundary that leans the same way, point after point, is not behaving like noise.</div>
+    </section>
+
+    <section>
+      <h2>Corners are not where the measurement puts them</h2>
+      <p>A camera, or a rendering engine, cannot draw an infinitely sharp corner — it always
+        rounds the very tip off by a pixel or so, the same way a photograph of a sharp table
+        edge shows a hint of blur right at the point. Trusting the measured point at a corner
+        literally would draw every corner very slightly rounded, and would waste an extra
+        shape bridging the rounding on the way there.</p>
+      <p>The fix is to find where the two straight edges either side of a corner actually
+        meet, algebraically, rather than trust the rounded sample sitting between them — but
+        only where there is genuinely a corner to find. Trying this on a smooth curve, where
+        two neighbouring pieces are nearly parallel, is like trying to find where two nearly
+        parallel roads on a map cross: the answer exists on paper but can be miles from
+        either road. So the correction only fires where two pieces meet at a real angle, and
+        even then, only up to a distance the measurement's own honesty allows — never further
+        than the corner could plausibly have been rounded by the rendering process that
+        produced it in the first place.</p>
+    </section>
+
+    <section>
+      <h2>Passes that clean up afterwards, on by default and off by default</h2>
+      <p>Two small tidy-up passes run automatically after every fit: rejoining a short run of
+        segments into one smooth curve when a corner's rigid geometry made it look artificially
+        expensive, and replacing a curve that is really just the camera's rounding of a corner
+        with the sharp corner it stands in for.</p>
+      <p>Two more exist in the code but do not run unless specifically switched on. One would
+        snap a line to be perfectly horizontal or vertical when the measurement genuinely
+        cannot tell it apart from one — real drawings do this constantly, and the evidence for
+        it is strong, but turning it on made almost no measurable difference to the finished
+        picture, so it ships off. The other would rewrite two neighbouring curves to share a
+        handle exactly, the shorthand professional design tools write automatically — again,
+        well-supported by how real artwork looks, and again, not switched on by default. Both
+        remain available, tested against real evidence, simply dormant.</p>
+    </section>
+
+  </main>
+  <nav class="stages">
+    <a href="00-overview.html">Overview</a>
+    <a href="01-intake.html">1 Intake</a>
+    <a href="02-coverage.html">2 Coverage</a>
+    <a href="03-palette.html">3 Palette</a>
+    <a href="04-regions.html">4 Regions</a>
+    <a href="05-gradients.html">5 Gradients</a>
+    <a href="06-planar-map.html">6 Planar map</a>
+    <a href="07-subpixel.html">7 Sub-pixel</a>
+    <a href="08-boundary-solve.html">8 Boundary solve</a>
+    <a href="09-decode.html">9 Decode</a>
+    <a href="10-symmetry.html">10 Symmetry</a>
+    <a href="11-fitting.html" aria-current="page">11 Curve fitting</a>
+    <a href="12-repair.html">12 Repair</a>
+    <a href="13-emit.html">13 Emit</a>
+    <a href="constants.md">Constants</a>
+  </nav>
+</div>
+</body>
+</html>

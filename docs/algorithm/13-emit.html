@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Writing the document — inkvec</title>
+<link rel="stylesheet" href="assets/doc.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="masthead">
+    <p class="eyebrow">Stage 13 of 14</p>
+    <h1>Writing the document without losing what was already right</h1>
+    <p class="standfirst">Every decision about the picture — the curves, the colours, what
+      sits on top of what — has already been made by the time this stage runs. All that is
+      left is turning that into the actual text of an SVG file, and it turns out that even
+      this "just write it down" step can throw away real accuracy if it is careless.</p>
+    <p class="pairlink">Technical reference: <a href="13-emit.md">13-emit.md</a></p>
+  </header>
+  <main>
+
+    <section>
+      <h2>Rounding a correct answer is still a way of getting it wrong</h2>
+      <p>An SVG file stores every coordinate as plain text — a number with some digits after
+        the decimal point. How many digits to keep looks like a housekeeping choice: fewer
+        digits, a smaller file; more digits, a bigger one, with no real difference to the eye.
+        For a long time this tracer kept one digit after the decimal point, rounding every
+        coordinate to the nearest tenth of a pixel.</p>
+      <p>The curves themselves, by the time they reach this stage, are measured far more
+        precisely than that — typically accurate to somewhere between one and six hundredths
+        of a pixel. Rounding a number that precise down to the nearest tenth throws away real
+        information the earlier stages worked hard to get right. It is the equivalent of
+        carefully measuring a room to the nearest millimetre and then writing the result down
+        rounded to the nearest centimetre, for no reason except habit.</p>
+      <figure>
+        <svg viewBox="0 0 640 260" role="img" aria-label="A smooth curve rounded to one decimal place develops small steps and kinks; the same curve rounded to two decimal places stays smooth">
+          <text x="20" y="22" class="fig-label-strong">The same curve, two ways of writing its numbers down</text>
+
+          <g transform="translate(40,50)">
+            <text x="0" y="0" class="fig-label">Rounded to a tenth of a pixel — a staircase hiding under a smooth curve</text>
+            <path d="M 0,90 C 0,90 8,60 8,60 C 16,32 60,20 100,20 C 140,20 184,32 192,60 C 192,60 200,90 200,90"
+              fill="none" stroke="var(--ink-faint)" stroke-width="1" stroke-dasharray="3 3"/>
+            <path d="M 0,90 L 8,60 L 16,32 L 60,20 L 100,20 L 140,20 L 184,32 L 192,60 L 200,90"
+              fill="none" class="fig-accent-stroke" stroke-width="2"/>
+            <circle cx="0" cy="90" r="2.5" class="fig-accent"/>
+            <circle cx="8" cy="60" r="2.5" class="fig-accent"/>
+            <circle cx="16" cy="32" r="2.5" class="fig-accent"/>
+            <circle cx="100" cy="20" r="2.5" class="fig-accent"/>
+            <circle cx="184" cy="32" r="2.5" class="fig-accent"/>
+            <circle cx="192" cy="60" r="2.5" class="fig-accent"/>
+            <circle cx="200" cy="90" r="2.5" class="fig-accent"/>
+          </g>
+
+          <g transform="translate(340,50)">
+            <text x="0" y="0" class="fig-label">Rounded to a hundredth of a pixel — the curve keeps its shape</text>
+            <path d="M 0,90 C 0,58 20,20 100,20 C 180,20 200,58 200,90"
+              fill="none" class="fig-accent-stroke" stroke-width="2"/>
+            <circle cx="0" cy="90" r="2" class="fig-accent"/>
+            <circle cx="200" cy="90" r="2" class="fig-accent"/>
+          </g>
+
+          <text x="40" y="220" class="fig-label" fill="var(--ink-soft)">Exaggerated here to make it visible. On a real drawing the effect is a softening of every</text>
+          <text x="40" y="240" class="fig-label" fill="var(--ink-soft)">curve and a slight blurring of every corner — small on any one shape, and it adds up.</text>
+        </svg>
+        <figcaption>Coarser rounding does not average out. It nudges every control point of
+          every curve a little, and those nudges compound across a whole boundary.</figcaption>
+      </figure>
+      <p>The fix, tested rather than assumed, was to write two decimal places instead of one.
+        Measured across the whole benchmark set — nearly a thousand icons, every visual style
+        represented, held-out test images included — this single change improved the overall
+        accuracy score by about seven percent, with every single family of icon improving and
+        none getting worse. A third decimal place was tried too, and it barely moved the
+        needle at all — which is exactly the sign that two decimals had already reached the
+        real limit of how precisely the curves themselves are known. Writing finer than that
+        is not honesty, it is padding.</p>
+    </section>
+
+    <section>
+      <h2>A shorthand that has to be tested the way the reader will read it</h2>
+      <p>SVG has a shorthand for a very common shape: two curves in a row that continue each
+        other smoothly, the way a single flowing brushstroke does. Instead of writing all six
+        numbers for the second curve, the file can write four, and let the reading program
+        work out the other two by reflecting a point from the curve before it — the mirror
+        image of a control handle across the join between the two curves.</p>
+      <p>Deciding when it is safe to use that shorthand sounds like simple arithmetic: check
+        whether the reflected point matches the fitted one. But the check has to be done using
+        the *rounded* numbers that will actually end up in the file, not the precise numbers
+        the fitter produced internally. Rounding a number and then reflecting it does not
+        always give the same answer as reflecting first and then rounding — the two operations
+        do not commute, in the same way that rounding two prices to the nearest cent and
+        adding them does not always match adding the exact prices and then rounding the
+        total. A join that only becomes perfectly mirror-smooth after the numbers are rounded
+        would be missed by a check done before rounding, and the shorthand would go unused for
+        no good reason. Testing on the rounded numbers is what makes the shorthand trustworthy
+        for whoever reads the file next — human or program, it is the rounded numbers they
+        will actually see.</p>
+    </section>
+
+    <section>
+      <h2>Drawing a word as one shape, not one shape per letter</h2>
+      <p>A person drawing a wordmark by hand does not create a separate object for every
+        letter, and a separate object again for every hole inside a letter like an "o" or an
+        "a". They draw the whole thing as one compound shape, using the standard rule that a
+        region enclosed an odd number of times is filled and one enclosed an even number of
+        times is not — the same logic a hole-punch pattern follows.</p>
+      <p>Earlier, this tracer wrote one separate shape for every disconnected piece of a
+        single colour, which meant a detailed wordmark could come out with three or four times
+        as many shapes as the person who actually designed it used. Grouping every same-colour
+        piece back into one compound shape — legitimate here because the pieces never overlap
+        by construction — brought a set of twenty real brand logos from nearly twice the
+        designer's own shape count down to about three-quarters of it, with the only visible
+        change being the disappearance of faint seams that used to sit between neighbouring
+        pieces of identical colour. Fewer shapes, and a slightly cleaner picture, from the same
+        underlying geometry.</p>
+      <div class="aside">This only ever merges shapes of the exact same flat colour and the
+        exact same transparency. A shape with its own gradient, or a shape drawn as a plain
+        circle or rectangle element, always keeps its own place in the file.</div>
+    </section>
+
+    <section>
+      <h2>The last few knobs: minifying, dropping the background, resizing the canvas</h2>
+      <p>A few finishing options are entirely optional and change only how the file is
+        written, never the picture itself. One strips every internal label and every trailing
+        zero from the numbers, shrinking the file by roughly a tenth with no visual change at
+        all — useful once a file is finished and no longer being read by a person. Another can
+        drop the single shape that simply paints the whole canvas one flat colour underneath
+        everything else, so the artwork sits on a transparent background instead — handy for
+        placing a logo over something else. A third can grow the canvas by a margin on every
+        side, giving a tightly-cropped shape some breathing room without moving a single
+        coordinate of the artwork itself.</p>
+    </section>
+
+  </main>
+  <nav class="stages">
+    <a href="00-overview.html">Overview</a>
+    <a href="01-intake.html">1 Intake</a>
+    <a href="02-coverage.html">2 Coverage</a>
+    <a href="03-palette.html">3 Palette</a>
+    <a href="04-regions.html">4 Regions</a>
+    <a href="05-gradients.html">5 Gradients</a>
+    <a href="06-planar-map.html">6 Planar map</a>
+    <a href="07-subpixel.html">7 Sub-pixel</a>
+    <a href="08-boundary-solve.html">8 Boundary solve</a>
+    <a href="09-decode.html">9 Decode</a>
+    <a href="10-symmetry.html">10 Symmetry</a>
+    <a href="11-fitting.html">11 Curve fitting</a>
+    <a href="12-repair.html">12 Repair</a>
+    <a href="13-emit.html" aria-current="page">13 Emit</a>
+    <a href="constants.md">Constants</a>
+  </nav>
+</div>
+</body>
+</html>

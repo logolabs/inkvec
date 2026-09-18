@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gradients — inkvec</title>
+<link rel="stylesheet" href="assets/doc.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="masthead">
+    <p class="eyebrow">Stage 5 of 14</p>
+    <h1>Reading a staircase of colours back as a ramp</h1>
+    <p class="standfirst">A palette has no way to represent a smooth fade — it can only
+      quantise it into flat steps. This stage recognises those steps for what they are and
+      welds them back into one gradient, then decides, region by region, whether a flat
+      colour, a straight fade or a radial fade actually explains what the picture shows.</p>
+    <p class="pairlink">Technical reference: <a href="05-gradients.md">05-gradients.md</a></p>
+  </header>
+  <main>
+
+    <section>
+      <h2>A ramp has no flat region to find</h2>
+      <p>The palette stage works by finding the small set of colours the picture actually
+        uses and assigning each pixel the nearest one. That works well for flat artwork.
+        It breaks down on a smooth gradient, because a gradient has no flat colour to be
+        assigned to — it only ever has the colour it happens to be at that point. The
+        palette's only option is to quantise it: cut the ramp into bands, one per palette
+        entry it crosses, and label each band as if it were its own solid colour.</p>
+      <p>Left uncorrected, each of those bands becomes its own separate flat shape in the
+        output file. One synthetic test gradient came back described as four flat layers
+        costing fifty-eight numbers in the file, where the honest description is a single
+        gradient costing twelve.</p>
+      <figure>
+        <svg viewBox="0 0 640 260" role="img" aria-label="A smooth colour fade, the same fade as the palette quantises it into flat bands, and the fade rebuilt from those bands">
+          <text x="20" y="24" class="fig-label-strong">Fade, bands, and the fade recovered from them</text>
+          <g transform="translate(30,50)">
+            <text x="0" y="-10" class="fig-label">The true gradient</text>
+            <defs>
+              <linearGradient id="trueramp" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0" stop-color="#f3ded0"/>
+                <stop offset="1" stop-color="#3a2416"/>
+              </linearGradient>
+            </defs>
+            <rect x="0" y="0" width="230" height="46" fill="url(#trueramp)" stroke="var(--rule)"/>
+          </g>
+          <g transform="translate(30,130)">
+            <text x="0" y="-10" class="fig-label">Quantised into flat bands — each its own face</text>
+            <rect x="0" y="0" width="46" height="46" fill="#f3ded0" stroke="var(--copper)" stroke-width="1.5"/>
+            <rect x="46" y="0" width="46" height="46" fill="#cdaf98" stroke="var(--copper)" stroke-width="1.5"/>
+            <rect x="92" y="0" width="46" height="46" fill="#a17d64" stroke="var(--copper)" stroke-width="1.5"/>
+            <rect x="138" y="0" width="46" height="46" fill="#6f503a" stroke="var(--copper)" stroke-width="1.5"/>
+            <rect x="184" y="0" width="46" height="46" fill="#3a2416" stroke="var(--copper)" stroke-width="1.5"/>
+            <text x="115" y="70" text-anchor="middle" class="fig-label" fill="var(--copper)">five bands, five boundaries, five flat fills</text>
+          </g>
+          <g transform="translate(30,215)">
+            <text x="0" y="-10" class="fig-label">Recognised and merged back into one gradient</text>
+            <rect x="0" y="0" width="230" height="30" fill="url(#trueramp)" stroke="var(--ink-faint)"/>
+          </g>
+        </svg>
+        <figcaption>The bands and the true gradient are made of exactly the same pixels.
+          What this stage adds is the judgement that a smooth ramp, cut by the palette, is
+          worth putting back together — because a single fade genuinely describes the
+          picture better than five flat pieces of it.</figcaption>
+      </figure>
+      <p>The merging is done carefully rather than greedily: neighbouring bands are only
+        candidates for joining when at least one side is already recognised as part of a
+        ramp, and the actual saving in file size is checked before any two pieces are
+        welded. Two flat regions are never joined just because a gradient happens to sit
+        between them — bands only exist in the first place because a real ramp was
+        quantised, and the check for that runs before any expensive fitting is attempted.</p>
+    </section>
+
+    <section>
+      <h2>Choosing the cheapest honest description</h2>
+      <p>Once a region's boundary is settled, this stage still has to decide what to fill
+        it with. A flat colour, a straight-line fade and a circular or elliptical fade are
+        all tried, and the cheapest one that actually explains the pixels wins. "Cheapest"
+        is not vague: a flat fill costs the file three numbers, a straight fade costs ten,
+        and a circular fade costs nine (eleven if it needs to be an ellipse rather than a
+        perfect circle) — each extra colour stop along the way costs four more. A gradient
+        is only chosen when the error it removes, compared with the simplest flat guess,
+        is worth more than the extra numbers it costs to write down.</p>
+      <p>Two further guards keep the search honest. A gradient is not even attempted on a
+        region with too few pixels to tell a real fade from noise. And a candidate fade
+        must clear a visibility floor and actually shade a real portion of the region's
+        pixels — otherwise it is not describing shading at all, it is spending a gradient's
+        worth of numbers explaining a single lost dot or a chamfered corner.</p>
+    </section>
+
+    <section>
+      <h2>A ramp, or two flat colours wearing a ramp's clothes</h2>
+      <p>There is a harder case than picking a fill for genuine shading: telling a real
+        gradient apart from two flat inks the palette happened to merge into one region.
+        Both cases leave a flat guess with a high error, so comparing a candidate gradient
+        only against the flat fit's own error cannot separate them — an earlier version of
+        this test that tried exactly that ended up declining gradients almost everywhere.</p>
+      <p>What actually tells the two apart is how well each alternative explains the same
+        pixels. Measured across the regions the tracer was wrongly leaving flat, the best
+        single straight-line ramp removed only thirteen percent of the error there, while
+        the best possible split into two flat colours removed sixty-six percent. That gap
+        is the signature of a step, not a ramp: shading fades continuously and a two-colour
+        split can only approximate it badly, while two genuinely distinct inks are matched
+        almost perfectly by two flat colours and poorly by any smooth fade in between.</p>
+      <figure>
+        <svg viewBox="0 0 640 210" role="img" aria-label="How much error is removed by the best gradient versus the best two flat colours, for a region that should stay flat">
+          <text x="20" y="24" class="fig-label-strong">Which alternative actually explains the pixels</text>
+          <g transform="translate(60,55)">
+            <text x="0" y="-12" class="fig-label">Best single ramp</text>
+            <rect x="0" y="0" width="500" height="34" fill="var(--paper)" stroke="var(--rule)"/>
+            <rect x="0" y="0" width="65" height="34" fill="var(--copper-soft)" stroke="var(--copper)"/>
+            <text x="75" y="22" class="fig-label">removes 13% of the error — leaves most of it unexplained</text>
+          </g>
+          <g transform="translate(60,125)">
+            <text x="0" y="-12" class="fig-label">Best pair of flat colours</text>
+            <rect x="0" y="0" width="500" height="34" fill="var(--paper)" stroke="var(--rule)"/>
+            <rect x="0" y="0" width="330" height="34" fill="var(--copper)" stroke="var(--copper)"/>
+            <text x="340" y="22" class="fig-label">removes 66% of the error — this was two inks, not a fade</text>
+          </g>
+        </svg>
+        <figcaption>When two flat colours out-perform the best gradient by this margin, the
+          region is priced as a step and every gradient candidate is discarded — it is kept
+          flat, correctly, even though a flat guess alone still shows visible error.</figcaption>
+      </figure>
+    </section>
+
+    <section>
+      <h2>A feature stuck to a gradient</h2>
+      <p>The palette only sees colours, not shapes, so a two-pixel white seam through a
+        black shape, a stray dot, or the end of a thin stroke all quantise into the ink
+        that surrounds them, disappearing into an otherwise flat region. The fill fitter
+        then sees a solid region with a small stubborn cluster of pixels it cannot explain
+        as flat, and its only remaining tool is to buy a gradient to cover the difference —
+        real cases on solid black shapes came back fitted with as many as three separate
+        radial gradients purely to explain seams that were never shading at all.</p>
+      <p>Before fill fitting runs, this stage looks specifically for small clusters of
+        pixels whose colour sits well outside what the region's chosen fill predicts there,
+        excluding anything that looks like ordinary anti-aliasing rather than a genuine
+        feature. Each surviving cluster is carved out as its own small flat region, named by
+        its own measured colour, and the parent region is refitted without those pixels
+        dragging its gradient search around. The threshold for "well outside" scales with
+        the picture's own measured noise, with a floor so that genuine anti-aliasing fringes
+        are never mistaken for a feature, and the number of features carved from a single
+        image is capped, as a guard against a heavily textured region shattering into
+        hundreds of tiny pieces.</p>
+    </section>
+
+    <section>
+      <h2>Interpolation space is part of the model, not a rendering detail</h2>
+      <p>A gradient can fade in one of two different ways: in the space the file's colours
+        are actually stored in, or in the physical, light-intensity space a screen actually
+        composites in. Both are genuinely used by real design tools, and they look visibly
+        different for the same two end colours. Rather than assuming one, this stage fits a
+        candidate in both spaces and lets the same cost comparison decide which one the
+        picture's own pixels actually support — the winning choice is written into the file
+        alongside the gradient itself, not left to the renderer's default.</p>
+      <p>This also matters for elliptical fades specifically: in a large corpus of tested
+        icons, most of the radial gradients found were not circles but ellipses, tilted at
+        an angle. Fitting a plain circle to one of those is visibly wrong in a way no colour
+        tolerance can paper over, so an elliptical radial model — with its own angle and
+        aspect ratio — is tried alongside the circular one whenever a region calls for it.</p>
+    </section>
+
+    <section>
+      <h2>Why this stage costs the most time in the tracer</h2>
+      <p>Searching for the best gradient — trying candidate axes, candidate centres,
+        candidate interpolation spaces, and scoring each against the actual pixels — is the
+        single most expensive part of the whole pipeline. On one particularly demanding
+        image, disabling every other optional stage still left a trace taking 10.9 seconds;
+        capping how many colours feed the search — which is what feeds the per-region
+        gradient search — brought that down to 6.3 seconds. Skipping gradient fitting
+        altogether and filling every region flat is offered as a genuine fast path for
+        exactly this reason — not a cosmetic shortcut, but a real way to trade fidelity on
+        shaded artwork for speed when speed is what matters.</p>
+    </section>
+
+  </main>
+  <nav class="stages">
+    <a href="00-overview.html">Overview</a>
+    <a href="01-intake.html">1 Intake</a>
+    <a href="02-coverage.html">2 Coverage</a>
+    <a href="03-palette.html">3 Palette</a>
+    <a href="04-regions.html">4 Regions</a>
+    <a href="05-gradients.html" aria-current="page">5 Gradients</a>
+    <a href="06-planar-map.html">6 Planar map</a>
+    <a href="07-subpixel.html">7 Sub-pixel</a>
+    <a href="08-boundary-solve.html">8 Boundary solve</a>
+    <a href="09-decode.html">9 Decode</a>
+    <a href="10-symmetry.html">10 Symmetry</a>
+    <a href="11-fitting.html">11 Curve fitting</a>
+    <a href="12-repair.html">12 Repair</a>
+    <a href="13-emit.html">13 Emit</a>
+    <a href="constants.md">Constants</a>
+  </nav>
+</div>
+</body>
+</html>

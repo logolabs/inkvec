@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Boundary solve — inkvec</title>
+<link rel="stylesheet" href="assets/doc.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="masthead">
+    <p class="eyebrow">Stage 8 of 14</p>
+    <h1>Moving every edge at once</h1>
+    <p class="standfirst">Every earlier stage nudges one boundary point at a time, guided
+      by the pixels right next to it. This stage stops doing that. It gathers every point
+      on every boundary into a single problem and asks a much harder, much better
+      question: if I actually painted the picture this geometry describes, would it match
+      the image — not approximately, exactly?</p>
+    <p class="pairlink">Technical reference: <a href="08-boundary-solve.md">08-boundary-solve.md</a></p>
+  </header>
+  <main>
+
+    <section>
+      <h2>Why one point at a time is not enough</h2>
+      <p>Picture a boundary as a dot-to-dot drawing: a chain of points, each one free to
+        slide back and forth along its own short line perpendicular to the edge, hunting
+        for the spot where the pixel underneath it looks exactly half-covered. That is
+        roughly what the earlier refinement stages do, and it works well for an isolated,
+        well-separated edge.</p>
+      <p>It breaks down in two ways that a single point, working alone, cannot see.
+        First, a pixel's colour is not only about the one boundary running near it — if
+        several shapes meet close together, that pixel's colour is a blend of <em>all</em>
+        of them, and no single point can account for that on its own. Second, a point can
+        happily slide sideways, <em>along</em> the boundary rather than across it, without
+        changing how any pixel looks at all — nothing in a one-point-at-a-time process
+        stops it drifting, because no single pixel measurement objects.</p>
+      <p>So this stage treats the whole boundary — every point on it — as one set of
+        unknowns to be solved together, against one shared yardstick: how closely the
+        shape, if rendered honestly, would reproduce the actual picture.</p>
+    </section>
+
+    <section>
+      <h2>The yardstick: paint it and compare</h2>
+      <p>The honest way to check whether a boundary is in the right place is to ask what a
+        careful renderer would do with it — not "is the point near the edge", but "if I
+        clipped this exact pixel square by this exact boundary, what fraction of it falls
+        on each side, and does mixing the two colours in that proportion match what the
+        pixel actually shows?"</p>
+      <figure>
+        <svg viewBox="0 0 640 240" role="img" aria-label="A pixel grid crossed by a boundary line, with the area on the ink side of the boundary shaded to show the exact clipped coverage">
+          <text x="20" y="24" class="fig-label-strong">One pixel, clipped exactly by the boundary crossing it</text>
+          <g transform="translate(40,50)">
+            <!-- 4x4 grid of pixels, each 45px -->
+            <g stroke="var(--rule)" fill="none">
+              <rect x="0" y="0" width="180" height="180"/>
+              <line x1="45" y1="0" x2="45" y2="180"/>
+              <line x1="90" y1="0" x2="90" y2="180"/>
+              <line x1="135" y1="0" x2="135" y2="180"/>
+              <line x1="0" y1="45" x2="180" y2="45"/>
+              <line x1="0" y1="90" x2="180" y2="90"/>
+              <line x1="0" y1="135" x2="180" y2="135"/>
+            </g>
+            <!-- ink region: everything right of a diagonal boundary -->
+            <path d="M 20,0 L 60,45 L 45,90 L 100,135 L 95,180 L 180,180 L 180,0 Z" fill="var(--copper-soft)"/>
+            <!-- the boundary curve itself -->
+            <path d="M 20,0 L 60,45 L 45,90 L 100,135 L 95,180" fill="none" class="fig-accent-stroke" stroke-width="2.5"/>
+            <!-- highlight one clipped pixel -->
+            <rect x="45" y="45" width="45" height="45" fill="none" stroke="var(--ink)" stroke-width="2"/>
+            <!-- shade the ink-side fraction of that pixel more strongly -->
+            <path d="M 60,45 L 90,45 L 90,90 L 45,90 L 45,90 L 60,45 Z" fill="var(--copper)" opacity="0.55"/>
+            <text x="95" y="70" class="fig-label" fill="var(--ink)">this pixel:</text>
+            <text x="95" y="86" class="fig-label" fill="var(--ink)">31% ink, 69% background</text>
+          </g>
+        </svg>
+        <figcaption>The stage computes this fraction — the pixel's exact clipped area —
+          for every boundary point at once, rather than approximating it, and moves the
+          points so the computed fraction matches the pixel's real colour.</figcaption>
+      </figure>
+      <p>That clipped fraction can be computed exactly, as a plain area calculation, and —
+        this is what makes solving thousands of points at once practical rather than
+        impossibly slow — the way that area changes as any one point moves can also be
+        worked out exactly, by algebra, instead of by nudging the point slightly and
+        re-measuring. Nudging-and-re-measuring for every point against every pixel would
+        be far too slow; having the exact formula in hand is what lets the whole boundary
+        move together in reasonable time.</p>
+    </section>
+
+    <section>
+      <h2>Two habits of mind, built in</h2>
+      <p>Matching pixels exactly is not, by itself, enough to produce a sensible boundary
+        — an infinite number of wiggly shapes can match a set of pixels equally well (more
+        on that below). Two additional preferences are built into the maths, both scaled
+        automatically to the size and contrast of the particular image so they mean the
+        same thing on a plain two-colour logo and on a crowded, busy emoji:</p>
+      <ul>
+        <li><b>Prefer a smooth line to a corner, and a gentle corner to a sharp one.</b>
+          Corners are allowed — a sharp corner in the artwork should stay sharp — but a
+          corner costs something in proportion to how sharp it is, so the solver does not
+          spend one big, honest corner's worth of "cost" on ten small, meaningless
+          zigzags instead.</li>
+        <li><b>Do not drift without reason.</b> Every point starts from where the earlier,
+          careful measurement put it, and unless the picture gives it good reason to move,
+          it stays close to that starting position — especially along the boundary's own
+          length, in the direction a pixel-matching test cannot see at all.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Where three shapes meet, trust the intersection, not one pixel</h2>
+      <p>Where two boundaries meet a third — a corner where three colours come together —
+        a single pixel there is a blend of three or more shapes at once, and reading a
+        clean signal out of that blend is much less reliable than reading it from an
+        ordinary two-colour edge. This stage handles that by holding those meeting points
+        firmly in place, several times more firmly than an ordinary point, and by default
+        leaves them out of the pixel-matching comparison entirely: they still move,
+        because the ordinary boundary points on either side of them pull them along, but
+        the pixels right at the meeting point do not get a vote on exactly where it sits.
+        An earlier stage has already placed that point by working out precisely where the
+        two boundary lines geometrically cross, which is sturdier evidence than one
+        blended pixel.</p>
+      <p>This was tried the other way — letting those meeting-point pixels vote too — and
+        it made results measurably worse across a large test set of icons, not better.
+        Junctions in real artwork are rare enough, and the blended-pixel signal there weak
+        enough, that trusting them costs more than it buys.</p>
+    </section>
+
+    <section>
+      <h2>The sawtooth: a real limit of the idea, honestly reported</h2>
+      <p>Matching pixels exactly has a blind spot. Picture a thin ribbon — a stroke about
+        two pixels wide. Its two long edges are close enough together that they are
+        competing for the same pixels. If one edge nibbles a little area away from a
+        pixel and the other edge, right next to it, gives a little area back, the total
+        picture is unchanged — the maths cannot tell the difference between a smooth
+        straight edge and a jagged, saw-toothed one that happens to trade area back and
+        forth in exactly this way.</p>
+      <figure>
+        <svg viewBox="0 0 640 220" role="img" aria-label="A smooth straight stroke compared with a jagged sawtooth stroke that renders to nearly the same pixels">
+          <text x="20" y="24" class="fig-label-strong">Two boundaries, almost the same picture</text>
+          <g transform="translate(30,50)">
+            <text x="0" y="0" class="fig-label">What the artwork looked like</text>
+            <rect x="0" y="14" width="260" height="120" fill="none" stroke="var(--rule)"/>
+            <path d="M 20,44 L 240,44" class="fig-accent-stroke" stroke-width="2"/>
+            <path d="M 20,104 L 240,104" class="fig-accent-stroke" stroke-width="2"/>
+            <rect x="20" y="44" width="220" height="60" fill="var(--ink)" opacity="0.85"/>
+          </g>
+          <g transform="translate(340,50)">
+            <text x="0" y="0" class="fig-label">A boundary that "cheats" and matches the same pixels</text>
+            <rect x="0" y="14" width="260" height="120" fill="none" stroke="var(--rule)"/>
+            <path d="M 20,44 L 40,52 L 60,40 L 80,52 L 100,40 L 120,52 L 140,40 L 160,52 L 180,40 L 200,52 L 220,44 L 240,44"
+                  class="fig-accent-stroke" stroke-width="2"/>
+            <path d="M 20,104 L 40,96 L 60,108 L 80,96 L 100,108 L 120,96 L 140,108 L 160,96 L 180,108 L 200,96 L 220,104 L 240,104"
+                  class="fig-accent-stroke" stroke-width="2"/>
+            <path d="M20,44 L 40,52 L 60,40 L 80,52 L 100,40 L 120,52 L 140,40 L 160,52 L 180,40 L 200,52 L 220,44 L 240,44 L 240,104 L 220,104 L 200,96 L 180,108 L 160,96 L 140,108 L 120,96 L 100,108 L 80,96 L 60,108 L 40,96 L 20,104 Z"
+                  fill="var(--ink)" opacity="0.85"/>
+          </g>
+        </svg>
+        <figcaption>Rendered to pixels, these two look almost identical — the coloured
+          picture barely changes. Drawn as a shape, one is an honest stroke and the other
+          is a saw. Pixel-matching alone cannot always tell them apart.</figcaption>
+      </figure>
+      <p>The team measured, and rejected, four different general-purpose fixes for this —
+        turning up the smoothness preference further, adding a penalty for how long the
+        boundary is, weighting each point by how confidently it was originally measured,
+        and simply stopping the solver earlier before the teeth have time to grow. Every
+        one of them either failed to remove the sawtooth, or removed it at the cost of
+        blurring away real, wanted detail somewhere else in the corpus of test images.
+        None of the four was shipped.</p>
+      <div class="aside">The documented conclusion is blunt, and worth stating plainly: a
+        thin ribbon's two edges are not really two independent boundaries — they are one
+        stroke with a centre and a width, and no amount of general-purpose smoothing
+        applied to "two independent edges" can substitute for modelling it that way. The
+        fix belongs in how a thin shape is represented, not in another dial on this
+        stage. The engineering note in the source code ends, deliberately: <b>do not add
+        a fifth knob here.</b></div>
+    </section>
+
+    <section>
+      <h2>A safety catch: never let the fix tie the boundary in a knot</h2>
+      <p>Because points move together rather than one at a time, there is a real risk that
+        the solved answer accidentally pulls one side of a boundary through the other —
+        imagine pulling both edges of that thin ribbon toward the same strip of dark
+        pixels until they cross. A crossed boundary is not a small cosmetic problem
+        downstream; it can make a shape's inside and outside ambiguous and force a lot of
+        expensive repair work later.</p>
+      <p>So after solving, the stage checks whether it introduced any <em>new</em>
+        crossing that was not already there before it started (an existing tangle from
+        earlier stages is a separate problem, not this stage's to fix). If it did, it does
+        not throw the whole improvement away — it scales the entire proposed motion back
+        toward zero, a little at a time, until the new crossing disappears. Only if it
+        cannot back off far enough to avoid it does it give up and leave the boundary
+        exactly as it found it.</p>
+    </section>
+
+    <section>
+      <h2>How long to keep solving</h2>
+      <p>Like any iterative process, this one can be stopped early or run longer. Early
+        testing used a smaller number of passes; a careful measurement later found that
+        setting was stopping the process before it had actually settled down — the
+        boundary handed to the next stage was still visibly moving. Running roughly twice
+        as many passes let it finish properly, and measured across the project's full test
+        set, every family of icons improved or held steady on accuracy <em>and</em> got
+        cheaper to describe at the same time — which is the signature of a process that
+        has genuinely converged, rather than one that has simply been tuned to trade one
+        thing for another. The extra passes cost only a few milliseconds per image.</p>
+      <p>Interestingly, running for far more passes than that does not keep helping, and on
+        one measurement set it very slightly hurt. The explanation on record is that once
+        the true signal in the pixels has been mostly extracted, additional passes are
+        chasing smaller and smaller effects where the process's own step-taking behaviour
+        starts to wander rather than usefully improve the picture.</p>
+    </section>
+
+  </main>
+  <nav class="stages">
+    <a href="00-overview.html">Overview</a>
+    <a href="01-intake.html">1 Intake</a>
+    <a href="02-coverage.html">2 Coverage</a>
+    <a href="03-palette.html">3 Palette</a>
+    <a href="04-regions.html">4 Regions</a>
+    <a href="05-gradients.html">5 Gradients</a>
+    <a href="06-planar-map.html">6 Planar map</a>
+    <a href="07-subpixel.html">7 Sub-pixel</a>
+    <a href="08-boundary-solve.html" aria-current="page">8 Boundary solve</a>
+    <a href="09-decode.html">9 Decode</a>
+    <a href="10-symmetry.html">10 Symmetry</a>
+    <a href="11-fitting.html">11 Curve fitting</a>
+    <a href="12-repair.html">12 Repair</a>
+    <a href="13-emit.html">13 Emit</a>
+    <a href="constants.md">Constants</a>
+  </nav>
+</div>
+</body>
+</html>

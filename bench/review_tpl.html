@@ -1,0 +1,58 @@
+<title>inkvec Day-2 Review</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{--bg:#f6f4ef;--panel:#fffdf8;--ink:#1f1d1a;--muted:#6b665d;--line:#e2ddd2;--accent:#8a3b12;--good:#1f6f4a;--bad:#a83a2c;--chip:#ece7dc;--chipon:#1f1d1a;--chipink:#f6f4ef;color-scheme:light}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#171613;--panel:#201e1a;--ink:#ece8df;--muted:#a49e92;--line:#332f29;--accent:#e0946a;--good:#6ccf9a;--bad:#f0866f;--chip:#2c2925;--chipon:#ece8df;--chipink:#171613;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#171613;--panel:#201e1a;--ink:#ece8df;--muted:#a49e92;--line:#332f29;--accent:#e0946a;--good:#6ccf9a;--bad:#f0866f;--chip:#2c2925;--chipon:#ece8df;--chipink:#171613;color-scheme:dark}
+body{background:var(--bg);color:var(--ink);font-family:"IBM Plex Sans",system-ui,sans-serif;font-size:14px;line-height:1.45;margin:0}
+header{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--line);padding:14px 24px;z-index:5;display:flex;flex-wrap:wrap;gap:18px;align-items:baseline}
+h1{font-family:"IBM Plex Sans Condensed",sans-serif;font-weight:600;font-size:22px;margin:0 12px 0 0;letter-spacing:.01em}
+.stat{font-family:"IBM Plex Mono",monospace;font-size:13px;color:var(--muted)}.stat b{color:var(--ink);font-weight:500}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-left:auto}
+.chip{background:var(--chip);color:var(--ink);border:0;border-radius:999px;padding:4px 11px;font:500 12px "IBM Plex Sans Condensed",sans-serif;letter-spacing:.04em;text-transform:uppercase;cursor:pointer}
+.chip[aria-pressed="true"]{background:var(--chipon);color:var(--chipink)}
+main{padding:20px 24px;max-width:1500px;margin:0 auto}
+table{border-collapse:collapse;font-variant-numeric:tabular-nums;margin:0 0 22px;font-size:13px}
+th,td{padding:5px 12px 5px 0;text-align:right;border-bottom:1px solid var(--line)}th{color:var(--muted);font-weight:500;font-family:"IBM Plex Sans Condensed",sans-serif;text-transform:uppercase;letter-spacing:.05em;font-size:11px}
+td:first-child,th:first-child{text-align:left}
+.good{color:var(--good)}.bad{color:var(--bad)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:12px 14px;margin:0 0 14px}
+.card[hidden]{display:none}
+.meta{display:flex;flex-wrap:wrap;gap:4px 18px;align-items:baseline;margin-bottom:8px}
+.meta .name{font-family:"IBM Plex Mono",monospace;font-size:13px}.meta .fam{color:var(--muted);font-size:12px}
+.meta .grp{font:500 11px "IBM Plex Sans Condensed",sans-serif;text-transform:uppercase;letter-spacing:.05em;color:var(--accent)}
+.meta .m{font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--muted)}.meta .m b{font-weight:500;color:var(--ink)}
+.strip{display:grid;grid-template-columns:repeat(5,minmax(120px,1fr));gap:10px}
+.strip figure{margin:0}.strip img,.strip canvas{width:100%;aspect-ratio:1;background:#fff;border:1px solid var(--line);image-rendering:auto;display:block}
+.strip img.px{image-rendering:pixelated}
+.strip figcaption{font:500 11px "IBM Plex Sans Condensed",sans-serif;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-top:4px}
+.flick{cursor:pointer;position:relative}.flick img{position:absolute;inset:0}.flick img.b{opacity:0}.flick:hover img.b,.flick.pin img.b{opacity:1}.flick .ph{visibility:hidden}
+@media (prefers-reduced-motion:no-preference){.flick img{transition:opacity .08s}}
+</style>
+<header><h1 id="t"></h1><span class="stat" id="s"></span>
+<div class="chips" id="chips"></div></header>
+<main><table id="fam"></table><div id="cards"></div></main>
+<script>
+const D=/*DATA*/[]/*END*/;
+document.getElementById('t').textContent=D.title;document.title=D.title;
+const f4=x=>x.toFixed(4),f3=x=>x.toFixed(3),f2=x=>x.toFixed(2);
+document.getElementById('s').innerHTML=`objective <b>${f4(D.objective.a)} → ${f4(D.objective.b)}</b> (lower is better; ΔE00 + 10·DISTS, macro over families)`;
+let rows='<tr><th>family</th><th>n</th><th>ΔE00 before</th><th>after</th><th>DISTS before</th><th>after</th><th>params÷GT before</th><th>after</th><th>better / worse</th></tr>';
+for(const r of D.families){const cls=r.de_b<r.de_a-1e-4?'good':r.de_b>r.de_a+1e-4?'bad':'';rows+=`<tr><td>${r.family}</td><td>${r.n}</td><td>${f4(r.de_a)}</td><td class="${cls}">${f4(r.de_b)}</td><td>${f4(r.dists_a)}</td><td>${f4(r.dists_b)}</td><td>${f2(r.ratio_a)}</td><td>${f2(r.ratio_b)}</td><td>${r.better} / ${r.worse}</td></tr>`}
+document.getElementById('fam').innerHTML=rows;
+const groups=['improved','regressed','worst'],fams=[...new Set(D.cards.map(c=>c.corpus))];
+let sel={group:null,fam:null};
+const chips=document.getElementById('chips');
+function chip(label,key,val){const b=document.createElement('button');b.className='chip';b.textContent=label;b.setAttribute('aria-pressed','false');b.onclick=()=>{sel[key]=sel[key]===val?null:val;draw()};b.dataset.k=key;b.dataset.v=val;chips.appendChild(b)}
+groups.forEach(g=>chip(g,'group',g));fams.forEach(f=>chip(f,'fam',f));
+const cards=document.getElementById('cards');
+for(const c of D.cards){const el=document.createElement('section');el.className='card';el.dataset.group=c.group;el.dataset.fam=c.corpus;
+const d=(k,dig,inv)=>{const a=c.before[k],b=c.after[k],dd=b-a,cls=Math.abs(dd)<1e-6?'':(inv?dd>0:dd<0)?'good':'bad';return `<span class="m">${k} <b>${dig(a)} → <span class="${cls}">${dig(b)}</span></b></span>`};
+el.innerHTML=`<div class="meta"><span class="grp">${c.group}</span><span class="name">${c.stem}</span><span class="fam">${c.corpus}</span>${d('de00',f3)}${d('dists',f4)}${d('ratio',f2)}${d('paths',String)}${d('gradients',String)}${d('bytes',String)}</div>
+<div class="strip"><figure><img class="px" src="${c.img.src}" alt=""><figcaption>source 128 px</figcaption></figure><figure><img src="${c.img.gt}" alt=""><figcaption>artist SVG</figcaption></figure><figure class="flick" tabindex="0"><img class="ph" src="${c.img.gt}" alt=""><img class="a" src="${c.img.before}" alt=""><img class="b" src="${c.img.after}" alt=""><figcaption>before · hover/click = after</figcaption></figure><figure><img src="${c.img.after}" alt=""><figcaption>after</figcaption></figure><figure><canvas></canvas><figcaption>changed pixels ×4</figcaption></figure></div>`;
+const fl=el.querySelector('.flick');fl.onclick=()=>fl.classList.toggle('pin');fl.onkeydown=e=>{if(e.key===' '||e.key==='Enter'){e.preventDefault();fl.classList.toggle('pin')}};
+cards.appendChild(el);
+const cv=el.querySelector('canvas'),A=new Image(),B=new Image();let n=0;const go=()=>{if(++n<2)return;const S=A.width;cv.width=cv.height=S;const x=cv.getContext('2d');x.drawImage(A,0,0);const pa=x.getImageData(0,0,S,S);x.drawImage(B,0,0);const pb=x.getImageData(0,0,S,S);const o=x.createImageData(S,S);for(let i=0;i<pa.data.length;i+=4){const df=Math.min(255,4*(Math.abs(pa.data[i]-pb.data[i])+Math.abs(pa.data[i+1]-pb.data[i+1])+Math.abs(pa.data[i+2]-pb.data[i+2]))/3);const l=(pb.data[i]+pb.data[i+1]+pb.data[i+2])/3;o.data[i]=255;o.data[i+1]=255-df;o.data[i+2]=255-df;if(df<8){o.data[i]=o.data[i+1]=o.data[i+2]=230+l*0.1}o.data[i+3]=255}x.putImageData(o,0,0)};A.onload=go;B.onload=go;A.src=c.img.before;B.src=c.img.after;}
+function draw(){for(const b of chips.children)b.setAttribute('aria-pressed',String(sel[b.dataset.k]===b.dataset.v));for(const el of cards.children)el.hidden=(sel.group&&el.dataset.group!==sel.group)||(sel.fam&&el.dataset.fam!==sel.fam)}
+draw();
+</script>

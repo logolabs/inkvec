@@ -1,0 +1,6737 @@
+{
+ "seed": 7,
+ "tier": "128ss",
+ "supersample": 8,
+ "families": {
+  "noto-emoji": 170,
+  "twemoji": 170,
+  "openmoji": 140,
+  "material-icons": 160,
+  "lucide": 160,
+  "simple-icons": 160,
+  "synthetic": 20
+ },
+ "dev": [
+  {
+   "corpus": "lucide",
+   "stem": "bluetooth",
+   "gt_params": 10
+  },
+  {
+   "corpus": "lucide",
+   "stem": "bridge",
+   "gt_params": 21
+  },
+  {
+   "corpus": "lucide",
+   "stem": "copyleft",
+   "gt_params": 10
+  },
+  {
+   "corpus": "lucide",
+   "stem": "lightbulb-off",
+   "gt_params": 32
+  },
+  {
+   "corpus": "lucide",
+   "stem": "messages-square",
+   "gt_params": 79
+  },
+  {
+   "corpus": "lucide",
+   "stem": "move-right",
+   "gt_params": 6
+  },
+  {
+   "corpus": "lucide",
+   "stem": "smartphone",
+   "gt_params": 8
+  },
+  {
+   "corpus": "lucide",
+   "stem": "type",
+   "gt_params": 24
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "arrow_drop_down",
+   "gt_params": 6
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "brightness_high",
+   "gt_params": 115
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "crop",
+   "gt_params": 52
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "group_remove",
+   "gt_params": 134
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "houseboat",
+   "gt_params": 152
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "macro_off",
+   "gt_params": 292
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "send_and_archive",
+   "gt_params": 80
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "touch_app",
+   "gt_params": 141
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f36a",
+   "gt_params": 1158
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f3c2_1f3fd",
+   "gt_params": 1342
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f3c3_1f3fc_200d_27a1",
+   "gt_params": 1346
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f468_1f3fc_200d_2764_200d_1f48b_200d_1f468_1f3fd",
+   "gt_params": 1072
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f46c_1f3fd",
+   "gt_params": 2590
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f55b",
+   "gt_params": 152
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f914",
+   "gt_params": 772
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f96b",
+   "gt_params": 386
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F468-1F3FB-200D-1F3ED",
+   "gt_params": 1290
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F468-200D-1F692",
+   "gt_params": 1542
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F469-1F3FC-200D-1F9BD-200D-27A1-FE0F",
+   "gt_params": 302
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F64D-200D-2642-FE0F",
+   "gt_params": 224
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9D1-1F3FD-200D-1F4BC",
+   "gt_params": 418
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9D1-200D-2708-FE0F",
+   "gt_params": 1298
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1FA8B",
+   "gt_params": 1248
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "26F8",
+   "gt_params": 384
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "appium",
+   "gt_params": 118
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "changedetection",
+   "gt_params": 470
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "clickup",
+   "gt_params": 38
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "inspire",
+   "gt_params": 68
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "nginx",
+   "gt_params": 78
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "picpay",
+   "gt_params": 60
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "umbraco",
+   "gt_params": 207
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "x",
+   "gt_params": 36
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "gradient_radial",
+   "gt_params": 9
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "prim_roundrect",
+   "gt_params": 12
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "symmetry_rot8",
+   "gt_params": 66
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f1f3-1f1e8",
+   "gt_params": 349
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f509",
+   "gt_params": 142
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f515",
+   "gt_params": 87
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f6b5-1f3fd-200d-2642-fe0f",
+   "gt_params": 668
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f926-1f3fd-200d-2640-fe0f",
+   "gt_params": 452
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9a8",
+   "gt_params": 309
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9e0",
+   "gt_params": 1066
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "2744",
+   "gt_params": 300
+  }
+ ],
+ "held_a": [
+  {
+   "corpus": "lucide",
+   "stem": "at-sign",
+   "gt_params": 21
+  },
+  {
+   "corpus": "lucide",
+   "stem": "battery-low",
+   "gt_params": 10
+  },
+  {
+   "corpus": "lucide",
+   "stem": "between-horizontal-start",
+   "gt_params": 16
+  },
+  {
+   "corpus": "lucide",
+   "stem": "between-vertical-start",
+   "gt_params": 16
+  },
+  {
+   "corpus": "lucide",
+   "stem": "book-heart",
+   "gt_params": 61
+  },
+  {
+   "corpus": "lucide",
+   "stem": "book-type",
+   "gt_params": 48
+  },
+  {
+   "corpus": "lucide",
+   "stem": "circle-equal",
+   "gt_params": 7
+  },
+  {
+   "corpus": "lucide",
+   "stem": "cloud-moon",
+   "gt_params": 49
+  },
+  {
+   "corpus": "lucide",
+   "stem": "corner-up-right",
+   "gt_params": 15
+  },
+  {
+   "corpus": "lucide",
+   "stem": "fast-forward",
+   "gt_params": 50
+  },
+  {
+   "corpus": "lucide",
+   "stem": "file-minus-corner",
+   "gt_params": 51
+  },
+  {
+   "corpus": "lucide",
+   "stem": "folder-open",
+   "gt_params": 74
+  },
+  {
+   "corpus": "lucide",
+   "stem": "grip-horizontal",
+   "gt_params": 18
+  },
+  {
+   "corpus": "lucide",
+   "stem": "iteration-ccw",
+   "gt_params": 13
+  },
+  {
+   "corpus": "lucide",
+   "stem": "maximize-2",
+   "gt_params": 12
+  },
+  {
+   "corpus": "lucide",
+   "stem": "message-circle-question-mark",
+   "gt_params": 47
+  },
+  {
+   "corpus": "lucide",
+   "stem": "navigation-2-off",
+   "gt_params": 16
+  },
+  {
+   "corpus": "lucide",
+   "stem": "panel-right-close",
+   "gt_params": 12
+  },
+  {
+   "corpus": "lucide",
+   "stem": "pencil-off",
+   "gt_params": 44
+  },
+  {
+   "corpus": "lucide",
+   "stem": "phone-missed",
+   "gt_params": 86
+  },
+  {
+   "corpus": "lucide",
+   "stem": "ship",
+   "gt_params": 85
+  },
+  {
+   "corpus": "lucide",
+   "stem": "sport-shoe",
+   "gt_params": 55
+  },
+  {
+   "corpus": "lucide",
+   "stem": "square-arrow-out-up-right",
+   "gt_params": 35
+  },
+  {
+   "corpus": "lucide",
+   "stem": "square-split-vertical",
+   "gt_params": 42
+  },
+  {
+   "corpus": "lucide",
+   "stem": "zodiac-aries",
+   "gt_params": 16
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "12mp",
+   "gt_params": 160
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "7k_plus",
+   "gt_params": 102
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "bento",
+   "gt_params": 80
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "border_left",
+   "gt_params": 136
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "chair",
+   "gt_params": 164
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "crop_landscape",
+   "gt_params": 40
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "dehaze",
+   "gt_params": 24
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "drive_file_move_rtl",
+   "gt_params": 66
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "exposure_neg_1",
+   "gt_params": 22
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "fullscreen",
+   "gt_params": 48
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "media_bluetooth_off",
+   "gt_params": 82
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "miscellaneous_services",
+   "gt_params": 348
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "mode_standby",
+   "gt_params": 72
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "no_backpack",
+   "gt_params": 94
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "open_in_new",
+   "gt_params": 58
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "pentagon",
+   "gt_params": 20
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "perm_media",
+   "gt_params": 80
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "polyline",
+   "gt_params": 58
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "rocket_launch",
+   "gt_params": 163
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "settings",
+   "gt_params": 352
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "settings_overscan",
+   "gt_params": 64
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "smart_toy",
+   "gt_params": 138
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "thumb_up_alt",
+   "gt_params": 74
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "view_cozy",
+   "gt_params": 64
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "view_list",
+   "gt_params": 56
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u0036",
+   "gt_params": 146
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f3c3_1f3fd_200d_2640_200d_27a1",
+   "gt_params": 1344
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f3e1",
+   "gt_params": 814
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f41c",
+   "gt_params": 860
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f468_1f3fb_200d_2764_200d_1f48b_200d_1f468_1f3ff",
+   "gt_params": 1072
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f468_200d_1f527",
+   "gt_params": 1336
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f469_1f3fb_200d_1f91d_200d_1f468_1f3fe",
+   "gt_params": 2082
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f469_1f3fd_200d_1f4bc",
+   "gt_params": 494
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f469_200d_1f469_200d_1f466_200d_1f466",
+   "gt_params": 604
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f470_1f3fb_200d_2640",
+   "gt_params": 876
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f478_1f3fd",
+   "gt_params": 1138
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f4d8",
+   "gt_params": 210
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f511",
+   "gt_params": 324
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f52b",
+   "gt_params": 620
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f595_1f3fb",
+   "gt_params": 502
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f923",
+   "gt_params": 770
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f93e_1f3fd",
+   "gt_params": 1682
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9cd_1f3fb_200d_2642",
+   "gt_params": 1236
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9cf_1f3fb",
+   "gt_params": 866
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9d1_1f3fc_200d_1f37c",
+   "gt_params": 1772
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9da_1f3fd_200d_2642",
+   "gt_params": 1404
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9dd_1f3ff_200d_2640",
+   "gt_params": 1370
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1fa9d",
+   "gt_params": 438
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1faa5",
+   "gt_params": 576
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u26bd",
+   "gt_params": 462
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F334",
+   "gt_params": 264
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F382",
+   "gt_params": 438
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F3D4",
+   "gt_params": 390
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F3DD",
+   "gt_params": 654
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F3F3-FE0F-200D-1F7E6",
+   "gt_params": 12
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F468-1F3FC-200D-1F91D-200D-1F468-1F3FF",
+   "gt_params": 324
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F468-1F3FE-200D-1F527",
+   "gt_params": 494
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F469-1F3FC-200D-2764-FE0F-200D-1F48B-200D-1F469-1F3FC",
+   "gt_params": 420
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F469-1F3FE-200D-2764-FE0F-200D-1F469-1F3FB",
+   "gt_params": 606
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F470-200D-2642-FE0F",
+   "gt_params": 806
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F482-1F3FD-200D-2642-FE0F",
+   "gt_params": 772
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F491",
+   "gt_params": 620
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F4A6",
+   "gt_params": 486
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F4F9",
+   "gt_params": 146
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F596-1F3FC",
+   "gt_params": 318
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F6BD",
+   "gt_params": 210
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9D1",
+   "gt_params": 218
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9D1-1F3FC-200D-1F91D-200D-1F9D1-1F3FC",
+   "gt_params": 452
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9D1-1F3FC-200D-1FA70",
+   "gt_params": 260
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9D1-1F3FD-200D-1F527",
+   "gt_params": 494
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9D1-200D-1F393",
+   "gt_params": 968
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1FAC3",
+   "gt_params": 622
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1FAC4-1F3FD",
+   "gt_params": 622
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "3030",
+   "gt_params": 264
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "E056",
+   "gt_params": 666
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "autozone",
+   "gt_params": 626
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "babelio",
+   "gt_params": 50
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "biome",
+   "gt_params": 42
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "denodeploy",
+   "gt_params": 228
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "ebox",
+   "gt_params": 128
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "fampay",
+   "gt_params": 187
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "fizz",
+   "gt_params": 79
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "fluke",
+   "gt_params": 211
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "fluxer",
+   "gt_params": 228
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "googlechrome",
+   "gt_params": 91
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "h2database",
+   "gt_params": 191
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "imessage",
+   "gt_params": 83
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "jirasoftware",
+   "gt_params": 59
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "leetcode",
+   "gt_params": 174
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "livekit",
+   "gt_params": 52
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "looker",
+   "gt_params": 181
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "luanti",
+   "gt_params": 303
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "microeditor",
+   "gt_params": 490
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "notist",
+   "gt_params": 168
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "picxy",
+   "gt_params": 1053
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "platformio",
+   "gt_params": 217
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "prismic",
+   "gt_params": 549
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "redcandlegames",
+   "gt_params": 530
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "sourcehut",
+   "gt_params": 52
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "sparkpost",
+   "gt_params": 60
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "mosaic_grid4",
+   "gt_params": 102
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "prim_ellipse",
+   "gt_params": 10
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "prim_hex",
+   "gt_params": 16
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "prim_rect_rot",
+   "gt_params": 12
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "stack_overlap",
+   "gt_params": 15
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "thin_features",
+   "gt_params": 66
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f17e",
+   "gt_params": 80
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f1f3-1f1f4",
+   "gt_params": 118
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f1f8-1f1ee",
+   "gt_params": 344
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f1f8-1f1fe",
+   "gt_params": 100
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f1f9-1f1f3",
+   "gt_params": 101
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f325",
+   "gt_params": 183
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f338",
+   "gt_params": 659
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f435",
+   "gt_params": 176
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f450-1f3fd",
+   "gt_params": 390
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f468-1f3fb-200d-1f91d-200d-1f468-1f3fd",
+   "gt_params": 940
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f468-1f3fb-200d-1f9bd-200d-27a1-fe0f",
+   "gt_params": 1116
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f468-1f3fd-200d-2764-fe0f-200d-1f468-1f3fc",
+   "gt_params": 392
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f468-1f3ff-200d-1f9b2",
+   "gt_params": 180
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f468-200d-1f467-200d-1f466",
+   "gt_params": 384
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f536",
+   "gt_params": 32
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f574-1f3fb-200d-2640-fe0f",
+   "gt_params": 584
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f638",
+   "gt_params": 624
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f64b-1f3fb-200d-2640-fe0f",
+   "gt_params": 288
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f6a3-1f3ff-200d-2642-fe0f",
+   "gt_params": 404
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f6e5",
+   "gt_params": 120
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f977-1f3fb",
+   "gt_params": 472
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d4-200d-2642-fe0f",
+   "gt_params": 284
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d8-1f3fe",
+   "gt_params": 762
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9de-200d-2640-fe0f",
+   "gt_params": 356
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "2611",
+   "gt_params": 80
+  }
+ ],
+ "held_b": [
+  {
+   "corpus": "lucide",
+   "stem": "arrow-right-to-line",
+   "gt_params": 8
+  },
+  {
+   "corpus": "lucide",
+   "stem": "arrows-up-from-line",
+   "gt_params": 14
+  },
+  {
+   "corpus": "lucide",
+   "stem": "badge-pound-sterling",
+   "gt_params": 69
+  },
+  {
+   "corpus": "lucide",
+   "stem": "badge-russian-ruble",
+   "gt_params": 71
+  },
+  {
+   "corpus": "lucide",
+   "stem": "beaker",
+   "gt_params": 24
+  },
+  {
+   "corpus": "lucide",
+   "stem": "briefcase-conveyor-belt",
+   "gt_params": 36
+  },
+  {
+   "corpus": "lucide",
+   "stem": "church",
+   "gt_params": 82
+  },
+  {
+   "corpus": "lucide",
+   "stem": "clipboard-plus",
+   "gt_params": 48
+  },
+  {
+   "corpus": "lucide",
+   "stem": "closed-caption",
+   "gt_params": 20
+  },
+  {
+   "corpus": "lucide",
+   "stem": "coffee",
+   "gt_params": 51
+  },
+  {
+   "corpus": "lucide",
+   "stem": "file-lock",
+   "gt_params": 66
+  },
+  {
+   "corpus": "lucide",
+   "stem": "forward",
+   "gt_params": 15
+  },
+  {
+   "corpus": "lucide",
+   "stem": "ice-cream-cone",
+   "gt_params": 34
+  },
+  {
+   "corpus": "lucide",
+   "stem": "lamp-ceiling",
+   "gt_params": 43
+  },
+  {
+   "corpus": "lucide",
+   "stem": "list-checks",
+   "gt_params": 14
+  },
+  {
+   "corpus": "lucide",
+   "stem": "octagon-pause",
+   "gt_params": 74
+  },
+  {
+   "corpus": "lucide",
+   "stem": "road",
+   "gt_params": 40
+  },
+  {
+   "corpus": "lucide",
+   "stem": "settings",
+   "gt_params": 87
+  },
+  {
+   "corpus": "lucide",
+   "stem": "shapes",
+   "gt_params": 34
+  },
+  {
+   "corpus": "lucide",
+   "stem": "shopping-basket",
+   "gt_params": 32
+  },
+  {
+   "corpus": "lucide",
+   "stem": "shopping-cart-plus",
+   "gt_params": 43
+  },
+  {
+   "corpus": "lucide",
+   "stem": "sliders-horizontal",
+   "gt_params": 18
+  },
+  {
+   "corpus": "lucide",
+   "stem": "sparkle",
+   "gt_params": 70
+  },
+  {
+   "corpus": "lucide",
+   "stem": "swiss-franc",
+   "gt_params": 8
+  },
+  {
+   "corpus": "lucide",
+   "stem": "table-columns-split",
+   "gt_params": 58
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "admin_panel_settings",
+   "gt_params": 122
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "arrow_back_ios",
+   "gt_params": 12
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "arrow_circle_down",
+   "gt_params": 62
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "audio_file",
+   "gt_params": 69
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "crop_square",
+   "gt_params": 40
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "earbuds",
+   "gt_params": 146
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "enhanced_encryption",
+   "gt_params": 98
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "event_busy",
+   "gt_params": 86
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "expand_circle_down",
+   "gt_params": 60
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "flip",
+   "gt_params": 96
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "girl",
+   "gt_params": 45
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "help_center",
+   "gt_params": 122
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "https",
+   "gt_params": 100
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "integration_instructions",
+   "gt_params": 131
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "laptop",
+   "gt_params": 48
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "logo_dev",
+   "gt_params": 139
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "no_encryption_gmailerrorred",
+   "gt_params": 86
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "notifications_paused",
+   "gt_params": 92
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "perm_scan_wifi",
+   "gt_params": 44
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "remove_red_eye",
+   "gt_params": 88
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "speaker",
+   "gt_params": 107
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "table_rows",
+   "gt_params": 56
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "tsunami",
+   "gt_params": 187
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "unarchive",
+   "gt_params": 76
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "view_week",
+   "gt_params": 56
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f371",
+   "gt_params": 1680
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f39b",
+   "gt_params": 452
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f3cb_200d_2642",
+   "gt_params": 2170
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f44b_1f3fb",
+   "gt_params": 650
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f44d_1f3fc",
+   "gt_params": 722
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f468_1f3ff_200d_2764_200d_1f468_1f3fb",
+   "gt_params": 1104
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f469_1f3fb_200d_1f52c",
+   "gt_params": 1082
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f469_1f3fc_200d_1f33e",
+   "gt_params": 866
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f469_1f3fe_200d_1f9af_200d_27a1",
+   "gt_params": 924
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f46e_1f3fe_200d_2642",
+   "gt_params": 968
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f54e",
+   "gt_params": 980
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f606",
+   "gt_params": 458
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f64b_1f3fe_200d_2640",
+   "gt_params": 798
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f90d",
+   "gt_params": 176
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f90f_1f3fd",
+   "gt_params": 916
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f91c_1f3fe",
+   "gt_params": 450
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f926_1f3ff",
+   "gt_params": 1308
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f932",
+   "gt_params": 1122
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9a9",
+   "gt_params": 554
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9b8_1f3fd",
+   "gt_params": 1808
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9d1_1f3fc_200d_1f91d_200d_1f9d1_1f3fd",
+   "gt_params": 2466
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9d6_1f3fe_200d_2642",
+   "gt_params": 912
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9ed",
+   "gt_params": 474
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1fa90",
+   "gt_params": 628
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1fabc",
+   "gt_params": 1248
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F1F1-1F1E8",
+   "gt_params": 24
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F1FF-1F1F2",
+   "gt_params": 48
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F38A",
+   "gt_params": 192
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F3C3-1F3FC-200D-2640-FE0F-200D-27A1-FE0F",
+   "gt_params": 212
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F400",
+   "gt_params": 468
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F468-1F3FB-200D-1F37C",
+   "gt_params": 865
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F468-1F3FB-200D-1F430-200D-1F468-1F3FE",
+   "gt_params": 496
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F468-1F3FD-200D-1FAEF-200D-1F468-1F3FC",
+   "gt_params": 417
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F477-1F3FE-200D-2640-FE0F",
+   "gt_params": 835
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F484",
+   "gt_params": 118
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F61C",
+   "gt_params": 137
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F646-1F3FC",
+   "gt_params": 458
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F64E-1F3FB",
+   "gt_params": 232
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F93E-1F3FE",
+   "gt_params": 225
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9B8-1F3FF",
+   "gt_params": 529
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9CE-1F3FF-200D-27A1-FE0F",
+   "gt_params": 155
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9D1-1F3FB-200D-1F680",
+   "gt_params": 438
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9D1-1F3FC-200D-1F3ED",
+   "gt_params": 1290
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9D1-1F3FD-200D-1F393",
+   "gt_params": 968
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1FA8E",
+   "gt_params": 312
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1FAE4",
+   "gt_params": 40
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "25FC",
+   "gt_params": 24
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "267B",
+   "gt_params": 292
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "E18A",
+   "gt_params": 946
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "E24A",
+   "gt_params": 125
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "alchemy",
+   "gt_params": 265
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "audiobookshelf",
+   "gt_params": 335
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "backendless",
+   "gt_params": 151
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "bandrautomation",
+   "gt_params": 220
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "boosty",
+   "gt_params": 44
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "chainguard",
+   "gt_params": 261
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "cocos",
+   "gt_params": 1335
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "contao",
+   "gt_params": 111
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "customink",
+   "gt_params": 941
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "dacia",
+   "gt_params": 62
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "getx",
+   "gt_params": 223
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "haskell",
+   "gt_params": 36
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "keybase",
+   "gt_params": 571
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "langchain",
+   "gt_params": 90
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "messenger",
+   "gt_params": 114
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "mysql",
+   "gt_params": 822
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "okcupid",
+   "gt_params": 405
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "openbao",
+   "gt_params": 278
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "playerfm",
+   "gt_params": 360
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "pomerium",
+   "gt_params": 63
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "premierleague",
+   "gt_params": 422
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "prepbytes",
+   "gt_params": 181
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "rotaryinternational",
+   "gt_params": 1170
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "wise",
+   "gt_params": 26
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "zigbee2mqtt",
+   "gt_params": 674
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "gradient_linear",
+   "gt_params": 12
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "mosaic_pie12",
+   "gt_params": 114
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "mosaic_pie6",
+   "gt_params": 60
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "prim_circle",
+   "gt_params": 9
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "symmetry_rot3",
+   "gt_params": 36
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "symmetry_rot5",
+   "gt_params": 48
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f1f8",
+   "gt_params": 104
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f3a6",
+   "gt_params": 122
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f3c3-1f3ff-200d-27a1-fe0f",
+   "gt_params": 1212
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f468-1f3fb-200d-1faef-200d-1f468-1f3fd",
+   "gt_params": 981
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f468-1f3fc-200d-1f9b0",
+   "gt_params": 242
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f468-1f3fe-200d-1faef-200d-1f468-1f3fb",
+   "gt_params": 981
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-1f3fb-200d-1f37c",
+   "gt_params": 750
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-1f3fd-200d-2764-fe0f-200d-1f48b-200d-1f469-1f3fb",
+   "gt_params": 500
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-1f3ff-200d-1f91d-200d-1f468-1f3fc",
+   "gt_params": 928
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-1f3ff-200d-1f9b2",
+   "gt_params": 186
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-1f3ff-200d-1f9bc",
+   "gt_params": 1224
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-200d-1f9af-200d-27a1-fe0f",
+   "gt_params": 835
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f470-1f3fc-200d-2640-fe0f",
+   "gt_params": 370
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f482-1f3fd-200d-2642-fe0f",
+   "gt_params": 414
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f4a6",
+   "gt_params": 66
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f4d6",
+   "gt_params": 218
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f574-1f3fd-200d-2640-fe0f",
+   "gt_params": 584
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f64f-1f3fe",
+   "gt_params": 224
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f90c-1f3fc",
+   "gt_params": 518
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f926-1f3ff-200d-2642-fe0f",
+   "gt_params": 462
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f98d",
+   "gt_params": 274
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d4-1f3fd",
+   "gt_params": 270
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1fa79",
+   "gt_params": 125
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1faf1-1f3fd-200d-1faf2-1f3fc",
+   "gt_params": 604
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "270d",
+   "gt_params": 464
+  }
+ ],
+ "full": [
+  {
+   "corpus": "lucide",
+   "stem": "app-window-mac",
+   "gt_params": 12
+  },
+  {
+   "corpus": "lucide",
+   "stem": "arrow-right-to-line",
+   "gt_params": 8
+  },
+  {
+   "corpus": "lucide",
+   "stem": "arrows-up-from-line",
+   "gt_params": 14
+  },
+  {
+   "corpus": "lucide",
+   "stem": "at-sign",
+   "gt_params": 21
+  },
+  {
+   "corpus": "lucide",
+   "stem": "audio-lines-x",
+   "gt_params": 16
+  },
+  {
+   "corpus": "lucide",
+   "stem": "badge",
+   "gt_params": 56
+  },
+  {
+   "corpus": "lucide",
+   "stem": "badge-pound-sterling",
+   "gt_params": 69
+  },
+  {
+   "corpus": "lucide",
+   "stem": "badge-question-mark",
+   "gt_params": 73
+  },
+  {
+   "corpus": "lucide",
+   "stem": "badge-russian-ruble",
+   "gt_params": 71
+  },
+  {
+   "corpus": "lucide",
+   "stem": "badge-turkish-lira",
+   "gt_params": 67
+  },
+  {
+   "corpus": "lucide",
+   "stem": "balloon",
+   "gt_params": 46
+  },
+  {
+   "corpus": "lucide",
+   "stem": "banknote-arrow-up",
+   "gt_params": 42
+  },
+  {
+   "corpus": "lucide",
+   "stem": "bath",
+   "gt_params": 37
+  },
+  {
+   "corpus": "lucide",
+   "stem": "battery-low",
+   "gt_params": 10
+  },
+  {
+   "corpus": "lucide",
+   "stem": "beaker",
+   "gt_params": 24
+  },
+  {
+   "corpus": "lucide",
+   "stem": "bean-off",
+   "gt_params": 51
+  },
+  {
+   "corpus": "lucide",
+   "stem": "bell",
+   "gt_params": 42
+  },
+  {
+   "corpus": "lucide",
+   "stem": "bell-check",
+   "gt_params": 46
+  },
+  {
+   "corpus": "lucide",
+   "stem": "between-horizontal-start",
+   "gt_params": 16
+  },
+  {
+   "corpus": "lucide",
+   "stem": "between-vertical-start",
+   "gt_params": 16
+  },
+  {
+   "corpus": "lucide",
+   "stem": "birdhouse",
+   "gt_params": 22
+  },
+  {
+   "corpus": "lucide",
+   "stem": "bluetooth",
+   "gt_params": 10
+  },
+  {
+   "corpus": "lucide",
+   "stem": "book-a",
+   "gt_params": 44
+  },
+  {
+   "corpus": "lucide",
+   "stem": "book-alert",
+   "gt_params": 42
+  },
+  {
+   "corpus": "lucide",
+   "stem": "book-heart",
+   "gt_params": 61
+  },
+  {
+   "corpus": "lucide",
+   "stem": "book-type",
+   "gt_params": 48
+  },
+  {
+   "corpus": "lucide",
+   "stem": "bridge",
+   "gt_params": 21
+  },
+  {
+   "corpus": "lucide",
+   "stem": "briefcase-conveyor-belt",
+   "gt_params": 36
+  },
+  {
+   "corpus": "lucide",
+   "stem": "bug",
+   "gt_params": 74
+  },
+  {
+   "corpus": "lucide",
+   "stem": "calendar-arrow-down",
+   "gt_params": 41
+  },
+  {
+   "corpus": "lucide",
+   "stem": "calendar-heart",
+   "gt_params": 58
+  },
+  {
+   "corpus": "lucide",
+   "stem": "calendar-sync",
+   "gt_params": 61
+  },
+  {
+   "corpus": "lucide",
+   "stem": "cat",
+   "gt_params": 71
+  },
+  {
+   "corpus": "lucide",
+   "stem": "cctv-off",
+   "gt_params": 68
+  },
+  {
+   "corpus": "lucide",
+   "stem": "chart-area",
+   "gt_params": 63
+  },
+  {
+   "corpus": "lucide",
+   "stem": "chef-hat",
+   "gt_params": 53
+  },
+  {
+   "corpus": "lucide",
+   "stem": "chess-king",
+   "gt_params": 80
+  },
+  {
+   "corpus": "lucide",
+   "stem": "chess-rook",
+   "gt_params": 64
+  },
+  {
+   "corpus": "lucide",
+   "stem": "church",
+   "gt_params": 82
+  },
+  {
+   "corpus": "lucide",
+   "stem": "circle-arrow-out-up-left",
+   "gt_params": 13
+  },
+  {
+   "corpus": "lucide",
+   "stem": "circle-arrow-right",
+   "gt_params": 9
+  },
+  {
+   "corpus": "lucide",
+   "stem": "circle-equal",
+   "gt_params": 7
+  },
+  {
+   "corpus": "lucide",
+   "stem": "clipboard-plus",
+   "gt_params": 48
+  },
+  {
+   "corpus": "lucide",
+   "stem": "clock-arrow-left",
+   "gt_params": 17
+  },
+  {
+   "corpus": "lucide",
+   "stem": "closed-caption",
+   "gt_params": 20
+  },
+  {
+   "corpus": "lucide",
+   "stem": "cloud-drizzle",
+   "gt_params": 28
+  },
+  {
+   "corpus": "lucide",
+   "stem": "cloud-moon",
+   "gt_params": 49
+  },
+  {
+   "corpus": "lucide",
+   "stem": "coffee",
+   "gt_params": 51
+  },
+  {
+   "corpus": "lucide",
+   "stem": "cooking-pot",
+   "gt_params": 44
+  },
+  {
+   "corpus": "lucide",
+   "stem": "copyleft",
+   "gt_params": 10
+  },
+  {
+   "corpus": "lucide",
+   "stem": "corner-up-left",
+   "gt_params": 15
+  },
+  {
+   "corpus": "lucide",
+   "stem": "corner-up-right",
+   "gt_params": 15
+  },
+  {
+   "corpus": "lucide",
+   "stem": "diff",
+   "gt_params": 6
+  },
+  {
+   "corpus": "lucide",
+   "stem": "drafting-compass",
+   "gt_params": 16
+  },
+  {
+   "corpus": "lucide",
+   "stem": "drama",
+   "gt_params": 68
+  },
+  {
+   "corpus": "lucide",
+   "stem": "ellipsis-vertical",
+   "gt_params": 9
+  },
+  {
+   "corpus": "lucide",
+   "stem": "equal",
+   "gt_params": 8
+  },
+  {
+   "corpus": "lucide",
+   "stem": "fast-forward",
+   "gt_params": 50
+  },
+  {
+   "corpus": "lucide",
+   "stem": "feather",
+   "gt_params": 31
+  },
+  {
+   "corpus": "lucide",
+   "stem": "file-code",
+   "gt_params": 62
+  },
+  {
+   "corpus": "lucide",
+   "stem": "file-digit",
+   "gt_params": 59
+  },
+  {
+   "corpus": "lucide",
+   "stem": "file-lock",
+   "gt_params": 66
+  },
+  {
+   "corpus": "lucide",
+   "stem": "file-minus-corner",
+   "gt_params": 51
+  },
+  {
+   "corpus": "lucide",
+   "stem": "file-type-corner",
+   "gt_params": 73
+  },
+  {
+   "corpus": "lucide",
+   "stem": "focus",
+   "gt_params": 47
+  },
+  {
+   "corpus": "lucide",
+   "stem": "folder-bookmark",
+   "gt_params": 60
+  },
+  {
+   "corpus": "lucide",
+   "stem": "folder-closed",
+   "gt_params": 54
+  },
+  {
+   "corpus": "lucide",
+   "stem": "folder-heart",
+   "gt_params": 70
+  },
+  {
+   "corpus": "lucide",
+   "stem": "folder-open",
+   "gt_params": 74
+  },
+  {
+   "corpus": "lucide",
+   "stem": "folder-up",
+   "gt_params": 58
+  },
+  {
+   "corpus": "lucide",
+   "stem": "forward",
+   "gt_params": 15
+  },
+  {
+   "corpus": "lucide",
+   "stem": "gamepad-directional",
+   "gt_params": 172
+  },
+  {
+   "corpus": "lucide",
+   "stem": "git-compare",
+   "gt_params": 28
+  },
+  {
+   "corpus": "lucide",
+   "stem": "globe",
+   "gt_params": 19
+  },
+  {
+   "corpus": "lucide",
+   "stem": "grip-horizontal",
+   "gt_params": 18
+  },
+  {
+   "corpus": "lucide",
+   "stem": "hand-grab",
+   "gt_params": 100
+  },
+  {
+   "corpus": "lucide",
+   "stem": "hard-drive-download",
+   "gt_params": 16
+  },
+  {
+   "corpus": "lucide",
+   "stem": "hash",
+   "gt_params": 16
+  },
+  {
+   "corpus": "lucide",
+   "stem": "haze",
+   "gt_params": 21
+  },
+  {
+   "corpus": "lucide",
+   "stem": "heading-6",
+   "gt_params": 15
+  },
+  {
+   "corpus": "lucide",
+   "stem": "ice-cream-cone",
+   "gt_params": 34
+  },
+  {
+   "corpus": "lucide",
+   "stem": "image-play",
+   "gt_params": 59
+  },
+  {
+   "corpus": "lucide",
+   "stem": "image-up",
+   "gt_params": 49
+  },
+  {
+   "corpus": "lucide",
+   "stem": "inbox",
+   "gt_params": 52
+  },
+  {
+   "corpus": "lucide",
+   "stem": "iteration-ccw",
+   "gt_params": 13
+  },
+  {
+   "corpus": "lucide",
+   "stem": "lamp-ceiling",
+   "gt_params": 43
+  },
+  {
+   "corpus": "lucide",
+   "stem": "landmark",
+   "gt_params": 35
+  },
+  {
+   "corpus": "lucide",
+   "stem": "lightbulb-off",
+   "gt_params": 32
+  },
+  {
+   "corpus": "lucide",
+   "stem": "list-checks",
+   "gt_params": 14
+  },
+  {
+   "corpus": "lucide",
+   "stem": "list-filter-plus",
+   "gt_params": 10
+  },
+  {
+   "corpus": "lucide",
+   "stem": "list-start",
+   "gt_params": 21
+  },
+  {
+   "corpus": "lucide",
+   "stem": "maximize-2",
+   "gt_params": 12
+  },
+  {
+   "corpus": "lucide",
+   "stem": "message-circle-dashed-check",
+   "gt_params": 64
+  },
+  {
+   "corpus": "lucide",
+   "stem": "message-circle-heart",
+   "gt_params": 62
+  },
+  {
+   "corpus": "lucide",
+   "stem": "message-circle-plus",
+   "gt_params": 36
+  },
+  {
+   "corpus": "lucide",
+   "stem": "message-circle-question-mark",
+   "gt_params": 47
+  },
+  {
+   "corpus": "lucide",
+   "stem": "messages-square",
+   "gt_params": 79
+  },
+  {
+   "corpus": "lucide",
+   "stem": "microwave",
+   "gt_params": 18
+  },
+  {
+   "corpus": "lucide",
+   "stem": "mop",
+   "gt_params": 48
+  },
+  {
+   "corpus": "lucide",
+   "stem": "move-right",
+   "gt_params": 6
+  },
+  {
+   "corpus": "lucide",
+   "stem": "navigation-2-off",
+   "gt_params": 16
+  },
+  {
+   "corpus": "lucide",
+   "stem": "nut-off",
+   "gt_params": 106
+  },
+  {
+   "corpus": "lucide",
+   "stem": "octagon-pause",
+   "gt_params": 74
+  },
+  {
+   "corpus": "lucide",
+   "stem": "octagon-x",
+   "gt_params": 74
+  },
+  {
+   "corpus": "lucide",
+   "stem": "omega",
+   "gt_params": 43
+  },
+  {
+   "corpus": "lucide",
+   "stem": "paint-bucket",
+   "gt_params": 82
+  },
+  {
+   "corpus": "lucide",
+   "stem": "paintbrush-vertical",
+   "gt_params": 85
+  },
+  {
+   "corpus": "lucide",
+   "stem": "panel-bottom-dashed",
+   "gt_params": 14
+  },
+  {
+   "corpus": "lucide",
+   "stem": "panel-right",
+   "gt_params": 8
+  },
+  {
+   "corpus": "lucide",
+   "stem": "panel-right-close",
+   "gt_params": 12
+  },
+  {
+   "corpus": "lucide",
+   "stem": "parasol",
+   "gt_params": 25
+  },
+  {
+   "corpus": "lucide",
+   "stem": "pause",
+   "gt_params": 12
+  },
+  {
+   "corpus": "lucide",
+   "stem": "pen-line",
+   "gt_params": 36
+  },
+  {
+   "corpus": "lucide",
+   "stem": "pencil-off",
+   "gt_params": 44
+  },
+  {
+   "corpus": "lucide",
+   "stem": "pencil-sparkles",
+   "gt_params": 48
+  },
+  {
+   "corpus": "lucide",
+   "stem": "person-standing",
+   "gt_params": 13
+  },
+  {
+   "corpus": "lucide",
+   "stem": "phone-forwarded",
+   "gt_params": 88
+  },
+  {
+   "corpus": "lucide",
+   "stem": "phone-missed",
+   "gt_params": 86
+  },
+  {
+   "corpus": "lucide",
+   "stem": "playing-card",
+   "gt_params": 40
+  },
+  {
+   "corpus": "lucide",
+   "stem": "radius",
+   "gt_params": 15
+  },
+  {
+   "corpus": "lucide",
+   "stem": "rectangle-goggles",
+   "gt_params": 61
+  },
+  {
+   "corpus": "lucide",
+   "stem": "repeat",
+   "gt_params": 30
+  },
+  {
+   "corpus": "lucide",
+   "stem": "road",
+   "gt_params": 40
+  },
+  {
+   "corpus": "lucide",
+   "stem": "router",
+   "gt_params": 26
+  },
+  {
+   "corpus": "lucide",
+   "stem": "save-pen",
+   "gt_params": 94
+  },
+  {
+   "corpus": "lucide",
+   "stem": "scan-eye",
+   "gt_params": 75
+  },
+  {
+   "corpus": "lucide",
+   "stem": "separator-horizontal",
+   "gt_params": 10
+  },
+  {
+   "corpus": "lucide",
+   "stem": "settings",
+   "gt_params": 87
+  },
+  {
+   "corpus": "lucide",
+   "stem": "shapes",
+   "gt_params": 34
+  },
+  {
+   "corpus": "lucide",
+   "stem": "ship",
+   "gt_params": 85
+  },
+  {
+   "corpus": "lucide",
+   "stem": "shopping-bag",
+   "gt_params": 61
+  },
+  {
+   "corpus": "lucide",
+   "stem": "shopping-basket",
+   "gt_params": 32
+  },
+  {
+   "corpus": "lucide",
+   "stem": "shopping-cart-plus",
+   "gt_params": 43
+  },
+  {
+   "corpus": "lucide",
+   "stem": "sliders-horizontal",
+   "gt_params": 18
+  },
+  {
+   "corpus": "lucide",
+   "stem": "smartphone",
+   "gt_params": 8
+  },
+  {
+   "corpus": "lucide",
+   "stem": "sofa",
+   "gt_params": 78
+  },
+  {
+   "corpus": "lucide",
+   "stem": "sparkle",
+   "gt_params": 70
+  },
+  {
+   "corpus": "lucide",
+   "stem": "sport-shoe",
+   "gt_params": 55
+  },
+  {
+   "corpus": "lucide",
+   "stem": "square-arrow-out-up-right",
+   "gt_params": 35
+  },
+  {
+   "corpus": "lucide",
+   "stem": "square-centerline-dashed-horizontal",
+   "gt_params": 47
+  },
+  {
+   "corpus": "lucide",
+   "stem": "square-minus",
+   "gt_params": 8
+  },
+  {
+   "corpus": "lucide",
+   "stem": "square-parking",
+   "gt_params": 19
+  },
+  {
+   "corpus": "lucide",
+   "stem": "square-split-vertical",
+   "gt_params": 42
+  },
+  {
+   "corpus": "lucide",
+   "stem": "store",
+   "gt_params": 109
+  },
+  {
+   "corpus": "lucide",
+   "stem": "swiss-franc",
+   "gt_params": 8
+  },
+  {
+   "corpus": "lucide",
+   "stem": "table-columns-split",
+   "gt_params": 58
+  },
+  {
+   "corpus": "lucide",
+   "stem": "target",
+   "gt_params": 9
+  },
+  {
+   "corpus": "lucide",
+   "stem": "test-tube",
+   "gt_params": 20
+  },
+  {
+   "corpus": "lucide",
+   "stem": "ticket-minus",
+   "gt_params": 54
+  },
+  {
+   "corpus": "lucide",
+   "stem": "timer-reset",
+   "gt_params": 24
+  },
+  {
+   "corpus": "lucide",
+   "stem": "toolbox",
+   "gt_params": 78
+  },
+  {
+   "corpus": "lucide",
+   "stem": "type",
+   "gt_params": 24
+  },
+  {
+   "corpus": "lucide",
+   "stem": "undo",
+   "gt_params": 20
+  },
+  {
+   "corpus": "lucide",
+   "stem": "undo-2",
+   "gt_params": 22
+  },
+  {
+   "corpus": "lucide",
+   "stem": "unlink",
+   "gt_params": 54
+  },
+  {
+   "corpus": "lucide",
+   "stem": "user-pen",
+   "gt_params": 48
+  },
+  {
+   "corpus": "lucide",
+   "stem": "vegan",
+   "gt_params": 28
+  },
+  {
+   "corpus": "lucide",
+   "stem": "weight",
+   "gt_params": 37
+  },
+  {
+   "corpus": "lucide",
+   "stem": "zodiac-aries",
+   "gt_params": 16
+  },
+  {
+   "corpus": "lucide",
+   "stem": "zodiac-sagittarius",
+   "gt_params": 8
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "12mp",
+   "gt_params": 160
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "20mp",
+   "gt_params": 190
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "7k_plus",
+   "gt_params": 102
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "add_road",
+   "gt_params": 52
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "admin_panel_settings",
+   "gt_params": 122
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "all_inclusive",
+   "gt_params": 114
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "arrow_back_ios",
+   "gt_params": 12
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "arrow_circle_down",
+   "gt_params": 62
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "arrow_drop_down",
+   "gt_params": 6
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "audio_file",
+   "gt_params": 69
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "battery_saver",
+   "gt_params": 64
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "bedroom_parent",
+   "gt_params": 134
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "bento",
+   "gt_params": 80
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "blinds_closed",
+   "gt_params": 94
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "block",
+   "gt_params": 66
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "bluetooth",
+   "gt_params": 40
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "border_left",
+   "gt_params": 136
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "boy",
+   "gt_params": 52
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "brightness_high",
+   "gt_params": 115
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "calendar_view_week",
+   "gt_params": 64
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "call",
+   "gt_params": 109
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "camera_alt",
+   "gt_params": 104
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "candlestick_chart",
+   "gt_params": 64
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "car_crash",
+   "gt_params": 176
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "chair",
+   "gt_params": 164
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "chair_alt",
+   "gt_params": 92
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "check_box_outline_blank",
+   "gt_params": 40
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "cleaning_services",
+   "gt_params": 122
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "closed_caption",
+   "gt_params": 138
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "code_off",
+   "gt_params": 32
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "colorize",
+   "gt_params": 60
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "crop",
+   "gt_params": 52
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "crop_landscape",
+   "gt_params": 40
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "crop_square",
+   "gt_params": 40
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "data_thresholding",
+   "gt_params": 86
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "dehaze",
+   "gt_params": 24
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "dining",
+   "gt_params": 144
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "directions_subway_filled",
+   "gt_params": 94
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "diversity_3",
+   "gt_params": 173
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "door_back",
+   "gt_params": 42
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "double_arrow",
+   "gt_params": 20
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "downhill_skiing",
+   "gt_params": 111
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "drive_file_move_rtl",
+   "gt_params": 66
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "dvr",
+   "gt_params": 80
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "dynamic_feed",
+   "gt_params": 76
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "earbuds",
+   "gt_params": 146
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "enhanced_encryption",
+   "gt_params": 98
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "event_busy",
+   "gt_params": 86
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "expand_circle_down",
+   "gt_params": 60
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "exposure_neg_1",
+   "gt_params": 22
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "face_4",
+   "gt_params": 154
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "fitness_center",
+   "gt_params": 56
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "flight",
+   "gt_params": 44
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "flip",
+   "gt_params": 96
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "flip_camera_android",
+   "gt_params": 124
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "forward_10",
+   "gt_params": 258
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "free_breakfast",
+   "gt_params": 71
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "fullscreen",
+   "gt_params": 48
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "gesture",
+   "gt_params": 152
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "girl",
+   "gt_params": 45
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "group_remove",
+   "gt_params": 134
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "groups",
+   "gt_params": 215
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "hdr_enhanced_select",
+   "gt_params": 186
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "hdr_off",
+   "gt_params": 96
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "headset",
+   "gt_params": 86
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "hearing",
+   "gt_params": 137
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "help_center",
+   "gt_params": 122
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "hourglass_empty",
+   "gt_params": 56
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "houseboat",
+   "gt_params": 152
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "https",
+   "gt_params": 100
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "insert_emoticon",
+   "gt_params": 110
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "integration_instructions",
+   "gt_params": 131
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "javascript",
+   "gt_params": 96
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "join_right",
+   "gt_params": 100
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "keyboard_double_arrow_down",
+   "gt_params": 20
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "keyboard_double_arrow_up",
+   "gt_params": 20
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "laptop",
+   "gt_params": 48
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "live_help",
+   "gt_params": 104
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "local_library",
+   "gt_params": 110
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "logo_dev",
+   "gt_params": 139
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "lyrics",
+   "gt_params": 107
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "macro_off",
+   "gt_params": 292
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "map",
+   "gt_params": 68
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "media_bluetooth_off",
+   "gt_params": 82
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "miscellaneous_services",
+   "gt_params": 348
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "mode_fan_off",
+   "gt_params": 265
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "mode_standby",
+   "gt_params": 72
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "movie_creation",
+   "gt_params": 58
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "music_note",
+   "gt_params": 53
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "navigate_before",
+   "gt_params": 12
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "no_backpack",
+   "gt_params": 94
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "no_encryption_gmailerrorred",
+   "gt_params": 86
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "no_food",
+   "gt_params": 82
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "not_interested",
+   "gt_params": 66
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "not_listed_location",
+   "gt_params": 206
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "notifications_active",
+   "gt_params": 108
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "notifications_paused",
+   "gt_params": 92
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "open_in_new",
+   "gt_params": 58
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "panorama_fish_eye",
+   "gt_params": 48
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "pentagon",
+   "gt_params": 20
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "perm_media",
+   "gt_params": 80
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "perm_scan_wifi",
+   "gt_params": 44
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "person_off",
+   "gt_params": 90
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "phone_forwarded",
+   "gt_params": 121
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "phone_iphone",
+   "gt_params": 68
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "photo_camera_back",
+   "gt_params": 64
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "pin_drop",
+   "gt_params": 75
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "play_disabled",
+   "gt_params": 26
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "polyline",
+   "gt_params": 58
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "price_change",
+   "gt_params": 112
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "print_disabled",
+   "gt_params": 101
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "private_connectivity",
+   "gt_params": 149
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "qr_code",
+   "gt_params": 96
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "queue_music",
+   "gt_params": 58
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "radio_button_unchecked",
+   "gt_params": 48
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "remove_red_eye",
+   "gt_params": 88
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "report",
+   "gt_params": 41
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "rocket_launch",
+   "gt_params": 163
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "rss_feed",
+   "gt_params": 35
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "rsvp",
+   "gt_params": 132
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "rule_folder",
+   "gt_params": 84
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "school",
+   "gt_params": 42
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "screen_lock_rotation",
+   "gt_params": 130
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "scuba_diving",
+   "gt_params": 74
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "sd_card_alert",
+   "gt_params": 50
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "send",
+   "gt_params": 24
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "send_and_archive",
+   "gt_params": 80
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "settings",
+   "gt_params": 352
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "settings_overscan",
+   "gt_params": 64
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "sip",
+   "gt_params": 128
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "slideshow",
+   "gt_params": 46
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "smart_toy",
+   "gt_params": 138
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "sms_failed",
+   "gt_params": 50
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "speaker",
+   "gt_params": 107
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "sports_basketball",
+   "gt_params": 155
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "sports_tennis",
+   "gt_params": 129
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "storage",
+   "gt_params": 48
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "subtitles_off",
+   "gt_params": 80
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "superscript",
+   "gt_params": 70
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "swap_horizontal_circle",
+   "gt_params": 72
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "table_rows",
+   "gt_params": 56
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "text_rotate_up",
+   "gt_params": 36
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "thumb_up_alt",
+   "gt_params": 74
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "touch_app",
+   "gt_params": 141
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "transfer_within_a_station",
+   "gt_params": 108
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "transform",
+   "gt_params": 64
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "tsunami",
+   "gt_params": 187
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "turn_sharp_right",
+   "gt_params": 38
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "two_wheeler",
+   "gt_params": 138
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "unarchive",
+   "gt_params": 76
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "usb",
+   "gt_params": 97
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "verified_user",
+   "gt_params": 50
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "video_camera_back",
+   "gt_params": 58
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "video_chat",
+   "gt_params": 78
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "view_cozy",
+   "gt_params": 64
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "view_list",
+   "gt_params": 56
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "view_week",
+   "gt_params": 56
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "vignette",
+   "gt_params": 88
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "wifi_off",
+   "gt_params": 80
+  },
+  {
+   "corpus": "material-icons",
+   "stem": "wrong_location",
+   "gt_params": 81
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u0030",
+   "gt_params": 108
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u0036",
+   "gt_params": 146
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f1ec",
+   "gt_params": 98
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f1f4",
+   "gt_params": 48
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f36a",
+   "gt_params": 1158
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f371",
+   "gt_params": 1680
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f385_1f3fe",
+   "gt_params": 640
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f39b",
+   "gt_params": 452
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f39e",
+   "gt_params": 688
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f3a4",
+   "gt_params": 283
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f3ab",
+   "gt_params": 364
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f3ad",
+   "gt_params": 960
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f3c2_1f3fd",
+   "gt_params": 1342
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f3c3_1f3fc_200d_27a1",
+   "gt_params": 1346
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f3c3_1f3fd_200d_2640_200d_27a1",
+   "gt_params": 1344
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f3c3_1f3fd_200d_27a1",
+   "gt_params": 1346
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f3c4_1f3fe",
+   "gt_params": 2560
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f3c6",
+   "gt_params": 1000
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f3ca_1f3fc",
+   "gt_params": 1188
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f3cb_1f3fc_200d_2640",
+   "gt_params": 2148
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f3cb_200d_2642",
+   "gt_params": 2170
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f3cc_1f3fb",
+   "gt_params": 1174
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f3d7",
+   "gt_params": 736
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f3e1",
+   "gt_params": 814
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f41b",
+   "gt_params": 573
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f41c",
+   "gt_params": 860
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f439",
+   "gt_params": 616
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f44b_1f3fb",
+   "gt_params": 650
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f44d_1f3fc",
+   "gt_params": 722
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f44f_1f3fd",
+   "gt_params": 694
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f45d",
+   "gt_params": 388
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f462",
+   "gt_params": 502
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f468_1f3fb_200d_2764_200d_1f468_1f3fd",
+   "gt_params": 1104
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f468_1f3fb_200d_2764_200d_1f48b_200d_1f468_1f3ff",
+   "gt_params": 1072
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f468_1f3fc_200d_2764_200d_1f48b_200d_1f468_1f3fd",
+   "gt_params": 1072
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f468_1f3fd_200d_1f33e",
+   "gt_params": 1284
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f468_1f3ff_200d_1f393",
+   "gt_params": 814
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f468_1f3ff_200d_2764_200d_1f468_1f3fb",
+   "gt_params": 1104
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f468_200d_1f3a4",
+   "gt_params": 1438
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f468_200d_1f527",
+   "gt_params": 1336
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f469_1f3fb_200d_1f52c",
+   "gt_params": 1082
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f469_1f3fb_200d_1f91d_200d_1f468_1f3fe",
+   "gt_params": 2082
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f469_1f3fc_200d_1f33e",
+   "gt_params": 866
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f469_1f3fc_200d_1f52c",
+   "gt_params": 1082
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f469_1f3fc_200d_1f91d_200d_1f468_1f3fb",
+   "gt_params": 2082
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f469_1f3fd_200d_1f4bc",
+   "gt_params": 494
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f469_1f3fe_200d_1f4bc",
+   "gt_params": 494
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f469_1f3fe_200d_1f9af_200d_27a1",
+   "gt_params": 924
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f469_1f3fe_200d_1faef_200d_1f469_1f3fd",
+   "gt_params": 2194
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f469_1f3fe_200d_2764_200d_1f469_1f3fd",
+   "gt_params": 960
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f469_1f3ff_200d_1faef_200d_1f469_1f3fb",
+   "gt_params": 2182
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f469_1f3ff_200d_1faef_200d_1f469_1f3fd",
+   "gt_params": 2194
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f469_200d_1f469_200d_1f466_200d_1f466",
+   "gt_params": 604
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f469_200d_1f469_200d_1f467_200d_1f466",
+   "gt_params": 725
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f469_200d_1f9bd",
+   "gt_params": 1465
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f46a",
+   "gt_params": 251
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f46c_1f3fd",
+   "gt_params": 2590
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f46d_1f3fc",
+   "gt_params": 1574
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f46e_1f3fe_200d_2642",
+   "gt_params": 968
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f46f",
+   "gt_params": 3328
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f470_1f3fb_200d_2640",
+   "gt_params": 876
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f473_1f3ff_200d_2640",
+   "gt_params": 1112
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f478_1f3fd",
+   "gt_params": 1138
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f481_200d_2640",
+   "gt_params": 520
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f482_1f3ff_200d_2640",
+   "gt_params": 992
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f486_1f3fe_200d_2640",
+   "gt_params": 502
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f499",
+   "gt_params": 176
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f4ac",
+   "gt_params": 53
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f4d8",
+   "gt_params": 210
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f4e5",
+   "gt_params": 236
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f511",
+   "gt_params": 324
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f51c",
+   "gt_params": 600
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f520",
+   "gt_params": 438
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f52b",
+   "gt_params": 620
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f54e",
+   "gt_params": 980
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f55b",
+   "gt_params": 152
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f56f",
+   "gt_params": 582
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f573",
+   "gt_params": 92
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f595_1f3fb",
+   "gt_params": 502
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f596_1f3fe",
+   "gt_params": 564
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f5a8",
+   "gt_params": 430
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f5b1",
+   "gt_params": 320
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f5fa",
+   "gt_params": 2540
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f606",
+   "gt_params": 458
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f62d",
+   "gt_params": 666
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f645_1f3fc_200d_2640",
+   "gt_params": 974
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f645_200d_2640",
+   "gt_params": 974
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f64b_1f3fd_200d_2642",
+   "gt_params": 864
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f64b_1f3fe_200d_2640",
+   "gt_params": 798
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f64d_1f3fe",
+   "gt_params": 960
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f64d_200d_2640",
+   "gt_params": 522
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f64d_200d_2642",
+   "gt_params": 560
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f6c0_1f3ff",
+   "gt_params": 1739
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f6e2",
+   "gt_params": 638
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f6f5",
+   "gt_params": 938
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f7e2",
+   "gt_params": 48
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f90d",
+   "gt_params": 176
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f90f_1f3fd",
+   "gt_params": 916
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f914",
+   "gt_params": 772
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f916",
+   "gt_params": 300
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f91c_1f3fe",
+   "gt_params": 450
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f91f",
+   "gt_params": 590
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f923",
+   "gt_params": 770
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f926_1f3fb_200d_2640",
+   "gt_params": 866
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f926_1f3ff",
+   "gt_params": 1308
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f926_200d_2642",
+   "gt_params": 904
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f930_1f3ff",
+   "gt_params": 666
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f931_1f3fe",
+   "gt_params": 1486
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f932",
+   "gt_params": 1122
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f935_1f3fc_200d_2642",
+   "gt_params": 697
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f937_1f3fb_200d_2642",
+   "gt_params": 1136
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f938_200d_2640",
+   "gt_params": 930
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f93c_1f3fe_200d_2640",
+   "gt_params": 2182
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f93e_1f3fd",
+   "gt_params": 1682
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f95d",
+   "gt_params": 1008
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f96b",
+   "gt_params": 386
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f987",
+   "gt_params": 580
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9a9",
+   "gt_params": 554
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9b8_1f3fd",
+   "gt_params": 1808
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9b9_1f3fc",
+   "gt_params": 2750
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9be",
+   "gt_params": 835
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9cd_1f3fb",
+   "gt_params": 1408
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9cd_1f3fb_200d_2640",
+   "gt_params": 1188
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9cd_1f3fb_200d_2642",
+   "gt_params": 1236
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9ce_1f3fd_200d_2642",
+   "gt_params": 816
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9ce_200d_2642",
+   "gt_params": 816
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9ce_200d_2642_200d_27a1",
+   "gt_params": 834
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9cf_1f3fb",
+   "gt_params": 866
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9cf_1f3fc",
+   "gt_params": 866
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9cf_1f3fd",
+   "gt_params": 866
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9cf_1f3fe_200d_2642",
+   "gt_params": 916
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9d1_1f3fb_200d_2764_200d_1f48b_200d_1f9d1_1f3ff",
+   "gt_params": 1314
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9d1_1f3fc_200d_1f37c",
+   "gt_params": 1772
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9d1_1f3fc_200d_1f91d_200d_1f9d1_1f3fd",
+   "gt_params": 2466
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9d1_1f3fc_200d_1f9bd",
+   "gt_params": 1347
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9d1_1f3fd_200d_1f393",
+   "gt_params": 1096
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9d1_1f3fd_200d_1f91d_200d_1f9d1_1f3ff",
+   "gt_params": 2466
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9d1_1f3fd_200d_1faef_200d_1f9d1_1f3fb",
+   "gt_params": 2278
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9d1_1f3fe_200d_1f9af",
+   "gt_params": 817
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9d1_1f3fe_200d_1f9b0",
+   "gt_params": 898
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9d1_1f3fe_200d_1f9bc_200d_27a1",
+   "gt_params": 1596
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9d1_1f3ff_200d_1f52c",
+   "gt_params": 1550
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9d2_1f3fd",
+   "gt_params": 1086
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9d3",
+   "gt_params": 1114
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9d6_1f3fe_200d_2642",
+   "gt_params": 912
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9d9_1f3fc_200d_2642",
+   "gt_params": 1114
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9da_1f3fd_200d_2642",
+   "gt_params": 1404
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9db_1f3fd_200d_2640",
+   "gt_params": 592
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9dd_1f3fd_200d_2640",
+   "gt_params": 1370
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9dd_1f3ff_200d_2640",
+   "gt_params": 1370
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9e5",
+   "gt_params": 1892
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9e6",
+   "gt_params": 336
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9ed",
+   "gt_params": 474
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1fa90",
+   "gt_params": 628
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1fa99",
+   "gt_params": 1541
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1fa9d",
+   "gt_params": 438
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1faa5",
+   "gt_params": 576
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1fabc",
+   "gt_params": 1248
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1fac4",
+   "gt_params": 918
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1faea",
+   "gt_params": 278
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1faf1_1f3fc_200d_1faf2_1f3ff",
+   "gt_params": 1202
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1faf3_1f3fd",
+   "gt_params": 504
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u2618",
+   "gt_params": 646
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u261d_1f3fb",
+   "gt_params": 622
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u26bd",
+   "gt_params": 462
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u26ea",
+   "gt_params": 908
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u26f9_1f3fc",
+   "gt_params": 1510
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u26f9_1f3fe",
+   "gt_params": 1510
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u2b05",
+   "gt_params": 156
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u3030",
+   "gt_params": 220
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F195",
+   "gt_params": 34
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F1E8-1F1FE",
+   "gt_params": 292
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F1F1-1F1E8",
+   "gt_params": 24
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F1FB-1F1EC",
+   "gt_params": 274
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F1FF-1F1F2",
+   "gt_params": 48
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F326",
+   "gt_params": 632
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F334",
+   "gt_params": 264
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F33F",
+   "gt_params": 210
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F361",
+   "gt_params": 140
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F382",
+   "gt_params": 438
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F385-1F3FF",
+   "gt_params": 1336
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F386",
+   "gt_params": 202
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F38A",
+   "gt_params": 192
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F393",
+   "gt_params": 54
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F3A1",
+   "gt_params": 265
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F3A4",
+   "gt_params": 258
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F3A9",
+   "gt_params": 134
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F3BB",
+   "gt_params": 404
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F3C3-1F3FC-200D-2640-FE0F-200D-27A1-FE0F",
+   "gt_params": 212
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F3C3-1F3FE-200D-2640-FE0F-200D-27A1-FE0F",
+   "gt_params": 212
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F3C3-1F3FF-200D-2642-FE0F",
+   "gt_params": 193
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F3C4-1F3FF-200D-2640-FE0F",
+   "gt_params": 497
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F3C5",
+   "gt_params": 117
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F3CB-1F3FD",
+   "gt_params": 402
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F3CC-FE0F-200D-2640-FE0F",
+   "gt_params": 256
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F3D4",
+   "gt_params": 390
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F3DD",
+   "gt_params": 654
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F3F3-FE0F-200D-1F7E6",
+   "gt_params": 12
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F3F4-E0069-E0074-E0062-E0061-E007F",
+   "gt_params": 20
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F3FB",
+   "gt_params": 72
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F400",
+   "gt_params": 468
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F442-1F3FB",
+   "gt_params": 114
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F442-1F3FF",
+   "gt_params": 114
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F468-1F3FB-200D-1F37C",
+   "gt_params": 865
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F468-1F3FB-200D-1F3ED",
+   "gt_params": 1290
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F468-1F3FB-200D-1F430-200D-1F468-1F3FE",
+   "gt_params": 496
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F468-1F3FC-200D-1F3ED",
+   "gt_params": 1290
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F468-1F3FC-200D-1F91D-200D-1F468-1F3FF",
+   "gt_params": 324
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F468-1F3FD-200D-1FAEF-200D-1F468-1F3FC",
+   "gt_params": 417
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F468-1F3FE-200D-1F527",
+   "gt_params": 494
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F468-1F3FF-200D-1F9B0",
+   "gt_params": 260
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F468-1F3FF-200D-2695-FE0F",
+   "gt_params": 388
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F468-200D-1F692",
+   "gt_params": 1542
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F468-200D-1F9AF-200D-27A1-FE0F",
+   "gt_params": 175
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F468-200D-1F9B1",
+   "gt_params": 436
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F468-200D-1F9BD",
+   "gt_params": 236
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F469-1F3FC-200D-1F9BD-200D-27A1-FE0F",
+   "gt_params": 302
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F469-1F3FC-200D-2764-FE0F-200D-1F468-1F3FD",
+   "gt_params": 620
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F469-1F3FC-200D-2764-FE0F-200D-1F48B-200D-1F469-1F3FC",
+   "gt_params": 420
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F469-1F3FD-200D-2764-FE0F-200D-1F48B-200D-1F469-1F3FF",
+   "gt_params": 420
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F469-1F3FE-200D-1F9AF",
+   "gt_params": 291
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F469-1F3FE-200D-2764-FE0F-200D-1F469-1F3FB",
+   "gt_params": 606
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F469-1F3FF-200D-1F9B2",
+   "gt_params": 152
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F469-1F3FF-200D-2764-FE0F-200D-1F469-1F3FF",
+   "gt_params": 606
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F470-200D-2642-FE0F",
+   "gt_params": 806
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F477-1F3FE-200D-2640-FE0F",
+   "gt_params": 835
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F481-1F3FB-200D-2642-FE0F",
+   "gt_params": 270
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F482-1F3FD-200D-2642-FE0F",
+   "gt_params": 772
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F484",
+   "gt_params": 118
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F491",
+   "gt_params": 620
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F49B",
+   "gt_params": 88
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F4A6",
+   "gt_params": 486
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F4DD",
+   "gt_params": 116
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F4F9",
+   "gt_params": 146
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F517",
+   "gt_params": 286
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F596-1F3FC",
+   "gt_params": 318
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F61C",
+   "gt_params": 137
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F646-1F3FB-200D-2642-FE0F",
+   "gt_params": 434
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F646-1F3FC",
+   "gt_params": 458
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F64D-200D-2642-FE0F",
+   "gt_params": 224
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F64E-1F3FB",
+   "gt_params": 232
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F64E-200D-2642-FE0F",
+   "gt_params": 213
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F6B4-1F3FD-200D-2640-FE0F",
+   "gt_params": 176
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F6B4-1F3FE-200D-2642-FE0F",
+   "gt_params": 157
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F6BD",
+   "gt_params": 210
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F6C1",
+   "gt_params": 184
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F6E0",
+   "gt_params": 224
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F6E3",
+   "gt_params": 118
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F90C-1F3FC",
+   "gt_params": 240
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F91B-1F3FE",
+   "gt_params": 156
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F938-1F3FB",
+   "gt_params": 228
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F939-1F3FB-200D-2640-FE0F",
+   "gt_params": 290
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F939-1F3FE",
+   "gt_params": 189
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F93D-1F3FC-200D-2640-FE0F",
+   "gt_params": 270
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F93E-1F3FE",
+   "gt_params": 225
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F964",
+   "gt_params": 40
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F97B",
+   "gt_params": 362
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F992",
+   "gt_params": 246
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9B3",
+   "gt_params": 66
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9B8-1F3FF",
+   "gt_params": 529
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9BB-1F3FE",
+   "gt_params": 206
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9CE-1F3FF-200D-27A1-FE0F",
+   "gt_params": 155
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9D1",
+   "gt_params": 218
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9D1-1F3FB-200D-1F680",
+   "gt_params": 438
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9D1-1F3FC-200D-1F3ED",
+   "gt_params": 1290
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9D1-1F3FC-200D-1F91D-200D-1F9D1-1F3FC",
+   "gt_params": 452
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9D1-1F3FC-200D-1FA70",
+   "gt_params": 260
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9D1-1F3FC-200D-2696-FE0F",
+   "gt_params": 616
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9D1-1F3FD-200D-1F393",
+   "gt_params": 968
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9D1-1F3FD-200D-1F4BC",
+   "gt_params": 418
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9D1-1F3FD-200D-1F527",
+   "gt_params": 494
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9D1-1F3FD-200D-1F91D-200D-1F9D1-1F3FF",
+   "gt_params": 452
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9D1-1F3FD-200D-1FAEF-200D-1F9D1-1F3FB",
+   "gt_params": 417
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9D1-1F3FD-200D-2764-FE0F-200D-1F48B-200D-1F9D1-1F3FF",
+   "gt_params": 432
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9D1-200D-1F393",
+   "gt_params": 968
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9D1-200D-1F9D1-200D-1F9D2",
+   "gt_params": 134
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9D1-200D-2708-FE0F",
+   "gt_params": 1298
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9D4-1F3FD",
+   "gt_params": 454
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9D6-1F3FD-200D-2642-FE0F",
+   "gt_params": 373
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9D9-1F3FB",
+   "gt_params": 354
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9DA-1F3FE-200D-2642-FE0F",
+   "gt_params": 538
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1F9FE",
+   "gt_params": 100
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1FA8B",
+   "gt_params": 1248
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1FA8E",
+   "gt_params": 312
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1FAAF",
+   "gt_params": 468
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1FAC3",
+   "gt_params": 622
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1FAC4-1F3FD",
+   "gt_params": 622
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1FAE4",
+   "gt_params": 40
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1FAF1-1F3FE-200D-1FAF2-1F3FD",
+   "gt_params": 404
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "1FBC8",
+   "gt_params": 29
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "25FC",
+   "gt_params": 24
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "2639",
+   "gt_params": 87
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "267B",
+   "gt_params": 292
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "26F8",
+   "gt_params": 384
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "2705",
+   "gt_params": 152
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "2708",
+   "gt_params": 180
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "2709",
+   "gt_params": 284
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "3030",
+   "gt_params": 264
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "E056",
+   "gt_params": 666
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "E082",
+   "gt_params": 210
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "E108",
+   "gt_params": 227
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "E18A",
+   "gt_params": 946
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "E1D1",
+   "gt_params": 346
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "E1DB",
+   "gt_params": 1005
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "E24A",
+   "gt_params": 125
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "E2D7",
+   "gt_params": 182
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "E30B",
+   "gt_params": 234
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "E313",
+   "gt_params": 258
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "E31B",
+   "gt_params": 180
+  },
+  {
+   "corpus": "openmoji",
+   "stem": "E434",
+   "gt_params": 48
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "alchemy",
+   "gt_params": 265
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "apachecouchdb",
+   "gt_params": 168
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "apachegroovy",
+   "gt_params": 950
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "appium",
+   "gt_params": 118
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "appletv",
+   "gt_params": 171
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "appwrite",
+   "gt_params": 89
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "astro",
+   "gt_params": 136
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "atlasos",
+   "gt_params": 14
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "atlassian",
+   "gt_params": 65
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "auchan",
+   "gt_params": 281
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "audiobookshelf",
+   "gt_params": 335
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "autentique",
+   "gt_params": 53
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "autocad",
+   "gt_params": 62
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "autozone",
+   "gt_params": 626
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "babelio",
+   "gt_params": 50
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "backendless",
+   "gt_params": 151
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "bandrautomation",
+   "gt_params": 220
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "barclays",
+   "gt_params": 497
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "beijingsubway",
+   "gt_params": 287
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "bigbluebutton",
+   "gt_params": 124
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "bim",
+   "gt_params": 141
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "biome",
+   "gt_params": 42
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "bitwarden",
+   "gt_params": 140
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "bnbchain",
+   "gt_params": 120
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "boosty",
+   "gt_params": 44
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "brandfolder",
+   "gt_params": 214
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "bulma",
+   "gt_params": 14
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "chainguard",
+   "gt_params": 261
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "changedetection",
+   "gt_params": 470
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "channel4",
+   "gt_params": 54
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "chupachups",
+   "gt_params": 1523
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "clickup",
+   "gt_params": 38
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "cocos",
+   "gt_params": 1335
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "codingame",
+   "gt_params": 581
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "contactlesspayment",
+   "gt_params": 792
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "contao",
+   "gt_params": 111
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "contentstack",
+   "gt_params": 408
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "cts",
+   "gt_params": 358
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "customink",
+   "gt_params": 941
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "dacia",
+   "gt_params": 62
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "debridlink",
+   "gt_params": 165
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "denodeploy",
+   "gt_params": 228
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "digitalocean",
+   "gt_params": 68
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "ebox",
+   "gt_params": 128
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "elixir",
+   "gt_params": 53
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "enterprisedb",
+   "gt_params": 182
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "esea",
+   "gt_params": 34
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "ethers",
+   "gt_params": 72
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "fampay",
+   "gt_params": 187
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "fing",
+   "gt_params": 452
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "fizz",
+   "gt_params": 79
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "fluke",
+   "gt_params": 211
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "fluxer",
+   "gt_params": 228
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "getx",
+   "gt_params": 223
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "glovo",
+   "gt_params": 106
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "googleadsense",
+   "gt_params": 115
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "googlechrome",
+   "gt_params": 91
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "googleclassroom",
+   "gt_params": 162
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "grammarly",
+   "gt_params": 100
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "grapheneos",
+   "gt_params": 272
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "h2database",
+   "gt_params": 191
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "hackerearth",
+   "gt_params": 104
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "hashnode",
+   "gt_params": 50
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "haskell",
+   "gt_params": 36
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "hitachi",
+   "gt_params": 294
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "ifixit",
+   "gt_params": 154
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "ilovepdf",
+   "gt_params": 48
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "imessage",
+   "gt_params": 83
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "infinityfree",
+   "gt_params": 413
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "inspire",
+   "gt_params": 68
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "iobroker",
+   "gt_params": 106
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "itunes",
+   "gt_params": 316
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "jdoodle",
+   "gt_params": 398
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "jirasoftware",
+   "gt_params": 59
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "k3s",
+   "gt_params": 115
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "keybase",
+   "gt_params": 571
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "kleinanzeigen",
+   "gt_params": 150
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "konva",
+   "gt_params": 54
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "langchain",
+   "gt_params": 90
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "lapce",
+   "gt_params": 28
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "leetcode",
+   "gt_params": 174
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "linuxserver",
+   "gt_params": 304
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "livekit",
+   "gt_params": 52
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "lmstudio",
+   "gt_params": 146
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "looker",
+   "gt_params": 181
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "luanti",
+   "gt_params": 303
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "lydia",
+   "gt_params": 87
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "mailbox",
+   "gt_params": 185
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "mamp",
+   "gt_params": 120
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "medium",
+   "gt_params": 193
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "messenger",
+   "gt_params": 114
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "meta",
+   "gt_params": 237
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "microeditor",
+   "gt_params": 490
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "mingww64",
+   "gt_params": 48
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "modin",
+   "gt_params": 616
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "monster",
+   "gt_params": 20
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "mysql",
+   "gt_params": 822
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "nginx",
+   "gt_params": 78
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "nokia",
+   "gt_params": 93
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "normalizedotcss",
+   "gt_params": 24
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "notion",
+   "gt_params": 178
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "notist",
+   "gt_params": 168
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "okcupid",
+   "gt_params": 405
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "openbao",
+   "gt_params": 278
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "osano",
+   "gt_params": 28
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "pagerduty",
+   "gt_params": 54
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "paritysubstrate",
+   "gt_params": 294
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "peerlist",
+   "gt_params": 354
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "phpstorm",
+   "gt_params": 144
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "picpay",
+   "gt_params": 60
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "picxy",
+   "gt_params": 1053
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "platformio",
+   "gt_params": 217
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "playerfm",
+   "gt_params": 360
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "plesk",
+   "gt_params": 507
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "polkadot",
+   "gt_params": 144
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "pomerium",
+   "gt_params": 63
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "premierleague",
+   "gt_params": 422
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "prepbytes",
+   "gt_params": 181
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "primeng",
+   "gt_params": 104
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "prismic",
+   "gt_params": 549
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "pronounsdotpage",
+   "gt_params": 172
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "protocolsdotio",
+   "gt_params": 590
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "protools",
+   "gt_params": 296
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "pug",
+   "gt_params": 846
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "purescript",
+   "gt_params": 54
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "pypy",
+   "gt_params": 607
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "quest",
+   "gt_params": 720
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "redcandlegames",
+   "gt_params": 530
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "redsys",
+   "gt_params": 142
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "revanced",
+   "gt_params": 84
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "roll20",
+   "gt_params": 657
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "rotaryinternational",
+   "gt_params": 1170
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "sagemath",
+   "gt_params": 707
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "scratch",
+   "gt_params": 425
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "sellfy",
+   "gt_params": 114
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "simplenote",
+   "gt_params": 80
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "slackware",
+   "gt_params": 211
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "slashdot",
+   "gt_params": 32
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "sourcehut",
+   "gt_params": 52
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "spaceship",
+   "gt_params": 95
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "sparkar",
+   "gt_params": 24
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "sparkpost",
+   "gt_params": 60
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "statamic",
+   "gt_params": 187
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "steelseries",
+   "gt_params": 152
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "stmicroelectronics",
+   "gt_params": 154
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "theirishtimes",
+   "gt_params": 188
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "tidb",
+   "gt_params": 30
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "trustedshops",
+   "gt_params": 94
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "ubiquiti",
+   "gt_params": 226
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "umbraco",
+   "gt_params": 207
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "v2ex",
+   "gt_params": 62
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "vauxhall",
+   "gt_params": 610
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "visa",
+   "gt_params": 136
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "volvo",
+   "gt_params": 285
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "vueuse",
+   "gt_params": 57
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "wise",
+   "gt_params": 26
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "wxt",
+   "gt_params": 194
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "x",
+   "gt_params": 36
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "yabai",
+   "gt_params": 137
+  },
+  {
+   "corpus": "simple-icons",
+   "stem": "zigbee2mqtt",
+   "gt_params": 674
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "gradient_linear",
+   "gt_params": 12
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "gradient_radial",
+   "gt_params": 9
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "logo_like",
+   "gt_params": 24
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "mosaic_grid4",
+   "gt_params": 102
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "mosaic_grid6",
+   "gt_params": 222
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "mosaic_pie12",
+   "gt_params": 114
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "mosaic_pie6",
+   "gt_params": 60
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "prim_circle",
+   "gt_params": 9
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "prim_ellipse",
+   "gt_params": 10
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "prim_hex",
+   "gt_params": 16
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "prim_rect_rot",
+   "gt_params": 12
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "prim_roundrect",
+   "gt_params": 12
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "prim_star5",
+   "gt_params": 24
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "rings_concentric",
+   "gt_params": 36
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "stack_overlap",
+   "gt_params": 15
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "symmetry_mirror",
+   "gt_params": 26
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "symmetry_rot3",
+   "gt_params": 36
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "symmetry_rot5",
+   "gt_params": 48
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "symmetry_rot8",
+   "gt_params": 66
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "thin_features",
+   "gt_params": 66
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f17e",
+   "gt_params": 80
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f1f1-1f1f7",
+   "gt_params": 138
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f1f3-1f1e8",
+   "gt_params": 349
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f1f3-1f1f4",
+   "gt_params": 118
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f1f8",
+   "gt_params": 104
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f1f8-1f1ee",
+   "gt_params": 344
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f1f8-1f1fe",
+   "gt_params": 100
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f1f9-1f1f3",
+   "gt_params": 101
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f1fa",
+   "gt_params": 88
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f1fb-1f1ee",
+   "gt_params": 1238
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f1fe-1f1f9",
+   "gt_params": 1792
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f312",
+   "gt_params": 66
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f325",
+   "gt_params": 183
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f338",
+   "gt_params": 659
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f343",
+   "gt_params": 292
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f357",
+   "gt_params": 90
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f369",
+   "gt_params": 534
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f3a6",
+   "gt_params": 122
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f3c3-1f3ff-200d-27a1-fe0f",
+   "gt_params": 1212
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f3c4",
+   "gt_params": 860
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f3ca-1f3fe-200d-2640-fe0f",
+   "gt_params": 318
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f3ca-200d-2640-fe0f",
+   "gt_params": 318
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f3cb-1f3fb",
+   "gt_params": 1154
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f3cc-1f3fb",
+   "gt_params": 742
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f3cc-1f3fb-200d-2640-fe0f",
+   "gt_params": 490
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f3cc-1f3fb-200d-2642-fe0f",
+   "gt_params": 986
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f3f8",
+   "gt_params": 412
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f3ff",
+   "gt_params": 32
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f42b",
+   "gt_params": 264
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f435",
+   "gt_params": 176
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f450-1f3fd",
+   "gt_params": 390
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f468-1f3fb-200d-1f91d-200d-1f468-1f3fc",
+   "gt_params": 940
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f468-1f3fb-200d-1f91d-200d-1f468-1f3fd",
+   "gt_params": 940
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f468-1f3fb-200d-1f9bd-200d-27a1-fe0f",
+   "gt_params": 1116
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f468-1f3fb-200d-1faef-200d-1f468-1f3fd",
+   "gt_params": 981
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f468-1f3fb-200d-2764-fe0f-200d-1f468-1f3fb",
+   "gt_params": 392
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f468-1f3fc-200d-1f9b0",
+   "gt_params": 242
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f468-1f3fd-200d-2696-fe0f",
+   "gt_params": 704
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f468-1f3fd-200d-2764-fe0f-200d-1f468-1f3fc",
+   "gt_params": 392
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f468-1f3fe-200d-1faef-200d-1f468-1f3fb",
+   "gt_params": 981
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f468-1f3fe-200d-2764-fe0f-200d-1f48b-200d-1f468-1f3ff",
+   "gt_params": 552
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f468-1f3ff-200d-1f9b2",
+   "gt_params": 180
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f468-200d-1f467-200d-1f466",
+   "gt_params": 384
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f468-200d-1f4bc",
+   "gt_params": 646
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-1f3fb-200d-1f37c",
+   "gt_params": 750
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-1f3fb-200d-1f393",
+   "gt_params": 616
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-1f3fb-200d-2764-fe0f-200d-1f469-1f3fe",
+   "gt_params": 372
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-1f3fb-200d-2764-fe0f-200d-1f48b-200d-1f468-1f3fb",
+   "gt_params": 530
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-1f3fc-200d-2764-fe0f-200d-1f468-1f3fc",
+   "gt_params": 368
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-1f3fc-200d-2764-fe0f-200d-1f468-1f3fd",
+   "gt_params": 368
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-1f3fd-200d-1f9af-200d-27a1-fe0f",
+   "gt_params": 835
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-1f3fd-200d-2764-fe0f-200d-1f48b-200d-1f469-1f3fb",
+   "gt_params": 500
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-1f3fe",
+   "gt_params": 264
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-1f3fe-200d-1f9bd",
+   "gt_params": 1187
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-1f3fe-200d-2764-fe0f-200d-1f469-1f3fd",
+   "gt_params": 372
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-1f3ff-200d-1f4bc",
+   "gt_params": 522
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-1f3ff-200d-1f91d-200d-1f468-1f3fc",
+   "gt_params": 928
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-1f3ff-200d-1f9b2",
+   "gt_params": 186
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-1f3ff-200d-1f9bc",
+   "gt_params": 1224
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-1f3ff-200d-2764-fe0f-200d-1f468-1f3fd",
+   "gt_params": 368
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-200d-1f467-200d-1f467",
+   "gt_params": 384
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-200d-1f9af-200d-27a1-fe0f",
+   "gt_params": 835
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f46e-200d-2640-fe0f",
+   "gt_params": 744
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f46f-1f3fb-200d-2640-fe0f",
+   "gt_params": 1106
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f470-1f3fc-200d-2640-fe0f",
+   "gt_params": 370
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f471-1f3fd",
+   "gt_params": 240
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f47a",
+   "gt_params": 322
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f480",
+   "gt_params": 150
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f481-1f3fc-200d-2640-fe0f",
+   "gt_params": 296
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f481-1f3fe-200d-2640-fe0f",
+   "gt_params": 296
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f482-1f3fd-200d-2642-fe0f",
+   "gt_params": 414
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f483-1f3fd",
+   "gt_params": 852
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f486-1f3ff",
+   "gt_params": 488
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f4a6",
+   "gt_params": 66
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f4b3",
+   "gt_params": 196
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f4d6",
+   "gt_params": 218
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f4e6",
+   "gt_params": 244
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f509",
+   "gt_params": 142
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f515",
+   "gt_params": 87
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f536",
+   "gt_params": 32
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f53a",
+   "gt_params": 24
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f565",
+   "gt_params": 62
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f574-1f3fb-200d-2640-fe0f",
+   "gt_params": 584
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f574-1f3fd-200d-2640-fe0f",
+   "gt_params": 584
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f57a-1f3fb",
+   "gt_params": 1016
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f590-1f3fb",
+   "gt_params": 174
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f5a4",
+   "gt_params": 48
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f60d",
+   "gt_params": 156
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f635",
+   "gt_params": 264
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f638",
+   "gt_params": 624
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f640",
+   "gt_params": 442
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f643",
+   "gt_params": 80
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f646-1f3fb-200d-2640-fe0f",
+   "gt_params": 322
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f646-1f3fe-200d-2642-fe0f",
+   "gt_params": 358
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f647-1f3fe",
+   "gt_params": 403
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f647-200d-2640-fe0f",
+   "gt_params": 367
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f648",
+   "gt_params": 957
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f64b-1f3fb-200d-2640-fe0f",
+   "gt_params": 288
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f64b-1f3fc-200d-2642-fe0f",
+   "gt_params": 324
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f64b-1f3fe-200d-2642-fe0f",
+   "gt_params": 324
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f64d-1f3fd",
+   "gt_params": 256
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f64f-1f3fe",
+   "gt_params": 224
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f694",
+   "gt_params": 460
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f6a3-1f3fe-200d-2640-fe0f",
+   "gt_params": 340
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f6a3-1f3ff-200d-2642-fe0f",
+   "gt_params": 404
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f6b4-1f3fe-200d-2642-fe0f",
+   "gt_params": 632
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f6b5-1f3fd-200d-2642-fe0f",
+   "gt_params": 668
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f6bc",
+   "gt_params": 296
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f6d6",
+   "gt_params": 814
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f6dc",
+   "gt_params": 191
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f6e1",
+   "gt_params": 62
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f6e5",
+   "gt_params": 120
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f7eb",
+   "gt_params": 32
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f90c-1f3fc",
+   "gt_params": 518
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f918",
+   "gt_params": 270
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f91a-1f3fc",
+   "gt_params": 170
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f91c-1f3fe",
+   "gt_params": 212
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f926-1f3fd-200d-2640-fe0f",
+   "gt_params": 452
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f926-1f3ff-200d-2642-fe0f",
+   "gt_params": 462
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f937-1f3fd-200d-2640-fe0f",
+   "gt_params": 368
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f938-1f3fe",
+   "gt_params": 1124
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f93e-1f3fc-200d-2642-fe0f",
+   "gt_params": 1165
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f93e-1f3fd",
+   "gt_params": 1243
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f95c",
+   "gt_params": 392
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f977-1f3fb",
+   "gt_params": 472
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f984",
+   "gt_params": 401
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f98d",
+   "gt_params": 274
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f998",
+   "gt_params": 338
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9a8",
+   "gt_params": 309
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9b8-1f3fb-200d-2640-fe0f",
+   "gt_params": 536
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9c5",
+   "gt_params": 314
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9c7",
+   "gt_params": 728
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9c9",
+   "gt_params": 289
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9ce-1f3fc",
+   "gt_params": 346
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d1-1f3fb-200d-1f9b1",
+   "gt_params": 384
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d1-1f3fb-200d-1faef-200d-1f9d1-1f3fd",
+   "gt_params": 953
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d1-1f3fd-200d-1f9af-200d-27a1-fe0f",
+   "gt_params": 800
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d1-1f3fd-200d-2696-fe0f",
+   "gt_params": 556
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d1-1f3ff-200d-1f680",
+   "gt_params": 602
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d1-1f3ff-200d-1f9af",
+   "gt_params": 796
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d1-1f3ff-200d-2764-fe0f-200d-1f9d1-1f3fb",
+   "gt_params": 424
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d1-200d-1f9b1",
+   "gt_params": 384
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d1-200d-2696-fe0f",
+   "gt_params": 556
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d2",
+   "gt_params": 240
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d4-1f3fd",
+   "gt_params": 270
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d4-200d-2642-fe0f",
+   "gt_params": 284
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d6-1f3fc",
+   "gt_params": 588
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d6-1f3fe-200d-2642-fe0f",
+   "gt_params": 694
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d8-1f3fe",
+   "gt_params": 762
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9da",
+   "gt_params": 404
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9de-200d-2640-fe0f",
+   "gt_params": 356
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9e0",
+   "gt_params": 1066
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9e9",
+   "gt_params": 240
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9f5",
+   "gt_params": 524
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1fa79",
+   "gt_params": 125
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1faa0",
+   "gt_params": 136
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1faa3",
+   "gt_params": 108
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1fabc",
+   "gt_params": 656
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1fac2",
+   "gt_params": 200
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1fad5",
+   "gt_params": 400
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1fae5",
+   "gt_params": 252
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1faf1-1f3fd-200d-1faf2-1f3fc",
+   "gt_params": 604
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1faf5-1f3ff",
+   "gt_params": 361
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1faf6-1f3ff",
+   "gt_params": 278
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "2196",
+   "gt_params": 42
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "2611",
+   "gt_params": 80
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "26f7-1f3fe",
+   "gt_params": 734
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "270d",
+   "gt_params": 464
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "271d",
+   "gt_params": 104
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "2744",
+   "gt_params": 300
+  }
+ ]
+}

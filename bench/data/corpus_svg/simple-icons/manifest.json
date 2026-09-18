@@ -1,0 +1,11 @@
+{
+  "name": "simple-icons",
+  "repo": "simple-icons/simple-icons",
+  "ref": "develop",
+  "path": "icons",
+  "licence": "CC0-1.0",
+  "seed": 7,
+  "limit": 175,
+  "available": 3458,
+  "written": 175
+}

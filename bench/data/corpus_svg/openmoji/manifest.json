@@ -1,0 +1,11 @@
+{
+  "name": "openmoji",
+  "repo": "hfg-gmuend/openmoji",
+  "ref": "master",
+  "path": "color/svg",
+  "licence": "CC-BY-SA-4.0",
+  "seed": 7,
+  "limit": 148,
+  "available": 4565,
+  "written": 148
+}

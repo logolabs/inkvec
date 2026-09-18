@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Repair — inkvec</title>
+<link rel="stylesheet" href="assets/doc.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="masthead">
+    <p class="eyebrow">Stage 12 of 14</p>
+    <h1>Untangling a boundary that crosses itself</h1>
+    <p class="standfirst">Two stretches of a shape's outline, fitted correctly and
+      independently, can still end up crossing each other where they pass close together.
+      This stage finds every place that happens and redraws just enough of the boundary to
+      stop it — without redrawing what was already right.</p>
+    <p class="pairlink">Technical reference: <a href="12-repair.md">12-repair.md</a></p>
+  </header>
+  <main>
+
+    <section>
+      <h2>How a correct fit still goes wrong</h2>
+      <p>The previous stage fits each stretch of a shape's outline on its own merits: does
+        this curve pass close enough to the points it was measured against. That question is
+        answered honestly and locally, one stretch at a time. Nothing in that question ever
+        asks "does this curve also avoid crossing some other, entirely different stretch of
+        the same outline drawn somewhere else."</p>
+      <p>Most of the time that omission costs nothing, because most of an outline does not
+        come anywhere near itself. But where a shape narrows to a thin neck — two edges of
+        the same outline running close and parallel for a stretch, the way the inside and
+        outside of a comma or a thin bracket do — each edge is free to bulge very slightly
+        toward the other while still fitting its own measured points perfectly. Fitted
+        independently, the two bulges can simply meet in the middle and cross.</p>
+      <figure>
+        <svg viewBox="0 0 640 240" role="img" aria-label="Two curves fitted independently to a thin neck of a shape bulge across each other and cross">
+          <text x="20" y="22" class="fig-label-strong">A thin neck, fitted honestly on both sides</text>
+
+          <g transform="translate(40,50)">
+            <text x="0" y="0" class="fig-label">Each edge measured well against its own points</text>
+            <path d="M 0,40 C 60,30 120,30 180,50" fill="none" stroke="var(--ink-faint)" stroke-width="1" stroke-dasharray="2 3"/>
+            <path d="M 0,55 C 60,65 120,65 180,45" fill="none" stroke="var(--ink-faint)" stroke-width="1" stroke-dasharray="2 3"/>
+            <path d="M 0,40 C 60,35 120,58 180,50" fill="none" class="fig-accent-stroke" stroke-width="2"/>
+            <path d="M 0,55 C 60,60 120,32 180,45" fill="none" class="fig-accent-stroke" stroke-width="2"/>
+            <circle cx="101" cy="47" r="4" fill="none" stroke="var(--warn)" stroke-width="2"/>
+            <text x="115" y="90" class="fig-label" fill="var(--warn)">the two fitted curves cross here</text>
+          </g>
+
+          <g transform="translate(40,150)">
+            <text x="0" y="0" class="fig-label">The rendered pixels barely move — which is exactly the trap</text>
+            <text x="0" y="24" class="fig-label" fill="var(--ink-soft)">Both curves still sit right on top of their own measured points.</text>
+            <text x="0" y="44" class="fig-label" fill="var(--ink-soft)">A quality check that only asks "does this match the picture" sees nothing wrong here.</text>
+          </g>
+        </svg>
+        <figcaption>Each half of the fit is individually correct. The crossing is a property
+          of the two halves put together — invisible to any test that looks at only one half
+          at a time.</figcaption>
+      </figure>
+    </section>
+
+    <section>
+      <h2>Why a crossing is worth fixing even though the picture looks fine</h2>
+      <p>A drawing program fills a shape by a rule: walk around its outline and use the
+        turns and crossings to decide what is inside and what is outside. That rule assumes
+        the outline is a simple loop — one continuous line that does not cross itself. The
+        moment it does cross itself, the fill rule still runs, but its answer for the small
+        region cut off by the crossing is no longer the answer the shape intended. A letter's
+        inner counter, or any other small hole in a shape, can end up painted solid when it
+        should be empty, or empty when it should be solid, purely as a side effect of where
+        the crossing happened to land.</p>
+      <p>The picture usually still looks nearly right, because the crossing is small and the
+        area it flips is small. But "nearly right by accident" is a poor foundation for a
+        document someone is going to open in an editor and try to work with. A shape that
+        crosses itself is invalid regardless of how it happens to render, and it is the kind
+        of thing that turns confusing the moment anyone tries to edit it by hand.</p>
+      <div class="aside">Not every crossing is a mistake. Where several parts of a drawing
+        genuinely meet at a single point — a valid junction, not an accident of fitting — that
+        is legitimate structure, and the repair is careful to leave it alone.</div>
+    </section>
+
+    <section>
+      <h2>The fix: shrink the freedom, not the shape</h2>
+      <p>The most direct way to guarantee no crossing is to stop giving the fit room to
+        drift away from what was actually measured. Every measured point on a boundary,
+        connected point to point with no smoothing at all, is guaranteed not to cross itself —
+        it is exactly the outline the earlier stages traced, and that outline came from a
+        real, single, non-overlapping shape in the first place.</p>
+      <p>So the repair does not try to detect and patch a crossing directly. It finds which
+        stretches of the boundary are involved in one, and re-fits just those stretches under
+        a shrinking limit on how far any one curve is allowed to span. Push that limit down
+        far enough — eventually to "one curve per measured point" — and the crossing has
+        nowhere left to hide, because the shape being redrawn is, at that point, exactly the
+        original measurement. The repair only tightens the limit as far as it needs to on the
+        parts that are actually guilty; everything else in the drawing is left exactly as the
+        previous stage produced it.</p>
+      <figure>
+        <svg viewBox="0 0 640 220" role="img" aria-label="Before and after the repair: the crossing on the left is gone on the right, with the rest of the shape unchanged">
+          <text x="20" y="22" class="fig-label-strong">Before and after, on just the guilty stretch</text>
+          <g transform="translate(40,50)">
+            <text x="0" y="0" class="fig-label">Before</text>
+            <path d="M 0,40 C 60,35 120,58 180,50" fill="none" class="fig-accent-stroke" stroke-width="2"/>
+            <path d="M 0,55 C 60,60 120,32 180,45" fill="none" class="fig-accent-stroke" stroke-width="2"/>
+            <circle cx="101" cy="47" r="4" fill="none" stroke="var(--warn)" stroke-width="2"/>
+          </g>
+          <g transform="translate(320,50)">
+            <text x="0" y="0" class="fig-label">After — only the crossing pair refit, tighter</text>
+            <path d="M 0,40 C 40,37 80,40 110,44 C 140,47 160,49 180,50" fill="none" class="fig-accent-stroke" stroke-width="2"/>
+            <path d="M 0,55 C 40,58 80,55 110,51 C 140,48 160,46 180,45" fill="none" class="fig-accent-stroke" stroke-width="2"/>
+          </g>
+          <text x="40" y="150" class="fig-label" fill="var(--ink-soft)">A curve that spanned too much freedom is broken into shorter pieces —</text>
+          <text x="40" y="170" class="fig-label" fill="var(--ink-soft)">only as many as it takes to stop the two sides bulging into each other.</text>
+        </svg>
+        <figcaption>The repair spends a little compactness, exactly where the crossing was,
+          and nowhere else.</figcaption>
+      </figure>
+    </section>
+
+    <section>
+      <h2>Putting the good curve back where it is safe to</h2>
+      <p>Tightening a curve's freedom to guarantee no crossing is a blunt tool: taken to its
+        extreme it turns a smooth, compact curve back into a dense staircase of tiny
+        segments — technically safe, but a worse drawing on every count that matters. So once
+        the crossings are gone, the repair tries putting the original, more elegant fit back
+        in place, and keeps it if doing so does not reopen the very crossing it just closed.
+        Most of the time it can — the crossing usually only needed a small, local correction,
+        not a wholesale rewrite of the whole stretch.</p>
+      <p>There is one deliberate exception. If tightening a stretch has already gone so far
+        that it has exploded into hundreds of tiny segments — the staircase — that outcome is
+        judged worse than simply keeping the earlier, more compact fit even if it still
+        crosses. A measured comparison on a real, difficult case bore this out plainly: the
+        smooth version that still crossed itself scored better against the original artwork,
+        on every measure, than the technically-valid staircase that replaced it. A theoretical
+        guarantee is not worth much if the fix it produces is worse than the problem.</p>
+    </section>
+
+    <section>
+      <h2>Cost, kept in check</h2>
+      <p>Redrawing a boundary at high detail is expensive to compute, not just visually
+        heavy. An early version of this repair spent the overwhelming majority of one image's
+        entire processing time re-tidying a single stubborn shape, because a costly
+        smoothing pass was being re-run on every attempt, including the ones that were about
+        to be discarded anyway. The fix was to run the expensive smoothing only once
+        everything has settled and stopped crossing, and to give that final smoothing pass a
+        firm budget — so a shape with an unusually large number of guilty stretches spends
+        that budget on the shortest, cheapest fixes first, rather than exhausting it on one
+        stretch and leaving the rest untouched.</p>
+    </section>
+
+  </main>
+  <nav class="stages">
+    <a href="00-overview.html">Overview</a>
+    <a href="01-intake.html">1 Intake</a>
+    <a href="02-coverage.html">2 Coverage</a>
+    <a href="03-palette.html">3 Palette</a>
+    <a href="04-regions.html">4 Regions</a>
+    <a href="05-gradients.html">5 Gradients</a>
+    <a href="06-planar-map.html">6 Planar map</a>
+    <a href="07-subpixel.html">7 Sub-pixel</a>
+    <a href="08-boundary-solve.html">8 Boundary solve</a>
+    <a href="09-decode.html">9 Decode</a>
+    <a href="10-symmetry.html">10 Symmetry</a>
+    <a href="11-fitting.html">11 Curve fitting</a>
+    <a href="12-repair.html" aria-current="page">12 Repair</a>
+    <a href="13-emit.html">13 Emit</a>
+    <a href="constants.md">Constants</a>
+  </nav>
+</div>
+</body>
+</html>

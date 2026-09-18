@@ -1,0 +1,24 @@
+[package]
+name = "inkvec-sr"
+description = "Optional super-resolution pre-pass for the Inkvec vectoriser, run through an external upscaler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+inkvec-trace = { workspace = true }
+resvg = { version = "0.45", default-features = false }
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+# The upscaler network itself is not compiled in: it runs out of process through
+# `external::External` (the packaged Python pre-pass, or any command). An in-process
+# port was stubbed here once and never implemented, so its features were removed.
+
+[lints]
+workspace = true

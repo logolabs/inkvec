@@ -1,0 +1,11 @@
+{
+  "name": "fluent-emoji",
+  "repo": "microsoft/fluentui-emoji",
+  "ref": "main",
+  "path": "assets",
+  "licence": "MIT",
+  "seed": 7,
+  "limit": 175,
+  "available": 3145,
+  "written": 175
+}

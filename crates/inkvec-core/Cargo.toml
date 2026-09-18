@@ -1,0 +1,22 @@
+[package]
+name = "inkvec-core"
+description = "Geometry primitives shared by the Inkvec vectoriser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+robust = { workspace = true }
+
+# `std::time::Instant` panics on wasm32-unknown-unknown; web-time wraps performance.now().
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-time = "1"
+
+[lints]
+workspace = true

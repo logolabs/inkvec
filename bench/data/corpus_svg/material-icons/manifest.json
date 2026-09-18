@@ -1,0 +1,11 @@
+{
+  "name": "material-icons",
+  "repo": "marella/material-design-icons",
+  "ref": "main",
+  "path": "svg/outlined",
+  "licence": "Apache-2.0",
+  "seed": 7,
+  "limit": 175,
+  "available": 2122,
+  "written": 175
+}

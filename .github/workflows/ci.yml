@@ -1,0 +1,154 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Least-privilege by default; jobs that need more (there are none in this workflow)
+# would declare it themselves.
+permissions:
+  contents: read
+
+# Cancel a superseded run on the same branch/PR so pushes in quick succession don't
+# queue redundant work.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --workspace
+      - run: cargo test --release --workspace
+
+  gate:
+    # The 246-icon screen set against bench/gate/baseline.json. dE00, turning and
+    # parameter ratio each gated on their own; see bench/ci_gate.py.
+    name: regression gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p inkvec-cli
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install numpy pillow scikit-image resvg_py
+      - run: python bench/ci_gate.py --exe target/release/inkvec --workers 4
+
+  quality:
+    # The code-quality ratchet: bench/quality_budget.json records what is true today and
+    # this fails on a move away from it. Existing debt is grandfathered by name, so this
+    # never blocks work on an old long function -- only on a new one.
+    name: quality ratchet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m unittest discover -s bench/tests -p test_quality.py
+      - run: python bench/quality.py
+
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    # Only clippy::correctness and clippy::suspicious fail the job. Plain warnings
+    # (including the 37 grandfathered clippy::too_many_lines hits the quality ratchet
+    # tracks separately in bench/quality_budget.json) must not fail CI here.
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious
+
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -Dwarnings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --workspace --no-deps
+
+  msrv:
+    # Pinned to the exact rust-version in the workspace Cargo.toml. If that version is
+    # bumped, bump the toolchain input here in the same PR.
+    name: msrv (1.88)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.88"
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace
+
+  wasm:
+    name: wasm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p inkvec-wasm --target wasm32-unknown-unknown
+
+  restore-model:
+    # Confirms the optional ONNX-Runtime-backed restorer feature still compiles. `ort`
+    # downloads a prebuilt ONNX Runtime at build time; this needs outbound network
+    # access, which GitHub-hosted runners have by default.
+    name: restore-model build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p inkvec-cli --features restore-model
+
+  licences:
+    # docs/THIRD_PARTY.md is generated from `cargo tree`; this fails if it drifts from
+    # the actual dependency graph (see tools/third_party.py).
+    name: licences
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python tools/third_party.py --check

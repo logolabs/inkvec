@@ -1,0 +1,249 @@
+name: release
+
+# Tag pushes (v*) build every target/feature combination and publish a draft GitHub
+# release. `workflow_dispatch` runs the same build matrix as a dry run: it exercises every
+# target without creating or touching a release, since the publish job below is gated on
+# the tag-push event specifically.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+env:
+  CARGO_TERM_COLOR: always
+  BIN_NAME: inkvec
+
+# Least-privilege by default; only the publish job elevates to contents: write.
+permissions:
+  contents: read
+
+# Tag pushes should not cancel each other (a release build is not "superseded" the way a
+# CI run on a branch is), so this only dedupes accidental double-triggers of the exact
+# same ref.
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build (${{ matrix.target }}, ${{ matrix.feature }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+          - x86_64-apple-darwin
+          - aarch64-apple-darwin
+          - x86_64-pc-windows-msvc
+        feature: [default, restore-model]
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          # Native arm64 runner rather than `cross`/QEMU: the restore-model flavour needs
+          # `ort` to download a matching prebuilt ONNX Runtime at build time, which is far
+          # more likely to have an arm64 Linux asset than a cross-compiled sysroot is to
+          # have every native dependency lined up. NOT verified locally (no arm64 runner
+          # available here) -- verify the first tagged run.
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          # macos-13 is the last Intel (x86_64) GitHub-hosted image; macos-14 is arm64.
+          # Pinned explicitly rather than macos-latest so the mapping doesn't silently
+          # shift under us.
+          - target: x86_64-apple-darwin
+            os: macos-13
+          - target: aarch64-apple-darwin
+            os: macos-14
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}-${{ matrix.feature }}
+
+      - name: Build (default features)
+        if: matrix.feature == 'default'
+        run: cargo build --release -p inkvec-cli --target ${{ matrix.target }}
+
+      - name: Build (restore-model)
+        # Windows + restore-model links ONNX Runtime statically, which needs MSVC 17.10+;
+        # per the crate's own notes (crates/inkvec-restore/Cargo.toml) GitHub's
+        # windows-latest image has that already. NOT independently re-verified in this
+        # workflow beyond what those notes record -- watch the first tagged run's Windows
+        # restore-model job.
+        if: matrix.feature == 'restore-model'
+        run: cargo build --release -p inkvec-cli --target ${{ matrix.target }} --features restore-model
+
+      - name: Stage archive contents
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          FEATURE: ${{ matrix.feature }}
+        run: |
+          set -euo pipefail
+
+          version="${GITHUB_REF_NAME#v}"
+          if [[ "${GITHUB_REF_NAME:-}" != v* ]]; then
+            version="0.0.0-dev"
+          fi
+
+          bin="${BIN_NAME}"
+          ext=""
+          if [[ "${TARGET}" == *windows* ]]; then
+            ext=".exe"
+          fi
+          bin_path="target/${TARGET}/release/${bin}${ext}"
+
+          name="inkvec-${version}-${TARGET}"
+          if [[ "${FEATURE}" == "restore-model" ]]; then
+            name="${name}-restore-model"
+          fi
+
+          stage="stage/${name}"
+          mkdir -p "${stage}"
+          cp "${bin_path}" "${stage}/"
+          cp LICENSE NOTICE README.md "${stage}/"
+          cp docs/THIRD_PARTY.md "${stage}/THIRD_PARTY.md"
+
+          if [[ "${FEATURE}" == "restore-model" ]]; then
+            cat > "${stage}/RESTORER.txt" <<'EOF'
+          This build includes the ONNX-Runtime-backed restorer (--restore), but NOT the
+          trained restorer network itself: its licence is still under legal review, so it
+          is not bundled in this archive or in the Inkvec repository.
+
+          To use --restore:
+
+            1. Download restorer.onnx from the Hugging Face model repository
+               Logolabs/inkvec-denoiser-001 (https://huggingface.co/Logolabs/inkvec-denoiser-001).
+            2. Place it next to this binary, or in a `models/` directory next to this
+               binary, or point INKVEC_RESTORE_ONNX at its path.
+            3. Run inkvec with --restore auto (or on).
+
+          See the project README for the other restorer backends (restore-burn,
+          restore-wgpu), which are not part of this pre-built archive.
+          EOF
+
+            # This build links ONNX Runtime statically (see crates/inkvec-restore/Cargo.toml),
+            # so no onnxruntime library file should end up next to the binary and no
+            # ThirdPartyNotices.txt copy should be needed. This step is defensive: if a
+            # future change switches to dynamic linking, or `ort`'s download ever leaves a
+            # shared library or notices file next to the build output, pick it up here
+            # rather than silently omitting a required notice. NOT triggered in local
+            # testing (this repository's working tree could not build restore-model at
+            # all while this workflow was authored -- see PR description) -- verify on the
+            # first tagged run that this either finds nothing (expected) or finds and
+            # copies the right files.
+            notice_src=$(find target -iname "ThirdPartyNotices.txt" -ipath "*onnxruntime*" 2>/dev/null | head -n1 || true)
+            if [[ -n "${notice_src}" ]]; then
+              cp "${notice_src}" "${stage}/ONNXRUNTIME_ThirdPartyNotices.txt"
+            fi
+            shopt -s nullglob
+            for lib in "target/${TARGET}/release/"onnxruntime*.dll "target/${TARGET}/release/"libonnxruntime*.so* "target/${TARGET}/release/"libonnxruntime*.dylib; do
+              cp "${lib}" "${stage}/"
+            done
+            shopt -u nullglob
+          fi
+
+          echo "ARCHIVE_NAME=${name}" >> "${GITHUB_ENV}"
+
+      - name: Archive (tar.gz)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          tar -C stage -czf "dist/${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}"
+
+      - name: Archive (zip)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path "stage/$env:ARCHIVE_NAME" -DestinationPath "dist/$env:ARCHIVE_NAME.zip" -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARCHIVE_NAME }}
+          path: dist/*
+          if-no-files-found: error
+
+  checksums:
+    name: checksums
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect archives and hash them
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} out/ \;
+          (cd out && sha256sum -- * > SHA256SUMS)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: out/*
+          if-no-files-found: error
+
+  publish:
+    name: publish draft release
+    needs: checksums
+    # workflow_dispatch runs are a dry run: build and checksum everything above, but never
+    # reach this job, so nothing is published or touched on the releases page.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: out
+
+      - name: Extract matching CHANGELOG section
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          awk -v ver="${version}" '
+            /^## \[/ {
+              if (found) exit
+              if (index($0, "[" ver "]") > 0) { found = 1; next }
+              next
+            }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          if [[ ! -s notes.md ]]; then
+            echo "No CHANGELOG.md section found for [${version}]; edit this release's notes before publishing." > notes.md
+          fi
+
+      # NOT run end-to-end locally (no tag push in this session); the extraction script
+      # above was validated against this repository's actual CHANGELOG.md heading format
+      # ("## [0.1.0] - 2026-09-15") but the action itself, and the draft it produces on
+      # github.com, were not exercised.
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: notes.md
+          fail_on_unmatched_files: true
+          files: |
+            out/*.tar.gz
+            out/*.zip
+            out/SHA256SUMS

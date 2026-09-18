@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Overview — inkvec</title>
+<link rel="stylesheet" href="assets/doc.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="masthead">
+    <p class="eyebrow">Stage 00 of 14</p>
+    <h1>What inkvec does, and why it isn't just "trace the edges"</h1>
+    <p class="standfirst">inkvec turns a raster image — a logo, an icon, a PNG or JPEG —
+    into an SVG document: shapes with fills, not a photograph. This page explains the one
+    idea the whole tool rests on, and gives the shape of the twenty-odd steps between a
+    grid of coloured squares and a finished vector file.</p>
+    <p class="pairlink">Technical reference: <a href="00-overview.md">00-overview.md</a></p>
+  </header>
+  <main>
+
+  <section>
+    <h2>A pixel is a measurement, not a smudge</h2>
+    <p>Every image made of pixels has a jagged secret at its edges. Draw a black circle on
+    white and zoom into its boundary: the pixels there are not black or white, they are
+    grey — some ninety percent black, some ten percent, a whole gradient of in-between.
+    Most software treats that grey band as a nuisance: blur to hide, or threshold to erase
+    it, snapping every pixel back to solid black or solid white.</p>
+    <p>inkvec treats it as information instead. A pixel that is seventy percent covered by
+    the circle is not an ambiguous pixel — it is a precise statement that the true edge of
+    the circle passes through that pixel in a particular place. Read correctly, the grey
+    band tells you where the boundary sits to a fraction of a pixel, not merely which whole
+    pixel it is closest to.</p>
+
+    <figure>
+      <svg viewBox="0 0 560 220" role="img" aria-labelledby="fig1-title">
+        <title id="fig1-title">A diagonal edge crossing a pixel grid, and the coverage
+        value each pixel reports</title>
+        <!-- grid -->
+        <g class="fig-rule" stroke-width="1">
+          <line x1="40" y1="20" x2="40" y2="200"></line>
+          <line x1="95" y1="20" x2="95" y2="200"></line>
+          <line x1="150" y1="20" x2="150" y2="200"></line>
+          <line x1="205" y1="20" x2="205" y2="200"></line>
+          <line x1="260" y1="20" x2="260" y2="200"></line>
+          <line x1="40" y1="20" x2="260" y2="20"></line>
+          <line x1="40" y1="75" x2="260" y2="75"></line>
+          <line x1="40" y1="130" x2="260" y2="130"></line>
+          <line x1="40" y1="185" x2="260" y2="185"></line>
+          <line x1="40" y1="200" x2="260" y2="200"></line>
+        </g>
+        <!-- shape: dark region below/left of a diagonal line -->
+        <clipPath id="grid1"><rect x="40" y="20" width="220" height="180"></rect></clipPath>
+        <g clip-path="url(#grid1)">
+          <polygon points="40,20 150,20 40,200" fill="var(--ink)" opacity="0.88"></polygon>
+        </g>
+        <line x1="150" y1="20" x2="40" y2="200" class="fig-accent-stroke" stroke-width="2.5"></line>
+        <text x="150" y="12" class="fig-label" text-anchor="middle">the true edge — a
+          straight line, no pixels involved</text>
+        <!-- coverage labels on the boundary pixels -->
+        <text x="67" y="55" class="fig-label-strong" text-anchor="middle">0.95</text>
+        <text x="122" y="55" class="fig-label-strong" text-anchor="middle">0.15</text>
+        <text x="67" y="105" class="fig-label-strong" text-anchor="middle">0.60</text>
+        <text x="122" y="105" class="fig-label-strong" text-anchor="middle">0.02</text>
+        <text x="67" y="160" class="fig-label-strong" text-anchor="middle">0.05</text>
+        <!-- arrow + reconstructed boundary points -->
+        <g>
+          <circle cx="95" cy="47.5" r="3" class="fig-accent"></circle>
+          <circle cx="95" cy="102.5" r="3" class="fig-accent"></circle>
+          <circle cx="95" cy="157.5" r="3" class="fig-accent"></circle>
+        </g>
+        <text x="330" y="45" class="fig-label-strong">Each pixel's grey level is the
+          fraction of it the shape covers.</text>
+        <text x="330" y="68" class="fig-label">A pixel reading 0.60 is not "a bit
+          uncertain" — it is a</text>
+        <text x="330" y="86" class="fig-label">precise statement that the edge cuts off
+          60% of that square.</text>
+        <text x="330" y="115" class="fig-label-strong">Copper dots: the edge position each
+          coverage</text>
+        <text x="330" y="133" class="fig-label-strong">value implies, found by inverting
+          the blend.</text>
+        <text x="330" y="162" class="fig-label">A faint edge (colours close together)
+          gives a noisy</text>
+        <text x="330" y="180" class="fig-label">estimate; a crisp edge gives a confident
+          one — and</text>
+        <text x="330" y="198" class="fig-label">inkvec carries that confidence forward
+          through every</text>
+        <text x="330" y="216" class="fig-label" y2="216">later stage instead of discarding
+          it.</text>
+      </svg>
+      <figcaption><b>Coverage as measurement.</b> The formula is
+        <code>a = (P − B)·(F − B) / |F − B|²</code> — project the observed pixel colour
+        <code>P</code> onto the axis between the foreground colour <code>F</code> and the
+        background colour <code>B</code>. Source: <code>crates/inkvec-trace/src/coverage.rs:1-33</code>.</figcaption>
+    </figure>
+
+    <p class="aside">Where this stops working is honest, not silent: a feature narrower
+    than a pixel — a hairline stroke, say — never produces a fully-covered pixel at all,
+    so the darkest thing observed is already a blend. inkvec detects that condition
+    (<code>saturation</code>, in <code>coverage.rs</code>) and widens its own uncertainty
+    rather than guessing a width and stating it confidently.</p>
+  </section>
+
+  <section>
+    <h2>One objective, everywhere</h2>
+    <p>A vectoriser has to make hundreds of small decisions per image: is this smear one
+    colour or two? Is this curve a circle or four short cubic segments? Is this
+    almost-symmetric shape meant to be exactly symmetric? inkvec answers all of them with
+    the same yardstick, an old idea from statistics called the minimum description length
+    principle, stated here as one sum:</p>
+    <div class="plain">
+      <h3>The rule</h3>
+      <p style="font-family:var(--mono); font-size:1.05rem;">cost = 0.5 × (how badly this
+        model fits the pixels) + λ × (how many numbers it takes to write down)</p>
+      <p>A model — a flat colour, a gradient, a circle, a cubic curve — is kept only when
+        it earns its keep: it must lower the fitting error by more than it costs in
+        parameters. λ (lambda) sets the exchange rate, and it is not a knob turned by eye —
+        it is derived from the canvas size and the coordinate precision the SVG will be
+        written to, because that precision is literally how many numbers a coordinate
+        takes to state.</p>
+    </div>
+    <p>This is why a circle in the source art comes back as <code>&lt;circle
+      cx cy r/&gt;</code> rather than four approximate curves: three numbers beat twelve
+      whenever the pixels genuinely support a circle, and lose whenever they don't. It is
+      why a smooth gradient does not get chopped into eight flat-coloured bands, and why a
+      speck of single-pixel noise gets ignored rather than drawn.</p>
+  </section>
+
+  <section>
+    <h2>The shape of the pipeline</h2>
+    <p>Twenty-odd named steps, but they fall into four phases a reader can hold in mind at
+      once: get a clean, correctly-scaled raster in; decide what regions and colours are in
+      it; turn each region's boundary into curves; write the document.</p>
+
+    <figure>
+      <svg viewBox="0 0 900 210" role="img" aria-labelledby="fig2-title">
+        <title id="fig2-title">The four phases of the pipeline, left to right</title>
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" class="fig-ink"></path>
+          </marker>
+        </defs>
+        <!-- phase groups -->
+        <g>
+          <rect x="10" y="30" width="190" height="150" rx="8" fill="none" class="fig-rule"></rect>
+          <text x="105" y="20" class="fig-label-strong" text-anchor="middle">1. INTAKE</text>
+          <rect x="30" y="50" width="150" height="34" rx="5" class="fig-accent" opacity="0.18"></rect>
+          <text x="105" y="71" class="fig-label" text-anchor="middle">decode, unblock, SR</text>
+          <rect x="30" y="94" width="150" height="34" rx="5" class="fig-accent" opacity="0.18"></rect>
+          <text x="105" y="115" class="fig-label" text-anchor="middle">resolution normalise</text>
+          <rect x="30" y="138" width="150" height="34" rx="5" class="fig-accent" opacity="0.18"></rect>
+          <text x="105" y="159" class="fig-label" text-anchor="middle">alpha matte</text>
+        </g>
+        <g>
+          <rect x="230" y="30" width="220" height="150" rx="8" fill="none" class="fig-rule"></rect>
+          <text x="340" y="20" class="fig-label-strong" text-anchor="middle">2. WHAT'S THERE</text>
+          <rect x="248" y="45" width="184" height="26" rx="5" class="fig-accent" opacity="0.18"></rect>
+          <text x="340" y="63" class="fig-label" text-anchor="middle">palette + labels</text>
+          <rect x="248" y="76" width="184" height="26" rx="5" class="fig-accent" opacity="0.18"></rect>
+          <text x="340" y="94" class="fig-label" text-anchor="middle">gradient bands, carve</text>
+          <rect x="248" y="107" width="184" height="26" rx="5" class="fig-accent" opacity="0.18"></rect>
+          <text x="340" y="125" class="fig-label" text-anchor="middle">planar map (shared edges)</text>
+          <rect x="248" y="138" width="184" height="26" rx="5" class="fig-accent" opacity="0.18"></rect>
+          <text x="340" y="156" class="fig-label" text-anchor="middle">boundary solve (§ below)</text>
+        </g>
+        <g>
+          <rect x="490" y="30" width="190" height="150" rx="8" fill="none" class="fig-rule"></rect>
+          <text x="585" y="20" class="fig-label-strong" text-anchor="middle">3. CURVES</text>
+          <rect x="508" y="55" width="154" height="30" rx="5" class="fig-accent" opacity="0.18"></rect>
+          <text x="585" y="75" class="fig-label" text-anchor="middle">line / cubic DP</text>
+          <rect x="508" y="93" width="154" height="30" rx="5" class="fig-accent" opacity="0.18"></rect>
+          <text x="585" y="113" class="fig-label" text-anchor="middle">primitive fit (circles...)</text>
+          <rect x="508" y="131" width="154" height="30" rx="5" class="fig-accent" opacity="0.18"></rect>
+          <text x="585" y="151" class="fig-label" text-anchor="middle">repair self-crossings</text>
+        </g>
+        <g>
+          <rect x="720" y="30" width="170" height="150" rx="8" fill="none" class="fig-rule"></rect>
+          <text x="805" y="20" class="fig-label-strong" text-anchor="middle">4. WRITE</text>
+          <rect x="738" y="60" width="134" height="30" rx="5" class="fig-accent" opacity="0.18"></rect>
+          <text x="805" y="80" class="fig-label" text-anchor="middle">fills, layers</text>
+          <rect x="738" y="98" width="134" height="30" rx="5" class="fig-accent" opacity="0.18"></rect>
+          <text x="805" y="118" class="fig-label" text-anchor="middle">emit SVG text</text>
+          <rect x="738" y="136" width="134" height="30" rx="5" class="fig-accent" opacity="0.18"></rect>
+          <text x="805" y="156" class="fig-label" text-anchor="middle">post (viewBox, margin)</text>
+        </g>
+        <line x1="200" y1="105" x2="228" y2="105" class="fig-rule" stroke-width="2" marker-end="url(#arrow)"></line>
+        <line x1="450" y1="105" x2="488" y2="105" class="fig-rule" stroke-width="2" marker-end="url(#arrow)"></line>
+        <line x1="680" y1="105" x2="718" y2="105" class="fig-rule" stroke-width="2" marker-end="url(#arrow)"></line>
+      </svg>
+      <figcaption><b>The four phases.</b> Full stage-by-stage table with source lines is in
+        <code>00-overview.md</code>. Every arrow between boxes is a real handoff of data —
+        never a re-read of the original pixels — except the boundary solve and the curve
+        fitter, which both go back to the image on purpose (see below).</figcaption>
+    </figure>
+
+    <h3>Two moments where the pipeline deliberately looks at the image twice</h3>
+    <p>Most stages move forward only: decide, hand off, never revisit. Two stages break
+      that rule on purpose, because a decision made one point at a time cannot see what a
+      decision made about every point at once can.</p>
+    <p>First, after every boundary point has been placed by its own one-dimensional
+      argument — "slide along my own normal until I read 0.5 coverage" — the whole boundary
+      is solved again, all points at once, so that the picture the vector document would
+      render actually matches the source pixel for pixel, not just point for point. A
+      single point cannot tell that its neighbours moving would change what its own pixel
+      should read; the joint solve can.</p>
+    <p>Second, once curves are fitted, primitive shapes (circles, ellipses, rounded
+      rectangles) are tried against the same measured points and kept only when they cost
+      fewer numbers than the general-purpose curve fit for the same accuracy — the
+      objective described above, applied one more time.</p>
+  </section>
+
+  <section>
+    <h2>Why shapes share an edge instead of each carrying their own</h2>
+    <p>Picture a red square touching a blue square. The everyday way to draw that in SVG is
+      two independent shapes, each with its own outline — and the two outlines have to
+      agree, pixel for pixel, along the line where they touch, or a hairline gap of
+      background shows through (a <b>seam</b>), or the two shapes overlap and double up the
+      geometry along that edge (<b>overdraw</b>).</p>
+
+    <figure>
+      <svg viewBox="0 0 620 190" role="img" aria-labelledby="fig3-title">
+        <title id="fig3-title">Independent paths versus one shared edge</title>
+        <text x="130" y="24" class="fig-label-strong" text-anchor="middle">two independent
+          paths</text>
+        <g transform="translate(30,40)">
+          <path d="M0,0 L95,0 L95,60 Q60,58 40,64 L0,60 Z" fill="var(--ink)" opacity="0.75"></path>
+          <path d="M40,4 L102,10 L108,120 L45,116 Z" class="fig-accent" opacity="0.75"></path>
+          <text x="50" y="150" class="fig-label" text-anchor="middle">their shared edge was
+            fitted twice and</text>
+          <text x="50" y="166" class="fig-label" text-anchor="middle">disagrees — a seam,
+            or an overlap</text>
+        </g>
+        <line x1="300" y1="20" x2="300" y2="180" class="fig-rule" stroke-dasharray="4 4"></line>
+        <text x="470" y="24" class="fig-label-strong" text-anchor="middle">one shared edge
+          (inkvec)</text>
+        <g transform="translate(370,40)">
+          <path d="M0,0 L95,0 L95,60 L48,66 L0,60 Z" fill="var(--ink)" opacity="0.75"></path>
+          <path d="M48,66 L95,60 L95,120 L0,120 L0,60 Z" class="fig-accent" opacity="0.75"></path>
+          <line x1="0" y1="60" x2="48" y2="66" class="fig-accent-stroke" stroke-width="2.5"></line>
+          <line x1="48" y1="66" x2="95" y2="60" class="fig-accent-stroke" stroke-width="2.5"></line>
+          <text x="50" y="150" class="fig-label" text-anchor="middle">one curve, referenced
+            by both faces —</text>
+          <text x="50" y="166" class="fig-label" text-anchor="middle">a seam cannot occur;
+            there is nothing to disagree</text>
+        </g>
+      </svg>
+      <figcaption><b>Shared boundaries.</b> inkvec's internal map (a <i>planar map</i>: a
+        network of regions and the boundary curves between them, a structure sometimes
+        called a "DCEL" in computational geometry) stores each boundary once. Both
+        neighbouring shapes reference it. Moving that boundary — to refine it, to simplify
+        it — moves it for both sides at once, by construction, not by careful bookkeeping.
+        Source: <code>crates/inkvec-trace/src/planar.rs:1-18</code>, which measures a
+        published open-source tracer sitting at 1.64× the ideal amount of overdrawn
+        geometry against a target of 1.00×.</figcaption>
+    </figure>
+
+    <p>This is also why editing an inkvec output tends to behave the way a human-drawn one
+      does: dragging one shared corner moves both shapes that meet there, instead of moving
+      one and leaving a gap next to the other.</p>
+  </section>
+
+  <section>
+    <h2>What "sub-pixel" actually buys</h2>
+    <p>Because the pipeline never rounds a boundary to the nearest whole pixel — it keeps a
+      real-valued position and an honest uncertainty for every point, all the way through —
+      a stroke or a gap narrower than a single pixel is not automatically lost. Ordinary
+      thresholding-based tracers cannot represent a shape that never reaches full coverage
+      anywhere; a coverage-measuring one can, because "0.3 of a pixel wide" is still a
+      perfectly good number to fit a curve to.</p>
+  </section>
+
+  </main>
+  <nav class="stages" aria-label="pipeline stages">
+    <a href="00-overview.html" aria-current="page">Overview</a>
+    <a href="01-intake.html">1 Intake</a>
+    <a href="02-coverage.html">2 Coverage</a>
+    <a href="03-palette.html">3 Palette</a>
+    <a href="04-regions.html">4 Regions</a>
+    <a href="05-gradients.html">5 Gradients</a>
+    <a href="06-planar-map.html">6 Planar map</a>
+    <a href="07-subpixel.html">7 Sub-pixel</a>
+    <a href="08-boundary-solve.html">8 Boundary solve</a>
+    <a href="09-decode.html">9 Decode</a>
+    <a href="10-symmetry.html">10 Symmetry</a>
+    <a href="11-fitting.html">11 Curve fitting</a>
+    <a href="12-repair.html">12 Repair</a>
+    <a href="13-emit.html">13 Emit</a>
+    <a href="constants.md">Constants</a>
+  </nav>
+</div>
+</body>
+</html>

@@ -1,0 +1,4 @@
+# WebAssembly builds use the SIMD extension every current browser supports; the
+# float loops in the palette and the fits vectorise.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+simd128"]

@@ -1,11 +1,5 @@
 <p align="center">
-  <img src="docs/assets/logolabs-brand-lockup.png" width="440" alt="LogoLabs">
-</p>
-
-<h1 align="center">Inkvec</h1>
-<p align="center"><strong>Raster → exact vector, for logos, icons and flat artwork.</strong></p>
-<p align="center">
-  One binary &nbsp;·&nbsp; No runtime dependencies &nbsp;·&nbsp; Apache-2.0
+  <img src="docs/assets/github-hero.png" width="100%" alt="Inkvec by LogoLabs — raster input and Inkvec SVG output, with measured quality and compactness metrics">
 </p>
 
 <p align="center">
@@ -14,12 +8,6 @@
   <a href="LICENSE"><img alt="Apache-2.0" src="https://img.shields.io/badge/licence-Apache--2.0-blue"></a>
   <a href="https://huggingface.co/spaces/logolabs/inkvec"><img alt="demo" src="https://img.shields.io/badge/🤗_demo-HuggingFace-orange"></a>
   <a href="https://huggingface.co/Logolabs/inkvec-denoiser-001"><img alt="model" src="https://img.shields.io/badge/model-inkvec--denoiser--001-yellow"></a>
-</p>
-
----
-
-<p align="center">
-  <img src="docs/assets/hero-node-count.png" width="720" alt="Same picture, 25× fewer dots. Inkvec: 216 pts — VTracer: 1,610 — covecto: 30,090 — potrace-color: 36,408">
 </p>
 
 Inkvec reads a PNG, JPEG, WebP, GIF, BMP or TIFF and writes an SVG whose geometry is decided by the evidence in the pixels:
@@ -36,7 +24,7 @@ Most tracers spend points wherever their curve-fit tolerance lets them. Inkvec s
 ## Results
 
 <p align="center">
-  <img src="docs/assets/results-summary.png" width="680" alt="Benchmark summary: Inkvec 0.048 colour error / 216 pts vs VTracer 0.598 / 1,266, covecto 0.192 / 28,824, potrace-color 0.229 / 25,018">
+  <img src="docs/assets/github-benchmarks.png" width="100%" alt="Benchmark summary: Inkvec has the lowest mean colour error and fewest coordinates among the compared engines">
 </p>
 
 Inkvec vs four other engines on **21 hash-selected cases** (real brand logos, icons, emoji), scored with CIEDE2000 colour error, DISTS, DINOv3, and coordinate count:
@@ -184,6 +172,10 @@ fn trace(input: &str) -> Result<String, Box<dyn std::error::Error>> {
 ---
 
 ## How it works
+
+<p align="center">
+  <img src="docs/assets/github-pipeline.png" width="100%" alt="Inkvec pipeline: read pixels, map regions and edges, solve sub-pixel boundaries, fit curves and arcs, then emit compact SVG">
+</p>
 
 1. **Palette** by minimum description length — an ink survives only if the pixels it explains cost more without it.
 2. **Labels → planar map.** Every boundary is shared between exactly two faces, so a moved edge moves for both sides and the output never has a seam.

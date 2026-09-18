@@ -715,8 +715,17 @@ pub(crate) fn emit_color(
         None
     };
 
+    // Faces the colour of the canvas are background showing through -- a guess, and the
+    // right one for an opaque file. Where the source was transparent under the canvas face
+    // its colour is only the matte, and whether a face of that colour is paint is not a
+    // guess: `clear` says so face by face, and the pass below punches the clear ones. Taking
+    // every face that merely matches the matte deleted white paint: a white ring inside a
+    // copper disc on a transparent PNG came out as a hole in the disc.
+    let bg_known_clear = canvas_bg.is_some_and(|bg| clear.get(bg).copied().unwrap_or(false));
     if let Some(bg) = canvas_bg {
         dropped[bg] = true;
+    }
+    if let Some(bg) = canvas_bg.filter(|_| !bg_known_clear) {
         if let Some(bg_c) = get_flat_color(bg) {
             for c in 0..order.len() {
                 if c == bg || outer[c].is_empty() {

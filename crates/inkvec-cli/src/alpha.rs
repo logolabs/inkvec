@@ -291,7 +291,21 @@ pub(crate) fn pixel_grid(img: &inkvec_trace::Rgba) -> Option<usize> {
 /// numbers that had to agree, with nothing keeping them in agreement.
 pub(crate) const SWALLOWED: f64 = 0.33;
 
-pub(crate) fn choose_matte(img: &inkvec_trace::Rgba) -> ([f32; 3], f64) {
+/// Share of the drawn silhouette that, composited over white, the palette cannot tell from
+/// white at all ([`inkvec_trace::color::SAME_INK_DE00`]). Above it the white matte has erased
+/// the artwork's outline and [`alpha_source`] turns the cutout on.
+///
+/// Deliberately not [`SWALLOWED`], whose margin (dE00 10) is for choosing a matte colour:
+/// at that margin a near-white edge counts as lost although the tracer separates it from
+/// white easily, and turning the cutout on for those images made the printer and bride emoji
+/// worse on every ground (`noto-emoji/emoji_u1f5a8` dE00 0.53 -> 0.76). At the same-ink
+/// margin, white marks on a transparent ground read 1.00 and no icon of the 246-icon screen
+/// set reads above 0.32, so a majority is far from both.
+pub(crate) const LOST_TO_WHITE: f64 = 0.5;
+
+/// The matte, the share of the drawn mass it swallows at [`SWALLOWED`]'s margin, and the
+/// share of it that is indistinguishable from white ([`LOST_TO_WHITE`]).
+pub(crate) fn choose_matte(img: &inkvec_trace::Rgba) -> ([f32; 3], f64, f64) {
     // In order of preference. The two neutrals first, then colours artwork rarely uses.
     const CANDIDATES: [[f32; 3]; 6] = [
         [1.0, 1.0, 1.0],
@@ -314,9 +328,9 @@ pub(crate) fn choose_matte(img: &inkvec_trace::Rgba) -> ([f32; 3], f64) {
 
     if let Some(v) = std::env::var_os("INKVEC_MATTE") {
         match v.to_string_lossy().to_lowercase().as_str() {
-            "white" => return ([1.0, 1.0, 1.0], 0.0),
-            "black" => return ([0.0, 0.0, 0.0], 0.0),
-            "magenta" => return ([1.0, 0.0, 1.0], 0.0),
+            "white" => return ([1.0, 1.0, 1.0], 0.0, 0.0),
+            "black" => return ([0.0, 0.0, 0.0], 0.0, 0.0),
+            "magenta" => return ([1.0, 0.0, 1.0], 0.0, 0.0),
             _ => {}
         }
     }
@@ -344,6 +358,7 @@ pub(crate) fn choose_matte(img: &inkvec_trace::Rgba) -> ([f32; 3], f64) {
     let mut hist: std::collections::HashMap<[u8; 4], usize> = std::collections::HashMap::new();
     let mut drawn = 0usize;
     let mut soft = 0usize;
+    let mut lost = 0usize;
     for y in 0..h {
         for x in 0..w {
             let a = alpha(x, y);
@@ -379,6 +394,13 @@ pub(crate) fn choose_matte(img: &inkvec_trace::Rgba) -> ([f32; 3], f64) {
             }
             drawn += 1;
             let p = &img.data[(y * w + x) * 4..(y * w + x) * 4 + 3];
+            let over_white = [p[0] * a + 1.0 - a, p[1] * a + 1.0 - a, p[2] * a + 1.0 - a];
+            if over_white.iter().all(|&v| v >= 0.9)
+                && inkvec_trace::color::de00(over_white, [1.0, 1.0, 1.0])
+                    < inkvec_trace::color::SAME_INK_DE00
+            {
+                lost += 1;
+            }
             let q = |v: f32| ((v.clamp(0.0, 1.0) * 15.0).round() as u8).min(15);
             *hist
                 .entry([
@@ -391,8 +413,9 @@ pub(crate) fn choose_matte(img: &inkvec_trace::Rgba) -> ([f32; 3], f64) {
         }
     }
     if drawn == 0 || soft as f64 > SOFT_SHARE * (drawn + soft) as f64 {
-        return ([1.0, 1.0, 1.0], 0.0);
+        return ([1.0, 1.0, 1.0], 0.0, 0.0);
     }
+    let lost_to_white = lost as f64 / drawn as f64;
     let buckets: Vec<([f32; 3], f32, usize)> = hist
         .into_iter()
         .map(|(b, n)| {
@@ -422,7 +445,7 @@ pub(crate) fn choose_matte(img: &inkvec_trace::Rgba) -> ([f32; 3], f64) {
     let cost_of_white = swallowed(CANDIDATES[0]);
     for cand in CANDIDATES {
         if swallowed(cand) < SWALLOWED {
-            return (cand, cost_of_white);
+            return (cand, cost_of_white, lost_to_white);
         }
     }
     (
@@ -431,6 +454,7 @@ pub(crate) fn choose_matte(img: &inkvec_trace::Rgba) -> ([f32; 3], f64) {
             .min_by(|&x, &y| swallowed(x).total_cmp(&swallowed(y)))
             .unwrap_or([1.0, 1.0, 1.0]),
         cost_of_white,
+        lost_to_white,
     )
 }
 
@@ -439,6 +463,10 @@ pub(crate) struct AlphaSource {
     pub(crate) flat: inkvec_trace::Rgba,
     pub(crate) alpha: Vec<f32>,
     pub(crate) matte: [f32; 3],
+    /// Whether the transparency is carried out as `--cutout` does: asked for, or turned on
+    /// here because the white matte would have swallowed the artwork. Everything downstream
+    /// has to agree with the matte, so callers pass [`cutout_args`] on, not their own args.
+    pub(crate) cutout: bool,
 }
 
 /// The matted image, when the input has any transparency at all. `None` — and so not one
@@ -451,6 +479,15 @@ pub(crate) struct AlphaSource {
 /// white fixed, the tracer is byte-for-byte what it was — which is what the committed CI
 /// gate measures, and what it rejected the auto matte for: dE00 0.15404 -> 0.15654 against
 /// a limit of 0.15558, on a corpus that is scored over white and cannot see the gain.
+///
+/// Except where white erases the artwork. A white mark on a transparent ground, composited
+/// over white, is one flat colour: the trace came back as a single white rectangle, and with
+/// `--no-background` as an empty document — the LogoLabs flask in white scored alpha error
+/// 0.89 either way, and 0.0008 with the cutout. There is no trace of the artwork to keep
+/// byte-for-byte there, so the cutout is turned on for that image, when more than
+/// [`LOST_TO_WHITE`] of the drawn silhouette is paint the palette cannot tell from white.
+/// Artwork with a soft glow reports nothing lost (white is kept for the glow's sake) and so
+/// stays as it was.
 pub(crate) fn alpha_source(
     img: &inkvec_trace::Rgba,
     quiet: bool,
@@ -459,7 +496,9 @@ pub(crate) fn alpha_source(
     if !img.data.iter().skip(3).step_by(4).any(|&a| a < 0.999) {
         return None;
     }
-    let (chosen, cost_of_white) = choose_matte(img);
+    let (chosen, _, lost_to_white) = choose_matte(img);
+    let swallowed = !cutout && lost_to_white > LOST_TO_WHITE;
+    let cutout = cutout || swallowed;
     let matte = if cutout { chosen } else { [1.0, 1.0, 1.0] };
     let (flat, alpha) = flatten_over(img, matte);
     if !quiet {
@@ -469,15 +508,35 @@ pub(crate) fn alpha_source(
             inkvec_trace::color::to_hex(matte),
             100.0 * clear as f64 / alpha.len().max(1) as f64
         );
-        if !cutout && cost_of_white > SWALLOWED {
+        if swallowed {
             eprintln!(
-                "  warning       {:.0}% of the artwork meets transparency in white and will \
-be lost against the white matte; --cutout keeps it",
-                100.0 * cost_of_white
+                "  cutout        {:.0}% of the outline is white and would vanish into a white \
+matte; carrying the transparency out as --cutout does",
+                100.0 * lost_to_white
             );
         }
     }
-    Some(AlphaSource { flat, alpha, matte })
+    Some(AlphaSource {
+        flat,
+        alpha,
+        matte,
+        cutout,
+    })
+}
+
+/// `args` as the rest of the trace must see them once [`alpha_source`] has decided: with
+/// `--cutout` on when it turned the cutout on for this image.
+pub(crate) fn cutout_args<'a>(
+    args: &'a Args,
+    src: Option<&AlphaSource>,
+) -> std::borrow::Cow<'a, Args> {
+    match src {
+        Some(s) if s.cutout && !args.cutout => std::borrow::Cow::Owned(Args {
+            cutout: true,
+            ..args.clone()
+        }),
+        _ => std::borrow::Cow::Borrowed(args),
+    }
 }
 
 pub(crate) fn flatten_over(

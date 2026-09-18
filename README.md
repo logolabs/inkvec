@@ -210,6 +210,14 @@ Full stage reference: [`docs/algorithm/`](docs/algorithm/) (start at `docs/algor
 
 ---
 
+## Roadmap & Future Work
+
+Active engineering initiatives tracked in [**`docs/TODO.md`**](docs/TODO.md):
+- **Neural Post-Processing Refinement Pass:** Integrating our 20M vision-conditioned Graph Neural Network (`TraceRefineGNN20M`) with equality-constrained CAD least-squares snapping (KKT solver) and topological collinear edge collapse to eliminate subtle raster quantization and restore sharp $C^0$ corners.
+- **High-Volume Benchmarking:** Scaling from the 246-icon regression gate to a multi-thousand-sample suite across diverse complexity tiers, streaming multi-engine Pareto frontiers against Potrace, VTracer, and Adobe Illustrator.
+
+---
+
 ## Licence
 
 Apache-2.0. See [`LICENSE`](LICENSE). Third-party components: [`docs/THIRD_PARTY.md`](docs/THIRD_PARTY.md). All Rust dependencies are permissive. Potrace (GPL) is used only as a benchmark baseline — never linked or redistributed.

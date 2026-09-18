@@ -15,7 +15,7 @@ categories.workspace = true
 inkvec-trace = { workspace = true }
 inkvec-sr = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png"] }
-sha2 = "0.10"
+sha2 = "0.11"
 
 # The restorer network. Off by default, same reasoning as inkvec-sr: it pulls in a full ML
 # runtime, and everything else in this crate is a few hundred lines of arithmetic that should

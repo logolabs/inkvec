@@ -236,7 +236,7 @@ Apache-2.0. See [`LICENSE`](LICENSE). Third-party components: [`docs/THIRD_PARTY
 ## Acknowledgements
 
 <p align="center">
-  <img src="docs/assets/acknowledgment-banner.jpg" width="760" alt="LogoLabs · EuroHPC JU · Arrhenius — Compute resources provided by EuroHPC JU · Project EHPC-AIF-2026PG01-907 · Arrhenius GPU at NAISS, Sweden">
+  <img src="docs/assets/acknowledgment-banner.png" width="760" alt="LogoLabs, EuroHPC JU, and Arrhenius — EuroHPC JU Project EHPC-AIF-2026PG01-907; Arrhenius GPU at NAISS, Sweden">
 </p>
 
 We acknowledge EuroHPC JU for awarding the project ID **EHPC-AIF-2026PG01-907** access to resources on **Arrhenius GPU at NAISS, Sweden**. The Arrhenius system is operated by the National Academic Infrastructure for Supercomputing in Sweden (NAISS). Compute time on Arrhenius enabled the training and evaluation of the denoiser/restorer model shipped with this release.

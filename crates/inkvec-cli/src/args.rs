@@ -116,7 +116,7 @@ pub struct Args {
     pub harmonize: bool,
     /// Threshold IoU for shape equivalence [default: 0.92].
     pub harmonize_threshold: f64,
-    /// Emit harmonized shapes as SVG <defs> and <use> instances.
+    /// Emit harmonized shapes as SVG `<defs>` and `<use>` instances.
     pub use_symbols: bool,
 }
 
@@ -400,7 +400,9 @@ fn parse_args_from(mut it: impl Iterator<Item = String>) -> Result<Args, String>
             "--stroke-balance" => a.stroke_balance = parse_value(&mut it, "--stroke-balance")?,
             "--harmonize" => a.harmonize = true,
             "--no-harmonize" => a.harmonize = false,
-            "--harmonize-threshold" => a.harmonize_threshold = parse_value(&mut it, "--harmonize-threshold")?,
+            "--harmonize-threshold" => {
+                a.harmonize_threshold = parse_value(&mut it, "--harmonize-threshold")?
+            }
             "--use-symbols" => a.use_symbols = true,
             "--sr-command" => {
                 a.sr_command = Some(it.next().ok_or("--sr-command needs a command line")?)

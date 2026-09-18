@@ -138,16 +138,24 @@ pub(crate) fn minify_svg(svg: &str) -> String {
     let mut remaining = s.as_str();
     while let Some(i) = remaining.find('<') {
         flattened.push_str(&remaining[..i]);
-        let Some(end) = remaining[i..].find('>') else { break; };
+        let Some(end) = remaining[i..].find('>') else {
+            break;
+        };
         let tag = &remaining[i..i + end + 1];
         let keep = if tag == "<g>" {
-            groups.push(false); false
+            groups.push(false);
+            false
         } else if tag.starts_with("<g ") && !tag.ends_with("/>") {
-            groups.push(true); true
+            groups.push(true);
+            true
         } else if tag == "</g>" {
             groups.pop().unwrap_or(true)
-        } else { true };
-        if keep { flattened.push_str(tag); }
+        } else {
+            true
+        };
+        if keep {
+            flattened.push_str(tag);
+        }
         remaining = &remaining[i + end + 1..];
     }
     flattened.push_str(remaining);
@@ -270,8 +278,12 @@ mod hygiene_tests {
     #[test]
     fn minify_keeps_attribute_groups_balanced() {
         let svg = "<svg><g transform=\"translate(2,3)\"><g id=\"unused\"><path d=\"M0,0L1,1\"/></g></g></svg>";
-        assert_eq!(minify_svg(svg), "<svg><g transform=\"translate(2,3)\"><path d=\"M0,0L1,1\"/></g></svg>");
-        let referenced = "<svg><g id=\"repeat\"><path d=\"M0,0L1,1\"/></g><use href=\"#repeat\"/></svg>";
+        assert_eq!(
+            minify_svg(svg),
+            "<svg><g transform=\"translate(2,3)\"><path d=\"M0,0L1,1\"/></g></svg>"
+        );
+        let referenced =
+            "<svg><g id=\"repeat\"><path d=\"M0,0L1,1\"/></g><use href=\"#repeat\"/></svg>";
         assert_eq!(minify_svg(referenced), referenced);
     }
 }

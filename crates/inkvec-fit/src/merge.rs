@@ -960,8 +960,23 @@ pub fn snap_smooth_joins(
                         p2: c2,
                         p3,
                     };
-                    crate::multimodel::chi2_cubic(&poly.points, &poly.sigma, &s, a0, b0, &prev, true)
-                        + crate::multimodel::chi2_cubic(&poly.points, &poly.sigma, &s, a1, b1, &next, true)
+                    crate::multimodel::chi2_cubic(
+                        &poly.points,
+                        &poly.sigma,
+                        &s,
+                        a0,
+                        b0,
+                        &prev,
+                        true,
+                    ) + crate::multimodel::chi2_cubic(
+                        &poly.points,
+                        &poly.sigma,
+                        &s,
+                        a1,
+                        b1,
+                        &next,
+                        true,
+                    )
                 };
                 let free = chi2_of(pc2, c1, c2);
 
@@ -1031,7 +1046,15 @@ pub fn snap_smooth_joins(
                         p2: c2,
                         p3,
                     };
-                    crate::multimodel::chi2_cubic(&poly.points, &poly.sigma, &s, a1, b1, &next, true)
+                    crate::multimodel::chi2_cubic(
+                        &poly.points,
+                        &poly.sigma,
+                        &s,
+                        a1,
+                        b1,
+                        &next,
+                        true,
+                    )
                 };
                 let free = crate::multimodel::chi2_cubic(
                     &poly.points,
@@ -1039,7 +1062,12 @@ pub fn snap_smooth_joins(
                     &s,
                     a1,
                     b1,
-                    &crate::multimodel::Cubic { p0: q1, p1: c1, p2: c2, p3 },
+                    &crate::multimodel::Cubic {
+                        p0: q1,
+                        p1: c1,
+                        p2: c2,
+                        p3,
+                    },
                     true,
                 );
                 let mut v = [n_out, c2.x, c2.y];
@@ -1051,7 +1079,9 @@ pub fn snap_smooth_joins(
                         for dir in [-1.0, 1.0] {
                             let mut t = v;
                             t[i] += dir * step;
-                            if i == 0 && t[0] < 1e-4 { continue; }
+                            if i == 0 && t[0] < 1e-4 {
+                                continue;
+                            }
                             let c = chi2_of(t[0], Point::new(t[1], t[2]));
                             if c < best - 1e-9 {
                                 best = c;
@@ -1062,7 +1092,9 @@ pub fn snap_smooth_joins(
                     }
                     if !moved {
                         step *= 0.5;
-                        if step < 1e-4 { break; }
+                        if step < 1e-4 {
+                            break;
+                        }
                     }
                 }
                 let lc_budget = cfg.lambda;
@@ -1071,7 +1103,11 @@ pub fn snap_smooth_joins(
                         "  [g1-lc] pair {k}: free chi2 {free:.2} -> constrained {best:.2} \
         (d {:.2}) vs budget {lc_budget:.2} -> {}",
                         best - free,
-                        if best - free < lc_budget { "SNAP" } else { "keep" }
+                        if best - free < lc_budget {
+                            "SNAP"
+                        } else {
+                            "keep"
+                        }
                     );
                 }
                 if best - free < lc_budget {
@@ -1101,7 +1137,15 @@ pub fn snap_smooth_joins(
                         p2: Point::new(q1.x - u_out.0 * arm, q1.y - u_out.1 * arm),
                         p3: q1,
                     };
-                    crate::multimodel::chi2_cubic(&poly.points, &poly.sigma, &s, a0, b0, &prev, true)
+                    crate::multimodel::chi2_cubic(
+                        &poly.points,
+                        &poly.sigma,
+                        &s,
+                        a0,
+                        b0,
+                        &prev,
+                        true,
+                    )
                 };
                 let free = crate::multimodel::chi2_cubic(
                     &poly.points,
@@ -1109,7 +1153,12 @@ pub fn snap_smooth_joins(
                     &s,
                     a0,
                     b0,
-                    &crate::multimodel::Cubic { p0: q0, p1: pc1, p2: pc2, p3: pp3 },
+                    &crate::multimodel::Cubic {
+                        p0: q0,
+                        p1: pc1,
+                        p2: pc2,
+                        p3: pp3,
+                    },
                     true,
                 );
                 let mut v = [pc1.x, pc1.y, n_in];
@@ -1121,7 +1170,9 @@ pub fn snap_smooth_joins(
                         for dir in [-1.0, 1.0] {
                             let mut t = v;
                             t[i] += dir * step;
-                            if i == 2 && t[2] < 1e-4 { continue; }
+                            if i == 2 && t[2] < 1e-4 {
+                                continue;
+                            }
                             let c = chi2_of(Point::new(t[0], t[1]), t[2]);
                             if c < best - 1e-9 {
                                 best = c;
@@ -1132,7 +1183,9 @@ pub fn snap_smooth_joins(
                     }
                     if !moved {
                         step *= 0.5;
-                        if step < 1e-4 { break; }
+                        if step < 1e-4 {
+                            break;
+                        }
                     }
                 }
                 let cl_budget = cfg.lambda;
@@ -1141,7 +1194,11 @@ pub fn snap_smooth_joins(
                         "  [g1-cl] pair {k}: free chi2 {free:.2} -> constrained {best:.2} \
         (d {:.2}) vs budget {cl_budget:.2} -> {}",
                         best - free,
-                        if best - free < cl_budget { "SNAP" } else { "keep" }
+                        if best - free < cl_budget {
+                            "SNAP"
+                        } else {
+                            "keep"
+                        }
                     );
                 }
                 if best - free < cl_budget {

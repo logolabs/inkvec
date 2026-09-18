@@ -4,11 +4,11 @@
 //!
 //! Run: `cargo run --release -p inkvec-fit --example structural_demo`
 
-use std::time::Instant;
 use inkvec_core::Point;
 use inkvec_fit::curves::{eval_cubic, Segment};
 use inkvec_fit::structural::{simplify_path_structural, StructuralConfig};
 use inkvec_fit::FittedPath;
+use std::time::Instant;
 
 fn build_circle_chords(r: f64, num_chords: usize) -> FittedPath {
     let mut segs = Vec::new();
@@ -32,21 +32,30 @@ fn build_rounded_rect_chords(w: f64, h: f64, r: f64, chords_per_corner: usize) -
     // Top-right corner
     for i in 1..=chords_per_corner {
         let a = -Q + Q * (i as f64 / chords_per_corner as f64);
-        segs.push(Segment::Line(Point::new(w - r + r * a.cos(), r + r * a.sin())));
+        segs.push(Segment::Line(Point::new(
+            w - r + r * a.cos(),
+            r + r * a.sin(),
+        )));
     }
     // Right straight
     segs.push(Segment::Line(Point::new(w, h - r)));
     // Bottom-right corner
     for i in 1..=chords_per_corner {
         let a = Q * (i as f64 / chords_per_corner as f64);
-        segs.push(Segment::Line(Point::new(w - r + r * a.cos(), h - r + r * a.sin())));
+        segs.push(Segment::Line(Point::new(
+            w - r + r * a.cos(),
+            h - r + r * a.sin(),
+        )));
     }
     // Bottom straight
     segs.push(Segment::Line(Point::new(r, h)));
     // Bottom-left corner
     for i in 1..=chords_per_corner {
         let a = Q + Q * (i as f64 / chords_per_corner as f64);
-        segs.push(Segment::Line(Point::new(r + r * a.cos(), h - r + r * a.sin())));
+        segs.push(Segment::Line(Point::new(
+            r + r * a.cos(),
+            h - r + r * a.sin(),
+        )));
     }
     // Left straight
     segs.push(Segment::Line(Point::new(0.0, r)));
@@ -108,9 +117,23 @@ fn main() {
 
         let elim = simplify_path_structural(&mut path, &cfg);
         println!("Test 1: Circle (r=64, 64 chords)");
-        println!("  Segments:   {} -> {} (eliminated {})", before_segs, path.segments.len(), elim);
-        println!("  Parameters: {:.1} -> {:.1} (saved {:.1})", before_params, path.params(), before_params - path.params());
-        println!("  Time/path:  {:.2} us ({:.3} ms)", per_op_us, per_op_us / 1000.0);
+        println!(
+            "  Segments:   {} -> {} (eliminated {})",
+            before_segs,
+            path.segments.len(),
+            elim
+        );
+        println!(
+            "  Parameters: {:.1} -> {:.1} (saved {:.1})",
+            before_params,
+            path.params(),
+            before_params - path.params()
+        );
+        println!(
+            "  Time/path:  {:.2} us ({:.3} ms)",
+            per_op_us,
+            per_op_us / 1000.0
+        );
         println!();
     }
 
@@ -131,9 +154,23 @@ fn main() {
 
         let elim = simplify_path_structural(&mut path, &cfg);
         println!("Test 2: Rounded Rectangle (128x128, r=24, 36 chords)");
-        println!("  Segments:   {} -> {} (eliminated {})", before_segs, path.segments.len(), elim);
-        println!("  Parameters: {:.1} -> {:.1} (saved {:.1})", before_params, path.params(), before_params - path.params());
-        println!("  Time/path:  {:.2} us ({:.3} ms)", per_op_us, per_op_us / 1000.0);
+        println!(
+            "  Segments:   {} -> {} (eliminated {})",
+            before_segs,
+            path.segments.len(),
+            elim
+        );
+        println!(
+            "  Parameters: {:.1} -> {:.1} (saved {:.1})",
+            before_params,
+            path.params(),
+            before_params - path.params()
+        );
+        println!(
+            "  Time/path:  {:.2} us ({:.3} ms)",
+            per_op_us,
+            per_op_us / 1000.0
+        );
         println!();
     }
 
@@ -154,9 +191,23 @@ fn main() {
 
         let elim = simplify_path_structural(&mut path, &cfg);
         println!("Test 3: Cubic S-Curve (24 chords)");
-        println!("  Segments:   {} -> {} (eliminated {})", before_segs, path.segments.len(), elim);
-        println!("  Parameters: {:.1} -> {:.1} (saved {:.1})", before_params, path.params(), before_params - path.params());
-        println!("  Time/path:  {:.2} us ({:.3} ms)", per_op_us, per_op_us / 1000.0);
+        println!(
+            "  Segments:   {} -> {} (eliminated {})",
+            before_segs,
+            path.segments.len(),
+            elim
+        );
+        println!(
+            "  Parameters: {:.1} -> {:.1} (saved {:.1})",
+            before_params,
+            path.params(),
+            before_params - path.params()
+        );
+        println!(
+            "  Time/path:  {:.2} us ({:.3} ms)",
+            per_op_us,
+            per_op_us / 1000.0
+        );
         println!();
     }
 }

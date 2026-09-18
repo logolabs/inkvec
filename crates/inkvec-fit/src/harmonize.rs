@@ -12,8 +12,8 @@
 //! target pose via the inverse affine transform, restoring pixel-perfect consistency
 //! and enabling compact SVG `<use>` symbol instancing.
 
-use inkvec_core::Point;
 use crate::curves::Segment;
+use inkvec_core::Point;
 
 /// A 2D Affine Transformation:
 ///
@@ -642,7 +642,11 @@ pub fn cluster_compound_shapes(
             .iter()
             .min_by_key(|&&m| {
                 shapes[m].outer_segments.len()
-                    + shapes[m].holes.iter().map(|(_, segs, _)| segs.len()).sum::<usize>()
+                    + shapes[m]
+                        .holes
+                        .iter()
+                        .map(|(_, segs, _)| segs.len())
+                        .sum::<usize>()
             })
             .unwrap_or(&i);
 
@@ -687,7 +691,10 @@ pub fn cluster_compound_shapes(
                 .map(|poly| closest_point_on_closed_polyline(canon_outer_start, poly))
                 .collect();
             let new_start = median_point(&candidates);
-            let mut cur_delta = Point::new(new_start.x - canon_outer_start.x, new_start.y - canon_outer_start.y);
+            let mut cur_delta = Point::new(
+                new_start.x - canon_outer_start.x,
+                new_start.y - canon_outer_start.y,
+            );
             canon_outer_start = new_start;
 
             for seg in canon_outer_segments.iter_mut() {
@@ -735,7 +742,8 @@ pub fn cluster_compound_shapes(
                         .map(|poly| closest_point_on_closed_polyline(*h_start, poly))
                         .collect();
                     let new_h_start = median_point(&h_start_candidates);
-                    let mut h_cur_delta = Point::new(new_h_start.x - h_start.x, new_h_start.y - h_start.y);
+                    let mut h_cur_delta =
+                        Point::new(new_h_start.x - h_start.x, new_h_start.y - h_start.y);
                     *h_start = new_h_start;
 
                     for seg in h_segs.iter_mut() {
@@ -1003,7 +1011,11 @@ mod tests {
         .expect("compound shape 2");
 
         let clusters = cluster_compound_shapes(&[s1, s2], 0.90);
-        assert_eq!(clusters.len(), 1, "Both shapes with holes should cluster together");
+        assert_eq!(
+            clusters.len(),
+            1,
+            "Both shapes with holes should cluster together"
+        );
         assert_eq!(clusters[0].members.len(), 2);
     }
 
@@ -1029,4 +1041,3 @@ mod tests {
         assert_eq!(closest, Point::new(5.0, 0.0));
     }
 }
-

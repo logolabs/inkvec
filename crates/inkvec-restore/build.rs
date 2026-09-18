@@ -27,8 +27,7 @@ fn generate() {
         if let Some(parent) = onnx.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let url =
-            "https://huggingface.co/Logolabs/inkvec-denoiser-001/resolve/main/restorer.onnx";
+        let url = "https://huggingface.co/Logolabs/inkvec-denoiser-001/resolve/main/restorer.onnx";
         let temp = onnx.with_extension("tmp");
         let curl_ok = std::process::Command::new("curl")
             .args(["-fSL", "-o", temp.to_str().unwrap_or(""), url])

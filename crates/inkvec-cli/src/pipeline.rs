@@ -554,21 +554,34 @@ fn finish_color(
     // A local merge can trigger a more expensive global crossing repair. Keep
     // an independent baseline through primitive selection and repair so the
     // trial is judged on the geometry that those stages actually return.
-    let mut structural_baseline = if std::env::var("INKVEC_STRUCTURAL")
-        .is_ok_and(|v| v != "0") {
-        let results: Vec<_> = polys.par_iter().zip(lambda_scales.par_iter())
+    let mut structural_baseline = if std::env::var("INKVEC_STRUCTURAL").is_ok_and(|v| v != "0") {
+        let results: Vec<_> = polys
+            .par_iter()
+            .zip(lambda_scales.par_iter())
             .map(|(poly, &scale)| {
-                let cfg_k = FitConfig { lambda: cfg.lambda * scale, ..*cfg };
+                let cfg_k = FitConfig {
+                    lambda: cfg.lambda * scale,
+                    ..*cfg
+                };
                 let curve = multimodel::optimal_multimodel_without_structural(poly, &cfg_k);
                 match fit_primitive_or_arcs(&poly.points, &poly.sigma, poly.closed, &cfg_k) {
-                    Some((segs, prim, cost)) if cost < path_cost(poly, &curve, &cfg_k) =>
-                        (FittedPath { start: poly.points[0], segments: segs, closed: poly.closed }, prim),
+                    Some((segs, prim, cost)) if cost < path_cost(poly, &curve, &cfg_k) => (
+                        FittedPath {
+                            start: poly.points[0],
+                            segments: segs,
+                            closed: poly.closed,
+                        },
+                        prim,
+                    ),
                     _ => (curve, None),
                 }
-            }).collect();
+            })
+            .collect();
         let (paths, primitives): (Vec<_>, Vec<_>) = results.into_iter().unzip();
         Some((paths, primitives))
-    } else { None };
+    } else {
+        None
+    };
     sw.mark("fit_dp");
     if ring_timing {
         let mut rt = ring_times.into_inner().unwrap();
@@ -672,7 +685,9 @@ fn finish_color(
         repair_ring_crossings(&order, &mut fitted, &polys, &cfg_repair)
     };
     if let Some((mut baseline, baseline_prims)) = structural_baseline.take() {
-        let baseline_repaired = if args.no_repair { 0 } else {
+        let baseline_repaired = if args.no_repair {
+            0
+        } else {
             repair_ring_crossings(&order, &mut baseline, &polys, &cfg_repair)
         };
         if !structural_trial_improves(&polys, &fitted, &baseline, &lambda_scales, cfg) {
@@ -925,24 +940,44 @@ fn finish_color(
 
 /// MDL cost of a fitted path against the measurements it came from, in the same units
 /// the fitters minimise, so a primitive and a curve description are directly comparable.
-fn structural_trial_improves(polys: &[inkvec_core::Polyline], trial: &[FittedPath],
-    baseline: &[FittedPath], scales: &[f64], cfg: &FitConfig) -> bool {
-    if polys.len() != trial.len() || polys.len() != baseline.len()
-        || polys.len() != scales.len() { return false; }
+fn structural_trial_improves(
+    polys: &[inkvec_core::Polyline],
+    trial: &[FittedPath],
+    baseline: &[FittedPath],
+    scales: &[f64],
+    cfg: &FitConfig,
+) -> bool {
+    if polys.len() != trial.len() || polys.len() != baseline.len() || polys.len() != scales.len() {
+        return false;
+    }
     let mut strict = false;
-    for (((poly, candidate), original), &scale) in polys.iter().zip(trial).zip(baseline).zip(scales) {
+    for (((poly, candidate), original), &scale) in polys.iter().zip(trial).zip(baseline).zip(scales)
+    {
         let rate = |p: &FittedPath| p.segments.iter().map(|s| s.params()).sum::<f64>();
         // An SVG arc writes seven numbers even when its geometric model has
         // only five degrees of freedom. Protect both notions of complexity.
-        let written = |p: &FittedPath| p.segments.iter().map(|s| match s {
-            Segment::Line(..) => 2usize,
-            Segment::Cubic(..) => 6,
-            Segment::Arc { .. } => 7,
-        }).sum::<usize>();
+        let written = |p: &FittedPath| {
+            p.segments
+                .iter()
+                .map(|s| match s {
+                    Segment::Line(..) => 2usize,
+                    Segment::Cubic(..) => 6,
+                    Segment::Arc { .. } => 7,
+                })
+                .sum::<usize>()
+        };
         let (new_rate, old_rate) = (rate(candidate), rate(original));
-        if new_rate > old_rate || written(candidate) > written(original) { return false; }
-        let local = FitConfig { lambda: cfg.lambda * scale, ..*cfg };
-        let (new_cost, old_cost) = (path_cost(poly, candidate, &local), path_cost(poly, original, &local));
+        if new_rate > old_rate || written(candidate) > written(original) {
+            return false;
+        }
+        let local = FitConfig {
+            lambda: cfg.lambda * scale,
+            ..*cfg
+        };
+        let (new_cost, old_cost) = (
+            path_cost(poly, candidate, &local),
+            path_cost(poly, original, &local),
+        );
         if !new_cost.is_finite() || !old_cost.is_finite() || new_cost > old_cost + 1e-9 {
             return false;
         }
@@ -1043,13 +1078,43 @@ mod tests {
         let b = Point::new(10.0, 0.0);
         let c = Point::new(20.0, 0.0);
         let poly = Polyline::new(vec![a, b, c], vec![0.1; 3], false);
-        let original = FittedPath { start: a, segments: vec![Segment::Line(b), Segment::Line(c)], closed: false };
-        let compact = FittedPath { start: a, segments: vec![Segment::Line(c)], closed: false };
-        let inflated = FittedPath { start: a, segments: vec![Segment::Cubic(b, b, c)], closed: false };
+        let original = FittedPath {
+            start: a,
+            segments: vec![Segment::Line(b), Segment::Line(c)],
+            closed: false,
+        };
+        let compact = FittedPath {
+            start: a,
+            segments: vec![Segment::Line(c)],
+            closed: false,
+        };
+        let inflated = FittedPath {
+            start: a,
+            segments: vec![Segment::Cubic(b, b, c)],
+            closed: false,
+        };
         let cfg = FitConfig::default();
-        assert!(structural_trial_improves(&[poly.clone()], &[compact], &[original.clone()], &[1.0], &cfg));
-        assert!(!structural_trial_improves(&[poly.clone()], &[inflated], &[original.clone()], &[1.0], &cfg));
-        assert!(!structural_trial_improves(&[poly], &[], &[original], &[1.0], &cfg));
+        assert!(structural_trial_improves(
+            &[poly.clone()],
+            &[compact],
+            &[original.clone()],
+            &[1.0],
+            &cfg
+        ));
+        assert!(!structural_trial_improves(
+            &[poly.clone()],
+            &[inflated],
+            &[original.clone()],
+            &[1.0],
+            &cfg
+        ));
+        assert!(!structural_trial_improves(
+            &[poly],
+            &[],
+            &[original],
+            &[1.0],
+            &cfg
+        ));
     }
 
     #[test]

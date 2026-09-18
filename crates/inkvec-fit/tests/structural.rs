@@ -3,8 +3,8 @@
 use inkvec_core::{Point, Polyline};
 use inkvec_fit::curves::{eval_cubic, Segment};
 use inkvec_fit::structural::{
-    generate_replacements, max_deviation_to_samples, sample_run_uniform,
-    simplify_path_structural, simplify_with_poly, vector_angle, StructuralConfig,
+    generate_replacements, max_deviation_to_samples, sample_run_uniform, simplify_path_structural,
+    simplify_with_poly, vector_angle, StructuralConfig,
 };
 use inkvec_fit::{FitConfig, FittedPath};
 
@@ -79,11 +79,21 @@ fn test_circular_arc_recovery() {
 
     let eliminated = simplify_path_structural(&mut path, &cfg);
     assert!(eliminated >= 4, "Eliminated {eliminated} segments");
-    assert!(path.segments.len() <= 2, "Length is {}", path.segments.len());
+    assert!(
+        path.segments.len() <= 2,
+        "Length is {}",
+        path.segments.len()
+    );
 
     // Should have fitted a circular arc or a high-accuracy cubic
-    let has_arc = path.segments.iter().any(|s| matches!(s, Segment::Arc { .. }));
-    let has_cubic = path.segments.iter().any(|s| matches!(s, Segment::Cubic(..)));
+    let has_arc = path
+        .segments
+        .iter()
+        .any(|s| matches!(s, Segment::Arc { .. }));
+    let has_cubic = path
+        .segments
+        .iter()
+        .any(|s| matches!(s, Segment::Cubic(..)));
     assert!(has_arc || has_cubic);
 }
 
@@ -118,7 +128,11 @@ fn test_s_curve_c1_cubic_fit() {
 
     let eliminated = simplify_path_structural(&mut path, &cfg);
     assert!(eliminated >= 5, "Eliminated {eliminated} segments");
-    assert!(path.segments.len() <= 2, "Path segments: {}", path.segments.len());
+    assert!(
+        path.segments.len() <= 2,
+        "Path segments: {}",
+        path.segments.len()
+    );
 
     // Verify max deviation from original endpoints
     assert!((path.end().x - p3.x).abs() < 1e-6);
@@ -151,7 +165,11 @@ fn test_sharp_corner_is_not_flattened() {
 
     // The two horizontal segments should collapse to 1, and the two vertical segments to 1.
     // But the corner must remain! Length should be exactly 2.
-    assert_eq!(path.segments.len(), 2, "Expected 2 segments (one per side of corner)");
+    assert_eq!(
+        path.segments.len(),
+        2,
+        "Expected 2 segments (one per side of corner)"
+    );
     assert_eq!(path.segments[0].end(), Point::new(20.0, 0.0));
     assert_eq!(path.segments[1].end(), Point::new(20.0, 20.0));
 }
@@ -210,7 +228,10 @@ fn test_generate_replacements_and_sampling() {
 
     let cfg = StructuralConfig::default();
     let repls = generate_replacements(p0, &segs, None, None, &cfg);
-    assert!(!repls.is_empty(), "Should generate at least a line replacement");
+    assert!(
+        !repls.is_empty(),
+        "Should generate at least a line replacement"
+    );
     assert!(matches!(repls[0], Segment::Line(_)));
 }
 
@@ -218,16 +239,28 @@ fn test_generate_replacements_and_sampling() {
 fn missing_contour_correspondence_does_not_change_the_objective() {
     let mut path = FittedPath {
         start: Point::new(0.0, 0.0),
-        segments: vec![Segment::Line(Point::new(10.0, 0.0)),
-                       Segment::Line(Point::new(20.0, 0.0))],
+        segments: vec![
+            Segment::Line(Point::new(10.0, 0.0)),
+            Segment::Line(Point::new(20.0, 0.0)),
+        ],
         closed: false,
     };
-    let poly = Polyline { points: vec![path.start, path.end()],
-                          sigma: vec![0.01; 2], closed: false };
+    let poly = Polyline {
+        points: vec![path.start, path.end()],
+        sigma: vec![0.01; 2],
+        closed: false,
+    };
     // The two indices no longer correspond to the two current segments.
     // Previously this silently selected a geometry-only simplifier instead.
-    let eliminated = simplify_with_poly(&mut path, &poly, &[0, 1],
-                                        &FitConfig { tau: 2.0, lambda: 1.0 });
+    let eliminated = simplify_with_poly(
+        &mut path,
+        &poly,
+        &[0, 1],
+        &FitConfig {
+            tau: 2.0,
+            lambda: 1.0,
+        },
+    );
     assert_eq!(eliminated, 0);
     assert_eq!(path.segments.len(), 2);
     assert_eq!(path.end(), Point::new(20.0, 0.0));
@@ -237,17 +270,33 @@ fn missing_contour_correspondence_does_not_change_the_objective() {
 fn closed_contour_wrap_does_not_disable_other_valid_spans() {
     let mut path = FittedPath {
         start: Point::new(0.0, 0.0),
-        segments: vec![Segment::Line(Point::new(10.0, 0.0)),
-                       Segment::Line(Point::new(20.0, 0.0)),
-                       Segment::Line(Point::new(20.0, 20.0)),
-                       Segment::Line(Point::new(0.0, 0.0))],
+        segments: vec![
+            Segment::Line(Point::new(10.0, 0.0)),
+            Segment::Line(Point::new(20.0, 0.0)),
+            Segment::Line(Point::new(20.0, 20.0)),
+            Segment::Line(Point::new(0.0, 0.0)),
+        ],
         closed: true,
     };
-    let poly = Polyline { points: vec![path.start, Point::new(10.0, 0.0),
-                                      Point::new(20.0, 0.0), Point::new(20.0, 20.0)],
-                          sigma: vec![0.01; 4], closed: true };
-    let eliminated = simplify_with_poly(&mut path, &poly, &[0, 1, 2, 3, 0],
-                                        &FitConfig { tau: 2.0, lambda: 1.0 });
+    let poly = Polyline {
+        points: vec![
+            path.start,
+            Point::new(10.0, 0.0),
+            Point::new(20.0, 0.0),
+            Point::new(20.0, 20.0),
+        ],
+        sigma: vec![0.01; 4],
+        closed: true,
+    };
+    let eliminated = simplify_with_poly(
+        &mut path,
+        &poly,
+        &[0, 1, 2, 3, 0],
+        &FitConfig {
+            tau: 2.0,
+            lambda: 1.0,
+        },
+    );
     assert!(eliminated >= 1);
     assert_eq!(path.start, path.end());
     assert!(path.closed);
@@ -258,22 +307,41 @@ fn one_sided_distance_cannot_erase_a_protrusion() {
     // The candidate follows the bottom of the contour perfectly, but omits
     // the narrow upward excursion. Both directions of evidence are required.
     use inkvec_fit::structural::is_deviation_within;
-    let contour = vec![Point::new(0.0,0.0), Point::new(9.0,0.0),
-        Point::new(10.0,3.0), Point::new(11.0,0.0), Point::new(20.0,0.0)];
-    let line = vec![Point::new(0.0,0.0), Point::new(20.0,0.0)];
+    let contour = vec![
+        Point::new(0.0, 0.0),
+        Point::new(9.0, 0.0),
+        Point::new(10.0, 3.0),
+        Point::new(11.0, 0.0),
+        Point::new(20.0, 0.0),
+    ];
+    let line = vec![Point::new(0.0, 0.0), Point::new(20.0, 0.0)];
     assert!(is_deviation_within(&line, &contour, 0.85));
     assert!(!is_deviation_within(&contour, &line, 0.85));
 }
 
 #[test]
 fn geometrically_closed_path_has_the_same_seam_guard_as_flagged_closed() {
-    let points = [Point::new(0.0,0.0), Point::new(10.0,0.1),
-        Point::new(20.0,0.0), Point::new(20.0,20.0),
-        Point::new(10.0,20.1), Point::new(0.0,20.0), Point::new(0.0,0.0)];
-    let mut flagged = FittedPath { start:points[0], segments:points[1..].iter().copied().map(Segment::Line).collect(), closed:true };
-    let mut geometric = flagged.clone(); geometric.closed=false;
-    let cfg=StructuralConfig::default();
-    simplify_path_structural(&mut flagged,&cfg);
-    simplify_path_structural(&mut geometric,&cfg);
-    assert_eq!(format!("{:?}",flagged.segments),format!("{:?}",geometric.segments));
+    let points = [
+        Point::new(0.0, 0.0),
+        Point::new(10.0, 0.1),
+        Point::new(20.0, 0.0),
+        Point::new(20.0, 20.0),
+        Point::new(10.0, 20.1),
+        Point::new(0.0, 20.0),
+        Point::new(0.0, 0.0),
+    ];
+    let mut flagged = FittedPath {
+        start: points[0],
+        segments: points[1..].iter().copied().map(Segment::Line).collect(),
+        closed: true,
+    };
+    let mut geometric = flagged.clone();
+    geometric.closed = false;
+    let cfg = StructuralConfig::default();
+    simplify_path_structural(&mut flagged, &cfg);
+    simplify_path_structural(&mut geometric, &cfg);
+    assert_eq!(
+        format!("{:?}", flagged.segments),
+        format!("{:?}", geometric.segments)
+    );
 }

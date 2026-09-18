@@ -11,7 +11,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "Apache-2.0"
 rust-version = "1.88"
@@ -32,12 +32,12 @@ too_many_lines = "warn"
 [workspace.dependencies]
 # Internal crates carry a version as well as a path: crates.io refuses a published crate
 # whose dependency is a bare path.
-inkvec-core = { path = "crates/inkvec-core", version = "0.1.0" }
-inkvec-fit = { path = "crates/inkvec-fit", version = "0.1.0" }
-inkvec-trace = { path = "crates/inkvec-trace", version = "0.1.0" }
-inkvec-sr = { path = "crates/inkvec-sr", version = "0.1.0" }
-inkvec-restore = { path = "crates/inkvec-restore", version = "0.1.0" }
-inkvec-cli = { path = "crates/inkvec-cli", version = "0.1.0" }
+inkvec-core = { path = "crates/inkvec-core", version = "0.1.1" }
+inkvec-fit = { path = "crates/inkvec-fit", version = "0.1.1" }
+inkvec-trace = { path = "crates/inkvec-trace", version = "0.1.1" }
+inkvec-sr = { path = "crates/inkvec-sr", version = "0.1.1" }
+inkvec-restore = { path = "crates/inkvec-restore", version = "0.1.1" }
+inkvec-cli = { path = "crates/inkvec-cli", version = "0.1.1" }
 robust = "1.1"
 rayon = "1.10"
 kurbo = "0.11"

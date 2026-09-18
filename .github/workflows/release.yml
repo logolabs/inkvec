@@ -49,11 +49,12 @@ jobs:
           # available here) -- verify the first tagged run.
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
-          # macos-13 is the last Intel (x86_64) GitHub-hosted image; macos-14 is arm64.
+          # macos-15-intel is the supported Intel (x86_64) GitHub-hosted image;
+          # macos-14 is arm64.
           # Pinned explicitly rather than macos-latest so the mapping doesn't silently
           # shift under us.
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-15-intel
           - target: aarch64-apple-darwin
             os: macos-14
           - target: x86_64-pc-windows-msvc
@@ -61,7 +62,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.98.0
         with:
           targets: ${{ matrix.target }}
 
@@ -199,7 +200,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    name: publish draft release
+    name: publish release
     needs: checksums
     # workflow_dispatch runs are a dry run: build and checksum everything above, but never
     # reach this job, so nothing is published or touched on the releases page.
@@ -232,13 +233,12 @@ jobs:
             echo "No CHANGELOG.md section found for [${version}]; edit this release's notes before publishing." > notes.md
           fi
 
-      # NOT run end-to-end locally (no tag push in this session); the extraction script
-      # above was validated against this repository's actual CHANGELOG.md heading format
-      # ("## [0.1.0] - 2026-09-15") but the action itself, and the draft it produces on
-      # github.com, were not exercised.
+      # The extraction script is validated against this repository's CHANGELOG heading
+      # format (for example "## [0.1.1] - 2026-09-18"). A tag push publishes only after
+      # every archive and its checksums are present.
       - uses: softprops/action-gh-release@v2
         with:
-          draft: true
+          draft: false
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           body_path: notes.md

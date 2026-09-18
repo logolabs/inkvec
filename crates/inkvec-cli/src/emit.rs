@@ -288,12 +288,7 @@ pub(crate) fn ring_to_segments(ring: &Ring, fitted: &[FittedPath]) -> (Point, Ve
 }
 
 /// Serializes a sequence of fitted segments starting from `start` into SVG path data.
-pub(crate) fn fmt_segments(
-    start: Point,
-    segments: &[Segment],
-    decimals: usize,
-    d: &mut String,
-) {
+pub(crate) fn fmt_segments(start: Point, segments: &[Segment], decimals: usize, d: &mut String) {
     if segments.is_empty() {
         return;
     }
@@ -306,7 +301,18 @@ pub(crate) fn fmt_segments(
             Segment::Line(p) => d.push_str(&format!("L{:.*},{:.*}", decimals, p.x, decimals, p.y)),
             Segment::Cubic(a, b, p) => d.push_str(&format!(
                 "C{:.*},{:.*} {:.*},{:.*} {:.*},{:.*}",
-                decimals, a.x, decimals, a.y, decimals, b.x, decimals, b.y, decimals, p.x, decimals, p.y
+                decimals,
+                a.x,
+                decimals,
+                a.y,
+                decimals,
+                b.x,
+                decimals,
+                b.y,
+                decimals,
+                p.x,
+                decimals,
+                p.y
             )),
             Segment::Arc {
                 rx,
@@ -333,7 +339,6 @@ pub(crate) fn fmt_segments(
     }
     d.push('Z');
 }
-
 
 /// Emit the map as a **stacked** document: faces painted back to front, each drawing only
 /// its outermost rings.
@@ -677,10 +682,17 @@ pub(crate) fn emit_color(
                 return false;
             }
             if let Some(pf) = (drawn[i].len() == 1 && order[i][drawn[i][0]].len() == 1)
-                .then(|| prims.get(order[i][outer[i][0]][0].0).and_then(|p| p.as_ref()))
+                .then(|| {
+                    prims
+                        .get(order[i][outer[i][0]][0].0)
+                        .and_then(|p| p.as_ref())
+                })
                 .flatten()
             {
-                if let PrimitiveKind::RoundRect { x, y, w: rw, h: rh, .. } = pf.kind {
+                if let PrimitiveKind::RoundRect {
+                    x, y, w: rw, h: rh, ..
+                } = pf.kind
+                {
                     if (x + 0.5).abs() <= 0.25
                         && (y + 0.5).abs() <= 0.25
                         && (x + rw - x1).abs() <= 0.25
@@ -693,7 +705,8 @@ pub(crate) fn emit_color(
             outer[i].iter().any(|&k| {
                 let ring = &pts[i][k];
                 let has_corner = |cx: f64, cy: f64| {
-                    ring.iter().any(|p| (p.x - cx).abs() <= 0.5 && (p.y - cy).abs() <= 0.5)
+                    ring.iter()
+                        .any(|p| (p.x - cx).abs() <= 0.5 && (p.y - cy).abs() <= 0.5)
                 };
                 has_corner(x0, y0) && has_corner(x1, y0) && has_corner(x1, y1) && has_corner(x0, y1)
             })
@@ -760,7 +773,9 @@ pub(crate) fn emit_color(
                             let c_ring = &order[c][kc];
                             order[p].iter().enumerate().any(|(kp, pr)| {
                                 !outer[p].contains(&kp)
-                                    && pr.iter().any(|&(pe, _)| c_ring.iter().any(|&(ce, _)| ce == pe))
+                                    && pr
+                                        .iter()
+                                        .any(|&(pe, _)| c_ring.iter().any(|&(ce, _)| ce == pe))
                             })
                         });
                         if is_hole {
@@ -876,8 +891,10 @@ pub(crate) fn emit_color(
         }
     }
     // Optional shape harmonization
-    let mut harmonized_d: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
-    let mut symbol_use: std::collections::HashMap<usize, (String, String)> = std::collections::HashMap::new();
+    let mut harmonized_d: std::collections::HashMap<usize, String> =
+        std::collections::HashMap::new();
+    let mut symbol_use: std::collections::HashMap<usize, (String, String)> =
+        std::collections::HashMap::new();
 
     // Gradient definitions, and the fill string each face will use.
     let mut defs = String::new();
@@ -917,10 +934,8 @@ pub(crate) fn emit_color(
             }
         }
 
-        let clusters = inkvec_fit::harmonize::cluster_compound_shapes(
-            &candidate_shapes,
-            harmonize_threshold,
-        );
+        let clusters =
+            inkvec_fit::harmonize::cluster_compound_shapes(&candidate_shapes, harmonize_threshold);
 
         for (cluster_idx, cluster) in clusters.iter().enumerate() {
             if cluster.members.len() > 1 {
@@ -950,7 +965,9 @@ pub(crate) fn emit_color(
                         let face_idx = face_indices[m];
                         let shape = &candidate_shapes[m];
                         let mut d_out = String::new();
-                        let re_start = shape.from_canonical.apply_point(cluster.canonical_outer_start);
+                        let re_start = shape
+                            .from_canonical
+                            .apply_point(cluster.canonical_outer_start);
                         let re_segs: Vec<_> = cluster
                             .canonical_outer_segments
                             .iter()
@@ -1172,7 +1189,16 @@ pub(crate) fn emit_color(
                 }
             }
         }
-        let d = face_d(i, order, fitted, prims, drawn, holes, decimals, harmonized_d);
+        let d = face_d(
+            i,
+            order,
+            fitted,
+            prims,
+            drawn,
+            holes,
+            decimals,
+            harmonized_d,
+        );
         if d.is_empty() {
             return None;
         }
@@ -1218,21 +1244,47 @@ pub(crate) fn emit_color(
             done[a] = true;
             let i = members[a];
             let Some((element, is_prim)) = face_element(
-                i, order, outer, fitted, prims, fills, opac, ids, drawn, holes, decimals,
-                harmonized_d, symbol_use,
+                i,
+                order,
+                outer,
+                fitted,
+                prims,
+                fills,
+                opac,
+                ids,
+                drawn,
+                holes,
+                decimals,
+                harmonized_d,
+                symbol_use,
             ) else {
                 continue;
             };
             let mut group = vec![i];
             if !is_prim && fills[i].starts_with('#') && !symbol_use.contains_key(&i) {
                 for b in a + 1..members.len() {
-                    if done[b] || fills[members[b]] != fills[i] || opac[members[b]] != opac[i] || symbol_use.contains_key(&members[b]) {
+                    if done[b]
+                        || fills[members[b]] != fills[i]
+                        || opac[members[b]] != opac[i]
+                        || symbol_use.contains_key(&members[b])
+                    {
                         continue;
                     }
                     let j = members[b];
                     let Some((_, prim_b)) = face_element(
-                        j, order, outer, fitted, prims, fills, opac, ids, drawn, holes, decimals,
-                        harmonized_d, symbol_use,
+                        j,
+                        order,
+                        outer,
+                        fitted,
+                        prims,
+                        fills,
+                        opac,
+                        ids,
+                        drawn,
+                        holes,
+                        decimals,
+                        harmonized_d,
+                        symbol_use,
                     ) else {
                         done[b] = true;
                         continue;
@@ -1249,7 +1301,16 @@ pub(crate) fn emit_color(
             } else {
                 let mut d = String::new();
                 for &j in &group {
-                    d.push_str(&face_d(j, order, fitted, prims, drawn, holes, decimals, harmonized_d));
+                    d.push_str(&face_d(
+                        j,
+                        order,
+                        fitted,
+                        prims,
+                        drawn,
+                        holes,
+                        decimals,
+                        harmonized_d,
+                    ));
                 }
                 format!(
                     "<path id=\"{}\" d=\"{d}\" fill=\"{}\"{} fill-rule=\"evenodd\"/>",
@@ -1290,8 +1351,21 @@ pub(crate) fn emit_color(
 
     let mut body = String::new();
     emit_level(
-        &roots, order, &outer, fitted, prims, &fills, &opac, &ids, &children, drawn, &holes,
-        decimals, &harmonized_d, &symbol_use, &mut body,
+        &roots,
+        order,
+        &outer,
+        fitted,
+        prims,
+        &fills,
+        &opac,
+        &ids,
+        &children,
+        drawn,
+        &holes,
+        decimals,
+        &harmonized_d,
+        &symbol_use,
+        &mut body,
     );
 
     // The layers, over everything, each as one compound path. Its faces are disjoint, so

@@ -7,6 +7,19 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-18
+
+### Fixed
+
+- **Release verification.** Pin CI and release builds to Rust 1.98.0 so formatting,
+  lint and benchmark measurements do not change when the rolling stable channel advances.
+  The quality baseline now records the reproducible release build rather than an
+  unrecoverable pre-release snapshot.
+- **Release packaging.** Use GitHub's supported `macos-15-intel` runner for the Intel
+  macOS archive.
+- **Documentation checks.** Escape SVG element names in Rust documentation and refresh
+  the generated third-party component notice.
+
 ## [0.1.0] - 2026-09-15
 
 Initial public release.

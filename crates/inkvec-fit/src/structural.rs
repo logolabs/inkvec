@@ -30,11 +30,9 @@
 //!   unchanged and are applied in descending index order, preserving tangent evidence
 //!   and index stability, including the seam of a closed path.
 
-use inkvec_core::{Point, Polyline, Vec2};
-use crate::curves::{
-    arc_ellipse_center, cubic_self_intersects, eval_cubic, Segment, PARAMS_ARC,
-};
+use crate::curves::{arc_ellipse_center, cubic_self_intersects, eval_cubic, Segment, PARAMS_ARC};
 use crate::{FitConfig, FittedPath, PARAMS_LINE};
+use inkvec_core::{Point, Polyline, Vec2};
 
 /// Parameters charged for a cubic segment.
 pub const PARAMS_CUBIC: f64 = 6.0;
@@ -212,10 +210,17 @@ pub fn segment_tangent_start(seg: &Segment, start: Point) -> Option<Vec2> {
 pub fn eval_segment(seg: &Segment, start: Point, t: f64) -> Point {
     let t = t.clamp(0.0, 1.0);
     // Preserve the stored incidence exactly, including SVG arc roundoff.
-    if t == 0.0 { return start; }
-    if t == 1.0 { return seg.end(); }
+    if t == 0.0 {
+        return start;
+    }
+    if t == 1.0 {
+        return seg.end();
+    }
     match *seg {
-        Segment::Line(end) => Point::new(start.x + (end.x - start.x) * t, start.y + (end.y - start.y) * t),
+        Segment::Line(end) => Point::new(
+            start.x + (end.x - start.x) * t,
+            start.y + (end.y - start.y) * t,
+        ),
         Segment::Cubic(c1, c2, end) => eval_cubic([start, c1, c2, end], t),
         Segment::Arc {
             rx,
@@ -234,7 +239,11 @@ pub fn eval_segment(seg: &Segment, start: Point, t: f64) -> Point {
 /// Sample a run of segments at roughly uniform arc-length intervals.
 ///
 /// Returns `(samples, total_arc_length)`.
-pub fn sample_run_uniform(start: Point, segs: &[Segment], count: usize) -> Option<(Vec<Point>, f64)> {
+pub fn sample_run_uniform(
+    start: Point,
+    segs: &[Segment],
+    count: usize,
+) -> Option<(Vec<Point>, f64)> {
     if segs.is_empty() || count < 2 {
         return None;
     }
@@ -280,7 +289,10 @@ pub fn sample_run_uniform(start: Point, segs: &[Segment], count: usize) -> Optio
             let u = ((target_s - s0) / span).clamp(0.0, 1.0);
             let p0 = raw_pts[cursor];
             let p1 = raw_pts[cursor + 1];
-            out.push(Point::new(p0.x + (p1.x - p0.x) * u, p0.y + (p1.y - p0.y) * u));
+            out.push(Point::new(
+                p0.x + (p1.x - p0.x) * u,
+                p0.y + (p1.y - p0.y) * u,
+            ));
         }
     }
 
@@ -334,10 +346,18 @@ pub fn max_deviation_to_samples(samples: &[Point], ref_pts: &[Point]) -> f64 {
         cursor = best_i;
         let mut d = best.sqrt();
         if best_i > 0 {
-            d = d.min(point_to_segment_dist(p, ref_pts[best_i - 1], ref_pts[best_i]));
+            d = d.min(point_to_segment_dist(
+                p,
+                ref_pts[best_i - 1],
+                ref_pts[best_i],
+            ));
         }
         if best_i + 1 < m {
-            d = d.min(point_to_segment_dist(p, ref_pts[best_i], ref_pts[best_i + 1]));
+            d = d.min(point_to_segment_dist(
+                p,
+                ref_pts[best_i],
+                ref_pts[best_i + 1],
+            ));
         }
         if d > max_d {
             max_d = d;
@@ -376,10 +396,18 @@ pub fn is_deviation_within(samples: &[Point], ref_pts: &[Point], max_dist: f64) 
         cursor = best_i;
         let mut d = best_d2.sqrt();
         if best_i > 0 {
-            d = d.min(point_to_segment_dist(p, ref_pts[best_i - 1], ref_pts[best_i]));
+            d = d.min(point_to_segment_dist(
+                p,
+                ref_pts[best_i - 1],
+                ref_pts[best_i],
+            ));
         }
         if best_i + 1 < m {
-            d = d.min(point_to_segment_dist(p, ref_pts[best_i], ref_pts[best_i + 1]));
+            d = d.min(point_to_segment_dist(
+                p,
+                ref_pts[best_i],
+                ref_pts[best_i + 1],
+            ));
         }
         if d > max_dist {
             return false;
@@ -431,10 +459,18 @@ pub fn mean_sq_deviation(samples: &[Point], ref_pts: &[Point]) -> f64 {
         cursor = best_i;
         let mut d = best.sqrt();
         if best_i > 0 {
-            d = d.min(point_to_segment_dist(p, ref_pts[best_i - 1], ref_pts[best_i]));
+            d = d.min(point_to_segment_dist(
+                p,
+                ref_pts[best_i - 1],
+                ref_pts[best_i],
+            ));
         }
         if best_i + 1 < m {
-            d = d.min(point_to_segment_dist(p, ref_pts[best_i], ref_pts[best_i + 1]));
+            d = d.min(point_to_segment_dist(
+                p,
+                ref_pts[best_i],
+                ref_pts[best_i + 1],
+            ));
         }
         sum_sq += d * d;
     }
@@ -509,7 +545,8 @@ pub fn generate_replacements(
 
         // Geometric pre-filter with early exit
         if !is_deviation_within(&cand_pts, &z, cfg.max_dist)
-            || !is_deviation_within(&z, &cand_pts, cfg.max_dist) {
+            || !is_deviation_within(&z, &cand_pts, cfg.max_dist)
+        {
             continue;
         }
 
@@ -517,7 +554,9 @@ pub fn generate_replacements(
         let cand_tan_start = segment_tangent_start(&cand, a);
         let cand_tan_end = segment_tangent_end(&cand, a);
 
-        if let (Some(b_tan), Some(c_tan), Some(r_tan)) = (ref_before_tan, cand_tan_start, ref_run_start_tan) {
+        if let (Some(b_tan), Some(c_tan), Some(r_tan)) =
+            (ref_before_tan, cand_tan_start, ref_run_start_tan)
+        {
             let existing_kink = vector_angle(b_tan, r_tan);
             let new_kink = vector_angle(b_tan, c_tan);
             if new_kink > existing_kink.max(cfg.min_kink_rad) + 1e-6 {
@@ -525,7 +564,9 @@ pub fn generate_replacements(
             }
         }
 
-        if let (Some(a_tan), Some(c_tan), Some(r_tan)) = (ref_after_tan, cand_tan_end, ref_run_end_tan) {
+        if let (Some(a_tan), Some(c_tan), Some(r_tan)) =
+            (ref_after_tan, cand_tan_end, ref_run_end_tan)
+        {
             let existing_kink = vector_angle(r_tan, a_tan);
             let new_kink = vector_angle(c_tan, a_tan);
             if new_kink > existing_kink.max(cfg.min_kink_rad) + 1e-6 {
@@ -735,14 +776,14 @@ fn fit_circular_arc(z: &[Point], a: Point, b: Point) -> Option<Segment> {
         if yc < yd {
             d = c;
             yd = yc;
-            span = invphi * span;
+            span *= invphi;
             c = lo + invphi2 * span;
             yc = loss(c);
         } else {
             lo = c;
             c = d;
             yc = yd;
-            span = invphi * span;
+            span *= invphi;
             d = lo + invphi * span;
             yd = loss(d);
         }
@@ -799,8 +840,7 @@ pub struct Proposal {
 /// replacements share that evidence and must be deferred to a later round.
 /// The first and last runs are adjacent too when the path is closed.
 fn independent_runs(s: usize, e: usize, bs: usize, be: usize, n: usize, closed: bool) -> bool {
-    (e < bs || s > be)
-        && !(closed && ((s == 0 && be == n) || (bs == 0 && e == n)))
+    (e < bs || s > be) && !(closed && ((s == 0 && be == n) || (bs == 0 && e == n)))
 }
 
 /// Simplify a [`FittedPath`] using the structural MDL rate-distortion algorithm.
@@ -906,13 +946,14 @@ pub fn simplify_path_structural(path: &mut FittedPath, cfg: &StructuralConfig) -
         }
 
         // Sort proposals descending by gain
-        proposals.sort_by(|a, b| b.gain.partial_cmp(&a.gain).unwrap_or(std::cmp::Ordering::Equal));
+        proposals.sort_by(|a, b| b.gain.total_cmp(&a.gain));
 
         // Greedy disjoint interval packing
         let mut batch: Vec<Proposal> = Vec::new();
         for prop in proposals {
-            let overlaps = batch.iter().any(|b| !independent_runs(
-                prop.start, prop.end, b.start, b.end, n, closed));
+            let overlaps = batch
+                .iter()
+                .any(|b| !independent_runs(prop.start, prop.end, b.start, b.end, n, closed));
             if !overlaps {
                 batch.push(prop);
             }
@@ -923,7 +964,7 @@ pub fn simplify_path_structural(path: &mut FittedPath, cfg: &StructuralConfig) -
         }
 
         // Apply batch back-to-front by start index so earlier indices remain valid
-        batch.sort_by(|a, b| b.start.cmp(&a.start));
+        batch.sort_by_key(|proposal| std::cmp::Reverse(proposal.start));
 
         let before_count = path.segments.len();
         for p in batch {
@@ -1047,9 +1088,16 @@ pub fn simplify_with_poly(
                 let old_cost = 0.5 * old_chi2 + cfg.lambda * old_params;
 
                 for cand in cand_list {
-                    let new_chi2 = crate::curves::chi2(pts_span, sig_span, run_start, std::slice::from_ref(&cand));
+                    let new_chi2 = crate::curves::chi2(
+                        pts_span,
+                        sig_span,
+                        run_start,
+                        std::slice::from_ref(&cand),
+                    );
                     let new_params = cand.params();
-                    if new_params >= old_params { continue; }
+                    if new_params >= old_params {
+                        continue;
+                    }
                     let new_cost = 0.5 * new_chi2 + cfg.lambda * new_params;
 
                     if new_cost < old_cost - 1e-9 {
@@ -1064,12 +1112,13 @@ pub fn simplify_with_poly(
             break;
         }
 
-        proposals.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
+        proposals.sort_by(|a, b| b.3.total_cmp(&a.3));
 
         let mut batch = Vec::new();
         for (s, e, repl, _) in proposals {
-            let overlaps = batch.iter().any(|&(bs, be, _, _)|
-                !independent_runs(s, e, bs, be, n, closed));
+            let overlaps = batch
+                .iter()
+                .any(|&(bs, be, _, _)| !independent_runs(s, e, bs, be, n, closed));
             if !overlaps {
                 batch.push((s, e, repl, ()));
             }
@@ -1079,7 +1128,7 @@ pub fn simplify_with_poly(
             break;
         }
 
-        batch.sort_by(|a, b| b.0.cmp(&a.0));
+        batch.sort_by_key(|proposal| std::cmp::Reverse(proposal.0));
         let before_count = path.segments.len();
         for (s, e, repl, _) in batch {
             path.segments.splice(s..e, [repl]);

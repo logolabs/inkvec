@@ -202,12 +202,20 @@ pub fn optimal_multimodel_capped_full(
     cfg: &FitConfig,
     max_span: usize,
 ) -> MultimodelFit {
-    optimal_multimodel_impl(poly, cfg, max_span,
-        std::env::var("INKVEC_STRUCTURAL").is_ok_and(|v| v != "0"))
+    optimal_multimodel_impl(
+        poly,
+        cfg,
+        max_span,
+        std::env::var("INKVEC_STRUCTURAL").is_ok_and(|v| v != "0"),
+    )
 }
 
-fn optimal_multimodel_impl(poly: &Polyline, cfg: &FitConfig, max_span: usize,
-    structural: bool) -> MultimodelFit {
+fn optimal_multimodel_impl(
+    poly: &Polyline,
+    cfg: &FitConfig,
+    max_span: usize,
+    structural: bool,
+) -> MultimodelFit {
     let n = poly.len();
     if n < 2 {
         return MultimodelFit {
@@ -827,7 +835,15 @@ pub fn segment_cost_direct(
             ) {
                 Some((chi2, d0, d1)) => {
                     let chord = (pts[j] - pts[i]).norm();
-                    let cb = Cubic::from_arms(pts[i], pts[j], tan.outgoing[i], tan.incoming[j], chord, d0, d1);
+                    let cb = Cubic::from_arms(
+                        pts[i],
+                        pts[j],
+                        tan.outgoing[i],
+                        tan.incoming[j],
+                        chord,
+                        d0,
+                        d1,
+                    );
                     let wobble = cb.wobble_penalty(cfg.lambda);
                     (0.5 * chi2 + cfg.lambda * params_cubic() + wobble).min(free)
                 }

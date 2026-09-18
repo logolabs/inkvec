@@ -23,8 +23,11 @@ runs from a bare checkout. Everything else under bench/data stays ignored.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import platform
+import subprocess
 import sys
 from pathlib import Path
 
@@ -35,6 +38,25 @@ import svgeval  # noqa: E402
 
 BASELINE = ROOT / "bench" / "gate" / "baseline.json"
 LIMITS = {"de00": 0.01, "turning": 0.01, "ratio": 0.05}
+
+
+def command_output(*args: str) -> str | None:
+    """Best-effort provenance: a missing local tool must not hide a score."""
+    try:
+        result = subprocess.run(args, cwd=ROOT, text=True, capture_output=True, check=True)
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return result.stdout.strip() or None
+
+
+def provenance(exe: Path) -> dict[str, str]:
+    """Identify the exact tracer and source snapshot behind a recorded baseline."""
+    return {
+        "executable_sha256": hashlib.sha256(exe.read_bytes()).hexdigest(),
+        "platform": platform.platform(),
+        "rustc": command_output("rustc", "--version") or "unavailable",
+        "source_revision": command_output("git", "rev-parse", "HEAD") or "unavailable",
+    }
 
 
 def main() -> int:
@@ -73,6 +95,7 @@ def main() -> int:
         return 1
 
     if a.write_baseline:
+        now["_provenance"] = provenance(exe)
         if a.bypass_gate:
             now["_bypass_justification"] = a.bypass_gate.strip()
         BASELINE.parent.mkdir(parents=True, exist_ok=True)
@@ -128,6 +151,7 @@ def main() -> int:
     if gains:
         tightened["n"] = now["n"]
         tightened["self_res"] = now["self_res"]
+        tightened["_provenance"] = provenance(exe)
         tightened.pop("_bypass_justification", None)
         BASELINE.parent.mkdir(parents=True, exist_ok=True)
         BASELINE.write_text(json.dumps(tightened, indent=2), encoding="utf-8")

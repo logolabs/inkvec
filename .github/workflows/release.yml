@@ -39,6 +39,11 @@ jobs:
           - aarch64-apple-darwin
           - x86_64-pc-windows-msvc
         feature: [default, restore-model]
+        exclude:
+          # The ONNX Runtime package does not currently build for this legacy target;
+          # retain the default Intel-macOS executable rather than blocking every archive.
+          - target: x86_64-apple-darwin
+            feature: restore-model
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest

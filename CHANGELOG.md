@@ -7,6 +7,14 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-09-18
+
+### Fixed
+
+- **Release archives.** Keep the default Intel-macOS archive in the release matrix while
+  omitting its unsupported optional ONNX-Runtime restorer variant, which previously
+  prevented the full multi-platform release from publishing.
+
 ## [0.1.2] - 2026-09-18
 
 ### Fixed

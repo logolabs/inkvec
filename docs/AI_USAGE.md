@@ -125,6 +125,15 @@ For applications demanding reproducible, certifiable, and zero-hallucination vec
 
 ---
 
-## 6. Feedback and Inquiries
+## 6. Known Limitations & Technical Boundaries
+
+For complete technical transparency, all geometric, topological, performance, and model failure modes are documented in [**`docs/LIMITATIONS.md`**](LIMITATIONS.md):
+- **Core Vectorizer:** Designed strictly for graphic artwork, logotypes, icons, and diagrams. Natural continuous-tone photographs, OCR/typography identification, variable-width freehand sketches, and occluded shape inpainting are outside the mathematical model.
+- **Neural Restorer (`restorer.onnx`):** Trained on synthetic DCT and compression artifacts; may attenuate intentional stippling, dithering, or grain. Off by default.
+- **GNN Refiner (`TraceRefineGNN20M`):** May over-regularize subtle hand-drawn organic asymmetry into rigid CAD constraints. Research-stage only.
+
+---
+
+## 7. Feedback and Inquiries
 
 For questions regarding AI disclosures, algorithmic provenance, or academic citations, please open an issue on GitHub at [`github.com/logolabs/inkvec`](https://github.com/logolabs/inkvec) or contact the maintainers at LogoLabs.

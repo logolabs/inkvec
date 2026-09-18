@@ -7,6 +7,7 @@
   <a href="https://github.com/logolabs/inkvec/releases"><img alt="release" src="https://img.shields.io/github/v/release/logolabs/inkvec?label=release"></a>
   <a href="PIPELINE_EXPLANATION.md"><img alt="Pipeline Explanation" src="https://img.shields.io/badge/architecture-PIPELINE__EXPLANATION-c9754a"></a>
   <a href="docs/AI_USAGE.md"><img alt="AI Usage" src="https://img.shields.io/badge/provenance-AI__USAGE-teal"></a>
+  <a href="docs/LIMITATIONS.md"><img alt="Limitations" src="https://img.shields.io/badge/engineering-LIMITATIONS-darkred"></a>
   <a href="LICENSE"><img alt="Apache-2.0" src="https://img.shields.io/badge/licence-Apache--2.0-blue"></a>
   <a href="https://huggingface.co/spaces/logolabs/inkvec"><img alt="demo" src="https://img.shields.io/badge/🤗_demo-HuggingFace-orange"></a>
   <a href="https://huggingface.co/Logolabs/inkvec-denoiser-001"><img alt="model" src="https://img.shields.io/badge/model-inkvec--denoiser--001-yellow"></a>
@@ -201,15 +202,20 @@ Full stage reference: [`docs/algorithm/`](docs/algorithm/) (start at `docs/algor
 
 ---
 
-## Who this is not for
+## Known Limitations & Technical Boundaries
 
-| Scenario | Why |
-|---|---|
-| Photographs | Inkvec finds inks and boundaries; a photo has neither. |
-| Centerline / sketch tracing | `--strokes` emits centerlines, but only on genuinely stroked drawings. |
-| Editable text | Lettering is traced as shapes, not re-flowable text. |
-| Sub-pixel gaps | Two strokes closer than a pixel become one region. |
-| Mesh gradients / blurs | Linear and radial gradients are fitted; exotic gradients become bands. |
+See [**`docs/LIMITATIONS.md`**](docs/LIMITATIONS.md) for our comprehensive architectural boundary disclosure.
+
+Inkvec is engineered specifically for graphic artwork, logotypes, icons, and diagrams. Because the core operates under an exact planar partition and description-length model, specific inputs are outside its design scope:
+
+| Scenario | Expected Behavior / Failure Mode | Recommended Alternative |
+|---|---|---|
+| **Photographs** | Natural color transitions violate discrete ink models; causes severe color banding and high coordinate counts. | Keep as AVIF/WebP raster or use diffusion curves. |
+| **Text & Typography** | Glyphs are traced purely as geometric Bézier contours (`<path>`); no font detection, OCR, or `<text>` tags. | Use an OCR engine (e.g. Tesseract) for semantic text. |
+| **Variable-Width Art / Sketches** | Medial axis stroke recovery (`--strokes`) requires uniform width; rough sketches fall back to filled outlines. | Use manual vector pen tools or specialized sketch tracers. |
+| **Sub-Pixel Gaps (< 1px)** | Optical anti-aliasing ramps overlap, merging fine gaps into single faces. | Enable `--sr on` (MambaIR) to upsample before tracing. |
+| **Exotic Gradients & Blurs** | Linear and radial gradients are supported; mesh gradients, angular sweeps, and drop shadows are quantised into bands. | SVG 1.1 limitation; manual gradient mesh authoring. |
+| **Real-Time / 60 FPS Video** | Heavy global optimization (Levenberg-Marquardt + MDL DP) takes $\approx 1.2\text{s}$ per graphic. | Use Potrace (<0.01s) or VTracer (~0.04s) for interactive speed. |
 
 ---
 

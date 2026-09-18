@@ -93,27 +93,30 @@ listed here is compiled but not necessarily linked into the binary.
 |---|---|---|---|
 """
 
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 LINE = re.compile(r"^(?P<name>[A-Za-z0-9_.-]+) v(?P<version>\S+)(?: \((?P<src>[^)]*)\))?(?: \(\*\))?\|(?P<lic>.*)$")
 
 
 def tree(extra: list[str]) -> dict[tuple[str, str], str | None]:
     """Crates compiled by one build, as (name, version) -> declared licence."""
     r = subprocess.run(
-        [CARGO, "tree", *extra, "-e", "normal,build", "--target", "all", "--prefix", "none", "--format", "{p}|{l}"],
+        [CARGO, "tree", *extra, "--color", "never", "-e", "normal,build", "--target", "all", "--prefix", "none", "--format", "{p}|{l}"],
         cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     if r.returncode != 0:
         sys.exit(f"cargo tree {' '.join(extra)} failed:\n{r.stderr[-2000:]}")
     out: dict[tuple[str, str], str | None] = {}
     for line in r.stdout.splitlines():
-        m = LINE.match(line.strip())
+        clean = ANSI_ESCAPE.sub("", line.strip())
+        m = LINE.match(clean)
         if not m:
             continue
         src = m.group("src") or ""
         if src and not src.startswith("http") and ("\\" in src or "/" in src or ":" in src):
             continue  # a workspace member (path source)
         # `cargo tree` appends " (*)" after the whole formatted line for a crate it already printed.
-        lic = re.sub(r"\s*\(\*\)\s*$", "", m.group("lic")).strip()
+        lic = ANSI_ESCAPE.sub("", m.group("lic"))
+        lic = re.sub(r"\s*\(\*\)\s*$", "", lic).strip()
         out[(m.group("name"), m.group("version"))] = lic or None
     return out
 

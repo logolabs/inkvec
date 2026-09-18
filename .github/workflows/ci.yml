@@ -144,6 +144,8 @@ jobs:
     # the actual dependency graph (see tools/third_party.py).
     name: licences
     runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: never
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.98.0

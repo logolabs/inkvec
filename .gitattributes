@@ -1,0 +1,14 @@
+# Ensure all text files use LF line endings across all platforms
+* text=auto eol=lf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.ico binary
+*.onnx binary
+*.pt binary
+*.zip binary
+*.tar.gz binary

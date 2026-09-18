@@ -47,7 +47,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install numpy pillow scikit-image resvg_py
+      - run: pip install numpy pillow scikit-image resvg_py svgelements
       - run: python bench/ci_gate.py --exe target/release/inkvec --workers 4
 
   quality:

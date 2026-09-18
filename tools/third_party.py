@@ -156,11 +156,19 @@ def main() -> int:
     if "--check" in sys.argv:
         old = OUT.read_text("utf-8") if OUT.exists() else ""
         strip = lambda s: re.sub(r"on \d{4}-\d{2}-\d{2}\.", "", s)
-        if strip(old) != strip(text):
+        s_old = strip(old).replace("\r\n", "\n")
+        s_text = strip(text).replace("\r\n", "\n")
+        if s_old != s_text:
+            import difflib
+            print("docs/THIRD_PARTY.md is out of date; diff follows:")
+            for line in difflib.unified_diff(
+                s_old.splitlines(), s_text.splitlines(), fromfile="committed", tofile="rendered"
+            ):
+                print(line)
             print("docs/THIRD_PARTY.md is out of date; run python tools/third_party.py")
             return 1
         return 0
-    OUT.write_text(text, "utf-8")
+    OUT.write_text(text, "utf-8", newline="\n")
     print(f"wrote {OUT.relative_to(ROOT)}")
     return 0
 

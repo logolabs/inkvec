@@ -1,8 +1,8 @@
 """Loading and running the packaged x4 upscaler.
 
-The weights live outside this package, in `out/sr/logo_sr_package`, together with
-the MambaIRv2 architecture made standalone. Nothing here duplicates them; this
-module finds them, binds a scan implementation, and runs tiles.
+The weights and architecture are hosted on Hugging Face at
+`Logolabs/inkvec-sr-001` and downloaded on first use. A local override can be
+provided with `--sr-package` for offline or development use.
 
 Two details are carried over from the packaged CLI because getting them wrong
 shows up in the traced output rather than in the raster:
@@ -16,14 +16,19 @@ shows up in the traced output rather than in the raster:
 """
 from __future__ import annotations
 
+import os
 import sys
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
-ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_PACKAGE = ROOT / "out/sr/logo_sr_package"
+HF_REPO_ID = "Logolabs/inkvec-sr-001"
+HF_BASE_URL = f"https://huggingface.co/{HF_REPO_ID}/resolve/main"
+
+#: Files the loader needs from the HF repo.
+_HF_FILES = ["logo_sr_x4.pt", "mambairv2_arch.py"]
 
 
 class UpscalerUnavailable(RuntimeError):
@@ -33,6 +38,64 @@ class UpscalerUnavailable(RuntimeError):
 #: Fixed RNG seed for the routing sample. Any constant does; what matters is
 #: that it is the same one every run.
 ROUTING_SEED = 0x5641_4331
+
+
+def _cache_dir() -> Path:
+    """Return the local cache directory for downloaded SR model files."""
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    if xdg:
+        base = Path(xdg)
+    elif sys.platform == "win32":
+        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+    else:
+        base = Path.home() / ".cache"
+    return base / "inkvec" / "sr"
+
+
+def _ensure_package() -> Path:
+    """Download the SR model package from Hugging Face if not already cached.
+
+    Returns the directory containing ``logo_sr_x4.pt`` and ``mambairv2_arch.py``.
+    Uses ``huggingface_hub`` when available (respects its cache), otherwise falls
+    back to direct HTTPS download into ``~/.cache/inkvec/sr``.
+    """
+    # --- Try huggingface_hub first (cleaner, auth-aware, cache-deduped) -------
+    try:
+        from huggingface_hub import hf_hub_download
+
+        paths = [
+            Path(hf_hub_download(repo_id=HF_REPO_ID, filename=f))
+            for f in _HF_FILES
+        ]
+        # All files land in the same snapshot directory.
+        return paths[0].parent
+    except Exception:  # noqa: BLE001
+        pass
+
+    # --- Fallback: plain HTTPS into a local cache directory -------------------
+    dest = _cache_dir()
+    dest.mkdir(parents=True, exist_ok=True)
+
+    for fname in _HF_FILES:
+        local = dest / fname
+        if local.exists():
+            continue
+        url = f"{HF_BASE_URL}/{fname}"
+        print(f"Downloading {fname} from {url} ...")
+        tmp = local.with_suffix(".tmp")
+        try:
+            urllib.request.urlretrieve(url, tmp)
+            tmp.replace(local)
+        except Exception as e:
+            tmp.unlink(missing_ok=True)
+            raise UpscalerUnavailable(
+                f"could not download {fname} from {url}: {e}\n"
+                f"Install huggingface_hub (`pip install huggingface_hub`) for "
+                f"better error handling, or use --sr-package to point at a "
+                f"local copy."
+            ) from e
+
+    return dest
 
 
 def _seeded(torch, fn, *a, **kw):
@@ -94,12 +157,20 @@ def load(package: Path | None = None, device: str | None = None,
         raise UpscalerUnavailable(
             "PyTorch is not installed; the SR pre-pass needs it") from e
 
-    pkg = Path(package) if package else DEFAULT_PACKAGE
-    weights = pkg / "weights/logo_sr_x4.pt"
-    if not weights.exists():
-        raise UpscalerUnavailable(
-            f"weights not found at {weights}. Point --sr-package at a copy of "
-            "logo_sr_package, or unpack logo_sr_package.zip.")
+    if package is not None:
+        # Explicit local override: check both the flat layout (HF-style) and the
+        # legacy nested layout (out/sr/logo_sr_package/weights/...).
+        pkg = Path(package)
+        weights = pkg / "logo_sr_x4.pt"
+        if not weights.exists():
+            weights = pkg / "weights" / "logo_sr_x4.pt"
+        if not weights.exists():
+            raise UpscalerUnavailable(
+                f"weights not found at {pkg}. Expected logo_sr_x4.pt or "
+                f"weights/logo_sr_x4.pt inside the package directory.")
+    else:
+        pkg = _ensure_package()
+        weights = pkg / "logo_sr_x4.pt"
 
     if device is None:
         # Only refuse when CPU was *inferred*. Asking for it is a valid choice.

@@ -40,9 +40,13 @@ echo "==> threaded (nightly, build-std) -> web/pkg-threads"
 #                     memory, since it is the JS side that passes it to each worker
 #
 # A shared memory must also declare a maximum, hence --max-memory.
+#
+# +simd128 is repeated here on purpose. A RUSTFLAGS variable replaces the `rustflags` in
+# .cargo/config.toml rather than adding to it, so without it this arm -- the one the Space
+# serves to every isolated browser -- silently compiled without SIMD.
 CARGO_TARGET_DIR="$ROOT/target/wasm-mt" \
 RUSTUP_TOOLCHAIN=nightly \
-RUSTFLAGS="-C target-feature=+atomics,+bulk-memory,+mutable-globals -C link-arg=--shared-memory -C link-arg=--import-memory -C link-arg=--max-memory=4294967296 -C link-arg=--export=__wasm_init_tls -C link-arg=--export=__tls_size -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base" \
+RUSTFLAGS="-C target-feature=+atomics,+bulk-memory,+mutable-globals,+simd128 -C link-arg=--shared-memory -C link-arg=--import-memory -C link-arg=--max-memory=4294967296 -C link-arg=--export=__wasm_init_tls -C link-arg=--export=__tls_size -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base" \
   wasm-pack build "$CRATE" --target web --release --out-dir "$ROOT/web/pkg-threads" \
   -- -Z build-std=panic_abort,std --features threads
 

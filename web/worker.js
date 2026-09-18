@@ -15,7 +15,7 @@
 // import alone busts the JavaScript and never the WebAssembly — the wrong way round, since
 // the bindings rarely change and the wasm changes on every build. Bump it when `pkg/` or
 // `pkg-threads/` is rebuilt.
-const V = "v=7";
+const V = "v=8";
 
 const isolated = typeof crossOriginIsolated !== "undefined" && crossOriginIsolated;
 

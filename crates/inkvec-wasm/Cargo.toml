@@ -15,8 +15,9 @@ crate-type = ["cdylib", "rlib"]
 
 # wasm-opt runs after wasm-bindgen and validates against the features it is told about,
 # not the ones the binary uses. Shared memory, atomics and SIMD all have to be named
-# here or it rejects the threaded module. `simd128` is on for both builds via
-# `.cargo/config.toml`, so it belongs here even for the single-threaded one.
+# here or it rejects the threaded module. `simd128` is on for both builds -- via
+# `.cargo/config.toml` for the single-threaded one and restated in the threaded arm's
+# RUSTFLAGS in `tools/build_wasm.sh` -- so it belongs here for both.
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = ['-O3', '--enable-threads', '--enable-bulk-memory', '--enable-mutable-globals', '--enable-simd']
 

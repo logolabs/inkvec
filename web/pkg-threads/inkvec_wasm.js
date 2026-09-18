@@ -28,8 +28,10 @@ export function threads_available() {
  * Trace image bytes to an SVG string.
  *
  * `precision`, `min_area`, `colors`, `merge` are the tracer's quality knobs (pass the
- * defaults 0.1, 2, 64, 0.055 when unsure); `max_dim` and `time_budget` bound the work;
- * `no_background`, `minify`, `margin`, `content_units` shape the output.
+ * defaults 0.1, 2, 64, 0.035 when unsure; the merge default is
+ * `inkvec_trace::color::DEFAULT_MERGE_DISTANCE`); `max_dim` and `time_budget` bound the
+ * work; `no_background`, `minify`, `margin`, `content_units` shape the output. `max_dim = 0`
+ * means no cap.
  * @param {Uint8Array} bytes
  * @param {number} precision
  * @param {number} min_area

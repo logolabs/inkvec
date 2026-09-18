@@ -6,7 +6,7 @@
 <meta http-equiv="Cache-Control" content="no-cache">
 <title>Inkvec</title>
 <meta name="description" content="Inkvec by LogoLabs traces logos, icons and flat artwork to exact SVG, entirely in your browser.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Cpath d=%27M16 3c-4 6-9 11-9 17a9 9 0 0 0 18 0c0-6-5-11-9-17z%27 fill=%27%23c9754a%27/%3E%3Cpath d=%27M11 21c2 3 8 3 10 0%27 stroke=%27%23faf8f5%27 stroke-width=%272.2%27 fill=%27none%27 stroke-linecap=%27round%27/%3E%3C/svg%3E">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,500&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
 /* LogoLabs design system: warm charcoal ramp, one copper accent, Playfair Display + Inter.
@@ -39,7 +39,7 @@ h2{font-size:clamp(22px,3vw,30px);letter-spacing:-.02em;font-weight:600;margin:0
 .sec{margin-top:64px}
 /* top bar */
 .top{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:14px;padding:14px 24px;border-bottom:1px solid var(--rule);background:var(--card)}
-.top .mark{width:28px;height:28px}
+.top .mark{width:28px;height:28px;color:var(--accent)}
 .top .name{font-family:var(--font-display);font-weight:700;font-size:19px;letter-spacing:-.01em}
 .top .by{color:var(--dim);font-size:13px}
 .top nav{margin-left:auto;display:flex;gap:18px;font-size:13.5px;font-weight:600}
@@ -160,9 +160,9 @@ footer .v{margin-left:auto}
 </head>
 <body>
 <header class="top">
-  <svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3c-4 6-9 11-9 17a9 9 0 0 0 18 0c0-6-5-11-9-17z" fill="#c9754a"/><path d="M11 21c2 3 8 3 10 0" stroke="#faf8f5" stroke-width="2.2" fill="none" stroke-linecap="round"/></svg>
+  <svg class="mark" viewBox="720 550 700 970" fill="currentColor" aria-hidden="true"><path d="M 881.984 591.726 C 909.088 592.132 936.829 591.866 963.981 591.887 L 964.051 615.134 C 987.819 614.909 1017.69 614.432 1041.08 615.648 C 1040.93 607.346 1040.69 600.253 1041.98 592.045 C 1069.11 592.348 1096.88 591.998 1124.06 591.953 L 1123.92 675.668 L 1101.07 675.765 C 1095.31 774.162 1119.89 868.607 1055.36 953.552 C 1004.92 1019.95 937.496 1064.82 878.928 1123.13 C 845.28 1156.38 816.712 1194.4 794.144 1235.97 C 767.017 1286.42 741.545 1353.22 780.436 1404.37 C 796.668 1425.52 824.772 1443.38 851.877 1445.43 C 877.696 1447.4 906.17 1446.57 932.261 1446.6 L 1080.96 1446.69 L 1197.09 1446.81 C 1210.8 1446.82 1244.73 1447.6 1257.07 1445.9 C 1273.88 1443.68 1289.75 1436.88 1302.95 1426.25 C 1322.04 1410.93 1332.82 1389.99 1335.14 1365.73 C 1337.48 1341.57 1330.09 1317.48 1314.6 1298.79 C 1282.06 1259.91 1239.06 1266.08 1193.98 1266.11 L 1064.24 1266.18 C 1007.04 1266.21 963.782 1274.83 923.019 1226.4 C 902.441 1198.45 902.862 1175 902.924 1142.3 C 912.343 1133.33 929.852 1117.98 939.887 1110.13 C 940.427 1142.3 933.166 1185.04 957.055 1209.47 C 975.922 1228.76 996.316 1230.57 1021.97 1229.58 C 1035.66 1229.06 1050.27 1230.01 1064.04 1229.64 C 1123.95 1229.84 1183.88 1229.63 1243.79 1229.78 C 1278.77 1229.84 1312.9 1244 1337.05 1269.48 C 1360.56 1294.24 1373.23 1327.36 1372.25 1361.49 C 1371.21 1395.65 1356.25 1427.91 1330.85 1450.78 C 1293.97 1484.58 1264.51 1482.67 1218.46 1482.55 L 1136.27 1482.52 L 960.971 1482.87 C 928.505 1482.94 895.26 1483.33 863.01 1482.84 C 824.574 1482.3 784.504 1464.07 758.904 1435.1 C 675.08 1340.22 761.832 1202.37 828.1 1124.18 C 850.986 1097.18 877.862 1073.68 903.55 1050.22 C 901.884 1021.1 903.068 980.916 903.063 950.824 L 903.075 765.518 L 903.206 711.487 C 903.313 700.62 904.014 686.497 903.106 676.093 C 895.901 675.719 889.159 675.649 881.94 675.611 C 882.424 648.129 881.982 619.316 881.984 591.726 z M 964.007 675.527 C 955.974 675.648 947.939 675.718 939.905 675.736 L 939.967 1018.59 C 957.908 1003.76 976.395 987.535 992.628 970.848 C 1042.17 921.753 1064.98 876.954 1065.28 806.604 L 1064.84 676.083 L 1040.87 676.051 C 1041.64 666.978 1041.33 661.135 1040.9 651.947 C 1019.24 651.252 986.821 650.561 965.356 651.5 C 963.031 654.329 963.936 670.679 964.007 675.527 z M 1062.08 612.678 C 1061.97 626.562 1062.1 641.194 1061.69 655 L 1095.78 654.97 C 1098.9 654.996 1101.7 655.476 1104.18 653.836 C 1105.4 645.43 1104.6 621.8 1104.64 611.911 C 1099.78 612.021 1078.39 611.957 1074.37 612.466 L 1062.08 612.678 z"/></svg>
   <span class="name">Inkvec</span><span class="by">by LogoLabs</span>
-  <nav><a href="#showcase">Before &amp; after</a><a href="#versus">Results</a><a href="#how">How it works</a><a href="https://github.com/logolabs/inkvec">GitHub</a></nav>
+  <nav><a href="#showcase">Before &amp; after</a><a href="#versus">Results</a><a href="#how">How it works</a><a href="https://github.com/logolabs/inkvec" target="_blank" rel="noopener noreferrer">GitHub</a></nav>
 </header>
 <main>
 <h1>Exact vectors from your logo, in your browser.</h1>
@@ -187,6 +187,7 @@ footer .v{margin-left:auto}
   <button class="primary" id="go" disabled>Trace</button>
   <span class="status mono" id="status">loading the tracer…</span>
 </div>
+<p class="note" style="margin:2px 0 12px">Repeated shapes are harmonized by default &mdash; fewer paths and smaller SVGs; on very fine line art this can visibly shift geometry (CLI opt-out: <code class="mono">--no-harmonize</code>).</p>
 
 <div class="viewer empty" id="viewer"><span>Your input and the vector result appear here side by side. Scroll to zoom, drag to pan; both sides move together.</span></div>
 <div class="tools" id="livetools" hidden></div>
@@ -202,7 +203,7 @@ footer .v{margin-left:auto}
     <label>Precision (px)<input type="number" id="precision" value="0.1" step="0.05" min="0.02"></label>
     <label>Speckle floor (px²)<input type="number" id="min_area" value="2" step="1" min="0"></label>
     <label>Max colours<input type="number" id="colors" value="64" step="1" min="2"></label>
-    <label>Merge distance (OKLab)<input type="number" id="merge" value="0.055" step="0.005" min="0"></label>
+    <label>Merge distance (OKLab)<input type="number" id="merge" value="0.035" step="0.005" min="0"></label>
     <label>Max dimension (px)<input type="number" id="max_dim" value="1024" step="256" min="128"></label>
     <label>Time budget (s)<input type="number" id="time_budget" value="20" step="5" min="0"></label>
     <label>Margin (fraction)<input type="number" id="margin" value="0" step="0.02" min="0"></label>
@@ -368,9 +369,9 @@ document.addEventListener('keyup', e => { if (e.code === 'Space' && hot) hot.fli
 // ---------------------------------------------------------------- live tracer
 let bytes = null, svgText = "", name = "image", jobId = 0, timer = null, live = null, liveVec = null, liveLayer = 'fill';
 const PRESETS = {
-  logo:    {precision:0.1,  min_area:2, colors:64, merge:0.055, max_dim:1024, content_units:false},
-  icon:    {precision:0.1,  min_area:1, colors:16, merge:0.055, max_dim:1024, content_units:false},
-  detail:  {precision:0.05, min_area:1, colors:64, merge:0.045, max_dim:2048, content_units:false},
+  logo:    {precision:0.1,  min_area:2, colors:64, merge:0.035, max_dim:1024, content_units:false},
+  icon:    {precision:0.1,  min_area:1, colors:16, merge:0.035, max_dim:1024, content_units:false},
+  detail:  {precision:0.05, min_area:1, colors:64, merge:0.035, max_dim:2048, content_units:false},
   compact: {precision:0.1,  min_area:4, colors:32, merge:0.06,  max_dim:1024, content_units:true},
 };
 function applyPreset(p){ const v = PRESETS[p]; for (const k in v){ const e = $(k); if (e.type === "checkbox") e.checked = v[k]; else e.value = v[k]; } }
@@ -378,7 +379,7 @@ for (const b of document.querySelectorAll("#presets button")) b.addEventListener
 
 let worker = null;
 function makeWorker(){
-  const url = A.workerUrl || "./worker.js?v=7";
+  const url = A.workerUrl || "./worker.js?v=8";
   try { worker = new Worker(url, { type: "module" }); } catch (e) { worker = null; return; }
   worker.onmessage = (e) => {
     const m = e.data;
@@ -503,7 +504,7 @@ function renderVersus(){
   $("bars").innerHTML = `<table><caption>21 cases, 2026-09-15</caption><thead><tr><th>engine</th><th>mean dE00</th><th>median dE00</th><th>DISTS</th><th>DINO</th><th>coords</th><th>seconds</th></tr></thead><tbody>` +
     COMPETITORS.map(r => `<tr class="${r.win ? 'win' : ''}"><td>${r.name}</td><td class="mono">${fmt(r.mean,3)}</td><td class="mono">${fmt(r.median,3)}</td><td class="mono">${fmt(r.dists,4)}</td><td class="mono">${fmt(r.dino,4)}</td><td class="mono">${r.coords}</td><td class="mono">${fmt(r.sec,2)}</td></tr>`).join('') +
     `</tbody></table>`;
-  $("vtnote").innerHTML = `Source: <code class="mono">out/crosscompare-competitors-2026-09-15/summary.md</code>. Two more engines were measured for completeness and are left out of this table because they are not comparable at the geometry level: covecto's default mode and potrace-color both reproduce the source pixel grid almost losslessly (tens of thousands of coordinates per case) rather than artist-shaped geometry. Full detail in the <a href="https://github.com/logolabs/inkvec#results">README</a>.`;
+  $("vtnote").innerHTML = `Source: <code class="mono">out/crosscompare-competitors-2026-09-15/summary.md</code>. Two more engines were measured for completeness and are left out of this table because they are not comparable at the geometry level: covecto's default mode and potrace-color both reproduce the source pixel grid almost losslessly (tens of thousands of coordinates per case) rather than artist-shaped geometry. Full detail in the <a href="https://github.com/logolabs/inkvec#results" target="_blank" rel="noopener noreferrer">README</a>.`;
 }
 renderVersus();
 loadShowcase();

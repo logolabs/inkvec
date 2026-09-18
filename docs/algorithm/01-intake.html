@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Intake — inkvec</title>
+<link rel="stylesheet" href="assets/doc.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="masthead">
+    <p class="eyebrow">Stage 1 of 14</p>
+    <h1>Giving the file a fair reading before anything else runs</h1>
+    <p class="standfirst">Before a single shape is traced, the file has to be checked for
+      things that would otherwise be mistaken for artwork: a sneaky resize, a compressed
+      file pretending to be clean, transparency that has nowhere to go in the maths, and a
+      size the rest of the tool was never calibrated against. This stage settles all of
+      that, quietly, so every later stage can trust the pixels it is handed.</p>
+    <p class="pairlink">Technical reference: <a href="01-intake.md">01-intake.md</a></p>
+  </header>
+  <main>
+
+    <section>
+      <h2>The file is not the same thing as the drawing</h2>
+      <p>It is tempting to think of a PNG or a JPEG as simply "the picture" — open it, trace
+        what is there. But a raster file is one snapshot of a drawing, at one size, saved by
+        one program, and any of those three facts can quietly work against the tracer.</p>
+      <p>Someone with a small logo who wants a large one often resizes the file first, with
+        the crudest possible method, before it ever reaches this tool. A photo-style
+        compressed file adds faint ripples of colour near edges that were never part of the
+        original artwork. And a file with a transparent background hands the tracer a
+        problem it has no way to solve directly — the maths behind reading an edge (stage 2)
+        needs two solid colours to measure a boundary against, not one colour and a
+        see-through hole.</p>
+      <p>Intake is where all of that gets sorted out, before the palette, the boundaries, or
+        anything downstream ever looks at a pixel.</p>
+    </section>
+
+    <section>
+      <h2>Undoing an accidental zoom</h2>
+      <p>Resize a small image with the simplest method a computer offers — "nearest
+        neighbour" — and every pixel becomes a solid square block, four, eight, sixteen
+        times its original size. Nothing new was drawn; the same handful of pixels was just
+        repeated. A tracer that does not know this happened will faithfully draw the
+        staircase of block edges, because as far as it can tell, that staircase <em>is</em>
+        the artwork.</p>
+      <figure>
+        <svg viewBox="0 0 640 260" role="img" aria-label="A small pixelated logo blown up by nearest-neighbour resizing into large blocky squares, then undone back to the original small grid">
+          <text x="20" y="24" class="fig-label-strong">A block upscale, and its exact inverse</text>
+          <g transform="translate(20,50)">
+            <text x="0" y="-8" class="fig-label">original, 4x4</text>
+            <g transform="translate(0,0)">
+              <rect x="0" y="0" width="80" height="80" fill="none" class="fig-rule"/>
+              <rect x="0" y="0" width="20" height="20" class="fig-ink"/>
+              <rect x="20" y="0" width="20" height="20" class="fig-ink"/>
+              <rect x="40" y="0" width="20" height="20" fill="var(--paper)"/>
+              <rect x="60" y="0" width="20" height="20" fill="var(--paper)"/>
+              <rect x="0" y="20" width="20" height="20" class="fig-ink"/>
+              <rect x="20" y="20" width="20" height="20" class="fig-accent"/>
+              <rect x="40" y="20" width="20" height="20" class="fig-accent"/>
+              <rect x="60" y="20" width="20" height="20" fill="var(--paper)"/>
+              <rect x="0" y="40" width="20" height="20" fill="var(--paper)"/>
+              <rect x="20" y="40" width="20" height="20" class="fig-accent"/>
+              <rect x="40" y="40" width="20" height="20" class="fig-accent"/>
+              <rect x="60" y="40" width="20" height="20" class="fig-ink"/>
+              <rect x="0" y="60" width="20" height="20" fill="var(--paper)"/>
+              <rect x="20" y="60" width="20" height="20" fill="var(--paper)"/>
+              <rect x="40" y="60" width="20" height="20" class="fig-ink"/>
+              <rect x="60" y="60" width="20" height="20" class="fig-ink"/>
+              <g class="fig-rule" stroke-width="1">
+                <line x1="20" y1="0" x2="20" y2="80"/><line x1="40" y1="0" x2="40" y2="80"/><line x1="60" y1="0" x2="60" y2="80"/>
+                <line x1="0" y1="20" x2="80" y2="20"/><line x1="0" y1="40" x2="80" y2="40"/><line x1="0" y1="60" x2="80" y2="60"/>
+              </g>
+            </g>
+          </g>
+          <text x="150" y="90" text-anchor="middle" class="fig-label-strong" fill="var(--copper)">viewer resizes 4x -&gt;</text>
+          <g transform="translate(240,50)">
+            <text x="0" y="-8" class="fig-label">what arrives, 16x16 of blocky squares</text>
+            <g transform="translate(0,0)">
+              <rect x="0" y="0" width="80" height="80" fill="none" class="fig-rule"/>
+              <rect x="0" y="0" width="20" height="20" class="fig-ink"/>
+              <rect x="20" y="0" width="20" height="20" class="fig-ink"/>
+              <rect x="40" y="0" width="20" height="20" fill="var(--paper)"/>
+              <rect x="60" y="0" width="20" height="20" fill="var(--paper)"/>
+              <rect x="0" y="20" width="20" height="20" class="fig-ink"/>
+              <rect x="20" y="20" width="20" height="20" class="fig-accent"/>
+              <rect x="40" y="20" width="20" height="20" class="fig-accent"/>
+              <rect x="60" y="20" width="20" height="20" fill="var(--paper)"/>
+              <rect x="0" y="40" width="20" height="20" fill="var(--paper)"/>
+              <rect x="20" y="40" width="20" height="20" class="fig-accent"/>
+              <rect x="40" y="40" width="20" height="20" class="fig-accent"/>
+              <rect x="60" y="40" width="20" height="20" class="fig-ink"/>
+              <rect x="0" y="60" width="20" height="20" fill="var(--paper)"/>
+              <rect x="20" y="60" width="20" height="20" fill="var(--paper)"/>
+              <rect x="40" y="60" width="20" height="20" class="fig-ink"/>
+              <rect x="60" y="60" width="20" height="20" class="fig-ink"/>
+              <g class="fig-rule" stroke-width="0.5" opacity="0.6">
+                <line x1="5" y1="0" x2="5" y2="80"/><line x1="10" y1="0" x2="10" y2="80"/><line x1="15" y1="0" x2="15" y2="80"/>
+                <line x1="25" y1="0" x2="25" y2="80"/><line x1="30" y1="0" x2="30" y2="80"/><line x1="35" y1="0" x2="35" y2="80"/>
+                <line x1="45" y1="0" x2="45" y2="80"/><line x1="50" y1="0" x2="50" y2="80"/><line x1="55" y1="0" x2="55" y2="80"/>
+                <line x1="65" y1="0" x2="65" y2="80"/><line x1="70" y1="0" x2="70" y2="80"/><line x1="75" y1="0" x2="75" y2="80"/>
+                <line x1="0" y1="5" x2="80" y2="5"/><line x1="0" y1="10" x2="80" y2="10"/><line x1="0" y1="15" x2="80" y2="15"/>
+                <line x1="0" y1="25" x2="80" y2="25"/><line x1="0" y1="30" x2="80" y2="30"/><line x1="0" y1="35" x2="80" y2="35"/>
+                <line x1="0" y1="45" x2="80" y2="45"/><line x1="0" y1="50" x2="80" y2="50"/><line x1="0" y1="55" x2="80" y2="55"/>
+                <line x1="0" y1="65" x2="80" y2="65"/><line x1="0" y1="70" x2="80" y2="70"/><line x1="0" y1="75" x2="80" y2="75"/>
+              </g>
+            </g>
+            <text x="40" y="100" text-anchor="middle" class="fig-label">every 4x4 block is one flat colour, exactly</text>
+          </g>
+          <text x="460" y="90" text-anchor="middle" class="fig-label-strong" fill="var(--copper)">detected -&gt; averaged back down</text>
+          <g transform="translate(540,50)">
+            <text x="0" y="-8" class="fig-label">traced at</text>
+            <rect x="0" y="0" width="80" height="80" fill="none" class="fig-rule"/>
+            <rect x="0" y="0" width="20" height="20" class="fig-ink"/>
+            <rect x="20" y="0" width="20" height="20" class="fig-ink"/>
+            <rect x="40" y="0" width="20" height="20" fill="var(--paper)"/>
+            <rect x="60" y="0" width="20" height="20" fill="var(--paper)"/>
+            <rect x="0" y="20" width="20" height="20" class="fig-ink"/>
+            <rect x="20" y="20" width="20" height="20" class="fig-accent"/>
+            <rect x="40" y="20" width="20" height="20" class="fig-accent"/>
+            <rect x="60" y="20" width="20" height="20" fill="var(--paper)"/>
+            <rect x="0" y="40" width="20" height="20" fill="var(--paper)"/>
+            <rect x="20" y="40" width="20" height="20" class="fig-accent"/>
+            <rect x="40" y="40" width="20" height="20" class="fig-accent"/>
+            <rect x="60" y="40" width="20" height="20" class="fig-ink"/>
+            <rect x="0" y="60" width="20" height="20" fill="var(--paper)"/>
+            <rect x="20" y="60" width="20" height="20" fill="var(--paper)"/>
+            <rect x="40" y="60" width="20" height="20" class="fig-ink"/>
+            <rect x="60" y="60" width="20" height="20" class="fig-ink"/>
+            <g class="fig-rule" stroke-width="1">
+              <line x1="20" y1="0" x2="20" y2="80"/><line x1="40" y1="0" x2="40" y2="80"/><line x1="60" y1="0" x2="60" y2="80"/>
+              <line x1="0" y1="20" x2="80" y2="20"/><line x1="0" y1="40" x2="80" y2="40"/><line x1="0" y1="60" x2="80" y2="60"/>
+            </g>
+            <text x="40" y="100" text-anchor="middle" class="fig-label">identical to the original</text>
+          </g>
+        </svg>
+        <figcaption>The blow-up is exactly reversible: average every constant block and the
+          original pixels come back unchanged. Once that pattern is recognised, the tracer
+          works on the small original — and still writes the SVG at the size the file
+          claimed.</figcaption>
+      </figure>
+      <p>This check is deliberately strict — every pixel in every block has to match
+        exactly, with no wiggle room. A looser test would also catch a logo that genuinely
+        contains large flat squares, and undoing those would throw away real artwork. On a
+        96-pixel logo blown up to 768 pixels, skipping this step means the tracer describes
+        the staircase directly: thirteen colours instead of three, and over fifteen hundred
+        straight little lines walking around pixel corners instead of the handful of smooth
+        curves the artist actually drew.</p>
+    </section>
+
+    <section>
+      <h2>Telling a compressed file from a clean one</h2>
+      <p>Photo-style compression (the kind JPEG uses) does not blur an edge — it leaves the
+        edge itself mostly alone and instead adds a faint ripple of colour in the flat areas
+        just beside it, an artefact of how the compressor represents smooth regions cheaply.
+        Two different checks were tried to catch this automatically, and both were fooled,
+        for related reasons worth stating honestly rather than glossing over:</p>
+      <ul>
+        <li>Measuring how <em>wide</em> an edge is does not see it, because the ripple does
+          not widen the edge — it sits beside it, in territory the width measurement is not
+          looking at.</li>
+        <li>Measuring random noise in flat areas does not see it either, because the ripple
+          only occupies a thin band next to each edge; an icon is mostly empty, so the
+          "typical" noise level across the whole image stays at its floor, exactly as it
+          would on a perfectly clean file.</li>
+      </ul>
+      <p>This was not a hypothetical risk. A real compressed logo measured a native
+        1.15-pixel edge width against a 1.75-pixel threshold meant to catch resizing damage —
+        comfortably under it — so the safeguard that should have caught the damage stayed
+        off, and the tracer dutifully treated the compression ripple as real ink. The result
+        was <b>243 separate paths across 1301 separate regions, 89% of which together
+        covered only 5% of the drawing</b> — noise, not artwork, each ripple minted as its
+        own tiny shape.</p>
+      <figure>
+        <svg viewBox="0 0 640 200" role="img" aria-label="A clean edge compared with a compressed edge that rings with faint colour ripples beside it; both read the same width and the same noise level, and only reading the file format tells them apart">
+          <text x="20" y="22" class="fig-label-strong">Same edge width, same noise reading, different history</text>
+          <g transform="translate(20,50)">
+            <text x="0" y="0" class="fig-label">clean file</text>
+            <rect x="0" y="10" width="150" height="40" fill="var(--paper)" stroke="var(--rule)"/>
+            <rect x="150" y="10" width="6" height="40" fill="#8a837b"/>
+            <rect x="156" y="10" width="150" height="40" class="fig-ink"/>
+            <text x="153" y="70" text-anchor="middle" class="fig-label">edge width 1.15px, noise at the floor</text>
+          </g>
+          <g transform="translate(20,120)">
+            <text x="0" y="0" class="fig-label">compressed file</text>
+            <rect x="0" y="10" width="150" height="40" fill="var(--paper)" stroke="var(--rule)"/>
+            <path d="M 40,10 v40 M 60,10 v40 M 80,10 v40 M 100,10 v40 M 120,10 v40 M 140,10 v40"
+                  stroke="var(--copper-soft)" stroke-width="10" opacity="0.55"/>
+            <rect x="150" y="10" width="6" height="40" fill="#8a837b"/>
+            <rect x="156" y="10" width="150" height="40" class="fig-ink"/>
+            <path d="M 160,10 v40 M 175,10 v40 M 195,10 v40 M 220,10 v40 M 250,10 v40 M 285,10 v40"
+                  stroke="var(--copper-soft)" stroke-width="10" opacity="0.4"/>
+            <text x="153" y="70" text-anchor="middle" class="fig-label">edge still reads 1.15px; the ripples never widen it</text>
+          </g>
+          <g transform="translate(360,55)">
+            <text x="0" y="0" class="fig-label-strong" fill="var(--copper)">The honest fix: ask the file</text>
+            <text x="0" y="26" class="fig-label">JPEG and one flavour of WebP</text>
+            <text x="0" y="44" class="fig-label">are always lossy. PNG, GIF,</text>
+            <text x="0" y="62" class="fig-label">BMP and TIFF never are. The</text>
+            <text x="0" y="80" class="fig-label">container format says so</text>
+            <text x="0" y="98" class="fig-label">directly — no inference needed.</text>
+            <text x="0" y="130" class="fig-label-strong">243 paths, 1301 faces</text>
+            <text x="0" y="148" class="fig-label" fill="var(--copper)">-&gt; 80 paths, 654 faces</text>
+            <text x="0" y="166" class="fig-label">artwork intact, ripples gone</text>
+          </g>
+        </svg>
+        <figcaption>Neither pixel-level check can separate lossy ringing from a clean file —
+          one reads the same width either way, the other reads the same noise floor either
+          way. The fix asks a question the pixels cannot answer: what format was this file
+          actually saved in.</figcaption>
+      </figure>
+      <p>A third pixel-level idea was also tried and also refuted: measuring how jagged the
+        colour is in supposedly flat areas. It separated clean files from compressed ones
+        cleanly — until it met a genuinely clean smooth gradient, which scored as more
+        "damaged" than the compressed flat icon, because ordinary 8-bit colour ramps produce
+        the same kind of small jumps a lossy codec does. There is no separating the two from
+        pixel statistics alone. So the fix does not try to get cleverer about pixels — it
+        reads the file's own container format, which states the fact exactly rather than
+        estimating it. A JPEG is lossy. A PNG is not. A WebP says which of its two internal
+        codecs it used, right there in its header.</p>
+      <p>This matters for a reason beyond one file type. Turning this safeguard on
+        unconditionally, for every file whether it needs it or not, was tried and measured:
+        it costs 10.9% on the tool's own quality benchmark, because on a genuinely clean
+        file, two very similar colours really are two different inks the artist chose, and
+        merging them throws real artwork away. The safeguard has to stay off until there is
+        real evidence — a wide edge, or a compressed file format — that it is needed.</p>
+    </section>
+
+    <section>
+      <h2>Same logo, four times the pixels, wildly different results</h2>
+      <p>Export the same logo as a 128-pixel PNG and as a 512-pixel PNG. It is the same
+        drawing. It should cost the same number of points and curves to describe in an SVG.
+        For a long time, it did not — and the reason is worth walking through carefully,
+        because it is one of the more surprising things about how this tool was tuned.</p>
+      <p>Every measurement this tool takes is stated in pixels: how confidently an edge is
+        located, how precisely a coordinate is written down, how big a stray speck has to be
+        before it is worth ignoring. All of those numbers were chosen by testing against
+        images around 128 pixels on a side. Hand the same logo in at 512 pixels and nothing
+        about those numbers changes automatically — but the boundary itself is now drawn
+        with four times as many points, each one sitting four times as far (in raw pixels)
+        from where a simplified curve would put it, for exactly the same shape. The
+        book-keeping that is supposed to discourage adding unnecessary detail barely
+        reacted — it only grew by a small, slow amount, nowhere near enough to offset how
+        much more "wrong" a simplified curve now looks in raw-pixel terms. Faced with that
+        imbalance, the tool kept buying more and more detail it did not actually need, one
+        cheap-looking segment at a time.</p>
+      <p>Measured directly, on real brand logos, the effect was severe and got worse with
+        size: <b>3.54 times the artist's own number of points at 128 pixels, 6.02 times at
+        256, 11.62 times at 512</b> — for a mark whose actual complexity had not changed at
+        all.</p>
+      <figure>
+        <svg viewBox="0 0 640 230" role="img" aria-label="The same star shape traced at two different resolutions; without correction the larger raster is described with far more unnecessary points, with correction it comes back with the same handful" >
+          <text x="20" y="22" class="fig-label-strong">Same shape, priced per pixel versus priced per unit of content</text>
+          <g transform="translate(40,50)">
+            <text x="30" y="-10" text-anchor="middle" class="fig-label">128px export</text>
+            <polygon points="30,0 38,22 62,22 42,36 50,58 30,44 10,58 18,36 -2,22 22,22"
+                     fill="none" stroke="var(--ink)" stroke-width="2"/>
+            <text x="30" y="80" text-anchor="middle" class="fig-label">a handful of points</text>
+          </g>
+          <g transform="translate(230,20)">
+            <text x="60" y="-10" text-anchor="middle" class="fig-label">512px export, priced per raw pixel</text>
+            <polygon points="60,0 68,10 78,14 70,24 100,44 88,48 92,68 76,66 62,86 58,72 40,86 42,64 20,66 30,48 4,42 26,26 20,10 44,16"
+                     fill="none" stroke="var(--copper)" stroke-width="2"/>
+            <text x="60" y="105" text-anchor="middle" class="fig-label" fill="var(--copper)">11.62x the points, same star</text>
+          </g>
+          <g transform="translate(460,50)">
+            <text x="30" y="-10" text-anchor="middle" class="fig-label">512px, priced per unit of content</text>
+            <polygon points="30,0 38,22 62,22 42,36 50,58 30,44 10,58 18,36 -2,22 22,22"
+                     fill="none" class="fig-accent-stroke" stroke-width="2"/>
+            <text x="30" y="80" text-anchor="middle" class="fig-label" fill="var(--copper)">back to a handful</text>
+          </g>
+          <text x="320" y="200" text-anchor="middle" class="fig-label">The fix: widen the allowed tolerance in proportion to how much bigger the raster is,
+            so a curve is judged against the drawing's own scale rather than raw pixels.</text>
+        </svg>
+        <figcaption>Nothing about the artwork changed between the middle and right panels —
+          only how the tolerance for "close enough" was measured.</figcaption>
+      </figure>
+      <p>The fix is to stop pricing everything in raw pixels and start pricing it per unit of
+        the drawing's own content: work out how many "reference units" bigger this raster is
+        than the 128-pixel size everything was tuned at, and widen the allowed tolerance by
+        that same factor before fitting a single curve. A boundary point's permitted wobble
+        room grows with the image, so a curve that would have been accepted at 128 pixels is
+        accepted again at 512, from the same relative position.</p>
+      <p>This is turned off by default, because it is a genuine trade rather than a free
+        correctness fix. Under it, a five-pixel square rotated slightly can get mistaken for
+        a circle, and a thin ring two pixels wide can come out broken, in exchange for
+        roughly a fifth fewer points overall. It is offered as an option, not switched on
+        everywhere, because sometimes exact pixel fidelity matters more than a tidy point
+        count.</p>
+      <div class="aside">Worth stating plainly: this correction, as shipped, widens how much
+        wobble a curve is allowed before it fails — but it does not fully rebalance the
+        cost side of the trade the way its own design notes say it should. That is flagged
+        as an open question in the technical reference rather than glossed over here.</div>
+    </section>
+
+    <section>
+      <h2>When there is nothing solid to measure against</h2>
+      <p>Stage 2's whole method for reading an edge depends on knowing the two colours a
+        boundary sits between — a shape's own colour, and whatever is behind it. A
+        transparent background is not a colour at all, so before tracing starts, every
+        see-through pixel is painted over with something solid.</p>
+      <p>The obvious choice is white, and white is exactly wrong for a lot of real artwork.
+        A white logo on a transparent background, painted onto white, disappears completely —
+        there is nothing left to trace. A softly translucent panel painted onto white loses
+        its identity and merges into the background it was meant to sit over.</p>
+      <p>So the colour used to fill in the transparency is chosen by testing what it would
+        <em>hide</em>: for each of a short list of candidate colours (white first, then
+        black, then a few saturated colours real artwork rarely uses), the tool checks how
+        much of the image's meaningfully-drawn content — the outline of the shape, and any
+        softly translucent area — would become indistinguishable from that candidate once
+        painted onto it. The first candidate that would not swallow too much of the real
+        content wins. A soft glow (opacity that fades gradually, like a light source) gets
+        no vote either way, because no single flat colour can honestly stand in for
+        something that was never one flat opacity to begin with.</p>
+      <p>By default this choice never actually changes anything visible in the output — the
+        image is still matted to plain white — because without an extra flag turned on,
+        transparency has nowhere to go in the final file anyway: a see-through region gets
+        painted solid rather than cut out as a hole. The smarter colour choice only takes
+        effect once that flag is on, and it exists specifically so the file can be produced
+        for use on a background other than white.</p>
+    </section>
+
+    <section>
+      <h2>Cleaning up genuine damage</h2>
+      <p>Some input is not merely resized or slightly compressed — it is a screenshot, a
+        heavily compressed export, or a genuine photograph of a printed logo. For that kind
+        of damage, there is an optional cleanup step: run the image through a small model
+        that guesses at extra detail, shrink the result back down, and repaint the flat
+        areas with the original file's own colours so the tracer is not trusting the model's
+        colour judgement, only its judgement about where edges should sit.</p>
+      <p>This step is expensive and not always worth it, so the tool can be told to decide
+        for itself. In that mode, it traces the file once as it arrived, renders that trace
+        back into a picture, and compares the two everywhere the trace claims the drawing is
+        flat. A flat trace that disagrees with the input in supposedly flat territory is a
+        sign of real damage rather than an honest simplification — a shape that is flat by
+        construction should not need to argue with a clean input. Below a measured
+        disagreement threshold, the file is traced as-is. Above it, the cleanup step runs
+        and the file is traced again. On genuinely clean input, running this cleanup step
+        anyway makes results roughly three times worse — which is exactly why the tool
+        checks first rather than always cleaning up "just in case."</p>
+    </section>
+
+  </main>
+  <nav class="stages">
+    <a href="00-overview.html">Overview</a>
+    <a href="01-intake.html" aria-current="page">1 Intake</a>
+    <a href="02-coverage.html">2 Coverage</a>
+    <a href="03-palette.html">3 Palette</a>
+    <a href="04-regions.html">4 Regions</a>
+    <a href="05-gradients.html">5 Gradients</a>
+    <a href="06-planar-map.html">6 Planar map</a>
+    <a href="07-subpixel.html">7 Sub-pixel</a>
+    <a href="08-boundary-solve.html">8 Boundary solve</a>
+    <a href="09-decode.html">9 Decode</a>
+    <a href="10-symmetry.html">10 Symmetry</a>
+    <a href="11-fitting.html">11 Curve fitting</a>
+    <a href="12-repair.html">12 Repair</a>
+    <a href="13-emit.html">13 Emit</a>
+    <a href="constants.md">Constants</a>
+  </nav>
+</div>
+</body>
+</html>

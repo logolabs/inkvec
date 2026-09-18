@@ -1,0 +1,7 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/logolabs/inkvec/security
+    about: >
+      Please do not file a public issue for a security vulnerability. Use GitHub's
+      private vulnerability reporting instead — see SECURITY.md for details.

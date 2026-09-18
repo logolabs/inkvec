@@ -1,0 +1,58 @@
+[package]
+name = "inkvec-cli"
+description = "Inkvec: turn raster logos, icons and illustrations into compact, accurate SVG"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories = ["command-line-utilities", "graphics", "multimedia::images"]
+
+[lib]
+name = "inkvec_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "inkvec"
+path = "src/main.rs"
+
+[[example]]
+name = "neural_geometry"
+required-features = ["research-guidance"]
+
+[[example]]
+name = "neural_trace"
+required-features = ["research-guidance"]
+
+[[example]]
+name = "oracle_guidance"
+required-features = ["research-guidance"]
+
+[dependencies]
+inkvec-core = { workspace = true }
+inkvec-trace = { workspace = true }
+inkvec-fit = { workspace = true }
+inkvec-sr = { workspace = true }
+inkvec-restore = { workspace = true }
+rayon = { workspace = true }
+
+[features]
+default = []
+#: Research-only library entry points that let a harness replace the palette or labels.
+research-guidance = []
+#: Experimental tracer stages (see inkvec-trace's `research` feature). Never in a release.
+research = ["inkvec-trace/research"]
+#: Compile the trained restorer (`--restore`) into the binary, on the CPU through ONNX
+#: Runtime (downloaded at build time). Reads the network from a separate .onnx file
+#: (--restore-weights, else INKVEC_RESTORE_ONNX, else restorer.onnx beside the binary).
+restore-model = ["inkvec-restore/onnxruntime"]
+#: The same network through Burn on the CPU: pure Rust, no native library, ~4x slower.
+restore-burn = ["inkvec-restore/flex"]
+#: The restorer through Burn on the GPU (wgpu: Vulkan / DX12 / Metal).
+restore-wgpu = ["inkvec-restore/wgpu"]
+
+[lints]
+workspace = true

@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Symmetry — inkvec</title>
+<link rel="stylesheet" href="assets/doc.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="masthead">
+    <p class="eyebrow">Stage 10 of 14</p>
+    <h1>Putting back the symmetry the pipeline quietly broke</h1>
+    <p class="standfirst">Many logos are mirror-symmetric by design, and drawn that way
+      exactly. This stage finds that exact symmetry early, while it is still easy to prove,
+      and restores it at the very end — after every other stage has had its turn and had
+      the chance to nudge one side very slightly out of step with the other.</p>
+    <p class="pairlink">Technical reference: <a href="10-symmetry.md">10-symmetry.md</a></p>
+  </header>
+  <main>
+
+    <section>
+      <h2>The artist was exact. The tracer, quietly, was not.</h2>
+      <p>A great many real logos are mirror-symmetric on purpose, and the artist's own
+        symmetry is essentially perfect: rendering one such icon and comparing it against
+        its own mirror image gives a difference of around one part in a hundred thousand —
+        floating-point rounding, nothing more.</p>
+      <p>Before this stage existed, the tracer's own traced output came back roughly two to
+        four hundred times worse than that — a difference around four in a thousand. That
+        sounds small, but it is exactly the kind of error a person notices at a glance and
+        a colour-difference measurement barely registers at all: one bar of a three-bar
+        mark ending up a tenth of a pixel wider than the other two, so the mark reads as
+        slightly lopsided even though every individual measurement looks fine on its own.</p>
+      <p>The striking part is where that error does not come from. Measured all the way
+        through the pipeline, the input picture itself is symmetric to within one part in a
+        million, and the very first per-pixel colour-label map this pipeline produces is
+        symmetric <b>exactly</b> — not almost, exactly. Every bit of the eventual mismatch
+        is introduced afterwards, by genuine coin-flips scattered through the rest of the
+        pipeline: which of two equally valid pixels a boundary crack gets filed under,
+        which direction a chain of points happens to be walked in, which of two equally
+        good candidates a search happens to reach first. None of those choices is wrong by
+        itself. There are simply thousands of them, and which one flips which way differs
+        from icon to icon and from stage to stage — there is no single place to go and fix.</p>
+      <div class="aside">Rather than chase down every tie-break individually across a
+        pipeline this size, symmetry is restored once, structurally, as its own dedicated
+        pass at the very end.</div>
+    </section>
+
+    <section>
+      <h2>Finding the mirror, exactly, while it is still easy</h2>
+      <p>This stage looks for symmetry twice, at two different moments, for two different
+        reasons.</p>
+      <p>First, immediately after the shapes and their connections are settled — before any
+        point has moved even slightly off the exact pixel grid — it checks whether the
+        picture has a vertical or horizontal mirror line running through its exact centre.
+        The test has no tolerance whatsoever: a candidate mirror is accepted only if
+        <b>every single pixel</b> on one side matches the corresponding pixel's ink on the
+        other side. There is no near-enough. This is deliberate: a looser test could be
+        fooled into "discovering" symmetry in a logo the artist genuinely drew slightly
+        asymmetric, which would be a worse mistake than missing a real symmetry occasionally
+        is.</p>
+      <p>Because this check runs while every boundary point still sits on an exact
+        grid position, matching one side against its mirror is simple exact arithmetic — no
+        rounding, no near-misses to argue about. That is precisely why it has to happen this
+        early: once later stages start moving points to their true sub-pixel positions, the
+        same comparison would need a tolerance, and a tolerance is exactly the kind of
+        judgement call this test is built to avoid.</p>
+    </section>
+
+    <section>
+      <h2>Restoring it once every tie has already been broken</h2>
+      <p>The second moment is the very last thing this pipeline does, after every stage
+        that could nudge a point asymmetrically has already run — moving points to their
+        sub-pixel positions, resolving junctions, any later boundary adjustment, deciding
+        exactly how each region gets filled. Only then does this stage act on the mirror it
+        found earlier: every boundary point that has a matching mirrored partner is replaced
+        by the exact midpoint of itself and that partner's reflection.</p>
+      <p>Replacing both sides with their average, rather than simply picking one side to
+        win, is the whole point. Neither side is more correct than the other — they were
+        built from identical evidence and differ only because of an arbitrary tie broken
+        one way on one side and the other way on the other. The midpoint is the position
+        both sides actually support.</p>
+      <figure>
+        <svg viewBox="0 0 640 260" role="img" aria-label="A nearly symmetric shape before averaging, where two mirrored points disagree slightly, and after, where they have been pulled to their shared midpoint on the axis">
+          <text x="20" y="24" class="fig-label-strong">Before and after averaging a mirrored pair</text>
+          <g transform="translate(60,55)">
+            <text x="0" y="-10" class="fig-label">Before — a tie broken differently on each side</text>
+            <line x1="260" y1="0" x2="260" y2="80" stroke="var(--rule)" stroke-dasharray="4 3"/>
+            <text x="260" y="-16" text-anchor="middle" class="fig-label">mirror axis</text>
+            <path d="M 60,10 C 160,-10 220,30 254,40" fill="none" stroke="var(--ink-faint)" stroke-width="2.5"/>
+            <path d="M 460,10 C 360,-10 300,30 267,42" fill="none" stroke="var(--ink-faint)" stroke-width="2.5"/>
+            <circle cx="254" cy="40" r="4" fill="var(--copper)"/>
+            <circle cx="267" cy="42" r="4" fill="var(--copper)"/>
+            <text x="200" y="70" class="fig-label" fill="var(--copper)">two points, close but not equal</text>
+          </g>
+          <g transform="translate(60,165)">
+            <text x="0" y="-10" class="fig-label">After — both replaced by their shared midpoint</text>
+            <line x1="260" y1="0" x2="260" y2="80" stroke="var(--rule)" stroke-dasharray="4 3"/>
+            <path d="M 60,10 C 160,-10 220,30 260,41" fill="none" stroke="var(--ink)" stroke-width="2.5"/>
+            <path d="M 460,10 C 360,-10 300,30 260,41" fill="none" stroke="var(--ink)" stroke-width="2.5"/>
+            <circle cx="260" cy="41" r="4.5" fill="var(--copper)"/>
+            <text x="200" y="70" class="fig-label" fill="var(--copper)">one point, exactly on the axis</text>
+          </g>
+        </svg>
+        <figcaption>Both mirrored points were honest measurements. Averaging them does not
+          favour either one — it removes only the disagreement between them, which was
+          never evidence about the shape in the first place.</figcaption>
+      </figure>
+      <p>The concrete case this exists for: a glyph made of three bars that should all be
+        the same width can come back from fitting at, say, 21.3, 21.4 and 21.3 pixels —
+        each bar fitted on its own, with the middle one straddling the mirror axis and
+        absorbing a small independent error on each side of itself. This stage is what
+        makes that middle bar come back exactly as wide as its two neighbours, because it
+        is, structurally, required to.</p>
+    </section>
+
+    <section>
+      <h2>Anything nudged in between gets flattened back</h2>
+      <p>Because the final averaging step treats both sides identically and has no way to
+        prefer one over the other, any stage that runs between the two moments — the
+        detection and the restoration — and treats a mirrored pair of points asymmetrically
+        has that asymmetric adjustment erased at the very end, regardless of whether it was
+        an improvement or not. This is simply how the averaging works, not a special case
+        it watches for. A stage inserted into that window either has to respect the mirror
+        itself, or accept that whatever it did differently on the two sides will be pulled
+        back into agreement afterwards.</p>
+    </section>
+
+    <section>
+      <h2>What this does not fix</h2>
+      <p>Restoring symmetry to the underlying points does not automatically make the curves
+        fitted through them identical, because the process that turns a chain of points
+        into a smooth curve can walk one mirrored boundary in one direction and its partner
+        in the other, and reach a slightly different curve even from perfectly mirrored
+        points. That is handled separately, downstream: rather than fit both halves of a
+        symmetric pair independently and hope they agree, only one edge of each mirrored
+        pair is fitted at all, and its result is reflected directly onto its partner — which
+        is both exactly consistent and roughly half the fitting work for anything the mirror
+        covers.</p>
+    </section>
+
+    <section>
+      <h2>What this stage will not attempt</h2>
+      <p>Only two candidate mirrors are ever considered: a single vertical line and a single
+        horizontal line, each running through the exact centre of the image, because a short
+        argument shows those are the only lines a pixel grid's own edges can possibly
+        support without going out of bounds. A diagonal mirror, a shape with four-fold
+        rotational symmetry, or a symmetry that only holds within one part of a larger
+        picture rather than across the whole canvas are all outside what this stage looks
+        for. And because the pixel-level test has no tolerance at all, a logo with even one
+        pixel of genuine, deliberate hand-drawn asymmetry is correctly found to have no
+        mirror at all — which is the intended behaviour, not a shortcoming: this stage would
+        rather miss a symmetry than manufacture one that was never really there.</p>
+    </section>
+
+  </main>
+  <nav class="stages">
+    <a href="00-overview.html">Overview</a>
+    <a href="01-intake.html">1 Intake</a>
+    <a href="02-coverage.html">2 Coverage</a>
+    <a href="03-palette.html">3 Palette</a>
+    <a href="04-regions.html">4 Regions</a>
+    <a href="05-gradients.html">5 Gradients</a>
+    <a href="06-planar-map.html">6 Planar map</a>
+    <a href="07-subpixel.html">7 Sub-pixel</a>
+    <a href="08-boundary-solve.html">8 Boundary solve</a>
+    <a href="09-decode.html">9 Decode</a>
+    <a href="10-symmetry.html" aria-current="page">10 Symmetry</a>
+    <a href="11-fitting.html">11 Curve fitting</a>
+    <a href="12-repair.html">12 Repair</a>
+    <a href="13-emit.html">13 Emit</a>
+    <a href="constants.md">Constants</a>
+  </nav>
+</div>
+</body>
+</html>

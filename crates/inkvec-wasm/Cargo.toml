@@ -1,0 +1,36 @@
+[package]
+name = "inkvec-wasm"
+description = "Inkvec in the browser: the tracer compiled to WebAssembly"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+# Built into the web demo with wasm-pack; not a crate anyone depends on.
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# wasm-opt runs after wasm-bindgen and validates against the features it is told about,
+# not the ones the binary uses. Shared memory, atomics and SIMD all have to be named
+# here or it rejects the threaded module. `simd128` is on for both builds via
+# `.cargo/config.toml`, so it belongs here even for the single-threaded one.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ['-O3', '--enable-threads', '--enable-bulk-memory', '--enable-mutable-globals', '--enable-simd']
+
+[features]
+# Real threads in the browser. Needs a nightly toolchain and a rebuilt `std` (the atomics
+# target feature is not in the shipped one), and a cross-origin isolated page, so it is a
+# feature rather than the default -- `tools/build_wasm.sh` builds both.
+threads = ["dep:wasm-bindgen-rayon", "dep:rayon"]
+
+[dependencies]
+inkvec-cli = { workspace = true }
+inkvec-trace = { workspace = true }
+wasm-bindgen = "0.2"
+console_error_panic_hook = "0.1"
+wasm-bindgen-rayon = { version = "1.2", optional = true }
+rayon = { workspace = true, optional = true }
+

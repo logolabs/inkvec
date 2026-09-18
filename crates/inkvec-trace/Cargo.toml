@@ -1,0 +1,28 @@
+[package]
+name = "inkvec-trace"
+description = "Raster tracing for the Inkvec vectoriser: palette, planar map, sub-pixel boundaries and gradient fills"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+inkvec-core = { workspace = true }
+inkvec-fit = { workspace = true }
+rayon = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "tiff"] }
+
+[features]
+default = []
+#: Experimental stages kept for research: the five ink-grouping rules in `ink_ideas`, selected
+#: at run time with INKVEC_INK_IDEA. Off in every release build; the benchmark scripts that
+#: study them need a binary built with `--features research`.
+research = []
+
+[lints]
+workspace = true

@@ -1,0 +1,25 @@
+{
+  "name": "inkvec-wasm",
+  "type": "module",
+  "collaborators": [
+    "LogoLabs"
+  ],
+  "description": "Inkvec in the browser: the tracer compiled to WebAssembly",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/logolabs/inkvec"
+  },
+  "files": [
+    "inkvec_wasm_bg.wasm",
+    "inkvec_wasm.js",
+    "inkvec_wasm.d.ts"
+  ],
+  "main": "inkvec_wasm.js",
+  "homepage": "https://github.com/logolabs/inkvec",
+  "types": "inkvec_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

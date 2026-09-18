@@ -1,0 +1,11 @@
+{
+  "name": "lucide",
+  "repo": "lucide-icons/lucide",
+  "ref": "main",
+  "path": "icons",
+  "licence": "ISC",
+  "seed": 7,
+  "limit": 175,
+  "available": 1798,
+  "written": 175
+}

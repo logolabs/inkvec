@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sub-pixel refinement — inkvec</title>
+<link rel="stylesheet" href="assets/doc.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="masthead">
+    <p class="eyebrow">Stage 7 of 14</p>
+    <h1>Moving every point off the grid, onto the true edge</h1>
+    <p class="standfirst">The previous stage settled which shapes touch which, using
+      points that sit exactly on pixel corners. This stage moves each of those points to
+      the precise position the picture actually supports, and honestly records how sure
+      it is about each one — without ever changing who touches whom.</p>
+    <p class="pairlink">Technical reference: <a href="07-subpixel.md">07-subpixel.md</a></p>
+  </header>
+  <main>
+
+    <section>
+      <h2>The grid corner was never the real answer</h2>
+      <p>Once the previous stage has decided which regions are which and how they connect,
+        every boundary point it produced sits on an exact pixel-grid corner — a whole
+        number, or a whole number and a half. That is a coordinate the label map can
+        express, not a coordinate a curved edge would ever naturally land on. A real
+        boundary drawn by hand or by a design tool almost never falls exactly on a grid
+        line; it crosses the grid wherever the artist put it, and the label map can only
+        round that true position to the nearest corner.</p>
+      <p>This stage moves each point away from that rounded corner, back onto the position
+        the anti-aliased image itself reports the edge to be — the same coverage
+        measurement described earlier in this pipeline, now used to place a point rather
+        than merely to describe a pixel.</p>
+      <figure>
+        <svg viewBox="0 0 640 260" role="img" aria-label="A boundary point starting on an exact pixel grid corner, then moving along the local edge direction to its true sub-pixel position on the curve">
+          <text x="20" y="24" class="fig-label-strong">From grid corner to true edge</text>
+          <g transform="translate(60,50)">
+            <!-- pixel grid -->
+            <g stroke="var(--rule)" fill="none">
+              <line x1="0" y1="0" x2="0" y2="180"/>
+              <line x1="60" y1="0" x2="60" y2="180"/>
+              <line x1="120" y1="0" x2="120" y2="180"/>
+              <line x1="180" y1="0" x2="180" y2="180"/>
+              <line x1="240" y1="0" x2="240" y2="180"/>
+              <line x1="0" y1="0" x2="240" y2="0"/>
+              <line x1="0" y1="60" x2="240" y2="60"/>
+              <line x1="0" y1="120" x2="240" y2="120"/>
+              <line x1="0" y1="180" x2="240" y2="180"/>
+            </g>
+            <!-- shape either side of the true curve -->
+            <path d="M 240,0 C 150,10 90,60 60,120 C 45,150 30,170 0,180 L 0,0 Z" fill="#3a3530" opacity="0.9"/>
+            <!-- grid-corner reading (dashed) -->
+            <path d="M 240,0 L 180,0 L 120,60 L 60,120 L 0,180" fill="none" stroke="var(--ink-faint)" stroke-width="2" stroke-dasharray="5 4"/>
+            <text x="150" y="-14" class="fig-label" fill="var(--ink-faint)">starts here — a staircase of grid corners</text>
+            <!-- true curve refined position -->
+            <path d="M 240,0 C 150,10 90,60 60,120 C 45,150 30,170 0,180" fill="none" stroke="var(--copper)" stroke-width="3"/>
+            <circle cx="120" cy="60" r="4" fill="var(--ink-faint)"/>
+            <circle cx="98" cy="46" r="4" fill="var(--copper)"/>
+            <line x1="120" y1="60" x2="98" y2="46" stroke="var(--copper)" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <text x="130" y="90" class="fig-label" fill="var(--copper)">moved along the edge's own direction, to where the picture's coverage crosses 50%</text>
+          </g>
+          <defs>
+            <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+              <path d="M0,0 L6,3 L0,6 Z" fill="var(--copper)"/>
+            </marker>
+          </defs>
+        </svg>
+        <figcaption>The dashed line is what the label grid alone can express — a staircase.
+          The solid copper line is the same boundary after each point has been pushed to
+          where the anti-aliased pixels actually say the edge crosses.</figcaption>
+      </figure>
+    </section>
+
+    <section>
+      <h2>Getting the physics of a pixel right</h2>
+      <p>Moving a point sounds simple — find where the coverage measurement crosses
+        halfway, and put the point there — but doing it carelessly introduces a
+        systematic, repeatable bias, not random error. An earlier version of this stage
+        blended between whole pixel centres in a way that consistently pulled every edge
+        towards the grid, by amounts measured at 0.19 pixels on straight boundaries and
+        enough, on one real icon whose edges genuinely fall at a fraction of a pixel, to
+        lose 2.5 percent of its ink outright.</p>
+      <p>Three separate, measured corrections were needed to fix this properly:</p>
+      <ul>
+        <li><b>How much a pixel's coverage changes as the edge moves depends on the angle
+          the edge crosses at</b> — a boundary running straight across a pixel changes
+          coverage differently than one crossing diagonally. Getting the wrong one of the
+          two natural choices here was found to push every diagonal and curved edge
+          outward by up to twice as much as it should — rounded shapes came back uniformly
+          too fat.</li>
+        <li><b>The relationship between coverage and position is not a straight line except
+          along the pixel's own axes.</b> At a true forty-five degree angle it curves, and
+          using the straight-line approximation there put a ninety-percent-covered pixel's
+          edge at 0.57 pixels from centre when the true position was 0.39 — slanted strokes
+          came out fat by a tenth to a fifth of a pixel. The fix inverts the exact
+          coverage of a square pixel rather than a linear stand-in for it.</li>
+        <li><b>Only the two measurements that actually straddle the edge are used</b> —
+          averaging in a third, already-saturated reading was found to pull a point half a
+          pixel into a stroke narrower than two pixels wide, because that third reading
+          was contaminated by the stroke's other edge.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Not every boundary is a clean step</h2>
+      <p>The exact inversion above assumes the edge is a genuine step from one flat colour
+        to another. Two situations break that assumption, and this stage detects both
+        before choosing which method to trust:</p>
+      <p>A soft boundary — the seam between two gradient bands, the edge of a shadow — is
+        a gradual ramp, not a step, and reading it as one throws the point out by as much as
+        a full pixel on synthetic tests built specifically to check this. A stroke narrower
+        than about two pixels is a ridge with background on both sides rather than a single
+        step, and reading it as a step is even more damaging — one synthetic test of thin
+        strokes went from an error of 0.91 to 3.00 once the step method was wrongly applied
+        there. Whenever a boundary looks like either of these — not flat on both sides, not
+        rising smoothly to saturation, or simply too low in contrast to trust — this stage
+        falls back to a direct numerical search for the fifty-percent crossing along the
+        edge's own normal instead of the exact but narrower step formula.</p>
+    </section>
+
+    <section>
+      <h2>An honest error bar travels with every point</h2>
+      <p>Alongside its new position, every point also receives a positional uncertainty —
+        the same idea introduced earlier in the pipeline, now attached to an individual
+        point rather than a whole pixel row. A crisp, high-contrast edge is pinned down
+        tightly; a faint, low-contrast one is pinned down loosely, because the same amount
+        of pixel noise represents a much larger uncertainty in position when the two
+        colours on either side are close together. There is also a floor on how precisely
+        this method can ever locate an edge at all, measured on perfectly known test
+        shapes, which is folded in alongside the noise-driven part rather than replacing
+        it.</p>
+      <figure>
+        <svg viewBox="0 0 640 230" role="img" aria-label="Points placed along a boundary, with a small error bar where contrast is high and a large error bar where contrast is low">
+          <text x="20" y="24" class="fig-label-strong">Every point carries its own honest uncertainty</text>
+          <g transform="translate(40,60)">
+            <path d="M 0,60 Q 140,10 280,55 Q 420,100 560,50" fill="none" stroke="var(--ink-faint)" stroke-width="2"/>
+            <!-- high contrast points, tight bars -->
+            <g stroke="var(--copper)" stroke-width="2">
+              <line x1="40" y1="42" x2="40" y2="52"/>
+              <line x1="100" y1="20" x2="100" y2="30"/>
+              <line x1="160" y1="22" x2="160" y2="32"/>
+            </g>
+            <circle cx="40" cy="47" r="3.5" fill="var(--copper)"/>
+            <circle cx="100" cy="25" r="3.5" fill="var(--copper)"/>
+            <circle cx="160" cy="27" r="3.5" fill="var(--copper)"/>
+            <text x="60" y="-6" class="fig-label" fill="var(--copper)">high contrast — small error bar</text>
+            <!-- low contrast points, wide bars -->
+            <g stroke="var(--ink-soft)" stroke-width="2">
+              <line x1="360" y1="70" x2="360" y2="115"/>
+              <line x1="460" y1="70" x2="460" y2="115"/>
+            </g>
+            <circle cx="360" cy="92" r="3.5" fill="var(--ink-soft)"/>
+            <circle cx="460" cy="92" r="3.5" fill="var(--ink-soft)"/>
+            <text x="340" y="155" class="fig-label" fill="var(--ink-soft)">low contrast — wide error bar</text>
+          </g>
+        </svg>
+        <figcaption>Both sets of points sit on the same physical boundary. The error bar is
+          this stage's honest statement of how much trust each one deserves — carried
+          forward so the curve-fitting stage can spend its effort where the measurement
+          actually earns it.</figcaption>
+      </figure>
+    </section>
+
+    <section>
+      <h2>Junctions need a different method entirely</h2>
+      <p>Where three or more boundaries meet at one point, the two-colour reasoning this
+        stage otherwise relies on breaks down — the pixels there are a genuine mixture of
+        three or more colours, and there is no single edge normal to search along. Moving
+        each incident boundary's endpoint independently, along its own local direction,
+        was tried and produced a visibly wrong result: every edge meeting at the junction
+        disagreed slightly about where the junction actually was, each still within about
+        half a pixel of the original grid corner, but pulling every touching face toward a
+        slightly different point.</p>
+      <p>Junctions are instead handled as their own separate problem: each incident
+        boundary's approach direction is estimated from its own already-placed nearby
+        points, and the junction's true position is taken as the point that best agrees
+        with every one of those approach directions at once, weighted by how confident each
+        one is. Where two boundaries meet at a shallow, glancing angle rather than crossing
+        cleanly, that agreement calculation becomes unreliable by its very nature, and a
+        separate method built specifically for a tapering meeting point is used instead.</p>
+    </section>
+
+    <section>
+      <h2>A feature that was tried, and shipped off</h2>
+      <p>It is tempting to spend even fewer points on a faint boundary than its honest
+        uncertainty already implies, on the reasoning that a viewer cannot see position
+        error on a boundary they can barely see at all. That idea exists in the code, as an
+        optional switch, and the underlying logic is sound: on two otherwise identical wavy
+        test edges, one at strong contrast and one very faint, the tracer without this
+        switch spent a nearly identical number of points on each — the right answer to
+        "where is the edge" and arguably the wrong answer to "how much does this edge's
+        exact position matter."</p>
+      <p>Measured on a 246-icon screen set, though, turning it on saved a very small
+        fraction of the file's total points and cost a larger fraction of colour accuracy
+        in return — most of that test set is high-contrast artwork where the faint case
+        barely arises, so the measurement mostly sees the cost and not the benefit. It
+        ships switched off by default for that reason.</p>
+    </section>
+
+  </main>
+  <nav class="stages">
+    <a href="00-overview.html">Overview</a>
+    <a href="01-intake.html">1 Intake</a>
+    <a href="02-coverage.html">2 Coverage</a>
+    <a href="03-palette.html">3 Palette</a>
+    <a href="04-regions.html">4 Regions</a>
+    <a href="05-gradients.html">5 Gradients</a>
+    <a href="06-planar-map.html">6 Planar map</a>
+    <a href="07-subpixel.html" aria-current="page">7 Sub-pixel</a>
+    <a href="08-boundary-solve.html">8 Boundary solve</a>
+    <a href="09-decode.html">9 Decode</a>
+    <a href="10-symmetry.html">10 Symmetry</a>
+    <a href="11-fitting.html">11 Curve fitting</a>
+    <a href="12-repair.html">12 Repair</a>
+    <a href="13-emit.html">13 Emit</a>
+    <a href="constants.md">Constants</a>
+  </nav>
+</div>
+</body>
+</html>

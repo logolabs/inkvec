@@ -1,0 +1,19 @@
+[package]
+name = "inkvec-fit"
+description = "Curve and primitive fitting for the Inkvec vectoriser: lines, cubics, arcs and ellipses chosen by description length"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+inkvec-core = { workspace = true }
+kurbo = { workspace = true }
+
+[lints]
+workspace = true

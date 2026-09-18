@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Cache-Control" content="no-cache">
+<title>Inkvec</title>
+<meta name="description" content="Inkvec by LogoLabs traces logos, icons and flat artwork to exact SVG, entirely in your browser.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Cpath d=%27M16 3c-4 6-9 11-9 17a9 9 0 0 0 18 0c0-6-5-11-9-17z%27 fill=%27%23c9754a%27/%3E%3Cpath d=%27M11 21c2 3 8 3 10 0%27 stroke=%27%23faf8f5%27 stroke-width=%272.2%27 fill=%27none%27 stroke-linecap=%27round%27/%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,500&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* LogoLabs design system: warm charcoal ramp, one copper accent, Playfair Display + Inter.
+   The product ships a single warm-dark theme -- no light mode. */
+:root{
+  --paper:#1a1816;--card:#211f1c;--stage:#141210;--void:#0c0a09;--surface:#2a2724;--highlight:#35322e;
+  --ink:#faf8f5;--dim:rgba(250,248,245,.75);--faint:rgba(250,248,245,.55);--muted:rgba(250,248,245,.4);
+  --rule:rgba(250,248,245,.08);--rule2:#2a2724;
+  --accent:#c9754a;--accent-hover:#d4896a;--accent-ink:#1a1816;--accent-soft:rgba(201,117,74,.12);--accent-subtle:rgba(201,117,74,.08);
+  --gold:#b8976c;
+  --good:#34d399;--goodbg:rgba(52,211,153,.15);--bad:#f87171;--badbg:rgba(248,113,113,.15);--check:#2a2724;
+  --anchor:#f87171;--handle:#b8976c;--wire:#faf8f5;--vt:#9a938c;
+  --shadow:0 8px 24px -4px rgba(12,10,9,.5);--shadow-lg:0 20px 50px -12px rgba(12,10,9,.6);
+  --glow:0 0 30px rgba(201,117,74,.25);
+  --font-display:"Playfair Display",Georgia,serif;--font-body:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  --radius:12px;--radius-sm:8px;--radius-lg:16px;--radius-full:9999px}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 var(--font-body);-webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-decoration:none}a:hover{color:var(--accent-hover);text-decoration:underline}
+button{font:600 13.5px/1 var(--font-body);color:var(--ink);background:var(--card);border:1px solid var(--rule);border-radius:var(--radius-sm);padding:10px 14px;cursor:pointer;transition:border-color .15s,background .15s,transform .1s,box-shadow .15s}
+button:hover{border-color:rgba(250,248,245,.18)}button:active{transform:translateY(1px) scale(.98)}
+button:disabled{opacity:.4;cursor:default;transform:none}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);padding:12px 24px;font-size:14.5px;border-radius:var(--radius-full)}
+button.primary:hover{background:var(--accent-hover);border-color:var(--accent-hover);box-shadow:var(--glow);transform:translateY(-1px)}
+button[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+kbd{font:500 11px "IBM Plex Mono",monospace;border:1px solid var(--rule);border-bottom-width:2px;border-radius:5px;padding:1px 5px;color:var(--dim)}
+.mono{font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
+h1,h2,h3{font-family:var(--font-display)}
+h2{font-size:clamp(22px,3vw,30px);letter-spacing:-.02em;font-weight:600;margin:0 0 6px;text-wrap:balance}
+.sec{margin-top:64px}
+/* top bar */
+.top{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:14px;padding:14px 24px;border-bottom:1px solid var(--rule);background:var(--card)}
+.top .mark{width:28px;height:28px}
+.top .name{font-family:var(--font-display);font-weight:700;font-size:19px;letter-spacing:-.01em}
+.top .by{color:var(--dim);font-size:13px}
+.top nav{margin-left:auto;display:flex;gap:18px;font-size:13.5px;font-weight:600}
+.top nav a{color:var(--dim)}
+.top nav a:hover{color:var(--accent)}
+main{max-width:1180px;margin:0 auto;padding:30px 22px 80px}
+h1{font-size:clamp(30px,4.4vw,46px);line-height:1.08;letter-spacing:-.025em;font-weight:700;margin:0 0 10px;text-wrap:balance}
+.lede{color:var(--dim);max-width:64ch;margin:0 0 22px;font-size:16px}
+/* drop */
+.drop{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;min-height:140px;padding:24px;border:1.5px dashed var(--rule);border-radius:var(--radius);background:var(--card);cursor:pointer;transition:border-color .12s,background .12s;text-align:center}
+.drop:hover,.drop.over{border-color:var(--accent);background:var(--accent-soft)}
+.drop input{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+.drop:focus-within{outline:2px solid var(--accent);outline-offset:3px}
+.drop .big{font-weight:700;font-size:17px}
+.drop .small{color:var(--dim);font-size:13.5px;max-width:72ch}
+.drop svg{width:32px;height:32px;color:var(--accent)}
+.samples{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:12px 0 0;color:var(--dim);font-size:13px}
+.samples button{padding:7px 11px;font-weight:600;font-size:12.5px;border-radius:999px}
+/* controls */
+.controls{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:20px 0 12px}
+.seg{display:inline-flex;background:var(--card);border:1px solid var(--rule);border-radius:var(--radius-full);padding:3px;gap:2px;flex-wrap:wrap}
+.seg button{border:0;background:transparent;border-radius:var(--radius-full);padding:9px 13px;color:var(--dim)}
+.seg button[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent)}
+.seg.small button{padding:7px 10px;font-size:12.5px}
+.controls label.chk{display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:13.5px;color:var(--dim);cursor:pointer}
+.controls .status{margin-left:auto;font-size:13px;color:var(--dim)}
+.status.err{color:var(--bad)}
+/* viewer */
+.viewer{position:relative;display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.viewer.single{grid-template-columns:1fr}
+.viewer.empty{display:flex;align-items:center;justify-content:center;min-height:220px;border:1px solid var(--rule);border-radius:var(--radius);background:var(--stage);color:var(--faint);text-align:center;padding:20px}
+@media (max-width:720px){.viewer{grid-template-columns:1fr}}
+.pane{position:relative;aspect-ratio:1;max-height:640px;background:var(--stage);border:1px solid var(--rule);border-radius:var(--radius);overflow:hidden;box-shadow:var(--shadow);cursor:grab;touch-action:none;user-select:none}
+.viewer.single .pane{aspect-ratio:auto;height:min(70vh,640px)}
+.pane:active{cursor:grabbing}
+.pane .checker{position:absolute;inset:0;z-index:0;background-image:linear-gradient(45deg,var(--check) 25%,transparent 25%),linear-gradient(-45deg,var(--check) 25%,transparent 25%),linear-gradient(45deg,transparent 75%,var(--check) 75%),linear-gradient(-45deg,transparent 75%,var(--check) 75%);background-size:18px 18px;background-position:0 0,0 9px,9px -9px,-9px 0}
+.pane .cam{position:absolute;left:0;top:0;width:100%;height:100%;transform-origin:0 0;z-index:1}
+.pane .layer{position:absolute;inset:0}
+.pane .layer>*{position:absolute;inset:0;width:100%;height:100%}
+.pane .layer img{object-fit:contain;display:block}
+.pane .layer svg{display:block}
+.pane .rightwrap{position:absolute;inset:0;z-index:2}
+.pane .rightwrap .cam{z-index:auto}
+/* strokes stay the same size on screen at any zoom: non-scaling-stroke counters the SVG's own
+   viewBox scale, and dividing by --z counters the pane's CSS zoom */
+.pane{--z:1}
+.pane svg.wire path,.pane svg.wire circle,.pane svg.wire ellipse,.pane svg.wire rect{fill:none!important;stroke:var(--wire);stroke-width:1px;vector-effect:non-scaling-stroke;stroke-opacity:.9}
+.pane svg.ov{pointer-events:none}
+.pane svg.ov .h{stroke:var(--handle);stroke-width:1px;vector-effect:non-scaling-stroke;fill:none;stroke-opacity:.85}
+.pane svg.ov .hd{stroke:var(--handle);stroke-width:3.5px;vector-effect:non-scaling-stroke;stroke-linecap:round;fill:none}
+.pane svg.ov .a{stroke:var(--anchor);stroke-width:6px;vector-effect:non-scaling-stroke;stroke-linecap:round;fill:none}
+.pane .divider{position:absolute;top:0;bottom:0;left:50%;width:2px;background:var(--accent);z-index:4;cursor:ew-resize;transform:translateX(-1px)}
+.pane .divider::before{content:"";position:absolute;top:0;bottom:0;left:-14px;right:-14px}
+.pane .divider::after{content:"";position:absolute;top:50%;left:50%;width:34px;height:34px;transform:translate(-50%,-50%);border-radius:50%;background:var(--accent);box-shadow:0 2px 10px rgba(12,10,9,.4);background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23faf8f5' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 7l-4 5 4 5M16 7l4 5-4 5'/%3E%3C/svg%3E");background-size:20px;background-repeat:no-repeat;background-position:center}
+.pane .tag{position:absolute;top:10px;left:10px;z-index:3;font:600 11px/1 var(--font-body);letter-spacing:.08em;text-transform:uppercase;padding:5px 8px;border-radius:6px;background:rgba(250,248,245,.92);color:var(--accent-ink);pointer-events:none}
+.pane .tag.r{left:auto;right:10px}
+.pane .busy{position:absolute;inset:0;z-index:5;display:none;align-items:center;justify-content:center;background:rgba(12,10,9,.6);backdrop-filter:blur(2px)}
+.pane .busy.on{display:flex}
+.busy .pill{display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--rule);border-radius:var(--radius-full);padding:10px 16px;font-weight:600;box-shadow:var(--shadow)}
+.spin{width:16px;height:16px;border:2px solid var(--rule);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spin{animation:none}}
+.zoomlbl{position:absolute;right:10px;bottom:10px;z-index:4;font:500 11px "IBM Plex Mono",monospace;padding:4px 7px;border-radius:6px;background:rgba(250,248,245,.92);color:var(--accent-ink);pointer-events:none}
+/* toolbar under a viewer */
+.tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0}
+.tools .lbl{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);margin:0 2px 0 4px}
+.tools .legend{display:flex;gap:12px;color:var(--dim);font-size:12.5px;margin-left:auto}
+.tools .legend i{display:inline-block;width:10px;height:10px;border-radius:50%;vertical-align:-1px;margin-right:5px}
+/* results */
+.results{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:10px 0}
+.stats{display:flex;gap:6px;flex-wrap:wrap}
+.stat{display:inline-flex;gap:6px;align-items:baseline;font-size:12.5px;padding:6px 10px;border-radius:999px;background:var(--rule2);color:var(--dim)}
+.stat b{color:var(--ink);font-weight:700}
+.results .actions{margin-left:auto;display:flex;gap:8px}
+details{margin:18px 0 0}
+summary{cursor:pointer;font-weight:700;font-size:13.5px;color:var(--dim);list-style:none;display:inline-flex;align-items:center;gap:6px}
+summary::-webkit-details-marker{display:none}
+summary::before{content:"";width:6px;height:6px;border-right:2px solid var(--faint);border-bottom:2px solid var(--faint);transform:rotate(-45deg);transition:transform .12s}
+details[open] summary::before{transform:rotate(45deg)}
+.adv{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px 18px;padding:14px 0 4px}
+.adv label{display:flex;flex-direction:column;gap:5px;font-size:12.5px;color:var(--dim);font-weight:600}
+.adv input[type=number]{font:13px "IBM Plex Mono",monospace;padding:7px 9px;border:1px solid var(--rule);border-radius:8px;background:var(--card);color:var(--ink)}
+.adv label.chk{flex-direction:row;align-items:center;gap:8px;margin-top:22px;color:var(--ink)}
+.adv .hint{grid-column:1/-1;font-size:12.5px;color:var(--faint);font-weight:400}
+textarea{width:100%;height:150px;margin-top:10px;font:11.5px/1.45 "IBM Plex Mono",monospace;border:1px solid var(--rule);border-radius:10px;padding:10px;background:var(--card);color:var(--ink);resize:vertical}
+/* showcase */
+.case{background:var(--card);border:1px solid var(--rule);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px 18px;margin-bottom:22px}
+.case header{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.case h3{margin:0;font-size:17px;font-weight:600;letter-spacing:-.01em}
+.case .who{color:var(--faint);font-size:12.5px}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.chip{display:inline-flex;gap:6px;align-items:baseline;font-size:12.5px;padding:5px 9px;border-radius:999px;background:var(--rule2);color:var(--dim)}
+.chip b{color:var(--ink);font-weight:700}
+.chip.win{background:var(--goodbg);color:var(--good)}.chip.win b{color:var(--good)}
+.chip.vt{border:1px solid var(--rule);background:transparent}
+/* versus */
+.versus{display:grid;grid-template-columns:1.1fr 1fr;gap:22px;align-items:start}
+@media (max-width:900px){.versus{grid-template-columns:1fr}}
+.bignums{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+.bignum{background:var(--card);border:1px solid var(--rule);border-radius:var(--radius);padding:16px 18px;box-shadow:var(--shadow)}
+.bignum .k{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}
+.bignum .v{font-family:var(--font-display);font-size:32px;font-weight:600;letter-spacing:-.01em;line-height:1.1;margin:6px 0 2px;color:var(--accent)}
+.bignum .s{font-size:12.5px;color:var(--dim)}
+.bars{background:var(--card);border:1px solid var(--rule);border-radius:var(--radius);padding:6px 16px 14px;box-shadow:var(--shadow);overflow-x:auto}
+.bars table{width:100%;border-collapse:collapse;font-size:12.5px;white-space:nowrap}
+.bars caption{text-align:left;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);padding:12px 0 8px}
+.bars th,.bars td{padding:8px 10px;text-align:right;border-bottom:1px solid var(--rule2)}
+.bars th:first-child,.bars td:first-child{text-align:left}
+.bars thead th{color:var(--faint);font-weight:600;font-size:11px;letter-spacing:.04em;text-transform:uppercase}
+.bars tbody tr:last-child td{border-bottom:0}
+.bars tr.win td{color:var(--ink)}
+.bars tr.win td:first-child{color:var(--accent);font-weight:600}
+.note{color:var(--faint);font-size:12.5px;margin-top:10px}
+footer{margin:60px auto 0;max-width:1180px;padding:0 22px;color:var(--faint);font-size:12.5px;display:flex;gap:16px;flex-wrap:wrap}
+footer .v{margin-left:auto}
+@media (max-width:640px){.top nav{display:none}.results .actions{margin-left:0}.bignums{grid-template-columns:1fr}.tools .legend{margin-left:0}}
+</style>
+</head>
+<body>
+<header class="top">
+  <svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3c-4 6-9 11-9 17a9 9 0 0 0 18 0c0-6-5-11-9-17z" fill="#c9754a"/><path d="M11 21c2 3 8 3 10 0" stroke="#faf8f5" stroke-width="2.2" fill="none" stroke-linecap="round"/></svg>
+  <span class="name">Inkvec</span><span class="by">by LogoLabs</span>
+  <nav><a href="#showcase">Before &amp; after</a><a href="#versus">Results</a><a href="#how">How it works</a><a href="https://github.com/logolabs/inkvec">GitHub</a></nav>
+</header>
+<main>
+<h1>Exact vectors from your logo, in your browser.</h1>
+<p class="lede">Drop a PNG, JPEG, WebP, GIF, BMP or TIFF. The tracer runs as WebAssembly on your machine, so nothing is uploaded. Edges land where the anti-aliasing says they are, circles come back as circles, and every colour is one clean path.</p>
+
+<label class="drop" id="drop">
+  <input type="file" id="file" accept="image/*">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4m0 0l-4 4m4-4l4 4"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+  <div class="big">Drop an image here, click to choose, or paste</div>
+  <div class="small">Logos, icons, flat illustrations. A 512-px logo takes a few seconds in the browser, larger ones longer; files above the max dimension are traced at that size and written at full size.</div>
+</label>
+<div class="samples" id="samples"><span>Try one:</span></div>
+
+<div class="controls">
+  <div class="seg" id="presets" role="group" aria-label="preset">
+    <button data-p="logo" aria-pressed="true">Logo</button>
+    <button data-p="icon" aria-pressed="false">Icon</button>
+    <button data-p="detail" aria-pressed="false">Fine detail</button>
+    <button data-p="compact" aria-pressed="false">Fewer paths</button>
+  </div>
+  <label class="chk"><input type="checkbox" id="no_background"> Transparent background</label>
+  <button class="primary" id="go" disabled>Trace</button>
+  <span class="status mono" id="status">loading the tracer…</span>
+</div>
+
+<div class="viewer empty" id="viewer"><span>Your input and the vector result appear here side by side. Scroll to zoom, drag to pan; both sides move together.</span></div>
+<div class="tools" id="livetools" hidden></div>
+
+<div class="results">
+  <div class="stats" id="stats"></div>
+  <div class="actions"><button id="dl" disabled>Download SVG</button><button id="copy" disabled>Copy SVG</button><button id="showsrc" disabled aria-pressed="false">Source</button></div>
+</div>
+<textarea id="src" readonly hidden></textarea>
+
+<details id="advanced"><summary>Advanced settings</summary>
+  <div class="adv">
+    <label>Precision (px)<input type="number" id="precision" value="0.1" step="0.05" min="0.02"></label>
+    <label>Speckle floor (px²)<input type="number" id="min_area" value="2" step="1" min="0"></label>
+    <label>Max colours<input type="number" id="colors" value="64" step="1" min="2"></label>
+    <label>Merge distance (OKLab)<input type="number" id="merge" value="0.055" step="0.005" min="0"></label>
+    <label>Max dimension (px)<input type="number" id="max_dim" value="1024" step="256" min="128"></label>
+    <label>Time budget (s)<input type="number" id="time_budget" value="20" step="5" min="0"></label>
+    <label>Margin (fraction)<input type="number" id="margin" value="0" step="0.02" min="0"></label>
+    <label class="chk"><input type="checkbox" id="minify"> Minify output</label>
+    <label class="chk"><input type="checkbox" id="content_units"> Content units (fewer paths)</label>
+    <span class="hint">Presets set these for you. Precision is the price of a coordinate; the speckle floor absorbs regions below it; content units scale the fit tolerances with the raster for a smaller file at the cost of exact corners.</span>
+  </div>
+</details>
+
+<section class="sec" id="showcase">
+  <h2>Before and after, with the geometry showing</h2>
+  <p class="lede">Real brand logos rendered from the brand's own file at 1024 px, then traced. Input on the left, the vector on the right, moving together as you zoom. Switch the right side to VTracer's trace of the same raster, or the view to a wipe or an A/B flick. <b>Anchors</b> shows every on-curve point the tracer emitted; <b>Handles</b> adds each cubic's control points with their tangents.</p>
+  <div id="gallery"></div>
+</section>
+
+<section class="sec" id="versus">
+  <h2>Inkvec vs the field</h2>
+  <p class="lede">21 hash-selected cases &mdash; real brand logos, icons and emoji &mdash; traced by every engine and scored against the source render with CIEDE2000 (colour), DISTS and DINOv3. VTracer is the widely used open-source tracer and the fastest thing here by a wide margin; that trade-off is shown too.</p>
+  <div class="versus">
+    <div class="bignums" id="bignums"></div>
+    <div class="bars" id="bars"></div>
+  </div>
+  <p class="note" id="vtnote"></p>
+</section>
+
+<section class="sec" id="how" style="max-width:72ch">
+  <h2>How it works</h2>
+  <p style="color:var(--dim);margin:0 0 8px">Inkvec decides the geometry from the evidence in the pixels. It finds the inks by minimum description length, builds a planar map where every boundary is shared by exactly two shapes so there are never seams, solves every boundary at once against an exact coverage render of the image, then fits lines, curves, circles and gradients priced in parameters. The result carries the artist's structure: a word is one path, a circle is a <code class="mono">&lt;circle&gt;</code>, and the coordinate count tracks the artwork rather than a tolerance slider.</p>
+  <p style="color:var(--dim);margin:0">The native command line uses every core and is several times faster than this browser build, which runs single-threaded.</p>
+</section>
+</main>
+<footer><span>Runs entirely in your browser. Nothing is uploaded.</span><span>&copy; LogoLabs</span><span class="v mono" id="ver"></span></footer>
+
+<script type="module">
+const $ = id => document.getElementById(id);
+const status = (t, err) => { const s = $("status"); s.textContent = t; s.className = "status mono" + (err ? " err" : ""); };
+const A = window.INKVEC_ASSETS || {};
+const asset = n => (A.samples && A.samples[n]) || `samples/${n}.png`;
+const fmt = (v, d) => (v === undefined || v === null || Number.isNaN(v)) ? "—" : Number(v).toFixed(d);
+const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html !== undefined) e.innerHTML = html; return e; };
+
+// ---------------------------------------------------------------- geometry overlays
+function parsePath(d, tx, ty){
+  const toks = d.match(/[MLHVCSQTAZmlhvcsqtaz]|-?\d*\.?\d+(?:e[-+]?\d+)?/gi) || [];
+  const anchors = [], handles = [];
+  let i = 0, cx = 0, cy = 0, sx = 0, sy = 0, cmd = null, pc = null, pcx = 0, pcy = 0;
+  const num = () => parseFloat(toks[i++]);
+  const push = (x,y) => anchors.push([x+tx, y+ty]);
+  const hd = (ax,ay,bx,by) => handles.push([[ax+tx,ay+ty],[bx+tx,by+ty]]);
+  while (i < toks.length){
+    const t = toks[i];
+    if (/[A-Za-z]/.test(t)){ cmd = t; i++; if (cmd==='Z'||cmd==='z'){ cx = sx; cy = sy; pc = null; continue; } }
+    const rel = cmd === cmd.toLowerCase(); const C = cmd.toUpperCase();
+    if (C === 'M'){ let x = num(), y = num(); if (rel){x+=cx;y+=cy;} cx=x;cy=y;sx=x;sy=y; push(x,y); cmd = rel?'l':'L'; pc=null; continue; }
+    if (C === 'L'){ let x = num(), y = num(); if (rel){x+=cx;y+=cy;} cx=x;cy=y; push(x,y); pc=null; continue; }
+    if (C === 'H'){ let x = num(); if (rel) x+=cx; cx=x; push(cx,cy); pc=null; continue; }
+    if (C === 'V'){ let y = num(); if (rel) y+=cy; cy=y; push(cx,cy); pc=null; continue; }
+    if (C === 'C'){ let x1=num(),y1=num(),x2=num(),y2=num(),x=num(),y=num(); if (rel){x1+=cx;y1+=cy;x2+=cx;y2+=cy;x+=cx;y+=cy;} hd(cx,cy,x1,y1); hd(x,y,x2,y2); cx=x;cy=y; push(x,y); pc='C'; pcx=x2; pcy=y2; continue; }
+    if (C === 'S'){ let x2=num(),y2=num(),x=num(),y=num(); if (rel){x2+=cx;y2+=cy;x+=cx;y+=cy;} const x1 = pc==='C' ? 2*cx-pcx : cx, y1 = pc==='C' ? 2*cy-pcy : cy; hd(cx,cy,x1,y1); hd(x,y,x2,y2); cx=x;cy=y; push(x,y); pc='C'; pcx=x2; pcy=y2; continue; }
+    if (C === 'Q'){ let x1=num(),y1=num(),x=num(),y=num(); if (rel){x1+=cx;y1+=cy;x+=cx;y+=cy;} hd(cx,cy,x1,y1); hd(x,y,x1,y1); cx=x;cy=y; push(x,y); pc='Q'; pcx=x1; pcy=y1; continue; }
+    if (C === 'T'){ let x=num(),y=num(); if (rel){x+=cx;y+=cy;} const x1 = pc==='Q' ? 2*cx-pcx : cx, y1 = pc==='Q' ? 2*cy-pcy : cy; hd(cx,cy,x1,y1); hd(x,y,x1,y1); cx=x;cy=y; push(x,y); pc='Q'; pcx=x1; pcy=y1; continue; }
+    if (C === 'A'){ num();num();num();num();num(); let x=num(),y=num(); if (rel){x+=cx;y+=cy;} cx=x;cy=y; push(x,y); pc=null; continue; }
+    i++;
+  }
+  return {anchors, handles};
+}
+const translateOf = e => { const m = (e.getAttribute('transform')||'').match(/translate\(\s*(-?[\d.e+-]+)[ ,]+(-?[\d.e+-]+)?\s*\)/i); return m ? [parseFloat(m[1]), parseFloat(m[2]||'0')] : [0,0]; };
+function svgEl(text){ const h = document.createElement('div'); h.innerHTML = text; const s = h.querySelector('svg'); if (!s) return null; s.removeAttribute('width'); s.removeAttribute('height'); s.setAttribute('preserveAspectRatio','xMidYMid meet'); return s; }
+function overlay(src){
+  const ns = 'http://www.w3.org/2000/svg';
+  const ov = document.createElementNS(ns, 'svg'); ov.setAttribute('viewBox', src.getAttribute('viewBox') || '0 0 100 100'); ov.setAttribute('class','ov'); ov.setAttribute('preserveAspectRatio','xMidYMid meet');
+  let Aa = '', H = '', HD = '', n = 0, nh = 0;
+  for (const e of src.querySelectorAll('path')){
+    const [tx, ty] = translateOf(e); const g = e.closest('g'); let gx = 0, gy = 0; if (g){ [gx, gy] = translateOf(g); }
+    const {anchors, handles} = parsePath(e.getAttribute('d')||'', tx+gx, ty+gy); n += anchors.length; nh += handles.length;
+    for (const [x,y] of anchors) Aa += `M${x.toFixed(2)} ${y.toFixed(2)}h0.001`;
+    for (const [a,b] of handles){ H += `M${a[0].toFixed(2)} ${a[1].toFixed(2)}L${b[0].toFixed(2)} ${b[1].toFixed(2)}`; HD += `M${b[0].toFixed(2)} ${b[1].toFixed(2)}h0.001`; }
+  }
+  for (const e of src.querySelectorAll('circle, ellipse')){ Aa += `M${parseFloat(e.getAttribute('cx')).toFixed(2)} ${parseFloat(e.getAttribute('cy')).toFixed(2)}h0.001`; n++; }
+  const mk = (d, cls) => { const p = document.createElementNS(ns,'path'); p.setAttribute('d', d||'M0 0'); p.setAttribute('class', cls); return p; };
+  const h = mk(H,'h'), hdp = mk(HD,'hd'), a = mk(Aa,'a'); ov.append(h, hdp, a);
+  return {ov, h, hd: hdp, a, n, cubics: nh/2};
+}
+function vectorLayer(svgText){
+  const fill = svgEl(svgText); const wire = svgEl(svgText); wire.setAttribute('class','wire');
+  const o = overlay(fill);
+  const root = el('div', 'layer'); root.append(fill, wire, o.ov);
+  const set = L => { root.dataset.layer = L; fill.style.display = (L==='fill'||L==='anchor'||L==='handle') ? '' : 'none'; fill.style.opacity = (L==='anchor'||L==='handle') ? '.35' : '1'; wire.style.display = (L==='wire'||L==='anchor'||L==='handle') ? '' : 'none'; o.a.style.display = (L==='anchor'||L==='handle') ? '' : 'none'; o.h.style.display = o.hd.style.display = (L==='handle') ? '' : 'none'; };
+  set('fill');
+  return {root, set, anchors: o.n, cubics: o.cubics};
+}
+const imgLayer = src => { const w = el('div', 'layer'); const im = document.createElement('img'); im.src = src; im.alt = ''; w.appendChild(im); return w; };
+
+// ---------------------------------------------------------------- viewer: side by side, wipe, flick
+function viewer(host, opts = {}){
+  host.classList.remove('empty'); host.innerHTML = '';
+  const mkPane = () => { const p = el('div', 'pane'); const chk = el('div', 'checker'); const cam = el('div', 'cam'); const tag = el('span', 'tag'); const zl = el('span', 'zoomlbl', '1.0×'); p.append(chk, cam, tag, zl); return {p, cam, tag, zl}; };
+  const L = mkPane(), R = mkPane();
+  const rightWrap = el('div', 'rightwrap'); const camW = el('div', 'cam'); rightWrap.appendChild(camW);
+  const tagR2 = el('span', 'tag r'); const divider = el('div', 'divider');
+  L.p.append(rightWrap, tagR2, divider);
+  if (opts.busy){ const b = el('div', 'busy', '<div class="pill"><span class="spin"></span><span class="t">Tracing…</span></div>'); L.p.appendChild(b); }
+  host.append(L.p, R.p);
+  const st = {z:1, x:0, y:0, split:0.5, mode:'side', flick:'left'};
+  let leftNode = null, rightNode = null;
+  // Zoom by resizing the camera box (the SVG re-renders at the new size, so it stays
+  // crisp at any magnification); only the pan is a transform.
+  const view = () => { const t = `translate(${st.x}px,${st.y}px)`; const sz = (st.z * 100) + '%'; for (const c of [L.cam, R.cam, camW]){ c.style.transform = t; c.style.width = sz; c.style.height = sz; } L.zl.textContent = R.zl.textContent = st.z.toFixed(1) + '×'; };
+  const setSplit = f => { st.split = Math.min(1, Math.max(0, f)); const px = st.split * L.p.getBoundingClientRect().width; rightWrap.style.clipPath = `inset(0 0 0 ${px}px)`; divider.style.left = px + 'px'; };
+  function layout(){
+    host.classList.toggle('single', st.mode !== 'side');
+    R.p.style.display = st.mode === 'side' ? '' : 'none';
+    divider.style.display = st.mode === 'wipe' ? '' : 'none';
+    rightWrap.style.display = st.mode === 'side' ? 'none' : '';
+    tagR2.style.display = st.mode === 'wipe' ? '' : 'none';
+    // where the right node lives
+    if (rightNode){ (st.mode === 'side' ? R.cam : camW).appendChild(rightNode); }
+    if (st.mode === 'wipe'){ rightWrap.style.clipPath = ''; setSplit(st.split); L.cam.style.visibility = ''; rightWrap.style.visibility = ''; }
+    else if (st.mode === 'flick'){ rightWrap.style.clipPath = 'none'; L.cam.style.visibility = st.flick === 'left' ? '' : 'hidden'; rightWrap.style.visibility = st.flick === 'right' ? '' : 'hidden'; }
+    else { L.cam.style.visibility = ''; }
+    if (st.mode === 'flick'){ const showing = st.flick === 'left' ? L.tag.dataset.n : R.tag.dataset.n; L.tag.textContent = 'showing ' + (showing || ''); }
+  }
+  // input: wheel zooms about the cursor in whichever pane it is over; drag pans; the divider wipes
+  let drag = null, onDiv = false;
+  for (const P of [L.p, R.p]){
+    P.addEventListener('wheel', ev => { ev.preventDefault(); const r = P.getBoundingClientRect(), mx = ev.clientX - r.left, my = ev.clientY - r.top; const f = Math.exp(-ev.deltaY * 0.0015), nz = Math.min(40, Math.max(0.5, st.z * f)), k = nz / st.z; st.x = mx - (mx - st.x) * k; st.y = my - (my - st.y) * k; st.z = nz; view(); }, {passive:false});
+    P.addEventListener('pointerdown', ev => { onDiv = !!ev.target.closest('.divider'); drag = [ev.clientX - st.x, ev.clientY - st.y]; P.setPointerCapture(ev.pointerId); });
+    P.addEventListener('pointermove', ev => { if (!drag) return; if (onDiv){ const r = L.p.getBoundingClientRect(); setSplit((ev.clientX - r.left) / r.width); return; } st.x = ev.clientX - drag[0]; st.y = ev.clientY - drag[1]; view(); });
+    const up = () => { drag = null; onDiv = false; }; P.addEventListener('pointerup', up); P.addEventListener('pointercancel', up);
+    P.addEventListener('dblclick', () => { st.z = 1; st.x = 0; st.y = 0; view(); });
+  }
+  window.addEventListener('resize', () => { if (st.mode === 'wipe') setSplit(st.split); });
+  layout(); view();
+  return {
+    setLeft(node, label){ leftNode = node; L.cam.innerHTML = ''; if (node) L.cam.appendChild(node); L.tag.dataset.n = label || ''; L.tag.textContent = label || ''; },
+    relabel(){ const nm = n => n ? (n.querySelector('svg') ? ' · svg · ' + ({fill:'fill', wire:'wireframe', anchor:'anchors', handle:'handles'}[n.dataset.layer] || 'fill') : ' · raster') : ''; L.tag.textContent = (L.tag.dataset.n || '') + nm(leftNode); R.tag.textContent = (R.tag.dataset.n || '') + nm(rightNode); tagR2.textContent = R.tag.textContent; },
+    setRight(node, label){ rightNode = node; R.cam.innerHTML = ''; camW.innerHTML = ''; if (node) (st.mode === 'side' ? R.cam : camW).appendChild(node); R.tag.dataset.n = label || ''; R.tag.textContent = label || ''; tagR2.textContent = label || ''; layout(); this.relabel(); },
+    setMode(m){ st.mode = m; layout(); },
+    flick(side){ st.flick = side; if (st.mode === 'flick') layout(); },
+    zoom(z){ const r = L.p.getBoundingClientRect(); st.x = (r.width - r.width*z)/2; st.y = (r.height - r.height*z)/2; st.z = z; view(); },
+    reset(){ st.z = 1; st.x = 0; st.y = 0; view(); },
+    busy(on, text){ const b = L.p.querySelector('.busy'); if (!b) return; b.classList.toggle('on', on); if (text) b.querySelector('.t').textContent = text; },
+  };
+}
+// Toolbar: view mode, layers, zoom presets. `onLayer(L)` applies a layer to the vector nodes.
+function toolbar(host, v, onLayer, extra){
+  host.innerHTML = '';
+  const seg = (items, cls, on) => { const s = el('div', 'seg small'); for (const [key, label, pressed] of items){ const b = el('button', '', label); b.dataset.k = key; b.setAttribute('aria-pressed', !!pressed); b.addEventListener('click', () => { for (const o of s.children) o.setAttribute('aria-pressed','false'); b.setAttribute('aria-pressed','true'); on(key); }); s.appendChild(b); } return s; };
+  host.append(el('span', 'lbl', 'view'), seg([['side','Side by side',true],['wipe','Wipe'],['flick','A / B']], '', m => v.setMode(m)));
+  const fl = el('button', '', 'Flick'); fl.title = 'Hold to show the other side (or hold Space)';
+  fl.addEventListener('pointerdown', () => v.flick('right')); fl.addEventListener('pointerup', () => v.flick('left')); fl.addEventListener('pointerleave', () => v.flick('left'));
+  host.append(fl);
+  host.append(el('span', 'lbl', 'show'), seg([['fill','Fill',true],['wire','Wireframe'],['anchor','Anchors'],['handle','Handles']], '', onLayer));
+  const z = el('div', 'seg small'); for (const k of [1, 4, 12]){ const b = el('button', '', k + '×'); b.addEventListener('click', () => v.zoom(k)); z.appendChild(b); } host.append(el('span', 'lbl', 'zoom'), z);
+  if (extra) host.append(extra);
+  host.append(el('span', 'legend', '<span><i style="background:var(--anchor)"></i>anchor</span><span><i style="background:var(--handle)"></i>control point &amp; tangent</span>'));
+}
+// Space flicks whichever viewer the pointer is over
+let hot = null;
+document.addEventListener('keydown', e => { if (e.code === 'Space' && hot && !e.repeat && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA'){ e.preventDefault(); hot.flick('right'); } });
+document.addEventListener('keyup', e => { if (e.code === 'Space' && hot) hot.flick('left'); });
+
+// ---------------------------------------------------------------- live tracer
+let bytes = null, svgText = "", name = "image", jobId = 0, timer = null, live = null, liveVec = null, liveLayer = 'fill';
+const PRESETS = {
+  logo:    {precision:0.1,  min_area:2, colors:64, merge:0.055, max_dim:1024, content_units:false},
+  icon:    {precision:0.1,  min_area:1, colors:16, merge:0.055, max_dim:1024, content_units:false},
+  detail:  {precision:0.05, min_area:1, colors:64, merge:0.045, max_dim:2048, content_units:false},
+  compact: {precision:0.1,  min_area:4, colors:32, merge:0.06,  max_dim:1024, content_units:true},
+};
+function applyPreset(p){ const v = PRESETS[p]; for (const k in v){ const e = $(k); if (e.type === "checkbox") e.checked = v[k]; else e.value = v[k]; } }
+for (const b of document.querySelectorAll("#presets button")) b.addEventListener("click", () => { for (const o of document.querySelectorAll("#presets button")) o.setAttribute("aria-pressed","false"); b.setAttribute("aria-pressed","true"); applyPreset(b.dataset.p); if (bytes) $("go").click(); });
+
+let worker = null;
+function makeWorker(){
+  const url = A.workerUrl || "./worker.js?v=7";
+  try { worker = new Worker(url, { type: "module" }); } catch (e) { worker = null; return; }
+  worker.onmessage = (e) => {
+    const m = e.data;
+    if (m.type === "ready") { $("ver").textContent = `inkvec ${m.version} · wasm${m.threads > 1 ? ` · ${m.threads + 1} cores` : ""}`; if (!bytes) status("ready · drop an image"); return; }
+    if (m.id !== jobId) return;
+    if (m.type === "error") {
+      finish(); status("failed: " + m.error, true);
+      // A trap inside WebAssembly can leave the module's memory in an unknown state, so the
+      // next image gets a fresh worker rather than the one that just failed.
+      if (/RuntimeError|unreachable/.test(m.error)) { worker.terminate(); makeWorker(); }
+      return;
+    }
+    svgText = m.svg; finish(); show(svgText, m.ms);
+  };
+  worker.onerror = (e) => { status("worker error: " + (e.message || e), true); };
+}
+makeWorker();
+
+// The tracer decodes the whole image before --max-dim applies, so a huge upload costs memory
+// the tab may not have. Refuse it here, with a way forward, instead of stalling the worker.
+const MAX_BYTES = 40 * 1024 * 1024;
+const MAX_PIXELS = 6000 * 6000;
+function pick(f){
+  if (!f) return;
+  if (f.size > MAX_BYTES){ status(`${f.name} is ${(f.size/1048576).toFixed(0)} MB. The browser demo takes files up to 40 MB; use the command line for larger ones.`, true); return; }
+  name = f.name.replace(/\.[^.]+$/, "");
+  f.arrayBuffer().then(async b => {
+    try {
+      const bmp = await createImageBitmap(f);
+      const [bw, bh] = [bmp.width, bmp.height];
+      if (bmp.close) bmp.close();
+      if (bw * bh > MAX_PIXELS){ status(`${f.name} is ${bw} x ${bh}. The browser demo takes images up to 6000 x 6000; downscale it or use the command line.`, true); return; }
+    } catch (e) {
+      // Formats the browser cannot preview (TIFF, for one) go straight to the tracer.
+    }
+    bytes = new Uint8Array(b); $("go").disabled = false; status(`${f.name} · ${(f.size/1024).toFixed(0)} KB`);
+    if (!live){ live = viewer($("viewer"), {busy:true}); $("livetools").hidden = false; toolbar($("livetools"), live, L => { liveLayer = L; if (liveVec) liveVec.set(L); live.relabel(); }); $("viewer").addEventListener('pointerenter', () => hot = live); }
+    live.setLeft(imgLayer(URL.createObjectURL(f)), 'input'); live.setRight(null, ''); live.reset();
+    $("viewer").scrollIntoView({block:'nearest'});
+    $("go").click();
+  });
+}
+$("file").addEventListener("change", e => pick(e.target.files[0]));
+const drop = $("drop");
+drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); pick(e.dataTransfer.files[0]); });
+document.addEventListener("paste", e => { const f = [...(e.clipboardData?.files || [])][0]; if (f) pick(f); });
+for (const n of ["365retailmarkets","adamo","1075thefan"]){
+  const b = el("button", "", n); b.addEventListener("click", async () => { const r = await fetch(asset(n)); const bl = await r.blob(); pick(new File([bl], n + ".png", {type:"image/png"})); });
+  $("samples").appendChild(b);
+}
+function options(){ return { precision:+$("precision").value, min_area:+$("min_area").value, colors:+$("colors").value, merge:+$("merge").value, max_dim:+$("max_dim").value, time_budget:+$("time_budget").value, no_background:$("no_background").checked, minify:$("minify").checked, margin:+$("margin").value, content_units:$("content_units").checked }; }
+function start(){ $("go").disabled = true; const t0 = performance.now(); live && live.busy(true, "Tracing…"); timer = setInterval(() => live && live.busy(true, `Tracing… ${((performance.now()-t0)/1000).toFixed(1)} s`), 100); }
+function finish(){ $("go").disabled = false; clearInterval(timer); live && live.busy(false); }
+$("go").addEventListener("click", () => {
+  if (!bytes) return;
+  start(); status("tracing…"); jobId += 1;
+  if (worker) worker.postMessage({ id: jobId, bytes, o: options() });
+  else { finish(); status("the tracer could not start in this browser", true); }
+});
+$("no_background").addEventListener("change", () => { if (bytes) $("go").click(); });
+function show(svg, ms){
+  liveVec = vectorLayer(svg); liveVec.set(liveLayer);
+  live.setRight(liveVec.root, 'inkvec');
+  const paths = (svg.match(/<path/g)||[]).length, prims = (svg.match(/<(circle|ellipse|rect)\b/g)||[]).length, grads = (svg.match(/<(linear|radial)Gradient/g)||[]).length, nums = (svg.match(/-?\d+\.?\d*/g)||[]).length;
+  $("stats").innerHTML = [[`${(ms/1000).toFixed(2)} s`, ''], [paths, 'paths'], [prims, 'primitives'], [grads, 'gradients'], [liveVec.anchors, 'anchors'], [nums, 'numbers'], [`${(svg.length/1024).toFixed(1)} KB`, '']].map(([v, k]) => `<span class="stat"><b>${v}</b>${k ? ' ' + k : ''}</span>`).join('');
+  $("src").value = svg; $("dl").disabled = $("copy").disabled = $("showsrc").disabled = false;
+  status(`done in ${(ms/1000).toFixed(2)} s`);
+}
+$("dl").addEventListener("click", () => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([svgText], {type:"image/svg+xml"})); a.download = name + ".svg"; a.click(); });
+$("copy").addEventListener("click", () => navigator.clipboard.writeText(svgText).then(() => status("copied to clipboard")));
+$("showsrc").addEventListener("click", () => { const on = $("showsrc").getAttribute("aria-pressed") !== "true"; $("showsrc").setAttribute("aria-pressed", on); $("src").hidden = !on; });
+
+// ---------------------------------------------------------------- showcase + versus
+async function loadShowcase(){
+  let d = A.showcase;
+  if (!d){ try { d = await (await fetch('showcase.json?v=4')).json(); } catch (e) { return; } }
+  const gal = $("gallery");
+  for (const lg of d.logos){
+    const card = el('article', 'case');
+    card.innerHTML = `<header><h3>${lg.name}</h3><span class="who">artist: ${lg.artist_paths} paths</span></header><div class="viewer"></div><div class="tools"></div><div class="chips"></div>`;
+    gal.appendChild(card);
+    const v = viewer(card.querySelector('.viewer'));
+    card.querySelector('.viewer').addEventListener('pointerenter', () => hot = v);
+    const ours = vectorLayer(lg.ours.svg), vt = vectorLayer(lg.vtracer.svg);
+    let cmp = 'input';
+    const apply = () => { if (cmp === 'input'){ v.setLeft(imgLayer(lg.png), 'input'); v.setRight(ours.root, 'inkvec'); } else { v.setLeft(ours.root, 'inkvec'); v.setRight(vt.root, 'vtracer'); } v.relabel(); };
+    const cmpSeg = el('div', 'seg small');
+    for (const [k, label, on] of [['input', 'input · inkvec', true], ['vtracer', 'inkvec · vtracer']]){ const b = el('button', '', label); b.setAttribute('aria-pressed', !!on); b.addEventListener('click', () => { for (const o of cmpSeg.children) o.setAttribute('aria-pressed','false'); b.setAttribute('aria-pressed','true'); cmp = k; apply(); }); cmpSeg.appendChild(b); }
+    const wrap = el('span'); wrap.append(el('span', 'lbl', 'compare'), cmpSeg);
+    toolbar(card.querySelector('.tools'), v, L => { ours.set(L); vt.set(L); v.relabel(); }, wrap);
+    apply();
+    const m = lg.ours.m, w = lg.vtracer.m;
+    card.querySelector('.chips').innerHTML =
+      `<span class="chip win">inkvec dE00 <b>${fmt(m.de00,3)}</b></span><span class="chip vt">vtracer dE00 <b>${fmt(w.de00,3)}</b></span>` +
+      `<span class="chip win">paths <b>${m.paths}</b> · anchors <b>${ours.anchors}</b></span><span class="chip vt">paths <b>${w.paths}</b> · anchors <b>${vt.anchors}</b></span>` +
+      `<span class="chip win"><b>${(m.bytes/1024).toFixed(1)} KB</b></span><span class="chip vt"><b>${(w.bytes/1024).toFixed(1)} KB</b></span>`;
+  }
+}
+// Source: out/crosscompare-competitors-2026-09-15/summary.md -- 21 hash-selected cases
+// (real brand logos, icons, emoji), scored against the source render with CIEDE2000 (dE00),
+// DISTS and DINOv3. Regenerate with bench/crosscompare_competitors.py. Timings were measured
+// on a machine doing other CPU-bound work at the same time; treat them as approximate.
+const COMPETITORS = [
+  {name:'Inkvec',                             mean:0.119, median:0.048, dists:0.0231, dino:0.9922, coords:585,  sec:1.17, win:true},
+  {name:'VTracer 0.6.15 (PyPI, default)',      mean:1.303, median:0.598, dists:0.0508, dino:0.9633, coords:1943, sec:0.04},
+  {name:'VTracer 1.0.0-alpha.4 (default)',     mean:1.303, median:0.598, dists:0.0508, dino:0.9633, coords:1943, sec:0.05},
+  {name:'VTracer 1.0.0-alpha.4 (--simplify)',  mean:1.264, median:0.579, dists:0.0636, dino:0.9538, coords:1239, sec:0.06},
+  {name:'Trazor (PhenX/Trazor, MIT)',          mean:0.518, median:0.227, dists:0.0479, dino:0.9711, coords:1172, sec:2.19},
+];
+function renderVersus(){
+  const us = COMPETITORS[0], vt = COMPETITORS[1];
+  $("bignums").innerHTML = [
+    ['colour error, dE00 (median)', `${fmt(us.median,3)} <span style="font-size:16px;color:var(--dim)">vs ${fmt(vt.median,3)}</span>`, `${(vt.median/us.median).toFixed(1)}× lower than VTracer`],
+    ['DISTS', `${fmt(us.dists,4)} <span style="font-size:16px;color:var(--dim)">vs ${fmt(vt.dists,4)}</span>`, 'perceptual distance, lower is better'],
+    ['coordinates emitted', `${us.coords} <span style="font-size:16px;color:var(--dim)">vs ${vt.coords}</span>`, `${(vt.coords/us.coords).toFixed(1)}× fewer numbers per SVG, mean of 21 cases`],
+    ['seconds per case', `${fmt(us.sec,2)} <span style="font-size:16px;color:var(--dim)">vs ${fmt(vt.sec,2)}</span>`, 'VTracer is the fast, lower-fidelity option here'],
+  ].map(([k, val, sub]) => `<div class="bignum"><div class="k">${k}</div><div class="v">${val}</div><div class="s">${sub}</div></div>`).join('');
+  $("bars").innerHTML = `<table><caption>21 cases, 2026-09-15</caption><thead><tr><th>engine</th><th>mean dE00</th><th>median dE00</th><th>DISTS</th><th>DINO</th><th>coords</th><th>seconds</th></tr></thead><tbody>` +
+    COMPETITORS.map(r => `<tr class="${r.win ? 'win' : ''}"><td>${r.name}</td><td class="mono">${fmt(r.mean,3)}</td><td class="mono">${fmt(r.median,3)}</td><td class="mono">${fmt(r.dists,4)}</td><td class="mono">${fmt(r.dino,4)}</td><td class="mono">${r.coords}</td><td class="mono">${fmt(r.sec,2)}</td></tr>`).join('') +
+    `</tbody></table>`;
+  $("vtnote").innerHTML = `Source: <code class="mono">out/crosscompare-competitors-2026-09-15/summary.md</code>. Two more engines were measured for completeness and are left out of this table because they are not comparable at the geometry level: covecto's default mode and potrace-color both reproduce the source pixel grid almost losslessly (tens of thousands of coordinates per case) rather than artist-shaped geometry. Full detail in the <a href="https://github.com/logolabs/inkvec#results">README</a>.`;
+}
+renderVersus();
+loadShowcase();
+
+// ?demo=name traces a sample on load (headless check). Kept last.
+const demo = new URLSearchParams(location.search).get("demo");
+if (demo){ const r = await fetch(asset(demo)); const bl = await r.blob(); pick(new File([bl], demo + ".png", {type:"image/png"})); }
+</script>
+</body>
+</html>

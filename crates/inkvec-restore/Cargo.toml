@@ -1,0 +1,67 @@
+[package]
+name = "inkvec-restore"
+description = "Optional trained restorer pre-pass for the Inkvec vectoriser: removes JPEG and WebP damage before tracing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+inkvec-trace = { workspace = true }
+inkvec-sr = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+# The restorer network. Off by default, same reasoning as inkvec-sr: it pulls in a full ML
+# runtime, and everything else in this crate is a few hundred lines of arithmetic that should
+# not have to link one to compile. Two runtimes, both reading the same ONNX export:
+#
+# - ONNX Runtime (`onnxruntime`): the fast CPU path. Prebuilt, downloaded by `ort` at build time
+#   and linked statically. On Windows that static build needs MSVC 17.10 or newer: with 17.9
+#   (toolset 14.39) the link fails on `__std_find_last_of_trivial_pos_1`. Either update MSVC, or
+#   link dynamically against Microsoft's release zip: set `ORT_LIB_PATH=<zip>/lib` and
+#   `ORT_PREFER_DYNAMIC_LINK=1`, and ship `onnxruntime.dll` next to the binary.
+#   Measured on a 16-thread desktop CPU: 3.6-3.9 s at 512 px, 17.4 s at 1024 px, output
+#   bit-identical to Python onnxruntime.
+# - Burn (`flex`, `ndarray`, `wgpu`, `cuda`): pure Rust, network code generated from the ONNX file.
+#   15-17 s at 512 px on the same CPU, output within 1e-6 of onnxruntime.
+#   Burn's CPU backends run element-wise ops on one thread (sigmoid over a 144-channel 512 px
+#   tensor: 171-270 ms), which is where most of their time goes on this network.
+#
+# Candle was tried first and dropped, measured: it implements a grouped convolution by
+# splitting it into `groups` separate convolutions (candle-core 0.9.2 `conv.rs`), on every
+# backend, and this network is mostly depthwise convolutions -- 20 s at 512 px on 16 threads.
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "download-binaries", "tls-native", "copy-dylibs", "api-27"], optional = true }
+# Default features stay on: with them off, Burn's CPU backends silently build single-threaded
+# and without SIMD.
+burn = { version = "0.21", optional = true }
+burn-store = { version = "0.21", default-features = false, features = ["std", "burnpack", "memmap"], optional = true }
+
+[build-dependencies]
+burn-onnx = { version = "0.21", optional = true }
+
+[features]
+default = []
+#: CPU through ONNX Runtime. Reads the `.onnx` export at run time.
+onnxruntime = ["dep:ort"]
+#: Burn network code generated from the ONNX export. Needs one backend feature below to run.
+model = ["dep:burn", "dep:burn-store", "dep:burn-onnx"]
+#: Burn on the CPU, portable (im2col + gemm, SIMD, rayon). No system dependencies.
+flex = ["model", "burn/flex"]
+#: Burn on the CPU, ndarray.
+ndarray = ["model", "burn/ndarray"]
+#: Burn on the GPU through wgpu (Vulkan / DX12 / Metal). No CUDA toolkit or C++ compiler needed.
+wgpu = ["model", "burn/wgpu"]
+#: Burn on the GPU through CUDA. NVIDIA only; needs the CUDA toolkit at run time.
+cuda = ["model", "burn/cuda"]
+
+[[example]]
+name = "opbench"
+required-features = ["model"]
+
+[lints]
+workspace = true

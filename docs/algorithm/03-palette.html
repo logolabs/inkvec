@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Palette — inkvec</title>
+<link rel="stylesheet" href="assets/doc.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="masthead">
+    <p class="eyebrow">Stage 3 of 14</p>
+    <h1>Deciding how many colours a picture actually has</h1>
+    <p class="standfirst">Not every distinct-looking pixel is a distinct ink, and not every
+      pair of similar pixels is the same ink. This stage decides the palette by asking whether
+      each candidate colour earns its keep — not by clustering pixels or picking a fixed
+      distance and hoping it fits everywhere.</p>
+    <p class="pairlink">Technical reference: <a href="03-palette.md">03-palette.md</a></p>
+  </header>
+  <main>
+
+    <section>
+      <h2>A question with two ways to get it wrong</h2>
+      <p>Before anything about shapes or curves can be decided, the tracer needs to know: how
+        many distinct colours — inks — did the artist actually use? This sounds simple and is
+        not, because a picture never presents its palette cleanly. Every soft edge sprinkles in
+        blend colours that are not really inks at all, and some genuinely different inks — two
+        similar shades of pale pink, say — sit very close together in colour.</p>
+      <p>Get the count wrong in either direction and it shows:</p>
+      <div class="plain">
+        <h3>Too few colours</h3>
+        <p>Merge two inks the artist meant to keep separate, and the region loses detail — or
+          worse, the tracer notices something is not quite flat there and invents a gradient to
+          explain the leftover difference, when the truth was simply two flat colours side by
+          side.</p>
+      </div>
+      <div class="plain">
+        <h3>Too many colours</h3>
+        <p>Mint an ink for every faint ripple a compressed file leaves near its edges, or for
+          every step of an anti-aliased ramp, and a drawing with five real colours comes out with
+          dozens — each one becoming its own shape, its own outline, its own path in the final
+          file.</p>
+      </div>
+      <p>This is a genuine judgement call, not a lookup. It is what statisticians call a
+        <b>model selection</b> problem — deciding how complex a description to use — rather than
+        a clustering problem. Clustering asks "which pixels look similar." Model selection asks
+        "does adding this colour to my description actually pay for itself, given how much of
+        the picture it explains and how much noise there is to explain away."</p>
+    </section>
+
+    <section>
+      <h2>Why a fixed ruler does not work</h2>
+      <p>The obvious approach is to pick a colour space where distance roughly matches what a
+        human eye perceives, and declare two colours "the same ink" whenever they sit within a
+        fixed distance. This mostly works — until it meets the colour space's own quirks.</p>
+      <p>The space used here (OKLab) makes lightness a cube root of brightness, which is
+        deliberate and mostly helpful — human vision is far more sensitive to differences among
+        dark tones than among light ones, so building that sensitivity into the space keeps a
+        single ruler roughly fair. But taken to its extreme, right down near black, that same
+        cube root stretches distances enormously. A handful of the very darkest, almost
+        imperceptible one-pixel-level differences near black can measure as farther apart, in
+        this space, than two visibly different mid-tones. A clean black logo with no colour
+        variation at all was, at one point, read as four separate near-black inks purely because
+        of this stretch — differences nobody looking at the picture could ever see.</p>
+      <figure>
+        <svg viewBox="0 0 640 220" role="img" aria-label="A ruler that measures distances near black as far larger than the same visual gap near white">
+          <text x="20" y="24" class="fig-label-strong">The same ruler, two very different readings</text>
+          <g transform="translate(20,55)">
+            <text x="0" y="-10" class="fig-label">Near black</text>
+            <rect x="0" y="0" width="40" height="40" fill="#000000" stroke="var(--rule)"/>
+            <rect x="55" y="0" width="40" height="40" fill="#070707" stroke="var(--rule)"/>
+            <line x1="42" y1="20" x2="53" y2="20" class="fig-accent-stroke" stroke-width="3"/>
+            <text x="47" y="10" text-anchor="middle" class="fig-label" fill="var(--copper)">huge in OKLab</text>
+            <text x="47" y="65" text-anchor="middle" class="fig-label">invisible to the eye</text>
+          </g>
+          <g transform="translate(260,55)">
+            <text x="0" y="-10" class="fig-label">Mid grey</text>
+            <rect x="0" y="0" width="40" height="40" fill="#7d7d7d" stroke="var(--rule)"/>
+            <rect x="55" y="0" width="40" height="40" fill="#858585" stroke="var(--rule)"/>
+            <line x1="42" y1="20" x2="53" y2="20" class="fig-accent-stroke" stroke-width="3"/>
+            <text x="47" y="10" text-anchor="middle" class="fig-label" fill="var(--copper)">smaller in OKLab</text>
+            <text x="47" y="65" text-anchor="middle" class="fig-label">but this one you CAN see</text>
+          </g>
+        </svg>
+        <figcaption>The same numeric gap in OKLab means very different things depending on where
+          it sits. A single fixed threshold cannot serve both cases at once.</figcaption>
+      </figure>
+      <p>So the stage does not trust one ruler alone. It keeps a second, independent check —
+        CIEDE2000, a colour-difference formula built specifically to match what people can
+        actually distinguish — and uses it as a hard floor: below a small CIEDE2000 gap, two
+        colours are declared the same ink no matter what any other test says, because no argument
+        about "the artwork probably meant this" can rescue a difference nobody can see.</p>
+    </section>
+
+    <section>
+      <h2>Does this colour earn its keep?</h2>
+      <p>For every candidate colour, ordered from most to least common, the stage asks a version
+        of the same question a scientist asks when deciding whether to add a new term to a model:
+        does keeping this separate explain the picture enough better to be worth the extra
+        complexity?</p>
+      <p>Concretely: if this candidate were folded into the nearest colour already accepted, how
+        much error would that introduce across every pixel that would have chosen it? And is that
+        error bigger than the fixed cost of writing one more colour into the file? A colour with
+        thousands of pixels sitting well clear of anything already accepted almost always wins —
+        the error saved by keeping it separate dwarfs the small fixed cost of adding it. A colour
+        with a handful of pixels a hair's breadth from an existing one almost always loses — not
+        worth a whole new entry for barely any benefit.</p>
+      <figure>
+        <svg viewBox="0 0 640 240" role="img" aria-label="A weighing scale, one side the cost of a new colour, one side the error saved by keeping it separate">
+          <text x="20" y="24" class="fig-label-strong">Is a new ink worth its keep?</text>
+          <g transform="translate(320,60)">
+            <line x1="0" y1="0" x2="0" y2="130" class="fig-rule" stroke-width="3"/>
+            <line x1="-220" y1="30" x2="220" y2="30" class="fig-rule" stroke-width="3"/>
+            <!-- left pan: cost of a new ink -->
+            <g transform="translate(-180,30)">
+              <line x1="0" y1="0" x2="0" y2="45" class="fig-rule"/>
+              <ellipse cx="0" cy="55" rx="70" ry="16" fill="var(--copper-soft)" stroke="var(--copper)"/>
+              <text x="0" y="60" text-anchor="middle" class="fig-label">fixed cost of one new ink</text>
+            </g>
+            <!-- right pan: residual saved -->
+            <g transform="translate(180,30)">
+              <line x1="0" y1="0" x2="0" y2="65" class="fig-rule"/>
+              <ellipse cx="0" cy="80" rx="80" ry="20" fill="var(--paper-raised)" stroke="var(--ink)"/>
+              <text x="0" y="76" text-anchor="middle" class="fig-label">error saved,</text>
+              <text x="0" y="90" text-anchor="middle" class="fig-label">across every pixel that would choose it</text>
+            </g>
+            <text x="0" y="-15" text-anchor="middle" class="fig-label-strong">kept only if the right pan is heavier</text>
+          </g>
+        </svg>
+        <figcaption>The fixed cost never changes. What changes is how many pixels the candidate
+          would explain and how far from an alternative they'd otherwise sit — both measured
+          against the noise actually present in this particular image.</figcaption>
+      </figure>
+      <p>The comparison is scaled by how noisy the image is. In a very clean, exact render, even
+        a small colour gap is trustworthy evidence, because there is nothing else that could have
+        caused it. In an image known to have been resampled, upscaled or compressed, the same
+        small gap is much less trustworthy — it could easily be an artefact — so the bar for
+        keeping a nearby candidate separate is raised.</p>
+    </section>
+
+    <section>
+      <h2>Telling a blend from a real pale colour</h2>
+      <p>Every soft edge between two inks produces a ramp of in-between pixels — a coverage
+        blend, not a colour choice. Left unchecked, that ramp would mint its own family of
+        spurious inks. But a genuinely pale, real colour — a pastel pink, say — sits in exactly
+        the same part of colour space as a blend between white and red. Colour position alone
+        cannot tell the two apart. Shape can.</p>
+      <p>An anti-aliasing ramp is a thin band running along a boundary: almost none of its pixels
+        have every neighbour also in the band, because the band is only a pixel or two wide. A
+        real ink, even a small one, covers area — most of its pixels are safely surrounded by more
+        of the same colour. This stage measures exactly that: what fraction of a candidate's
+        pixels are "interior," meaning every neighbour also belongs to it.</p>
+      <figure>
+        <svg viewBox="0 0 640 220" role="img" aria-label="A thin ramp of blend pixels along a boundary compared with a solid patch of real ink, only the solid patch has interior pixels">
+          <text x="20" y="24" class="fig-label-strong">A ramp has no interior. A patch does.</text>
+          <g transform="translate(30,50)">
+            <text x="0" y="-8" class="fig-label">Anti-aliasing ramp (boundary)</text>
+            <g>
+              <rect x="0" y="0" width="26" height="26" fill="var(--ink)"/>
+              <rect x="26" y="0" width="26" height="26" fill="#4b3a26"/>
+              <rect x="52" y="0" width="26" height="26" fill="#a6926f"/>
+              <rect x="78" y="0" width="26" height="26" fill="var(--paper)"/>
+              <rect x="0" y="26" width="26" height="26" fill="var(--ink)"/>
+              <rect x="26" y="26" width="26" height="26" fill="#4b3a26"/>
+              <rect x="52" y="26" width="26" height="26" fill="#a6926f"/>
+              <rect x="78" y="26" width="26" height="26" fill="var(--paper)"/>
+            </g>
+            <text x="0" y="72" class="fig-label" fill="var(--copper)">no pixel is fully surrounded by its own shade</text>
+          </g>
+          <g transform="translate(360,50)">
+            <text x="0" y="-8" class="fig-label">Real pale ink (a patch)</text>
+            <g>
+              <rect x="0" y="0" width="26" height="26" fill="#e3c9c9" stroke="var(--rule)"/>
+              <rect x="26" y="0" width="26" height="26" fill="#e3c9c9" stroke="var(--rule)"/>
+              <rect x="52" y="0" width="26" height="26" fill="#e3c9c9" stroke="var(--rule)"/>
+              <rect x="0" y="26" width="26" height="26" fill="#e3c9c9" stroke="var(--rule)"/>
+              <rect x="26" y="26" width="26" height="26" fill="var(--copper)" stroke="var(--rule)"/>
+              <rect x="52" y="26" width="26" height="26" fill="#e3c9c9" stroke="var(--rule)"/>
+              <rect x="0" y="52" width="26" height="26" fill="#e3c9c9" stroke="var(--rule)"/>
+              <rect x="26" y="52" width="26" height="26" fill="#e3c9c9" stroke="var(--rule)"/>
+              <rect x="52" y="52" width="26" height="26" fill="#e3c9c9" stroke="var(--rule)"/>
+            </g>
+            <text x="0" y="98" class="fig-label" fill="var(--copper)">the centre pixel is surrounded on all sides</text>
+          </g>
+        </svg>
+        <figcaption>Same colour, opposite verdicts — because the question being asked is about
+          shape, not hue.</figcaption>
+      </figure>
+      <p>There is one more wrinkle. A real ink drawn only two or three pixels wide is thin enough
+        that it, too, has almost no fully-surrounded interior — the interior test alone cannot
+        tell it apart from a ramp. For that narrow case, the stage asks one more question: does
+        this colour's neighbourhood actually straddle the two colours it supposedly blends —
+        having, close by, a neighbour clearly nearer one and a neighbour clearly nearer the other?
+        A genuine coverage ramp always does. A real thin stroke of its own colour usually does
+        not: it touches its neighbours on either side but is not caught between them. This
+        distinction was needed after a real case where a stroke's shadow — a thin brown line that
+        happened to be a mathematical mix of the shapes on either side of it — was nearly deleted
+        as if it were only an anti-aliasing artefact.</p>
+    </section>
+
+    <section>
+      <h2>Telling clean input from damaged input</h2>
+      <p>How strict the palette should be depends on where the picture came from. An exact,
+        cleanly rendered image can be trusted down to fine colour differences — if two nearby
+        shades appear, the artist probably meant two shades. A picture that has been resized,
+        blurred, or run through a compressed image format cannot be trusted the same way — its
+        soft edges and its compression ripples both invent colours nobody chose.</p>
+      <p>This stage does not try to guess that from the colours alone; instead it is told,
+        explicitly, by two upstream signals: how wide the picture's edges measure (a resized or
+        blurred image has wider edges than a native render), and what file format the picture was
+        saved in (some compressed formats are known to damage flat areas without widening edges
+        at all — a case documented in the previous stage). Only when one of those signals says
+        "this input is not clean" does the palette loosen its tolerance for near-duplicate
+        colours and the confidence it grants to small colour gaps.</p>
+      <div class="aside">This has to stay conditional rather than always-on. Running the looser,
+        more forgiving settings on a genuinely clean image was measured to cost real quality —
+        about an eleven percent drop on a standard set of test icons — because on clean input a
+        small colour gap really is the artist's choice, and blurring that distinction away throws
+        artwork out along with the artefacts it was meant to catch.</div>
+    </section>
+
+    <section>
+      <h2>What this stage hands forward</h2>
+      <p>The result is a short list of colours — the recovered palette — plus, for each pixel in
+        the picture, which of those colours it has been assigned to. Every later stage builds on
+        top of this decision: the shapes that get outlined, the boundaries that get measured, and
+        the gradients that get fitted are all defined in terms of these inks. Get the count right
+        here, and everything downstream has the right raw material to work with.</p>
+    </section>
+
+  </main>
+  <nav class="stages">
+    <a href="00-overview.html">Overview</a>
+    <a href="01-intake.html">1 Intake</a>
+    <a href="02-coverage.html">2 Coverage</a>
+    <a href="03-palette.html" aria-current="page">3 Palette</a>
+    <a href="04-regions.html">4 Regions</a>
+    <a href="05-gradients.html">5 Gradients</a>
+    <a href="06-planar-map.html">6 Planar map</a>
+    <a href="07-subpixel.html">7 Sub-pixel</a>
+    <a href="08-boundary-solve.html">8 Boundary solve</a>
+    <a href="09-decode.html">9 Decode</a>
+    <a href="10-symmetry.html">10 Symmetry</a>
+    <a href="11-fitting.html">11 Curve fitting</a>
+    <a href="12-repair.html">12 Repair</a>
+    <a href="13-emit.html">13 Emit</a>
+    <a href="constants.md">Constants</a>
+  </nav>
+</div>
+</body>
+</html>

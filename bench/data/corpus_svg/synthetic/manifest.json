@@ -1,0 +1,162 @@
+[
+  {
+    "name": "prim_circle",
+    "category": "primitive",
+    "n_primitives": 1,
+    "has_gradient": false,
+    "symmetry": "rot_inf",
+    "notes": "exact circle"
+  },
+  {
+    "name": "prim_ellipse",
+    "category": "primitive",
+    "n_primitives": 1,
+    "has_gradient": false,
+    "symmetry": "mirror",
+    "notes": "exact ellipse"
+  },
+  {
+    "name": "prim_roundrect",
+    "category": "primitive",
+    "n_primitives": 1,
+    "has_gradient": false,
+    "symmetry": "mirror",
+    "notes": "rounded rect, r=34"
+  },
+  {
+    "name": "prim_rect_rot",
+    "category": "primitive",
+    "n_primitives": 1,
+    "has_gradient": false,
+    "symmetry": "mirror",
+    "notes": "rotated rect, 23deg"
+  },
+  {
+    "name": "prim_star5",
+    "category": "primitive",
+    "n_primitives": 1,
+    "has_gradient": false,
+    "symmetry": "rot5",
+    "notes": "5-fold regular"
+  },
+  {
+    "name": "prim_hex",
+    "category": "primitive",
+    "n_primitives": 1,
+    "has_gradient": false,
+    "symmetry": "rot6",
+    "notes": "6-fold regular"
+  },
+  {
+    "name": "mosaic_pie6",
+    "category": "mosaic",
+    "n_primitives": 6,
+    "has_gradient": false,
+    "symmetry": "rot6",
+    "notes": "6 sectors sharing radial boundaries exactly"
+  },
+  {
+    "name": "mosaic_pie12",
+    "category": "mosaic",
+    "n_primitives": 12,
+    "has_gradient": false,
+    "symmetry": "rot12",
+    "notes": "12 sectors sharing radial boundaries exactly"
+  },
+  {
+    "name": "mosaic_grid4",
+    "category": "mosaic",
+    "n_primitives": 16,
+    "has_gradient": false,
+    "symmetry": "none",
+    "notes": "4x4 jittered grid, shared vertices"
+  },
+  {
+    "name": "mosaic_grid6",
+    "category": "mosaic",
+    "n_primitives": 36,
+    "has_gradient": false,
+    "symmetry": "none",
+    "notes": "6x6 jittered grid, shared vertices"
+  },
+  {
+    "name": "gradient_linear",
+    "category": "gradient",
+    "n_primitives": 1,
+    "has_gradient": true,
+    "symmetry": "none",
+    "notes": "single linear gradient; banding tracers explode here"
+  },
+  {
+    "name": "gradient_radial",
+    "category": "gradient",
+    "n_primitives": 1,
+    "has_gradient": true,
+    "symmetry": "none",
+    "notes": "single radial gradient on a primitive circle"
+  },
+  {
+    "name": "symmetry_rot3",
+    "category": "symmetry",
+    "n_primitives": 3,
+    "has_gradient": false,
+    "symmetry": "rot3",
+    "notes": "3-fold rotational, one path reused via <use>"
+  },
+  {
+    "name": "symmetry_rot5",
+    "category": "symmetry",
+    "n_primitives": 5,
+    "has_gradient": false,
+    "symmetry": "rot5",
+    "notes": "5-fold rotational, one path reused via <use>"
+  },
+  {
+    "name": "symmetry_rot8",
+    "category": "symmetry",
+    "n_primitives": 8,
+    "has_gradient": false,
+    "symmetry": "rot8",
+    "notes": "8-fold rotational, one path reused via <use>"
+  },
+  {
+    "name": "symmetry_mirror",
+    "category": "symmetry",
+    "n_primitives": 2,
+    "has_gradient": false,
+    "symmetry": "mirror",
+    "notes": "exact mirror pair via <use> + scale(-1,1)"
+  },
+  {
+    "name": "thin_features",
+    "category": "hard",
+    "n_primitives": 10,
+    "has_gradient": false,
+    "symmetry": "none",
+    "notes": "strokes 0.6..5.6 user units wide; sub-pixel at small tiers"
+  },
+  {
+    "name": "rings_concentric",
+    "category": "hard",
+    "n_primitives": 10,
+    "has_gradient": false,
+    "symmetry": "rot_inf",
+    "notes": "10 stacked circles; tests boundary spacing and z-order"
+  },
+  {
+    "name": "stack_overlap",
+    "category": "hard",
+    "n_primitives": 3,
+    "has_gradient": false,
+    "symmetry": "none",
+    "notes": "3 overlapping semi-transparent circles; occlusion + alpha"
+  },
+  {
+    "name": "logo_like",
+    "category": "logo",
+    "n_primitives": 4,
+    "has_gradient": true,
+    "symmetry": "mirror",
+    "notes": "gradient panel, concentric counters, rounded corners"
+  }
+]

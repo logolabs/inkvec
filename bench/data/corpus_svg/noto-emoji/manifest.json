@@ -1,0 +1,11 @@
+{
+  "name": "noto-emoji",
+  "repo": "googlefonts/noto-emoji",
+  "ref": "main",
+  "path": "svg",
+  "licence": "Apache-2.0 (code) / CC-BY-4.0 (emoji)",
+  "seed": 7,
+  "limit": 216,
+  "available": 3731,
+  "written": 216
+}

@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Regions — inkvec</title>
+<link rel="stylesheet" href="assets/doc.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="masthead">
+    <p class="eyebrow">Stage 4 of 14</p>
+    <h1>Turning a colour map into a set of shapes</h1>
+    <p class="standfirst">Knowing which colour a pixel is assigned to is not the same as
+      knowing which shape it belongs to. This stage cleans up the label map into a set of
+      solid, single-coloured, correctly separated regions — removing speckle, folding
+      anti-aliasing back into the ink it belongs to, and resolving the one genuine
+      ambiguity a pixel grid can produce.</p>
+    <p class="pairlink">Technical reference: <a href="04-regions.md">04-regions.md</a></p>
+  </header>
+  <main>
+
+    <section>
+      <h2>A colour is not yet a shape</h2>
+      <p>The previous stage decided, pixel by pixel, which of a small set of inks each
+        pixel most resembles. That decision has no notion of shape at all. It does not
+        know that a lone stray pixel is noise rather than a shape of its own. It does not
+        know that a thin ribbon of in-between colour running along a boundary is only the
+        blur of anti-aliasing, not a third ink. It does not know that two blobs of
+        identical colour on opposite sides of the picture are two different objects. And
+        it cannot tell, on its own, whether two shapes that touch at a single pixel corner
+        are one connected mark or two shapes that happen to kiss.</p>
+      <p>This stage answers each of those questions in turn, and hands the next stage a
+        set of connected, single-ink regions it can trust.</p>
+    </section>
+
+    <section>
+      <h2>The sliver problem</h2>
+      <p>Every soft edge between two inks is, in the label map, a thin ribbon of pixels
+        that were each assigned to whichever palette colour they happened to sit nearest —
+        often neither of the two inks actually forming the edge, but some third colour
+        that happens to sit nearby in colour space. Left alone, that ribbon becomes its own
+        skinny region: a sliver, with its own boundary on both sides, running the whole
+        length of every edge in the picture. On one 36-cell test mosaic, leaving slivers
+        unabsorbed turned a scene with a true count of 37 flat regions into 128 separate
+        faces.</p>
+      <p>The fix is not to erase the ribbon, but to ask what mixture of real inks would
+        explain its colour, and give each sliver pixel back to the ink that mixture says it
+        mostly is. A pixel that reads as seventy percent dark outline and thirty percent
+        mid-brown is, physically, an outline pixel — even though, measured by plain colour
+        distance, it might sit nearer the brown.</p>
+      <figure>
+        <svg viewBox="0 0 640 260" role="img" aria-label="A thin ribbon of blend pixels along a boundary shown as its own fragile region before absorption, and folded back into the ink it belongs to afterwards">
+          <text x="20" y="24" class="fig-label-strong">A sliver, before and after absorption</text>
+          <g transform="translate(30,55)">
+            <text x="0" y="-10" class="fig-label">Before — the ribbon is its own region</text>
+            <rect x="0" y="0" width="46" height="46" fill="#2b2622" stroke="var(--rule)"/>
+            <rect x="46" y="0" width="46" height="46" fill="#5c4b3a" stroke="var(--rule)"/>
+            <rect x="92" y="0" width="46" height="46" fill="#a08a6f" stroke="var(--rule)"/>
+            <rect x="138" y="0" width="46" height="46" fill="#cdbfa9" stroke="var(--rule)"/>
+            <rect x="184" y="0" width="46" height="46" fill="#efe9dd" stroke="var(--rule)"/>
+            <rect x="46" y="-6" width="138" height="58" fill="none" stroke="var(--copper)" stroke-width="2" stroke-dasharray="4 3"/>
+            <text x="115" y="70" text-anchor="middle" class="fig-label" fill="var(--copper)">its own thin face, with a boundary on both sides</text>
+          </g>
+          <g transform="translate(30,175)">
+            <text x="0" y="-10" class="fig-label">After — folded back into the ink it mixes with</text>
+            <rect x="0" y="0" width="46" height="46" fill="#2b2622" stroke="var(--rule)"/>
+            <rect x="46" y="0" width="46" height="46" fill="#5c4b3a" stroke="var(--rule)"/>
+            <rect x="92" y="0" width="46" height="46" fill="#a08a6f" stroke="var(--rule)"/>
+            <rect x="138" y="0" width="46" height="46" fill="#cdbfa9" stroke="var(--rule)"/>
+            <rect x="184" y="0" width="46" height="46" fill="#efe9dd" stroke="var(--rule)"/>
+            <rect x="0" y="-6" width="138" height="58" fill="none" stroke="var(--copper)" stroke-width="2"/>
+            <rect x="138" y="-6" width="92" height="58" fill="none" stroke="var(--ink-faint)" stroke-width="2"/>
+            <text x="69" y="70" text-anchor="middle" class="fig-label" fill="var(--copper)">one region, one boundary</text>
+          </g>
+        </svg>
+        <figcaption>The pixel colours never change. What changes is which region each one is
+          filed under — decided by asking which mixture of real inks explains it, not by
+          which single palette colour it happens to sit nearest.</figcaption>
+      </figure>
+      <p>Each candidate sliver is tested against up to three neighbouring inks at once,
+        because a ribbon sitting at a three-way junction, or under a shape that pokes out
+        slightly from beneath another, is a mixture of three colours, not two. A component
+        is only absorbed once at least four fifths of its pixels fit that mixture within a
+        tolerance set from the picture's own measured noise. A second, pixel-by-pixel pass
+        catches the slivers that slip past even this — the case where anti-aliasing between
+        two cells happens to land on a third cell's own colour and fuses into a large
+        region with it, too big to look like a thin ribbon at all.</p>
+      <div class="aside">A genuinely thin real feature — a hairline stroke a single pixel
+        wide — is protected by the same test, not caught by it: its colour does not sit on
+        the line between its neighbours' colours, so it fails the mixture test outright and
+        keeps its own identity.</div>
+    </section>
+
+    <section>
+      <h2>Same colour, different objects</h2>
+      <p>Colour alone cannot tell two separate shapes of the same ink apart. Two dots of
+        identical red on opposite sides of a logo are, to a colour label, indistinguishable
+        — but they are two different marks, and treating them as one region has real
+        consequences beyond tidiness. A region drawn from several disconnected pieces has
+        no single flat colour and no single sensible fill shape; asked to explain the
+        left-over difference between its pieces, the fitting stage further downstream will
+        happily invent a gradient to cover a difference that was never a gradient at all —
+        it was simply two unrelated objects sharing a palette entry.</p>
+      <p>This stage separates every region into its actually-connected pieces before
+        anything else is decided about its fill. Two same-coloured shapes that do not touch
+        become two independent regions, each free to be measured, edited, and filled on its
+        own terms.</p>
+    </section>
+
+    <section>
+      <h2>The one true ambiguity: four pixels at a corner</h2>
+      <p>There is exactly one situation a pixel grid cannot settle by itself. Picture four
+        pixels meeting at a single shared corner, arranged so the two pixels on one
+        diagonal are one ink and the two on the other diagonal are a second ink — a
+        chequerboard corner. Read one way, the two same-coloured pixels are corners of one
+        connected shape that happens to pinch down to nothing at that single point, like an
+        hourglass. Read the other way, they are two separate shapes that simply touch at a
+        point. Nothing in the four pixels themselves says which is true — both readings
+        explain the same four colours equally well.</p>
+      <figure>
+        <svg viewBox="0 0 640 320" role="img" aria-label="Four pixels meeting at one corner, two diagonal readings: one connected bowtie shape, or two shapes that merely touch at a point">
+          <text x="20" y="24" class="fig-label-strong">The chequerboard corner: two equally valid readings</text>
+
+          <g transform="translate(40,50)">
+            <text x="60" y="-10" text-anchor="middle" class="fig-label">The four pixels</text>
+            <rect x="0" y="0" width="60" height="60" fill="#3a3530" stroke="var(--rule)"/>
+            <rect x="60" y="0" width="60" height="60" fill="#cbb89a" stroke="var(--rule)"/>
+            <rect x="0" y="60" width="60" height="60" fill="#cbb89a" stroke="var(--rule)"/>
+            <rect x="60" y="60" width="60" height="60" fill="#3a3530" stroke="var(--rule)"/>
+            <circle cx="60" cy="60" r="4" fill="var(--copper)"/>
+            <text x="60" y="140" text-anchor="middle" class="fig-label">shared corner</text>
+          </g>
+
+          <g transform="translate(300,50)">
+            <text x="75" y="-10" text-anchor="middle" class="fig-label-strong">Reading 1 — one shape, welded</text>
+            <rect x="0" y="0" width="60" height="60" fill="#3a3530" stroke="var(--rule)"/>
+            <rect x="60" y="0" width="60" height="60" fill="#cbb89a" stroke="var(--rule)"/>
+            <rect x="0" y="60" width="60" height="60" fill="#cbb89a" stroke="var(--rule)"/>
+            <rect x="60" y="60" width="60" height="60" fill="#3a3530" stroke="var(--rule)"/>
+            <path d="M 0,0 L 60,0 L 60,60 L 120,60 L 120,120 L 60,120 L 60,60 L 0,60 Z"
+                  fill="none" stroke="var(--copper)" stroke-width="3"/>
+            <circle cx="60" cy="60" r="4" fill="var(--copper)"/>
+            <text x="75" y="145" text-anchor="middle" class="fig-label" fill="var(--copper)">one outline, one point where it pinches to nothing</text>
+          </g>
+
+          <g transform="translate(300,215)">
+            <text x="75" y="-10" text-anchor="middle" class="fig-label-strong">Reading 2 — two shapes touching</text>
+            <rect x="0" y="0" width="60" height="60" fill="#3a3530" stroke="var(--rule)"/>
+            <rect x="60" y="0" width="60" height="60" fill="#cbb89a" stroke="var(--rule)"/>
+            <rect x="0" y="60" width="60" height="60" fill="#cbb89a" stroke="var(--rule)"/>
+            <rect x="60" y="60" width="60" height="60" fill="#3a3530" stroke="var(--rule)"/>
+            <path d="M 0,0 L 58,0 L 58,58 L 0,58 Z" fill="none" stroke="var(--copper)" stroke-width="3"/>
+            <path d="M 62,62 L 120,62 L 120,120 L 62,120 Z" fill="none" stroke="var(--copper)" stroke-width="3"/>
+            <circle cx="58" cy="58" r="3.5" fill="var(--copper)"/>
+            <circle cx="62" cy="62" r="3.5" fill="var(--copper)"/>
+            <text x="75" y="140" text-anchor="middle" class="fig-label" fill="var(--copper)">two outlines, each keeping its own copy of the corner</text>
+          </g>
+        </svg>
+        <figcaption>The pixels are identical in both readings. What differs is a purely
+          topological choice: does one outline pinch shut at the corner, or do two separate
+          outlines each keep their own copy of it, free to move apart later.</figcaption>
+      </figure>
+      <p>This stage resolves the ambiguity by going back to the picture itself, not the
+        label map, and asking how much of each of the two inks actually covers each of the
+        four pixels. Those four coverage fractions are combined into a single estimate of
+        which ink genuinely owns the exact corner point, together with an honest measure of
+        how uncertain that estimate is — carried through from the same pixel noise used
+        throughout the tracer. Only when the reading clears a firm statistical margin is
+        the corner actually merged one way or the other; below that margin, the two
+        readings are indistinguishable and the corner is left exactly as found, neither
+        welded nor split.</p>
+      <p>That caution matters concretely on a real chequerboard pattern — a QR code, a
+        chequered flag — whose corners genuinely sit exactly on the boundary between the
+        two readings, because the two squares really do meet at a single point and neither
+        reading is truer than the other. Forcing a decision there on nothing more than
+        rounding noise was measured to cost real accuracy on one icon on its own.</p>
+      <div class="aside">This corner-merging pass exists in the code but ships switched
+        <b>off</b> by default. Measured on a 246-icon screen set it left the great majority
+        of icons untouched, moved the overall accuracy score very slightly the wrong way,
+        and the handful of icons it made worse trace back to a separate, unresolved
+        interaction with how the final file stacks overlapping shapes — not to the corner
+        reading itself being wrong.</div>
+    </section>
+
+    <section>
+      <h2>What this stage hands forward</h2>
+      <p>The output is a face per connected, single-ink shape: speckle gone, anti-aliasing
+        folded into whichever ink it actually belongs to, disconnected same-coloured shapes
+        told apart, and every four-way corner either resolved with real statistical
+        confidence or left honestly undecided. Everything from here on — fitting a gradient
+        to a region, tracing its boundary, deciding where curves bend — works on this set of
+        faces, not on the raw colour labels underneath it.</p>
+    </section>
+
+  </main>
+  <nav class="stages">
+    <a href="00-overview.html">Overview</a>
+    <a href="01-intake.html">1 Intake</a>
+    <a href="02-coverage.html">2 Coverage</a>
+    <a href="03-palette.html">3 Palette</a>
+    <a href="04-regions.html" aria-current="page">4 Regions</a>
+    <a href="05-gradients.html">5 Gradients</a>
+    <a href="06-planar-map.html">6 Planar map</a>
+    <a href="07-subpixel.html">7 Sub-pixel</a>
+    <a href="08-boundary-solve.html">8 Boundary solve</a>
+    <a href="09-decode.html">9 Decode</a>
+    <a href="10-symmetry.html">10 Symmetry</a>
+    <a href="11-fitting.html">11 Curve fitting</a>
+    <a href="12-repair.html">12 Repair</a>
+    <a href="13-emit.html">13 Emit</a>
+    <a href="constants.md">Constants</a>
+  </nav>
+</div>
+</body>
+</html>

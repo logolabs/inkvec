@@ -1,0 +1,1006 @@
+{
+ "dev": [
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f1f4",
+   "gt_params": 48
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f4e5",
+   "gt_params": 236
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1fa72",
+   "gt_params": 380
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f468_200d_1f469_200d_1f466_200d_1f466",
+   "gt_params": 487
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u270c_1f3fd",
+   "gt_params": 690
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f469_1f3fc_200d_1f33e",
+   "gt_params": 866
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f469_1f3fe_200d_1f9af_200d_27a1",
+   "gt_params": 924
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f469_1f3ff_200d_2764_200d_1f468_1f3fb",
+   "gt_params": 1032
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f3cc_1f3fc",
+   "gt_params": 1174
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f468_200d_1f3a8",
+   "gt_params": 1502
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f3cb_200d_2640",
+   "gt_params": 2148
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f98e",
+   "gt_params": 46488
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f53a",
+   "gt_params": 24
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f685",
+   "gt_params": 106
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f940",
+   "gt_params": 260
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f6bc",
+   "gt_params": 296
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d1-1f3fb-200d-1f9b1",
+   "gt_params": 384
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f939-1f3fe-200d-2640-fe0f",
+   "gt_params": 523
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f638",
+   "gt_params": 624
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d1-1f3ff-200d-1f9af",
+   "gt_params": 796
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f3cb-1f3fb",
+   "gt_params": 1154
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "gradient_radial",
+   "gt_params": 9
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "symmetry_mirror",
+   "gt_params": 26
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "mosaic_grid6",
+   "gt_params": 222
+  }
+ ],
+ "held": [
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f7e2",
+   "gt_params": 48
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f573",
+   "gt_params": 92
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u0030",
+   "gt_params": 108
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u25fc",
+   "gt_params": 118
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u2b05",
+   "gt_params": 156
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f499",
+   "gt_params": 176
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u23f8",
+   "gt_params": 182
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u3030",
+   "gt_params": 220
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f46a",
+   "gt_params": 251
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u2721",
+   "gt_params": 262
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9d1_1f3fe_200d_1f9b2",
+   "gt_params": 276
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u2648",
+   "gt_params": 278
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f3f9",
+   "gt_params": 284
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9e6",
+   "gt_params": 336
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f526",
+   "gt_params": 361
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f3ab",
+   "gt_params": 364
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f4cc",
+   "gt_params": 384
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f955",
+   "gt_params": 412
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f351",
+   "gt_params": 434
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f3cf",
+   "gt_params": 448
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f91c_1f3fe",
+   "gt_params": 450
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f688",
+   "gt_params": 464
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f695",
+   "gt_params": 472
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9ed",
+   "gt_params": 474
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1faf3_1f3fd",
+   "gt_params": 504
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f642_200d_2195",
+   "gt_params": 516
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f6cc_1f3fd",
+   "gt_params": 528
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f648",
+   "gt_params": 554
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f596_1f3fe",
+   "gt_params": 564
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u2618",
+   "gt_params": 646
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f44b_1f3fb",
+   "gt_params": 650
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f44b_1f3fd",
+   "gt_params": 650
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f44d_1f3fc",
+   "gt_params": 722
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f469_200d_1f469_200d_1f467_200d_1f466",
+   "gt_params": 725
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f3d7",
+   "gt_params": 736
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f587",
+   "gt_params": 764
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f469_1f3fd_200d_1f393",
+   "gt_params": 770
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f914",
+   "gt_params": 772
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f64b_1f3fe_200d_2640",
+   "gt_params": 798
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9d1_1f3fc_200d_1f9b1",
+   "gt_params": 818
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f6b6_1f3fd_200d_2642_200d_27a1",
+   "gt_params": 868
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f470_1f3fb_200d_2640",
+   "gt_params": 876
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f470_1f3ff_200d_2640",
+   "gt_params": 876
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9d1_1f3fe_200d_1f9b0",
+   "gt_params": 898
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9cf_1f3fe_200d_2642",
+   "gt_params": 916
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1fac4",
+   "gt_params": 918
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1fac1",
+   "gt_params": 922
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f469_1f3fc_200d_1f9af_200d_27a1",
+   "gt_params": 924
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f938_200d_2640",
+   "gt_params": 930
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f6e9",
+   "gt_params": 936
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f3ad",
+   "gt_params": 960
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f469_1f3ff_200d_2764_200d_1f469_1f3fe",
+   "gt_params": 960
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f64d_1f3fc",
+   "gt_params": 960
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f481_1f3fb",
+   "gt_params": 970
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f645_200d_2640",
+   "gt_params": 974
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f645_200d_2642",
+   "gt_params": 1014
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f468_1f3fe_200d_2764_200d_1f48b_200d_1f468_1f3fe",
+   "gt_params": 1072
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f468_1f3fd_200d_2764_200d_1f468_1f3fe",
+   "gt_params": 1104
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f469_1f3fc_200d_2764_200d_1f48b_200d_1f469_1f3fe",
+   "gt_params": 1104
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9d3",
+   "gt_params": 1114
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f932",
+   "gt_params": 1122
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f478_1f3fd",
+   "gt_params": 1138
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f450_1f3fc",
+   "gt_params": 1140
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9d1_200d_2695",
+   "gt_params": 1150
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1faf1_1f3fc_200d_1faf2_1f3ff",
+   "gt_params": 1202
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f469_1f3fb_200d_2708",
+   "gt_params": 1270
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1faef",
+   "gt_params": 1318
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f3c3_1f3fd_200d_27a1",
+   "gt_params": 1346
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9dd_1f3ff_200d_2640",
+   "gt_params": 1370
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9da_1f3fd_200d_2642",
+   "gt_params": 1404
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9cd_1f3fb",
+   "gt_params": 1408
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f6a3",
+   "gt_params": 1494
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u26f9_1f3fc",
+   "gt_params": 1510
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u26f9_1f3fe",
+   "gt_params": 1510
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f46d_1f3fc",
+   "gt_params": 1574
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9da_1f3fc",
+   "gt_params": 1590
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f93e_1f3fe",
+   "gt_params": 1682
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9e5",
+   "gt_params": 1892
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9d1_1f3fc_200d_2764_200d_1f9d1_1f3fe",
+   "gt_params": 1948
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f6b4_1f3fd",
+   "gt_params": 2096
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f93d_1f3fb_200d_2640",
+   "gt_params": 2194
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9d1_1f3fd_200d_1faef_200d_1f9d1_1f3fb",
+   "gt_params": 2278
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f93c_200d_2640",
+   "gt_params": 2414
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f9d1_1f3fc_200d_1f91d_200d_1f9d1_1f3fd",
+   "gt_params": 2466
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f3c4_1f3fd_200d_2642",
+   "gt_params": 2486
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f3cb_1f3fd",
+   "gt_params": 2590
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1fab4",
+   "gt_params": 3144
+  },
+  {
+   "corpus": "noto-emoji",
+   "stem": "emoji_u1f46f",
+   "gt_params": 3328
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f7eb",
+   "gt_params": 32
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f514",
+   "gt_params": 55
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f565",
+   "gt_params": 62
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f6e1",
+   "gt_params": 62
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f17e",
+   "gt_params": 80
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f515",
+   "gt_params": 87
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f357",
+   "gt_params": 90
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f447-1f3fc",
+   "gt_params": 98
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f1f8",
+   "gt_params": 104
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f501",
+   "gt_params": 108
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f6e5",
+   "gt_params": 120
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f1f1-1f1f7",
+   "gt_params": 138
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f201",
+   "gt_params": 152
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f60d",
+   "gt_params": 156
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f1e8-1f1e6",
+   "gt_params": 176
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-1f3ff-200d-1f9b2",
+   "gt_params": 186
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f348",
+   "gt_params": 234
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f64d-200d-2640-fe0f",
+   "gt_params": 234
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f3c6",
+   "gt_params": 266
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f918",
+   "gt_params": 270
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d4-1f3fd",
+   "gt_params": 270
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d5-1f3fe",
+   "gt_params": 270
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f98d",
+   "gt_params": 274
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9c9",
+   "gt_params": 289
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f343",
+   "gt_params": 292
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f474-1f3fb",
+   "gt_params": 296
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f481-1f3fe-200d-2640-fe0f",
+   "gt_params": 296
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9a8",
+   "gt_params": 309
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f3ca-1f3fb",
+   "gt_params": 318
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f64b-1f3fe-200d-2642-fe0f",
+   "gt_params": 324
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f596-1f3ff",
+   "gt_params": 332
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f468-1f3fd",
+   "gt_params": 356
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f646-1f3fe-200d-2642-fe0f",
+   "gt_params": 358
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f35f",
+   "gt_params": 365
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f647-200d-2640-fe0f",
+   "gt_params": 367
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-1f3fd-200d-2764-fe0f-200d-1f468-1f3fe",
+   "gt_params": 368
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f450-1f3fd",
+   "gt_params": 390
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f471",
+   "gt_params": 394
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f491-1f3fc",
+   "gt_params": 424
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d1-1f3ff-200d-2764-fe0f-200d-1f9d1-1f3fb",
+   "gt_params": 424
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f926-1f3ff-200d-2642-fe0f",
+   "gt_params": 462
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-1f3fd-200d-2764-fe0f-200d-1f48b-200d-1f469-1f3fb",
+   "gt_params": 500
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f486-200d-2642-fe0f",
+   "gt_params": 516
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-1f3ff-200d-1f4bc",
+   "gt_params": 522
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d1-1f3fd-200d-2764-fe0f-200d-1f48b-200d-1f9d1-1f3ff",
+   "gt_params": 528
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-1f3fc-200d-2764-fe0f-200d-1f48b-200d-1f468-1f3fc",
+   "gt_params": 530
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9b8-1f3ff-200d-2640-fe0f",
+   "gt_params": 536
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d1-1f3ff-200d-1f692",
+   "gt_params": 552
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-1f3fc-200d-1f9b1",
+   "gt_params": 556
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d1-1f3fd-200d-2696-fe0f",
+   "gt_params": 556
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f993",
+   "gt_params": 572
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d6-1f3fc",
+   "gt_params": 588
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d1-1f3ff-200d-1f680",
+   "gt_params": 602
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f6b4-1f3fb-200d-2642-fe0f",
+   "gt_params": 632
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f468-200d-1f4bc",
+   "gt_params": 646
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f468-1f3fd-200d-1f373",
+   "gt_params": 670
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d1-1f3ff-200d-1f37c",
+   "gt_params": 670
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f468-1f3fe-200d-2708-fe0f",
+   "gt_params": 722
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9c7",
+   "gt_params": 728
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f46e-200d-2640-fe0f",
+   "gt_params": 744
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-1f3fc-200d-1f37c",
+   "gt_params": 750
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d8-1f3fe",
+   "gt_params": 762
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f468-1f3fd-200d-1f9af-200d-27a1-fe0f",
+   "gt_params": 819
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f469-1f3fd-200d-1f9af-200d-27a1-fe0f",
+   "gt_params": 835
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f3c4",
+   "gt_params": 860
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f1f9-1f1e8",
+   "gt_params": 908
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f468-1f3fb-200d-1f91d-200d-1f468-1f3fd",
+   "gt_params": 940
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f9d1-1f3fb-200d-1faef-200d-1f9d1-1f3fd",
+   "gt_params": 953
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f468-1f3fb-200d-1faef-200d-1f468-1f3fd",
+   "gt_params": 981
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f468-1f3fe-200d-1faef-200d-1f468-1f3fb",
+   "gt_params": 981
+  },
+  {
+   "corpus": "twemoji",
+   "stem": "1f57a-1f3fb",
+   "gt_params": 1016
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "prim_circle",
+   "gt_params": 9
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "prim_ellipse",
+   "gt_params": 10
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "gradient_linear",
+   "gt_params": 12
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "prim_rect_rot",
+   "gt_params": 12
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "prim_roundrect",
+   "gt_params": 12
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "stack_overlap",
+   "gt_params": 15
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "prim_hex",
+   "gt_params": 16
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "logo_like",
+   "gt_params": 24
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "prim_star5",
+   "gt_params": 24
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "rings_concentric",
+   "gt_params": 36
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "symmetry_rot3",
+   "gt_params": 36
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "symmetry_rot5",
+   "gt_params": 48
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "mosaic_pie6",
+   "gt_params": 60
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "symmetry_rot8",
+   "gt_params": 66
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "thin_features",
+   "gt_params": 66
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "mosaic_grid4",
+   "gt_params": 102
+  },
+  {
+   "corpus": "synthetic",
+   "stem": "mosaic_pie12",
+   "gt_params": 114
+  }
+ ]
+}

@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Planar map — inkvec</title>
+<link rel="stylesheet" href="assets/doc.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="masthead">
+    <p class="eyebrow">Stage 6 of 14</p>
+    <h1>Storing a shared border once, not twice</h1>
+    <p class="standfirst">When two regions touch, there are two easy ways to draw the line
+      between them, and both are wrong: draw it twice and the two copies can drift apart
+      into a hairline gap, or overlap the shapes and the same geometry gets painted twice.
+      This stage stores every shared boundary exactly once, so neither failure is possible.</p>
+    <p class="pairlink">Technical reference: <a href="06-planar-map.md">06-planar-map.md</a></p>
+  </header>
+  <main>
+
+    <section>
+      <h2>A choice most tracers do not get to avoid</h2>
+      <p>Picture two regions of a logo sitting side by side — say, a light shape and a dark
+        shape sharing an edge. A tracer that stores each shape as its own independent
+        outline has to decide what happens exactly on that shared edge, and the obvious
+        approaches both fail in visible ways:</p>
+      <div class="plain">
+        <h3>Lay them edge to edge</h3>
+        <p>Each shape gets its own copy of the boundary. The two copies are computed
+          separately, rounded separately, and simplified separately — so they hardly ever
+          agree to the last fraction of a pixel. The result is a hairline seam: a sliver of
+          background showing through exactly where two shapes were meant to meet with no
+          gap at all.</p>
+      </div>
+      <div class="plain">
+        <h3>Overlap them slightly</h3>
+        <p>Hide the seam by letting the two shapes overlap by a hair. Now there is no gap —
+          but the same strip of geometry is drawn twice, once by each shape, which is
+          wasteful, and an edit to move or reshape that boundary now has to be made twice,
+          in two different places, or the two copies drift out of sync again.</p>
+      </div>
+      <p>A widely used tracer, measured against this project's own baseline, was found to
+        sit squarely on that second failure: its output redraws 1.64 times as much geometry
+        as the picture actually needs, against a ground truth of 1.00, and its seams grow
+        2.4 times worse between a normal view and a four-times zoom.</p>
+    </section>
+
+    <section>
+      <h2>Store the border once, and let both sides point to it</h2>
+      <p>This stage sidesteps the choice entirely. A boundary between two regions is stored
+        as a single piece of geometry, and both of the regions that touch it simply refer
+        to that same piece by name, one calling it "my edge, walked forward" and the other
+        "my edge, walked backward." There is only ever one copy of the line itself.</p>
+      <figure>
+        <svg viewBox="0 0 640 260" role="img" aria-label="Three regions meeting at a point, with each shared border stored once and referenced by both faces on either side of it">
+          <text x="20" y="24" class="fig-label-strong">Three regions, three borders, each stored once</text>
+          <g transform="translate(220,140)">
+            <path d="M -160,-90 L 0,0 L -160,90 Z" fill="#3a3530" stroke="none"/>
+            <path d="M 160,-90 L 0,0 L 160,90 Z" fill="#cbb89a" stroke="none"/>
+            <path d="M -160,-90 L 160,-90 L 0,0 Z" fill="#7a624a" stroke="none"/>
+            <path d="M -160,-90 L 0,0" stroke="var(--copper)" stroke-width="3" fill="none"/>
+            <path d="M 0,0 L 160,-90" stroke="var(--copper)" stroke-width="3" fill="none"/>
+            <path d="M -160,90 L 0,0 L 160,90" stroke="var(--copper)" stroke-width="3" fill="none"/>
+            <circle cx="0" cy="0" r="4.5" fill="var(--copper)"/>
+            <text x="-110" y="-105" class="fig-label">region A</text>
+            <text x="60" y="-105" class="fig-label">region B</text>
+            <text x="-40" y="55" class="fig-label">region C</text>
+            <text x="-95" y="-40" class="fig-label" fill="var(--copper)">one edge, A and C both point to it</text>
+          </g>
+        </svg>
+        <figcaption>Each line between two colours here is one object in memory, indexed
+          once. Face A knows it borders that edge on one side; face C knows it borders the
+          same edge, the same object, on the other. Move the edge and both faces move with
+          it, automatically, because there is nothing else to keep in sync.</figcaption>
+      </figure>
+      <p>The gain is structural, not a matter of careful rounding. A seam becomes something
+        that cannot be represented at all, rather than something that is merely rare — and
+        overdraw is exactly one copy of every boundary, by construction, not by tuning any
+        threshold after the fact.</p>
+    </section>
+
+    <section>
+      <h2>What a seam looks like when the guarantee is missing</h2>
+      <p>It is worth seeing the failure this stage removes, concretely, to see why storing
+        the border once is worth the extra bookkeeping.</p>
+      <figure>
+        <svg viewBox="0 0 640 220" role="img" aria-label="A hairline seam appearing where two independently rounded copies of the same boundary fail to agree exactly">
+          <text x="20" y="24" class="fig-label-strong">Two copies of one boundary, rounded independently</text>
+          <g transform="translate(60,55)">
+            <path d="M 0,10 Q 90,-10 200,20 L 200,110 Q 90,90 0,120 Z" fill="#3a3530"/>
+          </g>
+          <g transform="translate(60,55)">
+            <path d="M 200,20 Q 92,-6 200,10 L 260,10 L 260,120 L 200,110 Q 92,86 200,120 Z"
+                  fill="#cbb89a" fill-rule="evenodd"/>
+          </g>
+          <text x="290" y="120" class="fig-label" fill="var(--copper)">a hairline gap along the seam —</text>
+          <text x="290" y="138" class="fig-label" fill="var(--copper)">the two copies do not quite agree</text>
+        </svg>
+        <figcaption>Exaggerated for clarity: two shapes, each carrying its own separately
+          rounded copy of what should be the same line, disagree by a fraction of a pixel
+          along its length. Stored once, that disagreement has nowhere to come from.</figcaption>
+      </figure>
+    </section>
+
+    <section>
+      <h2>Topology first, position later</h2>
+      <p>This stage decides only who is adjacent to whom, reading that directly off the
+        exact grid of integer region labels the previous stage produced. It does not yet
+        decide exactly where, to sub-pixel precision, each boundary sits — that comes in the
+        next stage. This ordering is deliberate: because moving a point cannot change which
+        two faces it separates, later stages are free to refine a boundary's exact position
+        as precisely as the picture supports, without ever risking a shape suddenly
+        belonging to the wrong neighbour.</p>
+    </section>
+
+    <section>
+      <h2>The one genuine ambiguity, resolved once, upstream</h2>
+      <p>There is exactly one situation where "who is adjacent to whom" is not obvious from
+        the label grid alone: four regions meeting at a single shared corner, where the two
+        diagonally opposite ones happen to be the very same shape. Read one way, that shape
+        pinches to a single point there and reopens — a bowtie. Read the other way, two
+        separate shapes simply touch at a point. Whichever reading is correct is decided
+        earlier in the pipeline, by looking at the actual picture rather than the labels; by
+        the time this stage runs, it treats that decision as already made and simply keeps
+        the corner as an ordinary meeting point whenever four different shapes are honestly
+        present. What it does guard against unconditionally is the geometric consequence of
+        the bowtie reading: welding two arms of one shape at a single point produces
+        exactly one shared location for what should be two independently movable corners,
+        and no later stage could ever separate them again once that has happened.</p>
+      <div class="aside">This is why the ambiguous four-way corner is handled here, before
+        any curve is fitted and before any point moves off the pixel grid: once two corners
+        have been welded into one, nothing downstream can tell that a mistake was made.</div>
+    </section>
+
+    <section>
+      <h2>What this stage hands forward</h2>
+      <p>The result is a structure of faces and shared boundary pieces in which every line
+        in the picture is represented exactly once, referenced by every region that borders
+        it. Every later stage — moving points to their true sub-pixel position, fitting
+        curves, checking for symmetry, writing the final file — works on this shared
+        structure, which is precisely what keeps two sides of one boundary from ever being
+        able to drift apart.</p>
+    </section>
+
+  </main>
+  <nav class="stages">
+    <a href="00-overview.html">Overview</a>
+    <a href="01-intake.html">1 Intake</a>
+    <a href="02-coverage.html">2 Coverage</a>
+    <a href="03-palette.html">3 Palette</a>
+    <a href="04-regions.html">4 Regions</a>
+    <a href="05-gradients.html">5 Gradients</a>
+    <a href="06-planar-map.html" aria-current="page">6 Planar map</a>
+    <a href="07-subpixel.html">7 Sub-pixel</a>
+    <a href="08-boundary-solve.html">8 Boundary solve</a>
+    <a href="09-decode.html">9 Decode</a>
+    <a href="10-symmetry.html">10 Symmetry</a>
+    <a href="11-fitting.html">11 Curve fitting</a>
+    <a href="12-repair.html">12 Repair</a>
+    <a href="13-emit.html">13 Emit</a>
+    <a href="constants.md">Constants</a>
+  </nav>
+</div>
+</body>
+</html>

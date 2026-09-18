@@ -1,0 +1,75 @@
+name: Bug report
+description: Something is wrong with a trace, a build, or the CLI itself.
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. The more of this you can fill in, the faster it is
+        to reproduce.
+
+  - type: input
+    id: version
+    attributes:
+      label: Inkvec version
+      description: Output of `inkvec --version`.
+      placeholder: "inkvec 0.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "e.g. Windows 11, Ubuntu 24.04, macOS 15 (Apple Silicon)"
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Command line
+      description: The exact `inkvec` invocation (or library call) that shows the problem.
+      render: shell
+      placeholder: "inkvec logo.png -o logo.svg --restore auto"
+    validations:
+      required: true
+
+  - type: textarea
+    id: input-image
+    attributes:
+      label: Input image
+      description: >
+        Attach the input image if you can (drag and drop into this box), or describe it
+        precisely if you cannot share it (dimensions, format, roughly what it depicts,
+        whether it is a photograph, icon, logo, or line art).
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead. Include the full error message or stage log if there is one.
+    validations:
+      required: true
+
+  - type: textarea
+    id: svg
+    attributes:
+      label: Output SVG
+      description: If Inkvec produced an SVG but it is wrong, attach it (or a minimal excerpt) here.
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Feature flags used to build, other flags passed, anything else that might matter.

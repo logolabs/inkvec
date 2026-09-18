@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Decode — inkvec</title>
+<link rel="stylesheet" href="assets/doc.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="masthead">
+    <p class="eyebrow">Stage 9 of 14</p>
+    <h1>Reading a shape backwards, on purpose</h1>
+    <p class="standfirst">For most of the artwork, the tracer builds a boundary first and
+      decides how simple a shape it turned into afterwards. For one narrow, awkward class
+      of shape — a stroke or ribbon too thin to have ever shown its true colour to the
+      camera — this stage does the opposite: guess the shape's basic form first, then
+      solve for its exact position and colour together. It is switched off by default, and
+      this page explains both why it exists and why it stays off.</p>
+    <p class="pairlink">Technical reference: <a href="09-decode.md">09-decode.md</a></p>
+  </header>
+  <main>
+
+    <section>
+      <h2>The problem: a stroke that never showed its true colour</h2>
+      <p>Every pixel a very thin stroke touches is a blend — part ink, part background —
+        because the stroke is narrower than a single pixel of the picture, so no pixel
+        ever sits entirely inside it. That is a genuine limit, not a processing mistake:
+        looking harder at those pixels cannot recover information that was never recorded.
+        A method that reads a stroke's colour off its "most solid-looking" pixel will read
+        something too pale, too washed out, biased toward the background — because that is
+        genuinely the truest thing any single pixel can honestly report.</p>
+      <p>The rest of the tracer builds the stroke's outline first, using that
+        too-pale colour, and only afterwards asks how many little curved segments it takes
+        to draw that outline. On an ordinary shape this order works well. On a thin stroke
+        it can go wrong twice over: the colour is biased from the start, and the outline —
+        chasing tiny, spurious wiggles in a blend that was never very informative to begin
+        with — can end up needing far more little segments than the stroke actually
+        deserves.</p>
+      <figure>
+        <svg viewBox="0 0 640 260" role="img" aria-label="A thin stroke drawn as many small wobbly arcs versus the same stroke recovered as a single clean quadrilateral">
+          <text x="20" y="24" class="fig-label-strong">The same stroke, described two ways</text>
+          <g transform="translate(20,50)">
+            <text x="0" y="0" class="fig-label">Outline-first: many small arcs chasing noise</text>
+            <rect x="0" y="14" width="280" height="150" fill="none" stroke="var(--rule)"/>
+            <path d="M 30,140 C 45,120 40,110 55,95 C 70,85 60,75 80,65
+                     C 95,55 90,45 110,35 C 130,25 150,30 165,25
+                     L 178,38 C 160,42 145,50 128,60 C 112,70 118,80 100,92
+                     C 85,102 90,112 72,122 C 58,132 62,140 45,150 Z"
+                  fill="var(--copper)" opacity="0.5" stroke="var(--copper)" stroke-width="1.5"/>
+            <text x="140" y="175" text-anchor="middle" class="fig-label" fill="var(--ink-soft)">fifteen short curved pieces</text>
+          </g>
+          <g transform="translate(340,50)">
+            <text x="0" y="0" class="fig-label">Order-first: one width, one colour, one quadrilateral</text>
+            <rect x="0" y="14" width="280" height="150" fill="none" stroke="var(--rule)"/>
+            <path d="M 40,145 L 65,90 L 240,35 L 215,90 Z"
+                  fill="var(--copper)" opacity="0.75" stroke="var(--ink)" stroke-width="2"/>
+            <text x="140" y="175" text-anchor="middle" class="fig-label" fill="var(--ink-soft)">four points, exact colour</text>
+          </g>
+        </svg>
+        <figcaption>Both drawings can render to very similar pixels. One writes down
+          fifteen curved pieces and a wrong colour; the other writes down four points and
+          the true colour. This stage looks for the second answer, on the shapes narrow
+          enough to need it.</figcaption>
+        </figure>
+    </section>
+
+    <section>
+      <h2>Reading the shape backwards</h2>
+      <p>This stage inverts the usual order. Instead of building a free-form outline and
+        then simplifying it, it starts by guessing how simple the shape's basic form
+        probably is — is this a four-sided ribbon? A five-sided cap? — proposes a handful
+        of such guesses, and only <em>then</em> works out the best position, size and
+        colour for each guess. Finally it compares the guesses against each other, and
+        against what the tracer would otherwise have drawn, and keeps whichever answer is
+        genuinely both more accurate <em>and</em> no more complicated to write down. If
+        nothing beats what was already there, nothing changes.</p>
+      <p>There is a real piece of mathematics behind why this works, not just intuition.
+        A shape's outline, seen through a slightly blurry lens — which is exactly what a
+        camera or a renderer does to it — behaves like a small number of point sources of
+        light seen through a telescope that cannot quite resolve them individually. That
+        is the same mathematical territory as "super-resolution" imaging: recovering a
+        small number of precise facts (here, the corners of a shape) from a signal that
+        has been smoothed just enough to hide them at first glance. Committing to the
+        <em>number</em> of corners first, rather than discovering it by trial and error
+        afterwards, is what makes that recovery tractable.</p>
+    </section>
+
+    <section>
+      <h2>A genuine, provable ambiguity</h2>
+      <p>Not every case can be solved, and the project's own measurements are candid about
+        the ones that cannot. A very thin stroke laid exactly along the pixel grid — dead
+        horizontal or dead vertical, not tilted even slightly — presents every pixel it
+        touches with exactly the same amount of information, over and over. In that exact
+        situation, the picture genuinely cannot distinguish a faint, wide stroke from a
+        dark, narrow one: both can produce pixel-for-pixel identical results. This is not
+        a limitation of the current solver that a cleverer one might someday overcome —
+        it is a fact about what the picture contains, provable rather than merely
+        observed. Tilt that same stroke by a single degree, and the ambiguity vanishes,
+        because now different pixels along its length see slightly different sub-pixel
+        positions and the picture does contain enough information after all.</p>
+      <div class="aside">One promising idea, tried and set aside: if several strokes in
+        the same picture are known to share one pen — one consistent width — then pooling
+        them together can, in principle, break this ambiguity, because different strokes
+        sit at different sub-pixel offsets even when each one alone does not. The
+        mathematics behind that idea checks out. But by the time this stage sees the
+        picture, an earlier stage has already committed each pixel to one shape or
+        another, which quietly pins the stroke's width down on its own — so there is
+        nothing left for the pooling idea to add, in this particular pipeline, as it
+        stands today. The idea is kept in the code, switched off, in case a future change
+        to that earlier commitment reopens the opportunity.</div>
+    </section>
+
+    <section>
+      <h2>Care with shared edges</h2>
+      <p>A shape's boundary in this tracer is never drawn twice — the same edge is shared
+        by the two regions on either side of it, which is what keeps seams from opening up
+        between adjacent shapes elsewhere in the picture. That means this stage has to be
+        careful never to simply throw away an old outline and replace it with a new one:
+        doing so could silently move a boundary that a neighbouring shape is also relying
+        on.</p>
+      <p>The rule it follows: any point where three or more shapes meet is held perfectly
+        fixed, never moved by this stage at all. Only the points in between two such
+        meeting points — points that belong to exactly one edge, shared with exactly one
+        neighbour — are free to move. Because of how the boundary bookkeeping works, that
+        guarantees every neighbouring shape still sees a boundary that matches its own
+        copy exactly, without needing any separate clean-up step afterwards.</p>
+    </section>
+
+    <section>
+      <h2>Why this ships switched off</h2>
+      <p>Measured across the project's full test set of icons, turning this stage on made
+        almost no difference at all — a change of two hundredths of one percent, with a
+        small number of icons better and a similarly small number worse. That is not a
+        result the project's own rule ("if it does not clearly help, do not ship it")
+        allows shipping as the default.</p>
+      <p>The explanation is one of the more interesting findings behind these docs. A
+        separate measurement split every icon's remaining error into "inside a flat area
+        of colour" versus "right at a boundary between two colours." For most families of
+        icons the flat interiors turned out to be essentially perfect already — the fills
+        the earlier stages chose were almost exactly right — and just about all of the
+        remaining error sat in a thin band right along each boundary. A further, separate
+        measurement then estimated how far off those boundaries actually were, in real
+        distance rather than in colour-error units, by artificially nudging a set of known
+        correct outlines by small known amounts and seeing how much colour error that
+        produced. The answer: the boundaries this tracer draws are already accurate to
+        somewhere between a fiftieth and a twentieth of a pixel.</p>
+      <div class="aside">In plain terms: the boundaries are already about as good as they
+        can usefully be, for the way accuracy is measured here. This stage exists to fix
+        thin-stroke colour and shape more thoroughly than a boundary-only fix ever could —
+        and it does that correctly, on the cases built specifically to demonstrate it —
+        but those cases are rare across real artwork, at roughly six shapes in a hundred,
+        so the corpus-wide win is small enough to be lost in the noise of the handful of
+        icons that get slightly worse. It stays available, behind a setting, for exactly
+        the pictures where it matters.</div>
+    </section>
+
+    <section>
+      <h2>What is actually left to fix</h2>
+      <p>Once boundaries are ruled out as the main source of remaining error, the same
+        investigation followed the trail further and found where the error was really
+        concentrated: not in shading that needed a smoother gradient, but in patches where
+        two genuinely different flat colours had been merged into one by an earlier stage.
+        Fitting those patches with two flat colours instead of one recovered roughly two
+        thirds of the remaining error there, against about one eighth for trying a smoother
+        gradient instead. That result pointed the project's next piece of work away from
+        boundaries and toward colour-splitting — a different, upstream problem to this
+        stage, not a reason to change this one.</p>
+    </section>
+
+  </main>
+  <nav class="stages">
+    <a href="00-overview.html">Overview</a>
+    <a href="01-intake.html">1 Intake</a>
+    <a href="02-coverage.html">2 Coverage</a>
+    <a href="03-palette.html">3 Palette</a>
+    <a href="04-regions.html">4 Regions</a>
+    <a href="05-gradients.html">5 Gradients</a>
+    <a href="06-planar-map.html">6 Planar map</a>
+    <a href="07-subpixel.html">7 Sub-pixel</a>
+    <a href="08-boundary-solve.html">8 Boundary solve</a>
+    <a href="09-decode.html" aria-current="page">9 Decode</a>
+    <a href="10-symmetry.html">10 Symmetry</a>
+    <a href="11-fitting.html">11 Curve fitting</a>
+    <a href="12-repair.html">12 Repair</a>
+    <a href="13-emit.html">13 Emit</a>
+    <a href="constants.md">Constants</a>
+  </nav>
+</div>
+</body>
+</html>

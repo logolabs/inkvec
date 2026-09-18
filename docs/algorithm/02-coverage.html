@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coverage — inkvec</title>
+<link rel="stylesheet" href="assets/doc.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="masthead">
+    <p class="eyebrow">Stage 2 of 14</p>
+    <h1>Reading a fuzzy edge as a measurement</h1>
+    <p class="standfirst">A pixel sitting on the edge of a shape is not blurry, and it is not
+      noise. It is a precise report of how much of that pixel the shape covers — and this stage
+      reads that report, including how much to trust it.</p>
+    <p class="pairlink">Technical reference: <a href="02-coverage.md">02-coverage.md</a></p>
+  </header>
+  <main>
+
+    <section>
+      <h2>The edge is not fuzzy. It is measured.</h2>
+      <p>Zoom into any smooth curve rendered by a computer and the pixels along its edge are
+        never fully the shape's colour or fully the background's. They sit in between — a dark
+        grey between black ink and white paper, say. It is tempting to treat that in-between
+        pixel as noise: round it up if it is dark enough, round it down if it is not, and get on
+        with finding the edge.</p>
+      <p>That throws away the most useful number in the whole image. A pixel that is 70% covered
+        by the shape and one that is 30% covered are reporting two different, precise facts about
+        exactly where the edge crosses that pixel — not two shades of "probably an edge here."
+        Rounding either one to solid or empty erases the difference between them. This stage does
+        the opposite: it recovers the fraction, treats it as a real measurement of coverage, and
+        — just as importantly — works out how confident that measurement is.</p>
+    </section>
+
+    <section>
+      <h2>Recovering the fraction</h2>
+      <p>Every pixel touched by an edge is a blend of two colours: the shape's ink and whatever
+        sits behind it. If the shape's colour and the background colour are both known, an
+        in-between pixel's colour pins down exactly what fraction of it the shape covers — the
+        same way knowing a paint is a mix of white and red lets you work out the ratio just by
+        looking at how pink it is.</p>
+      <figure>
+        <svg viewBox="0 0 640 200" role="img" aria-label="A pixel row crossing a curved edge, each pixel shaded by how much of it the shape covers">
+          <text x="20" y="24" class="fig-label-strong">A row of pixels crossing an edge</text>
+          <!-- grid of 10 pixels -->
+          <g transform="translate(20,50)">
+            <!-- pixel cells -->
+            <rect x="0" y="0" width="52" height="52" fill="var(--paper)" stroke="var(--rule)"/>
+            <rect x="52" y="0" width="52" height="52" fill="var(--paper)" stroke="var(--rule)"/>
+            <rect x="104" y="0" width="52" height="52" fill="#e7ded4" stroke="var(--rule)"/>
+            <rect x="156" y="0" width="52" height="52" fill="#c9b9a4" stroke="var(--rule)"/>
+            <rect x="208" y="0" width="52" height="52" fill="#a6926f" stroke="var(--rule)"/>
+            <rect x="260" y="0" width="52" height="52" fill="#7a6244" stroke="var(--rule)"/>
+            <rect x="312" y="0" width="52" height="52" fill="#4b3a26" stroke="var(--rule)"/>
+            <rect x="364" y="0" width="52" height="52" fill="var(--ink)" stroke="var(--rule)"/>
+            <rect x="416" y="0" width="52" height="52" fill="var(--ink)" stroke="var(--rule)"/>
+            <rect x="468" y="0" width="52" height="52" fill="var(--ink)" stroke="var(--rule)"/>
+            <!-- coverage fractions -->
+            <text x="26" y="72" text-anchor="middle" class="fig-label">0%</text>
+            <text x="78" y="72" text-anchor="middle" class="fig-label">0%</text>
+            <text x="130" y="72" text-anchor="middle" class="fig-label">12%</text>
+            <text x="182" y="72" text-anchor="middle" class="fig-label">31%</text>
+            <text x="234" y="72" text-anchor="middle" class="fig-label">48%</text>
+            <text x="286" y="72" text-anchor="middle" class="fig-label">67%</text>
+            <text x="338" y="72" text-anchor="middle" class="fig-label">85%</text>
+            <text x="390" y="72" text-anchor="middle" class="fig-label">100%</text>
+            <text x="442" y="72" text-anchor="middle" class="fig-label">100%</text>
+            <text x="494" y="72" text-anchor="middle" class="fig-label">100%</text>
+            <!-- true edge curve overlay -->
+            <path d="M 0,26 C 120,26 150,-10 260,26 S 420,26 520,26" fill="none" class="fig-accent-stroke" stroke-width="2" stroke-dasharray="4 3"/>
+            <text x="0" y="90" class="fig-label" fill="var(--copper)">— the true edge, which this stage never sees directly</text>
+          </g>
+        </svg>
+        <figcaption>Nobody supplies the dashed line. It is <b>inferred</b> from the coverage
+          percentages, which come straight from how dark each pixel is between the paper colour
+          and the ink colour.</figcaption>
+      </figure>
+      <p>The maths behind this uses all three colour channels — red, green and blue together —
+        rather than reducing everything to a single brightness value first. That matters for
+        coloured edges: a boundary between two saturated colours of similar brightness would be
+        invisible to a brightness-only method but is perfectly readable when all three channels
+        are used.</p>
+    </section>
+
+    <section>
+      <h2>The number that matters more: how sure are we?</h2>
+      <p>Recovering the coverage fraction is only half the job. The harder, and more useful, half
+        is working out how much to trust each fraction — because not every edge is measured
+        equally well.</p>
+      <p>Two things make a boundary hard to pin down precisely:</p>
+      <ul>
+        <li><b>Low contrast.</b> A dark grey line on black paper and a black line on white paper
+          might both be one pixel wide, but the grey-on-black edge is measured far less
+          precisely: the same amount of sensor noise represents a much bigger swing in
+          "coverage" when the two colours are close together than when they are far apart.</li>
+        <li><b>A gentle, spread-out transition.</b> If the colour changes gradually over several
+          pixels rather than sharply over one, there is a wider range of positions the true edge
+          could plausibly sit at.</li>
+      </ul>
+      <figure>
+        <svg viewBox="0 0 640 230" role="img" aria-label="Two edges compared: a crisp high-contrast edge is located precisely, a soft low-contrast edge is located loosely">
+          <text x="20" y="22" class="fig-label-strong">Same edge, two very different confidences</text>
+          <g transform="translate(20,45)">
+            <text x="0" y="0" class="fig-label">Crisp, high contrast</text>
+            <rect x="0" y="10" width="120" height="40" fill="var(--paper)" stroke="var(--rule)"/>
+            <rect x="120" y="10" width="10" height="40" fill="#9a9186" stroke="var(--rule)"/>
+            <rect x="130" y="10" width="120" height="40" fill="var(--ink)" stroke="var(--rule)"/>
+            <rect x="122" y="0" width="16" height="60" fill="none" stroke="var(--copper)" stroke-width="2"/>
+            <text x="130" y="70" text-anchor="middle" class="fig-label" fill="var(--copper)">located to within ~a tenth of a pixel</text>
+          </g>
+          <g transform="translate(20,140)">
+            <text x="0" y="0" class="fig-label">Soft, low contrast</text>
+            <rect x="0" y="10" width="90" height="40" fill="var(--paper)" stroke="var(--rule)"/>
+            <rect x="90" y="10" width="18" height="40" fill="#efece7" stroke="var(--rule)"/>
+            <rect x="108" y="10" width="18" height="40" fill="#e6e1d9" stroke="var(--rule)"/>
+            <rect x="126" y="10" width="18" height="40" fill="#ddd6cb" stroke="var(--rule)"/>
+            <rect x="144" y="10" width="18" height="40" fill="#d4cbbd" stroke="var(--rule)"/>
+            <rect x="162" y="10" width="18" height="40" fill="#cbc0af" stroke="var(--rule)"/>
+            <rect x="180" y="10" width="70" height="40" fill="#c2b5a1" stroke="var(--rule)"/>
+            <rect x="80" y="0" width="180" height="60" fill="none" stroke="var(--copper)" stroke-width="2"/>
+            <text x="170" y="70" text-anchor="middle" class="fig-label" fill="var(--copper)">could be anywhere across several pixels</text>
+          </g>
+        </svg>
+        <figcaption>Same physical distance, opposite confidence. This stage measures that
+          difference explicitly, in pixels, for every point on every boundary.</figcaption>
+      </figure>
+      <p>Both effects are combined into a single number: a positional uncertainty, in pixels, for
+        every point on every boundary. A crisp, high-contrast edge might carry an uncertainty of
+        a few hundredths of a pixel. A soft, low-contrast one might carry an uncertainty of a
+        whole pixel or more.</p>
+    </section>
+
+    <section>
+      <h2>Why this is the single most important idea in the project</h2>
+      <p>Later stages need to decide how many points to spend describing each boundary — a
+        circle drawn with four points looks polygonal; one drawn with four hundred is wasteful.
+        The obvious approach is a separate rule: "simplify more on boring bits, less on important
+        ones." That is a heuristic, and heuristics need tuning and second-guessing.</p>
+      <p>This project does not need that rule, because the confidence number already says it. A
+        boundary point measured with a large uncertainty is, by definition, a place where extra
+        precision would be pretending to know something nobody knows. So the curve-fitting stage
+        simply asks each point to stay within its own measured uncertainty, and the simplification
+        falls out for free: it is loose exactly where the measurement was loose, and tight exactly
+        where it was tight. Nothing downstream has to separately decide "this part doesn't
+        matter" — the coverage stage already said so, honestly, as part of taking the
+        measurement.</p>
+      <div class="aside">A faint boundary is measured badly, and the number this stage produces
+        <b>says so</b> — rather than confidently reporting a precise position that happens to be
+        wrong.</div>
+    </section>
+
+    <section>
+      <h2>When there is nothing to measure against</h2>
+      <p>The whole method depends on knowing the two colours a boundary sits between. Usually
+        that is easy: look at pixels that are fully one colour or fully the other. But a very
+        thin feature — a hairline stroke narrower than a single pixel — never produces a fully
+        covered pixel at all. Every pixel it touches is already a blend.</p>
+      <p>In that situation the honest answer is: we genuinely cannot tell the difference between a
+        faint, wide stroke and a dark, narrow one — they can produce identical pixels. Rather than
+        guessing a width and stating it with false confidence, this stage recognises the
+        situation (by checking how much of the "covered" area is safely interior, away from any
+        edge) and widens its uncertainty accordingly, so later stages treat that region gently
+        instead of committing to detail that was never really there.</p>
+    </section>
+
+    <section>
+      <h2>Telling real edges from a compressed file's damage</h2>
+      <p>This stage also has to notice when the input file itself is untrustworthy — for
+        instance, a photograph-style compressed file (JPEG) that adds faint ripples of colour
+        near edges that were never in the original artwork. Left alone, those ripples would be
+        measured just as carefully as real detail, and the tracer would faithfully draw shapes
+        for compression artefacts.</p>
+      <p>There is an honest limitation here, worth stating plainly rather than glossing over. Two
+        of the checks this stage runs — how wide an edge is, and how much random noise sits in
+        flat areas — are both blind to this particular kind of damage. The ripples do not make an
+        edge wider, and because they cluster in a thin band beside the edge rather than spreading
+        across the whole image, the noise check's "typical" reading stays at its floor as if the
+        image were perfectly clean. Both checks report a clean bill of health on a file that is
+        not clean.</p>
+      <p>This was a real bug: a compressed logo passed both checks, and the tracer dutifully
+        traced the compression ripples as if they were shapes in the artwork. The fix was not to
+        make either check cleverer — it was to stop asking pixels a question they cannot answer,
+        and instead ask the file itself what format it was saved in. Some formats (JPEG, and one
+        of the two flavours of WebP) are known to damage flat regions this way; the honest fix was
+        to check that fact directly rather than trying to infer it from pixels that do not carry
+        the signal.</p>
+    </section>
+
+  </main>
+  <nav class="stages">
+    <a href="00-overview.html">Overview</a>
+    <a href="01-intake.html">1 Intake</a>
+    <a href="02-coverage.html" aria-current="page">2 Coverage</a>
+    <a href="03-palette.html">3 Palette</a>
+    <a href="04-regions.html">4 Regions</a>
+    <a href="05-gradients.html">5 Gradients</a>
+    <a href="06-planar-map.html">6 Planar map</a>
+    <a href="07-subpixel.html">7 Sub-pixel</a>
+    <a href="08-boundary-solve.html">8 Boundary solve</a>
+    <a href="09-decode.html">9 Decode</a>
+    <a href="10-symmetry.html">10 Symmetry</a>
+    <a href="11-fitting.html">11 Curve fitting</a>
+    <a href="12-repair.html">12 Repair</a>
+    <a href="13-emit.html">13 Emit</a>
+    <a href="constants.md">Constants</a>
+  </nav>
+</div>
+</body>
+</html>

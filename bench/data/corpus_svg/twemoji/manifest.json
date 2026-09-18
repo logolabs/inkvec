@@ -1,0 +1,11 @@
+{
+  "name": "twemoji",
+  "repo": "jdecked/twemoji",
+  "ref": "main",
+  "path": "assets/svg",
+  "licence": "MIT (code) / CC-BY-4.0 (graphics)",
+  "seed": 7,
+  "limit": 216,
+  "available": 4009,
+  "written": 216
+}

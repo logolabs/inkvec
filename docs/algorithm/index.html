@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How inkvec Works</title>
+<link rel="stylesheet" href="assets/doc.css">
+<style>
+  .hero-figure { margin: 2rem 0 1rem; }
+  .stage-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .stage-card {
+    background: var(--paper-raised);
+    padding: 1.15rem 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    text-decoration: none;
+    color: inherit;
+  }
+  .stage-card:hover { background: var(--copper-soft); }
+  .stage-card .n {
+    font: 500 0.7rem/1 var(--mono);
+    letter-spacing: 0.1em;
+    color: var(--copper);
+  }
+  .stage-card .t { font: 600 1.02rem/1.25 var(--text); }
+  .stage-card .d { font-size: 0.86rem; color: var(--ink-soft); line-height: 1.45; }
+  .stage-card .r { font: 400 0.76rem/1 var(--mono); color: var(--ink-faint); margin-top: 0.15rem; }
+  .lede { max-width: 38rem; font-size: 1.06rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="masthead">
+  <p class="eyebrow">inkvec &middot; algorithm documentation</p>
+  <h1>How a picture becomes a drawing</h1>
+  <p class="standfirst">inkvec turns a grid of coloured squares into a set of shapes and
+  curves. These pages explain how, one stage at a time — in plain language here, and in
+  full technical detail in the reference documents beside them.</p>
+</header>
+
+<main>
+
+<section>
+  <h2>The problem</h2>
+  <p class="lede">A photograph of a logo, or a screenshot of one, is a grid of pixels. Each
+  pixel holds one colour. A designer's original file holds something quite different: a
+  handful of shapes, each with an outline made of straight lines and smooth curves, each
+  filled with a colour.</p>
+  <p>Going from the second to the first is easy — that is just drawing. Going back is the
+  hard direction, and it is what inkvec does. The difficulty is that a great deal of
+  information has been thrown away, and what is left is ambiguous: many different sets of
+  shapes would produce exactly the same grid of pixels.</p>
+
+  <figure class="hero-figure">
+    <svg viewBox="0 0 640 190" role="img" aria-label="A curved shape drawn as smooth geometry, then as a pixel grid, then recovered as geometry again">
+      <!-- panel 1: the original shape -->
+      <text x="10" y="16" class="fig-label-strong">The designer's shape</text>
+      <path d="M30 50 Q 100 32 150 70 Q 175 118 120 140 Q 55 150 32 108 Z"
+            fill="var(--copper)" opacity="0.9"/>
+      <text x="10" y="176" class="fig-label">a few curves and a fill</text>
+
+      <!-- arrow -->
+      <path d="M200 95 L 232 95" class="fig-accent-stroke" stroke-width="1.5"/>
+      <path d="M232 95 l -6 -4 v 8 z" fill="var(--copper)"/>
+      <text x="196" y="82" class="fig-label">drawn</text>
+
+      <!-- panel 2: pixels -->
+      <text x="250" y="16" class="fig-label-strong">What a screen stores</text>
+      <g id="pixelgrid"></g>
+      <text x="250" y="176" class="fig-label">a grid of coloured squares</text>
+
+      <!-- arrow -->
+      <path d="M440 95 L 472 95" class="fig-accent-stroke" stroke-width="1.5"/>
+      <path d="M472 95 l -6 -4 v 8 z" fill="var(--copper)"/>
+      <text x="430" y="82" class="fig-label">inkvec</text>
+
+      <!-- panel 3: recovered -->
+      <text x="490" y="16" class="fig-label-strong">What inkvec recovers</text>
+      <path d="M510 50 Q 580 32 630 70 Q 655 118 600 140 Q 535 150 512 108 Z"
+            fill="none" stroke="var(--copper)" stroke-width="2"/>
+      <circle cx="510" cy="50" r="3" class="fig-accent"/>
+      <circle cx="630" cy="70" r="3" class="fig-accent"/>
+      <circle cx="600" cy="140" r="3" class="fig-accent"/>
+      <circle cx="512" cy="108" r="3" class="fig-accent"/>
+      <text x="490" y="176" class="fig-label">curves and control points again</text>
+    </svg>
+    <figcaption><b>The round trip.</b> Drawing is easy; undrawing is not. The middle panel
+    is all inkvec ever gets to see.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <h2>The idea that makes it work</h2>
+  <p class="lede">Look closely at the edge of a shape on a screen and you will find pixels
+  that are neither the shape's colour nor the background's, but something in between.</p>
+  <p>Most tracing tools treat those in-between pixels as a nuisance — blur to be cleaned up,
+  a threshold to be picked. inkvec treats them as the most informative pixels in the image.
+  A pixel that is 30% of the way from background to foreground is <em>telling you</em> that
+  the shape covers 30% of it. That is a measurement, and a measurement narrows down where
+  the edge runs to a fraction of a pixel — far finer than the pixel grid itself.</p>
+  <div class="plain">
+    <h3>In one line</h3>
+    <p>A blurry edge is not a problem to be removed. It is a ruler, and it is more precise
+    than the grid it is drawn on.</p>
+  </div>
+  <p>This has a second consequence that matters just as much. Because the in-between pixels
+  are measurements, inkvec can work out <em>how confident</em> it is about each one. Where
+  two colours are strongly different the measurement is sharp; where they are nearly the
+  same, it is vague — and the tool knows this, so it can afford to be approximate exactly
+  where nobody could tell the difference.</p>
+</section>
+
+<section>
+  <h2>The other idea: describing, not just matching</h2>
+  <p class="lede">A tracer that only tried to match the pixels would produce a shape with
+  thousands of tiny corners — a perfect match, and a useless drawing.</p>
+  <p>So inkvec is not asked to match the picture. It is asked to find the <em>shortest
+  honest description</em> of it. Every curve it adds costs something; every bit of error it
+  leaves also costs something; and it looks for the description where the total is smallest.
+  Two flat colours may beat one gradient. One long curve may beat six short ones. The
+  balance is a single number that runs through the whole system.</p>
+  <p>This is why the output tends to have roughly as many shapes as a person would have
+  drawn, rather than thousands. It is also the mechanism behind most of the ways the tool
+  can go wrong: if the picture has been through a compression step, the compression's own
+  errors look like detail worth describing, and the tracer will faithfully describe them.</p>
+</section>
+
+<section>
+  <h2>The stages</h2>
+  <p>Each page below explains one stage. They are written to be read in order, but each
+  stands alone. Every one has a technical companion document with the code references,
+  the exact constants, and the failure modes.</p>
+
+  <div class="stage-grid">
+    <a class="stage-card" href="00-overview.html">
+      <span class="n">OVERVIEW</span><span class="t">The whole pipeline</span>
+      <span class="d">The shape of the system end to end, and how the stages fit together.</span>
+      <span class="r">00-overview.md</span></a>
+    <a class="stage-card" href="01-intake.html">
+      <span class="n">STAGE 01</span><span class="t">Intake</span>
+      <span class="d">Reading the file, and working out what has already been done to it.</span>
+      <span class="r">01-intake.md</span></a>
+    <a class="stage-card" href="02-coverage.html">
+      <span class="n">STAGE 02</span><span class="t">Coverage</span>
+      <span class="d">Reading blurry edge pixels as measurements, with error bars.</span>
+      <span class="r">02-coverage.md</span></a>
+    <a class="stage-card" href="03-palette.html">
+      <span class="n">STAGE 03</span><span class="t">Palette</span>
+      <span class="d">Deciding how many colours the picture actually has.</span>
+      <span class="r">03-palette.md</span></a>
+    <a class="stage-card" href="04-regions.html">
+      <span class="n">STAGE 04</span><span class="t">Regions</span>
+      <span class="d">Grouping pixels into areas, and discarding the ones that are only blur.</span>
+      <span class="r">04-regions.md</span></a>
+    <a class="stage-card" href="05-gradients.html">
+      <span class="n">STAGE 05</span><span class="t">Gradients</span>
+      <span class="d">Putting a smooth colour fade back together from the bands it arrived as.</span>
+      <span class="r">05-gradients.md</span></a>
+    <a class="stage-card" href="06-planar-map.html">
+      <span class="n">STAGE 06</span><span class="t">Planar map</span>
+      <span class="d">Building a structure where neighbours share their border exactly.</span>
+      <span class="r">06-planar-map.md</span></a>
+    <a class="stage-card" href="07-subpixel.html">
+      <span class="n">STAGE 07</span><span class="t">Sub-pixel</span>
+      <span class="d">Moving every boundary point off the grid and onto the true edge.</span>
+      <span class="r">07-subpixel.md</span></a>
+    <a class="stage-card" href="08-boundary-solve.html">
+      <span class="n">STAGE 08</span><span class="t">Boundary solve</span>
+      <span class="d">Adjusting every point at once against a re-drawing of the whole image.</span>
+      <span class="r">08-boundary-solve.md</span></a>
+    <a class="stage-card" href="09-decode.html">
+      <span class="n">STAGE 09</span><span class="t">Decode</span>
+      <span class="d">Treating the problem as recovering a signal rather than following an outline.</span>
+      <span class="r">09-decode.md</span></a>
+    <a class="stage-card" href="10-symmetry.html">
+      <span class="n">STAGE 10</span><span class="t">Symmetry</span>
+      <span class="d">Noticing that a shape is meant to be symmetric, and making it exactly so.</span>
+      <span class="r">10-symmetry.md</span></a>
+    <a class="stage-card" href="11-fitting.html">
+      <span class="n">STAGE 11</span><span class="t">Curve fitting</span>
+      <span class="d">Choosing how many curves to spend, and where to put the joins.</span>
+      <span class="r">11-fitting.md</span></a>
+    <a class="stage-card" href="12-repair.html">
+      <span class="n">STAGE 12</span><span class="t">Repair</span>
+      <span class="d">Finding outlines that cross themselves, and fixing the holes that causes.</span>
+      <span class="r">12-repair.md</span></a>
+    <a class="stage-card" href="13-emit.html">
+      <span class="n">STAGE 13</span><span class="t">Emit</span>
+      <span class="d">Writing the SVG — where a careless rounding can undo everything above.</span>
+      <span class="r">13-emit.md</span></a>
+  </div>
+</section>
+
+<section>
+  <h2>Every number, and where it came from</h2>
+  <p class="lede">A system like this accumulates thresholds. Some are mathematical, some
+  were measured against a corpus of over a thousand icons, and some were chosen once to fix
+  one particular picture and never revisited.</p>
+  <p><a href="constants.md">constants.md</a> lists all of them with their provenance, and
+  marks the ones that look fitted to a single example rather than derived or measured.
+  It exists to be uncomfortable reading.</p>
+</section>
+
+</main>
+
+<nav class="stages">
+  <a href="00-overview.html">Overview</a>
+  <a href="01-intake.html">1 Intake</a>
+  <a href="02-coverage.html">2 Coverage</a>
+  <a href="03-palette.html">3 Palette</a>
+  <a href="04-regions.html">4 Regions</a>
+  <a href="05-gradients.html">5 Gradients</a>
+  <a href="06-planar-map.html">6 Planar map</a>
+  <a href="07-subpixel.html">7 Sub-pixel</a>
+  <a href="08-boundary-solve.html">8 Boundary solve</a>
+  <a href="09-decode.html">9 Decode</a>
+  <a href="10-symmetry.html">10 Symmetry</a>
+  <a href="11-fitting.html">11 Curve fitting</a>
+  <a href="12-repair.html">12 Repair</a>
+  <a href="13-emit.html">13 Emit</a>
+  <a href="constants.md">Constants</a>
+</nav>
+
+</div>
+
+<script>
+// The middle panel of the hero figure: the same shape sampled onto a coarse grid, with
+// each cell shaded by how much of it the shape covers. Built here rather than hand-written
+// so the coverage values are real area fractions, not guesses.
+(function () {
+  var g = document.getElementById("pixelgrid");
+  if (!g) return;
+  var X0 = 250, Y0 = 32, CELL = 11, N = 16, M = 10;
+
+  // A polygonal approximation of the panel-1 curve, supersampled to get each cell's true
+  // area fraction. The shading is therefore a real coverage value, which is the whole
+  // point the figure is making.
+  var pts = [[30,50],[60,40],[100,32],[128,46],[150,70],[162,96],[120,140],[85,146],
+             [55,150],[38,130],[32,108],[28,76]];
+  function inside(px, py) {
+    var c = false;
+    for (var i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      var xi = pts[i][0], yi = pts[i][1], xj = pts[j][0], yj = pts[j][1];
+      if (((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) c = !c;
+    }
+    return c;
+  }
+  var SS = 4, frag = "";
+  for (var r = 0; r < M; r++) {
+    for (var col = 0; col < N; col++) {
+      // cell in panel-2 space -> panel-1 space
+      var x = X0 + col * CELL, y = Y0 + r * CELL;
+      var hit = 0;
+      for (var sy = 0; sy < SS; sy++) {
+        for (var sx = 0; sx < SS; sx++) {
+          var ux = (col + (sx + 0.5) / SS) * CELL + 22;
+          var uy = (r + (sy + 0.5) / SS) * CELL + 32;
+          if (inside(ux, uy)) hit++;
+        }
+      }
+      var a = hit / (SS * SS);
+      frag += '<rect x="' + x + '" y="' + y + '" width="' + CELL + '" height="' + CELL +
+              '" fill="var(--copper)" opacity="' + (a * 0.9).toFixed(3) +
+              '" stroke="var(--rule)" stroke-width="0.5"/>';
+    }
+  }
+  g.innerHTML = frag;
+})();
+</script>
+
+</body>
+</html>

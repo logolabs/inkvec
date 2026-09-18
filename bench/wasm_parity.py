@@ -64,6 +64,7 @@ OPTIONS = {
     "minify": False,
     "margin": 0,
     "content_units": False,
+    "cutout": False,
 }
 
 # Loaded in node; `self` is pointed at the real global because the threads arm's worker
@@ -94,7 +95,7 @@ const svg = mod.trace(
   bytes,
   spec.o.precision, spec.o.min_area, spec.o.colors, spec.o.merge, spec.o.max_dim,
   spec.o.time_budget, spec.o.no_background, spec.o.minify, spec.o.margin,
-  spec.o.content_units
+  spec.o.content_units, spec.o.cutout
 );
 const ms = performance.now() - t0;
 writeFileSync(spec.out, svg, "utf8");
@@ -119,6 +120,8 @@ def run_native(exe: Path, image: Path, out: Path) -> subprocess.CompletedProcess
         "--margin", str(OPTIONS["margin"]),
         "-q",
     ]
+    cmd += [flag for flag, on in (("--no-background", OPTIONS["no_background"]),
+                                  ("--cutout", OPTIONS["cutout"])) if on]
     return subprocess.run(cmd, capture_output=True, text=True)
 
 
@@ -169,8 +172,11 @@ def main() -> int:
                     help="seconds; nonzero makes the output depend on machine speed")
     ap.add_argument("--strict-native", action="store_true",
                     help="also fail when native differs from the wasm arms")
+    ap.add_argument("--transparent", action="store_true",
+                    help="the page's 'Transparent background' box: no_background and cutout")
     args = ap.parse_args()
     OPTIONS["time_budget"] = args.time_budget
+    OPTIONS["no_background"] = OPTIONS["cutout"] = args.transparent
 
     exe = Path(args.exe)
     pkg = Path(args.pkg)

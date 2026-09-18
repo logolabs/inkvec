@@ -3,7 +3,7 @@
 export const __wbg_wbg_rayon_poolbuilder_free: (a: number, b: number) => void;
 export const initThreadPool: (a: number) => any;
 export const threads_available: () => number;
-export const trace: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
+export const trace: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number, number, number];
 export const version: () => [number, number];
 export const wbg_rayon_poolbuilder_build: (a: number) => void;
 export const wbg_rayon_poolbuilder_numThreads: (a: number) => number;

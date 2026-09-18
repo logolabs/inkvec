@@ -1,6 +1,7 @@
 """White artwork on a transparent ground: does it survive the trace?
 
     python bench/white_on_clear.py [--exe target/release/inkvec.exe] [--args " --cutout"]
+    python bench/white_on_clear.py --wasm web/pkg [--args " --no-background --cutout"]
 
 A white mark composited over the white matte is one flat colour and traces to nothing, so
 this is the case a matte-based intake is most likely to lose. Each truth is an SVG,
@@ -101,25 +102,51 @@ def main() -> int:
     ap.add_argument("--exe", default=str(ROOT / "target/release/inkvec.exe"))
     ap.add_argument("--args", default="", help='extra CLI flags, e.g. " --cutout"')
     ap.add_argument("--work", default=str(ROOT / "out/white_on_clear"))
+    ap.add_argument("--wasm", help="trace with this wasm package in node instead of the exe; "
+                                   "--args may then hold only --no-background and --cutout")
     a = ap.parse_args()
     work = Path(a.work)
     work.mkdir(parents=True, exist_ok=True)
     extra = shlex.split(a.args)
-    tag = "default" if not extra else "_".join(x.lstrip("-") for x in extra)
+    tag = ("wasm_" if a.wasm else "") + ("default" if not extra else "_".join(x.lstrip("-") for x in extra))
 
-    print(f"exe {a.exe}  args [{a.args.strip()}]")
+    trace_wasm = None
+    if a.wasm:
+        import wasm_parity  # noqa: E402  (bench/ is on sys.path)
+
+        unknown = set(extra) - {"--no-background", "--cutout"}
+        if unknown:
+            raise SystemExit(f"--wasm takes only --no-background/--cutout, not {sorted(unknown)}")
+        wasm_parity.OPTIONS.update(time_budget=0, no_background="--no-background" in extra,
+                                   cutout="--cutout" in extra)
+        (work / "parity_runner.mjs").write_text(wasm_parity.RUNNER_JS, encoding="utf-8")
+
+        def trace_wasm(png: Path, out: Path) -> str:
+            got, _ = wasm_parity.run_wasm("node", Path(a.wasm), png, work, out.stem)
+            out.write_bytes(got.read_bytes())
+            return ""
+
+    print(f"{'wasm ' + a.wasm if a.wasm else 'exe ' + a.exe}  args [{a.args.strip()}]")
     print(f"{'case':16} {'paths':>5} {'fills':28} {'white':>7} {'dark':>7} {'alpha':>7}  verdict")
     worst = 0.0
     for name, svg in CASES.items():
         png = work / f"{name}.png"
         png.write_bytes(render.render_to_png(svg, SIZE, SIZE))
         out = work / f"{name}.{tag}.svg"
-        p = subprocess.run([a.exe, str(png), "-o", str(out), "-q", *extra],
-                           capture_output=True, text=True)
-        if p.returncode != 0 or not out.is_file():
-            print(f"{name:16} FAILED: {p.stderr.strip()[:200]}")
-            worst = max(worst, 1.0)
-            continue
+        if trace_wasm:
+            try:
+                trace_wasm(png, out)
+            except RuntimeError as e:
+                print(f"{name:16} FAILED: {str(e)[:200]}")
+                worst = max(worst, 1.0)
+                continue
+        else:
+            p = subprocess.run([a.exe, str(png), "-o", str(out), "-q", *extra],
+                               capture_output=True, text=True)
+            if p.returncode != 0 or not out.is_file():
+                print(f"{name:16} FAILED: {p.stderr.strip()[:200]}")
+                worst = max(worst, 1.0)
+                continue
         traced = out.read_text(encoding="utf-8")
         truth, trace = rgba(svg), rgba(traced)
         s_white = float(np.abs(over(trace, np.ones(3, np.float32)) - over(truth, np.ones(3, np.float32))).mean())

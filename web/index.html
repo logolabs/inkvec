@@ -379,7 +379,7 @@ for (const b of document.querySelectorAll("#presets button")) b.addEventListener
 
 let worker = null;
 function makeWorker(){
-  const url = A.workerUrl || "./worker.js?v=8";
+  const url = A.workerUrl || "./worker.js?v=9";
   try { worker = new Worker(url, { type: "module" }); } catch (e) { worker = null; return; }
   worker.onmessage = (e) => {
     const m = e.data;
@@ -432,7 +432,7 @@ for (const n of ["365retailmarkets","adamo","1075thefan"]){
   const b = el("button", "", n); b.addEventListener("click", async () => { const r = await fetch(asset(n)); const bl = await r.blob(); pick(new File([bl], n + ".png", {type:"image/png"})); });
   $("samples").appendChild(b);
 }
-function options(){ return { precision:+$("precision").value, min_area:+$("min_area").value, colors:+$("colors").value, merge:+$("merge").value, max_dim:+$("max_dim").value, time_budget:+$("time_budget").value, no_background:$("no_background").checked, minify:$("minify").checked, margin:+$("margin").value, content_units:$("content_units").checked }; }
+function options(){ return { precision:+$("precision").value, min_area:+$("min_area").value, colors:+$("colors").value, merge:+$("merge").value, max_dim:+$("max_dim").value, time_budget:+$("time_budget").value, no_background:$("no_background").checked, minify:$("minify").checked, margin:+$("margin").value, content_units:$("content_units").checked, cutout:$("no_background").checked }; }
 function start(){ $("go").disabled = true; const t0 = performance.now(); live && live.busy(true, "Tracing…"); timer = setInterval(() => live && live.busy(true, `Tracing… ${((performance.now()-t0)/1000).toFixed(1)} s`), 100); }
 function finish(){ $("go").disabled = false; clearInterval(timer); live && live.busy(false); }
 $("go").addEventListener("click", () => {

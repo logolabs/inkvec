@@ -19,9 +19,11 @@ export function threads_available(): boolean;
  * defaults 0.1, 2, 64, 0.035 when unsure; the merge default is
  * `inkvec_trace::color::DEFAULT_MERGE_DISTANCE`); `max_dim` and `time_budget` bound the
  * work; `no_background`, `minify`, `margin`, `content_units` shape the output. `max_dim = 0`
- * means no cap.
+ * means no cap. `cutout` is `--cutout`: an input's transparency is carried into the SVG
+ * (holes stay holes, a flat wash keeps its opacity); it changes nothing for an opaque
+ * input.
  */
-export function trace(bytes: Uint8Array, precision: number, min_area: number, colors: number, merge: number, max_dim: number, time_budget: number, no_background: boolean, minify: boolean, margin: number, content_units: boolean): string;
+export function trace(bytes: Uint8Array, precision: number, min_area: number, colors: number, merge: number, max_dim: number, time_budget: number, no_background: boolean, minify: boolean, margin: number, content_units: boolean, cutout: boolean): string;
 
 /**
  * The tracer's version, for the page footer.
@@ -45,7 +47,7 @@ export interface InitOutput {
     readonly __wbg_wbg_rayon_poolbuilder_free: (a: number, b: number) => void;
     readonly initThreadPool: (a: number) => any;
     readonly threads_available: () => number;
-    readonly trace: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
+    readonly trace: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number, number, number];
     readonly version: () => [number, number];
     readonly wbg_rayon_poolbuilder_build: (a: number) => void;
     readonly wbg_rayon_poolbuilder_numThreads: (a: number) => number;

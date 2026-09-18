@@ -20,7 +20,9 @@ export function threads_available() {
  * defaults 0.1, 2, 64, 0.035 when unsure; the merge default is
  * `inkvec_trace::color::DEFAULT_MERGE_DISTANCE`); `max_dim` and `time_budget` bound the
  * work; `no_background`, `minify`, `margin`, `content_units` shape the output. `max_dim = 0`
- * means no cap.
+ * means no cap. `cutout` is `--cutout`: an input's transparency is carried into the SVG
+ * (holes stay holes, a flat wash keeps its opacity); it changes nothing for an opaque
+ * input.
  * @param {Uint8Array} bytes
  * @param {number} precision
  * @param {number} min_area
@@ -32,15 +34,16 @@ export function threads_available() {
  * @param {boolean} minify
  * @param {number} margin
  * @param {boolean} content_units
+ * @param {boolean} cutout
  * @returns {string}
  */
-export function trace(bytes, precision, min_area, colors, merge, max_dim, time_budget, no_background, minify, margin, content_units) {
+export function trace(bytes, precision, min_area, colors, merge, max_dim, time_budget, no_background, minify, margin, content_units, cutout) {
     let deferred3_0;
     let deferred3_1;
     try {
         const ptr0 = passArray8ToWasm0(bytes, wasm.__wbindgen_malloc);
         const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.trace(ptr0, len0, precision, min_area, colors, merge, max_dim, time_budget, no_background, minify, margin, content_units);
+        const ret = wasm.trace(ptr0, len0, precision, min_area, colors, merge, max_dim, time_budget, no_background, minify, margin, content_units, cutout);
         var ptr2 = ret[0];
         var len2 = ret[1];
         if (ret[3]) {

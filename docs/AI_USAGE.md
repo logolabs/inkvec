@@ -101,7 +101,7 @@ For applications demanding reproducible, certifiable, and zero-hallucination vec
 │ 1. Sub-Pixel Linear Unmixing:  Inverts optical anti-aliasing in 3D RGB │
 │ 2. MDL Palette Clustering:     Minimum Description Length in OKLab     │
 │ 3. Planar DCEL Map:            Shared half-edge topological boundaries │
-│ 4. Boundary Optimization:      Levenberg-Marquardt + Shoelace Jacobian │
+│ 4. Boundary Optimization:      Fletcher-Reeves nonlinear CG solver     │
 │ 5. Curve Fitting:              Dynamic Programming over Bézier / Arcs  │
 │ 6. Topological Repair:         Winding-number resolution & G1 fairing  │
 └────────────────────────────────────────────────────────────────────────┘
@@ -119,7 +119,7 @@ For applications demanding reproducible, certifiable, and zero-hallucination vec
 ## 5. Licensing, Ethics & Training Data Compliance
 
 - **Permissive Licensing:** All source code in this repository is licensed under **Apache-2.0**.
-- **Third-Party Crate Audit:** Every Rust crate compiled into Inkvec is audited for permissive licensing (MIT, Apache-2.0, BSD-2/3-Clause, ISC, Zlib). The full manifest is automatically tracked and updated in [`docs/THIRD_PARTY.md`](THIRD_PARTY.md).
+- **Third-Party Crate Audit:** Every Rust crate compiled into Inkvec is audited for its licensing terms, which are permissive (MIT, Apache-2.0, BSD-2/3-Clause, ISC, Zlib and similar) with two exceptions: `colored` and `option-ext` are MPL-2.0 (weak copyleft), pulled in only by the optional Burn restorer backends (`restore-burn`/`restore-wgpu`/`cuda`) and never by the default build. The full manifest is automatically tracked and updated in [`docs/THIRD_PARTY.md`](THIRD_PARTY.md).
 - **Clean-Room Baseline Separation:** Potrace is licensed under GPL-2.0. Inkvec **never links, incorporates, or redistributes Potrace source or object code**. Potrace is invoked solely as an external command-line executable in optional benchmark comparison scripts.
 - **Test Corpus Data Disclaimer:** The rasters committed under `bench/data` (Lucide, Material Design, Twemoji, OpenMoji, Simple Icons) are strictly used as test benchmarks to evaluate vectorization fidelity against ground truth. All marks and logos remain the trademarks of their respective owners.
 

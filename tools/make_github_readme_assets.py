@@ -99,7 +99,7 @@ def hero() -> None:
         image.alpha_composite(card, (x, 262))
     draw.text((1174, 361), "→", font=font(46), fill=COPPER)
 
-    stats = [("0.119", "MEAN dE00 ↓", COPPER), ("0.992", "DINO ↑", MINT), ("585", "COORDINATES", GOLD), ("1.17 s", "PER IMAGE", CREAM)]
+    stats = [("0.132", "MEAN dE00 ↓", COPPER), ("0.991", "DINO ↑", MINT), ("446", "COORDINATES", GOLD), ("1.17 s", "PER IMAGE", CREAM)]
     x = 86
     for value, caption, colour in stats:
         rounded(draw, (x, 558, x + 332, 670), (31, 28, 24, 255), (66, 59, 51, 255))
@@ -114,8 +114,8 @@ def benchmarks() -> None:
     draw = ImageDraw.Draw(image)
     centered_brand(image, 26, 210)
     draw.text((74, 108), "Quality without coordinate sprawl.", font=font(58, True), fill=CREAM)
-    draw.text((78, 181), "21 hash-selected real logos and icons · lower error is better", font=sans(19), fill=MUTED)
-    headers = [("Inkvec", "0.119", "mean dE00", "585", "coordinates", COPPER),
+    draw.text((78, 181), "21 cases: 14 icons, 4 probes, 3 logos · lower error is better", font=sans(19), fill=MUTED)
+    headers = [("Inkvec", "0.132", "mean dE00", "446", "coordinates", COPPER),
                ("VTracer", "1.303", "mean dE00", "1,943", "coordinates", (181, 168, 157)),
                ("VTracer tuned", "1.264", "mean dE00", "1,239", "coordinates", (181, 168, 157)),
                ("Trazor", "0.518", "mean dE00", "1,172", "coordinates", (181, 168, 157))]

@@ -46,7 +46,8 @@ python bench/full_eval.py A.exe --compare B.exe --set held_a              # pair
 Scores a devset split (`dev`, `held_a`, `held_b`, `full`, `screen`, or `all`) in parallel
 and prints a per-family table (dE00, DISTS, parameter ratio, self-residual, turning,
 mirror error) plus the worst individual icons by dE00. Uses the same scoring code as the
-evolve loop (`evolve/svgeval.py`), judged at 1024px against each icon's ground-truth SVG.
+evolve loop and the regression gate (`bench/svgeval.py`), judged at 1024px against each
+icon's ground-truth SVG.
 Writes `bench/data/eval_<label>.json` — per-icon numbers, not just the aggregate.
 
 `bench/devset.json` / `bench/devset_v2.json` define the splits; `bench/gt_diff.py`,

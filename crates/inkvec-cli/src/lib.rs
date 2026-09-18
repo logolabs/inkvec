@@ -62,7 +62,9 @@ use inkvec_fit::{
     primitives::{fit_primitive_or_arcs, PrimitiveFit},
     FitConfig, FittedPath, Segmentation,
 };
-use inkvec_trace::{gradient, load_image, planar, trace_bilevel, ColorOptions, TraceOptions};
+use inkvec_trace::{
+    gradient, load_image_capped, planar, trace_bilevel, ColorOptions, TraceOptions,
+};
 
 /// The command-line entry point.
 pub fn cli_main() -> ExitCode {
@@ -243,9 +245,24 @@ pub fn trace_image(
     img: inkvec_trace::Rgba,
     args: &Args,
 ) -> Result<Traced, Box<dyn std::error::Error>> {
+    trace_image_sized(img, args, None)
+}
+
+/// [`trace_image`], with the size the SVG is presented at carried in from the caller.
+///
+/// When the caller has already capped the raster before this point (a decode-time
+/// `--max-dim`), the raster's own dimensions are the capped ones and would be written as
+/// the SVG's `width`/`height`. `display_size` restores the arrival size so the document
+/// keeps the `--max-dim` contract: geometry in capped space, presented at the size that
+/// arrived.
+pub fn trace_image_sized(
+    img: inkvec_trace::Rgba,
+    args: &Args,
+    display_size: Option<(usize, usize)>,
+) -> Result<Traced, Box<dyn std::error::Error>> {
     let mut img = img;
     let mut sr_note: Option<String> = None;
-    let (display_w, display_h) = (img.width, img.height);
+    let (display_w, display_h) = display_size.unwrap_or((img.width, img.height));
 
     // A nearest-neighbour upscale, undone, before anything else looks at the image. Exact,
     // so it is not a trade: the pixels that come back are the ones the file was made from,
@@ -274,108 +291,12 @@ pub fn trace_image(
         }
     }
 
-    // The restorer comes before SR and before anything that resamples: it was trained on
-    // damage at the size the damage happened, and it returns an image of the same size.
-    let pass = restore_prepass(img, args)?;
-    img = pass.img;
-    let restore_note = pass.note;
-    let restored = pass.restored;
-    let mut probe = pass.probe;
-    if args.sr == inkvec_sr::Mode::Off {
-        // `auto` kept the input, and nothing else is going to look at it: the probe is the trace.
-        if let Some(svg) = probe.take() {
-            return Ok(Traced {
-                svg,
-                stats: restore_note.into_iter().collect(),
-                width: img.width,
-                height: img.height,
-                lambda: None,
-            });
-        }
-    }
-
-    // Restored input is traced with soft intake on, the configuration the restorer was
-    // validated in. It has to be forced: a restored image can look clean enough that the
-    // edge-width and ringing detectors no longer open soft intake by themselves.
-    let lossy_args;
-    let args = if restored && args.lossy != inkvec_sr::Mode::On {
-        lossy_args = Args {
-            lossy: inkvec_sr::Mode::On,
-            ..args.clone()
-        };
-        &lossy_args
-    } else {
-        args
-    };
-
-    // `auto` needs a trace before it can decide, so it produces one and keeps it
-    // when the input turns out to be undamaged -- the common case pays one trace
-    // and never touches the upscaler.
-    if args.sr == inkvec_sr::Mode::Auto {
-        let probe = match probe.take() {
-            Some(p) => p,
-            None => trace_once(&img, args)?,
-        };
-        match inkvec_sr::decide(&img, &probe, args.sr_threshold) {
-            inkvec_sr::Decision::Keep { residual } => {
-                let note = match residual {
-                    Some(r) => format!(
-                        "sr            residual {r:.3} <= {:.3}, traced directly",
-                        args.sr_threshold
-                    ),
-                    None => "sr            could not measure the fit; traced directly".into(),
-                };
-                return Ok(Traced {
-                    svg: probe,
-                    stats: restore_note
-                        .into_iter()
-                        .chain(std::iter::once(note))
-                        .collect(),
-                    width: img.width,
-                    height: img.height,
-                    lambda: None,
-                });
-            }
-            inkvec_sr::Decision::Clean { residual } => {
-                sr_note = residual.map(|r| format!("residual {r:.3} > {:.3}", args.sr_threshold));
-            }
-        }
-    }
-
-    if args.sr != inkvec_sr::Mode::Off {
-        let up = build_upscaler(args)?;
-        let opt = inkvec_sr::Options {
-            out_scale: args.sr_scale,
-            recolour: !args.sr_no_recolour,
-        };
-        let t = inkvec_core::clock::Instant::now();
-        let cleaned = inkvec_sr::prepass(up.as_ref(), &img, opt)?;
-        sr_note = Some(format!(
-            "sr            {}cleaned to {}x{}{} in {:.2}s, {}",
-            sr_note.map(|n| format!("{n}; ")).unwrap_or_default(),
-            cleaned.width,
-            cleaned.height,
-            if args.sr_no_recolour {
-                ", no recolour"
-            } else {
-                ""
-            },
-            t.elapsed().as_secs_f64(),
-            up.describe()
-        ));
-        img = cleaned;
-    }
-
-    // Not when the pre-pass ran: the upscaler exists to put detail back that the
-    // input had lost, and its output legitimately carries more pixels than the
-    // source did. Resampling it here would throw away exactly what was paid for.
-    let (display_w, display_h) = if replicated {
-        (display_w, display_h)
-    } else {
-        (img.width, img.height)
-    };
-
-    let normalised = if replicated {
+    // The cap, intake normalisation and oversample correction run *before* the restore and
+    // SR pre-passes, so that a probe trace either `auto` mode makes of an input it keeps is
+    // bounded exactly like the real trace. They used to run after the pre-passes' early
+    // returns, so `--restore auto` / `--sr auto` kept a probe traced at full resolution and
+    // `--max-dim` (and `--intake-scale`) were silently ignored.
+    let mut normalised = if replicated {
         true
     } else if !args.intake_scale || args.sr != inkvec_sr::Mode::Off {
         false
@@ -388,7 +309,6 @@ pub fn trace_image(
     // Larger than the product wants to spend time on: trace a box-filtered
     // reduction and write the SVG at the original size. The reduction is the same
     // exact area average the intake normaliser uses, so edges stay edges.
-    let mut normalised = normalised;
     let longest = img.width.max(img.height);
     if args.max_dim > 0 && longest > args.max_dim {
         let s = longest as f64 / args.max_dim as f64;
@@ -405,14 +325,6 @@ pub fn trace_image(
         img = inkvec_trace::coverage::downsample_to(&img, nw, nh);
         normalised = true;
     }
-
-    // Transparency, once, after every resampling step: put the image against a matte the
-    // artwork is not made of and keep the alphas for the emitter. Everything from here
-    // traces the matted copy.
-    let alpha_src = alpha_source(&img, args.quiet, args.cutout);
-    let img = alpha_src.as_ref().map(|s| &s.flat).unwrap_or(&img);
-
-    let (w, h) = (img.width, img.height);
 
     // Two of the knobs below are denominated in pixels, and a raster that carries the
     // same drawing at more pixels per unit therefore gets read as if it were a more
@@ -432,6 +344,7 @@ pub fn trace_image(
     // resolution. It reads 1 for every native render, so this does nothing at all to a
     // native intake and the benchmark is untouched by construction.
     let (oversample, redundancy) = {
+        let (w, h) = (img.width, img.height);
         let rgb = img.composited([1.0, 1.0, 1.0]);
         // Two signals, and each does the half of the job the other cannot. Edge width
         // decides *whether* this is a native render, which it can: every corpus raster
@@ -482,7 +395,7 @@ pub fn trace_image(
     // genuinely small art, and erases real dots. Measured: 128ss objective 0.4005 -> 0.4112,
     // the same shape of failure as the flat 9-px floor of 2026-09-03. Above the reference
     // there is no such double count, because the constant was never fitted there.
-    let over_reference = (w.max(h) as f64) > REF_EXTENT;
+    let over_reference = (img.width.max(img.height) as f64) > REF_EXTENT;
     let floor_scale = if over_reference {
         redundancy * redundancy
     } else {
@@ -513,6 +426,126 @@ pub fn trace_image(
     } else {
         args.clone()
     };
+
+    // The restorer comes before SR and before anything that resamples: it was trained on
+    // damage at the size the damage happened, and it returns an image of the same size.
+    let pass = restore_prepass(img, args)?;
+    img = pass.img;
+    let restore_note = pass.note;
+    let restored = pass.restored;
+    let mut probe = pass.probe;
+    if args.sr == inkvec_sr::Mode::Off {
+        // `auto` kept the input, and nothing else is going to look at it: the probe is the trace.
+        if let Some(svg) = probe.take() {
+            let svg = if normalised || (img.width, img.height) != (display_w, display_h) {
+                retarget(&svg, display_w, display_h)
+            } else {
+                svg
+            };
+            return Ok(Traced {
+                svg,
+                stats: restore_note.into_iter().collect(),
+                width: img.width,
+                height: img.height,
+                lambda: None,
+            });
+        }
+    }
+
+    // Restored input is traced with soft intake on, the configuration the restorer was
+    // validated in. It has to be forced: a restored image can look clean enough that the
+    // edge-width and ringing detectors no longer open soft intake by themselves.
+    let lossy_args;
+    let args = if restored && args.lossy != inkvec_sr::Mode::On {
+        lossy_args = Args {
+            lossy: inkvec_sr::Mode::On,
+            ..args.clone()
+        };
+        &lossy_args
+    } else {
+        args
+    };
+
+    // `auto` needs a trace before it can decide, so it produces one and keeps it
+    // when the input turns out to be undamaged -- the common case pays one trace
+    // and never touches the upscaler.
+    if args.sr == inkvec_sr::Mode::Auto {
+        let probe = match probe.take() {
+            Some(p) => p,
+            None => trace_once(&img, args)?,
+        };
+        match inkvec_sr::decide(&img, &probe, args.sr_threshold) {
+            inkvec_sr::Decision::Keep { residual } => {
+                let note = match residual {
+                    Some(r) => format!(
+                        "sr            residual {r:.3} <= {:.3}, traced directly",
+                        args.sr_threshold
+                    ),
+                    None => "sr            could not measure the fit; traced directly".into(),
+                };
+                let svg = if normalised || (img.width, img.height) != (display_w, display_h) {
+                    retarget(&probe, display_w, display_h)
+                } else {
+                    probe
+                };
+                return Ok(Traced {
+                    svg,
+                    stats: restore_note
+                        .into_iter()
+                        .chain(std::iter::once(note))
+                        .collect(),
+                    width: img.width,
+                    height: img.height,
+                    lambda: None,
+                });
+            }
+            inkvec_sr::Decision::Clean { residual } => {
+                sr_note = residual.map(|r| format!("residual {r:.3} > {:.3}", args.sr_threshold));
+            }
+        }
+    }
+
+    if args.sr != inkvec_sr::Mode::Off {
+        let up = build_upscaler(args)?;
+        let opt = inkvec_sr::Options {
+            out_scale: args.sr_scale,
+            recolour: !args.sr_no_recolour,
+        };
+        let t = inkvec_core::clock::Instant::now();
+        let cleaned = inkvec_sr::prepass(up.as_ref(), &img, opt)?;
+        sr_note = Some(format!(
+            "sr            {}cleaned to {}x{}{} in {:.2}s, {}",
+            sr_note.map(|n| format!("{n}; ")).unwrap_or_default(),
+            cleaned.width,
+            cleaned.height,
+            if args.sr_no_recolour {
+                ", no recolour"
+            } else {
+                ""
+            },
+            t.elapsed().as_secs_f64(),
+            up.describe()
+        ));
+        img = cleaned;
+    }
+
+    // The SVG is presented at the size it arrived at -- or, when SR ran, at the size SR
+    // produced -- while the viewBox stays at the (capped) size the tracer actually saw.
+    let (display_w, display_h) = if replicated {
+        (display_w, display_h)
+    } else if args.sr != inkvec_sr::Mode::Off {
+        (img.width, img.height)
+    } else {
+        (display_w, display_h)
+    };
+
+    // Transparency, once, after every resampling step: put the image against a matte the
+    // artwork is not made of and keep the alphas for the emitter. Everything from here
+    // traces the matted copy.
+    let alpha_src = alpha_source(&img, args.quiet, args.cutout);
+    let img = alpha_src.as_ref().map(|s| &s.flat).unwrap_or(&img);
+
+    let (w, h) = (img.width, img.height);
 
     // Through `fit_config`, not `FitConfig::from_precision` directly, so that
     // `--content-units` applies the whole of its mechanism here and not half of it.
@@ -545,7 +578,7 @@ pub fn trace_image(
     if let Some(n) = restore_note {
         stats.insert(0, n);
     }
-    let svg = if normalised {
+    let svg = if normalised || (w, h) != (display_w, display_h) {
         retarget(&svg, display_w, display_h)
     } else {
         svg
@@ -575,7 +608,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             return Err(format!("output folder does not exist: {}", parent.display()).into());
         }
     }
-    let img = load_image(&args.input)?;
+    let (img, (arr_w, arr_h)) = load_image_capped(&args.input, args.max_dim)?;
     // `--lossy auto` is a question about the file, so it is answered here, where the file
     // is, and not inside the tracer, which only ever sees decoded pixels. Reading the
     // first few bytes is enough for every container the tracer accepts.
@@ -586,7 +619,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             .and_then(|mut f| f.read(&mut head).map(|n| head[..n].to_vec()))
             .ok()
     });
-    let t = trace_image(img, args)?;
+    let t = trace_image_sized(img, args, Some((arr_w as usize, arr_h as usize)))?;
     finish(args, t.svg, t.stats, t.width, t.height, t.lambda)
 }
 

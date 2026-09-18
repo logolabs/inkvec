@@ -147,6 +147,71 @@ fn from_dynamic(img: &image::DynamicImage) -> Rgba {
     }
 }
 
+/// The decode-time target for a `w x h` raster capped at `max_dim` on its longer side,
+/// or `None` when no cap applies. `max_dim == 0` means no cap.
+fn target_dims(w: u32, h: u32, max_dim: usize) -> Option<(u32, u32)> {
+    if max_dim == 0 {
+        return None;
+    }
+    let longest = w.max(h);
+    if longest <= max_dim as u32 {
+        return None;
+    }
+    let s = longest as f64 / max_dim as f64;
+    Some((
+        ((w as f64 / s).round() as u32).max(1),
+        ((h as f64 / s).round() as u32).max(1),
+    ))
+}
+
+/// Load a raster from a file path into straight RGBA floats, capping the longer side at
+/// `max_dim` pixels (0 = no cap) before the pixels are read into floats, and returning the
+/// file's original dimensions alongside so a caller can present the result at the size that
+/// arrived.
+///
+/// The size is decided from the file's header first, so the cap is known before the decode
+/// allocates. The full-resolution 8-bit buffer may still be decoded once, but the cap is an
+/// exact-area box average over that buffer, and the f32 conversion -- four bytes per channel,
+/// the dominant allocation -- then runs at the capped size rather than at the file's size,
+/// which is what used to blow past the decoder's 512 MiB guard on very large rasters.
+pub fn load_image_capped(path: &Path, max_dim: usize) -> Result<(Rgba, (u32, u32)), TraceError> {
+    let (w, h) = image::ImageReader::open(path)
+        .map_err(|e| TraceError::Decode(e.to_string()))?
+        .into_dimensions()
+        .map_err(|e| TraceError::Decode(e.to_string()))?;
+    let img = image::open(path).map_err(|e| TraceError::Decode(e.to_string()))?;
+    let out = match target_dims(w, h, max_dim) {
+        Some((nw, nh)) => {
+            let rgba = img.to_rgba8();
+            let raw = rgba.into_raw();
+            coverage::box_downsample_rgba8(&raw, w as usize, h as usize, nw as usize, nh as usize)
+        }
+        None => from_dynamic(&img),
+    };
+    Ok((out, (w, h)))
+}
+
+/// Decode in-memory bytes into straight RGBA floats, capping the longer side at `max_dim`
+/// pixels (0 = no cap) before the pixels are read into floats, and returning the original
+/// dimensions alongside. See [`load_image_capped`].
+pub fn decode_image_capped(bytes: &[u8], max_dim: usize) -> Result<(Rgba, (u32, u32)), TraceError> {
+    let (w, h) = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|e| TraceError::Decode(e.to_string()))?
+        .into_dimensions()
+        .map_err(|e| TraceError::Decode(e.to_string()))?;
+    let img = image::load_from_memory(bytes).map_err(|e| TraceError::Decode(e.to_string()))?;
+    let out = match target_dims(w, h, max_dim) {
+        Some((nw, nh)) => {
+            let rgba = img.to_rgba8();
+            let raw = rgba.into_raw();
+            coverage::box_downsample_rgba8(&raw, w as usize, h as usize, nw as usize, nh as usize)
+        }
+        None => from_dynamic(&img),
+    };
+    Ok((out, (w, h)))
+}
+
 /// Options for the bilevel path.
 #[derive(Debug, Clone, Copy)]
 pub struct TraceOptions {
@@ -1213,5 +1278,66 @@ mod from_labels_tests {
             reps.iter().any(|c| c.iter().all(|&v| v < 0.05)),
             "one of the fills is the square's black, got {reps:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod decode_cap_tests {
+    use super::*;
+
+    fn png_bytes(w: u32, h: u32) -> Vec<u8> {
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            w,
+            h,
+            image::Rgb([200, 30, 30]),
+        ));
+        let mut buf = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut buf, image::ImageFormat::Png).unwrap();
+        buf.into_inner()
+    }
+
+    #[test]
+    fn decode_cap_bounds_a_large_raster() {
+        let bytes = png_bytes(512, 256);
+
+        // No cap decodes at full size.
+        let (full, _) = decode_image_capped(&bytes, 0).unwrap();
+        assert_eq!((full.width, full.height), (512, 256));
+
+        // A cap reduces the raster before the f32 conversion, so the buffer that comes
+        // back is bounded by the cap rather than by the file's dimensions -- and the
+        // original dimensions still come back alongside.
+        let (capped, (aw, ah)) = decode_image_capped(&bytes, 64).unwrap();
+        assert_eq!((aw, ah), (512, 256), "arrival dimensions must be preserved");
+        assert!(
+            capped.width <= 64 && capped.height <= 64,
+            "capped raster is {}x{}, want at most 64 on the longer side",
+            capped.width,
+            capped.height
+        );
+        assert_eq!(capped.data.len(), capped.width * capped.height * 4);
+        assert!(capped.width < full.width);
+    }
+
+    #[test]
+    fn load_cap_bounds_a_large_file() {
+        let path = std::env::temp_dir().join(format!("inkvec-load-cap-{}.png", std::process::id()));
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            300,
+            100,
+            image::Rgb([0, 0, 0]),
+        ))
+        .save(&path)
+        .unwrap();
+        let (capped, (aw, ah)) = load_image_capped(&path, 40).unwrap();
+        std::fs::remove_file(&path).ok();
+        assert_eq!((aw, ah), (300, 100), "arrival dimensions must be preserved");
+        assert!(
+            capped.width <= 40 && capped.height <= 40,
+            "capped file is {}x{}, want at most 40 on the longer side",
+            capped.width,
+            capped.height
+        );
+        assert_eq!(capped.data.len(), capped.width * capped.height * 4);
     }
 }

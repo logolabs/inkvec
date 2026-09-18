@@ -66,6 +66,5 @@ only need revisiting when the *concept* changes.
 - [`../DESIGN.md`](../DESIGN.md) — the original design rationale.
 - [`../M0-BASELINE.md`](../M0-BASELINE.md) — the baseline measurements this project set out
   to beat.
-- [`../research-notes/`](../research-notes/) — working notes from individual investigations.
 - `bench/quality.py` — the code-quality ratchet, including the budget of long functions and
   untested modules.

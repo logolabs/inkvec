@@ -35,6 +35,9 @@ are drawn from the following third-party icon sets, each under its own upstream 
   openmoji          CC-BY-SA 4.0
                     https://openmoji.org
 
+  fluent-emoji      MIT
+                    https://github.com/microsoft/fluentui-emoji
+
 When the optional `restore-model` feature is built and an ONNX Runtime library is
 redistributed with the result, Microsoft's ONNX Runtime ThirdPartyNotices.txt is included
 alongside it, as required by its licence.

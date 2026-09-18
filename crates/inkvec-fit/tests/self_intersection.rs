@@ -236,3 +236,44 @@ fn an_already_simple_fit_is_not_disturbed() {
     assert_eq!(plain.segments.len(), repaired.segments.len());
     assert_eq!(self_crossing(&repaired), None);
 }
+
+/// A long ring (longer than the eight halvings of the old fixed-round repair) must still
+/// come back simple.
+///
+/// The repair's span-cap loop used to run a fixed eight rounds, which stops before
+/// `max_span = 1` -- the measured contour, the guaranteed-simple fallback -- on any ring
+/// longer than 512 points. The loop now halves until the cap is exhausted, so the fallback is
+/// reachable however long the ring is.
+#[test]
+fn a_long_thin_neck_is_repaired_without_crossing() {
+    // A long narrow hairpin: out along y≈0, round the end, back along y≈1.2.
+    let mut pts = Vec::new();
+    for k in 0..=300 {
+        pts.push(p(k as f64 * 2.0, 0.0));
+    }
+    for k in 1..8 {
+        let a = std::f64::consts::PI * (k as f64 / 8.0) - std::f64::consts::FRAC_PI_2;
+        pts.push(p(600.0 + 0.6 * a.cos(), 0.6 + 0.6 * a.sin()));
+    }
+    for k in (0..=300).rev() {
+        pts.push(p(k as f64 * 2.0, 1.2));
+    }
+    let n = pts.len();
+    assert!(
+        n > 511,
+        "the ring must outlast eight halvings, got {n} points"
+    );
+    let poly = Polyline {
+        points: pts,
+        sigma: vec![0.35; n],
+        closed: false,
+    };
+    let cfg = FitConfig::from_precision(128.0, 0.1, 2.0);
+    let fit = fit_simple(&poly, &cfg);
+    assert_eq!(
+        self_crossing(&fit),
+        None,
+        "the repair returned a path that still crosses itself"
+    );
+    assert!(!fit.segments.is_empty());
+}

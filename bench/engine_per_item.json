@@ -1,0 +1,1052 @@
+[
+  {
+    "family": "lucide",
+    "name": "calendar-sync",
+    "engine": "inkvec",
+    "case": "lucide/calendar-sync",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.7693272000178695,
+    "de00": 0.04448990151286125,
+    "coordinates": 172
+  },
+  {
+    "family": "lucide",
+    "name": "calendar-sync",
+    "engine": "vtracer-default",
+    "case": "lucide/calendar-sync",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.03499439998995513,
+    "de00": 0.622069239616394,
+    "coordinates": 1610
+  },
+  {
+    "family": "lucide",
+    "name": "calendar-sync",
+    "engine": "vtracer-1.0-default",
+    "case": "lucide/calendar-sync",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.047675599984358996,
+    "de00": 0.6203908920288086,
+    "coordinates": 1610
+  },
+  {
+    "family": "lucide",
+    "name": "calendar-sync",
+    "engine": "vtracer-1.0-simplify",
+    "case": "lucide/calendar-sync",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.042137600015848875,
+    "de00": 0.8034266233444214,
+    "coordinates": 902
+  },
+  {
+    "family": "lucide",
+    "name": "calendar-sync",
+    "engine": "trazor-auto",
+    "case": "lucide/calendar-sync",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 10.36974709999049,
+    "de00": 0.3350616991519928,
+    "coordinates": 484
+  },
+  {
+    "family": "lucide",
+    "name": "paintbrush-vertical",
+    "engine": "inkvec",
+    "case": "lucide/paintbrush-vertical",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.6679876999696717,
+    "de00": 0.026775836944580078,
+    "coordinates": 108
+  },
+  {
+    "family": "lucide",
+    "name": "paintbrush-vertical",
+    "engine": "vtracer-default",
+    "case": "lucide/paintbrush-vertical",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.03600600000936538,
+    "de00": 0.5017598271369934,
+    "coordinates": 848
+  },
+  {
+    "family": "lucide",
+    "name": "paintbrush-vertical",
+    "engine": "vtracer-1.0-default",
+    "case": "lucide/paintbrush-vertical",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.047385300043970346,
+    "de00": 0.502185583114624,
+    "coordinates": 848
+  },
+  {
+    "family": "lucide",
+    "name": "paintbrush-vertical",
+    "engine": "vtracer-1.0-simplify",
+    "case": "lucide/paintbrush-vertical",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.042839900008402765,
+    "de00": 0.5298407673835754,
+    "coordinates": 506
+  },
+  {
+    "family": "lucide",
+    "name": "paintbrush-vertical",
+    "engine": "trazor-auto",
+    "case": "lucide/paintbrush-vertical",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 1.9636436000000685,
+    "de00": 0.226552352309227,
+    "coordinates": 284
+  },
+  {
+    "family": "material-icons",
+    "name": "subtitles_off",
+    "engine": "inkvec",
+    "case": "material-icons/subtitles_off",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.8664085000054911,
+    "de00": 0.018431151285767555,
+    "coordinates": 100
+  },
+  {
+    "family": "material-icons",
+    "name": "subtitles_off",
+    "engine": "vtracer-default",
+    "case": "material-icons/subtitles_off",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.027483199955895543,
+    "de00": 1.5115787982940674,
+    "coordinates": 1012
+  },
+  {
+    "family": "material-icons",
+    "name": "subtitles_off",
+    "engine": "vtracer-1.0-default",
+    "case": "material-icons/subtitles_off",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.042137499956879765,
+    "de00": 1.5121725797653198,
+    "coordinates": 1012
+  },
+  {
+    "family": "material-icons",
+    "name": "subtitles_off",
+    "engine": "vtracer-1.0-simplify",
+    "case": "material-icons/subtitles_off",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.04164820001460612,
+    "de00": 0.7755390405654907,
+    "coordinates": 666
+  },
+  {
+    "family": "material-icons",
+    "name": "subtitles_off",
+    "engine": "trazor-auto",
+    "case": "material-icons/subtitles_off",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 1.8034959000069648,
+    "de00": 0.2639131247997284,
+    "coordinates": 174
+  },
+  {
+    "family": "material-icons",
+    "name": "center_focus_weak",
+    "engine": "inkvec",
+    "case": "material-icons/center_focus_weak",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 1.7162957999971695,
+    "de00": 0.006310563534498215,
+    "coordinates": 70
+  },
+  {
+    "family": "material-icons",
+    "name": "center_focus_weak",
+    "engine": "vtracer-default",
+    "case": "material-icons/center_focus_weak",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.028325999970547855,
+    "de00": 0.4700421690940857,
+    "coordinates": 566
+  },
+  {
+    "family": "material-icons",
+    "name": "center_focus_weak",
+    "engine": "vtracer-1.0-default",
+    "case": "material-icons/center_focus_weak",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.04345130000729114,
+    "de00": 0.47039446234703064,
+    "coordinates": 566
+  },
+  {
+    "family": "material-icons",
+    "name": "center_focus_weak",
+    "engine": "vtracer-1.0-simplify",
+    "case": "material-icons/center_focus_weak",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.07123930001398548,
+    "de00": 0.6737834811210632,
+    "coordinates": 482
+  },
+  {
+    "family": "material-icons",
+    "name": "center_focus_weak",
+    "engine": "trazor-auto",
+    "case": "material-icons/center_focus_weak",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 2.7807812000392005,
+    "de00": 0.13848018646240234,
+    "coordinates": 200
+  },
+  {
+    "family": "simple-icons",
+    "name": "barclays",
+    "engine": "inkvec",
+    "case": "simple-icons/barclays",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.9811786000500433,
+    "de00": 0.0347171314060688,
+    "coordinates": 202
+  },
+  {
+    "family": "simple-icons",
+    "name": "barclays",
+    "engine": "vtracer-default",
+    "case": "simple-icons/barclays",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.037914899992756546,
+    "de00": 0.5982004404067993,
+    "coordinates": 582
+  },
+  {
+    "family": "simple-icons",
+    "name": "barclays",
+    "engine": "vtracer-1.0-default",
+    "case": "simple-icons/barclays",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.055612900003325194,
+    "de00": 0.5983838438987732,
+    "coordinates": 582
+  },
+  {
+    "family": "simple-icons",
+    "name": "barclays",
+    "engine": "vtracer-1.0-simplify",
+    "case": "simple-icons/barclays",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.050568100006785244,
+    "de00": 0.4050329327583313,
+    "coordinates": 558
+  },
+  {
+    "family": "simple-icons",
+    "name": "barclays",
+    "engine": "trazor-auto",
+    "case": "simple-icons/barclays",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 1.983345200016629,
+    "de00": 0.16599281132221222,
+    "coordinates": 362
+  },
+  {
+    "family": "simple-icons",
+    "name": "slackware",
+    "engine": "inkvec",
+    "case": "simple-icons/slackware",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 1.008676600002218,
+    "de00": 0.05346144735813141,
+    "coordinates": 152
+  },
+  {
+    "family": "simple-icons",
+    "name": "slackware",
+    "engine": "vtracer-default",
+    "case": "simple-icons/slackware",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.03680589998839423,
+    "de00": 0.5733181238174438,
+    "coordinates": 546
+  },
+  {
+    "family": "simple-icons",
+    "name": "slackware",
+    "engine": "vtracer-1.0-default",
+    "case": "simple-icons/slackware",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.03702370001701638,
+    "de00": 0.5737354755401611,
+    "coordinates": 546
+  },
+  {
+    "family": "simple-icons",
+    "name": "slackware",
+    "engine": "vtracer-1.0-simplify",
+    "case": "simple-icons/slackware",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.04198989999713376,
+    "de00": 0.5786392688751221,
+    "coordinates": 406
+  },
+  {
+    "family": "simple-icons",
+    "name": "slackware",
+    "engine": "trazor-auto",
+    "case": "simple-icons/slackware",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 3.7994859000318684,
+    "de00": 0.1506992131471634,
+    "coordinates": 224
+  },
+  {
+    "family": "twemoji",
+    "name": "1f9d1-1f3fb-200d-1faef-200d-1f9d1-1f3fd",
+    "engine": "inkvec",
+    "case": "twemoji/1f9d1-1f3fb-200d-1faef-200d-1f9d1-1f3fd",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 1.1252236000145786,
+    "de00": 0.0515078566968441,
+    "coordinates": 840
+  },
+  {
+    "family": "twemoji",
+    "name": "1f9d1-1f3fb-200d-1faef-200d-1f9d1-1f3fd",
+    "engine": "vtracer-default",
+    "case": "twemoji/1f9d1-1f3fb-200d-1faef-200d-1f9d1-1f3fd",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.06090709997806698,
+    "de00": 0.4712074398994446,
+    "coordinates": 4318
+  },
+  {
+    "family": "twemoji",
+    "name": "1f9d1-1f3fb-200d-1faef-200d-1f9d1-1f3fd",
+    "engine": "vtracer-1.0-default",
+    "case": "twemoji/1f9d1-1f3fb-200d-1faef-200d-1f9d1-1f3fd",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.07153299998026341,
+    "de00": 0.4710671901702881,
+    "coordinates": 4318
+  },
+  {
+    "family": "twemoji",
+    "name": "1f9d1-1f3fb-200d-1faef-200d-1f9d1-1f3fd",
+    "engine": "vtracer-1.0-simplify",
+    "case": "twemoji/1f9d1-1f3fb-200d-1faef-200d-1f9d1-1f3fd",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.05307129997527227,
+    "de00": 0.4172857701778412,
+    "coordinates": 1986
+  },
+  {
+    "family": "twemoji",
+    "name": "1f9d1-1f3fb-200d-1faef-200d-1f9d1-1f3fd",
+    "engine": "trazor-auto",
+    "case": "twemoji/1f9d1-1f3fb-200d-1faef-200d-1f9d1-1f3fd",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 2.5158625000040047,
+    "de00": 0.16180257499217987,
+    "coordinates": 3066
+  },
+  {
+    "family": "twemoji",
+    "name": "1f6a3-1f3ff-200d-2642-fe0f",
+    "engine": "inkvec",
+    "case": "twemoji/1f6a3-1f3ff-200d-2642-fe0f",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.6762044000206515,
+    "de00": 0.05410923436284065,
+    "coordinates": 384
+  },
+  {
+    "family": "twemoji",
+    "name": "1f6a3-1f3ff-200d-2642-fe0f",
+    "engine": "vtracer-default",
+    "case": "twemoji/1f6a3-1f3ff-200d-2642-fe0f",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.0569099000422284,
+    "de00": 0.49351170659065247,
+    "coordinates": 3262
+  },
+  {
+    "family": "twemoji",
+    "name": "1f6a3-1f3ff-200d-2642-fe0f",
+    "engine": "vtracer-1.0-default",
+    "case": "twemoji/1f6a3-1f3ff-200d-2642-fe0f",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.06566140003269538,
+    "de00": 0.49352604150772095,
+    "coordinates": 3262
+  },
+  {
+    "family": "twemoji",
+    "name": "1f6a3-1f3ff-200d-2642-fe0f",
+    "engine": "vtracer-1.0-simplify",
+    "case": "twemoji/1f6a3-1f3ff-200d-2642-fe0f",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.046395799960009754,
+    "de00": 0.4384681284427643,
+    "coordinates": 938
+  },
+  {
+    "family": "twemoji",
+    "name": "1f6a3-1f3ff-200d-2642-fe0f",
+    "engine": "trazor-auto",
+    "case": "twemoji/1f6a3-1f3ff-200d-2642-fe0f",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 2.3055848000221886,
+    "de00": 0.17712309956550598,
+    "coordinates": 2054
+  },
+  {
+    "family": "noto-emoji",
+    "name": "emoji_u1f6a3",
+    "engine": "inkvec",
+    "case": "noto-emoji/emoji_u1f6a3",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 1.4069825999904424,
+    "de00": 0.10126729309558868,
+    "coordinates": 1320
+  },
+  {
+    "family": "noto-emoji",
+    "name": "emoji_u1f6a3",
+    "engine": "vtracer-default",
+    "case": "noto-emoji/emoji_u1f6a3",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.04466709995176643,
+    "de00": 0.5792914628982544,
+    "coordinates": 5836
+  },
+  {
+    "family": "noto-emoji",
+    "name": "emoji_u1f6a3",
+    "engine": "vtracer-1.0-default",
+    "case": "noto-emoji/emoji_u1f6a3",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.05657039996003732,
+    "de00": 0.5793328881263733,
+    "coordinates": 5836
+  },
+  {
+    "family": "noto-emoji",
+    "name": "emoji_u1f6a3",
+    "engine": "vtracer-1.0-simplify",
+    "case": "noto-emoji/emoji_u1f6a3",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.051253899990115315,
+    "de00": 0.4989452362060547,
+    "coordinates": 3108
+  },
+  {
+    "family": "noto-emoji",
+    "name": "emoji_u1f6a3",
+    "engine": "trazor-auto",
+    "case": "noto-emoji/emoji_u1f6a3",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 2.6104384000063874,
+    "de00": 0.21530009806156158,
+    "coordinates": 7490
+  },
+  {
+    "family": "noto-emoji",
+    "name": "emoji_u1f478_1f3fd",
+    "engine": "inkvec",
+    "case": "noto-emoji/emoji_u1f478_1f3fd",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 1.7059140999917872,
+    "de00": 0.23276753723621368,
+    "coordinates": 1070
+  },
+  {
+    "family": "noto-emoji",
+    "name": "emoji_u1f478_1f3fd",
+    "engine": "vtracer-default",
+    "case": "noto-emoji/emoji_u1f478_1f3fd",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.05360770004335791,
+    "de00": 0.8519020676612854,
+    "coordinates": 3502
+  },
+  {
+    "family": "noto-emoji",
+    "name": "emoji_u1f478_1f3fd",
+    "engine": "vtracer-1.0-default",
+    "case": "noto-emoji/emoji_u1f478_1f3fd",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.06921709998277947,
+    "de00": 0.8517971634864807,
+    "coordinates": 3502
+  },
+  {
+    "family": "noto-emoji",
+    "name": "emoji_u1f478_1f3fd",
+    "engine": "vtracer-1.0-simplify",
+    "case": "noto-emoji/emoji_u1f478_1f3fd",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.05058959999587387,
+    "de00": 0.8250677585601807,
+    "coordinates": 2148
+  },
+  {
+    "family": "noto-emoji",
+    "name": "emoji_u1f478_1f3fd",
+    "engine": "trazor-auto",
+    "case": "noto-emoji/emoji_u1f478_1f3fd",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 2.5358089999645017,
+    "de00": 0.41937685012817383,
+    "coordinates": 2300
+  },
+  {
+    "family": "openmoji",
+    "name": "1F334",
+    "engine": "inkvec",
+    "case": "openmoji/1F334",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 1.0951708999928087,
+    "de00": 0.08878808468580246,
+    "coordinates": 384
+  },
+  {
+    "family": "openmoji",
+    "name": "1F334",
+    "engine": "vtracer-default",
+    "case": "openmoji/1F334",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.030106799968052655,
+    "de00": 0.6647294759750366,
+    "coordinates": 1266
+  },
+  {
+    "family": "openmoji",
+    "name": "1F334",
+    "engine": "vtracer-1.0-default",
+    "case": "openmoji/1F334",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.0356175999622792,
+    "de00": 0.6647125482559204,
+    "coordinates": 1266
+  },
+  {
+    "family": "openmoji",
+    "name": "1F334",
+    "engine": "vtracer-1.0-simplify",
+    "case": "openmoji/1F334",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.04275180003605783,
+    "de00": 0.5740787982940674,
+    "coordinates": 794
+  },
+  {
+    "family": "openmoji",
+    "name": "1F334",
+    "engine": "trazor-auto",
+    "case": "openmoji/1F334",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 2.257828800007701,
+    "de00": 0.31811508536338806,
+    "coordinates": 866
+  },
+  {
+    "family": "openmoji",
+    "name": "2709",
+    "engine": "inkvec",
+    "case": "openmoji/2709",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.7932072000112385,
+    "de00": 0.06509264558553696,
+    "coordinates": 116
+  },
+  {
+    "family": "openmoji",
+    "name": "2709",
+    "engine": "vtracer-default",
+    "case": "openmoji/2709",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.032590000017080456,
+    "de00": 0.7000405192375183,
+    "coordinates": 1330
+  },
+  {
+    "family": "openmoji",
+    "name": "2709",
+    "engine": "vtracer-1.0-default",
+    "case": "openmoji/2709",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.07990549999522045,
+    "de00": 0.7001394629478455,
+    "coordinates": 1330
+  },
+  {
+    "family": "openmoji",
+    "name": "2709",
+    "engine": "vtracer-1.0-simplify",
+    "case": "openmoji/2709",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.08729520003544167,
+    "de00": 0.7640164494514465,
+    "coordinates": 592
+  },
+  {
+    "family": "openmoji",
+    "name": "2709",
+    "engine": "trazor-auto",
+    "case": "openmoji/2709",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 5.213472100032959,
+    "de00": 0.4025305509567261,
+    "coordinates": 334
+  },
+  {
+    "family": "fluent-emoji",
+    "name": "Musical_notes_Color_musical_notes_color",
+    "engine": "inkvec",
+    "case": "fluent-emoji/Musical_notes_Color_musical_notes_color",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 3.181973199942149,
+    "de00": 0.5986873507499695,
+    "coordinates": 1280
+  },
+  {
+    "family": "fluent-emoji",
+    "name": "Musical_notes_Color_musical_notes_color",
+    "engine": "vtracer-default",
+    "case": "fluent-emoji/Musical_notes_Color_musical_notes_color",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.04059200000483543,
+    "de00": 1.792994737625122,
+    "coordinates": 1412
+  },
+  {
+    "family": "fluent-emoji",
+    "name": "Musical_notes_Color_musical_notes_color",
+    "engine": "vtracer-1.0-default",
+    "case": "fluent-emoji/Musical_notes_Color_musical_notes_color",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.04076039994833991,
+    "de00": 1.7928214073181152,
+    "coordinates": 1412
+  },
+  {
+    "family": "fluent-emoji",
+    "name": "Musical_notes_Color_musical_notes_color",
+    "engine": "vtracer-1.0-simplify",
+    "case": "fluent-emoji/Musical_notes_Color_musical_notes_color",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.0754194000037387,
+    "de00": 1.744621992111206,
+    "coordinates": 890
+  },
+  {
+    "family": "fluent-emoji",
+    "name": "Musical_notes_Color_musical_notes_color",
+    "engine": "trazor-auto",
+    "case": "fluent-emoji/Musical_notes_Color_musical_notes_color",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 3.177675499988254,
+    "de00": 1.430219054222107,
+    "coordinates": 336
+  },
+  {
+    "family": "fluent-emoji",
+    "name": "Face_with_medical_mask_Color_face_with_medical_mask_color",
+    "engine": "inkvec",
+    "case": "fluent-emoji/Face_with_medical_mask_Color_face_with_medical_mask_color",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 2.3433895999914967,
+    "de00": 0.7159636616706848,
+    "coordinates": 732
+  },
+  {
+    "family": "fluent-emoji",
+    "name": "Face_with_medical_mask_Color_face_with_medical_mask_color",
+    "engine": "vtracer-default",
+    "case": "fluent-emoji/Face_with_medical_mask_Color_face_with_medical_mask_color",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.05103660002350807,
+    "de00": 4.014852523803711,
+    "coordinates": 1164
+  },
+  {
+    "family": "fluent-emoji",
+    "name": "Face_with_medical_mask_Color_face_with_medical_mask_color",
+    "engine": "vtracer-1.0-default",
+    "case": "fluent-emoji/Face_with_medical_mask_Color_face_with_medical_mask_color",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.06409549998352304,
+    "de00": 4.016274452209473,
+    "coordinates": 1170
+  },
+  {
+    "family": "fluent-emoji",
+    "name": "Face_with_medical_mask_Color_face_with_medical_mask_color",
+    "engine": "vtracer-1.0-simplify",
+    "case": "fluent-emoji/Face_with_medical_mask_Color_face_with_medical_mask_color",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.05132819997379556,
+    "de00": 3.917470693588257,
+    "coordinates": 1012
+  },
+  {
+    "family": "fluent-emoji",
+    "name": "Face_with_medical_mask_Color_face_with_medical_mask_color",
+    "engine": "trazor-auto",
+    "case": "fluent-emoji/Face_with_medical_mask_Color_face_with_medical_mask_color",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 2.896783599979244,
+    "de00": 3.8670613765716553,
+    "coordinates": 636
+  },
+  {
+    "family": "synthetic",
+    "name": "prim_circle",
+    "engine": "inkvec",
+    "case": "synthetic/prim_circle",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 1.9262811999651603,
+    "de00": 0.0033191340044140816,
+    "coordinates": 4
+  },
+  {
+    "family": "synthetic",
+    "name": "prim_circle",
+    "engine": "vtracer-default",
+    "case": "synthetic/prim_circle",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.03855689999181777,
+    "de00": 0.19457758963108063,
+    "coordinates": 190
+  },
+  {
+    "family": "synthetic",
+    "name": "prim_circle",
+    "engine": "vtracer-1.0-default",
+    "case": "synthetic/prim_circle",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.04494579997844994,
+    "de00": 0.194507896900177,
+    "coordinates": 190
+  },
+  {
+    "family": "synthetic",
+    "name": "prim_circle",
+    "engine": "vtracer-1.0-simplify",
+    "case": "synthetic/prim_circle",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.04528419999405742,
+    "de00": 0.19797304272651672,
+    "coordinates": 126
+  },
+  {
+    "family": "synthetic",
+    "name": "prim_circle",
+    "engine": "trazor-auto",
+    "case": "synthetic/prim_circle",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 2.7364176000119187,
+    "de00": 0.015853147953748703,
+    "coordinates": 30
+  },
+  {
+    "family": "synthetic",
+    "name": "mosaic_pie6",
+    "engine": "inkvec",
+    "case": "synthetic/mosaic_pie6",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 1.2269183999742381,
+    "de00": 0.018455909565091133,
+    "coordinates": 74
+  },
+  {
+    "family": "synthetic",
+    "name": "mosaic_pie6",
+    "engine": "vtracer-default",
+    "case": "synthetic/mosaic_pie6",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.06119580002268776,
+    "de00": 0.31790775060653687,
+    "coordinates": 940
+  },
+  {
+    "family": "synthetic",
+    "name": "mosaic_pie6",
+    "engine": "vtracer-1.0-default",
+    "case": "synthetic/mosaic_pie6",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.08079520001774654,
+    "de00": 0.31790199875831604,
+    "coordinates": 940
+  },
+  {
+    "family": "synthetic",
+    "name": "mosaic_pie6",
+    "engine": "vtracer-1.0-simplify",
+    "case": "synthetic/mosaic_pie6",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.0839842000277713,
+    "de00": 0.34651073813438416,
+    "coordinates": 444
+  },
+  {
+    "family": "synthetic",
+    "name": "mosaic_pie6",
+    "engine": "trazor-auto",
+    "case": "synthetic/mosaic_pie6",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 6.260419099999126,
+    "de00": 0.12621665000915527,
+    "coordinates": 344
+  },
+  {
+    "family": "synthetic",
+    "name": "gradient_linear",
+    "engine": "inkvec",
+    "case": "synthetic/gradient_linear",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 2.9308473999844864,
+    "de00": 0.1665228009223938,
+    "coordinates": 4
+  },
+  {
+    "family": "synthetic",
+    "name": "gradient_linear",
+    "engine": "vtracer-default",
+    "case": "synthetic/gradient_linear",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.04529390000971034,
+    "de00": 7.30793571472168,
+    "coordinates": 534
+  },
+  {
+    "family": "synthetic",
+    "name": "gradient_linear",
+    "engine": "vtracer-1.0-default",
+    "case": "synthetic/gradient_linear",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.10089719999814406,
+    "de00": 7.308000087738037,
+    "coordinates": 534
+  },
+  {
+    "family": "synthetic",
+    "name": "gradient_linear",
+    "engine": "vtracer-1.0-simplify",
+    "case": "synthetic/gradient_linear",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.19769870000891387,
+    "de00": 7.321343421936035,
+    "coordinates": 186
+  },
+  {
+    "family": "synthetic",
+    "name": "gradient_linear",
+    "engine": "trazor-auto",
+    "case": "synthetic/gradient_linear",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 8.176919199991971,
+    "de00": 1.0551375150680542,
+    "coordinates": 536
+  },
+  {
+    "family": "synthetic",
+    "name": "gradient_radial",
+    "engine": "inkvec",
+    "case": "synthetic/gradient_radial",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 4.1273364999797195,
+    "de00": 0.04079729691147804,
+    "coordinates": 4
+  },
+  {
+    "family": "synthetic",
+    "name": "gradient_radial",
+    "engine": "vtracer-default",
+    "case": "synthetic/gradient_radial",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.04756639996776357,
+    "de00": 3.1812186241149902,
+    "coordinates": 190
+  },
+  {
+    "family": "synthetic",
+    "name": "gradient_radial",
+    "engine": "vtracer-1.0-default",
+    "case": "synthetic/gradient_radial",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.07786800002213567,
+    "de00": 3.1812496185302734,
+    "coordinates": 190
+  },
+  {
+    "family": "synthetic",
+    "name": "gradient_radial",
+    "engine": "vtracer-1.0-simplify",
+    "case": "synthetic/gradient_radial",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.08102469996083528,
+    "de00": 3.175178050994873,
+    "coordinates": 126
+  },
+  {
+    "family": "synthetic",
+    "name": "gradient_radial",
+    "engine": "trazor-auto",
+    "case": "synthetic/gradient_radial",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 4.642591200012248,
+    "de00": 0.5224600434303284,
+    "coordinates": 400
+  },
+  {
+    "family": "brands",
+    "name": "shinhancard_com",
+    "engine": "inkvec",
+    "case": "brands/shinhancard_com",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 1.4923376999795437,
+    "de00": 0.0659499317407608,
+    "coordinates": 350
+  },
+  {
+    "family": "brands",
+    "name": "shinhancard_com",
+    "engine": "vtracer-default",
+    "case": "brands/shinhancard_com",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.03510249999817461,
+    "de00": 0.5807479023933411,
+    "coordinates": 1576
+  },
+  {
+    "family": "brands",
+    "name": "shinhancard_com",
+    "engine": "vtracer-1.0-default",
+    "case": "brands/shinhancard_com",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.07058890000917017,
+    "de00": 0.5807806849479675,
+    "coordinates": 1576
+  },
+  {
+    "family": "brands",
+    "name": "shinhancard_com",
+    "engine": "vtracer-1.0-simplify",
+    "case": "brands/shinhancard_com",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.15166919998591766,
+    "de00": 0.5712850093841553,
+    "coordinates": 1254
+  },
+  {
+    "family": "brands",
+    "name": "shinhancard_com",
+    "engine": "trazor-auto",
+    "case": "brands/shinhancard_com",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 3.3106191999977455,
+    "de00": 0.21315760910511017,
+    "coordinates": 886
+  },
+  {
+    "family": "brands",
+    "name": "jurlique_com_au",
+    "engine": "inkvec",
+    "case": "brands/jurlique_com_au",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 1.4263119000243023,
+    "de00": 0.08667411655187607,
+    "coordinates": 268
+  },
+  {
+    "family": "brands",
+    "name": "jurlique_com_au",
+    "engine": "vtracer-default",
+    "case": "brands/jurlique_com_au",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.03154240001458675,
+    "de00": 0.5409015417098999,
+    "coordinates": 1712
+  },
+  {
+    "family": "brands",
+    "name": "jurlique_com_au",
+    "engine": "vtracer-1.0-default",
+    "case": "brands/jurlique_com_au",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.03718539996771142,
+    "de00": 0.5408430695533752,
+    "coordinates": 1712
+  },
+  {
+    "family": "brands",
+    "name": "jurlique_com_au",
+    "engine": "vtracer-1.0-simplify",
+    "case": "brands/jurlique_com_au",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.07466480002040043,
+    "de00": 0.5383956432342529,
+    "coordinates": 1348
+  },
+  {
+    "family": "brands",
+    "name": "jurlique_com_au",
+    "engine": "trazor-auto",
+    "case": "brands/jurlique_com_au",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 3.6330376000260003,
+    "de00": 0.18039827048778534,
+    "coordinates": 1298
+  },
+  {
+    "family": "brands",
+    "name": "sangchaimeter_com",
+    "engine": "inkvec",
+    "case": "brands/sangchaimeter_com",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 1.466094699979294,
+    "de00": 0.2940555214881897,
+    "coordinates": 1734
+  },
+  {
+    "family": "brands",
+    "name": "sangchaimeter_com",
+    "engine": "vtracer-default",
+    "case": "brands/sangchaimeter_com",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.04789470002287999,
+    "de00": 1.3838001489639282,
+    "coordinates": 8406
+  },
+  {
+    "family": "brands",
+    "name": "sangchaimeter_com",
+    "engine": "vtracer-1.0-default",
+    "case": "brands/sangchaimeter_com",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.0497536999755539,
+    "de00": 1.3832024335861206,
+    "coordinates": 8406
+  },
+  {
+    "family": "brands",
+    "name": "sangchaimeter_com",
+    "engine": "vtracer-1.0-simplify",
+    "case": "brands/sangchaimeter_com",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 0.07346139999572188,
+    "de00": 1.456026554107666,
+    "coordinates": 7554
+  },
+  {
+    "family": "brands",
+    "name": "sangchaimeter_com",
+    "engine": "trazor-auto",
+    "case": "brands/sangchaimeter_com",
+    "inkvec_binary_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "seconds": 3.0760719000245444,
+    "de00": 0.49879807233810425,
+    "coordinates": 2302
+  }
+]

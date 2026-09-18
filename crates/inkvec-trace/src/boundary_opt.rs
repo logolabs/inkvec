@@ -421,7 +421,7 @@ fn segments_cross(a: Point, b: Point, c: Point, d: Point) -> bool {
 ///
 /// Only segments sharing a pixel are compared. A point moves less than a pixel, so a new
 /// crossing is always local.
-fn crossings_count(map: &PlanarMap, vars: &Vars, pos: &[Point], w: usize, h: usize) -> usize {
+fn crossings_count(map: &PlanarMap, vars: &Vars, pos: &[Point], _w: usize, _h: usize) -> usize {
     let mut segs: Vec<(u32, u32)> = Vec::new();
     for (k, e) in map.edges.iter().enumerate() {
         let ids = &vars.var[k];
@@ -434,7 +434,7 @@ fn crossings_count(map: &PlanarMap, vars: &Vars, pos: &[Point], w: usize, h: usi
             segs.push((ids[i], ids[(i + 1) % n]));
         }
     }
-    let mut cells: HashMap<i64, Vec<u32>> = HashMap::new();
+    let mut cells: HashMap<(i64, i64), Vec<u32>> = HashMap::new();
     for (i, &(a, b)) in segs.iter().enumerate() {
         let (p, q) = (pos[a as usize], pos[b as usize]);
         let x0 = (p.x.min(q.x) - 0.5).floor() as i64;
@@ -447,10 +447,7 @@ fn crossings_count(map: &PlanarMap, vars: &Vars, pos: &[Point], w: usize, h: usi
         }
         for y in y0..=y1 {
             for x in x0..=x1 {
-                cells
-                    .entry(y * (w as i64 + 4) + x + h as i64)
-                    .or_default()
-                    .push(i as u32);
+                cells.entry((x, y)).or_default().push(i as u32);
             }
         }
     }

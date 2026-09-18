@@ -209,7 +209,7 @@ pub const NOISE_FLOOR: f64 = 0.5 / 255.0;
 /// constants have quietly absorbed is the worst kind to leave as a literal; deriving it
 /// from the kernel means changing the kernel can no longer leave a stale gain behind.
 pub fn estimate_noise(gray: &[f32], w: usize, h: usize) -> f64 {
-    if w < 3 || h < 3 {
+    if w < 3 || h < 3 || gray.len() < w * h {
         return 1.0 / 255.0;
     }
     let mut lap = Vec::with_capacity((w - 2) * (h - 2));
@@ -250,6 +250,18 @@ pub fn bilevel_coverage(img: &Rgba) -> CoverageField {
     let mut sorted = lum.clone();
     sorted.sort_by(|a, b| a.total_cmp(b));
     let n = sorted.len();
+    if n == 0 {
+        return CoverageField {
+            width: w,
+            height: h,
+            data: Vec::new(),
+            sigma_alpha: 0.0,
+            sigma_model: DEFAULT_SIGMA_MODEL,
+            fg: [0.0, 0.0, 0.0],
+            bg: [1.0, 1.0, 1.0],
+            saturation: 1.0,
+        };
+    }
     let plateau = ((n as f64 * 0.001) as usize).clamp(1, n.saturating_sub(1).max(1));
     let lo = sorted[plateau.min(n - 1)];
     let hi = sorted[n.saturating_sub(1 + plateau)];
@@ -260,6 +272,21 @@ pub fn bilevel_coverage(img: &Rgba) -> CoverageField {
 
     let d = [fg[0] - bg[0], fg[1] - bg[1], fg[2] - bg[2]];
     let dd = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) as f64;
+    // A uniform image has fg == bg, so the colour axis is degenerate and dividing by `dd`
+    // below would produce NaN (0/0) that `f64::clamp` passes straight through. There is no
+    // boundary to extract; return an empty, fully-saturated field instead.
+    if dd <= f64::EPSILON {
+        return CoverageField {
+            width: w,
+            height: h,
+            data: vec![0.0; w * h],
+            sigma_alpha: 0.0,
+            sigma_model: DEFAULT_SIGMA_MODEL,
+            fg,
+            bg,
+            saturation: 1.0,
+        };
+    }
     let contrast = dd.sqrt().max(1e-6);
 
     let data: Vec<f32> = rgb
@@ -702,6 +729,110 @@ pub fn downsample_to(img: &Rgba, nw: usize, nh: usize) -> Rgba {
     }
 }
 
+/// Exact-area (box) downsample of an 8-bit RGBA buffer to `nw x nh` — the same operator
+/// [`downsample_to`] applies to an f32 [`Rgba`], read straight from the decoder's 8-bit
+/// buffer so the decode-time `--max-dim` cap never has to materialise the full-resolution
+/// f32 image.
+///
+/// The arithmetic is identical to [`downsample_to`]: each target pixel is the exact
+/// area-weighted average of the source pixels under its footprint, with fractional weights
+/// on the boundary pixels, colour averaged premultiplied and then un-premultiplied. The only
+/// difference is that source channels are read at 8 bits per channel, which differs from the
+/// f32 path by at most the 8-bit quantisation of the input.
+pub fn box_downsample_rgba8(src: &[u8], w: usize, h: usize, nw: usize, nh: usize) -> Rgba {
+    if w == 0 || h == 0 || nw == 0 || nh == 0 || (nw == w && nh == h) {
+        let mut data = vec![0.0f32; w * h * 4];
+        for (i, &b) in src.iter().take(w * h * 4).enumerate() {
+            data[i] = b as f32 / 255.0;
+        }
+        return Rgba {
+            width: w,
+            height: h,
+            data,
+        };
+    }
+    let mut data = vec![0.0f32; nw * nh * 4];
+    let sx = w as f64 / nw as f64;
+    let sy = h as f64 / nh as f64;
+
+    for oy in 0..nh {
+        let y_start = oy as f64 * sy;
+        let y_end = if oy + 1 == nh {
+            h as f64
+        } else {
+            (oy + 1) as f64 * sy
+        };
+        let y0 = (y_start.floor() as usize).min(h);
+        let y1 = (y_end.ceil() as usize).min(h);
+
+        for ox in 0..nw {
+            let x_start = ox as f64 * sx;
+            let x_end = if ox + 1 == nw {
+                w as f64
+            } else {
+                (ox + 1) as f64 * sx
+            };
+            let x0 = (x_start.floor() as usize).min(w);
+            let x1 = (x_end.ceil() as usize).min(w);
+
+            let (mut acc, mut a_sum, mut total_weight) = ([0.0f64; 3], 0.0f64, 0.0f64);
+
+            for y in y0..y1 {
+                let wy = ((y + 1) as f64).min(y_end) - (y as f64).max(y_start);
+                if wy <= 0.0 {
+                    continue;
+                }
+                for x in x0..x1 {
+                    let wx = ((x + 1) as f64).min(x_end) - (x as f64).max(x_start);
+                    if wx <= 0.0 {
+                        continue;
+                    }
+                    let weight = wx * wy;
+                    total_weight += weight;
+                    let p = (y * w + x) * 4;
+                    let a = src[p + 3] as f64 / 255.0;
+                    let wa = a * weight;
+                    for c in 0..3 {
+                        acc[c] += (src[p + c] as f64 / 255.0) * wa;
+                    }
+                    a_sum += wa;
+                }
+            }
+
+            let o = (oy * nw + ox) * 4;
+            let alpha = if total_weight > 0.0 {
+                let a = (a_sum / total_weight) as f32;
+                if a.is_finite() {
+                    a.clamp(0.0, 1.0)
+                } else {
+                    0.0
+                }
+            } else {
+                0.0
+            };
+            for c in 0..3 {
+                data[o + c] = if a_sum > 1e-9 {
+                    let v = (acc[c] / a_sum) as f32;
+                    if v.is_finite() {
+                        v.clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    }
+                } else {
+                    0.0
+                };
+            }
+            data[o + 3] = alpha;
+        }
+    }
+
+    Rgba {
+        width: nw,
+        height: nh,
+        data,
+    }
+}
+
 /// Mean absolute round-trip error, in 8-bit levels, above which a downsample has lost
 /// something.
 ///
@@ -936,6 +1067,42 @@ mod tests {
         assert_eq!(oversample_factor(&[[0.0; 3]; 4], 2, 2), 1);
         assert!(estimate_noise(&[], 0, 0) > 0.0);
         assert!(estimate_noise(&[0.5; 4], 2, 2) > 0.0);
+    }
+
+    #[test]
+    fn bilevel_coverage_is_defined_on_a_uniform_image() {
+        // A solid-colour image has fg == bg, which used to divide by zero and put NaN in
+        // every coverage sample; `f64::clamp` passes NaN through, so it survived to the
+        // contour stage. There must be no NaN and saturation must read fully covered.
+        let img = Rgba {
+            width: 16,
+            height: 16,
+            data: [0.5f32, 0.5, 0.5, 1.0].repeat(16 * 16),
+        };
+        let field = bilevel_coverage(&img);
+        assert_eq!(field.data.len(), 16 * 16);
+        assert!(field.data.iter().all(|v| v.is_finite()), "no NaN");
+        assert_eq!(field.saturation, 1.0);
+    }
+
+    #[test]
+    fn bilevel_coverage_is_defined_on_a_zero_pixel_image() {
+        let img = Rgba {
+            width: 0,
+            height: 0,
+            data: Vec::new(),
+        };
+        let field = bilevel_coverage(&img);
+        assert!(field.data.is_empty());
+        assert_eq!(field.saturation, 1.0);
+    }
+
+    #[test]
+    fn estimate_noise_guards_a_short_buffer() {
+        // A truncated buffer with claimed dimensions must not index out of bounds; the
+        // sibling estimators all carry this guard, estimate_noise was the one that did not.
+        assert!(estimate_noise(&[], 100, 100) > 0.0);
+        assert!(estimate_noise(&[0.5f32; 4], 100, 100) > 0.0);
     }
 
     /// Deterministic standard normal samples, by Box-Muller on a linear congruential
@@ -1443,5 +1610,49 @@ mod tests {
         nan_rgb[25] = [0.5, f32::INFINITY, 0.5];
         let scale = intake_scale(&nan_rgb, 32, 32);
         assert!(scale.is_finite() && scale >= 1.0);
+    }
+
+    /// The decode-time box cap is the *same operator* as the f32 exact-area downsample, read
+    /// from an 8-bit source. The only difference allowed is the 8-bit quantisation of the
+    /// input, so the two must agree to within a couple of levels.
+    #[test]
+    fn box_downsample_rgba8_matches_downsample_to_within_8_bit_rounding() {
+        for &(w, h, nw, nh) in &[(37, 23, 17, 11), (64, 48, 8, 8), (40, 40, 15, 15)] {
+            let mut seed = 7u32;
+            let mut next = move || {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                ((seed >> 8) as f64 + 0.5) / 16777216.0
+            };
+            let src = {
+                let mut data = vec![0.0f32; w * h * 4];
+                for p in 0..w * h {
+                    for c in 0..3 {
+                        data[p * 4 + c] = next() as f32;
+                    }
+                    data[p * 4 + 3] = (0.5 + 0.5 * next()) as f32;
+                }
+                Rgba {
+                    width: w,
+                    height: h,
+                    data,
+                }
+            };
+            let u8buf: Vec<u8> = src
+                .data
+                .iter()
+                .map(|&v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
+                .collect();
+
+            let reference = downsample_to(&src, nw, nh);
+            let from_u8 = box_downsample_rgba8(&u8buf, w, h, nw, nh);
+            assert_eq!((from_u8.width, from_u8.height), (nw, nh));
+            for i in 0..nw * nh * 4 {
+                let (a, b) = (reference.data[i] as f64, from_u8.data[i] as f64);
+                assert!(
+                    (a - b).abs() < 2.0 / 255.0,
+                    "{w}x{h} -> {nw}x{nh}: channel {i}: f32 {a} vs u8 {b}"
+                );
+            }
+        }
     }
 }

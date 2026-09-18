@@ -82,7 +82,8 @@ pub use junctions::{node_position, refine_junctions};
 /// `(i - 0.5, j - 0.5)`, with `i` in `0..=w` and `j` in `0..=h`.
 #[inline]
 fn node_id(i: usize, j: usize, w: usize) -> u32 {
-    (j * (w + 1) + i) as u32
+    u32::try_from(j * (w + 1) + i)
+        .expect("planar node id exceeds u32; the raster is too large to subdivide")
 }
 
 #[inline]
@@ -149,7 +150,8 @@ pub fn build(labels: &[u16], w: usize, h: usize, n_labels: usize) -> PlanarMap {
 
     // Real nodes are `0..(w+1)*(h+1)`; a node split below gets a second id one whole
     // grid further on, which `node_position` folds back to the same place.
-    let plane = ((w + 1) * (h + 1)) as u32;
+    let plane = u32::try_from((w + 1) * (h + 1))
+        .expect("planar node count exceeds u32; the raster is too large to subdivide");
 
     // Where four pixels meet at a corner and one diagonal is a single face, give the
     // other two their own copy of that corner.

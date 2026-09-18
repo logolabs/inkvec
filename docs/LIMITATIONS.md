@@ -10,7 +10,7 @@
 
 Every software system is built around explicit design assumptions. Inkvec is engineered to produce **publication-grade, exact, mathematically compact vector graphics from raster artwork** (logos, icons, technical diagrams, emoji, and graphic illustrations).
 
-To achieve sub-pixel boundary fidelity ($< 0.05\text{px}$) and $1.000\times$ exact planar topology without seams or overdraw, Inkvec relies on physical and information-theoretic models. When inputs violate those underlying assumptions, the system degrades predictably.
+To achieve sub-pixel boundary fidelity ($< 0.05\text{px}$) and an exact planar topology with no seams and no overdraw in the internal representation ($1.000\times$), Inkvec relies on physical and information-theoretic models. When inputs violate those underlying assumptions, the system degrades predictably.
 
 This document outlines Inkvec's known limitations, failure modes, performance trade-offs, and out-of-scope use cases with complete engineering transparency.
 
@@ -70,7 +70,7 @@ This document outlines Inkvec's known limitations, failure modes, performance tr
 
 ### 4.2 Large Image Memory Footprint
 - **Scaling:** The Doubly Connected Edge List (DCEL), per-pixel label arrays, coverage gradient fields, and dynamic programming memory matrices scale linearly with pixel dimensions $\mathcal{O}(W \times H)$.
-- **Limitation:** Processing ultra-high-resolution images (e.g., 8,000 × 8,000 pixels or larger) requires several gigabytes of RAM during the global Levenberg-Marquardt boundary solve and DP curve fitting.
+- **Limitation:** Processing ultra-high-resolution images (e.g., 8,000 × 8,000 pixels or larger) requires several gigabytes of RAM during the global nonlinear conjugate gradient boundary solve and DP curve fitting.
 - **Mitigation:** Inkvec's intake normalizer automatically detects oversampled artwork and downsamples to $\le 8.0\times$ detail resolution unless overridden.
 
 ---
@@ -93,7 +93,7 @@ This document outlines Inkvec's known limitations, failure modes, performance tr
 
 | Capability / Scenario | Support Level | Expected Behavior / Failure Mode |
 |---|:---:|---|
-| Clean Vector Logos & Icons | ⭐⭐⭐⭐⭐ **Native** | Optimal; $< 0.05\text{px}$ boundary fit, exact $1.000\times$ planar map. |
+| Clean Vector Logos & Icons | ⭐⭐⭐⭐⭐ **Native** | Optimal; $< 0.05\text{px}$ boundary fit, exact planar map (boundaries stored once, no internal overdraw). |
 | Linear & Radial Gradients | ⭐⭐⭐⭐⭐ **Native** | Merged across bands; emitted as native SVG gradients. |
 | Flat Line Art (Uniform Width) | ⭐⭐⭐⭐ **High** | Recovered as single-path centerlines via `--strokes`. |
 | Lossy JPEGs / WebP | ⭐⭐⭐⭐ **High** | Requires `--restore on` for deblocking; high noise guard. |

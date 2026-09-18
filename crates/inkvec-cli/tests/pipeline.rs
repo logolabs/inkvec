@@ -4,7 +4,7 @@
 //! colour and bilevel emitters, post-processing, transparency, and how the pipeline reports a
 //! stop), which the tracer's own tests never reach.
 
-use inkvec_cli::{post_process, trace_image, Args, Stop};
+use inkvec_cli::{post_process, trace_image, trace_image_sized, Args, Stop};
 use inkvec_trace::Rgba;
 
 fn image(w: usize, h: usize, px: impl Fn(usize, usize) -> [f32; 4]) -> Rgba {
@@ -182,4 +182,36 @@ fn degenerate_sizes_and_full_transparency_do_not_fail() {
     }
     let clear = image(16, 16, |_, _| [0.0, 0.0, 0.0, 0.0]);
     assert!(trace_image(clear, &Args::default()).is_ok());
+}
+
+/// `--max-dim` writes the geometry in capped space but presents it at the arrival size: the
+/// `viewBox` shrinks to the capped raster while `width`/`height` keep the size that arrived.
+#[test]
+fn max_dim_cap_keeps_arrival_size_in_attributes() {
+    let img = image(128, 96, |x, _| {
+        if x < 64 {
+            [0.0, 0.0, 0.0, 1.0]
+        } else {
+            [1.0, 1.0, 1.0, 1.0]
+        }
+    });
+
+    // 128x96 capped at 64: longest side halves, so the capped raster is 64x48.
+    let args = Args {
+        max_dim: 64,
+        ..Args::default()
+    };
+    let t = trace_image_sized(img.clone(), &args, Some((128, 96))).expect("trace succeeds");
+    let svg = post_process(&args, t.svg, t.width, t.height);
+    assert!(svg.contains("width=\"128\" height=\"96\""), "{svg}");
+    assert!(svg.contains("viewBox=\"-0.5 -0.5 64 48\""), "{svg}");
+
+    // `max_dim = 0` keeps meaning "no cap": the geometry stays at the arrival size.
+    let no_cap = Args {
+        max_dim: 0,
+        ..Args::default()
+    };
+    let t0 = trace_image_sized(img, &no_cap, Some((128, 96))).expect("trace succeeds");
+    let svg0 = post_process(&no_cap, t0.svg, t0.width, t0.height);
+    assert!(svg0.contains("viewBox=\"-0.5 -0.5 128 96\""), "{svg0}");
 }

@@ -3686,7 +3686,7 @@ checksum = "a257582fdcde896fd96463bf2d40eefea0580021c0712a0e2b028b60b47a837a"
 
 [[package]]
 name = "inkvec-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "inkvec-core",
  "inkvec-fit",
@@ -3698,7 +3698,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "robust",
  "web-time",
@@ -3706,7 +3706,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-fit"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "inkvec-core",
  "kurbo",
@@ -3714,7 +3714,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-restore"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "burn",
  "burn-onnx",
@@ -3723,11 +3723,12 @@ dependencies = [
  "inkvec-sr",
  "inkvec-trace",
  "ort",
+ "sha2",
 ]
 
 [[package]]
 name = "inkvec-sr"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "image",
  "inkvec-trace",
@@ -3736,7 +3737,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-trace"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "image",
  "inkvec-core",
@@ -3746,7 +3747,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-wasm"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "console_error_panic_hook",
  "inkvec-cli",

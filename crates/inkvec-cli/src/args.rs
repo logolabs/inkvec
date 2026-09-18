@@ -201,15 +201,17 @@ USAGE:
 OPTIONS:
     -o, --output <path>     Output SVG (default: alongside the input)
         --tau <f>           Chord tolerance in standard deviations   [default: 2.0]
-        --precision <f>     Output coordinate precision, in pixels.  [default: 0.1]
-                            Also sets the MDL cost of a coordinate: lambda = ln(extent/precision)
+        --precision <f>     Sets the MDL cost of a coordinate: lambda = ln(extent/precision).
+                            It does not set the digits the emitter writes; output
+                            coordinates are fixed at 2 decimals        [default: 0.1]
         --min-area <f>      Discard features below this area, in px^2  [default: 2.0]
         --margin <f>        Transparent margin around the output, as a fraction of the
                             larger side; the viewBox grows, the geometry does not move
         --max-dim <px>      Inputs larger than this on their longer side are traced at
                             this size and the SVG is written at the original size.
                             Trace time grows with the pixel count; 2048 keeps a
-                            typical logo under a few seconds        [default: 2048]
+                            typical logo under a few seconds. 0 means no cap
+                                                                   [default: 2048]
         --time-budget <s>   Advisory wall-clock budget. Gradient-band merging stops at
                             60% of it and the boundary solve gets 25%; the output is
                             still a correct trace, with more fills or a less polished
@@ -260,6 +262,8 @@ OPTIONS:
         --bilevel           Two-tone output (the Potrace-comparable mode)
         --no-gradients      Skip gradient fitting entirely and fill flat. A genuine
                             fast path: gradient fitting dominates runtime
+        --no-repair         Skip the self-crossing ring repair pass that runs after
+                            fitting
         --strokes           Emit line art as strokes -- one path and one width --
                             instead of as filled outlines. 28% of the corpus is
                             drawn this way and costs 3.3x the artist's parameters
@@ -267,6 +271,10 @@ OPTIONS:
         --stroke-balance <f>   Least share of the input's ink the strokes must
                             actually draw, or the drawing falls back to outlines
                             [default: 0.90]
+        --stroke-refine <n> Iterations of centreline refinement against the measured
+                            coverage, after stroke recovery. 0 skips it  [default: 0]
+        --stroke-residual <f>  Residual, per stroke against its own region, above
+                            which a stroke falls back to an outline [default: 0.06]
         --lambda-scale <f>  Research: multiply the MDL cost of every parameter. Above
                             1.0 buys a plainer, cheaper description, below 1.0 a more
                             detailed one                              [default: 1.0]
@@ -299,8 +307,8 @@ SUPER-RESOLUTION PRE-PASS:
         --sr-no-recolour    Skip putting flat colours back on the source's values
         --sr-command <cmd>  Upscale with an external command instead of the packaged
                             Python tool. `{in}` and `{out}` are replaced with PNG
-                            paths; the command must write an image --sr-scale x2
-                            larger. Quote a program path that contains spaces.
+                            paths; the command must write an image x4 larger.
+                            Quote a program path that contains spaces.
 
 RESTORER PRE-PASS:
     A trained network that removes JPEG, WebP and AI-decoder damage at the input's

@@ -228,11 +228,12 @@ disagreements are where the real design lives:
 * Whether DESIGN.md's S0 (per-image gamma / AA-kernel estimation) is intentionally narrowed
   to the two detectors that exist, or genuinely unbuilt, is not stated anywhere in the
   tree. **Unverified.**
-* `docs/M0-BASELINE.md`, `docs/M1-PROGRESS.md` (referenced from DESIGN.md §9.5) and the
-  `bench/research/decoding/*` measurement scripts cited throughout the code comments exist
-  in the repository; the numbers quoted above come from source-code doc comments rather
-  than being independently re-derived from those scripts. A reader auditing a specific
-  number should trace it to the script named in the comment.
+* `docs/M0-BASELINE.md` and `docs/M1-PROGRESS.md` (referenced from DESIGN.md §9.5) exist
+  in the repository. The measurement scripts cited throughout the code comments are
+  development-time artefacts that are not committed, so the numbers quoted above come from
+  source-code doc comments rather than being independently re-derived from a committed
+  harness. A reader auditing a specific number should trace it to the comment that states
+  it.
 * `inkvec_fit::fit_path` (`crates/inkvec-fit/src/lib.rs:770`, documented in its own doc
   comment as "two passes: a line-only DP... then cubics are fitted to the runs between
   them") is not reachable from the production pipeline. Every call site is an example or a

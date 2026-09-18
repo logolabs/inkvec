@@ -220,7 +220,7 @@ footer .v{margin-left:auto}
 
 <section class="sec" id="versus">
   <h2>Inkvec vs the field</h2>
-  <p class="lede">21 hash-selected cases &mdash; real brand logos, icons and emoji &mdash; traced by every engine and scored against the source render with CIEDE2000 (colour), DISTS and DINOv3. VTracer is the widely used open-source tracer and the fastest thing here by a wide margin; that trade-off is shown too.</p>
+  <p class="lede">21 cases &mdash; 14 hash-selected real icons across seven families, 4 hand-picked synthetic probes and 3 real brand logos from an external dataset (selection fixed from the seed <code class="mono">crosscompare-2026-09-15-v1</code>) &mdash; traced by every engine and scored against the source render with CIEDE2000 (colour), DISTS and DINOv3. VTracer is the widely used open-source tracer and the fastest thing here by a wide margin; that trade-off is shown too.</p>
   <div class="versus">
     <div class="bignums" id="bignums"></div>
     <div class="bars" id="bars"></div>
@@ -479,12 +479,14 @@ async function loadShowcase(){
       `<span class="chip win"><b>${(m.bytes/1024).toFixed(1)} KB</b></span><span class="chip vt"><b>${(w.bytes/1024).toFixed(1)} KB</b></span>`;
   }
 }
-// Source: out/crosscompare-competitors-2026-09-15/summary.md -- 21 hash-selected cases
-// (real brand logos, icons, emoji), scored against the source render with CIEDE2000 (dE00),
-// DISTS and DINOv3. Regenerate with bench/crosscompare_competitors.py. Timings were measured
-// on a machine doing other CPU-bound work at the same time; treat them as approximate.
+// Source: out/crosscompare-competitors-2026-09-15/summary.md -- 21 cases: 14 hash-selected
+// real icons across seven families, 4 hand-picked synthetic probes, and 3 real brand logos
+// from an external dataset (selection fixed from the seed crosscompare-2026-09-15-v1). Scored
+// against the source render with CIEDE2000 (dE00), DISTS and DINOv3. Regenerate with
+// bench/crosscompare_competitors.py. Timings were measured on a machine doing other CPU-bound
+// work at the same time; treat them as approximate.
 const COMPETITORS = [
-  {name:'Inkvec',                             mean:0.119, median:0.048, dists:0.0231, dino:0.9922, coords:585,  sec:1.17, win:true},
+  {name:'Inkvec',                             mean:0.132, median:0.054, dists:0.0236, dino:0.991,  coords:446,  sec:1.17, win:true},
   {name:'VTracer 0.6.15 (PyPI, default)',      mean:1.303, median:0.598, dists:0.0508, dino:0.9633, coords:1943, sec:0.04},
   {name:'VTracer 1.0.0-alpha.4 (default)',     mean:1.303, median:0.598, dists:0.0508, dino:0.9633, coords:1943, sec:0.05},
   {name:'VTracer 1.0.0-alpha.4 (--simplify)',  mean:1.264, median:0.579, dists:0.0636, dino:0.9538, coords:1239, sec:0.06},

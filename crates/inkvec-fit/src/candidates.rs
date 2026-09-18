@@ -409,7 +409,10 @@ impl CubicSamples {
         for (m, slot) in at.iter_mut().enumerate().take(count) {
             let k = i + 1 + (((m as f64 + 0.5) * interior as f64) / count as f64).floor() as usize;
             let k = k.min(j - 1);
-            *slot = (k as u32, (s[k] - s[i]) / span, sigma[k] * sigma[k]);
+            // Floored like every other chi2 term: a vanishing sigma would otherwise divide
+            // by zero (or a subnormal) and blow the residual up.
+            let sg = sigma[k].max(1e-6);
+            *slot = (k as u32, (s[k] - s[i]) / span, sg * sg);
         }
         Some(Self {
             at,
@@ -457,7 +460,8 @@ pub(crate) fn chi2_cubic(
         let k = k.min(j - 1);
         let t = (s[k] - s[i]) / span;
         let d2 = cb.dist2_from(pts[k], t);
-        acc += weight * d2 / (sigma[k] * sigma[k]);
+        let sg = sigma[k].max(1e-6);
+        acc += weight * d2 / (sg * sg);
     }
     acc
 }

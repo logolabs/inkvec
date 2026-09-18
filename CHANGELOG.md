@@ -7,6 +7,16 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-18
+
+### Fixed
+
+- **Published benchmark provenance.** Replace unreproducible pre-release figures and
+  visuals with measurements tied to the pinned 0.1.1 release executable; regenerate the
+  README assets and distributions from the recorded 21-case data.
+- **Large-input intake.** Preserve exact-area resampling when the decode cap applies,
+  avoiding a filter mismatch with the corpus's supersampled raster convention.
+
 ## [0.1.1] - 2026-09-18
 
 ### Fixed

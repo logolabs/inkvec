@@ -6,7 +6,7 @@ One command, three vectorisers, two families of metric, and a degradation batter
 python bench/suite/run.py --split screen --limit 40                  # quality, clean
 python bench/suite/run.py --split full --engines inkvec vtracer      # the settling run
 python bench/suite/run.py --degrade clean jpeg-q50 blur-1.0 noise-2  # robustness
-python bench/suite/run.py --svgenius C:/Users/stefa/svgb --tier hard # against the literature
+python bench/suite/run.py --svgenius <path-to-svgenius-checkout> --tier hard # against the literature
 ```
 
 Writes `bench/data/suite_<label>.json` and prints the table below.

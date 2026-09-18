@@ -50,10 +50,6 @@ use crate::{FitConfig, FittedPath};
 /// there is no reason to go finer.
 const FLATTEN: usize = 16;
 
-/// How many times the span cap may be halved before falling back to the measured
-/// contour. `2^8` covers any contour we produce.
-const MAX_REPAIRS: usize = 8;
-
 /// Two endpoints closer than this are the same point. Coordinates are in pixels, so this
 /// is far below anything the fit distinguishes.
 const EPS: f64 = 1e-6;
@@ -285,16 +281,18 @@ pub fn fit_simple(poly: &Polyline, cfg: &FitConfig) -> FittedPath {
     }
     let mut cap = poly.len().max(2);
     let mut best = path;
-    for _ in 0..MAX_REPAIRS {
+    // Halve the span cap until the fit is simple. `max_span = 1` reproduces the measured
+    // contour, which is simple by construction, so the search always has a valid fallback —
+    // but only if the loop actually reaches cap 1. A fixed round count never did for a ring
+    // longer than 512 points (eight halvings stop at a cap of two), so it returned a
+    // still-crossing ring as `best`. Loop until the cap is exhausted instead.
+    while cap > 1 {
         cap = (cap / 2).max(1);
         let candidate = optimal_multimodel_capped(poly, cfg, cap);
         if self_crossing(&candidate).is_none() {
             return candidate;
         }
         best = candidate;
-        if cap == 1 {
-            break;
-        }
     }
     // `max_span = 1` reproduces the measured contour, which is simple, so reaching here
     // means the contour itself was not simple — nothing this function can repair.

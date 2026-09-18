@@ -389,8 +389,8 @@ is now only the *initializer*.
 
 The accurate method never forms that intermediate polyline. Parametrize the boundary
 curve directly, forward-render it through the S0 model to predict pixel values, and
-minimize the residual against the observed image by non-linear least squares
-(Levenberg–Marquardt):
+minimize the residual against the observed image by non-linear least squares,
+solved with Fletcher–Reeves nonlinear conjugate gradient:
 
 ```
   minimise  Σ_pixels  || I_observed  -  render(boundary curve, θ) ||²

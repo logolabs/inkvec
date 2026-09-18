@@ -59,9 +59,8 @@ const MAX_SPAN: usize = 96;
 /// Most segments a single cubic may absorb in one round.
 ///
 /// This and [`MAX_ROUNDS`] were once overridable (`INKVEC_MERGE_RUN`,
-/// `INKVEC_MERGE_ROUNDS`). Nothing ever swept them and neither appears in `evolve/tune.py`,
-/// so they are plain constants again; `INKVEC_SMOOTH` below is the merge knob that was
-/// actually measured.
+/// `INKVEC_MERGE_ROUNDS`), but no sweep ever moved either, so they are plain constants
+/// again; `INKVEC_SMOOTH` below is the merge knob that was actually measured.
 const MAX_RUN: usize = 4;
 
 /// Rounds to run the pass for.

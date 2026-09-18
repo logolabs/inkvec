@@ -338,9 +338,8 @@ independent boundaries.
 ### The junction wedge term, tested and found worse
 
 `INKVEC_BOPT_JUNC` (default off) turns on `junction_pixel` so junction pixels enter the
-data term through the wedge construction above. `bench/research/decoding/REPORT.md`
-records a corpus measurement of turning it on (screen set, 246 icons, paired against the
-shipped default):
+data term through the wedge construction above. A development corpus measurement of
+turning it on (screen set, 246 icons, paired against the shipped default) recorded:
 
 | | dE00 | DISTS | params ratio | objective |
 |---|---|---|---|---|

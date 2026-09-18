@@ -97,9 +97,10 @@ fn load(backend: &str, weights: Option<&Path>) -> Result<Box<dyn Restore>, Box<d
     match backend {
         #[cfg(feature = "onnxruntime")]
         "ort" => {
-            let path = weights
-                .map(Path::to_path_buf)
-                .unwrap_or_else(inkvec_restore::default_onnx);
+            let path = match weights {
+                Some(w) => w.to_path_buf(),
+                None => inkvec_restore::default_onnx()?,
+            };
             Ok(Box::new(inkvec_restore::onnx::OnnxRestorer::load(&path)?))
         }
         #[cfg(feature = "flex")]

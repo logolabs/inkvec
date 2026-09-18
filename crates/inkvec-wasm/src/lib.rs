@@ -22,6 +22,15 @@ use wasm_bindgen::prelude::*;
 #[cfg(feature = "threads")]
 pub use wasm_bindgen_rayon::init_thread_pool;
 
+/// Cap on the palette size a caller may request. `usize` wraps at the JS boundary (a 32-bit
+/// `usize`: `2**32` comes back as 0 and `-1` as `usize::MAX`), and an absurd request here
+/// would otherwise mean unbounded palette work.
+const MAX_COLORS: usize = 4096;
+
+/// Cap on `max_dim`, for the same boundary-wrap reason. `0` — "no cap" — passes through
+/// unchanged; only values that wrapped to `usize::MAX` (a JS `-1`) are brought down.
+const MAX_DIM: usize = 32_768;
+
 /// How many workers the pool should start, from the browser's own estimate.
 ///
 /// Returned rather than decided here: the pool is started from JavaScript, and only the
@@ -35,8 +44,10 @@ pub fn threads_available() -> bool {
 /// Trace image bytes to an SVG string.
 ///
 /// `precision`, `min_area`, `colors`, `merge` are the tracer's quality knobs (pass the
-/// defaults 0.1, 2, 64, 0.055 when unsure); `max_dim` and `time_budget` bound the work;
-/// `no_background`, `minify`, `margin`, `content_units` shape the output.
+/// defaults 0.1, 2, 64, 0.035 when unsure; the merge default is
+/// `inkvec_trace::color::DEFAULT_MERGE_DISTANCE`); `max_dim` and `time_budget` bound the
+/// work; `no_background`, `minify`, `margin`, `content_units` shape the output. `max_dim = 0`
+/// means no cap.
 #[wasm_bindgen]
 #[allow(clippy::too_many_arguments)]
 pub fn trace(
@@ -53,7 +64,69 @@ pub fn trace(
     content_units: bool,
 ) -> Result<String, JsValue> {
     console_error_panic_hook::set_once();
-    let img = inkvec_trace::decode_image(bytes).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let result = std::panic::catch_unwind(|| {
+        trace_inner(
+            bytes,
+            precision,
+            min_area,
+            colors,
+            merge,
+            max_dim,
+            time_budget,
+            no_background,
+            minify,
+            margin,
+            content_units,
+        )
+    });
+    match result {
+        Ok(Ok(svg)) => Ok(svg),
+        Ok(Err(e)) => Err(e),
+        Err(payload) => Err(panic_message(&payload)),
+    }
+}
+
+/// The real work, run inside [`trace`]'s `catch_unwind` so that — where the panic strategy
+/// permits it — a panic becomes a JS error instead of a poisoned instance.
+///
+/// The threaded build compiles with `panic = abort` (`tools/build_wasm.sh` passes
+/// `-Z build-std=panic_abort,std`); there a panic aborts the instance before anything can
+/// catch it, and no amount of wrapping here can change that. The single-threaded build
+/// unwinds, so [`trace`] does surface its panics as exceptions.
+#[allow(clippy::too_many_arguments)]
+fn trace_inner(
+    bytes: &[u8],
+    precision: f64,
+    min_area: f64,
+    colors: usize,
+    merge: f32,
+    max_dim: usize,
+    time_budget: f64,
+    no_background: bool,
+    minify: bool,
+    margin: f64,
+    content_units: bool,
+) -> Result<String, JsValue> {
+    // `usize` parameters wrap silently across the boundary; clamp them before the tracer
+    // sees them so `colors = -1` does not become unbounded palette work and `max_dim = -1`
+    // does not disable the cap.
+    let colors = colors.clamp(1, MAX_COLORS);
+    let max_dim = max_dim.min(MAX_DIM);
+
+    // NaN or non-positive quality knobs used to emit a blank 99-byte document with no
+    // error; refuse them explicitly instead.
+    if !(precision.is_finite() && precision > 0.0) {
+        return Err(JsValue::from_str("precision must be a finite number > 0"));
+    }
+    if !(min_area.is_finite() && min_area > 0.0) {
+        return Err(JsValue::from_str("min_area must be a finite number > 0"));
+    }
+    if !(margin.is_finite() && margin >= 0.0) {
+        return Err(JsValue::from_str("margin must be a finite number >= 0"));
+    }
+
+    let (img, (arr_w, arr_h)) = inkvec_trace::decode_image_capped(bytes, max_dim)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
     let args = inkvec_cli::Args {
         precision,
         min_area,
@@ -69,8 +142,21 @@ pub fn trace(
         ..Default::default()
     };
     let args = inkvec_cli::resolve_lossy(&args, || Some(bytes.to_vec()));
-    let t = inkvec_cli::trace_image(img, &args).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let t = inkvec_cli::trace_image_sized(img, &args, Some((arr_w as usize, arr_h as usize)))
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
     Ok(inkvec_cli::post_process(&args, t.svg, t.width, t.height))
+}
+
+/// A panic payload turned into a JS error message.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> JsValue {
+    let msg = if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "a panic occurred inside the tracer".to_string()
+    };
+    JsValue::from_str(&format!("inkvec panic: {msg}"))
 }
 
 /// The tracer's version, for the page footer.

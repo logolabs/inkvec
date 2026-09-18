@@ -300,7 +300,7 @@ fix.
 
 - **`BLEND_IMMUNE_WEIGHT` is dead code.** It is declared and carries a full measured
   justification (`color.rs:135-147`, the ten-concentric-rings 8.4%-of-image case), and it is
-  referenced from `bench/sweep.py:30` and `evolve/cells/palette.md:15` as if it is an active
+  referenced from `bench/sweep.py:30` as if it is an active
   tuning knob — but a repo-wide search confirms it is **never read** inside
   `extract_palette_mdl` or anywhere else in `color.rs`. The abundance-based immunity it describes
   appears to have been superseded by the interior/straddle shape tests, and the constant, its

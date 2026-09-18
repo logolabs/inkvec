@@ -33,6 +33,7 @@ pub mod model;
 pub mod onnx;
 
 use inkvec_trace::Rgba;
+use sha2::{Digest, Sha256};
 
 /// When to restore.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -173,10 +174,48 @@ pub fn user_cache_model_path() -> Option<std::path::PathBuf> {
     base.map(|b| b.join("inkvec").join("models").join("restorer.onnx"))
 }
 
-/// Auto-pull the restorer ONNX weights from Hugging Face if not already present.
+/// SHA-256 of the published `restorer.onnx`, mirroring `tools/pull_model.py`. A file that
+/// does not hash to this is not the model the restorer was validated against.
+const EXPECTED_SHA256: &str = "bdc2762157632f6f74dd91474f0598e591d49ded47e0a87642c89416b0809d6d";
+
+/// SHA-256 of a file, hex-encoded.
+fn file_sha256(path: &std::path::Path) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut hasher = Sha256::new();
+    let mut file = std::fs::File::open(path)?;
+    let mut buf = [0u8; 1 << 16];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// Refuse a weights file whose contents do not match the published model. This is what makes
+/// a half-downloaded or tampered `restorer.onnx` an explicit error instead of a corrupt model
+/// that fails later, deep inside the runtime, with an unrelated message.
+fn verify_weights(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    let actual = file_sha256(path)
+        .map_err(|e| format!("could not hash restorer weights at {}: {e}", path.display()))?;
+    if actual != EXPECTED_SHA256 {
+        return Err(format!(
+            "restorer weights at {} failed verification: SHA256 {actual} != {EXPECTED_SHA256}; \
+             re-download from {HF_DENOISER_REPO} with `python tools/pull_model.py`",
+            path.display()
+        )
+        .into());
+    }
+    Ok(())
+}
+
+/// Auto-pull the restorer ONNX weights from Hugging Face if not already present, verifying the
+/// result against [`EXPECTED_SHA256`] in both cases (already present, or just downloaded).
 pub fn pull_onnx_weights(dest: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     if dest.is_file() {
-        return Ok(());
+        return verify_weights(dest);
     }
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)?;
@@ -186,6 +225,7 @@ pub fn pull_onnx_weights(dest: &std::path::Path) -> Result<(), Box<dyn std::erro
     );
 
     let temp_dest = dest.with_extension("tmp");
+    let _ = std::fs::remove_file(&temp_dest);
 
     // 1. Try curl if available
     let curl_status = std::process::Command::new("curl")
@@ -199,6 +239,7 @@ pub fn pull_onnx_weights(dest: &std::path::Path) -> Result<(), Box<dyn std::erro
 
     if let Ok(status) = curl_status {
         if status.success() && temp_dest.is_file() {
+            verify_weights(&temp_dest)?;
             std::fs::rename(&temp_dest, dest)?;
             eprintln!(
                 "Successfully downloaded restorer weights to {}",
@@ -220,6 +261,7 @@ pub fn pull_onnx_weights(dest: &std::path::Path) -> Result<(), Box<dyn std::erro
 
     if let Ok(status) = py_status {
         if status.success() && temp_dest.is_file() {
+            verify_weights(&temp_dest)?;
             std::fs::rename(&temp_dest, dest)?;
             eprintln!(
                 "Successfully downloaded restorer weights to {}",
@@ -243,6 +285,7 @@ pub fn pull_onnx_weights(dest: &std::path::Path) -> Result<(), Box<dyn std::erro
 
         if let Ok(status) = ps_status {
             if status.success() && temp_dest.is_file() {
+                verify_weights(&temp_dest)?;
                 std::fs::rename(&temp_dest, dest)?;
                 eprintln!(
                     "Successfully downloaded restorer weights to {}",
@@ -253,8 +296,10 @@ pub fn pull_onnx_weights(dest: &std::path::Path) -> Result<(), Box<dyn std::erro
         }
     }
 
+    let _ = std::fs::remove_file(&temp_dest);
     Err(format!(
-        "Failed to auto-pull restorer ONNX model from {HF_DENOISER_URL}. Please download manually to {}",
+        "Failed to auto-pull the restorer ONNX model from {HF_DENOISER_REPO}. \
+         Download it manually with `python tools/pull_model.py` into {}",
         dest.display()
     )
     .into())
@@ -264,12 +309,13 @@ pub fn pull_onnx_weights(dest: &std::path::Path) -> Result<(), Box<dyn std::erro
 ///
 /// Resolution order: `INKVEC_RESTORE_ONNX`; then `restorer.onnx` beside the executable, or in a
 /// `models/` folder beside it, which is how a release archive ships it; then this crate's
-/// `models/` directory in the source checkout; then user cache; if not present, auto-pulls
-/// from Hugging Face (`Logolabs/inkvec-denoiser-001`).
+/// `models/` directory in the source checkout; then user cache, auto-pulling (and verifying)
+/// from Hugging Face (`Logolabs/inkvec-denoiser-001`). A failed pull is an error, never a
+/// build-machine path baked into the binary.
 #[cfg(feature = "onnxruntime")]
-pub fn default_onnx() -> std::path::PathBuf {
+pub fn default_onnx() -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
     if let Some(p) = std::env::var_os("INKVEC_RESTORE_ONNX") {
-        return std::path::PathBuf::from(p);
+        return Ok(std::path::PathBuf::from(p));
     }
     if let Some(dir) = std::env::current_exe()
         .ok()
@@ -280,24 +326,26 @@ pub fn default_onnx() -> std::path::PathBuf {
             dir.join("models").join("restorer.onnx"),
         ] {
             if candidate.is_file() {
-                return candidate;
+                return Ok(candidate);
             }
         }
     }
     let manifest_path =
         std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/models/restorer.onnx"));
     if manifest_path.is_file() {
-        return manifest_path;
+        return Ok(manifest_path);
     }
     if let Some(cache_path) = user_cache_model_path() {
-        if cache_path.is_file() {
-            return cache_path;
-        }
-        if pull_onnx_weights(&cache_path).is_ok() {
-            return cache_path;
-        }
+        // Verifies an already-present file and downloads+verifies a missing one; either way a
+        // failure is reported here rather than silently falling through to a non-existent path.
+        pull_onnx_weights(&cache_path)?;
+        return Ok(cache_path);
     }
-    manifest_path
+    Err(format!(
+        "no restorer weights found locally and no user cache directory to pull them into; \
+         download the model from {HF_DENOISER_REPO} with `python tools/pull_model.py`"
+    )
+    .into())
 }
 
 /// Load the in-process restorer on the fastest runtime compiled in. ONNX Runtime first (the
@@ -312,9 +360,10 @@ pub fn load_builtin(
             .and_then(std::path::Path::extension)
             .is_some_and(|e| e.eq_ignore_ascii_case("bpk"));
         if !burn_weights {
-            let path = weights
-                .map(std::path::Path::to_path_buf)
-                .unwrap_or_else(default_onnx);
+            let path = match weights {
+                Some(w) => w.to_path_buf(),
+                None => default_onnx()?,
+            };
             return Ok(Box::new(onnx::OnnxRestorer::load(&path)?));
         }
     }
@@ -447,5 +496,36 @@ mod tests {
         assert_eq!(&rgb[6..9], &[0.5, 0.5, 0.5]);
         assert_eq!(&rgb[9..12], &[0.0, 0.0, 0.0]);
         assert_eq!(&rgb[12..15], &[0.5, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn verify_weights_rejects_a_corrupt_file() {
+        let dir =
+            std::env::temp_dir().join(format!("inkvec-restore-verify-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("restorer.onnx");
+        std::fs::write(&path, b"not the model").unwrap();
+        let err = verify_weights(&path).unwrap_err();
+        assert!(
+            err.to_string().contains(EXPECTED_SHA256),
+            "error must name the expected hash, got: {err}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn pull_onnx_weights_verifies_an_existing_file_before_downloading() {
+        // The "already present" short-circuit must verify, not just return Ok, so a corrupt
+        // or truncated cache file is refused without any network access.
+        let dir = std::env::temp_dir().join(format!("inkvec-restore-pull-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("restorer.onnx");
+        std::fs::write(&path, b"garbage").unwrap();
+        let err = pull_onnx_weights(&path).unwrap_err();
+        assert!(
+            err.to_string().contains("verification"),
+            "error must say verification failed, got: {err}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

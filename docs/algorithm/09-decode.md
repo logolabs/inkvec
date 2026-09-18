@@ -21,7 +21,7 @@ that reads its colour directly, so the palette's estimate of its colour is biase
 the ground by one minus its best coverage, the boundary is then fitted against that wrong
 colour, and nothing downstream revisits either.
 
-Measured on a 2 px diagonal stroke (`bench/research/decoding/`): master emits fifteen
+Measured on a 2 px diagonal stroke: master emits fifteen
 cubic arcs, a core colour of `#41557d` where the truth is `#204080`, and keeps 91% of the
 ink mass — "violating the first-order condition that a least-squares fill must leave the
 coverage-weighted residual orthogonal to its own coverage column." Fixing the model order
@@ -35,7 +35,7 @@ frequencies are the vertices; treated that way, the vertices behave like point s
 seen through a low-pass filter (the pixel box, plus whatever else blurred the image before
 it was rasterised), which is the setting of the super-resolution and shape-from-moments
 literature (Candès & Fernandez-Granda 2014; Milanfar, Verghese, Karl & Willsky 1995).
-Concretely, `bench/research/decoding/REPORT.md` derives (H1) that for a straight stroke of
+Concretely, the decode analysis derives (H1) that for a straight stroke of
 width `w` and contrast `theta`, the soft (least-identifiable) mode of the Gauss–Newton
 Hessian lives entirely above frequency `1/w`, so what the point-spread function does at
 high frequency determines what is recoverable at all — a genuine super-resolution
@@ -106,7 +106,7 @@ Two tests decide whether the face is actually a candidate for this stage
   (`decode.rs:791-796`). It is retained only as a diagnostic printed under
   `INKVEC_DECODEDBG`.
 
-`bench/research/decoding/REPORT.md`'s leak census (H5) puts this in context: over 112
+The leak census (H5) puts this in context: over 112
 faces on 30 screen-set icons, only 6.2% leak at all, concentrated (weakly, correlation
 +0.157) in the 2–4 px width band. "The disease is real but rare on this corpus," which the
 report gives as the main reason the stage came out corpus-neutral (H6, below).
@@ -270,7 +270,7 @@ are the cheapest description and the caps cannot be deleted.
 `share_widths` (`decode.rs:1503-1845`, called only when `INKVEC_DECODE_SHARE` is set to
 something other than `"0"`; **off** by default) is a second pass over the same map, run
 after the per-face loop. It targets a specific identifiability gap the per-face decoder
-cannot close on its own: `bench/research/decoding/REPORT.md`'s H3b/H3c measured that an
+cannot close on its own: H3b/H3c measured that an
 axis-aligned sub-pixel stroke's raster fixes only the *product* of width and contrast, not
 either factor alone — two zero-residual fits to the same 1 px bar can have widths that
 differ by two thirds of a pixel while `w * theta` agrees to six decimals. Two strokes at
@@ -331,7 +331,7 @@ has already answered the question it exists to ask.
 
 ## Corpus result (H6)
 
-`bench/research/decoding/REPORT.md` gives the measured verdict on the default (per-face,
+The measured verdict on the default (per-face,
 `INKVEC_DECODE_SHARE` off) configuration, screen set (246 icons):
 
 | build | acceptance rule | dE00 | DISTS | params ratio | objective |
@@ -389,8 +389,7 @@ Four tests in `#[cfg(test)] mod tests` (`decode.rs:1847-1937`):
   its start, and the worst per-vertex coordinate error is under `0.05` px.
 
 There is no unit test in this file for `share_widths`, `varpro`'s ridge regularisation, or
-`fitted_params`; those are exercised only through the corpus/case-suite measurements in
-`bench/research/decoding/REPORT.md`, not through `cargo test`.
+`fitted_params`; those are exercised only through the corpus/case-suite measurements, not through `cargo test`.
 
 ## Constants and thresholds
 
@@ -491,4 +490,4 @@ There is no unit test in this file for `share_widths`, `varpro`'s ridge regulari
   settings shown.
 - **No test in this file exercises `share_widths`, `fitted_params`, or the
   `INKVEC_DECODE_OVERRIDE` code path.** All three are validated only through the external
-  `bench/research/decoding/` scripts and `REPORT.md`'s numbers, not through `cargo test`.
+  corpus/case-suite measurements, not through `cargo test`.

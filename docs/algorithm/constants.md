@@ -221,7 +221,7 @@ half-integer lattice points (`inkvec-trace/src/symmetry.rs:19-21,156-163,243-245
 | `CORNER_DEGREES` | 45.0 | `inkvec-fit/src/lib.rs:722` | corner-vs-smooth-join threshold | none |
 | max-shift factor | 3.0x max(sigma), floor 0.25 | `inkvec-fit/src/lib.rs:800` | corner intersection displacement cap | motivated |
 | `PARAMS_CUBIC` | 6.0 | `inkvec-fit/src/multimodel.rs:102` | cubic parameter cost | derived |
-| `G1_BREAK_DEGREES` | 10.0 | `inkvec-fit/src/multimodel.rs:137` | tangent break below which a join is nearly free | none; swept in `evolve/tune.py` |
+| `G1_BREAK_DEGREES` | 10.0 | `inkvec-fit/src/multimodel.rs:137` | tangent break below which a join is nearly free | none; swept empirically |
 | `MAX_ARM` | 1.0 | `inkvec-fit/src/multimodel.rs:142`, `merge.rs:117` | largest admissible control arm, as a fraction of chord | derived |
 | `MAX_RESIDUAL_SAMPLES` | 32 | `inkvec-fit/src/multimodel.rs:147` | cubic residual evaluation points (O(1) cap) | none |
 | `PRUNE_PATIENCE` | 8 | `inkvec-fit/src/multimodel.rs:158` | over-budget candidates before scan stops | measured, value not stated |

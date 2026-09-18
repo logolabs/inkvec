@@ -72,6 +72,18 @@ def select():
         files=[p for p in brands.glob('*/logo_1.svg') if 800 < p.stat().st_size < 120000]
         files.sort(key=lambda p:hashlib.sha256((SEED+p.parent.name).encode()).hexdigest())
         sources.extend(('brands',p.parent.name,p) for p in files[:3])
+    else:
+        print(
+            "\n" + "!"*78 + "\n"
+            f"!! EXTERNAL DATASET MISSING: {brands}\n"
+            "!! This brand dataset is an EXTERNAL dependency, not part of this repository.\n"
+            "!! Without it this run selects 18 cases, NOT the 21 cases in the published\n"
+            "!! tables (README.md, docs/results/2026-09-15.md). The 3 missing cases are real\n"
+            "!! brand logos that cannot be redistributed with the repo. Re-run with the\n"
+            "!! dataset in place to reproduce the published 21-case numbers.\n"
+            + "!"*78 + "\n",
+            file=sys.stderr, flush=True,
+        )
     return sources
 
 def main():

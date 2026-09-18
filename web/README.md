@@ -20,10 +20,13 @@ SVG, nothing leaves your machine.
 
 Boundaries land where the anti-aliasing says they are, circles come back as circles, the
 pieces of one colour are one path, and the number of coordinates is chosen by minimum
-description length rather than a tolerance slider. Across 21 real logos, icons and emoji,
-scored against the source render, Inkvec's median colour error (dE00) is 12.5x lower than
-VTracer's default output at roughly a third of the coordinates. Full numbers, sourced, are
-in the [project README](https://github.com/logolabs/inkvec#results).
+description length rather than a tolerance slider. Across 21 cases — 14 hash-selected real
+icons across seven families, 4 hand-picked synthetic probes, and 3 real brand logos from an
+external dataset (selection fixed from the seed `crosscompare-2026-09-15-v1`) — scored
+against the source render, Inkvec's median colour error (dE00) is 11x lower than VTracer's
+default output at roughly a quarter of the coordinates; the 3 brand logos are not part of the
+repo, so a clean clone reproduces the other 18. Full numbers, sourced, are in the
+[project README](https://github.com/logolabs/inkvec#results).
 
 ## Build
 
@@ -43,8 +46,7 @@ That writes two packages, and `web/worker.js` picks between them at load:
 
 The tracer, its arithmetic and its output are the same in both — measured, by hashing the
 SVGs from each: on a sixteen-core machine the threaded build is 3.7x to 4.3x faster on real
-logos and returns the identical bytes. `web/threadtest.html` is the harness that says so;
-open it with and without isolation.
+logos and returns the identical bytes.
 
 Isolation is what the `custom_headers` block in this README asks the Space for. Where it is
 not granted the page loads the single-threaded package instead and everything still works.
@@ -54,8 +56,8 @@ The page is `web/index.html`; serve it over HTTP (ES modules do not load from `f
 ## Deploy
 
 This folder is the Space. Create a Space under the LogoLabs org with the **static** SDK and
-push these files (README, `index.html`, `worker.js`, `samples/`, the built `pkg/`).
-`tools/deploy_space.sh logolabs/inkvec` builds the package and uploads with
+push these files (README, `index.html`, `worker.js`, `samples/`, the built `pkg/`). Build the
+package with `tools/build_wasm.sh`, then upload this folder to the Space with
 `huggingface-cli` once you are logged in.
 
 ## Notes

@@ -3,7 +3,7 @@
     python bench/suite/run.py --split screen --limit 40
     python bench/suite/run.py --split full --engines inkvec vtracer
     python bench/suite/run.py --degrade clean jpeg-q50 blur-1.0 --limit 25
-    python bench/suite/run.py --svgenius C:/Users/stefa/svgb --tier hard --limit 40
+    python bench/suite/run.py --svgenius <path-to-svgenius-checkout> --tier hard --limit 40
 
 Writes `bench/data/suite_<label>.json` and prints a table. Every engine sees byte-identical
 input, every metric is computed from one pair of renders, and a failed trace is counted as

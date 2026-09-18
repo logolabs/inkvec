@@ -63,9 +63,9 @@ so the lobe cut off by a self-crossing flips crossing parity relative to the res
 ring's interior and renders with the *opposite* fill state from what was intended — a letter's
 counter, or any other hole, can flip from empty to solid or the reverse. This specific
 inversion is not spelled out anywhere in the repo; only the weaker "resolved arbitrarily"
-claim is. The related, and separately documented, complication is that **not every crossing is
-a defect**: `docs/research-notes/after-action-review.md:213-214` records that "about a fifth of
-the residual is pinch points at junctions, which are valid topology and must not be repaired."
+claim is. The related complication is that **not every crossing is
+a defect**: about a fifth of the residual is pinch points at junctions, which are valid
+topology and must not be repaired.
 
 ## Inputs and outputs
 
@@ -318,7 +318,7 @@ before mirror symmetrisation, fill assignment and emission.
   chamfers in, which is safe and merely more faceted than it could be" (`rings.rs:161-163`).
 - **Pinch points at valid junctions must not be repaired**, and the code has no explicit test
   distinguishing them from a genuine defect — only the span cap running out stops a pointless
-  refit from being attempted on one (`after-action-review.md:213-214`).
+  refit from being attempted on one.
 - **The restoration pass's safety re-check is deliberately partial.** `rings.rs:249-253`
   reasons that "every ring is simple at this point... so a crossing this candidate introduces
   has to involve one of edge `k`'s own segments, and only those pairs are worth testing" — an

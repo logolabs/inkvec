@@ -18,7 +18,9 @@ If a metric regresses, the gate FAILS. The gate can only be bypassed if the user
 and provides a strong, explicit justification via `--bypass-gate "<justification>"`.
 
 The screen set's 246 rasters and truths (1.6 MB) are committed under bench/data so this
-runs from a bare checkout. Everything else under bench/data stays ignored.
+runs from a bare checkout. So is the rest of the test corpus: every icon family at the
+128/128ss/256ss/512ss/1024ss raster tiers plus the synthetic SVG cases -- about 5,400
+committed files, ~38 MB in total. Only generated output (out/) is ignored.
 """
 from __future__ import annotations
 

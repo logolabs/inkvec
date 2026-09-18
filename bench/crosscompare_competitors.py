@@ -1,5 +1,5 @@
 """Inkvec vs. named competitors: VTracer 1.0 pre-release (highest priority), plus
-RasterTrace/Trazor research (bench/research context, see report).
+RasterTrace/Trazor research.
 
 Reuses the shared case set and metric/scoring code from crosscompare_current.py
 (imports select()/structure()/rgb()/png()/sha()) exactly as crosscompare_4way.py

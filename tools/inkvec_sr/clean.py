@@ -1,6 +1,6 @@
 """The pre-pass itself: upscale, halve, and put the colours back.
 
-Measured in `bench/research/decoding/SR_JPEG.md`. The short version is that the
+Measured during development. The short version is that the
 upscaler removes about two thirds of a JPEG's error energy -- not because it was
 trained to, it was not, but because it was fitted on flat-colour logo art and
 ringing is not on that manifold, so it cannot represent the damage.

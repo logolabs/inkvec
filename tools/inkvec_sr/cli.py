@@ -20,7 +20,7 @@ an undamaged raster and 1.509 on JPEG q50. The cheaper candidate -- an 8x8 block
 signature needing no trace -- was measured and does not discriminate (2.175 clean
 against 2.133 JPEG), so `auto` pays for one extra trace instead.
 
-Measurements: `bench/research/decoding/SR_JPEG.md`.
+Measured during development.
 """
 from __future__ import annotations
 

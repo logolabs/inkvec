@@ -611,7 +611,7 @@ are marked **none**.
 | `CORNER_DEGREES` | `lib.rs:722` | 45.0 | corner-vs-smooth-join threshold | none |
 | max-shift factor | `lib.rs:800` (inline) | 3.0 x max(sigma), floor 0.25 | corner intersection displacement cap | motivated; 3.0 and 0.25 none |
 | `PARAMS_CUBIC` | `multimodel.rs:102` | 6.0 | cubic parameter cost | derived |
-| `G1_BREAK_DEGREES` | `multimodel.rs:137` | 10.0 | tangent break below which a join is nearly free | none; swept in `evolve/tune.py` |
+| `G1_BREAK_DEGREES` | `multimodel.rs:137` | 10.0 | tangent break below which a join is nearly free | none; swept empirically |
 | `MAX_ARM` | `multimodel.rs:142`, also `merge.rs:117` | 1.0 | largest admissible control arm as a fraction of chord | derived |
 | `MAX_RESIDUAL_SAMPLES` | `multimodel.rs:147` | 32 | cubic residual evaluation points (O(1) cap) | none |
 | `PRUNE_PATIENCE` | `multimodel.rs:158` | 8 | consecutive over-budget candidates before scan stops | empirical; value none |

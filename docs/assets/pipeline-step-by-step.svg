@@ -1,0 +1,340 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 1020" width="1400" height="1020" style="background:#0c0a09; font-family:'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;0,700;1,400&amp;family=Inter:wght@300;400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap');
+      .font-display { font-family: 'Playfair Display', Georgia, serif; }
+      .font-mono { font-family: 'JetBrains Mono', monospace; }
+      .font-sans { font-family: 'Inter', sans-serif; }
+    </style>
+    <linearGradient id="copperGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#d4896a"/>
+      <stop offset="100%" stop-color="#c9754a"/>
+    </linearGradient>
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#d8ba8e"/>
+      <stop offset="100%" stop-color="#b8976c"/>
+    </linearGradient>
+    <linearGradient id="cardGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#211f1c"/>
+      <stop offset="100%" stop-color="#181614"/>
+    </linearGradient>
+    <filter id="subtleGlow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000000" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+
+  <!-- Background Canvas -->
+  <rect width="1400" height="1020" fill="#0c0a09"/>
+  <!-- Subtle Grid lines -->
+  <g opacity="0.04" stroke="#faf8f5" stroke-width="1">
+    <line x1="0" y1="120" x2="1400" y2="120"/>
+    <line x1="0" y1="340" x2="1400" y2="340"/>
+    <line x1="0" y1="560" x2="1400" y2="560"/>
+    <line x1="0" y1="780" x2="1400" y2="780"/>
+    <line x1="350" y1="0" x2="350" y2="1020"/>
+    <line x1="700" y1="0" x2="700" y2="1020"/>
+    <line x1="1050" y1="0" x2="1050" y2="1020"/>
+  </g>
+
+  <!-- Header Section -->
+  <g transform="translate(60, 48)">
+    <!-- Brand Emblem Lockup -->
+    <g transform="translate(0, 4)">
+      <rect x="0" y="0" width="36" height="36" rx="8" fill="#211f1c" stroke="#35322e" stroke-width="1"/>
+      <path d="M10 26 L18 10 L26 26 Z" fill="none" stroke="#c9754a" stroke-width="2.5" stroke-linejoin="round"/>
+      <circle cx="18" cy="20" r="2.5" fill="#b8976c"/>
+    </g>
+    <text x="50" y="20" class="font-sans" font-size="12" font-weight="600" letter-spacing="0.18em" fill="#c9754a">LOGOLABS · RESEARCH &amp; ARCHITECTURE</text>
+    <text x="50" y="44" class="font-display" font-size="28" font-weight="700" fill="#faf8f5" letter-spacing="-0.01em">Inkvec: Exact End-to-End Tracing Pipeline</text>
+    
+    <!-- Header Right: The Core Objective Equation -->
+    <g transform="translate(760, 0)">
+      <rect x="0" y="-4" width="520" height="52" rx="8" fill="#141210" stroke="#35322e" stroke-width="1"/>
+      <text x="20" y="18" class="font-sans" font-size="10" font-weight="600" fill="#b8976c" letter-spacing="0.14em">GOVERNING MDL OBJECTIVE</text>
+      <text x="20" y="38" class="font-mono" font-size="13" font-weight="500" fill="#faf8f5">min <tspan fill="#d4896a">D*</tspan> = 0.5·<tspan fill="#34d399">χ²</tspan>(pixels) + <tspan fill="#b8976c">λ</tspan>·<tspan fill="#d4896a">K_params</tspan> <tspan font-size="11" fill="rgba(250,248,245,0.5)">[λ = ln(extent/precision)]</tspan></text>
+    </g>
+  </g>
+
+  <!-- Flow Connector Bar -->
+  <path d="M 60 125 L 1340 125" stroke="#2a2724" stroke-width="2" stroke-dasharray="4 4"/>
+
+  <!-- COLUMN 1: Intake & Physical Coverage (Stages 01–02) -->
+  <g transform="translate(60, 145)">
+    <!-- Column Header -->
+    <rect x="0" y="0" width="300" height="32" rx="6" fill="#1a1816" stroke="#35322e"/>
+    <circle cx="16" cy="16" r="4" fill="#c9754a"/>
+    <text x="28" y="20" class="font-sans" font-size="11" font-weight="700" letter-spacing="0.12em" fill="#faf8f5">PHASE I: IMAGE FORMATION</text>
+
+    <!-- Stage 01 Card -->
+    <g transform="translate(0, 44)" filter="url(#subtleGlow)">
+      <rect x="0" y="0" width="300" height="195" rx="8" fill="url(#cardGrad)" stroke="#35322e" stroke-width="1"/>
+      <rect x="0" y="0" width="300" height="3" rx="1.5" fill="#c9754a"/>
+      <text x="16" y="24" class="font-mono" font-size="11" font-weight="600" fill="#c9754a">STAGE 01</text>
+      <text x="16" y="44" class="font-display" font-size="16" font-weight="600" fill="#faf8f5">Intake &amp; Pre-Pass</text>
+      <text x="16" y="66" class="font-sans" font-size="12" fill="rgba(250,248,245,0.7)" line-height="1.4">
+        <tspan x="16" dy="0">• Container inspect: JPEG/WebP lossy guard</tspan>
+        <tspan x="16" dy="18">• Unblock: gcd run-length upscale detector</tspan>
+        <tspan x="16" dy="18">• MambaIRv2: state-space artifact denoiser</tspan>
+        <tspan x="16" dy="18">• Continuous 2D area box downsampler</tspan>
+        <tspan x="16" dy="18">• Resolution invariance: scale min_area ∝ s²</tspan>
+      </text>
+      <rect x="16" y="160" width="268" height="24" rx="4" fill="#141210" stroke="#2a2724"/>
+      <text x="24" y="176" class="font-mono" font-size="10" fill="#b8976c">out: Rgba straight f32 [0,1]</text>
+    </g>
+
+    <!-- Arrow down -->
+    <path d="M 150 245 L 150 262" stroke="#c9754a" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+    <!-- Stage 02 Card -->
+    <g transform="translate(0, 265)" filter="url(#subtleGlow)">
+      <rect x="0" y="0" width="300" height="225" rx="8" fill="url(#cardGrad)" stroke="#35322e" stroke-width="1"/>
+      <rect x="0" y="0" width="300" height="3" rx="1.5" fill="#c9754a"/>
+      <text x="16" y="24" class="font-mono" font-size="11" font-weight="600" fill="#c9754a">STAGE 02</text>
+      <text x="16" y="44" class="font-display" font-size="16" font-weight="600" fill="#faf8f5">Coverage &amp; Uncertainty</text>
+      <text x="16" y="66" class="font-sans" font-size="12" fill="rgba(250,248,245,0.7)">
+        <tspan x="16" dy="0">• Physical unmixing: P = α·F + (1-α)·B</tspan>
+        <tspan x="16" dy="18">• Inversion: α = (P-B)·(F-B) / |F-B|²</tspan>
+        <tspan x="16" dy="18">• Noise propagation: σα = σ_pixel / |F-B|</tspan>
+        <tspan x="16" dy="18">• Spatial uncertainty: σ_pos = σα / |∇α|</tspan>
+        <tspan x="16" dy="18">• Discretization floor: σ ≥ 1/√12 ≈ 0.289px</tspan>
+      </text>
+      <rect x="16" y="172" width="268" height="42" rx="4" fill="#141210" stroke="#2a2724"/>
+      <text x="24" y="188" class="font-mono" font-size="10" fill="#34d399">σ = σ_pixel / (|F-B| · |∇α|)</text>
+      <text x="24" y="204" class="font-mono" font-size="9" fill="rgba(250,248,245,0.5)">Faint edge → large σ → adaptive simplify</text>
+    </g>
+
+    <!-- Callout Box -->
+    <g transform="translate(0, 505)">
+      <rect x="0" y="0" width="300" height="90" rx="8" fill="#141210" stroke="#c9754a" stroke-dasharray="3 3"/>
+      <text x="14" y="22" class="font-sans" font-size="10" font-weight="700" fill="#c9754a" letter-spacing="0.1em">KEY BREAKTHROUGH §1</text>
+      <text x="14" y="40" class="font-sans" font-size="11" fill="#faf8f5" font-weight="500">AA is not blur — it is area measurement.</text>
+      <text x="14" y="58" class="font-sans" font-size="10" fill="rgba(250,248,245,0.65)">Propagates true posterior variance directly to downstream DP curve fitters.</text>
+    </g>
+  </g>
+
+  <!-- COLUMN 2: Topology & Color (Stages 03–06) -->
+  <g transform="translate(390, 145)">
+    <!-- Column Header -->
+    <rect x="0" y="0" width="300" height="32" rx="6" fill="#1a1816" stroke="#35322e"/>
+    <circle cx="16" cy="16" r="4" fill="#b8976c"/>
+    <text x="28" y="20" class="font-sans" font-size="11" font-weight="700" letter-spacing="0.12em" fill="#faf8f5">PHASE II: TOPOLOGY &amp; INKS</text>
+
+    <!-- Stage 03 Card -->
+    <g transform="translate(0, 44)" filter="url(#subtleGlow)">
+      <rect x="0" y="0" width="300" height="150" rx="8" fill="url(#cardGrad)" stroke="#35322e" stroke-width="1"/>
+      <rect x="0" y="0" width="300" height="3" rx="1.5" fill="#b8976c"/>
+      <text x="16" y="24" class="font-mono" font-size="11" font-weight="600" fill="#b8976c">STAGE 03</text>
+      <text x="16" y="44" class="font-display" font-size="16" font-weight="600" fill="#faf8f5">MDL Palette in OKLab</text>
+      <text x="16" y="66" class="font-sans" font-size="12" fill="rgba(250,248,245,0.7)">
+        <tspan x="16" dy="0">• Perceptual clustering in OKLab (Ottosson)</tspan>
+        <tspan x="16" dy="18">• ΔE00 perceptual distance floor</tspan>
+        <tspan x="16" dy="18">• MDL accept test: cost = 0.5·χ² + λ_bic·K</tspan>
+        <tspan x="16" dy="18">• Eliminates spurious gradient bands</tspan>
+      </text>
+      <rect x="16" y="118" width="268" height="22" rx="4" fill="#141210" stroke="#2a2724"/>
+      <text x="24" y="133" class="font-mono" font-size="10" fill="#b8976c">out: Palette { colors, rgb, weight }</text>
+    </g>
+
+    <!-- Stage 04 & 05 Combined Compact Card -->
+    <g transform="translate(0, 204)" filter="url(#subtleGlow)">
+      <rect x="0" y="0" width="300" height="160" rx="8" fill="url(#cardGrad)" stroke="#35322e" stroke-width="1"/>
+      <rect x="0" y="0" width="300" height="3" rx="1.5" fill="#b8976c"/>
+      <text x="16" y="22" class="font-mono" font-size="11" font-weight="600" fill="#b8976c">STAGES 04 &amp; 05</text>
+      <text x="16" y="40" class="font-display" font-size="16" font-weight="600" fill="#faf8f5">Regions &amp; Gradient Fills</text>
+      <text x="16" y="62" class="font-sans" font-size="12" fill="rgba(250,248,245,0.7)">
+        <tspan x="16" dy="0">• Blend sliver absorption at AA boundaries</tspan>
+        <tspan x="16" dy="18">• Saddle disambiguation (4-pixel diagonal)</tspan>
+        <tspan x="16" dy="18">• Fill model selection: Flat / Linear / Radial</tspan>
+        <tspan x="16" dy="18">• Du et al. / Chakraborty et al. gradient fits</tspan>
+      </text>
+      <rect x="16" y="128" width="268" height="22" rx="4" fill="#141210" stroke="#2a2724"/>
+      <text x="24" y="143" class="font-mono" font-size="10" fill="#b8976c">out: Vec&lt;u16&gt; connected labels + Fills</text>
+    </g>
+
+    <!-- Stage 06 Planar Map Card -->
+    <g transform="translate(0, 374)" filter="url(#subtleGlow)">
+      <rect x="0" y="0" width="300" height="220" rx="8" fill="url(#cardGrad)" stroke="#35322e" stroke-width="1"/>
+      <rect x="0" y="0" width="300" height="3" rx="1.5" fill="#b8976c"/>
+      <text x="16" y="24" class="font-mono" font-size="11" font-weight="600" fill="#b8976c">STAGE 06</text>
+      <text x="16" y="44" class="font-display" font-size="16" font-weight="600" fill="#faf8f5">Planar Map (Half-Edge DCEL)</text>
+      <text x="16" y="66" class="font-sans" font-size="12" fill="rgba(250,248,245,0.7)">
+        <tspan x="16" dy="0">• Dual grid segment extraction from labels</tspan>
+        <tspan x="16" dy="18">• Shared edge between exactly two faces</tspan>
+        <tspan x="16" dy="18">• Shewchuk exact adaptive predicates</tspan>
+        <tspan x="16" dy="18">• Overdraw = 1.000 (0 seams by invariant)</tspan>
+      </text>
+      <rect x="16" y="150" width="268" height="58" rx="4" fill="#141210" stroke="#2a2724"/>
+      <text x="24" y="168" class="font-mono" font-size="10" fill="#34d399">struct Edge { pts, sigma, left, right }</text>
+      <text x="24" y="186" class="font-mono" font-size="9" fill="rgba(250,248,245,0.5)">Shewchuk exact orient2d / incircle</text>
+      <text x="24" y="200" class="font-mono" font-size="9" fill="#c9754a">Seams unrepresentable</text>
+    </g>
+  </g>
+
+  <!-- COLUMN 3: Subpixel Optimization (Stages 07–10) -->
+  <g transform="translate(720, 145)">
+    <!-- Column Header -->
+    <rect x="0" y="0" width="300" height="32" rx="6" fill="#1a1816" stroke="#35322e"/>
+    <circle cx="16" cy="16" r="4" fill="#34d399"/>
+    <text x="28" y="20" class="font-sans" font-size="11" font-weight="700" letter-spacing="0.12em" fill="#faf8f5">PHASE III: SPATIAL SOLVE</text>
+
+    <!-- Stage 07 & 09 Card -->
+    <g transform="translate(0, 44)" filter="url(#subtleGlow)">
+      <rect x="0" y="0" width="300" height="150" rx="8" fill="url(#cardGrad)" stroke="#35322e" stroke-width="1"/>
+      <rect x="0" y="0" width="300" height="3" rx="1.5" fill="#34d399"/>
+      <text x="16" y="24" class="font-mono" font-size="11" font-weight="600" fill="#34d399">STAGES 07 &amp; 09</text>
+      <text x="16" y="44" class="font-display" font-size="16" font-weight="600" fill="#faf8f5">Subpixel Normals &amp; Decode</text>
+      <text x="16" y="66" class="font-sans" font-size="12" fill="rgba(250,248,245,0.7)">
+        <tspan x="16" dy="0">• Slide boundary points along local normal</tspan>
+        <tspan x="16" dy="18">• Level set crossing α = 0.5</tspan>
+        <tspan x="16" dy="18">• Junction settlement (triple/Y-junctions)</tspan>
+        <tspan x="16" dy="18">• Order-first decode: recover &lt;1px features</tspan>
+      </text>
+      <rect x="16" y="118" width="268" height="22" rx="4" fill="#141210" stroke="#2a2724"/>
+      <text x="24" y="133" class="font-mono" font-size="10" fill="#34d399">Points centered at 0.5 coverage</text>
+    </g>
+
+    <!-- Stage 08 Global Boundary Solve -->
+    <g transform="translate(0, 204)" filter="url(#subtleGlow)">
+      <rect x="0" y="0" width="300" height="220" rx="8" fill="url(#cardGrad)" stroke="#35322e" stroke-width="1"/>
+      <rect x="0" y="0" width="300" height="3" rx="1.5" fill="#34d399"/>
+      <text x="16" y="24" class="font-mono" font-size="11" font-weight="600" fill="#34d399">STAGE 08</text>
+      <text x="16" y="44" class="font-display" font-size="16" font-weight="600" fill="#faf8f5">Analysis-by-Synthesis Solve</text>
+      <text x="16" y="66" class="font-sans" font-size="12" fill="rgba(250,248,245,0.7)">
+        <tspan x="16" dy="0">• Move ALL boundary points simultaneously</tspan>
+        <tspan x="16" dy="18">• Exact clipped polygon pixel area rendering</tspan>
+        <tspan x="16" dy="18">• Shoelace formula: A = 0.5·Σ (x_i·y_i+1 - ...)</tspan>
+        <tspan x="16" dy="18">• Analytic Jacobian via Prov tracking enum</tspan>
+        <tspan x="16" dy="18">• Levenberg-Marquardt energy minimization</tspan>
+      </text>
+      <rect x="16" y="160" width="268" height="48" rx="4" fill="#141210" stroke="#2a2724"/>
+      <text x="24" y="178" class="font-mono" font-size="10" fill="#34d399">E = ||a·c_L + (1-a)·c_R - target||²</text>
+      <text x="24" y="196" class="font-mono" font-size="9" fill="rgba(250,248,245,0.5)">+ w_kink·|Δ²p| + w_anchor·|p - p₀|²</text>
+    </g>
+
+    <!-- Stage 10 Symmetry -->
+    <g transform="translate(0, 434)" filter="url(#subtleGlow)">
+      <rect x="0" y="0" width="300" height="160" rx="8" fill="url(#cardGrad)" stroke="#35322e" stroke-width="1"/>
+      <rect x="0" y="0" width="300" height="3" rx="1.5" fill="#34d399"/>
+      <text x="16" y="24" class="font-mono" font-size="11" font-weight="600" fill="#34d399">STAGE 10</text>
+      <text x="16" y="44" class="font-display" font-size="16" font-weight="600" fill="#faf8f5">Symmetry Group Discovery</text>
+      <text x="16" y="66" class="font-sans" font-size="12" fill="rgba(250,248,245,0.7)">
+        <tspan x="16" dy="0">• Reflection axes &amp; k-fold rotational groups</tspan>
+        <tspan x="16" dy="18">• Detected on exact integer lattice</tspan>
+        <tspan x="16" dy="18">• Enforced as geometric equality constraint</tspan>
+        <tspan x="16" dy="18">• Emits &lt;defs&gt; and &lt;use&gt; transforms</tspan>
+      </text>
+      <rect x="16" y="124" width="268" height="22" rx="4" fill="#141210" stroke="#2a2724"/>
+      <text x="24" y="139" class="font-mono" font-size="10" fill="#34d399">Enforces exact mathematical mirror/rot</text>
+    </g>
+  </g>
+
+  <!-- COLUMN 4: Curve Fitting, Repair & Emit (Stages 11–13) -->
+  <g transform="translate(1050, 145)">
+    <!-- Column Header -->
+    <rect x="0" y="0" width="290" height="32" rx="6" fill="#1a1816" stroke="#35322e"/>
+    <circle cx="16" cy="16" r="4" fill="#d4896a"/>
+    <text x="28" y="20" class="font-sans" font-size="11" font-weight="700" letter-spacing="0.12em" fill="#faf8f5">PHASE IV: FITTING &amp; EMIT</text>
+
+    <!-- Stage 11 Dynamic Programming Curve Fit -->
+    <g transform="translate(0, 44)" filter="url(#subtleGlow)">
+      <rect x="0" y="0" width="290" height="255" rx="8" fill="url(#cardGrad)" stroke="#35322e" stroke-width="1"/>
+      <rect x="0" y="0" width="290" height="3" rx="1.5" fill="#d4896a"/>
+      <text x="16" y="24" class="font-mono" font-size="11" font-weight="600" fill="#d4896a">STAGE 11</text>
+      <text x="16" y="44" class="font-display" font-size="16" font-weight="600" fill="#faf8f5">Multi-Model DP Curve Fit</text>
+      <text x="16" y="66" class="font-sans" font-size="12" fill="rgba(250,248,245,0.7)">
+        <tspan x="16" dy="0">• Generalized Potrace DP over full alphabet:</tspan>
+        <tspan x="26" dy="16">- Line (2 params), Axis line (1 param)</tspan>
+        <tspan x="26" dy="16">- Circular arc (5 params via Kåsa O(1))</tspan>
+        <tspan x="26" dy="16">- G1 Cubic (6) via Raph Levien quartic</tspan>
+        <tspan x="26" dy="16">- Primitives: &lt;circle&gt;(3), &lt;rect&gt;(4/6)</tspan>
+        <tspan x="16" dy="18">• Ahn Orthogonal Distance (no curvature bias)</tspan>
+        <tspan x="16" dy="18">• Bow penalty detects systematic arc drift</tspan>
+      </text>
+      <rect x="16" y="195" width="258" height="46" rx="4" fill="#141210" stroke="#2a2724"/>
+      <text x="24" y="212" class="font-mono" font-size="10" fill="#d4896a">d = σ·√(2·λ·k / n)</text>
+      <text x="24" y="228" class="font-mono" font-size="9" fill="rgba(250,248,245,0.5)">Levien moment quartic avoids 3 minima</text>
+    </g>
+
+    <!-- Stage 12 Repair -->
+    <g transform="translate(0, 309)" filter="url(#subtleGlow)">
+      <rect x="0" y="0" width="290" height="135" rx="8" fill="url(#cardGrad)" stroke="#35322e" stroke-width="1"/>
+      <rect x="0" y="0" width="290" height="3" rx="1.5" fill="#d4896a"/>
+      <text x="16" y="24" class="font-mono" font-size="11" font-weight="600" fill="#d4896a">STAGE 12</text>
+      <text x="16" y="44" class="font-display" font-size="16" font-weight="600" fill="#faf8f5">Topological Ring Repair</text>
+      <text x="16" y="66" class="font-sans" font-size="12" fill="rgba(250,248,245,0.7)">
+        <tspan x="16" dy="0">• Assembled ring self-intersection test</tspan>
+        <tspan x="16" dy="18">• Prevents even-odd fill parity inversion</tspan>
+        <tspan x="16" dy="18">• Tightens span cap: max_span → 1</tspan>
+        <tspan x="16" dy="18">• Guaranteed termination to simple boundary</tspan>
+      </text>
+    </g>
+
+    <!-- Stage 13 Emit & Post -->
+    <g transform="translate(0, 454)" filter="url(#subtleGlow)">
+      <rect x="0" y="0" width="290" height="140" rx="8" fill="url(#cardGrad)" stroke="#35322e" stroke-width="1"/>
+      <rect x="0" y="0" width="290" height="3" rx="1.5" fill="#d4896a"/>
+      <text x="16" y="24" class="font-mono" font-size="11" font-weight="600" fill="#d4896a">STAGE 13</text>
+      <text x="16" y="44" class="font-display" font-size="16" font-weight="600" fill="#faf8f5">High-Fidelity SVG Emission</text>
+      <text x="16" y="66" class="font-sans" font-size="12" fill="rgba(250,248,245,0.7)">
+        <tspan x="16" dy="0">• Stacked vs cutout mosaic export</tspan>
+        <tspan x="16" dy="18">• Emit coordinate precision (2 decimals)</tspan>
+        <tspan x="16" dy="18">• Shared sibling even-odd path merger</tspan>
+        <tspan x="16" dy="18">• Minification &amp; viewBox retargeting</tspan>
+      </text>
+    </g>
+  </g>
+
+  <!-- Bottom Comparison Bar / Key Findings Banner -->
+  <g transform="translate(60, 775)">
+    <rect x="0" y="0" width="1280" height="195" rx="12" fill="#141210" stroke="#35322e" stroke-width="1"/>
+    <!-- Banner Header -->
+    <text x="30" y="32" class="font-sans" font-size="11" font-weight="700" letter-spacing="0.14em" fill="#c9754a">WHY INKVEC DOMINATES PREVIOUS ENGINES (VTRACER, POTRACE, AUTOTRACE)</text>
+    
+    <!-- Comparison 3-Column Layout -->
+    <g transform="translate(30, 48)">
+      <!-- Item 1 -->
+      <g transform="translate(0, 0)">
+        <rect x="0" y="0" width="380" height="120" rx="8" fill="#1a1816" stroke="#2a2724"/>
+        <text x="16" y="26" class="font-sans" font-size="13" font-weight="600" fill="#faf8f5">1. Subpixel Precision vs Bitmaps</text>
+        <text x="16" y="48" class="font-sans" font-size="11" fill="rgba(250,248,245,0.7)">
+          <tspan x="16" dy="0">Conventional: Thresholds pixels to integer raster grid.</tspan>
+          <tspan x="16" dy="18" fill="#c9754a" font-weight="500">Inkvec: Inverts continuous physical coverage mixture,</tspan>
+          <tspan x="16" dy="16" fill="#c9754a" font-weight="500">localizing edges to ~0.02 px with honest uncertainty σ.</tspan>
+        </text>
+      </g>
+
+      <!-- Item 2 -->
+      <g transform="translate(410, 0)">
+        <rect x="0" y="0" width="380" height="120" rx="8" fill="#1a1816" stroke="#2a2724"/>
+        <text x="16" y="26" class="font-sans" font-size="13" font-weight="600" fill="#faf8f5">2. Planar Map DCEL vs Independent Paths</text>
+        <text x="16" y="48" class="font-sans" font-size="11" fill="rgba(250,248,245,0.7)">
+          <tspan x="16" dy="0">Conventional: 1.64× overdraw or unsightly gaps/seams.</tspan>
+          <tspan x="16" dy="18" fill="#b8976c" font-weight="500">Inkvec: Stores shared edge ONCE in planar subdivision.</tspan>
+          <tspan x="16" dy="16" fill="#b8976c" font-weight="500">Overdraw = 1.000 by invariant; Shewchuk exact predicates.</tspan>
+        </text>
+      </g>
+
+      <!-- Item 3 -->
+      <g transform="translate(820, 0)">
+        <rect x="0" y="0" width="390" height="120" rx="8" fill="#1a1816" stroke="#2a2724"/>
+        <text x="16" y="26" class="font-sans" font-size="13" font-weight="600" fill="#faf8f5">3. Multi-Model Alphabet vs Cubic-Only</text>
+        <text x="16" y="48" class="font-sans" font-size="11" fill="rgba(250,248,245,0.7)">
+          <tspan x="16" dy="0">Conventional: 36 chords or 4 cubics (24 floats) per circle.</tspan>
+          <tspan x="16" dy="18" fill="#34d399" font-weight="500">Inkvec: MDL DP selects &lt;circle&gt; (3 floats), arcs (5),</tspan>
+          <tspan x="16" dy="16" fill="#34d399" font-weight="500">or Levien quartic G1 cubics. 3.3× fewer coordinates.</tspan>
+        </text>
+      </g>
+    </g>
+  </g>
+
+  <!-- Flow Direction Arrows -->
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 8 5 L 0 9 z" fill="#c9754a"/>
+    </marker>
+  </defs>
+  <!-- Inter-column connector arrows -->
+  <path d="M 360 280 L 390 280" stroke="#c9754a" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M 690 280 L 720 280" stroke="#b8976c" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M 1020 280 L 1050 280" stroke="#34d399" stroke-width="2" marker-end="url(#arrow)"/>
+</svg>

@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 680" width="1200" height="680" style="background:#0c0a09; font-family:'Inter', sans-serif;">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&amp;family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap');
+      .font-display { font-family: 'Playfair Display', Georgia, serif; }
+      .font-mono { font-family: 'JetBrains Mono', monospace; }
+      .font-sans { font-family: 'Inter', sans-serif; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="680" fill="#0c0a09"/>
+
+  <!-- Header -->
+  <g transform="translate(60, 40)">
+    <text x="0" y="16" class="font-sans" font-size="11" font-weight="700" letter-spacing="0.16em" fill="#b8976c">TOPOLOGY &amp; DATA STRUCTURE · STAGE 06</text>
+    <text x="0" y="44" class="font-display" font-size="26" font-weight="700" fill="#faf8f5">Planar Map Subdivision vs Conventional Independent Paths</text>
+  </g>
+
+  <!-- Left: Conventional Approach -->
+  <g transform="translate(60, 110)">
+    <rect x="0" y="0" width="510" height="510" rx="10" fill="#141210" stroke="#f87171" stroke-opacity="0.5" stroke-width="1.5"/>
+    <text x="24" y="32" class="font-display" font-size="18" font-weight="600" fill="#f87171">Conventional Tracers (VTracer, Potrace, SVG)</text>
+    <text x="24" y="54" class="font-sans" font-size="12" fill="rgba(250,248,245,0.65)">Independent closed paths per region: The Seam vs Overdraw Dilemma</text>
+
+    <!-- Failure illustration -->
+    <g transform="translate(40, 80)">
+      <!-- Shape A -->
+      <path d="M 20 20 L 180 20 L 180 180 L 20 180 Z" fill="#2a2724" stroke="#faf8f5" stroke-width="1.5"/>
+      <text x="60" y="105" class="font-sans" font-size="14" font-weight="600" fill="#faf8f5">Face A</text>
+      <!-- Duplicated boundary with jitter/gap -->
+      <path d="M 184 20 L 340 20 L 340 180 L 184 180 Z" fill="#35322e" stroke="#faf8f5" stroke-width="1.5"/>
+      <text x="230" y="105" class="font-sans" font-size="14" font-weight="600" fill="#faf8f5">Face B</text>
+
+      <!-- Zoom callout to the seam -->
+      <line x1="182" y1="80" x2="182" y2="120" stroke="#f87171" stroke-width="3"/>
+      
+      <!-- Seam Magnified Circle -->
+      <g transform="translate(260, 190)">
+        <circle cx="60" cy="60" r="55" fill="#1a1816" stroke="#f87171" stroke-width="2"/>
+        <line x1="45" y1="15" x2="45" y2="105" stroke="#faf8f5" stroke-width="3"/>
+        <line x1="75" y1="15" x2="75" y2="105" stroke="#faf8f5" stroke-width="3"/>
+        <!-- Gap -->
+        <rect x="47" y="15" width="26" height="90" fill="#f87171" fill-opacity="0.3"/>
+        <text x="18" y="130" class="font-mono" font-size="10" fill="#f87171">Hairline Seam / Gap</text>
+      </g>
+    </g>
+
+    <!-- Failure metrics box -->
+    <g transform="translate(24, 340)">
+      <rect x="0" y="0" width="462" height="145" rx="8" fill="#1a1816" stroke="#2a2724"/>
+      <text x="18" y="24" class="font-mono" font-size="12" font-weight="600" fill="#f87171">MEASURED BENCHMARK FAILURE:</text>
+      <text x="18" y="46" class="font-sans" font-size="12" fill="rgba(250,248,245,0.8)">
+        <tspan x="18" dy="0">• <tspan font-weight="700" fill="#faf8f5">Overdraw: 1.64×</tspan> (64% of boundary geometry is drawn twice)</tspan>
+        <tspan x="18" dy="20">• Edge rounding errors diverge at 4× zoom: <tspan fill="#f87171">seams widen 2.4×</tspan></tspan>
+        <tspan x="18" dy="20">• Moving an edge requires synchronizing two separate bezier paths</tspan>
+        <tspan x="18" dy="20">• Under noise perturbation: anchor count explodes by <tspan fill="#f87171">+106.7%</tspan></tspan>
+      </text>
+    </g>
+  </g>
+
+  <!-- Right: Inkvec DCEL Planar Map -->
+  <g transform="translate(630, 110)">
+    <rect x="0" y="0" width="510" height="510" rx="10" fill="#141210" stroke="#34d399" stroke-opacity="0.7" stroke-width="1.5"/>
+    <text x="24" y="32" class="font-display" font-size="18" font-weight="600" fill="#34d399">Inkvec Half-Edge Planar Subdivision (DCEL)</text>
+    <text x="24" y="54" class="font-sans" font-size="12" fill="rgba(250,248,245,0.65)">Every shared edge stored exactly once with exact Shewchuk predicates</text>
+
+    <!-- Planar Map Diagram -->
+    <g transform="translate(40, 80)">
+      <!-- Face L -->
+      <polygon points="20,20 180,20 180,180 20,180" fill="#211f1c" stroke="#35322e" stroke-width="1"/>
+      <text x="60" y="105" class="font-sans" font-size="14" font-weight="600" fill="#faf8f5">Face L</text>
+      <!-- Face R -->
+      <polygon points="180,20 340,20 340,180 180,180" fill="#2a2724" stroke="#35322e" stroke-width="1"/>
+      <text x="230" y="105" class="font-sans" font-size="14" font-weight="600" fill="#faf8f5">Face R</text>
+
+      <!-- Shared Edge E_k (highlighted) -->
+      <line x1="180" y1="20" x2="180" y2="180" stroke="#c9754a" stroke-width="4"/>
+      <!-- Nodes / Junctions -->
+      <circle cx="180" cy="20" r="6" fill="#34d399" stroke="#faf8f5" stroke-width="2"/>
+      <circle cx="180" cy="180" r="6" fill="#34d399" stroke="#faf8f5" stroke-width="2"/>
+      <text x="190" y="25" class="font-mono" font-size="11" fill="#34d399">Node v₁</text>
+      <text x="190" y="185" class="font-mono" font-size="11" fill="#34d399">Node v₂</text>
+
+      <!-- Direction Arrow on Shared Edge -->
+      <path d="M 175 90 L 180 105 L 185 90" fill="#faf8f5"/>
+      <text x="100" y="145" class="font-mono" font-size="11" fill="#c9754a">Shared Edge e_k</text>
+      <text x="100" y="160" class="font-mono" font-size="9" fill="rgba(250,248,245,0.6)">left: L, right: R</text>
+    </g>
+
+    <!-- Mathematical Invariant Box -->
+    <g transform="translate(24, 340)">
+      <rect x="0" y="0" width="462" height="145" rx="8" fill="#1a1816" stroke="#2a2724"/>
+      <text x="18" y="24" class="font-mono" font-size="12" font-weight="600" fill="#34d399">TOPOLOGICAL GUARANTEES (BY INVARIANT):</text>
+      <text x="18" y="46" class="font-sans" font-size="12" fill="rgba(250,248,245,0.8)">
+        <tspan x="18" dy="0">• <tspan font-weight="700" fill="#faf8f5">Overdraw: 1.000×</tspan> (Exactly zero duplicated geometry)</tspan>
+        <tspan x="18" dy="20">• <tspan font-weight="700" fill="#34d399">0 Seams:</tspan> Hairline gaps are unrepresentable in the data structure</tspan>
+        <tspan x="18" dy="20">• <tspan font-weight="700" fill="#b8976c">Shewchuk robust predicates:</tspan> orient2d/incircle evaluated exactly</tspan>
+        <tspan x="18" dy="20">• Moving edge e_k moves boundary for both faces identically</tspan>
+      </text>
+    </g>
+  </g>
+</svg>

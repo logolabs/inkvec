@@ -1,0 +1,146 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 680" width="1200" height="680" style="background:#0c0a09; font-family:'Inter', sans-serif;">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&amp;family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap');
+      .font-display { font-family: 'Playfair Display', Georgia, serif; }
+      .font-mono { font-family: 'JetBrains Mono', monospace; }
+      .font-sans { font-family: 'Inter', sans-serif; }
+    </style>
+    <linearGradient id="cardBg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#1f1d1a"/>
+      <stop offset="100%" stop-color="#141210"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="680" fill="#0c0a09"/>
+  
+  <!-- Header -->
+  <g transform="translate(60, 40)">
+    <text x="0" y="16" class="font-sans" font-size="11" font-weight="700" letter-spacing="0.16em" fill="#c9754a">MATHEMATICAL FOUNDATION · STAGE 02</text>
+    <text x="0" y="44" class="font-display" font-size="26" font-weight="700" fill="#faf8f5">Subpixel Anti-Aliasing Inversion &amp; Uncertainty Propagation</text>
+  </g>
+
+  <!-- Panel 1: Physical Continuous Coverage inside a Pixel Grid -->
+  <g transform="translate(60, 110)">
+    <rect x="0" y="0" width="340" height="510" rx="10" fill="url(#cardBg)" stroke="#35322e" stroke-width="1"/>
+    <text x="24" y="32" class="font-display" font-size="16" font-weight="600" fill="#faf8f5">1. Physical Pixel Integration</text>
+    <text x="24" y="52" class="font-sans" font-size="12" fill="rgba(250,248,245,0.65)">Continuous vector edge cuts the square sensor cell</text>
+
+    <!-- Visual of pixel cell -->
+    <g transform="translate(50, 80)">
+      <!-- Pixel Cell Boundary -->
+      <rect x="0" y="0" width="240" height="240" fill="#1a1816" stroke="#35322e" stroke-width="2"/>
+      <!-- Background Fill (1-alpha) -->
+      <polygon points="0,0 240,0 240,160 0,60" fill="#2a2724"/>
+      <!-- Foreground Fill alpha -->
+      <polygon points="0,60 240,160 240,240 0,240" fill="#c9754a" fill-opacity="0.85"/>
+      <!-- True Boundary Vector -->
+      <line x1="0" y1="60" x2="240" y2="160" stroke="#faf8f5" stroke-width="3"/>
+      <!-- Normal vector -->
+      <line x1="120" y1="110" x2="85" y2="194" stroke="#b8976c" stroke-width="2" stroke-dasharray="3 3"/>
+      <circle cx="120" cy="110" r="4" fill="#faf8f5"/>
+      <text x="130" y="105" class="font-mono" font-size="11" fill="#faf8f5">Edge Level-Set α=0.5</text>
+      <text x="100" y="215" class="font-mono" font-size="11" fill="#b8976c">∇α (normal)</text>
+
+      <!-- Label Area -->
+      <text x="40" y="40" class="font-mono" font-size="12" fill="#faf8f5">Area = (1 - α)</text>
+      <text x="40" y="56" class="font-sans" font-size="10" fill="rgba(250,248,245,0.6)">Background (B)</text>
+
+      <text x="40" y="190" class="font-mono" font-size="12" fill="#faf8f5">Area = α (62%)</text>
+      <text x="40" y="206" class="font-sans" font-size="10" fill="rgba(250,248,245,0.85)">Foreground (F)</text>
+    </g>
+
+    <!-- Formula block -->
+    <g transform="translate(20, 360)">
+      <rect x="0" y="0" width="300" height="125" rx="6" fill="#141210" stroke="#2a2724"/>
+      <text x="16" y="24" class="font-mono" font-size="12" fill="#d4896a">Forward Image Formation:</text>
+      <text x="16" y="46" class="font-mono" font-size="14" fill="#faf8f5">P = α·F + (1 - α)·B</text>
+      <text x="16" y="70" class="font-sans" font-size="11" fill="rgba(250,248,245,0.6)">P is the recorded pixel value in RGB space.</text>
+      <text x="16" y="88" class="font-sans" font-size="11" fill="rgba(250,248,245,0.6)">α is scalar area fraction [0, 1].</text>
+      <text x="16" y="106" class="font-sans" font-size="11" fill="#34d399">Preserves subpixel edge to ~0.02 px.</text>
+    </g>
+  </g>
+
+  <!-- Panel 2: Vector Projection in 3D Color Space -->
+  <g transform="translate(430, 110)">
+    <rect x="0" y="0" width="340" height="510" rx="10" fill="url(#cardBg)" stroke="#35322e" stroke-width="1"/>
+    <text x="24" y="32" class="font-display" font-size="16" font-weight="600" fill="#faf8f5">2. 3D Color Space Inversion</text>
+    <text x="24" y="52" class="font-sans" font-size="12" fill="rgba(250,248,245,0.65)">Least-squares unmixing along (F - B) axis</text>
+
+    <!-- 3D Vector Diagram -->
+    <g transform="translate(30, 90)">
+      <!-- Axis lines -->
+      <line x1="30" y1="200" x2="250" y2="200" stroke="#35322e" stroke-width="1.5"/>
+      <line x1="30" y1="200" x2="30" y2="20" stroke="#35322e" stroke-width="1.5"/>
+      <line x1="30" y1="200" x2="100" y2="250" stroke="#35322e" stroke-width="1.5"/>
+      <text x="255" y="205" class="font-mono" font-size="10" fill="rgba(250,248,245,0.4)">Red</text>
+      <text x="25" y="15" class="font-mono" font-size="10" fill="rgba(250,248,245,0.4)">Green</text>
+      <text x="105" y="255" class="font-mono" font-size="10" fill="rgba(250,248,245,0.4)">Blue</text>
+
+      <!-- Vector F - B -->
+      <line x1="50" y1="170" x2="220" y2="60" stroke="#c9754a" stroke-width="3"/>
+      <!-- Background Node B -->
+      <circle cx="50" cy="170" r="6" fill="#2a2724" stroke="#faf8f5" stroke-width="2"/>
+      <text x="35" y="195" class="font-mono" font-size="12" font-weight="600" fill="#faf8f5">B (α=0)</text>
+
+      <!-- Foreground Node F -->
+      <circle cx="220" cy="60" r="6" fill="#c9754a" stroke="#faf8f5" stroke-width="2"/>
+      <text x="210" y="45" class="font-mono" font-size="12" font-weight="600" fill="#c9754a">F (α=1)</text>
+
+      <!-- Observed Pixel P with noise projection -->
+      <circle cx="150" cy="95" r="5" fill="#34d399"/>
+      <text x="160" y="90" class="font-mono" font-size="11" fill="#34d399">P (Observed)</text>
+      <!-- Projection line -->
+      <line x1="150" y1="95" x2="160" y2="99" stroke="#34d399" stroke-width="1.5" stroke-dasharray="2 2"/>
+      <circle cx="160" cy="99" r="4" fill="#faf8f5"/>
+      <text x="170" y="115" class="font-mono" font-size="10" fill="#faf8f5">α Projection</text>
+
+      <!-- Vector Difference annotation -->
+      <text x="110" y="150" class="font-mono" font-size="11" fill="#b8976c">Vector (F - B)</text>
+    </g>
+
+    <!-- Formula block -->
+    <g transform="translate(20, 360)">
+      <rect x="0" y="0" width="300" height="125" rx="6" fill="#141210" stroke="#2a2724"/>
+      <text x="16" y="24" class="font-mono" font-size="12" fill="#d4896a">Least-Squares Projection:</text>
+      <text x="16" y="46" class="font-mono" font-size="13" fill="#34d399">α = (P - B) · (F - B) / |F - B|²</text>
+      <text x="16" y="70" class="font-sans" font-size="11" fill="rgba(250,248,245,0.6)">Uses all three RGB channels simultaneously,</text>
+      <text x="16" y="88" class="font-sans" font-size="11" fill="rgba(250,248,245,0.6)">unlike luminance-only thresholding.</text>
+      <text x="16" y="106" class="font-sans" font-size="11" fill="#b8976c">Robust against single-channel noise.</text>
+    </g>
+  </g>
+
+  <!-- Panel 3: Rigorous Uncertainty Propagation -->
+  <g transform="translate(800, 110)">
+    <rect x="0" y="0" width="340" height="510" rx="10" fill="url(#cardBg)" stroke="#35322e" stroke-width="1"/>
+    <text x="24" y="32" class="font-display" font-size="16" font-weight="600" fill="#faf8f5">3. Error Propagation Chain</text>
+    <text x="24" y="52" class="font-sans" font-size="12" fill="rgba(250,248,245,0.65)">Pixel noise → Coverage noise → Positional σ</text>
+
+    <!-- Visual comparison of Sharp vs Faint -->
+    <g transform="translate(20, 80)">
+      <!-- Sharp Edge Box -->
+      <rect x="0" y="0" width="300" height="110" rx="6" fill="#141210" stroke="#34d399" stroke-width="1"/>
+      <text x="14" y="22" class="font-sans" font-size="11" font-weight="700" fill="#34d399">SHARP / HIGH CONTRAST (|F-B| large)</text>
+      <text x="14" y="42" class="font-mono" font-size="11" fill="#faf8f5">|∇α| ≈ 1.0 px⁻¹  ·  σα ≈ 0.02</text>
+      <text x="14" y="62" class="font-mono" font-size="14" font-weight="600" fill="#34d399">σ_pos = 0.028 px (tight tolerance!)</text>
+      <text x="14" y="86" class="font-sans" font-size="10" fill="rgba(250,248,245,0.6)">Fitter strictly respects every contour point.</text>
+
+      <!-- Faint Edge Box -->
+      <rect x="0" y="130" width="300" height="110" rx="6" fill="#141210" stroke="#e09263" stroke-width="1"/>
+      <text x="14" y="152" class="font-sans" font-size="11" font-weight="700" fill="#e09263">FAINT / LOW CONTRAST (|F-B| small)</text>
+      <text x="14" y="172" class="font-mono" font-size="11" fill="#faf8f5">|∇α| ≈ 0.2 px⁻¹  ·  σα ≈ 0.25</text>
+      <text x="14" y="192" class="font-mono" font-size="14" font-weight="600" fill="#e09263">σ_pos = 1.250 px (wide tolerance!)</text>
+      <text x="14" y="216" class="font-sans" font-size="10" fill="rgba(250,248,245,0.6)">Fitter simplifies hard — naturally noise-immune.</text>
+    </g>
+
+    <!-- Formula block -->
+    <g transform="translate(20, 360)">
+      <rect x="0" y="0" width="300" height="125" rx="6" fill="#141210" stroke="#2a2724"/>
+      <text x="16" y="24" class="font-mono" font-size="12" fill="#d4896a">Unified Uncertainty Formula:</text>
+      <text x="16" y="48" class="font-mono" font-size="13" font-weight="600" fill="#faf8f5">σ_pos = σ_pixel / (|F - B| · |∇α|)</text>
+      <text x="16" y="72" class="font-sans" font-size="11" fill="rgba(250,248,245,0.7)">Quantization Variance Floor (Uniform noise):</text>
+      <text x="16" y="92" class="font-mono" font-size="12" fill="#b8976c">σ_floor ≥ 1 / √12 ≈ 0.2887 px</text>
+      <text x="16" y="110" class="font-sans" font-size="10" fill="#34d399">Prevents over-segmentation on 16-level alpha!</text>
+    </g>
+  </g>
+</svg>

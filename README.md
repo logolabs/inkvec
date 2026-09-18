@@ -5,6 +5,7 @@
 <p align="center">
   <a href="https://github.com/logolabs/inkvec/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/logolabs/inkvec/ci.yml?label=CI&logo=github"></a>
   <a href="https://github.com/logolabs/inkvec/releases"><img alt="release" src="https://img.shields.io/github/v/release/logolabs/inkvec?label=release"></a>
+  <a href="PIPELINE_EXPLANATION.md"><img alt="Pipeline Explanation" src="https://img.shields.io/badge/architecture-PIPELINE__EXPLANATION-c9754a"></a>
   <a href="LICENSE"><img alt="Apache-2.0" src="https://img.shields.io/badge/licence-Apache--2.0-blue"></a>
   <a href="https://huggingface.co/spaces/logolabs/inkvec"><img alt="demo" src="https://img.shields.io/badge/🤗_demo-HuggingFace-orange"></a>
   <a href="https://huggingface.co/Logolabs/inkvec-denoiser-001"><img alt="model" src="https://img.shields.io/badge/model-inkvec--denoiser--001-yellow"></a>
@@ -174,17 +175,20 @@ fn trace(input: &str) -> Result<String, Box<dyn std::error::Error>> {
 ## How it works
 
 <p align="center">
-  <img src="docs/assets/github-pipeline.png" width="100%" alt="Inkvec pipeline: read pixels, map regions and edges, solve sub-pixel boundaries, fit curves and arcs, then emit compact SVG">
+  <img src="docs/assets/pipeline-step-by-step.svg" width="100%" alt="Inkvec pipeline: read pixels, map regions and edges, solve sub-pixel boundaries, fit curves and arcs, then emit compact SVG">
 </p>
 
-1. **Palette** by minimum description length — an ink survives only if the pixels it explains cost more without it.
-2. **Labels → planar map.** Every boundary is shared between exactly two faces, so a moved edge moves for both sides and the output never has a seam.
-3. **Boundary solve.** All boundary points simultaneously, against an exact-coverage render, so each edge lands where the anti-aliasing says it is.
-4. **Gradient fits.** Flat, linear or radial per face by the same MDL cost; bands that were one gradient are merged back.
-5. **Curve fitting** by dynamic programming over lines, cubics, arcs and whole primitives (circle, ellipse, rounded rectangle).
-6. **Repair and emit.** Crossing rings are refitted; SVG is written with shared geometry and stable ids.
+1. **Intake & Super-Resolution.** Lossy container inspection, GCD upscale unblocking, MambaIRv2 state-space restoration, and exact continuous area-weighted downsampling.
+2. **Sub-Pixel Coverage.** Linear unmixing across 3D RGB channels inverts anti-aliasing to a fraction of a pixel, establishing honest per-point uncertainty $\sigma_{\text{pos}}$.
+3. **Palette.** Minimum description length clustering in OKLab ($\Delta E_{00}$) eliminates spurious bands and fake inks.
+4. **Planar Map (DCEL).** Boundaries are stored once between adjacent faces; seams are unrepresentable and overdraw is exactly $1.000\times$.
+5. **Boundary Solve.** Analysis-by-synthesis moves all boundary points simultaneously under Levenberg-Marquardt with an analytic Shoelace polygon area Jacobian.
+6. **Curve Fitting.** Global dynamic programming over lines, arcs, Raph Levien quartic G1 Béziers, and primitives (`<circle>`, `<ellipse>`, `<rect>`).
+7. **Repair & Emit.** Capped span refitting eliminates self-crossing rings; output is emitted with shared geometry and clean even-odd paths.
 
-Full pipeline reference: [`docs/algorithm/`](docs/algorithm/) (start at `docs/algorithm/index.html`). Design rationale: [`docs/DESIGN.md`](docs/DESIGN.md).
+📖 **Comprehensive Technical & Scientific Guide:** See [**`PIPELINE_EXPLANATION.md`**](PIPELINE_EXPLANATION.md) for full mathematical derivations, branded step-by-step diagrams, and an extensive review of all research and arXiv papers used (AnchorFlow, VectorArk, AdaVec, SuperSVG, MambaIR, Levien Bézier fits, Shewchuk exact predicates, and more).
+
+Full stage reference: [`docs/algorithm/`](docs/algorithm/) (start at `docs/algorithm/index.html`). Design rationale: [`docs/DESIGN.md`](docs/DESIGN.md).
 
 ---
 

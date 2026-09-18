@@ -1,0 +1,151 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" width="1200" height="720" style="background:#0c0a09; font-family:'Inter', sans-serif;">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&amp;family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap');
+      .font-display { font-family: 'Playfair Display', Georgia, serif; }
+      .font-mono { font-family: 'JetBrains Mono', monospace; }
+      .font-sans { font-family: 'Inter', sans-serif; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="720" fill="#0c0a09"/>
+
+  <!-- Header -->
+  <g transform="translate(60, 36)">
+    <text x="0" y="16" class="font-sans" font-size="11" font-weight="700" letter-spacing="0.16em" fill="#c9754a">ALGORITHM &amp; OPTIMIZATION · STAGE 11</text>
+    <text x="0" y="44" class="font-display" font-size="26" font-weight="700" fill="#faf8f5">Multi-Model Dynamic Programming &amp; Primitive Fitting</text>
+  </g>
+
+  <!-- Top: Dynamic Programming Graph Representation -->
+  <g transform="translate(60, 105)">
+    <rect x="0" y="0" width="1080" height="155" rx="10" fill="#141210" stroke="#35322e" stroke-width="1"/>
+    <text x="24" y="28" class="font-sans" font-size="12" font-weight="700" fill="#b8976c" letter-spacing="0.12em">THE GLOBAL DYNAMIC PROGRAMMING RECURRENCE</text>
+    
+    <!-- State and transitions visual -->
+    <g transform="translate(40, 50)">
+      <!-- Vertices on the polyline -->
+      <circle cx="0" cy="50" r="6" fill="#c9754a"/>
+      <text x="-8" y="72" class="font-mono" font-size="11" fill="#c9754a">v₀</text>
+
+      <circle cx="160" cy="50" r="6" fill="#faf8f5"/>
+      <text x="154" y="72" class="font-mono" font-size="11" fill="#faf8f5">v_i</text>
+
+      <circle cx="360" cy="50" r="6" fill="#faf8f5"/>
+      <text x="354" y="72" class="font-mono" font-size="11" fill="#faf8f5">v_j</text>
+
+      <circle cx="560" cy="50" r="6" fill="#34d399"/>
+      <text x="552" y="72" class="font-mono" font-size="11" fill="#34d399">v_n</text>
+
+      <!-- Polyline path -->
+      <line x1="0" y1="50" x2="160" y2="50" stroke="#35322e" stroke-width="2"/>
+      <line x1="160" y1="50" x2="360" y2="50" stroke="#35322e" stroke-width="2"/>
+      <line x1="360" y1="50" x2="560" y2="50" stroke="#35322e" stroke-width="2"/>
+
+      <!-- Competing candidate transitions over span (i, j) -->
+      <!-- Candidate 1: Line -->
+      <path d="M 160 50 Q 260 20 360 50" fill="none" stroke="#faf8f5" stroke-width="1.5" stroke-dasharray="3 3"/>
+      <text x="230" y="30" class="font-mono" font-size="10" fill="#faf8f5">Line (2 params)</text>
+
+      <!-- Candidate 2: Circular Arc -->
+      <path d="M 160 50 Q 260 0 360 50" fill="none" stroke="#b8976c" stroke-width="2"/>
+      <text x="210" y="0" class="font-mono" font-size="10" fill="#b8976c">Circular Arc (5 params, Kåsa O(1))</text>
+
+      <!-- Candidate 3: G1 Cubic -->
+      <path d="M 160 50 Q 260 -25 360 50" fill="none" stroke="#c9754a" stroke-width="2.5"/>
+      <text x="190" y="-28" class="font-mono" font-size="10" fill="#c9754a">Levien G1 Cubic (6 params, Quartic root)</text>
+
+      <!-- Recurrence Formula on Right -->
+      <g transform="translate(620, -10)">
+        <text x="0" y="20" class="font-mono" font-size="12" fill="#d4896a">best[j] = min_{i &lt; j, kind} [ base(i) + segcost(kind, i, j) ]</text>
+        <text x="0" y="44" class="font-mono" font-size="11" fill="rgba(250,248,245,0.7)">segcost = 0.5·χ²(kind, i, j) + λ·PARAMS(kind) + bow_penalty</text>
+        <text x="0" y="66" class="font-sans" font-size="11" fill="#34d399">Verified strictly optimal against exhaustive search.</text>
+      </g>
+    </g>
+  </g>
+
+  <!-- Bottom 3 Pillars: Specific Mathematical Models -->
+  <g transform="translate(60, 280)">
+    <!-- Card 1: Raph Levien's Quartic Closed-Form Fit -->
+    <g transform="translate(0, 0)">
+      <rect x="0" y="0" width="340" height="400" rx="10" fill="#141210" stroke="#35322e" stroke-width="1"/>
+      <rect x="0" y="0" width="340" height="3" rx="1.5" fill="#c9754a"/>
+      <text x="20" y="28" class="font-display" font-size="16" font-weight="600" fill="#faf8f5">Raph Levien G1 Cubic Fit</text>
+      <text x="20" y="48" class="font-sans" font-size="11" fill="#c9754a">Green's Theorem Moment Matching</text>
+
+      <g transform="translate(20, 68)">
+        <rect x="0" y="0" width="300" height="150" rx="6" fill="#1a1816" stroke="#2a2724"/>
+        <text x="14" y="24" class="font-sans" font-size="12" fill="rgba(250,248,245,0.85)">
+          <tspan x="14" dy="0">• Matches signed area via Green's:</tspan>
+          <tspan x="24" dy="18" class="font-mono" fill="#b8976c">∮ (x dy - y dx) = 2·Area</tspan>
+          <tspan x="14" dy="22">• Matches first x-moment:</tspan>
+          <tspan x="24" dy="18" class="font-mono" fill="#b8976c">∮ x (x dy - y dx) = 3·M_x</tspan>
+          <tspan x="14" dy="22">• Reduces 2D arm space to a <tspan fill="#34d399">single quartic</tspan></tspan>
+          <tspan x="24" dy="18" fill="rgba(250,248,245,0.6)">solvable analytically in closed form!</tspan>
+        </text>
+      </g>
+
+      <text x="20" y="248" class="font-sans" font-size="12" font-weight="600" fill="#faf8f5">Why it beats Schneider (Graphics Gems):</text>
+      <text x="20" y="270" class="font-sans" font-size="11" fill="rgba(250,248,245,0.7)">
+        <tspan x="20" dy="0">C-shaped cubics possess <tspan fill="#f87171">three local minima</tspan>.</tspan>
+        <tspan x="20" dy="18">Schneider's gradient descent routinely gets trapped</tspan>
+        <tspan x="20" dy="18">in suboptimal arm configurations. Levien's quartic</tspan>
+        <tspan x="20" dy="18" fill="#34d399">inspects all 4 roots, finding the global minimum.</tspan>
+      </text>
+    </g>
+
+    <!-- Card 2: Ahn Orthogonal Distance vs Taubin Algebraic Bias -->
+    <g transform="translate(370, 0)">
+      <rect x="0" y="0" width="340" height="400" rx="10" fill="#141210" stroke="#35322e" stroke-width="1"/>
+      <rect x="0" y="0" width="340" height="3" rx="1.5" fill="#b8976c"/>
+      <text x="20" y="28" class="font-display" font-size="16" font-weight="600" fill="#faf8f5">Ahn Orthogonal Distance</text>
+      <text x="20" y="48" class="font-sans" font-size="11" fill="#b8976c">Geometric vs Algebraic Fitting</text>
+
+      <g transform="translate(20, 68)">
+        <rect x="0" y="0" width="300" height="150" rx="6" fill="#1a1816" stroke="#2a2724"/>
+        <text x="14" y="24" class="font-sans" font-size="12" fill="rgba(250,248,245,0.85)">
+          <tspan x="14" dy="0">• Taubin algebraic fit: fast initializer,</tspan>
+          <tspan x="24" dy="18" fill="#f87171">but carries documented high-curvature bias</tspan>
+          <tspan x="24" dy="18" fill="#f87171">(shrinks tight radii and fillets!)</tspan>
+          <tspan x="14" dy="24">• Ahn Orthogonal Distance Fitting (ODF):</tspan>
+          <tspan x="24" dy="18" class="font-mono" fill="#34d399">d_ortho = ||p_k - proj(p_k, curve)||</tspan>
+          <tspan x="24" dy="18" fill="rgba(250,248,245,0.6)">True geometric distance to ellipse/arc.</tspan>
+        </text>
+      </g>
+
+      <text x="20" y="248" class="font-sans" font-size="12" font-weight="600" fill="#faf8f5">Why it matters for brand logos:</text>
+      <text x="20" y="270" class="font-sans" font-size="11" fill="rgba(250,248,245,0.7)">
+        <tspan x="20" dy="0">Logo design lives at high curvature — corner fillets,</tspan>
+        <tspan x="20" dy="18">counter-spaces, and tight serif brackets.</tspan>
+        <tspan x="20" dy="18" fill="#34d399">Ahn ODF preserves intended corner radii</tspan>
+        <tspan x="20" dy="18">without clipping or flattening.</tspan>
+      </text>
+    </g>
+
+    <!-- Card 3: Exact Primitives in the Alphabet -->
+    <g transform="translate(740, 0)">
+      <rect x="0" y="0" width="340" height="400" rx="10" fill="#141210" stroke="#35322e" stroke-width="1"/>
+      <rect x="0" y="0" width="340" height="3" rx="1.5" fill="#34d399"/>
+      <text x="20" y="28" class="font-display" font-size="16" font-weight="600" fill="#faf8f5">First-Class Primitives</text>
+      <text x="20" y="48" class="font-sans" font-size="11" fill="#34d399">Parametric Primitives inside the DP</text>
+
+      <g transform="translate(20, 68)">
+        <rect x="0" y="0" width="300" height="150" rx="6" fill="#1a1816" stroke="#2a2724"/>
+        <text x="14" y="24" class="font-mono" font-size="11" fill="#faf8f5">
+          <tspan x="14" dy="0">• &lt;circle cx cy r&gt;       : <tspan fill="#34d399">3 params</tspan></tspan>
+          <tspan x="14" dy="20">• &lt;ellipse cx cy rx ry φ&gt; : <tspan fill="#34d399">5 params</tspan></tspan>
+          <tspan x="14" dy="20">• &lt;rect x y w h rx ry&gt;    : <tspan fill="#34d399">6 params</tspan></tspan>
+          <tspan x="14" dy="20">• Four cubics (circle)   : <tspan fill="#f87171">24 params</tspan></tspan>
+          <tspan x="14" dy="20">• Thirty-six chords       : <tspan fill="#f87171">72 params</tspan></tspan>
+        </text>
+      </g>
+
+      <text x="20" y="248" class="font-sans" font-size="12" font-weight="600" fill="#faf8f5">MDL Compactness Rewards Editability:</text>
+      <text x="20" y="270" class="font-sans" font-size="11" fill="rgba(250,248,245,0.7)">
+        <tspan x="20" dy="0">Because description length rewards compactness,</tspan>
+        <tspan x="20" dy="18">a circle written as &lt;circle&gt; saves 21 parameters!</tspan>
+        <tspan x="20" dy="18" fill="#34d399">A designer opening the SVG can grab the radius</tspan>
+        <tspan x="20" dy="18">handle in Figma or Illustrator and edit it cleanly.</tspan>
+      </text>
+    </g>
+  </g>
+</svg>

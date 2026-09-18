@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 680" width="1200" height="680" style="background:#0c0a09; font-family:'Inter', sans-serif;">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&amp;family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap');
+      .font-display { font-family: 'Playfair Display', Georgia, serif; }
+      .font-mono { font-family: 'JetBrains Mono', monospace; }
+      .font-sans { font-family: 'Inter', sans-serif; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="680" fill="#0c0a09"/>
+
+  <!-- Header -->
+  <g transform="translate(60, 40)">
+    <text x="0" y="16" class="font-sans" font-size="11" font-weight="700" letter-spacing="0.16em" fill="#34d399">ANALYSIS-BY-SYNTHESIS · STAGE 08</text>
+    <text x="0" y="44" class="font-display" font-size="26" font-weight="700" fill="#faf8f5">Global Boundary Solve: Analytic Area Jacobian</text>
+  </g>
+
+  <!-- Left: Geometric Polygon Clipping inside Pixel Grid -->
+  <g transform="translate(60, 110)">
+    <rect x="0" y="0" width="520" height="510" rx="10" fill="#141210" stroke="#35322e" stroke-width="1"/>
+    <text x="24" y="32" class="font-display" font-size="18" font-weight="600" fill="#faf8f5">Pixel Clipping &amp; Shoelace Area Integration</text>
+    <text x="24" y="52" class="font-sans" font-size="12" fill="rgba(250,248,245,0.65)">Exact continuous coverage computed by boundary chain polygon clipping</text>
+
+    <!-- Visual Pixel Grid with Polygon Clipping -->
+    <g transform="translate(60, 75)">
+      <!-- Pixel Square (280x280) -->
+      <rect x="0" y="0" width="280" height="280" fill="#1a1816" stroke="#35322e" stroke-width="2"/>
+      
+      <!-- Clipped Polygon on the left side of the boundary -->
+      <polygon points="0,0 280,0 280,70 200,160 80,210 0,280" fill="#c9754a" fill-opacity="0.25"/>
+      <polygon points="0,0 280,0 280,70 200,160 80,210 0,280" fill="none" stroke="#c9754a" stroke-width="2"/>
+
+      <!-- Boundary points inside pixel -->
+      <circle cx="200" cy="160" r="6" fill="#34d399" stroke="#faf8f5" stroke-width="2"/>
+      <text x="212" y="165" class="font-mono" font-size="11" fill="#34d399">v₁ (Prov::Vertex)</text>
+
+      <circle cx="80" cy="210" r="6" fill="#34d399" stroke="#faf8f5" stroke-width="2"/>
+      <text x="92" y="215" class="font-mono" font-size="11" fill="#34d399">v₂ (Prov::Vertex)</text>
+
+      <!-- Gridline Crossing Points -->
+      <circle cx="280" cy="70" r="5" fill="#b8976c"/>
+      <text x="210" y="60" class="font-mono" font-size="10" fill="#b8976c">Prov::CrossV</text>
+
+      <circle cx="0" cy="280" r="5" fill="#b8976c"/>
+      <text x="12" y="270" class="font-mono" font-size="10" fill="#b8976c">Prov::CrossH</text>
+
+      <!-- Fixed Pixel Corners -->
+      <circle cx="0" cy="0" r="4" fill="rgba(250,248,245,0.4)"/>
+      <circle cx="280" cy="0" r="4" fill="rgba(250,248,245,0.4)"/>
+      <text x="10" y="20" class="font-mono" font-size="9" fill="rgba(250,248,245,0.4)">Prov::Corner</text>
+    </g>
+
+    <g transform="translate(24, 385)">
+      <rect x="0" y="0" width="472" height="105" rx="6" fill="#1a1816" stroke="#2a2724"/>
+      <text x="16" y="24" class="font-mono" font-size="12" fill="#d4896a">Shoelace Formula for Polygon Area:</text>
+      <text x="16" y="46" class="font-mono" font-size="13" fill="#faf8f5">A = 0.5 · Σ (x_i · y_{i+1} - x_{i+1} · y_i)</text>
+      <text x="16" y="70" class="font-sans" font-size="11" fill="rgba(250,248,245,0.7)">Gradient w.r.t vertex: <tspan class="font-mono" fill="#34d399">∂A/∂x_i = -0.5(y_{i+1} - y_{i-1})</tspan></text>
+      <text x="16" y="90" class="font-sans" font-size="11" fill="rgba(250,248,245,0.7)">No numerical finite differences needed!</text>
+    </g>
+  </g>
+
+  <!-- Right: Analytic Jacobian Tracking & LM Energy Minimization -->
+  <g transform="translate(620, 110)">
+    <rect x="0" y="0" width="520" height="510" rx="10" fill="#141210" stroke="#35322e" stroke-width="1"/>
+    <text x="24" y="32" class="font-display" font-size="18" font-weight="600" fill="#faf8f5">Levenberg-Marquardt &amp; Prov Tracking</text>
+    <text x="24" y="52" class="font-sans" font-size="12" fill="rgba(250,248,245,0.65)">Propagating pixel area derivatives directly to boundary coordinate unknowns</text>
+
+    <!-- Prov enum explanation box -->
+    <g transform="translate(24, 75)">
+      <rect x="0" y="0" width="472" height="190" rx="8" fill="#1a1816" stroke="#2a2724"/>
+      <text x="16" y="24" class="font-mono" font-size="12" font-weight="600" fill="#34d399">enum Prov { Vertex, CrossV, CrossH, Corner }</text>
+      <text x="16" y="48" class="font-sans" font-size="12" fill="rgba(250,248,245,0.8)">
+        <tspan x="16" dy="0">• <tspan class="font-mono" fill="#faf8f5">Prov::Vertex(v):</tspan> Boundary point. ∂A/∂v passes straight through.</tspan>
+        <tspan x="16" dy="24">• <tspan class="font-mono" fill="#b8976c">Prov::CrossV { line, a, b }:</tspan> Crosses vertical gridline.</tspan>
+        <tspan x="26" dy="18" class="font-mono" font-size="11" fill="rgba(250,248,245,0.6)">t = (line - a.x)/(b.x - a.x); propagates to unknowns a &amp; b.</tspan>
+        <tspan x="16" dy="24">• <tspan class="font-mono" fill="#b8976c">Prov::CrossH { line, a, b }:</tspan> Crosses horizontal gridline.</tspan>
+        <tspan x="16" dy="24">• <tspan class="font-mono" fill="rgba(250,248,245,0.4)">Prov::Corner:</tspan> Fixed pixel corner; zero contribution.</tspan>
+      </text>
+    </g>
+
+    <!-- Energy minimization box -->
+    <g transform="translate(24, 285)">
+      <rect x="0" y="0" width="472" height="205" rx="8" fill="#1a1816" stroke="#2a2724"/>
+      <text x="16" y="24" class="font-mono" font-size="12" font-weight="600" fill="#c9754a">JOINT NON-LINEAR ENERGY FUNCTION:</text>
+      
+      <text x="16" y="52" class="font-mono" font-size="12" fill="#faf8f5">E = Σ || a·c_left + (1-a)·c_right - target ||²</text>
+      <text x="36" y="72" class="font-mono" font-size="11" fill="#b8976c">+ w_kink · Σ |p_{i-1} - 2·p_i + p_{i+1}|</text>
+      <text x="36" y="90" class="font-mono" font-size="11" fill="#34d399">+ w_anchor · Σ |p_i - p_i⁰|²</text>
+
+      <text x="16" y="118" class="font-sans" font-size="11" fill="rgba(250,248,245,0.75)">
+        <tspan x="16" dy="0">• Data term evaluates true rendered pixel coverage</tspan>
+        <tspan x="16" dy="18">• Kink regularizer discourages sharp boundary oscillations</tspan>
+        <tspan x="16" dy="18">• Anchor regularizer stabilizes motion along boundary tangents</tspan>
+        <tspan x="16" dy="18">• Self-intersection fold guard rejects any move that flips topology</tspan>
+      </text>
+    </g>
+  </g>
+</svg>

@@ -13,7 +13,7 @@ categories.workspace = true
 
 [dependencies]
 inkvec-trace = { workspace = true }
-resvg = { version = "0.45", default-features = false }
+resvg = { version = "0.48", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 # The upscaler network itself is not compiled in: it runs out of process through

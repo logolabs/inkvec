@@ -38,3 +38,26 @@ The current continuous integration gate tests against a grandfathered 246-icon s
     - Sub-pixel self-resolution reconstruction error.
 - [ ] **Distributed Benchmark Runner:**
   - Implement batch execution with persistent caching, multi-core worker pools, and streaming regression metrics to avoid CI timeout while running deep benchmark sweeps.
+
+---
+
+## 3. Output-Preserving Speedups (deferred: diminishing returns)
+
+Fifteen browser threads buy only about 4.3× over one core, because two stages do not scale. Measured on `adamo` at 768 px, native, 1 vs 16 threads (2026-09-19):
+
+| stage | 1 thread | 16 threads | limit |
+|---|---|---|---|
+| `fit_dp` | 4185 ms | 768 ms | the largest single ring (681 ms); each ring's DP is sequential |
+| `palette` | 662 ms | 399 ms | mostly serial |
+| `carve` | 104 ms | 102 ms | serial |
+
+Both can be made faster without changing a byte of output: compute the same numbers in parallel, and keep every decision in the same arithmetic and the same order. The comparisons in `solve_open` are `base + cost_a < base + cost_b`, which is not the same as `cost_a < cost_b` in floating point, so they must stay as written; only the fits feeding them may move. The estimated ceiling is 1.3–1.5× end to end, which is why this waits.
+
+### Implementation Tasks:
+- [ ] **Critical-path ring speculation in `fit_dp`:**
+  - For the one or two rings longer than the average per-thread load, fit their spans in parallel ahead of the sequential sweep, which then reads those results; spans past the prune are discarded unread.
+  - A blanket block-parallel version (2026-09-06) produced identical output but was slower at 2048 px, where every core was already busy with other rings. Apply it to the critical path only.
+- [ ] **Largest-first ring scheduling:** start the biggest rings first so none begins late. Exact by construction; small gain.
+- [ ] **Palette serial remainder:** profile which loop keeps `palette` at 1.66× on 16 threads; parallelize it with results combined in the existing order.
+- [ ] **Acceptance:** byte-identical SVGs before and after on the 246-icon screen set, the Space samples and a few 2048-px logos, with `--time-budget 0` (a wall-clock budget makes output depend on speed); then `python bench/wasm_parity.py` on rebuilt wasm.
+- [ ] **Optional, separate: native = browser output.** Today they differ on 6 of 8 parity images in the last digit, occasionally in path structure, because wasm32 takes transcendentals (OKLab `cbrt`, sRGB `powf`, `atan2`) from Rust's `libm` and Windows from its runtime. Routing them through the `libm` crate on every target would make the CLI and the Space agree, at the cost of changing native output once and re-baselining the gate.

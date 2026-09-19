@@ -23,6 +23,16 @@ Inkvec reads a PNG, JPEG, WebP, GIF, BMP or TIFF and writes an SVG whose geometr
 
 Most tracers spend points wherever their curve-fit tolerance lets them. Inkvec spends them where the artist would have: one path per region, a circle where there is a circle, shared edges between shapes that never drift apart.
 
+## Who it's for
+
+Flat artwork — logos, icons, emoji, illustrations — and two readers of the result at once: whoever looks at the SVG, and whoever has to edit it later.
+
+- **A designer opening the file in Figma or Illustrator.** A circle comes back as a `<circle>` and a rounded rectangle as a `<rect>`. Neighbouring shapes of one flat colour are one compound path, the way an artist draws a word. Shapes are stacked rather than cut into a jigsaw, so moving one does not open a hole in the one behind it. A smooth ramp is a real gradient, and a transparent area is still transparent. On the 246-icon regression set the file carries 1.48× the parameters of the artist's own SVG. What tracing cannot give back: layer names (ids are colour names such as `dark-grey-6`), live text (lettering comes back as outlines), and stroke widths you can drag — unless the drawing uses uniform strokes and you pass `--strokes`.
+- **A developer shipping a smaller asset.** On the 21 comparison cases below, Inkvec writes 4.4× fewer coordinates than VTracer's defaults at a tenth of the colour error, and `--minify` takes about another 10% off the file. The price is time: about a second per graphic where VTracer takes 0.04 s, so trace at build time, not per request.
+- **A brand team that needs the logo exact.** Boundaries land within ~0.05 px on analytic test shapes, and on the regression set the mean colour error is dE00 0.148 (median 0.110; around 1.0 is where a trained eye starts to see a difference). A trace is still a reconstruction from pixels, not a recovery of the source file: if the original vector exists, use it. The colours written are the ones measured in the image, so whatever a JPEG or a screenshot did to them comes along — check them against your brand values.
+
+Not for photographs, text you need to edit as text, or pencil and brush work; see [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md).
+
 ---
 
 ## Results

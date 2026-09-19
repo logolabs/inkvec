@@ -170,7 +170,7 @@ python tools/pull_model.py
 
 **Try it live:** [huggingface.co/spaces/logolabs/inkvec](https://huggingface.co/spaces/logolabs/inkvec)
 
-To embed in your own page, call `trace(bytes, precision, min_area, colors, merge, max_dim, time_budget, no_background, minify, margin, content_units)` — see [`crates/inkvec-wasm/src/lib.rs`](crates/inkvec-wasm/src/lib.rs).
+To use it from JavaScript or TypeScript — browsers, Node.js, Deno, Bun — use the npm package [`@logolabs/inkvec`](packages/npm/) (`packages/npm`): `await trace(bytes, { colors: 16, cutout: true })`, with typed options, a threaded build at `@logolabs/inkvec/threads`, and the same output on every runtime.
 
 ---
 

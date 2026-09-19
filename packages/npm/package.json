@@ -1,0 +1,73 @@
+{
+  "name": "@logolabs/inkvec",
+  "version": "0.1.3",
+  "description": "Raster to SVG tracing by minimum description length: PNG, JPEG, WebP or raw RGBA in, an SVG string out. WebAssembly, for browsers and Node.js.",
+  "license": "Apache-2.0",
+  "author": "LogoLabs",
+  "homepage": "https://github.com/logolabs/inkvec/tree/main/packages/npm#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/logolabs/inkvec.git",
+    "directory": "packages/npm"
+  },
+  "bugs": "https://github.com/logolabs/inkvec/issues",
+  "keywords": [
+    "svg",
+    "vectorize",
+    "vectorizer",
+    "vectorization",
+    "image-tracing",
+    "raster-to-vector",
+    "trace",
+    "potrace",
+    "logo",
+    "icon",
+    "wasm",
+    "webassembly"
+  ],
+  "type": "module",
+  "sideEffects": [
+    "./wasm/threads/snippets/**",
+    "./dist/node-worker.js"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./threads": {
+      "types": "./dist/threads.d.ts",
+      "default": "./dist/threads.js"
+    },
+    "./inkvec.wasm": "./wasm/st/inkvec_wasm_bg.wasm",
+    "./threads/inkvec.wasm": "./wasm/threads/inkvec_wasm_bg.wasm",
+    "./package.json": "./package.json"
+  },
+  "types": "./dist/index.d.ts",
+  "main": "./dist/index.js",
+  "files": [
+    "dist/",
+    "wasm/st/inkvec_wasm.js",
+    "wasm/st/inkvec_wasm.d.ts",
+    "wasm/st/inkvec_wasm_bg.wasm",
+    "wasm/threads/inkvec_wasm.js",
+    "wasm/threads/inkvec_wasm.d.ts",
+    "wasm/threads/inkvec_wasm_bg.wasm",
+    "wasm/threads/snippets/",
+    "CHANGELOG.md",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": ">=20.16"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "build:ts": "node build.mjs --skip-wasm",
+    "test": "node --test --test-concurrency=1 test/*.test.mjs",
+    "test:browser": "node test/browser/smoke.mjs",
+    "prepack": "node build.mjs --check"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

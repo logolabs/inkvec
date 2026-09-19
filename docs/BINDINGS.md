@@ -8,9 +8,12 @@ three layers, each a thin wrapper over the one below:
 | `inkvec` crate (the facade) | `crates/inkvec` | Rust; the API every binding calls |
 | C ABI: `inkvec_ffi.dll` / `libinkvec_ffi.so` / `libinkvec_ffi.dylib`, static `inkvec_ffi.lib` / `libinkvec_ffi.a`, header `include/inkvec.h` | `crates/inkvec-ffi` | C, C++, and every language with a C FFI: Java (JNA, Panama), C# (P/Invoke), Go (cgo), Swift, Ruby, PHP |
 | Python package `inkvec` | `crates/inkvec-py` | Python 3.9+, abi3 wheels built with PyO3 and maturin |
+| npm package `@logolabs/inkvec` | `packages/npm` over `crates/inkvec-wasm` | JavaScript and TypeScript: browsers, Node.js, Deno, Bun; a single-threaded and a threaded WebAssembly build |
 
-The browser build (`crates/inkvec-wasm`) predates this layer; moving it onto the same facade and
-schema is separate work.
+The WebAssembly crate (`crates/inkvec-wasm`) calls the facade: `trace_json` and
+`trace_rgba_json` take the options as JSON, `default_options_json` and `options_schema_json`
+read them back. Its older positional `trace` export is what the web demo (`web/worker.js`) still
+calls; it is kept until the page moves over.
 
 ## One source of truth
 
@@ -25,8 +28,8 @@ Nothing about an option is written twice.
 * **Every binding takes options as a JSON object** and hands it to `Options::from_json`: the C ABI
   takes a JSON string, the Python package serialises its keyword arguments. No binding contains
   per-option code, so none of them change when an option does.
-* **Typed surfaces are generated** from the schema by `bindings/codegen/`: the Python type stub
-  and the options tables in this file and the READMEs.
+* **Typed surfaces are generated** from the schema by `bindings/codegen/`: the Python type stub,
+  the npm package's TypeScript `Options`, and the options tables in this file and the READMEs.
 * **`bindings/contract/`** holds inputs, options and what every binding must produce for them:
   the reported size or error everywhere, and the SVG byte for byte per build target.
 
@@ -39,7 +42,8 @@ Nothing about an option is written twice.
    refuses to build until both are done, and a unit test fails if the option reaches nothing.
 2. `cargo test -p inkvec` -- regenerates `bindings/options.schema.json` and fails once so the
    change is seen; run it again and it passes.
-3. `python bindings/codegen/generate.py` -- regenerates the Python stub and the options tables.
+3. `python bindings/codegen/generate.py` -- regenerates the Python stub, the TypeScript types
+   and the options tables.
 4. If the change alters output for the contract inputs:
    `INKVEC_BLESS=1 cargo test -p inkvec --release --test contract`.
 5. Commit. The C header, the C library's API, the Python module and every other binding are
@@ -246,12 +250,32 @@ inkvec.options_schema()    # the JSON Schema
 The keyword arguments are typed in the stub (`inkvec/__init__.pyi`, generated). Errors derive
 from `inkvec.InkvecError`.
 
+### JavaScript and TypeScript
+
+```sh
+npm install @logolabs/inkvec
+```
+
+```js
+import { trace, traceRGBA, defaults, optionsSchema } from "@logolabs/inkvec";
+
+const svg = await trace(bytes, { colors: 16, cutout: true });   // Uint8Array, Buffer, ArrayBuffer, Blob
+const svg2 = await traceRGBA(ctx.getImageData(0, 0, w, h));   // or (pixels, width, height, options)
+```
+
+One ES module entry for browsers, Node.js, Deno and Bun; `@logolabs/inkvec/threads` is the
+threaded build (cross-origin isolated pages inside a Web Worker, or Node.js `worker_threads`).
+The option names are the schema's, typed by the generated `Options` interface. Errors are
+`InkvecError` with `code` set to the error kind, plus `load_failed` for a WebAssembly module
+that could not be loaded. See `packages/npm/README.md`.
+
 ## Versions
 
 There is one version: `workspace.package.version` in the root `Cargo.toml`. Every crate inherits
 it, maturin reads it for the Python wheel (`dynamic = ["version"]`), `inkvec_version()` and
-`inkvec.__version__` return it, and the C release archives are named after the tag. A binding
-added later (npm, Maven, NuGet, ...) should read it the same way rather than carry its own.
+`inkvec.__version__` return it, the C release archives are named after the tag, and
+`packages/npm/build.mjs` writes it into the npm package's `package.json`. A binding added later
+(Maven, NuGet, ...) should read it the same way rather than carry its own.
 
 ## The contract fixtures
 
@@ -281,12 +305,15 @@ It rewrites `expect` and this target's hashes and drops every other target's, wh
 made stale. To record another target's hashes (its output unchanged), run the same test there
 with `INKVEC_BLESS=add`; CI uploads a `cases.json` blessed this way from each platform it tests.
 `INKVEC_CONTRACT_REQUIRE_HASH=1` turns a target without recorded hashes from a note into a
-failure. The committed hashes cover `x86_64-windows-msvc` and `x86_64-linux-gnu`.
+failure. The committed hashes cover `x86_64-windows-msvc`, `x86_64-linux-gnu` and
+`wasm32-unknown` -- both WebAssembly builds, recorded from the npm package with
+`INKVEC_BLESS=add node --test test/contract.test.mjs` in `packages/npm`.
 
 The Rust facade (`crates/inkvec/tests/contract.rs`), the C ABI from Rust
 (`crates/inkvec-ffi/src/lib.rs` tests) and from a foreign caller (`crates/inkvec-ffi/tests/test_c_abi.py`,
-through ctypes, plus the compiled C example) and the Python package
-(`crates/inkvec-py/tests/test_inkvec.py`) all assert against it.
+through ctypes, plus the compiled C example), the Python package
+(`crates/inkvec-py/tests/test_inkvec.py`) and the npm package, on both of its builds
+(`packages/npm/test/contract.test.mjs`) all assert against it.
 
 ## Building and testing locally
 
@@ -303,6 +330,9 @@ pip install maturin
 maturin build --release -m crates/inkvec-py/Cargo.toml  # abi3 wheel in target/wheels
 pip install target/wheels/inkvec-*.whl pytest pillow numpy
 python -m pytest crates/inkvec-py/tests
+
+cd packages/npm && npm ci                               # the npm package (needs wasm-pack and
+node build.mjs && npm test                              # a nightly toolchain with rust-src)
 ```
 
 `.github/workflows/bindings.yml` does all of this on Linux, macOS and Windows and builds the
@@ -319,3 +349,4 @@ tag, and the registry ones only when the repository opts in.
 | crates.io | `inkvec` and the internal crates it depends on | the repository variable `PUBLISH_CRATES=true` and a crates.io API token as the secret `CARGO_REGISTRY_TOKEN`. `cargo publish --workspace` publishes in dependency order: `inkvec-core`, `inkvec-fit`, `inkvec-trace`, `inkvec-sr`, `inkvec-restore`, `inkvec-cli`, `inkvec` (all seven pass `cargo publish --workspace --dry-run`). `inkvec-ffi`, `inkvec-py` and `inkvec-wasm` are `publish = false`. |
 | PyPI | `inkvec` | the repository variable `PUBLISH_PYPI=true` and this repository and workflow (environment `pypi`) registered as a trusted publisher of the PyPI project; or an API token as the secret `PYPI_API_TOKEN`, passed as `password:` to the publish step |
 | GitHub Releases | C library archives `inkvec-c-<version>-<platform>` | nothing beyond the workflow's own `GITHUB_TOKEN` |
+| npm | `@logolabs/inkvec` | an npm organisation `logolabs` (the scope) and an automation token with publish rights to it as the secret `NPM_TOKEN`; `.github/workflows/npm.yml` publishes the tarball it built and tested, with provenance, on a `v*` tag whose version matches `package.json` |

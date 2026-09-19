@@ -16,6 +16,13 @@ API in particular should be treated as unstable release to release).
   JSON Schema (`bindings/options.schema.json`) the bindings take their options through and
   their typed stubs are generated from; `bindings/contract/` holds the cases every binding must
   reproduce. Nothing is published yet.
+- **npm package `@logolabs/inkvec`** (`packages/npm`). The WebAssembly build for JavaScript
+  and TypeScript: one ES module entry for browsers, Node.js, Deno and Bun, and a threaded
+  build at `@logolabs/inkvec/threads` (cross-origin isolated pages in a Web Worker, or Node.js
+  `worker_threads`). `trace`, `traceRGBA` (canvas `ImageData`), `defaults`, `optionsSchema`;
+  options go to the facade as JSON and their TypeScript types are generated from the schema.
+  `crates/inkvec-wasm` gains `trace_json` / `trace_rgba_json` on the facade; the positional
+  `trace` the web demo calls is unchanged. Not published yet.
 
 ### Fixed
 

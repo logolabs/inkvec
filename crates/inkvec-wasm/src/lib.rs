@@ -16,6 +16,18 @@
 //! cross-origin isolated, because the pool is built on `SharedArrayBuffer`. Where that is
 //! not true the single-threaded build is the fallback and behaves exactly as before —
 //! same code, same `f64`, same output, on one core.
+//!
+//! # Two surfaces
+//!
+//! [`trace_json`], [`trace_rgba_json`], [`default_options_json`] and
+//! [`options_schema_json`] are the library API of the `inkvec` crate with the options as
+//! JSON: Rust parses them into `inkvec::Options`, applies the defaults and checks every
+//! value, so the npm package (`packages/npm`) restates none of it and follows any change
+//! to the options without an edit. Errors are JS `Error`s whose `code` is the facade's
+//! error kind (`invalid_image`, `invalid_options`, `internal`).
+//!
+//! The positional [`trace`] is what the Space's `web/worker.js` calls, kept until the
+//! page moves to [`trace_json`].
 
 use wasm_bindgen::prelude::*;
 
@@ -31,14 +43,71 @@ const MAX_COLORS: usize = 4096;
 /// unchanged; only values that wrapped to `usize::MAX` (a JS `-1`) are brought down.
 const MAX_DIM: usize = 32_768;
 
-/// How many workers the pool should start, from the browser's own estimate.
+/// Whether this is the threaded build, whose pool `initThreadPool` starts.
 ///
-/// Returned rather than decided here: the pool is started from JavaScript, and only the
-/// page knows whether it is allowed to (`crossOriginIsolated`) and how many cores the
-/// visitor has agreed to give it.
+/// How many workers to start is left to JavaScript: only the page knows whether it is
+/// allowed to (`crossOriginIsolated`) and how many cores the visitor has agreed to give it.
 #[wasm_bindgen]
 pub fn threads_available() -> bool {
     cfg!(feature = "threads")
+}
+
+/// Trace an encoded image (PNG, JPEG, WebP, GIF, BMP or TIFF) to an SVG string, with the
+/// options as a JSON object -- `inkvec::trace` with `inkvec::Options::from_json(options)`.
+/// Missing keys take their defaults; `""` and `"{}"` mean all defaults.
+#[wasm_bindgen]
+pub fn trace_json(bytes: &[u8], options: &str) -> Result<String, JsValue> {
+    console_error_panic_hook::set_once();
+    let opts = inkvec::Options::from_json(options).map_err(js_error)?;
+    inkvec::trace(bytes, &opts).map(|t| t.svg).map_err(js_error)
+}
+
+/// Trace raw pixels -- straight RGBA8, row-major, exactly `width * height * 4` bytes, as in
+/// `ImageData.data` -- to an SVG string. `inkvec::trace_rgba`; the options as for
+/// [`trace_json`]. Byte-identical to [`trace_json`] on a PNG of the same pixels.
+#[wasm_bindgen]
+pub fn trace_rgba_json(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    options: &str,
+) -> Result<String, JsValue> {
+    console_error_panic_hook::set_once();
+    let opts = inkvec::Options::from_json(options).map_err(js_error)?;
+    inkvec::trace_rgba(pixels, width, height, &opts)
+        .map(|t| t.svg)
+        .map_err(js_error)
+}
+
+/// Every option at its default, as a JSON object.
+#[wasm_bindgen]
+pub fn default_options_json() -> String {
+    inkvec::Options::default().to_json()
+}
+
+/// The JSON Schema of the options: byte for byte `bindings/options.schema.json`.
+#[wasm_bindgen]
+pub fn options_schema_json() -> String {
+    inkvec::options_schema_json().to_string()
+}
+
+/// The build target the contract fixtures key their SVG hashes by (`inkvec::build_target`):
+/// `wasm32-unknown` for both builds.
+#[wasm_bindgen]
+pub fn build_target() -> String {
+    inkvec::build_target().to_string()
+}
+
+/// A facade error as a JS `Error` carrying the error kind as `code`.
+fn js_error(e: inkvec::Error) -> JsValue {
+    let err = js_sys::Error::new(e.message());
+    // Setting a plain data property on a fresh `Error` cannot fail.
+    let _ = js_sys::Reflect::set(
+        &err,
+        &JsValue::from_str("code"),
+        &JsValue::from_str(e.code()),
+    );
+    err.into()
 }
 
 /// Trace image bytes to an SVG string.

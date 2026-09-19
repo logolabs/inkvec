@@ -3788,8 +3788,10 @@ name = "inkvec-wasm"
 version = "0.1.3"
 dependencies = [
  "console_error_panic_hook",
+ "inkvec",
  "inkvec-cli",
  "inkvec-trace",
+ "js-sys",
  "rayon",
  "wasm-bindgen",
  "wasm-bindgen-rayon",

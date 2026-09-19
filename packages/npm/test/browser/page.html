@@ -1,0 +1,52 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>inkvec browser smoke test</title>
+<canvas id="c"></canvas>
+<script type="module">
+  // Loads the package straight from its files, the way a CDN serves it: no bundler, no
+  // import map. Reports back to the server that smoke.mjs runs.
+  const report = (r) => fetch("/result", { method: "POST", body: JSON.stringify(r) });
+  const sha = async (s) =>
+    [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)))]
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  const result = { isolated: crossOriginIsolated };
+  try {
+    const inkvec = await import("/dist/index.js");
+    result.version = inkvec.version();
+    const png = new Uint8Array(await (await fetch("/samples/tiny.png")).arrayBuffer());
+    let t = performance.now();
+    const svg = await inkvec.trace(new Blob([png]));
+    result.st = { sha: await sha(svg), bytes: svg.length, ms: performance.now() - t };
+
+    // A canvas's pixels, which traceRGBA takes as ImageData.
+    const bmp = await createImageBitmap(new Blob([png], { type: "image/png" }), {
+      colorSpaceConversion: "none",
+      premultiplyAlpha: "none",
+    });
+    const cv = document.getElementById("c");
+    cv.width = bmp.width;
+    cv.height = bmp.height;
+    const ctx = cv.getContext("2d");
+    ctx.drawImage(bmp, 0, 0);
+    const rgba = await inkvec.traceRGBA(ctx.getImageData(0, 0, bmp.width, bmp.height));
+    result.rgba = { sha: await sha(rgba), bytes: rgba.length };
+
+    // The threaded entry refuses the main thread with a clear error.
+    const threads = await import("/dist/threads.js");
+    result.mainThreadThreads = await threads.init().then(
+      () => "started",
+      (e) => `${e.name} ${e.code}: ${e.message}`,
+    );
+
+    // ...and runs in a worker.
+    result.mt = await new Promise((resolve) => {
+      const w = new Worker("/test/browser/worker.js", { type: "module" });
+      w.onmessage = (e) => resolve(e.data);
+      w.onerror = (e) => resolve({ error: String(e.message || e) });
+    });
+  } catch (e) {
+    result.error = String((e && e.stack) || e);
+  }
+  await report(result);
+</script>

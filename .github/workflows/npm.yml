@@ -1,0 +1,116 @@
+name: npm
+
+# Builds @logolabs/inkvec (packages/npm) from source -- both WebAssembly builds, the
+# generated option types, TypeScript -- tests it, and packs it. On a version tag it also
+# publishes the packed tarball to npm, when an NPM_TOKEN secret is configured; without the
+# secret the publish step is skipped and the tarball is still attached to the run.
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+    paths:
+      - "packages/npm/**"
+      - "bindings/**"
+      - "crates/**"
+      - "tools/build_wasm.sh"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/npm.yml"
+  pull_request:
+    paths:
+      - "packages/npm/**"
+      - "bindings/**"
+      - "crates/**"
+      - "tools/build_wasm.sh"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/npm.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build:
+    name: build and test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/npm
+    steps:
+      - uses: actions/checkout@v4
+      # Stable for the single-threaded build, nightly with rust-src for the threaded one
+      # (it rebuilds std with atomics); see tools/build_wasm.sh.
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: wasm32-unknown-unknown
+          components: rust-src
+      - run: rustup default 1.98.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/npm/package-lock.json
+      - run: npm ci
+      - run: node build.mjs
+      # The generated sources (option types, README table, version) are committed; a build
+      # that changes them means the Rust side moved without them.
+      - name: generated files are committed and current
+        run: git diff --exit-code -- . ../../bindings
+      - run: npm test
+      # Headless Chrome (preinstalled on the runner) loads the package with no bundler, on
+      # a cross-origin isolated page, and runs the threaded build in a Web Worker.
+      - run: npm run test:browser
+        env:
+          CHROME: /usr/bin/google-chrome
+      - run: npm pack
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-package
+          path: packages/npm/*.tgz
+          if-no-files-found: error
+
+  publish:
+    name: publish to npm
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm provenance
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-package
+          path: dist-npm
+      - name: tag matches the package version
+        run: |
+          want="${GITHUB_REF_NAME#v}"
+          have=$(node -p "require('./packages/npm/package.json').version")
+          test "$want" = "$have" || { echo "tag $GITHUB_REF_NAME but package.json says $have"; exit 1; }
+      - name: npm publish
+        if: env.NODE_AUTH_TOKEN != ''
+        run: npm publish dist-npm/*.tgz --access public --provenance
+      - name: no NPM_TOKEN secret
+        if: env.NODE_AUTH_TOKEN == ''
+        run: echo "::notice::NPM_TOKEN is not set; the package was built and packed but not published."

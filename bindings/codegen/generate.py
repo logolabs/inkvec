@@ -22,8 +22,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import docs_tables  # noqa: E402
 import python_stub  # noqa: E402
 import schema  # noqa: E402
+import typescript  # noqa: E402
 
-GENERATORS = [python_stub, docs_tables]
+GENERATORS = [python_stub, typescript, docs_tables]
 
 
 def outputs() -> dict[Path, str]:

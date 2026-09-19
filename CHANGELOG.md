@@ -7,6 +7,36 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+### Changed
+
+- **Transparency is traced natively, by default.** An ink is a colour and an opacity and the
+  transparent ground is an ink, instead of the image being composited onto white first:
+  holes stay holes, white artwork on a transparent ground traces, translucent panels keep
+  `fill-opacity`, and a glow or fade is one gradient of `stop-color` and `stop-opacity`.
+  Opaque input traces byte-for-byte as before. `--no-native-alpha` (or
+  `INKVEC_NATIVE_ALPHA=0`) restores the old path. Dark-ground pixel error on the screen set
+  0.063 -> 0.0017.
+- **`--cutout`** only matters with `--no-native-alpha` now.
+- **Shape harmonization is held to the traced boundary.** A repeated shape takes the
+  cluster's consensus geometry only where that stays within 0.1 px of where its own pixels
+  put it and costs fewer parameters. A face that another face is drawn against — one punched
+  out of the faces below it, or one with a translucent face in its hole — is never moved,
+  so harmonizing can no longer open a gap onto a transparent ground; nor is a fitted circle
+  or rounded rectangle. Screen set with the default flags: mean dE00 0.299 -> 0.148 (native
+  transparency and this together), no icon above dE00 1.0, and the alpha-channel error of
+  harmonized icons back to the unharmonized level (22 better, 0 worse).
+
+### Fixed
+
+- **Holes and outlines of fitted primitives.** A hole written as two half-circle arcs had its
+  ends and radius rounded separately and bulged by up to 0.76 px; a face with a hole drew its
+  own outline from the traced ring rather than its primitive. A ring with one hole of uniform
+  width is written as one stroked shape.
+- **Nested holes.** A hole inside another hole of the same face is no longer written twice
+  (even-odd filled it back in).
+- **White artwork on a transparent ground** under `--no-native-alpha` no longer traces to a
+  white rectangle.
+
 ## [0.1.3] - 2026-09-18
 
 ### Fixed

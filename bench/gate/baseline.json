@@ -1,13 +1,13 @@
 {
-  "de00": 0.2988928444237488,
-  "turning": 0.0426450771762631,
+  "de00": 0.1482360010317451,
+  "turning": 0.041947954405059586,
   "ratio": 1.457063438477474,
-  "self_res": 0.005172151498573669,
+  "self_res": 0.003581892620860618,
   "n": 246,
   "_provenance": {
-    "executable_sha256": "73c2f67a4e42194a42f72eba9063815942accb8e05d3e70e472fad1b5d115753",
+    "executable_sha256": "8e8ca4a7e7a4c86473d877003dd8b3a5e4d2c2a02ffad796137ac34a21dbf599",
     "platform": "Windows-10-10.0.26200-SP0",
     "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
-    "source_revision": "160c4802fbe32760a60ddb529889459969fe8874"
+    "source_revision": "b945fcb23a8aeccf136979dbeb5d1804e663c5c8"
   }
 }

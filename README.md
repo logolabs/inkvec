@@ -64,7 +64,7 @@ Per-case coordinate count over the same 21 cases, from the same script and data 
   <img src="docs/assets/geometry-overlay.png" width="680" alt="Geometry overlay: Inkvec's traced outline sits on the source outline everywhere the others drift. Three image classes: brand logo, icon, emoji.">
 </p>
 
-> **On the regression corpus** (246 icons from lucide, material-icons, simple-icons, noto-emoji, openmoji, twemoji — the set CI gates on): **mean dE00 0.299**, 1.46× the parameters a human author would use. That mean is a family macro-average and is outlier-driven, so read it next to the **median (per-item) 0.125** — p10 0.024, p90 0.612, worst 5.72, and 13 of the 246 cases above dE00 1.0. The typical icon sits at ~0.125, and the mean is roughly 2.4× the median because a small tail pulls it up. (An earlier 0.149 figure came from a pre-release snapshot that was not reproducible; the baseline was re-recorded against the reproducible release build — see [`CHANGELOG.md`](CHANGELOG.md).) Source: [`bench/gate/baseline.json`](bench/gate/baseline.json).
+> **On the regression corpus** (246 icons from lucide, material-icons, simple-icons, noto-emoji, openmoji, twemoji — the set CI gates on), with the current defaults: **mean dE00 0.148**, 1.48× the parameters a human author would use. That mean is a family macro-average, so read it next to the **median (per-item) 0.110** — p10 0.023, p90 0.389, worst 0.69 (`noto-emoji/emoji_u1f9d1_1f3fd_200d_1f91d_200d_1f9d1_1f3ff`), none of the 246 above dE00 1.0. Releases up to 0.1.3 measured 0.299 on the same set: they composited transparent input onto white before tracing, and their shape harmonization was not held to the traced boundary (see [Shape harmonization](#shape-harmonization-on-by-default)). Source: [`bench/gate/baseline.json`](bench/gate/baseline.json).
 
 ### Damaged input: JPEG, WebP, AI-decoder output
 
@@ -133,14 +133,22 @@ inkvec <input> [-o <output.svg>] [OPTIONS]
 | `--time-budget <s>` | 0 | Advisory wall-clock budget; trace is still correct if it runs out. |
 | `--no-background` | off | Drop the face that paints the whole canvas. |
 | `--minify` | off | No ids, no groups, no trailing zeros — ~10% smaller, identical geometry. |
+| `--no-native-alpha` | off | Composite transparent input onto a matte before tracing, as releases up to 0.1.3 did. |
+| `--no-harmonize` | off | Skip shape harmonization (see below). |
 
 Run `inkvec --help` for the full list.
 
+### Transparency (native)
+
+A transparent PNG is traced as it is, not composited onto white first. Every ink is a colour and an opacity, and the transparent ground is an ink of its own, so holes stay holes, a white mark on a transparent ground traces like any other, a translucent panel keeps its `fill-opacity`, and a glow, halo or soft fade becomes one gradient of `stop-color` and `stop-opacity`. Two inks count as one only if they look the same over white and over mid-grey; for opaque colours that is plain OKLab distance, so an opaque input traces exactly as it did before.
+
+Measured on the 246-icon screen set as the mean absolute pixel error of the rendered SVG against the artist's file, over a dark ground and on the alpha channel: 0.063 and 0.069 for the composite-onto-white path, 0.0017 and 0.0031 now. On the nine corpus icons with real interior translucency (steam, glass, halos) the dark-ground error falls from 0.046 to 0.0077. `--no-native-alpha` restores the old path.
+
 ### Shape harmonization (on by default)
 
-After fitting, marks that repeat across the drawing — a run of identical tabs, segmented rings, tiled glyphs — are matched by affine-normalized outline similarity (IoU threshold `--harmonize-threshold`, default 0.92) and redrawn from one consensus geometry per cluster. The pass exists to save parameters: on the 246-icon screen set it trims the parameter ratio from 1.466× to 1.457× the artist's count (−0.6%), concentrated in a couple of dozen drawings with genuinely repeated compound shapes (`osano` halves its path budget; disabling costs the most on `osano`, `badge-russian-ruble`, `perm_media`, `rule_folder`).
+After fitting, marks that repeat across the drawing — a run of identical tabs, segmented rings, tiled glyphs — are matched by affine-normalized outline similarity (IoU threshold `--harmonize-threshold`, default 0.92) and redrawn from one consensus geometry per cluster. The pass exists to save parameters on drawings with genuinely repeated compound shapes.
 
-The known cost is fidelity on fine-line art. The consensus averages the cluster's members, and on marks near the resolution of the raster — hairlines, thin rings, small rounded details — that average displaces thin lines by about a pixel and stamps rounded details toward the cluster's consensus shape. On the screen set it raises mean dE00 from **0.151** with the flag off to **0.299** with it on: 63 of 246 icons get measurably worse, 4 get better, and the other 179 are untouched (per-icon median 0.110 → 0.125). The worst cases are exactly the repeated-shape drawings the pass exists for — `rule_folder`, `perm_media`, `report`, `badge-russian-ruble`, `cat` — which is why those dominate the Results note above. On artwork of this kind, opt out with `--no-harmonize`. (The 0.149 pre-release mean quoted under Results predates this pass — measured on a build where it did not exist; this build measures 0.151 with the flag off, so the whole 0.15→0.30 move on that set is this pass.)
+The clustering compares 48×48 masks, where a line a pixel out of place barely changes the overlap, so on its own it would stamp one shape's geometry over near-misses. Each member is therefore held to its own evidence: it takes the consensus only if that lands within **0.1 px** of the boundary it was traced at (solved against colour and, on a transparent ground, against alpha) and costs fewer parameters than its own drawing. A face that another face is drawn against — one punched out of the faces below it (translucent, faded, a clear counter) or one with a translucent face sitting in its hole — is never moved, since moving one side of the pair would open a gap onto the ground; nor is a ring written as a fitted circle or rounded rectangle, which is already exact. Releases up to 0.1.3 had none of these checks, and there harmonization raised mean dE00 on the screen set from 0.151 to 0.299 to save 0.6% of the parameters. Guarded, it changes 2 of the 246 icons, both cheaper and neither worse. `--no-harmonize` turns it off.
 
 ---
 

@@ -1,0 +1,45 @@
+[package]
+name = "inkvec-server"
+description = "Inkvec's HTTP service: trace raster images to SVG over HTTP, for the Docker image"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+# A deployable service, not a library other crates depend on.
+publish = false
+
+[lib]
+name = "inkvec_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "inkvec-server"
+path = "src/main.rs"
+
+[dependencies]
+inkvec = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net", "time"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+multer = "3"
+bytes = "1"
+form_urlencoded = "1"
+http = "1"
+futures-util = { version = "0.3", default-features = false }
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+sha2 = "0.10"
+
+[lints]
+workspace = true

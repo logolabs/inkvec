@@ -45,6 +45,16 @@ API in particular should be treated as unstable release to release).
   release tag when the repository opts in; Linux links `libinkvec_ffi` as a system library.
   The contract passes on x86_64 Linux; the macOS and iOS builds have not run yet. Not
   published yet.
+- **Docker HTTP service** (`crates/inkvec-server`, `services/docker/Dockerfile`). `POST
+  /trace` traces raw image bytes or a `multipart/form-data` `image` part to `image/svg+xml`;
+  options come from a `?options=` query parameter, an `X-Inkvec-Options` header, generic query
+  parameters typed against the schema, or a multipart `options` part, all handed to
+  `inkvec::Options::from_json` unchanged -- no option is named in the service. `GET
+  /options/schema`, `/options/defaults`, `/healthz`, `/version`, and a generated OpenAPI 3.1
+  document at `/openapi.json` (`bindings/codegen/openapi.py`). Traces run on a blocking pool
+  behind a concurrency limit (`INKVEC_MAX_CONCURRENCY`, `503 busy` past it) and a body-size
+  cap (`INKVEC_MAX_BODY_BYTES`, `413`); the image is `rust:1.98-bookworm` building a
+  distroless, non-root runtime. Not published or pushed anywhere by this repository.
 
 ### Changed
 

@@ -1,0 +1,157 @@
+name: go
+
+# The Go module github.com/logolabs/inkvec-go (packages/go): pure Go over wazero, no cgo. It
+# embeds the C ABI (crates/inkvec-ffi) compiled for wasm32-wasip1 by tools/build_go_wasm.sh.
+#
+#   build   builds inkvec.wasm, checks the generated Options struct, go vet, go test (with the
+#           race detector) and uploads the module;
+#   test    runs go test on Windows and on macOS arm64 (wazero's arm64 compiler) with that
+#           same inkvec.wasm;
+#   mirror  on a v* tag only: `go get` cannot run a build step, so Go users get the module
+#           from a mirror repository whose root is packages/go with inkvec.wasm committed.
+#           This job copies packages/go there, commits, and tags it with the same vX.Y.Z.
+#
+# The mirror job needs the repository secret GO_MIRROR_DEPLOY_KEY: the private half of an SSH
+# deploy key with write access, added to github.com/logolabs/inkvec-go (Settings -> Deploy
+# keys). Without it the job only reports that it skipped the push. The mirror repository must
+# exist, with a default branch `main`; the job never creates it.
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+    paths:
+      - "packages/go/**"
+      - "bindings/**"
+      - "crates/**"
+      - "tools/build_go_wasm.sh"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/go.yml"
+  pull_request:
+    paths:
+      - "packages/go/**"
+      - "bindings/**"
+      - "crates/**"
+      - "tools/build_go_wasm.sh"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/go.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: go-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  BINARYEN: "123"
+
+jobs:
+  build:
+    name: build and test (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          targets: wasm32-wasip1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - name: wasm-opt (binaryen ${{ env.BINARYEN }})
+        run: |
+          curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN}/binaryen-version_${BINARYEN}-x86_64-linux.tar.gz" | tar xz
+          echo "INKVEC_WASM_OPT=$PWD/binaryen-version_${BINARYEN}/bin/wasm-opt" >> "$GITHUB_ENV"
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: packages/go/go.mod
+          cache-dependency-path: packages/go/go.sum
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: bash tools/build_go_wasm.sh
+      # options_generated.go and the README's options table are committed; a stale one means
+      # the Rust options moved without `python bindings/codegen/generate.py`.
+      - run: python bindings/codegen/generate.py --check
+      - name: go vet, go test
+        working-directory: packages/go
+        run: |
+          test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+          go vet ./...
+          go test -race -count=1 ./...
+      - uses: actions/upload-artifact@v4
+        with:
+          name: inkvec-wasm
+          path: packages/go/inkvec.wasm
+          if-no-files-found: error
+
+  test:
+    name: test (${{ matrix.os }})
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: inkvec-wasm
+          path: packages/go
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: packages/go/go.mod
+          cache-dependency-path: packages/go/go.sum
+      - name: go test
+        working-directory: packages/go
+        run: go test -count=1 ./...
+
+  mirror:
+    name: sync to github.com/logolabs/inkvec-go
+    needs: [build, test]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    env:
+      DEPLOY_KEY: ${{ secrets.GO_MIRROR_DEPLOY_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: inkvec-wasm
+          path: packages/go
+      - name: tag matches the workspace version
+        run: |
+          want="${GITHUB_REF_NAME#v}"
+          have=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version *= *"\(.*\)"/\1/p' Cargo.toml)
+          test "$want" = "$have" || { echo "tag $GITHUB_REF_NAME but Cargo.toml says $have"; exit 1; }
+      - name: no GO_MIRROR_DEPLOY_KEY secret
+        if: env.DEPLOY_KEY == ''
+        run: echo "::notice::GO_MIRROR_DEPLOY_KEY is not set; the Go module was built and tested but not pushed to the mirror."
+      - name: push packages/go to the mirror, tagged ${{ github.ref_name }}
+        if: env.DEPLOY_KEY != ''
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/inkvec_go_mirror
+          chmod 600 ~/.ssh/inkvec_go_mirror
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/inkvec_go_mirror -o IdentitiesOnly=yes"
+          git clone --depth 1 git@github.com:logolabs/inkvec-go.git mirror
+          # The mirror is packages/go as it is here, plus what `go get` users need and this
+          # repository keeps elsewhere: the built module (ignored here), the licence, and the
+          # contract fixtures for its tests.
+          rsync -a --delete --exclude .git packages/go/ mirror/
+          rm -f mirror/.gitignore
+          cp LICENSE NOTICE mirror/
+          mkdir -p mirror/testdata/contract
+          cp bindings/contract/cases.json bindings/contract/*.png bindings/contract/*.rgba mirror/testdata/contract/
+          test -s mirror/inkvec.wasm
+          cd mirror
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "inkvec ${GITHUB_REF_NAME} (logolabs/inkvec@${GITHUB_SHA})" || echo "nothing changed"
+          git tag -a "${GITHUB_REF_NAME}" -m "inkvec ${GITHUB_REF_NAME}"
+          git push origin HEAD:main "${GITHUB_REF_NAME}"

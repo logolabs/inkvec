@@ -25,6 +25,7 @@ TARGETS = [
     ROOT / "packages" / "dotnet" / "README.md",
     ROOT / "packages" / "swift" / "README.md",
     ROOT / "crates" / "inkvec-server" / "README.md",
+    ROOT / "packages" / "go" / "README.md",
 ]
 
 KIND_NAMES = {"boolean": "bool", "integer": "integer", "number": "number"}

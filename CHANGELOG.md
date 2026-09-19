@@ -55,6 +55,16 @@ API in particular should be treated as unstable release to release).
   behind a concurrency limit (`INKVEC_MAX_CONCURRENCY`, `503 busy` past it) and a body-size
   cap (`INKVEC_MAX_BODY_BYTES`, `413`); the image is `rust:1.98-bookworm` building a
   distroless, non-root runtime. Not published or pushed anywhere by this repository.
+- **Go module `github.com/logolabs/inkvec-go`** (`packages/go`). Pure Go, no cgo: the C ABI
+  compiled to `wasm32-wasip1` (`tools/build_go_wasm.sh`), embedded and run by wazero, one
+  module instance per concurrent call. `Trace`, `TraceRGBA`, `TraceJSON` (options passed
+  through untouched), `Defaults`, `OptionsSchema`, errors matching `ErrInvalidImage`,
+  `ErrInvalidOptions`, `ErrInternal`; the `Options` struct is generated from the schema
+  (`bindings/codegen/golang.py`). `inkvec-ffi` gains `inkvec_alloc` / `inkvec_dealloc` on WASI
+  only (not in the header), and `inkvec::build_target()` names that build `wasm32-wasip1`
+  instead of `wasm32-unknown`, which it shared with the browser build although its output
+  differs. Released through a mirror repository by `.github/workflows/go.yml`; not published
+  yet.
 
 ### Changed
 

@@ -204,6 +204,8 @@ fn trace(input: &str) -> Result<String, Box<dyn std::error::Error>> {
 
 The `inkvec` crate (`crates/inkvec`) is the stable library API -- `inkvec::trace(&png, &inkvec::Options::default())` -- and the base of a C library with a generated header (`crates/inkvec-ffi`), a Python package (`crates/inkvec-py`: `inkvec.trace("logo.png", colors=16)`) and a Java package (`packages/java`, JNA: `Inkvec.trace(png, InkvecOptions.builder().colors(16).build())`). Every binding takes the same options, generated from one schema, and reproduces the same contract fixtures. They share the command line's defaults, native transparency and guarded shape harmonization included. See [`docs/BINDINGS.md`](docs/BINDINGS.md).
 
+Swift (macOS, iOS, Linux): [`packages/swift`](packages/swift/), `try Inkvec.trace(png, options: InkvecOptions(colors: 16))`, installed on Apple platforms from the mirror `github.com/logolabs/inkvec-swift` with a prebuilt XCFramework.
+
 ---
 
 ## How it works

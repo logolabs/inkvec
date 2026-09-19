@@ -36,6 +36,15 @@ API in particular should be treated as unstable release to release).
   `InvalidImageException`, `InvalidOptionsException` and `InkvecInternalException`. Native
   libraries for `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64` and
   `osx-arm64` ship under `runtimes/`. Not published yet.
+- **Swift package** (`packages/swift`). `Inkvec.trace` (image data, a file URL, a `CGImage`,
+  `UIImage` or `NSImage`), `Inkvec.traceRGBA`, raw-JSON variants of both, `defaults`,
+  `optionsSchema`, `version`, `buildTarget`; errors are `InkvecError`. `InkvecOptions` is
+  generated from the options schema (`bindings/codegen/swift.py`). Apple platforms get the C
+  library as a static XCFramework (`packages/swift/scripts/build-xcframework.sh`) through a
+  mirror repository, `logolabs/inkvec-swift`, that `.github/workflows/swift.yml` updates on a
+  release tag when the repository opts in; Linux links `libinkvec_ffi` as a system library.
+  The contract passes on x86_64 Linux; the macOS and iOS builds have not run yet. Not
+  published yet.
 
 ### Changed
 

@@ -23,6 +23,7 @@ TARGETS = [
     ROOT / "packages" / "npm" / "README.md",
     ROOT / "packages" / "java" / "README.md",
     ROOT / "packages" / "dotnet" / "README.md",
+    ROOT / "packages" / "swift" / "README.md",
 ]
 
 KIND_NAMES = {"boolean": "bool", "integer": "integer", "number": "number"}

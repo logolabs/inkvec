@@ -295,7 +295,9 @@ pub struct ColorOptions {
     /// uncertainty handed to the fitter is inflated where the two inks meeting at an edge
     /// are close in colour. See `planar::refine_subpixel`.
     pub simplify_faint: bool,
-    /// Wall-clock budget for the boundary solve, overriding `INKVEC_BOPT_MS`.
+    /// Wall-clock budget for the boundary solve, overriding `INKVEC_BOPT_MS`. `None` (the
+    /// default, and what a zero `--time-budget` gives) means no clock: the solve stops on
+    /// its iteration count alone, so the result does not depend on how fast the machine is.
     pub boundary_ms: Option<u64>,
     /// The intake came out of a lossy codec, so the palette's noise guard must run even
     /// though the edges are sharp. See [`lossy_container`].
@@ -1155,6 +1157,7 @@ pub(crate) fn finish_color_trace_alpha(
             &labels,
             &mut face_fill,
             gradient::bic_lambda(img.width * img.height),
+            opts.deadline.map(|_| decode::BUDGETED_MS),
         )
     } else {
         None

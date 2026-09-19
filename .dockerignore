@@ -1,0 +1,25 @@
+# Build context for services/docker/Dockerfile. `cargo build -p inkvec-server` only needs the
+# workspace manifests, the crate sources (every member's Cargo.toml must be present for the
+# workspace to resolve, even the ones the image does not build) and bindings/openapi.json
+# (embedded with include_str!). Everything else here is multi-hundred-MB of benchmark data,
+# the WebAssembly demo, docs assets and non-Rust tooling the image never touches.
+#
+# Deny by default, then allow back only what the build needs.
+*
+!Cargo.toml
+!Cargo.lock
+!crates
+!bindings
+
+# Re-deny within the allowed trees: build artifacts, model weights (never committed; see the
+# root .gitignore) and the crates whose own tests/examples pull in large fixtures.
+**/target/
+crates/inkvec-restore/models/
+**/*.onnx
+**/*.bpk
+**/*.pt
+**/*.pth
+**/*.ckpt
+**/*.safetensors
+bindings/contract/*.png
+bindings/contract/*.rgba

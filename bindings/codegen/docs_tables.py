@@ -21,6 +21,7 @@ TARGETS = [
     ROOT / "crates" / "inkvec" / "README.md",
     ROOT / "crates" / "inkvec-py" / "README.md",
     ROOT / "packages" / "npm" / "README.md",
+    ROOT / "crates" / "inkvec-server" / "README.md",
 ]
 
 KIND_NAMES = {"boolean": "bool", "integer": "integer", "number": "number"}

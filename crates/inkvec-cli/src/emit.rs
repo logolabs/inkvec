@@ -568,6 +568,9 @@ pub(crate) fn emit_color(
     opacity: &[f32],
     // Faces whose opacity fades across them, as a gradient of `stop-opacity`.
     alpha_ramps: &[Option<AlphaRamp>],
+    // Faces traced natively as fades: an opacity profile (stops are greys equal to the
+    // opacity) and the colour profile on the same geometry and stops.
+    fades: &[Option<(gradient::FillModel, gradient::FillModel)>],
     // Translucent layers to paint over the faces once those carry the ground's colour,
     // with one ring set per layer: its own outline, taken before the merge that removed
     // its faces from the map. A face can lie under two layers, so these cannot be indexed
@@ -1067,6 +1070,14 @@ pub(crate) fn emit_color(
             fills.push(inkvec_trace::color::to_hex(base));
             continue;
         }
+        // A fade traced natively: linear, radial or elliptical, with the stops the fitter
+        // found, all in one colour at their own opacities.
+        if let Some((model, color)) = fades.get(i).and_then(|f| f.as_ref()) {
+            let (frag, attr) = gradient::fade_to_svg(model, color, &format!("f{i}"));
+            defs.push_str(&frag);
+            fills.push(attr);
+            continue;
+        }
         // A fade is written as the gradient an editor would use: one colour, two
         // `stop-opacity` values, along the axis the alpha was measured to run.
         if let Some(r) = alpha_ramps.get(i).copied().flatten() {
@@ -1106,6 +1117,17 @@ pub(crate) fn emit_color(
     let opac: Vec<String> = (0..order.len())
         .map(|i| {
             let a = face_opacity(i);
+            // A fade's opacity is in its gradient's stops; stating it again would apply it
+            // twice. A flat profile is the exception: its colour is written plain, so its
+            // one opacity goes on the attribute as for any wash.
+            if let Some((model, _)) = fades.get(i).and_then(|f| f.as_ref()) {
+                return match model {
+                    gradient::FillModel::Flat(c) if c[0] < 1.0 => {
+                        format!(" fill-opacity=\"{:.3}\"", c[0])
+                    }
+                    _ => String::new(),
+                };
+            }
             if a < 1.0 {
                 format!(" fill-opacity=\"{a:.3}\"")
             } else {

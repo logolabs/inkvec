@@ -329,6 +329,9 @@ pub struct ColorTrace {
     pub face_rgb: Vec<[f32; 3]>,
     /// Estimated per-channel pixel noise, in sRGB units.
     pub sigma_noise: f64,
+    /// Per face, when transparency was traced natively and the face is a fade: one colour
+    /// at an opacity that varies across it. Empty on the classic path.
+    pub face_fade: Vec<Option<native::Fade>>,
 }
 
 /// Full colour front end, with alpha assumed opaque. See [`trace_color_full_with_alpha`].
@@ -1028,7 +1031,7 @@ fn finish_color_trace(
     sw: &mut Stopwatch,
 ) -> ColorTrace {
     finish_color_trace_alpha(
-        img, opts, rgb, pal, labels, face_fill, face_color, n_faces, sigma_noise, sw, None,
+        img, opts, rgb, pal, labels, face_fill, face_color, n_faces, sigma_noise, sw, None, None,
     )
 }
 
@@ -1049,6 +1052,7 @@ pub(crate) fn finish_color_trace_alpha(
     sigma_noise: f64,
     sw: &mut Stopwatch,
     source_alpha: Option<&[f32]>,
+    face_alpha_override: Option<Vec<f32>>,
 ) -> ColorTrace {
     // Four pixels meeting at one corner are the one thing the labels cannot settle on
     // their own. Ask the image, and record the answer where the map can read it.
@@ -1073,10 +1077,14 @@ pub(crate) fn finish_color_trace_alpha(
     sw.mark("symmetry_detect");
     let face_model: Vec<gradient::FillModel> = face_fill.iter().map(|f| f.model.clone()).collect();
     let face_alpha: Option<Vec<f32>> = source_alpha.map(|_| {
-        face_color
-            .iter()
-            .map(|&c| pal.alpha.get(c).copied().unwrap_or(1.0))
-            .collect()
+        face_alpha_override
+            .filter(|o| o.len() == face_color.len())
+            .unwrap_or_else(|| {
+                face_color
+                    .iter()
+                    .map(|&c| pal.alpha.get(c).copied().unwrap_or(1.0))
+                    .collect()
+            })
     });
     let alpha_pair = source_alpha.zip(face_alpha.as_deref());
     planar::refine_subpixel_alpha(
@@ -1138,6 +1146,7 @@ pub(crate) fn finish_color_trace_alpha(
         face_fill,
         face_rgb,
         sigma_noise,
+        face_fade: Vec::new(),
     }
 }
 

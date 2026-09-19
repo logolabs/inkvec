@@ -465,6 +465,7 @@ fn finish_color(
     let boundary_report = traced.boundary_opt;
     let symmetry = traced.symmetry;
     let symmetrised = traced.symmetrised;
+    let face_fade = traced.face_fade;
     let (map, pal, face_color, face_fill) = (
         traced.map,
         traced.palette,
@@ -796,7 +797,29 @@ fn finish_color(
                 *o = if a < 0.05 || a > 0.98 { 1.0 } else { a };
             }
         }
+        // A fade is translucent throughout, so it is punched out of whatever paints under
+        // it exactly as a wash is; its opacity is written by its gradient's stops, and the
+        // number here only has to say "below one".
+        for (f, fade) in face_fade.iter().enumerate() {
+            if fade.is_some() {
+                if let Some(c) = clear.get_mut(f) {
+                    *c = false;
+                }
+                if let Some(o) = opacity.get_mut(f) {
+                    *o = 0.5;
+                }
+            }
+        }
     }
+    let fades: Vec<Option<(gradient::FillModel, gradient::FillModel)>> = (0..face_color.len())
+        .map(|f| {
+            face_fade
+                .get(f)
+                .cloned()
+                .flatten()
+                .map(|fd| (fd.alpha, fd.color))
+        })
+        .collect();
 
     // Both forms of the document, costed against each other.
     //
@@ -819,6 +842,7 @@ fn finish_color(
             args.no_background,
             &opacity,
             &alpha_ramps,
+            &fades,
             an,
             matte,
             w,

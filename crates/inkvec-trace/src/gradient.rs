@@ -266,7 +266,7 @@ impl FillModel {
     }
 
     /// The gradient coordinate `t` of a position: 0 at the first stop, 1 at the last.
-    fn t_at(&self, x: f64, y: f64) -> f64 {
+    pub(crate) fn t_at(&self, x: f64, y: f64) -> f64 {
         match *self {
             FillModel::Flat(_) => 0.0,
             FillModel::Linear { p0, p1, .. } => linear_t(x, y, p0, p1),
@@ -281,7 +281,7 @@ impl FillModel {
     }
 
     /// The same geometry with the colour profile replaced.
-    fn with_stops(&self, c0: [f32; 3], mids: Vec<(f64, [f32; 3])>, c1: [f32; 3]) -> FillModel {
+    pub(crate) fn with_stops(&self, c0: [f32; 3], mids: Vec<(f64, [f32; 3])>, c1: [f32; 3]) -> FillModel {
         let mut m = self.clone();
         match &mut m {
             FillModel::Flat(_) => {}
@@ -1739,4 +1739,4 @@ pub use bands::{merge_gradient_bands, merge_gradient_bands_with_ink};
 pub(crate) use budget::*;
 pub use carve::{carve_residual_features, carve_residual_features_with_detail_noise};
 pub(crate) use stops::fit_mid_stops;
-pub use svg::fill_to_svg;
+pub use svg::{fade_to_svg, fill_to_svg};

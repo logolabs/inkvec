@@ -531,7 +531,10 @@ const STROKE_TOL: f64 = 0.1;
 /// hole in six numbers. Circles are offsets of circles and rounded rectangles of rounded
 /// rectangles (outer corner `r + t/2`, inner `max(r - t/2, 0)`, square with a mitred join
 /// at `r = 0`); an ellipse's offset is not an ellipse, so it is never one.
-pub(crate) fn annulus_stroke(outer: &PrimitiveKind, inner: &PrimitiveKind) -> Option<(PrimitiveKind, f64)> {
+pub(crate) fn annulus_stroke(
+    outer: &PrimitiveKind,
+    inner: &PrimitiveKind,
+) -> Option<(PrimitiveKind, f64)> {
     let tol = std::env::var("INKVEC_STROKE_TOL")
         .ok()
         .and_then(|v| v.parse::<f64>().ok())
@@ -545,7 +548,13 @@ pub(crate) fn annulus_stroke(outer: &PrimitiveKind, inner: &PrimitiveKind) -> Op
                 return None;
             }
             let c = Point::new(0.5 * (co.x + ci.x), 0.5 * (co.y + ci.y));
-            Some((PrimitiveKind::Circle { c, r: 0.5 * (ro + ri) }, t))
+            Some((
+                PrimitiveKind::Circle {
+                    c,
+                    r: 0.5 * (ro + ri),
+                },
+                t,
+            ))
         }
         (
             PrimitiveKind::RoundRect {
@@ -563,19 +572,31 @@ pub(crate) fn annulus_stroke(outer: &PrimitiveKind, inner: &PrimitiveKind) -> Op
                 rx: ri,
             },
         ) => {
-            let sides = [xi - xo, yi - yo, (xo + wo) - (xi + wi), (yo + ho) - (yi + hi)];
+            let sides = [
+                xi - xo,
+                yi - yo,
+                (xo + wo) - (xi + wi),
+                (yo + ho) - (yi + hi),
+            ];
             if sides.iter().any(|&s| s <= 0.0) {
                 return None;
             }
             let t = sides.iter().sum::<f64>() / 4.0;
-            let mut worst = sides.iter().map(|&s| (s - t).abs() / 2.0).fold(0.0f64, f64::max);
+            let mut worst = sides
+                .iter()
+                .map(|&s| (s - t).abs() / 2.0)
+                .fold(0.0f64, f64::max);
             let (ro, ri) = (ro.max(0.0), ri.max(0.0));
             let r = if ro < tol / corner && ri < tol / corner {
                 // Square corners, which a stroke gets from its mitred join.
                 worst = worst.max(ro.max(ri) * corner);
                 0.0
             } else {
-                let r = if ri > tol / corner { 0.5 * (ro + ri) } else { ro - 0.5 * t };
+                let r = if ri > tol / corner {
+                    0.5 * (ro + ri)
+                } else {
+                    ro - 0.5 * t
+                };
                 if r <= 0.0 {
                     return None;
                 }
@@ -604,7 +625,12 @@ pub(crate) fn annulus_stroke(outer: &PrimitiveKind, inner: &PrimitiveKind) -> Op
 }
 
 /// [`primitive_element`] as a stroke of `width` in `color`, with nothing filled.
-pub(crate) fn stroke_element(kind: &PrimitiveKind, width: f64, color: &str, decimals: usize) -> Option<String> {
+pub(crate) fn stroke_element(
+    kind: &PrimitiveKind,
+    width: f64,
+    color: &str,
+    decimals: usize,
+) -> Option<String> {
     let paint = format!(" stroke=\"{color}\" stroke-width=\"{width:.decimals$}\"");
     primitive_element(kind, "none", &paint, decimals)
 }
@@ -1058,104 +1084,29 @@ pub(crate) fn emit_color(
             }
         }
     }
-    // Optional shape harmonization
-    let mut harmonized_d: std::collections::HashMap<usize, String> =
-        std::collections::HashMap::new();
-    let mut symbol_use: std::collections::HashMap<usize, (String, String)> =
-        std::collections::HashMap::new();
-
-    // Gradient definitions, and the fill string each face will use.
+    // Repeated shapes redrawn from one consensus, where their own evidence agrees; see
+    // `crate::harmonize`. Its symbols come first among the definitions.
     let mut defs = String::new();
-
-    if harmonize {
-        let mut candidate_shapes = Vec::new();
-        let mut face_indices = Vec::new();
-
-        for i in 0..order.len() {
-            if drop(i) || drawn[i].is_empty() {
-                continue;
-            }
-            let (outer_start, outer_segs) = ring_to_segments(&order[i][drawn[i][0]], fitted);
-            if outer_segs.is_empty() {
-                continue;
-            }
-            let outer_pts = pts[i][drawn[i][0]].clone();
-
-            let mut holes_data = Vec::new();
-            for &c in &holes[i] {
-                for &k in &drawn[c] {
-                    let (h_start, h_segs) = ring_to_segments(&order[c][k], fitted);
-                    if !h_segs.is_empty() {
-                        holes_data.push((h_start, h_segs, pts[c][k].clone()));
-                    }
-                }
-            }
-
-            if let Some(shape) = inkvec_fit::harmonize::CompoundShape::new(
-                outer_start,
-                outer_segs,
-                outer_pts,
-                holes_data,
-            ) {
-                candidate_shapes.push(shape);
-                face_indices.push(i);
-            }
-        }
-
-        let clusters =
-            inkvec_fit::harmonize::cluster_compound_shapes(&candidate_shapes, harmonize_threshold);
-
-        for (cluster_idx, cluster) in clusters.iter().enumerate() {
-            if cluster.members.len() > 1 {
-                if use_symbols {
-                    let sym_id = format!("glyph_{cluster_idx}");
-                    let mut canon_d = String::new();
-                    fmt_segments(
-                        cluster.canonical_outer_start,
-                        &cluster.canonical_outer_segments,
-                        decimals,
-                        &mut canon_d,
-                    );
-                    for (h_start, h_segs) in &cluster.canonical_holes {
-                        fmt_segments(*h_start, h_segs, decimals, &mut canon_d);
-                    }
-                    defs.push_str(&format!("<path id=\"{sym_id}\" d=\"{canon_d}\"/>"));
-                    for &m in &cluster.members {
-                        let face_idx = face_indices[m];
-                        let shape = &candidate_shapes[m];
-                        symbol_use.insert(
-                            face_idx,
-                            (sym_id.clone(), shape.from_canonical.svg_matrix()),
-                        );
-                    }
-                } else {
-                    for &m in &cluster.members {
-                        let face_idx = face_indices[m];
-                        let shape = &candidate_shapes[m];
-                        let mut d_out = String::new();
-                        let re_start = shape
-                            .from_canonical
-                            .apply_point(cluster.canonical_outer_start);
-                        let re_segs: Vec<_> = cluster
-                            .canonical_outer_segments
-                            .iter()
-                            .map(|s| shape.from_canonical.apply_segment(s))
-                            .collect();
-                        fmt_segments(re_start, &re_segs, decimals, &mut d_out);
-                        for (h_start, h_segs) in &cluster.canonical_holes {
-                            let re_h_start = shape.from_canonical.apply_point(*h_start);
-                            let re_h_segs: Vec<_> = h_segs
-                                .iter()
-                                .map(|s| shape.from_canonical.apply_segment(s))
-                                .collect();
-                            fmt_segments(re_h_start, &re_h_segs, decimals, &mut d_out);
-                        }
-                        harmonized_d.insert(face_idx, d_out);
-                    }
-                }
-            }
-        }
-    }
+    let harmonized = if harmonize {
+        crate::harmonize::harmonize(
+            &crate::harmonize::Faces {
+                order,
+                fitted,
+                prims,
+                pts: &pts,
+                drawn,
+                holes: &holes,
+                dropped: &dropped,
+            },
+            harmonize_threshold,
+            use_symbols,
+            decimals,
+        )
+    } else {
+        crate::harmonize::Harmonized::default()
+    };
+    defs.push_str(&harmonized.defs);
+    let (harmonized_d, symbol_use) = (harmonized.d, harmonized.symbols);
 
     let mut fills: Vec<String> = Vec::with_capacity(order.len());
     // A translucent face was measured *over the matte*, so its colour is un-matted before
@@ -1681,7 +1632,10 @@ mod tests {
         let v = numbers(&d);
         // M x0,y  A r,r 0 1 0 x1,y  A r,r 0 1 0 x0,y
         let (x0, ra, x1) = (v[0], v[2], v[7]);
-        assert!(ra < 0.5 * (x1 - x0), "{d}: the radius must fall short of the half-chord");
+        assert!(
+            ra < 0.5 * (x1 - x0),
+            "{d}: the radius must fall short of the half-chord"
+        );
         assert!((0.5 * (x0 + x1) - 63.50).abs() < 1e-9, "{d}");
         assert!((0.5 * (x1 - x0) - 57.10).abs() < 1e-9, "{d}");
     }

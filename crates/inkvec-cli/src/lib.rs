@@ -27,6 +27,7 @@
 mod alpha;
 mod args;
 mod emit;
+mod harmonize;
 mod post;
 mod rings;
 

@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "InkvecOptions",
+  "description": "Options for one Inkvec trace. Every field is optional and takes its default when missing; an unknown field is an error.",
+  "type": "object",
+  "properties": {
+    "precision": {
+      "description": "Sets the description-length cost of a coordinate, in pixels: lambda = ln(extent / precision). Smaller values buy more detail with more coordinates. It does not set the digits written; coordinates are always written at 2 decimals.",
+      "type": "number",
+      "format": "double",
+      "default": 0.1,
+      "exclusiveMinimum": 0
+    },
+    "min_area": {
+      "description": "Discard features smaller than this area, in square pixels.",
+      "type": "number",
+      "format": "double",
+      "default": 2.0,
+      "exclusiveMinimum": 0
+    },
+    "colors": {
+      "description": "Maximum palette size.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 1,
+      "maximum": 4096,
+      "default": 64
+    },
+    "merge": {
+      "description": "OKLab distance below which two colours are treated as one ink.",
+      "type": "number",
+      "format": "double",
+      "minimum": 0,
+      "default": 0.035
+    },
+    "max_dim": {
+      "description": "Inputs larger than this on their longer side, in pixels, are traced at this size and the SVG is written at the original size. Trace time grows with the pixel count. 0 means no cap.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "default": 2048
+    },
+    "time_budget": {
+      "description": "Advisory wall-clock budget, in seconds; 0 means none. Gradient-band merging stops at 60% of it and the boundary solve gets 25%; the output is still a correct trace, with more fills or a less polished outline. A nonzero budget makes the output depend on machine speed and load, so it is no longer reproducible.",
+      "type": "number",
+      "format": "double",
+      "minimum": 0,
+      "default": 0.0
+    },
+    "margin": {
+      "description": "Transparent margin around the output, as a fraction of the larger side. The viewBox grows; the geometry does not move.",
+      "type": "number",
+      "format": "double",
+      "minimum": 0,
+      "default": 0.0
+    },
+    "no_background": {
+      "description": "Knock the background out: the face that covers the whole canvas is not painted, so the artwork sits on transparency.",
+      "type": "boolean",
+      "default": false
+    },
+    "minify": {
+      "description": "No ids or groups, no trailing zeros. Same geometry, typically about a tenth smaller.",
+      "type": "boolean",
+      "default": false
+    },
+    "cutout": {
+      "description": "Carry the input's transparency into the SVG: a face the source drew transparent becomes a hole, one drawn at a single opacity keeps it as fill-opacity, and white artwork on a transparent ground survives. Changes nothing for an opaque input. Off by default because over white it opens faint seams along shared edges; use it for artwork that will sit on anything but white.",
+      "type": "boolean",
+      "default": false
+    },
+    "content_units": {
+      "description": "Scale the fit tolerances with the raster, so a large, simple drawing gets the parameter count of a small one. Trades fidelity for parsimony: small squares can come back as circles and thin rings broken.",
+      "type": "boolean",
+      "default": false
+    },
+    "harmonize": {
+      "description": "Shape harmonization (on by default): marks that repeat across the drawing are redrawn from one consensus geometry per cluster, which saves parameters. The known cost is fidelity on fine-line art: on hairlines, thin rings and small rounded details the consensus can displace thin lines by about a pixel (on the 246-icon screen set mean dE00 0.151 off vs 0.299 on). Set it to false for such artwork.",
+      "type": "boolean",
+      "default": true
+    },
+    "harmonize_threshold": {
+      "description": "Shape-equivalence threshold for harmonization: the outline similarity (IoU after affine normalisation) above which two marks count as the same shape.",
+      "type": "number",
+      "format": "double",
+      "minimum": 0,
+      "maximum": 1,
+      "default": 0.92
+    }
+  },
+  "additionalProperties": false
+}

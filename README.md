@@ -190,6 +190,10 @@ fn trace(input: &str) -> Result<String, Box<dyn std::error::Error>> {
 
 `Args::default()` holds every flag's default. `trace_image` is the whole pipeline behind both the CLI and the WASM build.
 
+### Language bindings
+
+The `inkvec` crate (`crates/inkvec`) is the stable library API -- `inkvec::trace(&png, &inkvec::Options::default())` -- and the base of a C library with a generated header (`crates/inkvec-ffi`) and a Python package (`crates/inkvec-py`: `inkvec.trace("logo.png", colors=16)`). Every binding takes the same options, generated from one schema, and reproduces the same contract fixtures. See [`docs/BINDINGS.md`](docs/BINDINGS.md), including the same shape-harmonization caveat as above.
+
 ---
 
 ## How it works

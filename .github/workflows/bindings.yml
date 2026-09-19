@@ -1,0 +1,304 @@
+name: bindings
+
+# The language-binding foundation: the `inkvec` facade crate, the C library (inkvec-ffi) and
+# the Python package (inkvec-py). See docs/BINDINGS.md.
+#
+# Every job below builds and tests. The three publishing jobs at the end run ONLY on a `v*`
+# tag AND only when the repository opts in (a variable or a secret, named in each job); on
+# branches, pull requests and manual runs nothing is uploaded anywhere but this run's
+# artifacts.
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+    paths:
+      - "crates/**"
+      - "bindings/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/bindings.yml"
+  pull_request:
+    paths:
+      - "crates/**"
+      - "bindings/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/bindings.yml"
+  workflow_dispatch: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bindings-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  facade:
+    # The facade's unit tests, the schema drift check, the contract and the C ABI's own tests,
+    # on all three OSes. A target with no recorded hashes in bindings/contract/cases.json is
+    # checked on everything but the exact bytes; the cases.json blessed here with
+    # INKVEC_BLESS=add is uploaded so its hashes can be committed.
+    name: facade (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --release --locked -p inkvec -p inkvec-ffi
+      - name: Record this target's contract hashes
+        if: always()
+        shell: bash
+        run: INKVEC_BLESS=add cargo test --release --locked -p inkvec --test contract
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: contract-${{ matrix.os }}
+          path: bindings/contract/cases.json
+
+  generated:
+    # Everything generated from inkvec::Options must be committed up to date: the schema
+    # (checked by `cargo test -p inkvec` above), the language stubs and tables, and the header.
+    name: generated files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python bindings/codegen/generate.py --check
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cbindgen@0.29.4
+      - run: >-
+          cbindgen --config crates/inkvec-ffi/cbindgen.toml --crate inkvec-ffi
+          --output crates/inkvec-ffi/include/inkvec.h --verify
+
+  c-library:
+    name: C library (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: windows-x64, os: windows-latest, target: x86_64-pc-windows-msvc }
+          - { name: linux-x64, os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          # Native arm64 runner, as in release.yml. NOT verified locally.
+          - { name: linux-arm64, os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          - { name: macos-arm64, os: macos-14, target: aarch64-apple-darwin }
+          - { name: macos-x64, os: macos-15-intel, target: x86_64-apple-darwin }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ffi-${{ matrix.target }}
+      - run: cargo build --release --locked -p inkvec-ffi --target ${{ matrix.target }}
+
+      - name: Build the C example (cc)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          lib="target/${{ matrix.target }}/release"
+          cc -std=c99 -Wall -Wextra -pedantic -Werror -O2 crates/inkvec-ffi/examples/c/trace.c \
+            -I crates/inkvec-ffi/include -L "$lib" -linkvec_ffi -Wl,-rpath,"$PWD/$lib" -o trace-c
+          echo "INKVEC_C_EXAMPLE=$PWD/trace-c" >> "$GITHUB_ENV"
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+      - name: Build the C example (MSVC)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $lib = "target/${{ matrix.target }}/release"
+          cl /nologo /W4 /WX /O2 crates/inkvec-ffi/examples/c/trace.c /I crates/inkvec-ffi/include /Fe:trace-c.exe /link "$lib/inkvec_ffi.dll.lib"
+          Copy-Item "$lib/inkvec_ffi.dll" .
+          "INKVEC_C_EXAMPLE=$PWD\trace-c.exe" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: The C ABI through ctypes, and the C example, against the contract
+        shell: bash
+        run: |
+          pip install pytest
+          case "${{ runner.os }}" in
+            Windows) lib=inkvec_ffi.dll ;;
+            macOS) lib=libinkvec_ffi.dylib ;;
+            *) lib=libinkvec_ffi.so ;;
+          esac
+          INKVEC_LIB="$PWD/target/${{ matrix.target }}/release/$lib" python -m pytest -q crates/inkvec-ffi/tests
+
+      - name: Stage the archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          [[ "${GITHUB_REF_NAME:-}" == v* ]] || version="0.0.0-dev"
+          name="inkvec-c-${version}-${{ matrix.name }}"
+          stage="stage/${name}"
+          mkdir -p "${stage}/include" "${stage}/lib" "${stage}/examples"
+          cp crates/inkvec-ffi/include/inkvec.h "${stage}/include/"
+          lib="target/${{ matrix.target }}/release"
+          shopt -s nullglob
+          for f in "$lib"/inkvec_ffi.dll "$lib"/inkvec_ffi.dll.lib "$lib"/inkvec_ffi.lib \
+                   "$lib"/libinkvec_ffi.so "$lib"/libinkvec_ffi.dylib "$lib"/libinkvec_ffi.a; do
+            cp "$f" "${stage}/lib/"
+          done
+          cp crates/inkvec-ffi/examples/c/trace.c "${stage}/examples/"
+          cp crates/inkvec-ffi/README.md "${stage}/README.md"
+          cp LICENSE NOTICE "${stage}/"
+          cp docs/THIRD_PARTY.md "${stage}/THIRD_PARTY.md"
+          cp docs/BINDINGS.md "${stage}/BINDINGS.md"
+          echo "ARCHIVE_NAME=${name}" >> "$GITHUB_ENV"
+      - name: Archive (tar.gz)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: mkdir -p dist && tar -C stage -czf "dist/${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}"
+      - name: Archive (zip)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path "stage/$env:ARCHIVE_NAME" -DestinationPath "dist/$env:ARCHIVE_NAME.zip" -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: c-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  wheels:
+    # abi3 wheels (CPython 3.9+) built by maturin; Linux ones are manylinux, built in
+    # maturin-action's container. Each is then installed on the runner and tested.
+    name: wheel (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: windows-x64, os: windows-latest, target: x86_64-pc-windows-msvc }
+          - { name: linux-x64, os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { name: linux-arm64, os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          - { name: macos-arm64, os: macos-14, target: aarch64-apple-darwin }
+          - { name: macos-x64, os: macos-15-intel, target: x86_64-apple-darwin }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --locked --out dist -m crates/inkvec-py/Cargo.toml
+          manylinux: auto
+          rust-toolchain: 1.98.0
+      - name: Install and test the wheel
+        shell: bash
+        run: |
+          pip install dist/*.whl pytest pillow numpy
+          python -m pytest -q crates/inkvec-py/tests
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.name }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  sdist:
+    name: sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist -m crates/inkvec-py/Cargo.toml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------------------------
+  # Publishing. Each job runs only on a v* tag AND only when the repository has opted in.
+  # ------------------------------------------------------------------------------------
+
+  publish-pypi:
+    # Opt in: set the repository variable PUBLISH_PYPI to `true` and register this repository
+    # and workflow (environment `pypi`) as a trusted publisher of the `inkvec` project on
+    # PyPI. No token is stored. To use an API token instead, add
+    # `password: ${{ secrets.PYPI_API_TOKEN }}` to the publish step.
+    name: publish to PyPI
+    needs: [wheels, sdist]
+    if: startsWith(github.ref, 'refs/tags/v') && vars.PUBLISH_PYPI == 'true'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+
+  publish-crates:
+    # Opt in: set the repository variable PUBLISH_CRATES to `true` and add a crates.io API
+    # token as the secret CARGO_REGISTRY_TOKEN. `cargo publish --workspace` publishes every
+    # member that is not `publish = false`, in dependency order: inkvec-core, inkvec-fit,
+    # inkvec-trace, inkvec-sr, inkvec-restore, inkvec-cli, inkvec. The version is the
+    # workspace version; a version already on crates.io fails the job.
+    name: publish to crates.io
+    needs: [facade, generated]
+    if: startsWith(github.ref, 'refs/tags/v') && vars.PUBLISH_CRATES == 'true'
+    runs-on: ubuntu-latest
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - name: Publish
+        if: env.CARGO_REGISTRY_TOKEN != ''
+        run: cargo publish --workspace --locked
+
+  release-c:
+    # Attaches the C library archives to the GitHub release of the tag (release.yml creates
+    # it). Needs nothing but this workflow's own token.
+    name: attach C libraries to the release
+    needs: c-library
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: c-*
+          path: out
+          merge-multiple: true
+      - name: Checksums
+        run: cd out && sha256sum -- * > SHA256SUMS-c
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          fail_on_unmatched_files: true
+          files: |
+            out/*.tar.gz
+            out/*.zip
+            out/SHA256SUMS-c

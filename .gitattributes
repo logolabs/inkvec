@@ -12,3 +12,4 @@
 *.pt binary
 *.zip binary
 *.tar.gz binary
+*.rgba binary

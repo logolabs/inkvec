@@ -7,6 +7,22 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+### Added
+
+- **Language-binding foundation** (`docs/BINDINGS.md`). The `inkvec` crate is a small stable
+  library API (`trace`, `trace_rgba`, `Options`, `Traced`, `Error`); `inkvec-ffi` is a C
+  library (`inkvec_ffi`) with a cbindgen header, `include/inkvec.h`; `inkvec-py` is the `inkvec`
+  Python package (PyO3, abi3 wheels for 3.9+). Options live once, in `inkvec::Options`, whose
+  JSON Schema (`bindings/options.schema.json`) the bindings take their options through and
+  their typed stubs are generated from; `bindings/contract/` holds the cases every binding must
+  reproduce. Nothing is published yet.
+
+### Fixed
+
+- **`--margin` on reduced input.** The margin was silently dropped whenever the SVG was
+  presented at a larger size than it was traced at (`--max-dim` capped the input, or an exact
+  pixel-block upscale was undone). The presented size now grows with the viewBox.
+
 ## [0.1.3] - 2026-09-18
 
 ### Fixed

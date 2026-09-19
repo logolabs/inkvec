@@ -1,0 +1,33 @@
+[package]
+name = "inkvec-py"
+description = "Python bindings for Inkvec (the `inkvec` package on PyPI), built with PyO3 and maturin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+# Published to PyPI as wheels by maturin (pyproject.toml), never to crates.io.
+publish = false
+
+[lib]
+# The native half of the package: `inkvec._inkvec`, wrapped by python/inkvec/__init__.py.
+name = "_inkvec"
+crate-type = ["cdylib"]
+
+[dependencies]
+inkvec = { workspace = true }
+# Optional so that `cargo build --workspace` needs no Python: maturin turns it on
+# (`python` and `pyo3/extension-module`, see pyproject.toml). Without it this crate is empty.
+pyo3 = { version = "0.29", features = ["abi3-py39"], optional = true }
+
+[features]
+default = []
+#: The Python extension module. Enabled by maturin; plain cargo builds leave it off.
+python = ["dep:pyo3"]
+
+[lints]
+workspace = true

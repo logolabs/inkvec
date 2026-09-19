@@ -9,7 +9,7 @@ C# (P/Invoke), Go (cgo), Swift, Ruby and PHP bind to.
 #include "inkvec.h"
 
 InkvecResult r = INKVEC_RESULT_INIT;
-int status = inkvec_trace(png, png_len, "{\"colors\": 16, \"cutout\": true}", &r);
+int status = inkvec_trace(png, png_len, "{\"colors\": 16, \"no_background\": true}", &r);
 if (status == INKVEC_OK)
     fwrite(r.svg, 1, r.svg_len, out);
 else

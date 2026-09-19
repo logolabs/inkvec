@@ -32,8 +32,9 @@ export async function rawGlue(arm) {
 }
 
 /**
- * A white disk on a transparent ground: the case `cutout` exists for. Anti-aliased edge
- * (4x4 supersampled coverage in alpha), colour white everywhere.
+ * A white disk on a transparent ground: the case native transparency (and, without it,
+ * `cutout`) exists for. Anti-aliased edge (4x4 supersampled coverage in alpha), colour
+ * white everywhere.
  */
 export function whiteDisk(size = 64) {
   const data = new Uint8ClampedArray(size * size * 4);
@@ -51,6 +52,15 @@ export function whiteDisk(size = 64) {
       }
       data.set([255, 255, 255, Math.round((inside / 16) * 255)], (y * size + x) * 4);
     }
+  }
+  return { data, width: size, height: size };
+}
+
+/** A blue disk at half opacity on a transparent ground, 4x4 supersampled like `whiteDisk`. */
+export function translucentDisk(size = 64) {
+  const { data } = whiteDisk(size);
+  for (let i = 0; i < data.length; i += 4) {
+    data.set([20, 40, 200, Math.round(data[i + 3] / 2)], i);
   }
   return { data, width: size, height: size };
 }

@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import threading
 import time
@@ -87,9 +88,14 @@ def test_paths_and_file_objects_are_read(tmp_path):
     assert inkvec.trace(bytearray(tiny())).svg == expected
 
 
-def test_white_on_transparent_with_cutout_paints_no_background():
+@pytest.mark.parametrize(
+    "options",
+    [{}, {"native_alpha": False, "cutout": True}],
+    ids=["native", "composited_cutout"],
+)
+def test_white_on_transparent_paints_no_background(options):
     data = (CONTRACT / "white_on_clear.rgba").read_bytes()
-    t = inkvec.trace_rgba(data, 64, 64, cutout=True)
+    t = inkvec.trace_rgba(data, 64, 64, **options)
     root = ET.fromstring(t.svg)
     shapes = [el for el in root.iter() if el.tag.split("}")[-1] in ("path", "rect", "circle", "ellipse")]
     assert shapes, t.svg
@@ -98,13 +104,43 @@ def test_white_on_transparent_with_cutout_paints_no_background():
         if el.tag == SVG_NS + "rect":
             assert float(el.get("width")) < 60 and float(el.get("height")) < 60, t.svg
         assert "-0.50,-0.50" not in (el.get("d") or ""), t.svg
-        # The artwork survives, in its own colour.
-        assert el.get("fill") in ("#ffffff", "#fff"), t.svg
+        # The artwork survives, in its own colour (a ring of uniform width can be one
+        # stroked shape).
+        paint = el.get("stroke") if el.get("fill") == "none" else el.get("fill")
+        assert paint in ("#ffffff", "#fff"), t.svg
     # Control: an opaque image does paint its canvas.
     opaque = ET.fromstring(inkvec.trace(tiny()).svg)
     assert any(
         el.tag == SVG_NS + "rect" and float(el.get("width")) >= 96 for el in opaque.iter()
     )
+
+
+def translucent_disc(size: int = 64) -> bytes:
+    """A blue disc at half opacity on a transparent ground, 4x4 supersampled."""
+    out = bytearray()
+    c, r = size / 2, size * 0.3
+    for y in range(size):
+        for x in range(size):
+            inside = sum(
+                (x + (sx + 0.5) / 4 - c) ** 2 + (y + (sy + 0.5) / 4 - c) ** 2 < r * r
+                for sy in range(4)
+                for sx in range(4)
+            )
+            out += bytes((20, 40, 200, inside * 128 // 16))
+    return bytes(out)
+
+
+def test_native_alpha_keeps_opacity_and_false_composites():
+    data = translucent_disc()
+    composited = inkvec.trace_rgba(data, 64, 64, native_alpha=False).svg
+    # Composited onto white, the disc comes back as an opaque, lighter blue.
+    assert "fill-opacity" not in composited, composited
+    if os.environ.get("INKVEC_NATIVE_ALPHA") is None:
+        assert inkvec.defaults()["native_alpha"] is True
+        native = inkvec.trace_rgba(data, 64, 64).svg
+        # Natively, it keeps its own colour at its own opacity, on no background.
+        assert "fill-opacity" in native and "<rect" not in native, native
+        assert inkvec.trace_rgba(data, 64, 64, native_alpha=True).svg == native
 
 
 def test_output_is_deterministic():

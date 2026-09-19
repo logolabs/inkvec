@@ -201,16 +201,69 @@
       },
       "svg": {
         "x86_64-windows-msvc": {
-          "bytes": 435,
-          "sha256": "44f95b89dbd21a1f4acbcbe3af212a1360e97657afd4dcdd9798926efea0151a"
+          "bytes": 292,
+          "sha256": "6a11edc9789eb579eed9d00e8ead5c4655ab95e4be3862a8032ac146a002fc25"
         },
         "x86_64-linux-gnu": {
-          "bytes": 435,
-          "sha256": "44f95b89dbd21a1f4acbcbe3af212a1360e97657afd4dcdd9798926efea0151a"
+          "bytes": 292,
+          "sha256": "6a11edc9789eb579eed9d00e8ead5c4655ab95e4be3862a8032ac146a002fc25"
         },
         "wasm32-unknown": {
-          "bytes": 435,
-          "sha256": "44f95b89dbd21a1f4acbcbe3af212a1360e97657afd4dcdd9798926efea0151a"
+          "bytes": 292,
+          "sha256": "6a11edc9789eb579eed9d00e8ead5c4655ab95e4be3862a8032ac146a002fc25"
+        }
+      }
+    },
+    {
+      "name": "clear_rgba_defaults",
+      "input": "white_on_clear.rgba",
+      "form": "rgba",
+      "width": 64,
+      "height": 64,
+      "options": {},
+      "same_svg_as": "clear_defaults",
+      "expect": {
+        "width": 64,
+        "height": 64
+      },
+      "svg": {
+        "x86_64-windows-msvc": {
+          "bytes": 292,
+          "sha256": "6a11edc9789eb579eed9d00e8ead5c4655ab95e4be3862a8032ac146a002fc25"
+        },
+        "x86_64-linux-gnu": {
+          "bytes": 292,
+          "sha256": "6a11edc9789eb579eed9d00e8ead5c4655ab95e4be3862a8032ac146a002fc25"
+        },
+        "wasm32-unknown": {
+          "bytes": 292,
+          "sha256": "6a11edc9789eb579eed9d00e8ead5c4655ab95e4be3862a8032ac146a002fc25"
+        }
+      }
+    },
+    {
+      "name": "clear_composited",
+      "input": "white_on_clear.png",
+      "form": "encoded",
+      "options": {
+        "native_alpha": false
+      },
+      "expect": {
+        "width": 64,
+        "height": 64
+      },
+      "svg": {
+        "x86_64-windows-msvc": {
+          "bytes": 393,
+          "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
+        },
+        "x86_64-linux-gnu": {
+          "bytes": 393,
+          "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
+        },
+        "wasm32-unknown": {
+          "bytes": 393,
+          "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
         }
       }
     },
@@ -219,6 +272,7 @@
       "input": "white_on_clear.png",
       "form": "encoded",
       "options": {
+        "native_alpha": false,
         "cutout": true
       },
       "expect": {
@@ -227,16 +281,16 @@
       },
       "svg": {
         "x86_64-windows-msvc": {
-          "bytes": 435,
-          "sha256": "44f95b89dbd21a1f4acbcbe3af212a1360e97657afd4dcdd9798926efea0151a"
+          "bytes": 393,
+          "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
         },
         "x86_64-linux-gnu": {
-          "bytes": 435,
-          "sha256": "44f95b89dbd21a1f4acbcbe3af212a1360e97657afd4dcdd9798926efea0151a"
+          "bytes": 393,
+          "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
         },
         "wasm32-unknown": {
-          "bytes": 435,
-          "sha256": "44f95b89dbd21a1f4acbcbe3af212a1360e97657afd4dcdd9798926efea0151a"
+          "bytes": 393,
+          "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
         }
       }
     },
@@ -247,6 +301,7 @@
       "width": 64,
       "height": 64,
       "options": {
+        "native_alpha": false,
         "cutout": true
       },
       "same_svg_as": "clear_cutout",
@@ -256,16 +311,16 @@
       },
       "svg": {
         "x86_64-windows-msvc": {
-          "bytes": 435,
-          "sha256": "44f95b89dbd21a1f4acbcbe3af212a1360e97657afd4dcdd9798926efea0151a"
+          "bytes": 393,
+          "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
         },
         "x86_64-linux-gnu": {
-          "bytes": 435,
-          "sha256": "44f95b89dbd21a1f4acbcbe3af212a1360e97657afd4dcdd9798926efea0151a"
+          "bytes": 393,
+          "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
         },
         "wasm32-unknown": {
-          "bytes": 435,
-          "sha256": "44f95b89dbd21a1f4acbcbe3af212a1360e97657afd4dcdd9798926efea0151a"
+          "bytes": 393,
+          "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
         }
       }
     },

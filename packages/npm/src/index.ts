@@ -67,8 +67,8 @@ export function trace(input: ImageInput, options?: Options): Promise<string> {
  *
  * ```js
  * const img = ctx.getImageData(0, 0, w, h);
- * const svg = await traceRGBA(img, { cutout: true });
- * // or: await traceRGBA(img.data, img.width, img.height, { cutout: true });
+ * const svg = await traceRGBA(img, { colors: 16 });
+ * // or: await traceRGBA(img.data, img.width, img.height, { colors: 16 });
  * ```
  *
  * Pixels decoded from a PNG trace to the same bytes as the PNG itself. Raw pixels carry

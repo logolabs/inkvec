@@ -3,7 +3,7 @@
  *
  *   trace <input-image> [output.svg] [options-json]
  *
- *   trace logo.png logo.svg '{"colors": 16, "cutout": true}'
+ *   trace logo.png logo.svg '{"colors": 16, "no_background": true}'
  *
  * Without an output path the SVG goes to stdout. Build against the library and header:
  *

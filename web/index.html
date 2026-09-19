@@ -187,7 +187,7 @@ footer .v{margin-left:auto}
   <button class="primary" id="go" disabled>Trace</button>
   <span class="status mono" id="status">loading the tracer…</span>
 </div>
-<p class="note" style="margin:2px 0 12px">Repeated shapes are harmonized by default &mdash; fewer paths and smaller SVGs; on very fine line art this can visibly shift geometry (CLI opt-out: <code class="mono">--no-harmonize</code>).</p>
+<p class="note" style="margin:2px 0 12px">Repeated shapes are harmonized by default &mdash; a copy is redrawn from the shared geometry only where that stays within 0.1&nbsp;px of what was traced and saves parameters (CLI opt-out: <code class="mono">--no-harmonize</code>).</p>
 
 <div class="viewer empty" id="viewer"><span>Your input and the vector result appear here side by side. Scroll to zoom, drag to pan; both sides move together.</span></div>
 <div class="tools" id="livetools" hidden></div>
@@ -379,7 +379,7 @@ for (const b of document.querySelectorAll("#presets button")) b.addEventListener
 
 let worker = null;
 function makeWorker(){
-  const url = A.workerUrl || "./worker.js?v=9";
+  const url = A.workerUrl || "./worker.js?v=11";
   try { worker = new Worker(url, { type: "module" }); } catch (e) { worker = null; return; }
   worker.onmessage = (e) => {
     const m = e.data;

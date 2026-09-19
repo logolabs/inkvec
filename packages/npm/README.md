@@ -47,7 +47,7 @@ import { trace } from "@logolabs/inkvec";
 
 onmessage = async ({ data: file }) => {
   // `file` is a File or Blob, e.g. from <input type="file">
-  postMessage(await trace(file, { cutout: true }));
+  postMessage(await trace(file, { colors: 16 }));
 };
 ```
 
@@ -129,29 +129,33 @@ every value -- an unknown name is an error, not a silent no-op.
 | `margin` | number | `0.0` | >= 0 | Transparent margin around the output, as a fraction of the larger side. The viewBox grows; the geometry does not move. |
 | `no_background` | bool | `false` | - | Knock the background out: the face that covers the whole canvas is not painted, so the artwork sits on transparency. |
 | `minify` | bool | `false` | - | No ids or groups, no trailing zeros. Same geometry, typically about a tenth smaller. |
-| `cutout` | bool | `false` | - | Carry the input's transparency into the SVG: a face the source drew transparent becomes a hole, one drawn at a single opacity keeps it as fill-opacity, and white artwork on a transparent ground survives. Changes nothing for an opaque input. Off by default because over white it opens faint seams along shared edges; use it for artwork that will sit on anything but white. |
+| `native_alpha` | bool | `true` | - | Trace transparency natively: each ink is a colour and an opacity, and the transparent ground is an ink of its own, instead of the image being composited onto a matte first. Holes stay holes, white artwork on a transparent ground traces, glows and shadows stay translucent, and a fade is one gradient of colour and opacity. An opaque input traces the same either way. On by default, as on the command line (where the environment variable INKVEC_NATIVE_ALPHA=0 turns the default off); false composites onto a matte first, as releases up to 0.1.3 did. |
+| `cutout` | bool | `false` | - | With native_alpha off, carry the input's transparency into the SVG: a face the source drew transparent becomes a hole, one drawn at a single opacity keeps it as fill-opacity, and white artwork on a transparent ground survives. Changes nothing for an opaque input, and nothing with native_alpha on (the default), which already carries the transparency out. |
 | `content_units` | bool | `false` | - | Scale the fit tolerances with the raster, so a large, simple drawing gets the parameter count of a small one. Trades fidelity for parsimony: small squares can come back as circles and thin rings broken. |
-| `harmonize` | bool | `true` | - | Shape harmonization (on by default): marks that repeat across the drawing are redrawn from one consensus geometry per cluster, which saves parameters. The known cost is fidelity on fine-line art: on hairlines, thin rings and small rounded details the consensus can displace thin lines by about a pixel (on the 246-icon screen set mean dE00 0.151 off vs 0.299 on). Set it to false for such artwork. |
+| `harmonize` | bool | `true` | - | Shape harmonization (on by default): marks that repeat across the drawing are redrawn from one consensus geometry per cluster, which saves parameters. A mark takes the consensus only where that stays within 0.1 px of the boundary traced for it and costs fewer parameters; a face another face is drawn against, and a fitted circle or rounded rectangle, is never moved. Set it to false to skip the pass. |
 | `harmonize_threshold` | number | `0.92` | >= 0 and <= 1 | Shape-equivalence threshold for harmonization: the outline similarity (IoU after affine normalisation) above which two marks count as the same shape. |
 <!-- inkvec:options:end -->
 
 ### Transparency
 
-For artwork that will sit on anything but white, use `cutout: true`: a region the source
-drew transparent becomes a hole instead of a patch of the matte colour, a region drawn at
-one opacity keeps it as `fill-opacity`, and white artwork on a transparent ground survives.
-It changes nothing for an opaque image. `no_background: true` additionally leaves out the
-region that covers the whole canvas, so an opaque logo on a flat background comes back on
+Transparency is traced natively by default: every ink is a colour and an opacity and the
+transparent ground is an ink of its own, so a region the source drew transparent stays a
+hole, a translucent panel keeps its `fill-opacity`, white artwork on a transparent ground
+traces, and a glow or fade is one gradient of colour and opacity. It changes nothing for an
+opaque image. `native_alpha: false` composites onto a matte first, as releases up to 0.1.3
+did (`cutout: true` then puts the holes back). `no_background: true` leaves out the region
+that covers the whole canvas, so an opaque logo on a flat background comes back on
 transparency.
 
 ### Shape harmonization
 
 On by default, as on the command line. Marks that repeat across a drawing -- a run of
 identical tabs, segmented rings, tiled glyphs -- are redrawn from one consensus shape per
-cluster, which saves parameters. The cost is fidelity on fine-line art: on hairlines, thin
-rings and small rounded details the consensus can move a thin line by about a pixel (on
-the project's 246-icon screen set, mean colour error dE00 0.151 with it off, 0.299 with it
-on). For such artwork pass `harmonize: false`.
+cluster, which saves parameters. A mark takes the consensus only where that lands within
+0.1 px of the boundary traced for it and costs fewer parameters; a face another face is
+drawn against, or a fitted circle or rounded rectangle, is never moved. On the project's
+246-icon screen set it changes 2 icons, both cheaper and neither worse. To skip the pass,
+pass `harmonize: false`.
 
 ## Threads
 

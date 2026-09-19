@@ -51,12 +51,20 @@
 //! and the super-resolution pre-pass (`--sr`) -- are not part of this API: they need model
 //! weights, an ML runtime or an external process. Clean the image first if it needs it.
 //!
+//! # Transparency
+//!
+//! Traced natively by default, as on the command line: every ink is a colour and an
+//! opacity and the transparent ground is an ink of its own, so holes stay holes and a fade
+//! is one gradient of colour and opacity. An opaque input traces the same either way. Set
+//! [`Options::native_alpha`] to `false` to composite onto a matte first, as releases up to
+//! 0.1.3 did ([`Options::cutout`] then decides whether the transparency is put back).
+//!
 //! # Shape harmonization
 //!
 //! On by default, as on the command line. Marks that repeat across the drawing are redrawn
-//! from one consensus geometry per cluster, which saves parameters; on fine-line art
-//! (hairlines, thin rings, small rounded details) the consensus can displace thin lines by
-//! about a pixel. Set [`Options::harmonize`] to `false` for such artwork.
+//! from one consensus geometry per cluster, which saves parameters. A mark takes the
+//! consensus only where that stays within 0.1 px of the boundary traced for it and costs
+//! fewer parameters. Set [`Options::harmonize`] to `false` to skip the pass.
 
 mod options;
 
@@ -131,7 +139,7 @@ impl std::error::Error for Error {}
 ///
 /// The container is read as well as the pixels: JPEG and lossy WebP are traced with the
 /// noise-aware intake the command line uses for them. Transparency is honoured as the
-/// command line does (see [`Options::cutout`]).
+/// command line does (see [`Options::native_alpha`]).
 pub fn trace(image: &[u8], opts: &Options) -> Result<Traced, Error> {
     opts.validate()?;
     guarded(|| {

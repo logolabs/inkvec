@@ -409,8 +409,50 @@ pub fn refine_subpixel(
     sigma_noise: f64,
     simplify_faint: bool,
 ) {
+    refine_subpixel_alpha(map, rgb, face_fill, sigma_noise, simplify_faint, None)
+}
+
+/// [`refine_subpixel`] with alpha as a fourth channel: `alpha` is the source's alpha per
+/// pixel and each face's opacity. A pixel on the edge between white paint and the clear
+/// ground is then unmixed along the alpha axis, where over white it had no contrast at all.
+/// With `None` this is exactly [`refine_subpixel`].
+pub fn refine_subpixel_alpha(
+    map: &mut PlanarMap,
+    rgb: &[[f32; 3]],
+    face_fill: &[crate::gradient::FillModel],
+    sigma_noise: f64,
+    simplify_faint: bool,
+    src_alpha: Option<(&[f32], &[f32])>,
+) {
     let (w, h) = (map.width, map.height);
     let min_contrast = (3.0 * sigma_noise).max(MIN_UNMIX_CONTRAST);
+    let sample_alpha = |x: f64, y: f64| -> f32 {
+        let Some((img_a, _)) = src_alpha else {
+            return 1.0;
+        };
+        let (xf, yf) = (x.floor(), y.floor());
+        let (x0, y0) = (xf as isize, yf as isize);
+        let (tx, ty) = ((x - xf) as f32, (y - yf) as f32);
+        let (mut acc, mut wsum) = (0.0f32, 0.0f32);
+        for (dx, dy, wt) in [
+            (0, 0, (1.0 - tx) * (1.0 - ty)),
+            (1, 0, tx * (1.0 - ty)),
+            (0, 1, (1.0 - tx) * ty),
+            (1, 1, tx * ty),
+        ] {
+            let (sx, sy) = (x0 + dx, y0 + dy);
+            if sx < 0 || sy < 0 || sx >= w as isize || sy >= h as isize {
+                continue;
+            }
+            acc += img_a[sy as usize * w + sx as usize] * wt;
+            wsum += wt;
+        }
+        if wsum <= 1e-6 {
+            1.0
+        } else {
+            acc / wsum
+        }
+    };
 
     let sample = |x: f64, y: f64| -> Option<[f32; 3]> {
         // Bilinear sample of the source image at pixel-centre coordinates.
@@ -496,6 +538,28 @@ pub fn refine_subpixel(
             let (ca, cb, contrast) = crate::gradient::unmix_pair(fa, fb, p.x, p.y);
             let d = [ca[0] - cb[0], ca[1] - cb[1], ca[2] - cb[2]];
             let dd = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) as f64;
+            // The opacity axis, when the source had one -- used only where the colours over
+            // white cannot tell the faces apart, the one case they do not already carry the
+            // alpha (see `boundary_opt`): white paint on the clear ground, one fade's bands.
+            let src_alpha = src_alpha.filter(|_| contrast < min_contrast);
+            let (ab, da) = match src_alpha {
+                Some((_, fa_)) => {
+                    let (a_a, a_b) = (
+                        fa_.get(e.left as usize).copied().unwrap_or(1.0),
+                        fa_.get(e.right as usize).copied().unwrap_or(1.0),
+                    );
+                    (a_b, a_a - a_b)
+                }
+                None => (1.0, 0.0),
+            };
+            let (dd, contrast) = if src_alpha.is_some() {
+                (
+                    dd + (da * da) as f64,
+                    (contrast * contrast + (da * da) as f64).sqrt(),
+                )
+            } else {
+                (dd, contrast)
+            };
             // Nothing to unmix across: the vertex stays on the grid at grid uncertainty.
             if tl < 1e-9 || contrast < min_contrast {
                 moved.push(p);
@@ -504,7 +568,10 @@ pub fn refine_subpixel(
             }
             let alpha = |x: f64, y: f64| -> Option<f64> {
                 let p = sample(x, y)?;
-                let n = (p[0] - cb[0]) * d[0] + (p[1] - cb[1]) * d[1] + (p[2] - cb[2]) * d[2];
+                let mut n = (p[0] - cb[0]) * d[0] + (p[1] - cb[1]) * d[1] + (p[2] - cb[2]) * d[2];
+                if src_alpha.is_some() {
+                    n += (sample_alpha(x, y) - ab) * da;
+                }
                 Some((n as f64 / dd).clamp(0.0, 1.0))
             };
             let nx = -t.y / tl;

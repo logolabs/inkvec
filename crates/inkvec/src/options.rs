@@ -30,10 +30,10 @@ use std::sync::OnceLock;
 /// ```
 /// let mut opts = inkvec::Options::default();
 /// opts.colors = 16;
-/// opts.cutout = true;
+/// opts.no_background = true;
 /// assert!(opts.validate().is_ok());
 ///
-/// let same = inkvec::Options::from_json(r#"{"colors": 16, "cutout": true}"#).unwrap();
+/// let same = inkvec::Options::from_json(r#"{"colors": 16, "no_background": true}"#).unwrap();
 /// assert_eq!(opts, same);
 /// ```
 ///
@@ -80,13 +80,16 @@ pub struct Options {
     /// No ids or groups, no trailing zeros. Same geometry, typically about a tenth smaller.
     pub minify: bool,
 
-    /// Carry the input's transparency into the SVG: a face the source drew transparent becomes a hole, one drawn at a single opacity keeps it as fill-opacity, and white artwork on a transparent ground survives. Changes nothing for an opaque input. Off by default because over white it opens faint seams along shared edges; use it for artwork that will sit on anything but white.
+    /// Trace transparency natively: each ink is a colour and an opacity, and the transparent ground is an ink of its own, instead of the image being composited onto a matte first. Holes stay holes, white artwork on a transparent ground traces, glows and shadows stay translucent, and a fade is one gradient of colour and opacity. An opaque input traces the same either way. On by default, as on the command line (where the environment variable INKVEC_NATIVE_ALPHA=0 turns the default off); false composites onto a matte first, as releases up to 0.1.3 did.
+    pub native_alpha: bool,
+
+    /// With native_alpha off, carry the input's transparency into the SVG: a face the source drew transparent becomes a hole, one drawn at a single opacity keeps it as fill-opacity, and white artwork on a transparent ground survives. Changes nothing for an opaque input, and nothing with native_alpha on (the default), which already carries the transparency out.
     pub cutout: bool,
 
     /// Scale the fit tolerances with the raster, so a large, simple drawing gets the parameter count of a small one. Trades fidelity for parsimony: small squares can come back as circles and thin rings broken.
     pub content_units: bool,
 
-    /// Shape harmonization (on by default): marks that repeat across the drawing are redrawn from one consensus geometry per cluster, which saves parameters. The known cost is fidelity on fine-line art: on hairlines, thin rings and small rounded details the consensus can displace thin lines by about a pixel (on the 246-icon screen set mean dE00 0.151 off vs 0.299 on). Set it to false for such artwork.
+    /// Shape harmonization (on by default): marks that repeat across the drawing are redrawn from one consensus geometry per cluster, which saves parameters. A mark takes the consensus only where that stays within 0.1 px of the boundary traced for it and costs fewer parameters; a face another face is drawn against, and a fitted circle or rounded rectangle, is never moved. Set it to false to skip the pass.
     pub harmonize: bool,
 
     /// Shape-equivalence threshold for harmonization: the outline similarity (IoU after affine normalisation) above which two marks count as the same shape.
@@ -109,6 +112,7 @@ impl Default for Options {
             margin: a.margin,
             no_background: a.no_background,
             minify: a.minify,
+            native_alpha: a.native_alpha,
             cutout: a.cutout,
             content_units: a.content_units,
             harmonize: a.harmonize,
@@ -181,6 +185,7 @@ impl Options {
             margin,
             no_background,
             minify,
+            native_alpha,
             cutout,
             content_units,
             harmonize,
@@ -196,6 +201,7 @@ impl Options {
             margin,
             no_background,
             minify,
+            native_alpha,
             cutout,
             content_units,
             harmonize,
@@ -362,6 +368,10 @@ mod tests {
         assert_eq!(p["merge"]["default"], 0.035);
         assert_eq!(p["precision"]["exclusiveMinimum"], 0);
         assert_eq!(p["harmonize"]["default"], true);
+        assert_eq!(
+            p["native_alpha"]["default"],
+            inkvec_cli::Args::default().native_alpha
+        );
         for (name, prop) in p.as_object().unwrap() {
             assert!(
                 prop["description"].as_str().is_some_and(|d| !d.is_empty()),

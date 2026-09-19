@@ -9,7 +9,16 @@ import { test } from "node:test";
 
 import * as inkvec from "@logolabs/inkvec";
 import { InkvecError, defaults, optionsSchema, trace, traceRGBA, version } from "@logolabs/inkvec";
-import { ROOT, cargoVersion, fills, rawGlue, sample, samples, whiteDisk } from "./helpers.mjs";
+import {
+  ROOT,
+  cargoVersion,
+  fills,
+  rawGlue,
+  sample,
+  samples,
+  translucentDisk,
+  whiteDisk,
+} from "./helpers.mjs";
 import { decodePng, encodePng } from "./png.mjs";
 
 const rejectsWith = (p, code, pattern) =>
@@ -139,16 +148,31 @@ test("traceRGBA on a PNG's pixels equals trace on the PNG", async () => {
   );
 });
 
-test("cutout: white artwork on a transparent ground keeps its transparency", async () => {
-  const img = whiteDisk(64);
-  const svg = await traceRGBA(img, { cutout: true });
-  assert.equal(await trace(encodePng(img), { cutout: true }), svg, "PNG and pixels agree");
-  const painted = fills(svg).filter((f) => f !== "none");
-  assert.ok(painted.length > 0, `the disk is drawn: ${svg}`);
-  for (const f of painted) {
-    assert.match(f, /^(#fff|#ffffff|white)$/, `only white is painted, found ${f}: ${svg}`);
-  }
-  assert.doesNotMatch(svg, /<rect\b/, `no canvas rectangle: ${svg}`);
+for (const [what, options] of [
+  ["natively (the default)", {}],
+  ["composited, with cutout", { native_alpha: false, cutout: true }],
+]) {
+  test(`white artwork on a transparent ground keeps its transparency ${what}`, async () => {
+    const img = whiteDisk(64);
+    const svg = await traceRGBA(img, options);
+    assert.equal(await trace(encodePng(img), options), svg, "PNG and pixels agree");
+    const painted = fills(svg).filter((f) => f !== "none");
+    assert.ok(painted.length > 0, `the disk is drawn: ${svg}`);
+    for (const f of painted) {
+      assert.match(f, /^(#fff|#ffffff|white)$/, `only white is painted, found ${f}: ${svg}`);
+    }
+    assert.doesNotMatch(svg, /<rect\b/, `no canvas rectangle: ${svg}`);
+  });
+}
+
+test("native_alpha: a translucent disk keeps its opacity; off, it is composited", async () => {
+  const img = translucentDisk(64);
+  assert.equal((await defaults()).native_alpha, true);
+  const native = await traceRGBA(img);
+  assert.match(native, /fill-opacity=/, `own colour at its own opacity: ${native}`);
+  assert.doesNotMatch(native, /<rect\b/, `no canvas rectangle: ${native}`);
+  const composited = await traceRGBA(img, { native_alpha: false });
+  assert.doesNotMatch(composited, /fill-opacity=/, `opaque, composited onto white: ${composited}`);
 });
 
 test("options are checked by the tracer", async () => {

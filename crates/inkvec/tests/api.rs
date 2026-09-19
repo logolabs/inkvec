@@ -143,6 +143,49 @@ fn options_change_the_output() {
     assert_eq!(w.parse::<f64>().unwrap(), 96.0 * 1.5);
 }
 
+/// A blue disc at half opacity on a transparent ground, anti-aliased by 4x4 supersampling.
+fn translucent_disc_rgba(size: u32) -> Vec<u8> {
+    let mut px = Vec::with_capacity((size * size * 4) as usize);
+    let (c, r) = (size as f64 / 2.0, size as f64 * 0.3);
+    for y in 0..size {
+        for x in 0..size {
+            let mut inside = 0u32;
+            for sy in 0..4 {
+                for sx in 0..4 {
+                    let (fx, fy) = (
+                        x as f64 + (sx as f64 + 0.5) / 4.0,
+                        y as f64 + (sy as f64 + 0.5) / 4.0,
+                    );
+                    if (fx - c).hypot(fy - c) < r {
+                        inside += 1;
+                    }
+                }
+            }
+            px.extend_from_slice(&[20, 40, 200, (inside * 128 / 16) as u8]);
+        }
+    }
+    px
+}
+
+#[test]
+fn transparency_is_traced_natively_unless_turned_off() {
+    let px = translucent_disc_rgba(64);
+    let native = inkvec::trace_rgba(&px, 64, 64, &Options::default())
+        .unwrap()
+        .svg;
+    let mut o = Options::default();
+    o.native_alpha = false;
+    let composited = inkvec::trace_rgba(&px, 64, 64, &o).unwrap().svg;
+    // Composited onto white, the disc comes back as an opaque, lighter blue.
+    assert!(!composited.contains("fill-opacity"), "{composited}");
+    if std::env::var_os("INKVEC_NATIVE_ALPHA").is_none() {
+        // Natively, it keeps its own colour at its own opacity.
+        assert!(Options::default().native_alpha);
+        assert!(native.contains("fill-opacity"), "{native}");
+        assert!(!native.contains("<rect"), "{native}");
+    }
+}
+
 #[test]
 fn invalid_options_are_refused_before_any_work() {
     let png = sample("tiny.png");

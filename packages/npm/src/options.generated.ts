@@ -86,11 +86,23 @@ export interface Options {
    */
   minify?: boolean;
   /**
-   * Carry the input's transparency into the SVG: a face the source drew transparent
-   * becomes a hole, one drawn at a single opacity keeps it as fill-opacity, and white
-   * artwork on a transparent ground survives. Changes nothing for an opaque input. Off by
-   * default because over white it opens faint seams along shared edges; use it for artwork
-   * that will sit on anything but white.
+   * Trace transparency natively: each ink is a colour and an opacity, and the transparent
+   * ground is an ink of its own, instead of the image being composited onto a matte first.
+   * Holes stay holes, white artwork on a transparent ground traces, glows and shadows stay
+   * translucent, and a fade is one gradient of colour and opacity. An opaque input traces
+   * the same either way. On by default, as on the command line (where the environment
+   * variable INKVEC_NATIVE_ALPHA=0 turns the default off); false composites onto a matte
+   * first, as releases up to 0.1.3 did.
+   *
+   * @default true
+   */
+  native_alpha?: boolean;
+  /**
+   * With native_alpha off, carry the input's transparency into the SVG: a face the source
+   * drew transparent becomes a hole, one drawn at a single opacity keeps it as fill-
+   * opacity, and white artwork on a transparent ground survives. Changes nothing for an
+   * opaque input, and nothing with native_alpha on (the default), which already carries
+   * the transparency out.
    *
    * @default false
    */
@@ -105,10 +117,10 @@ export interface Options {
   content_units?: boolean;
   /**
    * Shape harmonization (on by default): marks that repeat across the drawing are redrawn
-   * from one consensus geometry per cluster, which saves parameters. The known cost is
-   * fidelity on fine-line art: on hairlines, thin rings and small rounded details the
-   * consensus can displace thin lines by about a pixel (on the 246-icon screen set mean
-   * dE00 0.151 off vs 0.299 on). Set it to false for such artwork.
+   * from one consensus geometry per cluster, which saves parameters. A mark takes the
+   * consensus only where that stays within 0.1 px of the boundary traced for it and costs
+   * fewer parameters; a face another face is drawn against, and a fitted circle or rounded
+   * rectangle, is never moved. Set it to false to skip the pass.
    *
    * @default true
    */

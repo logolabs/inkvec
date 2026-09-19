@@ -82,6 +82,28 @@ CASES = {
                        'fill="#c9754a"/><circle cx="256" cy="256" r="110" fill="none" '
                        'stroke="#ffffff" stroke-width="40"/></svg>',
     "flask_copper": f'<svg {SQ} viewBox="585 550 970 970"><path fill="#c9754a" d="{FLASK}"/></svg>',
+    # No single matte serves both: white meets the ground, and so does black.
+    "panda": f'<svg {SQ} viewBox="0 0 512 512"><circle cx="150" cy="130" r="70" fill="#000000"/>'
+             '<circle cx="362" cy="130" r="70" fill="#000000"/><circle cx="256" cy="290" r="190" '
+             'fill="#ffffff"/><ellipse cx="190" cy="270" rx="40" ry="55" fill="#000000"/>'
+             '<ellipse cx="322" cy="270" rx="40" ry="55" fill="#000000"/></svg>',
+    # A white mark with a soft white glow: translucency that varies, next to paint that is
+    # the matte's own colour.
+    "white_glow": f'<svg {SQ} viewBox="0 0 512 512"><defs><radialGradient id="g">'
+                  '<stop offset="0.45" stop-color="#ffffff" stop-opacity="0.8"/>'
+                  '<stop offset="1" stop-color="#ffffff" stop-opacity="0"/></radialGradient></defs>'
+                  '<circle cx="256" cy="256" r="240" fill="url(#g)"/>'
+                  '<rect x="186" y="186" width="140" height="140" fill="#ffffff"/></svg>',
+    # A flat translucent panel over an opaque disc and over nothing.
+    "translucent_panel": f'<svg {SQ} viewBox="0 0 512 512"><circle cx="220" cy="256" r="180" '
+                         'fill="#c9754a"/><rect x="250" y="120" width="220" height="272" '
+                         'fill="#2b6cb0" fill-opacity="0.5"/></svg>',
+    # A soft shadow under a dark mark.
+    "soft_shadow": f'<svg {SQ} viewBox="0 0 512 512"><defs><filter id="b" x="-50%" y="-50%" '
+                   'width="200%" height="200%"><feGaussianBlur stdDeviation="14"/></filter></defs>'
+                   '<rect x="150" y="170" width="220" height="220" rx="30" fill="#000000" '
+                   'fill-opacity="0.45" filter="url(#b)"/><rect x="130" y="130" width="220" '
+                   'height="220" rx="30" fill="#1f2937"/></svg>',
 }
 
 

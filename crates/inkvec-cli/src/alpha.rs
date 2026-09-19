@@ -492,9 +492,29 @@ pub(crate) fn alpha_source(
     img: &inkvec_trace::Rgba,
     quiet: bool,
     cutout: bool,
+    native: bool,
 ) -> Option<AlphaSource> {
     if !img.data.iter().skip(3).step_by(4).any(|&a| a < 0.999) {
         return None;
+    }
+    if native {
+        // Nothing is chosen and nothing is lost: over white is only how the colour is
+        // written down, and the alpha travels beside it into every stage that unmixes.
+        // The output carries the transparency out, as the cutout does.
+        let (flat, alpha) = flatten_over(img, [1.0, 1.0, 1.0]);
+        if !quiet {
+            let clear = alpha.iter().filter(|&&a| a < 0.05).count();
+            eprintln!(
+                "  alpha         native, {:.0}% of the image transparent",
+                100.0 * clear as f64 / alpha.len().max(1) as f64
+            );
+        }
+        return Some(AlphaSource {
+            flat,
+            alpha,
+            matte: [1.0, 1.0, 1.0],
+            cutout: true,
+        });
     }
     let (chosen, _, lost_to_white) = choose_matte(img);
     let swallowed = !cutout && lost_to_white > LOST_TO_WHITE;

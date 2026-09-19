@@ -239,3 +239,48 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> JsValue {
 pub fn version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn contract_input(name: &str) -> Vec<u8> {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../bindings/contract")
+            .join(name);
+        std::fs::read(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()))
+    }
+
+    /// The Space's positional export, given every knob it takes at the facade's default,
+    /// writes what the facade writes -- the JSON exports and the page cannot drift apart.
+    #[test]
+    fn the_positional_trace_is_the_facade_at_its_defaults() {
+        let d = inkvec::Options::default();
+        for name in ["tiny.png", "white_on_clear.png"] {
+            let png = contract_input(name);
+            let positional = trace_inner(
+                &png,
+                d.precision,
+                d.min_area,
+                d.colors as usize,
+                d.merge as f32,
+                d.max_dim as usize,
+                d.time_budget,
+                d.no_background,
+                d.minify,
+                d.margin,
+                d.content_units,
+                d.cutout,
+            )
+            .unwrap_or_else(|_| panic!("{name}: the positional trace failed"));
+            assert_eq!(positional, inkvec::trace(&png, &d).unwrap().svg, "{name}");
+        }
+    }
+
+    #[test]
+    fn the_json_surface_reads_the_facade() {
+        assert_eq!(default_options_json(), inkvec::Options::default().to_json());
+        assert_eq!(options_schema_json(), inkvec::options_schema_json());
+        assert_eq!(build_target(), inkvec::build_target());
+    }
+}

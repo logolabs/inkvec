@@ -7,6 +7,8 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-09-20
+
 ### Changed
 
 - **Transparency is traced natively, by default.** An ink is a colour and an opacity and the

@@ -498,6 +498,9 @@ struct Problem<'a> {
     pieces: Vec<Piece>,
     head: Vec<i32>,
     scratch: Scratch,
+    /// The source's alpha per pixel and each face's opacity, when alpha is a fourth
+    /// channel of the data term.
+    alpha: Option<(&'a [f32], &'a [f32])>,
     w_kink: f64,
     w_anchor: f64,
     /// Whether junction pixels take part in the data term.
@@ -682,6 +685,22 @@ impl Problem<'_> {
             let cl = self.face[e.left as usize].color_at(px, py);
             let cr = self.face[e.right as usize].color_at(px, py);
             let contrast = (0..3).map(|k| (cl[k] - cr[k]).abs()).fold(0.0f32, f32::max);
+            // The opacities either side, when alpha is a channel -- and only where the colour
+            // over white has no contrast to measure: white paint against the clear ground,
+            // two bands of one fade. Anywhere else the colour over white already carries
+            // the alpha (`W = 1 - a` for black on clear) and counting it again as a fourth
+            // channel moved every such edge: 0.07 px on `material-icons/table_rows`.
+            let opac = self.alpha.filter(|_| contrast < MIN_CONTRAST).map(|(img_a, fa)| {
+                (
+                    fa.get(e.left as usize).copied().unwrap_or(1.0),
+                    fa.get(e.right as usize).copied().unwrap_or(1.0),
+                    img_a[cell],
+                )
+            });
+            let contrast = match opac {
+                Some((al, ar, _)) => contrast.max((al - ar).abs()),
+                None => contrast,
+            };
             if contrast < MIN_CONTRAST {
                 continue;
             }
@@ -730,6 +749,12 @@ impl Problem<'_> {
                 let (l, r_) = (cl[k] as f64, cr[k] as f64);
                 let c = a * l + (1.0 - a) * r_;
                 let r = c - t[k] as f64;
+                total += r * r;
+                dda += 2.0 * r * (l - r_);
+            }
+            if let Some((al, ar, ta)) = opac {
+                let (l, r_) = (al as f64, ar as f64);
+                let r = a * l + (1.0 - a) * r_ - ta as f64;
                 total += r * r;
                 dda += 2.0 * r * (l - r_);
             }
@@ -1021,6 +1046,18 @@ pub fn optimise(
     face: &[FillModel],
     budget_ms: Option<u64>,
 ) -> Option<Report> {
+    optimise_alpha(map, rgb, face, budget_ms, None)
+}
+
+/// [`optimise`] with alpha as a fourth channel of the data term: `alpha` is the source's
+/// alpha per pixel and each face's opacity. With `None` this is exactly [`optimise`].
+pub fn optimise_alpha(
+    map: &mut PlanarMap,
+    rgb: &[[f32; 3]],
+    face: &[FillModel],
+    budget_ms: Option<u64>,
+    alpha: Option<(&[f32], &[f32])>,
+) -> Option<Report> {
     let (w, h) = (map.width, map.height);
     if w == 0 || h == 0 || map.edges.is_empty() || rgb.len() < w * h {
         return None;
@@ -1063,6 +1100,7 @@ pub fn optimise(
             pieces: Vec::with_capacity(4096),
             head: vec![-1; w * h],
             scratch: Scratch::default(),
+            alpha,
             w_kink: 1.0,
             w_anchor: 0.0,
             junctions: std::env::var("INKVEC_BOPT_JUNC").is_ok_and(|v| v != "0"),
@@ -1244,6 +1282,7 @@ mod tests {
             pieces: Vec::new(),
             head: vec![-1; 9],
             scratch: Scratch::default(),
+            alpha: None,
             w_kink: 0.0,
             w_anchor: 0.0,
             junctions: true,
@@ -1312,6 +1351,7 @@ mod tests {
             pieces: Vec::new(),
             head: vec![-1; 9],
             scratch: Scratch::default(),
+            alpha: None,
             w_kink: 0.0,
             w_anchor: 0.0,
             junctions: false,
@@ -1405,6 +1445,7 @@ mod tests {
             pieces: Vec::new(),
             head: vec![-1; 9],
             scratch: Scratch::default(),
+            alpha: None,
             w_kink: 0.7,
             w_anchor: 0.3,
             junctions: true,

@@ -47,6 +47,10 @@ pub struct Args {
     /// Punch the faces the source drew transparent out of the faces above them, so the
     /// SVG carries the input's holes instead of painting them.
     pub cutout: bool,
+    /// Trace transparency natively: inks carry an opacity, the clear ground is an ink, and
+    /// alpha is a fourth channel wherever the tracer unmixes. Implies `cutout`'s output.
+    /// An opaque input traces exactly as without it.
+    pub native_alpha: bool,
     /// No ids or groups, no trailing zeros. Same geometry, typically about a tenth
     /// smaller.
     pub minify: bool,
@@ -138,6 +142,7 @@ impl Default for Args {
             simplify_faint: false,
             layers: false,
             cutout: false,
+            native_alpha: std::env::var_os("INKVEC_NATIVE_ALPHA").is_some_and(|v| v != "0"),
             minify: false,
             bilevel: false,
             no_gradients: false,
@@ -251,6 +256,11 @@ OPTIONS:
                             none of that is visible and the seams it opens along shared
                             edges are: objective 0.4123 -> 0.4235 on the 246-icon screen
                             set. Use it for artwork that will sit on anything but white
+        --native-alpha      Trace transparency natively (experimental): every ink has an
+                            opacity, the transparent ground is an ink, and alpha is a
+                            fourth channel wherever edges are unmixed, so nothing is
+                            composited onto a matte first. Output as --cutout. An opaque
+                            input traces exactly as without it
         --minify            No ids or groups, no trailing zeros. Same geometry,
                             typically about a tenth smaller
         --content-units     Scale the fit tolerances (sigma, precision, lambda) with the
@@ -388,6 +398,7 @@ fn parse_args_from(mut it: impl Iterator<Item = String>) -> Result<Args, String>
             "--simplify-faint" => a.simplify_faint = true,
             "--layers" => a.layers = true,
             "--cutout" => a.cutout = true,
+            "--native-alpha" => a.native_alpha = true,
             "--minify" => a.minify = true,
             "--bilevel" => a.bilevel = true,
             "--lossy" => {

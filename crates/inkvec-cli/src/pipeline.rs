@@ -323,6 +323,7 @@ pub(crate) fn color_options(args: &Args) -> ColorOptions {
         // that, treating it as "not known to be lossy" keeps a clean intake untouched.
         lossy_intake: args.lossy == inkvec_sr::Mode::On,
         alpha_inks: args.cutout,
+        native_alpha: args.native_alpha,
         simplify_faint: args.simplify_faint,
         deadline,
         boundary_ms,
@@ -776,11 +777,26 @@ fn finish_color(
     let layers = alpha::recover_layers(args, &map, &face_color, &fills, &pal, &traced_labels);
 
     let FaceAlpha {
-        clear,
-        opacity,
+        mut clear,
+        mut opacity,
         matte,
         alpha_ramps,
     } = alpha::face_alpha(img, args, alpha_src, &face_color, &traced_labels, w, h);
+    // Traced natively, a face's opacity is its ink's: the palette found the ink *as* a
+    // colour at an opacity, so a band of a fade is one opacity by construction, where the
+    // flatness test above would call it varying and bake it opaque. The ramp fit stays for
+    // the faces the palette did find opaque.
+    if args.native_alpha && alpha_src.is_some() {
+        for (f, &ink) in face_color.iter().enumerate() {
+            let a = pal.alpha.get(ink).copied().unwrap_or(1.0);
+            if let Some(c) = clear.get_mut(f) {
+                *c = a < 0.05;
+            }
+            if let Some(o) = opacity.get_mut(f) {
+                *o = if a < 0.05 || a > 0.98 { 1.0 } else { a };
+            }
+        }
+    }
 
     // Both forms of the document, costed against each other.
     //
@@ -799,6 +815,7 @@ fn finish_color(
             &face_color,
             &clear,
             args.cutout,
+            args.native_alpha,
             args.no_background,
             &opacity,
             &alpha_ramps,

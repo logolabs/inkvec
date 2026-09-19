@@ -560,6 +560,8 @@ pub(crate) fn emit_color(
     clear: &[bool],
     // Punch those faces out of the faces above them (`--cutout`).
     cutout: bool,
+    // Transparency was traced natively: a clear face is the ground, never paint.
+    native: bool,
     no_background: bool,
     // What the source drew each face at, 1.0 for opaque. Below it, the face carries
     // `fill-opacity` and its colour is un-matted.
@@ -835,6 +837,16 @@ pub(crate) fn emit_color(
         }
         if is_clear {
             if !sure {
+                // Traced natively, a clear face is the ground itself, and painting it would
+                // put a matte colour where the source had nothing. Drop it and punch it out
+                // of the ancestors that do contain it; without native alpha the old rule
+                // stands and it is left as it was.
+                if native {
+                    dropped[c] = true;
+                    for p in chain {
+                        holes[p].push(c);
+                    }
+                }
                 continue;
             }
             // Without the cutout the old rule stands: drop only what has nothing painted
@@ -861,6 +873,35 @@ pub(crate) fn emit_color(
         } else {
             thin[c] = 1.0;
         }
+    }
+    // A face is written with its holes under even-odd, and even-odd counts crossings: a
+    // hole inside another hole of the same face fills back in, and the same hole twice
+    // cancels. Every clear or translucent face is punched out of *all* its ancestors, so a
+    // stack of them -- the bands of a fade -- gave the outermost band every inner outline
+    // as a hole and painted alternate bands twice over. A hole already inside another of
+    // the face's holes is removed with it and needs no hole of its own.
+    for p in 0..holes.len() {
+        if holes[p].len() < 2 {
+            continue;
+        }
+        let set: std::collections::HashSet<usize> = holes[p].iter().copied().collect();
+        let mut seen = std::collections::HashSet::new();
+        holes[p].retain(|&h| {
+            if !seen.insert(h) {
+                return false;
+            }
+            let mut k = h;
+            while let Some(q) = parent[k] {
+                if q == p {
+                    break;
+                }
+                if set.contains(&q) {
+                    return false;
+                }
+                k = q;
+            }
+            true
+        });
     }
     let drop = |i: usize| -> bool { dropped[i] };
     // A dropped face must not take its children with it. Walk up past any dropped

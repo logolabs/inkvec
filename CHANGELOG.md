@@ -32,6 +32,12 @@ API in particular should be treated as unstable release to release).
   ends and radius rounded separately and bulged by up to 0.76 px; a face with a hole drew its
   own outline from the traced ring rather than its primitive. A ring with one hole of uniform
   width is written as one stroked shape.
+- **The same input gives the same SVG on every machine.** Without `--time-budget`, the
+  boundary solve still stopped on a fixed 1200 ms wall clock (and the opt-in decode stage on
+  600 ms), so a slower CPU, a loaded CI runner or WebAssembly could write different bytes for
+  the same image. Only a caller's time budget runs a clock now; otherwise the solve stops on
+  its iteration count. No output changes on the 246-icon screen set or on 1024 px rasters;
+  two of eight complex 2048 px emoji change, for at most 1.4 s more time.
 - **Nested holes.** A hole inside another hole of the same face is no longer written twice
   (even-odd filled it back in).
 - **White artwork on a transparent ground** under `--no-native-alpha` no longer traces to a

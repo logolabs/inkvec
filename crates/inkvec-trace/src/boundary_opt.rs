@@ -1084,12 +1084,17 @@ pub fn optimise_alpha(
     // screen split against 48's 0.4142 -- so the step schedule drifts once the
     // residual stops driving it, and more iterations are not better iterations.
     //
-    // Nearly free: 573 ms/icon to 578 ms, and the 1200 ms budget below was never
-    // the binding constraint. Measuring at a 60 s budget gave the same 0.4142.
+    // Nearly free: 573 ms/icon to 578 ms. The iteration count is the bound. A wall clock
+    // runs only under a caller's time budget: the fixed 1200 ms one this had never bound
+    // on the corpus (a 60 s budget gave the same 0.4142) and made the answer depend on how
+    // fast the machine was -- WebAssembly or a loaded CI runner stopped sooner and wrote
+    // different bytes. `INKVEC_BOPT_MS` still forces one.
     let iters = env_usize("INKVEC_BOPT_ITERS", 48);
-    let budget = budget_ms
-        .map(|b| b as u128)
-        .unwrap_or_else(|| env_usize("INKVEC_BOPT_MS", 1200) as u128);
+    let budget: Option<u128> = budget_ms.map(u128::from).or_else(|| {
+        std::env::var("INKVEC_BOPT_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+    });
     let dbg = std::env::var_os("INKVEC_BOPTDBG").is_some();
 
     let (report, pos) = {
@@ -1132,7 +1137,7 @@ pub fn optimise_alpha(
         let mut done = 0usize;
 
         for it in 0..iters {
-            if clock.elapsed().as_millis() > budget {
+            if budget.is_some_and(|b| clock.elapsed().as_millis() > b) {
                 break;
             }
             let dmax = dir.iter().map(|d| d.x.hypot(d.y)).fold(0.0f64, f64::max);

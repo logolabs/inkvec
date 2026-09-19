@@ -212,7 +212,8 @@ fn verify_weights(path: &std::path::Path) -> Result<(), Box<dyn std::error::Erro
 }
 
 /// Auto-pull the restorer ONNX weights from Hugging Face if not already present, verifying the
-/// result against [`EXPECTED_SHA256`] in both cases (already present, or just downloaded).
+/// result against this crate's expected SHA256 in both cases (already present, or just
+/// downloaded).
 pub fn pull_onnx_weights(dest: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     if dest.is_file() {
         return verify_weights(dest);

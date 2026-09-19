@@ -498,6 +498,9 @@ struct Problem<'a> {
     pieces: Vec<Piece>,
     head: Vec<i32>,
     scratch: Scratch,
+    /// The source's alpha per pixel and each face's opacity, when alpha is a fourth
+    /// channel of the data term.
+    alpha: Option<(&'a [f32], &'a [f32])>,
     w_kink: f64,
     w_anchor: f64,
     /// Whether junction pixels take part in the data term.
@@ -682,6 +685,25 @@ impl Problem<'_> {
             let cl = self.face[e.left as usize].color_at(px, py);
             let cr = self.face[e.right as usize].color_at(px, py);
             let contrast = (0..3).map(|k| (cl[k] - cr[k]).abs()).fold(0.0f32, f32::max);
+            // The opacities either side, when alpha is a channel -- and only where the colour
+            // over white has no contrast to measure: white paint against the clear ground,
+            // two bands of one fade. Anywhere else the colour over white already carries
+            // the alpha (`W = 1 - a` for black on clear) and counting it again as a fourth
+            // channel moved every such edge: 0.07 px on `material-icons/table_rows`.
+            let opac = self
+                .alpha
+                .filter(|_| contrast < MIN_CONTRAST)
+                .map(|(img_a, fa)| {
+                    (
+                        fa.get(e.left as usize).copied().unwrap_or(1.0),
+                        fa.get(e.right as usize).copied().unwrap_or(1.0),
+                        img_a[cell],
+                    )
+                });
+            let contrast = match opac {
+                Some((al, ar, _)) => contrast.max((al - ar).abs()),
+                None => contrast,
+            };
             if contrast < MIN_CONTRAST {
                 continue;
             }
@@ -730,6 +752,12 @@ impl Problem<'_> {
                 let (l, r_) = (cl[k] as f64, cr[k] as f64);
                 let c = a * l + (1.0 - a) * r_;
                 let r = c - t[k] as f64;
+                total += r * r;
+                dda += 2.0 * r * (l - r_);
+            }
+            if let Some((al, ar, ta)) = opac {
+                let (l, r_) = (al as f64, ar as f64);
+                let r = a * l + (1.0 - a) * r_ - ta as f64;
                 total += r * r;
                 dda += 2.0 * r * (l - r_);
             }
@@ -1021,6 +1049,18 @@ pub fn optimise(
     face: &[FillModel],
     budget_ms: Option<u64>,
 ) -> Option<Report> {
+    optimise_alpha(map, rgb, face, budget_ms, None)
+}
+
+/// [`optimise`] with alpha as a fourth channel of the data term: `alpha` is the source's
+/// alpha per pixel and each face's opacity. With `None` this is exactly [`optimise`].
+pub fn optimise_alpha(
+    map: &mut PlanarMap,
+    rgb: &[[f32; 3]],
+    face: &[FillModel],
+    budget_ms: Option<u64>,
+    alpha: Option<(&[f32], &[f32])>,
+) -> Option<Report> {
     let (w, h) = (map.width, map.height);
     if w == 0 || h == 0 || map.edges.is_empty() || rgb.len() < w * h {
         return None;
@@ -1044,12 +1084,17 @@ pub fn optimise(
     // screen split against 48's 0.4142 -- so the step schedule drifts once the
     // residual stops driving it, and more iterations are not better iterations.
     //
-    // Nearly free: 573 ms/icon to 578 ms, and the 1200 ms budget below was never
-    // the binding constraint. Measuring at a 60 s budget gave the same 0.4142.
+    // Nearly free: 573 ms/icon to 578 ms. The iteration count is the bound. A wall clock
+    // runs only under a caller's time budget: the fixed 1200 ms one this had never bound
+    // on the corpus (a 60 s budget gave the same 0.4142) and made the answer depend on how
+    // fast the machine was -- WebAssembly or a loaded CI runner stopped sooner and wrote
+    // different bytes. `INKVEC_BOPT_MS` still forces one.
     let iters = env_usize("INKVEC_BOPT_ITERS", 48);
-    let budget = budget_ms
-        .map(|b| b as u128)
-        .unwrap_or_else(|| env_usize("INKVEC_BOPT_MS", 1200) as u128);
+    let budget: Option<u128> = budget_ms.map(u128::from).or_else(|| {
+        std::env::var("INKVEC_BOPT_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+    });
     let dbg = std::env::var_os("INKVEC_BOPTDBG").is_some();
 
     let (report, pos) = {
@@ -1063,6 +1108,7 @@ pub fn optimise(
             pieces: Vec::with_capacity(4096),
             head: vec![-1; w * h],
             scratch: Scratch::default(),
+            alpha,
             w_kink: 1.0,
             w_anchor: 0.0,
             junctions: std::env::var("INKVEC_BOPT_JUNC").is_ok_and(|v| v != "0"),
@@ -1091,7 +1137,7 @@ pub fn optimise(
         let mut done = 0usize;
 
         for it in 0..iters {
-            if clock.elapsed().as_millis() > budget {
+            if budget.is_some_and(|b| clock.elapsed().as_millis() > b) {
                 break;
             }
             let dmax = dir.iter().map(|d| d.x.hypot(d.y)).fold(0.0f64, f64::max);
@@ -1244,6 +1290,7 @@ mod tests {
             pieces: Vec::new(),
             head: vec![-1; 9],
             scratch: Scratch::default(),
+            alpha: None,
             w_kink: 0.0,
             w_anchor: 0.0,
             junctions: true,
@@ -1312,6 +1359,7 @@ mod tests {
             pieces: Vec::new(),
             head: vec![-1; 9],
             scratch: Scratch::default(),
+            alpha: None,
             w_kink: 0.0,
             w_anchor: 0.0,
             junctions: false,
@@ -1405,6 +1453,7 @@ mod tests {
             pieces: Vec::new(),
             head: vec![-1; 9],
             scratch: Scratch::default(),
+            alpha: None,
             w_kink: 0.7,
             w_anchor: 0.3,
             junctions: true,

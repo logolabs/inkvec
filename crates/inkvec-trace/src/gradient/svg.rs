@@ -10,6 +10,52 @@ fn interp_attr(interp: Interp) -> &'static str {
     }
 }
 
+/// Render a fade -- the opacity profile `alpha`, whose stops are greys equal to the
+/// opacity, and the colour profile `color` on the same geometry and stop offsets -- as one
+/// gradient carrying `stop-color` and `stop-opacity` at each stop: the geometry
+/// [`fill_to_svg`] writes. Returns the `<defs>` fragment and the `fill` value; a flat
+/// opacity profile is a plain colour, and the caller writes its `fill-opacity`.
+pub fn fade_to_svg(alpha: &FillModel, color: &FillModel, id: &str) -> (String, String) {
+    let stops = |m: &FillModel| -> Vec<[f32; 3]> {
+        match m {
+            FillModel::Flat(c) => vec![*c],
+            FillModel::Linear { c0, c1, mids, .. } | FillModel::Radial { c0, c1, mids, .. } => {
+                let mut v = vec![*c0];
+                v.extend(mids.iter().map(|m| m.1));
+                v.push(*c1);
+                v
+            }
+        }
+    };
+    let (alphas, colours) = (stops(alpha), stops(color));
+    if !alpha.is_gradient() {
+        return (String::new(), to_hex(colours[0]));
+    }
+    let (defs, attr) = fill_to_svg(alpha, id);
+    // `fill_to_svg` wrote one `stop-color="#rrggbb"` per stop, in stop order: the grey that
+    // stood for the opacity. Replace each with that stop's colour and opacity.
+    let mut out = String::with_capacity(defs.len() + 32 * alphas.len());
+    let mut rest = defs.as_str();
+    let mut k = 0usize;
+    while let Some(i) = rest.find("stop-color=\"#") {
+        out.push_str(&rest[..i]);
+        let a = alphas.get(k).map_or(1.0, |g| g[0]).clamp(0.0, 1.0);
+        let c = colours
+            .get(k)
+            .or(colours.last())
+            .copied()
+            .unwrap_or([1.0; 3]);
+        out.push_str(&format!(
+            "stop-color=\"{}\" stop-opacity=\"{a:.3}\"",
+            to_hex(c)
+        ));
+        rest = &rest[i + "stop-color=\"#rrggbb\"".len()..];
+        k += 1;
+    }
+    out.push_str(rest);
+    (out, attr)
+}
+
 /// Render a fill as SVG: the `<defs>` fragment it needs (empty for a flat colour) and the
 /// value of the `fill` attribute that references it.
 ///

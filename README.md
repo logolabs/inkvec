@@ -11,6 +11,7 @@
   <a href="LICENSE"><img alt="Apache-2.0" src="https://img.shields.io/badge/licence-Apache--2.0-blue"></a>
   <a href="https://huggingface.co/spaces/logolabs/inkvec"><img alt="demo" src="https://img.shields.io/badge/🤗_demo-HuggingFace-orange"></a>
   <a href="https://huggingface.co/Logolabs/inkvec-denoiser-001"><img alt="model" src="https://img.shields.io/badge/model-inkvec--denoiser--001-yellow"></a>
+  <a href="https://huggingface.co/Logolabs/inkvec-sr-001"><img alt="model" src="https://img.shields.io/badge/model-inkvec--sr--001-yellow"></a>
 </p>
 
 Inkvec reads a PNG, JPEG, WebP, GIF, BMP or TIFF and writes an SVG whose geometry is decided by the evidence in the pixels:
@@ -21,6 +22,16 @@ Inkvec reads a PNG, JPEG, WebP, GIF, BMP or TIFF and writes an SVG whose geometr
 - The number of coordinates is chosen by **minimum description length** — not a tolerance slider you have to guess at.
 
 Most tracers spend points wherever their curve-fit tolerance lets them. Inkvec spends them where the artist would have: one path per region, a circle where there is a circle, shared edges between shapes that never drift apart.
+
+## Who it's for
+
+Flat artwork — logos, icons, emoji, illustrations — and two readers of the result at once: whoever looks at the SVG, and whoever has to edit it later.
+
+- **A designer opening the file in Figma or Illustrator.** A circle comes back as a `<circle>` and a rounded rectangle as a `<rect>`. Neighbouring shapes of one flat colour are one compound path, the way an artist draws a word. Shapes are stacked rather than cut into a jigsaw, so moving one does not open a hole in the one behind it. A smooth ramp is a real gradient, and a transparent area is still transparent. On the 246-icon regression set the file carries 1.48× the parameters of the artist's own SVG. What tracing cannot give back: layer names (ids are colour names such as `dark-grey-6`), live text (lettering comes back as outlines), and stroke widths you can drag — unless the drawing uses uniform strokes and you pass `--strokes`.
+- **A developer shipping a smaller asset.** On the 21 comparison cases below, Inkvec writes 4.4× fewer coordinates than VTracer's defaults at a tenth of the colour error, and `--minify` takes about another 10% off the file. The price is time: about a second per graphic where VTracer takes 0.04 s, so trace at build time, not per request.
+- **A brand team that needs the logo exact.** Boundaries land within ~0.05 px on analytic test shapes, and on the regression set the mean colour error is dE00 0.148 (median 0.110; around 1.0 is where a trained eye starts to see a difference). A trace is still a reconstruction from pixels, not a recovery of the source file: if the original vector exists, use it. The colours written are the ones measured in the image, so whatever a JPEG or a screenshot did to them comes along — check them against your brand values.
+
+Not for photographs, text you need to edit as text, or pencil and brush work; see [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md).
 
 ---
 
@@ -63,7 +74,7 @@ Per-case coordinate count over the same 21 cases, from the same script and data 
   <img src="docs/assets/geometry-overlay.png" width="680" alt="Geometry overlay: Inkvec's traced outline sits on the source outline everywhere the others drift. Three image classes: brand logo, icon, emoji.">
 </p>
 
-> **On the regression corpus** (246 icons from lucide, material-icons, simple-icons, noto-emoji, openmoji, twemoji — the set CI gates on): **mean dE00 0.299**, 1.46× the parameters a human author would use. That mean is a family macro-average and is outlier-driven, so read it next to the **median (per-item) 0.125** — p10 0.024, p90 0.612, worst 5.72, and 13 of the 246 cases above dE00 1.0. The typical icon sits at ~0.125, and the mean is roughly 2.4× the median because a small tail pulls it up. (An earlier 0.149 figure came from a pre-release snapshot that was not reproducible; the baseline was re-recorded against the reproducible release build — see [`CHANGELOG.md`](CHANGELOG.md).) Source: [`bench/gate/baseline.json`](bench/gate/baseline.json).
+> **On the regression corpus** (246 icons from lucide, material-icons, simple-icons, noto-emoji, openmoji, twemoji — the set CI gates on), with the current defaults: **mean dE00 0.148**, 1.48× the parameters a human author would use. That mean is a family macro-average, so read it next to the **median (per-item) 0.110** — p10 0.023, p90 0.389, worst 0.69 (`noto-emoji/emoji_u1f9d1_1f3fd_200d_1f91d_200d_1f9d1_1f3ff`), none of the 246 above dE00 1.0. Releases up to 0.1.3 measured 0.299 on the same set: they composited transparent input onto white before tracing, and their shape harmonization was not held to the traced boundary (see [Shape harmonization](#shape-harmonization-on-by-default)). Source: [`bench/gate/baseline.json`](bench/gate/baseline.json).
 
 ### Damaged input: JPEG, WebP, AI-decoder output
 
@@ -132,8 +143,22 @@ inkvec <input> [-o <output.svg>] [OPTIONS]
 | `--time-budget <s>` | 0 | Advisory wall-clock budget; trace is still correct if it runs out. |
 | `--no-background` | off | Drop the face that paints the whole canvas. |
 | `--minify` | off | No ids, no groups, no trailing zeros — ~10% smaller, identical geometry. |
+| `--no-native-alpha` | off | Composite transparent input onto a matte before tracing, as releases up to 0.1.3 did. |
+| `--no-harmonize` | off | Skip shape harmonization (see below). |
 
 Run `inkvec --help` for the full list.
+
+### Transparency (native)
+
+A transparent PNG is traced as it is, not composited onto white first. Every ink is a colour and an opacity, and the transparent ground is an ink of its own, so holes stay holes, a white mark on a transparent ground traces like any other, a translucent panel keeps its `fill-opacity`, and a glow, halo or soft fade becomes one gradient of `stop-color` and `stop-opacity`. Two inks count as one only if they look the same over white and over mid-grey; for opaque colours that is plain OKLab distance, so an opaque input traces exactly as it did before.
+
+Measured on the 246-icon screen set as the mean absolute pixel error of the rendered SVG against the artist's file, over a dark ground and on the alpha channel: 0.063 and 0.069 for the composite-onto-white path, 0.0017 and 0.0031 now. On the nine corpus icons with real interior translucency (steam, glass, halos) the dark-ground error falls from 0.046 to 0.0077. `--no-native-alpha` restores the old path.
+
+### Shape harmonization (on by default)
+
+After fitting, marks that repeat across the drawing — a run of identical tabs, segmented rings, tiled glyphs — are matched by affine-normalized outline similarity (IoU threshold `--harmonize-threshold`, default 0.92) and redrawn from one consensus geometry per cluster. The pass exists to save parameters on drawings with genuinely repeated compound shapes.
+
+The clustering compares 48×48 masks, where a line a pixel out of place barely changes the overlap, so on its own it would stamp one shape's geometry over near-misses. Each member is therefore held to its own evidence: it takes the consensus only if that lands within **0.1 px** of the boundary it was traced at (solved against colour and, on a transparent ground, against alpha) and costs fewer parameters than its own drawing. A face that another face is drawn against — one punched out of the faces below it (translucent, faded, a clear counter) or one with a translucent face sitting in its hole — is never moved, since moving one side of the pair would open a gap onto the ground; nor is a ring written as a fitted circle or rounded rectangle, which is already exact. Releases up to 0.1.3 had none of these checks, and there harmonization raised mean dE00 on the screen set from 0.151 to 0.299 to save 0.6% of the parameters. Guarded, it changes 2 of the 246 icons, both cheaper and neither worse. `--no-harmonize` turns it off.
 
 ---
 

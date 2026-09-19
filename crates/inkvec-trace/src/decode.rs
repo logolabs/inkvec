@@ -111,6 +111,9 @@ const MAX_RING_POINTS: usize = 512;
 /// thousandth of an objective.
 const PIXELS_PER_UNKNOWN: usize = 4;
 pub(crate) const MAX_BBOX_PIXELS: usize = 20_000;
+/// The stage's slice of wall-clock time when the caller set a time budget. Without one the
+/// stage has no clock at all; see [`decode_faces`].
+pub(crate) const BUDGETED_MS: f64 = 600.0;
 /// Levenberg schedule.
 const GN_ITERS: usize = 14;
 const FD_STEP: f64 = 0.01;
@@ -567,9 +570,19 @@ pub fn decode_faces(
     labels: &[u16],
     face_fill: &mut [FillFit],
     lambda: f64,
+    budget_ms: Option<f64>,
 ) -> Option<Report> {
     let t0 = Instant::now();
-    let budget = env_f64("INKVEC_DECODE_MS", 600.0);
+    // A wall clock makes the answer depend on the machine: the same image traced in
+    // WebAssembly, on a slower CPU or under load stops sooner and writes different bytes.
+    // So the clock runs only under a caller's time budget (see `BUDGETED_MS`); otherwise
+    // what bounds the stage is the candidate list itself, faces of at most
+    // `MAX_BBOX_PIXELS` with a handful of orders each. `INKVEC_DECODE_MS` still forces one.
+    let budget = std::env::var("INKVEC_DECODE_MS")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .or(budget_ms);
+    let out_of_time = |t0: &Instant| budget.is_some_and(|b| t0.elapsed().as_secs_f64() * 1e3 > b);
     let leak_gate = env_f64("INKVEC_DECODE_LEAK", LEAK_GATE);
     let dbg = std::env::var("INKVEC_DECODEDBG").is_ok();
     let (w, h) = (map.width, map.height);
@@ -607,7 +620,7 @@ pub fn decode_faces(
     let mut mark: Vec<bool> = Vec::new();
 
     for f in cand {
-        if t0.elapsed().as_secs_f64() * 1e3 > budget {
+        if out_of_time(&t0) {
             break;
         }
         let Some((ring, spans)) = ring_of(map, &order[f]) else {
@@ -703,7 +716,7 @@ pub fn decode_faces(
         // ---- decode, once per candidate order, and keep the best ------------------------
         let mut winner: Option<(Vec<Point>, Vec<usize>, f64)> = None;
         for (cuts, verts) in orders {
-            if t0.elapsed().as_secs_f64() * 1e3 > budget {
+            if out_of_time(&t0) {
                 break;
             }
             if !is_polygonal(&pts, &verts, &cuts) {

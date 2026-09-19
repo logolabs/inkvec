@@ -47,7 +47,9 @@ pub fn threads_available() -> bool {
 /// defaults 0.1, 2, 64, 0.035 when unsure; the merge default is
 /// `inkvec_trace::color::DEFAULT_MERGE_DISTANCE`); `max_dim` and `time_budget` bound the
 /// work; `no_background`, `minify`, `margin`, `content_units` shape the output. `max_dim = 0`
-/// means no cap.
+/// means no cap. `cutout` is `--cutout`: an input's transparency is carried into the SVG
+/// (holes stay holes, a flat wash keeps its opacity); it changes nothing for an opaque
+/// input.
 #[wasm_bindgen]
 #[allow(clippy::too_many_arguments)]
 pub fn trace(
@@ -62,6 +64,7 @@ pub fn trace(
     minify: bool,
     margin: f64,
     content_units: bool,
+    cutout: bool,
 ) -> Result<String, JsValue> {
     console_error_panic_hook::set_once();
     let result = std::panic::catch_unwind(|| {
@@ -77,6 +80,7 @@ pub fn trace(
             minify,
             margin,
             content_units,
+            cutout,
         )
     });
     match result {
@@ -106,6 +110,7 @@ fn trace_inner(
     minify: bool,
     margin: f64,
     content_units: bool,
+    cutout: bool,
 ) -> Result<String, JsValue> {
     // `usize` parameters wrap silently across the boundary; clamp them before the tracer
     // sees them so `colors = -1` does not become unbounded palette work and `max_dim = -1`
@@ -138,6 +143,7 @@ fn trace_inner(
         minify,
         margin,
         content_units,
+        cutout,
         quiet: true,
         ..Default::default()
     };

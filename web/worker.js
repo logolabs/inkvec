@@ -15,7 +15,7 @@
 // import alone busts the JavaScript and never the WebAssembly — the wrong way round, since
 // the bindings rarely change and the wasm changes on every build. Bump it when `pkg/` or
 // `pkg-threads/` is rebuilt.
-const V = "v=7";
+const V = "v=11";
 
 const isolated = typeof crossOriginIsolated !== "undefined" && crossOriginIsolated;
 
@@ -63,7 +63,8 @@ onmessage = async (e) => {
   const t0 = performance.now();
   try {
     const svg = mod.trace(bytes, o.precision, o.min_area, o.colors, o.merge, o.max_dim,
-                          o.time_budget, o.no_background, o.minify, o.margin, o.content_units);
+                          o.time_budget, o.no_background, o.minify, o.margin, o.content_units,
+                          o.cutout);
     postMessage({ type: "done", id, svg, ms: performance.now() - t0 });
   } catch (err) {
     postMessage({ type: "error", id, error: String(err) });

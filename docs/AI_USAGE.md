@@ -77,7 +77,7 @@ Inkvec provides optional, modular neural components designed to handle extreme i
 ### 3.2 Super-Resolution Pre-Pass (`inkvec-sr`)
 - **Purpose:** Restores sub-pixel structural details for tiny inputs (e.g. 16px to 64px favicons) prior to vector contouring.
 - **Architecture:** Based on MambaIR / MambaIRv2 state-space models for image restoration.
-- **Provenance:** Third-party model architecture (Apache-2.0, Guo et al., ECCV 2024); weights are fetched on demand by Python tooling and are never bundled in the binary.
+- **Provenance:** Third-party model architectures (Apache-2.0): MambaIR (Guo et al., ECCV 2024, arXiv:2402.15648) and MambaIRv2 (Guo et al., CVPR 2025, arXiv:2411.15269); weights are fetched on demand by Python tooling and are never bundled in the binary.
 
 ### 3.3 Geometric Refinement GNN (`TraceRefineGNN20M` — Research / Next-Gen)
 - **Purpose:** Post-processes raw traced vector graphs by predicting continuous anchor point nudges ($\Delta \mathbf{x}$), edge straightness classifications, and CAD regularity constraints (tangency, perpendicularity, parallelism).

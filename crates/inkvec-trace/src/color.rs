@@ -215,7 +215,7 @@ pub const BLEND_STRADDLE_FRACTION: f32 = 0.5;
 /// How much further along the A–B axis a neighbour must sit, as a fraction of the axis,
 /// to count as being on the far side. Above quantisation noise for a pair of inks that
 /// differ by more than a few levels.
-const STRADDLE_STEP: f32 = 0.12;
+pub(crate) const STRADDLE_STEP: f32 = 0.12;
 
 /// What fraction of the pixels `c` would claim sit between a pixel nearer ink `a` and a
 /// pixel nearer ink `b`? See [`BLEND_STRADDLE_FRACTION`].
@@ -829,7 +829,7 @@ fn gcd(a: usize, b: usize) -> usize {
 }
 
 /// Stride for the statistical passes over an image of `n` pixels and `width` columns.
-fn stat_stride(n: usize, width: usize) -> usize {
+pub(crate) fn stat_stride(n: usize, width: usize) -> usize {
     if n <= STAT_PIXELS || width == 0 {
         return 1;
     }

@@ -42,6 +42,7 @@ pub mod diag;
 pub mod gradient;
 #[cfg(feature = "research")]
 pub mod ink_ideas;
+pub mod native;
 pub mod occlusion;
 pub mod planar;
 pub mod regions;
@@ -269,11 +270,17 @@ pub struct ColorOptions {
     /// uncertainty handed to the fitter is inflated where the two inks meeting at an edge
     /// are close in colour. See `planar::refine_subpixel`.
     pub simplify_faint: bool,
-    /// Wall-clock budget for the boundary solve, overriding `INKVEC_BOPT_MS`.
+    /// Wall-clock budget for the boundary solve, overriding `INKVEC_BOPT_MS`. `None` (the
+    /// default, and what a zero `--time-budget` gives) means no clock: the solve stops on
+    /// its iteration count alone, so the result does not depend on how fast the machine is.
     pub boundary_ms: Option<u64>,
     /// The intake came out of a lossy codec, so the palette's noise guard must run even
     /// though the edges are sharp. See [`lossy_container`].
     pub lossy_intake: bool,
+    /// Carry transparency natively: inks with opacity, the clear ground as an ink, and
+    /// alpha as a fourth channel wherever the tracer unmixes. See [`native`]. Only an image
+    /// with transparency takes this path; an opaque one traces as it always has.
+    pub native_alpha: bool,
 }
 
 impl Default for ColorOptions {
@@ -282,6 +289,7 @@ impl Default for ColorOptions {
             merge_distance: color::DEFAULT_MERGE_DISTANCE,
             max_colors: 64,
             gradients: true,
+            native_alpha: false,
             alpha_inks: false,
             simplify_faint: false,
             deadline: None,
@@ -323,6 +331,9 @@ pub struct ColorTrace {
     pub face_rgb: Vec<[f32; 3]>,
     /// Estimated per-channel pixel noise, in sRGB units.
     pub sigma_noise: f64,
+    /// Per face, when transparency was traced natively and the face is a fade: one colour
+    /// at an opacity that varies across it. Empty on the classic path.
+    pub face_fade: Vec<Option<native::Fade>>,
 }
 
 /// Full colour front end, with alpha assumed opaque. See [`trace_color_full_with_alpha`].
@@ -342,6 +353,13 @@ pub fn trace_color_full_with_alpha(
     opts: &ColorOptions,
     source_alpha: Option<&[f32]>,
 ) -> ColorTrace {
+    if opts.native_alpha {
+        if let Some(a) = source_alpha
+            .filter(|a| a.len() == img.width * img.height && a.iter().any(|&v| v < native::OPAQUE))
+        {
+            return native::trace_color(img, opts, a);
+        }
+    }
     let rgb = img.composited([1.0, 1.0, 1.0]);
 
     // Noise first: the palette needs it to judge whether two nearby modes are two inks or
@@ -1014,6 +1032,41 @@ fn finish_color_trace(
     sigma_noise: f64,
     sw: &mut Stopwatch,
 ) -> ColorTrace {
+    finish_color_trace_alpha(
+        img,
+        opts,
+        rgb,
+        pal,
+        labels,
+        face_fill,
+        face_color,
+        n_faces,
+        sigma_noise,
+        sw,
+        None,
+        None,
+    )
+}
+
+/// [`finish_color_trace`], told the source's alpha. The sub-pixel refinement and the
+/// boundary solve then unmix in four channels, each face at its palette entry's opacity, so
+/// an edge between white paint and the clear ground is found although over white it has no
+/// contrast at all. With `None` this is exactly the classic function.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn finish_color_trace_alpha(
+    img: &Rgba,
+    opts: &ColorOptions,
+    rgb: &[[f32; 3]],
+    pal: Palette,
+    labels: Vec<u16>,
+    face_fill: Vec<gradient::FillFit>,
+    face_color: Vec<usize>,
+    n_faces: usize,
+    sigma_noise: f64,
+    sw: &mut Stopwatch,
+    source_alpha: Option<&[f32]>,
+    face_alpha_override: Option<Vec<f32>>,
+) -> ColorTrace {
     // Four pixels meeting at one corner are the one thing the labels cannot settle on
     // their own. Ask the image, and record the answer where the map can read it.
     let (labels, mut face_fill, face_color, n_faces) = merge_saddle_faces(
@@ -1036,7 +1089,25 @@ fn finish_color_trace(
     let sym = symmetry::detect(&map, &labels, &face_color);
     sw.mark("symmetry_detect");
     let face_model: Vec<gradient::FillModel> = face_fill.iter().map(|f| f.model.clone()).collect();
-    planar::refine_subpixel(&mut map, rgb, &face_model, sigma_noise, opts.simplify_faint);
+    let face_alpha: Option<Vec<f32>> = source_alpha.map(|_| {
+        face_alpha_override
+            .filter(|o| o.len() == face_color.len())
+            .unwrap_or_else(|| {
+                face_color
+                    .iter()
+                    .map(|&c| pal.alpha.get(c).copied().unwrap_or(1.0))
+                    .collect()
+            })
+    });
+    let alpha_pair = source_alpha.zip(face_alpha.as_deref());
+    planar::refine_subpixel_alpha(
+        &mut map,
+        rgb,
+        &face_model,
+        sigma_noise,
+        opts.simplify_faint,
+        alpha_pair,
+    );
     sw.mark("refine_subpix");
     planar::refine_junctions(&mut map);
     sw.mark("refine_junc");
@@ -1045,7 +1116,7 @@ fn finish_color_trace(
     // placed by a one-dimensional argument of its own, and a pixel's value is the area
     // coverage of all the regions that touch it.
     let boundary_opt = if std::env::var("INKVEC_BOPT").map_or(true, |v| v != "0") {
-        boundary_opt::optimise(&mut map, rgb, &face_model, opts.boundary_ms)
+        boundary_opt::optimise_alpha(&mut map, rgb, &face_model, opts.boundary_ms, alpha_pair)
     } else {
         None
     };
@@ -1061,6 +1132,7 @@ fn finish_color_trace(
             &labels,
             &mut face_fill,
             gradient::bic_lambda(img.width * img.height),
+            opts.deadline.map(|_| decode::BUDGETED_MS),
         )
     } else {
         None
@@ -1088,6 +1160,7 @@ fn finish_color_trace(
         face_fill,
         face_rgb,
         sigma_noise,
+        face_fade: Vec::new(),
     }
 }
 

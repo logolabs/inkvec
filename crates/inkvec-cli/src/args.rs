@@ -47,6 +47,11 @@ pub struct Args {
     /// Punch the faces the source drew transparent out of the faces above them, so the
     /// SVG carries the input's holes instead of painting them.
     pub cutout: bool,
+    /// Trace transparency natively: inks carry an opacity, the clear ground is an ink, and
+    /// alpha is a fourth channel wherever the tracer unmixes. Implies `cutout`'s output.
+    /// An opaque input traces exactly as without it. On by default; `--no-native-alpha` (or
+    /// `INKVEC_NATIVE_ALPHA=0`) goes back to compositing onto a matte first.
+    pub native_alpha: bool,
     /// No ids or groups, no trailing zeros. Same geometry, typically about a tenth
     /// smaller.
     pub minify: bool,
@@ -138,6 +143,7 @@ impl Default for Args {
             simplify_faint: false,
             layers: false,
             cutout: false,
+            native_alpha: std::env::var_os("INKVEC_NATIVE_ALPHA").is_none_or(|v| v != "0"),
             minify: false,
             bilevel: false,
             no_gradients: false,
@@ -246,11 +252,16 @@ OPTIONS:
                             rather than a patch of white; one drawn at a single opacity
                             comes back with `fill-opacity` and its own colour; and the
                             matte the image is traced against is chosen so that white
-                            artwork on a transparent ground survives at all.
-                            Off by default because the corpus is scored over white, where
-                            none of that is visible and the seams it opens along shared
-                            edges are: objective 0.4123 -> 0.4235 on the 246-icon screen
-                            set. Use it for artwork that will sit on anything but white
+                            artwork on a transparent ground survives at all. Only matters
+                            with --no-native-alpha: native tracing (the default) already
+                            carries the transparency out
+        --no-native-alpha   Composite a transparent input onto a matte before tracing, as
+                            releases up to 0.1.3 did, instead of tracing its transparency
+                            natively. Native (the default) gives every ink an opacity and
+                            the transparent ground an ink of its own: holes stay holes,
+                            glows and shadows stay translucent, and a fade is one gradient
+                            of colour and opacity. An opaque input traces the same either
+                            way
         --minify            No ids or groups, no trailing zeros. Same geometry,
                             typically about a tenth smaller
         --content-units     Scale the fit tolerances (sigma, precision, lambda) with the
@@ -388,6 +399,8 @@ fn parse_args_from(mut it: impl Iterator<Item = String>) -> Result<Args, String>
             "--simplify-faint" => a.simplify_faint = true,
             "--layers" => a.layers = true,
             "--cutout" => a.cutout = true,
+            "--native-alpha" => a.native_alpha = true,
+            "--no-native-alpha" => a.native_alpha = false,
             "--minify" => a.minify = true,
             "--bilevel" => a.bilevel = true,
             "--lossy" => {
@@ -487,6 +500,15 @@ mod tests {
 
         let a_opt_out = parse("logo.png --no-harmonize").expect("parses");
         assert!(!a_opt_out.harmonize);
+
+        if std::env::var_os("INKVEC_NATIVE_ALPHA").is_none() {
+            assert!(parse("logo.png").expect("parses").native_alpha);
+        }
+        assert!(
+            !parse("logo.png --no-native-alpha")
+                .expect("parses")
+                .native_alpha
+        );
     }
 
     #[test]

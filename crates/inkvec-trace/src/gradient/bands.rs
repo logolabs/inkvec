@@ -122,6 +122,24 @@ pub fn merge_gradient_bands_with_ink(
     lambda: f64,
     deadline: Option<inkvec_core::clock::Instant>,
 ) -> (Vec<FillFit>, Vec<usize>) {
+    merge_gradient_bands_guarded(labels, rgb, w, h, pal, sigma_noise, lambda, deadline, None)
+}
+
+/// [`merge_gradient_bands_with_ink`], with a veto on which palette entries may ever share a
+/// fill: two regions whose labels `same_class` rejects are never adjacent for merging. With
+/// `None` the two functions are the same function.
+#[allow(clippy::too_many_arguments)]
+pub fn merge_gradient_bands_guarded(
+    labels: &mut [u16],
+    rgb: &[[f32; 3]],
+    w: usize,
+    h: usize,
+    pal: &Palette,
+    sigma_noise: f64,
+    lambda: f64,
+    deadline: Option<inkvec_core::clock::Instant>,
+    same_class: Option<&(dyn Fn(u16, u16) -> bool + Sync)>,
+) -> (Vec<FillFit>, Vec<usize>) {
     let n = w * h;
     let n_pal = pal
         .len()
@@ -179,7 +197,9 @@ pub fn merge_gradient_bands_with_ink(
         .flatten()
         {
             let (a, b) = (comp[p], comp[q]);
-            if a != b {
+            if a != b
+                && same_class.is_none_or(|f| f(comp_label[a as usize], comp_label[b as usize]))
+            {
                 *adj[a as usize].entry(b).or_insert(0) += 1;
                 *adj[b as usize].entry(a).or_insert(0) += 1;
             }

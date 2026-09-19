@@ -47,11 +47,11 @@ Inkvec implements a dual-tier neural pre-processing architecture. These two neur
 
 | Architectural Property | In-Engine Restorer (`--restore`) | External Super-Resolution (`--sr`) |
 | :--- | :--- | :--- |
-| **Model Name** | **LogoLabs Custom U-Net** (`inkvec-denoiser-001`) | **MambaIRv2** (Guo et al., ECCV 2024) |
-| **Hugging Face / Model Hub** | [`Logolabs/inkvec-denoiser-001`](https://huggingface.co/Logolabs/inkvec-denoiser-001) | Academic baseline checkpoint (`out/sr/logo_sr_package`) |
+| **Model Name** | **LogoLabs Custom U-Net** (`inkvec-denoiser-001`) | **MambaIRv2** (Guo et al., CVPR 2025) |
+| **Hugging Face / Model Hub** | [`Logolabs/inkvec-denoiser-001`](https://huggingface.co/Logolabs/inkvec-denoiser-001) | [`Logolabs/inkvec-sr-001`](https://huggingface.co/Logolabs/inkvec-sr-001) |
 | **Weights Artifact** | `restorer.onnx` (79.9 MB, SHA256: `bdc27621...`) | PyTorch weights / `logo_sr_package.zip` |
-| **Training Supercomputer** | **Arrhenius GPU cluster at NAISS, Sweden**<br>(EuroHPC Project **EHPC-AIF-2026PG01-907**) | Academic publication baseline (Guo et al., ECCV 2024, arXiv:2402.15648) |
-| **Primary Paper / Origin** | Proprietary LogoLabs Model (Apache-2.0 release) | Guo et al., *MambaIR: A Simple Baseline for Image Restoration with State-Space Model*, ECCV 2024 |
+| **Training Supercomputer** | **Arrhenius GPU cluster at NAISS, Sweden**<br>(EuroHPC Project **EHPC-AIF-2026PG01-907**) | Academic publication baseline (Guo et al., CVPR 2025, arXiv:2411.15269) |
+| **Primary Paper / Origin** | Proprietary LogoLabs Model (Apache-2.0 release) | Guo et al., *MambaIRv2: Attentive State Space Restoration*, CVPR 2025, arXiv:2411.15269 |
 | **Rust Orchestration Crate** | `crates/inkvec-restore` | `crates/inkvec-sr` |
 | **Implementation / Runtime** | In-engine: **ONNX Runtime** (`ort 2.0.0-rc.13`) or pure-Rust **Burn** (`burn 0.21`, generated via `burn-onnx`) | Out-of-process Python package (`tools/inkvec_sr`, invoked via `inkvec_sr::external::External`) |
 | **Spatial Scaling** | **$1\times$ In-Place Restoration**: exact same spatial dimensions $(W, H)$ | **$4\times$ Spatial Upscaling** (`scale: 4`), downsampled to $2\times$ via continuous box downsampling |
@@ -63,7 +63,7 @@ Inkvec implements a dual-tier neural pre-processing architecture. These two neur
 | **Tracer Intake Interaction** | Forces tracer **`--lossy on`** (soft intake) when restoration triggers | Runs before intake normalization; downsampled to target scale |
 
 > **Critical Architectural Clarification (The Arrhenius Attribution):**
-> Earlier pipeline documentation erroneously attributed the EuroHPC compute grant to MambaIR. Compute time on the **Arrhenius GPU cluster at NAISS, Sweden**, awarded under EuroHPC Project **EHPC-AIF-2026PG01-907**, was utilized exclusively to train and evaluate LogoLabs' proprietary in-engine restoration model (**`Logolabs/inkvec-denoiser-001`** in `crates/inkvec-restore`). MambaIRv2 is an external foundation model architecture published by Guo et al. at ECCV 2024.
+> Earlier pipeline documentation erroneously attributed the EuroHPC compute grant to MambaIR. Compute time on the **Arrhenius GPU cluster at NAISS, Sweden**, awarded under EuroHPC Project **EHPC-AIF-2026PG01-907**, was utilized exclusively to train and evaluate LogoLabs' proprietary in-engine restoration model (**`Logolabs/inkvec-denoiser-001`** in `crates/inkvec-restore`). MambaIRv2 is an external foundation model architecture published by Guo et al. at CVPR 2025 (arXiv:2411.15269).
 
 ---
 
@@ -163,7 +163,7 @@ Inkvec sits at the confluence of classical computational geometry, perceptual co
 ├───────────────────────────────────────────────────────┼───────────────────────────────────────────────────────┤
 │ 5. PHYSICAL ANTI-ALIASING INVERSION & INFO THEORY     │ 6. DUAL-TIER NEURAL PRE-PROCESSING & LAYERING         │
 │    • Subpixel Deblurring (Yang et al., CGF 2023)      │    • LogoLabs Custom U-Net (inkvec-denoiser-001)      │
-│    • OKLab Uniform Color (Ottosson 2020)              │    • MambaIRv2 State-Space SR (Guo et al., ECCV 2024) │
+│    • OKLab Uniform Color (Ottosson 2020)              │    • MambaIRv2 State-Space SR (Guo et al., CVPR 2025) │
 │    • CIEDE2000 ΔE00 (Luo et al. 2001)                 │    • LayerPeeler (arXiv:2505.23740, 2025)             │
 │    • Rissanen MDL (1978) & Schwarz BIC (1978)         │    • AmodalSVG (arXiv:2604.10940, 2026)               │
 │                                                       │    • Du et al. Linear Gradients (SIGGRAPH 2023)       │
@@ -180,7 +180,7 @@ Inkvec sits at the confluence of classical computational geometry, perceptual co
 | **3. Learned Structural Priors & Hybrid Paradigms** | StarVector (2024), AdaVec (2025), AnchorFlow (2026), VectorArk (2026), VectorGym (2026) | Neural anchor heatmaps (AFNet); VLM structural priors (InternVL2); autoregressive SVG tokens. | Pure neural generators hallucinate coordinates; cannot enforce exact $G^1$ tangency or circles. High latency (33 s on A100). Heuristic upstream decomposition breaks on shared boundaries. | Provoked the division of labor: neural priors detect structural features; deterministic geometry computes exact coordinates. |
 | **4. Exact Computational Geometry & Analytical Fitting** | Shewchuk (1997), Levien (2021/23), Schneider (1990), Taubin (1991), Ahn (2001/04) | Robust floating-point predicates; closed-form quartic root solving via Green moments; Orthogonal Distance Fitting (ODF). | Classical geometry lacked physical image formation models (treated input polylines as ground truth without measurement uncertainty). Schneider traps in 3 local minima; Taubin flattens fillets. | Provoked Levien's closed-form quartic Bézier solve and Ahn's geometric ODF refinement over honest per-point $\sigma$. |
 | **5. Physical Anti-Aliasing Inversion & Information Theory** | Yang et al. (2023), OKLab (2020), CIEDE2000 (2001), Rissanen MDL (1978), Schwarz BIC (1978) | Continuous convolution inversion; perceptual color metrics; Bayesian coding exchange rate $\lambda = \ln(R/\delta)$. | Inverting convolution without topological constraints creates ill-posed ringing and sawtooth null spaces on thin strokes. | Provoked Planar Map topology and coupled ribbon constraints (LOG-44) to stabilize physical inversion. |
-| **6. Dual-Tier Neural Pre-Processing & Layering** | LogoLabs Custom U-Net (`inkvec-denoiser-001`), MambaIRv2 (2024), LayerPeeler (2025), AmodalSVG (2026), Du et al. (2023), Chakraborty et al. (2025) | State-space linear long-range modeling ($\mathcal{O}(N)$); in-engine U-Net residual denoising; seeded Gumbel routing. | Super-resolution hallucinates non-existent edges on clean vector art; naive amodal inpainting invents unseen geometry. | Provoked strict dual-tier model separation: in-engine denoising for fidelity vs external $4\times$ SR for severe degradation. |
+| **6. Dual-Tier Neural Pre-Processing & Layering** | LogoLabs Custom U-Net (`inkvec-denoiser-001`), MambaIRv2 (2025), LayerPeeler (2025), AmodalSVG (2026), Du et al. (2023), Chakraborty et al. (2025) | State-space linear long-range modeling ($\mathcal{O}(N)$); in-engine U-Net residual denoising; seeded Gumbel routing. | Super-resolution hallucinates non-existent edges on clean vector art; naive amodal inpainting invents unseen geometry. | Provoked strict dual-tier model separation: in-engine denoising for fidelity vs external $4\times$ SR for severe degradation. |
 
 ---
 
@@ -221,7 +221,7 @@ Inkvec sits at the confluence of classical computational geometry, perceptual co
                                    ▼
   [LINEAGE 6] DUAL-TIER NEURAL PRE-PROCESSING
   LogoLabs Custom U-Net (inkvec-denoiser-001) [EuroHPC/NAISS] ──► In-engine raster denoising & de-ringing
-  MambaIRv2 State-Space Model (Guo et al. ECCV 2024)         ──► External 4x super-resolution (0x56414331)
+  MambaIRv2 State-Space Model (Guo et al. CVPR 2025)         ──► External 4x super-resolution (0x56414331)
                                    │
                                    ▼
 ========================================================================================================================
@@ -288,7 +288,7 @@ flowchart TD
 
     subgraph L6 ["Lineage 6: Dual-Tier Neural Pre-Processing"]
         P13["LogoLabs Custom U-Net (2026)<br/>inkvec-denoiser-001 (EuroHPC)"]
-        P14["MambaIRv2 ASSM (Guo 2024)<br/>4× Super-Resolution (0x56414331)"]
+        P14["MambaIRv2 ASSM (Guo 2025)<br/>4× Super-Resolution (0x56414331)"]
     end
     class L6,P13,P14 lineage6;
 
@@ -647,6 +647,7 @@ flowchart TD
 
 ##### 22. MambaIR & MambaIRv2: State-Space Image Restoration
 * **Citation:** Guo, H., et al. (2024). *MambaIR: A Simple Baseline for Image Restoration with State-Space Model*. ECCV 2024, [arXiv:2402.15648](https://arxiv.org/abs/2402.15648).
+* **Citation (MambaIRv2):** Guo, H., Guo, Y., Zha, Y., Zhang, Y., Li, W., Dai, T., Xia, S.-T., & Li, Y. (2025). *MambaIRv2: Attentive State Space Restoration*. CVPR 2025, [arXiv:2411.15269](https://arxiv.org/abs/2411.15269).
 * **Research Context & Motivation:** Replacing quadratic-complexity self-attention in Vision Transformers with linear-complexity $\mathcal{O}(N)$ State-Space Models (SSMs) for image restoration and super-resolution.
 * **Core Mathematical / Algorithmic Mechanism:**
   - Employs Attentive State-Space Models (ASSM). MambaIRv2 uses dynamic prompt routing where each pixel selects one of 128 prompt tokens via Gumbel-Softmax:
@@ -779,7 +780,7 @@ Before geometric contour extraction, degraded raster inputs undergo neural pre-p
   * **Tracer Conditioning:** Restored rasters set `restored = true`, which automatically forces downstream tracer mode `--lossy on` (`lossy_args`, `crates/inkvec-cli/src/lib.rs:444-450`) to condition subsequent edge-width and ringing estimators.
 
 * **External Super-Resolution (`--sr`, MambaIRv2):**
-  * **Architecture & Origin:** Foundation Attentive State-Space Model (ASSM) published by Guo et al. at ECCV 2024 (*MambaIR: A Simple Baseline for Image Restoration with State-Space Model*, arXiv:2402.15648).
+  * **Architecture & Origin:** Foundation Attentive State-Space Model (ASSM) published by Guo et al. at CVPR 2025 (*MambaIRv2: Attentive State Space Restoration*, arXiv:2411.15269), building on MambaIR (Guo et al., ECCV 2024, *MambaIR: A Simple Baseline for Image Restoration with State-Space Model*, arXiv:2402.15648).
   * **Out-of-Process Execution:** Packaged in `tools/inkvec_sr/` and invoked out-of-process via Python (`crates/inkvec-sr/src/external.rs:34-57`) in an isolated temporary `RunDir`. Implements a pure-PyTorch Hillis-Steele associative scan (`tools/inkvec_sr/scan.py`) in $\mathcal{O}(\log_2 L)$ steps, bypassing fragile custom CUDA C++ extensions.
   * **$4\times$ Spatial Upscaling & $2\times$ Downsampling:** Neural upscaling by $4\times$ (`scale = 4`) followed by $2\times$ continuous area-weighted downsampling (`factor = 2`, `crates/inkvec-sr/src/lib.rs:110-114`) via `clean::box_downsample`, collapsing high-frequency neural reconstruction ripples while preserving sharp edge profiles.
   * **Pinned Gumbel Routing (`ROUTING_SEED = 0x5641_4331`):** In MambaIRv2, `F.gumbel_softmax` samples stochastic Gumbel noise on every forward pass, even under `eval` and `no_grad`, creating non-deterministic pixel discrepancies of up to 12.45 levels/pixel. Replacing this with argmax degraded fidelity ($\Delta E_{00}$ worsened from 0.5364 to 0.5492). Inkvec fixes this via `_seeded()` (`tools/inkvec_sr/model.py:35`) using pinned seed `0x5641_4331` ("VAC1"), guaranteeing 100% bit-exact SVG reproducibility.
@@ -1276,3 +1277,4 @@ All graphics, documentation, and diagrams generated for Inkvec adhere strictly t
 26. **Hu, J., Xue, Z., Liang, G., Qi, A., Li, B., Wang, S., Xu, D., & Yu, Q.** (2026). *AmodalSVG: Amodal Image Vectorization via Semantic Layer Peeling*. [arXiv:2604.10940](https://arxiv.org/abs/2604.10940).
 27. **Rodriguez, J., et al.** (2026). *VectorGym: A Multi-Task Benchmark for SVG Code Generation, Sketching and Editing*. [arXiv:2603.29852](https://arxiv.org/abs/2603.29852).
 28. **Gribov, A.** (2016). *Optimal Compression of a Polyline with Segments and Arcs*. [arXiv:1604.07476](https://arxiv.org/abs/1604.07476).
+29. **Guo, H., Guo, Y., Zha, Y., Zhang, Y., Li, W., Dai, T., Xia, S.-T., & Li, Y.** (2025). *MambaIRv2: Attentive State Space Restoration*. IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR 2025). [arXiv:2411.15269](https://arxiv.org/abs/2411.15269).

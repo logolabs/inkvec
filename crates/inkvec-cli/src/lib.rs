@@ -27,6 +27,7 @@
 mod alpha;
 mod args;
 mod emit;
+mod harmonize;
 mod post;
 mod rings;
 
@@ -542,8 +543,10 @@ pub fn trace_image_sized(
     // Transparency, once, after every resampling step: put the image against a matte the
     // artwork is not made of and keep the alphas for the emitter. Everything from here
     // traces the matted copy.
-    let alpha_src = alpha_source(&img, args.quiet, args.cutout);
+    let alpha_src = alpha_source(&img, args.quiet, args.cutout, args.native_alpha);
     let img = alpha_src.as_ref().map(|s| &s.flat).unwrap_or(&img);
+    let cut_args = alpha::cutout_args(args, alpha_src.as_ref());
+    let args = &*cut_args;
 
     let (w, h) = (img.width, img.height);
 
@@ -840,8 +843,11 @@ fn trace_once(img: &inkvec_trace::Rgba, args: &Args) -> Result<String, Stop> {
         Ok(run_bilevel(img, args, &cfg).0)
     } else {
         // The probe sees what the real trace will see, matte and all.
-        match alpha_source(img, true, args.cutout) {
-            Some(src) => Ok(run_color(&src.flat, args, &cfg, Some(&src))?.0),
+        match alpha_source(img, true, args.cutout, args.native_alpha) {
+            Some(src) => {
+                let args = alpha::cutout_args(args, Some(&src));
+                Ok(run_color(&src.flat, &args, &cfg, Some(&src))?.0)
+            }
             None => Ok(run_color(img, args, &cfg, None)?.0),
         }
     }

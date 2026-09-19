@@ -1,0 +1,187 @@
+name: swift
+
+# The Swift package, packages/swift (see its README):
+#
+#   linux        the tests against libinkvec_ffi built here, linked as a system library;
+#   xcframework  InkvecFFI.xcframework from inkvec-ffi's static libraries (macOS arm64+x86_64,
+#                iOS arm64, iOS Simulator arm64+x86_64); the tests against it through the
+#                mirror's own manifest; the tests linked for the iOS Simulator and devices;
+#   release      only on a v* tag: attaches InkvecFFI.xcframework.zip to the tag's GitHub
+#                release and renders the mirror's Package.swift with its URL and checksum.
+#                It pushes to the mirror, github.com/logolabs/inkvec-swift, only when the
+#                repository variable PUBLISH_SWIFT is `true` and the secret SWIFT_MIRROR_TOKEN
+#                holds a token allowed to push there (fine-grained: Contents read and write
+#                on logolabs/inkvec-swift).
+#
+# Written without access to macOS or GitHub Actions: the linux job's commands were run by
+# hand on Debian 12 (Swift 6.3.3); the xcframework and release jobs have not run yet.
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+    paths:
+      - "packages/swift/**"
+      - "bindings/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/swift.yml"
+  pull_request:
+    paths:
+      - "packages/swift/**"
+      - "bindings/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/swift.yml"
+  workflow_dispatch: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+concurrency:
+  group: swift-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  linux:
+    name: Linux (system library)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # The generated options struct and the header copy are committed and current.
+      - run: python bindings/codegen/generate.py --check
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: swift-linux
+      - run: cargo build --release --locked -p inkvec-ffi
+      - name: Swift toolchain (the runner's, else swiftly's latest release)
+        run: |
+          if ! command -v swift >/dev/null 2>&1; then
+            curl -fsSL -O "https://download.swift.org/swiftly/linux/swiftly-$(uname -m).tar.gz"
+            tar zxf "swiftly-$(uname -m).tar.gz"
+            ./swiftly init --quiet-shell-followup --assume-yes
+            . "${SWIFTLY_HOME_DIR:-$HOME/.local/share/swiftly}/env.sh"
+            dirname "$(command -v swift)" >> "$GITHUB_PATH"
+          fi
+          swift --version
+      - name: swift test
+        working-directory: packages/swift
+        env:
+          # x86_64-linux-gnu has recorded hashes: the SVG must match them byte for byte.
+          INKVEC_CONTRACT_REQUIRE_HASH: "1"
+        run: |
+          lib="$GITHUB_WORKSPACE/target/release"
+          swift test -Xlinker -L"$lib" -Xlinker -rpath -Xlinker "$lib"
+
+  xcframework:
+    name: XCFramework (macOS, iOS)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: swift-xcframework
+      - run: swift --version && xcodebuild -version
+      - run: packages/swift/scripts/build-xcframework.sh "$RUNNER_TEMP/xcf"
+
+      # The mirror exactly as it is released, except that the binary target is the local
+      # XCFramework and the tests are included.
+      - name: Render the mirror around the XCFramework
+        run: >-
+          python3 packages/swift/scripts/render_mirror.py "$RUNNER_TEMP/mirror-test"
+          --xcframework "$RUNNER_TEMP/xcf/InkvecFFI.xcframework" --with-tests
+      - name: swift test (macOS, against the XCFramework)
+        working-directory: ${{ runner.temp }}/mirror-test
+        env:
+          INKVEC_REPO_ROOT: ${{ github.workspace }}
+        # No hashes are recorded for aarch64-macos yet: the SVG is checked on everything else
+        # and its hashes are printed. Record them with the facade job's INKVEC_BLESS=add.
+        run: swift test
+      - name: The tests linked for the iOS Simulator and for iOS devices
+        working-directory: ${{ runner.temp }}/mirror-test
+        run: |
+          xcodebuild -list
+          scheme=Inkvec
+          if xcodebuild -list | grep -q "Inkvec-Package"; then scheme=Inkvec-Package; fi
+          for destination in "generic/platform=iOS Simulator" "generic/platform=iOS"; do
+            xcodebuild build-for-testing -scheme "$scheme" -destination "$destination" \
+              CODE_SIGNING_ALLOWED=NO -quiet
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: swift-xcframework
+          path: |
+            ${{ runner.temp }}/xcf/InkvecFFI.xcframework.zip
+            ${{ runner.temp }}/xcf/InkvecFFI.xcframework.zip.checksum
+          if-no-files-found: error
+
+  release:
+    name: release the XCFramework and the mirror
+    needs: [linux, xcframework]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-15
+    permissions:
+      contents: write
+    env:
+      SWIFT_MIRROR_TOKEN: ${{ secrets.SWIFT_MIRROR_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: swift-xcframework
+          path: dist
+      - name: The tag is the workspace version
+        run: |
+          version=$(cd packages/swift/scripts && python3 -c 'import render_mirror; print(render_mirror.workspace_version())')
+          test "v$version" = "$GITHUB_REF_NAME" || { echo "::error::tag $GITHUB_REF_NAME, but Cargo.toml says $version"; exit 1; }
+      - name: The checksum is the zip's
+        run: |
+          have=$(swift package compute-checksum dist/InkvecFFI.xcframework.zip)
+          want=$(cat dist/InkvecFFI.xcframework.zip.checksum)
+          test "$have" = "$want" || { echo "::error::checksum $have, recorded $want"; exit 1; }
+          echo "CHECKSUM=$have" >> "$GITHUB_ENV"
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          fail_on_unmatched_files: true
+          files: dist/InkvecFFI.xcframework.zip
+      - name: Render the mirror
+        run: python3 packages/swift/scripts/render_mirror.py "$RUNNER_TEMP/mirror" --checksum "$CHECKSUM"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: swift-mirror
+          path: ${{ runner.temp }}/mirror
+          if-no-files-found: error
+      - name: Push to github.com/logolabs/inkvec-swift
+        if: vars.PUBLISH_SWIFT == 'true' && env.SWIFT_MIRROR_TOKEN != ''
+        run: |
+          set -euo pipefail
+          clone="$RUNNER_TEMP/inkvec-swift"
+          git clone "https://x-access-token:${SWIFT_MIRROR_TOKEN}@github.com/logolabs/inkvec-swift.git" "$clone"
+          # An empty mirror has no branch yet; start it as main.
+          git -C "$clone" rev-parse --verify -q HEAD >/dev/null || git -C "$clone" symbolic-ref HEAD refs/heads/main
+          python3 packages/swift/scripts/render_mirror.py "$clone" --checksum "$CHECKSUM"
+          cd "$clone"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || git commit -q -m "Inkvec ${GITHUB_REF_NAME#v}" \
+            -m "Rendered from logolabs/inkvec@${GITHUB_SHA} (packages/swift)."
+          git tag -a "$GITHUB_REF_NAME" -m "Inkvec ${GITHUB_REF_NAME#v}"
+          git push origin "HEAD:refs/heads/$(git symbolic-ref --short HEAD)" "refs/tags/$GITHUB_REF_NAME"
+      - name: Mirror not pushed
+        if: vars.PUBLISH_SWIFT != 'true' || env.SWIFT_MIRROR_TOKEN == ''
+        run: echo "::notice::PUBLISH_SWIFT is not true or SWIFT_MIRROR_TOKEN is not set; the zip is on the release and the rendered mirror is this run's artifact, nothing was pushed."

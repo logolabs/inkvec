@@ -1,0 +1,9 @@
+// The C library `inkvec_ffi` as a Clang module, for SwiftPM's system-library target.
+// inkvec.h beside this file is a generated copy of crates/inkvec-ffi/include/inkvec.h.
+// The XCFramework carries its own module map (packages/swift/scripts/build-xcframework.sh),
+// without the `link`: SwiftPM links a binary target itself.
+module InkvecFFI [system] {
+    header "inkvec.h"
+    link "inkvec_ffi"
+    export *
+}

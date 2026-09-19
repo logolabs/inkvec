@@ -180,8 +180,6 @@ python tools/pull_model.py
 
 To use it from JavaScript or TypeScript — browsers, Node.js, Deno, Bun — use the npm package [`@logolabs/inkvec`](packages/npm/) (`packages/npm`): `await trace(bytes, { colors: 16 })`, with typed options, a threaded build at `@logolabs/inkvec/threads`, and the same output on every runtime.
 
-From .NET, use the NuGet package [`LogoLabs.Inkvec`](packages/dotnet/) (`packages/dotnet`): `Inkvec.TraceFile("logo.png", new InkvecOptions { Colors = 16 })`, P/Invoke over the C ABI, `netstandard2.0` and `net8.0`.
-
 ---
 
 ## Library API
@@ -202,10 +200,21 @@ fn trace(input: &str) -> Result<String, Box<dyn std::error::Error>> {
 
 ### Language bindings
 
-The `inkvec` crate (`crates/inkvec`) is the stable library API -- `inkvec::trace(&png, &inkvec::Options::default())` -- and the base of a C library with a generated header (`crates/inkvec-ffi`), a Python package (`crates/inkvec-py`: `inkvec.trace("logo.png", colors=16)`) and a Java package (`packages/java`, JNA: `Inkvec.trace(png, InkvecOptions.builder().colors(16).build())`). Every binding takes the same options, generated from one schema, and reproduces the same contract fixtures. They share the command line's defaults, native transparency and guarded shape harmonization included. See [`docs/BINDINGS.md`](docs/BINDINGS.md).
+The `inkvec` crate (`crates/inkvec`) is the stable library API, and every other language reaches the same pipeline through it:
 
-Swift (macOS, iOS, Linux): [`packages/swift`](packages/swift/), `try Inkvec.trace(png, options: InkvecOptions(colors: 16))`, installed on Apple platforms from the mirror `github.com/logolabs/inkvec-swift` with a prebuilt XCFramework.
-The `inkvec` crate (`crates/inkvec`) is the stable library API -- `inkvec::trace(&png, &inkvec::Options::default())` -- and the base of a C library with a generated header (`crates/inkvec-ffi`), a Python package (`crates/inkvec-py`: `inkvec.trace("logo.png", colors=16)`) and a pure-Go module over WebAssembly (`packages/go`, `github.com/logolabs/inkvec-go`). Every binding takes the same options, generated from one schema, and reproduces the same contract fixtures. They share the command line's defaults, native transparency and guarded shape harmonization included. See [`docs/BINDINGS.md`](docs/BINDINGS.md).
+| Language | Package (source) | Call |
+|---|---|---|
+| Rust | `inkvec` ([`crates/inkvec`](crates/inkvec/)) | `inkvec::trace(&png, &inkvec::Options::default())` |
+| C / C++ | `inkvec_ffi` + `inkvec.h` ([`crates/inkvec-ffi`](crates/inkvec-ffi/)) | `inkvec_trace(bytes, len, "{\"colors\":16}", &result)` |
+| Python | `inkvec` ([`crates/inkvec-py`](crates/inkvec-py/)) | `inkvec.trace("logo.png", colors=16)` |
+| JavaScript / TypeScript | `@logolabs/inkvec` ([`packages/npm`](packages/npm/)) | `await trace(bytes, { colors: 16 })` |
+| Java 8+ | `com.logolabs:inkvec` ([`packages/java`](packages/java/)) | `Inkvec.trace(png, InkvecOptions.builder().colors(16).build())` |
+| C# / .NET | `LogoLabs.Inkvec` ([`packages/dotnet`](packages/dotnet/)) | `Inkvec.TraceFile("logo.png", new InkvecOptions { Colors = 16 })` |
+| Go | `github.com/logolabs/inkvec-go` ([`packages/go`](packages/go/)) | `inkvec.Trace(ctx, png, &inkvec.Options{Colors: inkvec.Ptr(16)})` |
+| Swift | `Inkvec` via `github.com/logolabs/inkvec-swift` ([`packages/swift`](packages/swift/)) | `try Inkvec.trace(png, options: InkvecOptions(colors: 16))` |
+| HTTP (Docker) | `ghcr.io/logolabs/inkvec` ([`crates/inkvec-server`](crates/inkvec-server/)) | `curl --data-binary @logo.png -H 'Content-Type: image/png' 'localhost:8080/trace?colors=16'` |
+
+Every binding takes the same options, generated from one schema, and reproduces the same contract fixtures; they share the command line's defaults, native transparency and guarded shape harmonization included. None is published to its registry yet — build from this repository. See [`docs/BINDINGS.md`](docs/BINDINGS.md).
 
 ---
 

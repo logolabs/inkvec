@@ -15,6 +15,7 @@ on:
     paths:
       - "crates/**"
       - "bindings/**"
+      - "packages/dotnet/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/bindings.yml"
@@ -22,6 +23,7 @@ on:
     paths:
       - "crates/**"
       - "bindings/**"
+      - "packages/dotnet/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/bindings.yml"
@@ -228,6 +230,91 @@ jobs:
           path: dist/*.tar.gz
           if-no-files-found: error
 
+  dotnet-test:
+    # Builds and tests the NuGet package (packages/dotnet) against the native library
+    # c-library just built for this OS: unpack its archive into
+    # packages/dotnet/runtimes/<rid>/native/ (the same layout the packed nupkg carries; see
+    # LogoLabs.Inkvec.csproj), then run the test suite once against each target framework
+    # (net8.0 natively, netstandard2.0 by pointing the same net8.0 test host at the
+    # library's netstandard2.0 build -- see LogoLabs.Inkvec.Tests.csproj).
+    name: .NET (${{ matrix.name }})
+    needs: c-library
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: windows-x64, os: windows-latest, rid: win-x64, native: inkvec_ffi.dll }
+          - { name: linux-x64, os: ubuntu-latest, rid: linux-x64, native: libinkvec_ffi.so }
+          - { name: macos-arm64, os: macos-14, rid: osx-arm64, native: libinkvec_ffi.dylib }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - uses: actions/download-artifact@v4
+        with:
+          name: c-${{ matrix.name }}
+          path: dl
+      - name: Unpack the native library
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "packages/dotnet/runtimes/${{ matrix.rid }}/native"
+          archive=$(find dl -type f \( -name '*.tar.gz' -o -name '*.zip' \))
+          case "$archive" in
+            *.tar.gz) tar -xzf "$archive" -C dl ;;
+            *.zip) unzip -q "$archive" -d dl ;;
+          esac
+          find dl -name "${{ matrix.native }}" -exec cp {} "packages/dotnet/runtimes/${{ matrix.rid }}/native/" \;
+      - run: dotnet test packages/dotnet/test/LogoLabs.Inkvec.Tests -c Release
+      - name: Test the netstandard2.0 build (through the net8.0 host)
+        run: dotnet test packages/dotnet/test/LogoLabs.Inkvec.Tests -c Release -p:InkvecLibraryTargetFramework=netstandard2.0
+
+  dotnet-pack:
+    # One nupkg carrying every native library c-library built (win-arm64 is not in that
+    # matrix yet, so it is not in the package either -- see LogoLabs.Inkvec.csproj, which
+    # skips whichever RIDs are absent rather than failing).
+    name: .NET pack
+    needs: [c-library, dotnet-test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: c-*
+          path: dl
+      - name: Unpack every native library into runtimes/<rid>/native/
+        shell: bash
+        run: |
+          set -euo pipefail
+          declare -A rid_of=( [windows-x64]=win-x64 [linux-x64]=linux-x64 [linux-arm64]=linux-arm64 [macos-arm64]=osx-arm64 [macos-x64]=osx-x64 )
+          for dir in dl/c-*; do
+            plat=$(basename "$dir" | sed 's/^c-//')
+            rid=${rid_of[$plat]:-}
+            [[ -n "$rid" ]] || { echo "unknown platform $plat"; exit 1; }
+            mkdir -p "packages/dotnet/runtimes/$rid/native"
+            archive=$(find "$dir" -type f \( -name '*.tar.gz' -o -name '*.zip' \))
+            case "$archive" in
+              *.tar.gz) tar -xzf "$archive" -C "$dir" ;;
+              *.zip) unzip -q "$archive" -d "$dir" ;;
+            esac
+            find "$dir" \( -name 'inkvec_ffi.dll' -o -name 'libinkvec_ffi.so' -o -name 'libinkvec_ffi.dylib' \) \
+              -exec cp {} "packages/dotnet/runtimes/$rid/native/" \;
+          done
+          find packages/dotnet/runtimes -type f
+      - run: dotnet pack packages/dotnet/src/LogoLabs.Inkvec -c Release -o dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dotnet-nupkg
+          path: |
+            dist/*.nupkg
+            dist/*.snupkg
+          if-no-files-found: error
+
   # ------------------------------------------------------------------------------------
   # Publishing. Each job runs only on a v* tag AND only when the repository has opted in.
   # ------------------------------------------------------------------------------------
@@ -257,6 +344,27 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist
+
+  publish-nuget:
+    # Opt in: set the repository variable PUBLISH_NUGET to `true` and add a NuGet.org API
+    # key as the secret NUGET_API_KEY.
+    name: publish to NuGet
+    needs: dotnet-pack
+    if: startsWith(github.ref, 'refs/tags/v') && vars.PUBLISH_NUGET == 'true'
+    runs-on: ubuntu-latest
+    env:
+      NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dotnet-nupkg
+          path: dist
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Publish
+        if: env.NUGET_API_KEY != ''
+        run: dotnet nuget push "dist/*.nupkg" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
 
   publish-crates:
     # Opt in: set the repository variable PUBLISH_CRATES to `true` and add a crates.io API

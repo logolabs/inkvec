@@ -10,6 +10,7 @@ three layers, each a thin wrapper over the one below:
 | Python package `inkvec` | `crates/inkvec-py` | Python 3.9+, abi3 wheels built with PyO3 and maturin |
 | npm package `@logolabs/inkvec` | `packages/npm` over `crates/inkvec-wasm` | JavaScript and TypeScript: browsers, Node.js, Deno, Bun; a single-threaded and a threaded WebAssembly build |
 | Maven package `com.logolabs:inkvec` | `packages/java` over the C ABI | Java 8+, a JNA binding |
+| NuGet package `LogoLabs.Inkvec` | `packages/dotnet` over `crates/inkvec-ffi` | .NET: `netstandard2.0` (.NET Framework 4.6.1+, Unity) and `net8.0`, P/Invoke |
 
 The WebAssembly crate (`crates/inkvec-wasm`) calls the facade: `trace_json` and
 `trace_rgba_json` take the options as JSON, `default_options_json` and `options_schema_json`
@@ -301,6 +302,26 @@ method also takes options as a raw JSON string. Errors are `InkvecException` sub
 Maven Central yet (placeholder group id `com.logolabs`; needs a verified namespace). See
 `packages/java/README.md`.
 
+### C#
+
+```sh
+dotnet add package LogoLabs.Inkvec
+```
+
+```csharp
+using LogoLabs.Inkvec;
+
+var traced = Inkvec.TraceFile("logo.png", new InkvecOptions { Colors = 16 });
+File.WriteAllText("logo.svg", traced.Svg);
+```
+
+P/Invoke over the C ABI, `netstandard2.0` (.NET Framework 4.6.1+, Unity) and `net8.0`
+(`LibraryImport` source generation there, `DllImport` on `netstandard2.0`, one shared
+declarations file). `InkvecOptions` is generated from the schema, same as every other
+binding's typed surface; a raw-JSON overload of `Trace`/`TraceRgba` reaches an option before
+it has been regenerated for. Errors are `InvalidImageException`, `InvalidOptionsException` and
+`InkvecInternalException`, all deriving from `InkvecException`. See `packages/dotnet/README.md`.
+
 ## Versions
 
 There is one version: `workspace.package.version` in the root `Cargo.toml`. Every crate inherits
@@ -369,7 +390,8 @@ node build.mjs && npm test                              # a nightly toolchain wi
 
 `.github/workflows/bindings.yml` does all of this on Linux, macOS and Windows and builds the
 release artifacts: the C library for windows-x64, linux-x64, linux-arm64, macos-arm64 and
-macos-x64, and abi3 wheels for the same targets plus an sdist.
+macos-x64, abi3 wheels for the same targets plus an sdist, and the `LogoLabs.Inkvec` nupkg
+carrying whichever of those native libraries the C library job produced.
 
 ## Publishing
 
@@ -382,3 +404,4 @@ tag, and the registry ones only when the repository opts in.
 | PyPI | `inkvec` | the repository variable `PUBLISH_PYPI=true` and this repository and workflow (environment `pypi`) registered as a trusted publisher of the PyPI project; or an API token as the secret `PYPI_API_TOKEN`, passed as `password:` to the publish step |
 | GitHub Releases | C library archives `inkvec-c-<version>-<platform>` | nothing beyond the workflow's own `GITHUB_TOKEN` |
 | npm | `@logolabs/inkvec` | an npm organisation `logolabs` (the scope) and an automation token with publish rights to it as the secret `NPM_TOKEN`; `.github/workflows/npm.yml` publishes the tarball it built and tested, with provenance, on a `v*` tag whose version matches `package.json` |
+| NuGet | `LogoLabs.Inkvec` | the repository variable `PUBLISH_NUGET=true` and a NuGet.org API key as the secret `NUGET_API_KEY`; the `dotnet-pack` job in `bindings.yml` gathers the native libraries `c-library` built for every platform into one nupkg first |

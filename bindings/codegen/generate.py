@@ -19,13 +19,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import csharp  # noqa: E402
 import docs_tables  # noqa: E402
 import java  # noqa: E402
 import python_stub  # noqa: E402
 import schema  # noqa: E402
 import typescript  # noqa: E402
 
-GENERATORS = [python_stub, typescript, java, docs_tables]
+GENERATORS = [python_stub, typescript, java, csharp, docs_tables]
 
 
 def outputs() -> dict[Path, str]:

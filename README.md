@@ -180,6 +180,8 @@ python tools/pull_model.py
 
 To use it from JavaScript or TypeScript — browsers, Node.js, Deno, Bun — use the npm package [`@logolabs/inkvec`](packages/npm/) (`packages/npm`): `await trace(bytes, { colors: 16 })`, with typed options, a threaded build at `@logolabs/inkvec/threads`, and the same output on every runtime.
 
+From .NET, use the NuGet package [`LogoLabs.Inkvec`](packages/dotnet/) (`packages/dotnet`): `Inkvec.TraceFile("logo.png", new InkvecOptions { Colors = 16 })`, P/Invoke over the C ABI, `netstandard2.0` and `net8.0`.
+
 ---
 
 ## Library API

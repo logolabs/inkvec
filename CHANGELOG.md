@@ -28,6 +28,14 @@ API in particular should be treated as unstable release to release).
   immutable `InkvecOptions` builder plus a raw-JSON-options overload on every method, and
   `InkvecException` subclasses per error kind. Options are generated from the schema by
   `bindings/codegen/java.py`. Placeholder group id `com.logolabs`; not published yet.
+- **NuGet package `LogoLabs.Inkvec`** (`packages/dotnet`). The .NET binding: P/Invoke over
+  `inkvec_ffi`, `netstandard2.0` (.NET Framework 4.6.1+, Unity) and `net8.0`
+  (`LibraryImport` source generation there, `DllImport` on `netstandard2.0`). `Inkvec.Trace`,
+  `TraceRgba`, `TraceFile`; options are the generated `InkvecOptions` (nullable properties,
+  `null` meaning the tracer's own default) or a raw JSON string; errors are
+  `InvalidImageException`, `InvalidOptionsException` and `InkvecInternalException`. Native
+  libraries for `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64` and
+  `osx-arm64` ship under `runtimes/`. Not published yet.
 
 ### Changed
 

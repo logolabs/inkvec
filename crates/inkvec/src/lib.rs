@@ -190,7 +190,8 @@ pub fn version() -> &'static str {
 }
 
 /// The target this library was compiled for, as `arch-os-env` (`x86_64-windows-msvc`,
-/// `x86_64-linux-gnu`, `aarch64-macos`, ...).
+/// `x86_64-linux-gnu`, `aarch64-macos`, ...; `wasm32-unknown` for the browser build and
+/// `wasm32-wasip1` for the WASI one the Go package runs).
 ///
 /// Output is byte-identical between two builds only when this string is the same. The
 /// pipeline takes a few transcendental functions (cube roots, trigonometry, logarithms) from
@@ -203,6 +204,9 @@ pub fn build_target() -> &'static str {
     static TARGET: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     TARGET.get_or_init(|| {
         let os = match std::env::consts::OS {
+            // Empty on every WebAssembly target. WASI is named: its maths library is
+            // wasi-libc's, not the browser build's, and the output differs.
+            "" if cfg!(target_os = "wasi") => "wasi",
             "" => "unknown",
             os => os,
         };
@@ -212,6 +216,10 @@ pub fn build_target() -> &'static str {
             "-gnu"
         } else if cfg!(target_env = "musl") {
             "-musl"
+        } else if cfg!(target_env = "p1") {
+            "p1" // wasm32-wasip1, as the Rust target is spelled
+        } else if cfg!(target_env = "p2") {
+            "p2"
         } else {
             ""
         };

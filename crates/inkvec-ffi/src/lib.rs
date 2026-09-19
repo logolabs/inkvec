@@ -33,6 +33,13 @@ use std::sync::OnceLock;
 
 use inkvec as facade;
 
+/// `inkvec_alloc` / `inkvec_dealloc`, for a host that runs this library as a WebAssembly
+/// module (the Go package, through wazero). Not part of the C header.
+///
+/// cbindgen:ignore
+#[cfg(target_os = "wasi")]
+mod wasi;
+
 /// Success.
 pub const INKVEC_OK: i32 = 0;
 /// A required pointer was NULL, or `out->struct_size` is smaller than this library's

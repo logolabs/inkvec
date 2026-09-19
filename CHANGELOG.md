@@ -23,6 +23,16 @@ API in particular should be treated as unstable release to release).
   options go to the facade as JSON and their TypeScript types are generated from the schema.
   `crates/inkvec-wasm` gains `trace_json` / `trace_rgba_json` on the facade; the positional
   `trace` the web demo calls is unchanged. Not published yet.
+- **Go module `github.com/logolabs/inkvec-go`** (`packages/go`). Pure Go, no cgo: the C ABI
+  compiled to `wasm32-wasip1` (`tools/build_go_wasm.sh`), embedded and run by wazero, one
+  module instance per concurrent call. `Trace`, `TraceRGBA`, `TraceJSON` (options passed
+  through untouched), `Defaults`, `OptionsSchema`, errors matching `ErrInvalidImage`,
+  `ErrInvalidOptions`, `ErrInternal`; the `Options` struct is generated from the schema
+  (`bindings/codegen/golang.py`). `inkvec-ffi` gains `inkvec_alloc` / `inkvec_dealloc` on WASI
+  only (not in the header), and `inkvec::build_target()` names that build `wasm32-wasip1`
+  instead of `wasm32-unknown`, which it shared with the browser build although its output
+  differs. Released through a mirror repository by `.github/workflows/go.yml`; not published
+  yet.
 
 ### Changed
 

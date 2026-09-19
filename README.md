@@ -200,7 +200,7 @@ fn trace(input: &str) -> Result<String, Box<dyn std::error::Error>> {
 
 ### Language bindings
 
-The `inkvec` crate (`crates/inkvec`) is the stable library API -- `inkvec::trace(&png, &inkvec::Options::default())` -- and the base of a C library with a generated header (`crates/inkvec-ffi`) and a Python package (`crates/inkvec-py`: `inkvec.trace("logo.png", colors=16)`). Every binding takes the same options, generated from one schema, and reproduces the same contract fixtures. They share the command line's defaults, native transparency and guarded shape harmonization included. See [`docs/BINDINGS.md`](docs/BINDINGS.md).
+The `inkvec` crate (`crates/inkvec`) is the stable library API -- `inkvec::trace(&png, &inkvec::Options::default())` -- and the base of a C library with a generated header (`crates/inkvec-ffi`), a Python package (`crates/inkvec-py`: `inkvec.trace("logo.png", colors=16)`) and a pure-Go module over WebAssembly (`packages/go`, `github.com/logolabs/inkvec-go`). Every binding takes the same options, generated from one schema, and reproduces the same contract fixtures. They share the command line's defaults, native transparency and guarded shape harmonization included. See [`docs/BINDINGS.md`](docs/BINDINGS.md).
 
 ---
 

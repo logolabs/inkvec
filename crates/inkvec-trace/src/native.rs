@@ -467,7 +467,23 @@ pub fn extract_palette(
         // accepted inks explains it (`noto-emoji/emoji_u1f932` minted two inks at 0.77 from
         // 136 scattered rim pixels). The palette's own rule settles it: an ink covers area,
         // anti-aliasing is a band. A translucent candidate is kept only with an interior.
-        let translucent = (0.05..0.95).contains(&c.alpha());
+        //
+        // Translucent means any opacity the palette does not round to 0 or 1. The rim just
+        // inside an opaque silhouette is 0.95-0.99 opaque, and while this asked only between
+        // 0.05 and 0.95 that rim was never asked at all: the mode of those pixels sits a
+        // step off black, too far to be the same ink (dE00 over the same-ink floor) and too
+        // close to be a blend (inside the chord test's 0.04 end margin), so
+        // `simple-icons/sagemath`'s black line graph gained a 0.96 ink along every line
+        // (dE00 0.62 -> 0.75 over white; the classic path's bins never form that mode).
+        //
+        // Blends keep the straddle test below instead. Asking them for an interior as well
+        // was tried: on its own it traded noto-emoji for twemoji (0.3722 -> 0.3713 against
+        // 0.1414 -> 0.1424), and with the wider range above it cost the translucent set
+        // (dark 0.0077 -> 0.0079).
+        let translucent = {
+            let a = c.alpha();
+            a > 0.0 && a < 1.0
+        };
         let interior = if blend || translucent {
             interior_fraction(&px, width, height, c, &nearest_px, stride_px)
         } else {

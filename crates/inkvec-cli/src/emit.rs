@@ -362,35 +362,58 @@ pub(crate) fn fmt_segments(start: Point, segments: &[Segment], decimals: usize, 
 /// punch has to be the *primitive*: the fitted ring it came from is a fraction of a pixel
 /// away, and that difference showed as a bright seam along every inner edge of
 /// `material-icons/qr_code` (dE00 0.060 -> 0.164) when the ring was punched instead.
+///
+/// A circle or an ellipse is two half-turn arcs between the ends of a diameter, and that is
+/// the worst-conditioned arc there is: the reader places the centre `sqrt(r² - (c/2)²)` off
+/// the chord, so a radius written 0.005 px longer than half the rounded chord moves it by a
+/// third of a pixel. Rounding the ends and the radius separately did exactly that -- the
+/// hole in `material-icons/music_note` bulged 0.33 px past the circle it was cut for at top
+/// and bottom (dE00 0.009 -> 0.079), `simple-icons/changedetection`'s 0.76 px (dE00 0.23 ->
+/// 1.22). So the radius is
+/// written a step *shorter* than the half-chord: SVG scales a radius that cannot reach both
+/// ends up until it just does (SVG 1.1 F.6.6), which puts the centre on the chord's
+/// midpoint in every renderer, and the arc through the two written ends is the half-turn.
 pub(crate) fn primitive_d(kind: &PrimitiveKind, decimals: usize) -> Option<String> {
     let d = decimals;
+    let step = 10f64.powi(-(d as i32));
+    let q = |v: f64| -> f64 {
+        let s = 10f64.powi(d as i32);
+        (v * s).round() / s
+    };
     Some(match *kind {
-        PrimitiveKind::Circle { c, r } => format!(
-            "M{:.*},{:.*}A{:.*},{:.*} 0 1 0 {:.*},{:.*}A{:.*},{:.*} 0 1 0 {:.*},{:.*}Z",
-            d,
-            c.x - r,
-            d,
-            c.y,
-            d,
-            r,
-            d,
-            r,
-            d,
-            c.x + r,
-            d,
-            c.y,
-            d,
-            r,
-            d,
-            r,
-            d,
-            c.x - r,
-            d,
-            c.y
-        ),
+        PrimitiveKind::Circle { c, r } => {
+            let (cx, cy, r) = (q(c.x), q(c.y), q(r));
+            let ra = (r - step).max(0.5 * step);
+            format!(
+                "M{:.*},{:.*}A{:.*},{:.*} 0 1 0 {:.*},{:.*}A{:.*},{:.*} 0 1 0 {:.*},{:.*}Z",
+                d,
+                cx - r,
+                d,
+                cy,
+                d,
+                ra,
+                d,
+                ra,
+                d,
+                cx + r,
+                d,
+                cy,
+                d,
+                ra,
+                d,
+                ra,
+                d,
+                cx - r,
+                d,
+                cy
+            )
+        }
         PrimitiveKind::Ellipse { c, rx, ry, angle } => {
             let (sn, cs) = angle.sin_cos();
             let (ax, ay) = (rx * cs, rx * sn);
+            // Two steps: the written ends can each be half a step off along the axis.
+            let s = ((rx - 2.0 * step) / rx.max(1e-9)).clamp(0.5, 1.0);
+            let (rxa, rya) = (rx * s, ry * s);
             format!(
                 "M{:.*},{:.*}A{:.*},{:.*} {:.3} 1 0 {:.*},{:.*}A{:.*},{:.*} {:.3} 1 0 {:.*},{:.*}Z",
                 d,
@@ -398,18 +421,18 @@ pub(crate) fn primitive_d(kind: &PrimitiveKind, decimals: usize) -> Option<Strin
                 d,
                 c.y - ay,
                 d,
-                rx,
+                rxa,
                 d,
-                ry,
+                rya,
                 angle.to_degrees(),
                 d,
                 c.x + ax,
                 d,
                 c.y + ay,
                 d,
-                rx,
+                rxa,
                 d,
-                ry,
+                rya,
                 angle.to_degrees(),
                 d,
                 c.x - ax,
@@ -418,10 +441,6 @@ pub(crate) fn primitive_d(kind: &PrimitiveKind, decimals: usize) -> Option<Strin
             )
         }
         PrimitiveKind::RoundRect { x, y, w, h, rx } => {
-            let q = |v: f64| -> f64 {
-                let s = 10f64.powi(d as i32);
-                (v * s).round() / s
-            };
             let (x0, y0) = (q(x), q(y));
             let (w, h) = (q(x + w) - x0, q(y + h) - y0);
             let (x1, y1) = (x0 + w, y0 + h);
@@ -492,6 +511,102 @@ A{:.*},{:.*} 0 0 1 {:.*},{:.*}Z",
             }
         }
     })
+}
+
+/// Largest distance, in pixels, that writing an annulus as one stroke may move any part of
+/// its two boundaries: a few times the 0.02-0.06 px the boundaries are measured good to (see
+/// [`EMIT_DECIMALS`]), and far below the pixel or more by which a ring that is not of one
+/// width misses.
+const STROKE_TOL: f64 = 0.1;
+
+/// The one stroked primitive that paints exactly the ring between `outer` and `inner`, as
+/// its midline and its width, when there is one to within [`STROKE_TOL`].
+///
+/// A face with a hole punched in it cannot be a primitive element, so under the cutout a
+/// ring -- the frame of a window, the rim of a button -- became two primitives' worth of
+/// path data: a rounded rectangle and its hole cost 72 numbers where the stacked document
+/// painted a rectangle and a white one for 12, and lucide's outline icons came out with
+/// 1.2x the parameters of the traced-over-white file. But a ring of one width *is* a stroke,
+/// which is how the artist drew it, and a stroke leaves its inside empty: the hole stays a
+/// hole in six numbers. Circles are offsets of circles and rounded rectangles of rounded
+/// rectangles (outer corner `r + t/2`, inner `max(r - t/2, 0)`, square with a mitred join
+/// at `r = 0`); an ellipse's offset is not an ellipse, so it is never one.
+pub(crate) fn annulus_stroke(outer: &PrimitiveKind, inner: &PrimitiveKind) -> Option<(PrimitiveKind, f64)> {
+    let tol = std::env::var("INKVEC_STROKE_TOL")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(STROKE_TOL);
+    // How far a corner arc's apex moves when its radius changes by one.
+    let corner = std::f64::consts::SQRT_2 - 1.0;
+    match (*outer, *inner) {
+        (PrimitiveKind::Circle { c: co, r: ro }, PrimitiveKind::Circle { c: ci, r: ri }) => {
+            let t = ro - ri;
+            if t <= 0.0 || co.dist(ci) / 2.0 > tol {
+                return None;
+            }
+            let c = Point::new(0.5 * (co.x + ci.x), 0.5 * (co.y + ci.y));
+            Some((PrimitiveKind::Circle { c, r: 0.5 * (ro + ri) }, t))
+        }
+        (
+            PrimitiveKind::RoundRect {
+                x: xo,
+                y: yo,
+                w: wo,
+                h: ho,
+                rx: ro,
+            },
+            PrimitiveKind::RoundRect {
+                x: xi,
+                y: yi,
+                w: wi,
+                h: hi,
+                rx: ri,
+            },
+        ) => {
+            let sides = [xi - xo, yi - yo, (xo + wo) - (xi + wi), (yo + ho) - (yi + hi)];
+            if sides.iter().any(|&s| s <= 0.0) {
+                return None;
+            }
+            let t = sides.iter().sum::<f64>() / 4.0;
+            let mut worst = sides.iter().map(|&s| (s - t).abs() / 2.0).fold(0.0f64, f64::max);
+            let (ro, ri) = (ro.max(0.0), ri.max(0.0));
+            let r = if ro < tol / corner && ri < tol / corner {
+                // Square corners, which a stroke gets from its mitred join.
+                worst = worst.max(ro.max(ri) * corner);
+                0.0
+            } else {
+                let r = if ri > tol / corner { 0.5 * (ro + ri) } else { ro - 0.5 * t };
+                if r <= 0.0 {
+                    return None;
+                }
+                let (po, pi) = (r + 0.5 * t, (r - 0.5 * t).max(0.0));
+                worst = worst.max((po - ro).abs().max((pi - ri).abs()) * corner);
+                r
+            };
+            let (x0, y0) = (0.5 * (xo + xi), 0.5 * (yo + yi));
+            let (x1, y1) = (0.5 * (xo + wo + xi + wi), 0.5 * (yo + ho + yi + hi));
+            if worst > tol || 2.0 * r > (x1 - x0).min(y1 - y0) {
+                return None;
+            }
+            Some((
+                PrimitiveKind::RoundRect {
+                    x: x0,
+                    y: y0,
+                    w: x1 - x0,
+                    h: y1 - y0,
+                    rx: r,
+                },
+                t,
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// [`primitive_element`] as a stroke of `width` in `color`, with nothing filled.
+pub(crate) fn stroke_element(kind: &PrimitiveKind, width: f64, color: &str, decimals: usize) -> Option<String> {
+    let paint = format!(" stroke=\"{color}\" stroke-width=\"{width:.decimals$}\"");
+    primitive_element(kind, "none", &paint, decimals)
 }
 
 pub(crate) fn primitive_element(
@@ -1202,20 +1317,26 @@ pub(crate) fn emit_color(
             return h_d.clone();
         }
         let mut d = String::new();
+        // A face's own outline is its primitive too, when it fitted one, and for the same
+        // reason as a hole's: it is the geometry every neighbour was drawn against. The
+        // fitted ring starts wherever the edge walk did, off the primitive by as much as
+        // 0.6 px, and a face only lands here with a primitive outline when a hole was
+        // punched in it -- `material-icons/qr_code`'s finder squares came out with a
+        // slanted top edge, `simple-icons/phpstorm`'s square with a notch in one corner.
+        let mut ring_d = |ring: &Ring| match (ring.len() == 1)
+            .then(|| prims.get(ring[0].0).and_then(|p| p.as_ref()))
+            .flatten()
+            .and_then(|pf| primitive_d(&pf.kind, decimals))
+        {
+            Some(p) => d.push_str(&p),
+            None => fmt_ring(ring, fitted, decimals, &mut d),
+        };
         for &k in &drawn[i] {
-            fmt_ring(&order[i][k], fitted, decimals, &mut d);
+            ring_d(&order[i][k]);
         }
         for &c in &holes[i] {
             for &k in &drawn[c] {
-                let ring = &order[c][k];
-                let prim = (ring.len() == 1)
-                    .then(|| prims.get(ring[0].0).and_then(|p| p.as_ref()))
-                    .flatten()
-                    .and_then(|pf| primitive_d(&pf.kind, decimals));
-                match prim {
-                    Some(p) => d.push_str(&p),
-                    None => fmt_ring(ring, fitted, decimals, &mut d),
-                }
+                ring_d(&order[c][k]);
             }
         }
         d
@@ -1238,6 +1359,7 @@ pub(crate) fn emit_color(
         decimals: usize,
         harmonized_d: &std::collections::HashMap<usize, String>,
         symbol_use: &std::collections::HashMap<usize, (String, String)>,
+        strokes: &std::collections::HashMap<usize, String>,
     ) -> Option<(String, bool)> {
         let fill = &fills[i];
         let alpha = opac[i].as_str();
@@ -1247,6 +1369,13 @@ pub(crate) fn emit_color(
                 format!("<use id=\"{id}\" href=\"#{sym_id}\" transform=\"{matrix}\" fill=\"{fill}\"{alpha} fill-rule=\"evenodd\"/>"),
                 false,
             ));
+        }
+        if let Some(el) = strokes.get(&i) {
+            let mut el = el.clone();
+            if let Some(sp) = el.find(' ') {
+                el.insert_str(sp, &format!(" id=\"{id}\""));
+            }
+            return Some((el, true));
         }
         // A primitive element cannot carry a hole, so a face that has to show one through
         // is written as a path even when its outline would have fitted a circle.
@@ -1306,6 +1435,7 @@ pub(crate) fn emit_color(
         decimals: usize,
         harmonized_d: &std::collections::HashMap<usize, String>,
         symbol_use: &std::collections::HashMap<usize, (String, String)>,
+        strokes: &std::collections::HashMap<usize, String>,
         out: &mut String,
     ) {
         let mut done = vec![false; members.len()];
@@ -1329,6 +1459,7 @@ pub(crate) fn emit_color(
                 decimals,
                 harmonized_d,
                 symbol_use,
+                strokes,
             ) else {
                 continue;
             };
@@ -1357,6 +1488,7 @@ pub(crate) fn emit_color(
                         decimals,
                         harmonized_d,
                         symbol_use,
+                        strokes,
                     ) else {
                         done[b] = true;
                         continue;
@@ -1414,12 +1546,46 @@ pub(crate) fn emit_color(
                     decimals,
                     harmonized_d,
                     symbol_use,
+                    strokes,
                     out,
                 );
             }
             out.push_str("</g>");
         }
     }
+
+    // Rings written as strokes: a face with exactly one hole punched in it, where the face's
+    // outline and the hole are both primitives and one is the other offset by a uniform
+    // width. See `annulus_stroke`. Only where transparency is traced natively; opaque paint
+    // only, since a stroke carries no `fill-opacity` of its own.
+    let single_prim = |f: usize| -> Option<&PrimitiveKind> {
+        let &[k] = drawn[f].as_slice() else {
+            return None;
+        };
+        let &[(e, _)] = order[f][k].as_slice() else {
+            return None;
+        };
+        prims.get(e).and_then(|p| p.as_ref()).map(|p| &p.kind)
+    };
+    let strokes: std::collections::HashMap<usize, String> = if native {
+        (0..order.len())
+            .filter(|&i| {
+                !drop(i)
+                    && holes[i].len() == 1
+                    && fills[i].starts_with('#')
+                    && opac[i].is_empty()
+                    && !harmonized_d.contains_key(&i)
+                    && !symbol_use.contains_key(&i)
+            })
+            .filter_map(|i| {
+                let (o, h) = (single_prim(i)?, single_prim(holes[i][0])?);
+                let (mid, width) = annulus_stroke(o, h)?;
+                Some((i, stroke_element(&mid, width, &fills[i], decimals)?))
+            })
+            .collect()
+    } else {
+        std::collections::HashMap::new()
+    };
 
     let mut body = String::new();
     emit_level(
@@ -1437,6 +1603,7 @@ pub(crate) fn emit_color(
         decimals,
         &harmonized_d,
         &symbol_use,
+        &strokes,
         &mut body,
     );
 
@@ -1489,4 +1656,107 @@ pub(crate) fn emit_bilevel(paths: &[Vec<Point>], w: usize, h: usize, precision: 
     format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"-0.5 -0.5 {w} {h}\" width=\"{w}\" height=\"{h}\"><rect x=\"-0.5\" y=\"-0.5\" width=\"{w}\" height=\"{h}\" fill=\"#ffffff\"/><path d=\"{d}\" fill=\"#000000\" fill-rule=\"evenodd\"/></svg>"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn numbers(d: &str) -> Vec<f64> {
+        d.split(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-'))
+            .filter(|s| !s.is_empty())
+            .filter_map(|s| s.parse().ok())
+            .collect()
+    }
+
+    #[test]
+    fn a_circle_as_path_is_centred_where_it_was_fitted() {
+        // Radius and ends rounded independently put the chord a hair under the diameter,
+        // and a half-turn arc then bulges by sqrt(r * error): 0.76 px on this circle.
+        let kind = PrimitiveKind::Circle {
+            c: Point::new(63.4962, 63.5),
+            r: 57.0975,
+        };
+        let d = primitive_d(&kind, 2).unwrap();
+        let v = numbers(&d);
+        // M x0,y  A r,r 0 1 0 x1,y  A r,r 0 1 0 x0,y
+        let (x0, ra, x1) = (v[0], v[2], v[7]);
+        assert!(ra < 0.5 * (x1 - x0), "{d}: the radius must fall short of the half-chord");
+        assert!((0.5 * (x0 + x1) - 63.50).abs() < 1e-9, "{d}");
+        assert!((0.5 * (x1 - x0) - 57.10).abs() < 1e-9, "{d}");
+    }
+
+    #[test]
+    fn a_ring_of_one_width_is_one_stroke() {
+        let c = Point::new(63.5, 63.5);
+        let (mid, t) = annulus_stroke(
+            &PrimitiveKind::Circle { c, r: 21.32 },
+            &PrimitiveKind::Circle { c, r: 10.68 },
+        )
+        .expect("concentric circles are a stroke");
+        assert!((t - 10.64).abs() < 1e-9);
+        assert_eq!(mid, PrimitiveKind::Circle { c, r: 16.0 });
+
+        // lucide/square-minus: the frame, fitted as two rounded rectangles.
+        let outer = PrimitiveKind::RoundRect {
+            x: 10.16,
+            y: 10.16,
+            w: 106.68,
+            h: 106.68,
+            rx: 16.06,
+        };
+        let inner = PrimitiveKind::RoundRect {
+            x: 20.84,
+            y: 20.84,
+            w: 85.32,
+            h: 85.32,
+            rx: 5.29,
+        };
+        let (mid, t) = annulus_stroke(&outer, &inner).expect("a uniform frame is a stroke");
+        assert!((t - 10.68).abs() < 1e-9);
+        let PrimitiveKind::RoundRect { x, w, rx, .. } = mid else {
+            panic!("a rectangle's stroke is a rectangle")
+        };
+        assert!((x - 15.5).abs() < 1e-9 && (w - 96.0).abs() < 1e-9 && (rx - 10.675).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_ring_that_is_not_uniform_stays_a_path() {
+        let c = Point::new(63.5, 63.5);
+        // Off centre by a pixel: one side of the ring is two pixels thicker.
+        assert!(annulus_stroke(
+            &PrimitiveKind::Circle { c, r: 21.32 },
+            &PrimitiveKind::Circle {
+                c: Point::new(64.5, 63.5),
+                r: 10.68
+            },
+        )
+        .is_none());
+        // A frame with a thicker bottom bar.
+        assert!(annulus_stroke(
+            &PrimitiveKind::RoundRect {
+                x: 10.0,
+                y: 10.0,
+                w: 100.0,
+                h: 100.0,
+                rx: 0.0
+            },
+            &PrimitiveKind::RoundRect {
+                x: 20.0,
+                y: 20.0,
+                w: 80.0,
+                h: 70.0,
+                rx: 0.0
+            },
+        )
+        .is_none());
+        // An ellipse's offset is not an ellipse.
+        let e = |rx: f64, ry: f64| PrimitiveKind::Ellipse {
+            c,
+            rx,
+            ry,
+            angle: 0.0,
+        };
+        assert!(annulus_stroke(&e(30.0, 20.0), &e(20.0, 10.0)).is_none());
+    }
 }

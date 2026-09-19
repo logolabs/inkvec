@@ -1,0 +1,46 @@
+Inkvec
+Copyright 2026 LogoLabs and Stefan-Lucian Deleanu
+
+This product includes software developed by LogoLabs and licensed under the Apache
+License, Version 2.0 (see LICENSE).
+
+------------------------------------------------------------------------------------
+
+This distribution includes third-party components. Every Rust crate Inkvec compiles
+against, plus the tools and runtimes used by the optional restorer and SR pre-pass, are
+listed with their licences and upstream URLs in docs/THIRD_PARTY.md; that file is
+regenerated from the resolved dependency graph and is the authoritative list.
+
+The benchmark corpora committed under bench/data (test data, not shipped in any build)
+are drawn from the following third-party icon sets, each under its own upstream licence:
+
+  lucide            ISC (includes Feather's MIT notice)
+                    https://github.com/lucide-icons/lucide
+
+  material-icons    Apache-2.0
+                    https://github.com/google/material-design-icons
+
+  simple-icons      CC0-1.0
+                    https://github.com/simple-icons/simple-icons
+                    The icons are dedicated to the public domain; the brand names and
+                    logos depicted remain trademarks of their respective owners. See
+                    simple-icons' own DISCLAIMER.md.
+
+  twemoji           CC-BY 4.0 (graphics)
+                    https://github.com/jdecked/twemoji
+
+  noto-emoji        Apache-2.0 (images), OFL-1.1 (fonts)
+                    https://github.com/googlefonts/noto-emoji
+
+  openmoji          CC-BY-SA 4.0
+                    https://openmoji.org
+
+  fluent-emoji      MIT
+                    https://github.com/microsoft/fluentui-emoji
+
+When the optional `restore-model` feature is built and an ONNX Runtime library is
+redistributed with the result, Microsoft's ONNX Runtime ThirdPartyNotices.txt is included
+alongside it, as required by its licence.
+
+For the complete, generated list of Rust crates and their licences, see
+docs/THIRD_PARTY.md.

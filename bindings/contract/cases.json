@@ -1,0 +1,429 @@
+{
+  "about": "Cross-language contract. Every binding traces each case. `form` is `encoded` (the file's bytes go to trace) or `rgba` (the file is raw straight RGBA8 of `width` x `height`, for trace_rgba). `expect` must match on every build: the reported width and height, or `error`, the kind of error (invalid_image, invalid_options, internal). `svg` maps a build target (the library's build_target()) to the SVG's length in bytes and SHA-256; a target with an entry must match it exactly, a target without one is checked on everything else. `same_svg_as` names a case whose SVG must be identical, on every target. Cases, inputs and options are written by hand; `expect` and `svg` are produced by the Rust facade.",
+  "regenerate": "INKVEC_BLESS=1 cargo test -p inkvec --release --test contract (output changed: rewrites this target, drops the others); INKVEC_BLESS=add ... (records another target's hashes)",
+  "cases": [
+    {
+      "name": "tiny_defaults",
+      "input": "tiny.png",
+      "form": "encoded",
+      "options": {},
+      "expect": {
+        "width": 96,
+        "height": 96
+      },
+      "svg": {
+        "x86_64-windows-msvc": {
+          "bytes": 8991,
+          "sha256": "83fd2fe7a69fce6ca7f100275a58a26f0d757b014f14369ef643ea951eaa0777"
+        },
+        "x86_64-linux-gnu": {
+          "bytes": 9003,
+          "sha256": "d3c70c5eb63d68bfcfcb0e141539b37b060a6708b7d3510ad0f2f00773bc47b9"
+        },
+        "wasm32-unknown": {
+          "bytes": 9003,
+          "sha256": "0ac9ec2c72cc17350cb174798b10b997ff6cdab2aad3bff0b6d95877851670d4"
+        },
+        "wasm32-wasip1": {
+          "bytes": 8991,
+          "sha256": "6da4b1c22523c3a9c7d0a0c273da97e653f169c148fb05f5c8a60f5b4ef2b2b1"
+        }
+      }
+    },
+    {
+      "name": "tiny_rgba_defaults",
+      "input": "tiny.rgba",
+      "form": "rgba",
+      "width": 96,
+      "height": 96,
+      "options": {},
+      "same_svg_as": "tiny_defaults",
+      "expect": {
+        "width": 96,
+        "height": 96
+      },
+      "svg": {
+        "x86_64-windows-msvc": {
+          "bytes": 8991,
+          "sha256": "83fd2fe7a69fce6ca7f100275a58a26f0d757b014f14369ef643ea951eaa0777"
+        },
+        "x86_64-linux-gnu": {
+          "bytes": 9003,
+          "sha256": "d3c70c5eb63d68bfcfcb0e141539b37b060a6708b7d3510ad0f2f00773bc47b9"
+        },
+        "wasm32-unknown": {
+          "bytes": 9003,
+          "sha256": "0ac9ec2c72cc17350cb174798b10b997ff6cdab2aad3bff0b6d95877851670d4"
+        },
+        "wasm32-wasip1": {
+          "bytes": 8991,
+          "sha256": "6da4b1c22523c3a9c7d0a0c273da97e653f169c148fb05f5c8a60f5b4ef2b2b1"
+        }
+      }
+    },
+    {
+      "name": "tiny_output_options",
+      "input": "tiny.png",
+      "form": "encoded",
+      "options": {
+        "colors": 8,
+        "minify": true,
+        "no_background": true,
+        "harmonize": false
+      },
+      "expect": {
+        "width": 96,
+        "height": 96
+      },
+      "svg": {
+        "x86_64-windows-msvc": {
+          "bytes": 8389,
+          "sha256": "6596472d4e41ed72773a474086761c55070045d1d286dca9f84a0b75f07e5a03"
+        },
+        "x86_64-linux-gnu": {
+          "bytes": 8402,
+          "sha256": "a392bf058bc1237130ec8ee72761d417525b230ae9efaef4a68a9629d7306c41"
+        },
+        "wasm32-unknown": {
+          "bytes": 8401,
+          "sha256": "0c39463926e8b7964cd9edf506f7d8bdc9d51aadb9c860a1eda887b8dff9d803"
+        },
+        "wasm32-wasip1": {
+          "bytes": 8389,
+          "sha256": "59753672a29ebf11b5567be35fc0c72b7f3951df217b2e763b86f0c0d774e99a"
+        }
+      }
+    },
+    {
+      "name": "tiny_margin",
+      "input": "tiny.png",
+      "form": "encoded",
+      "options": {
+        "margin": 0.1
+      },
+      "expect": {
+        "width": 96,
+        "height": 96
+      },
+      "svg": {
+        "x86_64-windows-msvc": {
+          "bytes": 9011,
+          "sha256": "66556fe1eaf4e6ab022667924d3a00c635f76bfa3110d4b3d72017f3b0cb2eb4"
+        },
+        "x86_64-linux-gnu": {
+          "bytes": 9023,
+          "sha256": "7297d5eb852361d87029094047e97fc083219f30edc1e8bb8b0bec34978e252d"
+        },
+        "wasm32-unknown": {
+          "bytes": 9023,
+          "sha256": "4c41969b3518983043a65808a5a7d6b91351b9c60f33ce1c67933b279f2aa85d"
+        },
+        "wasm32-wasip1": {
+          "bytes": 9011,
+          "sha256": "fa78e22008ba3912bcb6d6e044daafe7d80dab4bb34a4f88cd595f31564289e2"
+        }
+      }
+    },
+    {
+      "name": "tiny_capped",
+      "input": "tiny.png",
+      "form": "encoded",
+      "options": {
+        "max_dim": 48
+      },
+      "expect": {
+        "width": 96,
+        "height": 96
+      },
+      "svg": {
+        "x86_64-windows-msvc": {
+          "bytes": 2425,
+          "sha256": "a1f93b76a30d40e2ec81dabd2d494403f4095f02b4fee71c3b98a8024ea90ff9"
+        },
+        "x86_64-linux-gnu": {
+          "bytes": 2424,
+          "sha256": "49f8014eaf831ced3596cd3b23ee8a9e82ab87cf3b7db049cd6fa7bac47a63ed"
+        },
+        "wasm32-unknown": {
+          "bytes": 2424,
+          "sha256": "49f8014eaf831ced3596cd3b23ee8a9e82ab87cf3b7db049cd6fa7bac47a63ed"
+        },
+        "wasm32-wasip1": {
+          "bytes": 2424,
+          "sha256": "49f8014eaf831ced3596cd3b23ee8a9e82ab87cf3b7db049cd6fa7bac47a63ed"
+        }
+      }
+    },
+    {
+      "name": "tiny_rgba_capped",
+      "input": "tiny.rgba",
+      "form": "rgba",
+      "width": 96,
+      "height": 96,
+      "options": {
+        "max_dim": 48
+      },
+      "same_svg_as": "tiny_capped",
+      "expect": {
+        "width": 96,
+        "height": 96
+      },
+      "svg": {
+        "x86_64-windows-msvc": {
+          "bytes": 2425,
+          "sha256": "a1f93b76a30d40e2ec81dabd2d494403f4095f02b4fee71c3b98a8024ea90ff9"
+        },
+        "x86_64-linux-gnu": {
+          "bytes": 2424,
+          "sha256": "49f8014eaf831ced3596cd3b23ee8a9e82ab87cf3b7db049cd6fa7bac47a63ed"
+        },
+        "wasm32-unknown": {
+          "bytes": 2424,
+          "sha256": "49f8014eaf831ced3596cd3b23ee8a9e82ab87cf3b7db049cd6fa7bac47a63ed"
+        },
+        "wasm32-wasip1": {
+          "bytes": 2424,
+          "sha256": "49f8014eaf831ced3596cd3b23ee8a9e82ab87cf3b7db049cd6fa7bac47a63ed"
+        }
+      }
+    },
+    {
+      "name": "tiny_capped_margin",
+      "input": "tiny.png",
+      "form": "encoded",
+      "options": {
+        "max_dim": 48,
+        "margin": 0.1
+      },
+      "expect": {
+        "width": 96,
+        "height": 96
+      },
+      "svg": {
+        "x86_64-windows-msvc": {
+          "bytes": 2441,
+          "sha256": "7247b2b73041f49dd97c202acd7d67b26f537811db5c77e35c3bceea4bbcfe4b"
+        },
+        "x86_64-linux-gnu": {
+          "bytes": 2440,
+          "sha256": "69f57b22979f603bff50a8eed1a10ba26bec6144290a9f5bf077f9d6b2b8dd3b"
+        },
+        "wasm32-unknown": {
+          "bytes": 2440,
+          "sha256": "69f57b22979f603bff50a8eed1a10ba26bec6144290a9f5bf077f9d6b2b8dd3b"
+        },
+        "wasm32-wasip1": {
+          "bytes": 2440,
+          "sha256": "69f57b22979f603bff50a8eed1a10ba26bec6144290a9f5bf077f9d6b2b8dd3b"
+        }
+      }
+    },
+    {
+      "name": "clear_defaults",
+      "input": "white_on_clear.png",
+      "form": "encoded",
+      "options": {},
+      "expect": {
+        "width": 64,
+        "height": 64
+      },
+      "svg": {
+        "x86_64-windows-msvc": {
+          "bytes": 292,
+          "sha256": "6a11edc9789eb579eed9d00e8ead5c4655ab95e4be3862a8032ac146a002fc25"
+        },
+        "x86_64-linux-gnu": {
+          "bytes": 292,
+          "sha256": "6a11edc9789eb579eed9d00e8ead5c4655ab95e4be3862a8032ac146a002fc25"
+        },
+        "wasm32-unknown": {
+          "bytes": 292,
+          "sha256": "6a11edc9789eb579eed9d00e8ead5c4655ab95e4be3862a8032ac146a002fc25"
+        },
+        "wasm32-wasip1": {
+          "bytes": 292,
+          "sha256": "6a11edc9789eb579eed9d00e8ead5c4655ab95e4be3862a8032ac146a002fc25"
+        }
+      }
+    },
+    {
+      "name": "clear_rgba_defaults",
+      "input": "white_on_clear.rgba",
+      "form": "rgba",
+      "width": 64,
+      "height": 64,
+      "options": {},
+      "same_svg_as": "clear_defaults",
+      "expect": {
+        "width": 64,
+        "height": 64
+      },
+      "svg": {
+        "x86_64-windows-msvc": {
+          "bytes": 292,
+          "sha256": "6a11edc9789eb579eed9d00e8ead5c4655ab95e4be3862a8032ac146a002fc25"
+        },
+        "x86_64-linux-gnu": {
+          "bytes": 292,
+          "sha256": "6a11edc9789eb579eed9d00e8ead5c4655ab95e4be3862a8032ac146a002fc25"
+        },
+        "wasm32-unknown": {
+          "bytes": 292,
+          "sha256": "6a11edc9789eb579eed9d00e8ead5c4655ab95e4be3862a8032ac146a002fc25"
+        },
+        "wasm32-wasip1": {
+          "bytes": 292,
+          "sha256": "6a11edc9789eb579eed9d00e8ead5c4655ab95e4be3862a8032ac146a002fc25"
+        }
+      }
+    },
+    {
+      "name": "clear_composited",
+      "input": "white_on_clear.png",
+      "form": "encoded",
+      "options": {
+        "native_alpha": false
+      },
+      "expect": {
+        "width": 64,
+        "height": 64
+      },
+      "svg": {
+        "x86_64-windows-msvc": {
+          "bytes": 393,
+          "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
+        },
+        "x86_64-linux-gnu": {
+          "bytes": 393,
+          "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
+        },
+        "wasm32-unknown": {
+          "bytes": 393,
+          "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
+        },
+        "wasm32-wasip1": {
+          "bytes": 393,
+          "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
+        }
+      }
+    },
+    {
+      "name": "clear_cutout",
+      "input": "white_on_clear.png",
+      "form": "encoded",
+      "options": {
+        "native_alpha": false,
+        "cutout": true
+      },
+      "expect": {
+        "width": 64,
+        "height": 64
+      },
+      "svg": {
+        "x86_64-windows-msvc": {
+          "bytes": 393,
+          "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
+        },
+        "x86_64-linux-gnu": {
+          "bytes": 393,
+          "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
+        },
+        "wasm32-unknown": {
+          "bytes": 393,
+          "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
+        },
+        "wasm32-wasip1": {
+          "bytes": 393,
+          "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
+        }
+      }
+    },
+    {
+      "name": "clear_rgba_cutout",
+      "input": "white_on_clear.rgba",
+      "form": "rgba",
+      "width": 64,
+      "height": 64,
+      "options": {
+        "native_alpha": false,
+        "cutout": true
+      },
+      "same_svg_as": "clear_cutout",
+      "expect": {
+        "width": 64,
+        "height": 64
+      },
+      "svg": {
+        "x86_64-windows-msvc": {
+          "bytes": 393,
+          "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
+        },
+        "x86_64-linux-gnu": {
+          "bytes": 393,
+          "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
+        },
+        "wasm32-unknown": {
+          "bytes": 393,
+          "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
+        },
+        "wasm32-wasip1": {
+          "bytes": 393,
+          "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
+        }
+      }
+    },
+    {
+      "name": "error_unknown_option",
+      "input": "tiny.png",
+      "form": "encoded",
+      "options": {
+        "colours": 8
+      },
+      "expect": {
+        "error": "invalid_options"
+      }
+    },
+    {
+      "name": "error_out_of_range",
+      "input": "tiny.png",
+      "form": "encoded",
+      "options": {
+        "colors": 0
+      },
+      "expect": {
+        "error": "invalid_options"
+      }
+    },
+    {
+      "name": "error_wrong_type",
+      "input": "tiny.png",
+      "form": "encoded",
+      "options": {
+        "cutout": "yes"
+      },
+      "expect": {
+        "error": "invalid_options"
+      }
+    },
+    {
+      "name": "error_not_an_image",
+      "input": "white_on_clear.rgba",
+      "form": "encoded",
+      "options": {},
+      "expect": {
+        "error": "invalid_image"
+      }
+    },
+    {
+      "name": "error_rgba_size_mismatch",
+      "input": "white_on_clear.rgba",
+      "form": "rgba",
+      "width": 60,
+      "height": 64,
+      "options": {},
+      "expect": {
+        "error": "invalid_image"
+      }
+    }
+  ]
+}

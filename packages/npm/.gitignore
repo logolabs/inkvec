@@ -1,0 +1,7 @@
+node_modules/
+dist/
+wasm/
+# Copied from the repository root by build.mjs.
+LICENSE
+NOTICE
+*.tgz

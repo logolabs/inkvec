@@ -213,6 +213,31 @@ pub fn decode_image_capped(bytes: &[u8], max_dim: usize) -> Result<(Rgba, (u32, 
     Ok((out, (w, h)))
 }
 
+/// Raw straight RGBA8 pixels (row-major, tightly packed, `w * h * 4` bytes) into straight
+/// RGBA floats, capping the longer side at `max_dim` (0 = no cap) exactly as
+/// [`decode_image_capped`] caps a decoded file.
+///
+/// The two share the cap and the 8-bit conversion so that a caller holding pixels and a
+/// caller holding the encoded file trace the same raster, byte for byte. The caller checks
+/// the length; a short buffer reads as transparent black past its end.
+pub fn rgba8_capped(raw: &[u8], w: u32, h: u32, max_dim: usize) -> Rgba {
+    match target_dims(w, h, max_dim) {
+        Some((nw, nh)) => {
+            coverage::box_downsample_rgba8(raw, w as usize, h as usize, nw as usize, nh as usize)
+        }
+        None => {
+            let n = w as usize * h as usize * 4;
+            let mut data: Vec<f32> = raw.iter().take(n).map(|&b| b as f32 / 255.0).collect();
+            data.resize(n, 0.0);
+            Rgba {
+                width: w as usize,
+                height: h as usize,
+                data,
+            }
+        }
+    }
+}
+
 /// Options for the bilevel path.
 #[derive(Debug, Clone, Copy)]
 pub struct TraceOptions {
@@ -1241,6 +1266,38 @@ mod lossy_container_tests {
     #[test]
     fn nonsense_is_unknown_not_clean() {
         assert_eq!(lossy_container(b"not an image at all"), None);
+    }
+}
+
+#[cfg(test)]
+mod rgba8_capped_tests {
+    use super::{decode_image_capped, rgba8_capped};
+
+    /// Raw pixels and the same pixels encoded as a PNG must reach the tracer as the same
+    /// raster, capped or not: the language bindings promise that the two inputs agree.
+    #[test]
+    fn raw_pixels_match_the_decoded_file_with_and_without_a_cap() {
+        let (w, h) = (40u32, 24u32);
+        let img = image::RgbaImage::from_fn(w, h, |x, y| {
+            image::Rgba([
+                (x * 6) as u8,
+                (y * 9) as u8,
+                200,
+                if x > 20 { 255 } else { 90 },
+            ])
+        });
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(img.clone())
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let png = png.into_inner();
+        for max_dim in [0usize, 2048, 16] {
+            let (decoded, dims) = decode_image_capped(&png, max_dim).unwrap();
+            let raw = rgba8_capped(img.as_raw(), w, h, max_dim);
+            assert_eq!(dims, (w, h));
+            assert_eq!((raw.width, raw.height), (decoded.width, decoded.height));
+            assert_eq!(raw.data, decoded.data, "max_dim {max_dim}");
+        }
     }
 }
 

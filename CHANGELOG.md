@@ -7,6 +7,71 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+### Added
+
+- **Language-binding foundation** (`docs/BINDINGS.md`). The `inkvec` crate is a small stable
+  library API (`trace`, `trace_rgba`, `Options`, `Traced`, `Error`); `inkvec-ffi` is a C
+  library (`inkvec_ffi`) with a cbindgen header, `include/inkvec.h`; `inkvec-py` is the `inkvec`
+  Python package (PyO3, abi3 wheels for 3.9+). Options live once, in `inkvec::Options`, whose
+  JSON Schema (`bindings/options.schema.json`) the bindings take their options through and
+  their typed stubs are generated from; `bindings/contract/` holds the cases every binding must
+  reproduce. Nothing is published yet.
+- **npm package `@logolabs/inkvec`** (`packages/npm`). The WebAssembly build for JavaScript
+  and TypeScript: one ES module entry for browsers, Node.js, Deno and Bun, and a threaded
+  build at `@logolabs/inkvec/threads` (cross-origin isolated pages in a Web Worker, or Node.js
+  `worker_threads`). `trace`, `traceRGBA` (canvas `ImageData`), `defaults`, `optionsSchema`;
+  options go to the facade as JSON and their TypeScript types are generated from the schema.
+  `crates/inkvec-wasm` gains `trace_json` / `trace_rgba_json` on the facade; the positional
+  `trace` the web demo calls is unchanged. Not published yet.
+- **Java package `com.logolabs:inkvec`** (`packages/java`). A JNA binding over `inkvec-ffi`'s
+  C ABI, Java 8+: `Inkvec.trace`, `Inkvec.traceRgba`, `defaults`, `optionsSchema`; a generated,
+  immutable `InkvecOptions` builder plus a raw-JSON-options overload on every method, and
+  `InkvecException` subclasses per error kind. Options are generated from the schema by
+  `bindings/codegen/java.py`. Placeholder group id `com.logolabs`; not published yet.
+- **NuGet package `LogoLabs.Inkvec`** (`packages/dotnet`). The .NET binding: P/Invoke over
+  `inkvec_ffi`, `netstandard2.0` (.NET Framework 4.6.1+, Unity) and `net8.0`
+  (`LibraryImport` source generation there, `DllImport` on `netstandard2.0`). `Inkvec.Trace`,
+  `TraceRgba`, `TraceFile`; options are the generated `InkvecOptions` (nullable properties,
+  `null` meaning the tracer's own default) or a raw JSON string; errors are
+  `InvalidImageException`, `InvalidOptionsException` and `InkvecInternalException`. Native
+  libraries for `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64` and
+  `osx-arm64` ship under `runtimes/`. Not published yet.
+- **Swift package** (`packages/swift`). `Inkvec.trace` (image data, a file URL, a `CGImage`,
+  `UIImage` or `NSImage`), `Inkvec.traceRGBA`, raw-JSON variants of both, `defaults`,
+  `optionsSchema`, `version`, `buildTarget`; errors are `InkvecError`. `InkvecOptions` is
+  generated from the options schema (`bindings/codegen/swift.py`). Apple platforms get the C
+  library as a static XCFramework (`packages/swift/scripts/build-xcframework.sh`) through a
+  mirror repository, `logolabs/inkvec-swift`, that `.github/workflows/swift.yml` updates on a
+  release tag when the repository opts in; Linux links `libinkvec_ffi` as a system library.
+  The contract passes on x86_64 Linux; the macOS and iOS builds have not run yet. Not
+  published yet.
+- **Docker HTTP service** (`crates/inkvec-server`, `services/docker/Dockerfile`). `POST
+  /trace` traces raw image bytes or a `multipart/form-data` `image` part to `image/svg+xml`;
+  options come from a `?options=` query parameter, an `X-Inkvec-Options` header, generic query
+  parameters typed against the schema, or a multipart `options` part, all handed to
+  `inkvec::Options::from_json` unchanged -- no option is named in the service. `GET
+  /options/schema`, `/options/defaults`, `/healthz`, `/version`, and a generated OpenAPI 3.1
+  document at `/openapi.json` (`bindings/codegen/openapi.py`). Traces run on a blocking pool
+  behind a concurrency limit (`INKVEC_MAX_CONCURRENCY`, `503 busy` past it) and a body-size
+  cap (`INKVEC_MAX_BODY_BYTES`, `413`); the image is `rust:1.98-bookworm` building a
+  distroless, non-root runtime. Not published or pushed anywhere by this repository.
+- **Go module `github.com/logolabs/inkvec-go`** (`packages/go`). Pure Go, no cgo: the C ABI
+  compiled to `wasm32-wasip1` (`tools/build_go_wasm.sh`), embedded and run by wazero, one
+  module instance per concurrent call. `Trace`, `TraceRGBA`, `TraceJSON` (options passed
+  through untouched), `Defaults`, `OptionsSchema`, errors matching `ErrInvalidImage`,
+  `ErrInvalidOptions`, `ErrInternal`; the `Options` struct is generated from the schema
+  (`bindings/codegen/golang.py`). `inkvec-ffi` gains `inkvec_alloc` / `inkvec_dealloc` on WASI
+  only (not in the header), and `inkvec::build_target()` names that build `wasm32-wasip1`
+  instead of `wasm32-unknown`, which it shared with the browser build although its output
+  differs. Released through a mirror repository by `.github/workflows/go.yml`; not published
+  yet.
+
+### Fixed
+
+- **`--margin` on reduced input.** The margin was silently dropped whenever the SVG was
+  presented at a larger size than it was traced at (`--max-dim` capped the input, or an exact
+  pixel-block upscale was undone). The presented size now grows with the viewBox.
+
 ## [0.1.4] - 2026-09-20
 
 ### Changed

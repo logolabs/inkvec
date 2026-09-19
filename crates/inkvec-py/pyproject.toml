@@ -1,0 +1,52 @@
+[build-system]
+# 1.9.4 is the first maturin that tells PyO3 it is building an extension module through
+# PYO3_BUILD_EXTENSION_MODULE, which replaces PyO3's deprecated `extension-module` feature.
+requires = ["maturin>=1.9.4,<2"]
+build-backend = "maturin"
+
+[project]
+name = "inkvec"
+description = "Raster logos, icons and illustrations to compact, accurate SVG"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "LogoLabs" }]
+keywords = ["svg", "vectorization", "vectorizer", "image-tracing", "raster-to-vector"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Rust",
+    "Topic :: Multimedia :: Graphics :: Graphics Conversion",
+    "Typing :: Typed",
+]
+# The version is the Rust workspace's (Cargo.toml `workspace.package.version`), read by
+# maturin at build time, so the wheel, the crate and the C library always agree.
+dynamic = ["version"]
+dependencies = []
+
+[project.optional-dependencies]
+# Pillow images and numpy arrays are accepted as input when those packages are installed;
+# neither is needed otherwise.
+test = ["pytest>=7", "pillow", "numpy"]
+
+[project.urls]
+Homepage = "https://github.com/logolabs/inkvec"
+Documentation = "https://github.com/logolabs/inkvec/blob/main/docs/BINDINGS.md"
+Source = "https://github.com/logolabs/inkvec"
+Issues = "https://github.com/logolabs/inkvec/issues"
+Demo = "https://huggingface.co/spaces/logolabs/inkvec"
+
+[tool.maturin]
+python-source = "python"
+module-name = "inkvec._inkvec"
+bindings = "pyo3"
+# The crate compiles empty without it, so `cargo build --workspace` needs no Python.
+features = ["python"]
+profile = "release"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

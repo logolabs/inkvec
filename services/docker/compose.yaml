@@ -1,0 +1,30 @@
+# Example: `docker compose -f services/docker/compose.yaml up --build` from the repository
+# root. Not used by CI; a runnable reference for local use and as a starting point for a
+# deployment.
+services:
+  inkvec-server:
+    build:
+      context: ../..
+      dockerfile: services/docker/Dockerfile
+    image: inkvec-server:local
+    ports:
+      - "8080:8080"
+    environment:
+      # See crates/inkvec-server/README.md#configuration for the full list.
+      INKVEC_MAX_CONCURRENCY: "4"
+      INKVEC_MAX_BODY_BYTES: "20971520" # 20 MB
+      RUST_LOG: "info"
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/inkvec-server", "--healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+    restart: unless-stopped
+    # CPU-bound: give it real headroom rather than the daemon's default share, and cap it so
+    # one container cannot starve its host (see the README's security notes).
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 2g

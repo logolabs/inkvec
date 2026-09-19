@@ -118,6 +118,10 @@ jobs:
           cp "${bin_path}" "${stage}/"
           cp LICENSE NOTICE README.md "${stage}/"
           cp docs/THIRD_PARTY.md "${stage}/THIRD_PARTY.md"
+          # The options, as the bindings see them: the ComfyUI node reads this file next
+          # to the binary and builds its widgets from it, so a new option reaches it
+          # without a node release.
+          cp bindings/options.schema.json "${stage}/options.schema.json"
 
           if [[ "${FEATURE}" == "restore-model" ]]; then
             cat > "${stage}/RESTORER.txt" <<'EOF'

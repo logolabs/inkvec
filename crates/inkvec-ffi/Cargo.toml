@@ -1,0 +1,34 @@
+[package]
+name = "inkvec-ffi"
+description = "Inkvec's C ABI: a shared and static library with a generated C header, for binding from any language"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+# Shipped as prebuilt libraries plus include/inkvec.h (GitHub release assets), not through
+# crates.io: a Rust caller should depend on the `inkvec` crate directly.
+publish = false
+
+[lib]
+# The artifacts are `inkvec_ffi.dll` (+ `inkvec_ffi.dll.lib`) / `libinkvec_ffi.so` /
+# `libinkvec_ffi.dylib`, and the static `inkvec_ffi.lib` / `libinkvec_ffi.a`. Not plain
+# `inkvec`: on Windows the library's `inkvec.pdb` would collide with the command line's
+# (`inkvec.exe`) in one target directory, which cargo reports as an output filename
+# collision and may one day refuse. No `rlib`: the tests live inside the library.
+name = "inkvec_ffi"
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+inkvec = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+sha2 = "0.10"
+
+[lints]
+workspace = true

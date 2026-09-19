@@ -1,0 +1,10 @@
+# Build output
+bin/
+obj/
+*.nupkg
+*.snupkg
+
+# Native libraries: build artifacts gathered per-platform by the bindings workflow (see
+# docs/BINDINGS.md, "Building and testing locally" / .github/workflows/bindings.yml), never
+# committed -- the same rule packages/npm/.gitignore applies to wasm/.
+runtimes/*/native/*

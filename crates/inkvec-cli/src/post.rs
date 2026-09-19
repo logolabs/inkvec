@@ -196,6 +196,12 @@ pub(crate) fn minify_svg(svg: &str) -> String {
 /// Grow the viewBox by `margin` of the larger side on every edge. The geometry does
 /// not move: the artwork keeps its coordinates and gains transparent breathing room, so
 /// a logo traced from a tight raster no longer sits flush against its own frame.
+///
+/// `w` x `h` is the viewBox, the size that was traced. The presented `width`/`height` that
+/// follow it are read from the document rather than assumed equal: an input reduced for
+/// tracing (`--max-dim`, or an undone pixel-block upscale) is presented at the size that
+/// arrived, and each presented side grows in proportion to its viewBox side. Matching the
+/// presented size against `w` x `h` used to drop the margin silently on every such input.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub(crate) fn with_margin(svg: String, w: usize, h: usize, margin: f64) -> String {
     // Negated deliberately: `--margin nan` should leave the document alone, and it would
@@ -203,19 +209,44 @@ pub(crate) fn with_margin(svg: String, w: usize, h: usize, margin: f64) -> Strin
     if !(margin > 0.0) {
         return svg;
     }
+    let head = format!("viewBox=\"-0.5 -0.5 {w} {h}\" width=\"");
+    let Some(start) = svg.find(&head) else {
+        return svg;
+    };
+    // `<dw>" height="<dh>"` follows the head.
+    let tail = &svg[start + head.len()..];
+    let parsed = tail.split_once('"').and_then(|(dw, rest)| {
+        let (dh, _) = rest.strip_prefix(" height=\"")?.split_once('"')?;
+        let end = head.len() + dw.len() + " height=\"".len() + 1 + dh.len() + 1;
+        Some((dw.parse::<f64>().ok()?, dh.parse::<f64>().ok()?, end))
+    });
+    let Some((dw, dh, end)) = parsed else {
+        return svg;
+    };
     let m = margin * w.max(h) as f64;
-    let head = format!("viewBox=\"-0.5 -0.5 {w} {h}\" width=\"{w}\" height=\"{h}\"");
     let (vw, vh) = (w as f64 + 2.0 * m, h as f64 + 2.0 * m);
+    // Unretargeted, the presented size is the viewBox size, written exactly as before.
+    let grow = |d: f64, side: usize, v: f64| {
+        if d == side as f64 {
+            v
+        } else {
+            d * v / side as f64
+        }
+    };
     let grown = format!(
         "viewBox=\"{:.2} {:.2} {:.2} {:.2}\" width=\"{:.2}\" height=\"{:.2}\"",
         -0.5 - m,
         -0.5 - m,
         vw,
         vh,
-        vw,
-        vh
+        grow(dw, w, vw),
+        grow(dh, h, vh)
     );
-    svg.replacen(&head, &grown, 1)
+    let mut out = String::with_capacity(svg.len() + 32);
+    out.push_str(&svg[..start]);
+    out.push_str(&grown);
+    out.push_str(&svg[start + end..]);
+    out
 }
 
 /// The output options, in the order they compose: background knock-out, minify, margin.
@@ -231,7 +262,27 @@ pub fn post_process(args: &Args, svg: String, w: usize, h: usize) -> String {
 
 #[cfg(test)]
 mod hygiene_tests {
-    use super::{knock_out_background, minify_svg};
+    use super::{knock_out_background, minify_svg, with_margin};
+
+    #[test]
+    fn margin_grows_the_viewbox_and_the_presented_size() {
+        let svg = |dw: u32| {
+            format!("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"-0.5 -0.5 48 48\" width=\"{dw}\" height=\"{dw}\"><path d=\"M1,1L2,2Z\"/></svg>")
+        };
+        let grown = "viewBox=\"-5.30 -5.30 57.60 57.60\" width=\"57.60\" height=\"57.60\"";
+        assert!(with_margin(svg(48), 48, 48, 0.1).contains(grown));
+        // Traced at 48 and presented at 96 (a capped input): the margin is kept and the
+        // presented size grows by the same proportion.
+        let capped = with_margin(svg(96), 48, 48, 0.1);
+        assert!(
+            capped
+                .contains("viewBox=\"-5.30 -5.30 57.60 57.60\" width=\"115.20\" height=\"115.20\""),
+            "{capped}"
+        );
+        assert!(capped.ends_with("<path d=\"M1,1L2,2Z\"/></svg>"));
+        assert_eq!(with_margin(svg(96), 48, 48, 0.0), svg(96));
+        assert_eq!(with_margin(svg(96), 48, 48, f64::NAN), svg(96));
+    }
 
     #[test]
     fn knock_out_matches_a_fitted_canvas_rect_to_a_quarter_pixel() {

@@ -18,6 +18,9 @@ path = "src/lib.rs"
 [[bin]]
 name = "inkvec"
 path = "src/main.rs"
+# The binary's rustdoc page would land on target/doc/inkvec/, which is the library API crate
+# `inkvec`'s (crates/inkvec); cargo reports that as an output filename collision.
+doc = false
 
 [[example]]
 name = "neural_geometry"

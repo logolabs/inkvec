@@ -1,0 +1,30 @@
+[package]
+name = "inkvec"
+description = "Inkvec: turn raster logos, icons and illustrations into compact, accurate SVG. The stable library API the language bindings are built on"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+# This crate's own README, not the workspace one: it is the page crates.io and docs.rs show.
+readme = "README.md"
+documentation = "https://docs.rs/inkvec"
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+inkvec-cli = { workspace = true }
+inkvec-trace = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { workspace = true }
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+sha2 = "0.10"
+rayon = { workspace = true }
+roxmltree = "0.20"
+
+[lints]
+workspace = true

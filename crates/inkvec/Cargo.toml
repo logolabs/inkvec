@@ -22,9 +22,9 @@ schemars = { workspace = true }
 
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
-sha2 = "0.10"
+sha2 = "0.11"
 rayon = { workspace = true }
-roxmltree = "0.20"
+roxmltree = "0.21"
 
 [lints]
 workspace = true

@@ -23,6 +23,14 @@ API in particular should be treated as unstable release to release).
   options go to the facade as JSON and their TypeScript types are generated from the schema.
   `crates/inkvec-wasm` gains `trace_json` / `trace_rgba_json` on the facade; the positional
   `trace` the web demo calls is unchanged. Not published yet.
+- **NuGet package `LogoLabs.Inkvec`** (`packages/dotnet`). The .NET binding: P/Invoke over
+  `inkvec_ffi`, `netstandard2.0` (.NET Framework 4.6.1+, Unity) and `net8.0`
+  (`LibraryImport` source generation there, `DllImport` on `netstandard2.0`). `Inkvec.Trace`,
+  `TraceRgba`, `TraceFile`; options are the generated `InkvecOptions` (nullable properties,
+  `null` meaning the tracer's own default) or a raw JSON string; errors are
+  `InvalidImageException`, `InvalidOptionsException` and `InkvecInternalException`. Native
+  libraries for `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64` and
+  `osx-arm64` ship under `runtimes/`. Not published yet.
 
 ### Changed
 

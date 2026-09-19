@@ -1,0 +1,64 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      netstandard2.0 reaches .NET Framework 4.6.1+ and Unity; net8.0 gets the source-generated
+      LibraryImport P/Invoke marshalling. NativeMethods.cs picks between them with
+      NET8_0_OR_GREATER; everything else in this project is TFM-agnostic.
+    -->
+    <TargetFrameworks>netstandard2.0;net8.0</TargetFrameworks>
+    <RootNamespace>LogoLabs.Inkvec</RootNamespace>
+    <AssemblyName>LogoLabs.Inkvec</AssemblyName>
+
+    <PackageId>LogoLabs.Inkvec</PackageId>
+    <Title>Inkvec</Title>
+    <Description>Raster logos, icons and illustrations to compact, accurate SVG. .NET binding over the Rust tracer's C ABI (inkvec_ffi): P/Invoke, no other dependency.</Description>
+    <IsPackable>true</IsPackable>
+    <IncludeBuildOutput>true</IncludeBuildOutput>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <!-- The package carries native libraries but no managed dependency needs a RID to restore. -->
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
+    <!-- Span&lt;T&gt;/ReadOnlySpan&lt;T&gt; are not part of netstandard2.0's BCL; net8.0 has them built in. -->
+    <PackageReference Include="System.Memory" Version="4.5.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      One native library per RID (see docs/BINDINGS.md, "Adding a language" /
+      .github/workflows/bindings.yml). Only the RIDs actually built are present under
+      runtimes/ (gitignored build output; CI gathers them from the bindings workflow's
+      per-platform "cargo build release, package inkvec-ffi" artifacts before packing); a
+      missing one is silently skipped rather than failing the build, so this project builds
+      and packs with whichever subset a given machine has produced locally.
+    -->
+    <None Include="..\..\runtimes\win-x64\native\inkvec_ffi.dll" Condition="Exists('..\..\runtimes\win-x64\native\inkvec_ffi.dll')" Pack="true" PackagePath="runtimes/win-x64/native/" />
+    <None Include="..\..\runtimes\win-arm64\native\inkvec_ffi.dll" Condition="Exists('..\..\runtimes\win-arm64\native\inkvec_ffi.dll')" Pack="true" PackagePath="runtimes/win-arm64/native/" />
+    <None Include="..\..\runtimes\linux-x64\native\libinkvec_ffi.so" Condition="Exists('..\..\runtimes\linux-x64\native\libinkvec_ffi.so')" Pack="true" PackagePath="runtimes/linux-x64/native/" />
+    <None Include="..\..\runtimes\linux-arm64\native\libinkvec_ffi.so" Condition="Exists('..\..\runtimes\linux-arm64\native\libinkvec_ffi.so')" Pack="true" PackagePath="runtimes/linux-arm64/native/" />
+    <None Include="..\..\runtimes\osx-x64\native\libinkvec_ffi.dylib" Condition="Exists('..\..\runtimes\osx-x64\native\libinkvec_ffi.dylib')" Pack="true" PackagePath="runtimes/osx-x64/native/" />
+    <None Include="..\..\runtimes\osx-arm64\native\libinkvec_ffi.dylib" Condition="Exists('..\..\runtimes\osx-arm64\native\libinkvec_ffi.dylib')" Pack="true" PackagePath="runtimes/osx-arm64/native/" />
+
+    <!--
+      For local `dotnet build` / `dotnet test` (a plain ProjectReference, not a restored
+      package): copy this machine's own native library next to the managed assembly, so the
+      default unmanaged DllImport/LibraryImport search finds "inkvec_ffi" without needing
+      the RID-asset selection a PackageReference gets. A consumer of the packed nupkg does
+      not need this; see runtimes/ above and NativeMethods.cs's net8.0 resolver fallback.
+    -->
+    <None Include="..\..\runtimes\win-x64\native\inkvec_ffi.dll" Condition="Exists('..\..\runtimes\win-x64\native\inkvec_ffi.dll') AND '$(OS)' == 'Windows_NT'" CopyToOutputDirectory="PreserveNewest" Link="inkvec_ffi.dll" Visible="false" />
+    <None Include="..\..\runtimes\linux-x64\native\libinkvec_ffi.so" Condition="Exists('..\..\runtimes\linux-x64\native\libinkvec_ffi.so') AND '$(OS)' != 'Windows_NT' AND Exists('/usr/lib')" CopyToOutputDirectory="PreserveNewest" Link="libinkvec_ffi.so" Visible="false" />
+
+    <None Include="..\..\..\..\LICENSE" Pack="true" PackagePath="" />
+    <None Include="..\..\..\..\NOTICE" Pack="true" PackagePath="" />
+    <None Include="..\..\README.md" Pack="true" PackagePath="" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+</Project>

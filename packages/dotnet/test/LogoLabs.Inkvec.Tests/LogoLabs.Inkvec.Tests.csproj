@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      net8.0 only: the test host itself needs a real, runnable TFM, and the library's two
+      TFMs share every source file except NativeMethods.cs's P/Invoke declarations (see its
+      NET8_0_OR_GREATER guard). netstandard2.0 is exercised by running this same suite
+      against a net8.0 test host that references the library's netstandard2.0 build; see
+      packages/dotnet/README's "Building and testing locally" / the task's finish notes.
+    -->
+    <TargetFramework>net8.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>LogoLabs.Inkvec.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Plain reference: MSBuild picks the library's net8.0 build (the nearest match for this
+      net8.0 test host). Pass -p:InkvecLibraryTargetFramework=netstandard2.0 to instead
+      consume the library's netstandard2.0 build from this same net8.0 host: the one way
+      to exercise netstandard2.0's DllImport declarations (as opposed to net8.0's
+      LibraryImport ones) without a second, separately-runnable TFM for the test project
+      itself.
+    -->
+    <ProjectReference Include="..\..\src\LogoLabs.Inkvec\LogoLabs.Inkvec.csproj" SetTargetFramework="TargetFramework=$(InkvecLibraryTargetFramework)" Condition="'$(InkvecLibraryTargetFramework)' != ''" />
+    <ProjectReference Include="..\..\src\LogoLabs.Inkvec\LogoLabs.Inkvec.csproj" Condition="'$(InkvecLibraryTargetFramework)' == ''" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The shared cross-language contract: bindings/contract/. -->
+    <None Include="..\..\..\..\bindings\contract\cases.json" Link="contract\cases.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\..\..\bindings\contract\tiny.png" Link="contract\tiny.png" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\..\..\bindings\contract\tiny.rgba" Link="contract\tiny.rgba" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\..\..\bindings\contract\white_on_clear.png" Link="contract\white_on_clear.png" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\..\..\bindings\contract\white_on_clear.rgba" Link="contract\white_on_clear.rgba" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

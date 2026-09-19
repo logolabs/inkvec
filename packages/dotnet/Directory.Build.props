@@ -1,0 +1,43 @@
+<Project>
+  <!--
+    There is one version, `[workspace.package] version` in the repository's root Cargo.toml
+    (see docs/BINDINGS.md, "Versions"). Every project under packages/dotnet reads it from
+    there with plain MSBuild property functions; no custom task, so it works the same in
+    `dotnet build`, `dotnet pack` and `dotnet test`, on every OS the SDK runs on. Nothing in
+    this tree hard-codes the version.
+  -->
+  <PropertyGroup>
+    <RepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\'))</RepoRoot>
+    <_CargoToml>$([System.IO.Path]::Combine('$(RepoRoot)', 'Cargo.toml'))</_CargoToml>
+    <_CargoTomlText>$([System.IO.File]::ReadAllText('$(_CargoToml)'))</_CargoTomlText>
+    <InkvecVersion>$([System.Text.RegularExpressions.Regex]::Match('$(_CargoTomlText)', 'version\s*=\s*"([^"]+)"').Groups[1].Value)</InkvecVersion>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(InkvecVersion)' == ''">
+    <!-- Fails the build loudly rather than shipping an unversioned package. -->
+    <InkvecVersion>0.0.0-version-not-found</InkvecVersion>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <Version>$(InkvecVersion)</Version>
+    <PackageVersion>$(InkvecVersion)</PackageVersion>
+    <AssemblyVersion>$(InkvecVersion).0</AssemblyVersion>
+
+    <Authors>LogoLabs</Authors>
+    <Company>LogoLabs</Company>
+    <Copyright>LogoLabs</Copyright>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/logolabs/inkvec</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/logolabs/inkvec</RepositoryUrl>
+    <PackageTags>svg;vectorization;vectorizer;image-tracing;raster-to-vector;inkvec</PackageTags>
+
+    <LangVersion>11.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+</Project>

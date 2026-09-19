@@ -23,6 +23,11 @@ API in particular should be treated as unstable release to release).
   options go to the facade as JSON and their TypeScript types are generated from the schema.
   `crates/inkvec-wasm` gains `trace_json` / `trace_rgba_json` on the facade; the positional
   `trace` the web demo calls is unchanged. Not published yet.
+- **Java package `com.logolabs:inkvec`** (`packages/java`). A JNA binding over `inkvec-ffi`'s
+  C ABI, Java 8+: `Inkvec.trace`, `Inkvec.traceRgba`, `defaults`, `optionsSchema`; a generated,
+  immutable `InkvecOptions` builder plus a raw-JSON-options overload on every method, and
+  `InkvecException` subclasses per error kind. Options are generated from the schema by
+  `bindings/codegen/java.py`. Placeholder group id `com.logolabs`; not published yet.
 
 ### Changed
 

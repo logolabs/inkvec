@@ -1,0 +1,203 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Maven build for the Java binding of Inkvec (JNA over crates/inkvec-ffi's C ABI).
+
+  The version below is kept in sync with the workspace Cargo.toml's
+  workspace.package.version, the one version every Inkvec binding shares (see
+  docs/BINDINGS.md, "Versions"), by python packages/java/build.py, the same role
+  packages/npm/build.mjs plays for the npm package. Run it (or with the check flag) after a
+  version bump in Cargo.toml, before running the package build.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <!--
+    com.logolabs is a placeholder group id. Maven Central requires a verified namespace (a
+    domain the project controls, or io.github.<user>); the user decides which before this is
+    ever published. Nothing here publishes automatically; see .github/workflows for the gate.
+  -->
+  <groupId>com.logolabs</groupId>
+  <artifactId>inkvec</artifactId>
+  <version>0.1.3</version>
+  <packaging>jar</packaging>
+
+  <name>inkvec</name>
+  <description>
+    Raster to SVG tracing by minimum description length: PNG, JPEG, WebP, GIF, BMP, TIFF or
+    raw RGBA in, an SVG string out. A JNA binding over Inkvec's native C library.
+  </description>
+  <url>https://github.com/logolabs/inkvec</url>
+
+  <licenses>
+    <license>
+      <name>Apache-2.0</name>
+      <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+    </license>
+  </licenses>
+
+  <organization>
+    <name>LogoLabs</name>
+    <url>https://github.com/logolabs</url>
+  </organization>
+
+  <scm>
+    <url>https://github.com/logolabs/inkvec</url>
+    <connection>scm:git:https://github.com/logolabs/inkvec.git</connection>
+    <tag>HEAD</tag>
+  </scm>
+
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <maven.compiler.release>8</maven.compiler.release>
+    <jna.version>5.14.0</jna.version>
+    <junit.version>5.10.2</junit.version>
+    <jackson.version>2.17.1</jackson.version>
+    <!-- Overridable with a system property of the same name: a directory containing
+         inkvec_ffi's shared library, used only by tests run from this checkout. Defaults to
+         the workspace's own target/release, where the release build of inkvec-ffi lands. -->
+    <inkvec.nativeDir>${project.basedir}/../../target/release</inkvec.nativeDir>
+    <!-- The repository root, for tests that read bindings/contract/ (the shared contract
+         every binding's tests run against). -->
+    <inkvec.repoRoot>${project.basedir}/../..</inkvec.repoRoot>
+  </properties>
+
+  <dependencies>
+    <!-- The only runtime dependency: reaches the C ABI without a native compile step for
+         consumers, on Java 8 through 21+ (JDK 22's Panama FFM is too new to require yet). -->
+    <dependency>
+      <groupId>net.java.dev.jna</groupId>
+      <artifactId>jna</artifactId>
+      <version>${jna.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>${junit.version}</version>
+      <scope>test</scope>
+    </dependency>
+
+    <!-- Test-only: reads bindings/contract/cases.json, the shared contract. The main
+         binding still carries no JSON library; options pass through as plain strings. -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>${jackson.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.11.0</version>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.1.2</version>
+        <configuration>
+          <!-- Every test loads the same native library once; running classes in parallel
+               inside one JVM is fine (the pipeline is itself thread-safe and parallel), but
+               forking multiple JVMs would just reload it redundantly. -->
+          <systemPropertyVariables>
+            <!-- Local, unbuilt-package convenience: the DLL/so/dylib this repository's own
+                 release build of inkvec-ffi just produced. A consumer of the published jar
+                 never needs this; the release jar bundles the native library as a JNA
+                 resource instead. See README.md and .github/workflows. -->
+            <jna.library.path>${inkvec.nativeDir}</jna.library.path>
+            <inkvec.repoRoot>${inkvec.repoRoot}</inkvec.repoRoot>
+          </systemPropertyVariables>
+        </configuration>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>3.3.0</version>
+        <configuration>
+          <archive>
+            <manifest>
+              <addDefaultImplementationEntries>true</addDefaultImplementationEntries>
+            </manifest>
+          </archive>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+
+  <!--
+    Inactive unless built with -Prelease (only .github/workflows/java.yml does, and only on
+    a v* tag with credentials present). Signs the jar and stages it to Maven Central through
+    the Central Publisher Portal. Needs a verified group id first (see the notes on groupId
+    above); until then this profile is scaffolding, not a working publish path.
+  -->
+  <profiles>
+    <profile>
+      <id>release</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-source-plugin</artifactId>
+            <version>3.3.1</version>
+            <executions>
+              <execution>
+                <id>attach-sources</id>
+                <goals>
+                  <goal>jar-no-fork</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-javadoc-plugin</artifactId>
+            <version>3.6.3</version>
+            <executions>
+              <execution>
+                <id>attach-javadocs</id>
+                <goals>
+                  <goal>jar</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
+            <!-- Credentials from the environment (GPG_PASSPHRASE), never written here. -->
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-gpg-plugin</artifactId>
+            <version>3.2.4</version>
+            <executions>
+              <execution>
+                <id>sign-artifacts</id>
+                <phase>verify</phase>
+                <goals>
+                  <goal>sign</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
+            <!-- Central Publisher Portal, the successor to OSSRH staging. Credentials from
+                 the server id "central" in settings.xml, populated by CI from secrets. -->
+            <groupId>org.sonatype.central</groupId>
+            <artifactId>central-publishing-maven-plugin</artifactId>
+            <version>0.5.0</version>
+            <extensions>true</extensions>
+            <configuration>
+              <publishingServerId>central</publishingServerId>
+              <autoPublish>false</autoPublish>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
+
+</project>

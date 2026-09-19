@@ -9,6 +9,7 @@ three layers, each a thin wrapper over the one below:
 | C ABI: `inkvec_ffi.dll` / `libinkvec_ffi.so` / `libinkvec_ffi.dylib`, static `inkvec_ffi.lib` / `libinkvec_ffi.a`, header `include/inkvec.h` | `crates/inkvec-ffi` | C, C++, and every language with a C FFI: Java (JNA, Panama), C# (P/Invoke), Go (cgo), Swift, Ruby, PHP |
 | Python package `inkvec` | `crates/inkvec-py` | Python 3.9+, abi3 wheels built with PyO3 and maturin |
 | npm package `@logolabs/inkvec` | `packages/npm` over `crates/inkvec-wasm` | JavaScript and TypeScript: browsers, Node.js, Deno, Bun; a single-threaded and a threaded WebAssembly build |
+| Maven package `com.logolabs:inkvec` | `packages/java` over the C ABI | Java 8+, a JNA binding |
 
 The WebAssembly crate (`crates/inkvec-wasm`) calls the facade: `trace_json` and
 `trace_rgba_json` take the options as JSON, `default_options_json` and `options_schema_json`
@@ -277,6 +278,28 @@ threaded build (cross-origin isolated pages inside a Web Worker, or Node.js `wor
 The option names are the schema's, typed by the generated `Options` interface. Errors are
 `InkvecError` with `code` set to the error kind, plus `load_failed` for a WebAssembly module
 that could not be loaded. See `packages/npm/README.md`.
+
+### Java
+
+```xml
+<dependency>
+  <groupId>com.logolabs</groupId>
+  <artifactId>inkvec</artifactId>
+  <version>0.1.3</version>
+</dependency>
+```
+
+```java
+TraceResult r = Inkvec.trace(png, InkvecOptions.builder().colors(16).build());
+System.out.println(r.svg());
+```
+
+A [JNA](https://github.com/java-native-access/jna) binding over the C ABI (`inkvec_ffi`):
+Java 8 or later, one dependency. `InkvecOptions` is a generated, immutable builder; every
+method also takes options as a raw JSON string. Errors are `InkvecException` subclasses
+(`InvalidImageException`, `InvalidOptionsException`, `InternalException`). Not published to
+Maven Central yet (placeholder group id `com.logolabs`; needs a verified namespace). See
+`packages/java/README.md`.
 
 ## Versions
 

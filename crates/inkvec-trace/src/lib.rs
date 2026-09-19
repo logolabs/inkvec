@@ -352,9 +352,9 @@ pub fn trace_color_full_with_alpha(
     source_alpha: Option<&[f32]>,
 ) -> ColorTrace {
     if opts.native_alpha {
-        if let Some(a) = source_alpha.filter(|a| {
-            a.len() == img.width * img.height && a.iter().any(|&v| v < native::OPAQUE)
-        }) {
+        if let Some(a) = source_alpha
+            .filter(|a| a.len() == img.width * img.height && a.iter().any(|&v| v < native::OPAQUE))
+        {
             return native::trace_color(img, opts, a);
         }
     }
@@ -1031,7 +1031,18 @@ fn finish_color_trace(
     sw: &mut Stopwatch,
 ) -> ColorTrace {
     finish_color_trace_alpha(
-        img, opts, rgb, pal, labels, face_fill, face_color, n_faces, sigma_noise, sw, None, None,
+        img,
+        opts,
+        rgb,
+        pal,
+        labels,
+        face_fill,
+        face_color,
+        n_faces,
+        sigma_noise,
+        sw,
+        None,
+        None,
     )
 }
 

@@ -264,46 +264,6 @@ impl FillModel {
             FillModel::Radial { c0, c1, .. } => mid(c0, c1),
         }
     }
-
-    /// The gradient coordinate `t` of a position: 0 at the first stop, 1 at the last.
-    pub(crate) fn t_at(&self, x: f64, y: f64) -> f64 {
-        match *self {
-            FillModel::Flat(_) => 0.0,
-            FillModel::Linear { p0, p1, .. } => linear_t(x, y, p0, p1),
-            FillModel::Radial {
-                c,
-                r,
-                aspect,
-                angle,
-                ..
-            } => radial_t(x, y, c, r, aspect, angle),
-        }
-    }
-
-    /// The same geometry with the colour profile replaced.
-    pub(crate) fn with_stops(&self, c0: [f32; 3], mids: Vec<(f64, [f32; 3])>, c1: [f32; 3]) -> FillModel {
-        let mut m = self.clone();
-        match &mut m {
-            FillModel::Flat(_) => {}
-            FillModel::Linear {
-                c0: a,
-                c1: b,
-                mids: mm,
-                ..
-            }
-            | FillModel::Radial {
-                c0: a,
-                c1: b,
-                mids: mm,
-                ..
-            } => {
-                *a = c0;
-                *b = c1;
-                *mm = mids;
-            }
-        }
-        m
-    }
 }
 
 /// A fitted model with the numbers the selection was made on.

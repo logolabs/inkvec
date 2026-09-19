@@ -58,7 +58,8 @@ impl Ink2 {
 
     /// CIEDE2000 over whichever ground tells the two apart better.
     pub fn de00(self, o: Ink2) -> f32 {
-        de00(oklab_to_rgb(self.w), oklab_to_rgb(o.w)).max(de00(oklab_to_rgb(self.k), oklab_to_rgb(o.k)))
+        de00(oklab_to_rgb(self.w), oklab_to_rgb(o.w))
+            .max(de00(oklab_to_rgb(self.k), oklab_to_rgb(o.k)))
     }
 
     /// The opacity the two grounds imply: over white and over the second ground differ by
@@ -104,7 +105,11 @@ pub fn snap_alpha(a: f32) -> f32 {
 #[inline]
 pub fn over_black(w: [f32; 3], a: f32) -> [f32; 3] {
     let m = (1.0 - a.clamp(0.0, 1.0)) * (1.0 - second_ground());
-    [(w[0] - m).max(0.0), (w[1] - m).max(0.0), (w[2] - m).max(0.0)]
+    [
+        (w[0] - m).max(0.0),
+        (w[1] - m).max(0.0),
+        (w[2] - m).max(0.0),
+    ]
 }
 
 /// Every pixel as a two-ground point.
@@ -174,7 +179,13 @@ fn bin(c: Oklab) -> u64 {
     li * (BINS * BINS) as u64 + ai * BINS as u64 + bi
 }
 
-fn claim_spread(px: &[Ink2], nearest_px: &[f32], c: Ink2, tol: f32, stride_px: usize) -> (usize, f32) {
+fn claim_spread(
+    px: &[Ink2],
+    nearest_px: &[f32],
+    c: Ink2,
+    tol: f32,
+    stride_px: usize,
+) -> (usize, f32) {
     const MAX_SAMPLES: usize = 8192;
     let stride = (px.len() / MAX_SAMPLES).max(1);
     let n = (0..px.len())
@@ -198,7 +209,14 @@ fn claim_spread(px: &[Ink2], nearest_px: &[f32], c: Ink2, tol: f32, stride_px: u
     (n, d_in[d_in.len() / 2])
 }
 
-fn interior_fraction(px: &[Ink2], width: usize, height: usize, c: Ink2, nearest: &[f32], stride_px: usize) -> f32 {
+fn interior_fraction(
+    px: &[Ink2],
+    width: usize,
+    height: usize,
+    c: Ink2,
+    nearest: &[f32],
+    stride_px: usize,
+) -> f32 {
     if width == 0 || height == 0 || px.len() < width * height {
         return 1.0;
     }
@@ -403,7 +421,10 @@ pub fn extract_palette(
     for (p, &key) in px.iter().zip(keys.iter()) {
         let e = acc.entry(key).or_insert((0, [0.0; 6]));
         e.0 += 1;
-        for (s, v) in e.1.iter_mut().zip([p.w.l, p.w.a, p.w.b, p.k.l, p.k.a, p.k.b]) {
+        for (s, v) in
+            e.1.iter_mut()
+                .zip([p.w.l, p.w.a, p.w.b, p.k.l, p.k.a, p.k.b])
+        {
             *s += v as f64;
         }
     }
@@ -416,8 +437,16 @@ pub fn extract_palette(
                 n,
                 key,
                 Ink2 {
-                    w: Oklab { l: m(0), a: m(1), b: m(2) },
-                    k: Oklab { l: m(3), a: m(4), b: m(5) },
+                    w: Oklab {
+                        l: m(0),
+                        a: m(1),
+                        b: m(2),
+                    },
+                    k: Oklab {
+                        l: m(3),
+                        a: m(4),
+                        b: m(5),
+                    },
                 },
             )
         })
@@ -436,16 +465,20 @@ pub fn extract_palette(
         if (claim as f32 / total_px) < MIN_INK_WEIGHT && !colors.is_empty() {
             continue;
         }
-        let nearest = colors.iter().map(|&p| p.dist(c)).fold(f32::INFINITY, f32::min);
+        let nearest = colors
+            .iter()
+            .map(|&p| p.dist(c))
+            .fold(f32::INFINITY, f32::min);
         let k = std::env::var("INKVEC_NOISE_SIGMAS")
             .ok()
             .and_then(|v| v.parse::<f32>().ok())
             .unwrap_or(noise_sigmas);
         let reach = k * spread;
-        if let Some(&near_ink) = colors
-            .iter()
-            .min_by(|&&p, &&q| p.dist(c).partial_cmp(&q.dist(c)).unwrap_or(std::cmp::Ordering::Equal))
-        {
+        if let Some(&near_ink) = colors.iter().min_by(|&&p, &&q| {
+            p.dist(c)
+                .partial_cmp(&q.dist(c))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }) {
             if c.de00(near_ink) < same_ink_de00 {
                 continue;
             }
@@ -454,7 +487,8 @@ pub fn extract_palette(
             let worth_it = sigma_noise > 0.0
                 && nearest > JND_FLOOR
                 && nearest > reach
-                && 0.5 * (claim as f64) * ((nearest as f64 / sigma_noise).powi(2)) > lambda * PARAMS_PER_INK;
+                && 0.5 * (claim as f64) * ((nearest as f64 / sigma_noise).powi(2))
+                    > lambda * PARAMS_PER_INK;
             if !worth_it {
                 continue;
             }
@@ -497,7 +531,16 @@ pub fn extract_palette(
                 .iter()
                 .map(|&(i, j, linear, _)| {
                     straddle_fraction(
-                        &px, &px6_srgb, &px6_lin, width, height, c, &nearest_px, colors[i], colors[j], linear,
+                        &px,
+                        &px6_srgb,
+                        &px6_lin,
+                        width,
+                        height,
+                        c,
+                        &nearest_px,
+                        colors[i],
+                        colors[j],
+                        linear,
                         stride_px,
                     )
                 })
@@ -523,7 +566,11 @@ pub fn extract_palette(
         colors.push(c);
     }
     if colors.is_empty() {
-        colors.push(modes.first().map(|m| m.2).unwrap_or(Ink2::opaque(Oklab { l: 1.0, a: 0.0, b: 0.0 })));
+        colors.push(modes.first().map(|m| m.2).unwrap_or(Ink2::opaque(Oklab {
+            l: 1.0,
+            a: 0.0,
+            b: 0.0,
+        })));
     }
 
     // Refine each ink to the mean of the pixels that chose it, over both grounds.
@@ -548,7 +595,10 @@ pub fn extract_palette(
     for (c, &k) in px.iter().zip(chosen.iter()) {
         if k != u32::MAX {
             let e = &mut sums[k as usize];
-            for (s, v) in e.0.iter_mut().zip([c.w.l, c.w.a, c.w.b, c.k.l, c.k.a, c.k.b]) {
+            for (s, v) in
+                e.0.iter_mut()
+                    .zip([c.w.l, c.w.a, c.w.b, c.k.l, c.k.a, c.k.b])
+            {
                 *s += v as f64;
             }
             e.1 += 1;
@@ -560,8 +610,16 @@ pub fn extract_palette(
             let f = *n as f64;
             let m = |j: usize| (s[j] / f) as f32;
             colors[i] = Ink2 {
-                w: Oklab { l: m(0), a: m(1), b: m(2) },
-                k: Oklab { l: m(3), a: m(4), b: m(5) },
+                w: Oklab {
+                    l: m(0),
+                    a: m(1),
+                    b: m(2),
+                },
+                k: Oklab {
+                    l: m(3),
+                    a: m(4),
+                    b: m(5),
+                },
             };
         }
         weight.push(*n as f32 / total_px);
@@ -569,7 +627,10 @@ pub fn extract_palette(
     let alpha: Vec<f32> = colors.iter().map(|c| c.alpha()).collect();
     if paldbg {
         for (c, a) in colors.iter().zip(&alpha) {
-            eprintln!("  native ink {} alpha {a:.3}", color::to_hex(oklab_to_rgb(c.w)));
+            eprintln!(
+                "  native ink {} alpha {a:.3}",
+                color::to_hex(oklab_to_rgb(c.w))
+            );
         }
     }
     Palette {
@@ -860,7 +921,16 @@ pub fn reassign_blend_pixels(
             let own = snap[p];
             let mut labs = [own; 4];
             let mut nl = 1usize;
-            for (dx, dy) in [(-1i32, -1i32), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] {
+            for (dx, dy) in [
+                (-1i32, -1i32),
+                (0, -1),
+                (1, -1),
+                (-1, 0),
+                (1, 0),
+                (-1, 1),
+                (0, 1),
+                (1, 1),
+            ] {
                 let (qx, qy) = (x as i32 + dx, y as i32 + dy);
                 if qx < 0 || qy < 0 || qx >= w as i32 || qy >= h as i32 {
                     continue;
@@ -936,7 +1006,8 @@ pub struct Fade {
 pub(crate) fn model_stops(m: &gradient::FillModel) -> Vec<(f64, [f32; 3])> {
     match m {
         gradient::FillModel::Flat(c) => vec![(0.0, *c)],
-        gradient::FillModel::Linear { c0, c1, mids, .. } | gradient::FillModel::Radial { c0, c1, mids, .. } => {
+        gradient::FillModel::Linear { c0, c1, mids, .. }
+        | gradient::FillModel::Radial { c0, c1, mids, .. } => {
             let mut v = vec![(0.0, *c0)];
             v.extend(mids.iter().copied());
             v.push((1.0, *c1));
@@ -953,7 +1024,10 @@ fn restop(m: &gradient::FillModel, cols: &[[f32; 3]]) -> gradient::FillModel {
             let k = mids.len();
             m.with_stops(
                 cols[0],
-                mids.iter().zip(&cols[1..=k]).map(|(&(o, _), &c)| (o, c)).collect(),
+                mids.iter()
+                    .zip(&cols[1..=k])
+                    .map(|(&(o, _), &c)| (o, c))
+                    .collect(),
                 cols[k + 1],
             )
         }
@@ -1093,14 +1167,26 @@ fn fit_colour_stops(
     let x = solve(a, b).unwrap_or_else(|| vec![mean; m]);
     let cols: Vec<[f32; 3]> = x
         .iter()
-        .map(|c| [c[0].clamp(0.0, 1.0) as f32, c[1].clamp(0.0, 1.0) as f32, c[2].clamp(0.0, 1.0) as f32])
+        .map(|c| {
+            [
+                c[0].clamp(0.0, 1.0) as f32,
+                c[1].clamp(0.0, 1.0) as f32,
+                c[2].clamp(0.0, 1.0) as f32,
+            ]
+        })
         .collect();
     restop(alpha_model, &cols)
 }
 
 /// Chi-square of a model of a region's pixels -- opacity and premultiplied colour, each
 /// beyond the half-level quantisation dead zone -- where `model(p)` is `(colour, alpha)`.
-fn fade_chi2(px: &[usize], rgb: &[[f32; 3]], alpha: &[f32], sigma: f64, model: impl Fn(usize) -> ([f32; 3], f32)) -> f64 {
+fn fade_chi2(
+    px: &[usize],
+    rgb: &[[f32; 3]],
+    alpha: &[f32],
+    sigma: f64,
+    model: impl Fn(usize) -> ([f32; 3], f32),
+) -> f64 {
     const DEAD: f64 = 0.5 / 255.0;
     let r = |e: f64| {
         let e = (e.abs() - DEAD).max(0.0) / sigma;
@@ -1152,7 +1238,8 @@ fn fit_opacity(
         .into_iter()
         .filter(|f| match &f.model {
             gradient::FillModel::Flat(_) => true,
-            gradient::FillModel::Linear { interp, .. } | gradient::FillModel::Radial { interp, .. } => {
+            gradient::FillModel::Linear { interp, .. }
+            | gradient::FillModel::Radial { interp, .. } => {
                 !flat_only && *interp == gradient::Interp::Srgb
             }
         })
@@ -1286,7 +1373,8 @@ fn merge_fades(
         let translucent_gradient = (0..n_labels)
             .filter(|&l| {
                 let a = pal.alpha.get(ink_of(l, label_ink)).copied().unwrap_or(1.0);
-                (0.05..OPAQUE_BAND).contains(&a) && fills_by_label.get(l).is_some_and(|f| f.model.is_gradient())
+                (0.05..OPAQUE_BAND).contains(&a)
+                    && fills_by_label.get(l).is_some_and(|f| f.model.is_gradient())
             })
             .count();
         eprintln!(
@@ -1303,16 +1391,25 @@ fn merge_fades(
         // One band is enough: a single region whose opacity ramps is a fade on its own.
         if px.len() < 16 || next >= u16::MAX as usize {
             if dbg {
-                eprintln!("  fade cluster {cid}: {} band(s), {} px -- too small", bands.len(), px.len());
+                eprintln!(
+                    "  fade cluster {cid}: {} band(s), {} px -- too small",
+                    bands.len(),
+                    px.len()
+                );
             }
             continue;
         }
         let cid = cid as u32;
         // The geometry comes from the opacity, which is what a fade is.
-        let (alpha_model, _) = fit_opacity(&grey, w, h, px, |p| cluster[p] == cid, sigma, lambda, false);
+        let (alpha_model, _) =
+            fit_opacity(&grey, w, h, px, |p| cluster[p] == cid, sigma, lambda, false);
         if !alpha_model.is_gradient() {
             if dbg {
-                eprintln!("  fade cluster {cid}: {} bands, {} px -- opacity fits flat", bands.len(), px.len());
+                eprintln!(
+                    "  fade cluster {cid}: {} bands, {} px -- opacity fits flat",
+                    bands.len(),
+                    px.len()
+                );
             }
             continue;
         }
@@ -1404,11 +1501,8 @@ fn merge_fades(
                 cost: 0.0,
             });
         }
-        fills_by_label[l].model = gradient::FillModel::Flat([
-            s[0] * a + 1.0 - a,
-            s[1] * a + 1.0 - a,
-            s[2] * a + 1.0 - a,
-        ]);
+        fills_by_label[l].model =
+            gradient::FillModel::Flat([s[0] * a + 1.0 - a, s[1] * a + 1.0 - a, s[2] * a + 1.0 - a]);
     }
     fade_of
 }
@@ -1450,7 +1544,8 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
     } else {
         color::SOFT_RINGING
     };
-    let soft_intake = edge_width > color::SOFT_INTAKE_EDGE || opts.lossy_intake || ringing > ringing_gate;
+    let soft_intake =
+        edge_width > color::SOFT_INTAKE_EDGE || opts.lossy_intake || ringing > ringing_gate;
     let noise_sigmas = if soft_intake {
         color::SOFT_NOISE_SIGMAS
     } else {
@@ -1484,7 +1579,9 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
     let mut labels = label_image(&rgb, alpha, &pal);
     if soft_intake && std::env::var_os("INKVEC_NO_MEASURED_SIGMA").is_none() {
         let cap = color::MEASURED_SIGMA_CAP / 255.0;
-        let measured = (regularize::residual_sigma(&rgb, &labels, w, h, &pal) * color::MEASURED_SIGMA_SCALE).min(cap);
+        let measured = (regularize::residual_sigma(&rgb, &labels, w, h, &pal)
+            * color::MEASURED_SIGMA_SCALE)
+            .min(cap);
         sigma_noise = sigma_noise.max(measured);
     }
     sw.mark("labels");
@@ -1561,12 +1658,17 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
     let face_fill: Vec<gradient::FillFit> = face_src
         .iter()
         .map(|&l| {
-            fills_by_label.get(l).cloned().unwrap_or_else(|| gradient::FillFit {
-                model: gradient::FillModel::Flat(pal.rgb.get(l).copied().unwrap_or([1.0, 1.0, 1.0])),
-                chi2: 0.0,
-                params: gradient::PARAMS_FLAT,
-                cost: 0.0,
-            })
+            fills_by_label
+                .get(l)
+                .cloned()
+                .unwrap_or_else(|| gradient::FillFit {
+                    model: gradient::FillModel::Flat(
+                        pal.rgb.get(l).copied().unwrap_or([1.0, 1.0, 1.0]),
+                    ),
+                    chi2: 0.0,
+                    params: gradient::PARAMS_FLAT,
+                    cost: 0.0,
+                })
         })
         .collect();
     let face_color: Vec<usize> = face_src

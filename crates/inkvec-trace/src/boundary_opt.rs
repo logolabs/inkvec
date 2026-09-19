@@ -690,13 +690,16 @@ impl Problem<'_> {
             // two bands of one fade. Anywhere else the colour over white already carries
             // the alpha (`W = 1 - a` for black on clear) and counting it again as a fourth
             // channel moved every such edge: 0.07 px on `material-icons/table_rows`.
-            let opac = self.alpha.filter(|_| contrast < MIN_CONTRAST).map(|(img_a, fa)| {
-                (
-                    fa.get(e.left as usize).copied().unwrap_or(1.0),
-                    fa.get(e.right as usize).copied().unwrap_or(1.0),
-                    img_a[cell],
-                )
-            });
+            let opac = self
+                .alpha
+                .filter(|_| contrast < MIN_CONTRAST)
+                .map(|(img_a, fa)| {
+                    (
+                        fa.get(e.left as usize).copied().unwrap_or(1.0),
+                        fa.get(e.right as usize).copied().unwrap_or(1.0),
+                        img_a[cell],
+                    )
+                });
             let contrast = match opac {
                 Some((al, ar, _)) => contrast.max((al - ar).abs()),
                 None => contrast,

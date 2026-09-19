@@ -40,8 +40,15 @@ pub fn fade_to_svg(alpha: &FillModel, color: &FillModel, id: &str) -> (String, S
     while let Some(i) = rest.find("stop-color=\"#") {
         out.push_str(&rest[..i]);
         let a = alphas.get(k).map_or(1.0, |g| g[0]).clamp(0.0, 1.0);
-        let c = colours.get(k).or(colours.last()).copied().unwrap_or([1.0; 3]);
-        out.push_str(&format!("stop-color=\"{}\" stop-opacity=\"{a:.3}\"", to_hex(c)));
+        let c = colours
+            .get(k)
+            .or(colours.last())
+            .copied()
+            .unwrap_or([1.0; 3]);
+        out.push_str(&format!(
+            "stop-color=\"{}\" stop-opacity=\"{a:.3}\"",
+            to_hex(c)
+        ));
         rest = &rest[i + "stop-color=\"#rrggbb\"".len()..];
         k += 1;
     }

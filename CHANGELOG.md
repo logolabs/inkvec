@@ -66,6 +66,14 @@ API in particular should be treated as unstable release to release).
   differs. Released through a mirror repository by `.github/workflows/go.yml`; not published
   yet.
 
+### Fixed
+
+- **`--margin` on reduced input.** The margin was silently dropped whenever the SVG was
+  presented at a larger size than it was traced at (`--max-dim` capped the input, or an exact
+  pixel-block upscale was undone). The presented size now grows with the viewBox.
+
+## [0.1.4] - 2026-09-20
+
 ### Changed
 
 - **Transparency is traced natively, by default.** An ink is a colour and an opacity and the
@@ -73,8 +81,8 @@ API in particular should be treated as unstable release to release).
   holes stay holes, white artwork on a transparent ground traces, translucent panels keep
   `fill-opacity`, and a glow or fade is one gradient of `stop-color` and `stop-opacity`.
   Opaque input traces byte-for-byte as before. `--no-native-alpha` (or
-  `INKVEC_NATIVE_ALPHA=0`; the option `native_alpha: false` in the language bindings)
-  restores the old path. Dark-ground pixel error on the screen set 0.063 -> 0.0017.
+  `INKVEC_NATIVE_ALPHA=0`) restores the old path. Dark-ground pixel error on the screen set
+  0.063 -> 0.0017.
 - **`--cutout`** only matters with `--no-native-alpha` now.
 - **Shape harmonization is held to the traced boundary.** A repeated shape takes the
   cluster's consensus geometry only where that stays within 0.1 px of where its own pixels
@@ -101,9 +109,6 @@ API in particular should be treated as unstable release to release).
   (even-odd filled it back in).
 - **White artwork on a transparent ground** under `--no-native-alpha` no longer traces to a
   white rectangle.
-- **`--margin` on reduced input.** The margin was silently dropped whenever the SVG was
-  presented at a larger size than it was traced at (`--max-dim` capped the input, or an exact
-  pixel-block upscale was undone). The presented size now grows with the viewBox.
 
 ## [0.1.3] - 2026-09-18
 

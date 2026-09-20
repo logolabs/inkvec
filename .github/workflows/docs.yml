@@ -4,6 +4,8 @@ on:
     branches: [main]
     paths:
       - "docs/**"
+      - "web/logo.svg"
+      - "web/favicon.svg"
       - "README.md"
       - "PIPELINE_EXPLANATION.md"
       - "CHANGELOG.md"

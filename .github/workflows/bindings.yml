@@ -52,15 +52,15 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.120.0
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --release --locked -p inkvec -p inkvec-ffi
       - name: Record this target's contract hashes
         if: always()
         shell: bash
         run: INKVEC_BLESS=add cargo test --release --locked -p inkvec --test contract
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: contract-${{ matrix.os }}
@@ -72,12 +72,12 @@ jobs:
     name: generated files
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - run: python bindings/codegen/generate.py --check
-      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: dtolnay/rust-toolchain@1.120.0
       - uses: taiki-e/install-action@v2
         with:
           tool: cbindgen@0.29.4
@@ -103,8 +103,8 @@ jobs:
           - { name: macos-arm64, os: macos-14, target: aarch64-apple-darwin, glibc: "" }
           - { name: macos-x64, os: macos-15-intel, target: x86_64-apple-darwin, glibc: "" }
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.120.0
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
@@ -167,7 +167,7 @@ jobs:
           Copy-Item "$lib/inkvec_ffi.dll" .
           "INKVEC_C_EXAMPLE=$PWD\trace-c.exe" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - name: The C ABI through ctypes, and the C example, against the contract
@@ -226,7 +226,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Compress-Archive -Path "stage/$env:ARCHIVE_NAME" -DestinationPath "dist/$env:ARCHIVE_NAME.zip" -Force
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: c-${{ matrix.name }}
           path: dist/*
@@ -247,8 +247,8 @@ jobs:
           - { name: macos-arm64, os: macos-14, target: aarch64-apple-darwin }
           - { name: macos-x64, os: macos-15-intel, target: x86_64-apple-darwin }
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - uses: PyO3/maturin-action@v1
@@ -262,7 +262,7 @@ jobs:
         run: |
           pip install dist/*.whl pytest pillow numpy
           python -m pytest -q crates/inkvec-py/tests
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wheel-${{ matrix.name }}
           path: dist/*.whl
@@ -272,12 +272,12 @@ jobs:
     name: sdist
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: PyO3/maturin-action@v1
         with:
           command: sdist
           args: --out dist -m crates/inkvec-py/Cargo.toml
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sdist
           path: dist/*.tar.gz
@@ -301,11 +301,11 @@ jobs:
           - { name: linux-x64, os: ubuntu-latest, rid: linux-x64, native: libinkvec_ffi.so }
           - { name: macos-arm64, os: macos-14, rid: osx-arm64, native: libinkvec_ffi.dylib }
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "8.0.x"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: c-${{ matrix.name }}
           path: dl
@@ -332,11 +332,11 @@ jobs:
     needs: [c-library, dotnet-test]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "8.0.x"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: c-*
           path: dl
@@ -360,7 +360,7 @@ jobs:
           done
           find packages/dotnet/runtimes -type f
       - run: dotnet pack packages/dotnet/src/LogoLabs.Inkvec -c Release -o dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dotnet-nupkg
           path: |
@@ -385,12 +385,12 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: wheel-*
           path: dist
           merge-multiple: true
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: sdist
           path: dist
@@ -408,11 +408,11 @@ jobs:
     env:
       NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dotnet-nupkg
           path: dist
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "8.0.x"
       - name: Publish
@@ -432,8 +432,8 @@ jobs:
     env:
       CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.120.0
       - name: Publish
         if: env.CARGO_REGISTRY_TOKEN != ''
         run: cargo publish --workspace --locked
@@ -448,14 +448,14 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: c-*
           path: out
           merge-multiple: true
       - name: Checksums
         run: cd out && sha256sum -- * > SHA256SUMS-c
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           fail_on_unmatched_files: true

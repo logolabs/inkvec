@@ -339,6 +339,17 @@ pub fn sigma_flat() -> Option<f64> {
     })
 }
 
+/// The experimental positional floor from `INKVEC_SIGMA_FLOOR`; `0.0`, meaning no floor,
+/// unless it is set.
+///
+/// Applied as `.max(sigma_floor())` to a per-point positional sigma on both front ends --
+/// `sigmas_for` here and the planar path in `planar.rs` -- so it bounds how certain any one
+/// point is allowed to claim to be. Weight in chi2 goes as `1/sigma²`, so a sigma near zero
+/// lets a single point outvote the rest of its boundary; a floor caps that leverage without
+/// disturbing the rest of the distribution.
+///
+/// Read once and cached. A value that does not parse, is not finite, or is negative is
+/// ignored rather than refused, as with `sigma_flat` above.
 pub fn sigma_floor() -> f64 {
     static V: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
     *V.get_or_init(|| {

@@ -36,6 +36,22 @@ use inkvec_core::Point;
 
 /// Systematic positional error of level-set extraction, in pixels. See
 /// [`CoverageField::sigma_model`].
+///
+/// Worth knowing how much of the pipeline's behaviour this one number decides. It is
+/// combined in quadrature with the statistical term in `planar.rs`, and on this corpus
+/// it dominates: 79% of the gate set's 86,060 boundary points come out between 0.050
+/// and 0.060, so for most of a traced image the fitter's tolerance *is* this constant
+/// rather than anything measured from the image (see [`crate::contour::sigma_flat`],
+/// which prices the remaining variation at about one percent).
+///
+/// That makes it a large dial, but not an independent one. Because chi2 weights are
+/// `1/sigma²`, scaling every sigma by `k` is exactly `lambda -> k²·lambda`, and the
+/// measurement agrees: raising this to 0.10 moves the gate to dE00 +39.00% / ratio
+/// -10.28%, and `--lambda-scale 4.0` — the algebraically equivalent change — to +44.34%
+/// / -11.68%, the same frontier. So tune fidelity against compactness with
+/// `--lambda-scale`, which is documented as a tuning knob; this is documented as a
+/// property of the extraction method, and changing it silently retunes the whole
+/// pipeline while claiming to state a physical fact about it.
 pub const DEFAULT_SIGMA_MODEL: f64 = 0.05;
 
 /// A scalar coverage field sampled at pixel centres.

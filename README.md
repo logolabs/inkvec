@@ -9,6 +9,7 @@
   <a href="docs/AI_USAGE.md"><img alt="AI Usage" src="https://img.shields.io/badge/provenance-AI__USAGE-teal"></a>
   <a href="docs/LIMITATIONS.md"><img alt="Limitations" src="https://img.shields.io/badge/engineering-LIMITATIONS-darkred"></a>
   <a href="LICENSE"><img alt="Apache-2.0" src="https://img.shields.io/badge/licence-Apache--2.0-blue"></a>
+  <a href="https://logolabs.github.io/inkvec/"><img alt="docs" src="https://img.shields.io/badge/docs-logolabs.github.io-c9754a"></a>
   <a href="https://huggingface.co/spaces/logolabs/inkvec"><img alt="demo" src="https://img.shields.io/badge/🤗_demo-HuggingFace-orange"></a>
   <a href="https://huggingface.co/Logolabs/inkvec-denoiser-001"><img alt="model" src="https://img.shields.io/badge/model-inkvec--denoiser--001-yellow"></a>
   <a href="https://huggingface.co/Logolabs/inkvec-sr-001"><img alt="model" src="https://img.shields.io/badge/model-inkvec--sr--001-yellow"></a>
@@ -24,6 +25,8 @@ Inkvec reads a PNG, JPEG, WebP, GIF, BMP or TIFF and writes an SVG whose geometr
 Most tracers spend points wherever their curve-fit tolerance lets them. Inkvec spends them where the artist would have: one path per region, a circle where there is a circle, shared edges between shapes that never drift apart.
 
 Inkvec is developed by [LogoLabs](https://logolabs.org) and released as open source as part of its work on [logo generation using AI](https://logolabs.org).
+
+The full documentation lives at **[logolabs.github.io/inkvec](https://logolabs.github.io/inkvec/)** — a fourteen-stage walkthrough of the pipeline, its design and its bindings, the measured limits, and every constant with its justification.
 
 ## Who it's for
 
@@ -267,6 +270,8 @@ Every binding takes the same options, generated from one schema, and reproduces 
 <p align="center">
   <img src="docs/assets/pipeline-step-by-step.svg" width="100%" alt="Inkvec pipeline: read pixels, map regions and edges, solve sub-pixel boundaries, fit curves and arcs, then emit compact SVG">
 </p>
+
+Each stage is documented in depth in the [pipeline series](https://logolabs.github.io/inkvec/algorithm/) — what problem it solves, what it hands forward, and where every constant comes from.
 
 1. **Intake & Super-Resolution.** Lossy container inspection, GCD upscale unblocking, MambaIRv2 state-space restoration, and exact continuous area-weighted downsampling.
 2. **Sub-Pixel Coverage.** Linear unmixing across 3D RGB channels inverts anti-aliasing to a fraction of a pixel, establishing honest per-point uncertainty $\sigma_{\text{pos}}$.

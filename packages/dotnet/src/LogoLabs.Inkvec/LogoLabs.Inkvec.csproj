@@ -51,6 +51,11 @@
     -->
     <None Include="..\..\runtimes\win-x64\native\inkvec_ffi.dll" Condition="Exists('..\..\runtimes\win-x64\native\inkvec_ffi.dll') AND '$(OS)' == 'Windows_NT'" CopyToOutputDirectory="PreserveNewest" Link="inkvec_ffi.dll" Visible="false" />
     <None Include="..\..\runtimes\linux-x64\native\libinkvec_ffi.so" Condition="Exists('..\..\runtimes\linux-x64\native\libinkvec_ffi.so') AND '$(OS)' != 'Windows_NT' AND Exists('/usr/lib')" CopyToOutputDirectory="PreserveNewest" Link="libinkvec_ffi.so" Visible="false" />
+    <!-- macOS was missing here: on a mac runner nothing copied the dylib, and every
+      native call in the test suite threw DllNotFoundException. Keyed on the SDK's own RID
+      so a machine that has built both architectures copies the one this host can load. -->
+    <None Include="..\..\runtimes\osx-arm64\native\libinkvec_ffi.dylib" Condition="Exists('..\..\runtimes\osx-arm64\native\libinkvec_ffi.dylib') AND '$(NETCoreSdkRuntimeIdentifier)' == 'osx-arm64'" CopyToOutputDirectory="PreserveNewest" Link="libinkvec_ffi.dylib" Visible="false" />
+    <None Include="..\..\runtimes\osx-x64\native\libinkvec_ffi.dylib" Condition="Exists('..\..\runtimes\osx-x64\native\libinkvec_ffi.dylib') AND '$(NETCoreSdkRuntimeIdentifier)' == 'osx-x64'" CopyToOutputDirectory="PreserveNewest" Link="libinkvec_ffi.dylib" Visible="false" />
 
     <None Include="..\..\..\..\LICENSE" Pack="true" PackagePath="" />
     <None Include="..\..\..\..\NOTICE" Pack="true" PackagePath="" />

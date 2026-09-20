@@ -51,6 +51,29 @@ pub(crate) fn arcs_enabled() -> bool {
 }
 
 /// Off unless `INKVEC_FREE_CUBIC` is set, because it does not pay.
+///
+/// What it costs is one axis, not three. On the 246-icon gate set it is *better* on
+/// dE00 (-0.21%) and on parameter ratio (-1.08%), and fails only turning (+5.44%). The
+/// wobble is real and not a metric artefact: `turning` is the sawtooth detector
+/// (`svgeval.py:538`), which exists to catch a boundary that renders well and is shaped
+/// wrong.
+///
+/// Swept against [`wobble_penalty_factor`], which had not been done. There is no
+/// setting that keeps the parameter win and the wobble both:
+///
+/// | wobble | dE00 | turning | ratio |
+/// |---|---|---|---|
+/// | 1.0 | -0.21% | +5.44% | **-1.08%** |
+/// | 1.5 | -0.52% | +2.48% | +0.35% |
+/// | 2.0 | -0.34% | +1.58% | +0.93% |
+/// | 2.5 | -0.77% | +1.17% | +1.11% |
+/// | 3.5 | -0.63% | **+0.34%** | +1.35% |
+/// | 5.0 | -0.73% | **+0.01%** | +1.53% |
+///
+/// By the time turning is inside the gate the ratio is worse than baseline, so the free
+/// cubic is available as a *colour* win costing parameters (3.5 passes all three gates
+/// at dE00 -0.63%), which is the wrong direction for a project whose loose axis is the
+/// parameter ratio. That is why it is still off.
 pub(crate) fn free_cubic_enabled() -> bool {
     static V: OnceLock<bool> = OnceLock::new();
     *V.get_or_init(|| std::env::var_os("INKVEC_FREE_CUBIC").is_some())
@@ -379,6 +402,25 @@ impl Cubic {
     }
 }
 
+/// The most efficient parameter-ratio lever measured on this tree, and it is already
+/// here. Swept on the 246-icon gate set against the default 1.0 (dE00 0.148324, turning
+/// 0.042094, ratio 1.481829):
+///
+/// | factor | dE00 | turning | ratio |
+/// |---|---|---|---|
+/// | 0.0 | -0.48% | +42.40% | -9.96% |
+/// | 0.5 | +2.86% | +11.38% | -8.35% |
+/// | 0.8 | **+0.40%** | +2.54% | **-1.94%** |
+/// | 1.0 | — | — | — |
+/// | 2.0 | +0.03% | -3.74% | +2.20% |
+///
+/// The response either side of the default is steep and very asymmetric, and 0.8 is the
+/// interesting point: nearly 2% of the parameter ratio for 0.4% of dE00. It still fails
+/// the turning gate (+2.54% against a +1% limit), so it is not a free win — but it is a
+/// better exchange than anything else tried here, including `--lambda-scale` and the
+/// correlated-noise chi2 reverted in e3746b0, and it costs one constant rather than a
+/// new model. Whether 1.0 is the right default does not appear to have been swept
+/// against the parameter ratio; on this evidence it is worth doing properly.
 pub(crate) fn wobble_penalty_factor() -> f64 {
     static V: OnceLock<f64> = OnceLock::new();
     *V.get_or_init(|| {

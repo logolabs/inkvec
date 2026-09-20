@@ -129,6 +129,36 @@ fn concurrent_calls_are_independent() {
     });
 }
 
+/// The restorer's output is traced with soft intake forced, which is a different
+/// configuration from the one raw pixels get -- and on an input with the kind of ringing a
+/// restorer leaves behind, a visibly different trace. If this ever stops differing, the
+/// forcing has stopped reaching the pipeline.
+#[test]
+fn restored_pixels_are_traced_with_soft_intake() {
+    let size = 96;
+    let mut px = disc_rgba(size);
+    // Ringing around the disc: a low-amplitude ripple, the residue soft intake exists for.
+    for y in 0..size {
+        for x in 0..size {
+            let i = ((y * size + x) * 4) as usize;
+            let ripple = ((x as f64 * 0.7).sin() * (y as f64 * 0.7).cos() * 9.0) as i16;
+            for c in 0..3 {
+                px[i + c] = (px[i + c] as i16 + ripple).clamp(0, 255) as u8;
+            }
+        }
+    }
+    let o = Options::default();
+    let plain = inkvec::trace_rgba(&px, size, size, &o).unwrap();
+    let restored = inkvec::trace_rgba_restored(&px, size, size, &o).unwrap();
+
+    assert_eq!((restored.width, restored.height), (size, size));
+    svg_size(&restored.svg);
+    assert_ne!(
+        plain.svg, restored.svg,
+        "forcing soft intake did not reach the pipeline"
+    );
+}
+
 #[test]
 fn options_change_the_output() {
     let png = sample("tiny.png");

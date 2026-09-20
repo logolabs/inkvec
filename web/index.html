@@ -61,6 +61,7 @@ h1{font-size:clamp(30px,4.4vw,46px);line-height:1.08;letter-spacing:-.025em;font
 /* controls */
 .controls{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:20px 0 12px}
 .seg{display:inline-flex;background:var(--card);border:1px solid var(--rule);border-radius:var(--radius-full);padding:3px;gap:2px;flex-wrap:wrap}
+[hidden]{display:none!important}
 .seg button{border:0;background:transparent;border-radius:var(--radius-full);padding:9px 13px;color:var(--dim)}
 .seg button[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent)}
 .seg.small button{padding:7px 10px;font-size:12.5px}
@@ -80,6 +81,7 @@ h1{font-size:clamp(30px,4.4vw,46px);line-height:1.08;letter-spacing:-.025em;font
 .pane .layer{position:absolute;inset:0}
 .pane .layer>*{position:absolute;inset:0;width:100%;height:100%}
 .pane .layer img{object-fit:contain;display:block}
+.pane .layer canvas{object-fit:contain;display:block;image-rendering:auto}
 .pane .layer svg{display:block}
 .pane .rightwrap{position:absolute;inset:0;z-index:2}
 .pane .rightwrap .cam{z-index:auto}
@@ -99,6 +101,8 @@ h1{font-size:clamp(30px,4.4vw,46px);line-height:1.08;letter-spacing:-.025em;font
 .pane .busy{position:absolute;inset:0;z-index:5;display:none;align-items:center;justify-content:center;background:rgba(12,10,9,.6);backdrop-filter:blur(2px)}
 .pane .busy.on{display:flex}
 .busy .pill{display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--rule);border-radius:var(--radius-full);padding:10px 16px;font-weight:600;box-shadow:var(--shadow)}
+.busy .pill .bar{width:120px;height:4px;border-radius:2px;background:var(--rule2);overflow:hidden}
+.busy .pill .bar i{display:block;height:100%;width:0;background:var(--accent);transition:width .2s}
 .spin{width:16px;height:16px;border:2px solid var(--rule);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.spin{animation:none}}
@@ -184,9 +188,15 @@ footer .v{margin-left:auto}
     <button data-p="compact" aria-pressed="false">Fewer paths</button>
   </div>
   <label class="chk"><input type="checkbox" id="no_background"> Transparent background</label>
+  <div class="seg" id="denoise" role="group" aria-label="denoiser">
+    <button data-d="off" aria-pressed="true">No denoise</button>
+    <button data-d="auto" aria-pressed="false">Denoise: auto</button>
+    <button data-d="on" aria-pressed="false">Denoise: on</button>
+  </div>
   <button class="primary" id="go" disabled>Trace</button>
   <span class="status mono" id="status">loading the tracer…</span>
 </div>
+<p class="note" style="margin:2px 0 12px" id="denoisenote">The denoiser is the trained <code class="mono">--restore</code> pre-pass, the same <code class="mono">restorer.onnx</code> the command line runs, on your GPU through WebGPU (CPU kernels where there is no GPU). It cleans JPEG, WebP and AI-decoder damage before the trace. <b>Auto</b> traces once and denoises only where the raster disagrees with its own trace; <b>on</b> always denoises, which costs a few percent of colour accuracy on already-clean art. Turning it on downloads the runtime and the weights once (~110&nbsp;MB, cached afterwards). Your image still never leaves the machine.</p>
 <p class="note" style="margin:2px 0 12px">Repeated shapes are harmonized by default &mdash; a copy is redrawn from the shared geometry only where that stays within 0.1&nbsp;px of what was traced and saves parameters (CLI opt-out: <code class="mono">--no-harmonize</code>).</p>
 
 <div class="viewer empty" id="viewer"><span>Your input and the vector result appear here side by side. Scroll to zoom, drag to pan; both sides move together.</span></div>
@@ -305,7 +315,7 @@ function viewer(host, opts = {}){
   const rightWrap = el('div', 'rightwrap'); const camW = el('div', 'cam'); rightWrap.appendChild(camW);
   const tagR2 = el('span', 'tag r'); const divider = el('div', 'divider');
   L.p.append(rightWrap, tagR2, divider);
-  if (opts.busy){ const b = el('div', 'busy', '<div class="pill"><span class="spin"></span><span class="t">Tracing…</span></div>'); L.p.appendChild(b); }
+  if (opts.busy){ const b = el('div', 'busy', '<div class="pill"><span class="spin"></span><span class="t">Tracing…</span><span class="bar" hidden><i></i></span></div>'); L.p.appendChild(b); }
   host.append(L.p, R.p);
   const st = {z:1, x:0, y:0, split:0.5, mode:'side', flick:'left'};
   let leftNode = null, rightNode = null;
@@ -345,7 +355,7 @@ function viewer(host, opts = {}){
     flick(side){ st.flick = side; if (st.mode === 'flick') layout(); },
     zoom(z){ const r = L.p.getBoundingClientRect(); st.x = (r.width - r.width*z)/2; st.y = (r.height - r.height*z)/2; st.z = z; view(); },
     reset(){ st.z = 1; st.x = 0; st.y = 0; view(); },
-    busy(on, text){ const b = L.p.querySelector('.busy'); if (!b) return; b.classList.toggle('on', on); if (text) b.querySelector('.t').textContent = text; },
+    busy(on, text, frac){ const b = L.p.querySelector('.busy'); if (!b) return; b.classList.toggle('on', on); if (text) b.querySelector('.t').textContent = text; const bar = b.querySelector('.bar'); bar.hidden = !(frac >= 0); if (frac >= 0) bar.firstElementChild.style.width = (frac * 100).toFixed(1) + '%'; },
   };
 }
 // Toolbar: view mode, layers, zoom presets. `onLayer(L)` applies a layer to the vector nodes.
@@ -367,7 +377,7 @@ document.addEventListener('keydown', e => { if (e.code === 'Space' && hot && !e.
 document.addEventListener('keyup', e => { if (e.code === 'Space' && hot) hot.flick('left'); });
 
 // ---------------------------------------------------------------- live tracer
-let bytes = null, svgText = "", name = "image", jobId = 0, timer = null, live = null, liveVec = null, liveLayer = 'fill';
+let bytes = null, svgText = "", name = "image", jobId = 0, timer = null, live = null, liveVec = null, liveLayer = 'fill', inputLayer = null;
 const PRESETS = {
   logo:    {precision:0.1,  min_area:2, colors:64, merge:0.035, max_dim:1024, content_units:false},
   icon:    {precision:0.1,  min_area:1, colors:16, merge:0.035, max_dim:1024, content_units:false},
@@ -375,16 +385,25 @@ const PRESETS = {
   compact: {precision:0.1,  min_area:4, colors:32, merge:0.06,  max_dim:1024, content_units:true},
 };
 function applyPreset(p){ const v = PRESETS[p]; for (const k in v){ const e = $(k); if (e.type === "checkbox") e.checked = v[k]; else e.value = v[k]; } }
+
+// off / auto / on, the three modes `--restore` has.
+let denoiseMode = "off";
+for (const b of document.querySelectorAll("#denoise button")) b.addEventListener("click", () => {
+  for (const o of document.querySelectorAll("#denoise button")) o.setAttribute("aria-pressed","false");
+  b.setAttribute("aria-pressed","true"); denoiseMode = b.dataset.d; if (bytes) $("go").click();
+});
 for (const b of document.querySelectorAll("#presets button")) b.addEventListener("click", () => { for (const o of document.querySelectorAll("#presets button")) o.setAttribute("aria-pressed","false"); b.setAttribute("aria-pressed","true"); applyPreset(b.dataset.p); if (bytes) $("go").click(); });
 
 let worker = null;
 function makeWorker(){
-  const url = A.workerUrl || "./worker.js?v=11";
+  const url = A.workerUrl || "./worker.js?v=12";
   try { worker = new Worker(url, { type: "module" }); } catch (e) { worker = null; return; }
   worker.onmessage = (e) => {
     const m = e.data;
     if (m.type === "ready") { $("ver").textContent = `inkvec ${m.version} · wasm${m.threads > 1 ? ` · ${m.threads + 1} cores` : ""}`; if (!bytes) status("ready · drop an image"); return; }
     if (m.id !== jobId) return;
+    if (m.type === "stage") { phase(m); return; }
+    if (m.type === "download") { phase(m); return; }
     if (m.type === "error") {
       finish(); status("failed: " + m.error, true);
       // A trap inside WebAssembly can leave the module's memory in an unknown state, so the
@@ -392,7 +411,7 @@ function makeWorker(){
       if (/RuntimeError|unreachable/.test(m.error)) { worker.terminate(); makeWorker(); }
       return;
     }
-    svgText = m.svg; finish(); show(svgText, m.ms);
+    svgText = m.svg; finish(); setDenoised(m); show(svgText, m.ms, m.denoise);
   };
   worker.onerror = (e) => { status("worker error: " + (e.message || e), true); };
 }
@@ -416,8 +435,21 @@ function pick(f){
       // Formats the browser cannot preview (TIFF, for one) go straight to the tracer.
     }
     bytes = new Uint8Array(b); $("go").disabled = false; status(`${f.name} · ${(f.size/1024).toFixed(0)} KB`);
-    if (!live){ live = viewer($("viewer"), {busy:true}); $("livetools").hidden = false; toolbar($("livetools"), live, L => { liveLayer = L; if (liveVec) liveVec.set(L); live.relabel(); }); $("viewer").addEventListener('pointerenter', () => hot = live); }
-    live.setLeft(imgLayer(URL.createObjectURL(f)), 'input'); live.setRight(null, ''); live.reset();
+    if (!live){
+      live = viewer($("viewer"), {busy:true}); $("livetools").hidden = false;
+      const seg = el('span', 'seg small');
+      for (const [k, label] of [['input','Input'],['denoised','Denoised']]){
+        const b = el('button', '', label); b.dataset.l = k; b.setAttribute('aria-pressed', String(k === 'denoised'));
+        b.addEventListener('click', () => showLeft(k)); seg.appendChild(b);
+      }
+      const box = el('span'); box.id = 'leftsrc'; box.hidden = true;
+      box.append(el('span', 'lbl', 'left'), seg);
+      toolbar($("livetools"), live, L => { liveLayer = L; if (liveVec) liveVec.set(L); live.relabel(); }, box);
+      $("viewer").addEventListener('pointerenter', () => hot = live);
+    }
+    const url = URL.createObjectURL(f); inputLayer = () => imgLayer(url);
+    denoisedLayer = null; const box = $("leftsrc"); if (box) box.hidden = true;
+    live.setLeft(inputLayer(), 'input'); live.setRight(null, ''); live.reset();
     $("viewer").scrollIntoView({block:'nearest'});
     $("go").click();
   });
@@ -432,21 +464,76 @@ for (const n of ["365retailmarkets","adamo","1075thefan"]){
   const b = el("button", "", n); b.addEventListener("click", async () => { const r = await fetch(asset(n)); const bl = await r.blob(); pick(new File([bl], n + ".png", {type:"image/png"})); });
   $("samples").appendChild(b);
 }
-function options(){ return { precision:+$("precision").value, min_area:+$("min_area").value, colors:+$("colors").value, merge:+$("merge").value, max_dim:+$("max_dim").value, time_budget:+$("time_budget").value, no_background:$("no_background").checked, minify:$("minify").checked, margin:+$("margin").value, content_units:$("content_units").checked, cutout:$("no_background").checked }; }
-function start(){ $("go").disabled = true; const t0 = performance.now(); live && live.busy(true, "Tracing…"); timer = setInterval(() => live && live.busy(true, `Tracing… ${((performance.now()-t0)/1000).toFixed(1)} s`), 100); }
+function options(){ return { precision:+$("precision").value, min_area:+$("min_area").value, colors:+$("colors").value, merge:+$("merge").value, max_dim:+$("max_dim").value, time_budget:+$("time_budget").value, no_background:$("no_background").checked, minify:$("minify").checked, margin:+$("margin").value, content_units:$("content_units").checked, cutout:$("no_background").checked, denoise:denoiseMode }; }
+// What the worker is doing right now. The denoiser has waits the tracer never had — a
+// 110 MB first-run download and a network pass — and a spinner that says "Tracing…" through
+// all of it would be a lie about where the time is going.
+let phaseLabel = "Tracing…", phaseFrac = -1;
+function phase(m){
+  if (m.type === "download"){
+    if (m.cached){ phaseLabel = "Reading the cached denoiser…"; phaseFrac = -1; return; }
+    const mb = v => (v / 1048576).toFixed(0);
+    phaseFrac = m.total ? m.received / m.total : -1;
+    phaseLabel = `Downloading the denoiser… ${mb(m.received)}${m.total ? ` / ${mb(m.total)}` : ""} MB`;
+    return;
+  }
+  phaseFrac = -1;
+  const s = m.stage || "";
+  if (s === "denoiser" || s === "denoiser:runtime") phaseLabel = "Loading the denoiser runtime…";
+  else if (s === "denoiser:weights") phaseLabel = "Fetching the denoiser weights…";
+  else if (s === "denoiser:session") phaseLabel = "Preparing the denoiser…";
+  else if (s === "denoising") phaseLabel = `Denoising ${m.width}×${m.height}${m.backend === "webgpu" ? " on the GPU" : ""}…`;
+  else if (s === "tracing") phaseLabel = "Tracing…";
+}
+function start(){
+  $("go").disabled = true; phaseLabel = denoiseMode === "off" ? "Tracing…" : "Preparing…"; phaseFrac = -1;
+  const t0 = performance.now();
+  const tick = () => live && live.busy(true, `${phaseLabel} ${((performance.now()-t0)/1000).toFixed(1)} s`, phaseFrac);
+  tick(); timer = setInterval(tick, 100);
+}
 function finish(){ $("go").disabled = false; clearInterval(timer); live && live.busy(false); }
+
+// The denoised raster, when there is one: the left pane can show it instead of the input,
+// which is the only way to see what the network actually did.
+let denoisedLayer = null;
+function rasterLayer(pixels, w, h){
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(pixels.buffer, pixels.byteOffset, pixels.length), w, h), 0, 0);
+  const wrap = el('div', 'layer'); wrap.appendChild(c); return wrap;
+}
+function setDenoised(m){
+  denoisedLayer = m.pixels ? rasterLayer(m.pixels, m.width, m.height) : null;
+  const box = $("leftsrc");
+  if (box) { box.hidden = !denoisedLayer; if (denoisedLayer) showLeft('denoised'); else showLeft('input'); }
+}
+function showLeft(which){
+  if (!live) return;
+  if (which === 'denoised' && denoisedLayer) live.setLeft(denoisedLayer, 'denoised');
+  else if (inputLayer) live.setLeft(inputLayer(), 'input');
+  for (const b of document.querySelectorAll("#leftsrc button")) b.setAttribute('aria-pressed', String(b.dataset.l === which));
+}
 $("go").addEventListener("click", () => {
   if (!bytes) return;
-  start(); status("tracing…"); jobId += 1;
+  start(); status(denoiseMode === "off" ? "tracing…" : "working…"); jobId += 1;
   if (worker) worker.postMessage({ id: jobId, bytes, o: options() });
   else { finish(); status("the tracer could not start in this browser", true); }
 });
 $("no_background").addEventListener("change", () => { if (bytes) $("go").click(); });
-function show(svg, ms){
+// What the denoiser did, in the words `--restore` uses for it: either the residual that
+// decided the question, or the pass itself with the kernels that ran it.
+function denoiseStat(d){
+  if (!d) return null;
+  if (d.denoised) return [`denoised · ${d.backend === "webgpu" ? "WebGPU" : "CPU"}`, `${(d.ms/1000).toFixed(2)} s`];
+  if (d.skipped === "clean") return [`not denoised`, `residual ${fmt(d.residual, 2)} ≤ ${fmt(d.threshold, 2)}`];
+  if (d.skipped === "unmeasurable") return [`not denoised`, `no flat interior to measure`];
+  return null;
+}
+function show(svg, ms, denoise){
   liveVec = vectorLayer(svg); liveVec.set(liveLayer);
   live.setRight(liveVec.root, 'inkvec');
   const paths = (svg.match(/<path/g)||[]).length, prims = (svg.match(/<(circle|ellipse|rect)\b/g)||[]).length, grads = (svg.match(/<(linear|radial)Gradient/g)||[]).length, nums = (svg.match(/-?\d+\.?\d*/g)||[]).length;
-  $("stats").innerHTML = [[`${(ms/1000).toFixed(2)} s`, ''], [paths, 'paths'], [prims, 'primitives'], [grads, 'gradients'], [liveVec.anchors, 'anchors'], [nums, 'numbers'], [`${(svg.length/1024).toFixed(1)} KB`, '']].map(([v, k]) => `<span class="stat"><b>${v}</b>${k ? ' ' + k : ''}</span>`).join('');
+  const d = denoiseStat(denoise);
+  $("stats").innerHTML = [[`${(ms/1000).toFixed(2)} s`, ''], ...(d ? [d] : []), [paths, 'paths'], [prims, 'primitives'], [grads, 'gradients'], [liveVec.anchors, 'anchors'], [nums, 'numbers'], [`${(svg.length/1024).toFixed(1)} KB`, '']].map(([v, k]) => `<span class="stat"><b>${v}</b>${k ? ' ' + k : ''}</span>`).join('');
   $("src").value = svg; $("dl").disabled = $("copy").disabled = $("showsrc").disabled = false;
   status(`done in ${(ms/1000).toFixed(2)} s`);
 }

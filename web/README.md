@@ -28,6 +28,9 @@ default output at roughly a quarter of the coordinates; the 3 brand logos are no
 repo, so a clean clone reproduces the other 18. Full numbers, sourced, are in the
 [project README](https://github.com/logolabs/inkvec#results).
 
+Damaged input — a JPEG, a WebP, something an image model decoded — can be cleaned first by
+the trained denoiser, which runs here on WebGPU. See [The denoiser](#the-denoiser).
+
 ## Build
 
 ```
@@ -53,12 +56,45 @@ not granted the page loads the single-threaded package instead and everything st
 
 The page is `web/index.html`; serve it over HTTP (ES modules do not load from `file://`).
 
+## The denoiser
+
+The `--restore` pre-pass runs in the browser as well, off by default, with the same three
+modes the command line has:
+
+| | |
+|---|---|
+| **No denoise** | what the page has always done |
+| **Auto** | trace once, measure how far the raster disagrees with its own trace where the trace claims a flat interior, denoise and retrace only above the threshold |
+| **On** | always denoise first |
+
+It is the same network, not a second one: `web/denoise.js` loads `restorer.onnx` from
+[`Logolabs/inkvec-denoiser-001`](https://huggingface.co/Logolabs/inkvec-denoiser-001) — the
+file the command line pulls, checked against the same SHA-256 the WebAssembly build reports —
+into [ONNX Runtime Web](https://onnxruntime.ai/docs/tutorials/web/), pinned to 1.30.0. WebGPU
+runs it where the browser has it, and ONNX Runtime's WebAssembly kernels where it does not;
+which one ran is on the result line.
+
+Everything around the network is the tracer's own code, reached through WebAssembly rather
+than rewritten in JavaScript: the compositing onto white, the pad to a multiple of 16, the
+crop, the quantisation to 256 levels, the extreme-snapping (`inkvec_restore::network_input`
+and `network_output`), the `auto` decision (`inkvec_restore::decide`) and the forced soft
+intake for the trace that follows. `denoise.js` turns one Float32Array into another and does
+nothing else.
+
+Measured against native ONNX Runtime on a 512-px JPEG, the WebAssembly kernels agree to
+4.2e-7; after the 8-bit quantisation the tracer reads, one channel of one pixel in 786,432
+differs by one level.
+
+Turning it on downloads ONNX Runtime Web (~28 MB, from jsDelivr) and the weights (~80 MB,
+from Hugging Face) once; the browser caches both. The image is still never uploaded.
+
 ## Deploy
 
 This folder is the Space. Create a Space under the LogoLabs org with the **static** SDK and
-push these files (README, `index.html`, `worker.js`, `samples/`, the built `pkg/`). Build the
-package with `tools/build_wasm.sh`, then upload this folder to the Space with
-`huggingface-cli` once you are logged in.
+push these files (README, `index.html`, `worker.js`, `denoise.js`, `samples/`, the built
+`pkg/` and `pkg-threads/`). Build the packages with `tools/build_wasm.sh`, then upload this
+folder to the Space with `huggingface-cli` once you are logged in. ONNX Runtime and the
+denoiser weights are not part of the upload: the page fetches them at run time.
 
 ## Notes
 
@@ -68,3 +104,10 @@ package with `tools/build_wasm.sh`, then upload this folder to the Space with
   cannot set; a `coi-serviceworker` shim is the usual workaround if that ever matters.
 - Inputs above the "max dimension" setting are traced at that size and written at the
   original size, so a 4000-px screenshot still finishes.
+- The denoiser runs at the size the tracer will see — after "max dimension", after the
+  unblock — because that is where `--restore` sits in the pipeline, and it costs what a
+  20-million-parameter network costs: seconds on a GPU, longer on the WebAssembly kernels.
+  A browser whose only WebGPU adapter is a software one (SwiftShader, lavapipe) is taken as
+  no GPU at all and the WebAssembly kernels run instead: measured in a headless Chromium, a
+  512-px pass those kernels finished in about eight seconds had still not returned ten
+  minutes into the software adapter.

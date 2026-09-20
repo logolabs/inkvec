@@ -1,5 +1,6 @@
 // The trace runs here so the page stays responsive: a 768-px logo is seconds of work and
-// on the main thread that would freeze the controls.
+// on the main thread that would freeze the controls. The denoiser runs here too, for the
+// same reason and then some — it is a 19.7-million-parameter network.
 //
 // Two builds of the same tracer sit beside each other, and which one loads is decided by
 // whether the browser will give us threads. `pkg-threads/` is compiled with the wasm
@@ -15,7 +16,7 @@
 // import alone busts the JavaScript and never the WebAssembly — the wrong way round, since
 // the bindings rarely change and the wasm changes on every build. Bump it when `pkg/` or
 // `pkg-threads/` is rebuilt.
-const V = "v=11";
+const V = "v=12";
 
 const isolated = typeof crossOriginIsolated !== "undefined" && crossOriginIsolated;
 
@@ -57,16 +58,111 @@ const ready = load().then(({ mod, threads }) => {
 });
 ready.catch((e) => postMessage({ type: "loadfail", stage, error: String((e && e.stack) || e) }));
 
+// The denoiser module is imported the first time someone asks for it, not at load: it pulls
+// ONNX Runtime Web and ~80 MB of weights down behind it, and most traces never want them.
+let denoiser = null;
+async function denoiserModule() {
+  if (!denoiser) denoiser = import(`./denoise.js?${V}`);
+  return denoiser;
+}
+
+/**
+ * The denoiser pre-pass, exactly as `--restore` runs it: `on` always denoises, `auto`
+ * traces once, measures how far the raster disagrees with its own trace where the trace
+ * claims a flat interior, and denoises only if that residual is over the threshold — the
+ * common case pays one trace and never touches the network.
+ *
+ * The tensor is the tracer's (`denoiser_input`), the answer goes back to the tracer
+ * (`take_denoiser_output`), and the tracer forces soft intake on whatever it traces next.
+ * Everything between is ONNX Runtime Web's.
+ */
+async function denoise(intake, mode, mod, report) {
+  const note = {};
+  let probe = null;
+
+  if (mode === "auto") {
+    const t = performance.now();
+    probe = intake.trace();
+    note.probeMs = performance.now() - t;
+    const residual = intake.residual(probe);
+    const threshold = mod.denoiser_threshold();
+    note.residual = residual ?? null;
+    note.threshold = threshold;
+    if (!(residual > threshold)) {
+      // Undamaged, or nothing measurable: the probe is the answer.
+      note.skipped = residual === undefined || residual === null ? "unmeasurable" : "clean";
+      return { svg: probe, note };
+    }
+  }
+
+  const den = await denoiserModule();
+  report({ type: "stage", stage: "denoiser" });
+  // The download arrives in thousands of chunks and the page only draws a bar out of it, so
+  // it hears about four of them a second rather than all of them.
+  let last = 0;
+  await den.load({
+    url: mod.denoiser_model_url(),
+    sha256: mod.denoiser_model_sha256(),
+    onStage: (s) => report({ type: "stage", stage: "denoiser:" + s }),
+    onProgress: (p) => {
+      const now = performance.now();
+      if (p.cached || p.received === p.total || now - last > 250) {
+        last = now;
+        report({ type: "download", ...p });
+      }
+    },
+  });
+
+  const [pw, ph] = intake.denoiser_input_size;
+  const backend = den.activeBackend();
+  report({ type: "stage", stage: "denoising", width: pw, height: ph, backend });
+  const t0 = performance.now();
+  const out = await den.run(intake.denoiser_input(), pw, ph);
+  note.ms = performance.now() - t0;
+  note.backend = den.activeBackend();
+  intake.take_denoiser_output(out);
+  note.denoised = true;
+  return { svg: null, note, pixels: intake.rgba8(), width: intake.width, height: intake.height };
+}
+
 onmessage = async (e) => {
   const mod = await ready;
   const { id, bytes, o } = e.data;
+  const report = (m) => postMessage({ ...m, id });
   const t0 = performance.now();
+  let intake = null;
   try {
-    const svg = mod.trace(bytes, o.precision, o.min_area, o.colors, o.merge, o.max_dim,
-                          o.time_budget, o.no_background, o.minify, o.margin, o.content_units,
-                          o.cutout);
-    postMessage({ type: "done", id, svg, ms: performance.now() - t0 });
+    const mode = o.denoise || "off";
+    if (mode === "off") {
+      // Unchanged, and deliberately the same call it always was.
+      const svg = mod.trace(bytes, o.precision, o.min_area, o.colors, o.merge, o.max_dim,
+                            o.time_budget, o.no_background, o.minify, o.margin, o.content_units,
+                            o.cutout);
+      postMessage({ type: "done", id, svg, ms: performance.now() - t0 });
+      return;
+    }
+
+    intake = mod.prepare(bytes, o.precision, o.min_area, o.colors, o.merge, o.max_dim,
+                         o.time_budget, o.no_background, o.minify, o.margin, o.content_units,
+                         o.cutout);
+    const r = await denoise(intake, mode, mod, report);
+    let svg = r.svg;
+    if (svg === null) {
+      report({ type: "stage", stage: "tracing" });
+      svg = intake.trace();
+    }
+    const msg = { type: "done", id, svg, ms: performance.now() - t0, denoise: r.note };
+    if (r.pixels) {
+      msg.pixels = r.pixels;
+      msg.width = r.width;
+      msg.height = r.height;
+      postMessage(msg, [r.pixels.buffer]);
+    } else {
+      postMessage(msg);
+    }
   } catch (err) {
-    postMessage({ type: "error", id, error: String(err) });
+    postMessage({ type: "error", id, error: String((err && err.message) || err) });
+  } finally {
+    intake?.free?.();
   }
 };

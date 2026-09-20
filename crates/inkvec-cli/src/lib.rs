@@ -261,8 +261,47 @@ pub fn trace_image_sized(
     args: &Args,
     display_size: Option<(usize, usize)>,
 ) -> Result<Traced, Box<dyn std::error::Error>> {
+    trace_prepared(intake(img, args, display_size))
+}
+
+/// The image and the settings the tracer proper works from: everything
+/// [`trace_image_sized`] does to a freshly decoded raster before the restorer sees it.
+///
+/// The fields are what the rest of the pipeline reads, and [`trace_prepared`] is what reads
+/// them.
+#[derive(Debug, Clone)]
+pub struct Intake {
+    /// The raster the tracer sees: unblocked, intake-normalised and capped.
+    pub img: inkvec_trace::Rgba,
+    /// The settings, with the pixel-denominated knobs priced in this raster's own units.
+    pub args: Args,
+    /// Whether an exact pixel-grid upscale was undone.
+    pub replicated: bool,
+    /// Whether anything resampled the raster, which is what decides if the SVG must be
+    /// retargeted to the presentation size.
+    pub normalised: bool,
+    /// The size the SVG is presented at.
+    pub display: (usize, usize),
+}
+
+/// Everything [`trace_image_sized`] does before the restorer pre-pass: undo an exact
+/// pixel-grid upscale, normalise the intake, apply `--max-dim`, and price `--precision`,
+/// `--min-area` and lambda in the raster's own units.
+///
+/// It is public, and separate from [`trace_prepared`], for one caller: a browser that runs
+/// the restorer network itself, in a runtime this crate cannot call into -- WebGPU through
+/// ONNX Runtime Web, whose session is asynchronous where this pipeline is not. Such a caller
+/// cannot hand a [`crate::Args::restore_command`]-style backend to `restore_prepass`, so it
+/// splits the pipeline at the same seam instead: `intake`, then its own network, then
+/// [`trace_prepared`] with `restore` off and `lossy` forced on. Splitting it here rather
+/// than before the decode is the point -- the restorer must see the raster the tracer will
+/// see, at the size `--max-dim` settled on, which is the order `trace_image_sized` has.
+pub fn intake(
+    img: inkvec_trace::Rgba,
+    args: &Args,
+    display_size: Option<(usize, usize)>,
+) -> Intake {
     let mut img = img;
-    let mut sr_note: Option<String> = None;
     let (display_w, display_h) = display_size.unwrap_or((img.width, img.height));
 
     // A nearest-neighbour upscale, undone, before anything else looks at the image. Exact,
@@ -407,7 +446,7 @@ pub fn trace_image_sized(
     } else {
         1.0
     };
-    let args = &if oversample > 1.0 || floor_scale > 1.0 || redundancy_lambda > 1.0 {
+    let args = if oversample > 1.0 || floor_scale > 1.0 || redundancy_lambda > 1.0 {
         if !args.quiet {
             if oversample > 1.0 {
                 eprintln!(
@@ -427,6 +466,28 @@ pub fn trace_image_sized(
     } else {
         args.clone()
     };
+
+    Intake {
+        img,
+        args,
+        replicated,
+        normalised,
+        display: (display_w, display_h),
+    }
+}
+
+/// The tracer, from the restorer pre-pass onward, on a raster [`intake`] has already
+/// prepared. The second half of [`trace_image_sized`].
+pub fn trace_prepared(prepared: Intake) -> Result<Traced, Box<dyn std::error::Error>> {
+    let Intake {
+        mut img,
+        args,
+        replicated,
+        normalised,
+        display: (display_w, display_h),
+    } = prepared;
+    let args = &args;
+    let mut sr_note: Option<String> = None;
 
     // The restorer comes before SR and before anything that resamples: it was trained on
     // damage at the size the damage happened, and it returns an image of the same size.

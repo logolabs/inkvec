@@ -3717,6 +3717,7 @@ version = "0.1.4"
 dependencies = [
  "image",
  "inkvec-cli",
+ "inkvec-sr",
  "inkvec-trace",
  "rayon",
  "roxmltree",
@@ -3833,6 +3834,8 @@ dependencies = [
  "console_error_panic_hook",
  "inkvec",
  "inkvec-cli",
+ "inkvec-restore",
+ "inkvec-sr",
  "inkvec-trace",
  "js-sys",
  "rayon",

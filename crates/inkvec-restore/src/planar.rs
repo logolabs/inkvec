@@ -1,16 +1,20 @@
-//! Layout conversion shared by every in-process backend: interleaved RGB in, planar CHW padded
-//! to a multiple of 16 for the network, and back.
+//! Layout conversion shared by every backend: interleaved RGB in, planar CHW padded to a
+//! multiple of 16 for the network, and back.
 //!
 //! Padding replicates the last row and column, the same `F.pad(..., mode="replicate")` on the
 //! bottom and right that `restore_cli.py` applies, so every backend agrees with the Python
 //! reference pixel for pixel.
+//!
+//! The in-process backends call these directly. A backend that runs the network out of this
+//! crate's reach -- the browser's ONNX Runtime Web session, which holds the same `.onnx` file
+//! -- reaches them through [`crate::network_input`] and [`crate::network_output`], so that it
+//! pads and crops with this code and not with a reimplementation of it in another language.
 
 /// Both sides of the network input must be multiples of this (four 2x downsamplings).
 pub const MULTIPLE: usize = 16;
 
 /// The padded size for a `width x height` input.
-#[cfg_attr(not(any(feature = "model", feature = "onnxruntime")), allow(dead_code))]
-pub(crate) fn padded(width: usize, height: usize) -> (usize, usize) {
+pub fn padded(width: usize, height: usize) -> (usize, usize) {
     (
         width.div_ceil(MULTIPLE) * MULTIPLE,
         height.div_ceil(MULTIPLE) * MULTIPLE,
@@ -19,8 +23,7 @@ pub(crate) fn padded(width: usize, height: usize) -> (usize, usize) {
 
 /// Interleaved RGB `width x height` to planar CHW `pw x ph`, replicating the last column and
 /// row into the padding.
-#[cfg_attr(not(any(feature = "model", feature = "onnxruntime")), allow(dead_code))]
-pub(crate) fn to_planar_padded(
+pub fn to_planar_padded(
     rgb: &[f32],
     width: usize,
     height: usize,
@@ -42,8 +45,7 @@ pub(crate) fn to_planar_padded(
 }
 
 /// Planar CHW `pw x ph` back to interleaved RGB, keeping the top-left `width x height`.
-#[cfg_attr(not(any(feature = "model", feature = "onnxruntime")), allow(dead_code))]
-pub(crate) fn from_planar_cropped(
+pub fn from_planar_cropped(
     chw: &[f32],
     width: usize,
     height: usize,
@@ -63,8 +65,7 @@ pub(crate) fn from_planar_cropped(
 }
 
 /// Check an input buffer before any backend sees it.
-#[cfg_attr(not(any(feature = "model", feature = "onnxruntime")), allow(dead_code))]
-pub(crate) fn check_input(rgb: &[f32], width: usize, height: usize) -> Result<(), String> {
+pub fn check_input(rgb: &[f32], width: usize, height: usize) -> Result<(), String> {
     if width == 0 || height == 0 || rgb.len() != width * height * 3 {
         return Err(format!(
             "restorer input is {} floats, want {width}x{height}x3",

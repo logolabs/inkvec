@@ -71,6 +71,7 @@ Inkvec provides optional, modular neural components designed to handle extreme i
   - `restore-model` (default): Accelerated CPU execution via ONNX Runtime.
   - `restore-burn`: Pure Rust inference via the Burn deep-learning framework (portable, zero native dependencies).
   - `restore-wgpu`: GPU-accelerated inference via Burn's WebGPU backend (Vulkan, DirectX 12, Metal).
+  - **In the browser** (`web/denoise.js`): the same `restorer.onnx` in ONNX Runtime Web, on WebGPU where the browser provides it and on ONNX Runtime's WebAssembly kernels where it does not. The weights are fetched from the same Hugging Face repository, verified against the same SHA-256, and cached by the browser; the image being traced is never uploaded.
 - **Training Compute Acknowledgement:**
   - Trained using supercomputer time awarded by the **EuroHPC Joint Undertaking** on the **Arrhenius GPU supercomputer at NAISS (Sweden)** under Project ID **EHPC-AIF-2026PG01-907**.
 

@@ -27,7 +27,11 @@ API in particular should be treated as unstable release to release).
   23.5% of the bytes removed at a mean dE00 of 0.0077 against the original (worst 0.036).
   On the tracer's own output the geometry gives up 5.8% — its emitter is already
   description-length minimal — but the bytes give up 22.1%. On a nine-file spread it beats
-  SVGO's defaults on bytes, 33.5% to 29.7%, and running both beats either. Tens of
+  SVGO's defaults on bytes, 33.5% to 29.7%, and running both beats either.
+- **`--minify` re-encodes the path data** through that writer, taking about 9.6% off a
+  trace with nothing rounded and no pixel changed. `inkvec-svgmin --bytes-only` is the
+  same rewrite as a standalone tool, and `--decimals` there is how precision is spent for
+  bytes on purpose (two decimals takes 18% instead of 9.6%, and moves pixels). Tens of
   milliseconds for a small icon, under a second for a curve-dense logo, 6.5 s for the
   corpus's heaviest file (213 KB, 8,608 segments).
 - **Language-binding foundation** (`docs/BINDINGS.md`). The `inkvec` crate is a small stable

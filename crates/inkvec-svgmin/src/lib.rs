@@ -1180,6 +1180,10 @@ fn short_num(v: f64, quantum: f64, most: usize) -> String {
     best
 }
 
+/// Decimals allowed when nothing may be rounded: enough that a coordinate written back
+/// is the coordinate that was read, at a scale no renderer resolves.
+const LOSSLESS_DECIMALS: usize = 9;
+
 /// How many decimals a coordinate can need at this tolerance.
 fn decimals_for(eps: f64) -> usize {
     ((1.0 / (0.25 * eps)).log10().ceil().max(0.0) as usize).min(6)
@@ -1647,12 +1651,16 @@ fn rewrite_path(job: &Job, eps_units: f64, ext: f64, opts: &Options, fit: bool) 
     };
     let eps = eps_units / job.scale;
     let cfg = FitConfig::from_precision(ext / job.scale, eps, 2.0);
-    // Asked for a number of decimals, round to exactly that; otherwise to whatever the
-    // tolerance allows.
-    let most = opts.decimals.unwrap_or_else(|| decimals_for(eps));
-    let quantum = match opts.decimals {
-        Some(n) => 0.5 * 10f64.powi(-(i32::try_from(n).unwrap_or(6))),
-        None => 0.25 * eps,
+    // Asked for a number of decimals, round to exactly that. Otherwise: a rewrite that
+    // refits the drawing may round within the tolerance it is already spending, but one
+    // that only respells it may not round at all. Rounding is moving the drawing -- a
+    // quarter of a tolerance at a hard edge is a fifth of a pixel of coverage, which is
+    // visible in a difference image even though no fit has changed.
+    let (most, quantum) = match (opts.decimals, fit) {
+        (Some(n), _) => (n, 0.5 * 10f64.powi(-(i32::try_from(n).unwrap_or(6)))),
+        (None, true) => (decimals_for(eps), 0.25 * eps),
+        // The shortest spelling that is still the same number.
+        (None, false) => (LOSSLESS_DECIMALS, 0.0),
     };
 
     let mut w = Writer::new(quantum, most);
@@ -1776,11 +1784,13 @@ pub fn minify(svg: &str, opts: &Options) -> Result<(String, Report), String> {
 /// Rewrite every `<path d>` in the fewest bytes, leaving the drawing alone.
 ///
 /// The same writer as [`minify`] without the fitter: no segment is removed, moved or
-/// re-chosen, so the only thing that changes is how the numbers are spelled and how far
-/// they are rounded — to `Options::decimals` where that is set, and within a quarter of
-/// the tolerance otherwise. This is what an emitter that already knows its own geometry
-/// wants; on the tracer's own output the geometry has nothing left to give (0.2%) and the
-/// bytes have 14.6%.
+/// re-chosen, and — unless `Options::decimals` says otherwise — no coordinate is rounded
+/// either, so the picture that comes out is the picture that went in, pixel for pixel.
+/// Only the spelling changes.
+///
+/// This is what an emitter that already knows its own geometry wants: it can hand over
+/// the precision it chose (`decimals: Some(2)` for the tracer, which is what it already
+/// rounds to) and get the bytes back without giving up anything.
 pub fn compact(svg: &str, opts: &Options) -> Result<(String, Report), String> {
     run(svg, opts, false)
 }

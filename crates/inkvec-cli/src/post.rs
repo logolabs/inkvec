@@ -267,18 +267,19 @@ pub fn post_process(args: &Args, svg: String, w: usize, h: usize) -> String {
 /// Write the path data in the fewest bytes, without moving anything.
 ///
 /// The emitter chooses its coordinates carefully and then spells them out in full:
-/// absolute commands, every letter, every separator, two decimals whether or not the
-/// second one says anything. Handing the same numbers to `inkvec-svgmin`'s writer —
-/// relative where that is shorter, repeated letters and needless separators dropped,
-/// `H`/`V`/`S` where they say the same thing — takes about 15% of the file with the
-/// geometry untouched. Two decimals are kept, which is the precision the emitter already
-/// rounds to, so this cannot move a point at all.
+/// absolute commands, every letter, every separator. Handing the same numbers to
+/// `inkvec-svgmin`'s writer — relative where that is shorter, repeated letters and
+/// needless separators dropped, `H`/`V`/`S` where they say the same thing — takes about a
+/// twelfth of the file back with nothing moved at all.
+///
+/// Nothing is rounded, and that is ten points left on the table on purpose. Rounding to
+/// two decimals takes 18% instead of 8.5%, but on a gradient-heavy trace it moves a
+/// hundred pixels by as much as a fifth of a channel: the emitter writes two decimals for
+/// path data and more than that elsewhere, so two decimals is not the precision it chose.
+/// `--minify` promises the same geometry, so it keeps the same geometry;
+/// `inkvec-svgmin --decimals` is where precision is spent for bytes on purpose.
 fn compact_paths(svg: String) -> String {
-    let opts = inkvec_svgmin::Options {
-        decimals: Some(2),
-        ..Default::default()
-    };
-    match inkvec_svgmin::compact(&svg, &opts) {
+    match inkvec_svgmin::compact(&svg, &inkvec_svgmin::Options::default()) {
         Ok((out, _)) if out.len() < svg.len() => out,
         _ => svg,
     }

@@ -23,6 +23,8 @@ options:
       --decimals <n>        coordinate decimals (default: from the tolerance)
       --no-document         leave everything that is not path data alone: colours,
                             attributes, comments, metadata, whitespace
+      --bytes-only          rewrite the bytes, not the drawing: no segment is removed,
+                            moved or re-chosen, only spelled more cheaply
       --stats               print what changed, to stderr
   -h, --help
 ";
@@ -43,6 +45,7 @@ fn run() -> Result<(), String> {
     let mut out_dir: Option<PathBuf> = None;
     let mut opts = Options::default();
     let mut stats = false;
+    let mut bytes_only = false;
     let mut it = std::env::args().skip(1);
     let value = |it: &mut dyn Iterator<Item = String>, flag: &str| -> Result<String, String> {
         it.next().ok_or_else(|| format!("{flag} needs a value"))
@@ -62,6 +65,7 @@ fn run() -> Result<(), String> {
             }
             "--decimals" => opts.decimals = Some(parse::<usize>(&value(&mut it, "--decimals")?)?),
             "--no-document" => opts.document = false,
+            "--bytes-only" => bytes_only = true,
             "--stats" => stats = true,
             s if s.starts_with('-') => return Err(format!("unknown option {s}\n{USAGE}")),
             _ => inputs.push(a.into()),
@@ -82,7 +86,12 @@ fn run() -> Result<(), String> {
     for input in &inputs {
         let svg =
             std::fs::read_to_string(input).map_err(|e| format!("{}: {e}", input.display()))?;
-        let (out, rep) = minify(&svg, &opts).map_err(|e| format!("{}: {e}", input.display()))?;
+        let rewrite = if bytes_only {
+            inkvec_svgmin::compact
+        } else {
+            minify
+        };
+        let (out, rep) = rewrite(&svg, &opts).map_err(|e| format!("{}: {e}", input.display()))?;
         let dest: Option<PathBuf> = match (&out_dir, &output) {
             (Some(d), _) => Some(d.join(input.file_name().unwrap_or(input.as_os_str()))),
             (None, Some(o)) => Some(o.clone()),

@@ -61,12 +61,12 @@
       },
       "svg": {
         "x86_64-windows-msvc": {
-          "bytes": 6148,
-          "sha256": "6a1f1478936afb999c7209e04a2cf1c3cedfe5fef24b896f6482feea4c66e1a5"
+          "bytes": 6835,
+          "sha256": "ac036693a4ab08924952b7da27a8cd104d99e1976cf24242faf17d63d5dfb8e4"
         },
         "x86_64-linux-gnu": {
-          "bytes": 6150,
-          "sha256": "0926ee15409fdab7607a9bb543a4ac1112b99fe2e6a3aede997f8af782dbfe12"
+          "bytes": 6837,
+          "sha256": "bc399e1fcfe0c3c1d0ad5f65326ccd5794c9e665dd3f109207fa7910887f35bd"
         }
       }
     },

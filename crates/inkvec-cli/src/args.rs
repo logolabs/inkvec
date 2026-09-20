@@ -265,7 +265,8 @@ OPTIONS:
         --minify            No ids or groups, and the path data written in the fewest
                             bytes: relative commands where they are shorter, repeated
                             letters and needless separators dropped, H/V/S where they say
-                            the same thing. Same geometry, about a quarter smaller
+                            the same thing. Nothing is rounded and nothing moves -- the
+                            same picture, pixel for pixel, about a twelfth smaller
         --content-units     Scale the fit tolerances (sigma, precision, lambda) with the
                             raster so a 512-px logo gets the parameter count of a 128-px
                             one. Off by default: it trades fidelity for parsimony

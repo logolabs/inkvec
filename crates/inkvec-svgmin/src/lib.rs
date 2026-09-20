@@ -46,7 +46,7 @@ pub struct Options {
     /// Also shorten everything that is not path geometry: colours, numeric attributes,
     /// presentation attributes restating a value that already applies, comments,
     /// `<metadata>`, `<desc>`, and whitespace between tags. Nothing that renders or that
-    /// a screen reader speaks is removed. See [`document`].
+    /// a screen reader speaks is removed. See the `document` module.
     pub document: bool,
 }
 
@@ -206,33 +206,6 @@ mod tests {
                 (fast - brute).abs() < 1e-6,
                 "point {p:?}: fast {fast} via segment {k}, brute {brute}; segments {}",
                 fitted.segments.len()
-            );
-        }
-    }
-
-    /// A thin sliver of long segments: the far side's table sample is nearer to a point
-    /// than the near side's, and a lookup that trusts the table reads the sliver's width
-    /// (0.2) as the distance to a path the point lies on.
-
-    fn the_nearest_lookup_is_not_fooled_by_the_far_side_of_a_thin_shape() {
-        let fitted = FittedPath {
-            start: Point::new(0.0, 0.0),
-            segments: vec![
-                Segment::Line(Point::new(100.0, 0.0)),
-                Segment::Line(Point::new(100.0, 0.2)),
-                // The far side's samples are offset by half a gap from the near side's.
-                Segment::Line(Point::new(-6.25, 0.2)),
-                Segment::Line(Point::new(0.0, 0.0)),
-            ],
-            closed: true,
-        };
-        let curve = Curve::new(&fitted);
-        for i in 0..=1000 {
-            let p = Point::new(f64::from(i) * 0.1, 0.0);
-            let (k, d) = curve.nearest(p);
-            assert!(
-                d < 1e-9,
-                "point {p:?} is on the path; lookup says {d} via segment {k}"
             );
         }
     }

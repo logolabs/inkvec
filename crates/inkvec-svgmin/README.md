@@ -72,6 +72,41 @@ geometry, which is the check this tool exists to make, but its emitter writes ab
 coordinates at a fixed precision where relative ones at the tolerance's own precision
 would do.
 
+### What each tier costs
+
+Three different bargains, on the same 40 files (`bench/svgmin_tiers.py`). dE00 is against
+the artist's own file, rendered at 1024 px; the tracer's own error on these files is 0.148,
+and around 1.0 is where a trained eye starts to see a difference.
+
+| tier | | bytes saved | mean dE00 | worst dE00 |
+|---|---|---|---|---|
+| lossless | `--bytes-only` | 14.9% | **0** | **0** |
+| rounded, 3 dp | `--bytes-only --decimals 3` | 16.3% | 0.0001 | 0.0014 |
+| rounded, 2 dp | `--bytes-only --decimals 2` | 19.1% | 0.0084 | 0.0572 |
+| **refit** | *(default, 0.1 px)* | **23.5%** | **0.0077** | 0.0362 |
+| refit, 0.5 px | `--tolerance 0.5` | 36.9% | 0.0556 | 0.1779 |
+| refit, 1.0 px | `--tolerance 1.0` | 42.7% | 0.1263 | 0.4417 |
+
+Two things in that table are worth reading twice.
+
+The first is that **refitting dominates rounding**. The default saves more bytes than
+2-decimal rounding *and* is closer to the original (0.0077 against 0.0084). Rounding is
+blind — it moves every coordinate by up to half a digit whether that coordinate was
+describing a hard corner or the middle of a gentle curve. The fit is not: it spends its
+error where the curve can absorb it and holds every segment to a stated tolerance. If you
+want a smaller file, fit it; do not round it.
+
+The second is that rounding harder eventually saves *less*: 1 decimal gives 14.5%, below
+2 decimals and below doing nothing at all. At that coarseness the rewrite no longer reads
+back as the same drawing, so the guard refuses it and those paths keep their original
+bytes — 6 of 16 rewritten instead of 16 of 16. The tool declines rather than hit a byte
+target by wrecking the picture.
+
+A note on the worst-pixel figures you will see if you difference the images yourself: a
+tiny mean dE00 still comes with single pixels a long way off, because moving an edge by a
+fraction of a pixel flips that one pixel's coverage between two very different colours.
+The mean is the honest summary; the maximum is an artefact of where the edge landed.
+
 ### Against SVGO
 
 On a nine-file spread (two real-world illustrations and seven corpus icons, 61 KB in

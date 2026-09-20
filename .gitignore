@@ -53,6 +53,7 @@ HANDOFF*.md
 # Generated outputs
 /output/
 out/
+/site/
 
 # Local working areas and tool state
 scratch/

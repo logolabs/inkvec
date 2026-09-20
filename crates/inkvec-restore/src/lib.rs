@@ -165,7 +165,7 @@ pub fn restore_rgba(r: &dyn Restore, img: &Rgba) -> Result<Rgba, Box<dyn std::er
 /// The in-process backends build this inside [`Restore::restore`] and no caller sees it. It is
 /// public for a backend that runs the network somewhere this crate cannot follow it: the
 /// browser's ONNX Runtime Web session (`web/denoise.js`), which reads the same `.onnx` export
-/// the [`onnx`] backend reads. Such a backend pairs it with [`network_output`], so that the
+/// the `onnx` backend reads. Such a backend pairs it with [`network_output`], so that the
 /// padding, the crop, the quantisation and the snap are this code rather than a
 /// reimplementation of it in another language -- the same reason [`external`] hands its
 /// command a PNG instead of asking it to composite.

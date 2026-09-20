@@ -92,12 +92,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: windows-x64, os: windows-latest, target: x86_64-pc-windows-msvc }
-          - { name: linux-x64, os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          # `glibc` is the oldest glibc the Linux libraries have to load against, and it is
+          # what cargo-zigbuild is told to target below. 2.17 is manylinux2014's floor and
+          # Rust's own minimum, so the archive runs on anything still getting updates.
+          # Everywhere else the field is empty and the ordinary cargo build applies.
+          - { name: windows-x64, os: windows-latest, target: x86_64-pc-windows-msvc, glibc: "" }
+          - { name: linux-x64, os: ubuntu-latest, target: x86_64-unknown-linux-gnu, glibc: "2.17" }
           # Native arm64 runner, as in release.yml. NOT verified locally.
-          - { name: linux-arm64, os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
-          - { name: macos-arm64, os: macos-14, target: aarch64-apple-darwin }
-          - { name: macos-x64, os: macos-15-intel, target: x86_64-apple-darwin }
+          - { name: linux-arm64, os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, glibc: "2.17" }
+          - { name: macos-arm64, os: macos-14, target: aarch64-apple-darwin, glibc: "" }
+          - { name: macos-x64, os: macos-15-intel, target: x86_64-apple-darwin, glibc: "" }
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.98.0
@@ -106,7 +110,43 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ffi-${{ matrix.target }}
+      # The runner's own glibc is not the floor this should ship against. `ubuntu-latest` is
+      # 24.04, so a plain build leaves the library asking for GLIBC_2.39, and it then fails
+      # to load on Debian 11 and 12, Ubuntu 20.04 and 22.04, and RHEL 8 and 9. Every C ABI
+      # consumer inherits that -- PHP, Go, Java, .NET and Swift alike -- while the wheels job
+      # below is already portable through maturin's manylinux container. zigbuild is that
+      # same idea without a container, which matters here: the steps after this one link the
+      # C example and run the contract tests, and they keep doing so natively on the runner,
+      # against the very library that gets archived.
+      - uses: mlugg/setup-zig@v2
+        if: matrix.glibc != ''
+        with:
+          version: 0.14.1
+      - uses: taiki-e/install-action@v2
+        if: matrix.glibc != ''
+        with:
+          tool: cargo-zigbuild
+      - name: Build against glibc ${{ matrix.glibc }}
+        if: matrix.glibc != ''
+        run: cargo zigbuild --release --locked -p inkvec-ffi --target ${{ matrix.target }}.${{ matrix.glibc }}
       - run: cargo build --release --locked -p inkvec-ffi --target ${{ matrix.target }}
+        if: matrix.glibc == ''
+
+      # Assert the property the archive is actually judged on, because a regression here is
+      # silent: a dependency reaching for a newer symbol, or a runner image bump, shows up
+      # only when someone reports that the library will not load.
+      - name: No symbol newer than glibc ${{ matrix.glibc }}
+        if: matrix.glibc != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          lib="target/${{ matrix.target }}/release/libinkvec_ffi.so"
+          max=$(objdump -T "$lib" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sort -uV | tail -1 || true)
+          echo "highest required: ${max:-none}; floor: GLIBC_${{ matrix.glibc }}"
+          if [ -n "$max" ] && [ "$(printf '%s\nGLIBC_%s\n' "$max" "${{ matrix.glibc }}" | sort -V | tail -1)" != "GLIBC_${{ matrix.glibc }}" ]; then
+            echo "::error::$lib requires $max, above the GLIBC_${{ matrix.glibc }} floor"
+            exit 1
+          fi
 
       - name: Build the C example (cc)
         if: runner.os != 'Windows'
@@ -152,11 +192,24 @@ jobs:
           mkdir -p "${stage}/include" "${stage}/lib" "${stage}/examples"
           cp crates/inkvec-ffi/include/inkvec.h "${stage}/include/"
           lib="target/${{ matrix.target }}/release"
-          shopt -s nullglob
+          # `shopt -s nullglob` stood here, but these are literal paths, not patterns, and
+          # nullglob only ever drops a glob that matches nothing -- a word with no wildcard
+          # is never subject to it. So every platform tried to copy all six names, five of
+          # which it does not build, and `set -e` ended the job on the first. Test each name
+          # instead, then insist that something was staged: an archive with an empty lib/ is
+          # the one outcome this step must never produce quietly.
+          staged=0
           for f in "$lib"/inkvec_ffi.dll "$lib"/inkvec_ffi.dll.lib "$lib"/inkvec_ffi.lib \
                    "$lib"/libinkvec_ffi.so "$lib"/libinkvec_ffi.dylib "$lib"/libinkvec_ffi.a; do
-            cp "$f" "${stage}/lib/"
+            if [ -e "$f" ]; then
+              cp "$f" "${stage}/lib/"
+              staged=$((staged + 1))
+            fi
           done
+          if [ "$staged" -eq 0 ]; then
+            echo "::error::no library found in $lib to stage"
+            exit 1
+          fi
           cp crates/inkvec-ffi/examples/c/trace.c "${stage}/examples/"
           cp crates/inkvec-ffi/README.md "${stage}/README.md"
           cp LICENSE NOTICE "${stage}/"

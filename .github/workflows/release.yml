@@ -45,8 +45,12 @@ jobs:
           - target: x86_64-apple-darwin
             feature: restore-model
         include:
+          # `glibc` is the oldest glibc the Linux executables have to run against; see the
+          # build steps. 2.17 is manylinux2014's floor and Rust's own minimum. Absent on
+          # every other row, where the ordinary cargo build applies.
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+            glibc: "2.17"
           # Native arm64 runner rather than `cross`/QEMU: the restore-model flavour needs
           # `ort` to download a matching prebuilt ONNX Runtime at build time, which is far
           # more likely to have an arm64 Linux asset than a cross-compiled sysroot is to
@@ -54,6 +58,7 @@ jobs:
           # available here) -- verify the first tagged run.
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
+            glibc: "2.17"
           # macos-15-intel is the supported Intel (x86_64) GitHub-hosted image;
           # macos-14 is arm64.
           # Pinned explicitly rather than macos-latest so the mapping doesn't silently
@@ -75,9 +80,47 @@ jobs:
         with:
           key: ${{ matrix.target }}-${{ matrix.feature }}
 
+      # `ubuntu-latest` is 24.04, so an ordinary build here leaves the executable asking
+      # for GLIBC_2.39 and it will not start on Debian 11 or 12, Ubuntu 20.04 or 22.04, or
+      # RHEL 8 or 9 -- it exits on the dynamic loader, before main. zigbuild pins the floor
+      # instead, without a container.
+      #
+      # The restore-model flavour below is deliberately left alone: `ort` fetches a prebuilt
+      # ONNX Runtime at build time and links it, so that archive's floor is whichever is
+      # higher, ours or theirs, and putting zig's linker in the middle of it risks breaking
+      # a build that currently works to fix a floor it may not even control. The plain CLI
+      # is the artifact people actually download; this fixes that one and says so.
+      - uses: mlugg/setup-zig@v2
+        if: matrix.feature == 'default' && matrix.glibc != ''
+        with:
+          version: 0.14.1
+      - uses: taiki-e/install-action@v2
+        if: matrix.feature == 'default' && matrix.glibc != ''
+        with:
+          tool: cargo-zigbuild
+
+      - name: Build (default features, glibc ${{ matrix.glibc }})
+        if: matrix.feature == 'default' && matrix.glibc != ''
+        run: cargo zigbuild --release -p inkvec-cli --target ${{ matrix.target }}.${{ matrix.glibc }}
+
       - name: Build (default features)
-        if: matrix.feature == 'default'
+        if: matrix.feature == 'default' && matrix.glibc == ''
         run: cargo build --release -p inkvec-cli --target ${{ matrix.target }}
+
+      # Assert it, because the failure is silent until a user reports the binary will not
+      # start, which is exactly how this was found.
+      - name: No symbol newer than glibc ${{ matrix.glibc }}
+        if: matrix.feature == 'default' && matrix.glibc != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="target/${{ matrix.target }}/release/${BIN_NAME}"
+          max=$(objdump -T "$bin" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sort -uV | tail -1 || true)
+          echo "highest required: ${max:-none}; floor: GLIBC_${{ matrix.glibc }}"
+          if [ -n "$max" ] && [ "$(printf '%s\nGLIBC_%s\n' "$max" "${{ matrix.glibc }}" | sort -V | tail -1)" != "GLIBC_${{ matrix.glibc }}" ]; then
+            echo "::error::$bin requires $max, above the GLIBC_${{ matrix.glibc }} floor"
+            exit 1
+          fi
 
       - name: Build (restore-model)
         # Windows + restore-model links ONNX Runtime statically, which needs MSVC 17.10+;

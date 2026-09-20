@@ -7,6 +7,15 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+### Added
+
+- **`svgmin` in the WebAssembly build**: the SVG minifier reachable from a browser.
+  `svgmin(svg, lossless, tolerance_px, judge, corner_degrees, decimals, document)` returns
+  `{ svg, report }`; `lossless` picks `inkvec_svgmin::compact` (no segment moved, the picture
+  out is the picture in) over `minify` (each path refitted within the tolerance), and the
+  report carries `bytesBefore`/`bytesAfter` measured in UTF-8 bytes. Invalid input throws an
+  `Error` with `code = "invalid_svg"`. The committed `web/pkg/` needs a rebuild to expose it.
+
 ## [0.1.6] - 2026-09-22
 
 ### Added

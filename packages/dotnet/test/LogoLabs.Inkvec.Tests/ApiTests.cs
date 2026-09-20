@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using LogoLabs.Inkvec;
@@ -40,8 +41,16 @@ public class ApiTests
     public void BuildTarget_IsReported()
     {
         Assert.False(string.IsNullOrWhiteSpace(Inkvec.BuildTarget));
-        // This suite only runs on Windows x64 (see the toolchain caveat in the task/README).
-        Assert.Contains("windows", Inkvec.BuildTarget, StringComparison.OrdinalIgnoreCase);
+        // The bindings matrix runs this suite on Windows, Linux and macOS, each against
+        // its own native library -- so the reported target (crates/inkvec build_target:
+        // `windows-msvc`, `linux-gnu`, `macos*`) must name the platform the suite is
+        // running on, not any one of them.
+        var family =
+            RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "windows" :
+            RuntimeInformation.IsOSPlatform(OSPlatform.Linux) ? "linux" :
+            RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? "macos" : "";
+        Assert.True(family.Length > 0, "unexpected host OS");
+        Assert.Contains(family, Inkvec.BuildTarget, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

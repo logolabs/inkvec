@@ -50,6 +50,23 @@ jobs:
       - run: pip install numpy pillow scikit-image resvg_py svgelements
       - run: python bench/ci_gate.py --exe target/release/inkvec --workers 4
 
+  svgmin-gate:
+    # The minifier's own gate, which is shaped differently on purpose: its job is to spend
+    # fidelity for description length, so savings and dE00 are gated against each other
+    # rather than each ratcheted downwards. See the docstring in bench/svgmin_gate.py.
+    name: minifier gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p inkvec-svgmin
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install numpy pillow scikit-image resvg_py svgelements
+      - run: python bench/svgmin_gate.py --exe target/release/inkvec-svgmin
+
   quality:
     # The code-quality ratchet: bench/quality_budget.json records what is true today and
     # this fails on a move away from it. Existing debt is grandfathered by name, so this

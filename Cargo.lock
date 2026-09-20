@@ -3734,6 +3734,7 @@ dependencies = [
  "inkvec-fit",
  "inkvec-restore",
  "inkvec-sr",
+ "inkvec-svgmin",
  "inkvec-trace",
  "rayon",
 ]
@@ -3814,6 +3815,17 @@ dependencies = [
  "image",
  "inkvec-trace",
  "resvg",
+]
+
+[[package]]
+name = "inkvec-svgmin"
+version = "0.1.4"
+dependencies = [
+ "inkvec-core",
+ "inkvec-fit",
+ "rayon",
+ "roxmltree",
+ "svgtypes",
 ]
 
 [[package]]

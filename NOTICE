@@ -11,6 +11,19 @@ against, plus the tools and runtimes used by the optional restorer and SR pre-pa
 listed with their licences and upstream URLs in docs/THIRD_PARTY.md; that file is
 regenerated from the resolved dependency graph and is the authoritative list.
 
+The document-level rules in `inkvec-svgmin` (crates/inkvec-svgmin/src/document.rs) are a
+clean-room re-implementation of ideas from SVGO, which is the reference for what is safe
+to take out of an SVG and what is not:
+
+  SVGO              MIT
+                    https://github.com/svg/svgo
+                    No SVGO code is used. The behaviour of its convertColors,
+                    cleanupNumericValues, removeUnknownsAndDefaults, removeComments,
+                    removeMetadata, removeDesc, removeEmptyAttrs, cleanupIds,
+                    collapseGroups, moveElemsAttrsToGroup and convertStyleToAttrs plugins
+                    is reproduced from their documented contracts, some of them
+                    deliberately narrower than the original.
+
 The benchmark corpora committed under bench/data (test data, not shipped in any build)
 are drawn from the following third-party icon sets, each under its own upstream licence:
 

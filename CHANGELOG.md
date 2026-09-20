@@ -9,6 +9,32 @@ API in particular should be treated as unstable release to release).
 
 ### Added
 
+- **`inkvec-svgmin`** (`crates/inkvec-svgmin`): rewrite an existing SVG's paths as the
+  fewest segments that draw the same picture, by the tracer's own minimum-description-length
+  objective. Corners in the source are hard breaks and survive exactly; the tolerance is
+  stated at a viewing size (`--tolerance 0.1 --judge 1024`); only `d` attributes change and a
+  path that would not get smaller is left byte for byte. Whole subpaths that are circles,
+  ellipses or rectangles are written as those elements, and the `d` text itself is
+  minimised: relative or absolute per command, whichever is shorter, repeated letters and
+  needless separators and leading zeros dropped, `H`/`V`/`S` where they say the same thing,
+  and each number at the fewest decimals the tolerance allows. Everything that is not path
+  data is shortened too — colours, numeric attributes, presentation attributes restating
+  what is already inherited, `style="fill:…"` as an attribute, attributes shared by every
+  child of a group moved onto the group, unreferenced ids, empty groups, comments,
+  `<metadata>`, whitespace — by rules re-implemented from [SVGO](https://github.com/svg/svgo)
+  (MIT; see NOTICE), with `--no-document` to turn them off. `<title>`, and any `<desc>`
+  somebody wrote, are never removed. On 40 corpus artist files: 23.9% of the numbers and
+  23.5% of the bytes removed at a mean dE00 of 0.0077 against the original (worst 0.036).
+  On the tracer's own output the geometry gives up 5.8% — its emitter is already
+  description-length minimal — but the bytes give up 22.1%. On a nine-file spread it beats
+  SVGO's defaults on bytes, 33.5% to 29.7%, and running both beats either.
+- **`--minify` re-encodes the path data** through that writer, taking about 9.6% off a
+  trace with nothing rounded and no pixel changed. `inkvec-svgmin --bytes-only` is the
+  same rewrite as a standalone tool, and `--decimals` there is how precision is spent for
+  bytes on purpose (two decimals takes 18% instead of 9.6%, and moves pixels). Tens of
+  milliseconds for a small icon, under a second for a curve-dense logo, 6.5 s for the
+  corpus's heaviest file (213 KB, 8,608 segments).
+
 - **The denoiser in the browser** (`web/denoise.js`, `web/worker.js`, `crates/inkvec-wasm`).
   The `--restore` pre-pass now runs on the Space, off by default and with the same three
   modes (`off`, `auto`, `on`). The page loads the same `restorer.onnx` from
@@ -43,7 +69,6 @@ API in particular should be treated as unstable release to release).
   opening trace named as the check it is. The weights are counted in bytes; the network pass
   and the trace report nothing until they are done, so their tracks sweep rather than
   inventing a percentage.
-
 - **Language-binding foundation** (`docs/BINDINGS.md`). The `inkvec` crate is a small stable
   library API (`trace`, `trace_rgba`, `Options`, `Traced`, `Error`); `inkvec-ffi` is a C
   library (`inkvec_ffi`) with a cbindgen header, `include/inkvec.h`; `inkvec-py` is the `inkvec`

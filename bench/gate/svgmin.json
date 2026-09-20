@@ -1,0 +1,14 @@
+{
+  "bytes_saved": 0.2345532217871128,
+  "de00_mean": 0.007745679505205771,
+  "de00_worst": 0.036217935383319855,
+  "bytes_only_max_px": 0.0,
+  "bytes_only_worst_file": "",
+  "n": 40,
+  "_provenance": {
+    "platform": "Windows-10-10.0.26200-SP0",
+    "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
+    "source_revision": "dc0fd292ff00eb9cf083c3ce104b4dc6d1ca31ee",
+    "exe": "M:\\AI STORAGE\\SVGIfication\\target\\release\\inkvec-svgmin.exe"
+  }
+}

@@ -53,7 +53,24 @@ fn fills(svg: &str) -> std::collections::BTreeSet<String> {
             rest.find('"').map(|end| rest[..end].to_ascii_lowercase())
         })
         .filter(|f| f != "none")
+        .map(|f| expand_hex(&f))
         .collect()
+}
+
+/// `#abc` written out as `#aabbcc`: two spellings of one colour have to compare equal,
+/// because `--minify` picks whichever is shorter.
+fn expand_hex(v: &str) -> String {
+    match v.strip_prefix('#') {
+        Some(b) if b.len() == 3 || b.len() == 4 => {
+            let mut out = String::from("#");
+            for c in b.chars() {
+                out.push(c);
+                out.push(c);
+            }
+            out
+        }
+        _ => v.to_string(),
+    }
 }
 
 #[test]

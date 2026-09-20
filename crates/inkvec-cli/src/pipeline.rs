@@ -534,7 +534,18 @@ fn finish_color(
             // are scored by the same MDL cost, so the three numbers of a circle beat the
             // twenty-four of four cubics whenever the evidence actually supports a
             // circle, and lose when it does not.
-            match fit_primitive_or_arcs(&poly.points, &poly.sigma, poly.closed, &cfg_k) {
+            // `INKVEC_NO_PRIMITIVE=1` takes the whole-boundary primitive path out, the
+            // same way `INKVEC_NO_ARCS` takes arcs out of the DP alphabet, which is how
+            // the two are measured against each other. It is worth a great deal: over
+            // the 246-icon gate set, removing it costs 30.52% of the parameter ratio
+            // (1.4818 -> 1.9341) and 9.01% of dE00, far more than any other lever
+            // measured on this tree.
+            let attempt = if std::env::var_os("INKVEC_NO_PRIMITIVE").is_some() {
+                None
+            } else {
+                fit_primitive_or_arcs(&poly.points, &poly.sigma, poly.closed, &cfg_k)
+            };
+            match attempt {
                 Some((segs, prim, cost)) if cost < path_cost(&poly, &curve, &cfg_k) => (
                     FittedPath {
                         start: poly.points[0],

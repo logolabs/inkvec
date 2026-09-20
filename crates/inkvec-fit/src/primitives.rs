@@ -622,6 +622,33 @@ fn signed_area(pts: &[Point]) -> f64 {
 /// line-only optimum from [`optimal_polygon`], which is the "not fitting" baseline this
 /// function can compute for itself. The caller compares the returned cost against its
 /// cubic description; both are in the same units.
+///
+/// # Measured: this is the largest parameter lever in the tree, and the comparison is
+/// # not the weak point DESIGN.md §S4 expected
+///
+/// `docs/algorithm/00-overview.md` flags the caller's structure — one whole-boundary
+/// primitive fit scored against one DP fit, rather than primitives as states inside the
+/// DP — as "a real architectural gap", on DESIGN.md's reasoning that "once cubics are
+/// fitted they have already absorbed the error a primitive would have explained", so
+/// primitives would lose contests they deserve to win. Counted over the 246-icon gate
+/// set (6898 boundaries): a candidate is offered on 606 of them and **wins 595, or 98.2%
+/// of offers**. Eleven lose, and nine of those lose by more than 5% (median loser costs
+/// 1.28x the DP). There is no population of near-misses for a unified DP to rescue, so
+/// whatever that gap costs, it is not this.
+///
+/// Winners: 386 rounded rects, 107 circles, 69 ellipses, 33 arc chains. Only 16.4% of
+/// boundaries are closed at all, and a whole-shape primitive needs a closed one, so the
+/// offer rate among eligible boundaries is 53.5%.
+///
+/// Ablating the path entirely (`INKVEC_NO_PRIMITIVE=1`) costs **30.52% of the parameter
+/// ratio** (1.4818 -> 1.9341) and 9.01% of dE00, with turning unchanged (-0.32%). For
+/// scale, every other parameter lever measured on this tree moves the ratio by 1-2%.
+///
+/// What the count cannot see: a boundary that is only *partly* a primitive is never
+/// offered one, and shows up here only as a silent non-offer. That residue is the real
+/// remainder of the S4 gap — though circular arcs, the common case, are already states
+/// in the DP alphabet ([`crate::multimodel`] fits `{line, cubic, arc}`, not the
+/// `{line, cubic}` the overview describes), which bounds how much of it is left.
 pub fn fit_primitive_or_arcs(
     pts: &[Point],
     sigma: &[f64],

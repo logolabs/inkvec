@@ -417,6 +417,9 @@ blockquote p:last-child{margin:0}
 .plainlink{margin:-6px 0 1.6em;font-size:14px}
 .plainlink a{font-weight:500}
 
+/* the mark before the wordmark in the hero */
+.heromark{height:.8em;width:auto;vertical-align:-.08em;margin-right:.22em}
+
 /* about block on the landing page */
 .about{margin-top:3.2em;padding-top:1.4em;border-top:1px solid var(--rule)}
 .about p{color:var(--faint);max-width:38rem}
@@ -630,12 +633,12 @@ def build(base: str) -> int:
     assets = OUT / "assets"
     shutil.copytree(ROOT / "docs/assets", assets)
     # The app mark, in its two colours, is the favicon; the sidebar topbar carries the
-    # mono variant recoloured to the accent.
+    # mono variant recoloured to the accent (every concrete fill, not the root's
+    # fill="none", is replaced -- so a re-export with new colours needs no edit here).
     shutil.copyfile(ROOT / "web/favicon.svg", OUT / "favicon.svg")
     logo = (ROOT / "web/logo.svg").read_text(encoding="utf-8")
     (OUT / "logo-mono.svg").write_text(
-        logo.replace("#1d1c28", "#c9754a").replace("#08F4FB", "#c9754a")
-            .replace("#1d1c28".upper(), "#c9754a"),
+        re.sub(r'fill="#[0-9a-fA-F]+"', 'fill="#c9754a"', logo),
         encoding="utf-8")
     (OUT / "site.css").write_text(CSS + "\n" + FORMATTER.get_style_defs(".codehilite") + "\n",
                                   encoding="utf-8")
@@ -689,7 +692,7 @@ def build(base: str) -> int:
         if slug == "":
             body = strip_readme_chrome(body)
             hero = (f'<section class="hero"><p class="eyebrow">LOGOLABS</p>'
-                    f'<h1>Inkvec</h1>'
+                    f'<h1><img class="heromark" src="{base}logo-mono.svg" alt="">Inkvec</h1>'
                     f'<p class="pitch">Exact SVG from logos and icons. The geometry is decided '
                     f'by the evidence in the pixels &mdash; not by a tolerance slider.</p>'
                     f'<div class="cta"><a class="btn primary" href="{SPACE}">Try it in the browser</a>'

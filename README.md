@@ -222,6 +222,7 @@ The `inkvec` crate (`crates/inkvec`) is the stable library API, and every other 
 | C# / .NET | `LogoLabs.Inkvec` ([`packages/dotnet`](packages/dotnet/)) | `Inkvec.TraceFile("logo.png", new InkvecOptions { Colors = 16 })` |
 | Go | `github.com/logolabs/inkvec-go` ([`packages/go`](packages/go/)) | `inkvec.Trace(ctx, png, &inkvec.Options{Colors: inkvec.Ptr(16)})` |
 | Swift | `Inkvec` via `github.com/logolabs/inkvec-swift` ([`packages/swift`](packages/swift/)) | `try Inkvec.trace(png, options: InkvecOptions(colors: 16))` |
+| PHP 8.1+ | `logolabs/inkvec` ([`packages/php`](packages/php/)) | `Inkvec::traceFile('logo.png', new Options(colors: 16))` |
 | HTTP (Docker) | `ghcr.io/logolabs/inkvec` ([`crates/inkvec-server`](crates/inkvec-server/)) | `curl --data-binary @logo.png -H 'Content-Type: image/png' 'localhost:8080/trace?colors=16'` |
 
 Every binding takes the same options, generated from one schema, and reproduces the same contract fixtures; they share the command line's defaults, native transparency and guarded shape harmonization included. None is published to its registry yet — build from this repository. See [`docs/BINDINGS.md`](docs/BINDINGS.md).

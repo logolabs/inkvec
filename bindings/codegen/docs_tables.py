@@ -24,6 +24,7 @@ TARGETS = [
     ROOT / "packages" / "java" / "README.md",
     ROOT / "packages" / "dotnet" / "README.md",
     ROOT / "packages" / "swift" / "README.md",
+    ROOT / "packages" / "php" / "README.md",
     ROOT / "crates" / "inkvec-server" / "README.md",
     ROOT / "packages" / "go" / "README.md",
 ]

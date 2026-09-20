@@ -14,6 +14,7 @@ these, each a thin wrapper over the facade or the C ABI:
 | HTTP service `inkvec-server`, as a Docker image | `crates/inkvec-server`, `services/docker/` | Any language, over HTTP: `POST` an image, get SVG back |
 | Go module `github.com/logolabs/inkvec-go` | `packages/go` over the C ABI compiled to `wasm32-wasip1` | Go 1.25+, pure Go through wazero: no cgo, no native library |
 | Swift package `Inkvec`, from the mirror `github.com/logolabs/inkvec-swift` | `packages/swift` over the C ABI | Swift 5.9+: macOS and iOS through a prebuilt XCFramework, Linux against `libinkvec_ffi` |
+| Composer package `logolabs/inkvec` | `packages/php` over the C ABI | PHP 8.1+ through ext-FFI, the library called in-process; preloadable for PHP-FPM |
 
 The WebAssembly crate (`crates/inkvec-wasm`) calls the facade: `trace_json` and
 `trace_rgba_json` take the options as JSON, `default_options_json` and `options_schema_json`
@@ -370,6 +371,35 @@ operand. `go get` cannot run a build step, so users get the module from the mirr
 the compiled `inkvec.wasm` on a `v*` tag; here the `.wasm` is built, not committed. See
 `packages/go/README.md`.
 
+### PHP
+
+```sh
+composer require logolabs/inkvec
+vendor/bin/inkvec-fetch-library      # libinkvec_ffi for this platform, from the releases
+```
+
+```php
+use LogoLabs\Inkvec\Inkvec;
+use LogoLabs\Inkvec\Options;
+
+$traced = Inkvec::traceFile('logo.png', new Options(colors: 16));
+file_put_contents('logo.svg', $traced->svg);
+
+$traced = Inkvec::trace($bytes, ['colors' => 16]);            // options as an array
+$traced = Inkvec::traceRgba($rgba, $width, $height);          // straight RGBA8
+```
+
+`packages/php` calls the C ABI through PHP's FFI extension: no subprocess and no copy of the
+image on the way in (a PHP string is passed straight to `inkvec_trace`). The library is found
+through `Inkvec::useLibrary()`, `INKVEC_LIBRARY`, the package's own `lib/`, a sibling
+`target/release/`, or the system loader, and is refused unless its `inkvec_abi_version()`
+matches. Options are the generated `Options` (camelCase properties, `null` meaning the
+default, `bindings/codegen/php.py`), an array keyed by the tracer's own names, or raw JSON;
+errors are `InvalidImageException`, `InvalidOptionsException`, `InternalException` and
+`LibraryException`, all `InkvecException`. In a web SAPI, where `ffi.enable` defaults to
+`preload`, `Inkvec::preload()` registers the library from an `opcache.preload` script and
+every request shares it. See `packages/php/README.md`.
+
 ### HTTP (Docker)
 
 `crates/inkvec-server` is the facade behind axum: `POST /trace` (raw image bytes, or
@@ -451,6 +481,9 @@ python -m pytest crates/inkvec-py/tests
 
 cd packages/npm && npm ci                               # the npm package (needs wasm-pack and
 node build.mjs && npm test                              # a nightly toolchain with rust-src)
+
+cd packages/php && composer install                     # the PHP package (needs ext-ffi and
+vendor/bin/phpunit                                      # the C library built above)
 ```
 
 `.github/workflows/bindings.yml` does all of this on Linux, macOS and Windows and builds the
@@ -471,4 +504,5 @@ tag, and the registry ones only when the repository opts in.
 | Go (mirror repository) | `github.com/logolabs/inkvec-go` | the repository `logolabs/inkvec-go` with a `main` branch, and the private half of an SSH deploy key with write access to it as the secret `GO_MIRROR_DEPLOY_KEY`; `.github/workflows/go.yml` copies `packages/go`, the built `inkvec.wasm`, the licence and the contract fixtures there on a `v*` tag matching `Cargo.toml`, commits and tags it |
 | npm | `@logolabs/inkvec` | an npm organisation `logolabs` (the scope) and an automation token with publish rights to it as the secret `NPM_TOKEN`; `.github/workflows/npm.yml` publishes the tarball it built and tested, with provenance, on a `v*` tag whose version matches `package.json` |
 | NuGet | `LogoLabs.Inkvec` | the repository variable `PUBLISH_NUGET=true` and a NuGet.org API key as the secret `NUGET_API_KEY`; the `dotnet-pack` job in `bindings.yml` gathers the native libraries `c-library` built for every platform into one nupkg first |
+| Packagist (mirror repository) | `logolabs/inkvec` | Composer publishes from a repository root, so PHP users get the package from the mirror `github.com/logolabs/inkvec-php`: with the repository variable `PUBLISH_PHP=true` and the private half of an SSH deploy key with write access to it as the secret `PHP_MIRROR_DEPLOY_KEY`, `.github/workflows/php.yml` copies `packages/php`, the licence and the contract fixtures there on a `v*` tag, commits and tags it. The mirror carries no native library; `vendor/bin/inkvec-fetch-library` downloads the matching C release archive |
 | SwiftPM (mirror repository) | `github.com/logolabs/inkvec-swift`, product `Inkvec` | on a `v*` tag matching the workspace version, `.github/workflows/swift.yml` attaches `InkvecFFI.xcframework.zip` to this repository's release (its own `GITHUB_TOKEN`; the repository must be public for SwiftPM to download it), then -- with the repository variable `PUBLISH_SWIFT=true` and a token that may push to the mirror as the secret `SWIFT_MIRROR_TOKEN` -- commits the rendered mirror there and pushes the same tag |

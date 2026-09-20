@@ -81,6 +81,7 @@ async function denoise(intake, mode, mod, report) {
   let probe = null;
 
   if (mode === "auto") {
+    report({ type: "stage", stage: "checking" });
     const t = performance.now();
     probe = intake.trace();
     note.probeMs = performance.now() - t;
@@ -91,6 +92,7 @@ async function denoise(intake, mode, mod, report) {
     if (!(residual > threshold)) {
       // Undamaged, or nothing measurable: the probe is the answer.
       note.skipped = residual === undefined || residual === null ? "unmeasurable" : "clean";
+      report({ type: "stage", stage: "kept" });
       return { svg: probe, note };
     }
   }

@@ -38,6 +38,12 @@ API in particular should be treated as unstable release to release).
   finished in about eight seconds had still not returned ten minutes into the software
   adapter.
 
+  While a run is going the page shows its steps rather than one spinner: the weights, the
+  denoiser pass and the trace, each with its own track and its own elapsed time, and `auto`'s
+  opening trace named as the check it is. The weights are counted in bytes; the network pass
+  and the trace report nothing until they are done, so their tracks sweep rather than
+  inventing a percentage.
+
 - **Language-binding foundation** (`docs/BINDINGS.md`). The `inkvec` crate is a small stable
   library API (`trace`, `trace_rgba`, `Options`, `Traced`, `Error`); `inkvec-ffi` is a C
   library (`inkvec_ffi`) with a cbindgen header, `include/inkvec.h`; `inkvec-py` is the `inkvec`

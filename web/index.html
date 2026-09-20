@@ -100,9 +100,28 @@ h1{font-size:clamp(30px,4.4vw,46px);line-height:1.08;letter-spacing:-.025em;font
 .pane .tag.r{left:auto;right:10px}
 .pane .busy{position:absolute;inset:0;z-index:5;display:none;align-items:center;justify-content:center;background:rgba(12,10,9,.6);backdrop-filter:blur(2px)}
 .pane .busy.on{display:flex}
-.busy .pill{display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--rule);border-radius:var(--radius-full);padding:10px 16px;font-weight:600;box-shadow:var(--shadow)}
-.busy .pill .bar{width:120px;height:4px;border-radius:2px;background:var(--rule2);overflow:hidden}
-.busy .pill .bar i{display:block;height:100%;width:0;background:var(--accent);transition:width .2s}
+.busy .pill{display:flex;flex-direction:column;gap:9px;background:var(--card);border:1px solid var(--rule);border-radius:var(--radius);padding:12px 16px;font-weight:600;box-shadow:var(--shadow);min-width:min(300px,78vw)}
+.busy .pill .line{display:flex;align-items:center;gap:10px;font-size:13.5px}
+.busy .pill .line .t{flex:1}
+.busy .pill .line .el{color:var(--faint);font:500 12px "IBM Plex Mono",monospace;font-variant-numeric:tabular-nums}
+/* One track per step of the run, so the wait is legible: a network pass and a trace are
+   different work and take different times, and a single bar for both says neither. */
+.steps{display:flex;gap:6px}
+.steps .st{flex:1;display:flex;flex-direction:column;gap:4px;min-width:0}
+.steps .st .n{font:700 9.5px/1 var(--font-body);letter-spacing:.07em;text-transform:uppercase;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.steps .st.done .n{color:var(--faint)}
+.steps .st.active .n{color:var(--accent)}
+.steps .st.skip .n{color:var(--muted);text-decoration:line-through}
+.steps .st .tr{height:4px;border-radius:2px;background:var(--rule2);overflow:hidden}
+.steps .st .tr i{display:block;height:100%;width:0;background:var(--accent);border-radius:2px}
+.steps .st.done .tr i{width:100%;background:var(--gold)}
+/* Determinate only where there is something real to count -- the weights are bytes over the
+   network. A network pass and a trace report nothing until they are done, so their track
+   sweeps rather than inventing a percentage. */
+.steps .st.active.pct .tr i{transition:width .2s}
+.steps .st.active.indet .tr i{width:45%;animation:sweep 1.15s ease-in-out infinite}
+@keyframes sweep{from{transform:translateX(-110%)}to{transform:translateX(240%)}}
+@media (prefers-reduced-motion:reduce){.steps .st.active.indet .tr i{animation:none;width:100%;opacity:.45}}
 .spin{width:16px;height:16px;border:2px solid var(--rule);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.spin{animation:none}}
@@ -315,7 +334,7 @@ function viewer(host, opts = {}){
   const rightWrap = el('div', 'rightwrap'); const camW = el('div', 'cam'); rightWrap.appendChild(camW);
   const tagR2 = el('span', 'tag r'); const divider = el('div', 'divider');
   L.p.append(rightWrap, tagR2, divider);
-  if (opts.busy){ const b = el('div', 'busy', '<div class="pill"><span class="spin"></span><span class="t">Tracing…</span><span class="bar" hidden><i></i></span></div>'); L.p.appendChild(b); }
+  if (opts.busy){ const b = el('div', 'busy', '<div class="pill"><div class="line"><span class="spin"></span><span class="t">Tracing…</span><span class="el"></span></div><div class="steps"></div></div>'); L.p.appendChild(b); }
   host.append(L.p, R.p);
   const st = {z:1, x:0, y:0, split:0.5, mode:'side', flick:'left'};
   let leftNode = null, rightNode = null;
@@ -355,7 +374,32 @@ function viewer(host, opts = {}){
     flick(side){ st.flick = side; if (st.mode === 'flick') layout(); },
     zoom(z){ const r = L.p.getBoundingClientRect(); st.x = (r.width - r.width*z)/2; st.y = (r.height - r.height*z)/2; st.z = z; view(); },
     reset(){ st.z = 1; st.x = 0; st.y = 0; view(); },
-    busy(on, text, frac){ const b = L.p.querySelector('.busy'); if (!b) return; b.classList.toggle('on', on); if (text) b.querySelector('.t').textContent = text; const bar = b.querySelector('.bar'); bar.hidden = !(frac >= 0); if (frac >= 0) bar.firstElementChild.style.width = (frac * 100).toFixed(1) + '%'; },
+    // `view` is {text, elapsed, steps:[{name, state:'todo'|'active'|'done'|'skip', frac}]};
+    // `frac` below zero means the step cannot be counted and its track sweeps instead.
+    busy(on, view){
+      const b = L.p.querySelector('.busy'); if (!b) return;
+      b.classList.toggle('on', on);
+      if (!view) return;
+      b.querySelector('.t').textContent = view.text;
+      b.querySelector('.el').textContent = view.elapsed || '';
+      const host = b.querySelector('.steps');
+      const steps = view.steps || [];
+      if (host.childElementCount !== steps.length){
+        host.innerHTML = '';
+        for (const _ of steps){ const st = el('div', 'st'); st.innerHTML = '<span class="n"></span><span class="tr"><i></i></span>'; host.appendChild(st); }
+      }
+      host.hidden = steps.length < 2;
+      steps.forEach((s, i) => {
+        const st = host.children[i];
+        st.className = 'st ' + s.state + (s.state === 'active' ? (s.frac >= 0 ? ' pct' : ' indet') : '');
+        st.firstElementChild.textContent = s.name;
+        const fill = st.lastElementChild.firstElementChild;
+        // An inline width would beat the sweeping track's own rule, so a step that cannot be
+        // counted gets none at all rather than a zero-width bar animating invisibly.
+        if (s.state === 'active') fill.style.width = s.frac >= 0 ? (s.frac * 100).toFixed(1) + '%' : '';
+        else fill.style.width = s.state === 'done' ? '100%' : '0';
+      });
+    },
   };
 }
 // Toolbar: view mode, layers, zoom presets. `onLayer(L)` applies a layer to the vector nodes.
@@ -465,33 +509,84 @@ for (const n of ["365retailmarkets","adamo","1075thefan"]){
   $("samples").appendChild(b);
 }
 function options(){ return { precision:+$("precision").value, min_area:+$("min_area").value, colors:+$("colors").value, merge:+$("merge").value, max_dim:+$("max_dim").value, time_budget:+$("time_budget").value, no_background:$("no_background").checked, minify:$("minify").checked, margin:+$("margin").value, content_units:$("content_units").checked, cutout:$("no_background").checked, denoise:denoiseMode }; }
-// What the worker is doing right now. The denoiser has waits the tracer never had — a
-// 110 MB first-run download and a network pass — and a spinner that says "Tracing…" through
-// all of it would be a lie about where the time is going.
-let phaseLabel = "Tracing…", phaseFrac = -1;
+// What the worker is doing right now, as steps rather than one spinner. The denoiser has
+// waits the tracer never had — a 110 MB first-run download and a network pass — and a single
+// bar reading "Tracing…" through all of it says nothing about where the time is going or how
+// much of it is left.
+//
+// The steps are the ones the run will actually take, listed before it starts, so the wait has
+// a shape from the first frame. `auto` opens with a trace of its own (that is how it decides),
+// and says so; if it then declines to denoise, the two denoiser steps are struck through
+// rather than dropped, because "did not need it" is the useful answer.
+const STEPS = {
+  off:  [["trace", "Vectorize"]],
+  on:   [["model", "Denoiser"], ["denoise", "Denoise"], ["trace", "Vectorize"]],
+  auto: [["check", "Check"], ["model", "Denoiser"], ["denoise", "Denoise"], ["trace", "Vectorize"]],
+};
+
+let run = null;
+function newRun(mode){
+  return {
+    steps: STEPS[mode].map(([k, name]) => ({ k, name, state: "todo", frac: -1 })),
+    at: null, text: mode === "off" ? "Vectorizing…" : "Preparing…", since: performance.now(),
+  };
+}
+// Move to a step, completing everything before it. A run never goes backwards.
+function enter(k, text){
+  if (!run) return;
+  const i = run.steps.findIndex(s => s.k === k);
+  if (i < 0) return;
+  const was = run.steps.findIndex(s => s.k === run.at);
+  if (i < was) return;
+  if (i !== was) run.since = performance.now();
+  run.steps.forEach((s, j) => { if (j < i && s.state !== "skip") s.state = "done"; });
+  run.steps[i].state = "active";
+  run.steps[i].frac = -1;
+  run.at = k;
+  if (text) run.text = text;
+}
 function phase(m){
+  if (!run) return;
   if (m.type === "download"){
-    if (m.cached){ phaseLabel = "Reading the cached denoiser…"; phaseFrac = -1; return; }
+    enter("model");
+    const step = run.steps.find(s => s.k === "model");
     const mb = v => (v / 1048576).toFixed(0);
-    phaseFrac = m.total ? m.received / m.total : -1;
-    phaseLabel = `Downloading the denoiser… ${mb(m.received)}${m.total ? ` / ${mb(m.total)}` : ""} MB`;
+    if (m.cached){ run.text = "Reading the cached denoiser…"; step.frac = -1; return; }
+    step.frac = m.total ? m.received / m.total : -1;
+    run.text = `Downloading the denoiser… ${mb(m.received)}${m.total ? ` / ${mb(m.total)}` : ""} MB`;
     return;
   }
-  phaseFrac = -1;
-  const s = m.stage || "";
-  if (s === "denoiser" || s === "denoiser:runtime") phaseLabel = "Loading the denoiser runtime…";
-  else if (s === "denoiser:weights") phaseLabel = "Fetching the denoiser weights…";
-  else if (s === "denoiser:session") phaseLabel = "Preparing the denoiser…";
-  else if (s === "denoising") phaseLabel = `Denoising ${m.width}×${m.height}${m.backend === "webgpu" ? " on the GPU" : ""}…`;
-  else if (s === "tracing") phaseLabel = "Tracing…";
+  const st = m.stage || "";
+  if (st === "checking") enter("check", "Checking whether this needs denoising…");
+  else if (st === "kept"){
+    // Undamaged: the check was the trace, and the denoiser is never touched.
+    for (const s of run.steps) if (s.k === "model" || s.k === "denoise" || s.k === "trace") s.state = "skip";
+    run.text = "Clean enough — keeping the trace";
+  }
+  else if (st === "denoiser" || st === "denoiser:runtime") enter("model", "Loading the denoiser runtime…");
+  else if (st === "denoiser:weights") enter("model", "Fetching the denoiser weights…");
+  else if (st === "denoiser:session") enter("model", "Preparing the denoiser…");
+  else if (st === "denoising") enter("denoise", `Denoising ${m.width}×${m.height}${m.backend === "webgpu" ? " on the GPU" : ""}…`);
+  else if (st === "tracing") enter("trace", "Vectorizing…");
 }
 function start(){
-  $("go").disabled = true; phaseLabel = denoiseMode === "off" ? "Tracing…" : "Preparing…"; phaseFrac = -1;
+  $("go").disabled = true;
+  run = newRun(denoiseMode);
+  if (denoiseMode === "off") enter("trace", "Vectorizing…");
   const t0 = performance.now();
-  const tick = () => live && live.busy(true, `${phaseLabel} ${((performance.now()-t0)/1000).toFixed(1)} s`, phaseFrac);
+  const tick = () => {
+    if (!live || !run) return;
+    const phaseSecs = (performance.now() - run.since) / 1000;
+    const total = (performance.now() - t0) / 1000;
+    live.busy(true, {
+      text: run.text,
+      elapsed: `${phaseSecs.toFixed(1)} s${run.steps.length > 1 ? ` · ${total.toFixed(1)} s total` : ""}`,
+      steps: run.steps,
+    });
+  };
   tick(); timer = setInterval(tick, 100);
 }
-function finish(){ $("go").disabled = false; clearInterval(timer); live && live.busy(false); }
+function finish(){ $("go").disabled = false; clearInterval(timer); run = null; live && live.busy(false); }
 
 // The denoised raster, when there is one: the left pane can show it instead of the input,
 // which is the only way to see what the network actually did.

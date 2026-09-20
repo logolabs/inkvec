@@ -88,6 +88,11 @@ differs by one level.
 Turning it on downloads ONNX Runtime Web (~28 MB, from jsDelivr) and the weights (~80 MB,
 from Hugging Face) once; the browser caches both. The image is still never uploaded.
 
+While a run is going the page shows its steps separately — the weights (counted in bytes,
+because there is something real to count), the denoiser pass, and the trace — each with the
+time it is taking. Neither the network pass nor the trace reports anything until it is done,
+so their tracks sweep instead of inventing a percentage.
+
 ## Deploy
 
 This folder is the Space. Create a Space under the LogoLabs org with the **static** SDK and

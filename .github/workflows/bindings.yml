@@ -192,11 +192,24 @@ jobs:
           mkdir -p "${stage}/include" "${stage}/lib" "${stage}/examples"
           cp crates/inkvec-ffi/include/inkvec.h "${stage}/include/"
           lib="target/${{ matrix.target }}/release"
-          shopt -s nullglob
+          # `shopt -s nullglob` stood here, but these are literal paths, not patterns, and
+          # nullglob only ever drops a glob that matches nothing -- a word with no wildcard
+          # is never subject to it. So every platform tried to copy all six names, five of
+          # which it does not build, and `set -e` ended the job on the first. Test each name
+          # instead, then insist that something was staged: an archive with an empty lib/ is
+          # the one outcome this step must never produce quietly.
+          staged=0
           for f in "$lib"/inkvec_ffi.dll "$lib"/inkvec_ffi.dll.lib "$lib"/inkvec_ffi.lib \
                    "$lib"/libinkvec_ffi.so "$lib"/libinkvec_ffi.dylib "$lib"/libinkvec_ffi.a; do
-            cp "$f" "${stage}/lib/"
+            if [ -e "$f" ]; then
+              cp "$f" "${stage}/lib/"
+              staged=$((staged + 1))
+            fi
           done
+          if [ "$staged" -eq 0 ]; then
+            echo "::error::no library found in $lib to stage"
+            exit 1
+          fi
           cp crates/inkvec-ffi/examples/c/trace.c "${stage}/examples/"
           cp crates/inkvec-ffi/README.md "${stage}/README.md"
           cp LICENSE NOTICE "${stage}/"

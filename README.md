@@ -204,9 +204,10 @@ inkvec-svgmin logo.svg -o logo.min.svg --stats
 ```
 
 The tolerance is stated at a viewing size (`--tolerance 0.1 --judge 1024`: nothing moves
-more than a tenth of a pixel at 1024 px). On 40 corpus artist files it removes 21.6% of the
-description length at a mean dE00 of 0.0073 against the original; on the tracer's own
-output it finds 0.9%, which is the check that the emitter is already minimal. See
+more than a tenth of a pixel at 1024 px). On 40 corpus artist files it removes 22.1% of the
+numbers and 15.4% of the bytes at a mean dE00 of 0.0073 against the original. On the
+tracer's own output the geometry gives up 0.2%, which is the check that the emitter is
+already description-length minimal, and the bytes give up 14.6%. See
 [`crates/inkvec-svgmin`](crates/inkvec-svgmin/).
 
 ## Library API

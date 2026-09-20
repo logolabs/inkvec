@@ -1147,81 +1147,322 @@ fn minify_subpath(
     improved.then(|| (runs[0][0].start(), segments, guarded, None))
 }
 
-fn fmt_num(v: f64, decimals: usize, out: &mut String) {
-    let s = format!("{v:.decimals$}");
-    let s = if s.contains('.') {
-        s.trim_end_matches('0').trim_end_matches('.')
-    } else {
-        &s
-    };
-    let s = if s == "-0" { "0" } else { s };
-    out.push_str(s);
-}
-
-fn push_pair(p: Point, decimals: usize, out: &mut String) {
-    fmt_num(p.x, decimals, out);
-    out.push(',');
-    fmt_num(p.y, decimals, out);
-}
-
-/// Serialise one subpath as absolute commands, `S` where a cubic continues the previous
-/// one smoothly.
-fn fmt_subpath(start: Point, segs: &[Segment], closed: bool, decimals: usize, d: &mut String) {
-    d.push('M');
-    push_pair(start, decimals, d);
-    let mut prev_c2: Option<(Point, Point)> = None;
-    for seg in segs {
-        match *seg {
-            Segment::Line(p) => {
-                d.push('L');
-                push_pair(p, decimals, d);
-                prev_c2 = None;
-            }
-            Segment::Cubic(c1, c2, p) => {
-                let smooth = prev_c2.is_some_and(|(pc2, pp)| {
-                    Point::new(2.0 * pp.x - pc2.x, 2.0 * pp.y - pc2.y).dist(c1) < 5e-4
-                });
-                if smooth {
-                    d.push('S');
-                } else {
-                    d.push('C');
-                    push_pair(c1, decimals, d);
-                    d.push(' ');
-                }
-                push_pair(c2, decimals, d);
-                d.push(' ');
-                push_pair(p, decimals, d);
-                prev_c2 = Some((c2, p));
-            }
-            Segment::Arc {
-                rx,
-                ry,
-                phi,
-                large_arc,
-                sweep,
-                end,
-            } => {
-                d.push('A');
-                fmt_num(rx, decimals, d);
-                d.push(',');
-                fmt_num(ry, decimals, d);
-                d.push(' ');
-                fmt_num(phi.to_degrees(), 3, d);
-                d.push_str(&format!(" {} {} ", u8::from(large_arc), u8::from(sweep)));
-                push_pair(end, decimals, d);
-                prev_c2 = None;
-            }
+/// `v` at the fewest decimals that still lands within `quantum` of it, never more than
+/// `most`, with the leading zero of `0.5` and `-0.5` dropped -- a parser does not need it.
+fn short_num(v: f64, quantum: f64, most: usize) -> String {
+    let mut best = format!("{v:.most$}");
+    for d in 0..most {
+        let s = format!("{v:.d$}");
+        if s.parse::<f64>().is_ok_and(|r| (r - v).abs() <= quantum) {
+            best = s;
+            break;
         }
     }
-    if closed {
-        d.push('Z');
+    if best.contains('.') {
+        best = best.trim_end_matches('0').trim_end_matches('.').to_string();
+    }
+    if let Some(rest) = best.strip_prefix("0.") {
+        best = format!(".{rest}");
+    } else if let Some(rest) = best.strip_prefix("-0.") {
+        best = format!("-.{rest}");
+    }
+    if best == "-0" || best.is_empty() {
+        best = "0".to_string();
+    }
+    best
+}
+
+/// How many decimals a coordinate can need at this tolerance.
+fn decimals_for(eps: f64) -> usize {
+    ((1.0 / (0.25 * eps)).log10().ceil().max(0.0) as usize).min(6)
+}
+
+/// What the writer has just put down, which decides whether the next number needs a
+/// separator in front of it at all.
+#[derive(Clone, Copy, PartialEq)]
+enum Tail {
+    Empty,
+    /// A command letter, or an arc flag: both are exactly one character, so a parser
+    /// stops after them whatever comes next.
+    Single,
+    Number {
+        dot: bool,
+    },
+}
+
+/// Writes `d` in the fewest bytes the SVG grammar allows.
+///
+/// Every command goes down in whichever of its absolute and relative forms is shorter;
+/// the letter is dropped wherever it repeats (and after `M`, where a bare number already
+/// means `L`); an axis-aligned line becomes `H` or `V`; a cubic continuing the last one
+/// smoothly becomes `S`; leading zeros and separators go wherever a parser does not need
+/// them; and each number is written at the fewest decimals that still lands within a
+/// quarter of the tolerance.
+///
+/// The pen is tracked as a *parser* would reconstruct it -- from the numbers actually
+/// written, not the ones intended -- so a chain of relative commands cannot accumulate
+/// rounding. That is the whole reason relative is safe to use here.
+struct Writer {
+    out: String,
+    tail: Tail,
+    /// The last command letter written, or produced by an omission.
+    last: u8,
+    /// Where a parser would think the pen is.
+    at: Point,
+    /// Where the current subpath started, as written.
+    sub: Point,
+    /// The second control point of the last cubic, as written: what an `S` reflects.
+    prev_c2: Option<Point>,
+    /// Largest rounding allowed in one written number.
+    quantum: f64,
+    most: usize,
+}
+
+impl Writer {
+    fn new(eps: f64, most: usize) -> Self {
+        Writer {
+            out: String::new(),
+            tail: Tail::Empty,
+            last: 0,
+            at: Point::new(0.0, 0.0),
+            sub: Point::new(0.0, 0.0),
+            prev_c2: None,
+            quantum: 0.25 * eps,
+            most,
+        }
+    }
+
+    fn num(&self, v: f64) -> String {
+        short_num(v, self.quantum, self.most)
+    }
+
+    fn parse_back(s: &str) -> f64 {
+        s.parse().unwrap_or(0.0)
+    }
+
+    /// Whether `next` can follow what is already down without a separator between them.
+    fn joins(tail: Tail, next: &str) -> bool {
+        match tail {
+            Tail::Empty | Tail::Single => true,
+            // A minus sign always begins a new number. A point does too, but only once
+            // the number before it already has one: `1` and `.5` written together read
+            // as the single number `1.5`.
+            Tail::Number { dot } => match next.as_bytes().first() {
+                Some(b'-') => true,
+                Some(b'.') => dot,
+                _ => false,
+            },
+        }
+    }
+
+    /// The text this command would add, and what it would leave the writer having just
+    /// written. Nothing is committed: the caller weighs the forms first.
+    fn render(&self, letter: u8, nums: &[String], flag_at: usize) -> (String, u8, Tail) {
+        // A bare number after `M` already means `L`, so the letter can go there too.
+        let implied = self.last == letter
+            || (self.last == b'M' && letter == b'L')
+            || (self.last == b'm' && letter == b'l');
+        let mut s = String::new();
+        let mut tail = self.tail;
+        if !implied {
+            s.push(char::from(letter));
+            tail = Tail::Single;
+        }
+        for (i, n) in nums.iter().enumerate() {
+            if !Self::joins(tail, n) {
+                s.push(' ');
+            }
+            s.push_str(n);
+            tail = if (flag_at..flag_at.saturating_add(2)).contains(&i) {
+                Tail::Single
+            } else {
+                Tail::Number {
+                    dot: n.contains('.'),
+                }
+            };
+        }
+        (s, letter, tail)
+    }
+
+    /// Commit whichever rendering is shorter, preferring the one that keeps the previous
+    /// letter so the next command can drop its own.
+    fn put(&mut self, forms: &[(u8, Vec<String>, usize)]) -> Vec<f64> {
+        let mut best: Option<(String, u8, Tail, usize)> = None;
+        for (i, (letter, nums, flag_at)) in forms.iter().enumerate() {
+            let (s, l, t) = self.render(*letter, nums, *flag_at);
+            let better = match &best {
+                None => true,
+                Some((b, _, _, _)) => {
+                    s.len() < b.len() || (s.len() == b.len() && *letter == self.last)
+                }
+            };
+            if better {
+                best = Some((s, l, t, i));
+            }
+        }
+        let (s, letter, tail, i) = best.expect("at least one form");
+        self.out.push_str(&s);
+        self.last = letter;
+        self.tail = tail;
+        forms[i].1.iter().map(|n| Self::parse_back(n)).collect()
+    }
+
+    /// A point written as an absolute pair and as a delta from the pen.
+    fn pair(&self, p: Point) -> (Vec<String>, Vec<String>) {
+        (
+            vec![self.num(p.x), self.num(p.y)],
+            vec![self.num(p.x - self.at.x), self.num(p.y - self.at.y)],
+        )
+    }
+
+    fn move_to(&mut self, p: Point, first: bool) {
+        let (abs, rel) = self.pair(p);
+        let vals = if first {
+            // Nothing precedes the first `M`, so a relative one would mean the same
+            // thing and read as a mistake.
+            self.put(&[(b'M', abs, usize::MAX)])
+        } else {
+            self.put(&[(b'M', abs, usize::MAX), (b'm', rel, usize::MAX)])
+        };
+        self.at = if self.last == b'M' {
+            Point::new(vals[0], vals[1])
+        } else {
+            Point::new(self.at.x + vals[0], self.at.y + vals[1])
+        };
+        self.sub = self.at;
+        self.prev_c2 = None;
+    }
+
+    fn line_to(&mut self, p: Point) {
+        let (abs, rel) = self.pair(p);
+        let mut forms = vec![
+            (b'L', abs.clone(), usize::MAX),
+            (b'l', rel.clone(), usize::MAX),
+        ];
+        // An axis-aligned line is one number, but only if it stays axis-aligned once
+        // written: the pen must land exactly on the coordinate it keeps.
+        if Self::parse_back(&rel[1]) == 0.0 {
+            forms.push((b'H', vec![abs[0].clone()], usize::MAX));
+            forms.push((b'h', vec![rel[0].clone()], usize::MAX));
+        }
+        if Self::parse_back(&rel[0]) == 0.0 {
+            forms.push((b'V', vec![abs[1].clone()], usize::MAX));
+            forms.push((b'v', vec![rel[1].clone()], usize::MAX));
+        }
+        let vals = self.put(&forms);
+        self.at = match self.last {
+            b'L' => Point::new(vals[0], vals[1]),
+            b'l' => Point::new(self.at.x + vals[0], self.at.y + vals[1]),
+            b'H' => Point::new(vals[0], self.at.y),
+            b'h' => Point::new(self.at.x + vals[0], self.at.y),
+            b'V' => Point::new(self.at.x, vals[0]),
+            _ => Point::new(self.at.x, self.at.y + vals[0]),
+        };
+        self.prev_c2 = None;
+    }
+
+    fn cubic_to(&mut self, c1: Point, c2: Point, p: Point) {
+        let (a1, r1) = self.pair(c1);
+        let (a2, r2) = self.pair(c2);
+        let (ap, rp) = self.pair(p);
+        let mut forms = vec![
+            (
+                b'C',
+                [a1.clone(), a2.clone(), ap.clone()].concat(),
+                usize::MAX,
+            ),
+            (b'c', [r1, r2.clone(), rp.clone()].concat(), usize::MAX),
+        ];
+        // `S` restates the first control point as the reflection of the last one, which
+        // a parser computes from what was *written*. Offered only where that reflection
+        // is the control point we meant.
+        if let Some(pc2) = self.prev_c2 {
+            let mirror = Point::new(2.0 * self.at.x - pc2.x, 2.0 * self.at.y - pc2.y);
+            if mirror.dist(c1) <= self.quantum {
+                forms.push((b'S', [a2, ap].concat(), usize::MAX));
+                forms.push((b's', [r2, rp].concat(), usize::MAX));
+            }
+        }
+        let vals = self.put(&forms);
+        let (c2_written, end) = match self.last {
+            b'C' => (Point::new(vals[2], vals[3]), Point::new(vals[4], vals[5])),
+            b'c' => (
+                Point::new(self.at.x + vals[2], self.at.y + vals[3]),
+                Point::new(self.at.x + vals[4], self.at.y + vals[5]),
+            ),
+            b'S' => (Point::new(vals[0], vals[1]), Point::new(vals[2], vals[3])),
+            _ => (
+                Point::new(self.at.x + vals[0], self.at.y + vals[1]),
+                Point::new(self.at.x + vals[2], self.at.y + vals[3]),
+            ),
+        };
+        self.at = end;
+        self.prev_c2 = Some(c2_written);
+    }
+
+    fn arc_to(&mut self, rx: f64, ry: f64, phi: f64, large: bool, sweep: bool, p: Point) {
+        let (ap, rp) = self.pair(p);
+        let head = vec![
+            self.num(rx),
+            self.num(ry),
+            self.num(phi.to_degrees()),
+            u8::from(large).to_string(),
+            u8::from(sweep).to_string(),
+        ];
+        // The two flags sit at 3 and 4, and are one character each: a parser stops after
+        // them whatever follows, so nothing needs a separator there.
+        let mut abs = head.clone();
+        abs.extend(ap);
+        let mut rel = head;
+        rel.extend(rp);
+        let vals = self.put(&[(b'A', abs, 3), (b'a', rel, 3)]);
+        self.at = if self.last == b'A' {
+            Point::new(vals[5], vals[6])
+        } else {
+            Point::new(self.at.x + vals[5], self.at.y + vals[6])
+        };
+        self.prev_c2 = None;
+    }
+
+    fn close(&mut self) {
+        self.out.push('Z');
+        self.last = b'Z';
+        self.tail = Tail::Single;
+        self.at = self.sub;
+        self.prev_c2 = None;
+    }
+
+    /// Write one subpath. `first` says whether it opens the attribute.
+    fn subpath(&mut self, start: Point, segs: &[Segment], closed: bool, first: bool) {
+        self.move_to(start, first);
+        for seg in segs {
+            match *seg {
+                Segment::Line(p) => self.line_to(p),
+                Segment::Cubic(c1, c2, p) => self.cubic_to(c1, c2, p),
+                Segment::Arc {
+                    rx,
+                    ry,
+                    phi,
+                    large_arc,
+                    sweep,
+                    end,
+                } => self.arc_to(rx, ry, phi, large_arc, sweep, end),
+            }
+        }
+        if closed {
+            self.close();
+        }
     }
 }
 
 /// The element that states a whole-subpath primitive: its tag, its geometry attributes,
 /// and what they cost in numbers. A rotated ellipse would need a `transform` that could
 /// collide with the element's own, so it stays a path.
-fn primitive_element(kind: &PrimitiveKind, decimals: usize) -> Option<(&'static str, String, f64)> {
+fn primitive_element(
+    kind: &PrimitiveKind,
+    quantum: f64,
+    most: usize,
+) -> Option<(&'static str, String, f64)> {
     let mut a = String::new();
     let mut attr = |name: &str, v: f64| {
         if !a.is_empty() {
@@ -1229,7 +1470,7 @@ fn primitive_element(kind: &PrimitiveKind, decimals: usize) -> Option<(&'static 
         }
         a.push_str(name);
         a.push_str("=\"");
-        fmt_num(v, decimals, &mut a);
+        a.push_str(&short_num(v, quantum, most));
         a.push('"');
     };
     match *kind {
@@ -1373,8 +1614,8 @@ struct Outcome {
     delta: Report,
 }
 
-/// Fit one path and decide, as text against text, whether the rewrite is kept.
-fn rewrite_path(job: &Job, eps_units: f64, ext: f64, decimals: usize, opts: &Options) -> Outcome {
+/// Fit one path and decide, byte against byte, whether the rewrite is kept.
+fn rewrite_path(job: &Job, eps_units: f64, ext: f64, opts: &Options) -> Outcome {
     let mut delta = Report {
         paths: 1,
         ..Default::default()
@@ -1392,33 +1633,35 @@ fn rewrite_path(job: &Job, eps_units: f64, ext: f64, decimals: usize, opts: &Opt
     };
     let eps = eps_units / job.scale;
     let cfg = FitConfig::from_precision(ext / job.scale, eps, 2.0);
+    let most = opts.decimals.unwrap_or_else(|| decimals_for(eps));
 
-    let mut d = String::new();
-    let mut any = false;
+    let mut w = Writer::new(eps, most);
     let mut guarded = 0;
     let mut whole: Option<PrimitiveKind> = None;
     for sp in &subpaths {
         delta.subpaths += 1;
+        let first = w.out.is_empty();
         match minify_subpath(sp, eps, &cfg, opts.corner_degrees) {
             Some((start, segs, g, prim)) => {
-                any = true;
                 guarded += g;
                 if subpaths.len() == 1 {
                     whole = prim;
                 }
-                fmt_subpath(start, &segs, sp.closed, decimals, &mut d);
+                w.subpath(start, &segs, sp.closed, first);
             }
             None => {
+                // The geometry stays exactly as it was; the bytes need not.
                 let segs: Vec<Segment> = sp.segs.iter().map(Src::segment).collect();
-                fmt_subpath(sp.segs[0].start(), &segs, sp.closed, decimals, &mut d);
+                w.subpath(sp.segs[0].start(), &segs, sp.closed, first);
             }
         }
     }
+    let d = w.out;
     // A path that is one whole primitive becomes the element that says so -- a
     // `<circle>` is three numbers where its path form is seventeen -- with every
     // other attribute carried over byte for byte.
     if let (Some((tag, attrs, cost)), Some(others)) = (
-        whole.and_then(|k| primitive_element(&k, decimals)),
+        whole.and_then(|k| primitive_element(&k, 0.25 * eps, most)),
         &job.other_attrs,
     ) {
         if cost < params0 {
@@ -1441,11 +1684,12 @@ fn rewrite_path(job: &Job, eps_units: f64, ext: f64, decimals: usize, opts: &Opt
             };
         }
     }
-    // The fitter counts a cubic as six numbers whatever the source wrote; the source may
-    // have written it as an `S` in four. So the rewrite is judged as text against text,
-    // and a path that is not cheaper as written keeps its original bytes.
+    // What a minifier owes the reader is a smaller file, so the two are weighed in bytes,
+    // and a path that would not get smaller keeps its original text exactly. Fewer numbers
+    // is not the same thing: a hand-tightened source writes them in a form we might not
+    // beat, and then the honest answer is to leave it alone.
     let (segs1, params1) = text_cost(&d);
-    if any && params1 < params0 {
+    if d.len() < job.d.len() && parses_back(&d, &subpaths, eps) {
         delta.rewritten = 1;
         delta.guarded = guarded;
         delta.segments_after = segs1;
@@ -1460,15 +1704,53 @@ fn rewrite_path(job: &Job, eps_units: f64, ext: f64, decimals: usize, opts: &Opt
     }
 }
 
+/// Does the text we are about to write read back as the drawing we meant?
+///
+/// The writer drops separators, letters and leading zeros wherever the SVG grammar says a
+/// parser does not need them, and reconstructs relative commands from what it wrote. That
+/// reasoning is worth checking against an actual parser once per path -- it costs one
+/// parse, and it is the difference between a bug that shortens a file and a bug that
+/// silently redraws it.
+fn parses_back(d: &str, source: &[Subpath], eps: f64) -> bool {
+    let Ok(read) = parse_d(d) else {
+        return false;
+    };
+    let ours: Vec<Point> = read
+        .iter()
+        .flat_map(|sp| sp.segs.iter().map(Src::start))
+        .collect();
+    if ours.is_empty() {
+        return false;
+    }
+    // Every point of the source must lie on what we wrote. The rewrite moves points by
+    // design, so this asks the looser question the guard already asked: nothing is far
+    // from the curve it belongs to.
+    let limit = 4.0 * eps;
+    source.iter().all(|sp| {
+        sp.segs.iter().all(|s| {
+            let p = s.start();
+            ours.iter()
+                .map(|&q| p.dist(q))
+                .fold(f64::INFINITY, f64::min)
+                < limit
+                || read.iter().any(|r| {
+                    let mut cur = r.segs[0].start();
+                    r.segs.iter().any(|seg| {
+                        let d = dist_to_segment(p, &seg.segment(), cur);
+                        cur = seg.segment().end();
+                        d < limit
+                    })
+                })
+        })
+    })
+}
+
 /// Rewrite every `<path d>` in `svg` as its cheapest description within the tolerance.
 pub fn minify(svg: &str, opts: &Options) -> Result<(String, Report), String> {
     let doc = roxmltree::Document::parse(svg).map_err(|e| format!("not an SVG document: {e}"))?;
     let root = doc.root_element();
     let ext = extent(root).ok_or("the SVG has no usable viewBox or width/height")?;
     let eps_units = opts.tolerance_px * ext / opts.judge;
-    let decimals = opts
-        .decimals
-        .unwrap_or_else(|| ((1.0 / (0.5 * eps_units)).log10().ceil().max(0.0) as usize).min(6));
     let mut rep = Report {
         tolerance_units: eps_units,
         ..Default::default()
@@ -1504,7 +1786,7 @@ pub fn minify(svg: &str, opts: &Options) -> Result<(String, Report), String> {
     use rayon::prelude::*;
     let outcomes: Vec<Outcome> = jobs
         .par_iter()
-        .map(|job| rewrite_path(job, eps_units, ext, decimals, opts))
+        .map(|job| rewrite_path(job, eps_units, ext, opts))
         .collect();
 
     let mut edits: Vec<(Range<usize>, String)> = Vec::new();
@@ -1704,9 +1986,30 @@ mod tests {
         d.push('Z');
         let (out, rep) = minify(&doc(&d), &Options::default()).expect("minifies");
         assert_eq!(rep.segments_after, 4, "{rep:?}\n{out}");
-        for corner in ["10,10", "100,10", "100,100", "10,100"] {
-            assert!(out.contains(corner), "corner {corner} lost in {out}");
+        // Read the corners back out of the text: the writer is free to say `H100` or
+        // `h90`, so what has to survive is the geometry, not the spelling.
+        let drawn = parse_d(&attr_d(&out)).expect("our own output parses");
+        for (x, y) in [(10.0, 10.0), (100.0, 10.0), (100.0, 100.0), (10.0, 100.0)] {
+            let corner = Point::new(x, y);
+            assert!(
+                drawn
+                    .iter()
+                    .flat_map(|sp| sp.segs.iter())
+                    .any(|s| s.start().dist(corner) < 1e-9),
+                "corner {corner:?} lost in {out}"
+            );
         }
+    }
+
+    /// The `d` attribute of the first path in a document. Split on the space before it:
+    /// `id="` ends in `d="` as well, and matching that reads the wrong attribute.
+    fn attr_d(svg: &str) -> String {
+        let after = svg.split(" d=\"").nth(1).expect("a path with a d");
+        after
+            .split('"')
+            .next()
+            .expect("a closing quote")
+            .to_string()
     }
 
     #[test]
@@ -1773,11 +2076,34 @@ mod tests {
     }
 
     #[test]
-    fn a_path_that_cannot_get_cheaper_is_left_byte_for_byte() {
+    fn a_path_already_at_its_shortest_is_left_byte_for_byte() {
+        // Two lines a triangle needs, written the way the writer would write them: there
+        // is nothing left to take out, so the bytes must come back untouched.
+        let src = doc("M10,10H100V100Z");
+        let (out, rep) = minify(&src, &Options::default()).expect("minifies");
+        assert_eq!(rep.rewritten, 0, "{rep:?}\n{out}");
+        assert_eq!(out, src);
+    }
+
+    #[test]
+    fn a_verbose_path_is_rewritten_shorter_without_moving() {
         let src = doc("M10,10L100,10L100,100Z");
         let (out, rep) = minify(&src, &Options::default()).expect("minifies");
-        assert_eq!(rep.rewritten, 0);
-        assert_eq!(out, src);
+        assert_eq!(rep.rewritten, 1, "{rep:?}\n{out}");
+        assert!(out.len() < src.len(), "{out}");
+        let drawn = parse_d(&attr_d(&out)).expect("our own output parses");
+        let corners: Vec<Point> = drawn
+            .iter()
+            .flat_map(|sp| sp.segs.iter())
+            .map(Src::start)
+            .collect();
+        for (x, y) in [(10.0, 10.0), (100.0, 10.0), (100.0, 100.0)] {
+            let c = Point::new(x, y);
+            assert!(
+                corners.iter().any(|p| p.dist(c) < 1e-9),
+                "corner {c:?} lost in {out}"
+            );
+        }
     }
 
     #[test]

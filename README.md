@@ -192,6 +192,23 @@ To use it from JavaScript or TypeScript — browsers, Node.js, Deno, Bun — use
 
 ---
 
+### Minifying an existing SVG
+
+The same objective works on vector input. `inkvec-svgmin` rewrites an SVG's paths as the
+fewest segments that draw the same picture — a circle drawn as sixteen cubics becomes arcs,
+a curve split into four pieces becomes one — while corners in the source survive exactly
+and nothing but `d` attributes changes:
+
+```sh
+inkvec-svgmin logo.svg -o logo.min.svg --stats
+```
+
+The tolerance is stated at a viewing size (`--tolerance 0.1 --judge 1024`: nothing moves
+more than a tenth of a pixel at 1024 px). On 40 corpus artist files it removes 14.8% of the
+description length at a mean dE00 of 0.0045 against the original; on the tracer's own
+output it finds 0.4%, which is the check that the emitter is already minimal. See
+[`crates/inkvec-svgmin`](crates/inkvec-svgmin/).
+
 ## Library API
 
 ```rust

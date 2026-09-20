@@ -9,6 +9,14 @@ API in particular should be treated as unstable release to release).
 
 ### Added
 
+- **`inkvec-svgmin`** (`crates/inkvec-svgmin`): rewrite an existing SVG's paths as the
+  fewest segments that draw the same picture, by the tracer's own minimum-description-length
+  objective. Corners in the source are hard breaks and survive exactly; the tolerance is
+  stated at a viewing size (`--tolerance 0.1 --judge 1024`); only `d` attributes change and a
+  path that would not get cheaper as written is left byte for byte. On 40 corpus artist
+  files: 14.8% of the description length removed at a mean dE00 of 0.0045 against the
+  original (worst 0.028); the tracer's own output shrinks 0.4%, its emitter being already
+  minimal. 1–30 ms per logo, 143 ms for the corpus's heaviest file.
 - **Language-binding foundation** (`docs/BINDINGS.md`). The `inkvec` crate is a small stable
   library API (`trace`, `trace_rgba`, `Options`, `Traced`, `Error`); `inkvec-ffi` is a C
   library (`inkvec_ffi`) with a cbindgen header, `include/inkvec.h`; `inkvec-py` is the `inkvec`

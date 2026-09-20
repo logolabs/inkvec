@@ -3817,6 +3817,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "inkvec-svgmin"
+version = "0.1.4"
+dependencies = [
+ "inkvec-core",
+ "inkvec-fit",
+ "roxmltree",
+ "svgtypes",
+]
+
+[[package]]
 name = "inkvec-trace"
 version = "0.1.4"
 dependencies = [

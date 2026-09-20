@@ -1,0 +1,30 @@
+[package]
+name = "inkvec-svgmin"
+description = "Rewrite an SVG's paths as the fewest segments that draw the same picture, chosen by description length"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories = ["command-line-utilities", "graphics", "multimedia::images"]
+
+[lib]
+name = "inkvec_svgmin"
+path = "src/lib.rs"
+
+[[bin]]
+name = "inkvec-svgmin"
+path = "src/main.rs"
+doc = false
+
+[dependencies]
+inkvec-core = { workspace = true }
+inkvec-fit = { workspace = true }
+roxmltree = "0.20"
+svgtypes = "0.15"
+
+[lints]
+workspace = true

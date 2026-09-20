@@ -12,6 +12,7 @@ members = [
     "crates/inkvec-ffi",
     "crates/inkvec-py",
     "crates/inkvec-server",
+    "crates/inkvec-svgmin",
 ]
 
 [workspace.package]

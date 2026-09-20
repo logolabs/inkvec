@@ -140,6 +140,39 @@ const PRUNE_PATIENCE: usize = 8;
 /// reaches it, so the benchmark at that size is untouched.
 const DP_MAX_POINTS: usize = 768;
 
+/// [`DP_MAX_POINTS`], or `INKVEC_DP_MAX_POINTS` when set. The program is O(n²) in its
+/// points and its early cut-off never fires on smooth, exact input, so a caller fitting
+/// vector curves rather than raster rings pays the full square; the decimation here is
+/// bend-preserving and rescales sigma, which is what lets such a caller cap the grid low
+/// and still recover exactness by refitting the chosen spans on the dense points.
+fn dp_max_points() -> usize {
+    if let Some(n) = DP_CAP_OVERRIDE.with(|c| c.get()) {
+        return n;
+    }
+    static V: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("INKVEC_DP_MAX_POINTS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|&n| n >= 16)
+            .unwrap_or(DP_MAX_POINTS)
+    })
+}
+
+thread_local! {
+    static DP_CAP_OVERRIDE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// Run `f` with the dynamic program's point cap set to `max_points` on this thread: the
+/// coarse pass of a coarse-to-fine caller, which fits cheaply first and repeats at full
+/// resolution only for the runs whose coarse fit fails its tolerance.
+pub fn with_dp_max_points<T>(max_points: usize, f: impl FnOnce() -> T) -> T {
+    let prev = DP_CAP_OVERRIDE.with(|c| c.replace(Some(max_points.max(16))));
+    let out = f();
+    DP_CAP_OVERRIDE.with(|c| c.set(prev));
+    out
+}
+
 /// The alphabet a segment of the multimodel dynamic program's fit was chosen from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SegKind {
@@ -244,7 +277,7 @@ fn optimal_multimodel_impl(
     // self-intersection repair relies on the measured contour being reproducible at
     // `max_span = 1`, and a decimated contour is not simple by construction.
     let stride = if max_span == usize::MAX {
-        n.div_ceil(DP_MAX_POINTS)
+        n.div_ceil(dp_max_points())
     } else {
         1
     };

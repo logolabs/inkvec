@@ -88,23 +88,27 @@ def main() -> int:
         ref, img = rgb(src), rgb(out)
         de = float(mcolor.delta_e00(ref, img)["de00_mean"])
         maxpx = float(np.abs(ref - img).max() * 255.0)
+        mse = float(np.mean((ref - img) ** 2))
+        psnr = 10.0 * np.log10(1.0 / mse) if mse > 0 else 99.0
         saved = 100.0 * (1.0 - p1 / p0) if p0 else 0.0
+        b0, b1 = len(src.encode("utf-8")), len(out.encode("utf-8"))
         rows.append(dict(corpus=it["corpus"], stem=it["stem"], s0=s0, s1=s1, p0=p0, p1=p1,
-                         saved=saved, de=de, maxpx=maxpx, ms=ms))
-        print(f"{it['corpus'] + '/' + it['stem']:38} {s0:4}->{s1:<4} {p0:5}->{p1:<5} {saved:5.1f}% {de:7.4f} {maxpx:6.1f} {ms:5.0f}")
+                         saved=saved, de=de, maxpx=maxpx, psnr=psnr, b0=b0, b1=b1, ms=ms))
+        print(f"{it['corpus'] + '/' + it['stem']:38} {s0:4}->{s1:<4} {p0:5.0f}->{p1:<5.0f} {saved:5.1f}% {de:7.4f} {maxpx:6.1f} {psnr:5.1f}dB {ms:5.0f}")
 
     if not rows:
         return 1
     print()
     fams = sorted({r["corpus"] for r in rows})
-    print(f"{'family':16} {'n':>3} {'params saved':>13} {'segs saved':>11} {'mean dE00':>10} {'worst dE00':>11} {'max px':>7} {'ms':>5}")
+    print(f"{'family':16} {'n':>3} {'params saved':>13} {'bytes saved':>12} {'mean dE00':>10} {'worst dE00':>11} "
+          f"{'PSNR mean':>10} {'PSNR min':>9} {'ms':>5}")
     for fam in fams + ["ALL"]:
         rs = [r for r in rows if fam == "ALL" or r["corpus"] == fam]
         p0, p1 = sum(r["p0"] for r in rs), sum(r["p1"] for r in rs)
-        s0, s1 = sum(r["s0"] for r in rs), sum(r["s1"] for r in rs)
-        print(f"{fam:16} {len(rs):3} {100 * (1 - p1 / max(p0, 1)):12.1f}% {100 * (1 - s1 / max(s0, 1)):10.1f}% "
+        b0, b1 = sum(r["b0"] for r in rs), sum(r["b1"] for r in rs)
+        print(f"{fam:16} {len(rs):3} {100 * (1 - p1 / max(p0, 1)):12.1f}% {100 * (1 - b1 / max(b0, 1)):11.1f}% "
               f"{np.mean([r['de'] for r in rs]):10.4f} {max(r['de'] for r in rs):11.4f} "
-              f"{max(r['maxpx'] for r in rs):7.1f} {np.mean([r['ms'] for r in rs]):5.0f}")
+              f"{np.mean([r['psnr'] for r in rs]):10.1f} {min(r['psnr'] for r in rs):9.1f} {np.mean([r['ms'] for r in rs]):5.0f}")
     return 0
 
 

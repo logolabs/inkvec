@@ -13,10 +13,12 @@ API in particular should be treated as unstable release to release).
   fewest segments that draw the same picture, by the tracer's own minimum-description-length
   objective. Corners in the source are hard breaks and survive exactly; the tolerance is
   stated at a viewing size (`--tolerance 0.1 --judge 1024`); only `d` attributes change and a
-  path that would not get cheaper as written is left byte for byte. On 40 corpus artist
-  files: 14.8% of the description length removed at a mean dE00 of 0.0045 against the
-  original (worst 0.028); the tracer's own output shrinks 0.4%, its emitter being already
-  minimal. 1–30 ms per logo, 143 ms for the corpus's heaviest file.
+  path that would not get cheaper as written is left byte for byte. Whole subpaths that are
+  circles, ellipses or rectangles are written as those elements. On 40 corpus artist files:
+  21.6% of the description length removed at a mean dE00 of 0.0073 against the original
+  (worst 0.036); the tracer's own output shrinks 0.9%, its emitter being already minimal.
+  Tens of milliseconds for a small icon, under a second for a curve-dense logo, 6.6 s for
+  the corpus's heaviest file (213 KB, 8,608 segments).
 - **Language-binding foundation** (`docs/BINDINGS.md`). The `inkvec` crate is a small stable
   library API (`trace`, `trace_rgba`, `Options`, `Traced`, `Error`); `inkvec-ffi` is a C
   library (`inkvec_ffi`) with a cbindgen header, `include/inkvec.h`; `inkvec-py` is the `inkvec`

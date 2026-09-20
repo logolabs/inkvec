@@ -122,10 +122,11 @@ fn line(r: &Report) -> String {
         0.0
     };
     format!(
-        "{} paths ({} rewritten), segments {} -> {}, params {:.0} -> {:.0} ({pct:.1}% smaller), \
-         {} runs guarded, tolerance {:.4} units",
+        "{} paths ({} rewritten, {} as primitives), segments {} -> {}, params {:.0} -> {:.0} \
+         ({pct:.1}% smaller), {} runs guarded, tolerance {:.4} units",
         r.paths,
         r.rewritten,
+        r.primitives,
         r.segments_before,
         r.segments_after,
         r.params_before,
@@ -138,6 +139,7 @@ fn line(r: &Report) -> String {
 fn add(t: &mut Report, r: &Report) {
     t.paths += r.paths;
     t.rewritten += r.rewritten;
+    t.primitives += r.primitives;
     t.subpaths += r.subpaths;
     t.segments_before += r.segments_before;
     t.segments_after += r.segments_after;

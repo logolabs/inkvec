@@ -37,20 +37,22 @@ noto-emoji, openmoji, twemoji), at the defaults:
 
 | family | description length saved | mean dE00 vs original | worst dE00 |
 |---|---|---|---|
-| noto-emoji | 16.0% | 0.0085 | 0.016 |
-| openmoji | 17.1% | 0.0089 | 0.016 |
-| simple-icons | 17.1% | 0.0098 | 0.028 |
-| twemoji | 6.4% | 0.0014 | 0.005 |
+| noto-emoji | 23.9% | 0.0148 | 0.028 |
+| openmoji | 25.8% | 0.0146 | 0.025 |
+| simple-icons | 17.8% | 0.0155 | 0.036 |
+| twemoji | 9.5% | 0.0015 | 0.004 |
 | lucide, material-icons | 0% (already minimal; left untouched) | 0 | 0 |
-| **all 40** | **14.8%** | **0.0045** | **0.028** |
+| **all 40** | **21.6%** | **0.0073** | **0.036** |
 
 For scale, the tracer's own colour error against these files averages 0.148, so the
-rewrite is thirty times below it — invisible. Individual files reach 35%. The tracer's own
-output shrinks by 0.4%: its emitter is already description-length minimal, which is the
+rewrite is twenty times below it — invisible. Individual files reach 56%. The tracer's own
+output shrinks by 0.9%: its emitter is already description-length minimal, which is the
 check this tool exists to make.
 
-Speed: 1–30 ms for typical logos, 143 ms for the corpus's heaviest file (213 KB, 7,983
-segments). `bench/svgmin_eval.py` reproduces the table.
+Speed, best of three: 21–53 ms for a small icon, 0.3–0.8 s for a curve-dense 1–2 KB logo,
+0.6 s for a 20 KB emoji, 6.6 s for the corpus's heaviest file (213 KB, 8,608 segments).
+The fit costs the square of the samples it is shown, so the time follows curve density
+rather than file size. `bench/svgmin_eval.py` reproduces the table.
 
 ## How it works
 

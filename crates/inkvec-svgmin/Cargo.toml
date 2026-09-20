@@ -23,6 +23,7 @@ doc = false
 [dependencies]
 inkvec-core = { workspace = true }
 inkvec-fit = { workspace = true }
+rayon = { workspace = true }
 roxmltree = "0.20"
 svgtypes = "0.15"
 

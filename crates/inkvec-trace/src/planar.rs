@@ -804,11 +804,12 @@ pub fn refine_subpixel_alpha(
             } else {
                 1.0
             };
-            sigmas.push(
-                (s.hypot(crate::coverage::DEFAULT_SIGMA_MODEL) * visibility)
+            sigmas.push(match crate::contour::sigma_flat() {
+                Some(flat) => flat,
+                None => (s.hypot(crate::coverage::DEFAULT_SIGMA_MODEL) * visibility)
                     .max(crate::contour::sigma_floor())
                     .clamp(0.02, 2.0),
-            );
+            });
         }
 
         // The planar path extracts boundaries as level sets on a pixel grid exactly as

@@ -303,6 +303,42 @@ fn sigmas_for(field: &CoverageField, pts: &[Point]) -> Vec<f64> {
 /// clean small artwork.
 ///
 /// `INKVEC_SIGMA_FLOOR` remains an experimental, nonnegative positional floor.
+/// Replace every per-point sigma with one constant, destroying all of its structure.
+///
+/// This exists to price that structure, and the price is low. `Edge.sigma` is the one
+/// number the whole tree claims to derive its tolerances from — "nothing downstream
+/// invents its own tolerance parameter; it reads this one"
+/// (`docs/algorithm/00-overview.md`) — but measured over 86,060 boundary points on the
+/// gate set, **79% of them sit between 0.050 and 0.060**, pinned at or just above
+/// [`crate::coverage::DEFAULT_SIGMA_MODEL`]. Median 0.0512, p25 0.0501, p75 0.0576;
+/// only 5.5% exceed 0.10. For four fifths of the corpus sigma is not a measurement, it
+/// is that constant.
+///
+/// Flattening it to the median and re-running the 246-icon gate costs **+1.56% turning
+/// and +0.89% ratio, and improves dE00 by 0.45%**. So the whole per-point structure —
+/// the coverage inversion, the contrast division, the gradient division, the curvature
+/// inflation — is worth about one percent on two axes and is slightly negative on the
+/// third. What little it does buy comes from the thin tail that correctly marks a faint
+/// boundary as not worth coordinates, not from the variation in the bulk.
+///
+/// The consequence for anything that would revise sigma downstream (recomputing it
+/// after `boundary_opt`, say, which never does): the quantity being improved carries
+/// about a percent of value, so the improvement is bounded by that. The *level* of
+/// sigma matters enormously by comparison, and it is not a separate lever — scaling
+/// every sigma by `k` scales chi2 by `1/k²`, which is exactly `lambda -> k²·lambda`.
+/// Measured rather than assumed: sigma_model 0.10 gives dE00 +39.00% / ratio -10.28%
+/// and `--lambda-scale 4.0` gives +44.34% / -11.68%, the same frontier to three
+/// significant figures (ratio per dE00, 0.264 against 0.263). Use `--lambda-scale`.
+pub fn sigma_flat() -> Option<f64> {
+    static V: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("INKVEC_SIGMA_FLAT")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|v| v.is_finite() && *v > 0.0)
+    })
+}
+
 pub fn sigma_floor() -> f64 {
     static V: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
     *V.get_or_init(|| {

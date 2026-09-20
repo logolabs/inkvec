@@ -22,7 +22,7 @@
 //! reason: the network pulls in a full ML runtime, and nothing else here should have to.
 
 pub mod external;
-mod planar;
+pub mod planar;
 
 pub use planar::MULTIPLE;
 
@@ -110,36 +110,102 @@ fn snap_extremes(rgb: &mut [f32]) {
     }
 }
 
-/// Restore an RGBA image (straight alpha), compositing onto white first -- the network is
-/// RGB-only and was trained exclusively on opaque renders (every damage condition in this
-/// project's corpus -- JPEG, WebP, a VAE round trip -- produces an opaque raster; there is no
-/// alpha-aware restoration to do). Alpha is carried through unchanged.
-pub fn restore_rgba(r: &dyn Restore, img: &Rgba) -> Result<Rgba, Box<dyn std::error::Error>> {
+/// An RGBA image composited onto white as interleaved RGB in `[0, 1]`, what every backend
+/// receives.
+///
+/// The network is RGB-only and was trained exclusively on opaque renders (every damage
+/// condition in this project's corpus -- JPEG, WebP, a VAE round trip -- produces an opaque
+/// raster; there is no alpha-aware restoration to do). Compositing on white with straight
+/// alpha matches how every restorer-eval script this project has produced its
+/// training/validation input from a transparent source.
+pub fn composite_on_white(img: &Rgba) -> Vec<f32> {
     let n = img.width * img.height;
     let mut rgb = vec![0f32; n * 3];
     for i in 0..n {
         let a = img.data[i * 4 + 3];
         for c in 0..3 {
-            // On white, straight alpha: matches how every restorer-eval script this project
-            // has produced its training/validation input composited a transparent source.
             rgb[i * 3 + c] = img.data[i * 4 + c] * a + (1.0 - a);
         }
     }
-    let mut out = r.restore(&rgb, img.width, img.height)?;
-    quantize_levels(&mut out);
-    snap_extremes(&mut out);
+    rgb
+}
+
+/// The restorer's output as an image: quantised to 256 levels, extremes snapped, and the
+/// input's alpha carried through unchanged.
+fn finish(mut rgb: Vec<f32>, img: &Rgba) -> Rgba {
+    quantize_levels(&mut rgb);
+    snap_extremes(&mut rgb);
+    let n = img.width * img.height;
     let mut data = vec![0f32; n * 4];
     for i in 0..n {
         for c in 0..3 {
-            data[i * 4 + c] = out[i * 3 + c];
+            data[i * 4 + c] = rgb[i * 3 + c];
         }
         data[i * 4 + 3] = img.data[i * 4 + 3];
     }
-    Ok(Rgba {
+    Rgba {
         width: img.width,
         height: img.height,
         data,
-    })
+    }
+}
+
+/// Restore an RGBA image (straight alpha). Composite, run the network, quantise, snap, and
+/// put the alpha back.
+pub fn restore_rgba(r: &dyn Restore, img: &Rgba) -> Result<Rgba, Box<dyn std::error::Error>> {
+    let rgb = composite_on_white(img);
+    let out = r.restore(&rgb, img.width, img.height)?;
+    Ok(finish(out, img))
+}
+
+/// The tensor the network takes for an RGBA image: composited onto white, planar CHW, padded
+/// to a multiple of [`MULTIPLE`] by replicating the last row and column. `1 x 3 x height x
+/// width` of the [`PaddedTensor`]'s own size.
+///
+/// The in-process backends build this inside [`Restore::restore`] and no caller sees it. It is
+/// public for a backend that runs the network somewhere this crate cannot follow it: the
+/// browser's ONNX Runtime Web session (`web/denoise.js`), which reads the same `.onnx` export
+/// the [`onnx`] backend reads. Such a backend pairs it with [`network_output`], so that the
+/// padding, the crop, the quantisation and the snap are this code rather than a
+/// reimplementation of it in another language -- the same reason [`external`] hands its
+/// command a PNG instead of asking it to composite.
+pub fn network_input(img: &Rgba) -> PaddedTensor {
+    let rgb = composite_on_white(img);
+    let (width, height) = planar::padded(img.width, img.height);
+    PaddedTensor {
+        data: planar::to_planar_padded(&rgb, img.width, img.height, width, height),
+        width,
+        height,
+    }
+}
+
+/// A planar CHW tensor and the padded size it is laid out at.
+#[derive(Debug, Clone)]
+pub struct PaddedTensor {
+    /// `3 * width * height` floats, channel-major.
+    pub data: Vec<f32>,
+    /// Padded width, a multiple of [`MULTIPLE`].
+    pub width: usize,
+    /// Padded height, a multiple of [`MULTIPLE`].
+    pub height: usize,
+}
+
+/// The image the network's output becomes: cropped back to `img`'s size, quantised to 256
+/// levels, extremes snapped, `img`'s alpha carried through. The other half of
+/// [`network_input`].
+pub fn network_output(chw: &[f32], img: &Rgba) -> Result<Rgba, String> {
+    let (pw, ph) = planar::padded(img.width, img.height);
+    if chw.len() != 3 * pw * ph {
+        return Err(format!(
+            "restorer output is {} floats, want {}x{}x3 = {}",
+            chw.len(),
+            pw,
+            ph,
+            3 * pw * ph
+        ));
+    }
+    let rgb = planar::from_planar_cropped(chw, img.width, img.height, pw, ph);
+    Ok(finish(rgb, img))
 }
 
 /// Where the built-in restorer's weights come from when the caller does not say: the
@@ -176,7 +242,10 @@ pub fn user_cache_model_path() -> Option<std::path::PathBuf> {
 
 /// SHA-256 of the published `restorer.onnx`, mirroring `tools/pull_model.py`. A file that
 /// does not hash to this is not the model the restorer was validated against.
-const EXPECTED_SHA256: &str = "bdc2762157632f6f74dd91474f0598e591d49ded47e0a87642c89416b0809d6d";
+///
+/// Public because it is not only this crate that downloads the file: the browser build
+/// fetches the same weights for its own runtime, and checks them against this.
+pub const WEIGHTS_SHA256: &str = "bdc2762157632f6f74dd91474f0598e591d49ded47e0a87642c89416b0809d6d";
 
 /// SHA-256 of a file, hex-encoded.
 fn file_sha256(path: &std::path::Path) -> std::io::Result<String> {
@@ -200,9 +269,9 @@ fn file_sha256(path: &std::path::Path) -> std::io::Result<String> {
 fn verify_weights(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     let actual = file_sha256(path)
         .map_err(|e| format!("could not hash restorer weights at {}: {e}", path.display()))?;
-    if actual != EXPECTED_SHA256 {
+    if actual != WEIGHTS_SHA256 {
         return Err(format!(
-            "restorer weights at {} failed verification: SHA256 {actual} != {EXPECTED_SHA256}; \
+            "restorer weights at {} failed verification: SHA256 {actual} != {WEIGHTS_SHA256}; \
              re-download from {HF_DENOISER_REPO} with `python tools/pull_model.py`",
             path.display()
         )
@@ -499,6 +568,62 @@ mod tests {
         assert_eq!(&rgb[12..15], &[0.5, 0.0, 0.0]);
     }
 
+    /// A network that returns its input is enough to pin the layout: whatever
+    /// [`network_input`] lays out, [`network_output`] must read back as the image
+    /// [`restore_rgba`] produces from the same backend. The browser backend is exactly this
+    /// pair with a real network in the middle, so a drift between the two paths -- a padding
+    /// rule applied on one side only, a missing quantisation -- fails here.
+    #[test]
+    fn the_out_of_process_pair_matches_the_in_process_path() {
+        struct Identity;
+        impl Restore for Identity {
+            fn restore(
+                &self,
+                rgb: &[f32],
+                _w: usize,
+                _h: usize,
+            ) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+                Ok(rgb.to_vec())
+            }
+            fn describe(&self) -> String {
+                "identity".into()
+            }
+        }
+
+        // A size that is not a multiple of 16 on either side, so the padding is exercised.
+        let (w, h) = (19usize, 7usize);
+        let data: Vec<f32> = (0..w * h * 4)
+            .map(|i| ((i * 37) % 256) as f32 / 255.0)
+            .collect();
+        let img = Rgba {
+            width: w,
+            height: h,
+            data,
+        };
+
+        let in_process = restore_rgba(&Identity, &img).unwrap();
+
+        let t = network_input(&img);
+        assert_eq!((t.width, t.height), (32, 16));
+        assert_eq!(t.data.len(), 3 * t.width * t.height);
+        let out_of_process = network_output(&t.data, &img).unwrap();
+
+        assert_eq!(out_of_process.width, in_process.width);
+        assert_eq!(out_of_process.height, in_process.height);
+        assert_eq!(out_of_process.data, in_process.data);
+    }
+
+    #[test]
+    fn network_output_refuses_a_tensor_of_the_wrong_size() {
+        let img = Rgba {
+            width: 4,
+            height: 4,
+            data: vec![1.0; 4 * 4 * 4],
+        };
+        let err = network_output(&[0.0; 3 * 16 * 16 - 1], &img).unwrap_err();
+        assert!(err.contains("want 16x16x3"), "got: {err}");
+    }
+
     #[test]
     fn verify_weights_rejects_a_corrupt_file() {
         let dir =
@@ -508,7 +633,7 @@ mod tests {
         std::fs::write(&path, b"not the model").unwrap();
         let err = verify_weights(&path).unwrap_err();
         assert!(
-            err.to_string().contains(EXPECTED_SHA256),
+            err.to_string().contains(WEIGHTS_SHA256),
             "error must name the expected hash, got: {err}"
         );
         std::fs::remove_dir_all(&dir).ok();

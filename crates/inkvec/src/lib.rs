@@ -159,6 +159,39 @@ pub fn trace(image: &[u8], opts: &Options) -> Result<Traced, Error> {
 /// The result is byte-identical to [`trace`] on a PNG holding the same pixels. There is no
 /// container to read, so the intake is the one for lossless input.
 pub fn trace_rgba(pixels: &[u8], width: u32, height: u32, opts: &Options) -> Result<Traced, Error> {
+    // No container: resolve `lossy` the way an unrecognised file resolves it.
+    trace_rgba_lossy(pixels, width, height, opts, None)
+}
+
+/// Trace pixels that came out of the restorer pre-pass (`inkvec-restore`), which are not the
+/// same thing as ordinary lossless pixels.
+///
+/// Restoration and the tracer's soft intake -- measured noise, a relaxed same-ink merge --
+/// travel together: restored output can look clean enough that the automatic
+/// edge-width/ringing detector no longer opens soft intake on its own, so a caller that
+/// restores must force it. That is what `inkvec-cli` does after `--restore`, and this is
+/// [`trace_rgba`] with the same forcing, for a caller whose restorer ran somewhere the
+/// command line cannot reach -- a browser's ONNX Runtime Web session, say. Handing restored
+/// pixels to [`trace_rgba`] instead traces them in a configuration the restorer was never
+/// validated in.
+pub fn trace_rgba_restored(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    opts: &Options,
+) -> Result<Traced, Error> {
+    trace_rgba_lossy(pixels, width, height, opts, Some(inkvec_sr::Mode::On))
+}
+
+/// [`trace_rgba`] with the intake decided by the caller: `None` resolves it the way an
+/// unrecognised file resolves it, `Some(mode)` sets it outright.
+fn trace_rgba_lossy(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    opts: &Options,
+    lossy: Option<inkvec_sr::Mode>,
+) -> Result<Traced, Error> {
     opts.validate()?;
     if width == 0 || height == 0 {
         return Err(Error::InvalidImage(format!(
@@ -178,8 +211,13 @@ pub fn trace_rgba(pixels: &[u8], width: u32, height: u32, opts: &Options) -> Res
     guarded(|| {
         let args = opts.to_args();
         let img = inkvec_trace::rgba8_capped(pixels, width, height, args.max_dim);
-        // No container: resolve `lossy` the way an unrecognised file resolves it.
-        let args = inkvec_cli::resolve_lossy(&args, || None);
+        let args = match lossy {
+            Some(mode) => inkvec_cli::Args {
+                lossy: mode,
+                ..args
+            },
+            None => inkvec_cli::resolve_lossy(&args, || None),
+        };
         run(img, &args, width, height)
     })
 }

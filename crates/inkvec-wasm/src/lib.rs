@@ -137,7 +137,7 @@ pub fn trace(
 ) -> Result<String, JsValue> {
     console_error_panic_hook::set_once();
     let result = std::panic::catch_unwind(|| {
-        trace_inner(
+        prepare_inner(
             bytes,
             precision,
             min_area,
@@ -151,6 +151,7 @@ pub fn trace(
             content_units,
             cutout,
         )
+        .and_then(Intake::into_svg)
     });
     match result {
         Ok(Ok(svg)) => Ok(svg),
@@ -159,15 +160,15 @@ pub fn trace(
     }
 }
 
-/// The real work, run inside [`trace`]'s `catch_unwind` so that — where the panic strategy
-/// permits it — a panic becomes a JS error instead of a poisoned instance.
+/// Decode, validate and prepare, run inside [`trace`]'s `catch_unwind` so that — where the
+/// panic strategy permits it — a panic becomes a JS error instead of a poisoned instance.
 ///
 /// The threaded build compiles with `panic = abort` (`tools/build_wasm.sh` passes
 /// `-Z build-std=panic_abort,std`); there a panic aborts the instance before anything can
 /// catch it, and no amount of wrapping here can change that. The single-threaded build
 /// unwinds, so [`trace`] does surface its panics as exceptions.
 #[allow(clippy::too_many_arguments)]
-fn trace_inner(
+fn prepare_inner(
     bytes: &[u8],
     precision: f64,
     min_area: f64,
@@ -180,7 +181,7 @@ fn trace_inner(
     margin: f64,
     content_units: bool,
     cutout: bool,
-) -> Result<String, JsValue> {
+) -> Result<Intake, JsValue> {
     // `usize` parameters wrap silently across the boundary; clamp them before the tracer
     // sees them so `colors = -1` does not become unbounded palette work and `max_dim = -1`
     // does not disable the cap.
@@ -217,9 +218,188 @@ fn trace_inner(
         ..Default::default()
     };
     let args = inkvec_cli::resolve_lossy(&args, || Some(bytes.to_vec()));
-    let t = inkvec_cli::trace_image_sized(img, &args, Some((arr_w as usize, arr_h as usize)))
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    Ok(inkvec_cli::post_process(&args, t.svg, t.width, t.height))
+    Ok(Intake {
+        inner: inkvec_cli::intake(img, &args, Some((arr_w as usize, arr_h as usize))),
+        denoised: false,
+    })
+}
+
+/// A decoded raster, prepared for tracing and held across a denoiser round trip.
+///
+/// [`prepare`] makes one, [`Intake::trace`] finishes the job, and in between the denoiser
+/// exports hand the tensor out to the page's ONNX Runtime Web session and take its answer
+/// back. With no denoising in between, `prepare(...).trace()` is exactly what [`trace`] does
+/// — the same call, because [`trace`] *is* that pair.
+///
+/// JavaScript owns it and must release it: `free()` after the last [`Intake::trace`], or
+/// [`Intake::trace_once`] instead of that last trace, which consumes the intake and leaves
+/// nothing to free. Not both -- `free()` on an intake `traceOnce` already took is a free of
+/// a null pointer.
+#[wasm_bindgen]
+pub struct Intake {
+    inner: inkvec_cli::Intake,
+    denoised: bool,
+}
+
+#[wasm_bindgen]
+impl Intake {
+    /// The width the tracer will see, after `max_dim` and any intake normalisation. This is
+    /// the size the denoiser runs at, which is the point of denoising here rather than
+    /// before the decode: the network must see the raster the tracer sees.
+    #[wasm_bindgen(getter)]
+    pub fn width(&self) -> usize {
+        self.inner.img.width
+    }
+
+    /// The height the tracer will see.
+    #[wasm_bindgen(getter)]
+    pub fn height(&self) -> usize {
+        self.inner.img.height
+    }
+
+    /// The size of the tensor [`Intake::denoiser_input`] returns, as `[width, height]`: the
+    /// raster's size rounded up to a multiple of 16, which is what the network's four 2x
+    /// downsamplings require. The tensor itself is `1 x 3 x height x width`, planar.
+    #[wasm_bindgen(getter)]
+    pub fn denoiser_input_size(&self) -> Vec<usize> {
+        let (w, h) = inkvec_restore::planar::padded(self.inner.img.width, self.inner.img.height);
+        vec![w, h]
+    }
+
+    /// The tensor the denoiser network takes: composited onto white, planar, edge-padded.
+    ///
+    /// This is `inkvec_restore::network_input`, the same preparation the command line's
+    /// in-process backends do, so the browser is not a second recipe — only a second
+    /// runtime for the same `restorer.onnx`.
+    pub fn denoiser_input(&self) -> Vec<f32> {
+        inkvec_restore::network_input(&self.inner.img).data
+    }
+
+    /// Take the network's output — the same `1 x 3 x height x width` planar layout — as the
+    /// raster to trace: cropped back to size, quantised to 256 levels, extremes snapped,
+    /// alpha carried through, all of it `inkvec_restore::network_output`.
+    ///
+    /// The trace that follows is then forced onto soft intake, as `--restore` forces it: a
+    /// denoised raster can look clean enough that the edge-width and ringing detectors no
+    /// longer open soft intake by themselves, and the network was validated with it open.
+    pub fn take_denoiser_output(&mut self, chw: &[f32]) -> Result<(), JsValue> {
+        let img = inkvec_restore::network_output(chw, &self.inner.img)
+            .map_err(|e| JsValue::from_str(&e))?;
+        self.inner.img = img;
+        self.denoised = true;
+        Ok(())
+    }
+
+    /// How far this raster disagrees with `svg` where the trace claims a flat interior —
+    /// `inkvec_restore::decide`'s signal, and the one `--restore auto` decides on. Above
+    /// [`denoiser_threshold`] the input is treated as damaged. `undefined` when the SVG
+    /// could not be rendered or has no flat interior to measure.
+    pub fn residual(&self, svg: &str) -> Option<f64> {
+        match inkvec_restore::decide(&self.inner.img, svg, inkvec_restore::Options::default()) {
+            inkvec_restore::Decision::Restore { residual }
+            | inkvec_restore::Decision::Keep { residual } => residual,
+        }
+    }
+
+    /// The raster as RGBA8, for showing the page what the denoiser did.
+    pub fn rgba8(&self) -> Vec<u8> {
+        self.inner
+            .img
+            .data
+            .iter()
+            .map(|&v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
+            .collect()
+    }
+
+    /// Trace it, without consuming: `auto` needs one trace before it can decide whether to
+    /// denoise, and keeps that trace when the input turns out to be undamaged.
+    ///
+    /// The clone this takes is the raster only. It is the price of asking for the same trace
+    /// twice, and it is small next to the trace.
+    pub fn trace(&self) -> Result<String, JsValue> {
+        Self {
+            inner: self.inner.clone(),
+            denoised: self.denoised,
+        }
+        .into_svg()
+    }
+
+    /// Trace it, consuming the intake. `trace` when the answer is only needed once.
+    #[wasm_bindgen(js_name = traceOnce)]
+    pub fn trace_once(self) -> Result<String, JsValue> {
+        self.into_svg()
+    }
+
+    fn into_svg(self) -> Result<String, JsValue> {
+        let Self {
+            mut inner,
+            denoised,
+        } = self;
+        if denoised {
+            inner.args.lossy = inkvec_sr::Mode::On;
+        }
+        let args = inner.args.clone();
+        let t = inkvec_cli::trace_prepared(inner).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(inkvec_cli::post_process(&args, t.svg, t.width, t.height))
+    }
+}
+
+/// Decode an image and run the pipeline up to the point the denoiser would see it, for a
+/// caller that wants to denoise it there. The arguments are [`trace`]'s.
+///
+/// `trace(bytes, ...)` is `prepare(bytes, ...).traceOnce()`; the page calls this one instead
+/// when it has a denoiser to run in between.
+#[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
+pub fn prepare(
+    bytes: &[u8],
+    precision: f64,
+    min_area: f64,
+    colors: usize,
+    merge: f32,
+    max_dim: usize,
+    time_budget: f64,
+    no_background: bool,
+    minify: bool,
+    margin: f64,
+    content_units: bool,
+    cutout: bool,
+) -> Result<Intake, JsValue> {
+    console_error_panic_hook::set_once();
+    prepare_inner(
+        bytes,
+        precision,
+        min_area,
+        colors,
+        merge,
+        max_dim,
+        time_budget,
+        no_background,
+        minify,
+        margin,
+        content_units,
+        cutout,
+    )
+}
+
+/// The interior residual above which `auto` denoises, `inkvec_restore::Options`' default.
+#[wasm_bindgen]
+pub fn denoiser_threshold() -> f64 {
+    inkvec_restore::Options::default().residual_threshold
+}
+
+/// Where the denoiser weights come from: the same `restorer.onnx` the command line pulls,
+/// from the same Hugging Face repository.
+#[wasm_bindgen]
+pub fn denoiser_model_url() -> String {
+    inkvec_restore::HF_DENOISER_URL.to_string()
+}
+
+/// The SHA-256 the weights must hash to, so a page can refuse a truncated or tampered
+/// download the way `inkvec_restore::pull_onnx_weights` refuses one.
+#[wasm_bindgen]
+pub fn denoiser_model_sha256() -> String {
+    inkvec_restore::WEIGHTS_SHA256.to_string()
 }
 
 /// A panic payload turned into a JS error message.
@@ -258,7 +438,7 @@ mod tests {
         let d = inkvec::Options::default();
         for name in ["tiny.png", "white_on_clear.png"] {
             let png = contract_input(name);
-            let positional = trace_inner(
+            let positional = prepare_inner(
                 &png,
                 d.precision,
                 d.min_area,
@@ -272,9 +452,67 @@ mod tests {
                 d.content_units,
                 d.cutout,
             )
+            .and_then(Intake::into_svg)
             .unwrap_or_else(|_| panic!("{name}: the positional trace failed"));
             assert_eq!(positional, inkvec::trace(&png, &d).unwrap().svg, "{name}");
         }
+    }
+
+    /// The tensor the page hands to ONNX Runtime Web and the raster it gets back have to
+    /// agree about shape and about the crop, or the denoised trace is silently of a shifted
+    /// image. An identity network pins both, and pins that a second pass over an already
+    /// denoised raster changes nothing — the quantise and the snap are idempotent, so a page
+    /// that denoises twice cannot drift.
+    #[test]
+    fn the_denoiser_tensor_round_trips_through_the_intake() {
+        let d = inkvec::Options::default();
+        let png = contract_input("tiny.png");
+        let mut intake = prepare_inner(
+            &png,
+            d.precision,
+            d.min_area,
+            d.colors as usize,
+            d.merge as f32,
+            d.max_dim as usize,
+            d.time_budget,
+            d.no_background,
+            d.minify,
+            d.margin,
+            d.content_units,
+            d.cutout,
+        )
+        .expect("prepare");
+
+        let (w, h) = (intake.width(), intake.height());
+        let size = intake.denoiser_input_size();
+        assert_eq!(size, vec![w.div_ceil(16) * 16, h.div_ceil(16) * 16]);
+
+        let tensor = intake.denoiser_input();
+        assert_eq!(tensor.len(), 3 * size[0] * size[1]);
+
+        intake.take_denoiser_output(&tensor).expect("first pass");
+        assert_eq!((intake.width(), intake.height()), (w, h));
+        let once = intake.rgba8();
+        assert_eq!(once.len(), w * h * 4);
+
+        let again = intake.denoiser_input();
+        intake.take_denoiser_output(&again).expect("second pass");
+        assert_eq!(intake.rgba8(), once, "the round trip is not idempotent");
+
+        // And it still traces, through the soft intake a denoised raster is traced with.
+        let svg = intake.trace().expect("trace");
+        assert!(
+            svg.starts_with("<svg") || svg.starts_with("<?xml"),
+            "{svg:.40}"
+        );
+    }
+
+    /// The page verifies its download against the same hash the command line does.
+    #[test]
+    fn the_denoiser_constants_are_the_restorers_own() {
+        assert_eq!(denoiser_model_url(), inkvec_restore::HF_DENOISER_URL);
+        assert_eq!(denoiser_model_sha256().len(), 64);
+        assert_eq!(denoiser_threshold(), inkvec_sr::detect::DEGRADED_RESIDUAL);
     }
 
     #[test]

@@ -34,6 +34,41 @@ API in particular should be treated as unstable release to release).
   bytes on purpose (two decimals takes 18% instead of 9.6%, and moves pixels). Tens of
   milliseconds for a small icon, under a second for a curve-dense logo, 6.5 s for the
   corpus's heaviest file (213 KB, 8,608 segments).
+
+- **The denoiser in the browser** (`web/denoise.js`, `web/worker.js`, `crates/inkvec-wasm`).
+  The `--restore` pre-pass now runs on the Space, off by default and with the same three
+  modes (`off`, `auto`, `on`). The page loads the same `restorer.onnx` from
+  `Logolabs/inkvec-denoiser-001`, verified against the same SHA-256 the CLI checks, into
+  ONNX Runtime Web (pinned 1.30.0): **WebGPU** where the browser has it, ONNX Runtime's
+  WebAssembly kernels where it does not, and the result line says which ran. Measured
+  against native ONNX Runtime on a 512-px JPEG, the WebAssembly kernels agree to 4.2e-7 —
+  after the 8-bit quantisation the tracer reads, one channel of one pixel in 786,432 differs
+  by one level.
+
+  Nothing around the network is reimplemented in JavaScript. `inkvec-restore` gains
+  `network_input` / `network_output` (the compositing, the pad to a multiple of 16, the crop,
+  the quantisation and the extreme-snapping its in-process backends already did, now callable
+  by a backend this crate cannot reach), and `crates/inkvec-wasm` exposes them, plus
+  `inkvec_restore::decide` for the `auto` decision, on an `Intake` object the page holds
+  across the round trip. `inkvec_cli::trace_image_sized` is split into `intake` and
+  `trace_prepared` at exactly the seam the restorer sits in, so the browser denoises the
+  raster the tracer will see — after `--max-dim`, after the unblock — rather than one the
+  pipeline would go on to resample; ONNX Runtime Web's session is asynchronous where the
+  pipeline is not, which is why it cannot be a `Restore` backend like the others.
+  `inkvec::trace_rgba_restored` is the facade's version of the trace that follows, with soft
+  intake forced as `--restore` forces it. The page also shows the denoised raster next to the
+  input, and reports the residual when `auto` decides not to denoise.
+
+  A browser whose only WebGPU adapter is a software one (SwiftShader, lavapipe) is treated as
+  having no GPU: measured in a headless Chromium, a 512-px pass the WebAssembly kernels
+  finished in about eight seconds had still not returned ten minutes into the software
+  adapter.
+
+  While a run is going the page shows its steps rather than one spinner: the weights, the
+  denoiser pass and the trace, each with its own track and its own elapsed time, and `auto`'s
+  opening trace named as the check it is. The weights are counted in bytes; the network pass
+  and the trace report nothing until they are done, so their tracks sweep rather than
+  inventing a percentage.
 - **Language-binding foundation** (`docs/BINDINGS.md`). The `inkvec` crate is a small stable
   library API (`trace`, `trace_rgba`, `Options`, `Traced`, `Error`); `inkvec-ffi` is a C
   library (`inkvec_ffi`) with a cbindgen header, `include/inkvec.h`; `inkvec-py` is the `inkvec`

@@ -16,6 +16,9 @@ categories.workspace = true
 [dependencies]
 inkvec-cli = { workspace = true }
 inkvec-trace = { workspace = true }
+# For `inkvec_sr::Mode`, the type `inkvec_cli::Args::lossy` already is. Nothing new is
+# compiled: `inkvec-cli` depends on it either way.
+inkvec-sr = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 schemars = { workspace = true }

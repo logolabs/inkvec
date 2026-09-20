@@ -80,6 +80,8 @@ Per-case coordinate count over the same 21 cases, from the same script and data 
 
 Inkvec ships an optional trained restorer that removes compression and decode damage before tracing. It is **off by default** (`--restore off`; `--restore auto` enables it only when the input looks damaged). The weights that ship — `restorer.onnx` from [`Logolabs/inkvec-denoiser-001`](https://huggingface.co/Logolabs/inkvec-denoiser-001), pulled on first use or via `tools/pull_model.py` — have **no published benchmark in this repository**, and no LPIPS or ablation figure for them is reported anywhere here. The figures that previously appeared in this section were measured during development on a different checkpoint and are not reproduced for the shipped weights; the VectorArk and StarVector numbers were those projects' own published results, measured under their protocols, not here.
 
+The same pre-pass runs **in the browser**, on the same `restorer.onnx`: see [In the browser](#in-the-browser).
+
 ---
 
 ## Install
@@ -188,6 +190,16 @@ python tools/pull_model.py
 
 **Try it live:** [huggingface.co/spaces/logolabs/inkvec](https://huggingface.co/spaces/logolabs/inkvec)
 
+### The denoiser in the browser
+
+`--restore`'s trained denoiser runs there too, off by default and with the same three modes (`off`, `auto`, `on`). It is not a port: the page loads the same `restorer.onnx` from [`Logolabs/inkvec-denoiser-001`](https://huggingface.co/Logolabs/inkvec-denoiser-001) — verified against the same SHA-256 the CLI checks — into **ONNX Runtime Web**, which runs it on **WebGPU** where the browser has it and on WebAssembly kernels where it does not.
+
+Nothing around the network is reimplemented in JavaScript either. The compositing onto white, the pad to a multiple of 16, the crop, the quantisation to 256 levels and the extreme-snapping are `inkvec-restore`'s own (`network_input` / `network_output`), reached through the WebAssembly build; `--restore`'s `auto` decision is `inkvec_restore::decide`, the same interior-residual test; and the trace that follows is forced onto soft intake exactly as the command line forces it. The pipeline is split at the seam the command line has — `inkvec_cli::intake`, the restorer, `inkvec_cli::trace_prepared` — because ONNX Runtime Web's session is asynchronous where the tracer is not, so the network cannot be called from inside the pipeline the way an in-process backend is.
+
+Measured against native ONNX Runtime on a 512-px JPEG, ONNX Runtime Web's WebAssembly kernels agree with the native ones to 4.2e-7; after the 8-bit quantisation the tracer reads, one channel of one pixel in 786,432 differs by one level.
+
+The runtime (~28 MB) and the weights (~80 MB) are fetched on first use and cached by the browser. The image is not: it never leaves the machine, denoiser or no denoiser.
+
 To use it from JavaScript or TypeScript — browsers, Node.js, Deno, Bun — use the npm package [`@logolabs/inkvec`](packages/npm/) (`packages/npm`): `await trace(bytes, { colors: 16 })`, with typed options, a threaded build at `@logolabs/inkvec/threads`, and the same output on every runtime.
 
 ---
@@ -225,7 +237,7 @@ fn trace(input: &str) -> Result<String, Box<dyn std::error::Error>> {
 }
 ```
 
-`Args::default()` holds every flag's default. `trace_image` is the whole pipeline behind both the CLI and the WASM build.
+`Args::default()` holds every flag's default. `trace_image` is the whole pipeline behind both the CLI and the WASM build; `inkvec_cli::intake` and `trace_prepared` are its two halves, for a caller that needs to reach between them — that is where the restorer runs, and it is how the browser runs the denoiser in a runtime this crate cannot call into. Pixels that came back from such a restorer are traced with `inkvec::trace_rgba_restored`, which forces the soft intake `--restore` forces.
 
 ### Language bindings
 

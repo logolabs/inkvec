@@ -21,6 +21,15 @@ The WebAssembly crate (`crates/inkvec-wasm`) calls the facade: `trace_json` and
 read them back. Its older positional `trace` export is what the web demo (`web/worker.js`) still
 calls; it is kept until the page moves over.
 
+It also exposes the denoiser pre-pass for a page that runs the network itself, which the web
+demo does through ONNX Runtime Web: `prepare` returns an `Intake` — the pipeline stopped where
+the restorer sits — whose `denoiser_input` / `take_denoiser_output` are `inkvec_restore`'s own
+`network_input` / `network_output`, whose `residual` is `inkvec_restore::decide`'s signal for
+`--restore auto`, and whose `trace` finishes the job with soft intake forced. `trace` is
+`prepare(...).traceOnce()` with nothing in between. `denoiser_model_url`,
+`denoiser_model_sha256` and `denoiser_threshold` are the constants the CLI uses, so a page
+cannot end up fetching or trusting a different model.
+
 ## One source of truth
 
 Nothing about an option is written twice.

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import html as html_mod
+import json
 import posixpath
 import re
 import shutil
@@ -45,6 +46,7 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "site"
 GITHUB = "https://github.com/logolabs/inkvec"
 SPACE = "https://huggingface.co/spaces/Logolabs/inkvec"
+LOGOLABS = "https://logolabs.org"
 DEFAULT_BASE = "/inkvec/"
 
 STAGES = [
@@ -415,6 +417,10 @@ blockquote p:last-child{margin:0}
 .plainlink{margin:-6px 0 1.6em;font-size:14px}
 .plainlink a{font-weight:500}
 
+/* about block on the landing page */
+.about{margin-top:3.2em;padding-top:1.4em;border-top:1px solid var(--rule)}
+.about p{color:var(--faint);max-width:38rem}
+
 /* prev / next */
 .pagenav{display:flex;justify-content:space-between;gap:14px;margin-top:3.2em;padding-top:1.2em;
   border-top:1px solid var(--rule)}
@@ -468,6 +474,7 @@ __HEAD__
 </div>
 <footer>
   <span>Inkvec &middot; LogoLabs</span>
+  <span>Released as part of LogoLabs' work on <a href="__LOGOLABS__">logo generation using AI</a></span>
   <span><a href="__GITHUB__/blob/main/LICENSE">Apache-2.0</a> &middot; <a href="__GITHUB__">source</a>
   &middot; <a href="__SPACE__">demo</a></span>
 </footer>
@@ -604,6 +611,7 @@ def write_page(out: Path, base: str, slug: str, title: str, body: str,
            .replace("__BASE__", base)
            .replace("__SPACE__", SPACE)
            .replace("__GITHUB__", GITHUB)
+           .replace("__LOGOLABS__", LOGOLABS)
            .replace("__HEAD__", extra_head)
            .replace("__NAV__", render_nav(base, slug))
            .replace("__RAIL__", render_rail(toc_tokens))
@@ -640,6 +648,22 @@ def build(base: str) -> int:
             errors.append(str(e))
             continue
         extra = KATEX_HEAD if '<div class="math">' in body else ""
+        if slug == "":
+            extra += ('<script type="application/ld+json">' + json.dumps({
+                "@context": "https://schema.org",
+                "@type": "SoftwareSourceCode",
+                "name": "Inkvec",
+                "url": "https://logolabs.github.io/inkvec/",
+                "codeRepository": GITHUB,
+                "license": "https://www.apache.org/licenses/LICENSE-2.0",
+                "applicationCategory": "DesignApplication",
+                "operatingSystem": "Cross-platform",
+                "description": "Inkvec converts raster logos and icons into exact, "
+                               "editable SVG: boundaries decided by the evidence in the "
+                               "pixels, primitives recognised as primitives, real "
+                               "gradients, path count chosen by minimum description length.",
+                "author": {"@type": "Organization", "name": "LogoLabs", "url": LOGOLABS},
+            }, separators=(",", ":")) + '</script>')
         pagenav = ""
         if slug.startswith("algorithm/") and re.fullmatch(r"algorithm/(\d\d-[\w-]+)\.html", slug):
             stage = slug.split("/")[1][:-5]
@@ -666,7 +690,11 @@ def build(base: str) -> int:
                     f'<div class="cta"><a class="btn primary" href="{SPACE}">Try it in the browser</a>'
                     f'<a class="btn" href="{base}algorithm/">How it works</a>'
                     f'<a class="btn ghost" href="{GITHUB}/releases">Download</a></div></section>')
-            body = hero + body
+            body = hero + body + (
+                f'<section class="about"><h2>About</h2>'
+                f'<p>Inkvec is open source under Apache-2.0, released as part of '
+                f'LogoLabs&rsquo; work on <a href="{LOGOLABS}">logo generation using AI</a>. '
+                f'The studio&rsquo;s home is <a href="{LOGOLABS}">logolabs.org</a>.</p></section>')
         write_page(OUT / (slug or "index.html"), base, slug, title, body, toc_tokens,
                    extra_head=extra, pagenav=pagenav)
         written.append(slug)

@@ -505,6 +505,31 @@ struct Solution {
 /// too faithfully. A noise model that knows the error along a boundary is correlated would
 /// buy both: a cubic that no longer needs the perfect endpoint, and then a coarse candidate
 /// grid that costs g-squared less to search.
+///
+/// That last paragraph was built and measured, and it is wrong. An AR(1)-whitened cubic
+/// residual — discounting the deviation a point shares with its neighbour — *raises*
+/// turning monotonically (+1.42% at rho=0.25, +3.98% at rho=0.50, +10.02% with the free
+/// cubic) where it was predicted to lower it. Discounting a smooth residual does not
+/// make the fitter pick a smoother curve; it stops holding the curve to the measurement,
+/// and an unanchored curve drifts.
+///
+/// The damage is specifically at corners, which is worth keeping because it says what a
+/// correlation model would have to know. Points either side of a sharp corner all miss
+/// any one smooth curve in the same direction — indistinguishable from a correlated
+/// error — so the discount is spent disbelieving the only evidence that the corner is
+/// real. Measured: at rho=0.50 the corner-heaviest third of the gate set loses 6.92% of
+/// turning while the other two thirds lose nothing (median 0.00%), and corner density
+/// predicts the loss (Spearman +0.25, p = 0.006, n = 119). Gating the discount off near
+/// corners does reduce the damage, confirming the mechanism, but gives back the
+/// parameter saving at about the same rate (+3.90%/-2.06% ungated, +2.07%/-1.28% gated
+/// at 10 degrees), so it moves along the frontier rather than past it.
+///
+/// And the frontier already has a better lever on it. `INKVEC_WOBBLE_PENALTY=0.8` beats
+/// the whole correlated-noise model on every axis at once — turning +2.54% against
+/// +3.90%, ratio -1.94% against -2.06%, dE00 +0.40% against +2.94% — by changing one
+/// constant. See [`crate::candidates::wobble_penalty_factor`]. The implementation is in
+/// this branch's history (commit 3f1abc0, reverted in e3746b0) if anyone wants to rerun
+/// it; nothing here suggests it is worth the two hundred lines.
 fn solve_open(
     pts: &[Point],
     sigma: &[f64],

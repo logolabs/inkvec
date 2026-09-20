@@ -21,6 +21,8 @@ options:
       --judge <px>          the viewing size the tolerance is stated at   [1024]
       --corner-degrees <d>  turn above which a join is a hard corner      [30]
       --decimals <n>        coordinate decimals (default: from the tolerance)
+      --no-document         leave everything that is not path data alone: colours,
+                            attributes, comments, metadata, whitespace
       --stats               print what changed, to stderr
   -h, --help
 ";
@@ -59,6 +61,7 @@ fn run() -> Result<(), String> {
                 opts.corner_degrees = parse(&value(&mut it, "--corner-degrees")?)?
             }
             "--decimals" => opts.decimals = Some(parse::<usize>(&value(&mut it, "--decimals")?)?),
+            "--no-document" => opts.document = false,
             "--stats" => stats = true,
             s if s.starts_with('-') => return Err(format!("unknown option {s}\n{USAGE}")),
             _ => inputs.push(a.into()),

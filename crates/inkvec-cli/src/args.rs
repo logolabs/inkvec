@@ -262,8 +262,10 @@ OPTIONS:
                             glows and shadows stay translucent, and a fade is one gradient
                             of colour and opacity. An opaque input traces the same either
                             way
-        --minify            No ids or groups, no trailing zeros. Same geometry,
-                            typically about a tenth smaller
+        --minify            No ids or groups, and the path data written in the fewest
+                            bytes: relative commands where they are shorter, repeated
+                            letters and needless separators dropped, H/V/S where they say
+                            the same thing. Same geometry, about a quarter smaller
         --content-units     Scale the fit tolerances (sigma, precision, lambda) with the
                             raster so a 512-px logo gets the parameter count of a 128-px
                             one. Off by default: it trades fidelity for parsimony

@@ -204,10 +204,11 @@ inkvec-svgmin logo.svg -o logo.min.svg --stats
 ```
 
 The tolerance is stated at a viewing size (`--tolerance 0.1 --judge 1024`: nothing moves
-more than a tenth of a pixel at 1024 px). On 40 corpus artist files it removes 22.1% of the
-numbers and 15.4% of the bytes at a mean dE00 of 0.0073 against the original. On the
-tracer's own output the geometry gives up 0.2%, which is the check that the emitter is
-already description-length minimal, and the bytes give up 14.6%. See
+more than a tenth of a pixel at 1024 px). On 40 corpus artist files it removes 23.9% of the
+numbers and 23.5% of the bytes at a mean dE00 of 0.0077 against the original — ahead of
+SVGO's defaults on bytes, and complementary to them. On the tracer's own output the
+geometry gives up 5.8%, which is the check that the emitter is already description-length
+minimal, and the bytes give up 22.1%. See
 [`crates/inkvec-svgmin`](crates/inkvec-svgmin/).
 
 ## Library API

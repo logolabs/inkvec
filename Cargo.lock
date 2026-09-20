@@ -3734,6 +3734,7 @@ dependencies = [
  "inkvec-fit",
  "inkvec-restore",
  "inkvec-sr",
+ "inkvec-svgmin",
  "inkvec-trace",
  "rayon",
 ]

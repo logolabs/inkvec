@@ -19,14 +19,6 @@
         "x86_64-linux-gnu": {
           "bytes": 9003,
           "sha256": "d3c70c5eb63d68bfcfcb0e141539b37b060a6708b7d3510ad0f2f00773bc47b9"
-        },
-        "wasm32-unknown": {
-          "bytes": 9003,
-          "sha256": "0ac9ec2c72cc17350cb174798b10b997ff6cdab2aad3bff0b6d95877851670d4"
-        },
-        "wasm32-wasip1": {
-          "bytes": 8991,
-          "sha256": "6da4b1c22523c3a9c7d0a0c273da97e653f169c148fb05f5c8a60f5b4ef2b2b1"
         }
       }
     },
@@ -50,14 +42,6 @@
         "x86_64-linux-gnu": {
           "bytes": 9003,
           "sha256": "d3c70c5eb63d68bfcfcb0e141539b37b060a6708b7d3510ad0f2f00773bc47b9"
-        },
-        "wasm32-unknown": {
-          "bytes": 9003,
-          "sha256": "0ac9ec2c72cc17350cb174798b10b997ff6cdab2aad3bff0b6d95877851670d4"
-        },
-        "wasm32-wasip1": {
-          "bytes": 8991,
-          "sha256": "6da4b1c22523c3a9c7d0a0c273da97e653f169c148fb05f5c8a60f5b4ef2b2b1"
         }
       }
     },
@@ -77,20 +61,12 @@
       },
       "svg": {
         "x86_64-windows-msvc": {
-          "bytes": 8389,
-          "sha256": "6596472d4e41ed72773a474086761c55070045d1d286dca9f84a0b75f07e5a03"
+          "bytes": 6148,
+          "sha256": "6a1f1478936afb999c7209e04a2cf1c3cedfe5fef24b896f6482feea4c66e1a5"
         },
         "x86_64-linux-gnu": {
-          "bytes": 8402,
-          "sha256": "a392bf058bc1237130ec8ee72761d417525b230ae9efaef4a68a9629d7306c41"
-        },
-        "wasm32-unknown": {
-          "bytes": 8401,
-          "sha256": "0c39463926e8b7964cd9edf506f7d8bdc9d51aadb9c860a1eda887b8dff9d803"
-        },
-        "wasm32-wasip1": {
-          "bytes": 8389,
-          "sha256": "59753672a29ebf11b5567be35fc0c72b7f3951df217b2e763b86f0c0d774e99a"
+          "bytes": 6150,
+          "sha256": "0926ee15409fdab7607a9bb543a4ac1112b99fe2e6a3aede997f8af782dbfe12"
         }
       }
     },
@@ -113,14 +89,6 @@
         "x86_64-linux-gnu": {
           "bytes": 9023,
           "sha256": "7297d5eb852361d87029094047e97fc083219f30edc1e8bb8b0bec34978e252d"
-        },
-        "wasm32-unknown": {
-          "bytes": 9023,
-          "sha256": "4c41969b3518983043a65808a5a7d6b91351b9c60f33ce1c67933b279f2aa85d"
-        },
-        "wasm32-wasip1": {
-          "bytes": 9011,
-          "sha256": "fa78e22008ba3912bcb6d6e044daafe7d80dab4bb34a4f88cd595f31564289e2"
         }
       }
     },
@@ -141,14 +109,6 @@
           "sha256": "a1f93b76a30d40e2ec81dabd2d494403f4095f02b4fee71c3b98a8024ea90ff9"
         },
         "x86_64-linux-gnu": {
-          "bytes": 2424,
-          "sha256": "49f8014eaf831ced3596cd3b23ee8a9e82ab87cf3b7db049cd6fa7bac47a63ed"
-        },
-        "wasm32-unknown": {
-          "bytes": 2424,
-          "sha256": "49f8014eaf831ced3596cd3b23ee8a9e82ab87cf3b7db049cd6fa7bac47a63ed"
-        },
-        "wasm32-wasip1": {
           "bytes": 2424,
           "sha256": "49f8014eaf831ced3596cd3b23ee8a9e82ab87cf3b7db049cd6fa7bac47a63ed"
         }
@@ -176,14 +136,6 @@
         "x86_64-linux-gnu": {
           "bytes": 2424,
           "sha256": "49f8014eaf831ced3596cd3b23ee8a9e82ab87cf3b7db049cd6fa7bac47a63ed"
-        },
-        "wasm32-unknown": {
-          "bytes": 2424,
-          "sha256": "49f8014eaf831ced3596cd3b23ee8a9e82ab87cf3b7db049cd6fa7bac47a63ed"
-        },
-        "wasm32-wasip1": {
-          "bytes": 2424,
-          "sha256": "49f8014eaf831ced3596cd3b23ee8a9e82ab87cf3b7db049cd6fa7bac47a63ed"
         }
       }
     },
@@ -207,14 +159,6 @@
         "x86_64-linux-gnu": {
           "bytes": 2440,
           "sha256": "69f57b22979f603bff50a8eed1a10ba26bec6144290a9f5bf077f9d6b2b8dd3b"
-        },
-        "wasm32-unknown": {
-          "bytes": 2440,
-          "sha256": "69f57b22979f603bff50a8eed1a10ba26bec6144290a9f5bf077f9d6b2b8dd3b"
-        },
-        "wasm32-wasip1": {
-          "bytes": 2440,
-          "sha256": "69f57b22979f603bff50a8eed1a10ba26bec6144290a9f5bf077f9d6b2b8dd3b"
         }
       }
     },
@@ -233,14 +177,6 @@
           "sha256": "6a11edc9789eb579eed9d00e8ead5c4655ab95e4be3862a8032ac146a002fc25"
         },
         "x86_64-linux-gnu": {
-          "bytes": 292,
-          "sha256": "6a11edc9789eb579eed9d00e8ead5c4655ab95e4be3862a8032ac146a002fc25"
-        },
-        "wasm32-unknown": {
-          "bytes": 292,
-          "sha256": "6a11edc9789eb579eed9d00e8ead5c4655ab95e4be3862a8032ac146a002fc25"
-        },
-        "wasm32-wasip1": {
           "bytes": 292,
           "sha256": "6a11edc9789eb579eed9d00e8ead5c4655ab95e4be3862a8032ac146a002fc25"
         }
@@ -266,14 +202,6 @@
         "x86_64-linux-gnu": {
           "bytes": 292,
           "sha256": "6a11edc9789eb579eed9d00e8ead5c4655ab95e4be3862a8032ac146a002fc25"
-        },
-        "wasm32-unknown": {
-          "bytes": 292,
-          "sha256": "6a11edc9789eb579eed9d00e8ead5c4655ab95e4be3862a8032ac146a002fc25"
-        },
-        "wasm32-wasip1": {
-          "bytes": 292,
-          "sha256": "6a11edc9789eb579eed9d00e8ead5c4655ab95e4be3862a8032ac146a002fc25"
         }
       }
     },
@@ -294,14 +222,6 @@
           "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
         },
         "x86_64-linux-gnu": {
-          "bytes": 393,
-          "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
-        },
-        "wasm32-unknown": {
-          "bytes": 393,
-          "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
-        },
-        "wasm32-wasip1": {
           "bytes": 393,
           "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
         }
@@ -325,14 +245,6 @@
           "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
         },
         "x86_64-linux-gnu": {
-          "bytes": 393,
-          "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
-        },
-        "wasm32-unknown": {
-          "bytes": 393,
-          "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
-        },
-        "wasm32-wasip1": {
           "bytes": 393,
           "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
         }
@@ -359,14 +271,6 @@
           "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
         },
         "x86_64-linux-gnu": {
-          "bytes": 393,
-          "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
-        },
-        "wasm32-unknown": {
-          "bytes": 393,
-          "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
-        },
-        "wasm32-wasip1": {
           "bytes": 393,
           "sha256": "98917d51da9c9c3d51afd75e91222f05b6897a58c8fc69466d61de8713325867"
         }

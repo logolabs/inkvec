@@ -40,6 +40,7 @@ inkvec-trace = { workspace = true }
 inkvec-fit = { workspace = true }
 inkvec-sr = { workspace = true }
 inkvec-restore = { workspace = true }
+inkvec-svgmin = { workspace = true }
 rayon = { workspace = true }
 
 [features]

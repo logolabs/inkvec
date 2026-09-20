@@ -18,6 +18,8 @@
 //! touched; paint, ids, groups, gradients and transforms pass through untouched, and a
 //! path that would not get cheaper is left exactly as it was.
 
+mod document;
+
 use std::ops::Range;
 
 use inkvec_core::{Point, Polyline};
@@ -42,6 +44,11 @@ pub struct Options {
     pub corner_degrees: f64,
     /// Decimals written per coordinate; `None` derives them from the tolerance.
     pub decimals: Option<usize>,
+    /// Also shorten everything that is not path geometry: colours, numeric attributes,
+    /// presentation attributes restating a value that already applies, comments,
+    /// `<metadata>`, `<desc>`, and whitespace between tags. Nothing that renders or that
+    /// a screen reader speaks is removed. See [`document`].
+    pub document: bool,
 }
 
 impl Default for Options {
@@ -51,6 +58,7 @@ impl Default for Options {
             judge: 1024.0,
             corner_degrees: 30.0,
             decimals: None,
+            document: true,
         }
     }
 }
@@ -1219,7 +1227,7 @@ struct Writer {
 }
 
 impl Writer {
-    fn new(eps: f64, most: usize) -> Self {
+    fn new(quantum: f64, most: usize) -> Self {
         Writer {
             out: String::new(),
             tail: Tail::Empty,
@@ -1227,7 +1235,7 @@ impl Writer {
             at: Point::new(0.0, 0.0),
             sub: Point::new(0.0, 0.0),
             prev_c2: None,
-            quantum: 0.25 * eps,
+            quantum,
             most,
         }
     }
@@ -1434,6 +1442,12 @@ impl Writer {
 
     /// Write one subpath. `first` says whether it opens the attribute.
     fn subpath(&mut self, start: Point, segs: &[Segment], closed: bool, first: bool) {
+        // `Z` already draws the straight line home, so a last segment that is that line
+        // is a command saying what the next one says anyway.
+        let segs = match segs.split_last() {
+            Some((Segment::Line(p), rest)) if closed && p.dist(start) <= self.quantum => rest,
+            _ => segs,
+        };
         self.move_to(start, first);
         for seg in segs {
             match *seg {
@@ -1615,7 +1629,7 @@ struct Outcome {
 }
 
 /// Fit one path and decide, byte against byte, whether the rewrite is kept.
-fn rewrite_path(job: &Job, eps_units: f64, ext: f64, opts: &Options) -> Outcome {
+fn rewrite_path(job: &Job, eps_units: f64, ext: f64, opts: &Options, fit: bool) -> Outcome {
     let mut delta = Report {
         paths: 1,
         ..Default::default()
@@ -1633,15 +1647,24 @@ fn rewrite_path(job: &Job, eps_units: f64, ext: f64, opts: &Options) -> Outcome 
     };
     let eps = eps_units / job.scale;
     let cfg = FitConfig::from_precision(ext / job.scale, eps, 2.0);
+    // Asked for a number of decimals, round to exactly that; otherwise to whatever the
+    // tolerance allows.
     let most = opts.decimals.unwrap_or_else(|| decimals_for(eps));
+    let quantum = match opts.decimals {
+        Some(n) => 0.5 * 10f64.powi(-(i32::try_from(n).unwrap_or(6))),
+        None => 0.25 * eps,
+    };
 
-    let mut w = Writer::new(eps, most);
+    let mut w = Writer::new(quantum, most);
     let mut guarded = 0;
     let mut whole: Option<PrimitiveKind> = None;
     for sp in &subpaths {
         delta.subpaths += 1;
         let first = w.out.is_empty();
-        match minify_subpath(sp, eps, &cfg, opts.corner_degrees) {
+        match fit
+            .then(|| minify_subpath(sp, eps, &cfg, opts.corner_degrees))
+            .flatten()
+        {
             Some((start, segs, g, prim)) => {
                 guarded += g;
                 if subpaths.len() == 1 {
@@ -1661,7 +1684,7 @@ fn rewrite_path(job: &Job, eps_units: f64, ext: f64, opts: &Options) -> Outcome 
     // `<circle>` is three numbers where its path form is seventeen -- with every
     // other attribute carried over byte for byte.
     if let (Some((tag, attrs, cost)), Some(others)) = (
-        whole.and_then(|k| primitive_element(&k, 0.25 * eps, most)),
+        whole.and_then(|k| primitive_element(&k, quantum, most)),
         &job.other_attrs,
     ) {
         if cost < params0 {
@@ -1747,6 +1770,22 @@ fn parses_back(d: &str, source: &[Subpath], eps: f64) -> bool {
 
 /// Rewrite every `<path d>` in `svg` as its cheapest description within the tolerance.
 pub fn minify(svg: &str, opts: &Options) -> Result<(String, Report), String> {
+    run(svg, opts, true)
+}
+
+/// Rewrite every `<path d>` in the fewest bytes, leaving the drawing alone.
+///
+/// The same writer as [`minify`] without the fitter: no segment is removed, moved or
+/// re-chosen, so the only thing that changes is how the numbers are spelled and how far
+/// they are rounded — to `Options::decimals` where that is set, and within a quarter of
+/// the tolerance otherwise. This is what an emitter that already knows its own geometry
+/// wants; on the tracer's own output the geometry has nothing left to give (0.2%) and the
+/// bytes have 14.6%.
+pub fn compact(svg: &str, opts: &Options) -> Result<(String, Report), String> {
+    run(svg, opts, false)
+}
+
+fn run(svg: &str, opts: &Options, fit: bool) -> Result<(String, Report), String> {
     let doc = roxmltree::Document::parse(svg).map_err(|e| format!("not an SVG document: {e}"))?;
     let root = doc.root_element();
     let ext = extent(root).ok_or("the SVG has no usable viewBox or width/height")?;
@@ -1786,7 +1825,7 @@ pub fn minify(svg: &str, opts: &Options) -> Result<(String, Report), String> {
     use rayon::prelude::*;
     let outcomes: Vec<Outcome> = jobs
         .par_iter()
-        .map(|job| rewrite_path(job, eps_units, ext, opts))
+        .map(|job| rewrite_path(job, eps_units, ext, opts, fit))
         .collect();
 
     let mut edits: Vec<(Range<usize>, String)> = Vec::new();
@@ -1804,10 +1843,20 @@ pub fn minify(svg: &str, opts: &Options) -> Result<(String, Report), String> {
         edits.extend(o.edit);
     }
 
+    // Everything that is not path geometry: colours, numbers, restated defaults, the
+    // elements that draw nothing. Ranges a path rewrite has already claimed are left to it.
+    if opts.document {
+        let taken: Vec<Range<usize>> = edits.iter().map(|(r, _)| r.clone()).collect();
+        edits.extend(document::edits(svg, &doc, &taken));
+    }
+
     let mut out = svg.to_string();
     edits.sort_by_key(|e| std::cmp::Reverse(e.0.start));
     for (range, text) in edits {
         out.replace_range(range, &text);
+    }
+    if opts.document {
+        out = document::squeeze_whitespace(&out);
     }
     Ok((out, rep))
 }
@@ -1985,17 +2034,20 @@ mod tests {
         }
         d.push('Z');
         let (out, rep) = minify(&doc(&d), &Options::default()).expect("minifies");
-        assert_eq!(rep.segments_after, 4, "{rep:?}\n{out}");
+        // Three lines and a `Z`: the fourth edge is the one `Z` draws on its way home.
+        assert_eq!(rep.segments_after, 3, "{rep:?}\n{out}");
         // Read the corners back out of the text: the writer is free to say `H100` or
         // `h90`, so what has to survive is the geometry, not the spelling.
         let drawn = parse_d(&attr_d(&out)).expect("our own output parses");
+        let corners: Vec<Point> = drawn
+            .iter()
+            .flat_map(|sp| sp.segs.iter())
+            .flat_map(|s| [s.start(), s.segment().end()])
+            .collect();
         for (x, y) in [(10.0, 10.0), (100.0, 10.0), (100.0, 100.0), (10.0, 100.0)] {
             let corner = Point::new(x, y);
             assert!(
-                drawn
-                    .iter()
-                    .flat_map(|sp| sp.segs.iter())
-                    .any(|s| s.start().dist(corner) < 1e-9),
+                corners.iter().any(|p| p.dist(corner) < 1e-9),
                 "corner {corner:?} lost in {out}"
             );
         }
@@ -2077,10 +2129,16 @@ mod tests {
 
     #[test]
     fn a_path_already_at_its_shortest_is_left_byte_for_byte() {
-        // Two lines a triangle needs, written the way the writer would write them: there
-        // is nothing left to take out, so the bytes must come back untouched.
-        let src = doc("M10,10H100V100Z");
-        let (out, rep) = minify(&src, &Options::default()).expect("minifies");
+        // The two lines a triangle needs, written the way the writer would write them —
+        // relative, because `h90` is shorter than `H100`. There is nothing left to take
+        // out, so the bytes must come back untouched. The document pass is off, because it
+        // would rightly take the unreferenced `id` with it.
+        let src = doc("M10 10h90v90Z");
+        let opts = Options {
+            document: false,
+            ..Default::default()
+        };
+        let (out, rep) = minify(&src, &opts).expect("minifies");
         assert_eq!(rep.rewritten, 0, "{rep:?}\n{out}");
         assert_eq!(out, src);
     }

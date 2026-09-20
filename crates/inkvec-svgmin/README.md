@@ -36,6 +36,15 @@ same alphabet of lines, cubics, circular arcs and whole primitives.
   tolerance. The pen is tracked as a parser would reconstruct it, so relative commands
   cannot accumulate rounding, and the result is parsed back and checked against the source
   before it is kept.
+- **And everything that is not geometry.** Colours written in the fewest characters,
+  numeric attributes without their leading and trailing zeros, presentation attributes
+  that restate what the element already inherits, `style="fill:…"` written as an
+  attribute, an attribute every child of a group shares moved onto the group, ids nothing
+  references, empty groups, comments, `<metadata>`, and the whitespace between and inside
+  tags. `<title>` is never touched and `<desc>` only when it is empty or is a drawing
+  program signing its work — both are read aloud by a screen reader. These rules are
+  re-implemented from [SVGO](https://github.com/svg/svgo) (MIT); see `src/document.rs` and
+  the NOTICE file. `--no-document` turns them off.
 
 ## Measured
 
@@ -44,12 +53,12 @@ noto-emoji, openmoji, twemoji), at the defaults:
 
 | family | numbers saved | bytes saved | mean dE00 vs original | worst dE00 |
 |---|---|---|---|---|
-| openmoji | 27.4% | 28.8% | 0.0155 | 0.025 |
-| simple-icons | 24.3% | 16.9% | 0.0152 | 0.036 |
-| noto-emoji | 23.6% | 14.0% | 0.0145 | 0.029 |
-| twemoji | 9.6% | 6.0% | 0.0020 | 0.005 |
-| lucide, material-icons | ~0% (nothing left in the geometry) | 0.4% | 0.0004 | 0.004 |
-| **all 40** | **22.1%** | **15.4%** | **0.0076** | **0.036** |
+| openmoji | 28.8% | 40.9% | 0.0155 | 0.025 |
+| simple-icons | 26.2% | 18.8% | 0.0152 | 0.036 |
+| noto-emoji | 25.5% | 22.4% | 0.0150 | 0.029 |
+| twemoji | 10.5% | 6.5% | 0.0020 | 0.005 |
+| lucide, material-icons | ~0–6% (little left in the geometry) | 1–9% | 0.0006 | 0.005 |
+| **all 40** | **23.9%** | **23.5%** | **0.0077** | **0.036** |
 
 For scale, the tracer's own colour error against these files averages 0.148, so the
 rewrite is twenty times below it — invisible. Individual files reach 56%; the heaviest
@@ -57,10 +66,28 @@ goes from 213 KB to 95 KB.
 
 The two columns answer different questions, and both are worth reading. *Numbers* is the
 description length — how much of the drawing was redundant. *Bytes* is the file, which
-also depends on how the numbers are written. On the tracer's own output the first is 0.2%
-and the second is 14.6%: there is nothing left in its geometry, which is the check this
-tool exists to make, but its emitter writes absolute coordinates at a fixed precision
-where relative ones at the tolerance's own precision would do.
+also depends on how the numbers are written and on everything around them. On the tracer's
+own output the first is 5.8% and the second is 22.1%: there is almost nothing left in its
+geometry, which is the check this tool exists to make, but its emitter writes absolute
+coordinates at a fixed precision where relative ones at the tolerance's own precision
+would do.
+
+### Against SVGO
+
+On a nine-file spread (two real-world illustrations and seven corpus icons, 61 KB in
+total), against [SVGO](https://github.com/svg/svgo) 4 at its defaults:
+
+| | bytes saved |
+|---|---|
+| SVGO alone | 29.7% |
+| this tool alone | **33.5%** |
+| this tool, then SVGO | 43.1% |
+| SVGO, then this tool | **44.1%** |
+
+They are not the same tool. SVGO reads markup and cannot know that sixteen cubics are a
+circle; this refits the geometry, which is where its lead comes from and why it wins most
+on hand-drawn files. Running both still beats either, because SVGO minifies things this
+deliberately leaves alone — stylesheets, transforms, `<defs>`, and merging paths.
 
 Speed, best of three: 21–53 ms for a small icon, 0.3–0.8 s for a curve-dense 1–2 KB logo,
 0.6 s for a 20 KB emoji, 6.5 s for the corpus's heaviest file (213 KB, 8,608 segments).

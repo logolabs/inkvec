@@ -17,10 +17,17 @@ API in particular should be treated as unstable release to release).
   ellipses or rectangles are written as those elements, and the `d` text itself is
   minimised: relative or absolute per command, whichever is shorter, repeated letters and
   needless separators and leading zeros dropped, `H`/`V`/`S` where they say the same thing,
-  and each number at the fewest decimals the tolerance allows. On 40 corpus artist files:
-  22.1% of the numbers and 15.4% of the bytes removed at a mean dE00 of 0.0076 against the
-  original (worst 0.036). On the tracer's own output the geometry gives up 0.2% — its
-  emitter is already description-length minimal — but the bytes give up 14.6%. Tens of
+  and each number at the fewest decimals the tolerance allows. Everything that is not path
+  data is shortened too — colours, numeric attributes, presentation attributes restating
+  what is already inherited, `style="fill:…"` as an attribute, attributes shared by every
+  child of a group moved onto the group, unreferenced ids, empty groups, comments,
+  `<metadata>`, whitespace — by rules re-implemented from [SVGO](https://github.com/svg/svgo)
+  (MIT; see NOTICE), with `--no-document` to turn them off. `<title>`, and any `<desc>`
+  somebody wrote, are never removed. On 40 corpus artist files: 23.9% of the numbers and
+  23.5% of the bytes removed at a mean dE00 of 0.0077 against the original (worst 0.036).
+  On the tracer's own output the geometry gives up 5.8% — its emitter is already
+  description-length minimal — but the bytes give up 22.1%. On a nine-file spread it beats
+  SVGO's defaults on bytes, 33.5% to 29.7%, and running both beats either. Tens of
   milliseconds for a small icon, under a second for a curve-dense logo, 6.5 s for the
   corpus's heaviest file (213 KB, 8,608 segments).
 - **Language-binding foundation** (`docs/BINDINGS.md`). The `inkvec` crate is a small stable

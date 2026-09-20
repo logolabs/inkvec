@@ -42,6 +42,7 @@ inkvec-fit = { path = "crates/inkvec-fit", version = "0.1.4" }
 inkvec-trace = { path = "crates/inkvec-trace", version = "0.1.4" }
 inkvec-sr = { path = "crates/inkvec-sr", version = "0.1.4" }
 inkvec-restore = { path = "crates/inkvec-restore", version = "0.1.4" }
+inkvec-svgmin = { path = "crates/inkvec-svgmin", version = "0.1.4" }
 inkvec-cli = { path = "crates/inkvec-cli", version = "0.1.4" }
 inkvec = { path = "crates/inkvec", version = "0.1.4" }
 robust = "1.1"

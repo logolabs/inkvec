@@ -3848,6 +3848,7 @@ dependencies = [
  "inkvec-cli",
  "inkvec-restore",
  "inkvec-sr",
+ "inkvec-svgmin",
  "inkvec-trace",
  "js-sys",
  "rayon",

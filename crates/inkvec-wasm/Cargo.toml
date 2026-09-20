@@ -31,6 +31,9 @@ threads = ["dep:wasm-bindgen-rayon", "dep:rayon"]
 inkvec = { workspace = true }
 inkvec-cli = { workspace = true }
 inkvec-trace = { workspace = true }
+# The other half of the tool: rewriting an SVG that already exists. Pure string in,
+# string out -- no image decoding, no palette work -- so it costs the module little.
+inkvec-svgmin = { workspace = true }
 # The denoiser's arithmetic and its `auto` decision, without an ML runtime: default features
 # only, so the network itself stays out of the module. The page runs it in ONNX Runtime Web.
 inkvec-restore = { workspace = true }

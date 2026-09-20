@@ -98,6 +98,99 @@ pub fn build_target() -> String {
     inkvec::build_target().to_string()
 }
 
+/// Rewrite an SVG that already exists in fewer bytes: `inkvec_svgmin` at the JS boundary.
+///
+/// The counterpart to [`trace`]. That one decides geometry from pixels; this one decides it
+/// from geometry that is already there, so a corner is a fact -- two consecutive segments
+/// whose tangents disagree -- rather than something inferred.
+///
+/// `lossless` picks between the two rewrites:
+///
+/// * `false` is `inkvec_svgmin::minify`: every `<path d>` refitted as its cheapest
+///   description within `tolerance_px`, stated at a viewing size of `judge` pixels because
+///   "0.01 units" depends on an arbitrary viewBox. Buys the most bytes, and moves the
+///   drawing by a bounded amount.
+/// * `true` is `inkvec_svgmin::compact`: the same writer without the fitter. No segment is
+///   removed, moved or re-chosen, and with a negative `decimals` no coordinate is rounded
+///   either, so the picture that comes out is the picture that went in, pixel for pixel.
+///   Only the spelling changes.
+///
+/// `decimals` is the precision written per coordinate; pass a negative number for
+/// `Options::decimals: None`, which derives it from the tolerance. `document` also shortens
+/// what is not path geometry -- colours, presentation attributes restating an inherited
+/// value, comments, `<metadata>`, whitespace -- and removes nothing that renders or that a
+/// screen reader speaks.
+///
+/// Returns `{ svg, report }`. `report` is `inkvec_svgmin::Report` with its fields in
+/// camelCase, plus `bytesBefore` and `bytesAfter` so the caller need not measure the
+/// strings itself -- and so the two agree on what a byte is, which `String::len` settles
+/// and a JS `.length` (UTF-16 code units) would not.
+#[wasm_bindgen]
+pub fn svgmin(
+    svg: &str,
+    lossless: bool,
+    tolerance_px: f64,
+    judge: f64,
+    corner_degrees: f64,
+    decimals: i32,
+    document: bool,
+) -> Result<js_sys::Object, JsValue> {
+    console_error_panic_hook::set_once();
+
+    let opts = inkvec_svgmin::Options {
+        tolerance_px,
+        judge,
+        corner_degrees,
+        // Negative means "derive from the tolerance"; `try_from` turns exactly that set of
+        // values into `None`.
+        decimals: usize::try_from(decimals).ok(),
+        document,
+    };
+
+    let (out, report) = if lossless {
+        inkvec_svgmin::compact(svg, &opts)
+    } else {
+        inkvec_svgmin::minify(svg, &opts)
+    }
+    .map_err(|message| svgmin_error(&message))?;
+
+    // Setting a plain data property on a fresh object cannot fail.
+    fn num(o: &js_sys::Object, key: &str, value: f64) {
+        let _ = js_sys::Reflect::set(o, &JsValue::from_str(key), &JsValue::from_f64(value));
+    }
+
+    let r = js_sys::Object::new();
+    num(&r, "paths", report.paths as f64);
+    num(&r, "rewritten", report.rewritten as f64);
+    num(&r, "subpaths", report.subpaths as f64);
+    num(&r, "segmentsBefore", report.segments_before as f64);
+    num(&r, "segmentsAfter", report.segments_after as f64);
+    num(&r, "paramsBefore", report.params_before);
+    num(&r, "paramsAfter", report.params_after);
+    num(&r, "guarded", report.guarded as f64);
+    num(&r, "primitives", report.primitives as f64);
+    num(&r, "toleranceUnits", report.tolerance_units);
+    num(&r, "bytesBefore", svg.len() as f64);
+    num(&r, "bytesAfter", out.len() as f64);
+
+    let o = js_sys::Object::new();
+    let _ = js_sys::Reflect::set(&o, &JsValue::from_str("svg"), &JsValue::from_str(&out));
+    let _ = js_sys::Reflect::set(&o, &JsValue::from_str("report"), &r);
+    Ok(o)
+}
+
+/// An `inkvec_svgmin` failure as a JS `Error`, shaped like [`js_error`]. The crate reports a
+/// plain `String`, and everything it refuses is a property of the SVG it was handed.
+fn svgmin_error(message: &str) -> JsValue {
+    let err = js_sys::Error::new(message);
+    let _ = js_sys::Reflect::set(
+        &err,
+        &JsValue::from_str("code"),
+        &JsValue::from_str("invalid_svg"),
+    );
+    err.into()
+}
+
 /// A facade error as a JS `Error` carrying the error kind as `code`.
 fn js_error(e: inkvec::Error) -> JsValue {
     let err = js_sys::Error::new(e.message());

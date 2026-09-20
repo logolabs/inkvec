@@ -461,7 +461,7 @@ __HEAD__
 </head>
 <body>
 <header class="top">
-  <a class="brand" href="__BASE__"><img src="__BASE__favicon.svg" alt=""> <span>Inkvec</span></a>
+  <a class="brand" href="__BASE__"><img src="__BASE__logo-mono.svg" alt=""> <span>Inkvec</span></a>
   <nav class="toplinks">
     <a href="__SPACE__">Try in the browser</a>
     <a href="__GITHUB__">GitHub</a>
@@ -629,9 +629,14 @@ def build(base: str) -> int:
     OUT.mkdir(parents=True)
     assets = OUT / "assets"
     shutil.copytree(ROOT / "docs/assets", assets)
-    favicon = (ROOT / "web/favicon.svg").read_text(encoding="utf-8")
-    (OUT / "favicon.svg").write_text(favicon.replace('fill="#000000"', 'fill="#c9754a"'),
-                                     encoding="utf-8")
+    # The app mark, in its two colours, is the favicon; the sidebar topbar carries the
+    # mono variant recoloured to the accent.
+    shutil.copyfile(ROOT / "web/favicon.svg", OUT / "favicon.svg")
+    logo = (ROOT / "web/logo.svg").read_text(encoding="utf-8")
+    (OUT / "logo-mono.svg").write_text(
+        logo.replace("#1d1c28", "#c9754a").replace("#08F4FB", "#c9754a")
+            .replace("#1d1c28".upper(), "#c9754a"),
+        encoding="utf-8")
     (OUT / "site.css").write_text(CSS + "\n" + FORMATTER.get_style_defs(".codehilite") + "\n",
                                   encoding="utf-8")
 

@@ -120,9 +120,10 @@ jobs:
       - name: test against the assembled jar's bundled native library
         working-directory: packages/java
         shell: bash
-        # No jna.library.path override: this exercises exactly what a consumer gets, JNA's
-        # own extraction of the per-platform resource the assemble job just bundled.
-        run: mvn -q test -Djna.library.path=
+        # This exercises exactly what a consumer gets: the assembled jar on the classpath
+        # and JNA's own extraction of the per-platform resource bundled inside it -- no
+        # jna.library.path anywhere.
+        run: mvn -q test "-Dinkvec.bundledJar=$PWD/target/inkvec-0.1.4.jar"
 
   publish:
     name: publish to Maven Central

@@ -54,6 +54,9 @@ HANDOFF*.md
 /output/
 out/
 /site/
+# Native libraries the java.yml assemble job unpacks into JNA resource folders before
+# packaging the jar; the checkout itself never carries them.
+/packages/java/src/main/resources/
 
 # Local working areas and tool state
 scratch/

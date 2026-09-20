@@ -58,6 +58,10 @@
          inkvec_ffi's shared library, used only by tests run from this checkout. Defaults to
          the workspace's own target/release, where the release build of inkvec-ffi lands. -->
     <inkvec.nativeDir>${project.basedir}/../../target/release</inkvec.nativeDir>
+    <!-- Overridable with a system property of the same name: the assembled release jar,
+         whose bundled per-platform native library JNA extracts on the test classpath. Empty
+         by default: checkout runs take inkvec.nativeDir above instead. -->
+    <inkvec.bundledJar></inkvec.bundledJar>
     <!-- The repository root, for tests that read bindings/contract/ (the shared contract
          every binding's tests run against). -->
     <inkvec.repoRoot>${project.basedir}/../..</inkvec.repoRoot>
@@ -113,6 +117,13 @@
             <jna.library.path>${inkvec.nativeDir}</jna.library.path>
             <inkvec.repoRoot>${inkvec.repoRoot}</inkvec.repoRoot>
           </systemPropertyVariables>
+          <!-- The consumer path: the assembled release jar on the classpath, JNA extracting
+               the bundled per-platform resource from it. CI's java.yml test job sets this to
+               the jar the assemble job just built; unset for plain checkout runs, where the
+               element is empty and harmless. -->
+          <additionalClasspathElements>
+            <additionalClasspathElement>${inkvec.bundledJar}</additionalClasspathElement>
+          </additionalClasspathElements>
         </configuration>
       </plugin>
 

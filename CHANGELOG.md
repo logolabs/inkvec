@@ -9,6 +9,12 @@ API in particular should be treated as unstable release to release).
 
 ### Added
 
+- **Documentation site** (`tools/build_site.py`): the repo's docs rendered to static HTML
+  in the LogoLabs design system and published to GitHub Pages
+  (logolabs.github.io/inkvec) by the new `docs` workflow — the 14-stage algorithm series
+  plus its plain-language diagram edition, the pipeline explanation with rendered
+  equations, design, bindings, limitations, results, changelog and project documents.
+
 - **`inkvec-svgmin`** (`crates/inkvec-svgmin`): rewrite an existing SVG's paths as the
   fewest segments that draw the same picture, by the tracer's own minimum-description-length
   objective. Corners in the source are hard breaks and survive exactly; the tolerance is

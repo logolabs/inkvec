@@ -23,6 +23,8 @@ Inkvec reads a PNG, JPEG, WebP, GIF, BMP or TIFF and writes an SVG whose geometr
 
 Most tracers spend points wherever their curve-fit tolerance lets them. Inkvec spends them where the artist would have: one path per region, a circle where there is a circle, shared edges between shapes that never drift apart.
 
+Inkvec is developed by [LogoLabs](https://logolabs.org) and released as open source as part of its work on [logo generation using AI](https://logolabs.org).
+
 ## Who it's for
 
 Flat artwork — logos, icons, emoji, illustrations — and two readers of the result at once: whoever looks at the SVG, and whoever has to edit it later.

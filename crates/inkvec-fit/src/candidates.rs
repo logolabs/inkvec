@@ -51,6 +51,20 @@ pub(crate) fn arcs_enabled() -> bool {
 }
 
 /// Off unless `INKVEC_FREE_CUBIC` is set, because it does not pay.
+///
+/// What it costs is worth naming, because it is one axis and not three. Measured on the
+/// 246-icon gate set, turning it on alone gives dE00 **-0.11%** and ratio **-1.08%** —
+/// both better — and turning **+5.44%**, which is the only thing that fails. The wobble
+/// is real and not a metric artefact: `turning` is the sawtooth detector
+/// (`svgeval.py:538`), which exists precisely to catch a boundary that renders well and
+/// is shaped wrong.
+///
+/// It trades against [`wobble_penalty_factor`], and the pair has not been swept jointly.
+/// With `INKVEC_WOBBLE_PENALTY=3.5` the free cubic passes all three gates — dE00 -0.64%,
+/// turning +0.35%, ratio +1.35% — so it is available as a *colour* win costing
+/// parameters, which is the wrong direction for a project whose loose axis is the
+/// parameter ratio, and is why it is still off. Nothing found so far makes it a win on
+/// parameters and wobble at once.
 pub(crate) fn free_cubic_enabled() -> bool {
     static V: OnceLock<bool> = OnceLock::new();
     *V.get_or_init(|| std::env::var_os("INKVEC_FREE_CUBIC").is_some())
@@ -315,6 +329,15 @@ impl Cubic {
 
     /// Squared distance from `p` to the curve, starting Newton from parameter `t`.
     fn dist2_from(&self, p: Point, t_init: f64) -> f64 {
+        let r = self.residual_from(p, t_init);
+        r.dot(r)
+    }
+
+    /// The residual as a *vector*, from the same Newton projection [`Self::dist2_from`]
+    /// uses. Squared distance throws away the direction the point missed in, and the
+    /// direction is exactly what says whether two neighbouring points missed the same
+    /// way — which is what [`whitened_term`] needs to tell an echo from a fresh vote.
+    fn residual_from(&self, p: Point, t_init: f64) -> Vec2 {
         let mut t = t_init.clamp(0.0, 1.0);
         for _ in 0..NEWTON_STEPS {
             let b = self.eval(t);
@@ -330,8 +353,7 @@ impl Cubic {
             }
             t = next;
         }
-        let r = self.eval(t) - p;
-        r.dot(r)
+        self.eval(t) - p
     }
 
     /// Internal inflection check: does the cubic reverse its turning direction?
@@ -379,6 +401,89 @@ impl Cubic {
     }
 }
 
+/// Correlation of the *measurement error* between adjacent boundary points.
+///
+/// Zero is the diagonal noise model every chi2 term in this crate has always assumed:
+/// each point's error is its own, so eight points that all miss the same way are eight
+/// independent votes for a bulge and the fitter buys a curve to explain them. They are
+/// not eight votes. Sub-pixel extraction error is correlated *along* a boundary — one
+/// slightly-bent ruler quoted eight times — and `planar.rs:822` says as much.
+///
+/// Above zero the residual is whitened before it is charged for, so only the part a
+/// point does *not* share with its predecessor counts as evidence. Off by default:
+/// `INKVEC_RHO=<0..0.99>` turns it on, and at `0.0` every chi2 below is bit-identical
+/// to what it was (checked: same SVG, byte for byte).
+///
+/// # Measured, and it does not do what it was built to do
+///
+/// The argument for this was `multimodel.rs:502-507`: a noise model that knows the
+/// error is correlated should let `try_free_cubic` back in, because the free cubic is
+/// only switched off for fitting that correlated noise too faithfully. The prediction
+/// was that the discount would *remove* wobble. It adds it. Gate set, 246 icons,
+/// against the same binary at `rho=0` on the same host (dE00 0.148324, turning 0.042094,
+/// ratio 1.481829 — a re-baseline, because the committed figures were recorded on
+/// Windows and this is Linux):
+///
+/// | config | dE00 | turning | ratio |
+/// |---|---|---|---|
+/// | `rho=0.25` | +0.85% | **+1.42%** | -0.97% |
+/// | `rho=0.50` | +2.95% | **+3.98%** | -2.02% |
+/// | `rho=0.25` + free cubic | +1.39% | **+6.86%** | -2.30% |
+/// | `rho=0.50` + free cubic | +3.93% | **+10.02%** | -3.39% |
+///
+/// Turning rises monotonically with `rho`, which is the opposite of the prediction:
+/// discounting a smooth residual does not make the fitter *choose* a smoother curve, it
+/// stops holding the curve to the measurement at all. Charging the span under the
+/// correlation model while picking each cubic's shape under the raw residual (which is
+/// what this module does now, see `chi2_rho`) does not rescue it either — it moved
+/// `rho=0.50` by 0.00003 on turning, i.e. not at all. So the wobble is intrinsic to the
+/// discount, not an artefact of where it was applied.
+///
+/// What survives is narrower: `rho` is a better *lever* than lambda for trading colour
+/// against compactness. `rho=0.25` buys -0.97% of parameter ratio for +0.85% of dE00,
+/// where `--lambda-scale 1.15` buys -1.19% for +4.24% — about four times the parameter
+/// reduction per unit of colour error. That is still a trade, not a free win, and
+/// nothing here beats the baseline on all three axes. Left in, default-off, because the
+/// frontier result is worth keeping and the knob is what reproduces it.
+pub(crate) fn corr_rho() -> f64 {
+    static V: OnceLock<f64> = OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("INKVEC_RHO")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|v| v.is_finite() && (0.0..0.99).contains(v))
+            .unwrap_or(0.0)
+    })
+}
+
+/// One AR(1)-whitened residual term: what this point says that its predecessor did not
+/// already say.
+///
+/// `lag` is the gap in sample indices, so a subsampled span discounts by `rho^lag` —
+/// the correlation that survives that distance — rather than by the adjacent-point
+/// figure. The first sample of a span has nothing to echo and pays in full.
+///
+/// The `1 + rg²` denominator is what makes this a change of *shape* and not of scale.
+/// Differencing inflates an uncorrelated residual as much as it deflates a smooth one
+/// (`E|r_k - rho·r_{k-1}|² = (1 + rho²)·sigma²` for white `r`), and dividing by
+/// `1 - rg²` — the textbook whitening constant — would leave that inflation in, which
+/// silently raises the effective lambda as well. Normalising on white noise instead
+/// leaves a jagged residual costing exactly what it always did, and charges a smooth
+/// one less. Any measured difference is then the correlation model and nothing else.
+#[inline]
+fn whitened_term(rv: Vec2, prev: Option<(usize, Vec2)>, k: usize, rho: f64) -> f64 {
+    match prev {
+        None => rv.dot(rv),
+        Some((kp, pv)) => {
+            let lag = k.saturating_sub(kp).clamp(1, 64) as i32;
+            let rg = rho.powi(lag);
+            let wx = rv.x - rg * pv.x;
+            let wy = rv.y - rg * pv.y;
+            (wx * wx + wy * wy) / (1.0 + rg * rg)
+        }
+    }
+}
+
 pub(crate) fn wobble_penalty_factor() -> f64 {
     static V: OnceLock<f64> = OnceLock::new();
     *V.get_or_init(|| {
@@ -421,10 +526,24 @@ impl CubicSamples {
         })
     }
 
-    fn chi2(&self, pts: &[Point], cb: &Cubic, bound: f64) -> f64 {
+    /// Weighted residual of the sampled interior points against a cubic, at a named
+    /// correlation. `rho = 0.0` is the plain diagonal sum, which is what picks a cubic's
+    /// *shape*:
+    /// discounting a smooth residual while the arms are still being chosen makes bowing
+    /// free, and an unanchored cubic wobbles. The discount belongs to what a span
+    /// *costs*, not to what it looks like.
+    fn chi2_rho(&self, pts: &[Point], cb: &Cubic, bound: f64, rho: f64) -> f64 {
         let mut acc = 0.0;
+        let mut prev: Option<(usize, Vec2)> = None;
         for &(k, t, s2) in &self.at[..self.len] {
-            acc += self.weight * cb.dist2_from(pts[k as usize], t) / s2;
+            let k = k as usize;
+            if rho <= 0.0 {
+                acc += self.weight * cb.dist2_from(pts[k], t) / s2;
+            } else {
+                let rv = cb.residual_from(pts[k], t);
+                acc += self.weight * whitened_term(rv, prev, k, rho) / s2;
+                prev = Some((k, rv));
+            }
             if acc >= bound {
                 return acc;
             }
@@ -443,6 +562,21 @@ pub(crate) fn chi2_cubic(
     cb: &Cubic,
     subsample: bool,
 ) -> f64 {
+    chi2_cubic_rho(pts, sigma, s, i, j, cb, subsample, corr_rho())
+}
+
+/// As [`chi2_cubic`], with the correlation named rather than read from the process.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn chi2_cubic_rho(
+    pts: &[Point],
+    sigma: &[f64],
+    s: &[f64],
+    i: usize,
+    j: usize,
+    cb: &Cubic,
+    subsample: bool,
+    rho: f64,
+) -> f64 {
     let interior = j.saturating_sub(i + 1);
     if interior == 0 {
         return 0.0;
@@ -455,13 +589,19 @@ pub(crate) fn chi2_cubic(
     let weight = interior as f64 / count as f64;
     let span = (s[j] - s[i]).max(1e-12);
     let mut acc = 0.0;
+    let mut prev: Option<(usize, Vec2)> = None;
     for m in 0..count {
         let k = i + 1 + (((m as f64 + 0.5) * interior as f64) / count as f64).floor() as usize;
         let k = k.min(j - 1);
         let t = (s[k] - s[i]) / span;
-        let d2 = cb.dist2_from(pts[k], t);
         let sg = sigma[k].max(1e-6);
-        acc += weight * d2 / (sg * sg);
+        if rho <= 0.0 {
+            acc += weight * cb.dist2_from(pts[k], t) / (sg * sg);
+        } else {
+            let rv = cb.residual_from(pts[k], t);
+            acc += weight * whitened_term(rv, prev, k, rho) / (sg * sg);
+            prev = Some((k, rv));
+        }
     }
     acc
 }
@@ -600,12 +740,26 @@ pub(crate) fn best_cubic(
             continue;
         }
         let cb = Cubic::from_arms(pts[i], pts[j], t0, t1, fr.chord, d0, d1);
+        // Shape is chosen against the raw residual, always. See `chi2_rho`.
         let chi2 = match &plan {
-            Some(p) => p.chi2(pts, &cb, best.map_or(f64::INFINITY, |b| b.0)),
-            None => chi2_cubic(pts, sigma, s, i, j, &cb, subsample),
+            Some(p) => p.chi2_rho(pts, &cb, best.map_or(f64::INFINITY, |b| b.0), 0.0),
+            None => chi2_cubic_rho(pts, sigma, s, i, j, &cb, subsample, 0.0),
         };
         if best.map(|b| chi2 < b.0).unwrap_or(true) {
             best = Some((chi2, d0, d1));
+        }
+    }
+    // The winning shape is then charged under the correlation model, so that what a
+    // span costs the dynamic program knows about echoes even though its shape did not.
+    let rho = corr_rho();
+    if rho > 0.0 {
+        if let Some((_, d0, d1)) = best {
+            let cb = Cubic::from_arms(pts[i], pts[j], t0, t1, fr.chord, d0, d1);
+            let scored = match &plan {
+                Some(p) => p.chi2_rho(pts, &cb, f64::INFINITY, rho),
+                None => chi2_cubic_rho(pts, sigma, s, i, j, &cb, subsample, rho),
+            };
+            best = Some((scored, d0, d1));
         }
     }
     best

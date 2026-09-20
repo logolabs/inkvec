@@ -1,0 +1,205 @@
+#!/usr/bin/env php
+<?php
+
+/**
+ * Fetch the native library this binding calls into, from Inkvec's GitHub releases.
+ *
+ *     vendor/bin/inkvec-fetch-library                 # the release matching this package
+ *     vendor/bin/inkvec-fetch-library --version=0.1.4
+ *     vendor/bin/inkvec-fetch-library --platform=linux-arm64 --dir=/opt/inkvec
+ *
+ * It downloads `inkvec-c-<version>-<platform>` (the C library archive built by
+ * .github/workflows/bindings.yml), unpacks the shared library for this machine and puts it
+ * in `lib/<platform>/` inside the package, which is the first place the binding looks.
+ *
+ * Composer does not run scripts of an installed library, so this is a command, not a hook.
+ * You never have to use it: any copy of the library works if INKVEC_LIBRARY points at it,
+ * or it sits where the system loader looks.
+ */
+
+declare(strict_types=1);
+
+use LogoLabs\Inkvec\Library;
+
+foreach ([__DIR__ . '/../../../autoload.php', __DIR__ . '/../vendor/autoload.php'] as $autoload) {
+    if (is_file($autoload)) {
+        require $autoload;
+        break;
+    }
+}
+if (!class_exists(Library::class)) {
+    // Run straight from a checkout, with no autoloader anywhere.
+    require __DIR__ . '/../src/Library.php';
+    require __DIR__ . '/../src/InkvecException.php';
+    require __DIR__ . '/../src/LibraryException.php';
+}
+
+// Where the release archives live. INKVEC_FETCH_BASE_URL points this at a mirror, or at a
+// directory of archives (`file:///srv/inkvec`) for a machine with no route to GitHub; the
+// layout under it is the releases' own, `v<version>/<archive>`.
+const DEFAULT_BASE_URL = 'https://github.com/logolabs/inkvec/releases/download';
+
+/** The shared library's file name on the platform being fetched for, not on this one. */
+function sonameFor(string $platform): string
+{
+    return match (true) {
+        str_starts_with($platform, 'windows') => 'inkvec_ffi.dll',
+        str_starts_with($platform, 'macos') => 'libinkvec_ffi.dylib',
+        default => 'libinkvec_ffi.so',
+    };
+}
+
+/** @param list<string> $argv */
+function options(array $argv): array
+{
+    $opts = ['version' => null, 'platform' => null, 'dir' => null, 'force' => false];
+    foreach (\array_slice($argv, 1) as $arg) {
+        if ($arg === '--help' || $arg === '-h') {
+            usage(0);
+        } elseif ($arg === '--force') {
+            $opts['force'] = true;
+        } elseif (preg_match('/^--(version|platform|dir)=(.+)$/', $arg, $m)) {
+            $opts[$m[1]] = $m[2];
+        } else {
+            fwrite(\STDERR, "unknown argument {$arg}\n");
+            usage(2);
+        }
+    }
+
+    return $opts;
+}
+
+function usage(int $code): never
+{
+    $text = <<<TXT
+        inkvec-fetch-library -- download the Inkvec native library for this machine
+
+          --version=X.Y.Z    release to fetch (default: this package's version)
+          --platform=NAME    linux-x64, linux-arm64, macos-arm64, macos-x64, windows-x64
+          --dir=PATH         where to put it (default: <package>/lib/<platform>)
+          --force            download even if the library is already there
+
+        INKVEC_FETCH_BASE_URL replaces https://github.com/logolabs/inkvec/releases/download,
+        for a mirror or a local directory of archives.
+
+        TXT;
+    fwrite($code === 0 ? \STDOUT : \STDERR, $text);
+    exit($code);
+}
+
+/** The version to fetch: what Composer installed, or the checkout's workspace version. */
+function packageVersion(): string
+{
+    if (class_exists(\Composer\InstalledVersions::class)) {
+        $pretty = \Composer\InstalledVersions::getPrettyVersion('logolabs/inkvec');
+        if (\is_string($pretty) && preg_match('/^v?(\d+\.\d+\.\d+)$/', $pretty, $m)) {
+            return $m[1];
+        }
+    }
+
+    $cargo = \dirname(__DIR__, 3) . '/Cargo.toml';
+    if (is_file($cargo) && preg_match('/^version = "([^"]+)"/m', (string) file_get_contents($cargo), $m)) {
+        return $m[1];
+    }
+
+    fwrite(\STDERR, "inkvec: cannot tell which release to fetch; pass --version=X.Y.Z\n");
+    exit(1);
+}
+
+function download(string $url, string $to): void
+{
+    fwrite(\STDOUT, "downloading {$url}\n");
+    $in = @fopen($url, 'rb', false, stream_context_create([
+        'http' => ['follow_location' => 1, 'timeout' => 120, 'user_agent' => 'inkvec-fetch-library'],
+    ]));
+    if ($in === false) {
+        fwrite(\STDERR, "inkvec: could not download {$url}\n");
+        exit(1);
+    }
+    $out = fopen($to, 'wb');
+    if ($out === false || stream_copy_to_stream($in, $out) === false) {
+        fwrite(\STDERR, "inkvec: could not write {$to}\n");
+        exit(1);
+    }
+    fclose($in);
+    fclose($out);
+}
+
+/** Unpack the one shared library from the archive into $dir. Returns its path. */
+function extractLibrary(string $archive, string $soname, string $dir): string
+{
+    $target = $dir . '/' . $soname;
+
+    if (str_ends_with($archive, '.zip')) {
+        if (!class_exists(\ZipArchive::class)) {
+            fwrite(\STDERR, "inkvec: ext-zip is needed to unpack {$archive}\n");
+            exit(1);
+        }
+        $zip = new \ZipArchive();
+        if ($zip->open($archive) !== true) {
+            fwrite(\STDERR, "inkvec: could not open {$archive}\n");
+            exit(1);
+        }
+        for ($i = 0; $i < $zip->numFiles; ++$i) {
+            $name = (string) $zip->getNameIndex($i);
+            if (basename($name) === $soname) {
+                $bytes = $zip->getFromIndex($i);
+                $zip->close();
+                if ($bytes === false || file_put_contents($target, $bytes) === false) {
+                    fwrite(\STDERR, "inkvec: could not write {$target}\n");
+                    exit(1);
+                }
+
+                return $target;
+            }
+        }
+        $zip->close();
+    } else {
+        $phar = new \PharData($archive);
+        foreach (new \RecursiveIteratorIterator($phar) as $file) {
+            /** @var \PharFileInfo $file */
+            if ($file->getFilename() === $soname) {
+                if (file_put_contents($target, file_get_contents($file->getPathname())) === false) {
+                    fwrite(\STDERR, "inkvec: could not write {$target}\n");
+                    exit(1);
+                }
+
+                return $target;
+            }
+        }
+    }
+
+    fwrite(\STDERR, "inkvec: {$soname} is not in {$archive}\n");
+    exit(1);
+}
+
+$opts = options($argv);
+$version = $opts['version'] ?? packageVersion();
+$platform = $opts['platform'] ?? Library::platform();
+$soname = sonameFor($platform);
+$dir = $opts['dir'] ?? \dirname(__DIR__) . '/lib/' . $platform;
+
+if (!is_dir($dir) && !mkdir($dir, 0o775, true) && !is_dir($dir)) {
+    fwrite(\STDERR, "inkvec: could not create {$dir}\n");
+    exit(1);
+}
+
+$installed = $dir . '/' . $soname;
+if (is_file($installed) && !$opts['force']) {
+    fwrite(\STDOUT, "inkvec: {$installed} is already there (use --force to replace it)\n");
+    exit(0);
+}
+
+$name = "inkvec-c-{$version}-{$platform}";
+$archiveName = str_starts_with($platform, 'windows') ? "{$name}.zip" : "{$name}.tar.gz";
+$base = getenv('INKVEC_FETCH_BASE_URL') ?: DEFAULT_BASE_URL;
+$url = rtrim($base, '/') . "/v{$version}/{$archiveName}";
+
+$tmp = sys_get_temp_dir() . '/' . $archiveName;
+download($url, $tmp);
+$path = extractLibrary($tmp, $soname, $dir);
+@unlink($tmp);
+@chmod($path, 0o755);
+
+fwrite(\STDOUT, "inkvec: {$path}\n");
+fwrite(\STDOUT, "        (INKVEC_LIBRARY overrides it; the binding finds this path on its own)\n");

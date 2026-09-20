@@ -45,6 +45,20 @@ API in particular should be treated as unstable release to release).
   release tag when the repository opts in; Linux links `libinkvec_ffi` as a system library.
   The contract passes on x86_64 Linux; the macOS and iOS builds have not run yet. Not
   published yet.
+- **Composer package `logolabs/inkvec`** (`packages/php`). The PHP binding: the C ABI called
+  in-process through ext-FFI, PHP 8.1+. `Inkvec::trace`, `traceFile`, `traceRgba`,
+  `defaults`, `optionsSchema`, `version`, `buildTarget`; options are the generated `Options`
+  (camelCase properties, `null` meaning the tracer's own default, `bindings/codegen/php.py`),
+  an array keyed by the tracer's own names, or raw JSON; errors are `InvalidImageException`,
+  `InvalidOptionsException`, `InternalException` and `LibraryException`. A PHP string goes to
+  the tracer as it is, with no copy into an FFI buffer; the library is found through
+  `Inkvec::useLibrary()`, `INKVEC_LIBRARY`, the package's `lib/` (filled by
+  `vendor/bin/inkvec-fetch-library` from the C release archives), a sibling
+  `target/release/`, or the system loader, and is refused unless its C ABI version matches.
+  `Inkvec::preload()` registers it from an `opcache.preload` script, which is what makes a
+  trace possible in a PHP-FPM request (`ffi.enable=preload`) and shares one open library
+  across a pool. `tests/HeaderTest.php` holds the FFI declarations to `include/inkvec.h`.
+  Released through a mirror repository by `.github/workflows/php.yml`; not published yet.
 - **Docker HTTP service** (`crates/inkvec-server`, `services/docker/Dockerfile`). `POST
   /trace` traces raw image bytes or a `multipart/form-data` `image` part to `image/svg+xml`;
   options come from a `?options=` query parameter, an `X-Inkvec-Options` header, generic query

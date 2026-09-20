@@ -1,0 +1,202 @@
+name: php
+
+# The Composer package logolabs/inkvec (packages/php): ext-FFI over the C ABI
+# (crates/inkvec-ffi). The library is not part of the package -- Composer installs one set of
+# files for every platform -- so each job builds it here and points INKVEC_LIBRARY at it,
+# which is what `vendor/bin/inkvec-fetch-library` does for a user from the release archives.
+#
+#   test    builds libinkvec_ffi, checks the generated Options class and the README's options
+#           table, lints every source file and runs PHPUnit (the shared contract, the API, the
+#           error mapping, and Library::CDEF against include/inkvec.h) on Linux, macOS and
+#           Windows, on the oldest and the newest PHP this package supports;
+#   mirror  on a v* tag only: Composer publishes from a repository root, so PHP users get the
+#           package from github.com/logolabs/inkvec-php. This job copies packages/php there
+#           with the licence and the contract fixtures, commits, and tags it with the same
+#           vX.Y.Z.
+#
+# The mirror job needs the repository variable PUBLISH_PHP=true and the secret
+# PHP_MIRROR_DEPLOY_KEY: the private half of an SSH deploy key with write access, added to
+# github.com/logolabs/inkvec-php (Settings -> Deploy keys). Without them the job only reports
+# that it skipped the push. The mirror repository must exist, with a default branch `main`;
+# the job never creates it.
+#
+# NOT verified by running this workflow -- no CI has executed it. Locally verified instead:
+# `cargo build --release -p inkvec-ffi` + PHPUnit on x86_64 Linux with PHP 8.4.
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+    paths:
+      - "packages/php/**"
+      - "bindings/**"
+      - "crates/inkvec-ffi/**"
+      - "crates/inkvec/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/php.yml"
+  pull_request:
+    paths:
+      - "packages/php/**"
+      - "bindings/**"
+      - "crates/inkvec-ffi/**"
+      - "crates/inkvec/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/php.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: php-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, php ${{ matrix.php }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The oldest PHP the package supports and the newest, on Linux; one job each on
+          # macOS (arm64) and Windows for the other two library names and loaders.
+          - { os: ubuntu-latest, php: "8.1" }
+          - { os: ubuntu-latest, php: "8.4" }
+          - { os: macos-latest, php: "8.4" }
+          - { os: windows-latest, php: "8.4" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ffi-${{ matrix.os }}
+      - run: cargo build --release --locked -p inkvec-ffi
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: ffi, json, zip
+          ini-values: ffi.enable=true
+          coverage: none
+          tools: composer
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # src/Options.php and the README's options table are committed; a stale one means the
+      # Rust options moved without `python bindings/codegen/generate.py`.
+      - run: python bindings/codegen/generate.py --check
+
+      - name: lint every source file
+        shell: bash
+        working-directory: packages/php
+        run: |
+          set -euo pipefail
+          find src tests bin -type f \( -name '*.php' -o -name 'inkvec-fetch-library' \) -print0 \
+            | xargs -0 -n1 php -l
+
+      - run: composer install --no-interaction --no-progress
+        working-directory: packages/php
+
+      - name: phpunit against the library built here
+        shell: bash
+        working-directory: packages/php
+        run: |
+          case "${{ runner.os }}" in
+            Windows) lib=inkvec_ffi.dll ;;
+            macOS) lib=libinkvec_ffi.dylib ;;
+            *) lib=libinkvec_ffi.so ;;
+          esac
+          INKVEC_LIBRARY="$PWD/../../target/release/$lib" vendor/bin/phpunit
+
+      - name: the binding also finds the library on its own (no INKVEC_LIBRARY)
+        shell: bash
+        working-directory: packages/php
+        # packages/php inside a checkout: the fourth candidate, ../../target/release.
+        run: php -r 'require "vendor/autoload.php"; $t = LogoLabs\Inkvec\Inkvec::traceFile("../../bindings/contract/tiny.png"); echo LogoLabs\Inkvec\Inkvec::libraryPath(), " ", $t->width, "x", $t->height, "\n";'
+
+  preload:
+    name: preloading (the path a PHP-FPM pool takes)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ffi-ubuntu-latest
+      - run: cargo build --release --locked -p inkvec-ffi
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          extensions: ffi, json
+          coverage: none
+          tools: composer
+      - run: composer install --no-interaction --no-progress
+        working-directory: packages/php
+      # FFI is always enabled on the CLI SAPI whatever ffi.enable says, so this checks the
+      # preloading path itself -- the header Inkvec::preload() writes, FFI::load(), and a
+      # trace through the registered scope -- which is what a web SAPI with
+      # ffi.enable=preload then relies on.
+      - name: trace through a preloaded scope
+        working-directory: packages/php
+        run: |
+          set -euo pipefail
+          cat > /tmp/preload.php <<'PHP'
+          <?php
+          require getenv('INKVEC_PACKAGE') . '/vendor/autoload.php';
+          LogoLabs\Inkvec\Inkvec::preload();
+          PHP
+          cat > /tmp/trace.php <<'PHP'
+          <?php
+          require getenv('INKVEC_PACKAGE') . '/vendor/autoload.php';
+          $traced = LogoLabs\Inkvec\Inkvec::traceFile(getenv('INKVEC_PACKAGE') . '/../../bindings/contract/tiny.png');
+          echo ini_get('ffi.enable'), " ", $traced->width, "x", $traced->height, "\n";
+          PHP
+          INKVEC_PACKAGE="$PWD" INKVEC_LIBRARY="$PWD/../../target/release/libinkvec_ffi.so" \
+            php -d ffi.enable=preload \
+                -d opcache.enable_cli=1 -d opcache.preload=/tmp/preload.php \
+                /tmp/trace.php
+
+  mirror:
+    name: sync to github.com/logolabs/inkvec-php
+    needs: [test, preload]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    env:
+      DEPLOY_KEY: ${{ secrets.PHP_MIRROR_DEPLOY_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: tag matches the workspace version
+        run: |
+          want="${GITHUB_REF_NAME#v}"
+          have=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version *= *"\(.*\)"/\1/p' Cargo.toml)
+          test "$want" = "$have" || { echo "tag $GITHUB_REF_NAME but Cargo.toml says $have"; exit 1; }
+      - name: not pushed
+        if: env.DEPLOY_KEY == '' || vars.PUBLISH_PHP != 'true'
+        run: echo "::notice::PUBLISH_PHP is not 'true', or PHP_MIRROR_DEPLOY_KEY is not set; the package was tested but not pushed to the mirror."
+      - name: push packages/php to the mirror, tagged ${{ github.ref_name }}
+        if: env.DEPLOY_KEY != '' && vars.PUBLISH_PHP == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/inkvec_php_mirror
+          chmod 600 ~/.ssh/inkvec_php_mirror
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/inkvec_php_mirror -o IdentitiesOnly=yes"
+          git clone --depth 1 git@github.com:logolabs/inkvec-php.git mirror
+          # The mirror is packages/php as it is here, plus what a Composer user needs and this
+          # repository keeps elsewhere: the licence and the contract fixtures its tests run.
+          rsync -a --delete --exclude .git packages/php/ mirror/
+          cp LICENSE NOTICE mirror/
+          mkdir -p mirror/tests/contract
+          cp bindings/contract/cases.json bindings/contract/*.png bindings/contract/*.rgba mirror/tests/contract/
+          cd mirror
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "inkvec ${GITHUB_REF_NAME} (logolabs/inkvec@${GITHUB_SHA})" || echo "nothing changed"
+          git tag -a "${GITHUB_REF_NAME}" -m "inkvec ${GITHUB_REF_NAME}"
+          git push origin HEAD:main "${GITHUB_REF_NAME}"

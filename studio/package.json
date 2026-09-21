@@ -9,7 +9,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "sidecar": "node scripts/sidecar.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.9.0",

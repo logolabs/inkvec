@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build && npm run sidecar",
     "frontendDist": "../dist"
   },
   "app": {
@@ -50,6 +50,7 @@
     "longDescription": "Inkvec Studio Lite turns a raster logo into an SVG and minimises SVGs you already have. It measures the result: colour difference, coordinates, paths and file size, next to an honest list of what tracing could not recover. Everything runs on this computer; your image is never uploaded.",
     "copyright": "Copyright (c) LogoLabs. Licensed under the Apache License, Version 2.0.",
     "licenseFile": "../../LICENSE",
+    "externalBin": ["binaries/inkvec"],
     "homepage": "https://logolabs.org/tools/inkvec-studio",
     "publisher": "LogoLabs SRL",
     "resources": {
@@ -83,6 +84,7 @@
         "installerIcon": "icons/icon.ico",
         "headerImage": "installer/header.bmp",
         "sidebarImage": "installer/sidebar.bmp",
+        "installerHooks": "installer/hooks.nsh",
         "displayLanguageSelector": false,
         "languages": ["English"],
         "compression": "lzma"

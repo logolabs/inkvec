@@ -40,7 +40,11 @@ export type StageState =
   | { kind: "undecodable"; message: string }
   | { kind: "outOfMemory"; neededGb: number; suggestPx: number }
   | { kind: "failed"; message: string }
-  | { kind: "cancelled" };
+  | { kind: "cancelled" }
+  /** A preset wants the denoiser and it is not installed. Not an error: the trace runs. */
+  | { kind: "denoiserMissing" }
+  /** The update check could not reach the network. Tracing never needed one. */
+  | { kind: "offline"; message: string };
 
 /** How the two panes are arranged. */
 export type ViewMode = "side" | "wipe" | "ab";
@@ -54,7 +58,8 @@ export interface State {
 
   source: SourceInfo | null;
   settings: Settings;
-  preset: PresetId | null;
+  /** A built-in `PresetId`, or a saved preset's id. `null` once a control is moved. */
+  preset: string | null;
 
   /** The trace the interface is waiting for, or 0. */
   generation: number;

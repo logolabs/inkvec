@@ -22,7 +22,6 @@ import {
   api,
   events,
   type Outcome,
-  type PresetId,
   type Prefs,
   type SampleInfo,
   type Settings,
@@ -230,15 +229,58 @@ const workspace = createWorkspace(
   () => samples,
 );
 
+/**
+ * A preset id to the settings it means, whether it is one of the built-in seven or one
+ * the user saved. Returns `null` for an id that no longer exists — a saved preset can be
+ * deleted while it is the selected one.
+ */
+function resolvePreset(id: string): { settings: Settings; wantsDenoiser: boolean } | null {
+  const builtin = store.state.caps?.presets.find((p) => p.id === id);
+  if (builtin) return { settings: builtin.settings, wantsDenoiser: builtin.wantsDenoiser };
+  const saved = store.state.prefs?.saved.find((p) => p.id === id);
+  return saved ? { settings: saved.settings, wantsDenoiser: false } : null;
+}
+
 const rail = createRail(store, {
-  setPreset: (id: PresetId) => {
-    const preset = store.state.caps?.presets.find((p) => p.id === id);
+  setPreset: (id: string) => {
+    const preset = resolvePreset(id);
     if (!preset) return;
     store.set({ preset: id, settings: { ...preset.settings } });
+    // The preset works without the denoiser — the colours just keep their compression
+    // damage — so this explains itself on the stage and the trace carries on behind it.
+    // A modal here would be one the user did not ask for.
     if (preset.wantsDenoiser && store.state.caps?.denoiser.supported && !store.state.caps.denoiser.installed) {
-      openDenoiserModal(store);
+      store.set({ stageState: { kind: "denoiserMissing" } });
     }
     controlChanged();
+  },
+  // A saved preset is a whole snapshot of the controls, not a diff against the defaults:
+  // it was made by somebody who had already moved exactly what they wanted moved.
+  savePreset: (name: string) => {
+    const prefs = store.state.prefs;
+    if (!prefs) return;
+    const id = `saved:${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    const saved = [...prefs.saved, { id, name, settings: { ...store.state.settings } }];
+    // Selected only once the backend has said it kept it: sanitising trims the name and
+    // enforces the ceiling, so the tile that comes back is the one to point at — and if
+    // the tray was full, saying so beats a confirmation for something that did not happen.
+    void savePrefs({ saved }).then(() => {
+      const kept = store.state.prefs?.saved.find((p) => p.id === id);
+      if (kept) {
+        store.set({ preset: id });
+        toast(`Saved as "${kept.name}".`, { kind: "good" });
+      } else {
+        toast("The preset tray is full. Forget one and try again.", { kind: "bad" });
+      }
+    });
+  },
+  deletePreset: (id: string) => {
+    const prefs = store.state.prefs;
+    if (!prefs) return;
+    void savePrefs({ saved: prefs.saved.filter((p) => p.id !== id) });
+    // The controls stay exactly where they are. Deleting the tile that named them is not
+    // a reason to change the picture on the stage.
+    if (store.state.preset === id) store.set({ preset: null });
   },
   changeSetting: (key, value) => {
     assignSetting(store.state.settings, key, value);
@@ -246,8 +288,8 @@ const rail = createRail(store, {
     controlChanged();
   },
   resetGroup: (group) => {
-    const preset = store.state.caps?.presets.find((p) => p.id === store.state.preset);
-    const base = preset?.settings ?? DEFAULT_SETTINGS;
+    const id = store.state.preset;
+    const base = (id && resolvePreset(id)?.settings) || DEFAULT_SETTINGS;
     for (const c of store.state.caps?.controls ?? []) {
       if (c.group === group) assignSetting(store.state.settings, c.key, base[c.key]);
     }

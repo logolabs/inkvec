@@ -567,6 +567,12 @@ kbd {
   }
 }
 
+/* The Minify tab has no pan and zoom and no overlay, so its two drawings are
+   centred by the pane rather than pinned to its origin. */
+.art.centred {
+  position: static;
+}
+
 /* Overlays are drawn into one SVG that shares the artwork's transform, so a
    3,000-node logo costs one transform update rather than 3,000.
 
@@ -855,6 +861,60 @@ kbd {
   font-size: 10.5px;
   line-height: 1.3;
   color: var(--muted);
+}
+
+/* Forgetting a saved preset. The cross appears on hover and on keyboard focus rather
+   than sitting on every tile: seven of the nine tiles cannot be deleted at all, and a
+   permanent row of crosses would suggest otherwise. */
+.preset {
+  position: relative;
+}
+.preset .forget {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
+  opacity: 0;
+  transition: opacity var(--d-micro), background var(--d-micro);
+}
+.preset .forget::before,
+.preset .forget::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 7.5px;
+  width: 8px;
+  height: 1.5px;
+  border-radius: 1px;
+  background: var(--muted);
+}
+.preset .forget::before {
+  transform: rotate(45deg);
+}
+.preset .forget::after {
+  transform: rotate(-45deg);
+}
+.preset:hover .forget,
+.preset .forget:focus-visible {
+  opacity: 1;
+}
+.preset .forget:hover {
+  background: var(--highlight);
+}
+.preset .forget:hover::before,
+.preset .forget:hover::after {
+  background: var(--bad);
+}
+
+/* The tray's footer: what the keyboard does, and how to add to the tray. */
+.traybar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
 }
 
 /* The quality report. An instrument readout, never a score badge. */
@@ -1220,8 +1280,15 @@ kbd {
     opacity: 0.4;
   }
   .chip.swapped::after,
-  .art.swapping {
+  .art.swapping,
+  .callout,
+  .rail .card.drawer {
     animation: none;
+  }
+  /* The drop target still grows — the size is the signal that the window will take the
+     file — it just arrives rather than travels. */
+  .dragging .drop {
+    transition: none;
   }
 }
 
@@ -1240,6 +1307,8 @@ kbd {
 .drop {
   width: min(620px, 80%);
   padding: 44px 24px;
+  min-height: 220px;
+  justify-content: center;
   border: 1.5px dashed var(--highlight);
   border-radius: var(--radius-xl);
   display: flex;
@@ -1258,6 +1327,24 @@ kbd {
   font-size: 26px;
   letter-spacing: -0.02em;
   display: block;
+}
+/* Mid-drag the box grows and answers the gesture: the file is already over the window,
+   so "Drop a PNG, JPEG or WebP" is instruction for something the user has just done. */
+.drop .release,
+.dragging .drop .resting {
+  display: none;
+}
+.dragging .drop .release {
+  display: block;
+}
+.dragging .drop {
+  width: min(640px, 90%);
+  min-height: 320px;
+  transition:
+    width var(--d-fast) var(--ease-out-expo),
+    min-height var(--d-fast) var(--ease-out-expo),
+    border-color var(--d-fast),
+    background var(--d-fast);
 }
 .samples {
   display: flex;
@@ -1310,6 +1397,9 @@ kbd {
   border-color: var(--accent);
   background: var(--accent-soft);
 }
+.dragging .drop .glyph {
+  color: var(--accent);
+}
 .dragging::after {
   content: "";
   position: fixed;
@@ -1320,6 +1410,34 @@ kbd {
 }
 .dragging .stage > *:not(.stagestate) {
   opacity: 0.6;
+}
+
+/* Detail mode's callout: where the measurement says to point the pixel grid. Bottom
+   left, because the result chip has the top right and the artwork has the middle. */
+.callout {
+  position: absolute;
+  left: 20px;
+  bottom: 20px;
+  z-index: 8;
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px 13px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--rule2);
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+  backdrop-filter: blur(8px);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--dim);
+  animation: rise var(--d-fast) var(--ease-out-expo);
+}
+.callout .head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 /* ------------------------------------------------------- overlays, modals ---- */
@@ -1853,15 +1971,51 @@ kbd {
    find — and the advanced drawer becomes a bottom sheet instead. Export stays
    pinned at every width. */
 @media (max-width: 1400px) {
-  .rail {
-    width: 330px;
+  :root {
+    --rail-w: 330px;
+  }
+
+  /* The advanced drawer moves out of the rail and becomes a bottom sheet over the
+     stage. Eighteen controls in a 330 px column push Export off the bottom, and
+     Export has to stay reachable without scrolling at every width. The quality
+     report stays in the rail: a drawer would make it a thing you go and find. */
+  .rail .card.drawer {
+    position: fixed;
+    left: 0;
+    /* Stops at the rail rather than crossing it: Export lives in the rail's pinned
+       footer, and a sheet that covered it would trade one unreachable button for
+       another. */
+    right: var(--rail-w);
+    bottom: 0;
+    z-index: 25;
+    max-height: 62vh;
+    overflow-y: auto;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    border: none;
+    border-top: 1px solid var(--highlight);
+    padding: 16px 20px 24px;
+    box-shadow: 0 -20px 50px color-mix(in srgb, var(--void) 55%, transparent);
+    animation: rise var(--d-fast) var(--ease-out-expo);
+  }
+  .rail .card.drawer .group {
+    max-width: 640px;
+  }
+  /* Two columns of controls, because a full-width sheet with one is a long walk. */
+  .rail .card.drawer > .group {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 9px 28px;
+    align-items: start;
+  }
+  .rail .card.drawer > .group > .grouphead {
+    grid-column: 1 / -1;
   }
 }
 @media (max-width: 1180px) {
+  :root {
+    --rail-w: 310px;
+  }
   .legend {
     display: none;
-  }
-  .rail {
-    width: 310px;
   }
 }

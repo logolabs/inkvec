@@ -31,7 +31,9 @@ somebody watch the edge cut through a partially covered pixel.
 
 The rail, top to bottom: preset → trace/cancel → quality report → what could not be
 recovered → palette → advanced → **Export, pinned**, reachable without scrolling at every
-width.
+width. The preset tray holds the seven built-ins and as many as twelve saved ones; a saved
+preset is a whole snapshot of the eighteen controls rather than a set of differences from
+the defaults, so it cannot drift when those move.
 
 **Minify SVG** is a different register. Tracing takes a second; this takes about thirty
 milliseconds, so the tab is instant and the result *is* the screen. Its tolerance control
@@ -39,7 +41,15 @@ is a sentence — *nothing moves more than 0.1 px when the drawing is 1024 px wi
 the numbers inside it.
 
 **Batch** takes a folder and a preset, writes one SVG per file, and keeps failures visible
-after the run rather than letting them scroll away.
+after the run rather than letting them scroll away. Any single row can be given a preset of
+its own before the run; once a row has run, its preset is frozen, because the dE00 beside
+it was measured with the preset the column claims.
+
+**Settings** can put the app into the rest of the desktop, both ways and reversibly: the
+bundled `inkvec` command onto `PATH`, and a *Vectorize with Inkvec Studio* entry into the
+image right-click menu. Each row shows the real path it wrote and a Remove that takes it
+back out, because an app that installs something into the system and cannot say where has
+asked you to trust it twice.
 
 ## How it is put together
 
@@ -51,7 +61,11 @@ studio/
     views/             workspace, minify, batch, settings + about
     styles/            tokens.css (dark + light), app.css
   src-tauri/           backend: its own cargo workspace
-    src/               trace, quality, lost, minify, export, batch, denoiser, settings
+    src/               trace, quality, lost, minify, export, batch, denoiser,
+                       settings, integration (PATH + context menu)
+    binaries/          the inkvec CLI sidecar, built by scripts/sidecar.mjs
+    installer/         hooks.nsh — NSIS uninstall cleanup
+  scripts/             sidecar.mjs: builds and names the CLI for the target triple
   tools/               asset and notice generators
 ```
 
@@ -127,7 +141,10 @@ be the notices for the binary they are running.
 ## Tests
 
 ```sh
-cd src-tauri && cargo test      # 77 tests
+npm run sidecar                 # builds the bundled inkvec CLI first:
+                                # tauri.conf.json names it in externalBin, so
+                                # every cargo command wants it on disk
+cd src-tauri && cargo test      # 85 tests
 cd ..        && npm run build   # types + bundle
 python3 tools/make_assets.py --check
 python3 tools/third_party.py --check
@@ -141,11 +158,11 @@ features on a 0.07 dE00 trace), and assert that the honesty panel's copy never a
 ## Known gaps
 
 - **Not signed.** Windows SmartScreen will warn until the certificate builds reputation.
-  The finish page and the download page should carry the same calm, factual line about the
-  signature and the published checksum; that copy is written in the design bundle and is
-  not yet wired into the NSIS template.
-- **The `inkvec` command is not shipped as a sidecar**, so Settings has no "add to PATH"
-  row. It needs `externalBin` wiring and a CLI build step in the release job.
-- **The batch tab's per-row preset override** is stored and sent, but nothing sets one per
-  row yet — the queue-wide preset is what the toolbar offers.
+  The release notes carry the calm, factual line about the signature and the published
+  checksum. The installer's *own* copy of it does not: the design puts it on a custom NSIS
+  options page, and that needs a full template override rather than the supported
+  `installerHooks` extension point. Replacing Tauri's whole installer template — untested,
+  on the one platform that cannot be tested here — buys a paragraph at the cost of the
+  installer itself, so the hook only does uninstall cleanup. See
+  `src-tauri/installer/hooks.nsh`.
 - **Light theme has had less use than dark.** The tokens are complete and the switch works.

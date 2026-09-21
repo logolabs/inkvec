@@ -6,14 +6,18 @@
  * scrolling at every window width.
  */
 
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+
 import { fill, h, icon, s } from "../lib/dom";
-import { bytes, count, de00, percent, seconds, type Store } from "../lib/state";
-import type { Control, Ink, Loss, PresetId, Settings, Stage } from "../lib/ipc";
+import { bytes, count, de00, modKey, percent, seconds, type Store } from "../lib/state";
+import type { Control, Ink, Loss, Settings, Stage } from "../lib/ipc";
 import { api } from "../lib/ipc";
 import { closeOverlay, modal, openModal, openPopover, tip, toast } from "./overlays";
 
 export interface RailActions {
-  setPreset(id: PresetId): void;
+  setPreset(id: string): void;
+  savePreset(name: string): void;
+  deletePreset(id: string): void;
   changeSetting(key: keyof Settings, value: Settings[keyof Settings]): void;
   resetGroup(group: string): void;
   traceNow(): void;
@@ -47,7 +51,7 @@ export function createRail(store: Store, act: RailActions): HTMLElement {
 
   store.on(
     [
-      "caps", "preset", "settings", "tracing", "liveStages", "result", "report",
+      "caps", "prefs", "preset", "settings", "tracing", "liveStages", "result", "report",
       "palette", "losses", "advancedOpen", "source", "worstCorner", "stagesOpen",
     ],
     render,
@@ -61,6 +65,36 @@ export function createRail(store: Store, act: RailActions): HTMLElement {
 function presets(store: Store, act: RailActions): HTMLElement {
   const st = store.state;
   const list = st.caps?.presets ?? [];
+  const saved = st.prefs?.saved ?? [];
+  const mod = modKey(st.caps?.platform);
+  const tile = (id: string, name: string, sub: string, remove: (() => void) | null) => {
+    const el = h(
+      "button.preset",
+      {
+        "aria-pressed": String(st.preset === id),
+        title: `${name} — ${sub}`,
+        onclick: () => act.setPreset(id),
+      },
+      h("span.name", null, name),
+      h("span.sub", null, sub),
+      remove
+        ? h("span.forget", {
+            role: "button",
+            tabindex: "0",
+            "aria-label": `Forget ${name}`,
+            title: `Forget ${name}`,
+            onclick: (e: Event) => {
+              // The tile is a button; without this the click would also select the preset
+              // it is on its way to deleting.
+              e.stopPropagation();
+              remove();
+            },
+          })
+        : null,
+    );
+    return el;
+  };
+
   return h(
     "div",
     { style: { display: "flex", flexDirection: "column", gap: "8px" } },
@@ -68,26 +102,76 @@ function presets(store: Store, act: RailActions): HTMLElement {
       "div.cardhead",
       null,
       h("span.eyebrow", null, "Preset"),
-      h("span.faint", { style: { fontSize: "11px" } }, `${list.length} total`),
+      h("span.faint", { style: { fontSize: "11px" } }, `${list.length + saved.length} total`),
     ),
     h(
       "div.presets",
       null,
-      ...list.map((p, i) =>
-        h(
-          "button.preset",
-          {
-            "aria-pressed": String(st.preset === p.id),
-            title: `${p.name} — ${p.subtitle}`,
-            onclick: () => act.setPreset(p.id),
-          },
-          h("span.name", null, p.name),
-          h("span.sub", null, p.subtitle),
-          i < 9 ? null : null,
-        ),
+      ...list.map((p) => tile(p.id, p.name, p.subtitle, null)),
+      ...saved.map((p) => tile(p.id, p.name, "Saved", () => act.deletePreset(p.id))),
+    ),
+    h(
+      "div.traybar",
+      null,
+      h("span.faint", null, `${mod}+1–${mod}+7 switch presets`),
+      h(
+        "button.reset",
+        {
+          disabled: !st.caps,
+          title: "Remember the eighteen controls exactly as they stand",
+          onclick: () => saveCurrentAsPreset(store, act),
+        },
+        "Save current as preset",
       ),
     ),
   );
+}
+
+/**
+ * Name the controls as they stand and keep them.
+ *
+ * The name is asked for rather than generated because a preset called "Custom 3" is a
+ * preset nobody presses. The field starts on the preset the settings came from, if they
+ * still match one, so the common case — a built-in nudged twice — types two words.
+ */
+function saveCurrentAsPreset(store: Store, act: RailActions): void {
+  const from = store.state.caps?.presets.find((p) => p.id === store.state.preset);
+  const field = h("input.numberfield", {
+    type: "text",
+    maxlength: "40",
+    spellcheck: "false",
+    placeholder: from ? `${from.name}, adjusted` : "Northwind, flat",
+    style: { width: "100%", textAlign: "left", height: "32px", padding: "0 10px" },
+  }) as HTMLInputElement;
+
+  // Whether it was kept is the backend's answer, not this modal's, so the confirmation
+  // is raised there. All this does is name it and get out of the way.
+  const commit = () => {
+    act.savePreset((field.value.trim() || field.placeholder).slice(0, 40));
+    closeOverlay();
+  };
+
+  openModal(
+    modal(
+      "Save current as preset",
+      [
+        field,
+        h(
+          "span.muted",
+          { style: { fontSize: "11.5px", lineHeight: "1.5" } },
+          "All eighteen controls, as they stand. A saved preset is a snapshot rather than a set of differences from the defaults, so it will not drift when those move.",
+        ),
+      ],
+      [
+        h("button.btn", { onclick: closeOverlay }, "Cancel"),
+        h("button.btn.primary", { onclick: commit }, "Save"),
+      ],
+    ),
+  );
+  field.focus();
+  field.addEventListener("keydown", (e) => {
+    if ((e as KeyboardEvent).key === "Enter") commit();
+  });
 }
 
 // ------------------------------------------------------- trace / cancel row ---
@@ -338,7 +422,20 @@ function paletteCard(store: Store, act: RailActions): HTMLElement {
     ),
     ...st.palette.map((ink) => inkRow(ink, (target) => openSnap(target, ink, act))),
     st.palette.length
-      ? h("span.muted", { style: { fontSize: "11px", lineHeight: "1.45" } }, "Snapping rewrites fills only — no re-trace.")
+      ? h(
+          "div",
+          { style: { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "10px" } },
+          h("span.muted", { style: { fontSize: "11px", lineHeight: "1.45" } }, "Snapping rewrites fills only — no re-trace."),
+          h(
+            "button.reset",
+            {
+              style: { fontSize: "11px", flex: "none" },
+              title: "Custom properties, one per ink, in canvas-share order",
+              onclick: () => void copyPaletteCss(st.palette),
+            },
+            "Copy all as CSS",
+          ),
+        )
       : h("span.muted", { style: { fontSize: "11px" } }, "Trace an image to see its inks."),
   );
 }
@@ -419,6 +516,26 @@ function openSnap(anchor: HTMLElement, ink: Ink, act: RailActions): void {
       note,
     ),
   );
+}
+
+/**
+ * The palette as CSS custom properties.
+ *
+ * Named by position rather than by colour, because `--ink-1` survives a re-trace that
+ * moves the hue and `--dark-green` does not. The share goes in a comment: it is the
+ * reason the order is what it is, and it is the first thing you want when deciding which
+ * of four inks is the brand colour.
+ */
+async function copyPaletteCss(palette: Ink[]): Promise<void> {
+  const body = palette
+    .map((ink, i) => `  --ink-${i + 1}: ${ink.hex.toLowerCase()}; /* ${percent(ink.share)} of canvas */`)
+    .join("\n");
+  try {
+    await writeText(`:root {\n${body}\n}\n`);
+    toast(`${palette.length} ink${palette.length === 1 ? "" : "s"} copied as CSS.`, { kind: "good" });
+  } catch (e) {
+    toast(String(e), { kind: "bad" });
+  }
 }
 
 /** Paste a brand palette and see what each match would cost before committing. */
@@ -509,7 +626,9 @@ function advancedCard(store: Store, act: RailActions): HTMLElement {
 
   const groups = [...new Set(controls.map((c) => c.group))];
   return h(
-    "div.card",
+    // `.drawer` is what the narrow-window rule targets: below 1400 px this becomes a
+    // bottom sheet over the stage so Export keeps its place at the foot of the rail.
+    "div.card.drawer",
     null,
     h(
       "div.cardhead",

@@ -7,6 +7,8 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-09-21
+
 ### Added
 
 - **Inkvec Studio Lite** (`studio/`): a desktop app for Windows, macOS and Linux, built

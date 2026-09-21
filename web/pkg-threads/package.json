@@ -5,7 +5,7 @@
     "LogoLabs"
   ],
   "description": "Inkvec in the browser: the tracer compiled to WebAssembly",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

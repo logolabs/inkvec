@@ -1,7 +1,7 @@
 {
   "name": "inkvec-studio-lite",
   "private": true,
-  "version": "0.1.4",
+  "version": "0.1.5",
   "type": "module",
   "description": "Inkvec Studio Lite: a desktop app that turns a raster logo into an SVG, exactly.",
   "license": "Apache-2.0",

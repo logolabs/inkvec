@@ -10,7 +10,7 @@
 [package]
 name = "inkvec-studio"
 description = "Inkvec Studio Lite: turn a raster logo into an SVG, exactly, and minimise SVGs you already have."
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 rust-version = "1.88"
 license = "Apache-2.0"

@@ -193,6 +193,30 @@ API in particular should be treated as unstable release to release).
   presented at a larger size than it was traced at (`--max-dim` capped the input, or an exact
   pixel-block upscale was undone). The presented size now grows with the viewBox.
 
+- **The release itself.** The first 0.1.5 tag run published no command-line archives and no
+  installers: `bundle.category` in `tauri.conf.json` was `"Graphics"`, which is not one of
+  the names Tauri's bundler accepts, so every Studio job on every platform built the app and
+  then failed on `invalid category` — and the publish job waits on all of them. It is
+  `"GraphicsAndDesign"` now. The Linux Studio jobs failed earlier still, in the link: ONNX
+  Runtime's prebuilt needs glibc 2.38 and GCC 13's libstdc++, which Ubuntu 22.04 does not
+  have, so those rows build on 24.04.
+
+- **The npm publish.** `npm publish dist-npm/*.tgz` failed on the 0.1.5 tag with a git
+  authentication error: npm reads a bare `dir/file.tgz` as the GitHub shorthand
+  `owner/repo` and went looking for `ssh://git@github.com/dist-npm/<file>.tgz.git`. The path
+  now starts with `./`, and the step checks that exactly one tarball was packed before
+  publishing it.
+
+- **Which system each download runs on**, measured rather than assumed. A new
+  `.github/scripts/abi_floor.py` reads each built binary — the versioned symbols it imports
+  on Linux (weak references reported but not counted, since the loader may leave them null),
+  the minimum macOS in its Mach-O load commands — and fails the build if it asks for more
+  than the floor that row declares. The command-line archives keep the glibc 2.17 floor they
+  had; the macOS archives now pin their deployment target (10.12 Intel, 11.0 Apple silicon)
+  instead of inheriting whatever rustc's default happens to be that release. The restorer
+  flavour's own higher floor is stated in the archive's `RESTORER.txt` and in the README's
+  download table, next to the plain archive that runs on far older systems.
+
 ## [0.1.4] - 2026-09-20
 
 ### Changed

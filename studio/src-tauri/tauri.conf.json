@@ -45,7 +45,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "category": "Graphics",
+    "category": "GraphicsAndDesign",
     "shortDescription": "Raster to SVG, exactly.",
     "longDescription": "Inkvec Studio Lite turns a raster logo into an SVG and minimises SVGs you already have. It measures the result: colour difference, coordinates, paths and file size, next to an honest list of what tracing could not recover. Everything runs on this computer; your image is never uploaded.",
     "copyright": "Copyright (c) LogoLabs. Licensed under the Apache License, Version 2.0.",

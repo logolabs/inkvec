@@ -108,9 +108,21 @@ jobs:
           want="${GITHUB_REF_NAME#v}"
           have=$(node -p "require('./packages/npm/package.json').version")
           test "$want" = "$have" || { echo "tag $GITHUB_REF_NAME but package.json says $have"; exit 1; }
+      # `./` is load-bearing: npm reads a bare `dist-npm/x.tgz` as the GitHub shorthand
+      # `owner/repo` and goes looking for `ssh://git@github.com/dist-npm/x.tgz.git`, which
+      # is how the 0.1.5 tag failed to publish. A path that starts with `./` is a path.
       - name: npm publish
         if: env.NODE_AUTH_TOKEN != ''
-        run: npm publish dist-npm/*.tgz --access public --provenance
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          tarballs=(./dist-npm/*.tgz)
+          if [[ ${#tarballs[@]} -ne 1 ]]; then
+            echo "::error::expected exactly one packed tarball in dist-npm, found ${#tarballs[@]}"
+            ls -la dist-npm || true
+            exit 1
+          fi
+          npm publish "${tarballs[0]}" --access public --provenance
       - name: no NPM_TOKEN secret
         if: env.NODE_AUTH_TOKEN == ''
         run: echo "::notice::NPM_TOKEN is not set; the package was built and packed but not published."

@@ -32,42 +32,84 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - x86_64-unknown-linux-gnu
-          - aarch64-unknown-linux-gnu
-          - x86_64-apple-darwin
-          - aarch64-apple-darwin
-          - x86_64-pc-windows-msvc
-        feature: [default, restore-model]
-        exclude:
-          # The ONNX Runtime package does not currently build for this legacy target;
-          # retain the default Intel-macOS executable rather than blocking every archive.
-          - target: x86_64-apple-darwin
-            feature: restore-model
+        # Every row is written out rather than crossed, because the floor each archive
+        # can run on differs per row and belongs next to the row it describes:
+        #
+        #   glibc / glibcxx  the oldest glibc and libstdc++ the Linux executable may ask
+        #                    for. Asserted after the build by `.github/scripts/abi_floor.py`,
+        #                    which reads the binary rather than trusting the build.
+        #   macos            the oldest macOS the executable may ask for, asserted the
+        #                    same way from its Mach-O load commands.
+        #
+        # A floor is not a wish: it is either what the toolchain was told to target
+        # (the zigbuild rows) or what the build image actually has (every other row), so
+        # a check that fails means the image or a dependency moved, not that the number
+        # is optimistic.
         include:
-          # `glibc` is the oldest glibc the Linux executables have to run against; see the
-          # build steps. 2.17 is manylinux2014's floor and Rust's own minimum. Absent on
-          # every other row, where the ordinary cargo build applies.
+          # The plain command line, which is the archive people actually download.
+          # Ubuntu 24.04's own glibc is 2.39, so an ordinary build here leaves the
+          # executable asking for GLIBC_2.39 and it will not start on Debian 11 or 12,
+          # Ubuntu 20.04 or 22.04, or RHEL 8 or 9 -- it exits on the dynamic loader,
+          # before main. zigbuild pins the floor at 2.17 instead, without a container:
+          # manylinux2014's floor, and Rust's own minimum.
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            feature: default
+            os: ubuntu-24.04
             glibc: "2.17"
           # Native arm64 runner rather than `cross`/QEMU: the restore-model flavour needs
           # `ort` to download a matching prebuilt ONNX Runtime at build time, which is far
           # more likely to have an arm64 Linux asset than a cross-compiled sysroot is to
-          # have every native dependency lined up. NOT verified locally (no arm64 runner
-          # available here) -- verify the first tagged run.
+          # have every native dependency lined up.
           - target: aarch64-unknown-linux-gnu
+            feature: default
             os: ubuntu-24.04-arm
             glibc: "2.17"
+          # The restorer flavour cannot have that floor, and says so rather than
+          # pretending: `ort` downloads a prebuilt ONNX Runtime and links it statically,
+          # and that prebuilt calls glibc 2.38's `__isoc23_strtol` family and GCC 13's
+          # `basic_string::_M_replace_cold`. Measured on the 0.1.5 archives, not assumed.
+          # So this archive needs glibc 2.38 and libstdc++ 13 -- Ubuntu 23.10, Debian 13,
+          # Fedora 39 or newer -- while the plain archive above runs on glibc 2.17.
+          # RESTORER.txt in the archive says so too. Putting zig's linker in the middle of
+          # a C++ static link that currently works would risk breaking it to fix a floor
+          # it does not control.
+          - target: x86_64-unknown-linux-gnu
+            feature: restore-model
+            os: ubuntu-24.04
+            glibc: "2.38"
+            glibcxx: "3.4.31"
+          - target: aarch64-unknown-linux-gnu
+            feature: restore-model
+            os: ubuntu-24.04-arm
+            glibc: "2.38"
+            glibcxx: "3.4.31"
           # macos-15-intel is the supported Intel (x86_64) GitHub-hosted image;
-          # macos-14 is arm64.
-          # Pinned explicitly rather than macos-latest so the mapping doesn't silently
-          # shift under us.
+          # macos-14 is arm64. Pinned explicitly rather than macos-latest so the mapping
+          # doesn't silently shift under us.
+          #
+          # MACOSX_DEPLOYMENT_TARGET is set from `macos` below rather than left to
+          # rustc's default, which has been raised twice and will be again: 10.12 is
+          # what the 0.1.5 Intel archive happened to get, and this keeps it. 11.0 on
+          # Apple silicon is the oldest macOS that architecture exists on.
           - target: x86_64-apple-darwin
+            feature: default
             os: macos-15-intel
+            macos: "10.12"
           - target: aarch64-apple-darwin
+            feature: default
             os: macos-14
+            macos: "11.0"
+          # The ONNX Runtime package has no build for Intel macOS; the Intel archive is
+          # the plain one above rather than nothing at all.
+          - target: aarch64-apple-darwin
+            feature: restore-model
+            os: macos-14
+            macos: "11.0"
           - target: x86_64-pc-windows-msvc
+            feature: default
+            os: windows-latest
+          - target: x86_64-pc-windows-msvc
+            feature: restore-model
             os: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -80,16 +122,9 @@ jobs:
         with:
           key: ${{ matrix.target }}-${{ matrix.feature }}
 
-      # `ubuntu-latest` is 24.04, so an ordinary build here leaves the executable asking
-      # for GLIBC_2.39 and it will not start on Debian 11 or 12, Ubuntu 20.04 or 22.04, or
-      # RHEL 8 or 9 -- it exits on the dynamic loader, before main. zigbuild pins the floor
-      # instead, without a container.
-      #
-      # The restore-model flavour below is deliberately left alone: `ort` fetches a prebuilt
-      # ONNX Runtime at build time and links it, so that archive's floor is whichever is
-      # higher, ours or theirs, and putting zig's linker in the middle of it risks breaking
-      # a build that currently works to fix a floor it may not even control. The plain CLI
-      # is the artifact people actually download; this fixes that one and says so.
+      # zigbuild, on the plain-CLI Linux rows only: it is what pins the glibc floor at
+      # 2.17 without a container. The restore-model rows are deliberately left to the
+      # ordinary linker -- see the note on their matrix rows.
       - uses: mlugg/setup-zig@v2
         if: matrix.feature == 'default' && matrix.glibc != ''
         with:
@@ -101,35 +136,41 @@ jobs:
 
       - name: Build (default features, glibc ${{ matrix.glibc }})
         if: matrix.feature == 'default' && matrix.glibc != ''
+        env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos }}
         run: cargo zigbuild --release -p inkvec-cli --target ${{ matrix.target }}.${{ matrix.glibc }}
 
       - name: Build (default features)
         if: matrix.feature == 'default' && matrix.glibc == ''
+        env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos }}
         run: cargo build --release -p inkvec-cli --target ${{ matrix.target }}
-
-      # Assert it, because the failure is silent until a user reports the binary will not
-      # start, which is exactly how this was found.
-      - name: No symbol newer than glibc ${{ matrix.glibc }}
-        if: matrix.feature == 'default' && matrix.glibc != ''
-        shell: bash
-        run: |
-          set -euo pipefail
-          bin="target/${{ matrix.target }}/release/${BIN_NAME}"
-          max=$(objdump -T "$bin" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sort -uV | tail -1 || true)
-          echo "highest required: ${max:-none}; floor: GLIBC_${{ matrix.glibc }}"
-          if [ -n "$max" ] && [ "$(printf '%s\nGLIBC_%s\n' "$max" "${{ matrix.glibc }}" | sort -V | tail -1)" != "GLIBC_${{ matrix.glibc }}" ]; then
-            echo "::error::$bin requires $max, above the GLIBC_${{ matrix.glibc }} floor"
-            exit 1
-          fi
 
       - name: Build (restore-model)
         # Windows + restore-model links ONNX Runtime statically, which needs MSVC 17.10+;
         # per the crate's own notes (crates/inkvec-restore/Cargo.toml) GitHub's
-        # windows-latest image has that already. NOT independently re-verified in this
-        # workflow beyond what those notes record -- watch the first tagged run's Windows
-        # restore-model job.
+        # windows-latest image has that already. Confirmed by the 0.1.5 tag run, whose
+        # Windows restore-model job built and archived.
         if: matrix.feature == 'restore-model'
+        env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos }}
         run: cargo build --release -p inkvec-cli --target ${{ matrix.target }} --features restore-model
+
+      # Assert the floor, because the failure is silent until a user reports the binary
+      # will not start, which is exactly how this was found. The script reads the built
+      # executable: versioned imports on Linux (weak ones reported but not counted, since
+      # the loader is content to leave them null), the Mach-O minimum OS on macOS.
+      - name: The oldest system this build will start on
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="target/${{ matrix.target }}/release/${BIN_NAME}"
+          args=()
+          if [ -n "${{ matrix.glibc }}" ]; then args+=(--glibc "${{ matrix.glibc }}"); fi
+          if [ -n "${{ matrix.glibcxx }}" ]; then args+=(--glibcxx "${{ matrix.glibcxx }}"); fi
+          if [ -n "${{ matrix.macos }}" ]; then args+=(--macos "${{ matrix.macos }}"); fi
+          python3 .github/scripts/abi_floor.py "$bin" "${args[@]}"
 
       - name: Stage archive contents
         shell: bash
@@ -183,6 +224,25 @@ jobs:
           See the project README for the other restorer backends (restore-burn,
           restore-wgpu), which are not part of this pre-built archive.
           EOF
+
+            # The floor this flavour runs on, stated in the archive rather than only in
+            # the workflow: ONNX Runtime's prebuilt is what sets it, and somebody holding
+            # a file that will not start deserves to be told why by the file itself.
+            if [[ "${TARGET}" == *linux* ]]; then
+              cat >> "${stage}/RESTORER.txt" <<'EOF'
+
+          Which systems this build runs on
+          --------------------------------
+
+          The statically linked ONNX Runtime in this archive needs glibc 2.38 or newer
+          and the libstdc++ from GCC 13 or newer: Ubuntu 23.10, Debian 13, Fedora 39,
+          RHEL 10 or later. On anything older it stops in the dynamic loader before it
+          starts.
+
+          The plain inkvec archive for this platform is built against glibc 2.17 and
+          runs on all of those and on much older systems, without --restore.
+          EOF
+            fi
 
             # This build links ONNX Runtime statically (see crates/inkvec-restore/Cargo.toml),
             # so no onnxruntime library file should end up next to the binary and no
@@ -239,43 +299,53 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # An app bundle inherits the glibc, libstdc++ and WebKitGTK of the machine that
+        # built it, so the image is the floor. `glibc`/`glibcxx`/`macos` record the one
+        # each row is expected to have and are asserted against the binary that actually
+        # comes out, by the same script the CLI archives use.
         include:
           # 24.04, not 22.04, and that is about ONNX Runtime rather than about Ubuntu.
-          # `ort` downloads a prebuilt ORT and links it statically; that prebuilt is
-          # built against a newer libstdc++ than 22.04 links against, so on 22.04 the
-          # link ends in undefined `__cxa_call_terminate` and
-          # `basic_string::_M_replace_cold` out of `libort_sys`. The CLI's own
-          # restore-model rows link the same prebuilt on 24.04 and have always
-          # succeeded, which is the whole evidence for this line.
+          # `ort` downloads a prebuilt ONNX Runtime and links it statically, and that
+          # prebuilt needs glibc 2.38 and GCC 13's libstdc++: on 22.04 the link ends in
+          # undefined `__isoc23_strtoll` and `basic_string::_M_replace_cold` out of
+          # `libort_sys`, which is exactly how the 0.1.5 tag run failed on both Linux
+          # rows. The CLI's own restore-model rows link the same prebuilt on 24.04 and
+          # have always succeeded.
           #
-          # The cost is the glibc floor: these bundles need what 24.04 has, so they
-          # will not start on Ubuntu 22.04 or Debian 12. Taking the denoiser out
-          # instead would buy that floor back -- the feature is optional and the app
-          # reports it honestly when absent -- but it would also make Settings' "the
-          # release builds for Windows, Linux and Apple-silicon macOS do" untrue.
-          # If the older floor matters more, split Linux into two flavours the way the
-          # CLI does rather than quietly dropping one of the two.
+          # The cost is the floor: one bundle per architecture, with the denoiser in it,
+          # means these bundles need what 24.04 has and will not start on Ubuntu 22.04,
+          # Debian 12 or RHEL 9. That is deliberate -- the app ships the feature rather
+          # than shipping without it -- and the README says which glibc each download
+          # needs so nobody has to find out from a loader error. Linux users on an older
+          # distribution have the `inkvec` command itself, whose plain archive is built
+          # against glibc 2.17 and runs on all of them.
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-24.04
             bundles: deb,rpm,appimage
             denoiser: true
+            glibc: "2.39"
+            glibcxx: "3.4.33"
           # Native arm64 rather than cross: the app links a webview, and a
           # cross-compiled sysroot for WebKitGTK is not a fight worth having.
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
             bundles: deb,rpm,appimage
             denoiser: true
-          # ONNX Runtime has no package for this target, which is why the CLI matrix
-          # excludes its restore-model row too. The app says so honestly rather than
+            glibc: "2.39"
+            glibcxx: "3.4.33"
+          # ONNX Runtime has no package for this target, which is why the CLI matrix has
+          # no restore-model row for it either. The app says so honestly rather than
           # offering a download that could not be used.
           - target: x86_64-apple-darwin
             os: macos-15-intel
             bundles: app,dmg
             denoiser: false
+            macos: "10.15"
           - target: aarch64-apple-darwin
             os: macos-14
             bundles: app,dmg
             denoiser: true
+            macos: "11.0"
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             bundles: nsis,msi
@@ -298,9 +368,8 @@ jobs:
           workspaces: studio/src-tauri
           key: studio-${{ matrix.target }}
 
-      # Ubuntu 22.04 rather than the newest image on purpose: an AppImage and a .deb
-      # inherit the glibc and WebKitGTK of the machine that built them, and building on
-      # 24.04 produces packages that will not start on 22.04.
+      # WebKitGTK 4.1 and its friends, from whichever Ubuntu this row builds on: the
+      # bundle takes that image's versions with it, which is what the floors above record.
       - name: Install the webview toolchain
         if: runner.os == 'Linux'
         run: |
@@ -318,8 +387,13 @@ jobs:
         # SIDECAR_TARGET tells `scripts/sidecar.mjs` which triple to build the bundled
         # `inkvec` command for; Tauri does not pass its own --target down to
         # beforeBuildCommand, and a host-built command in a cross bundle would not run.
+        #
+        # MACOSX_DEPLOYMENT_TARGET matches `bundle.macOS.minimumSystemVersion` in
+        # tauri.conf.json; on Apple silicon it is 11.0, the oldest macOS that
+        # architecture exists on, rather than a number clang would only clamp anyway.
         env:
           SIDECAR_TARGET: ${{ matrix.target }}
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos }}
         run: |
           set -euo pipefail
           features=""
@@ -327,6 +401,23 @@ jobs:
             features="--features denoiser"
           fi
           npx tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} ${features}
+
+      # The app and the `inkvec` command it carries, both checked: an installer that
+      # cannot start is as useless as an archive that cannot, and the bundled command is
+      # what Settings puts on PATH.
+      - name: The oldest system this build will start on
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=()
+          if [ -n "${{ matrix.glibc }}" ]; then args+=(--glibc "${{ matrix.glibc }}"); fi
+          if [ -n "${{ matrix.glibcxx }}" ]; then args+=(--glibcxx "${{ matrix.glibcxx }}"); fi
+          if [ -n "${{ matrix.macos }}" ]; then args+=(--macos "${{ matrix.macos }}"); fi
+          python3 .github/scripts/abi_floor.py \
+            "studio/src-tauri/target/${{ matrix.target }}/release/inkvec-studio" "${args[@]}"
+          python3 .github/scripts/abi_floor.py \
+            "target/${{ matrix.target }}/release/${BIN_NAME}" "${args[@]}"
 
       # Named the way the CLI archives are, so a release page reads as one set of
       # downloads rather than two conventions side by side.
@@ -436,6 +527,22 @@ jobs:
           # the installer, and leaving somebody to guess what that means is worse than
           # saying it plainly next to the checksums that settle it.
           cat >> notes.md <<'NOTES'
+
+          ---
+
+          ## Which download
+
+          | File | What it is | Oldest system it starts on |
+          | --- | --- | --- |
+          | `inkvec-*-<target>.tar.gz` / `.zip` | The command line | Linux glibc 2.17 · macOS 10.12 Intel, 11.0 Apple silicon · Windows 10 |
+          | `inkvec-*-<target>-restore-model.*` | The command line with the `--restore` restorer compiled in | Linux glibc 2.38 and libstdc++ 13 · macOS 11.0, Apple silicon only · Windows 10 |
+          | `inkvec-studio-*` | Inkvec Studio Lite, the desktop app | Linux glibc 2.39 and WebKitGTK 4.1 (Ubuntu 24.04, Debian 13, Fedora 40+) · macOS 10.15 Intel, 11.0 Apple silicon · Windows 10 |
+
+          The restorer links a prebuilt ONNX Runtime that calls glibc 2.38 and GCC 13
+          symbols, and the app ships the restorer: that is where the two higher floors come
+          from. On an older Linux, take the plain command-line archive, which is built
+          against glibc 2.17. Every floor above is asserted during the build by reading the
+          binary that came out of it.
 
           ---
 

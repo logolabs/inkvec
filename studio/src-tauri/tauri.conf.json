@@ -1,0 +1,95 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Inkvec Studio Lite",
+  "version": "0.1.4",
+  "identifier": "org.logolabs.inkvec.studio",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Inkvec Studio Lite",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 640,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": false,
+        "transparent": false,
+        "dragDropEnabled": true,
+        "theme": null,
+        "backgroundColor": "#1a1816"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost blob: data:; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self' ipc: http://ipc.localhost",
+      "assetProtocol": {
+        "enable": true,
+        "scope": []
+      }
+    },
+    "withGlobalTauri": false
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["deb", "rpm", "appimage", "dmg", "app", "nsis", "msi"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "Graphics",
+    "shortDescription": "Raster to SVG, exactly.",
+    "longDescription": "Inkvec Studio Lite turns a raster logo into an SVG and minimises SVGs you already have. It measures the result: colour difference, coordinates, paths and file size, next to an honest list of what tracing could not recover. Everything runs on this computer; your image is never uploaded.",
+    "copyright": "Copyright (c) LogoLabs. Licensed under the Apache License, Version 2.0.",
+    "licenseFile": "../../LICENSE",
+    "homepage": "https://logolabs.org/tools/inkvec-studio",
+    "publisher": "LogoLabs SRL",
+    "resources": {
+      "../../LICENSE": "LICENSE",
+      "../../NOTICE": "NOTICE",
+      "../../docs/THIRD_PARTY.md": "THIRD_PARTY.md",
+      "samples/": "samples/"
+    },
+    "linux": {
+      "deb": {
+        "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"],
+        "section": "graphics"
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "10.15",
+      "dmg": {
+        "appPosition": { "x": 180, "y": 220 },
+        "applicationFolderPosition": { "x": 480, "y": 220 },
+        "windowSize": { "width": 660, "height": 420 }
+      }
+    },
+    "windows": {
+      "allowDowngrades": true,
+      "nsis": {
+        "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico",
+        "headerImage": "installer/header.bmp",
+        "sidebarImage": "installer/sidebar.bmp",
+        "displayLanguageSelector": false,
+        "languages": ["English"],
+        "compression": "lzma"
+      },
+      "wix": {
+        "language": ["en-US"]
+      }
+    }
+  },
+  "plugins": {}
+}

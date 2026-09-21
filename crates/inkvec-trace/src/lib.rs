@@ -1195,6 +1195,64 @@ pub struct Stopwatch {
     t: clock::Instant,
 }
 
+/// A sink for stage boundaries: the stage's name, and how long it took in milliseconds.
+type StageSink = std::rc::Rc<dyn Fn(&str, f64)>;
+
+thread_local! {
+    /// The sink installed on this thread by [`with_stage_sink`], if any.
+    static STAGE_SINK: std::cell::RefCell<Option<StageSink>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `f` with `sink` receiving every stage boundary the pipeline passes on this thread,
+/// as a stage name and the milliseconds that stage took.
+///
+/// This is the seam an embedder needs to show a trace *as it happens* rather than after
+/// it. A trace of a real logo takes about a second, and an interface has to spend that
+/// second saying something true; without this the alternatives are a bare spinner or a
+/// fabricated sequence of stages, and neither is worth offering.
+///
+/// The names are the pipeline's own internal stage names (`palette`, `carve`,
+/// `boundary_opt`, `fit_dp`, ...), which is what makes them worth reporting: they are the
+/// real boundaries rather than a display schedule. They are **not** a stable interface —
+/// stages get added, split and renamed as the pipeline changes — so a caller must treat an
+/// unrecognised name as "some stage" and must not assume a fixed set, count or order.
+///
+/// Thread-local by design. The pipeline marks stages on the thread that drives it and does
+/// its parallel work below that level, so a caller tracing several images at once (a batch
+/// queue on a rayon pool) gets each image's stages on its own thread with no interleaving.
+/// Nothing is reported from rayon's workers.
+///
+/// The sink runs on the pipeline's thread, in the middle of a trace. It should hand the
+/// value off and return, and it must not call back into the tracer.
+///
+/// ```
+/// use std::{cell::RefCell, rc::Rc};
+///
+/// let seen = Rc::new(RefCell::new(Vec::new()));
+/// let sink = Rc::clone(&seen);
+/// inkvec_trace::with_stage_sink(
+///     move |name, _ms| sink.borrow_mut().push(name.to_string()),
+///     || inkvec_trace::Stopwatch::start().mark("palette"),
+/// );
+/// assert_eq!(*seen.borrow(), ["palette"]);
+/// ```
+pub fn with_stage_sink<R>(sink: impl Fn(&str, f64) + 'static, f: impl FnOnce() -> R) -> R {
+    /// Puts back whatever sink was installed before, on every path out of the call —
+    /// including a panic inside `f`, which would otherwise leave a stale sink behind on a
+    /// thread that goes on to be reused.
+    struct Restore(Option<StageSink>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            STAGE_SINK.with(|s| *s.borrow_mut() = self.0.take());
+        }
+    }
+
+    let installed: StageSink = std::rc::Rc::new(sink);
+    let _guard = Restore(STAGE_SINK.with(|s| s.borrow_mut().replace(installed)));
+    f()
+}
+
 impl Stopwatch {
     /// Start a stopwatch, enabled if the `INKVEC_TIMING` environment variable is set.
     pub fn start() -> Self {
@@ -1205,15 +1263,102 @@ impl Stopwatch {
     }
 
     /// Log elapsed time since previous mark and reset the baseline.
+    ///
+    /// Also reports the boundary to the sink [`with_stage_sink`] installed on this
+    /// thread, if there is one. With no sink and no `INKVEC_TIMING` this is a thread-local
+    /// read and a clock sample, which is what it already was.
     pub fn mark(&mut self, name: &str) {
+        let ms = self.t.elapsed().as_secs_f64() * 1e3;
         if self.on {
-            eprintln!(
-                "  [t] {:<16} {:>9.1} ms",
-                name,
-                self.t.elapsed().as_secs_f64() * 1e3
-            );
+            eprintln!("  [t] {name:<16} {ms:>9.1} ms");
+        }
+        // Cloned out of the cell before being called, so a sink that somehow reached back
+        // into this thread would not find the RefCell already borrowed.
+        let sink = STAGE_SINK.with(|s| s.borrow().clone());
+        if let Some(sink) = sink {
+            sink(name, ms);
         }
         self.t = clock::Instant::now();
+    }
+}
+
+#[cfg(test)]
+mod stage_sink_tests {
+    use super::{with_stage_sink, Stopwatch};
+    use std::{cell::RefCell, rc::Rc};
+
+    fn recorder() -> (Rc<RefCell<Vec<String>>>, impl Fn(&str, f64) + 'static) {
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&seen);
+        (seen, move |n: &str, _ms: f64| {
+            sink.borrow_mut().push(n.to_string())
+        })
+    }
+
+    #[test]
+    fn marks_reach_the_installed_sink() {
+        let (seen, sink) = recorder();
+        with_stage_sink(sink, || {
+            let mut sw = Stopwatch::start();
+            sw.mark("palette");
+            sw.mark("carve");
+        });
+        assert_eq!(*seen.borrow(), ["palette", "carve"]);
+    }
+
+    #[test]
+    fn a_stage_is_timed_from_the_previous_mark() {
+        let elapsed = Rc::new(RefCell::new(0.0f64));
+        let sink = Rc::clone(&elapsed);
+        with_stage_sink(
+            move |_, ms| *sink.borrow_mut() = ms,
+            || {
+                let mut sw = Stopwatch::start();
+                std::thread::sleep(std::time::Duration::from_millis(12));
+                sw.mark("slow");
+            },
+        );
+        assert!(*elapsed.borrow() >= 10.0, "{}", elapsed.borrow());
+    }
+
+    #[test]
+    fn no_sink_installed_is_a_no_op() {
+        Stopwatch::start().mark("palette");
+    }
+
+    #[test]
+    fn the_previous_sink_is_restored_afterwards() {
+        let (outer_seen, outer_sink) = recorder();
+        with_stage_sink(outer_sink, || {
+            let (inner_seen, inner_sink) = recorder();
+            with_stage_sink(inner_sink, || Stopwatch::start().mark("nested"));
+            assert_eq!(*inner_seen.borrow(), ["nested"]);
+            Stopwatch::start().mark("after");
+        });
+        assert_eq!(*outer_seen.borrow(), ["after"]);
+    }
+
+    #[test]
+    fn a_panic_does_not_leave_a_sink_behind() {
+        let (seen, sink) = recorder();
+        let boom = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_stage_sink(sink, || panic!("inside the trace"))
+        }));
+        assert!(boom.is_err());
+        Stopwatch::start().mark("afterwards");
+        assert!(seen.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_sink_on_one_thread_does_not_see_another_threads_stages() {
+        let (seen, sink) = recorder();
+        with_stage_sink(sink, || {
+            std::thread::scope(|s| {
+                s.spawn(|| Stopwatch::start().mark("elsewhere"));
+            });
+            Stopwatch::start().mark("here");
+        });
+        assert_eq!(*seen.borrow(), ["here"]);
     }
 }
 

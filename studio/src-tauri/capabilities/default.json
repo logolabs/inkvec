@@ -1,0 +1,23 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The window's own permissions. Deliberately small: the app needs file dialogs, the clipboard, and the ability to reveal a folder it just wrote to. It does not get arbitrary filesystem or shell access — everything that touches disk goes through a named command in lib.rs.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close",
+    "core:window:allow-is-maximized",
+    "core:webview:allow-internal-toggle-devtools",
+    "core:event:default",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "dialog:allow-message",
+    "clipboard-manager:allow-write-text",
+    "clipboard-manager:allow-read-text",
+    "opener:allow-reveal-item-in-dir",
+    "opener:allow-open-url"
+  ]
+}

@@ -199,14 +199,15 @@ jobs:
         run: |
           set -euo pipefail
           # `find` rather than a `**` glob: the macOS runners run bash 3.2, which has no
-          # globstar and fails the step on `shopt -s globstar`.
-          count=$(find . \( \
+          # globstar and fails the step on `shopt -s globstar`. And no `tee /dev/stderr`:
+          # Git Bash on the Windows runner has no /dev/stderr to write to.
+          files=$(find . \( \
             -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o \
-            -name '*.dmg' -o -name '*.exe' -o -name '*.msi' -o -name '*.app' \) \
-            -print | tee /dev/stderr | wc -l | tr -d ' ')
-          if [[ "${count}" -eq 0 ]]; then
+            -name '*.dmg' -o -name '*.exe' -o -name '*.msi' -o -name '*.app' \) -print)
+          if [[ -z "${files}" ]]; then
             echo "::error::the bundler produced nothing for ${{ matrix.bundles }}"
             ls -R .
             exit 1
           fi
-          echo "${count} file(s)"
+          printf '%s\n' "${files}"
+          printf '%s\n' "${files}" | wc -l | tr -d ' ' | xargs -I{} echo "{} file(s)"

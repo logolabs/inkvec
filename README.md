@@ -103,13 +103,13 @@ assumed:
 | --- | --- | --- |
 | `inkvec-<version>-<target>.tar.gz` / `.zip` | The command line | Linux **glibc 2.17** (CentOS 7, Debian 8, Ubuntu 14.04 and newer) · macOS **10.12** on Intel, **11.0** on Apple silicon · Windows 10 |
 | `inkvec-<version>-<target>-restore-model.tar.gz` / `.zip` | The command line with the ONNX-Runtime restorer (`--restore`) compiled in | Linux **glibc 2.38 and libstdc++ 13** (Ubuntu 23.10, Debian 13, Fedora 39, RHEL 10 and newer) · macOS **11.0**, Apple silicon only · Windows 10 |
-| `inkvec-studio-<version>-<target>.deb` / `.rpm` / `.AppImage` / `.dmg` / `.exe` / `.msi` | Inkvec Studio Lite, the desktop app | Linux **glibc 2.39 and WebKitGTK 4.1** (Ubuntu 24.04, Debian 13, Fedora 40 and newer) · macOS **10.15** on Intel, **11.0** on Apple silicon · Windows 10 with WebView2 (the installer fetches it) |
+| `inkvec-studio-<version>-<target>.deb` / `.rpm` / `.AppImage` / `.dmg` / `.exe` / `.msi` | Inkvec Studio Lite, the desktop app | Linux **glibc 2.38, libstdc++ 13 and WebKitGTK 4.1** (Ubuntu 23.10, Debian 13, Fedora 39 and newer; built on Ubuntu 24.04) · macOS **10.15** on Intel, **11.0** on Apple silicon · Windows 10 with WebView2 (the installer fetches it) |
 
 The two higher floors are ONNX Runtime's: the restorer links a prebuilt copy of it
 statically, and that prebuilt calls glibc 2.38 and GCC 13 symbols. The app ships the
-restorer, which is why its Linux packages need a 2024-vintage distribution. On anything
-older, the plain command-line archive is the one to take — it is built against glibc 2.17
-and runs everywhere, without `--restore`.
+restorer, which is why its Linux packages need a recent distribution. On anything older,
+the plain command-line archive is the one to take — it is built against glibc 2.17 and
+runs everywhere, without `--restore`.
 
 ### Build from source
 

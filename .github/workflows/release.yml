@@ -376,7 +376,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev \
-            libgtk-3-dev librsvg2-dev patchelf file desktop-file-utils
+            libgtk-3-dev librsvg2-dev patchelf file desktop-file-utils xdg-utils
 
       - run: npm ci
         working-directory: studio
@@ -536,7 +536,7 @@ jobs:
           | --- | --- | --- |
           | `inkvec-*-<target>.tar.gz` / `.zip` | The command line | Linux glibc 2.17 · macOS 10.12 Intel, 11.0 Apple silicon · Windows 10 |
           | `inkvec-*-<target>-restore-model.*` | The command line with the `--restore` restorer compiled in | Linux glibc 2.38 and libstdc++ 13 · macOS 11.0, Apple silicon only · Windows 10 |
-          | `inkvec-studio-*` | Inkvec Studio Lite, the desktop app | Linux glibc 2.39 and WebKitGTK 4.1 (Ubuntu 24.04, Debian 13, Fedora 40+) · macOS 10.15 Intel, 11.0 Apple silicon · Windows 10 |
+          | `inkvec-studio-*` | Inkvec Studio Lite, the desktop app | Linux glibc 2.38, libstdc++ 13 and WebKitGTK 4.1 (Ubuntu 23.10, Debian 13, Fedora 39+) · macOS 10.15 Intel, 11.0 Apple silicon · Windows 10 |
 
           The restorer links a prebuilt ONNX Runtime that calls glibc 2.38 and GCC 13
           symbols, and the app ships the restorer: that is where the two higher floors come

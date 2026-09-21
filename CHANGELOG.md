@@ -199,7 +199,8 @@ API in particular should be treated as unstable release to release).
   then failed on `invalid category` — and the publish job waits on all of them. It is
   `"GraphicsAndDesign"` now. The Linux Studio jobs failed earlier still, in the link: ONNX
   Runtime's prebuilt needs glibc 2.38 and GCC 13's libstdc++, which Ubuntu 22.04 does not
-  have, so those rows build on 24.04.
+  have, so those rows build on 24.04. The AppImage needed one more thing nobody had
+  reached yet: `xdg-utils`, without which the bundler stops after writing the AppDir.
 
 - **The npm publish.** `npm publish dist-npm/*.tgz` failed on the 0.1.5 tag with a git
   authentication error: npm reads a bare `dir/file.tgz` as the GitHub shorthand

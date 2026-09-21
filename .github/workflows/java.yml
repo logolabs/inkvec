@@ -8,9 +8,16 @@ name: java
 # darwin-aarch64/), so the assembled jar needs no native build step for a consumer.
 #
 # Tested on linux, windows and macos against that assembled jar (no jna.library.path
-# override: this is the same jar a consumer would get). On a v* tag, publishes to Maven
-# Central through the Central Publisher Portal when the secrets below are configured;
-# without them the publish job records a notice and the jar stays attached to the run.
+# override: this is the same jar a consumer would get). It is not published anywhere: the
+# Java binding is built from this repository by whoever wants it (`packages/java/README.md`),
+# so this workflow builds and tests the jar and attaches it to the run, and that is all.
+#
+# There was a publish-to-Maven-Central job here. It never ran and never could: this
+# workflow is triggered by `workflow_run`, whose `github.ref` is the default branch even
+# when the run it followed was a tag, so its `startsWith(github.ref, 'refs/tags/v')` guard
+# was false every time. Publishing to Central also needs a verified namespace, which the
+# placeholder group id `com.logolabs` is not. Neither is worth carrying for a package
+# nobody has asked to consume from a registry.
 #
 # NOT verified by running this workflow -- no CI has executed it. Locally verified instead:
 # `cargo build --release -p inkvec-ffi` + `mvn test` on Windows x64 with JDK 22, and a
@@ -123,51 +130,17 @@ jobs:
         # This exercises exactly what a consumer gets: the assembled jar on the classpath
         # and JNA's own extraction of the per-platform resource bundled inside it -- no
         # jna.library.path anywhere.
-        run: mvn -q test "-Dinkvec.bundledJar=$PWD/target/inkvec-0.1.4.jar"
-
-  publish:
-    name: publish to Maven Central
-    needs: [assemble, test]
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    env:
-      HAVE_SECRETS: ${{ secrets.MAVEN_CENTRAL_USERNAME != '' && secrets.MAVEN_CENTRAL_PASSWORD != '' && secrets.MAVEN_GPG_PRIVATE_KEY != '' }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: java-package
-          path: packages/java/target
-      # Opt in: set the repository variable PUBLISH_MAVEN to `true`, register a verified
-      # Maven Central namespace (see packages/java/README.md -- com.logolabs is a
-      # placeholder), and configure four secrets: MAVEN_CENTRAL_USERNAME and
-      # MAVEN_CENTRAL_PASSWORD (a Central Publisher Portal user token), and
-      # MAVEN_GPG_PRIVATE_KEY and MAVEN_GPG_PASSPHRASE (an ASCII-armored signing key, for
-      # the artifacts Central requires be signed).
-      - uses: actions/setup-java@v4
-        if: env.HAVE_SECRETS == 'true' && vars.PUBLISH_MAVEN == 'true'
-        with:
-          distribution: temurin
-          java-version: "17"
-          server-id: central
-          server-username: MAVEN_CENTRAL_USERNAME
-          server-password: MAVEN_CENTRAL_PASSWORD
-          gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
-          gpg-passphrase: MAVEN_GPG_PASSPHRASE
-      - name: tag matches Cargo.toml's version
-        if: env.HAVE_SECRETS == 'true' && vars.PUBLISH_MAVEN == 'true'
+        #
+        # The jar is found rather than named: this line used to carry a hard-coded
+        # `inkvec-0.1.4.jar`, which every version bump turns into a path that does not
+        # exist.
         run: |
-          want="${GITHUB_REF_NAME#v}"
-          have=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
-          test "$want" = "$have" || { echo "tag $GITHUB_REF_NAME but Cargo.toml says $have"; exit 1; }
-      - name: mvn deploy (signed, to the Central Publisher Portal)
-        if: env.HAVE_SECRETS == 'true' && vars.PUBLISH_MAVEN == 'true'
-        working-directory: packages/java
-        env:
-          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
-          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
-          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
-        run: mvn -q -Prelease deploy -DskipTests
-      - name: not published
-        if: env.HAVE_SECRETS != 'true' || vars.PUBLISH_MAVEN != 'true'
-        run: echo "::notice::PUBLISH_MAVEN is not 'true', or one of MAVEN_CENTRAL_USERNAME / MAVEN_CENTRAL_PASSWORD / MAVEN_GPG_PRIVATE_KEY / MAVEN_GPG_PASSPHRASE is not set; the jar was built and tested but not published."
+          set -euo pipefail
+          shopt -s nullglob
+          jars=(target/inkvec-[0-9]*.jar)
+          if [[ ${#jars[@]} -ne 1 ]]; then
+            echo "::error::expected exactly one assembled jar in packages/java/target, found ${#jars[@]}"
+            ls -la target || true
+            exit 1
+          fi
+          mvn -q test "-Dinkvec.bundledJar=$PWD/${jars[0]}"

@@ -17,19 +17,32 @@ Project page, method and benchmarks: <https://github.com/logolabs/inkvec>.
 
 ## Install
 
-Maven:
+**This package is not on Maven Central, and is not planned to be.** It is built from the
+repository, which takes two commands:
+
+```sh
+cargo build --release -p inkvec-ffi        # the native library this binds to
+mvn -f packages/java/pom.xml install       # builds, tests and installs the jar locally
+```
+
+Then depend on what you just installed:
 
 ```xml
 <dependency>
   <groupId>com.logolabs</groupId>
   <artifactId>inkvec</artifactId>
-  <version>0.1.3</version>
+  <version>0.1.5</version>
 </dependency>
 ```
 
-`com.logolabs` is a placeholder group id: Maven Central requires a verified namespace
-(a domain you control, or `io.github.<user>`), which is not yet decided. Not published to
-Maven Central yet; see the repository's `packages/java/README.md` for building it locally.
+`com.logolabs` is a placeholder group id; publishing to Central would need a verified
+namespace (a domain you control, or `io.github.<user>`). The `release` profile in
+`pom.xml` is still there for anyone who wants to publish their own build under their own
+group id.
+
+The jar the `java` workflow builds carries the native library for all five platforms
+inside it, under JNA's resource prefixes, and is attached to that workflow's runs if you
+would rather not build the Rust side yourself.
 
 Java 8 or later. Pulls in one dependency, [JNA](https://github.com/java-native-access/jna).
 

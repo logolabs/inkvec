@@ -296,12 +296,8 @@ that could not be loaded. See `packages/npm/README.md`.
 
 ### Java
 
-```xml
-<dependency>
-  <groupId>com.logolabs</groupId>
-  <artifactId>inkvec</artifactId>
-  <version>0.1.3</version>
-</dependency>
+```sh
+cargo build --release -p inkvec-ffi     # then: mvn -f packages/java/pom.xml install
 ```
 
 ```java
@@ -313,8 +309,9 @@ A [JNA](https://github.com/java-native-access/jna) binding over the C ABI (`inkv
 Java 8 or later, one dependency. `InkvecOptions` is a generated, immutable builder; every
 method also takes options as a raw JSON string. Errors are `InkvecException` subclasses
 (`InvalidImageException`, `InvalidOptionsException`, `InternalException`). Not published to
-Maven Central yet (placeholder group id `com.logolabs`; needs a verified namespace). See
-`packages/java/README.md`.
+Maven Central, and not planned to be: build it from the repository, or take the jar the
+`java` workflow attaches to its runs, which carries all five platforms' native libraries.
+See `packages/java/README.md`.
 
 ### C#
 

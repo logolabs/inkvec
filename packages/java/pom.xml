@@ -143,10 +143,10 @@
   </build>
 
   <!--
-    Inactive unless built with -Prelease (only .github/workflows/java.yml does, and only on
-    a v* tag with credentials present). Signs the jar and stages it to Maven Central through
-    the Central Publisher Portal. Needs a verified group id first (see the notes on groupId
-    above); until then this profile is scaffolding, not a working publish path.
+    Inactive unless built with -Prelease, which nothing in this repository does: Inkvec does
+    not publish this package to Maven Central. Signs the jar and stages it to the Central
+    Publisher Portal, and is kept as scaffolding for anyone publishing their own build --
+    which needs a verified group id of their own first (see the notes on groupId above).
   -->
   <profiles>
     <profile>

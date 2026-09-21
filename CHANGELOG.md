@@ -214,6 +214,16 @@ API in particular should be treated as unstable release to release).
   now starts with `./`, and the step checks that exactly one tarball was packed before
   publishing it.
 
+- **The Java package is built from this repository, not from Maven Central.** The
+  publish-to-Central job is gone: it could never have run, because `java.yml` is triggered
+  by `workflow_run` and a `workflow_run` event's `github.ref` is the default branch even
+  when the run it followed was a tag, so its `refs/tags/v` guard was false every time.
+  Publishing would also need a verified namespace the placeholder group id `com.logolabs`
+  does not have. `packages/java/README.md` and `docs/BINDINGS.md` now give the two commands
+  that build the jar instead of a dependency block for an artifact that does not exist.
+  The test job no longer looks for a hard-coded `inkvec-0.1.4.jar`, which every version
+  bump turned into a path that is not there.
+
 - **Which system each download runs on**, measured rather than assumed. A new
   `.github/scripts/abi_floor.py` reads each built binary — the versioned symbols it imports
   on Linux (weak references reported but not counted, since the loader may leave them null),

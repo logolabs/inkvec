@@ -20,6 +20,7 @@ import {
 } from "../lib/ipc";
 import { bytes, type Store } from "../lib/state";
 import { closeOverlay, confirm, modal, openModal, toast } from "../components/overlays";
+import { windowControls } from "../components/wincontrols";
 
 export interface ScreenActions {
   applyPrefs(patch: Partial<Prefs>): void;
@@ -60,6 +61,10 @@ function settings(store: Store, act: ScreenActions): HTMLElement {
       h("span", { style: { fontSize: "12.5px", fontWeight: "600" } }, "Settings"),
       h("div.spacer"),
       h("button.btn.compact", { onclick: act.close }, "Done"),
+      // This screen covers the app bar, so the window's own controls come with it.
+      // Taking the chrome and then hiding it is how an app becomes unclosable.
+      h("div.sep"),
+      windowControls(),
     ),
     h(
       "div.screenbody",
@@ -405,6 +410,10 @@ function about(store: Store, act: ScreenActions): HTMLElement {
       h("span", { style: { fontSize: "12.5px", fontWeight: "600" } }, "About"),
       h("div.spacer"),
       h("button.btn.compact", { onclick: act.close }, "Done"),
+      // This screen covers the app bar, so the window's own controls come with it.
+      // Taking the chrome and then hiding it is how an app becomes unclosable.
+      h("div.sep"),
+      windowControls(),
     ),
     h(
       "div.screenbody",

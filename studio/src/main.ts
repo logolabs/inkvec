@@ -11,13 +11,12 @@
  * substitution.
  */
 
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
-import { appMark, fill, h, icon } from "./lib/dom";
+import { appMark, fill, h } from "./lib/dom";
 import {
   api,
   events,
@@ -30,6 +29,7 @@ import { initial, modKey, Store } from "./lib/state";
 import { createRail } from "./components/rail";
 import { openCardComposer, openExportSheet } from "./components/exportsheet";
 import { closeOverlay, openPopover, toast } from "./components/overlays";
+import { windowControls } from "./components/wincontrols";
 import { createBatch } from "./views/batch";
 import { createMinify } from "./views/minify";
 import { createScreens, openDenoiserModal } from "./views/screens";
@@ -341,7 +341,6 @@ function renderTab(): void {
 
 function renderAppBar(): void {
   const st = store.state;
-  const win = getCurrentWindow();
 
   fill(
     appbar,
@@ -382,13 +381,7 @@ function renderAppBar(): void {
       h("button.btn.ghost.compact", { onclick: () => store.set({ screen: "settings" }) }, "Settings"),
       h("button.btn.ghost.compact", { onclick: () => store.set({ screen: "about" }) }, "About"),
       h("div.sep"),
-      h(
-        "div.wincontrols",
-        null,
-        h("button.min", { "aria-label": "Minimise", onclick: () => void win.minimize() }, h("i")),
-        h("button.max", { "aria-label": "Maximise", onclick: () => void win.toggleMaximize() }, h("i")),
-        h("button.close", { "aria-label": "Close", onclick: () => void win.close() }, icon("x", 13)),
-      ),
+      windowControls(),
     ),
   );
   appbar.setAttribute("data-tauri-drag-region", "");

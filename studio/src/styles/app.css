@@ -1671,7 +1671,9 @@ kbd {
 }
 
 .settingsgrid {
-  width: min(1080px, 100%);
+  /* 1080 of cards plus the 24 px gutter either side, so the two columns are the width
+     the design draws them at and still do not touch the edge in a narrow window. */
+  width: min(1128px, 100%);
   margin: 0 auto;
   padding: 24px;
   display: grid;

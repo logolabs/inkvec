@@ -171,7 +171,9 @@ jobs:
           if [[ "${{ matrix.denoiser }}" == "true" ]]; then
             features="--features denoiser"
           fi
-          npx tauri build --bundles ${{ matrix.bundles }} ${features}
+          # --verbose so a bundler that fails prints its own error. Without it Tauri
+          # reports only `failed to run light.exe` and the WiX diagnostic is lost.
+          npx tauri build --verbose --bundles ${{ matrix.bundles }} ${features}
 
       # Name every file the bundler produced, so a format that silently stops being
       # built is visible in the log rather than only in a release that lacks it.
@@ -180,13 +182,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          shopt -s nullglob globstar
-          files=(**/*.deb **/*.rpm **/*.AppImage **/*.dmg **/*.exe **/*.msi **/*.app)
-          if [[ ${#files[@]} -eq 0 ]]; then
+          # `find` rather than a `**` glob: the macOS runners run bash 3.2, which has no
+          # globstar and fails the step on `shopt -s globstar`.
+          count=$(find . \( \
+            -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o \
+            -name '*.dmg' -o -name '*.exe' -o -name '*.msi' -o -name '*.app' \) \
+            -print | tee /dev/stderr | wc -l | tr -d ' ')
+          if [[ "${count}" -eq 0 ]]; then
             echo "::error::the bundler produced nothing for ${{ matrix.bundles }}"
             ls -R .
             exit 1
           fi
-          for f in "${files[@]}"; do
-            echo "${f}"
-          done
+          echo "${count} file(s)"

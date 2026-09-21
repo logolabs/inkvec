@@ -434,15 +434,18 @@ jobs:
           out="dist"
           mkdir -p "${out}"
           bundle="studio/src-tauri/target/${TARGET}/release/bundle"
-          shopt -s nullglob globstar
+          shopt -s nullglob
+          # `find`, not a `**` glob: the macOS runners' bash is 3.2, where `shopt -s
+          # globstar` is not an option at all -- it fails the step outright, which is how
+          # this was found.
           found=0
-          for f in "${bundle}"/**/*.deb "${bundle}"/**/*.rpm "${bundle}"/**/*.AppImage \
-                   "${bundle}"/**/*.dmg "${bundle}"/**/*.exe "${bundle}"/**/*.msi; do
+          while IFS= read -r f; do
             ext="${f##*.}"
             cp "${f}" "${out}/inkvec-studio-${version}-${TARGET}.${ext}"
             found=$((found + 1))
-          done
-          shopt -u globstar
+          done < <(find "${bundle}" -type f \( \
+            -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o \
+            -name '*.dmg' -o -name '*.exe' -o -name '*.msi' \) | sort)
           if [[ "${found}" -eq 0 ]]; then
             echo "::error::no bundles were produced for ${TARGET}"
             ls -R "${bundle}" || true

@@ -224,6 +224,12 @@ API in particular should be treated as unstable release to release).
   The test job no longer looks for a hard-coded `inkvec-0.1.4.jar`, which every version
   bump turned into a path that is not there.
 
+- **Studio CI packages the app instead of only compiling it.** `--no-bundle` is what let
+  the category bug reach a tag: packaging was the one step no CI run had ever executed, on
+  any platform. The `studio` workflow now builds the same bundle formats the release does
+  — `deb`/`rpm`/`AppImage`, `app`/`dmg`, `nsis`/`msi` — and fails if a bundler produces
+  nothing, so the next installer that will not build says so on the pull request.
+
 - **Which system each download runs on**, measured rather than assumed. A new
   `.github/scripts/abi_floor.py` reads each built binary — the versioned symbols it imports
   on Linux (weak references reported but not counted, since the loader may leave them null),

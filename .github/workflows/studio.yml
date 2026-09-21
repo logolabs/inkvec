@@ -105,15 +105,19 @@ jobs:
       # drifted from the dependency graph they claim to describe.
       - run: python studio/tools/third_party.py --check
 
-  # The slow half: does the app actually build on each platform? `--no-bundle` because
-  # packaging is the release workflow's job and doubles the time for no extra signal on
-  # a pull request.
+  # The slow half: does the app actually build and package on each platform?
   #
-  # The images and the feature flags are the release workflow's, deliberately. When they
-  # were not, the first tagged build was the first thing to ever compile the app with
-  # `--features denoiser` on the image the release actually uses, and it failed there:
-  # ONNX Runtime's prebuilt would not link. A matrix that tests a different combination
-  # from the one you ship tells you nothing about the one you ship.
+  # The images, the feature flags and the bundle formats are the release workflow's,
+  # deliberately. When they were not, a tagged build was the first thing to ever run each
+  # of those combinations, and each one failed there in turn: `--features denoiser` would
+  # not link on the image the release used, and then `bundle.category` -- a single wrong
+  # word in tauri.conf.json -- failed every bundler on every platform after compiling the
+  # whole app, so 0.1.5 published no installers at all. `--no-bundle` here is what let
+  # that through: packaging was the only step no CI run ever executed. It costs a few
+  # minutes per platform to stop doing that.
+  #
+  # A matrix that tests a different combination from the one you ship tells you nothing
+  # about the one you ship.
   build:
     name: build (${{ matrix.os }})
     needs: check
@@ -124,10 +128,13 @@ jobs:
         include:
           - os: ubuntu-24.04
             denoiser: true
+            bundles: deb,rpm,appimage
           - os: macos-14 # arm64
             denoiser: true
+            bundles: app,dmg
           - os: windows-latest
             denoiser: true
+            bundles: nsis,msi
     steps:
       - uses: actions/checkout@v4
 
@@ -150,12 +157,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev \
-            libgtk-3-dev librsvg2-dev patchelf
+            libgtk-3-dev librsvg2-dev patchelf file desktop-file-utils xdg-utils
 
       - run: npm ci
         working-directory: studio
 
-      - name: Build the app
+      - name: Build and package the app
         working-directory: studio
         shell: bash
         run: |
@@ -164,4 +171,22 @@ jobs:
           if [[ "${{ matrix.denoiser }}" == "true" ]]; then
             features="--features denoiser"
           fi
-          npx tauri build --no-bundle ${features}
+          npx tauri build --bundles ${{ matrix.bundles }} ${features}
+
+      # Name every file the bundler produced, so a format that silently stops being
+      # built is visible in the log rather than only in a release that lacks it.
+      - name: What the bundler produced
+        working-directory: studio/src-tauri/target/release/bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob globstar
+          files=(**/*.deb **/*.rpm **/*.AppImage **/*.dmg **/*.exe **/*.msi **/*.app)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "::error::the bundler produced nothing for ${{ matrix.bundles }}"
+            ls -R .
+            exit 1
+          fi
+          for f in "${files[@]}"; do
+            echo "${f}"
+          done

@@ -1,0 +1,144 @@
+name: studio
+
+# Inkvec Studio Lite's own CI. It is separate from `ci.yml` because the app needs a
+# webview toolchain that the engine deliberately does not: `cargo build --workspace`
+# must keep working on a machine with no WebKitGTK, which is why `studio/src-tauri` is
+# excluded from the root workspace.
+#
+# Path-filtered, so a change to the tracer does not spend fifteen minutes building three
+# desktop apps -- with one exception below, because a change to the engine *can* break
+# the app it is compiled into.
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "studio/**"
+      - "crates/**"
+      - ".github/workflows/studio.yml"
+  pull_request:
+    paths:
+      - "studio/**"
+      - "crates/**"
+      - ".github/workflows/studio.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: studio-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The fast half: types, lint, the backend's own tests, and the assets. Runs on Linux
+  # only because none of it is platform-dependent, and it fails long before the slow
+  # matrix would.
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: studio/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: studio/src-tauri
+
+      - name: Install the webview toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev \
+            libgtk-3-dev librsvg2-dev patchelf
+
+      - run: npm ci
+        working-directory: studio
+
+      - name: Frontend types and bundle
+        working-directory: studio
+        run: npm run build
+
+      - name: Backend tests
+        working-directory: studio/src-tauri
+        run: cargo test --release
+
+      - name: fmt
+        working-directory: studio/src-tauri
+        run: cargo fmt --all -- --check
+
+      # The same gate the engine holds itself to: correctness and suspicious fail the
+      # job, plain warnings do not.
+      - name: clippy
+        working-directory: studio/src-tauri
+        run: cargo clippy --all-targets -- -D clippy::correctness -D clippy::suspicious
+
+      # The icon, the installer bitmaps and the bundled samples are generated from
+      # `studio/tools/make_assets.py`. This fails if the committed binaries have drifted
+      # from the script that draws them, which is the only way to keep a binary in a
+      # repository honest.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pillow
+      - run: python studio/tools/make_assets.py --check
+
+      # The app ships its own notices and shows them on About. This fails if they have
+      # drifted from the dependency graph they claim to describe.
+      - run: python studio/tools/third_party.py --check
+
+  # The slow half: does the app actually build on each platform? `--no-bundle` because
+  # packaging is the release workflow's job and doubles the time for no extra signal on
+  # a pull request.
+  build:
+    name: build (${{ matrix.os }})
+    needs: check
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+          - os: macos-14 # arm64
+          - os: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: studio/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@1.98.0
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: studio/src-tauri
+          key: ${{ matrix.os }}
+
+      - name: Install the webview toolchain
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev \
+            libgtk-3-dev librsvg2-dev patchelf
+
+      - run: npm ci
+        working-directory: studio
+
+      - run: npx tauri build --no-bundle
+        working-directory: studio

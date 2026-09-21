@@ -1,0 +1,90 @@
+# Inkvec Studio Lite's Tauri backend.
+#
+# This is a workspace of its own, and the repository root excludes it, on purpose.
+# `cargo build --workspace` at the root runs on every CI platform and must not need
+# WebKitGTK, a WebView2 SDK or a macOS webview to succeed; pulling the app in as a
+# member would make the engine's build depend on the app's system libraries. The app
+# still depends on the engine by path, so it always builds against the tree it sits in.
+[workspace]
+
+[package]
+name = "inkvec-studio"
+description = "Inkvec Studio Lite: turn a raster logo into an SVG, exactly, and minimise SVGs you already have."
+version = "0.1.4"
+edition = "2021"
+rust-version = "1.88"
+license = "Apache-2.0"
+authors = ["LogoLabs"]
+repository = "https://github.com/logolabs/inkvec"
+default-run = "inkvec-studio"
+
+[lib]
+# Tauri v2's mobile entry point wants the app as a library; the binary is a thin shim.
+name = "inkvec_studio_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "inkvec-studio"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# The engine, by path. `inkvec-cli`'s library half rather than the `inkvec` facade:
+# the facade deliberately exposes fourteen options, and the app's advanced drawer
+# drives eighteen — bilevel, strokes and flat fills among them — which only `Args` has.
+inkvec-cli = { path = "../../crates/inkvec-cli" }
+inkvec-trace = { path = "../../crates/inkvec-trace" }
+inkvec-restore = { path = "../../crates/inkvec-restore" }
+inkvec-svgmin = { path = "../../crates/inkvec-svgmin" }
+
+tauri = { version = "2", features = ["protocol-asset", "devtools"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-clipboard-manager = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rayon = "1.10"
+
+# Rasterising the traced SVG is what makes the quality report a measurement rather
+# than an adjective: the colour difference is computed between the source pixels and
+# a render of the SVG we just wrote, not estimated from the fit.
+resvg = { version = "0.48", default-features = false }
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+    "webp",
+    "gif",
+    "bmp",
+    "tiff",
+] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
+
+# The denoiser download: one HTTPS GET, checksummed on arrival. `ureq` is a blocking
+# client with rustls and no async runtime, which is the whole of what this needs.
+ureq = { version = "3", default-features = false, features = [
+    "rustls",
+    "gzip",
+] }
+sha2 = "0.10"
+dirs = "6"
+
+[features]
+default = []
+#: Compile the trained restorer in, so "Clean up damage" and the Photo-or-scan preset
+#: can run. `ort` downloads a prebuilt ONNX Runtime at build time and links it
+#: statically. Off by default so a plain `cargo tauri build` needs no network; the
+#: release workflow turns it on for every target the engine's own release builds it
+#: for (that is, all but x86_64-apple-darwin, where ONNX Runtime has no package).
+denoiser = ["inkvec-cli/restore-model"]
+
+[profile.release]
+opt-level = 3
+lto = true
+# `panic = "abort"` is deliberately NOT set: the tracer is run inside catch_unwind so a
+# panic deep in the pipeline becomes a "trace failed" state in the app rather than a
+# window that vanishes.
+codegen-units = 1
+strip = true

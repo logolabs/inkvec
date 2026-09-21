@@ -1,0 +1,223 @@
+/* ============================================================================
+   Inkvec Studio Lite — tokens.
+
+   The names are the ones already in `web/index.html` (the WASM demo), so the two
+   surfaces can be read against each other and a value can be copied between them
+   without translation. The tokens marked NEW below are the ones the desktop app
+   adds: it needs a focus ring, a transparency checkerboard, draft/final state
+   colours and an accent that is legible as *text* on a light ground.
+
+   Light is not an inversion of dark. #c9754a on #ffffff is 3.1:1 — fine for a
+   52 px numeral, short of AA for a 13 px label — so light gets its own
+   `--accent-text` and an off-white stage, chosen so white artwork still reads
+   against its ground.
+   ============================================================================ */
+
+/* ---------------------------------------------------------------- fonts ---
+   Bundled, not fetched. The app makes no network request it did not explain,
+   and that includes a font. Both families are OFL 1.1; see THIRD_PARTY.md. */
+
+@font-face {
+  font-family: "Inter Studio";
+  src: url("/fonts/inter-latin.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Playfair Studio";
+  src: url("/fonts/playfair-latin.woff2") format("woff2");
+  font-weight: 400 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* ------------------------------------------------------------ dark theme --- */
+
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Surfaces, deepest to lightest. */
+  --void: #0c0a09;
+  --stage: #141210;
+  --paper: #1a1816;
+  --card: #211f1c;
+  --surface: #2a2724;
+  --highlight: #35322e;
+
+  /* Text. Warm cream, never pure white. */
+  --ink: #faf8f5;
+  --dim: rgba(250, 248, 245, 0.75);
+  --faint: rgba(250, 248, 245, 0.55);
+  --muted: rgba(250, 248, 245, 0.4);
+
+  /* Rules. */
+  --rule: rgba(250, 248, 245, 0.08);
+  --rule2: #2a2724;
+
+  /* Accent. `--accent` is the fill and is identical in both themes;
+     `--accent-text` is the one that has to pass AA as 13 px text. */
+  --accent: #c9754a;
+  --accent-text: #d4896a; /* NEW */
+  --accent-hover: #d4896a;
+  --accent-ink: #1a1816;
+  --accent-soft: rgba(201, 117, 74, 0.12);
+  --accent-subtle: rgba(201, 117, 74, 0.08);
+  --gold: #b8976c;
+  --gold-soft: rgba(184, 151, 108, 0.15);
+
+  /* Semantic. */
+  --good: #34d399;
+  --goodbg: rgba(52, 211, 153, 0.15);
+  --bad: #f87171;
+  --badbg: rgba(248, 113, 113, 0.15);
+
+  /* Viewer overlay. Shape carries the meaning as well as hue: the anchor is
+     round and the handle is a diamond, because red/green confusion is common
+     among exactly the people who turn this overlay on. */
+  --anchor: #f87171;
+  --handle: #b8976c;
+  --wire: #faf8f5;
+  --vt: #9a938c;
+
+  /* NEW — transparency checkerboard. 16 px cells in the viewer, 8 px in swatches. */
+  --checker-a: #191715;
+  --checker-b: #141210;
+
+  /* NEW — focus ring. 2 px, 2 px offset, never removed. */
+  --focus: rgba(201, 117, 74, 0.35);
+  --focus-line: #c9754a;
+
+  /* NEW — result states. */
+  --state-draft: #b8976c;
+  --state-final: #34d399;
+  --state-stale: #c9754a;
+
+  /* Shadows, warm rather than neutral. */
+  --shadow-sm: 0 4px 12px -2px rgba(12, 10, 9, 0.4);
+  --shadow: 0 8px 24px -4px rgba(12, 10, 9, 0.5);
+  --shadow-lg: 0 20px 50px -12px rgba(12, 10, 9, 0.6);
+  --shadow-xl: 0 30px 70px -20px rgba(12, 10, 9, 0.7);
+  --glow: 0 6px 20px rgba(201, 117, 74, 0.25);
+}
+
+/* ----------------------------------------------------------- light theme --- */
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --void: #e6e1d9;
+  --stage: #f0ece6; /* off-white so white artwork reads against its ground */
+  --paper: #faf8f5;
+  --card: #ffffff;
+  --surface: #eae5dd;
+  --highlight: #ded8ce;
+
+  --ink: #1a1816;
+  --dim: rgba(26, 24, 22, 0.75);
+  --faint: rgba(26, 24, 22, 0.58);
+  --muted: rgba(26, 24, 22, 0.46);
+
+  --rule: rgba(26, 24, 22, 0.1);
+  --rule2: #d8d2c8;
+
+  --accent: #c9754a; /* fills are identical in both themes */
+  --accent-text: #9c5730; /* AA on white at 13 px */
+  --accent-hover: #b3603a;
+  --accent-ink: #faf8f5;
+  --accent-soft: rgba(201, 117, 74, 0.14);
+  --accent-subtle: rgba(201, 117, 74, 0.08);
+  --gold: #8a6a3f;
+  --gold-soft: rgba(138, 106, 63, 0.14);
+
+  --good: #1c7a55;
+  --goodbg: rgba(28, 122, 85, 0.14);
+  --bad: #b83232;
+  --badbg: rgba(184, 50, 50, 0.13);
+
+  --anchor: #b83232;
+  --handle: #8a6a3f;
+  --wire: #1a1816;
+  --vt: #6f6862;
+
+  --checker-a: #ffffff;
+  --checker-b: #e8e3db;
+
+  --focus: rgba(201, 117, 74, 0.45);
+  --focus-line: #9c5730;
+
+  --state-draft: #8a6a3f;
+  --state-final: #1c7a55;
+  --state-stale: #9c5730;
+
+  --shadow-sm: 0 4px 12px -2px rgba(90, 76, 60, 0.12);
+  --shadow: 0 8px 24px -4px rgba(90, 76, 60, 0.16);
+  --shadow-lg: 0 20px 50px -12px rgba(90, 76, 60, 0.2);
+  --shadow-xl: 0 30px 70px -20px rgba(90, 76, 60, 0.24);
+  --glow: 0 6px 20px rgba(201, 117, 74, 0.28);
+}
+
+/* ------------------------------------------------- density, type, shape --- */
+
+:root {
+  --font-display: "Playfair Studio", "Playfair Display", Georgia, serif;
+  --font-body: "Inter Studio", Inter, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  /* Control heights. The desktop density scale, not the web page's. */
+  --h-compact: 28px;
+  --h-control: 32px;
+  --h-pill: 36px;
+  --h-appbar: 46px;
+  --h-status: 26px;
+  --h-row: 30px;
+
+  /* Type. */
+  --t-chrome: 12.5px;
+  --t-panel: 13px;
+  --t-label: 11.5px;
+  --t-eyebrow: 10px;
+
+  /* Spacing, 8 px base. */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+  --rail-pad: 14px;
+  --rail-w: 352px;
+
+  /* Shape. */
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  /* Motion. Durations and easings from the motion table; the reduced-motion
+     block below zeroes the ones that are decoration rather than information. */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+  --d-micro: 150ms;
+  --d-fast: 200ms;
+  --d-normal: 400ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --d-micro: 0ms;
+    --d-fast: 0ms;
+    --d-normal: 0ms;
+  }
+}

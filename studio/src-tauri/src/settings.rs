@@ -16,12 +16,17 @@ use serde::{Deserialize, Serialize};
 use crate::options::Settings as TraceSettings;
 
 /// Which theme the window follows.
+///
+/// Dark is the default rather than `System`, and that is a product decision rather than a
+/// preference: this is a viewer, the stage is a dark ground so artwork reads against it,
+/// and a first run that opened light on a machine set to light would show the app at its
+/// least convincing. Light is fully supported and one click away.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Theme {
     /// Follow the operating system.
-    #[default]
     System,
+    #[default]
     Dark,
     Light,
 }
@@ -188,7 +193,7 @@ mod tests {
         let parsed: Prefs = serde_json::from_str(r#"{"draftPx": 256, "somethingRemoved": true}"#)
             .expect("an unknown field is not a parse failure");
         assert_eq!(parsed.draft_px, 256);
-        assert_eq!(parsed.theme, Theme::System);
+        assert_eq!(parsed.theme, Theme::Dark, "dark is the product default");
         assert!(parsed.recent.is_empty());
     }
 
@@ -228,8 +233,10 @@ mod tests {
 
     #[test]
     fn preferences_round_trip_through_json() {
-        let mut p = Prefs::default();
-        p.theme = Theme::Light;
+        let mut p = Prefs {
+            theme: Theme::Light,
+            ..Prefs::default()
+        };
         p.trace.precision = 0.05;
         p.remember(std::path::Path::new("/tmp/a.png"));
         let text = serde_json::to_string(&p).unwrap();

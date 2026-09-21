@@ -228,6 +228,9 @@ pub fn run(
         return rows;
     }
 
+    // Indexed rather than iterated: a row is read, mutated and then reported, and the
+    // report borrows it again after the mutation has finished.
+    #[allow(clippy::needless_range_loop)]
     for i in 0..rows.len() {
         // Pause holds here, between rows, which is the only place stopping is clean.
         while controls.is_paused() && !controls.is_cancelled() {

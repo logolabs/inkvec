@@ -9,6 +9,35 @@ API in particular should be treated as unstable release to release).
 
 ### Added
 
+- **Inkvec Studio Lite** (`studio/`): a desktop app for Windows, macOS and Linux, built
+  on Tauri v2 over this repository's own engine. It turns a raster logo into an SVG and
+  minimises SVGs you already have, and it measures what it did rather than asserting it:
+  the quality report's colour difference is CIEDE2000 between the raster the tracer saw
+  and a render of the SVG it wrote, not an estimate. A "what this trace could not
+  recover" panel states, from measurements, what tracing lost — lettering that came back
+  as outlines, a lossy source, strokes baked into fills, a continuous ramp, features
+  below the speckle floor — and says so plainly when nothing was. Everything runs on the
+  user's own machine: the only outbound requests the binary can make are the update
+  check and the optional denoiser download, and both say exactly what they send.
+
+  Three tabs (Vectorize, Minify SVG, Batch), a split comparison viewer with wipe, A/B and
+  a pixel-grid detail mode, eighteen advanced controls taking their tooltip copy verbatim
+  from the engine's own option documentation, brand-colour snapping, an export sheet with
+  measured byte counts and a designed asset-pack README, and a share card rendered in the
+  app. Dark and light themes at full token parity. Built and packaged on all three
+  platforms by the new `studio` workflow, and released as `.deb`/`.rpm`/`.AppImage`,
+  `.dmg` and NSIS `.exe`/`.msi` alongside the command-line archives.
+
+  `studio/src-tauri` is a cargo workspace of its own, excluded from the root one, so
+  `cargo build --workspace` keeps working without a webview SDK.
+
+- **`inkvec_trace::with_stage_sink`**: a thread-local hook that reports each pipeline
+  stage boundary as it is passed, as a name and the milliseconds it took. `Stopwatch::mark`
+  feeds it. Additive, a no-op when nothing is installed, and restores the previous sink on
+  panic. It exists because a trace takes about a second and an embedder's only other
+  options for that second are a bare spinner or a fabricated sequence of stages; the
+  stage names are documented as explicitly unstable.
+
 - **Documentation site** (`tools/build_site.py`): the repo's docs rendered to static HTML
   in the LogoLabs design system and published to GitHub Pages
   (logolabs.github.io/inkvec) by the new `docs` workflow — the 14-stage algorithm series

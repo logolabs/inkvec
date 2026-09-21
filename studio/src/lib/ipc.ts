@@ -1,0 +1,349 @@
+/**
+ * The backend, typed.
+ *
+ * Every shape here mirrors a `serde` struct in `src-tauri`. They are written out rather
+ * than generated because there are about twenty of them and a code generator is a build
+ * step somebody has to maintain; the backend's tests assert the field names, so a rename
+ * on either side shows up as a type error here or a failing test there.
+ */
+
+import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+
+// ---------------------------------------------------------------------- settings ---
+
+export type Cleanup = "off" | "auto" | "on";
+
+export interface Settings {
+  precision: number;
+  speckleFloor: number;
+  traceSize: number;
+  timeLimit: number;
+  maxColours: number;
+  colourMerging: number;
+  flatFills: boolean;
+  blackAndWhite: boolean;
+  cleanUpDamage: Cleanup;
+  matchRepeatedShapes: boolean;
+  matchThreshold: number;
+  fewerPaths: boolean;
+  lineArt: boolean;
+  repairRings: boolean;
+  minify: boolean;
+  transparentBackground: boolean;
+  margin: number;
+  holesAsCutouts: boolean;
+}
+
+export type PresetId =
+  | "logo"
+  | "icon"
+  | "fine-detail"
+  | "fewer-paths"
+  | "photo-or-scan"
+  | "black-and-white"
+  | "line-art";
+
+export interface Control {
+  group: "Detail" | "Colour" | "Shape" | "Output";
+  key: keyof Settings;
+  label: string;
+  unit: string;
+  kind: "range" | "switch" | "tri";
+  min: number;
+  max: number;
+  curve: number;
+  decimals: number;
+  stops: { at: number; label: string }[];
+  help: string;
+}
+
+export interface PresetInfo {
+  id: PresetId;
+  name: string;
+  subtitle: string;
+  settings: Settings;
+  wantsDenoiser: boolean;
+}
+
+export interface DenoiserStatus {
+  supported: boolean;
+  installed: boolean;
+  path: string | null;
+  bytes: number | null;
+  repo: string;
+  sha256: string;
+}
+
+export interface Capabilities {
+  version: string;
+  engineVersion: string;
+  buildTarget: string;
+  platform: string;
+  controls: Control[];
+  presets: PresetInfo[];
+  stages: string[];
+  denoiser: DenoiserStatus;
+}
+
+export type Theme = "system" | "dark" | "light";
+
+export interface Prefs {
+  outputFolder: string | null;
+  theme: Theme;
+  threads: number | null;
+  draftPx: number;
+  draftSeconds: number;
+  settleMs: number;
+  checkUpdates: boolean;
+  channel: "stable" | "prerelease";
+  trace: Settings;
+  recent: string[];
+  seenFirstRun: boolean;
+}
+
+// ------------------------------------------------------------------------ traces ---
+
+export interface SourceInfo {
+  name: string;
+  path: string | null;
+  width: number;
+  height: number;
+  container: string;
+  lossy: boolean;
+  preview: string;
+}
+
+export interface SampleInfo {
+  file: string;
+  label: string;
+  preview: string;
+}
+
+export interface Report {
+  meanDe00: number | null;
+  medianDe00: number | null;
+  worstDe00: number | null;
+  coordinates: number;
+  paths: number;
+  segments: number;
+  colours: number;
+  bytes: number;
+  minifiedBytes: number | null;
+  seconds: number;
+  tracedPx: number;
+}
+
+export interface Ink {
+  traced: string;
+  hex: string;
+  share: number;
+  snappedDe00: number | null;
+}
+
+export interface Loss {
+  kind: string;
+  text: string;
+  why: string;
+  link: { label: string; href: string } | null;
+}
+
+export interface WorstCorner {
+  x: number;
+  y: number;
+  de00: number;
+}
+
+export interface Stage {
+  name: string;
+  ms: number;
+}
+
+export interface Traced {
+  tier: "draft" | "final";
+  svg: string;
+  report: Report;
+  palette: Ink[];
+  losses: Loss[];
+  worstCorner: WorstCorner | null;
+  stages: Stage[];
+  engineLog: string[];
+  tracedPx: number;
+  oversized: boolean;
+  sourcePx: [number, number];
+}
+
+export type Outcome =
+  | ({ state: "traced" } & Traced)
+  | { state: "flat" }
+  | { state: "undecodable"; message: string }
+  | { state: "outOfMemory"; neededGb: number; suggestPx: number }
+  | { state: "failed"; message: string };
+
+// ------------------------------------------------------------------------ minify ---
+
+export interface MinifySettings {
+  tolerancePx: number;
+  judgePx: number;
+  cornerDegrees: number;
+  documentCleanup: boolean;
+}
+
+export interface MinifyResult {
+  svg: string;
+  bytesBefore: number;
+  bytesAfter: number;
+  numbersBefore: number;
+  numbersAfter: number;
+  pathsBefore: number;
+  pathsAfter: number;
+  segmentsBefore: number;
+  segmentsAfter: number;
+  primitives: number;
+  guarded: number;
+  toleranceUnits: number;
+  differenceDe00: number | null;
+  ms: number;
+  removed: { what: string; amount: string }[];
+}
+
+// ------------------------------------------------------------------------- batch ---
+
+export type RowState = "queued" | "running" | "done" | "failed" | "skipped";
+
+export interface BatchRow {
+  id: number;
+  path: string;
+  file: string;
+  preset: PresetId;
+  state: RowState;
+  de00: number | null;
+  coordinates: number | null;
+  outBytes: number | null;
+  destination: string;
+  message: string | null;
+  seconds: number | null;
+}
+
+export interface BatchTotals {
+  finished: number;
+  total: number;
+  failed: number;
+  skipped: number;
+  bytesWritten: number;
+  sourceBytes: number;
+  meanDe00: number | null;
+  elapsed: number;
+  remaining: number | null;
+}
+
+export interface BatchPlan {
+  files: string[];
+  preset: PresetId;
+  overrides: [number, PresetId][];
+  outputDir: string;
+  skipExisting: boolean;
+}
+
+// ------------------------------------------------------------------------ export ---
+
+export interface Formats {
+  svg: boolean;
+  svgMinified: boolean;
+  pngSizes: number[];
+  favicon: boolean;
+  assetPack: boolean;
+}
+
+export interface PlannedFile {
+  name: string;
+  bytes: number;
+  group: string;
+}
+
+export interface ExportRequest {
+  svg: string;
+  report: { meanDe00: number | null; coordinates: number; paths: number; tracedPx: number };
+  palette: { hex: string; traced: string; share: number }[];
+  losses: { text: string }[];
+  formats: Formats;
+}
+
+export interface UpdateInfo {
+  latest: string | null;
+  newer: boolean;
+  url: string;
+  offline: string | null;
+}
+
+// -------------------------------------------------------------------- the calls ---
+
+export const api = {
+  capabilities: () => invoke<Capabilities>("capabilities"),
+  openPath: (path: string) => invoke<SourceInfo>("open_path", { path }),
+  openBytes: (bytes: number[], name?: string) =>
+    invoke<SourceInfo>("open_bytes", { bytes, name: name ?? null }),
+  openSample: (name: string) => invoke<SourceInfo>("open_sample", { name }),
+  listSamples: () => invoke<SampleInfo[]>("list_samples"),
+
+  startTrace: (settings: Settings, tier: "draft" | "final") =>
+    invoke<number>("start_trace", { request: { settings, tier } }),
+  cancelTrace: () => invoke<void>("cancel_trace"),
+
+  snapInks: (svg: string, snaps: { from: string; to: string }[], width: number, height: number) =>
+    invoke<{ svg: string; inks: Ink[] }>("snap_inks", { svg, snaps, width, height }),
+  matchPalette: (traced: string[], pasted: string) =>
+    invoke<{ from: string; to: string; de00: number }[]>("match_palette", { traced, pasted }),
+
+  planExport: (request: ExportRequest) => invoke<PlannedFile[]>("plan_export", { request }),
+  writeExport: (request: ExportRequest, destination: string) =>
+    invoke<string[]>("write_export", { request, destination }),
+
+  minify: (svg: string, settings: MinifySettings) =>
+    invoke<MinifyResult>("minify_svg", { svg, settings }),
+  readTextFile: (path: string) => invoke<string>("read_text_file", { path }),
+  saveBytes: (path: string, bytes: number[]) => invoke<void>("save_bytes", { path, bytes }),
+
+  batchScan: (folder: string) => invoke<string[]>("batch_scan", { folder }),
+  batchStart: (plan: BatchPlan) => invoke<void>("batch_start", { plan }),
+  batchPause: (paused: boolean) => invoke<void>("batch_pause", { paused }),
+  batchCancel: () => invoke<void>("batch_cancel"),
+  batchStatsCsv: () => invoke<string>("batch_stats_csv"),
+
+  denoiserStatus: () => invoke<DenoiserStatus>("denoiser_status"),
+  denoiserDownload: () => invoke<void>("denoiser_download"),
+  denoiserCancel: () => invoke<void>("denoiser_cancel"),
+  denoiserRemove: () => invoke<DenoiserStatus>("denoiser_remove"),
+
+  loadPrefs: () => invoke<Prefs>("load_prefs"),
+  savePrefs: (prefs: Prefs) => invoke<Prefs>("save_prefs", { prefs }),
+  resetPrefs: () => invoke<Prefs>("reset_prefs"),
+
+  thirdPartyNotices: () => invoke<string>("third_party_notices"),
+  checkUpdate: () => invoke<UpdateInfo>("check_update"),
+};
+
+// ----------------------------------------------------------------------- events ---
+
+export const events = {
+  traceStage: (fn: (e: { generation: number; name: string; ms: number }) => void) =>
+    listen<{ generation: number; name: string; ms: number }>("trace:stage", (e) => fn(e.payload)),
+  traceDone: (fn: (e: { generation: number; outcome: Outcome }) => void) =>
+    listen<{ generation: number; outcome: Outcome }>("trace:done", (e) => fn(e.payload)),
+  batchRow: (fn: (row: BatchRow) => void) =>
+    listen<BatchRow>("batch:row", (e) => fn(e.payload)),
+  batchTotals: (fn: (t: BatchTotals) => void) =>
+    listen<BatchTotals>("batch:totals", (e) => fn(e.payload)),
+  batchFinished: (fn: (rows: BatchRow[]) => void) =>
+    listen<BatchRow[]>("batch:finished", (e) => fn(e.payload)),
+  denoiserProgress: (fn: (e: { got: number; total: number | null }) => void) =>
+    listen<{ got: number; total: number | null }>("denoiser:progress", (e) => fn(e.payload)),
+  denoiserDone: (
+    fn: (e: { ok: boolean; message?: string; status: DenoiserStatus }) => void,
+  ) =>
+    listen<{ ok: boolean; message?: string; status: DenoiserStatus }>("denoiser:done", (e) =>
+      fn(e.payload),
+    ),
+};
+
+export type { UnlistenFn };

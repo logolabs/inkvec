@@ -545,7 +545,7 @@ mod tests {
         assert!(!t.palette.is_empty());
         // The whole point of the panel: the number is measured, not asserted.
         let mean = t.report.mean_de00.expect("dE00 was measured");
-        assert!(mean >= 0.0 && mean < 12.0, "{mean}");
+        assert!((0.0..12.0).contains(&mean), "{mean}");
         assert_eq!(t.tier, "final");
         assert!(!t.oversized);
     }
@@ -569,6 +569,32 @@ mod tests {
             assert!(STAGES.contains(name), "{name} is not a named stage");
         }
         assert!(seen.contains(&"palette"), "{seen:?}");
+    }
+
+    /// The honesty panel must not invent losses.
+    ///
+    /// This is a regression test for a real one: the dropped-detail heuristic used to
+    /// count every thread of anti-aliased pixels along a boundary as a lost feature, and
+    /// reported 469 of them on a trace whose mean colour difference was 0.07 dE00. A
+    /// panel that says that is worse than no panel, because it teaches people to ignore
+    /// it. A clean trace of clean artwork reports nothing.
+    #[test]
+    fn a_clean_trace_reports_no_losses_at_all() {
+        let source = Source::open(sample_png(), None).unwrap();
+        let outcome = run(&source, &Settings::default(), Tier::Final, |_, _| {});
+        let Outcome::Traced(t) = outcome else {
+            panic!("expected a drawing, got {outcome:?}")
+        };
+        assert!(
+            t.report.mean_de00.unwrap() < 1.0,
+            "this fixture should trace cleanly: {:?}",
+            t.report.mean_de00
+        );
+        assert!(
+            t.losses.is_empty(),
+            "a clean trace reported losses: {:?}",
+            t.losses.iter().map(|l| &l.text).collect::<Vec<_>>()
+        );
     }
 
     #[test]

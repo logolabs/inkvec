@@ -534,7 +534,7 @@ pub struct Match {
 #[tauri::command]
 fn match_palette(traced: Vec<String>, pasted: String) -> Vec<Match> {
     let wanted: Vec<String> = pasted
-        .split(|c: char| c == '\n' || c == ',' || c == ';')
+        .split(['\n', ',', ';'])
         .filter_map(parse_colour)
         .collect();
     traced
@@ -923,13 +923,28 @@ fn reset_prefs(state: State<'_, AppState>) -> Result<settings::Prefs, String> {
 }
 
 /// The licence and third-party notices, as shipped beside the app.
+///
+/// Both documents, in one string: the app's own dependencies and the engine's. They are
+/// generated separately because `studio/src-tauri` is not a member of the root cargo
+/// workspace, but the notices a user reads have to be the notices for the binary they are
+/// actually running, so the screen shows the pair.
 #[tauri::command]
 fn third_party_notices(app: AppHandle) -> Result<String, String> {
-    let path = app
-        .path()
-        .resolve("THIRD_PARTY.md", tauri::path::BaseDirectory::Resource)
-        .map_err(|e| format!("cannot find the notices: {e}"))?;
-    std::fs::read_to_string(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))
+    let read = |name: &str| -> Option<String> {
+        let path = app
+            .path()
+            .resolve(name, tauri::path::BaseDirectory::Resource)
+            .ok()?;
+        std::fs::read_to_string(path).ok()
+    };
+    let parts: Vec<String> = ["STUDIO_THIRD_PARTY.md", "THIRD_PARTY.md"]
+        .iter()
+        .filter_map(|n| read(n))
+        .collect();
+    if parts.is_empty() {
+        return Err("the bundled notices could not be read".into());
+    }
+    Ok(parts.join("\n\n\n"))
 }
 
 /// What the update check found.

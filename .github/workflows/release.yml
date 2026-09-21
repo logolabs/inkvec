@@ -228,9 +228,131 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+
+  # Inkvec Studio Lite, packaged for each platform. A separate job from the CLI matrix
+  # above rather than another feature row in it: the app needs a Node toolchain and a
+  # webview SDK, its bundles are installers rather than archives, and its build takes
+  # long enough that folding it in would make every CLI archive wait for it.
+  studio:
+    name: studio (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+            bundles: deb,rpm,appimage
+            denoiser: true
+          # Native arm64 rather than cross: the app links a webview, and a
+          # cross-compiled sysroot for WebKitGTK is not a fight worth having.
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04-arm
+            bundles: deb,rpm,appimage
+            denoiser: true
+          # ONNX Runtime has no package for this target, which is why the CLI matrix
+          # excludes its restore-model row too. The app says so honestly rather than
+          # offering a download that could not be used.
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+            bundles: app,dmg
+            denoiser: false
+          - target: aarch64-apple-darwin
+            os: macos-14
+            bundles: app,dmg
+            denoiser: true
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            bundles: nsis,msi
+            denoiser: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: studio/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: studio/src-tauri
+          key: studio-${{ matrix.target }}
+
+      # Ubuntu 22.04 rather than the newest image on purpose: an AppImage and a .deb
+      # inherit the glibc and WebKitGTK of the machine that built them, and building on
+      # 24.04 produces packages that will not start on 22.04.
+      - name: Install the webview toolchain
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev \
+            libgtk-3-dev librsvg2-dev patchelf file desktop-file-utils
+
+      - run: npm ci
+        working-directory: studio
+
+      - name: Build and bundle
+        working-directory: studio
+        shell: bash
+        run: |
+          set -euo pipefail
+          features=""
+          if [[ "${{ matrix.denoiser }}" == "true" ]]; then
+            features="--features denoiser"
+          fi
+          npx tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} ${features}
+
+      # Named the way the CLI archives are, so a release page reads as one set of
+      # downloads rather than two conventions side by side.
+      - name: Collect the installers
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          if [[ "${GITHUB_REF_NAME:-}" != v* ]]; then
+            version="0.0.0-dev"
+          fi
+          out="dist"
+          mkdir -p "${out}"
+          bundle="studio/src-tauri/target/${TARGET}/release/bundle"
+          shopt -s nullglob globstar
+          found=0
+          for f in "${bundle}"/**/*.deb "${bundle}"/**/*.rpm "${bundle}"/**/*.AppImage \
+                   "${bundle}"/**/*.dmg "${bundle}"/**/*.exe "${bundle}"/**/*.msi; do
+            ext="${f##*.}"
+            cp "${f}" "${out}/inkvec-studio-${version}-${TARGET}.${ext}"
+            found=$((found + 1))
+          done
+          shopt -u globstar
+          if [[ "${found}" -eq 0 ]]; then
+            echo "::error::no bundles were produced for ${TARGET}"
+            ls -R "${bundle}" || true
+            exit 1
+          fi
+          # The .app is a directory; tar it so it survives upload and download.
+          for app in "${bundle}"/macos/*.app; do
+            tar -C "$(dirname "${app}")" -czf \
+              "${out}/inkvec-studio-${version}-${TARGET}-app.tar.gz" "$(basename "${app}")"
+          done
+          ls -la "${out}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: inkvec-studio-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
   checksums:
     name: checksums
-    needs: build
+    needs: [build, studio]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -242,7 +364,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p out
-          find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} out/ \;
+          find artifacts -type f \( \
+            -name "*.tar.gz" -o -name "*.zip" -o \
+            -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" -o \
+            -name "*.dmg" -o -name "*.exe" -o -name "*.msi" \
+          \) -exec cp {} out/ \;
           (cd out && sha256sum -- * > SHA256SUMS)
 
       - uses: actions/upload-artifact@v4
@@ -298,4 +424,10 @@ jobs:
           files: |
             out/*.tar.gz
             out/*.zip
+            out/*.deb
+            out/*.rpm
+            out/*.AppImage
+            out/*.dmg
+            out/*.exe
+            out/*.msi
             out/SHA256SUMS

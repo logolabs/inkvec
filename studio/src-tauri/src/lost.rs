@@ -340,23 +340,63 @@ fn smooth_ramps(source: &inkvec_trace::Rgba, analysis: &Analysis, svg: &str) -> 
 
 /// Features that fell below the speckle floor.
 ///
-/// Small islands of high disagreement, counted by flooding the difference map. A dozen
-/// scattered specks is a trace that dropped detail; one large region is something else
-/// and is reported by the ramp row instead.
+/// Small islands of high disagreement, found by flooding the difference map. The hard part
+/// is not finding them, it is *not* finding the ones that are not there: every boundary in
+/// every trace has a thread of anti-aliased pixels along it where the vector edge and the
+/// raster's coverage disagree by a degree or two, and a naive flood counts each of those
+/// threads as a lost feature. On a clean trace that produces hundreds of them, and a panel
+/// that reports hundreds of losses on a 0.07 dE00 trace is worse than no panel at all.
+///
+/// So an island has to look like a dropped mark rather than like an edge: at least
+/// [`MIN_ISLAND`] pixels, no larger than the speckle floor allows, and *compact* — filling
+/// at least half of its own bounding box. A sliver tracking a boundary fills almost none
+/// of its box; a dot, a serif or a speck of scanner dust fills most of it.
 fn dropped_details(analysis: &Analysis, settings: &Settings) -> Option<Loss> {
+    /// Below this an island is a pixel or two of edge noise, whatever its shape.
+    const MIN_ISLAND: usize = 4;
+    /// How much of its own bounding box an island must fill to count as a mark.
+    const MIN_FILL: f64 = 0.5;
+    /// Fewer than this and there is no pattern worth reporting.
+    const MIN_ISLANDS: usize = 4;
+
     let (w, h) = (analysis.width as usize, analysis.height as usize);
     let n = w * h;
-    if n == 0 {
+    if n < 9 || w < 3 || h < 3 {
         return None;
     }
-    // Two just-visible differences: well past "you might notice" and into "that is gone".
-    let hot: Vec<bool> = analysis.deltas.iter().map(|d| *d > 2.0).collect();
-    let ceiling = (settings.speckle_floor.max(1.0) * 6.0) as usize;
+
+    // A pixel is a candidate when the trace disagrees with the source by more than two
+    // just-visible differences *and* the trace painted something flat there.
+    //
+    // That second condition is what separates a dropped feature from an edge. Every
+    // boundary carries a thread of pixels where the vector edge and the raster's coverage
+    // disagree by a degree or two — but the render has a strong gradient across exactly
+    // those pixels, because that is where its own edge is. Where a feature was genuinely
+    // lost, the render is locally flat: it painted the surrounding ink straight over it.
+    let lum = |px: &[u8]| -> f32 {
+        let a = px[3] as f32 / 255.0;
+        (0.2126 * px[0] as f32 + 0.7152 * px[1] as f32 + 0.0722 * px[2] as f32) * a / 255.0
+    };
+    let at = |i: usize| lum(&analysis.rendered[i * 4..i * 4 + 4]);
+    let mut hot = vec![false; n];
+    for y in 1..h - 1 {
+        for x in 1..w - 1 {
+            let i = y * w + x;
+            if analysis.deltas[i] <= 2.0 {
+                continue;
+            }
+            let flat = (at(i + 1) - at(i - 1))
+                .abs()
+                .max((at(i + w) - at(i - w)).abs())
+                < 0.02;
+            hot[i] = flat;
+        }
+    }
+    let ceiling = ((settings.speckle_floor.max(1.0) * 6.0) as usize).max(MIN_ISLAND * 2);
 
     let mut seen = vec![false; n];
     let mut stack: Vec<usize> = Vec::new();
     let mut islands = 0usize;
-    let mut largest = 0usize;
     for start in 0..n {
         if !hot[start] || seen[start] {
             continue;
@@ -364,9 +404,14 @@ fn dropped_details(analysis: &Analysis, settings: &Settings) -> Option<Loss> {
         seen[start] = true;
         stack.push(start);
         let mut size = 0usize;
+        let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0usize, 0usize);
         while let Some(i) = stack.pop() {
             size += 1;
             let (x, y) = (i % w, i / w);
+            x0 = x0.min(x);
+            y0 = y0.min(y);
+            x1 = x1.max(x);
+            y1 = y1.max(y);
             let push = |j: usize, seen: &mut Vec<bool>, stack: &mut Vec<usize>| {
                 if hot[j] && !seen[j] {
                     seen[j] = true;
@@ -385,23 +430,34 @@ fn dropped_details(analysis: &Analysis, settings: &Settings) -> Option<Loss> {
             if y + 1 < h {
                 push(i + w, &mut seen, &mut stack);
             }
+            // An island running away along a boundary is an edge, not a mark. Stop
+            // flooding once it is clearly larger than anything the floor could drop.
+            if size > ceiling * 4 {
+                break;
+            }
         }
-        largest = largest.max(size);
-        if size <= ceiling {
+        if !(MIN_ISLAND..=ceiling).contains(&size) {
+            continue;
+        }
+        let box_area = (x1 - x0 + 1) * (y1 - y0 + 1);
+        if size as f64 / box_area as f64 >= MIN_FILL {
             islands += 1;
         }
     }
 
-    if islands < 4 {
+    if islands < MIN_ISLANDS {
         return None;
     }
     Some(Loss {
         kind: "detail",
         text: format!("{islands} very small features did not survive the trace at this size."),
         why: format!(
-            "Each is an island of more than two dE00 covering no more than {ceiling} px² — \
-             at or under the speckle floor of {:.1} px². Raising the trace size measures \
-             them at more pixels; lowering the speckle floor keeps smaller ones.",
+            "Each is a compact island of {MIN_ISLAND} to {ceiling} px² where the trace \
+             differs from the source by more than two dE00 and has painted a flat colour — \
+             at or under the speckle floor of {:.1} px². Disagreement along a boundary is \
+             anti-aliasing rather than lost detail and is not counted. Raising the trace \
+             size measures these at more pixels; lowering the speckle floor keeps smaller \
+             ones.",
             settings.speckle_floor
         ),
         link: Some(Link {

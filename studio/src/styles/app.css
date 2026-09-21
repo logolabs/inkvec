@@ -543,6 +543,14 @@ kbd {
 }
 
 .art {
+  /* Pinned to the pane's origin, because `fit()` and `goTo()` compute the pan from the
+     pane's own box. The pane is a centring grid for the empty and Minify cases, and a
+     grid-centred item would be offset by half the slack *and then* translated by the
+     pan — the drawing lands low and to the right of where every measurement says it is,
+     and the anchors overlay with it. */
+  position: absolute;
+  left: 0;
+  top: 0;
   transform-origin: 0 0;
   will-change: transform;
   pointer-events: none;

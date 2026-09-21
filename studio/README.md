@@ -1,3 +1,5 @@
+<img src="src/assets/mark.svg" alt="" height="72" align="right">
+
 # Inkvec Studio Lite
 
 A desktop app for Windows, macOS and Linux that turns a raster logo into an SVG, exactly,
@@ -125,6 +127,27 @@ restores the previous sink on panic. The pipeline's internal stage names are doc
 *not* a stable interface; `trace.rs::stage_label` folds all of them onto the nine the
 interface names, with a wildcard arm so a new pipeline step can never put an unreadable
 word in front of a user.
+
+## The mark
+
+`src/assets/mark.svg` is not drawn here. `tools/make_assets.py` takes it from
+`web/logo.svg` — the one the site serves — and makes it mono, which is already this
+project's treatment for the mark: the documentation site recolours it to the copper
+accent.
+
+One file covers both readings of "mono". Its ink is `currentColor` and the root carries
+`color="#c9754a"`, so on its own — the image above, a file preview — it is the copper
+mark the site shows, while `appMark` removes that `color` and the mark takes whatever
+the text around it is using: 18 px in the chrome, 72 px on About, and the light theme
+needs no second file.
+
+`make_assets.py --check` fails if it ever drifts from `web/logo.svg`, which is the
+point — the mark changed twice in one day while this app was being built.
+
+The platform icon files (`.ico`, `.icns`, the PNGs) are still the stair-stepped pixels
+and copper curve that `make_assets.py` draws, tuned by hand for the 16 px cut. Moving
+those to this mark is a separate decision about what the taskbar shows, not a
+find-and-replace.
 
 ## Generated assets
 

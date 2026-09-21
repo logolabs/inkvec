@@ -9,7 +9,7 @@
  */
 
 import { fill, h, s } from "../lib/dom";
-import { anchorStyle, nodesOf, pathData, viewBoxOf } from "../lib/path";
+import { anchorStyle, nodesOf, shapesOf, viewBoxOf } from "../lib/path";
 import type { State, Store } from "../lib/state";
 
 /** The zoom stops the toolbar offers, plus the range scroll can reach. */
@@ -59,6 +59,8 @@ export function createViewer(store: Store): Viewer {
 
   /** The drawing's own coordinate space, from its viewBox. */
   let box = { x: 0, y: 0, w: 1, h: 1 };
+  /** The traced document currently on screen, sized by `transform()`. */
+  let drawing: SVGSVGElement | null = null;
 
   // ------------------------------------------------------------- drawing ---
 
@@ -76,32 +78,23 @@ export function createViewer(store: Store): Viewer {
       sourceArt,
       st.source ? h("img", { src: st.source.preview, alt: "", draggable: "false" }) : null,
     );
-    if (st.source) {
-      const img = sourceArt.firstElementChild as HTMLImageElement | null;
-      if (img) {
-        img.style.width = `${box.w}px`;
-        img.style.height = `${box.h}px`;
-      }
-    }
 
+    // Parsed rather than injected as markup: the document comes from our own tracer,
+    // but parsing it means a stray script or external reference could not execute even
+    // if one ever appeared. The same parse feeds the overlay, so the nodes are read
+    // from the document on screen rather than from a second reading of the text.
+    drawing = null;
     if (svg) {
-      // Parsed rather than injected as markup: the document comes from our own
-      // tracer, but parsing it means a stray script or external reference could not
-      // execute even if one ever appeared.
-      const doc = new DOMParser().parseFromString(svg, "image/svg+xml");
-      const root = doc.documentElement;
-      if (root && root.nodeName === "svg") {
+      const root = new DOMParser().parseFromString(svg, "image/svg+xml").documentElement;
+      if (root && root.nodeName === "svg" && !root.querySelector("parsererror")) {
         root.setAttribute("width", String(box.w));
         root.setAttribute("height", String(box.h));
-        fill(vectorArt, document.importNode(root, true), overlay);
-      } else {
-        fill(vectorArt, overlay);
+        drawing = document.importNode(root, true) as unknown as SVGSVGElement;
       }
-    } else {
-      fill(vectorArt, overlay);
     }
+    fill(vectorArt, drawing, overlay);
 
-    buildOverlay();
+    buildOverlay(drawing);
     applyShow();
     transform();
   }
@@ -112,13 +105,12 @@ export function createViewer(store: Store): Viewer {
    * Built once per trace. Their size and opacity are the only things that change with
    * zoom, and those are attributes on three groups rather than on every dot.
    */
-  function buildOverlay(): void {
-    const svg = store.state.svg;
+  function buildOverlay(drawing: SVGSVGElement | null): void {
     fill(overlay);
-    if (!svg) return;
+    if (!drawing) return;
 
     overlay.setAttribute("viewBox", `${box.x} ${box.y} ${box.w} ${box.h}`);
-    const ds = pathData(svg);
+    const ds = shapesOf(drawing);
 
     // Colours and stroke widths come from the stylesheet, not from presentation
     // attributes: `var()` is a CSS value function and is not part of the attribute
@@ -130,7 +122,12 @@ export function createViewer(store: Store): Viewer {
 
     for (const d of ds) {
       wire.append(s("path", { d }));
+      // One dot per place, not one per node. A closed shape ends where it began — a
+      // circle is four arcs back to its start — and two dots stacked on one point read
+      // as a heavier dot, which is a lie about where the nodes are.
+      const seen = new Set<string>();
       for (const n of nodesOf(d)) {
+        if (!seen.add(`${n.x.toFixed(3)},${n.y.toFixed(3)}`)) continue;
         anchors.append(s("circle", { cx: n.x, cy: n.y, r: 1 }));
         for (const c of [n.in, n.out]) {
           if (!c) continue;
@@ -173,12 +170,35 @@ export function createViewer(store: Store): Viewer {
 
   function transform(): void {
     const st = store.state;
-    const t = `translate(${st.pan.x}px, ${st.pan.y}px) scale(${st.zoom})`;
+
+    // The zoom is *not* in the transform.
+    //
+    // `transform: scale()` on a promoted layer is composited: WebKit rasterises the
+    // layer once and scales that bitmap, so at 12x the traced SVG came out as a twenty
+    // pixel gradient where it should be one hard edge — the drawing was a real SVG and
+    // looked exactly like a blown-up PNG, which is the one thing this viewer exists to
+    // disprove. Sizing the document in CSS pixels makes the engine re-render the vector
+    // at the resolution it is shown at, and the edge is an edge at any stop.
+    //
+    // The transform still carries the pan, which is a translate and composites
+    // correctly, so dragging stays a single cheap write per frame.
+    const t = `translate(${st.pan.x}px, ${st.pan.y}px)`;
     for (const node of [sourceArt, vectorArt]) {
       node.style.transform = t;
     }
-    overlay.setAttribute("width", String(box.w));
-    overlay.setAttribute("height", String(box.h));
+    const w = box.w * st.zoom;
+    const h = box.h * st.zoom;
+    const img = sourceArt.querySelector("img");
+    if (img) {
+      img.style.width = `${w}px`;
+      img.style.height = `${h}px`;
+    }
+    if (drawing) {
+      drawing.setAttribute("width", String(w));
+      drawing.setAttribute("height", String(h));
+    }
+    overlay.setAttribute("width", String(w));
+    overlay.setAttribute("height", String(h));
 
     // Overlay geometry is in the drawing's units, so everything that should stay a
     // constant size on screen is divided by the zoom. The anchors thin out with zoom
@@ -248,6 +268,8 @@ export function createViewer(store: Store): Viewer {
       grid.style.backgroundSize = `${st.zoom}px ${st.zoom}px`;
       grid.style.backgroundPosition = `${st.pan.x}px ${st.pan.y}px`;
     }
+    // The source is a raster and its pixels are the evidence, so past the point where
+    // they are individually visible they are drawn as squares rather than smoothed.
     const img = sourceArt.querySelector("img");
     if (img) img.style.imageRendering = st.zoom >= 4 ? "pixelated" : "auto";
   }

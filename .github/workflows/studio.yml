@@ -108,6 +108,12 @@ jobs:
   # The slow half: does the app actually build on each platform? `--no-bundle` because
   # packaging is the release workflow's job and doubles the time for no extra signal on
   # a pull request.
+  #
+  # The images and the feature flags are the release workflow's, deliberately. When they
+  # were not, the first tagged build was the first thing to ever compile the app with
+  # `--features denoiser` on the image the release actually uses, and it failed there:
+  # ONNX Runtime's prebuilt would not link. A matrix that tests a different combination
+  # from the one you ship tells you nothing about the one you ship.
   build:
     name: build (${{ matrix.os }})
     needs: check
@@ -116,9 +122,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
+            denoiser: true
           - os: macos-14 # arm64
+            denoiser: true
           - os: windows-latest
+            denoiser: true
     steps:
       - uses: actions/checkout@v4
 
@@ -146,5 +155,13 @@ jobs:
       - run: npm ci
         working-directory: studio
 
-      - run: npx tauri build --no-bundle
+      - name: Build the app
         working-directory: studio
+        shell: bash
+        run: |
+          set -euo pipefail
+          features=""
+          if [[ "${{ matrix.denoiser }}" == "true" ]]; then
+            features="--features denoiser"
+          fi
+          npx tauri build --no-bundle ${features}

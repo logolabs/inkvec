@@ -240,14 +240,29 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # 24.04, not 22.04, and that is about ONNX Runtime rather than about Ubuntu.
+          # `ort` downloads a prebuilt ORT and links it statically; that prebuilt is
+          # built against a newer libstdc++ than 22.04 links against, so on 22.04 the
+          # link ends in undefined `__cxa_call_terminate` and
+          # `basic_string::_M_replace_cold` out of `libort_sys`. The CLI's own
+          # restore-model rows link the same prebuilt on 24.04 and have always
+          # succeeded, which is the whole evidence for this line.
+          #
+          # The cost is the glibc floor: these bundles need what 24.04 has, so they
+          # will not start on Ubuntu 22.04 or Debian 12. Taking the denoiser out
+          # instead would buy that floor back -- the feature is optional and the app
+          # reports it honestly when absent -- but it would also make Settings' "the
+          # release builds for Windows, Linux and Apple-silicon macOS do" untrue.
+          # If the older floor matters more, split Linux into two flavours the way the
+          # CLI does rather than quietly dropping one of the two.
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-22.04
+            os: ubuntu-24.04
             bundles: deb,rpm,appimage
             denoiser: true
           # Native arm64 rather than cross: the app links a webview, and a
           # cross-compiled sysroot for WebKitGTK is not a fight worth having.
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-22.04-arm
+            os: ubuntu-24.04-arm
             bundles: deb,rpm,appimage
             denoiser: true
           # ONNX Runtime has no package for this target, which is why the CLI matrix

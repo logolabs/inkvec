@@ -36,9 +36,17 @@ PERMISSIVE = {
     "Apache-2.0 WITH LLVM-exception", "CDLA-Permissive-2.0",
 }
 
+# `cargo tree` resolves target-specific dependencies for the host only, so a notice
+# file generated on Linux would leave out the Windows-only registry crate that the
+# Windows binary actually links. The three triples below are the ones the release
+# workflow ships; a crate keeps the label of the first build it appears in, so the
+# host's own crates stay "default" and only the ones it cannot see get a platform.
 BUILDS = [
     ("default", []),
     ("denoiser", ["--features", "denoiser"]),
+    ("windows", ["--target", "x86_64-pc-windows-msvc"]),
+    ("macos", ["--target", "aarch64-apple-darwin"]),
+    ("linux", ["--target", "x86_64-unknown-linux-gnu"]),
 ]
 
 # Crates that come from this repository. They are Inkvec, not third parties.
@@ -147,8 +155,9 @@ def render() -> str:
         "Inkvec Studio Lite itself is licensed under Apache-2.0 (`LICENSE`).",
         "",
         f"{len(rows)} Rust crates are compiled into the app"
-        f" ({sum(1 for _, (_, b) in rows if b == 'default')} in every build,"
-        f" the rest only with the optional denoiser).",
+        f" ({sum(1 for _, (_, b) in rows if b == 'default')} in every build; the rest"
+        f" only with the optional denoiser, or only on the platform the Build column"
+        f" names).",
         "",
     ]
 

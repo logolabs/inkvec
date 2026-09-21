@@ -202,6 +202,12 @@ API in particular should be treated as unstable release to release).
   have, so those rows build on 24.04. The AppImage needed one more thing nobody had
   reached yet: `xdg-utils`, without which the bundler stops after writing the AppDir.
 
+- **The release notes claimed a signature the builds do not have.** Nothing here is
+  code-signed on any platform — no certificate is configured — but the notes said the
+  Windows installer was signed by LogoLabs SRL. They now say it is unsigned, and give the
+  first-run steps for Windows SmartScreen and macOS Gatekeeper next to the checksums that
+  do establish provenance.
+
 - **The npm publish.** `npm publish dist-npm/*.tgz` failed on the 0.1.5 tag with a git
   authentication error: npm reads a bare `dir/file.tgz` as the GitHub shorthand
   `owner/repo` and went looking for `ssh://git@github.com/dist-npm/<file>.tgz.git`. The path

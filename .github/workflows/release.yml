@@ -522,10 +522,10 @@ jobs:
             echo "No CHANGELOG.md section found for [${version}]; edit this release's notes before publishing." > notes.md
           fi
 
-          # Every release carries the same verification section. Until the signing
-          # certificate has been downloaded enough times Windows SmartScreen may warn on
-          # the installer, and leaving somebody to guess what that means is worse than
-          # saying it plainly next to the checksums that settle it.
+          # Every release carries the same two sections. Nothing here is code-signed --
+          # no certificate is configured on any platform -- so both operating systems put
+          # a warning in front of the app, and leaving somebody to guess what that means
+          # is worse than saying it plainly next to the checksums that settle it.
           cat >> notes.md <<'NOTES'
 
           ---
@@ -554,10 +554,22 @@ jobs:
           - **macOS** — `shasum -a 256 <file>`
           - **Linux** — `sha256sum <file>`
 
-          Inkvec Studio Lite for Windows is signed by LogoLabs SRL. Until that certificate
-          has been downloaded enough times to build reputation, Windows may still show a
-          blue SmartScreen warning: choose **More info**, then **Run anyway**. The
-          checksum above is what actually settles whether the file is ours.
+          ---
+
+          ## Opening the app the first time
+
+          These builds are **not code-signed** on any platform, so each operating system
+          will say so in its own way. The checksum above is what actually settles whether
+          a file is ours.
+
+          - **Windows** — SmartScreen shows "Windows protected your PC" with an unknown
+            publisher: choose **More info**, then **Run anyway**.
+          - **macOS** — Gatekeeper refuses an unsigned, un-notarised app downloaded from a
+            browser. Open Applications, Control-click **Inkvec Studio Lite**, choose
+            **Open**, then **Open** again in the dialog. If macOS still refuses, run
+            `xattr -dr com.apple.quarantine "/Applications/Inkvec Studio Lite.app"`.
+          - **Linux** — nothing special for the `.deb` or `.rpm`; an `.AppImage` needs
+            `chmod +x` before it will run.
 
           Nothing in this release phones home. The app's only outbound requests are the
           update check, which sends its version and your operating system and can be

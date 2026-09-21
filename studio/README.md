@@ -180,9 +180,11 @@ features on a 0.07 dE00 trace), and assert that the honesty panel's copy never a
 
 ## Known gaps
 
-- **Not signed.** Windows SmartScreen will warn until the certificate builds reputation.
-  The release notes carry the calm, factual line about the signature and the published
-  checksum. The installer's *own* copy of it does not: the design puts it on a custom NSIS
+- **Not signed**, on any platform: no certificate is configured for Windows, and the
+  macOS bundles are neither signed nor notarised, so SmartScreen warns and Gatekeeper
+  needs a Control-click **Open** the first time. The release notes say exactly that, next
+  to the published checksums and the steps for each platform. The installer's *own* copy
+  of it does not: the design puts it on a custom NSIS
   options page, and that needs a full template override rather than the supported
   `installerHooks` extension point. Replacing Tauri's whole installer template — untested,
   on the one platform that cannot be tested here — buys a paragraph at the cost of the

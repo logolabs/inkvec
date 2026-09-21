@@ -157,7 +157,7 @@ cannot drift from the script. The icon is designed at 16 px first — at that si
 stair-step is dropped and everything left grows to at least four device pixels, because
 three 8-unit squares at 16 px read as grit rather than as a raster.
 
-`tools/third_party.py` writes `THIRD_PARTY.md` from the app's own dependency graph. The
+`tools/third_party.py` writes `STUDIO_THIRD_PARTY.md` from the app's own dependency graph. The
 app ships it next to the engine's and shows both on About: the notices a user reads have to
 be the notices for the binary they are running.
 

@@ -224,6 +224,24 @@ API in particular should be treated as unstable release to release).
   The test job no longer looks for a hard-coded `inkvec-0.1.4.jar`, which every version
   bump turned into a path that is not there.
 
+- **The Windows `.msi` could not be built at all**, and packaging the app in CI is what
+  found it. Tauri's WiX generator ignores the name a resource is mapped to and installs it
+  under its source file name, so `docs/THIRD_PARTY.md` and the app's own `THIRD_PARTY.md`
+  became one target file installed by two components — WiX rejects that (ICE30) and the
+  MSI never linked, while the `.deb` and `.rpm` carried both files correctly. The app's
+  copy is now `studio/STUDIO_THIRD_PARTY.md` at the source, so no rename is needed and no
+  platform has to honour one. On Windows this also means the About screen's second notices
+  document is installed at all, which it would not have been.
+
+- **`shopt -s globstar` fails outright on the macOS runners**, whose bash is 3.2. It was in
+  the release workflow's "Collect the installers" step, so a tagged macOS row would have
+  built the app, built the `.dmg`, and then thrown the job away on a shell option. Both
+  workflows list bundles with `find` now.
+
+- **The AppImage runtime is fetched before bundling**, with retries, and handed to
+  linuxdeploy through `LDAI_RUNTIME_FILE`. The plugin otherwise downloads it mid-bundle,
+  where a 504 — one happened — fails the row and, on a tag, costs a re-tag.
+
 - **Studio CI packages the app instead of only compiling it.** `--no-bundle` is what let
   the category bug reach a tag: packaging was the one step no CI run had ever executed, on
   any platform. The `studio` workflow now builds the same bundle formats the release does

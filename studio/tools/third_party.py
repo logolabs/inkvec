@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Regenerate studio/THIRD_PARTY.md from the app's own dependency graph.
+"""Regenerate studio/STUDIO_THIRD_PARTY.md from the app's own dependency graph.
 
-    python3 studio/tools/third_party.py            # write studio/THIRD_PARTY.md
+    python3 studio/tools/third_party.py            # write studio/STUDIO_THIRD_PARTY.md
     python3 studio/tools/third_party.py --check    # exit 1 if the file is out of date
 
 The repository's `tools/third_party.py` resolves the root workspace, and `studio/src-tauri`
@@ -25,7 +25,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "src-tauri" / "Cargo.toml"
-OUT = ROOT / "THIRD_PARTY.md"
+# STUDIO_THIRD_PARTY.md, not THIRD_PARTY.md, and the awkward name is load-bearing: the
+# app bundles this file next to the engine's own docs/THIRD_PARTY.md, and Tauri's WiX
+# generator ignores the destination name a resource is mapped to and uses the source's
+# file name. Two sources both called THIRD_PARTY.md therefore became one target file
+# installed by two components, which WiX rejects (ICE30) -- the MSI could not be built at
+# all. Distinct source names, no rename to ignore.
+OUT = ROOT / "STUDIO_THIRD_PARTY.md"
 CARGO = shutil.which("cargo") or str(Path.home() / ".cargo" / "bin" / "cargo")
 
 # Licences that need no further thought. Anything outside this set is called out in its

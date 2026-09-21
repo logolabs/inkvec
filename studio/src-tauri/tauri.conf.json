@@ -57,7 +57,7 @@
       "../../LICENSE": "LICENSE",
       "../../NOTICE": "NOTICE",
       "../../docs/THIRD_PARTY.md": "THIRD_PARTY.md",
-      "../THIRD_PARTY.md": "STUDIO_THIRD_PARTY.md",
+      "../STUDIO_THIRD_PARTY.md": "STUDIO_THIRD_PARTY.md",
       "samples/": "samples/"
     },
     "linux": {

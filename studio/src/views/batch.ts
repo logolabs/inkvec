@@ -13,7 +13,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { fill, h } from "../lib/dom";
 import { api, type BatchRow, type PresetId } from "../lib/ipc";
 import { bytes, count, de00, duration, percent, type Store } from "../lib/state";
-import { toast } from "../components/overlays";
+import { closeOverlay, openPopover, toast } from "../components/overlays";
 
 const ROW_HEIGHT = 30;
 /** Rows drawn above and below the visible window, so a fast scroll does not flash. */
@@ -53,7 +53,7 @@ export function createBatch(store: Store): HTMLElement {
 
     spacerTop.style.height = `${first * ROW_HEIGHT}px`;
     spacerBottom.style.height = `${Math.max(0, (list.length - first - slice.length) * ROW_HEIGHT)}px`;
-    fill(rows, ...slice.map(rowEl));
+    fill(rows, ...slice.map((r) => rowEl(r, store, () => store.touch("batch"))));
   };
 
   viewport.addEventListener("scroll", drawRows, { passive: true });
@@ -257,8 +257,21 @@ export function createBatch(store: Store): HTMLElement {
   return el;
 }
 
-function rowEl(r: BatchRow): HTMLElement {
+function rowEl(r: BatchRow, store: Store, changed: () => void): HTMLElement {
   const stateClass = r.state === "failed" ? ".failed" : r.state === "running" ? ".running" : "";
+  // A row that has already run cannot be re-presetted: the number beside it was measured
+  // with the preset it says, and letting the two disagree would make the column a lie.
+  const editable = r.state === "queued";
+  const preset = h(
+    `button.reset${editable ? "" : ".muted"}`,
+    {
+      style: { textAlign: "left", color: editable ? "var(--dim)" : "var(--muted)" },
+      disabled: !editable,
+      title: editable ? "Use a different preset for this file" : "Already run",
+      onclick: () => openRowPreset(preset, r, store, changed),
+    },
+    presetName(r.preset),
+  );
   return h(
     `div.batchrow${stateClass}`,
     { title: r.message ?? r.path },
@@ -272,12 +285,39 @@ function rowEl(r: BatchRow): HTMLElement {
       },
     }),
     h("span.trunc.dim", null, r.file),
-    h("span.muted", null, presetName(r.preset)),
+    preset,
     h(`span.state.${r.state}`, null, h("i"), r.state),
     h("span.right", { class: r.de00 === null ? "muted" : "dim" }, r.de00 === null ? "—" : de00(r.de00)),
     h("span.right.faint", null, r.coordinates === null ? "—" : count(r.coordinates)),
     h("span.right.faint", null, r.outBytes === null ? "—" : bytes(r.outBytes)),
     h("span.trunc.muted", null, r.message ?? r.destination),
+  );
+}
+
+/** Choose a preset for one row. The queue-wide preset stays whatever it was. */
+function openRowPreset(anchor: HTMLElement, row: BatchRow, store: Store, changed: () => void): void {
+  const presets = store.state.caps?.presets ?? [];
+  openPopover(
+    anchor,
+    h(
+      "div.menu",
+      null,
+      ...presets.map((p) =>
+        h(
+          "button.item",
+          {
+            onclick: () => {
+              const target = store.state.batch.rows.find((x) => x.id === row.id);
+              if (target) target.preset = p.id;
+              closeOverlay();
+              changed();
+            },
+          },
+          h("span", { style: { flex: "1" } }, p.name),
+          h("span.when", null, p.id === row.preset ? "current" : p.subtitle),
+        ),
+      ),
+    ),
   );
 }
 

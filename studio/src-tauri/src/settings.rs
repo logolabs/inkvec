@@ -40,6 +40,22 @@ pub enum Channel {
     Prerelease,
 }
 
+/// A preset the user saved from the advanced controls.
+///
+/// The built-in seven are each a small set of deliberate differences from the defaults,
+/// which is why a batch row's preset only overrides what that preset speaks to. A saved
+/// one is the opposite: a whole snapshot, because whoever pressed Save had already moved
+/// exactly what they wanted moved, and "everything else follows the queue" would quietly
+/// undo half of it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedPreset {
+    /// Stable across a rename, so the rail's selection survives one.
+    pub id: String,
+    pub name: String,
+    pub settings: TraceSettings,
+}
+
 /// Everything remembered between sessions.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -74,6 +90,8 @@ pub struct Prefs {
     pub recent: Vec<PathBuf>,
     /// Whether the first-run screen has been seen.
     pub seen_first_run: bool,
+    /// Presets the user saved, in the order the tray shows them.
+    pub saved: Vec<SavedPreset>,
 }
 
 impl Default for Prefs {
@@ -92,6 +110,7 @@ impl Default for Prefs {
             trace: TraceSettings::default(),
             recent: Vec::new(),
             seen_first_run: false,
+            saved: Vec::new(),
         }
     }
 }
@@ -99,6 +118,14 @@ impl Default for Prefs {
 /// How many recent files are kept. Enough to be useful, few enough that the menu is a
 /// menu and not a history.
 const RECENT_LIMIT: usize = 8;
+
+/// How many saved presets are kept. The tray is a tray, not a filing cabinet; past this
+/// many the seven built-ins stop being findable, which is the thing they are for.
+const SAVED_LIMIT: usize = 12;
+
+/// The longest a saved preset's name may be. Long enough for a client and a job, short
+/// enough to read in a 150 px tile.
+const NAME_LIMIT: usize = 40;
 
 impl Prefs {
     /// Clamp anything that came out of the file into a range the app can act on.
@@ -113,6 +140,16 @@ impl Prefs {
         self.threads = self.threads.map(|t| t.clamp(1, 256));
         self.trace = self.trace.sanitised();
         self.recent.truncate(RECENT_LIMIT);
+
+        // A saved preset with no name or a duplicate id would show as a blank tile or as
+        // two tiles that both answer to one click, so neither survives the file.
+        let mut seen = std::collections::HashSet::new();
+        self.saved.retain_mut(|p| {
+            p.name = p.name.trim().chars().take(NAME_LIMIT).collect();
+            p.settings = p.settings.clone().sanitised();
+            !p.id.is_empty() && !p.name.is_empty() && seen.insert(p.id.clone())
+        });
+        self.saved.truncate(SAVED_LIMIT);
         self
     }
 
@@ -228,6 +265,58 @@ mod tests {
                 .filter(|x| x.ends_with("logo-3.png"))
                 .count(),
             1
+        );
+    }
+
+    #[test]
+    fn a_saved_preset_that_cannot_be_shown_does_not_survive_the_file() {
+        let one = |id: &str, name: &str| SavedPreset {
+            id: id.into(),
+            name: name.into(),
+            settings: TraceSettings::default(),
+        };
+        let p = Prefs {
+            saved: vec![
+                one("a", "  Northwind  "),
+                one("b", "   "),
+                one("", "No id"),
+                one("a", "A second tile answering to the same click"),
+                one("c", &"x".repeat(NAME_LIMIT + 20)),
+            ],
+            ..Prefs::default()
+        }
+        .sanitised();
+
+        let ids: Vec<&str> = p.saved.iter().map(|x| x.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["a", "c"],
+            "blank, id-less and duplicate tiles are dropped"
+        );
+        assert_eq!(p.saved[0].name, "Northwind", "names are trimmed");
+        assert_eq!(p.saved[1].name.chars().count(), NAME_LIMIT);
+    }
+
+    #[test]
+    fn saved_presets_have_a_ceiling_and_go_through_the_same_clamps() {
+        let p = Prefs {
+            saved: (0..SAVED_LIMIT + 5)
+                .map(|i| SavedPreset {
+                    id: format!("p{i}"),
+                    name: format!("Preset {i}"),
+                    settings: TraceSettings {
+                        trace_size: 99_999,
+                        ..TraceSettings::default()
+                    },
+                })
+                .collect(),
+            ..Prefs::default()
+        }
+        .sanitised();
+        assert_eq!(p.saved.len(), SAVED_LIMIT);
+        assert_eq!(
+            p.saved[0].settings.trace_size, 16_384,
+            "a saved preset's numbers are clamped like any live ones"
         );
     }
 

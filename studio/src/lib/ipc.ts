@@ -88,6 +88,18 @@ export interface Capabilities {
 
 export type Theme = "system" | "dark" | "light";
 
+/**
+ * A preset the user saved. Unlike the built-in seven it is a whole snapshot of the
+ * controls, and its id is a string rather than a `PresetId` — saved presets are a
+ * Vectorize-tab affordance and never reach the batch queue, whose CSV column has to say
+ * which of the seven a row was measured with.
+ */
+export interface SavedPreset {
+  id: string;
+  name: string;
+  settings: Settings;
+}
+
 export interface Prefs {
   outputFolder: string | null;
   theme: Theme;
@@ -100,6 +112,7 @@ export interface Prefs {
   trace: Settings;
   recent: string[];
   seenFirstRun: boolean;
+  saved: SavedPreset[];
 }
 
 // ------------------------------------------------------------------------ traces ---
@@ -269,6 +282,14 @@ export interface ExportRequest {
   formats: Formats;
 }
 
+/** Where a desktop integration stands: the `inkvec` command, the context-menu entry. */
+export interface IntegrationStatus {
+  available: boolean;
+  installed: boolean;
+  path: string | null;
+  note: string | null;
+}
+
 export interface UpdateInfo {
   latest: string | null;
   newer: boolean;
@@ -321,6 +342,13 @@ export const api = {
 
   thirdPartyNotices: () => invoke<string>("third_party_notices"),
   checkUpdate: () => invoke<UpdateInfo>("check_update"),
+
+  cliStatus: () => invoke<IntegrationStatus>("cli_status"),
+  installCli: () => invoke<IntegrationStatus>("install_cli"),
+  removeCli: () => invoke<IntegrationStatus>("remove_cli"),
+  contextMenuStatus: () => invoke<IntegrationStatus>("context_menu_status"),
+  installContextMenu: () => invoke<IntegrationStatus>("install_context_menu"),
+  removeContextMenu: () => invoke<IntegrationStatus>("remove_context_menu"),
 };
 
 // ----------------------------------------------------------------------- events ---

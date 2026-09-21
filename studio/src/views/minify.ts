@@ -22,8 +22,106 @@ import { toast } from "../components/overlays";
 export function createMinify(store: Store): HTMLElement {
   const before = h("div.pane", null, h("span.eyebrow.panelabel", null, "Before"));
   const after = h("div.pane", null, h("span.eyebrow.panelabel", null, "After"));
-  const panes = h("div.panes", null, before, after);
-  const stage = h("section.stage", null, panes);
+  const divider = h("div.wipehandle", { role: "separator", "aria-label": "Wipe" });
+  const panes = h("div.panes", null, before, after, divider);
+  const tools = h("div.viewertools");
+  const stage = h("section.stage", null, tools, panes);
+
+  // The same three arrangements as the Vectorize viewer, for the same reason: this tab's
+  // whole claim is that nothing moved, and the only way to believe that is to look.
+  let view: "side" | "wipe" | "ab" = "side";
+  let wipe = 0.5;
+  let flicked = false;
+
+  const layout = () => {
+    panes.classList.toggle("stacked", view !== "side");
+    divider.style.display = view === "wipe" ? "" : "none";
+    if (view === "side") {
+      before.classList.remove("hidden");
+      after.classList.remove("hidden");
+      before.style.clipPath = "";
+      after.style.clipPath = "";
+    } else if (view === "wipe") {
+      before.classList.remove("hidden");
+      after.classList.remove("hidden");
+      const pct = `${(wipe * 100).toFixed(2)}%`;
+      divider.style.left = pct;
+      before.style.clipPath = `inset(0 ${(100 - wipe * 100).toFixed(2)}% 0 0)`;
+      after.style.clipPath = `inset(0 0 0 ${pct})`;
+    } else {
+      before.style.clipPath = "";
+      after.style.clipPath = "";
+      before.classList.toggle("hidden", !flicked);
+      after.classList.toggle("hidden", flicked);
+    }
+  };
+
+  divider.addEventListener("pointerdown", (e: PointerEvent) => {
+    divider.setPointerCapture(e.pointerId);
+    const move = (m: PointerEvent) => {
+      const r = panes.getBoundingClientRect();
+      wipe = Math.min(0.98, Math.max(0.02, (m.clientX - r.left) / r.width));
+      layout();
+    };
+    const up = () => {
+      divider.removeEventListener("pointermove", move);
+      divider.removeEventListener("pointerup", up);
+    };
+    divider.addEventListener("pointermove", move);
+    divider.addEventListener("pointerup", up);
+  });
+
+  window.addEventListener("keydown", (e) => {
+    if (store.state.tab !== "minify" || store.state.screen || e.key !== " " || e.repeat) return;
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    e.preventDefault();
+    flicked = true;
+    layout();
+  });
+  window.addEventListener("keyup", (e) => {
+    if (e.key === " " && flicked) {
+      flicked = false;
+      layout();
+    }
+  });
+
+  const renderTools = () => {
+    const m = store.state.minify;
+    const r = m.result;
+    fill(
+      tools,
+      h(
+        "div.seg",
+        null,
+        ...(["side", "wipe", "ab"] as const).map((v) =>
+          h(
+            "button",
+            {
+              "aria-pressed": String(view === v),
+              disabled: !m.before,
+              onclick: () => {
+                view = v;
+                layout();
+                renderTools();
+              },
+            },
+            v === "side" ? "Side by side" : v === "wipe" ? "Wipe" : "A/B",
+          ),
+        ),
+      ),
+      h("span.muted", { style: { fontSize: "11.5px" } }, "hold ", h("kbd", null, "Space"), " to flick"),
+      // The promise, stated where somebody is looking for a reason to doubt it.
+      h(
+        "span.muted",
+        { style: { marginLeft: "auto", fontSize: "11.5px" } },
+        r
+          ? `Nothing moved more than ${m.settings.tolerancePx} px${
+              r.differenceDe00 === null ? "" : ` · measured ${de00(r.differenceDe00)} dE00`
+            }`
+          : "",
+      ),
+    );
+  };
   const rail = h("aside.minifyrail");
   const el = h("div", { style: { flex: "1", minHeight: "0", display: "flex" } }, stage, rail);
 
@@ -80,6 +178,8 @@ export function createMinify(store: Store): HTMLElement {
   const render = () => {
     const m = store.state.minify;
     const r = m.result;
+    renderTools();
+    layout();
 
     fill(
       before,
@@ -334,9 +434,15 @@ function toleranceControl(store: Store, run: () => void): HTMLElement {
   );
 }
 
-/** One pane's drawing, parsed rather than injected. */
+/**
+ * One pane's drawing, parsed rather than injected.
+ *
+ * `.centred` because this tab has no pan and zoom: the Vectorize viewer pins its artwork
+ * to the pane's origin so the overlay can share one transform with it, and without the
+ * modifier these two drawings would inherit that and sit in the corner.
+ */
 function art(svg: string): HTMLElement {
-  const wrap = h("div.art");
+  const wrap = h("div.art.centred");
   const doc = new DOMParser().parseFromString(svg, "image/svg+xml");
   const root = doc.documentElement;
   if (root && root.nodeName === "svg") {

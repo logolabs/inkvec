@@ -10,9 +10,17 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { appMark, fill, h } from "../lib/dom";
-import { api, events, type DenoiserStatus, type Prefs, type Theme } from "../lib/ipc";
+import {
+  api,
+  events,
+  type DenoiserStatus,
+  type IntegrationStatus,
+  type Prefs,
+  type Theme,
+} from "../lib/ipc";
 import { bytes, type Store } from "../lib/state";
 import { closeOverlay, confirm, modal, openModal, toast } from "../components/overlays";
+import { windowControls } from "../components/wincontrols";
 
 export interface ScreenActions {
   applyPrefs(patch: Partial<Prefs>): void;
@@ -53,6 +61,10 @@ function settings(store: Store, act: ScreenActions): HTMLElement {
       h("span", { style: { fontSize: "12.5px", fontWeight: "600" } }, "Settings"),
       h("div.spacer"),
       h("button.btn.compact", { onclick: act.close }, "Done"),
+      // This screen covers the app bar, so the window's own controls come with it.
+      // Taking the chrome and then hiding it is how an app becomes unclosable.
+      h("div.sep"),
+      windowControls(),
     ),
     h(
       "div.screenbody",
@@ -138,9 +150,61 @@ function settings(store: Store, act: ScreenActions): HTMLElement {
               (v) => act.applyPrefs({ channel: v as Prefs["channel"] }),
             ),
           ),
+          row(
+            "Check now",
+            "Asks once, immediately, whatever the setting above says.",
+            h(
+              "button.btn.compact",
+              {
+                onclick: async (e: Event) => {
+                  const button = e.currentTarget as HTMLButtonElement;
+                  button.disabled = true;
+                  button.textContent = "Checking…";
+                  try {
+                    const update = await api.checkUpdate();
+                    store.set({ update });
+                    if (update.offline) {
+                      // A missing network is not an error worth a dialog: the stage says
+                      // so plainly and tracing carries on regardless.
+                      store.set({ screen: null, stageState: { kind: "offline", message: offlineNote(update.offline) } });
+                    } else if (update.newer) {
+                      toast(`${update.latest} is available. The status strip has the link.`);
+                    } else {
+                      toast("This is the newest version.");
+                    }
+                  } catch (err) {
+                    toast(String(err), { kind: "bad" });
+                  } finally {
+                    button.disabled = false;
+                    button.textContent = "Check now";
+                  }
+                },
+              },
+              "Check now",
+            ),
+          ),
         ]),
 
         group("Advanced", [
+          // The same engine, on the command line. The binary linked is the one shipped
+          // beside the app, so a trace from the terminal and a trace from the window are
+          // the same version.
+          integrationRow(
+            "Add inkvec to PATH",
+            "The same engine, on the command line.",
+            () => api.cliStatus(),
+            () => api.installCli(),
+            () => api.removeCli(),
+            (s) => (s.installed ? (s.path ?? "Installed") : "Not on the path"),
+          ),
+          integrationRow(
+            "Right-click menu",
+            platformMenuHelp(store),
+            () => api.contextMenuStatus(),
+            () => api.installContextMenu(),
+            () => api.removeContextMenu(),
+            (s) => (s.installed ? "In the menu" : "Not added"),
+          ),
           row(
             "Reset settings",
             "Puts every preference and the trace controls back to their defaults. Your files are untouched.",
@@ -346,6 +410,10 @@ function about(store: Store, act: ScreenActions): HTMLElement {
       h("span", { style: { fontSize: "12.5px", fontWeight: "600" } }, "About"),
       h("div.spacer"),
       h("button.btn.compact", { onclick: act.close }, "Done"),
+      // This screen covers the app bar, so the window's own controls come with it.
+      // Taking the chrome and then hiding it is how an app becomes unclosable.
+      h("div.sep"),
+      windowControls(),
     ),
     h(
       "div.screenbody",
@@ -442,6 +510,84 @@ function showFullNotices(text: string): void {
       [h("button.btn", { onclick: closeOverlay }, "Close")],
     ),
   );
+}
+
+/**
+ * The second sentence of the "no network" card.
+ *
+ * The reason the check failed is a transport error — a DNS name, a proxy, a refused
+ * connection — and pasting one into a card helps nobody. What the user can act on is
+ * whether the check will happen again, so that is what this says; the raw reason is kept
+ * only when it is short enough to be a hint rather than a stack trace.
+ */
+function offlineNote(reason: string): string {
+  const short = reason.length <= 80 ? ` (${reason})` : "";
+  return `The update check will run next time you are online${short}.`;
+}
+
+/** What the right-click row's help line says, which differs per platform. */
+function platformMenuHelp(store: Store): string {
+  switch (store.state.caps?.platform) {
+    case "windows":
+      return '"Vectorize with Inkvec" in Explorer, for you only. Nothing machine-wide.';
+    case "macos":
+      return "macOS already offers Inkvec Studio under Finder's Open With.";
+    default:
+      return '"Vectorize with Inkvec" in your file manager, for you only.';
+  }
+}
+
+/**
+ * A Settings row backed by something that is either in place or not.
+ *
+ * It asks the backend what the truth is rather than remembering what it did, because both
+ * of these live outside the app — a symlink and a registry key — and either can be removed
+ * by something else between one visit to this screen and the next.
+ */
+function integrationRow(
+  label: string,
+  help: string,
+  read: () => Promise<IntegrationStatus>,
+  add: () => Promise<IntegrationStatus>,
+  drop: () => Promise<IntegrationStatus>,
+  describe: (s: IntegrationStatus) => string,
+): HTMLElement {
+  const control = h("span.muted", { style: { fontSize: "12.5px" } }, "…");
+  const detail = h("span.help");
+  const container = row(label, help, control);
+  container.querySelector(".about")?.append(detail);
+
+  const paint = (status: IntegrationStatus) => {
+    detail.textContent = status.available ? describe(status) : (status.note ?? "");
+    if (!status.available) {
+      fill(control, h("span.muted", { style: { fontSize: "12.5px" } }, "Not available"));
+      return;
+    }
+    fill(
+      control,
+      h(
+        `button.btn.compact${status.installed ? ".danger" : ""}`,
+        {
+          onclick: async () => {
+            fill(control, h("span.muted", { style: { fontSize: "12.5px" } }, "Working…"));
+            try {
+              paint(status.installed ? await drop() : await add());
+              toast(status.installed ? `${label}: removed.` : `${label}: added.`);
+            } catch (e) {
+              paint(status);
+              toast(String(e), { kind: "bad" });
+            }
+          },
+        },
+        status.installed ? "Remove" : "Add",
+      ),
+    );
+  };
+
+  void read().then(paint).catch(() => {
+    fill(control, h("span.muted", { style: { fontSize: "12.5px" } }, "Unknown"));
+  });
+  return container;
 }
 
 // ------------------------------------------------------------------ fragments ---

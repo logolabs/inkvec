@@ -134,6 +134,7 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
     const overlay = stateOverlay(st.stageState, st, act);
     if (overlay) stageBody.append(overlay);
     if (st.svg) stageBody.append(resultChip(store));
+    if (st.detail && st.svg) stageBody.append(detailCallout(store, act));
     viewer.redraw();
     if (st.zoom === 1 && st.pan.x === 0 && st.pan.y === 0) viewer.fit();
   };
@@ -182,7 +183,7 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
   };
 
   store.on(["source", "view", "show", "zoom", "detail", "svg"], renderTools);
-  store.on(["source", "svg", "stageState", "result"], renderStage);
+  store.on(["source", "svg", "stageState", "result", "detail", "worstCorner"], renderStage);
   store.on(["tracing", "liveStages", "report", "result", "source", "update"], renderStrip);
 
   renderTools();
@@ -228,6 +229,31 @@ function resultChip(store: Store): HTMLElement {
 }
 
 /**
+ * The detail-mode callout.
+ *
+ * Detail mode draws the source's pixel grid under the vector edge, and the only thing
+ * worth saying while it is on is where to point it. The sentence is the measurement, not
+ * a claim about it: if there is no worst corner it says the trace and the source agree
+ * everywhere we can measure, which is what a null means.
+ */
+function detailCallout(store: Store, act: WorkspaceActions): HTMLElement {
+  const st = store.state;
+  return h(
+    "div.callout",
+    null,
+    h(
+      "div.head",
+      null,
+      // 12x is where Jump to it lands, not where the view happens to be: a live zoom
+      // here would go stale on every wheel tick unless the stage rebuilt with it.
+      h("span.eyebrow", null, st.worstCorner ? "Worst corner · 12×" : "Detail"),
+      st.worstCorner ? h("button.reset", { onclick: act.jumpToWorst }, "Jump to it") : null,
+    ),
+    h("span", null, worstCornerCaption(store)),
+  );
+}
+
+/**
  * The stage states that are not a drawing.
  *
  * Copy carries the weight in every one of them, and none of them apologises. "Oversized"
@@ -264,6 +290,24 @@ function stateOverlay(state: StageState, st: ReturnType<Store["state"]["valueOf"
       return frame("alert", "var(--bad)", "The trace stopped", state.message, ["Trace again", act.traceNow]);
     case "cancelled":
       return frame("x", "var(--faint)", "Trace cancelled", "The last full trace is still on screen and still exportable. Nothing was discarded.", ["Trace again", act.traceNow]);
+    // Not an error: the preset works without it, the colours just keep the compression
+    // damage. The download is explained before anything is fetched.
+    case "denoiserMissing":
+      return frame(
+        "download",
+        "var(--faint)",
+        "This preset wants the denoiser",
+        "Photo or scan works without it, but compression damage stays in the colours. The download is explained before anything is fetched, and it runs locally like everything else.",
+        ["Download the denoiser", act.openDenoiser],
+      );
+    // Tracing never needed a network. Saying so is the whole message.
+    case "offline":
+      return frame(
+        "globe",
+        "var(--faint)",
+        "No network",
+        `Tracing is unaffected — it never needed one. ${state.message}`,
+      );
     default:
       return null;
   }
@@ -282,10 +326,17 @@ function firstRun(store: Store, act: WorkspaceActions, samples: SampleInfo[]): H
       h(
         "div",
         { style: { display: "flex", flexDirection: "column", gap: "6px" } },
-        h("span.headline", null, "Drop a PNG, JPEG or WebP"),
-        h("span.faint", { style: { fontSize: "13px" } }, "or press ", h("kbd", null, `${mod}+O`), " to choose a file"),
+        h("span.headline.resting", null, "Drop a PNG, JPEG or WebP"),
+        h("span.headline.release", null, "Release to trace"),
+        h(
+          "span.faint.resting",
+          { style: { fontSize: "13px" } },
+          "or press ",
+          h("kbd", null, `${mod}+O`),
+          " to choose a file",
+        ),
       ),
-      h("button.btn.primary", { onclick: act.openFile }, "Open an image"),
+      h("button.btn.primary.resting", { onclick: act.openFile }, "Open an image"),
     ),
     samples.length
       ? h(

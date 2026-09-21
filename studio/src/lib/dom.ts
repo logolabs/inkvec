@@ -8,6 +8,11 @@
  * the viewer is driven imperatively because it is not.
  */
 
+// Generated from `web/logo.svg` by `studio/tools/make_assets.py`, with its ink set to
+// `currentColor`. Imported rather than transcribed: the mark changed twice in one day
+// while this app was being built, and a copied path is a copy that goes stale quietly.
+import markSvg from "../assets/mark.svg?raw";
+
 type Child = Node | string | number | null | undefined | false | Child[];
 
 /** Attributes `h` understands beyond plain string properties. */
@@ -149,33 +154,36 @@ export function hasIcon(name: string): boolean {
 }
 
 /**
- * The app's own mark, inline.
+ * The Inkvec mark, inline and mono.
  *
- * Three stair-stepped pixels and one copper curve cutting across them: a raster being
- * read as a continuous edge, which is the product's whole argument in one shape. The same
- * geometry `studio/tools/make_assets.py` draws the icon files from, on the same 48-unit
- * grid, so the window and the taskbar cannot show two different marks.
+ * The drop with a dot and a chevron carved out of it — one path, `fill-rule="evenodd"`
+ * — which is the mark the project settled on for Inkvec itself. It is drawn in
+ * `currentColor` rather than in the palette, so the bar and About each get it in
+ * whatever colour their own text is using and the light theme needs no second file.
  *
- * The LogoLabs flask is deliberately not used here. The app is Inkvec Studio; the flask
- * belongs to the company, and it appears on About and in the export README rather than
- * in the chrome.
+ * The geometry is not written here. It is generated from `web/logo.svg`, which is the
+ * one the site serves, and `make_assets.py --check` fails if the two drift apart.
  */
 export function appMark(size = 18): SVGElement {
-  const steps: [number, number, string][] = [
-    [6, 26, "var(--vt)"],
-    [14, 20, "var(--dim)"],
-    [22, 14, "var(--vt)"],
-  ];
-  return s(
-    "svg",
-    { width: size, height: size, viewBox: "0 0 48 48", "aria-hidden": "true", focusable: "false" },
-    ...steps.map(([x, y, fill]) => s("rect", { x, y, width: 8, height: 8, fill })),
-    s("path", {
-      d: "M6 38C18 38 30 26 38 10",
-      fill: "none",
-      stroke: "var(--accent)",
-      "stroke-width": size <= 20 ? 5 : 3.4,
-      "stroke-linecap": "round",
-    }),
-  );
+  const node = MARK.cloneNode(true) as SVGSVGElement;
+  // The file carries `color="#c9754a"` so that rendered on its own — a README image, a
+  // file preview — it is the copper mono mark the documentation site shows. In here it
+  // should take the chrome's colour instead, so the root's own `color` comes off and
+  // `currentColor` inherits.
+  node.removeAttribute("color");
+  // Taller than it is wide, so the *height* is the size and the width follows from the
+  // viewBox. Asking for a square would letterbox it or squash it, and a squashed mark
+  // is a different mark.
+  const [, , w, hh] = (node.getAttribute("viewBox") ?? "0 0 1 1").split(/\s+/).map(Number);
+  node.setAttribute("height", String(size));
+  node.setAttribute("width", String(Math.round((size * w) / hh)));
+  node.setAttribute("aria-hidden", "true");
+  node.setAttribute("focusable", "false");
+  return node;
 }
+
+/** Parsed once. Every `appMark` is a clone of it. */
+const MARK: SVGSVGElement = (() => {
+  const root = new DOMParser().parseFromString(markSvg, "image/svg+xml").documentElement;
+  return document.importNode(root, true) as unknown as SVGSVGElement;
+})();

@@ -71,6 +71,11 @@ ureq = { version = "3", default-features = false, features = [
 sha2 = "0.10"
 dirs = "6"
 
+# Windows only, and only for the per-user context-menu entry: HKCU\Software\Classes.
+# Nothing here writes a machine-wide hive or asks for elevation.
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+
 [features]
 default = []
 #: Compile the trained restorer in, so "Clean up damage" and the Photo-or-scan preset

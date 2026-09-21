@@ -20,6 +20,7 @@
 pub mod batch;
 pub mod denoiser;
 pub mod export;
+pub mod integration;
 pub mod lost;
 pub mod minify;
 pub mod options;
@@ -175,6 +176,12 @@ pub fn run() {
             reset_prefs,
             third_party_notices,
             check_update,
+            cli_status,
+            install_cli,
+            remove_cli,
+            context_menu_status,
+            install_context_menu,
+            remove_context_menu,
         ])
         .run(tauri::generate_context!())
         .expect("Inkvec Studio Lite could not start its window");
@@ -1026,6 +1033,39 @@ fn check_update(state: State<'_, AppState>) -> Result<UpdateInfo, String> {
             .unwrap_or(notes),
         offline: None,
     })
+}
+
+// ------------------------------------------------------- desktop integration ---
+
+#[tauri::command]
+fn cli_status() -> integration::Status {
+    integration::cli_status()
+}
+
+#[tauri::command]
+fn install_cli() -> Result<integration::Status, String> {
+    integration::install_cli()
+}
+
+#[tauri::command]
+fn remove_cli() -> Result<integration::Status, String> {
+    integration::remove_cli()
+}
+
+#[tauri::command]
+fn context_menu_status() -> integration::Status {
+    integration::context_menu_status()
+}
+
+#[tauri::command]
+fn install_context_menu() -> Result<integration::Status, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("cannot find this app: {e}"))?;
+    integration::install_context_menu(&exe)
+}
+
+#[tauri::command]
+fn remove_context_menu() -> Result<integration::Status, String> {
+    integration::remove_context_menu()
 }
 
 /// Whether `candidate` is a later version than `current`, compared numerically.

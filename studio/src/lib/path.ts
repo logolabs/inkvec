@@ -169,6 +169,116 @@ export function pathData(svg: string): string[] {
   return out;
 }
 
+/** Elements the overlay knows how to draw, in document order. */
+const SHAPES = "path, circle, ellipse, rect, line, polyline, polygon";
+
+/**
+ * Every drawable shape in a parsed document, as path data.
+ *
+ * The tracer does not emit only `<path>`. A round face comes out as `<circle>`, an
+ * oval as `<ellipse>` (sometimes with a `rotate()` on it), and a rectangle as `<rect>`
+ * — that is the whole point of primitive recovery, and it is usually the largest shape
+ * in the drawing. Reading `d` attributes alone left those shapes with no wireframe and
+ * no nodes, so on a logo built from a disc the overlay drew everything except the disc.
+ *
+ * Primitives are converted rather than sampled: a circle becomes four arcs through its
+ * quadrant points, which is where an editor puts its nodes, and a rotated ellipse keeps
+ * the rotation as the arcs' own x-axis rotation so nothing has to carry a transform.
+ */
+export function shapesOf(root: Element): string[] {
+  const out: string[] = [];
+  for (const el of root.querySelectorAll(SHAPES)) {
+    const d = shapeData(el);
+    if (d) out.push(d);
+  }
+  return out;
+}
+
+function num(el: Element, name: string, fallback = 0): number {
+  // An absent attribute is the fallback, not zero: `Number(null)` is 0, which quietly
+  // turned `<rect rx="8">` (no `ry`) into a square-cornered rectangle.
+  const raw = el.getAttribute(name);
+  if (raw === null || raw.trim() === "") return fallback;
+  const v = Number(raw);
+  return Number.isFinite(v) ? v : fallback;
+}
+
+/** The degrees in a bare `transform="rotate(a cx cy)"`, which is all the tracer emits. */
+function rotation(el: Element): number {
+  const m = /rotate\(\s*(-?[\d.]+)/.exec(el.getAttribute("transform") ?? "");
+  return m ? Number(m[1]) : 0;
+}
+
+function shapeData(el: Element): string | null {
+  const f = (n: number) => (Math.round(n * 1000) / 1000).toString();
+  switch (el.nodeName.toLowerCase()) {
+    case "path":
+      return el.getAttribute("d");
+
+    case "circle":
+    case "ellipse": {
+      const cx = num(el, "cx");
+      const cy = num(el, "cy");
+      const isCircle = el.nodeName.toLowerCase() === "circle";
+      const rx = isCircle ? num(el, "r") : num(el, "rx");
+      const ry = isCircle ? num(el, "r") : num(el, "ry");
+      if (!(rx > 0) || !(ry > 0)) return null;
+      const deg = rotation(el);
+      const rad = (deg * Math.PI) / 180;
+      const cos = Math.cos(rad);
+      const sin = Math.sin(rad);
+      // The four quadrant points, carried through the ellipse's own rotation.
+      const at = (ax: number, ay: number) =>
+        `${f(cx + ax * cos - ay * sin)},${f(cy + ax * sin + ay * cos)}`;
+      const arc = `A${f(rx)},${f(ry)} ${f(deg)} 0 1 `;
+      return (
+        `M${at(rx, 0)}${arc}${at(0, ry)}${arc}${at(-rx, 0)}` +
+        `${arc}${at(0, -ry)}${arc}${at(rx, 0)}Z`
+      );
+    }
+
+    case "rect": {
+      const x = num(el, "x");
+      const y = num(el, "y");
+      const w = num(el, "width");
+      const h = num(el, "height");
+      if (!(w > 0) || !(h > 0)) return null;
+      // `rx` alone means both, which is what the tracer writes for a rounded rect.
+      const rx = Math.min(num(el, "rx", num(el, "ry")), w / 2);
+      const ry = Math.min(num(el, "ry", num(el, "rx")), h / 2);
+      if (!(rx > 0) || !(ry > 0)) {
+        return `M${f(x)},${f(y)}L${f(x + w)},${f(y)}L${f(x + w)},${f(y + h)}L${f(x)},${f(y + h)}Z`;
+      }
+      const a = `A${f(rx)},${f(ry)} 0 0 1 `;
+      return (
+        `M${f(x + rx)},${f(y)}L${f(x + w - rx)},${f(y)}${a}${f(x + w)},${f(y + ry)}` +
+        `L${f(x + w)},${f(y + h - ry)}${a}${f(x + w - rx)},${f(y + h)}` +
+        `L${f(x + rx)},${f(y + h)}${a}${f(x)},${f(y + h - ry)}` +
+        `L${f(x)},${f(y + ry)}${a}${f(x + rx)},${f(y)}Z`
+      );
+    }
+
+    case "line":
+      return `M${f(num(el, "x1"))},${f(num(el, "y1"))}L${f(num(el, "x2"))},${f(num(el, "y2"))}`;
+
+    case "polyline":
+    case "polygon": {
+      const pts = (el.getAttribute("points") ?? "")
+        .trim()
+        .split(/[\s,]+/)
+        .map(Number);
+      if (pts.length < 4 || pts.some((n) => !Number.isFinite(n))) return null;
+      const parts: string[] = [`M${f(pts[0])},${f(pts[1])}`];
+      for (let i = 2; i + 1 < pts.length; i += 2) parts.push(`L${f(pts[i])},${f(pts[i + 1])}`);
+      if (el.nodeName.toLowerCase() === "polygon") parts.push("Z");
+      return parts.join("");
+    }
+
+    default:
+      return null;
+  }
+}
+
 /** The `viewBox` of a document, or its width/height, or null. */
 export function viewBoxOf(svg: string): { x: number; y: number; w: number; h: number } | null {
   const vb = /viewBox="([^"]*)"/.exec(svg);

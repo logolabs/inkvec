@@ -71,6 +71,12 @@ jobs:
         working-directory: studio
         run: npm run build
 
+      # The app declares the `inkvec` command as an external binary, so it has to exist
+      # before any cargo command in `src-tauri` — the build script checks for it.
+      - name: Build the bundled inkvec command
+        working-directory: studio
+        run: npm run sidecar
+
       - name: Backend tests
         working-directory: studio/src-tauri
         run: cargo test --release

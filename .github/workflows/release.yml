@@ -300,6 +300,11 @@ jobs:
       - name: Build and bundle
         working-directory: studio
         shell: bash
+        # SIDECAR_TARGET tells `scripts/sidecar.mjs` which triple to build the bundled
+        # `inkvec` command for; Tauri does not pass its own --target down to
+        # beforeBuildCommand, and a host-built command in a cross bundle would not run.
+        env:
+          SIDECAR_TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
           features=""
@@ -410,6 +415,34 @@ jobs:
           if [[ ! -s notes.md ]]; then
             echo "No CHANGELOG.md section found for [${version}]; edit this release's notes before publishing." > notes.md
           fi
+
+          # Every release carries the same verification section. Until the signing
+          # certificate has been downloaded enough times Windows SmartScreen may warn on
+          # the installer, and leaving somebody to guess what that means is worse than
+          # saying it plainly next to the checksums that settle it.
+          cat >> notes.md <<'NOTES'
+
+          ---
+
+          ## Verifying your download
+
+          `SHA256SUMS` below covers every file in this release. To check one:
+
+          - **Windows** — `certutil -hashfile <file> SHA256`
+          - **macOS** — `shasum -a 256 <file>`
+          - **Linux** — `sha256sum <file>`
+
+          Inkvec Studio Lite for Windows is signed by LogoLabs SRL. Until that certificate
+          has been downloaded enough times to build reputation, Windows may still show a
+          blue SmartScreen warning: choose **More info**, then **Run anyway**. The
+          checksum above is what actually settles whether the file is ours.
+
+          Nothing in this release phones home. The app's only outbound requests are the
+          update check, which sends its version and your operating system and can be
+          turned off, and the optional denoiser download.
+          NOTES
+          # The heredoc above is indented for readability; strip that indent back out.
+          sed -i 's/^          //' notes.md
 
       # The extraction script is validated against this repository's CHANGELOG heading
       # format (for example "## [0.1.1] - 2026-09-18"). A tag push publishes only after

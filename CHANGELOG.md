@@ -28,6 +28,16 @@ API in particular should be treated as unstable release to release).
   platforms by the new `studio` workflow, and released as `.deb`/`.rpm`/`.AppImage`,
   `.dmg` and NSIS `.exe`/`.msi` alongside the command-line archives.
 
+  The preset tray takes saved presets as well as the seven built-ins, the palette copies
+  itself out as CSS custom properties, and detail mode carries a callout naming the worst
+  corner it measured and offering to go there. The app draws the Inkvec mark, mono,
+  generated from `web/logo.svg` so the two cannot drift.
+
+  The installers carry the `inkvec` command-line tool with them, and Settings can put it
+  on `PATH` and add a *Vectorize with Inkvec Studio* entry to the image right-click menu
+  — each row naming the exact path it wrote, with a Remove that takes it back out. On
+  Windows the uninstaller removes both.
+
   `studio/src-tauri` is a cargo workspace of its own, excluded from the root one, so
   `cargo build --workspace` keeps working without a webview SDK.
 

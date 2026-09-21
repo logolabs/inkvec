@@ -16,5 +16,5 @@
     "useDefineForClassFields": true,
     "resolveJsonModule": true
   },
-  "include": ["src/**/*.ts", "vite.config.ts"]
+  "include": ["src/**/*.ts", "src/**/*.d.ts", "vite.config.ts"]
 }

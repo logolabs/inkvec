@@ -10,7 +10,7 @@
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
-import { fill, h } from "../lib/dom";
+import { fill, h, icon } from "../lib/dom";
 import { api, type BatchRow, type PresetId } from "../lib/ipc";
 import { bytes, count, de00, duration, percent, type Store } from "../lib/state";
 import { closeOverlay, openPopover, toast } from "../components/overlays";
@@ -44,8 +44,38 @@ export function createBatch(store: Store): HTMLElement {
     return [...b.rows].sort((x, y) => Number(y.state === "failed") - Number(x.state === "failed"));
   };
 
+  /** An empty queue is an invitation, not an empty table. */
+  const emptyQueue = () =>
+    h(
+      "div.firstrun",
+      { style: { minHeight: "100%", background: "transparent" } },
+      h(
+        "div.drop",
+        null,
+        h("span.glyph", null, icon("folder", 32)),
+        h(
+          "div",
+          { style: { display: "flex", flexDirection: "column", gap: "6px" } },
+          h("span.headline", null, "Trace a whole folder"),
+          h(
+            "span.faint",
+            { style: { fontSize: "13px", maxWidth: "46ch" } },
+            "Every PNG, JPEG and WebP in it becomes an SVG in the output folder. A row that fails stays listed after the run.",
+          ),
+        ),
+        h("button.btn.primary", { onclick: () => void chooseInput() }, "Choose a folder…"),
+      ),
+    );
+
   const drawRows = () => {
     const list = ordered();
+    head.hidden = list.length === 0;
+    if (!list.length) {
+      spacerTop.style.height = "0px";
+      spacerBottom.style.height = "0px";
+      fill(rows, emptyQueue());
+      return;
+    }
     const top = viewport.scrollTop;
     const visible = Math.ceil(viewport.clientHeight / ROW_HEIGHT) + OVERSCAN * 2;
     const first = Math.max(0, Math.floor(top / ROW_HEIGHT) - OVERSCAN);

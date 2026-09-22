@@ -1,4 +1,4 @@
-//! The eighteen controls and the seven presets, and how both become `inkvec_cli::Args`.
+//! The nineteen controls and the eight presets, and how both become `inkvec_cli::Args`.
 //!
 //! The interface never shows an engine flag. Every control carries the user-facing name
 //! from the terminology table (`min_area` is "Speckle floor", `max_dim` is "Trace size",
@@ -37,7 +37,7 @@ impl Cleanup {
     }
 }
 
-/// The eighteen controls, exactly as the advanced drawer shows them.
+/// The nineteen controls, exactly as the Tune tab shows them.
 ///
 /// Serialised with the names the frontend uses. Defaults are the command line's, read
 /// through `Args::default()` so the app and `inkvec logo.png` cannot drift apart.
@@ -77,6 +77,12 @@ pub struct Settings {
     pub line_art: bool,
     /// Repair crossing rings.
     pub repair_rings: bool,
+    /// Editable structure.
+    pub editability: bool,
+    /// What one Bézier curve costs the fit, in parameters (a line costs 2).
+    pub bezier_cost: f64,
+    /// The turn, in degrees, at a join that is charged as a full corner.
+    pub corner_angle: f64,
 
     // --- Output ---
     /// Minify.
@@ -107,6 +113,10 @@ impl Default for Settings {
             fewer_paths: a.content_units,
             line_art: a.strokes,
             repair_rings: !a.no_repair,
+            editability: a.editability,
+            // The engine's own prices, so an untouched control asks for nothing.
+            bezier_cost: inkvec_fit::cost::CostModel::standard().cubic_params,
+            corner_angle: inkvec_fit::cost::CostModel::standard().g1_break_degrees,
             minify: a.minify,
             transparent_background: a.no_background,
             margin: a.margin,
@@ -137,11 +147,19 @@ impl Settings {
             fewer_paths,
             line_art,
             repair_rings,
+            editability,
+            bezier_cost,
+            corner_angle,
             minify,
             transparent_background,
             margin,
             holes_as_cutouts,
         } = *self;
+
+        // A price that equals the engine's own is passed as no request at all, so a trace that
+        // has not touched these two controls takes exactly the path it always did.
+        let standard = inkvec_fit::cost::CostModel::standard();
+        let asked = |v: f64, base: f64| ((v - base).abs() > 1e-9).then_some(v);
 
         inkvec_cli::Args {
             precision,
@@ -158,6 +176,9 @@ impl Settings {
             content_units: fewer_paths,
             strokes: line_art,
             no_repair: !repair_rings,
+            editability,
+            bezier_cost: asked(bezier_cost, standard.cubic_params),
+            corner_angle: asked(corner_angle, standard.g1_break_degrees),
             minify,
             no_background: transparent_background,
             margin,
@@ -204,6 +225,10 @@ impl Settings {
         self.colour_merging = clamp(self.colour_merging, 0.0, 1.0);
         self.match_threshold = clamp(self.match_threshold, 0.0, 1.0);
         self.margin = clamp(self.margin, 0.0, 1.0);
+        let (lo, hi) = inkvec_fit::cost::CostModel::CUBIC_RANGE;
+        self.bezier_cost = clamp(self.bezier_cost, lo, hi);
+        let (lo, hi) = inkvec_fit::cost::CostModel::G1_RANGE;
+        self.corner_angle = clamp(self.corner_angle, lo, hi);
         self
     }
 }
@@ -222,11 +247,12 @@ pub enum Preset {
     PhotoOrScan,
     BlackAndWhite,
     LineArt,
+    Editable,
 }
 
 impl Preset {
     /// Every preset, in the order the tray shows them.
-    pub const ALL: [Preset; 7] = [
+    pub const ALL: [Preset; 8] = [
         Preset::Logo,
         Preset::Icon,
         Preset::FineDetail,
@@ -234,6 +260,7 @@ impl Preset {
         Preset::PhotoOrScan,
         Preset::BlackAndWhite,
         Preset::LineArt,
+        Preset::Editable,
     ];
 
     /// The name and the one-line subtitle. The names alone are not self-explanatory,
@@ -247,6 +274,7 @@ impl Preset {
             Preset::PhotoOrScan => ("Photo or scan", "Photographed or screenshotted"),
             Preset::BlackAndWhite => ("Black & white", "Stamps, signatures"),
             Preset::LineArt => ("Line art", "Uniform-stroke drawings"),
+            Preset::Editable => ("Editable", "Tidy nodes for an artist to edit"),
         }
     }
 
@@ -288,6 +316,10 @@ impl Preset {
             },
             Preset::LineArt => Settings {
                 line_art: true,
+                ..base
+            },
+            Preset::Editable => Settings {
+                editability: true,
                 ..base
             },
         }
@@ -344,7 +376,7 @@ pub struct Control {
     pub help: &'static str,
 }
 
-/// The advanced drawer, in order. Four groups, eighteen rows.
+/// The Tune tab's controls, in order. Four groups, nineteen rows.
 pub const CONTROLS: &[Control] = &[
     // ----------------------------------------------------------------- Detail ---
     Control {
@@ -555,6 +587,53 @@ pub const CONTROLS: &[Control] = &[
         stops: &[],
         help: "The self-crossing ring repair pass that runs after fitting. Off leaves a fitted boundary exactly as the fitter wrote it, crossings and all.",
     },
+    Control {
+        group: "Shape",
+        key: "editability",
+        label: "Editable structure",
+        unit: "",
+        kind: Kind::Switch,
+        min: 0.0,
+        max: 1.0,
+        curve: 1.0,
+        decimals: 0,
+        stops: &[],
+        help: "Post-fit passes that trade parameters for structure an artist can edit: G1-smooth joins, axis-aligned and equal-length handles, aligned nodes, and self-symmetric rings locked into exact mirrors. Fidelity stays within the same tolerance; only structure and parameters move.",
+    },
+    Control {
+        group: "Shape",
+        key: "bezierCost",
+        label: "Curve cost",
+        unit: "params",
+        kind: Kind::Range,
+        min: 2.0,
+        max: 12.0,
+        curve: 1.0,
+        decimals: 1,
+        stops: &[
+            Stop { at: 0.0, label: "more curves" },
+            Stop { at: 0.4, label: "default" },
+            Stop { at: 1.0, label: "more lines" },
+        ],
+        help: "What one Bézier curve costs the fit, in parameters; a straight line costs 2. At the default, 6, a chain of short lines is cheaper than the one curve that describes it, which is why traces come out less curved than hand-drawn artwork. Lower it and the tracer draws more curves and fewer lines, at some cost in file size.",
+    },
+    Control {
+        group: "Shape",
+        key: "cornerAngle",
+        label: "Smooth-join angle",
+        unit: "°",
+        kind: Kind::Range,
+        min: 1.0,
+        max: 60.0,
+        curve: 1.0,
+        decimals: 0,
+        stops: &[
+            Stop { at: 0.0, label: "sharper" },
+            Stop { at: 0.15, label: "default" },
+            Stop { at: 1.0, label: "smoother" },
+        ],
+        help: "The turn, in degrees, at a join that is charged as a full corner; below it the charge ramps up gradually. Raising it lets gentler bends stay smooth, which tends to give more curves and a little more detail, at a somewhat larger file. The default is 10°.",
+    },
     // ----------------------------------------------------------------- Output ---
     Control {
         group: "Output",
@@ -630,11 +709,42 @@ mod tests {
     }
 
     #[test]
-    fn there_are_eighteen_controls_in_four_groups() {
-        assert_eq!(CONTROLS.len(), 18);
+    fn there_are_twenty_one_controls_in_four_groups() {
+        assert_eq!(CONTROLS.len(), 21);
         let mut groups: Vec<&str> = CONTROLS.iter().map(|c| c.group).collect();
         groups.dedup();
         assert_eq!(groups, ["Detail", "Colour", "Shape", "Output"]);
+    }
+
+    #[test]
+    fn untouched_curve_prices_ask_the_engine_for_nothing() {
+        let a = Settings::default().to_args();
+        assert_eq!(a.bezier_cost, None, "the default cost is no request");
+        assert_eq!(a.corner_angle, None, "the default angle is no request");
+    }
+
+    #[test]
+    fn changed_curve_prices_reach_the_engine() {
+        let s = Settings {
+            bezier_cost: 3.0,
+            corner_angle: 30.0,
+            ..Settings::default()
+        };
+        let a = s.to_args();
+        assert_eq!(a.bezier_cost, Some(3.0));
+        assert_eq!(a.corner_angle, Some(30.0));
+    }
+
+    #[test]
+    fn curve_prices_are_held_to_the_range_the_engine_accepts() {
+        let wild = Settings {
+            bezier_cost: -5.0,
+            corner_angle: 9999.0,
+            ..Settings::default()
+        }
+        .sanitised();
+        assert_eq!(wild.bezier_cost, inkvec_fit::cost::CostModel::CUBIC_RANGE.0);
+        assert_eq!(wild.corner_angle, inkvec_fit::cost::CostModel::G1_RANGE.1);
     }
 
     #[test]
@@ -684,6 +794,31 @@ mod tests {
         assert_eq!(wild.trace_size, 64);
         assert_eq!(wild.max_colours, 4096);
         assert_eq!(wild.margin, 0.0);
+    }
+
+    #[test]
+    fn editable_structure_is_off_until_asked_for_and_reaches_the_engine() {
+        assert!(!Settings::default().to_args().editability);
+        assert!(!inkvec_cli::Args::default().editability);
+        let on = Settings {
+            editability: true,
+            ..Settings::default()
+        };
+        assert!(on.to_args().editability);
+        assert!(Preset::Editable.settings().to_args().editability);
+        // Only the Editable preset asks for it.
+        for p in Preset::ALL.iter().filter(|p| **p != Preset::Editable) {
+            assert!(!p.settings().editability, "{p:?} turns editability on");
+        }
+    }
+
+    #[test]
+    fn a_settings_file_from_before_editability_still_loads() {
+        // Prefs written by an older build have no such key; the struct-level default fills it.
+        let old = serde_json::json!({ "precision": 0.2, "maxColours": 12 });
+        let s: Settings = serde_json::from_value(old).unwrap();
+        assert_eq!(s.max_colours, 12);
+        assert!(!s.editability);
     }
 
     #[test]

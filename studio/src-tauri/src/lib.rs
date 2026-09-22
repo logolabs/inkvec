@@ -31,9 +31,10 @@ pub mod trace;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Listener, Manager, State};
 
 /// Everything the app holds between commands.
 #[derive(Default)]
@@ -50,6 +51,11 @@ pub struct AppState {
     batch_rows: Mutex<Vec<batch::Row>>,
     /// Set to stop a denoiser download.
     denoiser_stop: Arc<AtomicBool>,
+    /// One trace at a time, the interactive one first. See [`trace::Scheduler`].
+    pipeline: Arc<trace::Scheduler>,
+    /// The last drawing traced, so an output option does not cost a trace. See
+    /// [`trace::Cache`].
+    traced: Arc<trace::Cache>,
 }
 
 /// What this build can do, sent once at startup so the interface never has to guess.
@@ -145,10 +151,30 @@ pub fn run() {
             configure_threads(&prefs);
             let state = app.state::<AppState>();
             *state.prefs.lock().expect("preferences lock") = prefs;
+
+            // If the interface never reports that it is ready — a script error before it
+            // gets that far — the splash must not stay on screen forever with the app
+            // hidden behind it. Past this, the window swap happens anyway, and whatever
+            // the interface managed to draw (its own error, at best) is what is shown.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(SPLASH_FAILSAFE);
+                finish_splash(&handle, true);
+            });
+
+            // The splash says when its animation has played to the end. The app does not
+            // take the screen until that has happened, however early it is ready.
+            let handle = app.handle().clone();
+            app.listen("splash-animation-done", move |_| {
+                ANIMATION_DONE.store(true, Ordering::SeqCst);
+                finish_splash(&handle, false);
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             capabilities,
+            startup_progress,
+            app_ready,
             open_path,
             open_bytes,
             open_sample,
@@ -185,6 +211,73 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("Inkvec Studio Lite could not start its window");
+}
+
+// ------------------------------------------------------------------------- splash ---
+
+/// Set once the interface has drawn itself and loaded its data.
+static APP_READY: AtomicBool = AtomicBool::new(false);
+/// Set once the splash has played its animation to the end. The splash is the one that
+/// knows: its animation starts when its own page and fonts are ready, which is not when
+/// the process started, so no timer counted from launch could promise the whole thing.
+static ANIMATION_DONE: AtomicBool = AtomicBool::new(false);
+/// Set once the splash has been handed over, so the swap happens exactly once.
+static SPLASH_DONE: AtomicBool = AtomicBool::new(false);
+
+/// How long the app waits for the splash to say its animation is over, once the app itself
+/// is ready. It never comes to this unless the splash's page failed to run.
+const ANIMATION_GRACE: Duration = Duration::from_secs(6);
+/// The most time the splash may stay up when the interface never says it is ready.
+const SPLASH_FAILSAFE: Duration = Duration::from_secs(20);
+/// How long the splash's fade-out gets before it is closed.
+const SPLASH_FADE: Duration = Duration::from_millis(280);
+
+/// What the splash window's status line and bar should say.
+#[derive(Clone, Serialize)]
+struct SplashProgress {
+    text: String,
+    progress: f32,
+}
+
+/// The interface reporting one real step of its own start-up.
+#[tauri::command]
+fn startup_progress(app: AppHandle, text: String, progress: f32) {
+    // No splash (it has already gone, or this is a build without one) is not an error.
+    let _ = app.emit_to("splash", "splash-status", SplashProgress { text, progress });
+}
+
+/// The interface is drawn and its data is loaded. The screen is handed over as soon as the
+/// splash has also finished its animation, which may already be true or may be a moment away.
+#[tauri::command]
+fn app_ready(app: AppHandle) {
+    APP_READY.store(true, Ordering::SeqCst);
+    finish_splash(&app, false);
+    // If the splash never reports, do not wait on it for ever.
+    std::thread::spawn(move || {
+        std::thread::sleep(ANIMATION_GRACE);
+        finish_splash(&app, true);
+    });
+}
+
+/// Fade the splash, show the app and close the splash. Runs once, when both the app is
+/// ready and the animation is over — or, with `force`, regardless of either.
+fn finish_splash(app: &AppHandle, force: bool) {
+    let both = APP_READY.load(Ordering::SeqCst) && ANIMATION_DONE.load(Ordering::SeqCst);
+    if !(both || force) || SPLASH_DONE.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let _ = app.emit_to("splash", "splash-done", ());
+        std::thread::sleep(SPLASH_FADE);
+        if let Some(main) = app.get_webview_window("main") {
+            let _ = main.show();
+            let _ = main.set_focus();
+        }
+        if let Some(splash) = app.get_webview_window("splash") {
+            let _ = splash.destroy();
+        }
+    });
 }
 
 /// Hold the tracer's thread pool to the number of threads the user asked for.
@@ -329,6 +422,10 @@ fn adopt(source: trace::Source, state: &State<'_, AppState>) -> Result<SourceInf
         preview: preview_of(&source)?,
     };
     *state.source.lock().map_err(lock)? = Some(Arc::new(source));
+    // The drawing in hand belongs to the image that has just been replaced. Keying on the
+    // image would miss it anyway; this is so its bytes are not held for an image nobody
+    // has open any more.
+    state.traced.clear();
     Ok(info)
 }
 
@@ -394,7 +491,7 @@ fn base64(bytes: &[u8]) -> String {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TraceRequest {
-    /// The eighteen controls as they stand.
+    /// The controls as they stand.
     pub settings: options::Settings,
     /// Draft or final.
     pub tier: trace::Tier,
@@ -433,11 +530,23 @@ fn start_trace(
 
     let generation = state.generation.next();
     let tier = request.tier;
+    let pipeline = Arc::clone(&state.pipeline);
+    let traced = Arc::clone(&state.traced);
     std::thread::Builder::new()
         .name(format!("inkvec-trace-{generation}"))
         .spawn(move || {
+            // One trace at a time. Waiting here rather than starting straight away is what
+            // stops a handful of quick control changes becoming a handful of full traces
+            // sharing the cores, each slower for the others.
+            let _slot = pipeline.interactive();
+            // Whoever we were waiting for has finished, and the user may well have moved on
+            // while we waited. A trace the interface is no longer waiting for is not worth
+            // the cores: its result would be dropped on arrival anyway.
+            if !app.state::<AppState>().generation.is_current(generation) {
+                return;
+            }
             let stage_app = app.clone();
-            let outcome = trace::run(&source, &settings, tier, move |name, ms| {
+            let outcome = trace::run(&source, &settings, tier, Some(&traced), move |name, ms| {
                 let _ = stage_app.emit(
                     "trace:stage",
                     serde_json::json!({ "generation": generation, "name": name, "ms": ms }),
@@ -800,6 +909,7 @@ fn batch_start(
         fresh
     };
     let base = state.prefs.lock().map_err(lock)?.trace.clone();
+    let pipeline = Arc::clone(&state.pipeline);
 
     std::thread::Builder::new()
         .name("inkvec-batch".into())
@@ -810,6 +920,7 @@ fn batch_start(
                 &plan,
                 &base,
                 &controls,
+                &pipeline,
                 move |row| {
                     let _ = row_app.emit("batch:row", row);
                 },
@@ -1200,10 +1311,10 @@ mod tests {
     }
 
     #[test]
-    fn the_capabilities_describe_the_whole_advanced_drawer() {
+    fn the_capabilities_describe_the_whole_tune_tab() {
         let c = capabilities();
-        assert_eq!(c.controls.len(), 18);
-        assert_eq!(c.presets.len(), 7);
+        assert_eq!(c.controls.len(), 21);
+        assert_eq!(c.presets.len(), 8);
         assert_eq!(c.stages.len(), 9);
         assert_eq!(c.version, env!("CARGO_PKG_VERSION"));
         assert!(c.build_target.starts_with(std::env::consts::ARCH));

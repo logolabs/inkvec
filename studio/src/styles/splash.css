@@ -1,0 +1,259 @@
+/* ============================================================================
+   The splash window.
+
+   Always the dark charcoal, whatever the system theme: it is a brand moment, not a
+   piece of chrome, and it is on screen for two seconds. The mark is drawn as an outline
+   first and then filled, which is the product in miniature — an edge found, then a shape.
+   ============================================================================ */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  background: #1a1816;
+  color: #faf8f5;
+  font-family: var(--font-body, "Inter Studio", Inter, system-ui, sans-serif);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+}
+
+/* Every child lets the pointer through to the drag region on the root. */
+.splash * {
+  pointer-events: none;
+}
+
+.splash {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  grid-template-rows: 1fr auto;
+  padding: 34px 40px 20px;
+  overflow: hidden;
+  background: #1a1816;
+  box-shadow: inset 0 0 0 1px rgba(250, 248, 245, 0.09);
+  transition: opacity 0.26s ease;
+}
+.splash.leaving {
+  opacity: 0;
+}
+
+/* A raster grid fading out toward the mark's side: the input the whole product reads. */
+.grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, rgba(250, 248, 245, 0.045) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(250, 248, 245, 0.045) 1px, transparent 1px);
+  background-size: 14px 14px;
+  -webkit-mask-image: radial-gradient(ellipse 60% 75% at 16% 46%, #000 0%, transparent 72%);
+  mask-image: radial-gradient(ellipse 60% 75% at 16% 46%, #000 0%, transparent 72%);
+  opacity: 0;
+  animation: fadein 1.2s ease 0.1s forwards;
+}
+.glow {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 12% -8%, rgba(201, 117, 74, 0.22), transparent 55%);
+}
+
+.stage {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 42px;
+  min-height: 0;
+}
+
+/* --------------------------------------------------------------- the mark --- */
+
+.mark {
+  flex: none;
+  height: 212px;
+  filter: drop-shadow(0 14px 30px rgba(201, 117, 74, 0.22));
+}
+.mark svg {
+  display: block;
+  height: 100%;
+  width: auto;
+  overflow: visible;
+}
+.mark .outline,
+.mark .body {
+  fill-rule: evenodd;
+}
+.mark .outline {
+  fill: none;
+  stroke: #c9754a;
+  stroke-width: 5;
+  stroke-linejoin: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+}
+.mark .body {
+  fill: #c9754a;
+  opacity: 0;
+}
+.go .mark .outline {
+  animation:
+    draw 1.55s cubic-bezier(0.6, 0, 0.2, 1) 0.15s forwards,
+    fadeout 0.5s ease 1.55s forwards;
+}
+.go .mark .body {
+  animation: fadein 0.7s ease 1.3s forwards;
+}
+
+/* ------------------------------------------------------------------ titles --- */
+
+.titles {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+.titles > * {
+  opacity: 0;
+  transform: translateY(8px);
+}
+.go .titles > * {
+  animation: rise 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
+  animation-delay: var(--d, 0.4s);
+}
+.eyebrow.by {
+  --d: 0.35s;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(250, 248, 245, 0.5);
+}
+h1 {
+  --d: 0.5s;
+  margin-top: 8px;
+  font-family: var(--font-display, "Playfair Studio", Georgia, serif);
+  font-size: 68px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: -0.025em;
+}
+.edition {
+  --d: 0.65s;
+  margin-top: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: #c9754a;
+}
+.tag {
+  --d: 0.8s;
+  margin-top: 20px;
+  font-size: 14px;
+  color: rgba(250, 248, 245, 0.62);
+}
+
+/* ------------------------------------------------------------------- footer --- */
+
+.foot {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.progress {
+  height: 2px;
+  border-radius: 1px;
+  background: rgba(250, 248, 245, 0.1);
+  overflow: hidden;
+}
+.progress i {
+  position: relative;
+  display: block;
+  height: 100%;
+  width: 0;
+  background: #c9754a;
+  transition: width 0.55s cubic-bezier(0.3, 0.7, 0.2, 1);
+}
+/* A slow sweep so a wait never looks like a freeze. */
+.progress i::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+  transform: translateX(-100%);
+  animation: sweep 1.4s ease-in-out infinite;
+}
+.splash.done .progress i::after {
+  animation: none;
+  opacity: 0;
+}
+.row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 12px;
+  color: rgba(250, 248, 245, 0.72);
+}
+.version {
+  font-variant-numeric: tabular-nums;
+  color: rgba(250, 248, 245, 0.5);
+}
+.fine {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 10px;
+  color: rgba(250, 248, 245, 0.34);
+}
+
+/* ---------------------------------------------------------------- keyframes --- */
+
+@keyframes draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes fadeout {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes fadein {
+  to {
+    opacity: 1;
+  }
+}
+@keyframes rise {
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* Nothing moves for anyone who asked for that: the finished picture, at once. */
+@media (prefers-reduced-motion: reduce) {
+  .grid,
+  .mark .body,
+  .titles > * {
+    animation: none !important;
+    opacity: 1;
+    transform: none;
+  }
+  .mark .outline,
+  .progress i::after {
+    animation: none !important;
+    opacity: 0;
+  }
+  .progress i {
+    transition: none;
+  }
+}

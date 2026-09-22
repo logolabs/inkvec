@@ -113,17 +113,47 @@ export function openPopover(anchor: HTMLElement, content: HTMLElement): void {
 /**
  * Attach a tooltip to an element.
  *
- * Hover and keyboard focus both show it, because the advanced drawer's tooltips carry the
+ * Hover and keyboard focus both show it, because the Tune tab's tooltips carry the
  * engine's own documentation and somebody driving the app from the keyboard needs it as
  * much as somebody with a mouse.
+ *
+ * There is only ever one, and it cannot outlive what it describes. The rail is rebuilt
+ * whenever a control or a trace changes, so the label a tooltip belongs to is routinely
+ * removed from the page while the pointer is still over it — and a removed element never
+ * fires `pointerleave` or `blur`, which is how tooltips used to be left stuck on screen. A
+ * tooltip therefore checks, while it is showing, that its label is still in the page and
+ * still hovered or keyboard-focused, and goes the moment that stops being true. A click
+ * dismisses it too: pressing the thing it explains is the answer to "what is this".
  */
+let showing: { node: HTMLElement; el: HTMLElement } | null = null;
+let watchdog = 0;
+
+function hideTip(): void {
+  window.cancelAnimationFrame(watchdog);
+  showing?.node.remove();
+  showing = null;
+}
+
+function watch(): void {
+  const t = showing;
+  if (!t) return;
+  const held = t.el.isConnected && (t.el.matches(":hover") || t.el.matches(":focus-visible"));
+  if (!held) {
+    hideTip();
+    return;
+  }
+  watchdog = window.requestAnimationFrame(watch);
+}
+
 export function tip(el: HTMLElement, text: string): HTMLElement {
-  let node: HTMLElement | null = null;
   let timer = 0;
 
   const show = () => {
-    if (node) return;
-    node = h("div.tooltip", { role: "tooltip" }, text);
+    // The label may have been rebuilt away during the delay; a tooltip for an element that
+    // is not on the page has no position, and would land in the corner.
+    if (!el.isConnected || showing?.el === el) return;
+    hideTip();
+    const node = h("div.tooltip", { role: "tooltip" }, text);
     document.body.append(node);
     const a = el.getBoundingClientRect();
     const b = node.getBoundingClientRect();
@@ -131,21 +161,37 @@ export function tip(el: HTMLElement, text: string): HTMLElement {
     const above = a.top - b.height - 8;
     node.style.left = `${Math.round(left)}px`;
     node.style.top = `${Math.round(above < 8 ? a.bottom + 8 : above)}px`;
+    showing = { node, el };
+    watchdog = window.requestAnimationFrame(watch);
   };
   const hide = () => {
     window.clearTimeout(timer);
-    node?.remove();
-    node = null;
+    if (showing?.el === el) hideTip();
   };
 
   el.addEventListener("pointerenter", () => {
+    window.clearTimeout(timer);
     timer = window.setTimeout(show, 350);
   });
   el.addEventListener("pointerleave", hide);
-  el.addEventListener("focus", show);
+  el.addEventListener("pointerdown", hide);
+  // Focus from a click is not a request for a tooltip; focus from the keyboard is.
+  el.addEventListener("focus", () => {
+    if (el.matches(":focus-visible")) show();
+  });
   el.addEventListener("blur", hide);
   return el;
 }
+
+// Escape closes a tooltip before it does anything else.
+document.addEventListener(
+  "keydown",
+  (e) => {
+    if (e.key === "Escape" && showing) hideTip();
+  },
+  true,
+);
+window.addEventListener("blur", hideTip);
 
 /** A confirmation with a named consequence, for the few things that destroy something. */
 export function confirm(

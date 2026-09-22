@@ -46,6 +46,9 @@ export type StageState =
   /** The update check could not reach the network. Tracing never needed one. */
   | { kind: "offline"; message: string };
 
+/** The two halves of the rail. */
+export type RailTab = "result" | "tune";
+
 /** How the two panes are arranged. */
 export type ViewMode = "side" | "wipe" | "ab";
 
@@ -64,12 +67,17 @@ export interface State {
   /** The trace the interface is waiting for, or 0. */
   generation: number;
   tracing: boolean;
+  /** Which tier the trace in flight is, so the size shown for it is the size it runs at. */
+  tracingTier: "draft" | "final";
   /** Stages of the trace in flight, in the order they finished. */
   liveStages: Stage[];
-  /** Whether the expanded stage list is showing. */
-  stagesOpen: boolean;
 
   result: Traced | null;
+  /**
+   * The full trace before the current one, for the same image: what the readout's
+   * deltas are measured against, so moving a control shows what it bought or cost.
+   */
+  previous: Report | null;
   /** The drawing as it is painted now: the trace's own SVG, or one with snapped fills. */
   svg: string | null;
   palette: Ink[];
@@ -84,12 +92,17 @@ export interface State {
   show: { fill: boolean; wireframe: boolean; anchors: boolean; handles: boolean };
   zoom: number;
   pan: { x: number; y: number };
+  /** Whether the view is the fitted one, as opposed to a zoom the user chose. */
+  fitted: boolean;
   /** A/B and the hold-to-flick key show the source instead of the vector. */
   flicked: boolean;
   wipe: number;
   detail: boolean;
 
-  advancedOpen: boolean;
+  /** Which half of the rail is showing: what came out, or the controls that make it. */
+  railTab: RailTab;
+  /** Which control groups are folded open in the Tune tab. */
+  groupsOpen: Record<string, boolean>;
   exportOpen: boolean;
   dragging: boolean;
 
@@ -128,9 +141,10 @@ export function initial(settings: Settings, minify: MinifySettings): State {
     preset: "logo",
     generation: 0,
     tracing: false,
+    tracingTier: "final",
     liveStages: [],
-    stagesOpen: false,
     result: null,
+    previous: null,
     svg: null,
     palette: [],
     losses: [],
@@ -142,10 +156,12 @@ export function initial(settings: Settings, minify: MinifySettings): State {
     show: { fill: true, wireframe: false, anchors: false, handles: false },
     zoom: 1,
     pan: { x: 0, y: 0 },
+    fitted: true,
     flicked: false,
     wipe: 0.5,
     detail: false,
-    advancedOpen: false,
+    railTab: "result",
+    groupsOpen: { Detail: true, Colour: true, Shape: true, Output: false },
     exportOpen: false,
     dragging: false,
     minify: { name: null, before: null, settings: minify, result: null, error: null },
@@ -240,6 +256,21 @@ export function de00(n: number | null | undefined): string {
 /** Seconds, or milliseconds when that is the honest unit. */
 export function seconds(n: number): string {
   return n < 1 ? `${Math.round(n * 1000)} ms` : `${n.toFixed(2)} s`;
+}
+
+/**
+ * The longer side, in pixels, a trace will actually run at.
+ *
+ * The trace-size control is a *cap*: an input larger than it is traced at the cap and the SVG
+ * is written back at full size, and a smaller input is traced at the size it arrived. A draft
+ * is capped again at the draft size. Showing the setting itself, as the interface used to,
+ * told somebody with a 622 px logo that it was being traced at 2048 px.
+ */
+export function plannedTracePx(st: State, tier: "draft" | "final"): number | null {
+  if (!st.source) return null;
+  const longer = Math.max(st.source.width, st.source.height);
+  const cap = tier === "draft" ? Math.min(st.prefs?.draftPx ?? 512, st.settings.traceSize) : st.settings.traceSize;
+  return Math.min(cap, longer);
 }
 
 /** A share of the canvas. */

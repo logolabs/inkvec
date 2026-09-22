@@ -579,6 +579,24 @@ kbd {
    centred by the pane rather than pinned to its origin. */
 .art.centred {
   position: static;
+  /* Fill the pane, clear of the label along the top, and let the drawing fit inside. */
+  place-self: stretch;
+  min-width: 0;
+  min-height: 0;
+  padding: 44px 32px 32px;
+}
+
+/* A backdrop chosen for the artwork rather than the theme: dark artwork on a dark stage
+   is a blank pane. Only the stage's own tokens change, so the checker stays a checker. */
+.panes.onlight {
+  --stage: #f3f0ea;
+  --checker-a: #ffffff;
+  --checker-b: #ebe7df;
+}
+.panes.ondark {
+  --stage: #1a1816;
+  --checker-a: #26231f;
+  --checker-b: #211f1c;
 }
 
 /* Overlays are drawn into one SVG that shares the artwork's transform, so a
@@ -831,44 +849,36 @@ kbd {
   color: var(--muted);
 }
 
-/* Presets: a two-column tray. Seven names do not fit one segmented row at
-   1280 px, and the names are not self-explanatory without their subtitles. */
+/* Presets: a wrapped row of chips. The name is what you choose by; the one-line
+   description lives in the tooltip and, for the selected one, under the row. */
 .presets {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
 }
 .preset {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  align-items: flex-start;
-  text-align: left;
-  padding: 7px 9px;
-  border-radius: var(--radius);
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 10px;
+  border-radius: 999px;
   border: 1px solid var(--rule2);
   background: var(--card);
-  transition: border-color var(--d-micro), background var(--d-micro);
+  font-size: var(--t-chrome);
+  color: var(--dim);
+  transition: border-color var(--d-micro), background var(--d-micro), color var(--d-micro);
 }
 .preset:hover {
   border-color: var(--highlight);
+  color: var(--ink);
 }
 .preset[aria-pressed="true"] {
   border-color: var(--accent);
   background: var(--accent-soft);
-}
-.preset .name {
-  font-size: var(--t-chrome);
-  font-weight: 500;
-  color: var(--dim);
-}
-.preset[aria-pressed="true"] .name {
   color: var(--ink);
+  font-weight: 500;
 }
-.preset .sub {
-  font-size: 10.5px;
-  line-height: 1.3;
-  color: var(--muted);
+.preset.saved {
+  padding-right: 22px;
 }
 
 /* Forgetting a saved preset. The cross appears on hover and on keyboard focus rather
@@ -879,7 +889,8 @@ kbd {
 }
 .preset .forget {
   position: absolute;
-  top: 4px;
+  top: 50%;
+  margin-top: -8px;
   right: 4px;
   width: 16px;
   height: 16px;
@@ -923,6 +934,353 @@ kbd {
   justify-content: space-between;
   gap: 8px;
   font-size: 11px;
+}
+
+/* ---------------------------------------------------- the rail's two halves ---- */
+
+/* The denoiser and editable structure: big, and on screen whichever half is showing. */
+.railmodes {
+  flex: none;
+  display: grid;
+  grid-template-columns: 1.75fr 1fr;
+  gap: 8px;
+  padding: 10px var(--rail-pad) 0;
+}
+.mode {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 11px 11px;
+  border: 1px solid var(--rule2);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+}
+.modehead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 16px;
+}
+.modetitle {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.modestate {
+  font-size: 10.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.seg.big {
+  display: flex;
+  width: 100%;
+  padding: 3px;
+}
+.seg.big > button {
+  flex: 1;
+  padding: 7px 0;
+  font-size: 12.5px;
+  text-align: center;
+}
+.seg.big > button[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.bigswitch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 4px;
+  border: 1px solid var(--rule2);
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--dim);
+  font-size: 12.5px;
+  font-weight: 600;
+  transition: background var(--d-micro), border-color var(--d-micro), color var(--d-micro);
+}
+.bigswitch .knob {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--highlight);
+  transition: background var(--d-micro);
+}
+.bigswitch .state {
+  flex: 1;
+  text-align: center;
+  padding-right: 4px;
+}
+.bigswitch[aria-checked="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.bigswitch[aria-checked="true"] {
+  flex-direction: row-reverse;
+}
+.bigswitch[aria-checked="true"] .knob {
+  background: var(--accent-ink);
+}
+.bigswitch[aria-checked="true"] .state {
+  padding-right: 0;
+  padding-left: 4px;
+}
+
+/* The tab strip: its own recessed bar, a rule under it, an underline on the tab that is
+   showing. Not a `.seg`: that class is the viewer toolbar's and the app bar's, and a switch
+   that looks like a toolbar button is what made this one easy to miss. */
+.railtabs {
+  flex: none;
+  background: var(--stage);
+  border-bottom: 1px solid var(--rule2);
+}
+.railseg {
+  display: flex;
+  width: 100%;
+}
+.railseg > button {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 8px;
+  height: 46px;
+  padding: 0 12px;
+  padding-top: 14px;
+  color: var(--muted);
+  transition: color var(--d-micro), background var(--d-micro);
+}
+.railseg > button:hover:not([aria-selected="true"]) {
+  color: var(--dim);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+.railseg > button[aria-selected="true"] {
+  color: var(--ink);
+  background: var(--paper);
+}
+/* The underline sits on the bar's own rule, so the active tab reads as open onto the
+   pane below it. */
+.railseg > button::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: transparent;
+  transition: background var(--d-micro);
+}
+.railseg > button[aria-selected="true"]::after {
+  background: var(--accent);
+}
+.railseg .tablabel {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+.railseg .tabnote {
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+}
+.railseg .tabnote:empty {
+  display: none;
+}
+.railseg > button[aria-selected="true"] .tabnote {
+  color: var(--accent-text);
+}
+.tabcaption {
+  margin: 0;
+  padding: 7px var(--rail-pad) 9px;
+  background: var(--paper);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.presetblock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.presetblock .traybar .faint {
+  min-width: 0;
+}
+
+/* Control groups fold. A group says how many of its controls have moved and puts just
+   those back, which is the question a wall of sliders makes hard to answer. */
+.rail section.group {
+  gap: 0;
+  border: 1px solid var(--rule2);
+  background: var(--card);
+  border-radius: var(--radius-lg);
+}
+.rail section.group .grouphead {
+  align-items: center;
+  padding-right: 13px;
+}
+.groupbtn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 11px 9px 11px 13px;
+  color: var(--muted);
+  text-align: left;
+  border-radius: var(--radius-lg);
+}
+.groupbtn:hover {
+  color: var(--dim);
+}
+.groupbtn .changed {
+  font-size: 10.5px;
+  color: var(--accent-text);
+}
+.groupbody {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  padding: 2px 13px 14px;
+}
+.control.changed .controlhead .label::before {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: 1px;
+}
+
+.emptycard p {
+  margin: 0;
+  font-size: var(--t-chrome);
+  line-height: 1.55;
+  color: var(--dim);
+}
+
+/* Editability: three ratios, each a bar with a tick where hand-drawn files sit. */
+.structure .srow {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  column-gap: 8px;
+  row-gap: 5px;
+  align-items: baseline;
+}
+.structure .srow .k {
+  font-size: var(--t-chrome);
+  color: var(--dim);
+}
+.structure .srow .v {
+  font-size: var(--t-panel);
+  font-variant-numeric: tabular-nums;
+}
+.structure .srow .v .of {
+  margin-left: 6px;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.sbar {
+  grid-column: 1 / -1;
+  position: relative;
+  height: 4px;
+  margin-bottom: 4px;
+  border-radius: 2px;
+  background: var(--highlight);
+}
+.sbar i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width var(--d-normal) var(--ease-out-expo);
+}
+.sbar b {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--dim);
+}
+
+/* The pinned readout: the three figures a control moves, and what it moved them by. */
+.readout {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  min-height: 54px;
+  background: var(--rule2);
+  border: 1px solid var(--rule2);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.readout .cell {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 10px;
+  background: var(--paper);
+}
+.readout .v {
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.25;
+}
+.readout .k {
+  font-size: 10px;
+  color: var(--muted);
+}
+.delta {
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.delta.better {
+  color: var(--good);
+}
+.delta.worse {
+  color: var(--gold);
+}
+.readout.busy,
+.readout.idle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  background: var(--paper);
+  font-size: var(--t-chrome);
+}
+.readout .stage {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--state-stale);
+}
+.pulse {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--state-stale);
+  animation: pulse 1s ease-in-out infinite;
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.3;
+  }
 }
 
 /* The quality report. An instrument readout, never a score badge. */
@@ -1290,7 +1648,7 @@ kbd {
   .chip.swapped::after,
   .art.swapping,
   .callout,
-  .rail .card.drawer {
+  .pulse {
     animation: none;
   }
   /* The drop target still grows — the size is the signal that the window will take the
@@ -1329,6 +1687,22 @@ kbd {
 }
 .drop .glyph {
   color: var(--muted);
+}
+/* `hidden` must beat any `display` a component sets, or it hides nothing. */
+[hidden] {
+  display: none !important;
+}
+/* On a checkerboard (the Minify pane) the invitation needs a ground of its own. */
+.drop.solid {
+  background: var(--paper);
+  border-style: solid;
+  border-color: var(--rule2);
+}
+.panehint {
+  max-width: 34ch;
+  text-align: center;
+  font-size: 12.5px;
+  line-height: 1.55;
 }
 .drop .headline {
   font-family: var(--font-display);
@@ -1494,6 +1868,209 @@ kbd {
   display: flex;
   gap: 8px;
   justify-content: flex-end;
+}
+
+/* ------------------------------------------------------- the share card ---- */
+
+.modal.composer {
+  width: min(1040px, 100%);
+  max-height: 92vh;
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+}
+.composerhead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 22px 15px;
+  border-bottom: 1px solid var(--rule2);
+}
+.composerhead p {
+  margin-top: 3px;
+  font-size: var(--t-chrome);
+}
+.composerbody {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 312px;
+  min-height: 0;
+  overflow-y: auto;
+}
+.composerpreview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 22px;
+  min-width: 0;
+  background: var(--stage);
+}
+/* Sized by height as well as width, so a square card is not taller than the dialog. */
+.cardstage {
+  --ar: 1.7778;
+  position: relative;
+  width: min(100%, calc(58vh * var(--ar)));
+  aspect-ratio: var(--ar);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--paper);
+  box-shadow: var(--shadow-lg);
+}
+.cardstage img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+/* The spinner only appears for a draw that is actually slow; a quick one never flashes. */
+.cardbusy {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  opacity: 0;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--paper) 45%, transparent);
+  transition: opacity var(--d-micro);
+}
+.cardstage.busy .cardbusy {
+  opacity: 1;
+  transition-delay: 260ms;
+}
+.cardspin {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid var(--highlight);
+  border-top-color: var(--accent);
+  animation: cardspin 0.8s linear infinite;
+}
+@keyframes cardspin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.composerside {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 20px 22px;
+  border-left: 1px solid var(--rule2);
+}
+.optgroup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cardseg {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--rule2);
+  border-radius: var(--radius);
+  background: var(--paper);
+}
+.cardseg button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 6px 8px;
+  border-radius: calc(var(--radius) - 2px);
+  font-size: var(--t-chrome);
+  color: var(--faint);
+}
+.cardseg button small {
+  font-size: 10px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.cardseg button:hover:not([aria-checked="true"]) {
+  color: var(--ink);
+}
+.cardseg button[aria-checked="true"] {
+  color: var(--ink);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.optlist {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--rule2);
+  border-radius: var(--radius);
+  background: var(--paper);
+}
+.optlist > * + * {
+  border-top: 1px solid var(--rule2);
+}
+.optrow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 9px 11px;
+  text-align: left;
+}
+.optrow:hover {
+  background: var(--rule2);
+}
+.optext {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.optlabel {
+  font-size: 12.5px;
+  color: var(--ink);
+}
+.optnote {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+.optslider {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 9px 11px 8px;
+  transition: opacity var(--d-micro);
+}
+.optslider.off {
+  opacity: 0.4;
+}
+.optslider.off .slider {
+  cursor: default;
+}
+.optsliderhead {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--dim);
+}
+.composeractions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: auto;
+}
+.composeractions .btn {
+  justify-content: center;
+  gap: 7px;
+}
+@media (max-width: 860px) {
+  .composerbody {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .composerside {
+    border-left: 0;
+    border-top: 1px solid var(--rule2);
+  }
 }
 
 .popover {
@@ -1976,49 +2553,13 @@ kbd {
 
 /* ---------------------------------------------------------- small windows ---- */
 
-/* Below ~1400 px the rail and the stage compete. The report stays in the rail —
-   it is the reason someone chooses us, and a drawer makes it a thing you go and
-   find — and the advanced drawer becomes a bottom sheet instead. Export stays
-   pinned at every width. */
+/* Below ~1400 px the rail narrows and the stage keeps the room. The controls used to
+   become a sheet over the stage here; they now have a half of the rail to themselves,
+   so nothing has to cover the drawing the controls are changing. Export stays pinned at
+   every width. */
 @media (max-width: 1400px) {
   :root {
     --rail-w: 330px;
-  }
-
-  /* The advanced drawer moves out of the rail and becomes a bottom sheet over the
-     stage. Eighteen controls in a 330 px column push Export off the bottom, and
-     Export has to stay reachable without scrolling at every width. The quality
-     report stays in the rail: a drawer would make it a thing you go and find. */
-  .rail .card.drawer {
-    position: fixed;
-    left: 0;
-    /* Stops at the rail rather than crossing it: Export lives in the rail's pinned
-       footer, and a sheet that covered it would trade one unreachable button for
-       another. */
-    right: var(--rail-w);
-    bottom: 0;
-    z-index: 25;
-    max-height: 62vh;
-    overflow-y: auto;
-    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
-    border: none;
-    border-top: 1px solid var(--highlight);
-    padding: 16px 20px 24px;
-    box-shadow: 0 -20px 50px color-mix(in srgb, var(--void) 55%, transparent);
-    animation: rise var(--d-fast) var(--ease-out-expo);
-  }
-  .rail .card.drawer .group {
-    max-width: 640px;
-  }
-  /* Two columns of controls, because a full-width sheet with one is a long walk. */
-  .rail .card.drawer > .group {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    gap: 9px 28px;
-    align-items: start;
-  }
-  .rail .card.drawer > .group > .grouphead {
-    grid-column: 1 / -1;
   }
 }
 @media (max-width: 1180px) {

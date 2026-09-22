@@ -42,7 +42,7 @@ pub enum Channel {
 
 /// A preset the user saved from the advanced controls.
 ///
-/// The built-in seven are each a small set of deliberate differences from the defaults,
+/// The built-in eight are each a small set of deliberate differences from the defaults,
 /// which is why a batch row's preset only overrides what that preset speaks to. A saved
 /// one is the opposite: a whole snapshot, because whoever pressed Save had already moved
 /// exactly what they wanted moved, and "everything else follows the queue" would quietly
@@ -120,11 +120,11 @@ impl Default for Prefs {
 const RECENT_LIMIT: usize = 8;
 
 /// How many saved presets are kept. The tray is a tray, not a filing cabinet; past this
-/// many the seven built-ins stop being findable, which is the thing they are for.
+/// many the eight built-ins stop being findable, which is the thing they are for.
 const SAVED_LIMIT: usize = 12;
 
 /// The longest a saved preset's name may be. Long enough for a client and a job, short
-/// enough to read in a 150 px tile.
+/// enough to read on a chip.
 const NAME_LIMIT: usize = 40;
 
 impl Prefs {
@@ -203,7 +203,14 @@ pub fn save(prefs: &Prefs) -> Result<(), String> {
 
 /// Forget everything. The Advanced group's "Reset settings".
 pub fn reset() -> Result<Prefs, String> {
-    if let Some(p) = path() {
+    reset_at(path())
+}
+
+/// [`reset`] against an explicit file, so a test can exercise it on a temporary one. The
+/// test suite must never call `reset()` itself: that deletes the real preferences of
+/// whoever runs it.
+fn reset_at(file: Option<PathBuf>) -> Result<Prefs, String> {
+    if let Some(p) = file {
         match std::fs::remove_file(&p) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -333,8 +340,23 @@ mod tests {
         assert_eq!(back, p);
     }
 
+    /// A path in the temp directory, never the user's real preferences.
+    fn scratch(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("inkvec-{name}-{}.json", std::process::id()))
+    }
+
     #[test]
     fn a_missing_file_is_not_a_reason_to_fail_a_reset() {
-        assert!(reset().is_ok());
+        let missing = scratch("no-such-prefs");
+        let _ = std::fs::remove_file(&missing);
+        assert!(reset_at(Some(missing)).is_ok());
+    }
+
+    #[test]
+    fn a_reset_removes_the_file_it_is_given_and_returns_the_defaults() {
+        let file = scratch("prefs-to-reset");
+        std::fs::write(&file, b"{}").unwrap();
+        assert_eq!(reset_at(Some(file.clone())).unwrap(), Prefs::default());
+        assert!(!file.exists(), "the file should be gone");
     }
 }

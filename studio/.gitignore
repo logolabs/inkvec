@@ -5,3 +5,6 @@ src-tauri/gen/
 # Built by scripts/sidecar.mjs at build time from crates/inkvec-cli, so the command the
 # app installs is always the engine in this tree. Never committed.
 src-tauri/binaries/
+src-tauri/ort-runtime/
+# Logs the browser harness and local test runs leave beside them.
+dev/*.log

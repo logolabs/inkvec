@@ -1,0 +1,385 @@
+[
+ {
+  "group": "Detail",
+  "key": "precision",
+  "label": "Precision",
+  "unit": "px",
+  "kind": "range",
+  "min": 0.02,
+  "max": 0.5,
+  "curve": 2.2,
+  "decimals": 2,
+  "stops": [
+   {
+    "at": 0.0,
+    "label": "exact"
+   },
+   {
+    "at": 0.35,
+    "label": "default"
+   },
+   {
+    "at": 1.0,
+    "label": "coarse"
+   }
+  ],
+  "help": "Sets the description-length cost of a coordinate, in pixels: lambda = ln(extent / precision). Smaller values buy more detail with more coordinates. It does not set the digits written; coordinates are always written at 2 decimals."
+ },
+ {
+  "group": "Detail",
+  "key": "speckleFloor",
+  "label": "Speckle floor",
+  "unit": "px\u00b2",
+  "kind": "range",
+  "min": 0.0,
+  "max": 64.0,
+  "curve": 2.0,
+  "decimals": 1,
+  "stops": [
+   {
+    "at": 0.0,
+    "label": "keep all"
+   },
+   {
+    "at": 1.0,
+    "label": "drop dust"
+   }
+  ],
+  "help": "Discard features smaller than this area, in square pixels. Raise it to drop scanner dust; lower it to keep small serifs."
+ },
+ {
+  "group": "Detail",
+  "key": "traceSize",
+  "label": "Trace size",
+  "unit": "px",
+  "kind": "range",
+  "min": 256.0,
+  "max": 4096.0,
+  "curve": 1.0,
+  "decimals": 0,
+  "stops": [
+   {
+    "at": 0.0,
+    "label": "256"
+   },
+   {
+    "at": 0.47,
+    "label": "2048"
+   },
+   {
+    "at": 1.0,
+    "label": "4096"
+   }
+  ],
+  "help": "Inputs larger than this on their longer side, in pixels, are traced at this size and the SVG is written at the original size. Trace time grows with the pixel count."
+ },
+ {
+  "group": "Detail",
+  "key": "timeLimit",
+  "label": "Time limit",
+  "unit": "s",
+  "kind": "range",
+  "min": 0.0,
+  "max": 60.0,
+  "curve": 1.6,
+  "decimals": 1,
+  "stops": [
+   {
+    "at": 0.0,
+    "label": "none"
+   },
+   {
+    "at": 1.0,
+    "label": "60"
+   }
+  ],
+  "help": "Advisory wall-clock budget, in seconds; 0 means none. Gradient-band merging stops at 60% of it and the boundary solve gets 25%; the output is still a correct trace, with more fills or a less polished outline. A nonzero budget makes the output depend on machine speed and load, so it is no longer reproducible."
+ },
+ {
+  "group": "Colour",
+  "key": "maxColours",
+  "label": "Max colours",
+  "unit": "",
+  "kind": "range",
+  "min": 2.0,
+  "max": 2048.0,
+  "curve": 2.4,
+  "decimals": 0,
+  "stops": [
+   {
+    "at": 0.0,
+    "label": "2"
+   },
+   {
+    "at": 0.4,
+    "label": "64"
+   },
+   {
+    "at": 1.0,
+    "label": "2048"
+   }
+  ],
+  "help": "Maximum palette size."
+ },
+ {
+  "group": "Colour",
+  "key": "colourMerging",
+  "label": "Colour merging",
+  "unit": "",
+  "kind": "range",
+  "min": 0.0,
+  "max": 0.2,
+  "curve": 1.4,
+  "decimals": 3,
+  "stops": [
+   {
+    "at": 0.0,
+    "label": "none"
+   },
+   {
+    "at": 1.0,
+    "label": "heavy"
+   }
+  ],
+  "help": "OKLab distance below which two colours are treated as one ink."
+ },
+ {
+  "group": "Colour",
+  "key": "flatFills",
+  "label": "Flat fills instead of gradients",
+  "unit": "",
+  "kind": "switch",
+  "min": 0.0,
+  "max": 1.0,
+  "curve": 1.0,
+  "decimals": 0,
+  "stops": [],
+  "help": "Skip gradient fitting entirely and fill flat."
+ },
+ {
+  "group": "Colour",
+  "key": "blackAndWhite",
+  "label": "Black & white",
+  "unit": "",
+  "kind": "switch",
+  "min": 0.0,
+  "max": 1.0,
+  "curve": 1.0,
+  "decimals": 0,
+  "stops": [],
+  "help": "Two-tone output (the Potrace-comparable mode)."
+ },
+ {
+  "group": "Colour",
+  "key": "cleanUpDamage",
+  "label": "Clean up damage",
+  "unit": "",
+  "kind": "tri",
+  "min": 0.0,
+  "max": 2.0,
+  "curve": 1.0,
+  "decimals": 0,
+  "stops": [],
+  "help": "The trained restorer: removes JPEG, WebP and decoder damage at the input's own size before tracing. Off by default, because on clean input it costs a little colour accuracy. Auto traces, measures the fit, and restores only if the trace disagrees with the input where it claims to be flat."
+ },
+ {
+  "group": "Shape",
+  "key": "matchRepeatedShapes",
+  "label": "Match repeated shapes",
+  "unit": "",
+  "kind": "switch",
+  "min": 0.0,
+  "max": 1.0,
+  "curve": 1.0,
+  "decimals": 0,
+  "stops": [],
+  "help": "Marks that repeat across the drawing are redrawn from one consensus geometry per cluster, which saves parameters. A mark takes the consensus only where that stays within 0.1 px of the boundary traced for it and costs fewer parameters; a face another face is drawn against, and a fitted circle or rounded rectangle, is never moved."
+ },
+ {
+  "group": "Shape",
+  "key": "matchThreshold",
+  "label": "Match threshold",
+  "unit": "",
+  "kind": "range",
+  "min": 0.5,
+  "max": 1.0,
+  "curve": 1.0,
+  "decimals": 2,
+  "stops": [
+   {
+    "at": 0.0,
+    "label": "loose"
+   },
+   {
+    "at": 1.0,
+    "label": "identical"
+   }
+  ],
+  "help": "Shape-equivalence threshold for harmonization: the outline similarity (IoU after affine normalisation) above which two marks count as the same shape."
+ },
+ {
+  "group": "Shape",
+  "key": "fewerPaths",
+  "label": "Fewer paths",
+  "unit": "",
+  "kind": "switch",
+  "min": 0.0,
+  "max": 1.0,
+  "curve": 1.0,
+  "decimals": 0,
+  "stops": [],
+  "help": "Scale the fit tolerances with the raster, so a large, simple drawing gets the parameter count of a small one. Trades fidelity for parsimony: small squares can come back as circles and thin rings broken."
+ },
+ {
+  "group": "Shape",
+  "key": "lineArt",
+  "label": "Line art",
+  "unit": "",
+  "kind": "switch",
+  "min": 0.0,
+  "max": 1.0,
+  "curve": 1.0,
+  "decimals": 0,
+  "stops": [],
+  "help": "Emit line art as strokes \u2014 one path and one width \u2014 instead of as filled outlines. Declines silently on anything else."
+ },
+ {
+  "group": "Shape",
+  "key": "repairRings",
+  "label": "Repair crossing rings",
+  "unit": "",
+  "kind": "switch",
+  "min": 0.0,
+  "max": 1.0,
+  "curve": 1.0,
+  "decimals": 0,
+  "stops": [],
+  "help": "The self-crossing ring repair pass that runs after fitting. Off leaves a fitted boundary exactly as the fitter wrote it, crossings and all."
+ },
+ {
+  "group": "Shape",
+  "key": "editability",
+  "label": "Editable structure",
+  "unit": "",
+  "kind": "switch",
+  "min": 0.0,
+  "max": 1.0,
+  "curve": 1.0,
+  "decimals": 0,
+  "stops": [],
+  "help": "Post-fit passes that trade parameters for structure an artist can edit: G1-smooth joins, axis-aligned and equal-length handles, aligned nodes, and self-symmetric rings locked into exact mirrors. Fidelity stays within the same tolerance; only structure and parameters move."
+ },
+ {
+  "group": "Shape",
+  "key": "bezierCost",
+  "label": "Curve cost",
+  "unit": "params",
+  "kind": "range",
+  "min": 2.0,
+  "max": 12.0,
+  "curve": 1.0,
+  "decimals": 1,
+  "stops": [
+   {
+    "at": 0.0,
+    "label": "more curves"
+   },
+   {
+    "at": 0.4,
+    "label": "default"
+   },
+   {
+    "at": 1.0,
+    "label": "more lines"
+   }
+  ],
+  "help": "What one B\u00e9zier curve costs the fit, in parameters; a straight line costs 2. At the default, 6, a chain of short lines is cheaper than the one curve that describes it, which is why traces come out less curved than hand-drawn artwork. Lower it and the tracer draws more curves and fewer lines, at some cost in file size."
+ },
+ {
+  "group": "Shape",
+  "key": "cornerAngle",
+  "label": "Smooth-join angle",
+  "unit": "\u00b0",
+  "kind": "range",
+  "min": 1.0,
+  "max": 60.0,
+  "curve": 1.0,
+  "decimals": 0,
+  "stops": [
+   {
+    "at": 0.0,
+    "label": "sharper"
+   },
+   {
+    "at": 0.15,
+    "label": "default"
+   },
+   {
+    "at": 1.0,
+    "label": "smoother"
+   }
+  ],
+  "help": "The turn, in degrees, at a join that is charged as a full corner; below it the charge ramps up gradually. Raising it lets gentler bends stay smooth, which tends to give more curves and a little more detail, at a somewhat larger file. The default is 10\u00b0."
+ },
+ {
+  "group": "Output",
+  "key": "minify",
+  "label": "Minify",
+  "unit": "",
+  "kind": "switch",
+  "min": 0.0,
+  "max": 1.0,
+  "curve": 1.0,
+  "decimals": 0,
+  "stops": [],
+  "help": "No ids or groups, no trailing zeros. Same geometry, typically about a tenth smaller."
+ },
+ {
+  "group": "Output",
+  "key": "transparentBackground",
+  "label": "Transparent background",
+  "unit": "",
+  "kind": "switch",
+  "min": 0.0,
+  "max": 1.0,
+  "curve": 1.0,
+  "decimals": 0,
+  "stops": [],
+  "help": "Knock the background out: the face that covers the whole canvas is not painted, so the artwork sits on transparency."
+ },
+ {
+  "group": "Output",
+  "key": "margin",
+  "label": "Margin",
+  "unit": "%",
+  "kind": "range",
+  "min": 0.0,
+  "max": 0.25,
+  "curve": 1.0,
+  "decimals": 3,
+  "stops": [
+   {
+    "at": 0.0,
+    "label": "none"
+   },
+   {
+    "at": 1.0,
+    "label": "25%"
+   }
+  ],
+  "help": "Transparent margin around the output, as a fraction of the larger side. The viewBox grows; the geometry does not move."
+ },
+ {
+  "group": "Output",
+  "key": "holesAsCutouts",
+  "label": "Holes as cutouts",
+  "unit": "",
+  "kind": "switch",
+  "min": 0.0,
+  "max": 1.0,
+  "curve": 1.0,
+  "decimals": 0,
+  "stops": [],
+  "help": "Carry the input's transparency into the SVG: a face the source drew transparent becomes a hole, one drawn at a single opacity keeps it as fill-opacity, and white artwork on a transparent ground survives. Changes nothing for an opaque input."
+ }
+]

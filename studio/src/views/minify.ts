@@ -33,6 +33,18 @@ export function createMinify(store: Store): HTMLElement {
   let wipe = 0.5;
   let flicked = false;
 
+  // What the drawings are shown on. A logo is very often one dark colour, and a dark logo
+  // on a dark stage is a blank pane: nothing is wrong with the drawing, it just cannot be
+  // seen. So the backdrop follows the artwork unless it is told otherwise.
+  let backdrop: "auto" | "light" | "dark" = "auto";
+  let autoTone: "light" | "dark" | null = null;
+  let measuredFor: string | null = null;
+  const applyBackdrop = () => {
+    const tone = backdrop === "auto" ? autoTone : backdrop;
+    panes.classList.toggle("onlight", tone === "light");
+    panes.classList.toggle("ondark", tone === "dark");
+  };
+
   const layout = () => {
     panes.classList.toggle("stacked", view !== "side");
     divider.style.display = view === "wipe" ? "" : "none";
@@ -110,6 +122,30 @@ export function createMinify(store: Store): HTMLElement {
         ),
       ),
       h("span.muted", { style: { fontSize: "11.5px" } }, "hold ", h("kbd", null, "Space"), " to flick"),
+      h(
+        "div",
+        { style: { display: "flex", alignItems: "center", gap: "8px", marginLeft: "12px" } },
+        h("span.muted", { style: { fontSize: "11.5px" } }, "Backdrop"),
+        h(
+          "div.seg",
+          { role: "group", "aria-label": "Backdrop" },
+          ...(["auto", "light", "dark"] as const).map((b) =>
+            h(
+              "button",
+              {
+                "aria-pressed": String(backdrop === b),
+                disabled: !m.before,
+                onclick: () => {
+                  backdrop = b;
+                  applyBackdrop();
+                  renderTools();
+                },
+              },
+              b === "auto" ? "Auto" : b === "light" ? "Light" : "Dark",
+            ),
+          ),
+        ),
+      ),
       // The promise, stated where somebody is looking for a reason to doubt it.
       h(
         "span.muted",
@@ -175,6 +211,21 @@ export function createMinify(store: Store): HTMLElement {
   };
   (el as HTMLElement & { acceptDropped?: typeof acceptDropped }).acceptDropped = acceptDropped;
 
+  /** Before anything is open the stage itself is the invitation, as it is on Vectorize. */
+  const emptyDrop = () =>
+    h(
+      "div.drop.solid",
+      null,
+      h("span.glyph", null, icon("file", 32)),
+      h(
+        "div",
+        { style: { display: "flex", flexDirection: "column", gap: "6px" } },
+        h("span.headline", null, "Drop an SVG here"),
+        h("span.faint", { style: { fontSize: "13px" } }, "or choose one to rewrite it in the fewest segments"),
+      ),
+      h("button.btn.primary", { onclick: openSvg }, "Open an SVG"),
+    );
+
   const render = () => {
     const m = store.state.minify;
     const r = m.result;
@@ -184,13 +235,27 @@ export function createMinify(store: Store): HTMLElement {
     fill(
       before,
       h("span.eyebrow.panelabel", null, `Before${r ? ` · ${bytes(r.bytesBefore)}` : ""}`),
-      m.before ? art(m.before) : null,
+      m.before ? art(m.before) : emptyDrop(),
     );
     fill(
       after,
       h("span.eyebrow.panelabel", null, `After${r ? ` · ${bytes(r.bytesAfter)}` : ""}`),
-      r ? art(r.svg) : null,
+      r ? art(r.svg) : m.before ? null : h("span.faint.panehint", null, "The rewritten drawing appears here, on the same ground, so nothing can hide."),
     );
+
+    if (m.before !== measuredFor) {
+      const file = m.before;
+      measuredFor = file;
+      autoTone = null;
+      applyBackdrop();
+      if (file) {
+        void toneOf(file).then((tone) => {
+          if (measuredFor !== file) return;
+          autoTone = tone;
+          applyBackdrop();
+        });
+      }
+    }
 
     if (!m.before) {
       fill(
@@ -198,14 +263,12 @@ export function createMinify(store: Store): HTMLElement {
         h(
           "div.railscroll",
           { style: { justifyContent: "center", alignItems: "center", textAlign: "center", gap: "16px" } },
-          h("span", { style: { color: "var(--muted)", display: "flex" } }, icon("file", 28)),
-          h("span.serif", { style: { fontSize: "20px" } }, "Open an SVG"),
+          h("span.serif", { style: { fontSize: "20px" } }, "Minify an SVG"),
           h(
             "span.faint",
             { style: { fontSize: "12.5px", lineHeight: "1.6", maxWidth: "30ch" } },
-            "From Illustrator, Figma, a stock site — anything. It gets rewritten with the fewest segments that draw the same picture.",
+            "From Illustrator, Figma, a stock site — anything. It gets rewritten with the fewest segments that draw the same picture, and the result appears as you open it.",
           ),
-          h("button.btn.primary", { onclick: openSvg }, "Open an SVG"),
         ),
       );
       return;
@@ -264,25 +327,32 @@ export function createMinify(store: Store): HTMLElement {
             "div",
             { style: { display: "flex", alignItems: "center", justifyContent: "space-between" } },
             h("span.dim", { style: { fontSize: "12.5px" } }, "Corner threshold"),
-            h(
-              "div",
-              { style: { display: "flex", alignItems: "center", gap: "8px" } },
-              h("input.slider", {
-                type: "range",
-                min: "5",
-                max: "90",
-                step: "1",
-                style: { width: "120px" },
-                value: String(m.settings.cornerDegrees),
-                "aria-label": "Corner threshold in degrees",
-                oninput: (e: Event) => {
-                  m.settings.cornerDegrees = Number((e.target as HTMLInputElement).value);
-                  store.touch("minify");
-                  void run();
-                },
-              }),
-              h("span.num.faint", { style: { fontSize: "12px", width: "34px" } }, `${m.settings.cornerDegrees}°`),
-            ),
+            (() => {
+              const readout = h("span.num.faint", { style: { fontSize: "12px", width: "34px" } }, `${m.settings.cornerDegrees}°`);
+              return h(
+                "div",
+                { style: { display: "flex", alignItems: "center", gap: "8px" } },
+                h("input.slider", {
+                  type: "range",
+                  min: "5",
+                  max: "90",
+                  step: "1",
+                  style: { width: "120px" },
+                  value: String(m.settings.cornerDegrees),
+                  "aria-label": "Corner threshold in degrees",
+                  // Drag moves the readout; the minifier runs once, on release.
+                  oninput: (e: Event) => {
+                    readout.textContent = `${(e.target as HTMLInputElement).value}°`;
+                  },
+                  onchange: (e: Event) => {
+                    m.settings.cornerDegrees = Number((e.target as HTMLInputElement).value);
+                    store.touch("minify");
+                    void run();
+                  },
+                }),
+                readout,
+              );
+            })(),
           ),
           h(
             "div",
@@ -395,7 +465,14 @@ function toleranceControl(store: Store, run: () => void): HTMLElement {
           run();
         }
       },
-    });
+    }) as HTMLInputElement;
+
+  const tolerance = field(m.settings.tolerancePx, true, (n) => (m.settings.tolerancePx = n));
+  // 0–1 px on a square curve: the useful range is the first tenth of it.
+  const toleranceAt = (el: HTMLInputElement) => {
+    const p = Number(el.value) / 1000;
+    return Number((p * p).toFixed(3));
+  };
 
   return h(
     "div.card",
@@ -404,7 +481,7 @@ function toleranceControl(store: Store, run: () => void): HTMLElement {
       "span.sentence",
       null,
       "Nothing moves more than ",
-      field(m.settings.tolerancePx, true, (n) => (m.settings.tolerancePx = n)),
+      tolerance,
       " px when the drawing is ",
       field(m.settings.judgePx, false, (n) => (m.settings.judgePx = n)),
       " px wide.",
@@ -414,12 +491,14 @@ function toleranceControl(store: Store, run: () => void): HTMLElement {
       min: "0",
       max: "1000",
       step: "1",
-      // 0–1 px on a square curve: the useful range is the first tenth of it.
       value: String(Math.round(Math.sqrt(Math.min(1, m.settings.tolerancePx)) * 1000)),
       "aria-label": "Tolerance",
+      // Drag rewrites the sentence; the minifier runs once, on release.
       oninput: (e: Event) => {
-        const p = Number((e.target as HTMLInputElement).value) / 1000;
-        m.settings.tolerancePx = Number((p * p).toFixed(3));
+        tolerance.value = String(toleranceAt(e.target as HTMLInputElement));
+      },
+      onchange: (e: Event) => {
+        m.settings.tolerancePx = toleranceAt(e.target as HTMLInputElement);
         store.touch("minify");
         run();
       },
@@ -441,14 +520,116 @@ function toleranceControl(store: Store, run: () => void): HTMLElement {
  * to the pane's origin so the overlay can share one transform with it, and without the
  * modifier these two drawings would inherit that and sit in the corner.
  */
-function art(svg: string): HTMLElement {
+export function art(svg: string): HTMLElement {
   const wrap = h("div.art.centred");
+  const el = drawable(svg);
+  if (!el) return wrap;
+  // Sized by the pane, on both axes, rather than by a fixed number of pixels: the SVG
+  // fills the wrapper's box and letterboxes itself by its own `viewBox`, so a wide logo
+  // and a tall one both fit whatever shape the window is.
+  el.setAttribute("width", "100%");
+  el.setAttribute("height", "100%");
+  wrap.append(el);
+  return wrap;
+}
+
+function viewBoxOf(el: SVGSVGElement): [number, number, number, number] | null {
+  const v = (el.getAttribute("viewBox") ?? "").trim().split(/[\s,]+/).map(Number);
+  return v.length === 4 && v.every(Number.isFinite) && v[2] > 0 && v[3] > 0
+    ? [v[0], v[1], v[2], v[3]]
+    : null;
+}
+
+/**
+ * The document as an element that will show up, or null if it is not an SVG at all.
+ *
+ * Most SVGs say where their coordinates live with a `viewBox`, and then any size can be put
+ * on them. Some — a hand-written logo, an older export — give only `width` and `height`,
+ * and forcing a size onto one of those without a `viewBox` crops it to the top-left
+ * corner of its own canvas: the pane comes up blank. So the missing `viewBox` is
+ * supplied, from the stated size if there is one and from the drawing's measured extent
+ * if there is not.
+ */
+function drawable(svg: string): SVGSVGElement | null {
   const doc = new DOMParser().parseFromString(svg, "image/svg+xml");
   const root = doc.documentElement;
-  if (root && root.nodeName === "svg") {
-    root.setAttribute("width", "320");
-    root.setAttribute("height", "320");
-    wrap.append(document.importNode(root, true));
+  if (!root || root.nodeName !== "svg" || doc.querySelector("parsererror")) return null;
+  const el = document.importNode(root, true) as unknown as SVGSVGElement;
+  if (viewBoxOf(el)) return el;
+
+  const width = el.getAttribute("width") ?? "";
+  const height = el.getAttribute("height") ?? "";
+  const w = parseFloat(width);
+  const hh = parseFloat(height);
+  if (w > 0 && hh > 0 && !width.includes("%") && !height.includes("%")) {
+    el.setAttribute("viewBox", `0 0 ${w} ${hh}`);
+    return el;
   }
-  return wrap;
+
+  // Nothing stated: measure it. That needs the element to be in the document.
+  const probe = document.createElement("div");
+  probe.style.cssText = "position:absolute;visibility:hidden;width:0;height:0;overflow:hidden";
+  el.setAttribute("width", "1");
+  el.setAttribute("height", "1");
+  probe.append(el);
+  document.body.append(probe);
+  try {
+    const b = el.getBBox();
+    if (b.width > 0 && b.height > 0) {
+      const pad = Math.max(b.width, b.height) * 0.02;
+      el.setAttribute("viewBox", `${b.x - pad} ${b.y - pad} ${b.width + 2 * pad} ${b.height + 2 * pad}`);
+    } else {
+      el.setAttribute("viewBox", "0 0 100 100");
+    }
+  } catch {
+    el.setAttribute("viewBox", "0 0 100 100");
+  } finally {
+    probe.remove();
+  }
+  return el;
+}
+
+/**
+ * Which backdrop the drawing can be seen on: `"light"` for dark artwork, `"dark"` for
+ * light artwork, and `null` when the default is fine (or the picture is empty).
+ *
+ * Read from the rendered pixels rather than from the markup, because colour in an SVG
+ * comes from attributes, style sheets, classes and inheritance, and the picture is the
+ * one place all of that has already been resolved.
+ */
+export async function toneOf(svg: string): Promise<"light" | "dark" | null> {
+  const el = drawable(svg);
+  if (!el) return null;
+  const size = 64;
+  el.setAttribute("width", String(size));
+  el.setAttribute("height", String(size));
+  const url = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(el))}`;
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = reject;
+      i.src = url;
+    });
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const g = canvas.getContext("2d", { willReadFrequently: true });
+    if (!g) return null;
+    g.drawImage(img, 0, 0, size, size);
+    const px = g.getImageData(0, 0, size, size).data;
+    let weight = 0;
+    let light = 0;
+    for (let i = 0; i < px.length; i += 4) {
+      const a = px[i + 3] / 255;
+      if (a < 0.05) continue;
+      weight += a;
+      light += (a * (0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2])) / 255;
+    }
+    if (weight < 20) return null;
+    const mean = light / weight;
+    return mean < 0.3 ? "light" : mean > 0.8 ? "dark" : null;
+  } catch {
+    return null;
+  }
 }

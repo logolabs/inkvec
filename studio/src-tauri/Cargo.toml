@@ -10,7 +10,7 @@
 [package]
 name = "inkvec-studio"
 description = "Inkvec Studio Lite: turn a raster logo into an SVG, exactly, and minimise SVGs you already have."
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 rust-version = "1.88"
 license = "Apache-2.0"
@@ -36,6 +36,9 @@ tauri-build = { version = "2", features = [] }
 # drives eighteen — bilevel, strokes and flat fills among them — which only `Args` has.
 inkvec-cli = { path = "../../crates/inkvec-cli" }
 inkvec-trace = { path = "../../crates/inkvec-trace" }
+# The fit's own default prices, so the two curve controls start where the engine does and
+# a value that equals the default is passed as "no request".
+inkvec-fit = { path = "../../crates/inkvec-fit" }
 inkvec-restore = { path = "../../crates/inkvec-restore" }
 inkvec-svgmin = { path = "../../crates/inkvec-svgmin" }
 
@@ -77,12 +80,16 @@ dirs = "6"
 winreg = "0.55"
 
 [features]
-default = []
+# The denoiser is part of the app, not an extra: "Clean up damage" and the Photo-or-scan
+# preset are two of its headline controls and do nothing without it. So it is on by
+# default, and the one target that cannot have it opts out with `--no-default-features`
+# (x86_64-apple-darwin, where ONNX Runtime has no package).
+default = ["denoiser"]
 #: Compile the trained restorer in, so "Clean up damage" and the Photo-or-scan preset
 #: can run. `ort` downloads a prebuilt ONNX Runtime at build time and links it
-#: statically. Off by default so a plain `cargo tauri build` needs no network; the
-#: release workflow turns it on for every target the engine's own release builds it
-#: for (that is, all but x86_64-apple-darwin, where ONNX Runtime has no package).
+#: statically, which needs network on the first build; on Windows it also needs MSVC
+#: 17.10 or newer (see studio/README.md, "Building on an older MSVC", for the dynamic
+#: alternative).
 denoiser = ["inkvec-cli/restore-model"]
 
 [profile.release]

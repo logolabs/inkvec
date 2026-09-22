@@ -363,7 +363,13 @@ mod tests {
 
     #[test]
     fn removing_something_that_is_not_there_is_not_an_error() {
-        // Nothing is installed in a test environment; both must still succeed.
+        // Both removers act on the real machine: the command's link on the PATH and the
+        // user's own registry key. Where either is installed, calling them here would
+        // delete the user's own setup, so the test runs only where there is nothing to
+        // delete, which is the case it is about.
+        if cli_status().installed || context_menu_status().installed {
+            return;
+        }
         assert!(remove_cli().is_ok());
         assert!(remove_context_menu().is_ok());
     }

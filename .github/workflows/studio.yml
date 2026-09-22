@@ -183,9 +183,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # The denoiser is a default feature; a row without it says so explicitly.
           features=""
-          if [[ "${{ matrix.denoiser }}" == "true" ]]; then
-            features="--features denoiser"
+          if [[ "${{ matrix.denoiser }}" != "true" ]]; then
+            features="--no-default-features"
           fi
           # --verbose so a bundler that fails prints its own error. Without it Tauri
           # reports only `failed to run light.exe` and the WiX diagnostic is lost.

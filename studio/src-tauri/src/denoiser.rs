@@ -153,7 +153,14 @@ pub fn download(
 
 /// Remove the installed weights.
 pub fn remove() -> Result<(), String> {
-    let Some(path) = weights_path() else {
+    remove_at(weights_path())
+}
+
+/// [`remove`] against an explicit file, so a test can exercise it on a temporary one. The
+/// test suite must never call `remove()` itself: that deletes the model installed for
+/// whoever runs it.
+fn remove_at(file: Option<PathBuf>) -> Result<(), String> {
+    let Some(path) = file else {
         return Ok(());
     };
     match std::fs::remove_file(&path) {
@@ -202,8 +209,18 @@ mod tests {
 
     #[test]
     fn removing_something_that_is_not_there_is_not_an_error() {
-        // Nothing is installed in a test environment; remove() must still succeed.
-        assert!(remove().is_ok());
+        let missing =
+            std::env::temp_dir().join(format!("inkvec-no-such-model-{}", std::process::id()));
+        let _ = std::fs::remove_file(&missing);
+        assert!(remove_at(Some(missing)).is_ok());
+    }
+
+    #[test]
+    fn removing_deletes_the_file_it_is_given() {
+        let file = std::env::temp_dir().join(format!("inkvec-model-to-remove-{}", std::process::id()));
+        std::fs::write(&file, b"weights").unwrap();
+        assert!(remove_at(Some(file.clone())).is_ok());
+        assert!(!file.exists(), "the file should be gone");
     }
 
     #[test]

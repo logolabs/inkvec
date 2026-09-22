@@ -287,12 +287,13 @@ export function createViewer(store: Store): Viewer {
     store.set({
       zoom,
       pan: { x: (w - box.w * zoom) / 2, y: (ph - box.h * zoom) / 2 },
+      fitted: true,
     });
   }
 
   function goTo(x: number, y: number, zoom: number): void {
     const { w, h: ph } = paneSize();
-    store.set({ zoom, pan: { x: w / 2 - x * zoom, y: ph / 2 - y * zoom } });
+    store.set({ zoom, pan: { x: w / 2 - x * zoom, y: ph / 2 - y * zoom }, fitted: false });
   }
 
   /**
@@ -315,6 +316,7 @@ export function createViewer(store: Store): Viewer {
     store.set({
       zoom: next,
       pan: { x: px - (px - st.pan.x) * k, y: py - (py - st.pan.y) * k },
+      fitted: false,
     });
   }
 
@@ -338,7 +340,7 @@ export function createViewer(store: Store): Viewer {
       let lastY = e.clientY;
       const move = (m: PointerEvent) => {
         const st = store.state;
-        store.set({ pan: { x: st.pan.x + (m.clientX - lastX), y: st.pan.y + (m.clientY - lastY) } });
+        store.set({ pan: { x: st.pan.x + (m.clientX - lastX), y: st.pan.y + (m.clientY - lastY) }, fitted: false });
         lastX = m.clientX;
         lastY = m.clientY;
       };
@@ -382,6 +384,8 @@ export function createViewer(store: Store): Viewer {
   const observer = new ResizeObserver(() => {
     if (!store.state.svg && !store.state.source) return;
     applyLayout();
+    // A view nobody has moved follows the window; one somebody zoomed or panned is theirs.
+    if (store.state.fitted) fit();
   });
   observer.observe(panes);
 

@@ -412,9 +412,11 @@ jobs:
           MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos }}
         run: |
           set -euo pipefail
+          # The denoiser is a default feature of the app, so the only row that says
+          # anything is the one that cannot have it.
           features=""
-          if [[ "${{ matrix.denoiser }}" == "true" ]]; then
-            features="--features denoiser"
+          if [[ "${{ matrix.denoiser }}" != "true" ]]; then
+            features="--no-default-features"
           fi
           npx tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} ${features}
 

@@ -1,0 +1,74 @@
+{
+ "flat-logo:default": {
+  "nodes": 28,
+  "cubics": 0,
+  "handles": 0,
+  "axisHandles": 0,
+  "joins": 0,
+  "smoothJoins": 0,
+  "alignedNodes": 22
+ },
+ "flat-logo:edit": {
+  "nodes": 28,
+  "cubics": 0,
+  "handles": 0,
+  "axisHandles": 0,
+  "joins": 0,
+  "smoothJoins": 0,
+  "alignedNodes": 23
+ },
+ "crest-filigree:default": {
+  "nodes": 310,
+  "cubics": 48,
+  "handles": 96,
+  "axisHandles": 0,
+  "joins": 1,
+  "smoothJoins": 0,
+  "alignedNodes": 201
+ },
+ "crest-filigree:edit": {
+  "nodes": 325,
+  "cubics": 48,
+  "handles": 96,
+  "axisHandles": 4,
+  "joins": 1,
+  "smoothJoins": 0,
+  "alignedNodes": 275
+ },
+ "icon-64:default": {
+  "nodes": 22,
+  "cubics": 4,
+  "handles": 8,
+  "axisHandles": 0,
+  "joins": 0,
+  "smoothJoins": 0,
+  "alignedNodes": 6
+ },
+ "icon-64:edit": {
+  "nodes": 22,
+  "cubics": 4,
+  "handles": 8,
+  "axisHandles": 0,
+  "joins": 0,
+  "smoothJoins": 0,
+  "alignedNodes": 18
+ },
+ "signature-bw:default": {
+  "nodes": 26,
+  "cubics": 7,
+  "handles": 14,
+  "axisHandles": 0,
+  "joins": 2,
+  "smoothJoins": 0,
+  "alignedNodes": 8
+ },
+ "signature-bw:edit": {
+  "nodes": 26,
+  "cubics": 7,
+  "handles": 14,
+  "axisHandles": 0,
+  "joins": 2,
+  "smoothJoins": 0,
+  "alignedNodes": 8
+ }
+}

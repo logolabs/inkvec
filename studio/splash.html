@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- The splash is its own window and its own page: it has to paint before the app's
+         bundle has been read, so it carries nothing from it but the fonts and tokens. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self' ipc: http://ipc.localhost"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Inkvec Studio Lite</title>
+    <link rel="stylesheet" href="/src/styles/tokens.css" />
+    <link rel="stylesheet" href="/src/styles/splash.css" />
+  </head>
+  <body>
+    <main class="splash" id="splash" data-tauri-drag-region role="status" aria-live="polite" aria-label="Inkvec Studio Lite is starting">
+      <div class="grid" aria-hidden="true"></div>
+      <div class="glow" aria-hidden="true"></div>
+
+      <section class="stage">
+        <div class="mark" id="mark" aria-hidden="true"></div>
+        <div class="titles">
+          <span class="eyebrow by">LogoLabs presents</span>
+          <h1>Inkvec</h1>
+          <span class="edition">Studio Lite</span>
+          <p class="tag">Raster to SVG, exactly.</p>
+        </div>
+      </section>
+
+      <footer class="foot">
+        <div class="progress" aria-hidden="true"><i id="bar"></i></div>
+        <div class="row">
+          <span id="status" class="status">Starting the engine…</span>
+          <span id="version" class="version"></span>
+        </div>
+        <div class="fine">
+          <span>Copyright logolabs.org · Apache-2.0</span>
+          <span>Denoiser trained on Arrhenius at NAISS · EuroHPC JU</span>
+        </div>
+      </footer>
+    </main>
+    <script type="module" src="/src/splash.ts"></script>
+  </body>
+</html>

@@ -48,10 +48,49 @@ pub struct Report {
     pub bytes: usize,
     /// Bytes after the minifier, for the same drawing.
     pub minified_bytes: Option<usize>,
+    /// How editable the drawing is: what its nodes and handles do, counted.
+    pub structure: Structure,
     /// Seconds the trace took.
     pub seconds: f64,
     /// The longer side the trace ran at, in pixels.
     pub traced_px: u32,
+}
+
+/// The counts behind the editability card, as `inkvec_svgmin::structure` measures them.
+///
+/// The engine's own type is plain data with no serializer, so this mirrors it field for
+/// field under the names the interface uses.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Structure {
+    /// On-curve points.
+    pub nodes: usize,
+    /// Cubic segments.
+    pub cubics: usize,
+    /// Handles with any length.
+    pub handles: usize,
+    /// Of those, the ones on an axis.
+    pub axis_handles: usize,
+    /// Joins between two cubics.
+    pub joins: usize,
+    /// Of those, the smooth ones.
+    pub smooth_joins: usize,
+    /// Nodes sharing an exact x or y with another.
+    pub aligned_nodes: usize,
+}
+
+impl From<inkvec_svgmin::Structure> for Structure {
+    fn from(s: inkvec_svgmin::Structure) -> Self {
+        Self {
+            nodes: s.nodes,
+            cubics: s.cubics,
+            handles: s.handles,
+            axis_handles: s.axis_handles,
+            joins: s.joins,
+            smooth_joins: s.smooth_joins,
+            aligned_nodes: s.aligned_nodes,
+        }
+    }
 }
 
 /// One ink in the palette.

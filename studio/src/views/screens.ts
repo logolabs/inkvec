@@ -463,7 +463,7 @@ function about(store: Store, act: ScreenActions): HTMLElement {
             h(
               "p",
               { style: { margin: "0", fontSize: "13px", lineHeight: "1.7", color: "var(--dim)" } },
-              "The denoiser was trained on resources provided by EuroHPC JU and NAISS. Training ran on the Alvis cluster at Chalmers University of Technology.",
+              "The denoiser was trained on resources provided by EuroHPC JU and NAISS. Training ran on the Arrhenius GPU supercomputer at NAISS, Sweden, under EuroHPC project EHPC-AIF-2026PG01-907.",
             ),
             h(
               "div",

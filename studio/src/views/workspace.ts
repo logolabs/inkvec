@@ -8,7 +8,7 @@
 
 import { fill, h, icon } from "../lib/dom";
 import type { SampleInfo } from "../lib/ipc";
-import { count, de00, modKey, seconds, type StageState, type Store } from "../lib/state";
+import { count, de00, modKey, plannedTracePx, seconds, type StageState, type Store } from "../lib/state";
 import { createViewer, type Viewer } from "../components/viewer";
 
 export interface WorkspaceActions {
@@ -41,7 +41,7 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
       h(
         "button",
         {
-          "aria-pressed": String(z !== "fit" && Math.abs(st.zoom - z) < 0.01),
+          "aria-pressed": String(z === "fit" ? st.fitted : !st.fitted && Math.abs(st.zoom - z) < 0.01),
           disabled: !on,
           onclick: () => (z === "fit" ? viewer.fit() : viewer.zoomTo(z)),
         },
@@ -96,13 +96,16 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
       h(
         "div",
         { style: { marginLeft: "auto", display: "flex", alignItems: "center", gap: "12px" } },
-        h(
-          "div.legend",
-          null,
-          h("span", null, h("i.anchor"), "anchor"),
-          h("span", null, h("i.handle"), "handle"),
-          h("span", null, h("i.wire"), "wireframe"),
-        ),
+        // The key to the dots is only worth the room while there are dots to read.
+        st.show.wireframe || st.show.anchors || st.show.handles
+          ? h(
+              "div.legend",
+              null,
+              st.show.anchors ? h("span", null, h("i.anchor"), "anchor") : null,
+              st.show.handles ? h("span", null, h("i.handle"), "handle") : null,
+              st.show.wireframe ? h("span", null, h("i.wire"), "wireframe") : null,
+            )
+          : null,
         h(
           "button.toggle",
           {
@@ -150,7 +153,7 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
       const last = st.liveStages[st.liveStages.length - 1];
       lead = last?.name ?? "starting";
       const elapsed = st.liveStages.reduce((a, x) => a + x.ms, 0) / 1000;
-      rest = `· ${st.settings.traceSize} px · ${seconds(elapsed)} elapsed · Esc to cancel`;
+      rest = `· ${plannedTracePx(st, st.tracingTier) ?? "—"} px · ${seconds(elapsed)} elapsed · Esc to cancel`;
       colour = "var(--state-stale)";
     } else if (r && st.result) {
       const draft = st.result.tier === "draft";
@@ -182,7 +185,7 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
     );
   };
 
-  store.on(["source", "view", "show", "zoom", "detail", "svg"], renderTools);
+  store.on(["source", "view", "show", "zoom", "fitted", "detail", "svg"], renderTools);
   store.on(["source", "svg", "stageState", "result", "detail", "worstCorner"], renderStage);
   store.on(["tracing", "liveStages", "report", "result", "source", "update"], renderStrip);
 
@@ -218,7 +221,7 @@ function resultChip(store: Store): HTMLElement {
   const st = store.state;
   const kind = st.tracing ? "stale" : st.result?.tier === "draft" ? "draft" : "final";
   const label = st.tracing
-    ? `re-tracing · ${st.settings.traceSize} px`
+    ? `re-tracing · ${plannedTracePx(st, st.tracingTier) ?? "—"} px`
     : `${st.result?.tier ?? "final"} · ${st.report?.tracedPx ?? "—"} px`;
   return h(
     `span.chip.${kind}${st.justSwapped ? ".swapped" : ""}`,

@@ -29,6 +29,11 @@ export interface Settings {
   fewerPaths: boolean;
   lineArt: boolean;
   repairRings: boolean;
+  editability: boolean;
+  /** What one Bézier curve costs the fit, in parameters. A line costs 2. */
+  bezierCost: number;
+  /** The turn, in degrees, at a join that is charged as a full corner. */
+  cornerAngle: number;
   minify: boolean;
   transparentBackground: boolean;
   margin: number;
@@ -42,7 +47,8 @@ export type PresetId =
   | "fewer-paths"
   | "photo-or-scan"
   | "black-and-white"
-  | "line-art";
+  | "line-art"
+  | "editable";
 
 export interface Control {
   group: "Detail" | "Colour" | "Shape" | "Output";
@@ -133,6 +139,21 @@ export interface SampleInfo {
   preview: string;
 }
 
+/**
+ * How editable the drawing is, counted from the SVG itself: the three habits of a
+ * hand-drawn file (handles on the axes, smooth joins, nodes that share a coordinate),
+ * as the counts behind each ratio. Mirrors `inkvec_svgmin::Structure`.
+ */
+export interface Structure {
+  nodes: number;
+  cubics: number;
+  handles: number;
+  axisHandles: number;
+  joins: number;
+  smoothJoins: number;
+  alignedNodes: number;
+}
+
 export interface Report {
   meanDe00: number | null;
   medianDe00: number | null;
@@ -143,6 +164,7 @@ export interface Report {
   colours: number;
   bytes: number;
   minifiedBytes: number | null;
+  structure: Structure;
   seconds: number;
   tracedPx: number;
 }
@@ -301,6 +323,10 @@ export interface UpdateInfo {
 
 export const api = {
   capabilities: () => invoke<Capabilities>("capabilities"),
+  /** One real step of start-up, for the splash window's status line and bar. */
+  startupProgress: (text: string, progress: number) => invoke<void>("startup_progress", { text, progress }),
+  /** The interface is ready: swap the splash for the app. */
+  appReady: () => invoke<void>("app_ready"),
   openPath: (path: string) => invoke<SourceInfo>("open_path", { path }),
   openBytes: (bytes: number[], name?: string) =>
     invoke<SourceInfo>("open_bytes", { bytes, name: name ?? null }),

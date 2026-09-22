@@ -41,12 +41,25 @@ function main() {
   const target = triple();
   const exe = target.includes("windows") ? ".exe" : "";
 
+  // The command the app carries has the restorer wherever the app does, so `inkvec
+  // --restore` on the PATH and "Clean up damage" in the window are the same thing. The
+  // app's own feature flags do not reach this script, so the rule is written here too:
+  // every target but the one ONNX Runtime has no package for. SIDECAR_FEATURES overrides
+  // it, and an empty value means none.
+  const NO_ONNX_RUNTIME = ["x86_64-apple-darwin"];
+  const features =
+    process.env.SIDECAR_FEATURES !== undefined
+      ? process.env.SIDECAR_FEATURES.trim()
+      : NO_ONNX_RUNTIME.includes(target)
+        ? ""
+        : "restore-model";
+  const featureArgs = features ? ["--features", features] : [];
   // Built into the engine's own target directory, so a developer who has already built
   // the CLI does not build it twice.
-  console.log(`sidecar: building inkvec for ${target}`);
+  console.log(`sidecar: building inkvec for ${target}${features ? ` with ${features}` : ""}`);
   execFileSync(
     "cargo",
-    ["build", "--release", "-p", "inkvec-cli", "--target", target],
+    ["build", "--release", "-p", "inkvec-cli", "--target", target, ...featureArgs],
     { cwd: REPO, stdio: "inherit" },
   );
 

@@ -207,6 +207,7 @@ pub fn run(
     plan: &Plan,
     base: &Settings,
     controls: &Arc<Controls>,
+    pipeline: &Arc<trace::Scheduler>,
     on_row: impl Fn(&Row),
     on_totals: impl Fn(&Totals),
 ) -> Vec<Row> {
@@ -250,6 +251,28 @@ pub fn run(
             continue;
         }
 
+        // One trace at a time, and the Vectorize tab goes first: a row waits here while
+        // anybody is looking at a trace of their own. Nothing about the row changes until
+        // the slot is ours, so a run that stands aside resumes at this same row — the
+        // waiting is inside this iteration rather than around it, because `continue` in an
+        // indexed loop would skip the very row it is waiting to run.
+        let slot = loop {
+            if controls.is_cancelled() {
+                break None;
+            }
+            if controls.is_paused() {
+                std::thread::sleep(std::time::Duration::from_millis(60));
+                continue;
+            }
+            if let Some(slot) = pipeline.batch_row(|| controls.is_cancelled() || controls.is_paused())
+            {
+                break Some(slot);
+            }
+        };
+        let Some(slot) = slot else {
+            break;
+        };
+
         rows[i].state = RowState::Running;
         on_row(&rows[i]);
 
@@ -264,10 +287,15 @@ pub fn run(
             .map(|source| {
                 let source_bytes = source.bytes.len();
                 (
-                    trace::run(&source, &settings, Tier::Final, |_, _| {}),
+                    // No cache: every row is a different image, so there is nothing a
+                    // previous row could offer this one.
+                    trace::run(&std::sync::Arc::new(source), &settings, Tier::Final, None, |_, _| {}),
                     source_bytes,
                 )
             });
+        // The pipeline is done with; writing the file and reporting the row are not trace
+        // work and must not keep a trace waiting.
+        drop(slot);
 
         match outcome {
             Err(why) => fail(&mut rows[i], why, &mut totals),
@@ -474,6 +502,7 @@ mod tests {
             &plan,
             &Settings::default(),
             &controls,
+            &Arc::new(trace::Scheduler::default()),
             |r| seen.lock().unwrap().push((r.id, r.state)),
             |_| {},
         );
@@ -508,6 +537,7 @@ mod tests {
             &plan,
             &Settings::default(),
             &Arc::new(Controls::default()),
+            &Arc::new(trace::Scheduler::default()),
             |_| {},
             |_| {},
         );
@@ -535,6 +565,7 @@ mod tests {
             &plan,
             &Settings::default(),
             &Arc::new(Controls::default()),
+            &Arc::new(trace::Scheduler::default()),
             |_| {},
             |_| {},
         );
@@ -567,6 +598,7 @@ mod tests {
             &plan,
             &Settings::default(),
             &controls,
+            &Arc::new(trace::Scheduler::default()),
             move |r| {
                 if r.id == 0 && r.state == RowState::Done {
                     c.cancel();
@@ -621,5 +653,67 @@ mod tests {
             .starts_with("file,preset,status"));
         assert!(csv.contains("\"a,b.png\""), "{csv}");
         assert!(csv.contains("0.1234"));
+    }
+
+    /// The point of the scheduler, from the batch's side: a row stands aside for an
+    /// interactive trace and then runs, rather than being skipped or running alongside it.
+    #[test]
+    fn a_row_waits_for_the_trace_slot_and_is_not_skipped() {
+        let dir = workspace("slot");
+        let out = dir.join("svg");
+        for i in 0..2 {
+            std::fs::write(dir.join(format!("logo-{i}.png")), png([20, 69, 63, 255], 32)).unwrap();
+        }
+        let plan = Plan {
+            files: scan(&dir).unwrap(),
+            preset: Preset::Logo,
+            overrides: vec![],
+            output_dir: out.clone(),
+            skip_existing: false,
+        };
+        let controls = Arc::new(Controls::default());
+        let pipeline = Arc::new(trace::Scheduler::default());
+
+        // The Vectorize tab is tracing: the batch must not start a row.
+        let held = pipeline.interactive();
+        let started = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let run_handle = {
+            let (plan, controls, pipeline, started) = (
+                plan,
+                Arc::clone(&controls),
+                Arc::clone(&pipeline),
+                Arc::clone(&started),
+            );
+            std::thread::spawn(move || {
+                run(
+                    &plan,
+                    &Settings::default(),
+                    &controls,
+                    &pipeline,
+                    move |row| {
+                        if row.state == RowState::Running {
+                            started.fetch_add(1, Ordering::SeqCst);
+                        }
+                    },
+                    |_| {},
+                )
+            })
+        };
+
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        assert_eq!(
+            started.load(Ordering::SeqCst),
+            0,
+            "a row started while an interactive trace held the slot"
+        );
+
+        drop(held);
+        let rows = run_handle.join().expect("the run finished");
+        assert_eq!(rows.len(), 2);
+        for row in &rows {
+            assert_eq!(row.state, RowState::Done, "{row:?} — a row that waited must still run");
+            assert!(row.destination.exists());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

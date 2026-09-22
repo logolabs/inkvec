@@ -8,10 +8,9 @@ below rather than being opaque blobs in the tree.
     python3 studio/tools/make_assets.py            # writes into studio/
     python3 studio/tools/make_assets.py --check    # fails if anything is stale
 
-The app icon is designed at 16 px first, which is a real constraint: it has to read in a
-taskbar. At that size the three stair-stepped pixels drop to two and the copper curve
-thickens, because a 1.5-px stroke at 16 px is a grey smudge. The larger sizes are the same
-mark with the detail put back.
+The app icon is the Inkvec droplet from `web/logo.svg`, in copper on a transparent
+ground, rasterised here from the same path the app draws in its bar. Nothing is copied by
+hand: change the mark and every icon follows.
 
 Dependencies: Pillow. ICNS is assembled here rather than left to Pillow, whose writer is
 platform-dependent; the container is a magic word, a length and a run of tagged PNGs.
@@ -20,6 +19,7 @@ platform-dependent; the container is a magic word, a length and a run of tagged 
 from __future__ import annotations
 
 import argparse
+import functools
 import hashlib
 import math
 import re
@@ -27,7 +27,7 @@ import struct
 import sys
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw
 
 ROOT = Path(__file__).resolve().parents[1]
 ICONS = ROOT / "src-tauri" / "icons"
@@ -69,69 +69,195 @@ def cubic(p0, p1, p2, p3, steps=96):
     return out
 
 
-def rounded_rect_mask(size, radius):
-    m = Image.new("L", (size * SS, size * SS), 0)
-    d = ImageDraw.Draw(m)
-    d.rounded_rectangle(
-        [0, 0, size * SS - 1, size * SS - 1], radius=radius * SS, fill=255
-    )
-    return m.resize((size, size), Image.LANCZOS)
+class _Scan:
+    """Just enough of an SVG path reader for the mark: numbers, and arc flags.
+
+    Arc flags are single characters that may be run together with the number after them
+    (`0 00-67.1`), which is why a generic split on whitespace and signs is not enough.
+    """
+
+    _NUM = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?")
+
+    def __init__(self, d: str):
+        self.d = d
+        self.i = 0
+
+    def _skip(self) -> None:
+        while self.i < len(self.d) and self.d[self.i] in " \t\r\n,":
+            self.i += 1
+
+    def command(self) -> str | None:
+        self._skip()
+        if self.i < len(self.d) and self.d[self.i].isalpha():
+            c = self.d[self.i]
+            self.i += 1
+            return c
+        return None
+
+    def more(self) -> bool:
+        self._skip()
+        return self.i < len(self.d) and not self.d[self.i].isalpha()
+
+    def num(self) -> float:
+        self._skip()
+        m = self._NUM.match(self.d, self.i)
+        if not m:
+            raise ValueError(f"expected a number at {self.i} in the mark's path")
+        self.i = m.end()
+        return float(m.group())
+
+    def flag(self) -> bool:
+        self._skip()
+        c = self.d[self.i]
+        self.i += 1
+        return c == "1"
+
+
+def _arc(p0, rx, ry, phi_deg, large, sweep, p1, steps_per_turn=64):
+    """Points along an SVG elliptical arc, endpoint form (SVG 1.1, F.6.5)."""
+    (x1, y1), (x2, y2) = p0, p1
+    if rx == 0 or ry == 0 or p0 == p1:
+        return [p1]
+    phi = math.radians(phi_deg)
+    cp, sp = math.cos(phi), math.sin(phi)
+    dx, dy = (x1 - x2) / 2, (y1 - y2) / 2
+    x1p, y1p = cp * dx + sp * dy, -sp * dx + cp * dy
+    rx, ry = abs(rx), abs(ry)
+    lam = x1p**2 / rx**2 + y1p**2 / ry**2
+    if lam > 1:
+        rx, ry = rx * math.sqrt(lam), ry * math.sqrt(lam)
+    num = rx**2 * ry**2 - rx**2 * y1p**2 - ry**2 * x1p**2
+    den = rx**2 * y1p**2 + ry**2 * x1p**2
+    co = math.sqrt(max(0.0, num / den)) * (-1 if large == sweep else 1)
+    cxp, cyp = co * rx * y1p / ry, -co * ry * x1p / rx
+    cx = cp * cxp - sp * cyp + (x1 + x2) / 2
+    cy = sp * cxp + cp * cyp + (y1 + y2) / 2
+
+    def angle(ux, uy, vx, vy):
+        a = math.atan2(ux * vy - uy * vx, ux * vx + uy * vy)
+        return a
+
+    t1 = angle(1, 0, (x1p - cxp) / rx, (y1p - cyp) / ry)
+    dt = angle((x1p - cxp) / rx, (y1p - cyp) / ry, (-x1p - cxp) / rx, (-y1p - cyp) / ry)
+    if not sweep and dt > 0:
+        dt -= 2 * math.pi
+    elif sweep and dt < 0:
+        dt += 2 * math.pi
+    n = max(4, math.ceil(abs(dt) / (2 * math.pi) * steps_per_turn))
+    out = []
+    for k in range(1, n + 1):
+        t = t1 + dt * k / n
+        ex, ey = rx * math.cos(t), ry * math.sin(t)
+        out.append((cp * ex - sp * ey + cx, sp * ex + cp * ey + cy))
+    out[-1] = p1
+    return out
+
+
+def _path_polygons(d: str) -> list[list[tuple[float, float]]]:
+    """Every subpath of `d` as a polygon. Lines, cubics and arcs; that is all the mark uses."""
+    sc = _Scan(d)
+    polys: list[list[tuple[float, float]]] = []
+    cur = start = (0.0, 0.0)
+    poly: list[tuple[float, float]] = []
+    cmd = None
+    while True:
+        c = sc.command()
+        if c is None:
+            if not sc.more():
+                break
+            c = cmd  # implicit repeat; after a moveto that means lineto
+            if c in ("M", "m"):
+                c = "L" if c == "M" else "l"
+        cmd = c
+        rel = c.islower()
+        u = c.upper()
+        if u == "Z":
+            if poly:
+                polys.append(poly)
+            poly, cur = [], start
+            continue
+        if u == "M":
+            if poly:
+                polys.append(poly)
+            x, y = sc.num(), sc.num()
+            cur = (cur[0] + x, cur[1] + y) if rel else (x, y)
+            start = cur
+            poly = [cur]
+        elif u == "L":
+            x, y = sc.num(), sc.num()
+            cur = (cur[0] + x, cur[1] + y) if rel else (x, y)
+            poly.append(cur)
+        elif u == "H":
+            x = sc.num()
+            cur = (cur[0] + x if rel else x, cur[1])
+            poly.append(cur)
+        elif u == "V":
+            y = sc.num()
+            cur = (cur[0], cur[1] + y if rel else y)
+            poly.append(cur)
+        elif u == "C":
+            v = [sc.num() for _ in range(6)]
+            if rel:
+                v = [v[i] + cur[i % 2] for i in range(6)]
+            poly += cubic(cur, (v[0], v[1]), (v[2], v[3]), (v[4], v[5]), steps=24)[1:]
+            cur = (v[4], v[5])
+        elif u == "A":
+            rx, ry, rot = sc.num(), sc.num(), sc.num()
+            large, sweep = sc.flag(), sc.flag()
+            x, y = sc.num(), sc.num()
+            end = (cur[0] + x, cur[1] + y) if rel else (x, y)
+            poly += _arc(cur, rx, ry, rot, large, sweep, end)
+            cur = end
+        else:
+            raise ValueError(f"the mark's path uses '{c}', which this reader does not implement")
+    if poly:
+        polys.append(poly)
+    return polys
+
+
+@functools.lru_cache(maxsize=None)
+def _mark_geometry():
+    """The mark's polygons and its viewBox, from the same SVG the app draws in its bar."""
+    svg = mono_mark().decode("utf-8")
+    vb = re.search(r'viewBox="([^"]+)"', svg)
+    box = tuple(float(v) for v in vb.group(1).split())
+    polys = [p for d in re.findall(r'<path[^>]*\sd="([^"]+)"', svg) for p in _path_polygons(d)]
+    return polys, box
+
+
+def mark_image(height: int, ss: int | None = None) -> Image.Image:
+    """The mark in copper on a transparent ground, exactly `height` px tall and as wide as it is.
+
+    Filled even-odd, like the SVG: each subpath is drawn into its own bitmap and the
+    bitmaps are XORed, which is what turns the head and the chevron into holes.
+    """
+    polys, (vx, vy, vw, vh) = _mark_geometry()
+    ss = ss or (SS if height <= 256 else 4)
+    width = max(1, round(height * vw / vh))
+    k = height * ss / vh
+    acc = None
+    for poly in polys:
+        m = Image.new("1", (width * ss, height * ss), 0)
+        ImageDraw.Draw(m).polygon([((x - vx) * k, (y - vy) * k) for x, y in poly], fill=1)
+        acc = m if acc is None else ImageChops.logical_xor(acc, m)
+    alpha = acc.convert("L").resize((width, height), Image.LANCZOS)
+    img = Image.new("RGBA", (width, height), COPPER + (0,))
+    img.putalpha(alpha)
+    return img
 
 
 def icon(size: int) -> Image.Image:
-    """The app icon at `size` px.
+    """The app icon at `size` px: the Inkvec droplet, copper, on a transparent ground.
 
-    Three stair-stepped pixels and one copper curve cutting across them: a raster being
-    read as a continuous edge, which is the product's whole argument in one mark.
+    No tile. Windows and Linux draw an icon straight onto the taskbar, and a copper mark
+    with nothing behind it reads on both a light one and a dark one. The mark is taller
+    than it is wide, so its *height* sets the size, with a small margin so the tip and the
+    base are not clipped by whatever draws the icon.
     """
-    small = size <= 20
-    s = size * SS
-    img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-
-    # Warm ground, lighter at the top left, as in the design sheet.
-    for y in range(s):
-        t = y / max(s - 1, 1)
-        c = tuple(round(CARD[i] + (STAGE[i] - CARD[i]) * t) for i in range(3))
-        d.line([(0, y), (s, y)], fill=c + (255,))
-
-    # The mark is specified on a 48-unit grid.
-    k = s / 48.0
-
-    if small:
-        # The 16 px cut, and the one the mark was designed against first. Sixteen device
-        # pixels do not hold three 8-unit squares and a 3-unit stroke: an 8-unit square is
-        # 2.7 px, which reads as grit. So the lowest step is dropped and everything that
-        # is left grows until it is at least four pixels across — two 12-unit squares and
-        # a 6-unit stroke, which is 4 px and 2 px at this size.
-        squares = [(11, 24, PIXEL_LIT), (25, 11, PIXEL_DIM)]
-        side = 12
-        width = 6.0 * k
-        curve = ((5, 40), (18, 40), (30, 27), (41, 8))
-    else:
-        squares = [(6, 26, PIXEL_DIM), (14, 20, PIXEL_LIT), (22, 14, PIXEL_DIM)]
-        side = 8
-        width = (4.0 if size <= 40 else 3.0) * k
-        curve = ((6, 38), (18, 38), (30, 26), (38, 10))
-
-    for x, y, colour in squares:
-        d.rectangle(
-            [x * k, y * k, (x + side) * k, (y + side) * k], fill=colour + (255,)
-        )
-
-    pts = cubic(*[(px * k, py * k) for px, py in curve])
-    d.line(pts, fill=COPPER + (255,), width=round(width), joint="curve")
-    r = width / 2
-    for end in (pts[0], pts[-1]):
-        d.ellipse(
-            [end[0] - r, end[1] - r, end[0] + r, end[1] + r], fill=COPPER + (255,)
-        )
-
-    img = img.resize((size, size), Image.LANCZOS)
-    # Platform icons are rounded rectangles. A small icon gets a proportionally tighter
-    # corner, because at 16 px the standard radius eats the mark's own edges.
-    radius = max(2, round(size * (0.14 if small else 0.1875)))
-    img.putalpha(rounded_rect_mask(size, radius))
+    margin = 0.04 if size <= 20 else 0.06
+    mark = mark_image(max(1, round(size * (1 - 2 * margin))))
+    img = Image.new("RGBA", (size, size), COPPER + (0,))
+    img.alpha_composite(mark, ((size - mark.width) // 2, (size - mark.height) // 2))
     return img
 
 
@@ -174,7 +300,7 @@ def installer_sidebar() -> Image.Image:
         gd.ellipse([cx - r, cy - r, cx + r, cy + r], fill=int(56 * (1 - i / 48) ** 2))
     img = Image.composite(Image.new("RGB", img.size, COPPER), img, glow)
 
-    mark = icon(64).resize((64 * SS, 64 * SS), Image.LANCZOS)
+    mark = mark_image(64 * SS, ss=2)
     img.paste(mark, (16 * SS, 22 * SS), mark)
 
     img = img.resize((w, h), Image.LANCZOS)
@@ -188,8 +314,8 @@ def installer_header() -> Image.Image:
     """NSIS header. 150 x 57, also fixed."""
     w, h = 150, 57
     img = Image.new("RGB", (w, h), STAGE)
-    mark = icon(26)
-    img.paste(mark, (12, (h - 26) // 2), mark)
+    mark = mark_image(30)
+    img.paste(mark, (14, (h - mark.height) // 2), mark)
     d = ImageDraw.Draw(img)
     _text_block(d, 46, 18, ["Inkvec", "Studio Lite"], CREAM, 10)
     return img

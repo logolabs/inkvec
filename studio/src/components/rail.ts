@@ -1,16 +1,20 @@
 /**
  * The right rail.
  *
- * The order is deliberate and fixed: preset → trace/cancel and status → quality report →
- * what-was-lost → palette → advanced → Export, pinned at the bottom and reachable without
- * scrolling at every window width.
+ * Two halves, chosen by a switch at the top: **Result** is what came out — the quality
+ * report, how editable it is, what could not be recovered, the palette — and **Tune** is
+ * what makes it: the presets and every control. They are separate because they are used
+ * at different moments; a single column of both put the controls a thousand pixels from
+ * the number they move. What they share is pinned at the foot: a live readout of the
+ * three figures that matter, with the change since the last full trace beside each, and
+ * Export, which stays reachable at every window width.
  */
 
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 
 import { fill, h, icon, s } from "../lib/dom";
-import { bytes, count, de00, modKey, percent, seconds, type Store } from "../lib/state";
-import type { Control, Ink, Loss, Settings, Stage } from "../lib/ipc";
+import { bytes, count, de00, modKey, percent, plannedTracePx, seconds, type Store } from "../lib/state";
+import type { Control, Ink, Loss, Report, Settings, Stage } from "../lib/ipc";
 import { api } from "../lib/ipc";
 import { closeOverlay, modal, openModal, openPopover, tip, toast } from "./overlays";
 
@@ -20,6 +24,8 @@ export interface RailActions {
   deletePreset(id: string): void;
   changeSetting(key: keyof Settings, value: Settings[keyof Settings]): void;
   resetGroup(group: string): void;
+  /** The settings the controls are measured against: the selected preset's, else the defaults. */
+  baseSettings(): Settings;
   traceNow(): void;
   cancel(): void;
   snap(from: string, to: string): void;
@@ -27,37 +33,236 @@ export interface RailActions {
   copySvg(): void;
   saveCard(): void;
   jumpToWorst(): void;
+  /** Open the denoiser's download dialog. */
+  openDenoiser(): void;
 }
 
+/**
+ * The two settings that are promoted out of the control groups into the modes block at the
+ * top of the rail. They are the two things people most often come for, so they are not left
+ * three folds down a list; and each is drawn once, so a setting never has two controls.
+ */
+const PROMOTED: ReadonlySet<string> = new Set(["cleanUpDamage", "editability"]);
+
+/** What hand-drawn files do, from the 1,544 artist-drawn SVGs in the evaluation corpus. */
+const ARTIST = { axisHandles: 0.34, smoothJoins: 0.89, alignedNodes: 0.86 } as const;
+
 export function createRail(store: Store, act: RailActions): HTMLElement {
+  const tabs = h("div.railtabs");
+  const modes = h("div.railmodes");
   const scroll = h("div.railscroll");
   const foot = h("div.railfoot");
-  const rail = h("aside.rail", { "aria-label": "Controls" }, scroll, foot);
+  const rail = h("aside.rail", { "aria-label": "Controls" }, tabs, modes, scroll, foot);
 
-  const render = () => {
+  // Each half keeps its own place: switching to Tune and back must not lose where the
+  // palette was scrolled to.
+  const scrolled: Record<string, number> = { result: 0, tune: 0 };
+  let shown: string = store.state.railTab;
+
+  /** The half that is showing, rebuilt. Keeps the scroll place and the keyboard focus. */
+  const renderScroll = () => {
     const st = store.state;
+    // A control's element is replaced when it changes, which would drop keyboard focus from
+    // the very control someone is adjusting; put it back on its twin afterwards.
+    const focused =
+      document.activeElement instanceof HTMLElement && scroll.contains(document.activeElement)
+        ? document.activeElement.getAttribute("data-ctl")
+        : null;
+    scrolled[shown] = scroll.scrollTop;
+
     fill(
       scroll,
-      presets(store, act),
-      traceRow(store, act),
-      st.tracing ? stageCard(store) : null,
-      reportCard(store, act),
-      lostCard(store),
-      paletteCard(store, act),
-      advancedCard(store, act),
+      ...(st.railTab === "result"
+        ? [st.tracing ? stageCard(store) : null, ...resultPane(store, act)]
+        : tunePane(store, act)),
     );
-    fill(foot, ...exportFooter(store, act));
+    shown = st.railTab;
+    scroll.scrollTop = scrolled[shown] ?? 0;
+    if (focused) scroll.querySelector<HTMLElement>(`[data-ctl="${focused}"]`)?.focus({ preventScroll: true });
   };
 
-  store.on(
-    [
-      "caps", "prefs", "preset", "settings", "tracing", "liveStages", "result", "report",
-      "palette", "losses", "advancedOpen", "source", "worstCorner", "stagesOpen",
-    ],
-    render,
-  );
-  render();
+  /**
+   * The pinned foot. While a trace runs it is updated in place rather than rebuilt: a stage
+   * finishes every few tenths of a second, and a Cancel button that is replaced between the
+   * press and the release never hears the click.
+   */
+  const renderFoot = () => {
+    const st = store.state;
+    const busy = foot.querySelector<HTMLElement>(".readout.busy");
+    if (st.tracing && busy) {
+      const last = st.liveStages[st.liveStages.length - 1];
+      busy.querySelector(".stage")!.textContent = last?.name ?? "starting";
+      busy.querySelector(".elapsed")!.textContent = seconds(st.liveStages.reduce((a: number, x: Stage) => a + x.ms, 0) / 1000);
+      return;
+    }
+    fill(foot, ...footer(store, act));
+  };
+
+  const renderModes = () => {
+    const focused =
+      document.activeElement instanceof HTMLElement && modes.contains(document.activeElement)
+        ? document.activeElement.getAttribute("data-ctl")
+        : null;
+    fill(modes, ...modesBlock(store, act));
+    if (focused) modes.querySelector<HTMLElement>(`[data-ctl="${focused}"]`)?.focus({ preventScroll: true });
+  };
+
+  const renderAll = () => {
+    fill(tabs, ...railTabs(store, act));
+    renderModes();
+    renderScroll();
+    renderFoot();
+  };
+
+  // What the Tune half shows depends on the controls and the presets and on nothing a
+  // running trace changes, so a trace's progress must not rebuild it: a slider that is
+  // replaced under the pointer cannot be dragged.
+  store.on(["caps", "prefs", "preset", "settings", "railTab", "groupsOpen"], renderAll);
+  store.on(["tracing", "liveStages", "result", "report", "palette", "losses", "source", "worstCorner", "previous"], () => {
+    if (store.state.railTab === "result") renderScroll();
+    renderFoot();
+    // The tab strip is not rebuilt here — a button replaced between the press and the
+    // release never hears the click — only its note is rewritten.
+    const note = tabs.querySelector<HTMLElement>('[data-note="result"]');
+    if (note) note.textContent = resultNote(store);
+  });
+  renderAll();
   return rail;
+}
+
+// --------------------------------------------------------------------- the modes ---
+
+/**
+ * The denoiser and editable structure, big, above both halves of the rail.
+ *
+ * The denoiser is the difference between tracing a JPEG's damage faithfully and tracing what
+ * the picture was meant to be, and editable structure is the difference between an SVG to
+ * look at and an SVG to open in a vector editor. Both used to be rows in the Tune tab's
+ * groups, which is a fine place for a precision slider and a poor one for these. They are
+ * here whichever half of the rail is showing, and set the same settings the groups did.
+ */
+function modesBlock(store: Store, act: RailActions): HTMLElement[] {
+  const st = store.state;
+  const help = (key: string) => st.caps?.controls.find((c) => c.key === key)?.help ?? "";
+  const den = st.caps?.denoiser;
+  const mode = st.settings.cleanUpDamage;
+  const supported = den?.supported ?? false;
+  const missing = supported && den !== undefined && !den.installed && mode !== "off";
+
+  const captions = { off: "pixels as they are", auto: "only if damaged", on: "always" } as const;
+  const denoiser = h(
+    "div.mode",
+    null,
+    h(
+      "div.modehead",
+      null,
+      tip(h("span.modetitle", { tabindex: "0" }, "Denoiser"), help("cleanUpDamage")),
+      missing
+        ? h("button.reset", { onclick: act.openDenoiser, title: "It runs on this computer; nothing is uploaded" }, "Download it")
+        : h("span.modestate", null, supported ? captions[mode] : "not in this build"),
+    ),
+    h(
+      "div.seg.big",
+      { role: "group", "aria-label": "Denoiser" },
+      ...(["off", "auto", "on"] as const).map((id) =>
+        h(
+          "button",
+          {
+            "aria-pressed": String(mode === id),
+            disabled: !supported,
+            "data-ctl": `cleanUpDamage:${id}`,
+            onclick: () => act.changeSetting("cleanUpDamage", id),
+          },
+          id === "off" ? "Off" : id === "auto" ? "Auto" : "On",
+        ),
+      ),
+    ),
+  );
+
+  const editable = st.settings.editability;
+  const structure = h(
+    "div.mode",
+    null,
+    h(
+      "div.modehead",
+      null,
+      tip(h("span.modetitle", { tabindex: "0" }, "Editable"), help("editability")),
+    ),
+    h(
+      "button.bigswitch",
+      {
+        role: "switch",
+        "aria-checked": String(editable),
+        "aria-label": "Editable structure",
+        "data-ctl": "editability:switch",
+        onclick: () => act.changeSetting("editability", !editable),
+      },
+      h("span.knob"),
+      h("span.state", null, editable ? "On" : "Off"),
+    ),
+  );
+  return [denoiser, structure];
+}
+
+// ---------------------------------------------------------------------- the tabs ---
+
+/** How many controls are away from where the selected preset put them. */
+function changedCount(store: Store, act: RailActions): number {
+  const base = act.baseSettings();
+  const st = store.state;
+  return (st.caps?.controls ?? []).filter((c) => st.settings[c.key] !== base[c.key]).length;
+}
+
+/** What the Result tab says about itself: the colour difference of the drawing on screen. */
+function resultNote(store: Store): string {
+  const r = store.state.report;
+  return r ? `${de00(r.meanDe00)} dE00` : "";
+}
+
+/**
+ * The switch between the two halves, drawn as a tab strip rather than another segmented
+ * control: on its own recessed bar with a rule under it, an underline on the tab that is
+ * showing, and a line saying what that half is. Each tab also says something true about
+ * itself — the colour difference of what came out, how many controls have moved — so it
+ * is a summary as well as a switch.
+ *
+ * Styled through `.railseg`, not `.seg`: that class is shared with the viewer toolbar and
+ * the app bar.
+ */
+function railTabs(store: Store, act: RailActions): HTMLElement[] {
+  const st = store.state;
+  const changed = changedCount(store, act);
+  const tab = (id: "result" | "tune", label: string, note: string, hint: string) =>
+    h(
+      "button",
+      {
+        role: "tab",
+        "aria-selected": String(st.railTab === id),
+        title: hint,
+        onclick: () => store.set({ railTab: id }),
+      },
+      h("span.tablabel", null, label),
+      h("span.tabnote", { "data-note": id }, note),
+    );
+  return [
+    h(
+      "div.railseg",
+      { role: "tablist", "aria-label": "What the rail shows" },
+      tab("result", "Result", resultNote(store), "What this trace produced"),
+      tab("tune", "Tune", changed ? `${changed} changed` : "", "The settings that make the next trace"),
+    ),
+    h(
+      "p.tabcaption",
+      null,
+      st.railTab === "result" ? "What this trace produced." : "The settings for the next trace.",
+    ),
+  ];
+}
+
+// ------------------------------------------------------------------------- tune ---
+
+function tunePane(store: Store, act: RailActions): (HTMLElement | null)[] {
+  return [presets(store, act), ...controlGroups(store, act)];
 }
 
 // ------------------------------------------------------------------- presets ---
@@ -67,16 +272,15 @@ function presets(store: Store, act: RailActions): HTMLElement {
   const list = st.caps?.presets ?? [];
   const saved = st.prefs?.saved ?? [];
   const mod = modKey(st.caps?.platform);
-  const tile = (id: string, name: string, sub: string, remove: (() => void) | null) => {
-    const el = h(
-      "button.preset",
+  const chip = (id: string, name: string, sub: string, hotkey: number | null, remove: (() => void) | null) =>
+    h(
+      remove ? "button.preset.saved" : "button.preset",
       {
         "aria-pressed": String(st.preset === id),
-        title: `${name} — ${sub}`,
+        title: `${name} — ${sub}${hotkey ? ` (${mod}+${hotkey})` : ""}`,
         onclick: () => act.setPreset(id),
       },
       h("span.name", null, name),
-      h("span.sub", null, sub),
       remove
         ? h("span.forget", {
             role: "button",
@@ -84,7 +288,7 @@ function presets(store: Store, act: RailActions): HTMLElement {
             "aria-label": `Forget ${name}`,
             title: `Forget ${name}`,
             onclick: (e: Event) => {
-              // The tile is a button; without this the click would also select the preset
+              // The chip is a button; without this the click would also select the preset
               // it is on its way to deleting.
               e.stopPropagation();
               remove();
@@ -92,36 +296,50 @@ function presets(store: Store, act: RailActions): HTMLElement {
           })
         : null,
     );
-    return el;
-  };
+
+  const current = list.find((p) => p.id === st.preset);
+  const caption = current
+    ? `${current.subtitle}.`
+    : saved.find((p) => p.id === st.preset)
+      ? "One of your saved presets."
+      : "Controls moved from the preset they started at.";
+  const changed = changedCount(store, act);
 
   return h(
-    "div",
-    { style: { display: "flex", flexDirection: "column", gap: "8px" } },
+    "div.presetblock",
+    null,
     h(
       "div.cardhead",
       null,
       h("span.eyebrow", null, "Preset"),
-      h("span.faint", { style: { fontSize: "11px" } }, `${list.length + saved.length} total`),
+      h(
+        "button.reset",
+        {
+          disabled: !st.caps || !changed,
+          title: "Put every control back to where the preset had it",
+          onclick: () => st.preset && act.setPreset(st.preset),
+        },
+        changed ? `Reset ${changed} changed` : "Nothing changed",
+      ),
     ),
     h(
       "div.presets",
-      null,
-      ...list.map((p) => tile(p.id, p.name, p.subtitle, null)),
-      ...saved.map((p) => tile(p.id, p.name, "Saved", () => act.deletePreset(p.id))),
+      { role: "group", "aria-label": "Presets" },
+      ...list.map((p, i) => chip(p.id, p.name, p.subtitle, i < 9 ? i + 1 : null, null)),
+      ...saved.map((p) => chip(p.id, p.name, "Saved preset", null, () => act.deletePreset(p.id))),
     ),
     h(
       "div.traybar",
       null,
-      h("span.faint", null, `${mod}+1–${mod}+7 switch presets`),
+      h("span.faint", null, caption),
       h(
         "button.reset",
         {
           disabled: !st.caps,
-          title: "Remember the eighteen controls exactly as they stand",
+          title: `Remember all ${st.caps?.controls.length ?? ""} controls exactly as they stand`,
           onclick: () => saveCurrentAsPreset(store, act),
         },
-        "Save current as preset",
+        "Save as preset",
       ),
     ),
   );
@@ -159,7 +377,7 @@ function saveCurrentAsPreset(store: Store, act: RailActions): void {
         h(
           "span.muted",
           { style: { fontSize: "11.5px", lineHeight: "1.5" } },
-          "All eighteen controls, as they stand. A saved preset is a snapshot rather than a set of differences from the defaults, so it will not drift when those move.",
+          `All ${store.state.caps?.controls.length ?? ""} controls, as they stand. A saved preset is a snapshot rather than a set of differences from the defaults, so it will not drift when those move.`,
         ),
       ],
       [
@@ -174,31 +392,41 @@ function saveCurrentAsPreset(store: Store, act: RailActions): void {
   });
 }
 
-// ------------------------------------------------------- trace / cancel row ---
+// ---------------------------------------------------------------------- result ---
 
-function traceRow(store: Store, act: RailActions): HTMLElement {
-  const st = store.state;
-  const busy = st.tracing;
+function resultPane(store: Store, act: RailActions): (HTMLElement | null)[] {
+  if (!store.state.source) return [emptyResult()];
+  return [reportCard(store, act), structureCard(store, act), lostCard(store), paletteCard(store, act), benchmarkNote()];
+}
+
+/** Before any image is open there is nothing to report, and a card of dashes says so badly. */
+function emptyResult(): HTMLElement {
   return h(
-    "div",
-    { style: { display: "flex", gap: "8px", alignItems: "center" } },
+    "div.card.emptycard",
+    null,
+    h("span.eyebrow", null, "Quality report"),
     h(
-      "button.btn",
-      {
-        style: { flex: "1" },
-        disabled: !st.source,
-        onclick: () => (busy ? act.cancel() : act.traceNow()),
-      },
-      busy ? "Cancel" : "Trace again",
+      "p",
+      null,
+      "Open an image and its report lands here: the measured colour difference, what the drawing cost in coordinates, how editable it is, what could not be recovered, and its palette.",
     ),
+    h("span.faint", null, "The controls are under Tune; they apply to whatever you open next."),
+  );
+}
+
+/** The one line that puts our numbers beside someone else's, kept apart from the measurements. */
+function benchmarkNote(): HTMLElement {
+  // Our published 21-case average, labelled as such. It must never read as a
+  // measurement of the user's own file, because we did not run VTracer on it.
+  return h(
+    "div.benchmark",
+    null,
+    h("span.eyebrow.label", null, "Benchmark"),
     h(
-      "button.btn",
-      {
-        disabled: !st.caps || !st.preset,
-        onclick: () => st.preset && act.setPreset(st.preset),
-        title: "Put every control back to this preset's values",
-      },
-      "Reset",
+      "p",
+      null,
+      "Across our published 21-case set, VTracer's defaults average 4.4× the coordinates at 10× the colour error. ",
+      h("span.dim", null, "Not a measurement of this file."),
     ),
   );
 }
@@ -224,7 +452,7 @@ function stageCard(store: Store): HTMLElement {
     h(
       "div.cardhead",
       null,
-      h("span", { style: { fontSize: "12px", fontWeight: "500" } }, `Tracing at ${st.settings.traceSize} px`),
+      h("span", { style: { fontSize: "12px", fontWeight: "500" } }, `Tracing at ${plannedTracePx(st, st.tracingTier) ?? "—"} px`),
       h("span.muted.num", { style: { fontSize: "11px" } }, seconds(elapsed)),
     ),
     h("div.sweep", null, h("i")),
@@ -307,19 +535,6 @@ function reportCard(store: Store, act: RailActions): HTMLElement {
           `Find the worst corner · ${de00(st.worstCorner.de00)} dE00 →`,
         )
       : null,
-    // Our published 21-case average, labelled as such. It must never read as a
-    // measurement of the user's own file, because we did not run VTracer on it.
-    h(
-      "div.benchmark",
-      null,
-      h("span.eyebrow.label", null, "Benchmark"),
-      h(
-        "p",
-        null,
-        "Across our published 21-case set, VTracer's defaults average 4.4× the coordinates at 10× the colour error. ",
-        h("span.dim", null, "Not a measurement of this file."),
-      ),
-    ),
   );
 }
 
@@ -336,6 +551,105 @@ function statPairs(store: Store): [string, string][] {
     ["traced at", `${r.tracedPx} px`],
     ["time taken", seconds(r.seconds)],
   ];
+}
+
+// ----------------------------------------------------------- editability ---
+
+/**
+ * How editable the drawing is: the three habits of hand-drawn vector files, counted on
+ * this one, each beside what artists' own files do.
+ *
+ * A traced file is fitted for pixels alone, so it starts near zero on all three; the
+ * editable-structure control moves them, and this is where that is shown rather than
+ * claimed. The reference tick is the median of 1,544 artist-drawn SVGs — measured with
+ * the same function, `inkvec_svgmin::structure`, so the two are the same kind of number.
+ */
+function structureCard(store: Store, act: RailActions): HTMLElement | null {
+  const st = store.state;
+  const m = st.report?.structure;
+  if (st.report && !m) return null;
+
+  const on = st.settings.editability;
+  const rows: { label: string; help: string; part: number; whole: number; artist: number }[] = m
+    ? [
+        {
+          label: "Handles on an axis",
+          help: "Curve handles that point exactly along x or y, as an artist places them with the keyboard. Counted over every cubic handle in the drawing.",
+          part: m.axisHandles,
+          whole: m.handles,
+          artist: ARTIST.axisHandles,
+        },
+        {
+          label: "Smooth joins",
+          help: "Places where two curves meet with their tangents within a degree of each other, so the outline has no kink for a hand to trip on.",
+          part: m.smoothJoins,
+          whole: m.joins,
+          artist: ARTIST.smoothJoins,
+        },
+        {
+          label: "Nodes sharing a coordinate",
+          help: "Nodes with the same x or the same y as another node, so a group of them can be selected and aligned in one move.",
+          part: m.alignedNodes,
+          whole: m.nodes,
+          artist: ARTIST.alignedNodes,
+        },
+      ]
+    : [];
+
+  // A drawing of lines and arcs has no curve handles to be on an axis and no two curves
+  // to join, and an empty bar for each would read as a failure rather than as not applying.
+  const measured = rows.filter((r) => r.whole > 0);
+  const curveless = m !== undefined && m.cubics === 0;
+
+  return h(
+    "div.card.structure",
+    { style: { opacity: st.tracing ? "0.45" : "1", transition: "opacity var(--d-fast)" } },
+    h(
+      "div.cardhead",
+      null,
+      h("span.eyebrow", null, "Editability"),
+      h(
+        "button.reset",
+        {
+          title: on
+            ? "Stop moving nodes and handles onto what an artist would draw"
+            : "Move nodes and handles onto what an artist would draw. Costs about 0.04 dE00 on icons, and the report above shows the price on this image.",
+          onclick: () => act.changeSetting("editability", !on),
+        },
+        on ? "Editable structure on · turn off" : "Make it editable",
+      ),
+    ),
+    ...measured.map((r) => {
+      const share = r.part / r.whole;
+      return h(
+        "div.srow",
+        { title: r.help },
+        h("span.k", null, r.label),
+        h("span.v", null, percent(share), h("span.of", null, `${r.part} of ${r.whole}`)),
+        h(
+          "div.sbar",
+          { role: "img", "aria-label": `${r.label}: ${percent(share)}, ${r.part} of ${r.whole}; hand-drawn files ${percent(r.artist)}` },
+          h("i", { style: { width: `${(share * 100).toFixed(1)}%` } }),
+          h("b", { style: { left: `${(r.artist * 100).toFixed(1)}%` } }),
+        ),
+      );
+    }),
+    curveless
+      ? h(
+          "span.muted",
+          { style: { fontSize: "11px", lineHeight: "1.45" } },
+          "This drawing is lines and arcs, so there are no curve handles to tidy; only its nodes can line up.",
+        )
+      : null,
+    h(
+      "span.muted",
+      { style: { fontSize: "11px", lineHeight: "1.45" } },
+      "The tick is where hand-drawn files sit (median of 1,544 artist SVGs). ",
+      on
+        ? "Nothing moves further than the trace's own tolerance."
+        : "A trace fitted for pixels alone starts near zero on all three.",
+    ),
+  );
 }
 
 // ------------------------------------------------------------ what was lost ---
@@ -607,77 +921,75 @@ function pastePalette(store: Store, act: RailActions): void {
   );
 }
 
-// -------------------------------------------------------- advanced drawer ---
+// -------------------------------------------------------- control groups ---
 
-function advancedCard(store: Store, act: RailActions): HTMLElement {
+/**
+ * The controls, four groups of them, each folded open or shut.
+ *
+ * A group says how many of its controls are away from the preset, and can put just those
+ * back — "what did I change?" is the question a wall of eighteen sliders makes hard, and
+ * the one somebody comparing two traces keeps asking.
+ */
+function controlGroups(store: Store, act: RailActions): HTMLElement[] {
   const st = store.state;
-  const controls = st.caps?.controls ?? [];
-  if (!st.advancedOpen) {
-    return h(
-      "button.card",
-      {
-        style: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: "11px 13px" },
-        onclick: () => store.set({ advancedOpen: true }),
-      },
-      h("span.dim", { style: { fontSize: "12.5px" } }, `Advanced · ${controls.length} controls`),
-      h("span.muted", { style: { fontSize: "12px" } }, "Show"),
-    );
-  }
-
+  const controls = (st.caps?.controls ?? []).filter((c) => !PROMOTED.has(c.key));
+  const base = act.baseSettings();
   const groups = [...new Set(controls.map((c) => c.group))];
-  return h(
-    // `.drawer` is what the narrow-window rule targets: below 1400 px this becomes a
-    // bottom sheet over the stage so Export keeps its place at the foot of the rail.
-    "div.card.drawer",
-    null,
-    h(
-      "div.cardhead",
-      null,
-      h("span.eyebrow", null, `Advanced · ${controls.length} controls`),
-      h("button.reset", { onclick: () => store.set({ advancedOpen: false }) }, "Hide"),
-    ),
-    ...groups.map((g) =>
+
+  return groups.map((g) => {
+    const rows = controls.filter((c) => c.group === g);
+    const open = st.groupsOpen[g] !== false;
+    const changed = rows.filter((c) => st.settings[c.key] !== base[c.key]).length;
+    return h(
+      "section.group",
+      { class: open ? "open" : undefined },
       h(
-        "div.group",
+        "div.grouphead",
         null,
         h(
-          "div.grouphead",
-          null,
+          "button.groupbtn",
+          {
+            "aria-expanded": String(open),
+            "data-ctl": `group:${g}`,
+            onclick: () => {
+              st.groupsOpen[g] = !open;
+              store.touch("groupsOpen");
+            },
+          },
+          icon(open ? "chevronDown" : "chevronRight", 13),
           h("span.eyebrow", null, g),
-          h("button.reset", { onclick: () => act.resetGroup(g) }, "Reset group"),
+          changed ? h("span.changed", null, `${changed} changed`) : null,
         ),
-        ...controls.filter((c) => c.group === g).map((c) => controlRow(store, c, act)),
+        changed ? h("button.reset", { onclick: () => act.resetGroup(g) }, "Reset") : null,
       ),
-    ),
-  );
+      open ? h("div.groupbody", null, ...rows.map((c) => controlRow(store, c, act, base))) : null,
+    );
+  });
 }
 
 /**
- * One row of the drawer: a plain-words label, its unit, the value shown numerically, and
- * a slider on a perceptual scale with named stops rather than a bare track.
+ * One row: a plain-words label, its unit, the value shown numerically, and a slider on a
+ * perceptual scale with named stops rather than a bare track.
  */
-function controlRow(store: Store, c: Control, act: RailActions): HTMLElement {
+function controlRow(store: Store, c: Control, act: RailActions, base: Settings): HTMLElement {
   const value = store.state.settings[c.key];
+  const changed = value !== base[c.key];
+  const row = (...kids: (HTMLElement | null)[]) => h(changed ? "div.control.changed" : "div.control", null, ...kids);
 
   if (c.kind === "switch") {
     const sw = h("button.switch", {
       role: "switch",
       "aria-checked": String(Boolean(value)),
       "aria-label": c.label,
+      "data-ctl": `${c.key}:switch`,
       onclick: () => act.changeSetting(c.key, !value as never),
     });
-    return h(
-      "div.control",
-      null,
-      h("div.controlhead", null, tip(h("span.label", { tabindex: "0" }, c.label), c.help), sw),
-    );
+    return row(h("div.controlhead", null, tip(h("span.label", { tabindex: "0" }, c.label), c.help), sw));
   }
 
   if (c.kind === "tri") {
     const options: [string, string][] = [["off", "Off"], ["auto", "Auto"], ["on", "On"]];
-    return h(
-      "div.control",
-      null,
+    return row(
       h(
         "div.controlhead",
         null,
@@ -688,7 +1000,11 @@ function controlRow(store: Store, c: Control, act: RailActions): HTMLElement {
           ...options.map(([id, label]) =>
             h(
               "button",
-              { "aria-pressed": String(value === id), onclick: () => act.changeSetting(c.key, id as never) },
+              {
+                "aria-pressed": String(value === id),
+                "data-ctl": `${c.key}:${id}`,
+                onclick: () => act.changeSetting(c.key, id as never),
+              },
               label,
             ),
           ),
@@ -708,12 +1024,23 @@ function controlRow(store: Store, c: Control, act: RailActions): HTMLElement {
     value: show(Number(value)),
     inputmode: "decimal",
     "aria-label": `${c.label}${c.unit ? ` in ${c.unit}` : ""}`,
+    "data-ctl": `${c.key}:field`,
     onchange: (e: Event) => {
       const n = Number((e.target as HTMLInputElement).value);
       if (Number.isFinite(n)) act.changeSetting(c.key, Math.min(c.max, Math.max(c.min, n)) as never);
     },
   }) as HTMLInputElement;
 
+  const valueAt = (el: HTMLInputElement) => {
+    const v = fromSlider(Number(el.value));
+    return c.decimals === 0 ? Math.round(v) : Number(v.toFixed(c.decimals));
+  };
+
+  // Dragging only moves the readout. A trace is Rust work and the rail rebuilds itself
+  // when a setting changes — either one on every pixel of a drag is what made the
+  // controls stutter — so the setting is committed once, when the thumb is let go. The
+  // `change` event also fires once per key press, so the arrow keys still work, and the
+  // rebuild hands focus back to the slider so the next press lands too.
   const slider = h("input.slider", {
     type: "range",
     min: "0",
@@ -722,17 +1049,17 @@ function controlRow(store: Store, c: Control, act: RailActions): HTMLElement {
     value: String(Math.round(toSlider(Number(value)))),
     "aria-label": c.label,
     "aria-valuetext": `${show(Number(value))} ${c.unit}`.trim(),
+    "data-ctl": `${c.key}:slider`,
     oninput: (e: Event) => {
-      const v = fromSlider(Number((e.target as HTMLInputElement).value));
-      const rounded = c.decimals === 0 ? Math.round(v) : Number(v.toFixed(c.decimals));
+      const el = e.target as HTMLInputElement;
+      const rounded = valueAt(el);
       field.value = show(rounded);
-      act.changeSetting(c.key, rounded as never);
+      el.setAttribute("aria-valuetext", `${show(rounded)} ${c.unit}`.trim());
     },
+    onchange: (e: Event) => act.changeSetting(c.key, valueAt(e.target as HTMLInputElement) as never),
   });
 
-  return h(
-    "div.control",
-    null,
+  return row(
     h(
       "div.controlhead",
       null,
@@ -745,25 +1072,90 @@ function controlRow(store: Store, c: Control, act: RailActions): HTMLElement {
   );
 }
 
-// ------------------------------------------------------------------ export ---
+// ------------------------------------------------------------------ footer ---
 
-function exportFooter(store: Store, act: RailActions): HTMLElement[] {
-  const ready = Boolean(store.state.svg) && !store.state.tracing;
+/**
+ * The pinned foot: the live readout, Export, and the one honest note about Export.
+ *
+ * The readout is the loop that makes the controls useful. Moving one starts a trace, and
+ * the figures that matter — the measured colour difference, what the drawing cost in
+ * coordinates, the file it makes — land here beside the change since the last full trace,
+ * wherever the rail is scrolled and whichever half of it is showing.
+ */
+function footer(store: Store, act: RailActions): HTMLElement[] {
+  const st = store.state;
+  const ready = Boolean(st.svg) && !st.tracing;
   return [
+    readout(store, act),
     h(
       "div.row",
       null,
       h("button.btn.primary", { style: { flex: "1" }, disabled: !ready, onclick: act.openExport }, "Export"),
       h("button.btn", { disabled: !ready, onclick: act.copySvg, title: "Paste straight into Figma or Illustrator" }, "Copy SVG"),
-      h("button.btn.icon", { disabled: !ready, onclick: act.saveCard, "aria-label": "Save comparison card" }, icon("share", 16)),
+      h("button.btn.icon", { disabled: !ready, onclick: act.saveCard, "aria-label": "Save comparison card", title: "Save comparison card" }, icon("share", 16)),
     ),
     h(
       "div.note",
       null,
       h("span", null, "Export runs a fresh full trace."),
-      h("button.reset", { disabled: !ready, onclick: act.saveCard }, "Save card"),
+      h("button.reset", { disabled: !st.source || st.tracing, onclick: act.traceNow }, "Trace again"),
     ),
   ];
+}
+
+function readout(store: Store, act: RailActions): HTMLElement {
+  const st = store.state;
+  const r = st.report;
+
+  if (st.tracing) {
+    const last = st.liveStages[st.liveStages.length - 1];
+    const elapsed = st.liveStages.reduce((a: number, x: Stage) => a + x.ms, 0) / 1000;
+    return h(
+      "div.readout.busy",
+      null,
+      h("span.pulse"),
+      h("span.stage", null, last?.name ?? "starting"),
+      h("span.muted.num.elapsed", null, seconds(elapsed)),
+      h("button.reset", { onclick: act.cancel, title: "Esc" }, "Cancel"),
+    );
+  }
+  if (!r) {
+    return h("div.readout.idle", null, h("span.faint", null, st.source ? "Nothing traced yet." : "Open an image to see what a setting does."));
+  }
+
+  // Only a full trace is compared with a full trace: a draft is smaller, so its counts
+  // would read as a change nobody made.
+  const p: Report | null = st.result?.tier === "final" ? st.previous : null;
+  const cell = (value: string, label: string, change: HTMLElement | null) =>
+    h("div.cell", null, h("span.v.num", null, value), h("span.k", null, label), change);
+
+  return h(
+    "div.readout",
+    { "aria-live": "polite" },
+    cell(de00(r.meanDe00), "dE00", p ? change(r.meanDe00, p.meanDe00, (d) => d.toFixed(2), 0.005, true) : null),
+    cell(count(r.coordinates), "coordinates", p ? change(r.coordinates, p.coordinates, count, 0, false) : null),
+    cell(bytes(r.bytes), "file", p ? change(r.bytes, p.bytes, bytes, 16, false) : null),
+  );
+}
+
+/**
+ * What a control moved, in the words of the number it moved.
+ *
+ * Fewer coordinates and a smaller file are only ever good news, but a bigger colour
+ * difference is a cost, so only that one turns amber.
+ */
+function change(
+  now: number | null | undefined,
+  before: number | null | undefined,
+  fmt: (n: number) => string,
+  epsilon: number,
+  costWhenHigher: boolean,
+): HTMLElement | null {
+  if (now == null || before == null) return null;
+  const d = now - before;
+  if (Math.abs(d) <= epsilon) return h("span.delta.same", null, "no change");
+  const cls = d < 0 ? "better" : costWhenHigher ? "worse" : "same";
+  return h(`span.delta.${cls}`, null, `${d < 0 ? "−" : "+"}${fmt(Math.abs(d))}`);
 }
 
 /** A tiny helper the export sheet and the batch bar both want. */

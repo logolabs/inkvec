@@ -431,6 +431,7 @@ mod tests {
             colours: 4,
             bytes: SVG.len(),
             minified_bytes: Some(120),
+            structure: Default::default(),
             seconds: 1.18,
             traced_px: 1024,
         }

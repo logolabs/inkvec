@@ -13,6 +13,7 @@
 //! when the engine has finished it, with the time it took.
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Condvar, Mutex};
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
@@ -263,9 +264,10 @@ const MEMORY_CEILING: u64 = 8 * 1024 * 1024 * 1024;
 /// `on_stage` is called from inside the pipeline as each stage is passed; it should hand
 /// the value off and return.
 pub fn run(
-    source: &Source,
+    source: &std::sync::Arc<Source>,
     settings: &Settings,
     tier: Tier,
+    cache: Option<&Cache>,
     on_stage: impl Fn(&'static str, f64) + Send + 'static,
 ) -> Outcome {
     let settings = settings.clone().sanitised();
@@ -292,6 +294,45 @@ pub fn run(
     let head: Vec<u8> = source.bytes[..source.bytes.len().min(32)].to_vec();
     let args = inkvec_cli::resolve_lossy(&args, move || Some(head));
 
+    // The drawing, either from the pipeline or from the one already in hand. Only the
+    // output options can be different for a reused drawing, and they are applied below.
+    let reused = cache.and_then(|c| c.reuse(source, &settings, tier));
+    let (raw_svg, raw_w, raw_h, engine_log, stages) = match reused {
+        Some(hit) => (hit.svg, hit.width, hit.height, hit.stats, Vec::new()),
+        None => match trace_pipeline(source, &args, on_stage) {
+            Ok(t) => {
+                if let Some(c) = cache {
+                    c.keep(source, &settings, tier, &t.svg, t.width, t.height, &t.stats);
+                }
+                (t.svg, t.width, t.height, t.stats, t.stages)
+            }
+            Err(outcome) => return outcome,
+        },
+    };
+
+    let (traced_w, traced_h) = (raw_w as u32, raw_h as u32);
+    let svg = inkvec_cli::post_process(&args, raw_svg, raw_w, raw_h);
+    let seconds = started.elapsed().as_secs_f64();
+    measure(
+        source, &settings, &args, tier, svg, traced_w, traced_h, engine_log, stages, seconds,
+    )
+}
+
+/// What the pipeline produced, with the stages it reported on the way.
+struct Pipeline {
+    svg: String,
+    stats: Vec<String>,
+    width: usize,
+    height: usize,
+    stages: Vec<Stage>,
+}
+
+/// Run the pipeline itself, turning a failure into the outcome the interface shows.
+fn trace_pipeline(
+    source: &Source,
+    args: &inkvec_cli::Args,
+    on_stage: impl Fn(&'static str, f64) + Send + 'static,
+) -> Result<Pipeline, Outcome> {
     // Stages are reported from inside the pipeline, on this thread, as each one is
     // passed. They are folded onto the nine names the interface shows — accumulating
     // time where several pipeline steps map to one name — and handed straight on, so the
@@ -323,13 +364,13 @@ pub fn run(
 
     let traced = match traced {
         Err(payload) => {
-            return Outcome::Failed {
+            return Err(Outcome::Failed {
                 message: panic_message(&payload),
-            }
+            })
         }
         Ok(Err(e)) => {
             let msg = e.to_string();
-            return if msg.contains("single flat colour") {
+            return Err(if msg.contains("single flat colour") {
                 Outcome::Flat
             } else if msg.contains("decode") || msg.contains("format") {
                 Outcome::Undecodable {
@@ -337,19 +378,37 @@ pub fn run(
                 }
             } else {
                 Outcome::Failed { message: msg }
-            };
+            });
         }
         Ok(Ok(t)) => t,
     };
 
-    let engine_log = traced.stats.clone();
-    let (traced_w, traced_h) = (traced.width as u32, traced.height as u32);
-    let svg = inkvec_cli::post_process(&args, traced.svg, traced.width, traced.height);
-    let seconds = started.elapsed().as_secs_f64();
+    Ok(Pipeline {
+        svg: traced.svg,
+        stats: traced.stats,
+        width: traced.width,
+        height: traced.height,
+        stages,
+    })
+}
 
-    // Everything below is measurement of what was just produced, and every one of them
-    // can fail on a document resvg will not take. None of that should cost the user the
-    // trace itself, so each degrades to "not measured" and the panel says so.
+/// Measure what was produced and describe it: the quality report, the palette and what
+/// could not be recovered. Every one of these can fail on a document resvg will not take,
+/// and none of that should cost the user the trace, so each degrades to "not measured".
+#[allow(clippy::too_many_arguments)]
+fn measure(
+    source: &Source,
+    settings: &Settings,
+    args: &inkvec_cli::Args,
+    tier: Tier,
+    svg: String,
+    traced_w: u32,
+    traced_h: u32,
+    engine_log: Vec<String>,
+    stages: Vec<Stage>,
+    seconds: f64,
+) -> Outcome {
+
     let raster = inkvec_trace::decode_image_capped(&source.bytes, args.max_dim)
         .ok()
         .map(|(img, _)| img);
@@ -367,13 +426,14 @@ pub fn run(
         colours,
         bytes: svg.len(),
         minified_bytes,
+        structure: inkvec_svgmin::structure(&svg).into(),
         seconds,
         traced_px: traced_w.max(traced_h),
     };
 
     let palette = quality::palette(&svg, traced_w, traced_h).unwrap_or_default();
     let losses = match (raster.as_ref(), analysis.as_ref()) {
-        (Some(r), Some(a)) => lost::detect(r, a, &svg, &settings, source.container),
+        (Some(r), Some(a)) => lost::detect(r, a, &svg, settings, source.container),
         _ => Vec::new(),
     };
 
@@ -530,16 +590,18 @@ mod tests {
 
     #[test]
     fn a_trace_produces_an_svg_and_measures_it() {
-        let source = Source::open(sample_png(), None).unwrap();
-        let outcome = run(&source, &Settings::default(), Tier::Final, |_, _| {});
+        let source = std::sync::Arc::new(Source::open(sample_png(), None).unwrap());
+        let outcome = run(&source, &Settings::default(), Tier::Final, None, |_, _| {});
         let Outcome::Traced(t) = outcome else {
             panic!("expected a drawing, got {outcome:?}");
         };
+        // The engine writes an XML declaration and a generator comment before the root.
         assert!(
-            t.svg.starts_with("<svg"),
+            t.svg.starts_with("<svg") || t.svg.starts_with("<?xml"),
             "{}",
             &t.svg[..40.min(t.svg.len())]
         );
+        assert!(t.svg.contains("<svg"));
         assert!(t.report.paths >= 2, "{:?}", t.report);
         assert!(t.report.coordinates > 0);
         assert!(!t.palette.is_empty());
@@ -552,12 +614,13 @@ mod tests {
 
     #[test]
     fn the_stage_log_arrives_while_the_trace_runs() {
-        let source = Source::open(sample_png(), None).unwrap();
+        let source = std::sync::Arc::new(Source::open(sample_png(), None).unwrap());
         let (tx, rx) = std::sync::mpsc::channel();
         let outcome = run(
             &source,
             &Settings::default(),
             Tier::Final,
+            None,
             move |name, _| {
                 let _ = tx.send(name);
             },
@@ -580,8 +643,8 @@ mod tests {
     /// it. A clean trace of clean artwork reports nothing.
     #[test]
     fn a_clean_trace_reports_no_losses_at_all() {
-        let source = Source::open(sample_png(), None).unwrap();
-        let outcome = run(&source, &Settings::default(), Tier::Final, |_, _| {});
+        let source = std::sync::Arc::new(Source::open(sample_png(), None).unwrap());
+        let outcome = run(&source, &Settings::default(), Tier::Final, None, |_, _| {});
         let Outcome::Traced(t) = outcome else {
             panic!("expected a drawing, got {outcome:?}")
         };
@@ -599,16 +662,16 @@ mod tests {
 
     #[test]
     fn a_flat_image_is_a_state_of_its_own_not_an_error() {
-        let source = Source::open(flat_png(), None).unwrap();
-        let outcome = run(&source, &Settings::default(), Tier::Final, |_, _| {});
+        let source = std::sync::Arc::new(Source::open(flat_png(), None).unwrap());
+        let outcome = run(&source, &Settings::default(), Tier::Final, None, |_, _| {});
         assert!(matches!(outcome, Outcome::Flat), "{outcome:?}");
     }
 
     #[test]
     fn a_draft_is_smaller_and_quicker_than_the_final() {
-        let source = Source::open(sample_png(), None).unwrap();
+        let source = std::sync::Arc::new(Source::open(sample_png(), None).unwrap());
         let draft = Settings::default().draft(64, 0.4);
-        let outcome = run(&source, &draft, Tier::Draft, |_, _| {});
+        let outcome = run(&source, &draft, Tier::Draft, None, |_, _| {});
         let Outcome::Traced(t) = outcome else {
             panic!("expected a drawing, got {outcome:?}")
         };
@@ -624,7 +687,7 @@ mod tests {
 
     #[test]
     fn an_impossible_trace_size_is_refused_before_the_allocator_sees_it() {
-        let source = Source::open(sample_png(), None).unwrap();
+        let source = std::sync::Arc::new(Source::open(sample_png(), None).unwrap());
         let huge = Settings {
             trace_size: 16384,
             ..Settings::default()
@@ -632,7 +695,7 @@ mod tests {
         // A 96 px input is capped *down* to 96, so it never reaches the ceiling: the
         // estimate has to be driven by a genuinely large input.
         assert!(matches!(
-            run(&source, &huge, Tier::Final, |_, _| {}),
+            run(&source, &huge, Tier::Final, None, |_, _| {}),
             Outcome::Traced(_)
         ));
         assert!(memory_estimate(20000, 20000, 16384) > MEMORY_CEILING);
@@ -656,5 +719,423 @@ mod tests {
         assert_eq!(scaled_to(1000, 500, 2048), None);
         assert_eq!(scaled_to(1000, 500, 0), None);
         assert_eq!(scaled_to(1000, 500, 500), Some((500, 250)));
+    }
+
+    /// The whole promise of the cache in one test: a drawing that was reused has to be the
+    /// drawing a fresh trace would have produced, byte for byte. If this ever fails, the
+    /// cache is handing back something stale and the key is wrong.
+    #[test]
+    fn a_reused_drawing_is_what_a_fresh_trace_would_have_written() {
+        let source = std::sync::Arc::new(Source::open(sample_png(), None).unwrap());
+        let plain = Settings {
+            trace_size: 96,
+            ..Settings::default()
+        };
+
+        // Trace once, filling the cache, then ask for each output option in turn. Each of
+        // those is a cache hit, and each must match the same settings traced from scratch.
+        let cache = Cache::default();
+        assert!(matches!(
+            run(&source, &plain, Tier::Final, Some(&cache), |_, _| {}),
+            Outcome::Traced(_)
+        ));
+
+        for changed in [
+            Settings { minify: true, ..plain.clone() },
+            Settings { margin: 0.1, ..plain.clone() },
+            Settings { minify: true, margin: 0.05, ..plain.clone() },
+            // Not a hit, but it must still come out right: the emitter reads this one, so
+            // the cache has to trace again rather than hand back the drawing it has.
+            Settings { transparent_background: true, ..plain.clone() },
+        ] {
+            let Outcome::Traced(hit) = run(&source, &changed, Tier::Final, Some(&cache), |_, _| {})
+            else {
+                panic!("the cached path did not produce a drawing");
+            };
+            let Outcome::Traced(fresh) = run(&source, &changed, Tier::Final, None, |_, _| {}) else {
+                panic!("the fresh path did not produce a drawing");
+            };
+            assert_eq!(hit.svg, fresh.svg, "a reused drawing differs from a fresh one: {changed:?}");
+            assert_eq!(hit.report.coordinates, fresh.report.coordinates);
+            assert_eq!(hit.report.bytes, fresh.report.bytes);
+            assert_eq!(hit.palette.len(), fresh.palette.len());
+        }
+    }
+
+    /// And the other half: a setting that can move a line must not be served from the cache.
+    #[test]
+    fn a_setting_that_changes_the_drawing_is_traced_again() {
+        let source = std::sync::Arc::new(Source::open(sample_png(), None).unwrap());
+        let plain = Settings {
+            trace_size: 96,
+            ..Settings::default()
+        };
+        let cache = Cache::default();
+        let Outcome::Traced(first) = run(&source, &plain, Tier::Final, Some(&cache), |_, _| {})
+        else {
+            panic!("expected a drawing")
+        };
+
+        let coarse = Settings {
+            precision: 0.5,
+            ..plain.clone()
+        };
+        let Outcome::Traced(second) = run(&source, &coarse, Tier::Final, Some(&cache), |_, _| {})
+        else {
+            panic!("expected a drawing")
+        };
+        assert_ne!(
+            first.svg, second.svg,
+            "a coarser precision came back as the drawing traced at the finer one"
+        );
+        // And the pipeline really ran: a cache hit reports no stages.
+        assert!(!second.stages.is_empty(), "the pipeline did not run for a changed setting");
+    }
+}
+
+
+/// One trace at a time, and the one somebody is looking at goes first.
+///
+/// Two things can ask the engine to trace: the Vectorize tab, and a batch run going in the
+/// background. Nothing used to stop them running at once, or stop a second interactive
+/// trace starting while the first was still going — every request got its own thread, and
+/// every one of those threads fed the same global rayon pool. The pipeline has no
+/// cancellation point (see [`Generation`]), so a trace nobody wants any more keeps its
+/// cores until it finishes: change three controls on a large image and three full traces
+/// grind away together, each of them slower for the other two, and the one the user is
+/// actually waiting for arrives minutes later. The cost is not one slow trace, it is
+/// several slow traces sharing one machine.
+///
+/// So the pipeline is entered through here. [`Scheduler::interactive`] and
+/// [`Scheduler::batch_row`] both wait for the same slot, and while any interactive trace
+/// is waiting the batch does not take it — what somebody is watching comes before what is
+/// running behind them. A batch row already in flight cannot be interrupted, so the batch
+/// yields at its next row boundary and resumes there afterwards, which loses no work: the
+/// row that was running finishes and keeps its result.
+///
+/// Superseded interactive traces need no queue of their own. Each one waits for the slot
+/// and then asks [`Generation::is_current`] whether it is still the trace the interface is
+/// waiting for; the ones the user has already moved past find that they are not, and stop
+/// without tracing anything.
+#[derive(Default)]
+pub struct Scheduler {
+    slots: Mutex<Slots>,
+    freed: Condvar,
+}
+
+#[derive(Default)]
+struct Slots {
+    /// A trace is running right now, interactive or batch.
+    busy: bool,
+    /// Interactive traces waiting for the slot.
+    waiting: usize,
+}
+
+/// The right to run one trace, given up when it is dropped — including when the pipeline
+/// panics, which [`run`] catches.
+pub struct Slot(std::sync::Arc<Scheduler>);
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.lock().busy = false;
+        self.0.freed.notify_all();
+    }
+}
+
+impl Scheduler {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Slots> {
+        self.slots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Wait for the slot for an interactive trace. Batch rows wait for these.
+    pub fn interactive(self: &std::sync::Arc<Self>) -> Slot {
+        let mut slots = self.lock();
+        slots.waiting += 1;
+        while slots.busy {
+            slots = self
+                .freed
+                .wait(slots)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        slots.waiting -= 1;
+        slots.busy = true;
+        drop(slots);
+        Slot(std::sync::Arc::clone(self))
+    }
+
+    /// Wait for the slot for one batch row, yielding to any interactive trace that wants
+    /// it. `give_up` is polled while waiting — a run that is cancelled or paused meanwhile
+    /// gets `None` and goes back to its own loop rather than holding the queue open.
+    pub fn batch_row(self: &std::sync::Arc<Self>, give_up: impl Fn() -> bool) -> Option<Slot> {
+        let mut slots = self.lock();
+        while slots.busy || slots.waiting > 0 {
+            if give_up() {
+                return None;
+            }
+            let (next, _) = self
+                .freed
+                .wait_timeout(slots, std::time::Duration::from_millis(50))
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            slots = next;
+        }
+        if give_up() {
+            return None;
+        }
+        slots.busy = true;
+        drop(slots);
+        Some(Slot(std::sync::Arc::clone(self)))
+    }
+
+    /// Whether an interactive trace is running or waiting to. What a batch run shows in
+    /// its own status while it stands aside.
+    pub fn interactive_wants_it(&self) -> bool {
+        self.lock().waiting > 0
+    }
+}
+
+#[cfg(test)]
+mod scheduler_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn one_trace_at_a_time() {
+        let s = Arc::new(Scheduler::default());
+        let first = s.interactive();
+        assert!(s.lock().busy);
+        // A batch row must not take the slot while the interactive trace holds it.
+        assert!(s.batch_row(|| true).is_none(), "gave up rather than running alongside");
+        drop(first);
+        assert!(!s.lock().busy);
+        assert!(s.batch_row(|| false).is_some(), "free again once the trace finished");
+    }
+
+    #[test]
+    fn a_batch_row_waits_while_an_interactive_trace_wants_the_slot() {
+        let s = Arc::new(Scheduler::default());
+        let held = s.interactive();
+        let waiter = {
+            let s = Arc::clone(&s);
+            std::thread::spawn(move || s.interactive())
+        };
+        // Wait until the second interactive trace is registered as waiting.
+        while !s.interactive_wants_it() {
+            std::thread::yield_now();
+        }
+        // The batch sees interactive demand even though the slot is about to be free.
+        assert!(s.batch_row(|| true).is_none());
+        drop(held);
+        let second = waiter.join().expect("the waiting trace got the slot");
+        drop(second);
+        assert!(s.batch_row(|| false).is_some(), "the batch gets it once no trace wants it");
+    }
+
+    #[test]
+    fn a_cancelled_batch_stops_waiting() {
+        let s = Arc::new(Scheduler::default());
+        let _held = s.interactive();
+        assert!(s.batch_row(|| true).is_none(), "a cancelled run does not block on the slot");
+    }
+
+    #[test]
+    fn the_slot_comes_back_when_a_trace_panics() {
+        let s = Arc::new(Scheduler::default());
+        let s2 = Arc::clone(&s);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _slot = s2.interactive();
+            panic!("a trace that failed");
+        }));
+        assert!(!s.lock().busy, "the slot is given up even when the pipeline panics");
+        assert!(s.batch_row(|| false).is_some());
+    }
+}
+
+/// The drawing the pipeline last produced, kept so that changing something which only
+/// rewrites the finished document does not trace it all over again.
+///
+/// Two of the controls do not change the drawing at all. Minify rewrites the same geometry
+/// in fewer bytes and Margin grows the viewBox: `inkvec_cli::post_process` applies both to
+/// a finished document, which is why [`inkvec_cli::Traced::svg`] is documented as the SVG
+/// *before* output post-processing. Tracing again to apply them is a minute of arithmetic
+/// to produce a drawing identical to the one already in hand.
+///
+/// Everything else can change the drawing, so everything else is part of the key —
+/// including the two that look like output options and are not. Transparent background is
+/// one of them: `post_process` knocks out the backing rectangle, but the emitter reads it
+/// too (`emit.rs`, the canvas fill and whether holes are punched), so a cached drawing is
+/// the wrong drawing for it. Holes as cutouts reads the alpha differently again. The key is
+/// therefore the whole `Settings` with exactly the two safe ones blanked out, compared as a
+/// whole rather than field by field: a control added later is part of the key by default,
+/// and the worst a mistake here can do is trace again when it did not have to.
+#[derive(Default)]
+pub struct Cache(Mutex<Option<Cached>>);
+
+struct Cached {
+    /// Which image. The same file opened again is a different `Arc`, so this is identity
+    /// rather than equality and never has to hash a megabyte of PNG.
+    source: std::sync::Arc<Source>,
+    key: (Settings, Tier),
+    svg: String,
+    width: usize,
+    height: usize,
+    stats: Vec<String>,
+}
+
+/// What a hit gives back: the pipeline's own output, before the output options.
+pub struct Reused {
+    pub svg: String,
+    pub width: usize,
+    pub height: usize,
+    pub stats: Vec<String>,
+}
+
+/// The settings with the two post-processing controls blanked out: what decides whether two
+/// traces would draw the same thing.
+fn drawing_key(settings: &Settings, tier: Tier) -> (Settings, Tier) {
+    (
+        Settings {
+            minify: false,
+            margin: 0.0,
+            ..settings.clone()
+        },
+        tier,
+    )
+}
+
+impl Cache {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<Cached>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The drawing already in hand for this image and these settings, if there is one.
+    pub fn reuse(&self, source: &std::sync::Arc<Source>, settings: &Settings, tier: Tier) -> Option<Reused> {
+        let held = self.lock();
+        let hit = held.as_ref()?;
+        if !std::sync::Arc::ptr_eq(&hit.source, source) || hit.key != drawing_key(settings, tier) {
+            return None;
+        }
+        Some(Reused {
+            svg: hit.svg.clone(),
+            width: hit.width,
+            height: hit.height,
+            stats: hit.stats.clone(),
+        })
+    }
+
+    /// Keep this drawing for the next trace of the same image. One at a time: the only
+    /// drawing worth keeping is the one on screen.
+    pub fn keep(
+        &self,
+        source: &std::sync::Arc<Source>,
+        settings: &Settings,
+        tier: Tier,
+        svg: &str,
+        width: usize,
+        height: usize,
+        stats: &[String],
+    ) {
+        *self.lock() = Some(Cached {
+            source: std::sync::Arc::clone(source),
+            key: drawing_key(settings, tier),
+            svg: svg.to_string(),
+            width,
+            height,
+            stats: stats.to_vec(),
+        });
+    }
+
+    /// Forget it. What opening another image does, so a drawing is never held for an image
+    /// nobody has open.
+    pub fn clear(&self) {
+        *self.lock() = None;
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn source(byte: u8) -> Arc<Source> {
+        Arc::new(Source {
+            bytes: vec![byte],
+            path: None,
+            container: Container::Png,
+            width: 4,
+            height: 4,
+        })
+    }
+
+    fn keep(cache: &Cache, src: &Arc<Source>, settings: &Settings) {
+        cache.keep(src, settings, Tier::Final, "<svg/>", 8, 8, &["palette 1ms".to_string()]);
+    }
+
+    #[test]
+    fn the_same_settings_come_back() {
+        let (cache, src, s) = (Cache::default(), source(1), Settings::default());
+        keep(&cache, &src, &s);
+        let hit = cache.reuse(&src, &s, Tier::Final).expect("a hit");
+        assert_eq!(hit.svg, "<svg/>");
+        assert_eq!((hit.width, hit.height), (8, 8));
+    }
+
+    #[test]
+    fn only_rewriting_the_document_is_still_the_same_drawing() {
+        let (cache, src, s) = (Cache::default(), source(1), Settings::default());
+        keep(&cache, &src, &s);
+        for changed in [
+            Settings { minify: !s.minify, ..s.clone() },
+            Settings { margin: 0.25, ..s.clone() },
+        ] {
+            assert!(
+                cache.reuse(&src, &changed, Tier::Final).is_some(),
+                "an output option must not cost a trace"
+            );
+        }
+    }
+
+    #[test]
+    fn anything_that_could_move_a_line_traces_again() {
+        let (cache, src, s) = (Cache::default(), source(1), Settings::default());
+        keep(&cache, &src, &s);
+        for changed in [
+            Settings { precision: s.precision * 2.0, ..s.clone() },
+            Settings { trace_size: s.trace_size / 2, ..s.clone() },
+            Settings { max_colours: 3, ..s.clone() },
+            Settings { bezier_cost: 3.0, ..s.clone() },
+            Settings { corner_angle: 30.0, ..s.clone() },
+            Settings { editability: !s.editability, ..s.clone() },
+            // These two look like output options and are not: the emitter reads both.
+            // `a_reused_drawing_is_what_a_fresh_trace_would_have_written` caught
+            // Transparent background being treated as post-processing.
+            Settings { holes_as_cutouts: !s.holes_as_cutouts, ..s.clone() },
+            Settings { transparent_background: !s.transparent_background, ..s.clone() },
+            Settings { clean_up_damage: crate::options::Cleanup::On, ..s.clone() },
+        ] {
+            assert!(
+                cache.reuse(&src, &changed, Tier::Final).is_none(),
+                "a setting that can change the drawing must trace again"
+            );
+        }
+    }
+
+    #[test]
+    fn a_draft_is_not_a_final_and_another_image_is_not_this_one() {
+        let (cache, src, s) = (Cache::default(), source(1), Settings::default());
+        keep(&cache, &src, &s);
+        assert!(cache.reuse(&src, &s, Tier::Draft).is_none(), "a draft is its own drawing");
+        assert!(cache.reuse(&source(2), &s, Tier::Final).is_none(), "another image entirely");
+    }
+
+    #[test]
+    fn clearing_forgets_it() {
+        let (cache, src, s) = (Cache::default(), source(1), Settings::default());
+        keep(&cache, &src, &s);
+        cache.clear();
+        assert!(cache.reuse(&src, &s, Tier::Final).is_none());
     }
 }

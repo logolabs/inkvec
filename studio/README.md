@@ -20,6 +20,27 @@ npm run tauri dev          # run it
 npm run tauri build        # package it for this platform
 ```
 
+The denoiser is compiled into every build by default (`--no-default-features` leaves it
+out, and the release does that for exactly one target, Intel macOS, where ONNX Runtime has
+no package). The first build downloads a prebuilt ONNX Runtime and links it statically.
+
+### Building on an older MSVC
+
+On Windows that static link needs MSVC 17.10 or newer; with 17.9 it ends in an unresolved
+`__std_find_last_of_trivial_pos_1`. Either update Visual Studio, or link ONNX Runtime
+dynamically from Microsoft's own release and ship its DLLs beside the app. Put
+`onnxruntime-win-x64-1.28.0` under `tools/vendor/onnxruntime-1.28.0/` and build with
+
+```powershell
+$env:ORT_LIB_PATH = "<repo>\tools\vendor\onnxruntime-1.28.0\onnxruntime-win-x64-1.28.0\lib"
+$env:ORT_PREFER_DYNAMIC_LINK = "1"
+.\node_modules\.bin\tauri.cmd build --bundles nsis --config src-tauri\tauri.ort-dynamic.conf.json
+```
+
+`tauri.ort-dynamic.conf.json` adds `onnxruntime.dll` and `onnxruntime_providers_shared.dll`
+to the bundle, staging them first with `scripts/stage-ort.mjs` (it needs `ORT_LIB_PATH`). Without
+them the app will not start, because it imports the DLL at load.
+
 ## What it does
 
 Three tabs.
@@ -31,11 +52,34 @@ vector edge. That last one is the product's whole argument: a boundary lands wit
 0.05 px of where the anti-aliasing says it is, and the only way to show that is to let
 somebody watch the edge cut through a partially covered pixel.
 
-The rail, top to bottom: preset → trace/cancel → quality report → what could not be
-recovered → palette → advanced → **Export, pinned**, reachable without scrolling at every
-width. The preset tray holds the seven built-ins and as many as twelve saved ones; a saved
-preset is a whole snapshot of the eighteen controls rather than a set of differences from
-the defaults, so it cannot drift when those move.
+Above both halves sit the two settings people most often come for, drawn big and always
+in view: the **denoiser** (Off, Auto, On; with a *Download it* prompt if it is chosen before
+it is installed) and **Editable** (a switch). They are the same settings the groups below
+hold, drawn once rather than twice.
+
+The rail has two halves, chosen by a switch at its top. **Result** is what came out: the
+quality report, how editable the drawing is, what could not be recovered, the palette.
+**Tune** is what makes it: the presets and the twenty-one controls, in four groups that fold
+and say how many of their controls have moved off the preset. They are separate because they
+are used at different moments, and because one long column put the controls a thousand
+pixels from the number they change. What both share is pinned at the foot: a live readout
+of the colour difference, the coordinates and the file size, each with what the last
+control moved it by, and **Export**, reachable without scrolling at every width. Nothing
+covers the stage while you tune; there is no sheet that slides over the drawing.
+
+The preset tray holds the eight built-ins and as many as twelve saved ones; a saved preset
+is a whole snapshot of the twenty-one controls rather than a set of differences from the
+defaults, so it cannot drift when those move.
+
+**Editable structure** is the newest control, and the Result tab has a card for it. A trace
+is fitted for pixels alone, so what an artist meets when they open it in a vector editor
+— handles at arbitrary angles, joins with a kink, nodes that line up with nothing — is
+noise. The card counts three habits of hand-drawn files on this drawing (handles on an
+axis, smooth joins, nodes sharing a coordinate), each beside where hand-drawn files sit
+(the median of 1,544 artist SVGs, measured with the same function,
+`inkvec_svgmin::structure`), so what the switch does is shown and its price is the
+readout's colour difference beside it. A drawing of lines and arcs says so instead of
+showing empty bars.
 
 **Minify SVG** is a different register. Tracing takes a second; this takes about thirty
 milliseconds, so the tab is instant and the result *is* the screen. Its tolerance control
@@ -100,10 +144,11 @@ make the draft lie about what the final will look like.
 so artwork reads against it, and a first run that opened light would show the app at its
 least convincing. Light is fully supported, at token parity, one click away.
 
-**The denoiser is a non-default cargo feature.** `--features denoiser` links ONNX Runtime;
-the release workflow turns it on for every target except `x86_64-apple-darwin`, mirroring
-the exclusion already in the engine's own release matrix. Without it the app says so
-honestly rather than offering a download that would achieve nothing.
+**The denoiser is a default cargo feature.** It links ONNX Runtime, and "Clean up damage"
+and the Photo-or-scan preset do nothing without it, so every build has it. The release
+workflow passes `--no-default-features` for exactly one target, `x86_64-apple-darwin`,
+mirroring the exclusion already in the engine's own release matrix. A build without it says
+so honestly rather than offering a download that would achieve nothing.
 
 **`panic = "abort"` is deliberately not set.** The tracer runs inside `catch_unwind` so a
 panic becomes a "trace failed" state rather than a window that vanishes.
@@ -144,22 +189,34 @@ needs no second file.
 `make_assets.py --check` fails if it ever drifts from `web/logo.svg`, which is the
 point — the mark changed twice in one day while this app was being built.
 
-The platform icon files (`.ico`, `.icns`, the PNGs) are still the stair-stepped pixels
-and copper curve that `make_assets.py` draws, tuned by hand for the 16 px cut. Moving
-those to this mark is a separate decision about what the taskbar shows, not a
-find-and-replace.
+The platform icon files (`.ico`, `.icns`, the PNGs) are this same mark, in copper on a
+transparent ground: `make_assets.py` rasterises the mark's own path, so there is no second
+drawing to keep in step. It has no tile behind it, so it reads on a light taskbar and a
+dark one alike.
 
 ## Generated assets
 
 `tools/make_assets.py` draws the app icon, the NSIS bitmaps and the four bundled samples
 from the shapes that define them, with a `--check` mode CI runs so the committed binaries
-cannot drift from the script. The icon is designed at 16 px first — at that size the lowest
-stair-step is dropped and everything left grows to at least four device pixels, because
-three 8-unit squares at 16 px read as grit rather than as a raster.
+cannot drift from the script.
 
 `tools/third_party.py` writes `STUDIO_THIRD_PARTY.md` from the app's own dependency graph. The
 app ships it next to the engine's and shows both on About: the notices a user reads have to
 be the notices for the binary they are running.
+
+## Looking at the interface without building the app
+
+```sh
+npm run mock        # http://127.0.0.1:1420/dev/index.html
+```
+
+`dev/` serves the real interface in an ordinary browser over a stand-in for the Rust
+backend (`dev/mock.ts`, on Tauri's own `mockIPC`). The control table is the real one,
+extracted from `options.rs` by `dev/gen_controls.py`; the traces are SVGs the real CLI wrote
+(`dev/traced/`) and the report's structure counts are measured from them, but the colour
+difference and the timings are made up, and it says so at the top of the file. It exists for
+looking at layout and behaviour — it is how the two-halves rail was designed — and never
+ships: the build's inputs are `index.html` and `splash.html` only.
 
 ## Tests
 

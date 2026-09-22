@@ -27,7 +27,8 @@ import {
 } from "./lib/ipc";
 import { initial, modKey, Store } from "./lib/state";
 import { createRail } from "./components/rail";
-import { openCardComposer, openExportSheet } from "./components/exportsheet";
+import { openCardComposer } from "./components/card";
+import { openExportSheet } from "./components/exportsheet";
 import { closeOverlay, openPopover, toast } from "./components/overlays";
 import { windowControls } from "./components/wincontrols";
 import { createBatch } from "./views/batch";
@@ -50,6 +51,9 @@ const DEFAULT_SETTINGS: Settings = {
   fewerPaths: false,
   lineArt: false,
   repairRings: true,
+  editability: false,
+  bezierCost: 6,
+  cornerAngle: 10,
   minify: false,
   transparentBackground: false,
   margin: 0,
@@ -59,7 +63,7 @@ const DEFAULT_SETTINGS: Settings = {
 /**
  * Write one control's value into the settings object.
  *
- * The drawer is driven by data — a list of eighteen controls, each naming its field — so
+ * The Tune tab is driven by data — a list of controls, each naming its field — so
  * the write is necessarily dynamic. This is the one place that is true, and it is written
  * out so the unsoundness is visible and contained rather than sprinkled through the
  * callers: the backend's own tests assert that every control names a real field.
@@ -85,7 +89,7 @@ async function trace(tier: "draft" | "final"): Promise<void> {
   try {
     const generation = await api.startTrace(store.state.settings, tier);
     watching = generation;
-    store.set({ generation, tracing: true, liveStages: [] });
+    store.set({ generation, tracing: true, tracingTier: tier, liveStages: [] });
   } catch (e) {
     store.set({ tracing: false, stageState: { kind: "failed", message: String(e) } });
   }
@@ -120,8 +124,13 @@ function traceAndWait(): Promise<void> {
 function applyOutcome(outcome: Outcome): void {
   if (outcome.state === "traced") {
     const wasDraft = store.state.result?.tier === "draft";
+    // A draft is smaller than a final, so only a final is ever the yardstick: the readout
+    // compares this full trace with the one before it, and a draft in between changes
+    // nothing about what that one was.
+    const before = store.state.result?.tier === "final" ? store.state.report : store.state.previous;
     store.set({
       result: outcome,
+      previous: outcome.tier === "final" ? before : store.state.previous,
       svg: outcome.svg,
       report: outcome.report,
       palette: outcome.palette,
@@ -164,7 +173,15 @@ function applyOutcome(outcome: Outcome): void {
 // ------------------------------------------------------------------- opening ---
 
 async function openWith(fn: () => Promise<void>): Promise<void> {
-  store.set({ stageState: { kind: "decoding" }, svg: null, report: null, palette: [], losses: [], result: null });
+  store.set({
+    stageState: { kind: "decoding" },
+    svg: null,
+    report: null,
+    previous: null,
+    palette: [],
+    losses: [],
+    result: null,
+  });
   try {
     await fn();
     store.set({ zoom: 1, pan: { x: 0, y: 0 }, stageState: { kind: "drawing" } });
@@ -241,6 +258,12 @@ function resolvePreset(id: string): { settings: Settings; wantsDenoiser: boolean
   return saved ? { settings: saved.settings, wantsDenoiser: false } : null;
 }
 
+/** Where the controls started: the selected preset's values, or the defaults if none is selected. */
+function baseSettings(): Settings {
+  const id = store.state.preset;
+  return (id && resolvePreset(id)?.settings) || DEFAULT_SETTINGS;
+}
+
 const rail = createRail(store, {
   setPreset: (id: string) => {
     const preset = resolvePreset(id);
@@ -282,14 +305,20 @@ const rail = createRail(store, {
     // a reason to change the picture on the stage.
     if (store.state.preset === id) store.set({ preset: null });
   },
+  baseSettings,
   changeSetting: (key, value) => {
     assignSetting(store.state.settings, key, value);
     store.touch("settings");
+    // Choosing the denoiser before it is installed is not an error — the trace runs without
+    // it — but the stage says why nothing looks cleaner, and how to get it.
+    const den = store.state.caps?.denoiser;
+    if (key === "cleanUpDamage" && value !== "off" && den?.supported && !den.installed) {
+      store.set({ stageState: { kind: "denoiserMissing" } });
+    }
     controlChanged();
   },
   resetGroup: (group) => {
-    const id = store.state.preset;
-    const base = (id && resolvePreset(id)?.settings) || DEFAULT_SETTINGS;
+    const base = baseSettings();
     for (const c of store.state.caps?.controls ?? []) {
       if (c.group === group) assignSetting(store.state.settings, c.key, base[c.key]);
     }
@@ -309,6 +338,7 @@ const rail = createRail(store, {
     toast("SVG copied. Paste straight into Figma or Illustrator.");
   },
   saveCard: () => openCardComposer(store),
+  openDenoiser: () => openDenoiserModal(store),
   jumpToWorst: () => jumpToWorst(store, workspace.viewer),
 });
 
@@ -459,8 +489,8 @@ function keyboard(e: KeyboardEvent): void {
   }
   if (typing) return;
 
-  // ⌘1–⌘7 switch presets, for people who already know them.
-  if (mod && /^[1-7]$/.test(e.key)) {
+  // ⌘1–⌘8 switch presets, for people who already know them.
+  if (mod && /^[1-8]$/.test(e.key)) {
     const preset = store.state.caps?.presets[Number(e.key) - 1];
     if (preset) {
       e.preventDefault();
@@ -541,12 +571,15 @@ async function start(): Promise<void> {
     .matchMedia("(prefers-color-scheme: dark)")
     .addEventListener("change", () => applyTheme(store.state.prefs?.theme ?? "system"));
 
-  // Links that leave the app open in the system browser, never in the webview.
+  // Links that leave the app open in the system browser, never in the webview. Any
+  // http(s) or mailto link qualifies, marked or not: a link that navigates the webview
+  // would replace the app with a web page that has no way back.
   document.addEventListener("click", (e) => {
-    const a = (e.target as HTMLElement)?.closest?.("a[data-external]");
-    if (a) {
+    const a = (e.target as HTMLElement)?.closest?.("a[href]");
+    const href = a?.getAttribute("href") ?? "";
+    if (a && /^(https?:|mailto:)/i.test(href)) {
       e.preventDefault();
-      void openUrl(a.getAttribute("href") ?? "");
+      openUrl(href).catch(() => toast("Could not open the link in your browser.", { kind: "bad" }));
     }
   });
 
@@ -590,10 +623,14 @@ async function start(): Promise<void> {
   const [caps, prefs] = await Promise.all([api.capabilities(), api.loadPrefs()]);
   store.set({ caps, prefs, settings: prefs.trace });
   applyTheme(prefs.theme);
+  progress(`Engine ${caps.engineVersion} · ${caps.buildTarget}`, 0.55);
   samples = await api.listSamples();
   store.touch("source");
 
+  progress("Preparing the workspace…", 0.85);
   await wireDragDrop();
+  progress("Ready", 1);
+  void api.appReady().catch(() => {});
 
   // The update check, if it is on. Its result only ever reaches the status strip.
   if (prefs.checkUpdates) {
@@ -604,7 +641,14 @@ async function start(): Promise<void> {
   }
 }
 
+/** Tell the splash window how far start-up has got. It is decoration: never worth a failure. */
+function progress(text: string, fraction: number): void {
+  void api.startupProgress(text, fraction).catch(() => {});
+}
+
 void start().catch((e) => {
+  // Show the window either way: a start-up error is only readable if the window is.
+  void api.appReady().catch(() => {});
   const app = document.getElementById("app");
   if (app) {
     fill(

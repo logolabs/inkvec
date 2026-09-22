@@ -88,6 +88,14 @@ API in particular should be treated as unstable release to release).
 - **Studio**: moving a control with the keyboard dropped focus after the first key press,
   because the control was rebuilt under it, and a trace's progress rebuilt the controls
   several times a second, which could cancel a drag on the next slider.
+- **Release CI**: the one Studio row with no bundled denoiser (Intel macOS, the target
+  ONNX Runtime has no package for) passed `--no-default-features` straight to the Tauri
+  CLI, which rejects it -- that flag is cargo's, and needs `--` in front of it to reach
+  cargo at all. Every tagged release back to 0.1.5 built that row this way and failed it
+  silently as a result. Also: one platform's build failing no longer withholds every
+  other platform's archives from the release -- `build` and `studio` each carry on past
+  a failing row now, and the publish step ships whatever exists instead of requiring
+  every file type to be present.
 
 ## [0.1.5] - 2026-09-21
 

@@ -184,13 +184,16 @@ jobs:
         run: |
           set -euo pipefail
           # The denoiser is a default feature; a row without it says so explicitly.
-          features=""
+          # `--no-default-features` is cargo's flag, not the Tauri CLI's -- it has to go
+          # after `--`, or Tauri's own argument parser rejects it as unrecognised before
+          # cargo ever sees it.
+          cargo_args=()
           if [[ "${{ matrix.denoiser }}" != "true" ]]; then
-            features="--no-default-features"
+            cargo_args=(-- --no-default-features)
           fi
           # --verbose so a bundler that fails prints its own error. Without it Tauri
           # reports only `failed to run light.exe` and the WiX diagnostic is lost.
-          npx tauri build --verbose --bundles ${{ matrix.bundles }} ${features}
+          npx tauri build --verbose --bundles "${{ matrix.bundles }}" "${cargo_args[@]}"
 
       # Name every file the bundler produced, so a format that silently stops being
       # built is visible in the log rather than only in a release that lacks it.

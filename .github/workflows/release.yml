@@ -29,6 +29,13 @@ jobs:
   build:
     name: build (${{ matrix.target }}, ${{ matrix.feature }})
     runs-on: ${{ matrix.os }}
+    # One target failing must not take the rest of the release down with it: `checksums`
+    # needs every row of this job, and by default a job with any failed matrix leg reports
+    # overall failure, which would skip `checksums` (and so `publish`) even though the
+    # other archives built fine and are sitting in artifacts ready to ship. `fail-fast:
+    # false` above already lets every row run to completion regardless of its neighbours;
+    # this is what stops one row's failure from being contagious to the jobs after it.
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -296,6 +303,9 @@ jobs:
   studio:
     name: studio (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
+    # See the identical note on `build`: one platform's bundle failing must not withhold
+    # every other platform's, or the CLI's, from the release.
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -413,12 +423,14 @@ jobs:
         run: |
           set -euo pipefail
           # The denoiser is a default feature of the app, so the only row that says
-          # anything is the one that cannot have it.
-          features=""
+          # anything is the one that cannot have it. `--no-default-features` is cargo's
+          # flag, not the Tauri CLI's -- it has to go after `--`, or Tauri's own argument
+          # parser rejects it as unrecognised before cargo ever sees it.
+          cargo_args=()
           if [[ "${{ matrix.denoiser }}" != "true" ]]; then
-            features="--no-default-features"
+            cargo_args=(-- --no-default-features)
           fi
-          npx tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} ${features}
+          npx tauri build --target "${{ matrix.target }}" --bundles "${{ matrix.bundles }}" "${cargo_args[@]}"
 
       # The app and the `inkvec` command it carries, both checked: an installer that
       # cannot start is as useless as an archive that cannot, and the bundled command is
@@ -600,15 +612,23 @@ jobs:
           sed -i 's/^          //' notes.md
 
       # The extraction script is validated against this repository's CHANGELOG heading
-      # format (for example "## [0.1.1] - 2026-09-18"). A tag push publishes only after
-      # every archive and its checksums are present.
+      # format (for example "## [0.1.1] - 2026-09-18"). A tag push publishes whatever
+      # `build` and `studio` managed to produce between them, not only every archive.
+      #
+      # `fail_on_unmatched_files` is off on purpose: `build` and `studio` each carry on
+      # past a failing platform now (see the `continue-on-error` note on both), so one
+      # platform's archives can be genuinely absent here -- Windows down would zero out
+      # `*.msi`/`*.exe`, both macOS rows down would zero out `*.dmg` -- and that is a
+      # smaller release, not a broken workflow. Every archive that *is* present still gets
+      # its own checksum, and the platform table below still names what should exist; a
+      # human reads the run to notice what a glob match count no longer enforces.
       - uses: softprops/action-gh-release@v2
         with:
           draft: false
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           body_path: notes.md
-          fail_on_unmatched_files: true
+          fail_on_unmatched_files: false
           files: |
             out/*.tar.gz
             out/*.zip

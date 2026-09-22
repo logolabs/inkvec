@@ -11,6 +11,14 @@ API in particular should be treated as unstable release to release).
 
 ### Added
 
+- Non-minified output carries a generator comment and a Dublin Core `<metadata>` block
+  (creator and source, both pointing at `logolabs.org` and the GitHub repository), both
+  placed inside the `<svg>` root immediately after it opens. Invisible to every renderer;
+  the document still starts with the literal bytes `<svg` and gains no XML declaration,
+  since an SVG document is XML on its own and content placed before the root is the part
+  most likely to be lost if someone copies out just the `<svg>...</svg>` element. `--minify`
+  strips both, as it does everything else that carries no geometry.
+
 - **`--bezier-cost` and `--corner-angle`**, and a per-trace cost model in `inkvec-fit`
   (`inkvec_fit::cost`): what one Bézier segment costs the MDL objective (default 6
   parameters; a line costs 2) and the turn at a join that is charged as a full corner

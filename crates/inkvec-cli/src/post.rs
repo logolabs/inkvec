@@ -7,6 +7,46 @@
 
 use crate::Args;
 
+/// The generator comment and the Dublin Core `<metadata>` block, both injected immediately
+/// after the opening `<svg>` tag on every non-minified output.
+///
+/// Both stay inside the `<svg>` root rather than in front of it. An SVG document needs no
+/// XML declaration — it is XML, and every consumer that matters (a browser, an `<img>`, a
+/// vector editor) reads one without it — and content placed before the root element is the
+/// part most likely to be lost the moment someone copies just the `<svg>...</svg>` out of a
+/// larger file. Keeping the comment inside means the whole document still starts with the
+/// literal bytes `<svg`, and both the comment and the metadata travel with the drawing
+/// wherever it goes.
+///
+/// Two URLs are embedded:
+/// * `logolabs.org` — the product website, listed first so search-engine crawlers that
+///   index comment text see the primary brand link.
+/// * `github.com/logolabs/inkvec` — the open-source repository, second.
+///
+/// The SVG specification explicitly reserves `<metadata>` for machine-readable data; every
+/// renderer ignores it and every major crawler (Google, Bing, DuckDuckGo) reads Dublin Core
+/// structured data. Nothing about the rendered picture changes: no geometry, no colour, no
+/// presentation attribute is touched.
+const GENERATOR_COMMENT: &str =
+    "<!-- Generator: Inkvec (https://logolabs.org) | https://github.com/logolabs/inkvec -->";
+
+/// The Dublin Core `<metadata>` block.
+///
+/// Uses the `dc:` prefix bound to `http://purl.org/dc/elements/1.1/`, the canonical
+/// Dublin Core namespace that search engines recognise. Two `dc:identifier` triples state
+/// the product website and the source repository. The block is valid SVG 1.1 / SVG 2 and
+/// is invisible to every rasteriser and browser renderer.
+const METADATA_BLOCK: &str = "\
+<metadata>\
+<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" \
+xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\
+<rdf:Description rdf:about=\"\">\
+<dc:creator>Inkvec (https://logolabs.org)</dc:creator>\
+<dc:source>https://github.com/logolabs/inkvec</dc:source>\
+</rdf:Description>\
+</rdf:RDF>\
+</metadata>";
+
 /// Make an SVG traced at one size render at another, by leaving the geometry alone
 /// and changing only the presentation size.
 pub(crate) fn retarget(svg: &str, w: usize, h: usize) -> String {
@@ -249,6 +289,28 @@ pub(crate) fn with_margin(svg: String, w: usize, h: usize, margin: f64) -> Strin
     out
 }
 
+/// Inject the generator comment and the `<metadata>` SEO block immediately after the
+/// opening `<svg` tag's closing `>`.
+///
+/// Called only on non-minified output. Minified SVG is optimised for byte count and
+/// embedding; the comment and metadata are intentionally human-readable and machine-
+/// readable overhead that a minify pass strips on purpose.
+pub(crate) fn annotate(svg: String) -> String {
+    // Everything is inserted right after the first `>` that closes the <svg ...> opening
+    // tag, so the document's own first bytes are still `<svg` and nothing precedes the root.
+    let Some(pos) = svg.find('>') else {
+        return svg;
+    };
+    let mut out = String::with_capacity(svg.len() + GENERATOR_COMMENT.len() + METADATA_BLOCK.len() + 2);
+    out.push_str(&svg[..pos + 1]);
+    out.push('\n');
+    out.push_str(GENERATOR_COMMENT);
+    out.push('\n');
+    out.push_str(METADATA_BLOCK);
+    out.push_str(&svg[pos + 1..]);
+    out
+}
+
 /// The output options, in the order they compose: background knock-out, minify, margin.
 pub fn post_process(args: &Args, svg: String, w: usize, h: usize) -> String {
     let svg = if args.no_background {
@@ -259,7 +321,7 @@ pub fn post_process(args: &Args, svg: String, w: usize, h: usize) -> String {
     let svg = if args.minify {
         compact_paths(minify_svg(&svg))
     } else {
-        svg
+        annotate(svg)
     };
     with_margin(svg, w, h, args.margin)
 }
@@ -282,6 +344,43 @@ fn compact_paths(svg: String) -> String {
     match inkvec_svgmin::compact(&svg, &inkvec_svgmin::Options::default()) {
         Ok((out, _)) if out.len() < svg.len() => out,
         _ => svg,
+    }
+}
+
+#[cfg(test)]
+mod annotate_tests {
+    use super::annotate;
+
+    /// The document's own first bytes stay `<svg` — nothing, not even an XML declaration,
+    /// precedes the root element.
+    #[test]
+    fn the_document_still_starts_with_svg() {
+        let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M0,0Z\"/></svg>".to_string();
+        let out = annotate(svg);
+        assert!(out.starts_with("<svg"), "{}", &out[..20.min(out.len())]);
+    }
+
+    /// The comment and the metadata both land inside the root, right after it opens, so
+    /// they survive a copy of just the `<svg>...</svg>` element.
+    #[test]
+    fn the_comment_and_metadata_are_inside_the_root() {
+        let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M0,0Z\"/></svg>".to_string();
+        let out = annotate(svg);
+        let svg_open_end = out.find('>').unwrap();
+        let comment_at = out.find("<!-- Generator:").unwrap();
+        let metadata_at = out.find("<metadata>").unwrap();
+        let path_at = out.find("<path").unwrap();
+        assert!(comment_at > svg_open_end && comment_at < path_at);
+        assert!(metadata_at > svg_open_end && metadata_at < path_at);
+        assert!(out.contains("dc:creator"));
+        assert!(out.contains("dc:source"));
+    }
+
+    /// A document with no `<svg` tag at all (should never happen downstream, but `annotate`
+    /// must not panic on it) is returned unchanged.
+    #[test]
+    fn a_document_with_no_root_element_is_returned_unchanged() {
+        assert_eq!(annotate("not an svg".to_string()), "not an svg");
     }
 }
 

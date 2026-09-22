@@ -8,7 +8,7 @@
   "lint:unused_qualifications": 0,
   "max_file_lines": 1723,
   "rustfmt_hunks": 0,
-  "test_functions": 367,
+  "test_functions": 375,
   "untested_modules": [
     "crates/inkvec-cli/src/alpha.rs",
     "crates/inkvec-cli/src/rings.rs",

@@ -7,6 +7,80 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-09-22
+
+### Added
+
+- **`--bezier-cost` and `--corner-angle`**, and a per-trace cost model in `inkvec-fit`
+  (`inkvec_fit::cost`): what one Bézier segment costs the MDL objective (default 6
+  parameters; a line costs 2) and the turn at a join that is charged as a full corner
+  (default 10 degrees). Lowering the first draws more curves and fewer straight segments;
+  raising the second keeps gentler bends smooth. On the bundled logos a price of 3 with a
+  45-degree angle gives 82 curves instead of 48 on the crest, about 20 % more bytes and about
+  6 % less pixel error; the effect depends on the artwork. Until now these were process-wide
+  and could only be set with `INKVEC_PARAMS_CUBIC` and `INKVEC_G1_BREAK`, which still work as
+  the defaults. Output with neither option is byte-identical to before. They are options of
+  the command line and of Inkvec Studio (Tune, Shape: *Curve cost*, *Smooth-join angle*) and
+  are **not yet** fields of `inkvec::Options`, so the bindings do not have them.
+- **`editability`**, an option on the tracer (`--editability` on the command line, and a
+  field of `inkvec::Options`, so every binding has it from the generated schema): post-fit
+  passes that spend a little accuracy on structure an artist can edit — G1-smooth joins,
+  handles snapped to the axes and to 45°, nodes that nearly share a coordinate made to
+  share it, and rings that are their own mirror image locked into exact mirrors. Each
+  change is guarded to the fit's own tolerance. Off by default.
+- **`inkvec_svgmin::structure`**, and `structure_json` in the WebAssembly build: how
+  editable an SVG is, as three ratios — handles on an axis, smooth joins, nodes sharing a
+  coordinate — measured from the file alone, so a drawing somebody drew and a drawing a
+  machine wrote are counted by the same rule. Hand-drawn files sit at about 34%, 89% and
+  86% (median of 1,544 artist SVGs; `cargo run -p inkvec-svgmin --example structure`).
+- **The Space** has an *Editable structure* switch, and its stats count the three ratios.
+- **Studio**: an *Editable structure* control, an *Editable* preset (`Ctrl+8`), and an
+  Editability card in the report that shows the three ratios beside where hand-drawn files
+  sit.
+- **Studio**: a splash window covers the ~1-2 s startup instead of a blank frame, and the
+  denoiser is now compiled into every build by default (previously an opt-in feature), so
+  "Clean up damage" and the Photo-or-scan preset work without a separate download on first
+  run. The one target that cannot have it built in, `x86_64-apple-darwin`, opts out.
+- **Studio**: at most one trace runs at a time — a control moved while a trace is in flight
+  now queues rather than racing it — and a Minify or Margin change reuses the last drawing
+  instead of re-tracing, since neither can change the geometry.
+
+### Changed
+
+- **Studio's rail** is two halves, Result and Tune, with a pinned readout of the colour
+  difference, the coordinates and the file size and what the last control moved each by.
+  The advanced controls no longer slide over the stage at narrow widths, groups fold and
+  say how many of their controls have moved off the preset, and the preset tray is a row of
+  chips. Empty Minify and Batch tabs are an invitation instead of an empty table, the
+  overlay legend shows only while an overlay is on, and a view nobody has zoomed follows the
+  window when it is resized.
+- **Studio** shows the size a trace actually ran at, not the Trace size setting: the
+  setting is a cap, so a 622 px image was labelled "Tracing at 2048 px" even though the
+  engine never traces above the source's own size.
+- The WebAssembly `trace` and `prepare` take the options as one JSON object, the same one
+  `trace_json` takes, instead of twelve positional arguments. An option added to
+  `inkvec::Options` now reaches the Space by the page sending its key.
+- **`estimate_noise`** reads the tenth percentile of the pixel Laplacian instead of the
+  median, with the matching correction factor. The median assumes edges are rare, which
+  fails on edge-dense art: a 622x480 line drawing whose strokes are a few pixels wide
+  measured 53 display levels of "noise" where the trace's own flat interiors say 0.57, and
+  every downstream tolerance divides by that estimate. Reported by an artist tracing dense
+  line art and tracked down from their file. Byte-identical on every icon in the 246-icon
+  screen set at 128, 512 and 1024 px (the estimate already sat on its floor); on JPEG and
+  added-grain input, and on the reported file, only better (0.1582 to 0.1122 mean absolute
+  error on that file).
+
+### Fixed
+
+- **Studio**: tooltips no longer stay on screen. The rail is rebuilt whenever a control or a
+  trace changes, and a tooltip whose label was removed while it was hovered or focused never
+  heard the pointer leave; clicking a label also focused it and showed the tooltip again.
+  There is now one tooltip at a time, a click or Esc dismisses it, and it goes the moment its
+  label is no longer under the pointer or the keyboard focus.
+- **Studio**: moving a control with the keyboard dropped focus after the first key press,
+  because the control was rebuilt under it, and a trace's progress rebuilt the controls
+  several times a second, which could cancel a drag on the next slider.
+
 ## [0.1.5] - 2026-09-21
 
 ### Added

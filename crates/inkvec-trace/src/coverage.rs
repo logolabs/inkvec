@@ -241,10 +241,38 @@ pub fn estimate_noise(gray: &[f32], w: usize, h: usize) -> f64 {
         }
     }
     lap.sort_by(|a, b| a.total_cmp(b));
-    let mad = lap[lap.len() / 2] as f64;
+    // Read a LOW quantile, not the median, with the Gaussian factor for that quantile.
+    //
+    // The median is robust only while edges are rare: half the pixels are then flat, so the
+    // middle of the distribution is noise and edges sit in a tail it ignores. That is a
+    // property of the picture, not of the estimator. On a labyrinth of three-pixel strokes
+    // the median |Laplacian| IS an edge response: 53 display levels of "noise" where the
+    // trace's own flat interiors say 0.57. The palette's is-this-one-ink test and the fit
+    // tolerance both divide by this, so the trace ran two orders of magnitude too loose and
+    // strokes merged into blobs. The tenth percentile is still noise while a tenth of the
+    // image is flat, against the median's half, and stays unbiased on Gaussian noise because
+    // `Z10` is that quantile of the half-normal; the cost is variance, which the floor
+    // absorbs. Measured over 246 icons at 128, 512 and 1024 px: every output byte-identical,
+    // because on clean art both readings sit on the floor. JPEG and added grain improve.
+    // `INKVEC_NOISE_MEDIAN=1` restores the median this replaced. It is how the regression
+    // test below is shown to have teeth, and how a future suspicion of this estimator is
+    // settled without a rebuild.
+    let (at, z) = if std::env::var("INKVEC_NOISE_MEDIAN").is_ok_and(|v| v != "0") {
+        (0.5, MAD_TO_SIGMA)
+    } else {
+        (NOISE_QUANTILE, Z10)
+    };
+    let mad = lap[((lap.len() as f64) * at) as usize] as f64;
     let gain = LAPLACIAN_KERNEL.iter().map(|c| c * c).sum::<f64>().sqrt();
-    (mad / MAD_TO_SIGMA / gain).max(NOISE_FLOOR)
+    (mad / z / gain).max(NOISE_FLOOR)
 }
+
+/// The quantile of `|Laplacian|` read as the noise level.
+const NOISE_QUANTILE: f64 = 0.10;
+
+/// The tenth percentile of the half-normal: `Phi^-1(0.55)`. Dividing the tenth percentile of
+/// `|x|` by this recovers sigma, as dividing the median by [`MAD_TO_SIGMA`] does.
+const Z10: f64 = 0.12566;
 
 /// Recover a coverage field for a two-colour (bilevel) image.
 ///
@@ -1169,6 +1197,27 @@ mod tests {
                 est * 255.0
             );
         }
+    }
+
+    /// A noiseless picture must not report noise, however many edges it has.
+    ///
+    /// The regression the quantile exists for: where most of the image is edge, the median
+    /// |Laplacian| reads an edge and calls it noise — 53 display levels against a true 0.57
+    /// on a real labyrinth, which loosens every tolerance downstream. Three-pixel stripes
+    /// reproduce it: a third of the pixels sit mid-run with a zero Laplacian, so the tenth
+    /// percentile is noise and the median is not. `INKVEC_NOISE_MEDIAN=1` makes this fail,
+    /// which is the proof it bites.
+    #[test]
+    fn a_noiseless_edge_dense_picture_reports_no_noise() {
+        let (w, h) = (300, 300);
+        let g: Vec<f32> = (0..w * h)
+            .map(|i| if (i % w) % 6 < 3 { 0.0 } else { 1.0 })
+            .collect();
+        let est = estimate_noise(&g, w, h) * 255.0;
+        assert!(
+            est < 2.0,
+            "a noiseless stripe pattern reported {est:.1} display levels of noise;              reading the median instead of the {NOISE_QUANTILE} quantile reports tens"
+        );
     }
 
     /// The gain is only correct if the coefficients describe the loop's arithmetic.

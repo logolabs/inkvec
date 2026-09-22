@@ -24,8 +24,8 @@ doc = false
 inkvec-core = { workspace = true }
 inkvec-fit = { workspace = true }
 rayon = { workspace = true }
-roxmltree = "0.20"
-svgtypes = "0.15"
+roxmltree = "0.21"
+svgtypes = "0.16"
 
 [lints]
 workspace = true

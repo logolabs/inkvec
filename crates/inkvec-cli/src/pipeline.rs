@@ -839,6 +839,15 @@ fn finish_color(
     // identical either way and the whole decision is a parameter count — the same test
     // every fill model and every arc has to pass, with the residual term equal on both
     // sides. Where the layer does not pay, the flat form is what is written.
+    // Editability mode: post-fit structure passes, every one guarded to the ring's
+    // own tolerance. Runs after repair and harmonization so nothing downstream
+    // re-breaks what was locked.
+    if args.editability {
+        let stats = editable::edit_all(&polys, &mut fitted, &prims);
+        if !args.quiet {
+            eprintln!("{}", stats.summary());
+        }
+    }
     let emit = |order: &[FaceRings], an: Option<Layers>| {
         emit_color(
             order,

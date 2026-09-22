@@ -64,6 +64,7 @@ def trace(
     margin: float = 0.0,
     no_background: bool = False,
     minify: bool = False,
+    editability: bool = False,
     native_alpha: bool = True,
     cutout: bool = False,
     content_units: bool = False,
@@ -106,6 +107,15 @@ def trace(
         minify:
             No ids or groups, no trailing zeros. Same geometry, typically about a tenth
             smaller.
+        editability:
+            Spend parameters on structure an artist can edit: joins between curves made
+            G1-smooth, handles snapped to the axes and to 45 degrees, handles of one
+            curve made equal in length, nodes that nearly share a coordinate made to
+            share it, and rings that are their own mirror image locked into exact
+            mirrors. Every change is guarded to the fit's own tolerance -- 3 sigma of
+            the source point plus half a pixel, or 1.5 px for a mirror lock -- so the
+            picture stays within a fraction of a pixel of the default trace; the price
+            measured on 25 icons is about 0.04 dE00. Off by default.
         native_alpha:
             Trace transparency natively: each ink is a colour and an opacity, and the
             transparent ground is an ink of its own, instead of the image being
@@ -157,6 +167,7 @@ def trace_rgba(
     margin: float = 0.0,
     no_background: bool = False,
     minify: bool = False,
+    editability: bool = False,
     native_alpha: bool = True,
     cutout: bool = False,
     content_units: bool = False,
@@ -200,6 +211,15 @@ def trace_rgba(
         minify:
             No ids or groups, no trailing zeros. Same geometry, typically about a tenth
             smaller.
+        editability:
+            Spend parameters on structure an artist can edit: joins between curves made
+            G1-smooth, handles snapped to the axes and to 45 degrees, handles of one
+            curve made equal in length, nodes that nearly share a coordinate made to
+            share it, and rings that are their own mirror image locked into exact
+            mirrors. Every change is guarded to the fit's own tolerance -- 3 sigma of
+            the source point plus half a pixel, or 1.5 px for a mirror lock -- so the
+            picture stays within a fraction of a pixel of the default trace; the price
+            measured on 25 icons is about 0.04 dE00. Off by default.
         native_alpha:
             Trace transparency natively: each ink is a colour and an opacity, and the
             transparent ground is an ink of its own, instead of the image being

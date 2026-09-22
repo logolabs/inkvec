@@ -231,11 +231,11 @@ pub fn merge_gradient_bands_guarded(
         // by the subsampling factor so costs stay comparable across regions and with
         // the parameter terms. Measured identical in output on the two profiling logos
         // at 1024 and 2048 px against fitting every pixel.
-        let sub: Vec<usize> = if pixels.len() > FIT_PIXELS_CAP {
+        let sub: Vec<usize> = if pixels.len() > fit_pixels_cap() {
             pixels
                 .iter()
                 .copied()
-                .step_by(pixels.len() / FIT_PIXELS_CAP)
+                .step_by(pixels.len() / fit_pixels_cap())
                 .collect()
         } else {
             Vec::new()
@@ -289,7 +289,19 @@ pub fn merge_gradient_bands_guarded(
     // cached gain would make it the merge of the round, so the accepted merge is always
     // decided on a fresh fit while the rest wait.
     let mut cache: HashMap<(u32, u32), (FillFit, bool)> = HashMap::new();
+    // Where the rounds go, for the timing log: a greedy agglomeration accepts one merge per
+    // round, so the round count is the merge count and the wall time is the sum of the
+    // rounds. Which part of a round costs what is the question the log answers.
+    let timing = std::env::var_os("INKVEC_TIMING").is_some();
+    let (mut rounds, mut ns_scan, mut ns_wave, mut ns_stale, mut ns_book) = (0u64, 0u64, 0u64, 0u64, 0u64);
+    let mut waves = 0u64;
+    // (fits in the wave, wall ms) per wave, to see whether the waves are wide enough to fill
+    // the cores or are one big fit with a few small ones behind it.
+    let mut wave_log: Vec<(usize, f64)> = Vec::new();
+    let mut stale_refits = 0u64;
     loop {
+        rounds += 1;
+        let t_round = inkvec_core::clock::Instant::now();
         // Out of time: leave the remaining bands as the separate fills they already
         // are. Every merge accepted so far stands, so the output is a correct trace
         // with more fills than the best one -- the graceful end of a time budget.
@@ -327,7 +339,12 @@ pub fn merge_gradient_bands_guarded(
                 }
             }
         }
+        if timing {
+            ns_scan += t_round.elapsed().as_nanos() as u64;
+        }
+        let t_wave = inkvec_core::clock::Instant::now();
         if !missing.is_empty() {
+            waves += 1;
             missing.sort_unstable();
             use rayon::prelude::*;
             let computed: Vec<((u32, u32), (FillFit, bool))> = missing
@@ -347,6 +364,13 @@ pub fn merge_gradient_bands_guarded(
             cache.extend(computed);
         }
 
+        if timing {
+            ns_wave += t_wave.elapsed().as_nanos() as u64;
+            if !missing.is_empty() {
+                wave_log.push((missing.len(), t_wave.elapsed().as_secs_f64() * 1e3));
+            }
+        }
+        let t_pick = inkvec_core::clock::Instant::now();
         let best = loop {
             let mut best: Option<(f64, u32, u32)> = None;
             for a in 0..n_comp {
@@ -432,10 +456,15 @@ pub fn merge_gradient_bands_guarded(
                 px.extend_from_slice(&members[ai]);
                 px.extend_from_slice(&members[bi]);
                 cache.insert((a, b), (fit_group(&group, &px, a, b), false));
+                stale_refits += 1;
                 continue;
             }
             break Some((a, b));
         };
+        if timing {
+            ns_stale += t_pick.elapsed().as_nanos() as u64;
+        }
+        let t_book = inkvec_core::clock::Instant::now();
         let Some((a, b)) = best else { break };
         let (ai, bi) = (a as usize, b as usize);
         fits[ai] = cache.remove(&(a, b)).expect("cached union").0;
@@ -479,9 +508,38 @@ pub fn merge_gradient_bands_guarded(
                 entry.1 = true;
             }
         }
+        if timing {
+            ns_book += t_book.elapsed().as_nanos() as u64;
+        }
     }
 
-    if std::env::var_os("INKVEC_TIMING").is_some() {
+    if timing {
+        eprintln!(
+            "  [t] merge waves: {}",
+            {
+                let mut v = wave_log.clone();
+                v.sort_by(|x, y| y.1.total_cmp(&x.1));
+                let widest = v.iter().map(|w| w.0).max().unwrap_or(0);
+                let sum = |lo: usize, hi: usize| -> (usize, f64) {
+                    let it = v.iter().filter(|w| w.0 >= lo && w.0 <= hi);
+                    (it.clone().count(), it.map(|w| w.1).sum())
+                };
+                let (n1, ms1) = sum(1, 1);
+                let (n8, ms8) = sum(2, 8);
+                let (nm, msm) = sum(9, usize::MAX);
+                format!(
+                    "widest {widest}; {n1} wave(s) of 1 fit ({ms1:.0} ms), {n8} of 2-8 ({ms8:.0} ms), {nm} of 9+ ({msm:.0} ms); slowest five {:?}",
+                    v.iter().take(5).map(|w| (w.0, w.1.round() as u64)).collect::<Vec<_>>()
+                )
+            }
+        );
+        eprintln!(
+            "  [t] merge rounds: {rounds} ({waves} with a fit to do, {stale_refits} serial stale refits); wall ms: candidate scan {}, fit waves {}, pick+refit {}, bookkeeping {}",
+            ns_scan / 1_000_000,
+            ns_wave / 1_000_000,
+            ns_stale / 1_000_000,
+            ns_book / 1_000_000,
+        );
         eprintln!(
             "  [t] merge: {} components, {} union fits over {} pixels total; fit ms (summed over threads): collect {} flat {} linear {} radial {} elliptic {}",
             n_comp,

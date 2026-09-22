@@ -69,6 +69,17 @@ public struct InkvecOptions: Codable, Hashable, Sendable {
     /// Default: `false`.
     public var minify: Bool?
 
+    /// Spend parameters on structure an artist can edit: joins between curves made G1-smooth,
+    /// handles snapped to the axes and to 45 degrees, handles of one curve made equal in
+    /// length, nodes that nearly share a coordinate made to share it, and rings that are their
+    /// own mirror image locked into exact mirrors. Every change is guarded to the fit's own
+    /// tolerance -- 3 sigma of the source point plus half a pixel, or 1.5 px for a mirror lock
+    /// -- so the picture stays within a fraction of a pixel of the default trace; the price
+    /// measured on 25 icons is about 0.04 dE00. Off by default.
+    ///
+    /// Default: `false`.
+    public var editability: Bool?
+
     /// Trace transparency natively: each ink is a colour and an opacity, and the transparent
     /// ground is an ink of its own, instead of the image being composited onto a matte first.
     /// Holes stay holes, white artwork on a transparent ground traces, glows and shadows stay
@@ -122,6 +133,7 @@ public struct InkvecOptions: Codable, Hashable, Sendable {
         margin: Double? = nil,
         noBackground: Bool? = nil,
         minify: Bool? = nil,
+        editability: Bool? = nil,
         nativeAlpha: Bool? = nil,
         cutout: Bool? = nil,
         contentUnits: Bool? = nil,
@@ -137,6 +149,7 @@ public struct InkvecOptions: Codable, Hashable, Sendable {
         self.margin = margin
         self.noBackground = noBackground
         self.minify = minify
+        self.editability = editability
         self.nativeAlpha = nativeAlpha
         self.cutout = cutout
         self.contentUnits = contentUnits
@@ -154,6 +167,7 @@ public struct InkvecOptions: Codable, Hashable, Sendable {
         case margin
         case noBackground = "no_background"
         case minify
+        case editability
         case nativeAlpha = "native_alpha"
         case cutout
         case contentUnits = "content_units"

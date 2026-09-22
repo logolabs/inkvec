@@ -116,10 +116,17 @@ export function options_schema_json(): string;
  * Decode an image and run the pipeline up to the point the denoiser would see it, for a
  * caller that wants to denoise it there. The arguments are [`trace`]'s.
  *
- * `trace(bytes, ...)` is `prepare(bytes, ...).traceOnce()`; the page calls this one instead
- * when it has a denoiser to run in between.
+ * `trace(bytes, options)` is `prepare(bytes, options).traceOnce()`; the page calls this one
+ * instead when it has a denoiser to run in between.
  */
-export function prepare(bytes: Uint8Array, precision: number, min_area: number, colors: number, merge: number, max_dim: number, time_budget: number, no_background: boolean, minify: boolean, margin: number, content_units: boolean, cutout: boolean): Intake;
+export function prepare(bytes: Uint8Array, options: string): Intake;
+
+/**
+ * How editable an SVG is, as a JSON object of counts: `nodes`, `cubics`, `handles`,
+ * `axisHandles`, `joins`, `smoothJoins`, `alignedNodes`. `inkvec_svgmin::structure`, the
+ * same measurement the desktop app's editability card reports.
+ */
+export function structure_json(svg: string): string;
 
 /**
  * Whether this is the threaded build, whose pool `initThreadPool` starts.
@@ -130,17 +137,13 @@ export function prepare(bytes: Uint8Array, precision: number, min_area: number, 
 export function threads_available(): boolean;
 
 /**
- * Trace image bytes to an SVG string.
- *
- * `precision`, `min_area`, `colors`, `merge` are the tracer's quality knobs (pass the
- * defaults 0.1, 2, 64, 0.035 when unsure; the merge default is
- * `inkvec_trace::color::DEFAULT_MERGE_DISTANCE`); `max_dim` and `time_budget` bound the
- * work; `no_background`, `minify`, `margin`, `content_units` shape the output. `max_dim = 0`
- * means no cap. `cutout` is `--cutout`: an input's transparency is carried into the SVG
- * (holes stay holes, a flat wash keeps its opacity); it changes nothing for an opaque
- * input.
+ * Trace image bytes to an SVG string, with the options as a JSON object --
+ * [`trace_json`]'s options, and the same defaults for whatever is missing. The
+ * difference is the route: this is `prepare(bytes, options).traceOnce()`, the pair the
+ * page uses when it has a denoiser to run in between, so a page that never denoises and a
+ * page that does trace the same way.
  */
-export function trace(bytes: Uint8Array, precision: number, min_area: number, colors: number, merge: number, max_dim: number, time_budget: number, no_background: boolean, minify: boolean, margin: number, content_units: boolean, cutout: boolean): string;
+export function trace(bytes: Uint8Array, options: string): string;
 
 /**
  * Trace an encoded image (PNG, JPEG, WebP, GIF, BMP or TIFF) to an SVG string, with the
@@ -193,9 +196,10 @@ export interface InitOutput {
     readonly intake_traceOnce: (a: number) => [number, number, number, number];
     readonly intake_width: (a: number) => number;
     readonly options_schema_json: () => [number, number];
-    readonly prepare: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number, number];
+    readonly prepare: (a: number, b: number, c: number, d: number) => [number, number, number];
+    readonly structure_json: (a: number, b: number) => [number, number];
     readonly threads_available: () => number;
-    readonly trace: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number, number, number];
+    readonly trace: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly trace_json: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly trace_rgba_json: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly version: () => [number, number];

@@ -269,30 +269,44 @@ export function options_schema_json() {
  * Decode an image and run the pipeline up to the point the denoiser would see it, for a
  * caller that wants to denoise it there. The arguments are [`trace`]'s.
  *
- * `trace(bytes, ...)` is `prepare(bytes, ...).traceOnce()`; the page calls this one instead
- * when it has a denoiser to run in between.
+ * `trace(bytes, options)` is `prepare(bytes, options).traceOnce()`; the page calls this one
+ * instead when it has a denoiser to run in between.
  * @param {Uint8Array} bytes
- * @param {number} precision
- * @param {number} min_area
- * @param {number} colors
- * @param {number} merge
- * @param {number} max_dim
- * @param {number} time_budget
- * @param {boolean} no_background
- * @param {boolean} minify
- * @param {number} margin
- * @param {boolean} content_units
- * @param {boolean} cutout
+ * @param {string} options
  * @returns {Intake}
  */
-export function prepare(bytes, precision, min_area, colors, merge, max_dim, time_budget, no_background, minify, margin, content_units, cutout) {
+export function prepare(bytes, options) {
     const ptr0 = passArray8ToWasm0(bytes, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.prepare(ptr0, len0, precision, min_area, colors, merge, max_dim, time_budget, no_background, minify, margin, content_units, cutout);
+    const ptr1 = passStringToWasm0(options, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.prepare(ptr0, len0, ptr1, len1);
     if (ret[2]) {
         throw takeFromExternrefTable0(ret[1]);
     }
     return Intake.__wrap(ret[0]);
+}
+
+/**
+ * How editable an SVG is, as a JSON object of counts: `nodes`, `cubics`, `handles`,
+ * `axisHandles`, `joins`, `smoothJoins`, `alignedNodes`. `inkvec_svgmin::structure`, the
+ * same measurement the desktop app's editability card reports.
+ * @param {string} svg
+ * @returns {string}
+ */
+export function structure_json(svg) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ptr0 = passStringToWasm0(svg, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.structure_json(ptr0, len0);
+        deferred2_0 = ret[0];
+        deferred2_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
 }
 
 /**
@@ -308,47 +322,35 @@ export function threads_available() {
 }
 
 /**
- * Trace image bytes to an SVG string.
- *
- * `precision`, `min_area`, `colors`, `merge` are the tracer's quality knobs (pass the
- * defaults 0.1, 2, 64, 0.035 when unsure; the merge default is
- * `inkvec_trace::color::DEFAULT_MERGE_DISTANCE`); `max_dim` and `time_budget` bound the
- * work; `no_background`, `minify`, `margin`, `content_units` shape the output. `max_dim = 0`
- * means no cap. `cutout` is `--cutout`: an input's transparency is carried into the SVG
- * (holes stay holes, a flat wash keeps its opacity); it changes nothing for an opaque
- * input.
+ * Trace image bytes to an SVG string, with the options as a JSON object --
+ * [`trace_json`]'s options, and the same defaults for whatever is missing. The
+ * difference is the route: this is `prepare(bytes, options).traceOnce()`, the pair the
+ * page uses when it has a denoiser to run in between, so a page that never denoises and a
+ * page that does trace the same way.
  * @param {Uint8Array} bytes
- * @param {number} precision
- * @param {number} min_area
- * @param {number} colors
- * @param {number} merge
- * @param {number} max_dim
- * @param {number} time_budget
- * @param {boolean} no_background
- * @param {boolean} minify
- * @param {number} margin
- * @param {boolean} content_units
- * @param {boolean} cutout
+ * @param {string} options
  * @returns {string}
  */
-export function trace(bytes, precision, min_area, colors, merge, max_dim, time_budget, no_background, minify, margin, content_units, cutout) {
-    let deferred3_0;
-    let deferred3_1;
+export function trace(bytes, options) {
+    let deferred4_0;
+    let deferred4_1;
     try {
         const ptr0 = passArray8ToWasm0(bytes, wasm.__wbindgen_malloc);
         const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.trace(ptr0, len0, precision, min_area, colors, merge, max_dim, time_budget, no_background, minify, margin, content_units, cutout);
-        var ptr2 = ret[0];
-        var len2 = ret[1];
+        const ptr1 = passStringToWasm0(options, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.trace(ptr0, len0, ptr1, len1);
+        var ptr3 = ret[0];
+        var len3 = ret[1];
         if (ret[3]) {
-            ptr2 = 0; len2 = 0;
+            ptr3 = 0; len3 = 0;
             throw takeFromExternrefTable0(ret[2]);
         }
-        deferred3_0 = ptr2;
-        deferred3_1 = len2;
-        return getStringFromWasm0(ptr2, len2);
+        deferred4_0 = ptr3;
+        deferred4_1 = len3;
+        return getStringFromWasm0(ptr3, len3);
     } finally {
-        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
     }
 }
 

@@ -80,6 +80,9 @@ pub struct Options {
     /// No ids or groups, no trailing zeros. Same geometry, typically about a tenth smaller.
     pub minify: bool,
 
+    /// Spend parameters on structure an artist can edit: joins between curves made G1-smooth, handles snapped to the axes and to 45 degrees, handles of one curve made equal in length, nodes that nearly share a coordinate made to share it, and rings that are their own mirror image locked into exact mirrors. Every change is guarded to the fit's own tolerance -- 3 sigma of the source point plus half a pixel, or 1.5 px for a mirror lock -- so the picture stays within a fraction of a pixel of the default trace; the price measured on 25 icons is about 0.04 dE00. Off by default.
+    pub editability: bool,
+
     /// Trace transparency natively: each ink is a colour and an opacity, and the transparent ground is an ink of its own, instead of the image being composited onto a matte first. Holes stay holes, white artwork on a transparent ground traces, glows and shadows stay translucent, and a fade is one gradient of colour and opacity. An opaque input traces the same either way. On by default, as on the command line (where the environment variable INKVEC_NATIVE_ALPHA=0 turns the default off); false composites onto a matte first, as releases up to 0.1.3 did.
     pub native_alpha: bool,
 
@@ -112,6 +115,7 @@ impl Default for Options {
             margin: a.margin,
             no_background: a.no_background,
             minify: a.minify,
+            editability: a.editability,
             native_alpha: a.native_alpha,
             cutout: a.cutout,
             content_units: a.content_units,
@@ -170,6 +174,14 @@ impl Options {
         Ok(())
     }
 
+    /// The pipeline's own settings for these options, for the crates of this workspace that
+    /// drive the pipeline in two halves (the WebAssembly build hands the decoded raster to a
+    /// denoiser between them). Everything else should call [`crate::trace`].
+    #[doc(hidden)]
+    pub fn pipeline_args(&self) -> inkvec_cli::Args {
+        self.to_args()
+    }
+
     /// The pipeline's own settings for these options.
     ///
     /// The struct is destructured without `..`, so a field added to [`Options`] and not
@@ -185,6 +197,7 @@ impl Options {
             margin,
             no_background,
             minify,
+            editability,
             native_alpha,
             cutout,
             content_units,
@@ -201,6 +214,7 @@ impl Options {
             margin,
             no_background,
             minify,
+            editability,
             native_alpha,
             cutout,
             content_units,

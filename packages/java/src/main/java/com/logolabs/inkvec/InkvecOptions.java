@@ -22,6 +22,7 @@ public final class InkvecOptions {
     private final double margin;
     private final boolean noBackground;
     private final boolean minify;
+    private final boolean editability;
     private final boolean nativeAlpha;
     private final boolean cutout;
     private final boolean contentUnits;
@@ -38,6 +39,7 @@ public final class InkvecOptions {
         this.margin = b.margin;
         this.noBackground = b.noBackground;
         this.minify = b.minify;
+        this.editability = b.editability;
         this.nativeAlpha = b.nativeAlpha;
         this.cutout = b.cutout;
         this.contentUnits = b.contentUnits;
@@ -159,6 +161,21 @@ public final class InkvecOptions {
     }
 
     /**
+     * Spend parameters on structure an artist can edit: joins between curves made G1-smooth,
+     * handles snapped to the axes and to 45 degrees, handles of one curve made equal in length,
+     * nodes that nearly share a coordinate made to share it, and rings that are their own mirror
+     * image locked into exact mirrors. Every change is guarded to the fit's own tolerance -- 3
+     * sigma of the source point plus half a pixel, or 1.5 px for a mirror lock -- so the picture
+     * stays within a fraction of a pixel of the default trace; the price measured on 25 icons is
+     * about 0.04 dE00. Off by default.
+     *
+     * @default false
+     */
+    public boolean editability() {
+        return editability;
+    }
+
+    /**
      * Trace transparency natively: each ink is a colour and an opacity, and the transparent ground
      * is an ink of its own, instead of the image being composited onto a matte first. Holes stay
      * holes, white artwork on a transparent ground traces, glows and shadows stay translucent, and
@@ -237,6 +254,7 @@ public final class InkvecOptions {
         sb.append(",\"margin\":").append(margin);
         sb.append(",\"no_background\":").append(noBackground);
         sb.append(",\"minify\":").append(minify);
+        sb.append(",\"editability\":").append(editability);
         sb.append(",\"native_alpha\":").append(nativeAlpha);
         sb.append(",\"cutout\":").append(cutout);
         sb.append(",\"content_units\":").append(contentUnits);
@@ -265,6 +283,7 @@ public final class InkvecOptions {
         private double margin = 0.0;
         private boolean noBackground = false;
         private boolean minify = false;
+        private boolean editability = false;
         private boolean nativeAlpha = true;
         private boolean cutout = false;
         private boolean contentUnits = false;
@@ -383,6 +402,22 @@ public final class InkvecOptions {
          */
         public Builder minify(boolean minify) {
             this.minify = minify;
+            return this;
+        }
+
+        /**
+         * Spend parameters on structure an artist can edit: joins between curves made G1-smooth,
+         * handles snapped to the axes and to 45 degrees, handles of one curve made equal in length,
+         * nodes that nearly share a coordinate made to share it, and rings that are their own mirror
+         * image locked into exact mirrors. Every change is guarded to the fit's own tolerance -- 3
+         * sigma of the source point plus half a pixel, or 1.5 px for a mirror lock -- so the picture
+         * stays within a fraction of a pixel of the default trace; the price measured on 25 icons is
+         * about 0.04 dE00. Off by default.
+         *
+         * @default false
+         */
+        public Builder editability(boolean editability) {
+            this.editability = editability;
             return this;
         }
 

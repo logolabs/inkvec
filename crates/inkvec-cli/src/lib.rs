@@ -26,6 +26,7 @@
 
 mod alpha;
 mod args;
+mod editable;
 mod emit;
 mod harmonize;
 mod post;
@@ -479,6 +480,17 @@ pub fn intake(
 /// The tracer, from the restorer pre-pass onward, on a raster [`intake`] has already
 /// prepared. The second half of [`trace_image_sized`].
 pub fn trace_prepared(prepared: Intake) -> Result<Traced, Box<dyn std::error::Error>> {
+    // The curve prices are asked for in the settings and held for the whole trace, restorer
+    // retrace and all, so every stage that compares a line with a curve compares at the
+    // same price. A trace that asks for nothing is not affected.
+    let model = inkvec_fit::cost::CostModel::with_overrides(
+        prepared.args.bezier_cost,
+        prepared.args.corner_angle,
+    );
+    inkvec_fit::cost::with_cost_model(model, || trace_prepared_priced(prepared))
+}
+
+fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error::Error>> {
     let Intake {
         mut img,
         args,

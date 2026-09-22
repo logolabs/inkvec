@@ -30,6 +30,8 @@ threads = ["dep:wasm-bindgen-rayon", "dep:rayon"]
 [dependencies]
 inkvec = { workspace = true }
 inkvec-cli = { workspace = true }
+# `structure`, for the page's editability readout.
+inkvec-svgmin = { workspace = true }
 inkvec-trace = { workspace = true }
 # The denoiser's arithmetic and its `auto` decision, without an ML runtime: default features
 # only, so the network itself stays out of the module. The page runs it in ONNX Runtime Web.

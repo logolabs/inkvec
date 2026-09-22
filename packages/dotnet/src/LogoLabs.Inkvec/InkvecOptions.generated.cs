@@ -88,6 +88,18 @@ namespace LogoLabs.Inkvec
         public bool? Minify { get; set; }
 
         /// <summary>
+        /// Spend parameters on structure an artist can edit: joins between curves made G1-smooth,
+        /// handles snapped to the axes and to 45 degrees, handles of one curve made equal in length,
+        /// nodes that nearly share a coordinate made to share it, and rings that are their own mirror
+        /// image locked into exact mirrors. Every change is guarded to the fit's own tolerance -- 3
+        /// sigma of the source point plus half a pixel, or 1.5 px for a mirror lock -- so the picture
+        /// stays within a fraction of a pixel of the default trace; the price measured on 25 icons is
+        /// about 0.04 dE00. Off by default.
+        /// The tracer's default is false; leave this null to use it.
+        /// </summary>
+        public bool? Editability { get; set; }
+
+        /// <summary>
         /// Trace transparency natively: each ink is a colour and an opacity, and the transparent ground
         /// is an ink of its own, instead of the image being composited onto a matte first. Holes stay
         /// holes, white artwork on a transparent ground traces, glows and shadows stay translucent, and
@@ -196,6 +208,12 @@ namespace LogoLabs.Inkvec
                 if (!first) sb.Append(',');
                 first = false;
                 sb.Append("\"minify\":").Append(Minify.Value ? "true" : "false");
+            }
+            if (Editability.HasValue)
+            {
+                if (!first) sb.Append(',');
+                first = false;
+                sb.Append("\"editability\":").Append(Editability.Value ? "true" : "false");
             }
             if (NativeAlpha.HasValue)
             {

@@ -16,7 +16,7 @@
 // import alone busts the JavaScript and never the WebAssembly — the wrong way round, since
 // the bindings rarely change and the wasm changes on every build. Bump it when `pkg/` or
 // `pkg-threads/` is rebuilt.
-const V = "v=12";
+const V = "v=13";
 
 const isolated = typeof crossOriginIsolated !== "undefined" && crossOriginIsolated;
 
@@ -134,26 +134,25 @@ onmessage = async (e) => {
   const t0 = performance.now();
   let intake = null;
   try {
-    const mode = o.denoise || "off";
+    // Every option but the page's own `denoise` mode goes to the tracer as one JSON object.
+    // Rust applies the defaults and refuses what it does not know, so an option added to
+    // the tracer needs the page to send its key and nothing here.
+    const { denoise: mode = "off", ...tracer } = o;
+    const options = JSON.stringify(tracer);
     if (mode === "off") {
-      // Unchanged, and deliberately the same call it always was.
-      const svg = mod.trace(bytes, o.precision, o.min_area, o.colors, o.merge, o.max_dim,
-                            o.time_budget, o.no_background, o.minify, o.margin, o.content_units,
-                            o.cutout);
-      postMessage({ type: "done", id, svg, ms: performance.now() - t0 });
+      const svg = mod.trace(bytes, options);
+      postMessage({ type: "done", id, svg, structure: JSON.parse(mod.structure_json(svg)), ms: performance.now() - t0 });
       return;
     }
 
-    intake = mod.prepare(bytes, o.precision, o.min_area, o.colors, o.merge, o.max_dim,
-                         o.time_budget, o.no_background, o.minify, o.margin, o.content_units,
-                         o.cutout);
+    intake = mod.prepare(bytes, options);
     const r = await denoise(intake, mode, mod, report);
     let svg = r.svg;
     if (svg === null) {
       report({ type: "stage", stage: "tracing" });
       svg = intake.trace();
     }
-    const msg = { type: "done", id, svg, ms: performance.now() - t0, denoise: r.note };
+    const msg = { type: "done", id, svg, structure: JSON.parse(mod.structure_json(svg)), ms: performance.now() - t0, denoise: r.note };
     if (r.pixels) {
       msg.pixels = r.pixels;
       msg.width = r.width;

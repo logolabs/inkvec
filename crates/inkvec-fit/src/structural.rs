@@ -310,7 +310,7 @@ pub fn sample_run_uniform(
 pub fn segment_rate(seg: &Segment, cfg: &StructuralConfig) -> f64 {
     match seg {
         Segment::Line(_) => PARAMS_LINE,
-        Segment::Cubic(..) => PARAMS_CUBIC,
+        Segment::Cubic(..) => crate::multimodel::params_cubic(),
         Segment::Arc { .. } => cfg.arc_params,
     }
 }

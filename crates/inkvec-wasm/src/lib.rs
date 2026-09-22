@@ -26,21 +26,19 @@
 //! to the options without an edit. Errors are JS `Error`s whose `code` is the facade's
 //! error kind (`invalid_image`, `invalid_options`, `internal`).
 //!
-//! The positional [`trace`] is what the Space's `web/worker.js` calls, kept until the
-//! page moves to [`trace_json`].
+//! [`trace`] and [`prepare`] take the same JSON, and are what the Space's `web/worker.js`
+//! calls: `prepare` is the first half of a trace, so that a denoiser can sit between the
+//! two halves, and `trace` is both. Nothing about an option is spelled out here, so an
+//! option added to `inkvec::Options` reaches the Space by the page sending the key.
 
 use wasm_bindgen::prelude::*;
 
 #[cfg(feature = "threads")]
 pub use wasm_bindgen_rayon::init_thread_pool;
 
-/// Cap on the palette size a caller may request. `usize` wraps at the JS boundary (a 32-bit
-/// `usize`: `2**32` comes back as 0 and `-1` as `usize::MAX`), and an absurd request here
-/// would otherwise mean unbounded palette work.
-const MAX_COLORS: usize = 4096;
-
-/// Cap on `max_dim`, for the same boundary-wrap reason. `0` — "no cap" — passes through
-/// unchanged; only values that wrapped to `usize::MAX` (a JS `-1`) are brought down.
+/// Cap on `max_dim`: a trace larger than this cannot fit in a browser tab's memory. `0` --
+/// "no cap" -- passes through unchanged. The palette needs no such cap here: the options
+/// schema bounds `colors` at 4096 and `from_json` enforces it.
 const MAX_DIM: usize = 32_768;
 
 /// Whether this is the threaded build, whose pool `initThreadPool` starts.
@@ -110,49 +108,16 @@ fn js_error(e: inkvec::Error) -> JsValue {
     err.into()
 }
 
-/// Trace image bytes to an SVG string.
-///
-/// `precision`, `min_area`, `colors`, `merge` are the tracer's quality knobs (pass the
-/// defaults 0.1, 2, 64, 0.035 when unsure; the merge default is
-/// `inkvec_trace::color::DEFAULT_MERGE_DISTANCE`); `max_dim` and `time_budget` bound the
-/// work; `no_background`, `minify`, `margin`, `content_units` shape the output. `max_dim = 0`
-/// means no cap. `cutout` is `--cutout`: an input's transparency is carried into the SVG
-/// (holes stay holes, a flat wash keeps its opacity); it changes nothing for an opaque
-/// input.
+/// Trace image bytes to an SVG string, with the options as a JSON object --
+/// [`trace_json`]'s options, and the same defaults for whatever is missing. The
+/// difference is the route: this is `prepare(bytes, options).traceOnce()`, the pair the
+/// page uses when it has a denoiser to run in between, so a page that never denoises and a
+/// page that does trace the same way.
 #[wasm_bindgen]
-#[allow(clippy::too_many_arguments)]
-pub fn trace(
-    bytes: &[u8],
-    precision: f64,
-    min_area: f64,
-    colors: usize,
-    merge: f32,
-    max_dim: usize,
-    time_budget: f64,
-    no_background: bool,
-    minify: bool,
-    margin: f64,
-    content_units: bool,
-    cutout: bool,
-) -> Result<String, JsValue> {
+pub fn trace(bytes: &[u8], options: &str) -> Result<String, JsValue> {
     console_error_panic_hook::set_once();
-    let result = std::panic::catch_unwind(|| {
-        prepare_inner(
-            bytes,
-            precision,
-            min_area,
-            colors,
-            merge,
-            max_dim,
-            time_budget,
-            no_background,
-            minify,
-            margin,
-            content_units,
-            cutout,
-        )
-        .and_then(Intake::into_svg)
-    });
+    let result =
+        std::panic::catch_unwind(|| prepare_inner(bytes, options).and_then(Intake::into_svg));
     match result {
         Ok(Ok(svg)) => Ok(svg),
         Ok(Err(e)) => Err(e),
@@ -160,62 +125,24 @@ pub fn trace(
     }
 }
 
-/// Decode, validate and prepare, run inside [`trace`]'s `catch_unwind` so that — where the
-/// panic strategy permits it — a panic becomes a JS error instead of a poisoned instance.
+/// Decode, validate and prepare, run inside [`trace`]'s `catch_unwind` so that -- where the
+/// panic strategy permits it -- a panic becomes a JS error instead of a poisoned instance.
 ///
 /// The threaded build compiles with `panic = abort` (`tools/build_wasm.sh` passes
 /// `-Z build-std=panic_abort,std`); there a panic aborts the instance before anything can
 /// catch it, and no amount of wrapping here can change that. The single-threaded build
 /// unwinds, so [`trace`] does surface its panics as exceptions.
-#[allow(clippy::too_many_arguments)]
-fn prepare_inner(
-    bytes: &[u8],
-    precision: f64,
-    min_area: f64,
-    colors: usize,
-    merge: f32,
-    max_dim: usize,
-    time_budget: f64,
-    no_background: bool,
-    minify: bool,
-    margin: f64,
-    content_units: bool,
-    cutout: bool,
-) -> Result<Intake, JsValue> {
-    // `usize` parameters wrap silently across the boundary; clamp them before the tracer
-    // sees them so `colors = -1` does not become unbounded palette work and `max_dim = -1`
-    // does not disable the cap.
-    let colors = colors.clamp(1, MAX_COLORS);
-    let max_dim = max_dim.min(MAX_DIM);
-
-    // NaN or non-positive quality knobs used to emit a blank 99-byte document with no
-    // error; refuse them explicitly instead.
-    if !(precision.is_finite() && precision > 0.0) {
-        return Err(JsValue::from_str("precision must be a finite number > 0"));
-    }
-    if !(min_area.is_finite() && min_area > 0.0) {
-        return Err(JsValue::from_str("min_area must be a finite number > 0"));
-    }
-    if !(margin.is_finite() && margin >= 0.0) {
-        return Err(JsValue::from_str("margin must be a finite number >= 0"));
-    }
+fn prepare_inner(bytes: &[u8], options: &str) -> Result<Intake, JsValue> {
+    let opts = inkvec::Options::from_json(options).map_err(js_error)?;
+    // `from_json` has checked every number against the schema. The one cap the schema does
+    // not carry is this build's: a request for a trace larger than a browser tab can hold.
+    let max_dim = (opts.max_dim as usize).min(MAX_DIM);
 
     let (img, (arr_w, arr_h)) = inkvec_trace::decode_image_capped(bytes, max_dim)
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
     let args = inkvec_cli::Args {
-        precision,
-        min_area,
-        max_colors: colors,
-        merge_distance: merge,
         max_dim,
-        time_budget,
-        no_background,
-        minify,
-        margin,
-        content_units,
-        cutout,
-        quiet: true,
-        ..Default::default()
+        ..opts.pipeline_args()
     };
     let args = inkvec_cli::resolve_lossy(&args, || Some(bytes.to_vec()));
     Ok(Intake {
@@ -347,39 +274,20 @@ impl Intake {
 /// Decode an image and run the pipeline up to the point the denoiser would see it, for a
 /// caller that wants to denoise it there. The arguments are [`trace`]'s.
 ///
-/// `trace(bytes, ...)` is `prepare(bytes, ...).traceOnce()`; the page calls this one instead
-/// when it has a denoiser to run in between.
+/// `trace(bytes, options)` is `prepare(bytes, options).traceOnce()`; the page calls this one
+/// instead when it has a denoiser to run in between.
 #[wasm_bindgen]
-#[allow(clippy::too_many_arguments)]
-pub fn prepare(
-    bytes: &[u8],
-    precision: f64,
-    min_area: f64,
-    colors: usize,
-    merge: f32,
-    max_dim: usize,
-    time_budget: f64,
-    no_background: bool,
-    minify: bool,
-    margin: f64,
-    content_units: bool,
-    cutout: bool,
-) -> Result<Intake, JsValue> {
+pub fn prepare(bytes: &[u8], options: &str) -> Result<Intake, JsValue> {
     console_error_panic_hook::set_once();
-    prepare_inner(
-        bytes,
-        precision,
-        min_area,
-        colors,
-        merge,
-        max_dim,
-        time_budget,
-        no_background,
-        minify,
-        margin,
-        content_units,
-        cutout,
-    )
+    prepare_inner(bytes, options)
+}
+
+/// How editable an SVG is, as a JSON object of counts: `nodes`, `cubics`, `handles`,
+/// `axisHandles`, `joins`, `smoothJoins`, `alignedNodes`. `inkvec_svgmin::structure`, the
+/// same measurement the desktop app's editability card reports.
+#[wasm_bindgen]
+pub fn structure_json(svg: &str) -> String {
+    inkvec_svgmin::structure(svg).to_json()
 }
 
 /// The interior residual above which `auto` denoises, `inkvec_restore::Options`' default.
@@ -431,31 +339,47 @@ mod tests {
         std::fs::read(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()))
     }
 
-    /// The Space's positional export, given every knob it takes at the facade's default,
-    /// writes what the facade writes -- the JSON exports and the page cannot drift apart.
+    /// The Space's `trace`, given no options, writes what the facade writes at its defaults --
+    /// the JSON exports and the page cannot drift apart.
     #[test]
-    fn the_positional_trace_is_the_facade_at_its_defaults() {
+    fn the_page_trace_is_the_facade_at_its_defaults() {
         let d = inkvec::Options::default();
         for name in ["tiny.png", "white_on_clear.png"] {
             let png = contract_input(name);
-            let positional = prepare_inner(
-                &png,
-                d.precision,
-                d.min_area,
-                d.colors as usize,
-                d.merge as f32,
-                d.max_dim as usize,
-                d.time_budget,
-                d.no_background,
-                d.minify,
-                d.margin,
-                d.content_units,
-                d.cutout,
-            )
-            .and_then(Intake::into_svg)
-            .unwrap_or_else(|_| panic!("{name}: the positional trace failed"));
-            assert_eq!(positional, inkvec::trace(&png, &d).unwrap().svg, "{name}");
+            let page = prepare_inner(&png, "")
+                .and_then(Intake::into_svg)
+                .unwrap_or_else(|_| panic!("{name}: the page trace failed"));
+            assert_eq!(page, inkvec::trace(&png, &d).unwrap().svg, "{name}");
         }
+    }
+
+    /// An option the page sends reaches the pipeline without this crate naming it: the same
+    /// JSON through the page's route and through the facade writes the same bytes.
+    #[test]
+    fn an_option_sent_as_json_reaches_the_pipeline() {
+        let json = r#"{"colors": 6, "editability": true, "minify": true}"#;
+        let png = contract_input("tiny.png");
+        let opts = inkvec::Options::from_json(json).unwrap();
+        let page = prepare_inner(&png, json)
+            .and_then(Intake::into_svg)
+            .unwrap_or_else(|_| panic!("trace failed"));
+        assert_eq!(page, inkvec::trace(&png, &opts).unwrap().svg);
+    }
+
+    /// The page keeps its own `denoise` mode out of the JSON it sends, because the facade
+    /// refuses a key it does not know rather than ignoring it. (Checked on the facade: a
+    /// `JsValue` error cannot be built off the wasm target.)
+    #[test]
+    fn an_unknown_option_is_refused_rather_than_ignored() {
+        assert!(inkvec::Options::from_json(r#"{"denoise": "auto"}"#).is_err());
+    }
+
+    #[test]
+    fn structure_is_the_svgmin_measurement_as_json() {
+        let svg =
+            "<svg xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M0,0C10,0 20,10 30,10\"/></svg>";
+        assert_eq!(structure_json(svg), inkvec_svgmin::structure(svg).to_json());
+        assert!(structure_json(svg).contains("\"cubics\":1"));
     }
 
     /// The tensor the page hands to ONNX Runtime Web and the raster it gets back have to
@@ -465,23 +389,8 @@ mod tests {
     /// that denoises twice cannot drift.
     #[test]
     fn the_denoiser_tensor_round_trips_through_the_intake() {
-        let d = inkvec::Options::default();
         let png = contract_input("tiny.png");
-        let mut intake = prepare_inner(
-            &png,
-            d.precision,
-            d.min_area,
-            d.colors as usize,
-            d.merge as f32,
-            d.max_dim as usize,
-            d.time_budget,
-            d.no_background,
-            d.minify,
-            d.margin,
-            d.content_units,
-            d.cutout,
-        )
-        .expect("prepare");
+        let mut intake = prepare_inner(&png, "").expect("prepare");
 
         let (w, h) = (intake.width(), intake.height());
         let size = intake.denoiser_input_size();

@@ -39,6 +39,7 @@
 mod decimate;
 
 pub(crate) mod candidates;
+pub mod cost;
 pub mod curves;
 pub mod harmonize;
 pub mod merge;

@@ -23,12 +23,15 @@ mod driver;
 mod fit;
 mod geom;
 mod path;
+mod structure;
 mod write;
 
 #[cfg(test)]
 use inkvec_core::{Point, Polyline};
 #[cfg(test)]
 use inkvec_fit::{curves::Segment, primitives::fit_primitive_or_arcs, FitConfig, FittedPath};
+
+pub use structure::{structure, Structure};
 
 /// How the rewrite is judged.
 #[derive(Debug, Clone, Copy)]

@@ -55,6 +55,11 @@ pub struct Args {
     /// No ids or groups, no trailing zeros. Same geometry, typically about a tenth
     /// smaller.
     pub minify: bool,
+    /// Post-fit passes that trade parameters for structure an artist can edit:
+    /// G1-smooth joins, axis-aligned and equal-length handles, aligned nodes, and
+    /// self-symmetric rings locked into exact mirrors. Fidelity stays within the
+    /// same tolerance; only structure and parameters move.
+    pub editability: bool,
     /// Two-tone output (the Potrace-comparable mode).
     pub bilevel: bool,
     /// Skip gradient fitting entirely and fill flat.
@@ -117,6 +122,14 @@ pub struct Args {
     /// Research: a global multiplier on the MDL cost of a parameter. Above 1.0 the fit is
     /// plainer and cheaper, below it more detailed. 1.0 leaves every fit exactly as it is.
     pub lambda_scale: f64,
+    /// What one Bézier segment costs the MDL objective, in parameters. A line costs two.
+    /// The default, 6, is why traced output is far less curved than hand-drawn artwork; a
+    /// lower price buys more curves and fewer straight segments, at some cost in file size.
+    /// `None` leaves the fit's own price (6, or `INKVEC_PARAMS_CUBIC`) exactly as it is.
+    pub bezier_cost: Option<f64>,
+    /// The turn at a join, in degrees, that is charged as a full corner. `None` leaves the
+    /// fit's own angle (10, or `INKVEC_G1_BREAK`) exactly as it is.
+    pub corner_angle: Option<f64>,
     /// Detect and regularize repeating glyphs/shapes via affine moment normalization.
     pub harmonize: bool,
     /// Threshold IoU for shape equivalence [default: 0.92].
@@ -145,6 +158,7 @@ impl Default for Args {
             cutout: false,
             native_alpha: std::env::var_os("INKVEC_NATIVE_ALPHA").is_none_or(|v| v != "0"),
             minify: false,
+            editability: false,
             bilevel: false,
             no_gradients: false,
             no_repair: false,
@@ -172,6 +186,8 @@ impl Default for Args {
             // filled's 0.128, and looser values are worse still.
             stroke_residual: 0.06,
             lambda_scale: 1.0,
+            bezier_cost: None,
+            corner_angle: None,
             harmonize: true,
             harmonize_threshold: 0.92,
             use_symbols: false,
@@ -267,6 +283,10 @@ OPTIONS:
                             letters and needless separators dropped, H/V/S where they say
                             the same thing. Nothing is rounded and nothing moves -- the
                             same picture, pixel for pixel, about a twelfth smaller
+        --editability       Post-fit passes for artists: G1-smooth joins, axis-aligned
+                            and equal-length handles, aligned nodes, and self-symmetric
+                            rings locked into exact mirrors. Every pass is guarded to the
+                            same fidelity tolerance; parameters move so structure can too
         --content-units     Scale the fit tolerances (sigma, precision, lambda) with the
                             raster so a 512-px logo gets the parameter count of a 128-px
                             one. Off by default: it trades fidelity for parsimony
@@ -292,6 +312,11 @@ OPTIONS:
         --lambda-scale <f>  Research: multiply the MDL cost of every parameter. Above
                             1.0 buys a plainer, cheaper description, below 1.0 a more
                             detailed one                              [default: 1.0]
+        --bezier-cost <f>   What one Bézier segment costs the MDL objective, in parameters
+                            (a line costs 2). Lower draws more curves and fewer straight
+                            segments, at some cost in file size. 2 to 12  [default: 6]
+        --corner-angle <f>  The turn at a join, in degrees, charged as a full corner.
+                            Higher keeps gentler bends smooth. 1 to 60    [default: 10]
         --no-harmonize      Disable repeating shape harmonization (on by default)
         --harmonize         Explicitly enable repeating shape harmonization
         --harmonize-threshold <f> Shape equivalence IoU threshold     [default: 0.92]
@@ -405,6 +430,7 @@ fn parse_args_from(mut it: impl Iterator<Item = String>) -> Result<Args, String>
             "--native-alpha" => a.native_alpha = true,
             "--no-native-alpha" => a.native_alpha = false,
             "--minify" => a.minify = true,
+            "--editability" => a.editability = true,
             "--bilevel" => a.bilevel = true,
             "--lossy" => {
                 let v = it.next().ok_or("--lossy needs auto, on or off")?;
@@ -421,6 +447,8 @@ fn parse_args_from(mut it: impl Iterator<Item = String>) -> Result<Args, String>
             "--stroke-residual" => a.stroke_residual = parse_value(&mut it, "--stroke-residual")?,
             "--stroke-refine" => a.stroke_refine = parse_value(&mut it, "--stroke-refine")?,
             "--lambda-scale" => a.lambda_scale = parse_value(&mut it, "--lambda-scale")?,
+            "--bezier-cost" => a.bezier_cost = Some(parse_value(&mut it, "--bezier-cost")?),
+            "--corner-angle" => a.corner_angle = Some(parse_value(&mut it, "--corner-angle")?),
             "--stroke-balance" => a.stroke_balance = parse_value(&mut it, "--stroke-balance")?,
             "--harmonize" => a.harmonize = true,
             "--no-harmonize" => a.harmonize = false,

@@ -22,18 +22,10 @@ pub const MAX_ARM: f64 = 1.0;
 /// treated as describing something other than this boundary.
 const FREE_MAX_SWING: f64 = 75.0;
 
-fn env_f64(key: &str, default: f64) -> f64 {
-    std::env::var(key)
-        .ok()
-        .and_then(|v| v.parse::<f64>().ok())
-        .filter(|v| v.is_finite())
-        .unwrap_or(default)
-}
-
-/// Parameters charged to a cubic segment.
+/// Parameters charged to a cubic segment: 6 unless the trace in progress asked for another
+/// price (see [`crate::cost`]), or an experiment set `INKVEC_PARAMS_CUBIC`.
 pub fn params_cubic() -> f64 {
-    static V: OnceLock<f64> = OnceLock::new();
-    *V.get_or_init(|| env_f64("INKVEC_PARAMS_CUBIC", 6.0))
+    crate::cost::cubic_params()
 }
 
 /// The elliptical candidate, separately from the circular one, so the two can be priced

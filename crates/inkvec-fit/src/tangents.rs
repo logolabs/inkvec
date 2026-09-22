@@ -10,18 +10,10 @@ pub const G1_BREAK_DEGREES: f64 = 10.0;
 /// Widest tangent window, in points on each side.
 pub const TANGENT_WINDOW_MAX: usize = 16;
 
-fn env_f64(key: &str, default: f64) -> f64 {
-    std::env::var(key)
-        .ok()
-        .and_then(|v| v.parse::<f64>().ok())
-        .filter(|v| v.is_finite())
-        .unwrap_or(default)
-}
-
-/// Break angle threshold in radians.
+/// Break angle threshold in radians: 10 degrees unless the trace in progress asked for another
+/// (see [`crate::cost`]), or an experiment set `INKVEC_G1_BREAK`.
 pub(crate) fn g1_break_radians() -> f64 {
-    static V: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
-    *V.get_or_init(|| env_f64("INKVEC_G1_BREAK", G1_BREAK_DEGREES).to_radians())
+    crate::cost::g1_break_radians()
 }
 
 /// One-sided unit tangents at every vertex: `incoming[k]` is the direction the boundary

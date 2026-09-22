@@ -70,6 +70,24 @@ h1{font-size:clamp(30px,4.4vw,46px);line-height:1.08;letter-spacing:-.025em;font
 .controls label.chk{display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:13.5px;color:var(--dim);cursor:pointer}
 .controls .status{margin-left:auto;font-size:13px;color:var(--dim)}
 .status.err{color:var(--bad)}
+/* the two modes people most often come for, big and always in view */
+.modes{display:grid;grid-template-columns:1.6fr 1fr;gap:12px;margin:0 0 14px}
+@media (max-width:720px){.modes{grid-template-columns:1fr}}
+.mode{display:flex;flex-direction:column;gap:10px;background:var(--card);border:1px solid var(--rule);border-radius:var(--radius);padding:12px 14px}
+.mode .mh{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.mode .mh b{font-size:14.5px;color:var(--ink)}
+.mode .mh span{font-size:12px;color:var(--faint)}
+.seg.big{display:flex;width:100%}
+.seg.big button{flex:1;padding:11px 0;font-size:14.5px;font-weight:600}
+.seg.big button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink)}
+.mode.toggle{position:relative;cursor:pointer}
+.mode.toggle input{position:absolute;opacity:0;pointer-events:none}
+.bigswitch{display:flex;align-items:center;gap:10px;height:46px;padding:0 6px;border:1px solid var(--rule);border-radius:var(--radius-full);background:var(--stage);font-weight:600;font-size:14.5px;color:var(--dim);transition:background .15s,border-color .15s}
+.bigswitch i{flex:none;width:32px;height:32px;border-radius:50%;background:var(--rule)}
+.bigswitch .st{flex:1;text-align:center}
+.mode.toggle:has(input:checked) .bigswitch{flex-direction:row-reverse;background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.mode.toggle:has(input:checked) .bigswitch i{background:var(--accent-ink)}
+.mode.toggle:has(input:focus-visible) .bigswitch{outline:2px solid var(--accent);outline-offset:2px}
 /* viewer */
 .viewer{position:relative;display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .viewer.single{grid-template-columns:1fr}
@@ -210,15 +228,25 @@ footer .v{margin-left:auto}
     <button data-p="compact" aria-pressed="false">Fewer paths</button>
   </div>
   <label class="chk"><input type="checkbox" id="no_background"> Transparent background</label>
-  <div class="seg" id="denoise" role="group" aria-label="denoiser">
-    <button data-d="off" aria-pressed="true">No denoise</button>
-    <button data-d="auto" aria-pressed="false">Denoise: auto</button>
-    <button data-d="on" aria-pressed="false">Denoise: on</button>
-  </div>
   <button class="primary" id="go" disabled>Trace</button>
   <span class="status mono" id="status">loading the tracer…</span>
 </div>
+<div class="modes">
+  <div class="mode">
+    <div class="mh"><b>Denoiser</b><span id="denoisecap">pixels as they are</span></div>
+    <div class="seg big" id="denoise" role="group" aria-label="denoiser">
+      <button data-d="off" aria-pressed="true">Off</button>
+      <button data-d="auto" aria-pressed="false">Auto</button>
+      <button data-d="on" aria-pressed="false">On</button>
+    </div>
+  </div>
+  <label class="mode toggle" title="Snap joins to smooth, handles to the axes and to 45 degrees, and nodes onto shared coordinates, each within the trace's own tolerance">
+    <div class="mh"><b>Editable structure</b><span id="editcap">pixels only</span></div>
+    <span class="bigswitch"><input type="checkbox" id="editability"><i></i><span class="st" id="editst">Off</span></span>
+  </label>
+</div>
 <p class="note" style="margin:2px 0 12px" id="denoisenote">The denoiser is the trained <code class="mono">--restore</code> pre-pass, the same <code class="mono">restorer.onnx</code> the command line runs, on your GPU through WebGPU (CPU kernels where there is no GPU). It cleans JPEG, WebP and AI-decoder damage before the trace. <b>Auto</b> traces once and denoises only where the raster disagrees with its own trace; <b>on</b> always denoises, which costs a few percent of colour accuracy on already-clean art. Turning it on downloads the runtime and the weights once (~110&nbsp;MB, cached afterwards). Your image still never leaves the machine.</p>
+<p class="note" style="margin:2px 0 12px"><b>Editable structure</b> spends a little accuracy on what an artist would draw: curves that join smoothly, handles on the axes and at 45&deg;, nodes that share a coordinate, mirror-symmetric shapes locked into exact mirrors. Every change stays within the trace's own tolerance (about 0.04&nbsp;dE00 on icons); the stats below count what it did &mdash; <i>nodes aligned</i>, <i>handles on axis</i> and <i>smooth joins</i> &mdash; and hand-drawn files sit near 86%, 34% and 89% (median of 1,544 artist SVGs).</p>
 <p class="note" style="margin:2px 0 12px">Repeated shapes are harmonized by default &mdash; a copy is redrawn from the shared geometry only where that stays within 0.1&nbsp;px of what was traced and saves parameters (CLI opt-out: <code class="mono">--no-harmonize</code>).</p>
 
 <div class="viewer empty" id="viewer"><span>Your input and the vector result appear here side by side. Scroll to zoom, drag to pan; both sides move together.</span></div>
@@ -437,13 +465,15 @@ function applyPreset(p){ const v = PRESETS[p]; for (const k in v){ const e = $(k
 let denoiseMode = "off";
 for (const b of document.querySelectorAll("#denoise button")) b.addEventListener("click", () => {
   for (const o of document.querySelectorAll("#denoise button")) o.setAttribute("aria-pressed","false");
-  b.setAttribute("aria-pressed","true"); denoiseMode = b.dataset.d; if (bytes) $("go").click();
+  b.setAttribute("aria-pressed","true"); denoiseMode = b.dataset.d;
+  $("denoisecap").textContent = { off: "pixels as they are", auto: "only if damaged", on: "always" }[denoiseMode];
+  if (bytes) $("go").click();
 });
 for (const b of document.querySelectorAll("#presets button")) b.addEventListener("click", () => { for (const o of document.querySelectorAll("#presets button")) o.setAttribute("aria-pressed","false"); b.setAttribute("aria-pressed","true"); applyPreset(b.dataset.p); if (bytes) $("go").click(); });
 
 let worker = null;
 function makeWorker(){
-  const url = A.workerUrl || "./worker.js?v=12";
+  const url = A.workerUrl || "./worker.js?v=13";
   try { worker = new Worker(url, { type: "module" }); } catch (e) { worker = null; return; }
   worker.onmessage = (e) => {
     const m = e.data;
@@ -458,7 +488,7 @@ function makeWorker(){
       if (/RuntimeError|unreachable/.test(m.error)) { worker.terminate(); makeWorker(); }
       return;
     }
-    svgText = m.svg; finish(); setDenoised(m); show(svgText, m.ms, m.denoise);
+    svgText = m.svg; finish(); setDenoised(m); show(svgText, m.ms, m.denoise, m.structure);
   };
   worker.onerror = (e) => { status("worker error: " + (e.message || e), true); };
 }
@@ -511,7 +541,7 @@ for (const n of ["365retailmarkets","adamo","1075thefan"]){
   const b = el("button", "", n); b.addEventListener("click", async () => { const r = await fetch(asset(n)); const bl = await r.blob(); pick(new File([bl], n + ".png", {type:"image/png"})); });
   $("samples").appendChild(b);
 }
-function options(){ return { precision:+$("precision").value, min_area:+$("min_area").value, colors:+$("colors").value, merge:+$("merge").value, max_dim:+$("max_dim").value, time_budget:+$("time_budget").value, no_background:$("no_background").checked, minify:$("minify").checked, margin:+$("margin").value, content_units:$("content_units").checked, cutout:$("no_background").checked, denoise:denoiseMode }; }
+function options(){ return { precision:+$("precision").value, min_area:+$("min_area").value, colors:+$("colors").value, merge:+$("merge").value, max_dim:+$("max_dim").value, time_budget:+$("time_budget").value, no_background:$("no_background").checked, minify:$("minify").checked, margin:+$("margin").value, content_units:$("content_units").checked, cutout:$("no_background").checked, editability:$("editability").checked, denoise:denoiseMode }; }
 // What the worker is doing right now, as steps rather than one spinner. The denoiser has
 // waits the tracer never had — a 110 MB first-run download and a network pass — and a single
 // bar reading "Tracing…" through all of it says nothing about where the time is going or how
@@ -617,6 +647,11 @@ $("go").addEventListener("click", () => {
   else { finish(); status("the tracer could not start in this browser", true); }
 });
 $("no_background").addEventListener("change", () => { if (bytes) $("go").click(); });
+$("editability").addEventListener("change", () => {
+  const on = $("editability").checked;
+  $("editst").textContent = on ? "On" : "Off"; $("editcap").textContent = on ? "tidy nodes" : "pixels only";
+  if (bytes) $("go").click();
+});
 // What the denoiser did, in the words `--restore` uses for it: either the residual that
 // decided the question, or the pass itself with the kernels that ran it.
 function denoiseStat(d){
@@ -626,12 +661,27 @@ function denoiseStat(d){
   if (d.skipped === "unmeasurable") return [`not denoised`, `no flat interior to measure`];
   return null;
 }
-function show(svg, ms, denoise){
+// How editable the drawing is: the share of nodes that line up with another node, of curve
+// handles that lie on an axis, and of curve joins that are smooth. Hand-drawn files sit at
+// 86%, 34% and 89% (median of 1,544 artist SVGs, measured with the same function), so the
+// tooltip says where each one stands against them; a ratio with nothing to divide is left out.
+function structureStats(st){
+  if (!st) return [];
+  const pct = (n, d) => Math.round(100 * n / d);
+  const rows = [
+    [st.nodes, st.alignedNodes, 'nodes aligned', 86, 'Nodes that share an exact x or y with another node'],
+    [st.handles, st.axisHandles, 'handles on axis', 34, 'Curve handles that point exactly along x or y'],
+    [st.joins, st.smoothJoins, 'smooth joins', 89, 'Joins of two curves whose tangents agree within a degree'],
+  ];
+  return rows.filter(r => r[0] > 0).map(([whole, part, label, artist, what]) =>
+    [`${pct(part, whole)}%`, label, `${what} (${part} of ${whole}). Hand-drawn files: ${artist}%.`]);
+}
+function show(svg, ms, denoise, structure){
   liveVec = vectorLayer(svg); liveVec.set(liveLayer);
   live.setRight(liveVec.root, 'inkvec');
   const paths = (svg.match(/<path/g)||[]).length, prims = (svg.match(/<(circle|ellipse|rect)\b/g)||[]).length, grads = (svg.match(/<(linear|radial)Gradient/g)||[]).length, nums = (svg.match(/-?\d+\.?\d*/g)||[]).length;
   const d = denoiseStat(denoise);
-  $("stats").innerHTML = [[`${(ms/1000).toFixed(2)} s`, ''], ...(d ? [d] : []), [paths, 'paths'], [prims, 'primitives'], [grads, 'gradients'], [liveVec.anchors, 'anchors'], [nums, 'numbers'], [`${(svg.length/1024).toFixed(1)} KB`, '']].map(([v, k]) => `<span class="stat"><b>${v}</b>${k ? ' ' + k : ''}</span>`).join('');
+  $("stats").innerHTML = [[`${(ms/1000).toFixed(2)} s`, ''], ...(d ? [d] : []), [paths, 'paths'], [prims, 'primitives'], [grads, 'gradients'], [liveVec.anchors, 'anchors'], [nums, 'numbers'], ...structureStats(structure), [`${(svg.length/1024).toFixed(1)} KB`, '']].map(([v, k, tip]) => `<span class="stat"${tip ? ` title="${tip}"` : ''}><b>${v}</b>${k ? ' ' + k : ''}</span>`).join('');
   $("src").value = svg; $("dl").disabled = $("copy").disabled = $("showsrc").disabled = false;
   status(`done in ${(ms/1000).toFixed(2)} s`);
 }

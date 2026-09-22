@@ -215,7 +215,7 @@ impl Segment {
     pub fn params(&self) -> f64 {
         match self {
             Segment::Line(_) => crate::PARAMS_LINE,
-            Segment::Cubic(..) => crate::multimodel::PARAMS_CUBIC,
+            Segment::Cubic(..) => crate::multimodel::params_cubic(),
             Segment::Arc { .. } => {
                 if self.is_circular() {
                     PARAMS_ARC

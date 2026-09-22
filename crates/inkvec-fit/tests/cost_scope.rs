@@ -32,7 +32,11 @@ fn a_scope_is_undone_when_the_work_inside_it_panics() {
     let asked = CostModel::with_overrides(Some(2.5), None);
     let r = std::panic::catch_unwind(|| with_cost_model(asked, || panic!("boom")));
     assert!(r.is_err());
-    assert_eq!(cubic_params(), std.cubic_params, "the prices must not leak out of a panic");
+    assert_eq!(
+        cubic_params(),
+        std.cubic_params,
+        "the prices must not leak out of a panic"
+    );
 }
 
 #[test]
@@ -42,7 +46,11 @@ fn a_nested_scope_inherits_rather_than_deadlocking() {
     let inner = CostModel::with_overrides(Some(9.0), None);
     with_cost_model(outer, || {
         with_cost_model(inner, || {
-            assert_eq!(cubic_params(), 4.0, "the inner call runs under the outer scope");
+            assert_eq!(
+                cubic_params(),
+                4.0,
+                "the inner call runs under the outer scope"
+            );
         });
         assert_eq!(cubic_params(), 4.0);
     });

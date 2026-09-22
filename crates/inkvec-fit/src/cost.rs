@@ -174,6 +174,10 @@ mod tests {
         assert_eq!(m.cubic_params, CostModel::CUBIC_RANGE.0);
         assert_eq!(m.g1_break_degrees, CostModel::G1_RANGE.1);
         let n = CostModel::with_overrides(Some(f64::NAN), Some(f64::INFINITY));
-        assert_eq!(n, CostModel::standard(), "a non-finite request means no request");
+        assert_eq!(
+            n,
+            CostModel::standard(),
+            "a non-finite request means no request"
+        );
     }
 }

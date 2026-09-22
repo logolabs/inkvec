@@ -293,7 +293,8 @@ pub fn merge_gradient_bands_guarded(
     // round, so the round count is the merge count and the wall time is the sum of the
     // rounds. Which part of a round costs what is the question the log answers.
     let timing = std::env::var_os("INKVEC_TIMING").is_some();
-    let (mut rounds, mut ns_scan, mut ns_wave, mut ns_stale, mut ns_book) = (0u64, 0u64, 0u64, 0u64, 0u64);
+    let (mut rounds, mut ns_scan, mut ns_wave, mut ns_stale, mut ns_book) =
+        (0u64, 0u64, 0u64, 0u64, 0u64);
     let mut waves = 0u64;
     // (fits in the wave, wall ms) per wave, to see whether the waves are wide enough to fill
     // the cores or are one big fit with a few small ones behind it.
@@ -514,25 +515,22 @@ pub fn merge_gradient_bands_guarded(
     }
 
     if timing {
-        eprintln!(
-            "  [t] merge waves: {}",
-            {
-                let mut v = wave_log.clone();
-                v.sort_by(|x, y| y.1.total_cmp(&x.1));
-                let widest = v.iter().map(|w| w.0).max().unwrap_or(0);
-                let sum = |lo: usize, hi: usize| -> (usize, f64) {
-                    let it = v.iter().filter(|w| w.0 >= lo && w.0 <= hi);
-                    (it.clone().count(), it.map(|w| w.1).sum())
-                };
-                let (n1, ms1) = sum(1, 1);
-                let (n8, ms8) = sum(2, 8);
-                let (nm, msm) = sum(9, usize::MAX);
-                format!(
+        eprintln!("  [t] merge waves: {}", {
+            let mut v = wave_log.clone();
+            v.sort_by(|x, y| y.1.total_cmp(&x.1));
+            let widest = v.iter().map(|w| w.0).max().unwrap_or(0);
+            let sum = |lo: usize, hi: usize| -> (usize, f64) {
+                let it = v.iter().filter(|w| w.0 >= lo && w.0 <= hi);
+                (it.clone().count(), it.map(|w| w.1).sum())
+            };
+            let (n1, ms1) = sum(1, 1);
+            let (n8, ms8) = sum(2, 8);
+            let (nm, msm) = sum(9, usize::MAX);
+            format!(
                     "widest {widest}; {n1} wave(s) of 1 fit ({ms1:.0} ms), {n8} of 2-8 ({ms8:.0} ms), {nm} of 9+ ({msm:.0} ms); slowest five {:?}",
                     v.iter().take(5).map(|w| (w.0, w.1.round() as u64)).collect::<Vec<_>>()
                 )
-            }
-        );
+        });
         eprintln!(
             "  [t] merge rounds: {rounds} ({waves} with a fit to do, {stale_refits} serial stale refits); wall ms: candidate scan {}, fit waves {}, pick+refit {}, bookkeeping {}",
             ns_scan / 1_000_000,

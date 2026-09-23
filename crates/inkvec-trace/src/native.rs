@@ -188,18 +188,21 @@ fn claim_spread(
 ) -> (usize, f32) {
     const MAX_SAMPLES: usize = 8192;
     let stride = (px.len() / MAX_SAMPLES).max(1);
-    let n = (0..px.len())
-        .into_par_iter()
-        .step_by(stride_px)
-        .filter(|&i| px[i].dist(c) < nearest_px[i])
-        .count();
-    let mut d_in: Vec<f32> = (0..px.len())
+    // One pass for both the territory count and the spread sample: they test the same
+    // distance at the same pixels.
+    let claimed: Vec<(usize, f32)> = (0..px.len())
         .into_par_iter()
         .step_by(stride_px)
         .filter_map(|i| {
             let d = px[i].dist(c);
-            (d < nearest_px[i] && d < tol && i % stride == 0).then_some(d)
+            (d < nearest_px[i]).then_some((i, d))
         })
+        .collect();
+    let n = claimed.len();
+    let mut d_in: Vec<f32> = claimed
+        .iter()
+        .filter(|&&(i, d)| d < tol && i % stride == 0)
+        .map(|&(_, d)| d)
         .collect();
     let n = n * stride_px;
     if d_in.is_empty() {
@@ -220,21 +223,20 @@ fn interior_fraction(
     if width == 0 || height == 0 || px.len() < width * height {
         return 1.0;
     }
-    let mask: Vec<bool> = px
-        .par_iter()
-        .zip(nearest.par_iter())
-        .map(|(&p, &d)| p.dist(c) < d)
-        .collect();
+    // Evaluated only where the reduction reads it: the sampled pixels and their four
+    // neighbours. Building the whole-image mask first cost a full pass and an allocation
+    // per call for a candidate whose territory is usually a thin band.
+    let mask = |i: usize| px[i].dist(c) < nearest[i];
     let (total, interior) = (0..width * height)
         .into_par_iter()
         .step_by(stride_px)
-        .filter(|&i| mask[i])
+        .filter(|&i| mask(i))
         .map(|i| {
             let (x, y) = (i % width, i / width);
-            let ok = (x == 0 || mask[i - 1])
-                && (x + 1 == width || mask[i + 1])
-                && (y == 0 || mask[i - width])
-                && (y + 1 == height || mask[i + width]);
+            let ok = (x == 0 || mask(i - 1))
+                && (x + 1 == width || mask(i + 1))
+                && (y == 0 || mask(i - width))
+                && (y + 1 == height || mask(i + width));
             (1u32, ok as u32)
         })
         .reduce(|| (0u32, 0u32), |a, b| (a.0 + b.0, a.1 + b.1));
@@ -350,17 +352,15 @@ fn straddle_fraction(
     let tc = t_of(&six(c, linear));
     let step_lo = color::STRADDLE_STEP.min(0.5 * tc).max(0.02);
     let step_hi = color::STRADDLE_STEP.min(0.5 * (1.0 - tc)).max(0.02);
-    let mask: Vec<bool> = px
-        .par_iter()
-        .zip(nearest.par_iter())
-        .map(|(&p, &n)| p.dist(c) < n)
-        .collect();
+    // Both evaluated only where the reduction reads them -- see `interior_fraction`. This
+    // was the palette stage's largest cost on gradient art with transparency: two
+    // whole-image passes and allocations per candidate pair, 237 calls and 4.6 s on one
+    // 512 px noto-emoji, for values read at a thin band of sampled pixels.
     let cache = if linear { px6_lin } else { px6_srgb };
-    let t: Vec<f32> = cache.par_iter().map(t_of).collect();
     let (total, straddle) = (0..width * height)
         .into_par_iter()
         .step_by(stride_px)
-        .filter(|&i| mask[i])
+        .filter(|&i| px[i].dist(c) < nearest[i])
         .map(|i| {
             let (x, y) = (i % width, i / width);
             let (mut lower, mut higher) = (false, false);
@@ -370,7 +370,7 @@ fn straddle_fraction(
                     if nx < 0 || ny < 0 || nx >= width as isize || ny >= height as isize {
                         continue;
                     }
-                    let tn = t[ny as usize * width + nx as usize];
+                    let tn = t_of(&cache[ny as usize * width + nx as usize]);
                     lower |= tn < tc - step_lo;
                     higher |= tn > tc + step_hi;
                 }

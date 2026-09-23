@@ -266,26 +266,25 @@ fn straddle_fraction(
     // the far side is judged by the step, the near side by half the room that is left.
     let step_lo = STRADDLE_STEP.min(0.5 * tc).max(0.02);
     let step_hi = STRADDLE_STEP.min(0.5 * (1.0 - tc)).max(0.02);
-    let mask: Vec<bool> = lab
-        .par_iter()
-        .zip(nearest.par_iter())
-        .map(|(&p, &n)| p.dist(c) < n)
-        .collect();
     // Each pixel's position along the axis, from its *cached* colour rather than
     // by converting it here. `t_of` costs an oklab_to_rgb and, in linear space,
     // three powf calls, and it was being paid per pixel per candidate per pair --
     // 200 million cube roots on a 512 px input, which is where the palette stage's
     // 36 seconds went. The pixel's own colour does not depend on the pair, so it
     // is converted once for the whole image in `extract_palette_mdl`.
+    //
+    // Territory and axis position are both evaluated only where the reduction reads
+    // them -- the sampled pixels inside the candidate's territory and their neighbours
+    // -- rather than as two whole-image arrays built per call.
     let px: &[[f32; 3]] = if linear { px_lin } else { px_srgb };
-    let t: Vec<f32> = px
-        .par_iter()
-        .map(|p| ((p[0] - pa[0]) * d[0] + (p[1] - pa[1]) * d[1] + (p[2] - pa[2]) * d[2]) / dd)
-        .collect();
+    let t = |j: usize| {
+        let p = px[j];
+        ((p[0] - pa[0]) * d[0] + (p[1] - pa[1]) * d[1] + (p[2] - pa[2]) * d[2]) / dd
+    };
     let (total, straddle) = (0..width * height)
         .into_par_iter()
         .step_by(stride_px)
-        .filter(|&i| mask[i])
+        .filter(|&i| lab[i].dist(c) < nearest[i])
         .map(|i| {
             let (x, y) = (i % width, i / width);
             let (mut lower, mut higher) = (false, false);
@@ -295,7 +294,7 @@ fn straddle_fraction(
                     if nx < 0 || ny < 0 || nx >= width as isize || ny >= height as isize {
                         continue;
                     }
-                    let tn = t[ny as usize * width + nx as usize];
+                    let tn = t(ny as usize * width + nx as usize);
                     lower |= tn < tc - step_lo;
                     higher |= tn > tc + step_hi;
                 }
@@ -570,23 +569,21 @@ fn interior_fraction(
         // falls back on its other evidence rather than discarding the colour.
         return 1.0;
     }
-    let mask: Vec<bool> = lab
-        .par_iter()
-        .zip(nearest.par_iter())
-        .map(|(&p, &d)| p.dist(c) < d)
-        .collect();
+    // Evaluated only where the reduction reads it: the sampled pixels and their four
+    // neighbours, not as a whole-image array built per call.
+    let mask = |i: usize| lab[i].dist(c) < nearest[i];
     let (total, interior) = (0..width * height)
         .into_par_iter()
         .step_by(stride_px)
-        .filter(|&i| mask[i])
+        .filter(|&i| mask(i))
         .map(|i| {
             let (x, y) = (i % width, i / width);
             // A border pixel has no neighbour outside the image to disqualify it; treat
             // the outside as matching, so a region touching the edge is not penalised.
-            let ok = (x == 0 || mask[i - 1])
-                && (x + 1 == width || mask[i + 1])
-                && (y == 0 || mask[i - width])
-                && (y + 1 == height || mask[i + width]);
+            let ok = (x == 0 || mask(i - 1))
+                && (x + 1 == width || mask(i + 1))
+                && (y == 0 || mask(i - width))
+                && (y + 1 == height || mask(i + width));
             (1u32, ok as u32)
         })
         .reduce(|| (0u32, 0u32), |a, b| (a.0 + b.0, a.1 + b.1));
@@ -851,29 +848,27 @@ fn claim_spread(
 ) -> (usize, f32) {
     const MAX_SAMPLES: usize = 8192;
     let stride = (lab.len() / MAX_SAMPLES).max(1);
-    // Every core, in two ordered passes. rayon's collect keeps sequential order, so
-    // `d_in` and therefore its median are exactly what one thread would have produced.
-    let n = (0..lab.len())
+    // Every core, in one ordered pass: territory count and spread sample test the same
+    // distance at the same pixels. rayon's collect keeps sequential order, so `d_in` and
+    // therefore its median are exactly what one thread would have produced.
+    let claimed: Vec<(usize, f32)> = (0..lab.len())
         .into_par_iter()
         .step_by(stride_px)
-        .filter(|&i| lab[i].dist(c) < nearest_px[i])
-        .count();
+        .filter_map(|i| {
+            let dist = lab[i].dist(c);
+            (dist < nearest_px[i]).then_some((i, dist))
+        })
+        .collect();
+    let n = claimed.len();
     // Members, not territory. Territory is whatever has no closer ink yet, which
     // for the first candidate is the whole image, and a spread measured over that
     // is the mean distance from every pixel to white -- enormous, and it rejected
     // every colour after the first. Measured: the screen set went from 0.4328 to
     // 1.2461 before this was restricted to `tol`.
-    let mut d_in: Vec<f32> = (0..lab.len())
-        .into_par_iter()
-        .step_by(stride_px)
-        .filter_map(|i| {
-            let dist = lab[i].dist(c);
-            if dist < nearest_px[i] && dist < tol && i % stride == 0 {
-                Some(dist)
-            } else {
-                None
-            }
-        })
+    let mut d_in: Vec<f32> = claimed
+        .iter()
+        .filter(|&&(i, dist)| dist < tol && i % stride == 0)
+        .map(|&(_, dist)| dist)
         .collect();
     // `n` is compared against absolute pixel counts downstream, so a strided
     // visit is scaled back up to estimate what a full one would have counted.

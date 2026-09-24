@@ -215,6 +215,74 @@ export type Outcome =
   | { state: "outOfMemory"; neededGb: number; suggestPx: number }
   | { state: "failed"; message: string };
 
+// --------------------------------------------------------------------- fabricate ---
+
+export type FabMode = "singleColour" | "layered" | "inlay" | "sticker" | "stencil";
+export type CutStyle = "filled" | "hairline";
+
+/** A fabrication request; lengths in millimetres. Mirrors `inkvec_fab::Options`. */
+export interface FabOptions {
+  mode: FabMode;
+  widthMm: number;
+  include: string[];
+  order: string[];
+  bleedMm: number;
+  minFeatureMm: number;
+  removeThin: boolean;
+  stickerMarginMm: number;
+  bridgeMm: number;
+  stencilMarginMm: number;
+  registration: boolean;
+  weedBorderMm: number;
+  mirror: boolean;
+  cutStyle: CutStyle;
+  kerfMm: number;
+  toleranceMm: number;
+  mergeDeltaE: number;
+}
+
+export interface FabColour {
+  hex: string;
+  coverage: number;
+  background: boolean;
+  gradient: boolean;
+  translucent: boolean;
+}
+
+export interface FabAnalysis {
+  sizePx: [number, number];
+  aspect: number;
+  colours: FabColour[];
+  items: number;
+  nodes: number;
+  unsupported: string[];
+}
+
+export interface FabCheck {
+  level: "info" | "warn" | "error";
+  code: string;
+  message: string;
+}
+
+export interface FabLayer {
+  name: string;
+  hex: string;
+  svg: string;
+  nodes: number;
+  parts: number;
+  areaMm2: number;
+  materialMm: [number, number];
+}
+
+export interface FabPlan {
+  layers: FabLayer[];
+  previewSvg: string;
+  problemsSvg: string;
+  combinedSvg: string;
+  sizeMm: [number, number];
+  checks: FabCheck[];
+}
+
 // ------------------------------------------------------------------------ minify ---
 
 export interface MinifySettings {
@@ -348,6 +416,8 @@ export const api = {
 
   minify: (svg: string, settings: MinifySettings) =>
     invoke<MinifyResult>("minify_svg", { svg, settings }),
+  fabAnalyze: (svg: string) => invoke<FabAnalysis>("fab_analyze", { svg }),
+  fabPrepare: (svg: string, options: FabOptions) => invoke<FabPlan>("fab_prepare", { svg, options }),
   readTextFile: (path: string) => invoke<string>("read_text_file", { path }),
   saveBytes: (path: string, bytes: number[]) => invoke<void>("save_bytes", { path, bytes }),
 

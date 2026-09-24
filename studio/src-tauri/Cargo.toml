@@ -36,6 +36,8 @@ tauri-build = { version = "2", features = [] }
 # drives eighteen — bilevel, strokes and flat fills among them — which only `Args` has.
 inkvec-cli = { path = "../../crates/inkvec-cli" }
 inkvec-trace = { path = "../../crates/inkvec-trace" }
+# Fabrication: vinyl sheets, sticker contours and the preflight, for the Fabricate tab.
+inkvec-fab = { path = "../../crates/inkvec-fab" }
 # The fit's own default prices, so the two curve controls start where the engine does and
 # a value that equals the default is passed as "no request".
 inkvec-fit = { path = "../../crates/inkvec-fit" }

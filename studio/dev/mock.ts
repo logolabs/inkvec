@@ -23,6 +23,13 @@ const tracedSvgs = import.meta.glob("./traced/*.svg", { eager: true, query: "?ra
   string
 >;
 
+// The Fabricate tab's answers, written by the real engine for a traced twemoji unicorn at
+// 60 mm, small enough to trip the thin-part and speck checks
+// (`cargo run -p inkvec-fab --example fab` with FAB_JSON=1), one per mode.
+const fabJson = import.meta.glob("./fab/*/*.json", { eager: true, import: "default" }) as Record<string, unknown>;
+const fabUnicorn = (import.meta.glob("./fab/unicorn.svg", { eager: true, query: "?raw", import: "default" }) as Record<string, string>)["./fab/unicorn.svg"];
+const FAB_DIR: Record<string, string> = { singleColour: "single", layered: "layered", inlay: "inlay", sticker: "sticker", stencil: "stencil" };
+
 const png = (name: string) => samplePngs[`../src-tauri/samples/${name}.png`];
 const svgOf = (name: string) => tracedSvgs[`./traced/${name}.svg`] ?? "";
 
@@ -214,6 +221,12 @@ mockIPC(
         return [];
       case "minify_svg":
         return null;
+      case "fab_analyze":
+        return fabJson["./fab/layered/analysis.json"];
+      case "fab_prepare":
+        return fabJson[`./fab/${FAB_DIR[a.options?.mode] ?? "layered"}/plan.json`];
+      case "read_text_file":
+        return fabUnicorn;
       case "cli_status":
       case "context_menu_status":
         return { available: true, installed: false, path: null, note: null };

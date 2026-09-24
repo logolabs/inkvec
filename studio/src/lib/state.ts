@@ -10,6 +10,9 @@ import type {
   BatchRow,
   BatchTotals,
   Capabilities,
+  FabAnalysis,
+  FabOptions,
+  FabPlan,
   Ink,
   Loss,
   MinifyResult,
@@ -26,7 +29,7 @@ import type {
 } from "./ipc";
 
 /** Which top-level tab is showing. */
-export type Tab = "vectorize" | "minify" | "batch";
+export type Tab = "vectorize" | "minify" | "fabricate" | "batch";
 
 /** Which full-window screen is showing over the tabs, if any. */
 export type Screen = null | "settings" | "about";
@@ -114,6 +117,24 @@ export interface State {
     error: string | null;
   };
 
+  /** The Fabricate tab: the drawing, what is in it, the request and what came back. */
+  fab: {
+    name: string | null;
+    svg: string | null;
+    analysis: FabAnalysis | null;
+    options: FabOptions;
+    plan: FabPlan | null;
+    error: string | null;
+    /** Which sheet the stage shows; -1 for all of them stacked. */
+    shown: number;
+    /** Lengths are shown in millimetres or inches; the engine always works in mm. */
+    unit: "mm" | "in";
+    /** Whether the preflight's problems are drawn over the sheets. */
+    showProblems: boolean;
+    /** The material preset last chosen, if the options still match it. */
+    preset: string | null;
+  };
+
   batch: {
     folder: string | null;
     outputDir: string | null;
@@ -165,6 +186,7 @@ export function initial(settings: Settings, minify: MinifySettings): State {
     exportOpen: false,
     dragging: false,
     minify: { name: null, before: null, settings: minify, result: null, error: null },
+    fab: { name: null, svg: null, analysis: null, options: defaultFabOptions(), plan: null, error: null, shown: -1, unit: "mm", showProblems: true, preset: null },
     batch: {
       folder: null,
       outputDir: null,
@@ -177,6 +199,29 @@ export function initial(settings: Settings, minify: MinifySettings): State {
       failuresFirst: false,
     },
     update: null,
+  };
+}
+
+/** The Fabricate tab's starting request: the engine's own defaults. */
+export function defaultFabOptions(): FabOptions {
+  return {
+    mode: "singleColour",
+    widthMm: 100,
+    include: [],
+    order: [],
+    bleedMm: 1,
+    minFeatureMm: 0.8,
+    removeThin: false,
+    stickerMarginMm: 3,
+    bridgeMm: 1.5,
+    stencilMarginMm: 10,
+    registration: true,
+    weedBorderMm: 0,
+    mirror: false,
+    cutStyle: "filled",
+    kerfMm: 0,
+    toleranceMm: 0.05,
+    mergeDeltaE: 3,
   };
 }
 

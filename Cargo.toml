@@ -13,6 +13,7 @@ members = [
     "crates/inkvec-py",
     "crates/inkvec-server",
     "crates/inkvec-svgmin",
+    "crates/inkvec-fab",
 ]
 # Inkvec Studio Lite is a workspace of its own. `cargo build --workspace` runs on every CI
 # platform and must not start needing WebKitGTK, a WebView2 SDK or a macOS webview; the app

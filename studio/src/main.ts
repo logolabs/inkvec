@@ -33,6 +33,7 @@ import { closeOverlay, openPopover, toast } from "./components/overlays";
 import { windowControls } from "./components/wincontrols";
 import { createBatch } from "./views/batch";
 import { createMinify } from "./views/minify";
+import { createFabricate } from "./views/fabricate";
 import { createScreens, openDenoiserModal } from "./views/screens";
 import { createWorkspace, jumpToWorst } from "./views/workspace";
 
@@ -354,6 +355,7 @@ async function snap(from: string, to: string): Promise<void> {
 }
 
 let minifyView: HTMLElement | null = null;
+let fabView: HTMLElement | null = null;
 let batchView: HTMLElement | null = null;
 
 function renderTab(): void {
@@ -363,6 +365,9 @@ function renderTab(): void {
   } else if (st.tab === "minify") {
     minifyView ??= createMinify(store);
     fill(content, minifyView);
+  } else if (st.tab === "fabricate") {
+    fabView ??= createFabricate(store);
+    fill(content, fabView);
   } else {
     batchView ??= createBatch(store);
     fill(content, batchView);
@@ -390,6 +395,7 @@ function renderAppBar(): void {
         [
           ["vectorize", "Vectorize"],
           ["minify", "Minify SVG"],
+          ["fabricate", "Fabricate"],
           ["batch", "Batch"],
         ] as const
       ).map(([id, label]) =>
@@ -538,9 +544,13 @@ async function wireDragDrop(): Promise<void> {
     // showing: dropping a file should do the obvious thing with it.
     const svgs = paths.filter((p) => p.toLowerCase().endsWith(".svg"));
     if (svgs.length) {
-      store.set({ tab: "minify" });
+      // On the Fabricate tab an SVG is something to cut; anywhere else, to minify.
+      const target = store.state.tab === "fabricate" ? "fabricate" : "minify";
+      store.set({ tab: target });
       renderTab();
-      const view = minifyView as (HTMLElement & { acceptDropped?: (p: string) => Promise<boolean> }) | null;
+      const view = (target === "fabricate" ? fabView : minifyView) as
+        | (HTMLElement & { acceptDropped?: (p: string) => Promise<boolean> })
+        | null;
       await view?.acceptDropped?.(svgs[0]);
       return;
     }

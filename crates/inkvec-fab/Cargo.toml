@@ -1,0 +1,21 @@
+[package]
+name = "inkvec-fab"
+description = "Prepare vector art for physical output: preflight checks, vinyl layers, sticker contours, real units."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+usvg = { version = "0.48", default-features = false }
+kurbo = { workspace = true }
+i_overlay = "9"
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

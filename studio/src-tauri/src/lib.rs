@@ -186,6 +186,8 @@ pub fn run() {
             plan_export,
             write_export,
             minify_svg,
+            fab_analyze,
+            fab_prepare,
             read_text_file,
             save_bytes,
             batch_scan,
@@ -866,6 +868,19 @@ fn minify_svg(
     settings: minify::MinifySettings,
 ) -> Result<minify::MinifyResult, String> {
     minify::run(&svg, settings)
+}
+
+/// What an SVG holds, for the Fabricate tab: its colours, which is the page, and what
+/// cannot be cut.
+#[tauri::command]
+fn fab_analyze(svg: String) -> Result<inkvec_fab::Analysis, String> {
+    inkvec_fab::analyze(&svg).map_err(|e| e.to_string())
+}
+
+/// The sheets to cut for one set of Fabricate choices, with the preflight.
+#[tauri::command]
+fn fab_prepare(svg: String, options: inkvec_fab::Options) -> Result<inkvec_fab::Plan, String> {
+    inkvec_fab::prepare(&svg, &options).map_err(|e| e.to_string())
 }
 
 /// Read a text file the user chose. Used by the Minify tab to open an existing SVG.

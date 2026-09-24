@@ -176,6 +176,26 @@ fn registration_marks(b: [f64; 4]) -> Region {
     geom::union_all(bars.iter())
 }
 
+/// Gap between the design (with its marks and border) and the size-check square.
+const SIZE_CHECK_GAP_MM: f64 = 3.0;
+
+/// The size-check square of side `side`, below the lower left of `b`.
+fn size_check(b: [f64; 4], side: f64) -> Region {
+    let y = b[3] + SIZE_CHECK_GAP_MM;
+    geom::rect(b[0], y, b[0] + side, y + side)
+}
+
+/// The finding that says what the square is for.
+fn size_check_note(side: f64) -> Check {
+    Check {
+        level: crate::options::Level::Info,
+        code: "sizeCheck",
+        message: format!(
+            "A {side:.1} mm square is cut below the design. Measure it once it is cut: if it is not {side:.1} mm, the cutter's program changed the size on import."
+        ),
+    }
+}
+
 /// A rectangular frame `gap` outside `b`, one bar wide.
 fn weed_border(b: [f64; 4], gap: f64) -> Region {
     let outer = geom::rect(
@@ -334,7 +354,24 @@ fn plan_lines(
 ) -> Plan {
     let pad = 1.0;
     let origin = [-pad, -pad];
-    let size = [canvas_mm[0] + 2.0 * pad, canvas_mm[1] + 2.0 * pad];
+    let side = o.size_check_mm.max(0.0);
+    let check = (side > 0.0).then(|| {
+        checks.push(size_check_note(side));
+        size_check([0.0, 0.0, canvas_mm[0], canvas_mm[1]], side)
+    });
+    let below = if side > 0.0 {
+        SIZE_CHECK_GAP_MM + side
+    } else {
+        0.0
+    };
+    let size = [
+        canvas_mm[0].max(side) + 2.0 * pad,
+        canvas_mm[1] + below + 2.0 * pad,
+    ];
+    let square = check
+        .as_ref()
+        .map(|r| write::region_d(r, o.tolerance_mm).0)
+        .unwrap_or_default();
     let mut layers = Vec::new();
     let mut preview = String::new();
     let mut combined = String::new();
@@ -353,6 +390,10 @@ fn plan_lines(
         let mut shown = write::filled(&outline_d, &colour);
         if !outline_d.is_empty() {
             body.push_str(&write::pen(&outline_d, &colour, o.pen_mm));
+        }
+        if !square.is_empty() {
+            body.push_str(&write::pen(&square, &colour, o.pen_mm));
+            shown.push_str(&write::pen(&square, &colour, o.pen_mm));
         }
         let mut nodes = outline_nodes;
         let mut paths = Vec::new();
@@ -458,6 +499,22 @@ pub fn plan(
     ]);
     let marks = (o.registration && base.len() > 1).then(|| registration_marks(art_bounds));
     let border = (o.weed_border_mm > 0.0).then(|| weed_border(art_bounds, o.weed_border_mm));
+    let check = (o.size_check_mm > 0.0).then(|| {
+        let around = [&marks, &border]
+            .into_iter()
+            .flatten()
+            .filter_map(geom::bounds)
+            .fold(art_bounds, |a, b| {
+                [
+                    a[0].min(b[0]),
+                    a[1].min(b[1]),
+                    a[2].max(b[2]),
+                    a[3].max(b[3]),
+                ]
+            });
+        checks.push(size_check_note(o.size_check_mm));
+        size_check(around, o.size_check_mm)
+    });
     // Each sheet's own extent, before the marks every sheet shares are added.
     let extents: Vec<[f64; 2]> = base
         .iter()
@@ -467,7 +524,7 @@ pub fn plan(
         .into_iter()
         .map(|(n, h, r)| {
             let mut r = r;
-            for extra in [&marks, &border].into_iter().flatten() {
+            for extra in [&marks, &border, &check].into_iter().flatten() {
                 r = geom::union(&r, extra);
             }
             (n, h, r)

@@ -137,6 +137,28 @@ pub fn document(size: [f64; 2], origin: [f64; 2], body: &str) -> String {
     )
 }
 
+/// `svg` (one of [`document`]'s) with its size restated in `units`. The viewBox stays in
+/// millimetres, so only the stated size changes and with it nothing a reader draws.
+pub fn with_units(svg: &str, units: crate::options::FileUnits) -> String {
+    let Some(ppi) = units.px_per_inch() else {
+        return svg.to_string();
+    };
+    let mut out = svg.to_string();
+    for key in ["width=\"", "height=\""] {
+        let Some(at) = out.find(key) else { continue };
+        let start = at + key.len();
+        let Some(len) = out[start..].find("mm\"") else {
+            continue;
+        };
+        let Ok(mm) = out[start..start + len].parse::<f64>() else {
+            continue;
+        };
+        let px = format!("{:.3}", mm / 25.4 * ppi);
+        out.replace_range(start..start + len + 2, &px);
+    }
+    out
+}
+
 /// A filled path element.
 pub fn filled(d: &str, hex: &str) -> String {
     format!("<path d=\"{d}\" fill=\"{hex}\"/>")

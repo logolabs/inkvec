@@ -219,6 +219,7 @@ export type Outcome =
 
 export type FabMode = "singleColour" | "layered" | "inlay" | "sticker" | "stencil" | "lines";
 export type CutStyle = "filled" | "hairline";
+export type FileUnits = "mm" | "px96" | "px72";
 
 /** A fabrication request; lengths in millimetres. Mirrors `inkvec_fab::Options`. */
 export interface FabOptions {
@@ -240,6 +241,10 @@ export interface FabOptions {
   weedBorderMm: number;
   mirror: boolean;
   cutStyle: CutStyle;
+  /** Side of a square cut beside the design, to measure after cutting; 0 for none. */
+  sizeCheckMm: number;
+  /** How the saved files state their size. */
+  fileUnits: FileUnits;
   kerfMm: number;
   toleranceMm: number;
   mergeDeltaE: number;

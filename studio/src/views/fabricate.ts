@@ -17,7 +17,7 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 import { fill, h, icon } from "../lib/dom";
-import { api, type FabLayer, type FabMode, type FabOptions, type FabPlan } from "../lib/ipc";
+import { api, type FabLayer, type FabMode, type FabOptions, type FabPlan, type FileUnits } from "../lib/ipc";
 import { count, percent, type Store } from "../lib/state";
 import { toast } from "../components/overlays";
 import { art } from "./minify";
@@ -43,6 +43,13 @@ const MODES: [FabMode, string, string][] = [
     "Lines",
     "For a pen, a scoring blade or a laser line: every line in the drawing is followed once, along its centre, instead of round both of its edges. Strokes in the file are used as drawn; lines inside filled shapes are found and checked against the shape.",
   ],
+];
+
+/** How the saved files state their size, and which programs read each correctly. */
+const FILE_UNITS: [FileUnits, string, string][] = [
+  ["mm", "Millimetres", "Exact by the SVG standard, and read correctly by most programs. If yours imports at the wrong size, choose the pixel rate it uses."],
+  ["px96", "Pixels, 96/in", "The CSS pixel: Inkscape, LightBurn, Carbide Create, Fusion and browsers read a bare pixel size at 96 per inch."],
+  ["px72", "Pixels, 72/in", "Cricut Design Space and Silhouette Studio read a bare pixel size at 72 per inch."],
 ];
 
 /** What people actually put in the machine, each a set of choices made for them. */
@@ -521,6 +528,27 @@ function sizeCard(store: Store, change: (p: Partial<FabOptions>) => void): HTMLE
       ` ${u} wide and `,
       lenField(store, w * aspect, (mm) => mm > 0 && change({ widthMm: mm / aspect })),
       ` ${u} tall.`,
+    ),
+    switchRow(
+      "Cut a size-check square",
+      f.options.sizeCheckMm > 0,
+      () => change({ sizeCheckMm: f.options.sizeCheckMm > 0 ? 0 : f.unit === "in" ? MM_PER_IN : 20 }),
+      f.options.sizeCheckMm > 0
+        ? `A ${len(store, f.options.sizeCheckMm, 1)} square below the design. Measure it once cut: any other size means the program rescaled the file on import.`
+        : "Wrong size on import is the commonest cutter complaint. A small square below the design shows it before a whole sheet is wasted.",
+    ),
+    h(
+      "div",
+      { style: { display: "flex", flexDirection: "column", gap: "6px" } },
+      h("span.dim", { style: { fontSize: "12.5px" } }, "The files state their size in"),
+      h(
+        "div.seg",
+        { role: "group", "aria-label": "Size written in", style: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)" } },
+        ...FILE_UNITS.map(([id, label]) =>
+          h("button", { "aria-pressed": String(f.options.fileUnits === id), onclick: () => change({ fileUnits: id }) }, label),
+        ),
+      ),
+      h("span.muted", { style: { fontSize: "11px", lineHeight: "1.45" } }, FILE_UNITS.find((x) => x[0] === f.options.fileUnits)?.[2] ?? ""),
     ),
   );
 }

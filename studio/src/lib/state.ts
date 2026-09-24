@@ -223,6 +223,8 @@ export function defaultFabOptions(): FabOptions {
     weedBorderMm: 0,
     mirror: false,
     cutStyle: "filled",
+    sizeCheckMm: 0,
+    fileUnits: "mm",
     kerfMm: 0,
     toleranceMm: 0.05,
     mergeDeltaE: 3,

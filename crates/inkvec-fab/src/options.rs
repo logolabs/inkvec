@@ -24,6 +24,36 @@ pub enum Mode {
     Lines,
 }
 
+/// How a saved file states its size.
+///
+/// A millimetre size is exact in the SVG specification, but the commonest complaint about
+/// cutter files is that they import at the wrong size: programs that read a bare pixel
+/// size turn it into inches at their own rate, 72 per inch in Cricut Design Space and
+/// Silhouette Studio, 96 in Inkscape, LightBurn and browsers. A file whose size is written
+/// in the pixels its program expects imports at the size it was drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum FileUnits {
+    /// `width="100mm"`: exact for every reader that follows the specification.
+    #[default]
+    Mm,
+    /// Bare pixels at 96 per inch (the CSS pixel).
+    Px96,
+    /// Bare pixels at 72 per inch.
+    Px72,
+}
+
+impl FileUnits {
+    /// Pixels per inch, when the size is written in pixels.
+    pub fn px_per_inch(self) -> Option<f64> {
+        match self {
+            FileUnits::Mm => None,
+            FileUnits::Px96 => Some(96.0),
+            FileUnits::Px72 => Some(72.0),
+        }
+    }
+}
+
 /// How a cut line is drawn in the output file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -75,6 +105,11 @@ pub struct Options {
     pub mirror: bool,
     /// How cut lines are drawn.
     pub cut_style: CutStyle,
+    /// Side of a square cut outside the design on every sheet, to measure after cutting
+    /// and so catch a program that changed the size on import; 0 for none.
+    pub size_check_mm: f64,
+    /// How the saved files state their size.
+    pub file_units: FileUnits,
     /// Width of material the cut itself removes (a laser's kerf, a knife's does not
     /// count). Every kept piece grows by half of it, which is the inside/outside rule:
     /// outlines move out, holes move in, so the parts come out the drawn size.
@@ -104,6 +139,8 @@ impl Default for Options {
             weed_border_mm: 0.0,
             mirror: false,
             cut_style: CutStyle::Filled,
+            size_check_mm: 0.0,
+            file_units: FileUnits::Mm,
             kerf_mm: 0.0,
             tolerance_mm: 0.05,
             merge_delta_e: 3.0,

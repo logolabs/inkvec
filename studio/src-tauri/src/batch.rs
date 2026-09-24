@@ -21,7 +21,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::options::{Preset, Settings};
-use crate::trace::{self, Outcome, Source, Tier};
+use crate::trace::{self, MeasureLevel, Outcome, Source, Tier};
 
 /// Where a row is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -281,21 +281,29 @@ pub fn run(
             // things a preset does not touch, so a batch honours both.
             ..merge(base, rows[i].preset)
         };
-        let outcome = std::fs::read(&rows[i].path)
+        // A row is measured for what its line shows — the mean colour difference and the
+        // counts — not for the palette, the losses or the bands nobody will look at.
+        let level = MeasureLevel::Summary;
+        let drawn = std::fs::read(&rows[i].path)
             .map_err(|e| e.to_string())
             .and_then(|bytes| Source::open(bytes, Some(rows[i].path.clone())))
             .map(|source| {
-                let source_bytes = source.bytes.len();
-                (
-                    // No cache: every row is a different image, so there is nothing a
-                    // previous row could offer this one.
-                    trace::run(&std::sync::Arc::new(source), &settings, Tier::Final, None, |_, _| {}),
-                    source_bytes,
-                )
+                let source = Arc::new(source);
+                // No cache: every row is a different image, so there is nothing a
+                // previous row could offer this one.
+                let drawn = trace::draw(&source, &settings, Tier::Final, None, level, |_, _| {});
+                (source, drawn)
             });
-        // The pipeline is done with; writing the file and reporting the row are not trace
-        // work and must not keep a trace waiting.
+        // The pipeline is done with; measuring the drawing, writing the file and reporting
+        // the row are not trace work and must not keep a trace waiting.
         drop(slot);
+        let outcome = drawn.map(|(source, drawn)| {
+            let outcome = match drawn {
+                Ok(drawn) => trace::measure(&source, drawn, level, None),
+                Err(outcome) => outcome,
+            };
+            (outcome, source.bytes.len())
+        });
 
         match outcome {
             Err(why) => fail(&mut rows[i], why, &mut totals),

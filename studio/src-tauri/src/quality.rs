@@ -189,28 +189,17 @@ pub fn analyse(source: &inkvec_trace::Rgba, svg: &str) -> Result<Analysis, Strin
     if source.data.len() < n * 4 {
         return Err("the source raster is shorter than its own dimensions".into());
     }
-    let mut deltas = vec![0.0f32; n];
-    for (i, delta) in deltas.iter_mut().enumerate() {
-        let s = &source.data[i * 4..i * 4 + 4];
-        let r = &rendered[i * 4..i * 4 + 4];
-        let lab_s = lab(over_matte([s[0], s[1], s[2]], s[3]));
-        let lab_r = lab(over_matte(
-            [
-                r[0] as f32 / 255.0,
-                r[1] as f32 / 255.0,
-                r[2] as f32 / 255.0,
-            ],
-            r[3] as f32 / 255.0,
-        ));
-        *delta = ciede2000(lab_s, lab_r) as f32;
-    }
+    let deltas = pixel_deltas(&source.data, &rendered, w as usize, n);
 
-    let mean = deltas.iter().map(|d| *d as f64).sum::<f64>() / n as f64;
-    let mut sorted = deltas.clone();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let median = sorted[n / 2] as f64;
-    let worst = sorted[((n as f64 * 0.99) as usize).min(n - 1)] as f64;
-    let corner = worst_corner(&deltas, w, h);
+    // The mean is summed in order, one pixel after another, so it is the same number
+    // however the map above was split across threads.
+    let ((mean, (median, worst)), corner) = rayon::join(
+        || {
+            let mean = deltas.iter().map(|d| *d as f64).sum::<f64>() / n as f64;
+            (mean, median_and_p99(&deltas))
+        },
+        || worst_corner(&deltas, w, h),
+    );
 
     Ok(Analysis {
         deltas,
@@ -224,6 +213,106 @@ pub fn analyse(source: &inkvec_trace::Rgba, svg: &str) -> Result<Analysis, Strin
     })
 }
 
+/// dE00 for every pixel, row by row across the cores.
+///
+/// Each pixel's number is computed exactly as it would be alone: a row is one task, and
+/// inside a row a pixel whose source and render are both bit-for-bit the pixel before it
+/// takes that pixel's number rather than computing the same one again. Flat artwork is
+/// mostly such runs, which is where most of the saving comes from. A noisy source (a
+/// JPEG) breaks the runs, but its render still runs flat, so the render's own colour
+/// conversion is carried along a run of the render alone. The answer is the same either
+/// way.
+fn pixel_deltas(source: &[f32], rendered: &[u8], w: usize, n: usize) -> Vec<f32> {
+    use rayon::prelude::*;
+    let mut deltas = vec![0.0f32; n];
+    deltas
+        .par_chunks_mut(w.max(1))
+        .enumerate()
+        .for_each(|(y, row)| {
+            let mut last: Option<([u32; 4], [u8; 4], f32)> = None;
+            let mut last_render: Option<([u8; 4], [f64; 3])> = None;
+            for (x, delta) in row.iter_mut().enumerate() {
+                let i = (y * w + x) * 4;
+                let s = &source[i..i + 4];
+                let r = [
+                    rendered[i],
+                    rendered[i + 1],
+                    rendered[i + 2],
+                    rendered[i + 3],
+                ];
+                let key = [
+                    s[0].to_bits(),
+                    s[1].to_bits(),
+                    s[2].to_bits(),
+                    s[3].to_bits(),
+                ];
+                if let Some((ks, kr, d)) = last {
+                    if ks == key && kr == r {
+                        *delta = d;
+                        continue;
+                    }
+                }
+                let lab_r = match last_render {
+                    Some((kr, l)) if kr == r => l,
+                    _ => {
+                        let l = rendered_lab(r);
+                        last_render = Some((r, l));
+                        l
+                    }
+                };
+                let d = ciede2000(source_lab(s), lab_r) as f32;
+                *delta = d;
+                last = Some((key, r, d));
+            }
+        });
+    deltas
+}
+
+/// dE00 between one source pixel and one rendered pixel, both over the matte.
+#[cfg(test)]
+fn pixel_delta(s: &[f32], r: [u8; 4]) -> f32 {
+    ciede2000(source_lab(s), rendered_lab(r)) as f32
+}
+
+/// A source pixel over the matte, in L*a*b*.
+fn source_lab(s: &[f32]) -> [f64; 3] {
+    lab(over_matte([s[0], s[1], s[2]], s[3]))
+}
+
+/// A rendered pixel over the matte, in L*a*b*.
+fn rendered_lab(r: [u8; 4]) -> [f64; 3] {
+    lab(over_matte(
+        [
+            r[0] as f32 / 255.0,
+            r[1] as f32 / 255.0,
+            r[2] as f32 / 255.0,
+        ],
+        r[3] as f32 / 255.0,
+    ))
+}
+
+/// The median and the 99th percentile: the values a full sort would put at `n / 2` and
+/// at `n * 0.99`.
+///
+/// Two selections instead of a sort. The 99th percentile goes first, which leaves every
+/// smaller value in front of it, and the median is then selected inside that front part.
+/// Same comparator, same indices, same two values.
+fn median_and_p99(deltas: &[f32]) -> (f64, f64) {
+    use std::cmp::Ordering;
+    let n = deltas.len();
+    let cmp = |a: &f32, b: &f32| a.partial_cmp(b).unwrap_or(Ordering::Equal);
+    let mid = n / 2;
+    let k99 = ((n as f64 * 0.99) as usize).min(n - 1);
+    let mut v = deltas.to_vec();
+    let worst = *v.select_nth_unstable_by(k99, cmp).1;
+    let median = match mid.cmp(&k99) {
+        Ordering::Less => *v[..k99].select_nth_unstable_by(mid, cmp).1,
+        Ordering::Equal => worst,
+        Ordering::Greater => *v[k99 + 1..].select_nth_unstable_by(mid - k99 - 1, cmp).1,
+    };
+    (median as f64, worst as f64)
+}
+
 /// The window, on a coarse grid, whose mean dE00 is highest.
 ///
 /// This is what "find the worst corner" jumps to. A grid rather than a search: the point
@@ -233,20 +322,38 @@ fn worst_corner(deltas: &[f32], w: u32, h: u32) -> Option<WorstCorner> {
     if w < win || h < win {
         return None;
     }
+    use rayon::prelude::*;
     let step = (win / 2).max(1);
+    let ys: Vec<u32> = (0..)
+        .map(|i| i * step)
+        .take_while(|y| y + win <= h)
+        .collect();
+    let xs: Vec<u32> = (0..)
+        .map(|i| i * step)
+        .take_while(|x| x + win <= w)
+        .collect();
+    // Every window's mean, each summed exactly as before, one row of windows per task...
+    let means: Vec<Vec<f64>> = ys
+        .par_iter()
+        .map(|&y| {
+            xs.iter()
+                .map(|&x| {
+                    let mut sum = 0.0f64;
+                    for yy in y..y + win {
+                        let row = (yy as usize) * (w as usize);
+                        for xx in x..x + win {
+                            sum += deltas[row + xx as usize] as f64;
+                        }
+                    }
+                    sum / (win as f64 * win as f64)
+                })
+                .collect()
+        })
+        .collect();
+    // ...and the choice made in scan order, so a tie goes to the same window it always did.
     let mut best: Option<WorstCorner> = None;
-    let mut y = 0;
-    while y + win <= h {
-        let mut x = 0;
-        while x + win <= w {
-            let mut sum = 0.0f64;
-            for yy in y..y + win {
-                let row = (yy as usize) * (w as usize);
-                for xx in x..x + win {
-                    sum += deltas[row + xx as usize] as f64;
-                }
-            }
-            let mean = sum / (win as f64 * win as f64);
+    for (&y, row) in ys.iter().zip(&means) {
+        for (&x, &mean) in xs.iter().zip(row) {
             if best.is_none_or(|b| mean > b.de00) {
                 best = Some(WorstCorner {
                     x: x + win / 2,
@@ -254,9 +361,7 @@ fn worst_corner(deltas: &[f32], w: u32, h: u32) -> Option<WorstCorner> {
                     de00: mean,
                 });
             }
-            x += step;
         }
-        y += step;
     }
     // A perfectly clean trace has no worst corner worth going to.
     best.filter(|b| b.de00 > 0.05)
@@ -403,7 +508,10 @@ pub fn count(svg: &str) -> (usize, usize, usize, usize) {
     }
     // <svg ...> itself is not a drawn element, and neither is a <rect> inside <defs>;
     // the first is worth subtracting because it is always there.
-    elements = elements.saturating_sub(svg.matches("<rect").count().min(0));
+    #[allow(clippy::unnecessary_min_or_max)]
+    {
+        elements = elements.saturating_sub(svg.matches("<rect").count().min(0));
+    }
 
     for d in attribute_values(svg, "d") {
         let (c, s) = count_path(d);
@@ -494,27 +602,45 @@ pub fn palette(svg: &str, w: u32, h: u32) -> Result<Vec<Ink>, String> {
     );
     let px = render(svg, rw, rh)?;
 
-    let labs: Vec<[f64; 3]> = declared.iter().map(|c| lab(*c)).collect();
-    let mut counts = vec![0usize; declared.len()];
+    // The nearest ink depends only on the rendered colour, so the pixels are first counted
+    // by colour and each distinct colour is looked up once, across the cores. A render of
+    // flat artwork has few distinct colours; one of a photo-like trace with hundreds of
+    // inks has thousands, and every lookup is a dE00 against every ink.
+    let mut by_colour: std::collections::HashMap<[u8; 3], usize> = std::collections::HashMap::new();
     let mut covered = 0usize;
-    for chunk in px.chunks_exact(4) {
+    for chunk in px.as_chunks::<4>().0 {
         if chunk[3] < 8 {
             continue;
         }
         covered += 1;
-        let here = lab([
-            chunk[0] as f32 / 255.0,
-            chunk[1] as f32 / 255.0,
-            chunk[2] as f32 / 255.0,
-        ]);
-        let mut best = (f64::MAX, 0usize);
-        for (i, l) in labs.iter().enumerate() {
-            let d = ciede2000(here, *l);
-            if d < best.0 {
-                best = (d, i);
-            }
-        }
-        counts[best.1] += 1;
+        *by_colour.entry([chunk[0], chunk[1], chunk[2]]).or_insert(0) += 1;
+    }
+    let labs: Vec<[f64; 3]> = declared.iter().map(|c| lab(*c)).collect();
+    let colours: Vec<([u8; 3], usize)> = by_colour.into_iter().collect();
+    let nearest: Vec<usize> = {
+        use rayon::prelude::*;
+        colours
+            .par_iter()
+            .map(|(colour, _)| {
+                let here = lab([
+                    colour[0] as f32 / 255.0,
+                    colour[1] as f32 / 255.0,
+                    colour[2] as f32 / 255.0,
+                ]);
+                let mut best = (f64::MAX, 0usize);
+                for (i, l) in labs.iter().enumerate() {
+                    let d = ciede2000(here, *l);
+                    if d < best.0 {
+                        best = (d, i);
+                    }
+                }
+                best.1
+            })
+            .collect()
+    };
+    let mut counts = vec![0usize; declared.len()];
+    for ((_, n), ink) in colours.iter().zip(&nearest) {
+        counts[*ink] += n;
     }
 
     let total = covered.max(1) as f64;
@@ -681,6 +807,73 @@ mod tests {
         let a = analyse(&source, &other).unwrap();
         assert!(a.mean > 1.0, "{}", a.mean);
         assert!(a.corner.is_some());
+    }
+
+    /// The two selections must land on exactly the values a full sort puts at the two
+    /// indices, for every length, including the short ones where the indices meet.
+    #[test]
+    fn the_percentiles_are_the_ones_a_sort_would_give() {
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for n in (1..70).chain([199, 200, 201, 1000, 4096, 65_537]) {
+            // Plenty of ties, as in a real delta map: most pixels are exactly zero.
+            let deltas: Vec<f32> = (0..n)
+                .map(|_| match next() % 4 {
+                    0 | 1 => 0.0,
+                    2 => (next() % 16) as f32 * 0.125,
+                    _ => (next() % 100_000) as f32 / 997.0,
+                })
+                .collect();
+            let mut sorted = deltas.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let want = (
+                sorted[n / 2] as f64,
+                sorted[((n as f64 * 0.99) as usize).min(n - 1)] as f64,
+            );
+            let got = median_and_p99(&deltas);
+            assert_eq!(
+                (got.0.to_bits(), got.1.to_bits()),
+                (want.0.to_bits(), want.1.to_bits()),
+                "n = {n}"
+            );
+        }
+    }
+
+    /// The parallel map is the sequential one, bit for bit, runs and all.
+    #[test]
+    fn the_delta_map_is_the_pixel_by_pixel_one() {
+        let (w, h) = (37usize, 23usize);
+        let mut source = Vec::with_capacity(w * h * 4);
+        let mut rendered = Vec::with_capacity(w * h * 4);
+        for y in 0..h {
+            for x in 0..w {
+                // Runs of identical pixels broken by a few that differ in one channel only.
+                let v = if x % 7 == 3 {
+                    0.25
+                } else {
+                    (y % 3) as f32 * 0.4
+                };
+                source.extend_from_slice(&[v, 0.5, 1.0 - v, if x == 5 { 0.5 } else { 1.0 }]);
+                let r = if x % 5 == 1 { 200 } else { 30 + y as u8 };
+                rendered.extend_from_slice(&[r, 128, 64, if x == 9 { 90 } else { 255 }]);
+            }
+        }
+        let got = pixel_deltas(&source, &rendered, w, w * h);
+        for i in 0..w * h {
+            let r = [
+                rendered[i * 4],
+                rendered[i * 4 + 1],
+                rendered[i * 4 + 2],
+                rendered[i * 4 + 3],
+            ];
+            let want = pixel_delta(&source[i * 4..i * 4 + 4], r);
+            assert_eq!(got[i].to_bits(), want.to_bits(), "pixel {i}");
+        }
     }
 
     #[test]

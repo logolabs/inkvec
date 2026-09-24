@@ -46,10 +46,18 @@ pub fn weights_path() -> Option<PathBuf> {
 
 /// What to tell the Settings screen and the "denoiser missing" state.
 pub fn status() -> Status {
-    let path = weights_path();
+    status_at(weights_path())
+}
+
+/// [`status`] for an explicit file, so a test can use a temporary one. The test suite
+/// must never call `status()` itself: on a machine with the model installed, that writes
+/// the verification marker beside the user's own weights.
+pub(crate) fn status_at(path: Option<PathBuf>) -> Status {
     let meta = path.as_ref().and_then(|p| std::fs::metadata(p).ok());
     let installed = match (&path, &meta) {
-        (Some(p), Some(m)) if m.is_file() => verify(p).is_ok(),
+        (Some(p), Some(m)) if m.is_file() => {
+            verified_before(p, m, inkvec_restore::WEIGHTS_SHA256, |p| verify(p).is_ok())
+        }
         _ => false,
     };
     Status {
@@ -60,6 +68,46 @@ pub fn status() -> Status {
         repo: inkvec_restore::HF_DENOISER_REPO,
         sha256: inkvec_restore::WEIGHTS_SHA256,
     }
+}
+
+/// The marker a successful verification leaves beside the weights: `restorer.verified`.
+fn marker_path(weights: &std::path::Path) -> PathBuf {
+    weights.with_extension("verified")
+}
+
+/// What the marker says: the file's size and modification time, and the digest it was
+/// checked against. Any of the three changing means the check has to run again.
+fn stamp(meta: &std::fs::Metadata, digest: &str) -> String {
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{} {mtime} {digest}", meta.len())
+}
+
+/// Whether the file verifies, trusting the marker from the last time it did while the
+/// size and the modification time still match. Hashing 80 MB is most of a second, and
+/// the status is asked for at every start; the file almost never changes in between.
+fn verified_before(
+    path: &std::path::Path,
+    meta: &std::fs::Metadata,
+    digest: &str,
+    check: impl Fn(&std::path::Path) -> bool,
+) -> bool {
+    let marker = marker_path(path);
+    let want = stamp(meta, digest);
+    if std::fs::read_to_string(&marker).is_ok_and(|s| s == want) {
+        return true;
+    }
+    let ok = check(path);
+    if ok {
+        let _ = std::fs::write(&marker, want);
+    } else {
+        let _ = std::fs::remove_file(&marker);
+    }
+    ok
 }
 
 /// Check a file against the published digest.
@@ -148,6 +196,13 @@ pub fn download(
         return Err(why);
     }
     std::fs::rename(&part, &dest).map_err(|e| format!("cannot move the model into place: {e}"))?;
+    // Verified a moment ago; say so, so the next status does not hash it again.
+    if let Ok(meta) = std::fs::metadata(&dest) {
+        let _ = std::fs::write(
+            marker_path(&dest),
+            stamp(&meta, inkvec_restore::WEIGHTS_SHA256),
+        );
+    }
     Ok(dest)
 }
 
@@ -163,6 +218,7 @@ fn remove_at(file: Option<PathBuf>) -> Result<(), String> {
     let Some(path) = file else {
         return Ok(());
     };
+    let _ = std::fs::remove_file(marker_path(&path));
     match std::fs::remove_file(&path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -188,9 +244,18 @@ pub fn announce_to_engine() {
 mod tests {
     use super::*;
 
+    /// A file under the temporary directory, unique to this test run. Every test here uses
+    /// one: the real weights and their marker belong to whoever runs the suite.
+    fn temp(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "inkvec-denoiser-test-{name}-{}",
+            std::process::id()
+        ))
+    }
+
     #[test]
     fn the_status_quotes_the_engines_own_repository_and_digest() {
-        let s = status();
+        let s = status_at(Some(temp("absent.onnx")));
         assert_eq!(s.repo, inkvec_restore::HF_DENOISER_REPO);
         assert_eq!(s.sha256, inkvec_restore::WEIGHTS_SHA256);
         assert_eq!(s.sha256.len(), 64, "a SHA-256 is 64 hex characters");
@@ -225,12 +290,54 @@ mod tests {
 
     #[test]
     fn nothing_is_reported_as_installed_without_a_matching_file() {
-        let s = status();
-        if !s.installed {
-            assert!(
-                s.bytes.is_none(),
-                "a size was reported for a model that is not there"
-            );
-        }
+        let missing = status_at(Some(temp("missing.onnx")));
+        assert!(!missing.installed);
+        assert!(
+            missing.bytes.is_none(),
+            "a size was reported for a model that is not there"
+        );
+        let fake = temp("fake.onnx");
+        std::fs::write(&fake, b"not the model").unwrap();
+        let s = status_at(Some(fake.clone()));
+        assert!(!s.installed && s.bytes.is_none());
+        assert!(
+            !marker_path(&fake).exists(),
+            "a failed check leaves no marker"
+        );
+        std::fs::remove_file(&fake).unwrap();
+    }
+
+    /// The hash runs once; after that the marker answers, until the file changes.
+    #[test]
+    fn a_verified_file_is_not_hashed_again_until_it_changes() {
+        let file = temp("weights.onnx");
+        std::fs::write(&file, b"weights, version one").unwrap();
+        let hashed = std::cell::Cell::new(0);
+        let check = |_: &std::path::Path| {
+            hashed.set(hashed.get() + 1);
+            true
+        };
+        let meta = || std::fs::metadata(&file).unwrap();
+        assert!(verified_before(&file, &meta(), "digest-a", check));
+        assert!(verified_before(&file, &meta(), "digest-a", check));
+        assert_eq!(hashed.get(), 1, "the second status trusted the marker");
+        assert!(marker_path(&file).exists());
+
+        // A different expected digest (a new app version) checks again.
+        assert!(verified_before(&file, &meta(), "digest-b", check));
+        assert_eq!(hashed.get(), 2);
+
+        // So does a file of another size.
+        std::fs::write(&file, b"weights, version two, longer").unwrap();
+        assert!(verified_before(&file, &meta(), "digest-b", check));
+        assert_eq!(hashed.get(), 3);
+
+        // And a file that no longer verifies loses its marker.
+        std::fs::write(&file, b"damaged").unwrap();
+        assert!(!verified_before(&file, &meta(), "digest-b", |_| false));
+        assert!(!marker_path(&file).exists());
+
+        assert!(remove_at(Some(file.clone())).is_ok());
+        assert!(!file.exists());
     }
 }

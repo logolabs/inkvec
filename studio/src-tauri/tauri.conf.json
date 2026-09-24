@@ -12,22 +12,6 @@
   "app": {
     "windows": [
       {
-        "title": "Inkvec Studio Lite",
-        "width": 1440,
-        "height": 900,
-        "minWidth": 1024,
-        "minHeight": 640,
-        "resizable": true,
-        "fullscreen": false,
-        "decorations": false,
-        "transparent": false,
-        "dragDropEnabled": true,
-        "theme": null,
-        "backgroundColor": "#1a1816",
-        "center": true,
-        "visible": false
-      },
-      {
         "label": "splash",
         "title": "Inkvec Studio Lite",
         "url": "splash.html",
@@ -47,6 +31,23 @@
         "dragDropEnabled": false,
         "theme": "Dark",
         "backgroundColor": "#1a1816"
+      },
+      {
+        "label": "main",
+        "title": "Inkvec Studio Lite",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 640,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": false,
+        "transparent": false,
+        "dragDropEnabled": true,
+        "theme": null,
+        "backgroundColor": "#1a1816",
+        "center": true,
+        "visible": false
       }
     ],
     "security": {

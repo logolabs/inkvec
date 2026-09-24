@@ -426,6 +426,8 @@ export const api = {
   startTrace: (settings: Settings, tier: "draft" | "final") =>
     invoke<number>("start_trace", { request: { settings, tier } }),
   cancelTrace: () => invoke<void>("cancel_trace"),
+  /** The confidence bands of a finished trace; they travel apart from `trace:done`. */
+  traceBands: (generation: number) => invoke<string | null>("trace_bands", { generation }),
 
   snapInks: (svg: string, snaps: { from: string; to: string }[], width: number, height: number) =>
     invoke<{ svg: string; inks: Ink[] }>("snap_inks", { svg, snaps, width, height }),

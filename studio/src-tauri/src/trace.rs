@@ -166,7 +166,17 @@ impl std::fmt::Debug for Source {
 
 impl Source {
     /// Read an image from bytes, refusing early and in words if it will not decode.
+    ///
+    /// An SVG is accepted too, rendered to a PNG first: re-tracing a drawing is how a
+    /// messy one comes back clean (the paths a generator or a converter left behind,
+    /// stacked translucent strokes, thousands of nodes), and from then on it is an image
+    /// like any other, with a quality report measured against its own render.
     pub fn open(bytes: Vec<u8>, path: Option<std::path::PathBuf>) -> Result<Self, String> {
+        let bytes = if looks_like_svg(&bytes) {
+            svg_to_png(&bytes)?
+        } else {
+            bytes
+        };
         let container = Container::sniff(&bytes);
         // `max_dim` 0: dimensions only, no resampling, so the reported size is the file's.
         let (_img, (width, height)) = inkvec_trace::decode_image_capped(&bytes, 0)
@@ -197,6 +207,76 @@ impl Source {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "image".to_string())
     }
+}
+
+/// Long side of the render an SVG is traced from, in pixels.
+const SVG_RENDER_PX: u32 = 1024;
+/// Samples per pixel along each axis when rendering an SVG. resvg's own antialiasing gives
+/// an edge a handful of alpha levels; the tracer reads sub-pixel boundary positions from
+/// edge coverage, so the render is supersampled and box-filtered to exact coverage.
+const SVG_SUPERSAMPLE: u32 = 4;
+
+/// Whether `bytes` are an SVG document rather than an image file.
+fn looks_like_svg(bytes: &[u8]) -> bool {
+    let head = String::from_utf8_lossy(&bytes[..bytes.len().min(4096)]);
+    let t = head.trim_start_matches('\u{feff}').trim_start();
+    t.starts_with('<') && t.contains("<svg")
+}
+
+/// Render an SVG document to a PNG, [`SVG_RENDER_PX`] on its long side.
+fn svg_to_png(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    use resvg::{tiny_skia, usvg};
+    let text = std::str::from_utf8(bytes).map_err(|_| "this SVG is not UTF-8 text".to_string())?;
+    let tree = usvg::Tree::from_str(text, &usvg::Options::default())
+        .map_err(|e| format!("this SVG could not be read: {e}"))?;
+    let size = tree.size();
+    let (sw, sh) = (size.width() as f64, size.height() as f64);
+    if !(sw > 0.0 && sh > 0.0) {
+        return Err("this SVG declares an empty canvas".into());
+    }
+    let fit = SVG_RENDER_PX as f64 / sw.max(sh);
+    let w = ((sw * fit).round() as u32).max(1);
+    let h = ((sh * fit).round() as u32).max(1);
+    let k = SVG_SUPERSAMPLE;
+    let mut pixmap = tiny_skia::Pixmap::new(w * k, h * k)
+        .ok_or_else(|| "this SVG is too large to render".to_string())?;
+    let ts = tiny_skia::Transform::from_scale(
+        (w * k) as f32 / size.width(),
+        (h * k) as f32 / size.height(),
+    );
+    resvg::render(&tree, ts, &mut pixmap.as_mut());
+    // Box filter in tiny-skia's premultiplied space, then unpremultiply once.
+    let src = pixmap.data();
+    let stride = (w * k * 4) as usize;
+    let n = k * k;
+    let mut out = image::RgbaImage::new(w, h);
+    for y in 0..h {
+        for x in 0..w {
+            let mut acc = [0u32; 4];
+            for j in 0..k {
+                let row = ((y * k + j) as usize) * stride;
+                for i in 0..k {
+                    let at = row + ((x * k + i) * 4) as usize;
+                    for (c, v) in acc.iter_mut().enumerate() {
+                        *v += src[at + c] as u32;
+                    }
+                }
+            }
+            let a = (acc[3] + n / 2) / n;
+            let px = if a == 0 {
+                [0, 0, 0, 0]
+            } else {
+                // Straight colour is the premultiplied sum over the alpha sum.
+                let un = |c: u32| ((c * 255 + acc[3] / 2) / acc[3]).min(255) as u8;
+                [un(acc[0]), un(acc[1]), un(acc[2]), a as u8]
+            };
+            out.put_pixel(x, y, image::Rgba(px));
+        }
+    }
+    let mut png = Vec::new();
+    out.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .map_err(|e| format!("could not encode the render: {e}"))?;
+    Ok(png)
 }
 
 /// A trace's identity, so a result that arrives after the user has moved on can be
@@ -408,7 +488,6 @@ fn measure(
     stages: Vec<Stage>,
     seconds: f64,
 ) -> Outcome {
-
     let raster = inkvec_trace::decode_image_capped(&source.bytes, args.max_dim)
         .ok()
         .map(|(img, _)| img);
@@ -583,6 +662,21 @@ mod tests {
     }
 
     #[test]
+    fn an_svg_is_opened_as_its_render_with_exact_edge_coverage() {
+        // A 10 x 5 canvas whose left 5.00488 units are black: the render is 1024 x 512
+        // and the boundary sits at x = 512.5, half way across pixel 512.
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="5"><rect width="5.00488" height="5"/></svg>"#;
+        let s = Source::open(svg.to_vec(), Some("drawing.svg".into())).unwrap();
+        assert_eq!((s.width, s.height), (1024, 512));
+        assert_eq!(s.container, Container::Png);
+        assert_eq!(s.stem(), "drawing");
+        let img = image::load_from_memory(&s.bytes).unwrap().to_rgba8();
+        let a = |x: u32| img.get_pixel(x, 100)[3];
+        assert_eq!((a(100), a(900)), (255, 0));
+        assert!((a(512) as i32 - 128).abs() <= 16, "{}", a(512));
+    }
+
+    #[test]
     fn opening_something_that_is_not_an_image_says_what_is_supported() {
         let e = Source::open(b"this is a text file".to_vec(), None).unwrap_err();
         assert!(e.contains("PNG, JPEG, WebP"), "{e}");
@@ -741,21 +835,38 @@ mod tests {
         ));
 
         for changed in [
-            Settings { minify: true, ..plain.clone() },
-            Settings { margin: 0.1, ..plain.clone() },
-            Settings { minify: true, margin: 0.05, ..plain.clone() },
+            Settings {
+                minify: true,
+                ..plain.clone()
+            },
+            Settings {
+                margin: 0.1,
+                ..plain.clone()
+            },
+            Settings {
+                minify: true,
+                margin: 0.05,
+                ..plain.clone()
+            },
             // Not a hit, but it must still come out right: the emitter reads this one, so
             // the cache has to trace again rather than hand back the drawing it has.
-            Settings { transparent_background: true, ..plain.clone() },
+            Settings {
+                transparent_background: true,
+                ..plain.clone()
+            },
         ] {
             let Outcome::Traced(hit) = run(&source, &changed, Tier::Final, Some(&cache), |_, _| {})
             else {
                 panic!("the cached path did not produce a drawing");
             };
-            let Outcome::Traced(fresh) = run(&source, &changed, Tier::Final, None, |_, _| {}) else {
+            let Outcome::Traced(fresh) = run(&source, &changed, Tier::Final, None, |_, _| {})
+            else {
                 panic!("the fresh path did not produce a drawing");
             };
-            assert_eq!(hit.svg, fresh.svg, "a reused drawing differs from a fresh one: {changed:?}");
+            assert_eq!(
+                hit.svg, fresh.svg,
+                "a reused drawing differs from a fresh one: {changed:?}"
+            );
             assert_eq!(hit.report.coordinates, fresh.report.coordinates);
             assert_eq!(hit.report.bytes, fresh.report.bytes);
             assert_eq!(hit.palette.len(), fresh.palette.len());
@@ -789,10 +900,12 @@ mod tests {
             "a coarser precision came back as the drawing traced at the finer one"
         );
         // And the pipeline really ran: a cache hit reports no stages.
-        assert!(!second.stages.is_empty(), "the pipeline did not run for a changed setting");
+        assert!(
+            !second.stages.is_empty(),
+            "the pipeline did not run for a changed setting"
+        );
     }
 }
-
 
 /// One trace at a time, and the one somebody is looking at goes first.
 ///
@@ -906,10 +1019,16 @@ mod scheduler_tests {
         let first = s.interactive();
         assert!(s.lock().busy);
         // A batch row must not take the slot while the interactive trace holds it.
-        assert!(s.batch_row(|| true).is_none(), "gave up rather than running alongside");
+        assert!(
+            s.batch_row(|| true).is_none(),
+            "gave up rather than running alongside"
+        );
         drop(first);
         assert!(!s.lock().busy);
-        assert!(s.batch_row(|| false).is_some(), "free again once the trace finished");
+        assert!(
+            s.batch_row(|| false).is_some(),
+            "free again once the trace finished"
+        );
     }
 
     #[test]
@@ -929,14 +1048,20 @@ mod scheduler_tests {
         drop(held);
         let second = waiter.join().expect("the waiting trace got the slot");
         drop(second);
-        assert!(s.batch_row(|| false).is_some(), "the batch gets it once no trace wants it");
+        assert!(
+            s.batch_row(|| false).is_some(),
+            "the batch gets it once no trace wants it"
+        );
     }
 
     #[test]
     fn a_cancelled_batch_stops_waiting() {
         let s = Arc::new(Scheduler::default());
         let _held = s.interactive();
-        assert!(s.batch_row(|| true).is_none(), "a cancelled run does not block on the slot");
+        assert!(
+            s.batch_row(|| true).is_none(),
+            "a cancelled run does not block on the slot"
+        );
     }
 
     #[test]
@@ -947,7 +1072,10 @@ mod scheduler_tests {
             let _slot = s2.interactive();
             panic!("a trace that failed");
         }));
-        assert!(!s.lock().busy, "the slot is given up even when the pipeline panics");
+        assert!(
+            !s.lock().busy,
+            "the slot is given up even when the pipeline panics"
+        );
         assert!(s.batch_row(|| false).is_some());
     }
 }
@@ -1012,7 +1140,12 @@ impl Cache {
     }
 
     /// The drawing already in hand for this image and these settings, if there is one.
-    pub fn reuse(&self, source: &std::sync::Arc<Source>, settings: &Settings, tier: Tier) -> Option<Reused> {
+    pub fn reuse(
+        &self,
+        source: &std::sync::Arc<Source>,
+        settings: &Settings,
+        tier: Tier,
+    ) -> Option<Reused> {
         let held = self.lock();
         let hit = held.as_ref()?;
         if !std::sync::Arc::ptr_eq(&hit.source, source) || hit.key != drawing_key(settings, tier) {
@@ -1071,7 +1204,15 @@ mod cache_tests {
     }
 
     fn keep(cache: &Cache, src: &Arc<Source>, settings: &Settings) {
-        cache.keep(src, settings, Tier::Final, "<svg/>", 8, 8, &["palette 1ms".to_string()]);
+        cache.keep(
+            src,
+            settings,
+            Tier::Final,
+            "<svg/>",
+            8,
+            8,
+            &["palette 1ms".to_string()],
+        );
     }
 
     #[test]
@@ -1088,8 +1229,14 @@ mod cache_tests {
         let (cache, src, s) = (Cache::default(), source(1), Settings::default());
         keep(&cache, &src, &s);
         for changed in [
-            Settings { minify: !s.minify, ..s.clone() },
-            Settings { margin: 0.25, ..s.clone() },
+            Settings {
+                minify: !s.minify,
+                ..s.clone()
+            },
+            Settings {
+                margin: 0.25,
+                ..s.clone()
+            },
         ] {
             assert!(
                 cache.reuse(&src, &changed, Tier::Final).is_some(),
@@ -1103,18 +1250,45 @@ mod cache_tests {
         let (cache, src, s) = (Cache::default(), source(1), Settings::default());
         keep(&cache, &src, &s);
         for changed in [
-            Settings { precision: s.precision * 2.0, ..s.clone() },
-            Settings { trace_size: s.trace_size / 2, ..s.clone() },
-            Settings { max_colours: 3, ..s.clone() },
-            Settings { bezier_cost: 3.0, ..s.clone() },
-            Settings { corner_angle: 30.0, ..s.clone() },
-            Settings { editability: !s.editability, ..s.clone() },
+            Settings {
+                precision: s.precision * 2.0,
+                ..s.clone()
+            },
+            Settings {
+                trace_size: s.trace_size / 2,
+                ..s.clone()
+            },
+            Settings {
+                max_colours: 3,
+                ..s.clone()
+            },
+            Settings {
+                bezier_cost: 3.0,
+                ..s.clone()
+            },
+            Settings {
+                corner_angle: 30.0,
+                ..s.clone()
+            },
+            Settings {
+                editability: !s.editability,
+                ..s.clone()
+            },
             // These two look like output options and are not: the emitter reads both.
             // `a_reused_drawing_is_what_a_fresh_trace_would_have_written` caught
             // Transparent background being treated as post-processing.
-            Settings { holes_as_cutouts: !s.holes_as_cutouts, ..s.clone() },
-            Settings { transparent_background: !s.transparent_background, ..s.clone() },
-            Settings { clean_up_damage: crate::options::Cleanup::On, ..s.clone() },
+            Settings {
+                holes_as_cutouts: !s.holes_as_cutouts,
+                ..s.clone()
+            },
+            Settings {
+                transparent_background: !s.transparent_background,
+                ..s.clone()
+            },
+            Settings {
+                clean_up_damage: crate::options::Cleanup::On,
+                ..s.clone()
+            },
         ] {
             assert!(
                 cache.reuse(&src, &changed, Tier::Final).is_none(),
@@ -1127,8 +1301,14 @@ mod cache_tests {
     fn a_draft_is_not_a_final_and_another_image_is_not_this_one() {
         let (cache, src, s) = (Cache::default(), source(1), Settings::default());
         keep(&cache, &src, &s);
-        assert!(cache.reuse(&src, &s, Tier::Draft).is_none(), "a draft is its own drawing");
-        assert!(cache.reuse(&source(2), &s, Tier::Final).is_none(), "another image entirely");
+        assert!(
+            cache.reuse(&src, &s, Tier::Draft).is_none(),
+            "a draft is its own drawing"
+        );
+        assert!(
+            cache.reuse(&source(2), &s, Tier::Final).is_none(),
+            "another image entirely"
+        );
     }
 
     #[test]

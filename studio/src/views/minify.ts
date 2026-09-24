@@ -394,6 +394,20 @@ export function createMinify(store: Store): HTMLElement {
       h(
         "div.railfoot",
         null,
+        m.before
+          ? h(
+              "button.btn.ghost",
+              {
+                style: { justifyContent: "flex-start", gap: "8px" },
+                title:
+                  "Minifying keeps every path the file has. Re-tracing draws the file again from its render: stacked or translucent paths, broken outlines and thousands of nodes come back as a few clean shapes, and the report measures the result against the original.",
+                onclick: () =>
+                  window.dispatchEvent(new CustomEvent("inkvec:retrace", { detail: { svg: m.before, name: m.name ?? "drawing.svg" } })),
+              },
+              icon("wand", 14),
+              "Rebuild it clean by re-tracing",
+            )
+          : null,
         h(
           "div.row",
           null,

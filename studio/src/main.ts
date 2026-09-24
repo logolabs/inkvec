@@ -204,10 +204,26 @@ async function openPath(path: string): Promise<void> {
 async function chooseFile(): Promise<void> {
   const picked = await open({
     multiple: false,
-    filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff"] }],
+    // An SVG is accepted too: it is traced from its render, which is how a messy drawing
+    // comes back as clean shapes.
+    filters: [{ name: "Images and SVG", extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff", "svg"] }],
   });
   if (typeof picked === "string") await openPath(picked);
 }
+
+/** Trace an SVG from its render, in the Vectorize tab: the Minify tab's "rebuild". */
+async function retraceSvg(svg: string, name: string): Promise<void> {
+  store.set({ tab: "vectorize" });
+  renderTab();
+  await openWith(async () => {
+    const info = await api.openBytes([...new TextEncoder().encode(svg)], name);
+    store.set({ source: info });
+  });
+}
+window.addEventListener("inkvec:retrace", (e) => {
+  const { svg, name } = (e as CustomEvent<{ svg: string; name: string }>).detail;
+  void retraceSvg(svg, name);
+});
 
 // ------------------------------------------------------------------ the shell ---
 
@@ -543,6 +559,11 @@ async function wireDragDrop(): Promise<void> {
     // An SVG belongs to the Minify tab and an image to Vectorize, whichever tab is
     // showing: dropping a file should do the obvious thing with it.
     const svgs = paths.filter((p) => p.toLowerCase().endsWith(".svg"));
+    // Dropped on Vectorize, an SVG is something to re-trace clean.
+    if (svgs.length === 1 && paths.length === 1 && store.state.tab === "vectorize") {
+      await openPath(svgs[0]);
+      return;
+    }
     if (svgs.length) {
       // On the Fabricate tab an SVG is something to cut; anywhere else, to minify.
       const target = store.state.tab === "fabricate" ? "fabricate" : "minify";

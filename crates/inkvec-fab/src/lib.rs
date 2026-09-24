@@ -21,6 +21,7 @@
 pub mod dxf;
 pub mod fitcurve;
 pub mod geom;
+pub mod lines;
 pub mod load;
 pub mod options;
 pub mod plan;
@@ -128,6 +129,35 @@ mod tests {
             p.layers.iter().map(|l| l.nodes).collect::<Vec<_>>()
         );
         assert!(p.layers[0].svg.contains("width=\""));
+    }
+
+    #[test]
+    fn a_stroked_drawing_is_drawn_along_its_own_strokes() {
+        // An arrow drawn with strokes, a crossing, and one filled square beside it.
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50">
+            <path d="M10 25H40M20 15 10 25 20 35M25 10V40" fill="none" stroke="#000" stroke-width="3"/>
+            <rect x="60" y="10" width="30" height="30" fill="#000"/></svg>"##;
+        let o = Options {
+            mode: Mode::Lines,
+            width_mm: 100.0,
+            ..Options::default()
+        };
+        let p = prepare(svg, &o).unwrap();
+        assert_eq!(p.layers.len(), 1);
+        let pen = &p.layers[0].svg;
+        // Three strokes as three lines at the pen width, the square as its outline.
+        assert_eq!(pen.matches("stroke-width=\"0.400\"").count(), 4, "{pen}");
+        let info = p
+            .checks
+            .iter()
+            .find(|c| c.code == "lines")
+            .expect("lines info");
+        assert!(info.message.contains("3 line(s)"), "{}", info.message);
+        assert!(
+            info.message.contains("the file's own strokes"),
+            "{}",
+            info.message
+        );
     }
 
     #[test]

@@ -3,7 +3,7 @@
 
 use inkvec_core::Point;
 
-use super::{median, LevelSet, RegionGrid, CAP_FRACTION, SPUR_FACTOR};
+use super::{median, LevelSet, RegionGrid, CAP_FRACTION};
 
 /// Zhang–Suen thinning to a one-pixel skeleton.
 pub(crate) fn zhang_suen(mask: &[bool], w: usize, h: usize) -> Vec<bool> {
@@ -213,13 +213,15 @@ pub(crate) fn trace_branches(g: &SkelGraph) -> Vec<Branch> {
     out
 }
 
-/// Iteratively remove dead-end branches shorter than the local stroke width.
+/// Iteratively remove dead-end branches shorter than `spur_factor` local stroke widths,
+/// or that end without a cap.
 pub(crate) fn prune_spurs(
     mut skel: Vec<bool>,
     g: &RegionGrid,
     ls: &LevelSet,
     w: usize,
     h: usize,
+    spur_factor: f64,
 ) -> Vec<bool> {
     for _ in 0..16 {
         let graph = SkelGraph::build(&skel, w, h);
@@ -251,7 +253,7 @@ pub(crate) fn prune_spurs(
                 .collect();
             let d_med = median(&mut ds);
             let local_width = 2.0 * ds.iter().cloned().fold(0.0f64, f64::max);
-            let short = len < SPUR_FACTOR * local_width;
+            let short = len < spur_factor * local_width;
             let no_cap = d_med > 0.0 && d_tip < CAP_FRACTION * d_med;
             if short || no_cap {
                 for &k in &br.chain {

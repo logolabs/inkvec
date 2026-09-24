@@ -12,6 +12,9 @@ repository.workspace = true
 usvg = { version = "0.48", default-features = false }
 kurbo = { workspace = true }
 i_overlay = "9"
+# The tracer's centreline analysis, for line-shaped parts drawn or scored once.
+inkvec-trace = { workspace = true }
+inkvec-core = { workspace = true }
 serde = { workspace = true }
 
 [dev-dependencies]

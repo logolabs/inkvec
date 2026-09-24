@@ -28,7 +28,7 @@ const tracedSvgs = import.meta.glob("./traced/*.svg", { eager: true, query: "?ra
 // (`cargo run -p inkvec-fab --example fab` with FAB_JSON=1), one per mode.
 const fabJson = import.meta.glob("./fab/*/*.json", { eager: true, import: "default" }) as Record<string, unknown>;
 const fabUnicorn = (import.meta.glob("./fab/unicorn.svg", { eager: true, query: "?raw", import: "default" }) as Record<string, string>)["./fab/unicorn.svg"];
-const FAB_DIR: Record<string, string> = { singleColour: "single", layered: "layered", inlay: "inlay", sticker: "sticker", stencil: "stencil" };
+const FAB_DIR: Record<string, string> = { singleColour: "single", layered: "layered", inlay: "inlay", sticker: "sticker", stencil: "stencil", lines: "lines" };
 
 const png = (name: string) => samplePngs[`../src-tauri/samples/${name}.png`];
 const svgOf = (name: string) => tracedSvgs[`./traced/${name}.svg`] ?? "";
@@ -225,6 +225,9 @@ mockIPC(
         return fabJson["./fab/layered/analysis.json"];
       case "fab_prepare":
         return fabJson[`./fab/${FAB_DIR[a.options?.mode] ?? "layered"}/plan.json`];
+      case "plugin:dialog|open":
+        // An SVG picker gets the fixture drawing; any other picker is cancelled.
+        return a.options?.filters?.some((f: { extensions: string[] }) => f.extensions.includes("svg")) ? "C:/mock/unicorn.svg" : null;
       case "read_text_file":
         return fabUnicorn;
       case "cli_status":

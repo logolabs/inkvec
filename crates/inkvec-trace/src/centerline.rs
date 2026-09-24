@@ -148,6 +148,42 @@ use skeleton::{geometric_chains, prune_spurs, zhang_suen, RawChain};
 /// threshold sits, and nothing real is in it.
 pub const MIN_ASPECT: f64 = 3.0;
 
+/// How [`analyse_with`] decides that a region is drawn line.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Criteria {
+    /// Least `length / width` of each skeleton edge in a region whose skeleton has more than
+    /// one edge. [`MIN_ASPECT`] (the default) asks every edge to be a stroke on its own, which
+    /// refuses any drawing with junctions closer than three widths: the legs of lucide's
+    /// `bug` are one to two and a half widths between junctions, so the whole region goes
+    /// back to filled tracing. With a smaller value the aspect test moves to the region —
+    /// the summed edge length must still reach [`MIN_ASPECT`] widths — and a blob is still
+    /// refused by the width-spread and area tests, which it fails by a wide margin.
+    pub min_edge_aspect: f64,
+    /// Multiple of the local width below which a dead-end branch is pruned as a thinning
+    /// artefact, whatever its end looks like ([`SPUR_FACTOR`] by default). The length is a
+    /// proxy for the cap test beside it and it is wrong for short drawn stubs: an antenna
+    /// one width long off a junction ends in a round cap and is pruned by length alone.
+    pub spur_factor: f64,
+}
+
+impl Default for Criteria {
+    fn default() -> Self {
+        Criteria {
+            min_edge_aspect: MIN_ASPECT,
+            spur_factor: SPUR_FACTOR,
+        }
+    }
+}
+
+/// [`Criteria`] for drawings with junctions: an edge may be half a width long, and a
+/// stub off a junction stays when it ends in a cap and is at least a quarter width long.
+/// Measured on a traced lucide `bug`, its antennae leave the junction as skeleton stubs of
+/// 0.31 and 0.44 widths whose tips sit at 0.97 of the median distance: caps, not corners.
+pub const GRAPH_CRITERIA: Criteria = Criteria {
+    min_edge_aspect: 0.5,
+    spur_factor: 0.25,
+};
+
 /// Confidence multiplier on the width-measurement sigma, above which a width variation
 /// is real rather than measurement noise. The same role `FitConfig::tau` plays for
 /// position.
@@ -308,6 +344,17 @@ pub struct StrokeAnalysis {
 /// `labels` is a per-pixel region id in the same layout as the image, as produced by
 /// [`bilevel_labels`] or by the colour front end's face labelling.
 pub fn analyse(coverage: &CoverageField, labels: &[u16], w: usize, h: usize) -> StrokeAnalysis {
+    analyse_with(coverage, labels, w, h, Criteria::default())
+}
+
+/// [`analyse`] under explicit [`Criteria`].
+pub fn analyse_with(
+    coverage: &CoverageField,
+    labels: &[u16],
+    w: usize,
+    h: usize,
+    criteria: Criteria,
+) -> StrokeAnalysis {
     if w == 0 || h == 0 || labels.len() != w * h {
         return StrokeAnalysis::default();
     }
@@ -330,7 +377,7 @@ pub fn analyse(coverage: &CoverageField, labels: &[u16], w: usize, h: usize) -> 
 
         let region = RegionGrid::build(coverage, labels, w, h, label, st);
         ink_area += region.area();
-        match analyse_region(coverage, &region, label) {
+        match analyse_region(coverage, &region, label, criteria) {
             Some(strokes) => {
                 stroke_area += region.area();
                 out.strokes.extend(strokes);
@@ -996,22 +1043,32 @@ pub fn refine_to_coverage(strokes: &mut [Stroke], coverage: &CoverageField, roun
 // Sub-pixel ridge, width, and the stroke decision
 // ---------------------------------------------------------------------------------
 
-fn analyse_region(cov: &CoverageField, g: &RegionGrid, label: u16) -> Option<Vec<Stroke>> {
+fn analyse_region(
+    cov: &CoverageField,
+    g: &RegionGrid,
+    label: u16,
+    criteria: Criteria,
+) -> Option<Vec<Stroke>> {
     let ls = LevelSet::build(g);
     if ls.segs.is_empty() {
         return None;
     }
     let skel = zhang_suen(&g.mask, g.w, g.h);
-    let skel = prune_spurs(skel, g, &ls, g.w, g.h);
+    let skel = prune_spurs(skel, g, &ls, g.w, g.h, criteria.spur_factor);
     let chains = geometric_chains(&skel, g, &ls, g.w, g.h);
     if chains.is_empty() {
         return None;
     }
 
+    let min_aspect = if chains.len() > 1 {
+        criteria.min_edge_aspect.min(MIN_ASPECT)
+    } else {
+        MIN_ASPECT
+    };
     let mut strokes = Vec::new();
     let mut explained = 0.0f64;
     for c in &chains {
-        if let Some(s) = measure_stroke(cov, &ls, c, label) {
+        if let Some(s) = measure_stroke(cov, &ls, c, label, min_aspect) {
             let l = s.length();
             explained += l * s.width;
             if !s.closed {
@@ -1025,6 +1082,14 @@ fn analyse_region(cov: &CoverageField, g: &RegionGrid, label: u16) -> Option<Vec
     }
     if strokes.is_empty() {
         return None;
+    }
+    if min_aspect < MIN_ASPECT {
+        // The aspect test, moved from the edge to the region.
+        let mut widths: Vec<f64> = strokes.iter().map(|s| s.width).collect();
+        let length: f64 = strokes.iter().map(Stroke::length).sum();
+        if length / median(&mut widths) < MIN_ASPECT {
+            return None;
+        }
     }
 
     let area = g.area();
@@ -1043,6 +1108,7 @@ fn measure_stroke(
     ls: &LevelSet,
     chain: &RawChain,
     label: u16,
+    min_aspect: f64,
 ) -> Option<Stroke> {
     let n = chain.pts.len();
     if n < 3 {
@@ -1092,7 +1158,7 @@ fn measure_stroke(
     let sigma_meas = median(&mut sig_int).max(WIDTH_SIGMA_FLOOR);
 
     let length = polyline_length(&pts, chain.closed);
-    if width <= 0.0 || length / width < MIN_ASPECT {
+    if width <= 0.0 || length / width < min_aspect {
         return None;
     }
     // Is the variation more than the measurement can explain?

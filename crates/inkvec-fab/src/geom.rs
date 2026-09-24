@@ -8,11 +8,13 @@
 
 use i_overlay::core::fill_rule::FillRule;
 use i_overlay::core::overlay_rule::OverlayRule;
+use i_overlay::float::clip::FloatClip;
 use i_overlay::float::simplify::SimplifyShape;
 use i_overlay::float::single::SingleFloatOverlay;
 use i_overlay::mesh::float::outline::offset::OutlineOffset;
 use i_overlay::mesh::float::stroke::offset::StrokeOffset;
 use i_overlay::mesh::float::style::{LineCap, LineJoin, OutlineStyle, StrokeStyle};
+use i_overlay::string::clip::ClipRule;
 
 /// A point in millimetres.
 pub type Pt = [f64; 2];
@@ -110,6 +112,68 @@ pub fn stroke(path: &[Pt], width: f64, closed: bool) -> Region {
         .start_cap(LineCap::Round(ROUND_STEP))
         .end_cap(LineCap::Round(ROUND_STEP));
     path.to_vec().stroke(style, closed)
+}
+
+/// The parts of a polyline inside `r`, each with whether it is still a closed loop. A line
+/// wholly inside comes back as it was, not cut at its own crossings; pieces the clip
+/// splits are rejoined end to end where they meet.
+pub fn clip_line(path: &[Pt], closed: bool, r: &Region) -> Vec<(Vec<Pt>, bool)> {
+    if path.len() < 2 || r.is_empty() {
+        return Vec::new();
+    }
+    let mut string = path.to_vec();
+    if closed {
+        string.push(path[0]);
+    }
+    let length = |p: &[Pt]| -> f64 {
+        p.windows(2)
+            .map(|s| (s[1][0] - s[0][0]).hypot(s[1][1] - s[0][1]))
+            .sum()
+    };
+    let rule = ClipRule {
+        invert: false,
+        boundary_included: true,
+    };
+    let pieces: Vec<Vec<Pt>> = string.clip_by(r, FillRule::NonZero, rule);
+    let total = length(&string);
+    let kept: f64 = pieces.iter().map(|p| length(p)).sum();
+    if kept >= total * (1.0 - 1e-6) {
+        return vec![(path.to_vec(), closed)];
+    }
+    // Rejoin: the clip returns pieces in no particular order or direction.
+    let near = |a: Pt, b: Pt| (a[0] - b[0]).hypot(a[1] - b[1]) < 1e-6;
+    let mut pieces: Vec<Vec<Pt>> = pieces.into_iter().filter(|p| p.len() >= 2).collect();
+    let mut out = Vec::new();
+    while let Some(mut cur) = pieces.pop() {
+        loop {
+            let end = cur[cur.len() - 1];
+            let start = cur[0];
+            let Some(k) = pieces.iter().position(|p| {
+                near(p[0], end)
+                    || near(p[p.len() - 1], end)
+                    || near(p[0], start)
+                    || near(p[p.len() - 1], start)
+            }) else {
+                break;
+            };
+            let mut p = pieces.swap_remove(k);
+            if near(p[0], end) {
+                cur.extend_from_slice(&p[1..]);
+            } else if near(p[p.len() - 1], end) {
+                p.reverse();
+                cur.extend_from_slice(&p[1..]);
+            } else if near(p[p.len() - 1], start) {
+                p.extend_from_slice(&cur[1..]);
+                cur = p;
+            } else {
+                p.reverse();
+                p.extend_from_slice(&cur[1..]);
+                cur = p;
+            }
+        }
+        out.push((cur, false));
+    }
+    out
 }
 
 /// Signed area of a contour (positive counterclockwise in a y-up frame).
@@ -221,5 +285,21 @@ mod tests {
         let b = bounds(&o).unwrap();
         assert!(b[2] < 10.5, "the tail is gone: {b:?}");
         assert!(area(&o) > 95.0, "the body stays");
+    }
+
+    #[test]
+    fn a_line_is_clipped_to_the_region_and_kept_whole_when_inside() {
+        let r = rect(0.0, 0.0, 10.0, 10.0);
+        let inside = vec![[1.0, 1.0], [9.0, 1.0], [9.0, 9.0]];
+        let out = clip_line(&inside, false, &r);
+        assert_eq!(out, vec![(inside.clone(), false)], "untouched");
+        let across = vec![[-5.0, 5.0], [15.0, 5.0]];
+        let out = clip_line(&across, false, &r);
+        assert_eq!(out.len(), 1);
+        let xs: Vec<f64> = out[0].0.iter().map(|p| p[0]).collect();
+        let (lo, hi) = xs
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(a, b), &x| (a.min(x), b.max(x)));
+        assert!(lo.abs() < 1e-6 && (hi - 10.0).abs() < 1e-6, "{xs:?}");
     }
 }

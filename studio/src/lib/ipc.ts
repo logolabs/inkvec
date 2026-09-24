@@ -217,7 +217,7 @@ export type Outcome =
 
 // --------------------------------------------------------------------- fabricate ---
 
-export type FabMode = "singleColour" | "layered" | "inlay" | "sticker" | "stencil";
+export type FabMode = "singleColour" | "layered" | "inlay" | "sticker" | "stencil" | "lines";
 export type CutStyle = "filled" | "hairline";
 
 /** A fabrication request; lengths in millimetres. Mirrors `inkvec_fab::Options`. */
@@ -232,6 +232,10 @@ export interface FabOptions {
   stickerMarginMm: number;
   bridgeMm: number;
   stencilMarginMm: number;
+  /** Widest part drawn as one line in "lines" mode; 0 for any width. */
+  maxLineMm: number;
+  /** The pen or tool line width in "lines" mode. */
+  penMm: number;
   registration: boolean;
   weedBorderMm: number;
   mirror: boolean;

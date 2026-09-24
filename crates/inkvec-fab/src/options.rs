@@ -19,6 +19,9 @@ pub enum Mode {
     Sticker,
     /// A stencil: a sheet with the artwork cut out, every loose counter held by a bridge.
     Stencil,
+    /// For a pen, a scoring blade or a laser line: every line-shaped part drawn once along
+    /// its centre, everything else round its outline.
+    Lines,
 }
 
 /// How a cut line is drawn in the output file.
@@ -59,6 +62,11 @@ pub struct Options {
     pub bridge_mm: f64,
     /// Width of the stencil sheet's frame around the artwork.
     pub stencil_margin_mm: f64,
+    /// Widest part [`Mode::Lines`] draws as a single line rather than an outline; 0 takes
+    /// every part the analysis reads as a drawn line, whatever its width.
+    pub max_line_mm: f64,
+    /// Width of the pen or tool line in [`Mode::Lines`] output.
+    pub pen_mm: f64,
     /// Registration marks on every layer, outside the artwork.
     pub registration: bool,
     /// A weeding border this far outside the artwork; zero for none.
@@ -90,6 +98,8 @@ impl Default for Options {
             sticker_margin_mm: 3.0,
             bridge_mm: 1.5,
             stencil_margin_mm: 10.0,
+            max_line_mm: 0.0,
+            pen_mm: 0.4,
             registration: true,
             weed_border_mm: 0.0,
             mirror: false,

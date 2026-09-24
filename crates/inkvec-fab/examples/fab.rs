@@ -13,6 +13,7 @@ fn main() {
         Some("inlay") => inkvec_fab::Mode::Inlay,
         Some("sticker") => inkvec_fab::Mode::Sticker,
         Some("stencil") => inkvec_fab::Mode::Stencil,
+        Some("lines") => inkvec_fab::Mode::Lines,
         _ => inkvec_fab::Mode::SingleColour,
     };
     let width_mm = a.get(4).and_then(|w| w.parse().ok()).unwrap_or(100.0);
@@ -36,6 +37,10 @@ fn main() {
     let o = inkvec_fab::Options {
         mode,
         width_mm,
+        max_line_mm: std::env::var("FAB_MAX_LINE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.0),
         ..Default::default()
     };
     let t = Instant::now();

@@ -117,6 +117,7 @@ const PATHS: Record<string, string> = {
   chevronDown: "m6 9 6 6 6-6",
   chevronRight: "m9 18 6-6-6-6",
   minus: "M5 12h14",
+  pen: "M21.17 6.81a2.82 2.82 0 0 0-3.99-3.99L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5Z",
   square: "M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2Z",
   crosshair: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20ZM22 12h-4M6 12H2M12 6V2M12 22v-4",
   zap: "M4 14h7l-3 8 12-12h-7l3-8Z",

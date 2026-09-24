@@ -43,7 +43,12 @@ fn main() {
         let t = std::time::Instant::now();
         let cov = coverage::bilevel_coverage(&img);
         let labels = centerline::bilevel_labels(&cov);
-        let an = centerline::analyse(&cov, &labels, img.width, img.height);
+        let criteria = if std::env::var_os("STROKES_GRAPH").is_some() {
+            centerline::GRAPH_CRITERIA
+        } else {
+            centerline::Criteria::default()
+        };
+        let an = centerline::analyse_with(&cov, &labels, img.width, img.height, criteria);
         let ms = t.elapsed().as_secs_f64() * 1e3;
 
         // The artist's line weight is one number, so the spread of recovered

@@ -142,6 +142,30 @@ pub fn filled(d: &str, hex: &str) -> String {
     format!("<path d=\"{d}\" fill=\"{hex}\"/>")
 }
 
+/// A pen or tool line: unfilled, round-ended, `width` wide.
+pub fn pen(d: &str, hex: &str, width: f64) -> String {
+    format!(
+        "<path d=\"{d}\" fill=\"none\" stroke=\"{hex}\" stroke-width=\"{width:.3}\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>"
+    )
+}
+
+/// An open or closed polyline's `d`.
+pub fn open_d(p: &[crate::geom::Pt], closed: bool) -> String {
+    let mut d = String::new();
+    for (i, q) in p.iter().enumerate() {
+        d.push_str(&format!(
+            "{}{:.3} {:.3}",
+            if i == 0 { 'M' } else { 'L' },
+            q[0],
+            q[1]
+        ));
+    }
+    if closed {
+        d.push('Z');
+    }
+    d
+}
+
 /// A hairline cut element: unfilled, red, 0.025 mm (a thousandth of an inch).
 pub fn hairline(d: &str) -> String {
     hairline_in(d, "#ff0000")

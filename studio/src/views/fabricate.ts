@@ -38,6 +38,11 @@ const MODES: [FabMode, string, string][] = [
     "Stencil",
     "A sheet with the artwork cut out. Counters that would fall out, like the middle of an O, are held by thin bridges.",
   ],
+  [
+    "lines",
+    "Lines",
+    "For a pen, a scoring blade or a laser line: every line in the drawing is followed once, along its centre, instead of round both of its edges. Strokes in the file are used as drawn; lines inside filled shapes are found and checked against the shape.",
+  ],
 ];
 
 /** What people actually put in the machine, each a set of choices made for them. */
@@ -69,6 +74,13 @@ const PRESETS: { id: string; label: string; glyph: string; note: string; apply: 
     glyph: "copy",
     note: "Mylar or card with the design cut out, for paint or etching cream. Loose centres are bridged.",
     apply: () => ({ mode: "stencil", cutStyle: "filled", mirror: false, bridgeMm: 1.5, stencilMarginMm: 10, minFeatureMm: 1.5, kerfMm: 0 }),
+  },
+  {
+    id: "pen",
+    label: "Pen or score",
+    glyph: "pen",
+    note: "A pen in the cutter, a scoring or foil tool, a plotter, or a laser engraving lines: each line is drawn once, down its middle. Set the tip width so the preview shows what the pen will leave.",
+    apply: () => ({ mode: "lines", penMm: 0.4, maxLineMm: 0, mirror: false }),
   },
   {
     id: "laser",
@@ -301,11 +313,19 @@ function renderStage(store: Store, tools: HTMLElement, pane: HTMLElement): void 
       : null,
     h("span.muted", { style: { marginLeft: "auto", fontSize: "11.5px" } }, plan
         ? `${size2(store, plan.sizeMm)}${
-            f.options.registration && plan.layers.length > 1 ? ", marks included" : f.options.weedBorderMm > 0 ? ", border included" : ""
+            f.options.mode === "lines"
+              ? ""
+              : f.options.registration && plan.layers.length > 1 && (f.options.mode === "layered" || f.options.mode === "inlay")
+                ? ", marks included"
+                : f.options.weedBorderMm > 0
+                  ? ", border included"
+                  : ""
           }`
         : ""),
   );
-  const shown = plan ? (f.shown >= 0 ? plan.layers[f.shown]?.svg : plan.previewSvg) : null;
+  const lines = f.options.mode === "lines";
+  // Lines mode shows what the pen draws, over a ghost of the drawing it came from.
+  const shown = plan ? (f.shown >= 0 ? plan.layers[f.shown]?.svg : lines ? plan.combinedSvg : plan.previewSvg) : null;
   // The overlay shares the sheets' size and origin, and the same grid cell as the sheet,
   // so the two fit the pane identically and line up at any size.
   const cell = (node: HTMLElement, over = false) => {
@@ -320,6 +340,7 @@ function renderStage(store: Store, tools: HTMLElement, pane: HTMLElement): void 
     ? h(
         "div",
         { style: { display: "grid", placeSelf: "stretch", minWidth: "0", minHeight: "0" } },
+        lines && plan && f.shown < 0 ? ghost(cell(art(plan.previewSvg))) : null,
         cell(art(shown)),
         plan && problems && f.showProblems ? cell(art(plan.problemsSvg), true) : null,
       )
@@ -331,10 +352,27 @@ function renderStage(store: Store, tools: HTMLElement, pane: HTMLElement): void 
     h(
       "span.eyebrow.panelabel",
       null,
-      f.shown >= 0 && plan ? `Sheet ${f.shown + 1} · ${plan.layers[f.shown].name} · ${size2(store, plan.layers[f.shown].materialMm)}` : "All sheets, stacked",
+      f.shown >= 0 && plan
+        ? `${lines ? "Pen" : "Sheet"} ${f.shown + 1} · ${plan.layers[f.shown].name} · ${size2(store, plan.layers[f.shown].materialMm)}`
+        : lines
+          ? "What the pen draws, over the drawing"
+          : "All sheets, stacked",
     ),
     layered,
   );
+}
+
+/** What one output file is called: a sheet of material, or one pen's drawing. */
+function sheetWord(store: Store, n: number): string {
+  const word = store.state.fab.options.mode === "lines" ? "pen drawing" : "sheet";
+  return n === 1 ? word : `${word}s`;
+}
+
+/** A layer drawn faintly, for reference under another. */
+function ghost(node: HTMLElement): HTMLElement {
+  node.style.opacity = "0.18";
+  node.style.pointerEvents = "none";
+  return node;
 }
 
 function emptyRail(store: Store, openSvg: () => void, useTrace: () => void): HTMLElement {
@@ -389,7 +427,7 @@ function presetCard(store: Store, change: (p: Partial<FabOptions>, keepPreset?: 
             },
             onclick: () => {
               f.preset = p.id;
-              f.dxf = p.id === "laser";
+              f.dxf = p.id === "laser" || p.id === "pen";
               change(p.apply(inks), true);
             },
           },
@@ -411,7 +449,8 @@ function modeCard(store: Store, change: (p: Partial<FabOptions>) => void): HTMLE
     h("span.eyebrow", null, "Making"),
     h(
       "div.seg",
-      { role: "group", "aria-label": "What is being made" },
+      // Six choices do not fit the rail in one row: three by two, each the same width.
+      { role: "group", "aria-label": "What is being made", style: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)" } },
       ...MODES.map(([id, label]) => h("button", { "aria-pressed": String(o.mode === id), onclick: () => change({ mode: id }) }, label)),
     ),
     h("span.muted", { style: { fontSize: "11.5px", lineHeight: "1.5" } }, about),
@@ -562,8 +601,38 @@ function switchRow(label: string, on: boolean, flip: () => void, note?: string):
   );
 }
 
+/** The options that matter when drawing lines: the pen, what counts as a line, the DXF. */
+function linesCard(store: Store, change: (p: Partial<FabOptions>) => void): HTMLElement {
+  const o = store.state.fab.options;
+  const u = unitWord(store);
+  return h(
+    "div.card",
+    null,
+    h("span.eyebrow", null, "Drawing"),
+    h("span.sentence", null, "The pen or tool draws ", lenField(store, o.penMm, (mm) => mm > 0 && change({ penMm: mm })), ` ${u} wide.`),
+    h(
+      "span.sentence",
+      null,
+      "Lines up to ",
+      lenField(store, o.maxLineMm, (mm) => change({ maxLineMm: mm })),
+      ` ${u} wide are drawn once (0 for any width); wider parts are drawn round their outline.`,
+    ),
+    switchRow(
+      "Also save a DXF",
+      store.state.fab.dxf,
+      () => {
+        store.state.fab.dxf = !store.state.fab.dxf;
+        store.touch("fab");
+      },
+      "Lines as open polylines and outlines as closed ones, one layer per colour, in millimetres.",
+    ),
+    h("span.sentence", null, "Lines stay within ", lenField(store, o.toleranceMm, (mm) => mm > 0 && change({ toleranceMm: mm })), ` ${u} of the drawing.`),
+  );
+}
+
 function optionsCard(store: Store, change: (p: Partial<FabOptions>) => void): HTMLElement {
   const o = store.state.fab.options;
+  if (o.mode === "lines") return linesCard(store, change);
   const u = unitWord(store);
   const sheets = o.mode === "layered" || o.mode === "inlay";
   return h(
@@ -660,7 +729,7 @@ function preflightCard(store: Store): HTMLElement | null {
       null,
       ...(
         [
-          ["sheets", String(plan.layers.length)],
+          [sheetWord(store, 2), String(plan.layers.length)],
           ["pieces", count(parts)],
           ["path segments", count(nodes)],
           ["whole job", size2(store, plan.sizeMm)],
@@ -701,7 +770,7 @@ function cutListCard(store: Store): HTMLElement | null {
   return h(
     "div.card",
     null,
-    h("span.eyebrow", null, "Cut list"),
+    h("span.eyebrow", null, store.state.fab.options.mode === "lines" ? "Pens, one per colour" : "Cut list"),
     ...plan.layers.map((l, i) =>
       h(
         "button",
@@ -768,13 +837,13 @@ function footer(store: Store): HTMLElement {
             if (f.dxf) await put(`${stem}.dxf`, plan.dxf);
             const first = `${folder}${sep}${fileName(plan, 0)}`;
             const many = plan.layers.length > 1;
-            toast(`Saved ${plan.layers.length} sheet${many ? "s" : ""}${many ? " and one combined file" : ""} to ${folder}`, {
+            toast(`Saved ${plan.layers.length} ${sheetWord(store, plan.layers.length)}${many ? " and one combined file" : ""} to ${folder}`, {
               kind: "good",
               action: { label: "Show in folder", run: () => void revealItemInDir(first) },
             });
           },
         },
-        plan && plan.layers.length > 1 ? `Save ${plan.layers.length} sheets…` : "Save the sheet…",
+        plan && plan.layers.length > 1 ? `Save ${plan.layers.length} ${sheetWord(store, 2)}…` : `Save the ${sheetWord(store, 1)}…`,
       ),
       h(
         "button.btn",

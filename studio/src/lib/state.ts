@@ -217,6 +217,8 @@ export function defaultFabOptions(): FabOptions {
     stickerMarginMm: 3,
     bridgeMm: 1.5,
     stencilMarginMm: 10,
+    maxLineMm: 0,
+    penMm: 0.4,
     registration: true,
     weedBorderMm: 0,
     mirror: false,

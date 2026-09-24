@@ -2,6 +2,7 @@
 
 use crate::dxf;
 use crate::geom::{self, Region};
+use crate::lines;
 use crate::options::{Check, CutStyle, Layer, Mode, Options, Plan};
 use crate::preflight;
 use crate::regions::{delta_e, hex, ColourRegion};
@@ -78,6 +79,8 @@ fn sheets(
     checks: &mut Vec<Check>,
 ) -> Vec<(String, String, Region)> {
     match o.mode {
+        // Built by `plan_lines` instead; it never reaches the sheet builder.
+        Mode::Lines => Vec::new(),
         Mode::Stencil => {
             let all = geom::union_all(set.iter().map(|c| &c.region));
             let (sheet, bridges) = stencil::stencil(&all, o.stencil_margin_mm, o.bridge_mm);
@@ -320,6 +323,89 @@ fn write_sheets(
     (layers, preview, drawn)
 }
 
+/// [`Mode::Lines`]: per colour, the line-shaped parts as single strokes along their
+/// centre and everything else round its outline, all in the pen's width, lines ordered to
+/// shorten pen-up travel. The preview draws each line at the width the drawing gave it.
+fn plan_lines(
+    set: &[&ColourRegion],
+    canvas_mm: [f64; 2],
+    mut checks: Vec<Check>,
+    o: &Options,
+) -> Plan {
+    let pad = 1.0;
+    let origin = [-pad, -pad];
+    let size = [canvas_mm[0] + 2.0 * pad, canvas_mm[1] + 2.0 * pad];
+    let mut layers = Vec::new();
+    let mut preview = String::new();
+    let mut combined = String::new();
+    let mut dxf_regions: Vec<(String, Region)> = Vec::new();
+    let mut dxf_lines: Vec<Vec<Vec<geom::Pt>>> = Vec::new();
+    let (mut total_lines, mut from_file) = (0, 0);
+    for c in set {
+        let (found, kept, own) =
+            lines::colour_lines(&c.region, &c.strokes, o.max_line_mm, o.tolerance_mm);
+        let found = lines::order(found);
+        total_lines += found.len();
+        from_file += own;
+        let colour = hex(c.rgb);
+        let (outline_d, outline_nodes) = write::region_d(&kept, o.tolerance_mm);
+        let mut body = String::new();
+        let mut shown = write::filled(&outline_d, &colour);
+        if !outline_d.is_empty() {
+            body.push_str(&write::pen(&outline_d, &colour, o.pen_mm));
+        }
+        let mut nodes = outline_nodes;
+        let mut paths = Vec::new();
+        for l in &found {
+            let p = lines::simplify(&l.path, o.tolerance_mm);
+            nodes += p.len().saturating_sub(1);
+            let d = write::open_d(&p, l.closed);
+            body.push_str(&write::pen(&d, &colour, o.pen_mm));
+            shown.push_str(&write::pen(&d, &colour, l.width_mm));
+            paths.push(p);
+        }
+        preview.push_str(&shown);
+        let id = colour.trim_start_matches('#').to_string();
+        combined.push_str(&format!("<g id=\"pen-{id}\">{body}</g>"));
+        layers.push(Layer {
+            svg: write::document(size, origin, &body),
+            nodes,
+            parts: kept.len() + found.len(),
+            area_mm2: geom::area(&kept),
+            material_mm: geom::bounds(&c.region).map_or([0.0, 0.0], |b| [b[2] - b[0], b[3] - b[1]]),
+            name: colour.clone(),
+            hex: colour.clone(),
+        });
+        dxf_regions.push((colour, kept));
+        dxf_lines.push(paths);
+    }
+    if total_lines > 0 {
+        let traced = total_lines - from_file;
+        let source = match (from_file, traced) {
+            (_, 0) => "all of them the file's own strokes".to_string(),
+            (0, _) => "all of them found in filled shapes".to_string(),
+            (f, t) => format!("{f} from the file's strokes, {t} found in filled shapes"),
+        };
+        checks.push(Check {
+            level: crate::options::Level::Info,
+            code: "lines",
+            message: format!(
+                "{total_lines} line(s) are drawn once along their centre instead of round both edges ({source})."
+            ),
+        });
+    }
+    let sheets: Vec<(String, &Region)> = dxf_regions.iter().map(|(n, r)| (n.clone(), r)).collect();
+    Plan {
+        preview_svg: write::document(size, origin, &preview),
+        problems_svg: write::document(size, origin, ""),
+        combined_svg: write::document(size, origin, &combined),
+        dxf: dxf::document_with_lines(&sheets, &dxf_lines, o.tolerance_mm, origin[1] + size[1]),
+        layers,
+        size_mm: size,
+        checks,
+    }
+}
+
 /// Build the sheets for `o` from the artwork's visible colours.
 pub fn plan(
     colours: &[ColourRegion],
@@ -329,6 +415,9 @@ pub fn plan(
 ) -> Plan {
     let set = chosen(colours, o);
     let mut checks: Vec<Check> = preflight::colour_checks(&set, unsupported);
+    if o.mode == Mode::Lines {
+        return plan_lines(&set, canvas_mm, checks, o);
+    }
     let mut base = sheets(&set, o, &mut checks);
     for (k, (name, _, r)) in base.iter_mut().enumerate() {
         // A layered sheet is judged by what shows of it: its bleed lies hidden under the
@@ -430,6 +519,7 @@ mod tests {
             gradient: false,
             translucent: false,
             background: false,
+            strokes: Vec::new(),
         }
     }
 

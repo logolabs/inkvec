@@ -3801,6 +3801,8 @@ name = "inkvec-fab"
 version = "0.1.6"
 dependencies = [
  "i_overlay",
+ "inkvec-core",
+ "inkvec-trace",
  "kurbo 0.11.3",
  "serde",
  "serde_json",

@@ -62,6 +62,16 @@ fn layer_name(name: &str, i: usize) -> String {
 
 /// One DXF holding `sheets` (name and region each) as layers, with y flipped about `top`.
 pub fn document(sheets: &[(String, &Region)], tolerance: f64, top: f64) -> String {
+    document_with_lines(sheets, &[], tolerance, top)
+}
+
+/// [`document`], with open polylines too: `lines[i]` are drawn on sheet `i`'s layer.
+pub fn document_with_lines(
+    sheets: &[(String, &Region)],
+    lines: &[Vec<Vec<Pt>>],
+    tolerance: f64,
+    top: f64,
+) -> String {
     let mut s = String::new();
     let mut put = |code: i32, value: &str| {
         s.push_str(&format!("{code}\n{value}\n"));
@@ -106,6 +116,27 @@ pub fn document(sheets: &[(String, &Region)], tolerance: f64, top: f64) -> Strin
             put(20, "0.0");
             put(30, "0.0");
             for p in pts {
+                put(0, "VERTEX");
+                put(8, &layer);
+                put(10, &format!("{:.4}", p[0]));
+                put(20, &format!("{:.4}", top - p[1]));
+                put(30, "0.0");
+            }
+            put(0, "SEQEND");
+            put(8, &layer);
+        }
+        for line in lines.get(i).map(Vec::as_slice).unwrap_or(&[]) {
+            if line.len() < 2 {
+                continue;
+            }
+            put(0, "POLYLINE");
+            put(8, &layer);
+            put(66, "1");
+            put(70, "0");
+            put(10, "0.0");
+            put(20, "0.0");
+            put(30, "0.0");
+            for p in line {
                 put(0, "VERTEX");
                 put(8, &layer);
                 put(10, &format!("{:.4}", p[0]));

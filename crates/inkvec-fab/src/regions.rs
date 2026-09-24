@@ -12,7 +12,7 @@
 //! differ by a JND, and a trace can carry both.
 
 use crate::geom::{self, Region};
-use crate::load::{Artwork, PaintKind};
+use crate::load::{Artwork, Centreline, PaintKind};
 
 /// Everything visible in one colour.
 #[derive(Clone, Debug)]
@@ -29,6 +29,8 @@ pub struct ColourRegion {
     pub translucent: bool,
     /// True when it looks like the page rather than the artwork: it spans the canvas.
     pub background: bool,
+    /// The centrelines of this colour's strokes, clipped to where the colour shows.
+    pub strokes: Vec<Centreline>,
 }
 
 fn lab(rgb: [u8; 3]) -> [f64; 3] {
@@ -140,13 +142,13 @@ pub fn visible_colours(art: &Artwork, merge_de: f64) -> Vec<ColourRegion> {
     }
     shown.reverse();
     // Group by colour, first come first served.
-    let mut out: Vec<(ColourRegion, Vec<Region>)> = Vec::new();
+    let mut out: Vec<(ColourRegion, Vec<Region>, Vec<Centreline>)> = Vec::new();
     for (i, vis) in shown {
         let item = &art.items[i];
         let slot = out
             .iter()
-            .position(|(c, _)| delta_e(c.rgb, item.rgb) <= merge_de);
-        let (c, parts) = match slot {
+            .position(|(c, _, _)| delta_e(c.rgb, item.rgb) <= merge_de);
+        let (c, parts, lines) = match slot {
             Some(k) => &mut out[k],
             None => {
                 out.push((
@@ -157,7 +159,9 @@ pub fn visible_colours(art: &Artwork, merge_de: f64) -> Vec<ColourRegion> {
                         gradient: false,
                         translucent: false,
                         background: false,
+                        strokes: Vec::new(),
                     },
+                    Vec::new(),
                     Vec::new(),
                 ));
                 out.last_mut().expect("just pushed")
@@ -166,12 +170,27 @@ pub fn visible_colours(art: &Artwork, merge_de: f64) -> Vec<ColourRegion> {
         c.gradient |= item.kind != PaintKind::Solid;
         c.translucent |= item.opacity < 0.999;
         parts.push(vis);
+        lines.extend(item.centrelines.iter().cloned());
     }
     let canvas = art.size_mm;
     let mut colours: Vec<ColourRegion> = out
         .into_iter()
-        .map(|(mut c, parts)| {
+        .map(|(mut c, parts, lines)| {
             c.region = geom::union_all(parts.iter());
+            // Clipped to the colour as a whole, not to the item: where two strokes of one
+            // colour cross, the lower is covered by the upper and a pen still draws both.
+            c.strokes = lines
+                .iter()
+                .flat_map(|l| {
+                    geom::clip_line(&l.path, l.closed, &c.region)
+                        .into_iter()
+                        .map(move |(path, closed)| Centreline {
+                            path,
+                            closed,
+                            width_mm: l.width_mm,
+                        })
+                })
+                .collect();
             c.area_mm2 = geom::area(&c.region);
             c.background = spans_canvas(&c.region, canvas);
             c

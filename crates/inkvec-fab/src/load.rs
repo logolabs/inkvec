@@ -22,6 +22,18 @@ pub enum PaintKind {
     Pattern,
 }
 
+/// A stroke's own centreline: what a pen or a scoring blade should follow, exactly as the
+/// file drew it.
+#[derive(Clone, Debug)]
+pub struct Centreline {
+    /// Its points, millimetres.
+    pub path: Contour,
+    /// Whether it closes.
+    pub closed: bool,
+    /// The stroke's width, millimetres.
+    pub width_mm: f64,
+}
+
 /// One painted fill or stroke.
 #[derive(Clone, Debug)]
 pub struct Item {
@@ -37,6 +49,8 @@ pub struct Item {
     pub from_stroke: bool,
     /// Path segments as written in the source, before flattening.
     pub nodes: usize,
+    /// A stroke's centrelines; empty for a fill.
+    pub centrelines: Vec<Centreline>,
 }
 
 /// The drawing, in paint order (first is bottom).
@@ -138,6 +152,7 @@ fn add_path(p: &usvg::Path, opacity: f32, scale: f64, tol: f64, art: &mut Artwor
                 opacity: opacity * fill.opacity().get(),
                 from_stroke: false,
                 nodes,
+                centrelines: Vec::new(),
             });
         }
     }
@@ -160,6 +175,14 @@ fn add_path(p: &usvg::Path, opacity: f32, scale: f64, tol: f64, art: &mut Artwor
                 opacity: opacity * stroke.opacity().get(),
                 from_stroke: true,
                 nodes,
+                centrelines: subpaths
+                    .iter()
+                    .map(|(c, closed)| Centreline {
+                        path: c.clone(),
+                        closed: *closed,
+                        width_mm: width,
+                    })
+                    .collect(),
             });
         }
     }

@@ -55,10 +55,64 @@ fn lab(rgb: [u8; 3]) -> [f64; 3] {
     [116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz)]
 }
 
-/// CIE76 colour difference.
+/// CIEDE2000 colour difference (Sharma, Wu and Dalal's formulation), the measure the tracer
+/// uses: CIE76 merges dark colours that look different and splits blues that look alike.
 pub fn delta_e(a: [u8; 3], b: [u8; 3]) -> f64 {
     let (p, q) = (lab(a), lab(b));
-    ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2)).sqrt()
+    let (l1, a1, b1) = (p[0], p[1], p[2]);
+    let (l2, a2, b2) = (q[0], q[1], q[2]);
+    let c1 = a1.hypot(b1);
+    let c2 = a2.hypot(b2);
+    let cm = (c1 + c2) / 2.0;
+    let g = 0.5 * (1.0 - (cm.powi(7) / (cm.powi(7) + 25f64.powi(7))).sqrt());
+    let (a1p, a2p) = ((1.0 + g) * a1, (1.0 + g) * a2);
+    let (c1p, c2p) = (a1p.hypot(b1), a2p.hypot(b2));
+    let hue = |bb: f64, aa: f64| {
+        if bb == 0.0 && aa == 0.0 {
+            0.0
+        } else {
+            bb.atan2(aa).to_degrees().rem_euclid(360.0)
+        }
+    };
+    let (h1p, h2p) = (hue(b1, a1p), hue(b2, a2p));
+    let dlp = l2 - l1;
+    let dcp = c2p - c1p;
+    let dhp = if c1p * c2p == 0.0 {
+        0.0
+    } else if (h2p - h1p).abs() <= 180.0 {
+        h2p - h1p
+    } else if h2p - h1p > 180.0 {
+        h2p - h1p - 360.0
+    } else {
+        h2p - h1p + 360.0
+    };
+    let dhp_big = 2.0 * (c1p * c2p).sqrt() * (dhp.to_radians() / 2.0).sin();
+    let lpm = (l1 + l2) / 2.0;
+    let cpm = (c1p + c2p) / 2.0;
+    let hpm = if c1p * c2p == 0.0 {
+        h1p + h2p
+    } else if (h1p - h2p).abs() <= 180.0 {
+        (h1p + h2p) / 2.0
+    } else if h1p + h2p < 360.0 {
+        (h1p + h2p + 360.0) / 2.0
+    } else {
+        (h1p + h2p - 360.0) / 2.0
+    };
+    let t = 1.0 - 0.17 * (hpm - 30.0).to_radians().cos()
+        + 0.24 * (2.0 * hpm).to_radians().cos()
+        + 0.32 * (3.0 * hpm + 6.0).to_radians().cos()
+        - 0.20 * (4.0 * hpm - 63.0).to_radians().cos();
+    let dtheta = 30.0 * (-((hpm - 275.0) / 25.0).powi(2)).exp();
+    let rc = 2.0 * (cpm.powi(7) / (cpm.powi(7) + 25f64.powi(7))).sqrt();
+    let sl = 1.0 + 0.015 * (lpm - 50.0).powi(2) / (20.0 + (lpm - 50.0).powi(2)).sqrt();
+    let sc = 1.0 + 0.045 * cpm;
+    let sh = 1.0 + 0.015 * cpm * t;
+    let rt = -(2.0 * dtheta).to_radians().sin() * rc;
+    ((dlp / sl).powi(2)
+        + (dcp / sc).powi(2)
+        + (dhp_big / sh).powi(2)
+        + rt * (dcp / sc) * (dhp_big / sh))
+        .sqrt()
 }
 
 /// Lightness, 0 (black) to 100 (white).
@@ -202,5 +256,14 @@ mod tests {
             <circle cx="50" cy="50" r="50" fill="#000000"/></svg>"##;
         let art = load(svg, 100.0, 0.01).unwrap();
         assert!(!visible_colours(&art, 3.0)[0].background);
+    }
+
+    #[test]
+    fn ciede2000_matches_a_published_pair() {
+        // Sharma et al.'s test data are in Lab; check the formula's shape on sRGB instead:
+        // identical colours are 0, and pure red to pure blue is about 52.9 (reference value).
+        assert!(delta_e([12, 34, 56], [12, 34, 56]).abs() < 1e-9);
+        let d = delta_e([255, 0, 0], [0, 0, 255]);
+        assert!((d - 52.88).abs() < 0.5, "{d}");
     }
 }

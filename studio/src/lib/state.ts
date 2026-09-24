@@ -133,6 +133,8 @@ export interface State {
     showProblems: boolean;
     /** The material preset last chosen, if the options still match it. */
     preset: string | null;
+    /** Whether saving also writes a DXF, for CAD and CNC programs. */
+    dxf: boolean;
   };
 
   batch: {
@@ -186,7 +188,7 @@ export function initial(settings: Settings, minify: MinifySettings): State {
     exportOpen: false,
     dragging: false,
     minify: { name: null, before: null, settings: minify, result: null, error: null },
-    fab: { name: null, svg: null, analysis: null, options: defaultFabOptions(), plan: null, error: null, shown: -1, unit: "mm", showProblems: true, preset: null },
+    fab: { name: null, svg: null, analysis: null, options: defaultFabOptions(), plan: null, error: null, shown: -1, unit: "mm", showProblems: true, preset: null, dxf: false },
     batch: {
       folder: null,
       outputDir: null,
@@ -209,7 +211,7 @@ export function defaultFabOptions(): FabOptions {
     widthMm: 100,
     include: [],
     order: [],
-    bleedMm: 1,
+    bleedMm: 0.8,
     minFeatureMm: 0.8,
     removeThin: false,
     stickerMarginMm: 3,

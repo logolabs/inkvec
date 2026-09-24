@@ -46,15 +46,15 @@ const PRESETS: { id: string; label: string; glyph: string; note: string; apply: 
     id: "vinyl",
     label: "Adhesive vinyl",
     glyph: "layers",
-    note: "Cricut, Silhouette, Brother. Filled shapes, stacked by colour, marks to line up.",
-    apply: (inks) => ({ mode: inks > 1 ? "layered" : "singleColour", cutStyle: "filled", mirror: false, registration: true, bleedMm: 1, kerfMm: 0 }),
+    note: "Cricut, Silhouette, Brother. Filled shapes, stacked by colour with a 0.8 mm overlap, marks to line up, nothing narrower than 0.8 mm.",
+    apply: (inks) => ({ mode: inks > 1 ? "layered" : "singleColour", cutStyle: "filled", mirror: false, registration: true, bleedMm: 0.8, minFeatureMm: 0.8, kerfMm: 0 }),
   },
   {
     id: "htv",
     label: "Iron-on",
     glyph: "zap",
-    note: "Heat-transfer vinyl is cut face down, so every sheet is mirrored.",
-    apply: (inks) => ({ mode: inks > 1 ? "layered" : "singleColour", cutStyle: "filled", mirror: true, registration: true, bleedMm: 1, kerfMm: 0 }),
+    note: "Heat-transfer vinyl is cut face down, so every sheet is mirrored. Layers overlap by 0.3 mm (0.25–0.38 mm is the press-safe range) and nothing is narrower than 1 mm. Glitter, holographic and puff go on top only.",
+    apply: (inks) => ({ mode: inks > 1 ? "layered" : "singleColour", cutStyle: "filled", mirror: true, registration: true, bleedMm: 0.3, minFeatureMm: 1.0, kerfMm: 0 }),
   },
   {
     id: "sticker",
@@ -68,14 +68,14 @@ const PRESETS: { id: string; label: string; glyph: string; note: string; apply: 
     label: "Stencil",
     glyph: "copy",
     note: "Mylar or card with the design cut out, for paint or etching cream. Loose centres are bridged.",
-    apply: () => ({ mode: "stencil", cutStyle: "filled", mirror: false, bridgeMm: 1.5, stencilMarginMm: 10, kerfMm: 0 }),
+    apply: () => ({ mode: "stencil", cutStyle: "filled", mirror: false, bridgeMm: 1.5, stencilMarginMm: 10, minFeatureMm: 1.5, kerfMm: 0 }),
   },
   {
     id: "laser",
     label: "Laser or sign cutter",
     glyph: "crosshair",
-    note: "Hairlines only: each colour its own set of parts, no marks, grown for a 0.15 mm kerf (typical for a CO₂ laser in 3 mm plywood; measure yours).",
-    apply: () => ({ mode: "inlay", cutStyle: "hairline", mirror: false, registration: false, kerfMm: 0.15 }),
+    note: "Hairlines in LightBurn's layer colours, inner shapes cut first, parts grown for a 0.15 mm kerf (CO₂ 0.1–0.2 mm, diode 0.15–0.3 mm; measure yours). A DXF is saved too.",
+    apply: () => ({ mode: "inlay", cutStyle: "hairline", mirror: false, registration: false, kerfMm: 0.15, minFeatureMm: 0.3 }),
   },
 ];
 
@@ -224,7 +224,7 @@ function size2(store: Store, wh: [number, number]): string {
 
 /** Problems the overlay draws: the thin-part and speck findings. */
 function problemCount(plan: FabPlan | null): number {
-  return plan ? plan.checks.filter((c) => c.code === "thin" || c.code === "specks").length : 0;
+  return plan ? plan.checks.filter((c) => c.code === "thin" || c.code === "gaps" || c.code === "specks").length : 0;
 }
 
 /** Before anything is open the stage itself is the invitation, as it is on the other tabs. */
@@ -289,7 +289,7 @@ function renderStage(store: Store, tools: HTMLElement, pane: HTMLElement): void 
           {
             "aria-pressed": String(f.showProblems),
             style: { marginLeft: "12px", color: f.showProblems ? "#e5484d" : undefined },
-            title: "Draw the parts too thin to weed and the loose specks on the sheet",
+            title: "Draw the parts too thin to weed (red), the waste gaps too narrow to weed (amber) and the loose specks (ringed)",
             onclick: () => {
               f.showProblems = !f.showProblems;
               store.touch("fab");
@@ -299,7 +299,11 @@ function renderStage(store: Store, tools: HTMLElement, pane: HTMLElement): void 
           h("span", { style: { marginLeft: "6px" } }, f.showProblems ? "Showing problems" : "Show problems"),
         )
       : null,
-    h("span.muted", { style: { marginLeft: "auto", fontSize: "11.5px" } }, plan ? `${size2(store, plan.sizeMm)}, marks included` : ""),
+    h("span.muted", { style: { marginLeft: "auto", fontSize: "11.5px" } }, plan
+        ? `${size2(store, plan.sizeMm)}${
+            f.options.registration && plan.layers.length > 1 ? ", marks included" : f.options.weedBorderMm > 0 ? ", border included" : ""
+          }`
+        : ""),
   );
   const shown = plan ? (f.shown >= 0 ? plan.layers[f.shown]?.svg : plan.previewSvg) : null;
   // The overlay shares the sheets' size and origin, and the same grid cell as the sheet,
@@ -385,6 +389,7 @@ function presetCard(store: Store, change: (p: Partial<FabOptions>, keepPreset?: 
             },
             onclick: () => {
               f.preset = p.id;
+              f.dxf = p.id === "laser";
               change(p.apply(inks), true);
             },
           },
@@ -592,6 +597,15 @@ function optionsCard(store: Store, change: (p: Partial<FabOptions>) => void): HT
     switchRow("Remove them", o.removeThin, () => change({ removeThin: !o.removeThin }), "Drops the slivers and necks narrower than that from the sheets."),
     sheets ? switchRow("Registration marks", o.registration, () => change({ registration: !o.registration })) : null,
     h("span.sentence", null, "Weeding border ", lenField(store, o.weedBorderMm, (mm) => change({ weedBorderMm: mm })), ` ${u} outside (0 for none).`),
+    switchRow(
+      "Also save a DXF",
+      store.state.fab.dxf,
+      () => {
+        store.state.fab.dxf = !store.state.fab.dxf;
+        store.touch("fab");
+      },
+      "Every sheet as a layer of closed polylines in millimetres, for CAD, CNC and laser programs.",
+    ),
     o.mode === "sticker" || o.mode === "stencil"
       ? null
       : switchRow("Mirror", o.mirror, () => change({ mirror: !o.mirror }), "For heat-transfer vinyl, which is cut from the back."),
@@ -751,6 +765,7 @@ function footer(store: Store): HTMLElement {
             // One file with every sheet as its own group: what cutter software turns into
             // layers on import, and often the only file anyone needs.
             if (plan.layers.length > 1) await put(`${stem}-all.svg`, plan.combinedSvg);
+            if (f.dxf) await put(`${stem}.dxf`, plan.dxf);
             const first = `${folder}${sep}${fileName(plan, 0)}`;
             const many = plan.layers.length > 1;
             toast(`Saved ${plan.layers.length} sheet${many ? "s" : ""}${many ? " and one combined file" : ""} to ${folder}`, {

@@ -93,11 +93,34 @@ fn polyline_d(c: &Contour, tol: f64, d: &mut String) -> usize {
     n
 }
 
-/// A whole region as one even-odd path's `d`, and its segment count.
+/// A whole region as one compound path's `d`, and its segment count.
+///
+/// Outlines and holes keep the opposite windings the geometry gives them, so the path fills
+/// the same under nonzero and even-odd: some cutter software ignores `fill-rule` and uses
+/// winding alone, and a hole that relies on even-odd comes back filled there.
 pub fn region_d(r: &Region, tolerance: f64) -> (String, usize) {
+    region_d_ordered(r, tolerance, false)
+}
+
+/// [`region_d`], optionally in cutting order: every hole first, then outlines smallest
+/// first, so a part is never cut free before the openings inside it (it can drop or shift
+/// once free, which is why laser software cuts inner shapes first).
+pub fn region_d_ordered(r: &Region, tolerance: f64, inner_first: bool) -> (String, usize) {
+    let mut contours: Vec<&Contour> = r.iter().flatten().collect();
+    if inner_first {
+        let key = |c: &&Contour| {
+            let a = crate::geom::contour_area(c);
+            // Holes wind the other way from outlines: negative area first, then by size.
+            (a > 0.0, a.abs())
+        };
+        contours.sort_by(|x, y| {
+            let (kx, ky) = (key(x), key(y));
+            kx.0.cmp(&ky.0).then(kx.1.total_cmp(&ky.1))
+        });
+    }
     let mut d = String::new();
     let mut n = 0;
-    for c in r.iter().flatten() {
+    for c in contours {
         n += contour_d(c, tolerance, &mut d);
     }
     (d, n)
@@ -116,7 +139,7 @@ pub fn document(size: [f64; 2], origin: [f64; 2], body: &str) -> String {
 
 /// A filled path element.
 pub fn filled(d: &str, hex: &str) -> String {
-    format!("<path d=\"{d}\" fill=\"{hex}\" fill-rule=\"evenodd\"/>")
+    format!("<path d=\"{d}\" fill=\"{hex}\"/>")
 }
 
 /// A hairline cut element: unfilled, red, 0.025 mm (a thousandth of an inch).
@@ -144,5 +167,22 @@ mod tests {
         let mut d = String::new();
         let n = contour_d(&c, 0.05, &mut d);
         assert!(n > 0 && n <= 8, "{n} segments: {d}");
+    }
+
+    #[test]
+    fn a_ring_winds_so_both_fill_rules_agree() {
+        // An outline and its hole must wind opposite ways; then nonzero and even-odd agree.
+        let ring = crate::geom::difference(
+            &crate::geom::rect(0.0, 0.0, 20.0, 20.0),
+            &crate::geom::rect(5.0, 5.0, 15.0, 15.0),
+        );
+        let signs: Vec<bool> = ring[0]
+            .iter()
+            .map(|c| crate::geom::contour_area(c) > 0.0)
+            .collect();
+        assert_eq!(signs.len(), 2);
+        assert_ne!(signs[0], signs[1]);
+        let (d, _) = region_d(&ring, 0.05);
+        assert!(!filled(&d, "#000000").contains("evenodd"));
     }
 }

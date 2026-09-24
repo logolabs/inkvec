@@ -47,6 +47,7 @@ fn main() {
         p.size_mm[1]
     );
     std::fs::write(out.join("preview.svg"), &p.preview_svg).expect("write");
+    std::fs::write(out.join("plan.dxf"), &p.dxf).expect("write");
     for (i, l) in p.layers.iter().enumerate() {
         println!(
             "  layer {i} {} {}: {} nodes, {} parts, {:.0} mm2",

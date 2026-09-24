@@ -1,5 +1,6 @@
 //! From visible colours to sheets: the four modes, and what every sheet gets added.
 
+use crate::dxf;
 use crate::geom::{self, Region};
 use crate::options::{Check, CutStyle, Layer, Mode, Options, Plan};
 use crate::preflight;
@@ -54,6 +55,19 @@ fn chosen<'a>(colours: &'a [ColourRegion], o: &Options) -> Vec<&'a ColourRegion>
     set
 }
 
+/// How far inside the colour above a bleed stops, so it cannot peek out past it.
+const BLEED_HIDE_MM: f64 = 0.2;
+
+/// Print bleed of a sticker: its outer colours run this far under the contour, so a cut a
+/// little off the line shows colour, not paper.
+const PRINT_BLEED_MM: f64 = 1.5;
+
+/// LightBurn's first layer colours (00 to 05), exactly as its palette has them: a laser
+/// program maps an imported colour to a layer only on an exact match.
+const LIGHTBURN: [&str; 6] = [
+    "#000000", "#0000ff", "#ff0000", "#00e000", "#d0d000", "#ff8000",
+];
+
 /// Colour a stencil sheet is shown in: the blue-grey of Mylar.
 const STENCIL_HEX: &str = "#5f7489";
 
@@ -72,7 +86,7 @@ fn sheets(
                     level: crate::options::Level::Info,
                     code: "bridges",
                     message: format!(
-                        "{} loose piece(s) would fall out of the stencil; each is held by a {} mm bridge.",
+                        "Loose pieces that would fall out of the stencil are held by {} bridge(s), {} mm wide; large ones by two.",
                         bridges.len(),
                         o.bridge_mm
                     ),
@@ -97,7 +111,10 @@ fn sheets(
             .map(|k| {
                 let own = &set[k].region;
                 let above = geom::union_all(set[k + 1..].iter().map(|c| &c.region));
-                let under = geom::intersection(&geom::offset(own, o.bleed_mm), &above);
+                // Clipped short of the colour above's own edge, so the bleed never shows
+                // where that colour is narrower than the bleed is long.
+                let hidden = geom::offset(&above, -BLEED_HIDE_MM);
+                let under = geom::intersection(&geom::offset(own, o.bleed_mm), &hidden);
                 // A hole the layers above cover completely is filled, not shrunk: the
                 // colour on top hides it either way, and a filled sheet has nothing to
                 // weed and nothing to line up there.
@@ -170,9 +187,12 @@ fn weed_border(b: [f64; 4], gap: f64) -> Region {
 
 /// Colour of everything the preflight points at on the stage.
 const PROBLEM_HEX: &str = "#e5484d";
+/// Colour of the narrow waste gaps, told apart from thin parts.
+const GAP_HEX: &str = "#f5a524";
 
 /// Where the physical problems are, drawn over the sheets: every part narrower than the
-/// minimum feature filled, and every speck ringed, so a warning in the list has a place
+/// minimum feature filled in red, every waste gap narrower than it in amber, every speck
+/// ringed, so a warning in the list has a place
 /// on the drawing.
 fn problems_body(base: &[(String, String, Region)], o: &Options) -> String {
     let w = o.min_feature_mm;
@@ -188,6 +208,11 @@ fn problems_body(base: &[(String, String, Region)], o: &Options) -> String {
                 ));
             }
         }
+        let gaps = geom::difference(&geom::closing(r, w), r);
+        let (d, _) = write::region_d(&gaps, o.tolerance_mm.min(0.02));
+        if !d.is_empty() {
+            body.push_str(&format!("<path d=\"{d}\" fill=\"{GAP_HEX}\"/>"));
+        }
         for s in r.iter().filter(|s| geom::shape_area(s) < speck) {
             if let Some(b) = geom::bounds(&vec![s.clone()]) {
                 let (cx, cy) = ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
@@ -202,8 +227,8 @@ fn problems_body(base: &[(String, String, Region)], o: &Options) -> String {
 }
 
 /// Every sheet in one file, each its own group in its own colour: what Cricut Design Space
-/// and Silhouette Studio split into layers on import. Hairlines keep their sheet's colour
-/// here, because in a laser program colour is the operation.
+/// and Silhouette Studio split into layers on import. Hairlines take LightBurn's layer
+/// colours here, one per sheet, because in a laser program colour is the operation.
 fn combined_body(sheets: &[(String, String, String)], o: &Options) -> String {
     sheets
         .iter()
@@ -211,12 +236,33 @@ fn combined_body(sheets: &[(String, String, String)], o: &Options) -> String {
         .map(|(i, (name, hex, d))| {
             let el = match o.cut_style {
                 CutStyle::Filled => write::filled(d, hex),
-                CutStyle::Hairline => write::hairline_in(d, hex),
+                CutStyle::Hairline => write::hairline_in(d, LIGHTBURN[i % LIGHTBURN.len()]),
             };
             let id: String = name.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
             format!("<g id=\"sheet-{}-{id}\">{el}</g>", i + 1)
         })
         .collect()
+}
+
+/// A sticker's printable face: every colour first spread by the print bleed and clipped to
+/// the contour, then every colour as drawn on top. Inside the artwork the spreads are
+/// covered; at its edge they carry the outer colours out under the cut line.
+fn sticker_print(set: &[&ColourRegion], contour: &Region, o: &Options) -> String {
+    let mut out = String::new();
+    for c in set {
+        let spread = geom::intersection(&geom::offset(&c.region, PRINT_BLEED_MM), contour);
+        out.push_str(&write::filled(
+            &write::region_d(&spread, o.tolerance_mm).0,
+            &hex(c.rgb),
+        ));
+    }
+    for c in set {
+        out.push_str(&write::filled(
+            &write::region_d(&c.region, o.tolerance_mm).0,
+            &hex(c.rgb),
+        ));
+    }
+    out
 }
 
 /// Where every document of one plan sits: its size and origin, millimetres.
@@ -241,9 +287,11 @@ fn write_sheets(
     let mut preview = String::new();
     let mut drawn: Vec<(String, String, String)> = Vec::new();
     for (k, (name, colour, r)) in sheet_regions.drain(..).enumerate() {
-        let (d, nodes) = write::region_d(&r, o.tolerance_mm);
+        let (d, nodes) =
+            write::region_d_ordered(&r, o.tolerance_mm, o.cut_style == CutStyle::Hairline);
         drawn.push((name.clone(), colour.clone(), d.clone()));
-        checks.extend(preflight::node_checks(&name, nodes));
+        let paths = r.iter().map(Vec::len).sum();
+        checks.extend(preflight::node_checks(&name, paths, nodes));
         let element = match o.cut_style {
             CutStyle::Filled => write::filled(&d, &colour),
             CutStyle::Hairline => write::hairline(&d),
@@ -280,19 +328,19 @@ pub fn plan(
     o: &Options,
 ) -> Plan {
     let set = chosen(colours, o);
-    // A sticker's printable face: the chosen colours, each filled, under the contour.
-    let print: String = if o.mode == Mode::Sticker {
-        set.iter()
-            .map(|c| write::filled(&write::region_d(&c.region, o.tolerance_mm).0, &hex(c.rgb)))
-            .collect()
-    } else {
-        String::new()
-    };
     let mut checks: Vec<Check> = preflight::colour_checks(&set, unsupported);
     let mut base = sheets(&set, o, &mut checks);
-    for (name, _, r) in &mut base {
+    for (k, (name, _, r)) in base.iter_mut().enumerate() {
+        // A layered sheet is judged by what shows of it: its bleed lies hidden under the
+        // colours above, and a bleed clipped round a narrow upper colour is a thin fringe
+        // that the tests would flag although nobody weeds or sees it.
+        let seen = match (o.mode, set.get(k)) {
+            (Mode::Layered, Some(c)) => &c.region,
+            _ => &*r,
+        };
         checks.extend(preflight::layer_checks(
             name,
+            seen,
             r,
             o.min_feature_mm,
             o.remove_thin,
@@ -308,6 +356,10 @@ pub fn plan(
         }
     }
     let problems = problems_body(&base, o);
+    let print = match (o.mode, base.first()) {
+        (Mode::Sticker, Some((_, _, contour))) => sticker_print(&set, contour, o),
+        _ => String::new(),
+    };
     // Everything the marks and borders are placed around.
     let art_bounds = geom::bounds(&geom::union_all(base.iter().map(|(_, _, r)| r))).unwrap_or([
         0.0,
@@ -342,6 +394,12 @@ pub fn plan(
     ];
 
     let frame = Frame { size, origin };
+    let dxf_sheets: Vec<(String, &Region)> = sheet_regions
+        .iter()
+        .map(|(n, _, r)| (n.clone(), r))
+        .collect();
+    let dxf = dxf::document(&dxf_sheets, o.tolerance_mm, origin[1] + size[1]);
+    drop(dxf_sheets);
     let (layers, preview, drawn) =
         write_sheets(sheet_regions, &extents, &frame, &print, o, &mut checks);
     let combined = if o.mode == Mode::Sticker {
@@ -353,6 +411,7 @@ pub fn plan(
         preview_svg: write::document(size, origin, &preview),
         problems_svg: write::document(size, origin, &problems),
         combined_svg: combined,
+        dxf,
         layers,
         size_mm: size,
         checks,

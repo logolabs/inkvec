@@ -12,6 +12,10 @@
 
 use crate::geom::{self, Contour, Pt, Region, Shape};
 
+/// Islands larger than this, in square millimetres, hang from two bridges: one bridge is a
+/// hinge, and a large island on a hinge lifts and flaps under spray.
+pub const TWO_BRIDGE_AREA_MM2: f64 = 100.0;
+
 /// A bridge: the two points it joins, on the island and on the connected material.
 #[derive(Clone, Copy, Debug)]
 pub struct Bridge {
@@ -50,6 +54,17 @@ fn nearest(a: &[Pt], b: &[Pt]) -> (f64, Pt, Pt) {
     best
 }
 
+/// A strip `width` wide from `from` to `to`, run a little into both ends so it joins what
+/// it bridges rather than touching it.
+fn strip(from: Pt, to: Pt, width: f64) -> Region {
+    let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
+    let l = dx.hypot(dy).max(1e-9);
+    let ext = width / 2.0;
+    let a = [from[0] - dx / l * ext, from[1] - dy / l * ext];
+    let z = [to[0] + dx / l * ext, to[1] + dy / l * ext];
+    geom::stroke(&[a, z], width, false)
+}
+
 /// The stencil sheet for `art` inside a frame `margin` wide, with bridges `width` wide
 /// joining every island to the frame. Returns the sheet and the bridges it needed.
 pub fn stencil(art: &Region, margin: f64, width: f64) -> (Region, Vec<Bridge>) {
@@ -84,14 +99,29 @@ pub fn stencil(art: &Region, margin: f64, width: f64) -> (Region, Vec<Bridge>) {
             .min_by(|x, y| x.1 .0.total_cmp(&y.1 .0))
             .expect("islands is not empty");
         let island = islands.swap_remove(k);
-        // Run the strip a little into both sides so it joins them rather than touching.
-        let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
-        let l = dx.hypot(dy).max(1e-9);
-        let ext = width / 2.0;
-        let a = [from[0] - dx / l * ext, from[1] - dy / l * ext];
-        let z = [to[0] + dx / l * ext, to[1] + dy / l * ext];
-        strips.push(geom::stroke(&[a, z], width, false));
+        strips.push(strip(from, to, width));
         bridges.push(Bridge { from, to });
+        // A large island gets a second bridge, at least a quarter turn round from the first.
+        if geom::shape_area(&island) > TWO_BRIDGE_AREA_MM2 {
+            let pts = samples(&island, step);
+            let n = pts.len().max(1) as f64;
+            let c = pts
+                .iter()
+                .fold([0.0, 0.0], |a, p| [a[0] + p[0] / n, a[1] + p[1] / n]);
+            let (ux, uy) = (from[0] - c[0], from[1] - c[1]);
+            let apart: Vec<Pt> = pts
+                .into_iter()
+                .filter(|p| {
+                    let (vx, vy) = (p[0] - c[0], p[1] - c[1]);
+                    ux * vx + uy * vy <= 0.0
+                })
+                .collect();
+            if !apart.is_empty() {
+                let (_, f2, t2) = nearest(&apart, &connected_pts);
+                strips.push(strip(f2, t2, width));
+                bridges.push(Bridge { from: f2, to: t2 });
+            }
+        }
         connected_pts.extend(samples(&island, step));
         connected.push(island);
     }
@@ -111,12 +141,20 @@ mod tests {
             &geom::rect(4.0, 4.0, 16.0, 16.0),
         );
         let (sheet, bridges) = stencil(&o, 5.0, 1.0);
-        assert_eq!(bridges.len(), 1, "one island, one bridge");
+        // The counter is 144 mm², over the two-bridge threshold.
+        assert_eq!(bridges.len(), 2, "one large island, two bridges");
         assert_eq!(sheet.len(), 1, "the sheet is one piece");
-        // The bridge crosses the 4 mm ring.
-        let b = bridges[0];
-        let d = (b.from[0] - b.to[0]).hypot(b.from[1] - b.to[1]);
-        assert!((d - 4.0).abs() < 0.3, "{d}");
+        // Both cross the 4 mm ring, on different sides.
+        for b in &bridges {
+            let d = (b.from[0] - b.to[0]).hypot(b.from[1] - b.to[1]);
+            assert!((d - 4.0).abs() < 0.3, "{d}");
+        }
+        let (u, v) = (bridges[0].from, bridges[1].from);
+        let (cu, cv) = ([u[0] - 10.0, u[1] - 10.0], [v[0] - 10.0, v[1] - 10.0]);
+        assert!(
+            cu[0] * cv[0] + cu[1] * cv[1] <= 0.0,
+            "a quarter turn or more apart"
+        );
     }
 
     #[test]

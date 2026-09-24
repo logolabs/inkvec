@@ -84,7 +84,7 @@ impl Default for Options {
             width_mm: 100.0,
             include: Vec::new(),
             order: Vec::new(),
-            bleed_mm: 1.0,
+            bleed_mm: 0.8,
             min_feature_mm: 0.8,
             remove_thin: false,
             sticker_margin_mm: 3.0,
@@ -194,6 +194,8 @@ pub struct Plan {
     /// Every sheet in one file, one group per colour, for cutter software that splits a
     /// file into layers itself.
     pub combined_svg: String,
+    /// Every sheet in one DXF, a layer each, for CAD and CAM programs.
+    pub dxf: String,
     /// Output size, millimetres, including marks and borders.
     pub size_mm: [f64; 2],
     /// The preflight.

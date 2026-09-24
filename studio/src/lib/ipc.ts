@@ -279,6 +279,7 @@ export interface FabPlan {
   previewSvg: string;
   problemsSvg: string;
   combinedSvg: string;
+  dxf: string;
   sizeMm: [number, number];
   checks: FabCheck[];
 }

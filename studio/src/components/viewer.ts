@@ -148,6 +148,26 @@ export function createViewer(store: Store): Viewer {
       }
     }
     overlay.append(wire, handles, anchors);
+
+    // The engine's confidence bands share the drawing's coordinates; their group is lifted
+    // out of their own document, parsed as data like the drawing is.
+    const bands = store.state.result?.bands;
+    if (bands) {
+      const doc = new DOMParser().parseFromString(bands, "image/svg+xml");
+      const g = doc.documentElement.querySelector("g");
+      if (g && !doc.querySelector("parsererror")) {
+        const certainty = document.importNode(g, true) as unknown as SVGGElement;
+        certainty.setAttribute("class", "certainty");
+        // A clean edge's band is a tenth of a pixel wide, true and invisible; each band is
+        // coloured by how sure the edge is and outlined a screen pixel wide, so the sure
+        // ones read as green lines and the unsure ones as red swellings.
+        for (const p of certainty.querySelectorAll("path")) {
+          const sigma = Number(p.getAttribute("data-sigma-mean") ?? 0);
+          p.setAttribute("class", sigma <= 0.1 ? "sure" : sigma <= 0.3 ? "soft" : "unsure");
+        }
+        overlay.prepend(certainty);
+      }
+    }
   }
 
   /** Show/hide the three overlays and the fill, without rebuilding anything. */
@@ -160,6 +180,7 @@ export function createViewer(store: Store): Viewer {
     set(".wireframe", show.wireframe);
     set(".handles", show.handles);
     set(".anchors", show.anchors);
+    set(".certainty", show.certainty);
     // Turning the fill off has to leave something behind, or "wireframe only" is a
     // blank pane; it dims rather than disappears.
     const art = vectorArt.querySelector<SVGElement>("svg:not(.overlay)");

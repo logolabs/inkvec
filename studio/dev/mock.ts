@@ -32,6 +32,8 @@ const FAB_DIR: Record<string, string> = { singleColour: "single", layered: "laye
 
 const png = (name: string) => samplePngs[`../src-tauri/samples/${name}.png`];
 const svgOf = (name: string) => tracedSvgs[`./traced/${name}.svg`] ?? "";
+// Confidence bands for each sample, written by `inkvec <png> --uncertainty dev/bands/<name>.svg`.
+const bandSvgs = import.meta.glob("./bands/*.svg", { eager: true, query: "?raw", import: "default" }) as Record<string, string>;
 
 const SAMPLES = [
   { file: "flat-logo.png", label: "Flat logo" },
@@ -161,6 +163,7 @@ async function runTrace(tier: string, gen: number, settings: Record<string, unkn
       worstCorner: { x: 212, y: 148, de00: 0.71 },
       stages: [],
       engineLog: [],
+      bands: bandSvgs[`./bands/${stem}.svg`] ?? null,
       tracedPx,
       oversized: false,
       sourcePx: [512, 512],

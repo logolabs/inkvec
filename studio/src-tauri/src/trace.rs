@@ -127,6 +127,9 @@ pub struct Traced {
     pub stages: Vec<Stage>,
     /// The engine's own one-line-per-stage summary, as the command line prints it.
     pub engine_log: Vec<String>,
+    /// Where each boundary could be: the engine's confidence bands, an SVG in the
+    /// drawing's own coordinates, when the trace produced them (colour traces do).
+    pub bands: Option<String>,
     /// The raster the trace actually ran on, longer side in pixels.
     pub traced_px: u32,
     /// Whether the input was larger than the trace size and so was measured smaller.
@@ -377,14 +380,22 @@ pub fn run(
     // The drawing, either from the pipeline or from the one already in hand. Only the
     // output options can be different for a reused drawing, and they are applied below.
     let reused = cache.and_then(|c| c.reuse(source, &settings, tier));
-    let (raw_svg, raw_w, raw_h, engine_log, stages) = match reused {
-        Some(hit) => (hit.svg, hit.width, hit.height, hit.stats, Vec::new()),
+    let (raw_svg, raw_w, raw_h, engine_log, stages, bands) = match reused {
+        Some(hit) => (
+            hit.svg,
+            hit.width,
+            hit.height,
+            hit.stats,
+            Vec::new(),
+            hit.bands,
+        ),
         None => match trace_pipeline(source, &args, on_stage) {
             Ok(t) => {
                 if let Some(c) = cache {
                     c.keep(source, &settings, tier, &t.svg, t.width, t.height, &t.stats);
+                    c.keep_bands(t.bands.clone());
                 }
-                (t.svg, t.width, t.height, t.stats, t.stages)
+                (t.svg, t.width, t.height, t.stats, t.stages, t.bands)
             }
             Err(outcome) => return outcome,
         },
@@ -394,7 +405,7 @@ pub fn run(
     let svg = inkvec_cli::post_process(&args, raw_svg, raw_w, raw_h);
     let seconds = started.elapsed().as_secs_f64();
     measure(
-        source, &settings, &args, tier, svg, traced_w, traced_h, engine_log, stages, seconds,
+        source, &settings, &args, tier, svg, traced_w, traced_h, engine_log, stages, bands, seconds,
     )
 }
 
@@ -405,6 +416,17 @@ struct Pipeline {
     width: usize,
     height: usize,
     stages: Vec<Stage>,
+    bands: Option<String>,
+}
+
+/// A file for the engine's confidence bands, unique to this trace.
+fn bands_path() -> std::path::PathBuf {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    std::env::temp_dir().join(format!(
+        "inkvec-bands-{}-{}.svg",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ))
 }
 
 /// Run the pipeline itself, turning a failure into the outcome the interface shows.
@@ -417,6 +439,11 @@ fn trace_pipeline(
     // passed. They are folded onto the nine names the interface shows — accumulating
     // time where several pipeline steps map to one name — and handed straight on, so the
     // rail fills while the trace runs rather than after it.
+    // The bands come back through a file, as the command line writes them.
+    let bands_file = bands_path();
+    let mut args = args.clone();
+    args.uncertainty = Some(bands_file.clone());
+    let args = &args;
     let collected: std::rc::Rc<std::cell::RefCell<Vec<Stage>>> = Default::default();
     let store = std::rc::Rc::clone(&collected);
     let traced = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -463,12 +490,15 @@ fn trace_pipeline(
         Ok(Ok(t)) => t,
     };
 
+    let bands = std::fs::read_to_string(&bands_file).ok();
+    let _ = std::fs::remove_file(&bands_file);
     Ok(Pipeline {
         svg: traced.svg,
         stats: traced.stats,
         width: traced.width,
         height: traced.height,
         stages,
+        bands,
     })
 }
 
@@ -486,6 +516,7 @@ fn measure(
     traced_h: u32,
     engine_log: Vec<String>,
     stages: Vec<Stage>,
+    bands: Option<String>,
     seconds: f64,
 ) -> Outcome {
     let raster = inkvec_trace::decode_image_capped(&source.bytes, args.max_dim)
@@ -525,6 +556,7 @@ fn measure(
         worst_corner: analysis.as_ref().and_then(|a| a.corner),
         stages,
         engine_log,
+        bands,
         traced_px: traced_w.max(traced_h),
         oversized: scaled_to(source.width, source.height, args.max_dim as u32).is_some(),
         source_px: (source.width, source.height),
@@ -1109,6 +1141,7 @@ struct Cached {
     width: usize,
     height: usize,
     stats: Vec<String>,
+    bands: Option<String>,
 }
 
 /// What a hit gives back: the pipeline's own output, before the output options.
@@ -1117,6 +1150,7 @@ pub struct Reused {
     pub width: usize,
     pub height: usize,
     pub stats: Vec<String>,
+    pub bands: Option<String>,
 }
 
 /// The settings with the two post-processing controls blanked out: what decides whether two
@@ -1156,6 +1190,7 @@ impl Cache {
             width: hit.width,
             height: hit.height,
             stats: hit.stats.clone(),
+            bands: hit.bands.clone(),
         })
     }
 
@@ -1178,7 +1213,15 @@ impl Cache {
             width,
             height,
             stats: stats.to_vec(),
+            bands: None,
         });
+    }
+
+    /// The confidence bands of the drawing just kept.
+    pub fn keep_bands(&self, bands: Option<String>) {
+        if let Some(held) = self.lock().as_mut() {
+            held.bands = bands;
+        }
     }
 
     /// Forget it. What opening another image does, so a drawing is never held for an image

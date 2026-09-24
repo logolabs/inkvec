@@ -954,7 +954,8 @@ fn finish_color(
     };
     sw.mark("emit");
     if let Some(path) = &args.uncertainty {
-        let bands = crate::uncertainty::bands_svg(&svg, &map.edges, args.uncertainty_k);
+        let bands =
+            uncertainty::bands_svg(&svg, &map.edges, map.width, map.height, args.uncertainty_k);
         if let Err(e) = std::fs::write(path, bands) {
             eprintln!(
                 "could not write the confidence bands to {}: {e}",

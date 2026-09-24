@@ -77,13 +77,18 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
             ["wireframe", "Wireframe"],
             ["anchors", "Anchors"],
             ["handles", "Handles"],
+            ["certainty", "Certainty"],
           ] as const
         ).map(([key, label]) =>
           h(
             "button.toggle",
             {
               "aria-pressed": String(st.show[key]),
-              disabled: !st.svg,
+              disabled: !st.svg || (key === "certainty" && !st.result?.bands),
+              title:
+                key === "certainty"
+                  ? "Where each boundary could be: a band two sigmas either side, measured from the pixels. Thin is certain; a wide band is a soft, blurred or compressed edge, and the curve there is a best guess."
+                  : undefined,
               onclick: () => {
                 st.show[key] = !st.show[key];
                 store.touch("show");
@@ -97,13 +102,20 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
         "div",
         { style: { marginLeft: "auto", display: "flex", alignItems: "center", gap: "12px" } },
         // The key to the dots is only worth the room while there are dots to read.
-        st.show.wireframe || st.show.anchors || st.show.handles
+        st.show.wireframe || st.show.anchors || st.show.handles || st.show.certainty
           ? h(
               "div.legend",
               null,
               st.show.anchors ? h("span", null, h("i.anchor"), "anchor") : null,
               st.show.handles ? h("span", null, h("i.handle"), "handle") : null,
               st.show.wireframe ? h("span", null, h("i.wire"), "wireframe") : null,
+              ...(st.show.certainty
+                ? [
+                    h("span", null, h("i.band.sure"), "sure"),
+                    h("span", null, h("i.band.soft"), "soft"),
+                    h("span", null, h("i.band.unsure"), "unsure"),
+                  ]
+                : []),
             )
           : null,
         h(

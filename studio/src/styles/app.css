@@ -429,6 +429,34 @@ kbd {
   background: var(--handle);
   transform: rotate(45deg);
 }
+.legend .band {
+  width: 12px;
+  height: 6px;
+  border-radius: 2px;
+}
+/* Edge certainty, by the mean sigma of the boundary: under 0.1 px, under 0.3 px, above. */
+.legend .band.sure,
+.overlay .certainty .sure {
+  --band: #30a46c;
+}
+.legend .band.soft,
+.overlay .certainty .soft {
+  --band: #f5a524;
+}
+.legend .band.unsure,
+.overlay .certainty .unsure {
+  --band: #e5484d;
+}
+.legend .band {
+  background: var(--band);
+}
+.overlay .certainty path {
+  fill: var(--band);
+  fill-opacity: 0.45;
+  stroke: var(--band);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
 .legend .wire {
   width: 12px;
   height: 2px;

@@ -92,7 +92,7 @@ export interface State {
   justSwapped: boolean;
 
   view: ViewMode;
-  show: { fill: boolean; wireframe: boolean; anchors: boolean; handles: boolean };
+  show: { fill: boolean; wireframe: boolean; anchors: boolean; handles: boolean; certainty: boolean };
   zoom: number;
   pan: { x: number; y: number };
   /** Whether the view is the fitted one, as opposed to a zoom the user chose. */
@@ -177,7 +177,7 @@ export function initial(settings: Settings, minify: MinifySettings): State {
     stageState: { kind: "empty" },
     justSwapped: false,
     view: "side",
-    show: { fill: true, wireframe: false, anchors: false, handles: false },
+    show: { fill: true, wireframe: false, anchors: false, handles: false, certainty: false },
     zoom: 1,
     pan: { x: 0, y: 0 },
     fitted: true,

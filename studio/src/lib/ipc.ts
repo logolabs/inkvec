@@ -203,6 +203,8 @@ export interface Traced {
   worstCorner: WorstCorner | null;
   stages: Stage[];
   engineLog: string[];
+  /** Each boundary's confidence band, an SVG in the drawing's coordinates (colour traces). */
+  bands: string | null;
   tracedPx: number;
   oversized: boolean;
   sourcePx: [number, number];

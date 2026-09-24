@@ -79,8 +79,19 @@ fn band(e: &Edge, k: f64) -> String {
     }
 }
 
-/// The overlay for `edges`, sharing `trace`'s root element (and so its size and viewBox).
-pub(crate) fn bands_svg(trace: &str, edges: &[Edge], k: f64) -> String {
+/// Whether every point of `e` lies on the border of a `w` by `h` raster: the canvas's own
+/// edge, which the map carries but nobody drew.
+fn on_border(e: &Edge, w: usize, h: usize) -> bool {
+    let (x1, y1) = (w as f64 - 0.5, h as f64 - 0.5);
+    let near = |a: f64, b: f64| (a - b).abs() < 0.51;
+    e.points
+        .iter()
+        .all(|p| near(p.x, -0.5) || near(p.y, -0.5) || near(p.x, x1) || near(p.y, y1))
+}
+
+/// The overlay for the edges of a `w` by `h` map, sharing `trace`'s root element (and so
+/// its size and viewBox).
+pub(crate) fn bands_svg(trace: &str, edges: &[Edge], w: usize, h: usize, k: f64) -> String {
     let root = trace
         .find("<svg")
         .and_then(|a| trace[a..].find('>').map(|b| &trace[a..=a + b]))
@@ -90,7 +101,10 @@ pub(crate) fn bands_svg(trace: &str, edges: &[Edge], k: f64) -> String {
         "<g fill=\"#e5484d\" fill-opacity=\"0.55\" fill-rule=\"evenodd\" data-k=\"{}\">",
         fmt(k)
     ));
-    for e in edges.iter().filter(|e| e.points.len() >= 2) {
+    for e in edges
+        .iter()
+        .filter(|e| e.points.len() >= 2 && !on_border(e, w, h))
+    {
         let n = e.sigma.len().max(1) as f64;
         let mean = e.sigma.iter().sum::<f64>() / n;
         let max = e.sigma.iter().copied().fold(0.0, f64::max);
@@ -132,6 +146,8 @@ mod tests {
         let svg = bands_svg(
             "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 10 10\"><path/></svg>",
             &[e],
+            100,
+            100,
             2.0,
         );
         assert!(svg.starts_with("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 10 10\">"));

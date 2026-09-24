@@ -31,6 +31,7 @@ mod emit;
 mod harmonize;
 mod post;
 mod rings;
+mod uncertainty;
 
 use alpha::{alpha_source, pixel_grid, AlphaSource, FaceAlpha};
 pub use args::Args;

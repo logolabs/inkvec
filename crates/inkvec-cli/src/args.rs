@@ -105,6 +105,11 @@ pub struct Args {
     /// and `{out}` are replaced with PNG paths; the command must write a
     /// same-size image.
     pub restore_command: Option<String>,
+    /// Also write each boundary's confidence band (`k` sigma either side) to this file,
+    /// an SVG that overlays the trace.
+    pub uncertainty: Option<PathBuf>,
+    /// Width of the confidence bands, in sigmas.
+    pub uncertainty_k: f64,
     /// Resample an oversampled input before tracing.
     pub intake_scale: bool,
     /// Emit line art as strokes -- one path and one width -- instead of as filled
@@ -174,6 +179,8 @@ impl Default for Args {
             restore: inkvec_restore::Mode::Off,
             restore_threshold: inkvec_sr::detect::DEGRADED_RESIDUAL,
             restore_weights: None,
+            uncertainty: None,
+            uncertainty_k: 2.0,
             restore_command: None,
             intake_scale: false,
             strokes: false,
@@ -238,6 +245,13 @@ OPTIONS:
                             60% of it and the boundary solve gets 25%; the output is
                             still a correct trace, with more fills or a less polished
                             outline. 0 means no budget                 [default: 0]
+        --uncertainty <file>
+                            Also write where each traced boundary could be: an SVG
+                            that overlays the trace, every boundary a band k sigma
+                            either side of it, measured from the pixels (colour
+                            images)
+        --uncertainty-k <k> Band width in sigmas; 2 holds the true edge about 95%
+                            of the time                                [default: 2]
         --strict            Exit with status 2 on input that has nothing to trace
                             (a single flat colour). Without it the flat SVG is
                             written and a warning is printed
@@ -422,6 +436,12 @@ fn parse_args_from(mut it: impl Iterator<Item = String>) -> Result<Args, String>
             "--max-dim" => a.max_dim = parse_value(&mut it, "--max-dim")?,
             "--time-budget" => a.time_budget = parse_value(&mut it, "--time-budget")?,
             "--strict" => a.strict = true,
+            "--uncertainty" => {
+                a.uncertainty = Some(PathBuf::from(
+                    it.next().ok_or("--uncertainty needs a path")?,
+                ))
+            }
+            "--uncertainty-k" => a.uncertainty_k = parse_value(&mut it, "--uncertainty-k")?,
             "--no-background" => a.no_background = true,
             "--no-unblock" => a.no_unblock = true,
             "--simplify-faint" => a.simplify_faint = true,

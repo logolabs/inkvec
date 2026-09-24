@@ -18,7 +18,6 @@
 
 use inkvec_core::Point;
 use inkvec_fit::{
-    curves::Segment,
     primitives::{PrimitiveFit, PrimitiveKind},
     FittedPath,
 };
@@ -26,9 +25,11 @@ use inkvec_trace::gradient;
 
 use crate::alpha::{unmatte, AlphaRamp};
 use crate::colour_name;
+use crate::pathdata::{fmt_path, fmt_ring, fmt_ring_with};
 use crate::rings::{
     containment, interior_probes, point_in_ring, ring_area, ring_inside, ring_points,
 };
+use crate::seams;
 use crate::{FaceRings, Layers, Ring};
 
 /// Decimals written per coordinate.
@@ -60,284 +61,11 @@ const EMIT_DECIMALS: usize = 2;
 /// Smallest area, in square pixels, that a ring has to enclose to be worth emitting.
 const MIN_RING_AREA: f64 = 0.25;
 
-/// Serialise one fitted path. `fmt_ring` does this for a closed ring of planar
-/// edges; a stroke is a single open or closed curve and needs no ring walk.
-pub(crate) fn fmt_fitted(path: &FittedPath, closed: bool, decimals: usize, d: &mut String) {
-    d.push_str(&format!(
-        "M{:.*},{:.*}",
-        decimals, path.start.x, decimals, path.start.y
-    ));
-    // `S` restates a cubic whose first control point is the reflection of the previous
-    // one's second, which is exactly what `merge::snap_smooth_joins` arranges. Written
-    // out it is the same curve in two fewer numbers; the reader reconstructs the handle.
-    // Detected here from the geometry rather than carried on the segment, so nothing
-    // upstream has to track it and a curve that happens to be smooth gets the short form
-    // for free.
-    let mut prev_c2: Option<(Point, Point)> = None; // (that segment's c2, its end)
-    for seg in &path.segments {
-        if let Segment::Cubic(c1, c2, p) = *seg {
-            if let Some((pc2, pp3)) = prev_c2 {
-                let want = Point::new(2.0 * pp3.x - pc2.x, 2.0 * pp3.y - pc2.y);
-                if want.dist(c1) < 5e-4 {
-                    d.push_str(&format!(
-                        "S{:.*},{:.*} {:.*},{:.*}",
-                        decimals, c2.x, decimals, c2.y, decimals, p.x, decimals, p.y
-                    ));
-                    prev_c2 = Some((c2, p));
-                    continue;
-                }
-            }
-            prev_c2 = Some((c2, p));
-        } else {
-            prev_c2 = None;
-        }
-        match *seg {
-            Segment::Line(p) => d.push_str(&format!("L{:.*},{:.*}", decimals, p.x, decimals, p.y)),
-            Segment::Cubic(a, b, p) => d.push_str(&format!(
-                "C{:.*},{:.*} {:.*},{:.*} {:.*},{:.*}",
-                decimals,
-                a.x,
-                decimals,
-                a.y,
-                decimals,
-                b.x,
-                decimals,
-                b.y,
-                decimals,
-                p.x,
-                decimals,
-                p.y
-            )),
-            Segment::Arc {
-                rx,
-                ry,
-                phi,
-                large_arc,
-                sweep,
-                end,
-            } => d.push_str(&format!(
-                "A{:.*},{:.*} {:.3} {} {} {:.*},{:.*}",
-                decimals,
-                rx,
-                decimals,
-                ry,
-                phi.to_degrees(),
-                u8::from(large_arc),
-                u8::from(sweep),
-                decimals,
-                end.x,
-                decimals,
-                end.y
-            )),
-        }
-    }
-    if closed {
-        d.push('Z');
-    }
-}
-
 pub(crate) fn emit_decimals(_precision: f64) -> usize {
     std::env::var("INKVEC_EMIT_DECIMALS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(EMIT_DECIMALS)
-}
-
-pub(crate) fn fmt_path(pts: &[Point], decimals: usize, d: &mut String) {
-    if pts.len() < 3 {
-        return;
-    }
-    d.push('M');
-    for (i, p) in pts.iter().enumerate() {
-        if i > 0 {
-            d.push('L');
-        }
-        d.push_str(&format!("{:.*},{:.*}", decimals, p.x, decimals, p.y));
-    }
-    d.push('Z');
-}
-
-/// Serialize one ring, assembled from the shared edges that bound it.
-pub(crate) fn fmt_ring(ring: &Ring, fitted: &[FittedPath], decimals: usize, d: &mut String) {
-    let mut first = true;
-    let mut total = 0usize;
-    let mut buf = String::new();
-    // (previous cubic's second control point, its end) -- carried across edge boundaries,
-    // since a ring is several edges' fits concatenated and a smooth join can fall on the
-    // seam between two of them.
-    let mut prev_c2: Option<(Point, Point)> = None;
-    for &(k, rev) in ring {
-        let path = if rev {
-            fitted[k].reversed()
-        } else {
-            fitted[k].clone()
-        };
-        if path.segments.is_empty() {
-            continue;
-        }
-        if first {
-            buf.push_str(&format!(
-                "M{:.*},{:.*}",
-                decimals, path.start.x, decimals, path.start.y
-            ));
-            first = false;
-        }
-        for seg in &path.segments {
-            // `S` restates a cubic whose first control point is the reflection of the
-            // previous one's second -- the same curve in two fewer numbers, which is what
-            // `merge::snap_smooth_joins` arranges and what artists write (60% of their
-            // smooth cubic joins are exactly this).
-            //
-            // Tested on the *rounded* values, not the floats: those are what the reader
-            // gets, and a reflection that holds only before rounding would decode to a
-            // slightly different curve than the one that was fitted.
-            if let Segment::Cubic(a, b, p) = *seg {
-                if let Some((pc2, pp3)) = prev_c2 {
-                    let r = |v: f64| {
-                        let m = 10f64.powi(decimals as i32);
-                        (v * m).round() / m
-                    };
-                    // What the reader will reconstruct from the numbers actually
-                    // written. Rounding does not commute with the reflection, so testing
-                    // for equality there rejects joins that are exactly reflective in
-                    // full precision; what matters is only that the curve the reader
-                    // rebuilds is the curve that was fitted, to within the rounding this
-                    // output already accepts everywhere else.
-                    let (wx, wy) = (2.0 * r(pp3.x) - r(pc2.x), 2.0 * r(pp3.y) - r(pc2.y));
-                    let tol = 10f64.powi(-(decimals as i32));
-                    if (a.x - wx).abs() < tol && (a.y - wy).abs() < tol {
-                        buf.push_str(&format!(
-                            "S{:.*},{:.*} {:.*},{:.*}",
-                            decimals, b.x, decimals, b.y, decimals, p.x, decimals, p.y
-                        ));
-                        total += 1;
-                        prev_c2 = Some((b, p));
-                        continue;
-                    }
-                }
-                prev_c2 = Some((b, p));
-            } else {
-                prev_c2 = None;
-            }
-            match *seg {
-                Segment::Line(p) => {
-                    buf.push_str(&format!("L{:.*},{:.*}", decimals, p.x, decimals, p.y))
-                }
-                Segment::Cubic(a, b, p) => buf.push_str(&format!(
-                    "C{:.*},{:.*} {:.*},{:.*} {:.*},{:.*}",
-                    decimals,
-                    a.x,
-                    decimals,
-                    a.y,
-                    decimals,
-                    b.x,
-                    decimals,
-                    b.y,
-                    decimals,
-                    p.x,
-                    decimals,
-                    p.y
-                )),
-                Segment::Arc {
-                    rx,
-                    ry,
-                    phi,
-                    large_arc,
-                    sweep,
-                    end,
-                } => buf.push_str(&format!(
-                    "A{:.*},{:.*} {:.3} {},{} {:.*},{:.*}",
-                    decimals,
-                    rx,
-                    decimals,
-                    ry,
-                    phi.to_degrees(),
-                    u8::from(large_arc),
-                    u8::from(sweep),
-                    decimals,
-                    end.x,
-                    decimals,
-                    end.y
-                )),
-            }
-            total += 1;
-        }
-    }
-    if total >= 2 {
-        buf.push('Z');
-        d.push_str(&buf);
-    }
-}
-
-/// Assembles a ring's fitted edges into a starting point and a list of segments.
-pub(crate) fn ring_to_segments(ring: &Ring, fitted: &[FittedPath]) -> (Point, Vec<Segment>) {
-    let mut start = Point::new(0.0, 0.0);
-    let mut segments = Vec::new();
-    for &(k, rev) in ring {
-        let path = if rev {
-            fitted[k].reversed()
-        } else {
-            fitted[k].clone()
-        };
-        if segments.is_empty() && !path.segments.is_empty() {
-            start = path.start;
-        }
-        segments.extend(path.segments);
-    }
-    (start, segments)
-}
-
-/// Serializes a sequence of fitted segments starting from `start` into SVG path data.
-pub(crate) fn fmt_segments(start: Point, segments: &[Segment], decimals: usize, d: &mut String) {
-    if segments.is_empty() {
-        return;
-    }
-    d.push_str(&format!(
-        "M{:.*},{:.*}",
-        decimals, start.x, decimals, start.y
-    ));
-    for seg in segments {
-        match *seg {
-            Segment::Line(p) => d.push_str(&format!("L{:.*},{:.*}", decimals, p.x, decimals, p.y)),
-            Segment::Cubic(a, b, p) => d.push_str(&format!(
-                "C{:.*},{:.*} {:.*},{:.*} {:.*},{:.*}",
-                decimals,
-                a.x,
-                decimals,
-                a.y,
-                decimals,
-                b.x,
-                decimals,
-                b.y,
-                decimals,
-                p.x,
-                decimals,
-                p.y
-            )),
-            Segment::Arc {
-                rx,
-                ry,
-                phi,
-                large_arc,
-                sweep,
-                end,
-            } => d.push_str(&format!(
-                "A{:.*},{:.*} {:.3} {},{} {:.*},{:.*}",
-                decimals,
-                rx,
-                decimals,
-                ry,
-                phi.to_degrees(),
-                u8::from(large_arc),
-                u8::from(sweep),
-                decimals,
-                end.x,
-                decimals,
-                end.y
-            )),
-        }
-    }
-    d.push('Z');
 }
 
 /// Emit the map as a **stacked** document: faces painted back to front, each drawing only
@@ -1065,7 +793,10 @@ pub(crate) fn emit_color(
             eprintln!(
                 "  emit {i}: rings {} areas {:?} outer {} clear {:?} parent {:?} drop {} holes {:?}",
                 order.get(i).map_or(0, |o| o.len()),
-                pts[i].iter().map(|r| (r.len(), ring_area(r).round())).collect::<Vec<_>>(),
+                pts[i]
+                    .iter()
+                    .map(|r| (r.len(), ring_area(r).round()))
+                    .collect::<Vec<_>>(),
                 outer.get(i).map_or(0, |o| o.len()),
                 clear.get(i),
                 parent.get(i).copied().flatten(),
@@ -1263,6 +994,7 @@ pub(crate) fn emit_color(
         holes: &[Vec<usize>],
         decimals: usize,
         harmonized_d: &std::collections::HashMap<usize, String>,
+        under: &seams::Overrides,
     ) -> String {
         if let Some(h_d) = harmonized_d.get(&i) {
             return h_d.clone();
@@ -1274,20 +1006,29 @@ pub(crate) fn emit_color(
         // 0.6 px, and a face only lands here with a primitive outline when a hole was
         // punched in it -- `material-icons/qr_code`'s finder squares came out with a
         // slanted top edge, `simple-icons/phpstorm`'s square with a notch in one corner.
-        let mut ring_d = |ring: &Ring| match (ring.len() == 1)
+        // Only the face's own outline reaches under its neighbours; a hole punched in it
+        // is the punched face's outline exactly.
+        let mut ring_d = |ring: &Ring, own: bool| match (ring.len() == 1)
             .then(|| prims.get(ring[0].0).and_then(|p| p.as_ref()))
             .flatten()
             .and_then(|pf| primitive_d(&pf.kind, decimals))
         {
             Some(p) => d.push_str(&p),
+            None if own && !under.is_empty() => fmt_ring_with(
+                ring,
+                fitted,
+                &|k| under.get(&(i, k)).cloned(),
+                decimals,
+                &mut d,
+            ),
             None => fmt_ring(ring, fitted, decimals, &mut d),
         };
         for &k in &drawn[i] {
-            ring_d(&order[i][k]);
+            ring_d(&order[i][k], true);
         }
         for &c in &holes[i] {
             for &k in &drawn[c] {
-                ring_d(&order[c][k]);
+                ring_d(&order[c][k], false);
             }
         }
         d
@@ -1311,13 +1052,16 @@ pub(crate) fn emit_color(
         harmonized_d: &std::collections::HashMap<usize, String>,
         symbol_use: &std::collections::HashMap<usize, (String, String)>,
         strokes: &std::collections::HashMap<usize, String>,
+        under: &seams::Overrides,
     ) -> Option<(String, bool)> {
         let fill = &fills[i];
         let alpha = opac[i].as_str();
         let id = &ids[i];
         if let Some((sym_id, matrix)) = symbol_use.get(&i) {
             return Some((
-                format!("<use id=\"{id}\" href=\"#{sym_id}\" transform=\"{matrix}\" fill=\"{fill}\"{alpha} fill-rule=\"evenodd\"/>"),
+                format!(
+                    "<use id=\"{id}\" href=\"#{sym_id}\" transform=\"{matrix}\" fill=\"{fill}\"{alpha} fill-rule=\"evenodd\"/>"
+                ),
                 false,
             ));
         }
@@ -1350,6 +1094,7 @@ pub(crate) fn emit_color(
             holes,
             decimals,
             harmonized_d,
+            under,
         );
         if d.is_empty() {
             return None;
@@ -1387,6 +1132,8 @@ pub(crate) fn emit_color(
         harmonized_d: &std::collections::HashMap<usize, String>,
         symbol_use: &std::collections::HashMap<usize, (String, String)>,
         strokes: &std::collections::HashMap<usize, String>,
+        under: &seams::Overrides,
+        painted: &mut Vec<(usize, usize)>,
         out: &mut String,
     ) {
         let mut done = vec![false; members.len()];
@@ -1411,6 +1158,7 @@ pub(crate) fn emit_color(
                 harmonized_d,
                 symbol_use,
                 strokes,
+                under,
             ) else {
                 continue;
             };
@@ -1440,6 +1188,7 @@ pub(crate) fn emit_color(
                         harmonized_d,
                         symbol_use,
                         strokes,
+                        under,
                     ) else {
                         done[b] = true;
                         continue;
@@ -1465,6 +1214,7 @@ pub(crate) fn emit_color(
                         holes,
                         decimals,
                         harmonized_d,
+                        under,
                     ));
                 }
                 format!(
@@ -1472,6 +1222,11 @@ pub(crate) fn emit_color(
                     ids[i], fills[i], opac[i]
                 )
             };
+            // One element is one paint: its members share a rank, so none of them reaches
+            // under another -- inside one even-odd path an overlap would cancel to a hole,
+            // and a shared edge inside one path cannot seam in the first place.
+            let rank = painted.last().map_or(0, |&(_, r)| r + 1);
+            painted.extend(group.iter().map(|&j| (j, rank)));
             let has_children = group.iter().any(|&j| !children[j].is_empty());
             if !has_children {
                 out.push_str(&element);
@@ -1498,6 +1253,8 @@ pub(crate) fn emit_color(
                     harmonized_d,
                     symbol_use,
                     strokes,
+                    under,
+                    painted,
                     out,
                 );
             }
@@ -1538,25 +1295,134 @@ pub(crate) fn emit_color(
         std::collections::HashMap::new()
     };
 
-    let mut body = String::new();
-    emit_level(
-        &roots,
-        order,
-        &outer,
-        fitted,
-        prims,
-        &fills,
-        &opac,
-        &ids,
-        &children,
-        drawn,
-        &holes,
-        decimals,
-        &harmonized_d,
-        &symbol_use,
-        &strokes,
-        &mut body,
-    );
+    let emit_all = |under: &seams::Overrides, painted: &mut Vec<(usize, usize)>| -> String {
+        let mut body = String::new();
+        emit_level(
+            &roots,
+            order,
+            &outer,
+            fitted,
+            prims,
+            &fills,
+            &opac,
+            &ids,
+            &children,
+            drawn,
+            &holes,
+            decimals,
+            &harmonized_d,
+            &symbol_use,
+            &strokes,
+            under,
+            painted,
+            &mut body,
+        );
+        body
+    };
+    let mut painted = Vec::new();
+    let mut body = emit_all(&seams::Overrides::new(), &mut painted);
+
+    // Side-by-side faces: the lower reaches under the upper so no ground shows through
+    // their shared edge (see `crate::seams`). The first pass settled the paint order; the
+    // second writes the moved outlines, and is skipped when nothing moves.
+    let reach = seams::underlap_width();
+    if reach > 0.0 {
+        let mut z = vec![None; order.len()];
+        for &(f, rank) in &painted {
+            z[f] = Some(rank);
+        }
+        let lower_ok: Vec<bool> = (0..order.len())
+            .map(|i| {
+                z[i].is_some()
+                    && !harmonized_d.contains_key(&i)
+                    && !symbol_use.contains_key(&i)
+                    && !strokes.contains_key(&i)
+            })
+            .collect();
+        let upper_ok: Vec<bool> = (0..order.len())
+            .map(|i| {
+                z[i].is_some()
+                    && opac[i].is_empty()
+                    && fades.get(i).is_none_or(|f| f.is_none())
+                    && alpha_ramps.get(i).is_none_or(|r| r.is_none())
+            })
+            .collect();
+        // Already painted whole beneath: an ancestor in the stack.
+        let under = |v: usize, u: usize| -> bool {
+            let mut k = u;
+            while let Some(p) = surviving_parent(k) {
+                if p == v {
+                    return true;
+                }
+                k = p;
+            }
+            false
+        };
+        // The colour a face shows on average: its flat fill, a gradient's mean, or the
+        // colour of the ground under a recovered layer.
+        let ink = |i: usize| -> Option<[f32; 3]> {
+            if let Some(b) = base_of.get(i).copied().flatten() {
+                return Some(b);
+            }
+            match fill_fits.get(i).map(|f| &f.model) {
+                Some(gradient::FillModel::Flat(c)) => Some(*c),
+                Some(gradient::FillModel::Linear { c0, c1, .. })
+                | Some(gradient::FillModel::Radial { c0, c1, .. }) => Some([
+                    0.5 * (c0[0] + c1[0]),
+                    0.5 * (c0[1] + c1[1]),
+                    0.5 * (c0[2] + c1[2]),
+                ]),
+                None => face_color.get(i).and_then(|&ci| pal.rgb.get(ci)).copied(),
+            }
+        };
+        // A seam shows a quarter of the ground under the pair against the mix of the two;
+        // the ground is their nearest common ancestor. Two faces with nothing painted under
+        // them seam against the page, which may be anything, and count as full contrast.
+        let contrast = |v: usize, u: usize| -> f32 {
+            let mut up = Vec::new();
+            let mut k = v;
+            while let Some(p) = surviving_parent(k) {
+                up.push(p);
+                k = p;
+            }
+            let mut k = u;
+            let ground = loop {
+                match surviving_parent(k) {
+                    Some(p) if up.contains(&p) => break Some(p),
+                    Some(p) => k = p,
+                    None => break None,
+                }
+            };
+            match (ground.and_then(ink), ink(v), ink(u)) {
+                (Some(g), Some(a), Some(b)) => {
+                    let d: f32 = (0..3)
+                        .map(|c| (g[c] - 0.5 * (a[c] + b[c])).powi(2))
+                        .sum::<f32>()
+                        .sqrt();
+                    d
+                }
+                _ => 1.0,
+            }
+        };
+        let moved = seams::underlap(
+            &seams::Faces {
+                order,
+                fitted,
+                pts: &pts,
+                drawn,
+                outer: &outer,
+                z: &z,
+                lower_ok: &lower_ok,
+                upper_ok: &upper_ok,
+                contrast: &contrast,
+            },
+            &under,
+            reach,
+        );
+        if !moved.is_empty() {
+            body = emit_all(&moved, &mut Vec::new());
+        }
+    }
 
     // The layers, over everything, each as one compound path. Its faces are disjoint, so
     // even-odd paints their union; and because it is one path rather than one per face,

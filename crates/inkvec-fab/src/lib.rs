@@ -21,6 +21,7 @@
 pub mod biarc;
 pub mod dxf;
 pub mod fitcurve;
+pub mod gcode;
 pub mod geom;
 pub mod lines;
 pub mod load;

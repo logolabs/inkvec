@@ -243,6 +243,12 @@ export interface FabOptions {
   cutStyle: CutStyle;
   /** Side of a square cut beside the design, to measure after cutting; 0 for none. */
   sizeCheckMm: number;
+  /** G-code cutting speed, mm per minute. */
+  gcodeFeedMmMin: number;
+  /** G-code power, in the controller's S units. */
+  gcodePower: number;
+  /** Times the G-code cuts each path. */
+  gcodePasses: number;
   /** How the saved files state their size. */
   fileUnits: FileUnits;
   kerfMm: number;
@@ -289,6 +295,7 @@ export interface FabPlan {
   problemsSvg: string;
   combinedSvg: string;
   dxf: string;
+  gcode: string;
   sizeMm: [number, number];
   checks: FabCheck[];
 }

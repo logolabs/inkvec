@@ -105,6 +105,12 @@ pub struct Options {
     pub mirror: bool,
     /// How cut lines are drawn.
     pub cut_style: CutStyle,
+    /// G-code cutting speed, millimetres per minute.
+    pub gcode_feed_mm_min: f64,
+    /// G-code power, in the controller's S units.
+    pub gcode_power: f64,
+    /// Times the G-code cuts each path.
+    pub gcode_passes: u32,
     /// Side of a square cut outside the design on every sheet, to measure after cutting
     /// and so catch a program that changed the size on import; 0 for none.
     pub size_check_mm: f64,
@@ -139,6 +145,9 @@ impl Default for Options {
             weed_border_mm: 0.0,
             mirror: false,
             cut_style: CutStyle::Filled,
+            gcode_feed_mm_min: 1000.0,
+            gcode_power: 1000.0,
+            gcode_passes: 1,
             size_check_mm: 0.0,
             file_units: FileUnits::Mm,
             kerf_mm: 0.0,
@@ -243,6 +252,8 @@ pub struct Plan {
     pub combined_svg: String,
     /// Every sheet in one DXF, a layer each, for CAD and CAM programs.
     pub dxf: String,
+    /// Every sheet as GRBL G-code, lines and arcs, for lasers and plotters.
+    pub gcode: String,
     /// Output size, millimetres, including marks and borders.
     pub size_mm: [f64; 2],
     /// The preflight.

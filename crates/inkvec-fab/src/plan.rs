@@ -1,6 +1,7 @@
 //! From visible colours to sheets: the four modes, and what every sheet gets added.
 
 use crate::dxf;
+use crate::gcode;
 use crate::geom::{self, Region};
 use crate::lines;
 use crate::options::{Check, CutStyle, Layer, Mode, Options, Plan};
@@ -174,6 +175,16 @@ fn registration_marks(b: [f64; 4]) -> Region {
         })
         .collect();
     geom::union_all(bars.iter())
+}
+
+/// The G-code settings `o` asks for, with the frame's left edge at x = 0.
+fn gcode_settings(o: &Options, origin: [f64; 2]) -> gcode::Settings {
+    gcode::Settings {
+        feed_mm_min: o.gcode_feed_mm_min,
+        power: o.gcode_power,
+        passes: o.gcode_passes,
+        x0: origin[0],
+    }
 }
 
 /// Gap between the design (with its marks and border) and the size-check square.
@@ -436,11 +447,13 @@ fn plan_lines(
         });
     }
     let sheets: Vec<(String, &Region)> = dxf_regions.iter().map(|(n, r)| (n.clone(), r)).collect();
+    let cam = dxf::cam_sheets(&sheets, &dxf_lines, o.tolerance_mm, origin[1] + size[1]);
     Plan {
         preview_svg: write::document(size, origin, &preview),
         problems_svg: write::document(size, origin, ""),
         combined_svg: write::document(size, origin, &combined),
-        dxf: dxf::document_with_lines(&sheets, &dxf_lines, o.tolerance_mm, origin[1] + size[1]),
+        dxf: dxf::write(&cam),
+        gcode: gcode::write(&cam, &gcode_settings(o, origin)),
         layers,
         size_mm: size,
         checks,
@@ -544,8 +557,10 @@ pub fn plan(
         .iter()
         .map(|(n, _, r)| (n.clone(), r))
         .collect();
-    let dxf = dxf::document(&dxf_sheets, o.tolerance_mm, origin[1] + size[1]);
+    let cam = dxf::cam_sheets(&dxf_sheets, &[], o.tolerance_mm, origin[1] + size[1]);
     drop(dxf_sheets);
+    let dxf = dxf::write(&cam);
+    let gcode = gcode::write(&cam, &gcode_settings(o, origin));
     let (layers, preview, drawn) =
         write_sheets(sheet_regions, &extents, &frame, &print, o, &mut checks);
     let combined = if o.mode == Mode::Sticker {
@@ -558,6 +573,7 @@ pub fn plan(
         problems_svg: write::document(size, origin, &problems),
         combined_svg: combined,
         dxf,
+        gcode,
         layers,
         size_mm: size,
         checks,

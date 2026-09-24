@@ -654,7 +654,42 @@ function linesCard(store: Store, change: (p: Partial<FabOptions>) => void): HTML
       },
       "Lines as open polylines and outlines as closed ones, one layer per colour, in millimetres.",
     ),
+    gcodeRows(store, change),
     h("span.sentence", null, "Lines stay within ", lenField(store, o.toleranceMm, (mm) => mm > 0 && change({ toleranceMm: mm })), ` ${u} of the drawing.`),
+  );
+}
+
+/** The G-code switch and, when it is on, what the machine is told. */
+function gcodeRows(store: Store, change: (p: Partial<FabOptions>) => void): HTMLElement {
+  const f = store.state.fab;
+  const o = f.options;
+  const perMin = f.unit === "in" ? "in/min" : "mm/min";
+  const speed = f.unit === "in" ? Number((o.gcodeFeedMmMin / MM_PER_IN).toFixed(1)) : Math.round(o.gcodeFeedMmMin);
+  return h(
+    "div",
+    { style: { display: "flex", flexDirection: "column", gap: "8px" } },
+    switchRow(
+      "Also save G-code",
+      f.gcode,
+      () => {
+        f.gcode = !f.gcode;
+        store.touch("fab");
+      },
+      "For GRBL lasers and plotters: curves as G2/G3 arcs, holes cut first, origin at the lower left of the job. GRBL's laser mode ($32=1) keeps the beam off between cuts.",
+    ),
+    f.gcode
+      ? h(
+          "span.sentence",
+          null,
+          "Cut at ",
+          numField(speed, (n) => n > 0 && change({ gcodeFeedMmMin: f.unit === "in" ? n * MM_PER_IN : n }), "64px"),
+          ` ${perMin}, power S`,
+          numField(o.gcodePower, (n) => change({ gcodePower: n }), "58px"),
+          ", ",
+          numField(o.gcodePasses, (n) => n >= 1 && change({ gcodePasses: Math.round(n) }), "40px", 1),
+          o.gcodePasses === 1 ? " pass." : " passes.",
+        )
+      : null,
   );
 }
 
@@ -703,6 +738,7 @@ function optionsCard(store: Store, change: (p: Partial<FabOptions>) => void): HT
       },
       "Every sheet as a layer of closed polylines in millimetres, curves as true arcs (which CAM turns into G2/G3 moves), for CAD, CNC and laser programs.",
     ),
+    gcodeRows(store, change),
     o.mode === "sticker" || o.mode === "stencil"
       ? null
       : switchRow("Mirror", o.mirror, () => change({ mirror: !o.mirror }), "For heat-transfer vinyl, which is cut from the back."),
@@ -863,6 +899,7 @@ function footer(store: Store): HTMLElement {
             // layers on import, and often the only file anyone needs.
             if (plan.layers.length > 1) await put(`${stem}-all.svg`, plan.combinedSvg);
             if (f.dxf) await put(`${stem}.dxf`, plan.dxf);
+            if (f.gcode) await put(`${stem}.gcode`, plan.gcode);
             const first = `${folder}${sep}${fileName(plan, 0)}`;
             const many = plan.layers.length > 1;
             toast(`Saved ${plan.layers.length} ${sheetWord(store, plan.layers.length)}${many ? " and one combined file" : ""} to ${folder}`, {

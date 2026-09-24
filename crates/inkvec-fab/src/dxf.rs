@@ -46,18 +46,60 @@ fn layer_name(name: &str, i: usize) -> String {
     format!("SHEET-{}-{}", i + 1, clean.trim_matches('-'))
 }
 
-/// One DXF holding `sheets` (name and region each) as layers, with y flipped about `top`.
-pub fn document(sheets: &[(String, &Region)], tolerance: f64, top: f64) -> String {
-    document_with_lines(sheets, &[], tolerance, top)
+/// One sheet's cut paths in the machine frame (millimetres, y up): closed contours as
+/// vertices each carrying the bulge of the edge it starts, open lines as points.
+#[derive(Clone, Debug, Default)]
+pub struct CamSheet {
+    /// The sheet's name.
+    pub name: String,
+    /// Closed contours.
+    pub closed: Vec<Vec<(Pt, f64)>>,
+    /// Open lines.
+    pub open: Vec<Vec<Pt>>,
 }
 
-/// [`document`], with open polylines too: `lines[i]` are drawn on sheet `i`'s layer.
-pub fn document_with_lines(
+/// `sheets` (name and region each) and each sheet's open `lines`, fitted once into lines
+/// and arcs with y flipped about `top`, for [`write`] and [`crate::gcode::write`].
+pub fn cam_sheets(
     sheets: &[(String, &Region)],
     lines: &[Vec<Vec<Pt>>],
     tolerance: f64,
     top: f64,
-) -> String {
+) -> Vec<CamSheet> {
+    sheets
+        .iter()
+        .enumerate()
+        .map(|(i, (name, region))| CamSheet {
+            name: name.clone(),
+            closed: region
+                .iter()
+                .flatten()
+                .map(|c| {
+                    let flipped: Vec<Pt> = c.iter().map(|p| [p[0], top - p[1]]).collect();
+                    contour_vertices(&flipped, tolerance)
+                })
+                .filter(|v| v.len() >= 2)
+                .collect(),
+            open: lines
+                .get(i)
+                .map(Vec::as_slice)
+                .unwrap_or(&[])
+                .iter()
+                .filter(|l| l.len() >= 2)
+                .map(|l| l.iter().map(|p| [p[0], top - p[1]]).collect())
+                .collect(),
+        })
+        .collect()
+}
+
+/// One DXF holding `sheets` (name and region each) as layers, with y flipped about `top`.
+pub fn document(sheets: &[(String, &Region)], tolerance: f64, top: f64) -> String {
+    write(&cam_sheets(sheets, &[], tolerance, top))
+}
+
+/// The DXF for already-fitted sheets: a layer each, closed polylines with arcs as bulges
+/// and open polylines for lines.
+pub fn write(cam: &[CamSheet]) -> String {
     let mut s = String::new();
     let mut put = |code: i32, value: &str| {
         s.push_str(&format!("{code}\n{value}\n"));
@@ -74,10 +116,10 @@ pub fn document_with_lines(
     put(2, "TABLES");
     put(0, "TABLE");
     put(2, "LAYER");
-    put(70, &sheets.len().to_string());
-    for (i, (name, _)) in sheets.iter().enumerate() {
+    put(70, &cam.len().to_string());
+    for (i, sheet) in cam.iter().enumerate() {
         put(0, "LAYER");
-        put(2, &layer_name(name, i));
+        put(2, &layer_name(&sheet.name, i));
         put(70, "0");
         // AutoCAD colour index 1..7 (red, yellow, green, cyan, blue, magenta, white).
         put(62, &((i % 7) + 1).to_string());
@@ -87,22 +129,23 @@ pub fn document_with_lines(
     put(0, "ENDSEC");
     put(0, "SECTION");
     put(2, "ENTITIES");
-    for (i, (name, region)) in sheets.iter().enumerate() {
-        let layer = layer_name(name, i);
-        for c in region.iter().flatten() {
-            let flipped: Vec<Pt> = c.iter().map(|p| [p[0], top - p[1]]).collect();
-            let pts = contour_vertices(&flipped, tolerance);
-            if pts.len() < 2 {
-                continue;
-            }
+    for (i, sheet) in cam.iter().enumerate() {
+        let layer = layer_name(&sheet.name, i);
+        let paths = sheet.closed.iter().map(|v| (v.clone(), true)).chain(
+            sheet
+                .open
+                .iter()
+                .map(|l| (l.iter().map(|&p| (p, 0.0)).collect(), false)),
+        );
+        for (verts, closed) in paths {
             put(0, "POLYLINE");
             put(8, &layer);
             put(66, "1");
-            put(70, "1");
+            put(70, if closed { "1" } else { "0" });
             put(10, "0.0");
             put(20, "0.0");
             put(30, "0.0");
-            for (p, bulge) in pts {
+            for (p, bulge) in verts {
                 put(0, "VERTEX");
                 put(8, &layer);
                 put(10, &format!("{:.4}", p[0]));
@@ -111,27 +154,6 @@ pub fn document_with_lines(
                 if bulge != 0.0 {
                     put(42, &format!("{bulge:.6}"));
                 }
-            }
-            put(0, "SEQEND");
-            put(8, &layer);
-        }
-        for line in lines.get(i).map(Vec::as_slice).unwrap_or(&[]) {
-            if line.len() < 2 {
-                continue;
-            }
-            put(0, "POLYLINE");
-            put(8, &layer);
-            put(66, "1");
-            put(70, "0");
-            put(10, "0.0");
-            put(20, "0.0");
-            put(30, "0.0");
-            for p in line {
-                put(0, "VERTEX");
-                put(8, &layer);
-                put(10, &format!("{:.4}", p[0]));
-                put(20, &format!("{:.4}", top - p[1]));
-                put(30, "0.0");
             }
             put(0, "SEQEND");
             put(8, &layer);

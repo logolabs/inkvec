@@ -135,6 +135,7 @@ export interface State {
     preset: string | null;
     /** Whether saving also writes a DXF, for CAD and CNC programs. */
     dxf: boolean;
+    gcode: boolean;
   };
 
   batch: {
@@ -188,7 +189,7 @@ export function initial(settings: Settings, minify: MinifySettings): State {
     exportOpen: false,
     dragging: false,
     minify: { name: null, before: null, settings: minify, result: null, error: null },
-    fab: { name: null, svg: null, analysis: null, options: defaultFabOptions(), plan: null, error: null, shown: -1, unit: "mm", showProblems: true, preset: null, dxf: false },
+    fab: { name: null, svg: null, analysis: null, options: defaultFabOptions(), plan: null, error: null, shown: -1, unit: "mm", showProblems: true, preset: null, dxf: false, gcode: false },
     batch: {
       folder: null,
       outputDir: null,
@@ -224,6 +225,9 @@ export function defaultFabOptions(): FabOptions {
     mirror: false,
     cutStyle: "filled",
     sizeCheckMm: 0,
+    gcodeFeedMmMin: 1000,
+    gcodePower: 1000,
+    gcodePasses: 1,
     fileUnits: "mm",
     kerfMm: 0,
     toleranceMm: 0.05,

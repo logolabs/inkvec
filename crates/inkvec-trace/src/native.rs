@@ -193,6 +193,7 @@ fn claim_spread(
     let claimed: Vec<(usize, f32)> = (0..px.len())
         .into_par_iter()
         .step_by(stride_px)
+        .with_min_len(color::PAR_MIN_LEN)
         .filter_map(|i| {
             let d = px[i].dist(c);
             (d < nearest_px[i]).then_some((i, d))
@@ -230,6 +231,7 @@ fn interior_fraction(
     let (total, interior) = (0..width * height)
         .into_par_iter()
         .step_by(stride_px)
+        .with_min_len(color::PAR_MIN_LEN)
         .filter(|&i| mask(i))
         .map(|i| {
             let (x, y) = (i % width, i / width);
@@ -272,15 +274,11 @@ fn from_six(q: [f32; 6], linear: bool) -> Ink2 {
 /// [`color`]'s blend test in six dimensions: `c` lies on the chord between two accepted
 /// inks over white *and* over black. An anti-aliased rim between an ink and the clear ground
 /// is on such a chord (flat over white for a white ink, a ramp to black over black).
-fn blend_pairs(c: Ink2, accepted: &[Ink2], tol: f32) -> Vec<(usize, usize, bool, f32)> {
+fn blend_pairs(c: Ink2, accepted: &[Ink2], tol: f32, tmin: f32) -> Vec<(usize, usize, bool, f32)> {
     let mut out = Vec::new();
     if accepted.len() < 2 {
         return out;
     }
-    let tmin: f32 = std::env::var("INKVEC_BLEND_TMIN")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0.04);
     for space in 0..2 {
         let linear = space == 0;
         let p = six(c, linear);
@@ -360,6 +358,7 @@ fn straddle_fraction(
     let (total, straddle) = (0..width * height)
         .into_par_iter()
         .step_by(stride_px)
+        .with_min_len(color::PAR_MIN_LEN)
         .filter(|&i| px[i].dist(c) < nearest[i])
         .map(|i| {
             let (x, y) = (i % width, i / width);
@@ -457,6 +456,12 @@ pub fn extract_palette(
     let mut colors: Vec<Ink2> = Vec::new();
     let mut nearest_px: Vec<f32> = vec![f32::INFINITY; px.len()];
     let paldbg = std::env::var("INKVEC_PALDBG").is_ok();
+    // Read once per palette rather than once per candidate.
+    let noise_sigmas = std::env::var("INKVEC_NOISE_SIGMAS")
+        .ok()
+        .and_then(|v| v.parse::<f32>().ok())
+        .unwrap_or(noise_sigmas);
+    let blend_tmin = color::blend_tmin();
     for &(n, _key, c) in &modes {
         if colors.len() >= max_colors {
             break;
@@ -469,11 +474,7 @@ pub fn extract_palette(
             .iter()
             .map(|&p| p.dist(c))
             .fold(f32::INFINITY, f32::min);
-        let k = std::env::var("INKVEC_NOISE_SIGMAS")
-            .ok()
-            .and_then(|v| v.parse::<f32>().ok())
-            .unwrap_or(noise_sigmas);
-        let reach = k * spread;
+        let reach = noise_sigmas * spread;
         if let Some(&near_ink) = colors.iter().min_by(|&&p, &&q| {
             p.dist(c)
                 .partial_cmp(&q.dist(c))
@@ -493,7 +494,7 @@ pub fn extract_palette(
                 continue;
             }
         }
-        let pairs = blend_pairs(c, &colors, merge_distance * 1.6);
+        let pairs = blend_pairs(c, &colors, merge_distance * 1.6, blend_tmin);
         let blend = !pairs.is_empty();
         // Partly transparent is exactly what an anti-aliased silhouette pixel is, and the
         // chord test above cannot always say so: a rim where shading meets the ground mixes
@@ -526,9 +527,10 @@ pub fn extract_palette(
         if translucent && !blend && interior < BLEND_INTERIOR_FRACTION {
             continue;
         }
+        // The pairs on every core, as in `color`: the max of finite ratios is order-free.
         let straddle = if blend && interior < BLEND_INTERIOR_FRACTION {
             pairs
-                .iter()
+                .par_iter()
                 .map(|&(i, j, linear, _)| {
                     straddle_fraction(
                         &px,
@@ -544,7 +546,7 @@ pub fn extract_palette(
                         stride_px,
                     )
                 })
-                .fold(0.0f32, f32::max)
+                .reduce(|| 0.0f32, f32::max)
         } else {
             0.0
         };

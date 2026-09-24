@@ -243,6 +243,8 @@ export interface FabOptions {
   cutStyle: CutStyle;
   /** Side of a square cut beside the design, to measure after cutting; 0 for none. */
   sizeCheckMm: number;
+  /** Router bit radius for dogbones at inside corners; 0 for none. */
+  dogboneMm: number;
   /** G-code cutting speed, mm per minute. */
   gcodeFeedMmMin: number;
   /** G-code power, in the controller's S units. */

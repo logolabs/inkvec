@@ -225,6 +225,7 @@ export function defaultFabOptions(): FabOptions {
     mirror: false,
     cutStyle: "filled",
     sizeCheckMm: 0,
+    dogboneMm: 0,
     gcodeFeedMmMin: 1000,
     gcodePower: 1000,
     gcodePasses: 1,

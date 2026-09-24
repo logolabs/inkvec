@@ -1,5 +1,6 @@
 //! From visible colours to sheets: the four modes, and what every sheet gets added.
 
+use crate::corners;
 use crate::dxf;
 use crate::gcode;
 use crate::geom::{self, Region};
@@ -473,6 +474,7 @@ pub fn plan(
         return plan_lines(&set, canvas_mm, checks, o);
     }
     let mut base = sheets(&set, o, &mut checks);
+    let mut dogbones = 0;
     for (k, (name, _, r)) in base.iter_mut().enumerate() {
         // A layered sheet is judged by what shows of it: its bleed lies hidden under the
         // colours above, and a bleed clipped round a narrow upper colour is a thin fringe
@@ -497,6 +499,36 @@ pub fn plan(
         if o.kerf_mm > 0.0 {
             *r = geom::offset(r, o.kerf_mm / 2.0);
         }
+        if o.dogbone_mm > 0.0 {
+            let (relieved, n) = corners::dogbones(r, o.dogbone_mm);
+            *r = relieved;
+            dogbones += n;
+            // Waste narrower than the bit is somewhere it cannot go at all.
+            let bit = 2.0 * o.dogbone_mm;
+            let tight = geom::area(&geom::opening(
+                &geom::difference(&geom::closing(r, bit), r),
+                o.tolerance_mm,
+            ));
+            if tight > 0.01 * bit * bit {
+                checks.push(Check {
+                    level: crate::options::Level::Warn,
+                    code: "bitTooBig",
+                    message: format!(
+                        "{name}: {tight:.1} mm² of holes and gaps are narrower than the {bit:.2} mm bit, which cannot enter them."
+                    ),
+                });
+            }
+        }
+    }
+    if dogbones > 0 {
+        checks.push(Check {
+            level: crate::options::Level::Info,
+            code: "dogbones",
+            message: format!(
+                "{dogbones} inside corner(s) relieved for a {:.2} mm bit, so parts cut with it seat square.",
+                2.0 * o.dogbone_mm
+            ),
+        });
     }
     let problems = problems_body(&base, o);
     let print = match (o.mode, base.first()) {

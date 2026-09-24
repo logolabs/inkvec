@@ -41,6 +41,10 @@ fn main() {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(0.0),
+        dogbone_mm: std::env::var("FAB_DOGBONE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.0),
         size_check_mm: std::env::var("FAB_SIZE_CHECK")
             .ok()
             .and_then(|v| v.parse().ok())

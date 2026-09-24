@@ -19,6 +19,7 @@
 //! that make cutter software refuse a traced file.
 
 pub mod biarc;
+pub mod corners;
 pub mod dxf;
 pub mod fitcurve;
 pub mod gcode;

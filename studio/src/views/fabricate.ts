@@ -769,6 +769,13 @@ function optionsCard(store: Store, change: (p: Partial<FabOptions>) => void): HT
           ` ${u} (kerf); parts are grown by half of it so they come out the drawn size.`,
         )
       : null,
+    h(
+      "span.sentence",
+      null,
+      "Router bit ",
+      lenField(store, 2 * o.dogboneMm, (mm) => change({ dogboneMm: mm / 2 })),
+      ` ${u} across (0 for none): every inside corner gets a dogbone so parts seat square.`,
+    ),
     h("span.sentence", null, "Cuts stay within ", lenField(store, o.toleranceMm, (mm) => mm > 0 && change({ toleranceMm: mm })), ` ${u} of the drawing.`),
   );
 }

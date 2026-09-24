@@ -105,6 +105,9 @@ pub struct Options {
     pub mirror: bool,
     /// How cut lines are drawn.
     pub cut_style: CutStyle,
+    /// Radius of a router bit: every inside corner gets a dogbone of it, so parts cut with
+    /// that bit seat in each other; 0 for none.
+    pub dogbone_mm: f64,
     /// G-code cutting speed, millimetres per minute.
     pub gcode_feed_mm_min: f64,
     /// G-code power, in the controller's S units.
@@ -145,6 +148,7 @@ impl Default for Options {
             weed_border_mm: 0.0,
             mirror: false,
             cut_style: CutStyle::Filled,
+            dogbone_mm: 0.0,
             gcode_feed_mm_min: 1000.0,
             gcode_power: 1000.0,
             gcode_passes: 1,

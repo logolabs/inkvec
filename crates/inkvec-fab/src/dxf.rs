@@ -2,52 +2,38 @@
 //!
 //! R12 (AC1009) because it is the one version every laser, router and CAD program still
 //! reads; later versions need handles and object tables that small CAM tools get wrong.
-//! Contours are the refitted curves (see [`crate::fitcurve`]) subdivided into short chords:
-//! CAM programs handle SPLINE entities badly, and R12 has none. DXF's y axis points up, so
-//! the drawing is flipped to stand the right way round.
-//!
-//! Arcs (LWPOLYLINE bulges from a biarc fit, which CAM turns into G2/G3 moves) are the
-//! better encoding and the next step; a dense polyline is correct everywhere today.
+//! Contours are the refitted curves (see [`crate::fitcurve`]) written as lines and
+//! circular arcs: each cubic becomes a biarc within the tolerance ([`crate::biarc`]), carried
+//! as the bulge (group 42) of the vertex it starts at, which CAM programs turn into G2/G3
+//! moves. CAM programs handle SPLINE entities badly, and R12 has none. DXF's y axis points
+//! up, so the drawing is flipped to stand the right way round before it is fitted.
 
+use crate::biarc;
 use crate::fitcurve::{self, Seg};
 use crate::geom::{Pt, Region};
 
-/// Longest chord a cubic is cut into, millimetres. On a 5 mm radius that strays 0.006 mm.
-const CHORD_MM: f64 = 0.5;
-
-fn cubic_points(p0: Pt, c1: Pt, c2: Pt, p3: Pt, out: &mut Vec<Pt>) {
-    let poly = |a: Pt, b: Pt| (b[0] - a[0]).hypot(b[1] - a[1]);
-    let len = poly(p0, c1) + poly(c1, c2) + poly(c2, p3);
-    let n = ((len / CHORD_MM).ceil() as usize).clamp(2, 256);
-    for k in 1..=n {
-        let t = k as f64 / n as f64;
-        let u = 1.0 - t;
-        let (b0, b1, b2, b3) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
-        out.push([
-            b0 * p0[0] + b1 * c1[0] + b2 * c2[0] + b3 * p3[0],
-            b0 * p0[1] + b1 * c1[1] + b2 * c2[1] + b3 * p3[1],
-        ]);
-    }
-}
-
-/// A contour refitted and walked into points.
-fn contour_points(c: &[Pt], tolerance: f64) -> Vec<Pt> {
-    let (start, segs) = fitcurve::fit_closed(c, tolerance.max(1e-4));
+/// A closed contour, already in the file's y-up frame, refitted and written as vertices
+/// with the bulge of the edge each one starts.
+fn contour_vertices(c: &[Pt], tolerance: f64) -> Vec<(Pt, f64)> {
+    let tol = tolerance.max(1e-4);
+    let (start, segs) = fitcurve::fit_closed(c, tol);
     if segs.is_empty() {
-        return c.to_vec();
+        return c.iter().map(|&p| (p, 0.0)).collect();
     }
-    let mut out = vec![start];
+    let mut out = Vec::new();
     let mut at = start;
     for s in &segs {
         match *s {
-            Seg::Line(e) => out.push(e),
-            Seg::Cubic(a, b, e) => cubic_points(at, a, b, e, &mut out),
+            Seg::Line(e) => {
+                out.push((at, 0.0));
+                at = e;
+            }
+            Seg::Cubic(a, b, e) => {
+                // Half the tolerance for the arcs, half already spent by the refit.
+                out.extend(biarc::cubic(at, a, b, e, tol / 2.0));
+                at = e;
+            }
         }
-        at = *out.last().unwrap_or(&start);
-    }
-    // Closed by the flag; the repeated start is dropped.
-    if out.len() > 1 && out.first() == out.last() {
-        out.pop();
     }
     out
 }
@@ -104,7 +90,8 @@ pub fn document_with_lines(
     for (i, (name, region)) in sheets.iter().enumerate() {
         let layer = layer_name(name, i);
         for c in region.iter().flatten() {
-            let pts = contour_points(c, tolerance);
+            let flipped: Vec<Pt> = c.iter().map(|p| [p[0], top - p[1]]).collect();
+            let pts = contour_vertices(&flipped, tolerance);
             if pts.len() < 2 {
                 continue;
             }
@@ -115,12 +102,15 @@ pub fn document_with_lines(
             put(10, "0.0");
             put(20, "0.0");
             put(30, "0.0");
-            for p in pts {
+            for (p, bulge) in pts {
                 put(0, "VERTEX");
                 put(8, &layer);
                 put(10, &format!("{:.4}", p[0]));
-                put(20, &format!("{:.4}", top - p[1]));
+                put(20, &format!("{:.4}", p[1]));
                 put(30, "0.0");
+                if bulge != 0.0 {
+                    put(42, &format!("{bulge:.6}"));
+                }
             }
             put(0, "SEQEND");
             put(8, &layer);
@@ -174,8 +164,47 @@ mod tests {
         assert!(d.starts_with("0\nSECTION\n") && d.ends_with("0\nEOF\n"));
         assert_eq!(d.matches("\nPOLYLINE\n").count(), 2);
         assert!(d.contains("SHEET-1-Cut") && d.contains("SHEET-2-ff0000"));
-        // The square is four vertices; the disc is walked into chords no longer than 0.5 mm.
+        // The square is four straight vertices; the disc is a handful of arcs.
         let vertices = d.matches("\nVERTEX\n").count();
-        assert!(vertices > 4 + 40 && vertices < 4 + 200, "{vertices}");
+        assert!((4 + 4..=4 + 24).contains(&vertices), "{vertices}");
+        // Read the disc back: every arc, sampled, lies on the circle.
+        let lines: Vec<&str> = d.lines().collect();
+        let mut verts: Vec<(Pt, f64)> = Vec::new();
+        let (mut layer, mut in_vertex) = ("", false);
+        for pair in lines.chunks_exact(2) {
+            let (code, value) = (pair[0].trim(), pair[1]);
+            let disc = layer.contains("ff0000") && in_vertex;
+            match code {
+                "0" => {
+                    in_vertex = value == "VERTEX";
+                    if in_vertex {
+                        verts.push(([0.0, 0.0], 0.0));
+                    }
+                }
+                "8" => {
+                    layer = value;
+                    if !layer.contains("ff0000") && in_vertex {
+                        verts.pop();
+                        in_vertex = false;
+                    }
+                }
+                "10" if disc => verts.last_mut().unwrap().0[0] = value.parse().unwrap(),
+                "20" if disc => verts.last_mut().unwrap().0[1] = value.parse().unwrap(),
+                "42" if disc => verts.last_mut().unwrap().1 = value.parse().unwrap(),
+                _ => {}
+            }
+        }
+        assert!(
+            verts.len() >= 4 && verts.iter().all(|v| v.1 != 0.0),
+            "{verts:?}"
+        );
+        for i in 0..verts.len() {
+            let (a, b) = (verts[i], verts[(i + 1) % verts.len()].0);
+            for s in [0.25, 0.5, 0.75] {
+                let p = crate::biarc::arc_at(a.0, b, a.1, s);
+                let r = (p[0] - 30.0).hypot(p[1] - 5.0);
+                assert!((r - 5.0).abs() < 0.06, "{p:?} is {r} from the centre");
+            }
+        }
     }
 }

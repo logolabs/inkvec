@@ -18,6 +18,7 @@
 //! sheet carries a few hundred path segments rather than the tens of thousands of points
 //! that make cutter software refuse a traced file.
 
+pub mod biarc;
 pub mod dxf;
 pub mod fitcurve;
 pub mod geom;

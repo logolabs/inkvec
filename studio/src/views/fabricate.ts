@@ -701,7 +701,7 @@ function optionsCard(store: Store, change: (p: Partial<FabOptions>) => void): HT
         store.state.fab.dxf = !store.state.fab.dxf;
         store.touch("fab");
       },
-      "Every sheet as a layer of closed polylines in millimetres, for CAD, CNC and laser programs.",
+      "Every sheet as a layer of closed polylines in millimetres, curves as true arcs (which CAM turns into G2/G3 moves), for CAD, CNC and laser programs.",
     ),
     o.mode === "sticker" || o.mode === "stencil"
       ? null

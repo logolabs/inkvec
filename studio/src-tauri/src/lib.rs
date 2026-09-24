@@ -1328,7 +1328,7 @@ mod tests {
     #[test]
     fn the_capabilities_describe_the_whole_tune_tab() {
         let c = capabilities();
-        assert_eq!(c.controls.len(), 21);
+        assert_eq!(c.controls.len(), 22);
         assert_eq!(c.presets.len(), 8);
         assert_eq!(c.stages.len(), 9);
         assert_eq!(c.version, env!("CARGO_PKG_VERSION"));

@@ -38,6 +38,7 @@ export interface Settings {
   transparentBackground: boolean;
   margin: number;
   holesAsCutouts: boolean;
+  traceTransparency: boolean;
 }
 
 export type PresetId =

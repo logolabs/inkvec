@@ -59,6 +59,7 @@ const DEFAULT_SETTINGS: Settings = {
   transparentBackground: false,
   margin: 0,
   holesAsCutouts: false,
+  traceTransparency: false,
 };
 
 /**

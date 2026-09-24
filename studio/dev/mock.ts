@@ -66,6 +66,7 @@ const DEFAULTS = {
   transparentBackground: false,
   margin: 0,
   holesAsCutouts: false,
+  traceTransparency: false,
 };
 
 const PRESETS = [

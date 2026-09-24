@@ -1,4 +1,4 @@
-//! The nineteen controls and the eight presets, and how both become `inkvec_cli::Args`.
+//! The twenty-two controls and the eight presets, and how both become `inkvec_cli::Args`.
 //!
 //! The interface never shows an engine flag. Every control carries the user-facing name
 //! from the terminology table (`min_area` is "Speckle floor", `max_dim` is "Trace size",
@@ -37,7 +37,7 @@ impl Cleanup {
     }
 }
 
-/// The nineteen controls, exactly as the Tune tab shows them.
+/// The twenty-two controls, exactly as the Tune tab shows them.
 ///
 /// Serialised with the names the frontend uses. Defaults are the command line's, read
 /// through `Args::default()` so the app and `inkvec logo.png` cannot drift apart.
@@ -63,6 +63,9 @@ pub struct Settings {
     pub flat_fills: bool,
     /// Black & white.
     pub black_and_white: bool,
+    /// Trace transparency natively (inks with opacity, the clear ground an ink of its
+    /// own) instead of compositing onto a matte first.
+    pub trace_transparency: bool,
     /// Clean up damage.
     pub clean_up_damage: Cleanup,
 
@@ -107,6 +110,12 @@ impl Default for Settings {
             colour_merging: a.merge_distance as f64,
             flat_fills: a.no_gradients,
             black_and_white: a.bilevel,
+            // Off in the app, although the engine defaults to it: tracing the alpha
+            // channel gives every soft edge, shadow and glow inks of their own, and a
+            // colour cap then spends its slots on them (and on the clear ground) instead
+            // of on the artwork's colours. On the matte the artwork's own inks are what
+            // get counted; the switch brings native transparency back.
+            trace_transparency: false,
             clean_up_damage: Cleanup::Off,
             match_repeated_shapes: a.harmonize,
             match_threshold: a.harmonize_threshold,
@@ -141,6 +150,7 @@ impl Settings {
             colour_merging,
             flat_fills,
             black_and_white,
+            trace_transparency,
             clean_up_damage,
             match_repeated_shapes,
             match_threshold,
@@ -170,6 +180,7 @@ impl Settings {
             merge_distance: colour_merging as f32,
             no_gradients: flat_fills,
             bilevel: black_and_white,
+            native_alpha: trace_transparency,
             restore: clean_up_damage.restore(),
             harmonize: match_repeated_shapes,
             harmonize_threshold: match_threshold,
@@ -507,6 +518,19 @@ pub const CONTROLS: &[Control] = &[
     },
     Control {
         group: "Colour",
+        key: "traceTransparency",
+        label: "Trace transparency",
+        unit: "",
+        kind: Kind::Switch,
+        min: 0.0,
+        max: 1.0,
+        curve: 1.0,
+        decimals: 0,
+        stops: &[],
+        help: "Off: a transparent image is laid on a matte and traced as solid colours, so only the artwork's own colours count towards Max colours. On: transparency is traced as it is: every ink carries an opacity and the clear background is an ink of its own, so soft shadows, glows and feathered edges come back as translucent fills, often many more of them. Changes nothing for an opaque image.",
+    },
+    Control {
+        group: "Colour",
         key: "cleanUpDamage",
         label: "Clean up damage",
         unit: "",
@@ -709,11 +733,21 @@ mod tests {
     }
 
     #[test]
-    fn there_are_twenty_one_controls_in_four_groups() {
-        assert_eq!(CONTROLS.len(), 21);
+    fn there_are_twenty_two_controls_in_four_groups() {
+        assert_eq!(CONTROLS.len(), 22);
         let mut groups: Vec<&str> = CONTROLS.iter().map(|c| c.group).collect();
         groups.dedup();
         assert_eq!(groups, ["Detail", "Colour", "Shape", "Output"]);
+    }
+
+    #[test]
+    fn transparency_is_traced_on_a_matte_unless_asked() {
+        assert!(!Settings::default().to_args().native_alpha);
+        let on = Settings {
+            trace_transparency: true,
+            ..Settings::default()
+        };
+        assert!(on.to_args().native_alpha);
     }
 
     #[test]

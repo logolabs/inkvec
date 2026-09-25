@@ -538,6 +538,11 @@ jobs:
           name: release-assets
           path: out
 
+      # A tag that names another version than Cargo.toml, or a copy of the version left
+      # behind (npm, Maven, Studio, the lockfiles), stops the release before it exists.
+      - name: The tag and every version file agree with Cargo.toml
+        run: python3 tools/check_versions.py --tag "${GITHUB_REF_NAME}"
+
       - name: Extract matching CHANGELOG section
         shell: bash
         run: |

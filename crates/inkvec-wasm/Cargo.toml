@@ -30,7 +30,9 @@ threads = ["dep:wasm-bindgen-rayon", "dep:rayon"]
 [dependencies]
 inkvec = { workspace = true }
 inkvec-cli = { workspace = true }
-# `structure`, for the page's editability readout.
+# The other half of the tool: rewriting an SVG that already exists (`svgmin`), and the
+# `structure` measurement behind the page's editability readout. Pure string in, string
+# out -- no image decoding, no palette work -- so it costs the module little.
 inkvec-svgmin = { workspace = true }
 inkvec-trace = { workspace = true }
 # The denoiser's arithmetic and its `auto` decision, without an ML runtime: default features

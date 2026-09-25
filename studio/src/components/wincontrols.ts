@@ -16,7 +16,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { h, icon } from "../lib/dom";
-import { WEB } from "../lib/platform";
+import { DESKTOP_URL, DESKTOP_WHY, WEB } from "../lib/platform";
 
 export function windowControls(): HTMLElement {
   if (WEB) return webControls();
@@ -69,6 +69,27 @@ function webControls(): HTMLElement {
         h("span", null, "Open in its own tab"),
       )
     : null;
+  // Back to the Space's front page. Named as a file: Hugging Face's static host has no index
+  // for a folder below its root, so "../" would land on one of its own pages instead.
+  const home = h(
+    "a.btn.ghost.compact",
+    { "data-ctl": "home", href: "../index.html", title: "The Inkvec front page: what's new, before and after, results" },
+    icon("globe", 14),
+    h("span", null, "Inkvec home"),
+  );
+  // The desktop app, recommended once and quietly: it opens in a new tab.
+  const desktop = h(
+    "a.btn.ghost.compact.desktopapp",
+    {
+      "data-ctl": "desktop-app",
+      href: DESKTOP_URL,
+      target: "_blank",
+      rel: "noopener noreferrer",
+      title: DESKTOP_WHY,
+    },
+    icon("download", 14),
+    h("span", null, "Desktop app"),
+  );
   // A frame that is not allowed to go full screen gets only the way out of the frame.
-  return h("div.webcontrols", null, document.fullscreenEnabled ? full : null, tab);
+  return h("div.webcontrols", null, home, desktop, document.fullscreenEnabled ? full : null, tab);
 }

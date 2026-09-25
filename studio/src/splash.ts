@@ -56,9 +56,29 @@ function setProgress(p: Progress): void {
   bar.style.width = `${Math.round(Math.min(1, Math.max(0, p.progress)) * 100)}%`;
 }
 
+/**
+ * In the browser build this page is the loading screen, framed by the app's own page: the
+ * same markup, styles and animation as the desktop splash window. Progress and "done" come
+ * from the parent as messages instead of Tauri events, and "played" goes back the same way.
+ */
+const IN_PAGE = __INKVEC_WEB__ && window.parent !== window;
+
 async function main(): Promise<void> {
   drawMark();
-  document.getElementById("version")!.textContent = `Version ${__APP_VERSION__} · ${platformName()}`;
+  document.getElementById("version")!.textContent = IN_PAGE
+    ? `Version ${__APP_VERSION__} · in your browser`
+    : `Version ${__APP_VERSION__} · ${platformName()}`;
+  if (IN_PAGE) {
+    const edition = document.querySelector(".edition");
+    if (edition) edition.textContent = "Studio Lite";
+    root.setAttribute("aria-label", "Inkvec Studio Lite is starting");
+    window.addEventListener("message", (e: MessageEvent) => {
+      if (e.origin !== window.location.origin) return;
+      const m = e.data as { type?: string; text?: string; progress?: number };
+      if (m?.type === "splash-status") setProgress({ text: m.text ?? "", progress: m.progress ?? 0 });
+      if (m?.type === "splash-done") root.classList.add("done", "leaving");
+    });
+  }
 
   // The wordmark waits for its face. Starting the animation on a fallback font and then
   // swapping would be the first thing anyone saw of the product.
@@ -113,6 +133,10 @@ async function reportWhenPlayed(): Promise<void> {
   }
   // A beat on the finished picture, so it is seen rather than merely reached.
   await new Promise((resolve) => setTimeout(resolve, 450));
+  if (IN_PAGE) {
+    window.parent.postMessage({ type: "splash-animation-done" }, window.location.origin);
+    return;
+  }
   try {
     await emit("splash-animation-done");
   } catch {

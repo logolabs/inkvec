@@ -118,3 +118,76 @@ export async function takeLaunch(): Promise<Launch> {
     };
   });
 }
+
+// ---------------------------------------------------------------- the loading screen ---
+//
+// The desktop's splash window, shown as a card over the page (`#boot`, an iframe of
+// splash.html). The rule is the desktop's: the app takes the screen only once it is ready
+// AND the splash has played its animation to the end, which the splash reports from its own
+// `animationend` rather than a timer; either can come first.
+
+let appIsReady = false;
+let animationDone = false;
+let bootGone = false;
+
+function bootFrame(): HTMLIFrameElement | null {
+  return document.querySelector<HTMLIFrameElement>("#boot iframe");
+}
+
+function tell(message: Record<string, unknown>): void {
+  bootFrame()?.contentWindow?.postMessage(message, window.location.origin);
+}
+
+/** One real step of start-up, for the splash's status line and bar. */
+export function bootProgress(text: string, progress: number): void {
+  tell({ type: "splash-status", text, progress });
+}
+
+function finishBoot(force: boolean): void {
+  if (bootGone || !(force || (appIsReady && animationDone))) return;
+  bootGone = true;
+  const boot = document.getElementById("boot");
+  tell({ type: "splash-done" });
+  boot?.classList.add("leaving");
+  window.setTimeout(() => boot?.remove(), 300);
+}
+
+/** The interface is drawn and its data loaded: hand over once the splash has played. */
+export function bootReady(): void {
+  appIsReady = true;
+  finishBoot(false);
+  // A splash that never reports (its page failed to load) does not hold the app.
+  window.setTimeout(() => finishBoot(true), 6000);
+}
+
+window.addEventListener("message", (e: MessageEvent) => {
+  if (e.origin !== window.location.origin || (e.data as { type?: string })?.type !== "splash-animation-done") return;
+  animationDone = true;
+  finishBoot(false);
+});
+
+// ---------------------------------------------------------------- inside Hugging Face ---
+
+/**
+ * Whether the page is inside someone else's frame: Hugging Face shows a Space in an iframe
+ * under its own header. `framed` then puts a gap between that header and the app bar; full
+ * screen takes it away again (`fullscreen`).
+ */
+export function markFramed(): void {
+  let framed: boolean;
+  try {
+    framed = window.self !== window.top;
+  } catch {
+    framed = true;
+  }
+  const origins = (window.location as Location & { ancestorOrigins?: DOMStringList }).ancestorOrigins;
+  if (origins) {
+    // An opaque ancestor (about:blank, a sandbox) reads "null", which is not a URL.
+    for (let i = 0; i < origins.length; i++) if (/(^|\.)huggingface\.co(:\d+)?$/.test(origins[i].replace(/^[a-z]+:\/\//, ""))) framed = true;
+  }
+  const root = document.documentElement;
+  root.classList.toggle("framed", framed);
+  const sync = () => root.classList.toggle("fullscreen", Boolean(document.fullscreenElement));
+  document.addEventListener("fullscreenchange", sync);
+  sync();
+}

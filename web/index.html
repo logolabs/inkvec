@@ -110,15 +110,28 @@ h1{font-size:clamp(32px,4.6vw,52px);line-height:1.06;letter-spacing:-.025em;font
 .seg button{border:0;background:transparent;border-radius:var(--radius-full);padding:7px 10px;font-size:12.5px;color:var(--dim)}
 .seg button[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent)}
 /* gallery */
-.gal{display:grid;grid-template-columns:210px 1fr;gap:16px;margin-top:18px}
+.gal{display:grid;grid-template-columns:300px 1fr;gap:16px;margin-top:18px;align-items:start}
 @media (max-width:820px){.gal{grid-template-columns:1fr}}
-.cases{display:flex;flex-direction:column;gap:6px}
-@media (max-width:820px){.cases{flex-direction:row;flex-wrap:wrap}}
-.case{display:grid;grid-template-columns:44px 1fr;column-gap:10px;align-items:center;text-align:left;padding:6px 8px;border-radius:var(--radius-sm)}
-.case .th{grid-row:1/3;width:44px;height:44px;border-radius:6px;background:#fff;overflow:hidden;display:grid;place-items:center}
+/* Every example in one panel that scrolls inside itself, as tall as the viewer beside it
+   (set from the viewer's own height), a section per set. On a narrow screen, one strip. */
+.cases{height:560px;overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--rule);border-radius:var(--radius);background:var(--card);padding:0 10px 10px;scrollbar-width:thin}
+.sethead{position:sticky;top:0;z-index:1;display:flex;justify-content:space-between;align-items:baseline;padding:10px 2px 8px;background:var(--card);font:700 11px/1 var(--font-body);letter-spacing:.07em;text-transform:uppercase;color:var(--dim)}
+.sethead span{color:var(--faint);font-weight:600;letter-spacing:.02em;text-transform:none}
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:6px}
+.case{display:flex;flex-direction:column;gap:4px;padding:5px;border-radius:var(--radius-sm);text-align:left;background:var(--stage);min-width:0}
+.case .th{aspect-ratio:1;width:100%;border-radius:5px;background:#fff;overflow:hidden;display:grid;place-items:center}
 .case .th img{width:100%;height:100%;object-fit:contain}
-.case .nm{font-size:13px}
-.case .wh{font-size:11.5px;color:var(--faint);font-weight:500}
+.case .nm{font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dim)}
+.case[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft)}
+.case[aria-pressed="true"] .nm{color:var(--accent)}
+.caption{margin:8px 0 0;font-size:13px;color:var(--dim)}
+.caption b{color:var(--ink)}
+@media (max-width:820px){
+  .cases{height:auto!important;max-height:none;display:flex;align-items:stretch;gap:8px;overflow-x:auto;overflow-y:hidden;padding:8px}
+  .sethead{position:sticky;left:0;writing-mode:vertical-rl;transform:rotate(180deg);padding:4px;justify-content:center;gap:6px}
+  .tiles{display:flex;gap:6px;margin:0}
+  .case{width:84px;flex:none}
+}
 .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
 .chip{display:inline-flex;gap:6px;align-items:baseline;font-size:12.5px;padding:5px 9px;border-radius:999px;background:var(--rule2);color:var(--dim)}
 .chip b{color:var(--ink);font-weight:700}
@@ -149,6 +162,9 @@ h1{font-size:clamp(32px,4.6vw,52px);line-height:1.06;letter-spacing:-.025em;font
 .desk p{margin:4px 0 0;color:var(--dim);font-size:14px;max-width:70ch}
 footer{margin:60px auto 0;max-width:1180px;padding:0 22px 30px;color:var(--faint);font-size:12.5px;display:flex;gap:16px;flex-wrap:wrap}
 footer .v{margin-left:auto}
+/* Inside Hugging Face's frame, a gap in the page's own dark between their header and ours. */
+html.framed body{border-top:6px solid var(--void)}
+html.framed .top{box-shadow:0 -6px 0 var(--void),inset 0 1px 0 rgba(201,117,74,.35)}
 @media (max-width:640px){.top nav a:not(.go){display:none}.bignums{grid-template-columns:1fr}.tools .legend{margin-left:0}}
 </style>
 </head>
@@ -195,8 +211,8 @@ footer .v{margin-left:auto}
 
 <section class="sec" id="showcase">
   <h2>Before and after, with the geometry showing</h2>
-  <p class="lede" id="showlede">Twenty real brand logos, and the benchmark's logos, icons and emoji, each rendered from its source file and traced by Inkvec (the current build) and by the other engines. The raster on the left, a trace on the right, moving together as you zoom. Switch the right side between engines, or the view to a wipe or an A/B flick. <b>Anchors</b> shows every on-curve point; <b>Handles</b> adds each curve's control points with their tangents.</p>
-  <div class="gal"><div class="cases" id="cases"></div><div><div class="tools" id="galtools"></div><div class="viewer" id="galview"></div><div class="chips" id="galchips"></div></div></div>
+  <p class="lede" id="showlede">Every example in one scrolling panel: real brand logos, the benchmark's cases and more icons and emoji, each rendered from its source file and traced by Inkvec (the current build) and by the other engines. Pick one to open it. The raster on the left, a trace on the right, moving together as you zoom. Switch the right side between engines, or the view to a wipe or an A/B flick. <b>Anchors</b> shows every on-curve point; <b>Handles</b> adds each curve's control points with their tangents.</p>
+  <div class="gal"><div class="cases" id="cases"></div><div><div class="tools" id="galtools"></div><div class="viewer" id="galview"></div><p class="caption" id="galcap"></p><div class="chips" id="galchips"></div></div></div>
 </section>
 
 <section class="sec" id="versus">
@@ -233,7 +249,9 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":
 // ---------------------------------------------------------------- the way into the Studio
 // Inside the Space's frame the page may not be cross-origin isolated, and then the Studio
 // runs on one core without the denoiser; its own tab always is. Say so where it matters.
-const framed = (() => { try { return window.self !== window.top; } catch { return true; } })();
+const framed = (() => { try { return window.self !== window.top; } catch { return true; } })() ||
+  [...(location.ancestorOrigins || [])].some(o => /(^|\.)huggingface\.co(:\d+)?$/.test(o.replace(/^[a-z]+:\/\//, '')));
+document.documentElement.classList.toggle('framed', framed);
 if (framed) {
   $("ctanote").innerHTML = `Best on a laptop or desktop screen. For the whole window and every core, <a href="studio/index.html" target="_blank" rel="noopener">open the Studio in its own tab</a>.`;
 }
@@ -397,10 +415,16 @@ function gallery(d){
   const v = viewer($("galview"));
   $("galview").addEventListener('pointerenter', () => hot = v);
   $("galview").addEventListener('pointerleave', () => hot = null);
-  let set = d.sets[0], at = 0, other = 'inkvec', layer = 'fill', layers = null, token = 0;
+  let cur = d.sets[0].cases[0], other = 'inkvec', layer = 'fill', layers = null, token = 0;
+  const tiles = new Map();
   const apply = async () => {
-    const c = set.cases[at], mine = ++token;
-    for (const [i, b] of [...$("cases").children].entries()) b.setAttribute('aria-pressed', String(i === at));
+    const c = cur, mine = ++token;
+    for (const [key, b] of tiles) b.setAttribute('aria-pressed', String(key === c.key));
+    $("galcap").innerHTML = `<b>${esc(c.label)}</b> &middot; ${esc(c.what)}`;
+    const m = c.m.inkvec, w = c.m[other];
+    $("galchips").innerHTML = `<span class="chip win">Inkvec dE00 <b>${fmt(m.de1024,3)}</b></span><span class="chip win"><b>${m.paths}</b> paths · <b>${m.coordinates}</b> coordinates · <b>${(m.bytes/1024).toFixed(1)} KB</b></span>` +
+      (other === 'inkvec' ? '' : `<span class="chip vt">${esc(SHORT[other])} dE00 <b>${fmt(w.de1024,3)}</b></span><span class="chip vt"><b>${w.paths}</b> paths · <b>${w.coordinates}</b> coordinates · <b>${(w.bytes/1024).toFixed(1)} KB</b></span>`) +
+      `<span class="chip vt">the artist's file: <b>${c.artist.paths}</b> paths · <b>${c.artist.coordinates}</b> coordinates</span>`;
     const body = await fetchCase(c.key);
     if (mine !== token) return;
     const ours = vectorLayer(body.svg.inkvec);
@@ -409,22 +433,43 @@ function gallery(d){
     for (const x of layers) x.set(layer);
     if (other === 'inkvec'){ v.setLeft(imgLayer(body.input), 'raster'); v.setRight(ours.root, `inkvec · ${ours.anchors} anchors`); }
     else { v.setLeft(ours.root, `inkvec · ${ours.anchors} anchors`); v.setRight(right.root, `${SHORT[other]} · ${right.anchors} anchors`); }
-    const m = c.m.inkvec, w = c.m[other];
-    $("galchips").innerHTML = `<span class="chip win">Inkvec dE00 <b>${fmt(m.de1024,3)}</b></span><span class="chip win"><b>${m.paths}</b> paths · <b>${m.coordinates}</b> coordinates · <b>${(m.bytes/1024).toFixed(1)} KB</b></span>` +
-      (other === 'inkvec' ? '' : `<span class="chip vt">${esc(SHORT[other])} dE00 <b>${fmt(w.de1024,3)}</b></span><span class="chip vt"><b>${w.paths}</b> paths · <b>${w.coordinates}</b> coordinates · <b>${(w.bytes/1024).toFixed(1)} KB</b></span>`) +
-      `<span class="chip vt">the artist's file: <b>${c.artist.paths}</b> paths · <b>${c.artist.coordinates}</b> coordinates</span>`;
   };
-  const list = () => {
-    $("cases").innerHTML = '';
-    set.cases.forEach((c, i) => {
-      const b = el('button', 'case', `<span class="th"><img src="${c.thumb}" alt="" loading="lazy"></span><span class="nm">${esc(c.label)}</span><span class="wh">${esc(c.what)}</span>`);
-      b.addEventListener('click', () => { at = i; apply(); });
-      $("cases").appendChild(b);
-    });
+  // Every set in one panel that scrolls inside itself; thumbnails come with the index, a
+  // case's pictures only when it is opened.
+  const panel = $("cases"), order = [];
+  new ResizeObserver(() => { const h = $("galview").getBoundingClientRect().height; if (h > 200) panel.style.height = h + 'px'; }).observe($("galview"));
+  const pick = (c, focus) => {
+    cur = c; apply();
+    const b = tiles.get(c.key);
+    // Scroll the panel, never the page: the selected case stays in view inside the list.
+    const pr = panel.getBoundingClientRect(), br = b.getBoundingClientRect(), head = 34;
+    if (br.top < pr.top + head) panel.scrollTop -= pr.top + head - br.top;
+    else if (br.bottom > pr.bottom) panel.scrollTop += br.bottom - pr.bottom + 6;
+    if (br.left < pr.left) panel.scrollLeft -= pr.left - br.left + 30; else if (br.right > pr.right) panel.scrollLeft += br.right - pr.right + 6;
+    if (focus) b.focus({preventScroll: true});
   };
+  panel.addEventListener('keydown', e => {
+    const at = order.findIndex(c => c.key === cur.key), cols = getComputedStyle(panel).display === 'flex' ? 1 : 3;
+    const step = {ArrowDown: cols, ArrowUp: -cols, ArrowRight: 1, ArrowLeft: -1, Home: -at, End: order.length - 1 - at}[e.key];
+    if (step === undefined) return;
+    e.preventDefault();
+    pick(order[Math.min(order.length - 1, Math.max(0, at + step))], true);
+  });
+  for (const s of d.sets){
+    $("cases").append(el('div', 'sethead', `${esc(s.label)}<span>${s.cases.length}</span>`));
+    const grid = el('div', 'tiles');
+    for (const c of s.cases){
+      const b = el('button', 'case', `<span class="th"><img src="${c.thumb}" alt="" loading="lazy"></span><span class="nm">${esc(c.label)}</span>`);
+      b.title = `${c.label} · ${c.what}`;
+      b.dataset.key = c.key;
+      b.addEventListener('click', () => pick(c, false));
+      tiles.set(c.key, b); order.push(c);
+      grid.appendChild(b);
+    }
+    $("cases").appendChild(grid);
+  }
   const engines = d.gallery_engines;
   const t = $("galtools");
-  t.append(el('span', 'lbl', 'set'), seg(d.sets.map((s, i) => [s.id, `${s.label} (${s.cases.length})`, i === 0]), k => { set = d.sets.find(s => s.id === k); at = 0; list(); apply(); }));
   t.append(el('span', 'lbl', 'compare'), seg([['inkvec', 'raster · inkvec', true], ...engines.filter(e => e !== 'inkvec').map(e => [e, 'inkvec · ' + SHORT[e]])], k => { other = k; apply(); }));
   t.append(el('span', 'lbl', 'view'), seg([['side','Side by side',true],['wipe','Wipe'],['flick','A / B']], m => v.setMode(m)));
   const fl = el('button', '', 'Flick'); fl.title = 'Hold to show the other side (or hold Space over the viewer)';
@@ -433,23 +478,23 @@ function gallery(d){
   t.append(el('span', 'lbl', 'show'), seg([['fill','Fill',true],['wire','Wireframe'],['anchor','Anchors'],['handle','Handles']], L => { layer = L; for (const x of layers || []) x.set(L); }));
   const z = el('div', 'seg'); for (const k of [1, 4, 12]){ const b = el('button', '', k + '×'); b.addEventListener('click', () => v.zoom(k)); z.appendChild(b); } t.append(el('span', 'lbl', 'zoom'), z);
   t.append(el('span', 'legend', '<span><i style="background:var(--anchor)"></i>anchor</span><span><i style="background:var(--handle)"></i>control point &amp; tangent</span>'));
-  list(); apply();
+  apply();
 }
 const table = (rows, caption) => `<table><caption>${caption}</caption><thead><tr><th>engine</th><th>mean dE00</th><th>median dE00</th><th>DISTS</th><th>DINO</th><th>geometry</th><th>coords</th><th>seconds</th></tr></thead><tbody>` +
   rows.map(r => `<tr class="${r.id === 'inkvec' ? 'win' : ''}"><td>${esc(r.name)}</td><td class="mono">${fmt(r.de_mean,3)}</td><td class="mono">${fmt(r.de_median,3)}</td><td class="mono">${fmt(r.dists,4)}</td><td class="mono">${fmt(r.dino,4)}</td><td class="mono">${fmt(r.geometry_mean,2)}&times;</td><td class="mono">${Math.round(r.coordinates)}</td><td class="mono">${fmt(r.seconds_median,2)}</td></tr>`).join('') +
   `</tbody></table>`;
 function results(d){
   const us = d.engines.find(e => e.id === 'inkvec'), tz = d.engines.find(e => e.id === 'trazor-auto'), vt = d.engines.find(e => e.id === 'vtracer-default');
-  const wins = d.best_de_wins.inkvec || 0, b = d.brands, bwins = b.best_de_wins.inkvec || 0;
-  $("versuslede").innerHTML = `${d.cases} cases &mdash; real icons and emoji across ${d.families.filter(f => f !== 'brands' && f !== 'synthetic').length} families, synthetic probes and real brand logos, the selection fixed from the seed <code>${esc(d.seed)}</code> &mdash; each rendered from its source SVG, traced by every engine and scored against the render: CIEDE2000 colour difference, DISTS and DINOv3 perceptual similarity, and geometry against the artist's own file (1.00&times; is exactly the artist's number of parameters). Inkvec had the lowest colour difference on <b>${wins} of ${d.cases}</b>, and on <b>${bwins} of ${b.cases}</b> of the brand logos in the gallery. VTracer is the widely used open-source tracer and the fastest thing here by far; that trade-off is shown too.`;
+  const wins = d.best_de_wins.inkvec || 0, b = d.brands, bwins = b.best_de_wins.inkvec || 0, cp = d.corpus, cwins = cp.best_de_wins.inkvec || 0;
+  $("versuslede").innerHTML = `${d.cases} cases &mdash; real icons and emoji across ${d.families.filter(f => f !== 'brands' && f !== 'synthetic').length} families, synthetic probes and real brand logos, the selection fixed from the seed <code>${esc(d.seed)}</code> &mdash; each rendered from its source SVG, traced by every engine and scored against the render: CIEDE2000 colour difference, DISTS and DINOv3 perceptual similarity, and geometry against the artist's own file (1.00&times; is exactly the artist's number of parameters). Inkvec had the lowest colour difference on <b>${wins} of ${d.cases}</b>; in the gallery's other sets, on <b>${bwins} of ${b.cases}</b> brand logos and <b>${cwins} of ${cp.cases}</b> more icons and emoji. VTracer is the widely used open-source tracer and the fastest thing here by far; that trade-off is shown too.`;
   $("bignums").innerHTML = [
     ['colour difference, dE00', `${fmt(us.de_mean,3)} <small>mean</small>`, `median ${fmt(us.de_median,3)}; ${(tz.de_mean/us.de_mean).toFixed(1)}&times; lower than Trazor, ${(vt.de_mean/us.de_mean).toFixed(0)}&times; lower than VTracer (under 1 is invisible)`],
     ['geometry vs the artist', `${fmt(us.geometry_mean,2)}&times; <small>mean</small>`, `median ${fmt(us.geometry_median,2)}&times;; Trazor ${fmt(tz.geometry_mean,2)}&times;, VTracer ${fmt(vt.geometry_mean,2)}&times; (1.00&times; is the artist's own file)`],
     ['DINOv3 similarity', `${fmt(us.dino,4)}`, `1 is identical; DISTS ${fmt(us.dists,4)} (Trazor ${fmt(tz.dists,4)}, VTracer ${fmt(vt.dists,4)}; lower is better)`],
     ['seconds per case', `${fmt(us.seconds_median,2)} <small>median</small>`, `native command line; VTracer ${fmt(vt.seconds_median,2)} s, Trazor ${fmt(tz.seconds_median,2)} s`],
   ].map(([k, val, sub]) => `<div class="bignum"><div class="k">${k}</div><div class="v">${val}</div><div class="s">${sub}</div></div>`).join('');
-  $("bars").innerHTML = table(d.engines, `${d.cases} benchmark cases`) + table(b.engines, `${b.cases} brand logos (the gallery's brand set)`);
-  $("vtnote").innerHTML = `Means over the cases, except seconds (median, measured on a machine doing other work at the same time; treat them as approximate). Inkvec was traced by the current build (<code>${esc(d.inkvec.git)}</code>, ${esc(d.traced)}); the other engines have not changed, so their traces and scores are from their recorded runs (the benchmark's on ${esc(d.date)}, <code>out/${esc(d.run)}/results.json</code> from <code>bench/crosscompare_competitors.py</code>). The brand logos are twenty real marks from an external dataset, not part of the repository, rendered and scored the same way. All of it is computed by <code>tools/showcase_data.py</code>. Method and every case: the <a href="https://github.com/logolabs/inkvec#results" target="_blank" rel="noopener noreferrer">README</a>.`;
+  $("bars").innerHTML = table(d.engines, `${d.cases} benchmark cases`) + table(b.engines, `${b.cases} brand logos (the gallery's brand set)`) + table(cp.engines, `${cp.cases} more icons and emoji (the gallery's third set)`);
+  $("vtnote").innerHTML = `Means over the cases, except seconds (median, measured on a machine doing other work at the same time; treat them as approximate). Inkvec was traced by the current build (<code>${esc(d.inkvec.git)}</code>, ${esc(d.traced)}); the other engines have not changed, so their traces and scores are from their recorded runs (the benchmark's on ${esc(d.date)}, <code>out/${esc(d.run)}/results.json</code> from <code>bench/crosscompare_competitors.py</code>). The brand logos are real marks from an external dataset, not part of the repository: the twenty this page showed before, and more picked by the seed <code>${esc(d.pick_seed)}</code> alone (hash order, a quota per kind: gradients, thin lines, multi-colour, flat), not by how any engine traces them. The third set is more files from the repository's icon and emoji corpora, picked the same way. All are rendered and scored as the benchmark is. All of it is computed by <code>tools/showcase_data.py</code>. Method and every case: the <a href="https://github.com/logolabs/inkvec#results" target="_blank" rel="noopener noreferrer">README</a>.`;
 }
 load();
 </script>

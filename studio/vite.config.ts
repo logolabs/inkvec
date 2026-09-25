@@ -35,7 +35,9 @@ function webPage(): Plugin {
   ].join("; ");
   return {
     name: "inkvec-web-page",
-    transformIndexHtml(html) {
+    transformIndexHtml(html, ctx) {
+      // The splash page is shared with the desktop as it is; only the app's page changes.
+      if (!ctx.path.endsWith("index.html")) return html;
       return html
         .replace(/<title>[^<]*<\/title>/, "<title>Inkvec Studio Lite</title>")
         .replace(/content="default-src[^"]*"/, `content="${csp}"`)
@@ -45,7 +47,9 @@ function webPage(): Plugin {
         )
         .replace(
           '<div id="app"></div>',
-          '<div id="boot" class="boot" role="status"><span class="bootname">Inkvec Studio Lite</span><span class="bootline">Loading the engine</span></div>\n    <div id="app"></div>',
+          // The loading screen is the desktop's splash window itself, shown as a card over the
+          // page until the engine is ready and its animation has played (see lib/web/chrome.ts).
+          '<div id="boot" class="boot"><iframe src="./splash.html" title="Inkvec Studio Lite is starting"></iframe></div>\n    <div id="app"></div>',
         )
         .replace(
           '<meta name="viewport" content="width=device-width, initial-scale=1.0" />',
@@ -98,9 +102,9 @@ export default defineConfig(({ mode }) => {
       outDir: web ? "dist-web/studio" : "dist",
       emptyOutDir: true,
       rollupOptions: {
-        // The desktop has two pages: the app, and the splash window that covers its
-        // start-up. The browser has only the app, which shows its own loading state.
-        input: (web ? { main: "index.html" } : { main: "index.html", splash: "splash.html" }) as Record<string, string>,
+        // Both builds have both pages: the browser build shows the splash as its loading
+        // screen, inside the app's page.
+        input: { main: "index.html", splash: "splash.html" } as Record<string, string>,
       },
     },
   };

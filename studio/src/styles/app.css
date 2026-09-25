@@ -3374,42 +3374,43 @@ body.dragging-ink [data-drop="list"] {
    Inkvec Studio Lite only: the loading state before the engine has arrived, the full-screen
    and own-tab buttons where the desktop has window controls, and the phone note. */
 
+/* The desktop's splash window, as a card in the middle of the page (splash.html, framed). */
 .boot {
   position: fixed;
   inset: 0;
   z-index: 50;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  background: var(--paper);
-  color: var(--ink);
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: #0c0a09;
+  transition: opacity 0.28s ease;
 }
-.boot .bootname {
-  font-family: var(--font-display);
-  font-size: 28px;
+.boot.leaving {
+  opacity: 0;
 }
-.boot .bootline {
+.boot iframe {
+  width: min(660px, 100%);
+  height: 400px;
+  border: 0;
+  border-radius: 10px;
+  box-shadow: 0 30px 70px -20px rgba(0, 0, 0, 0.8);
+  background: #1a1816;
+}
+
+/* Inside Hugging Face's frame and not full screen: a gap in the app's darkest colour, with a
+   copper hairline, between their header and the app bar. */
+html.framed:not(.fullscreen) body {
+  padding-top: 6px;
+  background: var(--void);
+}
+html.framed:not(.fullscreen) #app {
+  position: relative;
+  border-top: 1px solid rgba(201, 117, 74, 0.35);
+}
+.desktopnote {
+  margin: 14px 0 0;
   font-size: 12.5px;
-  color: var(--faint);
-}
-.boot .bootline::after {
-  content: "";
-  display: block;
-  width: 160px;
-  height: 2px;
-  margin-top: 12px;
-  background: linear-gradient(90deg, transparent, var(--accent), transparent);
-  background-size: 200% 100%;
-  animation: bootsweep 1.2s linear infinite;
-}
-@keyframes bootsweep {
-  from { background-position: 100% 0; }
-  to { background-position: -100% 0; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .boot .bootline::after { animation: none; }
+  text-align: center;
 }
 
 .webcontrols {
@@ -3477,38 +3478,68 @@ body.dragging-ink [data-drop="list"] {
 }
 .sc-main {
   display: grid;
-  grid-template-columns: 200px 1fr;
+  grid-template-columns: 300px 1fr;
   gap: 16px;
   min-height: 0;
+  align-items: start;
 }
+/* Every example in one scrolling panel, a heading per set. */
 .sc-list {
+  height: 560px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 10px 10px;
+  border: 1px solid var(--rule2);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  scrollbar-width: thin;
+}
+.sc-sethead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   display: flex;
-  flex-direction: column;
+  justify-content: space-between;
+  padding: 10px 2px 8px;
+  background: var(--card);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.sc-sethead span {
+  color: var(--faint);
+  font-weight: 600;
+}
+.sc-tiles {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
   gap: 6px;
+  margin-bottom: 6px;
 }
 .sc-case {
-  display: grid;
-  grid-template-columns: 44px 1fr;
-  grid-template-rows: auto auto;
-  column-gap: 10px;
-  align-items: center;
-  text-align: left;
-  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 5px;
   border: 1px solid var(--rule2);
   border-radius: var(--radius-sm);
-  background: var(--card);
-  color: var(--ink);
+  background: var(--stage);
+  color: var(--dim);
   cursor: pointer;
+  text-align: left;
 }
 .sc-case[aria-pressed="true"] {
   border-color: var(--accent);
   background: var(--accent-subtle);
+  color: var(--accent);
 }
 .sc-thumb {
-  grid-row: 1 / 3;
-  width: 44px;
-  height: 44px;
-  border-radius: 6px;
+  aspect-ratio: 1;
+  width: 100%;
+  border-radius: 5px;
   background: #fff;
   display: grid;
   place-items: center;
@@ -3520,12 +3551,16 @@ body.dragging-ink [data-drop="list"] {
   object-fit: contain;
 }
 .sc-name {
-  font-size: 12.5px;
-  font-weight: 600;
-}
-.sc-what {
   font-size: 11px;
-  color: var(--faint);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sc-caption {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--dim);
 }
 .sc-stagecol {
   display: flex;
@@ -3537,13 +3572,14 @@ body.dragging-ink [data-drop="list"] {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  white-space: nowrap;
 }
 .sc-tools .eyebrow {
   margin-left: 6px;
 }
 .sc-legend {
-  margin-left: auto;
+  margin-right: 4px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -3750,8 +3786,4 @@ body.dragging-ink [data-drop="list"] {
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--faint);
-}
-.sc-list {
-  max-height: 640px;
-  overflow-y: auto;
 }

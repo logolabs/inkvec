@@ -13,11 +13,16 @@ current engine does; the other engines did not change, so their traces are reuse
   `results.json` and `cases/<key>/512/`). Inkvec re-traces each case's `input.png` and is
   scored exactly as that script scores (CIEDE2000, SSIM, DISTS and DINO at 1024 against the
   source render, geometry against the artist's file); the competitors' rows are the run's.
-* **Brand logos** are the twenty real brand marks the Space showed before 0.2 (an external
-  dataset, not in this repository), rendered with the same protocol (square viewBox, 4%
-  margin, 512 px on white, scored at 1024). Their competitor traces are made once, with
-  the same engines and flags as the competitor run, and kept in `--work`; later runs reuse
-  them.
+* **Brand logos** are the twenty real brand marks the Space showed before 0.2 and thirty
+  more picked by PICK_SEED alone (hash order, a quota per kind of source file: gradients,
+  thin lines, multi-colour, flat), from an external dataset not in this repository.
+* **More icons and emoji** are three more files from each of the repository's corpora,
+  picked by the same seed.
+
+The last two sets are rendered with the benchmark's protocol (square viewBox, 4% margin,
+512 px on white, scored at 1024); their competitor traces are made once, with the same
+engines and flags as the competitor run, and kept in `--work`, so later runs only re-trace
+Inkvec.
 
 Writes `web/showcase.json` (the summaries and each case's metrics and thumbnail) and
 `web/showcase/<key>.json` (a case's raster and every engine's SVG, fetched only when the
@@ -31,6 +36,7 @@ import base64
 import hashlib
 import io
 import json
+import os
 import re
 import statistics
 import subprocess
@@ -57,15 +63,24 @@ GALLERY_ENGINES = ["inkvec", "vtracer-1.0-simplify", "trazor-auto", "vtracer-def
 # flags' with more nodes.
 SHOWN_ENGINES = ["inkvec", "vtracer-1.0-simplify", "trazor-auto"]
 
-BENCH_GALLERY = [
+# Readable names for the benchmark's logos and the cases people ask about; the rest are
+# named from their file.
+BENCH_LABELS = [
     ("brands__shinhancard_com", "Shinhan Card", "brand logo"),
     ("brands__sangchaimeter_com", "SCM", "brand logo, halftone dots"),
-    ("simple-icons__barclays", "Barclays eagle", "brand icon (Simple Icons)"),
     ("brands__jurlique_com_au", "Jurlique", "brand wordmark"),
+    ("simple-icons__barclays", "Barclays eagle", "brand icon"),
+    ("simple-icons__slackware", "Slackware", "brand icon"),
     ("noto-emoji__emoji_u1f478_1f3fd", "Princess", "Noto emoji, gradients"),
     ("fluent-emoji__Face_with_medical_mask_Color_face_with_medical_mask_color", "Face with mask", "Fluent emoji, gradients"),
+    ("fluent-emoji__Musical_notes_Color_musical_notes_color", "Musical notes", "Fluent emoji, gradients"),
     ("openmoji__1F334", "Palm tree", "OpenMoji"),
 ]
+FAMILY_WHAT = {
+    "lucide": "Lucide icon", "material-icons": "Material icon", "simple-icons": "brand icon",
+    "twemoji": "Twemoji", "noto-emoji": "Noto emoji", "openmoji": "OpenMoji",
+    "fluent-emoji": "Fluent emoji", "synthetic": "synthetic probe", "brands": "brand logo",
+}
 # The Space's brand set before 0.2, the four it featured first.
 BRANDS = [
     "365retailmarkets_com", "115animal_com", "5corunafs_com", "abrinor_fr",
@@ -74,6 +89,12 @@ BRANDS = [
     "5avshop_es", "aandeheikant_be", "724canlidestek_com", "12port_com", "acceleratetech_net",
     "aboutkidshealth_ca",
 ]
+# More, picked by this seed and nothing else, stratified by what the source file is so the
+# set is not all flat wordmarks: see `brand_cases`.
+PICK_SEED = "showcase-2026-09-26-v1"
+BRAND_QUOTA = {"gradients": 8, "thin lines": 7, "multi-colour": 8, "flat": 7}
+CORPUS_FAMILIES = ["lucide", "material-icons", "simple-icons", "twemoji", "noto-emoji", "openmoji", "fluent-emoji"]
+EXTRA_PER_FAMILY = 3
 CASE_KEYS = ["de1024", "dists", "dino", "coordinates", "geometry_ratio", "paths", "bytes", "seconds", "gradients"]
 
 
@@ -177,17 +198,27 @@ def case_entry(key, label, what, gt, input_png, by: dict[str, dict]) -> dict:
         "label": label,
         "what": what,
         "artist": {"paths": gt["paths"], "coordinates": gt["coordinates"], "geometry_params": gt["geometry_params"]},
-        "thumb": data_url(input_png, 96),
+        "thumb": data_url(input_png, 80),
         "m": {e: {k: by[e].get(k) for k in CASE_KEYS} for e in GALLERY_ENGINES if e in by},
     }
 
 
+def label_of(key: str) -> tuple[str, str]:
+    """A readable name and a kind for a benchmark case key, `family__name`."""
+    named = {k: (l, w) for k, l, w in BENCH_LABELS}
+    if key in named:
+        return named[key]
+    family, _, name = key.partition("__")
+    return name.replace("_", " ").replace("-", " ")[:40], FAMILY_WHAT.get(family, family)
+
+
 def benchmark(s: Scorer, run: Path, work: Path) -> tuple[list[dict], list[dict]]:
-    """The competitor run with Inkvec re-traced: every row, and the gallery's cases."""
+    """The competitor run with Inkvec re-traced: every row, and every case for the gallery."""
     rows = json.loads((run / "results.json").read_text(encoding="utf-8"))
     keep = [r for r in rows if r["engine"] != "inkvec"]
     fresh = []
-    for key in sorted({r["key"] for r in rows}):
+    keys = sorted({r["key"] for r in rows})
+    for key in keys:
         base = next(r for r in rows if r["key"] == key)
         folder = run / "cases" / key / "512"
         out = work / "bench" / key
@@ -196,52 +227,125 @@ def benchmark(s: Scorer, run: Path, work: Path) -> tuple[list[dict], list[dict]]
         row = {k: base[k] for k in ("family", "name", "key", "source", "source_sha256", "gt")}
         row.update(s.trace_and_score("inkvec", folder / "input.png", out / "inkvec.svg", ref, base["gt"]))
         fresh.append(row)
-        print(f"  bench {key}: dE {row['de1024']:.3f} (was {next(r['de1024'] for r in rows if r['key'] == key and r['engine'] == 'inkvec'):.3f})", flush=True)
+        print(f"  bench {key}: dE {row['de1024']:.3f}", flush=True)
     all_rows = keep + fresh
+    # The labelled logos first, then the rest in the run's order.
+    order = [k for k, _, _ in BENCH_LABELS if k in keys] + [k for k in keys if k not in {k for k, _, _ in BENCH_LABELS}]
     gallery = []
-    for key, label, what in BENCH_GALLERY:
+    for key in order:
         by = {r["engine"]: r for r in all_rows if r["key"] == key}
         folder = run / "cases" / key / "512"
         svgs = {e: (work / "bench" / key / "inkvec.svg") if e == "inkvec" else folder / f"{e}.svg" for e in GALLERY_ENGINES}
         case_file(key, folder / "input.png", svgs)
+        label, what = label_of(key)
         gallery.append(case_entry(key, label, what, by["inkvec"]["gt"], folder / "input.png", by))
     return all_rows, gallery
 
 
-def brands(s: Scorer, dataset: Path, work: Path) -> tuple[list[dict], list[dict]]:
-    """The brand set: rendered, competitors traced once and kept, Inkvec always afresh."""
+def traced_set(s: Scorer, cases: list[tuple[str, str, str, Path]], work: Path, name: str) -> tuple[list[dict], list[dict]]:
+    """Cases outside the competitor run: rendered with its protocol, the competitors traced
+    once and kept in `work`, Inkvec always afresh."""
     c = s.c
     rows, gallery = [], []
-    for name in BRANDS:
-        src = dataset / name / "logo_1.svg"
-        key = "brand__" + re.sub(r"[^a-zA-Z0-9_.-]", "_", name)
-        out = work / "brands" / key
+    for key, label, what, src in cases:
+        out = work / name / key
         out.mkdir(parents=True, exist_ok=True)
         original = src.read_text(encoding="utf-8-sig")
-        truth = c.render.fit_viewbox(c.render.normalize_svg(original)[0], 512, 512, 0.04)
         if not (out / "truth.png").exists():
+            truth = c.render.fit_viewbox(c.render.normalize_svg(original)[0], 512, 512, 0.04)
             c.cc.png(c.cc.rgb(truth, 1024), out / "truth.png")
             c.cc.png(c.cc.rgb(truth, 512), out / "input.png")
         ref = s.ref(out / "truth.png")
         gt = c.cc.structure(original)
         by = {}
-        for engine in GALLERY_ENGINES:
-            cached = out / f"{engine}.json"
-            if engine != "inkvec" and cached.exists() and (out / f"{engine}.svg").exists():
-                row = json.loads(cached.read_text(encoding="utf-8"))
-            else:
-                row = s.trace_and_score(engine, out / "input.png", out / f"{engine}.svg", ref, gt)
-                if engine != "inkvec":
-                    cached.write_text(json.dumps(row), encoding="utf-8")
-            row.update(key=key, name=name, family="brands", gt=gt)
-            rows.append(row)
-            by[engine] = row
+        try:
+            for engine in GALLERY_ENGINES:
+                cached = out / f"{engine}.json"
+                if engine != "inkvec" and cached.exists() and (out / f"{engine}.svg").exists():
+                    row = json.loads(cached.read_text(encoding="utf-8"))
+                else:
+                    row = s.trace_and_score(engine, out / "input.png", out / f"{engine}.svg", ref, gt)
+                    if engine != "inkvec":
+                        cached.write_text(json.dumps(row), encoding="utf-8")
+                row.update(key=key, family=name, gt=gt)
+                by[engine] = row
+        except Exception as e:  # noqa: BLE001 - one engine failing a case drops the case, said aloud
+            print(f"  {name} {key}: SKIPPED ({e!r})"[:300], flush=True)
+            continue
+        rows.extend(by.values())
+        case_file(key, out / "input.png", {e: out / f"{e}.svg" for e in GALLERY_ENGINES})
+        gallery.append(case_entry(key, label, what, gt, out / "input.png", by))
+        print(f"  {name} {key}: " + ", ".join(f"{e} {by[e]['de1024']:.3f}" for e in GALLERY_ENGINES), flush=True)
+    return rows, gallery
+
+
+def classify(svg: str) -> str:
+    """A brand file's kind, read from its source, for the stratified pick."""
+    if "<linearGradient" in svg or "<radialGradient" in svg:
+        return "gradients"
+    if re.search(r'stroke-width\s*[:=]\s*"?\s*[0-9.]', svg) and not re.search(r'stroke\s*[:=]\s*"?\s*none', svg):
+        return "thin lines"
+    fills = {f.lower() for f in re.findall(r"#[0-9a-fA-F]{6}\b", svg)}
+    if len(fills) >= 3:
+        return "multi-colour"
+    return "flat"
+
+
+def brand_cases(dataset: Path, exclude: set[str]) -> list[tuple[str, str, str, Path]]:
+    """The twenty the Space showed before 0.2, then EXTRA_BRANDS more picked by a fixed seed:
+    names in the order of sha256(seed + name), size-filtered as the benchmark filters its
+    brands (800 to 120,000 bytes), taken until each kind has its quota. Nothing about how
+    any engine traces them takes part in the choice."""
+    def entry(name: str, what: str) -> tuple[str, str, str, Path]:
         label = name.rsplit("_", 1)
         label = f"{label[0]}.{label[1]}" if len(label) == 2 else name
-        case_file(key, out / "input.png", {e: out / f"{e}.svg" for e in GALLERY_ENGINES})
-        gallery.append(case_entry(key, label, "brand logo", gt, out / "input.png", by))
-        print(f"  brand {name}: " + ", ".join(f"{e} {by[e]['de1024']:.3f}" for e in GALLERY_ENGINES), flush=True)
-    return rows, gallery
+        return ("brand__" + re.sub(r"[^a-zA-Z0-9_.-]", "_", name), label, what, dataset / name / "logo_1.svg")
+
+    out = [entry(n, "brand logo") for n in BRANDS]
+    taken = set(BRANDS) | exclude
+    quota = dict(BRAND_QUOTA)
+    names = sorted(os.listdir(dataset), key=lambda n: hashlib.sha256((PICK_SEED + n).encode()).hexdigest())
+    for name in names:
+        if not any(quota.values()):
+            break
+        src = dataset / name / "logo_1.svg"
+        if name in taken or not src.is_file() or not 800 < src.stat().st_size < 120_000:
+            continue
+        try:
+            kind = classify(src.read_text(encoding="utf-8-sig"))
+        except (OSError, UnicodeDecodeError):
+            continue
+        if quota.get(kind, 0) > 0:
+            quota[kind] -= 1
+            out.append(entry(name, f"brand logo, {kind}"))
+    return out
+
+
+def corpus_cases(exclude: set[str]) -> list[tuple[str, str, str, Path]]:
+    """EXTRA_PER_FAMILY more files from each of the repository's icon and emoji corpora, in the
+    order of sha256(seed + family + file name), skipping the benchmark's own."""
+    out = []
+    for family in CORPUS_FAMILIES:
+        files = sorted((ROOT / "bench" / "data" / "corpus_svg" / family).glob("*.svg"),
+                       key=lambda p: hashlib.sha256((PICK_SEED + family + p.name).encode()).hexdigest())
+        n = 0
+        for p in files:
+            key = re.sub(r"[^a-zA-Z0-9_.-]", "_", f"corpus__{family}__{p.stem}")
+            if f"{family}__{p.stem}" in exclude or not 200 < p.stat().st_size < 120_000:
+                continue
+            out.append((key, p.stem.replace("_", " ").replace("-", " ")[:40], FAMILY_WHAT[family], p))
+            n += 1
+            if n == EXTRA_PER_FAMILY:
+                break
+    return out
+
+
+def block(rows: list[dict], n: int) -> dict:
+    return {
+        "cases": n,
+        "engines": [{"id": e, "name": nm, **summarise(rows, e)} for e, nm in ENGINES if summarise(rows, e)],
+        "best_de_wins": wins_of(rows),
+    }
 
 
 def main() -> int:
@@ -260,8 +364,11 @@ def main() -> int:
 
     print("benchmark cases, Inkvec re-traced:", flush=True)
     bench_rows, bench_gallery = benchmark(s, a.run, a.work)
+    bench_names = {r["name"] for r in bench_rows if r["family"] == "brands"}
     print("brand logos:", flush=True)
-    brand_rows, brand_gallery = brands(s, a.brands, a.work)
+    brand_rows, brand_gallery = traced_set(s, brand_cases(a.brands, bench_names), a.work, "brands")
+    print("more icons and emoji:", flush=True)
+    corpus_rows, corpus_gallery = traced_set(s, corpus_cases({r["key"] for r in bench_rows}), a.work, "corpus")
 
     git = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
     date = "-".join(a.run.name.rsplit("-", 3)[-3:])
@@ -271,28 +378,27 @@ def main() -> int:
         "run": a.run.name,
         "date": date,
         "seed": manifest.get("seed"),
+        "pick_seed": PICK_SEED,
         "cases": len({r["key"] for r in bench_rows}),
         "families": sorted({r["family"] for r in bench_rows}),
         "gallery_engines": SHOWN_ENGINES,
         "engines": [{"id": e, "name": n, **(summarise(bench_rows, e) or {})} for e, n in ENGINES],
         "best_de_wins": wins_of(bench_rows),
-        "brands": {
-            "cases": len(BRANDS),
-            "engines": [{"id": e, "name": n, **summarise(brand_rows, e)} for e, n in ENGINES if summarise(brand_rows, e)],
-            "best_de_wins": wins_of(brand_rows),
-        },
+        "brands": block(brand_rows, len(brand_gallery)),
+        "corpus": block(corpus_rows, len(corpus_gallery)),
         "sets": [
             {"id": "brands", "label": "Brand logos", "cases": brand_gallery},
             {"id": "bench", "label": "Benchmark cases", "cases": bench_gallery},
+            {"id": "corpus", "label": "More icons and emoji", "cases": corpus_gallery},
         ],
     }
     (WEB / "showcase.json").write_text(json.dumps(out, separators=(",", ":")), encoding="utf-8", newline="\n")
     per_case = sum(p.stat().st_size for p in (WEB / "showcase").glob("*.json"))
     print(f"wrote web/showcase.json ({(WEB / 'showcase.json').stat().st_size / 1024:.0f} KB) and "
           f"{len(list((WEB / 'showcase').glob('*.json')))} case files ({per_case / 1024:.0f} KB)")
-    for title, block in (("benchmark", out), ("brands", out["brands"])):
-        print(f"{title}: best dE00 {block['best_de_wins']}")
-        for e in block["engines"]:
+    for title, b in (("benchmark", out), ("brands", out["brands"]), ("corpus", out["corpus"])):
+        print(f"{title}: {len(b['engines']) and b.get('cases')} cases, best dE00 {b['best_de_wins']}")
+        for e in b["engines"]:
             if "de_mean" in e:
                 print(f"  {e['id']:22s} mean {e['de_mean']:.3f} median {e['de_median']:.3f} DISTS {e['dists']:.4f} "
                       f"DINO {e['dino']:.4f} geometry {e['geometry_mean']:.2f}x {e['coordinates']:.0f} coords "

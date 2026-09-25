@@ -28,7 +28,7 @@ import {
 } from "./lib/ipc";
 import { initial, modKey, Store } from "./lib/state";
 import { APP_NAME, copyText, openExternal, pickedFile, pickedPath, pickFiles, WEB, type Picked } from "./lib/platform";
-import { mountWebChrome, takeLaunch, webDrops, type Launch } from "./lib/web/chrome";
+import { markFramed, mountWebChrome, takeLaunch, webDrops, type Launch } from "./lib/web/chrome";
 import { Previews } from "./lib/previews";
 import { createRail, type RailActions } from "./components/rail";
 import { createChooser, createWizard, type Snapshot, type WizardActions } from "./components/wizard";
@@ -802,7 +802,10 @@ async function start(): Promise<void> {
   const app = document.getElementById("app");
   if (!app) return;
   app.append(appbar, content, screens);
-  if (WEB) mountWebChrome(app);
+  if (WEB) {
+    mountWebChrome(app);
+    markFramed();
+  }
 
   renderAppBar();
   renderTab();

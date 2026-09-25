@@ -25,9 +25,9 @@ pub struct Formats {
     pub svg: bool,
     /// The same drawing, minified.
     pub svg_minified: bool,
-    /// PNG at each of these widths.
+    /// PNG at each of these widths, the height following the drawing's own proportions.
     pub png_sizes: Vec<u32>,
-    /// A `.ico` plus 16/32/48 PNGs.
+    /// A `.ico` plus 16/32/48 PNGs, square, the drawing centred on transparent padding.
     pub favicon: bool,
     /// One `.zip` holding all of the above plus `palette.json` and the README.
     pub asset_pack: bool,
@@ -109,8 +109,8 @@ pub fn build(subject: &Subject<'_>, formats: &Formats) -> Result<Vec<Artifact>, 
     }
 
     for size in formats.png_sizes.iter().copied().filter(|s| *s > 0) {
-        let size = size.clamp(16, 8192);
-        let png = render_png(subject.svg, size, size)?;
+        let size = size.clamp(16, MAX_PNG_SIDE);
+        let png = png_at_width(subject.svg, size)?;
         out.push(artifact(format!("png/{stem}-{size}.png"), "png", png));
     }
 
@@ -152,7 +152,7 @@ pub fn build(subject: &Subject<'_>, formats: &Formats) -> Result<Vec<Artifact>, 
             inside.push(artifact(
                 format!("png/{stem}-{size}.png"),
                 "pack",
-                render_png(subject.svg, size, size)?,
+                png_at_width(subject.svg, size)?,
             ));
         }
         for size in [16u32, 32, 48] {
@@ -238,8 +238,29 @@ fn sanitise_stem(stem: &str) -> String {
     }
 }
 
+/// The longest side any exported PNG may have.
+const MAX_PNG_SIDE: u32 = 8192;
+
+/// A PNG `width` pixels wide, as tall as the drawing's proportions make it.
+///
+/// The sheet offers PNGs by width (512 / 1024 / 2048), so a wide logo comes out shorter and
+/// a tall one taller, never stretched to a square. A drawing so tall that its height would
+/// pass [`MAX_PNG_SIDE`] is scaled down to fit it instead.
+fn png_at_width(svg: &str, width: u32) -> Result<Vec<u8>, String> {
+    let (cw, ch) = quality::canvas_size(svg)?;
+    let mut w = width as f64;
+    let mut h = (w * ch as f64 / cw as f64).max(1.0);
+    if h > MAX_PNG_SIDE as f64 {
+        w = (w * MAX_PNG_SIDE as f64 / h).max(1.0);
+        h = MAX_PNG_SIDE as f64;
+    }
+    render_png(svg, w.round() as u32, h.round() as u32)
+}
+
+/// A PNG exactly `w` x `h`, the drawing scaled to fit without distortion and centred; where
+/// the proportions differ (a square favicon of a wide logo), the rest is transparent.
 fn render_png(svg: &str, w: u32, h: u32) -> Result<Vec<u8>, String> {
-    let rgba = quality::render(svg, w, h)?;
+    let rgba = quality::render_contained(svg, w, h)?;
     let buf = image::RgbaImage::from_raw(w, h, rgba)
         .ok_or_else(|| "the render did not fill the buffer".to_string())?;
     let mut out = std::io::Cursor::new(Vec::new());
@@ -358,7 +379,7 @@ fn readme(subject: &Subject<'_>, minified: &str, stem: &str) -> String {
             minified.len(),
             "no ids, no groups, no trailing zeros",
         ),
-        row("png/512, 1024, 2048", 0, ""),
+        row("png/512, 1024, 2048", 0, "px wide, in proportion"),
         row("favicon/", 0, ".ico + 16/32/48 png"),
         row(
             "palette.json",
@@ -568,6 +589,97 @@ mod tests {
         assert_eq!(written.len(), built.len());
         assert!(dir.join("png").join("northwind-mark-512.png").exists());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A logo twice as wide as it is tall, filling its whole canvas.
+    const WIDE: &str = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" height=\"100\"                         viewBox=\"0 0 200 100\"><path d=\"M0 0H200V100H0Z\" fill=\"#14453f\"/></svg>";
+
+    fn decoded(png: &[u8]) -> image::RgbaImage {
+        image::load_from_memory_with_format(png, image::ImageFormat::Png)
+            .unwrap()
+            .to_rgba8()
+    }
+
+    fn built_wide(formats: &Formats) -> Vec<Artifact> {
+        let (r, inks, losses) = (a_report(), vec![an_ink()], vec![]);
+        let wide = Subject {
+            svg: WIDE,
+            source_px: (1600, 800),
+            ..subject(&r, &inks, &losses)
+        };
+        build(&wide, formats).unwrap()
+    }
+
+    /// Every PNG used to be rendered square, so a wide logo came out squashed.
+    #[test]
+    fn a_png_keeps_the_drawings_proportions() {
+        let built = built_wide(&Formats {
+            png_sizes: vec![512],
+            asset_pack: false,
+            ..Formats::default()
+        });
+        let png = built
+            .iter()
+            .find(|a| a.name == "png/northwind-mark-512.png")
+            .unwrap();
+        assert_eq!(decoded(&png.data).dimensions(), (512, 256));
+    }
+
+    #[test]
+    fn a_favicon_of_a_wide_logo_is_square_with_the_drawing_centred() {
+        let built = built_wide(&Formats {
+            favicon: true,
+            asset_pack: false,
+            ..Formats::default()
+        });
+        let icon = built
+            .iter()
+            .find(|a| a.name == "favicon/favicon-32.png")
+            .unwrap();
+        let img = decoded(&icon.data);
+        assert_eq!(img.dimensions(), (32, 32));
+        // The drawing fills rows 8..24; above and below is transparent padding.
+        assert_eq!(img.get_pixel(16, 2)[3], 0, "the top is padding");
+        assert_eq!(img.get_pixel(16, 29)[3], 0, "the bottom is padding");
+        assert_eq!(img.get_pixel(16, 16)[3], 255, "the middle is drawn");
+        assert_eq!(img.get_pixel(1, 16)[3], 255, "the full width is drawn");
+        let ico = built
+            .iter()
+            .find(|a| a.name == "favicon/favicon.ico")
+            .unwrap();
+        let first = u32::from_le_bytes(ico.data[18..22].try_into().unwrap()) as usize;
+        let size = u32::from_le_bytes(ico.data[14..18].try_into().unwrap()) as usize;
+        assert_eq!(
+            decoded(&ico.data[first..first + size]).get_pixel(8, 1)[3],
+            0
+        );
+    }
+
+    #[test]
+    fn the_packs_pngs_keep_the_drawings_proportions_too() {
+        let built = built_wide(&Formats::default());
+        let pack = built.iter().find(|a| a.group == "assetPack").unwrap();
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(pack.data.clone())).unwrap();
+        let mut read = |name: &str| {
+            let mut bytes = Vec::new();
+            std::io::Read::read_to_end(&mut zip.by_name(name).unwrap(), &mut bytes).unwrap();
+            decoded(&bytes).dimensions()
+        };
+        assert_eq!(read("png/northwind-mark-1024.png"), (1024, 512));
+        assert_eq!(read("favicon/favicon-48.png"), (48, 48));
+    }
+
+    #[test]
+    fn a_very_tall_drawing_is_capped_on_its_longest_side() {
+        let tall = WIDE
+            .replace(
+                "width=\"200\" height=\"100\"",
+                "width=\"10\" height=\"100\"",
+            )
+            .replace("0 0 200 100", "0 0 10 100")
+            .replace("H200", "H10");
+        let img = decoded(&png_at_width(&tall, 2048).unwrap());
+        assert_eq!(img.dimensions(), (819, MAX_PNG_SIDE));
     }
 
     #[test]

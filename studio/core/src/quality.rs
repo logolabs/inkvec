@@ -160,9 +160,38 @@ pub struct WorstCorner {
 /// The SVG's own viewBox is mapped onto the whole pixmap, so the render lines up with the
 /// raster whatever `width`/`height` the document declares.
 pub fn render(svg: &str, w: u32, h: u32) -> Result<Vec<u8>, String> {
-    if w == 0 || h == 0 {
-        return Err("cannot render to a zero-sized pixmap".into());
-    }
+    let tree = parse_tree(svg)?;
+    let size = tree.size();
+    let scale = tiny_skia::Transform::from_scale(w as f32 / size.width(), h as f32 / size.height());
+    render_tree(&tree, w, h, scale)
+}
+
+/// Render an SVG document at `w` x `h` without distorting it: scaled uniformly to fit, and
+/// centred, with the rest of the pixmap left transparent. What an export wants where the
+/// size is fixed and the drawing's proportions are not (a square favicon of a wide logo).
+pub fn render_contained(svg: &str, w: u32, h: u32) -> Result<Vec<u8>, String> {
+    let tree = parse_tree(svg)?;
+    let size = tree.size();
+    let k = (w as f32 / size.width()).min(h as f32 / size.height());
+    let (dx, dy) = (
+        (w as f32 - size.width() * k) / 2.0,
+        (h as f32 - size.height() * k) / 2.0,
+    );
+    render_tree(
+        &tree,
+        w,
+        h,
+        tiny_skia::Transform::from_row(k, 0.0, 0.0, k, dx, dy),
+    )
+}
+
+/// The document's canvas, width by height, in its own user units.
+pub fn canvas_size(svg: &str) -> Result<(f32, f32), String> {
+    let size = parse_tree(svg)?.size();
+    Ok((size.width(), size.height()))
+}
+
+fn parse_tree(svg: &str) -> Result<usvg::Tree, String> {
     // No font database is loaded on purpose: the tracer never writes <text>, and a render
     // that silently substituted a font would be comparing against something the SVG does
     // not actually say.
@@ -172,10 +201,21 @@ pub fn render(svg: &str, w: u32, h: u32) -> Result<Vec<u8>, String> {
     if size.width() <= 0.0 || size.height() <= 0.0 {
         return Err("the SVG declares an empty canvas".into());
     }
+    Ok(tree)
+}
+
+fn render_tree(
+    tree: &usvg::Tree,
+    w: u32,
+    h: u32,
+    transform: tiny_skia::Transform,
+) -> Result<Vec<u8>, String> {
+    if w == 0 || h == 0 {
+        return Err("cannot render to a zero-sized pixmap".into());
+    }
     let mut pixmap =
         tiny_skia::Pixmap::new(w, h).ok_or_else(|| format!("{w}x{h} is too large to render"))?;
-    let scale = tiny_skia::Transform::from_scale(w as f32 / size.width(), h as f32 / size.height());
-    resvg::render(&tree, scale, &mut pixmap.as_mut());
+    resvg::render(tree, transform, &mut pixmap.as_mut());
 
     // tiny-skia stores premultiplied RGBA; the comparison wants straight.
     let mut out = Vec::with_capacity((w as usize) * (h as usize) * 4);

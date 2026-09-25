@@ -22,7 +22,7 @@ use inkvec_fit::{
     FittedPath,
 };
 
-use crate::emit::{fmt_segments, ring_to_segments};
+use crate::pathdata::{fmt_segments, ring_to_segments};
 use crate::FaceRings;
 
 /// How far a harmonized shape may stray from the boundary its own pixels put it at, in

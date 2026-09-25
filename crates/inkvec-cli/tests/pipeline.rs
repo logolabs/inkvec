@@ -201,6 +201,93 @@ fn degenerate_sizes_and_full_transparency_do_not_fail() {
     assert!(trace_image(clear, &Args::default()).is_ok());
 }
 
+/// Three pie slices side by side on white, anti-aliased as a renderer would draw them.
+const SLICES: [[f32; 3]; 3] = [[0.9, 0.1, 0.1], [0.1, 0.2, 0.9], [0.1, 0.7, 0.2]];
+
+fn pie3() -> Rgba {
+    const SS: usize = 4;
+    image(64, 64, |x, y| {
+        let mut acc = [0.0f32; 3];
+        for sy in 0..SS {
+            for sx in 0..SS {
+                let px = x as f32 + (sx as f32 + 0.5) / SS as f32 - 32.0;
+                let py = y as f32 + (sy as f32 + 0.5) / SS as f32 - 32.0;
+                let c = if px.hypot(py) > 26.0 {
+                    [1.0; 3]
+                } else {
+                    // Spokes at 10, 130 and 250 degrees, so none runs along a pixel row.
+                    let a = (py.atan2(px).to_degrees() - 10.0).rem_euclid(360.0);
+                    SLICES[(a / 120.0) as usize % 3]
+                };
+                for k in 0..3 {
+                    acc[k] += c[k] / (SS * SS) as f32;
+                }
+            }
+        }
+        [acc[0], acc[1], acc[2], 1.0]
+    })
+}
+
+/// Distance from `p` to the nearest blend of two slice colours.
+fn off_blends(p: [f32; 3]) -> f32 {
+    let mut best = f32::INFINITY;
+    for (i, a) in SLICES.iter().enumerate() {
+        for b in &SLICES[i + 1..] {
+            let ab: Vec<f32> = (0..3).map(|k| b[k] - a[k]).collect();
+            let den: f32 = ab.iter().map(|v| v * v).sum();
+            let t = ((0..3).map(|k| (p[k] - a[k]) * ab[k]).sum::<f32>() / den).clamp(0.0, 1.0);
+            let d = (0..3)
+                .map(|k| (p[k] - a[k] - t * ab[k]).powi(2))
+                .sum::<f32>()
+                .sqrt();
+            best = best.min(d);
+        }
+    }
+    best
+}
+
+/// Two fills that share an edge and are painted side by side each cover half of the pixel
+/// the edge crosses, and the renderer composites those halves one after the other, so a
+/// quarter of whatever lies beneath -- here the white canvas -- shows through as a pale
+/// hairline along every spoke. Along the spokes, clear of the six pixels at each end over
+/// which the fix tapers in from the junctions, every rendered pixel has to be a blend of two
+/// slice colours, at any zoom.
+#[test]
+fn pie_slices_side_by_side_show_no_background_at_their_shared_edges() {
+    let svg = traced_svg(pie3(), &Args::default());
+    for size in [64usize, 88, 150, 192] {
+        let r = inkvec_sr::detect::render_svg(&svg, size, size).expect("the SVG renders");
+        let s = size as f32 / 64.0;
+        let mut worst = (0.0f32, 0, 0);
+        for y in 0..size {
+            for x in 0..size {
+                // Pixel centre in traced-image coordinates (the viewBox starts at -0.5).
+                let px = (x as f32 + 0.5) / s - 0.5 - 31.5;
+                let py = (y as f32 + 0.5) / s - 0.5 - 31.5;
+                let rad = px.hypot(py);
+                if !(7.0..19.0).contains(&rad) {
+                    continue;
+                }
+                let i = (y * size + x) * 4;
+                let d = off_blends([r.data[i], r.data[i + 1], r.data[i + 2]]);
+                if d > worst.0 {
+                    worst = (d, x, y);
+                }
+            }
+        }
+        // Unmended the worst pixel is 0.29 off at every size. At the traced size the
+        // half-pixel reach leaves a sixteenth of the canvas there (0.07); at 1.4x it leaves
+        // 0.03, and from 2x up nothing.
+        let limit = if size == 64 { 0.12 } else { 0.05 };
+        assert!(
+            worst.0 < limit,
+            "at {size}px the canvas shows through a spoke: {:.3} off every blend at {:?}\n{svg}",
+            worst.0,
+            (worst.1, worst.2)
+        );
+    }
+}
+
 /// `--max-dim` writes the geometry in capped space but presents it at the arrival size: the
 /// `viewBox` shrinks to the capped raster while `width`/`height` keep the size that arrived.
 #[test]

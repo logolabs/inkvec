@@ -29,14 +29,17 @@ mod args;
 mod editable;
 mod emit;
 mod harmonize;
+mod pathdata;
 mod post;
 mod rings;
+mod seams;
 mod uncertainty;
 
 use alpha::{alpha_source, pixel_grid, AlphaSource, FaceAlpha};
 pub use args::Args;
 use args::{parse_args, usage};
-use emit::{emit_bilevel, emit_color, emit_decimals, fmt_fitted};
+use emit::{emit_bilevel, emit_color, emit_decimals};
+use pathdata::fmt_fitted;
 pub use post::post_process;
 use post::retarget;
 use rings::repair_ring_crossings;

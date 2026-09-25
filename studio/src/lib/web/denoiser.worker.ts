@@ -32,7 +32,14 @@ let sha256 = "";
 let module: Promise<DenoiseModule> | null = null;
 
 function denoise(): Promise<DenoiseModule> {
-  module ??= import(/* @vite-ignore */ new URL(`denoise.js${token ? `?v=${token}` : ""}`, base).href) as Promise<DenoiseModule>;
+  if (!module) {
+    module = import(/* @vite-ignore */ new URL(`denoise.js${token ? `?v=${token}` : ""}`, base).href) as Promise<DenoiseModule>;
+    // A failed fetch is not kept: the next request tries again rather than failing for the
+    // rest of the session.
+    module.catch(() => {
+      module = null;
+    });
+  }
   return module;
 }
 
@@ -75,8 +82,10 @@ scope.onmessage = (e: MessageEvent) => {
   const m = e.data;
   if (m.type === "init") {
     ({ base, token, url, sha256 } = m);
+  }
+  if (m.type === "init" || m.type === "port") {
     // The engine's requests arrive on their own port, so a download in progress here never
-    // queues behind them or they behind it.
+    // queues behind them or they behind it. A replacement engine sends a new one.
     (m.port as MessagePort).onmessage = (ev: MessageEvent) => {
       if (ev.data?.type === "run") void runOnce(ev.data);
     };

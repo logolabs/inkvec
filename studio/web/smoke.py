@@ -45,6 +45,20 @@ def wait_final(page: Page, timeout: float = 180) -> float:
     raise TimeoutError("no final trace")
 
 
+def idle(page: Page, timeout: float = 180) -> None:
+    """Wait until the settle timer has fired and the backend has nothing running or queued."""
+    t0 = time.perf_counter()
+    quiet = 0
+    while time.perf_counter() - t0 < timeout:
+        busy = page.evaluate("(() => { const b = window.__inkvecStudioLite; return Boolean(b.running) || b.queue.length > 0; })()")
+        quiet = 0 if busy else quiet + 1
+        # 1.2 s of quiet covers the 800 ms settle before the final is queued.
+        if quiet >= 12:
+            return
+        page.wait_for_timeout(100)
+    raise TimeoutError("the backend did not go quiet")
+
+
 def flow(page: Page, url: str, out: pathlib.Path, note) -> None:
     t0 = time.perf_counter()
     page.goto(url)
@@ -73,21 +87,17 @@ def flow(page: Page, url: str, out: pathlib.Path, note) -> None:
     page.click("[data-ctl=wiz-close]")
     page.wait_for_timeout(300)
 
-    # A preset change: a draft at once, the final once the controls settle.
+    # A preset change: a draft at once, the final once the controls settle (for an image no
+    # larger than the draft size, the draft is the final and the final comes from the cache).
     t0 = time.perf_counter()
     page.keyboard.press("Control+2")
-    saw_draft = False
-    for _ in range(200):
-        if page.evaluate("/draft · \\d+ px/.test(document.body.innerText)"):
-            saw_draft = True
-            break
-        page.wait_for_timeout(25)
-    draft_at = time.perf_counter() - t0
-    wait_final(page)
-    note(f"preset change: draft {'seen' if saw_draft else 'NOT seen'} at {draft_at:.2f}s, final at {time.perf_counter() - t0:.2f}s")
+    page.wait_for_timeout(300)
+    idle(page)
+    note(f"preset change (Icon): settled at {time.perf_counter() - t0:.2f}s")
     page.screenshot(path=str(out / "04-after-preset.png"))
     page.keyboard.press("Control+1")
-    wait_final(page)
+    page.wait_for_timeout(300)
+    idle(page)
 
     # Colour groups: tick two inks and merge them.
     inks = page.locator(".inklist .ink .inkpick")

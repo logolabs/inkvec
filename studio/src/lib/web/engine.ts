@@ -26,7 +26,8 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 
 import { download } from "./files";
 
-type Priority = 0 | 1 | 2;
+/** -1 is reserved for putting the image back into a fresh worker, ahead of everything. */
+type Priority = -1 | 0 | 1 | 2;
 
 interface Job {
   id: number;
@@ -35,6 +36,8 @@ interface Job {
   /** Jobs of one kind that replace each other: a newer one drops an older one not yet started. */
   kind?: "trace" | "preview" | "fab";
   payload: Record<string, unknown>;
+  /** When the worker was handed it (performance.now()), once it has been. */
+  started?: number;
   resolve: (v: unknown) => void;
   reject: (e: Error) => void;
 }
@@ -97,7 +100,13 @@ class WebBackend {
     if (isolated) {
       const channel = new MessageChannel();
       engineEnd = channel.port1;
-      this.denoiserPort = channel.port2;
+      if (this.denoiser) {
+        // A replacement engine (after a crash or a preemption): the denoiser worker keeps
+        // its loaded session and listens on the new engine's port instead.
+        this.denoiser.postMessage({ type: "port", port: channel.port2 }, [channel.port2]);
+      } else {
+        this.denoiserPort = channel.port2;
+      }
     }
 
     this.ready = new Promise((resolve, reject) => {
@@ -140,7 +149,11 @@ class WebBackend {
     return this.ready ?? this.start();
   }
 
-  /** The worker trapped (a panic, memory): start a fresh one and put the image back. */
+  /**
+   * Replace the worker: it trapped (a panic, memory), or it is busy with a wizard preview
+   * nobody wants any more. A fresh one is started and the image put back first; whatever
+   * was queued runs after it.
+   */
   private crashed(message: string): void {
     const running = this.running;
     this.running = null;
@@ -148,10 +161,13 @@ class WebBackend {
     this.worker = null;
     this.ready = null;
     if (running) running.reject(new Error(message));
+    // An image that takes the engine down while it is being opened is not put back into
+    // the next one, or the two would take turns for ever.
+    if (running?.op === "open_bytes") this.source = null;
     const reopen = this.source;
     void this.whenReady().then(async () => {
       if (reopen) {
-        await this.enqueue("open_bytes", 0, { bytes: reopen.bytes.slice(), name: reopen.name }).catch(() => {});
+        await this.enqueue("open_bytes", -1, { bytes: reopen.bytes.slice(), name: reopen.name }).catch(() => {});
       }
       this.pump();
     });
@@ -206,6 +222,7 @@ class WebBackend {
       return this.pump();
     }
     this.running = job;
+    job.started = performance.now();
     const transfer: Transferable[] = [];
     if (job.op === "open_bytes") transfer.push((job.payload.bytes as Uint8Array).buffer);
     this.worker.postMessage({ type: "job", id: job.id, op: job.op, ...job.payload }, transfer);
@@ -309,10 +326,18 @@ class WebBackend {
         );
         return generation;
       }
-      case "cancel_previews":
+      case "cancel_previews": {
         this.previewGeneration++;
         this.queue = this.queue.filter((j) => (j.kind === "preview" ? (j.resolve(null), false) : true));
+        // The desktop lets a retired preview run to its end on its thread. Here it would
+        // hold the only worker, and a line-art preview is seconds of it: past half a
+        // second, starting a fresh worker (about as long again) is the quicker way back.
+        const running = this.running;
+        if (running?.op === "preview" && running.started !== undefined && performance.now() - running.started > 500) {
+          this.crashed("superseded by a newer request");
+        }
         return null;
+      }
 
       case "source_facts":
       case "trace_bands":

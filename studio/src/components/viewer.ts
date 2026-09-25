@@ -212,6 +212,8 @@ export function createViewer(store: Store): Viewer {
     sourceLabel.textContent = c ? c.label : "Source";
     vectorLabel.textContent = c ? "Yours" : "Vector · SVG";
     sourcePane.classList.toggle("comparing", Boolean(c));
+    const t = `translate(${store.state.pan.x}px, ${store.state.pan.y}px)`;
+    (c ? compareArt : sourceArt).style.transform = t;
     sizeCompare();
   }
 
@@ -464,7 +466,8 @@ export function createViewer(store: Store): Viewer {
     // The transform still carries the pan, which is a translate and composites
     // correctly, so dragging stays a single cheap write per frame.
     const t = `translate(${st.pan.x}px, ${st.pan.y}px)`;
-    for (const node of [sourceArt, compareArt, vectorArt]) {
+    // The comparison only follows the view while it is shown; it is placed when it appears.
+    for (const node of shownCompare ? [compareArt, vectorArt] : [sourceArt, vectorArt]) {
       node.style.transform = t;
     }
 

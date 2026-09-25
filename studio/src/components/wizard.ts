@@ -729,7 +729,9 @@ export function createWizard(store: Store, host: HTMLElement, act: WizardActions
       const r = st.auto?.report;
       return r
         ? { url: autoThumb(), text: `${de00(r.meanDe00)} dE00 · ${count(r.paths)} paths · ${bytes(r.bytes)}`, busy: false }
-        : { url: null, text: "tracing…", busy: true };
+        : st.tracing
+          ? { url: null, text: "tracing…", busy: true }
+          : { url: null, text: "no trace yet", busy: false };
     }
     const p = t.settings ? previews.get(previewKey(t.settings)) : undefined;
     if (!p || p.state === "queued") return { url: null, text: st.auto?.report ? "queued" : "after Auto", busy: true };
@@ -773,7 +775,8 @@ export function createWizard(store: Store, host: HTMLElement, act: WizardActions
     }
     // Ask for what is missing: drafts of each tile, one at a time, behind the main trace.
     // Not before Auto has landed, so they never delay the trace somebody is waiting for.
-    if (store.state.auto?.report) {
+    const st = store.state;
+    if (!(st.auto && !st.auto.report && st.tracing)) {
       previews.want(
         list.filter((t) => t.settings && !sameAsAuto(t)).map((t) => ({ key: previewKey(t.settings!), settings: t.settings! })),
       );
@@ -802,6 +805,22 @@ export function createWizard(store: Store, host: HTMLElement, act: WizardActions
 
   function open(): void {
     if (sheet) return;
+    // Opened on a drawing no automatic trace started (the Minify tab's rebuild): the drawing
+    // on screen is the one to start from and compare with.
+    if (!store.state.auto && store.state.svg && store.state.report && !store.state.tracing) {
+      const now = store.state;
+      store.set({
+        auto: {
+          generation: now.resultGeneration,
+          settings: { ...now.settings },
+          preset: now.preset,
+          svg: now.svg,
+          report: now.report,
+          palette: now.palette,
+          losses: now.losses,
+        },
+      });
+    }
     const st = store.state;
     snapshot = { settings: { ...st.settings }, preset: st.preset, colourGroups: [...st.colourGroups] };
     viewBefore = st.view;

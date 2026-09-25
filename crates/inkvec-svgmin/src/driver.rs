@@ -15,6 +15,28 @@ use inkvec_fit::primitives::PrimitiveKind;
 use inkvec_fit::FitConfig;
 
 /// The longer side of the drawing in its own units: from `viewBox`, else `width`/`height`.
+/// The edits in document order with no two overlapping, keeping the enclosing one.
+///
+/// Every edit names a byte range of the original text, and they are applied back to front so
+/// the ranges still point where they meant to. That only holds while no two overlap: an edit
+/// inside another shortens the text the outer one then cuts with its original range, and the
+/// cut runs on into whatever follows. A `<metadata>` block removed whole while an empty
+/// attribute inside it was removed too took the next `<path d="M...` with it, and the drawing
+/// with that. Where two overlap, the outer edit already decides everything inside it.
+fn disjoint(mut edits: Vec<(Range<usize>, String)>) -> Vec<(Range<usize>, String)> {
+    edits.sort_by(|a, b| a.0.start.cmp(&b.0.start).then(b.0.end.cmp(&a.0.end)));
+    let mut out: Vec<(Range<usize>, String)> = Vec::with_capacity(edits.len());
+    for e in edits {
+        match out.last() {
+            // An empty range at the very end of the previous edit is an insertion there,
+            // not an overlap.
+            Some(last) if e.0.start < last.0.end => continue,
+            _ => out.push(e),
+        }
+    }
+    out
+}
+
 fn extent(root: roxmltree::Node) -> Option<f64> {
     if let Some(vb) = root.attribute("viewBox") {
         let v: Vec<f64> = vb
@@ -321,8 +343,7 @@ pub(crate) fn run(svg: &str, opts: &Options, fit: bool) -> Result<(String, Repor
     }
 
     let mut out = svg.to_string();
-    edits.sort_by_key(|e| std::cmp::Reverse(e.0.start));
-    for (range, text) in edits {
+    for (range, text) in disjoint(edits).into_iter().rev() {
         out.replace_range(range, &text);
     }
     if opts.document {
@@ -373,5 +394,50 @@ mod tests {
             .find(|n| n.tag_name().name() == "path")
             .unwrap();
         assert!((node_scale(node) - 10.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn overlapping_edits_keep_the_outer_one() {
+        let e = |a: usize, b: usize, t: &str| (a..b, t.to_string());
+        let kept = disjoint(vec![
+            e(12, 20, ""),
+            e(10, 40, ""),
+            e(40, 40, "x"),
+            e(50, 55, "y"),
+        ]);
+        assert_eq!(kept, vec![e(10, 40, ""), e(40, 40, "x"), e(50, 55, "y")]);
+    }
+
+    /// The tracer's own header, as 0.1.6 writes it: a comment and an RDF block whose
+    /// `rdf:Description` carries an empty `rdf:about`. Removing the block and that attribute
+    /// both used to shift the first path's text away, `d="M710` and all.
+    #[test]
+    fn a_metadata_block_with_empty_attributes_leaves_the_paths_whole() {
+        let svg = concat!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"-0.5 -0.5 100 100\">\n",
+            "<!-- Generator: Inkvec (https://logolabs.org) -->\n",
+            "<metadata><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" ",
+            "xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><rdf:Description rdf:about=\"\">",
+            "<dc:creator>Inkvec</dc:creator></rdf:Description></rdf:RDF></metadata>",
+            "<path id=\"black-1\" d=\"M10,10L90,10L90,90L10,90Z\" fill=\"#101010\"/>",
+            "<path id=\"grey-2\" d=\"M20,20L80,20L80,80Z\" fill=\"#121212\"/></svg>\n",
+        );
+        for fit in [false, true] {
+            let (out, _) = run(svg, &Options::default(), fit).expect("minifies");
+            let doc = roxmltree::Document::parse(&out).unwrap_or_else(|e| panic!("{e}: {out}"));
+            // Fitting may redraw the square as a `<rect>`; either way both shapes survive.
+            let drawn: Vec<_> = doc
+                .descendants()
+                .filter(|n| matches!(n.tag_name().name(), "path" | "rect"))
+                .collect();
+            assert_eq!(drawn.len(), 2, "{out}");
+            for p in drawn.iter().filter(|n| n.tag_name().name() == "path") {
+                assert!(
+                    p.attribute("d").is_some_and(|d| d.starts_with('M')),
+                    "{out}"
+                );
+            }
+            assert!(!out.contains("metadata") && !out.contains("<!--"), "{out}");
+        }
     }
 }

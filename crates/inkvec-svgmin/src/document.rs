@@ -475,7 +475,17 @@ pub(crate) fn edits(
         .descendants()
         .any(|n| n.tag_name().name() == "style" && n.is_element());
 
+    // Nodes removed whole: nothing inside one is edited, since its text is going anyway and
+    // an edit inside a removed range shifts every byte the removal was measured against.
+    let dropped = |n: roxmltree::Node| {
+        n.is_element()
+            && (INERT.contains(&n.tag_name().name())
+                || (n.tag_name().name() == "desc" && is_boilerplate_desc(n)))
+    };
     for node in doc.descendants() {
+        if node.ancestors().skip(1).any(dropped) {
+            continue;
+        }
         if node.is_comment() || node.is_pi() {
             let r = node.range();
             if clear(&r) {

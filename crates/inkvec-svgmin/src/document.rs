@@ -457,6 +457,13 @@ fn overrides_an_ancestor(node: roxmltree::Node, name: &str, value: &str) -> bool
         .is_some_and(|inherited| inherited.trim() != value)
 }
 
+/// An element [`edits`] removes whole: editor metadata, or a `<desc>` that is boilerplate.
+fn removed_whole(n: roxmltree::Node) -> bool {
+    n.is_element()
+        && (INERT.contains(&n.tag_name().name())
+            || (n.tag_name().name() == "desc" && is_boilerplate_desc(n)))
+}
+
 /// The edits this module wants to make to `svg`, as byte ranges to replace.
 ///
 /// `taken` are ranges another pass has already claimed (a rewritten path, an element
@@ -475,15 +482,10 @@ pub(crate) fn edits(
         .descendants()
         .any(|n| n.tag_name().name() == "style" && n.is_element());
 
-    // Nodes removed whole: nothing inside one is edited, since its text is going anyway and
-    // an edit inside a removed range shifts every byte the removal was measured against.
-    let dropped = |n: roxmltree::Node| {
-        n.is_element()
-            && (INERT.contains(&n.tag_name().name())
-                || (n.tag_name().name() == "desc" && is_boilerplate_desc(n)))
-    };
     for node in doc.descendants() {
-        if node.ancestors().skip(1).any(dropped) {
+        // Nothing inside an element removed whole is edited: its text is going anyway, and an
+        // edit inside a removed range shifts every byte the removal was measured against.
+        if node.ancestors().skip(1).any(removed_whole) {
             continue;
         }
         if node.is_comment() || node.is_pi() {

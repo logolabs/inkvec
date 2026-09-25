@@ -301,7 +301,8 @@ pub(crate) fn annotate(svg: String) -> String {
     let Some(pos) = svg.find('>') else {
         return svg;
     };
-    let mut out = String::with_capacity(svg.len() + GENERATOR_COMMENT.len() + METADATA_BLOCK.len() + 2);
+    let mut out =
+        String::with_capacity(svg.len() + GENERATOR_COMMENT.len() + METADATA_BLOCK.len() + 2);
     out.push_str(&svg[..pos + 1]);
     out.push('\n');
     out.push_str(GENERATOR_COMMENT);

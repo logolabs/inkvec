@@ -217,6 +217,13 @@ pub const BLEND_STRADDLE_FRACTION: f32 = 0.5;
 /// differ by more than a few levels.
 pub(crate) const STRADDLE_STEP: f32 = 0.12;
 
+/// The fewest strided pixels one rayon task takes in the palette's per-candidate passes.
+/// Those passes run hundreds of times per palette over a few thousand samples each, and
+/// splitting them finer than this spends more on scheduling than on the pixels. The
+/// reductions are integer counts and order-keeping collects, so the split does not
+/// change a result.
+pub(crate) const PAR_MIN_LEN: usize = 8192;
+
 /// What fraction of the pixels `c` would claim sit between a pixel nearer ink `a` and a
 /// pixel nearer ink `b`? See [`BLEND_STRADDLE_FRACTION`].
 ///
@@ -266,26 +273,26 @@ fn straddle_fraction(
     // the far side is judged by the step, the near side by half the room that is left.
     let step_lo = STRADDLE_STEP.min(0.5 * tc).max(0.02);
     let step_hi = STRADDLE_STEP.min(0.5 * (1.0 - tc)).max(0.02);
-    let mask: Vec<bool> = lab
-        .par_iter()
-        .zip(nearest.par_iter())
-        .map(|(&p, &n)| p.dist(c) < n)
-        .collect();
     // Each pixel's position along the axis, from its *cached* colour rather than
     // by converting it here. `t_of` costs an oklab_to_rgb and, in linear space,
     // three powf calls, and it was being paid per pixel per candidate per pair --
     // 200 million cube roots on a 512 px input, which is where the palette stage's
     // 36 seconds went. The pixel's own colour does not depend on the pair, so it
     // is converted once for the whole image in `extract_palette_mdl`.
+    //
+    // Territory and axis position are both evaluated only where the reduction reads
+    // them -- the sampled pixels inside the candidate's territory and their neighbours
+    // -- rather than as two whole-image arrays built per call.
     let px: &[[f32; 3]] = if linear { px_lin } else { px_srgb };
-    let t: Vec<f32> = px
-        .par_iter()
-        .map(|p| ((p[0] - pa[0]) * d[0] + (p[1] - pa[1]) * d[1] + (p[2] - pa[2]) * d[2]) / dd)
-        .collect();
+    let t = |j: usize| {
+        let p = px[j];
+        ((p[0] - pa[0]) * d[0] + (p[1] - pa[1]) * d[1] + (p[2] - pa[2]) * d[2]) / dd
+    };
     let (total, straddle) = (0..width * height)
         .into_par_iter()
         .step_by(stride_px)
-        .filter(|&i| mask[i])
+        .with_min_len(PAR_MIN_LEN)
+        .filter(|&i| lab[i].dist(c) < nearest[i])
         .map(|i| {
             let (x, y) = (i % width, i / width);
             let (mut lower, mut higher) = (false, false);
@@ -295,7 +302,7 @@ fn straddle_fraction(
                     if nx < 0 || ny < 0 || nx >= width as isize || ny >= height as isize {
                         continue;
                     }
-                    let tn = t[ny as usize * width + nx as usize];
+                    let tn = t(ny as usize * width + nx as usize);
                     lower |= tn < tc - step_lo;
                     higher |= tn > tc + step_hi;
                 }
@@ -570,23 +577,22 @@ fn interior_fraction(
         // falls back on its other evidence rather than discarding the colour.
         return 1.0;
     }
-    let mask: Vec<bool> = lab
-        .par_iter()
-        .zip(nearest.par_iter())
-        .map(|(&p, &d)| p.dist(c) < d)
-        .collect();
+    // Evaluated only where the reduction reads it: the sampled pixels and their four
+    // neighbours, not as a whole-image array built per call.
+    let mask = |i: usize| lab[i].dist(c) < nearest[i];
     let (total, interior) = (0..width * height)
         .into_par_iter()
         .step_by(stride_px)
-        .filter(|&i| mask[i])
+        .with_min_len(PAR_MIN_LEN)
+        .filter(|&i| mask(i))
         .map(|i| {
             let (x, y) = (i % width, i / width);
             // A border pixel has no neighbour outside the image to disqualify it; treat
             // the outside as matching, so a region touching the edge is not penalised.
-            let ok = (x == 0 || mask[i - 1])
-                && (x + 1 == width || mask[i + 1])
-                && (y == 0 || mask[i - width])
-                && (y + 1 == height || mask[i + width]);
+            let ok = (x == 0 || mask(i - 1))
+                && (x + 1 == width || mask(i + 1))
+                && (y == 0 || mask(i - width))
+                && (y + 1 == height || mask(i + width));
             (1u32, ok as u32)
         })
         .reduce(|| (0u32, 0u32), |a, b| (a.0 + b.0, a.1 + b.1));
@@ -594,6 +600,15 @@ fn interior_fraction(
         return 0.0;
     }
     interior as f32 / total as f32
+}
+
+/// `INKVEC_BLEND_TMIN`: how far inside a chord a blend must lie. Read once per palette,
+/// not once per ink pair: an environment read costs microseconds when every core asks.
+pub(crate) fn blend_tmin() -> f32 {
+    std::env::var("INKVEC_BLEND_TMIN")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.04)
 }
 
 /// Is `c` explained as a mixture of two colours already accepted?
@@ -612,7 +627,14 @@ fn interior_fraction(
 /// found in linear light. A pale pink is within tolerance of the white–grey axis as well
 /// as the white–red one, and only the pair its pixels actually lie between can say
 /// whether it straddles them; the caller tries them all.
-fn blend_pairs(c: Oklab, accepted: &[Oklab], tol: f32) -> Vec<(usize, usize, bool, f32)> {
+///
+/// `tmin` is [`blend_tmin`], read once per palette by the caller.
+fn blend_pairs(
+    c: Oklab,
+    accepted: &[Oklab],
+    tol: f32,
+    tmin: f32,
+) -> Vec<(usize, usize, bool, f32)> {
     let mut out: Vec<(usize, usize, bool, f32)> = Vec::new();
     if accepted.len() < 2 {
         return out;
@@ -641,10 +663,6 @@ fn blend_pairs(c: Oklab, accepted: &[Oklab], tol: f32) -> Vec<(usize, usize, boo
                 let t = ((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1] + (p[2] - a[2]) * d[2]) / dd;
                 // Only interior mixtures count; t outside (0, 1) is a different colour,
                 // not a blend of these two.
-                let tmin: f32 = std::env::var("INKVEC_BLEND_TMIN")
-                    .ok()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(0.04);
                 if !(tmin..=1.0 - tmin).contains(&t) {
                     continue;
                 }
@@ -851,29 +869,28 @@ fn claim_spread(
 ) -> (usize, f32) {
     const MAX_SAMPLES: usize = 8192;
     let stride = (lab.len() / MAX_SAMPLES).max(1);
-    // Every core, in two ordered passes. rayon's collect keeps sequential order, so
-    // `d_in` and therefore its median are exactly what one thread would have produced.
-    let n = (0..lab.len())
+    // Every core, in one ordered pass: territory count and spread sample test the same
+    // distance at the same pixels. rayon's collect keeps sequential order, so `d_in` and
+    // therefore its median are exactly what one thread would have produced.
+    let claimed: Vec<(usize, f32)> = (0..lab.len())
         .into_par_iter()
         .step_by(stride_px)
-        .filter(|&i| lab[i].dist(c) < nearest_px[i])
-        .count();
+        .with_min_len(PAR_MIN_LEN)
+        .filter_map(|i| {
+            let dist = lab[i].dist(c);
+            (dist < nearest_px[i]).then_some((i, dist))
+        })
+        .collect();
+    let n = claimed.len();
     // Members, not territory. Territory is whatever has no closer ink yet, which
     // for the first candidate is the whole image, and a spread measured over that
     // is the mean distance from every pixel to white -- enormous, and it rejected
     // every colour after the first. Measured: the screen set went from 0.4328 to
     // 1.2461 before this was restricted to `tol`.
-    let mut d_in: Vec<f32> = (0..lab.len())
-        .into_par_iter()
-        .step_by(stride_px)
-        .filter_map(|i| {
-            let dist = lab[i].dist(c);
-            if dist < nearest_px[i] && dist < tol && i % stride == 0 {
-                Some(dist)
-            } else {
-                None
-            }
-        })
+    let mut d_in: Vec<f32> = claimed
+        .iter()
+        .filter(|&&(i, dist)| dist < tol && i % stride == 0)
+        .map(|&(_, dist)| dist)
         .collect();
     // `n` is compared against absolute pixel counts downstream, so a strided
     // visit is scaled back up to estimate what a full one would have counted.
@@ -1013,6 +1030,21 @@ pub fn extract_palette_mdl(
     // Distance from each pixel to the nearest ink accepted so far, so a candidate's own
     // territory can be read off without rescanning the whole palette.
     let mut nearest_px: Vec<f32> = vec![f32::INFINITY; lab.len()];
+    // The knobs below are read once per palette rather than once per candidate.
+    let noise_sigmas = std::env::var("INKVEC_NOISE_SIGMAS")
+        .ok()
+        .and_then(|v| v.parse::<f32>().ok())
+        .unwrap_or(noise_sigmas);
+    let same_ink_de00 = std::env::var("INKVEC_SAME_INK_DE00")
+        .ok()
+        .and_then(|v| v.parse::<f32>().ok())
+        .unwrap_or(same_ink_de00);
+    let paldbg = std::env::var("INKVEC_PALDBG").is_ok();
+    let de00_radius = std::env::var("INKVEC_MERGE_DE00")
+        .ok()
+        .and_then(|v| v.parse::<f32>().ok());
+    let ink_escape = std::env::var_os("INKVEC_NO_INK_ESCAPE").is_none();
+    let blend_tmin = blend_tmin();
     for (n, _key, c) in &modes {
         if colors.len() >= max_colors {
             break;
@@ -1043,11 +1075,7 @@ pub fn extract_palette_mdl(
         // nothing changes; on a degraded or upscaled input it grows, and it grows most
         // where the colour space is most stretched, which is where the spurious inks were.
         // Apart by more than their own spread, or they are one ink measured twice.
-        let k = std::env::var("INKVEC_NOISE_SIGMAS")
-            .ok()
-            .and_then(|v| v.parse::<f32>().ok())
-            .unwrap_or(noise_sigmas);
-        let reach = k * spread;
+        let reach = noise_sigmas * spread;
         // Two inks nobody can tell apart are one ink. Decided perceptually, before any
         // description-length argument, because the argument counts pixels and pixels
         // are exactly what an anti-aliasing ramp near an ink has plenty of.
@@ -1057,18 +1085,14 @@ pub fn extract_palette_mdl(
                 .unwrap_or(std::cmp::Ordering::Equal)
         }) {
             let perceptual = de00(oklab_to_rgb(*c), oklab_to_rgb(near_ink));
-            let floor = std::env::var("INKVEC_SAME_INK_DE00")
-                .ok()
-                .and_then(|v| v.parse::<f32>().ok())
-                .unwrap_or(same_ink_de00);
-            if perceptual < floor {
-                if std::env::var("INKVEC_PALDBG").is_ok() {
+            if perceptual < same_ink_de00 {
+                if paldbg {
                     eprintln!(
                         "  cand {:<9} same ink as {} (dE00 {:.2} < {})",
                         to_hex(oklab_to_rgb(*c)),
                         to_hex(oklab_to_rgb(near_ink)),
                         perceptual,
-                        floor
+                        same_ink_de00
                     );
                 }
                 continue;
@@ -1089,9 +1113,6 @@ pub fn extract_palette_mdl(
         // switching the palette to plain sRGB instead (`INKVEC_PALETTE_RGB`) cost +15%
         // parameters and +1% colour on JPEG q40 and changed nothing on clean input, which
         // is why the space is not the lever and the metric might be.
-        let de00_radius = std::env::var("INKVEC_MERGE_DE00")
-            .ok()
-            .and_then(|v| v.parse::<f32>().ok());
         let merged = if let Some(rad) = de00_radius {
             let d = colors
                 .iter()
@@ -1108,7 +1129,7 @@ pub fn extract_palette_mdl(
             // enough pixels, separated far enough above the noise, that explaining them
             // with the nearest ink would cost more residual than a new ink costs to state.
             let worth_it = sigma_noise > 0.0
-                && std::env::var_os("INKVEC_NO_INK_ESCAPE").is_none()
+                && ink_escape
                 && nearest > JND_FLOOR
                 && nearest > reach
                 && 0.5 * (claim as f64) * ((nearest as f64 / sigma_noise).powi(2))
@@ -1122,7 +1143,7 @@ pub fn extract_palette_mdl(
         // colour — unless it covers too much of the image to be a boundary effect.
         // Explained as a blend of inks already accepted *and* shaped like a boundary
         // band rather than a region: coverage evidence, not a new colour.
-        let pairs = blend_pairs(*c, &colors, merge_distance * 1.6);
+        let pairs = blend_pairs(*c, &colors, merge_distance * 1.6, blend_tmin);
         let blend = !pairs.is_empty();
         // How far the candidate sits from the nearest chord between two accepted inks.
         // Zero means it lies exactly on the line between them, which in a three-dimensional
@@ -1136,9 +1157,11 @@ pub fn extract_palette_mdl(
         } else {
             1.0
         };
+        // The pairs on every core: each is a count ratio and a max of finite values does
+        // not depend on the order it is taken in.
         let straddle = if blend && interior < BLEND_INTERIOR_FRACTION {
             pairs
-                .iter()
+                .par_iter()
                 .map(|&(i, j, linear, _off)| {
                     straddle_fraction(
                         &lab,
@@ -1154,7 +1177,7 @@ pub fn extract_palette_mdl(
                         stride_px,
                     )
                 })
-                .fold(0.0f32, f32::max)
+                .reduce(|| 0.0f32, f32::max)
         } else {
             0.0
         };
@@ -1162,7 +1185,7 @@ pub fn extract_palette_mdl(
         // palette bug downstream — the green-circle case surfaced as a spurious radial
         // gradient and twenty-seven junk paths — so the decision has to be readable
         // directly. `INKVEC_PALDBG=1`.
-        if std::env::var("INKVEC_PALDBG").is_ok() {
+        if paldbg {
             eprintln!(
                 "  cand {:<9} bin={:<6} claim={:<6} w={:.4} sig={:.5} reach={:.4} near={:.4} blend={} chord={:.4} interior={:.3} straddle={:.3}",
                 to_hex(oklab_to_rgb(*c)),

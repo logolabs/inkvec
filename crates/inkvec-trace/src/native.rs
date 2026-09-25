@@ -188,18 +188,22 @@ fn claim_spread(
 ) -> (usize, f32) {
     const MAX_SAMPLES: usize = 8192;
     let stride = (px.len() / MAX_SAMPLES).max(1);
-    let n = (0..px.len())
+    // One pass for both the territory count and the spread sample: they test the same
+    // distance at the same pixels.
+    let claimed: Vec<(usize, f32)> = (0..px.len())
         .into_par_iter()
         .step_by(stride_px)
-        .filter(|&i| px[i].dist(c) < nearest_px[i])
-        .count();
-    let mut d_in: Vec<f32> = (0..px.len())
-        .into_par_iter()
-        .step_by(stride_px)
+        .with_min_len(color::PAR_MIN_LEN)
         .filter_map(|i| {
             let d = px[i].dist(c);
-            (d < nearest_px[i] && d < tol && i % stride == 0).then_some(d)
+            (d < nearest_px[i]).then_some((i, d))
         })
+        .collect();
+    let n = claimed.len();
+    let mut d_in: Vec<f32> = claimed
+        .iter()
+        .filter(|&&(i, d)| d < tol && i % stride == 0)
+        .map(|&(_, d)| d)
         .collect();
     let n = n * stride_px;
     if d_in.is_empty() {
@@ -220,21 +224,21 @@ fn interior_fraction(
     if width == 0 || height == 0 || px.len() < width * height {
         return 1.0;
     }
-    let mask: Vec<bool> = px
-        .par_iter()
-        .zip(nearest.par_iter())
-        .map(|(&p, &d)| p.dist(c) < d)
-        .collect();
+    // Evaluated only where the reduction reads it: the sampled pixels and their four
+    // neighbours. Building the whole-image mask first cost a full pass and an allocation
+    // per call for a candidate whose territory is usually a thin band.
+    let mask = |i: usize| px[i].dist(c) < nearest[i];
     let (total, interior) = (0..width * height)
         .into_par_iter()
         .step_by(stride_px)
-        .filter(|&i| mask[i])
+        .with_min_len(color::PAR_MIN_LEN)
+        .filter(|&i| mask(i))
         .map(|i| {
             let (x, y) = (i % width, i / width);
-            let ok = (x == 0 || mask[i - 1])
-                && (x + 1 == width || mask[i + 1])
-                && (y == 0 || mask[i - width])
-                && (y + 1 == height || mask[i + width]);
+            let ok = (x == 0 || mask(i - 1))
+                && (x + 1 == width || mask(i + 1))
+                && (y == 0 || mask(i - width))
+                && (y + 1 == height || mask(i + width));
             (1u32, ok as u32)
         })
         .reduce(|| (0u32, 0u32), |a, b| (a.0 + b.0, a.1 + b.1));
@@ -270,15 +274,11 @@ fn from_six(q: [f32; 6], linear: bool) -> Ink2 {
 /// [`color`]'s blend test in six dimensions: `c` lies on the chord between two accepted
 /// inks over white *and* over black. An anti-aliased rim between an ink and the clear ground
 /// is on such a chord (flat over white for a white ink, a ramp to black over black).
-fn blend_pairs(c: Ink2, accepted: &[Ink2], tol: f32) -> Vec<(usize, usize, bool, f32)> {
+fn blend_pairs(c: Ink2, accepted: &[Ink2], tol: f32, tmin: f32) -> Vec<(usize, usize, bool, f32)> {
     let mut out = Vec::new();
     if accepted.len() < 2 {
         return out;
     }
-    let tmin: f32 = std::env::var("INKVEC_BLEND_TMIN")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0.04);
     for space in 0..2 {
         let linear = space == 0;
         let p = six(c, linear);
@@ -350,17 +350,16 @@ fn straddle_fraction(
     let tc = t_of(&six(c, linear));
     let step_lo = color::STRADDLE_STEP.min(0.5 * tc).max(0.02);
     let step_hi = color::STRADDLE_STEP.min(0.5 * (1.0 - tc)).max(0.02);
-    let mask: Vec<bool> = px
-        .par_iter()
-        .zip(nearest.par_iter())
-        .map(|(&p, &n)| p.dist(c) < n)
-        .collect();
+    // Both evaluated only where the reduction reads them -- see `interior_fraction`. This
+    // was the palette stage's largest cost on gradient art with transparency: two
+    // whole-image passes and allocations per candidate pair, 237 calls and 4.6 s on one
+    // 512 px noto-emoji, for values read at a thin band of sampled pixels.
     let cache = if linear { px6_lin } else { px6_srgb };
-    let t: Vec<f32> = cache.par_iter().map(t_of).collect();
     let (total, straddle) = (0..width * height)
         .into_par_iter()
         .step_by(stride_px)
-        .filter(|&i| mask[i])
+        .with_min_len(color::PAR_MIN_LEN)
+        .filter(|&i| px[i].dist(c) < nearest[i])
         .map(|i| {
             let (x, y) = (i % width, i / width);
             let (mut lower, mut higher) = (false, false);
@@ -370,7 +369,7 @@ fn straddle_fraction(
                     if nx < 0 || ny < 0 || nx >= width as isize || ny >= height as isize {
                         continue;
                     }
-                    let tn = t[ny as usize * width + nx as usize];
+                    let tn = t_of(&cache[ny as usize * width + nx as usize]);
                     lower |= tn < tc - step_lo;
                     higher |= tn > tc + step_hi;
                 }
@@ -457,6 +456,12 @@ pub fn extract_palette(
     let mut colors: Vec<Ink2> = Vec::new();
     let mut nearest_px: Vec<f32> = vec![f32::INFINITY; px.len()];
     let paldbg = std::env::var("INKVEC_PALDBG").is_ok();
+    // Read once per palette rather than once per candidate.
+    let noise_sigmas = std::env::var("INKVEC_NOISE_SIGMAS")
+        .ok()
+        .and_then(|v| v.parse::<f32>().ok())
+        .unwrap_or(noise_sigmas);
+    let blend_tmin = color::blend_tmin();
     for &(n, _key, c) in &modes {
         if colors.len() >= max_colors {
             break;
@@ -469,11 +474,7 @@ pub fn extract_palette(
             .iter()
             .map(|&p| p.dist(c))
             .fold(f32::INFINITY, f32::min);
-        let k = std::env::var("INKVEC_NOISE_SIGMAS")
-            .ok()
-            .and_then(|v| v.parse::<f32>().ok())
-            .unwrap_or(noise_sigmas);
-        let reach = k * spread;
+        let reach = noise_sigmas * spread;
         if let Some(&near_ink) = colors.iter().min_by(|&&p, &&q| {
             p.dist(c)
                 .partial_cmp(&q.dist(c))
@@ -493,7 +494,7 @@ pub fn extract_palette(
                 continue;
             }
         }
-        let pairs = blend_pairs(c, &colors, merge_distance * 1.6);
+        let pairs = blend_pairs(c, &colors, merge_distance * 1.6, blend_tmin);
         let blend = !pairs.is_empty();
         // Partly transparent is exactly what an anti-aliased silhouette pixel is, and the
         // chord test above cannot always say so: a rim where shading meets the ground mixes
@@ -526,9 +527,10 @@ pub fn extract_palette(
         if translucent && !blend && interior < BLEND_INTERIOR_FRACTION {
             continue;
         }
+        // The pairs on every core, as in `color`: the max of finite ratios is order-free.
         let straddle = if blend && interior < BLEND_INTERIOR_FRACTION {
             pairs
-                .iter()
+                .par_iter()
                 .map(|&(i, j, linear, _)| {
                     straddle_fraction(
                         &px,
@@ -544,7 +546,7 @@ pub fn extract_palette(
                         stride_px,
                     )
                 })
-                .fold(0.0f32, f32::max)
+                .reduce(|| 0.0f32, f32::max)
         } else {
             0.0
         };

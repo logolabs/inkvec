@@ -505,13 +505,33 @@ struct Problem<'a> {
     w_anchor: f64,
     /// Whether junction pixels take part in the data term.
     junctions: bool,
+    /// The cells `head` holds a piece in, ascending once `bucket` has run. The data term
+    /// visits these rather than all `w * h` cells, and `bucket` clears only these: at
+    /// 2048 px the pieces sit in a few percent of the cells.
+    touched: Vec<usize>,
+    /// `INKVEC_BOPT_CELLS`, read once rather than once per boundary cell per evaluation.
+    cells_dbg: bool,
+    /// `INKVEC_BOPT_CHUNKS`, read once rather than once per evaluation.
+    chunks: usize,
+}
+
+/// `INKVEC_BOPT_CHUNKS`: 1 (sequential) unless set.
+fn env_chunks() -> usize {
+    std::env::var("INKVEC_BOPT_CHUNKS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(1)
+        .max(1)
 }
 
 impl Problem<'_> {
     /// Sort every chain piece into the pixel it lies in.
     fn bucket(&mut self, pos: &[Point]) {
         self.pieces.clear();
-        self.head.iter_mut().for_each(|s| *s = -1);
+        for &cell in &self.touched {
+            self.head[cell] = -1;
+        }
+        self.touched.clear();
         let cr = &mut self.scratch.cross;
         for (k, e) in self.map.edges.iter().enumerate() {
             if e.left as usize >= self.face.len() || e.right as usize >= self.face.len() {
@@ -556,6 +576,9 @@ impl Problem<'_> {
                                 to_prov,
                                 next: self.head[cell],
                             });
+                            if self.head[cell] < 0 {
+                                self.touched.push(cell);
+                            }
                             self.head[cell] = id;
                         }
                     }
@@ -565,6 +588,9 @@ impl Problem<'_> {
                 }
             }
         }
+        // Ascending, so the data term visits the cells in exactly the order a scan over
+        // every cell did, and sums the same terms in the same order.
+        self.touched.sort_unstable();
     }
 
     /// Data term, and its gradient when asked for. `bucket` must have run on `pos`.
@@ -578,15 +604,14 @@ impl Problem<'_> {
     /// decisions -- on one 300-path logo they cost 8 paths and 16 % more coordinates at
     /// the same colour error -- so it stays opt-in until the full set has priced it.
     fn data(&mut self, pos: &[Point], grad: Option<&mut [Point]>) -> f64 {
-        let chunks = std::env::var("INKVEC_BOPT_CHUNKS")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(1)
-            .max(1);
+        let chunks = self.chunks;
         let cells = self.w * self.h;
         if chunks == 1 || cells < 4096 {
+            // Only the cells `bucket` put a piece in; every other cell was skipped anyway.
             let mut scratch = std::mem::take(&mut self.scratch);
-            let t = self.data_cells(0..cells, pos, &mut scratch, grad);
+            let touched = std::mem::take(&mut self.touched);
+            let t = self.data_cells(touched.iter().copied(), pos, &mut scratch, grad);
+            self.touched = touched;
             self.scratch = scratch;
             return t;
         }
@@ -636,7 +661,7 @@ impl Problem<'_> {
 
     fn data_cells(
         &self,
-        cells: std::ops::Range<usize>,
+        cells: impl Iterator<Item = usize>,
         pos: &[Point],
         scratch: &mut Scratch,
         mut grad: Option<&mut [Point]>,
@@ -736,7 +761,7 @@ impl Problem<'_> {
             if !area.is_finite() || !(-0.01..=1.01).contains(&area) {
                 continue;
             }
-            if std::env::var_os("INKVEC_BOPT_CELLS").is_some() {
+            if self.cells_dbg {
                 eprintln!(
                     "  [bopt cell] ({px},{py}) edge {edge} pieces {} area {area:.6} ends {s_in:.3}->{s_out:.3}",
                     scratch.order.len()
@@ -1112,6 +1137,9 @@ pub fn optimise_alpha(
             w_kink: 1.0,
             w_anchor: 0.0,
             junctions: std::env::var("INKVEC_BOPT_JUNC").is_ok_and(|v| v != "0"),
+            touched: Vec::new(),
+            cells_dbg: std::env::var_os("INKVEC_BOPT_CELLS").is_some(),
+            chunks: env_chunks(),
         };
         let mut pos: Vec<Point> = vars.start.clone();
 
@@ -1294,6 +1322,9 @@ mod tests {
             w_kink: 0.0,
             w_anchor: 0.0,
             junctions: true,
+            touched: Vec::new(),
+            cells_dbg: false,
+            chunks: 1,
         };
         let pos = vars.start.clone();
         prob.bucket(&pos);
@@ -1363,6 +1394,9 @@ mod tests {
             w_kink: 0.0,
             w_anchor: 0.0,
             junctions: false,
+            touched: Vec::new(),
+            cells_dbg: false,
+            chunks: 1,
         };
         let pos = vars.start.clone();
         prob.bucket(&pos);
@@ -1457,6 +1491,9 @@ mod tests {
             w_kink: 0.7,
             w_anchor: 0.3,
             junctions: true,
+            touched: Vec::new(),
+            cells_dbg: false,
+            chunks: 1,
         };
         let n = vars.start.len();
         // Away from the start, so the anchor term is not sitting at its minimum.

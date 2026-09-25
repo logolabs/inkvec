@@ -269,10 +269,74 @@ fn move_cubic(
         .then(|| Segment::Cubic(add(q[1], d1), add(q[2], d2), add(q[3], de)))
 }
 
+/// A circular arc starting at `a` with its ends moved by `ds` and `de`: the concentric arc,
+/// its radius grown or shrunk by the mean of the two moves, through the moved ends. Exact
+/// when both ends move the full reach along the arc's own normal, which is what a smooth
+/// join hands it; otherwise a close neighbour of that offset, so it is checked the way a
+/// moved cubic is. `None` unless every probe along it moved outward, by no more than twice
+/// the reach, and the arc still sweeps the same way -- an arc whose ends went off the
+/// offset circle can swing its centre and cut into the lower face.
+fn move_arc(
+    a: Point,
+    seg: &Segment,
+    ds: Point,
+    de: Point,
+    delta: f64,
+    normal: &dyn Fn(Point) -> Point,
+) -> Option<Segment> {
+    let Segment::Arc {
+        rx,
+        ry,
+        phi,
+        large_arc,
+        sweep,
+        end,
+    } = *seg
+    else {
+        return None;
+    };
+    if !seg.is_circular() {
+        return None;
+    }
+    let f = arc_ellipse_center(a, rx, ry, phi, large_arc, sweep, end);
+    if f.delta == 0.0 {
+        return None;
+    }
+    let (mid, t) = midpoint(a, seg)?;
+    let away = dot(sub(mid, f.c), normal(t)) > 0.0;
+    let grow = 0.5 * (ds.x.hypot(ds.y) + de.x.hypot(de.y));
+    let rad = if away { f.rx + grow } else { f.rx - grow };
+    if rad <= 2.0 * grow {
+        return None;
+    }
+    let (a2, e2) = (add(a, ds), add(end, de));
+    let moved = Segment::Arc {
+        rx: rad,
+        ry: rad,
+        phi,
+        large_arc,
+        sweep,
+        end: e2,
+    };
+    let g = arc_ellipse_center(a2, rad, rad, phi, large_arc, sweep, e2);
+    if g.delta == 0.0 || g.delta.signum() != f.delta.signum() {
+        return None;
+    }
+    let ok = PROBES.iter().all(|&s| {
+        let th = f.theta1 + s * f.delta;
+        let (p, q) = (f.at(th), g.at(g.theta1 + s * g.delta));
+        let Some(tn) = unit(scale(arc_deriv(&f, th), f.delta.signum())) else {
+            return false;
+        };
+        let m = sub(q, p);
+        dot(m, normal(tn)) >= 0.0 && m.x.hypot(m.y) <= 2.0 * delta + 1e-9
+    });
+    ok.then_some(moved)
+}
+
 /// One segment starting at `a`, its start moved by `ds` and its end by `de`, each roughly
-/// `delta` along `normal`. Lines and cubics move their points; an arc never moves its ends
-/// (it bows instead), because an arc whose ends moved off the offset circle can swing its
-/// centre and cut into the lower face.
+/// `delta` along `normal`. Lines and cubics move their points; an arc moves to the arc
+/// concentric with it (see [`move_arc`]).
 fn move_segment(
     a: Point,
     seg: &Segment,
@@ -284,7 +348,7 @@ fn move_segment(
     match *seg {
         Segment::Line(p) => Some(Segment::Line(add(p, de))),
         Segment::Cubic(c1, c2, p) => move_cubic([a, c1, c2, p], ds, de, delta, normal),
-        Segment::Arc { .. } => None,
+        Segment::Arc { .. } => move_arc(a, seg, ds, de, delta, normal),
     }
 }
 
@@ -402,6 +466,7 @@ fn displace_run(
     delta: f64,
     inside_u: &dyn Fn(Point) -> bool,
     inside_v: &dyn Fn(Point) -> bool,
+    arcs_move: bool,
 ) -> Option<Vec<FittedPath>> {
     // Outward normal: the lower face lies to the left of travel when its ring's signed
     // area is positive.
@@ -437,10 +502,11 @@ fn displace_run(
         .collect();
     let zero = Point::new(0.0, 0.0);
     let is_arc = |i: usize| matches!(segs[i].0, Segment::Arc { .. });
-    // The run's ends are junctions and stay; so do an arc's ends.
+    // The run's ends are junctions and stay. An arc's ends move with their neighbours to
+    // the concentric arc when `arcs_move`; otherwise they stay and the arc bows instead.
     let mut disp = vec![zero; m + 1];
     for i in 1..m {
-        if is_arc(i - 1) || is_arc(i) {
+        if !arcs_move && (is_arc(i - 1) || is_arc(i)) {
             continue;
         }
         // A mitred offset at a corner between two spans, never more than twice the reach.
@@ -576,10 +642,16 @@ pub(crate) fn underlap(f: &Faces, under: &dyn Fn(usize, usize) -> bool, delta: f
                 let inside_u =
                     |q: Point| f.outer[u].iter().any(|&ko| point_in_ring(q, &f.pts[u][ko]));
                 let inside_v = |q: Point| point_in_ring(q, &f.pts[v][k]);
-                for d in [delta, 0.5 * delta] {
-                    if let Some(moved) =
-                        displace_run(&paths, area.signum(), d, &inside_u, &inside_v)
-                    {
+                // An arc's ends first move with the run; where that cannot be done
+                // safely anywhere in it, the run is tried again with them pinned.
+                for (d, arcs_move) in [
+                    (delta, true),
+                    (delta, false),
+                    (0.5 * delta, true),
+                    (0.5 * delta, false),
+                ] {
+                    let r = displace_run(&paths, area.signum(), d, &inside_u, &inside_v, arcs_move);
+                    if let Some(moved) = r {
                         for (i, &p) in positions.iter().enumerate() {
                             out.insert((v, ring[p].0), moved[i].clone());
                         }
@@ -613,7 +685,7 @@ mod tests {
         let shared = line_path(Point::new(4.0, 0.0), Point::new(4.0, 40.0));
         let inside_u = |q: Point| q.x > 4.0 && q.x < 8.0 && q.y > 0.0 && q.y < 40.0;
         let inside_v = |q: Point| q.x > 0.0 && q.x < 4.0 && q.y > 0.0 && q.y < 40.0;
-        let moved = displace_run(&[shared], 1.0, 0.5, &inside_u, &inside_v).unwrap();
+        let moved = displace_run(&[shared], 1.0, 0.5, &inside_u, &inside_v, true).unwrap();
         let ends: Vec<Point> = moved[0].segments.iter().map(|s| s.end()).collect();
         assert_eq!(moved[0].start, Point::new(4.0, 0.0));
         assert_eq!(ends.len(), 3, "{ends:?}");
@@ -628,7 +700,7 @@ mod tests {
         let shared = line_path(Point::new(4.0, 0.0), Point::new(4.0, 40.0));
         let inside_u = |q: Point| q.x > 4.0 && q.x < 4.6 && q.y > 0.0 && q.y < 40.0;
         let inside_v = |q: Point| q.x > 0.0 && q.x < 4.0 && q.y > 0.0 && q.y < 40.0;
-        assert!(displace_run(&[shared], 1.0, 0.5, &inside_u, &inside_v).is_none());
+        assert!(displace_run(&[shared], 1.0, 0.5, &inside_u, &inside_v, true).is_none());
     }
 
     /// An arc keeps its ends and bows out by the reach at its middle: still one arc, with
@@ -655,12 +727,64 @@ mod tests {
             r > 10.0 && r < 20.0
         };
         let inside_v = |q: Point| q.x.hypot(q.y) < 10.0;
-        let moved = displace_run(&[arc], 1.0, 0.5, &inside_u, &inside_v).unwrap();
+        let moved = displace_run(&[arc], 1.0, 0.5, &inside_u, &inside_v, true).unwrap();
         let segs = &moved[0].segments;
         assert_eq!(segs.len(), 1, "{segs:?}");
         assert!(matches!(segs[0], Segment::Arc { end, .. } if end == Point::new(0.0, 10.0)));
         let (mid, _) = midpoint(Point::new(10.0, 0.0), &segs[0]).unwrap();
         assert!((mid.x.hypot(mid.y) - 10.5).abs() < 1e-9, "{mid:?}");
+    }
+
+    /// Where an arc meets a line smoothly, their shared point moves with the run and the
+    /// arc becomes the concentric one through it. Pinning it -- which is what arcs used to
+    /// do -- left the reach tapering to nothing there, and on the Noto princess's hair that
+    /// stub of unmended edge was the one hairline the gradient faces still showed.
+    #[test]
+    fn a_smooth_join_with_an_arc_moves_with_the_run() {
+        // Quarter circle of radius 10 from (10,0) to (0,10), then the line tangent to it
+        // there, which runs in -x to (-30,10).
+        let run = FittedPath {
+            start: Point::new(10.0, 0.0),
+            segments: vec![
+                Segment::Arc {
+                    rx: 10.0,
+                    ry: 10.0,
+                    phi: 0.0,
+                    large_arc: false,
+                    sweep: true,
+                    end: Point::new(0.0, 10.0),
+                },
+                Segment::Line(Point::new(-30.0, 10.0)),
+            ],
+            closed: false,
+        };
+        // Lower face inside (the disc and the band under the line); upper face outside.
+        let inside_v = |q: Point| {
+            if q.x >= 0.0 {
+                q.x.hypot(q.y) < 10.0 && q.y > 0.0
+            } else {
+                q.x > -30.0 && q.y > 0.0 && q.y < 10.0
+            }
+        };
+        let inside_u = |q: Point| {
+            let outer = if q.x >= 0.0 {
+                q.x.hypot(q.y) < 20.0
+            } else {
+                q.x > -30.0 && q.y < 20.0
+            };
+            outer && !inside_v(q) && q.y > 0.0
+        };
+        let run_copy = run.clone();
+        let moved = displace_run(&[run], 1.0, 0.5, &inside_u, &inside_v, true).unwrap();
+        let segs = &moved[0].segments;
+        let Segment::Arc { rx, end, .. } = segs[0] else {
+            panic!("{segs:?}");
+        };
+        assert!((rx - 10.25).abs() < 1e-9, "{segs:?}");
+        assert!(end.dist(Point::new(0.0, 10.5)) < 1e-9, "{segs:?}");
+        // Pinned, the join stays where it was.
+        let pinned = displace_run(&[run_copy], 1.0, 0.5, &inside_u, &inside_v, false).unwrap();
+        assert_eq!(pinned[0].segments[0].end(), Point::new(0.0, 10.0));
     }
 
     /// A cubic pinned at both ends bows by moving its two inner control points: its middle

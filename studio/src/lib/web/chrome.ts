@@ -79,3 +79,42 @@ export function mountWebChrome(app: HTMLElement): void {
   );
   app.append(note);
 }
+
+/** What the presentation page asked the Studio to open: a bundled sample, or a file. */
+export type Launch = { sample: string } | { name: string; bytes: Uint8Array } | null;
+
+/**
+ * The presentation page (the Space's root) opens the Studio with `?sample=<file>` for one of
+ * the bundled samples, or `?open=handoff` for a file dropped on it, which it left in this
+ * origin's IndexedDB (`inkvec-handoff`) rather than sending anywhere. The file is taken
+ * once and deleted, and the query string is cleared so a reload does not open it again.
+ */
+export async function takeLaunch(): Promise<Launch> {
+  const q = new URLSearchParams(window.location.search);
+  const sample = q.get("sample");
+  const handoff = q.get("open") === "handoff";
+  if (!sample && !handoff) return null;
+  window.history.replaceState(null, "", window.location.pathname);
+  if (sample) return { sample };
+  return new Promise((resolve) => {
+    let req: IDBOpenDBRequest;
+    try {
+      req = indexedDB.open("inkvec-handoff", 1);
+    } catch {
+      resolve(null);
+      return;
+    }
+    req.onupgradeneeded = () => req.result.createObjectStore("files");
+    req.onerror = () => resolve(null);
+    req.onsuccess = () => {
+      const store = req.result.transaction("files", "readwrite").objectStore("files");
+      const get = store.get("open");
+      get.onsuccess = () => {
+        store.delete("open");
+        const v = get.result as { name?: string; bytes?: Uint8Array } | undefined;
+        resolve(v?.bytes ? { name: v.name ?? "image", bytes: v.bytes } : null);
+      };
+      get.onerror = () => resolve(null);
+    };
+  });
+}

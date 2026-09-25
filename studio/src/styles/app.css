@@ -3446,3 +3446,299 @@ body.dragging-ink [data-drop="list"] {
   line-height: 1.65;
   color: var(--dim);
 }
+
+/* ------------------------------------------------------------------ Showcase ---
+   Before and after on real logos (views/showcase.ts): a case list, three panes on one
+   camera, and the run's summary table. */
+
+.sc-loading {
+  padding: 40px;
+  text-align: center;
+}
+.sc-page {
+  width: min(1320px, 100%);
+  margin: 0 auto;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.sc-head h1 {
+  margin: 0 0 6px;
+  font-size: 28px;
+  font-weight: 600;
+}
+.sc-head p,
+.sc-results > p {
+  margin: 0;
+  max-width: 96ch;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.sc-main {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: 16px;
+  min-height: 0;
+}
+.sc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sc-case {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 10px;
+  align-items: center;
+  text-align: left;
+  padding: 6px 8px;
+  border: 1px solid var(--rule2);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--ink);
+  cursor: pointer;
+}
+.sc-case[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+.sc-thumb {
+  grid-row: 1 / 3;
+  width: 44px;
+  height: 44px;
+  border-radius: 6px;
+  background: #fff;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+.sc-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.sc-name {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.sc-what {
+  font-size: 11px;
+  color: var(--faint);
+}
+.sc-stagecol {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.sc-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.sc-tools .eyebrow {
+  margin-left: 6px;
+}
+.sc-legend {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+}
+.sc-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.sc-dot.a {
+  background: var(--anchor);
+}
+.sc-dot.hd {
+  background: var(--handle);
+  margin-left: 6px;
+}
+.sc-viewer {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.sc-pane {
+  position: relative;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border: 1px solid var(--rule2);
+  border-radius: var(--radius-sm);
+  background-color: var(--stage);
+  background-image: repeating-conic-gradient(var(--checker-a) 0% 25%, var(--checker-b) 0% 50%);
+  background-size: 16px 16px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.sc-pane:active {
+  cursor: grabbing;
+}
+.sc-cam {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  transform-origin: 0 0;
+}
+.sc-cam > img,
+.sc-layer,
+.sc-layer > svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.sc-cam > img {
+  object-fit: contain;
+}
+.sc-tag {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 4px 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--paper) 85%, transparent);
+  color: var(--ink);
+  pointer-events: none;
+}
+/* The wireframe and the handles stay one screen pixel wide at every zoom. */
+.sc-wire path,
+.sc-wire circle,
+.sc-wire ellipse,
+.sc-wire rect,
+.sc-wire polygon {
+  fill: none !important;
+  stroke: var(--wire);
+  stroke-width: 1px;
+  vector-effect: non-scaling-stroke;
+  stroke-opacity: 0.9;
+}
+.sc-ov {
+  pointer-events: none;
+}
+.sc-ov .h {
+  stroke: var(--handle);
+  stroke-width: 1px;
+  vector-effect: non-scaling-stroke;
+  fill: none;
+  stroke-opacity: 0.85;
+}
+.sc-ov .hd {
+  stroke: var(--handle);
+  stroke-width: 3.5px;
+  vector-effect: non-scaling-stroke;
+  stroke-linecap: round;
+  fill: none;
+}
+.sc-ov .a {
+  stroke: var(--anchor);
+  stroke-width: 5px;
+  vector-effect: non-scaling-stroke;
+  stroke-linecap: round;
+  fill: none;
+}
+.sc-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.sc-chip {
+  font-size: 12px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--rule2);
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+.sc-chip.win {
+  border-color: transparent;
+  background: var(--goodbg);
+  color: var(--good);
+}
+.sc-results {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--rule2);
+}
+.sc-results h2 {
+  margin: 8px 0 0;
+  font-size: 22px;
+  font-weight: 600;
+}
+.sc-bignums {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+.sc-bignum {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--rule2);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  font-size: 12px;
+}
+.sc-bignum .v {
+  font-size: 28px;
+  color: var(--accent);
+  line-height: 1.1;
+}
+.sc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  background: var(--card);
+  border: 1px solid var(--rule2);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.sc-table th,
+.sc-table td {
+  padding: 8px 12px;
+  text-align: right;
+  border-bottom: 1px solid var(--rule2);
+  white-space: nowrap;
+}
+.sc-table th:first-child,
+.sc-table td:first-child {
+  text-align: left;
+}
+.sc-table th {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.sc-table td.num {
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+}
+.sc-table tr.win td {
+  color: var(--ink);
+}
+.sc-table tr.win td:first-child {
+  color: var(--accent);
+  font-weight: 600;
+}
+.sc-note {
+  font-size: 12px !important;
+}

@@ -26,7 +26,7 @@ import {
 } from "./lib/ipc";
 import { initial, modKey, Store } from "./lib/state";
 import { APP_NAME, copyText, openExternal, pickedFile, pickedPath, pickFiles, WEB, type Picked } from "./lib/platform";
-import { mountWebChrome, webDrops } from "./lib/web/chrome";
+import { mountWebChrome, takeLaunch, webDrops, type Launch } from "./lib/web/chrome";
 import { Previews } from "./lib/previews";
 import { createRail, type RailActions } from "./components/rail";
 import { createChooser, createWizard, type Snapshot, type WizardActions } from "./components/wizard";
@@ -562,6 +562,7 @@ function renderAppBar(): void {
           ),
       h("button.btn.ghost.compact", { onclick: () => store.set({ screen: "settings" }) }, "Settings"),
       h("button.btn.ghost.compact", { onclick: () => store.set({ screen: "about" }) }, "About"),
+      h("button.btn.ghost.compact", { title: "Before and after on real logos, and how Inkvec compares", onclick: () => store.set({ screen: "showcase" }) }, "Showcase"),
       h("button.btn.ghost.compact", { title: "The user guide (F1)", onclick: () => openHelp(helpPageFor(store.state)) }, "Help"),
       h("div.sep"),
       windowControls(),
@@ -819,6 +820,8 @@ async function start(): Promise<void> {
   // The file the app was launched with, if any: the context menu's "Vectorize with Inkvec".
   const launched = await api.launchPath().catch(() => null);
   if (launched) void openFromOutside(launched);
+  // In the browser: a sample or a file the presentation page handed over.
+  if (WEB) void takeLaunch().then(openLaunch);
 
   // The update check, if it is on. Its result only ever reaches the status strip.
   if (prefs.checkUpdates) {
@@ -826,6 +829,17 @@ async function start(): Promise<void> {
       .checkUpdate()
       .then((update) => store.set({ update }))
       .catch(() => {});
+  }
+}
+
+/** Open what the Space's presentation page asked for: a bundled sample, or a dropped file. */
+async function openLaunch(launch: Launch): Promise<void> {
+  if (!launch) return;
+  store.set({ tab: "vectorize", screen: null });
+  if ("sample" in launch) {
+    await openWith(async () => store.set({ source: await api.openSample(launch.sample) }));
+  } else {
+    await openWith(async () => store.set({ source: await api.openBytes(launch.bytes, launch.name) }));
   }
 }
 

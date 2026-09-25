@@ -78,6 +78,9 @@ export default defineConfig(({ mode }) => {
       port: web ? 1430 : 1420,
       strictPort: true,
       watch: { ignored: ["**/src-tauri/**", "**/target/**"] },
+      // The Showcase screen bundles the Space's gallery data, which lives beside the page
+      // that also reads it (`web/showcase.json`, written by `tools/showcase_data.py`).
+      fs: { allow: [".", "../web/showcase.json"] },
       headers: web ? isolation : undefined,
     },
     preview: { headers: web ? isolation : undefined },
@@ -91,7 +94,8 @@ export default defineConfig(({ mode }) => {
       minify: "esbuild" as const,
       sourcemap: false,
       chunkSizeWarningLimit: 900,
-      outDir: web ? "dist-web" : "dist",
+      // The browser build is the Space's studio/ folder; its root is the presentation page.
+      outDir: web ? "dist-web/studio" : "dist",
       emptyOutDir: true,
       rollupOptions: {
         // The desktop has two pages: the app, and the splash window that covers its

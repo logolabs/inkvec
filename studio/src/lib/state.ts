@@ -34,7 +34,7 @@ import type {
 export type Tab = "vectorize" | "minify" | "fabricate" | "batch";
 
 /** Which full-window screen is showing over the tabs, if any. */
-export type Screen = null | "settings" | "about";
+export type Screen = null | "settings" | "about" | "showcase";
 
 /** What the stage is showing, when it is not showing a drawing. */
 export type StageState =

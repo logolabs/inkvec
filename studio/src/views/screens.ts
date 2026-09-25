@@ -246,14 +246,14 @@ function settings(store: Store, act: ScreenActions): HTMLElement {
           ),
           row(
             "Reset settings",
-            "Puts every preference and the trace controls back to their defaults. Your files are untouched.",
+            "Puts every preference and the trace controls back to their defaults. Your saved presets and your files are untouched.",
             h(
               "button.btn.compact.danger",
               {
                 onclick: () =>
                   confirm(
                     "Reset settings?",
-                    "Every preference goes back to its default, and the recent list is cleared. Nothing you have traced or exported is affected.",
+                    "Every preference goes back to its default, and the recent list is cleared. Your saved presets are kept, and nothing you have traced or exported is affected.",
                     "Reset",
                     async () => {
                       const fresh = await api.resetPrefs();

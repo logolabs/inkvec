@@ -7,9 +7,9 @@ README. About five minutes.
 ## 1. Start from the right image
 
 A favicon is drawn at 16 by 16 pixels in a browser tab. At that size a wordmark is a grey smudge;
-use the **symbol** on its own. And the export's PNG and favicon files are square (in version 0.2.0
-a non-square drawing is stretched to fill them), so the image should be **square**, with the mark
-centred. If your logo is wide, crop the symbol to a square in any image editor first.
+use the **symbol** on its own. And the favicon files are square (a non-square drawing is centred in
+them, with transparent space around it), so the image should be **square**, with the mark centred.
+If your logo is wide, crop the symbol to a square in any image editor first.
 
 A PNG with a transparent background is best. A JPEG works too; see
 [Clean up a JPEG logo](jpeg-logo.md) first.
@@ -97,8 +97,8 @@ For the colours as CSS custom properties instead, use **Copy all as CSS** in the
 
 ## Variations
 
-- **A wide logo as well.** Trace the full logo separately and take its SVG; skip the PNG rows
-  (they would be stretched square) and render PNGs from the SVG in your design tool.
+- **A wide logo as well.** Trace the full logo separately and export it; its PNGs keep its
+  proportions (512, 1024 and 2048 px wide).
 - **A dark-mode favicon.** Trace a light version of the mark, or edit the colours in the SVG.
 - **Only the SVG.** **Copy SVG** at the foot of the rail puts it on the clipboard without writing
   any files.

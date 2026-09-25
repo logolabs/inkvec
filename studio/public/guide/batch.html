@@ -79,14 +79,12 @@ difference, coordinates, bytes, seconds, destination, message) as a spreadsheet.
 <h2 id="which-settings-a-batch-uses">Which settings a batch uses</h2>
 <p>A batch starts from the controls of your <strong>last trace</strong> in the Vectorize tab, then applies each
 row's preset on top: the settings a preset changes from the defaults (Precision, Speckle floor,
-Trace size, Max colours, Colour merging, the denoiser, Black &amp; white, Line art, Fewer paths) come
+Trace size, Max colours, Colour merging, the denoiser, Black &amp; white, Line art, Fewer paths,
+Editable structure) come
 from the preset, and everything else, the Output settings such as <strong>Minify</strong> and
 <strong>Transparent background</strong> included, comes from your last trace. Set the Output group the way you
 want it in Vectorize before starting a batch.</p>
 <p>Colour groups are never used: they belong to one image.</p>
-<p>In version 0.2.0 the <strong>Editable</strong> preset does not turn on Editable structure in a batch (it is not
-one of the settings listed above). To batch editable SVGs, turn <strong>Editable</strong> on in the Vectorize
-tab, trace any image, and run the batch.</p>
 <p>The batch writes SVGs only. For PNGs, favicons or an asset pack, export each image from Vectorize.</p>
 <h2 id="dropping-files">Dropping files</h2>
 <p>Several files dropped on the window switch to this tab, but are not queued: a batch works on a

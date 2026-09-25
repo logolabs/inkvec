@@ -294,39 +294,96 @@ pub struct SnapResult {
     pub inks: Vec<quality::Ink>,
 }
 
+/// How far a snap's measured colour may be from an ink of a new trace and still name it.
+///
+/// A snap is kept with the image and applied again to every trace that lands after it
+/// (the export's own fresh trace among them), and a re-trace measures each ink afresh: a
+/// draft and a full trace, or two traces either side of a small control change, land a
+/// hair apart. Well under the distance at which two inks of one logo read as different
+/// colours, so a snap never jumps to a neighbour.
+pub const SNAP_REACH_DE00: f64 = 2.0;
+
 /// Rewrite the SVG's fills, and say how far each ink was moved from its measurement.
 ///
 /// This is the one thing in the app that is genuinely instant: it rewrites fill strings
 /// and nothing else, so there is no re-trace and no new measurement. The distance moved is
 /// shown beside every snapped swatch, because the user is overriding something that was
 /// measured and should be able to see by how much.
+///
+/// `svg` is the trace's own drawing and `snaps` every snap the user has made to it, all at
+/// once: the fills are rewritten in one pass, so a snap from A to B and another from B to C
+/// paint A as B, never as C. Each snap names the flat ink it was measured as, or failing an
+/// exact match the nearest one within [`SNAP_REACH_DE00`]; one that names nothing in this
+/// drawing (its ink merged away, say) is left out rather than guessed at.
 pub fn snap_inks(
     svg: String,
     snaps: Vec<Snap>,
     width: u32,
     height: u32,
 ) -> Result<SnapResult, String> {
-    let mut out = svg;
+    let (width, height) = (width.max(1), height.max(1));
+    let mut wanted: Vec<([f64; 3], String, String)> = Vec::new();
     for s in &snaps {
-        let (from, to) = (s.from.to_ascii_lowercase(), s.to.to_ascii_lowercase());
-        if quality::parse_hex(&from).is_none() || quality::parse_hex(&to).is_none() {
-            return Err(format!("{} or {} is not a colour", s.from, s.to));
-        }
-        for attr in ["fill", "stroke"] {
-            out = out
-                .replace(&format!("{attr}=\"{from}\""), &format!("{attr}=\"{to}\""))
-                .replace(
-                    &format!("{attr}=\"{}\"", from.to_ascii_uppercase()),
-                    &format!("{attr}=\"{to}\""),
-                );
+        match (quality::parse_hex(&s.from), quality::parse_hex(&s.to)) {
+            (Some(from), Some(to)) => wanted.push((
+                quality::lab(from),
+                quality::to_hex(from),
+                quality::to_hex(to),
+            )),
+            _ => return Err(format!("{} or {} is not a colour", s.from, s.to)),
         }
     }
-    let mut inks = quality::palette(&out, width.max(1), height.max(1))?;
+
+    // Which ink each snap names: the one measured as exactly its colour, else the nearest in
+    // reach that no other snap names exactly. An ink named by two snaps takes the closer.
+    let before = quality::palette(&svg, width, height)?;
+    let flats: Vec<(&quality::Ink, [f64; 3])> = before
+        .iter()
+        .filter(|i| i.kind == quality::InkKind::Flat)
+        .filter_map(|i| Some((i, quality::lab(quality::parse_hex(&i.hex)?))))
+        .collect();
+    let exact = |hex: &str| wanted.iter().any(|(_, from, _)| from == hex);
+    let mut taken: Vec<Option<(f64, &str)>> = vec![None; flats.len()];
+    for (from_lab, from, to) in &wanted {
+        let named = match flats.iter().position(|(i, _)| i.hex == *from) {
+            Some(at) => Some((at, 0.0)),
+            None => flats
+                .iter()
+                .enumerate()
+                .filter(|(_, (i, _))| !exact(&i.hex))
+                .map(|(at, (_, lab))| (at, quality::ciede2000(*from_lab, *lab)))
+                .filter(|(_, d)| *d <= SNAP_REACH_DE00)
+                .min_by(|a, b| a.1.total_cmp(&b.1)),
+        };
+        if let Some((at, d)) = named {
+            if taken[at].is_none_or(|(had, _)| d < had) {
+                taken[at] = Some((d, to.as_str()));
+            }
+        }
+    }
+    let mut repaint: std::collections::HashMap<String, String> = Default::default();
+    let mut moved: Vec<(String, String)> = Vec::new();
+    for ((ink, _), to) in flats.iter().zip(&taken) {
+        let Some((_, to)) = *to else { continue };
+        if to == ink.hex {
+            continue;
+        }
+        for key in &ink.keys {
+            repaint.insert(key.trim().to_string(), to.to_string());
+        }
+        moved.push((ink.hex.clone(), to.to_string()));
+    }
+
+    let paint = |value: &str| repaint.get(value.trim()).cloned();
+    let out = quality::rewrite_attr(&svg, "fill", paint);
+    let out = quality::rewrite_attr(&out, "stroke", paint);
+
+    let mut inks = quality::palette(&out, width, height)?;
     // Only a flat ink can have been snapped: a gradient's `hex` is its first stop, which a
     // snap to the same colour must not be mistaken for.
     for ink in inks.iter_mut().filter(|i| i.kind == quality::InkKind::Flat) {
-        if let Some(s) = snaps.iter().find(|s| s.to.eq_ignore_ascii_case(&ink.hex)) {
-            ink.traced = s.from.to_ascii_lowercase();
+        if let Some((from, _)) = moved.iter().find(|(_, to)| *to == ink.hex) {
+            ink.traced = from.clone();
             ink.snapped_de00 = quality::hex_distance(&ink.traced, &ink.hex);
         }
     }
@@ -350,10 +407,7 @@ pub struct Match {
 /// Each traced ink takes the nearest pasted colour, and the distance is reported so the
 /// modal can show what each match would cost before the user commits to it.
 pub fn match_palette(traced: Vec<String>, pasted: String) -> Vec<Match> {
-    let wanted: Vec<String> = pasted
-        .split(['\n', ',', ';'])
-        .filter_map(parse_colour)
-        .collect();
+    let wanted = pasted_colours(&pasted);
     traced
         .iter()
         .filter_map(|t| {
@@ -377,31 +431,84 @@ pub fn match_palette(traced: Vec<String>, pasted: String) -> Vec<Match> {
         .collect()
 }
 
-/// Read one colour out of a line of pasted text.
+/// Every colour in a pasted palette, in the order it was written.
 ///
-/// Hex with or without a `#`, `rgb(...)`, or a CSS custom property whose value is either.
-/// Anything else is skipped rather than guessed at.
+/// People paste lists separated by newlines, commas, semicolons or spaces, and the commas
+/// inside `rgb(207, 198, 180)` are not separators: the text is cut only outside
+/// parentheses, so a functional colour reaches [`parse_colour`] whole. A piece that is not
+/// a colour (a label, a variable's name) is skipped.
+pub fn pasted_colours(text: &str) -> Vec<String> {
+    let mut pieces: Vec<String> = Vec::new();
+    let mut piece = String::new();
+    let mut depth = 0usize;
+    for c in text.chars() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        if depth == 0 && (c == ',' || c == ';' || c.is_whitespace()) {
+            pieces.push(std::mem::take(&mut piece));
+        } else {
+            piece.push(c);
+        }
+    }
+    pieces.push(piece);
+    pieces.iter().filter_map(|p| parse_colour(p)).collect()
+}
+
+/// Read one colour out of a piece of pasted text.
+///
+/// Hex with a `#` (3, 4, 6 or 8 digits; an alpha channel is dropped, since a fill snaps to
+/// an opaque colour), six hex digits without one, `rgb(...)` / `rgba(...)` with commas or
+/// spaces and numbers or percentages, or a CSS custom property whose value is any of
+/// those. Anything else is skipped rather than guessed at: three bare letters such as
+/// `bad` or `add` are words far more often than colours.
 pub fn parse_colour(line: &str) -> Option<String> {
     let line = line.trim().trim_end_matches(';');
     let value = line.rsplit(':').next().unwrap_or(line).trim();
-    if let Some(rest) = value.strip_prefix("rgb") {
-        let inside = rest.trim_start_matches('(').trim_end_matches(')');
-        let parts: Vec<u8> = inside
-            .split(|c: char| c == ',' || c.is_whitespace())
+    let lower = value.to_ascii_lowercase();
+    if let Some(rest) = lower
+        .strip_prefix("rgba")
+        .or_else(|| lower.strip_prefix("rgb"))
+    {
+        let inside = rest
+            .trim()
+            .strip_prefix('(')?
+            .trim_end()
+            .strip_suffix(')')?;
+        let channel = |s: &str| -> Option<u8> {
+            let v = match s.strip_suffix('%') {
+                Some(pct) => pct.trim().parse::<f32>().ok()? * 2.55,
+                None => s.parse::<f32>().ok()?,
+            };
+            v.is_finite().then(|| v.clamp(0.0, 255.0).round() as u8)
+        };
+        // `rgb(r g b / a)` and `rgba(r, g, b, a)`: the alpha, when there is one, is fourth.
+        let parts: Vec<&str> = inside
+            .split(|c: char| c == ',' || c == '/' || c.is_whitespace())
             .filter(|s| !s.is_empty())
-            .filter_map(|s| s.trim().parse::<f32>().ok())
-            .map(|v| v.clamp(0.0, 255.0) as u8)
             .collect();
-        if parts.len() >= 3 {
-            return Some(format!("#{:02x}{:02x}{:02x}", parts[0], parts[1], parts[2]));
+        if parts.len() < 3 {
+            return None;
         }
+        let (r, g, b) = (channel(parts[0])?, channel(parts[1])?, channel(parts[2])?);
+        return Some(format!("#{r:02x}{g:02x}{b:02x}"));
+    }
+    let (hex, marked) = match lower.strip_prefix('#') {
+        Some(h) => (h, true),
+        None => (lower.as_str(), false),
+    };
+    if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
         return None;
     }
-    let hex = value.trim_start_matches('#');
-    if !hex.is_empty() && hex.len() <= 6 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
-        return quality::parse_hex(&format!("#{hex}")).map(quality::to_hex);
-    }
-    None
+    let rgb = match (hex.len(), marked) {
+        (3 | 4, true) => &hex[..3],
+        (6, _) => hex,
+        (8, true) => &hex[..6],
+        _ => return None,
+    };
+    quality::parse_hex(&format!("#{rgb}")).map(quality::to_hex)
 }
 
 // -------------------------------------------------------------------------- export ---
@@ -589,6 +696,38 @@ mod tests {
         assert_eq!(parse_colour(""), None);
     }
 
+    /// The dialog's own placeholder shows `rgb(207, 198, 180)`; its commas are not list
+    /// separators. Before this, the paste was cut at them and `198` was read as `#119988`.
+    #[test]
+    fn a_pasted_rgb_colour_keeps_its_commas() {
+        let matches = match_palette(vec!["#cfc6b5".into()], "rgb(207, 198, 180)".into());
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].to, "#cfc6b4", "{matches:?}");
+        assert_eq!(
+            pasted_colours("#12443E\n#E9B24C\nrgb(207, 198, 180)"),
+            ["#12443e", "#e9b24c", "#cfc6b4"]
+        );
+    }
+
+    #[test]
+    fn a_pasted_list_is_read_whatever_separates_it() {
+        let text = "rgb(207, 198, 180), #12443E; rgba(1, 2, 3, 0.5)\n\
+                    --brand-ink: rgb(10 20 30 / 50%);\t#abc #E9B24C80\r\n\
+                    RGB(100%, 0%, 50%), Accent: 0a0b0c; bad, add";
+        assert_eq!(
+            pasted_colours(text),
+            [
+                "#cfc6b4", "#12443e", "#010203", "#0a141e", "#aabbcc", "#e9b24c", "#ff0080",
+                "#0a0b0c",
+            ]
+        );
+        assert!(pasted_colours("").is_empty());
+        assert!(
+            pasted_colours("rgb(1, 2)").is_empty(),
+            "two channels is not a colour"
+        );
+    }
+
     #[test]
     fn matching_a_palette_picks_the_nearest_and_says_how_far() {
         let traced = vec!["#14453f".to_string(), "#e7b04a".to_string()];
@@ -660,6 +799,98 @@ mod tests {
             .unwrap();
         assert!(flat.snapped_de00.is_some());
         assert!((flat.share - 0.5).abs() < 0.02 && (ramp.share - 0.5).abs() < 0.02);
+    }
+
+    /// Two flat inks side by side, left and right.
+    fn two_inks(left: &str, right: &str) -> String {
+        format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\" viewBox=\"0 0 32 32\">\
+             <path d=\"M0 0H16V32H0Z\" fill=\"{left}\"/><path d=\"M16 0H32V32H16Z\" fill=\"{right}\"/></svg>"
+        )
+    }
+
+    fn snap(from: &str, to: &str) -> Snap {
+        Snap {
+            from: from.into(),
+            to: to.into(),
+        }
+    }
+
+    /// A pasted palette snaps every ink at once. When one ink's new colour is another's old
+    /// one, the old sequential rewrite ran them into each other and both came out as C.
+    #[test]
+    fn snaps_are_applied_all_at_once_not_one_after_another() {
+        let svg = two_inks("#aa2222", "#2222aa");
+        let result = snap_inks(
+            svg,
+            vec![snap("#aa2222", "#2222aa"), snap("#2222aa", "#22aa22")],
+            32,
+            32,
+        )
+        .unwrap();
+        assert!(
+            result.svg.contains("d=\"M0 0H16V32H0Z\" fill=\"#2222aa\""),
+            "{}",
+            result.svg
+        );
+        assert!(
+            result
+                .svg
+                .contains("d=\"M16 0H32V32H16Z\" fill=\"#22aa22\""),
+            "{}",
+            result.svg
+        );
+        assert_eq!(result.inks.len(), 2);
+        assert!(result.inks.iter().all(|i| i.snapped_de00.is_some()));
+    }
+
+    /// The export re-traces, and a re-trace measures each ink afresh: a snap made on one
+    /// trace names the same ink in the next even when it landed a hair away.
+    #[test]
+    fn a_snap_follows_its_ink_into_a_trace_that_measured_it_a_hair_apart() {
+        let result = snap_inks(
+            two_inks("#15463f", "#e7b04a"),
+            vec![snap("#14453f", "#12443e")],
+            32,
+            32,
+        )
+        .unwrap();
+        assert!(result.svg.contains("fill=\"#12443e\""), "{}", result.svg);
+        assert!(!result.svg.contains("#15463f"));
+        assert!(
+            result.svg.contains("fill=\"#e7b04a\""),
+            "a far ink is untouched"
+        );
+        let ink = result.inks.iter().find(|i| i.hex == "#12443e").unwrap();
+        assert_eq!(
+            ink.traced, "#15463f",
+            "the swatch says what this trace measured"
+        );
+    }
+
+    #[test]
+    fn a_snap_that_names_an_ink_exactly_leaves_its_near_neighbour_alone() {
+        let result = snap_inks(
+            two_inks("#aa0000", "#ab0101"),
+            vec![snap("#aa0000", "#ff0000")],
+            32,
+            32,
+        )
+        .unwrap();
+        assert!(result.svg.contains("fill=\"#ff0000\""));
+        assert!(result.svg.contains("fill=\"#ab0101\""), "{}", result.svg);
+    }
+
+    #[test]
+    fn a_snap_to_bare_hex_writes_a_colour_an_svg_can_read() {
+        let result = snap_inks(
+            two_inks("#aa0000", "#0000aa"),
+            vec![snap("#AA0000", "ABCDEF")],
+            32,
+            32,
+        )
+        .unwrap();
+        assert!(result.svg.contains("fill=\"#abcdef\""), "{}", result.svg);
     }
 
     #[test]

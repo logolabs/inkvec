@@ -169,6 +169,18 @@ impl Prefs {
         self
     }
 
+    /// What "Reset settings" leaves: every preference at its default and the recent list
+    /// empty, but the saved presets kept. A saved preset is something the user made, like a
+    /// file, not a preference; the tray forgets one on request, and the reset's own wording
+    /// promises preferences and the recent list, nothing more.
+    pub fn after_reset(&self) -> Prefs {
+        Prefs {
+            saved: self.saved.clone(),
+            ..Prefs::default()
+        }
+        .sanitised()
+    }
+
     /// Put `path` at the top of the recent list, without duplicating it.
     pub fn remember(&mut self, path: &std::path::Path) {
         self.recent.retain(|p| p != path);
@@ -287,6 +299,38 @@ mod tests {
         assert_eq!(
             p.saved[0].settings.trace_size, 16_384,
             "a saved preset's numbers are clamped like any live ones"
+        );
+    }
+
+    #[test]
+    fn a_reset_puts_every_preference_back_and_keeps_the_saved_presets() {
+        let saved = vec![SavedPreset {
+            id: "mine".into(),
+            name: "Our house style".into(),
+            settings: TraceSettings {
+                precision: 0.05,
+                ..TraceSettings::default()
+            },
+        }];
+        let used = Prefs {
+            draft_px: 256,
+            settle_ms: 2_000,
+            recent: vec!["C:/Brand/logo.png".into()],
+            seen_first_run: true,
+            trace: TraceSettings {
+                max_colours: 8,
+                ..TraceSettings::default()
+            },
+            saved: saved.clone(),
+            ..Prefs::default()
+        };
+        let reset = used.after_reset();
+        assert_eq!(
+            reset,
+            Prefs {
+                saved,
+                ..Prefs::default()
+            }
         );
     }
 

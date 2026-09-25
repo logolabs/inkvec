@@ -51,9 +51,9 @@ and accept the suggestions, or lower <strong>Max colours</strong>.</p>
 <p><strong>The colours are slightly off from the brand's.</strong> The colours written are the ones measured in
 the image, and a JPEG or a screenshot changes them. Use the <a href="settings.html#denoiser">denoiser</a>, and
 <a href="palette.html#paste-a-brand-palette">paste the brand palette</a> to snap each ink to its real value.</p>
-<p><strong>I snapped colours, and the exported files have the old ones.</strong> Export re-traces, which measures
-the colours again. In version 0.2.0, use <strong>Copy SVG</strong> after snapping, or set the colour on a colour
-group with <strong>Custom…</strong>. See <a href="export.html#things-to-know">Export</a>.</p>
+<p><strong>A snapped colour went back to the measured one.</strong> A snap is dropped when its ink is no longer in
+the drawing, for example after a colour group merged it into another ink. Snap the merged ink, or
+give the group a <strong>Custom…</strong> colour.</p>
 <h2 id="the-denoiser">The denoiser</h2>
 <p><strong>The download fails.</strong> The app downloads from <code>huggingface.co</code>. A proxy or firewall that blocks it
 stops the download; the message says why. You can also fetch the model yourself, from
@@ -84,8 +84,9 @@ says so. Re-set the words in a vector editor if they must stay editable.</p>
 even width; brush and calligraphic strokes stay as outlines.</p>
 <p><strong>The draft and the final look different.</strong> A draft is traced small (512 px) for speed. Wait for
 the chip to say <strong>final</strong> before judging or copying.</p>
-<p><strong>Exported PNGs are stretched.</strong> In version 0.2.0 the PNG and favicon files are square. Use the SVG
-for a non-square logo, or trace a square version for the favicon.</p>
+<p><strong>The favicon has space above and below the logo.</strong> Favicons are square; a wide drawing is
+centred in them on a transparent background rather than stretched. Trace a square crop of the mark
+for a favicon that fills its square.</p>
 <h2 id="integrations">Integrations</h2>
 <p><strong>"Vectorize with Inkvec" is not in the right-click menu.</strong> Add it first in
 <a href="settings.html#advanced">Settings, Advanced</a>. On Windows 11 it is under <strong>Show more options</strong>. On
@@ -99,8 +100,8 @@ square to confirm. See <a href="fabricate.html#size">Fabricate</a>.</p>
 <p><strong>Help says the guide is not bundled with this build.</strong> A development or browser build may not
 include it. <strong>Open the online guide</strong> shows the same pages on
 <a href="https://logolabs.github.io/inkvec/studio/">logolabs.github.io/inkvec</a>.</p>
-<p><strong>How do I start over?</strong> Settings, Advanced, <strong>Reset settings</strong>. It deletes your preferences,
-recent files and saved presets, and leaves your files and the denoiser alone.</p>
+<p><strong>How do I start over?</strong> Settings, Advanced, <strong>Reset settings</strong>. It resets your preferences and
+clears the recent files, and keeps your saved presets, your files and the denoiser.</p>
 <h2 id="studio-lite">Studio Lite</h2>
 <p><strong>Where did my file go?</strong> Studio Lite downloads what it saves, into your browser's downloads
 folder.</p>

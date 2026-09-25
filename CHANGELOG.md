@@ -114,9 +114,10 @@ API in particular should be treated as unstable release to release).
   failing the run. `--restore on` still fails without one.
 - **The desktop app is now called Inkvec Studio**; "Lite" names only the browser build. Its
   bundle identifier and settings folder (`inkvec-studio`) are unchanged, so preferences carry
-  over. The installer's product name changes with it, so on Windows the new version installs
-  beside an existing "Inkvec Studio Lite" rather than over it; uninstall the old one from
-  Settings, Apps.
+  over. On Windows the `.exe` installer removes an existing "Inkvec Studio Lite" (the per-user
+  `.exe` install silently, an old `.msi` through msiexec) before installing, asks first if
+  it is open, and keeps the right-click entry and the `inkvec` command if they were on. The
+  `.msi` installer does not: after it, remove the old one from Settings, Apps.
 
 ### Fixed
 

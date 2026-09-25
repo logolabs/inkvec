@@ -89,7 +89,7 @@ is one).
 On Windows, uninstalling the app also removes both entries.
 
 **Reset settings** puts every preference and the trace controls back to their defaults and clears
-the recent files. It deletes the preferences file, so **your saved presets go too**. Nothing you
+the recent files. **Your saved presets are kept** (forget one from the preset tray), nothing you
 have traced or exported is touched, and the denoiser stays installed.
 
 ## Privacy

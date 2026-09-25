@@ -384,38 +384,23 @@ fn update_totals(totals: &mut Totals, started: std::time::Instant, sum: f64, cou
 /// carried over; everything the preset does not speak to keeps whatever the queue was set
 /// to. Otherwise choosing "Icon" for one row would silently reset that row's output
 /// options too.
+///
+/// The differences are found field by field on the serialised settings rather than listed
+/// by hand: a hand-kept list silently dropped `editability`, so a row set to Editable traced
+/// as Logo, and it would have dropped the next field a preset learned to set as well.
 fn merge(base: &Settings, preset: Preset) -> Settings {
-    let d = Settings::default();
-    let p = preset.settings();
-    let mut out = base.clone();
-    if p.precision != d.precision {
-        out.precision = p.precision;
+    let as_map = |s: &Settings| match serde_json::to_value(s) {
+        Ok(serde_json::Value::Object(m)) => m,
+        _ => serde_json::Map::new(),
+    };
+    let (defaults, wanted) = (as_map(&Settings::default()), as_map(&preset.settings()));
+    let mut out = as_map(base);
+    for (key, value) in wanted {
+        if defaults.get(&key) != Some(&value) {
+            out.insert(key, value);
+        }
     }
-    if p.speckle_floor != d.speckle_floor {
-        out.speckle_floor = p.speckle_floor;
-    }
-    if p.trace_size != d.trace_size {
-        out.trace_size = p.trace_size;
-    }
-    if p.max_colours != d.max_colours {
-        out.max_colours = p.max_colours;
-    }
-    if p.colour_merging != d.colour_merging {
-        out.colour_merging = p.colour_merging;
-    }
-    if p.clean_up_damage != d.clean_up_damage {
-        out.clean_up_damage = p.clean_up_damage;
-    }
-    if p.black_and_white != d.black_and_white {
-        out.black_and_white = p.black_and_white;
-    }
-    if p.line_art != d.line_art {
-        out.line_art = p.line_art;
-    }
-    if p.fewer_paths != d.fewer_paths {
-        out.fewer_paths = p.fewer_paths;
-    }
-    out
+    serde_json::from_value(serde_json::Value::Object(out)).unwrap_or_else(|_| base.clone())
 }
 
 /// The summary CSV the toolbar's "Export stats.csv" writes.
@@ -637,6 +622,21 @@ mod tests {
         assert!(merged.transparent_background);
         assert_eq!(merged.speckle_floor, 1.0, "the preset's own values apply");
         assert_eq!(merged.max_colours, 16);
+    }
+
+    /// Every preset, applied to a queue at the defaults, is exactly that preset: each field a
+    /// preset sets reaches the row. The Editable preset's `editability` used to be dropped,
+    /// so a batch row set to Editable traced like Logo.
+    #[test]
+    fn every_preset_reaches_a_row_whole() {
+        for preset in Preset::ALL {
+            assert_eq!(
+                merge(&Settings::default(), preset),
+                preset.settings(),
+                "{preset:?}"
+            );
+        }
+        assert!(merge(&Settings::default(), Preset::Editable).editability);
     }
 
     #[test]

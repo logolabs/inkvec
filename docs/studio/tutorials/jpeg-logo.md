@@ -81,17 +81,16 @@ The colours now come from the cleaned image, which is closer to the artwork than
 still a measurement. If you know the brand's real values:
 
 1. In the palette, press **Paste brand palette**.
-2. Paste the colours, one per line, as hex (`#12443E`) or CSS variables. Include every colour the
+2. Paste the colours, one per line, as hex (`#12443E`), RGB or CSS variables. Include every colour the
    logo uses, white and black too: every ink is matched to its nearest pasted colour.
 3. Check the preview. A gold figure means a large move; make sure it is the right colour.
 4. Press **Snap**.
 
 ## 7. Take it out
 
-Snapped colours live on the drawing on screen. In version 0.2.0, **Export** re-traces first and
-writes the measured colours, so after snapping use **Copy SVG** and paste the drawing where it is
-going. If you did not snap, **Export** (or <kbd>Ctrl</kbd>+<kbd>E</kbd>) writes the SVG, a minified
-copy, PNGs and an asset pack; see [Export](../export.md).
+**Export** (or <kbd>Ctrl</kbd>+<kbd>E</kbd>) writes the SVG, a minified copy, PNGs and an asset
+pack, all in the snapped colours; see [Export](../export.md). **Copy SVG** puts the drawing on the
+clipboard instead.
 
 The Result tab will still list *The source is a JPEG, so these colours carry its compression
 damage*. That is a fact about the file you started from, and it goes into the asset pack's README

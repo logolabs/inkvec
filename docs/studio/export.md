@@ -56,14 +56,14 @@ Without the asset pack, `palette.json` is written loose beside the SVG.
 
 ### Things to know
 
-- **PNG and favicon files are square.** In version 0.2.0 each PNG is drawn at exactly 512×512,
-  1024×1024 or 2048×2048 pixels, and a drawing that is not square is **stretched** to fill it. For a
-  wide or tall logo, take the SVG and render it at the size you need elsewhere, or trace a square
-  version of the mark for the favicon (see the
+- **PNGs keep the drawing's proportions.** 512, 1024 and 2048 are widths: a logo twice as wide as
+  it is tall comes out 512×256, 1024×512 and 2048×1024. The favicon files are square, as favicons
+  must be, with a wide or tall drawing centred on a transparent background. A mark that should
+  fill its favicon is best traced from a square crop (see the
   [favicon tutorial](tutorials/favicon-asset-pack.md)).
-- **Snapped colours are not exported.** The fresh trace measures the colours again, so a snap made
-  in the palette does not reach the files. Use **Copy SVG** for a drawing with snapped colours, or
-  set the colour through a colour group (see [the palette](palette.md#snapping-an-ink-to-an-exact-colour)).
+- **Snapped colours are exported.** The fresh trace measures the colours again, and your snaps are
+  applied to it before anything is written, so every file carries the colours on screen (see
+  [the palette](palette.md#snapping-an-ink-to-an-exact-colour)).
 - The SVG always has the image's full size, whatever size it was traced at.
 
 ## Copy SVG

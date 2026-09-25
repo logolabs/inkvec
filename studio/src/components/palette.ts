@@ -19,7 +19,7 @@
 
 import { fill, h, icon } from "../lib/dom";
 import { de00, percent, type State, type Store, type Suggestion } from "../lib/state";
-import type { ColourGroup, Ink } from "../lib/ipc";
+import type { ColourGroup, Ink, Snap } from "../lib/ipc";
 import { api } from "../lib/ipc";
 import { copyText } from "../lib/platform";
 import {
@@ -38,7 +38,8 @@ import {
 import { closeOverlay, modal, openModal, openPopover, toast } from "./overlays";
 
 export interface PaletteActions {
-  snap(from: string, to: string): void;
+  /** Snap inks, each named by the colour it was traced as, in one rewrite of the drawing. */
+  snap(snaps: Snap[]): void;
   /** Replace the colour groups; a new trace follows, draft then final. */
   setColourGroups(groups: ColourGroup[]): void;
 }
@@ -821,7 +822,7 @@ function openSnap(anchor: HTMLElement, ink: Ink, act: PaletteActions): void {
           {
             style: { background: "var(--accent)", borderColor: "var(--accent)", color: "var(--accent-ink)", fontWeight: "600" },
             onclick: () => {
-              act.snap(ink.traced, field.value.trim().toLowerCase());
+              act.snap([{ from: ink.traced, to: field.value.trim().toLowerCase() }]);
               closeOverlay();
             },
           },
@@ -904,7 +905,7 @@ function pastePalette(store: Store, act: PaletteActions): void {
       "Paste a brand palette",
       [
         area,
-        h("span.muted", { style: { fontSize: "11.5px" } }, "Hex, RGB or CSS variables, one per line. We match each to the nearest traced ink."),
+        h("span.muted", { style: { fontSize: "11.5px" } }, "Hex, RGB or CSS variables, one per line or separated by commas. We match each to the nearest traced ink."),
         preview,
       ],
       [
@@ -913,7 +914,7 @@ function pastePalette(store: Store, act: PaletteActions): void {
           "button.btn.primary",
           {
             onclick: () => {
-              for (const m of matches) act.snap(m.from, m.to);
+              act.snap(matches.map((m) => ({ from: m.from, to: m.to })));
               closeOverlay();
             },
           },

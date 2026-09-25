@@ -332,11 +332,18 @@ smoke test.
   on the one platform that cannot be tested here — buys a paragraph at the cost of the
   installer itself, so the hook only does uninstall cleanup. See
   `src-tauri/installer/hooks.nsh`.
-- **The rename installs beside the old app on Windows.** The product name moved from
-  "Inkvec Studio Lite" to "Inkvec Studio", and Tauri's installers key the install folder and
-  the Apps entry on the product name, so the first "Inkvec Studio" installs next to an
-  existing "Inkvec Studio Lite" instead of upgrading it. Preferences are shared (same
-  identifier, same `inkvec-studio` folder). Removing the old copy from an installer hook
-  was left out on purpose: its uninstaller also removes the context-menu entry and the
-  `inkvec` command the new app may have just set up, and it could not be tested here.
+- **The rename, on Windows, is handled by the installer's hook.** The product name moved
+  from "Inkvec Studio Lite" to "Inkvec Studio", and Tauri's installers key the install
+  folder and the Apps entry on the product name, so without help the first "Inkvec Studio"
+  would install next to an existing "Inkvec Studio Lite". The `.exe` installer's hook
+  (`src-tauri/installer/hooks.nsh`) finds the old install by its Apps entry and runs its own
+  uninstaller first: silently for the per-user `.exe` install, through msiexec (with the
+  consent prompt a per-machine uninstall needs) for an old `.msi`. It asks before closing an
+  old app that is open, and declining installs beside it as before. Preferences are shared
+  (same identifier, same `inkvec-studio` folder) and no uninstaller touches them. The old
+  uninstaller removes the context menu and the `inkvec` command, so the hook puts back
+  whichever was on, pointing at the new app. The hook is dry-run against a staged old
+  install by `tools/check_installer_hooks.py` (a private registry key and folder; CI runs it
+  on Windows); the real installer has not been run against a real old install. The `.msi`
+  installer has no hook: installing the new `.msi` does not remove an old one.
 - **Light theme has had less use than dark.** The tokens are complete and the switch works.

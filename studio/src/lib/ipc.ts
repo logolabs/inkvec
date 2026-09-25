@@ -67,6 +67,12 @@ export interface Settings {
   colourGroups?: ColourGroup[];
 }
 
+/** A traced flat ink, by the colour it was measured as, and what to paint it. Mirrors `api::Snap`. */
+export interface Snap {
+  from: string;
+  to: string;
+}
+
 /**
  * Fills to draw as one. Mirrors `options::ColourGroup`; each member is spelt as the engine's
  * `--merge-colors` grammar spells it: `#rrggbb`, or a gradient's stops joined by `>`.
@@ -507,7 +513,12 @@ export const api = {
    */
   traceBands: (generation: number) => invoke<string | null>("trace_bands", { generation }),
 
-  snapInks: (svg: string, snaps: { from: string; to: string }[], width: number, height: number) =>
+  /**
+   * Paint `svg` (a trace's own drawing) with every snap at once. A snap names its ink by
+   * the colour it was measured as, and still finds it in a re-trace that measured it a
+   * hair apart (`api::SNAP_REACH_DE00`).
+   */
+  snapInks: (svg: string, snaps: Snap[], width: number, height: number) =>
     invoke<{ svg: string; inks: Ink[] }>("snap_inks", { svg, snaps, width, height }),
   matchPalette: (traced: string[], pasted: string) =>
     invoke<{ from: string; to: string; de00: number }[]>("match_palette", { traced, pasted }),

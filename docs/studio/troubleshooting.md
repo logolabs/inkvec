@@ -56,9 +56,9 @@ and accept the suggestions, or lower **Max colours**.
 the image, and a JPEG or a screenshot changes them. Use the [denoiser](settings.md#denoiser), and
 [paste the brand palette](palette.md#paste-a-brand-palette) to snap each ink to its real value.
 
-**I snapped colours, and the exported files have the old ones.** Export re-traces, which measures
-the colours again. In version 0.2.0, use **Copy SVG** after snapping, or set the colour on a colour
-group with **Custom…**. See [Export](export.md#things-to-know).
+**A snapped colour went back to the measured one.** A snap is dropped when its ink is no longer in
+the drawing, for example after a colour group merged it into another ink. Snap the merged ink, or
+give the group a **Custom…** colour.
 
 ## The denoiser
 
@@ -104,8 +104,9 @@ even width; brush and calligraphic strokes stay as outlines.
 **The draft and the final look different.** A draft is traced small (512 px) for speed. Wait for
 the chip to say **final** before judging or copying.
 
-**Exported PNGs are stretched.** In version 0.2.0 the PNG and favicon files are square. Use the SVG
-for a non-square logo, or trace a square version for the favicon.
+**The favicon has space above and below the logo.** Favicons are square; a wide drawing is
+centred in them on a transparent background rather than stretched. Trace a square crop of the mark
+for a favicon that fills its square.
 
 ## Integrations
 
@@ -126,8 +127,8 @@ square to confirm. See [Fabricate](fabricate.md#size).
 include it. **Open the online guide** shows the same pages on
 [logolabs.github.io/inkvec](https://logolabs.github.io/inkvec/studio/).
 
-**How do I start over?** Settings, Advanced, **Reset settings**. It deletes your preferences,
-recent files and saved presets, and leaves your files and the denoiser alone.
+**How do I start over?** Settings, Advanced, **Reset settings**. It resets your preferences and
+clears the recent files, and keeps your saved presets, your files and the denoiser.
 
 ## Studio Lite
 

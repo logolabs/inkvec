@@ -23,6 +23,8 @@ import {
   type Prefs,
   type SampleInfo,
   type Settings,
+  type Snap,
+  type Traced,
 } from "./lib/ipc";
 import { initial, modKey, Store } from "./lib/state";
 import { APP_NAME, copyText, openExternal, pickedFile, pickedPath, pickFiles, WEB, type Picked } from "./lib/platform";
@@ -149,7 +151,48 @@ function traceAndWait(): Promise<void> {
   });
 }
 
+/** Which trace outcome arrived last, so one whose snapped paint finishes late is dropped. */
+let outcomeSeq = 0;
+
+/**
+ * A trace has finished. The user's snaps belong to the image rather than to one trace, so a
+ * traced drawing is painted with them before it is shown: what is on screen, Copy SVG and
+ * every exported format then agree, and the export's own fresh trace keeps them too.
+ */
 function applyOutcome(outcome: Outcome, generation = store.state.generation): void {
+  const seq = ++outcomeSeq;
+  if (outcome.state !== "traced" || !store.state.snaps.length) {
+    showOutcome(outcome, generation);
+    return;
+  }
+  paintWithSnaps(outcome).then(
+    (painted) => {
+      if (seq === outcomeSeq) showOutcome(outcome, generation, painted);
+    },
+    (e) => {
+      if (seq !== outcomeSeq) return;
+      toast(`The snapped colours could not be applied to this trace: ${e}`, { kind: "bad" });
+      showOutcome(outcome, generation);
+    },
+  );
+}
+
+/** `traced` painted with the snaps as they stand, however many times they change meanwhile. */
+async function paintWithSnaps(traced: Traced): Promise<{ svg: string; inks: Traced["palette"] }> {
+  for (;;) {
+    const used = store.state.snaps;
+    if (!used.length) return { svg: traced.svg, inks: traced.palette };
+    const px = traced.report.tracedPx;
+    const painted = await api.snapInks(traced.svg, used, px, px);
+    if (store.state.snaps === used) return painted;
+  }
+}
+
+function showOutcome(
+  outcome: Outcome,
+  generation: number,
+  painted: { svg: string; inks: Traced["palette"] } | null = null,
+): void {
   if (outcome.state === "traced") {
     const wasDraft = store.state.result?.tier === "draft";
     // A draft is smaller than a final, so only a final is ever the yardstick: the readout
@@ -162,9 +205,9 @@ function applyOutcome(outcome: Outcome, generation = store.state.generation): vo
       resultGroups: groupsSent.get(generation) ?? store.state.resultGroups,
       bandsMissing: false,
       previous: outcome.tier === "final" ? before : store.state.previous,
-      svg: outcome.svg,
+      svg: painted?.svg ?? outcome.svg,
       report: outcome.report,
-      palette: outcome.palette,
+      palette: painted?.inks ?? outcome.palette,
       losses: outcome.losses,
       worstCorner: outcome.worstCorner,
       stageState: { kind: "drawing" },
@@ -240,8 +283,9 @@ async function openWith(fn: () => Promise<void>, offer = true): Promise<void> {
     palette: [],
     losses: [],
     result: null,
-    // Colour groups and what was proposed or turned down name colours of the image that
-    // was open; the next one starts without any.
+    // Snaps, colour groups and what was proposed or turned down name colours of the image
+    // that was open; the next one starts without any.
+    snaps: [],
     colourGroups: [],
     resultGroups: [],
     groupSuggestions: null,
@@ -452,7 +496,7 @@ const railActs: RailActions = {
     void api.cancelTrace();
     store.set({ tracing: false, stageState: store.state.svg ? { kind: "cancelled" } : { kind: "empty" } });
   },
-  snap: (from, to) => void snap(from, to),
+  snap: (changes) => void snap(changes),
   setColourGroups: (groups) => {
     store.set({ colourGroups: groups, paletteSelection: [] });
     // Exactly what moving a control does: a draft now, the full trace once things settle.
@@ -485,13 +529,33 @@ const wizardActs: WizardActions = {
 const wizard = createWizard(store, rail, wizardActs, previews);
 workspace.mount(createChooser(store, wizardActs, () => wizard.open()));
 
-async function snap(from: string, to: string): Promise<void> {
+/**
+ * Snap inks, each named by the colour it was traced as. A later snap of the same ink
+ * replaces the earlier one, and a snap back to the traced colour removes it.
+ *
+ * The drawing is always repainted from the trace's own SVG with every snap at once, never
+ * by rewriting the painted one: "Snap N inks" is one rewrite rather than N racing each
+ * other, and snapping an ink twice finds it by the colour it was traced as.
+ */
+async function snap(changes: Snap[]): Promise<void> {
   const st = store.state;
-  if (!st.svg || !st.report) return;
+  const result = st.result;
+  if (!result || !changes.length) return;
+  const before = st.snaps;
+  const named = new Set(changes.map((c) => c.from.toLowerCase()));
+  const snaps = [
+    ...st.snaps.filter((s) => !named.has(s.from.toLowerCase())),
+    ...changes.filter((c) => c.to.toLowerCase() !== c.from.toLowerCase()),
+  ];
+  // Kept before the rewrite comes back, so a trace landing meanwhile is painted with it.
+  store.set({ snaps });
   try {
-    const result = await api.snapInks(st.svg, [{ from, to }], st.report.tracedPx, st.report.tracedPx);
-    store.set({ svg: result.svg, palette: result.inks });
+    const painted = await paintWithSnaps(result);
+    // A newer trace landed meanwhile: it was painted with these snaps as it arrived.
+    if (store.state.result !== result) return;
+    store.set({ svg: painted.svg, palette: painted.inks });
   } catch (e) {
+    if (store.state.snaps === snaps) store.set({ snaps: before });
     toast(String(e), { kind: "bad" });
   }
 }

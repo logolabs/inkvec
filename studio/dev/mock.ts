@@ -341,8 +341,11 @@ mockIPC(
       case "trace_bands":
         return bandsByGeneration.get(a.generation) ?? null;
       case "snap_inks": {
-        let svg = a.svg as string;
-        for (const s of a.snaps as { from: string; to: string }[]) svg = svg.split(`fill="${s.from}"`).join(`fill="${s.to}"`);
+        // Every snap at once, as `api::snap_inks` does: A→B and B→C paint A as B, not C.
+        const to = new Map((a.snaps as { from: string; to: string }[]).map((s) => [s.from.toLowerCase(), s.to.toLowerCase()]));
+        const svg = (a.svg as string).replace(/ (fill|stroke)="([^"]*)"/g, (all, attr, v) =>
+          to.has(v.toLowerCase()) ? ` ${attr}="${to.get(v.toLowerCase())}"` : all,
+        );
         return paletteOf(svg).then((inks) => {
           for (const ink of inks) {
             const s = (a.snaps as { from: string; to: string }[]).find((x) => ink.kind === "flat" && x.to === ink.hex);

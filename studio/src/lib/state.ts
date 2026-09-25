@@ -22,6 +22,7 @@ import type {
   Prefs,
   Report,
   Settings,
+  SourceFacts,
   SourceInfo,
   Stage,
   Traced,
@@ -52,6 +53,27 @@ export type StageState =
 
 /** A proposed colour group; `edited` once the user has changed it, so a new proposal keeps it. */
 export type Suggestion = ColourGroup & { edited?: boolean };
+
+/**
+ * The automatic trace an image was opened with: the fork the wizard starts from.
+ *
+ * Captured when the trace is started (settings, preset, generation) and completed when its
+ * full trace lands (svg, report). It is what "Back to Auto" restores and what the wizard's
+ * left pane compares against; nothing else reads it, and it never changes the drawing.
+ */
+export interface AutoRun {
+  generation: number;
+  settings: Settings;
+  preset: string | null;
+  svg: string | null;
+  report: Report | null;
+  /** What that trace found, so what it suggests does not move when the controls do. */
+  palette: Ink[];
+  losses: Loss[];
+}
+
+/** The wizard's steps, in order. Steps that do not apply to an image are skipped. */
+export type WizardStep = "kind" | "cleanup" | "colours" | "detail" | "shape" | "output";
 
 /** The two halves of the rail. */
 export type RailTab = "result" | "tune";
@@ -183,6 +205,22 @@ export interface State {
   };
 
   update: UpdateInfo | null;
+
+  /** The automatic trace the open image started with; null until one has been started. */
+  auto: AutoRun | null;
+  /** Noise and transparency of the open image, measured once Auto's trace has finished. */
+  facts: SourceFacts | null;
+  /** The card over the stage offering Auto or Custom for the image just opened. */
+  chooser: boolean;
+  /** The Custom wizard, while it is open, and the step it is on. */
+  wizard: { step: WizardStep } | null;
+  /**
+   * What the viewer's left pane shows instead of the source: another trace to compare the
+   * current one with (Auto's, or a wizard preview). Never the drawing itself.
+   */
+  compare: { svg: string; label: string } | null;
+  /** The "Auto chose" note in the Result tab was closed for this image. */
+  autoNoteHidden: boolean;
 }
 
 /** The starting state, before anything has been loaded. */
@@ -243,6 +281,12 @@ export function initial(settings: Settings, minify: MinifySettings): State {
       failuresFirst: false,
     },
     update: null,
+    auto: null,
+    facts: null,
+    chooser: false,
+    wizard: null,
+    compare: null,
+    autoNoteHidden: false,
   };
 }
 

@@ -84,14 +84,22 @@ pub struct Facts {
 /// clear of the rounding an opaque file's alpha channel can carry.
 const ALPHA_OPAQUE: f32 = 0.99;
 
+/// The largest window, on each side, the noise is read from. The estimator sorts every
+/// pixel's Laplacian, and a 4096 px image is sixteen million of them; a window of a million
+/// reads the same statistic of the same pixels at a sixteenth of the cost.
+const NOISE_WINDOW: usize = 1024;
+
 /// Measure `img`.
 ///
 /// The noise is `inkvec_trace::coverage::estimate_noise` on the luminance the palette sees,
 /// with transparent pixels composited on white first: a clear pixel's colour channels are
-/// arbitrary, and the edge between two arbitrary colours is not noise in the picture.
+/// arbitrary, and the edge between two arbitrary colours is not noise in the picture. On a
+/// large image it is read from the centred window of [`NOISE_WINDOW`] pixels a side, at full
+/// resolution (downsampling would average the noise away). Transparency is counted over
+/// the whole image.
 pub fn facts_of(img: &inkvec_trace::Rgba) -> Facts {
-    let n = img.width * img.height;
-    let mut lum = Vec::with_capacity(n);
+    let (w, h) = (img.width, img.height);
+    let n = w * h;
     let mut translucent = 0usize;
     let mut clear = 0usize;
     for p in img.data.as_chunks::<4>().0.iter().take(n) {
@@ -102,10 +110,19 @@ pub fn facts_of(img: &inkvec_trace::Rgba) -> Facts {
         if a < 0.5 {
             clear += 1;
         }
-        let y = 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2];
-        lum.push(y * a + (1.0 - a));
     }
-    let sigma = inkvec_trace::coverage::estimate_noise(&lum, img.width, img.height);
+    let (ww, wh) = (w.min(NOISE_WINDOW), h.min(NOISE_WINDOW));
+    let (x0, y0) = ((w - ww) / 2, (h - wh) / 2);
+    let mut lum = Vec::with_capacity(ww * wh);
+    for y in y0..y0 + wh {
+        for x in x0..x0 + ww {
+            let p = &img.data[(y * w + x) * 4..(y * w + x) * 4 + 4];
+            let a = p[3].clamp(0.0, 1.0);
+            let v = 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2];
+            lum.push(v * a + (1.0 - a));
+        }
+    }
+    let sigma = inkvec_trace::coverage::estimate_noise(&lum, ww, wh);
     Facts {
         noise_levels: sigma * 255.0,
         // One stray pixel of alpha is a file-format artefact, not transparency anybody drew.
@@ -147,7 +164,11 @@ pub fn run_preview(
 mod tests {
     use super::*;
 
-    fn rgba(w: usize, h: usize, px: impl Fn(usize, usize) -> [f32; 4]) -> inkvec_trace::Rgba {
+    fn rgba(
+        w: usize,
+        h: usize,
+        mut px: impl FnMut(usize, usize) -> [f32; 4],
+    ) -> inkvec_trace::Rgba {
         let mut data = Vec::with_capacity(w * h * 4);
         for y in 0..h {
             for x in 0..w {
@@ -286,6 +307,30 @@ mod tests {
             "the clear ground is flat once composited: {}",
             f.noise_levels
         );
+    }
+
+    #[test]
+    fn a_large_image_reads_its_noise_from_the_centre_at_full_resolution() {
+        // Flat margins round a noisy middle: the window is all middle, so the noise shows;
+        // read over the whole canvas the flat margins would be most of it.
+        let side = NOISE_WINDOW + 800;
+        let mut state = 0x9e37_79b9_u32;
+        let img = rgba(side, side, |x, y| {
+            let middle =
+                (400..400 + NOISE_WINDOW).contains(&x) && (400..400 + NOISE_WINDOW).contains(&y);
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            let v = if middle {
+                0.5 + (state as f32 / u32::MAX as f32 - 0.5) * (8.0 / 255.0)
+            } else {
+                0.5
+            };
+            [v, v, v, 1.0]
+        });
+        let f = facts_of(&img);
+        assert!(f.noise_levels > 1.5, "{}", f.noise_levels);
+        assert!(!f.has_alpha);
     }
 
     #[test]

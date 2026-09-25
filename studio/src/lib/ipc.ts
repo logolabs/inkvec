@@ -123,6 +123,9 @@ export interface SavedPreset {
   settings: Settings;
 }
 
+/** What opening an image offers besides the automatic trace, which always starts at once. */
+export type OnOpen = "ask" | "auto" | "custom";
+
 export interface Prefs {
   outputFolder: string | null;
   theme: Theme;
@@ -134,8 +137,19 @@ export interface Prefs {
   channel: "stable" | "prerelease";
   trace: Settings;
   recent: string[];
+  /** Whether the first-run introduction to the wizard has been seen. */
   seenFirstRun: boolean;
+  onOpen: OnOpen;
   saved: SavedPreset[];
+}
+
+/** What the wizard knows about the open image that a trace's report does not say. */
+export interface SourceFacts {
+  /** Pixel noise in 8-bit levels; a clean render reads about 0.5. */
+  noiseLevels: number;
+  hasAlpha: boolean;
+  /** Share of the canvas that is mostly clear. */
+  clearShare: number;
 }
 
 // ------------------------------------------------------------------------ traces ---
@@ -454,6 +468,18 @@ export const api = {
     invoke<number>("start_trace", { request: { settings, tier } }),
   cancelTrace: () => invoke<void>("cancel_trace"),
   /**
+   * A wizard preview: a draft of `settings` that does not become the drawing. It never
+   * retires the trace in flight and waits behind it; the result is a `preview:done` event.
+   */
+  startPreview: (settings: Settings) =>
+    invoke<number>("start_preview", { request: { settings, tier: "draft" } }),
+  /** Retire every preview in flight or waiting; the viewer's trace is not touched. */
+  cancelPreviews: () => invoke<void>("cancel_previews"),
+  /** Noise and transparency of the open image, from the raster a trace at `maxDim` reads. */
+  sourceFacts: (maxDim: number) => invoke<SourceFacts>("source_facts", { maxDim }),
+  /** The image the app was launched to open (the context menu), once. */
+  launchPath: () => invoke<string | null>("launch_path"),
+  /**
    * The confidence bands of trace `generation`, asked for only when Certainty is shown.
    * Megabytes on a detailed drawing, so they are not in every result; null once the
    * backend no longer holds that trace, or when it had none.
@@ -509,6 +535,10 @@ export const events = {
     listen<{ generation: number; name: string; ms: number }>("trace:stage", (e) => fn(e.payload)),
   traceDone: (fn: (e: { generation: number; outcome: Outcome }) => void) =>
     listen<{ generation: number; outcome: Outcome }>("trace:done", (e) => fn(e.payload)),
+  previewDone: (fn: (e: { generation: number; outcome: Outcome }) => void) =>
+    listen<{ generation: number; outcome: Outcome }>("preview:done", (e) => fn(e.payload)),
+  /** A second launch asked this window to open a file (the context menu, while running). */
+  openPath: (fn: (path: string) => void) => listen<string>("open:path", (e) => fn(e.payload)),
   batchRow: (fn: (row: BatchRow) => void) =>
     listen<BatchRow>("batch:row", (e) => fn(e.payload)),
   batchTotals: (fn: (t: BatchTotals) => void) =>

@@ -7,6 +7,11 @@
  * writes. The anchors are the one overlay painted on a canvas, which follows the view by
  * repainting. Nothing here re-renders on store changes except when the drawing itself
  * changes — the pan/zoom path never touches the DOM structure.
+ *
+ * The left pane is the source, or — while the wizard compares two traces — another trace
+ * (`State.compare`). That one is shown as an image of the SVG rather than parsed into the
+ * page: it is only ever looked at, never overlaid or isolated, and an `<img>` costs the
+ * page one element however many paths the drawing has. It follows the same pan and zoom.
  */
 
 import { fill, h, s } from "../lib/dom";
@@ -34,14 +39,18 @@ export interface Viewer {
 
 export function createViewer(store: Store): Viewer {
   const sourceArt = h("div.art");
+  const compareArt = h("div.art.compare");
+  compareArt.style.display = "none";
+  const sourceLabel = h("span.eyebrow.panelabel", null, "Source");
   const vectorArt = h("div.art");
   const overlay = s("svg.overlay") as SVGSVGElement;
 
   const sourcePane = h(
     "div.pane.source",
     null,
-    h("span.eyebrow.panelabel", null, "Source"),
+    sourceLabel,
     sourceArt,
+    compareArt,
   );
   // The overlay lives *inside* the artwork's wrapper rather than beside it. Two
   // absolutely positioned siblings carrying the same transform drift apart the moment
@@ -55,10 +64,11 @@ export function createViewer(store: Store): Viewer {
   // few. The canvas is not zoomed, so it lives beside the artwork rather than inside it,
   // and it is repainted at the new pan and zoom in the frame that shows them.
   const anchorsCv = h("canvas.anchors") as HTMLCanvasElement;
+  const vectorLabel = h("span.eyebrow.panelabel", null, "Vector · SVG");
   const vectorPane = h(
     "div.pane.vector",
     null,
-    h("span.eyebrow.panelabel", null, "Vector · SVG"),
+    vectorLabel,
     vectorArt,
     anchorsCv,
   );
@@ -79,6 +89,10 @@ export function createViewer(store: Store): Viewer {
   let bandsRequest = 0;
   /** The zoom the documents were last sized at. */
   let sizedZoom = Number.NaN;
+  /** The comparison on screen in the left pane, its image's URL and its own viewBox. */
+  let shownCompare: State["compare"] | undefined;
+  let compareUrl: string | null = null;
+  let compareBox = { x: 0, y: 0, w: 1, h: 1 };
 
   // The layers, bottom to top, made once and emptied when the drawing changes. Each is
   // filled the first time it is shown: a 40,000-node logo whose anchors nobody looks at
@@ -172,6 +186,45 @@ export function createViewer(store: Store): Viewer {
     } else if (st.show.certainty) {
       applyShow();
     }
+  }
+
+  /**
+   * Show `State.compare` in the left pane in place of the source, or the source again.
+   *
+   * Placed by its own viewBox against the drawing's, so a comparison with a different
+   * canvas (a margin on one side only) still lines up shape for shape.
+   */
+  function redrawCompare(): void {
+    const c = store.state.compare;
+    if (c === shownCompare) return;
+    shownCompare = c;
+    if (compareUrl) URL.revokeObjectURL(compareUrl);
+    compareUrl = null;
+    if (c) {
+      compareBox = viewBoxOf(c.svg) ?? box;
+      compareUrl = URL.createObjectURL(new Blob([c.svg], { type: "image/svg+xml" }));
+      fill(compareArt, h("img", { src: compareUrl, alt: "", draggable: "false", style: { imageRendering: "auto" } }));
+    } else {
+      fill(compareArt);
+    }
+    compareArt.style.display = c ? "" : "none";
+    sourceArt.style.display = c ? "none" : "";
+    sourceLabel.textContent = c ? c.label : "Source";
+    vectorLabel.textContent = c ? "Yours" : "Vector · SVG";
+    sourcePane.classList.toggle("comparing", Boolean(c));
+    sizeCompare();
+  }
+
+  function sizeCompare(): void {
+    const img = compareArt.querySelector("img");
+    if (!img) return;
+    const z = store.state.zoom;
+    img.style.position = "absolute";
+    img.style.left = `${(compareBox.x - box.x) * z}px`;
+    img.style.top = `${(compareBox.y - box.y) * z}px`;
+    img.style.width = `${compareBox.w * z}px`;
+    img.style.height = `${compareBox.h * z}px`;
+    img.style.maxWidth = "none";
   }
 
   function dropBands(): void {
@@ -411,7 +464,7 @@ export function createViewer(store: Store): Viewer {
     // The transform still carries the pan, which is a translate and composites
     // correctly, so dragging stays a single cheap write per frame.
     const t = `translate(${st.pan.x}px, ${st.pan.y}px)`;
-    for (const node of [sourceArt, vectorArt]) {
+    for (const node of [sourceArt, compareArt, vectorArt]) {
       node.style.transform = t;
     }
 
@@ -435,6 +488,7 @@ export function createViewer(store: Store): Viewer {
       }
       overlay.setAttribute("width", String(w));
       overlay.setAttribute("height", String(h));
+      sizeCompare();
     }
     if (st.show.anchors) drawAnchors();
 
@@ -613,6 +667,7 @@ export function createViewer(store: Store): Viewer {
 
   // The viewer is the only thing that redraws itself; the stage around it never asks.
   store.on(["svg", "source", "result"], redraw);
+  store.on(["compare"], redrawCompare);
   store.on(["zoom", "pan", "view", "wipe", "flicked", "detail"], transform);
   store.on(["show"], applyShow);
   store.on(["hoverFill"], applyIsolate);

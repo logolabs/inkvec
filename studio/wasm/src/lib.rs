@@ -292,6 +292,11 @@ impl Studio {
                 )?)
             }
             "default_prefs" => to_json(&web_prefs(prefs::Prefs::default())),
+            "reset_prefs" => {
+                let a: PrefsArgs = from_json(args)?;
+                let kept = serde_json::from_value::<prefs::Prefs>(a.prefs).unwrap_or_default();
+                to_json(&web_reset(&kept))
+            }
             "sanitise_prefs" => {
                 let a: PrefsArgs = from_json(args)?;
                 let parsed = serde_json::from_value::<prefs::Prefs>(a.prefs)
@@ -385,6 +390,15 @@ fn web_prefs(p: prefs::Prefs) -> prefs::Prefs {
     p
 }
 
+/// "Reset settings" in a tab: the web build's own defaults (a first visit's trace size, not
+/// the desktop's), with the saved presets kept, as the desktop app keeps them.
+fn web_reset(current: &prefs::Prefs) -> prefs::Prefs {
+    prefs::Prefs {
+        saved: web_prefs(current.after_reset()).saved,
+        ..web_prefs(prefs::Prefs::default())
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SourceFactsArgs {
@@ -474,6 +488,29 @@ mod tests {
             repo: inkvec_restore::HF_DENOISER_REPO,
             sha256: inkvec_restore::WEIGHTS_SHA256,
         }
+    }
+
+    #[test]
+    fn a_reset_in_a_tab_keeps_the_saved_presets_and_starts_from_the_webs_defaults() {
+        let saved = vec![prefs::SavedPreset {
+            id: "mine".into(),
+            name: "Our house style".into(),
+            settings: options::Settings::default(),
+        }];
+        let used = prefs::Prefs {
+            draft_px: 256,
+            saved: saved.clone(),
+            ..prefs::Prefs::default()
+        };
+        let reset = web_reset(&used);
+        assert_eq!(reset.saved.len(), 1);
+        assert_eq!(reset.saved[0].id, "mine");
+        assert_eq!(reset.draft_px, prefs::Prefs::default().draft_px);
+        assert_eq!(reset.trace.trace_size, DEFAULT_TRACE_PX);
+        assert_eq!(
+            web_reset(&prefs::Prefs::default()),
+            web_prefs(prefs::Prefs::default())
+        );
     }
 
     #[test]

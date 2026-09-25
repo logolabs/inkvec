@@ -74,23 +74,32 @@ fn save_at(file: Option<PathBuf>, prefs: &Prefs) -> Result<(), String> {
     std::fs::rename(&tmp, &p).map_err(|e| format!("cannot replace {}: {e}", p.display()))
 }
 
-/// Forget everything. The Advanced group's "Reset settings".
+/// The Advanced group's "Reset settings": every preference back to its default and the
+/// recent list cleared, the saved presets kept ([`Prefs::after_reset`]).
 pub fn reset() -> Result<Prefs, String> {
     reset_at(path())
 }
 
 /// [`reset`] against an explicit file, so a test can exercise it on a temporary one. The
-/// test suite must never call `reset()` itself: that deletes the real preferences of
+/// test suite must never call `reset()` itself: that rewrites the real preferences of
 /// whoever runs it.
+///
+/// With no saved presets to keep, the file is removed, as a reset always did; otherwise it
+/// is rewritten with the defaults and the presets.
 fn reset_at(file: Option<PathBuf>) -> Result<Prefs, String> {
-    if let Some(p) = file {
-        match std::fs::remove_file(&p) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(format!("cannot remove {}: {e}", p.display())),
+    let kept = load_at(file.clone()).after_reset();
+    if kept.saved.is_empty() {
+        if let Some(p) = file {
+            match std::fs::remove_file(&p) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(format!("cannot remove {}: {e}", p.display())),
+            }
         }
+        return Ok(kept);
     }
-    Ok(Prefs::default())
+    save_at(file, &kept)?;
+    Ok(kept)
 }
 
 #[cfg(test)]
@@ -140,6 +149,39 @@ mod tests {
         let missing = scratch("no-such-prefs");
         let _ = std::fs::remove_file(&missing);
         assert!(reset_at(Some(missing)).is_ok());
+    }
+
+    /// "Reset settings" used to delete the preferences file whole, and the saved presets
+    /// with it, though its confirmation names only the preferences and the recent list.
+    #[test]
+    fn a_reset_keeps_the_saved_presets() {
+        let file = scratch("prefs-with-presets");
+        let saved = vec![SavedPreset {
+            id: "mine".into(),
+            name: "Our house style".into(),
+            settings: inkvec_studio_core::options::Settings::default(),
+        }];
+        let used = Prefs {
+            draft_px: 256,
+            recent: vec![PathBuf::from("logo.png")],
+            saved: saved.clone(),
+            ..Prefs::default()
+        };
+        save_at(Some(file.clone()), &used).unwrap();
+        let reset = reset_at(Some(file.clone())).unwrap();
+        assert_eq!(reset.saved, saved, "the presets are kept");
+        assert_eq!(
+            reset.draft_px,
+            Prefs::default().draft_px,
+            "the preferences are not"
+        );
+        assert!(reset.recent.is_empty());
+        assert_eq!(
+            load_at(Some(file.clone())),
+            reset,
+            "and that is what the next start reads"
+        );
+        std::fs::remove_file(&file).unwrap();
     }
 
     #[test]

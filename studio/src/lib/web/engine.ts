@@ -407,12 +407,10 @@ class WebBackend {
         return clean;
       }
       case "reset_prefs": {
-        try {
-          localStorage.removeItem(PREFS_KEY);
-        } catch {
-          // Storage blocked: nothing was kept.
-        }
-        this.prefs = (await this.enqueue("default_prefs", 0, { args: {} })) as Record<string, unknown>;
+        // The defaults, with the saved presets kept, as the desktop app resets.
+        const current = await this.loadPrefs();
+        this.prefs = (await this.enqueue("reset_prefs", 0, { args: { prefs: current } })) as Record<string, unknown>;
+        this.storePrefs();
         return this.prefs;
       }
 

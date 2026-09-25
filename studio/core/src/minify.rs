@@ -106,7 +106,7 @@ pub struct MinifyResult {
 
 /// Rewrite one SVG.
 pub fn run(svg: &str, settings: MinifySettings) -> Result<MinifyResult, String> {
-    let started = std::time::Instant::now();
+    let started = inkvec_core::clock::Instant::now();
     let opts = settings.to_options();
     let (out, report) = inkvec_svgmin::minify(svg, &opts)?;
     let ms = started.elapsed().as_secs_f64() * 1e3;

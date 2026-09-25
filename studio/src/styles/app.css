@@ -1,5 +1,5 @@
 /* ============================================================================
-   Inkvec Studio Lite — the app's own styles.
+   Inkvec Studio — the app's own styles (both builds).
 
    It runs in a system webview, so this is HTML and CSS, but it has to read as
    native software: dense controls, real window chrome, no hero section, no
@@ -3368,4 +3368,81 @@ body.dragging-ink [data-drop="list"] {
   justify-content: space-between;
   gap: 12px;
   font-size: var(--t-label);
+}
+
+/* ------------------------------------------------------------ the browser build ---
+   Inkvec Studio Lite only: the loading state before the engine has arrived, the full-screen
+   and own-tab buttons where the desktop has window controls, and the phone note. */
+
+.boot {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: var(--paper);
+  color: var(--ink);
+}
+.boot .bootname {
+  font-family: var(--font-display);
+  font-size: 28px;
+}
+.boot .bootline {
+  font-size: 12.5px;
+  color: var(--faint);
+}
+.boot .bootline::after {
+  content: "";
+  display: block;
+  width: 160px;
+  height: 2px;
+  margin-top: 12px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  background-size: 200% 100%;
+  animation: bootsweep 1.2s linear infinite;
+}
+@keyframes bootsweep {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .boot .bootline::after { animation: none; }
+}
+
+.webcontrols {
+  display: flex;
+  gap: 2px;
+  margin-left: 4px;
+}
+.webcontrols .btn {
+  gap: 6px;
+}
+
+.phonenote {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: color-mix(in srgb, var(--void) 82%, transparent);
+}
+.phonecard {
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 22px;
+  border-radius: var(--radius-lg, 12px);
+  background: var(--card);
+  box-shadow: var(--shadow-lg);
+}
+.phonecard p {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--dim);
 }

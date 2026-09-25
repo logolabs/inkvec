@@ -1,0 +1,81 @@
+/**
+ * What the browser build adds around the shared interface: files arriving by drag, drop or
+ * paste (the desktop's webview reports dropped paths instead), and a plain word for phones.
+ */
+
+import { h } from "../dom";
+import type { Store } from "../state";
+
+/**
+ * Files dropped anywhere on the page, or pasted (an image copied from another app arrives
+ * as a file on the clipboard). `take` gets them in the order they came.
+ */
+export function webDrops(store: Store, take: (files: File[]) => void): void {
+  let depth = 0;
+  const hasFiles = (e: DragEvent) => [...(e.dataTransfer?.types ?? [])].includes("Files");
+  const leave = () => {
+    depth = 0;
+    store.set({ dragging: false });
+    document.body.classList.remove("dragging");
+  };
+  window.addEventListener("dragenter", (e) => {
+    if (!hasFiles(e)) return;
+    depth++;
+    store.set({ dragging: true });
+    document.body.classList.add("dragging");
+  });
+  window.addEventListener("dragover", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+  });
+  window.addEventListener("dragleave", (e) => {
+    if (!hasFiles(e)) return;
+    depth = Math.max(0, depth - 1);
+    if (depth === 0) leave();
+  });
+  window.addEventListener("drop", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    leave();
+    const files = [...(e.dataTransfer?.files ?? [])];
+    if (files.length) take(files);
+  });
+  window.addEventListener("paste", (e) => {
+    const target = e.target as HTMLElement | null;
+    if (target?.closest?.("input, textarea, [contenteditable]")) return;
+    const files = [...(e.clipboardData?.files ?? [])];
+    if (!files.length) return;
+    e.preventDefault();
+    take(files);
+  });
+}
+
+/** Narrower than this, with a touch screen, the three-column interface does not fit. */
+const PHONE_WIDTH = 760;
+
+/**
+ * On a phone, say so rather than squeeze: the viewer, the rail and the palette need a
+ * laptop's width. The note can be dismissed, and the app underneath works as it is.
+ */
+export function mountWebChrome(app: HTMLElement): void {
+  const small = window.matchMedia(`(max-width: ${PHONE_WIDTH}px)`).matches;
+  const touch = window.matchMedia("(pointer: coarse)").matches;
+  if (!(small && touch)) return;
+  const note = h(
+    "div.phonenote",
+    { role: "dialog", "aria-label": "Best on a larger screen" },
+    h(
+      "div.phonecard",
+      null,
+      h("span.serif", { style: { fontSize: "22px" } }, "Best on a larger screen"),
+      h(
+        "p",
+        null,
+        "Inkvec Studio Lite is a full editor: a viewer, a rail of controls and a palette side by side. On a phone they do not fit. Open this page on a laptop or desktop to use it; everything runs in your browser and nothing is uploaded.",
+      ),
+      h("button.btn", { onclick: () => note.remove() }, "Continue anyway"),
+    ),
+  );
+  app.append(note);
+}

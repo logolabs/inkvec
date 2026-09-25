@@ -6,10 +6,8 @@
  * client's unreleased mark through this app at all.
  */
 
-import { open } from "@tauri-apps/plugin-dialog";
-import { openUrl } from "@tauri-apps/plugin-opener";
-
 import { appMark, fill, h } from "../lib/dom";
+import { APP_NAME, openExternal, pickFolder, WEB } from "../lib/platform";
 import {
   api,
   events,
@@ -75,20 +73,23 @@ function settings(store: Store, act: ScreenActions): HTMLElement {
         "div.settingsgrid",
         null,
         group("General", [
-          row(
-            "Default output folder",
-            "Where Export opens first.",
-            h(
-              "button.btn.compact",
-              {
-                onclick: async () => {
-                  const picked = await open({ directory: true, multiple: false });
-                  if (typeof picked === "string") act.applyPrefs({ outputFolder: picked });
-                },
-              },
-              p?.outputFolder ?? "Choose…",
-            ),
-          ),
+          // A browser downloads; there is no folder for Export to open.
+          WEB
+            ? null
+            : row(
+                "Default output folder",
+                "Where Export opens first.",
+                h(
+                  "button.btn.compact",
+                  {
+                    onclick: async () => {
+                      const picked = await pickFolder();
+                      if (picked) act.applyPrefs({ outputFolder: picked });
+                    },
+                  },
+                  p?.outputFolder ?? "Choose…",
+                ),
+              ),
           row(
             "Theme",
             "The light theme matches the dark one token for token.",
@@ -123,11 +124,19 @@ function settings(store: Store, act: ScreenActions): HTMLElement {
         ]),
 
         group("Performance", [
-          row(
-            "Threads",
-            `${navigator.hardwareConcurrency || 8} available. Fewer leaves room for other work. Takes effect at the next start.`,
-            number(p?.threads ?? navigator.hardwareConcurrency ?? 8, 1, 256, (v) => act.applyPrefs({ threads: v })),
-          ),
+          WEB
+            ? row(
+                "Threads",
+                crossOriginIsolated
+                  ? "The engine runs on a pool of workers, one per core the browser reports."
+                  : "This page is not cross-origin isolated, so the engine runs on one core. Open it in its own tab for all of them.",
+                h("span.muted.num", { style: { fontSize: "12.5px" } }, crossOriginIsolated ? `${navigator.hardwareConcurrency || 4}` : "1"),
+              )
+            : row(
+                "Threads",
+                `${navigator.hardwareConcurrency || 8} available. Fewer leaves room for other work. Takes effect at the next start.`,
+                number(p?.threads ?? navigator.hardwareConcurrency ?? 8, 1, 256, (v) => act.applyPrefs({ threads: v })),
+              ),
           row(
             "Draft resolution",
             "Used while you move a control.",
@@ -147,7 +156,10 @@ function settings(store: Store, act: ScreenActions): HTMLElement {
 
         group("Denoiser", denoiserRows(store, denoiser)),
 
-        group("Updates", [
+        // A web page is always the version it is served as.
+        WEB
+          ? null
+          : group("Updates", [
           row(
             "Check on start",
             "Sends your app version and operating system. Nothing else.",
@@ -204,7 +216,9 @@ function settings(store: Store, act: ScreenActions): HTMLElement {
           // The same engine, on the command line. The binary linked is the one shipped
           // beside the app, so a trace from the terminal and a trace from the window are
           // the same version.
-          integrationRow(
+          WEB
+            ? null
+            : integrationRow(
             "Add inkvec to PATH",
             "The same engine, on the command line.",
             () => api.cliStatus(),
@@ -212,7 +226,9 @@ function settings(store: Store, act: ScreenActions): HTMLElement {
             () => api.removeCli(),
             (s) => (s.installed ? (s.path ?? "Installed") : "Not on the path"),
           ),
-          integrationRow(
+          WEB
+            ? null
+            : integrationRow(
             "Right-click menu",
             platformMenuHelp(store),
             () => api.contextMenuStatus(),
@@ -249,11 +265,13 @@ function settings(store: Store, act: ScreenActions): HTMLElement {
           "div.privacycard",
           null,
           h("span.eyebrow", null, "Privacy"),
-          h("span.line", null, "Your image never leaves this computer."),
+          h("span.line", null, WEB ? "Your image never leaves this browser." : "Your image never leaves this computer."),
           h(
             "p",
             { style: { margin: "0", fontSize: "12.5px", lineHeight: "1.65", color: "var(--faint)" } },
-            "Tracing runs entirely on your own processor. There is no account, no upload and no telemetry. The only network request the app can make is the update check, which sends your app version and operating system and nothing else. Turn it off above and the app never contacts the network at all.",
+            WEB
+              ? "Tracing runs in this tab, on your own processor, as WebAssembly. There is no account, no upload and no telemetry. The page fetches only itself and, if you ask for it, the denoiser's weights; your preferences are kept in this browser's storage."
+              : "Tracing runs entirely on your own processor. There is no account, no upload and no telemetry. The only network request the app can make is the update check, which sends your app version and operating system and nothing else. Turn it off above and the app never contacts the network at all.",
           ),
         ),
       ),
@@ -268,7 +286,9 @@ function denoiserRows(store: Store, d: DenoiserStatus | undefined) {
     return [
       row(
         "Status",
-        "This build does not include the restorer, so there is nothing to download. The release builds for Windows, Linux and Apple-silicon macOS do.",
+        WEB
+          ? "The denoiser needs a cross-origin isolated page, which this one is not. Open the app in its own tab to use it."
+          : "This build does not include the restorer, so there is nothing to download. The release builds for Windows, Linux and Apple-silicon macOS do.",
         h("span.muted", { style: { fontSize: "12.5px" } }, "Not in this build"),
       ),
     ];
@@ -287,8 +307,10 @@ function denoiserRows(store: Store, d: DenoiserStatus | undefined) {
     row(
       d.installed ? "Remove" : "Download",
       d.installed
-        ? d.path ?? ""
-        : "Downloaded once and stored on this machine. Everything still runs locally — the model comes down, your image never goes up.",
+        ? (d.path ?? (WEB ? "Kept in this browser's storage." : ""))
+        : WEB
+          ? "Downloaded once into this browser's storage, and run in this tab on your GPU where it has one. The model comes down, your image never goes up."
+          : "Downloaded once and stored on this machine. Everything still runs locally — the model comes down, your image never goes up.",
       d.installed
         ? h(
             "button.btn.compact.danger",
@@ -331,13 +353,15 @@ export function openDenoiserModal(store: Store): void {
         : h(
             "p",
             null,
-            "Downloaded once and stored on this machine. It repairs JPEG and screenshot damage before tracing, which usually halves the colour error on photographed logos. Everything still runs locally — the model comes down, your image never goes up.",
+            WEB
+              ? "Downloaded once (about 80 MB, plus ONNX Runtime Web) and kept in this browser. It repairs JPEG and screenshot damage before tracing, which usually halves the colour error on photographed logos. It runs in this tab, on your GPU where there is one — the model comes down, your image never goes up."
+              : "Downloaded once and stored on this machine. It repairs JPEG and screenshot damage before tracing, which usually halves the colour error on photographed logos. Everything still runs locally — the model comes down, your image never goes up.",
           ),
       h(
         "div.stats",
         null,
         h("div", null, h("span.k", null, "from"), h("span.v", { style: { fontSize: "12px" } }, d.repo)),
-        h("div", null, h("span.k", null, "adds per trace"), h("span.v", null, "~0.6 s")),
+        h("div", null, h("span.k", null, "adds per trace"), h("span.v", null, WEB ? "seconds" : "~0.6 s")),
       ),
       h(
         "span.muted",
@@ -414,7 +438,7 @@ function about(store: Store, act: ScreenActions): HTMLElement {
     });
 
   const link = (label: string, href: string) =>
-    h("a", { href: "#", onclick: (e: Event) => { e.preventDefault(); void openUrl(href); } }, label);
+    h("a", { href: "#", onclick: (e: Event) => { e.preventDefault(); void openExternal(href); } }, label);
 
   return h(
     "div.screen",
@@ -443,7 +467,7 @@ function about(store: Store, act: ScreenActions): HTMLElement {
           h(
             "div",
             { style: { display: "flex", flexDirection: "column", gap: "8px" } },
-            h("span.serif", { style: { fontSize: "40px", lineHeight: "1" } }, "Inkvec Studio Lite"),
+            h("span.serif", { style: { fontSize: "40px", lineHeight: "1" } }, APP_NAME),
             h(
               "span.faint.num",
               { style: { fontSize: "13px" } },
@@ -457,13 +481,22 @@ function about(store: Store, act: ScreenActions): HTMLElement {
             { style: { margin: "0", fontSize: "13.5px", lineHeight: "1.7", color: "var(--dim)", maxWidth: "380px" } },
             "Made by LogoLabs, an AI lab working on brand assets and logo creation. Tracing reconstructs a picture; drawing one is a different job, and that is the one we do.",
           ),
+          WEB
+            ? h(
+                "p",
+                { style: { margin: "0", fontSize: "13px", lineHeight: "1.7", color: "var(--faint)", maxWidth: "380px" } },
+                "This is the browser edition. The desktop app, Inkvec Studio, is the same interface with folders of images traced in one go, the command line, the right-click menu and traces up to 16384 px.",
+              )
+            : null,
           h(
             "div",
             { style: { display: "flex", gap: "18px", fontSize: "13px", flexWrap: "wrap" } },
             h("a", { href: "#", onclick: (e: Event) => { e.preventDefault(); openHelp(); } }, "User guide"),
             link("GitHub", "https://github.com/logolabs/inkvec"),
             link("Benchmark results", "https://github.com/logolabs/inkvec#benchmark"),
-            link("Hugging Face demo", "https://huggingface.co/spaces/Logolabs/inkvec"),
+            WEB
+              ? link("Inkvec Studio for the desktop", "https://github.com/logolabs/inkvec/releases")
+              : link("Inkvec Studio Lite, in the browser", "https://huggingface.co/spaces/Logolabs/inkvec"),
             link("logolabs.org", "https://logolabs.org"),
           ),
         ),
@@ -499,7 +532,7 @@ function about(store: Store, act: ScreenActions): HTMLElement {
             ),
             notices,
           ),
-          h("span.muted", { style: { fontSize: "12px" } }, "Your image never leaves this computer."),
+          h("span.muted", { style: { fontSize: "12px" } }, WEB ? "Your image never leaves this browser." : "Your image never leaves this computer."),
         ),
       ),
     ),
@@ -608,7 +641,8 @@ function integrationRow(
 
 // ------------------------------------------------------------------ fragments ---
 
-function group(name: string, rows: HTMLElement[]): HTMLElement {
+/** A group of rows; a row that is `null` is one this build does not have. */
+function group(name: string, rows: (HTMLElement | null)[]): HTMLElement {
   return h("div.settinggroup", null, h("div.head.eyebrow", null, name), ...rows);
 }
 

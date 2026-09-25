@@ -7,11 +7,9 @@
  * point of a poster somebody will post.
  */
 
-import { save } from "@tauri-apps/plugin-dialog";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 import { h, icon } from "../lib/dom";
-import { api } from "../lib/ipc";
+import { revealAction, saveFile, WEB } from "../lib/platform";
 import { count, de00, type Store } from "../lib/state";
 import { closeOverlay, openModal, toast } from "./overlays";
 
@@ -194,21 +192,19 @@ export function openCardComposer(store: Store): void {
     }
   });
 
-  const saveBtn = h("button.btn.primary", { type: "button" }, icon("download", 15), h("span", null, "Save PNG")) as HTMLButtonElement;
+  const saveBtn = h("button.btn.primary", { type: "button" }, icon("download", 15), h("span", null, WEB ? "Download PNG" : "Save PNG")) as HTMLButtonElement;
   saveBtn.onclick = busyButton(saveBtn, "Saving…", async () => {
     const stem = store.state.source?.name.replace(/\.[^.]+$/, "") ?? "inkvec";
-    const path = await save({
-      defaultPath: `${stem}-card.png`,
-      filters: [{ name: "PNG", extensions: ["png"] }],
-    });
-    if (!path) return;
     const blob = await toBlob();
     if (!blob) return;
-    await api.saveBytes(path, [...new Uint8Array(await blob.arrayBuffer())]);
+    const saved = await saveFile(`${stem}-card.png`, new Uint8Array(await blob.arrayBuffer()), [
+      { name: "PNG", extensions: ["png"] },
+    ]);
+    if (!saved) return;
     closeOverlay();
-    toast(`Card saved to ${path}`, {
+    toast(saved.path ? `Card saved to ${saved.path}` : `Downloaded ${saved.name}`, {
       kind: "good",
-      action: { label: "Show in folder", run: () => void revealItemInDir(path) },
+      action: revealAction(saved.path),
     });
   });
 

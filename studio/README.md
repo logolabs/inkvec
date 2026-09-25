@@ -1,9 +1,16 @@
 <img src="src/assets/mark.svg" alt="" height="72" align="right">
 
-# Inkvec Studio Lite
+# Inkvec Studio
 
 A desktop app for Windows, macOS and Linux that turns a raster logo into an SVG, exactly,
 and minimises SVGs you already have. Tauri v2 over this repository's own engine.
+
+The same interface also runs in a browser tab as **Inkvec Studio Lite** — the Studio's
+shared core compiled to WebAssembly, served as a static site on the Hugging Face Space. See
+[Inkvec Studio Lite, in the browser](#inkvec-studio-lite-in-the-browser). "Lite" names only
+the browser build; the desktop app is Inkvec Studio. (It was called Inkvec Studio Lite up to
+0.1.6; its bundle identifier and its settings folder, `inkvec-studio`, are unchanged, so
+preferences carry over.)
 
 It is free, and it is marketing for LogoLabs. That only works if it is genuinely good and
 genuinely honest, which is why the quality report is a measurement rather than a badge and
@@ -110,19 +117,29 @@ asked you to trust it twice.
 
 ```
 studio/
-  src/                 frontend: TypeScript, no framework
-    lib/               DOM builder, typed IPC, store, SVG path reader
+  src/                 frontend, shared by both builds: TypeScript, no framework
+    lib/               DOM builder, typed IPC + transport switch, platform.ts, store
+      web/             the browser build's backend: engine.ts, the two workers, chrome
     components/        viewer, rail, overlays, export sheet + share card
-    views/             workspace, minify, batch, settings + about
+    views/             workspace, minify, fabricate, batch, settings + about
     styles/            tokens.css (dark + light), app.css
-  src-tauri/           backend: its own cargo workspace
-    src/               trace, quality, lost, minify, export, batch, denoiser,
-                       settings, integration (PATH + context menu)
+  core/                the shared core (inkvec-studio-core): trace, quality, lost,
+                       options, prefs model, wizard, export, minify, api (command bodies)
+  src-tauri/           the desktop shell: its own cargo workspace (core and wasm are
+                       members); threads, events, files, settings on disk, denoiser,
+                       batch, integration (PATH + context menu)
     binaries/          the inkvec CLI sidecar, built by scripts/sidecar.mjs
     installer/         hooks.nsh — NSIS uninstall cleanup
-  scripts/             sidecar.mjs: builds and names the CLI for the target triple
+  wasm/                the browser shell (inkvec-studio-wasm): the core for a Web Worker
+  web/                 the Space's README card, a local server with the isolation
+                       headers, and a headless-Edge smoke test
+  scripts/             sidecar.mjs (the CLI for the target triple), build-web.mjs (the site),
+                       deploy-space.py (uploads it; needs your token)
   tools/               asset and notice generators
 ```
+
+Everything a command does that is not about a window, a file or a thread is in `core/`, and
+both shells call it: a feature added there is a feature of both apps.
 
 There is no frontend framework. The rendering budget is CSS, DOM and inline SVG; the
 viewer has to survive a few thousand anchor dots, and a virtual DOM diffing thousands of
@@ -133,6 +150,50 @@ whole because they are small; the viewer is driven imperatively because it is no
 --workspace` runs on every CI platform and must not start needing WebKitGTK, a WebView2
 SDK or a macOS webview. The app still depends on the engine by path, so it always builds
 against the tree it sits in.
+
+## Inkvec Studio Lite, in the browser
+
+```sh
+cd studio
+npm install
+npm run build:web          # both WebAssembly builds, then the site, into dist-web/
+npm run serve:web          # http://127.0.0.1:8931/ with the isolation headers
+python web/smoke.py        # drive it in headless Edge (needs `pip install playwright`)
+python scripts/deploy-space.py --space Logolabs/inkvec   # upload; needs HF_TOKEN
+```
+
+`build:web` needs the WebAssembly toolchain the engine's browser package needs
+(`rustup target add wasm32-unknown-unknown`, a nightly with `rust-src`, `wasm-pack`).
+`node scripts/build-web.mjs --skip-wasm` rebuilds only the interface.
+
+**How it works.** `src/lib/ipc.ts` keeps every command and event name the desktop has and
+switches transport at build time: Tauri on the desktop, `src/lib/web/engine.ts` in the
+browser. That module is the browser's `lib.rs`: a queue (palette, export, minify and
+fabricate first; the viewer's trace next; wizard previews last; a trace, preview or
+Fabricate request that a newer one replaced before it started is dropped), generations and
+`trace:stage` / `trace:done` / `preview:done` events, preferences in `localStorage`
+(sanitised by the core), and crash recovery (a trapped WebAssembly instance is replaced and
+the image reopened). The work is done in `engine.worker.ts` by `studio/wasm`: the threaded
+build (a rayon pool of nested workers) where the page is cross-origin isolated, the
+single-threaded build where it is not. The Space asks for isolation in its README card
+(`web/README.md`), exactly as the old demo did.
+
+**The denoiser** is ONNX Runtime Web running the same `restorer.onnx`, loaded by the old
+demo's `web/denoise.js` in a worker of its own. The pipeline is synchronous and ONNX Runtime
+Web is not, so the engine worker posts the tensor to the denoiser worker and blocks on a
+`SharedArrayBuffer` until the answer is written into it; the auto decision and everything
+around the network stay in Rust (`trace::set_external_denoiser` in the core). It needs an
+isolated page; elsewhere Settings says so.
+
+**What differs from the desktop.** Files are chosen with the browser's picker, dropped or
+pasted, and every write is a download (several files arrive as one `.zip`). The trace size
+tops out at 2048 px and starts at 1024 (a tab has a 4 GiB address space); drafts are the
+desktop's. Hidden rather than faked: Batch, Recent, the output folder, the update check, the
+command-line install and the right-click menu, and "Show in folder". The engine's confidence
+bands (Certainty) reach the desktop through a file and are not available in the browser.
+The top bar has **Full screen** (the Fullscreen API) and, when the page is inside the
+Space's frame, **Open in its own tab**; on a phone a note says the app wants a larger
+screen, and can be dismissed.
 
 ## Decisions worth knowing before you change something
 
@@ -233,7 +294,7 @@ ships: the build's inputs are `index.html` and `splash.html` only.
 npm run sidecar                 # builds the bundled inkvec CLI first:
                                 # tauri.conf.json names it in externalBin, so
                                 # every cargo command wants it on disk
-cd src-tauri && cargo test      # 85 tests
+cd src-tauri && cargo test --workspace   # the shell, the core and the wasm shell
 cd ..        && npm run build   # types + bundle
 python3 tools/make_assets.py --check
 python3 tools/third_party.py --check
@@ -271,4 +332,11 @@ smoke test.
   on the one platform that cannot be tested here — buys a paragraph at the cost of the
   installer itself, so the hook only does uninstall cleanup. See
   `src-tauri/installer/hooks.nsh`.
+- **The rename installs beside the old app on Windows.** The product name moved from
+  "Inkvec Studio Lite" to "Inkvec Studio", and Tauri's installers key the install folder and
+  the Apps entry on the product name, so the first "Inkvec Studio" installs next to an
+  existing "Inkvec Studio Lite" instead of upgrading it. Preferences are shared (same
+  identifier, same `inkvec-studio` folder). Removing the old copy from an installer hook
+  was left out on purpose: its uninstaller also removes the context-menu entry and the
+  `inkvec` command the new app may have just set up, and it could not be tested here.
 - **Light theme has had less use than dark.** The tokens are complete and the switch works.

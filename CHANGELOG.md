@@ -68,6 +68,16 @@ API in particular should be treated as unstable release to release).
 - **Studio: a "Trace transparency" switch** (Colour group), on by default as before; off
   composites onto a matte first.
 
+- **Inkvec Studio Lite**: the Studio's whole interface in a browser tab, for the Hugging Face
+  Space. The backend's platform-independent half is now a shared core (`studio/core`) that the
+  desktop app wraps in Tauri and the browser wraps in a Web Worker as WebAssembly
+  (`studio/wasm`, threaded where the page is cross-origin isolated); the frontend switches
+  transport at build time and keeps every command and event. Vectorize (drafts, the wizard,
+  palette and colour groups, export as downloads), Minify, Fabricate and the denoiser (ONNX
+  Runtime Web) work; batch, the command-line install, the context menu and the update check
+  are desktop-only and hidden. Full screen and "Open in its own tab" in the top bar.
+  `npm run build:web` in `studio/` builds the site; `scripts/deploy-space.py` uploads it.
+
 ### Changed
 
 - **Side-by-side fills no longer show a seam**. Two fills that share an edge, painted
@@ -102,6 +112,11 @@ API in particular should be treated as unstable release to release).
 - **`--restore auto` with no restorer to run** (a build without the network, or weights
   that are not on disk) traces directly and says why in the report lines, instead of
   failing the run. `--restore on` still fails without one.
+- **The desktop app is now called Inkvec Studio**; "Lite" names only the browser build. Its
+  bundle identifier and settings folder (`inkvec-studio`) are unchanged, so preferences carry
+  over. The installer's product name changes with it, so on Windows the new version installs
+  beside an existing "Inkvec Studio Lite" rather than over it; uninstall the old one from
+  Settings, Apps.
 
 ### Fixed
 

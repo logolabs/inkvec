@@ -282,7 +282,8 @@ fn ico(svg: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-fn zip(files: &[Artifact]) -> Result<Vec<u8>, String> {
+/// Pack `files` into one `.zip`, deflated, under their own names.
+pub fn zip(files: &[Artifact]) -> Result<Vec<u8>, String> {
     let mut cursor = std::io::Cursor::new(Vec::new());
     {
         let mut w = zip::ZipWriter::new(&mut cursor);
@@ -319,7 +320,7 @@ fn palette_json(inks: &[Ink]) -> String {
         })
         .collect();
     serde_json::to_string_pretty(&serde_json::json!({
-        "generator": "Inkvec Studio Lite",
+        "generator": crate::APP_NAME,
         "inks": inks,
     }))
     .unwrap_or_else(|_| "{}".into())
@@ -369,7 +370,10 @@ fn readme(subject: &Subject<'_>, minified: &str, stem: &str) -> String {
             ),
         ),
         String::new(),
-        "Traced with Inkvec Studio Lite (Apache-2.0). Nothing was uploaded.".to_string(),
+        format!(
+            "Traced with {} (Apache-2.0). Nothing was uploaded.",
+            crate::APP_NAME
+        ),
     ];
 
     // The honest line comes before the LogoLabs line, and only when there is one to make.

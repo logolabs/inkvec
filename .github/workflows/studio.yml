@@ -1,6 +1,6 @@
 name: studio
 
-# Inkvec Studio Lite's own CI. It is separate from `ci.yml` because the app needs a
+# Inkvec Studio's own CI. It is separate from `ci.yml` because the app needs a
 # webview toolchain that the engine deliberately does not: `cargo build --workspace`
 # must keep working on a machine with no WebKitGTK, which is why `studio/src-tauri` is
 # excluded from the root workspace.
@@ -81,9 +81,18 @@ jobs:
         working-directory: studio
         run: npm run sidecar
 
+      # The desktop shell, the shared core (studio/core) and the browser shell
+      # (studio/wasm) are one workspace; all three are tested.
       - name: Backend tests
         working-directory: studio/src-tauri
-        run: cargo test --release
+        run: cargo test --release --workspace
+
+      # Inkvec Studio Lite: the browser shell must still compile for the browser.
+      - name: Browser build compiles
+        working-directory: studio/src-tauri
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo check -p inkvec-studio-wasm --target wasm32-unknown-unknown
 
       - name: fmt
         working-directory: studio/src-tauri
@@ -93,7 +102,7 @@ jobs:
       # job, plain warnings do not.
       - name: clippy
         working-directory: studio/src-tauri
-        run: cargo clippy --all-targets -- -D clippy::correctness -D clippy::suspicious
+        run: cargo clippy --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious
 
       # The icon, the installer bitmaps and the bundled samples are generated from
       # `studio/tools/make_assets.py`. This fails if the committed binaries have drifted

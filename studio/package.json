@@ -1,14 +1,17 @@
 {
-  "name": "inkvec-studio-lite",
+  "name": "inkvec-studio",
   "private": true,
   "version": "0.1.7",
   "type": "module",
-  "description": "Inkvec Studio Lite: a desktop app that turns a raster logo into an SVG, exactly.",
+  "description": "Inkvec Studio: turn a raster logo into an SVG, exactly. The desktop app (Tauri) and its browser build, Inkvec Studio Lite.",
   "license": "Apache-2.0",
   "scripts": {
     "dev": "vite",
     "mock": "vite --open /dev/index.html",
     "build": "tsc --noEmit && vite build",
+    "build:web": "node scripts/build-web.mjs",
+    "dev:web": "vite --mode web",
+    "serve:web": "python web/serve.py",
     "preview": "vite preview",
     "tauri": "tauri",
     "sidecar": "node scripts/sidecar.mjs"

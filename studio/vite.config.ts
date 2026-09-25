@@ -1,34 +1,103 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 
 import { version } from "./package.json";
 
-// Tauri serves the frontend from a fixed port in development and from the bundled
-// `dist` directory in a release build. `clearScreen: false` keeps the Rust compiler's
-// output visible while `tauri dev` runs both halves in one terminal.
-export default defineConfig({
-  clearScreen: false,
-  // The splash window says which version this is, and it should not have to ask the
-  // backend to do it: it has to paint before anything else is ready.
-  define: { __APP_VERSION__: JSON.stringify(version) },
-  server: {
-    port: 1420,
-    strictPort: true,
-    watch: { ignored: ["**/src-tauri/**"] },
-  },
-  envPrefix: ["VITE_", "TAURI_"],
-  build: {
-    // The webviews Tauri v2 targets: WebKitGTK on Linux, WKWebView on macOS, WebView2
-    // (Chromium) on Windows. All three are evergreen enough for es2021.
-    target: "es2021",
-    minify: "esbuild",
-    sourcemap: false,
-    chunkSizeWarningLimit: 900,
-    rollupOptions: {
-      // Two pages: the app, and the splash window that covers its start-up.
-      input: {
-        main: "index.html",
-        splash: "splash.html",
+// Node's own; declared rather than pulling in @types/node for one read.
+declare const process: { env: Record<string, string | undefined> };
+
+// Two builds of one interface.
+//
+// The default is the desktop app, Inkvec Studio: Tauri serves the frontend from a fixed port
+// in development and from the bundled `dist` directory in a release build.
+// `clearScreen: false` keeps the Rust compiler's output visible while `tauri dev` runs both
+// halves in one terminal.
+//
+// `--mode web` is the browser build, Inkvec Studio Lite (`npm run build:web`, via
+// `scripts/build-web.mjs`, which first stages the WebAssembly, the denoiser loader, the
+// samples and the notices into `web/public`). It is a static site for the Hugging Face
+// Space: relative URLs, one page, and the cross-origin isolation headers the threaded
+// engine needs on the dev server too.
+/**
+ * The page as the browser build serves it: its own name, a loading state for the seconds
+ * the WebAssembly takes to arrive (the desktop has its splash window for that), and a
+ * content policy for a web page rather than a webview -- the denoiser's runtime and weights
+ * come from jsDelivr and Hugging Face, and only when asked for.
+ */
+function webPage(): Plugin {
+  const csp = [
+    "default-src 'self'",
+    "script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net",
+    "worker-src 'self' blob:",
+    "img-src 'self' blob: data:",
+    "style-src 'self' 'unsafe-inline'",
+    "font-src 'self'",
+    "connect-src 'self' https://huggingface.co https://*.huggingface.co https://*.hf.co https://cdn.jsdelivr.net",
+  ].join("; ");
+  return {
+    name: "inkvec-web-page",
+    transformIndexHtml(html) {
+      return html
+        .replace(/<title>[^<]*<\/title>/, "<title>Inkvec Studio Lite</title>")
+        .replace(/content="default-src[^"]*"/, `content="${csp}"`)
+        .replace(
+          "<!-- A desktop app in a webview: no remote origins, no inline script, no eval. -->",
+          "<!-- A web page: its own origin, plus the denoiser's runtime and weights when asked for. -->",
+        )
+        .replace(
+          '<div id="app"></div>',
+          '<div id="boot" class="boot" role="status"><span class="bootname">Inkvec Studio Lite</span><span class="bootline">Loading the engine</span></div>\n    <div id="app"></div>',
+        )
+        .replace(
+          '<meta name="viewport" content="width=device-width, initial-scale=1.0" />',
+          '<meta name="viewport" content="width=device-width, initial-scale=1.0" />\n    <meta name="description" content="Turn a raster logo into an exact SVG, in your browser. Nothing is uploaded." />\n    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />',
+        );
+    },
+  };
+}
+
+export default defineConfig(({ mode }) => {
+  const web = mode === "web";
+  const isolation = {
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Embedder-Policy": "require-corp",
+    "Cross-Origin-Resource-Policy": "cross-origin",
+  };
+  return {
+    clearScreen: false,
+    plugins: web ? [webPage()] : [],
+    base: web ? "./" : "/",
+    publicDir: web ? "web/public" : "public",
+    // The splash window says which version this is, and it should not have to ask the
+    // backend to do it: it has to paint before anything else is ready.
+    define: {
+      __APP_VERSION__: JSON.stringify(version),
+      __INKVEC_WEB__: JSON.stringify(web),
+      __INKVEC_WASM_TOKEN__: JSON.stringify(process.env.INKVEC_WASM_TOKEN ?? ""),
+    },
+    server: {
+      port: web ? 1430 : 1420,
+      strictPort: true,
+      watch: { ignored: ["**/src-tauri/**", "**/target/**"] },
+      headers: web ? isolation : undefined,
+    },
+    preview: { headers: web ? isolation : undefined },
+    envPrefix: ["VITE_", "TAURI_"],
+    worker: { format: "es" as const },
+    build: {
+      // The webviews Tauri v2 targets: WebKitGTK on Linux, WKWebView on macOS, WebView2
+      // (Chromium) on Windows. All three are evergreen enough for es2021, and so is every
+      // browser that can run the threaded WebAssembly the web build needs.
+      target: "es2021",
+      minify: "esbuild" as const,
+      sourcemap: false,
+      chunkSizeWarningLimit: 900,
+      outDir: web ? "dist-web" : "dist",
+      emptyOutDir: true,
+      rollupOptions: {
+        // The desktop has two pages: the app, and the splash window that covers its
+        // start-up. The browser has only the app, which shows its own loading state.
+        input: (web ? { main: "index.html" } : { main: "index.html", splash: "splash.html" }) as Record<string, string>,
       },
     },
-  },
+  };
 });

@@ -12,11 +12,8 @@
  * (tens of milliseconds) to rebuild the sheets on every change, as Minify does.
  */
 
-import { open } from "@tauri-apps/plugin-dialog";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
-
 import { fill, h, icon } from "../lib/dom";
+import { copyText, pickFiles, readPickedText, revealAction, saveFiles, WEB, type Picked } from "../lib/platform";
 import { api, type FabLayer, type FabMode, type FabOptions, type FabPlan, type FileUnits } from "../lib/ipc";
 import { count, percent, type Store } from "../lib/state";
 import { toast } from "../components/overlays";
@@ -153,10 +150,10 @@ export function createFabricate(store: Store): HTMLElement {
   };
 
   const openSvg = async () => {
-    const picked = await open({ multiple: false, filters: [{ name: "SVG", extensions: ["svg"] }] });
-    if (typeof picked !== "string") return;
+    const [picked] = await pickFiles([{ name: "SVG", extensions: ["svg"] }]);
+    if (!picked) return;
     try {
-      await take(picked.split(/[\\/]/).pop() ?? picked, await api.readTextFile(picked));
+      await take(picked.name, await readPickedText(picked));
     } catch (e) {
       toast(String(e), { kind: "bad" });
     }
@@ -168,9 +165,9 @@ export function createFabricate(store: Store): HTMLElement {
     await take(st.source?.name ? `${st.source.name.replace(/\.[^.]+$/, "")}.svg` : "trace.svg", st.svg);
   };
 
-  const acceptDropped = async (path: string) => {
-    if (!path.toLowerCase().endsWith(".svg")) return false;
-    await take(path.split(/[\\/]/).pop() ?? path, await api.readTextFile(path));
+  const acceptDropped = async (picked: Picked) => {
+    if (!picked.name.toLowerCase().endsWith(".svg")) return false;
+    await take(picked.name, await readPickedText(picked));
     return true;
   };
   (el as HTMLElement & { acceptDropped?: typeof acceptDropped }).acceptDropped = acceptDropped;
@@ -896,26 +893,24 @@ function footer(store: Store): HTMLElement {
           disabled: !plan || plan.layers.length === 0,
           onclick: async () => {
             if (!plan) return;
-            const folder = await open({ directory: true, multiple: false, title: "Choose a folder for the sheets" });
-            if (typeof folder !== "string") return;
-            const sep = folder.includes("\\") ? "\\" : "/";
-            const enc = new TextEncoder();
-            const put = (name: string, text: string) => api.saveBytes(`${folder}${sep}${name}`, [...enc.encode(text)]);
-            for (let i = 0; i < plan.layers.length; i++) await put(fileName(plan, i), plan.layers[i].svg);
+            const files: { name: string; data: string }[] = plan.layers.map((l, i) => ({ name: fileName(plan, i), data: l.svg }));
             // One file with every sheet as its own group: what cutter software turns into
             // layers on import, and often the only file anyone needs.
-            if (plan.layers.length > 1) await put(`${stem}-all.svg`, plan.combinedSvg);
-            if (f.dxf) await put(`${stem}.dxf`, plan.dxf);
-            if (f.gcode) await put(`${stem}.gcode`, plan.gcode);
-            const first = `${folder}${sep}${fileName(plan, 0)}`;
+            if (plan.layers.length > 1) files.push({ name: `${stem}-all.svg`, data: plan.combinedSvg });
+            if (f.dxf) files.push({ name: `${stem}.dxf`, data: plan.dxf });
+            if (f.gcode) files.push({ name: `${stem}.gcode`, data: plan.gcode });
+            // A folder on the desktop; in a browser one download, a .zip when there are several.
+            const saved = await saveFiles(files, `${stem}-sheets.zip`, "Choose a folder for the sheets");
+            if (!saved) return;
             const many = plan.layers.length > 1;
-            toast(`Saved ${plan.layers.length} ${sheetWord(store, plan.layers.length)}${many ? " and one combined file" : ""} to ${folder}`, {
+            const what = `${plan.layers.length} ${sheetWord(store, plan.layers.length)}${many ? " and one combined file" : ""}`;
+            toast(saved.folder ? `Saved ${what} to ${saved.folder}` : `Downloaded ${what}${files.length > 1 ? " as one .zip" : ""}`, {
               kind: "good",
-              action: { label: "Show in folder", run: () => void revealItemInDir(first) },
+              action: revealAction(saved.first),
             });
           },
         },
-        plan && plan.layers.length > 1 ? `Save ${plan.layers.length} ${sheetWord(store, 2)}…` : `Save the ${sheetWord(store, 1)}…`,
+        `${WEB ? "Download" : "Save"} ${plan && plan.layers.length > 1 ? `${plan.layers.length} ${sheetWord(store, 2)}` : `the ${sheetWord(store, 1)}`}${WEB ? "" : "…"}`,
       ),
       h(
         "button.btn",
@@ -924,7 +919,7 @@ function footer(store: Store): HTMLElement {
           title: "Copies the shown sheet, or every sheet in one file",
           onclick: async () => {
             if (!plan) return;
-            await writeText(f.shown >= 0 ? plan.layers[f.shown].svg : plan.combinedSvg);
+            await copyText(f.shown >= 0 ? plan.layers[f.shown].svg : plan.combinedSvg);
             toast("Copied. Paste it into Design Space, Silhouette Studio or LightBurn.");
           },
         },

@@ -10,12 +10,9 @@
  * interface; the number is inside it, not in a tooltip hanging off it.
  */
 
-import { open, save } from "@tauri-apps/plugin-dialog";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
-
 import { fill, h, icon } from "../lib/dom";
 import { api } from "../lib/ipc";
+import { copyText, pickFiles, readPickedText, revealAction, saveFile, WEB, type Picked } from "../lib/platform";
 import { bytes, count, de00, percent, seconds, type Store } from "../lib/state";
 import { toast } from "../components/overlays";
 
@@ -181,14 +178,11 @@ export function createMinify(store: Store): HTMLElement {
   };
 
   const openSvg = async () => {
-    const picked = await open({
-      multiple: false,
-      filters: [{ name: "SVG", extensions: ["svg"] }],
-    });
-    if (typeof picked !== "string") return;
+    const [picked] = await pickFiles([{ name: "SVG", extensions: ["svg"] }]);
+    if (!picked) return;
     try {
-      const text = await api.readTextFile(picked);
-      store.state.minify.name = picked.split(/[\\/]/).pop() ?? picked;
+      const text = await readPickedText(picked);
+      store.state.minify.name = picked.name;
       store.state.minify.before = text;
       store.state.minify.result = null;
       store.state.minify.error = null;
@@ -200,10 +194,10 @@ export function createMinify(store: Store): HTMLElement {
   };
 
   /** Accept an SVG dropped anywhere in the window while this tab is showing. */
-  const acceptDropped = async (path: string) => {
-    if (!path.toLowerCase().endsWith(".svg")) return false;
-    const text = await api.readTextFile(path);
-    store.state.minify.name = path.split(/[\\/]/).pop() ?? path;
+  const acceptDropped = async (picked: Picked) => {
+    if (!picked.name.toLowerCase().endsWith(".svg")) return false;
+    const text = await readPickedText(picked);
+    store.state.minify.name = picked.name;
     store.state.minify.before = text;
     store.touch("minify");
     await run();
@@ -419,19 +413,15 @@ export function createMinify(store: Store): HTMLElement {
               onclick: async () => {
                 if (!r) return;
                 const stem = (m.name ?? "drawing").replace(/\.svg$/i, "");
-                const path = await save({
-                  defaultPath: `${stem}.min.svg`,
-                  filters: [{ name: "SVG", extensions: ["svg"] }],
-                });
-                if (!path) return;
-                await api.saveBytes(path, [...new TextEncoder().encode(r.svg)]);
-                toast(`Saved to ${path}`, {
+                const saved = await saveFile(`${stem}.min.svg`, r.svg, [{ name: "SVG", extensions: ["svg"] }]);
+                if (!saved) return;
+                toast(saved.path ? `Saved to ${saved.path}` : `Downloaded ${saved.name}`, {
                   kind: "good",
-                  action: { label: "Show in folder", run: () => void revealItemInDir(path) },
+                  action: revealAction(saved.path),
                 });
               },
             },
-            "Save SVG",
+            WEB ? "Download SVG" : "Save SVG",
           ),
           h(
             "button.btn",
@@ -439,7 +429,7 @@ export function createMinify(store: Store): HTMLElement {
               disabled: !r,
               onclick: async () => {
                 if (!r) return;
-                await writeText(r.svg);
+                await copyText(r.svg);
                 toast("SVG copied. Paste straight into Figma or Illustrator.");
               },
             },

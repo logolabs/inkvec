@@ -1,4 +1,4 @@
-; Inkvec Studio Lite — NSIS installer hooks.
+; Inkvec Studio — NSIS installer hooks.
 ;
 ; Tauri's own NSIS template does the install, the upgrade and the uninstall; this file is
 ; the documented extension point (`bundle.windows.nsis.installerHooks`) and adds only what

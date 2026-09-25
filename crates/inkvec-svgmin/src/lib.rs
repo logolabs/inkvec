@@ -29,7 +29,7 @@ mod write;
 #[cfg(test)]
 use inkvec_core::{Point, Polyline};
 #[cfg(test)]
-use inkvec_fit::{curves::Segment, primitives::fit_primitive_or_arcs, FitConfig, FittedPath};
+use inkvec_fit::{primitives::fit_primitive_or_arcs, FitConfig, FittedPath};
 
 pub use structure::{structure, Structure};
 
@@ -113,9 +113,7 @@ pub fn compact(svg: &str, opts: &Options) -> Result<(String, Report), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::driver::node_scale;
-    use crate::fit::ls_cubic_from;
-    use crate::geom::{cubic_at, dist_to_segment, Curve};
+    use crate::geom::{dist_to_segment, Curve};
     use crate::path::{parse_d, sample, Src};
 
     fn circle_as_cubics(cx: f64, cy: f64, r: f64, n: usize) -> String {
@@ -177,6 +175,7 @@ mod tests {
         assert!((num("r") - 40.0).abs() < eps, "{out}");
     }
 
+    #[test]
     fn the_nearest_segment_lookup_matches_brute_force() {
         let subs = parse_d(&circle_as_cubics(64.0, 64.0, 40.0, 16)).unwrap();
         let eps = 0.0125;
@@ -305,51 +304,6 @@ mod tests {
         assert_eq!(rep.segments_after, 1, "{rep:?}");
     }
 
-    fn least_squares_recovers_a_piece_of_an_exact_cubic() {
-        // The same subdivided cubic the minifier sees, sampled as it samples it, with a
-        // span that ends part-way through the second half.
-        let (p0, c1, c2, p3) = ((10.0, 100.0), (30.0, 10.0), (90.0, 10.0), (110.0, 100.0));
-        let mid = |a: (f64, f64), b: (f64, f64)| ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
-        let (q1, q2, q3) = (mid(p0, c1), mid(c1, c2), mid(c2, p3));
-        let (r1, r2) = (mid(q1, q2), mid(q2, q3));
-        let s = mid(r1, r2);
-        let pt = |a: (f64, f64)| Point::new(a.0, a.1);
-        let run = [
-            Src::Cubic(pt(p0), pt(q1), pt(r1), pt(s)),
-            Src::Cubic(pt(s), pt(r2), pt(q3), pt(p3)),
-        ];
-        let pts = sample(&run, 0.025, false);
-        let span = &pts[..=38];
-        let (a, b) = (span[0], span[span.len() - 1]);
-        let along: Vec<f64> = (0..span.len()).map(|i| i as f64 / 38.0).collect();
-        let (n1, n2) = ls_cubic_from(span, a, b, along).expect("fits");
-        let seg = Segment::Cubic(n1, n2, b);
-        let dev = span
-            .iter()
-            .map(|&p| dist_to_segment(p, &seg, a))
-            .fold(0.0, f64::max);
-        assert!(dev < 1e-3, "a piece of a cubic is a cubic; missed by {dev}");
-    }
-
-    fn least_squares_recovers_an_exact_cubic() {
-        let (p0, c1, c2, p3) = (
-            Point::new(10.0, 100.0),
-            Point::new(30.0, 10.0),
-            Point::new(90.0, 10.0),
-            Point::new(110.0, 100.0),
-        );
-        let pts: Vec<Point> = (0..=96)
-            .map(|i| cubic_at(p0, c1, c2, p3, i as f64 / 96.0))
-            .collect();
-        let along: Vec<f64> = (0..=96).map(|i| f64::from(i) / 96.0).collect();
-        let (n1, n2) = ls_cubic_from(&pts, p0, p3, along).expect("solvable");
-        let worst = pts
-            .iter()
-            .map(|&p| dist_to_segment(p, &Segment::Cubic(n1, n2, p3), p0))
-            .fold(0.0, f64::max);
-        assert!(worst < 1e-3, "c1 {n1:?} c2 {n2:?} worst {worst}");
-    }
-
     #[test]
     fn a_path_already_at_its_shortest_is_left_byte_for_byte() {
         // The two lines a triangle needs, written the way the writer would write them —
@@ -387,15 +341,4 @@ mod tests {
         }
     }
 
-    fn a_transform_scales_the_tolerance() {
-        // Under a 10x scale, 0.1 px on the page is 0.01 units in the path.
-        let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 1280 1280\">\
-                   <g transform=\"scale(10)\"><path d=\"M0,0L10,0L10,10Z\"/></g></svg>";
-        let doc = roxmltree::Document::parse(svg).unwrap();
-        let node = doc
-            .descendants()
-            .find(|n| n.tag_name().name() == "path")
-            .unwrap();
-        assert!((node_scale(node) - 10.0).abs() < 1e-12);
-    }
 }

@@ -21,7 +21,7 @@ fn common_pixel_gain(
     h: usize,
     pixels: &[usize],
     group: &[u32],
-    pure: &[bool],
+    evidence: &(dyn Fn(usize) -> bool + Sync),
     a: u32,
     b: u32,
     left: &FillFit,
@@ -36,7 +36,7 @@ fn common_pixel_gain(
         h,
         pixels,
         |p| group[p] == a || group[p] == b,
-        |p| pure[p],
+        evidence,
         true,
     );
     if samples.len() == 0 {
@@ -140,6 +140,35 @@ pub fn merge_gradient_bands_guarded(
     deadline: Option<inkvec_core::clock::Instant>,
     same_class: Option<&(dyn Fn(u16, u16) -> bool + Sync)>,
 ) -> (Vec<FillFit>, Vec<usize>) {
+    merge_bands_with(
+        labels,
+        rgb,
+        w,
+        h,
+        pal,
+        sigma_noise,
+        lambda,
+        deadline,
+        same_class,
+        regions::enabled(),
+    )
+}
+
+/// [`merge_gradient_bands_guarded`] with region recovery (see [`super::regions`]) switched
+/// by the caller rather than by `INKVEC_GRAD_REGIONS`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn merge_bands_with(
+    labels: &mut [u16],
+    rgb: &[[f32; 3]],
+    w: usize,
+    h: usize,
+    pal: &Palette,
+    sigma_noise: f64,
+    lambda: f64,
+    deadline: Option<inkvec_core::clock::Instant>,
+    same_class: Option<&(dyn Fn(u16, u16) -> bool + Sync)>,
+    inner_blends: bool,
+) -> (Vec<FillFit>, Vec<usize>) {
     let n = w * h;
     let n_pal = pal
         .len()
@@ -187,6 +216,9 @@ pub fn merge_gradient_bands_guarded(
 
     // Adjacency with shared-boundary lengths.
     let mut adj: Vec<HashMap<u32, u32>> = vec![HashMap::new(); n_comp];
+    // Of those, the pixel pairs across which the colour changes by less than a ramp
+    // step: see `regions::smooth_step`. Only kept when region recovery is on.
+    let mut smooth: Vec<HashMap<u32, u32>> = vec![HashMap::new(); n_comp];
     for p in 0..n {
         let (x, y) = (p % w, p / w);
         for q in [
@@ -202,6 +234,10 @@ pub fn merge_gradient_bands_guarded(
             {
                 *adj[a as usize].entry(b).or_insert(0) += 1;
                 *adj[b as usize].entry(a).or_insert(0) += 1;
+                if inner_blends && regions::smooth_step(rgb[p], rgb[q]) {
+                    *smooth[a as usize].entry(b).or_insert(0) += 1;
+                    *smooth[b as usize].entry(a).or_insert(0) += 1;
+                }
             }
         }
     }
@@ -211,7 +247,14 @@ pub fn merge_gradient_bands_guarded(
     let ink_rgb: Vec<[f32; 3]> = (0..n_pal)
         .map(|l| pal.rgb.get(l).copied().unwrap_or([0.0; 3]))
         .collect();
-    let pure = fill_evidence(rgb, w, h, labels, &ink_rgb, sigma_noise);
+    // A blend towards a region inside the fit is evidence for the fit; see
+    // `blend_partners`.
+    let partner = blend_partners(rgb, w, h, labels, &ink_rgb, sigma_noise, inner_blends);
+    let pure: Vec<bool> = partner.iter().map(|q| q[0] == PURE).collect();
+    // Every blend partner of `p` lies inside the fit of `a` and `b`.
+    let inner_of = |group: &[u32], p: usize, a: u32, b: u32| {
+        regions::all_inside(&partner[p], |q| group[q] == a || group[q] == b)
+    };
 
     // 2. Per-component fits. `group[p]` is the current component of pixel `p`.
     let mut group = comp;
@@ -221,7 +264,7 @@ pub fn merge_gradient_bands_guarded(
     // union first, so the two numbers say whether the cost is fit count or fit size.
     static FIT_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     static FIT_PIXELS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let fit_group = |group: &[u32], pixels: &[usize], a: u32, b: u32| -> FillFit {
+    let fit_group = |group: &[u32], pixels: &[usize], a: u32, b: u32, inner: bool| -> FillFit {
         FIT_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let member = |p: usize| group[p] == a || group[p] == b;
         // A fit sees at most `FIT_PIXELS` pixels, taken uniformly, whatever the region's
@@ -242,13 +285,14 @@ pub fn merge_gradient_bands_guarded(
         };
         let seen = if sub.is_empty() { pixels } else { &sub[..] };
         FIT_PIXELS.fetch_add(seen.len(), std::sync::atomic::Ordering::Relaxed);
+        let evidence = |p: usize| pure[p] || (inner && inner_of(group, p, a, b));
         let mut fit = select(fit_pixels(
             rgb,
             w,
             h,
             seen,
             member,
-            |p| pure[p],
+            evidence,
             sigma_noise,
             lambda,
         ));
@@ -267,7 +311,7 @@ pub fn merge_gradient_bands_guarded(
         use rayon::prelude::*;
         (0..n_comp)
             .into_par_iter()
-            .map(|c| fit_group(&group, &members[c], c as u32, c as u32))
+            .map(|c| fit_group(&group, &members[c], c as u32, c as u32, inner_blends))
             .collect()
     };
 
@@ -280,7 +324,26 @@ pub fn merge_gradient_bands_guarded(
     let mergedbg = std::env::var_os("INKVEC_MERGEDBG").is_some();
     // Explicit experiment; the measured production objective remains the default.
     let common_pixels = std::env::var("INKVEC_MERGE_COMMON_PIXELS").as_deref() == Ok("1");
+    // A pair whose seam is smooth (see `regions::is_smooth`) is judged as one region:
+    // blends between its members are evidence, and both sides are priced on the same
+    // pixels. Any other pair is judged exactly as before.
+    let smooth_pair =
+        |adj: &[HashMap<u32, u32>], smooth: &[HashMap<u32, u32>], a: usize, b: usize| {
+            inner_blends && regions::is_smooth(adj, smooth, a, b)
+        };
     let mut alive = vec![true; n_comp];
+    // Two flat bands of one quantised ramp are each flat -- a band is too thin to show
+    // its slope -- so the pair test above never looks at them, and a ramp cut into
+    // flat bands stays cut. With region recovery on, a flat pair whose inks are one
+    // ramp step apart is looked at too; the union still has to win on the pixels.
+    let ramp_step =
+        |adj: &[HashMap<u32, u32>], smooth: &[HashMap<u32, u32>], a: usize, b: usize| {
+            smooth_pair(adj, smooth, a, b)
+                && crate::color::de00(
+                    ink_rgb[comp_label[a] as usize],
+                    ink_rgb[comp_label[b] as usize],
+                ) < *regions::RAMP_STEP_DE00
+        };
     // A cached union is *stale* once one of its members has absorbed something else.
     // It is not thrown away: a large gradient region swallowing a two-pixel fleck used
     // to invalidate the union fit with every one of its other neighbours, and on a logo
@@ -289,6 +352,8 @@ pub fn merge_gradient_bands_guarded(
     // cached gain would make it the merge of the round, so the accepted merge is always
     // decided on a fresh fit while the rest wait.
     let mut cache: HashMap<(u32, u32), (FillFit, bool)> = HashMap::new();
+    // The common-pixel gain of each cached union, when it has been priced.
+    let mut gains: HashMap<(u32, u32), f64> = HashMap::new();
     // Where the rounds go, for the timing log: a greedy agglomeration accepts one merge per
     // round, so the round count is the merge count and the wall time is the sum of the
     // rounds. Which part of a round costs what is the question the log answers.
@@ -331,7 +396,10 @@ pub fn merge_gradient_bands_guarded(
                 // just to discard it was the single largest cost in the tracer. If one
                 // of the pair later absorbs a band and becomes a gradient, the union is
                 // fitted at that point instead.
-                if !fits[a].model.is_gradient() && !fits[b as usize].model.is_gradient() {
+                if !fits[a].model.is_gradient()
+                    && !fits[b as usize].model.is_gradient()
+                    && !ramp_step(&adj, &smooth, a, b as usize)
+                {
                     continue;
                 }
                 let key = (a as u32, b);
@@ -359,9 +427,13 @@ pub fn merge_gradient_bands_guarded(
                     // Every fit already sees at most FIT_PIXELS_CAP pixels, so a
                     // candidate union costs the same whatever its size and there is
                     // nothing to refit: the cached fit is the fit.
-                    ((a, b), (fit_group(&group, &px, a, b), false))
+                    let inner = smooth_pair(&adj, &smooth, ai, bi);
+                    ((a, b), (fit_group(&group, &px, a, b, inner), false))
                 })
                 .collect();
+            for (k, _) in &computed {
+                gains.remove(k);
+            }
             cache.extend(computed);
         }
 
@@ -384,7 +456,10 @@ pub fn merge_gradient_bands_guarded(
                     .filter(|&(b, shared)| b as usize > a && shared >= MIN_SHARED_BOUNDARY)
                     .collect();
                 for (b, _) in neighbours {
-                    if !fits[a].model.is_gradient() && !fits[b as usize].model.is_gradient() {
+                    if !fits[a].model.is_gradient()
+                        && !fits[b as usize].model.is_gradient()
+                        && !ramp_step(&adj, &smooth, a, b as usize)
+                    {
                         continue;
                     }
                     let Some((union, _)) = cache.get(&(a as u32, b)) else {
@@ -402,25 +477,30 @@ pub fn merge_gradient_bands_guarded(
                         continue;
                     }
                     let legacy_gain = fits[a].cost + fits[b as usize].cost - union.cost;
-                    let gain = if common_pixels {
-                        let mut pixels = members[a].clone();
-                        pixels.extend_from_slice(&members[b as usize]);
-                        common_pixel_gain(
-                            rgb,
-                            w,
-                            h,
-                            &pixels,
-                            &group,
-                            &pure,
-                            a as u32,
-                            b,
-                            &fits[a],
-                            &fits[b as usize],
-                            union,
-                            sigma_noise,
-                            lambda,
-                        )
-                        .unwrap_or(f64::NEG_INFINITY)
+                    let inner = smooth_pair(&adj, &smooth, a, b as usize);
+                    let gain = if common_pixels || inner {
+                        // Priced once per union fit: it reads only the pair's members and
+                        // fits, and both are fixed until one of them merges, which drops it.
+                        *gains.entry((a as u32, b)).or_insert_with(|| {
+                            let mut pixels = members[a].clone();
+                            pixels.extend_from_slice(&members[b as usize]);
+                            common_pixel_gain(
+                                rgb,
+                                w,
+                                h,
+                                &pixels,
+                                &group,
+                                &|p: usize| pure[p] || (inner && inner_of(&group, p, a as u32, b)),
+                                a as u32,
+                                b,
+                                &fits[a],
+                                &fits[b as usize],
+                                union,
+                                sigma_noise,
+                                lambda,
+                            )
+                            .unwrap_or(f64::NEG_INFINITY)
+                        })
                     } else {
                         legacy_gain
                     };
@@ -456,7 +536,9 @@ pub fn merge_gradient_bands_guarded(
                 let mut px: Vec<usize> = Vec::with_capacity(members[ai].len() + members[bi].len());
                 px.extend_from_slice(&members[ai]);
                 px.extend_from_slice(&members[bi]);
-                cache.insert((a, b), (fit_group(&group, &px, a, b), false));
+                let inner = smooth_pair(&adj, &smooth, ai, bi);
+                cache.insert((a, b), (fit_group(&group, &px, a, b, inner), false));
+                gains.remove(&(a, b));
                 stale_refits += 1;
                 continue;
             }
@@ -488,15 +570,17 @@ pub fn merge_gradient_bands_guarded(
             *e.entry(a).or_insert(0) += shared;
         }
         adj[ai].remove(&b);
+        regions::absorb_counts(&mut smooth, ai, bi);
         // A stale flat union is dropped rather than kept: it is never a candidate, so it
         // would never be refitted, and a union that came out flat before the region grew
         // can come out a gradient after (two noto icons moved 0.005 dE00 when these were
         // kept). Gradient unions are kept stale and refitted only when they would win.
+        gains.retain(|&(x, y), _| x != a && y != a && x != b && y != b);
         cache.retain(|&(x, y), (fit, _)| {
             x != b && y != b && (fit.model.is_gradient() || (x != a && y != a))
                 // Common-evidence gains do not inherit the legacy stale-cost bound.
                 // Refit affected candidates before ranking, not only after winning.
-                && (!common_pixels || (x != a && y != a))
+                && (!(common_pixels || inner_blends) || (x != a && y != a))
         });
         // The stale cost is left as fitted without the absorbed pixels. That is an
         // *under*estimate of the true union cost, so the stale gain is an overestimate and
@@ -549,6 +633,15 @@ pub fn merge_gradient_bands_guarded(
             FIT_NS_RADIAL.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000,
             FIT_NS_ELLIPTIC.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000,
         );
+    }
+
+    if let Some(win) = debug::window() {
+        let fit = |a: u32, b: u32| {
+            let mut px = members[a as usize].clone();
+            px.extend_from_slice(&members[b as usize]);
+            fit_group(&group, &px, a, b, true)
+        };
+        debug::dump(win, w, &members, &alive, &fits, &adj, rgb, &fit);
     }
 
     // 4. Write back.
@@ -633,7 +726,7 @@ mod tests {
             h,
             &pixels,
             &group,
-            &pure,
+            &|p: usize| pure[p],
             0,
             1,
             &left,
@@ -662,7 +755,7 @@ mod tests {
             h,
             &pixels,
             &group,
-            &pure,
+            &|p: usize| pure[p],
             0,
             1,
             &flat_only([0.2; 3], 2.0),
@@ -684,7 +777,7 @@ mod tests {
             4,
             &(0..16).collect::<Vec<_>>(),
             &[0; 16],
-            &[false; 16],
+            &|_: usize| false,
             0,
             1,
             &model,

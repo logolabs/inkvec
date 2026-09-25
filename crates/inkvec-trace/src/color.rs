@@ -344,7 +344,7 @@ pub const PARAMS_PER_INK: f64 = 3.0;
 pub const SAME_INK_DE00: f32 = 1.5;
 use rayon::prelude::*;
 
-fn srgb_to_lab(rgb: [f32; 3]) -> [f32; 3] {
+pub(crate) fn srgb_to_lab(rgb: [f32; 3]) -> [f32; 3] {
     let (r, g, b) = (
         srgb_to_linear(rgb[0]) as f64,
         srgb_to_linear(rgb[1]) as f64,

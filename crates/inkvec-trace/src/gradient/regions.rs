@@ -3,10 +3,11 @@
 
 use std::collections::HashMap;
 
-/// Whether the region-level gradient recovery is on (`INKVEC_GRAD_REGIONS=1`).
+/// Whether the region-level gradient recovery is on: by default, off with
+/// `INKVEC_GRAD_REGIONS=0`.
 pub(crate) fn enabled() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var("INKVEC_GRAD_REGIONS").is_ok_and(|v| v != "0"))
+    *V.get_or_init(|| std::env::var("INKVEC_GRAD_REGIONS").as_deref() != Ok("0"))
 }
 
 /// Largest colour difference (CIEDE2000) between the inks of two *flat* adjacent regions

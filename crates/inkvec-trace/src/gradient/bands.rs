@@ -285,9 +285,7 @@ pub(crate) fn merge_bands_with(
         };
         let seen = if sub.is_empty() { pixels } else { &sub[..] };
         FIT_PIXELS.fetch_add(seen.len(), std::sync::atomic::Ordering::Relaxed);
-        let evidence = |p: usize| {
-            pure[p] || (inner && inner_of(group, p, a, b))
-        };
+        let evidence = |p: usize| pure[p] || (inner && inner_of(group, p, a, b));
         let mut fit = select(fit_pixels(
             rgb,
             w,
@@ -329,21 +327,23 @@ pub(crate) fn merge_bands_with(
     // A pair whose seam is smooth (see `regions::is_smooth`) is judged as one region:
     // blends between its members are evidence, and both sides are priced on the same
     // pixels. Any other pair is judged exactly as before.
-    let smooth_pair = |adj: &[HashMap<u32, u32>], smooth: &[HashMap<u32, u32>], a: usize, b: usize| {
-        inner_blends && regions::is_smooth(adj, smooth, a, b)
-    };
+    let smooth_pair =
+        |adj: &[HashMap<u32, u32>], smooth: &[HashMap<u32, u32>], a: usize, b: usize| {
+            inner_blends && regions::is_smooth(adj, smooth, a, b)
+        };
     let mut alive = vec![true; n_comp];
     // Two flat bands of one quantised ramp are each flat -- a band is too thin to show
     // its slope -- so the pair test above never looks at them, and a ramp cut into
     // flat bands stays cut. With region recovery on, a flat pair whose inks are one
     // ramp step apart is looked at too; the union still has to win on the pixels.
-    let ramp_step = |adj: &[HashMap<u32, u32>], smooth: &[HashMap<u32, u32>], a: usize, b: usize| {
-        smooth_pair(adj, smooth, a, b)
-            && crate::color::de00(
-                ink_rgb[comp_label[a] as usize],
-                ink_rgb[comp_label[b] as usize],
-            ) < *regions::RAMP_STEP_DE00
-    };
+    let ramp_step =
+        |adj: &[HashMap<u32, u32>], smooth: &[HashMap<u32, u32>], a: usize, b: usize| {
+            smooth_pair(adj, smooth, a, b)
+                && crate::color::de00(
+                    ink_rgb[comp_label[a] as usize],
+                    ink_rgb[comp_label[b] as usize],
+                ) < *regions::RAMP_STEP_DE00
+        };
     // A cached union is *stale* once one of its members has absorbed something else.
     // It is not thrown away: a large gradient region swallowing a two-pixel fleck used
     // to invalidate the union fit with every one of its other neighbours, and on a logo
@@ -482,9 +482,7 @@ pub(crate) fn merge_bands_with(
                             h,
                             &pixels,
                             &group,
-                            &|p: usize| {
-                                pure[p] || (inner && inner_of(&group, p, a as u32, b))
-                            },
+                            &|p: usize| pure[p] || (inner && inner_of(&group, p, a as u32, b)),
                             a as u32,
                             b,
                             &fits[a],

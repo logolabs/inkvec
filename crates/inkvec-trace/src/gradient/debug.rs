@@ -12,6 +12,22 @@ pub(crate) fn verbose() -> bool {
     VERBOSE.load(Ordering::Relaxed)
 }
 
+/// While a union is being dumped: the candidates the fit weighed, and the step test.
+pub(crate) fn candidates(n: usize, out: &[FillFit], two: f64, best_grad: f64) {
+    if !verbose() {
+        return;
+    }
+    let rest: Vec<String> = out[1..]
+        .iter()
+        .map(|f| format!("{} {:.1}/{:.1}", f.model.kind(), f.chi2, f.cost))
+        .collect();
+    eprintln!(
+        "[gd]      n={n} flat chi2 {:.1} | two-flats {two:.1} vs best grad {best_grad:.1} | {}",
+        out[0].chi2,
+        rest.join(", ")
+    );
+}
+
 /// The window from `INKVEC_GRADDBG`, if set.
 pub(crate) fn window() -> Option<[usize; 4]> {
     let v = std::env::var("INKVEC_GRADDBG").ok()?;

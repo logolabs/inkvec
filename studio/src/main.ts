@@ -33,6 +33,7 @@ import { createChooser, createWizard, type Snapshot, type WizardActions } from "
 import { proposeGroups } from "./components/palette";
 import { openCardComposer } from "./components/card";
 import { openExportSheet } from "./components/exportsheet";
+import { helpPageFor, installHelp, openHelp } from "./components/help";
 import { closeOverlay, openPopover, toast } from "./components/overlays";
 import { windowControls } from "./components/wincontrols";
 import { createBatch } from "./views/batch";
@@ -547,6 +548,7 @@ function renderAppBar(): void {
       ),
       h("button.btn.ghost.compact", { onclick: () => store.set({ screen: "settings" }) }, "Settings"),
       h("button.btn.ghost.compact", { onclick: () => store.set({ screen: "about" }) }, "About"),
+      h("button.btn.ghost.compact", { title: "The user guide (F1)", onclick: () => openHelp(helpPageFor(store.state)) }, "Help"),
       h("div.sep"),
       windowControls(),
     ),
@@ -716,6 +718,7 @@ async function start(): Promise<void> {
   store.on(["tab"], renderTab);
 
   window.addEventListener("keydown", keyboard);
+  installHelp(store);
   window
     .matchMedia("(prefers-color-scheme: dark)")
     .addEventListener("change", () => applyTheme(store.state.prefs?.theme ?? "system"));

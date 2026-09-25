@@ -33,7 +33,7 @@ interface StudioWasm {
 }
 
 interface WasmModule {
-  default(init: { module_or_path: URL }): Promise<unknown>;
+  default(init: { module_or_path: URL }): Promise<{ memory?: WebAssembly.Memory }>;
   Studio: new () => StudioWasm;
   initThreadPool?: (n: number) => Promise<void>;
   threads_available(): boolean;
@@ -41,6 +41,7 @@ interface WasmModule {
   enable_denoiser(): void;
   denoiser_model_url(): string;
   denoiser_model_sha256(): string;
+  denoiser_model_repo(): string;
 }
 
 type Init = {
@@ -59,6 +60,8 @@ const scope = self as unknown as DedicatedWorkerGlobalScope & {
 };
 
 let mod: WasmModule | null = null;
+/** The module's linear memory: it only grows, so its size is the session's high-water mark. */
+let memory: WebAssembly.Memory | null = null;
 let studio: StudioWasm | null = null;
 let generations: Int32Array | null = null;
 let denoiserPort: MessagePort | null = null;
@@ -69,7 +72,8 @@ async function init(m: Init): Promise<void> {
   const q = m.token ? `?v=${m.token}` : "";
   const js = new URL(`${dir}/inkvec_studio_wasm.js${q}`, m.base).href;
   mod = (await import(/* @vite-ignore */ js)) as WasmModule;
-  await mod.default({ module_or_path: new URL(`${dir}/inkvec_studio_wasm_bg.wasm${q}`, m.base) });
+  const exports = await mod.default({ module_or_path: new URL(`${dir}/inkvec_studio_wasm_bg.wasm${q}`, m.base) });
+  memory = exports.memory ?? null;
   let threads = 1;
   let poolError: string | null = null;
   if (isolated && mod.initThreadPool) {
@@ -98,6 +102,7 @@ async function init(m: Init): Promise<void> {
     version: mod.version(),
     denoiserUrl: mod.denoiser_model_url(),
     denoiserSha256: mod.denoiser_model_sha256(),
+    denoiserRepo: mod.denoiser_model_repo(),
   });
 }
 
@@ -191,7 +196,7 @@ scope.onmessage = (e: MessageEvent<Init | Job>) => {
       const value = run(m);
       const transfer: Transferable[] = [];
       if (m.op === "export") for (const f of value as { data: Uint8Array }[]) transfer.push(f.data.buffer);
-      scope.postMessage({ type: "reply", id: m.id, ok: true, value, ms: performance.now() - started }, transfer);
+      scope.postMessage({ type: "reply", id: m.id, ok: true, value, ms: performance.now() - started, mem: memory?.buffer.byteLength ?? null }, transfer);
     } catch (err) {
       const message = String((err as Error)?.message ?? err);
       scope.postMessage({ type: "reply", id: m.id, ok: false, error: message, crashed: isTrap(err) });

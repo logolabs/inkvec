@@ -56,7 +56,7 @@ type Listener = (payload: unknown) => void;
 
 class WebBackend {
   private worker: Worker | null = null;
-  private ready: Promise<{ threads: number; isolated: boolean; denoiserUrl: string; denoiserSha256: string }> | null = null;
+  private ready: Promise<{ threads: number; isolated: boolean; denoiserUrl: string; denoiserSha256: string; denoiserRepo: string }> | null = null;
   private queue: Job[] = [];
   private running: Job | null = null;
   private nextId = 1;
@@ -78,6 +78,8 @@ class WebBackend {
 
   /** The worker's thread count and isolation, once it has loaded; for About and the tests. */
   info: { threads: number; isolated: boolean; version: string } | null = null;
+  /** The WebAssembly memory after the last job and how long the worker spent on it. */
+  last: { op: string; ms: number; mem: number | null } | null = null;
 
   // ------------------------------------------------------------------ the worker ---
 
@@ -85,7 +87,7 @@ class WebBackend {
     return new URL("./", document.baseURI).href;
   }
 
-  private start(): Promise<{ threads: number; isolated: boolean; denoiserUrl: string; denoiserSha256: string }> {
+  private start(): Promise<{ threads: number; isolated: boolean; denoiserUrl: string; denoiserSha256: string; denoiserRepo: string }> {
     const isolated = typeof crossOriginIsolated !== "undefined" && crossOriginIsolated;
     if (isolated && !this.shared) this.shared = new Int32Array(new SharedArrayBuffer(4));
     const worker = new Worker(new URL("./engine.worker.ts", import.meta.url), { type: "module", name: "inkvec-engine" });
@@ -155,9 +157,10 @@ class WebBackend {
     });
   }
 
-  private finish(m: { id: number; ok: boolean; value?: unknown; error?: string; crashed?: boolean }): void {
+  private finish(m: { id: number; ok: boolean; value?: unknown; error?: string; crashed?: boolean; ms?: number; mem?: number | null }): void {
     const job = this.running;
     if (!job || job.id !== m.id) return;
+    this.last = { op: job.op, ms: m.ms ?? 0, mem: m.mem ?? null };
     this.running = null;
     if (m.ok) job.resolve(m.value);
     else if (m.crashed) {
@@ -506,7 +509,7 @@ class WebBackend {
       installed,
       path: null,
       bytes,
-      repo: "Logolabs/inkvec-denoiser-001",
+      repo: ready.denoiserRepo,
       sha256: ready.denoiserSha256,
     };
   }
@@ -524,6 +527,11 @@ let backend: WebBackend | null = null;
 
 /** The one backend of this tab. */
 export function webBackend(): WebBackend {
-  backend ??= new WebBackend();
+  if (!backend) {
+    backend = new WebBackend();
+    // For the smoke test and anyone curious in the console: the backend, its thread count
+    // and the last job's time and memory. Nothing in the app reads it.
+    (globalThis as { __inkvecStudioLite?: WebBackend }).__inkvecStudioLite = backend;
+  }
   return backend;
 }

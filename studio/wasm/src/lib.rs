@@ -86,6 +86,12 @@ pub fn denoiser_model_url() -> String {
     inkvec_restore::HF_DENOISER_URL.to_string()
 }
 
+/// The Hugging Face repository the weights come from.
+#[wasm_bindgen]
+pub fn denoiser_model_repo() -> String {
+    inkvec_restore::HF_DENOISER_REPO.to_string()
+}
+
 /// The SHA-256 the weights must hash to.
 #[wasm_bindgen]
 pub fn denoiser_model_sha256() -> String {

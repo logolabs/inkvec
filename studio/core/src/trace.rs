@@ -966,16 +966,14 @@ fn trace_denoised(
     let tensor = inkvec_restore::network_input(&intake.img);
     let out = denoise(&tensor.data, tensor.width, tensor.height)?;
     intake.img = inkvec_restore::network_output(&out, &intake.img)?;
+    let restore_s = started.elapsed().as_secs_f64();
     // Restored input is traced with soft intake on, as the engine's pre-pass forces it.
     intake.args.lossy = inkvec_sr::Mode::On;
     let (w, h) = (intake.img.width, intake.img.height);
     let mut traced = inkvec_cli::trace_prepared(intake)?;
     traced.stats.insert(
         0,
-        format!(
-            "restore       {note}restored {w}x{h} in {:.2}s, in the browser",
-            started.elapsed().as_secs_f64()
-        ),
+        format!("restore       {note}restored {w}x{h} in {restore_s:.2}s, by the shell's denoiser"),
     );
     Ok(traced)
 }

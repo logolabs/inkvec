@@ -43,7 +43,7 @@ them the app will not start, because it imports the DLL at load.
 
 ## What it does
 
-Three tabs.
+Four tabs.
 
 **Vectorize** is where 90% of the time is spent. A split comparison viewer — side by side,
 wipe, or A/B with hold-Space to flick — over one shared pan and zoom, with wireframe,
@@ -85,6 +85,15 @@ showing empty bars.
 milliseconds, so the tab is instant and the result *is* the screen. Its tolerance control
 is a sentence — *nothing moves more than 0.1 px when the drawing is 1024 px wide* — with
 the numbers inside it.
+
+**Fabricate** prepares a drawing for a cutter, in millimetres, through `inkvec-fab`: one
+colour, layered vinyl (each colour running under the ones above by the bleed, with
+registration marks), inlay, print-then-cut sticker, stencil, or Lines for a pen, a scoring
+blade or a laser line. The stage shows the sheets with what preflight found drawn over them
+(parts and gaps narrower than the material's minimum feature, specks, translucency); the
+cutting card holds kerf, mirror, weed border, a router bit's diameter for dogbones, and the
+size-check square; Save writes an SVG per sheet and a combined file, and optionally DXF and
+G-code.
 
 **Batch** takes a folder and a preset, writes one SVG per file, and keeps failures visible
 after the run rather than letting them scroll away. Any single row can be given a preset of

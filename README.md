@@ -159,7 +159,7 @@ inkvec <input> [-o <output.svg>] [OPTIONS]
 
 | Flag | Default | What it does |
 |---|---|---|
-| `--restore <auto\|on\|off>` | off | Trained-network cleanup for JPEG/WebP/AI-decoder damage. `auto` only restores if it looks damaged. |
+| `--restore <auto\|on\|off>` | off | Trained-network cleanup for JPEG/WebP/AI-decoder damage. `auto` only restores if it looks damaged, and traces directly when no restorer is available (`on` is an error then). |
 | `--sr <auto\|on\|off>` | off | Super-resolution pre-pass (2-4× upscale), complementary to `--restore`. |
 | `--lossy <auto\|on\|off>` | auto | Whether to trust the file as clean or trace with noise-aware intake. |
 | `--max-dim <px>` | 2048 | Cap on the longer side; SVG is written at the original size. |
@@ -168,6 +168,15 @@ inkvec <input> [-o <output.svg>] [OPTIONS]
 | `--minify` | off | No ids, no groups, no trailing zeros — ~10% smaller, identical geometry. |
 | `--no-native-alpha` | off | Composite transparent input onto a matte before tracing, as releases up to 0.1.3 did. |
 | `--no-harmonize` | off | Skip shape harmonization (see below). |
+| `--merge-colors <groups>` | none | Draw several fills as one, so the shapes between them join: `'#c0392b,#e74c3c;#2c3e50,#34495e'` merges each group into its most-used fill, `=#hex` or `=@n` picks the result, `>` joins gradient stops. Costs one extra trace. |
+| `--margin <f>` | 0 | Transparent margin around the output, as a fraction of the larger side; the viewBox grows, the geometry does not move. |
+| `--uncertainty <file>` | off | Also write each boundary's confidence band, k sigma either side (`--uncertainty-k`, default 2), as an SVG that overlays the trace. |
+| `--editability` | off | Post-fit passes for editing by hand: smooth joins, axis-aligned handles, nodes sharing coordinates, exact mirrors, each held to the fit's tolerance. |
+| `--bezier-cost <f>` | 6 | What one Bézier segment costs the fit, in parameters (a line costs 2), 2 to 12. Lower draws more curves and fewer straight segments. |
+| `--corner-angle <deg>` | 10 | The turn at a join charged as a full corner, 1 to 60. Higher keeps gentler bends smooth. |
+| `--simplify-faint` | off | Fewer coordinates where the two inks at a boundary are close in colour, since a position error there is barely visible. |
+| `--content-units` | off | Scale the fit tolerances with the raster, so a large image gets a small one's parameter count. Trades fidelity for parsimony. |
+| `--intake-scale` | off | Resample an oversampled input (upscaled, blurred, photographed) to one pixel per unit of detail before tracing. Much faster on such input; costs structure. |
 
 Run `inkvec --help` for the full list.
 
@@ -202,6 +211,33 @@ The denoiser weights (`restorer.onnx`) are hosted on Hugging Face at [`Logolabs/
 ```sh
 python tools/pull_model.py
 ```
+
+---
+
+## Inkvec Studio Lite
+
+The desktop app (Windows, macOS, Linux; installers on the Releases page) runs this engine
+on your own computer — an image is never uploaded. Its tabs:
+
+- **Vectorize**: the trace beside the source under one pan and zoom, with wireframe, anchor,
+  handle and **Certainty** overlays (the engine's `--uncertainty` bands: where each boundary
+  could be, coloured by how sure the pixels are), a quality report that is a measurement
+  rather than a badge, and every control above. Each image opened is traced automatically;
+  **Custom** walks through what the image is, clean-up, colours, detail and shape, side by
+  side with the automatic trace. The palette shows flat and gradient inks and **colour
+  groups**: drag one ink onto another and the re-trace draws them as one fill
+  (`--merge-colors`), with merges proposed from each trace and never applied unasked.
+  An SVG can be opened too, and is rebuilt by re-tracing it.
+- **Minify SVG**: `inkvec-svgmin` on a file you already have.
+- **Fabricate**: prepare an SVG for a cutter, in millimetres (`crates/inkvec-fab`) — one
+  colour, layered vinyl with bleed and registration marks, inlay, print-then-cut sticker,
+  stencil with bridges, or Lines for a pen, scoring blade or laser line. Kerf, mirror for
+  heat-transfer vinyl, weed border, a size-check square; a preflight that draws the parts
+  too thin to cut before you cut them; SVG per sheet, DXF R12 with true arcs, GRBL G-code
+  with G2/G3 arcs, and dogbones for a router bit.
+- **Batch**: a folder and a preset, one SVG per file.
+
+How it is built and the decisions behind it: [`studio/README.md`](studio/README.md).
 
 ---
 

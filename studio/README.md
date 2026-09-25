@@ -243,6 +243,21 @@ The backend tests are the interesting ones. They trace real images, check the me
 dE00 against the eight Sharma/Wu/Dalal CIEDE2000 reference pairs, assert that a clean
 trace reports **no** losses (a regression test for a heuristic that once claimed 469 lost
 features on a 0.07 dE00 trace), and assert that the honesty panel's copy never apologises.
+None of them reads or writes the real preferences or the installed denoiser: the functions
+that touch a file take its path (`save_at`, `load_at`, `reset_at`, `status_at`), and the
+tests pass temporary ones.
+
+To run a built app without touching your own setup, point it at scratch directories:
+
+```sh
+INKVEC_STUDIO_CONFIG_DIR=/tmp/studio-prefs INKVEC_STUDIO_MODEL_DIR=/tmp/studio-model  ./inkvec-studio
+```
+
+`preferences.json` then lives in the first, and `restorer.onnx` is looked for (and
+downloaded to) the second only; with the second set and empty, the denoiser reads as not
+installed rather than falling back to the model in your cache. Settings' *Add to PATH*
+and the right-click entry still write where they say they do, so leave those alone in a
+smoke test.
 
 ## Known gaps
 

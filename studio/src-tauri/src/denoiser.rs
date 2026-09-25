@@ -39,9 +39,26 @@ pub struct Status {
 /// Whether this build has the restorer compiled in.
 pub const SUPPORTED: bool = cfg!(feature = "denoiser");
 
+/// An environment variable naming the directory the denoiser's weights are kept in
+/// (`restorer.onnx` straight inside it) instead of the user's cache. Set, the app neither
+/// reads nor downloads into the real cache -- a trace looks for the model there and nowhere
+/// else -- so a built app can be smoke-tested without touching an installed model.
+pub const MODEL_DIR_ENV: &str = "INKVEC_STUDIO_MODEL_DIR";
+
 /// Where the weights live for this user.
 pub fn weights_path() -> Option<PathBuf> {
-    inkvec_restore::user_cache_model_path()
+    weights_path_from(
+        std::env::var_os(MODEL_DIR_ENV),
+        inkvec_restore::user_cache_model_path(),
+    )
+}
+
+/// [`weights_path`] from its two inputs: the override, if set and not empty, else the cache.
+fn weights_path_from(dir: Option<std::ffi::OsString>, cache: Option<PathBuf>) -> Option<PathBuf> {
+    match dir.filter(|d| !d.is_empty()) {
+        Some(d) => Some(PathBuf::from(d).join("restorer.onnx")),
+        None => cache,
+    }
 }
 
 /// What to tell the Settings screen and the "denoiser missing" state.
@@ -231,9 +248,13 @@ fn remove_at(file: Option<PathBuf>) -> Result<(), String> {
 /// `inkvec_restore` reads `INKVEC_RESTORE_ONNX` when no explicit path is given, which is
 /// the seam the command line uses too. Setting it here means a trace started from the app
 /// finds the same model a trace started from the terminal would.
+///
+/// Under [`MODEL_DIR_ENV`] the engine is pointed at the override even before a model is
+/// there, so it fails to load one rather than fall back to (and download into) the cache.
 pub fn announce_to_engine() {
+    let overridden = std::env::var_os(MODEL_DIR_ENV).is_some_and(|d| !d.is_empty());
     if let Some(path) = weights_path() {
-        if path.is_file() && std::env::var_os("INKVEC_RESTORE_ONNX").is_none() {
+        if (overridden || path.is_file()) && std::env::var_os("INKVEC_RESTORE_ONNX").is_none() {
             // Safety: called once during setup, before any worker thread exists.
             unsafe { std::env::set_var("INKVEC_RESTORE_ONNX", &path) };
         }
@@ -243,6 +264,27 @@ pub fn announce_to_engine() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_model_dir_override_holds_the_weights_directly() {
+        let cache = Some(PathBuf::from("cache").join("restorer.onnx"));
+        assert_eq!(
+            weights_path_from(Some("smoke-model".into()), cache.clone()),
+            Some(PathBuf::from("smoke-model").join("restorer.onnx"))
+        );
+        assert_eq!(weights_path_from(None, cache.clone()), cache);
+        assert_eq!(weights_path_from(Some("".into()), cache.clone()), cache);
+    }
+
+    #[test]
+    fn an_empty_overridden_model_dir_reads_as_not_installed() {
+        let dir = temp("override-dir");
+        let _ = std::fs::remove_dir_all(&dir);
+        let s = status_at(weights_path_from(Some(dir.clone().into_os_string()), None));
+        assert!(!s.installed);
+        assert_eq!(s.path, Some(dir.join("restorer.onnx")));
+        assert!(!dir.exists(), "reading the status creates nothing");
+    }
 
     /// A file under the temporary directory, unique to this test run. Every test here uses
     /// one: the real weights and their marker belong to whoever runs the suite.
@@ -282,7 +324,8 @@ mod tests {
 
     #[test]
     fn removing_deletes_the_file_it_is_given() {
-        let file = std::env::temp_dir().join(format!("inkvec-model-to-remove-{}", std::process::id()));
+        let file =
+            std::env::temp_dir().join(format!("inkvec-model-to-remove-{}", std::process::id()));
         std::fs::write(&file, b"weights").unwrap();
         assert!(remove_at(Some(file.clone())).is_ok());
         assert!(!file.exists(), "the file should be gone");

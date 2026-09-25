@@ -29,7 +29,7 @@ pub mod settings;
 pub mod trace;
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -56,6 +56,14 @@ pub struct AppState {
     /// The last drawing traced, so an output option does not cost a trace. See
     /// [`trace::Cache`].
     traced: Arc<trace::Cache>,
+    /// The confidence bands of the last trace sent to the interface, by generation. They
+    /// are often a hundred times the size of the drawing, so they are not part of the
+    /// `trace:done` event; the interface asks for them with [`trace_bands`].
+    bands: Mutex<Option<(u64, Arc<String>)>>,
+    /// The newest Fabricate request, so a burst of edits prepares only the last one.
+    fab_latest: AtomicU64,
+    /// One Fabricate preparation at a time.
+    fab_running: Mutex<()>,
 }
 
 /// What this build can do, sent once at startup so the interface never has to guess.
@@ -180,6 +188,7 @@ pub fn run() {
             open_sample,
             list_samples,
             start_trace,
+            trace_bands,
             cancel_trace,
             snap_inks,
             match_palette,
@@ -270,12 +279,15 @@ fn finish_splash(app: &AppHandle, force: bool) {
     }
     let app = app.clone();
     std::thread::spawn(move || {
-        let _ = app.emit_to("splash", "splash-done", ());
-        std::thread::sleep(SPLASH_FADE);
+        // The app is shown first, under the splash: the splash is always on top, so it
+        // fades out over a window that is already there instead of over the desktop,
+        // and the app is on screen a fade sooner.
         if let Some(main) = app.get_webview_window("main") {
             let _ = main.show();
             let _ = main.set_focus();
         }
+        let _ = app.emit_to("splash", "splash-done", ());
+        std::thread::sleep(SPLASH_FADE);
         if let Some(splash) = app.get_webview_window("splash") {
             let _ = splash.destroy();
         }
@@ -296,9 +308,20 @@ fn configure_threads(prefs: &settings::Prefs) {
 }
 
 // ------------------------------------------------------------------------ commands ---
+//
+// Every command that does real work — reads a file, decodes, renders, hashes, reaches the
+// network — is `async`, which in Tauri means it runs on a worker thread rather than on
+// the thread that drives the window. A plain command blocks the interface for as long as
+// it takes: seconds, for a Fabricate plan of a detailed drawing or an update check on a
+// network that does not answer.
 
-#[tauri::command]
+#[tauri::command(async)]
 fn capabilities() -> Capabilities {
+    describe(denoiser::status())
+}
+
+/// What this build can do, with the denoiser's status as given.
+fn describe(denoiser: denoiser::Status) -> Capabilities {
     Capabilities {
         version: env!("CARGO_PKG_VERSION"),
         engine_version: env!("CARGO_PKG_VERSION"),
@@ -319,7 +342,7 @@ fn capabilities() -> Capabilities {
             })
             .collect(),
         stages: trace::STAGES,
-        denoiser: denoiser::status(),
+        denoiser,
     }
 }
 
@@ -337,7 +360,7 @@ fn build_target() -> String {
     format!("{}-{}{env}", std::env::consts::ARCH, std::env::consts::OS)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn open_path(path: PathBuf, state: State<'_, AppState>) -> Result<SourceInfo, String> {
     let bytes = std::fs::read(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     let info = adopt(trace::Source::open(bytes, Some(path.clone()))?, &state)?;
@@ -349,7 +372,7 @@ fn open_path(path: PathBuf, state: State<'_, AppState>) -> Result<SourceInfo, St
     Ok(info)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn open_bytes(
     bytes: Vec<u8>,
     name: Option<String>,
@@ -358,7 +381,7 @@ fn open_bytes(
     adopt(trace::Source::open(bytes, name.map(PathBuf::from))?, &state)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn open_sample(
     name: String,
     app: AppHandle,
@@ -370,7 +393,7 @@ fn open_sample(
 }
 
 /// The bundled samples, for the first-run screen.
-#[tauri::command]
+#[tauri::command(async)]
 fn list_samples(app: AppHandle) -> Vec<SampleInfo> {
     // Names and labels are fixed rather than read off the directory: the order on the
     // first-run screen is deliberate, and a stray file in the resource folder should not
@@ -432,14 +455,34 @@ fn adopt(source: trace::Source, state: &State<'_, AppState>) -> Result<SourceInf
 }
 
 /// The source as a `data:` URL the viewer can show, capped on the longer side.
+///
+/// A file the webview can show as it is, and small enough, goes across as it is: decoding
+/// a JPEG only to encode it again as a larger PNG costs a noticeable moment on every open.
+/// Only PNG, JPEG, WebP, GIF and BMP qualify, and those other than PNG only when they carry
+/// no EXIF rotation, because the webview honours one and the tracer does not; shown
+/// rotated, the source would not line up with its own trace.
 fn preview_of(source: &trace::Source) -> Result<String, String> {
+    use lost::Container;
     const CAP: u32 = 2048;
-    if source.width.max(source.height) <= CAP && source.container == lost::Container::Png {
-        return Ok(data_url(&source.bytes, "image/png"));
+    if source.width.max(source.height) <= CAP {
+        let mime = match source.container {
+            Container::Png => Some("image/png"),
+            Container::Jpeg => Some("image/jpeg"),
+            Container::WebpLossy | Container::WebpLossless => Some("image/webp"),
+            Container::Gif => Some("image/gif"),
+            Container::Bmp => Some("image/bmp"),
+            Container::Tiff | Container::Unknown => None,
+        };
+        if let Some(mime) = mime {
+            if source.container == Container::Png || !is_reoriented(&source.bytes) {
+                return Ok(data_url(&source.bytes, mime));
+            }
+        }
     }
-    let raster = inkvec_trace::decode_image_capped(&source.bytes, CAP as usize)
-        .map_err(|e| format!("cannot read the image: {e}"))?
-        .0;
+    // The raster a trace at this size reads anyway, so the decode is not wasted.
+    let raster = source
+        .raster(CAP as usize)
+        .map_err(|e| format!("cannot read the image: {e}"))?;
     let (w, h) = (raster.width as u32, raster.height as u32);
     let bytes: Vec<u8> = raster
         .data
@@ -453,6 +496,19 @@ fn preview_of(source: &trace::Source) -> Result<String, String> {
         .write_to(&mut out, image::ImageFormat::Png)
         .map_err(|e| format!("cannot encode the preview: {e}"))?;
     Ok(data_url(&out.into_inner(), "image/png"))
+}
+
+/// Whether the file asks to be shown rotated or mirrored, which is any EXIF Orientation
+/// but the first. A file whose orientation cannot be read counts as rotated, which only
+/// costs it the re-encoded preview.
+fn is_reoriented(bytes: &[u8]) -> bool {
+    use image::ImageDecoder;
+    image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()
+        .and_then(|r| r.into_decoder().ok())
+        .and_then(|mut d| d.orientation().ok())
+        .is_none_or(|o| o != image::metadata::Orientation::NoTransforms)
 }
 
 fn data_url(bytes: &[u8], mime: &str) -> String {
@@ -522,16 +578,20 @@ fn start_trace(
         let prefs = state.prefs.lock().map_err(lock)?;
         (prefs.draft_px, prefs.draft_seconds)
     };
-    let settings = match request.tier {
-        trace::Tier::Draft => request.settings.draft(draft_px, draft_seconds),
-        trace::Tier::Final => request.settings.clone(),
-    };
+    // A draft of an image that already fits the draft size runs as the final: see
+    // [`trace::plan`].
+    let (settings, tier) = trace::plan(
+        &request.settings,
+        request.tier,
+        draft_px,
+        draft_seconds,
+        (source.width, source.height),
+    );
 
     // Remember what was asked for, not the draft's reduction of it.
     state.prefs.lock().map_err(lock)?.trace = request.settings.clone();
 
     let generation = state.generation.next();
-    let tier = request.tier;
     let pipeline = Arc::clone(&state.pipeline);
     let traced = Arc::clone(&state.traced);
     std::thread::Builder::new()
@@ -540,7 +600,7 @@ fn start_trace(
             // One trace at a time. Waiting here rather than starting straight away is what
             // stops a handful of quick control changes becoming a handful of full traces
             // sharing the cores, each slower for the others.
-            let _slot = pipeline.interactive();
+            let slot = pipeline.interactive();
             // Whoever we were waiting for has finished, and the user may well have moved on
             // while we waited. A trace the interface is no longer waiting for is not worth
             // the cores: its result would be dropped on arrival anyway.
@@ -548,23 +608,88 @@ fn start_trace(
                 return;
             }
             let stage_app = app.clone();
-            let outcome = trace::run(&source, &settings, tier, Some(&traced), move |name, ms| {
-                let _ = stage_app.emit(
-                    "trace:stage",
-                    serde_json::json!({ "generation": generation, "name": name, "ms": ms }),
-                );
-            });
+            let drawn = trace::draw(
+                &source,
+                &settings,
+                tier,
+                Some(&traced),
+                trace::MeasureLevel::Full,
+                move |name, ms| {
+                    let _ = stage_app.emit(
+                        "trace:stage",
+                        StageEvent {
+                            generation,
+                            name,
+                            ms,
+                        },
+                    );
+                },
+            );
+            // The drawing is finished and kept; measuring it needs no slot, so the next
+            // trace can start while this one is measured.
+            drop(slot);
             let state = app.state::<AppState>();
-            if state.generation.is_current(generation) {
-                let _ = app.emit(
-                    "trace:done",
-                    serde_json::json!({ "generation": generation, "outcome": outcome }),
-                );
+            let mut outcome = match drawn {
+                // Superseded while it was drawn: nobody is waiting for its measurements.
+                // The drawing stays in the cache, where the next request may still find it.
+                Ok(_) if !state.generation.is_current(generation) => return,
+                Ok(drawn) => {
+                    trace::measure(&source, drawn, trace::MeasureLevel::Full, Some(&traced))
+                }
+                Err(outcome) => outcome,
+            };
+            // The bands stay here until the interface asks for them.
+            let bands = match &mut outcome {
+                trace::Outcome::Traced(t) => t.bands.take(),
+                _ => None,
+            };
+            if !state.generation.is_current(generation) {
+                return;
             }
+            if let Ok(mut held) = state.bands.lock() {
+                *held = bands.map(|b| (generation, Arc::new(b)));
+            }
+            let _ = app.emit(
+                "trace:done",
+                TraceDone {
+                    generation,
+                    outcome: &outcome,
+                },
+            );
         })
         .map_err(|e| format!("cannot start the trace: {e}"))?;
 
     Ok(generation)
+}
+
+/// One stage the engine passed, for the progress rail.
+#[derive(Clone, Serialize)]
+struct StageEvent {
+    generation: u64,
+    name: &'static str,
+    ms: f64,
+}
+
+/// A finished trace, for the interface. The confidence bands are not in it: see
+/// [`trace_bands`].
+#[derive(Clone, Serialize)]
+struct TraceDone<'a> {
+    generation: u64,
+    outcome: &'a trace::Outcome,
+}
+
+/// The confidence bands of the trace `generation`, if it is the one last sent.
+///
+/// They are an SVG of their own and often a hundred times the size of the drawing. An
+/// event's payload reaches the webview as a script to evaluate, the slow way for that
+/// much text, so the bands come back as a command's reply instead.
+#[tauri::command(async)]
+fn trace_bands(generation: u64, state: State<'_, AppState>) -> Result<Option<String>, String> {
+    let held = state.bands.lock().map_err(lock)?;
+    Ok(held
+        .as_ref()
+        .filter(|(g, _)| *g == generation)
+        .map(|(_, bands)| bands.as_str().to_owned()))
 }
 
 /// Retire whatever is in flight.
@@ -606,7 +731,7 @@ pub struct SnapResult {
 /// and nothing else, so there is no re-trace and no new measurement. The distance moved is
 /// shown beside every snapped swatch, because the user is overriding something that was
 /// measured and should be able to see by how much.
-#[tauri::command]
+#[tauri::command(async)]
 fn snap_inks(svg: String, snaps: Vec<Snap>, width: u32, height: u32) -> Result<SnapResult, String> {
     let mut out = svg;
     for s in &snaps {
@@ -772,7 +897,7 @@ pub struct PlannedFile {
 }
 
 /// Build the export in memory and report what it would write, with real byte counts.
-#[tauri::command]
+#[tauri::command(async)]
 fn plan_export(
     request: ExportRequest,
     state: State<'_, AppState>,
@@ -788,7 +913,7 @@ fn plan_export(
 }
 
 /// Write the export into `destination`.
-#[tauri::command]
+#[tauri::command(async)]
 fn write_export(
     request: ExportRequest,
     destination: PathBuf,
@@ -862,7 +987,7 @@ fn build_export(
 // -------------------------------------------------------------------------- minify ---
 
 /// Rewrite an SVG's paths as the fewest segments that draw the same picture.
-#[tauri::command]
+#[tauri::command(async)]
 fn minify_svg(
     svg: String,
     settings: minify::MinifySettings,
@@ -872,26 +997,44 @@ fn minify_svg(
 
 /// What an SVG holds, for the Fabricate tab: its colours, which is the page, and what
 /// cannot be cut.
-#[tauri::command]
+#[tauri::command(async)]
 fn fab_analyze(svg: String) -> Result<inkvec_fab::Analysis, String> {
     inkvec_fab::analyze(&svg).map_err(|e| e.to_string())
 }
 
 /// The sheets to cut for one set of Fabricate choices, with the preflight.
-#[tauri::command]
-fn fab_prepare(svg: String, options: inkvec_fab::Options) -> Result<inkvec_fab::Plan, String> {
+///
+/// Latest wins. Dragging a slider sends a request per step and a detailed drawing takes
+/// a while to prepare, so requests wait their turn here and every one that a newer
+/// request has overtaken by then stands down without preparing anything. The tab already
+/// ignores a reply to anything but its newest request, so the error it gets back is
+/// never shown.
+#[tauri::command(async)]
+fn fab_prepare(
+    svg: String,
+    options: inkvec_fab::Options,
+    state: State<'_, AppState>,
+) -> Result<inkvec_fab::Plan, String> {
+    let ticket = state.fab_latest.fetch_add(1, Ordering::SeqCst) + 1;
+    let _turn = state
+        .fab_running
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if state.fab_latest.load(Ordering::SeqCst) != ticket {
+        return Err("superseded by a newer request".into());
+    }
     inkvec_fab::prepare(&svg, &options).map_err(|e| e.to_string())
 }
 
 /// Read a text file the user chose. Used by the Minify tab to open an existing SVG.
-#[tauri::command]
+#[tauri::command(async)]
 fn read_text_file(path: PathBuf) -> Result<String, String> {
     let bytes = std::fs::read(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     String::from_utf8(bytes).map_err(|_| format!("{} is not text", path.display()))
 }
 
 /// Write bytes the interface produced — the share card's PNG, a stats CSV, a saved SVG.
-#[tauri::command]
+#[tauri::command(async)]
 fn save_bytes(path: PathBuf, bytes: Vec<u8>) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -902,7 +1045,7 @@ fn save_bytes(path: PathBuf, bytes: Vec<u8>) -> Result<(), String> {
 
 // --------------------------------------------------------------------------- batch ---
 
-#[tauri::command]
+#[tauri::command(async)]
 fn batch_scan(folder: PathBuf) -> Result<Vec<PathBuf>, String> {
     batch::scan(&folder)
 }
@@ -979,7 +1122,7 @@ fn batch_stats_csv(state: State<'_, AppState>) -> Result<String, String> {
 
 // ------------------------------------------------------------------------ denoiser ---
 
-#[tauri::command]
+#[tauri::command(async)]
 fn denoiser_status() -> denoiser::Status {
     denoiser::status()
 }
@@ -1061,7 +1204,7 @@ fn reset_prefs(state: State<'_, AppState>) -> Result<settings::Prefs, String> {
 /// generated separately because `studio/src-tauri` is not a member of the root cargo
 /// workspace, but the notices a user reads have to be the notices for the binary they are
 /// actually running, so the screen shows the pair.
-#[tauri::command]
+#[tauri::command(async)]
 fn third_party_notices(app: AppHandle) -> Result<String, String> {
     let read = |name: &str| -> Option<String> {
         let path = app
@@ -1101,7 +1244,10 @@ pub struct UpdateInfo {
 /// sends is exactly what the Privacy paragraph says it sends: the app version and the
 /// operating system, in the user agent, and nothing else. No identifier, no image, no
 /// cookie. Turning the check off in Settings means the app never contacts the network.
-#[tauri::command]
+///
+/// A network that swallows the request rather than refusing it gets five seconds, not
+/// the operating system's minutes: the answer only ever reaches the status strip.
+#[tauri::command(async)]
 fn check_update(state: State<'_, AppState>) -> Result<UpdateInfo, String> {
     const RELEASES: &str = "https://api.github.com/repos/logolabs/inkvec/releases/latest";
     let notes = "https://github.com/logolabs/inkvec/releases".to_string();
@@ -1120,7 +1266,8 @@ fn check_update(state: State<'_, AppState>) -> Result<UpdateInfo, String> {
         env!("CARGO_PKG_VERSION"),
         std::env::consts::OS
     );
-    let mut response = match ureq::get(RELEASES)
+    let mut response = match update_agent()
+        .get(RELEASES)
         .header("User-Agent", &agent)
         .header("Accept", "application/vnd.github+json")
         .call()
@@ -1192,6 +1339,21 @@ fn install_context_menu() -> Result<integration::Status, String> {
 #[tauri::command]
 fn remove_context_menu() -> Result<integration::Status, String> {
     integration::remove_context_menu()
+}
+
+/// The whole update check may take this long, however the network behaves.
+const UPDATE_TIMEOUT: Duration = Duration::from_secs(5);
+/// And this long to connect at all.
+const UPDATE_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// The HTTP client the update check uses: ureq's defaults, with a deadline.
+fn update_agent() -> ureq::Agent {
+    ureq::Agent::new_with_config(
+        ureq::Agent::config_builder()
+            .timeout_global(Some(UPDATE_TIMEOUT))
+            .timeout_connect(Some(UPDATE_CONNECT_TIMEOUT))
+            .build(),
+    )
 }
 
 /// Whether `candidate` is a later version than `current`, compared numerically.
@@ -1325,9 +1487,78 @@ mod tests {
         assert!(e.contains("chartreuse"), "{e}");
     }
 
+    /// A JPEG of `w` x `h`, with an EXIF Orientation of `orientation` when one is given.
+    fn jpeg(w: u32, h: u32, orientation: Option<u16>) -> Vec<u8> {
+        let img = image::RgbImage::from_fn(w, h, |x, y| {
+            image::Rgb([(x * 7 % 256) as u8, (y * 5 % 256) as u8, 90])
+        });
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut out, image::ImageFormat::Jpeg)
+            .unwrap();
+        let plain = out.into_inner();
+        let Some(o) = orientation else {
+            return plain;
+        };
+        // An APP1 segment right after the start marker: "Exif", then a little-endian TIFF
+        // header and one IFD entry, 0x0112 Orientation, SHORT, count 1.
+        let mut payload = b"Exif\0\0".to_vec();
+        payload.extend_from_slice(&[b'I', b'I', 42, 0, 8, 0, 0, 0, 1, 0, 0x12, 0x01, 3, 0]);
+        payload.extend_from_slice(&[1, 0, 0, 0, o as u8, (o >> 8) as u8, 0, 0, 0, 0, 0, 0]);
+        let len = (payload.len() + 2) as u16;
+        let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe1, (len >> 8) as u8, len as u8];
+        jpeg.extend_from_slice(&payload);
+        jpeg.extend_from_slice(&plain[2..]);
+        jpeg
+    }
+
+    #[test]
+    fn a_jpeg_that_needs_no_rotation_is_previewed_as_itself() {
+        let bytes = jpeg(120, 80, None);
+        assert!(!is_reoriented(&bytes));
+        let source = trace::Source::open(bytes.clone(), None).unwrap();
+        let url = preview_of(&source).unwrap();
+        assert_eq!(url, data_url(&bytes, "image/jpeg"));
+    }
+
+    /// The webview would turn a rotated JPEG upright and the tracer would not, so its
+    /// preview is the pixels as the tracer reads them.
+    #[test]
+    fn a_rotated_jpeg_is_previewed_as_the_tracer_reads_it() {
+        let upright = jpeg(120, 80, Some(1));
+        assert!(!is_reoriented(&upright), "Orientation 1 is no rotation");
+        let rotated = jpeg(120, 80, Some(6));
+        assert!(is_reoriented(&rotated));
+        let source = trace::Source::open(rotated, None).unwrap();
+        assert_eq!(
+            (source.width, source.height),
+            (120, 80),
+            "stored size, not rotated"
+        );
+        let url = preview_of(&source).unwrap();
+        assert!(url.starts_with("data:image/png;base64,"), "{}", &url[..30]);
+    }
+
+    /// An update check against a network that never answers gives up on time.
+    #[test]
+    fn the_update_check_gives_up_on_a_network_that_does_not_answer() {
+        let started = std::time::Instant::now();
+        // TEST-NET-1 (RFC 5737): reserved for documentation, never routed.
+        let result = update_agent().get("http://192.0.2.1/").call();
+        assert!(result.is_err());
+        assert!(
+            started.elapsed() < UPDATE_TIMEOUT + Duration::from_secs(1),
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
     #[test]
     fn the_capabilities_describe_the_whole_tune_tab() {
-        let c = capabilities();
+        // A status for a file that is not there: the real one would read, and possibly
+        // mark, the model installed for whoever runs the tests.
+        let missing = std::env::temp_dir().join(format!("inkvec-no-model-{}", std::process::id()));
+        let c = describe(denoiser::status_at(Some(missing)));
         assert_eq!(c.controls.len(), 22);
         assert_eq!(c.presets.len(), 8);
         assert_eq!(c.stages.len(), 9);

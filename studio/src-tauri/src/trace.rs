@@ -13,7 +13,7 @@
 //! when the engine has finished it, with the time it took.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
@@ -39,6 +39,61 @@ impl Tier {
             Tier::Final => "final",
         }
     }
+}
+
+/// What a request from the interface actually runs: the settings and the tier.
+///
+/// A final is what it says. A draft is the same settings at the draft size with the
+/// draft's time limit — except when the image already fits inside the draft size. Then
+/// the draft would trace the very raster the final traces, with the same settings, and
+/// only the time limit tells them apart; the limit exists to keep a large image live, and
+/// a small one does not need it. So such a draft runs as the final itself: the drawing
+/// that comes back is the one export would write, it is kept as the final, and the final
+/// the interface asks for once the controls settle is then served from the cache instead
+/// of tracing the same image a second time. The restorer is the one exception worth
+/// naming: a draft never runs it, so with "Clean up damage" on the two differ and the
+/// draft stays a draft.
+pub fn plan(
+    settings: &Settings,
+    tier: Tier,
+    draft_px: u32,
+    draft_seconds: f64,
+    source_px: (u32, u32),
+) -> (Settings, Tier) {
+    match tier {
+        Tier::Final => (settings.clone(), Tier::Final),
+        Tier::Draft => {
+            let draft = settings.draft(draft_px, draft_seconds);
+            if draft_is_the_final(settings, &draft, source_px) {
+                (settings.clone(), Tier::Final)
+            } else {
+                (draft, Tier::Draft)
+            }
+        }
+    }
+}
+
+/// Whether `draft` would trace exactly what `settings` traces: the image fits inside both
+/// sizes, so neither reduces it, and nothing but the time limit differs.
+fn draft_is_the_final(settings: &Settings, draft: &Settings, (w, h): (u32, u32)) -> bool {
+    let (full, draft) = (settings.clone().sanitised(), draft.clone().sanitised());
+    w.max(h) <= draft.trace_size
+        && Settings {
+            trace_size: full.trace_size,
+            time_limit: full.time_limit,
+            ..draft
+        } == full
+}
+
+/// How much of a finished drawing is measured.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MeasureLevel {
+    /// Everything the Vectorize tab shows: the colour differences, the palette, what could
+    /// not be recovered, the editability counts and the confidence bands.
+    Full,
+    /// What a batch row shows: the mean colour difference and the counts. A batch writes
+    /// hundreds of files and nobody looks at the palette of each one.
+    Summary,
 }
 
 /// One stage the engine finished, on its way through a trace.
@@ -73,8 +128,12 @@ pub const STAGES: [&str; 9] = [
 /// The internal names are explicitly not a stable interface, so an unrecognised one is
 /// folded into the stage it most likely belongs to rather than dropped or shown raw: a
 /// new pipeline step must not put a word nobody can read in front of the user.
-pub fn stage_label(internal: &str) -> &'static str {
-    match internal {
+///
+/// `None` for the one mark that is not a stage: `trace_total` is the whole trace again,
+/// and adding it to the last stage would count every millisecond twice.
+pub fn stage_label(internal: &str) -> Option<&'static str> {
+    Some(match internal {
+        "trace_total" => return None,
         "decode" => "intake",
         "palette" | "labels" | "labels_in" | "despeckle" | "blend_absorb" | "merge_bands"
         | "carve" | "split" | "fades" => "palette",
@@ -84,11 +143,11 @@ pub fn stage_label(internal: &str) -> &'static str {
         "repair" => "repair",
         "fit_dp" => "segments",
         "fills" => "lambda",
-        "emit" | "trace_total" => "wrote",
+        "emit" => "wrote",
         // Unknown: it happened after the palette and before the emit, which is where
         // nearly all of the pipeline lives.
         _ => "boundary solve",
-    }
+    })
 }
 
 /// How a trace ended.
@@ -151,6 +210,10 @@ pub struct Source {
     pub width: u32,
     /// Its size as it arrived.
     pub height: u32,
+    /// The rasters already decoded from `bytes`, by the cap they were decoded at. A trace
+    /// and its measurement read the same raster, and a draft and a final of a small image
+    /// read the same one too, so each is decoded once rather than once per use.
+    rasters: Mutex<Vec<(usize, Arc<inkvec_trace::Rgba>)>>,
 }
 
 /// Written by hand rather than derived: the file's own bytes are in here, and a
@@ -167,8 +230,16 @@ impl std::fmt::Debug for Source {
     }
 }
 
+/// How many decoded rasters a source keeps: a draft's and a final's.
+const RASTERS_KEPT: usize = 2;
+
 impl Source {
-    /// Read an image from bytes, refusing early and in words if it will not decode.
+    /// Read an image from bytes, refusing early and in words if it is not an image.
+    ///
+    /// Only the header is read here: the size is what opening needs, and a 6000 px photo
+    /// takes a third of a second to decode for no other reason. The pixels are decoded
+    /// when a trace first wants them (see [`Source::raster`]), and a file whose header
+    /// reads but whose pixels do not is reported then, as an image that will not decode.
     ///
     /// An SVG is accepted too, rendered to a PNG first: re-tracing a drawing is how a
     /// messy one comes back clean (the paths a generator or a converter left behind,
@@ -181,16 +252,67 @@ impl Source {
             bytes
         };
         let container = Container::sniff(&bytes);
-        // `max_dim` 0: dimensions only, no resampling, so the reported size is the file's.
-        let (_img, (width, height)) = inkvec_trace::decode_image_capped(&bytes, 0)
+        // The same header read `inkvec_trace::decode_image_capped` reports its size from,
+        // so the size here is the one every trace of this file will see. Neither applies
+        // an EXIF orientation, so nothing is swapped.
+        let (width, height) = image::ImageReader::new(std::io::Cursor::new(&bytes))
+            .with_guessed_format()
+            .map_err(|e| describe_decode_failure(container, &e.to_string()))?
+            .into_dimensions()
             .map_err(|e| describe_decode_failure(container, &e.to_string()))?;
-        Ok(Self {
+        Ok(Self::from_parts(bytes, path, container, width, height))
+    }
+
+    /// A source from what is already known about it, with nothing decoded yet.
+    pub fn from_parts(
+        bytes: Vec<u8>,
+        path: Option<std::path::PathBuf>,
+        container: Container,
+        width: u32,
+        height: u32,
+    ) -> Self {
+        Self {
             bytes,
             path,
             container,
             width,
             height,
-        })
+            rasters: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// The pixels, with the longer side capped at `max_dim` (0 for no cap), exactly as
+    /// `inkvec_trace::decode_image_capped` produces them. Decoded on first use and kept.
+    pub fn raster(&self, max_dim: usize) -> Result<Arc<inkvec_trace::Rgba>, String> {
+        // A cap the image already fits inside changes nothing, so it shares the uncapped
+        // raster: a draft and a final of a small image are one decode.
+        let key = if max_dim == 0 || (self.width.max(self.height) as usize) <= max_dim {
+            0
+        } else {
+            max_dim
+        };
+        let lock = || {
+            self.rasters
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        };
+        if let Some((_, r)) = lock().iter().find(|(k, _)| *k == key) {
+            return Ok(Arc::clone(r));
+        }
+        // Decoded outside the lock: a measurement reading the raster it already has must
+        // not wait for the next trace's decode at another size.
+        let (img, _) =
+            inkvec_trace::decode_image_capped(&self.bytes, key).map_err(|e| e.to_string())?;
+        let img = Arc::new(img);
+        let mut held = lock();
+        if let Some((_, r)) = held.iter().find(|(k, _)| *k == key) {
+            return Ok(Arc::clone(r));
+        }
+        if held.len() >= RASTERS_KEPT {
+            held.remove(0);
+        }
+        held.push((key, Arc::clone(&img)));
+        Ok(img)
     }
 
     /// The file's name, or a stand-in for an image that arrived from the clipboard.
@@ -342,17 +464,73 @@ fn scaled_to(w: u32, h: u32, max_dim: u32) -> Option<(u32, u32)> {
 /// any sane logo needs and well below what a desktop will survive losing.
 const MEMORY_CEILING: u64 = 8 * 1024 * 1024 * 1024;
 
-/// Run one trace to completion on the calling thread.
+/// Run one trace to completion on the calling thread, and measure everything about it.
 ///
 /// `on_stage` is called from inside the pipeline as each stage is passed; it should hand
 /// the value off and return.
 pub fn run(
-    source: &std::sync::Arc<Source>,
+    source: &Arc<Source>,
     settings: &Settings,
     tier: Tier,
     cache: Option<&Cache>,
     on_stage: impl Fn(&'static str, f64) + Send + 'static,
 ) -> Outcome {
+    run_at(source, settings, tier, cache, MeasureLevel::Full, on_stage)
+}
+
+/// [`run`], measuring only as much as `level` asks for.
+pub fn run_at(
+    source: &Arc<Source>,
+    settings: &Settings,
+    tier: Tier,
+    cache: Option<&Cache>,
+    level: MeasureLevel,
+    on_stage: impl Fn(&'static str, f64) + Send + 'static,
+) -> Outcome {
+    match draw(source, settings, tier, cache, level, on_stage) {
+        Ok(drawn) => measure(source, drawn, level, cache),
+        Err(outcome) => outcome,
+    }
+}
+
+/// A finished drawing that has not been measured yet.
+///
+/// Drawing and measuring are separate steps because they want different things. Drawing
+/// is the pipeline, and only one of those may run at a time (see [`Scheduler`]).
+/// Measuring renders the drawing back and compares it with the source, which is a
+/// fraction of the cost and needs no slot: the next trace can start while this one is
+/// being measured, and a drawing nobody is waiting for any more need not be measured at
+/// all.
+pub struct Drawn {
+    settings: Settings,
+    args: inkvec_cli::Args,
+    tier: Tier,
+    /// The SVG as it will be written: the output options applied.
+    svg: String,
+    /// The same drawing without the two output-only options, Minify and Margin, when
+    /// either is on. The report is measured on this one, so that what it says about the
+    /// drawing does not move when only the file's spelling or its canvas does.
+    unstyled: Option<String>,
+    traced_w: u32,
+    traced_h: u32,
+    engine_log: Vec<String>,
+    stages: Vec<Stage>,
+    bands: Option<String>,
+    seconds: f64,
+    /// What an earlier trace of this very drawing measured, when the cache had it.
+    measured: Option<Arc<Measured>>,
+}
+
+/// Trace, or take the drawing from the cache, and apply the output options. What runs
+/// inside the trace slot.
+pub fn draw(
+    source: &Arc<Source>,
+    settings: &Settings,
+    tier: Tier,
+    cache: Option<&Cache>,
+    level: MeasureLevel,
+    on_stage: impl Fn(&'static str, f64) + Send + 'static,
+) -> Result<Drawn, Outcome> {
     let settings = settings.clone().sanitised();
     let started = Instant::now();
 
@@ -361,10 +539,10 @@ pub fn run(
         // The largest size that fits, rounded down to something a slider can land on.
         let ratio = (MEMORY_CEILING as f64 / needed as f64).sqrt();
         let suggest = (((settings.trace_size as f64 * ratio) as u32) / 256 * 256).max(256);
-        return Outcome::OutOfMemory {
+        return Err(Outcome::OutOfMemory {
             needed_gb: needed as f64 / (1024.0 * 1024.0 * 1024.0),
             suggest_px: suggest,
-        };
+        });
     }
 
     let mut args = settings.to_args();
@@ -380,7 +558,7 @@ pub fn run(
     // The drawing, either from the pipeline or from the one already in hand. Only the
     // output options can be different for a reused drawing, and they are applied below.
     let reused = cache.and_then(|c| c.reuse(source, &settings, tier));
-    let (raw_svg, raw_w, raw_h, engine_log, stages, bands) = match reused {
+    let (raw_svg, raw_w, raw_h, engine_log, stages, bands, measured) = match reused {
         Some(hit) => (
             hit.svg,
             hit.width,
@@ -388,25 +566,215 @@ pub fn run(
             hit.stats,
             Vec::new(),
             hit.bands,
+            hit.measured,
         ),
-        None => match trace_pipeline(source, &args, on_stage) {
-            Ok(t) => {
-                if let Some(c) = cache {
-                    c.keep(source, &settings, tier, &t.svg, t.width, t.height, &t.stats);
-                    c.keep_bands(t.bands.clone());
-                }
-                (t.svg, t.width, t.height, t.stats, t.stages, t.bands)
+        None => {
+            let bands = level == MeasureLevel::Full;
+            let t = trace_pipeline(source, &args, bands, on_stage)?;
+            if let Some(c) = cache {
+                c.keep(source, &settings, tier, &t.svg, t.width, t.height, &t.stats);
+                c.keep_bands(t.bands.clone());
             }
-            Err(outcome) => return outcome,
-        },
+            (t.svg, t.width, t.height, t.stats, t.stages, t.bands, None)
+        }
     };
 
-    let (traced_w, traced_h) = (raw_w as u32, raw_h as u32);
+    // Measured on the drawing with neither output-only option; written with both.
+    let styled = args.minify || args.margin != 0.0;
+    let unstyled = (styled && measured.is_none()).then(|| {
+        let plain = inkvec_cli::Args {
+            minify: false,
+            margin: 0.0,
+            ..args.clone()
+        };
+        inkvec_cli::post_process(&plain, raw_svg.clone(), raw_w, raw_h)
+    });
     let svg = inkvec_cli::post_process(&args, raw_svg, raw_w, raw_h);
-    let seconds = started.elapsed().as_secs_f64();
-    measure(
-        source, &settings, &args, tier, svg, traced_w, traced_h, engine_log, stages, bands, seconds,
-    )
+    Ok(Drawn {
+        settings,
+        args,
+        tier,
+        svg,
+        unstyled,
+        traced_w: raw_w as u32,
+        traced_h: raw_h as u32,
+        engine_log,
+        stages,
+        bands,
+        seconds: started.elapsed().as_secs_f64(),
+        measured,
+    })
+}
+
+/// What was produced and how it compares: the quality report, the palette and what could
+/// not be recovered. Every one of these can fail on a document resvg will not take, and
+/// none of that should cost the user the trace, so each degrades to "not measured".
+///
+/// What does not depend on the output options is measured once per drawing and kept in
+/// the cache beside it, so toggling Minify or Margin re-measures only the file itself.
+pub fn measure(
+    source: &Arc<Source>,
+    drawn: Drawn,
+    level: MeasureLevel,
+    cache: Option<&Cache>,
+) -> Outcome {
+    let Drawn {
+        settings,
+        args,
+        tier,
+        svg,
+        unstyled,
+        traced_w,
+        traced_h,
+        engine_log,
+        stages,
+        bands,
+        seconds,
+        measured,
+    } = drawn;
+
+    let full = level == MeasureLevel::Full;
+    // Neither output-only option on: the file is the drawing the report measures, and its
+    // minified size may already be known from an earlier measurement of it.
+    let plain = !args.minify && args.margin == 0.0;
+    let known = measured
+        .as_ref()
+        .filter(|_| plain)
+        .and_then(|m| m.plain_minified.get().copied());
+    // The comparison with the source and the counts of the file are independent of each
+    // other, so they run side by side.
+    let (measured, (counts, minified_bytes, structure)) = rayon::join(
+        || match measured {
+            Some(m) => m,
+            None => {
+                let target = unstyled.as_deref().unwrap_or(&svg);
+                let m = Arc::new(Measured::of(
+                    source, &settings, &args, target, traced_w, traced_h, level,
+                ));
+                if full {
+                    if let Some(c) = cache {
+                        c.keep_measured(source, &settings, tier, Arc::clone(&m));
+                    }
+                }
+                m
+            }
+        },
+        || {
+            if full {
+                // The minifier is the slow one on a large drawing; it gets a task of its
+                // own.
+                let (minified, (counts, structure)) = rayon::join(
+                    || known.unwrap_or_else(|| minified_size(&svg, args.minify)),
+                    || (quality::count(&svg), inkvec_svgmin::structure(&svg).into()),
+                );
+                (counts, minified, structure)
+            } else {
+                (quality::count(&svg), None, Default::default())
+            }
+        },
+    );
+
+    if full && plain {
+        let _ = measured.plain_minified.set(minified_bytes);
+    }
+
+    let (coordinates, segments, paths, colours) = counts;
+    let report = Report {
+        mean_de00: measured.mean,
+        median_de00: measured.median,
+        worst_de00: measured.worst,
+        coordinates,
+        paths,
+        segments,
+        colours,
+        bytes: svg.len(),
+        minified_bytes,
+        structure,
+        seconds,
+        traced_px: traced_w.max(traced_h),
+    };
+
+    Outcome::Traced(Box::new(Traced {
+        tier: tier.label(),
+        svg,
+        report,
+        palette: measured.palette.clone(),
+        losses: measured.losses.clone(),
+        worst_corner: measured.corner,
+        stages,
+        engine_log,
+        bands,
+        traced_px: traced_w.max(traced_h),
+        oversized: scaled_to(source.width, source.height, args.max_dim as u32).is_some(),
+        source_px: (source.width, source.height),
+    }))
+}
+
+/// What measuring a drawing found, apart from the counts of the file itself.
+#[derive(Clone, Debug)]
+pub struct Measured {
+    /// Mean dE00, if the drawing could be rendered back.
+    pub mean: Option<f64>,
+    /// Median dE00.
+    pub median: Option<f64>,
+    /// 99th-percentile dE00.
+    pub worst: Option<f64>,
+    /// Where the two disagree most.
+    pub corner: Option<WorstCorner>,
+    /// The inks, largest share first. Empty at [`MeasureLevel::Summary`].
+    pub palette: Vec<Ink>,
+    /// What could not be recovered. Empty at [`MeasureLevel::Summary`].
+    pub losses: Vec<Loss>,
+    /// The minified size of the drawing written with neither output-only option, once
+    /// it has been worked out: the figure beside the file size when Minify is turned off
+    /// again. The minifier is the slowest of the counts on a large drawing.
+    pub plain_minified: std::sync::OnceLock<Option<usize>>,
+}
+
+impl Measured {
+    fn of(
+        source: &Source,
+        settings: &Settings,
+        args: &inkvec_cli::Args,
+        svg: &str,
+        traced_w: u32,
+        traced_h: u32,
+        level: MeasureLevel,
+    ) -> Self {
+        let full = level == MeasureLevel::Full;
+        let raster = source.raster(args.max_dim).ok();
+        // The palette is a small render of its own and needs nothing from the comparison,
+        // so it is worked out beside it; what could not be recovered reads the comparison
+        // and follows it.
+        let ((analysis, losses), palette) = rayon::join(
+            || {
+                let analysis = raster
+                    .as_deref()
+                    .and_then(|r| quality::analyse(r, svg).ok());
+                let losses = match (full, raster.as_deref(), analysis.as_ref()) {
+                    (true, Some(r), Some(a)) => lost::detect(r, a, svg, settings, source.container),
+                    _ => Vec::new(),
+                };
+                (analysis, losses)
+            },
+            || {
+                if full {
+                    quality::palette(svg, traced_w, traced_h).unwrap_or_default()
+                } else {
+                    Vec::new()
+                }
+            },
+        );
+        Self {
+            mean: analysis.as_ref().map(|a| a.mean),
+            median: analysis.as_ref().map(|a| a.median),
+            worst: analysis.as_ref().map(|a| a.worst),
+            corner: analysis.as_ref().and_then(|a| a.corner),
+            palette,
+            losses,
+            plain_minified: std::sync::OnceLock::new(),
+        }
+    }
 }
 
 /// What the pipeline produced, with the stages it reported on the way.
@@ -430,9 +798,13 @@ fn bands_path() -> std::path::PathBuf {
 }
 
 /// Run the pipeline itself, turning a failure into the outcome the interface shows.
+///
+/// `bands` asks the engine for its confidence bands as well. They do not change the
+/// drawing; a batch, which never shows them, does not ask.
 fn trace_pipeline(
     source: &Source,
     args: &inkvec_cli::Args,
+    bands: bool,
     on_stage: impl Fn(&'static str, f64) + Send + 'static,
 ) -> Result<Pipeline, Outcome> {
     // Stages are reported from inside the pipeline, on this thread, as each one is
@@ -440,16 +812,18 @@ fn trace_pipeline(
     // time where several pipeline steps map to one name — and handed straight on, so the
     // rail fills while the trace runs rather than after it.
     // The bands come back through a file, as the command line writes them.
-    let bands_file = bands_path();
+    let bands_file = bands.then(bands_path);
     let mut args = args.clone();
-    args.uncertainty = Some(bands_file.clone());
+    args.uncertainty = bands_file.clone();
     let args = &args;
     let collected: std::rc::Rc<std::cell::RefCell<Vec<Stage>>> = Default::default();
     let store = std::rc::Rc::clone(&collected);
     let traced = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         inkvec_trace::with_stage_sink(
             move |internal, ms| {
-                let name = stage_label(internal);
+                let Some(name) = stage_label(internal) else {
+                    return;
+                };
                 {
                     let mut stages = store.borrow_mut();
                     match stages.iter_mut().find(|s| s.name == name) {
@@ -460,9 +834,13 @@ fn trace_pipeline(
                 on_stage(name, ms);
             },
             || {
-                let (img, (w, h)) = inkvec_trace::decode_image_capped(&source.bytes, args.max_dim)?;
-                let out =
-                    inkvec_cli::trace_image_sized(img, &args, Some((w as usize, h as usize)))?;
+                // The pipeline takes its raster by value, so it gets a copy of the one the
+                // source keeps; the measurement afterwards reads the kept one.
+                let kept: Arc<inkvec_trace::Rgba> = source.raster(args.max_dim)?;
+                let img = inkvec_trace::Rgba::clone(&kept);
+                drop(kept);
+                let size = Some((source.width as usize, source.height as usize));
+                let out = inkvec_cli::trace_image_sized(img, args, size)?;
                 Ok::<_, Box<dyn std::error::Error>>(out)
             },
         )
@@ -490,8 +868,11 @@ fn trace_pipeline(
         Ok(Ok(t)) => t,
     };
 
-    let bands = std::fs::read_to_string(&bands_file).ok();
-    let _ = std::fs::remove_file(&bands_file);
+    let bands = bands_file.and_then(|file| {
+        let text = std::fs::read_to_string(&file).ok();
+        let _ = std::fs::remove_file(&file);
+        text
+    });
     Ok(Pipeline {
         svg: traced.svg,
         stats: traced.stats,
@@ -500,67 +881,6 @@ fn trace_pipeline(
         stages,
         bands,
     })
-}
-
-/// Measure what was produced and describe it: the quality report, the palette and what
-/// could not be recovered. Every one of these can fail on a document resvg will not take,
-/// and none of that should cost the user the trace, so each degrades to "not measured".
-#[allow(clippy::too_many_arguments)]
-fn measure(
-    source: &Source,
-    settings: &Settings,
-    args: &inkvec_cli::Args,
-    tier: Tier,
-    svg: String,
-    traced_w: u32,
-    traced_h: u32,
-    engine_log: Vec<String>,
-    stages: Vec<Stage>,
-    bands: Option<String>,
-    seconds: f64,
-) -> Outcome {
-    let raster = inkvec_trace::decode_image_capped(&source.bytes, args.max_dim)
-        .ok()
-        .map(|(img, _)| img);
-    let analysis = raster.as_ref().and_then(|r| quality::analyse(r, &svg).ok());
-
-    let (coordinates, segments, paths, colours) = quality::count(&svg);
-    let minified_bytes = minified_size(&svg, args.minify);
-    let report = Report {
-        mean_de00: analysis.as_ref().map(|a| a.mean),
-        median_de00: analysis.as_ref().map(|a| a.median),
-        worst_de00: analysis.as_ref().map(|a| a.worst),
-        coordinates,
-        paths,
-        segments,
-        colours,
-        bytes: svg.len(),
-        minified_bytes,
-        structure: inkvec_svgmin::structure(&svg).into(),
-        seconds,
-        traced_px: traced_w.max(traced_h),
-    };
-
-    let palette = quality::palette(&svg, traced_w, traced_h).unwrap_or_default();
-    let losses = match (raster.as_ref(), analysis.as_ref()) {
-        (Some(r), Some(a)) => lost::detect(r, a, &svg, settings, source.container),
-        _ => Vec::new(),
-    };
-
-    Outcome::Traced(Box::new(Traced {
-        tier: tier.label(),
-        svg,
-        report,
-        palette,
-        losses,
-        worst_corner: analysis.as_ref().and_then(|a| a.corner),
-        stages,
-        engine_log,
-        bands,
-        traced_px: traced_w.max(traced_h),
-        oversized: scaled_to(source.width, source.height, args.max_dim as u32).is_some(),
-        source_px: (source.width, source.height),
-    }))
 }
 
 /// The size the same drawing takes after the minifier, for the "minified" figure beside
@@ -673,16 +993,18 @@ mod tests {
             "fit_dp",
             "fills",
             "emit",
-            "trace_total",
             "something_new_in_2027",
         ];
         for name in internal {
-            let label = stage_label(name);
+            let label = stage_label(name).expect("a stage");
             assert!(
                 STAGES.contains(&label),
                 "{name} -> {label}, not a named stage"
             );
         }
+        // The whole trace's own total is not a stage: counted as one, the rail showed
+        // every trace taking twice as long as it did.
+        assert_eq!(stage_label("trace_total"), None);
     }
 
     #[test]
@@ -937,6 +1259,180 @@ mod tests {
             "the pipeline did not run for a changed setting"
         );
     }
+
+    /// The report's colour differences and the palette, bit for bit, as one string.
+    fn numbers(t: &Traced) -> String {
+        format!(
+            "{:?} {:?} {:?} {:?}",
+            t.report.mean_de00.map(f64::to_bits),
+            t.report.median_de00.map(f64::to_bits),
+            t.report.worst_de00.map(f64::to_bits),
+            t.palette
+                .iter()
+                .map(|i| (i.traced.as_str(), i.share.to_bits()))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    /// The report describes the drawing, not its spelling or its canvas: Minify and Margin
+    /// leave every colour-difference number and the palette exactly where they were, and a
+    /// measurement served from the cache is the measurement made from cold.
+    #[test]
+    fn output_options_do_not_move_the_report_and_the_cache_measures_the_same() {
+        let source = Arc::new(Source::open(sample_png(), None).unwrap());
+        let plain = Settings {
+            trace_size: 96,
+            ..Settings::default()
+        };
+        let cache = Cache::default();
+        let Outcome::Traced(first) = run(&source, &plain, Tier::Final, Some(&cache), |_, _| {})
+        else {
+            panic!("expected a drawing")
+        };
+        for changed in [
+            Settings {
+                minify: true,
+                ..plain.clone()
+            },
+            Settings {
+                margin: 0.1,
+                ..plain.clone()
+            },
+        ] {
+            let Outcome::Traced(hit) = run(&source, &changed, Tier::Final, Some(&cache), |_, _| {})
+            else {
+                panic!("expected a drawing")
+            };
+            let Outcome::Traced(fresh) = run(&source, &changed, Tier::Final, None, |_, _| {})
+            else {
+                panic!("expected a drawing")
+            };
+            assert_eq!(numbers(&hit), numbers(&first), "{changed:?}");
+            assert_eq!(numbers(&fresh), numbers(&first), "{changed:?}");
+            assert_eq!(hit.report.bytes, fresh.report.bytes);
+            assert_eq!(hit.report.coordinates, fresh.report.coordinates);
+        }
+        cache.forget_measurements();
+        let Outcome::Traced(cold) = run(&source, &plain, Tier::Final, Some(&cache), |_, _| {})
+        else {
+            panic!("expected a drawing")
+        };
+        assert_eq!(numbers(&cold), numbers(&first));
+        assert_eq!(cold.losses.len(), first.losses.len());
+    }
+
+    /// A batch measures less, and draws exactly the same thing.
+    #[test]
+    fn a_summary_measures_the_mean_and_draws_the_same_drawing() {
+        let source = Arc::new(Source::open(sample_png(), None).unwrap());
+        let Outcome::Traced(full) =
+            run(&source, &Settings::default(), Tier::Final, None, |_, _| {})
+        else {
+            panic!("expected a drawing")
+        };
+        let Outcome::Traced(summary) = run_at(
+            &source,
+            &Settings::default(),
+            Tier::Final,
+            None,
+            MeasureLevel::Summary,
+            |_, _| {},
+        ) else {
+            panic!("expected a drawing")
+        };
+        assert_eq!(summary.svg, full.svg);
+        assert_eq!(summary.report.mean_de00, full.report.mean_de00);
+        assert_eq!(summary.report.coordinates, full.report.coordinates);
+        assert!(summary.palette.is_empty() && summary.bands.is_none());
+        assert!(full.bands.is_some(), "a colour trace has its bands");
+    }
+
+    /// The raster is decoded once per size and shared by everything that reads it.
+    #[test]
+    fn a_source_decodes_each_size_once() {
+        let source = Source::open(sample_png(), None).unwrap();
+        let a = source.raster(2048).unwrap();
+        let b = source.raster(0).unwrap();
+        assert!(Arc::ptr_eq(&a, &b), "a cap the image fits inside is no cap");
+        let small = source.raster(64).unwrap();
+        assert_eq!((small.width, small.height), (64, 64));
+        assert!(Arc::ptr_eq(&small, &source.raster(64).unwrap()));
+        let (direct, _) = inkvec_trace::decode_image_capped(&source.bytes, 64).unwrap();
+        assert_eq!(
+            small.data, direct.data,
+            "the kept raster is the engine's own"
+        );
+    }
+
+    /// Opening reads only the header, so a file whose pixels are broken opens, and says
+    /// it will not decode when a trace first needs them.
+    #[test]
+    fn a_file_that_will_not_decode_is_reported_when_traced() {
+        let mut png = sample_png();
+        png.truncate(png.len() / 2);
+        let source = Arc::new(Source::open(png, None).expect("the header is intact"));
+        assert_eq!((source.width, source.height), (96, 96));
+        let outcome = run(&source, &Settings::default(), Tier::Final, None, |_, _| {});
+        let Outcome::Undecodable { message } = outcome else {
+            panic!("expected undecodable, got {outcome:?}")
+        };
+        assert!(message.contains("PNG, JPEG, WebP"), "{message}");
+    }
+
+    #[test]
+    fn a_draft_of_an_image_that_fits_the_draft_size_is_the_final() {
+        let s = Settings::default();
+        // 96 px fits inside the 512 px draft: the draft is the final.
+        let (settings, tier) = plan(&s, Tier::Draft, 512, 0.4, (96, 96));
+        assert_eq!(tier, Tier::Final);
+        assert_eq!(settings, s, "and it runs with the final's own settings");
+        // Larger than the draft size: a real draft.
+        let (settings, tier) = plan(&s, Tier::Draft, 512, 0.4, (600, 300));
+        assert_eq!(tier, Tier::Draft);
+        assert_eq!(settings, s.draft(512, 0.4));
+        // The restorer only runs for a final, so with it on the two differ.
+        let restoring = Settings {
+            clean_up_damage: crate::options::Cleanup::On,
+            ..Settings::default()
+        };
+        assert_eq!(
+            plan(&restoring, Tier::Draft, 512, 0.4, (96, 96)).1,
+            Tier::Draft
+        );
+        // A final is always a final.
+        assert_eq!(
+            plan(&s, Tier::Final, 512, 0.4, (4000, 4000)),
+            (s.clone(), Tier::Final)
+        );
+    }
+
+    /// The whole point of the rule above: a control change on a small image traces it once.
+    #[test]
+    fn a_small_image_is_traced_once_for_a_draft_and_the_final_after_it() {
+        let source = Arc::new(Source::open(sample_png(), None).unwrap());
+        let s = Settings::default();
+        let cache = Cache::default();
+        let runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut drawings = Vec::new();
+        for asked in [Tier::Draft, Tier::Final] {
+            let (settings, tier) = plan(&s, asked, 512, 0.4, (source.width, source.height));
+            let seen = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let flag = Arc::clone(&seen);
+            let Outcome::Traced(t) = run(&source, &settings, tier, Some(&cache), move |_, _| {
+                flag.store(true, Ordering::SeqCst);
+            }) else {
+                panic!("expected a drawing")
+            };
+            runs.fetch_add(seen.load(Ordering::SeqCst) as usize, Ordering::SeqCst);
+            drawings.push(t.svg);
+        }
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            1,
+            "the final was served from the cache"
+        );
+        assert_eq!(drawings[0], drawings[1]);
+    }
 }
 
 /// One trace at a time, and the one somebody is looking at goes first.
@@ -1142,6 +1638,9 @@ struct Cached {
     height: usize,
     stats: Vec<String>,
     bands: Option<String>,
+    /// What the drawing measured, once it has been. The same for every output option,
+    /// because it is measured on the drawing without them (see [`Drawn`]).
+    measured: Option<Arc<Measured>>,
 }
 
 /// What a hit gives back: the pipeline's own output, before the output options.
@@ -1151,6 +1650,7 @@ pub struct Reused {
     pub height: usize,
     pub stats: Vec<String>,
     pub bands: Option<String>,
+    pub measured: Option<Arc<Measured>>,
 }
 
 /// The settings with the two post-processing controls blanked out: what decides whether two
@@ -1191,11 +1691,13 @@ impl Cache {
             height: hit.height,
             stats: hit.stats.clone(),
             bands: hit.bands.clone(),
+            measured: hit.measured.clone(),
         })
     }
 
     /// Keep this drawing for the next trace of the same image. One at a time: the only
     /// drawing worth keeping is the one on screen.
+    #[allow(clippy::too_many_arguments)]
     pub fn keep(
         &self,
         source: &std::sync::Arc<Source>,
@@ -1214,6 +1716,7 @@ impl Cache {
             height,
             stats: stats.to_vec(),
             bands: None,
+            measured: None,
         });
     }
 
@@ -1221,6 +1724,31 @@ impl Cache {
     pub fn keep_bands(&self, bands: Option<String>) {
         if let Some(held) = self.lock().as_mut() {
             held.bands = bands;
+        }
+    }
+
+    /// What this drawing measured, kept beside it — if the drawing in hand is still this
+    /// one. The measurement runs outside the trace slot, so another trace may have
+    /// replaced the drawing meanwhile, and its measurement must not be taken for this.
+    pub fn keep_measured(
+        &self,
+        source: &Arc<Source>,
+        settings: &Settings,
+        tier: Tier,
+        measured: Arc<Measured>,
+    ) {
+        if let Some(held) = self.lock().as_mut() {
+            if Arc::ptr_eq(&held.source, source) && held.key == drawing_key(settings, tier) {
+                held.measured = Some(measured);
+            }
+        }
+    }
+
+    /// Drop the measurement but keep the drawing, so the next use measures from cold.
+    /// For pricing and testing the measurement itself.
+    pub fn forget_measurements(&self) {
+        if let Some(held) = self.lock().as_mut() {
+            held.measured = None;
         }
     }
 
@@ -1237,13 +1765,7 @@ mod cache_tests {
     use std::sync::Arc;
 
     fn source(byte: u8) -> Arc<Source> {
-        Arc::new(Source {
-            bytes: vec![byte],
-            path: None,
-            container: Container::Png,
-            width: 4,
-            height: 4,
-        })
+        Arc::new(Source::from_parts(vec![byte], None, Container::Png, 4, 4))
     }
 
     fn keep(cache: &Cache, src: &Arc<Source>, settings: &Settings) {

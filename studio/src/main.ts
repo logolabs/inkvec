@@ -623,8 +623,15 @@ async function start(): Promise<void> {
     else stages.push({ name, ms });
     store.set({ liveStages: stages });
   });
-  await events.traceDone(({ generation, outcome }) => {
+  await events.traceDone(async ({ generation, outcome }) => {
     if (generation !== store.state.generation) return;
+    // The confidence bands do not ride on the event: they are often a hundred times the
+    // size of the drawing, and an event's payload is the slow way across. They are asked
+    // for here, through the command channel, before the result is shown.
+    if (outcome.state === "traced" && outcome.bands == null) {
+      outcome.bands = await api.traceBands(generation).catch(() => null);
+      if (generation !== store.state.generation) return;
+    }
     applyOutcome(outcome);
   });
   await events.batchRow((row) => {

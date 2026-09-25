@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="inkvec-guide" content="studio">
+<title>Batch · Inkvec Studio guide</title>
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="side"><a class="guidebrand" href="index.html"><img src="logo-mono.svg" alt=""> <span>Inkvec Studio</span></a><div class="grp"><h4>User guide</h4><a href="index.html">Overview</a><a href="install.html">Install and first launch</a><a href="getting-started.html">Getting started</a><a href="viewer.html">The viewer</a><a href="result.html">Result</a><a href="tune.html">Tune</a><a href="palette.html">Palette and colour groups</a><a href="export.html">Export</a><a href="minify.html">Minify SVG</a><a href="fabricate.html">Fabricate</a><a href="batch.html" aria-current="page">Batch</a><a href="settings.html">Settings</a><a href="shortcuts.html">Keyboard and mouse</a><a href="troubleshooting.html">Troubleshooting</a></div><div class="grp"><h4>Tutorials</h4><a href="tutorials/jpeg-logo.html">Clean up a JPEG logo</a><a href="tutorials/favicon-asset-pack.html">A favicon and an asset pack</a><a href="tutorials/vinyl-htv.html">Layered vinyl and iron-on</a><a href="tutorials/laser.html">Laser: DXF and G-code</a></div><div class="grp"><h4>Online</h4><a href="https://logolabs.github.io/inkvec/">Inkvec documentation</a><a href="https://logolabs.github.io/inkvec/studio/batch.html">This page on the web</a></div><p class="guidenote">This copy of the guide is part of the app and works without a network.</p></aside>
+  <main><article><h1 id="batch">Batch</h1>
+<p>The <strong>Batch</strong> tab traces every image in a folder and writes one SVG for each. It is for a set of
+icons, a folder of partner logos, or a brand library.</p>
+<p><img alt="The Batch tab with a folder of twelve images queued" src="img/batch.webp"></p>
+<h2 id="running-a-batch">Running a batch</h2>
+<ol>
+<li><strong>Choose a folder…</strong> picks the folder of images. Every PNG, JPEG, WebP, GIF, BMP and TIFF in
+   it is listed, sorted by name. Subfolders are not included, and SVG files are skipped.</li>
+<li><strong>Output</strong> is where the SVGs go. It starts as a folder called <code>svg</code> inside the input folder;
+   press it to choose another. It is created if it does not exist.</li>
+<li><strong>Preset for all</strong> chooses the preset every queued file uses. To give one file a different
+   preset, click the preset in its row and choose; the rest stay as they are.</li>
+<li><strong>Skip existing</strong> (on at first) leaves a file alone if its SVG is already in the output folder,
+   so a batch that was stopped can be run again to finish. Turn it off to overwrite.</li>
+<li><strong>Start</strong>.</li>
+</ol>
+<p>Each output file has the image's name with <code>.svg</code>: <code>acme-mark.png</code> becomes <code>acme-mark.svg</code>.</p>
+<p>Files are traced one at a time, each at full quality: the tracer already uses every processor core
+on the file it is working on, so tracing several at once would not be faster. If you trace
+something in the Vectorize tab during a batch, it goes first, and the batch waits for it.</p>
+<p><strong>Pause</strong> stops before the next file, and <strong>Resume</strong> carries on; <strong>Cancel</strong> stops the run after
+the file in progress. The file being traced is always finished, never left half-written.</p>
+<h2 id="what-each-row-says">What each row says</h2>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>Shows</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>File</td>
+<td>The image's name.</td>
+</tr>
+<tr>
+<td>Preset</td>
+<td>The preset for this file. Once a row has run it cannot be changed, because the figures beside it were measured with that preset.</td>
+</tr>
+<tr>
+<td>Status</td>
+<td><em>queued</em>, <em>running</em>, <em>done</em>, <em>skipped</em> or <em>failed</em>.</td>
+</tr>
+<tr>
+<td>dE00</td>
+<td>The mean colour difference of this file's trace, as in the <a href="result.html#the-quality-report">quality report</a>.</td>
+</tr>
+<tr>
+<td>Coordinates</td>
+<td>The coordinates in its SVG.</td>
+</tr>
+<tr>
+<td>Output</td>
+<td>The SVG's size.</td>
+</tr>
+<tr>
+<td>Destination</td>
+<td>Where the SVG was written, or, for a failed row, why it failed. Hover a row to read the whole message.</td>
+</tr>
+</tbody>
+</table>
+<p>The footer shows progress, an estimate of the time left, and once rows have finished, the mean
+colour difference, the bytes written, and how much smaller that is than the source images.</p>
+<p>Failures stay listed after the run. <strong>Failures first</strong> sorts them to the top, so a failed file
+cannot scroll away unnoticed. <strong>Export stats.csv</strong> saves every row (file, preset, status, colour
+difference, coordinates, bytes, seconds, destination, message) as a spreadsheet.</p>
+<h2 id="which-settings-a-batch-uses">Which settings a batch uses</h2>
+<p>A batch starts from the controls of your <strong>last trace</strong> in the Vectorize tab, then applies each
+row's preset on top: the settings a preset changes from the defaults (Precision, Speckle floor,
+Trace size, Max colours, Colour merging, the denoiser, Black &amp; white, Line art, Fewer paths) come
+from the preset, and everything else, the Output settings such as <strong>Minify</strong> and
+<strong>Transparent background</strong> included, comes from your last trace. Set the Output group the way you
+want it in Vectorize before starting a batch.</p>
+<p>Colour groups are never used: they belong to one image.</p>
+<p>In version 0.2.0 the <strong>Editable</strong> preset does not turn on Editable structure in a batch (it is not
+one of the settings listed above). To batch editable SVGs, turn <strong>Editable</strong> on in the Vectorize
+tab, trace any image, and run the batch.</p>
+<p>The batch writes SVGs only. For PNGs, favicons or an asset pack, export each image from Vectorize.</p>
+<h2 id="dropping-files">Dropping files</h2>
+<p>Several files dropped on the window switch to this tab, but are not queued: a batch works on a
+folder. Choose the folder they are in.</p>
+<h2 id="studio-lite">Studio Lite</h2>
+<p>The Batch tab needs to read and write folders on disk, so it is not in Studio Lite. Trace the
+images one at a time in Vectorize, or use the <code>inkvec</code> command line in a shell loop, one
+<code>inkvec logo.png -o svg/logo.svg</code> per file.</p><nav class="pagenav"><a class="prev" href="fabricate.html"><span class="dir">Previous</span><span class="lbl">Fabricate</span></a><a class="next" href="settings.html"><span class="dir">Next</span><span class="lbl">Settings</span></a></nav></article></main>
+  <aside class="rail"><h5>On this page</h5><ul><ul><li class="l2"><a href="#running-a-batch">Running a batch</a></li><li class="l2"><a href="#what-each-row-says">What each row says</a></li><li class="l2"><a href="#which-settings-a-batch-uses">Which settings a batch uses</a></li><li class="l2"><a href="#dropping-files">Dropping files</a></li><li class="l2"><a href="#studio-lite">Studio Lite</a></li></ul></ul></aside>
+</div>
+</body>
+</html>

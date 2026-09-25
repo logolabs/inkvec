@@ -4,6 +4,7 @@ on:
     branches: [main]
     paths:
       - "docs/**"
+      - "studio/public/guide/img/**"
       - "web/logo.svg"
       - "web/favicon.svg"
       - "README.md"

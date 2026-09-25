@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="inkvec-guide" content="studio">
+<title>Settings · Inkvec Studio guide</title>
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="side"><a class="guidebrand" href="index.html"><img src="logo-mono.svg" alt=""> <span>Inkvec Studio</span></a><div class="grp"><h4>User guide</h4><a href="index.html">Overview</a><a href="install.html">Install and first launch</a><a href="getting-started.html">Getting started</a><a href="viewer.html">The viewer</a><a href="result.html">Result</a><a href="tune.html">Tune</a><a href="palette.html">Palette and colour groups</a><a href="export.html">Export</a><a href="minify.html">Minify SVG</a><a href="fabricate.html">Fabricate</a><a href="batch.html">Batch</a><a href="settings.html" aria-current="page">Settings</a><a href="shortcuts.html">Keyboard and mouse</a><a href="troubleshooting.html">Troubleshooting</a></div><div class="grp"><h4>Tutorials</h4><a href="tutorials/jpeg-logo.html">Clean up a JPEG logo</a><a href="tutorials/favicon-asset-pack.html">A favicon and an asset pack</a><a href="tutorials/vinyl-htv.html">Layered vinyl and iron-on</a><a href="tutorials/laser.html">Laser: DXF and G-code</a></div><div class="grp"><h4>Online</h4><a href="https://logolabs.github.io/inkvec/">Inkvec documentation</a><a href="https://logolabs.github.io/inkvec/studio/settings.html">This page on the web</a></div><p class="guidenote">This copy of the guide is part of the app and works without a network.</p></aside>
+  <main><article><h1 id="settings">Settings</h1>
+<p><strong>Settings</strong> in the app bar (or <kbd>Ctrl</kbd>+<kbd>,</kbd>, <kbd>⌘</kbd>+<kbd>,</kbd> on a Mac)
+opens the preferences on one page. Changes apply as you make them; <strong>Done</strong> or <kbd>Esc</kbd>
+returns to where you were.</p>
+<p><img alt="The Settings screen" src="img/settings.webp"></p>
+<h2 id="general">General</h2>
+<ul>
+<li><strong>Default output folder</strong>: where the export sheet starts. Without one, Export asks each time.</li>
+<li><strong>Theme</strong>: <em>System</em> (follow the operating system), <em>Dark</em> or <em>Light</em>.</li>
+<li><strong>When an image is opened</strong>: what the app offers besides Auto's trace, which always starts at
+  once. <em>Ask</em> shows the choice card; <em>Auto only</em> shows nothing; <em>Custom wizard</em> opens the wizard
+  straight away. See <a href="getting-started.html#the-choice-card-keep-auto-or-customise">Getting started</a>.</li>
+<li><strong>Language</strong>: English only in this release.</li>
+</ul>
+<h2 id="performance">Performance</h2>
+<ul>
+<li><strong>Threads</strong>: how many processor threads the tracer may use; fewer leaves room for other work.
+  Takes effect the next time the app starts.</li>
+<li><strong>Draft resolution</strong> (default 512 px): the size a <a href="viewer.html#draft-and-full-traces">draft</a> is
+  traced at, on its longer side, while you move a control.</li>
+<li><strong>Draft time limit</strong> (default 0.4 s): a draft that takes longer is dropped rather than shown late.</li>
+<li><strong>Settle before the full trace</strong> (default 800 ms): how long the controls must be still before the
+  full trace starts.</li>
+</ul>
+<p>On a slow computer, a lower draft resolution keeps the controls responsive; on a fast one, a
+higher one makes drafts closer to the final.</p>
+<h2 id="denoiser">Denoiser</h2>
+<p>The denoiser is a trained model that repairs JPEG, WebP and screenshot damage before tracing, which
+usually halves the colour error on a photographed or screenshotted logo. It is optional and not
+included in the installer (it is about 80 MB).</p>
+<ul>
+<li><strong>Status</strong>: <em>Not installed</em>, or <em>Installed</em> with its size.</li>
+<li><strong>Download</strong> explains the download before anything is fetched: where it comes from (the
+  <code>Logolabs/inkvec-denoiser-001</code> repository on Hugging Face), what it adds to each trace (about
+  0.6 s), and that it is checked against its published SHA-256 when it arrives. Press <strong>Download</strong>
+  to start. You can keep tracing while it downloads, and <strong>Cancel download</strong> really stops it.</li>
+<li><strong>Remove</strong> deletes it again.</li>
+<li><strong>Verified against</strong> shows the repository and the start of the checksum.</li>
+</ul>
+<p>The model runs on your computer like everything else: it comes down, your image never goes up.
+Once it is installed, the command-line <code>inkvec --restore</code> uses the same file.</p>
+<p>The Intel macOS build does not include the denoiser, and says <em>Not in this build</em>. The Windows,
+Linux and Apple-silicon macOS builds do.</p>
+<h2 id="updates">Updates</h2>
+<ul>
+<li><strong>Check on start</strong> (on): looks for a newer version when the app starts, sending your app version
+  and operating system and nothing else. Off, the app never contacts the network (except for a
+  denoiser download you ask for).</li>
+<li><strong>Channel</strong>: <em>Stable</em> or <em>Prerelease</em>.</li>
+<li><strong>Check now</strong>: asks once, whatever the setting above says. A newer version is announced in the
+  status strip, with a link to what changed.</li>
+</ul>
+<h2 id="advanced">Advanced</h2>
+<p>Both entries here add something to your system <em>for your user only</em>: no administrator rights,
+nothing machine-wide. Each row shows whether it is in place and where, and <strong>Remove</strong> takes it back
+out.</p>
+<p><strong>Add inkvec to PATH</strong> puts the <code>inkvec</code> command, the same engine at the same version as the app,
+where a terminal finds it:</p>
+<table>
+<thead>
+<tr>
+<th>System</th>
+<th>Where</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Windows</td>
+<td>a copy at <code>%LOCALAPPDATA%\Microsoft\WindowsApps\inkvec.exe</code></td>
+</tr>
+<tr>
+<td>macOS, Linux</td>
+<td>a link at <code>~/.local/bin/inkvec</code></td>
+</tr>
+</tbody>
+</table>
+<p>On Windows, open a new terminal afterwards. On macOS and Linux, <code>~/.local/bin</code> must be on your
+<code>PATH</code> (it is on most Linux distributions; on macOS, add it if <code>inkvec</code> is not found). Being a
+copy, the Windows command does not follow app updates: after installing a new version, press
+<strong>Remove</strong> and <strong>Add</strong> again.</p>
+<p><strong>Right-click menu</strong> adds <strong>Vectorize with Inkvec</strong> to the file manager's menu for PNG, JPEG, WebP,
+BMP and TIFF files. Choosing it opens the image in the Studio (in the window already open, if there
+is one).</p>
+<table>
+<thead>
+<tr>
+<th>System</th>
+<th>What is added</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Windows</td>
+<td>A per-user entry in the registry, under <code>HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations</code>. On Windows 11 it is under <strong>Show more options</strong>.</td>
+</tr>
+<tr>
+<td>Linux</td>
+<td>A desktop entry, <code>~/.local/share/applications/inkvec-studio-vectorize.desktop</code>; it appears under <em>Open With</em> in most file managers.</td>
+</tr>
+<tr>
+<td>macOS</td>
+<td>Nothing to add: Finder already offers Inkvec Studio under <strong>Open With</strong>.</td>
+</tr>
+</tbody>
+</table>
+<p>On Windows, uninstalling the app also removes both entries.</p>
+<p><strong>Reset settings</strong> puts every preference and the trace controls back to their defaults and clears
+the recent files. It deletes the preferences file, so <strong>your saved presets go too</strong>. Nothing you
+have traced or exported is touched, and the denoiser stays installed.</p>
+<h2 id="privacy">Privacy</h2>
+<p>The last card says what the rest of this guide says too: tracing runs on your own processor, there
+is no account, no upload and no telemetry, and the update check is the only request the app makes
+on its own.</p>
+<h2 id="where-things-are-kept">Where things are kept</h2>
+<table>
+<thead>
+<tr>
+<th>What</th>
+<th>Windows</th>
+<th>macOS</th>
+<th>Linux</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Preferences, recent files, saved presets</td>
+<td><code>%APPDATA%\inkvec-studio\preferences.json</code></td>
+<td><code>~/Library/Application Support/inkvec-studio/preferences.json</code></td>
+<td><code>~/.config/inkvec-studio/preferences.json</code></td>
+</tr>
+<tr>
+<td>The denoiser model</td>
+<td><code>%LOCALAPPDATA%\inkvec\models\restorer.onnx</code></td>
+<td><code>~/.cache/inkvec/models/restorer.onnx</code></td>
+<td><code>~/.cache/inkvec/models/restorer.onnx</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="about">About</h2>
+<p><strong>About</strong> shows the app's version, the engine's version and the build target, links to the user
+guide, the source and the online demo, the compute acknowledgement for the denoiser's training, and
+the licence and third-party notices (<strong>Open</strong> shows them in full).</p>
+<h2 id="studio-lite">Studio Lite</h2>
+<p>Studio Lite keeps its preferences in the browser. It has no <strong>Advanced</strong> entries (no command on
+the PATH, no right-click menu) and no default output folder, since files are downloaded.</p><nav class="pagenav"><a class="prev" href="batch.html"><span class="dir">Previous</span><span class="lbl">Batch</span></a><a class="next" href="shortcuts.html"><span class="dir">Next</span><span class="lbl">Keyboard and mouse</span></a></nav></article></main>
+  <aside class="rail"><h5>On this page</h5><ul><ul><li class="l2"><a href="#general">General</a></li><li class="l2"><a href="#performance">Performance</a></li><li class="l2"><a href="#denoiser">Denoiser</a></li><li class="l2"><a href="#updates">Updates</a></li><li class="l2"><a href="#advanced">Advanced</a></li><li class="l2"><a href="#privacy">Privacy</a></li><li class="l2"><a href="#where-things-are-kept">Where things are kept</a></li><li class="l2"><a href="#about">About</a></li><li class="l2"><a href="#studio-lite">Studio Lite</a></li></ul></ul></aside>
+</div>
+</body>
+</html>

@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="inkvec-guide" content="studio">
+<title>Export · Inkvec Studio guide</title>
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="side"><a class="guidebrand" href="index.html"><img src="logo-mono.svg" alt=""> <span>Inkvec Studio</span></a><div class="grp"><h4>User guide</h4><a href="index.html">Overview</a><a href="install.html">Install and first launch</a><a href="getting-started.html">Getting started</a><a href="viewer.html">The viewer</a><a href="result.html">Result</a><a href="tune.html">Tune</a><a href="palette.html">Palette and colour groups</a><a href="export.html" aria-current="page">Export</a><a href="minify.html">Minify SVG</a><a href="fabricate.html">Fabricate</a><a href="batch.html">Batch</a><a href="settings.html">Settings</a><a href="shortcuts.html">Keyboard and mouse</a><a href="troubleshooting.html">Troubleshooting</a></div><div class="grp"><h4>Tutorials</h4><a href="tutorials/jpeg-logo.html">Clean up a JPEG logo</a><a href="tutorials/favicon-asset-pack.html">A favicon and an asset pack</a><a href="tutorials/vinyl-htv.html">Layered vinyl and iron-on</a><a href="tutorials/laser.html">Laser: DXF and G-code</a></div><div class="grp"><h4>Online</h4><a href="https://logolabs.github.io/inkvec/">Inkvec documentation</a><a href="https://logolabs.github.io/inkvec/studio/export.html">This page on the web</a></div><p class="guidenote">This copy of the guide is part of the app and works without a network.</p></aside>
+  <main><article><h1 id="export">Export</h1>
+<p>When the drawing is right, three buttons at the foot of the rail take it out of the app:
+<strong>Export</strong> (files in a folder), <strong>Copy SVG</strong> (the clipboard) and the comparison card.</p>
+<h2 id="the-export-sheet">The export sheet</h2>
+<p><strong>Export</strong>, or <kbd>Ctrl</kbd>+<kbd>E</kbd> (<kbd>⌘</kbd>+<kbd>E</kbd> on a Mac), opens the
+export sheet over the rail.</p>
+<p><img alt="The export sheet: a checklist of formats, each with its size, and the destination" src="img/export.webp"></p>
+<p>Tick what you want:</p>
+<table>
+<thead>
+<tr>
+<th>Row</th>
+<th>Files written</th>
+<th>Ticked at first</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>SVG</strong></td>
+<td><code>name.svg</code>: the drawing as traced</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><strong>SVG (minified)</strong></td>
+<td><code>name.min.svg</code>: the same drawing with no ids, no groups and no trailing zeros</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><strong>PNG · 512 / 1024 / 2048</strong></td>
+<td><code>png/name-512.png</code>, <code>png/name-1024.png</code>, <code>png/name-2048.png</code></td>
+<td>yes</td>
+</tr>
+<tr>
+<td><strong>ICO and favicon set</strong></td>
+<td><code>favicon/favicon.ico</code> (16, 32 and 48 px inside), and <code>favicon/favicon-16.png</code>, <code>-32.png</code>, <code>-48.png</code></td>
+<td>no</td>
+</tr>
+<tr>
+<td><strong>Asset pack (.zip)</strong></td>
+<td><code>name-assets.zip</code>: everything above, plus <code>palette.json</code> and a <code>README.txt</code></td>
+<td>yes</td>
+</tr>
+</tbody>
+</table>
+<p><code>name</code> is the name of the image you opened. The size beside each row is the real size of the files
+it will write: the app builds them all in memory first and reports what it built, so nothing is an
+estimate. The button at the bottom says how many files and how many bytes in total.</p>
+<p><strong>To</strong> is the destination folder. It starts at the <em>Default output folder</em> from
+<a href="settings.html#general">Settings</a> if you set one; <strong>Choose</strong> or <strong>Change</strong> picks another. With none
+chosen, Export asks for one. <strong>Close</strong>, or a click outside the sheet, closes it.</p>
+<p><strong>Export</strong> always runs a <strong>fresh full trace</strong> first, then writes the files. What is on screen may be
+a draft, and a draft should never be shipped by accident. When the files are written, a note says
+where, with <strong>Show in folder</strong>.</p>
+<h3 id="the-asset-pack">The asset pack</h3>
+<p>The zip always holds the complete set, whichever loose rows are ticked:</p>
+<div class="codehilite"><pre><span></span>name.svg
+name.min.svg
+png/name-512.png, name-1024.png, name-2048.png
+favicon/favicon.ico, favicon-16.png, favicon-32.png, favicon-48.png
+palette.json
+README.txt
+</pre></div>
+
+<p><code>palette.json</code> lists every ink with its hex value, the colour that was measured (<code>traced</code>), and its
+share of the canvas; a gradient also lists its stops. <code>README.txt</code> is written for whoever opens the
+pack later: the source file and its size, the size it was traced at, the colour difference and
+coordinate count, what each file is, and the first item from
+<a href="result.html#what-this-trace-could-not-recover">what this trace could not recover</a>, if there was
+one.</p>
+<p>Without the asset pack, <code>palette.json</code> is written loose beside the SVG.</p>
+<h3 id="things-to-know">Things to know</h3>
+<ul>
+<li><strong>PNG and favicon files are square.</strong> In version 0.2.0 each PNG is drawn at exactly 512×512,
+  1024×1024 or 2048×2048 pixels, and a drawing that is not square is <strong>stretched</strong> to fill it. For a
+  wide or tall logo, take the SVG and render it at the size you need elsewhere, or trace a square
+  version of the mark for the favicon (see the
+  <a href="tutorials/favicon-asset-pack.html">favicon tutorial</a>).</li>
+<li><strong>Snapped colours are not exported.</strong> The fresh trace measures the colours again, so a snap made
+  in the palette does not reach the files. Use <strong>Copy SVG</strong> for a drawing with snapped colours, or
+  set the colour through a colour group (see <a href="palette.html#snapping-an-ink-to-an-exact-colour">the palette</a>).</li>
+<li>The SVG always has the image's full size, whatever size it was traced at.</li>
+</ul>
+<h2 id="copy-svg">Copy SVG</h2>
+<p><strong>Copy SVG</strong> puts the drawing on the clipboard as SVG text, ready to paste into Figma, Illustrator,
+Inkscape or a code editor. It copies the drawing exactly as it is on screen, snapped colours
+included. If the status strip says <em>draft shown</em>, wait for the full trace before copying.</p>
+<h2 id="the-comparison-card">The comparison card</h2>
+<p>The button with the share icon, beside Copy SVG, makes a poster of the result: the image and the
+SVG side by side, and optionally the numbers and a zoomed detail where the vector edge cuts through
+the source's pixels.</p>
+<ul>
+<li><strong>Format</strong>: <em>Landscape</em> (1600 × 900) or <em>Square</em> (1080 × 1080).</li>
+<li><strong>Appearance</strong>: dark or light.</li>
+<li><strong>On the card</strong>: <em>The numbers</em> (colour difference, coordinates, file size), <em>A zoomed detail</em>
+  (with its magnification, 4× to 24×), and <em>The file name</em>. The file name is off by default, so a
+  card of an unreleased logo does not give its name away.</li>
+</ul>
+<p><strong>Save PNG</strong> writes it (as <code>name-card.png</code>, by default); <strong>Copy image</strong> puts it on the clipboard.</p>
+<h2 id="studio-lite">Studio Lite</h2>
+<p>In Studio Lite there is no destination folder: Export and Save PNG download the files through your
+browser, into its downloads folder.</p><nav class="pagenav"><a class="prev" href="palette.html"><span class="dir">Previous</span><span class="lbl">Palette and colour groups</span></a><a class="next" href="minify.html"><span class="dir">Next</span><span class="lbl">Minify SVG</span></a></nav></article></main>
+  <aside class="rail"><h5>On this page</h5><ul><ul><li class="l2"><a href="#the-export-sheet">The export sheet</a><ul><li class="l3"><a href="#the-asset-pack">The asset pack</a></li><li class="l3"><a href="#things-to-know">Things to know</a></li></ul></li><li class="l2"><a href="#copy-svg">Copy SVG</a></li><li class="l2"><a href="#the-comparison-card">The comparison card</a></li><li class="l2"><a href="#studio-lite">Studio Lite</a></li></ul></ul></aside>
+</div>
+</body>
+</html>

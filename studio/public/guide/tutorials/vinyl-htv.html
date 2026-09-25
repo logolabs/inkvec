@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="inkvec-guide" content="studio">
+<title>Tutorial: layered vinyl and iron-on · Inkvec Studio guide</title>
+<link rel="stylesheet" href="../guide.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="side"><a class="guidebrand" href="../index.html"><img src="../logo-mono.svg" alt=""> <span>Inkvec Studio</span></a><div class="grp"><h4>User guide</h4><a href="../index.html">Overview</a><a href="../install.html">Install and first launch</a><a href="../getting-started.html">Getting started</a><a href="../viewer.html">The viewer</a><a href="../result.html">Result</a><a href="../tune.html">Tune</a><a href="../palette.html">Palette and colour groups</a><a href="../export.html">Export</a><a href="../minify.html">Minify SVG</a><a href="../fabricate.html">Fabricate</a><a href="../batch.html">Batch</a><a href="../settings.html">Settings</a><a href="../shortcuts.html">Keyboard and mouse</a><a href="../troubleshooting.html">Troubleshooting</a></div><div class="grp"><h4>Tutorials</h4><a href="jpeg-logo.html">Clean up a JPEG logo</a><a href="favicon-asset-pack.html">A favicon and an asset pack</a><a href="vinyl-htv.html" aria-current="page">Layered vinyl and iron-on</a><a href="laser.html">Laser: DXF and G-code</a></div><div class="grp"><h4>Online</h4><a href="https://logolabs.github.io/inkvec/">Inkvec documentation</a><a href="https://logolabs.github.io/inkvec/studio/tutorials/vinyl-htv.html">This page on the web</a></div><p class="guidenote">This copy of the guide is part of the app and works without a network.</p></aside>
+  <main><article><h1 id="tutorial-layered-vinyl-and-iron-on">Tutorial: layered vinyl and iron-on</h1>
+<p>This tutorial takes a colour logo to cut files for a Cricut, Silhouette or Brother machine: one
+sheet per colour, stacked so there are no gaps between colours, with marks to line the sheets up.
+The same steps make iron-on (heat-transfer vinyl, HTV) for a T-shirt; the differences are in step 4.
+About 15 minutes.</p>
+<h2 id="1-trace-with-the-cutter-in-mind">1. Trace with the cutter in mind</h2>
+<p>Open the logo in the <strong>Vectorize</strong> tab. Every colour in the drawing will become a sheet of vinyl,
+so the palette decides the job:</p>
+<ul>
+<li><strong>Fewer colours means fewer sheets.</strong> In the palette, accept the suggested colour groups, and set
+  <strong>Colours</strong> to the number of vinyl colours you will actually use. See
+  <a href="../palette.html#colour-groups">the palette</a>.</li>
+<li><strong>Vinyl is one flat colour.</strong> A gradient is cut as its average colour. Turn on <strong>Flat fills
+  instead of gradients</strong> (Tune, Colour) so the trace makes that choice where you can see it.</li>
+<li><strong>The background is not a sheet.</strong> Fabricate leaves out the colour that covers the page. If the
+  background is a colour you want cut, it can be switched back on later.</li>
+</ul>
+<p>Check the trace in the viewer at 4× and 12×: slivers and specks you see here are pieces you will
+have to weed.</p>
+<h2 id="2-bring-it-into-fabricate">2. Bring it into Fabricate</h2>
+<p>Switch to the <strong>Fabricate</strong> tab and press <strong>Use the current trace</strong>. The tab measures the drawing,
+selects every colour but the background, and, with more than one colour, chooses <strong>Layered</strong>.</p>
+<p>(Any SVG works here too: <strong>Open an SVG</strong>, or drop one on the window.)</p>
+<h2 id="3-choose-the-material-and-the-size">3. Choose the material and the size</h2>
+<p>Under <strong>Material</strong>, press <strong>Adhesive vinyl</strong>. It sets filled-shape cuts, a 0.8 mm overlap between
+layers, registration marks, and a smallest width of 0.8 mm.</p>
+<p><img alt="Seven layers of adhesive vinyl, stacked, with the thin parts drawn in red" src="../img/fabricate-vinyl.webp"></p>
+<p>Under <strong>Size</strong>, type the finished width: <em>The design is</em> <strong>120</strong> <em>mm wide</em>. The height follows.
+Switch to <strong>in</strong> if you work in inches; every length on the tab switches with it.</p>
+<p>Turn on <strong>Cut a size-check square</strong>. It adds a 20 mm square (1 in) below the design. Measure it
+after cutting: if it is any other size, the cutter's program rescaled the file on import.</p>
+<p>Set <strong>The files state their size in</strong> for your cutter's software: <strong>Pixels, 72/in</strong> for Cricut
+Design Space and Silhouette Studio, <strong>Millimetres</strong> otherwise.</p>
+<h2 id="4-for-iron-on-mirror-and-a-thinner-overlap">4. For iron-on: mirror, and a thinner overlap</h2>
+<p>Press <strong>Iron-on</strong> instead of Adhesive vinyl. It changes three things:</p>
+<ul>
+<li><strong>Mirror</strong> is on: HTV is cut from the back, face down on the mat.</li>
+<li>The overlap is <strong>0.3 mm</strong>. Every layer of HTV is another pressing; 0.25 to 0.38 mm is the range
+  that stays put without building up a ridge.</li>
+<li>The smallest width is <strong>1 mm</strong>: thin parts of HTV lift in the wash.</li>
+</ul>
+<p>Glitter, holographic and puff HTV do not take another layer on top of them: put them at the top of
+the stack (next step), or cut them as one colour on their own.</p>
+<h2 id="5-the-colours-and-their-order">5. The colours and their order</h2>
+<p><img alt="The colour list for iron-on, bottom sheet first, with the overlap below" src="../img/fabricate-htv-rail.webp"></p>
+<p>In Layered mode the <strong>Colours</strong> list is the stack, <strong>bottom sheet first</strong>. Each colour runs under
+the colours above it by the overlap, so the bottom one is the largest piece. The largest colour of
+the drawing starts at the bottom, which suits most logos. Use <strong>↓</strong> and <strong>↑</strong> to change the order,
+and the switch at the left of a colour to leave it out, for example the colour of the shirt itself.</p>
+<p>The stage shows <strong>All sheets</strong>, stacked as the finished piece. The numbered buttons above it show
+one sheet at a time; the <strong>Cut list</strong> at the bottom of the rail says how big a piece of vinyl each
+sheet needs.</p>
+<h2 id="6-fix-what-will-go-wrong">6. Fix what will go wrong</h2>
+<p><strong>Before you cut</strong> lists the problems, and <strong>Show problems</strong> draws them on the sheets: parts too
+thin to weed in red, waste gaps too narrow to weed in amber, loose specks ringed. For each:</p>
+<ul>
+<li><strong>Parts narrower than the smallest width</strong> will tear or not stick. Make the design larger, or
+  turn on <strong>Remove them</strong> under Cutting, which drops those slivers from the sheets.</li>
+<li><strong>Waste narrower than the smallest width</strong> lifts with the design when you weed. Make the design
+  larger, or plan to weed those spots by hand.</li>
+<li><strong>Specks</strong> smaller than a few square millimetres are lost on the transfer tape. Accept it, or go
+  back to Vectorize and raise <strong>Speckle floor</strong> so they are not in the drawing.</li>
+<li><strong>A gradient</strong> or <strong>a partly transparent colour</strong> is cut at its average colour, at full
+  strength. Choose a vinyl close to it.</li>
+<li><strong>More than 5,000 cut paths</strong> in a sheet: Cricut Design Space is reported to refuse such files.
+  Turn on <strong>Remove them</strong>, or raise the smallest width.</li>
+</ul>
+<p>Changing the size is usually the real fix: at 60 mm a detailed logo has dozens of thin parts; at
+120 mm most of them are gone. The findings update as you type.</p>
+<h2 id="7-save-and-cut">7. Save and cut</h2>
+<p>Press <strong>Save <em>N</em> sheets…</strong> and choose a folder. For a logo called <code>mark</code> you get:</p>
+<div class="codehilite"><pre><span></span>mark-1-c1cdd5.svg      bottom sheet
+mark-2-60379a.svg
+...
+mark-all.svg           every sheet in one file, one group per sheet
+</pre></div>
+
+<p>In Cricut Design Space or Silhouette Studio, upload <strong><code>mark-all.svg</code></strong>: it arrives as one layer per
+colour, already registered. The single-sheet files are there for software that wants one file per
+cut. <strong>Copy</strong> puts the sheet on screen (or all of them) on the clipboard instead.</p>
+<p>Cut the size-check square first and measure it. Then cut each colour, weed, and stack the sheets
+bottom first, lining up the registration crosses. For HTV, press each layer briefly and the top
+layer fully, following the vinyl's instructions.</p>
+<p><strong>Studio Lite:</strong> Save downloads the files instead of asking for a folder.</p>
+<h2 id="other-things-this-tab-makes">Other things this tab makes</h2>
+<ul>
+<li><strong>One colour</strong>: every selected colour joined into one sheet, for a single-colour decal.</li>
+<li><strong>Inlay</strong>: colours cut exactly and laid edge to edge instead of stacked. Thinner, but hard to
+  line up.</li>
+<li><strong>Sticker</strong>: the artwork with a contour 3 mm around it, for print-then-cut.</li>
+<li><strong>Stencil</strong>: the design cut out of one sheet, with bridges holding the middles of letters.</li>
+</ul>
+<p>All of them are described in <a href="../fabricate.html">Fabricate</a>.</p><nav class="pagenav"><a class="prev" href="favicon-asset-pack.html"><span class="dir">Previous</span><span class="lbl">A favicon and an asset pack</span></a><a class="next" href="laser.html"><span class="dir">Next</span><span class="lbl">Laser: DXF and G-code</span></a></nav></article></main>
+  <aside class="rail"><h5>On this page</h5><ul><ul><li class="l2"><a href="#1-trace-with-the-cutter-in-mind">1. Trace with the cutter in mind</a></li><li class="l2"><a href="#2-bring-it-into-fabricate">2. Bring it into Fabricate</a></li><li class="l2"><a href="#3-choose-the-material-and-the-size">3. Choose the material and the size</a></li><li class="l2"><a href="#4-for-iron-on-mirror-and-a-thinner-overlap">4. For iron-on: mirror, and a thinner overlap</a></li><li class="l2"><a href="#5-the-colours-and-their-order">5. The colours and their order</a></li><li class="l2"><a href="#6-fix-what-will-go-wrong">6. Fix what will go wrong</a></li><li class="l2"><a href="#7-save-and-cut">7. Save and cut</a></li><li class="l2"><a href="#other-things-this-tab-makes">Other things this tab makes</a></li></ul></ul></aside>
+</div>
+</body>
+</html>

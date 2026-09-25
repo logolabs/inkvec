@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="inkvec-guide" content="studio">
+<title>Minify SVG · Inkvec Studio guide</title>
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="side"><a class="guidebrand" href="index.html"><img src="logo-mono.svg" alt=""> <span>Inkvec Studio</span></a><div class="grp"><h4>User guide</h4><a href="index.html">Overview</a><a href="install.html">Install and first launch</a><a href="getting-started.html">Getting started</a><a href="viewer.html">The viewer</a><a href="result.html">Result</a><a href="tune.html">Tune</a><a href="palette.html">Palette and colour groups</a><a href="export.html">Export</a><a href="minify.html" aria-current="page">Minify SVG</a><a href="fabricate.html">Fabricate</a><a href="batch.html">Batch</a><a href="settings.html">Settings</a><a href="shortcuts.html">Keyboard and mouse</a><a href="troubleshooting.html">Troubleshooting</a></div><div class="grp"><h4>Tutorials</h4><a href="tutorials/jpeg-logo.html">Clean up a JPEG logo</a><a href="tutorials/favicon-asset-pack.html">A favicon and an asset pack</a><a href="tutorials/vinyl-htv.html">Layered vinyl and iron-on</a><a href="tutorials/laser.html">Laser: DXF and G-code</a></div><div class="grp"><h4>Online</h4><a href="https://logolabs.github.io/inkvec/">Inkvec documentation</a><a href="https://logolabs.github.io/inkvec/studio/minify.html">This page on the web</a></div><p class="guidenote">This copy of the guide is part of the app and works without a network.</p></aside>
+  <main><article><h1 id="minify-svg">Minify SVG</h1>
+<p>The <strong>Minify SVG</strong> tab makes an SVG you already have smaller without changing what it looks like.
+It rewrites every path with the fewest segments that stay within a tolerance of the original, and
+tidies the rest of the document. It works on any SVG: one from Illustrator, Figma, Inkscape, a
+stock site, or Inkvec itself. It takes a few milliseconds, so the result appears as soon as the
+file opens and changes as you move a control.</p>
+<p><img alt="The Minify SVG tab: the drawing before and after, and what changed" src="img/minify.webp"></p>
+<h2 id="opening-an-svg">Opening an SVG</h2>
+<p>Press <strong>Open an SVG</strong> (or <strong>Open…</strong> at the foot of the rail), or drop an SVG anywhere on the window
+while this tab is showing. An SVG dropped on another tab opens here too, except on Vectorize (which
+re-traces it) and Fabricate (which cuts it).</p>
+<h2 id="checking-that-nothing-moved">Checking that nothing moved</h2>
+<p>The two panes show the drawing <strong>Before</strong> and <strong>After</strong>, each with its file size. The same three
+arrangements as the Vectorize viewer are here: <strong>Side by side</strong>, <strong>Wipe</strong> (drag the divider) and
+<strong>A/B</strong> (hold <kbd>Space</kbd> to flick to the original).</p>
+<p><strong>Backdrop</strong> chooses what the drawings sit on. <strong>Auto</strong> picks a light backdrop for dark artwork and
+a dark one for light artwork, so a black logo does not vanish into the dark stage; <strong>Light</strong> and
+<strong>Dark</strong> force one.</p>
+<p>The line at the right of the toolbar states the promise and its measurement: <em>Nothing moved more
+than 0.1 px · measured 0.00 dE00</em>. The colour difference is measured the same way the quality
+report measures a trace, by rendering both files and comparing them.</p>
+<h2 id="the-result">The result</h2>
+<p>The large figure is how much smaller the file is, with the sizes before and after. Under it:</p>
+<table>
+<thead>
+<tr>
+<th>Figure</th>
+<th>What it counts</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>numbers before / after</td>
+<td>The numbers in the path data.</td>
+</tr>
+<tr>
+<td>paths</td>
+<td>Drawn elements before → after. Paths that are really circles, ellipses or rectangles are written as those.</td>
+</tr>
+<tr>
+<td>segments</td>
+<td>Lines and curves before → after.</td>
+</tr>
+<tr>
+<td>difference</td>
+<td>The measured colour difference between the two renders, in dE00.</td>
+</tr>
+<tr>
+<td>kept as drawn</td>
+<td>Runs of segments where the cheaper fit strayed past the tolerance, so the original was kept. The promise is kept by falling back, and this says how often that happened.</td>
+</tr>
+</tbody>
+</table>
+<p>When document cleanup removed anything, a <strong>Removed</strong> list says what and how much.</p>
+<h2 id="the-controls">The controls</h2>
+<p><strong>The tolerance sentence.</strong> <em>Nothing moves more than</em> <strong>0.1</strong> <em>px when the drawing is</em> <strong>1024</strong>
+<em>px wide.</em> Both numbers can be typed into. The first is the largest distance any point may move;
+the second is the width the drawing is judged at, so the tolerance means the same thing for a
+16-unit icon and a 2000-unit poster. The slider under it runs from <em>exact</em> through <em>gentle</em> to
+<em>aggressive</em> (0 to 1 px); most of the useful range is in its first part.</p>
+<p><strong>Corner threshold</strong> (default 30°). A join that turns more sharply than this is a corner, and is
+kept exactly. Lower it if soft corners are being rounded off.</p>
+<p><strong>Document cleanup</strong> (on). Removes ids, groups, editor metadata and trailing zeros. The geometry is
+the same. Turn it off to leave everything but the path data exactly as it was, for example when
+something relies on the ids.</p>
+<h2 id="saving">Saving</h2>
+<p><strong>Save SVG</strong> asks where, suggesting <code>name.min.svg</code>. <strong>Copy</strong> puts the result on the clipboard.</p>
+<h2 id="rebuild-it-clean-by-re-tracing">Rebuild it clean by re-tracing</h2>
+<p>Minifying keeps every path the file has. Some SVGs are messy in ways no rewrite can fix: shapes
+stacked on shapes, translucent overlaps, outlines broken into pieces, thousands of nodes from an
+auto-trace. <strong>Rebuild it clean by re-tracing</strong> sends the drawing to the Vectorize tab, where it is
+drawn at 1024 px on its longer side and traced again from that picture. It comes back as a few
+clean shapes, and the quality report measures the new drawing against the old one.</p>
+<p>The re-trace starts with your current controls; the choice card is not shown, but
+<strong>Walk me through it</strong> on the Tune tab opens the wizard as usual.</p>
+<p>A re-trace is a reconstruction: small text and hairlines narrower than a pixel at 1024 px will not
+survive it. Compare before you replace the original.</p>
+<h2 id="studio-lite">Studio Lite</h2>
+<p><strong>Save SVG</strong> downloads the file.</p>
+<p><strong>Command line:</strong> the same minifier is <code>inkvec-svgmin</code>, with <code>--tolerance</code>, <code>--judge</code>,
+<code>--corner-degrees</code> and <code>--no-document</code>.</p><nav class="pagenav"><a class="prev" href="export.html"><span class="dir">Previous</span><span class="lbl">Export</span></a><a class="next" href="fabricate.html"><span class="dir">Next</span><span class="lbl">Fabricate</span></a></nav></article></main>
+  <aside class="rail"><h5>On this page</h5><ul><ul><li class="l2"><a href="#opening-an-svg">Opening an SVG</a></li><li class="l2"><a href="#checking-that-nothing-moved">Checking that nothing moved</a></li><li class="l2"><a href="#the-result">The result</a></li><li class="l2"><a href="#the-controls">The controls</a></li><li class="l2"><a href="#saving">Saving</a></li><li class="l2"><a href="#rebuild-it-clean-by-re-tracing">Rebuild it clean by re-tracing</a></li><li class="l2"><a href="#studio-lite">Studio Lite</a></li></ul></ul></aside>
+</div>
+</body>
+</html>

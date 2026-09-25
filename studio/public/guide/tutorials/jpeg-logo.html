@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="inkvec-guide" content="studio">
+<title>Tutorial: clean up a JPEG logo · Inkvec Studio guide</title>
+<link rel="stylesheet" href="../guide.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="side"><a class="guidebrand" href="../index.html"><img src="../logo-mono.svg" alt=""> <span>Inkvec Studio</span></a><div class="grp"><h4>User guide</h4><a href="../index.html">Overview</a><a href="../install.html">Install and first launch</a><a href="../getting-started.html">Getting started</a><a href="../viewer.html">The viewer</a><a href="../result.html">Result</a><a href="../tune.html">Tune</a><a href="../palette.html">Palette and colour groups</a><a href="../export.html">Export</a><a href="../minify.html">Minify SVG</a><a href="../fabricate.html">Fabricate</a><a href="../batch.html">Batch</a><a href="../settings.html">Settings</a><a href="../shortcuts.html">Keyboard and mouse</a><a href="../troubleshooting.html">Troubleshooting</a></div><div class="grp"><h4>Tutorials</h4><a href="jpeg-logo.html" aria-current="page">Clean up a JPEG logo</a><a href="favicon-asset-pack.html">A favicon and an asset pack</a><a href="vinyl-htv.html">Layered vinyl and iron-on</a><a href="laser.html">Laser: DXF and G-code</a></div><div class="grp"><h4>Online</h4><a href="https://logolabs.github.io/inkvec/">Inkvec documentation</a><a href="https://logolabs.github.io/inkvec/studio/tutorials/jpeg-logo.html">This page on the web</a></div><p class="guidenote">This copy of the guide is part of the app and works without a network.</p></aside>
+  <main><article><h1 id="tutorial-clean-up-a-jpeg-logo">Tutorial: clean up a JPEG logo</h1>
+<p>A logo saved as a JPEG, or captured in a screenshot, is the most common thing people need to
+vectorize, and the hardest to trace well. JPEG compression leaves faint blocks and halos around
+every edge and shifts the colours slightly, and a faithful trace reproduces all of it: flat
+colours come back speckled, one colour comes back as three, and the edges wobble. This tutorial
+removes the damage first, then settles the palette, then checks the result.</p>
+<p>You need a JPEG (or a lossy WebP, or a screenshot) of a logo. About 10 minutes, plus a one-time
+download of about 80 MB.</p>
+<h2 id="1-get-the-denoiser">1. Get the denoiser</h2>
+<p>The denoiser is the trained model that repairs compression damage before tracing. It is not in the
+installer. Open <strong>Settings</strong>, and under <strong>Denoiser</strong> press <strong>Download</strong>. The dialog says where it
+comes from and what it costs; press <strong>Download</strong> again. It is checked against its published
+checksum when it arrives, and it runs on your computer: nothing is uploaded.</p>
+<p>You can do this later, from the prompts in the steps below; doing it first means the first trace is
+already a clean one.</p>
+<h2 id="2-open-the-jpeg">2. Open the JPEG</h2>
+<p>Drop the file on the window, or press <kbd>Ctrl</kbd>+<kbd>O</kbd>. Auto traces it at once, and
+the choice card appears over the stage. When Auto's trace lands, <strong>Auto chose</strong> says what it
+noticed:</p>
+<p><img alt="The choice card for a JPEG: Auto suggests the Photo or scan preset, and a colour group" src="../img/auto-chose-photo.webp"></p>
+<p><em>Looks like a photo, a scan or a screenshot</em> appears because the file is a JPEG, or because its
+pixels measure noisy (the evidence is on the second line, as a noise level: a clean file reads
+about 0.5).</p>
+<h2 id="3-turn-the-clean-up-on">3. Turn the clean-up on</h2>
+<p>Either press <strong>Try Photo or scan, with the denoiser</strong> on the card, which switches to the <em>Photo or
+scan</em> preset, or press <strong>Customise…</strong> and go through the wizard: its second step, <strong>Clean-up</strong>, is
+there because the image looks damaged.</p>
+<p><img alt="The wizard's Clean-up step, saying why it was offered" src="../img/wizard-cleanup.webp"></p>
+<p>Choose <strong>Auto</strong>: the trace is measured, and the damage is cleaned where the trace disagrees with the
+image in places that should be flat. (Tune's <strong>Denoiser</strong> switch at the top of the rail is the same
+setting: <strong>Off</strong>, <strong>Auto</strong>, <strong>On</strong>.)</p>
+<p>The denoiser runs on the full trace only, so the right pane changes a moment after the draft. With
+the wizard open, the left pane shows Auto's trace without it, for comparison.</p>
+<h2 id="4-settle-the-palette">4. Settle the palette</h2>
+<p>Compression turns one flat colour into a cluster of near-identical ones. Open the <strong>Colours</strong> step
+in the wizard (or the palette at the bottom of the Result tab).</p>
+<ul>
+<li>Accept the <strong>suggested</strong> groups whose members are the same colour measured twice. Hover a
+  suggestion first: the drawing singles out the shapes it would join.</li>
+<li>If the logo has, say, three colours and the palette still has more, set <strong>Colours</strong> to 3 and look
+  at the groups it proposes. Accept the ones that are right; <strong>Dismiss</strong> the others.</li>
+</ul>
+<p>Each accepted group re-traces, so the shapes between the merged colours really join into one.
+See <a href="../palette.html#colour-groups">the palette</a> for everything groups can do.</p>
+<h2 id="5-check-the-edges">5. Check the edges</h2>
+<p>Close the wizard (<strong>Finish</strong>), or stay on the Result tab.</p>
+<ol>
+<li>Read the quality report. The mean colour difference measures the trace against the JPEG,
+   damage and all, so a cleaned trace can show a <em>higher</em> number than a faithful one: it no longer
+   copies the noise. Judge by eye.</li>
+<li>Press <strong>Find the worst corner</strong>. The viewer zooms to 12× with the pixel grid on, at the place of
+   largest disagreement. On a JPEG this is usually a halo the trace has rightly ignored.</li>
+<li>Turn on <strong>Certainty</strong>. Red bands show edges the pixels could not pin down. If whole outlines are
+   red, the JPEG was small or heavily compressed; a larger source helps more than any setting.</li>
+<li>Hold <kbd>Space</kbd> in <strong>A/B</strong> to flick between the JPEG and the SVG.</li>
+</ol>
+<p>If small specks survived, raise <strong>Speckle floor</strong> (Tune, Detail) a little. If a detail was lost,
+lower it, or lower <strong>Precision</strong>.</p>
+<h2 id="6-match-the-brand-colours">6. Match the brand colours</h2>
+<p>The colours now come from the cleaned image, which is closer to the artwork than the JPEG, but
+still a measurement. If you know the brand's real values:</p>
+<ol>
+<li>In the palette, press <strong>Paste brand palette</strong>.</li>
+<li>Paste the colours, one per line, as hex (<code>#12443E</code>) or CSS variables. Include every colour the
+   logo uses, white and black too: every ink is matched to its nearest pasted colour.</li>
+<li>Check the preview. A gold figure means a large move; make sure it is the right colour.</li>
+<li>Press <strong>Snap</strong>.</li>
+</ol>
+<h2 id="7-take-it-out">7. Take it out</h2>
+<p>Snapped colours live on the drawing on screen. In version 0.2.0, <strong>Export</strong> re-traces first and
+writes the measured colours, so after snapping use <strong>Copy SVG</strong> and paste the drawing where it is
+going. If you did not snap, <strong>Export</strong> (or <kbd>Ctrl</kbd>+<kbd>E</kbd>) writes the SVG, a minified
+copy, PNGs and an asset pack; see <a href="../export.html">Export</a>.</p>
+<p>The Result tab will still list <em>The source is a JPEG, so these colours carry its compression
+damage</em>. That is a fact about the file you started from, and it goes into the asset pack's README
+so whoever uses the files knows to check the colours.</p>
+<h2 id="why-not-trace-the-jpeg-as-it-is">Why not trace the JPEG as it is?</h2>
+<p>You can: with the denoiser <strong>Off</strong>, the trace reproduces the JPEG faithfully, and the colour
+difference is lower because it copies the damage. That is the right choice when the damage is part
+of what you want to keep. For a logo, it almost never is.</p><nav class="pagenav"><a class="prev" href="../troubleshooting.html"><span class="dir">Previous</span><span class="lbl">Troubleshooting</span></a><a class="next" href="favicon-asset-pack.html"><span class="dir">Next</span><span class="lbl">A favicon and an asset pack</span></a></nav></article></main>
+  <aside class="rail"><h5>On this page</h5><ul><ul><li class="l2"><a href="#1-get-the-denoiser">1. Get the denoiser</a></li><li class="l2"><a href="#2-open-the-jpeg">2. Open the JPEG</a></li><li class="l2"><a href="#3-turn-the-clean-up-on">3. Turn the clean-up on</a></li><li class="l2"><a href="#4-settle-the-palette">4. Settle the palette</a></li><li class="l2"><a href="#5-check-the-edges">5. Check the edges</a></li><li class="l2"><a href="#6-match-the-brand-colours">6. Match the brand colours</a></li><li class="l2"><a href="#7-take-it-out">7. Take it out</a></li><li class="l2"><a href="#why-not-trace-the-jpeg-as-it-is">Why not trace the JPEG as it is?</a></li></ul></ul></aside>
+</div>
+</body>
+</html>

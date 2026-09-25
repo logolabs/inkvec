@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="inkvec-guide" content="studio">
+<title>Tutorial: laser cutting, DXF and G-code · Inkvec Studio guide</title>
+<link rel="stylesheet" href="../guide.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="side"><a class="guidebrand" href="../index.html"><img src="../logo-mono.svg" alt=""> <span>Inkvec Studio</span></a><div class="grp"><h4>User guide</h4><a href="../index.html">Overview</a><a href="../install.html">Install and first launch</a><a href="../getting-started.html">Getting started</a><a href="../viewer.html">The viewer</a><a href="../result.html">Result</a><a href="../tune.html">Tune</a><a href="../palette.html">Palette and colour groups</a><a href="../export.html">Export</a><a href="../minify.html">Minify SVG</a><a href="../fabricate.html">Fabricate</a><a href="../batch.html">Batch</a><a href="../settings.html">Settings</a><a href="../shortcuts.html">Keyboard and mouse</a><a href="../troubleshooting.html">Troubleshooting</a></div><div class="grp"><h4>Tutorials</h4><a href="jpeg-logo.html">Clean up a JPEG logo</a><a href="favicon-asset-pack.html">A favicon and an asset pack</a><a href="vinyl-htv.html">Layered vinyl and iron-on</a><a href="laser.html" aria-current="page">Laser: DXF and G-code</a></div><div class="grp"><h4>Online</h4><a href="https://logolabs.github.io/inkvec/">Inkvec documentation</a><a href="https://logolabs.github.io/inkvec/studio/tutorials/laser.html">This page on the web</a></div><p class="guidenote">This copy of the guide is part of the app and works without a network.</p></aside>
+  <main><article><h1 id="tutorial-laser-cutting-dxf-and-g-code">Tutorial: laser cutting, DXF and G-code</h1>
+<p>This tutorial turns a logo into files for a laser cutter or a CNC router: hairline cut paths in
+real millimetres, compensated for the width of the cut, as an SVG for LightBurn, a DXF for CAD and
+CAM programs, and G-code for a GRBL machine. About 15 minutes, plus a test cut.</p>
+<h2 id="1-trace-it-or-bring-an-svg">1. Trace it, or bring an SVG</h2>
+<p>Trace the logo in <strong>Vectorize</strong> as usual (see <a href="../getting-started.html">Getting started</a>), then open
+<strong>Fabricate</strong> and press <strong>Use the current trace</strong>. Or open any SVG in Fabricate with <strong>Open an
+SVG</strong>.</p>
+<p>For cutting, fewer and simpler outlines are better: every outline is a path the head has to
+follow. Accept the palette's colour-group suggestions, and consider the <em>Fewer paths</em> preset
+before you bring the trace over.</p>
+<h2 id="2-choose-laser-or-sign-cutter">2. Choose "Laser or sign cutter"</h2>
+<p>Under <strong>Material</strong>, press <strong>Laser or sign cutter</strong>. It sets:</p>
+<ul>
+<li><strong>Inlay</strong> mode: one sheet per colour, cut exactly, nothing stacked;</li>
+<li><strong>Hairlines</strong>: only a hairline is a cut, and each sheet keeps its colour so a laser program can
+  give each colour its own operation (LightBurn reads the colours as layers);</li>
+<li>a <strong>kerf</strong> of 0.15 mm, inner shapes cut before the parts around them;</li>
+<li>a smallest width of 0.3 mm, no registration marks;</li>
+<li><strong>Also save a DXF</strong> on.</li>
+</ul>
+<p><img alt="The Cutting options for a laser: smallest width, DXF, and below them G-code, kerf and router bit" src="../img/fabricate-laser-rail.webp"></p>
+<p>To cut one outline from one sheet of material rather than one sheet per colour, choose <strong>One
+colour</strong> under <strong>Making</strong>: every selected colour is joined into a single cut.</p>
+<p>To <em>engrave</em> lines rather than cut shapes (a pen, a scoring tool, or a laser line along the middle
+of each stroke), choose <strong>Pen or score</strong> instead: each line is followed once, down its centre.</p>
+<h2 id="3-set-the-size-and-the-units-the-file-states">3. Set the size, and the units the file states</h2>
+<p>Type the finished width under <strong>Size</strong>. Then set <strong>The files state their size in</strong>:</p>
+<ul>
+<li><strong>Pixels, 96/in</strong> for LightBurn, Inkscape, Carbide Create and Fusion, which read a bare pixel
+  size at 96 per inch;</li>
+<li><strong>Millimetres</strong> for everything else.</li>
+</ul>
+<p>The DXF and the G-code are always in millimetres, whatever this says.</p>
+<p>Turn on <strong>Cut a size-check square</strong> for the first cut: a 20 mm square below the design, to measure.</p>
+<h2 id="4-measure-and-set-the-kerf">4. Measure and set the kerf</h2>
+<p>The beam (or the bit) removes a strip of material as wide as the kerf. Without compensation every
+part comes out smaller than drawn by that much, and every hole larger. With <strong>Hairlines</strong>, the tab
+grows each part by half the kerf, so it comes out at the drawn size.</p>
+<p>Typical kerfs: a CO₂ laser 0.1 to 0.2 mm, a diode laser 0.15 to 0.3 mm. Yours depends on the
+machine, the lens, the focus and the material, so measure it:</p>
+<ol>
+<li>Cut the size-check square with the kerf set to 0.</li>
+<li>Measure the square with calipers. The kerf is <code>20 mm − measured size</code>.</li>
+<li>Type it into <em>The cut removes</em> <strong>x</strong> <em>mm (kerf)</em>.</li>
+</ol>
+<h2 id="5-for-a-router-dogbones-and-the-bit">5. For a router: dogbones and the bit</h2>
+<p>A round router bit cannot cut a sharp inside corner, so parts meant to fit into each other will not
+seat. Type the bit's diameter into <em>Router bit</em> <strong>x</strong> <em>mm across</em>: every inside corner gets a
+dogbone, a small round relief, so parts seat square. If some holes or gaps are narrower than the
+bit, <strong>Before you cut</strong> says so: the bit cannot get into them.</p>
+<p>Leave it at 0 for a laser.</p>
+<h2 id="6-check-before-you-cut">6. Check before you cut</h2>
+<p><strong>Before you cut</strong> lists the job (sheets, pieces, path segments, overall size) and anything that
+will cause trouble: parts narrower than the smallest width, more than 2,000 path segments (slow in
+most programs; raise <em>Cuts stay within</em> <strong>x</strong> <em>mm</em> to lower it), gaps the bit cannot enter.
+<strong>Show problems</strong> draws them on the stage.</p>
+<h2 id="7-g-code-for-a-grbl-machine">7. G-code for a GRBL machine</h2>
+<p>For a diode laser or a pen plotter running GRBL, turn on <strong>Also save G-code</strong> and set the sentence
+under it: <em>Cut at</em> <strong>1000</strong> <em>mm/min, power S</em> <strong>1000</strong>, <strong>1</strong> <em>pass</em>.</p>
+<ul>
+<li><strong>Speed and power</strong> depend entirely on your machine and material. Start from the material's
+  recommended settings, and test on scrap. <code>S</code> is in GRBL's power units; <code>S1000</code> is full power with
+  GRBL's default <code>$30=1000</code>.</li>
+<li><strong>Passes</strong>: thick material needs several passes at a speed that cuts cleanly.</li>
+<li>The file uses <strong>laser mode</strong>. Set <code>$32=1</code> on the controller once, so the beam is off during moves
+  between cuts; under laser mode, power follows speed (<code>M4</code>), so corners do not burn.</li>
+<li><strong>Origin</strong>: the lower left of the job, marks and borders included, in millimetres. Jog the head
+  to the lower-left corner of the material and zero it there before running the file.</li>
+<li>Curves are written as arcs (<code>G2</code>/<code>G3</code>), and holes and inner parts are cut before the part around
+  them, so a part never shifts before its holes are cut.</li>
+</ul>
+<p>Always run the file first with the laser at low power (or off, with a pointer), to check the
+position and the size.</p>
+<h2 id="8-save">8. Save</h2>
+<p>Press <strong>Save <em>N</em> sheets…</strong> and choose a folder. You get one SVG per colour, <code>name-all.svg</code> with
+every colour as its own group, <code>name.dxf</code> and, if on, <code>name.gcode</code>.</p>
+<ul>
+<li><strong>LightBurn</strong>: import <code>name-all.svg</code> (or the DXF). Each colour arrives as its own layer; set a
+  cut operation per layer.</li>
+<li><strong>CAD and CAM programs</strong> (Fusion, FreeCAD, VCarve, Carbide Create): import <code>name.dxf</code>. It is R12
+  DXF, the version every program reads, one layer per colour, closed polylines in millimetres,
+  curves as true arcs, which CAM turns into <code>G2</code>/<code>G3</code> moves.</li>
+<li><strong>GRBL</strong>: send <code>name.gcode</code> with your usual sender.</li>
+</ul>
+<p><strong>Studio Lite:</strong> Save downloads the files.</p>
+<h2 id="engraving-lines-with-pen-or-score">Engraving lines with "Pen or score"</h2>
+<p><strong>Pen or score</strong> sets the <strong>Lines</strong> mode: every line in the drawing is followed once, along its
+centre, rather than around both of its edges. The <strong>Drawing</strong> card sets the tip width (the preview
+shows the line the tool will leave) and which lines count as lines: <em>Lines up to</em> <strong>x</strong> <em>mm wide are
+drawn once</em> (0 for any width); wider parts are drawn round their outline. The DXF has lines as open
+polylines and outlines as closed ones. G-code works as above.</p><nav class="pagenav"><a class="prev" href="vinyl-htv.html"><span class="dir">Previous</span><span class="lbl">Layered vinyl and iron-on</span></a><span></span></nav></article></main>
+  <aside class="rail"><h5>On this page</h5><ul><ul><li class="l2"><a href="#1-trace-it-or-bring-an-svg">1. Trace it, or bring an SVG</a></li><li class="l2"><a href="#2-choose-laser-or-sign-cutter">2. Choose "Laser or sign cutter"</a></li><li class="l2"><a href="#3-set-the-size-and-the-units-the-file-states">3. Set the size, and the units the file states</a></li><li class="l2"><a href="#4-measure-and-set-the-kerf">4. Measure and set the kerf</a></li><li class="l2"><a href="#5-for-a-router-dogbones-and-the-bit">5. For a router: dogbones and the bit</a></li><li class="l2"><a href="#6-check-before-you-cut">6. Check before you cut</a></li><li class="l2"><a href="#7-g-code-for-a-grbl-machine">7. G-code for a GRBL machine</a></li><li class="l2"><a href="#8-save">8. Save</a></li><li class="l2"><a href="#engraving-lines-with-pen-or-score">Engraving lines with "Pen or score"</a></li></ul></ul></aside>
+</div>
+</body>
+</html>

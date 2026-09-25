@@ -9,6 +9,7 @@ range or default.
 
 from __future__ import annotations
 
+import json
 import textwrap
 from pathlib import Path
 
@@ -18,7 +19,7 @@ from schema import ROOT, Option
 # `.generated` the way the C# and TypeScript files are; the header says it instead.
 OUT = ROOT / "packages" / "php" / "src" / "Options.php"
 
-PHP_TYPES = {"boolean": "bool", "integer": "int", "number": "float"}
+PHP_TYPES = {"boolean": "bool", "integer": "int", "number": "float", "string": "string"}
 
 HEADER = """\
 <?php
@@ -67,6 +68,8 @@ def _default_text(o: Option) -> str:
         return "true" if o.default else "false"
     if o.kind == "integer":
         return str(int(o.default))
+    if o.kind == "string":
+        return json.dumps(o.default)
     return repr(float(o.default))
 
 
@@ -115,7 +118,7 @@ def render(options: list[Option]) -> dict[Path, str]:
      * The options that were set, keyed by the name the tracer knows them under. An unset
      * option is absent, so the tracer applies its own default to it.
      *
-     * @return array<string, bool|int|float>
+     * @return array<string, bool|int|float|string>
      */
     public function toArray(): array
     {

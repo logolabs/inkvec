@@ -104,6 +104,15 @@ final class Options
      *     outline similarity (IoU after affine normalisation) above which two marks count as the
      *     same shape. Range: >= 0 and <= 1. The tracer's default is 0.92; leave it null to use
      *     that.
+     *
+     * @param string|null $mergeColors Colour groups: fills to draw as one, so the shapes
+     *     between them join rather than being recoloured. Empty (the default) changes nothing.
+     *     Groups are separated by ';' and members by ','; a member is a colour '#rrggbb' as it
+     *     appears in a trace of the same image, or a gradient written as its stop colours joined
+     *     by '>'. An optional '=' says what the group becomes: '=#rrggbb' a flat colour, '=@n' its
+     *     n-th member (1-based; a gradient there is refitted over the whole group); without it,
+     *     the member covering the most of the image. Example: '#c0392b,#e74c3c;#f00>#00f,#0a0=@1'.
+     *     A group costs one extra trace. The tracer's default is ""; leave it null to use that.
      */
     public function __construct(
         public readonly ?float $precision = null,
@@ -121,6 +130,7 @@ final class Options
         public readonly ?bool $contentUnits = null,
         public readonly ?bool $harmonize = null,
         public readonly ?float $harmonizeThreshold = null,
+        public readonly ?string $mergeColors = null,
     ) {
     }
 
@@ -128,7 +138,7 @@ final class Options
      * The options that were set, keyed by the name the tracer knows them under. An unset
      * option is absent, so the tracer applies its own default to it.
      *
-     * @return array<string, bool|int|float>
+     * @return array<string, bool|int|float|string>
      */
     public function toArray(): array
     {
@@ -177,6 +187,9 @@ final class Options
         }
         if ($this->harmonizeThreshold !== null) {
             $set['harmonize_threshold'] = $this->harmonizeThreshold;
+        }
+        if ($this->mergeColors !== null) {
+            $set['merge_colors'] = $this->mergeColors;
         }
 
         return $set;

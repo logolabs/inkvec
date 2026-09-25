@@ -26,7 +26,7 @@ OUT = PACKAGE / "Sources" / "Inkvec" / "InkvecOptions.generated.swift"
 HEADER_SOURCE = ROOT / "crates" / "inkvec-ffi" / "include" / "inkvec.h"
 HEADER_COPY = PACKAGE / "Sources" / "InkvecFFI" / "inkvec.h"
 
-SWIFT_TYPES = {"boolean": "Bool", "integer": "Int", "number": "Double"}
+SWIFT_TYPES = {"boolean": "Bool", "integer": "Int", "number": "Double", "string": "String"}
 
 # Swift's reserved words; an option named like one is written in backticks.
 KEYWORDS = set(
@@ -84,6 +84,8 @@ def _default(o: Option) -> str:
         return "true" if o.default else "false"
     if o.kind == "integer":
         return str(int(o.default))
+    if o.kind == "string":
+        return json.dumps(o.default)
     return json.dumps(float(o.default))
 
 

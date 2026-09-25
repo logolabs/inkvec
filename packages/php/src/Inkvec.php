@@ -151,7 +151,7 @@ final class Inkvec
     /**
      * Every option at its default.
      *
-     * @return array<string, bool|int|float>
+     * @return array<string, bool|int|float|string>
      */
     public static function defaults(): array
     {

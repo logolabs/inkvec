@@ -16,7 +16,7 @@ from schema import ROOT, Option
 
 OUT = ROOT / "packages" / "go" / "options_generated.go"
 
-GO_TYPES = {"boolean": "bool", "integer": "int", "number": "float64"}
+GO_TYPES = {"boolean": "bool", "integer": "int", "number": "float64", "string": "string"}
 
 # Words Go spells in capitals inside an identifier (`MaxDPI`, not `MaxDpi`).
 INITIALISMS = {"api", "dpi", "id", "json", "rgb", "rgba", "svg", "url", "utf8"}
@@ -57,6 +57,8 @@ def _default(o: Option) -> str:
         return "true" if o.default else "false"
     if o.kind == "integer":
         return str(int(o.default))
+    if o.kind == "string":
+        return json.dumps(o.default)
     return json.dumps(float(o.default))
 
 

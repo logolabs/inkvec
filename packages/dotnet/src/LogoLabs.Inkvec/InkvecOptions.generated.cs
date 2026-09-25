@@ -3,6 +3,10 @@
 // Do not edit: change `inkvec::Options` in crates/inkvec, regenerate the schema
 // (cargo test -p inkvec), then run `python bindings/codegen/generate.py`.
 
+// Generated code is outside the nullable context unless it opts in; without this a `string?`
+// property would be oblivious to callers that enable nullable reference types.
+#nullable enable
+
 using System.Globalization;
 using System.Text;
 
@@ -146,6 +150,18 @@ namespace LogoLabs.Inkvec
         public double? HarmonizeThreshold { get; set; }
 
         /// <summary>
+        /// Colour groups: fills to draw as one, so the shapes between them join rather than being
+        /// recoloured. Empty (the default) changes nothing. Groups are separated by ';' and members by
+        /// ','; a member is a colour '#rrggbb' as it appears in a trace of the same image, or a
+        /// gradient written as its stop colours joined by '&gt;'. An optional '=' says what the group
+        /// becomes: '=#rrggbb' a flat colour, '=@n' its n-th member (1-based; a gradient there is
+        /// refitted over the whole group); without it, the member covering the most of the image.
+        /// Example: '#c0392b,#e74c3c;#f00&gt;#00f,#0a0=@1'. A group costs one extra trace.
+        /// The tracer's default is ""; leave this null to use it.
+        /// </summary>
+        public string? MergeColors { get; set; }
+
+        /// <summary>
         /// Serialises the properties that have been set to the JSON object the native
         /// library reads. A property left <see langword="null"/> is left out, so the
         /// tracer applies its own default to it.
@@ -245,7 +261,46 @@ namespace LogoLabs.Inkvec
                 first = false;
                 sb.Append("\"harmonize_threshold\":").Append(HarmonizeThreshold.Value.ToString("R", CultureInfo.InvariantCulture));
             }
+            if (MergeColors != null)
+            {
+                if (!first) sb.Append(',');
+                first = false;
+                sb.Append("\"merge_colors\":").Append(JsonString(MergeColors));
+            }
             sb.Append('}');
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// <paramref name="s"/> as a JSON string literal: quoted, with <c>"</c>, <c>\</c> and
+        /// every control character escaped.
+        /// </summary>
+        private static string JsonString(string s)
+        {
+            var sb = new StringBuilder(s.Length + 2);
+            sb.Append('"');
+            foreach (var c in s)
+            {
+                switch (c)
+                {
+                    case '"': sb.Append("\\\""); break;
+                    case '\\': sb.Append("\\\\"); break;
+                    case '\n': sb.Append("\\n"); break;
+                    case '\r': sb.Append("\\r"); break;
+                    case '\t': sb.Append("\\t"); break;
+                    default:
+                        if (c < ' ')
+                        {
+                            sb.Append("\\u").Append(((int)c).ToString("x4", CultureInfo.InvariantCulture));
+                        }
+                        else
+                        {
+                            sb.Append(c);
+                        }
+                        break;
+                }
+            }
+            sb.Append('"');
             return sb.ToString();
         }
     }

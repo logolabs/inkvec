@@ -146,4 +146,17 @@ export interface Options {
    * @default 0.92
    */
   harmonize_threshold?: number;
+  /**
+   * Colour groups: fills to draw as one, so the shapes between them join rather than being
+   * recoloured. Empty (the default) changes nothing. Groups are separated by ';' and
+   * members by ','; a member is a colour '#rrggbb' as it appears in a trace of the same
+   * image, or a gradient written as its stop colours joined by '>'. An optional '=' says
+   * what the group becomes: '=#rrggbb' a flat colour, '=@n' its n-th member (1-based; a
+   * gradient there is refitted over the whole group); without it, the member covering the
+   * most of the image. Example: '#c0392b,#e74c3c;#f00>#00f,#0a0=@1'. A group costs one
+   * extra trace.
+   *
+   * @default ""
+   */
+  merge_colors?: string;
 }

@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Inkvec HTTP service",
-    "version": "0.1.5",
+    "version": "0.1.6",
     "description": "Raster-to-SVG tracing over HTTP. Every option is inkvec::Options end to end: this document, and the query parameters on POST /trace below, are generated from the same JSON Schema the Rust facade writes (bindings/options.schema.json) -- nothing about an option is restated here."
   },
   "paths": {
@@ -172,6 +172,15 @@
               "type": "number",
               "minimum": 0,
               "maximum": 1
+            }
+          },
+          {
+            "name": "merge_colors",
+            "in": "query",
+            "required": false,
+            "description": "Colour groups: fills to draw as one, so the shapes between them join rather than being recoloured. Empty (the default) changes nothing. Groups are separated by ';' and members by ','; a member is a colour '#rrggbb' as it appears in a trace of the same image, or a gradient written as its stop colours joined by '>'. An optional '=' says what the group becomes: '=#rrggbb' a flat colour, '=@n' its n-th member (1-based; a gradient there is refitted over the whole group); without it, the member covering the most of the image. Example: '#c0392b,#e74c3c;#f00>#00f,#0a0=@1'. A group costs one extra trace.",
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -466,6 +475,11 @@
             "minimum": 0,
             "maximum": 1,
             "default": 0.92
+          },
+          "merge_colors": {
+            "description": "Colour groups: fills to draw as one, so the shapes between them join rather than being recoloured. Empty (the default) changes nothing. Groups are separated by ';' and members by ','; a member is a colour '#rrggbb' as it appears in a trace of the same image, or a gradient written as its stop colours joined by '>'. An optional '=' says what the group becomes: '=#rrggbb' a flat colour, '=@n' its n-th member (1-based; a gradient there is refitted over the whole group); without it, the member covering the most of the image. Example: '#c0392b,#e74c3c;#f00>#00f,#0a0=@1'. A group costs one extra trace.",
+            "type": "string",
+            "default": ""
           }
         },
         "additionalProperties": false

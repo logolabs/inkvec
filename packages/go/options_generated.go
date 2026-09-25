@@ -120,4 +120,15 @@ type Options struct {
 	//
 	// A number >= 0 and <= 1. Default: 0.92.
 	HarmonizeThreshold *float64 `json:"harmonize_threshold,omitempty"`
+
+	// Colour groups: fills to draw as one, so the shapes between them join rather than being
+	// recoloured. Empty (the default) changes nothing. Groups are separated by ';' and members
+	// by ','; a member is a colour '#rrggbb' as it appears in a trace of the same image, or a
+	// gradient written as its stop colours joined by '>'. An optional '=' says what the group
+	// becomes: '=#rrggbb' a flat colour, '=@n' its n-th member (1-based; a gradient there is
+	// refitted over the whole group); without it, the member covering the most of the image.
+	// Example: '#c0392b,#e74c3c;#f00>#00f,#0a0=@1'. A group costs one extra trace.
+	//
+	// Default: "".
+	MergeColors *string `json:"merge_colors,omitempty"`
 }

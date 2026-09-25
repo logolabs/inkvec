@@ -18,7 +18,7 @@ SCHEMA_PATH = ROOT / "bindings" / "options.schema.json"
 # JSON Schema types a generator knows how to render. A new kind of option (a string
 # enum, say) fails loudly in `load` until the generators are taught it, rather than being
 # rendered as something wrong.
-KINDS = ("boolean", "integer", "number")
+KINDS = ("boolean", "integer", "number", "string")
 
 
 @dataclass(frozen=True)
@@ -67,6 +67,8 @@ def load(path: Path = SCHEMA_PATH) -> list[Option]:
             )
         if "default" not in prop or not prop.get("description"):
             raise SystemExit(f"{path.name}: option `{name}` needs a default and a description")
+        if kind == "string" and not isinstance(prop["default"], str):
+            raise SystemExit(f"{path.name}: string option `{name}` has a non-string default")
         out.append(
             Option(
                 name=name,

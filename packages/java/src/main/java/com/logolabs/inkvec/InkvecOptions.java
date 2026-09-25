@@ -28,6 +28,7 @@ public final class InkvecOptions {
     private final boolean contentUnits;
     private final boolean harmonize;
     private final double harmonizeThreshold;
+    private final String mergeColors;
 
     private InkvecOptions(Builder b) {
         this.precision = b.precision;
@@ -45,6 +46,7 @@ public final class InkvecOptions {
         this.contentUnits = b.contentUnits;
         this.harmonize = b.harmonize;
         this.harmonizeThreshold = b.harmonizeThreshold;
+        this.mergeColors = b.mergeColors;
     }
 
     /** Every option at its default -- the command line's defaults. */
@@ -238,6 +240,21 @@ public final class InkvecOptions {
     }
 
     /**
+     * Colour groups: fills to draw as one, so the shapes between them join rather than being
+     * recoloured. Empty (the default) changes nothing. Groups are separated by ';' and members by
+     * ','; a member is a colour '#rrggbb' as it appears in a trace of the same image, or a
+     * gradient written as its stop colours joined by '&gt;'. An optional '=' says what the group
+     * becomes: '=#rrggbb' a flat colour, '=@n' its n-th member (1-based; a gradient there is
+     * refitted over the whole group); without it, the member covering the most of the image.
+     * Example: '#c0392b,#e74c3c;#f00&gt;#00f,#0a0=@1'. A group costs one extra trace.
+     *
+     * @default ""
+     */
+    public String mergeColors() {
+        return mergeColors;
+    }
+
+    /**
      * The JSON object the C ABI, and every other Inkvec binding, take as options.
      * Every field is written explicitly, so this is equivalent to passing only the
      * fields that differ from {@link #defaults()}.
@@ -260,8 +277,48 @@ public final class InkvecOptions {
         sb.append(",\"content_units\":").append(contentUnits);
         sb.append(",\"harmonize\":").append(harmonize);
         sb.append(",\"harmonize_threshold\":").append(harmonizeThreshold);
+        sb.append(",\"merge_colors\":").append(jsonString(mergeColors));
         sb.append('}');
         return sb.toString();
+    }
+
+    /**
+     * {@code s} as a JSON string literal: quoted, with {@code "}, the backslash and every
+     * control character escaped; {@code null} as JSON {@code null}.
+     */
+    private static String jsonString(String s) {
+        if (s == null) {
+            return "null";
+        }
+        StringBuilder sb = new StringBuilder(s.length() + 2);
+        sb.append('"');
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '"':
+                    sb.append("\\\"");
+                    break;
+                case '\\':
+                    sb.append("\\\\");
+                    break;
+                case '\n':
+                    sb.append("\\n");
+                    break;
+                case '\r':
+                    sb.append("\\r");
+                    break;
+                case '\t':
+                    sb.append("\\t");
+                    break;
+                default:
+                    if (c < 0x20) {
+                        sb.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        sb.append(c);
+                    }
+            }
+        }
+        return sb.append('"').toString();
     }
 
     @Override
@@ -289,6 +346,7 @@ public final class InkvecOptions {
         private boolean contentUnits = false;
         private boolean harmonize = true;
         private double harmonizeThreshold = 0.92;
+        private String mergeColors = "";
 
         private Builder() {
         }
@@ -485,6 +543,22 @@ public final class InkvecOptions {
          */
         public Builder harmonizeThreshold(double harmonizeThreshold) {
             this.harmonizeThreshold = harmonizeThreshold;
+            return this;
+        }
+
+        /**
+         * Colour groups: fills to draw as one, so the shapes between them join rather than being
+         * recoloured. Empty (the default) changes nothing. Groups are separated by ';' and members by
+         * ','; a member is a colour '#rrggbb' as it appears in a trace of the same image, or a
+         * gradient written as its stop colours joined by '&gt;'. An optional '=' says what the group
+         * becomes: '=#rrggbb' a flat colour, '=@n' its n-th member (1-based; a gradient there is
+         * refitted over the whole group); without it, the member covering the most of the image.
+         * Example: '#c0392b,#e74c3c;#f00&gt;#00f,#0a0=@1'. A group costs one extra trace.
+         *
+         * @default ""
+         */
+        public Builder mergeColors(String mergeColors) {
+            this.mergeColors = mergeColors;
             return this;
         }
 

@@ -70,6 +70,7 @@ def trace(
     content_units: bool = False,
     harmonize: bool = True,
     harmonize_threshold: float = 0.92,
+    merge_colors: str = "",
 ) -> Traced:
     """Trace an image to SVG.
 
@@ -146,6 +147,16 @@ def trace(
             Shape-equivalence threshold for harmonization: the outline similarity (IoU
             after affine normalisation) above which two marks count as the same shape.
             Must be >= 0 and <= 1.
+        merge_colors:
+            Colour groups: fills to draw as one, so the shapes between them join rather
+            than being recoloured. Empty (the default) changes nothing. Groups are
+            separated by ';' and members by ','; a member is a colour '#rrggbb' as it
+            appears in a trace of the same image, or a gradient written as its stop
+            colours joined by '>'. An optional '=' says what the group becomes:
+            '=#rrggbb' a flat colour, '=@n' its n-th member (1-based; a gradient there
+            is refitted over the whole group); without it, the member covering the most
+            of the image. Example: '#c0392b,#e74c3c;#f00>#00f,#0a0=@1'. A group costs
+            one extra trace.
 
     Raises:
         InvalidImageError: the input cannot be decoded.
@@ -173,6 +184,7 @@ def trace_rgba(
     content_units: bool = False,
     harmonize: bool = True,
     harmonize_threshold: float = 0.92,
+    merge_colors: str = "",
 ) -> Traced:
     """Trace raw straight-RGBA8 pixels (row-major, tightly packed) to SVG.
 
@@ -250,6 +262,16 @@ def trace_rgba(
             Shape-equivalence threshold for harmonization: the outline similarity (IoU
             after affine normalisation) above which two marks count as the same shape.
             Must be >= 0 and <= 1.
+        merge_colors:
+            Colour groups: fills to draw as one, so the shapes between them join rather
+            than being recoloured. Empty (the default) changes nothing. Groups are
+            separated by ';' and members by ','; a member is a colour '#rrggbb' as it
+            appears in a trace of the same image, or a gradient written as its stop
+            colours joined by '>'. An optional '=' says what the group becomes:
+            '=#rrggbb' a flat colour, '=@n' its n-th member (1-based; a gradient there
+            is refitted over the whole group); without it, the member covering the most
+            of the image. Example: '#c0392b,#e74c3c;#f00>#00f,#0a0=@1'. A group costs
+            one extra trace.
 
     The SVG is byte-identical to ``trace`` on a PNG holding the same pixels.
     """

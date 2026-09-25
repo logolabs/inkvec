@@ -122,6 +122,17 @@ public struct InkvecOptions: Codable, Hashable, Sendable {
     /// A number >= 0 and <= 1. Default: `0.92`.
     public var harmonizeThreshold: Double?
 
+    /// Colour groups: fills to draw as one, so the shapes between them join rather than being
+    /// recoloured. Empty (the default) changes nothing. Groups are separated by ';' and members
+    /// by ','; a member is a colour '#rrggbb' as it appears in a trace of the same image, or a
+    /// gradient written as its stop colours joined by '>'. An optional '=' says what the group
+    /// becomes: '=#rrggbb' a flat colour, '=@n' its n-th member (1-based; a gradient there is
+    /// refitted over the whole group); without it, the member covering the most of the image.
+    /// Example: '#c0392b,#e74c3c;#f00>#00f,#0a0=@1'. A group costs one extra trace.
+    ///
+    /// Default: `""`.
+    public var mergeColors: String?
+
     /// Options with the given values; every option left out (nil) takes its default.
     public init(
         precision: Double? = nil,
@@ -138,7 +149,8 @@ public struct InkvecOptions: Codable, Hashable, Sendable {
         cutout: Bool? = nil,
         contentUnits: Bool? = nil,
         harmonize: Bool? = nil,
-        harmonizeThreshold: Double? = nil
+        harmonizeThreshold: Double? = nil,
+        mergeColors: String? = nil
     ) {
         self.precision = precision
         self.minArea = minArea
@@ -155,6 +167,7 @@ public struct InkvecOptions: Codable, Hashable, Sendable {
         self.contentUnits = contentUnits
         self.harmonize = harmonize
         self.harmonizeThreshold = harmonizeThreshold
+        self.mergeColors = mergeColors
     }
 
     enum CodingKeys: String, CodingKey {
@@ -173,5 +186,6 @@ public struct InkvecOptions: Codable, Hashable, Sendable {
         case contentUnits = "content_units"
         case harmonize
         case harmonizeThreshold = "harmonize_threshold"
+        case mergeColors = "merge_colors"
     }
 }

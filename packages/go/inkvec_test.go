@@ -108,7 +108,7 @@ func TestOptionsStructMatchesTheSchema(t *testing.T) {
 	if err := json.Unmarshal([]byte(OptionsSchema()), &schema); err != nil {
 		t.Fatal(err)
 	}
-	kinds := map[reflect.Kind]string{reflect.Bool: "boolean", reflect.Int: "integer", reflect.Float64: "number"}
+	kinds := map[reflect.Kind]string{reflect.Bool: "boolean", reflect.Int: "integer", reflect.Float64: "number", reflect.String: "string"}
 	fields := map[string]bool{}
 	rt := reflect.TypeFor[Options]()
 	for i := range rt.NumField() {

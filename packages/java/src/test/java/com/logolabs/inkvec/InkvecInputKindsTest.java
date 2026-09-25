@@ -47,6 +47,14 @@ final class InkvecInputKindsTest {
     }
 
     @Test
+    void stringOptionsAreWrittenAsEscapedJson() {
+        String json = InkvecOptions.builder().mergeColors("#f00>#00f,#0a0=@1;\"q\"\\\n\u0001").build().toJson();
+        assertTrue(
+            json.contains("\"merge_colors\":\"#f00>#00f,#0a0=@1;\\\"q\\\"\\\\\\n\\u0001\""), json);
+        assertTrue(InkvecOptions.defaults().toJson().contains("\"merge_colors\":\"\""));
+    }
+
+    @Test
     void defaultsBuilderReproducesNoOptionsTrace() {
         byte[] png = ContractSupport.input(ContractSupport.caseByName("tiny_defaults"));
         TraceResult fromDefaults = Inkvec.trace(png, InkvecOptions.defaults());
@@ -77,7 +85,7 @@ final class InkvecInputKindsTest {
         for (String name : new String[] {
             "precision", "min_area", "colors", "merge", "max_dim", "time_budget", "margin",
             "no_background", "minify", "native_alpha", "cutout", "content_units", "harmonize",
-            "harmonize_threshold"
+            "harmonize_threshold", "merge_colors"
         }) {
             assertTrue(schema.contains("\"" + name + "\""), name + " missing from schema");
             assertTrue(defaults.contains("\"" + name + "\""), name + " missing from defaults");

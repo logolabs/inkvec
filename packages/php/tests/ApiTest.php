@@ -65,6 +65,7 @@ final class ApiTest extends TestCase
             contentUnits: false,
             harmonize: true,
             harmonizeThreshold: 0.92,
+            mergeColors: '',
         ))->toArray());
         self::assertSame(array_keys($schema['properties']), $typed);
     }

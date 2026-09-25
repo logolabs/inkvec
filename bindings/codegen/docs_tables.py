@@ -9,6 +9,7 @@ Each file keeps its own prose; only the region between the two markers below is 
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from schema import ROOT, Option
@@ -29,7 +30,7 @@ TARGETS = [
     ROOT / "packages" / "go" / "README.md",
 ]
 
-KIND_NAMES = {"boolean": "bool", "integer": "integer", "number": "number"}
+KIND_NAMES = {"boolean": "bool", "integer": "integer", "number": "number", "string": "string"}
 
 
 def _default(o: Option) -> str:
@@ -37,6 +38,9 @@ def _default(o: Option) -> str:
         return "true" if o.default else "false"
     if o.kind == "integer":
         return str(int(o.default))
+    if o.kind == "string":
+        # As JSON, so the empty string reads `""`; a table cell cannot hold a bare `|`.
+        return json.dumps(o.default).replace("|", "\\|")
     return repr(float(o.default))
 
 

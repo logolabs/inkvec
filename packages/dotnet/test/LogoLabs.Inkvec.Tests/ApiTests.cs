@@ -183,6 +183,15 @@ public class ApiTests
         Assert.Null(o.Colors);
         Assert.Null(o.NativeAlpha);
         Assert.Null(o.HarmonizeThreshold);
+        Assert.Null(o.MergeColors);
+    }
+
+    [Fact]
+    public void InkvecOptions_ToJson_EscapesStrings()
+    {
+        var o = new InkvecOptions { MergeColors = "#f00>#00f,#0a0=@1;\"q\"\\\n\u0001" };
+        Assert.Equal("{\"merge_colors\":\"#f00>#00f,#0a0=@1;\\\"q\\\"\\\\\\n\\u0001\"}", o.ToJson());
+        Assert.Equal("{\"merge_colors\":\"\"}", new InkvecOptions { MergeColors = "" }.ToJson());
     }
 
     [Fact]

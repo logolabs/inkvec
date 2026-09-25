@@ -430,6 +430,13 @@ it, maturin reads it for the Python wheel (`dynamic = ["version"]`), `inkvec_ver
 `packages/npm/build.mjs` writes it into the npm package's `package.json`. A binding added later
 (Maven, NuGet, ...) should read it the same way rather than carry its own.
 
+The files that cannot read it hold a copy: the npm package (`packages/npm/build.mjs`), the
+Maven POM (`packages/java/build.py`), the OpenAPI document (`bindings/codegen/generate.py`),
+both wasm-pack packages under `web/`, Inkvec Studio's manifests (its `src-tauri` is a
+workspace of its own) and both `Cargo.lock` files. `python tools/check_versions.py` lists every
+copy that disagrees with `Cargo.toml` and names the tool that rewrites it; CI runs it, and the
+release job runs it with `--tag`.
+
 ## The contract fixtures
 
 `bindings/contract/`:

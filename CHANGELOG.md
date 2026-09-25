@@ -7,6 +7,153 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+### Added
+
+- **Colour groups** (`--merge-colors`, and `merge_colors` in `inkvec::Options`, so every
+  binding and the HTTP service have it from the generated schema): draw several fills as
+  one, so the shapes between them join instead of staying separate faces with a traced
+  boundary between them. `'#c0392b,#e74c3c;#2c3e50,#34495e'` merges each `;`-separated
+  group into its most-used member, `=#hex` into a named colour, `=@n` into the n-th
+  member; a gradient is its stops joined by `>`, and a group whose target is a gradient
+  becomes one gradient of that kind fitted to each merged region's own pixels. Colours
+  are matched to the nearest fill of a first trace, so a colour picked off the output
+  works; the merged image is traced again, so a run with groups costs one extra trace
+  and a run without them is unchanged (246/246 gate icons byte-identical). The code
+  generators learned string options for it (Python, TypeScript, Go, Swift, PHP, C#,
+  Java, OpenAPI), and the server passes string query parameters through instead of
+  dropping them.
+- **`--uncertainty <file>`** (and `--uncertainty-k`, default 2): also write where each
+  traced boundary could be, as an SVG that overlays the trace -- every edge a band k
+  sigma either side, sigma measured from the pixels, mean and max sigma as data
+  attributes. Colour path only; the trace itself is unchanged. On a clean 128-px emoji
+  the median edge sigma is 0.09 px; the same image as JPEG q20 reads 0.50 px.
+- **`inkvec-fab`**, a new crate, and **Studio's Fabricate tab**: prepare any SVG for a
+  cutter, in millimetres. Modes: one colour, layered vinyl (each colour runs under the
+  ones above by the bleed, with registration marks), inlay, print-then-cut sticker
+  (offset contour, print bleed), stencil (islands bridged), and Lines (pen, scoring
+  blade or laser line: each line drawn once along its centre, strokes in the file used
+  as drawn, filled shapes through the tracer's centreline analysis with a per-region fit
+  check). Kerf compensation, mirror for heat-transfer vinyl, weed border, thin-part
+  removal, a size-check square, file units in mm or pixels at 96 or 72 per inch.
+  Preflight draws what will go wrong (parts and gaps narrower than the minimum feature,
+  specks, gradients and translucency, node counts) before it goes wrong. Output: an SVG
+  per sheet and a combined file (contours refitted as lines and cubics), DXF R12 with
+  curves as true arcs (biarcs written as polyline bulges), GRBL G-code with G2/G3 arcs
+  (laser mode, power, speed, passes, holes first), and dogbone reliefs at inside corners
+  for a router bit, with a warning where the bit cannot reach.
+- **Studio: colour groups in the palette**. The palette shows flat and gradient inks
+  (gradient inks with the same stops count once, and each ink's share is measured from
+  a render, not credited to the nearest flat colour). Drag an ink onto another to group
+  them, onto a group to join it, out to leave; without a pointer, tick inks and press
+  Merge. A group becomes its most-used member, a chosen member (a gradient member is
+  extended over the group) or a custom colour, and re-traces like any control.
+  Suggestions are proposed from each full trace (complete-linkage clustering at dE00
+  2.0; gradients compared by their stops) and never applied until accepted. Groups
+  belong to the open image: presets, saved preferences and batch never carry them.
+  Hovering or focusing an ink, group or member singles its fills out in the vector pane.
+- **Studio: Certainty view** beside Fill, Wireframe, Anchors and Handles: the engine's
+  confidence bands over the trace, coloured sure (under 0.1 px), soft (under 0.3 px)
+  and unsure, with a legend.
+- **Studio: Auto or Custom on every image opened**. The automatic trace starts as
+  before, and a card over the stage offers to keep it or customise; Custom walks
+  through what the image is (live previews of each preset), clean-up (for lossy or
+  noisy input), colours (the colour-groups palette), detail and shape, side by side
+  with Auto's trace. "Auto chose" explains what Auto used and offers one-click
+  alternatives. Settings has "When an image is opened": Ask, Auto only, or Custom.
+- **Studio: rebuild a messy SVG by re-tracing it**. Vectorize opens an SVG, and the
+  Minify tab has "Rebuild it clean by re-tracing": the SVG is rendered at 1024 px with
+  exact edge coverage and traced as any other source. On 20 emoji run through VTracer
+  0.6 the rebuild has 40% fewer nodes and 25% fewer paths, and is as close to the
+  artist's file or closer (mean dE00 1.393 -> 1.356).
+- **Studio: a "Trace transparency" switch** (Colour group), on by default as before; off
+  composites onto a matte first.
+
+### Changed
+
+- **Side-by-side fills no longer show a seam**. Two fills that share an edge, painted
+  next to each other over a third colour, each cover half of the edge pixel, and
+  composited in turn they let a quarter of the ground through: a pale hairline along
+  every such edge (pie slices, emoji shading). The face painted first now reaches half
+  a pixel under the opaque face painted over it, tapering to the junctions and only
+  where the upper face is thick enough to hide it. Seam pixels on the screen set fall
+  65%; the gate's dE00 improves 2.6% for 1% more bytes. Traces change on purpose
+  (`bindings/contract/cases.json` re-recorded); `INKVEC_UNDERLAP=0` switches it off for
+  comparison.
+- **The clear ground does not count towards the colour cap**. Traced natively, a
+  transparent image's clear ground is an ink of its own, and `--colors 4` left three for
+  the artwork. On 10 transparent emoji at `--colors 4` mean dE00 goes 0.457 -> 0.186,
+  better than compositing onto a matte (0.230). Nothing changes below the cap
+  (246/246 gate icons byte-identical).
+- **Faster, with identical output** (each change checked by SHA-256 of the traced SVGs,
+  at several thread counts, against the build before it):
+  - the multimodel curve fit fills its dynamic program in parallel blocks, replayed in
+    order: on 16 large images `fit_dp` 16.2 -> 10.8 s and the ring repair 14.5 -> 5.1 s;
+  - the palette reads only the pixels it samples and reads its settings once per
+    palette (7.3 -> 2.2 s over the same images), and the boundary solve clears and scans
+    only the cells it filled (5.3 -> 3.3 s);
+  - Studio measures the quality report in parallel and outside the trace slot, decodes
+    each source once, and traces a small image's draft once instead of twice; toggling
+    Minify or Margin no longer re-measures the drawing (and Margin no longer moves the
+    report's numbers). The main window appears about 0.4 s sooner;
+  - Studio's viewer redraws once per result, builds overlays only when they are shown,
+    paints anchors on a canvas, and fetches the certainty bands on demand: a result on a
+    325 KB drawing is applied in about 25 ms instead of 0.6-1.1 s, and a zoom step
+    with anchors on in about 25 ms instead of about 270 ms.
+- **`--restore auto` with no restorer to run** (a build without the network, or weights
+  that are not on disk) traces directly and says why in the report lines, instead of
+  failing the run. `--restore on` still fails without one.
+
+### Fixed
+
+- **Studio**: opening a file from the system's context menu, or launching the app a
+  second time with a file, now opens that file.
+- **Studio**: the wireframe stays one pixel wide at every zoom (it was as wide as the
+  zoom factor).
+
+## [0.1.7] - 2026-09-25
+
+A fix release: minifying anything the 0.1.6 tracer wrote was broken.
+
+### Added
+
+- **`svgmin` in the WebAssembly build**: the SVG minifier reachable from a browser.
+  `svgmin(svg, lossless, tolerance_px, judge, corner_degrees, decimals, document)` returns
+  `{ svg, report }`; `lossless` picks `inkvec_svgmin::compact` (no segment moved, the picture
+  out is the picture in) over `minify` (each path refitted within the tolerance), and the
+  report carries `bytesBefore`/`bytesAfter` measured in UTF-8 bytes. Invalid input throws an
+  `Error` with `code = "invalid_svg"`. The committed `web/pkg/` needs a rebuild to expose it.
+
+### Changed
+
+- Dependencies: kurbo 0.13, resvg 0.48, sha2 0.11, roxmltree 0.21, tower-http 0.7,
+  svgtypes 0.16.
+- **Releases are drafts**. A tag push builds every archive and installer into a draft
+  GitHub release that a maintainer reviews and publishes; nothing in CI publishes it.
+  The two workflows that attach files to the same release (the C libraries, the Swift
+  XCFramework) keep it a draft as well -- without that, the action they use publishes
+  any draft it finds for the tag once its upload is done.
+- **Version copies are checked**. `tools/check_versions.py` fails CI when any file that
+  holds its own copy of the version (the npm package and its lock, the Maven POM, the
+  OpenAPI document, both wasm-pack packages, Inkvec Studio's manifests, both Cargo.lock
+  files, the sibling requirements in `[workspace.dependencies]`) disagrees with Cargo.toml,
+  and the release job refuses a tag that names another version. 0.1.6 went out with the
+  npm package and the POM still at 0.1.5; they are at 0.1.7 now.
+
+### Fixed
+
+- **Minifying Inkvec's own output** (`inkvec-svgmin`, Studio's Minify tab, the `.min.svg`
+  export copy, the WebAssembly `svgmin`). Since 0.1.6 every trace
+  carries a header inside `<svg>` whose `<metadata>` block has an `rdf:about=""`
+  attribute. The document pass removed the `<metadata>` element whole *and* scheduled the
+  removal of that empty attribute inside it; edits are byte ranges applied back to front,
+  so the inner one shifted the text the outer one then cut, and the cut ran into the next
+  element. The first path lost the start of its tag: the file was not XML any more, or a
+  shape was gone. On the 246 regression-gate traces, every one was broken before and none
+  is after. Nothing inside an element that is removed whole is edited now, and when two
+  edits overlap only the enclosing one is applied.
+- **`inkvec-restore`** builds against sha2 0.11 (the weights digest is hex-encoded by
+  hand; the string is the same).
+
 ## [0.1.6] - 2026-09-22
 
 ### Added

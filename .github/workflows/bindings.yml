@@ -455,8 +455,11 @@ jobs:
           merge-multiple: true
       - name: Checksums
         run: cd out && sha256sum -- * > SHA256SUMS-c
+      # `draft: true` on purpose: the release stays a draft until a maintainer publishes
+      # it (see release.yml). Leaving it out makes the action publish the draft it finds.
       - uses: softprops/action-gh-release@v2
         with:
+          draft: true
           tag_name: ${{ github.ref_name }}
           fail_on_unmatched_files: true
           files: |

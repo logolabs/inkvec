@@ -97,7 +97,8 @@ pub struct Args {
     pub sr_command: Option<String>,
     /// The trained restorer: removes JPEG, WebP and decoder damage at the input's own size
     /// before tracing. Off by default for the same reason SR is: on clean input it costs a
-    /// little colour accuracy.
+    /// little colour accuracy. `Auto` with no restorer to run traces directly and says so
+    /// in the stats; `On` is an error then.
     pub restore: inkvec_restore::Mode,
     /// Interior residual above which `Auto` restores.
     pub restore_threshold: f64,
@@ -385,7 +386,9 @@ RESTORER PRE-PASS:
                             on    always restore first
                             auto  trace, measure the fit, restore and retrace only
                                   if the trace disagrees with the input where it
-                                  claims to be flat
+                                  claims to be flat; with no restorer to run (a
+                                  build without the network, no weights) it
+                                  traces directly and says so, where `on` fails
         --restore-threshold <f>   Interior residual above which auto restores
                             [default: 0.5]
         --restore-weights <file>  The built-in restorer's network: an .onnx export,

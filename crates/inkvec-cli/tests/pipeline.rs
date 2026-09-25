@@ -319,3 +319,39 @@ fn max_dim_cap_keeps_arrival_size_in_attributes() {
     let svg0 = post_process(&no_cap, t0.svg, t0.width, t0.height);
     assert!(svg0.contains("viewBox=\"-0.5 -0.5 128 96\""), "{svg0}");
 }
+
+/// Weights that cannot be loaded: no restorer for a build without the network, and a failed
+/// load for one with it, so both builds take the same path.
+fn no_restorer(mode: inkvec_restore::Mode) -> Args {
+    Args {
+        restore: mode,
+        // Below any residual, so `auto` always decides to restore.
+        restore_threshold: -1.0,
+        restore_weights: Some("no-such-dir/restorer.onnx".into()),
+        ..Args::default()
+    }
+}
+
+/// `--restore auto` asks for the restorer only where it helps, so a binary that cannot
+/// restore traces the input as it is and says why, instead of failing the whole trace.
+#[test]
+fn restore_auto_without_a_restorer_traces_directly() {
+    let args = no_restorer(inkvec_restore::Mode::Auto);
+    let t = trace_image(square(), &args).expect("auto falls back to tracing directly");
+    let note = t
+        .stats
+        .iter()
+        .find(|l| l.starts_with("restore"))
+        .expect("a restore line");
+    assert!(note.contains("no restorer is available"), "{note}");
+    assert!(note.contains("traced directly"), "{note}");
+    let direct = trace_image(square(), &Args::default()).expect("trace succeeds");
+    assert_eq!(t.svg, direct.svg, "the fallback is the plain trace");
+}
+
+/// `--restore on` asked for the restorer outright: without one it is still an error.
+#[test]
+fn restore_on_without_a_restorer_is_an_error() {
+    let args = no_restorer(inkvec_restore::Mode::On);
+    assert!(trace_image(square(), &args).is_err());
+}

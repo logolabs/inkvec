@@ -31,7 +31,7 @@ Then depend on what you just installed:
 <dependency>
   <groupId>com.logolabs</groupId>
   <artifactId>inkvec</artifactId>
-  <version>0.1.5</version>
+  <version>0.1.7</version>
 </dependency>
 ```
 

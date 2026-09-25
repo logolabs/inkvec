@@ -538,6 +538,11 @@ jobs:
           name: release-assets
           path: out
 
+      # A tag that names another version than Cargo.toml, or a copy of the version left
+      # behind (npm, Maven, Studio, the lockfiles), stops the release before it exists.
+      - name: The tag and every version file agree with Cargo.toml
+        run: python3 tools/check_versions.py --tag "${GITHUB_REF_NAME}"
+
       - name: Extract matching CHANGELOG section
         shell: bash
         run: |
@@ -622,9 +627,16 @@ jobs:
       # smaller release, not a broken workflow. Every archive that *is* present still gets
       # its own checksum, and the platform table below still names what should exist; a
       # human reads the run to notice what a glob match count no longer enforces.
+      #
+      # `draft: true`: a tag push never publishes. A maintainer reads the draft (notes,
+      # the platform table, which archives made it) and presses Publish on GitHub. The
+      # other workflows that attach to this release (bindings.yml `release-c`, swift.yml
+      # `release`) pass `draft: true` as well: without it, softprops/action-gh-release
+      # un-drafts any draft it finds for the tag once its own upload is done, which is
+      # how a half-finished release once went public mid-fix.
       - uses: softprops/action-gh-release@v2
         with:
-          draft: false
+          draft: true
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           body_path: notes.md

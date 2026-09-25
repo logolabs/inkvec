@@ -156,6 +156,20 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release -p inkvec-cli --features restore-model
 
+  versions:
+    # One version, in Cargo.toml; the npm package, the POM, the OpenAPI document, both
+    # wasm-pack packages, Inkvec Studio and both lockfiles each hold a copy. This fails when
+    # any copy disagrees, which is how the 0.1.6 tag shipped a 0.1.5 npm package.json and
+    # POM. The fix is named in tools/check_versions.py's docstring.
+    name: versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python tools/check_versions.py
+
   licences:
     # docs/THIRD_PARTY.md is generated from `cargo tree`; this fails if it drifts from
     # the actual dependency graph (see tools/third_party.py).

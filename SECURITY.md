@@ -14,9 +14,11 @@ private vulnerability reporting:
    repository.
 2. Click "Report a vulnerability" to open a private advisory.
 
-If you cannot use GitHub's reporting flow for some reason, contact the maintainers at
-**security@\<domain\>** (placeholder — the maintainer will fill in a real address before
-launch).
+The report is visible only to you and the maintainers until an advisory is published.
+This is the one channel for security reports: there is no security mailbox. If the
+button is missing or you cannot use it, open a public issue that says only that you have
+a security report and asks a maintainer to contact you — no details, no reproduction —
+and we will arrange a private channel from there.
 
 Please include:
 

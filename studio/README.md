@@ -43,7 +43,7 @@ them the app will not start, because it imports the DLL at load.
 
 ## What it does
 
-Three tabs.
+Four tabs.
 
 **Vectorize** is where 90% of the time is spent. A split comparison viewer — side by side,
 wipe, or A/B with hold-Space to flick — over one shared pan and zoom, with wireframe,
@@ -85,6 +85,15 @@ showing empty bars.
 milliseconds, so the tab is instant and the result *is* the screen. Its tolerance control
 is a sentence — *nothing moves more than 0.1 px when the drawing is 1024 px wide* — with
 the numbers inside it.
+
+**Fabricate** prepares a drawing for a cutter, in millimetres, through `inkvec-fab`: one
+colour, layered vinyl (each colour running under the ones above by the bleed, with
+registration marks), inlay, print-then-cut sticker, stencil, or Lines for a pen, a scoring
+blade or a laser line. The stage shows the sheets with what preflight found drawn over them
+(parts and gaps narrower than the material's minimum feature, specks, translucency); the
+cutting card holds kerf, mirror, weed border, a router bit's diameter for dogbones, and the
+size-check square; Save writes an SVG per sheet and a combined file, and optionally DXF and
+G-code.
 
 **Batch** takes a folder and a preset, writes one SVG per file, and keeps failures visible
 after the run rather than letting them scroll away. Any single row can be given a preset of
@@ -234,6 +243,21 @@ The backend tests are the interesting ones. They trace real images, check the me
 dE00 against the eight Sharma/Wu/Dalal CIEDE2000 reference pairs, assert that a clean
 trace reports **no** losses (a regression test for a heuristic that once claimed 469 lost
 features on a 0.07 dE00 trace), and assert that the honesty panel's copy never apologises.
+None of them reads or writes the real preferences or the installed denoiser: the functions
+that touch a file take its path (`save_at`, `load_at`, `reset_at`, `status_at`), and the
+tests pass temporary ones.
+
+To run a built app without touching your own setup, point it at scratch directories:
+
+```sh
+INKVEC_STUDIO_CONFIG_DIR=/tmp/studio-prefs INKVEC_STUDIO_MODEL_DIR=/tmp/studio-model  ./inkvec-studio
+```
+
+`preferences.json` then lives in the first, and `restorer.onnx` is looked for (and
+downloaded to) the second only; with the second set and empty, the denoiser reads as not
+installed rather than falling back to the model in your cache. Settings' *Add to PATH*
+and the right-click entry still write where they say they do, so leave those alone in a
+smoke test.
 
 ## Known gaps
 

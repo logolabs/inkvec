@@ -264,7 +264,8 @@ pub fn run(
                 std::thread::sleep(std::time::Duration::from_millis(60));
                 continue;
             }
-            if let Some(slot) = pipeline.batch_row(|| controls.is_cancelled() || controls.is_paused())
+            if let Some(slot) =
+                pipeline.batch_row(|| controls.is_cancelled() || controls.is_paused())
             {
                 break Some(slot);
             }
@@ -670,7 +671,11 @@ mod tests {
         let dir = workspace("slot");
         let out = dir.join("svg");
         for i in 0..2 {
-            std::fs::write(dir.join(format!("logo-{i}.png")), png([20, 69, 63, 255], 32)).unwrap();
+            std::fs::write(
+                dir.join(format!("logo-{i}.png")),
+                png([20, 69, 63, 255], 32),
+            )
+            .unwrap();
         }
         let plan = Plan {
             files: scan(&dir).unwrap(),
@@ -719,7 +724,11 @@ mod tests {
         let rows = run_handle.join().expect("the run finished");
         assert_eq!(rows.len(), 2);
         for row in &rows {
-            assert_eq!(row.state, RowState::Done, "{row:?} — a row that waited must still run");
+            assert_eq!(
+                row.state,
+                RowState::Done,
+                "{row:?} — a row that waited must still run"
+            );
             assert!(row.destination.exists());
         }
         let _ = std::fs::remove_dir_all(&dir);

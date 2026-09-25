@@ -109,6 +109,9 @@ use crate::{adjust_vertices_at, FitConfig, FittedPath, Segmentation, PARAMS_LINE
 use inkvec_core::{Point, Polyline, Vec2};
 use kurbo::{CubicBez, Line as KLine, ParamCurveNearest, Point as KPoint};
 
+mod scan;
+use scan::{SpanScorer, Table};
+
 /// Parameters a cubic adds to the document: two control points and an endpoint.
 pub const PARAMS_CUBIC: f64 = 6.0;
 
@@ -573,209 +576,26 @@ fn solve_open(
     max_span: usize,
 ) -> Solution {
     let n = pts.len();
-    let mut best = vec![f64::INFINITY; n];
-    let mut from = vec![usize::MAX; n];
-    let mut kind = vec![SegKind::Line; n];
-    let mut arms: Vec<Option<(f64, f64)>> = vec![None; n];
-    let mut tans: Vec<Option<(Vec2, Vec2)>> = vec![None; n];
-    #[allow(clippy::type_complexity)]
-    let mut arcs: Vec<Option<(f64, f64, f64, bool, bool)>> = vec![None; n];
-    best[0] = 0.0;
-    let cubic_floor = cfg.lambda * params_cubic();
-    let arc_floor = cfg.lambda * crate::curves::PARAMS_ARC;
-    let circles = arcs_enabled().then(|| CirclePrefix::new(pts, sigma));
-
-    for i in 0..n - 1 {
-        if !best[i].is_finite() {
-            continue;
+    // Long polylines are filled in parallel blocks of starts, onto whatever threads the
+    // pool has free; the result is the sequential program's, bit for bit (see `scan`).
+    let threads = rayon::current_num_threads();
+    let parallel = n >= scan::DP_PAR_MIN_POINTS && threads > 1;
+    let _running = scan::BusyThreads::claim(1);
+    let tab = SpanScorer::new(pts, sigma, tan, pre, cfg, joins_at_ends).fill(max_span, |left| {
+        if parallel {
+            scan::fork_width(left, threads)
+        } else {
+            1
         }
-        // Leaving `i` makes it a vertex; that is when its turn is paid.
-        let base = best[i] + if i > 0 { vertex_cost(tan, i, cfg) } else { 0.0 };
-        let t0 = tan.outgoing[i];
-        let mut over = 0usize;
-
-        for j in i + 1..(i.saturating_add(max_span).saturating_add(1)).min(n) {
-            let chi2_l = pre.chi2_line(i, j);
-            let line_plain = line_cost_terms(pts, tan, i, j, chi2_l, cfg, joins_at_ends);
-            // The circle is asked for first, because what it finds is evidence about the
-            // line: see `bow_penalty`. It is O(1) from the moment sums, so asking costs
-            // nothing but the guards.
-            // The price floor is a proof, not a heuristic: an arc costs at least its own
-            // 5 lambda, so a span the line already covers for less can never take one.
-            let circle = if arcs_enabled()
-                && j >= i + 2
-                && (line_plain > arc_floor || chi2_l > (j - i) as f64)
-            {
-                circles
-                    .as_ref()
-                    .and_then(|pre| try_arc(pts, tan, pre, i, j, cfg, joins_at_ends))
-            } else {
-                None
-            };
-            let line = line_plain
-                + circle
-                    .as_ref()
-                    .map_or(0.0, |f| bow_penalty(chi2_l, f.chi2, j - i));
-            let mut c = base + line;
-            let mut k = SegKind::Line;
-            let mut a = None;
-            let mut tv: Option<(Vec2, Vec2)> = None;
-            let mut arc: Option<(f64, f64, f64, bool, bool)> = None;
-            let mut chi2_a = f64::INFINITY;
-
-            // A cubic needs an interior point to be worth anything, and costs `6λ` before
-            // any residual: if the line already costs less, the residual is never
-            // evaluated. This is the O(1) pre-check that keeps straight runs cheap.
-            let mut chi2_c = f64::INFINITY;
-            let mut cubic_tried = false;
-            if j >= i + 2 && line > cubic_floor {
-                cubic_tried = true;
-                if let Some((chi2, d0, d1)) = best_cubic(
-                    pts,
-                    sigma,
-                    &pre.s,
-                    i,
-                    j,
-                    t0,
-                    tan.incoming[j],
-                    pre.raw_moments(i, j),
-                    true,
-                ) {
-                    chi2_c = chi2;
-                    let chord = (pts[j] - pts[i]).norm();
-                    let cb = Cubic::from_arms(pts[i], pts[j], t0, tan.incoming[j], chord, d0, d1);
-                    let wobble = cb.wobble_penalty(cfg.lambda);
-                    let cc = base + 0.5 * chi2 + cubic_floor + wobble;
-                    if cc < c {
-                        c = cc;
-                        k = SegKind::Cubic;
-                        a = Some((d0, d1));
-                    }
-                } else {
-                    cubic_tried = false; // no admissible arms: not evidence of hopelessness
-                }
-
-                // The same span with the tangent directions fitted rather than
-                // inherited. It gives up G1 with its neighbours, so it pays for the two
-                // breaks it makes, and only wins if the residual it saves is worth more
-                // than the smoothness it costs.
-                if let Some(f) = try_free_cubic(
-                    pts,
-                    sigma,
-                    &pre.s,
-                    i,
-                    j,
-                    t0,
-                    tan.incoming[j],
-                    cfg.lambda,
-                    true,
-                ) {
-                    let cc = base + 0.5 * f.chi2 + cubic_floor + f.brk;
-                    if cc < c {
-                        c = cc;
-                        k = SegKind::Cubic;
-                        a = Some(f.arms);
-                        tv = Some(f.tans);
-                    }
-                    if f.chi2 < chi2_c {
-                        chi2_c = f.chi2;
-                    }
-                }
-            }
-
-            // The arc, tried on the same terms as the cubic: only once the line is
-            // already paying more than the arc's price, so straight runs never fit a circle.
-            if let Some(f) = &circle {
-                chi2_a = f.chi2;
-                let cc = base + f.cost;
-                if cc < c {
-                    c = cc;
-                    k = SegKind::Arc;
-                    a = None;
-                    tv = Some(f.tans);
-                    arc = Some((f.radius, f.radius, 0.0, f.large_arc, f.sweep));
-                }
-            }
-
-            // An ellipse is asked about only where a circle has not already described the
-            // span — it is two parameters dearer, and a boundary a circle fits is not an
-            // ellipse's to claim. "Has not" includes the circle declining outright: a
-            // strongly elliptical run is exactly the shape whose angles about a *circle's*
-            // centre do not advance monotonically, so the circular candidate returns
-            // nothing and the ellipse has to be reached anyway.
-            let circle_fits = circle
-                .as_ref()
-                .is_some_and(|f| f.chi2 <= 4.0 * (j - i) as f64);
-            // And the same proof, sharpened: what an ellipse has to beat is the best
-            // candidate so far, not the line. A cubic that already covers the span for
-            // less than an ellipse's seven lambda settles it without a conic being fitted
-            // at all, which is most spans of a letterform — measured on a 768-px wordmark,
-            // the ellipse was 635 ms of the fitter's 1439.
-            let ellipse_floor = cfg.lambda * crate::curves::PARAMS_ELLIPTICAL_ARC;
-            if arcs_enabled()
-                && ellipses_enabled()
-                && !circle_fits
-                && j >= i + 2
-                && c - base > ellipse_floor
-            {
-                if let Some(e) = try_ellipse(pts, sigma, tan, i, j, cfg, joins_at_ends) {
-                    let cc = base + e.cost;
-                    if cc < c {
-                        c = cc;
-                        k = SegKind::Arc;
-                        a = None;
-                        tv = Some(e.tans);
-                        arc = Some((e.rx, e.ry, e.phi, e.large_arc, e.sweep));
-                    }
-                }
-            }
-
-            let _ = chi2_a;
-
-            if c < best[j] {
-                best[j] = c;
-                from[j] = i;
-                kind[j] = k;
-                arms[j] = a;
-                tans[j] = tv;
-                arcs[j] = arc;
-            }
-
-            // Why does a line win where the boundary curves? Dumps the two models' own
-            // numbers for every span considered, so the answer comes from the program
-            // rather than from a story about it.
-            if dp_debug() && j >= i + 2 {
-                println!(
-                    "DP {i} {j} span {} line_chi2 {:.3} cubic_chi2 {:.3} line_cost {:.3} cubic_cost {:.3} chose {}",
-                    j - i,
-                    chi2_l,
-                    chi2_c,
-                    line,
-                    if chi2_c.is_finite() {
-                        0.5 * chi2_c + cubic_floor
-                    } else {
-                        f64::INFINITY
-                    },
-                    if matches!(k, SegKind::Cubic) { "cubic" } else { "line" }
-                );
-            }
-
-            // Search cut-off derived from the objective (see `optimal_polygon`): covering
-            // `i..j` with the finest segmentation costs at least `2λ(j−i)`, so once both
-            // models' fidelity terms alone exceed that by the slack, no longer span from
-            // `i` can win. Both models must be over the bound — a line blows up at the
-            // first bend while the cubic is still fine.
-            let floor = PRUNE_SLACK * cfg.lambda * PARAMS_LINE * (j - i) as f64;
-            if 0.5 * chi2_l > floor && cubic_tried && 0.5 * chi2_c > floor {
-                over += 1;
-                if over >= PRUNE_PATIENCE {
-                    break;
-                }
-            } else {
-                over = 0;
-            }
-        }
-    }
+    });
+    let Table {
+        best,
+        from,
+        kind,
+        arms,
+        tans,
+        arcs,
+    } = tab;
 
     let mut vertices = Vec::new();
     let mut kinds = Vec::new();

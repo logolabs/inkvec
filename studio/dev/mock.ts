@@ -96,6 +96,8 @@ const PRESETS = [
   wantsDenoiser: id === "photo-or-scan",
 }));
 
+const params = new URLSearchParams(location.search);
+
 const prefs = {
   outputFolder: null,
   theme: (new URLSearchParams(location.search).get("theme") ?? "dark") as string,
@@ -107,12 +109,32 @@ const prefs = {
   channel: "stable",
   trace: { ...DEFAULTS },
   recent: ["C:\\Brand\\northwind-logo.png", "C:\\Brand\\crest.jpg"],
-  seenFirstRun: true,
+  // `?fresh=1` is a first launch: the introduction to the wizard shows.
+  seenFirstRun: params.get("fresh") !== "1",
+  // `?onopen=auto|custom` is a remembered choice; the default asks.
+  onOpen: params.get("onopen") ?? "ask",
   saved: [],
 };
 
+// `?launch=C:/path/logo.png` is the file the app was launched with (the context menu).
+let launchPath: string | null = params.get("launch");
+
+// Every command the app sent, with when, so a test can time the open-to-trace path.
+const mockLog: { cmd: string; t: number }[] = [];
+(window as unknown as { __mockLog: typeof mockLog }).__mockLog = mockLog;
+// A second launch while the app is open: what the single-instance plugin forwards.
+(window as unknown as { __mockSecondLaunch: (path: string) => Promise<void> }).__mockSecondLaunch = (path: string) =>
+  emit("open:path", path);
+// A file dropped on the window: what the webview reports for a drag and drop.
+(window as unknown as { __mockDrop: (paths: string[]) => Promise<void> }).__mockDrop = (paths: string[]) =>
+  emit("tauri://drag-drop", { paths, position: { x: 400, y: 300 } });
+
 let current = "flat-logo.png";
+let currentLossy = false;
 let generation = 0;
+let previewGeneration = 0;
+/** The interactive trace in flight, which a preview waits behind as the backend's do. */
+let mainTrace: Promise<void> = Promise.resolve();
 // The bands of each trace, kept back as the backend keeps them and served by generation
 // through `trace_bands` when the Certainty view asks. Exposed so a test can plant a
 // drawing's bands under the generation it applies.
@@ -188,10 +210,59 @@ async function runTrace(tier: string, gen: number, settings: Record<string, unkn
   });
 }
 
+/**
+ * A preview draft, roughly as the engine would draw it: the sample's own trace, recoloured
+ * to two inks for Black & white and outlined for Line art, so the tiles differ visibly.
+ * Mock-only, like everything here.
+ */
+function previewSvg(settings: Record<string, unknown>): string {
+  const stem = current.replace(".png", "");
+  let svg = svgOf(settings.editability && current !== EMOJI ? `${stem}.edit` : stem);
+  if (settings.blackAndWhite) {
+    svg = svg.replace(/(fill|stop-color)="#([0-9a-fA-F]{6})"/g, (_m, attr: string, hex: string) => {
+      const [r, g, b] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));
+      return `${attr}="${0.2126 * r + 0.7152 * g + 0.0722 * b < 150 ? "#111111" : "#ffffff"}"`;
+    });
+  }
+  if (settings.lineArt) {
+    svg = svg.replace(/<path([^>]*?)fill="(#[0-9a-fA-F]{6})"/g, '<path$1fill="none" stroke="$2" stroke-width="3"');
+  }
+  return svg;
+}
+
+async function runPreview(gen: number, settings: Record<string, unknown>) {
+  // Behind whatever the viewer is waiting for, then about a draft's time.
+  await mainTrace;
+  if (gen !== previewGeneration) return;
+  await new Promise((r) => setTimeout(r, 260 + Math.random() * 180));
+  if (gen !== previewGeneration) return;
+  const svg = previewSvg(settings);
+  const structure = (structures as Record<string, unknown>)[`${current.replace(".png", "")}:default`];
+  await emit("preview:done", {
+    generation: gen,
+    outcome: {
+      state: "traced",
+      tier: "draft",
+      svg,
+      report: { ...report(svg, 512, structure, Boolean(settings.editability)), meanDe00: settings.blackAndWhite ? 1.8 : 0.12 },
+      palette: [],
+      losses: [],
+      worstCorner: null,
+      stages: [],
+      engineLog: [],
+      bands: null,
+      tracedPx: 512,
+      oversized: false,
+      sourcePx: [512, 512],
+    },
+  });
+}
+
 mockWindows("main");
 mockIPC(
   (cmd, args) => {
     const a = (args ?? {}) as Record<string, any>;
+    mockLog.push({ cmd, t: performance.now() });
     switch (cmd) {
       case "capabilities":
         return {
@@ -214,17 +285,56 @@ mockIPC(
         return SAMPLES.map((s) => ({ ...s, preview: png(s.file.replace(".png", "")) }));
       case "open_sample": {
         current = a.name;
+        currentLossy = false;
         const stem = a.name.replace(".png", "");
         const side = stem === "icon-64" ? 64 : stem === "peach-emoji" ? 128 : 512;
         return { name: a.name, path: null, width: side, height: side, container: "PNG", lossy: false, preview: png(stem) };
       }
-      case "open_path":
+      case "open_path": {
+        // A JPEG path opens as a lossy photo of the crest, so the Clean-up step has a reason
+        // to appear; anything else is the flat logo.
+        const jpeg = /\.jpe?g$/i.test(a.path);
+        current = jpeg ? "crest-filigree.png" : "flat-logo.png";
+        currentLossy = jpeg;
+        const name = String(a.path).split(/[\\/]/).pop() ?? "image.png";
+        return {
+          name,
+          path: a.path,
+          width: 512,
+          height: 512,
+          container: jpeg ? "JPEG" : "PNG",
+          lossy: jpeg,
+          preview: png(jpeg ? "crest-filigree" : "flat-logo"),
+        };
+      }
+      case "open_bytes":
+        // The Minify tab's "rebuild": an SVG re-traced from its render. The flat logo stands in.
         current = "flat-logo.png";
-        return { name: "northwind-logo.png", path: a.path, width: 512, height: 512, container: "PNG", lossy: false, preview: png("flat-logo") };
+        currentLossy = false;
+        return { name: a.name ?? "pasted image", path: null, width: 512, height: 512, container: "PNG", lossy: false, preview: png("flat-logo") };
       case "start_trace": {
         const gen = ++generation;
-        void runTrace(a.request.tier, gen, a.request.settings);
+        mainTrace = runTrace(a.request.tier, gen, a.request.settings);
         return gen;
+      }
+      case "start_preview": {
+        const gen = ++previewGeneration;
+        void runPreview(gen, a.request.settings);
+        return gen;
+      }
+      case "cancel_previews":
+        previewGeneration++;
+        return null;
+      case "source_facts":
+        return {
+          noiseLevels: currentLossy ? 3.4 : 0.5,
+          hasAlpha: current === EMOJI || current === "icon-64.png",
+          clearShare: current === EMOJI ? 0.41 : current === "icon-64.png" ? 0.3 : 0,
+        };
+      case "launch_path": {
+        const path = launchPath;
+        launchPath = null;
+        return path;
       }
       case "cancel_trace":
         return null;

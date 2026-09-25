@@ -10,6 +10,7 @@ import { fill, h, icon } from "../lib/dom";
 import type { SampleInfo } from "../lib/ipc";
 import { count, de00, modKey, plannedTracePx, seconds, type StageState, type Store } from "../lib/state";
 import { createViewer, type Viewer } from "../components/viewer";
+import { DESKTOP_URL, WEB } from "../lib/platform";
 
 export interface WorkspaceActions {
   openFile(): void;
@@ -426,6 +427,16 @@ function firstRun(store: Store, act: WorkspaceActions, samples: SampleInfo[]): H
               ),
             ),
           ),
+        )
+      : null,
+    // The browser build says once, here, where the full app is.
+    WEB
+      ? h(
+          "p.desktopnote.faint",
+          null,
+          "For the fastest engine, whole folders in one batch, no browser limits and offline use, get ",
+          h("a", { href: DESKTOP_URL, target: "_blank", rel: "noopener noreferrer" }, "Inkvec Studio for the desktop"),
+          ".",
         )
       : null,
   );

@@ -29,6 +29,11 @@ export const WEB: boolean = __INKVEC_WEB__;
 /** The app's name as this build is called: the browser build is the Lite one. */
 export const APP_NAME = WEB ? "Inkvec Studio Lite" : "Inkvec Studio";
 
+/** Where the desktop app is downloaded, and why the browser build recommends it. */
+export const DESKTOP_URL = "https://github.com/logolabs/inkvec/releases";
+export const DESKTOP_WHY =
+  "Inkvec Studio for Windows, macOS and Linux: the native engine is faster, it traces whole folders in one batch, has no browser memory limit (traces up to 16384 px), and works offline.";
+
 /** A file the user chose or dropped: a path on the desktop, the file itself in a browser. */
 export interface Picked {
   name: string;

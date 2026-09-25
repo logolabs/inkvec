@@ -24,6 +24,7 @@
 
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
+import { bootProgress, bootReady } from "./chrome";
 import { download } from "./files";
 
 /** -1 is reserved for putting the image back into a fresh worker, ahead of everything. */
@@ -255,9 +256,10 @@ class WebBackend {
         return this.enqueue("capabilities", 0, { supported: den.supported, installed: den.installed, bytes: den.bytes });
       }
       case "startup_progress":
+        bootProgress(String(a.text ?? ""), Number(a.progress ?? 0));
         return null;
       case "app_ready":
-        document.getElementById("boot")?.remove();
+        bootReady();
         return null;
 
       case "open_path":

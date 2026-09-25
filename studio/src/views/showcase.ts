@@ -63,7 +63,9 @@ interface ShowcaseData {
   gallery_engines: string[];
   engines: EngineSummary[];
   best_de_wins: Record<string, number>;
+  pick_seed: string;
   brands: { cases: number; engines: EngineSummary[]; best_de_wins: Record<string, number> };
+  corpus: { cases: number; engines: EngineSummary[]; best_de_wins: Record<string, number> };
   sets: { id: string; label: string; cases: Case[] }[];
 }
 
@@ -78,16 +80,30 @@ const SHORT: Record<string, string> = {
 
 type Layer = "fill" | "wire" | "anchor" | "handle";
 
+/**
+ * Where the data comes from. The desktop app bundles it (a chunk for the index, one per
+ * case). The browser build is served beside the Space's front page, which already serves the
+ * same files at its root, so it fetches those rather than carrying a second copy.
+ */
+const CASE_FILES = __INKVEC_WEB__ ? {} : import.meta.glob("../../../web/showcase/*.json");
+const fetchJson = (path: string) =>
+  fetch(new URL(path, document.baseURI)).then((r) => {
+    if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`);
+    return r.json();
+  });
+
 let data: Promise<ShowcaseData> | null = null;
 function load(): Promise<ShowcaseData> {
-  data ??= import("../../../web/showcase.json").then((m) => (m.default ?? m) as unknown as ShowcaseData);
+  data ??= __INKVEC_WEB__
+    ? (fetchJson("../showcase.json") as Promise<ShowcaseData>)
+    : import("../../../web/showcase.json").then((m) => (m.default ?? m) as unknown as ShowcaseData);
   return data;
 }
 
-/** Each case's raster and SVGs, a chunk of its own. */
-const CASE_FILES = import.meta.glob("../../../web/showcase/*.json");
+/** Each case's raster and SVGs, loaded when it is opened. */
 function loadCase(key: string): Promise<CaseBody> {
-  const loader = CASE_FILES[`../../../web/showcase/${key}.json`];
+  if (__INKVEC_WEB__) return fetchJson(`../showcase/${key}.json`) as Promise<CaseBody>;
+  const loader = (CASE_FILES as Record<string, () => Promise<unknown>>)[`../../../web/showcase/${key}.json`];
   if (!loader) return Promise.reject(new Error(`no data for ${key}`));
   return loader().then((m) => ((m as { default?: unknown }).default ?? m) as CaseBody);
 }
@@ -118,15 +134,16 @@ export function showcaseScreen(store: Store, close: () => void): HTMLElement {
 // ------------------------------------------------------------------ the page ---
 
 function content(d: ShowcaseData): HTMLElement {
-  let set = d.sets[0];
-  let at = 0;
+  let cur = d.sets[0].cases[0];
   let other = "vtracer-1.0-simplify";
   let layer: Layer = "fill";
   let token = 0;
 
   const viewer = createViewer();
   const chips = h("div.sc-chips");
+  const caption = h("p.sc-caption");
   const list = h("div.sc-list");
+  const tiles = new Map<string, HTMLElement>();
   const others = d.gallery_engines.filter((e) => e !== "inkvec");
 
   const seg = (items: [string, string][], current: () => string, pick: (k: string) => void) => {
@@ -142,13 +159,15 @@ function content(d: ShowcaseData): HTMLElement {
   };
 
   const show = async () => {
-    const c = set.cases[at];
+    const c = cur;
     const mine = ++token;
-    for (const [i, b] of [...list.children].entries()) b.setAttribute("aria-pressed", String(i === at));
+    for (const [key, b] of tiles) b.setAttribute("aria-pressed", String(key === c.key));
+    fill(caption, h("b", null, c.label), ` · ${c.what}`);
     const us = c.m.inkvec;
     const them = c.m[other];
     fill(
       chips,
+      h("span.sc-legend.faint", null, h("i.sc-dot.a"), "anchor", h("i.sc-dot.hd"), "control point"),
       chip(`Inkvec dE00 ${us.de1024.toFixed(3)}`, true),
       chip(`${SHORT[other]} dE00 ${them.de1024.toFixed(3)}`),
       chip(`Inkvec ${us.paths} paths · ${us.coordinates} coordinates · ${kb(us.bytes)}`, true),
@@ -161,35 +180,58 @@ function content(d: ShowcaseData): HTMLElement {
     viewer.layer(layer);
   };
 
-  const fillList = () => {
-    fill(
-      list,
-      ...set.cases.map((c, i) =>
-        h(
-          "button.sc-case",
-          { onclick: () => { at = i; void show(); }, title: c.what },
-          h("span.sc-thumb", null, h("img", { src: c.thumb, alt: "", loading: "lazy" })),
-          h("span.sc-name", null, c.label),
-          h("span.sc-what", null, c.what),
-        ),
+  // Every set in one panel that scrolls inside itself, as tall as the viewer beside it, a
+  // heading per set; each thumbnail opens its case, and the arrow keys move through them.
+  const order: Case[] = [];
+  new ResizeObserver(() => {
+    const hgt = viewer.el.getBoundingClientRect().height;
+    if (hgt > 200) list.style.height = `${hgt}px`;
+  }).observe(viewer.el);
+  const pick = (c: Case, focus: boolean) => {
+    cur = c;
+    void show();
+    const b = tiles.get(c.key);
+    if (!b) return;
+    // Scroll the list, never the screen: the selected case stays in view inside it.
+    const pr = list.getBoundingClientRect();
+    const br = b.getBoundingClientRect();
+    const head = 34;
+    if (br.top < pr.top + head) list.scrollTop -= pr.top + head - br.top;
+    else if (br.bottom > pr.bottom) list.scrollTop += br.bottom - pr.bottom + 6;
+    if (focus) b.focus({ preventScroll: true });
+  };
+  list.addEventListener("keydown", (e: KeyboardEvent) => {
+    const at = order.findIndex((c) => c.key === cur.key);
+    const steps: Record<string, number> = { ArrowDown: 3, ArrowUp: -3, ArrowRight: 1, ArrowLeft: -1, Home: -at, End: order.length - 1 - at };
+    const step = steps[e.key];
+    if (step === undefined) return;
+    e.preventDefault();
+    pick(order[Math.min(order.length - 1, Math.max(0, at + step))], true);
+  });
+  for (const s of d.sets) {
+    list.append(h("div.sc-sethead", null, s.label, h("span", null, String(s.cases.length))));
+    list.append(
+      h(
+        "div.sc-tiles",
+        null,
+        ...s.cases.map((c) => {
+          const b = h(
+            "button.sc-case",
+            { onclick: () => pick(c, false), title: `${c.label} · ${c.what}` },
+            h("span.sc-thumb", null, h("img", { src: c.thumb, alt: "", loading: "lazy" })),
+            h("span.sc-name", null, c.label),
+          );
+          tiles.set(c.key, b);
+          order.push(c);
+          return b;
+        }),
       ),
     );
-  };
+  }
 
   const tools = h(
     "div.sc-tools",
     null,
-    h("span.eyebrow", null, "Set"),
-    seg(
-      d.sets.map((s) => [s.id, `${s.label} (${s.cases.length})`]),
-      () => set.id,
-      (k) => {
-        set = d.sets.find((s) => s.id === k) ?? set;
-        at = 0;
-        fillList();
-        void show();
-      },
-    ),
     h("span.eyebrow", null, "Compare with"),
     seg(others.map((e) => [e, SHORT[e] ?? e]), () => other, (k) => { other = k; void show(); }),
     h("span.eyebrow", null, "Show"),
@@ -200,15 +242,14 @@ function content(d: ShowcaseData): HTMLElement {
     ),
     h("span.eyebrow", null, "Zoom"),
     ...[1, 4, 12].map((z) => h("button.btn.compact.ghost", { onclick: () => viewer.zoom(z) }, `${z}×`)),
-    h("span.sc-legend.faint", null, h("i.sc-dot.a"), "anchor", h("i.sc-dot.hd"), "control point"),
   );
 
-  fillList();
   void show();
 
   const ink = d.engines.find((e) => e.id === "inkvec");
   const wins = d.best_de_wins.inkvec ?? 0;
   const bwins = d.brands.best_de_wins.inkvec ?? 0;
+  const cwins = d.corpus.best_de_wins.inkvec ?? 0;
   return h(
     "div.sc-page",
     null,
@@ -219,10 +260,10 @@ function content(d: ShowcaseData): HTMLElement {
       h(
         "p.faint",
         null,
-        `Twenty real brand logos, and the benchmark's logos, icons and emoji, each traced by Inkvec (build ${d.inkvec.git}, ${d.traced}) and by the other engines. Left, the raster; middle, Inkvec's SVG; right, the engine you compare with. Scroll to zoom and drag to pan, all three together; Anchors shows every on-curve point, Handles every control point with its tangent.`,
+        `Real brand logos, the benchmark's cases and more icons and emoji, all in the list on the left, each traced by Inkvec (build ${d.inkvec.git}, ${d.traced}) and by the other engines. Left, the raster; middle, Inkvec's SVG; right, the engine you compare with. Scroll to zoom and drag to pan, all three together; Anchors shows every on-curve point, Handles every control point with its tangent.`,
       ),
     ),
-    h("div.sc-main", null, list, h("div.sc-stagecol", null, tools, viewer.el, chips)),
+    h("div.sc-main", null, list, h("div.sc-stagecol", null, tools, viewer.el, caption, chips)),
     h(
       "div.sc-results",
       null,
@@ -230,7 +271,7 @@ function content(d: ShowcaseData): HTMLElement {
       h(
         "p.faint",
         null,
-        `${d.cases} benchmark cases (real icons, emoji, synthetic probes and real brand logos; selection fixed from the seed ${d.seed}), each rendered from its source SVG, traced by every engine and scored against the render: CIEDE2000 colour difference, DISTS and DINOv3 perceptual similarity, and geometry against the artist's own file (1.00× is exactly the artist's number of parameters). Inkvec had the lowest colour difference on ${wins} of ${d.cases}, and on ${bwins} of the ${d.brands.cases} brand logos.`,
+        `${d.cases} benchmark cases (real icons, emoji, synthetic probes and real brand logos; selection fixed from the seed ${d.seed}), each rendered from its source SVG, traced by every engine and scored against the render: CIEDE2000 colour difference, DISTS and DINOv3 perceptual similarity, and geometry against the artist's own file (1.00× is exactly the artist's number of parameters). Inkvec had the lowest colour difference on ${wins} of ${d.cases}; in the other sets, on ${bwins} of ${d.brands.cases} brand logos and ${cwins} of ${d.corpus.cases} more icons and emoji.`,
       ),
       ink
         ? h(
@@ -244,10 +285,11 @@ function content(d: ShowcaseData): HTMLElement {
         : null,
       table(`${d.cases} benchmark cases`, d.engines),
       table(`${d.brands.cases} brand logos`, d.brands.engines),
+      table(`${d.corpus.cases} more icons and emoji`, d.corpus.engines),
       h(
         "p.faint.sc-note",
         null,
-        `Means over the cases except seconds (median). Inkvec was traced by the build named above; the other engines have not changed, so their traces and scores are from their recorded runs (the benchmark's: out/${d.run}/results.json, ${d.date}, bench/crosscompare_competitors.py). Computed by tools/showcase_data.py. `,
+        `Means over the cases except seconds (median). Inkvec was traced by the build named above; the other engines have not changed, so their traces and scores are from their recorded runs (the benchmark's: out/${d.run}/results.json, ${d.date}, bench/crosscompare_competitors.py). The brand logos beyond the first twenty, and the third set, were picked by the seed ${d.pick_seed} alone (hash order, a quota per kind), not by how any engine traces them. Computed by tools/showcase_data.py. `,
         h("a", { href: "#", onclick: (e: Event) => { e.preventDefault(); void openExternal("https://github.com/logolabs/inkvec#results"); } }, "Method and every case"),
       ),
     ),

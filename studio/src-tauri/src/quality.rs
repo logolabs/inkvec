@@ -94,17 +94,53 @@ impl From<inkvec_svgmin::Structure> for Structure {
 }
 
 /// One ink in the palette.
-#[derive(Clone, Debug, Serialize)]
+///
+/// An ink is a flat colour or a gradient. The tracer writes a gradient element per face,
+/// so one gradient ink can be painted through many `url(#id)` references; `keys` lists
+/// every paint value that paints with it, which is what the viewer highlights on hover.
+#[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Ink {
-    /// The colour the tracer measured, `#rrggbb`.
+    /// The colour the tracer measured, `#rrggbb`. For a gradient, its first stop.
     pub traced: String,
     /// What it is painted as now: the traced value, or a colour the user snapped it to.
+    /// For a gradient, its first stop.
     pub hex: String,
     /// Share of the canvas it covers, 0..1.
     pub share: f64,
     /// Colour difference between `traced` and `hex`, when the user has snapped it.
     pub snapped_de00: Option<f64>,
+    /// Flat colour or gradient.
+    pub kind: InkKind,
+    /// The exact `fill` / `stroke` attribute values that paint with this ink, as written:
+    /// `#aabbcc`, or `url(#g12)` for each gradient element that has these stops.
+    pub keys: Vec<String>,
+    /// The stop colours in offset order, `#rrggbb`; `[hex]` for a flat ink.
+    pub stops: Vec<String>,
+    /// Linear or radial, for a gradient; absent for a flat ink.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gradient: Option<GradientKind>,
+}
+
+/// Whether an ink is one colour or a ramp.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum InkKind {
+    /// One colour.
+    #[default]
+    Flat,
+    /// A `<linearGradient>` or `<radialGradient>`.
+    Gradient,
+}
+
+/// Which kind of gradient element an ink was written as.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GradientKind {
+    /// `<linearGradient>`.
+    Linear,
+    /// `<radialGradient>`.
+    Radial,
 }
 
 /// Where the trace and the source disagree most: the region the viewer can jump to.
@@ -571,25 +607,19 @@ fn attribute_values<'a>(svg: &'a str, name: &str) -> Vec<&'a str> {
     out
 }
 
-/// The palette: every ink the SVG paints with, and how much of the canvas it covers.
+/// The palette: every ink the SVG paints with, flat or gradient, and how much of the
+/// canvas it covers.
 ///
 /// The share is measured from a render rather than inferred from the geometry, because
-/// what the user is being shown is the picture, and overlap, holes and opacity all move
-/// the answer.
+/// what the user is being shown is the picture, and overlap and holes move the answer.
+/// It is measured exactly rather than guessed from colours: the document is rendered once
+/// with every ink's paint replaced by a colour that stands for that ink alone, without
+/// antialiasing, so each pixel names the ink on top of it. Reading inks back from an
+/// ordinary render by nearest colour could not do this for gradients, whose pixels run
+/// through colours no flat ink has and were credited to whichever flat ink was nearest.
 pub fn palette(svg: &str, w: u32, h: u32) -> Result<Vec<Ink>, String> {
-    let declared: Vec<[f32; 3]> = {
-        let mut seen: Vec<String> = Vec::new();
-        for key in ["fill", "stroke"] {
-            for v in attribute_values(svg, key) {
-                let v = v.trim().to_ascii_lowercase();
-                if v.starts_with('#') && parse_hex(&v).is_some() && !seen.contains(&v) {
-                    seen.push(v);
-                }
-            }
-        }
-        seen.iter().filter_map(|s| parse_hex(s)).collect()
-    };
-    if declared.is_empty() {
+    let mut inks = declared_inks(svg);
+    if inks.is_empty() {
         return Ok(Vec::new());
     }
 
@@ -600,69 +630,375 @@ pub fn palette(svg: &str, w: u32, h: u32) -> Result<Vec<Ink>, String> {
         ((w as f64 * scale).round() as u32).max(1),
         ((h as f64 * scale).round() as u32).max(1),
     );
-    let px = render(svg, rw, rh)?;
+    let code = IdColours::new(inks.len());
+    let px = render(&id_document(svg, &inks, &code), rw, rh)?;
 
-    // The nearest ink depends only on the rendered colour, so the pixels are first counted
-    // by colour and each distinct colour is looked up once, across the cores. A render of
-    // flat artwork has few distinct colours; one of a photo-like trace with hundreds of
-    // inks has thousands, and every lookup is a dE00 against every ink.
-    let mut by_colour: std::collections::HashMap<[u8; 3], usize> = std::collections::HashMap::new();
+    let mut counts = vec![0usize; inks.len()];
     let mut covered = 0usize;
     for chunk in px.as_chunks::<4>().0 {
-        if chunk[3] < 8 {
+        if chunk[3] < 128 {
             continue;
         }
         covered += 1;
-        *by_colour.entry([chunk[0], chunk[1], chunk[2]]).or_insert(0) += 1;
-    }
-    let labs: Vec<[f64; 3]> = declared.iter().map(|c| lab(*c)).collect();
-    let colours: Vec<([u8; 3], usize)> = by_colour.into_iter().collect();
-    let nearest: Vec<usize> = {
-        use rayon::prelude::*;
-        colours
-            .par_iter()
-            .map(|(colour, _)| {
-                let here = lab([
-                    colour[0] as f32 / 255.0,
-                    colour[1] as f32 / 255.0,
-                    colour[2] as f32 / 255.0,
-                ]);
-                let mut best = (f64::MAX, 0usize);
-                for (i, l) in labs.iter().enumerate() {
-                    let d = ciede2000(here, *l);
-                    if d < best.0 {
-                        best = (d, i);
-                    }
-                }
-                best.1
-            })
-            .collect()
-    };
-    let mut counts = vec![0usize; declared.len()];
-    for ((_, n), ink) in colours.iter().zip(&nearest) {
-        counts[*ink] += n;
+        if let Some(i) = code.decode([chunk[0], chunk[1], chunk[2]]) {
+            counts[i] += 1;
+        }
     }
 
     let total = covered.max(1) as f64;
-    let mut inks: Vec<Ink> = declared
-        .iter()
-        .zip(counts.iter())
-        .map(|(c, n)| {
-            let hex = to_hex(*c);
-            Ink {
-                traced: hex.clone(),
-                hex,
-                share: *n as f64 / total,
-                snapped_de00: None,
-            }
-        })
-        .collect();
+    for (ink, n) in inks.iter_mut().zip(&counts) {
+        ink.share = *n as f64 / total;
+    }
+    // Stable: inks of equal share keep the order the document declares them in.
     inks.sort_by(|a, b| {
         b.share
             .partial_cmp(&a.share)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     Ok(inks)
+}
+
+/// How close two gradients' stops must be, in dE00 stop for stop, to be one ink. The tracer
+/// writes one gradient element per face, and faces cut from one ramp repeat its stops to
+/// the last digit or within a rounding of it; 1.0 is the difference a trained eye starts
+/// to see, so two gradients inside it are the same ramp to anyone looking.
+const SAME_GRADIENT_DE00: f64 = 1.0;
+
+/// Every ink the document paints with, in the order it first appears, with no shares yet.
+fn declared_inks(svg: &str) -> Vec<Ink> {
+    use std::collections::HashMap;
+    let defs: HashMap<String, GradientDef> = gradient_defs(svg)
+        .into_iter()
+        .map(|d| (d.id.clone(), d))
+        .collect();
+    let mut inks: Vec<Ink> = Vec::new();
+    // Paint values already placed, and inks by their exact stop list: a drawing repeats
+    // both thousands of times, and only a gradient seen for the first time is compared
+    // stop by stop against the gradients before it.
+    let mut by_key: HashMap<&str, usize> = HashMap::new();
+    let mut by_stops: HashMap<(bool, Vec<String>), usize> = HashMap::new();
+    // The gradient inks' stops in L*a*b*, for that comparison.
+    let mut gradient_labs: Vec<(usize, Vec<[f64; 3]>)> = Vec::new();
+    for value in paint_values(svg) {
+        let key = value.trim();
+        if by_key.contains_key(key) {
+            continue;
+        }
+        let (stops, kind) = if let Some(c) = parse_hex(key).filter(|_| key.starts_with('#')) {
+            (vec![c], None)
+        } else if let Some(def) = url_id(key).and_then(|id| defs.get(id)) {
+            (def.stops.clone(), Some(def.kind))
+        } else {
+            continue;
+        };
+        let hexes: Vec<String> = stops.iter().map(|c| to_hex(*c)).collect();
+        let exact = by_stops.get(&(kind.is_some(), hexes.clone())).copied();
+        let labs: Vec<[f64; 3]> = stops.iter().map(|c| lab(*c)).collect();
+        let near = || {
+            gradient_labs
+                .iter()
+                .find(|(_, have)| {
+                    have.len() == labs.len()
+                        && have
+                            .iter()
+                            .zip(&labs)
+                            .all(|(a, b)| ciede2000(*a, *b) <= SAME_GRADIENT_DE00)
+                })
+                .map(|(i, _)| *i)
+        };
+        let found = exact.or_else(|| if kind.is_some() { near() } else { None });
+        let i = match found {
+            Some(i) => {
+                inks[i].keys.push(key.to_string());
+                i
+            }
+            None => {
+                let i = inks.len();
+                if kind.is_some() {
+                    gradient_labs.push((i, labs));
+                }
+                by_stops.insert((kind.is_some(), hexes.clone()), i);
+                inks.push(Ink {
+                    traced: hexes[0].clone(),
+                    hex: hexes[0].clone(),
+                    share: 0.0,
+                    snapped_de00: None,
+                    kind: if kind.is_some() {
+                        InkKind::Gradient
+                    } else {
+                        InkKind::Flat
+                    },
+                    keys: vec![key.to_string()],
+                    stops: hexes,
+                    gradient: kind,
+                });
+                i
+            }
+        };
+        by_key.insert(key, i);
+    }
+    inks
+}
+
+/// Every `fill` and `stroke` value, in document order.
+fn paint_values(svg: &str) -> Vec<&str> {
+    let mut found: Vec<(usize, &str)> = Vec::new();
+    for name in ["fill", "stroke"] {
+        let needle = format!(" {name}=\"");
+        let mut from = 0;
+        while let Some(i) = svg[from..].find(&needle) {
+            let start = from + i + needle.len();
+            let Some(len) = svg[start..].find('"') else {
+                break;
+            };
+            found.push((start, &svg[start..start + len]));
+            from = start + len + 1;
+        }
+    }
+    found.sort_by_key(|(at, _)| *at);
+    found.into_iter().map(|(_, v)| v).collect()
+}
+
+/// `url(#id)` (quotes allowed) to `id`.
+fn url_id(value: &str) -> Option<&str> {
+    let inner = value.strip_prefix("url(")?.strip_suffix(')')?.trim();
+    let inner = inner.trim_matches(|c| c == '\'' || c == '"');
+    inner.strip_prefix('#').filter(|id| !id.is_empty())
+}
+
+/// One gradient element as the document declares it.
+struct GradientDef {
+    id: String,
+    kind: GradientKind,
+    stops: Vec<[f32; 3]>,
+}
+
+/// Every linear and radial gradient with an id and at least one readable stop.
+///
+/// A scan, like the rest of this module: the tracer writes each gradient as one element
+/// with its stops inside, `stop-color` as a hex attribute. A gradient that borrows its
+/// stops from another through `href` is given them; stops in any colour syntax other than
+/// hex are skipped.
+fn gradient_defs(svg: &str) -> Vec<GradientDef> {
+    let mut defs: Vec<(GradientDef, Option<String>)> = Vec::new();
+    for (tag, close, kind) in [
+        ("<linearGradient", "</linearGradient>", GradientKind::Linear),
+        ("<radialGradient", "</radialGradient>", GradientKind::Radial),
+    ] {
+        let mut from = 0;
+        while let Some(i) = svg[from..].find(tag) {
+            let at = from + i;
+            let after = &svg[at + tag.len()..];
+            from = at + tag.len();
+            if !after.starts_with(|c: char| c.is_whitespace() || c == '>' || c == '/') {
+                continue;
+            }
+            let Some(end) = after.find('>') else {
+                break;
+            };
+            let head = &after[..end];
+            let body = if head.ends_with('/') {
+                ""
+            } else {
+                let rest = &after[end + 1..];
+                &rest[..rest.find(close).unwrap_or(rest.len())]
+            };
+            let Some(id) = tag_attr(head, "id") else {
+                continue;
+            };
+            let href = tag_attr(head, "href")
+                .or_else(|| tag_attr(head, "xlink:href"))
+                .and_then(|h| h.strip_prefix('#'))
+                .map(str::to_string);
+            let mut stops = Vec::new();
+            let mut rest = body;
+            while let Some(j) = rest.find("<stop") {
+                let s = &rest[j + 5..];
+                let Some(e) = s.find('>') else {
+                    break;
+                };
+                let stop = &s[..e];
+                let colour = tag_attr(stop, "stop-color").or_else(|| {
+                    tag_attr(stop, "style").and_then(|st| {
+                        st.split(';')
+                            .find_map(|d| d.trim().strip_prefix("stop-color:").map(str::trim))
+                    })
+                });
+                if let Some(c) = colour.filter(|c| c.starts_with('#')).and_then(parse_hex) {
+                    stops.push(c);
+                }
+                rest = &s[e..];
+            }
+            defs.push((
+                GradientDef {
+                    id: id.to_string(),
+                    kind,
+                    stops,
+                },
+                href,
+            ));
+        }
+    }
+    // Borrowed stops, one step deep, which is as deep as any writer goes.
+    let borrowed: Vec<Option<Vec<[f32; 3]>>> = defs
+        .iter()
+        .map(|(d, href)| {
+            let href = href.as_deref().filter(|_| d.stops.is_empty())?;
+            defs.iter()
+                .find(|(o, _)| o.id == href)
+                .map(|(o, _)| o.stops.clone())
+        })
+        .collect();
+    defs.into_iter()
+        .zip(borrowed)
+        .map(|((mut d, _), b)| {
+            if let Some(stops) = b {
+                d.stops = stops;
+            }
+            d
+        })
+        .filter(|d| !d.stops.is_empty())
+        .collect()
+}
+
+/// The value of `name="..."` inside one tag's attribute text.
+fn tag_attr<'a>(head: &'a str, name: &str) -> Option<&'a str> {
+    let needle = format!("{name}=\"");
+    let mut from = 0;
+    while let Some(i) = head[from..].find(&needle) {
+        let at = from + i;
+        let start = at + needle.len();
+        // Whole attribute names only: `id` must not match inside `gradient-id`.
+        if at == 0 || head[..at].ends_with(char::is_whitespace) {
+            let len = head[start..].find('"')?;
+            return Some(&head[start..start + len]);
+        }
+        from = start;
+    }
+    None
+}
+
+/// A distinct colour for each ink, on a grid far enough apart that a pixel's colour names
+/// its ink without doubt. Index 0 (black) is kept for paint that is no ink of the palette.
+struct IdColours {
+    /// Levels per channel.
+    levels: u32,
+}
+
+impl IdColours {
+    fn new(inks: usize) -> Self {
+        let mut levels = 2u32;
+        while (levels.pow(3) as usize) <= inks {
+            levels += 1;
+        }
+        Self { levels }
+    }
+
+    fn step(&self) -> f32 {
+        255.0 / (self.levels - 1) as f32
+    }
+
+    /// The colour standing for ink `i`.
+    fn encode(&self, i: usize) -> String {
+        let n = i as u32 + 1;
+        let k = self.levels;
+        let c = |d: u32| (d as f32 * self.step()).round() as u8;
+        format!(
+            "#{:02x}{:02x}{:02x}",
+            c(n % k),
+            c(n / k % k),
+            c(n / (k * k) % k)
+        )
+    }
+
+    /// The ink a rendered colour stands for, if it is one of the grid's.
+    fn decode(&self, rgb: [u8; 3]) -> Option<usize> {
+        let k = self.levels;
+        let mut n = 0u32;
+        for (place, v) in [(1, rgb[0]), (k, rgb[1]), (k * k, rgb[2])] {
+            let d = (v as f32 / self.step()).round();
+            if (d * self.step() - v as f32).abs() > 2.0 {
+                return None;
+            }
+            n += d as u32 * place;
+        }
+        (n as usize).checked_sub(1)
+    }
+}
+
+/// The document with every ink's paint replaced by its identifying colour, drawn without
+/// antialiasing, so each pixel of a render is exactly one ink.
+///
+/// Paint that is no ink of the palette (a pattern, a named colour) becomes black, which
+/// stands for no ink, rather than disappearing: it still covers what is under it. Opacity
+/// is rounded to all or nothing, so a translucent ink owns the pixels it is at least half
+/// of and leaves the rest to what shows through, as the eye would split them.
+fn id_document(svg: &str, inks: &[Ink], code: &IdColours) -> String {
+    let owners: std::collections::HashMap<&str, usize> = inks
+        .iter()
+        .enumerate()
+        .flat_map(|(i, ink)| ink.keys.iter().map(move |k| (k.as_str(), i)))
+        .collect();
+    let paint = |value: &str| -> Option<String> {
+        let v = value.trim();
+        if v == "none" || v == "transparent" {
+            return None;
+        }
+        Some(match owners.get(v).copied() {
+            Some(i) => code.encode(i),
+            None => "#000000".to_string(),
+        })
+    };
+    let out = rewrite_attr(svg, "fill", paint);
+    let out = rewrite_attr(&out, "stroke", paint);
+    let solid = |v: &str| {
+        let a = v.trim().trim_end_matches('%');
+        let f = a.parse::<f32>().ok().map(|f| {
+            if v.trim().ends_with('%') {
+                f / 100.0
+            } else {
+                f
+            }
+        });
+        Some(if f.unwrap_or(1.0) >= 0.5 { "1" } else { "0" }.to_string())
+    };
+    let mut out = out;
+    for name in ["opacity", "fill-opacity", "stroke-opacity"] {
+        out = rewrite_attr(&out, name, solid);
+    }
+    let crisp = |_: &str| Some("crispEdges".to_string());
+    let mut out = rewrite_attr(&out, "shape-rendering", crisp);
+    // On the root too, where it is inherited by everything that did not name its own.
+    if let Some(i) = out.find("<svg") {
+        let head_end = out[i..].find('>').map_or(out.len(), |e| i + e);
+        if !out[i..head_end].contains("shape-rendering=") {
+            out.insert_str(i + 4, " shape-rendering=\"crispEdges\"");
+        }
+    }
+    out
+}
+
+/// The document with every ` name="value"` attribute's value passed through `f`; `None`
+/// keeps it as it was.
+fn rewrite_attr(svg: &str, name: &str, f: impl Fn(&str) -> Option<String>) -> String {
+    let needle = format!(" {name}=\"");
+    let mut out = String::with_capacity(svg.len());
+    let mut from = 0;
+    while let Some(i) = svg[from..].find(&needle) {
+        let start = from + i + needle.len();
+        let Some(len) = svg[start..].find('"') else {
+            break;
+        };
+        out.push_str(&svg[from..start]);
+        let value = &svg[start..start + len];
+        match f(value) {
+            Some(v) => out.push_str(&v),
+            None => out.push_str(value),
+        }
+        from = start + len;
+    }
+    out.push_str(&svg[from..]);
+    out
 }
 
 /// `#rgb` or `#rrggbb` to linear 0..1 sRGB components.
@@ -787,6 +1123,98 @@ mod tests {
             "{:?}",
             inks[0]
         );
+    }
+
+    /// A flat ground, a linear gradient over the left half and, in the right half, two
+    /// gradient elements with the same stops (one a rounding apart) and a radial one.
+    const GRADIENTS: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><defs><linearGradient id="g1" x1="0" y1="0" x2="32" y2="0" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/></linearGradient><linearGradient id="g2" x1="0" y1="0" x2="0" y2="64" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#fe0000"/><stop offset="1" stop-color="#0000ff"/></linearGradient><radialGradient id="g3" cx="48" cy="48" r="16" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ffffff"/><stop offset="0.5" stop-color="#808080"/><stop offset="1" stop-color="#000000"/></radialGradient></defs><rect width="64" height="64" fill="#14453F"/><path d="M0 0H32V64H0Z" fill="url(#g1)"/><path d="M32 0H64V16H32Z" fill="url(#g2)"/><path d="M32 32H64V64H32Z" fill="url(#g3)"/></svg>"##;
+
+    #[test]
+    fn gradients_are_inks_with_their_stops() {
+        let inks = palette(GRADIENTS, 64, 64).unwrap();
+        let ramp = inks
+            .iter()
+            .find(|i| i.keys.iter().any(|k| k == "url(#g1)"))
+            .expect("the linear gradient is an ink");
+        assert_eq!(ramp.kind, InkKind::Gradient);
+        assert_eq!(ramp.gradient, Some(GradientKind::Linear));
+        assert_eq!(ramp.stops, ["#ff0000", "#0000ff"]);
+        assert_eq!(ramp.traced, "#ff0000", "a gradient's hex is its first stop");
+        let radial = inks
+            .iter()
+            .find(|i| i.keys == ["url(#g3)"])
+            .expect("the radial gradient is an ink of its own");
+        assert_eq!(radial.gradient, Some(GradientKind::Radial));
+        assert_eq!(radial.stops.len(), 3);
+        let ground = inks.iter().find(|i| i.kind == InkKind::Flat).unwrap();
+        assert_eq!(
+            ground.keys,
+            ["#14453F"],
+            "keys are the attribute values as written"
+        );
+        assert_eq!(ground.stops, ["#14453f"]);
+        let json = serde_json::to_value(ramp).unwrap();
+        assert_eq!(json["kind"], "gradient");
+        assert_eq!(json["gradient"], "linear");
+        assert!(serde_json::to_value(ground)
+            .unwrap()
+            .get("gradient")
+            .is_none());
+    }
+
+    #[test]
+    fn gradients_with_the_same_stops_are_one_ink() {
+        let inks = palette(GRADIENTS, 64, 64).unwrap();
+        assert_eq!(inks.len(), 3, "{inks:?}");
+        let ramp = inks
+            .iter()
+            .find(|i| i.keys.iter().any(|k| k == "url(#g1)"))
+            .unwrap();
+        assert_eq!(ramp.keys, ["url(#g1)", "url(#g2)"]);
+    }
+
+    #[test]
+    fn gradient_shares_are_measured_and_sum_to_the_coverage() {
+        let inks = palette(GRADIENTS, 64, 64).unwrap();
+        let total: f64 = inks.iter().map(|i| i.share).sum();
+        assert!((total - 1.0).abs() < 1e-6, "{total}");
+        let share = |key: &str| {
+            inks.iter()
+                .find(|i| i.keys.iter().any(|k| k == key))
+                .unwrap()
+                .share
+        };
+        // Left half plus the top quarter of the right half.
+        assert!((share("url(#g1)") - (0.5 + 0.125)).abs() < 0.01, "{inks:?}");
+        assert!((share("url(#g3)") - 0.25).abs() < 0.01, "{inks:?}");
+        assert!((share("#14453F") - 0.125).abs() < 0.01, "{inks:?}");
+        // Sorted largest first.
+        assert!(inks.windows(2).all(|w| w[0].share >= w[1].share));
+    }
+
+    #[test]
+    fn a_transparent_ground_is_not_part_of_any_share() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><path d="M0 0H32V32H0Z" fill="#ff0000"/><path d="M32 32H64V64H32Z" fill="#0000ff" fill-opacity="0.8"/><path d="M0 32H32V64H0Z" fill="none" stroke="#00ff00" stroke-width="0"/></svg>"##;
+        let inks = palette(svg, 64, 64).unwrap();
+        assert_eq!(inks.len(), 3);
+        assert!(
+            (inks[0].share - 0.5).abs() < 0.01 && (inks[1].share - 0.5).abs() < 0.01,
+            "{inks:?}"
+        );
+        assert_eq!(inks[2].share, 0.0);
+    }
+
+    #[test]
+    fn the_id_colours_round_trip() {
+        for n in [1usize, 7, 8, 26, 27, 300, 5000] {
+            let code = IdColours::new(n);
+            for i in 0..n {
+                let c = parse_hex(&code.encode(i)).unwrap();
+                let rgb = c.map(|v| (v * 255.0).round() as u8);
+                assert_eq!(code.decode(rgb), Some(i), "{n} inks, ink {i}");
+            }
+            assert_eq!(code.decode([0, 0, 0]), None, "black is no ink");
+        }
     }
 
     #[test]

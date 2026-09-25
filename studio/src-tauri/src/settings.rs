@@ -138,7 +138,7 @@ impl Prefs {
         };
         self.settle_ms = self.settle_ms.clamp(100, 5_000);
         self.threads = self.threads.map(|t| t.clamp(1, 256));
-        self.trace = self.trace.sanitised();
+        self.trace = self.trace.sanitised().for_keeping();
         self.recent.truncate(RECENT_LIMIT);
 
         // A saved preset with no name or a duplicate id would show as a blank tile or as
@@ -146,7 +146,7 @@ impl Prefs {
         let mut seen = std::collections::HashSet::new();
         self.saved.retain_mut(|p| {
             p.name = p.name.trim().chars().take(NAME_LIMIT).collect();
-            p.settings = p.settings.clone().sanitised();
+            p.settings = p.settings.clone().sanitised().for_keeping();
             !p.id.is_empty() && !p.name.is_empty() && seen.insert(p.id.clone())
         });
         self.saved.truncate(SAVED_LIMIT);
@@ -325,6 +325,31 @@ mod tests {
             p.saved[0].settings.trace_size, 16_384,
             "a saved preset's numbers are clamped like any live ones"
         );
+    }
+
+    #[test]
+    fn colour_groups_are_never_written_to_preferences_or_presets() {
+        let groups = vec![crate::options::ColourGroup {
+            members: vec!["#111111".into(), "#222222".into()],
+            target: None,
+        }];
+        let with_groups = TraceSettings {
+            colour_groups: groups,
+            ..TraceSettings::default()
+        };
+        let p = Prefs {
+            trace: with_groups.clone(),
+            saved: vec![SavedPreset {
+                id: "a".into(),
+                name: "Northwind".into(),
+                settings: with_groups,
+            }],
+            ..Prefs::default()
+        }
+        .sanitised();
+        assert!(p.trace.colour_groups.is_empty());
+        assert!(p.saved[0].settings.colour_groups.is_empty());
+        assert!(!serde_json::to_string(&p).unwrap().contains("colourGroups"));
     }
 
     #[test]

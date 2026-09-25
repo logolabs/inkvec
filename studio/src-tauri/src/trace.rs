@@ -1060,6 +1060,87 @@ mod tests {
         assert!(!t.oversized);
     }
 
+    /// The palette panel's round trip: inks read off one trace, sent back as a colour group,
+    /// come back from the next trace as one ink, with the engine's line saying so.
+    #[test]
+    fn grouping_the_inks_of_a_trace_merges_them_in_the_next() {
+        // Two reds a little apart side by side on a light ground, and a blue apart from both.
+        let mut img = image::RgbaImage::from_pixel(96, 96, image::Rgba([245, 242, 234, 255]));
+        for y in 16..80u32 {
+            for x in 8..88u32 {
+                let c = match x {
+                    8..=35 => [200, 40, 40],
+                    36..=63 => [170, 30, 60],
+                    _ => [30, 60, 170],
+                };
+                img.put_pixel(x, y, image::Rgba([c[0], c[1], c[2], 255]));
+            }
+        }
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let source = std::sync::Arc::new(Source::open(png.into_inner(), None).unwrap());
+        let traced =
+            |settings: &Settings| match run(&source, settings, Tier::Final, None, |_, _| {}) {
+                Outcome::Traced(t) => t,
+                other => panic!("expected a drawing, got {other:?}"),
+            };
+
+        let before = traced(&Settings::default());
+        assert!(
+            before
+                .engine_log
+                .iter()
+                .all(|l| !l.starts_with("merge colors")),
+            "no groups, no merge: {:?}",
+            before.engine_log
+        );
+        let red = |t: &Traced, want: [f32; 3]| {
+            t.palette
+                .iter()
+                .min_by(|a, b| {
+                    let d = |i: &Ink| {
+                        quality::hex_distance(&i.traced, &quality::to_hex(want)).unwrap_or(f64::MAX)
+                    };
+                    d(a).total_cmp(&d(b))
+                })
+                .unwrap()
+                .traced
+                .clone()
+        };
+        let a = red(&before, [200.0 / 255.0, 40.0 / 255.0, 40.0 / 255.0]);
+        let b = red(&before, [170.0 / 255.0, 30.0 / 255.0, 60.0 / 255.0]);
+        assert_ne!(a, b, "{:?}", before.palette);
+
+        let grouped = Settings {
+            colour_groups: vec![crate::options::ColourGroup {
+                members: vec![a.clone(), b.clone()],
+                target: Some("@1".into()),
+            }],
+            ..Settings::default()
+        };
+        let after = traced(&grouped);
+        let line = after
+            .engine_log
+            .iter()
+            .find(|l| l.starts_with("merge colors"))
+            .unwrap_or_else(|| panic!("the engine says what it merged: {:?}", after.engine_log));
+        assert!(line.contains(&a) && line.contains(&b), "{line}");
+        assert_eq!(
+            after.palette.len() + 1,
+            before.palette.len(),
+            "two inks became one: {:?} then {:?}",
+            before.palette,
+            after.palette
+        );
+        assert!(
+            after.palette.iter().all(|i| i.traced != b),
+            "{:?}",
+            after.palette
+        );
+    }
+
     #[test]
     fn the_stage_log_arrives_while_the_trace_runs() {
         let source = std::sync::Arc::new(Source::open(sample_png(), None).unwrap());

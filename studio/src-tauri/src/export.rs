@@ -304,11 +304,18 @@ fn palette_json(inks: &[Ink]) -> String {
     let inks: Vec<serde_json::Value> = inks
         .iter()
         .map(|i| {
-            serde_json::json!({
+            let mut ink = serde_json::json!({
                 "hex": i.hex,
                 "traced": i.traced,
                 "share": (i.share * 10_000.0).round() / 10_000.0,
-            })
+            });
+            // A gradient says so and lists its stops; a flat ink is written exactly as it
+            // always was.
+            if i.kind == quality::InkKind::Gradient {
+                ink["kind"] = "gradient".into();
+                ink["stops"] = i.stops.clone().into();
+            }
+            ink
         })
         .collect();
     serde_json::to_string_pretty(&serde_json::json!({
@@ -443,6 +450,7 @@ mod tests {
             hex: "#14453f".into(),
             share: 0.56,
             snapped_de00: None,
+            ..Ink::default()
         }
     }
 

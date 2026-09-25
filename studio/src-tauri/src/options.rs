@@ -96,6 +96,76 @@ pub struct Settings {
     pub margin: f64,
     /// Holes as cutouts.
     pub holes_as_cutouts: bool,
+
+    // --- This image ---
+    /// Colours to draw as one ink, chosen in the palette for the image that is open.
+    ///
+    /// Not a control: there is no row for it in [`CONTROLS`], because it names colours of
+    /// one picture and means nothing for the next. It rides with the settings only so that
+    /// a change to it re-traces exactly as a moved control does, draft then final, and so
+    /// the drawing cache keys on it. It is never kept: [`Settings::for_keeping`] empties it
+    /// before preferences or a saved preset are written, and a batch never sees it. Omitted
+    /// from the JSON when empty, so everything written before it existed reads the same.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub colour_groups: Vec<ColourGroup>,
+}
+
+/// Fills the user wants drawn as one, as the palette panel sends them.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ColourGroup {
+    /// Each member as the engine's spec spells it: `#rrggbb`, or a gradient's stop colours
+    /// in offset order joined by `>`.
+    pub members: Vec<String>,
+    /// What the group becomes: `#rrggbb` a flat colour, `@n` the n-th member (1-based; a
+    /// gradient there is extended over the group), `None` the member covering the most of
+    /// the image.
+    pub target: Option<String>,
+}
+
+impl ColourGroup {
+    /// This group in `inkvec_cli::parse_color_groups`'s grammar, or `None` if a member or
+    /// the target is not something that grammar can say. Checked here, not left to the
+    /// parser, because the separators are characters a malformed member could carry into
+    /// the spec and turn into a different group.
+    fn spec(&self) -> Option<String> {
+        let hex = |s: &str| {
+            let h = s.strip_prefix('#').unwrap_or("");
+            matches!(h.len(), 3 | 6) && h.chars().all(|c| c.is_ascii_hexdigit())
+        };
+        let members: Vec<&str> = self.members.iter().map(|m| m.trim()).collect();
+        if members.is_empty() || !members.iter().all(|m| m.split('>').all(hex)) {
+            return None;
+        }
+        let target = match self.target.as_deref().map(str::trim) {
+            None | Some("") => String::new(),
+            Some(t) if hex(t) => format!("={t}"),
+            Some(t) => {
+                let n: usize = t.strip_prefix('@')?.parse().ok()?;
+                if !(1..=members.len()).contains(&n) {
+                    return None;
+                }
+                format!("=@{n}")
+            }
+        };
+        Some(format!("{}{target}", members.join(",")))
+    }
+}
+
+/// The groups as one `--merge-colors` spec. A group the grammar cannot say is left out and
+/// logged; the rest still merge.
+pub fn colour_groups_spec(groups: &[ColourGroup]) -> String {
+    groups
+        .iter()
+        .filter_map(|g| {
+            let spec = g.spec();
+            if spec.is_none() {
+                eprintln!("inkvec-studio: ignoring a colour group the engine cannot read: {g:?}");
+            }
+            spec
+        })
+        .collect::<Vec<_>>()
+        .join(";")
 }
 
 impl Default for Settings {
@@ -130,6 +200,7 @@ impl Default for Settings {
             transparent_background: a.no_background,
             margin: a.margin,
             holes_as_cutouts: a.cutout,
+            colour_groups: Vec::new(),
         }
     }
 }
@@ -164,12 +235,25 @@ impl Settings {
             transparent_background,
             margin,
             holes_as_cutouts,
-        } = *self;
+            colour_groups,
+        } = self.clone();
 
         // A price that equals the engine's own is passed as no request at all, so a trace that
         // has not touched these two controls takes exactly the path it always did.
         let standard = inkvec_fit::cost::CostModel::standard();
         let asked = |v: f64, base: f64| ((v - base).abs() > 1e-9).then_some(v);
+
+        // No groups is no spec at all, so an image nobody grouped traces exactly as before.
+        let merge_colors = if colour_groups.is_empty() {
+            Vec::new()
+        } else {
+            inkvec_cli::parse_color_groups(&colour_groups_spec(&colour_groups)).unwrap_or_else(
+                |e| {
+                    eprintln!("inkvec-studio: colour groups not applied: {e}");
+                    Vec::new()
+                },
+            )
+        };
 
         inkvec_cli::Args {
             precision,
@@ -194,6 +278,7 @@ impl Settings {
             no_background: transparent_background,
             margin,
             cutout: holes_as_cutouts,
+            merge_colors,
             // Not exposed: the app is not a research harness. `quiet` only suppresses
             // printing, which a library caller gets none of anyway.
             quiet: true,
@@ -215,6 +300,15 @@ impl Settings {
             // budget. It runs for the final trace.
             clean_up_damage: Cleanup::Off,
             ..self.clone()
+        }
+    }
+
+    /// The same settings with nothing that belongs to one image: what preferences, saved
+    /// presets and a batch keep. Colour groups name colours of the picture that is open.
+    pub fn for_keeping(self) -> Self {
+        Self {
+            colour_groups: Vec::new(),
+            ..self
         }
     }
 
@@ -853,6 +947,89 @@ mod tests {
         let s: Settings = serde_json::from_value(old).unwrap();
         assert_eq!(s.max_colours, 12);
         assert!(!s.editability);
+    }
+
+    fn group(members: &[&str], target: Option<&str>) -> ColourGroup {
+        ColourGroup {
+            members: members.iter().map(|m| m.to_string()).collect(),
+            target: target.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn no_colour_groups_ask_the_engine_for_nothing() {
+        let a = Settings::default().to_args();
+        assert!(a.merge_colors.is_empty());
+        assert!(inkvec_cli::Args::default().merge_colors.is_empty());
+        // Not a control, and not in the JSON when there are none: saved files, presets and
+        // the controls table read exactly as they did before groups existed.
+        assert!(CONTROLS.iter().all(|c| c.key != "colourGroups"));
+        let json = serde_json::to_value(Settings::default()).unwrap();
+        assert!(json.get("colourGroups").is_none());
+        for p in Preset::ALL {
+            assert!(p.settings().colour_groups.is_empty(), "{p:?}");
+        }
+    }
+
+    #[test]
+    fn colour_groups_reach_the_engine_as_its_own_grammar() {
+        let s = Settings {
+            colour_groups: vec![
+                group(&["#c0392b", "#e74c3c"], None),
+                group(&["#ff0000>#800000>#200000", "#00aa00"], Some("@1")),
+                group(&["#123456", "#abc"], Some("#ffffff")),
+            ],
+            ..Settings::default()
+        };
+        assert_eq!(
+            colour_groups_spec(&s.colour_groups),
+            "#c0392b,#e74c3c;#ff0000>#800000>#200000,#00aa00=@1;#123456,#abc=#ffffff"
+        );
+        use inkvec_cli::regroup::{Member, Target};
+        let a = s.to_args();
+        assert_eq!(a.merge_colors.len(), 3);
+        assert_eq!(a.merge_colors[0].target, Target::Auto);
+        assert_eq!(a.merge_colors[1].target, Target::Member(0));
+        assert!(
+            matches!(&a.merge_colors[1].members[0], Member::Gradient(stops) if stops.len() == 3)
+        );
+        assert!(matches!(a.merge_colors[2].target, Target::Colour(_)));
+    }
+
+    #[test]
+    fn a_colour_group_the_grammar_cannot_say_is_left_out() {
+        let groups = vec![
+            // A separator smuggled into a member would make a different group.
+            group(&["#c0392b;#000000", "#e74c3c"], None),
+            group(&["#c0392b", "red"], None),
+            group(&["#c0392b", "#e74c3c"], Some("@3")),
+            group(&[], None),
+            group(&["#111111", "#222222"], Some("@2")),
+        ];
+        assert_eq!(colour_groups_spec(&groups), "#111111,#222222=@2");
+        let s = Settings {
+            colour_groups: groups,
+            ..Settings::default()
+        };
+        assert_eq!(s.to_args().merge_colors.len(), 1);
+    }
+
+    #[test]
+    fn colour_groups_are_never_kept_and_old_files_still_load() {
+        let s = Settings {
+            colour_groups: vec![group(&["#111111", "#222222"], None)],
+            ..Settings::default()
+        };
+        let json = serde_json::to_value(&s).unwrap();
+        assert_eq!(json["colourGroups"][0]["members"][1], "#222222");
+        let back: Settings = serde_json::from_value(json).unwrap();
+        assert_eq!(back, s, "the interface's groups arrive whole");
+        assert_eq!(s.clone().for_keeping(), Settings::default());
+        // The draft traces the same groups as the final it stands for.
+        assert_eq!(s.draft(512, 0.4).colour_groups, s.colour_groups);
+        let old: Settings =
+            serde_json::from_value(serde_json::json!({ "precision": 0.2 })).unwrap();
+        assert!(old.colour_groups.is_empty());
     }
 
     #[test]

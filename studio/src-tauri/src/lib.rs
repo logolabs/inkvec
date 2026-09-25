@@ -589,7 +589,8 @@ fn start_trace(
     );
 
     // Remember what was asked for, not the draft's reduction of it.
-    state.prefs.lock().map_err(lock)?.trace = request.settings.clone();
+    // Colour groups belong to the image that is open, so they are not remembered.
+    state.prefs.lock().map_err(lock)?.trace = request.settings.clone().for_keeping();
 
     let generation = state.generation.next();
     let pipeline = Arc::clone(&state.pipeline);
@@ -749,7 +750,9 @@ fn snap_inks(svg: String, snaps: Vec<Snap>, width: u32, height: u32) -> Result<S
         }
     }
     let mut inks = quality::palette(&out, width.max(1), height.max(1))?;
-    for ink in inks.iter_mut() {
+    // Only a flat ink can have been snapped: a gradient's `hex` is its first stop, which a
+    // snap to the same colour must not be mistaken for.
+    for ink in inks.iter_mut().filter(|i| i.kind == quality::InkKind::Flat) {
         if let Some(s) = snaps.iter().find(|s| s.to.eq_ignore_ascii_case(&ink.hex)) {
             ink.traced = s.from.to_ascii_lowercase();
             ink.snapped_de00 = quality::hex_distance(&ink.traced, &ink.hex);
@@ -857,6 +860,9 @@ pub struct ExportInk {
     pub traced: String,
     /// Share of the canvas.
     pub share: f64,
+    /// A gradient's stop colours, in order; empty for a flat ink.
+    #[serde(default)]
+    pub stops: Vec<String>,
 }
 
 /// One honesty-panel row, as the interface has it.
@@ -951,11 +957,21 @@ fn build_export(
     let inks: Vec<quality::Ink> = request
         .palette
         .iter()
-        .map(|i| quality::Ink {
-            traced: i.traced.clone(),
-            hex: i.hex.clone(),
-            share: i.share,
-            snapped_de00: None,
+        .map(|i| {
+            let gradient = i.stops.len() > 1;
+            quality::Ink {
+                traced: i.traced.clone(),
+                hex: i.hex.clone(),
+                share: i.share,
+                snapped_de00: None,
+                kind: if gradient {
+                    quality::InkKind::Gradient
+                } else {
+                    quality::InkKind::Flat
+                },
+                stops: i.stops.clone(),
+                ..Default::default()
+            }
         })
         .collect();
     let losses: Vec<lost::Loss> = request
@@ -1066,7 +1082,14 @@ fn batch_start(
         *slot = Some(Arc::clone(&fresh));
         fresh
     };
-    let base = state.prefs.lock().map_err(lock)?.trace.clone();
+    // A batch is many images; colour groups name the colours of one.
+    let base = state
+        .prefs
+        .lock()
+        .map_err(lock)?
+        .trace
+        .clone()
+        .for_keeping();
     let pipeline = Arc::clone(&state.pipeline);
 
     std::thread::Builder::new()
@@ -1470,6 +1493,43 @@ mod tests {
             .snapped_de00
             .expect("a snapped ink reports what it cost");
         assert!(moved > 0.0 && moved < 3.0, "{moved}");
+    }
+
+    #[test]
+    fn snapping_a_flat_ink_leaves_a_gradient_that_starts_there_alone() {
+        let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\" viewBox=\"0 0 32 32\">\
+                   <defs><linearGradient id=\"g1\"><stop offset=\"0\" stop-color=\"#12443e\"/>\
+                   <stop offset=\"1\" stop-color=\"#ffffff\"/></linearGradient></defs>\
+                   <path d=\"M0 0H16V32H0Z\" fill=\"#14453f\"/><path d=\"M16 0H32V32H16Z\" fill=\"url(#g1)\"/></svg>";
+        let result = snap_inks(
+            svg.into(),
+            vec![Snap {
+                from: "#14453f".into(),
+                to: "#12443e".into(),
+            }],
+            32,
+            32,
+        )
+        .unwrap();
+        assert!(
+            result.svg.contains("fill=\"url(#g1)\""),
+            "the gradient is untouched"
+        );
+        assert_eq!(result.inks.len(), 2);
+        let ramp = result
+            .inks
+            .iter()
+            .find(|i| i.kind == quality::InkKind::Gradient)
+            .unwrap();
+        assert_eq!(ramp.hex, "#12443e", "the ramp starts at the snapped colour");
+        assert_eq!(ramp.snapped_de00, None, "but it was not snapped");
+        let flat = result
+            .inks
+            .iter()
+            .find(|i| i.kind == quality::InkKind::Flat)
+            .unwrap();
+        assert!(flat.snapped_de00.is_some());
+        assert!((flat.share - 0.5).abs() < 0.02 && (ramp.share - 0.5).abs() < 0.02);
     }
 
     #[test]

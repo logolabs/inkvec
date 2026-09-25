@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="inkvec-guide" content="studio">
+<title>Result: reading the quality report · Inkvec Studio guide</title>
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="side"><a class="guidebrand" href="index.html"><img src="logo-mono.svg" alt=""> <span>Inkvec Studio</span></a><div class="grp"><h4>User guide</h4><a href="index.html">Overview</a><a href="install.html">Install and first launch</a><a href="getting-started.html">Getting started</a><a href="viewer.html">The viewer</a><a href="result.html" aria-current="page">Result</a><a href="tune.html">Tune</a><a href="palette.html">Palette and colour groups</a><a href="export.html">Export</a><a href="minify.html">Minify SVG</a><a href="fabricate.html">Fabricate</a><a href="batch.html">Batch</a><a href="settings.html">Settings</a><a href="shortcuts.html">Keyboard and mouse</a><a href="troubleshooting.html">Troubleshooting</a></div><div class="grp"><h4>Tutorials</h4><a href="tutorials/jpeg-logo.html">Clean up a JPEG logo</a><a href="tutorials/favicon-asset-pack.html">A favicon and an asset pack</a><a href="tutorials/vinyl-htv.html">Layered vinyl and iron-on</a><a href="tutorials/laser.html">Laser: DXF and G-code</a></div><div class="grp"><h4>Online</h4><a href="https://logolabs.github.io/inkvec/">Inkvec documentation</a><a href="https://logolabs.github.io/inkvec/studio/result.html">This page on the web</a></div><p class="guidenote">This copy of the guide is part of the app and works without a network.</p></aside>
+  <main><article><h1 id="result-reading-the-quality-report">Result: reading the quality report</h1>
+<p>The <strong>Result</strong> half of the rail is what the last trace produced. It is a measurement, not a
+score: the SVG is rendered and compared with your image pixel by pixel, and the figures are what
+that comparison found.</p>
+<p><img alt="The Result half of the rail: the quality report, editability, and the readout at the foot" src="img/result.webp"></p>
+<p>From the top, the Result tab shows:</p>
+<ol>
+<li>The <strong>Denoiser</strong> and <strong>Editable</strong> settings (shared with Tune; see
+   <a href="tune.html#the-denoiser-and-editable">Tune</a>).</li>
+<li><strong>Auto chose</strong>, while it has something to offer (see
+   <a href="getting-started.html#the-choice-card-keep-auto-or-customise">Getting started</a>).</li>
+<li>The <strong>quality report</strong>.</li>
+<li><strong>Editability</strong>.</li>
+<li><strong>What this trace could not recover</strong>.</li>
+<li>The <strong>palette</strong> (<a href="palette.html">its own page</a>).</li>
+<li>One line comparing Inkvec with another tracer on the project's published benchmark. It is
+   labelled as such: it is not a measurement of your file.</li>
+</ol>
+<p>While a trace runs, a list of the engine's stages appears at the top, each ticked with the time it
+took as it finishes.</p>
+<h2 id="the-quality-report">The quality report</h2>
+<p>The large number is the <strong>mean colour difference</strong> between the SVG and the image, in <strong>dE00</strong>
+(CIEDE2000), the standard measure of how different two colours look to a person. It is averaged
+over every pixel, so most of it comes from anti-aliased edges.</p>
+<table>
+<thead>
+<tr>
+<th>dE00</th>
+<th>What it means</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>Identical.</td>
+</tr>
+<tr>
+<td>about 0.1</td>
+<td>Typical for a clean PNG logo.</td>
+</tr>
+<tr>
+<td>under 1.0</td>
+<td>Not visible side by side.</td>
+</tr>
+<tr>
+<td>about 1.0</td>
+<td>Where a trained eye starts to see a difference.</td>
+</tr>
+<tr>
+<td>well above 1</td>
+<td>Visible: a colour is off, or a detail is missing.</td>
+</tr>
+</tbody>
+</table>
+<p>The meter under it runs from 0 to 5 on a square-root scale, with a tick at 1.0, <em>just visible</em>.
+Beside the mean is the <strong>median</strong>, the difference at the typical pixel. A median much lower than
+the mean says the error is concentrated somewhere (often one small detail) rather than spread
+evenly.</p>
+<p>The header says what was measured: <strong>full trace</strong> or <strong>draft</strong>, and the size it was traced at.
+The card fades while a new trace is running.</p>
+<p>The figures below the meter:</p>
+<table>
+<thead>
+<tr>
+<th>Figure</th>
+<th>What it counts</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>coordinates</td>
+<td>Numbers in the drawing's geometry. The best single measure of how heavy the file is to edit and to ship.</td>
+</tr>
+<tr>
+<td>paths</td>
+<td>Drawn elements: paths, circles, rectangles.</td>
+</tr>
+<tr>
+<td>colours found</td>
+<td>Distinct inks in the drawing.</td>
+</tr>
+<tr>
+<td>segments</td>
+<td>Lines, curves and arcs, across all paths.</td>
+</tr>
+<tr>
+<td>file size</td>
+<td>The SVG as written.</td>
+</tr>
+<tr>
+<td>minified</td>
+<td>What <a href="tune.html#output">Minify</a> would make it, or <em>already</em> if it is on.</td>
+</tr>
+<tr>
+<td>traced at</td>
+<td>The size the image was traced at, on its longer side.</td>
+</tr>
+<tr>
+<td>time taken</td>
+<td>How long the trace took.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Find the worst corner</strong> zooms the viewer to 12× on the place where the SVG and the image
+disagree most, with the <a href="viewer.html#detail-the-pixel-grid-under-the-edge">pixel grid</a> on, and says
+how large that disagreement is.</p>
+<h2 id="the-readout-at-the-foot">The readout at the foot</h2>
+<p>Pinned under both halves of the rail are the three numbers that matter most, <strong>dE00</strong>,
+<strong>coordinates</strong> and <strong>file</strong>, each with what it changed by since the previous full trace. Fewer
+coordinates and a smaller file are shown as good news; a higher colour difference turns amber,
+since that is the cost. Drafts are never compared (they are smaller, so they would show changes
+nobody made); the readout compares full trace with full trace.</p>
+<p>This is how to judge a control: move it, and read what it bought and what it cost here.</p>
+<p>Under the readout are <strong>Export</strong>, <strong>Copy SVG</strong> and the comparison-card button (see
+<a href="export.html">Export</a>), and <strong>Trace again</strong>, which runs a full trace with the controls as they are.</p>
+<h2 id="editability">Editability</h2>
+<p>A trace is fitted for the pixels alone, so the file it makes does not have the habits of a file
+an artist drew by hand. This card counts three of those habits on your drawing:</p>
+<table>
+<thead>
+<tr>
+<th>Row</th>
+<th>What it counts</th>
+<th>Hand-drawn files</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Handles on an axis</td>
+<td>Curve handles pointing exactly along x or y</td>
+<td>34%</td>
+</tr>
+<tr>
+<td>Smooth joins</td>
+<td>Places two curves meet without a kink</td>
+<td>89%</td>
+</tr>
+<tr>
+<td>Nodes sharing a coordinate</td>
+<td>Nodes with the same x or y as another node, so they can be aligned in one move</td>
+<td>86%</td>
+</tr>
+</tbody>
+</table>
+<p>Each bar shows your drawing's share, with the count, and a tick where hand-drawn files sit: the
+median of 1,544 SVGs drawn by artists, measured the same way. A plain trace starts near zero on
+the first two. <strong>Make it editable</strong> turns on <a href="tune.html#the-denoiser-and-editable">Editable structure</a>,
+which moves the bars towards the ticks. It costs a little colour accuracy (about 0.04 dE00 on
+icons); the quality report shows the price on your image.</p>
+<p>A drawing made only of lines and arcs has no curve handles and no curve joins, so only the last row
+is shown, with a note saying why.</p>
+<h2 id="what-this-trace-could-not-recover">What this trace could not recover</h2>
+<p>This panel is always there. When it finds nothing it says <em>Nothing we can detect was lost</em>. When it
+finds something, each row says what, with <strong>Why</strong> for the measurement behind it and, sometimes, one
+link.</p>
+<table>
+<thead>
+<tr>
+<th>Row</th>
+<th>What it means</th>
+<th>What you can do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The lettering came back as outlines, not editable text.</td>
+<td>Six or more shapes of matching height sit on one baseline. Tracing recovers their shapes, not the typeface, so the words cannot be re-typed.</td>
+<td>Set the text again in a vector editor if you need it live.</td>
+</tr>
+<tr>
+<td>The source is a JPEG (or WebP), so these colours carry its compression damage.</td>
+<td>The colours measured are the ones in the file, which are not quite the ones the artwork was drawn with.</td>
+<td>Turn on the <a href="settings.html#denoiser">denoiser</a>, and check the colours against your brand values (<a href="palette.html#paste-a-brand-palette">paste a brand palette</a>).</td>
+</tr>
+<tr>
+<td>Stroke widths are baked into filled outlines.</td>
+<td>Several shapes are outlines drawn around lines rather than the lines themselves; an editor sees closed shapes, not strokes.</td>
+<td>Try the <em>Line art</em> preset.</td>
+</tr>
+<tr>
+<td>Line art was asked for, and the stroke widths vary too much to recover.</td>
+<td>Strokes need one width per path; this drawing's widths change along the line.</td>
+<td>Nothing: this drawing is not uniform-stroke line art.</td>
+</tr>
+<tr>
+<td>Part of this image is a continuous ramp, which is something SVG cannot hold.</td>
+<td>Part of the image is a smooth shade (a blur, a mesh, a photographic shadow) that no SVG gradient reproduces within a visible difference.</td>
+<td>Nothing in the settings; it is the closest arrangement of fills.</td>
+</tr>
+<tr>
+<td><em>N</em> very small features did not survive the trace at this size.</td>
+<td>Small islands of detail were painted over.</td>
+<td>Raise <strong>Trace size</strong>, or lower <strong>Speckle floor</strong> (see <a href="tune.html#detail">Tune</a>).</td>
+</tr>
+</tbody>
+</table>
+<p>The first row in this panel is also copied into the asset pack's README when you export one.</p><nav class="pagenav"><a class="prev" href="viewer.html"><span class="dir">Previous</span><span class="lbl">The viewer</span></a><a class="next" href="tune.html"><span class="dir">Next</span><span class="lbl">Tune</span></a></nav></article></main>
+  <aside class="rail"><h5>On this page</h5><ul><ul><li class="l2"><a href="#the-quality-report">The quality report</a></li><li class="l2"><a href="#the-readout-at-the-foot">The readout at the foot</a></li><li class="l2"><a href="#editability">Editability</a></li><li class="l2"><a href="#what-this-trace-could-not-recover">What this trace could not recover</a></li></ul></ul></aside>
+</div>
+</body>
+</html>

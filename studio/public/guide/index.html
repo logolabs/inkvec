@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="inkvec-guide" content="studio">
+<title>Inkvec Studio · Inkvec Studio guide</title>
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="side"><a class="guidebrand" href="index.html"><img src="logo-mono.svg" alt=""> <span>Inkvec Studio</span></a><div class="grp"><h4>User guide</h4><a href="index.html" aria-current="page">Overview</a><a href="install.html">Install and first launch</a><a href="getting-started.html">Getting started</a><a href="viewer.html">The viewer</a><a href="result.html">Result</a><a href="tune.html">Tune</a><a href="palette.html">Palette and colour groups</a><a href="export.html">Export</a><a href="minify.html">Minify SVG</a><a href="fabricate.html">Fabricate</a><a href="batch.html">Batch</a><a href="settings.html">Settings</a><a href="shortcuts.html">Keyboard and mouse</a><a href="troubleshooting.html">Troubleshooting</a></div><div class="grp"><h4>Tutorials</h4><a href="tutorials/jpeg-logo.html">Clean up a JPEG logo</a><a href="tutorials/favicon-asset-pack.html">A favicon and an asset pack</a><a href="tutorials/vinyl-htv.html">Layered vinyl and iron-on</a><a href="tutorials/laser.html">Laser: DXF and G-code</a></div><div class="grp"><h4>Online</h4><a href="https://logolabs.github.io/inkvec/">Inkvec documentation</a><a href="https://logolabs.github.io/inkvec/studio/index.html">This page on the web</a></div><p class="guidenote">This copy of the guide is part of the app and works without a network.</p></aside>
+  <main><article><h1 id="inkvec-studio">Inkvec Studio</h1>
+<p>Inkvec Studio is the desktop app for Inkvec. It turns a raster logo, icon or emoji into an SVG,
+shows you how close the SVG is to the image it came from, and prepares the result for the web,
+for print or for a cutting machine. It runs on Windows, macOS and Linux, and everything it does
+happens on your own computer: your image is never uploaded.</p>
+<p>This guide describes the app as it is in version 0.2.0. It covers every screen, and ends with
+four tutorials that each take one job from start to finish.</p>
+<p><img alt="The Vectorize tab: the source on the left, the SVG on the right, the quality report in the rail" src="img/workspace.webp"></p>
+<h2 id="what-is-where">What is where</h2>
+<p>The window has four tabs, chosen in the middle of the app bar.</p>
+<table>
+<thead>
+<tr>
+<th>Tab</th>
+<th>What it does</th>
+<th>Page</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Vectorize</strong></td>
+<td>Traces an image into an SVG and shows the two side by side, with a measured report.</td>
+<td><a href="viewer.html">The viewer</a>, <a href="result.html">Result</a>, <a href="tune.html">Tune</a></td>
+</tr>
+<tr>
+<td><strong>Minify SVG</strong></td>
+<td>Rewrites an SVG you already have with fewer numbers, without moving it.</td>
+<td><a href="minify.html">Minify SVG</a></td>
+</tr>
+<tr>
+<td><strong>Fabricate</strong></td>
+<td>Turns a drawing into sheets for a vinyl cutter, a sticker, a stencil, a pen or a laser.</td>
+<td><a href="fabricate.html">Fabricate</a></td>
+</tr>
+<tr>
+<td><strong>Batch</strong></td>
+<td>Traces every image in a folder, one SVG each.</td>
+<td><a href="batch.html">Batch</a></td>
+</tr>
+</tbody>
+</table>
+<p>On the right of the app bar are <strong>Open…</strong>, <strong>Recent</strong>, <strong>Settings</strong>, <strong>About</strong> and <strong>Help</strong>.
+Help (or <kbd>F1</kbd>) opens this guide inside the app, at the page about what is on screen. The
+guide is bundled with the app, so it works without a network; <strong>Open in browser</strong> shows the same
+page on the web.</p>
+<p><img alt="This guide, opened from Help inside the app" src="img/help.webp"></p>
+<p>The Vectorize tab is where most of the work happens. Its right-hand rail has two halves:
+<strong>Result</strong>, what the last trace produced, and <strong>Tune</strong>, the settings for the next one. Above both
+sit the two settings people most often change, the <strong>Denoiser</strong> and <strong>Editable</strong>, and below both
+a readout of the three numbers that matter (colour difference, coordinates, file size) with
+<strong>Export</strong> beside it.</p>
+<h2 id="how-a-trace-happens">How a trace happens</h2>
+<ol>
+<li>You open an image. <strong>Auto</strong> traces it at once with the settings you last used (the <strong>Logo</strong>
+   preset, the first time).</li>
+<li>A small card offers <strong>Custom</strong>: a few steps, each explained, with your result shown beside
+   Auto's. You can ignore the card; Auto's trace stands.</li>
+<li>Every setting you change starts a quick, small <strong>draft</strong> trace so you can see the effect, then
+   a <strong>full</strong> trace once you stop moving things. The full trace is what you export.</li>
+</ol>
+<p><a href="getting-started.html">Getting started</a> walks through this with a sample image.</p>
+<h2 id="inkvec-studio-and-inkvec-studio-lite">Inkvec Studio and Inkvec Studio Lite</h2>
+<p><strong>Inkvec Studio Lite</strong> is the same app running in a web browser. It differs from the desktop app
+in a few places:</p>
+<ul>
+<li>It cannot add the Windows <strong>Vectorize with Inkvec</strong> right-click entry or put the <code>inkvec</code>
+  command on your PATH (Settings, Advanced).</li>
+<li>It has no folder batch: the <strong>Batch</strong> tab needs to read and write folders on disk.</li>
+<li>Saving works through your browser's downloads: where this guide says a file is written to a
+  folder, Studio Lite downloads it instead.</li>
+</ul>
+<p>Where a page describes something Studio Lite does differently, it says so.</p>
+<h2 id="contents">Contents</h2>
+<p><strong>Using the app</strong></p>
+<ul>
+<li><a href="install.html">Install and first launch</a></li>
+<li><a href="getting-started.html">Getting started</a>: opening an image, Auto and Custom, the wizard</li>
+<li><a href="viewer.html">The viewer</a>: comparing, zooming, overlays, the pixel grid</li>
+<li><a href="result.html">Result</a>: the quality report, editability, what could not be recovered</li>
+<li><a href="tune.html">Tune</a>: presets and every control</li>
+<li><a href="palette.html">The palette and colour groups</a></li>
+<li><a href="export.html">Export</a>: SVG, PNG, favicon, asset pack, comparison card</li>
+<li><a href="minify.html">Minify SVG</a></li>
+<li><a href="fabricate.html">Fabricate</a>: vinyl, iron-on, stickers, stencils, pens and lasers</li>
+<li><a href="batch.html">Batch</a></li>
+<li><a href="settings.html">Settings</a>: preferences, the denoiser, the command line and the right-click menu</li>
+<li><a href="shortcuts.html">Keyboard and mouse</a></li>
+<li><a href="troubleshooting.html">Troubleshooting and questions</a></li>
+</ul>
+<p><strong>Tutorials</strong></p>
+<ul>
+<li><a href="tutorials/jpeg-logo.html">Clean up a JPEG logo</a></li>
+<li><a href="tutorials/favicon-asset-pack.html">A favicon and an asset pack</a></li>
+<li><a href="tutorials/vinyl-htv.html">Layered vinyl and iron-on</a></li>
+<li><a href="tutorials/laser.html">Laser cutting: DXF and G-code</a></li>
+</ul>
+<p>How the tracing itself works, stage by stage, is in <a href="https://logolabs.github.io/inkvec/algorithm/index.html">How Inkvec works</a>.
+What it cannot do is in <a href="https://logolabs.github.io/inkvec/limitations.html">Limitations</a>.</p>
+<p><em>The screenshots in this guide were taken from a development build with sample images. The
+numbers in them belong to those samples.</em></p><nav class="pagenav"><span></span><a class="next" href="install.html"><span class="dir">Next</span><span class="lbl">Install and first launch</span></a></nav></article></main>
+  <aside class="rail"><h5>On this page</h5><ul><ul><li class="l2"><a href="#what-is-where">What is where</a></li><li class="l2"><a href="#how-a-trace-happens">How a trace happens</a></li><li class="l2"><a href="#inkvec-studio-and-inkvec-studio-lite">Inkvec Studio and Inkvec Studio Lite</a></li><li class="l2"><a href="#contents">Contents</a></li></ul></ul></aside>
+</div>
+</body>
+</html>

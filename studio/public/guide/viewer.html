@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="inkvec-guide" content="studio">
+<title>The viewer · Inkvec Studio guide</title>
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="side"><a class="guidebrand" href="index.html"><img src="logo-mono.svg" alt=""> <span>Inkvec Studio</span></a><div class="grp"><h4>User guide</h4><a href="index.html">Overview</a><a href="install.html">Install and first launch</a><a href="getting-started.html">Getting started</a><a href="viewer.html" aria-current="page">The viewer</a><a href="result.html">Result</a><a href="tune.html">Tune</a><a href="palette.html">Palette and colour groups</a><a href="export.html">Export</a><a href="minify.html">Minify SVG</a><a href="fabricate.html">Fabricate</a><a href="batch.html">Batch</a><a href="settings.html">Settings</a><a href="shortcuts.html">Keyboard and mouse</a><a href="troubleshooting.html">Troubleshooting</a></div><div class="grp"><h4>Tutorials</h4><a href="tutorials/jpeg-logo.html">Clean up a JPEG logo</a><a href="tutorials/favicon-asset-pack.html">A favicon and an asset pack</a><a href="tutorials/vinyl-htv.html">Layered vinyl and iron-on</a><a href="tutorials/laser.html">Laser: DXF and G-code</a></div><div class="grp"><h4>Online</h4><a href="https://logolabs.github.io/inkvec/">Inkvec documentation</a><a href="https://logolabs.github.io/inkvec/studio/viewer.html">This page on the web</a></div><p class="guidenote">This copy of the guide is part of the app and works without a network.</p></aside>
+  <main><article><h1 id="the-viewer">The viewer</h1>
+<p>The stage of the Vectorize tab shows the image you opened (<strong>Source</strong>) beside the SVG it became
+(<strong>Vector · SVG</strong>). Both panes share one pan and one zoom, so the same spot is always under the
+same place in both. The SVG pane is drawn as a real vector at every zoom: at 12× an edge is still
+an edge, not an enlarged bitmap.</p>
+<h2 id="comparing-side-by-side-wipe-ab">Comparing: side by side, wipe, A/B</h2>
+<p>The three buttons at the left of the toolbar arrange the two panes.</p>
+<ul>
+<li><strong>Side by side</strong>: the two panes next to each other.</li>
+<li><strong>Wipe</strong>: one pane over the other, with a divider. Drag the divider to move it; the source is on
+  the left of it and the SVG on the right.</li>
+<li><strong>A/B</strong>: one pane at a time, the SVG. Hold <kbd>Space</kbd> to see the source instead, and
+  release to go back. Flicking between the two in place is the quickest way to see a small
+  difference.</li>
+</ul>
+<h2 id="zooming-and-panning">Zooming and panning</h2>
+<table>
+<thead>
+<tr>
+<th>To</th>
+<th>Do this</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Zoom about a point</td>
+<td>Scroll the wheel (or pinch on a trackpad) over either pane</td>
+</tr>
+<tr>
+<td>Pan</td>
+<td>Drag with the left button</td>
+</tr>
+<tr>
+<td>Fit the drawing to the window</td>
+<td>Double-click a pane, press <kbd>0</kbd>, or press <strong>Fit</strong></td>
+</tr>
+<tr>
+<td>Zoom to a fixed stop</td>
+<td><strong>1×</strong>, <strong>4×</strong> or <strong>12×</strong> in the toolbar</td>
+</tr>
+<tr>
+<td>Zoom in or out a step</td>
+<td><kbd>+</kbd> and <kbd>-</kbd></td>
+</tr>
+</tbody>
+</table>
+<p>Zoom runs from a quarter of the image's size to 64×. The view fits the window until you zoom or
+pan; after that it stays where you put it when the window is resized. From 4× up, the source is
+drawn with square pixels rather than smoothed, because those pixels are the evidence the trace was
+measured against.</p>
+<h2 id="overlays-what-the-svg-is-made-of">Overlays: what the SVG is made of</h2>
+<p>The <strong>Show</strong> toggles draw on the SVG pane.</p>
+<ul>
+<li><strong>Fill</strong>: the drawing's colours. Turned off, the fill dims rather than disappears, so the
+  outlines still have something to sit on.</li>
+<li><strong>Wireframe</strong>: every outline as a thin line.</li>
+<li><strong>Anchors</strong>: every node, as a dot.</li>
+<li><strong>Handles</strong>: the Bézier control handles, as lines with a diamond at the end.</li>
+<li><strong>Certainty</strong>: how sure each edge is (below).</li>
+</ul>
+<p><img alt="Wireframe, anchors and handles over the SVG at 4×" src="img/overlays.webp"></p>
+<p>A key to the marks appears at the right of the toolbar while any overlay is on. Anchors and
+handles are how you judge what the file will be like to edit: fewer nodes, and handles that line
+up, are easier to work with. <a href="tune.html#the-denoiser-and-editable">Editable structure</a> is the setting
+that moves them towards what an artist would draw.</p>
+<h2 id="detail-the-pixel-grid-under-the-edge">Detail: the pixel grid under the edge</h2>
+<p><strong>Detail</strong> draws the source's pixel grid under the SVG, one cell per source pixel, and zooms to
+12× if you are further out (the grid is only drawn from 6× up, where a cell is big enough to see).
+It shows where a vector edge falls inside the partly covered pixels along the source's
+anti-aliased boundary: a good trace cuts through them where their shade says the boundary is.</p>
+<p>While Detail is on, a small note on the stage names the <strong>worst corner</strong>: the place where the
+trace and the source disagree most, with its colour difference and position. <strong>Jump to it</strong> goes
+there at 12×. The same jump is <strong>Find the worst corner</strong> in the <a href="result.html">quality report</a>.</p>
+<h2 id="certainty">Certainty</h2>
+<p><strong>Certainty</strong> draws a band along each boundary showing where that boundary could be, measured from
+the pixels: two standard deviations either side of the traced edge.</p>
+<p><img alt="Certainty bands and the pixel grid at 12×" src="img/detail-certainty.webp"></p>
+<table>
+<thead>
+<tr>
+<th>Colour</th>
+<th>Means</th>
+<th>Band's typical half-width</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>sure</strong> (green)</td>
+<td>A crisp edge; the curve sits where the pixels say</td>
+<td>up to 0.1 px</td>
+</tr>
+<tr>
+<td><strong>soft</strong> (amber)</td>
+<td>A softer edge; still well placed</td>
+<td>up to 0.3 px</td>
+</tr>
+<tr>
+<td><strong>unsure</strong> (red)</td>
+<td>A blurred, soft or compressed edge; the curve here is a best guess</td>
+<td>more than 0.3 px</td>
+</tr>
+</tbody>
+</table>
+<p>A thin green line everywhere is what a clean PNG gives. Wide red bands usually mean the image was
+enlarged, blurred or compressed; the <a href="settings.html#denoiser">denoiser</a> or a better source helps
+more than any setting.</p>
+<p>If a trace has no certainty information, the toggle is greyed out until the next trace.</p>
+<h2 id="draft-and-full-traces">Draft and full traces</h2>
+<p>Every change to a control starts a <strong>draft</strong> straight away: the same settings, traced small
+(512 px on the longer side by default) with a short time limit, so the picture keeps up with you.
+When the controls have been still for a moment (0.8 s by default), the <strong>full</strong> trace starts. A
+chip at the top right of the stage says which one you are looking at:</p>
+<ul>
+<li><strong>draft · 512 px</strong> (gold): a draft; the full trace is queued.</li>
+<li><strong>final · 1024 px</strong> (green): the full trace, at the size it was traced.</li>
+<li><strong>re-tracing · …</strong> (copper): a trace is running; the drawing on screen is the previous one.</li>
+</ul>
+<p>The chip flashes when a draft is replaced by its full trace, so the swap is never silent. Draft
+size, draft time limit and the wait before the full trace are in
+<a href="settings.html#performance">Settings, Performance</a>.</p>
+<p>Only the full trace is ever exported: <a href="export.html">Export</a> always runs one first.</p>
+<h2 id="the-status-strip">The status strip</h2>
+<p>The line along the bottom of the stage says what is happening: the stage the trace is on and the
+time so far (with <kbd>Esc</kbd> to cancel), or how long the last trace took, at what size, and
+how many segments it has. When the update check has found a new version, it says so here and
+nowhere else. The right end always carries the same sentence: <em>Your image never leaves this
+computer.</em></p>
+<h2 id="when-the-stage-is-not-showing-a-drawing">When the stage is not showing a drawing</h2>
+<table>
+<thead>
+<tr>
+<th>The stage says</th>
+<th>What it means</th>
+<th>What to do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Reading <em>file</em></td>
+<td>The image is being decoded; tracing starts as soon as it is in memory.</td>
+<td>Wait.</td>
+</tr>
+<tr>
+<td>This image is one flat colour</td>
+<td>There is no boundary to trace; the whole output would be one rectangle.</td>
+<td>Open another image.</td>
+</tr>
+<tr>
+<td>This file will not decode</td>
+<td>The file is damaged or not an image the app reads. The message says why.</td>
+<td>Open another image.</td>
+</tr>
+<tr>
+<td>The trace would run out of memory</td>
+<td>The trace size needs more memory than is free; the card gives the estimate.</td>
+<td><strong>Retry at</strong> the smaller size it suggests; it usually costs nothing visible.</td>
+</tr>
+<tr>
+<td>The trace stopped</td>
+<td>Something failed; the message says what.</td>
+<td><strong>Trace again</strong>.</td>
+</tr>
+<tr>
+<td>Trace cancelled</td>
+<td>You pressed <kbd>Esc</kbd> or <strong>Cancel</strong>. The last full trace is still on screen and still exportable.</td>
+<td><strong>Trace again</strong> when you want.</td>
+</tr>
+<tr>
+<td>This preset wants the denoiser</td>
+<td>You chose <em>Photo or scan</em>, or turned the denoiser on, before downloading it. The trace runs without it.</td>
+<td><strong>Download the denoiser</strong>, or carry on.</td>
+</tr>
+<tr>
+<td>No network</td>
+<td>The update check could not connect. Tracing never needed a network.</td>
+<td>Nothing.</td>
+</tr>
+</tbody>
+</table>
+<p>A large image is traced at the <strong>Trace size</strong> (2048 px on the longer side by default) and the SVG
+is still written at the image's full size. When that happens a note says so; it is normal, and the
+SVG scales without limit.</p><nav class="pagenav"><a class="prev" href="getting-started.html"><span class="dir">Previous</span><span class="lbl">Getting started</span></a><a class="next" href="result.html"><span class="dir">Next</span><span class="lbl">Result</span></a></nav></article></main>
+  <aside class="rail"><h5>On this page</h5><ul><ul><li class="l2"><a href="#comparing-side-by-side-wipe-ab">Comparing: side by side, wipe, A/B</a></li><li class="l2"><a href="#zooming-and-panning">Zooming and panning</a></li><li class="l2"><a href="#overlays-what-the-svg-is-made-of">Overlays: what the SVG is made of</a></li><li class="l2"><a href="#detail-the-pixel-grid-under-the-edge">Detail: the pixel grid under the edge</a></li><li class="l2"><a href="#certainty">Certainty</a></li><li class="l2"><a href="#draft-and-full-traces">Draft and full traces</a></li><li class="l2"><a href="#the-status-strip">The status strip</a></li><li class="l2"><a href="#when-the-stage-is-not-showing-a-drawing">When the stage is not showing a drawing</a></li></ul></ul></aside>
+</div>
+</body>
+</html>

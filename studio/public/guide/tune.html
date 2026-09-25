@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="inkvec-guide" content="studio">
+<title>Tune: presets and every control · Inkvec Studio guide</title>
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="side"><a class="guidebrand" href="index.html"><img src="logo-mono.svg" alt=""> <span>Inkvec Studio</span></a><div class="grp"><h4>User guide</h4><a href="index.html">Overview</a><a href="install.html">Install and first launch</a><a href="getting-started.html">Getting started</a><a href="viewer.html">The viewer</a><a href="result.html">Result</a><a href="tune.html" aria-current="page">Tune</a><a href="palette.html">Palette and colour groups</a><a href="export.html">Export</a><a href="minify.html">Minify SVG</a><a href="fabricate.html">Fabricate</a><a href="batch.html">Batch</a><a href="settings.html">Settings</a><a href="shortcuts.html">Keyboard and mouse</a><a href="troubleshooting.html">Troubleshooting</a></div><div class="grp"><h4>Tutorials</h4><a href="tutorials/jpeg-logo.html">Clean up a JPEG logo</a><a href="tutorials/favicon-asset-pack.html">A favicon and an asset pack</a><a href="tutorials/vinyl-htv.html">Layered vinyl and iron-on</a><a href="tutorials/laser.html">Laser: DXF and G-code</a></div><div class="grp"><h4>Online</h4><a href="https://logolabs.github.io/inkvec/">Inkvec documentation</a><a href="https://logolabs.github.io/inkvec/studio/tune.html">This page on the web</a></div><p class="guidenote">This copy of the guide is part of the app and works without a network.</p></aside>
+  <main><article><h1 id="tune-presets-and-every-control">Tune: presets and every control</h1>
+<p>The <strong>Tune</strong> half of the rail holds the settings for the next trace: eight presets, any presets you
+saved, and twenty-two controls. Moving any of them starts a draft at once and a full trace a moment
+later (see <a href="viewer.html#draft-and-full-traces">draft and full traces</a>); the readout at the foot of
+the rail shows what the change bought or cost.</p>
+<p><img alt="The Tune half of the rail: presets, then the Detail group with one control changed" src="img/tune.webp"></p>
+<p>The tab's label says how many controls are away from the selected preset (<em>2 changed</em>). If you
+are not sure where to start, <strong>Walk me through it</strong> at the top opens the
+<a href="getting-started.html#the-custom-wizard">Custom wizard</a> for the image that is open.</p>
+<h2 id="how-the-controls-work">How the controls work</h2>
+<ul>
+<li><strong>Sliders</strong> move a readout while you drag and apply when you let go. The arrow keys move them one
+  step at a time. The words under a slider (<em>exact</em>, <em>default</em>, <em>coarse</em>) name the ends of its
+  scale; several sliders are not linear, so that the useful range gets most of the track.</li>
+<li><strong>Number fields</strong> beside each slider take a value typed in; it applies on <kbd>Enter</kbd> or
+  when you leave the field, and is held to the control's range.</li>
+<li><strong>Switches</strong> apply at once.</li>
+<li><strong>Hover or focus a control's name</strong> to read what it does. The text is the engine's own
+  documentation for the option, unedited.</li>
+</ul>
+<p>A control you have moved is marked with a dot. Each group (<strong>Detail</strong>, <strong>Colour</strong>, <strong>Shape</strong>,
+<strong>Output</strong>) folds open and shut from its heading, says how many of its controls are changed, and
+has its own <strong>Reset</strong>. <strong>Output</strong> starts folded.</p>
+<p>The controls are the same ones the <code>inkvec</code> command line has; the Studio only gives them
+plain-language names. The table at the end of this page maps them.</p>
+<h2 id="the-denoiser-and-editable">The denoiser and Editable</h2>
+<p>Two settings sit above both halves of the rail, big, because they are the two people most often
+come for. Each is one control, shown once.</p>
+<p><strong>Denoiser</strong>: <strong>Off</strong>, <strong>Auto</strong> or <strong>On</strong>. The denoiser is a trained model that repairs JPEG, WebP
+and screenshot damage at the image's own size before tracing, so the colours are the ones the
+artwork was drawn with rather than the ones the compression left.</p>
+<ul>
+<li><strong>Off</strong> (the default) traces the pixels as they are. On a clean PNG the denoiser costs a little
+  colour accuracy, which is why it is off.</li>
+<li><strong>Auto</strong> traces, measures the fit, and cleans only if the trace disagrees with the image where it
+  claims to be flat.</li>
+<li><strong>On</strong> always cleans first.</li>
+</ul>
+<p>It adds about 0.6 s to each full trace; drafts skip it. It is a one-time download of about 80 MB
+(see <a href="settings.html#denoiser">the denoiser</a>). If you choose Auto or On before downloading it, the
+trace carries on without it and <strong>Download it</strong> appears in its place. A build without the denoiser
+(the Intel macOS build) shows <em>not in this build</em>.</p>
+<p><strong>Editable</strong>: a switch for <strong>Editable structure</strong>. After fitting, it spends parameters on structure
+an artist can edit: joins that are smooth, handles that lie on an axis and have equal lengths, nodes
+lined up with each other, and shapes that are symmetric locked into exact mirrors. The outline stays
+within the same tolerance; the <a href="result.html#editability">Editability card</a> shows what it changed, and
+the quality report shows its price (about 0.04 dE00 on icons).</p>
+<h2 id="presets">Presets</h2>
+<p>A preset is a handful of settings chosen together. The tray shows the eight built-ins; the line
+under it describes the one selected.</p>
+<table>
+<thead>
+<tr>
+<th>Preset</th>
+<th>For</th>
+<th>What it changes from Logo</th>
+<th>Shortcut</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Logo</strong></td>
+<td>The default</td>
+<td>Nothing</td>
+<td><kbd>Ctrl</kbd>+<kbd>1</kbd></td>
+</tr>
+<tr>
+<td><strong>Icon</strong></td>
+<td>Small flat marks</td>
+<td>Speckle floor 1 px², Max colours 16</td>
+<td><kbd>Ctrl</kbd>+<kbd>2</kbd></td>
+</tr>
+<tr>
+<td><strong>Fine detail</strong></td>
+<td>Filigree, crests, emoji</td>
+<td>Precision 0.05 px</td>
+<td><kbd>Ctrl</kbd>+<kbd>3</kbd></td>
+</tr>
+<tr>
+<td><strong>Fewer paths</strong></td>
+<td>The smallest file</td>
+<td>Fewer paths on, Colour merging doubled (0.07)</td>
+<td><kbd>Ctrl</kbd>+<kbd>4</kbd></td>
+</tr>
+<tr>
+<td><strong>Photo or scan</strong></td>
+<td>Photographed or screenshotted marks</td>
+<td>Denoiser Auto</td>
+<td><kbd>Ctrl</kbd>+<kbd>5</kbd></td>
+</tr>
+<tr>
+<td><strong>Black &amp; white</strong></td>
+<td>Stamps, signatures</td>
+<td>Black &amp; white on</td>
+<td><kbd>Ctrl</kbd>+<kbd>6</kbd></td>
+</tr>
+<tr>
+<td><strong>Line art</strong></td>
+<td>Uniform-stroke drawings</td>
+<td>Line art on</td>
+<td><kbd>Ctrl</kbd>+<kbd>7</kbd></td>
+</tr>
+<tr>
+<td><strong>Editable</strong></td>
+<td>Tidy nodes for an artist to edit</td>
+<td>Editable structure on</td>
+<td><kbd>Ctrl</kbd>+<kbd>8</kbd></td>
+</tr>
+</tbody>
+</table>
+<p>On a Mac the shortcuts use <kbd>⌘</kbd>. Choosing a preset sets <em>every</em> control to that preset's
+values, so anything you had moved goes back. Moving a control after choosing a preset keeps the
+preset selected and counts the control as changed; <strong>Reset <em>N</em> changed</strong> puts them back.</p>
+<p><strong>Photo or scan</strong> needs the denoiser to do what it says. Without it the trace still runs, and the
+stage says the denoiser is missing and offers the download.</p>
+<h3 id="saving-your-own">Saving your own</h3>
+<p><strong>Save as preset</strong> stores all twenty-two controls exactly as they stand, under a name you give
+(up to 40 characters). It appears in the tray after the built-ins; the <strong>×</strong> on its chip forgets
+it. You can keep up to twelve. A saved preset is a complete snapshot rather than a list of
+differences, so it does not change if a future version changes the defaults.</p>
+<p>Colour groups are never saved in a preset: they name colours of one image.</p>
+<h2 id="detail">Detail</h2>
+<p><strong>Precision</strong> (px, 0.02 to 0.5, default 0.1). How much a coordinate has to earn its place.
+Smaller values follow the edge more closely and spend more coordinates doing it; larger values give
+a lighter file that follows less closely. It does not change how many decimals are written
+(always two).
+<em>Change it when</em> a crest or fine lettering loses detail (lower it), or when a simple mark has more
+nodes than it needs (raise it).</p>
+<p><strong>Speckle floor</strong> (px², 0 to 64, default 2). Features smaller than this area are dropped.
+<em>Raise it</em> to drop scanner dust and JPEG specks; <em>lower it</em> to keep tiny serifs, dots and
+one-pixel details.</p>
+<p><strong>Trace size</strong> (px, 256 to 4096, default 2048). An image larger than this on its longer side is
+traced at this size, and the SVG is still written at the image's full size. Smaller images are
+traced at their own size. Tracing time grows with the number of pixels.
+<em>Raise it</em> when a large image has small details that come back missing; <em>lower it</em> when a trace is
+slow or runs out of memory.</p>
+<p><strong>Time limit</strong> (s, 0 to 60, default 0: none). A budget for the trace. Two expensive steps stop
+early to meet it (merging gradient bands stops at 60% of it, the boundary solve gets 25%); the
+result is still a correct trace, with more fills or a less polished outline. With a time limit the
+output depends on how fast and how busy the computer is, so the same image can trace differently
+twice. Leave it at 0 unless a batch of very large images must finish in time.</p>
+<h2 id="colour">Colour</h2>
+<p><strong>Max colours</strong> (2 to 2048, default 64). The largest palette the trace may use. The transparent
+background does not count towards it.
+<em>Lower it</em> to force a small palette on a scan with many near-identical shades. To merge particular
+colours, <a href="palette.html#colour-groups">colour groups</a> are more precise.</p>
+<p><strong>Colour merging</strong> (0 to 0.2, default 0.035). How close two colours must be (a distance in the
+OKLab colour space) to be treated as one ink.
+<em>Raise it</em> when shades that should be one colour come back as several; <em>lower it</em> when two
+genuinely different colours were merged.</p>
+<p><strong>Flat fills instead of gradients</strong> (off). Skips gradient fitting and fills every region with one
+colour. For flat artwork, or when the SVG must not contain gradients.</p>
+<p><strong>Black &amp; white</strong> (off). Two inks only: the Potrace-style mode, for stamps, signatures and scans
+of print.</p>
+<p><strong>Trace transparency</strong> (on). Transparency is traced as it is: holes stay holes, every ink carries
+its own opacity, and soft shadows, glows and feathered edges come back as translucent fills. Turned
+off, the image is laid on a solid background first and traced as solid colours, which fills holes
+and gaps with that background. It changes nothing for an image without transparency.</p>
+<p>The denoiser's setting (<em>Clean up damage</em>) belongs to this group but is shown at the top of the
+rail.</p>
+<h2 id="shape">Shape</h2>
+<p><strong>Match repeated shapes</strong> (on). Marks that repeat across the drawing (a row of stars, the dots of
+several i's) are redrawn from one shared shape, which saves coordinates. A mark takes the shared
+shape only where that stays within 0.1 px of its own traced outline and actually costs less; a
+fitted circle or rounded rectangle, and a shape another shape is drawn against, are never moved.</p>
+<p><strong>Match threshold</strong> (0.5 to 1, default 0.92). How alike two marks' outlines must be to count as
+the same shape. Towards 1, only near-identical marks are matched.</p>
+<p><strong>Fewer paths</strong> (off). Scales the fit tolerances with the image, so a large, simple drawing costs
+what a small one would. It trades accuracy for a smaller file: small squares can come back as
+circles, and thin rings broken. Used by the <em>Fewer paths</em> preset.</p>
+<p><strong>Line art</strong> (off). Writes line art as strokes, one path and one width each, instead of as the
+filled outlines around the lines, so the lines can be re-weighted in an editor. On anything that is
+not uniform-stroke line art it does nothing, and the Result tab says so.</p>
+<p><strong>Repair crossing rings</strong> (on). A pass after fitting that fixes outlines that cross themselves.
+Turned off, each outline is exactly as the fitter wrote it, crossings included. Leave it on.</p>
+<p><strong>Curve cost</strong> (parameters, 2 to 12, default 6). What one Bézier curve costs the fit; a straight
+line costs 2. At 6, a chain of short lines is often cheaper than the one curve that describes it,
+which is why traces come out less curvy than hand-drawn artwork.
+<em>Lower it</em> for more curves and fewer lines, at some cost in file size.</p>
+<p><strong>Smooth-join angle</strong> (degrees, 1 to 60, default 10). The turn at a join that counts as a full
+corner; gentler bends are charged less.
+<em>Raise it</em> to let gentle bends stay smooth, which tends to give more curves and a little more
+detail in a slightly larger file.</p>
+<p><em>Editable structure</em> belongs to this group but is shown at the top of the rail, as <strong>Editable</strong>.</p>
+<h2 id="output">Output</h2>
+<p>These rewrite the drawing rather than change the trace.</p>
+<p><strong>Minify</strong> (off). No ids or groups, no trailing zeros: the same geometry in a file typically about
+a tenth smaller. Export always writes a minified copy as well, so you only need this if you copy or
+batch the SVG.</p>
+<p><strong>Transparent background</strong> (off). The shape that covers the whole canvas is not painted, so the
+artwork sits on transparency. Use it for a logo that will go on coloured backgrounds.</p>
+<p><strong>Margin</strong> (0 to 0.25, default 0). Transparent space around the drawing, as a fraction of its
+longer side: 0.05 adds 5% on every side. The canvas grows; the drawing does not move.</p>
+<p><strong>Holes as cutouts</strong> (off). Carries the image's transparency into the SVG as holes: a region the
+image drew transparent becomes a hole, one drawn at a single opacity keeps that opacity, and white
+artwork on a transparent background survives. It changes nothing for an image without
+transparency. With <strong>Trace transparency</strong> on (the default) holes already stay holes, so this
+matters mainly when that is off.</p>
+<h2 id="the-same-controls-on-the-command-line">The same controls on the command line</h2>
+<table>
+<thead>
+<tr>
+<th>Studio</th>
+<th><code>inkvec</code> option</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Precision</td>
+<td><code>--precision</code></td>
+</tr>
+<tr>
+<td>Speckle floor</td>
+<td><code>--min-area</code></td>
+</tr>
+<tr>
+<td>Trace size</td>
+<td><code>--max-dim</code></td>
+</tr>
+<tr>
+<td>Time limit</td>
+<td><code>--time-budget</code></td>
+</tr>
+<tr>
+<td>Max colours</td>
+<td><code>--colors</code></td>
+</tr>
+<tr>
+<td>Colour merging</td>
+<td><code>--merge</code></td>
+</tr>
+<tr>
+<td>Flat fills instead of gradients</td>
+<td><code>--no-gradients</code></td>
+</tr>
+<tr>
+<td>Black &amp; white</td>
+<td><code>--bilevel</code></td>
+</tr>
+<tr>
+<td>Trace transparency</td>
+<td>on by default; <code>--no-native-alpha</code> turns it off</td>
+</tr>
+<tr>
+<td>Denoiser (Clean up damage)</td>
+<td><code>--restore off</code>, <code>--restore auto</code>, <code>--restore on</code></td>
+</tr>
+<tr>
+<td>Match repeated shapes</td>
+<td>on by default; <code>--no-harmonize</code> turns it off</td>
+</tr>
+<tr>
+<td>Match threshold</td>
+<td><code>--harmonize-threshold</code></td>
+</tr>
+<tr>
+<td>Fewer paths</td>
+<td><code>--content-units</code></td>
+</tr>
+<tr>
+<td>Line art</td>
+<td><code>--strokes</code></td>
+</tr>
+<tr>
+<td>Repair crossing rings</td>
+<td>on by default; <code>--no-repair</code> turns it off</td>
+</tr>
+<tr>
+<td>Editable structure</td>
+<td><code>--editability</code></td>
+</tr>
+<tr>
+<td>Curve cost</td>
+<td><code>--bezier-cost</code></td>
+</tr>
+<tr>
+<td>Smooth-join angle</td>
+<td><code>--corner-angle</code></td>
+</tr>
+<tr>
+<td>Minify</td>
+<td><code>--minify</code></td>
+</tr>
+<tr>
+<td>Transparent background</td>
+<td><code>--no-background</code></td>
+</tr>
+<tr>
+<td>Margin</td>
+<td><code>--margin</code></td>
+</tr>
+<tr>
+<td>Holes as cutouts</td>
+<td><code>--cutout</code></td>
+</tr>
+<tr>
+<td>Colour groups (<a href="palette.html#colour-groups">palette</a>)</td>
+<td><code>--merge-colors</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>inkvec --help</code> lists them all with their exact spelling.</p><nav class="pagenav"><a class="prev" href="result.html"><span class="dir">Previous</span><span class="lbl">Result</span></a><a class="next" href="palette.html"><span class="dir">Next</span><span class="lbl">Palette and colour groups</span></a></nav></article></main>
+  <aside class="rail"><h5>On this page</h5><ul><ul><li class="l2"><a href="#how-the-controls-work">How the controls work</a></li><li class="l2"><a href="#the-denoiser-and-editable">The denoiser and Editable</a></li><li class="l2"><a href="#presets">Presets</a><ul><li class="l3"><a href="#saving-your-own">Saving your own</a></li></ul></li><li class="l2"><a href="#detail">Detail</a></li><li class="l2"><a href="#colour">Colour</a></li><li class="l2"><a href="#shape">Shape</a></li><li class="l2"><a href="#output">Output</a></li><li class="l2"><a href="#the-same-controls-on-the-command-line">The same controls on the command line</a></li></ul></ul></aside>
+</div>
+</body>
+</html>

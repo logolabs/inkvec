@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="inkvec-guide" content="studio">
+<title>The palette and colour groups · Inkvec Studio guide</title>
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="side"><a class="guidebrand" href="index.html"><img src="logo-mono.svg" alt=""> <span>Inkvec Studio</span></a><div class="grp"><h4>User guide</h4><a href="index.html">Overview</a><a href="install.html">Install and first launch</a><a href="getting-started.html">Getting started</a><a href="viewer.html">The viewer</a><a href="result.html">Result</a><a href="tune.html">Tune</a><a href="palette.html" aria-current="page">Palette and colour groups</a><a href="export.html">Export</a><a href="minify.html">Minify SVG</a><a href="fabricate.html">Fabricate</a><a href="batch.html">Batch</a><a href="settings.html">Settings</a><a href="shortcuts.html">Keyboard and mouse</a><a href="troubleshooting.html">Troubleshooting</a></div><div class="grp"><h4>Tutorials</h4><a href="tutorials/jpeg-logo.html">Clean up a JPEG logo</a><a href="tutorials/favicon-asset-pack.html">A favicon and an asset pack</a><a href="tutorials/vinyl-htv.html">Layered vinyl and iron-on</a><a href="tutorials/laser.html">Laser: DXF and G-code</a></div><div class="grp"><h4>Online</h4><a href="https://logolabs.github.io/inkvec/">Inkvec documentation</a><a href="https://logolabs.github.io/inkvec/studio/palette.html">This page on the web</a></div><p class="guidenote">This copy of the guide is part of the app and works without a network.</p></aside>
+  <main><article><h1 id="the-palette-and-colour-groups">The palette and colour groups</h1>
+<p>The palette card, at the bottom of the Result tab, lists every ink in the drawing: each flat
+colour, and each gradient. It is where you correct a colour, match the drawing to a brand palette,
+and tell the tracer that two colours are really one.</p>
+<p><img alt="The palette of an emoji, with two suggested colour groups; the one under the pointer is singled out in the drawing" src="img/palette.webp"></p>
+<h2 id="the-inks">The inks</h2>
+<p>Each row shows the ink's swatch, its hex value (or <em>linear</em> / <em>radial</em> for a gradient), the share
+of the canvas it covers, and on the right what can be done with it. Inks are listed largest first.</p>
+<p><strong>Hover or focus any ink</strong> and the drawing singles it out: everything else dims and the ink's
+shapes are outlined, so you can see exactly where a colour is used, even a piece one pixel wide.
+The same works for groups and their members, below.</p>
+<p><strong>Copy all as CSS</strong> copies the flat inks as CSS custom properties, <code>--ink-1</code>, <code>--ink-2</code> and so on,
+in the same order, each with its share of the canvas in a comment.</p>
+<h2 id="snapping-an-ink-to-an-exact-colour">Snapping an ink to an exact colour</h2>
+<p>Click a flat ink to open the snap popover. It shows the colour that was measured (<em>traced</em>) and
+how much of the canvas it covers, and takes a new colour from the picker or as a hex value.
+<strong>Snap</strong> repaints that ink in the new colour.</p>
+<p>Snapping rewrites the fills only; it does not trace again, so it is instant and the shapes do not
+change. The ink's row then says <em>snapped</em> with the colour difference between what was measured and
+what you chose. The popover says it plainly: you are overriding a measurement.</p>
+<p>A snap belongs to the drawing on screen. Any new trace measures the colours again and replaces it,
+so snap last. <strong>In version 0.2.0, Export is one of those traces</strong>: it always runs a fresh full
+trace first, and the files it writes carry the measured colours, not the snapped ones. To keep
+snapped colours, use <strong>Copy SVG</strong> (or the comparison card), which take the drawing exactly as it is
+on screen, or give the colours to a <a href="#colour-groups">colour group</a> with a <strong>Custom…</strong> colour, which
+is a setting and survives every trace.</p>
+<p>A gradient cannot be snapped: it has no single colour. Its row shows how many stops it has.</p>
+<h2 id="paste-a-brand-palette">Paste a brand palette</h2>
+<p><strong>Paste brand palette</strong> takes a list of colours, one per line, as hex (<code>#12443E</code>), RGB or CSS
+custom properties (<code>--brand-green: #12443E;</code>). Each flat ink of the drawing is then matched to the
+nearest colour you pasted. The preview lists every match with its colour difference: <em>exact</em> when
+the two are indistinguishable, green under 0.5 dE00, gold above. <strong>Snap</strong> applies them all.</p>
+<p>Two things to know:</p>
+<ul>
+<li><em>Every</em> flat ink is snapped to its nearest pasted colour, including inks that are far from all of
+  them. Paste every colour the design has (its white and black too), and check the gold rows before
+  you press Snap.</li>
+<li>In version 0.2.0, write RGB with spaces, <code>rgb(207 198 180)</code>. Commas also separate colours in the
+  pasted text, so <code>rgb(207, 198, 180)</code> is split apart and misread.</li>
+</ul>
+<p>This is the quickest fix for a logo traced from a JPEG or a screenshot, whose colours carry the
+compression's error: paste the brand's real values and every ink lands on them. Pasted colours are
+snaps, so the note above applies: take the result with <strong>Copy SVG</strong>.</p>
+<h2 id="colour-groups">Colour groups</h2>
+<p>A <strong>colour group</strong> is a set of inks you want drawn as one. Unlike a snap, a group re-traces: the
+engine merges the group's colours in the image before tracing, so the shapes between them really
+join into one, rather than two shapes of the same colour side by side.</p>
+<p>Groups are how you fix the most common palette problems:</p>
+<ul>
+<li>a flat colour that came back as two nearly identical inks (anti-aliasing or compression measured
+  it twice);</li>
+<li>more colours than the design has;</li>
+<li>a shadow or a highlight you want to fold into the colour under it.</li>
+</ul>
+<h3 id="suggested-groups">Suggested groups</h3>
+<p>After each full trace the card proposes groups under <strong>Suggested</strong>. By default these are <em>near
+duplicates</em>: inks that look like the same colour measured twice. Nothing is applied until you say
+so.</p>
+<ul>
+<li><strong>Accept</strong> turns a suggestion into a group (and re-traces). <strong>Accept all</strong> takes every
+  suggestion at once.</li>
+<li><strong>Dismiss</strong> drops it; it will not be proposed again for this image.</li>
+<li>A suggestion can be edited before you accept it: take a member out with its <strong>×</strong>, or drag
+  another ink onto it.</li>
+</ul>
+<p><strong>Colours</strong> <em>N</em> <strong>of</strong> <em>M</em>, with <strong>−</strong> and <strong>+</strong>, asks for a smaller palette: set it to the number
+of colours the design really has, and the suggestions change to groups that merge the palette down
+to that many. Back at the full count, the suggestions are near duplicates again.</p>
+<h3 id="making-a-group-yourself">Making a group yourself</h3>
+<p>Any of these works:</p>
+<ul>
+<li><strong>Drag an ink onto another ink.</strong> The two become a new group, or the dragged ink joins the group
+  the other is already in.</li>
+<li><strong>Drag an ink onto a group</strong> (or a suggestion) to add it.</li>
+<li><strong>Tick inks and press Merge.</strong> The tick box is at the left of each row; <kbd>Space</kbd> ticks it
+  from the keyboard. <strong>Merge</strong> puts the ticked inks in one group (or into the group one of them is
+  already in). <strong>Clear</strong> unticks them.</li>
+</ul>
+<p>To take a colour out of a group, press the <strong>×</strong> on its chip, or drag the chip out of the group and
+drop it anywhere else. A group left with one member stops being a group.</p>
+<h3 id="what-a-group-becomes">What a group becomes</h3>
+<p>Under each group's members, an arrow shows the colour it will be drawn in:</p>
+<ul>
+<li><strong>most-used</strong> (the default): the member that covers most of the image.</li>
+<li><strong>Click a member</strong> to make the group that colour. If the member is a gradient, the gradient is
+  extended over the whole group. Click it again to go back to most-used.</li>
+<li><strong>Custom…</strong> paints the whole group one colour of your choosing (hex <code>#RRGGBB</code>). <strong>Most-used</strong>
+  undoes it.</li>
+</ul>
+<h3 id="what-the-engine-did">What the engine did</h3>
+<p>After the re-trace, each group says what was merged, or warns you:</p>
+<ul>
+<li><em>Merged on the next trace</em>: the group is new and its trace has not landed yet.</li>
+<li><em>#C0392B is no longer in the image; the rest merged</em>: a member matched nothing (usually after a
+  control change moved the colours). The others were still merged.</li>
+<li><em>Left alone: fewer than two of these colours are in the image now</em>: nothing to merge.</li>
+</ul>
+<p><strong>Ungroup</strong> traces a group's inks on their own again; <strong>Clear groups</strong> removes every group.</p>
+<h3 id="groups-belong-to-one-image">Groups belong to one image</h3>
+<p>Colour groups name colours of the picture that is open. They are not saved with presets or
+preferences, are not used by Batch, and are cleared when you open another image. They do go with
+every trace of the current image, drafts included, and the Custom wizard's <strong>Undo my changes</strong>
+restores them with the controls.</p>
+<p><strong>Command line:</strong> the same grouping is <code>inkvec --merge-colors</code>, for example
+<code>--merge-colors "#c0392b,#e74c3c;#123456,#abcdef=#ffffff"</code> (groups separated by <code>;</code>, members by
+<code>,</code>, an optional <code>=</code> target).</p><nav class="pagenav"><a class="prev" href="tune.html"><span class="dir">Previous</span><span class="lbl">Tune</span></a><a class="next" href="export.html"><span class="dir">Next</span><span class="lbl">Export</span></a></nav></article></main>
+  <aside class="rail"><h5>On this page</h5><ul><ul><li class="l2"><a href="#the-inks">The inks</a></li><li class="l2"><a href="#snapping-an-ink-to-an-exact-colour">Snapping an ink to an exact colour</a></li><li class="l2"><a href="#paste-a-brand-palette">Paste a brand palette</a></li><li class="l2"><a href="#colour-groups">Colour groups</a><ul><li class="l3"><a href="#suggested-groups">Suggested groups</a></li><li class="l3"><a href="#making-a-group-yourself">Making a group yourself</a></li><li class="l3"><a href="#what-a-group-becomes">What a group becomes</a></li><li class="l3"><a href="#what-the-engine-did">What the engine did</a></li><li class="l3"><a href="#groups-belong-to-one-image">Groups belong to one image</a></li></ul></li></ul></ul></aside>
+</div>
+</body>
+</html>

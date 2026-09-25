@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="inkvec-guide" content="studio">
+<title>Tutorial: a favicon and an asset pack · Inkvec Studio guide</title>
+<link rel="stylesheet" href="../guide.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="side"><a class="guidebrand" href="../index.html"><img src="../logo-mono.svg" alt=""> <span>Inkvec Studio</span></a><div class="grp"><h4>User guide</h4><a href="../index.html">Overview</a><a href="../install.html">Install and first launch</a><a href="../getting-started.html">Getting started</a><a href="../viewer.html">The viewer</a><a href="../result.html">Result</a><a href="../tune.html">Tune</a><a href="../palette.html">Palette and colour groups</a><a href="../export.html">Export</a><a href="../minify.html">Minify SVG</a><a href="../fabricate.html">Fabricate</a><a href="../batch.html">Batch</a><a href="../settings.html">Settings</a><a href="../shortcuts.html">Keyboard and mouse</a><a href="../troubleshooting.html">Troubleshooting</a></div><div class="grp"><h4>Tutorials</h4><a href="jpeg-logo.html">Clean up a JPEG logo</a><a href="favicon-asset-pack.html" aria-current="page">A favicon and an asset pack</a><a href="vinyl-htv.html">Layered vinyl and iron-on</a><a href="laser.html">Laser: DXF and G-code</a></div><div class="grp"><h4>Online</h4><a href="https://logolabs.github.io/inkvec/">Inkvec documentation</a><a href="https://logolabs.github.io/inkvec/studio/tutorials/favicon-asset-pack.html">This page on the web</a></div><p class="guidenote">This copy of the guide is part of the app and works without a network.</p></aside>
+  <main><article><h1 id="tutorial-a-favicon-and-an-asset-pack">Tutorial: a favicon and an asset pack</h1>
+<p>This tutorial takes a mark from a PNG to the set of files a website or a brand folder needs: an
+SVG, a minified SVG, PNGs at three sizes, a favicon, a palette, and a zip holding all of them with a
+README. About five minutes.</p>
+<h2 id="1-start-from-the-right-image">1. Start from the right image</h2>
+<p>A favicon is drawn at 16 by 16 pixels in a browser tab. At that size a wordmark is a grey smudge;
+use the <strong>symbol</strong> on its own. And the export's PNG and favicon files are square (in version 0.2.0
+a non-square drawing is stretched to fill them), so the image should be <strong>square</strong>, with the mark
+centred. If your logo is wide, crop the symbol to a square in any image editor first.</p>
+<p>A PNG with a transparent background is best. A JPEG works too; see
+<a href="jpeg-logo.html">Clean up a JPEG logo</a> first.</p>
+<h2 id="2-open-and-trace-it">2. Open and trace it</h2>
+<p>Drop the PNG on the window. Auto traces it at once. For a small, flat mark the choice card may
+suggest <em>Icon</em>, which keeps one-pixel details and allows at most 16 colours; press <strong>Try Icon</strong> if
+it does. Otherwise <strong>Keep Auto</strong>.</p>
+<p>Look at the Result tab: a clean PNG mark should land near 0.1 dE00. Turn on <strong>Anchors</strong> in the
+viewer to see how many nodes it has; a favicon does not need many.</p>
+<h2 id="3-set-the-output">3. Set the output</h2>
+<p>Open <strong>Tune</strong> and unfold <strong>Output</strong>.</p>
+<ul>
+<li><strong>Transparent background</strong>: on, if the image has a solid background you do not want in the
+  favicon. (An image that is already transparent stays transparent without it.)</li>
+<li><strong>Margin</strong>: a little room around the mark keeps it off the edges of the tab: 0.05 adds 5% of the
+  mark's size on every side. Without one, the mark touches the edges of its 16 px square.</li>
+<li><strong>Minify</strong>: leave it off. The export writes a minified copy anyway, beside the readable one.</li>
+</ul>
+<p>These options rewrite the drawing rather than re-trace it, so the readout at the foot barely
+moves.</p>
+<h2 id="4-export">4. Export</h2>
+<p>Press <strong>Export</strong> (or <kbd>Ctrl</kbd>+<kbd>E</kbd>).</p>
+<p><img alt="The export sheet" src="../img/export.webp"></p>
+<ol>
+<li>Tick <strong>ICO and favicon set</strong>. (It is off at first.)</li>
+<li>Leave <strong>SVG</strong>, <strong>SVG (minified)</strong>, <strong>PNG · 512 / 1024 / 2048</strong> and <strong>Asset pack</strong> ticked, or
+   untick the loose files if the zip is all you want: the zip always holds the complete set.</li>
+<li><strong>Choose</strong> a folder.</li>
+<li>Press <strong>Export <em>N</em> files</strong>.</li>
+</ol>
+<p>The export runs a fresh full trace, then writes, for an image called <code>mark.png</code>:</p>
+<div class="codehilite"><pre><span></span>mark.svg                  the drawing
+mark.min.svg              the same, smaller
+png/mark-512.png          512 x 512
+png/mark-1024.png         1024 x 1024
+png/mark-2048.png         2048 x 2048
+favicon/favicon.ico       16, 32 and 48 px in one file
+favicon/favicon-16.png
+favicon/favicon-32.png
+favicon/favicon-48.png
+palette.json              every colour, with its share of the drawing
+mark-assets.zip           all of the above, plus README.txt
+</pre></div>
+
+<p><strong>Show in folder</strong> on the note that appears opens the folder.</p>
+<h2 id="5-put-the-favicon-on-a-site">5. Put the favicon on a site</h2>
+<p>Copy <code>favicon.ico</code> and <code>mark.min.svg</code> to the root of the site, and add to the page's <code>&lt;head&gt;</code>:</p>
+<div class="codehilite"><pre><span></span><span class="p">&lt;</span><span class="nt">link</span> <span class="na">rel</span><span class="o">=</span><span class="s">&quot;icon&quot;</span> <span class="na">href</span><span class="o">=</span><span class="s">&quot;/favicon.ico&quot;</span> <span class="na">sizes</span><span class="o">=</span><span class="s">&quot;any&quot;</span><span class="p">&gt;</span>
+<span class="p">&lt;</span><span class="nt">link</span> <span class="na">rel</span><span class="o">=</span><span class="s">&quot;icon&quot;</span> <span class="na">href</span><span class="o">=</span><span class="s">&quot;/mark.min.svg&quot;</span> <span class="na">type</span><span class="o">=</span><span class="s">&quot;image/svg+xml&quot;</span><span class="p">&gt;</span>
+</pre></div>
+
+<p>Browsers that read SVG favicons use the SVG, sharp at every size; the rest use the ICO.</p>
+<h2 id="6-hand-over-the-pack">6. Hand over the pack</h2>
+<p><code>mark-assets.zip</code> is made to be handed to someone else. Its <code>README.txt</code> says what the files were
+traced from, at what size, the measured colour difference and coordinate count, what each file
+is, and, if the trace could not recover something (lettering as outlines, JPEG colours), that too.
+<code>palette.json</code> lists each colour's hex value and how much of the drawing it covers, in order:</p>
+<div class="codehilite"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;generator&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;inks&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;hex&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;#14453f&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;traced&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;#14453f&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;share&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.56</span><span class="w"> </span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</pre></div>
+
+<p>For the colours as CSS custom properties instead, use <strong>Copy all as CSS</strong> in the palette.</p>
+<h2 id="variations">Variations</h2>
+<ul>
+<li><strong>A wide logo as well.</strong> Trace the full logo separately and take its SVG; skip the PNG rows
+  (they would be stretched square) and render PNGs from the SVG in your design tool.</li>
+<li><strong>A dark-mode favicon.</strong> Trace a light version of the mark, or edit the colours in the SVG.</li>
+<li><strong>Only the SVG.</strong> <strong>Copy SVG</strong> at the foot of the rail puts it on the clipboard without writing
+  any files.</li>
+</ul><nav class="pagenav"><a class="prev" href="jpeg-logo.html"><span class="dir">Previous</span><span class="lbl">Clean up a JPEG logo</span></a><a class="next" href="vinyl-htv.html"><span class="dir">Next</span><span class="lbl">Layered vinyl and iron-on</span></a></nav></article></main>
+  <aside class="rail"><h5>On this page</h5><ul><ul><li class="l2"><a href="#1-start-from-the-right-image">1. Start from the right image</a></li><li class="l2"><a href="#2-open-and-trace-it">2. Open and trace it</a></li><li class="l2"><a href="#3-set-the-output">3. Set the output</a></li><li class="l2"><a href="#4-export">4. Export</a></li><li class="l2"><a href="#5-put-the-favicon-on-a-site">5. Put the favicon on a site</a></li><li class="l2"><a href="#6-hand-over-the-pack">6. Hand over the pack</a></li><li class="l2"><a href="#variations">Variations</a></li></ul></ul></aside>
+</div>
+</body>
+</html>

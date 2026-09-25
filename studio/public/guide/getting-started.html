@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="inkvec-guide" content="studio">
+<title>Getting started · Inkvec Studio guide</title>
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="side"><a class="guidebrand" href="index.html"><img src="logo-mono.svg" alt=""> <span>Inkvec Studio</span></a><div class="grp"><h4>User guide</h4><a href="index.html">Overview</a><a href="install.html">Install and first launch</a><a href="getting-started.html" aria-current="page">Getting started</a><a href="viewer.html">The viewer</a><a href="result.html">Result</a><a href="tune.html">Tune</a><a href="palette.html">Palette and colour groups</a><a href="export.html">Export</a><a href="minify.html">Minify SVG</a><a href="fabricate.html">Fabricate</a><a href="batch.html">Batch</a><a href="settings.html">Settings</a><a href="shortcuts.html">Keyboard and mouse</a><a href="troubleshooting.html">Troubleshooting</a></div><div class="grp"><h4>Tutorials</h4><a href="tutorials/jpeg-logo.html">Clean up a JPEG logo</a><a href="tutorials/favicon-asset-pack.html">A favicon and an asset pack</a><a href="tutorials/vinyl-htv.html">Layered vinyl and iron-on</a><a href="tutorials/laser.html">Laser: DXF and G-code</a></div><div class="grp"><h4>Online</h4><a href="https://logolabs.github.io/inkvec/">Inkvec documentation</a><a href="https://logolabs.github.io/inkvec/studio/getting-started.html">This page on the web</a></div><p class="guidenote">This copy of the guide is part of the app and works without a network.</p></aside>
+  <main><article><h1 id="getting-started">Getting started</h1>
+<p>This page opens an image, explains the choice the app offers when it does, and walks through the
+Custom wizard. The fastest way to follow along is with one of the samples on the empty stage.</p>
+<h2 id="opening-an-image">Opening an image</h2>
+<p>Any of these opens an image in the <strong>Vectorize</strong> tab:</p>
+<ul>
+<li><strong>Open…</strong> in the app bar, <strong>Open an image</strong> on the empty stage, or <kbd>Ctrl</kbd>+<kbd>O</kbd>
+  (<kbd>⌘</kbd>+<kbd>O</kbd> on a Mac).</li>
+<li><strong>Drag a file onto the window.</strong> The whole window takes the drop, not only the dashed box.</li>
+<li><strong>Recent</strong> in the app bar: the last eight files you opened.</li>
+<li><strong>A sample</strong> from the row under the drop area, on the empty stage: <em>Flat logo</em>, <em>Icon, 64 px</em>,
+  <em>Crest, filigree</em> and <em>Signature, B&amp;W</em>.</li>
+<li><strong>Vectorize with Inkvec</strong> in your file manager's right-click menu, once you have added it in
+  <a href="settings.html#advanced">Settings</a> (Windows and Linux). If the app is already open, the file opens
+  in the window you have rather than a second copy.</li>
+</ul>
+<p>The app reads PNG, JPEG, WebP, GIF, BMP and TIFF. It also opens an <strong>SVG</strong>: the SVG is drawn at
+1024 px on its longer side and traced from that picture, which is how a messy drawing comes back
+as clean shapes. To make an SVG smaller <em>without</em> re-drawing it, use <a href="minify.html">Minify SVG</a>
+instead.</p>
+<p>What a dropped file does depends on what it is:</p>
+<table>
+<thead>
+<tr>
+<th>You drop</th>
+<th>What happens</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>One image</td>
+<td>Opens in Vectorize, whichever tab you were on.</td>
+</tr>
+<tr>
+<td>One SVG, on the Vectorize tab</td>
+<td>Opens in Vectorize, to be re-traced.</td>
+</tr>
+<tr>
+<td>One SVG, on the Fabricate tab</td>
+<td>Opens in Fabricate, to be cut.</td>
+</tr>
+<tr>
+<td>One SVG, on another tab</td>
+<td>Opens in Minify SVG.</td>
+</tr>
+<tr>
+<td>Several files</td>
+<td>Switches to Batch. The files are not queued: Batch works on a folder, so choose the folder they are in.</td>
+</tr>
+</tbody>
+</table>
+<p>The app bar shows the open file's name, its size in pixels and its format.</p>
+<p><strong>Studio Lite:</strong> there is no right-click entry, and a dropped or chosen file is read by the browser.</p>
+<h2 id="auto-traces-at-once">Auto traces at once</h2>
+<p>The moment an image opens, <strong>Auto</strong> traces it. It uses the controls exactly as you left them the
+last time (the first time, the <strong>Logo</strong> preset, which is the default). Nothing has to be chosen
+first, and the trace is already on its way when the next thing appears.</p>
+<h2 id="the-choice-card-keep-auto-or-customise">The choice card: Keep Auto or Customise</h2>
+<p>Over the stage, a small card appears while Auto traces.</p>
+<p><img alt="The card that appears when an image opens, with Auto's result and the Custom option" src="img/chooser.webp"></p>
+<ul>
+<li><strong>Auto</strong> shows the trace's progress and, once it lands, its colour difference, coordinates
+  and file size. <strong>Keep Auto</strong> closes the card.</li>
+<li><strong>Custom</strong> opens the wizard (next section), which changes the settings a step at a time with
+  your result shown beside Auto's.</li>
+<li><strong>Auto chose</strong> says what Auto used, and anything its own report suggests. There are at most
+  two suggestions, and each is a one-click preset change:</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Suggestion</th>
+<th>When it appears</th>
+<th>What <strong>Try</strong> does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Looks like a photo, a scan or a screenshot</td>
+<td>The file is a JPEG or a lossy WebP, or its pixels are noisy</td>
+<td>Switches to <em>Photo or scan</em>, which uses the denoiser</td>
+</tr>
+<tr>
+<td>Two colours, black and white</td>
+<td>Exactly two inks, one dark and one light, both neutral</td>
+<td>Switches to <em>Black &amp; white</em></td>
+</tr>
+<tr>
+<td>Drawn with strokes</td>
+<td>The report found line work traced as outlines</td>
+<td>Switches to <em>Line art</em></td>
+</tr>
+<tr>
+<td>A small flat mark</td>
+<td>256 px or smaller, no gradients, at most 16 colours</td>
+<td>Switches to <em>Icon</em></td>
+</tr>
+</tbody>
+</table>
+<p>If the palette has inks that look like the same colour measured twice, a line offers to
+  <strong>Accept</strong> them as colour groups (see <a href="palette.html#colour-groups">the palette</a>).
+- <strong>Remember my choice</strong> makes the button you press next the default for every image. Change it
+  later in <a href="settings.html#general">Settings</a>, <em>When an image is opened</em>: <strong>Ask</strong> (this card),
+  <strong>Auto only</strong>, or <strong>Custom wizard</strong>.</p>
+<p>Closing the card with <strong>×</strong> or <kbd>Esc</kbd>, or simply carrying on, keeps Auto. Once the card
+is gone, the same <em>Auto chose</em> note stays at the top of the Result tab while it has something to
+offer, with <strong>Customise</strong> and <strong>Hide</strong>.</p>
+<p>Nothing here changes a trace by itself. A suggestion you take is an ordinary preset change, shown
+under Tune like any other, and <strong>Back to Auto</strong> puts the controls back where Auto had them.</p>
+<h2 id="the-custom-wizard">The Custom wizard</h2>
+<p><strong>Customise…</strong> opens the wizard in place of the rail. The big view stays beside it, and its left
+pane shows <strong>Auto's trace</strong> (or the <strong>Source</strong>, if you switch it) so you can compare as you go; the
+right pane is yours.</p>
+<p><img alt="The wizard's first step: small draft previews of the image under each kind of preset" src="img/wizard-kind.webp"></p>
+<p>Each step says what it does, when to change it, what it costs, and links to the part of
+<a href="https://logolabs.github.io/inkvec/algorithm/index.html">How Inkvec works</a> behind it. The steps are:</p>
+<ol>
+<li><strong>What is it?</strong> Tiles for the kinds of image, each a small draft of <em>this</em> image under that
+   preset: <em>Logo</em>, <em>Icon</em>, <em>Illustration or emoji</em> (the Fine detail preset), <em>Line art</em>,
+   <em>Black &amp; white</em> and <em>Photo or scan</em>, plus Auto's own result. Presets Auto suggested come first,
+   marked <em>suggested</em>. Hover a tile to see its draft large in the left pane; click it to choose it,
+   and the full trace follows on the right. The drafts are traced one at a time, after Auto's
+   trace, so they never hold it up.</li>
+<li><strong>Clean-up.</strong> Only offered when the image looks damaged: a JPEG or a lossy WebP, or pixels that
+   measure noisy, and only in builds that include the denoiser. It says why it was offered.
+   <strong>Off</strong> traces the pixels as they are; <strong>Auto</strong> cleans compression damage first, where it finds
+   some. If the denoiser is not downloaded yet, the step offers the download (see
+   <a href="settings.html#denoiser">the denoiser</a>).</li>
+<li><strong>Colours.</strong> The palette, with suggested colour groups, and <strong>Max colours</strong>. For an image with
+   transparency, also <strong>Trace transparency</strong>. Hover an ink or a group to single it out in the
+   drawing.</li>
+<li><strong>Detail.</strong> <strong>Precision</strong> and <strong>Speckle floor</strong>, and a <em>Compare as</em> switch (side by side or
+   wipe).</li>
+<li><strong>Shape.</strong> <strong>Editable structure</strong>, <strong>Fewer paths</strong>, <strong>Match repeated shapes</strong>, <strong>Curve cost</strong>
+   and <strong>Smooth-join angle</strong>.</li>
+<li><strong>Output.</strong> <strong>Transparent background</strong>, <strong>Margin</strong> and <strong>Minify</strong>, and a list of everything
+   you changed from Auto.</li>
+</ol>
+<p>From step 4 on, a small table compares Auto's figures with yours: colour difference, nodes, paths
+and file size, with the change in each.</p>
+<p>What each control does is on the <a href="tune.html">Tune</a> page; the wizard shows the same controls, only
+fewer at a time.</p>
+<p>Along the bottom: <strong>Back</strong>, <strong>Skip to finish</strong> (jump to the last step, keeping everything chosen),
+and <strong>Next</strong>. On the last step, <strong>Finish</strong> closes the wizard and <strong>Export now</strong> closes it and opens
+the export sheet. At the top, <strong>Undo my changes</strong> puts every control and colour group back to where
+they were when the wizard opened, and <strong>Close</strong> (or <kbd>Esc</kbd>) leaves, keeping what you chose.</p>
+<p>Whatever the wizard changed is an ordinary setting. When it closes, the rail switches to <strong>Tune</strong>
+with those controls marked as changed, and a note says how many moved from Auto.</p>
+<p>To reopen the wizard for the image that is open, use <strong>Walk me through it</strong> at the top of the Tune
+tab, or <strong>Customise</strong> on the <em>Auto chose</em> note.</p>
+<h2 id="what-to-do-next">What to do next</h2>
+<ul>
+<li>Look at the result: <a href="viewer.html">the viewer</a> explains the comparison modes, zoom, and the
+  overlays that show nodes and edges.</li>
+<li>Read the numbers: <a href="result.html">Result</a> explains the quality report.</li>
+<li>Change something: <a href="tune.html">Tune</a> lists every control.</li>
+<li>Save it: <a href="export.html">Export</a>.</li>
+</ul><nav class="pagenav"><a class="prev" href="install.html"><span class="dir">Previous</span><span class="lbl">Install and first launch</span></a><a class="next" href="viewer.html"><span class="dir">Next</span><span class="lbl">The viewer</span></a></nav></article></main>
+  <aside class="rail"><h5>On this page</h5><ul><ul><li class="l2"><a href="#opening-an-image">Opening an image</a></li><li class="l2"><a href="#auto-traces-at-once">Auto traces at once</a></li><li class="l2"><a href="#the-choice-card-keep-auto-or-customise">The choice card: Keep Auto or Customise</a></li><li class="l2"><a href="#the-custom-wizard">The Custom wizard</a></li><li class="l2"><a href="#what-to-do-next">What to do next</a></li></ul></ul></aside>
+</div>
+</body>
+</html>

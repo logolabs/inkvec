@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="inkvec-guide" content="studio">
+<title>Install and first launch · Inkvec Studio guide</title>
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="side"><a class="guidebrand" href="index.html"><img src="logo-mono.svg" alt=""> <span>Inkvec Studio</span></a><div class="grp"><h4>User guide</h4><a href="index.html">Overview</a><a href="install.html" aria-current="page">Install and first launch</a><a href="getting-started.html">Getting started</a><a href="viewer.html">The viewer</a><a href="result.html">Result</a><a href="tune.html">Tune</a><a href="palette.html">Palette and colour groups</a><a href="export.html">Export</a><a href="minify.html">Minify SVG</a><a href="fabricate.html">Fabricate</a><a href="batch.html">Batch</a><a href="settings.html">Settings</a><a href="shortcuts.html">Keyboard and mouse</a><a href="troubleshooting.html">Troubleshooting</a></div><div class="grp"><h4>Tutorials</h4><a href="tutorials/jpeg-logo.html">Clean up a JPEG logo</a><a href="tutorials/favicon-asset-pack.html">A favicon and an asset pack</a><a href="tutorials/vinyl-htv.html">Layered vinyl and iron-on</a><a href="tutorials/laser.html">Laser: DXF and G-code</a></div><div class="grp"><h4>Online</h4><a href="https://logolabs.github.io/inkvec/">Inkvec documentation</a><a href="https://logolabs.github.io/inkvec/studio/install.html">This page on the web</a></div><p class="guidenote">This copy of the guide is part of the app and works without a network.</p></aside>
+  <main><article><h1 id="install-and-first-launch">Install and first launch</h1>
+<p>Inkvec Studio is published on the project's
+<a href="https://github.com/logolabs/inkvec/releases">GitHub releases page</a>. Each release has one
+download per platform, named <code>inkvec-studio-&lt;version&gt;-&lt;target&gt;</code> with the usual extension.</p>
+<table>
+<thead>
+<tr>
+<th>System</th>
+<th>Download</th>
+<th>Oldest system it starts on</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Windows</td>
+<td><code>.exe</code> (installer, no administrator rights needed) or <code>.msi</code></td>
+<td>Windows 10 with WebView2; the installer fetches WebView2 if it is missing</td>
+</tr>
+<tr>
+<td>macOS</td>
+<td><code>.dmg</code></td>
+<td>macOS 10.15 on Intel, 11.0 on Apple silicon</td>
+</tr>
+<tr>
+<td>Linux</td>
+<td><code>.deb</code>, <code>.rpm</code> or <code>.AppImage</code></td>
+<td>glibc 2.38, libstdc++ 13 and WebKitGTK 4.1: Ubuntu 23.10, Debian 13, Fedora 39 and newer</td>
+</tr>
+</tbody>
+</table>
+<p>The release notes list a SHA-256 checksum for every file. Checking it is what establishes that a
+download is the one the project published:</p>
+<ul>
+<li>Windows: <code>certutil -hashfile &lt;file&gt; SHA256</code></li>
+<li>macOS: <code>shasum -a 256 &lt;file&gt;</code></li>
+<li>Linux: <code>sha256sum &lt;file&gt;</code></li>
+</ul>
+<h2 id="opening-the-app-the-first-time">Opening the app the first time</h2>
+<p>The builds are <strong>not code-signed</strong> on any platform, so each operating system warns about them in
+its own way.</p>
+<ul>
+<li><strong>Windows.</strong> SmartScreen shows "Windows protected your PC" with an unknown publisher. Choose
+  <strong>More info</strong>, then <strong>Run anyway</strong>.</li>
+<li><strong>macOS.</strong> Gatekeeper refuses an unsigned app downloaded from a browser. Open Applications,
+  Control-click <strong>Inkvec Studio</strong>, choose <strong>Open</strong>, then <strong>Open</strong> again in the dialog. If macOS
+  still refuses, run <code>xattr -dr com.apple.quarantine "/Applications/Inkvec Studio.app"</code> in
+  Terminal.</li>
+<li><strong>Linux.</strong> Nothing special for the <code>.deb</code> or <code>.rpm</code>. An <code>.AppImage</code> needs <code>chmod +x</code> before it
+  will run.</li>
+</ul>
+<p>A short splash screen covers start-up, then the main window opens on the <strong>Vectorize</strong> tab with an
+empty stage: a drop area, <strong>Open an image</strong>, and four sample images to try.</p>
+<p><img alt="The empty Vectorize tab on first launch, with the introduction card and the samples" src="img/first-run.webp"></p>
+<p>On the very first launch a card above the drop area explains what happens when an image is
+opened. <strong>Got it</strong> hides it for good. The next page, <a href="getting-started.html">Getting started</a>, goes
+through the same thing with a sample.</p>
+<h2 id="what-the-app-sends-over-the-network">What the app sends over the network</h2>
+<p>Tracing never needs a network. The app can make exactly two kinds of outbound request:</p>
+<ul>
+<li><strong>The update check</strong>, when the app starts. It asks GitHub for the latest release and sends the
+  app's version and your operating system (in the request's user agent), nothing else. Turn it off
+  in <a href="settings.html#updates">Settings</a> and the app does not contact the network at all.</li>
+<li><strong>The denoiser download</strong>, only when you ask for it. See <a href="settings.html#denoiser">the denoiser</a>.</li>
+</ul>
+<p>Your images, traces and exported files never leave your computer.</p>
+<h2 id="updates">Updates</h2>
+<p>When the update check finds a newer version, the status strip at the bottom of the Vectorize tab
+shows <code>&lt;version&gt; available</code> and a <strong>What changed</strong> link to the release notes. The app does not
+update itself: download the new release and install it over the old one. Your preferences and
+saved presets are kept.</p>
+<h2 id="uninstalling">Uninstalling</h2>
+<p>Uninstall the app the way your system usually does (Windows: Settings, Apps; macOS: move it to the
+Bin; Linux: your package manager). On Windows the uninstaller also removes the two things the app
+can add from its Settings screen, the right-click entry and the <code>inkvec</code> command, if you added
+them. On macOS and Linux, remove those first from <a href="settings.html#advanced">Settings, Advanced</a> if you
+added them.</p>
+<p>Two things are left behind on purpose, because they are yours rather than the app's: the
+preferences file (your settings, recent files and saved presets) and, if you downloaded it, the
+denoiser model. Their locations are listed in <a href="settings.html#where-things-are-kept">Settings</a>.</p>
+<h2 id="studio-lite">Studio Lite</h2>
+<p>Inkvec Studio Lite needs no installation: it runs in a current desktop browser. Everything on this
+page about installers, signing and uninstalling applies only to the desktop app.</p><nav class="pagenav"><a class="prev" href="index.html"><span class="dir">Previous</span><span class="lbl">Overview</span></a><a class="next" href="getting-started.html"><span class="dir">Next</span><span class="lbl">Getting started</span></a></nav></article></main>
+  <aside class="rail"><h5>On this page</h5><ul><ul><li class="l2"><a href="#opening-the-app-the-first-time">Opening the app the first time</a></li><li class="l2"><a href="#what-the-app-sends-over-the-network">What the app sends over the network</a></li><li class="l2"><a href="#updates">Updates</a></li><li class="l2"><a href="#uninstalling">Uninstalling</a></li><li class="l2"><a href="#studio-lite">Studio Lite</a></li></ul></ul></aside>
+</div>
+</body>
+</html>

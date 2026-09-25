@@ -15,11 +15,15 @@ on:
     paths:
       - "studio/**"
       - "crates/**"
+      - "docs/studio/**"
+      - "tools/build_site.py"
       - ".github/workflows/studio.yml"
   pull_request:
     paths:
       - "studio/**"
       - "crates/**"
+      - "docs/studio/**"
+      - "tools/build_site.py"
       - ".github/workflows/studio.yml"
   workflow_dispatch: {}
 
@@ -98,8 +102,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install pillow
+      - run: pip install pillow markdown pygments
       - run: python studio/tools/make_assets.py --check
+
+      # The user guide the app opens from Help is a build of docs/studio/, committed so the
+      # app needs no Python to build. This fails if it has drifted from those pages.
+      - run: python tools/build_site.py --studio-guide --check
 
       # The app ships its own notices and shows them on About. This fails if they have
       # drifted from the dependency graph they claim to describe.

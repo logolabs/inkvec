@@ -22,6 +22,7 @@ import {
 import { bytes, type Store } from "../lib/state";
 import { closeOverlay, confirm, modal, openModal, toast } from "../components/overlays";
 import { windowControls } from "../components/wincontrols";
+import { openHelp } from "../components/help";
 
 export interface ScreenActions {
   applyPrefs(patch: Partial<Prefs>): void;
@@ -459,6 +460,7 @@ function about(store: Store, act: ScreenActions): HTMLElement {
           h(
             "div",
             { style: { display: "flex", gap: "18px", fontSize: "13px", flexWrap: "wrap" } },
+            h("a", { href: "#", onclick: (e: Event) => { e.preventDefault(); openHelp(); } }, "User guide"),
             link("GitHub", "https://github.com/logolabs/inkvec"),
             link("Benchmark results", "https://github.com/logolabs/inkvec#benchmark"),
             link("Hugging Face demo", "https://huggingface.co/spaces/Logolabs/inkvec"),

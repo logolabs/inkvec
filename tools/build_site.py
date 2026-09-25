@@ -8,6 +8,13 @@ client-side JavaScript beyond KaTeX on the one page that has equations.
 
     python tools/build_site.py                 # --base /inkvec/, for GitHub Pages
     python tools/build_site.py --base /        # local preview: serve site/ at the root
+    python tools/build_site.py --studio-guide  # the Studio's bundled copy of its guide
+    python tools/build_site.py --studio-guide --check   # fail if that copy is stale
+
+The Studio user guide (docs/studio/) is on the site under studio/, and is also built as a
+self-contained copy into studio/public/guide/, which the desktop app ships and opens from
+Help: relative links, the app's own fonts, no network. Its screenshots live once, in
+studio/public/guide/img/, and the site copies them from there.
 
 Every internal link is resolved against the page's own source directory and mapped to
 its site page. Files that are not on the site -- source files, internal working notes --
@@ -85,8 +92,48 @@ DOCS = {
     "algorithm/constants.html": ("docs/algorithm/constants.md", "Constants"),
 }
 
+# The Studio user guide: (page, sidebar label), in reading order. Page "x" is
+# docs/studio/x.md ("index" is its README.md), on the site at studio/x.html and in the app's
+# bundled copy at guide/x.html -- the same path under both, so Help can open either.
+STUDIO_GUIDE = [
+    ("index", "Overview"),
+    ("install", "Install and first launch"),
+    ("getting-started", "Getting started"),
+    ("viewer", "The viewer"),
+    ("result", "Result"),
+    ("tune", "Tune"),
+    ("palette", "Palette and colour groups"),
+    ("export", "Export"),
+    ("minify", "Minify SVG"),
+    ("fabricate", "Fabricate"),
+    ("batch", "Batch"),
+    ("settings", "Settings"),
+    ("shortcuts", "Keyboard and mouse"),
+    ("troubleshooting", "Troubleshooting"),
+]
+STUDIO_TUTORIALS = [
+    ("tutorials/jpeg-logo", "Clean up a JPEG logo"),
+    ("tutorials/favicon-asset-pack", "A favicon and an asset pack"),
+    ("tutorials/vinyl-htv", "Layered vinyl and iron-on"),
+    ("tutorials/laser", "Laser: DXF and G-code"),
+]
+STUDIO_PAGES = STUDIO_GUIDE + STUDIO_TUTORIALS
+# The guide's screenshots: one copy, inside the app's public files, which the site copies.
+STUDIO_IMG = "studio/public/guide/img/"
+STUDIO_BUNDLE = ROOT / "studio/public/guide"
+SITE_URL = "https://logolabs.github.io/inkvec/"
+
+
+def studio_source(page: str) -> str:
+    return "docs/studio/README.md" if page == "index" else f"docs/studio/{page}.md"
+
+
+DOCS.update({f"studio/{p}.html": (studio_source(p), label) for p, label in STUDIO_PAGES})
+
 NAV = [
     ("Getting started", [("", "Overview"), ("pipeline.html", "The pipeline, explained")]),
+    ("Inkvec Studio", [(f"studio/{p}.html", label) for p, label in STUDIO_GUIDE]),
+    ("Studio tutorials", [(f"studio/{p}.html", label) for p, label in STUDIO_TUTORIALS]),
     ("How it works", [("algorithm/index.html", "The series")]
      + [(f"algorithm/{slug}.html", label) for slug, label in STAGES]
      + [("algorithm/constants.html", "Constants and thresholds")]),
@@ -278,6 +325,7 @@ SOURCE_TO_SITE.update({
     **{f"docs/algorithm/{s}.md": f"algorithm/{s}.html" for s, _ in STAGES},
     **{f"docs/algorithm/{s}.html": f"algorithm/plain/{s}.html" for s, _ in STAGES},
     "docs/algorithm/index.html": "algorithm/plain/index.html",
+    "docs/studio": "studio/index.html",
 })
 
 
@@ -298,6 +346,8 @@ class LinkResolver:
         frag = f"#{frag}" if frag else ""
         if path.startswith("docs/assets/"):
             return f"{self.base}assets/{path[len('docs/assets/'):]}{frag}"
+        if path.startswith(STUDIO_IMG):
+            return f"{self.base}studio/img/{path[len(STUDIO_IMG):]}{frag}"
         site = SOURCE_TO_SITE.get(path)
         if site is not None:
             return self.base + site + frag
@@ -305,6 +355,31 @@ class LinkResolver:
             kind = "tree" if (ROOT / path).is_dir() else "blob"
             return f"{GITHUB}/{kind}/main/{path}{frag}"
         raise BuildError(f"dangling internal link {href!r} on {src_dir or '<root>'}")
+
+
+class GuideResolver(LinkResolver):
+    """Links for the Studio's bundled copy of its guide: relative between its own pages and
+    screenshots, so the copy works from wherever the app serves it; the published site for
+    everything else (the app opens those in the system browser)."""
+
+    def __init__(self):
+        super().__init__(SITE_URL)
+        self.page_dir = ""  # the directory, under the guide, of the page being written
+
+    def resolve(self, src_dir: str, href: str) -> str:
+        path, _, frag = href.partition("#")
+        if not path or href.startswith(("/", "http://", "https://", "mailto:")):
+            return href
+        full = posixpath.normpath(posixpath.join(src_dir, path))
+        if full.startswith(STUDIO_IMG):
+            target = "img/" + full[len(STUDIO_IMG):]
+        else:
+            site = SOURCE_TO_SITE.get(full, "")
+            if not site.startswith("studio/"):
+                return super().resolve(src_dir, href)
+            target = site[len("studio/"):]
+        rel = posixpath.relpath(target, self.page_dir or ".")
+        return rel + (f"#{frag}" if frag else "")
 
 
 # ----------------------------------------------------------------------------- chrome
@@ -368,6 +443,8 @@ article a{text-decoration:underline;text-decoration-color:rgba(201,117,74,.35);t
 article a:hover{text-decoration-color:var(--accent)}
 .md-anchor{position:relative;top:-70px}
 
+kbd{font-family:var(--font-mono);font-size:.8em;background:var(--surface);color:var(--ink);
+  border:1px solid var(--highlight);border-bottom-width:2px;border-radius:5px;padding:.05em .4em;white-space:nowrap}
 code{font-family:var(--font-mono);font-size:.86em;background:var(--surface);
   border:1px solid var(--rule);border-radius:5px;padding:.1em .35em;color:var(--ink)}
 .codehilite{background:var(--stage)!important;border:1px solid var(--rule);border-radius:10px;
@@ -589,16 +666,19 @@ def strip_readme_chrome(body: str) -> str:
                   "", body, flags=re.S)
 
 
-def convert_page(slug: str, src: str, resolver: LinkResolver) -> tuple:
-    """-> (body_html, toc_tokens, title)"""
+def convert_page(slug: str, src: str, resolver: LinkResolver, backstop: bool = True) -> tuple:
+    """-> (body_html, toc_tokens, title). `backstop` re-resolves links on the rendered tree;
+    off for the bundled guide, whose already-resolved links are relative and would be read
+    a second time as source paths."""
     path = ROOT / src
     text = path.read_text(encoding="utf-8")
     src_dir = posixpath.dirname(src)
     text = rewrite_links(text, src_dir, resolver)
-    md = markdown.Markdown(
-        extensions=[FencedCodeExtension(), TableExtension(), SiteLinks(src_dir, resolver),
-                    TocExtension(slugify=github_slugify, toc_depth="1-3")],
-        output_format="html5")
+    extensions = [FencedCodeExtension(), TableExtension(),
+                  TocExtension(slugify=github_slugify, toc_depth="1-3")]
+    if backstop:
+        extensions.insert(2, SiteLinks(src_dir, resolver))
+    md = markdown.Markdown(extensions=extensions, output_format="html5")
     body = md.convert(wrap_math(text))
     body = highlight_code(body)
     h1 = re.search(r"<h1[^>]*>(.*?)</h1>", body, re.S)
@@ -623,6 +703,22 @@ def write_page(out: Path, base: str, slug: str, title: str, body: str,
     out.write_text(doc, encoding="utf-8")
 
 
+def studio_pagenav(page: str, href) -> str:
+    """Previous and next through the guide, then the tutorials, in reading order."""
+    pages = [p for p, _ in STUDIO_PAGES]
+    labels = dict(STUDIO_PAGES)
+    i = pages.index(page)
+
+    def cell(direction: str, j: int) -> str:
+        if not 0 <= j < len(pages):
+            return "<span></span>"
+        return (f'<a class="{direction}" href="{href(pages[j])}">'
+                f'<span class="dir">{"Previous" if direction == "prev" else "Next"}</span>'
+                f'<span class="lbl">{labels[pages[j]]}</span></a>')
+
+    return f'<nav class="pagenav">{cell("prev", i - 1)}{cell("next", i + 1)}</nav>'
+
+
 def build(base: str) -> int:
     errors: list[str] = []
     resolver = LinkResolver(base)
@@ -632,6 +728,7 @@ def build(base: str) -> int:
     OUT.mkdir(parents=True)
     assets = OUT / "assets"
     shutil.copytree(ROOT / "docs/assets", assets)
+    shutil.copytree(ROOT / STUDIO_IMG, OUT / "studio/img")
     # The app mark, in its two colours, is the favicon; the sidebar topbar carries the
     # mono variant recoloured to the accent (every concrete fill, not the root's
     # fill="none", is replaced -- so a re-export with new colours needs no edit here).
@@ -689,6 +786,9 @@ def build(base: str) -> int:
                         f'<span class="dir">{"Previous" if direction == "prev" else "Next"}</span>'
                         f'<span class="lbl">{lbl}</span></a>')
             pagenav = f'<nav class="pagenav">{cell("prev", prev_s)}{cell("next", next_s)}</nav>'
+        if slug.startswith("studio/"):
+            pagenav = studio_pagenav(slug[len("studio/"):-len(".html")],
+                                     lambda p: f"{base}studio/{p}.html")
         if slug == "":
             body = strip_readme_chrome(body)
             hero = (f'<section class="hero"><p class="eyebrow">LOGOLABS</p>'
@@ -697,6 +797,7 @@ def build(base: str) -> int:
                     f'by the evidence in the pixels &mdash; not by a tolerance slider.</p>'
                     f'<div class="cta"><a class="btn primary" href="{SPACE}">Try it in the browser</a>'
                     f'<a class="btn" href="{base}algorithm/">How it works</a>'
+                    f'<a class="btn" href="{base}studio/">Studio guide</a>'
                     f'<a class="btn ghost" href="{GITHUB}/releases">Download</a></div></section>')
             body = hero + body + (
                 f'<section class="about"><h2>About</h2>'
@@ -748,13 +849,131 @@ def build(base: str) -> int:
     return 0
 
 
+# --------------------------------------------------------------- the bundled guide
+
+# The site's stylesheet, adjusted for the copy inside the app: the app's own fonts (the
+# page may not fetch anything), no top bar (the app's Help screen has one), and a plain
+# monospace stack in place of IBM Plex Mono, which the app does not ship.
+GUIDE_CSS_EXTRA = """@font-face{font-family:"Inter";src:url("../fonts/inter-latin.woff2") format("woff2");font-weight:100 900;font-display:swap}
+@font-face{font-family:"Playfair Display";src:url("../fonts/playfair-latin.woff2") format("woff2");font-weight:400 900;font-display:swap}
+:root{--font-mono:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace}
+.side,.rail{top:0;height:100vh}
+.side .guidebrand{display:flex;align-items:center;gap:9px;margin:0 0 22px;color:var(--ink)}
+.side .guidebrand img{width:20px;height:20px}
+.side .guidebrand span{font-family:var(--font-display);font-weight:700;font-size:17px}
+.side .guidebrand:hover{background:none}
+.guidenote{font-size:12px;color:var(--muted);margin:26px 0 0;line-height:1.5}
+.shell{max-width:1320px}
+"""
+
+GUIDE_SHELL = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="inkvec-guide" content="studio">
+<title>__TITLE__ · Inkvec Studio guide</title>
+<link rel="stylesheet" href="__ROOT__guide.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="side">__NAV__</aside>
+  <main><article>__CONTENT__</article></main>
+  <aside class="rail">__RAIL__</aside>
+</div>
+</body>
+</html>
+"""
+
+
+def guide_nav(page: str) -> str:
+    """The guide's own sidebar, relative to `page`; the rest of the site is a link out."""
+    here = posixpath.dirname(page)
+    rel = lambda p: posixpath.relpath(f"{p}.html", here or ".")
+    parts = [f'<a class="guidebrand" href="{rel("index")}">'
+             f'<img src="{posixpath.relpath("logo-mono.svg", here or ".")}" alt=""> '
+             f'<span>Inkvec Studio</span></a>']
+    for group, items in (("User guide", STUDIO_GUIDE), ("Tutorials", STUDIO_TUTORIALS)):
+        rows = "".join(
+            f'<a href="{rel(p)}"{" aria-current=" + chr(34) + "page" + chr(34) if p == page else ""}>{label}</a>'
+            for p, label in items)
+        parts.append(f'<div class="grp"><h4>{group}</h4>{rows}</div>')
+    parts.append(f'<div class="grp"><h4>Online</h4><a href="{SITE_URL}">Inkvec documentation</a>'
+                 f'<a href="{SITE_URL}studio/{page}.html">This page on the web</a></div>'
+                 '<p class="guidenote">This copy of the guide is part of the app and works '
+                 'without a network.</p>')
+    return "".join(parts)
+
+
+def render_guide() -> dict[str, str]:
+    """Every file of the bundled guide except the screenshots: {relative path: text}."""
+    resolver = GuideResolver()
+    files: dict[str, str] = {}
+    for page, _label in STUDIO_PAGES:
+        resolver.page_dir = posixpath.dirname(page)
+        body, toc_tokens, title = convert_page(f"studio/{page}.html", studio_source(page),
+                                               resolver, backstop=False)
+        root = posixpath.relpath(".", resolver.page_dir) + "/" if resolver.page_dir else ""
+        nav = studio_pagenav(page, lambda p: posixpath.relpath(f"{p}.html", resolver.page_dir or "."))
+        files[f"{page}.html"] = (GUIDE_SHELL
+                                 .replace("__TITLE__", html_mod.escape(title))
+                                 .replace("__ROOT__", root)
+                                 .replace("__NAV__", guide_nav(page))
+                                 .replace("__RAIL__", render_rail(toc_tokens))
+                                 .replace("__CONTENT__", body + nav))
+    files["guide.css"] = (CSS + "\n" + GUIDE_CSS_EXTRA + "\n"
+                          + FORMATTER.get_style_defs(".codehilite") + "\n")
+    logo = (ROOT / "web/logo.svg").read_text(encoding="utf-8")
+    files["logo-mono.svg"] = re.sub(r'fill="#[0-9a-fA-F]+"', 'fill="#c9754a"', logo)
+    return files
+
+
+def build_guide(check: bool) -> int:
+    """Write the bundled guide into studio/public/guide/, or with `check` only compare."""
+    try:
+        files = render_guide()
+    except BuildError as e:
+        print(f"build error: {e}", file=sys.stderr)
+        return 1
+    existing = {p.relative_to(STUDIO_BUNDLE).as_posix() for p in STUDIO_BUNDLE.rglob("*")
+                if p.is_file() and not p.relative_to(STUDIO_BUNDLE).as_posix().startswith("img/")}
+    if check:
+        stale = sorted(n for n, text in files.items()
+                       if not (STUDIO_BUNDLE / n).is_file()
+                       or (STUDIO_BUNDLE / n).read_bytes() != text.encode("utf-8"))
+        stale += sorted(existing - set(files))
+        if stale:
+            print("studio/public/guide/ is out of date with docs/studio/; run "
+                  "python tools/build_site.py --studio-guide", file=sys.stderr)
+            for n in stale:
+                print(f"  {n}", file=sys.stderr)
+            return 1
+        print(f"studio/public/guide/: {len(files)} files up to date")
+        return 0
+    for n in existing - set(files):
+        (STUDIO_BUNDLE / n).unlink()
+    for n, text in files.items():
+        out = STUDIO_BUNDLE / n
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with open(out, "w", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+    print(f"{len(files)} files -> {STUDIO_BUNDLE.relative_to(ROOT).as_posix()}/")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--base", default=DEFAULT_BASE,
                     help=f"URL prefix for every internal link (default {DEFAULT_BASE!r}; "
                          "use / to preview locally)")
+    ap.add_argument("--studio-guide", action="store_true",
+                    help="build the Studio's bundled guide into studio/public/guide/ instead")
+    ap.add_argument("--check", action="store_true",
+                    help="with --studio-guide: write nothing, fail if the bundled copy is stale")
     args = ap.parse_args()
+    if args.studio_guide:
+        return build_guide(args.check)
     base = args.base if args.base.endswith("/") else args.base + "/"
     return build(base)
 

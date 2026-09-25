@@ -20,11 +20,15 @@ export interface WorkspaceActions {
   jumpToWorst(): void;
   openDenoiser(): void;
   showUpdate(): void;
+  /** The first-run introduction has been read. */
+  markSeen(): void;
 }
 
 export interface Workspace {
   el: HTMLElement;
   viewer: Viewer;
+  /** Put something over the stage that manages its own visibility: the chooser card. */
+  mount(node: HTMLElement): void;
 }
 
 export function createWorkspace(store: Store, act: WorkspaceActions, samples: () => SampleInfo[]): Workspace {
@@ -218,7 +222,7 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
   };
 
   store.on(["source", "view", "show", "zoom", "fitted", "detail", "svg", "bandsMissing"], renderTools);
-  store.on(["source", "svg", "stageState", "result", "detail", "worstCorner"], renderStage);
+  store.on(["source", "svg", "stageState", "result", "detail", "worstCorner", "prefs"], renderStage);
   store.on(["tracing", "liveStages", "report", "result", "source", "update"], renderStrip);
 
   renderTools();
@@ -245,7 +249,7 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
     if (e.key === " ") store.set({ flicked: false });
   });
 
-  return { el, viewer };
+  return { el, viewer, mount: (node) => stageBody.append(node) };
 }
 
 /** The draft/final/re-tracing chip, beside the result it describes. */
@@ -348,12 +352,44 @@ function stateOverlay(state: StageState, st: ReturnType<Store["state"]["valueOf"
   }
 }
 
-/** First run, and the empty state the app returns to. No tour, nothing to dismiss. */
+/**
+ * What happens when an image is opened, said once, on the first launch: the automatic
+ * trace starts at once, and a card offers the Custom wizard beside it. Three lines and a
+ * button, over the empty stage; never shown again once read or once an image has been
+ * opened and the card answered.
+ */
+function firstRunIntro(store: Store, act: WorkspaceActions): HTMLElement | null {
+  const p = store.state.prefs;
+  if (!p || p.seenFirstRun) return null;
+  const step = (n: string, title: string, body: string) =>
+    h("li", null, h("span.introstep.num", null, n), h("div", null, h("span.introtitle", null, title), h("span.faint", null, body)));
+  return h(
+    "div.intro",
+    { role: "note" },
+    h("span.eyebrow", null, "How opening an image works"),
+    h(
+      "ol",
+      null,
+      step("1", "Auto traces it at once.", "The moment it opens, with nothing to choose first."),
+      step("2", "A small card offers Custom.", "A few short steps, each explained, with the result beside Auto's as you go. Ignore it and Auto stands."),
+      step("3", "Everything is an ordinary setting.", "What Custom chooses is under Tune afterwards, to change like any other control."),
+    ),
+    h(
+      "div.introfoot",
+      null,
+      h("span.muted", null, "Settings has a switch to always use Auto, or always Custom."),
+      h("button.btn.compact", { "data-ctl": "intro-seen", onclick: act.markSeen }, "Got it"),
+    ),
+  );
+}
+
+/** First run, and the empty state the app returns to. */
 function firstRun(store: Store, act: WorkspaceActions, samples: SampleInfo[]): HTMLElement {
   const mod = modKey(store.state.caps?.platform);
   return h(
     "div.firstrun",
     null,
+    firstRunIntro(store, act),
     h(
       "div.drop",
       null,

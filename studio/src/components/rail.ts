@@ -15,8 +15,9 @@ import { bytes, count, de00, modKey, percent, plannedTracePx, seconds, type Stor
 import type { Control, Loss, Report, Settings, Stage } from "../lib/ipc";
 import { closeOverlay, modal, openModal, tip, toast } from "./overlays";
 import { paletteCard, wirePaletteHover, type PaletteActions } from "./palette";
+import { autoChose, hasAutoNews, type AutoChoseActions } from "./autochose";
 
-export interface RailActions extends PaletteActions {
+export interface RailActions extends PaletteActions, AutoChoseActions {
   setPreset(id: string): void;
   savePreset(name: string): void;
   deletePreset(id: string): void;
@@ -33,6 +34,10 @@ export interface RailActions extends PaletteActions {
   jumpToWorst(): void;
   /** Open the denoiser's download dialog. */
   openDenoiser(): void;
+  /** Close the "Auto chose" note for this image. */
+  hideAutoNote(): void;
+  /** Open the Custom wizard over the rail. */
+  openWizard(): void;
 }
 
 /**
@@ -132,6 +137,11 @@ export function createRail(store: Store, act: RailActions): HTMLElement {
       "resultGroups",
       "paletteSelection",
       "simplifyTo",
+      "auto",
+      "facts",
+      "chooser",
+      "wizard",
+      "autoNoteHidden",
     ],
     () => {
       if (store.state.railTab === "result") renderScroll();
@@ -280,7 +290,22 @@ function railTabs(store: Store, act: RailActions): HTMLElement[] {
 // ------------------------------------------------------------------------- tune ---
 
 function tunePane(store: Store, act: RailActions): (HTMLElement | null)[] {
-  return [presets(store, act), ...controlGroups(store, act)];
+  return [guideLine(store, act), presets(store, act), ...controlGroups(store, act)];
+}
+
+/** The way back into the wizard, for an image that is already open. */
+function guideLine(store: Store, act: RailActions): HTMLElement | null {
+  if (!store.state.source) return null;
+  return h(
+    "div.guideline",
+    null,
+    h("span.faint", null, "Not sure which controls matter here?"),
+    h(
+      "button.reset",
+      { "data-ctl": "open-wizard", title: "The main choices one step at a time, each explained, with the result beside Auto's", onclick: act.openWizard },
+      "Walk me through it",
+    ),
+  );
 }
 
 // ------------------------------------------------------------------- presets ---
@@ -414,7 +439,35 @@ function saveCurrentAsPreset(store: Store, act: RailActions): void {
 
 function resultPane(store: Store, act: RailActions): (HTMLElement | null)[] {
   if (!store.state.source) return [emptyResult()];
-  return [reportCard(store, act), structureCard(store, act), lostCard(store), paletteCard(store, act), benchmarkNote()];
+  return [autoCard(store, act), reportCard(store, act), structureCard(store, act), lostCard(store), paletteCard(store, act), benchmarkNote()];
+}
+
+/**
+ * "Auto chose", once the chooser over the stage has gone: what the automatic trace noticed,
+ * with the alternatives and the colour-group suggestions a click away. Only while it has
+ * something to offer, and closable for the image.
+ */
+function autoCard(store: Store, act: RailActions): HTMLElement | null {
+  const st = store.state;
+  if (st.chooser || st.wizard || st.autoNoteHidden || !hasAutoNews(store)) return null;
+  const body = autoChose(store, act, true);
+  if (!body) return null;
+  return h(
+    "div.card.autocard",
+    null,
+    h(
+      "div.cardhead",
+      null,
+      h("span.eyebrow", null, "Auto chose"),
+      h(
+        "div",
+        { style: { display: "flex", gap: "10px" } },
+        h("button.reset", { "data-ctl": "auto-customise", onclick: act.openWizard }, "Customise"),
+        h("button.reset", { "data-ctl": "auto-hide", title: "Hide this for the image", onclick: act.hideAutoNote }, "Hide"),
+      ),
+    ),
+    body,
+  );
 }
 
 /** Before any image is open there is nothing to report, and a card of dashes says so badly. */
@@ -784,7 +837,7 @@ function controlGroups(store: Store, act: RailActions): HTMLElement[] {
  * One row: a plain-words label, its unit, the value shown numerically, and a slider on a
  * perceptual scale with named stops rather than a bare track.
  */
-function controlRow(store: Store, c: Control, act: RailActions, base: Settings): HTMLElement {
+export function controlRow(store: Store, c: Control, act: Pick<RailActions, "changeSetting">, base: Settings): HTMLElement {
   const value = store.state.settings[c.key];
   const changed = value !== base[c.key];
   const row = (...kids: (HTMLElement | null)[]) => h(changed ? "div.control.changed" : "div.control", null, ...kids);

@@ -2806,3 +2806,566 @@ body.dragging-ink [data-drop="list"] {
     display: none;
   }
 }
+
+/* ------------------------------------------------------------ the wizard ---- */
+
+/* The chooser: a small card over the foot of the stage, never a modal. The stage behind
+   it keeps panning and zooming; ignoring the card is Auto. */
+.chooser {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  z-index: 8;
+  width: min(560px, calc(100% - 32px));
+  max-height: calc(100% - 70px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 10px 12px 11px;
+  background: var(--card);
+  border: 1px solid var(--highlight);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+  animation: rise var(--d-fast) var(--ease-out-expo);
+}
+.choosehead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+.choosehead .eyebrow {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chooseintro {
+  font-size: var(--t-label);
+  line-height: 1.5;
+  color: var(--dim);
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  background: var(--accent-subtle);
+  border: 1px solid var(--accent-soft);
+}
+.choices {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.choice {
+  display: grid;
+  grid-template-columns: 92px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 8px 8px 12px;
+  border: 1px solid var(--rule2);
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+  min-width: 0;
+}
+.choice .btn {
+  min-width: 104px;
+}
+.choicename {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-display);
+  font-size: 17px;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+.choicename svg {
+  color: var(--accent-text);
+}
+.choicebody {
+  font-size: var(--t-chrome);
+  line-height: 1.5;
+  color: var(--faint);
+}
+.choosenews {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 9px;
+  border-top: 1px solid var(--rule2);
+}
+.remember {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--t-label);
+  color: var(--faint);
+  cursor: pointer;
+  align-self: flex-start;
+}
+.remember input {
+  accent-color: var(--accent);
+  margin: 0;
+}
+
+/* "Auto chose": what the automatic trace noticed, with the alternatives a click away. */
+.autochose {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-size: var(--t-chrome);
+}
+.autolead {
+  color: var(--dim);
+  line-height: 1.5;
+}
+.autorow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: space-between;
+}
+.autorow.moved {
+  padding-top: 7px;
+  border-top: 1px dashed var(--rule2);
+}
+.autotext {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.autotitle {
+  color: var(--ink);
+}
+.autotext .muted {
+  font-size: var(--t-label);
+}
+.autobtns {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+}
+.autorow .btn {
+  flex: none;
+}
+.autotaken {
+  font-size: var(--t-label);
+  color: var(--state-final);
+  flex: none;
+}
+.card.autocard {
+  border-color: var(--accent-soft);
+  background: color-mix(in srgb, var(--accent) 4%, var(--card));
+}
+.guideline {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: var(--t-label);
+}
+
+/* The wizard takes the rail over, a little wider, and leaves the stage beside it. */
+.rail.wizarding {
+  width: max(var(--rail-w), 400px);
+}
+.sheet.wizsheet {
+  align-items: stretch;
+  background: var(--paper);
+}
+.sheetbody.wizbody {
+  height: 100%;
+  border-radius: 0;
+  border-top: none;
+  box-shadow: none;
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+  background: var(--paper);
+}
+.wizhead {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--rule2);
+}
+.wiztitle {
+  font-size: 24px;
+  font-weight: 500;
+  line-height: 1.1;
+  color: var(--ink);
+}
+.wizdots {
+  display: flex;
+  gap: 6px;
+}
+.wizdots button {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--highlight);
+  transition: background var(--d-micro);
+}
+.wizdots button.done {
+  background: color-mix(in srgb, var(--accent) 45%, var(--highlight));
+}
+.wizdots button[aria-selected="true"] {
+  background: var(--accent);
+}
+.wizdots button:hover {
+  background: var(--accent-hover);
+}
+.wizcompare {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--t-label);
+}
+.wizcompare .seg > button {
+  padding: 3px 9px;
+}
+.wizscroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.wizlead {
+  font-size: var(--t-panel);
+  line-height: 1.55;
+  color: var(--dim);
+}
+.wizguide {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--rule2);
+}
+.wizexplain {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 5px 12px;
+  margin: 0;
+  font-size: var(--t-chrome);
+  line-height: 1.5;
+}
+.wizexplain dt {
+  font-size: var(--t-eyebrow);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding-top: 3px;
+  white-space: nowrap;
+}
+.wizexplain dd {
+  margin: 0;
+  color: var(--dim);
+}
+.wizlearn {
+  font-size: var(--t-label);
+  color: var(--accent-text);
+  align-self: flex-start;
+  text-decoration: none;
+}
+.wizlearn:hover {
+  text-decoration: underline;
+}
+.wizcontrols {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--rule2);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+}
+.wizlive {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.wizrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: var(--t-chrome);
+}
+.wizsmall {
+  font-size: var(--t-label);
+  line-height: 1.5;
+}
+.wizwhy {
+  font-size: var(--t-chrome);
+  line-height: 1.5;
+  color: var(--dim);
+}
+.wizchoices {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.wizchoice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 10px 11px;
+  text-align: left;
+  border: 1px solid var(--rule2);
+  border-radius: var(--radius);
+  background: var(--paper);
+  font-size: var(--t-label);
+  line-height: 1.45;
+}
+.wizchoice .name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.wizchoice:hover {
+  border-color: var(--highlight);
+}
+.wizchoice[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+.wiznote {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 11px;
+  border-radius: var(--radius);
+  background: var(--accent-subtle);
+  font-size: var(--t-label);
+  line-height: 1.5;
+  color: var(--dim);
+}
+.wiznav {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--rule2);
+  background: var(--paper);
+}
+
+/* "What is it?": one tile per preset, each a small draft of this image. */
+.kinds {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 9px;
+}
+.kind {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 7px 7px 9px;
+  text-align: left;
+  border: 1px solid var(--rule2);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  min-width: 0;
+  transition: border-color var(--d-micro), background var(--d-micro);
+}
+.kind:hover {
+  border-color: var(--highlight);
+}
+.kind[aria-checked="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, var(--card));
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.kthumb {
+  position: relative;
+  height: 104px;
+  border-radius: var(--radius);
+  background-color: var(--stage);
+  background-image: repeating-conic-gradient(var(--checker-a) 0% 25%, var(--checker-b) 0% 50%);
+  background-size: 10px 10px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  margin-bottom: 3px;
+}
+.kthumb img {
+  max-width: 92%;
+  max-height: 92%;
+  object-fit: contain;
+  image-rendering: auto;
+}
+.kspin {
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 2px;
+  overflow: hidden;
+  display: none;
+}
+.kind.busy .kspin {
+  display: block;
+}
+.kspin::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 30%;
+  background: var(--accent);
+  animation: sweepacross 1.6s var(--ease-out-expo) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .kspin::after {
+    animation: none;
+    width: 100%;
+    opacity: 0.5;
+  }
+}
+.kname {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+  padding: 0 2px;
+}
+.ksugg {
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent-text);
+}
+.kwhy,
+.knote,
+.kstat {
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 0 2px;
+}
+.kwhy {
+  color: var(--faint);
+}
+.knote {
+  color: var(--muted);
+  font-style: italic;
+}
+.kstat {
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+/* Auto's figures beside the current ones. */
+.wizreadout table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--t-chrome);
+}
+.wizreadout th,
+.wizreadout td {
+  padding: 4px 0;
+  text-align: right;
+  font-weight: 400;
+}
+.wizreadout thead th {
+  font-size: var(--t-eyebrow);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.wizreadout tbody th {
+  text-align: left;
+  color: var(--faint);
+}
+.wizreadout td {
+  color: var(--ink);
+  padding-left: 10px;
+}
+.wizreadout td.delta {
+  width: 70px;
+}
+.wizreadout td.delta.same {
+  color: var(--muted);
+}
+.wizchanges .wizchange {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: var(--t-chrome);
+  color: var(--faint);
+}
+.wizchanges .wizchange .num {
+  color: var(--ink);
+}
+
+/* The left pane, while it shows another trace rather than the source. */
+.pane.source.comparing .panelabel {
+  color: var(--accent-text);
+}
+
+/* The first launch: what opening an image does, said once. */
+.intro {
+  width: min(620px, 80%);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+  border: 1px solid var(--accent-soft);
+  border-radius: var(--radius-xl);
+  background: color-mix(in srgb, var(--accent) 5%, var(--paper));
+}
+.intro ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.intro li {
+  display: flex;
+  gap: 11px;
+  align-items: baseline;
+  font-size: var(--t-chrome);
+  line-height: 1.5;
+}
+.intro li > div {
+  display: flex;
+  flex-direction: column;
+}
+.introstep {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.introtitle {
+  color: var(--ink);
+  font-weight: 500;
+}
+.introfoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--t-label);
+}

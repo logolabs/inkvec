@@ -16,6 +16,7 @@ import {
   type DenoiserStatus,
   type IntegrationStatus,
   type Prefs,
+  type OnOpen,
   type Theme,
 } from "../lib/ipc";
 import { bytes, type Store } from "../lib/state";
@@ -98,6 +99,19 @@ function settings(store: Store, act: ScreenActions): HTMLElement {
               ],
               p?.theme ?? "system",
               (v) => act.applyPrefs({ theme: v as Theme }),
+            ),
+          ),
+          row(
+            "When an image is opened",
+            "Auto always starts tracing at once. Ask shows a small card offering the Custom wizard beside it; Custom opens the wizard straight away.",
+            select(
+              [
+                ["ask", "Ask"],
+                ["auto", "Auto only"],
+                ["custom", "Custom wizard"],
+              ],
+              p?.onOpen ?? "ask",
+              (v) => act.applyPrefs({ onOpen: v as OnOpen }),
             ),
           ),
           row(

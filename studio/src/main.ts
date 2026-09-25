@@ -27,7 +27,9 @@ import {
   type Settings,
 } from "./lib/ipc";
 import { initial, modKey, Store } from "./lib/state";
-import { createRail } from "./components/rail";
+import { Previews } from "./lib/previews";
+import { createRail, type RailActions } from "./components/rail";
+import { createChooser, createWizard, type Snapshot, type WizardActions } from "./components/wizard";
 import { proposeGroups } from "./components/palette";
 import { openCardComposer } from "./components/card";
 import { openExportSheet } from "./components/exportsheet";
@@ -86,6 +88,8 @@ let settleTimer = 0;
 let watching = 0;
 /** The colour groups each trace in flight was sent with, by generation. */
 const groupsSent = new Map<number, ColourGroup[]>();
+/** The wizard's preview drafts, queued one at a time behind the main trace. */
+const previews = new Previews();
 
 // --------------------------------------------------------------- the trace loop ---
 
@@ -172,6 +176,21 @@ function applyOutcome(outcome: Outcome, generation = store.state.generation): vo
     // Groups are proposed from a full trace's palette, never from a draft's, and only
     // proposed: nothing is applied until the user accepts it.
     if (outcome.tier === "final") store.set({ groupSuggestions: proposeGroups(store.state) });
+    // The automatic trace an image was opened with has landed: it is what the wizard starts
+    // from and compares against. Only now are the source's facts measured, from the raster
+    // that trace already decoded, so they never cost the trace itself a moment.
+    const auto = store.state.auto;
+    if (auto && generation === auto.generation && outcome.tier === "final" && !auto.report) {
+      store.set({
+        auto: { ...auto, svg: outcome.svg, report: outcome.report, palette: outcome.palette, losses: outcome.losses },
+      });
+      api.sourceFacts(auto.settings.traceSize).then(
+        (facts) => {
+          if (store.state.auto?.generation === generation) store.set({ facts });
+        },
+        () => {},
+      );
+    }
     if (outcome.oversized && outcome.tier === "final") {
       toast(
         `Traced at ${outcome.tracedPx} px; the SVG is still ${outcome.sourcePx[0]} × ${outcome.sourcePx[1]} and scales without limit. This is normal.`,
@@ -201,7 +220,17 @@ function applyOutcome(outcome: Outcome, generation = store.state.generation): vo
 
 // ------------------------------------------------------------------- opening ---
 
-async function openWith(fn: () => Promise<void>): Promise<void> {
+/**
+ * Open an image and trace it: the fork every entry point goes through.
+ *
+ * AUTO is the trace started here, exactly as it always was and before anything else: the
+ * chooser and the wizard are offered only once it is on its way, so choosing Auto costs no
+ * waiting and Custom starts from a finished result. `offer` is false for the Minify tab's
+ * "rebuild", which is a re-trace rather than an image somebody opened.
+ */
+async function openWith(fn: () => Promise<void>, offer = true): Promise<void> {
+  // A wizard still open over the last image closes, keeping its choices: they are the controls.
+  wizard.close();
   store.set({
     stageState: { kind: "decoding" },
     svg: null,
@@ -219,14 +248,35 @@ async function openWith(fn: () => Promise<void>): Promise<void> {
     simplifyTo: null,
     paletteSelection: [],
     hoverFill: null,
+    auto: null,
+    facts: null,
+    chooser: false,
+    compare: null,
+    autoNoteHidden: false,
   });
   try {
     await fn();
     store.set({ zoom: 1, pan: { x: 0, y: 0 }, stageState: { kind: "drawing" } });
     await trace("final");
+    // Everything below happens after the automatic trace has been started.
+    previews.reset();
+    const st = store.state;
+    if (st.tracing) {
+      store.set({
+        auto: { generation: st.generation, settings: { ...st.settings }, preset: st.preset, svg: null, report: null, palette: [], losses: [] },
+      });
+    }
+    if (offer) offerChoice();
   } catch (e) {
     store.set({ stageState: { kind: "undecodable", message: String(e) } });
   }
+}
+
+/** What opening an image offers besides Auto: the chooser card, the wizard, or nothing. */
+function offerChoice(): void {
+  const on = store.state.prefs?.onOpen ?? "ask";
+  if (on === "custom") wizard.open();
+  else if (on === "ask") store.set({ chooser: true });
 }
 
 async function openPath(path: string): Promise<void> {
@@ -255,7 +305,7 @@ async function retraceSvg(svg: string, name: string): Promise<void> {
   await openWith(async () => {
     const info = await api.openBytes([...new TextEncoder().encode(svg)], name);
     store.set({ source: info });
-  });
+  }, false);
 }
 window.addEventListener("inkvec:retrace", (e) => {
   const { svg, name } = (e as CustomEvent<{ svg: string; name: string }>).detail;
@@ -296,6 +346,7 @@ const workspace = createWorkspace(
       const u = store.state.update;
       if (u) void openUrl(u.url);
     },
+    markSeen: () => void savePrefs({ seenFirstRun: true }),
   },
   () => samples,
 );
@@ -318,7 +369,13 @@ function baseSettings(): Settings {
   return (id && resolvePreset(id)?.settings) || DEFAULT_SETTINGS;
 }
 
-const rail = createRail(store, {
+/** Put the controls and colour groups back to a snapshot, and trace them. */
+function restore(snapshot: Snapshot): void {
+  store.set({ settings: { ...snapshot.settings }, preset: snapshot.preset, colourGroups: [...snapshot.colourGroups] });
+  controlChanged();
+}
+
+const railActs: RailActions = {
   setPreset: (id: string) => {
     const preset = resolvePreset(id);
     if (!preset) return;
@@ -399,7 +456,23 @@ const rail = createRail(store, {
   saveCard: () => openCardComposer(store),
   openDenoiser: () => openDenoiserModal(store),
   jumpToWorst: () => jumpToWorst(store, workspace.viewer),
-});
+  backToAuto: () => {
+    const auto = store.state.auto;
+    if (auto) restore({ settings: auto.settings, preset: auto.preset, colourGroups: store.state.colourGroups });
+  },
+  hideAutoNote: () => store.set({ autoNoteHidden: true }),
+  openWizard: () => wizard.open(),
+};
+const rail = createRail(store, railActs);
+
+const wizardActs: WizardActions = {
+  ...railActs,
+  restore,
+  setOnOpen: (onOpen) => void savePrefs({ onOpen }),
+  markSeen: () => void savePrefs({ seenFirstRun: true }),
+};
+const wizard = createWizard(store, rail, wizardActs, previews);
+workspace.mount(createChooser(store, wizardActs, () => wizard.open()));
 
 async function snap(from: string, to: string): Promise<void> {
   const st = store.state;
@@ -565,6 +638,9 @@ function keyboard(e: KeyboardEvent): void {
   }
   if (e.key === "Escape") {
     if (store.state.screen) store.set({ screen: null });
+    // Escape in the wizard keeps what is chosen so far; on the chooser it means Auto.
+    else if (wizard.isOpen()) wizard.close(true);
+    else if (store.state.chooser) store.set({ chooser: false });
     else if (store.state.tracing) {
       void api.cancelTrace();
       store.set({ tracing: false, stageState: store.state.svg ? { kind: "cancelled" } : { kind: "empty" } });
@@ -670,6 +746,9 @@ async function start(): Promise<void> {
     // viewer asks for them by generation the first time Certainty is shown.
     applyOutcome(outcome, generation);
   });
+  // A second launch (the context menu's "Vectorize with Inkvec" while the app is open)
+  // hands its file to this window.
+  await events.openPath((path) => void openFromOutside(path));
   await events.batchRow((row) => {
     const b = store.state.batch;
     const at = b.rows.findIndex((r) => r.id === row.id);
@@ -707,6 +786,10 @@ async function start(): Promise<void> {
   progress("Ready", 1);
   void api.appReady().catch(() => {});
 
+  // The file the app was launched with, if any: the context menu's "Vectorize with Inkvec".
+  const launched = await api.launchPath().catch(() => null);
+  if (launched) void openFromOutside(launched);
+
   // The update check, if it is on. Its result only ever reaches the status strip.
   if (prefs.checkUpdates) {
     api
@@ -714,6 +797,12 @@ async function start(): Promise<void> {
       .then((update) => store.set({ update }))
       .catch(() => {});
   }
+}
+
+/** Open a file handed to the app from outside it (the command line, a second launch). */
+async function openFromOutside(path: string): Promise<void> {
+  store.set({ tab: "vectorize", screen: null });
+  await openPath(path);
 }
 
 /** Tell the splash window how far start-up has got. It is decoration: never worth a failure. */

@@ -74,6 +74,13 @@ function liveSuggestion(g: Suggestion, palette: Ink[]): Suggestion | null {
   return { ...g, members, target };
 }
 
+/** The suggestions that still apply to the palette on screen, with their place in the stored list. */
+export function liveSuggestions(st: State): { g: Suggestion; index: number }[] {
+  return (st.groupSuggestions ?? [])
+    .map((g, index) => ({ g: liveSuggestion(g, st.palette), index }))
+    .filter((x): x is { g: Suggestion; index: number } => x.g !== null);
+}
+
 // ------------------------------------------------------------ group edits ---
 
 /** `g` without its member `k`, with a target that named a later member following it. */
@@ -280,9 +287,7 @@ export function wirePaletteHover(container: HTMLElement, store: Store): void {
 export function paletteCard(store: Store, act: PaletteActions): HTMLElement {
   const st = store.state;
   // Each suggestion as it applies to this palette, with its place in the stored list.
-  const suggestions = (st.groupSuggestions ?? [])
-    .map((g, index) => ({ g: liveSuggestion(g, st.palette), index }))
-    .filter((x): x is { g: Suggestion; index: number } => x.g !== null);
+  const suggestions = liveSuggestions(st);
   const flats = st.palette.filter((i) => i.kind !== "gradient");
   const selected = st.paletteSelection;
 

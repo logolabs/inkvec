@@ -72,6 +72,32 @@ def normalize_svg(svg: str) -> tuple[str, tuple[float, float]]:
     raise RenderError("SVG has neither viewBox nor usable width/height")
 
 
+def _root_size(svg: str, width: int, height: int) -> str:
+    """Give the root the requested aspect when its own ``width``/``height`` disagree.
+
+    The backend draws the viewBox into the root's own viewport and then scales that
+    viewport to the requested size, independently in x and y. Widening the viewBox (see
+    `fit_viewbox`) therefore does nothing for a file that also says ``width="98.829"
+    height="57.306"``: the square viewBox is fitted into a 98.8 x 57.3 viewport and the
+    512 x 512 request squeezes it 1.72x. That is how the gallery's SCM logo arrived with
+    its round halftone dots drawn as tall ellipses and dark resampling caps (2026-09-26).
+    A root whose size already has the requested aspect is left alone, so the curated
+    corpus (square files, square requests) renders byte for byte as before.
+    """
+    m = re.search(r"<svg\b[^>]*>", svg)
+    if not m or width <= 0 or height <= 0:
+        return svg
+    tag = m.group(0)
+    mw = re.search(r'\swidth="([^"]*)"', tag)
+    mh = re.search(r'\sheight="([^"]*)"', tag)
+    w, h = _parse_len(mw.group(1)) if mw else None, _parse_len(mh.group(1)) if mh else None
+    if not w or not h or abs(w / h - width / height) < 1e-6:
+        return svg
+    new = re.sub(r'\swidth="[^"]*"', f' width="{width}"', tag, count=1)
+    new = re.sub(r'\sheight="[^"]*"', f' height="{height}"', new, count=1)
+    return svg[: m.start()] + new + svg[m.end():]
+
+
 def fit_viewbox(svg: str, width: int, height: int, margin: float = 0.0) -> str:
     """Expand the viewBox (centred) to the requested aspect so the backend renders exactly
     ``width x height`` at a uniform scale.
@@ -82,6 +108,7 @@ def fit_viewbox(svg: str, width: int, height: int, margin: float = 0.0) -> str:
     soft ramps and the lettering came out wrong (2026-09-05). A square viewBox at a
     square request is untouched, so the curated corpus is unchanged.
     """
+    svg = _root_size(svg, width, height)
     m0 = re.search(r'viewBox="([^"]+)"', svg)
     if not m0:
         return svg

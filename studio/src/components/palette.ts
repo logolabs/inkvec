@@ -904,7 +904,7 @@ function pastePalette(store: Store, act: PaletteActions): void {
       "Paste a brand palette",
       [
         area,
-        h("span.muted", { style: { fontSize: "11.5px" } }, "Hex, RGB or CSS variables, one per line. We match each to the nearest traced ink."),
+        h("span.muted", { style: { fontSize: "11.5px" } }, "Hex, RGB or CSS variables, one per line or separated by commas. We match each to the nearest traced ink."),
         preview,
       ],
       [

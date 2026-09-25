@@ -350,10 +350,7 @@ pub struct Match {
 /// Each traced ink takes the nearest pasted colour, and the distance is reported so the
 /// modal can show what each match would cost before the user commits to it.
 pub fn match_palette(traced: Vec<String>, pasted: String) -> Vec<Match> {
-    let wanted: Vec<String> = pasted
-        .split(['\n', ',', ';'])
-        .filter_map(parse_colour)
-        .collect();
+    let wanted = pasted_colours(&pasted);
     traced
         .iter()
         .filter_map(|t| {
@@ -377,31 +374,84 @@ pub fn match_palette(traced: Vec<String>, pasted: String) -> Vec<Match> {
         .collect()
 }
 
-/// Read one colour out of a line of pasted text.
+/// Every colour in a pasted palette, in the order it was written.
 ///
-/// Hex with or without a `#`, `rgb(...)`, or a CSS custom property whose value is either.
-/// Anything else is skipped rather than guessed at.
+/// People paste lists separated by newlines, commas, semicolons or spaces, and the commas
+/// inside `rgb(207, 198, 180)` are not separators: the text is cut only outside
+/// parentheses, so a functional colour reaches [`parse_colour`] whole. A piece that is not
+/// a colour (a label, a variable's name) is skipped.
+pub fn pasted_colours(text: &str) -> Vec<String> {
+    let mut pieces: Vec<String> = Vec::new();
+    let mut piece = String::new();
+    let mut depth = 0usize;
+    for c in text.chars() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        if depth == 0 && (c == ',' || c == ';' || c.is_whitespace()) {
+            pieces.push(std::mem::take(&mut piece));
+        } else {
+            piece.push(c);
+        }
+    }
+    pieces.push(piece);
+    pieces.iter().filter_map(|p| parse_colour(p)).collect()
+}
+
+/// Read one colour out of a piece of pasted text.
+///
+/// Hex with a `#` (3, 4, 6 or 8 digits; an alpha channel is dropped, since a fill snaps to
+/// an opaque colour), six hex digits without one, `rgb(...)` / `rgba(...)` with commas or
+/// spaces and numbers or percentages, or a CSS custom property whose value is any of
+/// those. Anything else is skipped rather than guessed at: three bare letters such as
+/// `bad` or `add` are words far more often than colours.
 pub fn parse_colour(line: &str) -> Option<String> {
     let line = line.trim().trim_end_matches(';');
     let value = line.rsplit(':').next().unwrap_or(line).trim();
-    if let Some(rest) = value.strip_prefix("rgb") {
-        let inside = rest.trim_start_matches('(').trim_end_matches(')');
-        let parts: Vec<u8> = inside
-            .split(|c: char| c == ',' || c.is_whitespace())
+    let lower = value.to_ascii_lowercase();
+    if let Some(rest) = lower
+        .strip_prefix("rgba")
+        .or_else(|| lower.strip_prefix("rgb"))
+    {
+        let inside = rest
+            .trim()
+            .strip_prefix('(')?
+            .trim_end()
+            .strip_suffix(')')?;
+        let channel = |s: &str| -> Option<u8> {
+            let v = match s.strip_suffix('%') {
+                Some(pct) => pct.trim().parse::<f32>().ok()? * 2.55,
+                None => s.parse::<f32>().ok()?,
+            };
+            v.is_finite().then(|| v.clamp(0.0, 255.0).round() as u8)
+        };
+        // `rgb(r g b / a)` and `rgba(r, g, b, a)`: the alpha, when there is one, is fourth.
+        let parts: Vec<&str> = inside
+            .split(|c: char| c == ',' || c == '/' || c.is_whitespace())
             .filter(|s| !s.is_empty())
-            .filter_map(|s| s.trim().parse::<f32>().ok())
-            .map(|v| v.clamp(0.0, 255.0) as u8)
             .collect();
-        if parts.len() >= 3 {
-            return Some(format!("#{:02x}{:02x}{:02x}", parts[0], parts[1], parts[2]));
+        if parts.len() < 3 {
+            return None;
         }
+        let (r, g, b) = (channel(parts[0])?, channel(parts[1])?, channel(parts[2])?);
+        return Some(format!("#{r:02x}{g:02x}{b:02x}"));
+    }
+    let (hex, marked) = match lower.strip_prefix('#') {
+        Some(h) => (h, true),
+        None => (lower.as_str(), false),
+    };
+    if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
         return None;
     }
-    let hex = value.trim_start_matches('#');
-    if !hex.is_empty() && hex.len() <= 6 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
-        return quality::parse_hex(&format!("#{hex}")).map(quality::to_hex);
-    }
-    None
+    let rgb = match (hex.len(), marked) {
+        (3 | 4, true) => &hex[..3],
+        (6, _) => hex,
+        (8, true) => &hex[..6],
+        _ => return None,
+    };
+    quality::parse_hex(&format!("#{rgb}")).map(quality::to_hex)
 }
 
 // -------------------------------------------------------------------------- export ---
@@ -587,6 +637,38 @@ mod tests {
         );
         assert_eq!(parse_colour("not a colour"), None);
         assert_eq!(parse_colour(""), None);
+    }
+
+    /// The dialog's own placeholder shows `rgb(207, 198, 180)`; its commas are not list
+    /// separators. Before this, the paste was cut at them and `198` was read as `#119988`.
+    #[test]
+    fn a_pasted_rgb_colour_keeps_its_commas() {
+        let matches = match_palette(vec!["#cfc6b5".into()], "rgb(207, 198, 180)".into());
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].to, "#cfc6b4", "{matches:?}");
+        assert_eq!(
+            pasted_colours("#12443E\n#E9B24C\nrgb(207, 198, 180)"),
+            ["#12443e", "#e9b24c", "#cfc6b4"]
+        );
+    }
+
+    #[test]
+    fn a_pasted_list_is_read_whatever_separates_it() {
+        let text = "rgb(207, 198, 180), #12443E; rgba(1, 2, 3, 0.5)\n\
+                    --brand-ink: rgb(10 20 30 / 50%);\t#abc #E9B24C80\r\n\
+                    RGB(100%, 0%, 50%), Accent: 0a0b0c; bad, add";
+        assert_eq!(
+            pasted_colours(text),
+            [
+                "#cfc6b4", "#12443e", "#010203", "#0a141e", "#aabbcc", "#e9b24c", "#ff0080",
+                "#0a0b0c",
+            ]
+        );
+        assert!(pasted_colours("").is_empty());
+        assert!(
+            pasted_colours("rgb(1, 2)").is_empty(),
+            "two channels is not a colour"
+        );
     }
 
     #[test]

@@ -35,6 +35,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         ".md": "text/markdown; charset=utf-8",
     }
 
+    def send_head(self):
+        # The Space's static host has no directory index below the root: `studio/` there
+        # falls through to a huggingface.co page (X-Frame-Options: DENY, no CORP), which the
+        # embedded Space then refuses to show. Answer the same way here, so a link to a
+        # folder fails in a local check instead of on the Space. Link to `studio/index.html`.
+        path = self.path.split("?", 1)[0].split("#", 1)[0]
+        if path.endswith("/") and path != "/":
+            self.send_error(404, "no directory index below the root (as on the Space)")
+            return None
+        return super().send_head()
+
     def end_headers(self) -> None:
         for k, v in HEADERS.items():
             self.send_header(k, v)

@@ -63,7 +63,7 @@ def main() -> None:
 
         # The button: into the Studio, with threads.
         page.click("#open")
-        page.wait_for_url("**/studio/", timeout=30_000)
+        page.wait_for_url("**/studio/index.html", timeout=30_000)
         page.wait_for_selector("#boot", state="detached", timeout=60_000)
         info = page.evaluate("window.__inkvecStudioLite?.info")
         note(f"Open Inkvec Studio Lite -> {page.url} engine={info}")

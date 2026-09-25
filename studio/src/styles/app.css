@@ -3514,15 +3514,17 @@ html.framed:not(.fullscreen) #app {
 }
 .sc-tiles {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
   margin-bottom: 6px;
 }
 .sc-case {
   display: flex;
   flex-direction: column;
+  align-items: stretch;
   gap: 4px;
   min-width: 0;
+  overflow: hidden;
   padding: 5px;
   border: 1px solid var(--rule2);
   border-radius: var(--radius-sm);
@@ -3551,6 +3553,7 @@ html.framed:not(.fullscreen) #app {
   object-fit: contain;
 }
 .sc-name {
+  width: 100%;
   font-size: 11px;
   font-weight: 600;
   white-space: nowrap;

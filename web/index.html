@@ -117,11 +117,11 @@ h1{font-size:clamp(32px,4.6vw,52px);line-height:1.06;letter-spacing:-.025em;font
 .cases{height:560px;overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--rule);border-radius:var(--radius);background:var(--card);padding:0 10px 10px;scrollbar-width:thin}
 .sethead{position:sticky;top:0;z-index:1;display:flex;justify-content:space-between;align-items:baseline;padding:10px 2px 8px;background:var(--card);font:700 11px/1 var(--font-body);letter-spacing:.07em;text-transform:uppercase;color:var(--dim)}
 .sethead span{color:var(--faint);font-weight:600;letter-spacing:.02em;text-transform:none}
-.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:6px}
-.case{display:flex;flex-direction:column;gap:4px;padding:5px;border-radius:var(--radius-sm);text-align:left;background:var(--stage);min-width:0}
+.tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-bottom:6px}
+.case{display:flex;flex-direction:column;align-items:stretch;gap:4px;padding:5px;border-radius:var(--radius-sm);text-align:left;background:var(--stage);min-width:0;overflow:hidden}
 .case .th{aspect-ratio:1;width:100%;border-radius:5px;background:#fff;overflow:hidden;display:grid;place-items:center}
 .case .th img{width:100%;height:100%;object-fit:contain}
-.case .nm{font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dim)}
+.case .nm{width:100%;font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dim)}
 .case[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft)}
 .case[aria-pressed="true"] .nm{color:var(--accent)}
 .caption{margin:8px 0 0;font-size:13px;color:var(--dim)}

@@ -511,10 +511,7 @@ fn parse_args_from(mut it: impl Iterator<Item = String>) -> Result<Args, String>
             "--no-repair" => a.no_repair = true,
             "--colors" => a.max_colors = parse_value(&mut it, "--colors")?,
             "--merge" => a.merge_distance = parse_value(&mut it, "--merge")?,
-            "--merge-colors" => {
-                a.merge_colors =
-                    parse_color_groups(&it.next().ok_or("--merge-colors needs groups")?)?
-            }
+            "--merge-colors" => a.merge_colors = color_groups_value(&mut it)?,
             other if other.starts_with('-') => return Err(format!("unknown option {other}")),
             other => input = Some(PathBuf::from(other)),
         }
@@ -577,6 +574,13 @@ pub fn parse_color_groups(spec: &str) -> Result<Vec<inkvec_trace::regroup::InkGr
         groups.push(InkGroup { members, target });
     }
     Ok(groups)
+}
+
+/// The value of `--merge-colors`, parsed.
+fn color_groups_value(
+    it: &mut impl Iterator<Item = String>,
+) -> Result<Vec<inkvec_trace::regroup::InkGroup>, String> {
+    parse_color_groups(&parse_value::<String>(it, "--merge-colors")?)
 }
 
 /// `#rgb` or `#rrggbb` (the `#` optional) as sRGB in `[0, 1]`.

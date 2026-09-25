@@ -132,6 +132,14 @@ enum Paint {
     Fitted(Vec<FillModel>),
 }
 
+/// Which group each face belongs to, each group's paint, and the groups whose gradients
+/// still have to be fitted: `(group, radial)`.
+struct Plan {
+    group_of: Vec<Option<usize>>,
+    paints: Vec<Option<Paint>>,
+    needs_fit: Vec<(usize, bool)>,
+}
+
 /// The image repainted so that each group is one fill, and what each group did.
 ///
 /// `trace` is a trace of `img` itself, made with the options the final trace will use. A
@@ -139,28 +147,38 @@ enum Paint {
 /// has no single answer, and the first is the one the caller listed first. Alpha is never
 /// touched, and a fully transparent pixel is left exactly as it was.
 pub fn apply(img: &Rgba, trace: &ColorTrace, groups: &[InkGroup]) -> (Rgba, Vec<GroupOutcome>) {
-    let (w, h) = (img.width, img.height);
-    let n_faces = trace.face_fill.len();
-    let labels = &trace.labels;
-    let mut area = vec![0usize; n_faces];
-    for &f in labels {
+    let mut area = vec![0usize; trace.face_fill.len()];
+    for &f in &trace.labels {
         if let Some(a) = area.get_mut(f as usize) {
             *a += 1;
         }
     }
+    let (mut plan, outcomes) = plan(trace, &area, groups);
+    let mut out = img.clone();
+    if plan.group_of.iter().all(Option::is_none) {
+        return (out, outcomes);
+    }
+    let region = fit_regions(img, trace, &mut plan);
+    repaint(&mut out, trace, &plan, &region);
+    (out, outcomes)
+}
 
-    // Which group each face belongs to, and each group's paint.
-    let mut group_of: Vec<Option<usize>> = vec![None; n_faces];
-    let mut paints: Vec<Option<Paint>> = Vec::with_capacity(groups.len());
+/// Match each group's members to faces and decide what the group becomes.
+fn plan(trace: &ColorTrace, area: &[usize], groups: &[InkGroup]) -> (Plan, Vec<GroupOutcome>) {
+    let n_faces = trace.face_fill.len();
+    let mut plan = Plan {
+        group_of: vec![None; n_faces],
+        paints: Vec::with_capacity(groups.len()),
+        needs_fit: Vec::new(),
+    };
     let mut outcomes = Vec::with_capacity(groups.len());
-    let mut needs_fit: Vec<(usize, bool)> = Vec::new(); // (group, radial)
     for (gi, g) in groups.iter().enumerate() {
         let faces_of: Vec<Vec<usize>> = g
             .members
             .iter()
             .map(|m| {
                 (0..n_faces)
-                    .filter(|&f| group_of[f].is_none() && names(&trace.face_fill[f].model, m))
+                    .filter(|&f| plan.group_of[f].is_none() && names(&trace.face_fill[f].model, m))
                     .collect()
             })
             .collect();
@@ -188,7 +206,7 @@ pub fn apply(img: &Rgba, trace: &ColorTrace, groups: &[InkGroup]) -> (Rgba, Vec<
         let explicit = !matches!(g.target, Target::Auto);
         // One fill and nothing of its own to become is not a merge; leave it alone.
         if matched == 0 || (matched == 1 && !explicit) {
-            paints.push(None);
+            plan.paints.push(None);
             outcomes.push(GroupOutcome {
                 target: None,
                 gradient: false,
@@ -205,7 +223,7 @@ pub fn apply(img: &Rgba, trace: &ColorTrace, groups: &[InkGroup]) -> (Rgba, Vec<
                 let radial = pick
                     .and_then(|i| faces_of[i].iter().copied().max_by_key(|&f| area[f]))
                     .is_some_and(|f| matches!(trace.face_fill[f].model, FillModel::Radial { .. }));
-                needs_fit.push((gi, radial));
+                plan.needs_fit.push((gi, radial));
                 Paint::Fitted(Vec::new())
             }
             (_, Some(Member::Flat(c))) => Paint::Flat(*c),
@@ -213,32 +231,33 @@ pub fn apply(img: &Rgba, trace: &ColorTrace, groups: &[InkGroup]) -> (Rgba, Vec<
         };
         for faces in &faces_of {
             for &f in faces {
-                group_of[f] = Some(gi);
+                plan.group_of[f] = Some(gi);
             }
         }
-        let gradient = matches!(paint, Paint::Fitted(_));
         outcomes.push(GroupOutcome {
             target: match paint {
                 Paint::Flat(c) => Some(c),
                 Paint::Fitted(_) => None,
             },
-            gradient,
+            gradient: matches!(paint, Paint::Fitted(_)),
             merged,
             unmatched,
         });
-        paints.push(Some(paint));
+        plan.paints.push(Some(paint));
     }
+    (plan, outcomes)
+}
 
-    let mut out = img.clone();
-    if group_of.iter().all(Option::is_none) {
-        return (out, outcomes);
-    }
-
-    // Connected regions of each gradient group, and one gradient fitted to each.
+/// The connected regions of each gradient group, one gradient fitted to each, stored in the
+/// group's paint. Returns each pixel's region id (`u32::MAX` outside every gradient group).
+fn fit_regions(img: &Rgba, trace: &ColorTrace, plan: &mut Plan) -> Vec<u32> {
+    let (w, h) = (img.width, img.height);
+    let labels = &trace.labels;
     let rgb = img.composited([1.0, 1.0, 1.0]);
     let mut region = vec![u32::MAX; w * h];
     let lambda = gradient::bic_lambda(w * h);
-    for &(gi, radial) in &needs_fit {
+    for &(gi, radial) in &plan.needs_fit {
+        let group_of = &plan.group_of;
         let in_group = |p: usize| group_of.get(labels[p] as usize).copied().flatten() == Some(gi);
         let mut models = Vec::new();
         for start in 0..w * h {
@@ -246,63 +265,89 @@ pub fn apply(img: &Rgba, trace: &ColorTrace, groups: &[InkGroup]) -> (Rgba, Vec<
                 continue;
             }
             let id = models.len() as u32;
-            let mut stack = vec![start];
-            region[start] = id;
-            let mut mask = vec![0u16; w * h];
-            while let Some(p) = stack.pop() {
-                mask[p] = 1;
-                let (x, y) = (p % w, p / w);
-                let mut push = |q: usize| {
-                    if region[q] == u32::MAX && in_group(q) {
-                        region[q] = id;
-                        stack.push(q);
-                    }
-                };
-                if x > 0 {
-                    push(p - 1);
-                }
-                if x + 1 < w {
-                    push(p + 1);
-                }
-                if y > 0 {
-                    push(p - w);
-                }
-                if y + 1 < h {
-                    push(p + w);
-                }
-            }
+            let mask = flood(&mut region, w, h, start, id, &in_group);
             let cands = gradient::fit_candidates(&rgb, w, h, &mask, 1, trace.sigma_noise, lambda);
-            let kind = |m: &FillModel| {
-                if radial {
-                    matches!(m, FillModel::Radial { .. })
-                } else {
-                    matches!(m, FillModel::Linear { .. })
-                }
-            };
-            let best = cands
-                .iter()
-                .filter(|c| kind(&c.model))
-                .min_by(|a, b| a.cost.total_cmp(&b.cost))
-                .or_else(|| {
-                    cands
-                        .iter()
-                        .filter(|c| c.model.is_gradient())
-                        .min_by(|a, b| a.cost.total_cmp(&b.cost))
-                })
-                .or_else(|| cands.iter().min_by(|a, b| a.cost.total_cmp(&b.cost)))
-                .map(|c| c.model.clone())
-                .unwrap_or(FillModel::Flat([0.0; 3]));
-            models.push(best);
+            models.push(best_gradient(&cands, radial));
         }
-        if let Some(Some(Paint::Fitted(m))) = paints.get_mut(gi) {
+        if let Some(Some(Paint::Fitted(m))) = plan.paints.get_mut(gi) {
             *m = models;
         }
     }
+    region
+}
 
+/// Mark the 4-connected region of `start` whose pixels pass `inside` with `id` in `region`,
+/// and return it as a label mask (1 inside, 0 elsewhere).
+fn flood(
+    region: &mut [u32],
+    w: usize,
+    h: usize,
+    start: usize,
+    id: u32,
+    inside: &impl Fn(usize) -> bool,
+) -> Vec<u16> {
+    let mut stack = vec![start];
+    region[start] = id;
+    let mut mask = vec![0u16; w * h];
+    while let Some(p) = stack.pop() {
+        mask[p] = 1;
+        let (x, y) = (p % w, p / w);
+        let mut push = |q: usize| {
+            if region[q] == u32::MAX && inside(q) {
+                region[q] = id;
+                stack.push(q);
+            }
+        };
+        if x > 0 {
+            push(p - 1);
+        }
+        if x + 1 < w {
+            push(p + 1);
+        }
+        if y > 0 {
+            push(p - w);
+        }
+        if y + 1 < h {
+            push(p + w);
+        }
+    }
+    mask
+}
+
+/// The cheapest candidate of the target's kind, else the cheapest gradient, else the
+/// cheapest fill at all.
+fn best_gradient(cands: &[gradient::FillFit], radial: bool) -> FillModel {
+    let kind = |m: &FillModel| {
+        if radial {
+            matches!(m, FillModel::Radial { .. })
+        } else {
+            matches!(m, FillModel::Linear { .. })
+        }
+    };
+    cands
+        .iter()
+        .filter(|c| kind(&c.model))
+        .min_by(|a, b| a.cost.total_cmp(&b.cost))
+        .or_else(|| {
+            cands
+                .iter()
+                .filter(|c| c.model.is_gradient())
+                .min_by(|a, b| a.cost.total_cmp(&b.cost))
+        })
+        .or_else(|| cands.iter().min_by(|a, b| a.cost.total_cmp(&b.cost)))
+        .map(|c| c.model.clone())
+        .unwrap_or(FillModel::Flat([0.0; 3]))
+}
+
+/// Repaint every pixel whose face, or the neighbouring face it is a blend with, is in a
+/// group: unmix it between the two fills and replace the ends that belong to a group.
+fn repaint(out: &mut Rgba, trace: &ColorTrace, plan: &Plan, region: &[u32]) {
+    let (w, h) = (out.width, out.height);
+    let labels = &trace.labels;
     // What a pixel of face `f` at pixel `p` is repainted as, if its face is in a group.
     let paint_at = |f: usize, p: usize, x: f64, y: f64| -> Option<[f32; 3]> {
-        let gi = group_of.get(f).copied().flatten()?;
-        match paints[gi].as_ref()? {
+        let gi = plan.group_of.get(f).copied().flatten()?;
+        match plan.paints[gi].as_ref()? {
             Paint::Flat(c) => Some(*c),
             Paint::Fitted(models) => models.get(region[p] as usize).map(|m| m.color_at(x, y)),
         }
@@ -371,7 +416,6 @@ pub fn apply(img: &Rgba, trace: &ColorTrace, groups: &[InkGroup]) -> (Rgba, Vec<
                 }
             }
         });
-    (out, outcomes)
 }
 
 #[inline]

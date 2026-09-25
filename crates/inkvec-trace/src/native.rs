@@ -462,18 +462,16 @@ pub fn extract_palette(
         .and_then(|v| v.parse::<f32>().ok())
         .unwrap_or(noise_sigmas);
     let blend_tmin = color::blend_tmin();
-    // The clear ground is not a colour: it draws nothing, and a cap of eight colours that
-    // spends one on it gives the artwork seven. It is found like any ink but not counted,
-    // and once the cap is full the scan goes on only to look for it.
+    // The clear ground draws nothing, so it is found but not counted against the cap; once
+    // the cap is full the scan goes on only to look for it.
     let clear = |c: &Ink2| c.alpha() <= CLEAR_INK_ALPHA;
     for &(n, _key, c) in &modes {
-        if colors.iter().filter(|p| !clear(p)).count() >= max_colors {
-            if colors.iter().any(clear) {
-                break;
-            }
-            if !clear(&c) {
-                continue;
-            }
+        let full = colors.iter().filter(|p| !clear(p)).count() >= max_colors;
+        if full && colors.iter().any(clear) {
+            break;
+        }
+        if full && !clear(&c) {
+            continue;
         }
         let (claim, spread) = claim_spread(&px, &nearest_px, c, merge_distance, stride_px);
         if (claim as f32 / total_px) < MIN_INK_WEIGHT && !colors.is_empty() {
@@ -677,8 +675,7 @@ pub fn label_image(rgb: &[[f32; 3]], alpha: &[f32], pal: &Palette) -> Vec<u16> {
 /// The clear ground, as `[W, a]`.
 pub const CLEAR: [f32; 4] = [1.0, 1.0, 1.0, 0.0];
 
-/// Opacity at or below which an ink is the clear ground rather than a colour, for the
-/// colour cap: well under the faintest wash anyone paints on purpose.
+/// Opacity at or below which an ink is the clear ground, not a colour (for the colour cap).
 pub const CLEAR_INK_ALPHA: f32 = 0.02;
 
 fn d2<const N: usize>(a: [f32; N], b: [f32; N]) -> f32 {

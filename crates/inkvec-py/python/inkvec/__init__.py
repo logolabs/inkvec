@@ -125,7 +125,7 @@ def _plain(value: Any) -> Any:
     item = getattr(value, "item", None)
     if callable(item):
         return item()
-    raise TypeError(f"option value {value!r} ({type(value).__name__}) is not a bool or a number")
+    raise TypeError(f"option value {value!r} ({type(value).__name__}) is not a bool, a number or a string")
 
 
 def _pixels_of(obj: Any) -> Optional[Tuple[bytes, int, int]]:

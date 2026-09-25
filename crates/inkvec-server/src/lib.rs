@@ -419,7 +419,7 @@ fn parse_options_object(raw: &str, from: &str) -> Result<Map<String, Value>, Api
 }
 
 /// Query parameters whose key is a property of the options schema, converted to that
-/// property's JSON type (`boolean`, `integer` or `number`). A key the schema does not have is
+/// property's JSON type (`boolean`, `integer`, `number` or `string`). A key the schema does not have is
 /// left for `Options::from_json` to reject (or, for `options`, is not an option at all and is
 /// skipped here). A value that does not parse as its schema type is `invalid_options` naming
 /// the key, the same shape of error the facade itself returns.
@@ -451,6 +451,8 @@ fn typed_query_options(
                 .ok_or_else(|| {
                     ApiError::InvalidOptions(format!("`{key}` must be a {kind}, got {raw:?}"))
                 })?,
+            // Taken as written; `Options::from_json` validates what it means.
+            "string" => Value::String(raw.clone()),
             _ => continue,
         };
         out.insert(key.clone(), value);
@@ -630,6 +632,7 @@ mod tests {
                 "colors": {"type": "integer"},
                 "merge": {"type": "number"},
                 "no_background": {"type": "boolean"},
+                "merge_colors": {"type": "string"},
             }
         })
     }
@@ -659,6 +662,7 @@ mod tests {
             ("colors".to_string(), "8".to_string()),
             ("merge".to_string(), "0.5".to_string()),
             ("no_background".to_string(), "true".to_string()),
+            ("merge_colors".to_string(), "#f00>#00f,#0a0=@1".to_string()),
             ("options".to_string(), "{}".to_string()), // handled elsewhere, must be skipped
             ("not_an_option".to_string(), "whatever".to_string()),
         ];
@@ -666,6 +670,10 @@ mod tests {
         assert_eq!(out.get("colors"), Some(&Value::from(8u64)));
         assert_eq!(out.get("merge"), Some(&Value::from(0.5)));
         assert_eq!(out.get("no_background"), Some(&Value::Bool(true)));
+        assert_eq!(
+            out.get("merge_colors"),
+            Some(&Value::from("#f00>#00f,#0a0=@1"))
+        );
         assert!(!out.contains_key("options"));
         assert!(!out.contains_key("not_an_option"));
     }

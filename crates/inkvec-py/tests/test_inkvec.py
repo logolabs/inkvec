@@ -179,7 +179,8 @@ def test_pillow_and_numpy_inputs_match_the_file():
         ({"precision": float("nan")}, "precision"),
         ({"harmonize_threshold": 2}, "harmonize_threshold"),
         ({"cutout": "yes"}, "bool"),
-        ({"minify": object()}, "not a bool or a number"),
+        ({"minify": object()}, "not a bool, a number or a string"),
+        ({"merge_colors": "#f00,#nope"}, "merge_colors"),
     ],
 )
 def test_bad_options_raise_naming_the_problem(options, needle):

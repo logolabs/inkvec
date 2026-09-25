@@ -21,7 +21,7 @@ fn common_pixel_gain(
     h: usize,
     pixels: &[usize],
     group: &[u32],
-    pure: &[bool],
+    evidence: &(dyn Fn(usize) -> bool + Sync),
     a: u32,
     b: u32,
     left: &FillFit,
@@ -36,7 +36,7 @@ fn common_pixel_gain(
         h,
         pixels,
         |p| group[p] == a || group[p] == b,
-        |p| pure[p],
+        evidence,
         true,
     );
     if samples.len() == 0 {
@@ -211,7 +211,11 @@ pub fn merge_gradient_bands_guarded(
     let ink_rgb: Vec<[f32; 3]> = (0..n_pal)
         .map(|l| pal.rgb.get(l).copied().unwrap_or([0.0; 3]))
         .collect();
-    let pure = fill_evidence(rgb, w, h, labels, &ink_rgb, sigma_noise);
+    let partner = blend_partners(rgb, w, h, labels, &ink_rgb, sigma_noise);
+    let pure: Vec<bool> = partner.iter().map(|&q| q == PURE).collect();
+    // A blend towards a region inside the fit is evidence for the fit; see
+    // `blend_partners`.
+    let inner_blends = regions::enabled();
 
     // 2. Per-component fits. `group[p]` is the current component of pixel `p`.
     let mut group = comp;
@@ -242,13 +246,19 @@ pub fn merge_gradient_bands_guarded(
         };
         let seen = if sub.is_empty() { pixels } else { &sub[..] };
         FIT_PIXELS.fetch_add(seen.len(), std::sync::atomic::Ordering::Relaxed);
+        let evidence = |p: usize| {
+            pure[p] || (inner_blends && {
+                let q = partner[p] as usize;
+                group[q] == a || group[q] == b
+            })
+        };
         let mut fit = select(fit_pixels(
             rgb,
             w,
             h,
             seen,
             member,
-            |p| pure[p],
+            evidence,
             sigma_noise,
             lambda,
         ));
@@ -279,8 +289,20 @@ pub fn merge_gradient_bands_guarded(
     // computing them in waves puts every core on them without changing which merge wins.
     let mergedbg = std::env::var_os("INKVEC_MERGEDBG").is_some();
     // Explicit experiment; the measured production objective remains the default.
-    let common_pixels = std::env::var("INKVEC_MERGE_COMMON_PIXELS").as_deref() == Ok("1");
+    let common_pixels =
+        inner_blends || std::env::var("INKVEC_MERGE_COMMON_PIXELS").as_deref() == Ok("1");
     let mut alive = vec![true; n_comp];
+    // Two flat bands of one quantised ramp are each flat -- a band is too thin to show
+    // its slope -- so the pair test above never looks at them, and a ramp cut into
+    // flat bands stays cut. With region recovery on, a flat pair whose inks are one
+    // ramp step apart is looked at too; the union still has to win on the pixels.
+    let ramp_step = |a: usize, b: usize| {
+        inner_blends
+            && crate::color::de00(
+                ink_rgb[comp_label[a] as usize],
+                ink_rgb[comp_label[b] as usize],
+            ) < *regions::RAMP_STEP_DE00
+    };
     // A cached union is *stale* once one of its members has absorbed something else.
     // It is not thrown away: a large gradient region swallowing a two-pixel fleck used
     // to invalidate the union fit with every one of its other neighbours, and on a logo
@@ -331,7 +353,10 @@ pub fn merge_gradient_bands_guarded(
                 // just to discard it was the single largest cost in the tracer. If one
                 // of the pair later absorbs a band and becomes a gradient, the union is
                 // fitted at that point instead.
-                if !fits[a].model.is_gradient() && !fits[b as usize].model.is_gradient() {
+                if !fits[a].model.is_gradient()
+                    && !fits[b as usize].model.is_gradient()
+                    && !ramp_step(a, b as usize)
+                {
                     continue;
                 }
                 let key = (a as u32, b);
@@ -384,7 +409,10 @@ pub fn merge_gradient_bands_guarded(
                     .filter(|&(b, shared)| b as usize > a && shared >= MIN_SHARED_BOUNDARY)
                     .collect();
                 for (b, _) in neighbours {
-                    if !fits[a].model.is_gradient() && !fits[b as usize].model.is_gradient() {
+                    if !fits[a].model.is_gradient()
+                        && !fits[b as usize].model.is_gradient()
+                        && !ramp_step(a, b as usize)
+                    {
                         continue;
                     }
                     let Some((union, _)) = cache.get(&(a as u32, b)) else {
@@ -411,7 +439,13 @@ pub fn merge_gradient_bands_guarded(
                             h,
                             &pixels,
                             &group,
-                            &pure,
+                            &|p: usize| {
+                                pure[p]
+                                    || (inner_blends && {
+                                        let q = group[partner[p] as usize];
+                                        q == a as u32 || q == b
+                                    })
+                            },
                             a as u32,
                             b,
                             &fits[a],
@@ -551,6 +585,15 @@ pub fn merge_gradient_bands_guarded(
         );
     }
 
+    if let Some(win) = debug::window() {
+        let fit = |a: u32, b: u32| {
+            let mut px = members[a as usize].clone();
+            px.extend_from_slice(&members[b as usize]);
+            fit_group(&group, &px, a, b)
+        };
+        debug::dump(win, w, &members, &alive, &fits, &adj, rgb, &fit);
+    }
+
     // 4. Write back.
     let mut out: Vec<FillFit> = (0..n_pal)
         .map(|i| flat_only(if i < pal.len() { pal.rgb[i] } else { [0.0; 3] }, lambda))
@@ -633,7 +676,7 @@ mod tests {
             h,
             &pixels,
             &group,
-            &pure,
+            &|p: usize| pure[p],
             0,
             1,
             &left,
@@ -662,7 +705,7 @@ mod tests {
             h,
             &pixels,
             &group,
-            &pure,
+            &|p: usize| pure[p],
             0,
             1,
             &flat_only([0.2; 3], 2.0),
@@ -684,7 +727,7 @@ mod tests {
             4,
             &(0..16).collect::<Vec<_>>(),
             &[0; 16],
-            &[false; 16],
+            &|_: usize| false,
             0,
             1,
             &model,

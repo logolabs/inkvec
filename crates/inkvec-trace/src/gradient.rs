@@ -1364,7 +1364,7 @@ fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> 
                 // Which gate refused a candidate is otherwise invisible: a region that
                 // ends up "cands 1" looks identical whether no ramp was ever tried or
                 // every ramp was thrown away here. `INKVEC_EVDBG=1`.
-                if std::env::var_os("INKVEC_EVDBG").is_some() {
+                if std::env::var_os("INKVEC_EVDBG").is_some() || debug::verbose() {
                     // The data's own per-channel range, so a refusal can be read as
                     // "the truth is that subtle" or "the fit missed it".
                     let (mut lo, mut hi) = ([1f32; 3], [0f32; 3]);
@@ -1421,6 +1421,20 @@ fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> 
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
             .unwrap_or(BIMODAL_MARGIN);
+        if debug::verbose() {
+            eprintln!(
+                "[gd]      n={} flat chi2 {:.1} | two-flats {:.1} vs best grad {:.1} | {}",
+                s.len(),
+                out[0].chi2,
+                two,
+                best_grad,
+                out[1..]
+                    .iter()
+                    .map(|f| format!("{} {:.1}/{:.1}", f.model.kind(), f.chi2, f.cost))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
         if two.is_finite() && best_grad.is_finite() && two < margin * best_grad {
             out.truncate(n_flat_only);
         }
@@ -1549,10 +1563,37 @@ pub(crate) fn fill_evidence(
     ink: &[[f32; 3]],
     sigma_noise: f64,
 ) -> Vec<bool> {
+    blend_partners(rgb, w, h, labels, ink, sigma_noise)
+        .into_iter()
+        .map(|q| q == PURE)
+        .collect()
+}
+
+/// [`blend_partners`]' mark for a pixel that is evidence for its own fill.
+pub(crate) const PURE: u32 = u32::MAX;
+
+/// [`fill_evidence`], saying for each blend pixel *which* pixel's ink it is a blend
+/// towards: [`PURE`] for evidence, otherwise the index of the neighbouring pixel whose
+/// label's ink the pixel lies on the segment to.
+///
+/// A fit of several bands of one quantised ramp wants this. Every pixel of a ramp between
+/// two band inks lies on the segment between them, so the plain test calls half of each
+/// band a blend and leaves only the pixels next to the inks: the union then sees two
+/// clusters of colour, which the ramp-or-step test reads as a step. A blend towards a
+/// region that is itself part of the fit is not a blend with anything foreign, and is
+/// evidence for the fit.
+pub(crate) fn blend_partners(
+    rgb: &[[f32; 3]],
+    w: usize,
+    h: usize,
+    labels: &[u16],
+    ink: &[[f32; 3]],
+    sigma_noise: f64,
+) -> Vec<u32> {
     let n = w * h;
     let tol = (3.0 * sigma_noise * 3f64.sqrt()).max(2.0 / 255.0) as f32;
     let tol2 = tol * tol;
-    let mut pure = vec![true; n];
+    let mut pure = vec![PURE; n];
     for p in 0..n {
         let l = labels[p] as usize;
         if l >= ink.len() {
@@ -1572,9 +1613,9 @@ pub(crate) fn fill_evidence(
         let (y0, y1) = (y.saturating_sub(2), (y + 2).min(h - 1));
         let mut seen: [usize; 8] = [usize::MAX; 8];
         let mut n_seen = 0usize;
-        let mut blend = false;
+        let mut blend = PURE;
         for yy in y0..=y1 {
-            if blend {
+            if blend != PURE {
                 break;
             }
             for xx in x0..=x1 {
@@ -1598,21 +1639,19 @@ pub(crate) fn fill_evidence(
                 }
                 let perp = [da[0] - t * ab[0], da[1] - t * ab[1], da[2] - t * ab[2]];
                 if perp[0] * perp[0] + perp[1] * perp[1] + perp[2] * perp[2] <= tol2 {
-                    blend = true;
+                    blend = (yy * w + xx) as u32;
                     break;
                 }
             }
         }
-        if blend {
-            pure[p] = false;
-        }
+        pure[p] = blend;
     }
     if std::env::var_os("INKVEC_EVDBG").is_some() {
         let mut per: std::collections::BTreeMap<usize, (usize, usize)> = Default::default();
         for p in 0..n {
             let e = per.entry(labels[p] as usize).or_insert((0, 0));
             e.0 += 1;
-            if !pure[p] {
+            if pure[p] != PURE {
                 e.1 += 1;
             }
         }
@@ -1692,6 +1731,8 @@ pub fn fit_fill(
 pub mod bands;
 mod budget;
 pub mod carve;
+mod debug;
+pub(crate) mod regions;
 pub(crate) mod stops;
 pub mod svg;
 

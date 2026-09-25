@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read the advanced drawer's controls out of src-tauri/src/options.rs into controls.json.
+"""Read the advanced drawer's controls out of core/src/options.rs into controls.json.
 
 The browser mock (`mock.ts`) has no Rust behind it, so it takes the control table from the
 one place it is defined rather than keeping a second copy that can drift.
@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 
 here = Path(__file__).resolve().parent
-src = (here.parent / "src-tauri" / "src" / "options.rs").read_text(encoding="utf-8")
+src = (here.parent / "core" / "src" / "options.rs").read_text(encoding="utf-8")
 
 start = src.index("pub const CONTROLS")
 body = src[start:]

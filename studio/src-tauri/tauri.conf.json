@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Inkvec Studio Lite",
+  "productName": "Inkvec Studio",
   "version": "0.1.6",
   "identifier": "org.logolabs.inkvec.studio",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "splash",
-        "title": "Inkvec Studio Lite",
+        "title": "Inkvec Studio",
         "url": "splash.html",
         "width": 660,
         "height": 400,
@@ -34,7 +34,7 @@
       },
       {
         "label": "main",
-        "title": "Inkvec Studio Lite",
+        "title": "Inkvec Studio",
         "width": 1440,
         "height": 900,
         "minWidth": 1024,
@@ -71,7 +71,7 @@
     ],
     "category": "GraphicsAndDesign",
     "shortDescription": "Raster to SVG, exactly.",
-    "longDescription": "Inkvec Studio Lite turns a raster logo into an SVG and minimises SVGs you already have. It measures the result: colour difference, coordinates, paths and file size, next to an honest list of what tracing could not recover. Everything runs on this computer; your image is never uploaded.",
+    "longDescription": "Inkvec Studio turns a raster logo into an SVG and minimises SVGs you already have. It measures the result: colour difference, coordinates, paths and file size, next to an honest list of what tracing could not recover. Everything runs on this computer; your image is never uploaded.",
     "copyright": "Copyright logolabs.org. Licensed under the Apache License, Version 2.0.",
     "licenseFile": "../../LICENSE",
     "externalBin": ["binaries/inkvec"],

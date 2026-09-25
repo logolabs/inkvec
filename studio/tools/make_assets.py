@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate Inkvec Studio Lite's binary assets from the shapes that define them.
+"""Generate Inkvec Studio's binary assets from the shapes that define them.
 
 Everything this writes is derived, not drawn by hand, so that the app icon, the installer
 bitmaps and the four bundled samples can be regenerated after any change to the marks
@@ -305,7 +305,7 @@ def installer_sidebar() -> Image.Image:
 
     img = img.resize((w, h), Image.LANCZOS)
     d = ImageDraw.Draw(img)
-    _text_block(d, 16, h - 60, ["Inkvec", "Studio Lite"], CREAM, 15, serif=True)
+    _text_block(d, 16, h - 60, ["Inkvec", "Studio"], CREAM, 15, serif=True)
     _text_block(d, 16, h - 24, ["Raster to SVG, exactly"], PIXEL_DIM, 9)
     return img
 
@@ -317,7 +317,7 @@ def installer_header() -> Image.Image:
     mark = mark_image(30)
     img.paste(mark, (14, (h - mark.height) // 2), mark)
     d = ImageDraw.Draw(img)
-    _text_block(d, 46, 18, ["Inkvec", "Studio Lite"], CREAM, 10)
+    _text_block(d, 46, 18, ["Inkvec", "Studio"], CREAM, 10)
     return img
 
 

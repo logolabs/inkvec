@@ -296,7 +296,7 @@ jobs:
           if-no-files-found: error
 
 
-  # Inkvec Studio Lite, packaged for each platform. A separate job from the CLI matrix
+  # Inkvec Studio, packaged for each platform. A separate job from the CLI matrix
   # above rather than another feature row in it: the app needs a Node toolchain and a
   # webview SDK, its bundles are installers rather than archives, and its build takes
   # long enough that folding it in would make every CLI archive wait for it.
@@ -569,7 +569,7 @@ jobs:
           | --- | --- | --- |
           | `inkvec-*-<target>.tar.gz` / `.zip` | The command line | Linux glibc 2.17 · macOS 10.12 Intel, 11.0 Apple silicon · Windows 10 |
           | `inkvec-*-<target>-restore-model.*` | The command line with the `--restore` restorer compiled in | Linux glibc 2.38 and libstdc++ 13 · macOS 11.0, Apple silicon only · Windows 10 |
-          | `inkvec-studio-*` | Inkvec Studio Lite, the desktop app | Linux glibc 2.38, libstdc++ 13 and WebKitGTK 4.1 (Ubuntu 23.10, Debian 13, Fedora 39+) · macOS 10.15 Intel, 11.0 Apple silicon · Windows 10 |
+          | `inkvec-studio-*` | Inkvec Studio, the desktop app | Linux glibc 2.38, libstdc++ 13 and WebKitGTK 4.1 (Ubuntu 23.10, Debian 13, Fedora 39+) · macOS 10.15 Intel, 11.0 Apple silicon · Windows 10 |
 
           The restorer links a prebuilt ONNX Runtime that calls glibc 2.38 and GCC 13
           symbols, and the app ships the restorer: that is where the two higher floors come
@@ -598,9 +598,9 @@ jobs:
           - **Windows** — SmartScreen shows "Windows protected your PC" with an unknown
             publisher: choose **More info**, then **Run anyway**.
           - **macOS** — Gatekeeper refuses an unsigned, un-notarised app downloaded from a
-            browser. Open Applications, Control-click **Inkvec Studio Lite**, choose
+            browser. Open Applications, Control-click **Inkvec Studio**, choose
             **Open**, then **Open** again in the dialog. If macOS still refuses, run
-            `xattr -dr com.apple.quarantine "/Applications/Inkvec Studio Lite.app"`.
+            `xattr -dr com.apple.quarantine "/Applications/Inkvec Studio.app"`.
           - **Linux** — nothing special for the `.deb` or `.rpm`; an `.AppImage` needs
             `chmod +x` before it will run.
 

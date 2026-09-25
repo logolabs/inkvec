@@ -17,6 +17,15 @@
 //!
 //! A feature added here is a feature of both.
 
+/// The app's name as this build is called: the desktop app is Inkvec Studio, the browser
+/// build Inkvec Studio Lite. It signs what an export writes (`palette.json`'s `generator`,
+/// the asset pack's README).
+pub const APP_NAME: &str = if cfg!(target_arch = "wasm32") {
+    "Inkvec Studio Lite"
+} else {
+    "Inkvec Studio"
+};
+
 pub mod api;
 pub mod export;
 pub mod lost;

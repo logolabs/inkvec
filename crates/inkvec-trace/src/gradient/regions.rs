@@ -88,3 +88,143 @@ pub(crate) fn all_inside(partners: &[u32], inside: impl Fn(usize) -> bool) -> bo
             .take_while(|&&q| q != super::PURE)
             .all(|&q| inside(q as usize))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::color::{rgb_to_oklab, Palette};
+
+    fn palette(rgb: Vec<[f32; 3]>) -> Palette {
+        Palette {
+            colors: rgb.iter().map(|&c| rgb_to_oklab(c)).collect(),
+            weight: vec![1.0; rgb.len()],
+            alpha: vec![1.0; rgb.len()],
+            rgb,
+        }
+    }
+
+    fn q8(v: f32) -> f32 {
+        (v * 255.0).round() / 255.0
+    }
+
+    /// Distinct gradient fills among the labels the pixels ended up with.
+    fn gradients(labels: &[u16], fills: &[crate::gradient::FillFit]) -> usize {
+        let mut seen: Vec<u16> = labels
+            .iter()
+            .copied()
+            .filter(|&l| fills[l as usize].model.is_gradient())
+            .collect();
+        seen.sort_unstable();
+        seen.dedup();
+        seen.len()
+    }
+
+    /// A horizontal ramp quantised into two-pixel bands: every band is too thin to have an
+    /// interior, so each is flat, and only region recovery joins them into one gradient.
+    #[test]
+    fn thin_flat_bands_of_a_ramp_become_one_gradient() {
+        let (w, h, band) = (40usize, 20usize, 2usize);
+        let n_bands = w / band;
+        let ramp = |x: usize| 0.25 + 0.5 * x as f32 / (w - 1) as f32;
+        let rgb: Vec<[f32; 3]> = (0..w * h).map(|p| [q8(ramp(p % w)); 3]).collect();
+        let inks: Vec<[f32; 3]> = (0..n_bands)
+            .map(|b| [q8(ramp(b * band) * 0.5 + ramp(b * band + 1) * 0.5); 3])
+            .collect();
+        let pal = palette(inks);
+        let base: Vec<u16> = (0..w * h).map(|p| ((p % w) / band) as u16).collect();
+        let (sigma, lambda) = (0.5 / 255.0, crate::gradient::bic_lambda(w * h));
+
+        let mut off = base.clone();
+        let (fills, _) = crate::gradient::bands::merge_bands_with(
+            &mut off, &rgb, w, h, &pal, sigma, lambda, None, None, false,
+        );
+        assert_eq!(
+            gradients(&off, &fills),
+            0,
+            "the legacy merge never joins flat bands"
+        );
+
+        let mut on = base.clone();
+        let (fills, _) = crate::gradient::bands::merge_bands_with(
+            &mut on, &rgb, w, h, &pal, sigma, lambda, None, None, true,
+        );
+        assert_eq!(gradients(&on, &fills), 1);
+        let first = on[0];
+        assert!(on.iter().all(|&l| l == first), "one region covers the ramp");
+    }
+
+    /// Two flat inks meeting at an anti-aliased edge stay two flat regions.
+    #[test]
+    fn an_antialiased_edge_between_flats_is_not_a_ramp() {
+        let (w, h) = (40usize, 20usize);
+        let (a, b) = (0.30f32, 0.55f32);
+        let rgb: Vec<[f32; 3]> = (0..w * h)
+            .map(|p| {
+                let x = p % w;
+                let v = if x < 20 {
+                    a
+                } else if x == 20 {
+                    q8(0.5 * (a + b))
+                } else {
+                    b
+                };
+                [q8(v); 3]
+            })
+            .collect();
+        let pal = palette(vec![[q8(a); 3], [q8(b); 3]]);
+        let mut labels: Vec<u16> = (0..w * h).map(|p| u16::from(p % w > 20)).collect();
+        let (sigma, lambda) = (0.5 / 255.0, crate::gradient::bic_lambda(w * h));
+        let (fills, _) = crate::gradient::bands::merge_bands_with(
+            &mut labels,
+            &rgb,
+            w,
+            h,
+            &pal,
+            sigma,
+            lambda,
+            None,
+            None,
+            true,
+        );
+        assert_eq!(gradients(&labels, &fills), 0);
+        assert_ne!(labels[0], labels[w - 1]);
+    }
+
+    #[test]
+    fn smooth_steps_and_seams() {
+        assert!(smooth_step([0.50; 3], [0.51; 3]));
+        assert!(!smooth_step([0.30; 3], [0.42; 3]));
+        let mut adj = vec![HashMap::new(); 3];
+        let mut calm = vec![HashMap::new(); 3];
+        adj[0].insert(1, 10);
+        adj[1].insert(0, 10);
+        calm[0].insert(1, 6);
+        calm[1].insert(0, 6);
+        assert!(is_smooth(&adj, &calm, 0, 1));
+        calm[0].insert(1, 4);
+        assert!(!is_smooth(&adj, &calm, 0, 1));
+        assert!(!is_smooth(&adj, &calm, 0, 2));
+    }
+
+    #[test]
+    fn absorbed_counts_move_to_the_survivor() {
+        let mut c = vec![HashMap::new(); 3];
+        for (a, b, k) in [(0u32, 1u32, 2u32), (1, 2, 5), (0, 2, 1)] {
+            c[a as usize].insert(b, k);
+            c[b as usize].insert(a, k);
+        }
+        absorb_counts(&mut c, 0, 1);
+        assert_eq!(c[0].get(&2), Some(&6));
+        assert_eq!(c[2].get(&0), Some(&6));
+        assert!(c[0].get(&1).is_none() && c[1].is_empty() && c[2].get(&1).is_none());
+    }
+
+    #[test]
+    fn a_blend_is_inner_only_when_every_partner_is_inside() {
+        let p = super::super::PURE;
+        assert!(all_inside(&[p, p, p], |_| false));
+        assert!(all_inside(&[4, 7, p], |q| q == 4 || q == 7));
+        assert!(!all_inside(&[4, 9, p], |q| q == 4 || q == 7));
+        assert!(!all_inside(&[super::super::FOREIGN; 3], |_| true));
+    }
+}

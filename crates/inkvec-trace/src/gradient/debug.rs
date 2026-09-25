@@ -31,7 +31,9 @@ fn bbox(px: &[usize], w: usize) -> [usize; 4] {
     b
 }
 
-/// Dump the components in the window. `fit` fits the union of two components.
+/// Dump the components in the window. `fit` fits the union of two components. The
+/// merger's state, passed piece by piece: it lives in separate locals there.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn dump(
     win: [usize; 4],
     w: usize,
@@ -42,7 +44,8 @@ pub(crate) fn dump(
     rgb: &[[f32; 3]],
     fit: &dyn Fn(u32, u32) -> FillFit,
 ) {
-    let meets = |b: [usize; 4]| b[0] <= win[2] && b[2] >= win[0] && b[1] <= win[3] && b[3] >= win[1];
+    let meets =
+        |b: [usize; 4]| b[0] <= win[2] && b[2] >= win[0] && b[1] <= win[3] && b[3] >= win[1];
     for c in 0..members.len() {
         if !alive[c] || members[c].is_empty() {
             continue;

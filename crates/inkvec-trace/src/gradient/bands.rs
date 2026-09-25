@@ -140,6 +140,35 @@ pub fn merge_gradient_bands_guarded(
     deadline: Option<inkvec_core::clock::Instant>,
     same_class: Option<&(dyn Fn(u16, u16) -> bool + Sync)>,
 ) -> (Vec<FillFit>, Vec<usize>) {
+    merge_bands_with(
+        labels,
+        rgb,
+        w,
+        h,
+        pal,
+        sigma_noise,
+        lambda,
+        deadline,
+        same_class,
+        regions::enabled(),
+    )
+}
+
+/// [`merge_gradient_bands_guarded`] with region recovery (see [`super::regions`]) switched
+/// by the caller rather than by `INKVEC_GRAD_REGIONS`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn merge_bands_with(
+    labels: &mut [u16],
+    rgb: &[[f32; 3]],
+    w: usize,
+    h: usize,
+    pal: &Palette,
+    sigma_noise: f64,
+    lambda: f64,
+    deadline: Option<inkvec_core::clock::Instant>,
+    same_class: Option<&(dyn Fn(u16, u16) -> bool + Sync)>,
+    inner_blends: bool,
+) -> (Vec<FillFit>, Vec<usize>) {
     let n = w * h;
     let n_pal = pal
         .len()
@@ -189,7 +218,6 @@ pub fn merge_gradient_bands_guarded(
     let mut adj: Vec<HashMap<u32, u32>> = vec![HashMap::new(); n_comp];
     // Of those, the pixel pairs across which the colour changes by less than a ramp
     // step: see `regions::smooth_step`. Only kept when region recovery is on.
-    let smooth_on = regions::enabled();
     let mut smooth: Vec<HashMap<u32, u32>> = vec![HashMap::new(); n_comp];
     for p in 0..n {
         let (x, y) = (p % w, p / w);
@@ -206,7 +234,7 @@ pub fn merge_gradient_bands_guarded(
             {
                 *adj[a as usize].entry(b).or_insert(0) += 1;
                 *adj[b as usize].entry(a).or_insert(0) += 1;
-                if smooth_on && regions::smooth_step(rgb[p], rgb[q]) {
+                if inner_blends && regions::smooth_step(rgb[p], rgb[q]) {
                     *smooth[a as usize].entry(b).or_insert(0) += 1;
                     *smooth[b as usize].entry(a).or_insert(0) += 1;
                 }
@@ -221,7 +249,6 @@ pub fn merge_gradient_bands_guarded(
         .collect();
     // A blend towards a region inside the fit is evidence for the fit; see
     // `blend_partners`.
-    let inner_blends = regions::enabled();
     let partner = blend_partners(rgb, w, h, labels, &ink_rgb, sigma_noise, inner_blends);
     let pure: Vec<bool> = partner.iter().map(|q| q[0] == PURE).collect();
     // Every blend partner of `p` lies inside the fit of `a` and `b`.

@@ -8,8 +8,8 @@
  * page would be the first thing to break that. "Open in browser" takes the same page from
  * the published site, in the system browser, for anyone who wants it beside the app.
  *
- * Self-contained on purpose: the app bar's button and F1 are the only ways in, and nothing
- * else in the app needs to know the screen exists. In a browser build without the bundled
+ * Self-contained on purpose: the app bar's button, F1 and a link on About are the ways in,
+ * and nothing else in the app needs to know the screen exists. In a browser build without the bundled
  * copy it says so and offers the published guide instead.
  */
 

@@ -4,7 +4,8 @@
  * This is the product's argument, made visually, and it gets the most attention. Both
  * panes share one transform; the overlays live in one SVG that shares it too, so a
  * 3,000-node logo costs a single `transform` update per frame rather than 3,000 style
- * writes. Nothing here re-renders on store changes except when the drawing itself
+ * writes. The anchors are the one overlay painted on a canvas, which follows the view by
+ * repainting. Nothing here re-renders on store changes except when the drawing itself
  * changes — the pan/zoom path never touches the DOM structure.
  */
 
@@ -48,11 +49,18 @@ export function createViewer(store: Store): Viewer {
   // beside the paths instead of on them is worse than no overlay at all. One wrapper,
   // one transform, and the overlay inherits it by construction.
   vectorArt.append(overlay);
+  // The anchors are the exception: they are painted on a canvas the size of the pane,
+  // not drawn in the overlay. Tens of thousands of round marks re-stroked on every zoom
+  // tick cost a hundred milliseconds of paint and more; filled on a canvas they cost a
+  // few. The canvas is not zoomed, so it lives beside the artwork rather than inside it,
+  // and it is repainted at the new pan and zoom in the frame that shows them.
+  const anchorsCv = h("canvas.anchors") as HTMLCanvasElement;
   const vectorPane = h(
     "div.pane.vector",
     null,
     h("span.eyebrow.panelabel", null, "Vector · SVG"),
     vectorArt,
+    anchorsCv,
   );
   const divider = h("div.wipehandle", { role: "separator", "aria-label": "Wipe" });
   const panes = h("div.panes", null, sourcePane, vectorPane, divider);
@@ -69,9 +77,8 @@ export function createViewer(store: Store): Viewer {
   let shownBands: State["result"] | undefined;
   /** Bumped whenever a bands request in flight stops being wanted. */
   let bandsRequest = 0;
-  /** The zoom the documents were last sized at, and the zoom the dots were sized at. */
+  /** The zoom the documents were last sized at. */
   let sizedZoom = Number.NaN;
-  let dotsZoom = Number.NaN;
 
   // The layers, bottom to top, made once and emptied when the drawing changes. Each is
   // filled the first time it is shown: a 40,000-node logo whose anchors nobody looks at
@@ -85,16 +92,16 @@ export function createViewer(store: Store): Viewer {
     certainty: s("g.certainty") as SVGGElement,
     wireframe: s("g.wireframe") as SVGGElement,
     handles: s("g.handles") as SVGGElement,
-    anchors: s("g.anchors") as SVGGElement,
   };
   type Layer = keyof typeof layers;
-  const built: Record<Layer, boolean> = { certainty: false, wireframe: false, handles: false, anchors: false };
+  const built: Record<Layer, boolean> = { certainty: false, wireframe: false, handles: false };
   for (const g of Object.values(layers)) g.style.display = "none";
-  overlay.append(layers.certainty, layers.wireframe, layers.handles, layers.anchors);
+  anchorsCv.style.display = "none";
+  overlay.append(layers.certainty, layers.wireframe, layers.handles);
 
   /** The drawing's shapes and nodes, read once per drawing and only when a layer needs them. */
   let shapes: string[] | null = null;
-  let nodes: { anchors: string; lines: string; knobs: string } | null = null;
+  let nodes: { lines: string; knobs: string; dots: Dot[] } | null = null;
 
   // ------------------------------------------------------------- drawing ---
 
@@ -147,16 +154,17 @@ export function createViewer(store: Store): Viewer {
       overlay.setAttribute("viewBox", `${box.x} ${box.y} ${box.w} ${box.h}`);
       shapes = null;
       nodes = null;
-      for (const layer of ["wireframe", "handles", "anchors"] as const) {
+      for (const layer of ["wireframe", "handles"] as const) {
         fill(layers[layer]);
         built[layer] = false;
       }
-      dotsZoom = Number.NaN;
+      drawAnchors(true);
     }
 
     // The bands belong to a result rather than to a drawing: snapping an ink repaints the
-    // drawing and keeps them, and a new trace of the same drawing replaces them.
-    if (st.result !== shownBands) dropBands();
+    // drawing and keeps them, and a new trace of the same drawing replaces them. An outcome
+    // with no drawing (a flat image) keeps the last result but has nothing to band.
+    if (st.result !== shownBands || (svgChanged && !svg)) dropBands();
 
     if (sourceChanged || svgChanged) {
       applyShow();
@@ -179,31 +187,33 @@ export function createViewer(store: Store): Viewer {
   }
 
   /**
-   * Every node, handle line and handle knob of the drawing, as one path each.
+   * Every node of the drawing, and its handle lines and knobs as one path each.
    *
    * A path of thousands of subpaths is one element to style, lay out and restyle on zoom,
-   * where a `<circle>` per anchor was forty thousand. The marks are drawn by the stroke —
-   * a zero-length segment with round caps is a dot, one with square caps on a diagonal is
-   * a diamond — so with `vector-effect: non-scaling-stroke` they keep their size on
-   * screen at any zoom without a single attribute write.
+   * where an element per handle was forty thousand. The knobs are drawn by the stroke — a
+   * vanishing segment with square caps on a diagonal is a diamond — so with
+   * `vector-effect: non-scaling-stroke` they keep their size on screen at any zoom without
+   * a single attribute write. The anchors are points, painted by `paintAnchors`.
    */
-  function nodeGeometry(): { anchors: string; lines: string; knobs: string } {
+  function nodeGeometry(): { lines: string; knobs: string; dots: Dot[] } {
     if (nodes) return nodes;
-    const anchors: string[] = [];
+    const dots: Dot[] = [];
     const lines: string[] = [];
     const knobs: string[] = [];
     for (const d of shapesOfDrawing()) {
       // One dot per place, not one per node. A closed shape ends where it began — a
       // circle is four arcs back to its start — and two dots stacked on one point read
-      // as a heavier dot, which is a lie about where the nodes are.
+      // as a heavier dot, which is a lie about where the nodes are. Only the dot is
+      // shared: the nodes that meet there each keep their own handles.
       // Keyed to a thousandth of a pixel as a number: a string key per node was a third
       // of the cost of this whole walk.
       const seen = new Set<number>();
       for (const n of nodesOf(d)) {
         const key = Math.round(n.x * 1000) * 1e8 + Math.round(n.y * 1000);
-        if (seen.has(key)) continue;
-        seen.add(key);
-        anchors.push(`M${n.x} ${n.y}h0`);
+        if (!seen.has(key)) {
+          seen.add(key);
+          dots.push({ x: n.x, y: n.y });
+        }
         for (const c of [n.in, n.out]) {
           if (!c) continue;
           lines.push(`M${n.x} ${n.y}L${c.x} ${c.y}`);
@@ -215,7 +225,7 @@ export function createViewer(store: Store): Viewer {
         }
       }
     }
-    nodes = { anchors: anchors.join(""), lines: lines.join(""), knobs: knobs.join("") };
+    nodes = { lines: lines.join(""), knobs: knobs.join(""), dots };
     return nodes;
   }
 
@@ -226,13 +236,104 @@ export function createViewer(store: Store): Viewer {
     if (layer === "wireframe") {
       const d = joinPaths(shapesOfDrawing());
       if (d) g.append(s("path", { d }));
-    } else if (layer === "handles") {
+    } else {
       const { lines, knobs } = nodeGeometry();
       if (lines) g.append(s("path.lines", { d: lines }), s("path.knobs", { d: knobs }));
-    } else {
-      const { anchors } = nodeGeometry();
-      // The outline first and the dot over it, so a dot on top of its own ink still reads.
-      if (anchors) g.append(s("path.ring", { d: anchors }), s("path.dot", { d: anchors }));
+    }
+  }
+
+  // ------------------------------------------------------------- anchors ---
+
+  /** What the canvas holds, so a frame that changes nothing it shows repaints nothing. */
+  let paintedKey = "";
+  let anchorsQueued = false;
+
+  /**
+   * Repaint the anchors in the next frame, once however many changes ask for it. `force`
+   * marks what is painted stale (a new drawing, a theme); otherwise a frame whose pan,
+   * zoom and pane size match the last paint is skipped.
+   */
+  function drawAnchors(force = false): void {
+    if (force) paintedKey = "";
+    if (anchorsQueued) return;
+    anchorsQueued = true;
+    requestAnimationFrame(() => {
+      anchorsQueued = false;
+      paintAnchors();
+    });
+  }
+
+  /**
+   * One dot per anchor, in screen pixels, over the part of the drawing the pane shows.
+   *
+   * The same marks the overlay drew: a disc of the anchor colour on a ring of the stage
+   * colour 30% of the radius wide, sized and faded by `anchorStyle`. The fade is the
+   * canvas's own opacity, as it was the group's, so a dot over its ring is not faded twice.
+   * Two fills of one path each, rings first, whatever the count.
+   */
+  function paintAnchors(): void {
+    const st = store.state;
+    const on = Boolean(drawing) && st.show.anchors;
+    // A hidden pane (the other side of A/B) has no size; paint it when it is shown.
+    const pw = Math.round(vectorPane.clientWidth);
+    const ph = Math.round(vectorPane.clientHeight);
+    if (on && (!pw || !ph)) return;
+    const dpr = window.devicePixelRatio || 1;
+    const key = on ? `${st.zoom} ${st.pan.x} ${st.pan.y} ${pw} ${ph} ${dpr}` : "off";
+    if (key === paintedKey) return;
+    paintedKey = key;
+    const ctx = anchorsCv.getContext("2d");
+    if (!ctx) return;
+    if (!on) {
+      // Hidden or gone: release the backing store rather than clear it.
+      anchorsCv.width = 0;
+      anchorsCv.height = 0;
+      return;
+    }
+    const bw = Math.max(1, Math.round(pw * dpr));
+    const bh = Math.max(1, Math.round(ph * dpr));
+    if (anchorsCv.width !== bw || anchorsCv.height !== bh) {
+      anchorsCv.width = bw;
+      anchorsCv.height = bh;
+    }
+    anchorsCv.style.width = `${pw}px`;
+    anchorsCv.style.height = `${ph}px`;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, pw, ph);
+    const { dots } = nodeGeometry();
+    if (!dots.length) return;
+    const style = getComputedStyle(vectorPane);
+    const stage = style.getPropertyValue("--stage").trim() || "#808080";
+    const ink = style.getPropertyValue("--anchor").trim() || "#ff5c00";
+    const { r, opacity } = anchorStyle(st.zoom);
+    anchorsCv.style.opacity = String(opacity);
+    // Screen position of a drawing point: the art is pinned to the pane's origin, moved
+    // by the pan and sized by the zoom.
+    const ox = st.pan.x - box.x * st.zoom;
+    const oy = st.pan.y - box.y * st.zoom;
+    const outer = r * 1.15;
+    const inner = r * 0.85;
+    // Only the dots on screen, so a close zoom costs what it shows.
+    const xs: number[] = [];
+    const ys: number[] = [];
+    for (const p of dots) {
+      const x = ox + p.x * st.zoom;
+      const y = oy + p.y * st.zoom;
+      if (x < -outer || y < -outer || x > pw + outer || y > ph + outer) continue;
+      xs.push(x);
+      ys.push(y);
+    }
+    for (const [rad, colour] of [
+      [outer, stage],
+      [inner, ink],
+    ] as const) {
+      ctx.beginPath();
+      for (let i = 0; i < xs.length; i++) {
+        ctx.moveTo(xs[i] + rad, ys[i]);
+        ctx.arc(xs[i], ys[i], rad, 0, 2 * Math.PI);
+      }
+      ctx.fillStyle = colour;
+      ctx.fill();
     }
   }
 
@@ -241,8 +342,8 @@ export function createViewer(store: Store): Viewer {
    *
    * A result carries them inline (an older backend) or leaves them with the backend,
    * which serves them by generation. Either way they are read with a scan of the text, not
-   * a parse: fifteen thousand bands are three paths, one per class, rather than fifteen
-   * thousand elements.
+   * a parse: fifteen thousand bands are a few hundred paths (see `layerBands`) rather than
+   * fifteen thousand elements.
    */
   function buildBands(): void {
     const st = store.state;
@@ -255,8 +356,11 @@ export function createViewer(store: Store): Viewer {
       return;
     }
     const ticket = ++bandsRequest;
+    // No bands for this trace: the toggle is disabled until the next result, and it is
+    // released too, or it would sit pressed over a layer that is not there.
     const missing = () => {
-      if (ticket === bandsRequest) store.set({ bandsMissing: true });
+      if (ticket !== bandsRequest) return;
+      store.set({ bandsMissing: true, show: { ...store.state.show, certainty: false } });
     };
     api.traceBands(st.resultGeneration).then((text) => {
       if (ticket !== bandsRequest) return;
@@ -266,12 +370,8 @@ export function createViewer(store: Store): Viewer {
   }
 
   function fillBands(text: string): void {
-    const classes = bandClasses(text);
     fill(layers.certainty);
-    for (const k of ["sure", "soft", "unsure"] as const) {
-      const d = joinPaths(classes[k]);
-      if (d) layers.certainty.append(s(`path.${k}`, { d }));
-    }
+    for (const { cls, d } of layerBands(readBands(text))) layers.certainty.append(s(`path.${cls}`, { d }));
   }
 
   /** Show/hide the overlays and the fill, building a layer the first time it shows. */
@@ -286,27 +386,12 @@ export function createViewer(store: Store): Viewer {
     };
     set("wireframe", show.wireframe);
     set("handles", show.handles);
-    set("anchors", show.anchors);
     set("certainty", show.certainty);
-    if (show.anchors) sizeDots();
+    anchorsCv.style.display = show.anchors ? "" : "none";
+    drawAnchors();
     // Turning the fill off has to leave something behind, or "wireframe only" is a
     // blank pane; it dims rather than disappears.
     if (drawing) drawing.style.opacity = show.fill ? "1" : "0.12";
-  }
-
-  /**
-   * The anchors thin out with zoom rather than being capped, which is what keeps a
-   * 3,000-node logo readable at 1x and precise at 12x; see `anchorStyle`. Two custom
-   * properties on the anchors' own group, written only while they are showing: set on the
-   * overlay root they restyled every mark in every layer.
-   */
-  function sizeDots(): void {
-    const zoom = store.state.zoom;
-    if (zoom === dotsZoom) return;
-    dotsZoom = zoom;
-    const { r, opacity } = anchorStyle(zoom);
-    layers.anchors.style.setProperty("--dot", `${r}px`);
-    layers.anchors.style.setProperty("--dot-opacity", String(opacity));
   }
 
   // ----------------------------------------------------------- transform ---
@@ -331,8 +416,10 @@ export function createViewer(store: Store): Viewer {
     }
 
     // A pan is the translate above and nothing else. Only a new zoom resizes the
-    // documents, and the overlay marks are sized in screen pixels by the stylesheet, so
-    // the only zoom-dependent write they need is the anchors' two custom properties.
+    // documents, and the overlay marks are sized in screen pixels by the stylesheet. The
+    // anchors' canvas is the pane's size and does not move with the art: it is repainted
+    // for the new view in the coming frame (a pan that only translated it would leave the
+    // dots it slid in from off-screen unpainted).
     if (st.zoom !== sizedZoom) {
       sizedZoom = st.zoom;
       const w = box.w * st.zoom;
@@ -348,8 +435,8 @@ export function createViewer(store: Store): Viewer {
       }
       overlay.setAttribute("width", String(w));
       overlay.setAttribute("height", String(h));
-      if (st.show.anchors) sizeDots();
     }
+    if (st.show.anchors) drawAnchors();
 
     applyLayout();
   }
@@ -508,10 +595,31 @@ export function createViewer(store: Store): Viewer {
   const observer = new ResizeObserver(() => {
     if (!store.state.svg && !store.state.source) return;
     applyLayout();
+    // The anchors' canvas is the pane's size, so a new pane size is a new canvas.
+    if (store.state.show.anchors) drawAnchors();
     // A view nobody has moved follows the window; one somebody zoomed or panned is theirs.
     if (store.state.fitted) fit();
   });
   observer.observe(panes);
+
+  // The canvas holds colours and a pixel density rather than references to them, so a
+  // theme change or a move to a screen of another density repaints it.
+  new MutationObserver(() => {
+    if (store.state.show.anchors) drawAnchors(true);
+  }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  const watchDensity = () => {
+    window
+      .matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`)
+      .addEventListener(
+        "change",
+        () => {
+          if (store.state.show.anchors) drawAnchors();
+          watchDensity();
+        },
+        { once: true },
+      );
+  };
+  watchDensity();
 
   return { el, redraw, transform, fit, goTo, zoomTo };
 }
@@ -533,8 +641,11 @@ export function joinPaths(ds: string[]): string {
   return out;
 }
 
+/** How sure an edge is, by the mean sigma of its band: under 0.1 px, under 0.3 px, above. */
+export type BandClass = "sure" | "soft" | "unsure";
+
 /**
- * The bands of an `--uncertainty` document, sorted by how sure each edge is.
+ * The bands of an `--uncertainty` document, in document order, each with its class.
  *
  * A clean edge's band is a tenth of a pixel wide, true and invisible; each band is
  * coloured by how sure the edge is and outlined a screen pixel wide, so the sure ones read
@@ -542,17 +653,216 @@ export function joinPaths(ds: string[]): string {
  * document is the engine's own, a flat list of paths, and parsing it into a DOM only to
  * read two attributes back cost more than everything else a new result does.
  */
-export function bandClasses(text: string): { sure: string[]; soft: string[]; unsure: string[] } {
-  const out = { sure: [] as string[], soft: [] as string[], unsure: [] as string[] };
+export function readBands(text: string): Band[] {
+  const out: Band[] = [];
   const tag = /<path\b([^>]*)>/g;
   for (let m = tag.exec(text); m; m = tag.exec(text)) {
     const attrs = m[1];
-    const d = /(?:^|\s)d="([^"]*)"/.exec(attrs)?.[1];
-    if (!d) continue;
+    const raw = /(?:^|\s)d="([^"]*)"/.exec(attrs)?.[1]?.trim();
+    if (!raw) continue;
+    const box = bandBox(raw);
+    if (!box) continue;
     const sigma = Number(/\sdata-sigma-mean="([^"]*)"/.exec(attrs)?.[1] ?? 0);
-    (sigma <= 0.1 ? out.sure : sigma <= 0.3 ? out.soft : out.unsure).push(d);
+    out.push({
+      // Bands are joined into shared paths, where a leading relative moveto would move.
+      d: raw[0] === "M" ? raw : `M0 0${raw}`,
+      cls: sigma <= 0.1 ? "sure" : sigma <= 0.3 ? "soft" : "unsure",
+      x0: box.x0,
+      y0: box.y0,
+      x1: box.x1,
+      y1: box.y1,
+    });
   }
   return out;
+}
+
+/** An anchor, in the drawing's units. */
+export interface Dot {
+  x: number;
+  y: number;
+}
+
+/** A band's bounding box, in the drawing's units. */
+export interface Box {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+/** One band: its outline, its class and its box. */
+export interface Band extends Box {
+  d: string;
+  cls: BandClass;
+}
+
+const TENTHS = [1, 1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-6, 1e-7, 1e-8, 1e-9, 1e-10, 1e-11, 1e-12, 1e-13, 1e-14, 1e-15];
+
+/**
+ * A band's bounding box, read straight off its outline.
+ *
+ * The outline is the engine's own (`uncertainty.rs`): absolute `M x y L x y ... Z`, so
+ * every number is a coordinate and they alternate x, y. Read digit by digit rather than
+ * with a regex and `Number()`: fifteen thousand bands are half a million numbers, and
+ * converting each through a string was three times the cost of this loop.
+ */
+export function bandBox(d: string): Box | null {
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  let isY = false;
+  const n = d.length;
+  let i = 0;
+  while (i < n) {
+    let c = d.charCodeAt(i);
+    const neg = c === 45; // -
+    const signed = neg || c === 43;
+    if (signed) c = d.charCodeAt(++i);
+    if (!((c >= 48 && c <= 57) || c === 46)) {
+      if (!signed) i++;
+      continue;
+    }
+    let v = 0;
+    while (c >= 48 && c <= 57) {
+      v = v * 10 + (c - 48);
+      c = d.charCodeAt(++i);
+    }
+    if (c === 46) {
+      let f = 0;
+      let k = 0;
+      c = d.charCodeAt(++i);
+      while (c >= 48 && c <= 57) {
+        if (k < 15) {
+          f = f * 10 + (c - 48);
+          k++;
+        }
+        c = d.charCodeAt(++i);
+      }
+      v += f * TENTHS[k];
+    }
+    if (c === 101 || c === 69) {
+      c = d.charCodeAt(++i);
+      const eneg = c === 45;
+      if (eneg || c === 43) c = d.charCodeAt(++i);
+      let e = 0;
+      while (c >= 48 && c <= 57) {
+        e = e * 10 + (c - 48);
+        c = d.charCodeAt(++i);
+      }
+      v *= 10 ** (eneg ? -e : e);
+    }
+    if (neg) v = -v;
+    if (isY) {
+      if (v < y0) y0 = v;
+      if (v > y1) y1 = v;
+    } else {
+      if (v < x0) x0 = v;
+      if (v > x1) x1 = v;
+    }
+    isY = !isY;
+  }
+  return x0 <= x1 && y0 <= y1 ? { x0, y0, x1, y1 } : null;
+}
+
+/**
+ * How far apart, in the drawing's units, two bands' boxes must be to be drawn without
+ * regard to each other. Their fills only meet where the bands do; the margin covers
+ * their screen-pixel outlines and the antialiasing at their edges.
+ */
+const BAND_GAP = 1;
+/** The grid the overlap search buckets boxes into; about the size of a typical band. */
+const BAND_CELL = 16;
+/** The side of the square tiles each layer is cut into, in the drawing's units. */
+const BAND_TILE = 256;
+
+/**
+ * The bands as paths that paint exactly as one element per band did.
+ *
+ * One element per band was fifteen thousand elements, and a zoom restyled every one. One
+ * path per class fills where two bands overlap once rather than twice, puts every red band
+ * over every orange one, and merges even-odd interiors: a fit view came out visibly
+ * different. So the bands are dealt into layers first. A band joins an existing layer
+ * only where nothing it overlaps could tell: the layer is of its class, holds no band that
+ * overlaps it (their translucent fills stack, as two elements did), and comes after every
+ * layer holding an earlier band of another class that overlaps it (that one is painted
+ * under it, as in the document). Otherwise it starts a new layer at the top. "Overlaps" is
+ * the boxes, a little padded, found through a coarse grid; conservative, never a miss.
+ * Layers of one class commute, so only the order across classes is kept.
+ *
+ * Then each layer is cut into tiles by band centre, so a close zoom paints the paths it
+ * shows and skips the rest: a layer that spans the drawing is painted whole at any zoom.
+ * On a 15,000-band logo: about 340 layers, 2,200 paths.
+ */
+export function layerBands(bands: Band[], tile = BAND_TILE): { cls: BandClass; d: string }[] {
+  const grid = new Map<number, number[]>();
+  const layerOf = new Int32Array(bands.length);
+  const layers: BandClass[] = [];
+  // The layers of each class, bottom to top.
+  const byClass: Record<BandClass, number[]> = { sure: [], soft: [], unsure: [] };
+  // stamp[l] === i + 1 when layer l holds a band of band i's class that overlaps it.
+  const stamp: number[] = [];
+  const g = BAND_GAP / 2;
+  for (let i = 0; i < bands.length; i++) {
+    const b = bands[i];
+    const x0 = b.x0 - g;
+    const y0 = b.y0 - g;
+    const x1 = b.x1 + g;
+    const y1 = b.y1 + g;
+    const cx0 = Math.floor(x0 / BAND_CELL);
+    const cx1 = Math.floor(x1 / BAND_CELL);
+    const cy0 = Math.floor(y0 / BAND_CELL);
+    const cy1 = Math.floor(y1 / BAND_CELL);
+    // The highest layer this band must be painted over.
+    let floor = -1;
+    for (let cy = cy0; cy <= cy1; cy++) {
+      for (let cx = cx0; cx <= cx1; cx++) {
+        const near = grid.get(cx * 65536 + cy);
+        if (!near) continue;
+        for (const j of near) {
+          const o = bands[j];
+          if (o.x0 - g < x1 && o.x1 + g > x0 && o.y0 - g < y1 && o.y1 + g > y0) {
+            if (o.cls === b.cls) stamp[layerOf[j]] = i + 1;
+            else if (layerOf[j] > floor) floor = layerOf[j];
+          }
+        }
+      }
+    }
+    let layer = -1;
+    for (const l of byClass[b.cls]) {
+      if (l > floor && stamp[l] !== i + 1) {
+        layer = l;
+        break;
+      }
+    }
+    if (layer < 0) {
+      layer = layers.length;
+      layers.push(b.cls);
+      byClass[b.cls].push(layer);
+    }
+    layerOf[i] = layer;
+    for (let cy = cy0; cy <= cy1; cy++) {
+      for (let cx = cx0; cx <= cx1; cx++) {
+        const key = cx * 65536 + cy;
+        const near = grid.get(key);
+        if (near) near.push(i);
+        else grid.set(key, [i]);
+      }
+    }
+  }
+  // Each layer cut into tiles by band centre, so a close zoom skips what it does not show.
+  // Tiles of one layer never overlap, so they are painted layer by layer, in any order.
+  const paths = new Map<number, { cls: BandClass; d: string }>();
+  for (let i = 0; i < bands.length; i++) {
+    const b = bands[i];
+    const tx = Math.floor((b.x0 + b.x1) / 2 / tile) + 2048;
+    const ty = Math.floor((b.y0 + b.y1) / 2 / tile) + 2048;
+    const key = (layerOf[i] * 4096 + ty) * 4096 + tx;
+    const path = paths.get(key);
+    if (path) path.d += b.d;
+    else paths.set(key, { cls: layers[layerOf[i]], d: b.d });
+  }
+  return [...paths.entries()].sort((a, b) => a[0] - b[0]).map((e) => e[1]);
 }
 
 /** Whether a state has something for the viewer to show. */

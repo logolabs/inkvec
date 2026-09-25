@@ -3757,7 +3757,7 @@ checksum = "a257582fdcde896fd96463bf2d40eefea0580021c0712a0e2b028b60b47a837a"
 
 [[package]]
 name = "inkvec"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "image",
  "inkvec-cli",
@@ -3773,7 +3773,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-cli"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "inkvec-core",
  "inkvec-fit",
@@ -3786,7 +3786,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-core"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "robust",
  "web-time",
@@ -3794,7 +3794,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-ffi"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "inkvec",
  "serde_json",
@@ -3803,7 +3803,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-fit"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "inkvec-core",
  "kurbo",
@@ -3811,7 +3811,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-py"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "inkvec",
  "pyo3",
@@ -3819,7 +3819,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-restore"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "burn",
  "burn-onnx",
@@ -3833,7 +3833,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-server"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "axum",
  "bytes",
@@ -3855,7 +3855,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-sr"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "image",
  "inkvec-trace",
@@ -3864,7 +3864,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-svgmin"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "inkvec-core",
  "inkvec-fit",
@@ -3875,7 +3875,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-trace"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "image",
  "inkvec-core",
@@ -3885,7 +3885,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-wasm"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "console_error_panic_hook",
  "inkvec",

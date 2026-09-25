@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Inkvec HTTP service",
-    "version": "0.1.5",
+    "version": "0.1.7",
     "description": "Raster-to-SVG tracing over HTTP. Every option is inkvec::Options end to end: this document, and the query parameters on POST /trace below, are generated from the same JSON Schema the Rust facade writes (bindings/options.schema.json) -- nothing about an option is restated here."
   },
   "paths": {

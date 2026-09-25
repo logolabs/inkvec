@@ -2043,7 +2043,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-cli"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "inkvec-core",
  "inkvec-fit",
@@ -2056,7 +2056,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-core"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "robust",
  "web-time",
@@ -2064,7 +2064,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-fit"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "inkvec-core",
  "kurbo",
@@ -2072,7 +2072,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-restore"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "image",
  "inkvec-sr",
@@ -2083,7 +2083,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-sr"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "image",
  "inkvec-trace",
@@ -2092,7 +2092,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-studio"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "dirs",
  "image",
@@ -2118,7 +2118,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-svgmin"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "inkvec-core",
  "inkvec-fit",
@@ -2129,7 +2129,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-trace"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "image",
  "inkvec-core",

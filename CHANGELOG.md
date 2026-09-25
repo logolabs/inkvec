@@ -7,6 +7,10 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-09-25
+
+A fix release: minifying anything the 0.1.6 tracer wrote was broken.
+
 ### Added
 
 - **`svgmin` in the WebAssembly build**: the SVG minifier reachable from a browser.
@@ -15,6 +19,37 @@ API in particular should be treated as unstable release to release).
   out is the picture in) over `minify` (each path refitted within the tolerance), and the
   report carries `bytesBefore`/`bytesAfter` measured in UTF-8 bytes. Invalid input throws an
   `Error` with `code = "invalid_svg"`. The committed `web/pkg/` needs a rebuild to expose it.
+
+### Changed
+
+- Dependencies: kurbo 0.13, resvg 0.48, sha2 0.11, roxmltree 0.21, tower-http 0.7,
+  svgtypes 0.16.
+- **Releases are drafts**. A tag push builds every archive and installer into a draft
+  GitHub release that a maintainer reviews and publishes; nothing in CI publishes it.
+  The two workflows that attach files to the same release (the C libraries, the Swift
+  XCFramework) keep it a draft as well -- without that, the action they use publishes
+  any draft it finds for the tag once its upload is done.
+- **Version copies are checked**. `tools/check_versions.py` fails CI when any file that
+  holds its own copy of the version (the npm package and its lock, the Maven POM, the
+  OpenAPI document, both wasm-pack packages, Inkvec Studio's manifests, both Cargo.lock
+  files, the sibling requirements in `[workspace.dependencies]`) disagrees with Cargo.toml,
+  and the release job refuses a tag that names another version. 0.1.6 went out with the
+  npm package and the POM still at 0.1.5; they are at 0.1.7 now.
+
+### Fixed
+
+- **Minifying Inkvec's own output** (`inkvec-svgmin`, Studio's Minify tab, the `.min.svg`
+  export copy, the WebAssembly `svgmin`). Since 0.1.6 every trace
+  carries a header inside `<svg>` whose `<metadata>` block has an `rdf:about=""`
+  attribute. The document pass removed the `<metadata>` element whole *and* scheduled the
+  removal of that empty attribute inside it; edits are byte ranges applied back to front,
+  so the inner one shifted the text the outer one then cut, and the cut ran into the next
+  element. The first path lost the start of its tag: the file was not XML any more, or a
+  shape was gone. On the 246 regression-gate traces, every one was broken before and none
+  is after. Nothing inside an element that is removed whole is edited now, and when two
+  edits overlap only the enclosing one is applied.
+- **`inkvec-restore`** builds against sha2 0.11 (the weights digest is hex-encoded by
+  hand; the string is the same).
 
 ## [0.1.6] - 2026-09-22
 

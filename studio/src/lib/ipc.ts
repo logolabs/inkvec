@@ -204,7 +204,10 @@ export interface Traced {
   worstCorner: WorstCorner | null;
   stages: Stage[];
   engineLog: string[];
-  /** Each boundary's confidence band, an SVG in the drawing's coordinates (colour traces). */
+  /**
+   * Each boundary's confidence band, an SVG in the drawing's coordinates (colour traces).
+   * Null when the backend keeps them to itself, to be fetched with `api.traceBands`.
+   */
   bands: string | null;
   tracedPx: number;
   oversized: boolean;
@@ -426,7 +429,11 @@ export const api = {
   startTrace: (settings: Settings, tier: "draft" | "final") =>
     invoke<number>("start_trace", { request: { settings, tier } }),
   cancelTrace: () => invoke<void>("cancel_trace"),
-  /** The confidence bands of a finished trace; they travel apart from `trace:done`. */
+  /**
+   * The confidence bands of trace `generation`, asked for only when Certainty is shown.
+   * Megabytes on a detailed drawing, so they are not in every result; null once the
+   * backend no longer holds that trace, or when it had none.
+   */
   traceBands: (generation: number) => invoke<string | null>("trace_bands", { generation }),
 
   snapInks: (svg: string, snaps: { from: string; to: string }[], width: number, height: number) =>

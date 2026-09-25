@@ -450,8 +450,12 @@ kbd {
 .legend .band {
   background: var(--band);
 }
+/* No two bands in one path overlap (see layerBands), so each band keeps the even-odd
+   interior the engine gave it and overlapping bands stack their alpha, as they did when
+   every band was an element of its own. */
 .overlay .certainty path {
   fill: var(--band);
+  fill-rule: evenodd;
   fill-opacity: 0.45;
   stroke: var(--band);
   stroke-width: 1;
@@ -642,31 +646,40 @@ kbd {
   pointer-events: none;
 }
 
-.overlay .wireframe {
+/* Every mark is sized in screen pixels: `vector-effect` does not inherit, so it
+   sits on the paths themselves, and a zoom rewrites nothing. Each layer is one
+   path; the handles' diamonds are the square caps of vanishing diagonal strokes.
+   The anchors are not here: they are painted on a canvas (below). */
+.overlay .wireframe path {
   fill: none;
   stroke: var(--wire);
-  stroke-width: 1;
+  stroke-width: 1px;
+  vector-effect: non-scaling-stroke;
 }
 
-.overlay .handles {
-  stroke: var(--handle);
-  stroke-width: var(--hair, 0.5);
+.overlay .handles path {
   fill: none;
+  stroke: var(--handle);
+  vector-effect: non-scaling-stroke;
 }
-.overlay .handles rect {
-  fill: var(--handle);
-  stroke: none;
+.overlay .handles .lines {
+  stroke-width: 0.8px;
+}
+.overlay .handles .knobs {
+  stroke-width: 2.4px;
+  stroke-linecap: square;
 }
 
-/* Round, and outlined against the stage so a dot on top of its own ink still
-   reads. Shape carries the meaning as well as hue — the handle is a diamond —
-   because red/green confusion is common among exactly the engineers who turn
-   this overlay on. */
-.overlay .anchors {
-  fill: var(--anchor);
-  stroke: var(--stage);
-  stroke-width: calc(var(--dot, 1) * 0.3);
-  opacity: var(--dot-opacity, 1);
+/* The anchors: round, and outlined against the stage so a dot on top of its own
+   ink still reads. Shape carries the meaning as well as hue — the handle is a
+   diamond — because red/green confusion is common among exactly the engineers who
+   turn this overlay on. Painted by the viewer in `--anchor` on a `--stage` ring;
+   a canvas the pane's size, over the artwork and under the pane's label. */
+.pane > canvas.anchors {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
 }
 
 .wipehandle {

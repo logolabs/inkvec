@@ -76,6 +76,10 @@ export interface State {
   liveStages: Stage[];
 
   result: Traced | null;
+  /** The trace that produced `result`: what the backend keeps its confidence bands under. */
+  resultGeneration: number;
+  /** The backend had no confidence bands for `result`, so Certainty has nothing to show. */
+  bandsMissing: boolean;
   /**
    * The full trace before the current one, for the same image: what the readout's
    * deltas are measured against, so moving a control shows what it bought or cost.
@@ -168,6 +172,8 @@ export function initial(settings: Settings, minify: MinifySettings): State {
     tracingTier: "final",
     liveStages: [],
     result: null,
+    resultGeneration: 0,
+    bandsMissing: false,
     previous: null,
     svg: null,
     palette: [],

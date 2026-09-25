@@ -123,7 +123,7 @@ function traceAndWait(): Promise<void> {
   });
 }
 
-function applyOutcome(outcome: Outcome): void {
+function applyOutcome(outcome: Outcome, generation = store.state.generation): void {
   if (outcome.state === "traced") {
     const wasDraft = store.state.result?.tier === "draft";
     // A draft is smaller than a final, so only a final is ever the yardstick: the readout
@@ -132,6 +132,8 @@ function applyOutcome(outcome: Outcome): void {
     const before = store.state.result?.tier === "final" ? store.state.report : store.state.previous;
     store.set({
       result: outcome,
+      resultGeneration: generation,
+      bandsMissing: false,
       previous: outcome.tier === "final" ? before : store.state.previous,
       svg: outcome.svg,
       report: outcome.report,
@@ -623,16 +625,11 @@ async function start(): Promise<void> {
     else stages.push({ name, ms });
     store.set({ liveStages: stages });
   });
-  await events.traceDone(async ({ generation, outcome }) => {
+  await events.traceDone(({ generation, outcome }) => {
     if (generation !== store.state.generation) return;
-    // The confidence bands do not ride on the event: they are often a hundred times the
-    // size of the drawing, and an event's payload is the slow way across. They are asked
-    // for here, through the command channel, before the result is shown.
-    if (outcome.state === "traced" && outcome.bands == null) {
-      outcome.bands = await api.traceBands(generation).catch(() => null);
-      if (generation !== store.state.generation) return;
-    }
-    applyOutcome(outcome);
+    // The confidence bands do not ride on the event, and are not fetched here either: the
+    // viewer asks for them by generation the first time Certainty is shown.
+    applyOutcome(outcome, generation);
   });
   await events.batchRow((row) => {
     const b = store.state.batch;

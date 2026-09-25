@@ -1,5 +1,6 @@
 /**
- * Inkvec Studio Lite — the app shell.
+ * The app shell, for both builds: Inkvec Studio on the desktop and Inkvec Studio Lite in a
+ * browser tab (`lib/platform.ts` says which).
  *
  * Owns the window chrome, the tab switcher, the keyboard, and the trace loop that ties a
  * moving control to a draft and a settled one to a full trace.
@@ -12,9 +13,6 @@
  */
 
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { open } from "@tauri-apps/plugin-dialog";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { appMark, fill, h } from "./lib/dom";
 import {
@@ -27,6 +25,8 @@ import {
   type Settings,
 } from "./lib/ipc";
 import { initial, modKey, Store } from "./lib/state";
+import { APP_NAME, copyText, openExternal, pickedFile, pickedPath, pickFiles, WEB, type Picked } from "./lib/platform";
+import { mountWebChrome, webDrops } from "./lib/web/chrome";
 import { Previews } from "./lib/previews";
 import { createRail, type RailActions } from "./components/rail";
 import { createChooser, createWizard, type Snapshot, type WizardActions } from "./components/wizard";
@@ -288,14 +288,24 @@ async function openPath(path: string): Promise<void> {
   });
 }
 
+/** Open a file the user chose or dropped: by path on the desktop, by its bytes in a browser. */
+async function openPicked(picked: Picked): Promise<void> {
+  if (picked.path) return openPath(picked.path);
+  const file = picked.file;
+  if (!file) return;
+  await openWith(async () => {
+    const info = await api.openBytes(new Uint8Array(await file.arrayBuffer()), picked.name);
+    store.set({ source: info });
+  });
+}
+
 async function chooseFile(): Promise<void> {
-  const picked = await open({
-    multiple: false,
+  const [picked] = await pickFiles([
     // An SVG is accepted too: it is traced from its render, which is how a messy drawing
     // comes back as clean shapes.
-    filters: [{ name: "Images and SVG", extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff", "svg"] }],
-  });
-  if (typeof picked === "string") await openPath(picked);
+    { name: "Images and SVG", extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff", "svg"] },
+  ]);
+  if (picked) await openPicked(picked);
 }
 
 /** Trace an SVG from its render, in the Vectorize tab: the Minify tab's "rebuild". */
@@ -344,7 +354,7 @@ const workspace = createWorkspace(
     openDenoiser: () => openDenoiserModal(store),
     showUpdate: () => {
       const u = store.state.update;
-      if (u) void openUrl(u.url);
+      if (u) void openExternal(u.url);
     },
     markSeen: () => void savePrefs({ seenFirstRun: true }),
   },
@@ -450,7 +460,7 @@ const railActs: RailActions = {
   openExport: () => openExportSheet(store, rail, traceAndWait),
   copySvg: async () => {
     if (!store.state.svg) return;
-    await writeText(store.state.svg);
+    await copyText(store.state.svg);
     toast("SVG copied. Paste straight into Figma or Illustrator.");
   },
   saveCard: () => openCardComposer(store),
@@ -510,7 +520,7 @@ function renderAppBar(): void {
 
   fill(
     appbar,
-    h("span.brand", null, appMark(18), "Inkvec Studio Lite"),
+    h("span.brand", null, appMark(18), APP_NAME),
     st.tab === "vectorize" && st.source
       ? h(
           "div.filechip",
@@ -527,7 +537,8 @@ function renderAppBar(): void {
           ["vectorize", "Vectorize"],
           ["minify", "Minify SVG"],
           ["fabricate", "Fabricate"],
-          ["batch", "Batch"],
+          // A folder of images in, a folder of SVGs out: nothing a browser tab can do.
+          ...(WEB ? [] : ([["batch", "Batch"]] as const)),
         ] as const
       ).map(([id, label]) =>
         h("button", { "aria-pressed": String(st.tab === id), onclick: () => store.set({ tab: id }) }, label),
@@ -537,14 +548,17 @@ function renderAppBar(): void {
       "div",
       { style: { marginLeft: "auto", display: "flex", alignItems: "center", gap: "2px" } },
       h("button.btn.ghost.compact", { onclick: () => void chooseFile() }, `Open…`),
-      h(
-        "button.btn.ghost.compact",
-        {
-          disabled: !(st.prefs?.recent.length),
-          onclick: (e: Event) => openRecent(e.currentTarget as HTMLElement),
-        },
-        "Recent",
-      ),
+      // Recent files are paths on this computer; a browser never learns them.
+      WEB
+        ? null
+        : h(
+            "button.btn.ghost.compact",
+            {
+              disabled: !(st.prefs?.recent.length),
+              onclick: (e: Event) => openRecent(e.currentTarget as HTMLElement),
+            },
+            "Recent",
+          ),
       h("button.btn.ghost.compact", { onclick: () => store.set({ screen: "settings" }) }, "Settings"),
       h("button.btn.ghost.compact", { onclick: () => store.set({ screen: "about" }) }, "About"),
       h("div.sep"),
@@ -657,6 +671,10 @@ function keyboard(e: KeyboardEvent): void {
  * in Rust and never crosses the IPC boundary as a blob.
  */
 async function wireDragDrop(): Promise<void> {
+  if (WEB) {
+    webDrops(store, (files) => void dropped(files.map(pickedFile)));
+    return;
+  }
   await getCurrentWebview().onDragDropEvent(async (event) => {
     if (event.payload.type === "over") {
       store.set({ dragging: true });
@@ -671,36 +689,44 @@ async function wireDragDrop(): Promise<void> {
     store.set({ dragging: false });
     document.body.classList.remove("dragging");
 
-    const paths = event.payload.paths ?? [];
-    if (!paths.length) return;
-
-    // An SVG belongs to the Minify tab and an image to Vectorize, whichever tab is
-    // showing: dropping a file should do the obvious thing with it.
-    const svgs = paths.filter((p) => p.toLowerCase().endsWith(".svg"));
-    // Dropped on Vectorize, an SVG is something to re-trace clean.
-    if (svgs.length === 1 && paths.length === 1 && store.state.tab === "vectorize") {
-      await openPath(svgs[0]);
-      return;
-    }
-    if (svgs.length) {
-      // On the Fabricate tab an SVG is something to cut; anywhere else, to minify.
-      const target = store.state.tab === "fabricate" ? "fabricate" : "minify";
-      store.set({ tab: target });
-      renderTab();
-      const view = (target === "fabricate" ? fabView : minifyView) as
-        | (HTMLElement & { acceptDropped?: (p: string) => Promise<boolean> })
-        | null;
-      await view?.acceptDropped?.(svgs[0]);
-      return;
-    }
-    if (paths.length > 1) {
-      store.set({ tab: "batch" });
-      toast(`${paths.length} files dropped — choose a folder in the Batch tab to queue them.`);
-      return;
-    }
-    store.set({ tab: "vectorize" });
-    await openPath(paths[0]);
+    await dropped((event.payload.paths ?? []).map(pickedPath));
   });
+}
+
+/** Files dropped on the window (or pasted, in a browser): the obvious thing with each. */
+async function dropped(files: Picked[]): Promise<void> {
+  if (!files.length) return;
+  // An SVG belongs to the Minify tab and an image to Vectorize, whichever tab is
+  // showing: dropping a file should do the obvious thing with it.
+  const svgs = files.filter((p) => p.name.toLowerCase().endsWith(".svg"));
+  // Dropped on Vectorize, an SVG is something to re-trace clean.
+  if (svgs.length === 1 && files.length === 1 && store.state.tab === "vectorize") {
+    await openPicked(svgs[0]);
+    return;
+  }
+  if (svgs.length) {
+    // On the Fabricate tab an SVG is something to cut; anywhere else, to minify.
+    const target = store.state.tab === "fabricate" ? "fabricate" : "minify";
+    store.set({ tab: target });
+    renderTab();
+    const view = (target === "fabricate" ? fabView : minifyView) as
+      | (HTMLElement & { acceptDropped?: (p: Picked) => Promise<boolean> })
+      | null;
+    await view?.acceptDropped?.(svgs[0]);
+    return;
+  }
+  if (files.length > 1) {
+    if (WEB) {
+      toast(`${files.length} files dropped. ${APP_NAME} opens one image at a time; the desktop app has Batch.`);
+      await openPicked(files[0]);
+      return;
+    }
+    store.set({ tab: "batch" });
+    toast(`${files.length} files dropped — choose a folder in the Batch tab to queue them.`);
+    return;
+  }
+  store.set({ tab: "vectorize" });
+  await openPicked(files[0]);
 }
 
 // ---------------------------------------------------------------------- start ---
@@ -709,6 +735,7 @@ async function start(): Promise<void> {
   const app = document.getElementById("app");
   if (!app) return;
   app.append(appbar, content, screens);
+  if (WEB) mountWebChrome(app);
 
   renderAppBar();
   renderTab();
@@ -728,7 +755,7 @@ async function start(): Promise<void> {
     const href = a?.getAttribute("href") ?? "";
     if (a && /^(https?:|mailto:)/i.test(href)) {
       e.preventDefault();
-      openUrl(href).catch(() => toast("Could not open the link in your browser.", { kind: "bad" }));
+      openExternal(href).catch(() => toast("Could not open the link in your browser.", { kind: "bad" }));
     }
   });
 
@@ -820,7 +847,7 @@ void start().catch((e) => {
       h(
         "div.firstrun",
         null,
-        h("span.serif", { style: { fontSize: "24px" } }, "Inkvec Studio Lite could not start"),
+        h("span.serif", { style: { fontSize: "24px" } }, `${APP_NAME} could not start`),
         h("span.faint", { style: { maxWidth: "50ch", textAlign: "center" } }, String(e)),
       ),
     );

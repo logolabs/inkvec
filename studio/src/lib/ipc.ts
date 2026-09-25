@@ -7,8 +7,28 @@
  * on either side shows up as a type error here or a failing test there.
  */
 
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { listen as tauriListen, type EventCallback, type UnlistenFn } from "@tauri-apps/api/event";
+
+import { webBackend } from "./web/engine";
+
+// ------------------------------------------------------------------- transport ---
+//
+// One interface, two backends. On the desktop every command is a Tauri `invoke` and every
+// event a Tauri `listen`, exactly as they always were. In the browser build (Inkvec Studio
+// Lite, `__INKVEC_WEB__`) the same names reach `web/engine.ts`, which answers them with the
+// same core compiled to WebAssembly. `__INKVEC_WEB__` is a build-time constant, so each
+// bundle keeps only its own branch.
+
+function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  return __INKVEC_WEB__ ? webBackend().invoke<T>(cmd, args) : tauriInvoke<T>(cmd, args);
+}
+
+function listen<T>(event: string, fn: EventCallback<T>): Promise<UnlistenFn> {
+  return __INKVEC_WEB__
+    ? webBackend().listen<T>(event, fn as (e: { payload: T }) => void)
+    : tauriListen<T>(event, fn);
+}
 
 // ---------------------------------------------------------------------- settings ---
 
@@ -459,7 +479,8 @@ export const api = {
   /** The interface is ready: swap the splash for the app. */
   appReady: () => invoke<void>("app_ready"),
   openPath: (path: string) => invoke<SourceInfo>("open_path", { path }),
-  openBytes: (bytes: number[], name?: string) =>
+  /** A Uint8Array only in the browser build; Tauri's JSON arguments want a plain array. */
+  openBytes: (bytes: number[] | Uint8Array, name?: string) =>
     invoke<SourceInfo>("open_bytes", { bytes, name: name ?? null }),
   openSample: (name: string) => invoke<SourceInfo>("open_sample", { name }),
   listSamples: () => invoke<SampleInfo[]>("list_samples"),

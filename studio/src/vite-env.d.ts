@@ -10,3 +10,12 @@ declare module "*.svg?raw" {
 
 /** The app's version, from package.json, substituted at build time by `vite.config.ts`. */
 declare const __APP_VERSION__: string;
+
+/**
+ * True in the browser build, Inkvec Studio Lite (`vite build --mode web`), false in the
+ * desktop app. A constant, so the other build's code is dropped from each bundle.
+ */
+declare const __INKVEC_WEB__: boolean;
+
+/** The browser build's cache token for its WebAssembly, so a new build is never served stale. */
+declare const __INKVEC_WASM_TOKEN__: string;

@@ -16,12 +16,12 @@
  * (`State.hoverFill`; the viewer draws it), so it is clear what is being merged.
  */
 
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 
 import { fill, h, icon } from "../lib/dom";
 import { de00, percent, type State, type Store, type Suggestion } from "../lib/state";
 import type { ColourGroup, Ink } from "../lib/ipc";
 import { api } from "../lib/ipc";
+import { copyText } from "../lib/platform";
 import {
   groupSignature,
   inkFor,
@@ -846,7 +846,7 @@ async function copyPaletteCss(palette: Ink[]): Promise<void> {
     .map((ink, i) => `  --ink-${i + 1}: ${ink.hex.toLowerCase()}; /* ${percent(ink.share)} of canvas */`)
     .join("\n");
   try {
-    await writeText(`:root {\n${body}\n}\n`);
+    await copyText(`:root {\n${body}\n}\n`);
     toast(`${palette.length} ink${palette.length === 1 ? "" : "s"} copied as CSS.`, { kind: "good" });
   } catch (e) {
     toast(String(e), { kind: "bad" });

@@ -9,6 +9,9 @@
     "dev": "vite",
     "mock": "vite --open /dev/index.html",
     "build": "tsc --noEmit && vite build",
+    "build:web": "node scripts/build-web.mjs",
+    "dev:web": "vite --mode web",
+    "serve:web": "python web/serve.py",
     "preview": "vite preview",
     "tauri": "tauri",
     "sidecar": "node scripts/sidecar.mjs"

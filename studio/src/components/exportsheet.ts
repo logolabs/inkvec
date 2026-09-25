@@ -6,11 +6,9 @@
  * produced, so nothing here is an estimate. The share card lives in `card.ts`.
  */
 
-import { open } from "@tauri-apps/plugin-dialog";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
-
 import { fill, h, icon } from "../lib/dom";
 import { api, type ExportRequest, type Formats, type PlannedFile } from "../lib/ipc";
+import { CAN_PICK_FOLDER, pickFolder, revealAction } from "../lib/platform";
 import { bytes, type Store } from "../lib/state";
 import { toast } from "./overlays";
 
@@ -124,7 +122,16 @@ export function openExportSheet(
         formats.assetPack = !formats.assetPack;
         void replan();
       }),
-      h(
+      // A browser has no folder to choose: the export downloads (one .zip when it is
+      // several files), into wherever the browser keeps downloads.
+      !CAN_PICK_FOLDER
+        ? h(
+            "div.format",
+            { style: { cursor: "default" } },
+            h("span.muted", { style: { fontSize: "11px" } }, "To"),
+            h("span", { style: { flex: "1" } }, planned.length > 1 ? "Your downloads, as one .zip" : "Your downloads"),
+          )
+        : h(
         "div.format",
         { style: { cursor: "default" } },
         h("span.muted", { style: { fontSize: "11px" } }, "To"),
@@ -153,7 +160,8 @@ export function openExportSheet(
           disabled: !planned.length,
           onclick: async () => {
             let target = destination;
-            if (!target) {
+            if (!CAN_PICK_FOLDER) target = "";
+            else if (!target) {
               target = await chooseFolder(null);
               if (!target) return;
               destination = target;
@@ -163,18 +171,20 @@ export function openExportSheet(
             const request = requestFor(store, formats);
             if (!request) return;
             try {
-              const written = await api.writeExport(request, target);
-              toast(`${written.length} file${written.length === 1 ? "" : "s"} written to ${target}`, {
-                kind: "good",
-                action: { label: "Show in folder", run: () => void revealItemInDir(written[0]) },
-              });
+              const written = await api.writeExport(request, target ?? "");
+              toast(
+                CAN_PICK_FOLDER
+                  ? `${written.length} file${written.length === 1 ? "" : "s"} written to ${target}`
+                  : `Downloaded ${written[0] ?? "the export"}`,
+                { kind: "good", action: revealAction(CAN_PICK_FOLDER ? (written[0] ?? null) : null) },
+              );
             } catch (e) {
               toast(String(e), { kind: "bad" });
             }
           },
         },
         planned.length
-          ? `Export ${planned.length} file${planned.length === 1 ? "" : "s"} · ${bytes(total)}`
+          ? `${CAN_PICK_FOLDER ? "Export" : "Download"} ${planned.length} file${planned.length === 1 ? "" : "s"} · ${bytes(total)}`
           : "Nothing selected",
       ),
     );
@@ -186,7 +196,6 @@ export function openExportSheet(
   void replan();
 }
 
-async function chooseFolder(current: string | null): Promise<string | null> {
-  const picked = await open({ directory: true, multiple: false, defaultPath: current ?? undefined });
-  return typeof picked === "string" ? picked : null;
+function chooseFolder(current: string | null): Promise<string | null> {
+  return pickFolder(current);
 }

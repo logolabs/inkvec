@@ -8,3 +8,7 @@ src-tauri/binaries/
 src-tauri/ort-runtime/
 # Logs the browser harness and local test runs leave beside them.
 dev/*.log
+# The browser build (scripts/build-web.mjs): staged static files, WebAssembly, the site.
+web/public/
+dist-web/
+target-web/

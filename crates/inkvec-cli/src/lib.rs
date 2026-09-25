@@ -832,6 +832,7 @@ fn restore_prepass(
     if args.restore == inkvec_restore::Mode::Off {
         return Ok(pass);
     }
+    let mut auto_probe = None;
     if args.restore == inkvec_restore::Mode::Auto {
         let probe = trace_once(&pass.img, args)?;
         let decision = inkvec_restore::decide(
@@ -845,6 +846,7 @@ fn restore_prepass(
             inkvec_restore::Decision::Restore { residual } => {
                 pass.note =
                     residual.map(|r| format!("residual {r:.3} > {:.3}", args.restore_threshold));
+                auto_probe = Some(probe);
             }
             inkvec_restore::Decision::Keep { residual } => {
                 pass.note = Some(match residual {
@@ -859,7 +861,26 @@ fn restore_prepass(
             }
         }
     }
-    let restorer = build_restorer(args)?;
+    let restorer = match (build_restorer(args), auto_probe) {
+        (Ok(r), _) => r,
+        // `auto` is a request to restore *if it helps*, so no restorer to be had -- a binary
+        // without the network, weights that are not on disk -- is not a reason to fail the
+        // trace: keep the probe, as a clean input would, and say why in the stats. `on`
+        // asked for the restorer outright and still fails without one.
+        (Err(e), Some(probe)) => {
+            let measured = pass
+                .note
+                .take()
+                .map(|n| format!("{n}, "))
+                .unwrap_or_default();
+            pass.note = Some(format!(
+                "restore       {measured}but no restorer is available ({e}); traced directly"
+            ));
+            pass.probe = Some(probe);
+            return Ok(pass);
+        }
+        (Err(e), None) => return Err(e),
+    };
     let t = inkvec_core::clock::Instant::now();
     pass.img = inkvec_restore::restore_rgba(restorer.as_ref(), &pass.img)?;
     let earlier = pass

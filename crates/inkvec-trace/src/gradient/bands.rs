@@ -352,6 +352,8 @@ pub(crate) fn merge_bands_with(
     // cached gain would make it the merge of the round, so the accepted merge is always
     // decided on a fresh fit while the rest wait.
     let mut cache: HashMap<(u32, u32), (FillFit, bool)> = HashMap::new();
+    // The common-pixel gain of each cached union, when it has been priced.
+    let mut gains: HashMap<(u32, u32), f64> = HashMap::new();
     // Where the rounds go, for the timing log: a greedy agglomeration accepts one merge per
     // round, so the round count is the merge count and the wall time is the sum of the
     // rounds. Which part of a round costs what is the question the log answers.
@@ -429,6 +431,9 @@ pub(crate) fn merge_bands_with(
                     ((a, b), (fit_group(&group, &px, a, b, inner), false))
                 })
                 .collect();
+            for (k, _) in &computed {
+                gains.remove(k);
+            }
             cache.extend(computed);
         }
 
@@ -474,24 +479,28 @@ pub(crate) fn merge_bands_with(
                     let legacy_gain = fits[a].cost + fits[b as usize].cost - union.cost;
                     let inner = smooth_pair(&adj, &smooth, a, b as usize);
                     let gain = if common_pixels || inner {
-                        let mut pixels = members[a].clone();
-                        pixels.extend_from_slice(&members[b as usize]);
-                        common_pixel_gain(
-                            rgb,
-                            w,
-                            h,
-                            &pixels,
-                            &group,
-                            &|p: usize| pure[p] || (inner && inner_of(&group, p, a as u32, b)),
-                            a as u32,
-                            b,
-                            &fits[a],
-                            &fits[b as usize],
-                            union,
-                            sigma_noise,
-                            lambda,
-                        )
-                        .unwrap_or(f64::NEG_INFINITY)
+                        // Priced once per union fit: it reads only the pair's members and
+                        // fits, and both are fixed until one of them merges, which drops it.
+                        *gains.entry((a as u32, b)).or_insert_with(|| {
+                            let mut pixels = members[a].clone();
+                            pixels.extend_from_slice(&members[b as usize]);
+                            common_pixel_gain(
+                                rgb,
+                                w,
+                                h,
+                                &pixels,
+                                &group,
+                                &|p: usize| pure[p] || (inner && inner_of(&group, p, a as u32, b)),
+                                a as u32,
+                                b,
+                                &fits[a],
+                                &fits[b as usize],
+                                union,
+                                sigma_noise,
+                                lambda,
+                            )
+                            .unwrap_or(f64::NEG_INFINITY)
+                        })
                     } else {
                         legacy_gain
                     };
@@ -529,6 +538,7 @@ pub(crate) fn merge_bands_with(
                 px.extend_from_slice(&members[bi]);
                 let inner = smooth_pair(&adj, &smooth, ai, bi);
                 cache.insert((a, b), (fit_group(&group, &px, a, b, inner), false));
+                gains.remove(&(a, b));
                 stale_refits += 1;
                 continue;
             }
@@ -565,6 +575,7 @@ pub(crate) fn merge_bands_with(
         // would never be refitted, and a union that came out flat before the region grew
         // can come out a gradient after (two noto icons moved 0.005 dE00 when these were
         // kept). Gradient unions are kept stale and refitted only when they would win.
+        gains.retain(|&(x, y), _| x != a && y != a && x != b && y != b);
         cache.retain(|&(x, y), (fit, _)| {
             x != b && y != b && (fit.model.is_gradient() || (x != a && y != a))
                 // Common-evidence gains do not inherit the legacy stale-cost bound.

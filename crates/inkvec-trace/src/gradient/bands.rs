@@ -219,11 +219,15 @@ pub fn merge_gradient_bands_guarded(
     let ink_rgb: Vec<[f32; 3]> = (0..n_pal)
         .map(|l| pal.rgb.get(l).copied().unwrap_or([0.0; 3]))
         .collect();
-    let partner = blend_partners(rgb, w, h, labels, &ink_rgb, sigma_noise);
-    let pure: Vec<bool> = partner.iter().map(|&q| q == PURE).collect();
     // A blend towards a region inside the fit is evidence for the fit; see
     // `blend_partners`.
     let inner_blends = regions::enabled();
+    let partner = blend_partners(rgb, w, h, labels, &ink_rgb, sigma_noise, inner_blends);
+    let pure: Vec<bool> = partner.iter().map(|q| q[0] == PURE).collect();
+    // Every blend partner of `p` lies inside the fit of `a` and `b`.
+    let inner_of = |group: &[u32], p: usize, a: u32, b: u32| {
+        regions::all_inside(&partner[p], |q| group[q] == a || group[q] == b)
+    };
 
     // 2. Per-component fits. `group[p]` is the current component of pixel `p`.
     let mut group = comp;
@@ -255,10 +259,7 @@ pub fn merge_gradient_bands_guarded(
         let seen = if sub.is_empty() { pixels } else { &sub[..] };
         FIT_PIXELS.fetch_add(seen.len(), std::sync::atomic::Ordering::Relaxed);
         let evidence = |p: usize| {
-            pure[p] || (inner && {
-                let q = partner[p] as usize;
-                group[q] == a || group[q] == b
-            })
+            pure[p] || (inner && inner_of(group, p, a, b))
         };
         let mut fit = select(fit_pixels(
             rgb,
@@ -455,11 +456,7 @@ pub fn merge_gradient_bands_guarded(
                             &pixels,
                             &group,
                             &|p: usize| {
-                                pure[p]
-                                    || (inner && {
-                                        let q = group[partner[p] as usize];
-                                        q == a as u32 || q == b
-                                    })
+                                pure[p] || (inner && inner_of(&group, p, a as u32, b))
                             },
                             a as u32,
                             b,
@@ -547,7 +544,7 @@ pub fn merge_gradient_bands_guarded(
             x != b && y != b && (fit.model.is_gradient() || (x != a && y != a))
                 // Common-evidence gains do not inherit the legacy stale-cost bound.
                 // Refit affected candidates before ranking, not only after winning.
-                && (!common_pixels || (x != a && y != a))
+                && (!(common_pixels || inner_blends) || (x != a && y != a))
         });
         // The stale cost is left as fitted without the absorbed pixels. That is an
         // *under*estimate of the true union cost, so the stale gain is an overestimate and

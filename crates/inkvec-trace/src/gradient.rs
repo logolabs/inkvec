@@ -1563,18 +1563,24 @@ pub(crate) fn fill_evidence(
     ink: &[[f32; 3]],
     sigma_noise: f64,
 ) -> Vec<bool> {
-    blend_partners(rgb, w, h, labels, ink, sigma_noise)
+    blend_partners(rgb, w, h, labels, ink, sigma_noise, false)
         .into_iter()
-        .map(|q| q == PURE)
+        .map(|q| q[0] == PURE)
         .collect()
 }
 
-/// [`blend_partners`]' mark for a pixel that is evidence for its own fill.
+/// [`blend_partners`]' mark for a pixel that is evidence for its own fill, and for an
+/// unused partner slot.
 pub(crate) const PURE: u32 = u32::MAX;
+/// [`blend_partners`]' mark for a pixel with more blend partners than it records.
+pub(crate) const FOREIGN: u32 = u32::MAX - 1;
+/// Most blend partners recorded per pixel.
+pub(crate) const PARTNERS: usize = 3;
 
-/// [`fill_evidence`], saying for each blend pixel *which* pixel's ink it is a blend
-/// towards: [`PURE`] for evidence, otherwise the index of the neighbouring pixel whose
-/// label's ink the pixel lies on the segment to.
+/// [`fill_evidence`], saying for each blend pixel *which* pixels' inks it is a blend
+/// towards: `[PURE; _]` for evidence, otherwise the indices of the neighbouring pixels
+/// (one per neighbouring label) whose label's ink the pixel lies on the segment to --
+/// only the first unless `all` -- and [`FOREIGN`] when there are more than [`PARTNERS`].
 ///
 /// A fit of several bands of one quantised ramp wants this. Every pixel of a ramp between
 /// two band inks lies on the segment between them, so the plain test calls half of each
@@ -1589,11 +1595,12 @@ pub(crate) fn blend_partners(
     labels: &[u16],
     ink: &[[f32; 3]],
     sigma_noise: f64,
-) -> Vec<u32> {
+    all: bool,
+) -> Vec<[u32; PARTNERS]> {
     let n = w * h;
     let tol = (3.0 * sigma_noise * 3f64.sqrt()).max(2.0 / 255.0) as f32;
     let tol2 = tol * tol;
-    let mut pure = vec![PURE; n];
+    let mut pure = vec![[PURE; PARTNERS]; n];
     for p in 0..n {
         let l = labels[p] as usize;
         if l >= ink.len() {
@@ -1613,11 +1620,9 @@ pub(crate) fn blend_partners(
         let (y0, y1) = (y.saturating_sub(2), (y + 2).min(h - 1));
         let mut seen: [usize; 8] = [usize::MAX; 8];
         let mut n_seen = 0usize;
-        let mut blend = PURE;
-        for yy in y0..=y1 {
-            if blend != PURE {
-                break;
-            }
+        let mut blend = [PURE; PARTNERS];
+        let mut k = 0usize;
+        'scan: for yy in y0..=y1 {
             for xx in x0..=x1 {
                 let m = labels[yy * w + xx] as usize;
                 if m == l || m >= ink.len() || seen[..n_seen].contains(&m) {
@@ -1639,8 +1644,15 @@ pub(crate) fn blend_partners(
                 }
                 let perp = [da[0] - t * ab[0], da[1] - t * ab[1], da[2] - t * ab[2]];
                 if perp[0] * perp[0] + perp[1] * perp[1] + perp[2] * perp[2] <= tol2 {
-                    blend = (yy * w + xx) as u32;
-                    break;
+                    if k == PARTNERS {
+                        blend = [FOREIGN; PARTNERS];
+                        break 'scan;
+                    }
+                    blend[k] = (yy * w + xx) as u32;
+                    k += 1;
+                    if !all {
+                        break 'scan;
+                    }
                 }
             }
         }
@@ -1651,7 +1663,7 @@ pub(crate) fn blend_partners(
         for p in 0..n {
             let e = per.entry(labels[p] as usize).or_insert((0, 0));
             e.0 += 1;
-            if pure[p] != PURE {
+            if pure[p][0] != PURE {
                 e.1 += 1;
             }
         }

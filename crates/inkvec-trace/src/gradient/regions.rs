@@ -76,3 +76,15 @@ pub(crate) fn absorb_counts(counts: &mut [HashMap<u32, u32>], a: usize, b: usize
     }
     counts[a].remove(&(b as u32));
 }
+
+/// Whether a pixel's recorded blend partners (see [`super::blend_partners`]) all satisfy
+/// `inside`: a blend is evidence for a fit only when nothing outside the fit could have
+/// made it. An anti-aliased pixel on a grey ramp's outline against white lies on the
+/// segment between two of the ramp's inks as well as on the one to white.
+pub(crate) fn all_inside(partners: &[u32], inside: impl Fn(usize) -> bool) -> bool {
+    partners[0] != super::FOREIGN
+        && partners
+            .iter()
+            .take_while(|&&q| q != super::PURE)
+            .all(|&q| inside(q as usize))
+}

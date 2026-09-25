@@ -233,6 +233,14 @@ jobs:
           printf '%s\n' "${files}"
           printf '%s\n' "${files}" | wc -l | tr -d ' ' | xargs -I{} echo "{} file(s)"
 
+      # The installer's hooks replace an old "Inkvec Studio Lite" install. Running the
+      # installer here would test the runner, not the hooks: this compiles them into a
+      # harness and dry-runs it against a staged old install (.exe and .msi), in a private
+      # registry key and folder, with the NSIS `tauri build` just downloaded.
+      - name: Installer hooks, dry run
+        if: runner.os == 'Windows'
+        run: python studio/tools/check_installer_hooks.py
+
       # The backend's tests on this platform too. `check` runs them on Linux only, and
       # the code that differs by platform -- paths, the PATH and right-click integration,
       # the bundled command's name, ONNX Runtime linked in -- is exactly what Linux does

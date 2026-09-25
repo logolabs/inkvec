@@ -10,8 +10,14 @@ writer, the HTTP client) appear in neither file unless something writes them her
 ships both documents and the About screen shows them, which is the point: the notices a
 user reads have to be the notices for the binary they are running.
 
+The same file ships with Inkvec Studio Lite, the browser build (`scripts/build-web.mjs`
+copies it into the site), so the browser shell's own crates are resolved too, for the
+WebAssembly target: wasm-bindgen, js-sys and the rest never appear in a desktop build.
+
 Hand-maintained sections below cover what `cargo tree` cannot see: the two bundled
-webfonts, the icon geometry, and the npm packages that end up in the bundled JavaScript.
+webfonts, the icon geometry, the npm packages that end up in the bundled JavaScript, and
+ONNX Runtime Web, which the browser build's denoiser loads from jsDelivr at run time (its
+version is read from `web/denoise.js`, so `--check` fails when the pin moves).
 """
 
 from __future__ import annotations
@@ -25,6 +31,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "src-tauri" / "Cargo.toml"
+# The browser build's denoiser module, which pins the ONNX Runtime Web it fetches.
+DENOISE_JS = ROOT.parent / "web" / "denoise.js"
 # STUDIO_THIRD_PARTY.md, not THIRD_PARTY.md, and the awkward name is load-bearing: the
 # app bundles this file next to the engine's own docs/THIRD_PARTY.md, and Tauri's WiX
 # generator ignores the destination name a resource is mapped to and uses the source's
@@ -53,6 +61,11 @@ BUILDS = [
     ("windows", ["--target", "x86_64-pc-windows-msvc"]),
     ("macos", ["--target", "aarch64-apple-darwin"]),
     ("linux", ["--target", "x86_64-unknown-linux-gnu"]),
+    # Inkvec Studio Lite: the browser shell, for the target it is built for, in both of the
+    # builds `scripts/build-web.mjs` makes (one core, and the rayon pool of Web Workers).
+    ("browser", ["-p", "inkvec-studio-wasm", "--target", "wasm32-unknown-unknown"]),
+    ("browser, threads", ["-p", "inkvec-studio-wasm", "--target", "wasm32-unknown-unknown",
+                          "--features", "threads"]),
 ]
 
 # Crates that come from this repository. They are Inkvec, not third parties.
@@ -95,6 +108,23 @@ JavaScript API and three of its plugins, all MIT OR Apache-2.0:
 | @tauri-apps/plugin-clipboard-manager | MIT OR Apache-2.0 |
 
 `vite` and `typescript` are build-time only and are not distributed with the app.
+
+## The browser build
+
+Inkvec Studio Lite is this app's interface and its shared core compiled to WebAssembly.
+The crates only it compiles are marked `browser` above (`browser, threads` for the build
+with a pool of Web Workers); the JavaScript glue `wasm-bindgen` generates for them, and the
+worker helper of `wasm-bindgen-rayon`, ship in the site under the same licences.
+
+Its denoiser runs in ONNX Runtime Web, which the page does not bundle: the first time the
+denoiser runs, it loads the pinned release from jsDelivr, and the browser caches it.
+
+| Component | Version | Licence | Source |
+| --- | --- | --- | --- |
+| ONNX Runtime Web (`onnxruntime-web`) | {ort_version} | MIT | https://cdn.jsdelivr.net/npm/onnxruntime-web@{ort_version}/ |
+
+ONNX Runtime includes third-party code of its own; Microsoft lists it, with its licences,
+in `ThirdPartyNotices.txt` at https://github.com/microsoft/onnxruntime.
 
 ## The engine
 
@@ -144,6 +174,15 @@ def tree(extra: list[str]) -> dict[str, str]:
     return found
 
 
+def ort_web_version() -> str:
+    """The ONNX Runtime Web release `web/denoise.js` pins."""
+    text = DENOISE_JS.read_text(encoding="utf-8")
+    found = re.search(r'const ORT_VERSION = "([^"]+)"', text)
+    if not found:
+        raise SystemExit(f"no ORT_VERSION in {DENOISE_JS}; the notices cannot name it")
+    return found.group(1)
+
+
 def render() -> str:
     seen: dict[str, tuple[str, str]] = {}
     for label, extra in BUILDS:
@@ -163,8 +202,8 @@ def render() -> str:
         "",
         f"{len(rows)} Rust crates are compiled into the app"
         f" ({sum(1 for _, (_, b) in rows if b == 'default')} in every build; the rest"
-        f" only with the optional denoiser, or only on the platform the Build column"
-        f" names).",
+        f" only with the optional denoiser, only on the platform the Build column"
+        f" names, or only in the browser build).",
         "",
     ]
 
@@ -188,7 +227,7 @@ def render() -> str:
     for name, (licence, build) in rows:
         lines.append(f"| `{name}` | {licence} | {build} |")
 
-    return "\n".join(lines) + "\n" + FIXED_SECTIONS
+    return "\n".join(lines) + "\n" + FIXED_SECTIONS.replace("{ort_version}", ort_web_version())
 
 
 def main() -> int:

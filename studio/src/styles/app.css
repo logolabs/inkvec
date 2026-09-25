@@ -1531,6 +1531,201 @@ kbd {
   color: var(--accent-text);
 }
 
+/* Colour groups. An ink row is a tick box and the ink itself, and the whole row can be
+   dragged onto another ink or a group. */
+.ink {
+  gap: 6px;
+  touch-action: none;
+}
+.ink.grouped .hex {
+  color: var(--accent-text);
+}
+.inkpick {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border-radius: 4px;
+  border: 1px solid var(--highlight);
+  display: grid;
+  place-items: center;
+  color: var(--accent-ink);
+}
+.inkpick[aria-checked="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.inkmain {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+.inkmain[aria-disabled="true"] {
+  cursor: grab;
+}
+.swatch.mini {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+}
+.swatch.mini.ramp {
+  width: 26px;
+}
+.inklist {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border-radius: var(--radius-sm);
+}
+.inklist,
+.cgroup {
+  transition: box-shadow var(--d-fast), background var(--d-fast);
+}
+.mergebar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--t-label);
+}
+.cgroups {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.cgroupshead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cgroup {
+  border: 1px solid var(--rule2);
+  border-radius: var(--radius);
+  background: var(--paper);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.cgroup.suggested {
+  border-style: dashed;
+  background: transparent;
+}
+.cchips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.cchip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--highlight);
+  border-radius: 999px;
+  background: var(--card);
+  touch-action: none;
+  font-size: var(--t-label);
+  color: var(--dim);
+}
+.cchip.target {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+.cchip.unmatched {
+  border-color: var(--gold);
+  border-style: dashed;
+}
+.cchipmain {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 4px 2px 3px;
+  border-radius: 999px;
+}
+.cchipmain .swatch.mini {
+  border-radius: 999px;
+}
+.cchipx {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-right: 2px;
+  border-radius: 999px;
+  color: var(--muted);
+}
+.cchipx:hover {
+  color: var(--ink);
+  background: var(--surface);
+}
+.cresult {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--t-label);
+}
+.cresult > span {
+  white-space: nowrap;
+}
+.cresult .arrow {
+  color: var(--muted);
+}
+.cresultchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--dim);
+}
+.cactions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.creport {
+  font-size: 11px;
+  line-height: 1.4;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.creport.warn {
+  color: var(--gold);
+}
+.creport.warn svg {
+  flex: none;
+}
+.simplifyrow {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--t-label);
+}
+.numberfield.simplify {
+  min-width: 0;
+  width: 40px;
+  text-align: center;
+}
+/* A drag in progress: the chip under the pointer, and the place it would land. */
+.dragghost {
+  position: fixed;
+  z-index: 60;
+  pointer-events: none;
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.45));
+}
+body.dragging-ink,
+body.dragging-ink * {
+  cursor: grabbing !important;
+}
+body.dragging-ink [data-drop="list"] {
+  box-shadow: 0 0 0 1px var(--rule2);
+}
+.dropping {
+  box-shadow: 0 0 0 2px var(--accent) !important;
+  background: var(--accent-subtle) !important;
+}
+
 /* The advanced drawer. */
 .control {
   display: flex;

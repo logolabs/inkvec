@@ -28,7 +28,9 @@ export function requestFor(store: Store, formats: Formats): ExportRequest | null
       paths: st.report.paths,
       tracedPx: st.report.tracedPx,
     },
-    palette: st.palette.map((i) => ({ hex: i.hex, traced: i.traced, share: i.share })),
+    palette: st.palette.map((i) =>
+      i.kind === "gradient" ? { hex: i.hex, traced: i.traced, share: i.share, stops: i.stops } : { hex: i.hex, traced: i.traced, share: i.share },
+    ),
     losses: st.losses.map((l) => ({ text: l.text })),
     formats,
   };

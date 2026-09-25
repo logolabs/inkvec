@@ -39,6 +39,22 @@ export interface Settings {
   margin: number;
   holesAsCutouts: boolean;
   traceTransparency: boolean;
+  /**
+   * Colours to draw as one, for the image that is open. Not a control: the palette panel
+   * owns them (`State.colourGroups`) and they are added to the settings only when a trace is
+   * started, so presets, saved presets and preferences never carry them.
+   */
+  colourGroups?: ColourGroup[];
+}
+
+/**
+ * Fills to draw as one. Mirrors `options::ColourGroup`; each member is spelt as the engine's
+ * `--merge-colors` grammar spells it: `#rrggbb`, or a gradient's stops joined by `>`.
+ */
+export interface ColourGroup {
+  members: string[];
+  /** `#rrggbb` a flat colour, `@n` the n-th member (1-based), null the most-used member. */
+  target: string | null;
 }
 
 export type PresetId =
@@ -171,10 +187,18 @@ export interface Report {
 }
 
 export interface Ink {
+  /** The measured colour; a gradient's first stop. */
   traced: string;
+  /** What it is painted as now; a gradient's first stop. */
   hex: string;
   share: number;
   snappedDe00: number | null;
+  kind: "flat" | "gradient";
+  /** Every `fill` / `stroke` value that paints with it: `#aabbcc` or `url(#g12)`. */
+  keys: string[];
+  /** Stop colours in offset order; `[hex]` for a flat ink. */
+  stops: string[];
+  gradient?: "linear" | "radial";
 }
 
 export interface Loss {
@@ -392,7 +416,7 @@ export interface PlannedFile {
 export interface ExportRequest {
   svg: string;
   report: { meanDe00: number | null; coordinates: number; paths: number; tracedPx: number };
-  palette: { hex: string; traced: string; share: number }[];
+  palette: { hex: string; traced: string; share: number; stops?: string[] }[];
   losses: { text: string }[];
   formats: Formats;
 }

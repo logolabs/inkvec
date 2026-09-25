@@ -13,6 +13,7 @@ import { emit } from "@tauri-apps/api/event";
 
 import controls from "./controls.json";
 import structures from "./structure.json";
+import { paletteOf, regroup } from "./mockpalette";
 
 const samplePngs = import.meta.glob("../src-tauri/samples/*.png", { eager: true, query: "?url", import: "default" }) as Record<
   string,
@@ -30,8 +31,16 @@ const fabJson = import.meta.glob("./fab/*/*.json", { eager: true, import: "defau
 const fabUnicorn = (import.meta.glob("./fab/unicorn.svg", { eager: true, query: "?raw", import: "default" }) as Record<string, string>)["./fab/unicorn.svg"];
 const FAB_DIR: Record<string, string> = { singleColour: "single", layered: "layered", inlay: "inlay", sticker: "sticker", stencil: "stencil", lines: "lines" };
 
-const png = (name: string) => samplePngs[`../src-tauri/samples/${name}.png`];
-const svgOf = (name: string) => tracedSvgs[`./traced/${name}.svg`] ?? "";
+// A noto emoji the real CLI traced (`inkvec emoji_u1f351.png -o peach.svg`): gradients, and
+// flat inks a rounding apart, which is what colour groups are for. Mock-only; not a sample
+// the app ships.
+const emojiPngs = import.meta.glob("./emoji/*.png", { eager: true, query: "?url", import: "default" }) as Record<string, string>;
+const emojiSvgs = import.meta.glob("./emoji/*.svg", { eager: true, query: "?raw", import: "default" }) as Record<string, string>;
+const EMOJI = "peach-emoji.png";
+
+const png = (name: string) => (name === "peach-emoji" ? emojiPngs["./emoji/peach.png"] : samplePngs[`../src-tauri/samples/${name}.png`]);
+const svgOf = (name: string) =>
+  name.startsWith("peach-emoji") ? emojiSvgs["./emoji/peach.svg"] ?? "" : tracedSvgs[`./traced/${name}.svg`] ?? "";
 // Confidence bands for each sample, written by `inkvec <png> --uncertainty dev/bands/<name>.svg`.
 const bandSvgs = import.meta.glob("./bands/*.svg", { eager: true, query: "?raw", import: "default" }) as Record<string, string>;
 
@@ -40,6 +49,7 @@ const SAMPLES = [
   { file: "crest-filigree.png", label: "Crest, filigree" },
   { file: "icon-64.png", label: "64 px icon" },
   { file: "signature-bw.png", label: "Signature" },
+  { file: EMOJI, label: "Emoji, gradients" },
 ];
 
 const STAGES = ["intake", "palette", "planar map", "boundary solve", "symmetry", "repair", "segments", "lambda", "wrote"];
@@ -131,11 +141,6 @@ function report(svg: string, tracedPx: number, structure: unknown, editable: boo
   };
 }
 
-function palette(svg: string) {
-  const fills = [...new Set((svg.match(/fill="#[0-9a-fA-F]{6}"/g) ?? []).map((f) => f.slice(6, 13)))].slice(0, 8);
-  return fills.map((hex, i) => ({ traced: hex, hex, share: Math.max(0.02, 0.5 / (i + 1)), snappedDe00: null }));
-}
-
 async function runTrace(tier: string, gen: number, settings: Record<string, unknown>) {
   const draft = tier === "draft";
   for (const name of STAGES) {
@@ -144,7 +149,10 @@ async function runTrace(tier: string, gen: number, settings: Record<string, unkn
   }
   const stem = current.replace(".png", "");
   const editable = Boolean(settings.editability);
-  const svg = svgOf(editable ? `${stem}.edit` : stem);
+  // Colour groups, roughly as the engine applies them; see `mockpalette.ts`.
+  const grouped = await regroup(svgOf(editable && current !== EMOJI ? `${stem}.edit` : stem), (settings.colourGroups as never) ?? []);
+  const svg = grouped.svg;
+  const inks = await paletteOf(svg);
   const structure = (structures as Record<string, unknown>)[`${stem}:${editable ? "edit" : "default"}`];
   const tracedPx = draft ? 512 : 2048;
   bandsByGeneration.set(gen, bandSvgs[`./bands/${stem}.svg`] ?? null);
@@ -157,7 +165,7 @@ async function runTrace(tier: string, gen: number, settings: Record<string, unkn
       tier,
       svg,
       report: report(svg, tracedPx, structure, editable),
-      palette: palette(svg),
+      palette: inks,
       losses:
         current === "crest-filigree.png"
           ? [
@@ -171,7 +179,7 @@ async function runTrace(tier: string, gen: number, settings: Record<string, unkn
           : [],
       worstCorner: { x: 212, y: 148, de00: 0.71 },
       stages: [],
-      engineLog: [],
+      engineLog: grouped.lines,
       bands: null,
       tracedPx,
       oversized: false,
@@ -207,7 +215,8 @@ mockIPC(
       case "open_sample": {
         current = a.name;
         const stem = a.name.replace(".png", "");
-        return { name: a.name, path: null, width: stem === "icon-64" ? 64 : 512, height: stem === "icon-64" ? 64 : 512, container: "PNG", lossy: false, preview: png(stem) };
+        const side = stem === "icon-64" ? 64 : stem === "peach-emoji" ? 128 : 512;
+        return { name: a.name, path: null, width: side, height: side, container: "PNG", lossy: false, preview: png(stem) };
       }
       case "open_path":
         current = "flat-logo.png";
@@ -221,8 +230,17 @@ mockIPC(
         return null;
       case "trace_bands":
         return bandsByGeneration.get(a.generation) ?? null;
-      case "snap_inks":
-        return { svg: a.svg, inks: palette(a.svg) };
+      case "snap_inks": {
+        let svg = a.svg as string;
+        for (const s of a.snaps as { from: string; to: string }[]) svg = svg.split(`fill="${s.from}"`).join(`fill="${s.to}"`);
+        return paletteOf(svg).then((inks) => {
+          for (const ink of inks) {
+            const s = (a.snaps as { from: string; to: string }[]).find((x) => ink.kind === "flat" && x.to === ink.hex);
+            if (s) Object.assign(ink, { traced: s.from, snappedDe00: 1.2 });
+          }
+          return { svg, inks };
+        });
+      }
       case "match_palette":
         return [];
       case "plan_export":

@@ -10,15 +10,13 @@
  * Export, which stays reachable at every window width.
  */
 
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-
 import { fill, h, icon, s } from "../lib/dom";
 import { bytes, count, de00, modKey, percent, plannedTracePx, seconds, type Store } from "../lib/state";
-import type { Control, Ink, Loss, Report, Settings, Stage } from "../lib/ipc";
-import { api } from "../lib/ipc";
-import { closeOverlay, modal, openModal, openPopover, tip, toast } from "./overlays";
+import type { Control, Loss, Report, Settings, Stage } from "../lib/ipc";
+import { closeOverlay, modal, openModal, tip, toast } from "./overlays";
+import { paletteCard, wirePaletteHover, type PaletteActions } from "./palette";
 
-export interface RailActions {
+export interface RailActions extends PaletteActions {
   setPreset(id: string): void;
   savePreset(name: string): void;
   deletePreset(id: string): void;
@@ -118,14 +116,34 @@ export function createRail(store: Store, act: RailActions): HTMLElement {
   // running trace changes, so a trace's progress must not rebuild it: a slider that is
   // replaced under the pointer cannot be dragged.
   store.on(["caps", "prefs", "preset", "settings", "railTab", "groupsOpen"], renderAll);
-  store.on(["tracing", "liveStages", "result", "report", "palette", "losses", "source", "worstCorner", "previous"], () => {
-    if (store.state.railTab === "result") renderScroll();
-    renderFoot();
-    // The tab strip is not rebuilt here — a button replaced between the press and the
-    // release never hears the click — only its note is rewritten.
-    const note = tabs.querySelector<HTMLElement>('[data-note="result"]');
-    if (note) note.textContent = resultNote(store);
-  });
+  store.on(
+    [
+      "tracing",
+      "liveStages",
+      "result",
+      "report",
+      "palette",
+      "losses",
+      "source",
+      "worstCorner",
+      "previous",
+      "colourGroups",
+      "groupSuggestions",
+      "resultGroups",
+      "paletteSelection",
+      "simplifyTo",
+    ],
+    () => {
+      if (store.state.railTab === "result") renderScroll();
+      renderFoot();
+      // The tab strip is not rebuilt here — a button replaced between the press and the
+      // release never hears the click — only its note is rewritten.
+      const note = tabs.querySelector<HTMLElement>('[data-note="result"]');
+      if (note) note.textContent = resultNote(store);
+    },
+  );
+  // A swatch, a group or a member hovered or focused singles its fills out in the drawing.
+  wirePaletteHover(scroll, store);
   renderAll();
   return rail;
 }
@@ -712,211 +730,6 @@ function lossRow(l: Loss, glyph: string): HTMLElement {
         l.link ? h("a", { href: l.link.href, "data-external": l.link.href.startsWith("http") ? "1" : null }, l.link.label) : null,
       ),
       why,
-    ),
-  );
-}
-
-// ----------------------------------------------------------------- palette ---
-
-function paletteCard(store: Store, act: RailActions): HTMLElement {
-  const st = store.state;
-  return h(
-    "div.card",
-    null,
-    h(
-      "div.cardhead",
-      null,
-      h(
-        "span.eyebrow",
-        { style: { display: "flex", alignItems: "center", gap: "6px" } },
-        icon("palette", 12),
-        `Palette · ${st.palette.length} ink${st.palette.length === 1 ? "" : "s"}`,
-      ),
-      h("button.reset", { disabled: !st.palette.length, onclick: () => pastePalette(store, act) }, "Paste brand palette"),
-    ),
-    ...st.palette.map((ink) => inkRow(ink, (target) => openSnap(target, ink, act))),
-    st.palette.length
-      ? h(
-          "div",
-          { style: { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "10px" } },
-          h("span.muted", { style: { fontSize: "11px", lineHeight: "1.45" } }, "Snapping rewrites fills only — no re-trace."),
-          h(
-            "button.reset",
-            {
-              style: { fontSize: "11px", flex: "none" },
-              title: "Custom properties, one per ink, in canvas-share order",
-              onclick: () => void copyPaletteCss(st.palette),
-            },
-            "Copy all as CSS",
-          ),
-        )
-      : h("span.muted", { style: { fontSize: "11px" } }, "Trace an image to see its inks."),
-  );
-}
-
-function inkRow(ink: Ink, open: (el: HTMLElement) => void): HTMLElement {
-  const snapped = ink.snappedDe00 !== null;
-  const row = h(
-    "button.ink",
-    { onclick: () => open(row) },
-    h(`span.swatch${snapped ? ".snapped" : ""}`, null, h("i", { style: { background: ink.hex } })),
-    h("span.hex", null, ink.hex.toUpperCase()),
-    h("span.share", null, percent(ink.share)),
-    h(
-      `span.snap${snapped ? ".on" : ""}`,
-      null,
-      snapped ? `snapped · ΔE ${de00(ink.snappedDe00)}` : "snap to…",
-    ),
-  );
-  return row;
-}
-
-/** The colour-snap popover: a picker, a "snap to" field, and what it would cost. */
-function openSnap(anchor: HTMLElement, ink: Ink, act: RailActions): void {
-  const field = h("input.numberfield", {
-    type: "text",
-    value: ink.hex.toUpperCase(),
-    spellcheck: "false",
-    style: { width: "100%", textAlign: "left", height: "30px", padding: "0 9px" },
-  }) as HTMLInputElement;
-  const picker = h("input", {
-    type: "color",
-    value: ink.hex,
-    style: { width: "100%", height: "60px", border: "none", background: "none", padding: "0" },
-    oninput: () => {
-      field.value = (picker as HTMLInputElement).value.toUpperCase();
-    },
-  });
-  const note = h(
-    "span",
-    { style: { fontSize: "11.5px", color: "var(--gold)" } },
-    "You are overriding a measurement.",
-  );
-
-  openPopover(
-    anchor,
-    h(
-      "div",
-      { style: { width: "300px", padding: "12px", display: "flex", flexDirection: "column", gap: "11px" } },
-      picker,
-      h(
-        "div",
-        { style: { display: "flex", gap: "8px", alignItems: "center" } },
-        h("span.swatch", null, h("i", { style: { background: ink.traced } })),
-        h(
-          "div",
-          { style: { display: "flex", flexDirection: "column" } },
-          h("span.muted", { style: { fontSize: "11px" } }, "traced"),
-          h("span.num", { style: { fontSize: "12.5px" } }, `${ink.traced.toUpperCase()} · ${percent(ink.share)} of canvas`),
-        ),
-      ),
-      h("span.muted", { style: { fontSize: "11px" } }, "Snap to"),
-      h(
-        "div",
-        { style: { display: "flex", gap: "6px" } },
-        field,
-        h(
-          "button.btn.compact",
-          {
-            style: { background: "var(--accent)", borderColor: "var(--accent)", color: "var(--accent-ink)", fontWeight: "600" },
-            onclick: () => {
-              act.snap(ink.traced, field.value.trim().toLowerCase());
-              closeOverlay();
-            },
-          },
-          "Snap",
-        ),
-      ),
-      note,
-    ),
-  );
-}
-
-/**
- * The palette as CSS custom properties.
- *
- * Named by position rather than by colour, because `--ink-1` survives a re-trace that
- * moves the hue and `--dark-green` does not. The share goes in a comment: it is the
- * reason the order is what it is, and it is the first thing you want when deciding which
- * of four inks is the brand colour.
- */
-async function copyPaletteCss(palette: Ink[]): Promise<void> {
-  const body = palette
-    .map((ink, i) => `  --ink-${i + 1}: ${ink.hex.toLowerCase()}; /* ${percent(ink.share)} of canvas */`)
-    .join("\n");
-  try {
-    await writeText(`:root {\n${body}\n}\n`);
-    toast(`${palette.length} ink${palette.length === 1 ? "" : "s"} copied as CSS.`, { kind: "good" });
-  } catch (e) {
-    toast(String(e), { kind: "bad" });
-  }
-}
-
-/** Paste a brand palette and see what each match would cost before committing. */
-function pastePalette(store: Store, act: RailActions): void {
-  const area = h("textarea", {
-    rows: "5",
-    spellcheck: "false",
-    placeholder: "#12443E\n#E9B24C\nrgb(207, 198, 180)",
-    style: {
-      width: "100%",
-      border: "1px solid var(--rule2)",
-      borderRadius: "var(--radius)",
-      background: "var(--paper)",
-      color: "var(--ink)",
-      padding: "10px 12px",
-      font: "12px/1.8 var(--font-mono)",
-      resize: "vertical",
-    },
-  }) as HTMLTextAreaElement;
-  const preview = h("div", { style: { display: "flex", flexDirection: "column", gap: "7px" } });
-  let matches: { from: string; to: string; de00: number }[] = [];
-
-  const update = async () => {
-    matches = await api.matchPalette(store.state.palette.map((i) => i.traced), area.value);
-    fill(
-      preview,
-      ...matches.map((m) =>
-        h(
-          "div",
-          { style: { display: "flex", alignItems: "center", gap: "9px", fontSize: "12px" }, class: "num" },
-          h("span.swatch", { style: { width: "20px", height: "20px" } }, h("i", { style: { background: m.from } })),
-          h("span.muted", null, m.from.toUpperCase()),
-          h("span.muted", null, "→"),
-          h("span.swatch", { style: { width: "20px", height: "20px" } }, h("i", { style: { background: m.to } })),
-          h("span.dim", null, m.to.toUpperCase()),
-          h(
-            "span",
-            { style: { marginLeft: "auto", color: m.de00 < 0.5 ? "var(--good)" : "var(--gold)" } },
-            m.de00 < 0.05 ? "exact" : `${de00(m.de00)} dE00`,
-          ),
-        ),
-      ),
-    );
-  };
-  area.addEventListener("input", () => void update());
-
-  openModal(
-    modal(
-      "Paste a brand palette",
-      [
-        area,
-        h("span.muted", { style: { fontSize: "11.5px" } }, "Hex, RGB or CSS variables, one per line. We match each to the nearest traced ink."),
-        preview,
-      ],
-      [
-        h("button.btn", { onclick: closeOverlay }, "Cancel"),
-        h(
-          "button.btn.primary",
-          {
-            onclick: () => {
-              for (const m of matches) act.snap(m.from, m.to);
-              closeOverlay();
-            },
-          },
-          `Snap ${store.state.palette.length} inks`,
-        ),
-      ],
     ),
   );
 }

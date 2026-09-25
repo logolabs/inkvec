@@ -20,6 +20,7 @@ import { appMark, fill, h } from "./lib/dom";
 import {
   api,
   events,
+  type ColourGroup,
   type Outcome,
   type Prefs,
   type SampleInfo,
@@ -27,6 +28,7 @@ import {
 } from "./lib/ipc";
 import { initial, modKey, Store } from "./lib/state";
 import { createRail } from "./components/rail";
+import { proposeGroups } from "./components/palette";
 import { openCardComposer } from "./components/card";
 import { openExportSheet } from "./components/exportsheet";
 import { closeOverlay, openPopover, toast } from "./components/overlays";
@@ -82,14 +84,33 @@ let samples: SampleInfo[] = [];
 let settleTimer = 0;
 /** The generation whose stages are currently being collected. */
 let watching = 0;
+/** The colour groups each trace in flight was sent with, by generation. */
+const groupsSent = new Map<number, ColourGroup[]>();
 
 // --------------------------------------------------------------- the trace loop ---
+
+/**
+ * The settings a trace is started with: the controls, and this image's colour groups.
+ *
+ * The groups live apart from the controls (`State.colourGroups`) so that nothing which
+ * copies the controls — presets, saved presets, the preferences file, a batch — can carry
+ * them to another image. With none, the settings go exactly as they always did.
+ */
+function traceSettings(): Settings {
+  const sent: Settings = { ...store.state.settings };
+  delete sent.colourGroups;
+  if (store.state.colourGroups.length) sent.colourGroups = store.state.colourGroups;
+  return sent;
+}
 
 /** Start a trace. A draft keeps up with a moving control; a final is what gets exported. */
 async function trace(tier: "draft" | "final"): Promise<void> {
   if (!store.state.source) return;
   try {
-    const generation = await api.startTrace(store.state.settings, tier);
+    const groups = store.state.colourGroups;
+    const generation = await api.startTrace(traceSettings(), tier);
+    groupsSent.set(generation, groups);
+    for (const old of groupsSent.keys()) if (old < generation - 8) groupsSent.delete(old);
     watching = generation;
     store.set({ generation, tracing: true, tracingTier: tier, liveStages: [] });
   } catch (e) {
@@ -133,6 +154,7 @@ function applyOutcome(outcome: Outcome, generation = store.state.generation): vo
     store.set({
       result: outcome,
       resultGeneration: generation,
+      resultGroups: groupsSent.get(generation) ?? store.state.resultGroups,
       bandsMissing: false,
       previous: outcome.tier === "final" ? before : store.state.previous,
       svg: outcome.svg,
@@ -147,6 +169,9 @@ function applyOutcome(outcome: Outcome, generation = store.state.generation): vo
     if (store.state.justSwapped) {
       window.setTimeout(() => store.set({ justSwapped: false }), 600);
     }
+    // Groups are proposed from a full trace's palette, never from a draft's, and only
+    // proposed: nothing is applied until the user accepts it.
+    if (outcome.tier === "final") store.set({ groupSuggestions: proposeGroups(store.state) });
     if (outcome.oversized && outcome.tier === "final") {
       toast(
         `Traced at ${outcome.tracedPx} px; the SVG is still ${outcome.sourcePx[0]} × ${outcome.sourcePx[1]} and scales without limit. This is normal.`,
@@ -185,6 +210,15 @@ async function openWith(fn: () => Promise<void>): Promise<void> {
     palette: [],
     losses: [],
     result: null,
+    // Colour groups and what was proposed or turned down name colours of the image that
+    // was open; the next one starts without any.
+    colourGroups: [],
+    resultGroups: [],
+    groupSuggestions: null,
+    dismissedGroups: [],
+    simplifyTo: null,
+    paletteSelection: [],
+    hoverFill: null,
   });
   try {
     await fn();
@@ -351,6 +385,11 @@ const rail = createRail(store, {
     store.set({ tracing: false, stageState: store.state.svg ? { kind: "cancelled" } : { kind: "empty" } });
   },
   snap: (from, to) => void snap(from, to),
+  setColourGroups: (groups) => {
+    store.set({ colourGroups: groups, paletteSelection: [] });
+    // Exactly what moving a control does: a draft now, the full trace once things settle.
+    controlChanged();
+  },
   openExport: () => openExportSheet(store, rail, traceAndWait),
   copySvg: async () => {
     if (!store.state.svg) return;

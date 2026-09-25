@@ -584,12 +584,38 @@ export function createViewer(store: Store): Viewer {
     divider.addEventListener("pointerup", up);
   });
 
+  // ------------------------------------------------------------ isolate ---
+
+  /**
+   * One stylesheet, filled while a palette swatch, group or member is hovered and emptied
+   * after, that dims everything but the fills in `State.hoverFill` and outlines those.
+   *
+   * A drawing can be tens of thousands of paths, so nothing here touches one of them: the
+   * rule selects by the paint attributes the tracer wrote, and the browser restyles the
+   * drawing once when the rule arrives and once when it goes. Pan and zoom never see it.
+   * The dimming is `fill-opacity`, not `opacity`: per-element opacity makes every path a
+   * compositing group of its own. The outline is painted under the fill (so 1.5 px of it
+   * shows outside the shape) and does not scale with the zoom, so a piece a pixel wide is
+   * still findable at any zoom. It is the text colour, cream on the dark stage and ink on
+   * the light one, rather than the copper accent: copper beside a warm fill reads as the
+   * fill's own edge, not as an outline.
+   */
+  const isolate = h("style", { "data-owner": "viewer-isolate" });
+  document.head.append(isolate);
+
+  function applyIsolate(): void {
+    const keys = store.state.hoverFill;
+    vectorPane.classList.toggle("isolating", Boolean(keys?.length));
+    isolate.textContent = keys?.length ? isolateCss(keys) : "";
+  }
+
   // ----------------------------------------------------------- wiring up ---
 
   // The viewer is the only thing that redraws itself; the stage around it never asks.
   store.on(["svg", "source", "result"], redraw);
   store.on(["zoom", "pan", "view", "wipe", "flicked", "detail"], transform);
   store.on(["show"], applyShow);
+  store.on(["hoverFill"], applyIsolate);
 
   // Fitting needs the pane's size, which is only known once it is laid out.
   const observer = new ResizeObserver(() => {
@@ -863,6 +889,35 @@ export function layerBands(bands: Band[], tile = BAND_TILE): { cls: BandClass; d
     else paths.set(key, { cls: layers[layerOf[i]], d: b.d });
   }
   return [...paths.entries()].sort((a, b) => a[0] - b[0]).map((e) => e[1]);
+}
+
+/** The traced drawing in the vector pane: the one `svg` there that is not the overlay. */
+const DRAWING = ".pane.vector > .art > svg:not(.overlay)";
+
+/**
+ * The stylesheet that singles out the fills painted with `keys` (the `fill`/`stroke`
+ * attribute values of one palette ink, or several).
+ *
+ * Hex is compared without regard to case, and a colour the minifier may have shortened
+ * (`#aabbcc` to `#abc`) is matched in both spellings. Keys are the tracer's own attribute
+ * values; anything that could close the quoted string is dropped rather than escaped.
+ */
+export function isolateCss(keys: string[]): string {
+  const values = new Set<string>();
+  for (const raw of keys) {
+    const k = raw.replace(/["\\\n\r]/g, "").trim();
+    if (!k) continue;
+    values.add(k);
+    const m = /^#([0-9a-f])\1([0-9a-f])\2([0-9a-f])\3$/i.exec(k);
+    if (m) values.add(`#${m[1]}${m[2]}${m[3]}`);
+  }
+  if (!values.size) return "";
+  const any = (attr: string) => [...values].map((v) => `[${attr}="${v}" i]`).join(",");
+  return [
+    `${DRAWING} * { fill-opacity: 0.12 !important; stroke-opacity: 0.12 !important; }`,
+    `${DRAWING} :is(${any("fill")}) { fill-opacity: 1 !important; stroke: var(--ink, #faf8f5) !important; stroke-opacity: 1 !important; stroke-width: 3px !important; vector-effect: non-scaling-stroke !important; paint-order: stroke !important; }`,
+    `${DRAWING} :is(${any("stroke")}) { stroke-opacity: 1 !important; }`,
+  ].join("\n");
 }
 
 /** Whether a state has something for the viewer to show. */

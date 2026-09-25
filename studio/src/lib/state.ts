@@ -10,6 +10,7 @@ import type {
   BatchRow,
   BatchTotals,
   Capabilities,
+  ColourGroup,
   FabAnalysis,
   FabOptions,
   FabPlan,
@@ -48,6 +49,9 @@ export type StageState =
   | { kind: "denoiserMissing" }
   /** The update check could not reach the network. Tracing never needed one. */
   | { kind: "offline"; message: string };
+
+/** A proposed colour group; `edited` once the user has changed it, so a new proposal keeps it. */
+export type Suggestion = ColourGroup & { edited?: boolean };
 
 /** The two halves of the rail. */
 export type RailTab = "result" | "tune";
@@ -88,6 +92,30 @@ export interface State {
   /** The drawing as it is painted now: the trace's own SVG, or one with snapped fills. */
   svg: string | null;
   palette: Ink[];
+  /**
+   * Colours the user has asked to be drawn as one, for this image. Sent with every trace;
+   * never saved with the preferences or a preset, never given to a batch, and emptied when
+   * another image is opened.
+   */
+  colourGroups: ColourGroup[];
+  /**
+   * Proposed groups the palette offers to accept, for this image. `null` until the first
+   * full trace has proposed any.
+   */
+  groupSuggestions: Suggestion[] | null;
+  /** The colour groups the drawing on screen was traced with, which its merge report describes. */
+  resultGroups: ColourGroup[];
+  /** Suggestions the user dismissed, by `groupSignature`, so they are not offered again. */
+  dismissedGroups: string[];
+  /** "Simplify to N colours": propose merging down to this many inks, or null for near duplicates only. */
+  simplifyTo: number | null;
+  /** Palette members picked for the keyboard/click "Merge" path. */
+  paletteSelection: string[];
+  /**
+   * The paint values (`fill`/`stroke` attribute values) to single out in the vector pane
+   * while a swatch, group or member is hovered or focused; null when nothing is.
+   */
+  hoverFill: string[] | null;
   losses: Loss[];
   report: Report | null;
   worstCorner: WorstCorner | null;
@@ -177,6 +205,13 @@ export function initial(settings: Settings, minify: MinifySettings): State {
     previous: null,
     svg: null,
     palette: [],
+    colourGroups: [],
+    groupSuggestions: null,
+    resultGroups: [],
+    dismissedGroups: [],
+    simplifyTo: null,
+    paletteSelection: [],
+    hoverFill: null,
     losses: [],
     report: null,
     worstCorner: null,

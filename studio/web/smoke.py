@@ -250,7 +250,7 @@ def bench(browser, url: str, images: list[pathlib.Path], note, label: str) -> li
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--url", default="http://127.0.0.1:8931/")
+    ap.add_argument("--url", default="http://127.0.0.1:8931/studio/")
     ap.add_argument("--url-single", default=None, help="the same site without isolation headers, for a one-core bench")
     ap.add_argument("--out", default=str(STUDIO / ".shots-web"))
     ap.add_argument("--bench", nargs="*", default=[])

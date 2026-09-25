@@ -1,5 +1,5 @@
 ---
-title: Inkvec Studio Lite
+title: Inkvec
 colorFrom: gray
 colorTo: yellow
 sdk: static
@@ -12,7 +12,13 @@ custom_headers:
   cross-origin-resource-policy: cross-origin
 ---
 
-# Inkvec Studio Lite
+# Inkvec
+
+This Space has two pages. The front page presents Inkvec: before-and-after on real logos
+with the geometry showing, the latest comparison with other tracers, what is new, and how it
+works. **Inkvec Studio Lite**, under [`studio/`](studio/), is the editor itself.
+
+## Inkvec Studio Lite
 
 The Inkvec Studio editor, in your browser. Drop a logo, an icon or flat artwork and get an
 exact SVG back: boundaries where the anti-aliasing says they are, circles as circles, one path
@@ -32,7 +38,9 @@ It is the desktop app's interface and the desktop app's code, not a demo of them
   into your browser and run on your GPU where there is one (ONNX Runtime Web).
 
 Use **Full screen** in the top bar, or **Open in its own tab** when the Space's frame will not
-go full screen. It is built for a laptop or desktop screen.
+go full screen; its own tab also gives it every core. It is built for a laptop or desktop
+screen. A logo dropped on the front page opens straight in the Studio, handed over inside
+your browser.
 
 The desktop app, **Inkvec Studio** (Windows, macOS, Linux), is the same interface plus what a
 browser cannot do: folders of images in one batch, the `inkvec` command line, the right-click

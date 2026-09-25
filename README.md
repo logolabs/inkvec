@@ -243,9 +243,9 @@ How it is built and the decisions behind it: [`studio/README.md`](studio/README.
 
 ## In the browser
 
-`crates/inkvec-wasm` compiles the same pipeline to WebAssembly. [`web/`](web/) is a minimal static page around it — drop a logo, get the SVG, nothing uploaded.
+`crates/inkvec-wasm` compiles the same pipeline to WebAssembly (the npm package's engine). The Hugging Face Space opens on a presentation page ([`web/index.html`](web/index.html): before and after on real logos with the geometry showing, the latest comparison with other tracers, what is new) that leads into Inkvec Studio Lite.
 
-**Inkvec Studio Lite** is the whole Studio interface in the browser: the desktop app's own frontend and its shared Rust core (`studio/core`) compiled to WebAssembly and run in a Web Worker (`studio/wasm`) — Vectorize with drafts and the wizard, the palette and colour groups, export as downloads, Minify and Fabricate, with Full screen. `cd studio && npm run build:web` builds it as a static site for the Hugging Face Space; see [`studio/README.md`](studio/README.md#inkvec-studio-lite-in-the-browser).
+**Inkvec Studio Lite** is the whole Studio interface in the browser: the desktop app's own frontend and its shared Rust core (`studio/core`) compiled to WebAssembly and run in a Web Worker (`studio/wasm`) — Vectorize with drafts and the wizard, the palette and colour groups, export as downloads, Minify and Fabricate, with Full screen. `cd studio && npm run build:web` builds the Space (the presentation page at the root, the Studio under `studio/`); see [`studio/README.md`](studio/README.md#inkvec-studio-lite-in-the-browser).
 
 **Try it live:** [huggingface.co/spaces/logolabs/inkvec](https://huggingface.co/spaces/logolabs/inkvec)
 

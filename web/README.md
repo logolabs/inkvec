@@ -14,6 +14,20 @@ custom_headers:
 
 # Inkvec
 
+> **What this folder is now (0.2).** `index.html` is the Space's presentation page: the hero
+> leads into **Inkvec Studio Lite** (the Studio in the browser, `studio/`), with the
+> before/after gallery and the competitor results read from `showcase.json`, which
+> `tools/showcase_data.py` writes from a `bench/crosscompare_competitors.py` run. The Space
+> itself is built by `studio/scripts/build-web.mjs` (landing at the root, the Studio under
+> `studio/`) and uploaded by `studio/scripts/deploy-space.py`; its card is
+> `studio/web/README.md`. The page no longer has a tracer of its own: the Studio does that
+> job better (drafts, the wizard, the palette, the denoiser) and a second tracer would be a
+> second engine package on the Space and a second interface to keep in step. A logo dropped
+> on the page opens straight in the Studio instead. `denoise.js` is still here because the
+> Studio loads it; `worker.js`, `pkg/` and `pkg-threads/` are the engine's standalone
+> browser build from before, no longer served by the Space. The rest of this file describes
+> that earlier page.
+
 Exact vectors from logos, icons and flat artwork, entirely in the browser. Inkvec is
 LogoLabs' tracer compiled to WebAssembly and served as a static page: drop an image, get an
 SVG, nothing leaves your machine.
@@ -95,7 +109,7 @@ so their tracks sweep instead of inventing a percentage.
 
 ## Deploy
 
-This folder is the Space. Create a Space under the LogoLabs org with the **static** SDK and
+(Before 0.2; see the note at the top for how the Space is built now.) This folder was the Space. Create a Space under the LogoLabs org with the **static** SDK and
 push these files (README, `index.html`, `worker.js`, `denoise.js`, `samples/`, the built
 `pkg/` and `pkg-threads/`). Build the packages with `tools/build_wasm.sh`, then upload this
 folder to the Space with `huggingface-cli` once you are logged in. ONNX Runtime and the

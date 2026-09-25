@@ -1,14 +1,20 @@
 #!/usr/bin/env node
-// Build Inkvec Studio Lite: the Studio's interface and its shared core, as a static site for
-// the Hugging Face Space (or any host that sends the two cross-origin isolation headers).
+// Build the Hugging Face Space: the presentation page at the root, and Inkvec Studio Lite (the
+// Studio's interface and its shared core, as WebAssembly) under studio/. Any host that sends
+// the two cross-origin isolation headers serves it the same way.
 //
 //   node scripts/build-web.mjs              # both WebAssembly builds, then the site
 //   node scripts/build-web.mjs --skip-wasm  # reuse the WebAssembly already in web/public
 //
-// Output: studio/dist-web/ — index.html, the bundled interface, pkg/ (one core, runs
-// anywhere), pkg-threads/ (a rayon pool; needs a cross-origin isolated page), the denoiser
-// loader, the samples, the notices and the Space's README card. `scripts/deploy-space.py`
-// uploads it; nothing here touches the network except cargo and wasm-pack's own downloads.
+// Output: studio/dist-web/
+//   index.html, showcase.json, favicon.svg, fonts/   the presentation page (web/index.html),
+//                                                    its gallery data (tools/showcase_data.py)
+//   README.md                                        the Space's card (web/README.md here)
+//   studio/                                          Inkvec Studio Lite: the bundled interface,
+//     pkg/, pkg-threads/                             the core, one core / a rayon pool
+//     denoise.js, samples/, guide/, notices          what the Studio fetches at run time
+// `scripts/deploy-space.py` uploads it; nothing here touches the network except cargo and
+// wasm-pack's own downloads.
 //
 // Prerequisites, as for the engine's own browser package (tools/build_wasm.sh):
 //   rustup target add wasm32-unknown-unknown
@@ -20,7 +26,7 @@
 
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -29,6 +35,7 @@ const ROOT = resolve(STUDIO, "..");
 const CRATE = join(STUDIO, "wasm");
 const PUBLIC = join(STUDIO, "web", "public");
 const OUT = join(STUDIO, "dist-web");
+const APP = join(OUT, "studio");
 const TARGET = process.env.CARGO_TARGET_DIR ? resolve(process.env.CARGO_TARGET_DIR) : join(STUDIO, "target-web");
 const skipWasm = process.argv.includes("--skip-wasm");
 
@@ -128,11 +135,22 @@ cpSync(join(ROOT, "NOTICE"), join(PUBLIC, "NOTICE"));
 
 // ------------------------------------------------------------------ the site ---
 
+rmSync(OUT, { recursive: true, force: true });
 run("npx", ["tsc", "--noEmit"]);
+// Into dist-web/studio (vite.config.ts); its URLs are relative, so the subfolder is free.
 run("npx", ["vite", "build", "--mode", "web"], { INKVEC_WASM_TOKEN: token });
 
-// The Space's card: its front matter asks Hugging Face for the isolation headers.
+// The presentation page at the root, with its gallery data and the Studio's fonts, and the
+// Space's card: its front matter asks Hugging Face for the isolation headers.
+cpSync(join(ROOT, "web", "index.html"), join(OUT, "index.html"));
+cpSync(join(ROOT, "web", "showcase.json"), join(OUT, "showcase.json"));
+cpSync(join(ROOT, "web", "favicon.svg"), join(OUT, "favicon.svg"));
+cpSync(join(STUDIO, "public", "fonts"), join(OUT, "fonts"), { recursive: true });
 cpSync(join(STUDIO, "web", "README.md"), join(OUT, "README.md"));
+if (!existsSync(join(APP, "index.html")) || !existsSync(join(APP, "guide"))) {
+  console.error(`the Studio did not land in ${APP} with its guide`);
+  process.exit(1);
+}
 
 const size = (p) => {
   let total = 0;
@@ -143,13 +161,16 @@ const size = (p) => {
       else total += readFileSync(f).length;
     }
   };
+  if (statSync(p).isFile()) return statSync(p).size;
   walk(p);
   return total;
 };
 const mb = (n) => `${(n / 1024 / 1024).toFixed(2)} MB`;
-console.log(`\nInkvec Studio Lite built into ${OUT}`);
-console.log(`  token        ${token}`);
-console.log(`  pkg          ${mb(size(join(OUT, "pkg")))}`);
-console.log(`  pkg-threads  ${mb(size(join(OUT, "pkg-threads")))}`);
-console.log(`  interface    ${mb(size(join(OUT, "assets")))}`);
-console.log(`  site total   ${mb(size(OUT))}`);
+console.log(`\nThe Space built into ${OUT}`);
+console.log(`  token            ${token}`);
+console.log(`  landing          ${mb(size(join(OUT, "index.html")) + size(join(OUT, "showcase.json")) + size(join(OUT, "fonts")))}`);
+console.log(`  studio/pkg       ${mb(size(join(APP, "pkg")))}`);
+console.log(`  studio/pkg-thr.  ${mb(size(join(APP, "pkg-threads")))}`);
+console.log(`  studio/assets    ${mb(size(join(APP, "assets")))}`);
+console.log(`  studio/guide     ${mb(size(join(APP, "guide")))}`);
+console.log(`  site total       ${mb(size(OUT))}`);

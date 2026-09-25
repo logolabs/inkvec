@@ -34,9 +34,17 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
   const strip = h("div.statusstrip");
   const el = h("section.stage", null, tools, stageBody, strip);
 
+  // The toolbar reads the zoom only to say which stop is pressed. A wheel tick changes the
+  // zoom every frame and the pressed stop almost never, so the bar is rebuilt only when
+  // something it shows has changed.
+  let toolsDrawn = "";
   const renderTools = () => {
     const st = store.state;
     const on = Boolean(st.source);
+    const stops = [1, 4, 12].map((z) => !st.fitted && Math.abs(st.zoom - z) < 0.01);
+    const key = JSON.stringify([on, st.view, st.show, st.fitted, stops, st.detail, Boolean(st.svg), st.bandsMissing]);
+    if (key === toolsDrawn) return;
+    toolsDrawn = key;
     const zoomStop = (label: string, z: number | "fit") =>
       h(
         "button",
@@ -84,7 +92,9 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
             "button.toggle",
             {
               "aria-pressed": String(st.show[key]),
-              disabled: !st.svg || (key === "certainty" && !st.result?.bands),
+              // The bands are fetched when Certainty is first shown, so whether a trace
+              // has any is only known once somebody asks.
+              disabled: !st.svg || (key === "certainty" && st.bandsMissing),
               title:
                 key === "certainty"
                   ? "Where each boundary could be: a band two sigmas either side, measured from the pixels. Thin is certain; a wide band is a soft, blurred or compressed edge, and the curve there is a best guess."
@@ -139,18 +149,28 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
     );
   };
 
+  // The viewer stays mounted for good, hidden while there is nothing to view, and what
+  // sits over it — the stage states, the result chip, the detail callout — is rebuilt on
+  // its own. Detaching and reattaching the viewer restyled and relaid out every node of
+  // the drawing for a chip changing its label. `display: contents` keeps the chrome's
+  // children positioned against the stage exactly as if they were its own.
+  const chrome = h("div", { style: { display: "contents" } });
+  stageBody.append(viewer.el, chrome);
+
   const renderStage = () => {
     const st = store.state;
     if (!st.source) {
-      fill(stageBody, firstRun(store, act, samples()));
+      viewer.el.style.display = "none";
+      fill(chrome, firstRun(store, act, samples()));
       return;
     }
-    fill(stageBody, viewer.el);
-    const overlay = stateOverlay(st.stageState, st, act);
-    if (overlay) stageBody.append(overlay);
-    if (st.svg) stageBody.append(resultChip(store));
-    if (st.detail && st.svg) stageBody.append(detailCallout(store, act));
-    viewer.redraw();
+    viewer.el.style.display = "";
+    fill(
+      chrome,
+      stateOverlay(st.stageState, st, act),
+      st.svg ? resultChip(store) : null,
+      st.detail && st.svg ? detailCallout(store, act) : null,
+    );
     if (st.zoom === 1 && st.pan.x === 0 && st.pan.y === 0) viewer.fit();
   };
 
@@ -197,7 +217,7 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
     );
   };
 
-  store.on(["source", "view", "show", "zoom", "fitted", "detail", "svg"], renderTools);
+  store.on(["source", "view", "show", "zoom", "fitted", "detail", "svg", "bandsMissing"], renderTools);
   store.on(["source", "svg", "stageState", "result", "detail", "worstCorner"], renderStage);
   store.on(["tracing", "liveStages", "report", "result", "source", "update"], renderStrip);
 

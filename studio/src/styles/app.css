@@ -450,8 +450,11 @@ kbd {
 .legend .band {
   background: var(--band);
 }
+/* One path per class. Every band winds the same way, so nonzero fills where two
+   overlap; evenodd would cut a hole there. */
 .overlay .certainty path {
   fill: var(--band);
+  fill-rule: nonzero;
   fill-opacity: 0.45;
   stroke: var(--band);
   stroke-width: 1;
@@ -642,31 +645,50 @@ kbd {
   pointer-events: none;
 }
 
-.overlay .wireframe {
+/* Every mark is sized in screen pixels: `vector-effect` does not inherit, so it
+   sits on the paths themselves, and a zoom rewrites nothing but the anchors' two
+   custom properties. Each layer is one path; the dots and diamonds are the caps
+   of zero-length strokes. */
+.overlay .wireframe path {
   fill: none;
   stroke: var(--wire);
-  stroke-width: 1;
+  stroke-width: 1px;
+  vector-effect: non-scaling-stroke;
 }
 
-.overlay .handles {
-  stroke: var(--handle);
-  stroke-width: var(--hair, 0.5);
+.overlay .handles path {
   fill: none;
+  stroke: var(--handle);
+  vector-effect: non-scaling-stroke;
 }
-.overlay .handles rect {
-  fill: var(--handle);
-  stroke: none;
+.overlay .handles .lines {
+  stroke-width: 0.8px;
+}
+.overlay .handles .knobs {
+  stroke-width: 2.4px;
+  stroke-linecap: square;
 }
 
 /* Round, and outlined against the stage so a dot on top of its own ink still
    reads. Shape carries the meaning as well as hue — the handle is a diamond —
    because red/green confusion is common among exactly the engineers who turn
-   this overlay on. */
+   this overlay on. The ring is the dot's radius plus and minus 15%, as the
+   outline of a circle of that radius was. */
 .overlay .anchors {
-  fill: var(--anchor);
-  stroke: var(--stage);
-  stroke-width: calc(var(--dot, 1) * 0.3);
   opacity: var(--dot-opacity, 1);
+}
+.overlay .anchors path {
+  fill: none;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+.overlay .anchors .ring {
+  stroke: var(--stage);
+  stroke-width: calc(var(--dot, 1.2px) * 2.3);
+}
+.overlay .anchors .dot {
+  stroke: var(--anchor);
+  stroke-width: calc(var(--dot, 1.2px) * 1.7);
 }
 
 .wipehandle {

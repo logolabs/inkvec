@@ -123,7 +123,7 @@ function traceAndWait(): Promise<void> {
   });
 }
 
-function applyOutcome(outcome: Outcome): void {
+function applyOutcome(outcome: Outcome, generation = store.state.generation): void {
   if (outcome.state === "traced") {
     const wasDraft = store.state.result?.tier === "draft";
     // A draft is smaller than a final, so only a final is ever the yardstick: the readout
@@ -132,6 +132,8 @@ function applyOutcome(outcome: Outcome): void {
     const before = store.state.result?.tier === "final" ? store.state.report : store.state.previous;
     store.set({
       result: outcome,
+      resultGeneration: generation,
+      bandsMissing: false,
       previous: outcome.tier === "final" ? before : store.state.previous,
       svg: outcome.svg,
       report: outcome.report,
@@ -625,7 +627,7 @@ async function start(): Promise<void> {
   });
   await events.traceDone(({ generation, outcome }) => {
     if (generation !== store.state.generation) return;
-    applyOutcome(outcome);
+    applyOutcome(outcome, generation);
   });
   await events.batchRow((row) => {
     const b = store.state.batch;

@@ -103,6 +103,11 @@ const prefs = {
 
 let current = "flat-logo.png";
 let generation = 0;
+// The bands of each trace, kept back as the backend keeps them and served by generation
+// through `trace_bands` when the Certainty view asks. Exposed so a test can plant a
+// drawing's bands under the generation it applies.
+const bandsByGeneration = new Map<number, string | null>();
+(window as unknown as { __mockBands: Map<number, string | null> }).__mockBands = bandsByGeneration;
 
 function report(svg: string, tracedPx: number, structure: unknown, editable: boolean) {
   const nums = (svg.match(/-?\d+\.?\d*/g) ?? []).length;
@@ -142,6 +147,9 @@ async function runTrace(tier: string, gen: number, settings: Record<string, unkn
   const svg = svgOf(editable ? `${stem}.edit` : stem);
   const structure = (structures as Record<string, unknown>)[`${stem}:${editable ? "edit" : "default"}`];
   const tracedPx = draft ? 512 : 2048;
+  bandsByGeneration.set(gen, bandSvgs[`./bands/${stem}.svg`] ?? null);
+  // A few traces back, like the backend's cache: an older generation answers null.
+  for (const old of [...bandsByGeneration.keys()]) if (old < gen - 4) bandsByGeneration.delete(old);
   await emit("trace:done", {
     generation: gen,
     outcome: {
@@ -164,7 +172,7 @@ async function runTrace(tier: string, gen: number, settings: Record<string, unkn
       worstCorner: { x: 212, y: 148, de00: 0.71 },
       stages: [],
       engineLog: [],
-      bands: bandSvgs[`./bands/${stem}.svg`] ?? null,
+      bands: null,
       tracedPx,
       oversized: false,
       sourcePx: [512, 512],
@@ -211,6 +219,8 @@ mockIPC(
       }
       case "cancel_trace":
         return null;
+      case "trace_bands":
+        return bandsByGeneration.get(a.generation) ?? null;
       case "snap_inks":
         return { svg: a.svg, inks: palette(a.svg) };
       case "match_palette":

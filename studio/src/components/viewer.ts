@@ -9,6 +9,7 @@
  */
 
 import { fill, h, s } from "../lib/dom";
+import { api } from "../lib/ipc";
 import { anchorStyle, nodesOf, shapesOf, viewBoxOf } from "../lib/path";
 import type { State, Store } from "../lib/state";
 
@@ -61,130 +62,251 @@ export function createViewer(store: Store): Viewer {
   let box = { x: 0, y: 0, w: 1, h: 1 };
   /** The traced document currently on screen, sized by `transform()`. */
   let drawing: SVGSVGElement | null = null;
+  /** What is on screen now, so a result that repeats the drawing costs nothing. */
+  let shownSvg: string | null | undefined;
+  let shownSource: State["source"] | undefined;
+  /** The result whose bands the certainty layer holds, or is fetching. */
+  let shownBands: State["result"] | undefined;
+  /** Bumped whenever a bands request in flight stops being wanted. */
+  let bandsRequest = 0;
+  /** The zoom the documents were last sized at, and the zoom the dots were sized at. */
+  let sizedZoom = Number.NaN;
+  let dotsZoom = Number.NaN;
+
+  // The layers, bottom to top, made once and emptied when the drawing changes. Each is
+  // filled the first time it is shown: a 40,000-node logo whose anchors nobody looks at
+  // should not pay for them on every trace.
+  //
+  // Colours and stroke widths come from the stylesheet, not from presentation
+  // attributes: `var()` is a CSS value function and is not part of the attribute
+  // grammar, so `fill="var(--anchor)"` is silently dropped by the SVG parser. Only
+  // geometry is set here.
+  const layers = {
+    certainty: s("g.certainty") as SVGGElement,
+    wireframe: s("g.wireframe") as SVGGElement,
+    handles: s("g.handles") as SVGGElement,
+    anchors: s("g.anchors") as SVGGElement,
+  };
+  type Layer = keyof typeof layers;
+  const built: Record<Layer, boolean> = { certainty: false, wireframe: false, handles: false, anchors: false };
+  for (const g of Object.values(layers)) g.style.display = "none";
+  overlay.append(layers.certainty, layers.wireframe, layers.handles, layers.anchors);
+
+  /** The drawing's shapes and nodes, read once per drawing and only when a layer needs them. */
+  let shapes: string[] | null = null;
+  let nodes: { anchors: string; lines: string; knobs: string } | null = null;
 
   // ------------------------------------------------------------- drawing ---
 
+  /**
+   * Put the current source and drawing on screen.
+   *
+   * Only what changed is rebuilt: a new result that repeats the drawing, or a stage change
+   * around it, returns at once, and a new drawing leaves the source image alone. The
+   * overlays are emptied here and built again only when they are shown.
+   */
   function redraw(): void {
     const st = store.state;
     const svg = st.svg;
-    box = (svg ? viewBoxOf(svg) : null) ?? {
-      x: 0,
-      y: 0,
-      w: st.source?.width ?? 1,
-      h: st.source?.height ?? 1,
-    };
-
-    fill(
-      sourceArt,
-      st.source ? h("img", { src: st.source.preview, alt: "", draggable: "false" }) : null,
-    );
-
-    // Parsed rather than injected as markup: the document comes from our own tracer,
-    // but parsing it means a stray script or external reference could not execute even
-    // if one ever appeared. The same parse feeds the overlay, so the nodes are read
-    // from the document on screen rather than from a second reading of the text.
-    drawing = null;
-    if (svg) {
-      const root = new DOMParser().parseFromString(svg, "image/svg+xml").documentElement;
-      if (root && root.nodeName === "svg" && !root.querySelector("parsererror")) {
-        root.setAttribute("width", String(box.w));
-        root.setAttribute("height", String(box.h));
-        drawing = document.importNode(root, true) as unknown as SVGSVGElement;
-      }
+    const sourceChanged = st.source !== shownSource;
+    const svgChanged = svg !== shownSvg;
+    if (sourceChanged || svgChanged) {
+      box = (svg ? viewBoxOf(svg) : null) ?? {
+        x: 0,
+        y: 0,
+        w: st.source?.width ?? 1,
+        h: st.source?.height ?? 1,
+      };
+      sizedZoom = Number.NaN;
     }
-    fill(vectorArt, drawing, overlay);
 
-    buildOverlay(drawing);
-    applyShow();
-    transform();
+    if (sourceChanged) {
+      shownSource = st.source;
+      fill(
+        sourceArt,
+        st.source ? h("img", { src: st.source.preview, alt: "", draggable: "false" }) : null,
+      );
+    }
+
+    if (svgChanged) {
+      shownSvg = svg;
+      // Parsed rather than injected as markup: the document comes from our own tracer,
+      // but parsing it means a stray script or external reference could not execute even
+      // if one ever appeared. The overlays read their nodes from this document too, so
+      // they come from the drawing on screen rather than from a second reading of the text.
+      drawing = null;
+      if (svg) {
+        const root = new DOMParser().parseFromString(svg, "image/svg+xml").documentElement;
+        if (root && root.nodeName === "svg" && !root.querySelector("parsererror")) {
+          root.setAttribute("width", String(box.w));
+          root.setAttribute("height", String(box.h));
+          drawing = document.importNode(root, true) as unknown as SVGSVGElement;
+        }
+      }
+      fill(vectorArt, drawing, overlay);
+      overlay.setAttribute("viewBox", `${box.x} ${box.y} ${box.w} ${box.h}`);
+      shapes = null;
+      nodes = null;
+      for (const layer of ["wireframe", "handles", "anchors"] as const) {
+        fill(layers[layer]);
+        built[layer] = false;
+      }
+      dotsZoom = Number.NaN;
+    }
+
+    // The bands belong to a result rather than to a drawing: snapping an ink repaints the
+    // drawing and keeps them, and a new trace of the same drawing replaces them.
+    if (st.result !== shownBands) dropBands();
+
+    if (sourceChanged || svgChanged) {
+      applyShow();
+      transform();
+    } else if (st.show.certainty) {
+      applyShow();
+    }
+  }
+
+  function dropBands(): void {
+    shownBands = undefined;
+    bandsRequest++;
+    fill(layers.certainty);
+    built.certainty = false;
+  }
+
+  function shapesOfDrawing(): string[] {
+    shapes ??= drawing ? shapesOf(drawing) : [];
+    return shapes;
   }
 
   /**
-   * The wireframe, anchors and handles, as one SVG in the drawing's coordinates.
+   * Every node, handle line and handle knob of the drawing, as one path each.
    *
-   * Built once per trace. Their size and opacity are the only things that change with
-   * zoom, and those are attributes on three groups rather than on every dot.
+   * A path of thousands of subpaths is one element to style, lay out and restyle on zoom,
+   * where a `<circle>` per anchor was forty thousand. The marks are drawn by the stroke —
+   * a zero-length segment with round caps is a dot, one with square caps on a diagonal is
+   * a diamond — so with `vector-effect: non-scaling-stroke` they keep their size on
+   * screen at any zoom without a single attribute write.
    */
-  function buildOverlay(drawing: SVGSVGElement | null): void {
-    fill(overlay);
-    if (!drawing) return;
-
-    overlay.setAttribute("viewBox", `${box.x} ${box.y} ${box.w} ${box.h}`);
-    const ds = shapesOf(drawing);
-
-    // Colours and stroke widths come from the stylesheet, not from presentation
-    // attributes: `var()` is a CSS value function and is not part of the attribute
-    // grammar, so `fill="var(--anchor)"` is silently dropped by the SVG parser. Only
-    // geometry is set here.
-    const wire = s("g.wireframe", { "vector-effect": "non-scaling-stroke" });
-    const handles = s("g.handles");
-    const anchors = s("g.anchors");
-
-    for (const d of ds) {
-      wire.append(s("path", { d }));
+  function nodeGeometry(): { anchors: string; lines: string; knobs: string } {
+    if (nodes) return nodes;
+    const anchors: string[] = [];
+    const lines: string[] = [];
+    const knobs: string[] = [];
+    for (const d of shapesOfDrawing()) {
       // One dot per place, not one per node. A closed shape ends where it began — a
       // circle is four arcs back to its start — and two dots stacked on one point read
       // as a heavier dot, which is a lie about where the nodes are.
-      const seen = new Set<string>();
+      // Keyed to a thousandth of a pixel as a number: a string key per node was a third
+      // of the cost of this whole walk.
+      const seen = new Set<number>();
       for (const n of nodesOf(d)) {
-        if (!seen.add(`${n.x.toFixed(3)},${n.y.toFixed(3)}`)) continue;
-        anchors.append(s("circle", { cx: n.x, cy: n.y, r: 1 }));
+        const key = Math.round(n.x * 1000) * 1e8 + Math.round(n.y * 1000);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        anchors.push(`M${n.x} ${n.y}h0`);
         for (const c of [n.in, n.out]) {
           if (!c) continue;
-          handles.append(s("line", { x1: n.x, y1: n.y, x2: c.x, y2: c.y }));
+          lines.push(`M${n.x} ${n.y}L${c.x} ${c.y}`);
           // A diamond, not a dot: red/green confusion is common among exactly the
-          // engineers who turn this overlay on, so shape carries the meaning too.
-          handles.append(
-            s("rect", {
-              class: "knob",
-              x: c.x - 1,
-              y: c.y - 1,
-              width: 2,
-              height: 2,
-              transform: `rotate(45 ${c.x} ${c.y})`,
-            }),
-          );
+          // engineers who turn this overlay on, so shape carries the meaning too. The
+          // cap of a square-capped stroke is square to the segment, so a vanishing
+          // segment at 45 degrees draws the square on its point.
+          knobs.push(`M${c.x} ${c.y}l.001 .001`);
         }
       }
     }
-    overlay.append(wire, handles, anchors);
+    nodes = { anchors: anchors.join(""), lines: lines.join(""), knobs: knobs.join("") };
+    return nodes;
+  }
 
-    // The engine's confidence bands share the drawing's coordinates; their group is lifted
-    // out of their own document, parsed as data like the drawing is.
-    const bands = store.state.result?.bands;
-    if (bands) {
-      const doc = new DOMParser().parseFromString(bands, "image/svg+xml");
-      const g = doc.documentElement.querySelector("g");
-      if (g && !doc.querySelector("parsererror")) {
-        const certainty = document.importNode(g, true) as unknown as SVGGElement;
-        certainty.setAttribute("class", "certainty");
-        // A clean edge's band is a tenth of a pixel wide, true and invisible; each band is
-        // coloured by how sure the edge is and outlined a screen pixel wide, so the sure
-        // ones read as green lines and the unsure ones as red swellings.
-        for (const p of certainty.querySelectorAll("path")) {
-          const sigma = Number(p.getAttribute("data-sigma-mean") ?? 0);
-          p.setAttribute("class", sigma <= 0.1 ? "sure" : sigma <= 0.3 ? "soft" : "unsure");
-        }
-        overlay.prepend(certainty);
-      }
+  function build(layer: Exclude<Layer, "certainty">): void {
+    built[layer] = true;
+    if (!drawing) return;
+    const g = layers[layer];
+    if (layer === "wireframe") {
+      const d = joinPaths(shapesOfDrawing());
+      if (d) g.append(s("path", { d }));
+    } else if (layer === "handles") {
+      const { lines, knobs } = nodeGeometry();
+      if (lines) g.append(s("path.lines", { d: lines }), s("path.knobs", { d: knobs }));
+    } else {
+      const { anchors } = nodeGeometry();
+      // The outline first and the dot over it, so a dot on top of its own ink still reads.
+      if (anchors) g.append(s("path.ring", { d: anchors }), s("path.dot", { d: anchors }));
     }
   }
 
-  /** Show/hide the three overlays and the fill, without rebuilding anything. */
+  /**
+   * The engine's confidence bands, fetched when Certainty is first shown for a result.
+   *
+   * A result carries them inline (an older backend) or leaves them with the backend,
+   * which serves them by generation. Either way they are read with a scan of the text, not
+   * a parse: fifteen thousand bands are three paths, one per class, rather than fifteen
+   * thousand elements.
+   */
+  function buildBands(): void {
+    const st = store.state;
+    const result = st.result;
+    built.certainty = true;
+    shownBands = result;
+    if (!result || !st.svg) return;
+    if (result.bands) {
+      fillBands(result.bands);
+      return;
+    }
+    const ticket = ++bandsRequest;
+    const missing = () => {
+      if (ticket === bandsRequest) store.set({ bandsMissing: true });
+    };
+    api.traceBands(st.resultGeneration).then((text) => {
+      if (ticket !== bandsRequest) return;
+      if (text) fillBands(text);
+      else missing();
+    }, missing);
+  }
+
+  function fillBands(text: string): void {
+    const classes = bandClasses(text);
+    fill(layers.certainty);
+    for (const k of ["sure", "soft", "unsure"] as const) {
+      const d = joinPaths(classes[k]);
+      if (d) layers.certainty.append(s(`path.${k}`, { d }));
+    }
+  }
+
+  /** Show/hide the overlays and the fill, building a layer the first time it shows. */
   function applyShow(): void {
     const { show } = store.state;
-    const set = (sel: string, on: boolean) => {
-      const g = overlay.querySelector<SVGGElement>(sel);
-      if (g) g.style.display = on ? "" : "none";
+    const set = (layer: Layer, on: boolean) => {
+      if (on && !built[layer]) {
+        if (layer === "certainty") buildBands();
+        else build(layer);
+      }
+      layers[layer].style.display = on ? "" : "none";
     };
-    set(".wireframe", show.wireframe);
-    set(".handles", show.handles);
-    set(".anchors", show.anchors);
-    set(".certainty", show.certainty);
+    set("wireframe", show.wireframe);
+    set("handles", show.handles);
+    set("anchors", show.anchors);
+    set("certainty", show.certainty);
+    if (show.anchors) sizeDots();
     // Turning the fill off has to leave something behind, or "wireframe only" is a
     // blank pane; it dims rather than disappears.
-    const art = vectorArt.querySelector<SVGElement>("svg:not(.overlay)");
-    if (art) art.style.opacity = show.fill ? "1" : "0.12";
+    if (drawing) drawing.style.opacity = show.fill ? "1" : "0.12";
+  }
+
+  /**
+   * The anchors thin out with zoom rather than being capped, which is what keeps a
+   * 3,000-node logo readable at 1x and precise at 12x; see `anchorStyle`. Two custom
+   * properties on the anchors' own group, written only while they are showing: set on the
+   * overlay root they restyled every mark in every layer.
+   */
+  function sizeDots(): void {
+    const zoom = store.state.zoom;
+    if (zoom === dotsZoom) return;
+    dotsZoom = zoom;
+    const { r, opacity } = anchorStyle(zoom);
+    layers.anchors.style.setProperty("--dot", `${r}px`);
+    layers.anchors.style.setProperty("--dot-opacity", String(opacity));
   }
 
   // ----------------------------------------------------------- transform ---
@@ -207,43 +329,26 @@ export function createViewer(store: Store): Viewer {
     for (const node of [sourceArt, vectorArt]) {
       node.style.transform = t;
     }
-    const w = box.w * st.zoom;
-    const h = box.h * st.zoom;
-    const img = sourceArt.querySelector("img");
-    if (img) {
-      img.style.width = `${w}px`;
-      img.style.height = `${h}px`;
-    }
-    if (drawing) {
-      drawing.setAttribute("width", String(w));
-      drawing.setAttribute("height", String(h));
-    }
-    overlay.setAttribute("width", String(w));
-    overlay.setAttribute("height", String(h));
 
-    // Overlay geometry is in the drawing's units, so everything that should stay a
-    // constant size on screen is divided by the zoom. The anchors thin out with zoom
-    // rather than being capped, which is what keeps a 3,000-node logo readable at 1x
-    // and precise at 12x; see `anchorStyle`.
-    const { r, opacity } = anchorStyle(st.zoom);
-    overlay.style.setProperty("--dot", String(r / st.zoom));
-    overlay.style.setProperty("--dot-opacity", String(opacity));
-    overlay.style.setProperty("--hair", `${0.8 / st.zoom}`);
-    for (const c of overlay.querySelectorAll(".anchors > circle")) {
-      c.setAttribute("r", String(r / st.zoom));
-    }
-    for (const k of overlay.querySelectorAll<SVGRectElement>(".handles > rect")) {
-      const size = (2.4 / st.zoom).toFixed(3);
-      const half = Number(size) / 2;
-      const cx = Number(k.dataset.cx ?? k.getAttribute("x")) + 1;
-      const cy = Number(k.dataset.cy ?? k.getAttribute("y")) + 1;
-      k.dataset.cx ??= String(cx - 1);
-      k.dataset.cy ??= String(cy - 1);
-      k.setAttribute("x", String(cx - half));
-      k.setAttribute("y", String(cy - half));
-      k.setAttribute("width", size);
-      k.setAttribute("height", size);
-      k.setAttribute("transform", `rotate(45 ${cx} ${cy})`);
+    // A pan is the translate above and nothing else. Only a new zoom resizes the
+    // documents, and the overlay marks are sized in screen pixels by the stylesheet, so
+    // the only zoom-dependent write they need is the anchors' two custom properties.
+    if (st.zoom !== sizedZoom) {
+      sizedZoom = st.zoom;
+      const w = box.w * st.zoom;
+      const h = box.h * st.zoom;
+      const img = sourceArt.querySelector("img");
+      if (img) {
+        img.style.width = `${w}px`;
+        img.style.height = `${h}px`;
+      }
+      if (drawing) {
+        drawing.setAttribute("width", String(w));
+        drawing.setAttribute("height", String(h));
+      }
+      overlay.setAttribute("width", String(w));
+      overlay.setAttribute("height", String(h));
+      if (st.show.anchors) sizeDots();
     }
 
     applyLayout();
@@ -394,12 +499,10 @@ export function createViewer(store: Store): Viewer {
 
   // ----------------------------------------------------------- wiring up ---
 
-  store.on(["svg", "source"], redraw);
+  // The viewer is the only thing that redraws itself; the stage around it never asks.
+  store.on(["svg", "source", "result"], redraw);
   store.on(["zoom", "pan", "view", "wipe", "flicked", "detail"], transform);
-  store.on(["show"], () => {
-    applyShow();
-    transform();
-  });
+  store.on(["show"], applyShow);
 
   // Fitting needs the pane's size, which is only known once it is laid out.
   const observer = new ResizeObserver(() => {
@@ -411,6 +514,45 @@ export function createViewer(store: Store): Viewer {
   observer.observe(panes);
 
   return { el, redraw, transform, fit, goTo, zoomTo };
+}
+
+/**
+ * Several `d` attributes as one, for a layer drawn as a single path.
+ *
+ * A leading relative `m` is absolute only as the first command of a path; after another
+ * subpath it would be relative to where that one ended. A `M0 0` in front keeps it where
+ * it was, and a lone moveto is never stroked.
+ */
+export function joinPaths(ds: string[]): string {
+  let out = "";
+  for (const raw of ds) {
+    const d = raw.trim();
+    if (!d) continue;
+    out += d[0] === "M" ? d : `M0 0${d}`;
+  }
+  return out;
+}
+
+/**
+ * The bands of an `--uncertainty` document, sorted by how sure each edge is.
+ *
+ * A clean edge's band is a tenth of a pixel wide, true and invisible; each band is
+ * coloured by how sure the edge is and outlined a screen pixel wide, so the sure ones read
+ * as green lines and the unsure ones as red swellings. Read with a scan of the text: the
+ * document is the engine's own, a flat list of paths, and parsing it into a DOM only to
+ * read two attributes back cost more than everything else a new result does.
+ */
+export function bandClasses(text: string): { sure: string[]; soft: string[]; unsure: string[] } {
+  const out = { sure: [] as string[], soft: [] as string[], unsure: [] as string[] };
+  const tag = /<path\b([^>]*)>/g;
+  for (let m = tag.exec(text); m; m = tag.exec(text)) {
+    const attrs = m[1];
+    const d = /(?:^|\s)d="([^"]*)"/.exec(attrs)?.[1];
+    if (!d) continue;
+    const sigma = Number(/\sdata-sigma-mean="([^"]*)"/.exec(attrs)?.[1] ?? 0);
+    (sigma <= 0.1 ? out.sure : sigma <= 0.3 ? out.soft : out.unsure).push(d);
+  }
+  return out;
 }
 
 /** Whether a state has something for the viewer to show. */

@@ -33,6 +33,8 @@ REQUIRED = [
     # The presentation page, at the root.
     "index.html",
     "showcase.json",
+    "showcase/brand__365retailmarkets_com.json",
+    "showcase/noto-emoji__emoji_u1f478_1f3fd.json",
     "README.md",
     # Inkvec Studio Lite, under studio/.
     "studio/index.html",

@@ -1,13 +1,14 @@
 /**
  * The Showcase screen: before and after, with the geometry showing.
  *
- * A handful of logos and emoji from the last competitor run, each traced by Inkvec and by
- * the other engines at their best settings, side by side with the raster they were given:
- * fill, wireframe, every anchor and every handle, zoomable, both panes moving together.
- * Under it, the run's summary table. The data is `web/showcase.json`, written by
- * `tools/showcase_data.py` from the run's own `results.json` -- the same file the Space's
- * presentation page reads -- and bundled into the app, so the screen works offline. It is
- * a chunk of its own, loaded the first time the screen opens.
+ * Twenty real brand logos and the benchmark's logos, icons and emoji, each traced by Inkvec
+ * (the build named in the data) and by the other engines, side by side with the raster they
+ * were given: fill, wireframe, every anchor and every handle, zoomable, all panes moving
+ * together. Under it, the summary tables. The data is `web/showcase.json` and one
+ * `web/showcase/<key>.json` per case, written by `tools/showcase_data.py` -- the same files
+ * the Space's presentation page reads -- and bundled into the app so the screen works
+ * offline: the index is a chunk loaded when the screen opens, each case a chunk loaded when
+ * it is picked.
  */
 
 import { fill, h } from "../lib/dom";
@@ -29,14 +30,12 @@ interface EngineSummary {
   seconds_median: number;
 }
 
-interface CaseEngine {
-  svg: string;
+interface CaseMetrics {
   de1024: number;
   coordinates: number;
   geometry_ratio: number;
   paths: number;
   bytes: number;
-  gradients: number;
 }
 
 interface Case {
@@ -44,19 +43,28 @@ interface Case {
   label: string;
   what: string;
   artist: { paths: number; coordinates: number; geometry_params: number };
+  thumb: string;
+  m: Record<string, CaseMetrics>;
+}
+
+interface CaseBody {
   input: string;
-  engines: Record<string, CaseEngine>;
+  svg: Record<string, string>;
 }
 
 interface ShowcaseData {
+  traced: string;
+  inkvec: { git: string };
   run: string;
   date: string;
   seed: string;
   cases: number;
   families: string[];
+  gallery_engines: string[];
   engines: EngineSummary[];
   best_de_wins: Record<string, number>;
-  gallery: Case[];
+  brands: { cases: number; engines: EngineSummary[]; best_de_wins: Record<string, number> };
+  sets: { id: string; label: string; cases: Case[] }[];
 }
 
 /** Short names for the gallery's compare buttons. */
@@ -74,6 +82,14 @@ let data: Promise<ShowcaseData> | null = null;
 function load(): Promise<ShowcaseData> {
   data ??= import("../../../web/showcase.json").then((m) => (m.default ?? m) as unknown as ShowcaseData);
   return data;
+}
+
+/** Each case's raster and SVGs, a chunk of its own. */
+const CASE_FILES = import.meta.glob("../../../web/showcase/*.json");
+function loadCase(key: string): Promise<CaseBody> {
+  const loader = CASE_FILES[`../../../web/showcase/${key}.json`];
+  if (!loader) return Promise.reject(new Error(`no data for ${key}`));
+  return loader().then((m) => ((m as { default?: unknown }).default ?? m) as CaseBody);
 }
 
 export function showcaseScreen(store: Store, close: () => void): HTMLElement {
@@ -102,14 +118,16 @@ export function showcaseScreen(store: Store, close: () => void): HTMLElement {
 // ------------------------------------------------------------------ the page ---
 
 function content(d: ShowcaseData): HTMLElement {
+  let set = d.sets[0];
   let at = 0;
   let other = "vtracer-1.0-simplify";
   let layer: Layer = "fill";
+  let token = 0;
 
   const viewer = createViewer();
   const chips = h("div.sc-chips");
   const list = h("div.sc-list");
-  const others = Object.keys(d.gallery[0]?.engines ?? {}).filter((e) => e !== "inkvec");
+  const others = d.gallery_engines.filter((e) => e !== "inkvec");
 
   const seg = (items: [string, string][], current: () => string, pick: (k: string) => void) => {
     const el = h("div.seg");
@@ -123,12 +141,12 @@ function content(d: ShowcaseData): HTMLElement {
     return el;
   };
 
-  const show = () => {
-    const c = d.gallery[at];
-    viewer.set(c.input, c.engines.inkvec.svg, c.engines[other].svg, `Inkvec`, SHORT[other] ?? other);
-    viewer.layer(layer);
-    const us = c.engines.inkvec;
-    const them = c.engines[other];
+  const show = async () => {
+    const c = set.cases[at];
+    const mine = ++token;
+    for (const [i, b] of [...list.children].entries()) b.setAttribute("aria-pressed", String(i === at));
+    const us = c.m.inkvec;
+    const them = c.m[other];
     fill(
       chips,
       chip(`Inkvec dE00 ${us.de1024.toFixed(3)}`, true),
@@ -137,26 +155,43 @@ function content(d: ShowcaseData): HTMLElement {
       chip(`${SHORT[other]} ${them.paths} paths · ${them.coordinates} coordinates · ${kb(them.bytes)}`),
       chip(`The artist's file: ${c.artist.paths} paths · ${c.artist.coordinates} coordinates`),
     );
-    for (const [i, b] of [...list.children].entries()) b.setAttribute("aria-pressed", String(i === at));
+    const body = await loadCase(c.key);
+    if (mine !== token) return;
+    viewer.set(body.input, body.svg.inkvec, body.svg[other], "Inkvec", SHORT[other] ?? other);
+    viewer.layer(layer);
   };
 
-  d.gallery.forEach((c, i) => {
-    list.append(
-      h(
-        "button.sc-case",
-        { onclick: () => { at = i; show(); }, title: c.what },
-        h("span.sc-thumb", null, h("img", { src: c.input, alt: "" })),
-        h("span.sc-name", null, c.label),
-        h("span.sc-what", null, c.what),
+  const fillList = () => {
+    fill(
+      list,
+      ...set.cases.map((c, i) =>
+        h(
+          "button.sc-case",
+          { onclick: () => { at = i; void show(); }, title: c.what },
+          h("span.sc-thumb", null, h("img", { src: c.thumb, alt: "", loading: "lazy" })),
+          h("span.sc-name", null, c.label),
+          h("span.sc-what", null, c.what),
+        ),
       ),
     );
-  });
+  };
 
   const tools = h(
     "div.sc-tools",
     null,
+    h("span.eyebrow", null, "Set"),
+    seg(
+      d.sets.map((s) => [s.id, `${s.label} (${s.cases.length})`]),
+      () => set.id,
+      (k) => {
+        set = d.sets.find((s) => s.id === k) ?? set;
+        at = 0;
+        fillList();
+        void show();
+      },
+    ),
     h("span.eyebrow", null, "Compare with"),
-    seg(others.map((e) => [e, SHORT[e] ?? e]), () => other, (k) => { other = k; show(); }),
+    seg(others.map((e) => [e, SHORT[e] ?? e]), () => other, (k) => { other = k; void show(); }),
     h("span.eyebrow", null, "Show"),
     seg(
       [["fill", "Fill"], ["wire", "Wireframe"], ["anchor", "Anchors"], ["handle", "Handles"]],
@@ -168,10 +203,12 @@ function content(d: ShowcaseData): HTMLElement {
     h("span.sc-legend.faint", null, h("i.sc-dot.a"), "anchor", h("i.sc-dot.hd"), "control point"),
   );
 
-  show();
+  fillList();
+  void show();
 
   const ink = d.engines.find((e) => e.id === "inkvec");
   const wins = d.best_de_wins.inkvec ?? 0;
+  const bwins = d.brands.best_de_wins.inkvec ?? 0;
   return h(
     "div.sc-page",
     null,
@@ -182,7 +219,7 @@ function content(d: ShowcaseData): HTMLElement {
       h(
         "p.faint",
         null,
-        `Each raster was traced by Inkvec and by the other engines at their best settings. Left, the raster; middle, Inkvec's SVG; right, the engine you compare with. Scroll to zoom and drag to pan, all three together; Anchors shows every on-curve point, Handles every control point with its tangent. From the ${d.date} competitor run.`,
+        `Twenty real brand logos, and the benchmark's logos, icons and emoji, each traced by Inkvec (build ${d.inkvec.git}, ${d.traced}) and by the other engines. Left, the raster; middle, Inkvec's SVG; right, the engine you compare with. Scroll to zoom and drag to pan, all three together; Anchors shows every on-curve point, Handles every control point with its tangent.`,
       ),
     ),
     h("div.sc-main", null, list, h("div.sc-stagecol", null, tools, viewer.el, chips)),
@@ -193,7 +230,7 @@ function content(d: ShowcaseData): HTMLElement {
       h(
         "p.faint",
         null,
-        `${d.cases} cases (${d.families.length} families: real icons, emoji, synthetic probes and real brand logos; selection fixed from the seed ${d.seed}), each rendered from its source SVG, traced by every engine and scored against the render: CIEDE2000 colour difference, DISTS and DINOv3 perceptual similarity, and geometry against the artist's own file (1.00× is exactly the artist's number of parameters). Inkvec had the lowest colour difference on ${wins} of ${d.cases}.`,
+        `${d.cases} benchmark cases (real icons, emoji, synthetic probes and real brand logos; selection fixed from the seed ${d.seed}), each rendered from its source SVG, traced by every engine and scored against the render: CIEDE2000 colour difference, DISTS and DINOv3 perceptual similarity, and geometry against the artist's own file (1.00× is exactly the artist's number of parameters). Inkvec had the lowest colour difference on ${wins} of ${d.cases}, and on ${bwins} of the ${d.brands.cases} brand logos.`,
       ),
       ink
         ? h(
@@ -205,42 +242,44 @@ function content(d: ShowcaseData): HTMLElement {
             bignum("seconds per case", ink.seconds_median.toFixed(2), "median, native command line"),
           )
         : null,
-      h(
-        "table.sc-table",
-        null,
-        h(
-          "thead",
-          null,
-          h(
-            "tr",
-            null,
-            ...["Engine", "mean dE00", "median dE00", "DISTS", "DINO", "geometry", "coordinates", "seconds"].map((t) => h("th", null, t)),
-          ),
-        ),
-        h(
-          "tbody",
-          null,
-          ...d.engines.map((e) =>
-            h(
-              `tr${e.id === "inkvec" ? ".win" : ""}`,
-              null,
-              h("td", null, e.name),
-              h("td.num", null, e.de_mean.toFixed(3)),
-              h("td.num", null, e.de_median.toFixed(3)),
-              h("td.num", null, e.dists.toFixed(4)),
-              h("td.num", null, e.dino.toFixed(4)),
-              h("td.num", null, `${e.geometry_mean.toFixed(2)}×`),
-              h("td.num", null, Math.round(e.coordinates).toString()),
-              h("td.num", null, e.seconds_median.toFixed(2)),
-            ),
-          ),
-        ),
-      ),
+      table(`${d.cases} benchmark cases`, d.engines),
+      table(`${d.brands.cases} brand logos`, d.brands.engines),
       h(
         "p.faint.sc-note",
         null,
-        `Means over the ${d.cases} cases except seconds (median). Source: out/${d.run}/results.json, written by bench/crosscompare_competitors.py; this screen's data by tools/showcase_data.py. `,
+        `Means over the cases except seconds (median). Inkvec was traced by the build named above; the other engines have not changed, so their traces and scores are from their recorded runs (the benchmark's: out/${d.run}/results.json, ${d.date}, bench/crosscompare_competitors.py). Computed by tools/showcase_data.py. `,
         h("a", { href: "#", onclick: (e: Event) => { e.preventDefault(); void openExternal("https://github.com/logolabs/inkvec#results"); } }, "Method and every case"),
+      ),
+    ),
+  );
+}
+
+function table(caption: string, rows: EngineSummary[]): HTMLElement {
+  return h(
+    "table.sc-table",
+    null,
+    h("caption", null, caption),
+    h(
+      "thead",
+      null,
+      h("tr", null, ...["Engine", "mean dE00", "median dE00", "DISTS", "DINO", "geometry", "coordinates", "seconds"].map((t) => h("th", null, t))),
+    ),
+    h(
+      "tbody",
+      null,
+      ...rows.map((e) =>
+        h(
+          `tr${e.id === "inkvec" ? ".win" : ""}`,
+          null,
+          h("td", null, e.name),
+          h("td.num", null, e.de_mean.toFixed(3)),
+          h("td.num", null, e.de_median.toFixed(3)),
+          h("td.num", null, e.dists.toFixed(4)),
+          h("td.num", null, e.dino.toFixed(4)),
+          h("td.num", null, `${e.geometry_mean.toFixed(2)}×`),
+          h("td.num", null, Math.round(e.coordinates).toString()),
+          h("td.num", null, e.seconds_median.toFixed(2)),
+        ),
       ),
     ),
   );

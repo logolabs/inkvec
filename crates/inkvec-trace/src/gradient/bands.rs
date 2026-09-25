@@ -285,19 +285,12 @@ pub(crate) fn merge_bands_with(
         };
         let seen = if sub.is_empty() { pixels } else { &sub[..] };
         FIT_PIXELS.fetch_add(seen.len(), std::sync::atomic::Ordering::Relaxed);
-        let evidence = |p: usize| {
-            pure[p] || (inner && inner_of(group, p, a, b))
-        };
-        let mut fit = select(fit_pixels(
-            rgb,
-            w,
-            h,
-            seen,
-            member,
-            evidence,
-            sigma_noise,
-            lambda,
-        ));
+        let evidence = |p: usize| pure[p] || (inner && inner_of(group, p, a, b));
+        let mut cands = fit_pixels(rgb, w, h, seen, member, evidence, sigma_noise, lambda);
+        if inner && a != b {
+            regions::drop_edges(&mut cands);
+        }
+        let mut fit = select(cands);
         if seen.len() < pixels.len() {
             let k = pixels.len() as f64 / seen.len() as f64;
             let params_term = fit.cost - 0.5 * fit.chi2;
@@ -329,21 +322,23 @@ pub(crate) fn merge_bands_with(
     // A pair whose seam is smooth (see `regions::is_smooth`) is judged as one region:
     // blends between its members are evidence, and both sides are priced on the same
     // pixels. Any other pair is judged exactly as before.
-    let smooth_pair = |adj: &[HashMap<u32, u32>], smooth: &[HashMap<u32, u32>], a: usize, b: usize| {
-        inner_blends && regions::is_smooth(adj, smooth, a, b)
-    };
+    let smooth_pair =
+        |adj: &[HashMap<u32, u32>], smooth: &[HashMap<u32, u32>], a: usize, b: usize| {
+            inner_blends && regions::is_smooth(adj, smooth, a, b)
+        };
     let mut alive = vec![true; n_comp];
     // Two flat bands of one quantised ramp are each flat -- a band is too thin to show
     // its slope -- so the pair test above never looks at them, and a ramp cut into
     // flat bands stays cut. With region recovery on, a flat pair whose inks are one
     // ramp step apart is looked at too; the union still has to win on the pixels.
-    let ramp_step = |adj: &[HashMap<u32, u32>], smooth: &[HashMap<u32, u32>], a: usize, b: usize| {
-        smooth_pair(adj, smooth, a, b)
-            && crate::color::de00(
-                ink_rgb[comp_label[a] as usize],
-                ink_rgb[comp_label[b] as usize],
-            ) < *regions::RAMP_STEP_DE00
-    };
+    let ramp_step =
+        |adj: &[HashMap<u32, u32>], smooth: &[HashMap<u32, u32>], a: usize, b: usize| {
+            smooth_pair(adj, smooth, a, b)
+                && crate::color::de00(
+                    ink_rgb[comp_label[a] as usize],
+                    ink_rgb[comp_label[b] as usize],
+                ) < *regions::RAMP_STEP_DE00
+        };
     // A cached union is *stale* once one of its members has absorbed something else.
     // It is not thrown away: a large gradient region swallowing a two-pixel fleck used
     // to invalidate the union fit with every one of its other neighbours, and on a logo
@@ -363,6 +358,87 @@ pub(crate) fn merge_bands_with(
     // the cores or are one big fit with a few small ones behind it.
     let mut wave_log: Vec<(usize, f64)> = Vec::new();
     let mut stale_refits = 0u64;
+    // A run of bands that only joins as a whole: when no pair saves, each smooth set of
+    // regions is offered as one (see `regions::ramp_sets`). An accepted set is absorbed
+    // one member per round, every round carrying the set's union fit.
+    let mut forced: Vec<u32> = Vec::new();
+    let mut forced_at: (u32, Option<FillFit>) = (0, None);
+    let mut tried: std::collections::HashSet<Vec<u32>> = std::collections::HashSet::new();
+    let try_sets = |group: &[u32],
+                    members: &[Vec<usize>],
+                    fits: &[FillFit],
+                    adj: &[HashMap<u32, u32>],
+                    smooth: &[HashMap<u32, u32>],
+                    alive: &[bool],
+                    tried: &mut std::collections::HashSet<Vec<u32>>|
+     -> Option<(Vec<u32>, FillFit)> {
+        let linked = |a: usize, b: usize| {
+            adj[a].get(&(b as u32)).copied().unwrap_or(0) >= MIN_SHARED_BOUNDARY
+                && regions::is_smooth(adj, smooth, a, b)
+                && (fits[a].model.is_gradient()
+                    || fits[b].model.is_gradient()
+                    || crate::color::de00(
+                        ink_rgb[comp_label[a] as usize],
+                        ink_rgb[comp_label[b] as usize],
+                    ) < *regions::RAMP_STEP_DE00)
+        };
+        let mut best: Option<(f64, Vec<u32>, FillFit)> = None;
+        for set in regions::ramp_sets(alive, adj, linked) {
+            if set.len() < 3 || !tried.insert(set.clone()) {
+                continue;
+            }
+            let mut inside = vec![false; members.len()];
+            let mut px: Vec<usize> = Vec::new();
+            for &c in &set {
+                inside[c as usize] = true;
+                px.extend_from_slice(&members[c as usize]);
+            }
+            let in_set = |p: usize| inside[group[p] as usize];
+            let evidence = |p: usize| {
+                pure[p] || regions::all_inside(&partner[p], |q| inside[group[q] as usize])
+            };
+            let seen: Vec<usize> = px
+                .iter()
+                .copied()
+                .step_by((px.len() / fit_pixels_cap()).max(1))
+                .collect();
+            let mut cands = fit_pixels(rgb, w, h, &seen, in_set, evidence, sigma_noise, lambda);
+            regions::drop_edges(&mut cands);
+            let mut union = select(cands);
+            if !union.model.is_gradient() {
+                continue;
+            }
+            if seen.len() < px.len() {
+                let k = px.len() as f64 / seen.len() as f64;
+                let params_term = union.cost - 0.5 * union.chi2;
+                union.chi2 *= k;
+                union.cost = params_term + 0.5 * union.chi2;
+            }
+            let Some(gain) = regions::set_gain(
+                rgb,
+                w,
+                h,
+                &px,
+                &|p| {
+                    fits[group[p] as usize]
+                        .model
+                        .color_at((p % w) as f64, (p / w) as f64)
+                },
+                &in_set,
+                &evidence,
+                &union,
+                set.iter().map(|&c| fits[c as usize].params).sum(),
+                sigma_noise,
+                lambda,
+            ) else {
+                continue;
+            };
+            if gain > 0.0 && best.as_ref().is_none_or(|b| gain > b.0) {
+                best = Some((gain, set, union));
+            }
+        }
+        best.map(|(_, set, union)| (set, union))
+    };
     loop {
         rounds += 1;
         let t_round = inkvec_core::clock::Instant::now();
@@ -439,102 +515,134 @@ pub(crate) fn merge_bands_with(
             }
         }
         let t_pick = inkvec_core::clock::Instant::now();
-        let best = loop {
-            let mut best: Option<(f64, u32, u32)> = None;
-            for a in 0..n_comp {
-                if !alive[a] {
-                    continue;
-                }
-                let neighbours: Vec<(u32, u32)> = adj[a]
-                    .iter()
-                    .map(|(&b, &shared)| (b, shared))
-                    .filter(|&(b, shared)| b as usize > a && shared >= MIN_SHARED_BOUNDARY)
-                    .collect();
-                for (b, _) in neighbours {
-                    if !fits[a].model.is_gradient()
-                        && !fits[b as usize].model.is_gradient()
-                        && !ramp_step(&adj, &smooth, a, b as usize)
-                    {
+        let best = if let Some(b) = forced.pop() {
+            let (a, fit) = (forced_at.0, forced_at.1.clone().expect("set fit"));
+            cache.insert((a, b), (fit, false));
+            Some((a, b))
+        } else {
+            loop {
+                let mut best: Option<(f64, u32, u32)> = None;
+                for a in 0..n_comp {
+                    if !alive[a] {
                         continue;
                     }
-                    let Some((union, _)) = cache.get(&(a as u32, b)) else {
-                        continue;
-                    };
-                    if !union.model.is_gradient() {
-                        if mergedbg && members[a].len() + members[b as usize].len() > 200 {
-                            eprintln!(
+                    let neighbours: Vec<(u32, u32)> = adj[a]
+                        .iter()
+                        .map(|(&b, &shared)| (b, shared))
+                        .filter(|&(b, shared)| b as usize > a && shared >= MIN_SHARED_BOUNDARY)
+                        .collect();
+                    for (b, _) in neighbours {
+                        if !fits[a].model.is_gradient()
+                            && !fits[b as usize].model.is_gradient()
+                            && !ramp_step(&adj, &smooth, a, b as usize)
+                        {
+                            continue;
+                        }
+                        let Some((union, _)) = cache.get(&(a as u32, b)) else {
+                            continue;
+                        };
+                        if !union.model.is_gradient() {
+                            if mergedbg && members[a].len() + members[b as usize].len() > 200 {
+                                eprintln!(
                                 "merge: a={a}({}) {:?} | b={b}({}) {:?} | union FLAT chi2 {:.0} cost {:.0}",
                                 members[a].len(), fits[a].model.kind(),
                                 members[b as usize].len(), fits[b as usize].model.kind(),
                                 union.chi2, union.cost
                             );
+                            }
+                            continue;
                         }
-                        continue;
-                    }
-                    let legacy_gain = fits[a].cost + fits[b as usize].cost - union.cost;
-                    let inner = smooth_pair(&adj, &smooth, a, b as usize);
-                    let gain = if common_pixels || inner {
-                        let mut pixels = members[a].clone();
-                        pixels.extend_from_slice(&members[b as usize]);
-                        common_pixel_gain(
-                            rgb,
-                            w,
-                            h,
-                            &pixels,
-                            &group,
-                            &|p: usize| {
-                                pure[p] || (inner && inner_of(&group, p, a as u32, b))
-                            },
-                            a as u32,
-                            b,
-                            &fits[a],
-                            &fits[b as usize],
-                            union,
-                            sigma_noise,
-                            lambda,
-                        )
-                        .unwrap_or(f64::NEG_INFINITY)
-                    } else {
-                        legacy_gain
-                    };
-                    if mergedbg && common_pixels {
-                        eprintln!("common: a={a} b={b} legacy={legacy_gain:.3} common={gain:.3}");
-                    }
-                    if mergedbg && members[a].len() + members[b as usize].len() > 200 {
-                        eprintln!(
+                        let legacy_gain = fits[a].cost + fits[b as usize].cost - union.cost;
+                        let inner = smooth_pair(&adj, &smooth, a, b as usize);
+                        let gain = if common_pixels || inner {
+                            let mut pixels = members[a].clone();
+                            pixels.extend_from_slice(&members[b as usize]);
+                            common_pixel_gain(
+                                rgb,
+                                w,
+                                h,
+                                &pixels,
+                                &group,
+                                &|p: usize| pure[p] || (inner && inner_of(&group, p, a as u32, b)),
+                                a as u32,
+                                b,
+                                &fits[a],
+                                &fits[b as usize],
+                                union,
+                                sigma_noise,
+                                lambda,
+                            )
+                            .unwrap_or(f64::NEG_INFINITY)
+                        } else {
+                            legacy_gain
+                        };
+                        if mergedbg && common_pixels {
+                            eprintln!(
+                                "common: a={a} b={b} legacy={legacy_gain:.3} common={gain:.3}"
+                            );
+                        }
+                        if mergedbg && members[a].len() + members[b as usize].len() > 200 {
+                            eprintln!(
                             "merge: a={a}({}) {:?} cost {:.0} | b={b}({}) {:?} cost {:.0} | union {:?} chi2 {:.0} cost {:.0} | gain {gain:.0}",
                             members[a].len(), fits[a].model.kind(), fits[a].cost,
                             members[b as usize].len(), fits[b as usize].model.kind(), fits[b as usize].cost,
                             union.model.kind(), union.chi2, union.cost
                         );
-                    }
-                    // Exact ties go to the lowest (a, b). `a` already runs in order, but `b`
-                    // comes from a HashMap, whose iteration order changes from run to run, so
-                    // without this a tie between two neighbours of one region would be
-                    // decided by the hasher. The same class of bug was fixed in `contour`,
-                    // `color` and `occlusion`.
-                    let better = match best {
-                        None => gain > 0.0,
-                        Some((g, ba, bb)) => gain > g || (gain == g && (a as u32, b) < (ba, bb)),
-                    };
-                    if better {
-                        best = Some((gain, a as u32, b));
+                        }
+                        // Exact ties go to the lowest (a, b). `a` already runs in order, but `b`
+                        // comes from a HashMap, whose iteration order changes from run to run, so
+                        // without this a tie between two neighbours of one region would be
+                        // decided by the hasher. The same class of bug was fixed in `contour`,
+                        // `color` and `occlusion`.
+                        let better = match best {
+                            None => gain > 0.0,
+                            Some((g, ba, bb)) => {
+                                gain > g || (gain == g && (a as u32, b) < (ba, bb))
+                            }
+                        };
+                        if better {
+                            best = Some((gain, a as u32, b));
+                        }
                     }
                 }
+                let Some((_, a, b)) = best else {
+                    if !inner_blends {
+                        break None;
+                    }
+                    let Some((set, fit)) =
+                        try_sets(&group, &members, &fits, &adj, &smooth, &alive, &mut tried)
+                    else {
+                        break None;
+                    };
+                    // The set's lowest id survives and takes the others one per round.
+                    let a = set[0];
+                    forced = set[1..].iter().rev().copied().collect();
+                    let b = forced.pop().expect("a set has three members");
+                    if mergedbg {
+                        eprintln!(
+                            "merge: set {set:?} -> {} chi2 {:.0}",
+                            fit.model.kind(),
+                            fit.chi2
+                        );
+                    }
+                    cache.insert((a, b), (fit.clone(), false));
+                    forced_at = (a, Some(fit));
+                    break Some((a, b));
+                };
+                if cache.get(&(a, b)).is_some_and(|(_, stale)| *stale) {
+                    // The winner was judged on a stale fit: refit it and choose again.
+                    let (ai, bi) = (a as usize, b as usize);
+                    let mut px: Vec<usize> =
+                        Vec::with_capacity(members[ai].len() + members[bi].len());
+                    px.extend_from_slice(&members[ai]);
+                    px.extend_from_slice(&members[bi]);
+                    let inner = smooth_pair(&adj, &smooth, ai, bi);
+                    cache.insert((a, b), (fit_group(&group, &px, a, b, inner), false));
+                    stale_refits += 1;
+                    continue;
+                }
+                break Some((a, b));
             }
-            let Some((_, a, b)) = best else { break None };
-            if cache.get(&(a, b)).is_some_and(|(_, stale)| *stale) {
-                // The winner was judged on a stale fit: refit it and choose again.
-                let (ai, bi) = (a as usize, b as usize);
-                let mut px: Vec<usize> = Vec::with_capacity(members[ai].len() + members[bi].len());
-                px.extend_from_slice(&members[ai]);
-                px.extend_from_slice(&members[bi]);
-                let inner = smooth_pair(&adj, &smooth, ai, bi);
-                cache.insert((a, b), (fit_group(&group, &px, a, b, inner), false));
-                stale_refits += 1;
-                continue;
-            }
-            break Some((a, b));
         };
         if timing {
             ns_stale += t_pick.elapsed().as_nanos() as u64;

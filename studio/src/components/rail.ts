@@ -28,7 +28,6 @@ export interface RailActions extends PaletteActions, AutoChoseActions {
   baseSettings(): Settings;
   traceNow(): void;
   cancel(): void;
-  snap(from: string, to: string): void;
   openExport(): void;
   copySvg(): void;
   saveCard(): void;

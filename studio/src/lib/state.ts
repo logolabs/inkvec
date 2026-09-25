@@ -23,6 +23,7 @@ import type {
   Report,
   Settings,
   SourceFacts,
+  Snap,
   SourceInfo,
   Stage,
   Traced,
@@ -114,6 +115,12 @@ export interface State {
   /** The drawing as it is painted now: the trace's own SVG, or one with snapped fills. */
   svg: string | null;
   palette: Ink[];
+  /**
+   * The inks the user has snapped to colours of their choosing, for this image. Applied to
+   * every trace that lands, so a moved control, a colour group or the export's own fresh
+   * trace keeps them; like the colour groups, emptied when another image is opened.
+   */
+  snaps: Snap[];
   /**
    * Colours the user has asked to be drawn as one, for this image. Sent with every trace;
    * never saved with the preferences or a preset, never given to a batch, and emptied when
@@ -243,6 +250,7 @@ export function initial(settings: Settings, minify: MinifySettings): State {
     previous: null,
     svg: null,
     palette: [],
+    snaps: [],
     colourGroups: [],
     groupSuggestions: null,
     resultGroups: [],

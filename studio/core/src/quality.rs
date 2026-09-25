@@ -980,7 +980,7 @@ fn id_document(svg: &str, inks: &[Ink], code: &IdColours) -> String {
 
 /// The document with every ` name="value"` attribute's value passed through `f`; `None`
 /// keeps it as it was.
-fn rewrite_attr(svg: &str, name: &str, f: impl Fn(&str) -> Option<String>) -> String {
+pub(crate) fn rewrite_attr(svg: &str, name: &str, f: impl Fn(&str) -> Option<String>) -> String {
     let needle = format!(" {name}=\"");
     let mut out = String::with_capacity(svg.len());
     let mut from = 0;

@@ -166,6 +166,8 @@ def embedded(browser, url: str, out: pathlib.Path, note) -> None:
     page.set_content(f"<body style='margin:0'><iframe src='{url}' style='border:0;width:100vw;height:100vh'></iframe></body>")
     frame = page.frame_locator("iframe")
     frame.locator("[data-ctl=own-tab]").wait_for(timeout=60_000)
+    frame.locator("button.sample img").first.wait_for(timeout=30_000)
+    page.wait_for_timeout(1500)
     note(f"embedded: own-tab button shown; full screen button {'shown' if frame.locator('[data-ctl=fullscreen]').count() else 'hidden (frame not allowed)'}")
     page.screenshot(path=str(out / "11-embedded.png"))
     page.goto("about:blank")
@@ -285,7 +287,10 @@ def main() -> None:
             if a.url_single:
                 results["single"] = bench(br, a.url_single, imgs, note, "one core")
             (out / "bench.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
-        br.close()
+        try:
+            br.close()
+        except Exception:  # noqa: BLE001 - the old driver can fail to close a page with workers
+            pass
     logfile.close()
 
 

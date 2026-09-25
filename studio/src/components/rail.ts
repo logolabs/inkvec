@@ -13,6 +13,7 @@
 import { fill, h, icon, s } from "../lib/dom";
 import { bytes, count, de00, modKey, percent, plannedTracePx, seconds, type Store } from "../lib/state";
 import type { Control, Loss, Report, Settings, Stage } from "../lib/ipc";
+import { WEB } from "../lib/platform";
 import { closeOverlay, modal, openModal, tip, toast } from "./overlays";
 import { paletteCard, wirePaletteHover, type PaletteActions } from "./palette";
 import { autoChose, hasAutoNews, type AutoChoseActions } from "./autochose";
@@ -187,7 +188,13 @@ function modesBlock(store: Store, act: RailActions): HTMLElement[] {
       tip(h("span.modetitle", { tabindex: "0" }, "Denoiser"), help("cleanUpDamage")),
       missing
         ? h("button.reset", { onclick: act.openDenoiser, title: "It runs on this computer; nothing is uploaded" }, "Download it")
-        : h("span.modestate", null, supported ? captions[mode] : "not in this build"),
+        : h(
+            "span.modestate",
+            // In a browser the denoiser needs a cross-origin isolated page; the Space's own
+            // tab is one, its embedding frame may not be.
+            null,
+            supported ? captions[mode] : WEB ? "needs its own tab" : "not in this build",
+          ),
     ),
     h(
       "div.seg.big",

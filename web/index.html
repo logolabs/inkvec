@@ -134,7 +134,7 @@ h1{font-size:clamp(32px,4.6vw,52px);line-height:1.06;letter-spacing:-.025em;font
 .bignum .v small{font-family:var(--font-body);font-size:15px;color:var(--dim);font-weight:500}
 .bignum .s{font-size:12.5px;color:var(--dim)}
 .bars{background:var(--card);border:1px solid var(--rule);border-radius:var(--radius);padding:6px 16px 14px;box-shadow:var(--shadow);overflow-x:auto}
-.bars table{width:100%;border-collapse:collapse;font-size:12.5px;white-space:nowrap}
+.bars table{width:100%;margin-bottom:10px;border-collapse:collapse;font-size:12.5px;white-space:nowrap}
 .bars caption{text-align:left;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);padding:12px 0 8px}
 .bars th,.bars td{padding:8px 8px;text-align:right;border-bottom:1px solid var(--rule2)}
 .bars th:first-child,.bars td:first-child{text-align:left;white-space:normal;min-width:170px}
@@ -195,7 +195,7 @@ footer .v{margin-left:auto}
 
 <section class="sec" id="showcase">
   <h2>Before and after, with the geometry showing</h2>
-  <p class="lede" id="showlede">Brand logos, a brand icon and emoji, each rendered from its source file and traced by Inkvec and by the other engines at their best settings. The raster on the left, a trace on the right, moving together as you zoom. Switch the right side between engines, or the view to a wipe or an A/B flick. <b>Anchors</b> shows every on-curve point; <b>Handles</b> adds each curve's control points with their tangents.</p>
+  <p class="lede" id="showlede">Twenty real brand logos, and the benchmark's logos, icons and emoji, each rendered from its source file and traced by Inkvec (the current build) and by the other engines. The raster on the left, a trace on the right, moving together as you zoom. Switch the right side between engines, or the view to a wipe or an A/B flick. <b>Anchors</b> shows every on-curve point; <b>Handles</b> adds each curve's control points with their tangents.</p>
   <div class="gal"><div class="cases" id="cases"></div><div><div class="tools" id="galtools"></div><div class="viewer" id="galview"></div><div class="chips" id="galchips"></div></div></div>
 </section>
 
@@ -379,40 +379,52 @@ document.addEventListener('keydown', e => { if (e.code === 'Space' && hot && !e.
 document.addEventListener('keyup', e => { if (e.code === 'Space' && hot) hot.flick('left'); });
 
 // ---------------------------------------------------------------- showcase + results
-// Every number below is read from showcase.json, which tools/showcase_data.py writes from the
-// competitor run's own results.json; nothing is typed in here.
+// Every number below is read from showcase.json, which tools/showcase_data.py writes: Inkvec
+// traced afresh by the build named in it, the other engines' traces and scores from their
+// recorded runs. A case's raster and SVGs are in showcase/<key>.json, fetched when opened.
 const SHORT = {"inkvec": "Inkvec", "vtracer-1.0-simplify": "VTracer 1.0, best flags", "trazor-auto": "Trazor", "vtracer-1.0-default": "VTracer 1.0", "vtracer-default": "VTracer 0.6"};
 async function load(){
   let d;
   try { d = await (await fetch('showcase.json')).json(); } catch (e) { $("showlede").textContent = 'The showcase data could not be loaded.'; return; }
   gallery(d); results(d);
 }
+const caseData = new Map();
+function fetchCase(key){
+  if (!caseData.has(key)) caseData.set(key, fetch(`showcase/${key}.json`).then(r => r.json()));
+  return caseData.get(key);
+}
 function gallery(d){
   const v = viewer($("galview"));
   $("galview").addEventListener('pointerenter', () => hot = v);
   $("galview").addEventListener('pointerleave', () => hot = null);
-  let at = 0, other = 'inkvec', layer = 'fill', layers = null;
-  const engines = Object.keys(d.gallery[0].engines);
-  const apply = () => {
-    const c = d.gallery[at];
-    const ours = vectorLayer(c.engines.inkvec.svg);
-    const right = other === 'inkvec' ? ours : vectorLayer(c.engines[other].svg);
+  let set = d.sets[0], at = 0, other = 'inkvec', layer = 'fill', layers = null, token = 0;
+  const apply = async () => {
+    const c = set.cases[at], mine = ++token;
+    for (const [i, b] of [...$("cases").children].entries()) b.setAttribute('aria-pressed', String(i === at));
+    const body = await fetchCase(c.key);
+    if (mine !== token) return;
+    const ours = vectorLayer(body.svg.inkvec);
+    const right = other === 'inkvec' ? ours : vectorLayer(body.svg[other]);
     layers = other === 'inkvec' ? [ours] : [ours, right];
     for (const x of layers) x.set(layer);
-    if (other === 'inkvec'){ v.setLeft(imgLayer(c.input), 'raster'); v.setRight(ours.root, `inkvec · ${ours.anchors} anchors`); }
+    if (other === 'inkvec'){ v.setLeft(imgLayer(body.input), 'raster'); v.setRight(ours.root, `inkvec · ${ours.anchors} anchors`); }
     else { v.setLeft(ours.root, `inkvec · ${ours.anchors} anchors`); v.setRight(right.root, `${SHORT[other]} · ${right.anchors} anchors`); }
-    const m = c.engines.inkvec, w = c.engines[other];
+    const m = c.m.inkvec, w = c.m[other];
     $("galchips").innerHTML = `<span class="chip win">Inkvec dE00 <b>${fmt(m.de1024,3)}</b></span><span class="chip win"><b>${m.paths}</b> paths · <b>${m.coordinates}</b> coordinates · <b>${(m.bytes/1024).toFixed(1)} KB</b></span>` +
       (other === 'inkvec' ? '' : `<span class="chip vt">${esc(SHORT[other])} dE00 <b>${fmt(w.de1024,3)}</b></span><span class="chip vt"><b>${w.paths}</b> paths · <b>${w.coordinates}</b> coordinates · <b>${(w.bytes/1024).toFixed(1)} KB</b></span>`) +
       `<span class="chip vt">the artist's file: <b>${c.artist.paths}</b> paths · <b>${c.artist.coordinates}</b> coordinates</span>`;
-    for (const [i, b] of [...$("cases").children].entries()) b.setAttribute('aria-pressed', String(i === at));
   };
-  d.gallery.forEach((c, i) => {
-    const b = el('button', 'case', `<span class="th"><img src="${c.input}" alt=""></span><span class="nm">${esc(c.label)}</span><span class="wh">${esc(c.what)}</span>`);
-    b.addEventListener('click', () => { at = i; apply(); });
-    $("cases").appendChild(b);
-  });
+  const list = () => {
+    $("cases").innerHTML = '';
+    set.cases.forEach((c, i) => {
+      const b = el('button', 'case', `<span class="th"><img src="${c.thumb}" alt="" loading="lazy"></span><span class="nm">${esc(c.label)}</span><span class="wh">${esc(c.what)}</span>`);
+      b.addEventListener('click', () => { at = i; apply(); });
+      $("cases").appendChild(b);
+    });
+  };
+  const engines = d.gallery_engines;
   const t = $("galtools");
+  t.append(el('span', 'lbl', 'set'), seg(d.sets.map((s, i) => [s.id, `${s.label} (${s.cases.length})`, i === 0]), k => { set = d.sets.find(s => s.id === k); at = 0; list(); apply(); }));
   t.append(el('span', 'lbl', 'compare'), seg([['inkvec', 'raster · inkvec', true], ...engines.filter(e => e !== 'inkvec').map(e => [e, 'inkvec · ' + SHORT[e]])], k => { other = k; apply(); }));
   t.append(el('span', 'lbl', 'view'), seg([['side','Side by side',true],['wipe','Wipe'],['flick','A / B']], m => v.setMode(m)));
   const fl = el('button', '', 'Flick'); fl.title = 'Hold to show the other side (or hold Space over the viewer)';
@@ -421,22 +433,23 @@ function gallery(d){
   t.append(el('span', 'lbl', 'show'), seg([['fill','Fill',true],['wire','Wireframe'],['anchor','Anchors'],['handle','Handles']], L => { layer = L; for (const x of layers || []) x.set(L); }));
   const z = el('div', 'seg'); for (const k of [1, 4, 12]){ const b = el('button', '', k + '×'); b.addEventListener('click', () => v.zoom(k)); z.appendChild(b); } t.append(el('span', 'lbl', 'zoom'), z);
   t.append(el('span', 'legend', '<span><i style="background:var(--anchor)"></i>anchor</span><span><i style="background:var(--handle)"></i>control point &amp; tangent</span>'));
-  apply();
+  list(); apply();
 }
+const table = (rows, caption) => `<table><caption>${caption}</caption><thead><tr><th>engine</th><th>mean dE00</th><th>median dE00</th><th>DISTS</th><th>DINO</th><th>geometry</th><th>coords</th><th>seconds</th></tr></thead><tbody>` +
+  rows.map(r => `<tr class="${r.id === 'inkvec' ? 'win' : ''}"><td>${esc(r.name)}</td><td class="mono">${fmt(r.de_mean,3)}</td><td class="mono">${fmt(r.de_median,3)}</td><td class="mono">${fmt(r.dists,4)}</td><td class="mono">${fmt(r.dino,4)}</td><td class="mono">${fmt(r.geometry_mean,2)}&times;</td><td class="mono">${Math.round(r.coordinates)}</td><td class="mono">${fmt(r.seconds_median,2)}</td></tr>`).join('') +
+  `</tbody></table>`;
 function results(d){
   const us = d.engines.find(e => e.id === 'inkvec'), tz = d.engines.find(e => e.id === 'trazor-auto'), vt = d.engines.find(e => e.id === 'vtracer-default');
-  const wins = d.best_de_wins.inkvec || 0;
-  $("versuslede").innerHTML = `${d.cases} cases &mdash; real icons and emoji across ${d.families.filter(f => f !== 'brands' && f !== 'synthetic').length} families, synthetic probes and real brand logos, the selection fixed from the seed <code>${esc(d.seed)}</code> &mdash; each rendered from its source SVG, traced by every engine and scored against the render: CIEDE2000 colour difference, DISTS and DINOv3 perceptual similarity, and geometry against the artist's own file (1.00&times; is exactly the artist's number of parameters). Inkvec had the lowest colour difference on <b>${wins} of ${d.cases}</b>. VTracer is the widely used open-source tracer and the fastest thing here by far; that trade-off is shown too.`;
+  const wins = d.best_de_wins.inkvec || 0, b = d.brands, bwins = b.best_de_wins.inkvec || 0;
+  $("versuslede").innerHTML = `${d.cases} cases &mdash; real icons and emoji across ${d.families.filter(f => f !== 'brands' && f !== 'synthetic').length} families, synthetic probes and real brand logos, the selection fixed from the seed <code>${esc(d.seed)}</code> &mdash; each rendered from its source SVG, traced by every engine and scored against the render: CIEDE2000 colour difference, DISTS and DINOv3 perceptual similarity, and geometry against the artist's own file (1.00&times; is exactly the artist's number of parameters). Inkvec had the lowest colour difference on <b>${wins} of ${d.cases}</b>, and on <b>${bwins} of ${b.cases}</b> of the brand logos in the gallery. VTracer is the widely used open-source tracer and the fastest thing here by far; that trade-off is shown too.`;
   $("bignums").innerHTML = [
     ['colour difference, dE00', `${fmt(us.de_mean,3)} <small>mean</small>`, `median ${fmt(us.de_median,3)}; ${(tz.de_mean/us.de_mean).toFixed(1)}&times; lower than Trazor, ${(vt.de_mean/us.de_mean).toFixed(0)}&times; lower than VTracer (under 1 is invisible)`],
     ['geometry vs the artist', `${fmt(us.geometry_mean,2)}&times; <small>mean</small>`, `median ${fmt(us.geometry_median,2)}&times;; Trazor ${fmt(tz.geometry_mean,2)}&times;, VTracer ${fmt(vt.geometry_mean,2)}&times; (1.00&times; is the artist's own file)`],
     ['DINOv3 similarity', `${fmt(us.dino,4)}`, `1 is identical; DISTS ${fmt(us.dists,4)} (Trazor ${fmt(tz.dists,4)}, VTracer ${fmt(vt.dists,4)}; lower is better)`],
     ['seconds per case', `${fmt(us.seconds_median,2)} <small>median</small>`, `native command line; VTracer ${fmt(vt.seconds_median,2)} s, Trazor ${fmt(tz.seconds_median,2)} s`],
   ].map(([k, val, sub]) => `<div class="bignum"><div class="k">${k}</div><div class="v">${val}</div><div class="s">${sub}</div></div>`).join('');
-  $("bars").innerHTML = `<table><caption>${d.cases} cases, ${esc(d.date)}</caption><thead><tr><th>engine</th><th>mean dE00</th><th>median dE00</th><th>DISTS</th><th>DINO</th><th>geometry</th><th>coords</th><th>seconds</th></tr></thead><tbody>` +
-    d.engines.map(r => `<tr class="${r.id === 'inkvec' ? 'win' : ''}"><td>${esc(r.name)}</td><td class="mono">${fmt(r.de_mean,3)}</td><td class="mono">${fmt(r.de_median,3)}</td><td class="mono">${fmt(r.dists,4)}</td><td class="mono">${fmt(r.dino,4)}</td><td class="mono">${fmt(r.geometry_mean,2)}&times;</td><td class="mono">${Math.round(r.coordinates)}</td><td class="mono">${fmt(r.seconds_median,2)}</td></tr>`).join('') +
-    `</tbody></table>`;
-  $("vtnote").innerHTML = `Means over the ${d.cases} cases, except seconds (median, measured on a machine doing other work at the same time; treat them as approximate). Source: <code>out/${esc(d.run)}/results.json</code>, written by <code>bench/crosscompare_competitors.py</code>; this page's figures are computed from it by <code>tools/showcase_data.py</code>. Method and every case: the <a href="https://github.com/logolabs/inkvec#results" target="_blank" rel="noopener noreferrer">README</a>.`;
+  $("bars").innerHTML = table(d.engines, `${d.cases} benchmark cases`) + table(b.engines, `${b.cases} brand logos (the gallery's brand set)`);
+  $("vtnote").innerHTML = `Means over the cases, except seconds (median, measured on a machine doing other work at the same time; treat them as approximate). Inkvec was traced by the current build (<code>${esc(d.inkvec.git)}</code>, ${esc(d.traced)}); the other engines have not changed, so their traces and scores are from their recorded runs (the benchmark's on ${esc(d.date)}, <code>out/${esc(d.run)}/results.json</code> from <code>bench/crosscompare_competitors.py</code>). The brand logos are twenty real marks from an external dataset, not part of the repository, rendered and scored the same way. All of it is computed by <code>tools/showcase_data.py</code>. Method and every case: the <a href="https://github.com/logolabs/inkvec#results" target="_blank" rel="noopener noreferrer">README</a>.`;
 }
 load();
 </script>

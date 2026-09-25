@@ -46,15 +46,24 @@ def main() -> None:
              f"{page.locator('#bars tbody tr').count()} table rows, first row {page.inner_text('#bars tbody tr >> nth=0')!r}")
         page.locator("#new").scroll_into_view_if_needed()
         page.screenshot(path=str(out / "L2-whats-new.png"))
+        # The brand set first: a few of the restored logos, then SCM and Princess from the
+        # benchmark set, each Inkvec against VTracer 1.0 at its best flags.
         page.locator("#showcase").scroll_into_view_if_needed()
+        shots = [("brands", 0, "L3a-brand-365retail"), ("brands", 1, "L3b-brand-115animal"), ("brands", 3, "L3c-brand-abrinor"),
+                 ("bench", 1, "L3d-scm"), ("bench", 4, "L3e-princess")]
+        for set_id, nth, name in shots:
+            page.click(f'#galtools [data-k="{set_id}"]')
+            page.click(f"#cases .case >> nth={nth}")
+            page.click('#galtools button:has-text("inkvec · VTracer 1.0, best flags")')
+            page.wait_for_timeout(700)
+            page.locator("#showcase").scroll_into_view_if_needed()
+            page.screenshot(path=str(out / f"{name}.png"))
+            note(f"gallery {name}: {page.inner_text('#galchips')!r}".replace("\n", " "))
         page.click('#galtools button:has-text("Handles")')
-        page.click('#cases .case >> nth=1')
-        page.click('#galtools button:has-text("inkvec · VTracer 1.0, best flags")')
         page.click('#galtools button:has-text("4×")')
         page.wait_for_timeout(500)
         page.locator("#showcase").scroll_into_view_if_needed()
-        page.screenshot(path=str(out / "L3-gallery.png"))
-        note(f"gallery chips: {page.inner_text('#galchips')!r}")
+        page.screenshot(path=str(out / "L3f-princess-handles.png"))
         page.locator("#versus").scroll_into_view_if_needed()
         page.wait_for_timeout(300)
         page.screenshot(path=str(out / "L4-results.png"))
@@ -91,7 +100,14 @@ def main() -> None:
         page.wait_for_selector(".sc-case", timeout=30_000)
         page.wait_for_timeout(600)
         page.screenshot(path=str(out / "L7-studio-showcase.png"))
-        note(f"Studio Lite showcase: {page.locator('.sc-case').count()} cases")
+        note(f"Studio Lite showcase: {page.locator('.sc-case').count()} cases in the first set")
+        page.click('.sc-tools [data-k="bench"]')
+        page.click(".sc-case >> nth=1")
+        page.wait_for_timeout(700)
+        page.screenshot(path=str(out / "L8-studio-showcase-scm.png"))
+        page.click(".sc-case >> nth=4")
+        page.wait_for_timeout(700)
+        page.screenshot(path=str(out / "L9-studio-showcase-princess.png"))
 
         note(f"errors: {[e for e in errors if 'favicon' not in e][:6]}")
         try:

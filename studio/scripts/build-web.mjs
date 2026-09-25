@@ -7,7 +7,7 @@
 //   node scripts/build-web.mjs --skip-wasm  # reuse the WebAssembly already in web/public
 //
 // Output: studio/dist-web/
-//   index.html, showcase.json, favicon.svg, fonts/   the presentation page (web/index.html),
+//   index.html, showcase.json, showcase/, favicon.svg, fonts/   the presentation page (web/index.html),
 //                                                    its gallery data (tools/showcase_data.py)
 //   README.md                                        the Space's card (web/README.md here)
 //   studio/                                          Inkvec Studio Lite: the bundled interface,
@@ -144,6 +144,8 @@ run("npx", ["vite", "build", "--mode", "web"], { INKVEC_WASM_TOKEN: token });
 // Space's card: its front matter asks Hugging Face for the isolation headers.
 cpSync(join(ROOT, "web", "index.html"), join(OUT, "index.html"));
 cpSync(join(ROOT, "web", "showcase.json"), join(OUT, "showcase.json"));
+// Each gallery case's raster and SVGs, fetched only when the case is opened.
+cpSync(join(ROOT, "web", "showcase"), join(OUT, "showcase"), { recursive: true });
 cpSync(join(ROOT, "web", "favicon.svg"), join(OUT, "favicon.svg"));
 cpSync(join(STUDIO, "public", "fonts"), join(OUT, "fonts"), { recursive: true });
 cpSync(join(STUDIO, "web", "README.md"), join(OUT, "README.md"));
@@ -168,7 +170,7 @@ const size = (p) => {
 const mb = (n) => `${(n / 1024 / 1024).toFixed(2)} MB`;
 console.log(`\nThe Space built into ${OUT}`);
 console.log(`  token            ${token}`);
-console.log(`  landing          ${mb(size(join(OUT, "index.html")) + size(join(OUT, "showcase.json")) + size(join(OUT, "fonts")))}`);
+console.log(`  landing          ${mb(size(join(OUT, "index.html")) + size(join(OUT, "showcase.json")) + size(join(OUT, "showcase")) + size(join(OUT, "fonts")))}`);
 console.log(`  studio/pkg       ${mb(size(join(APP, "pkg")))}`);
 console.log(`  studio/pkg-thr.  ${mb(size(join(APP, "pkg-threads")))}`);
 console.log(`  studio/assets    ${mb(size(join(APP, "assets")))}`);

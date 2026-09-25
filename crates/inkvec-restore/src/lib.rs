@@ -260,7 +260,11 @@ fn file_sha256(path: &std::path::Path) -> std::io::Result<String> {
         }
         hasher.update(&buf[..n]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
 }
 
 /// Refuse a weights file whose contents do not match the published model. This is what makes

@@ -21,6 +21,7 @@ import { bytes, type Store } from "../lib/state";
 import { closeOverlay, confirm, modal, openModal, toast } from "../components/overlays";
 import { windowControls } from "../components/wincontrols";
 import { openHelp } from "../components/help";
+import { showcaseScreen } from "./showcase";
 
 export interface ScreenActions {
   applyPrefs(patch: Partial<Prefs>): void;
@@ -38,7 +39,14 @@ export function createScreens(store: Store, act: ScreenActions): HTMLElement {
       return;
     }
     host.style.display = "";
-    fill(host, st.screen === "settings" ? settings(store, act) : about(store, act));
+    fill(
+      host,
+      st.screen === "settings"
+        ? settings(store, act)
+        : st.screen === "showcase"
+          ? showcaseScreen(store, act.close)
+          : about(store, act),
+    );
   };
 
   store.on(["screen", "prefs", "caps"], render);
@@ -488,6 +496,11 @@ function about(store: Store, act: ScreenActions): HTMLElement {
                 "This is the browser edition. The desktop app, Inkvec Studio, is the same interface with folders of images traced in one go, the command line, the right-click menu and traces up to 16384 px.",
               )
             : null,
+          h(
+            "button.btn.compact",
+            { style: { alignSelf: "flex-start" }, onclick: () => store.set({ screen: "showcase" }) },
+            "Before and after on real logos: the showcase",
+          ),
           h(
             "div",
             { style: { display: "flex", gap: "18px", fontSize: "13px", flexWrap: "wrap" } },

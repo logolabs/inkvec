@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Upload Inkvec Studio Lite (studio/dist-web) to its Hugging Face Space.
+"""Upload the Space (studio/dist-web: the presentation page, Inkvec Studio Lite under studio/).
 
     python studio/scripts/deploy-space.py                      # dry run: what would go up
     python studio/scripts/deploy-space.py --yes                # upload to Logolabs/inkvec
@@ -30,14 +30,19 @@ SITE = STUDIO / "dist-web"
 
 # Everything the page needs on its first load. A build missing one of these is broken.
 REQUIRED = [
+    # The presentation page, at the root.
     "index.html",
+    "showcase.json",
     "README.md",
-    "denoise.js",
-    "pkg/inkvec_studio_wasm.js",
-    "pkg/inkvec_studio_wasm_bg.wasm",
-    "pkg-threads/inkvec_studio_wasm.js",
-    "pkg-threads/inkvec_studio_wasm_bg.wasm",
-    "samples/flat-logo.png",
+    # Inkvec Studio Lite, under studio/.
+    "studio/index.html",
+    "studio/denoise.js",
+    "studio/pkg/inkvec_studio_wasm.js",
+    "studio/pkg/inkvec_studio_wasm_bg.wasm",
+    "studio/pkg-threads/inkvec_studio_wasm.js",
+    "studio/pkg-threads/inkvec_studio_wasm_bg.wasm",
+    "studio/samples/flat-logo.png",
+    "studio/guide/index.html",
 ]
 
 
@@ -59,7 +64,7 @@ def main() -> int:
     ap.add_argument("--dir", default=str(SITE), help="the built site")
     ap.add_argument("--yes", action="store_true", help="actually upload")
     ap.add_argument("--keep-stale", action="store_true", help="leave remote files the build does not have")
-    ap.add_argument("--message", default="Inkvec Studio Lite: the Studio in the browser")
+    ap.add_argument("--message", default="Inkvec 0.2: the presentation page, and Inkvec Studio Lite under studio/")
     a = ap.parse_args()
 
     site = Path(a.dir)

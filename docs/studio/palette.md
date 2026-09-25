@@ -28,19 +28,19 @@ Snapping rewrites the fills only; it does not trace again, so it is instant and 
 change. The ink's row then says *snapped* with the colour difference between what was measured and
 what you chose. The popover says it plainly: you are overriding a measurement.
 
-A snap belongs to the drawing on screen. Any new trace measures the colours again and replaces it,
-so snap last. **In version 0.2.0, Export is one of those traces**: it always runs a fresh full
-trace first, and the files it writes carry the measured colours, not the snapped ones. To keep
-snapped colours, use **Copy SVG** (or the comparison card), which take the drawing exactly as it is
-on screen, or give the colours to a [colour group](#colour-groups) with a **Custom…** colour, which
-is a setting and survives every trace.
+A snap belongs to the image, not to one trace. Any new trace measures the colours again, and your
+snaps are applied to it as it lands: a moved control, a colour group and Export's own fresh trace
+all keep them, and the files Export writes carry the snapped colours. A snap finds its ink again
+even when the new trace measures it a hair differently; one whose ink is gone (merged into another
+by a colour group, say) is dropped. Snap an ink back to its traced colour to undo it. Opening
+another image starts without snaps.
 
 A gradient cannot be snapped: it has no single colour. Its row shows how many stops it has.
 
 ## Paste a brand palette
 
-**Paste brand palette** takes a list of colours, one per line, as hex (`#12443E`), RGB or CSS
-custom properties (`--brand-green: #12443E;`). Each flat ink of the drawing is then matched to the
+**Paste brand palette** takes a list of colours, one per line or separated by commas, as hex
+(`#12443E`), RGB (`rgb(207, 198, 180)`) or CSS custom properties (`--brand-green: #12443E;`). Each flat ink of the drawing is then matched to the
 nearest colour you pasted. The preview lists every match with its colour difference: *exact* when
 the two are indistinguishable, green under 0.5 dE00, gold above. **Snap** applies them all.
 
@@ -49,12 +49,11 @@ Two things to know:
 - *Every* flat ink is snapped to its nearest pasted colour, including inks that are far from all of
   them. Paste every colour the design has (its white and black too), and check the gold rows before
   you press Snap.
-- In version 0.2.0, write RGB with spaces, `rgb(207 198 180)`. Commas also separate colours in the
-  pasted text, so `rgb(207, 198, 180)` is split apart and misread.
+- Hex needs its `#` unless it has six digits: `bad` or `add` are read as words, not colours.
 
 This is the quickest fix for a logo traced from a JPEG or a screenshot, whose colours carry the
 compression's error: paste the brand's real values and every ink lands on them. Pasted colours are
-snaps, so the note above applies: take the result with **Copy SVG**.
+snaps, so they reach every file Export writes.
 
 ## Colour groups
 

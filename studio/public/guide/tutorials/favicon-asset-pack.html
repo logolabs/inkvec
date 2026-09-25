@@ -16,9 +16,9 @@ SVG, a minified SVG, PNGs at three sizes, a favicon, a palette, and a zip holdin
 README. About five minutes.</p>
 <h2 id="1-start-from-the-right-image">1. Start from the right image</h2>
 <p>A favicon is drawn at 16 by 16 pixels in a browser tab. At that size a wordmark is a grey smudge;
-use the <strong>symbol</strong> on its own. And the export's PNG and favicon files are square (in version 0.2.0
-a non-square drawing is stretched to fill them), so the image should be <strong>square</strong>, with the mark
-centred. If your logo is wide, crop the symbol to a square in any image editor first.</p>
+use the <strong>symbol</strong> on its own. And the favicon files are square (a non-square drawing is centred in
+them, with transparent space around it), so the image should be <strong>square</strong>, with the mark centred.
+If your logo is wide, crop the symbol to a square in any image editor first.</p>
 <p>A PNG with a transparent background is best. A JPEG works too; see
 <a href="jpeg-logo.html">Clean up a JPEG logo</a> first.</p>
 <h2 id="2-open-and-trace-it">2. Open and trace it</h2>
@@ -86,8 +86,8 @@ is, and, if the trace could not recover something (lettering as outlines, JPEG c
 <p>For the colours as CSS custom properties instead, use <strong>Copy all as CSS</strong> in the palette.</p>
 <h2 id="variations">Variations</h2>
 <ul>
-<li><strong>A wide logo as well.</strong> Trace the full logo separately and take its SVG; skip the PNG rows
-  (they would be stretched square) and render PNGs from the SVG in your design tool.</li>
+<li><strong>A wide logo as well.</strong> Trace the full logo separately and export it; its PNGs keep its
+  proportions (512, 1024 and 2048 px wide).</li>
 <li><strong>A dark-mode favicon.</strong> Trace a light version of the mark, or edit the colours in the SVG.</li>
 <li><strong>Only the SVG.</strong> <strong>Copy SVG</strong> at the foot of the rail puts it on the clipboard without writing
   any files.</li>

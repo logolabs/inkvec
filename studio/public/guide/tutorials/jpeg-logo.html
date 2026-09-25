@@ -73,16 +73,15 @@ lower it, or lower <strong>Precision</strong>.</p>
 still a measurement. If you know the brand's real values:</p>
 <ol>
 <li>In the palette, press <strong>Paste brand palette</strong>.</li>
-<li>Paste the colours, one per line, as hex (<code>#12443E</code>) or CSS variables. Include every colour the
+<li>Paste the colours, one per line, as hex (<code>#12443E</code>), RGB or CSS variables. Include every colour the
    logo uses, white and black too: every ink is matched to its nearest pasted colour.</li>
 <li>Check the preview. A gold figure means a large move; make sure it is the right colour.</li>
 <li>Press <strong>Snap</strong>.</li>
 </ol>
 <h2 id="7-take-it-out">7. Take it out</h2>
-<p>Snapped colours live on the drawing on screen. In version 0.2.0, <strong>Export</strong> re-traces first and
-writes the measured colours, so after snapping use <strong>Copy SVG</strong> and paste the drawing where it is
-going. If you did not snap, <strong>Export</strong> (or <kbd>Ctrl</kbd>+<kbd>E</kbd>) writes the SVG, a minified
-copy, PNGs and an asset pack; see <a href="../export.html">Export</a>.</p>
+<p><strong>Export</strong> (or <kbd>Ctrl</kbd>+<kbd>E</kbd>) writes the SVG, a minified copy, PNGs and an asset
+pack, all in the snapped colours; see <a href="../export.html">Export</a>. <strong>Copy SVG</strong> puts the drawing on the
+clipboard instead.</p>
 <p>The Result tab will still list <em>The source is a JPEG, so these colours carry its compression
 damage</em>. That is a fact about the file you started from, and it goes into the asset pack's README
 so whoever uses the files knows to check the colours.</p>

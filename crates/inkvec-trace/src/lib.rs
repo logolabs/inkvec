@@ -46,6 +46,7 @@ pub mod native;
 pub mod occlusion;
 pub mod planar;
 pub mod regions;
+pub mod regroup;
 pub mod regularize;
 pub mod symmetry;
 pub mod taper;

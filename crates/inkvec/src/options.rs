@@ -98,6 +98,9 @@ pub struct Options {
     /// Shape-equivalence threshold for harmonization: the outline similarity (IoU after affine normalisation) above which two marks count as the same shape.
     #[schemars(range(min = 0, max = 1))]
     pub harmonize_threshold: f64,
+
+    /// Colour groups: fills to draw as one, so the shapes between them join rather than being recoloured. Empty (the default) changes nothing. Groups are separated by ';' and members by ','; a member is a colour '#rrggbb' as it appears in a trace of the same image, or a gradient written as its stop colours joined by '>'. An optional '=' says what the group becomes: '=#rrggbb' a flat colour, '=@n' its n-th member (1-based; a gradient there is refitted over the whole group); without it, the member covering the most of the image. Example: '#c0392b,#e74c3c;#f00>#00f,#0a0=@1'. A group costs one extra trace.
+    pub merge_colors: String,
 }
 
 impl Default for Options {
@@ -121,6 +124,8 @@ impl Default for Options {
             content_units: a.content_units,
             harmonize: a.harmonize,
             harmonize_threshold: a.harmonize_threshold,
+            // The command line has no groups by default; a spec that parses to none.
+            merge_colors: String::new(),
         }
     }
 }
@@ -171,6 +176,8 @@ impl Options {
         for (name, prop) in props {
             check_number(name, value.get(name), prop)?;
         }
+        inkvec_cli::parse_color_groups(&self.merge_colors)
+            .map_err(|e| Error::InvalidOptions(format!("merge_colors: {e}")))?;
         Ok(())
     }
 
@@ -203,8 +210,11 @@ impl Options {
             content_units,
             harmonize,
             harmonize_threshold,
+            ref merge_colors,
         } = *self;
         inkvec_cli::Args {
+            // Validated before any trace; an invalid spec that got this far merges nothing.
+            merge_colors: inkvec_cli::parse_color_groups(merge_colors).unwrap_or_default(),
             precision,
             min_area,
             max_colors: colors as usize,
@@ -325,6 +335,8 @@ mod tests {
                 Value::Bool(b) => Value::Bool(!b),
                 Value::Number(n) if n.is_u64() => Value::from(n.as_u64().unwrap() + 1),
                 Value::Number(n) => Value::from(n.as_f64().unwrap() * 0.5 + 0.25),
+                // The only string option is `merge_colors`, a group spec.
+                Value::String(_) => Value::from("#c0392b,#e74c3c"),
                 other => panic!("no test value for {name} = {other}"),
             };
             let json = serde_json::json!({ name.as_str(): changed }).to_string();
@@ -355,6 +367,8 @@ mod tests {
             other => panic!("{j}: expected InvalidOptions, got {other:?}"),
         };
         assert!(err(r#"{"colours": 8}"#).contains("colours"));
+        assert!(err(r##"{"merge_colors": "#f00,#nope"}"##).contains("merge_colors"));
+        assert!(err(r##"{"merge_colors": "#f00,#00f=@9"}"##).contains("merge_colors"));
         assert!(err(r#"{"colors": 0}"#).contains("colors"));
         assert!(err(r#"{"colors": 5000}"#).contains("colors"));
         assert!(err(r#"{"colors": -1}"#).contains("u32"));

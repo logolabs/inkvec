@@ -374,6 +374,23 @@ pub(crate) fn run_color_impl(
 ) -> Result<(String, Vec<String>), Stop> {
     let opts = color_options(args);
     let mut sw = inkvec_trace::Stopwatch::start();
+    // Colour groups recolour the image, and everything after -- the trace and the fit that
+    // checks itself against the pixels -- sees the recoloured one. See `regroup`.
+    let regrouped;
+    let (img, merge_report) = if args.merge_colors.is_empty() {
+        (img, Vec::new())
+    } else {
+        // The groups name fills the caller saw in a trace, so they are found in one.
+        let first = inkvec_trace::trace_color_full_with_alpha(
+            img,
+            &opts,
+            alpha_src.map(|a| a.alpha.as_slice()),
+        );
+        let (out, outcomes) = regroup::apply(img, &first, &args.merge_colors);
+        sw.mark("merge_colors");
+        regrouped = out;
+        (&regrouped, merge_lines(&outcomes))
+    };
     let mut traced = inkvec_trace::trace_color_full_with_alpha(
         img,
         &opts,
@@ -381,7 +398,49 @@ pub(crate) fn run_color_impl(
     );
     guide(&mut traced);
     sw.mark("trace_total");
-    finish_color(img, args, cfg, alpha_src, traced)
+    let (svg, mut report) = finish_color(img, args, cfg, alpha_src, traced)?;
+    report.splice(0..0, merge_report);
+    Ok((svg, report))
+}
+
+/// One report line per colour group: what merged into what, and what matched nothing.
+fn merge_lines(outcomes: &[regroup::GroupOutcome]) -> Vec<String> {
+    let hex = |c: [f32; 3]| {
+        let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        format!("#{:02x}{:02x}{:02x}", b(c[0]), b(c[1]), b(c[2]))
+    };
+    outcomes
+        .iter()
+        .map(|o| {
+            let mut line = match (o.target, o.gradient) {
+                (Some(t), _) => {
+                    let fills: Vec<String> = o.merged.iter().map(|&c| hex(c)).collect();
+                    format!("merge colors  {} -> {}", fills.join(" + "), hex(t))
+                }
+                (None, true) => {
+                    let fills: Vec<String> = o.merged.iter().map(|&c| hex(c)).collect();
+                    format!("merge colors  {} -> one gradient", fills.join(" + "))
+                }
+                (None, false) => {
+                    "merge colors  group left alone (fewer than two fills found)".to_string()
+                }
+            };
+            if !o.unmatched.is_empty() {
+                let missing: Vec<String> = o
+                    .unmatched
+                    .iter()
+                    .map(|m| match m {
+                        regroup::Member::Flat(c) => hex(*c),
+                        regroup::Member::Gradient(s) => {
+                            s.iter().map(|&c| hex(c)).collect::<Vec<_>>().join(">")
+                        }
+                    })
+                    .collect();
+                line.push_str(&format!("; not found in the trace: {}", missing.join(", ")));
+            }
+            line
+        })
+        .collect()
 }
 
 /// Why the colour pipeline stopped before producing an SVG.

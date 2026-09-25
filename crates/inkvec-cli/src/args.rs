@@ -70,6 +70,9 @@ pub struct Args {
     pub merge_distance: f32,
     /// Maximum palette size.
     pub max_colors: usize,
+    /// Colours to draw as one: each group's inks become one ink before tracing, so the
+    /// shapes between them join. See [`inkvec_trace::regroup`].
+    pub merge_colors: Vec<inkvec_trace::regroup::InkGroup>,
     /// Only write the file; suppress other output.
     pub quiet: bool,
     /// Treat the intake as lossily compressed, so the palette's noise guard runs even
@@ -169,6 +172,7 @@ impl Default for Args {
             no_repair: false,
             merge_distance: inkvec_trace::color::DEFAULT_MERGE_DISTANCE,
             max_colors: 64,
+            merge_colors: Vec::new(),
             quiet: true,
             lossy: inkvec_sr::Mode::Auto,
             sr: inkvec_sr::Mode::Off,
@@ -307,6 +311,13 @@ OPTIONS:
                             (5-px squares fitted as circles, thin rings broken).
         --colors <n>        Maximum palette size                     [default: 64]
         --merge <f>         OKLab distance below which two colours are one ink [default: {merge_default}]
+        --merge-colors <groups>
+                            Draw several fills as one, so the shapes between them join:
+                            '#c0392b,#e74c3c;#2c3e50,#34495e' merges each ;-separated
+                            group into its most-used fill, '#aaa,#bbb=#ff0000' into the
+                            colour after =. A gradient is its stops joined by >, and
+                            '#f00>#00f,#0a0=@1' continues that gradient over the green.
+                            Colours are matched to the nearest ink
         --bilevel           Two-tone output (the Potrace-comparable mode)
         --no-gradients      Skip gradient fitting entirely and fill flat. A genuine
                             fast path: gradient fitting dominates runtime
@@ -500,12 +511,93 @@ fn parse_args_from(mut it: impl Iterator<Item = String>) -> Result<Args, String>
             "--no-repair" => a.no_repair = true,
             "--colors" => a.max_colors = parse_value(&mut it, "--colors")?,
             "--merge" => a.merge_distance = parse_value(&mut it, "--merge")?,
+            "--merge-colors" => {
+                a.merge_colors =
+                    parse_color_groups(&it.next().ok_or("--merge-colors needs groups")?)?
+            }
             other if other.starts_with('-') => return Err(format!("unknown option {other}")),
             other => input = Some(PathBuf::from(other)),
         }
     }
     a.input = input.ok_or("no input file")?;
     Ok(a)
+}
+
+/// `#a,#b;#c>#d,#e=@2`: groups separated by `;`, members within a group by `,`. A member is
+/// a colour, or a gradient written as its stop colours joined by `>`. An optional `=` says
+/// what the group becomes: `=#rrggbb` a flat colour, `=@n` the n-th member (1-based; a
+/// gradient there continues over the rest of the group); without it, the member covering
+/// the most of the image. Colours are `#rgb` or `#rrggbb`, `#` optional. Empty groups are
+/// skipped, so a trailing `;` is harmless.
+pub fn parse_color_groups(spec: &str) -> Result<Vec<inkvec_trace::regroup::InkGroup>, String> {
+    use inkvec_trace::regroup::{InkGroup, Member, Target};
+    let mut groups = Vec::new();
+    for part in spec.split(';') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let (members, target) = match part.split_once('=') {
+            Some((m, t)) => (m, Some(t.trim())),
+            None => (part, None),
+        };
+        let members = members
+            .split(',')
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+            .map(|m| {
+                let stops = m
+                    .split('>')
+                    .map(parse_hex_color)
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(if stops.len() == 1 {
+                    Member::Flat(stops[0])
+                } else {
+                    Member::Gradient(stops)
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        if members.is_empty() {
+            return Err(format!("--merge-colors group {part:?} names no colours"));
+        }
+        let target = match target {
+            None => Target::Auto,
+            Some(t) => match t.strip_prefix('@') {
+                Some(n) => match n.parse::<usize>() {
+                    Ok(k) if (1..=members.len()).contains(&k) => Target::Member(k - 1),
+                    _ => {
+                        return Err(format!(
+                            "--merge-colors target {t:?} is not a member of {part:?}"
+                        ))
+                    }
+                },
+                None => Target::Colour(parse_hex_color(t)?),
+            },
+        };
+        groups.push(InkGroup { members, target });
+    }
+    Ok(groups)
+}
+
+/// `#rgb` or `#rrggbb` (the `#` optional) as sRGB in `[0, 1]`.
+fn parse_hex_color(s: &str) -> Result<[f32; 3], String> {
+    let h = s.trim().trim_start_matches('#');
+    let digits: Vec<u8> = match h.len() {
+        3 => h
+            .chars()
+            .map(|c| c.to_digit(16).map(|d| (d * 17) as u8))
+            .collect::<Option<_>>(),
+        6 => (0..3)
+            .map(|k| u8::from_str_radix(h.get(2 * k..2 * k + 2)?, 16).ok())
+            .collect::<Option<_>>(),
+        _ => None,
+    }
+    .ok_or_else(|| format!("{s:?} is not a colour (want #rgb or #rrggbb)"))?;
+    Ok([
+        digits[0] as f32 / 255.0,
+        digits[1] as f32 / 255.0,
+        digits[2] as f32 / 255.0,
+    ])
 }
 
 /// Take the next argument as the value of `flag` and parse it. On failure the message names
@@ -573,5 +665,38 @@ mod tests {
         assert!(parse("logo.png --bogus")
             .unwrap_err()
             .contains("unknown option --bogus"));
+    }
+
+    #[test]
+    fn colour_groups_read_members_gradients_and_targets() {
+        use super::parse_color_groups;
+        use inkvec_trace::regroup::{Member, Target};
+        let red = [1.0, 0.0, 0.0];
+        let blue = [0.0, 0.0, 1.0];
+        let g = parse_color_groups("#f00,ff0000; #f00>#00f, #0000ff =@1 ;;#00f=#FF0000")
+            .expect("parses");
+        assert_eq!(g.len(), 3);
+        assert_eq!(g[0].members, vec![Member::Flat(red), Member::Flat(red)]);
+        assert_eq!(g[0].target, Target::Auto);
+        assert_eq!(
+            g[1].members,
+            vec![Member::Gradient(vec![red, blue]), Member::Flat(blue)]
+        );
+        assert_eq!(g[1].target, Target::Member(0));
+        assert_eq!(g[2].target, Target::Colour(red));
+        assert!(parse_color_groups("#f00,#00f=@3")
+            .unwrap_err()
+            .contains("not a member"));
+        assert!(parse_color_groups("#f00,#zz0000")
+            .unwrap_err()
+            .contains("not a colour"));
+        assert!(parse_color_groups("=#f00")
+            .unwrap_err()
+            .contains("names no colours"));
+        assert!(parse_color_groups("")
+            .expect("empty is no groups")
+            .is_empty());
+        let a = parse("logo.png --merge-colors #f00,#e00").expect("parses");
+        assert_eq!(a.merge_colors.len(), 1);
     }
 }

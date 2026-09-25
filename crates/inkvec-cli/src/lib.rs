@@ -36,7 +36,8 @@ mod seams;
 mod uncertainty;
 
 use alpha::{alpha_source, pixel_grid, AlphaSource, FaceAlpha};
-pub use args::Args;
+pub use args::{parse_color_groups, Args};
+pub use inkvec_trace::regroup;
 use args::{parse_args, usage};
 use emit::{emit_bilevel, emit_color, emit_decimals};
 use pathdata::fmt_fitted;

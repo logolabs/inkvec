@@ -180,12 +180,11 @@ impl Default for Settings {
             colour_merging: a.merge_distance as f64,
             flat_fills: a.no_gradients,
             black_and_white: a.bilevel,
-            // Off in the app, although the engine defaults to it: tracing the alpha
-            // channel gives every soft edge, shadow and glow inks of their own, and a
-            // colour cap then spends its slots on them (and on the clear ground) instead
-            // of on the artwork's colours. On the matte the artwork's own inks are what
-            // get counted; the switch brings native transparency back.
-            trace_transparency: false,
+            // On, as the engine defaults. It was off for a while so a colour cap would not
+            // spend a slot on the clear ground; that cost holes, gaps and translucency (a
+            // ring's hole filled white, 5% of transparent pixels painted on emoji), and the
+            // engine now leaves the clear ground out of the cap instead.
+            trace_transparency: a.native_alpha,
             clean_up_damage: Cleanup::Off,
             match_repeated_shapes: a.harmonize,
             match_threshold: a.harmonize_threshold,
@@ -621,7 +620,7 @@ pub const CONTROLS: &[Control] = &[
         curve: 1.0,
         decimals: 0,
         stops: &[],
-        help: "Off: a transparent image is laid on a matte and traced as solid colours, so only the artwork's own colours count towards Max colours. On: transparency is traced as it is: every ink carries an opacity and the clear background is an ink of its own, so soft shadows, glows and feathered edges come back as translucent fills, often many more of them. Changes nothing for an opaque image.",
+        help: "On (the default): transparency is traced as it is. Holes stay holes, every ink carries its opacity, and soft shadows, glows and feathered edges come back as translucent fills; the clear background is not counted towards Max colours. Off: the image is laid on a matte first and traced as solid colours, which fills holes and gaps with the matte colour. Changes nothing for an opaque image.",
     },
     Control {
         group: "Colour",
@@ -835,13 +834,16 @@ mod tests {
     }
 
     #[test]
-    fn transparency_is_traced_on_a_matte_unless_asked() {
-        assert!(!Settings::default().to_args().native_alpha);
-        let on = Settings {
-            trace_transparency: true,
+    fn transparency_is_traced_natively_unless_turned_off() {
+        // As the engine defaults (INKVEC_NATIVE_ALPHA=0 turns the engine's default off).
+        if std::env::var_os("INKVEC_NATIVE_ALPHA").is_none() {
+            assert!(Settings::default().to_args().native_alpha);
+        }
+        let off = Settings {
+            trace_transparency: false,
             ..Settings::default()
         };
-        assert!(on.to_args().native_alpha);
+        assert!(!off.to_args().native_alpha);
     }
 
     #[test]

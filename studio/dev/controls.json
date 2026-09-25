@@ -180,7 +180,7 @@
   "curve": 1.0,
   "decimals": 0,
   "stops": [],
-  "help": "Off: a transparent image is laid on a matte and traced as solid colours, so only the artwork's own colours count towards Max colours. On: transparency is traced as it is: every ink carries an opacity and the clear background is an ink of its own, so soft shadows, glows and feathered edges come back as translucent fills, often many more of them. Changes nothing for an opaque image."
+  "help": "On (the default): transparency is traced as it is. Holes stay holes, every ink carries its opacity, and soft shadows, glows and feathered edges come back as translucent fills; the clear background is not counted towards Max colours. Off: the image is laid on a matte first and traced as solid colours, which fills holes and gaps with the matte colour. Changes nothing for an opaque image."
  },
  {
   "group": "Colour",

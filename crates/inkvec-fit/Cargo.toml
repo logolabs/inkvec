@@ -14,6 +14,7 @@ categories.workspace = true
 [dependencies]
 inkvec-core = { workspace = true }
 kurbo = { workspace = true }
+rayon = { workspace = true }
 
 [lints]
 workspace = true

@@ -215,3 +215,14 @@ jobs:
           fi
           printf '%s\n' "${files}"
           printf '%s\n' "${files}" | wc -l | tr -d ' ' | xargs -I{} echo "{} file(s)"
+
+      # The backend's tests on this platform too. `check` runs them on Linux only, and
+      # the code that differs by platform -- paths, the PATH and right-click integration,
+      # the bundled command's name, ONNX Runtime linked in -- is exactly what Linux does
+      # not exercise. After packaging, so the frontend bundle and the bundled `inkvec`
+      # the build script checks for are already on disk. The tests use temporary paths
+      # only, never the runner's preferences or model cache.
+      - name: Backend tests on this platform
+        if: runner.os != 'Linux'
+        working-directory: studio/src-tauri
+        run: cargo test --release

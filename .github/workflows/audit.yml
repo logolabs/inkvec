@@ -1,0 +1,48 @@
+name: audit
+
+# RustSec: every crate in both lockfiles -- the engine workspace and Inkvec Studio's, which
+# is a workspace of its own -- checked against the advisory database. A vulnerability fails
+# the job; `unmaintained` and `unsound` notices are printed and do not (as of 2026-09-25
+# the engine has two, bincode and paste, and Studio seven, all from the Tauri and GTK
+# stack; none is a vulnerability).
+#
+# Weekly as well as on lockfile changes: an advisory is published against a version that
+# is already locked, so a lockfile nobody touches is exactly the one that needs it.
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "Cargo.lock"
+      - "studio/src-tauri/Cargo.lock"
+      - ".github/workflows/audit.yml"
+  pull_request:
+    paths:
+      - "Cargo.lock"
+      - "studio/src-tauri/Cargo.lock"
+      - ".github/workflows/audit.yml"
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: engine workspace
+        run: cargo audit --file Cargo.lock
+      - name: Inkvec Studio
+        if: success() || failure()
+        run: cargo audit --file studio/src-tauri/Cargo.lock

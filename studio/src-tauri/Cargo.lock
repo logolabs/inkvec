@@ -2181,7 +2181,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-studio-core"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "image",
  "inkvec-cli",
@@ -2201,7 +2201,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-studio-wasm"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "console_error_panic_hook",
  "inkvec-cli",

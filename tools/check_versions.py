@@ -95,8 +95,9 @@ def tauri_conf(version: str):
     return rel, found, new
 
 
-def studio_cargo(version: str):
-    rel = "studio/src-tauri/Cargo.toml"
+def studio_cargo(version: str, rel: str = "studio/src-tauri/Cargo.toml"):
+    """A Studio crate's own [package] version: the desktop shell, the shared core, the
+    browser shell. They sit outside the root workspace, so they cannot inherit it."""
     text = read(rel)
     m = re.search(r'(^\[package\]\s*\n(?:(?!^\[).*\n)*?version\s*=\s*")([^"]+)(")', text, re.M)
     if not m:
@@ -122,6 +123,8 @@ def all_files(version: str):
         json_file("studio/package.json", version),
         json_file("studio/package-lock.json", version, lock=True),
         studio_cargo(version),
+        studio_cargo(version, "studio/core/Cargo.toml"),
+        studio_cargo(version, "studio/wasm/Cargo.toml"),
         tauri_conf(version),
         generated("packages/npm/package.json", r'^  "version":\s*"([^"]+)"'),
         generated("packages/npm/package-lock.json", r'^  "version":\s*"([^"]+)"'),

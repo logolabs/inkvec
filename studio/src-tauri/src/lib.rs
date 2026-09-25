@@ -27,6 +27,7 @@ pub mod options;
 pub mod quality;
 pub mod settings;
 pub mod trace;
+pub mod wizard;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -43,6 +44,11 @@ pub struct AppState {
     source: Mutex<Option<Arc<trace::Source>>>,
     /// Which trace the interface is waiting for.
     generation: trace::Generation,
+    /// Which wizard preview the interface is waiting for. A counter of its own, so a
+    /// preview never retires the trace the viewer is waiting for. See [`wizard`].
+    preview_generation: trace::Generation,
+    /// The image the app was launched to open, until the interface asks for it.
+    launch: Mutex<Option<PathBuf>>,
     /// Preferences, as loaded and as edited.
     prefs: Mutex<settings::Prefs>,
     /// The controls of a batch run, while one is going.
@@ -150,6 +156,21 @@ pub fn run() {
     denoiser::announce_to_engine();
 
     tauri::Builder::default()
+        // First, so a second launch hands its file to this window before anything else
+        // starts: the context menu's "Vectorize with Inkvec" on a running app opens the
+        // file here rather than starting a second copy.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            let cwd = PathBuf::from(cwd);
+            if let Some(path) = wizard::path_from_args(&argv, Some(&cwd), std::path::Path::is_file)
+            {
+                let _ = app.emit_to("main", "open:path", path);
+            }
+            if let Some(main) = app.get_webview_window("main") {
+                let _ = main.unminimize();
+                let _ = main.show();
+                let _ = main.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -159,6 +180,13 @@ pub fn run() {
             configure_threads(&prefs);
             let state = app.state::<AppState>();
             *state.prefs.lock().expect("preferences lock") = prefs;
+            // The file the context menu (or anything else) launched the app with. Held
+            // until the interface is ready to open it; see [`launch_path`].
+            *state.launch.lock().expect("launch lock") = wizard::path_from_args(
+                std::env::args(),
+                std::env::current_dir().ok().as_deref(),
+                std::path::Path::is_file,
+            );
 
             // If the interface never reports that it is ready — a script error before it
             // gets that far — the splash must not stay on screen forever with the app
@@ -190,6 +218,10 @@ pub fn run() {
             start_trace,
             trace_bands,
             cancel_trace,
+            start_preview,
+            cancel_previews,
+            source_facts,
+            launch_path,
             snap_inks,
             match_palette,
             plan_export,
@@ -702,6 +734,103 @@ fn trace_bands(generation: u64, state: State<'_, AppState>) -> Result<Option<Str
 #[tauri::command]
 fn cancel_trace(state: State<'_, AppState>) {
     state.generation.cancel();
+}
+
+// -------------------------------------------------------------------------- wizard ---
+
+/// A finished wizard preview, for the interface.
+#[derive(Clone, Serialize)]
+struct PreviewDone<'a> {
+    generation: u64,
+    outcome: &'a trace::Outcome,
+}
+
+/// Start a wizard preview: a draft of `request.settings` that does not become the drawing.
+///
+/// Returns its generation at once; the result arrives as a `preview:done` event. Unlike
+/// [`start_trace`] it leaves everything the viewer depends on alone: the trace generation
+/// (so the automatic trace keeps running), the drawing cache, the confidence bands and the
+/// remembered settings. It waits for the trace slot the way a batch row does — behind any
+/// interactive trace — and gives up while waiting if a newer preview or
+/// [`cancel_previews`] has retired it. The tier in the request is ignored: a preview is
+/// always a draft.
+#[tauri::command]
+fn start_preview(
+    request: TraceRequest,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<u64, String> {
+    let source = state
+        .source
+        .lock()
+        .map_err(lock)?
+        .clone()
+        .ok_or_else(|| "no image is open".to_string())?;
+    let (draft_px, draft_seconds) = {
+        let prefs = state.prefs.lock().map_err(lock)?;
+        (prefs.draft_px, prefs.draft_seconds)
+    };
+    let generation = state.preview_generation.next();
+    let pipeline = Arc::clone(&state.pipeline);
+    std::thread::Builder::new()
+        .name(format!("inkvec-preview-{generation}"))
+        .spawn(move || {
+            let wanted = || {
+                app.state::<AppState>()
+                    .preview_generation
+                    .is_current(generation)
+            };
+            let Some(slot) = pipeline.batch_row(|| !wanted()) else {
+                return;
+            };
+            let mut outcome =
+                wizard::run_preview(&source, &request.settings, draft_px, draft_seconds);
+            drop(slot);
+            if !wanted() {
+                return;
+            }
+            if let trace::Outcome::Traced(t) = &mut outcome {
+                t.bands = None;
+            }
+            let _ = app.emit(
+                "preview:done",
+                PreviewDone {
+                    generation,
+                    outcome: &outcome,
+                },
+            );
+        })
+        .map_err(|e| format!("cannot start the preview: {e}"))?;
+    Ok(generation)
+}
+
+/// Retire every wizard preview in flight or waiting. The trace the viewer waits for is not
+/// touched.
+#[tauri::command]
+fn cancel_previews(state: State<'_, AppState>) {
+    state.preview_generation.cancel();
+}
+
+/// What the wizard wants to know about the open image: its noise, and whether it has any
+/// transparency. Read from the raster a trace at `max_dim` decodes, which after the first
+/// trace is already in memory.
+#[tauri::command(async)]
+fn source_facts(max_dim: usize, state: State<'_, AppState>) -> Result<wizard::Facts, String> {
+    let source = state
+        .source
+        .lock()
+        .map_err(lock)?
+        .clone()
+        .ok_or_else(|| "no image is open".to_string())?;
+    let raster = source.raster(max_dim)?;
+    Ok(wizard::facts_of(&raster))
+}
+
+/// The image the app was launched to open, once: asking again returns nothing, so a
+/// reload of the interface does not open it a second time.
+#[tauri::command]
+fn launch_path(state: State<'_, AppState>) -> Result<Option<PathBuf>, String> {
+    Ok(state.launch.lock().map_err(lock)?.take())
 }
 
 // ------------------------------------------------------------------------- palette ---

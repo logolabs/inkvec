@@ -40,6 +40,21 @@ pub enum Channel {
     Prerelease,
 }
 
+/// What opening an image does besides the automatic trace, which always starts at once.
+///
+/// `Ask` shows a small card over the stage offering Auto or the Custom wizard; ignoring it
+/// is Auto. The other two remember an answer, and are changed back in Settings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum OnOpen {
+    #[default]
+    Ask,
+    /// Trace automatically and show nothing else.
+    Auto,
+    /// Trace automatically and open the wizard over it.
+    Custom,
+}
+
 /// A preset the user saved from the advanced controls.
 ///
 /// The built-in eight are each a small set of deliberate differences from the defaults,
@@ -88,8 +103,10 @@ pub struct Prefs {
     pub trace: TraceSettings,
     /// Recently opened files, newest first. Paths only.
     pub recent: Vec<PathBuf>,
-    /// Whether the first-run screen has been seen.
+    /// Whether the first-run introduction to the wizard has been seen.
     pub seen_first_run: bool,
+    /// What opening an image offers besides the automatic trace.
+    pub on_open: OnOpen,
     /// Presets the user saved, in the order the tray shows them.
     pub saved: Vec<SavedPreset>,
 }
@@ -110,6 +127,7 @@ impl Default for Prefs {
             trace: TraceSettings::default(),
             recent: Vec::new(),
             seen_first_run: false,
+            on_open: OnOpen::default(),
             saved: Vec::new(),
         }
     }
@@ -353,12 +371,28 @@ mod tests {
     }
 
     #[test]
+    fn opening_an_image_asks_until_told_otherwise() {
+        assert_eq!(Prefs::default().on_open, OnOpen::Ask);
+        // A file written before the choice existed asks too.
+        let old: Prefs = serde_json::from_str(r#"{"seenFirstRun": true}"#).unwrap();
+        assert_eq!(old.on_open, OnOpen::Ask);
+        assert!(old.seen_first_run);
+        let custom: Prefs = serde_json::from_str(r#"{"onOpen": "custom"}"#).unwrap();
+        assert_eq!(custom.on_open, OnOpen::Custom);
+        assert!(serde_json::to_string(&Prefs::default())
+            .unwrap()
+            .contains(r#""onOpen":"ask""#));
+    }
+
+    #[test]
     fn preferences_round_trip_through_json() {
         let mut p = Prefs {
             theme: Theme::Light,
             ..Prefs::default()
         };
         p.trace.precision = 0.05;
+        p.on_open = OnOpen::Auto;
+        p.seen_first_run = true;
         p.remember(std::path::Path::new("/tmp/a.png"));
         let text = serde_json::to_string(&p).unwrap();
         let back: Prefs = serde_json::from_str(&text).unwrap();

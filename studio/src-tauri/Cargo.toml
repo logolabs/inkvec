@@ -48,6 +48,9 @@ tauri = { version = "2", features = ["protocol-asset", "devtools"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-clipboard-manager = "2"
+# A second launch (the context menu's "Vectorize with Inkvec" while the app is open)
+# hands its file to the running window instead of starting another copy.
+tauri-plugin-single-instance = "2"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

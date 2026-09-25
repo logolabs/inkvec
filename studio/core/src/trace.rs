@@ -12,9 +12,9 @@
 //! internal names onto the nine the interface names. Nothing is invented: a stage appears
 //! when the engine has finished it, with the time it took.
 
+use inkvec_core::clock::Instant;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
@@ -462,7 +462,12 @@ fn scaled_to(w: u32, h: u32, max_dim: u32) -> Option<(u32, u32)> {
 /// Not a measurement of this machine — reading free memory portably would need another
 /// dependency, and the answer moves while the trace runs anyway. 8 GiB is well above what
 /// any sane logo needs and well below what a desktop will survive losing.
+#[cfg(not(target_arch = "wasm32"))]
 const MEMORY_CEILING: u64 = 8 * 1024 * 1024 * 1024;
+/// In a browser tab the whole address space is 4 GiB (wasm32), shared with the module, the
+/// source bytes and every drawing held, so the ceiling is lower.
+#[cfg(target_arch = "wasm32")]
+const MEMORY_CEILING: u64 = 3 * 1024 * 1024 * 1024;
 
 /// Run one trace to completion on the calling thread, and measure everything about it.
 ///
@@ -473,7 +478,7 @@ pub fn run(
     settings: &Settings,
     tier: Tier,
     cache: Option<&Cache>,
-    on_stage: impl Fn(&'static str, f64) + Send + 'static,
+    on_stage: impl Fn(&'static str, f64) + 'static,
 ) -> Outcome {
     run_at(source, settings, tier, cache, MeasureLevel::Full, on_stage)
 }
@@ -485,7 +490,7 @@ pub fn run_at(
     tier: Tier,
     cache: Option<&Cache>,
     level: MeasureLevel,
-    on_stage: impl Fn(&'static str, f64) + Send + 'static,
+    on_stage: impl Fn(&'static str, f64) + 'static,
 ) -> Outcome {
     match draw(source, settings, tier, cache, level, on_stage) {
         Ok(drawn) => measure(source, drawn, level, cache),
@@ -529,7 +534,7 @@ pub fn draw(
     tier: Tier,
     cache: Option<&Cache>,
     level: MeasureLevel,
-    on_stage: impl Fn(&'static str, f64) + Send + 'static,
+    on_stage: impl Fn(&'static str, f64) + 'static,
 ) -> Result<Drawn, Outcome> {
     let settings = settings.clone().sanitised();
     let started = Instant::now();
@@ -805,14 +810,15 @@ fn trace_pipeline(
     source: &Source,
     args: &inkvec_cli::Args,
     bands: bool,
-    on_stage: impl Fn(&'static str, f64) + Send + 'static,
+    on_stage: impl Fn(&'static str, f64) + 'static,
 ) -> Result<Pipeline, Outcome> {
     // Stages are reported from inside the pipeline, on this thread, as each one is
     // passed. They are folded onto the nine names the interface shows — accumulating
     // time where several pipeline steps map to one name — and handed straight on, so the
     // rail fills while the trace runs rather than after it.
     // The bands come back through a file, as the command line writes them.
-    let bands_file = bands.then(bands_path);
+    // A browser has no file system to receive them through; see `bands_path`.
+    let bands_file = (bands && cfg!(not(target_arch = "wasm32"))).then(bands_path);
     let mut args = args.clone();
     args.uncertainty = bands_file.clone();
     let args = &args;
@@ -840,7 +846,12 @@ fn trace_pipeline(
                 let img = inkvec_trace::Rgba::clone(&kept);
                 drop(kept);
                 let size = Some((source.width as usize, source.height as usize));
-                let out = inkvec_cli::trace_image_sized(img, args, size)?;
+                let out = match external_denoiser() {
+                    Some(denoise) if args.restore != inkvec_restore::Mode::Off => {
+                        trace_denoised(img, args, size, denoise)?
+                    }
+                    _ => inkvec_cli::trace_image_sized(img, args, size)?,
+                };
                 Ok::<_, Box<dyn std::error::Error>>(out)
             },
         )
@@ -881,6 +892,92 @@ fn trace_pipeline(
         stages,
         bands,
     })
+}
+
+/// A denoiser the shell runs itself, outside the engine: the network's input tensor in
+/// (`1 x 3 x height x width`, planar, as `inkvec_restore::network_input` lays it out, with
+/// the padded width and height), its output tensor back, the same layout.
+///
+/// The desktop app never sets one: its denoiser is the engine's own (`inkvec-cli`'s
+/// `restore-model` feature), which `--restore` reaches inside the pipeline. A browser
+/// cannot link ONNX Runtime into the tracer; it runs the same `restorer.onnx` in ONNX
+/// Runtime Web instead, and hands the tensor across through this.
+pub type ExternalDenoiser = fn(&[f32], usize, usize) -> Result<Vec<f32>, String>;
+
+static EXTERNAL_DENOISER: std::sync::OnceLock<ExternalDenoiser> = std::sync::OnceLock::new();
+
+/// Install the shell's denoiser, once, for every trace from here on that asks for one.
+pub fn set_external_denoiser(denoise: ExternalDenoiser) {
+    let _ = EXTERNAL_DENOISER.set(denoise);
+}
+
+fn external_denoiser() -> Option<ExternalDenoiser> {
+    EXTERNAL_DENOISER.get().copied()
+}
+
+/// `--restore` with the network run by [`ExternalDenoiser`]: the engine's own seam, split
+/// where the engine documents it for exactly this caller (`inkvec_cli::intake`).
+///
+/// The same decisions as the engine's pre-pass: `auto` traces once, measures how far the
+/// raster disagrees with that trace where it claims a flat interior, and keeps the trace
+/// when the residual is under the threshold; otherwise, and always for `on`, the raster is
+/// denoised at the size the tracer will see it and traced with soft intake forced on.
+fn trace_denoised(
+    img: inkvec_trace::Rgba,
+    args: &inkvec_cli::Args,
+    size: Option<(usize, usize)>,
+    denoise: ExternalDenoiser,
+) -> Result<inkvec_cli::Traced, Box<dyn std::error::Error>> {
+    let mut intake = inkvec_cli::intake(img, args, size);
+    let mode = intake.args.restore;
+    intake.args.restore = inkvec_restore::Mode::Off;
+    let mut note = String::new();
+    if mode == inkvec_restore::Mode::Auto {
+        let mut probe = inkvec_cli::trace_prepared(intake.clone())?;
+        let decision = inkvec_restore::decide(
+            &intake.img,
+            &probe.svg,
+            inkvec_restore::Options {
+                residual_threshold: args.restore_threshold,
+            },
+        );
+        match decision {
+            inkvec_restore::Decision::Keep { residual } => {
+                probe.stats.insert(
+                    0,
+                    match residual {
+                        Some(r) => format!(
+                            "restore       residual {r:.3} <= {:.3}, traced directly",
+                            args.restore_threshold
+                        ),
+                        None => "restore       could not measure the fit; traced directly".into(),
+                    },
+                );
+                return Ok(probe);
+            }
+            inkvec_restore::Decision::Restore { residual } => {
+                if let Some(r) = residual {
+                    note = format!("residual {r:.3} > {:.3}; ", args.restore_threshold);
+                }
+            }
+        }
+    }
+    let started = Instant::now();
+    let tensor = inkvec_restore::network_input(&intake.img);
+    let out = denoise(&tensor.data, tensor.width, tensor.height)?;
+    intake.img = inkvec_restore::network_output(&out, &intake.img)?;
+    // Restored input is traced with soft intake on, as the engine's pre-pass forces it.
+    intake.args.lossy = inkvec_sr::Mode::On;
+    let (w, h) = (intake.img.width, intake.img.height);
+    let mut traced = inkvec_cli::trace_prepared(intake)?;
+    traced.stats.insert(
+        0,
+        format!(
+            "restore       {note}restored {w}x{h} in {:.2}s, in the browser",
+            started.elapsed().as_secs_f64()
+        ),
+    );
+    Ok(traced)
 }
 
 /// The size the same drawing takes after the minifier, for the "minified" figure beside

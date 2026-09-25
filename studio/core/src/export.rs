@@ -282,7 +282,8 @@ fn ico(svg: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-fn zip(files: &[Artifact]) -> Result<Vec<u8>, String> {
+/// Pack `files` into one `.zip`, deflated, under their own names.
+pub fn zip(files: &[Artifact]) -> Result<Vec<u8>, String> {
     let mut cursor = std::io::Cursor::new(Vec::new());
     {
         let mut w = zip::ZipWriter::new(&mut cursor);

@@ -1,15 +1,20 @@
-# Inkvec Studio Lite's Tauri backend.
+# Inkvec Studio's Tauri backend: the desktop shell round the shared core (studio/core).
 #
 # This is a workspace of its own, and the repository root excludes it, on purpose.
 # `cargo build --workspace` at the root runs on every CI platform and must not need
 # WebKitGTK, a WebView2 SDK or a macOS webview to succeed; pulling the app in as a
 # member would make the engine's build depend on the app's system libraries. The app
 # still depends on the engine by path, so it always builds against the tree it sits in.
+#
+# Its two siblings are members: the core both shells share, and the browser shell
+# (Inkvec Studio Lite, built to WebAssembly by studio/scripts/build-web.mjs). One
+# lock file then pins what the desktop app and its browser build are made of.
 [workspace]
+members = ["../core", "../wasm"]
 
 [package]
 name = "inkvec-studio"
-description = "Inkvec Studio Lite: turn a raster logo into an SVG, exactly, and minimise SVGs you already have."
+description = "Inkvec Studio: turn a raster logo into an SVG, exactly, and minimise SVGs you already have."
 version = "0.1.6"
 edition = "2021"
 rust-version = "1.88"
@@ -31,18 +36,15 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-# The engine, by path. `inkvec-cli`'s library half rather than the `inkvec` facade:
-# the facade deliberately exposes fourteen options, and the app's advanced drawer
-# drives eighteen — bilevel, strokes and flat fills among them — which only `Args` has.
+# Everything the app does that is not about a window, a file or a thread, shared with the
+# browser build.
+inkvec-studio-core = { path = "../core" }
+# The engine, by path, for what only the desktop does with it: `inkvec-cli` carries the
+# native denoiser (the `denoiser` feature below), `inkvec-restore` names its weights and
+# `inkvec-fab` answers the Fabricate tab.
 inkvec-cli = { path = "../../crates/inkvec-cli" }
-inkvec-trace = { path = "../../crates/inkvec-trace" }
-# Fabrication: vinyl sheets, sticker contours and the preflight, for the Fabricate tab.
 inkvec-fab = { path = "../../crates/inkvec-fab" }
-# The fit's own default prices, so the two curve controls start where the engine does and
-# a value that equals the default is passed as "no request".
-inkvec-fit = { path = "../../crates/inkvec-fit" }
 inkvec-restore = { path = "../../crates/inkvec-restore" }
-inkvec-svgmin = { path = "../../crates/inkvec-svgmin" }
 
 tauri = { version = "2", features = ["protocol-asset", "devtools"] }
 tauri-plugin-dialog = "2"
@@ -56,10 +58,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rayon = "1.10"
 
-# Rasterising the traced SVG is what makes the quality report a measurement rather
-# than an adjective: the colour difference is computed between the source pixels and
-# a render of the SVG we just wrote, not estimated from the fit.
-resvg = { version = "0.48", default-features = false }
+# Batch runs and the tests decode and write PNGs.
 image = { version = "0.25", default-features = false, features = [
     "png",
     "jpeg",
@@ -68,7 +67,6 @@ image = { version = "0.25", default-features = false, features = [
     "bmp",
     "tiff",
 ] }
-zip = { version = "8", default-features = false, features = ["deflate"] }
 
 # The denoiser download: one HTTPS GET, checksummed on arrival. `ureq` is a blocking
 # client with rustls and no async runtime, which is the whole of what this needs.

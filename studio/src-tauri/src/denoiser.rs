@@ -13,28 +13,10 @@
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
-use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-/// Where the denoiser stands right now.
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Status {
-    /// Whether this build can run the model at all. A build without the `denoiser`
-    /// feature has no ONNX Runtime linked in, and says so rather than offering a download
-    /// that would achieve nothing.
-    pub supported: bool,
-    /// Whether the weights are on disk and hash to the published value.
-    pub installed: bool,
-    /// Where they are, or where they would go.
-    pub path: Option<PathBuf>,
-    /// Their size on disk, in bytes, if present.
-    pub bytes: Option<u64>,
-    /// The Hugging Face repository they come from.
-    pub repo: &'static str,
-    /// The SHA-256 the download is checked against.
-    pub sha256: &'static str,
-}
+/// Where the denoiser stands right now: the core's type, shared with the browser build.
+pub use inkvec_studio_core::api::DenoiserStatus as Status;
 
 /// Whether this build has the restorer compiled in.
 pub const SUPPORTED: bool = cfg!(feature = "denoiser");
@@ -282,7 +264,8 @@ mod tests {
 
     #[test]
     fn removing_deletes_the_file_it_is_given() {
-        let file = std::env::temp_dir().join(format!("inkvec-model-to-remove-{}", std::process::id()));
+        let file =
+            std::env::temp_dir().join(format!("inkvec-model-to-remove-{}", std::process::id()));
         std::fs::write(&file, b"weights").unwrap();
         assert!(remove_at(Some(file.clone())).is_ok());
         assert!(!file.exists(), "the file should be gone");

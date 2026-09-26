@@ -121,6 +121,17 @@ type Options struct {
 	// A number >= 0 and <= 1. Default: 0.92.
 	HarmonizeThreshold *float64 `json:"harmonize_threshold,omitempty"`
 
+	// Which engine traces the image. "quality" (the default) is the full engine: the best
+	// fidelity and the fewest parameters, at about half a second for a 512 px logo. "fast" is
+	// a Potrace-class fit on the same palette, planar map and emitter, with a one-pass
+	// gradient check in place of gradient recovery: several times faster (tens of milliseconds
+	// at 512 px), a little less faithful, with somewhat more parameters. Options that only
+	// steer quality stages (precision, content_units, harmonize, harmonize_threshold,
+	// time_budget) are ignored in fast mode.
+	//
+	// Default: "quality".
+	Mode *string `json:"mode,omitempty"`
+
 	// Colour groups: fills to draw as one, so the shapes between them join rather than being
 	// recoloured. Empty (the default) changes nothing. Groups are separated by ';' and members
 	// by ','; a member is a colour '#rrggbb' as it appears in a trace of the same image, or a

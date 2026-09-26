@@ -47,6 +47,8 @@ def _query_param(o: Option) -> dict:
         prop["exclusiveMinimum"] = o.exclusive_minimum
     if o.exclusive_maximum is not None:
         prop["exclusiveMaximum"] = o.exclusive_maximum
+    if o.choices is not None:
+        prop["enum"] = list(o.choices)
     return {
         "name": o.name,
         "in": "query",

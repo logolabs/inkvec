@@ -28,6 +28,7 @@ public final class InkvecOptions {
     private final boolean contentUnits;
     private final boolean harmonize;
     private final double harmonizeThreshold;
+    private final String mode;
     private final String mergeColors;
 
     private InkvecOptions(Builder b) {
@@ -46,6 +47,7 @@ public final class InkvecOptions {
         this.contentUnits = b.contentUnits;
         this.harmonize = b.harmonize;
         this.harmonizeThreshold = b.harmonizeThreshold;
+        this.mode = b.mode;
         this.mergeColors = b.mergeColors;
     }
 
@@ -240,6 +242,21 @@ public final class InkvecOptions {
     }
 
     /**
+     * Which engine traces the image. "quality" (the default) is the full engine: the best fidelity
+     * and the fewest parameters, at about half a second for a 512 px logo. "fast" is a Potrace-
+     * class fit on the same palette, planar map and emitter, with a one-pass gradient check in
+     * place of gradient recovery: several times faster (tens of milliseconds at 512 px), a little
+     * less faithful, with somewhat more parameters. Options that only steer quality stages
+     * (precision, content_units, harmonize, harmonize_threshold, time_budget) are ignored in fast
+     * mode.
+     *
+     * @default "quality"
+     */
+    public String mode() {
+        return mode;
+    }
+
+    /**
      * Colour groups: fills to draw as one, so the shapes between them join rather than being
      * recoloured. Empty (the default) changes nothing. Groups are separated by ';' and members by
      * ','; a member is a colour '#rrggbb' as it appears in a trace of the same image, or a
@@ -277,6 +294,7 @@ public final class InkvecOptions {
         sb.append(",\"content_units\":").append(contentUnits);
         sb.append(",\"harmonize\":").append(harmonize);
         sb.append(",\"harmonize_threshold\":").append(harmonizeThreshold);
+        sb.append(",\"mode\":").append(jsonString(mode));
         sb.append(",\"merge_colors\":").append(jsonString(mergeColors));
         sb.append('}');
         return sb.toString();
@@ -346,6 +364,7 @@ public final class InkvecOptions {
         private boolean contentUnits = false;
         private boolean harmonize = true;
         private double harmonizeThreshold = 0.92;
+        private String mode = "quality";
         private String mergeColors = "";
 
         private Builder() {
@@ -543,6 +562,22 @@ public final class InkvecOptions {
          */
         public Builder harmonizeThreshold(double harmonizeThreshold) {
             this.harmonizeThreshold = harmonizeThreshold;
+            return this;
+        }
+
+        /**
+         * Which engine traces the image. "quality" (the default) is the full engine: the best fidelity
+         * and the fewest parameters, at about half a second for a 512 px logo. "fast" is a Potrace-
+         * class fit on the same palette, planar map and emitter, with a one-pass gradient check in
+         * place of gradient recovery: several times faster (tens of milliseconds at 512 px), a little
+         * less faithful, with somewhat more parameters. Options that only steer quality stages
+         * (precision, content_units, harmonize, harmonize_threshold, time_budget) are ignored in fast
+         * mode.
+         *
+         * @default "quality"
+         */
+        public Builder mode(String mode) {
+            this.mode = mode;
             return this;
         }
 

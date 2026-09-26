@@ -99,6 +99,10 @@ pub struct Options {
     #[schemars(range(min = 0, max = 1))]
     pub harmonize_threshold: f64,
 
+    /// Which engine traces the image. "quality" (the default) is the full engine: the best fidelity and the fewest parameters, at about half a second for a 512 px logo. "fast" is a Potrace-class fit on the same palette, planar map and emitter, with a one-pass gradient check in place of gradient recovery: several times faster (tens of milliseconds at 512 px), a little less faithful, with somewhat more parameters. Options that only steer quality stages (precision, content_units, harmonize, harmonize_threshold, time_budget) are ignored in fast mode.
+    #[schemars(extend("enum" = ["quality", "fast"]))]
+    pub mode: String,
+
     /// Colour groups: fills to draw as one, so the shapes between them join rather than being recoloured. Empty (the default) changes nothing. Groups are separated by ';' and members by ','; a member is a colour '#rrggbb' as it appears in a trace of the same image, or a gradient written as its stop colours joined by '>'. An optional '=' says what the group becomes: '=#rrggbb' a flat colour, '=@n' its n-th member (1-based; a gradient there is refitted over the whole group); without it, the member covering the most of the image. Example: '#c0392b,#e74c3c;#f00>#00f,#0a0=@1'. A group costs one extra trace.
     pub merge_colors: String,
 }
@@ -126,6 +130,7 @@ impl Default for Options {
             harmonize_threshold: a.harmonize_threshold,
             // The command line has no groups by default; a spec that parses to none.
             merge_colors: String::new(),
+            mode: a.mode.name().to_string(),
         }
     }
 }
@@ -176,6 +181,9 @@ impl Options {
         for (name, prop) in props {
             check_number(name, value.get(name), prop)?;
         }
+        for (name, prop) in props {
+            check_choice(name, value.get(name), prop)?;
+        }
         inkvec_cli::parse_color_groups(&self.merge_colors)
             .map_err(|e| Error::InvalidOptions(format!("merge_colors: {e}")))?;
         Ok(())
@@ -211,6 +219,7 @@ impl Options {
             harmonize,
             harmonize_threshold,
             ref merge_colors,
+            ref mode,
         } = *self;
         inkvec_cli::Args {
             // Validated before any trace; an invalid spec that got this far merges nothing.
@@ -230,6 +239,8 @@ impl Options {
             content_units,
             harmonize,
             harmonize_threshold,
+            // Validated before any trace against the schema's `enum`.
+            mode: mode.parse().unwrap_or_default(),
             // A library never writes to the terminal.
             quiet: true,
             ..inkvec_cli::Args::default()
@@ -284,6 +295,24 @@ fn check_number(name: &str, value: Option<&Value>, prop: &Value) -> Result<(), E
     Ok(())
 }
 
+/// A string property against the `enum` the schema records for it, if any.
+fn check_choice(name: &str, value: Option<&Value>, prop: &Value) -> Result<(), Error> {
+    let (Some(choices), Some(v)) = (
+        prop.get("enum").and_then(Value::as_array),
+        value.and_then(Value::as_str),
+    ) else {
+        return Ok(());
+    };
+    if choices.iter().any(|c| c.as_str() == Some(v)) {
+        return Ok(());
+    }
+    let names: Vec<&str> = choices.iter().filter_map(Value::as_str).collect();
+    Err(Error::InvalidOptions(format!(
+        "`{name}` must be one of {}, got {v:?}",
+        names.join(", ")
+    )))
+}
+
 /// The JSON Schema of [`Options`], generated once.
 fn schema() -> &'static Value {
     static SCHEMA: OnceLock<Value> = OnceLock::new();
@@ -330,12 +359,18 @@ mod tests {
         // check the pipeline's settings move. An option mapped to nothing fails here.
         let base = format!("{:?}", Options::default().to_args());
         let defaults = serde_json::to_value(Options::default()).unwrap();
+        let props = &schema()["properties"];
         for (name, v) in defaults.as_object().unwrap() {
+            // A string with a fixed set of values changes to another of them.
+            let other_choice = props[name]["enum"]
+                .as_array()
+                .and_then(|c| c.iter().find(|c| *c != v).cloned());
             let changed = match v {
+                Value::String(_) if other_choice.is_some() => other_choice.unwrap(),
                 Value::Bool(b) => Value::Bool(!b),
                 Value::Number(n) if n.is_u64() => Value::from(n.as_u64().unwrap() + 1),
                 Value::Number(n) => Value::from(n.as_f64().unwrap() * 0.5 + 0.25),
-                // The only string option is `merge_colors`, a group spec.
+                // Otherwise the string is `merge_colors`, a group spec.
                 Value::String(_) => Value::from("#c0392b,#e74c3c"),
                 other => panic!("no test value for {name} = {other}"),
             };
@@ -375,6 +410,11 @@ mod tests {
         assert!(err(r#"{"precision": 0}"#).contains("precision"));
         assert!(err(r#"{"harmonize_threshold": 1.5}"#).contains("harmonize_threshold"));
         assert!(err(r#"{"cutout": 1}"#).contains("bool"));
+        assert!(err(r#"{"mode": "slow"}"#).contains("quality, fast"));
+        assert_eq!(
+            Options::from_json(r#"{"mode": "fast"}"#).unwrap().mode,
+            "fast"
+        );
         assert!(err("[1, 2]").contains("JSON object"));
         assert!(err("null").contains("JSON object"));
         assert!(err("{nope").contains("key"));
@@ -396,6 +436,8 @@ mod tests {
         assert_eq!(p["merge"]["default"], 0.035);
         assert_eq!(p["precision"]["exclusiveMinimum"], 0);
         assert_eq!(p["harmonize"]["default"], true);
+        assert_eq!(p["mode"]["default"], "quality");
+        assert_eq!(p["mode"]["enum"], serde_json::json!(["quality", "fast"]));
         assert_eq!(
             p["native_alpha"]["default"],
             inkvec_cli::Args::default().native_alpha

@@ -175,6 +175,19 @@
             }
           },
           {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "description": "Which engine traces the image. \"quality\" (the default) is the full engine: the best fidelity and the fewest parameters, at about half a second for a 512 px logo. \"fast\" is a Potrace-class fit on the same palette, planar map and emitter, with a one-pass gradient check in place of gradient recovery: several times faster (tens of milliseconds at 512 px), a little less faithful, with somewhat more parameters. Options that only steer quality stages (precision, content_units, harmonize, harmonize_threshold, time_budget) are ignored in fast mode.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "quality",
+                "fast"
+              ]
+            }
+          },
+          {
             "name": "merge_colors",
             "in": "query",
             "required": false,
@@ -475,6 +488,15 @@
             "minimum": 0,
             "maximum": 1,
             "default": 0.92
+          },
+          "mode": {
+            "description": "Which engine traces the image. \"quality\" (the default) is the full engine: the best fidelity and the fewest parameters, at about half a second for a 512 px logo. \"fast\" is a Potrace-class fit on the same palette, planar map and emitter, with a one-pass gradient check in place of gradient recovery: several times faster (tens of milliseconds at 512 px), a little less faithful, with somewhat more parameters. Options that only steer quality stages (precision, content_units, harmonize, harmonize_threshold, time_budget) are ignored in fast mode.",
+            "type": "string",
+            "default": "quality",
+            "enum": [
+              "quality",
+              "fast"
+            ]
           },
           "merge_colors": {
             "description": "Colour groups: fills to draw as one, so the shapes between them join rather than being recoloured. Empty (the default) changes nothing. Groups are separated by ';' and members by ','; a member is a colour '#rrggbb' as it appears in a trace of the same image, or a gradient written as its stop colours joined by '>'. An optional '=' says what the group becomes: '=#rrggbb' a flat colour, '=@n' its n-th member (1-based; a gradient there is refitted over the whole group); without it, the member covering the most of the image. Example: '#c0392b,#e74c3c;#f00>#00f,#0a0=@1'. A group costs one extra trace.",

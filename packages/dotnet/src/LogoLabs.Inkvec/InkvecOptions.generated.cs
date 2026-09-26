@@ -150,6 +150,18 @@ namespace LogoLabs.Inkvec
         public double? HarmonizeThreshold { get; set; }
 
         /// <summary>
+        /// Which engine traces the image. "quality" (the default) is the full engine: the best fidelity
+        /// and the fewest parameters, at about half a second for a 512 px logo. "fast" is a Potrace-
+        /// class fit on the same palette, planar map and emitter, with a one-pass gradient check in
+        /// place of gradient recovery: several times faster (tens of milliseconds at 512 px), a little
+        /// less faithful, with somewhat more parameters. Options that only steer quality stages
+        /// (precision, content_units, harmonize, harmonize_threshold, time_budget) are ignored in fast
+        /// mode.
+        /// The tracer's default is "quality"; leave this null to use it.
+        /// </summary>
+        public string? Mode { get; set; }
+
+        /// <summary>
         /// Colour groups: fills to draw as one, so the shapes between them join rather than being
         /// recoloured. Empty (the default) changes nothing. Groups are separated by ';' and members by
         /// ','; a member is a colour '#rrggbb' as it appears in a trace of the same image, or a
@@ -260,6 +272,12 @@ namespace LogoLabs.Inkvec
                 if (!first) sb.Append(',');
                 first = false;
                 sb.Append("\"harmonize_threshold\":").Append(HarmonizeThreshold.Value.ToString("R", CultureInfo.InvariantCulture));
+            }
+            if (Mode != null)
+            {
+                if (!first) sb.Append(',');
+                first = false;
+                sb.Append("\"mode\":").Append(JsonString(Mode));
             }
             if (MergeColors != null)
             {

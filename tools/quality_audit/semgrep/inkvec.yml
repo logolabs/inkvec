@@ -1,0 +1,90 @@
+# Inkvec-specific Semgrep rules, run by tools/quality_audit/run.py --semgrep next to the
+# registry's `p/rust` pack. Each encodes a rule this project learned from an incident or
+# from the audit, so it is checked on every run instead of remembered.
+rules:
+  - id: inkvec-test-touches-real-config-dir
+    languages: [rust]
+    severity: ERROR
+    message: >-
+      A test resolves the user's real config/data directory. On 2026-09-21 and 09-25 Studio
+      tests and a smoke run overwrote the real %APPDATA%\inkvec-studio\preferences.json
+      (the `dirs` crate ignores an APPDATA override). Give the code under test a temp path
+      (settings::path_from with an explicit dir) instead.
+    metadata:
+      category: correctness
+      references: ["studio/src-tauri/src/settings.rs"]
+    patterns:
+      - pattern-either:
+          - pattern: dirs::config_dir()
+          - pattern: dirs::data_dir()
+          - pattern: dirs::data_local_dir()
+          - pattern: dirs::home_dir()
+          - pattern: std::env::var_os("APPDATA")
+          - pattern: std::env::var("APPDATA")
+          - pattern: std::env::var_os("LOCALAPPDATA")
+          - pattern: std::env::var("LOCALAPPDATA")
+      # Semgrep 1.178's Rust grammar matches neither attributes (#[test], #[cfg(test)]) nor
+      # a metavariable module name (`mod $M { ... }` finds nothing), so a test is
+      # recognised by name: 85 of the repo's 100 #[cfg(test)] modules are `mod tests`; the
+      # named `*_tests` modules are listed. Add a new one here when it appears.
+      - pattern-either:
+          - pattern-inside: mod tests { ... }
+          - pattern-inside: mod cache_tests { ... }
+          - pattern-inside: mod command_tests { ... }
+          - pattern-inside: mod scheduler_tests { ... }
+          - pattern-inside: mod stage_sink_tests { ... }
+          - pattern-inside: mod batch_tests { ... }
+          - pattern-inside: mod annotate_tests { ... }
+          - pattern-inside: mod hygiene_tests { ... }
+
+  - id: inkvec-test-file-touches-real-config-dir
+    languages: [rust]
+    severity: ERROR
+    message: >-
+      An integration test resolves the user's real config/data directory; use a temp dir.
+    paths:
+      include: ["**/tests/**"]
+    pattern-either:
+      - pattern: dirs::config_dir()
+      - pattern: dirs::data_dir()
+      - pattern: dirs::data_local_dir()
+      - pattern: std::env::var_os("APPDATA")
+      - pattern: std::env::var_os("LOCALAPPDATA")
+
+  - id: inkvec-server-handler-may-panic
+    languages: [rust]
+    severity: WARNING
+    message: >-
+      A panicking call in inkvec-server request-handling code: a panic here drops the
+      connection instead of returning a 4xx/5xx body. Map the error into the handler's
+      error type.
+    paths:
+      include: ["**/crates/inkvec-server/src/**"]
+    patterns:
+      - pattern-either:
+          - pattern: $X.unwrap()
+          - pattern: $X.expect(...)
+          - pattern: panic!(...)
+          - pattern: unreachable!(...)
+      - pattern-not-inside: |
+          mod tests { ... }
+
+  - id: inkvec-engine-reads-environment
+    languages: [rust]
+    severity: INFO
+    message: >-
+      The engine reads configuration from an environment variable. The output then depends
+      on the caller's environment, and no binding, the server, the WASM build or the
+      Options schema can see or set it. Debug switches belong behind a feature or a
+      diagnostics sink; tuning knobs that ship belong in Options.
+    paths:
+      include:
+        - "**/crates/inkvec-trace/src/**"
+        - "**/crates/inkvec-fit/src/**"
+        - "**/crates/inkvec-core/src/**"
+        - "**/crates/inkvec-svgmin/src/**"
+    pattern-either:
+      - pattern: std::env::var($K)
+      - pattern: std::env::var_os($K)
+      - pattern: env::var($K)
+      - pattern: env::var_os($K)

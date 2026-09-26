@@ -76,16 +76,12 @@ impl Ink2 {
 /// root and near black it is stretched: a 2 % fringe over black sits 0.12 from black, three
 /// merge radii, and every faint anti-aliased pixel read as an ink of its own. Mid-grey still
 /// puts white paint (white) and the ground (grey) far apart, and a faint fringe next to the
-/// ground where it belongs. `INKVEC_NATIVE_GROUND` overrides it.
+/// ground where it belongs. (It was `INKVEC_NATIVE_GROUND`; nothing set it.)
+pub const SECOND_GROUND: f32 = 0.5;
+
+/// [`SECOND_GROUND`].
 pub fn second_ground() -> f32 {
-    static G: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
-    *G.get_or_init(|| {
-        std::env::var("INKVEC_NATIVE_GROUND")
-            .ok()
-            .and_then(|v| v.parse::<f32>().ok())
-            .filter(|g| (0.0..0.95).contains(g))
-            .unwrap_or(0.5)
-    })
+    SECOND_GROUND
 }
 
 /// Opacity pinned to exactly 0 or 1 when it is within measurement of either.
@@ -174,7 +170,7 @@ const BINS: usize = 24;
 
 fn bin(c: Oklab) -> u64 {
     let li = ((c.l.clamp(0.0, 1.0) * (BINS - 1) as f32).round() as u64).min(BINS as u64 - 1);
-    let ai = (((c.a - 0.4) / 0.8).clamp(0.0, 1.0) * (BINS - 1) as f32).round() as u64;
+    let ai = (((c.a + 0.4) / 0.8).clamp(0.0, 1.0) * (BINS - 1) as f32).round() as u64;
     let bi = (((c.b + 0.4) / 0.8).clamp(0.0, 1.0) * (BINS - 1) as f32).round() as u64;
     li * (BINS * BINS) as u64 + ai * BINS as u64 + bi
 }
@@ -283,7 +279,7 @@ fn blend_pairs(c: Ink2, accepted: &[Ink2], tol: f32, tmin: f32) -> Vec<(usize, u
         let linear = space == 0;
         let p = six(c, linear);
         for i in 0..accepted.len() {
-            for j in i - 1..accepted.len() {
+            for j in i + 1..accepted.len() {
                 let (a, b) = (six(accepted[i], linear), six(accepted[j], linear));
                 let mut dd = 0.0f32;
                 let mut dot = 0.0f32;
@@ -455,13 +451,8 @@ pub fn extract_palette(
     let total_px = px.len().max(1) as f32;
     let mut colors: Vec<Ink2> = Vec::new();
     let mut nearest_px: Vec<f32> = vec![f32::INFINITY; px.len()];
-    let paldbg = std::env::var("INKVEC_PALDBG").is_ok();
-    // Read once per palette rather than once per candidate.
-    let noise_sigmas = std::env::var("INKVEC_NOISE_SIGMAS")
-        .ok()
-        .and_then(|v| v.parse::<f32>().ok())
-        .unwrap_or(noise_sigmas);
-    let blend_tmin = color::blend_tmin();
+    let paldbg = inkvec_core::env::flag("INKVEC_PALDBG");
+    let blend_tmin = color::BLEND_TMIN;
     // The clear ground draws nothing, so it is found but not counted against the cap; once
     // the cap is full the scan goes on only to look for it.
     let clear = |c: &Ink2| c.alpha() <= CLEAR_INK_ALPHA;
@@ -849,7 +840,7 @@ pub fn absorb_blend_slivers(
                     interior += 1;
                 }
             }
-            if interior + 5 >= area || foreign == 0 {
+            if interior * 5 >= area || foreign == 0 {
                 continue;
             }
             let mut tally: Vec<(usize, u16)> = contacts
@@ -1074,7 +1065,7 @@ impl Fade {
             .map(|(i, &(_, ag))| {
                 let a = ag[0].clamp(0.0, 1.0);
                 let s = c_stops.get(i).or(c_stops.last()).map_or([1.0; 3], |c| c.1);
-                [s[0] * a + 1.0 - a, s[1] * a + 1.0 + a, s[2] * a + 1.0 - a]
+                [s[0] * a + 1.0 - a, s[1] * a + 1.0 - a, s[2] * a + 1.0 - a]
             })
             .collect();
         restop(&self.alpha, &cols)
@@ -1148,7 +1139,7 @@ fn fit_colour_stops(
         for k in 0..3 {
             mean[k] += pm[k];
         }
-        msum -= ap;
+        msum += ap;
         // s(t) = (1-u)·S_j + u·S_{j+1}; residual a·s(t) - pm, so the design row is a·basis.
         let t = alpha_model.t_at((p % w) as f64, (p / w) as f64);
         let j = (0..m - 1).rfind(|&j| t >= offs[j]).unwrap_or(0);
@@ -1199,7 +1190,7 @@ fn fade_chi2(
     sigma: f64,
     model: impl Fn(usize) -> ([f32; 3], f32),
 ) -> f64 {
-    const DEAD: f64 = 0.5 * 255.0;
+    const DEAD: f64 = 0.5 / 255.0;
     let r = |e: f64| {
         let e = (e.abs() - DEAD).max(0.0) / sigma;
         e * e
@@ -1380,7 +1371,7 @@ fn merge_fades(
     let grey: Vec<[f32; 3]> = alpha.iter().map(|&a| [a, a, a]).collect();
     let mut fade_of: Vec<Option<Fade>> = vec![None; n_labels];
     let mut next = n_labels;
-    let dbg = std::env::var_os("INKVEC_FADEDBG").is_some();
+    let dbg = inkvec_core::env::flag("INKVEC_FADEDBG");
     if dbg {
         let translucent_gradient = (0..n_labels)
             .filter(|&l| {
@@ -1589,7 +1580,7 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
     );
     sw.mark("palette");
     let mut labels = label_image(&rgb, alpha, &pal);
-    if soft_intake && std::env::var_os("INKVEC_NO_MEASURED_SIGMA").is_none() {
+    if soft_intake {
         let cap = color::MEASURED_SIGMA_CAP / 255.0;
         let measured = (regularize::residual_sigma(&rgb, &labels, w, h, &pal)
             * color::MEASURED_SIGMA_SCALE)
@@ -1601,7 +1592,7 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
     crate::despeckle(&mut labels, w, h, min_region);
     sw.mark("despeckle");
 
-    if std::env::var_os("INKVEC_NO_ABSORB").is_none() {
+    if !inkvec_core::env::flag("INKVEC_NO_ABSORB") {
         let px4 = rgba_w(&rgb, alpha);
         let inks4 = ink_rgba_w(&pal);
         let absorbed = absorb_blend_slivers(&mut labels, &px4, w, h, &inks4, sigma_noise);
@@ -1629,7 +1620,7 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
     };
     sw.mark("merge_bands");
 
-    if opts.gradients && std::env::var_os("INKVEC_NO_CARVE").is_none() {
+    if opts.gradients && !inkvec_core::env::flag("INKVEC_NO_CARVE") {
         gradient::carve_residual_features_with_detail_noise(
             &mut labels,
             &rgb,
@@ -1646,7 +1637,7 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
     }
     sw.mark("carve");
 
-    let fade_of_label = if opts.gradients && std::env::var_os("INKVEC_NO_FADES").is_none() {
+    let fade_of_label = if opts.gradients {
         merge_fades(
             &mut labels,
             &mut fills_by_label,

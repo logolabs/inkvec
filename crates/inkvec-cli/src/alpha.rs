@@ -326,15 +326,6 @@ pub(crate) fn choose_matte(img: &inkvec_trace::Rgba) -> ([f32; 3], f64, f64) {
     const DRAWN: f32 = 0.5;
     const DRAWN_FLOOR: f32 = 0.05;
 
-    if let Some(v) = std::env::var_os("INKVEC_MATTE") {
-        match v.to_string_lossy().to_lowercase().as_str() {
-            "white" => return ([1.0, 1.0, 1.0], 0.0, 0.0),
-            "black" => return ([0.0, 0.0, 0.0], 0.0, 0.0),
-            "magenta" => return ([1.0, 0.0, 1.0], 0.0, 0.0),
-            _ => {}
-        }
-    }
-
     // What the matte has to keep: every pixel that is drawn but not fully opaque, plus the
     // opaque pixels along the silhouette, in coarse (colour, alpha) buckets.
     let (w, h) = (img.width, img.height);
@@ -636,7 +627,7 @@ pub(crate) fn recover_layers(
     pal: &inkvec_trace::color::Palette,
     traced_labels: &[u16],
 ) -> Option<inkvec_trace::alpha::AlphaAnalysis> {
-    if args.layers || std::env::var_os("INKVEC_LAYERS").is_some() {
+    if args.layers {
         let n_faces = face_color.len();
         let mut area = vec![0usize; n_faces];
         for &l in traced_labels.iter() {
@@ -665,11 +656,7 @@ pub(crate) fn recover_layers(
         adjacency.dedup();
         // The module's own advice: the compositing space is a property of the file, not a
         // constant, so try both and keep the fit that explains the faces better.
-        let sigma_srgb = std::env::var("INKVEC_LAYER_SIGMA")
-            .ok()
-            .and_then(|v| v.parse::<f64>().ok())
-            .map(|v| v / 255.0)
-            .unwrap_or(LAYER_SIGMA_SRGB);
+        let sigma_srgb = LAYER_SIGMA_SRGB;
         let best = [
             inkvec_trace::alpha::Space::Srgb,
             inkvec_trace::alpha::Space::Linear,
@@ -831,7 +818,7 @@ pub(crate) fn face_alpha(
             )
         })
         .collect();
-    if std::env::var_os("INKVEC_ALPHADBG").is_some() {
+    if inkvec_core::env::flag("INKVEC_ALPHADBG") {
         for f in 0..n_faces {
             if a_n[f] > 0 {
                 eprintln!(

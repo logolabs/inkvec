@@ -30,7 +30,7 @@ pub(crate) fn candidates(n: usize, out: &[FillFit], two: f64, best_grad: f64) {
 
 /// The window from `INKVEC_GRADDBG`, if set.
 pub(crate) fn window() -> Option<[usize; 4]> {
-    let v = std::env::var("INKVEC_GRADDBG").ok()?;
+    let v = inkvec_core::env::text("INKVEC_GRADDBG")?;
     let p: Vec<usize> = v.split(',').filter_map(|s| s.trim().parse().ok()).collect();
     (p.len() == 4).then(|| [p[0], p[1], p[2], p[3]])
 }

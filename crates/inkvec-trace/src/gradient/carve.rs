@@ -251,7 +251,7 @@ pub fn carve_residual_features_with_detail_noise(
         if new_label >= u16::MAX as usize {
             break;
         }
-        if std::env::var_os("INKVEC_EVDBG").is_some() {
+        if inkvec_core::env::flag("INKVEC_EVDBG") {
             let xs = group.iter().map(|&p| p % w);
             let ys = group.iter().map(|&p| p / w);
             eprintln!(

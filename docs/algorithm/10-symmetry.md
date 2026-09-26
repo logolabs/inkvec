@@ -224,6 +224,8 @@ this solves" above.
 
 ## Environment overrides
 
+Since the settings cleanup (CHANGELOG, *Unreleased*) the engine reads its environment through one helper (`inkvec_core::env`): a switch is off when unset, empty or `0`, and every variable is read once per process. Variables marked *removed* below are gone (their defaults are constants now); those marked *research build* are read only by a binary built with `--features research`. The full list, with what is left and why, is [`docs/internal/env-vars.md`](../internal/env-vars.md).
+
 `INKVEC_TIMING` (checked as `std::env::var_os`) turns on per-call timing output inside
 `detect` for `mirrors_of` and `pair_edges` (`symmetry.rs:260, 263-264, 267, 269-271`).
 No other stage-specific overrides exist in this file.

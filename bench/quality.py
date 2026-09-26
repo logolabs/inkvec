@@ -253,6 +253,28 @@ def unused_dependencies() -> list[str]:
     return sorted(found)
 
 
+# The one place the engine may read its environment. Everything else goes through it, so a
+# variable means the same thing everywhere and is read once per process; see
+# docs/internal/env-vars.md for the variables that are left and why.
+ENV_HELPER = ROOT / "crates" / "inkvec-core" / "src" / "env.rs"
+
+
+def env_reads() -> int:
+    """`std::env::var` / `var_os` calls in crate sources outside `inkvec_core::env`.
+
+    Deployment settings that are genuinely environmental (the server's port, a model path)
+    are counted too: the number is a ratchet, not a ban. What it stops is a new engine knob
+    appearing behind the Options schema's back.
+    """
+    n = 0
+    for p in rust_files():
+        if p == ENV_HELPER or "/examples/" in p.as_posix():
+            continue
+        body = p.read_text(encoding="utf-8", errors="replace")
+        n += len(re.findall(r"\benv::var(?:_os)?\s*\(", body))
+    return n
+
+
 def cargo(*args: str, env: dict | None = None) -> str:
     """Run a measurement tool; failures must never look like zero warnings."""
     try:
@@ -285,6 +307,7 @@ def measure(fast: bool = False, coverage: bool = False, mutants: Path | None = N
         "max_file_lines": max(files.values()) if files else 0,
         "debt_markers": markers,
         "test_functions": tests,
+        "env_reads": env_reads(),
     }
 
     if not fast:
@@ -311,6 +334,7 @@ DIRECTION = {
     "debt_markers": "max",
     "rustfmt_hunks": "max",
     "test_functions": "min",
+    "env_reads": "max",
 }
 
 
@@ -332,6 +356,7 @@ EXPLAIN = {
     "debt_markers": "TODO / FIXME / XXX / HACK markers",
     "rustfmt_hunks": "hunks cargo fmt would rewrite",
     "test_functions": "#[test] functions",
+    "env_reads": "std::env::var reads outside inkvec_core::env",
 }
 
 
@@ -415,7 +440,7 @@ def report(now: dict) -> None:
         for k, v in sorted(lints.items(), key=lambda kv: -kv[1]):
             print(f"  {v:5d}  {k[5:]}")
         print()
-    for k in ("rustfmt_hunks", "debt_markers", "test_functions", "max_file_lines"):
+    for k in ("rustfmt_hunks", "debt_markers", "test_functions", "max_file_lines", "env_reads"):
         if k in now:
             print(f"{k:20s} {now[k]:>6}   {explain(k)}")
     for prefix in ("coverage:", "mutation:"):

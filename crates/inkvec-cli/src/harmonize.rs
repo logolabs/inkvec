@@ -86,10 +86,7 @@ pub(crate) fn harmonize(
     decimals: usize,
 ) -> Harmonized {
     let (shapes, face_of) = candidates(f);
-    let tol = std::env::var("INKVEC_HARMONIZE_TOL")
-        .ok()
-        .and_then(|v| v.parse::<f64>().ok())
-        .unwrap_or(HARMONIZE_TOL);
+    let tol = inkvec_core::env::number("INKVEC_HARMONIZE_TOL").unwrap_or(HARMONIZE_TOL);
     let mut out = Harmonized::default();
     for (idx, mut cluster) in cluster_compound_shapes(&shapes, threshold)
         .into_iter()

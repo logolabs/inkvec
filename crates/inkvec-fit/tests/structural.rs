@@ -1,4 +1,6 @@
 //! Comprehensive unit tests for structural simplification (crates/inkvec-fit/src/structural.rs).
+//! The simplifier is research-only: `cargo test -p inkvec-fit --features research`.
+#![cfg(feature = "research")]
 
 use inkvec_core::{Point, Polyline};
 use inkvec_fit::curves::{eval_cubic, Segment};

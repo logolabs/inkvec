@@ -5,6 +5,48 @@ All notable changes to Inkvec are documented in this file. The format follows
 [Semantic Versioning](https://semver.org/) once it reaches 1.0 (before that, the library
 API in particular should be treated as unstable release to release).
 
+## [Unreleased]
+
+### Changed
+
+- **The engine no longer takes settings from the environment.** The crates read 127
+  distinct `INKVEC_*` names, 115 of them in the engine and command line, through four
+  copy-pasted helpers with three meanings of `0`. Now: 47 were tuned constants nobody set
+  and are named constants next to their use; 35 switch experiments and are read only by a
+  binary built with `--features research` (the decode stage, saddle merging, the structural
+  simplifier, axis and G1 snapping, the free cubic, junction wedges, lossy re-labelling and
+  the `ink_ideas` rules, with their knobs); 33 stay -- diagnostics that never change the SVG,
+  and the A/B switches the changelog or a benchmark script uses (`INKVEC_BOPT=0`,
+  `INKVEC_NO_CARVE`, `INKVEC_NO_ABSORB`, `INKVEC_NO_TAPER`, `INKVEC_GRAD_REGIONS=0`,
+  `INKVEC_UNDERLAP`, `INKVEC_NATIVE_ALPHA=0`, `INKVEC_EMIT_DECIMALS`,
+  `INKVEC_HARMONIZE_TOL`); 12 are deployment or test settings (server port, model paths,
+  contract re-record) and are unchanged. Every one left is read through `inkvec_core::env`,
+  once per process, and a switch is off when unset, empty or `0` -- so `INKVEC_NO_CARVE=0`
+  now leaves carving on, where it used to switch it off. `JDBG` and `TAPERDBG` are
+  `INKVEC_JDBG` and `INKVEC_TAPERDBG`. The full table is `docs/internal/env-vars.md`, and
+  `bench/quality.py` fails if a new `std::env::var` appears outside the helper. Default output
+  is byte-identical (1,290/1,290 traces across 6 suites), and the release `inkvec` binary is 5.44 MB (-202 KB / -3.6% vs 0.2.0).
+- Library API behind the `research` feature now: `inkvec_trace::decode`,
+  `inkvec_trace::merge_saddle_faces` / `SADDLE_SIGMAS`, `ColorTrace::decode`,
+  `inkvec_fit::merge::{snap_axis_aligned, snap_smooth_joins, PARAMS_AXIS_LINE,
+  PARAMS_SMOOTH_CUBIC}` and everything in `inkvec_fit::structural` except `eval_segment`.
+  `inkvec_fit::cost::CostModel::STANDARD` is new.
+
+### Removed
+
+- `INKVEC_PARAMS_CUBIC` and `INKVEC_G1_BREAK`: use `--bezier-cost` and `--corner-angle`.
+- `INKVEC_CONTENT_SCALE`, `INKVEC_LAYERS`: use `--content-units`, `--layers`.
+- `INKVEC_MATTE`, `INKVEC_BOPT_ITERS`, `INKVEC_BOPT_MS`, `INKVEC_NOISE_SIGMAS`,
+  `INKVEC_SAME_INK_DE00`, `INKVEC_SIGMA_SCALE`, `INKVEC_WOBBLE_PENALTY` and the other tuning
+  overrides listed as class (a) in `docs/internal/env-vars.md`.
+
+### Fixed
+
+- The boundary solve's gridline walk (`boundary_opt::crossings`) stepped `m += 1.0` until it
+  passed the segment's far end, which never happens when a coordinate is infinite or so large
+  that adding one leaves it unchanged: a trace could hang instead of failing. Such a segment now
+  contributes no crossings; a test with a deadline covers infinite, NaN and 1e20 coordinates.
+
 ## [0.2.0] - 2026-09-26
 
 ### Added

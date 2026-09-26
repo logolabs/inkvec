@@ -640,7 +640,7 @@ fn signed_area(pts: &[Point]) -> f64 {
 /// boundaries are closed at all, and a whole-shape primitive needs a closed one, so the
 /// offer rate among eligible boundaries is 53.5%.
 ///
-/// Ablating the path entirely (`INKVEC_NO_PRIMITIVE=1`) costs **30.52% of the parameter
+/// Ablating the path entirely (the `INKVEC_NO_PRIMITIVE` switch, since removed) costs **30.52% of the parameter
 /// ratio** (1.4818 -> 1.9341) and 9.01% of dE00, with turning unchanged (-0.32%). For
 /// scale, every other parameter lever measured on this tree moves the ratio by 1-2%.
 ///

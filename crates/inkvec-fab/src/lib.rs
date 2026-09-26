@@ -71,7 +71,7 @@ pub fn prepare(svg: &str, o: &Options) -> Result<Plan, LoadError> {
         return Err(LoadError("the width must be positive".into()));
     }
     // Flatten a little finer than the output tolerance, so the refit has room.
-    let timing = std::env::var_os("INKVEC_FAB_TIMING").is_some();
+    let timing = inkvec_core::env::flag("INKVEC_FAB_TIMING");
     let t = inkvec_core::clock::Instant::now();
     let art = load::load(svg, o.width_mm, (o.tolerance_mm / 4.0).max(0.002))?;
     if timing {

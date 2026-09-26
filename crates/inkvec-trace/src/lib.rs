@@ -20,7 +20,8 @@
 //!
 //! Two things run beside that path rather than in it: [`alpha`] recovers a translucent
 //! layer seen against two grounds, and [`centerline`] recovers strokes rather than
-//! regions. [`decode`] is a research stage, off unless `INKVEC_DECODE` is set.
+//! regions. `decode` is a research stage: compiled only with the `research` feature, and
+//! off even then unless `INKVEC_DECODE` is set.
 //!
 //! One rule governs every stage: a model is kept only when it lowers squared residual
 //! against the image by more than `lambda` times the parameters it adds.
@@ -34,9 +35,14 @@
 pub mod alpha;
 pub mod boundary_opt;
 pub mod centerline;
+// Exact polygon clipping and pixel coverage: the stroke solve's, and in a `research` build
+// also `decode`'s (the parts only `decode` calls are unused without it).
+#[cfg_attr(not(feature = "research"), allow(dead_code))]
+mod clip;
 pub mod color;
 pub mod contour;
 pub mod coverage;
+#[cfg(feature = "research")]
 pub mod decode;
 pub mod diag;
 pub mod fast;
@@ -60,9 +66,10 @@ pub use color::{Oklab, Palette};
 pub use coverage::{CoverageField, Rgba};
 pub use planar::PlanarMap;
 pub use regions::{
-    absorb_blend_slivers, despeckle, dump_labels, merge_saddle_faces, reassign_blend_pixels,
-    split_components, SADDLE_SIGMAS,
+    absorb_blend_slivers, despeckle, dump_labels, reassign_blend_pixels, split_components,
 };
+#[cfg(feature = "research")]
+pub use regions::{merge_saddle_faces, SADDLE_SIGMAS};
 
 /// Error loading or decoding a raster image.
 #[derive(Debug)]
@@ -297,7 +304,7 @@ pub struct ColorOptions {
     /// uncertainty handed to the fitter is inflated where the two inks meeting at an edge
     /// are close in colour. See `planar::refine_subpixel`.
     pub simplify_faint: bool,
-    /// Wall-clock budget for the boundary solve, overriding `INKVEC_BOPT_MS`. `None` (the
+    /// Wall-clock budget for the boundary solve. `None` (the
     /// default, and what a zero `--time-budget` gives) means no clock: the solve stops on
     /// its iteration count alone, so the result does not depend on how fast the machine is.
     pub boundary_ms: Option<u64>,
@@ -348,6 +355,7 @@ pub struct ColorTrace {
     /// What the global boundary solve did, when it ran and gained anything.
     pub boundary_opt: Option<boundary_opt::Report>,
     /// What order-first decoding did, when it ran and changed anything.
+    #[cfg(feature = "research")]
     pub decode: Option<decode::Report>,
     /// Mirrors of the label map, and how the boundaries pair off under them.
     pub symmetry: symmetry::Symmetry,
@@ -446,14 +454,11 @@ pub fn trace_color_full_with_alpha(
     // `intake_scale` reads edge width, which compression leaves at 1.00. See
     // `coverage::ringing_score`.
     let ringing = coverage::ringing_score(&rgb, img.width, img.height);
-    let ringing_gate = std::env::var("INKVEC_RINGING")
-        .ok()
-        .and_then(|v| v.parse::<f64>().ok())
-        .unwrap_or(if img.width.min(img.height) >= color::RINGING_MIN_DIM {
-            color::SOFT_RINGING_LARGE
-        } else {
-            color::SOFT_RINGING
-        });
+    let ringing_gate = if img.width.min(img.height) >= color::RINGING_MIN_DIM {
+        color::SOFT_RINGING_LARGE
+    } else {
+        color::SOFT_RINGING
+    };
     let soft_intake =
         edge_width > color::SOFT_INTAKE_EDGE || opts.lossy_intake || ringing > ringing_gate;
     let noise_sigmas = if soft_intake {
@@ -486,7 +491,7 @@ pub fn trace_color_full_with_alpha(
             diag::Stop::GateNeverFired,
         );
     }
-    if std::env::var("INKVEC_PALDBG").is_ok() {
+    if inkvec_core::env::flag("INKVEC_PALDBG") {
         eprintln!(
             "  intake edge width {edge_width:.2} px, ringing {ringing:.4} (gate {ringing_gate}), lossy {} -> noise guard {noise_sigmas} sigma",
             opts.lossy_intake
@@ -508,13 +513,13 @@ pub fn trace_color_full_with_alpha(
     sw.mark("palette");
     let mut pal = pal;
     let mut labels = color::label_image(&rgb, &pal);
-    if opts.lossy_intake && std::env::var_os("INKVEC_LOSSY_REGULARIZE").is_some() {
+    if opts.lossy_intake && research_lossy_regularize() {
         let sigma_lossy = sigma_noise.max(regularize::residual_sigma(
             &rgb, &labels, img.width, img.height, &pal,
         ));
         let changed =
             regularize::labels(&rgb, &mut labels, img.width, img.height, &pal, sigma_lossy);
-        if std::env::var_os("INKVEC_LOSSY_KEEP_NOISE").is_none() {
+        if !inkvec_core::env::flag("INKVEC_LOSSY_KEEP_NOISE") {
             sigma_noise = sigma_lossy;
         }
         eprintln!(
@@ -553,22 +558,15 @@ pub fn trace_color_full_with_alpha(
         measured_always * 255.0,
         soft_intake
     );
-    if soft_intake && std::env::var_os("INKVEC_NO_MEASURED_SIGMA").is_none() {
-        let scale = std::env::var("INKVEC_SIGMA_SCALE")
-            .ok()
-            .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(color::MEASURED_SIGMA_SCALE);
+    if soft_intake {
+        let scale = color::MEASURED_SIGMA_SCALE;
         // `residual_sigma` clamps itself to 8 display levels, which is far too generous for
         // thin-feature content: a diagram is mostly text, and an assumed noise of 8 levels
         // merges a glyph stroke into its background. Measured per class at quality 60, the
         // median escalation is 1.6 levels on diagrams against 3.9 to 4.9 elsewhere, but the
         // diagram TAIL reaches the 8-level ceiling, and those are exactly the files whose
         // colour error doubled. The cap is therefore set from the tail, not the median.
-        let cap = std::env::var("INKVEC_SIGMA_CAP")
-            .ok()
-            .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(color::MEASURED_SIGMA_CAP)
-            / 255.0;
+        let cap = color::MEASURED_SIGMA_CAP / 255.0;
         let measured = (regularize::residual_sigma(&rgb, &labels, img.width, img.height, &pal)
             * scale)
             .min(cap);
@@ -590,7 +588,7 @@ pub fn trace_color_full_with_alpha(
     // measured-sigma step so every rule sees the same labels and the same noise level the
     // shipped trace goes on to use.
     #[cfg(feature = "research")]
-    if let Ok(idea) = std::env::var("INKVEC_INK_IDEA") {
+    if let Some(idea) = inkvec_core::env::text("INKVEC_INK_IDEA") {
         let distinct = |ls: &[u16]| ls.iter().collect::<std::collections::HashSet<_>>().len();
         let inks_before = distinct(&labels);
         let t0 = std::time::Instant::now();
@@ -633,7 +631,7 @@ pub fn trace_color_full_with_alpha(
     // mints two junctions per couple of pixels: the boundary the fitter finally sees is
     // confetti before any curve model gets a say. Measured on `mosaic_grid6` (36 flat
     // cells): 128 faces and 368 edges, where the truth has 37 regions.
-    if std::env::var_os("INKVEC_NO_ABSORB").is_none() {
+    if !inkvec_core::env::flag("INKVEC_NO_ABSORB") {
         let alpha: Vec<f32> = match source_alpha {
             Some(a) if a.len() == img.width * img.height => a.to_vec(),
             _ => (0..img.width * img.height)
@@ -663,8 +661,8 @@ pub fn trace_color_full_with_alpha(
         }
     }
     sw.mark("blend_absorb");
-    if let Some(path) = std::env::var_os("INKVEC_DUMP_LABELS") {
-        dump_labels(&path, &labels, &pal, img.width, img.height);
+    if let Some(path) = inkvec_core::env::path("INKVEC_DUMP_LABELS") {
+        dump_labels(path.as_os_str(), &labels, &pal, img.width, img.height);
     }
 
     // Merge palette bands that are really one gradient, before anything downstream sees
@@ -734,7 +732,7 @@ pub fn trace_color_full_with_alpha(
     // end — is a cluster of pixels no fill explains. Carve it out as its own region
     // before the fitter is left to explain it with a gradient. See
     // `gradient::carve_residual_features`.
-    if opts.gradients && std::env::var_os("INKVEC_NO_CARVE").is_none() {
+    if opts.gradients && !inkvec_core::env::flag("INKVEC_NO_CARVE") {
         let carved = gradient::carve_residual_features_with_detail_noise(
             &mut labels,
             &rgb,
@@ -746,10 +744,9 @@ pub fn trace_color_full_with_alpha(
             sigma_noise,
             gradient::bic_lambda(img.width * img.height),
             min_region.max(2),
-            (opts.lossy_intake && std::env::var_os("INKVEC_LOSSY_REGULARIZE").is_some())
-                .then_some(detail_sigma),
+            (opts.lossy_intake && research_lossy_regularize()).then_some(detail_sigma),
         );
-        if carved > 0 && std::env::var_os("INKVEC_TIMING").is_some() {
+        if carved > 0 && inkvec_core::env::flag("INKVEC_TIMING") {
             eprintln!("  [t] carved {carved} residual feature(s) into regions");
         }
     }
@@ -989,7 +986,7 @@ pub fn trace_color_from_labels(
     // the same way a palette does, and more of them. No separate interior noise estimate:
     // that exists on the classical path to undo what lossy regularisation did to
     // `sigma_noise`, and nothing here raises it.
-    if opts.gradients && std::env::var_os("INKVEC_NO_CARVE").is_none() {
+    if opts.gradients && !inkvec_core::env::flag("INKVEC_NO_CARVE") {
         let carved = gradient::carve_residual_features_with_detail_noise(
             &mut labels,
             &rgb,
@@ -1003,7 +1000,7 @@ pub fn trace_color_from_labels(
             opts.min_region.max(2),
             None,
         );
-        if carved > 0 && std::env::var_os("INKVEC_TIMING").is_some() {
+        if carved > 0 && inkvec_core::env::flag("INKVEC_TIMING") {
             eprintln!("  [t] carved {carved} residual feature(s) into regions");
         }
     }
@@ -1108,7 +1105,9 @@ pub(crate) fn finish_color_trace_alpha(
     face_alpha_override: Option<Vec<f32>>,
 ) -> ColorTrace {
     // Four pixels meeting at one corner are the one thing the labels cannot settle on
-    // their own. Ask the image, and record the answer where the map can read it.
+    // their own. Ask the image, and record the answer where the map can read it. An
+    // experiment (`INKVEC_SADDLE`), compiled only in a `research` build.
+    #[cfg(feature = "research")]
     let (labels, mut face_fill, face_color, n_faces) = merge_saddle_faces(
         labels,
         img.width,
@@ -1154,8 +1153,7 @@ pub(crate) fn finish_color_trace_alpha(
 
     // Then solve the whole boundary against the image at once: every point above was
     // placed by a one-dimensional argument of its own, and a pixel's value is the area
-    // coverage of all the regions that touch it.
-    let boundary_opt = if !opts.fast && std::env::var("INKVEC_BOPT").map_or(true, |v| v != "0") {
+    let boundary_opt = if !opts.fast && inkvec_core::env::switch("INKVEC_BOPT", true) {
         boundary_opt::optimise_alpha(&mut map, rgb, &face_model, opts.boundary_ms, alpha_pair)
     } else {
         None
@@ -1164,8 +1162,9 @@ pub(crate) fn finish_color_trace_alpha(
 
     // A face too thin to own a fully covered pixel never had its colour read off the
     // image: the palette saw only blends. Its boundary was then fitted against that
-    // biased colour. Fix the model order first and solve the two together.
-    let decode = if !opts.fast && std::env::var("INKVEC_DECODE").is_ok_and(|v| v != "0") {
+    // biased colour. Fix the model order first and solve the two together. Research only.
+    #[cfg(feature = "research")]
+    let decode = if !opts.fast && inkvec_core::env::flag("INKVEC_DECODE") {
         decode::decode_faces(
             &mut map,
             rgb,
@@ -1193,6 +1192,7 @@ pub(crate) fn finish_color_trace_alpha(
         symmetry: sym,
         symmetrised,
         boundary_opt,
+        #[cfg(feature = "research")]
         decode,
         palette: pal,
         labels,
@@ -1202,6 +1202,12 @@ pub(crate) fn finish_color_trace_alpha(
         sigma_noise,
         face_fade: Vec::new(),
     }
+}
+
+/// `INKVEC_LOSSY_REGULARIZE`: re-label a lossy intake with `regularize::labels`, an
+/// experiment never switched on by default. Research builds only.
+fn research_lossy_regularize() -> bool {
+    cfg!(feature = "research") && inkvec_core::env::flag("INKVEC_LOSSY_REGULARIZE")
 }
 
 /// Stopwatch for logging wall-clock timing across tracing stages.
@@ -1272,7 +1278,7 @@ impl Stopwatch {
     /// Start a stopwatch, enabled if the `INKVEC_TIMING` environment variable is set.
     pub fn start() -> Self {
         Self {
-            on: std::env::var_os("INKVEC_TIMING").is_some(),
+            on: inkvec_core::env::flag("INKVEC_TIMING"),
             t: clock::Instant::now(),
         }
     }

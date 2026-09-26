@@ -5,14 +5,20 @@
 //! prior to planar map construction.
 
 use crate::color::Palette;
+#[cfg(feature = "research")]
 use crate::gradient;
 
 /// How far from the half-way mark a corner must sit before the image is taken to have
 /// answered: three sigma of the propagated coverage noise. Below that the two readings
 /// are indistinguishable, and the corner keeps the junction it has always had.
+#[cfg(feature = "research")]
 pub const SADDLE_SIGMAS: f64 = 3.0;
 
 /// Join the faces that four pixels meeting at one corner say are one shape.
+///
+/// An experiment: compiled only with the `research` feature, and even then a no-op unless
+/// `INKVEC_SADDLE` is set.
+#[cfg(feature = "research")]
 #[allow(clippy::too_many_arguments)]
 pub fn merge_saddle_faces(
     mut labels: Vec<u16>,
@@ -25,10 +31,10 @@ pub fn merge_saddle_faces(
     n_faces: usize,
     sigma_noise: f64,
 ) -> (Vec<u16>, Vec<gradient::FillFit>, Vec<usize>, usize) {
-    if !std::env::var("INKVEC_SADDLE").is_ok_and(|v| v != "0") || w < 2 || h < 2 {
+    if !inkvec_core::env::flag("INKVEC_SADDLE") || w < 2 || h < 2 {
         return (labels, face_fill, face_color, n_faces);
     }
-    let dbg = std::env::var("INKVEC_SADDLEDBG").is_ok_and(|v| v != "0");
+    let dbg = inkvec_core::env::flag("INKVEC_SADDLEDBG");
     let mut parent: Vec<u16> = (0..n_faces as u16).collect();
     fn find(parent: &mut [u16], x: u16) -> u16 {
         let mut r = x;
@@ -354,7 +360,7 @@ pub fn absorb_blend_slivers(
                     interior += 1;
                 }
             }
-            let absdbg = std::env::var_os("INKVEC_ABSDBG").is_some();
+            let absdbg = inkvec_core::env::flag("INKVEC_ABSDBG");
             if interior * 5 >= area || foreign == 0 {
                 if absdbg && area > 15 && interior * 5 >= area {
                     eprintln!("abs: comp area {area} NOT thin (interior {interior})");

@@ -219,11 +219,11 @@ opt-in": "Artists constrain these and the corpus says so plainly — of the join
 consecutive cubics that are smooth to within a thousandth of a degree, 60% have equal handle
 lengths either side, the ratio's median being exactly 1.00 with its whole interquartile range
 at 1.00." The same commit records that the *fitter-side* producer, `merge::snap_smooth_joins`,
-ships off by default behind `INKVEC_G1` because it does not pay on the objective ("objective
+ships off by default behind `INKVEC_G1` (*research build*) because it does not pay on the objective ("objective
 0.4005 -> 0.4019, fourteen icons better and seventy-four worse") even though it does what it
 claims at the file level ("42 `S` commands over 48 icons, 82 fewer coordinates, 0.45% fewer
 bytes... `svgmodel` counts geometric segments after normalising `S` away, so `ratio` moved by
-exactly 0.00% while the files genuinely shrank"). The important distinction: `INKVEC_G1` gates
+exactly 0.00% while the files genuinely shrank"). The important distinction: `INKVEC_G1` (*research build*) gates
 the *fitter's* deliberate production of reflective joins (stage 11); the emitter's `S`
 *detection* here is unconditional — a curve that happens to come out smooth for any reason
 gets the short form regardless of that flag.
@@ -413,6 +413,8 @@ Whichever wins becomes the output. `sw.mark("emit")` follows.
   a precision change or if run in the wrong order relative to minify.
 
 ## Environment overrides
+
+Since the settings cleanup (CHANGELOG, *Unreleased*) the engine reads its environment through one helper (`inkvec_core::env`): a switch is off when unset, empty or `0`, and every variable is read once per process. Variables marked *removed* below are gone (their defaults are constants now); those marked *research build* are read only by a binary built with `--features research`. The full list, with what is left and why, is [`docs/internal/env-vars.md`](../internal/env-vars.md).
 
 | variable | effect |
 |---|---|

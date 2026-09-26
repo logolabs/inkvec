@@ -12,6 +12,7 @@
 //! localized at all and should be simplified aggressively. Both facts are already in
 //! `sigma`; no stage below needs to re-derive them.
 
+pub mod env;
 pub mod predicates;
 
 /// A point in image space, in pixel units. Sub-pixel positions are the normal case.

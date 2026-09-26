@@ -265,9 +265,7 @@ fn blend_pairs_rejects_non_mixtures_and_chord_ends() {
 
 #[test]
 fn blend_tmin_defaults_to_four_percent() {
-    if std::env::var_os("INKVEC_BLEND_TMIN").is_none() {
-        assert_eq!(blend_tmin(), 0.04);
-    }
+    assert_eq!(BLEND_TMIN, 0.04);
 }
 
 /// A `w x h` image from a column painter, with the caches `extract_palette_mdl` builds.

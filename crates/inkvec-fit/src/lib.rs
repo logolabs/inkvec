@@ -916,7 +916,7 @@ pub fn fit_path(poly: &Polyline, cfg: &FitConfig) -> FittedPath {
             }
         }
 
-        if std::env::var("INKVEC_DEBUG_FIT").is_ok() {
+        if inkvec_core::env::flag("INKVEC_DEBUG_FIT") {
             eprintln!(
                 "    run {a}..{b}: {} pts | LINE {} segs chi2 {:.0} cost {:.0} | CUBIC {} segs cost {:.0}",
                 run_pts.len(),

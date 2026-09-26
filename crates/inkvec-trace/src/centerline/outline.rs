@@ -126,8 +126,8 @@ pub(crate) fn offset_outline(
             return (if a.len() >= 3 { a } else { b }, None);
         }
         let (aa, ab) = (
-            crate::decode::shoelace(&a).abs(),
-            crate::decode::shoelace(&b).abs(),
+            crate::clip::shoelace(&a).abs(),
+            crate::clip::shoelace(&b).abs(),
         );
         let (outer, inner) = if aa >= ab { (a, b) } else { (b, a) };
         return (outer, Some(inner));
@@ -176,10 +176,10 @@ pub(crate) fn outline_cover(
     if outer.len() < 3 {
         return 0.0;
     }
-    let mut c = crate::decode::clip_area(outer, x, y, a, b);
+    let mut c = crate::clip::clip_area(outer, x, y, a, b);
     if let Some(i) = inner {
         if i.len() >= 3 {
-            c -= crate::decode::clip_area(i, x, y, a, b);
+            c -= crate::clip::clip_area(i, x, y, a, b);
         }
     }
     c.clamp(0.0, 1.0)

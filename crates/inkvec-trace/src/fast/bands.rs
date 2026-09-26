@@ -149,7 +149,11 @@ pub(crate) fn merge_ramps(
     for (p, &l) in labels.iter().enumerate() {
         let r = root[l as usize];
         let s = stride[r];
-        if members[r] > 1 && count[r] >= MIN_PIXELS && (p % w) % s == 0 && (p / w) % s == 0 {
+        if members[r] > 1
+            && count[r] >= MIN_PIXELS
+            && (p % w).is_multiple_of(s)
+            && (p / w).is_multiple_of(s)
+        {
             cluster_px.entry(r).or_default().push(p);
         }
     }

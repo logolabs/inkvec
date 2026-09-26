@@ -491,7 +491,7 @@ fn finish_color(
     // writes it in a compact binary form and stops before the curve fit, which is half the
     // run. Format (little endian): u32 w, h, n_labels, n_edges; then per edge u32 left,
     // right, u8 closed, u32 n, then n x (f32 x, f32 y, f32 sigma). Same intake as a trace.
-    if let Some(path) = std::env::var_os("INKVEC_DUMP_MAP") {
+    if let Some(path) = inkvec_core::env::path("INKVEC_DUMP_MAP") {
         let mut buf: Vec<u8> = Vec::new();
         let m = &traced.map;
         for v in [w as u32, h as u32, m.n_labels as u32, m.edges.len() as u32] {
@@ -510,7 +510,7 @@ fn finish_color(
             }
         }
         return match std::fs::write(&path, buf) {
-            Ok(()) => Err(Stop::MapDumped(std::path::PathBuf::from(path))),
+            Ok(()) => Err(Stop::MapDumped(path)),
             Err(e) => Err(Stop::MapDumpFailed(e.to_string())),
         };
     }
@@ -568,7 +568,7 @@ fn finish_color(
     // edge varies by orders of magnitude (a two-point sliver against a thousand-point
     // outline), which is exactly the shape of problem rayon's work stealing handles.
     use rayon::prelude::*;
-    let ring_timing = std::env::var_os("INKVEC_TIMING").is_some();
+    let ring_timing = inkvec_core::env::flag("INKVEC_TIMING");
     let ring_times: std::sync::Mutex<Vec<(f64, usize)>> = std::sync::Mutex::new(Vec::new());
     let fast = fast::on(args);
     let results: Vec<(FittedPath, Option<PrimitiveFit>)> = if fast {
@@ -598,17 +598,12 @@ fn finish_color(
                 // are scored by the same MDL cost, so the three numbers of a circle beat the
                 // twenty-four of four cubics whenever the evidence actually supports a
                 // circle, and lose when it does not.
-                // `INKVEC_NO_PRIMITIVE=1` takes the whole-boundary primitive path out, the
-                // same way `INKVEC_NO_ARCS` takes arcs out of the DP alphabet, which is how
-                // the two are measured against each other. It is worth a great deal: over
-                // the 246-icon gate set, removing it costs 30.52% of the parameter ratio
+                // It is worth a great deal: measured by taking this whole-boundary primitive
+                // path out (the `INKVEC_NO_PRIMITIVE` ablation, since removed) over the
+                // 246-icon gate set, removing it costs 30.52% of the parameter ratio
                 // (1.4818 -> 1.9341) and 9.01% of dE00, far more than any other lever
                 // measured on this tree.
-                let attempt = if std::env::var_os("INKVEC_NO_PRIMITIVE").is_some() {
-                    None
-                } else {
-                    fit_primitive_or_arcs(&poly.points, &poly.sigma, poly.closed, &cfg_k)
-                };
+                let attempt = fit_primitive_or_arcs(&poly.points, &poly.sigma, poly.closed, &cfg_k);
                 match attempt {
                     Some((segs, prim, cost)) if cost < path_cost(&poly, &curve, &cfg_k) => (
                         FittedPath {
@@ -632,34 +627,36 @@ fn finish_color(
     // A local merge can trigger a more expensive global crossing repair. Keep
     // an independent baseline through primitive selection and repair so the
     // trial is judged on the geometry that those stages actually return.
-    let mut structural_baseline = if std::env::var("INKVEC_STRUCTURAL").is_ok_and(|v| v != "0") {
-        let results: Vec<_> = polys
-            .par_iter()
-            .zip(lambda_scales.par_iter())
-            .map(|(poly, &scale)| {
-                let cfg_k = FitConfig {
-                    lambda: cfg.lambda * scale,
-                    ..*cfg
-                };
-                let curve = multimodel::optimal_multimodel_without_structural(poly, &cfg_k);
-                match fit_primitive_or_arcs(&poly.points, &poly.sigma, poly.closed, &cfg_k) {
-                    Some((segs, prim, cost)) if cost < path_cost(poly, &curve, &cfg_k) => (
-                        FittedPath {
-                            start: poly.points[0],
-                            segments: segs,
-                            closed: poly.closed,
-                        },
-                        prim,
-                    ),
-                    _ => (curve, None),
-                }
-            })
-            .collect();
-        let (paths, primitives): (Vec<_>, Vec<_>) = results.into_iter().unzip();
-        Some((paths, primitives))
-    } else {
-        None
-    };
+    // The structural simplifier's transactional baseline: research builds only.
+    let mut structural_baseline =
+        if cfg!(feature = "research") && inkvec_core::env::flag("INKVEC_STRUCTURAL") {
+            let results: Vec<_> = polys
+                .par_iter()
+                .zip(lambda_scales.par_iter())
+                .map(|(poly, &scale)| {
+                    let cfg_k = FitConfig {
+                        lambda: cfg.lambda * scale,
+                        ..*cfg
+                    };
+                    let curve = multimodel::optimal_multimodel_without_structural(poly, &cfg_k);
+                    match fit_primitive_or_arcs(&poly.points, &poly.sigma, poly.closed, &cfg_k) {
+                        Some((segs, prim, cost)) if cost < path_cost(poly, &curve, &cfg_k) => (
+                            FittedPath {
+                                start: poly.points[0],
+                                segments: segs,
+                                closed: poly.closed,
+                            },
+                            prim,
+                        ),
+                        _ => (curve, None),
+                    }
+                })
+                .collect();
+            let (paths, primitives): (Vec<_>, Vec<_>) = results.into_iter().unzip();
+            Some((paths, primitives))
+        } else {
+            None
+        };
     sw.mark("fit_dp");
     if ring_timing {
         let mut rt = ring_times.into_inner().unwrap();

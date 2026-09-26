@@ -8,7 +8,7 @@
 **Entry point:** `decode_faces()` (`decode.rs:687`)
 **Pipeline position:** after `boundary_opt` (stage mark `"boundary_opt"`, `lib.rs:473`),
 before `symmetry` enforcement (stage mark `"decode"`, `lib.rs:489`). Called only from
-`trace_color_full_with_alpha`, and only when `INKVEC_DECODE` is set to something other than
+`trace_color_full_with_alpha`, and only when `INKVEC_DECODE` (*research build*) is set to something other than
 `"0"` (`lib.rs:478`) — **off by default**.
 
 ## What problem this solves
@@ -91,7 +91,7 @@ Two tests decide whether the face is actually a candidate for this stage
 (`decode.rs:771-802`):
 
 - **Thin.** `thin = 2.0 * area / perimeter`, the width of a long thin face measured as
-  twice its area over its perimeter. Compared against `THIN_PX` (`INKVEC_DECODE_THIN`,
+  twice its area over its perimeter. Compared against `THIN_PX` (`INKVEC_DECODE_THIN` (*research build*),
   default `2.5`). The doc comment on `THIN_PX` (`decode.rs:90-95`) states the derivation:
   "`4.0` lets in faces wide enough to own a clean witness pixel and cost more than it
   gains; `2.5` is where the conditioning cliff sits (`h1_exponent.py`) and where the
@@ -104,7 +104,7 @@ Two tests decide whether the face is actually a candidate for this stage
   merely a little off, and decoding one of those as a polygon damaged three case-suite
   shapes that a width test leaves alone (`corner_right`, `edge_axis`, `junction_quad`)"
   (`decode.rs:791-796`). It is retained only as a diagnostic printed under
-  `INKVEC_DECODEDBG`.
+  `INKVEC_DECODEDBG` (*research build*).
 
 The leak census (H5) puts this in context: over 112
 faces on 30 screen-set icons, only 6.2% leak at all, concentrated (weakly, correlation
@@ -267,7 +267,7 @@ are the cheapest description and the caps cannot be deleted.
 
 ### `share_widths` — pooling thin ribbons under one shared width
 
-`share_widths` (`decode.rs:1503-1845`, called only when `INKVEC_DECODE_SHARE` is set to
+`share_widths` (`decode.rs:1503-1845`, called only when `INKVEC_DECODE_SHARE` (*research build*) is set to
 something other than `"0"`; **off** by default) is a second pass over the same map, run
 after the per-face loop. It targets a specific identifiability gap the per-face decoder
 cannot close on its own: H3b/H3c measured that an
@@ -332,7 +332,7 @@ has already answered the question it exists to ask.
 ## Corpus result (H6)
 
 The measured verdict on the default (per-face,
-`INKVEC_DECODE_SHARE` off) configuration, screen set (246 icons):
+`INKVEC_DECODE_SHARE` (*research build*) off) configuration, screen set (246 icons):
 
 | build | acceptance rule | dE00 | DISTS | params ratio | objective |
 |---|---|---|---|---|---|
@@ -341,7 +341,7 @@ The measured verdict on the default (per-face,
 
 "The final build changes 4 icons of 246: two better, two worse, 242 identical. The
 objective differs from master by 0.02%, which is not a win... **Verdict on H6: not
-confirmed. Do not merge into the default path.** The stage stays behind `INKVEC_DECODE`,
+confirmed. Do not merge into the default path.** The stage stays behind `INKVEC_DECODE` (*research build*),
 off, which is where it already is." The report also records a synthetic-stroke win that
 does not generalise: on the 2 px diagonal stroke case, the stage recovers the exact core
 colour (`#204080` against master's `#41557d`) at 541 bytes against master's 614, and three
@@ -350,7 +350,7 @@ shape, corners alone not specifying a shape, and a line-fitting DP being the wro
 detector for a ribbon — all reflected in the `is_polygonal`/write-back design already
 described above.
 
-`REPORT.md` also documents a second, more aggressive setting, `INKVEC_DECODE_OVERRIDE=0.5`
+`REPORT.md` also documents a second, more aggressive setting, `INKVEC_DECODE_OVERRIDE=0.5` (*research build*)
 (the `EVIDENCE_OVERRIDE` env override, letting a decode move a boundary away from its ring
 on weaker evidence): it fixes one more case-suite regression (`ribbon_w1.5`) and the
 synthetic stroke's true colour, at a cost of 0.6% worse corpus objective across eleven
@@ -447,18 +447,20 @@ There is no unit test in this file for `share_widths`, `varpro`'s ridge regulari
 
 ## Environment overrides
 
+Since the settings cleanup (CHANGELOG, *Unreleased*) the engine reads its environment through one helper (`inkvec_core::env`): a switch is off when unset, empty or `0`, and every variable is read once per process. Variables marked *removed* below are gone (their defaults are constants now); those marked *research build* are read only by a binary built with `--features research`. The full list, with what is left and why, is [`docs/internal/env-vars.md`](../internal/env-vars.md).
+
 | variable | default | effect |
 |---|---|---|
-| `INKVEC_DECODE` | off (`"0"` or unset) | master switch — the whole stage is skipped unless set to something other than `"0"` (read in `lib.rs:478`, not in this file) |
-| `INKVEC_DECODE_MS` | `600.0` ms | time budget for the per-face loop |
-| `INKVEC_DECODE_LEAK` | `LEAK_GATE = 0.05` | overrides the (diagnostic-only) leak threshold |
-| `INKVEC_DECODE_THIN` | `THIN_PX = 2.5` | overrides the width threshold that gates whether a face is attempted |
-| `INKVEC_DECODE_GAIN` | `MIN_GAIN = 0.5` | overrides the required residual-fraction cut |
-| `INKVEC_DECODE_OVERRIDE` | `EVIDENCE_OVERRIDE = 0.0` | overrides the residual-ratio threshold for skipping the post-solve shape recheck; `0.5` is the trade documented in `REPORT.md` |
-| `INKVEC_DECODE_RECHECK` | on (`> 0.5`) | when off, the post-solve `is_polygonal` recheck never runs, whatever `earned` says |
-| `INKVEC_DECODE_KEEPFILL` | off | when set, an accepted decode keeps the face's existing `FillModel` instead of replacing it with the decoded flat fill |
-| `INKVEC_DECODE_SHARE` | off (`"0"` or unset) | enables `share_widths`, the ribbon-pooling second pass |
-| `INKVEC_DECODEDBG` | off | verbose per-face and per-order `eprintln!` tracing through the whole decision chain |
+| `INKVEC_DECODE` (*research build*) | off (`"0"` or unset) | master switch — the whole stage is skipped unless set to something other than `"0"` (read in `lib.rs:478`, not in this file) |
+| `INKVEC_DECODE_MS` (*research build*) | `600.0` ms | time budget for the per-face loop |
+| `INKVEC_DECODE_LEAK` (*research build*) | `LEAK_GATE = 0.05` | overrides the (diagnostic-only) leak threshold |
+| `INKVEC_DECODE_THIN` (*research build*) | `THIN_PX = 2.5` | overrides the width threshold that gates whether a face is attempted |
+| `INKVEC_DECODE_GAIN` (*research build*) | `MIN_GAIN = 0.5` | overrides the required residual-fraction cut |
+| `INKVEC_DECODE_OVERRIDE` (*research build*) | `EVIDENCE_OVERRIDE = 0.0` | overrides the residual-ratio threshold for skipping the post-solve shape recheck; `0.5` is the trade documented in `REPORT.md` |
+| `INKVEC_DECODE_RECHECK` (*research build*) | on (`> 0.5`) | when off, the post-solve `is_polygonal` recheck never runs, whatever `earned` says |
+| `INKVEC_DECODE_KEEPFILL` (*research build*) | off | when set, an accepted decode keeps the face's existing `FillModel` instead of replacing it with the decoded flat fill |
+| `INKVEC_DECODE_SHARE` (*research build*) | off (`"0"` or unset) | enables `share_widths`, the ribbon-pooling second pass |
+| `INKVEC_DECODEDBG` (*research build*) | off | verbose per-face and per-order `eprintln!` tracing through the whole decision chain |
 
 ## Open questions
 
@@ -489,5 +491,5 @@ There is no unit test in this file for `share_widths`, `varpro`'s ridge regulari
   way the main per-face decoder does — it is simply off, with no sweep of intermediate
   settings shown.
 - **No test in this file exercises `share_widths`, `fitted_params`, or the
-  `INKVEC_DECODE_OVERRIDE` code path.** All three are validated only through the external
+  `INKVEC_DECODE_OVERRIDE` (*research build*) code path.** All three are validated only through the external
   corpus/case-suite measurements, not through `cargo test`.

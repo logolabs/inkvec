@@ -103,7 +103,7 @@ each timed by the `Stopwatch` (`crates/inkvec-trace/src/lib.rs:1030-1055`, print
 | `refine_subpix` | `crates/inkvec-trace/src/lib.rs:975` (`planar::refine_subpixel`) | sub-pixel | slide each boundary point along its local normal to the measured 0.5-coverage level |
 | `refine_junc` | `crates/inkvec-trace/src/lib.rs:977` (`planar::refine_junctions`) | junctions | settle shared endpoints |
 | `boundary_opt` | `crates/inkvec-trace/src/lib.rs:987` (`boundary_opt::optimise`) | boundary solve | move every boundary point at once so the *rendered* partition matches the image |
-| `decode` | `crates/inkvec-trace/src/lib.rs:1003` (`decode::decode_faces`) | decode | order-first colour/geometry fix for faces too thin to own a fully-covered pixel; off unless `INKVEC_DECODE` is set |
+| `decode` | `crates/inkvec-trace/src/lib.rs:1003` (`decode::decode_faces`) | decode | order-first colour/geometry fix for faces too thin to own a fully-covered pixel; off unless `INKVEC_DECODE` (*research build*) is set |
 | `symmetry` | `crates/inkvec-trace/src/lib.rs:1013` (`symmetry::enforce`) | symmetry enforce | put back the exactness every upstream tie-break quietly broke |
 | — | `crates/inkvec-cli/src/pipeline.rs:363` (`trace_total`) | — | end of the `inkvec_trace` half |
 | — | `crates/inkvec-cli/src/pipeline.rs:585` (`fit_dp`) | curve fit | one global DP per boundary, `{line, cubic}` alphabet, MDL cost, primitives offered as an alternative and taken when they cost less |

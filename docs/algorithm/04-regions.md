@@ -65,7 +65,7 @@ Flood-fills the palette-indexed label array into 4-connected components, in rast
 
 ### Saddle resolution (`saddles`, `merge_saddle_faces`, `lib.rs:544`)
 
-**Off by default** — gated by `INKVEC_SADDLE` being set to something other than `"0"` (`lib.rs:561`). See Environment overrides.
+**Off by default** — gated by `INKVEC_SADDLE` (*research build*) being set to something other than `"0"` (`lib.rs:561`). See Environment overrides.
 
 For every interior pixel corner `(i, j)` where `1 <= i < w`, `1 <= j < h`, look at the four pixels meeting there: `nw = (i-1,j-1)`, `ne = (i,j-1)`, `sw = (i-1,j)`, `se = (i,j)`.
 
@@ -118,12 +118,14 @@ The comment reads as written in the order the idea was tried and then reverted; 
 
 ## Environment overrides
 
+Since the settings cleanup (CHANGELOG, *Unreleased*) the engine reads its environment through one helper (`inkvec_core::env`): a switch is off when unset, empty or `0`, and every variable is read once per process. Variables marked *removed* below are gone (their defaults are constants now); those marked *research build* are read only by a binary built with `--features research`. The full list, with what is left and why, is [`docs/internal/env-vars.md`](../internal/env-vars.md).
+
 | variable | effect |
 |---|---|
 | `INKVEC_NO_ABSORB` | if set (any value), skips both `absorb_blend_slivers` and `reassign_blend_pixels` entirely (`lib.rs:510`). It is the only environment variable of this kind in the current `inkvec-trace` source (confirmed by `grep -rn "NO_ABSORB" crates/ --include=*.rs`, one hit) — this project was previously named svgify, but no old `SVGIFY_*` env var names survive in the current source. |
 | `INKVEC_ABSDBG` | prints per-component rejection reasons from `absorb_blend_slivers` to stderr for components over 15 pixels (`lib.rs:953-978`) |
-| `INKVEC_SADDLE` | must be set to a value other than `"0"` to turn the saddle pass **on**; it is off by default (`lib.rs:561`) |
-| `INKVEC_SADDLEDBG` | prints, per resolved or tied corner, the two ink ids, the corner value, its uncertainty and the verdict (`lib.rs:654-664`) |
+| `INKVEC_SADDLE` (*research build*) | must be set to a value other than `"0"` to turn the saddle pass **on**; it is off by default (`lib.rs:561`) |
+| `INKVEC_SADDLEDBG` (*research build*) | prints, per resolved or tied corner, the two ink ids, the corner value, its uncertainty and the verdict (`lib.rs:654-664`) |
 | `INKVEC_DUMP_LABELS` | (path) writes the post-absorption label image as a binary PPM using palette colours, for visual inspection (`lib.rs:346-348`, `dump_labels` at `lib.rs:1263`) |
 | `INKVEC_TIMING` | enables the `Stopwatch` (`lib.rs:1241-1260`), printing each stage mark's wall-clock time |
 

@@ -152,8 +152,9 @@ counts and languages, with two exceptions:
 
 * a nonzero `time_budget` stops stages by wall clock, so the output depends on machine speed
   and load;
-* the tracer reads a number of `INKVEC_*` environment variables as research switches; leave them
-  unset.
+* a release build still reads a few `INKVEC_*` environment variables: diagnostics, and A/B
+  switches the benchmark scripts use to turn a shipped stage off (`INKVEC_BOPT=0`,
+  `INKVEC_NO_CARVE=1`, ...). They are listed in `docs/internal/env-vars.md`; leave them unset.
 
 **Across build targets the bytes can differ.** The pipeline takes a few transcendental functions
 (cube roots, trigonometry, logarithms) from the platform's maths library, whose last-bit

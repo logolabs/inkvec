@@ -202,7 +202,8 @@ impl Default for Args {
             simplify_faint: false,
             layers: false,
             cutout: false,
-            native_alpha: std::env::var_os("INKVEC_NATIVE_ALPHA").is_none_or(|v| v != "0"),
+            // `INKVEC_NATIVE_ALPHA=0` restores the old compositing path for comparison.
+            native_alpha: inkvec_core::env::switch("INKVEC_NATIVE_ALPHA", true),
             minify: false,
             editability: false,
             bilevel: false,
@@ -703,7 +704,7 @@ mod tests {
         let a_opt_out = parse("logo.png --no-harmonize").expect("parses");
         assert!(!a_opt_out.harmonize);
 
-        if std::env::var_os("INKVEC_NATIVE_ALPHA").is_none() {
+        if inkvec_core::env::raw("INKVEC_NATIVE_ALPHA").is_none() {
             assert!(parse("logo.png").expect("parses").native_alpha);
         }
         assert!(

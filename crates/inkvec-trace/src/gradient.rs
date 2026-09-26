@@ -163,27 +163,9 @@ fn linear_t(x: f64, y: f64, p0: (f64, f64), p1: (f64, f64)) -> f64 {
 #[inline]
 fn radial_t(x: f64, y: f64, c: (f64, f64), r: f64, aspect: f64, angle: f64) -> f64 {
     if r <= 0.0 || aspect == 1.0 {
-        return radial_t_rot(x, y, c, r, aspect, (0.0, 1.0));
+        return eval::radial_t_rot(x, y, c, r, aspect, (0.0, 1.0));
     }
-    radial_t_rot(x, y, c, r, aspect, angle.sin_cos())
-}
-
-/// [`radial_t`] with the rotation's `angle.sin_cos()` given (unused when `aspect` is 1).
-#[inline]
-fn radial_t_rot(x: f64, y: f64, c: (f64, f64), r: f64, aspect: f64, sin_cos: (f64, f64)) -> f64 {
-    if r <= 0.0 {
-        return 0.0;
-    }
-    let (dx, dy) = (x - c.0, y - c.1);
-    let rho = if aspect == 1.0 {
-        (dx * dx + dy * dy).sqrt()
-    } else {
-        let (sn, cs) = sin_cos;
-        let u = dx * cs + dy * sn;
-        let v = (-dx * sn + dy * cs) * aspect;
-        (u * u + v * v).sqrt()
-    };
-    (rho / r).clamp(0.0, 1.0)
+    eval::radial_t_rot(x, y, c, r, aspect, angle.sin_cos())
 }
 
 impl FillModel {
@@ -330,20 +312,10 @@ pub(crate) fn from_space(c: [f64; 3], space: Interp) -> [f32; 3] {
     }
 }
 
-/// Interpolate two stops already in linear light, returning sRGB.
-#[inline]
-fn lerp_lin(a: [f64; 3], b: [f64; 3], t: f64) -> [f32; 3] {
-    to_srgb([
-        a[0] + (b[0] - a[0]) * t,
-        a[1] + (b[1] - a[1]) * t,
-        a[2] + (b[2] - a[2]) * t,
-    ])
-}
-
 /// Interpolate two sRGB stops in the given space.
 fn lerp_stops(c0: [f32; 3], c1: [f32; 3], t: f64, interp: Interp) -> [f32; 3] {
     match interp {
-        Interp::LinearRgb => lerp_lin(to_lin(c0), to_lin(c1), t),
+        Interp::LinearRgb => eval::lerp_lin(to_lin(c0), to_lin(c1), t),
         Interp::Srgb => {
             let t = t as f32;
             [
@@ -357,144 +329,20 @@ fn lerp_stops(c0: [f32; 3], c1: [f32; 3], t: f64, interp: Interp) -> [f32; 3] {
 
 /// Evaluate a multi-stop profile: `c0` at 0, `c1` at 1, `mids` between, piecewise linear
 /// in `interp`.
-fn eval_stops(
+pub(super) fn eval_stops(
     c0: [f32; 3],
     mids: &[(f64, [f32; 3])],
     c1: [f32; 3],
     t: f64,
     interp: Interp,
 ) -> [f32; 3] {
-    let (k, u) = segment(mids, t);
+    let (k, u) = eval::segment(mids, t);
     let stop = |i: usize| match i {
         0 => c0,
         i if i <= mids.len() => mids[i - 1].1,
         _ => c1,
     };
     lerp_stops(stop(k), stop(k + 1), u, interp)
-}
-
-/// Which piece of a multi-stop profile `t` falls in, as the index of its first stop
-/// (`c0` is 0, `mids[i]` is `i + 1`), and where along that piece, 0 to 1.
-#[inline]
-fn segment(mids: &[(f64, [f32; 3])], t: f64) -> (usize, f64) {
-    if mids.is_empty() {
-        return (0, t);
-    }
-    let mut lo_t = 0.0;
-    for (i, &(off, _)) in mids.iter().enumerate() {
-        if t <= off {
-            let u = if off > lo_t {
-                (t - lo_t) / (off - lo_t)
-            } else {
-                0.0
-            };
-            return (i, u);
-        }
-        lo_t = off;
-    }
-    let u = if lo_t < 1.0 {
-        (t - lo_t) / (1.0 - lo_t)
-    } else {
-        1.0
-    };
-    (mids.len(), u)
-}
-
-/// [`FillModel::color_at`] for many positions of one model.
-///
-/// What does not depend on the position is worked out once here: the stops' conversion
-/// to linear light and an ellipse's rotation. Those were 6 of the 9 `powf` of every
-/// evaluated pixel, and the gradient fits evaluate millions of pixels per image. The
-/// result is `color_at`'s bit for bit: the same expressions on the same values, only
-/// hoisted out of the pixel loop.
-pub(crate) struct FillEval<'a> {
-    model: &'a FillModel,
-    /// Every stop, first to last, in linear light; empty unless the model interpolates
-    /// in linear RGB.
-    lin: Vec<[f64; 3]>,
-    /// `angle.sin_cos()` of an elliptical radial model.
-    sin_cos: (f64, f64),
-}
-
-impl FillModel {
-    /// A [`FillEval`] of this model, for evaluating it at many positions.
-    pub(crate) fn eval(&self) -> FillEval<'_> {
-        let (mut lin, mut sin_cos) = (Vec::new(), (0.0, 1.0));
-        match self {
-            FillModel::Flat(_) => {}
-            FillModel::Linear {
-                c0,
-                c1,
-                interp,
-                mids,
-                ..
-            }
-            | FillModel::Radial {
-                c0,
-                c1,
-                interp,
-                mids,
-                ..
-            } => {
-                if *interp == Interp::LinearRgb {
-                    lin.push(to_lin(*c0));
-                    lin.extend(mids.iter().map(|&(_, c)| to_lin(c)));
-                    lin.push(to_lin(*c1));
-                }
-            }
-        }
-        if let FillModel::Radial { aspect, angle, .. } = *self {
-            if aspect != 1.0 {
-                sin_cos = angle.sin_cos();
-            }
-        }
-        FillEval {
-            model: self,
-            lin,
-            sin_cos,
-        }
-    }
-}
-
-impl FillEval<'_> {
-    /// The fill colour (sRGB) at a pixel-centre position; see [`FillModel::color_at`].
-    #[inline]
-    pub(crate) fn color_at(&self, x: f64, y: f64) -> [f32; 3] {
-        let (t, c0, mids, c1, interp) = match *self.model {
-            FillModel::Flat(c) => return c,
-            FillModel::Linear {
-                p0,
-                p1,
-                c0,
-                c1,
-                interp,
-                ref mids,
-            } => (linear_t(x, y, p0, p1), c0, mids, c1, interp),
-            FillModel::Radial {
-                c,
-                r,
-                c0,
-                c1,
-                interp,
-                aspect,
-                ref mids,
-                ..
-            } => (
-                radial_t_rot(x, y, c, r, aspect, self.sin_cos),
-                c0,
-                mids,
-                c1,
-                interp,
-            ),
-        };
-        match interp {
-            Interp::LinearRgb => {
-                let (k, u) = segment(mids, t);
-                lerp_lin(self.lin[k], self.lin[k + 1], u)
-            }
-            Interp::Srgb => eval_stops(c0, mids, c1, t, interp),
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1461,13 +1309,9 @@ fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> 
     // Measured (h-series, noto-emoji): on the icons carrying the family's error, 98 of
     // 100 refused gradient candidates on regions of 200+ pixels fail *this* floor and
     // not the support one, by a hair -- contrast 0.0039-0.0055 against 0.0059 -- while
-    // the MDL below would accept them by a wide margin. `INKVEC_MIN_CONTRAST` scales
-    // the floor so the full set can price it.
-    let scale = std::env::var("INKVEC_MIN_CONTRAST")
-        .ok()
-        .and_then(|v| v.parse::<f64>().ok())
-        .unwrap_or(1.0);
-    let min_contrast = (3.0 * sigma).max(MIN_VISIBLE_CONTRAST) * scale;
+    // the MDL below would accept them by a wide margin. (`INKVEC_MIN_CONTRAST` scaled the
+    // floor so the full set could price it; the default never moved.)
+    let min_contrast = (3.0 * sigma).max(MIN_VISIBLE_CONTRAST);
     for space in INTERPS {
         let cols = s.colors(space);
         let t_r = inkvec_core::clock::Instant::now();
@@ -1488,7 +1332,7 @@ fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> 
                 // Which gate refused a candidate is otherwise invisible: a region that
                 // ends up "cands 1" looks identical whether no ramp was ever tried or
                 // every ramp was thrown away here. `INKVEC_EVDBG=1`.
-                if std::env::var_os("INKVEC_EVDBG").is_some() || debug::verbose() {
+                if inkvec_core::env::flag("INKVEC_EVDBG") || debug::verbose() {
                     // The data's own per-channel range, so a refusal can be read as
                     // "the truth is that subtle" or "the fit missed it".
                     let (mut lo, mut hi) = ([1f32; 3], [0f32; 3]);
@@ -1541,10 +1385,7 @@ fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> 
             .map(|f| f.chi2)
             .fold(f64::INFINITY, f64::min);
         let two = chi2_two_flats(s, sigma);
-        let margin = std::env::var("INKVEC_BIMODAL")
-            .ok()
-            .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(BIMODAL_MARGIN);
+        let margin = BIMODAL_MARGIN;
         debug::candidates(s.len(), &out, two, best_grad);
         if two.is_finite() && best_grad.is_finite() && two < margin * best_grad {
             out.truncate(n_flat_only);
@@ -1597,7 +1438,7 @@ pub(crate) fn fit_pixels(
     let t_c = inkvec_core::clock::Instant::now();
     let s = collect_samples(rgb, w, h, pixels, &member, &evidence, true);
     tick(&FIT_NS_COLLECT, t_c);
-    if std::env::var_os("INKVEC_EVDBG").is_some() {
+    if inkvec_core::env::flag("INKVEC_EVDBG") {
         let all = collect_samples(rgb, w, h, pixels, &member, |_| true, true);
         let fits = if s.len() > 0 {
             fit_samples(&s, w, true, sigma, lambda)
@@ -1717,6 +1558,7 @@ pub mod bands;
 mod budget;
 pub mod carve;
 mod debug;
+pub(crate) mod eval;
 mod evidence;
 pub(crate) mod regions;
 pub(crate) mod stops;

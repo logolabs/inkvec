@@ -529,7 +529,7 @@ fn pass_mirror(
     if (!fp.closed && !geometrically_closed) || fp.segments.len() < 4 {
         return;
     }
-    let debug = std::env::var_os("INKVEC_EDIT_DEBUG").is_some();
+    let debug = inkvec_core::env::flag("INKVEC_EDIT_DEBUG");
     let xs: Vec<f64> = pts.iter().map(|p| p.x).collect();
     let cx_raw = (xs.iter().cloned().fold(f64::MAX, f64::min)
         + xs.iter().cloned().fold(f64::MIN, f64::max))
@@ -781,13 +781,16 @@ pub(crate) fn edit_all(
     st
 }
 
-/// Whether a pass runs. `INKVEC_EDIT_PASSES` names the ones to keep, comma
-/// separated, so each can be priced on its own against the corpus; unset runs all
-/// of them, which is what the flag means.
+/// Whether a pass runs. In a `research` build `INKVEC_EDIT_PASSES` names the ones to keep,
+/// comma separated, so each can be priced on its own against the corpus; unset (and every
+/// release build) runs all of them, which is what the flag means.
 fn on(pass: &str) -> bool {
-    match std::env::var("INKVEC_EDIT_PASSES") {
-        Ok(v) => v.split(',').any(|p| p.trim() == pass),
-        Err(_) => true,
+    if !cfg!(feature = "research") {
+        return true;
+    }
+    match inkvec_core::env::text("INKVEC_EDIT_PASSES") {
+        Some(v) => v.split(',').any(|p| p.trim() == pass),
+        None => true,
     }
 }
 

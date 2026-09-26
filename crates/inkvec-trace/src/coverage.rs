@@ -187,9 +187,8 @@ impl Rgba {
 /// [`estimate_noise`] for why that distinction earned itself a constant.
 const LAPLACIAN_KERNEL: [f64; 5] = [4.0, -1.0, -1.0, -1.0, -1.0];
 
-/// Convert a median absolute deviation into a Gaussian standard deviation.
-///
-/// For a normal distribution, `MAD = 0.6745 * sigma`.
+/// A median absolute deviation to a Gaussian sigma (`MAD = 0.6745 * sigma`); test-only now.
+#[cfg(test)]
 const MAD_TO_SIGMA: f64 = 0.6745;
 
 /// The smallest noise this will report, in sRGB units.
@@ -225,6 +224,12 @@ pub const NOISE_FLOOR: f64 = 0.5 / 255.0;
 /// constants have quietly absorbed is the worst kind to leave as a literal; deriving it
 /// from the kernel means changing the kernel can no longer leave a stale gain behind.
 pub fn estimate_noise(gray: &[f32], w: usize, h: usize) -> f64 {
+    estimate_noise_at(gray, w, h, NOISE_QUANTILE, Z10)
+}
+
+/// [`estimate_noise`] at the `at` quantile, `z` being that quantile of the half-normal. The
+/// test reads the median it replaced here (it was `INKVEC_NOISE_MEDIAN=1`).
+fn estimate_noise_at(gray: &[f32], w: usize, h: usize, at: f64, z: f64) -> f64 {
     if w < 3 || h < 3 || gray.len() < w * h {
         return 1.0 / 255.0;
     }
@@ -254,14 +259,6 @@ pub fn estimate_noise(gray: &[f32], w: usize, h: usize) -> f64 {
     // `Z10` is that quantile of the half-normal; the cost is variance, which the floor
     // absorbs. Measured over 246 icons at 128, 512 and 1024 px: every output byte-identical,
     // because on clean art both readings sit on the floor. JPEG and added grain improve.
-    // `INKVEC_NOISE_MEDIAN=1` restores the median this replaced. It is how the regression
-    // test below is shown to have teeth, and how a future suspicion of this estimator is
-    // settled without a rebuild.
-    let (at, z) = if std::env::var("INKVEC_NOISE_MEDIAN").is_ok_and(|v| v != "0") {
-        (0.5, MAD_TO_SIGMA)
-    } else {
-        (NOISE_QUANTILE, Z10)
-    };
     let mad = lap[((lap.len() as f64) * at) as usize] as f64;
     let gain = LAPLACIAN_KERNEL.iter().map(|c| c * c).sum::<f64>().sqrt();
     (mad / z / gain).max(NOISE_FLOOR)
@@ -1205,8 +1202,8 @@ mod tests {
     /// |Laplacian| reads an edge and calls it noise — 53 display levels against a true 0.57
     /// on a real labyrinth, which loosens every tolerance downstream. Three-pixel stripes
     /// reproduce it: a third of the pixels sit mid-run with a zero Laplacian, so the tenth
-    /// percentile is noise and the median is not. `INKVEC_NOISE_MEDIAN=1` makes this fail,
-    /// which is the proof it bites.
+    /// percentile is noise and the median is not. The median reading is checked to fail,
+    /// which is the proof the test bites.
     #[test]
     fn a_noiseless_edge_dense_picture_reports_no_noise() {
         let (w, h) = (300, 300);
@@ -1218,6 +1215,8 @@ mod tests {
             est < 2.0,
             "a noiseless stripe pattern reported {est:.1} display levels of noise;              reading the median instead of the {NOISE_QUANTILE} quantile reports tens"
         );
+        let median = estimate_noise_at(&g, w, h, 0.5, MAD_TO_SIGMA) * 255.0;
+        assert!(median > 10.0, "the median reads {median:.1}");
     }
 
     /// The gain is only correct if the coefficients describe the loop's arithmetic.

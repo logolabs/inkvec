@@ -123,7 +123,7 @@ edge dragging its own copy apart. Those shared endpoints are marked `junction[v]
 
 Junction points are anchored four times harder (`JUNCTION_ANCHOR = 4.0`, applied in
 `priors`, `boundary_opt.rs:927-932`) and are excluded from the data term entirely unless
-`INKVEC_BOPT_JUNC` is set (see below). The module doc comment gives the reason
+`INKVEC_BOPT_JUNC` (*research build*) is set (see below). The module doc comment gives the reason
 (`boundary_opt.rs:70-75`): "Where three or more faces meet, one chain no longer divides
 the pixel in two and the coverages need the full clipped partition; the points there keep
 their priors and their anchor, so they move with their neighbours but are not driven by
@@ -159,7 +159,7 @@ resolution the solver works at, which turns a smooth energy into a staircase the
 search cannot descend."
 
 `Problem::data` (`boundary_opt.rs:542-593`) is the entry point that either runs
-`data_cells` over the whole image sequentially, or — if `INKVEC_BOPT_CHUNKS` is set to
+`data_cells` over the whole image sequentially, or — if `INKVEC_BOPT_CHUNKS` (*research build*) is set to
 more than one — splits the pixel range into that many contiguous chunks, one per rayon
 task, each with its own scratch buffer and gradient, summed back in chunk order. The
 default is sequential summation, and the doc comment explains the trade explicitly
@@ -171,7 +171,7 @@ opt-in until the full set has priced it."
 ### Junction pixels: wedges, not a two-face split
 
 `junction_pixel` (`boundary_opt.rs:731-891`) handles a pixel where several boundary
-chains meet at a shared node, when `INKVEC_BOPT_JUNC` turns it on. It groups the pixel's
+chains meet at a shared node, when `INKVEC_BOPT_JUNC` (*research build*) turns it on. It groups the pixel's
 pieces into contiguous chains, requires every chain to run outward from the same interior
 node to the pixel's border, and sorts them by where they exit. Consecutive chains (by exit
 position around the border) bound a **wedge** — one face's exact coverage of that
@@ -237,7 +237,7 @@ magnitude" (`boundary_opt.rs:91-93`).
    `beta = gg_new / gg`, restarting to steepest descent whenever the resulting direction
    is not itself downhill (`boundary_opt.rs:1097-1102`) — a known failure mode of
    Fletcher–Reeves on a non-quadratic objective.
-5. Stop when the iteration budget or the time budget (`INKVEC_BOPT_MS`, default `1200` ms,
+5. Stop when the iteration budget or the time budget (`INKVEC_BOPT_MS` (*removed*), default `1200` ms,
    or the caller-supplied `budget_ms`) is exhausted.
 
 If the final energy is not below the starting energy, or no iteration was accepted at
@@ -276,8 +276,8 @@ interior."
 | `JUNCTION_ANCHOR` | `4.0` | multiplier on `w_anchor` at a junction point | "anchored harder, for the reason given in the module comment" (junctions need better evidence than one pixel) — the multiplier's own value is not derived |
 | `MIN_CONTRAST` | `2.0/255.0` | pixel usable-evidence floor for the data term | no stated derivation |
 | `EPS` (in `priors`) | `1e-4` | floor inside the kink term's square root, for differentiability at zero curvature | stated purpose, no numeric derivation |
-| `INKVEC_BOPT_ITERS` default | `48` | iteration cap | **measured**: 24 was found unconverged; see Failure modes / Environment overrides |
-| `INKVEC_BOPT_MS` default | `1200` ms | time budget | "the 1200 ms budget below was never the binding constraint. Measuring at a 60 s budget gave the same 0.4142" (`boundary_opt.rs:1002-1003`) |
+| `INKVEC_BOPT_ITERS` (*removed*) default | `48` | iteration cap | **measured**: 24 was found unconverged; see Failure modes / Environment overrides |
+| `INKVEC_BOPT_MS` (*removed*) default | `1200` ms | time budget | "the 1200 ms budget below was never the binding constraint. Measuring at a 60 s budget gave the same 0.4142" (`boundary_opt.rs:1002-1003`) |
 | degenerate-box guard (in `crossings_count`) | `(x1-x0)*(y1-y0) > 64` | skips a segment whose bounding box would touch too many spatial-hash cells | "A degenerate box would put a segment in every cell; the map never has one" (`boundary_opt.rs:406-407`) — asserted, not derived |
 | fold-guard floor | `scale > 0.1` | how far the solve will keep halving the accepted displacement before giving up entirely | no stated derivation |
 | backtracking factor | `step *= 0.4`, up to 6 tries | line-search backoff | no stated derivation |
@@ -337,7 +337,7 @@ independent boundaries.
 
 ### The junction wedge term, tested and found worse
 
-`INKVEC_BOPT_JUNC` (default off) turns on `junction_pixel` so junction pixels enter the
+`INKVEC_BOPT_JUNC` (*research build*) (default off) turns on `junction_pixel` so junction pixels enter the
 data term through the wedge construction above. A development corpus measurement of
 turning it on (screen set, 246 icons, paired against the shipped default) recorded:
 
@@ -357,7 +357,7 @@ icons the mistaken classifier was scored on.
 
 ### The unconverged iteration count
 
-The comment above the `INKVEC_BOPT_ITERS` default (`boundary_opt.rs:988-1003`) is a second
+The comment above the `INKVEC_BOPT_ITERS` (*removed*) default (`boundary_opt.rs:988-1003`) is a second
 piece of measured history worth quoting closely:
 
 > 48, not 24: at 24 this solve stops before it has converged, and the boundary it hands on
@@ -384,15 +384,17 @@ does not help). They should not be conflated.
 
 ## Environment overrides
 
+Since the settings cleanup (CHANGELOG, *Unreleased*) the engine reads its environment through one helper (`inkvec_core::env`): a switch is off when unset, empty or `0`, and every variable is read once per process. Variables marked *removed* below are gone (their defaults are constants now); those marked *research build* are read only by a binary built with `--features research`. The full list, with what is left and why, is [`docs/internal/env-vars.md`](../internal/env-vars.md).
+
 | variable | default | effect |
 |---|---|---|
 | `INKVEC_BOPT` | on (any value other than `"0"`) | read in `lib.rs`, not in this file: disables the whole stage when set to `"0"` |
-| `INKVEC_BOPT_ITERS` | `48` | iteration cap |
-| `INKVEC_BOPT_MS` | `1200` | time budget in milliseconds; overridden by the caller's `budget_ms` when supplied |
-| `INKVEC_BOPT_KINK` | `K_KINK = 0.05` | kink-weight fraction of the initial data term |
-| `INKVEC_BOPT_ANCHOR` | `K_ANCHOR = 0.10` | anchor-weight fraction of the initial data term, divided by point count |
-| `INKVEC_BOPT_JUNC` | off | enables the wedge construction for junction pixels — measured worse on the corpus (see Failure modes) |
-| `INKVEC_BOPT_CHUNKS` | `1` (sequential) | parallel chunk count for the data-term sum; more than one changes summation order and, downstream, tie-sensitive fit decisions |
+| `INKVEC_BOPT_ITERS` (*removed*) | `48` | iteration cap |
+| `INKVEC_BOPT_MS` (*removed*) | `1200` | time budget in milliseconds; overridden by the caller's `budget_ms` when supplied |
+| `INKVEC_BOPT_KINK` (*removed*) | `K_KINK = 0.05` | kink-weight fraction of the initial data term |
+| `INKVEC_BOPT_ANCHOR` (*removed*) | `K_ANCHOR = 0.10` | anchor-weight fraction of the initial data term, divided by point count |
+| `INKVEC_BOPT_JUNC` (*research build*) | off | enables the wedge construction for junction pixels — measured worse on the corpus (see Failure modes) |
+| `INKVEC_BOPT_CHUNKS` (*research build*) | `1` (sequential) | parallel chunk count for the data-term sum; more than one changes summation order and, downstream, tie-sensitive fit decisions |
 | `INKVEC_BOPTDBG` | off | per-iteration `eprintln!` of step, energy, and relative improvement, plus the fold-guard summary |
 | `INKVEC_BOPT_CELLS` | off | per-pixel `eprintln!` of the clipped area computed in `data_cells` |
 | `INKVEC_JUNCDBG` | off | dumps the `juncstat` counters explaining why candidate junction pixels were accepted or declined |
@@ -405,7 +407,7 @@ does not help). They should not be conflated.
   swept numeric derivation the way the iteration count and the merge distance elsewhere in
   the tracer do. These read as engineering choices consistent with the design, not values
   independently justified by a measurement.
-- **`INKVEC_BOPT_CHUNKS`'s default of `1`** is justified by a single anecdote — "on one
+- **`INKVEC_BOPT_CHUNKS` (*research build*)'s default of `1`** is justified by a single anecdote — "on one
   300-path logo they cost 8 paths and 16% more coordinates at the same colour error" — and
   the comment says outright that this is provisional ("stays opt-in until the full set has
   priced it"). This is explicitly a one-test-case measurement standing in for a corpus

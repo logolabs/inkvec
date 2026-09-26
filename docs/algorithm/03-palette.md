@@ -228,7 +228,7 @@ each additional level mints a new palette entry sharing the same colour but a di
 | `SAME_INK_DE00` | `1.5` (CIEDE2000) | `color.rs:285-302`. OKLab's lightness is cube-root-shaped, so a fixed OKLab radius is far too generous near black: "a clean render of a one-ink black logo the palette accepted #020202, #040404 and #070707 as three more inks... In CIEDE2000, which is what the bench scores with, those three sit at 0.31, 0.63 and 1.11 from black: differences no viewer can see." Swept on the screen set: `1.0` gave 0.4145→0.4140 (6 better, 5 worse) and still let `#070707` stand; `1.5` gave 0.4140→0.4124 (10 better, 6 worse, noto-emoji −0.005 dE00) and correctly split `abra_agency` back into two inks. "Mid-grey pairs 4 levels apart read 1.5, and a pair that close is not something the artwork is saying." |
 | `SOFT_SAME_INK_DE00` | `5.0` | `color.rs:427-439`. Same judgement as `SOFT_NOISE_SIGMAS`, keyed to the same soft-intake trigger: on a resampled or oversampled intake, the ramp between two inks supplies "a whole family of intermediate colours that are not inks at all." Measured on the incorpo mark upscaled 4x: 76 distinct fills where the drawing has five, `#030303` alone as 82 separate paths against one `#000000` at native resolution. |
 | `SOFT_NOISE_SIGMAS` | `3.0` | `color.rs:417-425`. Must stay gated: "Run unconditionally it costs **10.9%** on the 246-icon screen set — objective 0.4005 → 0.4442, measured 2026-09-08 — because on a clean intake two colours a whisker apart really are two inks and merging them throws away artwork." Switched on only by positive evidence the intake is not clean: wide edges (`SOFT_INTAKE_EDGE`) or a lossy container. |
-| `NOISE_SIGMAS` | `0.0` | `color.rs:617-634`. The clean-intake default, deliberately zero. The doc comment records that the guard *works* — on a logo upscaled with the packaged SR model's own 1.87-level error, it takes output "from 5 fills, 77 paths and 12.4 KB back to 1 fill, 3 paths and 1.0 KB" — but "it is not free on a clean intake — the screen set goes from 0.4328 to 0.4451 — because a region with a real gradient has a real spread, and the guard cannot tell that from noise without knowing which it is looking at." So the *caller* decides via `INKVEC_NOISE_SIGMAS` or the soft-intake switch, rather than this being detected automatically; automatic detection is called out as "the open problem" because `coverage::estimate_noise`'s median "cannot see it, because an icon is mostly empty and its median Laplacian is zero however noisy the artwork is." |
+| `NOISE_SIGMAS` | `0.0` | `color.rs:617-634`. The clean-intake default, deliberately zero. The doc comment records that the guard *works* — on a logo upscaled with the packaged SR model's own 1.87-level error, it takes output "from 5 fills, 77 paths and 12.4 KB back to 1 fill, 3 paths and 1.0 KB" — but "it is not free on a clean intake — the screen set goes from 0.4328 to 0.4451 — because a region with a real gradient has a real spread, and the guard cannot tell that from noise without knowing which it is looking at." So the *caller* decides via `INKVEC_NOISE_SIGMAS` (*removed*) or the soft-intake switch, rather than this being detected automatically; automatic detection is called out as "the open problem" because `coverage::estimate_noise`'s median "cannot see it, because an icon is mostly empty and its median Laplacian is zero however noisy the artwork is." |
 | `SOFT_INTAKE_EDGE` | `1.75` px | `color.rs:406-415`. Measured over all 980 corpus rasters (native, 8x-supersampled): median edge width 1.00, widest native 1.50 (a noto-emoji face with soft shading). A 2x Lanczos round trip reads 1.36–1.40, 4x reads 2.80, 8x reads 4.00. The threshold sits above everything native, catching "upscales of about 3x and more"; a 2x resample is explicitly called out as indistinguishable from soft native artwork by edge width alone, and is the SR pre-pass's job instead. |
 | `DEFAULT_MERGE_DISTANCE` | `0.035` (OKLab) | `color.rs:100-125`. Was `0.055`; an error-budget analysis on the 980-icon devset found that value merging inks the artwork keeps apart — "1.6% of noto-emoji's interior pixels carrying half its interior error" turned out to be two flat colours (66% error reduction when fit as two flats) rather than a gradient (only 13% reduction as a ramp). Swept on the full set: `0.055→0.4960`, `0.040→0.4931`, `0.035→0.4922` (best), `0.030→0.4941`. At `0.035` all three axes improve together (dE00 0.2005→0.1991, DISTS 0.0296→0.0293, params-vs-artist 1.46→1.44). The doc comment explicitly warns not to tune this on the screen split alone — it prefers `0.030` there, and a held-out set prefers the old `0.055` outright; "Only the full set separates them." |
 | `MIN_INK_WEIGHT` | `0.004` | `color.rs:127-133`. Qualitative: anti-aliased pixels are individually rare and spread across a ramp, so no single blend colour accumulates much weight, while flat regions accumulate thousands of pixels — no specific sweep cited for `0.004` itself. |
@@ -239,7 +239,7 @@ each additional level mints a new palette entry sharing the same colour but a di
 | `JND_FLOOR` | `0.012` (OKLab) | `color.rs:611-615`. "Below this a viewer cannot tell the colours apart at all, so no amount of evidence makes them two inks rather than one measured twice." No numeric derivation shown; superseded in practice by `SAME_INK_DE00`'s perceptual floor for most cases, but still gates the MDL escape directly (`nearest > JND_FLOOR`, `color.rs:958`). |
 | `PARAMS_PER_INK` | `3.0` | `color.rs:279`. One parameter per OKLab channel — a direct accounting fact, not a tuned constant. |
 | `STAT_PIXELS` | `1 << 16` (65536) | `color.rs:692-705`. Bounds the cost of the per-candidate statistical passes (claim, spread, interior, straddle) so trace time does not grow with resolution beyond the corpus's 128px tuning point: "Every constant in this module was tuned on a 128 px corpus, and at or below the cap the stride is one and the arithmetic is bit-identical to visiting every pixel." |
-| `INKVEC_BLEND_TMIN` (env, default `0.04`) | `color.rs:535-538` | Only interior mixtures count as a blend; `t` outside `[tmin, 1-tmin]` on the A–B axis is a different colour, not a mixture of these two. No derivation given for `0.04` specifically. |
+| `INKVEC_BLEND_TMIN` (*removed*) (env, default `0.04`) | `color.rs:535-538` | Only interior mixtures count as a blend; `t` outside `[tmin, 1-tmin]` on the A–B axis is a different colour, not a mixture of these two. No derivation given for `0.04` specifically. |
 
 ## OKLab, sRGB, dE00 — why three colour spaces
 
@@ -288,12 +288,14 @@ fix.
 
 ## Environment overrides
 
+Since the settings cleanup (CHANGELOG, *Unreleased*) the engine reads its environment through one helper (`inkvec_core::env`): a switch is off when unset, empty or `0`, and every variable is read once per process. Variables marked *removed* below are gone (their defaults are constants now); those marked *research build* are read only by a binary built with `--features research`. The full list, with what is left and why, is [`docs/internal/env-vars.md`](../internal/env-vars.md).
+
 | variable | effect | default | source |
 |---|---|---|---|
-| `INKVEC_NOISE_SIGMAS` | overrides `ev.noise_sigmas` | `PaletteEvidence.noise_sigmas` (0.0 clean / 3.0 soft) | `color.rs:922-925` |
-| `INKVEC_SAME_INK_DE00` | overrides `ev.same_ink_de00` | `PaletteEvidence.same_ink_de00` (1.5 clean / 5.0 soft) | `color.rs:935-938` |
-| `INKVEC_NO_INK_ESCAPE` | disables the MDL `worth_it` escape entirely, when set | unset (escape active) | `color.rs:957` |
-| `INKVEC_BLEND_TMIN` | overrides the interior-mixture window `tmin` in `blend_pairs` | `0.04` | `color.rs:535-538` |
+| `INKVEC_NOISE_SIGMAS` (*removed*) | overrides `ev.noise_sigmas` | `PaletteEvidence.noise_sigmas` (0.0 clean / 3.0 soft) | `color.rs:922-925` |
+| `INKVEC_SAME_INK_DE00` (*removed*) | overrides `ev.same_ink_de00` | `PaletteEvidence.same_ink_de00` (1.5 clean / 5.0 soft) | `color.rs:935-938` |
+| `INKVEC_NO_INK_ESCAPE` (*removed*) | disables the MDL `worth_it` escape entirely, when set | unset (escape active) | `color.rs:957` |
+| `INKVEC_BLEND_TMIN` (*removed*) | overrides the interior-mixture window `tmin` in `blend_pairs` | `0.04` | `color.rs:535-538` |
 | `INKVEC_PALDBG` | prints per-candidate accept/reject diagnostics to stderr | unset (silent) | `color.rs:940, 1004, 1006` |
 
 ## Open questions
@@ -310,14 +312,14 @@ fix.
   rather than derived — see `02-coverage.md`'s Open questions.
 - **Several shape-test constants have no numeric derivation**, only qualitative motivation:
   `BLEND_STRADDLE_FRACTION = 0.5`, `STRADDLE_STEP = 0.12`, `MIN_INK_WEIGHT = 0.004`,
-  `JND_FLOOR = 0.012`, and `INKVEC_BLEND_TMIN`'s default of `0.04`. Each is tied to a real case
+  `JND_FLOOR = 0.012`, and `INKVEC_BLEND_TMIN` (*removed*)'s default of `0.04`. Each is tied to a real case
   that motivated it but not to a sweep that located its specific value, unlike
   `DEFAULT_MERGE_DISTANCE`, `SAME_INK_DE00`, `SOFT_NOISE_SIGMAS`, or `SOFT_INTAKE_EDGE`, all of
   which cite specific before/after numbers.
 - **`NOISE_SIGMAS` as a named constant is arguably vestigial.** The actual pipeline (`lib.rs:284`)
   computes `noise_sigmas` inline as `0.0` or `color::SOFT_NOISE_SIGMAS`, and never references
   `color::NOISE_SIGMAS` by name; the constant exists to document the clean-intake value and to be
-  overridden via `INKVEC_NOISE_SIGMAS`, but nothing in the traced code path reads it directly.
+  overridden via `INKVEC_NOISE_SIGMAS` (*removed*), but nothing in the traced code path reads it directly.
   This is a milder version of the `BLEND_IMMUNE_WEIGHT` problem and worth checking during any
   future refactor of this file.
 - **Automatic detection of a noisy-but-clean-looking intake remains unsolved**, and the module

@@ -7,39 +7,24 @@ use std::collections::HashMap;
 /// `INKVEC_GRAD_REGIONS=0`.
 pub(crate) fn enabled() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var("INKVEC_GRAD_REGIONS").as_deref() != Ok("0"))
+    *V.get_or_init(|| inkvec_core::env::switch("INKVEC_GRAD_REGIONS", true))
 }
 
 /// Largest colour difference (CIEDE2000) between the inks of two *flat* adjacent regions
-/// for them to be tried as bands of one ramp. Overridable with `INKVEC_RAMP_STEP`.
-pub(crate) static RAMP_STEP_DE00: std::sync::LazyLock<f32> = std::sync::LazyLock::new(|| {
-    std::env::var("INKVEC_RAMP_STEP")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(15.0)
-});
+/// for them to be tried as bands of one ramp (was `INKVEC_RAMP_STEP`).
+pub(crate) const RAMP_STEP_DE00: f32 = 15.0;
 
 /// Largest colour step (CIE76, Lab units) between two 4-neighbouring pixels for the pair
-/// to count as inside one smooth region. Overridable with `INKVEC_SMOOTH_STEP`.
+/// to count as inside one smooth region (was `INKVEC_SMOOTH_STEP`).
 ///
 /// A seam between two bands of one ramp is crossed in steps of the ramp's slope, a pixel
 /// at a time; a seam between two flat regions is crossed in one anti-aliased pixel, so
 /// at least one of the two pixel pairs across it steps half the contrast or more.
-static SMOOTH_STEP: std::sync::LazyLock<f32> = std::sync::LazyLock::new(|| {
-    std::env::var("INKVEC_SMOOTH_STEP")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(3.0)
-});
+const SMOOTH_STEP: f32 = 3.0;
 
 /// Fraction of a seam's pixel pairs that must be smooth steps for the seam to be one
-/// inside a region. Overridable with `INKVEC_SMOOTH_FRACTION`.
-static SMOOTH_FRACTION: std::sync::LazyLock<f64> = std::sync::LazyLock::new(|| {
-    std::env::var("INKVEC_SMOOTH_FRACTION")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0.5)
-});
+/// inside a region (was `INKVEC_SMOOTH_FRACTION`).
+const SMOOTH_FRACTION: f64 = 0.5;
 
 /// Whether the step from pixel colour `p` to `q` (sRGB) is small enough to lie inside a
 /// smooth region.
@@ -58,7 +43,7 @@ pub(crate) fn is_smooth(
 ) -> bool {
     let shared = adj[a].get(&(b as u32)).copied().unwrap_or(0);
     let calm = smooth[a].get(&(b as u32)).copied().unwrap_or(0);
-    shared > 0 && calm as f64 >= *SMOOTH_FRACTION * shared as f64
+    shared > 0 && calm as f64 >= SMOOTH_FRACTION * shared as f64
 }
 
 /// Region `b` was absorbed into `a`: move `b`'s seam counts onto `a`.

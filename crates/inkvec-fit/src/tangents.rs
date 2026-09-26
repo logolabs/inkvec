@@ -11,7 +11,7 @@ pub const G1_BREAK_DEGREES: f64 = 10.0;
 pub const TANGENT_WINDOW_MAX: usize = 16;
 
 /// Break angle threshold in radians: 10 degrees unless the trace in progress asked for another
-/// (see [`crate::cost`]), or an experiment set `INKVEC_G1_BREAK`.
+/// (see [`crate::cost`]).
 pub(crate) fn g1_break_radians() -> f64 {
     crate::cost::g1_break_radians()
 }
@@ -238,21 +238,10 @@ pub(crate) fn turn_angle(a: Vec2, b: Vec2) -> f64 {
 
 /// Cost of a tangent break between directions `a` and `b`.
 pub fn break_cost(a: Vec2, b: Vec2, lambda: f64) -> f64 {
+    // Quadratic in the turn, saturating at a full corner (the exponent was once
+    // `INKVEC_BREAK_EXP`; nothing measured another).
     let r = turn_angle(a, b) / g1_break_radians();
-    let exp = break_exponent();
-    let p = if exp == 2.0 { r * r } else { r.powf(exp) };
-    lambda * p.min(1.0)
-}
-
-fn break_exponent() -> f64 {
-    static V: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("INKVEC_BREAK_EXP")
-            .ok()
-            .and_then(|v| v.parse::<f64>().ok())
-            .filter(|v| v.is_finite() && *v > 0.0)
-            .unwrap_or(2.0)
-    })
+    lambda * (r * r).min(1.0)
 }
 
 /// Turn cost charged when vertex `k` is chosen as a segment boundary.

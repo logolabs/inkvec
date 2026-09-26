@@ -115,7 +115,7 @@ pub(crate) fn blend_partners(
         }
         pure[p] = blend;
     }
-    if std::env::var_os("INKVEC_EVDBG").is_some() {
+    if inkvec_core::env::flag("INKVEC_EVDBG") {
         let mut per: std::collections::BTreeMap<usize, (usize, usize)> = Default::default();
         for p in 0..n {
             let e = per.entry(labels[p] as usize).or_insert((0, 0));

@@ -16,5 +16,16 @@ inkvec-core = { workspace = true }
 kurbo = { workspace = true }
 rayon = { workspace = true }
 
+[features]
+default = []
+#: Experimental post-fit passes, each still switched on at run time by its variable: the
+#: structural simplifier (INKVEC_STRUCTURAL), axis snapping (INKVEC_AXIS), G1 snapping
+#: (INKVEC_G1) and the free cubic (INKVEC_FREE_CUBIC). Off in every release build.
+research = []
+
+[[example]]
+name = "structural_demo"
+required-features = ["research"]
+
 [lints]
 workspace = true

@@ -58,10 +58,8 @@ const FAINT_SEAM: f32 = 0.12;
 
 /// The reach, overridable (`INKVEC_UNDERLAP`, 0 to switch it off) for A/B measurement.
 pub(crate) fn underlap_width() -> f64 {
-    std::env::var("INKVEC_UNDERLAP")
-        .ok()
-        .and_then(|v| v.parse::<f64>().ok())
-        .filter(|v| v.is_finite() && *v >= 0.0)
+    inkvec_core::env::number("INKVEC_UNDERLAP")
+        .filter(|v| *v >= 0.0)
         .unwrap_or(UNDERLAP)
 }
 

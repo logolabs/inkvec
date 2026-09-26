@@ -229,20 +229,6 @@ const LINEARITY_WINDOW: usize = 3;
 /// the parameter count by half, so the term earns its place; it was simply too strong.
 const NONLINEARITY_GAIN: f64 = 0.35;
 
-/// Overridable for experiments with `INKVEC_CURV_GAIN`. Inflating sigma where the boundary
-/// curves is what lets a straight segment through a bend look statistically acceptable, so
-/// it is a suspect in why curves come out faceted.
-fn curv_gain() -> f64 {
-    static V: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("INKVEC_CURV_GAIN")
-            .ok()
-            .and_then(|v| v.parse::<f64>().ok())
-            .filter(|v| v.is_finite() && *v >= 0.0)
-            .unwrap_or(NONLINEARITY_GAIN)
-    })
-}
-
 /// Largest positional uncertainty local non-linearity may imply, in pixels.
 ///
 /// This bound is physical, not a tuning knob. The systematic error being corrected for
@@ -283,7 +269,7 @@ const MAX_CURVATURE_SIGMA: f64 = 0.354;
 /// corners are treated as poorly localized — which is what they are.
 fn sigmas_for(field: &CoverageField, pts: &[Point]) -> Vec<f64> {
     let n = pts.len();
-    let floor = sigma_floor();
+    let floor = SIGMA_FLOOR;
     (0..n)
         .map(|k| {
             let base = field.position_sigma(pts[k]).max(floor);
@@ -302,64 +288,37 @@ fn sigmas_for(field: &CoverageField, pts: &[Point]) -> Vec<f64> {
 /// pixel coordinates. Applying a universal `1/sqrt(12)` pixel floor oversmooths
 /// clean small artwork.
 ///
-/// `INKVEC_SIGMA_FLOOR` remains an experimental, nonnegative positional floor.
-/// Replace every per-point sigma with one constant, destroying all of its structure.
-///
-/// This exists to price that structure, and the price is low. `Edge.sigma` is the one
-/// number the whole tree claims to derive its tolerances from — "nothing downstream
-/// invents its own tolerance parameter; it reads this one"
-/// (`docs/algorithm/00-overview.md`) — but measured over 86,060 boundary points on the
-/// gate set, **79% of them sit between 0.050 and 0.060**, pinned at or just above
-/// [`crate::coverage::DEFAULT_SIGMA_MODEL`]. Median 0.0512, p25 0.0501, p75 0.0576;
-/// only 5.5% exceed 0.10. For four fifths of the corpus sigma is not a measurement, it
-/// is that constant.
-///
-/// Flattening it to the median and re-running the 246-icon gate costs **+1.56% turning
-/// and +0.89% ratio, and improves dE00 by 0.45%**. So the whole per-point structure —
-/// the coverage inversion, the contrast division, the gradient division, the curvature
-/// inflation — is worth about one percent on two axes and is slightly negative on the
-/// third. What little it does buy comes from the thin tail that correctly marks a faint
-/// boundary as not worth coordinates, not from the variation in the bulk.
-///
-/// The consequence for anything that would revise sigma downstream (recomputing it
-/// after `boundary_opt`, say, which never does): the quantity being improved carries
-/// about a percent of value, so the improvement is bounded by that. The *level* of
-/// sigma matters enormously by comparison, and it is not a separate lever — scaling
-/// every sigma by `k` scales chi2 by `1/k²`, which is exactly `lambda -> k²·lambda`.
-/// Measured rather than assumed: sigma_model 0.10 gives dE00 +39.00% / ratio -10.28%
-/// and `--lambda-scale 4.0` gives +44.34% / -11.68%, the same frontier to three
-/// significant figures (ratio per dE00, 0.264 against 0.263). Use `--lambda-scale`.
-pub fn sigma_flat() -> Option<f64> {
-    static V: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("INKVEC_SIGMA_FLAT")
-            .ok()
-            .and_then(|v| v.parse::<f64>().ok())
-            .filter(|v| v.is_finite() && *v > 0.0)
-    })
-}
+/// Zero, so no floor. (It was `INKVEC_SIGMA_FLOOR`, an experiment nothing set.) Still
+/// applied as `.max(SIGMA_FLOOR)`, so a NaN sigma reads as zero exactly as before.
+pub const SIGMA_FLOOR: f64 = 0.0;
 
-/// The experimental positional floor from `INKVEC_SIGMA_FLOOR`; `0.0`, meaning no floor,
-/// unless it is set.
-///
-/// Applied as `.max(sigma_floor())` to a per-point positional sigma on both front ends --
-/// `sigmas_for` here and the planar path in `planar.rs` -- so it bounds how certain any one
-/// point is allowed to claim to be. Weight in chi2 goes as `1/sigma²`, so a sigma near zero
-/// lets a single point outvote the rest of its boundary; a floor caps that leverage without
-/// disturbing the rest of the distribution.
-///
-/// Read once and cached. A value that does not parse, is not finite, or is negative is
-/// ignored rather than refused, as with `sigma_flat` above.
-pub fn sigma_floor() -> f64 {
-    static V: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("INKVEC_SIGMA_FLOOR")
-            .ok()
-            .and_then(|v| v.parse::<f64>().ok())
-            .filter(|v| v.is_finite() && *v >= 0.0)
-            .unwrap_or(0.0)
-    })
-}
+// `INKVEC_SIGMA_FLAT` (removed) replaced every per-point sigma with one constant,
+// destroying all of its structure.
+//
+// It existed to price that structure, and the price is low. `Edge.sigma` is the one
+// number the whole tree claims to derive its tolerances from — "nothing downstream
+// invents its own tolerance parameter; it reads this one"
+// (`docs/algorithm/00-overview.md`) — but measured over 86,060 boundary points on the
+// gate set, **79% of them sit between 0.050 and 0.060**, pinned at or just above
+// [`crate::coverage::DEFAULT_SIGMA_MODEL`]. Median 0.0512, p25 0.0501, p75 0.0576;
+// only 5.5% exceed 0.10. For four fifths of the corpus sigma is not a measurement, it
+// is that constant.
+//
+// Flattening it to the median and re-running the 246-icon gate costs **+1.56% turning
+// and +0.89% ratio, and improves dE00 by 0.45%**. So the whole per-point structure —
+// the coverage inversion, the contrast division, the gradient division, the curvature
+// inflation — is worth about one percent on two axes and is slightly negative on the
+// third. What little it does buy comes from the thin tail that correctly marks a faint
+// boundary as not worth coordinates, not from the variation in the bulk.
+//
+// The consequence for anything that would revise sigma downstream (recomputing it
+// after `boundary_opt`, say, which never does): the quantity being improved carries
+// about a percent of value, so the improvement is bounded by that. The *level* of
+// sigma matters enormously by comparison, and it is not a separate lever — scaling
+// every sigma by `k` scales chi2 by `1/k²`, which is exactly `lambda -> k²·lambda`.
+// Measured rather than assumed: sigma_model 0.10 gives dE00 +39.00% / ratio -10.28%
+// and `--lambda-scale 4.0` gives +44.34% / -11.68%, the same frontier to three
+// significant figures (ratio per dE00, 0.264 against 0.263). Use `--lambda-scale`.
 
 /// Combine a base positional uncertainty with the local non-linearity of the contour.
 ///
@@ -458,7 +417,7 @@ pub fn inflate_for_curvature(pts: &[Point], k: usize, base: f64, wrap: bool) -> 
             };
             let wobble = residual * (1.0 - consistency);
 
-            base.hypot((curv_gain() * wobble).min(MAX_CURVATURE_SIGMA))
+            base.hypot((NONLINEARITY_GAIN * wobble).min(MAX_CURVATURE_SIGMA))
         }
     }
 }

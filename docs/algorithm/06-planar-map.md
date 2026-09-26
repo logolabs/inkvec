@@ -229,7 +229,7 @@ saddle-merge decision:
   prevent it, but only fires when the two faces on one diagonal already share a face id.
 - **`merge_saddle_faces` is off by default.** The stage that decides, from the *image*,
   whether two diagonally-touching-but-currently-separate faces should be read as one
-  continuous shape is gated by `INKVEC_SADDLE` and does not run unless that variable is
+  continuous shape is gated by `INKVEC_SADDLE` (*research build*) and does not run unless that variable is
   set (`lib.rs:561`). Its own doc comment records why: "231 of the 246 screen icons are
   untouched — but it does not yet pay for itself on the set: objective 0.4005 -> 0.4010,
   six icons better and nine worse. The nine are the emitter's containment tree being
@@ -240,7 +240,7 @@ saddle-merge decision:
   of matching colour that never got unioned upstream. A four-way corner where no diagonal
   shares a face id is left as an ordinary junction (`four_inks_meeting_at_a_corner_stay_a_junction`,
   `planar.rs:1556-1562`) — correct when the four regions really are four regions, and a
-  missed merge when `INKVEC_SADDLE` would have said otherwise.
+  missed merge when `INKVEC_SADDLE` (*research build*) would have said otherwise.
 - **Chain walking can stall.** If `inc.get(&next_node)` finds no unused candidate segment
   before reaching a junction, the walk simply stops there (`planar.rs:256-262,
   301-307`) rather than panicking; this silently produces a shorter edge than the true
@@ -251,9 +251,11 @@ saddle-merge decision:
 
 ## Environment overrides
 
+Since the settings cleanup (CHANGELOG, *Unreleased*) the engine reads its environment through one helper (`inkvec_core::env`): a switch is off when unset, empty or `0`, and every variable is read once per process. Variables marked *removed* below are gone (their defaults are constants now); those marked *research build* are read only by a binary built with `--features research`. The full list, with what is left and why, is [`docs/internal/env-vars.md`](../internal/env-vars.md).
+
 None inside `planar::build` itself. The upstream decision that feeds it —
-`merge_saddle_faces` — is controlled by `INKVEC_SADDLE` (must be set and not `"0"`,
-`lib.rs:561`) and its diagnostic output by `INKVEC_SADDLEDBG` (`lib.rs:564`).
+`merge_saddle_faces` — is controlled by `INKVEC_SADDLE` (*research build*) (must be set and not `"0"`,
+`lib.rs:561`) and its diagnostic output by `INKVEC_SADDLEDBG` (*research build*) (`lib.rs:564`).
 
 ## Open questions
 

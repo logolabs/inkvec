@@ -138,7 +138,6 @@ fn same_opacity_joins_inks_within_five_hundredths() {
 // ---------------------------------------------------------------------------------------
 
 #[test]
-#[ignore = "WIP: native alpha audit"]
 fn bin_is_a_base_24_index_of_lightness_then_a_then_b() {
     let o = |l, a, b| Oklab { l, a, b };
     let idx = |l: u64, a: u64, b: u64| l * 576 + a * 24 + b;
@@ -240,7 +239,6 @@ fn six_is_the_colour_over_both_grounds_and_from_six_inverts_it() {
 // ---------------------------------------------------------------------------------------
 
 #[test]
-#[ignore = "WIP: native alpha audit"]
 fn blend_pairs_finds_a_mix_of_two_inks_and_only_that_pair() {
     let (r, b, g) = (ink(RED, 1.0), ink(BLUE, 1.0), ink(GREEN, 1.0));
     let acc = [r, b, g];
@@ -271,7 +269,6 @@ fn blend_pairs_finds_a_mix_of_two_inks_and_only_that_pair() {
 }
 
 #[test]
-#[ignore = "WIP: native alpha audit"]
 fn an_anti_aliased_rim_is_a_blend_of_the_paint_and_the_clear_ground() {
     let paint = ink([1.0; 3], 1.0);
     let ground = ink([1.0; 3], 0.0);
@@ -402,7 +399,6 @@ fn sliver_px(labels: &[u16], w: usize, sliver: usize, s: [f32; 4]) -> Vec<[f32; 
 }
 
 #[test]
-#[ignore = "WIP: native alpha audit"]
 fn a_blend_sliver_between_two_inks_goes_to_the_ink_it_is_mostly() {
     let inks = [A4, B4, mix(A4, B4, 0.5)];
     let mut labels = rows(&[0, 0, 2, 1, 1], 3);
@@ -415,7 +411,6 @@ fn a_blend_sliver_between_two_inks_goes_to_the_ink_it_is_mostly() {
 }
 
 #[test]
-#[ignore = "WIP: native alpha audit"]
 fn a_translucent_sliver_is_explained_with_the_clear_ground() {
     // Red at 60 % over the clear ground, between red and blue paint, with no clear ink in
     // the palette: only the clear ground explains the pixel.
@@ -439,7 +434,6 @@ fn a_translucent_sliver_is_explained_with_the_clear_ground() {
 }
 
 #[test]
-#[ignore = "WIP: native alpha audit"]
 fn slivers_that_are_not_blends_and_blend_areas_with_an_interior_stay() {
     let inks = [A4, B4, [0.1, 0.9, 0.1, 1.0]];
     let mut labels = rows(&[0, 0, 2, 1, 1], 3);
@@ -526,7 +520,6 @@ fn model_stops_and_alpha_params_read_a_profile() {
 }
 
 #[test]
-#[ignore = "WIP: native alpha audit"]
 fn a_fade_over_white_composites_each_stop_at_its_own_opacity() {
     let alpha = linear_model([0.2; 3], vec![(0.5, [0.6; 3])], [0.9; 3], 10.0);
     let fade = Fade {
@@ -613,7 +606,6 @@ fn fade_fixture() -> (Vec<[f32; 3]>, Vec<f32>) {
 }
 
 #[test]
-#[ignore = "WIP: native alpha audit"]
 fn fit_colour_stops_recovers_the_colours_a_fade_was_painted_with() {
     let (rgb, alpha) = fade_fixture();
     let model = linear_model([0.0; 3], vec![(0.5, [0.5; 3])], [1.0; 3], 10.0);
@@ -625,7 +617,6 @@ fn fit_colour_stops_recovers_the_colours_a_fade_was_painted_with() {
 }
 
 #[test]
-#[ignore = "WIP: native alpha audit"]
 fn a_stop_no_pixel_testifies_about_is_the_fades_mean_colour() {
     // Only the left half: the last stop has no evidence and is held to the opacity-weighted
     // mean colour, `Σ s·a / Σ a`.
@@ -651,7 +642,6 @@ fn a_stop_no_pixel_testifies_about_is_the_fades_mean_colour() {
 }
 
 #[test]
-#[ignore = "WIP: native alpha audit"]
 fn fade_chi2_charges_opacity_and_premultiplied_colour_beyond_half_a_level() {
     let s = [0.2f32, 0.4, 0.6];
     let (rgb, alpha) = (vec![on_white(s, 0.5)], vec![0.5f32]);
@@ -1025,7 +1015,6 @@ fn tracing_the_square_keeps_two_inks_and_a_fade_slot_per_face() {
 }
 
 #[test]
-#[ignore = "WIP: native alpha audit"]
 fn tracing_a_glow_hands_its_fade_to_the_face() {
     let (img, alpha) = rgba(16, |x, _| ([0.8, 0.3, 0.1], 0.1 + 0.05 * x as f32));
     let tr = trace_color(&img, &ColorOptions::default(), &alpha);

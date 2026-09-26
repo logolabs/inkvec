@@ -307,8 +307,8 @@ function content(d: ShowcaseData): HTMLElement {
       h(
         "p.faint.sc-note",
         { style: { marginTop: "10px", borderTop: "1px solid var(--rule2)", paddingTop: "10px", lineHeight: "1.6" } },
-        h("b", { style: { color: "var(--dim)" } }, "Trademark notice & fair-use disclaimer: "),
-        "All third-party trademarks, brand names, and logos displayed in this showcase are the property of their respective owners. Their depiction is solely for nominative, non-commercial educational benchmarking and comparative vectorization demonstration. Inkvec and LogoLabs are not affiliated with, sponsored by, or endorsed by these trademark holders.",
+        h("b", { style: { color: "var(--dim)" } }, "Trademarks: "),
+        "the logos and brand names shown here are the property of their owners, and appear only to compare how engines trace real artwork. This implies no affiliation with, sponsorship by or endorsement from them.",
       ),
     ),
   );

@@ -380,9 +380,14 @@ Apache-2.0. See [`LICENSE`](LICENSE). Third-party components: [`docs/THIRD_PARTY
 
 ---
 
-## Trademark Notice & Fair Use
+## Trademarks
 
-All third-party trademarks, registered marks, trade names, company names, and logos displayed or referenced in this repository, in benchmark evaluation datasets, in the Inkvec Studio showcase, and on the Hugging Face Space are the property of their respective owners. Their depiction is strictly for nominative, non-commercial educational benchmarking, research, and comparative algorithmic evaluation (assessing vectorization curve accuracy and node efficiency across engines). Inkvec and LogoLabs are not affiliated with, sponsored by, or endorsed by any of these trademark holders. See [`NOTICE`](NOTICE) for full details or to request removal of a mark.
+Trademarks, logos, brand and company names shown in this repository, in its benchmark corpora
+and results, in Inkvec Studio's Showcase and on the Inkvec Space are the property of their
+owners. They appear only to compare how vectorisation engines trace real artwork; this implies
+no affiliation with, sponsorship by or endorsement from their owners. An owner who objects to a
+mark being shown can [open an issue](https://github.com/logolabs/inkvec/issues) and it will be
+removed. See [`docs/TRADEMARKS.md`](docs/TRADEMARKS.md).
 
 ---
 

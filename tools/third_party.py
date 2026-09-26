@@ -26,6 +26,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "docs" / "THIRD_PARTY.md"
+# The trademark notice; studio/tools/third_party.py reads the same file.
+TRADEMARKS = ROOT / "docs" / "TRADEMARKS.md"
 CARGO = shutil.which("cargo") or str(Path.home() / ".cargo" / "bin" / "cargo")
 
 PERMISSIVE = {
@@ -83,6 +85,9 @@ are test data, not part of any build. Each keeps its upstream licence:
 
 Upstream licence terms for each family are linked in the table above.
 
+## Trademarks
+
+{trademarks}
 ## Rust crates ({count})
 
 `builds` is the smallest build that compiles the crate: `default` (every workspace build),
@@ -150,7 +155,12 @@ def render() -> str:
         lines += [f"- `{n}` {v}: {lic or 'no licence declared'} ({b})" for n, v, lic, b in flagged]
     else:
         lines.append("Every one is under a permissive licence or offers one as a choice.")
-    text = HEADER.format(date=datetime.date.today().isoformat(), summary="\n".join(lines), count=len(rows))
+    text = HEADER.format(
+        date=datetime.date.today().isoformat(),
+        summary="\n".join(lines),
+        count=len(rows),
+        trademarks=TRADEMARKS.read_text(encoding="utf-8"),
+    )
     text += "\n".join(f"| {n} | {v} | {lic or 'none declared'} | {b} |" for (n, v), (b, lic) in rows) + "\n"
     return text
 

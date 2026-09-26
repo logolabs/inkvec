@@ -33,6 +33,8 @@ ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "src-tauri" / "Cargo.toml"
 # The browser build's denoiser module, which pins the ONNX Runtime Web it fetches.
 DENOISE_JS = ROOT.parent / "web" / "denoise.js"
+# The trademark notice, shared with the engine's docs/THIRD_PARTY.md.
+TRADEMARKS = ROOT.parent / "docs" / "TRADEMARKS.md"
 # STUDIO_THIRD_PARTY.md, not THIRD_PARTY.md, and the awkward name is load-bearing: the
 # app bundles this file next to the engine's own docs/THIRD_PARTY.md, and Tauri's WiX
 # generator ignores the destination name a resource is mapped to and uses the source's
@@ -217,6 +219,8 @@ def render() -> str:
         for name, licence, build in unusual:
             lines.append(f"- `{name}` — {licence} ({build})")
         lines.append("")
+
+    lines += ["## Trademarks", "", TRADEMARKS.read_text(encoding="utf-8").rstrip("\n"), ""]
 
     lines += [
         "## Crates",

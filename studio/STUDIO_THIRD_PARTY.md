@@ -13,15 +13,16 @@ Not under a plainly permissive licence, with the smallest build that compiles th
 - `option-ext` — MPL-2.0 (default)
 - `selectors` — MPL-2.0 (default)
 
-## Trademark Notice & Nominative Fair Use
+## Trademarks
 
-All third-party trademarks, registered trademarks, service marks, logos, brand names, and company names appearing in Inkvec Studio, the bundled showcase comparison datasets, and related benchmark corpora are the property of their respective owners.
-
-Their inclusion and depiction in Inkvec Studio are solely for nominative, non-commercial, educational benchmarking, research, and comparative algorithmic vectorization demonstration (specifically evaluating curve accuracy, geometric fidelity, and node efficiency across competing vectorization engines on real-world graphic art).
-
-Use of these marks does not imply, indicate, or constitute any affiliation with, connection to, sponsorship of, or endorsement by their respective trademark holders. Inkvec, LogoLabs, and its contributors make no claim of ownership or proprietary rights to any third-party trademarks depicted.
-
-If any trademark owner objects to the nominative benchmarking of their mark in this open-source project, please open an issue at https://github.com/logolabs/inkvec or contact info@logolabs.org for prompt removal from sample showcases and benchmark data.
+Trademarks, logos, brand and company names shown in this repository, in its benchmark corpora
+and results, in Inkvec Studio's Showcase and on the Inkvec Space are the property of their
+owners. They appear only to compare how vectorisation engines trace real artwork (curve
+accuracy, geometric fidelity, node counts). This implies no affiliation with, sponsorship by
+or endorsement from their owners, and Inkvec, LogoLabs and its contributors claim no rights in
+them. An owner who objects to a mark being shown can open an issue at
+https://github.com/logolabs/inkvec/issues and it will be removed from the showcases and the
+benchmark data.
 
 ## Crates
 

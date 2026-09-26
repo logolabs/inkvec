@@ -201,6 +201,124 @@ Section
   ${IfThen} $1 != "" ${|} StrCpy $R0 "the ghost entry is still there" ${|}
   !insertmacro CHECK "an Apps entry with no install behind it is removed"
 
+  ; ---- 6. In-place upgrade of Inkvec Studio ---------------------------------------------
+  !insertmacro FRESH
+  WriteRegStr HKCU "${MENU}\.png\shell\InkvecStudio\command" "" '"${OLD}\inkvec-studio.exe" "%1"'
+  WriteRegStr HKCU "${MENU}\.tif\shell\InkvecStudio\command" "" '"${OLD}\inkvec-studio.exe" "%1"'
+  !insertmacro FILE "${WORK}\WindowsApps\inkvec.exe" "old command"
+
+  ; The installer marks the upgrade in progress and notes integrations at startup:
+  WriteRegDWORD HKCU "${INKVEC_PREFS_KEY}" "UpgradeInProgress" 1
+  !insertmacro INKVEC_NOTE_INTEGRATIONS
+
+  ; Tauri's reinstall page runs the uninstaller, which executes PREUNINSTALL:
+  !insertmacro NSIS_HOOK_PREUNINSTALL
+
+  ; Then the installer runs its install hooks:
+  !insertmacro NSIS_HOOK_PREINSTALL
+  !insertmacro NSIS_HOOK_POSTINSTALL
+
+  ReadRegStr $1 HKCU "${MENU}\.png\shell\InkvecStudio\command" ""
+  ReadRegStr $2 HKCU "${MENU}\.jpeg\shell\InkvecStudio\command" ""
+  StrCpy $R0 "png: $1 / jpeg: $2"
+  ${If} $1 == '"$INSTDIR\inkvec-studio.exe" "%1"'
+  ${AndIf} $2 == $1
+    StrCpy $R0 "yes"
+  ${EndIf}
+  !insertmacro CHECK "in-place upgrade keeps context menu, pointing at new app"
+
+  StrCpy $R0 "missing"
+  ${If} ${FileExists} "${WORK}\WindowsApps\inkvec.exe"
+    FileOpen $0 "${WORK}\WindowsApps\inkvec.exe" r
+    FileRead $0 $1
+    FileClose $0
+    StrCpy $R0 "holds: $1"
+    ${IfThen} $1 == "new command" ${|} StrCpy $R0 "yes" ${|}
+  ${EndIf}
+  !insertmacro CHECK "in-place upgrade keeps inkvec command, updated to new copy"
+
+  ClearErrors
+  ReadRegDWORD $1 HKCU "${INKVEC_PREFS_KEY}" "UpgradeInProgress"
+  StrCpy $R0 "yes"
+  ${IfNot} ${Errors}
+    StrCpy $R0 "marker still present: $1"
+  ${EndIf}
+  !insertmacro CHECK "in-place upgrade cleans up upgrade markers"
+
+  ; ---- 7. In-place upgrade where an older uninstaller wiped integrations ----------------
+  !insertmacro FRESH
+  WriteRegStr HKCU "${MENU}\.png\shell\InkvecStudio\command" "" '"${OLD}\inkvec-studio.exe" "%1"'
+  !insertmacro FILE "${WORK}\WindowsApps\inkvec.exe" "old command"
+
+  ; Installer marks upgrade and stashes state:
+  WriteRegDWORD HKCU "${INKVEC_PREFS_KEY}" "UpgradeInProgress" 1
+  !insertmacro INKVEC_NOTE_INTEGRATIONS
+
+  ; Older uninstaller wipes integrations unconditionally:
+  DeleteRegKey HKCU "${MENU}\.png\shell\InkvecStudio"
+  Delete "${WORK}\WindowsApps\inkvec.exe"
+
+  ; Simulate clean installer process reading from registry stash:
+  StrCpy $InkvecHadMenu 0
+  StrCpy $InkvecHadCli 0
+
+  !insertmacro NSIS_HOOK_PREINSTALL
+  !insertmacro NSIS_HOOK_POSTINSTALL
+
+  ReadRegStr $1 HKCU "${MENU}\.png\shell\InkvecStudio\command" ""
+  StrCpy $R0 "png: $1"
+  ${IfThen} $1 == '"$INSTDIR\inkvec-studio.exe" "%1"' ${|} StrCpy $R0 "yes" ${|}
+  !insertmacro CHECK "upgrade restores context menu even if old uninstaller wiped it"
+
+  StrCpy $R0 "missing"
+  ${If} ${FileExists} "${WORK}\WindowsApps\inkvec.exe"
+    FileOpen $0 "${WORK}\WindowsApps\inkvec.exe" r
+    FileRead $0 $1
+    FileClose $0
+    StrCpy $R0 "holds: $1"
+    ${IfThen} $1 == "new command" ${|} StrCpy $R0 "yes" ${|}
+  ${EndIf}
+  !insertmacro CHECK "upgrade restores inkvec command even if old uninstaller wiped it"
+
+  ; ---- 8. True uninstall removes all shell integrations ---------------------------------
+  !insertmacro FRESH
+  WriteRegStr HKCU "${MENU}\.png\shell\InkvecStudio\command" "" '"$INSTDIR\inkvec-studio.exe" "%1"'
+  !insertmacro FILE "${WORK}\WindowsApps\inkvec.exe" "command"
+
+  ; True uninstall: no UpgradeInProgress marker:
+  !insertmacro NSIS_HOOK_PREUNINSTALL
+
+  ReadRegStr $1 HKCU "${MENU}\.png\shell\InkvecStudio\command" ""
+  StrCpy $R0 "yes"
+  ${IfThen} $1 != "" ${|} StrCpy $R0 "context menu still present: $1" ${|}
+  !insertmacro CHECK "true uninstall removes context menu"
+
+  StrCpy $R0 "yes"
+  ${IfThen} ${FileExists} "${WORK}\WindowsApps\inkvec.exe" ${|} StrCpy $R0 "command still present" ${|}
+  !insertmacro CHECK "true uninstall removes inkvec command"
+
+  ClearErrors
+  ReadRegDWORD $1 HKCU "${INKVEC_PREFS_KEY}" "UpgradeHadMenu"
+  StrCpy $R0 "yes"
+  ${IfNot} ${Errors}
+    StrCpy $R0 "stashed value still present: $1"
+  ${EndIf}
+  !insertmacro CHECK "true uninstall leaves no stashed integration state"
+
+  ; ---- 9. In-place upgrade with integrations disabled: nothing is added -----------------
+  !insertmacro FRESH
+  WriteRegDWORD HKCU "${INKVEC_PREFS_KEY}" "UpgradeInProgress" 1
+  !insertmacro INKVEC_NOTE_INTEGRATIONS
+  !insertmacro NSIS_HOOK_PREUNINSTALL
+  !insertmacro NSIS_HOOK_PREINSTALL
+  !insertmacro NSIS_HOOK_POSTINSTALL
+
+  ReadRegStr $1 HKCU "${MENU}\.png\shell\InkvecStudio\command" ""
+  StrCpy $R0 "yes"
+  ${IfThen} $1 != "" ${|} StrCpy $R0 "context menu was added: $1" ${|}
+  ${IfThen} ${FileExists} "${WORK}\WindowsApps\inkvec.exe" ${|} StrCpy $R0 "command was added" ${|}
+  !insertmacro CHECK "upgrade with integrations off adds nothing"
+
   FileClose $9
   DeleteRegKey HKCU "${INKVEC_SOFTWARE}"
   RMDir /r "${WORK}"

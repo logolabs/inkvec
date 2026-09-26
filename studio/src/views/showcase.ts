@@ -163,7 +163,19 @@ function content(d: ShowcaseData): HTMLElement {
     const c = cur;
     const mine = ++token;
     for (const [key, b] of tiles) b.setAttribute("aria-pressed", String(key === c.key));
-    fill(caption, h("b", null, c.label), ` · ${c.what}`);
+    const isBrand = c.what.includes("brand") || c.key.startsWith("brand");
+    fill(
+      caption,
+      h("b", null, c.label),
+      ` · ${c.what}`,
+      isBrand
+        ? h(
+            "span.faint",
+            { style: { fontSize: "11px", marginLeft: "6px" }, title: "Nominative benchmark demonstration. All trademarks belong to their respective owners." },
+            "(nominative benchmark)",
+          )
+        : null,
+    );
     const us = c.m.inkvec;
     const them = c.m[other];
     fill(
@@ -292,6 +304,12 @@ function content(d: ShowcaseData): HTMLElement {
         null,
         `Means over the cases except seconds (median). Every case is rendered at ${d.size} px on white, traced by every engine from that raster and scored at 1024 px: the pictures and the tables are the same traces. Inkvec was traced by the build named above; the other engines have not changed. The benchmark of record is the ${d.date} run at 512 px (out/${d.run}/results.json, bench/crosscompare_competitors.py); these tables re-run its cases at ${d.size} px, where a logo's fine detail survives. The brand logos beyond the first twenty, and the third set, were picked by the seed ${d.pick_seed} alone (hash order, a quota per kind), not by how any engine traces them. Computed by tools/showcase_data.py. `,
         h("a", { href: "#", onclick: (e: Event) => { e.preventDefault(); void openExternal("https://github.com/logolabs/inkvec#results"); } }, "Method and every case"),
+      ),
+      h(
+        "p.faint.sc-note",
+        { style: { marginTop: "10px", borderTop: "1px solid var(--rule2)", paddingTop: "10px", lineHeight: "1.6" } },
+        h("b", { style: { color: "var(--dim)" } }, "Trademark notice & fair-use disclaimer: "),
+        "All third-party trademarks, brand names, and logos displayed in this showcase are the property of their respective owners. Their depiction is solely for nominative, non-commercial educational benchmarking and comparative vectorization demonstration. Inkvec and LogoLabs are not affiliated with, sponsored by, or endorsed by these trademark holders.",
       ),
     ),
   );

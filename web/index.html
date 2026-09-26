@@ -223,6 +223,7 @@ html.framed .top{box-shadow:0 -6px 0 var(--void),inset 0 1px 0 rgba(201,117,74,.
     <div class="bars" id="bars"></div>
   </div>
   <p class="note" id="vtnote"></p>
+  <p class="note" id="tmnote" style="margin-top:14px;border-top:1px solid var(--rule);padding-top:12px"><b>Trademark notice &amp; nominative fair-use disclaimer:</b> All third-party trademarks, logos, brand names, and company marks displayed in this showcase are the property of their respective owners. Their depiction is strictly for nominative, non-commercial educational benchmarking and comparative vectorization demonstration. Inkvec and LogoLabs are not affiliated with, sponsored by, or endorsed by these trademark holders.</p>
 </section>
 
 <section class="sec how" id="how">
@@ -238,7 +239,7 @@ html.framed .top{box-shadow:0 -6px 0 var(--void),inset 0 1px 0 rgba(201,117,74,.
   </div>
 </section>
 </main>
-<footer><span>Everything runs in your browser. Nothing is uploaded.</span><span>Inkvec is built by LogoLabs for its work on <a href="https://logolabs.org">logo generation using AI</a></span><span><a href="studio/guide/index.html">User guide</a></span><span>&copy; LogoLabs</span><span class="v mono" id="ver"></span></footer>
+<footer><span>Everything runs in your browser. Nothing is uploaded.</span><span>Inkvec is built by LogoLabs for its work on <a href="https://logolabs.org">logo generation using AI</a></span><span><a href="studio/guide/index.html">User guide</a></span><span>All trademarks property of respective owners (nominative fair use).</span><span>&copy; LogoLabs</span><span class="v mono" id="ver"></span></footer>
 
 <script type="module">
 const $ = id => document.getElementById(id);
@@ -420,7 +421,8 @@ function gallery(d){
   const apply = async () => {
     const c = cur, mine = ++token;
     for (const [key, b] of tiles) b.setAttribute('aria-pressed', String(key === c.key));
-    $("galcap").innerHTML = `<b>${esc(c.label)}</b> &middot; ${esc(c.what)}`;
+    const isBrand = c.what.includes("brand") || c.key.startsWith("brand");
+    $("galcap").innerHTML = `<b>${esc(c.label)}</b> &middot; ${esc(c.what)}` + (isBrand ? ` <span style="color:var(--faint);font-size:11px" title="Nominative benchmark demonstration. All trademarks belong to their respective owners.">(nominative benchmark)</span>` : '');
     const m = c.m.inkvec, w = c.m[other];
     $("galchips").innerHTML = `<span class="chip win">Inkvec dE00 <b>${fmt(m.de1024,3)}</b></span><span class="chip win"><b>${m.paths}</b> paths · <b>${m.coordinates}</b> coordinates · <b>${(m.bytes/1024).toFixed(1)} KB</b></span>` +
       (other === 'inkvec' ? '' : `<span class="chip vt">${esc(SHORT[other])} dE00 <b>${fmt(w.de1024,3)}</b></span><span class="chip vt"><b>${w.paths}</b> paths · <b>${w.coordinates}</b> coordinates · <b>${(w.bytes/1024).toFixed(1)} KB</b></span>`) +

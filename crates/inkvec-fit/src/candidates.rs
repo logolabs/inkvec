@@ -328,7 +328,9 @@ impl Cubic {
         }
     }
 
-    /// Squared distance from `p` to the curve, starting Newton from parameter `t`.
+    /// Squared distance from `p` to the curve, starting Newton from parameter `t`: the
+    /// reference [`Self::dist2_lanes`] reproduces bit for bit.
+    #[cfg(test)]
     fn dist2_from(&self, p: Point, t_init: f64) -> f64 {
         let mut t = t_init.clamp(0.0, 1.0);
         for _ in 0..NEWTON_STEPS {
@@ -347,6 +349,40 @@ impl Cubic {
         }
         let r = self.eval(t) - p;
         r.dot(r)
+    }
+
+    /// Squared distances from [`LANES`] points to the curve, each starting Newton from
+    /// its own parameter: `dist2_from`'s results, bit for bit.
+    ///
+    /// Every lane runs the scalar iteration's own expressions in the same order. Where
+    /// the scalar loop stops early (a vanishing derivative, or Newton landing on the
+    /// parameter it started from) the lane keeps its parameter, and since the step is a
+    /// pure function of the parameter, the steps that follow reach the same decision and
+    /// keep it too. With the early exits gone the lanes are straight-line code the
+    /// compiler can run side by side, where the scalar loop was one chain of dependent
+    /// operations per point with an unpredictable branch in it. This projection was a
+    /// quarter to a third of all trace time on flat art.
+    #[inline]
+    fn dist2_lanes(&self, p: &[Point; LANES], t_init: &[f64; LANES]) -> [f64; LANES] {
+        let mut t = t_init.map(|t| t.clamp(0.0, 1.0));
+        for _ in 0..NEWTON_STEPS {
+            for q in 0..LANES {
+                let b = self.eval(t[q]);
+                let d = self.deriv(t[q]);
+                let dd = d.dot(d);
+                let r = b - p[q];
+                let next = (t[q] - r.dot(d) / dd).clamp(0.0, 1.0);
+                if !(dd < 1e-18) && next != t[q] {
+                    t[q] = next;
+                }
+            }
+        }
+        let mut out = [0.0; LANES];
+        for q in 0..LANES {
+            let r = self.eval(t[q]) - p[q];
+            out[q] = r.dot(r);
+        }
+        out
     }
 
     /// Internal inflection check: does the cubic reverse its turning direction?
@@ -425,42 +461,64 @@ pub(crate) fn wobble_penalty_factor() -> f64 {
 }
 
 /// Which interior points of a span are scored, at what parameter, against what noise.
+///
+/// The points are gathered once per span, in [`LANES`]-wide groups (the tail padded with
+/// points never read), since every candidate cubic of the span is scored on them.
 struct CubicSamples {
-    at: [(u32, f64, f64); MAX_RESIDUAL_SAMPLES],
+    pt: [Point; MAX_RESIDUAL_SAMPLES],
+    t: [f64; MAX_RESIDUAL_SAMPLES],
+    s2: [f64; MAX_RESIDUAL_SAMPLES],
     len: usize,
     weight: f64,
 }
 
+/// Points [`Cubic::dist2_lanes`] projects at once.
+const LANES: usize = 4;
+const _: () = assert!(MAX_RESIDUAL_SAMPLES % LANES == 0);
+
+/// The `LANES` elements of `a` from `m`.
+#[inline]
+fn lanes<T>(a: &[T], m: usize) -> &[T; LANES] {
+    a[m..m + LANES].try_into().expect("a whole group of lanes")
+}
+
 impl CubicSamples {
-    fn new(sigma: &[f64], s: &[f64], i: usize, j: usize) -> Option<Self> {
+    fn new(pts: &[Point], sigma: &[f64], s: &[f64], i: usize, j: usize) -> Option<Self> {
         let interior = j.saturating_sub(i + 1);
         if interior == 0 {
             return None;
         }
         let count = interior.min(MAX_RESIDUAL_SAMPLES);
         let span = (s[j] - s[i]).max(1e-12);
-        let mut at = [(0u32, 0.0, 0.0); MAX_RESIDUAL_SAMPLES];
-        for (m, slot) in at.iter_mut().enumerate().take(count) {
+        let mut out = Self {
+            pt: [Point::new(0.0, 0.0); MAX_RESIDUAL_SAMPLES],
+            t: [0.0; MAX_RESIDUAL_SAMPLES],
+            s2: [0.0; MAX_RESIDUAL_SAMPLES],
+            len: count,
+            weight: interior as f64 / count as f64,
+        };
+        for m in 0..count {
             let k = i + 1 + (((m as f64 + 0.5) * interior as f64) / count as f64).floor() as usize;
             let k = k.min(j - 1);
             // Floored like every other chi2 term: a vanishing sigma would otherwise divide
             // by zero (or a subnormal) and blow the residual up.
             let sg = sigma[k].max(1e-6);
-            *slot = (k as u32, (s[k] - s[i]) / span, sg * sg);
+            (out.pt[m], out.t[m], out.s2[m]) = (pts[k], (s[k] - s[i]) / span, sg * sg);
         }
-        Some(Self {
-            at,
-            len: count,
-            weight: interior as f64 / count as f64,
-        })
+        Some(out)
     }
 
-    fn chi2(&self, pts: &[Point], cb: &Cubic, bound: f64) -> f64 {
+    /// The weighted residual, summed in sample order; returned as soon as the partial sum
+    /// reaches `bound` (a candidate that can no longer win).
+    fn chi2(&self, cb: &Cubic, bound: f64) -> f64 {
         let mut acc = 0.0;
-        for &(k, t, s2) in &self.at[..self.len] {
-            acc += self.weight * cb.dist2_from(pts[k as usize], t) / s2;
-            if acc >= bound {
-                return acc;
+        for m in (0..self.len).step_by(LANES) {
+            let d2 = cb.dist2_lanes(lanes(&self.pt, m), lanes(&self.t, m));
+            for (q, d2) in d2.iter().enumerate().take(self.len - m) {
+                acc += self.weight * d2 / self.s2[m + q];
+                if acc >= bound {
+                    return acc;
+                }
             }
         }
         acc
@@ -489,13 +547,19 @@ pub(crate) fn chi2_cubic(
     let weight = interior as f64 / count as f64;
     let span = (s[j] - s[i]).max(1e-12);
     let mut acc = 0.0;
-    for m in 0..count {
-        let k = i + 1 + (((m as f64 + 0.5) * interior as f64) / count as f64).floor() as usize;
-        let k = k.min(j - 1);
-        let t = (s[k] - s[i]) / span;
-        let d2 = cb.dist2_from(pts[k], t);
-        let sg = sigma[k].max(1e-6);
-        acc += weight * d2 / (sg * sg);
+    for m0 in (0..count).step_by(LANES) {
+        let (mut p, mut t, mut sg) = ([Point::new(0.0, 0.0); LANES], [0.0; LANES], [1.0; LANES]);
+        let n = LANES.min(count - m0);
+        for q in 0..n {
+            let m = m0 + q;
+            let k = i + 1 + (((m as f64 + 0.5) * interior as f64) / count as f64).floor() as usize;
+            let k = k.min(j - 1);
+            (p[q], t[q], sg[q]) = (pts[k], (s[k] - s[i]) / span, sigma[k].max(1e-6));
+        }
+        let d2 = cb.dist2_lanes(&p, &t);
+        for q in 0..n {
+            acc += weight * d2[q] / (sg[q] * sg[q]);
+        }
     }
     acc
 }
@@ -626,7 +690,7 @@ pub(crate) fn best_cubic(
 ) -> Option<(f64, f64, f64)> {
     let fr = g1_frame(pts[i], pts[j], t0, t1, raw)?;
     let plan = subsample
-        .then(|| CubicSamples::new(sigma, s, i, j))
+        .then(|| CubicSamples::new(pts, sigma, s, i, j))
         .flatten();
     let mut best: Option<(f64, f64, f64)> = None;
     for (d0, d1) in arms_from_moments(fr.th0, fr.th1, fr.area, fr.mx).iter() {
@@ -635,7 +699,7 @@ pub(crate) fn best_cubic(
         }
         let cb = Cubic::from_arms(pts[i], pts[j], t0, t1, fr.chord, d0, d1);
         let chi2 = match &plan {
-            Some(p) => p.chi2(pts, &cb, best.map_or(f64::INFINITY, |b| b.0)),
+            Some(p) => p.chi2(&cb, best.map_or(f64::INFINITY, |b| b.0)),
             None => chi2_cubic(pts, sigma, s, i, j, &cb, subsample),
         };
         if best.map(|b| chi2 < b.0).unwrap_or(true) {
@@ -1101,5 +1165,48 @@ mod tests {
 
         let penalty = bow_penalty(10.0, 1.0, 5);
         assert!(penalty > 0.0);
+    }
+
+    #[test]
+    fn test_dist2_lanes_is_dist2_from_bit_for_bit() {
+        let mut st = 3u64;
+        let mut rnd = || {
+            st = st
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (st >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for case in 0..400 {
+            let mut pt = || Point::new(40.0 * rnd() - 20.0, 40.0 * rnd() - 20.0);
+            let (p0, p1, p2, p3) = (pt(), pt(), pt(), pt());
+            // Degenerate curves too: every control point on one spot (a vanishing
+            // derivative everywhere), and cusps where two coincide.
+            let cb = match case % 5 {
+                0 => Cubic {
+                    p0,
+                    p1: p0,
+                    p2: p0,
+                    p3: p0,
+                },
+                1 => Cubic { p0, p1: p0, p2, p3 },
+                _ => Cubic { p0, p1, p2, p3 },
+            };
+            let mut p = [Point::new(0.0, 0.0); LANES];
+            let mut t = [0.0; LANES];
+            for q in 0..LANES {
+                p[q] = Point::new(40.0 * rnd() - 20.0, 40.0 * rnd() - 20.0);
+                // Starts outside [0, 1] and exactly on its ends as well as inside it.
+                t[q] = match (case + q) % 4 {
+                    0 => 0.0,
+                    1 => 1.0,
+                    2 => 1.4 * rnd() - 0.2,
+                    _ => rnd(),
+                };
+            }
+            let lanes = cb.dist2_lanes(&p, &t);
+            for q in 0..LANES {
+                assert_eq!(lanes[q].to_bits(), cb.dist2_from(p[q], t[q]).to_bits());
+            }
+        }
     }
 }

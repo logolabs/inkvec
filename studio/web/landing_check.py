@@ -54,15 +54,22 @@ def main() -> None:
                     scrolls: p.scrollHeight > p.clientHeight, sets: [...p.querySelectorAll('.sethead')].map(e => e.textContent)}; })()""")
         note(f"gallery panel: {geo}")
         page.screenshot(path=str(out / "L3a-gallery-top.png"))
-        shots = [("brand__365retailmarkets_com", "L3b-brand-365retail"), ("brand__abrinor_fr", "L3c-brand-abrinor"),
+        shots = [("brand__115animal_com", "L3b-115animal"), ("brand__abrinor_fr", "L3c-abrinor"),
                  ("brands__sangchaimeter_com", "L3d-scm"), ("noto-emoji__emoji_u1f478_1f3fd", "L3e-princess")]
         for key, name in shots:
             page.click(f'#cases .case[data-key="{key}"]')
-            page.click('#galtools button:has-text("inkvec · VTracer 1.0, best flags")')
+            page.click('#galtools button:has-text("raster · inkvec")')
+            page.click('#galtools button:has-text("1×")')
             page.wait_for_timeout(700)
             page.locator("#showcase").scroll_into_view_if_needed()
             page.screenshot(path=str(out / f"{name}.png"))
-            note(f"gallery {name}: {page.inner_text('#galcap')!r} {page.inner_text('#galchips')!r}".replace("\n", " "))
+            note(f"gallery {name}: {page.inner_text('#galcap')!r} {page.inner_text('#galchips')!r}".replace(chr(10), " "))
+            if name != "L3e-princess":
+                for z in ("4×", "12×"):
+                    page.click(f'#galtools button:has-text("{z}")')
+                    page.wait_for_timeout(500)
+                    page.screenshot(path=str(out / f"{name}-{z.rstrip('×')}x.png"))
+        page.click('#galtools button:has-text("1×")')
         # Arrow keys walk the list, and the selected case stays in view inside the panel.
         page.focus('#cases .case[data-key="noto-emoji__emoji_u1f478_1f3fd"]')
         for _ in range(12):

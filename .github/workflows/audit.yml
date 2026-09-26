@@ -15,11 +15,13 @@ on:
     paths:
       - "Cargo.lock"
       - "studio/src-tauri/Cargo.lock"
+      - "deny.toml"
       - ".github/workflows/audit.yml"
   pull_request:
     paths:
       - "Cargo.lock"
       - "studio/src-tauri/Cargo.lock"
+      - "deny.toml"
       - ".github/workflows/audit.yml"
   schedule:
     - cron: "17 5 * * 1"
@@ -46,3 +48,17 @@ jobs:
       - name: Inkvec Studio
         if: success() || failure()
         run: cargo audit --file studio/src-tauri/Cargo.lock
+
+  deny:
+    # Licences, sources and duplicate versions against deny.toml, every feature on: the
+    # licence allowlist is tools/third_party.py's PERMISSIVE set, so a new copyleft
+    # dependency fails here before it reaches docs/THIRD_PARTY.md. Advisories are checked
+    # too; `cargo audit` above remains the one that also covers Studio's lockfile.
+    name: cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - run: cargo deny --all-features check

@@ -1728,3 +1728,6 @@ pub use carve::{carve_residual_features, carve_residual_features_with_detail_noi
 pub(crate) use evidence::*;
 pub(crate) use stops::fit_mid_stops;
 pub use svg::{fade_to_svg, fill_to_svg};
+
+#[cfg(test)]
+mod tests;

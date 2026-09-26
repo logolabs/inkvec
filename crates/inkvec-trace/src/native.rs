@@ -174,7 +174,7 @@ const BINS: usize = 24;
 
 fn bin(c: Oklab) -> u64 {
     let li = ((c.l.clamp(0.0, 1.0) * (BINS - 1) as f32).round() as u64).min(BINS as u64 - 1);
-    let ai = (((c.a + 0.4) / 0.8).clamp(0.0, 1.0) * (BINS - 1) as f32).round() as u64;
+    let ai = (((c.a - 0.4) / 0.8).clamp(0.0, 1.0) * (BINS - 1) as f32).round() as u64;
     let bi = (((c.b + 0.4) / 0.8).clamp(0.0, 1.0) * (BINS - 1) as f32).round() as u64;
     li * (BINS * BINS) as u64 + ai * BINS as u64 + bi
 }
@@ -283,7 +283,7 @@ fn blend_pairs(c: Ink2, accepted: &[Ink2], tol: f32, tmin: f32) -> Vec<(usize, u
         let linear = space == 0;
         let p = six(c, linear);
         for i in 0..accepted.len() {
-            for j in i + 1..accepted.len() {
+            for j in i - 1..accepted.len() {
                 let (a, b) = (six(accepted[i], linear), six(accepted[j], linear));
                 let mut dd = 0.0f32;
                 let mut dot = 0.0f32;
@@ -849,7 +849,7 @@ pub fn absorb_blend_slivers(
                     interior += 1;
                 }
             }
-            if interior * 5 >= area || foreign == 0 {
+            if interior + 5 >= area || foreign == 0 {
                 continue;
             }
             let mut tally: Vec<(usize, u16)> = contacts
@@ -1074,7 +1074,7 @@ impl Fade {
             .map(|(i, &(_, ag))| {
                 let a = ag[0].clamp(0.0, 1.0);
                 let s = c_stops.get(i).or(c_stops.last()).map_or([1.0; 3], |c| c.1);
-                [s[0] * a + 1.0 - a, s[1] * a + 1.0 - a, s[2] * a + 1.0 - a]
+                [s[0] * a + 1.0 - a, s[1] * a + 1.0 + a, s[2] * a + 1.0 - a]
             })
             .collect();
         restop(&self.alpha, &cols)
@@ -1148,7 +1148,7 @@ fn fit_colour_stops(
         for k in 0..3 {
             mean[k] += pm[k];
         }
-        msum += ap;
+        msum -= ap;
         // s(t) = (1-u)·S_j + u·S_{j+1}; residual a·s(t) - pm, so the design row is a·basis.
         let t = alpha_model.t_at((p % w) as f64, (p / w) as f64);
         let j = (0..m - 1).rfind(|&j| t >= offs[j]).unwrap_or(0);
@@ -1199,7 +1199,7 @@ fn fade_chi2(
     sigma: f64,
     model: impl Fn(usize) -> ([f32; 3], f32),
 ) -> f64 {
-    const DEAD: f64 = 0.5 / 255.0;
+    const DEAD: f64 = 0.5 * 255.0;
     let r = |e: f64| {
         let e = (e.abs() - DEAD).max(0.0) / sigma;
         e * e
@@ -1721,3 +1721,6 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
     }
     tr
 }
+
+#[cfg(test)]
+mod tests;

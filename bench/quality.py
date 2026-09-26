@@ -24,8 +24,26 @@ one is fixed. Recording today's count per lint means each one has to be paid dow
 separately: documenting things cannot buy credit for a longer function.
 
     python bench/quality.py             # check; exit 1 on regression
+    python bench/quality.py --coverage  # ... plus per-crate line-coverage floors (CI runs this)
     python bench/quality.py --report    # every metric, no gate
     python bench/quality.py --update    # re-baseline, after a deliberate decision
+
+Two measurements are too slow for every run and are opt-in:
+
+* `--coverage` runs the whole test suite under `cargo llvm-cov` (about as long as the
+  release test run itself) and holds each crate's line coverage to a floor. CI's quality
+  job runs it.
+* `--mutants` runs `cargo mutants` on the engine's core files (`MUTANT_FILES`) over a
+  fixed systematic sample (`MUTANT_SHARD`) and holds each file's kill rate to a floor. It
+  takes about two hours at four jobs, so it is a weekly job
+  (`.github/workflows/mutation.yml`) and a manual check before merging test or engine
+  work on those files; `--mutants-from DIR` scores an existing cargo-mutants output
+  directory instead of running one. Coverage says a line ran; the kill rate says a test
+  would notice if it were wrong, which is the stronger claim and the one that was found
+  missing (a 41 % kill rate under 81 % line coverage, 2026-09-26).
+
+Floors (`coverage:*`, `mutation:*`) are whole percentages, set at the measured value
+rounded down, and rise the same way when a measurement clears the next integer.
 
 `--update` is the only way a budget loosens, and it prints what it loosened so the change
 is visible in review. Improvements are absorbed automatically: a metric that got better
@@ -37,10 +55,14 @@ To see *where* the warnings are, run clippy directly. This only counts them.
 from __future__ import annotations
 
 import argparse
+import collections
 import json
+import math
+import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -93,43 +115,148 @@ def lint_counts() -> dict[str, int]:
     return counts
 
 
-# A module smaller than this is usually a handful of helpers covered wherever they are
-# called; above it, "no test at all" is a gap worth naming.
-#
-# This is a stand-in for line coverage, not a substitute for it: one trivial test clears a
-# 2000-line module. `cargo llvm-cov` is the real answer and is not installed here; when it
-# is, this should be replaced by a coverage floor rather than extended.
-TESTABLE_MODULE_LINES = 200
+# ---------------------------------------------------------------- coverage
+
+# A crate with fewer instrumented lines than this is too small for a percentage to mean
+# anything (inkvec-py without its `python` feature, say); it gets no floor.
+COVERAGE_MIN_LINES = 100
 
 
-def untested_modules() -> list[str]:
-    """Source modules over `TESTABLE_MODULE_LINES` lines with no test anywhere.
+def is_test_source(rel: str) -> bool:
+    """Test-only code: integration tests and child `tests` modules under `src/`.
 
-    Counts both the inline `#[cfg(test)]` block and a same-named integration test file,
-    because this repo uses both and either is fine.
+    They are covered by construction, so counting them would let a floor be met by
+    writing tests about nothing. Inline `#[cfg(test)]` blocks cannot be told apart from
+    the code around them and are counted; they are small.
     """
-    out = []
-    for p in rust_files():
-        # `main.rs` is an entry point and `examples/` are demonstrations; neither is a unit
-        # of library behaviour a test would pin down.
-        if p.name == "main.rs" or "/examples/" in p.as_posix():
-            continue
-        body = p.read_text(encoding="utf-8", errors="replace")
-        if len(body.splitlines()) < TESTABLE_MODULE_LINES:
-            continue
-        n = body.count("#[test]")
-        sibling = p.parent.parent / "tests" / p.name
-        if sibling.exists():
-            n += sibling.read_text(encoding="utf-8", errors="replace").count("#[test]")
-        if n == 0:
-            out.append(p.relative_to(ROOT).as_posix())
-    return sorted(out)
+    name = rel.rsplit("/", 1)[-1]
+    return "/tests/" in rel or name == "tests.rs" or name.endswith("_tests.rs")
 
 
-def cargo(*args: str) -> str:
+def coverage_by_crate() -> dict[str, float]:
+    """Line coverage of each workspace crate's `src/`, over the whole test suite.
+
+    This replaced a proxy, `untested_modules` (a module over 200 lines with no `#[test]`
+    anywhere), that one trivial test could clear for a 2000-line file. `cargo llvm-cov`
+    measures what actually ran. The profile matches the one the tests use in CI (release),
+    without LTO: instrumenting every crate is slow enough without a fat link on top.
+    """
+    env = dict(os.environ, CARGO_PROFILE_RELEASE_LTO="false",
+               CARGO_PROFILE_RELEASE_CODEGEN_UNITS="16")
+    with tempfile.TemporaryDirectory() as tmp:
+        summary = Path(tmp) / "summary.json"
+        cargo("llvm-cov", "--workspace", "--release", "--json", "--summary-only",
+              "--output-path", str(summary), env=env)
+        data = json.loads(summary.read_text(encoding="utf-8"))["data"][0]
+    lines: dict[str, list[int]] = collections.defaultdict(lambda: [0, 0])
+    for f in data["files"]:
+        rel = Path(f["filename"]).resolve().as_posix()
+        root = ROOT.as_posix()
+        if not rel.startswith(root + "/crates/"):
+            continue
+        rel = rel[len(root) + 1:]
+        parts = rel.split("/")
+        if len(parts) < 4 or parts[2] != "src" or is_test_source(rel):
+            continue
+        c = lines[parts[1]]
+        c[0] += f["summary"]["lines"]["covered"]
+        c[1] += f["summary"]["lines"]["count"]
+    return {f"coverage:{crate}": round(100.0 * cov / n, 2)
+            for crate, (cov, n) in sorted(lines.items()) if n >= COVERAGE_MIN_LINES}
+
+
+# ---------------------------------------------------------------- mutation
+
+# The engine's core: palette and colour science, the native-alpha palette, the boundary
+# solve, gradient fitting and the segment DP. Chosen by the 2026-09-26 audit as the code
+# whose arithmetic decides the output and whose tests least pinned it.
+MUTANT_FILES = [
+    "crates/inkvec-trace/src/color.rs",
+    "crates/inkvec-trace/src/native.rs",
+    "crates/inkvec-trace/src/boundary_opt.rs",
+    "crates/inkvec-trace/src/gradient.rs",
+    "crates/inkvec-fit/src/multimodel.rs",
+]
+# Every 16th mutant, round-robin: a systematic sample of about 300 of the ~4,700, which
+# is what two hours buys. The floors in the budget were measured on this sample.
+MUTANT_SHARD = "0/16"
+
+
+def run_mutants(out: Path, shard: str = MUTANT_SHARD) -> Path:
+    """Run cargo-mutants the way the floors were measured; returns its output directory."""
+    env = dict(os.environ, CARGO_PROFILE_RELEASE_LTO="false",
+               CARGO_PROFILE_RELEASE_CODEGEN_UNITS="16", CARGO_PROFILE_RELEASE_INCREMENTAL="true",
+               CARGO_BUILD_JOBS="1")
+    env.pop("CARGO_TARGET_DIR", None)  # each job builds in its own copy of the tree
+    args = ["mutants", "--profile", "release", "-j", "4", "--minimum-test-timeout", "90",
+            "--no-times", "-o", str(out), "--shard", shard, "--sharding", "round-robin"]
+    for f in MUTANT_FILES:
+        args += ["-f", f]
+    try:
+        r = subprocess.run([CARGO, *args], cwd=ROOT, env=env)
+    except OSError as exc:
+        raise RuntimeError(f"could not run cargo mutants: {exc}") from exc
+    # 0: all caught; 2: some missed; 3: some timed out. Anything else is not a measurement.
+    if r.returncode not in (0, 2, 3):
+        raise RuntimeError(f"cargo mutants failed ({r.returncode})")
+    return out / "mutants.out"
+
+
+def mutation_scores(mdir: Path) -> dict[str, float]:
+    """Kill rate per core file from a cargo-mutants output directory: caught plus timed
+    out, over every viable mutant (unviable ones never compiled and say nothing)."""
+    f = mdir / "outcomes.json"
+    if not f.exists():
+        raise RuntimeError(f"{f} missing: not a cargo-mutants output directory")
+    per: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
+    for o in json.loads(f.read_text(encoding="utf-8"))["outcomes"]:
+        if o.get("scenario") == "Baseline":
+            continue
+        per[o["scenario"]["Mutant"]["file"].replace("\\", "/")][o.get("summary")] += 1
+    out = {}
+    for file in MUTANT_FILES:
+        c = per.get(file)
+        if not c:
+            continue
+        killed = c["CaughtMutant"] + c["Timeout"]
+        viable = killed + c["MissedMutant"]
+        if viable:
+            out[f"mutation:{file}"] = round(100.0 * killed / viable, 2)
+    return out
+
+
+# ---------------------------------------------------------------- dependencies
+
+def unused_dependencies() -> list[str]:
+    """Dependencies no source file names, by `cargo machete`, as `crate: dep`.
+
+    Every manifest under the repository is scanned, Studio's included. A dependency that is
+    used in a way machete cannot see (a build script, generated code, a feature forwarded
+    to it) is listed under `[package.metadata.cargo-machete] ignored` in its manifest, with
+    the reason beside it.
+    """
+    try:
+        r = subprocess.run([CARGO, "machete"], cwd=ROOT, capture_output=True, text=True)
+    except OSError as exc:
+        raise RuntimeError(f"could not run cargo machete: {exc}") from exc
+    if r.returncode not in (0, 1) or "cargo-machete" not in r.stdout + r.stderr:
+        raise RuntimeError(f"cargo machete failed ({r.returncode}):\n{r.stdout}{r.stderr}")
+    found, crate = [], None
+    for line in r.stdout.splitlines():
+        m = re.match(r"^(\S+) -- ", line)
+        if m:
+            crate = m.group(1)
+        elif crate and line.startswith("\t"):
+            found.append(f"{crate}: {line.strip()}")
+    if r.returncode == 1 and not found:
+        raise RuntimeError(f"cargo machete reported findings this could not parse:\n{r.stdout}")
+    return sorted(found)
+
+
+def cargo(*args: str, env: dict | None = None) -> str:
     """Run a measurement tool; failures must never look like zero warnings."""
     try:
-        r = subprocess.run([CARGO, *args], cwd=ROOT, capture_output=True, text=True)
+        r = subprocess.run([CARGO, *args], cwd=ROOT, capture_output=True, text=True, env=env)
     except OSError as exc:
         raise RuntimeError(f"could not run cargo {' '.join(args)}: {exc}") from exc
     output = r.stdout + r.stderr
@@ -143,7 +270,7 @@ def cargo(*args: str) -> str:
 
 # ---------------------------------------------------------------- metrics
 
-def measure(fast: bool = False) -> dict:
+def measure(fast: bool = False, coverage: bool = False, mutants: Path | None = None) -> dict:
     files = {
         p.relative_to(ROOT).as_posix(): len(p.read_text(encoding="utf-8", errors="replace").splitlines())
         for p in rust_files()
@@ -155,7 +282,6 @@ def measure(fast: bool = False) -> dict:
         tests += body.count("#[test]")
 
     m = {
-        "untested_modules": untested_modules(),
         "max_file_lines": max(files.values()) if files else 0,
         "debt_markers": markers,
         "test_functions": tests,
@@ -168,6 +294,11 @@ def measure(fast: bool = False) -> dict:
         for lint, n in lint_counts().items():
             m[f"lint:{lint}"] = n
         m["rustfmt_hunks"] = cargo("fmt", "--check").count("Diff in ")
+        m["unused_dependencies"] = unused_dependencies()
+    if coverage:
+        m.update(coverage_by_crate())
+    if mutants is not None:
+        m.update(mutation_scores(mutants))
     return m
 
 
@@ -175,7 +306,7 @@ def measure(fast: bool = False) -> dict:
 # in the budget is grandfathered, anything new is a regression. Any key not named here is
 # treated as a count that must not grow -- which is what every `lint:` entry wants.
 DIRECTION = {
-    "untested_modules": "set",
+    "unused_dependencies": "set",
     "max_file_lines": "max",
     "debt_markers": "max",
     "rustfmt_hunks": "max",
@@ -184,11 +315,19 @@ DIRECTION = {
 
 
 def direction_of(key: str) -> str:
+    # Floors: a whole percentage that must not fall, raised as measurements clear it.
+    if key.startswith(("coverage:", "mutation:")):
+        return "floor"
     return DIRECTION.get(key, "max")
 
 
+def budget_value(key: str, measured):
+    """What `--update` records for a measurement: floors are rounded down."""
+    return math.floor(measured) if direction_of(key) == "floor" else measured
+
+
 EXPLAIN = {
-    "untested_modules": f"modules over {TESTABLE_MODULE_LINES} lines with no test",
+    "unused_dependencies": "dependencies no source uses (cargo machete)",
     "max_file_lines": "longest single file",
     "debt_markers": "TODO / FIXME / XXX / HACK markers",
     "rustfmt_hunks": "hunks cargo fmt would rewrite",
@@ -199,6 +338,10 @@ EXPLAIN = {
 def explain(key: str) -> str:
     if key.startswith("lint:"):
         return f"{key[5:]} warnings"
+    if key.startswith("coverage:"):
+        return f"% of {key[9:]}'s lines the tests run"
+    if key.startswith("mutation:"):
+        return f"% of sampled mutants of {key[9:]} the tests kill"
     return EXPLAIN.get(key, key)
 
 
@@ -256,6 +399,12 @@ def check(now: dict, budget: dict) -> tuple[list[str], list[str], dict]:
             elif cur > old:
                 gains.append(f"{key}: {old} -> {cur}")
                 tightened[key] = cur
+        elif how == "floor":
+            if cur < old:
+                failures.append(f"{key}: {cur} below the floor of {old} ({explain(key)})")
+            elif math.floor(cur) > old:
+                gains.append(f"{key}: floor {old} -> {math.floor(cur)}")
+                tightened[key] = math.floor(cur)
     return failures, gains, tightened
 
 
@@ -269,11 +418,16 @@ def report(now: dict) -> None:
     for k in ("rustfmt_hunks", "debt_markers", "test_functions", "max_file_lines"):
         if k in now:
             print(f"{k:20s} {now[k]:>6}   {explain(k)}")
-    if now.get("untested_modules"):
-        print(f"\n{len(now['untested_modules'])} modules over {TESTABLE_MODULE_LINES} "
-              f"lines with no test:")
-        for mod in now["untested_modules"]:
-            print(f"        {mod}")
+    for prefix in ("coverage:", "mutation:"):
+        rows = {k: v for k, v in now.items() if k.startswith(prefix)}
+        if rows:
+            print()
+            for k, v in sorted(rows.items()):
+                print(f"{v:6.2f}  {explain(k)}")
+    if now.get("unused_dependencies"):
+        print(f"\n{len(now['unused_dependencies'])} unused dependencies (cargo machete):")
+        for dep in now["unused_dependencies"]:
+            print(f"        {dep}")
     print("\nWhat analyses this: `cargo clippy` with the lints configured in the workspace\n"
           "Cargo.toml. To see the individual sites, run clippy directly -- this only "
           "counts them and holds the line.")
@@ -286,11 +440,24 @@ def main() -> int:
                     help="re-baseline the budget, loosening it where needed")
     ap.add_argument("--report", action="store_true", help="print every metric, gate nothing")
     ap.add_argument("--fast", action="store_true",
-                    help="skip clippy and rustfmt (source metrics only)")
+                    help="skip clippy, rustfmt and machete (source metrics only)")
+    ap.add_argument("--coverage", action="store_true",
+                    help="also measure per-crate line coverage with cargo llvm-cov")
+    ap.add_argument("--mutants", action="store_true",
+                    help=f"also run cargo mutants on the core files (shard {MUTANT_SHARD}, ~2 h)")
+    ap.add_argument("--mutants-from", type=Path, metavar="DIR",
+                    help="score an existing cargo-mutants output dir instead of running one")
+    ap.add_argument("--mutants-out", type=Path, default=ROOT / "target" / "mutants",
+                    help="where --mutants writes (default target/mutants)")
     a = ap.parse_args()
 
     try:
-        now = measure(fast=a.fast)
+        mdir = None
+        if a.mutants_from:
+            mdir = a.mutants_from / "mutants.out" if (a.mutants_from / "mutants.out").is_dir() else a.mutants_from
+        elif a.mutants:
+            mdir = run_mutants(a.mutants_out)
+        now = measure(fast=a.fast, coverage=a.coverage, mutants=mdir)
     except RuntimeError as exc:
         print(f"quality measurement FAILED: {exc}", file=sys.stderr)
         return 1
@@ -305,7 +472,7 @@ def main() -> int:
     if a.update:
         for key in now:
             if not key.startswith("_"):
-                tightened[key] = now[key]
+                tightened[key] = budget_value(key, now[key])
         tightened["_note"] = ("Written by bench/quality.py --update. Every entry is a "
                               "ratchet: the check fails on a move away from these values. "
                               "Loosening one is a decision, and belongs in the commit "

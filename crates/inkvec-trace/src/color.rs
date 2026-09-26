@@ -370,14 +370,14 @@ pub(crate) fn srgb_to_lab(rgb: [f32; 3]) -> [f32; 3] {
 
 /// CIEDE2000 between two sRGB colours. Sharma, Wu and Dalal (2005) formulation.
 pub fn de00(a: [f32; 3], b: [f32; 3]) -> f32 {
-    let (l1, a1, b1) = {
-        let v = srgb_to_lab(a);
-        (v[0] as f64, v[1] as f64, v[2] as f64)
-    };
-    let (l2, a2, b2) = {
-        let v = srgb_to_lab(b);
-        (v[0] as f64, v[1] as f64, v[2] as f64)
-    };
+    de00_lab(srgb_to_lab(a).map(f64::from), srgb_to_lab(b).map(f64::from)) as f32
+}
+
+/// [`de00`] on CIELAB values (D65 white). Split out so the formula can be held to Sharma,
+/// Wu and Dalal's 34 published reference pairs, which are given in Lab (`color/tests.rs`).
+pub(crate) fn de00_lab(lab1: [f64; 3], lab2: [f64; 3]) -> f64 {
+    let [l1, a1, b1] = lab1;
+    let [l2, a2, b2] = lab2;
     let c1 = a1.hypot(b1);
     let c2 = a2.hypot(b2);
     let cbar = 0.5 * (c1 + c2);
@@ -442,7 +442,7 @@ pub fn de00(a: [f32; 3], b: [f32; 3]) -> f32 {
     let sh = 1.0 + 0.015 * cbp * t;
     let rt = -(2.0 * dtheta).to_radians().sin() * rc;
     let (vl, vc, vh) = (dlp / sl, dcp / sc, dhp_big / sh);
-    (vl * vl + vc * vc + vh * vh + rt * vc * vh).max(0.0).sqrt() as f32
+    (vl * vl + vc * vc + vh * vh + rt * vc * vh).max(0.0).sqrt()
 }
 
 /// An intake whose edges are wider than this many pixels has been resampled, blurred
@@ -1437,3 +1437,6 @@ mod de00_tests {
         assert_eq!(de00(c(50, 100, 150), c(50, 100, 150)), 0.0);
     }
 }
+
+#[cfg(test)]
+mod tests;

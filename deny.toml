@@ -1,0 +1,43 @@
+# cargo-deny policy for the engine workspace: RustSec advisories, licences, duplicate
+# versions and sources. The licence allowlist mirrors `PERMISSIVE` in tools/third_party.py,
+# so the two agree about what "permissive" means; CI runs it next to `cargo audit`
+# (.github/workflows/audit.yml), and the quality audit (tools/quality_audit/run.py) reads it.
+#
+#   cargo deny --all-features check
+#
+# Studio (studio/src-tauri) is a workspace of its own and is not covered here.
+
+[graph]
+all-features = true
+
+[advisories]
+# RustSec. `unmaintained` notices are reported for workspace crates' whole dependency tree.
+unmaintained = "workspace"
+yanked = "warn"
+
+[licenses]
+confidence-threshold = 0.9
+allow = [
+    "MIT", "MIT-0", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib", "0BSD",
+    "Unicode-3.0", "Unicode-DFS-2016", "Unlicense", "CC0-1.0", "BSL-1.0",
+    "Apache-2.0 WITH LLVM-exception", "CDLA-Permissive-2.0",
+]
+# Weak copyleft, file-level, reached only through the optional Burn restorer's build
+# dependency (`burn-onnx`, feature `model`): never in the default build, and listed in
+# docs/THIRD_PARTY.md. Named per crate so a new MPL dependency is still a decision.
+exceptions = [
+    { allow = ["MPL-2.0"], crate = "colored" },
+    { allow = ["MPL-2.0"], crate = "option-ext" },
+]
+
+[bans]
+# Duplicate versions are reported, not failed: most come from the ML runtimes behind
+# optional features, and the census is the point.
+multiple-versions = "warn"
+wildcards = "warn"
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

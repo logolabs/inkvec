@@ -46,3 +46,8 @@ console_error_panic_hook = "0.1"
 wasm-bindgen-rayon = { version = "1.2", optional = true }
 rayon = { workspace = true, optional = true }
 
+
+# `rayon` is here only so the `threads` feature can pin the rayon that
+# wasm-bindgen-rayon's pool drives; no source file names it.
+[package.metadata.cargo-machete]
+ignored = ["rayon"]

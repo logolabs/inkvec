@@ -70,20 +70,25 @@ jobs:
   quality:
     # The code-quality ratchet: bench/quality_budget.json records what is true today and
     # this fails on a move away from it. Existing debt is grandfathered by name, so this
-    # never blocks work on an old long function -- only on a new one.
+    # never blocks work on an old long function -- only on a new one. It also holds each
+    # crate's line coverage (cargo llvm-cov) to a floor and unused dependencies (cargo
+    # machete) at zero.
     name: quality ratchet
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.98.0
         with:
-          components: clippy, rustfmt
+          components: clippy, rustfmt, llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,cargo-machete
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
       - run: python -m unittest discover -s bench/tests -p test_quality.py
-      - run: python bench/quality.py
+      - run: python bench/quality.py --coverage
 
   fmt:
     name: fmt

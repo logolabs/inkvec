@@ -12,7 +12,7 @@ The app icon is the Inkvec droplet from `web/logo.svg`, in copper on a transpare
 ground, rasterised here from the same path the app draws in its bar. Nothing is copied by
 hand: change the mark and every icon follows.
 
-Dependencies: Pillow. ICNS is assembled here rather than left to Pillow, whose writer is
+Dependencies: Pillow, the version named in PILLOW below for `--check` to pass. ICNS is assembled here rather than left to Pillow, whose writer is
 platform-dependent; the container is a magic word, a length and a run of tagged PNGs.
 """
 
@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import argparse
 import functools
-import hashlib
 import math
 import re
 import struct
@@ -34,6 +33,7 @@ ICONS = ROOT / "src-tauri" / "icons"
 INSTALLER = ROOT / "src-tauri" / "installer"
 SAMPLES = ROOT / "src-tauri" / "samples"
 ASSETS = ROOT / "src" / "assets"
+FONTS = ROOT / "public" / "fonts"
 # The Inkvec mark, as the site serves it. Copied rather than re-drawn so the app cannot
 # show a mark the rest of the project has moved on from; `--check` fails if it has.
 SITE_LOGO = ROOT.parent / "web" / "logo.svg"
@@ -304,9 +304,8 @@ def installer_sidebar() -> Image.Image:
     img.paste(mark, (16 * SS, 22 * SS), mark)
 
     img = img.resize((w, h), Image.LANCZOS)
-    d = ImageDraw.Draw(img)
-    _text_block(d, 16, h - 60, ["Inkvec", "Studio"], CREAM, 15, serif=True)
-    _text_block(d, 16, h - 24, ["Raster to SVG, exactly"], PIXEL_DIM, 9)
+    _text_block(img, 16, h - 60, ["Inkvec", "Studio"], CREAM, 15, serif=True)
+    _text_block(img, 16, h - 24, ["Raster to SVG, exactly"], PIXEL_DIM, 9)
     return img
 
 
@@ -316,21 +315,24 @@ def installer_header() -> Image.Image:
     img = Image.new("RGB", (w, h), STAGE)
     mark = mark_image(30)
     img.paste(mark, (14, (h - mark.height) // 2), mark)
-    d = ImageDraw.Draw(img)
-    _text_block(d, 46, 18, ["Inkvec", "Studio"], CREAM, 10)
+    _text_block(img, 46, 18, ["Inkvec", "Studio"], CREAM, 10)
     return img
 
 
-def _text_block(draw, x, y, lines, colour, size, serif=False):
-    """Draw a run of lines with whatever font is actually available.
+def _font(size: int, serif: bool):
+    """The design system's typeface at `size` px.
 
-    Deliberately forgiving: these two bitmaps are built on whatever machine runs this
-    script, and a missing font must not stop the assets being produced. The layout is
-    what carries the design; the typeface is a bonus.
+    Playfair and Inter are the fonts the app itself ships (`studio/public/fonts/`), so
+    the installer art is set in the same type as the app and, more to the point, in the
+    same type on every machine: with a system font, a bitmap drawn on Windows (Georgia)
+    and one drawn on Linux (DejaVu) could never agree, and `--check` could never pass on
+    both. A system font is only a fallback for a FreeType that cannot read WOFF2, and
+    `--check` then reports the bitmaps as stale rather than passing on the wrong type.
     """
     from PIL import ImageFont
 
-    candidates = (
+    own = FONTS / ("playfair-latin.woff2" if serif else "inter-latin.woff2")
+    system = (
         [
             "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
             "/System/Library/Fonts/Supplemental/Georgia.ttf",
@@ -343,15 +345,25 @@ def _text_block(draw, x, y, lines, colour, size, serif=False):
             "C:/Windows/Fonts/arial.ttf",
         ]
     )
-    font = None
-    for path in candidates:
-        if Path(path).exists():
-            font = ImageFont.truetype(path, size)
-            break
-    if font is None:
-        font = ImageFont.load_default()
+    for path in [own] + [Path(p) for p in system]:
+        if not path.exists():
+            continue
+        try:
+            # BASIC layout: Raqm (HarfBuzz) is present in some Pillow builds and not
+            # others, and it kerns, so the two would place the same glyphs differently.
+            return ImageFont.truetype(str(path), size, layout_engine=ImageFont.Layout.BASIC)
+        except OSError:
+            # A FreeType built without Brotli cannot open WOFF2; try the next one.
+            continue
+    return ImageFont.load_default()
+
+
+def _text_block(img: Image.Image, x, y, lines, colour, size, serif=False) -> None:
+    """Draw a run of lines onto `img`, `size` px type with its top-left at (x, y)."""
+    font = _font(size, serif)
+    d = ImageDraw.Draw(img)
     for i, line in enumerate(lines):
-        draw.text((x, y + i * (size + 3)), line, fill=colour, font=font)
+        d.text((x, y + i * (size + 3)), line, fill=colour, font=font)
 
 
 # --------------------------------------------------------------------------- samples ---
@@ -482,9 +494,64 @@ def mono_mark() -> bytes:
     return (header + svg + "\n").encode("utf-8")
 
 
+def _pictures(data: bytes, suffix: str) -> list[Image.Image] | None:
+    """The images a binary asset holds, decoded to RGBA, or None for a non-image file.
+
+    An ICO or ICNS holds one picture per size; a PNG or BMP holds one.
+    """
+    import io
+
+    if suffix == ".icns":
+        # The container `icns` writes: after the 8-byte header, tag + length + PNG.
+        out, at = [], 8
+        while at + 8 <= len(data):
+            n = struct.unpack(">I", data[at + 4 : at + 8])[0]
+            out.append(Image.open(io.BytesIO(data[at + 8 : at + n])).convert("RGBA"))
+            at += n
+        return out
+    if suffix == ".ico":
+        from PIL import IcoImagePlugin
+
+        ico = IcoImagePlugin.IcoFile(io.BytesIO(data))
+        return [ico.getimage(s).convert("RGBA") for s in sorted(ico.sizes())]
+    if suffix in (".png", ".bmp"):
+        return [Image.open(io.BytesIO(data)).convert("RGBA")]
+    return None
+
+
+# The Pillow the committed assets were drawn with, and the one studio.yml installs for
+# `--check`. Pillow bundles its own FreeType, and FreeType releases hint small type
+# differently: Pillow 10.4 (FreeType 2.13) and 12.3 (2.14) disagree on 4% of the
+# installer header's pixels. Within one Pillow version the drawing is the same on
+# Windows, macOS and Linux, so the check pins the version rather than loosening the
+# comparison until a real change could slip through it.
+PILLOW = "12.3.0"
+
+
+def _equivalent(old: bytes, new: bytes, suffix: str) -> bool:
+    """True when `old` and `new` are the same asset: identical bytes, or the same pictures.
+
+    Bytes alone are not a fair test of an image: the same pixels come out of Pillow's PNG
+    writer as different bytes depending on the zlib it was built with (zlib-ng in recent
+    wheels). So an image counts as unchanged when every picture in it decodes to exactly
+    the same RGBA pixels, at the same sizes. Anything else is compared byte for byte.
+    """
+    if old == new:
+        return True
+    try:
+        a, b = _pictures(old, suffix), _pictures(new, suffix)
+    except Exception:
+        return False
+    if a is None or b is None or len(a) != len(b):
+        return False
+    return all(x.size == y.size and x.tobytes() == y.tobytes() for x, y in zip(a, b))
+
+
 def write(path: Path, data: bytes, check: bool, stale: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists() and hashlib.sha256(path.read_bytes()).digest() == hashlib.sha256(data).digest():
+    # An equivalent file is left alone, so a run on another machine does not rewrite
+    # every binary for its encoder's sake.
+    if path.exists() and _equivalent(path.read_bytes(), data, path.suffix.lower()):
         return
     if check:
         stale.append(str(path.relative_to(ROOT.parent)))
@@ -559,6 +626,14 @@ def main() -> int:
         print("These assets are stale; re-run without --check:", file=sys.stderr)
         for s in stale:
             print(f"  {s}", file=sys.stderr)
+        import PIL
+
+        if PIL.__version__ != PILLOW:
+            print(
+                f"(this is Pillow {PIL.__version__}; the assets are drawn with Pillow {PILLOW},"
+                f" whose FreeType the installer text depends on: pip install pillow=={PILLOW})",
+                file=sys.stderr,
+            )
         return 1
     print("assets up to date" if args.check else "assets written")
     return 0

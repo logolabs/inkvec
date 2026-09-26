@@ -111,7 +111,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install pillow markdown pygments
+      # Pillow is pinned to the version the assets are drawn with (PILLOW in
+      # make_assets.py): it bundles FreeType, whose hinting of the installer text changes
+      # between releases. Images are compared by decoded pixels, so zlib differences in
+      # the PNG bytes do not count.
+      - run: pip install pillow==12.3.0 markdown pygments
       - run: python studio/tools/make_assets.py --check
 
       # The user guide the app opens from Help is a build of docs/studio/, committed so the

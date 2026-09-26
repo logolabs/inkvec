@@ -18,7 +18,7 @@ use crate::lost::Loss;
 use crate::quality::{self, Ink, Report};
 
 /// Which formats to write.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Formats {
     /// The SVG as traced.

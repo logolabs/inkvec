@@ -27,7 +27,8 @@ import {
   type Snap,
   type Traced,
 } from "./lib/ipc";
-import { initial, modKey, Store } from "./lib/state";
+import { initial, modKey, Store, type State } from "./lib/state";
+import { applyRemembered, currentInterface, traceForKeeping, watchRemembered } from "./lib/remember";
 import { APP_NAME, copyText, openExternal, pickedFile, pickedPath, pickFiles, WEB, type Picked } from "./lib/platform";
 import { markFramed, mountWebChrome, takeLaunch, webDrops, type Launch } from "./lib/web/chrome";
 import { Previews } from "./lib/previews";
@@ -375,6 +376,10 @@ const appbar = h("header.appbar");
 const content = h("div.body");
 const screens = createScreens(store, {
   applyPrefs: (patch) => void savePrefs(patch),
+  afterReset: (fresh) => {
+    applyTheme(fresh.theme);
+    putBack(fresh);
+  },
   close: () => store.set({ screen: null }),
 });
 
@@ -679,13 +684,43 @@ function openRecent(anchor: HTMLElement): void {
   );
 }
 
+/**
+ * Save a change to the preferences. What is sent always carries the trace controls and the
+ * interface as they are now, not as they were when the preferences were loaded: sending the
+ * loaded copy back used to put an old `trace` over the one the backend had kept.
+ */
 async function savePrefs(patch: Partial<Prefs>): Promise<void> {
   const current = store.state.prefs;
   if (!current) return;
-  const next = { ...current, ...patch };
+  const next = { ...current, trace: traceForKeeping(store.state.settings), ui: currentInterface(store.state), ...patch };
   const saved = await api.savePrefs(next);
   store.set({ prefs: saved });
   applyTheme(saved.theme);
+}
+
+/**
+ * The remembered choices changed (`lib/remember.ts`). Saved without announcing new
+ * preferences to the store: the interface already shows every one of them, and a panel
+ * rebuilt for its own echo would lose a slider from under the pointer.
+ */
+async function autosave(patch: Pick<Prefs, "trace" | "ui">): Promise<void> {
+  const current = store.state.prefs;
+  if (!current) return;
+  try {
+    const saved = await api.savePrefs({ ...current, ...patch });
+    // Anything the user changed in Settings meanwhile arrives by `savePrefs`, not here.
+    if (store.state.prefs === current) store.state.prefs = saved;
+  } catch {
+    // Nowhere to write (a full disk, blocked storage): the session carries on unsaved.
+  }
+}
+
+/** The tabs this build has. */
+const TABS: readonly State["tab"][] = WEB ? ["vectorize", "minify", "fabricate"] : ["vectorize", "minify", "fabricate", "batch"];
+
+/** Put the interface back as the preferences remember it, and the theme with it. */
+function putBack(prefs: Prefs): void {
+  applyRemembered(store, prefs, TABS, (id) => resolvePreset(id) !== null);
 }
 
 function applyTheme(theme: Prefs["theme"]): void {
@@ -886,6 +921,9 @@ async function start(): Promise<void> {
   const [caps, prefs] = await Promise.all([api.capabilities(), api.loadPrefs()]);
   store.set({ caps, prefs, settings: prefs.trace });
   applyTheme(prefs.theme);
+  // The interface as it was left, before anything is shown; then kept as it changes.
+  putBack(prefs);
+  watchRemembered(store, (patch) => void autosave(patch));
   progress(`Engine ${caps.engineVersion} · ${caps.buildTarget}`, 0.55);
   samples = await api.listSamples();
   store.touch("source");

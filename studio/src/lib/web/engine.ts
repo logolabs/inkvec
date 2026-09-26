@@ -440,6 +440,10 @@ class WebBackend {
       case "load_prefs":
         return this.loadPrefs();
       case "save_prefs": {
+        // Written at once, as sent, before the core sanitises it: a save made as the tab
+        // closes (pagehide) runs only this far. The next load sanitises what it finds.
+        this.prefs = { ...(this.prefs ?? {}), ...(a.prefs as Record<string, unknown>) };
+        this.storePrefs();
         const clean = (await this.enqueue("sanitise_prefs", 0, { args: { prefs: a.prefs } })) as Record<string, unknown>;
         this.prefs = clean;
         this.storePrefs();

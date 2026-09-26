@@ -25,6 +25,8 @@ import { showcaseScreen } from "./showcase";
 
 export interface ScreenActions {
   applyPrefs(patch: Partial<Prefs>): void;
+  /** The preferences were reset: put the theme and the interface back to what they say. */
+  afterReset(fresh: Prefs): void;
   close(): void;
 }
 
@@ -258,6 +260,7 @@ function settings(store: Store, act: ScreenActions): HTMLElement {
                     async () => {
                       const fresh = await api.resetPrefs();
                       store.set({ prefs: fresh, settings: fresh.trace });
+                      act.afterReset(fresh);
                       toast("Settings reset.");
                     },
                     true,

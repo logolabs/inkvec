@@ -309,37 +309,46 @@ def check_prefs(browser, url: str, out: pathlib.Path, note) -> None:
     page.on("pageerror", lambda e: note(f"pageerror: {e}"))
     page.goto(url)
     page.wait_for_selector("#boot", state="detached", timeout=60_000)
+    before_any = snapshot(page)
     page.click("button.sample >> nth=0")
     page.wait_for_selector(".palettecard .ink", timeout=180_000)
     wait_final(page)
+    page.click("[data-ctl=chooser-auto]") if page.locator("[data-ctl=chooser-auto]").count() else None
     # A handful of choices from different corners of the interface.
     page.keyboard.press("Control+2")  # the Icon preset
     page.wait_for_timeout(400)
     page.click("[data-ctl='editability:switch']")
-    page.click(".viewtools button:has-text('Wipe')") if page.locator(".viewtools button:has-text('Wipe')").count() else None
-    for label in ("Wireframe", "Anchors"):
-        loc = page.locator(f"button:has-text('{label}')")
-        if loc.count():
-            loc.first.click()
-    tune = page.locator(".railtabs button:has-text('Tune')")
-    if tune.count():
-        tune.first.click()
-    page.wait_for_timeout(1500)
+    for label in ("Wipe", "Wireframe", "Anchors", "Detail"):
+        page.click(f".viewertools button:has-text('{label}')")
+        page.wait_for_timeout(150)
+    page.click(".railtabs [role=tab]:has-text('Tune')")
+    # The export sheet: the favicon set ticked.
+    page.click('button.btn.primary:has-text("Export")')
+    page.wait_for_selector(".sheet", timeout=10_000)
+    page.click(".sheet :text('ICO and favicon set')")
+    page.wait_for_timeout(1200)
     before = snapshot(page)
-    stored = page.evaluate("localStorage.getItem('inkvec-studio-lite:prefs')")
-    note(f"prefs before reload: {before}")
+    note(f"prefs defaults at first: {before_any}")
+    note(f"prefs before reload:     {before}")
     page.reload()
     page.wait_for_selector("#boot", state="detached", timeout=60_000)
     page.wait_for_timeout(800)
     after = snapshot(page)
-    note(f"prefs after reload:  {after}")
+    note(f"prefs after reload:      {after}")
     same = {k: before[k] == after[k] for k in before}
-    note(f"prefs restored: {same}; stored {len(stored or '')} bytes")
+    note(f"prefs restored after reload: {same}")
     page.screenshot(path=str(out / "R1-prefs-after-reload.png"))
+    # The last tab, too.
+    page.click('.appbar button:has-text("Fabricate")')
+    page.wait_for_timeout(1200)
+    page.reload()
+    page.wait_for_selector("#boot", state="detached", timeout=60_000)
+    page.wait_for_timeout(500)
+    note(f"prefs: tab after reload {snapshot(page)['tab']}")
     page.goto("about:blank")
     ctx.close()
 
-    # Storage that throws: the page still starts, on the defaults.
+    # Storage that throws: the page still starts, on the defaults, and traces.
     ctx = browser.new_context(viewport={"width": 1440, "height": 900})
     ctx.add_init_script(BLOCKED_STORAGE)
     ctx.add_init_script(SAVE_DATA)
@@ -348,12 +357,14 @@ def check_prefs(browser, url: str, out: pathlib.Path, note) -> None:
     page.on("pageerror", lambda e: errors.append(str(e)))
     page.goto(url)
     page.wait_for_selector("#boot", state="detached", timeout=60_000)
+    blocked = page.evaluate("(() => { try { localStorage.length; return false; } catch { return true; } })()")
     page.click("button.sample >> nth=0")
     page.wait_for_selector(".palettecard .ink", timeout=180_000)
+    wait_final(page)
     page.click("[data-ctl='editability:switch']")
     page.wait_for_timeout(1500)
     page.screenshot(path=str(out / "R2-storage-blocked.png"))
-    note(f"prefs with storage blocked: booted and traced, page errors {errors}")
+    note(f"prefs with storage blocked (throws: {blocked}): booted and traced; page errors {errors}")
     page.goto("about:blank")
     ctx.close()
 
@@ -361,12 +372,17 @@ def check_prefs(browser, url: str, out: pathlib.Path, note) -> None:
 def snapshot(page: Page) -> dict:
     return page.evaluate(
         """(() => {
-          const pressed = (sel) => [...document.querySelectorAll(sel)].filter(b => b.getAttribute('aria-pressed') === 'true' || b.getAttribute('aria-checked') === 'true').map(b => b.dataset.ctl || b.textContent.trim());
+          const on = (sel) => [...document.querySelectorAll(sel)].map(e => e.textContent.trim());
+          let ui = null;
+          try { ui = JSON.parse(localStorage.getItem('inkvec-studio-lite:prefs') || 'null')?.ui ?? null; } catch {}
           return {
-            preset: [...document.querySelectorAll('.presets [aria-pressed=true], .presets .on, .chip[aria-pressed=true]')].map(e => e.textContent.trim()).slice(0, 2),
+            tab: on('.appbar > .seg button[aria-pressed=true]'),
+            preset: on('button.preset[aria-pressed=true] .name'),
             editable: document.querySelector('[data-ctl="editability:switch"]')?.getAttribute('aria-checked'),
-            viewer: [...document.querySelectorAll('.viewtools [aria-pressed=true]')].map(e => e.textContent.trim()),
-            railTab: [...document.querySelectorAll('.railtabs [aria-selected=true], .railtabs [aria-pressed=true]')].map(e => e.textContent.trim()),
+            // The zoom stops are left out: zoom belongs to the image, and a new one opens fitted.
+            viewer: on('.viewertools button[aria-pressed=true]').filter(t => !/^(Fit|\d+×)$/.test(t)),
+            railTab: on('.railtabs [aria-selected=true]'),
+            exportFavicon: ui?.export?.favicon ?? null,
           };
         })()"""
     )

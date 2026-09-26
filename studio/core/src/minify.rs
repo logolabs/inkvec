@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::quality;
 
 /// The three controls the tab has.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct MinifySettings {
     /// Nothing moves more than this many pixels...

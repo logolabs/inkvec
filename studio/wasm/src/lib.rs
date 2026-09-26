@@ -387,6 +387,8 @@ fn web_prefs(p: prefs::Prefs) -> prefs::Prefs {
     p.threads = None;
     p.output_folder = None;
     p.recent.clear();
+    // A tab has no window of its own to put back.
+    p.window = None;
     p
 }
 

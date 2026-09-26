@@ -11,6 +11,7 @@ import { api, type ExportRequest, type Formats, type PlannedFile } from "../lib/
 import { CAN_PICK_FOLDER, pickFolder, revealAction } from "../lib/platform";
 import { bytes, type Store } from "../lib/state";
 import { toast } from "./overlays";
+import { remember, rememberedFormats } from "../lib/remember";
 
 const PNG_SIZES = [512, 1024, 2048];
 
@@ -45,13 +46,14 @@ export function openExportSheet(
   host: HTMLElement,
   onBeforeExport: () => Promise<void>,
 ): void {
-  const formats: Formats = {
+  // The formats ticked last time (lib/remember.ts), or these.
+  const formats: Formats = rememberedFormats({
     svg: true,
     svgMinified: true,
     pngSizes: [...PNG_SIZES],
     favicon: false,
     assetPack: true,
-  };
+  });
   let planned: PlannedFile[] = [];
   let destination = store.state.prefs?.outputFolder ?? null;
 
@@ -72,6 +74,7 @@ export function openExportSheet(
     planned.filter((p) => p.group === group).reduce((a, p) => a + p.bytes, 0);
 
   const replan = async () => {
+    remember({ export: { ...formats, pngSizes: [...formats.pngSizes] } });
     const request = requestFor(store, formats);
     if (!request) return;
     try {

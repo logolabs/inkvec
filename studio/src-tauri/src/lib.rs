@@ -26,6 +26,7 @@
 pub mod batch;
 pub mod denoiser;
 pub mod integration;
+mod place;
 pub mod settings;
 
 // The shared core's modules, under the names this crate has always used for them.
@@ -105,9 +106,21 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(AppState::default())
+        // The main window's place, remembered as it moves and written when it closes.
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => place::record(window),
+            tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed => {
+                place::save(window)
+            }
+            _ => {}
+        })
         .setup(|app| {
             let prefs = settings::load();
             configure_threads(&prefs);
+            // Where the window was last time, before anyone sees it.
+            if let Some(main) = app.get_webview_window(place::MAIN) {
+                place::restore(&main, prefs.window);
+            }
             let state = app.state::<AppState>();
             *state.prefs.lock().expect("preferences lock") = prefs;
             // The file the context menu (or anything else) launched the app with. Held
@@ -244,8 +257,14 @@ fn finish_splash(app: &AppHandle, force: bool) {
         // The app is shown first, under the splash: the splash is always on top, so it
         // fades out over a window that is already there instead of over the desktop,
         // and the app is on screen a fade sooner.
-        if let Some(main) = app.get_webview_window("main") {
-            let _ = main.show();
+        if let Some(main) = app.get_webview_window(place::MAIN) {
+            let window = app
+                .state::<AppState>()
+                .prefs
+                .lock()
+                .ok()
+                .and_then(|p| p.window);
+            place::show(&main, window);
             let _ = main.set_focus();
         }
         let _ = app.emit_to("splash", "splash-done", ());
@@ -885,9 +904,10 @@ fn save_prefs(
     prefs: settings::Prefs,
     state: State<'_, AppState>,
 ) -> Result<settings::Prefs, String> {
-    let cleaned = prefs.sanitised();
+    let mut held = state.prefs.lock().map_err(lock)?;
+    let cleaned = settings::merge_from_interface(&held, prefs);
     settings::save(&cleaned)?;
-    *state.prefs.lock().map_err(lock)? = cleaned.clone();
+    *held = cleaned.clone();
     Ok(cleaned)
 }
 

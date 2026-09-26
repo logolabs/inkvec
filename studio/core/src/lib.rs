@@ -28,6 +28,7 @@ pub const APP_NAME: &str = if cfg!(target_arch = "wasm32") {
 
 pub mod api;
 pub mod export;
+pub mod interface;
 pub mod lost;
 pub mod minify;
 pub mod options;

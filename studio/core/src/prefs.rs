@@ -6,12 +6,24 @@
 //! holds preferences and a list of recently opened files, nothing about the images
 //! themselves, and an unreadable or half-written copy falls back to the defaults rather
 //! than refusing to start.
+//!
+//! Read leniently, field by field ([`crate::interface::lenient`]): a value this version does
+//! not understand resets that field and nothing else, and an unknown field is ignored. The
+//! file records the schema that wrote it (`schema`), so a later change of meaning has
+//! somewhere to migrate from ([`Prefs::sanitised`]).
 
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::interface::{lenient, lenient_list, lenient_or, lenient_true};
+pub use crate::interface::{Interface, Layers, WindowPlace};
 use crate::options::Settings as TraceSettings;
+
+/// The preferences' schema. 0 is every file written before it was recorded; 1 added the
+/// interface's remembered choices (`ui`) and the desktop window's place (`window`), both of
+/// which an older file simply does not have.
+pub const SCHEMA: u32 = 1;
 
 /// Which theme the window follows.
 ///
@@ -73,45 +85,84 @@ pub struct SavedPreset {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Prefs {
+    /// The schema this file was written with ([`SCHEMA`]).
+    #[serde(deserialize_with = "lenient")]
+    pub schema: u32,
+
     // ---- General ----
     /// Where Export opens first.
+    #[serde(deserialize_with = "lenient")]
     pub output_folder: Option<PathBuf>,
     /// Dark, light, or whatever the system says.
+    #[serde(deserialize_with = "lenient")]
     pub theme: Theme,
 
     // ---- Performance ----
     /// Worker threads the tracer may use. `None` means every core.
+    #[serde(deserialize_with = "lenient")]
     pub threads: Option<usize>,
     /// The longer side a draft is traced at.
+    #[serde(deserialize_with = "lenient_draft_px")]
     pub draft_px: u32,
     /// The time limit a draft is given, in seconds.
+    #[serde(deserialize_with = "lenient_draft_seconds")]
     pub draft_seconds: f64,
     /// How long the controls must be still before the full trace is queued, in
     /// milliseconds.
+    #[serde(deserialize_with = "lenient_settle_ms")]
     pub settle_ms: u64,
 
     // ---- Updates ----
     /// Whether to look for a new version at startup.
+    #[serde(deserialize_with = "lenient_true")]
     pub check_updates: bool,
     /// Which builds to look at.
+    #[serde(deserialize_with = "lenient")]
     pub channel: Channel,
 
     // ---- Working state worth keeping ----
     /// The last trace settings, so the app opens where it was left.
+    #[serde(deserialize_with = "lenient")]
     pub trace: TraceSettings,
     /// Recently opened files, newest first. Paths only.
+    #[serde(deserialize_with = "lenient_list")]
     pub recent: Vec<PathBuf>,
     /// Whether the first-run introduction to the wizard has been seen.
+    #[serde(deserialize_with = "lenient")]
     pub seen_first_run: bool,
     /// What opening an image offers besides the automatic trace.
+    #[serde(deserialize_with = "lenient")]
     pub on_open: OnOpen,
-    /// Presets the user saved, in the order the tray shows them.
+    /// Presets the user saved, in the order the tray shows them. One the file cannot read
+    /// is dropped; the others stay.
+    #[serde(deserialize_with = "lenient_list")]
     pub saved: Vec<SavedPreset>,
+    /// The interface as it was left: tab, rail, viewer, export formats, the Minify and
+    /// Fabricate tabs' controls ([`Interface`]).
+    #[serde(deserialize_with = "lenient")]
+    pub ui: Interface,
+    /// Where the desktop window was ([`WindowPlace`]). The desktop shell owns it: it is
+    /// written from the window's own events, and the browser build never has one.
+    #[serde(deserialize_with = "lenient")]
+    pub window: Option<WindowPlace>,
+}
+
+// The defaults of the fields whose default is not their type's, for a value that cannot be
+// read. (A missing field takes `Prefs::default()`'s through `#[serde(default)]`.)
+fn lenient_draft_px<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    lenient_or(d, Prefs::default().draft_px)
+}
+fn lenient_draft_seconds<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
+    lenient_or(d, Prefs::default().draft_seconds)
+}
+fn lenient_settle_ms<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+    lenient_or(d, Prefs::default().settle_ms)
 }
 
 impl Default for Prefs {
     fn default() -> Self {
         Self {
+            schema: SCHEMA,
             output_folder: None,
             theme: Theme::default(),
             threads: None,
@@ -127,6 +178,8 @@ impl Default for Prefs {
             seen_first_run: false,
             on_open: OnOpen::default(),
             saved: Vec::new(),
+            ui: Interface::default(),
+            window: None,
         }
     }
 }
@@ -144,8 +197,14 @@ const SAVED_LIMIT: usize = 12;
 const NAME_LIMIT: usize = 40;
 
 impl Prefs {
-    /// Clamp anything that came out of the file into a range the app can act on.
+    /// Clamp anything that came out of the file into a range the app can act on, and bring
+    /// a file from an older schema forward.
     pub fn sanitised(mut self) -> Self {
+        // Schema 0 to 1 added two fields, which an older file takes at their defaults: there
+        // is nothing to convert. A later change of meaning converts here, by `self.schema`.
+        self.schema = SCHEMA;
+        self.ui = self.ui.sanitised();
+        self.window = self.window.and_then(WindowPlace::sanitised);
         self.draft_px = self.draft_px.clamp(128, 2048);
         self.draft_seconds = if self.draft_seconds.is_finite() {
             self.draft_seconds.clamp(0.05, 10.0)
@@ -169,13 +228,15 @@ impl Prefs {
         self
     }
 
-    /// What "Reset settings" leaves: every preference at its default and the recent list
-    /// empty, but the saved presets kept. A saved preset is something the user made, like a
-    /// file, not a preference; the tray forgets one on request, and the reset's own wording
-    /// promises preferences and the recent list, nothing more.
+    /// What "Reset settings" leaves: every preference at its default, the interface's
+    /// remembered choices with them, and the recent list empty, but the saved presets kept.
+    /// A saved preset is something the user made, like a file, not a preference; the tray
+    /// forgets one on request, and the reset's own wording promises preferences and the
+    /// recent list, nothing more. The window stays where it is.
     pub fn after_reset(&self) -> Prefs {
         Prefs {
             saved: self.saved.clone(),
+            window: self.window,
             ..Prefs::default()
         }
         .sanitised()
@@ -386,5 +447,93 @@ mod tests {
         let text = serde_json::to_string(&p).unwrap();
         let back: Prefs = serde_json::from_str(&text).unwrap();
         assert_eq!(back, p);
+    }
+
+    #[test]
+    fn one_unreadable_value_does_not_cost_the_rest_of_the_file() {
+        // Before fields were read one by one, a theme this version did not know made the
+        // whole file unreadable, and every preference and saved preset went with it.
+        let parsed: Prefs = serde_json::from_str(
+            r#"{"theme": "sepia", "draftPx": "big", "checkUpdates": null, "seenFirstRun": true,
+                "saved": [{"id": "a", "name": "Kept", "settings": {}}, {"id": 3}],
+                "trace": {"maxColours": "many"}, "ui": {"tab": "minify"}}"#,
+        )
+        .expect("a bad value is not a parse failure");
+        let p = parsed.sanitised();
+        assert_eq!(p.theme, Theme::Dark, "an unknown theme is the default one");
+        assert_eq!(
+            p.draft_px, 512,
+            "an unreadable number is its field's default"
+        );
+        assert!(
+            p.check_updates,
+            "an unreadable switch is its field's default"
+        );
+        assert!(
+            p.seen_first_run,
+            "and the readable fields around them are kept"
+        );
+        assert_eq!(p.saved.len(), 1, "the preset that can be read is kept");
+        assert_eq!(p.saved[0].name, "Kept");
+        assert_eq!(p.trace, TraceSettings::default().sanitised().for_keeping());
+        assert_eq!(p.ui.tab, "minify");
+    }
+
+    #[test]
+    fn a_file_from_before_the_schema_was_recorded_is_brought_forward() {
+        let old: Prefs = serde_json::from_str(r#"{"draftPx": 256, "onOpen": "custom"}"#).unwrap();
+        assert_eq!(
+            old.schema, SCHEMA,
+            "a missing field takes the current default"
+        );
+        let explicit_old: Prefs = serde_json::from_str(r#"{"schema": 0, "draftPx": 256}"#).unwrap();
+        assert_eq!(explicit_old.schema, 0);
+        let now = explicit_old.sanitised();
+        assert_eq!(now.schema, SCHEMA);
+        assert_eq!(now.draft_px, 256);
+        assert_eq!(now.ui, Interface::default());
+        assert_eq!(now.window, None);
+    }
+
+    #[test]
+    fn the_interface_round_trips_and_a_reset_forgets_it_but_not_the_presets_or_window() {
+        let window = WindowPlace {
+            x: 40.0,
+            y: 30.0,
+            width: 1600.0,
+            height: 1000.0,
+            maximized: false,
+        };
+        let used = Prefs {
+            ui: Interface {
+                preset: Some("icon".into()),
+                tab: "fabricate".into(),
+                rail_tab: "tune".into(),
+                view: "wipe".into(),
+                wipe: 0.3,
+                show: Layers {
+                    wireframe: true,
+                    anchors: true,
+                    ..Layers::default()
+                },
+                fab_unit: "in".into(),
+                ..Interface::default()
+            },
+            window: Some(window),
+            saved: vec![SavedPreset {
+                id: "mine".into(),
+                name: "House style".into(),
+                settings: TraceSettings::default(),
+            }],
+            ..Prefs::default()
+        }
+        .sanitised();
+        let back: Prefs = serde_json::from_str(&serde_json::to_string(&used).unwrap()).unwrap();
+        assert_eq!(back.sanitised(), used);
+
+        let reset = used.after_reset();
+        assert_eq!(reset.ui, Interface::default());
+        assert_eq!(reset.saved, used.saved);
+        assert_eq!(reset.window, Some(window));
     }
 }

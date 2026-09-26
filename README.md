@@ -386,8 +386,8 @@ Trademarks, logos, brand and company names shown in this repository, in its benc
 and results, in Inkvec Studio's Showcase and on the Inkvec Space are the property of their
 owners. They appear only to compare how vectorisation engines trace real artwork; this implies
 no affiliation with, sponsorship by or endorsement from their owners. An owner who objects to a
-mark being shown can [open an issue](https://github.com/logolabs/inkvec/issues) and it will be
-removed. See [`docs/TRADEMARKS.md`](docs/TRADEMARKS.md).
+mark being shown can [open an issue](https://github.com/logolabs/inkvec/issues) or write to
+office@incorpo.ro, and it will be removed. See [`docs/TRADEMARKS.md`](docs/TRADEMARKS.md).
 
 ---
 

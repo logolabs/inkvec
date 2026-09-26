@@ -15,7 +15,7 @@ members = ["../core", "../wasm"]
 [package]
 name = "inkvec-studio"
 description = "Inkvec Studio: turn a raster logo into an SVG, exactly, and minimise SVGs you already have."
-version = "0.1.7"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.88"
 license = "Apache-2.0"

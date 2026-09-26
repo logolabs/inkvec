@@ -9,7 +9,7 @@
 [package]
 name = "inkvec-studio-wasm"
 description = "Inkvec Studio Lite: the Studio's core in the browser, as WebAssembly."
-version = "0.1.7"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.88"
 license = "Apache-2.0"

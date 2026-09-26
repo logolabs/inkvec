@@ -5,7 +5,7 @@ All notable changes to Inkvec are documented in this file. The format follows
 [Semantic Versioning](https://semver.org/) once it reaches 1.0 (before that, the library
 API in particular should be treated as unstable release to release).
 
-## [Unreleased]
+## [0.2.0] - 2026-09-26
 
 ### Added
 
@@ -77,9 +77,25 @@ API in particular should be treated as unstable release to release).
   Runtime Web) work; batch, the command-line install, the context menu and the update check
   are desktop-only and hidden. Full screen and "Open in its own tab" in the top bar.
   `npm run build:web` in `studio/` builds the site; `scripts/deploy-space.py` uploads it.
+  In Hugging Face's frame a thin rule separates it from their header; "Inkvec home" returns
+  to the front page and "Desktop app" points to the releases. The loading screen is the
+  desktop splash.
+- **The Space's front page**: what Inkvec is, what is new, and a before-and-after gallery
+  of 92 cases in one scrolling panel (50 brand logos, the benchmark's 21 cases, 21 more
+  icons and emoji, chosen by a fixed seed rather than by result), with fill, wireframe,
+  anchor and handle views, a wipe and an A/B flick against VTracer 1.0 and Trazor, and the
+  results tables. `tools/showcase_data.py` rebuilds it with any engine build. The Studio
+  (desktop and Lite) has the same gallery as its **Showcase** screen. Third-party logos are
+  shown for comparison only; see NOTICE.
 
 ### Changed
 
+- **Gradients are recovered per region**. A gradient the artist drew across several
+  shapes is fitted to each connected region's own pixels, instead of being painted flat
+  or bent into one field: on the noto emoji set the share of gradient areas painted flat
+  falls from 56% to 30%, mean dE00 0.3596 -> 0.3397 and DISTS 0.0652 -> 0.0576. Every
+  other family is byte-identical. Gradient-heavy emoji trace about 1.3x slower.
+  `INKVEC_GRAD_REGIONS=0` switches it off for comparison.
 - **Side-by-side fills no longer show a seam**. Two fills that share an edge, painted
   next to each other over a third colour, each cover half of the edge pixel, and
   composited in turn they let a quarter of the ground through: a pale hairline along
@@ -88,7 +104,10 @@ API in particular should be treated as unstable release to release).
   where the upper face is thick enough to hide it. Seam pixels on the screen set fall
   65%; the gate's dE00 improves 2.6% for 1% more bytes. Traces change on purpose
   (`bindings/contract/cases.json` re-recorded); `INKVEC_UNDERLAP=0` switches it off for
-  comparison.
+  comparison. Along an edge that mixes lines and arcs the arc's ends now move with the
+  underlap too (they were pinned, so the reach shrank to nothing beside every arc): the
+  hairlines between gradient faces go (one emoji's hair 1723 -> 1048 seam pixels, worst
+  0.281 -> 0.076), and seam pixels over the screen set fall a further 15%.
 - **The clear ground does not count towards the colour cap**. Traced natively, a
   transparent image's clear ground is an ink of its own, and `--colors 4` left three for
   the artwork. On 10 transparent emoji at `--colors 4` mean dE00 goes 0.457 -> 0.186,
@@ -125,6 +144,18 @@ API in particular should be treated as unstable release to release).
   second time with a file, now opens that file.
 - **Studio**: the wireframe stays one pixel wide at every zoom (it was as wide as the
   zoom factor).
+- **Studio**: brand-colour snaps belong to the image, so the export (SVG, minified SVG,
+  PNGs, favicons, `palette.json`, the asset pack) and every re-trace keep them; pasting a
+  brand palette snaps every colour, not only the first.
+- **Studio**: exported PNGs keep the drawing's proportions (they were square); favicons and
+  the `.ico` stay square with the drawing centred on transparent padding.
+- **Studio**: a pasted `rgb(r, g, b)` or `rgba(...)` is one colour, not three pieces.
+- **Studio**: a batch row set to the Editable preset traces as Editable.
+- **Studio**: Reset settings keeps saved presets, and says so.
+- **Studio**: the notices cover the browser build, ONNX Runtime Web included.
+- **Bench**: an SVG whose root width and height disagree with its viewBox renders at a
+  uniform scale; a non-square logo was squeezed (round dots became ellipses), which is
+  what made some halftone logos look badly traced in comparisons.
 
 ## [0.1.7] - 2026-09-25
 

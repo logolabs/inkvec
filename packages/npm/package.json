@@ -1,6 +1,6 @@
 {
   "name": "@logolabs/inkvec",
-  "version": "0.1.7",
+  "version": "0.2.0",
   "description": "Raster to SVG tracing by minimum description length: PNG, JPEG, WebP or raw RGBA in, an SVG string out. WebAssembly, for browsers and Node.js.",
   "license": "Apache-2.0",
   "author": "LogoLabs",

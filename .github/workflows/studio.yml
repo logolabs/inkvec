@@ -217,7 +217,7 @@ jobs:
           fi
           # --verbose so a bundler that fails prints its own error. Without it Tauri
           # reports only `failed to run light.exe` and the WiX diagnostic is lost.
-          npx tauri build --verbose --bundles "${{ matrix.bundles }}" "${cargo_args[@]}"
+          npx tauri build --verbose --bundles "${{ matrix.bundles }}" ${cargo_args[@]+"${cargo_args[@]}"}
 
       # Name every file the bundler produced, so a format that silently stops being
       # built is visible in the log rather than only in a release that lacks it.

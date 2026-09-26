@@ -177,7 +177,7 @@ jobs:
           if [ -n "${{ matrix.glibc }}" ]; then args+=(--glibc "${{ matrix.glibc }}"); fi
           if [ -n "${{ matrix.glibcxx }}" ]; then args+=(--glibcxx "${{ matrix.glibcxx }}"); fi
           if [ -n "${{ matrix.macos }}" ]; then args+=(--macos "${{ matrix.macos }}"); fi
-          python3 .github/scripts/abi_floor.py "$bin" "${args[@]}"
+          python3 .github/scripts/abi_floor.py "$bin" ${args[@]+"${args[@]}"}
 
       - name: Stage archive contents
         shell: bash
@@ -430,7 +430,7 @@ jobs:
           if [[ "${{ matrix.denoiser }}" != "true" ]]; then
             cargo_args=(-- --no-default-features)
           fi
-          npx tauri build --target "${{ matrix.target }}" --bundles "${{ matrix.bundles }}" "${cargo_args[@]}"
+          npx tauri build --target "${{ matrix.target }}" --bundles "${{ matrix.bundles }}" ${cargo_args[@]+"${cargo_args[@]}"}
 
       # The app and the `inkvec` command it carries, both checked: an installer that
       # cannot start is as useless as an archive that cannot, and the bundled command is
@@ -445,9 +445,9 @@ jobs:
           if [ -n "${{ matrix.glibcxx }}" ]; then args+=(--glibcxx "${{ matrix.glibcxx }}"); fi
           if [ -n "${{ matrix.macos }}" ]; then args+=(--macos "${{ matrix.macos }}"); fi
           python3 .github/scripts/abi_floor.py \
-            "studio/src-tauri/target/${{ matrix.target }}/release/inkvec-studio" "${args[@]}"
+            "studio/src-tauri/target/${{ matrix.target }}/release/inkvec-studio" ${args[@]+"${args[@]}"}
           python3 .github/scripts/abi_floor.py \
-            "target/${{ matrix.target }}/release/${BIN_NAME}" "${args[@]}"
+            "target/${{ matrix.target }}/release/${BIN_NAME}" ${args[@]+"${args[@]}"}
 
       # Named the way the CLI archives are, so a release page reads as one set of
       # downloads rather than two conventions side by side.

@@ -103,3 +103,8 @@ lto = true
 # window that vanishes.
 codegen-units = 1
 strip = true
+
+# `inkvec-cli` is a direct dependency so the `denoiser` feature can forward to
+# `inkvec-cli/restore-model`; the code reaches the engine through inkvec-studio-core.
+[package.metadata.cargo-machete]
+ignored = ["inkvec-cli"]

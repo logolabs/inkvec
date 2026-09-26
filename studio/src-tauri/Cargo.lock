@@ -2204,11 +2204,9 @@ name = "inkvec-studio-wasm"
 version = "0.2.0"
 dependencies = [
  "console_error_panic_hook",
- "inkvec-cli",
  "inkvec-fab",
  "inkvec-restore",
  "inkvec-studio-core",
- "inkvec-trace",
  "js-sys",
  "rayon",
  "serde",

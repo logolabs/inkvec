@@ -1,0 +1,44 @@
+name: mutation
+
+# How many deliberate bugs in the engine's core the tests notice: cargo-mutants over
+# bench/quality.py's MUTANT_FILES (colour science, the native-alpha palette, the boundary
+# solve, gradient fitting, the segment DP) on a fixed 1/16 sample, each file's kill rate
+# held to the floor recorded in bench/quality_budget.json (`mutation:*`).
+#
+# Weekly and by hand, not per push: the sample is ~300 mutants and each is a rebuild and a
+# test run, about two hours. Run it before merging test or engine work on those files.
+
+on:
+  schedule:
+    - cron: "41 3 * * 6"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mutants:
+    name: mutation floor
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python bench/quality.py --fast --mutants --mutants-out target/mutants
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutants
+          path: |
+            target/mutants/mutants.out/*.txt
+            target/mutants/mutants.out/outcomes.json

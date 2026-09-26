@@ -1533,3 +1533,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod solve_tests;

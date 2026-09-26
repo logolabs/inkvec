@@ -606,7 +606,7 @@ def step_udeps(args, raw: Path) -> dict:
 # ------------------------------------------------------------------ deny
 
 def step_deny(args, raw: Path) -> dict:
-    p = run(["cargo", "deny", "--format", "json", "--config", str(HERE / "deny.toml"),
+    p = run(["cargo", "deny", "--format", "json", "--config", str(ROOT / "deny.toml"),
              "check", "-s"], args, log=raw / "logs" / "deny.log", timeout=1800)
     diags, summary = [], {}
     for line in p.stderr.splitlines():

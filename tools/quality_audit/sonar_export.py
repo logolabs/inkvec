@@ -248,7 +248,7 @@ def from_deny(raw: Path, root: Path) -> Report | None:
         if code not in kinds or fl.get("severity") not in ("error", "warning"):
             continue
         rid, name, attr, qual, sev = kinds[code]
-        rep.rule(rid, name, f"cargo-deny `{code}` (tools/quality_audit/deny.toml).", attr, qual, sev)
+        rep.rule(rid, name, f"cargo-deny `{code}` (deny.toml).", attr, qual, sev)
         member = first_member(fl.get("graphs") or []) or "inkvec-cli"
         krate = ""
         if fl.get("graphs"):

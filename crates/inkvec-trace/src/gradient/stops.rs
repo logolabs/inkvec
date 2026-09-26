@@ -103,6 +103,68 @@ fn solve_small(mut a: Vec<Vec<f64>>, mut b: Vec<[f64; 3]>) -> Option<Vec<[f64; 3
     Some(x)
 }
 
+/// The normal equations of [`fit_piecewise`]'s hat-function basis: `AᵀWA` (tridiagonal,
+/// with the 1e-9 ridge on its diagonal) and `AᵀWc`.
+///
+/// Each entry is summed over the samples in their order, exactly as accumulating
+/// straight into the matrix does; the sums of the piece the current sample falls in are
+/// only held in locals until the samples move on to another piece. Consecutive samples
+/// mostly share a piece, so the accumulation no longer waits on a store and a reload per
+/// sample, and not a bit of the result changes. (`AᵀWA` is symmetric, and its two
+/// off-diagonal entries per piece were two identical sums: one is summed and mirrored.)
+fn normal_equations(
+    cols: &[[f64; 3]],
+    basis: &[(usize, f64)],
+    weight: &[f64],
+    m: usize,
+) -> (Vec<Vec<f64>>, Vec<[f64; 3]>) {
+    let mut diag = vec![0.0; m];
+    // `off[j]` couples nodes `j - 1` and `j`.
+    let mut off = vec![0.0; m];
+    let mut atb = vec![[0.0; 3]; m];
+    // The piece whose sums are in the locals; pieces are numbered from 1, so 0 is none.
+    let mut cur = 0usize;
+    let (mut d0, mut d1, mut o) = (0.0, 0.0, 0.0);
+    let (mut b0, mut b1) = ([0.0; 3], [0.0; 3]);
+    for ((c, &(j, u)), &wt) in cols.iter().zip(basis).zip(weight) {
+        if j != cur {
+            if cur != 0 {
+                (diag[cur - 1], diag[cur], off[cur]) = (d0, d1, o);
+                (atb[cur - 1], atb[cur]) = (b0, b1);
+            }
+            cur = j;
+            (d0, d1, o) = (diag[j - 1], diag[j], off[j]);
+            (b0, b1) = (atb[j - 1], atb[j]);
+        }
+        let (w0, w1) = (1.0 - u, u);
+        d0 += wt * w0 * w0;
+        o += wt * w0 * w1;
+        d1 += wt * w1 * w1;
+        for k in 0..3 {
+            b0[k] += wt * w0 * c[k];
+            b1[k] += wt * w1 * c[k];
+        }
+    }
+    if cur != 0 {
+        (diag[cur - 1], diag[cur], off[cur]) = (d0, d1, o);
+        (atb[cur - 1], atb[cur]) = (b0, b1);
+    }
+    let ata = (0..m)
+        .map(|i| {
+            let mut row = vec![0.0; m];
+            row[i] = diag[i] + 1e-9;
+            if i > 0 {
+                row[i - 1] = off[i];
+            }
+            if i + 1 < m {
+                row[i + 1] = off[i + 1];
+            }
+            row
+        })
+        .collect();
+    (ata, atb)
+}
+
 /// Robust least squares of a piecewise-linear colour profile in `t` with nodes at
 /// `0, knots.., 1` (hat-function basis). Returns the Huber objective — quadratic within
 /// `delta` of the fit, linear beyond — and the colour at each node, first to last.
@@ -132,31 +194,16 @@ fn fit_piecewise(
             (j, u)
         })
         .collect();
-    let mut weight = weight.to_vec();
+    let mut weight = std::borrow::Cow::Borrowed(weight);
     let mut x: Vec<[f64; 3]> = Vec::new();
     for round in 0..=rounds {
         if round > 0 {
-            for ((c, &(j, u)), wt) in cols.iter().zip(&basis).zip(weight.iter_mut()) {
+            for ((c, &(j, u)), wt) in cols.iter().zip(&basis).zip(weight.to_mut().iter_mut()) {
                 let r = residual(c, &x[j - 1], &x[j], u);
                 *wt = if r > delta { delta / r } else { 1.0 };
             }
         }
-        let mut ata = vec![vec![0.0; m]; m];
-        let mut atb = vec![[0.0; 3]; m];
-        for ((c, &(j, u)), &wt) in cols.iter().zip(&basis).zip(&weight) {
-            let (w0, w1) = (1.0 - u, u);
-            ata[j - 1][j - 1] += wt * w0 * w0;
-            ata[j - 1][j] += wt * w0 * w1;
-            ata[j][j - 1] += wt * w0 * w1;
-            ata[j][j] += wt * w1 * w1;
-            for k in 0..3 {
-                atb[j - 1][k] += wt * w0 * c[k];
-                atb[j][k] += wt * w1 * c[k];
-            }
-        }
-        for (i, row) in ata.iter_mut().enumerate() {
-            row[i] += 1e-9;
-        }
+        let (ata, atb) = normal_equations(cols, &basis, &weight, m);
         x = solve_small(ata, atb)?;
     }
     let mut objective = 0.0;
@@ -195,10 +242,11 @@ pub(crate) fn fit_mid_stops(
     }
     let t: Vec<f64> = idx.iter().map(|&i| model.t_at(s.x[i], s.y[i])).collect();
     let c: Vec<[f64; 3]> = idx.iter().map(|&i| cols[i]).collect();
+    let parent = model.eval();
     let parent_r: Vec<f64> = idx
         .iter()
         .map(|&i| {
-            let p = model.color_at(s.x[i], s.y[i]);
+            let p = parent.color_at(s.x[i], s.y[i]);
             let p = match space {
                 Interp::LinearRgb => to_lin(p),
                 Interp::Srgb => [p[0] as f64, p[1] as f64, p[2] as f64],
@@ -241,9 +289,18 @@ pub(crate) fn fit_mid_stops(
         };
         let mut best = (f64::NAN, f64::MAX);
         let step = (k_hi - k_lo) / KNOT_GRID as f64;
-        for g in 0..=KNOT_GRID {
+        // The grid's fits are independent, and on a large gradient region they are the
+        // stage's longest serial stretch: fit them side by side, then pick in grid order
+        // exactly as the one-at-a-time loop did.
+        let grid: Vec<f64> = {
+            use rayon::prelude::*;
+            (0..=KNOT_GRID)
+                .into_par_iter()
+                .map(|g| resid_with(k_lo + g as f64 * step))
+                .collect()
+        };
+        for (g, &r) in grid.iter().enumerate() {
             let k = k_lo + g as f64 * step;
-            let r = resid_with(k);
             if r < best.1 {
                 best = (k, r);
             }
@@ -298,11 +355,12 @@ pub(crate) fn fit_mid_stops(
             f64::INFINITY
         };
         let mut resid: [Vec<f64>; 2] = [Vec::new(), Vec::new()];
+        let cand_eval = cand.eval();
         for (j, &i) in idx.iter().enumerate() {
             if t[j] < lo_t || t[j] > hi_t {
                 continue;
             }
-            let p = cand.color_at(s.x[i], s.y[i]);
+            let p = cand_eval.color_at(s.x[i], s.y[i]);
             let r = (0..3)
                 .map(|q| (p[q] - s.srgb[i][q]).powi(2))
                 .sum::<f32>()
@@ -344,5 +402,104 @@ mod tests {
         assert!((x[0][0] - 0.0).abs() < 1e-4);
         assert!((x[1][0] - 0.5).abs() < 1e-4);
         assert!((x[2][0] - 1.0).abs() < 1e-4);
+    }
+
+    /// A small deterministic generator, uniform in `[0, 1)`.
+    fn lcg(state: &mut u64) -> f64 {
+        *state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (*state >> 11) as f64 / (1u64 << 53) as f64
+    }
+
+    #[test]
+    fn test_fill_eval_is_color_at_bit_for_bit() {
+        let mut st = 7u64;
+        let col = |st: &mut u64| [lcg(st) as f32, lcg(st) as f32, lcg(st) as f32];
+        for case in 0..48 {
+            let interp = if case % 2 == 0 {
+                Interp::LinearRgb
+            } else {
+                Interp::Srgb
+            };
+            let mut mids: Vec<(f64, [f32; 3])> = (0..case % 3)
+                .map(|_| (0.1 + 0.8 * lcg(&mut st), col(&mut st)))
+                .collect();
+            mids.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let (c0, c1) = (col(&mut st), col(&mut st));
+            let model = match (case / 2) % 4 {
+                0 => FillModel::Linear {
+                    p0: (3.0, 4.0),
+                    p1: (40.0 * lcg(&mut st), 25.0),
+                    c0,
+                    c1,
+                    interp,
+                    mids,
+                },
+                1 => FillModel::Flat(c0),
+                k => FillModel::Radial {
+                    c: (20.0, 18.0),
+                    r: 5.0 + 20.0 * lcg(&mut st),
+                    c0,
+                    c1,
+                    interp,
+                    aspect: if k == 2 { 1.0 } else { 0.4 + lcg(&mut st) },
+                    angle: 3.0 * lcg(&mut st),
+                    mids,
+                },
+            };
+            let eval = model.eval();
+            for _ in 0..200 {
+                let (x, y) = (48.0 * lcg(&mut st), 48.0 * lcg(&mut st));
+                let (a, b) = (model.color_at(x, y), eval.color_at(x, y));
+                assert_eq!(
+                    a.map(f32::to_bits),
+                    b.map(f32::to_bits),
+                    "{model:?} at {x},{y}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_normal_equations_match_dense_accumulation_bit_for_bit() {
+        let mut st = 11u64;
+        let m = 4;
+        let n = 500;
+        let cols: Vec<[f64; 3]> = (0..n)
+            .map(|_| [lcg(&mut st), lcg(&mut st), lcg(&mut st)])
+            .collect();
+        // Runs of one piece, and jumps between arbitrary pieces, as samples in pixel order give.
+        let basis: Vec<(usize, f64)> = (0..n)
+            .map(|i| {
+                (
+                    1 + (i / 7 + usize::from(lcg(&mut st) < 0.2)) % (m - 1),
+                    lcg(&mut st),
+                )
+            })
+            .collect();
+        let weight: Vec<f64> = (0..n).map(|_| 0.2 + lcg(&mut st)).collect();
+        let mut ata = vec![vec![0.0; m]; m];
+        let mut atb = vec![[0.0; 3]; m];
+        for ((c, &(j, u)), &wt) in cols.iter().zip(&basis).zip(&weight) {
+            let (w0, w1) = (1.0 - u, u);
+            ata[j - 1][j - 1] += wt * w0 * w0;
+            ata[j - 1][j] += wt * w0 * w1;
+            ata[j][j - 1] += wt * w0 * w1;
+            ata[j][j] += wt * w1 * w1;
+            for k in 0..3 {
+                atb[j - 1][k] += wt * w0 * c[k];
+                atb[j][k] += wt * w1 * c[k];
+            }
+        }
+        for (i, row) in ata.iter_mut().enumerate() {
+            row[i] += 1e-9;
+        }
+        let (a2, b2) = normal_equations(&cols, &basis, &weight, m);
+        let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        for i in 0..m {
+            assert_eq!(bits(&ata[i]), bits(&a2[i]));
+            assert_eq!(bits(&atb[i]), bits(&b2[i]));
+        }
     }
 }

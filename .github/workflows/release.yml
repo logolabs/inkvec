@@ -634,7 +634,8 @@ jobs:
       # `release`) pass `draft: true` as well: without it, softprops/action-gh-release
       # un-drafts any draft it finds for the tag once its own upload is done, which is
       # how a half-finished release once went public mid-fix.
-      - uses: softprops/action-gh-release@v2
+      - id: release
+        uses: softprops/action-gh-release@v2
         with:
           draft: true
           tag_name: ${{ github.ref_name }}
@@ -651,3 +652,24 @@ jobs:
             out/*.exe
             out/*.msi
             out/SHA256SUMS
+
+      # `body_path` above only reaches the release when this job is the first to create
+      # the draft, and it usually is not: bindings.yml `release-c` finishes ~20 minutes
+      # earlier and creates a draft with no body. softprops v2 looks a release up with
+      # GET /releases/tags/{tag}, which never returns drafts, so it creates a second draft
+      # carrying these notes, then keeps the *oldest* draft for the tag as canonical and
+      # deletes its own (the v0.2.0 log: "Using release 397218429 for tag v0.2.0 instead
+      # of duplicate draft 397224169"). The assets land on the old draft; the notes were on
+      # the deleted one, and GitHub shows the tag's message in their place. So write the
+      # notes onto the release the action actually used, by id. The later workflows cannot
+      # undo this: when they create their own duplicate, the canonical draft is this one
+      # and its body is left as it is.
+      - name: Put the notes on the release the assets went to
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.release.outputs.id }}
+        run: |
+          set -euo pipefail
+          test -n "${RELEASE_ID}"
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            -F "body=@notes.md" --jq '"notes set on release \(.id) (draft: \(.draft))"'

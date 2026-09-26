@@ -33,6 +33,8 @@ class Option:
     maximum: Optional[float] = None
     exclusive_minimum: Optional[float] = None
     exclusive_maximum: Optional[float] = None
+    # The values a string option may take, when the schema fixes them (`enum`).
+    choices: Optional[tuple] = None
 
     def range_text(self) -> str:
         """The allowed range in words, or "" when the type alone bounds it."""
@@ -79,6 +81,7 @@ def load(path: Path = SCHEMA_PATH) -> list[Option]:
                 maximum=prop.get("maximum"),
                 exclusive_minimum=prop.get("exclusiveMinimum"),
                 exclusive_maximum=prop.get("exclusiveMaximum"),
+                choices=tuple(prop["enum"]) if "enum" in prop else None,
             )
         )
     return out

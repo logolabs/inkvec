@@ -147,6 +147,18 @@ export interface Options {
    */
   harmonize_threshold?: number;
   /**
+   * Which engine traces the image. "quality" (the default) is the full engine: the best
+   * fidelity and the fewest parameters, at about half a second for a 512 px logo. "fast"
+   * is a Potrace-class fit on the same palette, planar map and emitter, with a one-pass
+   * gradient check in place of gradient recovery: several times faster (tens of
+   * milliseconds at 512 px), a little less faithful, with somewhat more parameters.
+   * Options that only steer quality stages (precision, content_units, harmonize,
+   * harmonize_threshold, time_budget) are ignored in fast mode.
+   *
+   * @default "quality"
+   */
+  mode?: string;
+  /**
    * Colour groups: fills to draw as one, so the shapes between them join rather than being
    * recoloured. Empty (the default) changes nothing. Groups are separated by ';' and
    * members by ','; a member is a colour '#rrggbb' as it appears in a trace of the same

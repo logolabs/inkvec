@@ -39,6 +39,7 @@ pub mod contour;
 pub mod coverage;
 pub mod decode;
 pub mod diag;
+pub mod fast;
 pub mod gradient;
 #[cfg(feature = "research")]
 pub mod ink_ideas;
@@ -307,6 +308,12 @@ pub struct ColorOptions {
     /// alpha as a fourth channel wherever the tracer unmixes. See [`native`]. Only an image
     /// with transparency takes this path; an opaque one traces as it always has.
     pub native_alpha: bool,
+    /// Fast mode's front end: a histogram palette and labels, then the same planar map
+    /// with every boundary point refined to its sub-pixel position, but no MDL palette,
+    /// blend absorption, global boundary solve or order-first decoding (see [`fast`], whose
+    /// fitter follows). A transparent image traced natively keeps the native palette and
+    /// skips the rest. False is quality mode, exactly as before the flag existed.
+    pub fast: bool,
 }
 
 impl Default for ColorOptions {
@@ -322,6 +329,7 @@ impl Default for ColorOptions {
             boundary_ms: None,
             lossy_intake: false,
             min_region: 4,
+            fast: false,
         }
     }
 }
@@ -383,8 +391,14 @@ pub fn trace_color_full_with_alpha(
         if let Some(a) = source_alpha
             .filter(|a| a.len() == img.width * img.height && a.iter().any(|&v| v < native::OPAQUE))
         {
+            if opts.fast {
+                return fast::trace_color_native(img, opts, a);
+            }
             return native::trace_color(img, opts, a);
         }
+    }
+    if opts.fast {
+        return fast::trace_color(img, opts, source_alpha);
     }
     let rgb = img.composited([1.0, 1.0, 1.0]);
 
@@ -1141,7 +1155,7 @@ pub(crate) fn finish_color_trace_alpha(
     // Then solve the whole boundary against the image at once: every point above was
     // placed by a one-dimensional argument of its own, and a pixel's value is the area
     // coverage of all the regions that touch it.
-    let boundary_opt = if std::env::var("INKVEC_BOPT").map_or(true, |v| v != "0") {
+    let boundary_opt = if !opts.fast && std::env::var("INKVEC_BOPT").map_or(true, |v| v != "0") {
         boundary_opt::optimise_alpha(&mut map, rgb, &face_model, opts.boundary_ms, alpha_pair)
     } else {
         None
@@ -1151,7 +1165,7 @@ pub(crate) fn finish_color_trace_alpha(
     // A face too thin to own a fully covered pixel never had its colour read off the
     // image: the palette saw only blends. Its boundary was then fitted against that
     // biased colour. Fix the model order first and solve the two together.
-    let decode = if std::env::var("INKVEC_DECODE").is_ok_and(|v| v != "0") {
+    let decode = if !opts.fast && std::env::var("INKVEC_DECODE").is_ok_and(|v| v != "0") {
         decode::decode_faces(
             &mut map,
             rgb,

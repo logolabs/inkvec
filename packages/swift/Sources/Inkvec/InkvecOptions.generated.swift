@@ -122,6 +122,17 @@ public struct InkvecOptions: Codable, Hashable, Sendable {
     /// A number >= 0 and <= 1. Default: `0.92`.
     public var harmonizeThreshold: Double?
 
+    /// Which engine traces the image. "quality" (the default) is the full engine: the best
+    /// fidelity and the fewest parameters, at about half a second for a 512 px logo. "fast" is
+    /// a Potrace-class fit on the same palette, planar map and emitter, with a one-pass
+    /// gradient check in place of gradient recovery: several times faster (tens of milliseconds
+    /// at 512 px), a little less faithful, with somewhat more parameters. Options that only
+    /// steer quality stages (precision, content_units, harmonize, harmonize_threshold,
+    /// time_budget) are ignored in fast mode.
+    ///
+    /// Default: `"quality"`.
+    public var mode: String?
+
     /// Colour groups: fills to draw as one, so the shapes between them join rather than being
     /// recoloured. Empty (the default) changes nothing. Groups are separated by ';' and members
     /// by ','; a member is a colour '#rrggbb' as it appears in a trace of the same image, or a
@@ -150,6 +161,7 @@ public struct InkvecOptions: Codable, Hashable, Sendable {
         contentUnits: Bool? = nil,
         harmonize: Bool? = nil,
         harmonizeThreshold: Double? = nil,
+        mode: String? = nil,
         mergeColors: String? = nil
     ) {
         self.precision = precision
@@ -167,6 +179,7 @@ public struct InkvecOptions: Codable, Hashable, Sendable {
         self.contentUnits = contentUnits
         self.harmonize = harmonize
         self.harmonizeThreshold = harmonizeThreshold
+        self.mode = mode
         self.mergeColors = mergeColors
     }
 
@@ -186,6 +199,7 @@ public struct InkvecOptions: Codable, Hashable, Sendable {
         case contentUnits = "content_units"
         case harmonize
         case harmonizeThreshold = "harmonize_threshold"
+        case mode
         case mergeColors = "merge_colors"
     }
 }

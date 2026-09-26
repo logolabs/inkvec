@@ -105,6 +105,15 @@ final class Options
      *     same shape. Range: >= 0 and <= 1. The tracer's default is 0.92; leave it null to use
      *     that.
      *
+     * @param string|null $mode Which engine traces the image. "quality" (the default) is the
+     *     full engine: the best fidelity and the fewest parameters, at about half a second for a
+     *     512 px logo. "fast" is a Potrace-class fit on the same palette, planar map and emitter,
+     *     with a one-pass gradient check in place of gradient recovery: several times faster (tens
+     *     of milliseconds at 512 px), a little less faithful, with somewhat more parameters.
+     *     Options that only steer quality stages (precision, content_units, harmonize,
+     *     harmonize_threshold, time_budget) are ignored in fast mode. The tracer's default is
+     *     "quality"; leave it null to use that.
+     *
      * @param string|null $mergeColors Colour groups: fills to draw as one, so the shapes
      *     between them join rather than being recoloured. Empty (the default) changes nothing.
      *     Groups are separated by ';' and members by ','; a member is a colour '#rrggbb' as it
@@ -130,6 +139,7 @@ final class Options
         public readonly ?bool $contentUnits = null,
         public readonly ?bool $harmonize = null,
         public readonly ?float $harmonizeThreshold = null,
+        public readonly ?string $mode = null,
         public readonly ?string $mergeColors = null,
     ) {
     }
@@ -187,6 +197,9 @@ final class Options
         }
         if ($this->harmonizeThreshold !== null) {
             $set['harmonize_threshold'] = $this->harmonizeThreshold;
+        }
+        if ($this->mode !== null) {
+            $set['mode'] = $this->mode;
         }
         if ($this->mergeColors !== null) {
             $set['merge_colors'] = $this->mergeColors;

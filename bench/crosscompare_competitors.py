@@ -8,6 +8,7 @@ does, so the case set and metric definitions cannot drift between runs.
 Engines:
   inkvec              target/release/inkvec.exe, CLI defaults, --quiet. Same
                       binary crosscompare_4way.py uses; not rebuilt here.
+  inkvec-fast          The same binary with --mode fast.
   vtracer-default      Released vtracer Python binding (installed: 0.6.15,
                       "vtracer-default" in crosscompare_4way.py), defaults.
   vtracer-1.0-default  visioncortex/vtracer tag 1.0.0-alpha.4 (newest 1.0
@@ -43,7 +44,8 @@ independent engine. The vtracer-1.0-* rows above measure that engine directly
 JS glue, only its own stated attribution). We do not upload images to
 rastertrace.com or automate its browser UI, per the task rules.
 
-    python bench/crosscompare_competitors.py [--limit N]
+    python bench/crosscompare_competitors.py [--limit N] [--exe PATH] [--vendor DIR]
+        [--out DIR] [--engines inkvec,inkvec-fast,...]
 """
 from __future__ import annotations
 import hashlib, json, os, subprocess, sys, time
@@ -65,12 +67,29 @@ VTRACER10 = ROOT / 'tools/vendor/vtracer-1.0/extracted/vtracer.exe'
 TRAZOR_DIR = ROOT / 'tools/vendor/trazor'
 TRAZOR_CLI = TRAZOR_DIR / 'trace-cli.ts'
 NPX = 'npx.cmd' if os.name == 'nt' else 'npx'
-ENGINES = ['inkvec', 'vtracer-default', 'vtracer-1.0-default', 'vtracer-1.0-simplify', 'trazor-auto']
+ENGINES = ['inkvec', 'inkvec-fast', 'vtracer-default', 'vtracer-1.0-default', 'vtracer-1.0-simplify',
+           'trazor-auto']
+
+
+def set_paths(exe=None, vendor=None, out=None):
+    """Point the run at another binary, vendor folder (tools/vendor is not committed, so a
+    worktree borrows the main checkout's) or output folder."""
+    global EXE, VTRACER10, TRAZOR_DIR, TRAZOR_CLI, OUT
+    if exe:
+        EXE = Path(exe)
+    if vendor:
+        VTRACER10 = Path(vendor) / 'vtracer-1.0/extracted/vtracer.exe'
+        TRAZOR_DIR = Path(vendor) / 'trazor'
+        TRAZOR_CLI = TRAZOR_DIR / 'trace-cli.ts'
+    if out:
+        OUT = Path(out)
 
 
 def trace_one(engine, png_path, out_svg):
-    if engine == 'inkvec':
-        r = subprocess.run([str(EXE), str(png_path), '-o', str(out_svg), '--quiet'], capture_output=True, timeout=180)
+    if engine in ('inkvec', 'inkvec-fast'):
+        mode = ['--mode', 'fast'] if engine == 'inkvec-fast' else []
+        r = subprocess.run([str(EXE), str(png_path), '-o', str(out_svg), '--quiet', *mode],
+                           capture_output=True, timeout=180)
         if r.returncode:
             raise RuntimeError(r.stderr.decode(errors='replace'))
     elif engine == 'vtracer-default':
@@ -107,7 +126,12 @@ def trazor_commit():
 
 def main():
     import argparse, importlib.metadata
-    ap = argparse.ArgumentParser(); ap.add_argument('--limit', type=int, default=0); args = ap.parse_args()
+    ap = argparse.ArgumentParser(); ap.add_argument('--limit', type=int, default=0)
+    ap.add_argument('--exe'); ap.add_argument('--vendor'); ap.add_argument('--out')
+    ap.add_argument('--engines', help='comma-separated subset of ' + ','.join(ENGINES))
+    args = ap.parse_args()
+    set_paths(args.exe, args.vendor, args.out)
+    engines = args.engines.split(',') if args.engines else ENGINES
     OUT.mkdir(parents=True, exist_ok=True)
     backbone = 'dinov3' if mdino.available('dinov3') else 'dinov2'
     manifest = {
@@ -130,7 +154,7 @@ def main():
                        '-- browser-only WASM app, its own site states it wraps "vtracer 1.0 alpha"; '
                        'see vtracer-1.0-* rows for that engine measured directly. No image uploaded, no '
                        'browser automation used, per task rules.',
-        'dino_backbone': backbone, 'engines': ENGINES,
+        'dino_backbone': backbone, 'engines': engines,
         'protocol': 'Same 21 cases and protocol as crosscompare_current.py / crosscompare_4way.py (same '
                     'select()/structure()): original SVG normalized to square viewBox with 4% margin, RGB on '
                     'white, resvg raster at 512, scored at 1024 against the original render. Clean input only. '
@@ -155,7 +179,7 @@ def main():
         d = case / '512'; d.mkdir(exist_ok=True)
         inp = cc.rgb(truth, 512); cc.png(inp, d / 'input.png')
         base = dict(family=family, name=name, key=key, source=str(src), source_sha256=cc.sha(src), gt=gt)
-        for engine in ENGINES:
+        for engine in engines:
             row = {**base, 'engine': engine}; out = d / f'{engine}.svg'
             try:
                 t = time.perf_counter()

@@ -70,6 +70,7 @@ def trace(
     content_units: bool = False,
     harmonize: bool = True,
     harmonize_threshold: float = 0.92,
+    mode: str = "quality",
     merge_colors: str = "",
 ) -> Traced:
     """Trace an image to SVG.
@@ -147,6 +148,15 @@ def trace(
             Shape-equivalence threshold for harmonization: the outline similarity (IoU
             after affine normalisation) above which two marks count as the same shape.
             Must be >= 0 and <= 1.
+        mode:
+            Which engine traces the image. "quality" (the default) is the full engine:
+            the best fidelity and the fewest parameters, at about half a second for a
+            512 px logo. "fast" is a Potrace-class fit on the same palette, planar map
+            and emitter, with a one-pass gradient check in place of gradient recovery:
+            several times faster (tens of milliseconds at 512 px), a little less
+            faithful, with somewhat more parameters. Options that only steer quality
+            stages (precision, content_units, harmonize, harmonize_threshold,
+            time_budget) are ignored in fast mode.
         merge_colors:
             Colour groups: fills to draw as one, so the shapes between them join rather
             than being recoloured. Empty (the default) changes nothing. Groups are
@@ -184,6 +194,7 @@ def trace_rgba(
     content_units: bool = False,
     harmonize: bool = True,
     harmonize_threshold: float = 0.92,
+    mode: str = "quality",
     merge_colors: str = "",
 ) -> Traced:
     """Trace raw straight-RGBA8 pixels (row-major, tightly packed) to SVG.
@@ -262,6 +273,15 @@ def trace_rgba(
             Shape-equivalence threshold for harmonization: the outline similarity (IoU
             after affine normalisation) above which two marks count as the same shape.
             Must be >= 0 and <= 1.
+        mode:
+            Which engine traces the image. "quality" (the default) is the full engine:
+            the best fidelity and the fewest parameters, at about half a second for a
+            512 px logo. "fast" is a Potrace-class fit on the same palette, planar map
+            and emitter, with a one-pass gradient check in place of gradient recovery:
+            several times faster (tens of milliseconds at 512 px), a little less
+            faithful, with somewhat more parameters. Options that only steer quality
+            stages (precision, content_units, harmonize, harmonize_threshold,
+            time_budget) are ignored in fast mode.
         merge_colors:
             Colour groups: fills to draw as one, so the shapes between them join rather
             than being recoloured. Empty (the default) changes nothing. Groups are

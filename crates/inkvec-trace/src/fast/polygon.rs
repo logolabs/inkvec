@@ -121,6 +121,11 @@ impl Cone {
     }
 }
 
+/// The most points one side may span. A longer straight run is cut into sides of this
+/// length, which the line merge after smoothing joins back into one; without the cap the
+/// scan is quadratic on long straight boundaries, which a 2048 px raster is full of.
+const MAX_SPAN: usize = 160;
+
 /// Polygon vertices of an open run, as indices into `pts`: always the first and the last
 /// point, and the fewest interior points such that every point lies within `tol` of the
 /// side that spans it.
@@ -141,7 +146,7 @@ pub(crate) fn open(pts: &[Point], tol: f64) -> Vec<usize> {
         let a = pts[i];
         let mut cone = Cone::full();
         let mut reach = 0.0f64;
-        for j in i + 1..n {
+        for j in i + 1..n.min(i + MAX_SPAN + 1) {
             let v = pts[j] - a;
             let r = v.norm();
             // The run must move away from its anchor: a point that falls back by more than

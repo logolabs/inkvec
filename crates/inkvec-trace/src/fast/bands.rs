@@ -22,14 +22,19 @@ const RAMP_STEP: f32 = 0.09;
 const MIN_CONTACT: u32 = 3;
 /// Smallest cluster, in pixels, worth a gradient.
 const MIN_PIXELS: usize = 64;
+/// Most pixels gathered per cluster for its fit, as an even grid over the cluster.
+const SAMPLE_PIXELS: usize = 65536;
 /// Most pixels the acceptance test samples per cluster.
 const CHECK_SAMPLES: usize = 4096;
 /// A gradient is kept when its RMS residual is at most this multiple of the flat bands'
 /// residual, plus [`SLACK`]: it replaces every band boundary in the cluster with one fill,
 /// so it may explain the colour slightly worse and still be the better document.
 const RATIO: f64 = 1.25;
-/// Flat bands whose RMS residual is at most this, in sRGB units, are left as they are.
+/// Two flat bands whose RMS residual is at most this, in sRGB units, are left as they are.
 const FLAT_ENOUGH: f64 = 1.5 / 255.0;
+/// A gradient whose RMS residual is at most this, in sRGB units, is kept however well the
+/// bands did: two display levels are not visible, and the bands' boundaries are.
+const INVISIBLE: f64 = 2.0 / 255.0;
 /// Absolute slack on the acceptance test, in sRGB units (one display level).
 const SLACK: f64 = 1.0 / 255.0;
 
@@ -123,22 +128,32 @@ pub(crate) fn merge_ramps(
         }
     }
     let root: Vec<usize> = (0..n).map(|f| find(&mut parent, f)).collect();
-    let mut members: HashMap<usize, usize> = HashMap::new();
+    let mut members = vec![0usize; n];
     for &r in &root {
-        *members.entry(r).or_insert(0) += 1;
+        members[r] += 1;
     }
-    // Pixels per cluster that has more than one face.
+    // Pixels per cluster that has more than one face, then a grid sample of each: a fit
+    // reads a few thousand samples, so gathering millions of pixels would buy nothing.
+    let mut count = vec![0usize; n];
+    for &l in labels.iter() {
+        let r = root[l as usize];
+        if members[r] > 1 {
+            count[r] += 1;
+        }
+    }
+    let stride: Vec<usize> = count
+        .iter()
+        .map(|&c| ((c as f64 / SAMPLE_PIXELS as f64).sqrt().ceil() as usize).max(1))
+        .collect();
     let mut cluster_px: HashMap<usize, Vec<usize>> = HashMap::new();
     for (p, &l) in labels.iter().enumerate() {
         let r = root[l as usize];
-        if members[&r] > 1 {
+        let s = stride[r];
+        if members[r] > 1 && count[r] >= MIN_PIXELS && (p % w) % s == 0 && (p / w) % s == 0 {
             cluster_px.entry(r).or_default().push(p);
         }
     }
-    let mut clusters: Vec<(usize, Vec<usize>)> = cluster_px
-        .into_iter()
-        .filter(|(_, px)| px.len() >= MIN_PIXELS)
-        .collect();
+    let mut clusters: Vec<(usize, Vec<usize>)> = cluster_px.into_iter().collect();
     clusters.sort_unstable_by_key(|c| c.0);
     let sigma = crate::coverage::NOISE_FLOOR;
     let lambda = gradient::bic_lambda(w * h);
@@ -164,7 +179,10 @@ pub(crate) fn merge_ramps(
             // Bands that already explain their pixels are flat inks side by side, not a
             // quantised ramp: nothing for a gradient to win, and the fit is the costly part.
             let (_, f) = residuals(rgb, w, &interior, None, band);
-            if f <= FLAT_ENOUGH {
+            // Two faces that already explain their pixels are two flat inks side by side. A
+            // ramp of three or more bands is fitted whatever: fine bands explain the
+            // colour well and still cost a boundary each.
+            if f <= FLAT_ENOUGH && members[*r] < 3 {
                 return None;
             }
             let best = gradient::select(gradient::fit_pixels(
@@ -181,7 +199,7 @@ pub(crate) fn merge_ramps(
                 return None;
             }
             let (g, _) = residuals(rgb, w, &interior, Some(&best.model), band);
-            (g <= RATIO * f + SLACK).then_some((*r, best))
+            (g <= (RATIO * f + SLACK).max(INVISIBLE)).then_some((*r, best))
         })
         .collect();
     let mut made = 0;
@@ -218,8 +236,9 @@ pub(crate) fn merge_ramps(
             colors.push(face_color[t]);
         }
     }
+    let final_id: Vec<u16> = (0..n).map(|f| new_id[target(f)]).collect();
     for l in labels.iter_mut() {
-        *l = new_id[target(*l as usize)];
+        *l = final_id[*l as usize];
     }
     *face_fill = fills;
     *face_color = colors;

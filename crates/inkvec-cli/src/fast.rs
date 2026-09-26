@@ -24,8 +24,7 @@ pub(crate) fn fit(
     fills: &[inkvec_trace::gradient::FillFit],
 ) -> Vec<(FittedPath, Option<PrimitiveFit>)> {
     let cfg = inkvec_trace::fast::FastFit::default();
-    let face_rgb: Vec<[f32; 3]> = fills.iter().map(|f| f.model.representative()).collect();
-    inkvec_trace::fast::fit_edges(&map.edges, &face_rgb, &cfg)
+    inkvec_trace::fast::fit_edges(&map.edges, fills, &cfg)
 }
 
 /// The report line fast mode writes: what it ran, and every option it was given that only

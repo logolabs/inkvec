@@ -43,13 +43,34 @@ pub(crate) fn lerp(a: Point, b: Point, t: f64) -> Point {
 /// The measured points with the staircase taken out: a `[1 2 1] / 4` average along the
 /// boundary, which removes the alternation the pixel lattice leaves in refined points
 /// (about 0.1 px) and moves a curve of radius `r` by only `1 / 4r` px. The ends of an open
-/// boundary are junctions and stay put; a closed ring is averaged all the way round.
+/// boundary are junctions and stay put; a closed ring is averaged all the way round. A
+/// point where the boundary turns sharply over two steps each way is a corner, not a stair,
+/// and is kept: averaging it would round a small square's corners before the polygon sees
+/// them.
 pub(crate) fn denoise(pts: &[Point], closed: bool) -> Vec<Point> {
     let n = pts.len();
     if n < 4 {
         return pts.to_vec();
     }
     let src = pts;
+    let at = |k: isize| {
+        if closed {
+            Some(src[k.rem_euclid(n as isize) as usize])
+        } else if (0..n as isize).contains(&k) {
+            Some(src[k as usize])
+        } else {
+            None
+        }
+    };
+    let sharp = |k: usize| {
+        let k = k as isize;
+        let (Some(a), Some(b), Some(c)) = (at(k - 2), at(k), at(k + 2)) else {
+            return false;
+        };
+        let (u, v) = (b - a, c - b);
+        let (nu, nv) = (u.norm(), v.norm());
+        nu > 1e-9 && nv > 1e-9 && u.dot(v) / (nu * nv) < CORNER_COS
+    };
     let avg = |a: Point, b: Point, c: Point| {
         Point::new(
             0.25 * (a.x + c.x) + 0.5 * b.x,
@@ -58,7 +79,9 @@ pub(crate) fn denoise(pts: &[Point], closed: bool) -> Vec<Point> {
     };
     (0..n)
         .map(|k| {
-            if closed {
+            if sharp(k) {
+                src[k]
+            } else if closed {
                 avg(src[(k + n - 1) % n], src[k], src[(k + 1) % n])
             } else if k == 0 || k == n - 1 {
                 src[k]
@@ -214,6 +237,9 @@ fn mid_index(lo: usize, hi: usize, n: usize) -> usize {
     let span = (hi + n - lo) % n;
     (lo + span / 2) % n
 }
+
+/// Cosine of the two-step turn above which [`denoise`] keeps a point as a corner (50°).
+const CORNER_COS: f64 = 0.64;
 
 /// Largest distance, in pixels, a join is moved off its side's line towards the data.
 const JOIN_MAX: f64 = 0.5;

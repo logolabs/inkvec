@@ -23,6 +23,7 @@
 
 mod bands;
 mod curve;
+mod faces;
 mod front;
 mod palette;
 mod polygon;
@@ -59,7 +60,7 @@ impl Default for FastFit {
         Self {
             poly_tol: 0.5,
             vertex_box: 0.5,
-            corner_tol: 0.4,
+            corner_tol: 0.25,
             opt_tol: 0.2,
             flat: 0.05,
         }
@@ -129,6 +130,8 @@ pub fn fit_points(pts: &[Point], closed: bool, cfg: &FastFit) -> FittedPath {
 /// colour a misplaced boundary costs little, and where the two sides are two bands of one
 /// ramp there is no sharp edge to place at all.
 const FAINT: f64 = 0.12;
+/// How much a boundary of a gradient face is loosened, at the least.
+const GRADIENT_LOOSEN: f64 = 1.6;
 /// Most a faint boundary's tolerances are loosened.
 const MAX_LOOSEN: f64 = 3.0;
 
@@ -170,26 +173,37 @@ pub fn fit_edge(pts: &[Point], closed: bool, cfg: &FastFit) -> (FittedPath, Opti
 }
 
 /// Fit every edge of a planar map, in parallel. Each shared edge is fitted once and both
-/// of its faces draw the same curve. `face_rgb` is each face's representative colour; an
-/// edge between two faces of similar colour is fitted with looser tolerances.
+/// of its faces draw the same curve. `fills` is each face's fill; an edge between two faces
+/// of similar colour, or along a gradient, is fitted with looser tolerances.
 pub fn fit_edges(
     edges: &[Edge],
-    face_rgb: &[[f32; 3]],
+    fills: &[crate::gradient::FillFit],
     cfg: &FastFit,
 ) -> Vec<(FittedPath, Option<PrimitiveFit>)> {
     use rayon::prelude::*;
     let lab = |f: u16| {
-        face_rgb
+        fills
             .get(f as usize)
-            .map(|&c| crate::color::rgb_to_oklab(c))
+            .map(|fit| crate::color::rgb_to_oklab(fit.model.representative()))
+    };
+    let graded = |f: u16| {
+        fills
+            .get(f as usize)
+            .is_some_and(|fit| fit.model.is_gradient())
     };
     edges
         .par_iter()
         .map(|e| {
-            let contrast = match (lab(e.left), lab(e.right)) {
+            let mut contrast = match (lab(e.left), lab(e.right)) {
                 (Some(a), Some(b)) => a.dist(b) as f64,
                 _ => 1.0,
             };
+            // A boundary is placed against each side's fill model, and a fitted gradient is
+            // a coarser model of its pixels than a flat ink is of its own: its boundary
+            // comes back rougher, and is fitted as if its contrast were lower.
+            if graded(e.left) || graded(e.right) {
+                contrast = contrast.min(FAINT / GRADIENT_LOOSEN);
+            }
             fit_edge(&e.points, e.closed, &cfg.for_contrast(contrast))
         })
         .collect()
@@ -253,6 +267,16 @@ mod tests {
         let f = fit_points(&pts, false, &FastFit::default());
         assert_eq!(f.start, pts[0]);
         assert_eq!(f.end(), pts[29]);
+    }
+
+    #[test]
+    fn a_long_straight_boundary_is_one_line() {
+        let pts: Vec<Point> = (0..1000)
+            .map(|k| Point::new(k as f64 * 0.8 + 0.1, k as f64 * 0.6 + 0.3))
+            .collect();
+        let f = fit_points(&pts, false, &FastFit::default());
+        assert_eq!(f.segments.len(), 1, "{:?}", f.segments);
+        assert_eq!(f.end(), pts[999]);
     }
 
     #[test]

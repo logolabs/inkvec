@@ -80,12 +80,10 @@ test("every sample traces, and equals the raw WebAssembly exports byte for byte"
       assert.match(svg, /^<svg[\s>]/);
       assert.match(svg, /<\/svg>\s*$/);
       assert.equal(glue.trace_json(bytes, "{}"), svg, "trace_json");
-      // The positional export the Space calls, with every knob it takes at its default.
-      const positional = glue.trace(
-        bytes, d.precision, d.min_area, d.colors, d.merge, d.max_dim, d.time_budget,
-        d.no_background, d.minify, d.margin, d.content_units, d.cutout,
-      );
-      assert.equal(positional, svg, "positional trace");
+      // The export the Space calls (`prepare(...).traceOnce()` inside), with no options
+      // and with every option spelled out at its default.
+      assert.equal(glue.trace(bytes, "{}"), svg, "trace, no options");
+      assert.equal(glue.trace(bytes, JSON.stringify(d)), svg, "trace, explicit defaults");
     });
   }
 });

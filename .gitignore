@@ -60,6 +60,7 @@ out/
 
 # Local working areas and tool state
 scratch/
+scratchpad/
 .agents/
 .claude/
 wandb/

@@ -1,24 +1,38 @@
 /**
  * The denoiser, in a worker of its own: `restorer.onnx` in ONNX Runtime Web (WebGPU where
  * the GPU is real, its WebAssembly kernels where not), loaded by the old Space's
- * `denoise.js`, unchanged.
+ * `denoise.js`.
  *
- * Two callers. The page downloads the weights here on request (Settings' "Download the
- * denoiser"), with progress; and the engine worker, in the middle of a trace, posts a
- * tensor down a `MessagePort` and blocks on a shared buffer until this worker writes the
- * network's answer into it. Everything around the network — composite, pad, crop,
- * quantise, snap, the `auto` decision — stays in the tracer.
+ * Two callers. The page: it has the weights and the runtime fetched and kept (`prefetch`,
+ * started in the background as soon as the engine has arrived, or `download` when asked
+ * for), then has the session built (`prepare`) once a trace wants it, with progress for
+ * both. And the engine worker, in the middle of a trace, posts a tensor down a `MessagePort`
+ * and blocks on a shared buffer until this worker writes the network's answer into it. The
+ * page only lets a trace ask once the session is built, so that wait is the network's run
+ * and never a download. Everything around the network — composite, pad, crop, quantise,
+ * snap, the `auto` decision — stays in the tracer.
+ *
+ * To the page: `progress` (bytes), `stored` (everything is in the cache), `preparing`,
+ * `loaded`, `failed` with what failed, and `ran` after each run a trace asked for.
  */
 
 /// <reference lib="webworker" />
 
+interface Progress {
+  received: number;
+  total: number;
+  cached: boolean;
+}
+
 interface DenoiseModule {
-  load(o: {
+  prefetch(o: {
     url: string;
     sha256: string;
-    onProgress?: (p: { received: number; total: number; cached: boolean }) => void;
-    onStage?: (s: string) => void;
-  }): Promise<{ backend: string }>;
+    priority?: "low" | "high" | "auto";
+    onProgress?: (p: Progress) => void;
+  }): Promise<{ cached: boolean }>;
+  abort(): void;
+  load(o: { url: string; sha256: string; onProgress?: (p: Progress) => void }): Promise<{ backend: string }>;
   run(input: Float32Array, width: number, height: number): Promise<Float32Array>;
   activeBackend(): string | null;
 }
@@ -30,6 +44,9 @@ let token = "";
 let url = "";
 let sha256 = "";
 let module: Promise<DenoiseModule> | null = null;
+/** The fetch in flight or done, shared by every caller: one download however many ask. */
+let storing: Promise<{ cached: boolean }> | null = null;
+let preparing: Promise<string> | null = null;
 
 function denoise(): Promise<DenoiseModule> {
   if (!module) {
@@ -43,34 +60,63 @@ function denoise(): Promise<DenoiseModule> {
   return module;
 }
 
-async function load(report: boolean): Promise<string> {
-  const d = await denoise();
-  let last = 0;
-  const { backend } = await d.load({
-    url,
-    sha256,
-    onProgress: report
-      ? (p) => {
+const message = (e: unknown) => String((e as Error)?.message ?? e);
+
+/** Fetch and keep the weights and the runtime, reporting bytes at most five times a second. */
+function store(priority: "low" | "high"): Promise<{ cached: boolean }> {
+  if (!storing) {
+    let last = 0;
+    storing = (async () => {
+      const d = await denoise();
+      return d.prefetch({
+        url,
+        sha256,
+        priority,
+        onProgress: (p) => {
+          if (p.cached) return;
           const now = performance.now();
-          if (p.cached || p.received === p.total || now - last > 200) {
+          if (p.received === p.total || now - last > 200) {
             last = now;
             scope.postMessage({ type: "progress", got: p.received, total: p.total || null });
           }
-        }
-      : undefined,
-  });
-  return backend;
+        },
+      });
+    })();
+    // A failure is reported by whoever asked; the next ask starts again (and resumes).
+    storing.catch(() => {
+      storing = null;
+    });
+  }
+  return storing;
+}
+
+/** The session, built once everything is stored. */
+function prepare(): Promise<string> {
+  if (!preparing) {
+    preparing = (async () => {
+      const { cached } = await store("high");
+      scope.postMessage({ type: "stored", cached });
+      scope.postMessage({ type: "preparing" });
+      const { backend } = await (await denoise()).load({ url, sha256 });
+      return backend;
+    })();
+    preparing.catch(() => {
+      preparing = null;
+    });
+  }
+  return preparing;
 }
 
 async function runOnce(m: { input: Float32Array; width: number; height: number; shared: SharedArrayBuffer }) {
   const head = new Int32Array(m.shared, 0, 2);
   try {
-    await load(false);
+    await prepare();
     const out = await (await denoise()).run(m.input, m.width, m.height);
     new Float32Array(m.shared, 8, out.length).set(out);
     Atomics.store(head, 0, 1);
+    scope.postMessage({ type: "ran", width: m.width, height: m.height });
   } catch (e) {
-    const text = new TextEncoder().encode(String((e as Error)?.message ?? e)).slice(0, m.shared.byteLength - 8);
+    const text = new TextEncoder().encode(message(e)).slice(0, m.shared.byteLength - 8);
     new Uint8Array(m.shared, 8, text.length).set(text);
     Atomics.store(head, 1, text.length);
     Atomics.store(head, 0, 2);
@@ -83,7 +129,7 @@ scope.onmessage = (e: MessageEvent) => {
   if (m.type === "init") {
     ({ base, token, url, sha256 } = m);
   }
-  if (m.type === "init" || m.type === "port") {
+  if ((m.type === "init" || m.type === "port") && m.port) {
     // The engine's requests arrive on their own port, so a download in progress here never
     // queues behind them or they behind it. A replacement engine sends a new one.
     (m.port as MessagePort).onmessage = (ev: MessageEvent) => {
@@ -91,11 +137,26 @@ scope.onmessage = (e: MessageEvent) => {
     };
     return;
   }
-  if (m.type === "download") {
-    load(true).then(
-      (backend) => scope.postMessage({ type: "done", ok: true, backend }),
-      (err) => scope.postMessage({ type: "done", ok: false, message: String((err as Error)?.message ?? err) }),
+  // Every request is answered, including one for something already done.
+  if (m.type === "prefetch" || m.type === "download") {
+    store(m.type === "prefetch" ? "low" : "high").then(
+      ({ cached }) => scope.postMessage({ type: "stored", cached }),
+      (err) => scope.postMessage({ type: "failed", during: "download", message: message(err) }),
     );
+  }
+  if (m.type === "prepare") {
+    prepare().then(
+      (backend) => scope.postMessage({ type: "loaded", backend }),
+      (err) => scope.postMessage({ type: "failed", during: storing ? "prepare" : "download", message: message(err) }),
+    );
+  }
+  if (m.type === "abort") {
+    void module?.then((d) => d.abort());
+  }
+  // The stored copy was removed (Settings): the next request fetches again. A session
+  // already running keeps running for the rest of this page.
+  if (m.type === "forget") {
+    storing = null;
   }
 };
 

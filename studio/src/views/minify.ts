@@ -11,6 +11,7 @@
  */
 
 import { fill, h, icon } from "../lib/dom";
+import { remember, remembered } from "../lib/remember";
 import { api } from "../lib/ipc";
 import { copyText, pickFiles, readPickedText, revealAction, saveFile, WEB, type Picked } from "../lib/platform";
 import { bytes, count, de00, percent, seconds, type Store } from "../lib/state";
@@ -36,13 +37,23 @@ export function createMinify(store: Store): HTMLElement {
   let backdrop: "auto" | "light" | "dark" = "auto";
   let autoTone: "light" | "dark" | null = null;
   let measuredFor: string | null = null;
+  // Both are remembered with the preferences (lib/remember.ts), which arrive after this tab
+  // is built: they are taken over the first time the tab draws with the preferences loaded.
+  let adopted = false;
+  const adopt = () => {
+    if (adopted || !store.state.prefs) return;
+    adopted = true;
+    ({ minifyView: view, minifyBackdrop: backdrop } = remembered());
+  };
   const applyBackdrop = () => {
+    adopt();
     const tone = backdrop === "auto" ? autoTone : backdrop;
     panes.classList.toggle("onlight", tone === "light");
     panes.classList.toggle("ondark", tone === "dark");
   };
 
   const layout = () => {
+    adopt();
     panes.classList.toggle("stacked", view !== "side");
     divider.style.display = view === "wipe" ? "" : "none";
     if (view === "side") {
@@ -95,6 +106,7 @@ export function createMinify(store: Store): HTMLElement {
   });
 
   const renderTools = () => {
+    adopt();
     const m = store.state.minify;
     const r = m.result;
     fill(
@@ -110,6 +122,7 @@ export function createMinify(store: Store): HTMLElement {
               disabled: !m.before,
               onclick: () => {
                 view = v;
+                remember({ minifyView: v });
                 layout();
                 renderTools();
               },
@@ -134,6 +147,7 @@ export function createMinify(store: Store): HTMLElement {
                 disabled: !m.before,
                 onclick: () => {
                   backdrop = b;
+                  remember({ minifyBackdrop: b });
                   applyBackdrop();
                   renderTools();
                 },

@@ -35,7 +35,8 @@ It is the desktop app's interface and the desktop app's code, not a demo of them
 - **Minify SVG**: rewrite an SVG you already have in fewer bytes, with the difference measured.
 - **Fabricate**: vinyl sheets, stickers, stencils and laser cut lines, with a preflight.
 - **Clean up damage**: the trained denoiser for JPEG and screenshot damage, downloaded once
-  into your browser and run on your GPU where there is one (ONNX Runtime Web).
+  into your browser, in the background as the Studio opens (not when your browser asks to save
+  data), and run on your GPU where there is one (ONNX Runtime Web).
 
 Use **Full screen** in the top bar, or **Open in its own tab** when the Space's frame will not
 go full screen; its own tab also gives it every core. It is built for a laptop or desktop

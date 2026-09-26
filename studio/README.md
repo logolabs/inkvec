@@ -172,7 +172,7 @@ browser. That module is the browser's `lib.rs`: a queue (palette, export, minify
 fabricate first; the viewer's trace next; wizard previews last; a trace, preview or
 Fabricate request that a newer one replaced before it started is dropped), generations and
 `trace:stage` / `trace:done` / `preview:done` events, preferences in `localStorage`
-(sanitised by the core), and crash recovery (a trapped WebAssembly instance is replaced and
+(sanitised by the core, the same `Prefs` the desktop writes to its file), and crash recovery (a trapped WebAssembly instance is replaced and
 the image reopened). The work is done in `engine.worker.ts` by `studio/wasm`: the threaded
 build (a rayon pool of nested workers) where the page is cross-origin isolated, the
 single-threaded build where it is not. The Space asks for isolation in its README card
@@ -183,7 +183,20 @@ demo's `web/denoise.js` in a worker of its own. The pipeline is synchronous and 
 Web is not, so the engine worker posts the tensor to the denoiser worker and blocks on a
 `SharedArrayBuffer` until the answer is written into it; the auto decision and everything
 around the network stay in Rust (`trace::set_external_denoiser` in the core). It needs an
-isolated page; elsewhere Settings says so.
+isolated page; elsewhere Settings says so. Its weights (76 MB, Hugging Face) and ONNX Runtime
+Web's WebAssembly (26 MB, jsDelivr) are fetched in the background as soon as the engine's own
+bytes are in (a low-priority fetch in the denoiser's worker, skipped while
+`navigator.connection.saveData` is set) and kept in Cache Storage, so a later visit fetches
+nothing. A trace that asks for the denoiser before it is ready is traced without it at once,
+rather than holding the engine worker on a download; the rail and the status strip show the
+download, and the trace runs again with the denoiser when it is ready.
+
+**The loading screen** is the browser build's own (`web/boot/`, inlined into `index.html` by
+`vite.config.ts` so it paints with the first frame): the whole page, one bar driven by real
+progress (the engine's bytes as they arrive, its start, then the app's own steps), gone the
+moment the app is drawn. The desktop keeps its splash window (`splash.html`), which the browser
+build no longer includes. `web/lite_check.py` checks the loading screen, the denoiser download
+and the remembered preferences in headless Edge.
 
 **What differs from the desktop.** Files are chosen with the browser's picker, dropped or
 pasted, and every write is a download (several files arrive as one `.zip`). The trace size

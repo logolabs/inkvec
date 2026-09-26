@@ -25,6 +25,8 @@ import { showcaseScreen } from "./showcase";
 
 export interface ScreenActions {
   applyPrefs(patch: Partial<Prefs>): void;
+  /** The preferences were reset: put the theme and the interface back to what they say. */
+  afterReset(fresh: Prefs): void;
   close(): void;
 }
 
@@ -258,6 +260,7 @@ function settings(store: Store, act: ScreenActions): HTMLElement {
                     async () => {
                       const fresh = await api.resetPrefs();
                       store.set({ prefs: fresh, settings: fresh.trace });
+                      act.afterReset(fresh);
                       toast("Settings reset.");
                     },
                     true,
@@ -278,7 +281,7 @@ function settings(store: Store, act: ScreenActions): HTMLElement {
             "p",
             { style: { margin: "0", fontSize: "12.5px", lineHeight: "1.65", color: "var(--faint)" } },
             WEB
-              ? "Tracing runs in this tab, on your own processor, as WebAssembly. There is no account, no upload and no telemetry. The page fetches only itself and, if you ask for it, the denoiser's weights; your preferences are kept in this browser's storage."
+              ? "Tracing runs in this tab, on your own processor, as WebAssembly. There is no account, no upload and no telemetry. The page fetches only itself and the denoiser (its weights from Hugging Face and ONNX Runtime Web from jsDelivr, once, in the background, and not at all while the browser asks to save data until you turn it on); your preferences are kept in this browser's storage."
               : "Tracing runs entirely on your own processor. There is no account, no upload and no telemetry. The only network request the app can make is the update check, which sends your app version and operating system and nothing else. Turn it off above and the app never contacts the network at all.",
           ),
         ),
@@ -309,7 +312,11 @@ function denoiserRows(store: Store, d: DenoiserStatus | undefined) {
       h(
         "span",
         { style: { fontSize: "12.5px", color: d.installed ? "var(--good)" : "var(--muted)" } },
-        d.installed ? `Installed · ${bytes(d.bytes ?? 0)}` : "Not installed",
+        d.installed
+          ? `Installed · ${bytes(d.bytes ?? 0)}`
+          : WEB && store.state.denoiserFetch?.phase === "downloading"
+            ? "Downloading in the background"
+            : "Not installed",
       ),
     ),
     row(
@@ -317,7 +324,9 @@ function denoiserRows(store: Store, d: DenoiserStatus | undefined) {
       d.installed
         ? (d.path ?? (WEB ? "Kept in this browser's storage." : ""))
         : WEB
-          ? "Downloaded once into this browser's storage, and run in this tab on your GPU where it has one. The model comes down, your image never goes up."
+          ? store.state.denoiserFetch?.saveData
+            ? "Not downloaded in the background, because this browser asks to save data. Turning the denoiser on downloads it (about 100 MB), once, into this browser's storage. The model comes down, your image never goes up."
+            : "Downloaded in the background when the Studio opens, once, into this browser's storage (about 100 MB), and run in this tab on your GPU where it has one. The model comes down, your image never goes up."
           : "Downloaded once and stored on this machine. Everything still runs locally — the model comes down, your image never goes up.",
       d.installed
         ? h(
@@ -362,7 +371,7 @@ export function openDenoiserModal(store: Store): void {
             "p",
             null,
             WEB
-              ? "Downloaded once (about 80 MB, plus ONNX Runtime Web) and kept in this browser. It repairs JPEG and screenshot damage before tracing, which usually halves the colour error on photographed logos. It runs in this tab, on your GPU where there is one — the model comes down, your image never goes up."
+              ? "Downloaded once (about 76 MB of weights and 26 MB of ONNX Runtime Web) and kept in this browser; the Studio starts it in the background when it opens, unless the browser asks to save data. It repairs JPEG and screenshot damage before tracing, which usually halves the colour error on photographed logos. It runs in this tab, on your GPU where there is one — the model comes down, your image never goes up."
               : "Downloaded once and stored on this machine. It repairs JPEG and screenshot damage before tracing, which usually halves the colour error on photographed logos. Everything still runs locally — the model comes down, your image never goes up.",
           ),
       h(

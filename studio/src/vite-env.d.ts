@@ -19,3 +19,9 @@ declare const __INKVEC_WEB__: boolean;
 
 /** The browser build's cache token for its WebAssembly, so a new build is never served stale. */
 declare const __INKVEC_WASM_TOKEN__: string;
+
+/**
+ * The browser build's two WebAssembly modules' sizes in bytes (`pkg`, `pkg-threads`), for the
+ * loading screen's bar; empty in development. Written by `scripts/build-web.mjs`.
+ */
+declare const __INKVEC_WASM_BYTES__: Record<string, number>;

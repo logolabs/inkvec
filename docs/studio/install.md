@@ -48,6 +48,8 @@ Tracing never needs a network. The app can make exactly two kinds of outbound re
   app's version and your operating system (in the request's user agent), nothing else. Turn it off
   in [Settings](settings.md#updates) and the app does not contact the network at all.
 - **The denoiser download**, only when you ask for it. See [the denoiser](settings.md#denoiser).
+  (Studio Lite, in the browser, downloads it in the background when it opens, unless the browser
+  asks to save data.)
 
 Your images, traces and exported files never leave your computer.
 

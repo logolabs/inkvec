@@ -817,6 +817,38 @@ kbd {
   display: block;
 }
 
+/* Inkvec Studio Lite: the denoiser's background download, while it runs. */
+.statusstrip .fetchchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 12px;
+  color: var(--faint);
+  white-space: nowrap;
+}
+.statusstrip .fetchchip.bad {
+  color: var(--bad);
+}
+.fetchbar {
+  width: 64px;
+  flex: none;
+}
+.fetchnote {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--faint);
+}
+.fetchnote .fetchbar {
+  width: 100%;
+}
+.fetchnote .fetchline {
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ------------------------------------------------------------- the rail ---- */
 
 .rail {
@@ -3371,31 +3403,8 @@ body.dragging-ink [data-drop="list"] {
 }
 
 /* ------------------------------------------------------------ the browser build ---
-   Inkvec Studio Lite only: the loading state before the engine has arrived, the full-screen
-   and own-tab buttons where the desktop has window controls, and the phone note. */
-
-/* The desktop's splash window, as a card in the middle of the page (splash.html, framed). */
-.boot {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: grid;
-  place-items: center;
-  padding: 16px;
-  background: #0c0a09;
-  transition: opacity 0.28s ease;
-}
-.boot.leaving {
-  opacity: 0;
-}
-.boot iframe {
-  width: min(660px, 100%);
-  height: 400px;
-  border: 0;
-  border-radius: 10px;
-  box-shadow: 0 30px 70px -20px rgba(0, 0, 0, 0.8);
-  background: #1a1816;
-}
+   Inkvec Studio Lite only: the full-screen and own-tab buttons where the desktop has window
+   controls, and the phone note. Its loading screen styles itself (web/boot/boot.css). */
 
 /* Inside Hugging Face's frame and not full screen: a gap in the app's darkest colour, with a
    copper hairline, between their header and the app bar. */

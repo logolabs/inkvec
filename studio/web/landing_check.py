@@ -97,11 +97,12 @@ def main() -> None:
 
         # The button: into the Studio, with threads, through the desktop's splash.
         page.click("#open")
-        page.wait_for_url("**/studio/index.html", timeout=30_000)
-        page.wait_for_timeout(900)
-        page.screenshot(path=str(out / "L5a-studio-splash.png"))
-        note(f"loading screen: splash frame {page.locator('#boot iframe').count()}, "
-             f"edition {page.frame_locator('#boot iframe').locator('.edition').inner_text()!r}")
+        page.wait_for_url("**/studio/index.html", timeout=30_000, wait_until="commit")
+        # The browser's own loading screen: the whole page, gone the moment the app is drawn
+        # (a warm local start can be quicker than this look, so its absence is not a failure).
+        boot = page.evaluate("(() => { const b = document.getElementById('boot'); return b ? { edition: b.querySelector('.boot-edition')?.textContent, status: document.getElementById('boot-status')?.textContent, full: b.getBoundingClientRect().width >= innerWidth - 1 } : null; })()")
+        page.screenshot(path=str(out / "L5a-studio-loading.png"))
+        note(f"loading screen: {boot}")
         page.wait_for_selector("#boot", state="detached", timeout=60_000)
         info = page.evaluate("window.__inkvecStudioLite?.info")
         note(f"Open Inkvec Studio Lite -> {page.url} engine={info}")

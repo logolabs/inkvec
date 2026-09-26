@@ -11,6 +11,7 @@ import type {
   BatchTotals,
   Capabilities,
   ColourGroup,
+  DenoiserFetch,
   FabAnalysis,
   FabOptions,
   FabPlan,
@@ -213,6 +214,12 @@ export interface State {
 
   update: UpdateInfo | null;
 
+  /**
+   * Inkvec Studio Lite only: the denoiser's background download and start, as the backend
+   * last reported them. Always null on the desktop.
+   */
+  denoiserFetch: DenoiserFetch | null;
+
   /** The automatic trace the open image started with; null until one has been started. */
   auto: AutoRun | null;
   /** Noise and transparency of the open image, measured once Auto's trace has finished. */
@@ -289,6 +296,7 @@ export function initial(settings: Settings, minify: MinifySettings): State {
       failuresFirst: false,
     },
     update: null,
+    denoiserFetch: null,
     auto: null,
     facts: null,
     chooser: false,

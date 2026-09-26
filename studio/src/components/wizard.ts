@@ -22,6 +22,8 @@ import { autoChose, suggestionsOf, type AutoChoseActions } from "./autochose";
 import { paletteCard, wirePaletteHover } from "./palette";
 import { controlRow, type RailActions } from "./rail";
 import { toast } from "./overlays";
+import { fetchBar, fetchLine, sentence } from "./denoiserfetch";
+import { WEB } from "../lib/platform";
 
 const DOCS = "https://logolabs.github.io/inkvec/";
 
@@ -524,7 +526,19 @@ export function createWizard(store: Store, host: HTMLElement, act: WizardActions
         choice("off", "Off", "Trace the pixels as they are, damage and all."),
         choice("auto", "Auto", "Clean the damage first, where it is found."),
       ),
-      den && !den.installed && mode !== "off"
+      // In a browser the denoiser downloads by itself: the note says how far it has got.
+      WEB && den?.supported && mode !== "off" && st.denoiserFetch?.phase !== "ready"
+        ? h(
+            "div.wiznote",
+            { "data-ctl": "wiz-denoiser-progress" },
+            fetchBar(st.denoiserFetch),
+            h(
+              "span",
+              null,
+              `${sentence(fetchLine(st.denoiserFetch, true) ?? "Starting the denoiser…")} It comes from ${den.repo}, is checked against its SHA-256 on arrival and runs in this tab: the model comes down, your image never goes up. Until it is ready the trace runs without it, then again with it.`,
+            ),
+          )
+        : !WEB && den && !den.installed && mode !== "off"
         ? h(
             "div.wiznote",
             null,
@@ -839,6 +853,10 @@ export function createWizard(store: Store, host: HTMLElement, act: WizardActions
     if (!st.prefs?.seenFirstRun) act.markSeen();
     stops = [
       store.on(["wizard", "facts", "caps", "prefs"], renderFrame),
+      // The browser's denoiser download: only the step that shows it is redrawn.
+      store.on(["denoiserFetch"], () => {
+        if (sheet && step() === "cleanup") renderControls();
+      }),
       store.on(["settings", "preset", "colourGroups", "view"], () => {
         renderControls();
         if (step() === "kind" || step() === "output") renderLive();

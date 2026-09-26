@@ -96,6 +96,12 @@ for (const dir of [ST, MT]) {
 const hash = createHash("sha256");
 for (const dir of [ST, MT]) hash.update(readFileSync(join(dir, "inkvec_studio_wasm_bg.wasm")));
 const token = hash.digest("hex").slice(0, 12);
+// Their sizes, for the loading screen's progress bar: the Space's host may compress them in
+// transit, and then no header says how many bytes the download will yield.
+const wasmBytes = JSON.stringify({
+  pkg: statSync(join(ST, "inkvec_studio_wasm_bg.wasm")).size,
+  "pkg-threads": statSync(join(MT, "inkvec_studio_wasm_bg.wasm")).size,
+});
 
 // wasm-bindgen-rayon's worker helper imports its package as a directory ('../../..'), which
 // only a bundler resolves; name the file, with the same token as its parent.
@@ -138,7 +144,7 @@ cpSync(join(ROOT, "NOTICE"), join(PUBLIC, "NOTICE"));
 rmSync(OUT, { recursive: true, force: true });
 run("npx", ["tsc", "--noEmit"]);
 // Into dist-web/studio (vite.config.ts); its URLs are relative, so the subfolder is free.
-run("npx", ["vite", "build", "--mode", "web"], { INKVEC_WASM_TOKEN: token });
+run("npx", ["vite", "build", "--mode", "web"], { INKVEC_WASM_TOKEN: token, INKVEC_WASM_BYTES: wasmBytes });
 
 // The presentation page at the root, with its gallery data and the Studio's fonts, and the
 // Space's card: its front matter asks Hugging Face for the isolation headers.

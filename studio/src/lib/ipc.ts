@@ -124,6 +124,30 @@ export interface DenoiserStatus {
   sha256: string;
 }
 
+/**
+ * Inkvec Studio Lite only: where the denoiser's own download and start stand. The browser
+ * fetches it in the background when the page opens (unless the browser asks to save data),
+ * and a trace that wants it runs without it until it is `ready`, then again with it. The
+ * desktop never sends this; its denoiser is a download the user starts, reported by
+ * `denoiser:progress` and `denoiser:done`.
+ */
+export interface DenoiserFetch {
+  /**
+   * `idle`: not fetched and not being fetched (skipped to save data, cancelled, or not
+   * started yet); `downloading`; `stored`: in this browser's storage, not started;
+   * `preparing`: the runtime and session starting; `ready`; `failed`.
+   */
+  phase: "idle" | "downloading" | "stored" | "preparing" | "ready" | "failed";
+  got: number;
+  total: number | null;
+  /** Why it failed, in words. */
+  message?: string;
+  /** The background download was skipped because the browser asked to save data. */
+  saveData?: boolean;
+  /** A trace ran without the denoiser while it was not ready: trace again now that it is. */
+  retrace?: boolean;
+}
+
 export interface Capabilities {
   version: string;
   engineVersion: string;
@@ -152,7 +176,38 @@ export interface SavedPreset {
 /** What opening an image offers besides the automatic trace, which always starts at once. */
 export type OnOpen = "ask" | "auto" | "custom";
 
+/**
+ * The interface as it was left (`Interface` in `studio/core/src/interface.rs`): remembered
+ * as it changes, put back before the first paint. Nothing about the image on screen.
+ */
+export interface InterfacePrefs {
+  preset: string | null;
+  tab: "vectorize" | "minify" | "fabricate" | "batch";
+  railTab: "result" | "tune";
+  groupsOpen: Record<string, boolean>;
+  view: "side" | "wipe" | "ab";
+  wipe: number;
+  show: { fill: boolean; wireframe: boolean; anchors: boolean; handles: boolean; certainty: boolean };
+  detail: boolean;
+  export: Formats | null;
+  minify: MinifySettings | null;
+  minifyBackdrop: "auto" | "light" | "dark";
+  minifyView: "side" | "wipe" | "ab";
+  /** The Fabricate request without one drawing's colours (`include`, `order`). */
+  fab: Partial<FabOptions> | null;
+  fabUnit: "mm" | "in";
+  fabShowProblems: boolean;
+  fabPreset: string | null;
+  fabDxf: boolean;
+  fabGcode: boolean;
+  batchPreset: string | null;
+  batchSkipExisting: boolean;
+  batchFailuresFirst: boolean;
+}
+
 export interface Prefs {
+  /** The schema the preferences were written with; the backend brings older ones forward. */
+  schema: number;
   outputFolder: string | null;
   theme: Theme;
   threads: number | null;
@@ -167,6 +222,10 @@ export interface Prefs {
   seenFirstRun: boolean;
   onOpen: OnOpen;
   saved: SavedPreset[];
+  /** Absent from a backend older than this interface (the dev mock): read with defaults. */
+  ui?: InterfacePrefs;
+  /** The desktop window's place. The desktop backend owns it; the interface passes it through. */
+  window?: unknown;
 }
 
 /** What the wizard knows about the open image that a trace's report does not say. */
@@ -585,6 +644,8 @@ export const events = {
     listen<{ ok: boolean; message?: string; status: DenoiserStatus }>("denoiser:done", (e) =>
       fn(e.payload),
     ),
+  /** Inkvec Studio Lite only (see `DenoiserFetch`); the desktop never sends it. */
+  denoiserFetch: (fn: (e: DenoiserFetch) => void) => listen<DenoiserFetch>("denoiser:fetch", (e) => fn(e.payload)),
 };
 
 export type { UnlistenFn };

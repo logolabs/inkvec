@@ -48,6 +48,23 @@ Once it is installed, the command-line `inkvec --restore` uses the same file.
 The Intel macOS build does not include the denoiser, and says *Not in this build*. The Windows,
 Linux and Apple-silicon macOS builds do.
 
+**In Studio Lite** there is nothing to press. The denoiser (about 76 MB of weights and 26 MB of
+ONNX Runtime Web, the runtime that runs it in the browser) starts downloading in the background
+as soon as the page has loaded its engine, at low priority, and is kept in the browser's storage,
+so later visits start with it already there. While it downloads, the status strip at the bottom
+left shows how far it has got (*Denoiser 34 of 102 MB · 33%*) and then goes away. If you turn the
+denoiser **On** (or pick **Auto**, or a preset that uses it) before it has arrived, the trace you
+see is made without it for the moment, the **Denoiser** control shows the download (*Downloading
+the denoiser, 34 of 102 MB, 33%*, then *Preparing the denoiser…*), and the image is traced again
+with it, by itself, once it is ready. If the download fails, the control says why and offers
+**Retry**; a download that breaks off is also retried once by itself, from where it stopped.
+
+The background download is skipped when your browser asks sites to save data (Chrome's and
+Edge's data saver, or a metered connection set to save data). Turning the denoiser on then
+downloads it, with the same progress. **Remove** clears the browser's copy. It only works on the
+Space's own tab (a page that is *cross-origin isolated*); inside the Hugging Face frame the
+control says *needs its own tab*, and nothing is downloaded there.
+
 ## Updates
 
 - **Check on start** (on): looks for a newer version when the app starts, sending your app version
@@ -88,9 +105,25 @@ is one).
 
 On Windows, uninstalling the app also removes both entries.
 
-**Reset settings** puts every preference and the trace controls back to their defaults and clears
-the recent files. **Your saved presets are kept** (forget one from the preset tray), nothing you
-have traced or exported is touched, and the denoiser stays installed.
+**Reset settings** puts every preference, the trace controls and the remembered choices (see
+below) back to their defaults and clears the recent files. **Your saved presets are kept** (forget
+one from the preset tray), nothing you have traced or exported is touched, the denoiser stays
+installed, and the window stays where it is.
+
+## What the app remembers
+
+Besides the settings on this screen, the app remembers how you left it, and opens that way next
+time: the trace controls and the selected preset, the **Denoiser** and **Editable** switches, the
+tab you were on, the half of the rail (**Result** or **Tune**) and which Tune groups were open, the
+viewer's arrangement (**Side by side**, **Wipe**, **A/B**), its layers (**Fill**, **Wireframe**,
+**Anchors**, **Handles**, **Certainty**) and **Detail**, the formats and sizes ticked in the
+export sheet, the Minify tab's controls and backdrop, the Fabricate tab's settings (without the
+colours of one drawing), the Batch tab's switches, and, on the desktop, the window's size and
+position (on a monitor that is no longer connected, it opens centred instead). There is no save
+button: a change is kept about half a second after you make it.
+
+What belongs to one image is not kept: its colour groups, snapped colours, and the zoom and pan.
+They start fresh with the next image.
 
 ## Privacy
 
@@ -102,7 +135,7 @@ on its own.
 
 | What | Windows | macOS | Linux |
 |---|---|---|---|
-| Preferences, recent files, saved presets | `%APPDATA%\inkvec-studio\preferences.json` | `~/Library/Application Support/inkvec-studio/preferences.json` | `~/.config/inkvec-studio/preferences.json` |
+| Preferences, remembered choices, recent files, saved presets | `%APPDATA%\inkvec-studio\preferences.json` | `~/Library/Application Support/inkvec-studio/preferences.json` | `~/.config/inkvec-studio/preferences.json` |
 | The denoiser model | `%LOCALAPPDATA%\inkvec\models\restorer.onnx` | `~/.cache/inkvec/models/restorer.onnx` | `~/.cache/inkvec/models/restorer.onnx` |
 
 ## About
@@ -113,5 +146,9 @@ the licence and third-party notices (**Open** shows them in full).
 
 ## Studio Lite
 
-Studio Lite keeps its preferences in the browser. It has no **Advanced** entries (no command on
-the PATH, no right-click menu) and no default output folder, since files are downloaded.
+Studio Lite keeps its preferences, remembered choices and saved presets in the browser's local
+storage for the Space's site, and the denoiser in its Cache Storage; clearing the site's data in
+the browser removes both. In a private window, or with site data blocked, nothing can be kept:
+the app works the same and starts from the defaults each time. It has no **Advanced** entries (no
+command on the PATH, no right-click menu) and no default output folder, since files are
+downloaded.

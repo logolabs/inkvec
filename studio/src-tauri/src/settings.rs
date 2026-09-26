@@ -74,6 +74,20 @@ fn save_at(file: Option<PathBuf>, prefs: &Prefs) -> Result<(), String> {
     std::fs::rename(&tmp, &p).map_err(|e| format!("cannot replace {}: {e}", p.display()))
 }
 
+/// Preferences the interface sent, over the ones held here: everything the interface
+/// edits is taken from it, and what this side owns is kept -- the recent list (opening a
+/// file adds to it here, and the interface's copy can be older) and the window's place
+/// (written from the window's own events). Without this, saving a theme could put back a
+/// recent list from before the last file was opened.
+pub fn merge_from_interface(held: &Prefs, sent: Prefs) -> Prefs {
+    Prefs {
+        recent: held.recent.clone(),
+        window: held.window,
+        ..sent
+    }
+    .sanitised()
+}
+
 /// The Advanced group's "Reset settings": every preference back to its default and the
 /// recent list cleared, the saved presets kept ([`Prefs::after_reset`]).
 pub fn reset() -> Result<Prefs, String> {
@@ -142,6 +156,79 @@ mod tests {
         assert_eq!(load_at(file), prefs.clone().sanitised());
         assert!(dir.join("preferences.json").is_file());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_interface_cannot_overwrite_what_this_side_owns() {
+        let held = Prefs {
+            recent: vec![PathBuf::from("opened-after-the-interface-loaded.png")],
+            window: Some(WindowPlace {
+                x: 10.0,
+                y: 20.0,
+                width: 1500.0,
+                height: 950.0,
+                maximized: true,
+            }),
+            ..Prefs::default()
+        };
+        let sent = Prefs {
+            theme: Theme::Light,
+            recent: Vec::new(),
+            window: None,
+            ui: Interface {
+                tab: "minify".into(),
+                ..Interface::default()
+            },
+            ..Prefs::default()
+        };
+        let merged = merge_from_interface(&held, sent);
+        assert_eq!(
+            merged.theme,
+            Theme::Light,
+            "what the interface edits is taken"
+        );
+        assert_eq!(merged.ui.tab, "minify");
+        assert_eq!(merged.recent, held.recent, "the recent list is this side's");
+        assert_eq!(merged.window, held.window, "and so is the window's place");
+    }
+
+    #[test]
+    fn remembered_choices_survive_a_save_and_a_load_through_a_temporary_file() {
+        let file = scratch("prefs-with-interface");
+        let prefs = Prefs {
+            ui: Interface {
+                preset: Some("icon".into()),
+                rail_tab: "tune".into(),
+                view: "ab".into(),
+                show: Layers {
+                    anchors: true,
+                    ..Layers::default()
+                },
+                fab_unit: "in".into(),
+                ..Interface::default()
+            },
+            window: Some(WindowPlace {
+                x: -1800.0,
+                y: 100.0,
+                width: 1440.0,
+                height: 900.0,
+                maximized: false,
+            }),
+            ..Prefs::default()
+        };
+        save_at(Some(file.clone()), &prefs).unwrap();
+        assert_eq!(load_at(Some(file.clone())), prefs.clone().sanitised());
+        // A file whose interface section is from some other version: the rest survives.
+        std::fs::write(
+            &file,
+            r#"{"draftPx": 300, "ui": {"view": "cube", "tab": 5}, "window": "left"}"#,
+        )
+        .unwrap();
+        let odd = load_at(Some(file.clone()));
+        assert_eq!(odd.draft_px, 300);
+        assert_eq!(odd.ui, Interface::default());
+        assert_eq!(odd.window, None);
+        std::fs::remove_file(&file).unwrap();
     }
 
     #[test]

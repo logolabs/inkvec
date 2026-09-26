@@ -229,7 +229,7 @@ html.framed .top{box-shadow:0 -6px 0 var(--void),inset 0 1px 0 rgba(201,117,74,.
 <section class="sec how" id="how">
   <h2>How it works</h2>
   <p>Inkvec decides the geometry from the evidence in the pixels. It finds the inks by minimum description length, builds a planar map where every boundary is shared by exactly two shapes so there are never gaps, solves every boundary at once against an exact coverage render of the image, then fits lines, arcs, curves, circles and gradients priced in parameters. The result carries the artist's structure: a word is one path, a circle is a <code>&lt;circle&gt;</code>, and the number of coordinates follows the artwork rather than a tolerance slider.</p>
-  <p>Inkvec Studio Lite is the desktop app's own interface and code: the Studio's Rust core compiled to WebAssembly, run in a Web Worker on a pool of threads, one per core (where the browser allows it: a page opened in its own tab does). The trained denoiser for JPEG and screenshot damage is downloaded once, if you ask for it, and runs on your GPU through ONNX Runtime Web.</p>
+  <p>Inkvec Studio Lite is the desktop app's own interface and code: the Studio's Rust core compiled to WebAssembly, run in a Web Worker on a pool of threads, one per core (where the browser allows it: a page opened in its own tab does). The trained denoiser for JPEG and screenshot damage is downloaded once, in the background as the Studio opens, and runs on your GPU through ONNX Runtime Web.</p>
 </section>
 
 <section class="sec">

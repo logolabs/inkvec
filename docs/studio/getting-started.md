@@ -96,7 +96,8 @@ Each step says what it does, when to change it, what it costs, and links to the 
    measure noisy, and only in builds that include the denoiser. It says why it was offered.
    **Off** traces the pixels as they are; **Auto** cleans compression damage first, where it finds
    some. If the denoiser is not downloaded yet, the step offers the download (see
-   [the denoiser](settings.md#denoiser)).
+   [the denoiser](settings.md#denoiser)); in Studio Lite it is already downloading, and the
+   step shows how far it has got.
 3. **Colours.** The palette, with suggested colour groups, and **Max colours**. For an image with
    transparency, also **Trace transparency**. Hover an ink or a group to single it out in the
    drawing.

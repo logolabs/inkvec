@@ -55,6 +55,9 @@ in a few places:
 - It has no folder batch: the **Batch** tab needs to read and write folders on disk.
 - Saving works through your browser's downloads: where this guide says a file is written to a
   folder, Studio Lite downloads it instead.
+- The denoiser downloads by itself, in the background, the first time Studio Lite opens, and is
+  kept in the browser for later visits (see [the denoiser](settings.md#denoiser)).
+- Preferences and the choices you leave the app with are kept in the browser, not in a file.
 
 Where a page describes something Studio Lite does differently, it says so.
 

@@ -53,6 +53,21 @@ included in the installer (it is about 80 MB).</p>
 Once it is installed, the command-line <code>inkvec --restore</code> uses the same file.</p>
 <p>The Intel macOS build does not include the denoiser, and says <em>Not in this build</em>. The Windows,
 Linux and Apple-silicon macOS builds do.</p>
+<p><strong>In Studio Lite</strong> there is nothing to press. The denoiser (about 76 MB of weights and 26 MB of
+ONNX Runtime Web, the runtime that runs it in the browser) starts downloading in the background
+as soon as the page has loaded its engine, at low priority, and is kept in the browser's storage,
+so later visits start with it already there. While it downloads, the status strip at the bottom
+left shows how far it has got (<em>Denoiser 34 of 102 MB · 33%</em>) and then goes away. If you turn the
+denoiser <strong>On</strong> (or pick <strong>Auto</strong>, or a preset that uses it) before it has arrived, the trace you
+see is made without it for the moment, the <strong>Denoiser</strong> control shows the download (<em>Downloading
+the denoiser, 34 of 102 MB, 33%</em>, then <em>Preparing the denoiser…</em>), and the image is traced again
+with it, by itself, once it is ready. If the download fails, the control says why and offers
+<strong>Retry</strong>; a download that breaks off is also retried once by itself, from where it stopped.</p>
+<p>The background download is skipped when your browser asks sites to save data (Chrome's and
+Edge's data saver, or a metered connection set to save data). Turning the denoiser on then
+downloads it, with the same progress. <strong>Remove</strong> clears the browser's copy. It only works on the
+Space's own tab (a page that is <em>cross-origin isolated</em>); inside the Hugging Face frame the
+control says <em>needs its own tab</em>, and nothing is downloaded there.</p>
 <h2 id="updates">Updates</h2>
 <ul>
 <li><strong>Check on start</strong> (on): looks for a newer version when the app starts, sending your app version
@@ -116,9 +131,22 @@ is one).</p>
 </tbody>
 </table>
 <p>On Windows, uninstalling the app also removes both entries.</p>
-<p><strong>Reset settings</strong> puts every preference and the trace controls back to their defaults and clears
-the recent files. <strong>Your saved presets are kept</strong> (forget one from the preset tray), nothing you
-have traced or exported is touched, and the denoiser stays installed.</p>
+<p><strong>Reset settings</strong> puts every preference, the trace controls and the remembered choices (see
+below) back to their defaults and clears the recent files. <strong>Your saved presets are kept</strong> (forget
+one from the preset tray), nothing you have traced or exported is touched, the denoiser stays
+installed, and the window stays where it is.</p>
+<h2 id="what-the-app-remembers">What the app remembers</h2>
+<p>Besides the settings on this screen, the app remembers how you left it, and opens that way next
+time: the trace controls and the selected preset, the <strong>Denoiser</strong> and <strong>Editable</strong> switches, the
+tab you were on, the half of the rail (<strong>Result</strong> or <strong>Tune</strong>) and which Tune groups were open, the
+viewer's arrangement (<strong>Side by side</strong>, <strong>Wipe</strong>, <strong>A/B</strong>), its layers (<strong>Fill</strong>, <strong>Wireframe</strong>,
+<strong>Anchors</strong>, <strong>Handles</strong>, <strong>Certainty</strong>) and <strong>Detail</strong>, the formats and sizes ticked in the
+export sheet, the Minify tab's controls and backdrop, the Fabricate tab's settings (without the
+colours of one drawing), the Batch tab's switches, and, on the desktop, the window's size and
+position (on a monitor that is no longer connected, it opens centred instead). There is no save
+button: a change is kept about half a second after you make it.</p>
+<p>What belongs to one image is not kept: its colour groups, snapped colours, and the zoom and pan.
+They start fresh with the next image.</p>
 <h2 id="privacy">Privacy</h2>
 <p>The last card says what the rest of this guide says too: tracing runs on your own processor, there
 is no account, no upload and no telemetry, and the update check is the only request the app makes
@@ -135,7 +163,7 @@ on its own.</p>
 </thead>
 <tbody>
 <tr>
-<td>Preferences, recent files, saved presets</td>
+<td>Preferences, remembered choices, recent files, saved presets</td>
 <td><code>%APPDATA%\inkvec-studio\preferences.json</code></td>
 <td><code>~/Library/Application Support/inkvec-studio/preferences.json</code></td>
 <td><code>~/.config/inkvec-studio/preferences.json</code></td>
@@ -153,9 +181,13 @@ on its own.</p>
 guide, the source and the online demo, the compute acknowledgement for the denoiser's training, and
 the licence and third-party notices (<strong>Open</strong> shows them in full).</p>
 <h2 id="studio-lite">Studio Lite</h2>
-<p>Studio Lite keeps its preferences in the browser. It has no <strong>Advanced</strong> entries (no command on
-the PATH, no right-click menu) and no default output folder, since files are downloaded.</p><nav class="pagenav"><a class="prev" href="batch.html"><span class="dir">Previous</span><span class="lbl">Batch</span></a><a class="next" href="shortcuts.html"><span class="dir">Next</span><span class="lbl">Keyboard and mouse</span></a></nav></article></main>
-  <aside class="rail"><h5>On this page</h5><ul><ul><li class="l2"><a href="#general">General</a></li><li class="l2"><a href="#performance">Performance</a></li><li class="l2"><a href="#denoiser">Denoiser</a></li><li class="l2"><a href="#updates">Updates</a></li><li class="l2"><a href="#advanced">Advanced</a></li><li class="l2"><a href="#privacy">Privacy</a></li><li class="l2"><a href="#where-things-are-kept">Where things are kept</a></li><li class="l2"><a href="#about">About</a></li><li class="l2"><a href="#studio-lite">Studio Lite</a></li></ul></ul></aside>
+<p>Studio Lite keeps its preferences, remembered choices and saved presets in the browser's local
+storage for the Space's site, and the denoiser in its Cache Storage; clearing the site's data in
+the browser removes both. In a private window, or with site data blocked, nothing can be kept:
+the app works the same and starts from the defaults each time. It has no <strong>Advanced</strong> entries (no
+command on the PATH, no right-click menu) and no default output folder, since files are
+downloaded.</p><nav class="pagenav"><a class="prev" href="batch.html"><span class="dir">Previous</span><span class="lbl">Batch</span></a><a class="next" href="shortcuts.html"><span class="dir">Next</span><span class="lbl">Keyboard and mouse</span></a></nav></article></main>
+  <aside class="rail"><h5>On this page</h5><ul><ul><li class="l2"><a href="#general">General</a></li><li class="l2"><a href="#performance">Performance</a></li><li class="l2"><a href="#denoiser">Denoiser</a></li><li class="l2"><a href="#updates">Updates</a></li><li class="l2"><a href="#advanced">Advanced</a></li><li class="l2"><a href="#what-the-app-remembers">What the app remembers</a></li><li class="l2"><a href="#privacy">Privacy</a></li><li class="l2"><a href="#where-things-are-kept">Where things are kept</a></li><li class="l2"><a href="#about">About</a></li><li class="l2"><a href="#studio-lite">Studio Lite</a></li></ul></ul></aside>
 </div>
 </body>
 </html>

@@ -138,6 +138,22 @@ folder.
 **Where are Batch, the command line and the right-click menu?** They need the desktop app. See
 [Inkvec Studio and Inkvec Studio Lite](README.md#inkvec-studio-and-inkvec-studio-lite).
 
+**The first visit takes a few seconds to start.** The loading screen is the engine arriving
+(about 5 MB) and starting; its bar follows the real download. Later visits start from the
+browser's cache.
+
+**The denoiser is on but the trace looks the same, and the rail says it is downloading.** The
+trace shown was made without it while it downloads (about 100 MB, once). It traces again by
+itself when the denoiser is ready. If it failed, press **Retry** under the Denoiser buttons or in
+the status strip.
+
+**Nothing is downloaded in the background.** Your browser asks sites to save data, so Studio
+Lite waits until you turn the denoiser on. Inside the Hugging Face frame the denoiser cannot run
+at all: use **Open in its own tab**.
+
+**My settings are not remembered.** A private window, or a browser set to block site data, gives
+the page nowhere to keep them. The app still works, from the defaults each time.
+
 ## Reporting a problem
 
 Report bugs on [GitHub](https://github.com/logolabs/inkvec/issues). Include the app version (from

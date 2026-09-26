@@ -60,6 +60,7 @@ final class ApiTest extends TestCase
             margin: 0.0,
             noBackground: false,
             minify: false,
+            editability: false,
             nativeAlpha: true,
             cutout: false,
             contentUnits: false,

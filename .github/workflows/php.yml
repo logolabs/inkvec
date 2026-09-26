@@ -68,8 +68,8 @@ jobs:
           - { os: macos-latest, php: "8.4" }
           - { os: windows-latest, php: "8.4" }
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.120.0
       - uses: Swatinem/rust-cache@v2
         with:
           key: ffi-${{ matrix.os }}
@@ -83,7 +83,7 @@ jobs:
           coverage: none
           tools: composer
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       # src/Options.php and the README's options table are committed; a stale one means the
@@ -122,8 +122,8 @@ jobs:
     name: preloading (the path a PHP-FPM pool takes)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.120.0
       - uses: Swatinem/rust-cache@v2
         with:
           key: ffi-ubuntu-latest
@@ -168,7 +168,7 @@ jobs:
     env:
       DEPLOY_KEY: ${{ secrets.PHP_MIRROR_DEPLOY_KEY }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: tag matches the workspace version
         run: |
           want="${GITHUB_REF_NAME#v}"

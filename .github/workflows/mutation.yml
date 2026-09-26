@@ -26,16 +26,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 330
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.120.0
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-mutants
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - run: python bench/quality.py --fast --mutants --mutants-out target/mutants
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: mutants

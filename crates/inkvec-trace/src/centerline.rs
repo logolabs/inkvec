@@ -208,7 +208,7 @@ pub const MIN_REGION_PIXELS: usize = 8;
 pub const WIDTH_SIGMA_FLOOR: f64 = std::f64::consts::SQRT_2 * DEFAULT_SIGMA_MODEL;
 
 /// Multiple of the local width below which a dead-end branch is a thinning artefact.
-pub(crate) const SPUR_FACTOR: f64 = 1.0;
+pub const SPUR_FACTOR: f64 = 1.0;
 
 /// Least ratio of the distance-field value at a dead-end branch's tip to the median
 /// along that branch, for the tip to be a genuine stroke end rather than a corner.

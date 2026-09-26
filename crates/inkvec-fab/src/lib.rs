@@ -14,7 +14,7 @@
 //!
 //! The work happens in millimetres on polygons: overlaps are cut back to what shows
 //! ([`regions`]), layers are grown and clipped ([`geom`]), and every contour is refitted as
-//! lines and cubics before it is written ([`fitcurve`], [`write`]), so a
+//! lines and cubics before it is written ([`fitcurve`], [`mod@write`]), so a
 //! sheet carries a few hundred path segments rather than the tens of thousands of points
 //! that make cutter software refuse a traced file.
 

@@ -59,7 +59,7 @@ pub struct CamSheet {
 }
 
 /// `sheets` (name and region each) and each sheet's open `lines`, fitted once into lines
-/// and arcs with y flipped about `top`, for [`write`] and [`crate::gcode::write`].
+/// and arcs with y flipped about `top`, for [`write()`] and [`crate::gcode::write()`].
 pub fn cam_sheets(
     sheets: &[(String, &Region)],
     lines: &[Vec<Vec<Pt>>],

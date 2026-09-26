@@ -8,14 +8,14 @@
 //! and the emitter with its seam underlap, compound paths and minify -- and replaces the
 //! rest with one-pass versions:
 //!
-//! * [`palette`]: inks from a 15-bit histogram of flat pixels; blends go to a neighbour's ink;
-//! * [`front`]: faces and the planar map, without blend absorption or the boundary solve;
-//! * [`bands`]: posterised ramps put back together, one gradient fit per ramp;
-//! * [`prims`]: a closed boundary that is a circle or an ellipse is written as one;
+//! * `palette`: inks from a 15-bit histogram of flat pixels; blends go to a neighbour's ink;
+//! * `front`: faces and the planar map, without blend absorption or the boundary solve;
+//! * `bands`: posterised ramps put back together, one gradient fit per ramp;
+//! * `prims`: a closed boundary that is a circle or an ellipse is written as one;
 //! * and for everything else the classical pipeline of Selinger's Potrace (2003), restated
-//!   for sub-pixel input: the optimal polygon ([`polygon`]), least-squares vertex placement
-//!   and corner-aware smoothing into Bézier pieces ([`smooth`]), and curve-run
-//!   optimisation ([`curve`]).
+//!   for sub-pixel input: the optimal polygon (`polygon`), least-squares vertex placement
+//!   and corner-aware smoothing into Bézier pieces (`smooth`), and curve-run
+//!   optimisation (`curve`).
 //!
 //! Each stage is linear or near-linear in the number of pixels or boundary points, and
 //! nothing reads a clock, so the output is the same on every machine. Written from the

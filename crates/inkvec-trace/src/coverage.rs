@@ -41,7 +41,7 @@ use inkvec_core::Point;
 /// combined in quadrature with the statistical term in `planar.rs`, and on this corpus
 /// it dominates: 79% of the gate set's 86,060 boundary points come out between 0.050
 /// and 0.060, so for most of a traced image the fitter's tolerance *is* this constant
-/// rather than anything measured from the image (see [`crate::contour::sigma_flat`],
+/// rather than anything measured from the image (see the flat-sigma measurement in `contour.rs`,
 /// which prices the remaining variation at about one percent).
 ///
 /// That makes it a large dial, but not an independent one. Because chi2 weights are

@@ -248,7 +248,10 @@ def traced_set(s: Scorer, cases: list[tuple[str, str, str, Path]], work: Path, n
                 if engine != "inkvec" and cached.exists() and (out / f"{engine}.svg").exists():
                     row = json.loads(cached.read_text(encoding="utf-8"))
                 else:
-                    row = s.trace_and_score(engine, out / "input.png", out / f"{engine}.svg", ref, gt)
+                    try:
+                        row = s.trace_and_score(engine, out / "input.png", out / f"{engine}.svg", ref, gt)
+                    except Exception as e:  # noqa: BLE001 - name the engine; its stderr may be empty
+                        raise RuntimeError(f"{engine}: {e!r}") from e
                     if engine != "inkvec":
                         cached.write_text(json.dumps(row), encoding="utf-8")
                 row.update(key=key, family=name, gt=gt)
@@ -386,7 +389,7 @@ def main() -> int:
     print(f"wrote web/showcase.json ({(WEB / 'showcase.json').stat().st_size / 1024:.0f} KB) and "
           f"{len(list((WEB / 'showcase').glob('*.json')))} case files ({per_case / 1024:.0f} KB)")
     for title, b in (("benchmark", out), ("brands", out["brands"]), ("corpus", out["corpus"])):
-        print(f"{title}: {len(b['engines']) and b.get('cases')} cases, best dE00 {b['best_de_wins']}")
+        print(f"{title}: {b['cases']} cases, best dE00 {b['best_de_wins']}")
         for e in b["engines"]:
             if "de_mean" in e:
                 print(f"  {e['id']:22s} mean {e['de_mean']:.3f} median {e['de_median']:.3f} DISTS {e['dists']:.4f} "

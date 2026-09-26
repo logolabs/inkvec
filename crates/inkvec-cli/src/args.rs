@@ -6,6 +6,40 @@
 
 use std::path::PathBuf;
 
+/// Which engine traces the image.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TraceMode {
+    /// The full engine: global boundary solve, multi-model curve fit, gradient recovery,
+    /// ring repair and shape harmonization. The default.
+    #[default]
+    Quality,
+    /// A Potrace-class fit on the same palette, planar map and emitter: flat fills, several
+    /// times faster. See `inkvec_trace::fast`.
+    Fast,
+}
+
+impl TraceMode {
+    /// The mode's name, as `--mode` and the options JSON spell it.
+    pub fn name(self) -> &'static str {
+        match self {
+            TraceMode::Quality => "quality",
+            TraceMode::Fast => "fast",
+        }
+    }
+}
+
+impl std::str::FromStr for TraceMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "quality" => Ok(TraceMode::Quality),
+            "fast" => Ok(TraceMode::Fast),
+            _ => Err(format!("unknown mode {s:?}; want quality or fast")),
+        }
+    }
+}
+
 /// Settled command line options, driving the library whether or not there was an
 /// actual command line.
 #[derive(Clone, Debug)]
@@ -145,6 +179,9 @@ pub struct Args {
     pub harmonize_threshold: f64,
     /// Emit harmonized shapes as SVG `<defs>` and `<use>` instances.
     pub use_symbols: bool,
+    /// Quality (the default) or fast. Fast mode ignores the options that only steer quality
+    /// stages, and says so in the report.
+    pub mode: TraceMode,
 }
 
 impl Default for Args {
@@ -203,6 +240,7 @@ impl Default for Args {
             harmonize: true,
             harmonize_threshold: 0.92,
             use_symbols: false,
+            mode: TraceMode::Quality,
         }
     }
 }
@@ -234,6 +272,12 @@ USAGE:
 
 OPTIONS:
     -o, --output <path>     Output SVG (default: alongside the input)
+        --mode <mode>       quality  the full engine: best fidelity, fewest parameters
+                                     (default)
+                            fast     a Potrace-class fit on the same palette and
+                                     planar map, with flat fills: several times
+                                     faster, a little less faithful. Options that only
+                                     steer quality stages are ignored and listed
         --tau <f>           Chord tolerance in standard deviations   [default: 2.0]
         --precision <f>     Sets the MDL cost of a coordinate: lambda = ln(extent/precision).
                             It does not set the digits the emitter writes; output
@@ -490,6 +534,7 @@ fn parse_args_from(mut it: impl Iterator<Item = String>) -> Result<Args, String>
                 a.harmonize_threshold = parse_value(&mut it, "--harmonize-threshold")?
             }
             "--use-symbols" => a.use_symbols = true,
+            "--mode" => a.mode = it.next().ok_or("--mode needs quality or fast")?.parse()?,
             "--sr-command" => {
                 a.sr_command = Some(it.next().ok_or("--sr-command needs a command line")?)
             }
@@ -647,6 +692,13 @@ mod tests {
         assert_eq!(a.output, Some(PathBuf::from("out.svg")));
         assert!(matches!(a.restore, inkvec_restore::Mode::On));
         assert_eq!(a.max_colors, 8);
+
+        assert_eq!(a.mode, super::TraceMode::Quality);
+        let fast = parse("logo.png --mode fast").expect("parses");
+        assert_eq!(fast.mode, super::TraceMode::Fast);
+        assert!(parse("logo.png --mode slow")
+            .unwrap_err()
+            .contains("quality or fast"));
 
         let a_opt_out = parse("logo.png --no-harmonize").expect("parses");
         assert!(!a_opt_out.harmonize);

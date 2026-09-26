@@ -28,6 +28,7 @@ mod alpha;
 mod args;
 mod editable;
 mod emit;
+mod fast;
 mod harmonize;
 mod pathdata;
 mod post;
@@ -37,7 +38,7 @@ mod uncertainty;
 
 use alpha::{alpha_source, pixel_grid, AlphaSource, FaceAlpha};
 use args::{parse_args, usage};
-pub use args::{parse_color_groups, Args};
+pub use args::{parse_color_groups, Args, TraceMode};
 use emit::{emit_bilevel, emit_color, emit_decimals};
 pub use inkvec_trace::regroup;
 use pathdata::fmt_fitted;

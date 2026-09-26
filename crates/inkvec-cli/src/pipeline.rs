@@ -341,6 +341,7 @@ pub(crate) fn color_options(args: &Args) -> ColorOptions {
         // Area, so the square of the content scale.
         min_region: args.min_area.max(1.0) as usize,
         gradients: !args.no_gradients,
+        fast: fast::on(args),
     }
 }
 
@@ -569,54 +570,59 @@ fn finish_color(
     use rayon::prelude::*;
     let ring_timing = std::env::var_os("INKVEC_TIMING").is_some();
     let ring_times: std::sync::Mutex<Vec<(f64, usize)>> = std::sync::Mutex::new(Vec::new());
-    let results: Vec<(FittedPath, Option<PrimitiveFit>)> = polys
-        .par_iter()
-        .zip(lambda_scales.par_iter())
-        .map(|(poly, &scale)| {
-            let poly = poly.clone();
-            // This boundary's own exchange rate. `cfg_k == *cfg` when the scale is 1.0,
-            // which is every path but the guided one.
-            let cfg_k = FitConfig {
-                lambda: cfg.lambda * scale,
-                ..*cfg
-            };
-            let t_ring = inkvec_core::clock::Instant::now();
-            let curve = multimodel::optimal_multimodel(&poly, &cfg_k);
-            if ring_timing {
-                ring_times
-                    .lock()
-                    .unwrap()
-                    .push((t_ring.elapsed().as_secs_f64() * 1e3, poly.points.len()));
-            }
+    let fast = fast::on(args);
+    let results: Vec<(FittedPath, Option<PrimitiveFit>)> = if fast {
+        fast::fit(&map, &face_fill)
+    } else {
+        polys
+            .par_iter()
+            .zip(lambda_scales.par_iter())
+            .map(|(poly, &scale)| {
+                let poly = poly.clone();
+                // This boundary's own exchange rate. `cfg_k == *cfg` when the scale is 1.0,
+                // which is every path but the guided one.
+                let cfg_k = FitConfig {
+                    lambda: cfg.lambda * scale,
+                    ..*cfg
+                };
+                let t_ring = inkvec_core::clock::Instant::now();
+                let curve = multimodel::optimal_multimodel(&poly, &cfg_k);
+                if ring_timing {
+                    ring_times
+                        .lock()
+                        .unwrap()
+                        .push((t_ring.elapsed().as_secs_f64() * 1e3, poly.points.len()));
+                }
 
-            // A boundary that *is* a circle should be described as one. Both candidates
-            // are scored by the same MDL cost, so the three numbers of a circle beat the
-            // twenty-four of four cubics whenever the evidence actually supports a
-            // circle, and lose when it does not.
-            // `INKVEC_NO_PRIMITIVE=1` takes the whole-boundary primitive path out, the
-            // same way `INKVEC_NO_ARCS` takes arcs out of the DP alphabet, which is how
-            // the two are measured against each other. It is worth a great deal: over
-            // the 246-icon gate set, removing it costs 30.52% of the parameter ratio
-            // (1.4818 -> 1.9341) and 9.01% of dE00, far more than any other lever
-            // measured on this tree.
-            let attempt = if std::env::var_os("INKVEC_NO_PRIMITIVE").is_some() {
-                None
-            } else {
-                fit_primitive_or_arcs(&poly.points, &poly.sigma, poly.closed, &cfg_k)
-            };
-            match attempt {
-                Some((segs, prim, cost)) if cost < path_cost(&poly, &curve, &cfg_k) => (
-                    FittedPath {
-                        start: poly.points[0],
-                        segments: segs,
-                        closed: poly.closed,
-                    },
-                    prim,
-                ),
-                _ => (curve, None),
-            }
-        })
-        .collect();
+                // A boundary that *is* a circle should be described as one. Both candidates
+                // are scored by the same MDL cost, so the three numbers of a circle beat the
+                // twenty-four of four cubics whenever the evidence actually supports a
+                // circle, and lose when it does not.
+                // `INKVEC_NO_PRIMITIVE=1` takes the whole-boundary primitive path out, the
+                // same way `INKVEC_NO_ARCS` takes arcs out of the DP alphabet, which is how
+                // the two are measured against each other. It is worth a great deal: over
+                // the 246-icon gate set, removing it costs 30.52% of the parameter ratio
+                // (1.4818 -> 1.9341) and 9.01% of dE00, far more than any other lever
+                // measured on this tree.
+                let attempt = if std::env::var_os("INKVEC_NO_PRIMITIVE").is_some() {
+                    None
+                } else {
+                    fit_primitive_or_arcs(&poly.points, &poly.sigma, poly.closed, &cfg_k)
+                };
+                match attempt {
+                    Some((segs, prim, cost)) if cost < path_cost(&poly, &curve, &cfg_k) => (
+                        FittedPath {
+                            start: poly.points[0],
+                            segments: segs,
+                            closed: poly.closed,
+                        },
+                        prim,
+                    ),
+                    _ => (curve, None),
+                }
+            })
+            .collect()
+    };
     let mut prims: Vec<Option<PrimitiveFit>> = Vec::with_capacity(results.len());
     let mut fitted: Vec<FittedPath> = Vec::with_capacity(results.len());
     for (f, pr) in results {
@@ -751,7 +757,7 @@ fn finish_color(
     // and a thin neck is exactly where that reopens a crossing the repair had closed —
     // measured over 40 emoji, repairing first left 12 invalid rings where repairing last
     // leaves 9. The repair has to see the geometry that is actually emitted.
-    let mut repaired = if args.no_repair {
+    let mut repaired = if args.no_repair || fast {
         0
     } else {
         repair_ring_crossings(&order, &mut fitted, &polys, &cfg_repair)
@@ -927,7 +933,7 @@ fn finish_color(
             w,
             h,
             args.precision,
-            args.harmonize,
+            args.harmonize && !fast,
             args.harmonize_threshold,
             args.use_symbols,
         )
@@ -1023,9 +1029,12 @@ fn finish_color(
         }
     }
     let anchors = n_cubic + n_line;
-    Ok((
-        svg,
-        vec![
+    let mut report = if fast {
+        vec![fast::report(args)]
+    } else {
+        Vec::new()
+    };
+    report.extend([
             format!(
                 "palette       {} colours, {} faces ({n_grad} gradient)",
                 pal.len(),
@@ -1064,8 +1073,8 @@ fn finish_color(
                 "segments      {anchors}  ({n_line} line, {n_cubic} cubic) from {measured} measured points, {:.1}x reduction",
                 measured as f64 / anchors.max(1) as f64
             ),
-        ],
-    ))
+        ]);
+    Ok((svg, report))
 }
 
 /// MDL cost of a fitted path against the measurements it came from, in the same units

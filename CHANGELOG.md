@@ -7,6 +7,23 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+### Added
+
+- **Fast mode (`--mode fast` / `mode: "fast"`)**: A Potrace-speed mode that skips subpixel refinement,
+  boundary optimization, and iterative MDL segment fitting while sharing the planar map, color palette,
+  and native transparency handling. Ideal for real-time preview and throughput-critical pipelines.
+- **Fitting and gradient evaluation optimizations**:
+  - `Cubic::dist2_lanes`: Projects four sample points onto cubic Bézier segments in parallel.
+  - `FillEval`: Hoists invariant color-stop linear conversions and ellipse rotations out of inner pixel loops.
+  - Parallel knot grid candidate evaluation in `fit_mid_stops` via Rayon.
+- **Comprehensive test harness & CI policy**:
+  - 25 unit tests pinning CIEDE2000 against Sharma's 34 published reference pairs.
+  - 13 unit tests covering boundary solve subpixel refinement.
+  - 20 unit tests covering linear, radial, and elliptical gradient fits.
+  - 33 unit tests for native alpha palette, resolving edge blend slivers and stop composition.
+  - `deny.toml` policy asserting clean license compliance with MPL exceptions.
+  - `cargo-machete` automated dependency audit integrated into the quality ratchet.
+
 ### Changed
 
 - **The engine no longer takes settings from the environment.** The crates read 127
@@ -46,6 +63,10 @@ API in particular should be treated as unstable release to release).
   passed the segment's far end, which never happens when a coordinate is infinite or so large
   that adding one leaves it unchanged: a trace could hang instead of failing. Such a segment now
   contributes no crossings; a test with a deadline covers infinite, NaN and 1e20 coordinates.
+- Fixed native alpha palette bugs (`blend_pairs` index underflow, `bin()` coordinates, `Fade` composition,
+  and `fade_chi2` threshold) identified during mutation testing.
+- Fixed release draft notes overwriting in `.github/workflows/release.yml`.
+- Fixed rustdoc links under `-Dwarnings`, Java POM XML comment syntax, and PHP typed-options test coverage.
 
 ## [0.2.0] - 2026-09-26
 

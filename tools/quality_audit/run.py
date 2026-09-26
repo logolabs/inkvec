@@ -590,8 +590,11 @@ def step_machete(args, raw: Path) -> dict:
 
 
 def step_udeps(args, raw: Path) -> dict:
+    # Nightly artefacts in their own target dir, so they do not evict the stable ones.
+    env = tool_env(args)
+    env["CARGO_TARGET_DIR"] = str(args.target_dir) + "-udeps"
     p = run(["cargo", "+nightly", "udeps", "--workspace", "--all-targets", "--output", "json"],
-            args, log=raw / "logs" / "udeps.log", timeout=7200)
+            args, env=env, log=raw / "logs" / "udeps.log", timeout=7200)
     try:
         d = json.loads(p.stdout)
     except json.JSONDecodeError:
@@ -799,32 +802,54 @@ def summarise_mutants(mdir: Path) -> dict:
 # ------------------------------------------------------------------ profile
 
 def step_profile(args, raw: Path) -> dict:
+    """Wall-clock repeats plus one samply profile per input.
+
+    The profiled binary is the release CLI rebuilt with line tables only
+    (CARGO_PROFILE_RELEASE_DEBUG=line-tables-only, own target dir): same LTO and codegen,
+    but the PDB names every function. rustc embeds the PDB by file name only, and samply
+    fails to find it when the path has a space, so exe + PDB + inputs are copied to the
+    space-free --profile-work dir and recorded there.
+    """
+    import profile_report  # sibling module; imported here so the cheap steps never need it
+
     out = raw / "profile"
     out.mkdir(parents=True, exist_ok=True)
-    exe = Path(args.target_dir) / "release" / ("inkvec.exe" if os.name == "nt" else "inkvec")
-    if not exe.exists():
-        run(["cargo", "build", "--release", "-p", "inkvec-cli"], args, timeout=3600)
+    prof_target = Path(str(args.target_dir) + "-prof")
+    env = tool_env(args)
+    env.update(CARGO_TARGET_DIR=str(prof_target), CARGO_PROFILE_RELEASE_DEBUG="line-tables-only")
+    exe_name = "inkvec.exe" if os.name == "nt" else "inkvec"
+    run(["cargo", "build", "--release", "-p", "inkvec-cli"], args, env=env, timeout=3600,
+        log=raw / "logs" / "profile_build.log")
+    work = Path(args.profile_work)
+    work.mkdir(parents=True, exist_ok=True)
+    for f in (exe_name, "inkvec.pdb"):
+        if (prof_target / "release" / f).exists():
+            shutil.copyfile(prof_target / "release" / f, work / f)
+    exe = work / exe_name
     res = {}
     for inp in args.profile_inputs.split(","):
         src = Path(inp) if Path(inp).is_absolute() else ROOT / inp
         name = src.stem
-        svg = out / f"{name}.svg"
+        shutil.copyfile(src, work / src.name)
         times = []
         for _ in range(args.profile_repeats):
             t0 = time.time()
-            p = run([str(exe), str(src), "-o", str(svg)], args)
+            p = run([str(exe), src.name, "-o", f"{name}.svg"], args, cwd=work)
             times.append(round(time.time() - t0, 3))
-        env = tool_env(args)
-        env["INKVEC_TIMING"] = "1"
-        pt = run([str(exe), str(src), "-o", str(svg)], args, env=env)
-        (out / f"{name}.timing.txt").write_text(pt.stderr, encoding="utf-8")
-        entry = {"input": rel(src), "wall_s": times, "exit": p.returncode,
-                 "svg_bytes": svg.stat().st_size if svg.exists() else None}
+        (out / f"{name}.log").write_text(p.stderr, encoding="utf-8")
+        entry = {"input": rel(src), "wall_s": times, "exit": p.returncode}
         if shutil.which("samply", path=env["PATH"]) and not args.no_samply:
-            prof = out / f"{name}.samply.json.gz"
-            ps = run(["samply", "record", "--save-only", "-o", str(prof), "--", str(exe), str(src),
-                      "-o", str(svg)], args, timeout=900)
-            entry["samply"] = prof.name if ps.returncode == 0 and prof.exists() else f"failed: {ps.stderr[-300:]}"
+            prof = work / f"{name}.json.gz"
+            ps = run(["samply", "record", "--save-only", "--unstable-presymbolicate", "-r", "2000",
+                      "-o", prof.name, "--", str(exe), src.name, "-o", f"{name}.svg"], args,
+                     cwd=work, timeout=900)
+            if ps.returncode == 0 and prof.exists():
+                for f in (prof, work / f"{name}.json.syms.json", work / f"{name}.svg"):
+                    if f.exists():
+                        shutil.copyfile(f, out / f.name)
+                entry["profile"] = profile_report.analyse(out / prof.name, top=25)
+            else:
+                entry["samply"] = f"failed: {ps.stderr[-300:]}"
         res[name] = entry
     return res
 
@@ -845,7 +870,7 @@ def step_codeql(args, raw: Path) -> dict:
     arch = subprocess.run(["git", "archive", "HEAD", "crates", "studio/core", "studio/src-tauri/src",
                            "studio/src-tauri/Cargo.toml", "studio/wasm", "Cargo.toml", "Cargo.lock"],
                           cwd=ROOT, capture_output=True)
-    subprocess.run(["tar", "-x", "-C", str(src)], input=arch.stdout, check=True)
+    subprocess.run(["tar", "-x", "-f", "-", "-C", str(src)], input=arch.stdout, check=True)
     env = tool_env(args)
     env["CARGO_TARGET_DIR"] = str(work / "target")
     run([cq, "database", "create", str(db), "--language=rust", f"--source-root={src}",
@@ -952,6 +977,16 @@ def write_summary_md(out: Path, s: dict) -> None:
               md_table([(f"`{k}`", *[v.get(x, 0) for x in ("CaughtMutant", "MissedMutant", "Timeout", "Unviable")])
                         for k, v in mu["per_file"].items()], ["file", "caught", "missed", "timeout", "unviable"]),
               "", f"{len(mu['missed'])} surviving mutants: raw/mutants/mutants.out/missed.txt", ""]
+    pr = s.get("profile")
+    if pr:
+        L += ["## Profile (release CLI, samply, CPU time over all threads)", ""]
+        for name, e in pr.items():
+            L += [f"### {name}", "", f"Wall clock (s): {e.get('wall_s')}", ""]
+            p = e.get("profile")
+            if p:
+                L += [md_table([(f"`{m}`", f"{v}%") for m, v in p["by_module"][:12]], ["module (innermost Inkvec frame)", "CPU"]),
+                      "", md_table([(f"`{m[:100]}`", f"{v}%") for m, v in p["inclusive_inkvec"][:12]], ["function (inclusive)", "CPU"]),
+                      "", md_table([(f"`{m[:100]}`", f"{v}%") for m, v in p["self"][:12]], ["function (self)", "CPU"]), ""]
     for key, title in (("machete", "Unused dependencies (cargo-machete)"),):
         v = s.get(key)
         if v:
@@ -1007,7 +1042,9 @@ def main() -> int:
     ap.add_argument("--reuse-mutants", action="store_true", help="only re-summarise raw/mutants")
     ap.add_argument("--reuse-coverage", action="store_true", help="only re-summarise raw/coverage")
     ap.add_argument("--profile", action="store_true")
-    ap.add_argument("--profile-inputs", default="studio/src-tauri/samples/flat-logo.png")
+    ap.add_argument("--profile-inputs", default="studio/src-tauri/samples/flat-logo.png",
+                    help="comma-separated rasters (repo-relative or absolute)")
+    ap.add_argument("--profile-work", default="M:/qa-audit/prof", help="space-free dir for samply")
     ap.add_argument("--profile-repeats", type=int, default=3)
     ap.add_argument("--no-samply", action="store_true")
     ap.add_argument("--codeql", nargs="?", const="codeql", default=None, help="run CodeQL (optional CLI path)")

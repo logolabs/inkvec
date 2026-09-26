@@ -145,7 +145,7 @@
   <!--
     Inactive unless built with -Prelease, which nothing in this repository does: Inkvec does
     not publish this package to Maven Central. Signs the jar and stages it to the Central
-    Publisher Portal, and is kept as scaffolding for anyone publishing their own build --
+    Publisher Portal, and is kept as scaffolding for anyone publishing their own build,
     which needs a verified group id of their own first (see the notes on groupId above).
   -->
   <profiles>

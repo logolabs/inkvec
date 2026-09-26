@@ -188,13 +188,9 @@ function modesBlock(store: Store, act: RailActions): HTMLElement[] {
       tip(
         h("span.modetitle", { tabindex: "0" }, "Engine"),
         help("mode") ||
-          "Quality uses deep analysis-by-synthesis, sub-pixel boundary solve and multi-model Bézier DP (max fidelity, ~1-2s). Fast uses single-pass Potrace-class planar tracing (~50ms, zero seams).",
+          "Quality places every edge to a fraction of a pixel and fits the fewest curves that match the image: the closest trace, and the default. Fast traces each shape in a single pass, many times quicker, for previews, batches and very large images.",
       ),
-      h(
-        "span.modestate",
-        null,
-        engineMode === "fast" ? "⚡ single-pass (~50ms)" : "💎 deep solve (~1.5s)",
-      ),
+      h("span.modestate", null, engineMode === "fast" ? "one pass" : "closest fit"),
     ),
     h(
       "div.seg.big",
@@ -204,20 +200,20 @@ function modesBlock(store: Store, act: RailActions): HTMLElement[] {
         {
           "aria-pressed": String(engineMode === "quality"),
           "data-ctl": "mode:quality",
-          title: "Quality mode: Deep MDL analysis-by-synthesis, global boundary solve and multi-model Bézier DP",
+          title: "Quality: the closest trace, edges placed to a fraction of a pixel",
           onclick: () => act.changeSetting("mode", "quality"),
         },
-        "💎 Quality",
+        "Quality",
       ),
       h(
         "button",
         {
           "aria-pressed": String(engineMode === "fast"),
           "data-ctl": "mode:fast",
-          title: "Fast mode: Single-pass Potrace-class polygonalization on the shared planar map (~30× faster)",
+          title: "Fast: each shape traced in one pass, many times quicker, a little less exact",
           onclick: () => act.changeSetting("mode", "fast"),
         },
-        "⚡ Fast",
+        "Fast",
       ),
     ),
   );
@@ -361,18 +357,17 @@ function railTabs(store: Store, act: RailActions): HTMLElement[] {
 
 // ------------------------------------------------------------------------- tune ---
 
-/** A clear banner when Fast mode is active, explaining that advanced curve DPs and boundary solvers run in Quality mode. */
+/** In Fast mode some Tune controls do nothing (they steer stages only Quality runs): say so above them. */
 function fastModeBanner(store: Store, act: RailActions): HTMLElement | null {
   if (store.state.settings.mode !== "fast") return null;
   return h(
     "div.fastmode-banner",
     null,
-    h("span.glyph", null, "⚡"),
     h(
       "div.banner-text",
       null,
-      h("span.banner-title", null, "Fast Mode Active (Potrace-class)"),
-      h("span.banner-desc", null, "Single-pass planar fit (~50ms). Boundary solve, curve DP & ring repair run in Quality mode."),
+      h("span.banner-title", null, "Fast mode"),
+      h("span.banner-desc", null, "Each shape is traced in one pass. Controls for the edge solve and curve fitting apply in Quality."),
     ),
     h(
       "button.reset",
@@ -1146,7 +1141,6 @@ function readout(store: Store, act: RailActions): HTMLElement {
         title: isFast ? "Fast vectorizer active. Click to switch to Quality mode." : "Quality vectorizer active. Click to switch to Fast mode.",
         onclick: () => act.changeSetting("mode", isFast ? "quality" : "fast"),
       },
-      h("span.engine-icon", null, isFast ? "⚡" : "💎"),
       h("span.engine-name", null, isFast ? "Fast" : "Quality"),
     ),
     r.seconds != null

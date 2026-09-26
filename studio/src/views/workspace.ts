@@ -84,32 +84,6 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
       ),
       h("span.muted", { style: { fontSize: "11.5px" } }, "hold ", h("kbd", null, "Space"), " to flick"),
       h("div.sep"),
-      h("span.eyebrow", null, "Engine"),
-      h(
-        "div.seg",
-        null,
-        h(
-          "button",
-          {
-            "aria-pressed": String(st.settings.mode === "quality"),
-            disabled: !on,
-            title: "Quality mode: Deep MDL analysis-by-synthesis, sub-pixel boundary solve and multi-model Bézier DP (~1-2s)",
-            onclick: () => act.changeSetting?.("mode", "quality"),
-          },
-          "💎 Quality",
-        ),
-        h(
-          "button",
-          {
-            "aria-pressed": String(st.settings.mode === "fast"),
-            disabled: !on,
-            title: "Fast mode: Single-pass Potrace-class polygonalization on the shared planar map (~30× faster, ~50ms)",
-            onclick: () => act.changeSetting?.("mode", "fast"),
-          },
-          "⚡ Fast",
-        ),
-      ),
-      h("div.sep"),
       h("span.eyebrow", null, "Show"),
       h(
         "div",
@@ -220,12 +194,12 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
       const last = st.liveStages[st.liveStages.length - 1];
       lead = last?.name ?? "starting";
       const elapsed = st.liveStages.reduce((a, x) => a + x.ms, 0) / 1000;
-      const engineTag = st.settings.mode === "fast" ? "⚡ fast" : "💎 quality";
+      const engineTag = st.settings.mode === "fast" ? "fast" : "quality";
       rest = `· ${engineTag} · ${plannedTracePx(st, st.tracingTier) ?? "—"} px · ${seconds(elapsed)} elapsed · Esc to cancel`;
       colour = "var(--state-stale)";
     } else if (r && st.result) {
       const draft = st.result.tier === "draft";
-      const engineTag = st.settings.mode === "fast" ? "⚡ fast" : "💎 quality";
+      const engineTag = st.settings.mode === "fast" ? "Fast" : "Quality";
       lead = draft ? `${engineTag} draft` : `${engineTag} in ${seconds(r.seconds)}`;
       rest = draft
         ? `· ${r.tracedPx} px · full trace queued`

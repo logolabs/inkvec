@@ -523,7 +523,7 @@ pub const CONTROLS: &[Control] = &[
             Stop { at: 0.0, label: "quality" },
             Stop { at: 1.0, label: "fast" },
         ],
-        help: "Quality uses deep analysis-by-synthesis, sub-pixel boundary solve and multi-model Bézier DP (max fidelity, ~1-2s). Fast uses single-pass Potrace-class planar tracing (~50ms, zero seams).",
+        help: "Quality places every edge to a fraction of a pixel and fits the fewest curves that match the image: the closest trace, and the default. Fast traces each shape in a single pass, many times quicker, for previews, batches and very large images.",
     },
     Control {
         group: "Detail",

@@ -1,6 +1,28 @@
 [
  {
   "group": "Detail",
+  "key": "mode",
+  "label": "Engine",
+  "unit": "",
+  "kind": "choice",
+  "min": 0.0,
+  "max": 1.0,
+  "curve": 1.0,
+  "decimals": 0,
+  "stops": [
+   {
+    "at": 0.0,
+    "label": "quality"
+   },
+   {
+    "at": 1.0,
+    "label": "fast"
+   }
+  ],
+  "help": "Quality places every edge to a fraction of a pixel and fits the fewest curves that match the image: the closest trace, and the default. Fast traces each shape in a single pass, many times quicker, for previews, batches and very large images."
+ },
+ {
+  "group": "Detail",
   "key": "precision",
   "label": "Precision",
   "unit": "px",

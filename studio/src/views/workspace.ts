@@ -11,6 +11,7 @@ import type { SampleInfo } from "../lib/ipc";
 import { count, de00, modKey, plannedTracePx, seconds, type StageState, type Store } from "../lib/state";
 import { createViewer, type Viewer } from "../components/viewer";
 import { DESKTOP_URL, WEB } from "../lib/platform";
+import { fetchBar, fetchPercent } from "../components/denoiserfetch";
 
 export interface WorkspaceActions {
   openFile(): void;
@@ -20,6 +21,8 @@ export interface WorkspaceActions {
   retryAt(px: number): void;
   jumpToWorst(): void;
   openDenoiser(): void;
+  /** Inkvec Studio Lite: try the denoiser's download again after it failed. */
+  retryDenoiser(): void;
   showUpdate(): void;
   /** The first-run introduction has been read. */
   markSeen(): void;
@@ -217,6 +220,7 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
             h("button.reset", { onclick: act.showUpdate }, "What changed"),
           )
         : null,
+      WEB ? denoiserChip(store, act) : null,
       // Fixed wording, used identically everywhere it appears.
       h("span.privacy", null, "Your image never leaves this computer."),
     );
@@ -224,7 +228,7 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
 
   store.on(["source", "view", "show", "zoom", "fitted", "detail", "svg", "bandsMissing"], renderTools);
   store.on(["source", "svg", "stageState", "result", "detail", "worstCorner", "prefs"], renderStage);
-  store.on(["tracing", "liveStages", "report", "result", "source", "update"], renderStrip);
+  store.on(["tracing", "liveStages", "report", "result", "source", "update", "denoiserFetch"], renderStrip);
 
   renderTools();
   renderStage();
@@ -251,6 +255,40 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
   });
 
   return { el, viewer, mount: (node) => stageBody.append(node) };
+}
+
+/**
+ * Inkvec Studio Lite: the denoiser's background download, small, in the status strip while
+ * it runs; gone once it is stored, and a note with a retry if it failed. The Denoiser control
+ * in the rail says more when the controls are waiting for it.
+ */
+function denoiserChip(store: Store, act: WorkspaceActions): HTMLElement | null {
+  const st = store.state;
+  const f = st.denoiserFetch;
+  if (!f || !st.caps?.denoiser.supported) return null;
+  const wanted = st.settings.cleanUpDamage !== "off";
+  const mb = (n: number) => Math.round(n / (1024 * 1024));
+  if (f.phase === "downloading") {
+    const pct = fetchPercent(f);
+    return h(
+      "span.fetchchip",
+      { "data-ctl": "denoiser-chip", title: "The denoiser downloads in the background, once; later visits read it from this browser" },
+      fetchBar(f),
+      f.total ? `Denoiser ${mb(f.got)} of ${mb(f.total)} MB · ${pct}%` : `Denoiser ${mb(f.got)} MB`,
+    );
+  }
+  if ((f.phase === "stored" || f.phase === "preparing") && wanted) {
+    return h("span.fetchchip", { "data-ctl": "denoiser-chip" }, fetchBar(f), "Preparing the denoiser…");
+  }
+  if (f.phase === "failed") {
+    return h(
+      "span.fetchchip.bad",
+      { "data-ctl": "denoiser-chip", title: f.message ?? "" },
+      "Denoiser download failed",
+      h("button.reset", { "data-ctl": "denoiser-chip-retry", onclick: act.retryDenoiser }, "Retry"),
+    );
+  }
+  return null;
 }
 
 /** The draft/final/re-tracing chip, beside the result it describes. */

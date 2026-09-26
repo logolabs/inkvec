@@ -15,9 +15,13 @@
 // (`denoiser_input` / `take_denoiser_output`). This module's whole job is to turn one
 // Float32Array into another.
 //
-// Two things are fetched the first time the denoiser runs, and cached in the browser
-// afterwards: ONNX Runtime Web (~28 MB with its WebGPU kernels) and the weights (~80 MB).
-// The image is not one of them — it never leaves the machine, the same as the tracer.
+// Two things are fetched before the denoiser can run, and kept in the browser's Cache Storage
+// afterwards: ONNX Runtime Web's WebAssembly (~26 MB; its two small JavaScript files ride the
+// HTTP cache, jsDelivr marks them immutable) and the weights (~76 MB). `prefetch` fetches
+// both ahead of need -- Inkvec Studio Lite starts it as soon as its engine has arrived -- and
+// `load` fetches whatever is still missing. One download at a time per file however many ask,
+// and one that breaks off resumes where it stopped (an HTTP range) when it is asked again.
+// The image is not among them: it never leaves the machine, the same as the tracer.
 
 // Pinned, both of them. A runtime that silently moved under the page would be a second,
 // untested set of kernels for a network whose agreement with the native one is a measured
@@ -26,6 +30,14 @@
 const ORT_VERSION = "1.30.0";
 const ORT_BASE = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VERSION}/dist/`;
 const ORT_ENTRY = `${ORT_BASE}ort.webgpu.min.mjs`;
+// What the WebGPU build loads at run time (1.30 builds its GPU and CPU kernels with
+// asyncify): the WebAssembly, handed over as bytes from the cache (`env.wasm.wasmBinary`),
+// and its loader, which only the HTTP cache keeps.
+const ORT_WASM = `${ORT_BASE}ort-wasm-simd-threaded.asyncify.wasm`;
+const ORT_LOADER = `${ORT_BASE}ort-wasm-simd-threaded.asyncify.mjs`;
+// Its size, for progress: jsDelivr compresses it, so its Content-Length is not this.
+const ORT_WASM_BYTES = 26781914;
+const ORT_CACHE = `inkvec-ort-${ORT_VERSION}`;
 
 // Where a verified copy of the weights lives between visits. Bump the suffix if the model
 // the page asks for ever changes, so an old entry cannot be served for a new URL.
@@ -49,12 +61,14 @@ export function activeBackend() {
 
 async function ort() {
   if (!ortPromise) {
-    ortPromise = import(/* @vite-ignore */ ORT_ENTRY).then((mod) => {
+    ortPromise = (async () => {
+      const [mod, binary] = await Promise.all([import(/* @vite-ignore */ ORT_ENTRY), runtimeBinary()]);
       const ort = mod.default ?? mod;
-      // The WebGPU build still loads WebAssembly: the GPU kernels live in a wasm module
-      // (`ort-wasm-simd-threaded.jsep.wasm`) and everything WebGPU has no kernel for falls
-      // back to CPU inside the same session.
+      // The WebGPU build still loads WebAssembly: the GPU kernels live in a wasm module and
+      // everything WebGPU has no kernel for falls back to CPU inside the same session. Its
+      // bytes come from the cache; its loader from the same folder, the same version.
       ort.env.wasm.wasmPaths = ORT_BASE;
+      if (binary) ort.env.wasm.wasmBinary = binary;
       // Threads need `SharedArrayBuffer`, which needs the cross-origin isolation the Space
       // asks for in its README. Where it is not granted this is one thread, and the CPU
       // fallback is correspondingly slower — the same trade the tracer makes next door.
@@ -63,7 +77,7 @@ async function ort() {
         : 1;
       ort.env.logLevel = "error";
       return ort;
-    });
+    })();
     ortPromise.catch(() => { ortPromise = null; });
   }
   return ortPromise;
@@ -71,6 +85,179 @@ async function ort() {
 
 const hex = (buf) =>
   [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+
+async function openCache(name) {
+  try {
+    return await caches.open(name);
+  } catch (e) {
+    // Private windows and pages with site data blocked have no Cache Storage. Downloading
+    // every time is worse than caching, and better than not working.
+    return null;
+  }
+}
+
+/** Bytes of one file already fetched in this page, by URL, while its download is incomplete. */
+const partial = new Map();
+/** Downloads in flight, by URL: a second caller joins the first instead of fetching again. */
+const inflight = new Map();
+let aborter = null;
+
+/**
+ * One file, streamed with progress. If an earlier attempt in this page broke off, the bytes it
+ * got are kept and only the rest is asked for (`Range`); a server that answers with the whole
+ * file instead simply starts it over.
+ */
+async function download(url, { onBytes, priority, knownBytes, signal }) {
+  const have = partial.get(url) ?? { chunks: [], received: 0 };
+  const headers = have.received > 0 ? { Range: `bytes=${have.received}-` } : undefined;
+  // `no-store`: the bytes go into Cache Storage below, and a second copy in the HTTP cache
+  // would only double what is written to disk while the page is starting.
+  const res = await fetch(url, { headers, priority, signal, cache: "no-store" });
+  if (!(res.ok || res.status === 206)) throw new Error(`HTTP ${res.status} for ${url.split("?")[0]}`);
+  if (res.status !== 206) {
+    have.chunks = [];
+    have.received = 0;
+  }
+  partial.set(url, have);
+  const length = Number(res.headers.get("content-length")) || 0;
+  const encoded = Boolean(res.headers.get("content-encoding"));
+  const total = knownBytes || (!encoded && length ? have.received + length : 0);
+  onBytes(have.received, total);
+  const reader = res.body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    have.chunks.push(value);
+    have.received += value.length;
+    onBytes(have.received, total);
+  }
+  const bytes = new Uint8Array(have.received);
+  let at = 0;
+  for (const c of have.chunks) { bytes.set(c, at); at += c.length; }
+  partial.delete(url);
+  return bytes;
+}
+
+/**
+ * What is still to be fetched of `files` ([{ url, cache, sha256?, knownBytes? }]), fetched
+ * together with one combined progress report, verified where a hash is known, and stored.
+ * Returns each file's bytes (from the cache or the network), in order.
+ */
+async function ensure(files, { onProgress, priority = "auto", read = true } = {}) {
+  const found = await Promise.all(
+    files.map(async (f) => {
+      const cache = await openCache(f.cache);
+      const hit = cache && (await cache.match(f.url));
+      return { ...f, cache, hit };
+    }),
+  );
+  const missing = found.filter((f) => !f.hit);
+  if (!missing.length) {
+    onProgress?.({ received: 0, total: 0, cached: true });
+    return read ? Promise.all(found.map(async (f) => new Uint8Array(await f.hit.arrayBuffer()))) : [];
+  }
+  const got = new Map();
+  const totals = new Map();
+  const report = () => {
+    let received = 0;
+    let total = 0;
+    for (const f of missing) {
+      received += got.get(f.url) ?? 0;
+      total += totals.get(f.url) || f.knownBytes || 0;
+    }
+    onProgress?.({ received, total: Math.max(total, received), cached: false });
+  };
+  if (!aborter) aborter = new AbortController();
+  const signal = aborter.signal;
+  const fetched = await Promise.all(
+    missing.map((f) => {
+      let job = inflight.get(f.url);
+      if (!job) {
+        job = (async () => {
+          const bytes = await download(f.url, {
+            priority,
+            knownBytes: f.knownBytes,
+            signal,
+            onBytes: (n, t) => {
+              got.set(f.url, n);
+              if (t) totals.set(f.url, t);
+              report();
+            },
+          });
+          if (f.sha256) {
+            const digest = hex(await crypto.subtle.digest("SHA-256", bytes));
+            if (digest !== f.sha256) {
+              throw new Error(`the denoiser weights failed verification: SHA-256 ${digest} is not ${f.sha256}`);
+            }
+          }
+          if (f.cache) {
+            // A failure here is a full disk or a quota, not a reason to refuse to denoise.
+            try {
+              const headers = { "content-type": "application/octet-stream", "content-length": String(bytes.length) };
+              await f.cache.put(f.url, new Response(bytes, { headers }));
+            } catch (e) { /* the next visit downloads again */ }
+          }
+          return bytes;
+        })();
+        inflight.set(f.url, job);
+        job.then(() => inflight.delete(f.url), () => inflight.delete(f.url));
+      } else {
+        // Joined a download another caller started: its progress is reported there, and
+        // here the file counts as arriving all at once.
+        totals.set(f.url, f.knownBytes || 0);
+        job.then((b) => { got.set(f.url, b.length); totals.set(f.url, b.length); report(); }, () => {});
+      }
+      return job;
+    }),
+  ).finally(() => {
+    if (!inflight.size) aborter = null;
+  });
+  if (!read) return [];
+  const out = [];
+  let k = 0;
+  for (const f of found) out.push(f.hit ? new Uint8Array(await f.hit.arrayBuffer()) : fetched[k++]);
+  return out;
+}
+
+const runtimeFile = () => ({ url: ORT_WASM, cache: ORT_CACHE, knownBytes: ORT_WASM_BYTES });
+const weightsFile = (url, sha256) => ({ url, cache: CACHE, sha256 });
+
+/** ONNX Runtime Web's WebAssembly, from the cache, or fetched and kept there. */
+async function runtimeBinary() {
+  const [bytes] = await ensure([runtimeFile()]);
+  return bytes;
+}
+
+/**
+ * Fetch everything the denoiser needs and keep it, without starting it: the weights
+ * (verified against `sha256`) and ONNX Runtime Web. `priority` is the fetch priority hint
+ * ("low" for a download nobody is waiting for yet). Resolves to `{ cached }`: whether
+ * everything was already here. Nothing is read back out of the cache to answer that.
+ */
+export async function prefetch({ url, sha256, onProgress, priority = "low" } = {}) {
+  let cached = true;
+  await ensure([weightsFile(url, sha256), runtimeFile()], {
+    priority,
+    read: false,
+    onProgress: (p) => {
+      if (!p.cached) cached = false;
+      onProgress?.(p);
+    },
+  });
+  // The small loaders as well, so a later visit's first run needs nothing from the network.
+  if (!cached) {
+    await Promise.all(
+      [ORT_ENTRY, ORT_LOADER].map((u) => fetch(u, { priority }).then((r) => r.arrayBuffer(), () => null)),
+    );
+  }
+  return { cached };
+}
+
+/** Stop any download in flight; what arrived is kept, and the next request resumes it. */
+export function abort() {
+  aborter?.abort();
+  aborter = null;
+}
 
 /**
  * The weights, from the cache if they are there and from Hugging Face if they are not,
@@ -82,51 +269,13 @@ const hex = (buf) =>
  * hash costs about a tenth of a second against the minute the download costs once.
  */
 async function weights(url, sha256, onProgress) {
-  let cache = null;
-  try {
-    cache = await caches.open(CACHE);
-  } catch (e) {
-    // Private windows and pages with site data blocked have no Cache Storage. Downloading
-    // every time is worse than caching, and better than not working.
-  }
-
-  let bytes = null;
-  const hit = cache && (await cache.match(url));
-  if (hit) {
-    bytes = new Uint8Array(await hit.arrayBuffer());
-    onProgress?.({ received: bytes.length, total: bytes.length, cached: true });
-  } else {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`the denoiser weights could not be fetched: HTTP ${res.status}`);
-    const total = Number(res.headers.get("content-length")) || 0;
-    const chunks = [];
-    let received = 0;
-    const reader = res.body.getReader();
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-      received += value.length;
-      onProgress?.({ received, total, cached: false });
-    }
-    bytes = new Uint8Array(received);
-    let at = 0;
-    for (const c of chunks) { bytes.set(c, at); at += c.length; }
-  }
-
+  // The runtime is fetched alongside, so the progress reported is for everything missing.
+  const [bytes] = await ensure([weightsFile(url, sha256), runtimeFile()], { onProgress, priority: "high" });
   const digest = hex(await crypto.subtle.digest("SHA-256", bytes));
   if (digest !== sha256) {
+    const cache = await openCache(CACHE);
     if (cache) await cache.delete(url);
-    throw new Error(
-      `the denoiser weights failed verification: SHA-256 ${digest} is not ${sha256}`,
-    );
-  }
-  if (cache && !hit) {
-    // A failure here is a full disk or a quota, not a reason to refuse to denoise.
-    try {
-      const headers = { "content-type": "application/octet-stream" };
-      await cache.put(url, new Response(bytes, { headers }));
-    } catch (e) { /* the next visit downloads again */ }
+    throw new Error(`the denoiser weights failed verification: SHA-256 ${digest} is not ${sha256}`);
   }
   return bytes;
 }
@@ -187,10 +336,12 @@ export async function load({ url, sha256, onProgress, onStage } = {}) {
   if (!sessionPromise) {
     source = { url, sha256 };
     sessionPromise = (async () => {
-      onStage?.("runtime");
-      const ortMod = await ort();
+      // The weights first: that fetches whatever is missing of both files, with progress,
+      // so the runtime after it comes out of the cache.
       onStage?.("weights");
       const model = await weights(url, sha256, onProgress);
+      onStage?.("runtime");
+      const ortMod = await ort();
       onStage?.("session");
       if (await realGpu()) {
         try {

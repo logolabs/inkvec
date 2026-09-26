@@ -121,50 +121,103 @@ export async function takeLaunch(): Promise<Launch> {
 
 // ---------------------------------------------------------------- the loading screen ---
 //
-// The desktop's splash window, shown as a card over the page (`#boot`, an iframe of
-// splash.html). The rule is the desktop's: the app takes the screen only once it is ready
-// AND the splash has played its animation to the end, which the splash reports from its own
-// `animationend` rather than a timer; either can come first.
+// The browser build's own loading screen (`#boot`, from web/boot/, inlined into the page so it
+// paints with the first frame). Not the desktop's splash card: the whole page, with real
+// progress on one bar -- the engine's bytes as they arrive, its start, the app's own first
+// steps -- and it leaves the moment the app is drawn, with a short fade. Nothing waits for an
+// animation to finish, and nothing is added to make it look busier than it is.
+//
+// The bar is one element scaled by one CSS transition; every step below only ever moves it
+// forward, and at most once a frame.
 
-let appIsReady = false;
-let animationDone = false;
+let shown = 0;
+let queued: { text: string; fraction: number; detail: string } | null = null;
+let frame = 0;
 let bootGone = false;
+let lastStep = performance.now();
 
-function bootFrame(): HTMLIFrameElement | null {
-  return document.querySelector<HTMLIFrameElement>("#boot iframe");
+const mb = (n: number) => (n / (1024 * 1024)).toFixed(1);
+
+function paintBoot(): void {
+  frame = 0;
+  const step = queued;
+  queued = null;
+  if (!step || bootGone) return;
+  shown = step.fraction;
+  const bar = document.getElementById("boot-bar");
+  const fillEl = document.getElementById("boot-fill");
+  const status = document.getElementById("boot-status");
+  const pct = document.getElementById("boot-pct");
+  const detail = document.getElementById("boot-detail");
+  const percent = Math.round(shown * 100);
+  if (fillEl) fillEl.style.transform = `scaleX(${shown})`;
+  bar?.setAttribute("aria-valuenow", String(percent));
+  if (status) status.textContent = step.text;
+  if (pct) pct.textContent = `${percent}%`;
+  if (detail) detail.textContent = step.detail;
 }
 
-function tell(message: Record<string, unknown>): void {
-  bootFrame()?.contentWindow?.postMessage(message, window.location.origin);
+/** One real step of start-up: what is happening, how far along (0 to 1), and a detail line. */
+export function bootStep(text: string, fraction: number, detail = ""): void {
+  if (bootGone) return;
+  lastStep = performance.now();
+  queued = { text, fraction: Math.max(shown, queued?.fraction ?? 0, Math.min(1, fraction)), detail };
+  if (!frame) frame = requestAnimationFrame(paintBoot);
 }
 
-/** One real step of start-up, for the splash's status line and bar. */
+/** The engine's WebAssembly arriving: most of the wait on a cold visit, so most of the bar. */
+export function bootEngineBytes(got: number, total: number): void {
+  const share = total > 0 ? Math.min(1, got / total) : 0;
+  bootStep("Downloading the engine", 0.04 + 0.8 * share, total > 0 ? `${mb(got)} of ${mb(total)} MB` : `${mb(got)} MB`);
+}
+
+/** The bytes are in; the module compiles and its thread pool starts. */
+export function bootEngineStarting(): void {
+  bootStep("Starting the engine", 0.88, "Compiling, and starting a thread per core");
+}
+
+/** The app's own start-up steps (`startup_progress`, 0 to 1), the last tenth of the bar. */
 export function bootProgress(text: string, progress: number): void {
-  tell({ type: "splash-status", text, progress });
+  bootStep(text, 0.9 + 0.1 * Math.min(1, Math.max(0, progress)));
 }
 
-function finishBoot(force: boolean): void {
-  if (bootGone || !(force || (appIsReady && animationDone))) return;
-  bootGone = true;
-  const boot = document.getElementById("boot");
-  tell({ type: "splash-done" });
-  boot?.classList.add("leaving");
-  window.setTimeout(() => boot?.remove(), 300);
-}
-
-/** The interface is drawn and its data loaded: hand over once the splash has played. */
+/** The interface is drawn and its data loaded: the loading screen fades out at once. */
 export function bootReady(): void {
-  appIsReady = true;
-  finishBoot(false);
-  // A splash that never reports (its page failed to load) does not hold the app.
-  window.setTimeout(() => finishBoot(true), 6000);
+  if (bootGone) return;
+  bootStep("Ready", 1);
+  // The frame that shows the full bar, then the fade; the app is already underneath.
+  requestAnimationFrame(() => {
+    bootGone = true;
+    const boot = document.getElementById("boot");
+    if (!boot) return;
+    boot.classList.add("leaving");
+    window.setTimeout(() => boot.remove(), 260);
+  });
 }
 
-window.addEventListener("message", (e: MessageEvent) => {
-  if (e.origin !== window.location.origin || (e.data as { type?: string })?.type !== "splash-animation-done") return;
-  animationDone = true;
-  finishBoot(false);
-});
+// The desktop imports this module too (its drop and launch helpers are shared), and has its
+// splash window instead: none of this runs there.
+if (__INKVEC_WEB__) {
+  // Tells the head script's failsafe (web/boot/boot.js) that the app's own script is running.
+  (window as { __inkvecBoot?: boolean }).__inkvecBoot = true;
+  bootStep("Loading the Studio", 0.03);
+
+  // A start-up that stops moving says so rather than showing a bar that never moves. It is
+  // still waiting (the app takes over the moment it is ready); only the words change.
+  const watchdog = window.setInterval(() => {
+    if (bootGone) {
+      window.clearInterval(watchdog);
+      return;
+    }
+    if (performance.now() - lastStep > 20_000) {
+      const detail = document.getElementById("boot-detail");
+      if (detail) {
+        detail.textContent =
+          "Still waiting for the network. On a slow connection the first visit can take a minute; later ones start from the browser's cache.";
+      }
+    }
+  }, 2_000);
+}
 
 // ---------------------------------------------------------------- inside Hugging Face ---
 

@@ -33,7 +33,7 @@ interface StudioWasm {
 }
 
 interface WasmModule {
-  default(init: { module_or_path: URL }): Promise<{ memory?: WebAssembly.Memory }>;
+  default(init: { module_or_path: URL | Response }): Promise<{ memory?: WebAssembly.Memory }>;
   Studio: new () => StudioWasm;
   initThreadPool?: (n: number) => Promise<void>;
   threads_available(): boolean;
@@ -51,6 +51,8 @@ type Init = {
   /** The page's current trace generation, shared so a retired trace skips its measurement. */
   generations: SharedArrayBuffer | null;
   denoiserPort: MessagePort | null;
+  /** Each module's size in bytes (`pkg`, `pkg-threads`), known at build time; see `withProgress`. */
+  wasmBytes: Record<string, number>;
 };
 
 type Job = { type: "job"; id: number; op: string; [k: string]: unknown };
@@ -66,14 +68,56 @@ let studio: StudioWasm | null = null;
 let generations: Int32Array | null = null;
 let denoiserPort: MessagePort | null = null;
 
+/**
+ * The module's bytes, counted as they arrive, for the loading screen's bar. The response
+ * is re-wrapped rather than read whole, so compilation still streams alongside the download.
+ * The total is the size the build recorded: a host that compresses the file sends a
+ * Content-Length for the compressed bytes, not for what the stream yields.
+ */
+function withProgress(res: Response, known: number | undefined): Response {
+  if (!res.ok || !res.body || typeof TransformStream === "undefined") return res;
+  const total = known || Number(res.headers.get("content-length")) || 0;
+  let got = 0;
+  let last = 0;
+  const counted = res.body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, ctl) {
+        got += chunk.byteLength;
+        const now = performance.now();
+        if (now - last > 40) {
+          last = now;
+          scope.postMessage({ type: "loading", got, total });
+        }
+        ctl.enqueue(chunk);
+      },
+      flush() {
+        scope.postMessage({ type: "loading", got, total: Math.max(total, got), done: true });
+      },
+    }),
+  );
+  return new Response(counted, { status: res.status, headers: { "content-type": "application/wasm" } });
+}
+
 async function init(m: Init): Promise<void> {
   const isolated = typeof crossOriginIsolated !== "undefined" && crossOriginIsolated;
   const dir = isolated ? "pkg-threads" : "pkg";
   const q = m.token ? `?v=${m.token}` : "";
   const js = new URL(`${dir}/inkvec_studio_wasm.js${q}`, m.base).href;
+  // The module's bytes are asked for at once, alongside its JavaScript, not after it.
+  const wasm = fetch(new URL(`${dir}/inkvec_studio_wasm_bg.wasm${q}`, m.base));
+  // Handled where it is awaited, below; this only keeps a failure there from being reported
+  // as unhandled while the JavaScript is still arriving.
+  wasm.catch(() => undefined);
   mod = (await import(/* @vite-ignore */ js)) as WasmModule;
-  const exports = await mod.default({ module_or_path: new URL(`${dir}/inkvec_studio_wasm_bg.wasm${q}`, m.base) });
+  const exports = await mod.default({ module_or_path: withProgress(await wasm, m.wasmBytes?.[dir]) });
   memory = exports.memory ?? null;
+  // Compiled and instantiated: the page can start what waits on the engine's bytes being in
+  // (the denoiser's download) while the thread pool starts.
+  scope.postMessage({
+    type: "instantiated",
+    denoiserUrl: mod.denoiser_model_url(),
+    denoiserSha256: mod.denoiser_model_sha256(),
+  });
   let threads = 1;
   let poolError: string | null = null;
   if (isolated && mod.initThreadPool) {

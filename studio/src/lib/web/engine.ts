@@ -24,7 +24,8 @@
 
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
-import { bootProgress, bootReady } from "./chrome";
+import type { DenoiserFetch } from "../ipc";
+import { bootEngineBytes, bootEngineStarting, bootProgress, bootReady } from "./chrome";
 import { download } from "./files";
 
 /** -1 is reserved for putting the image back into a fresh worker, ahead of everything. */
@@ -46,6 +47,10 @@ interface Job {
 const PREFS_KEY = "inkvec-studio-lite:prefs";
 /** Where `denoise.js` keeps the verified weights (its `CACHE`). */
 const DENOISER_CACHE = "inkvec-denoiser-v1";
+/** Where `denoise.js` keeps ONNX Runtime Web's WebAssembly (its `ORT_CACHE`), for a removal. */
+const RUNTIME_CACHE_PREFIX = "inkvec-ort-";
+/** A background download that failed is tried once more, this long after. */
+const PREFETCH_RETRY_MS = 30_000;
 const UNAVAILABLE = "Not available in the browser. Inkvec Studio, the desktop app, has it.";
 
 /** The samples the first-run screen offers, as the desktop's `list_samples` names them. */
@@ -78,10 +83,21 @@ class WebBackend {
 
   private denoiser: Worker | null = null;
   private denoiserPort: MessagePort | null = null;
+  /** A download the user asked for (Settings, the dialog), which answers with `denoiser:done`. */
   private downloading = false;
+  /** Where the denoiser's download and start stand; see `DenoiserFetch`. */
+  private fetchState: DenoiserFetch = { phase: "idle", got: 0, total: null };
+  /** A trace ran without the denoiser because it was not ready, and wants it when it is. */
+  private wanted = false;
+  /** The download was cancelled: its abort is not a failure to report or retry. */
+  private cancelled = false;
+  /** The one automatic retry of a background download has been spent. */
+  private retried = false;
 
   /** The worker's thread count and isolation, once it has loaded; for About and the tests. */
   info: { threads: number; isolated: boolean; version: string } | null = null;
+  /** How many times a trace has run the denoiser network in this page; for the tests. */
+  denoiserRuns = 0;
   /** The WebAssembly memory after the last job and how long the worker spent on it. */
   last: { op: string; ms: number; mem: number | null } | null = null;
 
@@ -113,7 +129,17 @@ class WebBackend {
     this.ready = new Promise((resolve, reject) => {
       worker.onmessage = (e: MessageEvent) => {
         const m = e.data;
-        if (m.type === "ready") {
+        if (m.type === "loading") {
+          bootEngineBytes(m.got, m.total);
+          if (m.done) bootEngineStarting();
+        } else if (m.type === "instantiated") {
+          // The engine's bytes are in: the denoiser's download starts now, in the background,
+          // rather than competing with them for the connection (see `prefetchDenoiser`).
+          if (isolated) {
+            this.startDenoiser(m.denoiserUrl, m.denoiserSha256);
+            this.prefetchDenoiser();
+          }
+        } else if (m.type === "ready") {
           this.info = { threads: m.threads, isolated: m.isolated, version: m.version };
           if (m.poolError) console.warn("inkvec: thread pool did not start:", m.poolError);
           if (isolated) this.startDenoiser(m.denoiserUrl, m.denoiserSha256);
@@ -140,6 +166,7 @@ class WebBackend {
         token: __INKVEC_WASM_TOKEN__,
         generations: this.shared ? this.shared.buffer : null,
         denoiserPort: engineEnd,
+        wasmBytes: __INKVEC_WASM_BYTES__,
       },
       transfer,
     );
@@ -282,9 +309,10 @@ class WebBackend {
         return null;
 
       case "start_trace": {
-        const request = a.request as { settings: Record<string, unknown>; tier: string };
+        const asked = a.request as { settings: Record<string, unknown>; tier: string };
         const generation = this.bump();
-        this.rememberTrace(request.settings);
+        this.rememberTrace(asked.settings);
+        const request = this.withoutUnreadyDenoiser(asked);
         const p = await this.loadPrefs();
         this.enqueue(
           "trace",
@@ -308,7 +336,7 @@ class WebBackend {
         this.queue = this.queue.filter((j) => (j.kind === "trace" ? (j.resolve(null), false) : true));
         return null;
       case "start_preview": {
-        const request = a.request;
+        const request = this.withoutUnreadyDenoiser(a.request as { settings: Record<string, unknown> });
         const generation = ++this.previewGeneration;
         const p = await this.loadPrefs();
         this.enqueue(
@@ -385,19 +413,28 @@ class WebBackend {
       case "denoiser_download":
         return this.downloadDenoiser();
       case "denoiser_cancel":
-        // The fetch runs to its end inside ONNX Runtime's loader and lands in the cache;
-        // what cancelling does is stop waiting for it, as the desktop's cancel does.
+        // A real cancel: the fetch stops, what arrived is kept for a resume, and no retry
+        // follows. A trace that was waiting for the denoiser stays traced without it.
+        if (this.fetchState.phase === "downloading") {
+          this.cancelled = true;
+          this.wanted = false;
+          this.denoiser?.postMessage({ type: "abort" });
+        }
         if (this.downloading) {
           this.downloading = false;
-          this.emit("denoiser:done", { ok: false, message: "Cancelled.", status: await this.denoiserStatus() });
+          this.emit("denoiser:done", { ok: false, message: "cancelled", status: await this.denoiserStatus() });
         }
         return null;
       case "denoiser_remove":
         try {
           await caches.delete(DENOISER_CACHE);
+          for (const name of await caches.keys()) if (name.startsWith(RUNTIME_CACHE_PREFIX)) await caches.delete(name);
         } catch {
           // No Cache Storage (a private window): there was nothing kept to remove.
         }
+        this.denoiser?.postMessage({ type: "forget" });
+        // A session already started keeps working in this page; only the stored copy is gone.
+        if (this.fetchState.phase !== "ready") this.setFetch({ phase: "idle", got: 0, total: null });
         return this.denoiserStatus();
 
       case "load_prefs":
@@ -500,19 +537,119 @@ class WebBackend {
     if (this.denoiser || !this.denoiserPort) return;
     const w = new Worker(new URL("./denoiser.worker.ts", import.meta.url), { type: "module", name: "inkvec-denoiser" });
     this.denoiser = w;
-    w.onmessage = async (e: MessageEvent) => {
-      const m = e.data;
-      if (!this.downloading) return;
-      if (m.type === "progress") this.emit("denoiser:progress", { got: m.got, total: m.total });
-      if (m.type === "done") {
-        this.downloading = false;
-        this.emit("denoiser:done", { ok: m.ok, message: m.message, status: await this.denoiserStatus() });
-      }
-    };
+    w.onmessage = (e: MessageEvent) => void this.denoiserMessage(e.data);
     w.postMessage(
       { type: "init", base: this.base(), token: __INKVEC_WASM_TOKEN__, url, sha256, port: this.denoiserPort },
       [this.denoiserPort],
     );
+  }
+
+  private setFetch(patch: Partial<DenoiserFetch>): void {
+    this.fetchState = { ...this.fetchState, retrace: undefined, ...patch };
+    this.emit("denoiser:fetch", this.fetchState);
+  }
+
+  /** Where the denoiser's download and start stand, for the interface and the tests. */
+  get denoiserFetch(): DenoiserFetch {
+    return this.fetchState;
+  }
+
+  private async denoiserMessage(m: {
+    type: string;
+    got?: number;
+    total?: number | null;
+    message?: string;
+    during?: string;
+  }): Promise<void> {
+    const phase = this.fetchState.phase;
+    switch (m.type) {
+      case "progress":
+        if (phase === "preparing" || phase === "ready") return;
+        this.setFetch({ phase: "downloading", got: m.got ?? 0, total: m.total ?? null, message: undefined, saveData: undefined });
+        if (this.downloading) this.emit("denoiser:progress", { got: m.got, total: m.total });
+        return;
+      case "stored": {
+        if (phase === "preparing" || phase === "ready") return;
+        const size = this.fetchState.total ?? this.fetchState.got;
+        this.setFetch({ phase: "stored", got: size, total: size, message: undefined });
+        if (this.downloading) {
+          this.downloading = false;
+          this.emit("denoiser:done", { ok: true, status: await this.denoiserStatus() });
+        }
+        return;
+      }
+      case "preparing":
+        this.setFetch({ phase: "preparing", message: undefined });
+        return;
+      case "ran":
+        this.denoiserRuns++;
+        return;
+      case "loaded": {
+        const retrace = this.wanted;
+        this.wanted = false;
+        this.setFetch({ phase: "ready", message: undefined, retrace });
+        return;
+      }
+      case "failed": {
+        const text = m.message ?? "the download did not finish";
+        if (this.cancelled || /abort/i.test(text)) {
+          this.cancelled = false;
+          this.setFetch({ phase: "idle", message: undefined });
+          return;
+        }
+        this.setFetch({ phase: "failed", message: text });
+        if (this.downloading) {
+          this.downloading = false;
+          this.emit("denoiser:done", { ok: false, message: text, status: await this.denoiserStatus() });
+        }
+        // A download that broke off (a dropped connection, a tab put to sleep) is tried once
+        // more, later, from where it stopped; a second failure waits for the Retry button.
+        if (m.during === "download" && !this.retried) {
+          this.retried = true;
+          window.setTimeout(() => {
+            if (this.fetchState.phase === "failed") this.denoiser?.postMessage({ type: this.wanted ? "prepare" : "prefetch" });
+          }, PREFETCH_RETRY_MS);
+        }
+        return;
+      }
+    }
+  }
+
+  /**
+   * Start the denoiser's download in the background, once the engine's own bytes are in.
+   *
+   * Not before: on a real connection the two would share it, and the engine is what the
+   * loading screen is waiting for. Not later either: the ~100 MB is most of a minute on a
+   * home connection, and whoever turns the denoiser on should find it there. It is a
+   * low-priority fetch in a worker, one per file, kept in Cache Storage (see `denoise.js`),
+   * so a later visit reads it from there and fetches nothing.
+   *
+   * Skipped when the browser asks to save data (`navigator.connection.saveData`: Chrome's
+   * and Edge's data saver, or a metered-connection setting): turning the denoiser on then
+   * downloads it, with progress, and never before.
+   */
+  private prefetchDenoiser(): void {
+    const connection = (navigator as Navigator & { connection?: { saveData?: boolean } }).connection;
+    if (connection?.saveData) {
+      this.setFetch({ phase: "idle", saveData: true });
+      return;
+    }
+    this.denoiser?.postMessage({ type: "prefetch" });
+  }
+
+  /**
+   * A trace that asks for the denoiser before it is ready is traced without it, at once,
+   * rather than holding the one engine worker for a download: the denoiser is fetched and
+   * started, the interface shows how far that has got, and the trace runs again with it
+   * when it is ready (`retrace`). Once it is ready, requests go through as they are.
+   */
+  private withoutUnreadyDenoiser<T extends { settings: Record<string, unknown> }>(request: T): T {
+    const mode = request.settings?.cleanUpDamage;
+    if (!mode || mode === "off" || !this.denoiser || this.fetchState.phase === "ready") return request;
+    this.wanted = true;
+    this.cancelled = false;
+    this.denoiser.postMessage({ type: "prepare" });
+    return { ...request, settings: { ...request.settings, cleanUpDamage: "off" } };
   }
 
   private async denoiserStatus() {
@@ -543,7 +680,10 @@ class WebBackend {
     await this.whenReady();
     if (!this.denoiser) throw new Error("The denoiser needs a cross-origin isolated page.");
     this.downloading = true;
-    this.denoiser.postMessage({ type: "download" });
+    this.cancelled = false;
+    // Joins the background download if it is running, and resumes it if it broke off. A
+    // trace that is waiting for the denoiser also has it started once it is in.
+    this.denoiser.postMessage({ type: this.wanted ? "prepare" : "download" });
     return null;
   }
 }

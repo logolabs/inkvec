@@ -17,6 +17,7 @@ import { WEB } from "../lib/platform";
 import { closeOverlay, modal, openModal, tip, toast } from "./overlays";
 import { paletteCard, wirePaletteHover, type PaletteActions } from "./palette";
 import { autoChose, hasAutoNews, type AutoChoseActions } from "./autochose";
+import { fetchBar, fetchLine, sentence } from "./denoiserfetch";
 
 export interface RailActions extends PaletteActions, AutoChoseActions {
   setPreset(id: string): void;
@@ -34,6 +35,8 @@ export interface RailActions extends PaletteActions, AutoChoseActions {
   jumpToWorst(): void;
   /** Open the denoiser's download dialog. */
   openDenoiser(): void;
+  /** Inkvec Studio Lite: try the denoiser's download again after it failed. */
+  retryDenoiser(): void;
   /** Close the "Auto chose" note for this image. */
   hideAutoNote(): void;
   /** Open the Custom wizard over the rail. */
@@ -121,6 +124,8 @@ export function createRail(store: Store, act: RailActions): HTMLElement {
   // running trace changes, so a trace's progress must not rebuild it: a slider that is
   // replaced under the pointer cannot be dragged.
   store.on(["caps", "prefs", "preset", "settings", "railTab", "groupsOpen"], renderAll);
+  // The browser's denoiser download moves a note under the Denoiser buttons, nothing else.
+  store.on(["denoiserFetch"], renderModes);
   store.on(
     [
       "tracing",
@@ -175,7 +180,12 @@ function modesBlock(store: Store, act: RailActions): HTMLElement[] {
   const den = st.caps?.denoiser;
   const mode = st.settings.cleanUpDamage;
   const supported = den?.supported ?? false;
-  const missing = supported && den !== undefined && !den.installed && mode !== "off";
+  // In a browser the denoiser downloads by itself (in the background, or as soon as it is
+  // turned on) and a trace waits for nothing: this says how far that has got, under the
+  // buttons that asked for it. The desktop's download is one the user starts.
+  const dl = WEB && supported && mode !== "off" && st.denoiserFetch?.phase !== "ready" ? st.denoiserFetch : undefined;
+  const fetching = dl !== undefined;
+  const missing = !fetching && supported && den !== undefined && !den.installed && mode !== "off";
 
   const captions = { off: "pixels as they are", auto: "only if damaged", on: "always" } as const;
   const denoiser = h(
@@ -185,7 +195,9 @@ function modesBlock(store: Store, act: RailActions): HTMLElement[] {
       "div.modehead",
       null,
       tip(h("span.modetitle", { tabindex: "0" }, "Denoiser"), help("cleanUpDamage")),
-      missing
+      fetching && dl?.phase === "failed"
+        ? h("button.reset", { "data-ctl": "denoiser-retry", onclick: act.retryDenoiser }, "Retry")
+        : missing
         ? h("button.reset", { onclick: act.openDenoiser, title: "It runs on this computer; nothing is uploaded" }, "Download it")
         : h(
             "span.modestate",
@@ -211,6 +223,15 @@ function modesBlock(store: Store, act: RailActions): HTMLElement[] {
         ),
       ),
     ),
+    fetching
+      ? h(
+          "div.fetchnote",
+          { "data-ctl": "denoiser-progress", role: "status" },
+          fetchBar(dl ?? null),
+          h("span.fetchline", null, dl?.phase === "failed" ? `${fetchLine(dl, true)}: ${dl.message ?? "the connection dropped"}.` : sentence(fetchLine(dl ?? null, true) ?? "")),
+          h("span.muted", null, dl?.phase === "failed" ? "The trace shown is without it." : "Shown without it until then; it traces again by itself."),
+        )
+      : null,
   );
 
   const editable = st.settings.editability;

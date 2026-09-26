@@ -124,6 +124,30 @@ export interface DenoiserStatus {
   sha256: string;
 }
 
+/**
+ * Inkvec Studio Lite only: where the denoiser's own download and start stand. The browser
+ * fetches it in the background when the page opens (unless the browser asks to save data),
+ * and a trace that wants it runs without it until it is `ready`, then again with it. The
+ * desktop never sends this; its denoiser is a download the user starts, reported by
+ * `denoiser:progress` and `denoiser:done`.
+ */
+export interface DenoiserFetch {
+  /**
+   * `idle`: not fetched and not being fetched (skipped to save data, cancelled, or not
+   * started yet); `downloading`; `stored`: in this browser's storage, not started;
+   * `preparing`: the runtime and session starting; `ready`; `failed`.
+   */
+  phase: "idle" | "downloading" | "stored" | "preparing" | "ready" | "failed";
+  got: number;
+  total: number | null;
+  /** Why it failed, in words. */
+  message?: string;
+  /** The background download was skipped because the browser asked to save data. */
+  saveData?: boolean;
+  /** A trace ran without the denoiser while it was not ready: trace again now that it is. */
+  retrace?: boolean;
+}
+
 export interface Capabilities {
   version: string;
   engineVersion: string;
@@ -585,6 +609,8 @@ export const events = {
     listen<{ ok: boolean; message?: string; status: DenoiserStatus }>("denoiser:done", (e) =>
       fn(e.payload),
     ),
+  /** Inkvec Studio Lite only (see `DenoiserFetch`); the desktop never sends it. */
+  denoiserFetch: (fn: (e: DenoiserFetch) => void) => listen<DenoiserFetch>("denoiser:fetch", (e) => fn(e.payload)),
 };
 
 export type { UnlistenFn };

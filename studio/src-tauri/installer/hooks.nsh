@@ -57,6 +57,14 @@
 !endif
 !define INKVEC_UNINSTALL "${INKVEC_SOFTWARE}\Microsoft\Windows\CurrentVersion\Uninstall"
 !define INKVEC_OLD_UNINSTKEY "${INKVEC_UNINSTALL}\${INKVEC_OLD_PRODUCT}"
+; The current product name, defaulted if this file is included before the template defines it.
+!ifdef PRODUCTNAME
+  !define INKVEC_PRODUCT "${PRODUCTNAME}"
+!else
+  !define INKVEC_PRODUCT "Inkvec Studio"
+!endif
+!define INKVEC_PREFS_KEY "${INKVEC_SOFTWARE}\LogoLabs\${INKVEC_PRODUCT}"
+
 ; Where Settings puts the two integrations; keep in step with `src/integration.rs`.
 !define INKVEC_CLASSES "${INKVEC_SOFTWARE}\Classes\SystemFileAssociations"
 !define INKVEC_VERB "shell\InkvecStudio"
@@ -87,11 +95,39 @@ Var InkvecHadCli
 !macroend
 
 ; What an old uninstaller is about to take away, so POSTINSTALL can put it back.
+; Also stashes to the app's registry key so the state survives across uninstaller execution.
 !macro INKVEC_NOTE_INTEGRATIONS
   ReadRegStr $0 HKCU "${INKVEC_CLASSES}\.png\${INKVEC_VERB}\command" ""
-  ${IfThen} $0 != "" ${|} StrCpy $InkvecHadMenu 1 ${|}
-  ${IfThen} ${FileExists} "${INKVEC_CLI}" ${|} StrCpy $InkvecHadCli 1 ${|}
+  ${If} $0 != ""
+    StrCpy $InkvecHadMenu 1
+    WriteRegDWORD HKCU "${INKVEC_PREFS_KEY}" "UpgradeHadMenu" 1
+  ${EndIf}
+  ${If} ${FileExists} "${INKVEC_CLI}"
+    StrCpy $InkvecHadCli 1
+    WriteRegDWORD HKCU "${INKVEC_PREFS_KEY}" "UpgradeHadCli" 1
+  ${EndIf}
 !macroend
+
+; In a GUI or passive installer, note integrations before Tauri's reinstall page can
+; run the previous version's uninstaller, and mark an upgrade in progress.
+!ifdef MUI_INCLUDED
+  !define MUI_CUSTOMFUNCTION_GUIINIT InkvecGuiInit
+  !define MUI_CUSTOMFUNCTION_ABORT InkvecGuiAbort
+
+  Function InkvecGuiInit
+    Push $0
+    !insertmacro INKVEC_NOTE_INTEGRATIONS
+    WriteRegDWORD HKCU "${INKVEC_PREFS_KEY}" "UpgradeInProgress" 1
+    Pop $0
+  FunctionEnd
+
+  Function InkvecGuiAbort
+    DeleteRegValue HKCU "${INKVEC_PREFS_KEY}" "UpgradeInProgress"
+    DeleteRegValue HKCU "${INKVEC_PREFS_KEY}" "UpgradeHadMenu"
+    DeleteRegValue HKCU "${INKVEC_PREFS_KEY}" "UpgradeHadCli"
+  FunctionEnd
+!endif
+
 
 ; Remove an old .exe install registered under ROOT (HKCU, or the machine hive), if there is
 ; one. RUN is WAIT for a per-user install (no elevation, so it runs silently) and ELEVATED
@@ -204,6 +240,8 @@ Var InkvecHadCli
   Push $6
   StrCpy $InkvecHadMenu 0
   StrCpy $InkvecHadCli 0
+  ; In a silent or direct install, note integrations before any old uninstallers run.
+  !insertmacro INKVEC_NOTE_INTEGRATIONS
   !insertmacro INKVEC_REMOVE_OLD HKCU WAIT
   !insertmacro INKVEC_REMOVE_OLD ${INKVEC_MACHINE} ELEVATED
   !insertmacro INKVEC_REMOVE_OLD_MSI
@@ -220,6 +258,17 @@ Var InkvecHadCli
   Push $0
   Push $1
   Push $2
+  ; Read any stashed upgrade state from registry (written by GUI init or PREUNINSTALL)
+  ReadRegDWORD $0 HKCU "${INKVEC_PREFS_KEY}" "UpgradeHadMenu"
+  ${IfThen} $0 = 1 ${|} StrCpy $InkvecHadMenu 1 ${|}
+  DeleteRegValue HKCU "${INKVEC_PREFS_KEY}" "UpgradeHadMenu"
+
+  ReadRegDWORD $0 HKCU "${INKVEC_PREFS_KEY}" "UpgradeHadCli"
+  ${IfThen} $0 = 1 ${|} StrCpy $InkvecHadCli 1 ${|}
+  DeleteRegValue HKCU "${INKVEC_PREFS_KEY}" "UpgradeHadCli"
+
+  DeleteRegValue HKCU "${INKVEC_PREFS_KEY}" "UpgradeInProgress"
+
   ; The context menu: back if an old uninstaller removed it, and re-pointed if it still
   ; names a program that is no longer there (an old .msi's). "C:\...\app.exe" "%1".
   ReadRegStr $0 HKCU "${INKVEC_CLASSES}\.png\${INKVEC_VERB}\command" ""
@@ -234,6 +283,8 @@ Var InkvecHadCli
     ${IfThen} $InkvecHadMenu = 1 ${|} StrCpy $2 "write" ${|}
   ${ElseIfNot} ${FileExists} "$1"
     StrCpy $2 "write"
+  ${ElseIf} $InkvecHadMenu = 1
+    StrCpy $2 "write"
   ${EndIf}
   ${If} $2 == "write"
     !insertmacro INKVEC_WRITE_VERB ".png"
@@ -243,9 +294,9 @@ Var InkvecHadCli
     !insertmacro INKVEC_WRITE_VERB ".bmp"
     !insertmacro INKVEC_WRITE_VERB ".tif"
   ${EndIf}
-  ; The command: a copy of this version's, if an old uninstaller took the one there was.
+  ; The command: a copy of this version's, if an old uninstaller took the one there was,
+  ; or if the user had it and it needs updating to this version's binary.
   ${If} $InkvecHadCli = 1
-  ${AndIfNot} ${FileExists} "${INKVEC_CLI}"
   ${AndIf} ${FileExists} "$INSTDIR\inkvec.exe"
     CreateDirectory "${INKVEC_CLI_DIR}"
     CopyFiles /SILENT "$INSTDIR\inkvec.exe" "${INKVEC_CLI}"
@@ -256,18 +307,32 @@ Var InkvecHadCli
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
-  ; The per-user "Vectorize with Inkvec" verb, if Settings ever added it. Written under
-  ; SystemFileAssociations so it offers an action on these types without claiming to be
-  ; their default handler; keep this list in step with `src/integration.rs`.
-  DeleteRegKey HKCU "${INKVEC_CLASSES}\.png\${INKVEC_VERB}"
-  DeleteRegKey HKCU "${INKVEC_CLASSES}\.jpg\${INKVEC_VERB}"
-  DeleteRegKey HKCU "${INKVEC_CLASSES}\.jpeg\${INKVEC_VERB}"
-  DeleteRegKey HKCU "${INKVEC_CLASSES}\.webp\${INKVEC_VERB}"
-  DeleteRegKey HKCU "${INKVEC_CLASSES}\.bmp\${INKVEC_VERB}"
-  DeleteRegKey HKCU "${INKVEC_CLASSES}\.tif\${INKVEC_VERB}"
+  Push $0
+  ; Check if an installer marked an upgrade in progress.
+  ReadRegDWORD $0 HKCU "${INKVEC_PREFS_KEY}" "UpgradeInProgress"
+  ${If} $0 = 1
+    ; In an in-place upgrade, preserve the user's integrations. Stash their state
+    ; so POSTINSTALL knows they were enabled even if an uninstaller cleans files.
+    !insertmacro INKVEC_NOTE_INTEGRATIONS
+  ${Else}
+    ; The per-user "Vectorize with Inkvec" verb, if Settings ever added it. Written under
+    ; SystemFileAssociations so it offers an action on these types without claiming to be
+    ; their default handler; keep this list in step with `src/integration.rs`.
+    DeleteRegKey HKCU "${INKVEC_CLASSES}\.png\${INKVEC_VERB}"
+    DeleteRegKey HKCU "${INKVEC_CLASSES}\.jpg\${INKVEC_VERB}"
+    DeleteRegKey HKCU "${INKVEC_CLASSES}\.jpeg\${INKVEC_VERB}"
+    DeleteRegKey HKCU "${INKVEC_CLASSES}\.webp\${INKVEC_VERB}"
+    DeleteRegKey HKCU "${INKVEC_CLASSES}\.bmp\${INKVEC_VERB}"
+    DeleteRegKey HKCU "${INKVEC_CLASSES}\.tif\${INKVEC_VERB}"
 
-  ; The `inkvec` command, if Settings ever put it on the PATH.
-  Delete "${INKVEC_CLI}"
+    ; The `inkvec` command, if Settings ever put it on the PATH.
+    Delete "${INKVEC_CLI}"
+
+    DeleteRegValue HKCU "${INKVEC_PREFS_KEY}" "UpgradeHadMenu"
+    DeleteRegValue HKCU "${INKVEC_PREFS_KEY}" "UpgradeHadCli"
+    DeleteRegValue HKCU "${INKVEC_PREFS_KEY}" "UpgradeInProgress"
+  ${EndIf}
+  Pop $0
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL

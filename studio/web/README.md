@@ -54,4 +54,5 @@ one with a rayon thread pool, which needs the cross-origin isolation the headers
 and a single-threaded one for anywhere that isolation is not granted. Same code, same output.
 
 Source, benchmarks and licences: <https://github.com/logolabs/inkvec>. Apache-2.0. Made by
-LogoLabs.
+LogoLabs. Trademarks and brand logos depicted in benchmark comparisons are the property of
+their respective owners and used solely for nominative benchmarking demonstration.

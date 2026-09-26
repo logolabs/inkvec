@@ -46,6 +46,16 @@ are test data, not part of any build. Each keeps its upstream licence:
 
 Upstream licence terms for each family are linked in the table above.
 
+## Trademark Notice & Nominative Fair Use
+
+All third-party trademarks, registered trademarks, service marks, logos, brand names, and company names appearing in this repository, in the benchmark test corpora (such as `bench/data` and `simple-icons`), in benchmark results data, in the Inkvec Studio desktop showcase bundle, and on the Inkvec web presentation page / Hugging Face Space are the property of their respective owners.
+
+Their inclusion and depiction in Inkvec are solely for nominative, non-commercial, educational benchmarking, research, and comparative algorithmic vectorization demonstration (specifically evaluating curve accuracy, geometric fidelity, and node efficiency across competing vectorization engines on real-world graphic art).
+
+Use of these marks does not imply, indicate, or constitute any affiliation with, connection to, sponsorship of, or endorsement by their respective trademark holders. Inkvec, LogoLabs, and its contributors make no claim of ownership or proprietary rights to any third-party trademarks depicted.
+
+If any trademark owner objects to the nominative benchmarking of their mark in this open-source project, please open an issue at https://github.com/logolabs/inkvec or contact info@logolabs.org for prompt removal from sample showcases and benchmark data.
+
 ## Rust crates (516)
 
 `builds` is the smallest build that compiles the crate: `default` (every workspace build),

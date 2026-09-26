@@ -386,6 +386,7 @@ def main() -> int:
         "best_de_wins": wins_of(bench_rows),
         "brands": block(brand_rows, len(brand_gallery)),
         "corpus": block(corpus_rows, len(corpus_gallery)),
+        "trademark_notice": "All third-party trademarks, logos, and brand names are property of their respective owners, used solely for nominative benchmarking demonstration.",
         "sets": [
             {"id": "brands", "label": "Brand logos", "cases": brand_gallery},
             {"id": "bench", "label": "Benchmark cases", "cases": bench_gallery},

@@ -546,6 +546,11 @@ function about(store: Store, act: ScreenActions): HTMLElement {
             notices,
           ),
           h("span.muted", { style: { fontSize: "12px" } }, WEB ? "Your image never leaves this browser." : "Your image never leaves this computer."),
+          h(
+            "p.muted",
+            { style: { margin: "0", fontSize: "11px", lineHeight: "1.5", color: "var(--faint)" } },
+            "Trademarks, brand marks, and logos depicted in showcase comparisons are property of their respective owners, used solely for nominative, educational benchmarking demonstration.",
+          ),
         ),
       ),
     ),

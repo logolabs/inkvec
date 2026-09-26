@@ -289,9 +289,18 @@ pub(crate) fn fit_mid_stops(
         };
         let mut best = (f64::NAN, f64::MAX);
         let step = (k_hi - k_lo) / KNOT_GRID as f64;
-        for g in 0..=KNOT_GRID {
+        // The grid's fits are independent, and on a large gradient region they are the
+        // stage's longest serial stretch: fit them side by side, then pick in grid order
+        // exactly as the one-at-a-time loop did.
+        let grid: Vec<f64> = {
+            use rayon::prelude::*;
+            (0..=KNOT_GRID)
+                .into_par_iter()
+                .map(|g| resid_with(k_lo + g as f64 * step))
+                .collect()
+        };
+        for (g, &r) in grid.iter().enumerate() {
             let k = k_lo + g as f64 * step;
-            let r = resid_with(k);
             if r < best.1 {
                 best = (k, r);
             }

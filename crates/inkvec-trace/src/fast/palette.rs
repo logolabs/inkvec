@@ -18,9 +18,8 @@
 //! clear ground are as far apart as white and black. For an opaque image that is plain OKLab.
 //!
 //! Labelling is then per bin, not per pixel: each bin maps to its nearest ink once. A pixel
-//! whose bin is not itself an ink colour (a blend) is given the nearest of the inks its
-//! flat-coloured neighbours carry, so a rim between black and white goes to black or white,
-//! never to a grey ink that happens to sit between them in colour.
+//! whose bin is not itself an ink colour (a blend) takes the nearest of its own nearest ink
+//! and the inks its ink-coloured neighbours carry.
 
 use crate::color::{rgb_to_oklab, Palette};
 use crate::native::{over_black, snap_alpha, Ink2, OPAQUE};
@@ -278,7 +277,10 @@ pub(crate) fn palette_and_labels(
                     continue;
                 }
                 let c = bin_point[keys[p] as usize];
-                let mut best = (own, f32::INFINITY);
+                // Its own nearest ink stays a candidate: a thin stroke has no flat pixel
+                // anywhere near, and its partly covered pixels must not all go to the
+                // ground beside it. A rim that lands on a third ink is `absorb_slivers`' job.
+                let mut best = (own, points[own as usize].dist(c));
                 for yy in y.saturating_sub(1)..(y + 2).min(h) {
                     for xx in x.saturating_sub(1)..(x + 2).min(w) {
                         let (l, ok) = sure(yy * w + xx);

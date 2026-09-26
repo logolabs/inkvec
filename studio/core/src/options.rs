@@ -879,7 +879,10 @@ mod tests {
     #[test]
     fn mode_defaults_to_quality_and_reaches_engine() {
         assert_eq!(Settings::default().mode, TraceMode::Quality);
-        assert_eq!(Settings::default().to_args().mode, inkvec_cli::TraceMode::Quality);
+        assert_eq!(
+            Settings::default().to_args().mode,
+            inkvec_cli::TraceMode::Quality
+        );
         let fast = Settings {
             mode: TraceMode::Fast,
             ..Settings::default()

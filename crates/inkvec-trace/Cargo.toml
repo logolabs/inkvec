@@ -19,9 +19,14 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 
 [features]
 default = []
-#: Experimental stages kept for research: the five ink-grouping rules in `ink_ideas`, selected
-#: at run time with INKVEC_INK_IDEA. Off in every release build; the benchmark scripts that
-#: study them need a binary built with `--features research`.
+#: Experimental stages kept for research, each still switched on at run time by its variable:
+#: the five ink-grouping rules in `ink_ideas` (INKVEC_INK_IDEA), order-first decoding
+#: (INKVEC_DECODE, module `decode`), saddle merging (INKVEC_SADDLE), junction wedges and
+#: chunked sums in the boundary solve (INKVEC_BOPT_JUNC, INKVEC_BOPT_CHUNKS), lossy
+#: re-labelling (INKVEC_LOSSY_REGULARIZE), RGB palette space (INKVEC_PALETTE_RGB), the
+#: perceptual ink merge (INKVEC_MERGE_DE00) and the common-pixel band merge
+#: (INKVEC_MERGE_COMMON_PIXELS). Off in every release build; the benchmark scripts that
+#: study them need a binary built with `--features research`. See docs/internal/env-vars.md.
 research = []
 
 [lints]

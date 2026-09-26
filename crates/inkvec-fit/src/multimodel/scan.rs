@@ -191,7 +191,7 @@ impl<'a> SpanScorer<'a> {
             pre,
             cfg,
             joins_at_ends,
-            circles: arcs_enabled().then(|| CirclePrefix::new(pts, sigma)),
+            circles: Some(CirclePrefix::new(pts, sigma)),
             cubic_floor: cfg.lambda * params_cubic(),
             arc_floor: cfg.lambda * crate::curves::PARAMS_ARC,
             ellipse_floor: cfg.lambda * crate::curves::PARAMS_ELLIPTICAL_ARC,
@@ -206,10 +206,7 @@ impl<'a> SpanScorer<'a> {
     /// monotonically, so the circular candidate returns nothing and the ellipse has to be
     /// reached anyway. (The price gate that follows this is in [`Self::resolve`].)
     fn ellipse_asked(i: usize, j: usize, circle: Option<&ArcSpan>) -> bool {
-        arcs_enabled()
-            && ellipses_enabled()
-            && !circle.is_some_and(|f| f.chi2 <= 4.0 * (j - i) as f64)
-            && j >= i + 2
+        !circle.is_some_and(|f| f.chi2 <= 4.0 * (j - i) as f64) && j >= i + 2
     }
 
     fn ellipse(&self, i: usize, j: usize) -> Option<EllipseSpan> {
@@ -244,10 +241,7 @@ impl<'a> SpanScorer<'a> {
         // nothing but the guards.
         // The price floor is a proof, not a heuristic: an arc costs at least its own
         // 5 lambda, so a span the line already covers for less can never take one.
-        let circle = if arcs_enabled()
-            && j >= i + 2
-            && (line_plain > self.arc_floor || chi2_l > (j - i) as f64)
-        {
+        let circle = if j >= i + 2 && (line_plain > self.arc_floor || chi2_l > (j - i) as f64) {
             self.circles
                 .as_ref()
                 .and_then(|c| try_arc(pts, tan, c, i, j, cfg, self.joins_at_ends))
@@ -680,8 +674,6 @@ mod tests {
                 }
             }
         }
-        if ellipses_enabled() && arcs_enabled() {
-            assert!(ahead > 0, "the boundary never asked for an ellipse");
-        }
+        assert!(ahead > 0, "the boundary never asked for an ellipse");
     }
 }

@@ -185,7 +185,7 @@ fn fit_end_polynomial(ts: &[f64], rs: &[f64], ws: &[f64], n_fit: usize) -> Optio
     let n_all = ts.len();
     let n_fit = n_fit.min(n_all);
     let (xl, vl) = fit(1, n_fit)?;
-    if std::env::var("JDBG").is_ok() {
+    if inkvec_core::env::flag("INKVEC_JDBG") {
         let q = if n_all >= MIN_QUADRATIC_POINTS {
             fit(2, n_all)
         } else {
@@ -297,7 +297,7 @@ pub fn refine_junctions(map: &mut PlanarMap) {
         };
         let slid = taper.is_some();
         let (p, sigma) = taper.or(solved).unwrap_or((origin, 0.5));
-        if std::env::var("JDBG").is_ok() {
+        if inkvec_core::env::flag("INKVEC_JDBG") {
             eprintln!(
                 "JDBG node {node} deg {} lines {} origin ({:.2},{:.2}) -> ({:.3},{:.3}) move {:.3} sigma {:.3} vars {:?}",
                 list.len(),
@@ -390,10 +390,7 @@ const TAPER_MAX_SIGMA: f64 = 1.0;
 /// Place a junction where two boundaries meet tangentially, from the region that tapers.
 fn taper_junction(map: &PlanarMap, list: &[(usize, bool)], origin: Point) -> Option<(Point, f64)> {
     static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if list.len() < 3
-        || *DISABLED
-            .get_or_init(|| std::env::var_os("INKVEC_NO_TAPER").is_some_and(|v| !v.is_empty()))
-    {
+    if list.len() < 3 || *DISABLED.get_or_init(|| inkvec_core::env::flag("INKVEC_NO_TAPER")) {
         return None;
     }
     let dir = |&(k, at_start): &(usize, bool)| -> Option<Vec2> {
@@ -463,7 +460,7 @@ fn taper_junction(map: &PlanarMap, list: &[(usize, bool)], origin: Point) -> Opt
         .collect();
 
     let t = crate::taper::fit(&samples);
-    if std::env::var("TAPERDBG").is_ok() {
+    if inkvec_core::env::flag("INKVEC_TAPERDBG") {
         eprintln!(
             "  taper node at ({:.1},{:.1}): edge {bk}, {} pts -> {:?}",
             origin.x,
@@ -473,15 +470,6 @@ fn taper_junction(map: &PlanarMap, list: &[(usize, bool)], origin: Point) -> Opt
         );
     }
     let t = t?;
-    if let Some(skip) = std::env::var("INKVEC_TAPER_SKIP")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-    {
-        static SEEN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        if SEEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == skip {
-            return None;
-        }
-    }
     let shortest = list
         .iter()
         .map(|&(k, _)| {

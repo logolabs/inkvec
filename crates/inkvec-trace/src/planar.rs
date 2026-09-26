@@ -384,16 +384,10 @@ const MIN_UNMIX_CONTRAST: f64 = 0.02;
 ///
 /// `face_fill[f]` is the fill model of face `f`; the colours unmixed against are chosen
 /// per vertex by [`crate::gradient::unmix_pair`].
-fn subpx_window() -> usize {
-    static V: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("INKVEC_SUBPX_WIN")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .filter(|&w| (1..=8).contains(&w))
-            .unwrap_or(1)
-    })
-}
+///
+/// Points each side of a vertex its tangent is taken over; see the comment where it is
+/// used for the measurement that left it at one (it was `INKVEC_SUBPX_WIN`, 1..=8).
+const SUBPX_WIN: usize = 1;
 
 /// Cosine of the turning angle between a point's two chords above which the point is
 /// treated as a corner by `refine_subpixel` (60 degrees). A staircase at any slope turns
@@ -426,6 +420,7 @@ pub fn refine_subpixel_alpha(
 ) {
     let (w, h) = (map.width, map.height);
     let min_contrast = (3.0 * sigma_noise).max(MIN_UNMIX_CONTRAST);
+    let subpx_dbg = inkvec_core::env::flag("INKVEC_SUBPXDBG");
     let sample_alpha = |x: f64, y: f64| -> f32 {
         let Some((img_a, _)) = src_alpha else {
             return 1.0;
@@ -505,9 +500,9 @@ pub fn refine_subpixel_alpha(
         for k in 0..n {
             let p = e.points[k];
             // Local tangent from neighbours, normal perpendicular to it. The window is
-            // INKVEC_SUBPX_WIN points each side (default 1).
+            // `SUBPX_WIN` points each side.
             //
-            // `INKVEC_SUBPX_WIN` widens the window the tangent is taken over. The
+            // A wider `SUBPX_WIN` averages the tangent over more points. The
             // marching-squares polyline is a staircase, so a tangent from the immediate
             // neighbours is quantised to a few directions and on a slanted edge the probe
             // line is off-axis. Two points each side averages that out and improves the
@@ -518,7 +513,7 @@ pub fn refine_subpixel_alpha(
             // enough to change which face the emitter paints on top (dE00 0.23 -> 3.20).
             // Corners keep the narrow tangent already, so the remaining harm is elsewhere.
             // Default is one point each side until that is understood (LOG-43).
-            let win = subpx_window();
+            let win = SUBPX_WIN;
             let (pa, pb) = (
                 e.points[k.saturating_sub(win)],
                 e.points[(k + win).min(n - 1)],
@@ -757,7 +752,7 @@ pub fn refine_subpixel_alpha(
                     prev = Some((u, a));
                 }
             }
-            if std::env::var_os("INKVEC_SUBPXDBG").is_some() {
+            if subpx_dbg {
                 eprintln!(
                     "  [subpx] p=({:.3},{:.3}) n=({:.2},{:.2}) probes={:?} dir={} hit={:?} ca={:?} cb={:?}",
                     p.x, p.y, nx, ny, probes, dir, hit, ca, cb
@@ -804,12 +799,11 @@ pub fn refine_subpixel_alpha(
             } else {
                 1.0
             };
-            sigmas.push(match crate::contour::sigma_flat() {
-                Some(flat) => flat,
-                None => (s.hypot(crate::coverage::DEFAULT_SIGMA_MODEL) * visibility)
-                    .max(crate::contour::sigma_floor())
+            sigmas.push(
+                (s.hypot(crate::coverage::DEFAULT_SIGMA_MODEL) * visibility)
+                    .max(crate::contour::SIGMA_FLOOR)
                     .clamp(0.02, 2.0),
-            });
+            );
         }
 
         // The planar path extracts boundaries as level sets on a pixel grid exactly as
@@ -822,7 +816,7 @@ pub fn refine_subpixel_alpha(
         // Dump the measured boundary for offline study of its error structure. The whole
         // faceting question turns on how the extraction error is correlated along a
         // boundary, and that is a property of these numbers, not of an argument about them.
-        if let Some(path) = std::env::var_os("INKVEC_DUMP_CONTOUR") {
+        if let Some(path) = inkvec_core::env::path("INKVEC_DUMP_CONTOUR") {
             use std::io::Write;
             if let Ok(mut f) = std::fs::OpenOptions::new()
                 .create(true)

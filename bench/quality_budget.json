@@ -1,14 +1,15 @@
 {
   "_note": "Written by bench/quality.py --update. Every entry is a ratchet: the check fails on a move away from these values. Loosening one is a decision, and belongs in the commit message that does it.",
   "debt_markers": 0,
+  "env_reads": 13,
   "lint:clippy::too_many_arguments": 1,
   "lint:clippy::too_many_lines": 44,
   "lint:clippy::unnecessary_sort_by": 0,
   "lint:missing_docs": 0,
   "lint:unused_qualifications": 0,
-  "max_file_lines": 1723,
+  "max_file_lines": 1722,
   "rustfmt_hunks": 0,
-  "test_functions": 437,
+  "test_functions": 443,
   "untested_modules": [
     "crates/inkvec-cli/src/alpha.rs",
     "crates/inkvec-cli/src/rings.rs",

@@ -417,7 +417,7 @@ simplification (sigma-widening alone may be "enough" in practice, since it is wh
 9.6.2026 commit measured its real-brand-logo numbers against) or an unfinished wiring-up of
 `fit_config` into the production path could not be settled by reading the source alone.
 
-`content_units` defaults to `false` (`args.rs:66, 226`); `INKVEC_CONTENT_SCALE=1` is the
+`content_units` defaults to `false` (`args.rs:66, 226`); `INKVEC_CONTENT_SCALE=1` (*removed*) is the
 environment equivalent (`lib.rs:114-115`). It is off by default because it is a genuine
 trade, not a free correctness fix: the usage text states 5-px rotated squares get accepted
 as circles and thin rings come out broken under it, trading 1.16× the artist's parameters
@@ -492,7 +492,7 @@ The doc comment on `alpha_source` records exactly why this gate is not optional:
 committed CI screen-set gate rejected an always-on content-aware matte outright — dE00
 0.15404 → 0.15654 against a limit of 0.15558 — because the corpus is scored over white and
 cannot see any of the gain a better matte buys on other backgrounds (`alpha.rs:436-442`).
-`INKVEC_MATTE=white|black|magenta` forces the answer from the environment
+`INKVEC_MATTE=white|black|magenta` (*removed*) forces the answer from the environment
 (`alpha.rs:309-316`), bypassing `choose_matte` entirely.
 
 `crates/inkvec-trace/src/alpha.rs` is a related but distinct mechanism, run *after* the
@@ -509,7 +509,7 @@ background edge, and a battery of conservative gates (opacity in `(0.05, 0.98)`,
 error on the recovered opacity bounded, and more — `alpha.rs:68-90`), because a false layer
 is a visible error: it unions faces that are not one shape and paints them a colour that
 appears nowhere in the source. This is exposed as `--layers` (default off, opt-in via
-`INKVEC_LAYERS` too), and its own doc comment records it firing on "about one real icon in
+`INKVEC_LAYERS` (*removed*) too), and its own doc comment records it firing on "about one real icon in
 twenty" of the census used to tune it — two of forty (`args.rs:126-132`,
 `crates/inkvec-cli/src/alpha.rs:528-529`).
 
@@ -585,12 +585,14 @@ twenty" of the census used to tune it — two of forty (`args.rs:126-132`,
 
 ## Environment overrides
 
+Since the settings cleanup (CHANGELOG, *Unreleased*) the engine reads its environment through one helper (`inkvec_core::env`): a switch is off when unset, empty or `0`, and every variable is read once per process. Variables marked *removed* below are gone (their defaults are constants now); those marked *research build* are read only by a binary built with `--features research`. The full list, with what is left and why, is [`docs/internal/env-vars.md`](../internal/env-vars.md).
+
 | variable | effect | default | source |
 |---|---|---|---|
-| `INKVEC_CONTENT_SCALE=1` | equivalent to `--content-units` | unset (off) | `crates/inkvec-cli/src/lib.rs:114-115` |
-| `INKVEC_MATTE=white\|black\|magenta` | forces `choose_matte`'s answer, bypassing the swallowed-mass search | unset (`choose_matte` decides) | `crates/inkvec-cli/src/alpha.rs:309-316` |
-| `INKVEC_LAYERS` | forces `--layers` on | unset (off, same as `--layers` unset) | `crates/inkvec-cli/src/alpha.rs:538` |
-| `INKVEC_LAYER_SIGMA` | overrides the sRGB noise sigma used when fitting a translucent layer | `LAYER_SIGMA_SRGB` | `crates/inkvec-cli/src/alpha.rs:567-571` |
+| `INKVEC_CONTENT_SCALE=1` (*removed*) | equivalent to `--content-units` | unset (off) | `crates/inkvec-cli/src/lib.rs:114-115` |
+| `INKVEC_MATTE=white\|black\|magenta` (*removed*) | forces `choose_matte`'s answer, bypassing the swallowed-mass search | unset (`choose_matte` decides) | `crates/inkvec-cli/src/alpha.rs:309-316` |
+| `INKVEC_LAYERS` (*removed*) | forces `--layers` on | unset (off, same as `--layers` unset) | `crates/inkvec-cli/src/alpha.rs:538` |
+| `INKVEC_LAYER_SIGMA` (*removed*) | overrides the sRGB noise sigma used when fitting a translucent layer | `LAYER_SIGMA_SRGB` | `crates/inkvec-cli/src/alpha.rs:567-571` |
 | `INKVEC_ALPHADBG` | prints alpha/layer diagnostics to stderr | unset (silent) | `crates/inkvec-cli/src/alpha.rs:708`, `crates/inkvec-cli/src/emit.rs:569` |
 
 No `INKVEC_*` variable is read inside `inkvec-trace/src/lib.rs`'s `load_image`

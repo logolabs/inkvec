@@ -274,11 +274,11 @@ pub(crate) fn merge_bands_with(
         // by the subsampling factor so costs stay comparable across regions and with
         // the parameter terms. Measured identical in output on the two profiling logos
         // at 1024 and 2048 px against fitting every pixel.
-        let sub: Vec<usize> = if pixels.len() > fit_pixels_cap() {
+        let sub: Vec<usize> = if pixels.len() > FIT_PIXELS_CAP {
             pixels
                 .iter()
                 .copied()
-                .step_by(pixels.len() / fit_pixels_cap())
+                .step_by(pixels.len() / FIT_PIXELS_CAP)
                 .collect()
         } else {
             Vec::new()
@@ -321,9 +321,11 @@ pub(crate) fn merge_bands_with(
     // in parallel, since the fits are independent — then pick the best merge from the
     // cache. The pair scan itself is cheap; the union fits are where the time goes, and
     // computing them in waves puts every core on them without changing which merge wins.
-    let mergedbg = std::env::var_os("INKVEC_MERGEDBG").is_some();
-    // Explicit experiment; the measured production objective remains the default.
-    let common_pixels = std::env::var("INKVEC_MERGE_COMMON_PIXELS").as_deref() == Ok("1");
+    let mergedbg = inkvec_core::env::flag("INKVEC_MERGEDBG");
+    // Explicit experiment (research builds only); the measured production objective
+    // remains the default.
+    let common_pixels =
+        cfg!(feature = "research") && inkvec_core::env::flag("INKVEC_MERGE_COMMON_PIXELS");
     // A pair whose seam is smooth (see `regions::is_smooth`) is judged as one region:
     // blends between its members are evidence, and both sides are priced on the same
     // pixels. Any other pair is judged exactly as before.
@@ -342,7 +344,7 @@ pub(crate) fn merge_bands_with(
                 && crate::color::de00(
                     ink_rgb[comp_label[a] as usize],
                     ink_rgb[comp_label[b] as usize],
-                ) < *regions::RAMP_STEP_DE00
+                ) < regions::RAMP_STEP_DE00
         };
     // A cached union is *stale* once one of its members has absorbed something else.
     // It is not thrown away: a large gradient region swallowing a two-pixel fleck used
@@ -357,7 +359,7 @@ pub(crate) fn merge_bands_with(
     // Where the rounds go, for the timing log: a greedy agglomeration accepts one merge per
     // round, so the round count is the merge count and the wall time is the sum of the
     // rounds. Which part of a round costs what is the question the log answers.
-    let timing = std::env::var_os("INKVEC_TIMING").is_some();
+    let timing = inkvec_core::env::flag("INKVEC_TIMING");
     let (mut rounds, mut ns_scan, mut ns_wave, mut ns_stale, mut ns_book) =
         (0u64, 0u64, 0u64, 0u64, 0u64);
     let mut waves = 0u64;

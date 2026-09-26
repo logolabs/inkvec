@@ -76,16 +76,12 @@ impl Ink2 {
 /// root and near black it is stretched: a 2 % fringe over black sits 0.12 from black, three
 /// merge radii, and every faint anti-aliased pixel read as an ink of its own. Mid-grey still
 /// puts white paint (white) and the ground (grey) far apart, and a faint fringe next to the
-/// ground where it belongs. `INKVEC_NATIVE_GROUND` overrides it.
+/// ground where it belongs. (It was `INKVEC_NATIVE_GROUND`; nothing set it.)
+pub const SECOND_GROUND: f32 = 0.5;
+
+/// [`SECOND_GROUND`].
 pub fn second_ground() -> f32 {
-    static G: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
-    *G.get_or_init(|| {
-        std::env::var("INKVEC_NATIVE_GROUND")
-            .ok()
-            .and_then(|v| v.parse::<f32>().ok())
-            .filter(|g| (0.0..0.95).contains(g))
-            .unwrap_or(0.5)
-    })
+    SECOND_GROUND
 }
 
 /// Opacity pinned to exactly 0 or 1 when it is within measurement of either.
@@ -455,13 +451,8 @@ pub fn extract_palette(
     let total_px = px.len().max(1) as f32;
     let mut colors: Vec<Ink2> = Vec::new();
     let mut nearest_px: Vec<f32> = vec![f32::INFINITY; px.len()];
-    let paldbg = std::env::var("INKVEC_PALDBG").is_ok();
-    // Read once per palette rather than once per candidate.
-    let noise_sigmas = std::env::var("INKVEC_NOISE_SIGMAS")
-        .ok()
-        .and_then(|v| v.parse::<f32>().ok())
-        .unwrap_or(noise_sigmas);
-    let blend_tmin = color::blend_tmin();
+    let paldbg = inkvec_core::env::flag("INKVEC_PALDBG");
+    let blend_tmin = color::BLEND_TMIN;
     // The clear ground draws nothing, so it is found but not counted against the cap; once
     // the cap is full the scan goes on only to look for it.
     let clear = |c: &Ink2| c.alpha() <= CLEAR_INK_ALPHA;
@@ -1380,7 +1371,7 @@ fn merge_fades(
     let grey: Vec<[f32; 3]> = alpha.iter().map(|&a| [a, a, a]).collect();
     let mut fade_of: Vec<Option<Fade>> = vec![None; n_labels];
     let mut next = n_labels;
-    let dbg = std::env::var_os("INKVEC_FADEDBG").is_some();
+    let dbg = inkvec_core::env::flag("INKVEC_FADEDBG");
     if dbg {
         let translucent_gradient = (0..n_labels)
             .filter(|&l| {
@@ -1589,7 +1580,7 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
     );
     sw.mark("palette");
     let mut labels = label_image(&rgb, alpha, &pal);
-    if soft_intake && std::env::var_os("INKVEC_NO_MEASURED_SIGMA").is_none() {
+    if soft_intake {
         let cap = color::MEASURED_SIGMA_CAP / 255.0;
         let measured = (regularize::residual_sigma(&rgb, &labels, w, h, &pal)
             * color::MEASURED_SIGMA_SCALE)
@@ -1601,7 +1592,7 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
     crate::despeckle(&mut labels, w, h, min_region);
     sw.mark("despeckle");
 
-    if std::env::var_os("INKVEC_NO_ABSORB").is_none() {
+    if !inkvec_core::env::flag("INKVEC_NO_ABSORB") {
         let px4 = rgba_w(&rgb, alpha);
         let inks4 = ink_rgba_w(&pal);
         let absorbed = absorb_blend_slivers(&mut labels, &px4, w, h, &inks4, sigma_noise);
@@ -1629,7 +1620,7 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
     };
     sw.mark("merge_bands");
 
-    if opts.gradients && std::env::var_os("INKVEC_NO_CARVE").is_none() {
+    if opts.gradients && !inkvec_core::env::flag("INKVEC_NO_CARVE") {
         gradient::carve_residual_features_with_detail_noise(
             &mut labels,
             &rgb,
@@ -1646,7 +1637,7 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
     }
     sw.mark("carve");
 
-    let fade_of_label = if opts.gradients && std::env::var_os("INKVEC_NO_FADES").is_none() {
+    let fade_of_label = if opts.gradients {
         merge_fades(
             &mut labels,
             &mut fills_by_label,

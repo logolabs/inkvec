@@ -1337,13 +1337,9 @@ fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> 
     // Measured (h-series, noto-emoji): on the icons carrying the family's error, 98 of
     // 100 refused gradient candidates on regions of 200+ pixels fail *this* floor and
     // not the support one, by a hair -- contrast 0.0039-0.0055 against 0.0059 -- while
-    // the MDL below would accept them by a wide margin. `INKVEC_MIN_CONTRAST` scales
-    // the floor so the full set can price it.
-    let scale = std::env::var("INKVEC_MIN_CONTRAST")
-        .ok()
-        .and_then(|v| v.parse::<f64>().ok())
-        .unwrap_or(1.0);
-    let min_contrast = (3.0 * sigma).max(MIN_VISIBLE_CONTRAST) * scale;
+    // the MDL below would accept them by a wide margin. (`INKVEC_MIN_CONTRAST` scaled the
+    // floor so the full set could price it; the default never moved.)
+    let min_contrast = (3.0 * sigma).max(MIN_VISIBLE_CONTRAST);
     for space in INTERPS {
         let cols = s.colors(space);
         let t_r = inkvec_core::clock::Instant::now();
@@ -1364,7 +1360,7 @@ fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> 
                 // Which gate refused a candidate is otherwise invisible: a region that
                 // ends up "cands 1" looks identical whether no ramp was ever tried or
                 // every ramp was thrown away here. `INKVEC_EVDBG=1`.
-                if std::env::var_os("INKVEC_EVDBG").is_some() || debug::verbose() {
+                if inkvec_core::env::flag("INKVEC_EVDBG") || debug::verbose() {
                     // The data's own per-channel range, so a refusal can be read as
                     // "the truth is that subtle" or "the fit missed it".
                     let (mut lo, mut hi) = ([1f32; 3], [0f32; 3]);
@@ -1417,10 +1413,7 @@ fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> 
             .map(|f| f.chi2)
             .fold(f64::INFINITY, f64::min);
         let two = chi2_two_flats(s, sigma);
-        let margin = std::env::var("INKVEC_BIMODAL")
-            .ok()
-            .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(BIMODAL_MARGIN);
+        let margin = BIMODAL_MARGIN;
         debug::candidates(s.len(), &out, two, best_grad);
         if two.is_finite() && best_grad.is_finite() && two < margin * best_grad {
             out.truncate(n_flat_only);
@@ -1473,7 +1466,7 @@ pub(crate) fn fit_pixels(
     let t_c = inkvec_core::clock::Instant::now();
     let s = collect_samples(rgb, w, h, pixels, &member, &evidence, true);
     tick(&FIT_NS_COLLECT, t_c);
-    if std::env::var_os("INKVEC_EVDBG").is_some() {
+    if inkvec_core::env::flag("INKVEC_EVDBG") {
         let all = collect_samples(rgb, w, h, pixels, &member, |_| true, true);
         let fits = if s.len() > 0 {
             fit_samples(&s, w, true, sigma, lambda)

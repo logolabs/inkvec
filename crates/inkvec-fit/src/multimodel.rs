@@ -93,9 +93,8 @@
 #![allow(clippy::needless_range_loop, clippy::too_many_arguments)]
 
 pub(crate) use crate::candidates::{
-    arcs_enabled, best_cubic, bow_penalty, chi2_cubic, edge_terms, ellipses_enabled,
-    line_cost_terms, raw_moments_direct, scatter_min_eigen, try_arc, try_ellipse, try_free_cubic,
-    unit, CirclePrefix, Cubic,
+    best_cubic, bow_penalty, chi2_cubic, edge_terms, line_cost_terms, raw_moments_direct,
+    scatter_min_eigen, try_arc, try_ellipse, try_free_cubic, unit, CirclePrefix, Cubic,
 };
 pub use crate::candidates::{
     fit_cubic_moments, free_cubic_fit, params_cubic, MAX_ARM, MAX_RESIDUAL_SAMPLES,
@@ -115,16 +114,9 @@ use scan::{SpanScorer, Table};
 /// Parameters a cubic adds to the document: two control points and an endpoint.
 pub const PARAMS_CUBIC: f64 = 6.0;
 
-/// Overridable for experiments: `INKVEC_PARAMS_CUBIC`, `INKVEC_G1_BREAK`.
-///
-/// These two set how willing the program is to spend a curve. A cubic costs three times a
-/// line, and the counterweight — the penalty for the tangent breaks a polyline leaves — is
-/// quadratic in the break angle and saturates at one parameter's worth, so the small breaks
-/// that a chain of short lines makes are nearly free. Traced output is 21% curved where the
-/// ground truth is 78%, which is that trade showing up as faceted curves.
+/// `INKVEC_DPDBG`: print the dynamic program's decisions to stderr.
 pub fn dp_debug() -> bool {
-    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var_os("INKVEC_DPDBG").is_some())
+    inkvec_core::env::flag("INKVEC_DPDBG")
 }
 
 /// Safety factor on the search cut-off (see [`crate::optimal_polygon`]).
@@ -143,23 +135,14 @@ const PRUNE_PATIENCE: usize = 8;
 /// reaches it, so the benchmark at that size is untouched.
 const DP_MAX_POINTS: usize = 768;
 
-/// [`DP_MAX_POINTS`], or `INKVEC_DP_MAX_POINTS` when set. The program is O(n²) in its
-/// points and its early cut-off never fires on smooth, exact input, so a caller fitting
-/// vector curves rather than raster rings pays the full square; the decimation here is
-/// bend-preserving and rescales sigma, which is what lets such a caller cap the grid low
-/// and still recover exactness by refitting the chosen spans on the dense points.
+/// [`DP_MAX_POINTS`], or the cap a caller set with [`with_dp_max_points`]. The program is
+/// O(n²) in its points and its early cut-off never fires on smooth, exact input, so a
+/// caller fitting vector curves rather than raster rings pays the full square; the
+/// decimation here is bend-preserving and rescales sigma, which is what lets such a caller
+/// cap the grid low and still recover exactness by refitting the chosen spans on the dense
+/// points.
 fn dp_max_points() -> usize {
-    if let Some(n) = DP_CAP_OVERRIDE.with(|c| c.get()) {
-        return n;
-    }
-    static V: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("INKVEC_DP_MAX_POINTS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .filter(|&n| n >= 16)
-            .unwrap_or(DP_MAX_POINTS)
-    })
+    DP_CAP_OVERRIDE.with(|c| c.get()).unwrap_or(DP_MAX_POINTS)
 }
 
 thread_local! {
@@ -238,12 +221,27 @@ pub fn optimal_multimodel_capped_full(
     cfg: &FitConfig,
     max_span: usize,
 ) -> MultimodelFit {
-    optimal_multimodel_impl(
-        poly,
-        cfg,
-        max_span,
-        std::env::var("INKVEC_STRUCTURAL").is_ok_and(|v| v != "0"),
-    )
+    optimal_multimodel_impl(poly, cfg, max_span, research::structural())
+}
+
+/// The experimental post-fit passes, each off unless its variable is set in a `research`
+/// build (see `docs/internal/env-vars.md`). Without the feature the passes are not
+/// compiled and [`research::structural`] is a constant `false`.
+mod research {
+    /// `INKVEC_STRUCTURAL`: the structural simplifier (`crate::structural::simplify_with_poly`).
+    pub(super) fn structural() -> bool {
+        cfg!(feature = "research") && inkvec_core::env::flag("INKVEC_STRUCTURAL")
+    }
+    /// `INKVEC_AXIS`: `crate::merge::snap_axis_aligned`.
+    #[cfg(feature = "research")]
+    pub(super) fn axis() -> bool {
+        inkvec_core::env::flag("INKVEC_AXIS")
+    }
+    /// `INKVEC_G1`: `crate::merge::snap_smooth_joins`.
+    #[cfg(feature = "research")]
+    pub(super) fn g1() -> bool {
+        inkvec_core::env::flag("INKVEC_G1")
+    }
 }
 
 fn optimal_multimodel_impl(
@@ -354,22 +352,27 @@ fn optimal_multimodel_impl(
         // The opposite failure at sharp corners: a cubic through the anti-aliasing
         // chamfer where two lines meet. See `crate::merge::sharpen_corners`.
         crate::merge::sharpen_corners(&mut fit.path);
-        // A line the measurement cannot tell from axis-aligned has one degree of freedom,
-        // not two. See `crate::merge::snap_axis_aligned`.
-        if std::env::var("INKVEC_AXIS").is_ok_and(|v| v != "0") {
-            crate::merge::snap_axis_aligned(&mut fit.path, &shifted, &fit.vertices, cfg);
-        }
-        // A cubic that continues the one before it smoothly needs four numbers, not six.
-        // See `crate::merge::snap_smooth_joins`.
-        if std::env::var("INKVEC_G1").is_ok_and(|v| v != "0") {
-            crate::merge::snap_smooth_joins(&mut fit.path, &shifted, &fit.vertices, cfg);
-        }
-        // Structural MDL rate-distortion simplification across 4 primitives.
-        // Experimental: keep opt-in until acceptance uses calibrated image evidence.
-        if structural {
-            crate::structural::simplify_with_poly(&mut fit.path, &shifted, &fit.vertices, cfg);
+        #[cfg(feature = "research")]
+        {
+            // A line the measurement cannot tell from axis-aligned has one degree of
+            // freedom, not two. See `crate::merge::snap_axis_aligned`.
+            if research::axis() {
+                crate::merge::snap_axis_aligned(&mut fit.path, &shifted, &fit.vertices, cfg);
+            }
+            // A cubic that continues the one before it smoothly needs four numbers, not
+            // six. See `crate::merge::snap_smooth_joins`.
+            if research::g1() {
+                crate::merge::snap_smooth_joins(&mut fit.path, &shifted, &fit.vertices, cfg);
+            }
+            // Structural MDL rate-distortion simplification across 4 primitives.
+            // Experimental: keep opt-in until acceptance uses calibrated image evidence.
+            if structural {
+                crate::structural::simplify_with_poly(&mut fit.path, &shifted, &fit.vertices, cfg);
+            }
         }
     }
+    #[cfg(not(feature = "research"))]
+    let _ = structural;
 
     let back = |p: Point| Point::new(p.x + centre.x, p.y + centre.y);
     fit.path.start = back(fit.path.start);
@@ -672,14 +675,13 @@ pub fn segment_cost_direct(
             // way is not a line. Computed here from scratch, like everything else in this
             // function.
             let arc_floor = cfg.lambda * crate::curves::PARAMS_ARC;
-            let bow =
-                if arcs_enabled() && j >= i + 2 && (plain > arc_floor || chi2 > (j - i) as f64) {
-                    let pre = CirclePrefix::new(pts, &poly.sigma);
-                    try_arc(pts, tan, &pre, i, j, cfg, joins_at_ends)
-                        .map_or(0.0, |f| bow_penalty(chi2, f.chi2, j - i))
-                } else {
-                    0.0
-                };
+            let bow = if j >= i + 2 && (plain > arc_floor || chi2 > (j - i) as f64) {
+                let pre = CirclePrefix::new(pts, &poly.sigma);
+                try_arc(pts, tan, &pre, i, j, cfg, joins_at_ends)
+                    .map_or(0.0, |f| bow_penalty(chi2, f.chi2, j - i))
+            } else {
+                0.0
+            };
             plain + bow
         }
         SegKind::Cubic => {
@@ -1035,7 +1037,7 @@ fn solve_and_refine(
     );
     let t1 = t0.elapsed();
     let path = refine(poly, tan, &pre, &sol, cfg);
-    if max_span != usize::MAX && std::env::var_os("INKVEC_TIMING").is_some() {
+    if max_span != usize::MAX && inkvec_core::env::flag("INKVEC_TIMING") {
         eprintln!(
             "  [t]   capped fit n={} span={} segs={}: solve {:.1} ms, refine {:.1} ms",
             poly.len(),

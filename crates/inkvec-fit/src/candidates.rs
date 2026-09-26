@@ -7,7 +7,6 @@ use crate::tangents::{break_cost, turn_angle, Tangents};
 use crate::{FitConfig, PARAMS_LINE};
 use inkvec_core::{Point, Vec2};
 use kurbo::common::{factor_quartic_inner, solve_cubic, solve_quadratic};
-use std::sync::OnceLock;
 
 /// Maximum points a cubic's residual is evaluated on.
 pub const MAX_RESIDUAL_SAMPLES: usize = 32;
@@ -23,26 +22,12 @@ pub const MAX_ARM: f64 = 1.0;
 const FREE_MAX_SWING: f64 = 75.0;
 
 /// Parameters charged to a cubic segment: 6 unless the trace in progress asked for another
-/// price (see [`crate::cost`]), or an experiment set `INKVEC_PARAMS_CUBIC`.
+/// price (see [`crate::cost`]).
 pub fn params_cubic() -> f64 {
     crate::cost::cubic_params()
 }
 
-/// The elliptical candidate, separately from the circular one, so the two can be priced
-/// against each other.
-pub(crate) fn ellipses_enabled() -> bool {
-    static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("INKVEC_NO_ELLIPSE").is_none())
-}
-
-/// The per-span arc candidate. `INKVEC_NO_ARCS=1` takes it out of the alphabet, which is
-/// how the fitter is measured with and without it.
-pub(crate) fn arcs_enabled() -> bool {
-    static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("INKVEC_NO_ARCS").is_none())
-}
-
-/// Off unless `INKVEC_FREE_CUBIC` is set, because it does not pay.
+/// Off unless `INKVEC_FREE_CUBIC` is set in a `research` build, because it does not pay.
 ///
 /// What it costs is one axis, not three. On the 246-icon gate set it is *better* on
 /// dE00 (-0.21%) and on parameter ratio (-1.08%), and fails only turning (+5.44%). The
@@ -67,8 +52,7 @@ pub(crate) fn arcs_enabled() -> bool {
 /// at dE00 -0.63%), which is the wrong direction for a project whose loose axis is the
 /// parameter ratio. That is why it is still off.
 pub(crate) fn free_cubic_enabled() -> bool {
-    static V: OnceLock<bool> = OnceLock::new();
-    *V.get_or_init(|| std::env::var_os("INKVEC_FREE_CUBIC").is_some())
+    cfg!(feature = "research") && inkvec_core::env::flag("INKVEC_FREE_CUBIC")
 }
 
 /// Normalize vector to unit length, if non-degenerate.
@@ -378,10 +362,7 @@ impl Cubic {
 
     /// Penalty charged against wobbly/inflecting cubics to suppress micro-oscillations.
     pub(crate) fn wobble_penalty(&self, lambda: f64) -> f64 {
-        let factor = wobble_penalty_factor();
-        if factor <= 0.0 {
-            return 0.0;
-        }
+        let factor = WOBBLE_PENALTY;
         let mut penalty = 0.0;
         if self.has_inflection() {
             penalty += 2.0 * lambda * factor;
@@ -412,17 +393,9 @@ impl Cubic {
 /// better exchange than anything else tried here, including `--lambda-scale` and the
 /// correlated-noise chi2 reverted in e3746b0, and it costs one constant rather than a
 /// new model. Whether 1.0 is the right default does not appear to have been swept
-/// against the parameter ratio; on this evidence it is worth doing properly.
-pub(crate) fn wobble_penalty_factor() -> f64 {
-    static V: OnceLock<f64> = OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("INKVEC_WOBBLE_PENALTY")
-            .ok()
-            .and_then(|v| v.parse::<f64>().ok())
-            .filter(|v| v.is_finite() && *v >= 0.0)
-            .unwrap_or(1.0)
-    })
-}
+/// against the parameter ratio; on this evidence it is worth doing properly. (The sweep
+/// used `INKVEC_WOBBLE_PENALTY`, removed since: a sweep edits this constant.)
+pub(crate) const WOBBLE_PENALTY: f64 = 1.0;
 
 /// Which interior points of a span are scored, at what parameter, against what noise.
 struct CubicSamples {

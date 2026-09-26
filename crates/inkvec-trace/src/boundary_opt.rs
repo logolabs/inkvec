@@ -98,19 +98,8 @@ const JUNCTION_ANCHOR: f64 = 4.0;
 /// Colour difference across a boundary below which a pixel carries no usable evidence.
 const MIN_CONTRAST: f32 = 2.0 / 255.0;
 
-fn env_usize(var: &str, default: usize) -> usize {
-    std::env::var(var)
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
-}
-
-fn env_f64(var: &str, default: f64) -> f64 {
-    std::env::var(var)
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
-}
+/// Iterations of the solve; see the measurement where it is used.
+const ITERS: usize = 48;
 
 /// Where a vertex of a clipped polygon came from, and so how it moves.
 #[derive(Clone, Copy)]
@@ -186,12 +175,30 @@ fn build_vars(map: &PlanarMap) -> Vars {
     }
 }
 
+/// Largest coordinate, in pixels, whose gridlines [`crossings`] walks. Far inside the range
+/// where `m += 1.0` is exact, and far outside any image (labels are `u16`).
+const GRID_LIMIT: f64 = 1e9;
+
+/// Most gridlines [`crossings`] walks along one axis of one segment. A boundary segment
+/// lies inside the image, so it crosses at most the image's width or height.
+const GRID_MAX_SPAN: f64 = (1u64 << 20) as f64;
+
+/// Whether the gridlines between `lo` and `hi` can be walked a step at a time. The walk
+/// `while m < hi { m += 1.0 }` never ends when `hi` is infinite, or once `m` is so large
+/// that adding one leaves it where it was; a NaN fails every comparison here and so is
+/// refused as well. A segment that fails contributes no crossings: its geometry is already
+/// meaningless, and the caller must not hang on it.
+fn walkable(lo: f64, hi: f64) -> bool {
+    lo > -GRID_LIMIT && hi < GRID_LIMIT && hi - lo < GRID_MAX_SPAN
+}
+
 /// Gridline crossings of one segment, as parameters in `(0, 1)`, in order.
 fn crossings(a: Point, b: Point, va: u32, vb: u32, out: &mut Vec<(f64, Prov)>) {
     out.clear();
     let (dx, dy) = (b.x - a.x, b.y - a.y);
-    if dx.abs() > 1e-12 {
-        let (lo, hi) = if a.x < b.x { (a.x, b.x) } else { (b.x, a.x) };
+    let (lo_x, hi_x) = if a.x < b.x { (a.x, b.x) } else { (b.x, a.x) };
+    if dx.abs() > 1e-12 && walkable(lo_x, hi_x) {
+        let (lo, hi) = (lo_x, hi_x);
         let mut m = (lo - 0.5).ceil() + 0.5;
         while m < hi {
             let t = (m - a.x) / dx;
@@ -208,8 +215,9 @@ fn crossings(a: Point, b: Point, va: u32, vb: u32, out: &mut Vec<(f64, Prov)>) {
             m += 1.0;
         }
     }
-    if dy.abs() > 1e-12 {
-        let (lo, hi) = if a.y < b.y { (a.y, b.y) } else { (b.y, a.y) };
+    let (lo_y, hi_y) = if a.y < b.y { (a.y, b.y) } else { (b.y, a.y) };
+    if dy.abs() > 1e-12 && walkable(lo_y, hi_y) {
+        let (lo, hi) = (lo_y, hi_y);
         let mut m = (lo - 0.5).ceil() + 0.5;
         while m < hi {
             let t = (m - a.y) / dy;
@@ -515,13 +523,15 @@ struct Problem<'a> {
     chunks: usize,
 }
 
-/// `INKVEC_BOPT_CHUNKS`: 1 (sequential) unless set.
-fn env_chunks() -> usize {
-    std::env::var("INKVEC_BOPT_CHUNKS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(1)
-        .max(1)
+/// `INKVEC_BOPT_CHUNKS` in a `research` build; 1 (sequential) otherwise.
+fn research_chunks() -> usize {
+    if cfg!(feature = "research") {
+        inkvec_core::env::count("INKVEC_BOPT_CHUNKS")
+            .unwrap_or(1)
+            .max(1)
+    } else {
+        1
+    }
 }
 
 impl Problem<'_> {
@@ -597,7 +607,8 @@ impl Problem<'_> {
     /// The data term over every pixel.
     ///
     /// Sequential by default, so the floating-point summation order and therefore the
-    /// output are exactly what they always were. `INKVEC_BOPT_CHUNKS=16` sums the cells
+    /// output are exactly what they always were. `INKVEC_BOPT_CHUNKS=16` (research builds
+    /// only) sums the cells
     /// in that many fixed contiguous ranges on every core, each with its own scratch and
     /// gradient, added in range order: deterministic on any machine and about 60 ms
     /// faster at 2048 px, but the last-bit differences cascade through tie-sensitive fit
@@ -1113,14 +1124,11 @@ pub fn optimise_alpha(
     // runs only under a caller's time budget: the fixed 1200 ms one this had never bound
     // on the corpus (a 60 s budget gave the same 0.4142) and made the answer depend on how
     // fast the machine was -- WebAssembly or a loaded CI runner stopped sooner and wrote
-    // different bytes. `INKVEC_BOPT_MS` still forces one.
-    let iters = env_usize("INKVEC_BOPT_ITERS", 48);
-    let budget: Option<u128> = budget_ms.map(u128::from).or_else(|| {
-        std::env::var("INKVEC_BOPT_MS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-    });
-    let dbg = std::env::var_os("INKVEC_BOPTDBG").is_some();
+    // different bytes. (`INKVEC_BOPT_ITERS` and `INKVEC_BOPT_MS`, which overrode both, are
+    // gone: the count is `ITERS`, and a clock is the caller's time budget.)
+    let iters = ITERS;
+    let budget: Option<u128> = budget_ms.map(u128::from);
+    let dbg = inkvec_core::env::flag("INKVEC_BOPTDBG");
 
     let (report, pos) = {
         let mut prob = Problem {
@@ -1136,10 +1144,11 @@ pub fn optimise_alpha(
             alpha,
             w_kink: 1.0,
             w_anchor: 0.0,
-            junctions: std::env::var("INKVEC_BOPT_JUNC").is_ok_and(|v| v != "0"),
+            // Junction wedges: an experiment, off unless asked for in a `research` build.
+            junctions: cfg!(feature = "research") && inkvec_core::env::flag("INKVEC_BOPT_JUNC"),
             touched: Vec::new(),
-            cells_dbg: std::env::var_os("INKVEC_BOPT_CELLS").is_some(),
-            chunks: env_chunks(),
+            cells_dbg: inkvec_core::env::flag("INKVEC_BOPT_CELLS"),
+            chunks: research_chunks(),
         };
         let mut pos: Vec<Point> = vars.start.clone();
 
@@ -1151,8 +1160,8 @@ pub fn optimise_alpha(
         if data0 <= 0.0 || kink0 <= 0.0 {
             return None;
         }
-        prob.w_kink = env_f64("INKVEC_BOPT_KINK", K_KINK) * data0 / kink0;
-        prob.w_anchor = env_f64("INKVEC_BOPT_ANCHOR", K_ANCHOR) * data0 / n as f64;
+        prob.w_kink = K_KINK * data0 / kink0;
+        prob.w_anchor = K_ANCHOR * data0 / n as f64;
 
         let mut grad = vec![Point::new(0.0, 0.0); n];
         let mut e = prob.energy(&pos, Some(&mut grad));
@@ -1265,7 +1274,7 @@ pub fn optimise_alpha(
             e.points[i] = p;
         }
     }
-    if std::env::var_os("INKVEC_JUNCDBG").is_some() {
+    if inkvec_core::env::flag("INKVEC_JUNCDBG") {
         juncstat::report();
     }
     Some(Report {
@@ -1278,6 +1287,39 @@ pub fn optimise_alpha(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The gridline walk used to step `m += 1.0` until it passed the far end, which never
+    /// happens when that end is infinite or so large that adding one changes nothing. Run on
+    /// a thread with a deadline, so a regression fails instead of hanging the suite.
+    #[test]
+    fn crossings_end_on_non_finite_and_huge_coordinates() {
+        let (done, wait) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let p = Point::new;
+            let mut out = Vec::new();
+            // An ordinary segment still crosses every gridline it spans: x = 0.5 .. 3.5.
+            crossings(p(0.2, 0.2), p(3.7, 0.2), 0, 1, &mut out);
+            let lines: Vec<f64> = out.iter().map(|&(t, _)| 0.2 + 3.5 * t).collect();
+            assert_eq!(out.len(), 4, "{lines:?}");
+            for (got, want) in lines.iter().zip([0.5, 1.5, 2.5, 3.5]) {
+                assert!((got - want).abs() < 1e-9, "{lines:?}");
+            }
+            for (a, b) in [
+                (p(0.0, 0.0), p(f64::INFINITY, 1.0)),
+                (p(f64::NEG_INFINITY, 0.0), p(0.0, 0.0)),
+                (p(0.0, f64::NAN), p(2.0, f64::INFINITY)),
+                (p(1e20, 0.0), p(1e20 + 1e5, 0.0)),
+                (p(-1e300, 3.0), p(1e300, 3.0)),
+                (p(0.0, 0.0), p(1e12, 1e12)),
+            ] {
+                crossings(a, b, 0, 1, &mut out);
+                assert!(out.iter().all(|&(t, _)| t.is_finite()));
+            }
+            done.send(()).unwrap();
+        });
+        wait.recv_timeout(std::time::Duration::from_secs(20))
+            .expect("crossings() did not return on a non-finite or huge coordinate");
+    }
 
     /// Coverage of a pixel split by a straight vertical boundary, read off the geometry the
     /// optimiser builds, against the area computed by hand.

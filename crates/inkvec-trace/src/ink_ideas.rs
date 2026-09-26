@@ -49,13 +49,6 @@ const MIN_INTERIOR: f64 = 16.0;
 /// no interior, from having its evidence discounted to nothing.
 const MIN_PAIRS: f64 = 64.0;
 
-fn env_f64(name: &str, default: f64) -> f64 {
-    std::env::var(name)
-        .ok()
-        .and_then(|v| v.parse::<f64>().ok())
-        .unwrap_or(default)
-}
-
 /// What the rules need to know about the trace they are running inside.
 pub struct Ctx {
     /// Image width in pixels.
@@ -126,13 +119,7 @@ fn interior(labels: &[u16], w: usize, h: usize, i: usize) -> bool {
 /// collapsed a CLEAN diagram from 8 inks to 2. The correlation discount is meant for what the
 /// fill model cannot explain -- a tint, a ringing band -- not for shading it fits anyway.
 fn plane_residuals() -> bool {
-    use std::sync::OnceLock;
-    static F: OnceLock<bool> = OnceLock::new();
-    *F.get_or_init(|| {
-        std::env::var("INKVEC_INK_PLANE")
-            .map(|v| v != "0")
-            .unwrap_or(true)
-    })
+    inkvec_core::env::switch("INKVEC_INK_PLANE", true)
 }
 
 /// Sufficient statistics for one group of pixels (an ink, or a region). Every field is additive,
@@ -233,7 +220,8 @@ impl Acc {
     fn rho(&self) -> f64 {
         let v = self.var();
         let quantisation_only = v < (0.25f64 / 255.0).powi(2);
-        let structure_not_tint = v > (env_f64("INKVEC_INK_TINT_MAX", 3.0) / 255.0).powi(2);
+        let structure_not_tint =
+            v > (inkvec_core::env::number("INKVEC_INK_TINT_MAX").unwrap_or(3.0) / 255.0).powi(2);
         if self.pairs < MIN_PAIRS || self.den <= 1e-14 || quantisation_only || structure_not_tint {
             0.0
         } else {
@@ -416,7 +404,7 @@ fn batch_merge(labels: &mut [u16], k: usize, mut cands: Vec<(f64, usize, usize)>
 fn idea1_ink_mdl(rgb: &[[f32; 3]], labels: &mut [u16], pal: &Palette, ctx: &Ctx) {
     let (w, h, k) = (ctx.w, ctx.h, pal.rgb.len());
     let lambda = lambda_of(ctx);
-    let kappa = env_f64("INKVEC_INK_KAPPA", KAPPA_DEFAULT);
+    let kappa = inkvec_core::env::number("INKVEC_INK_KAPPA").unwrap_or(KAPPA_DEFAULT);
     for _ in 0..48 {
         let group: Vec<usize> = labels.iter().map(|&l| l as usize).collect();
         let mut accs = vec![Acc::default(); k];
@@ -508,7 +496,7 @@ fn idea2_region_mdl(rgb: &[[f32; 3]], labels: &mut [u16], pal: &Palette, ctx: &C
     let (w, h) = (ctx.w, ctx.h);
     let n = w * h;
     let lambda = lambda_of(ctx);
-    let kappa = env_f64("INKVEC_INK_KAPPA", KAPPA_DEFAULT);
+    let kappa = inkvec_core::env::number("INKVEC_INK_KAPPA").unwrap_or(KAPPA_DEFAULT);
     let (comp, ink) = components(labels, w, h);
     let r = ink.len();
     let group: Vec<usize> = comp.iter().map(|&c| c as usize).collect();
@@ -561,7 +549,7 @@ fn idea2_region_mdl(rgb: &[[f32; 3]], labels: &mut [u16], pal: &Palette, ctx: &C
             }
         }
     }
-    let cap = env_f64("INKVEC_INK_MAX_MERGES", 400_000.0) as usize;
+    let cap = inkvec_core::env::number("INKVEC_INK_MAX_MERGES").unwrap_or(400_000.0) as usize;
     let mut merges = 0;
     while let Some(e) = heap.pop() {
         if e.gain <= 0.0 || merges >= cap {
@@ -643,7 +631,8 @@ fn idea3_contrast_potts(
     let n = w * h;
     let inv2s2 = 1.0 / (2.0 * sigma.max(1e-6).powi(2));
     // The existing smoother's boundary price, in the same nats-per-neighbour-pair units.
-    let price = ((n.max(3)) as f64).ln() * env_f64("INKVEC_POTTS_SCALE", 1.0);
+    let price =
+        ((n.max(3)) as f64).ln() * inkvec_core::env::number("INKVEC_POTTS_SCALE").unwrap_or(1.0);
     // Boykov-Jolly contrast weights: beta from the mean squared neighbour difference.
     let (mut sum, mut cnt) = (0f64, 0f64);
     for i in 0..n {
@@ -804,7 +793,8 @@ fn idea3_contrast_potts(
 
 fn idea4_edge_witness(rgb: &[[f32; 3]], labels: &mut [u16], pal: &Palette, ctx: &Ctx) {
     let (w, h, k) = (ctx.w, ctx.h, pal.rgb.len());
-    let tau = env_f64("INKVEC_WITNESS_TAU", 0.2) / ctx.edge_width.max(1.0);
+    let tau =
+        inkvec_core::env::number("INKVEC_WITNESS_TAU").unwrap_or(0.2) / ctx.edge_width.max(1.0);
     for _ in 0..48 {
         let group: Vec<usize> = labels.iter().map(|&l| l as usize).collect();
         let mut accs = vec![Acc::default(); k];
@@ -881,7 +871,7 @@ fn idea5_inks_from_edges(rgb: &[[f32; 3]], labels: &mut [u16], pal: &Palette, ct
     let n = w * h;
     let t_edge = (12.0f64 / 255.0).max(8.0 * ctx.sigma);
     let t_flat = t_edge / 3.0;
-    let tol = env_f64("INKVEC_EDGE_INK_DE00", 4.0) as f32;
+    let tol = inkvec_core::env::number("INKVEC_EDGE_INK_DE00").unwrap_or(4.0) as f32;
     let mut samples: Vec<[f32; 3]> = Vec::new();
     let step = |i: usize, dx: isize, dy: isize, s: isize| -> Option<usize> {
         let (x, y) = ((i % w) as isize + dx * s, (i / w) as isize + dy * s);

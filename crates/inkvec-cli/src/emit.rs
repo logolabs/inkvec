@@ -62,10 +62,7 @@ const EMIT_DECIMALS: usize = 2;
 const MIN_RING_AREA: f64 = 0.25;
 
 pub(crate) fn emit_decimals(_precision: f64) -> usize {
-    std::env::var("INKVEC_EMIT_DECIMALS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(EMIT_DECIMALS)
+    inkvec_core::env::count("INKVEC_EMIT_DECIMALS").unwrap_or(EMIT_DECIMALS)
 }
 
 /// Emit the map as a **stacked** document: faces painted back to front, each drawing only
@@ -263,10 +260,7 @@ pub(crate) fn annulus_stroke(
     outer: &PrimitiveKind,
     inner: &PrimitiveKind,
 ) -> Option<(PrimitiveKind, f64)> {
-    let tol = std::env::var("INKVEC_STROKE_TOL")
-        .ok()
-        .and_then(|v| v.parse::<f64>().ok())
-        .unwrap_or(STROKE_TOL);
+    let tol = STROKE_TOL;
     // How far a corner arc's apex moves when its radius changes by one.
     let corner = std::f64::consts::SQRT_2 - 1.0;
     match (*outer, *inner) {
@@ -788,7 +782,7 @@ pub(crate) fn emit_color(
         }
         None
     };
-    if std::env::var_os("INKVEC_ALPHADBG").is_some() {
+    if inkvec_core::env::flag("INKVEC_ALPHADBG") {
         for i in 0..order.len() {
             eprintln!(
                 "  emit {i}: rings {} areas {:?} outer {} clear {:?} parent {:?} drop {} holes {:?}",

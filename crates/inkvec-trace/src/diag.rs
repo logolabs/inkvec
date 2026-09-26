@@ -41,10 +41,10 @@ fn mode() -> u8 {
     if m != UNSET {
         return m;
     }
-    let v = match std::env::var("INKVEC_DIAG").as_deref() {
-        Ok("json") => JSON,
-        Ok("0") | Err(_) => OFF,
-        Ok(_) => TEXT,
+    let v = match inkvec_core::env::text("INKVEC_DIAG") {
+        Some("json") => JSON,
+        Some("0") | Some("") | None => OFF,
+        Some(_) => TEXT,
     };
     MODE.store(v, Ordering::Relaxed);
     v

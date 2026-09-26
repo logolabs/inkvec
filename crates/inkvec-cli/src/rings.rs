@@ -111,7 +111,7 @@ pub(crate) fn repair_ring_crossings(
         if guilty.is_empty() {
             break;
         }
-        if std::env::var_os("INKVEC_TIMING").is_some() {
+        if inkvec_core::env::flag("INKVEC_TIMING") {
             let sizes: Vec<usize> = guilty.iter().map(|&k| polys[k].len()).collect();
             eprintln!(
                 "  [t] repair round: {} guilty, sizes {:?}, detect {:.1} ms",
@@ -136,7 +136,7 @@ pub(crate) fn repair_ring_crossings(
             refit_vertices.insert(k, f.vertices);
             repaired += 1;
         }
-        if std::env::var_os("INKVEC_TIMING").is_some() {
+        if inkvec_core::env::flag("INKVEC_TIMING") {
             eprintln!(
                 "  [t] repair round total {:.1} ms",
                 round_t.elapsed().as_secs_f64() * 1e3
@@ -181,7 +181,7 @@ pub(crate) fn repair_ring_crossings(
                 false
             }
         });
-        if std::env::var_os("INKVEC_TIMING").is_some() && affordable.len() < refit_vertices.len() {
+        if inkvec_core::env::flag("INKVEC_TIMING") && affordable.len() < refit_vertices.len() {
             eprintln!(
                 "  [t] repair merge budget: {} of {} boundary/ies, {} segment(s)",
                 affordable.len(),
@@ -203,7 +203,7 @@ pub(crate) fn repair_ring_crossings(
         // ring to be discarded too, leaving a full staircase of capped pixel chords.
         // Fixed endpoints mean accepted candidates cannot open seams; re-checking each
         // incident ring preserves the same no-crossing invariant as the repair itself.
-        if std::env::var_os("INKVEC_TIMING").is_some() {
+        if inkvec_core::env::flag("INKVEC_TIMING") {
             eprintln!(
                 "  [t] repair merge {} edge(s) {:.1} ms",
                 merged.len(),
@@ -234,7 +234,7 @@ pub(crate) fn repair_ring_crossings(
             };
             if exploded {
                 fitted[k] = full_fit[k].clone();
-                if std::env::var_os("INKVEC_TIMING").is_some() {
+                if inkvec_core::env::flag("INKVEC_TIMING") {
                     eprintln!("  [t] repair: edge {k} refit exploded, full fit restored");
                 }
                 continue;
@@ -268,7 +268,7 @@ pub(crate) fn repair_ring_crossings(
                 fitted[k] = previous;
             }
         }
-        if std::env::var_os("INKVEC_TIMING").is_some() {
+        if inkvec_core::env::flag("INKVEC_TIMING") {
             eprintln!(
                 "  [t] repair safety {:.1} ms",
                 safety_t.elapsed().as_secs_f64() * 1e3

@@ -2,7 +2,7 @@
 //!
 //! Compares segment count and runtime before and after structural simplification.
 //!
-//! Run: `cargo run --release -p inkvec-fit --example structural_demo`
+//! Run: `cargo run --release -p inkvec-fit --features research --example structural_demo`
 
 use inkvec_core::Point;
 use inkvec_fit::curves::{eval_cubic, Segment};

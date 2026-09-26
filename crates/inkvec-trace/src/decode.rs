@@ -149,17 +149,9 @@ pub struct Report {
     pub ms: f64,
 }
 
-pub(crate) fn env_f64(key: &str, default: f64) -> f64 {
-    std::env::var(key)
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
-}
-
-pub(crate) mod clip;
 pub(crate) mod ribbon;
 
-pub(crate) use clip::{clip_area, coverage, shoelace, simple, Bbox};
+pub(crate) use crate::clip::{coverage, shoelace, simple, Bbox};
 pub(crate) use ribbon::share_widths;
 
 // ---------------------------------------------------------------------------------------
@@ -578,13 +570,10 @@ pub fn decode_faces(
     // So the clock runs only under a caller's time budget (see `BUDGETED_MS`); otherwise
     // what bounds the stage is the candidate list itself, faces of at most
     // `MAX_BBOX_PIXELS` with a handful of orders each. `INKVEC_DECODE_MS` still forces one.
-    let budget = std::env::var("INKVEC_DECODE_MS")
-        .ok()
-        .and_then(|v| v.parse::<f64>().ok())
-        .or(budget_ms);
+    let budget = inkvec_core::env::number("INKVEC_DECODE_MS").or(budget_ms);
     let out_of_time = |t0: &Instant| budget.is_some_and(|b| t0.elapsed().as_secs_f64() * 1e3 > b);
-    let leak_gate = env_f64("INKVEC_DECODE_LEAK", LEAK_GATE);
-    let dbg = std::env::var("INKVEC_DECODEDBG").is_ok();
+    let leak_gate = inkvec_core::env::number("INKVEC_DECODE_LEAK").unwrap_or(LEAK_GATE);
+    let dbg = inkvec_core::env::flag("INKVEC_DECODEDBG");
     let (w, h) = (map.width, map.height);
     let n_faces = face_fill.len();
     if n_faces == 0 || w == 0 || h == 0 {
@@ -688,7 +677,7 @@ pub fn decode_faces(
         } else {
             0.0
         };
-        let thin_px = env_f64("INKVEC_DECODE_THIN", THIN_PX);
+        let thin_px = inkvec_core::env::number("INKVEC_DECODE_THIN").unwrap_or(THIN_PX);
         coverage(&pts, bb_old, &mut cov, &mut mark);
         let prior = prob.prior.clone();
         let sse_fixed = prob.eval_fixed(&cov[..bb_old.len()], &prior);
@@ -755,8 +744,11 @@ pub fn decode_faces(
             // ribbon the corrected boundary is *supposed* to sit a pixel off the ring it
             // came from. Strong evidence overrides the prior. A decode that cuts the
             // residual in half has earned the move; one that shaves a few per cent has not.
-            let earned = sse1 < env_f64("INKVEC_DECODE_OVERRIDE", EVIDENCE_OVERRIDE) * sse0;
-            let recheck = env_f64("INKVEC_DECODE_RECHECK", 1.0) > 0.5 && !earned;
+            let earned = sse1
+                < inkvec_core::env::number("INKVEC_DECODE_OVERRIDE").unwrap_or(EVIDENCE_OVERRIDE)
+                    * sse0;
+            let recheck =
+                inkvec_core::env::number("INKVEC_DECODE_RECHECK").unwrap_or(1.0) > 0.5 && !earned;
             if !simple(&best) || (recheck && !is_polygonal(&pts, &best, &cuts)) {
                 if dbg {
                     eprintln!(
@@ -778,7 +770,7 @@ pub fn decode_faces(
             // error, because the objective is happy to trade them. Require both -- a
             // strictly better fit and no more parameters -- so a decode can only be a
             // Pareto improvement over what the pipeline already had.
-            let gain = env_f64("INKVEC_DECODE_GAIN", MIN_GAIN);
+            let gain = inkvec_core::env::number("INKVEC_DECODE_GAIN").unwrap_or(MIN_GAIN);
             if sse1 >= gain * sse0 || params_after > params_before {
                 if dbg {
                     eprintln!(
@@ -817,7 +809,7 @@ pub fn decode_faces(
                 map.edges[ek].points.len()
             );
         }
-        if std::env::var("INKVEC_DECODE_KEEPFILL").is_err() {
+        if !inkvec_core::env::flag("INKVEC_DECODE_KEEPFILL") {
             if let Some(c) = fills.first() {
                 face_fill[f].model = FillModel::Flat(*c);
                 face_fill[f].params = PARAMS_FLAT;
@@ -839,7 +831,7 @@ pub fn decode_faces(
 
     // Off by default. See `share_widths`: the prior is sound and the pipeline does not
     // need it, because the label map already supplies what the raster alone leaves out.
-    if std::env::var("INKVEC_DECODE_SHARE").is_ok_and(|v| v != "0") {
+    if inkvec_core::env::flag("INKVEC_DECODE_SHARE") {
         share_widths(
             map, rgb, labels, face_fill, lambda, &mut rep, dbg, leak_gate,
         );
@@ -910,14 +902,14 @@ pub(crate) fn is_polygonal(ring: &[Point], verts: &[Point], cuts: &[usize]) -> b
         // Systematically to one side, by an amount that matters: a curve, leave it alone.
         // A sawtooth has mean near zero and spread; a curve has both.
         if mean.abs() > CURVE_BIAS_PX && mean.abs() > 0.5 * rms {
-            if std::env::var("INKVEC_DECODEDBG").is_ok() {
+            if inkvec_core::env::flag("INKVEC_DECODEDBG") {
                 eprintln!("        polyfail: seg {j} curved, mean {mean:.3} rms {rms:.3} n {cnt}");
             }
             return false;
         }
         // And nothing absurd, whatever the sign pattern.
         if worst > MAX_DEV {
-            if std::env::var("INKVEC_DECODEDBG").is_ok() {
+            if inkvec_core::env::flag("INKVEC_DECODEDBG") {
                 eprintln!("        polyfail: seg {j} worst {worst:.3} > {MAX_DEV}");
             }
             return false;

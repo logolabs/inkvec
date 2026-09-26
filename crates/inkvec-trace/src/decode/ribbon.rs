@@ -6,11 +6,11 @@ use inkvec_fit::FitConfig;
 use crate::gradient::{FillFit, FillModel, PARAMS_FLAT};
 use crate::planar::{face_edge_order, PlanarMap};
 
-use super::clip::{coverage, simple, Bbox};
 use super::{
-    build_problem, candidate_orders, env_f64, is_polygonal, ring_of, varpro, write_back, EdgeSpan,
-    Problem, Report, RingPt, MAX_BBOX_PIXELS, PARAMS_PER_RIBBON, SHARE_MAX_PX, THIN_PX,
+    build_problem, candidate_orders, is_polygonal, ring_of, varpro, write_back, EdgeSpan, Problem,
+    Report, RingPt, MAX_BBOX_PIXELS, PARAMS_PER_RIBBON, SHARE_MAX_PX, THIN_PX,
 };
+use crate::clip::{coverage, simple, Bbox};
 
 /// One straight ribbon: which face it is, the polygon that describes it, and the width
 /// that polygon currently has.
@@ -88,7 +88,7 @@ pub(crate) fn share_widths(
     _leak: f64,
 ) {
     let (w, h) = (map.width, map.height);
-    let thin_px = env_f64("INKVEC_DECODE_THIN", THIN_PX);
+    let thin_px = inkvec_core::env::number("INKVEC_DECODE_THIN").unwrap_or(THIN_PX);
     let order = face_edge_order(map);
     let n_faces = face_fill.len();
     let mut area = vec![0usize; n_faces];

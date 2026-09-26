@@ -332,9 +332,11 @@ surplus pixels are crisp or blurred, asking only whether they say anything" (`co
 
 ## Environment overrides
 
+Since the settings cleanup (CHANGELOG, *Unreleased*) the engine reads its environment through one helper (`inkvec_core::env`): a switch is off when unset, empty or `0`, and every variable is read once per process. Variables marked *removed* below are gone (their defaults are constants now); those marked *research build* are read only by a binary built with `--features research`. The full list, with what is left and why, is [`docs/internal/env-vars.md`](../internal/env-vars.md).
+
 No `INKVEC_*` environment variable is read directly inside `coverage.rs` (confirmed: no
 `env::var` call anywhere in the file). Callers downstream (`color.rs`, `lib.rs`) read several
-(`INKVEC_NOISE_SIGMAS`, `INKVEC_SAME_INK_DE00`, `INKVEC_PALDBG`) that consume this module's
+(`INKVEC_NOISE_SIGMAS` (*removed*), `INKVEC_SAME_INK_DE00` (*removed*), `INKVEC_PALDBG`) that consume this module's
 outputs — see `03-palette.md`.
 
 ## Open questions

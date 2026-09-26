@@ -142,8 +142,7 @@ const REF_EXTENT: f64 = 128.0;
 /// The measured scale cannot make that mistake: content that is genuinely resolved reads
 /// 1.0 and is left exactly as it was found.
 pub(crate) fn content_scale(img: &inkvec_trace::Rgba, args: &Args) -> f64 {
-    let on = args.content_units || std::env::var("INKVEC_CONTENT_SCALE").is_ok_and(|v| v == "1");
-    if !on {
+    if !args.content_units {
         return 1.0;
     }
     let rgb = img.composited([1.0, 1.0, 1.0]);
@@ -753,7 +752,7 @@ fn build_upscaler(args: &Args) -> Result<Box<dyn inkvec_sr::Upscaler>, Box<dyn s
 /// builds; a binary copied to another machine never depends on it.
 fn sr_tools_dir() -> Option<std::path::PathBuf> {
     let has_sr = |dir: &Path| dir.join("inkvec_sr").is_dir();
-    if let Some(dir) = std::env::var_os("INKVEC_TOOLS_DIR").map(std::path::PathBuf::from) {
+    if let Some(dir) = inkvec_core::env::path("INKVEC_TOOLS_DIR") {
         return has_sr(&dir).then_some(dir);
     }
     if let Ok(exe) = std::env::current_exe() {

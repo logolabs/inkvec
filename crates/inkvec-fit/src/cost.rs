@@ -15,9 +15,10 @@
 //! Both used to be process-wide values, read once from `INKVEC_PARAMS_CUBIC` and
 //! `INKVEC_G1_BREAK`, which is fine for an experiment and no use to an application that
 //! traces different images with different wishes in one process. They are now a
-//! [`CostModel`] a caller can set for the duration of one trace with [`with_cost_model`].
-//! The defaults, and those two environment variables, are exactly what they were, so a trace
-//! that asks for nothing is byte-identical to what it was.
+//! [`CostModel`] a caller can set for the duration of one trace with [`with_cost_model`]
+//! (`--bezier-cost` and `--corner-angle` on the command line). The defaults are exactly
+//! what they were, so a trace that asks for nothing is byte-identical to what it was; the
+//! two environment variables are gone.
 //!
 //! # How the scope works
 //!
@@ -31,7 +32,7 @@
 
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{OnceLock, RwLock};
+use std::sync::RwLock;
 
 /// The prices a trace charges for a curve.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -49,13 +50,16 @@ impl CostModel {
     /// The range `g1_break_degrees` is held to.
     pub const G1_RANGE: (f64, f64) = (1.0, 60.0);
 
-    /// The process default: the shipped prices, or an experiment's environment override.
+    /// The shipped prices: a Bézier costs its six numbers, and a turn of
+    /// [`crate::tangents::G1_BREAK_DEGREES`] is a full corner.
+    pub const STANDARD: CostModel = CostModel {
+        cubic_params: 6.0,
+        g1_break_degrees: crate::tangents::G1_BREAK_DEGREES,
+    };
+
+    /// The process default, [`CostModel::STANDARD`].
     pub fn standard() -> Self {
-        static STANDARD: OnceLock<CostModel> = OnceLock::new();
-        *STANDARD.get_or_init(|| CostModel {
-            cubic_params: env_f64("INKVEC_PARAMS_CUBIC", 6.0),
-            g1_break_degrees: env_f64("INKVEC_G1_BREAK", crate::tangents::G1_BREAK_DEGREES),
-        })
+        Self::STANDARD
     }
 
     /// The standard prices with any that were asked for replaced, and held to their range.
@@ -72,14 +76,6 @@ impl CostModel {
             g1_break_degrees: pick(g1_break_degrees, std.g1_break_degrees, Self::G1_RANGE),
         }
     }
-}
-
-fn env_f64(key: &str, default: f64) -> f64 {
-    std::env::var(key)
-        .ok()
-        .and_then(|v| v.parse::<f64>().ok())
-        .filter(|v| v.is_finite())
-        .unwrap_or(default)
 }
 
 /// "No override": the value in this slot is the standard one.

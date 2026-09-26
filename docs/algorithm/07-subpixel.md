@@ -55,7 +55,7 @@ edge sharing a node keeps bit-identical coordinates afterwards (`planar.rs:1029-
 For each edge point `p` (`planar.rs:427-699`):
 
 1. **Local tangent.** Estimated from neighbours `window` points to either side
-   (`INKVEC_SUBPX_WIN`, default 1 — see Environment overrides), unless the turning angle
+   (`INKVEC_SUBPX_WIN` (*removed*), default 1 — see Environment overrides), unless the turning angle
    between the two chords exceeds `CORNER_COS` (60°, `planar.rs:367`), in which case the
    narrow one-point window is used instead so a wide window does not smear a real corner.
    The normal is perpendicular to the tangent.
@@ -123,7 +123,7 @@ measurements that justified each change:
   there too, `planar.rs:611-615`).
 
 Two switches this history left behind are recorded as no longer switchable:
-`INKVEC_SUBPX_MODE=inv` (force step-inversion everywhere) and `=root` (force root-find
+`INKVEC_SUBPX_MODE=inv` (*removed*) (force step-inversion everywhere) and `=root` (force root-find
 everywhere) were both measured worse than the classifier and are dead code paths in
 intent even though the comments describing them remain (`planar.rs:552-554, 620-622`).
 
@@ -250,7 +250,7 @@ as the taper's entire net parameter cost across the 180-image measurement
 |---|---|---|---|
 | `MIN_UNMIX_CONTRAST` (`planar.rs:337`) | `0.02` | floor on unmixing contrast below which a point is not moved at all | no stated derivation |
 | `CORNER_COS` (`planar.rs:367`) | `0.5` (60°) | turning angle above which the tangent window narrows to 1 point | stated: "A staircase at any slope turns by at most 45 degrees between chords two points long, so slanted edges stay smooth" (`planar.rs:365-366`) — a geometric bound, not a sweep |
-| `INKVEC_SUBPX_WIN` (`planar.rs:353-362`) | default `1`, range `1..=8` | width of the tangent-estimation window | measured trade-off: widening to 2 improved dE00 0.2663→0.2534 on a 620-icon subset but cost DISTS 0.0418→0.0435 and caused a face-order regression on one icon (0.23→3.20 dE00); default left at 1 "until that is understood (LOG-43)" (`planar.rs:432-442`) |
+| `INKVEC_SUBPX_WIN` (*removed*) (`planar.rs:353-362`) | default `1`, range `1..=8` | width of the tangent-estimation window | measured trade-off: widening to 2 improved dE00 0.2663→0.2534 on a 620-icon subset but cost DISTS 0.0418→0.0435 and caused a face-order regression on one icon (0.23→3.20 dE00); default left at 1 "until that is understood (LOG-43)" (`planar.rs:432-442`) |
 | `DEFAULT_SIGMA_MODEL` (`coverage.rs:39`) | `0.05` px | irreducible resolution limit of level-set extraction, added in quadrature to statistical noise | stated: "Measured on analytic circles..., level-set extraction lands within roughly 0.05px" (`coverage.rs:59-60`) |
 | `CONTRAST_REF` (`planar.rs:688`) | `0.25` | reference contrast for `simplify_faint`'s inflation | no stated derivation |
 | `MAX_INFLATION` (`planar.rs:689`) | `4.0` | cap on `simplify_faint`'s sigma multiplier | no stated derivation |
@@ -296,17 +296,19 @@ as the taper's entire net parameter cost across the 180-image measurement
 
 ## Environment overrides
 
+Since the settings cleanup (CHANGELOG, *Unreleased*) the engine reads its environment through one helper (`inkvec_core::env`): a switch is off when unset, empty or `0`, and every variable is read once per process. Variables marked *removed* below are gone (their defaults are constants now); those marked *research build* are read only by a binary built with `--features research`. The full list, with what is left and why, is [`docs/internal/env-vars.md`](../internal/env-vars.md).
+
 | variable | effect |
 |---|---|
-| `INKVEC_SUBPX_WIN` | tangent-window width for `refine_subpixel`, `1..=8`, default `1` (`planar.rs:356-360`) |
+| `INKVEC_SUBPX_WIN` (*removed*) | tangent-window width for `refine_subpixel`, `1..=8`, default `1` (`planar.rs:356-360`) |
 | `INKVEC_SUBPXDBG` | per-point debug trace of the subpixel search (`planar.rs:648-653`) |
-| `INKVEC_SIGMA_FLOOR` | overrides `contour::sigma_floor()`, shared with the bilevel front end (`contour.rs:320-329`) |
-| `INKVEC_CURV_GAIN` | overrides `contour::curv_gain()` used by `inflate_for_curvature` (`contour.rs:231-243`) |
+| `INKVEC_SIGMA_FLOOR` (*removed*) | overrides `contour::sigma_floor()`, shared with the bilevel front end (`contour.rs:320-329`) |
+| `INKVEC_CURV_GAIN` (*removed*) | overrides `contour::curv_gain()` used by `inflate_for_curvature` (`contour.rs:231-243`) |
 | `INKVEC_DUMP_CONTOUR` | appends every refined edge's points and sigmas to a file, for offline study of extraction error structure (`planar.rs:712-724`) |
 | `INKVEC_NO_TAPER` | disables `taper_junction` when set to a non-empty value (`planar.rs:1260-1269`) — cached in a `OnceLock`, and the doc comment records a real bug where an *empty* value used to be treated as "set": "a shell that exports `VAR=` should not silently turn the estimator off, which it did once here and made an A/B compare a binary to itself" (`planar.rs:1261-1262`) |
-| `TAPERDBG` | per-node taper fit debug trace (`planar.rs:1340-1348`) |
-| `INKVEC_TAPER_SKIP=<n>` | skips the n-th accepted taper relocation, to attribute a corpus-level change to one junction (`planar.rs:1350-1357`) |
-| `JDBG` | debug trace for `end_tangent`'s polynomial fit and `refine_junctions`'s per-node solve (`planar.rs:925-943, 1084-1097`) |
+| `INKVEC_TAPERDBG` | per-node taper fit debug trace (`planar.rs:1340-1348`) |
+| `INKVEC_TAPER_SKIP=<n>` (*removed*) | skips the n-th accepted taper relocation, to attribute a corpus-level change to one junction (`planar.rs:1350-1357`) |
+| `INKVEC_JDBG` | debug trace for `end_tangent`'s polynomial fit and `refine_junctions`'s per-node solve (`planar.rs:925-943, 1084-1097`) |
 
 ## Open questions
 

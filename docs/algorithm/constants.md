@@ -83,7 +83,7 @@ stage's own reference document — this table only summarizes. Paths are relativ
 | `JND_FLOOR` | 0.012 (OKLab) | `inkvec-trace/src/color.rs:611-615` | below this, two colours are never treated as separate inks | none |
 | `PARAMS_PER_INK` | 3.0 | `inkvec-trace/src/color.rs:279` | one parameter per OKLab channel | derived |
 | `STAT_PIXELS` | 65536 | `inkvec-trace/src/color.rs:692-705` | cap on per-candidate statistical pass cost | derived (matches the 128px tuning point) |
-| `INKVEC_BLEND_TMIN` (env) | 0.04 | `inkvec-trace/src/color.rs:535-538` | interior-mixture band on the A-B colour axis | none |
+| `INKVEC_BLEND_TMIN` (*removed*) (env) | 0.04 | `inkvec-trace/src/color.rs:535-538` | interior-mixture band on the A-B colour axis | none |
 
 ## 04 — Regions ([04-regions.md](04-regions.md))
 
@@ -109,7 +109,7 @@ stage's own reference document — this table only summarizes. Paths are relativ
 | `PARAMS_STOP` | 4.0 | `inkvec-trace/src/gradient.rs:56-57` | cost of each interior stop | derived |
 | `MAX_MID_STOPS` | 2 | `inkvec-trace/src/gradient.rs:58-59` | most interior stops fitted | measured (corpus stop-count survey) |
 | `MIN_GRADIENT_PIXELS` | 16 | `inkvec-trace/src/gradient.rs:62` | fewest interior pixels before a gradient is attempted | motivated |
-| `BIMODAL_MARGIN` | 0.85 | `inkvec-trace/src/gradient.rs:64-68` | ramp-vs-step decision threshold; overridable via `INKVEC_BIMODAL` | motivated |
+| `BIMODAL_MARGIN` | 0.85 | `inkvec-trace/src/gradient.rs:64-68` | ramp-vs-step decision threshold; overridable via `INKVEC_BIMODAL` (*removed*) | motivated |
 | `MIN_VISIBLE_CONTRAST` | 1.5/255 | `inkvec-trace/src/gradient.rs:70-72` | floor on visible contrast for any gradient candidate | motivated |
 | `MIN_RAMP_SUPPORT` | 0.10 | `inkvec-trace/src/gradient.rs:73-79` | least fraction of samples a gradient must visibly shade | motivated (concrete regressions, value not derived) |
 | `QUANT_HALF_STEP` | 0.5/255 | `inkvec-trace/src/gradient.rs:81-82` | residual dead zone from 8-bit quantisation | derived |
@@ -138,7 +138,7 @@ to the upstream saddle merge:
 |---|---|---|---|---|
 | `MIN_UNMIX_CONTRAST` | 0.02 | `inkvec-trace/src/planar.rs:337` | floor on unmixing contrast below which a point does not move | none |
 | `CORNER_COS` | 0.5 (60 deg) | `inkvec-trace/src/planar.rs:367` | turning angle above which the tangent window narrows to 1 point | motivated (geometric bound) |
-| `INKVEC_SUBPX_WIN` (env) | default 1, range 1..=8 | `inkvec-trace/src/planar.rs:353-362` | width of the tangent-estimation window | measured (widening to 2 improved dE00 but cost DISTS and caused a face-order regression; left at 1) |
+| `INKVEC_SUBPX_WIN` (*removed*) (env) | default 1, range 1..=8 | `inkvec-trace/src/planar.rs:353-362` | width of the tangent-estimation window | measured (widening to 2 improved dE00 but cost DISTS and caused a face-order regression; left at 1) |
 | `DEFAULT_SIGMA_MODEL` | 0.05 px | `inkvec-trace/src/coverage.rs:39` | see 02-coverage.md | measured |
 | `CONTRAST_REF` | 0.25 | `inkvec-trace/src/planar.rs:688` | reference contrast for `simplify_faint`'s inflation | none |
 | `MAX_INFLATION` | 4.0 | `inkvec-trace/src/planar.rs:689` | cap on `simplify_faint`'s sigma multiplier | none |
@@ -170,8 +170,8 @@ to the upstream saddle merge:
 | `JUNCTION_ANCHOR` | 4.0 | `inkvec-trace/src/boundary_opt.rs` | multiplier on `w_anchor` at a junction point | motivated |
 | `MIN_CONTRAST` | 2.0/255 | `inkvec-trace/src/boundary_opt.rs` | pixel usable-evidence floor for the data term | none |
 | `EPS` (in `priors`) | 1e-4 | `inkvec-trace/src/boundary_opt.rs` | floor inside the kink term's square root | motivated |
-| `INKVEC_BOPT_ITERS` (env) | 48 | `inkvec-trace/src/boundary_opt.rs` | iteration cap | measured (24 was found unconverged) |
-| `INKVEC_BOPT_MS` (env) | 1200 ms | `inkvec-trace/src/boundary_opt.rs:1002-1003` | time budget | measured (60s budget gave the same result) |
+| `INKVEC_BOPT_ITERS` (*removed*) (env) | 48 | `inkvec-trace/src/boundary_opt.rs` | iteration cap | measured (24 was found unconverged) |
+| `INKVEC_BOPT_MS` (*removed*) (env) | 1200 ms | `inkvec-trace/src/boundary_opt.rs:1002-1003` | time budget | measured (60s budget gave the same result) |
 | degenerate-box guard | `(x1-x0)*(y1-y0) > 64` | `inkvec-trace/src/boundary_opt.rs:406-407` | skips a segment whose bbox would touch too many spatial-hash cells | motivated |
 | fold-guard floor | `scale > 0.1` | `inkvec-trace/src/boundary_opt.rs` | how far the solve halves the accepted displacement before giving up | none |
 | backtracking factor | `step *= 0.4`, up to 6 tries | `inkvec-trace/src/boundary_opt.rs` | line-search backoff | none |
@@ -239,7 +239,7 @@ half-integer lattice points (`inkvec-trace/src/symmetry.rs:19-21,156-163,243-245
 | `MAX_ARC_DEGREES` | 120.0 | `inkvec-fit/src/primitives.rs:50` | longest single-arc sweep | derived (conditioning argument) |
 | `MAX_REDUCED_CHI2` | 4.0 | `inkvec-fit/src/primitives.rs:1081` | primitive acceptance gate | derived (tau^2 at default tau=2) |
 | `PARAMS_CIRCLE` / `PARAMS_ELLIPSE` / `PARAMS_ROUND_RECT` / `PARAMS_RECT` | 3.0 / 5.0 / 6.0 / 4.0 | `inkvec-fit/src/primitives.rs:32-39` | primitive parameter costs | derived |
-| `BREAK_PARAMS` | 2.0 | `inkvec-fit/src/merge.rs:53` | join a free cubic no longer meets smoothly; overridable via `INKVEC_MERGE_BREAK` | derived |
+| `BREAK_PARAMS` | 2.0 | `inkvec-fit/src/merge.rs:53` | join a free cubic no longer meets smoothly; overridable via `INKVEC_MERGE_BREAK` (*removed*) | derived |
 | `MAX_SPAN` | 96 | `inkvec-fit/src/merge.rs:57` | longest merge run attempted | none |
 | `MAX_RUN` | 4 | `inkvec-fit/src/merge.rs:65` | segments a merge run may absorb | none (was overridable, no longer swept) |
 | `MAX_ROUNDS` | 6 | `inkvec-fit/src/merge.rs:75` | merge sweep passes | motivated |

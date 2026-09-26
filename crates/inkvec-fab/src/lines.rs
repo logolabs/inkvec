@@ -269,7 +269,7 @@ fn split_group(r: &Region, wide: f64, limit: f64) -> (Vec<Line>, Region) {
         let Some(misfit) = misfit(&parts, &found) else {
             continue;
         };
-        if std::env::var_os("INKVEC_FAB_TIMING").is_some() {
+        if inkvec_core::env::flag("INKVEC_FAB_TIMING") {
             eprintln!(
                 "  lines: region {label}: {} line(s), {:.2} mm wide, misfit {misfit:.3}",
                 found.len(),

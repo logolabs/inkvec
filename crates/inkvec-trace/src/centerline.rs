@@ -1020,7 +1020,7 @@ pub fn refine_to_coverage(strokes: &mut [Stroke], coverage: &CoverageField, roun
                 }
             }
         }
-        if std::env::var_os("INKVEC_REFINEDBG").is_some() {
+        if inkvec_core::env::flag("INKVEC_REFINEDBG") {
             let tot: f64 = moved.iter().map(|d| d.abs()).sum();
             eprintln!(
                 "  [refine] stroke {si}: {} pts, closed {}, width {:.3} -> {:.3},                  moved {:.4} px total, max {:.4}",

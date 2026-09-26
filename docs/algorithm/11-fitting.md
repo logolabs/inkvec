@@ -337,7 +337,7 @@ a deliberate over-charge:
 point; the DP's internal cost accounting (`multimodel::path_cost`) does not, since the start
 point is shared with whatever precedes it.
 
-**Free-tangent cubics are in the alphabet but off by default** (`INKVEC_FREE_CUBIC`), and the
+**Free-tangent cubics are in the alphabet but off by default** (`INKVEC_FREE_CUBIC` (*research build*)), and the
 refutation is a genuinely useful negative result, `multimodel.rs:1172-1188`:
 
 > "The model is sound and does what it promised: freeing the tangent directions halves the
@@ -429,8 +429,8 @@ if max_span == usize::MAX {
 |---|---|---|
 | `merge_free_cubics` | **on** | unconditional, but only outside the repair's span cap (`max_span == usize::MAX`) |
 | `sharpen_corners` | **on** | same |
-| `snap_axis_aligned` | **off** | `INKVEC_AXIS` must be set and not equal to `"0"` — absence means off |
-| `snap_smooth_joins` | **off** | `INKVEC_G1` must be set and not equal to `"0"` — absence means off |
+| `snap_axis_aligned` | **off** | `INKVEC_AXIS` (*research build*) must be set and not equal to `"0"` — absence means off |
+| `snap_smooth_joins` | **off** | `INKVEC_G1` (*research build*) must be set and not equal to `"0"` — absence means off |
 
 `merge_free_cubics` and `sharpen_corners` also run a second time, unconditionally, inside
 stage 12's ring-level repair (`crates/inkvec-cli/src/rings.rs:193-194`), under a segment
@@ -632,7 +632,7 @@ are marked **none**.
 | `PARAMS_ELLIPSE` | `primitives.rs:34` | 5.0 | derived |
 | `PARAMS_ROUND_RECT` | `primitives.rs:37` | 6.0 | derived |
 | `PARAMS_RECT` | `primitives.rs:39` | 4.0 | derived |
-| `BREAK_PARAMS` | `merge.rs:53` | 2.0 | joins a free cubic no longer meets smoothly | derived; overridable `INKVEC_MERGE_BREAK` |
+| `BREAK_PARAMS` | `merge.rs:53` | 2.0 | joins a free cubic no longer meets smoothly | derived; overridable `INKVEC_MERGE_BREAK` (*removed*) |
 | `MAX_SPAN` | `merge.rs:57` | 96 | longest merge run attempted | none |
 | `MAX_RUN` | `merge.rs:65` | 4 | segments a merge run may absorb | none (once overridable, no longer swept) |
 | `MAX_ROUNDS` | `merge.rs:75` | 6 | merge sweep passes | motivated; value none |
@@ -674,14 +674,16 @@ are marked **none**.
 
 ## Environment overrides
 
+Since the settings cleanup (CHANGELOG, *Unreleased*) the engine reads its environment through one helper (`inkvec_core::env`): a switch is off when unset, empty or `0`, and every variable is read once per process. Variables marked *removed* below are gone (their defaults are constants now); those marked *research build* are read only by a binary built with `--features research`. The full list, with what is left and why, is [`docs/internal/env-vars.md`](../internal/env-vars.md).
+
 | variable | effect | default when unset |
 |---|---|---|
-| `INKVEC_AXIS` | enables `snap_axis_aligned` when set and not `"0"` | off |
-| `INKVEC_G1` | enables `snap_smooth_joins` when set and not `"0"` | off |
-| `INKVEC_FREE_CUBIC` | enables the free-tangent cubic candidate in the DP | off |
-| `INKVEC_NO_ARCS` | referenced in a doc comment near `arcs_enabled()` as disabling per-span arcs when set to `1` | arcs on |
-| `INKVEC_MERGE_BREAK` | overrides `BREAK_PARAMS` (`merge.rs:94`) | `2.0` |
-| `INKVEC_G1DBG` | prints per-join accept/reject diagnostics for `snap_smooth_joins` | off |
+| `INKVEC_AXIS` (*research build*) | enables `snap_axis_aligned` when set and not `"0"` | off |
+| `INKVEC_G1` (*research build*) | enables `snap_smooth_joins` when set and not `"0"` | off |
+| `INKVEC_FREE_CUBIC` (*research build*) | enables the free-tangent cubic candidate in the DP | off |
+| `INKVEC_NO_ARCS` (*removed*) | referenced in a doc comment near `arcs_enabled()` as disabling per-span arcs when set to `1` | arcs on |
+| `INKVEC_MERGE_BREAK` (*removed*) | overrides `BREAK_PARAMS` (`merge.rs:94`) | `2.0` |
+| `INKVEC_G1DBG` (*research build*) | prints per-join accept/reject diagnostics for `snap_smooth_joins` | off |
 
 `--precision` and `--tau` (`crates/inkvec-cli/src/args.rs`) set `FitConfig` via
 `from_precision`; see the objective section above.

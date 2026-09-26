@@ -1,7 +1,7 @@
 //! The source path: how a `d` attribute is read, and how points are taken
 //! along it for the fitter to judge.
 
-use crate::fit::{knob, PER_SEGMENT};
+use crate::fit::PER_SEGMENT;
 use inkvec_core::Point;
 use inkvec_fit::curves::Segment;
 
@@ -209,7 +209,7 @@ pub(crate) fn sample(run: &[Src], spacing: f64, drop_last: bool) -> Vec<Point> {
 pub(crate) fn sample_mapped(run: &[Src], spacing: f64, drop_last: bool) -> (Vec<Point>, Vec<f64>) {
     let mut pts = vec![run[0].start()];
     let mut at = vec![0.0];
-    let most = knob("INKVEC_SVGMIN_PER_SEG", PER_SEGMENT as f64) as usize;
+    let most = PER_SEGMENT;
     for (k, s) in run.iter().enumerate() {
         let n = ((s.rough_length() / spacing).ceil() as usize).clamp(4, most);
         for i in 1..=n {

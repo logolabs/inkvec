@@ -116,14 +116,6 @@ fn refit_cubic(seg: &Segment, start: Point, span: &[Point], along: Vec<f64>) -> 
         seg.clone()
     }
 }
-/// A tuning knob read from the environment, for measurement; the default is the shipped
-/// value.
-pub(crate) fn knob(k: &str, d: f64) -> f64 {
-    std::env::var(k)
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(d)
-}
 /// Points the dynamic program is shown on the first pass; the tracer's own cap
 /// (`inkvec_fit::multimodel::DP_MAX_POINTS`) on the second.
 pub(crate) const COARSE_CAP: usize = 128;
@@ -347,7 +339,7 @@ impl RunFit<'_> {
         if path.segments.len() < 2 {
             return path;
         }
-        let debug = std::env::var_os("INKVEC_SVGMIN_DEBUG").is_some();
+        let debug = inkvec_core::env::flag("INKVEC_SVGMIN_DEBUG");
         let Some(mut ends) = self.locate(&path, lo, hi, path.closed) else {
             if debug {
                 eprintln!("    merge: cannot locate {} segments", path.segments.len());
@@ -458,8 +450,7 @@ fn fit_run(
     // curve, and repairing a boundary is not something the repair can do. Measured on the
     // 40-file batch, fitting whole where it is affordable is worth 1.6% of the whole
     // description.
-    let coarse_cap = knob("INKVEC_SVGMIN_COARSE_CAP", COARSE_CAP as f64) as usize;
-    let whole_below = knob("INKVEC_SVGMIN_WHOLE_BELOW", WHOLE_BELOW as f64) as usize;
+    let (coarse_cap, whole_below) = (COARSE_CAP, WHOLE_BELOW);
     let (mut start, mut segments) = fit.fit(lo, hi, closed, &[coarse_cap, FINE_CAP]);
     if n > coarse_cap && n <= whole_below {
         // Neither view dominates: the coarse one can place a boundary where the whole
@@ -471,19 +462,17 @@ fn fit_run(
             segments = whole;
         }
     }
-    if knob("INKVEC_SVGMIN_MERGE", 1.0) > 0.0 {
-        let path = fit.merge_pairs(
-            FittedPath {
-                start,
-                segments,
-                closed,
-            },
-            lo,
-            hi,
-        );
-        start = path.start;
-        segments = path.segments;
-    }
+    let path = fit.merge_pairs(
+        FittedPath {
+            start,
+            segments,
+            closed,
+        },
+        lo,
+        hi,
+    );
+    start = path.start;
+    segments = path.segments;
 
     // The program was offered an arc per span; this offers one description of the whole
     // run, which is how a circle is found at all. It is shown a thinned copy of the
@@ -494,8 +483,8 @@ fn fit_run(
     // cubics are repaired span by span they fit so well that `0.5·chi² + λ·params` prefers
     // them to four arcs that cost a third as much and are inside the tolerance.
     let mut primitive = None;
-    if !segments.is_empty() && (closed || knob("INKVEC_SVGMIN_PRIM_OPEN", 1.0) > 0.0) {
-        let stride = n.div_ceil(knob("INKVEC_SVGMIN_PRIM_CAP", PRIMITIVE_CAP as f64) as usize);
+    if !segments.is_empty() {
+        let stride = n.div_ceil(PRIMITIVE_CAP);
         let thin: Vec<Point> = fit.pts.iter().copied().step_by(stride.max(1)).collect();
         let sigma = vec![eps; thin.len()];
         if let Some((segs, prim, _)) = fit_primitive_or_arcs(&thin, &sigma, closed, cfg) {
@@ -521,7 +510,7 @@ fn fit_run(
     }
 
     let after = params_of(&segments);
-    if std::env::var_os("INKVEC_SVGMIN_DEBUG").is_some() {
+    if inkvec_core::env::flag("INKVEC_SVGMIN_DEBUG") {
         let kinds: String = segments
             .iter()
             .map(|s| match s {

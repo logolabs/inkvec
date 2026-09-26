@@ -279,7 +279,7 @@ pub fn detect(map: &PlanarMap, labels: &[u16], ink: &[usize]) -> Symmetry {
     }
     let mut mirrors = Vec::new();
     let mut partner = Vec::new();
-    let timing = std::env::var_os("INKVEC_TIMING").is_some();
+    let timing = inkvec_core::env::flag("INKVEC_TIMING");
     let t0 = inkvec_core::clock::Instant::now();
     let found = mirrors_of(labels, ink, w, h);
     if timing {

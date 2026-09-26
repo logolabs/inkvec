@@ -58,10 +58,17 @@ pub(crate) fn linear_to_srgb(c: f32) -> f32 {
 /// Cluster in plain sRGB instead of OKLab. Not a shipping option: it is here so the
 /// question "what if grouping were done in RGB" can be answered with a measurement
 /// rather than an argument. Both transforms honour it, so they stay inverses.
+/// `INKVEC_PALETTE_RGB`, in a `research` build only; a constant `false` otherwise.
+#[inline]
 fn palette_rgb_space() -> bool {
-    use std::sync::OnceLock;
-    static F: OnceLock<bool> = OnceLock::new();
-    *F.get_or_init(|| std::env::var_os("INKVEC_PALETTE_RGB").is_some())
+    #[cfg(feature = "research")]
+    {
+        // Asked once per pixel, so cached here rather than looked up each time.
+        static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *F.get_or_init(|| inkvec_core::env::flag("INKVEC_PALETTE_RGB"))
+    }
+    #[cfg(not(feature = "research"))]
+    false
 }
 
 /// sRGB in `[0, 1]` to OKLab (Ottosson).
@@ -602,14 +609,9 @@ fn interior_fraction(
     interior as f32 / total as f32
 }
 
-/// `INKVEC_BLEND_TMIN`: how far inside a chord a blend must lie. Read once per palette,
-/// not once per ink pair: an environment read costs microseconds when every core asks.
-pub(crate) fn blend_tmin() -> f32 {
-    std::env::var("INKVEC_BLEND_TMIN")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0.04)
-}
+/// How far inside a chord, as a fraction of it, a blend must lie (was `INKVEC_BLEND_TMIN`;
+/// see `docs/algorithm/constants.md`).
+pub(crate) const BLEND_TMIN: f32 = 0.04;
 
 /// Is `c` explained as a mixture of two colours already accepted?
 ///
@@ -628,7 +630,7 @@ pub(crate) fn blend_tmin() -> f32 {
 /// as the white–red one, and only the pair its pixels actually lie between can say
 /// whether it straddles them; the caller tries them all.
 ///
-/// `tmin` is [`blend_tmin`], read once per palette by the caller.
+/// `tmin` is [`BLEND_TMIN`].
 fn blend_pairs(
     c: Oklab,
     accepted: &[Oklab],
@@ -757,9 +759,9 @@ pub const JND_FLOOR: f32 = 0.012;
 /// gradient has a real spread, and the guard cannot tell that from noise without knowing
 /// which it is looking at.
 ///
-/// So the caller decides, because the caller knows where its raster came from. Set
-/// `INKVEC_NOISE_SIGMAS=3` for input that has been upscaled, compressed or resampled;
-/// leave it alone for an exact-coverage render. Making it free, by detecting the noise
+/// So the caller decides, because the caller knows where its raster came from: input that
+/// has been upscaled, compressed or resampled gets [`SOFT_NOISE_SIGMAS`] from the soft-intake
+/// gate, and an exact-coverage render keeps this. Making it free, by detecting the noise
 /// instead of being told about it, is the open problem: `coverage::estimate_noise` cannot
 /// see it, because an icon is mostly empty and its median Laplacian is zero however noisy
 /// the artwork is.
@@ -921,10 +923,10 @@ pub struct PaletteEvidence {
     /// against. An ink costs `lambda * PARAMS_PER_INK` before it explains anything.
     pub lambda: f64,
     /// How many measured standard deviations two inks must lie apart before they count
-    /// as two. Overridden by `INKVEC_NOISE_SIGMAS`.
+    /// as two.
     pub noise_sigmas: f32,
     /// Perceptual distance below which two candidate inks are one ink. Raised on a soft
-    /// intake; see [`SOFT_SAME_INK_DE00`]. Overridden by `INKVEC_SAME_INK_DE00`.
+    /// intake; see [`SOFT_SAME_INK_DE00`].
     pub same_ink_de00: f32,
 }
 
@@ -1030,21 +1032,14 @@ pub fn extract_palette_mdl(
     // Distance from each pixel to the nearest ink accepted so far, so a candidate's own
     // territory can be read off without rescanning the whole palette.
     let mut nearest_px: Vec<f32> = vec![f32::INFINITY; lab.len()];
-    // The knobs below are read once per palette rather than once per candidate.
-    let noise_sigmas = std::env::var("INKVEC_NOISE_SIGMAS")
-        .ok()
-        .and_then(|v| v.parse::<f32>().ok())
-        .unwrap_or(noise_sigmas);
-    let same_ink_de00 = std::env::var("INKVEC_SAME_INK_DE00")
-        .ok()
-        .and_then(|v| v.parse::<f32>().ok())
-        .unwrap_or(same_ink_de00);
-    let paldbg = std::env::var("INKVEC_PALDBG").is_ok();
-    let de00_radius = std::env::var("INKVEC_MERGE_DE00")
-        .ok()
-        .and_then(|v| v.parse::<f32>().ok());
-    let ink_escape = std::env::var_os("INKVEC_NO_INK_ESCAPE").is_none();
-    let blend_tmin = blend_tmin();
+    let paldbg = inkvec_core::env::flag("INKVEC_PALDBG");
+    // The perceptual-merge experiment below, in a `research` build only.
+    let de00_radius: Option<f32> = if cfg!(feature = "research") {
+        inkvec_core::env::number("INKVEC_MERGE_DE00").map(|v| v as f32)
+    } else {
+        None
+    };
+    let blend_tmin = BLEND_TMIN;
     for (n, _key, c) in &modes {
         if colors.len() >= max_colors {
             break;
@@ -1098,7 +1093,7 @@ pub fn extract_palette_mdl(
                 continue;
             }
         }
-        // EXPERIMENT (`INKVEC_MERGE_DE00=<radius>`): decide the merge PERCEPTUALLY rather
+        // EXPERIMENT (`INKVEC_MERGE_DE00=<radius>`, research builds only): decide the merge PERCEPTUALLY rather
         // than by Euclidean distance in OKLab.
         //
         // The motivation is the failure documented on `SAME_INK_DE00`: OKLab's lightness is
@@ -1110,7 +1105,7 @@ pub fn extract_palette_mdl(
         // distance itself removes the problem at its root instead of patching it.
         //
         // Measured at 512 px, so a reader can check whether it was worth it:
-        // switching the palette to plain sRGB instead (`INKVEC_PALETTE_RGB`) cost +15%
+        // switching the palette to plain sRGB instead (`INKVEC_PALETTE_RGB`, research) cost +15%
         // parameters and +1% colour on JPEG q40 and changed nothing on clean input, which
         // is why the space is not the lever and the metric might be.
         let merged = if let Some(rad) = de00_radius {
@@ -1129,7 +1124,6 @@ pub fn extract_palette_mdl(
             // enough pixels, separated far enough above the noise, that explaining them
             // with the nearest ink would cost more residual than a new ink costs to state.
             let worth_it = sigma_noise > 0.0
-                && ink_escape
                 && nearest > JND_FLOOR
                 && nearest > reach
                 && 0.5 * (claim as f64) * ((nearest as f64 / sigma_noise).powi(2))

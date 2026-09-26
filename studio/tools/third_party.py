@@ -52,19 +52,21 @@ PERMISSIVE = {
     "Apache-2.0 WITH LLVM-exception", "CDLA-Permissive-2.0",
 }
 
-# `cargo tree` resolves target-specific dependencies for the host only, so a notice
-# file generated on Linux would leave out the Windows-only registry crate that the
-# Windows binary actually links. The three triples below are the ones the release
-# workflow ships; a crate keeps the label of the first build it appears in, so the
-# host's own crates stay "default" and only the ones it cannot see get a platform.
-BUILDS = [
-    ("default", []),
-    ("denoiser", ["--features", "denoiser"]),
-    ("windows", ["--target", "x86_64-pc-windows-msvc"]),
-    ("macos", ["--target", "aarch64-apple-darwin"]),
-    ("linux", ["--target", "x86_64-unknown-linux-gnu"]),
-    # Inkvec Studio Lite: the browser shell, for the target it is built for, in both of the
-    # builds `scripts/build-web.mjs` makes (one core, and the rayon pool of Web Workers).
+# `cargo tree` resolves target-specific dependencies for one target at a time, and with no
+# `--target` for the host: a file built that way on Windows labels Linux's crates "linux"
+# and one built on Linux labels them "default", so the check could only ever pass on the
+# machine that last wrote the file. Every build therefore names its target. The three
+# desktop triples are the ones the release workflow ships: a crate all three compile is
+# "default", one only the denoiser brings in is "denoiser", and the rest are labelled by
+# the platform that needs them.
+DESKTOP = [
+    ("windows", "x86_64-pc-windows-msvc"),
+    ("macos", "aarch64-apple-darwin"),
+    ("linux", "x86_64-unknown-linux-gnu"),
+]
+# Inkvec Studio Lite: the browser shell, for the target it is built for, in both of the
+# builds `scripts/build-web.mjs` makes (one core, and the rayon pool of Web Workers).
+BROWSER = [
     ("browser", ["-p", "inkvec-studio-wasm", "--target", "wasm32-unknown-unknown"]),
     ("browser, threads", ["-p", "inkvec-studio-wasm", "--target", "wasm32-unknown-unknown",
                           "--features", "threads"]),
@@ -153,12 +155,17 @@ def permissive(expr: str | None) -> bool:
     return False
 
 
-def tree(extra: list[str]) -> dict[str, str]:
-    """Crate name to declared licence, as `cargo tree` resolves it for a real build."""
+def tree(extra: list[str], edges: str = "normal,no-proc-macro") -> dict[str, str]:
+    """Crate name to declared licence, as `cargo tree` resolves it for a real build.
+
+    Normal edges follow `--target`. Build scripts and proc macros (and what they depend on)
+    do not: cargo resolves them for the machine running the build, so they are left out
+    here and read once with `--target all` (see render).
+    """
     out = subprocess.run(
         [
             CARGO, "tree", "--manifest-path", str(MANIFEST),
-            "--edges", "normal,build", "--prefix", "none", "--no-dedupe",
+            "--edges", edges, "--prefix", "none", "--no-dedupe",
             "--format", "{p}|{l}", *extra,
         ],
         capture_output=True, text=True, check=True,
@@ -187,9 +194,30 @@ def ort_web_version() -> str:
 
 def render() -> str:
     seen: dict[str, tuple[str, str]] = {}
-    for label, extra in BUILDS:
+    plain = {label: tree(["--target", triple]) for label, triple in DESKTOP}
+    with_denoiser = {label: tree(["--features", "denoiser", "--target", triple]) for label, triple in DESKTOP}
+    everywhere = set.intersection(*(set(t) for t in plain.values()))
+    for label, _ in DESKTOP:
+        for name in sorted(everywhere):
+            seen.setdefault(name, (plain[label][name], "default"))
+    anywhere = set().union(*(set(t) for t in plain.values()))
+    for label, _ in DESKTOP:
+        for name, licence in with_denoiser[label].items():
+            if name not in anywhere:
+                seen.setdefault(name, (licence, "denoiser"))
+    for label, _ in DESKTOP:
+        for name, licence in plain[label].items():
+            seen.setdefault(name, (licence, label))
+    for label, extra in BROWSER:
         for name, licence in tree(extra).items():
             seen.setdefault(name, (licence, label))
+    # Build scripts and proc macros run on the build machine and are resolved for it, so a
+    # per-target read would differ by host. `--target all` takes every platform's at once.
+    for name, licence in tree(["--target", "all", "--features", "denoiser"], "normal,build").items():
+        seen.setdefault(name, (licence, "build"))
+    for name, licence in tree(["-p", "inkvec-studio-wasm", "--target", "all", "--features", "threads"],
+                              "normal,build").items():
+        seen.setdefault(name, (licence, "build"))
 
     rows = sorted(seen.items())
     unusual = [(n, l, b) for n, (l, b) in rows if not permissive(l)]
@@ -205,7 +233,8 @@ def render() -> str:
         f"{len(rows)} Rust crates are compiled into the app"
         f" ({sum(1 for _, (_, b) in rows if b == 'default')} in every build; the rest"
         f" only with the optional denoiser, only on the platform the Build column"
-        f" names, or only in the browser build).",
+        f" names, only in the browser build, or, marked build, only by a build script or"
+        f" macro while compiling).",
         "",
     ]
 

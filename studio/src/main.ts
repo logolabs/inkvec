@@ -48,6 +48,7 @@ import { createScreens, openDenoiserModal } from "./views/screens";
 import { createWorkspace, jumpToWorst } from "./views/workspace";
 
 const DEFAULT_SETTINGS: Settings = {
+  mode: "quality",
   precision: 0.1,
   speckleFloor: 2,
   traceSize: 2048,
@@ -383,6 +384,18 @@ const screens = createScreens(store, {
   close: () => store.set({ screen: null }),
 });
 
+function onSettingChanged<K extends keyof Settings>(key: K, value: Settings[K]): void {
+  assignSetting(store.state.settings, key, value);
+  store.touch("settings");
+  const den = store.state.caps?.denoiser;
+  if (WEB) {
+    if (key === "cleanUpDamage" && value !== "off") noteDenoiserWait();
+  } else if (key === "cleanUpDamage" && value !== "off" && den?.supported && !den.installed) {
+    store.set({ stageState: { kind: "denoiserMissing" } });
+  }
+  controlChanged();
+}
+
 const workspace = createWorkspace(
   store,
   {
@@ -410,6 +423,7 @@ const workspace = createWorkspace(
       if (u) void openExternal(u.url);
     },
     markSeen: () => void savePrefs({ seenFirstRun: true }),
+    changeSetting: onSettingChanged,
   },
   () => samples,
 );
@@ -483,19 +497,7 @@ const railActs: RailActions = {
     if (store.state.preset === id) store.set({ preset: null });
   },
   baseSettings,
-  changeSetting: (key, value) => {
-    assignSetting(store.state.settings, key, value);
-    store.touch("settings");
-    // Choosing the denoiser before it is installed is not an error — the trace runs without
-    // it — but the stage says why nothing looks cleaner, and how to get it.
-    const den = store.state.caps?.denoiser;
-    if (WEB) {
-      if (key === "cleanUpDamage" && value !== "off") noteDenoiserWait();
-    } else if (key === "cleanUpDamage" && value !== "off" && den?.supported && !den.installed) {
-      store.set({ stageState: { kind: "denoiserMissing" } });
-    }
-    controlChanged();
-  },
+  changeSetting: onSettingChanged,
   resetGroup: (group) => {
     const base = baseSettings();
     for (const c of store.state.caps?.controls ?? []) {

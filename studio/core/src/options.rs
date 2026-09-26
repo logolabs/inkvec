@@ -37,13 +37,28 @@ impl Cleanup {
     }
 }
 
-/// The twenty-two controls, exactly as the Tune tab shows them.
+/// Tracing engine mode: Quality (deep MDL analysis-by-synthesis) vs Fast (single-pass Potrace-class).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TraceMode {
+    /// Deep MDL analysis-by-synthesis, global boundary solve, multi-model curve DP.
+    #[default]
+    Quality,
+    /// Single-pass Potrace-class planar tracer on shared edges (~30x faster).
+    Fast,
+}
+
+/// The twenty-three controls, exactly as the Tune tab shows them.
 ///
 /// Serialised with the names the frontend uses. Defaults are the command line's, read
 /// through `Args::default()` so the app and `inkvec logo.png` cannot drift apart.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
+    // --- Engine ---
+    /// Tracing engine mode: Quality (deep analysis-by-synthesis) or Fast (Potrace-class planar).
+    pub mode: TraceMode,
+
     // --- Detail ---
     /// Precision (px).
     pub precision: f64,
@@ -172,6 +187,10 @@ impl Default for Settings {
     fn default() -> Self {
         let a = inkvec_cli::Args::default();
         Self {
+            mode: match a.mode {
+                inkvec_cli::TraceMode::Quality => TraceMode::Quality,
+                inkvec_cli::TraceMode::Fast => TraceMode::Fast,
+            },
             precision: a.precision,
             speckle_floor: a.min_area,
             trace_size: a.max_dim as u32,
@@ -212,6 +231,7 @@ impl Settings {
     /// `inkvec::Options::to_args` keeps.
     pub fn to_args(&self) -> inkvec_cli::Args {
         let Self {
+            mode,
             precision,
             speckle_floor,
             trace_size,
@@ -255,6 +275,10 @@ impl Settings {
         };
 
         inkvec_cli::Args {
+            mode: match mode {
+                TraceMode::Quality => inkvec_cli::TraceMode::Quality,
+                TraceMode::Fast => inkvec_cli::TraceMode::Fast,
+            },
             precision,
             min_area: speckle_floor,
             max_dim: trace_size as usize,
@@ -440,6 +464,8 @@ pub enum Kind {
     Switch,
     /// Off / Auto / On.
     Tri,
+    /// A segmented choice between named options.
+    Choice,
 }
 
 /// A labelled stop on a slider's scale.
@@ -483,6 +509,22 @@ pub struct Control {
 /// The Tune tab's controls, in order. Four groups, nineteen rows.
 pub const CONTROLS: &[Control] = &[
     // ----------------------------------------------------------------- Detail ---
+    Control {
+        group: "Detail",
+        key: "mode",
+        label: "Engine",
+        unit: "",
+        kind: Kind::Choice,
+        min: 0.0,
+        max: 1.0,
+        curve: 1.0,
+        decimals: 0,
+        stops: &[
+            Stop { at: 0.0, label: "quality" },
+            Stop { at: 1.0, label: "fast" },
+        ],
+        help: "Quality uses deep analysis-by-synthesis, sub-pixel boundary solve and multi-model Bézier DP (max fidelity, ~1-2s). Fast uses single-pass Potrace-class planar tracing (~50ms, zero seams).",
+    },
     Control {
         group: "Detail",
         key: "precision",
@@ -817,6 +859,7 @@ mod tests {
     fn defaults_are_the_command_lines_defaults() {
         let a = Settings::default().to_args();
         let d = inkvec_cli::Args::default();
+        assert_eq!(a.mode, d.mode);
         assert_eq!(a.precision, d.precision);
         assert_eq!(a.min_area, d.min_area);
         assert_eq!(a.max_dim, d.max_dim);
@@ -826,11 +869,22 @@ mod tests {
     }
 
     #[test]
-    fn there_are_twenty_two_controls_in_four_groups() {
-        assert_eq!(CONTROLS.len(), 22);
+    fn there_are_twenty_three_controls_in_four_groups() {
+        assert_eq!(CONTROLS.len(), 23);
         let mut groups: Vec<&str> = CONTROLS.iter().map(|c| c.group).collect();
         groups.dedup();
         assert_eq!(groups, ["Detail", "Colour", "Shape", "Output"]);
+    }
+
+    #[test]
+    fn mode_defaults_to_quality_and_reaches_engine() {
+        assert_eq!(Settings::default().mode, TraceMode::Quality);
+        assert_eq!(Settings::default().to_args().mode, inkvec_cli::TraceMode::Quality);
+        let fast = Settings {
+            mode: TraceMode::Fast,
+            ..Settings::default()
+        };
+        assert_eq!(fast.to_args().mode, inkvec_cli::TraceMode::Fast);
     }
 
     #[test]

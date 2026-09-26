@@ -33,8 +33,10 @@ function listen<T>(event: string, fn: EventCallback<T>): Promise<UnlistenFn> {
 // ---------------------------------------------------------------------- settings ---
 
 export type Cleanup = "off" | "auto" | "on";
+export type TraceMode = "quality" | "fast";
 
 export interface Settings {
+  mode: TraceMode;
   precision: number;
   speckleFloor: number;
   traceSize: number;
@@ -98,7 +100,7 @@ export interface Control {
   key: keyof Settings;
   label: string;
   unit: string;
-  kind: "range" | "switch" | "tri";
+  kind: "range" | "switch" | "tri" | "choice";
   min: number;
   max: number;
   curve: number;

@@ -7,7 +7,7 @@
  */
 
 import { fill, h, icon } from "../lib/dom";
-import type { SampleInfo } from "../lib/ipc";
+import type { SampleInfo, Settings } from "../lib/ipc";
 import { count, de00, modKey, plannedTracePx, seconds, type StageState, type Store } from "../lib/state";
 import { createViewer, type Viewer } from "../components/viewer";
 import { DESKTOP_URL, WEB } from "../lib/platform";
@@ -26,6 +26,7 @@ export interface WorkspaceActions {
   showUpdate(): void;
   /** The first-run introduction has been read. */
   markSeen(): void;
+  changeSetting?: (key: keyof Settings, value: Settings[keyof Settings]) => void;
 }
 
 export interface Workspace {
@@ -50,7 +51,7 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
     const st = store.state;
     const on = Boolean(st.source);
     const stops = [1, 4, 12].map((z) => !st.fitted && Math.abs(st.zoom - z) < 0.01);
-    const key = JSON.stringify([on, st.view, st.show, st.fitted, stops, st.detail, Boolean(st.svg), st.bandsMissing]);
+    const key = JSON.stringify([on, st.view, st.show, st.fitted, stops, st.detail, Boolean(st.svg), st.bandsMissing, st.settings.mode]);
     if (key === toolsDrawn) return;
     toolsDrawn = key;
     const zoomStop = (label: string, z: number | "fit") =>
@@ -82,6 +83,32 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
         ),
       ),
       h("span.muted", { style: { fontSize: "11.5px" } }, "hold ", h("kbd", null, "Space"), " to flick"),
+      h("div.sep"),
+      h("span.eyebrow", null, "Engine"),
+      h(
+        "div.seg",
+        null,
+        h(
+          "button",
+          {
+            "aria-pressed": String(st.settings.mode === "quality"),
+            disabled: !on,
+            title: "Quality mode: Deep MDL analysis-by-synthesis, sub-pixel boundary solve and multi-model Bézier DP (~1-2s)",
+            onclick: () => act.changeSetting?.("mode", "quality"),
+          },
+          "💎 Quality",
+        ),
+        h(
+          "button",
+          {
+            "aria-pressed": String(st.settings.mode === "fast"),
+            disabled: !on,
+            title: "Fast mode: Single-pass Potrace-class polygonalization on the shared planar map (~30× faster, ~50ms)",
+            onclick: () => act.changeSetting?.("mode", "fast"),
+          },
+          "⚡ Fast",
+        ),
+      ),
       h("div.sep"),
       h("span.eyebrow", null, "Show"),
       h(
@@ -193,11 +220,13 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
       const last = st.liveStages[st.liveStages.length - 1];
       lead = last?.name ?? "starting";
       const elapsed = st.liveStages.reduce((a, x) => a + x.ms, 0) / 1000;
-      rest = `· ${plannedTracePx(st, st.tracingTier) ?? "—"} px · ${seconds(elapsed)} elapsed · Esc to cancel`;
+      const engineTag = st.settings.mode === "fast" ? "⚡ fast" : "💎 quality";
+      rest = `· ${engineTag} · ${plannedTracePx(st, st.tracingTier) ?? "—"} px · ${seconds(elapsed)} elapsed · Esc to cancel`;
       colour = "var(--state-stale)";
     } else if (r && st.result) {
       const draft = st.result.tier === "draft";
-      lead = draft ? "draft shown" : `traced in ${seconds(r.seconds)}`;
+      const engineTag = st.settings.mode === "fast" ? "⚡ fast" : "💎 quality";
+      lead = draft ? `${engineTag} draft` : `${engineTag} in ${seconds(r.seconds)}`;
       rest = draft
         ? `· ${r.tracedPx} px · full trace queued`
         : `· ${r.tracedPx} px · final · ${count(r.segments)} segments`;
@@ -226,9 +255,9 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
     );
   };
 
-  store.on(["source", "view", "show", "zoom", "fitted", "detail", "svg", "bandsMissing"], renderTools);
+  store.on(["source", "view", "show", "zoom", "fitted", "detail", "svg", "bandsMissing", "settings"], renderTools);
   store.on(["source", "svg", "stageState", "result", "detail", "worstCorner", "prefs"], renderStage);
-  store.on(["tracing", "liveStages", "report", "result", "source", "update", "denoiserFetch"], renderStrip);
+  store.on(["tracing", "liveStages", "report", "result", "source", "update", "denoiserFetch", "settings"], renderStrip);
 
   renderTools();
   renderStage();

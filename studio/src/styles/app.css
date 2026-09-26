@@ -1014,10 +1014,19 @@ kbd {
 /* The denoiser and editable structure: big, and on screen whichever half is showing. */
 .railmodes {
   flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px var(--rail-pad) 0;
+}
+.railmodes-row {
   display: grid;
   grid-template-columns: 1.75fr 1fr;
   gap: 8px;
-  padding: 10px var(--rail-pad) 0;
+}
+.mode.mode-engine {
+  background: var(--paper);
+  border-color: var(--rule);
 }
 .mode {
   min-width: 0;
@@ -1288,14 +1297,123 @@ kbd {
 
 /* The pinned readout: the three figures a control moves, and what it moved them by. */
 .readout {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 1px;
+  display: flex;
+  flex-direction: column;
   min-height: 54px;
   background: var(--rule2);
   border: 1px solid var(--rule2);
   border-radius: var(--radius);
   overflow: hidden;
+}
+.readout-badge-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 10px;
+  background: var(--card);
+  border-bottom: 1px solid var(--rule2);
+}
+.engine-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all var(--d-micro);
+  line-height: 1.4;
+  font-family: inherit;
+}
+.engine-pill.fast {
+  background: color-mix(in srgb, var(--accent) 15%, var(--paper));
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--accent);
+}
+.engine-pill.quality {
+  background: color-mix(in srgb, var(--accent) 10%, var(--paper));
+  border-color: color-mix(in srgb, var(--accent) 25%, transparent);
+  color: var(--ink);
+}
+.engine-pill:hover {
+  filter: brightness(1.08);
+  border-color: var(--accent);
+}
+.time-pill {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.readout-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+}
+.fastmode-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--rule2));
+  border-radius: var(--radius-lg);
+}
+.fastmode-banner-icon {
+  font-size: 16px;
+  line-height: 1;
+  flex: none;
+}
+.fastmode-banner-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.fastmode-banner-title {
+  font-weight: 600;
+  color: var(--ink);
+  font-size: 12px;
+}
+.fastmode-banner-desc {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.fastmode-banner-btn {
+  flex: none;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--paper);
+  border: 1px solid var(--rule2);
+  border-radius: var(--radius);
+  color: var(--ink);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--d-micro);
+}
+.fastmode-banner-btn:hover {
+  background: var(--hover);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.quality-only-tag {
+  display: inline-block;
+  font-size: 9.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--gold) 15%, transparent);
+  color: var(--gold);
+  border: 1px solid color-mix(in srgb, var(--gold) 35%, transparent);
+  line-height: 1.3;
 }
 .readout .cell {
   min-width: 0;

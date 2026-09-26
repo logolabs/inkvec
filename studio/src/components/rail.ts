@@ -44,11 +44,11 @@ export interface RailActions extends PaletteActions, AutoChoseActions {
 }
 
 /**
- * The two settings that are promoted out of the control groups into the modes block at the
- * top of the rail. They are the two things people most often come for, so they are not left
+ * The three settings that are promoted out of the control groups into the modes block at the
+ * top of the rail. They are the things people most often come for, so they are not left
  * three folds down a list; and each is drawn once, so a setting never has two controls.
  */
-const PROMOTED: ReadonlySet<string> = new Set(["cleanUpDamage", "editability"]);
+const PROMOTED: ReadonlySet<string> = new Set(["mode", "cleanUpDamage", "editability"]);
 
 /** What hand-drawn files do, from the 1,544 artist-drawn SVGs in the evaluation corpus. */
 const ARTIST = { axisHandles: 0.34, smoothJoins: 0.89, alignedNodes: 0.86 } as const;
@@ -177,6 +177,51 @@ export function createRail(store: Store, act: RailActions): HTMLElement {
 function modesBlock(store: Store, act: RailActions): HTMLElement[] {
   const st = store.state;
   const help = (key: string) => st.caps?.controls.find((c) => c.key === key)?.help ?? "";
+  const engineMode = st.settings.mode ?? "quality";
+
+  const engine = h(
+    "div.mode.mode-engine",
+    null,
+    h(
+      "div.modehead",
+      null,
+      tip(
+        h("span.modetitle", { tabindex: "0" }, "Engine"),
+        help("mode") ||
+          "Quality uses deep analysis-by-synthesis, sub-pixel boundary solve and multi-model Bézier DP (max fidelity, ~1-2s). Fast uses single-pass Potrace-class planar tracing (~50ms, zero seams).",
+      ),
+      h(
+        "span.modestate",
+        null,
+        engineMode === "fast" ? "⚡ single-pass (~50ms)" : "💎 deep solve (~1.5s)",
+      ),
+    ),
+    h(
+      "div.seg.big",
+      { role: "group", "aria-label": "Tracing Engine" },
+      h(
+        "button",
+        {
+          "aria-pressed": String(engineMode === "quality"),
+          "data-ctl": "mode:quality",
+          title: "Quality mode: Deep MDL analysis-by-synthesis, global boundary solve and multi-model Bézier DP",
+          onclick: () => act.changeSetting("mode", "quality"),
+        },
+        "💎 Quality",
+      ),
+      h(
+        "button",
+        {
+          "aria-pressed": String(engineMode === "fast"),
+          "data-ctl": "mode:fast",
+          title: "Fast mode: Single-pass Potrace-class polygonalization on the shared planar map (~30× faster)",
+          onclick: () => act.changeSetting("mode", "fast"),
+        },
+        "⚡ Fast",
+      ),
+    ),
+  );
+
   const den = st.caps?.denoiser;
   const mode = st.settings.cleanUpDamage;
   const supported = den?.supported ?? false;
@@ -256,7 +301,7 @@ function modesBlock(store: Store, act: RailActions): HTMLElement[] {
       h("span.state", null, editable ? "On" : "Off"),
     ),
   );
-  return [denoiser, structure];
+  return [engine, h("div.railmodes-row", null, denoiser, structure)];
 }
 
 // ---------------------------------------------------------------------- the tabs ---
@@ -316,8 +361,29 @@ function railTabs(store: Store, act: RailActions): HTMLElement[] {
 
 // ------------------------------------------------------------------------- tune ---
 
+/** A clear banner when Fast mode is active, explaining that advanced curve DPs and boundary solvers run in Quality mode. */
+function fastModeBanner(store: Store, act: RailActions): HTMLElement | null {
+  if (store.state.settings.mode !== "fast") return null;
+  return h(
+    "div.fastmode-banner",
+    null,
+    h("span.glyph", null, "⚡"),
+    h(
+      "div.banner-text",
+      null,
+      h("span.banner-title", null, "Fast Mode Active (Potrace-class)"),
+      h("span.banner-desc", null, "Single-pass planar fit (~50ms). Boundary solve, curve DP & ring repair run in Quality mode."),
+    ),
+    h(
+      "button.reset",
+      { onclick: () => act.changeSetting("mode", "quality"), title: "Switch back to Quality mode" },
+      "Quality",
+    ),
+  );
+}
+
 function tunePane(store: Store, act: RailActions): (HTMLElement | null)[] {
-  return [guideLine(store, act), presets(store, act), ...controlGroups(store, act)];
+  return [guideLine(store, act), fastModeBanner(store, act), presets(store, act), ...controlGroups(store, act)];
 }
 
 /** The way back into the wizard, for an image that is already open. */
@@ -860,6 +926,16 @@ function controlGroups(store: Store, act: RailActions): HTMLElement[] {
   });
 }
 
+const QUALITY_ONLY_CONTROLS: ReadonlySet<string> = new Set([
+  "bezierCost",
+  "cornerAngle",
+  "repairRings",
+  "matchRepeatedShapes",
+  "matchThreshold",
+  "fewerPaths",
+  "timeLimit",
+]);
+
 /**
  * One row: a plain-words label, its unit, the value shown numerically, and a slider on a
  * perceptual scale with named stops rather than a bare track.
@@ -868,6 +944,10 @@ export function controlRow(store: Store, c: Control, act: Pick<RailActions, "cha
   const value = store.state.settings[c.key];
   const changed = value !== base[c.key];
   const row = (...kids: (HTMLElement | null)[]) => h(changed ? "div.control.changed" : "div.control", null, ...kids);
+  const qualityOnly = store.state.settings.mode === "fast" && QUALITY_ONLY_CONTROLS.has(c.key);
+  const qualityTag = qualityOnly
+    ? tip(h("span.quality-only-tag", null, "Quality only"), "This control only affects Quality mode and is bypassed in Fast mode.")
+    : null;
 
   if (c.kind === "switch") {
     const sw = h("button.switch", {
@@ -877,7 +957,14 @@ export function controlRow(store: Store, c: Control, act: Pick<RailActions, "cha
       "data-ctl": `${c.key}:switch`,
       onclick: () => act.changeSetting(c.key, !value as never),
     });
-    return row(h("div.controlhead", null, tip(h("span.label", { tabindex: "0" }, c.label), c.help), sw));
+    return row(
+      h(
+        "div.controlhead",
+        null,
+        h("div", { style: { display: "flex", alignItems: "baseline", gap: "6px" } }, tip(h("span.label", { tabindex: "0" }, c.label), c.help), qualityTag),
+        sw,
+      ),
+    );
   }
 
   if (c.kind === "tri") {
@@ -886,7 +973,33 @@ export function controlRow(store: Store, c: Control, act: Pick<RailActions, "cha
       h(
         "div.controlhead",
         null,
-        tip(h("span.label", { tabindex: "0" }, c.label), c.help),
+        h("div", { style: { display: "flex", alignItems: "baseline", gap: "6px" } }, tip(h("span.label", { tabindex: "0" }, c.label), c.help), qualityTag),
+        h(
+          "div.seg",
+          null,
+          ...options.map(([id, label]) =>
+            h(
+              "button",
+              {
+                "aria-pressed": String(value === id),
+                "data-ctl": `${c.key}:${id}`,
+                onclick: () => act.changeSetting(c.key, id as never),
+              },
+              label,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  if (c.kind === "choice") {
+    const options = c.stops.map((s) => [s.label.toLowerCase(), s.label]);
+    return row(
+      h(
+        "div.controlhead",
+        null,
+        h("div", { style: { display: "flex", alignItems: "baseline", gap: "6px" } }, tip(h("span.label", { tabindex: "0" }, c.label), c.help), qualityTag),
         h(
           "div.seg",
           null,
@@ -956,7 +1069,7 @@ export function controlRow(store: Store, c: Control, act: Pick<RailActions, "cha
     h(
       "div.controlhead",
       null,
-      tip(h("span.label", { tabindex: "0" }, c.label), c.help),
+      h("div", { style: { display: "flex", alignItems: "baseline", gap: "6px" } }, tip(h("span.label", { tabindex: "0" }, c.label), c.help), qualityTag),
       c.unit ? h("span.unit", null, c.unit) : null,
       field,
     ),
@@ -1022,12 +1135,40 @@ function readout(store: Store, act: RailActions): HTMLElement {
   const cell = (value: string, label: string, change: HTMLElement | null) =>
     h("div.cell", null, h("span.v.num", null, value), h("span.k", null, label), change);
 
+  const isFast = (st.settings.mode ?? "quality") === "fast";
+  const badgeRow = h(
+    "div.readout-badge-row",
+    null,
+    h(
+      "button.engine-pill" + (isFast ? ".fast" : ".quality"),
+      {
+        type: "button",
+        title: isFast ? "Fast vectorizer active. Click to switch to Quality mode." : "Quality vectorizer active. Click to switch to Fast mode.",
+        onclick: () => act.changeSetting("mode", isFast ? "quality" : "fast"),
+      },
+      h("span.engine-icon", null, isFast ? "⚡" : "💎"),
+      h("span.engine-name", null, isFast ? "Fast" : "Quality"),
+    ),
+    r.seconds != null
+      ? h(
+          "span.time-pill.num",
+          { title: `Traced in ${seconds(r.seconds)}` },
+          seconds(r.seconds),
+        )
+      : null,
+  );
+
   return h(
     "div.readout",
     { "aria-live": "polite" },
-    cell(de00(r.meanDe00), "dE00", p ? change(r.meanDe00, p.meanDe00, (d) => d.toFixed(2), 0.005, true) : null),
-    cell(count(r.coordinates), "coordinates", p ? change(r.coordinates, p.coordinates, count, 0, false) : null),
-    cell(bytes(r.bytes), "file", p ? change(r.bytes, p.bytes, bytes, 16, false) : null),
+    badgeRow,
+    h(
+      "div.readout-grid",
+      null,
+      cell(de00(r.meanDe00), "dE00", p ? change(r.meanDe00, p.meanDe00, (d) => d.toFixed(2), 0.005, true) : null),
+      cell(count(r.coordinates), "coordinates", p ? change(r.coordinates, p.coordinates, count, 0, false) : null),
+      cell(bytes(r.bytes), "file", p ? change(r.bytes, p.bytes, bytes, 16, false) : null),
+    ),
   );
 }
 

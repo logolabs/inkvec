@@ -2030,6 +2030,10 @@ mod cache_tests {
                 clean_up_damage: crate::options::Cleanup::On,
                 ..s.clone()
             },
+            Settings {
+                mode: crate::options::TraceMode::Fast,
+                ..s.clone()
+            },
         ] {
             assert!(
                 cache.reuse(&src, &changed, Tier::Final).is_none(),

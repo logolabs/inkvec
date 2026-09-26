@@ -285,7 +285,8 @@ def check_cold(browser, url: str, out: pathlib.Path, note, mbps: float) -> None:
     page.wait_for_timeout(1200)
     runs = page.evaluate("window.__inkvecStudioLite.denoiserRuns")
     page.screenshot(path=str(out / "C4-denoised-result.png"))
-    caption = page.evaluate("document.querySelector('.mode .modestate')?.innerText")
+    # The Engine card (Quality/Fast) is a `.mode` too, and comes first: read the denoiser's.
+    caption = page.evaluate("document.querySelector('.mode:not(.mode-engine) .modestate')?.innerText")
     note(f"cold: traced again with the denoiser: {runs} network run(s); rail now {caption!r}")
     page.goto("about:blank")
     ctx.close()

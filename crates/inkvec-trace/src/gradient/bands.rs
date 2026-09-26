@@ -45,14 +45,16 @@ fn common_pixel_gain(
     let stride = (samples.len() / fit_cap()).max(1);
     let mut difference = 0.0;
     let mut used = 0;
+    let (left_eval, right_eval, union_eval) =
+        (left.model.eval(), right.model.eval(), union.model.eval());
     for i in (0..samples.len()).step_by(stride) {
         let model = if group[samples.px[i]] == a {
-            &left.model
+            &left_eval
         } else {
-            &right.model
+            &right_eval
         };
         let split = model.color_at(samples.x[i], samples.y[i]);
-        let merged = union.model.color_at(samples.x[i], samples.y[i]);
+        let merged = union_eval.color_at(samples.x[i], samples.y[i]);
         for c in 0..3 {
             let old = ((samples.srgb[i][c] - split[c]).abs() as f64 - QUANT_HALF_STEP).max(0.0);
             let new = ((samples.srgb[i][c] - merged[c]).abs() as f64 - QUANT_HALF_STEP).max(0.0);

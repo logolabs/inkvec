@@ -162,6 +162,15 @@ fn linear_t(x: f64, y: f64, p0: (f64, f64), p1: (f64, f64)) -> f64 {
 /// Normalised radial coordinate of `(x, y)`: 0 at the centre, 1 on the ellipse.
 #[inline]
 fn radial_t(x: f64, y: f64, c: (f64, f64), r: f64, aspect: f64, angle: f64) -> f64 {
+    if r <= 0.0 || aspect == 1.0 {
+        return radial_t_rot(x, y, c, r, aspect, (0.0, 1.0));
+    }
+    radial_t_rot(x, y, c, r, aspect, angle.sin_cos())
+}
+
+/// [`radial_t`] with the rotation's `angle.sin_cos()` given (unused when `aspect` is 1).
+#[inline]
+fn radial_t_rot(x: f64, y: f64, c: (f64, f64), r: f64, aspect: f64, sin_cos: (f64, f64)) -> f64 {
     if r <= 0.0 {
         return 0.0;
     }
@@ -169,7 +178,7 @@ fn radial_t(x: f64, y: f64, c: (f64, f64), r: f64, aspect: f64, angle: f64) -> f
     let rho = if aspect == 1.0 {
         (dx * dx + dy * dy).sqrt()
     } else {
-        let (sn, cs) = angle.sin_cos();
+        let (sn, cs) = sin_cos;
         let u = dx * cs + dy * sn;
         let v = (-dx * sn + dy * cs) * aspect;
         (u * u + v * v).sqrt()
@@ -321,17 +330,20 @@ pub(crate) fn from_space(c: [f64; 3], space: Interp) -> [f32; 3] {
     }
 }
 
+/// Interpolate two stops already in linear light, returning sRGB.
+#[inline]
+fn lerp_lin(a: [f64; 3], b: [f64; 3], t: f64) -> [f32; 3] {
+    to_srgb([
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+    ])
+}
+
 /// Interpolate two sRGB stops in the given space.
 fn lerp_stops(c0: [f32; 3], c1: [f32; 3], t: f64, interp: Interp) -> [f32; 3] {
     match interp {
-        Interp::LinearRgb => {
-            let (a, b) = (to_lin(c0), to_lin(c1));
-            to_srgb([
-                a[0] + (b[0] - a[0]) * t,
-                a[1] + (b[1] - a[1]) * t,
-                a[2] + (b[2] - a[2]) * t,
-            ])
-        }
+        Interp::LinearRgb => lerp_lin(to_lin(c0), to_lin(c1), t),
         Interp::Srgb => {
             let t = t as f32;
             [
@@ -352,28 +364,137 @@ fn eval_stops(
     t: f64,
     interp: Interp,
 ) -> [f32; 3] {
+    let (k, u) = segment(mids, t);
+    let stop = |i: usize| match i {
+        0 => c0,
+        i if i <= mids.len() => mids[i - 1].1,
+        _ => c1,
+    };
+    lerp_stops(stop(k), stop(k + 1), u, interp)
+}
+
+/// Which piece of a multi-stop profile `t` falls in, as the index of its first stop
+/// (`c0` is 0, `mids[i]` is `i + 1`), and where along that piece, 0 to 1.
+#[inline]
+fn segment(mids: &[(f64, [f32; 3])], t: f64) -> (usize, f64) {
     if mids.is_empty() {
-        return lerp_stops(c0, c1, t, interp);
+        return (0, t);
     }
-    let (mut lo_t, mut lo_c) = (0.0, c0);
-    for &(off, col) in mids {
+    let mut lo_t = 0.0;
+    for (i, &(off, _)) in mids.iter().enumerate() {
         if t <= off {
             let u = if off > lo_t {
                 (t - lo_t) / (off - lo_t)
             } else {
                 0.0
             };
-            return lerp_stops(lo_c, col, u, interp);
+            return (i, u);
         }
         lo_t = off;
-        lo_c = col;
     }
     let u = if lo_t < 1.0 {
         (t - lo_t) / (1.0 - lo_t)
     } else {
         1.0
     };
-    lerp_stops(lo_c, c1, u, interp)
+    (mids.len(), u)
+}
+
+/// [`FillModel::color_at`] for many positions of one model.
+///
+/// What does not depend on the position is worked out once here: the stops' conversion
+/// to linear light and an ellipse's rotation. Those were 6 of the 9 `powf` of every
+/// evaluated pixel, and the gradient fits evaluate millions of pixels per image. The
+/// result is `color_at`'s bit for bit: the same expressions on the same values, only
+/// hoisted out of the pixel loop.
+pub(crate) struct FillEval<'a> {
+    model: &'a FillModel,
+    /// Every stop, first to last, in linear light; empty unless the model interpolates
+    /// in linear RGB.
+    lin: Vec<[f64; 3]>,
+    /// `angle.sin_cos()` of an elliptical radial model.
+    sin_cos: (f64, f64),
+}
+
+impl FillModel {
+    /// A [`FillEval`] of this model, for evaluating it at many positions.
+    pub(crate) fn eval(&self) -> FillEval<'_> {
+        let (mut lin, mut sin_cos) = (Vec::new(), (0.0, 1.0));
+        match self {
+            FillModel::Flat(_) => {}
+            FillModel::Linear {
+                c0,
+                c1,
+                interp,
+                mids,
+                ..
+            }
+            | FillModel::Radial {
+                c0,
+                c1,
+                interp,
+                mids,
+                ..
+            } => {
+                if *interp == Interp::LinearRgb {
+                    lin.push(to_lin(*c0));
+                    lin.extend(mids.iter().map(|&(_, c)| to_lin(c)));
+                    lin.push(to_lin(*c1));
+                }
+            }
+        }
+        if let FillModel::Radial { aspect, angle, .. } = *self {
+            if aspect != 1.0 {
+                sin_cos = angle.sin_cos();
+            }
+        }
+        FillEval {
+            model: self,
+            lin,
+            sin_cos,
+        }
+    }
+}
+
+impl FillEval<'_> {
+    /// The fill colour (sRGB) at a pixel-centre position; see [`FillModel::color_at`].
+    #[inline]
+    pub(crate) fn color_at(&self, x: f64, y: f64) -> [f32; 3] {
+        let (t, c0, mids, c1, interp) = match *self.model {
+            FillModel::Flat(c) => return c,
+            FillModel::Linear {
+                p0,
+                p1,
+                c0,
+                c1,
+                interp,
+                ref mids,
+            } => (linear_t(x, y, p0, p1), c0, mids, c1, interp),
+            FillModel::Radial {
+                c,
+                r,
+                c0,
+                c1,
+                interp,
+                aspect,
+                ref mids,
+                ..
+            } => (
+                radial_t_rot(x, y, c, r, aspect, self.sin_cos),
+                c0,
+                mids,
+                c1,
+                interp,
+            ),
+        };
+        match interp {
+            Interp::LinearRgb => {
+                let (k, u) = segment(mids, t);
+                lerp_lin(self.lin[k], self.lin[k + 1], u)
+            }
+            Interp::Srgb => eval_stops(c0, mids, c1, t, interp),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1238,6 +1359,7 @@ fn chi2(model: &FillModel, s: &Samples, sigma: f64) -> f64 {
     let mut sum = 0.0;
     let mut used = 0usize;
     let mut i = 0;
+    let model = model.eval();
     while i < n {
         let p = model.color_at(s.x[i], s.y[i]);
         for (obs, pred) in s.srgb[i].iter().zip(p.iter()) {
@@ -1265,6 +1387,7 @@ fn ramp_support(model: &FillModel, s: &Samples, mean: [f32; 3], contrast: f64) -
     let thr2 = thr * thr;
     let stride = (s.len() / fit_cap()).max(1);
     let (mut n, mut k) = (0usize, 0usize);
+    let model = model.eval();
     for i in (0..s.len()).step_by(stride) {
         let p = model.color_at(s.x[i], s.y[i]);
         let d = [p[0] - mean[0], p[1] - mean[1], p[2] - mean[2]];
@@ -1284,6 +1407,7 @@ fn visible_contrast(model: &FillModel, s: &Samples) -> f64 {
     let mut lo = [f32::MAX; 3];
     let mut hi = [f32::MIN; 3];
     let stride = (s.len() / fit_cap()).max(1);
+    let model = model.eval();
     for i in (0..s.len()).step_by(stride) {
         let p = model.color_at(s.x[i], s.y[i]);
         for k in 0..3 {

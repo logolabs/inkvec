@@ -60,6 +60,7 @@ interface ShowcaseData {
   seed: string;
   cases: number;
   families: string[];
+  size: number;
   gallery_engines: string[];
   engines: EngineSummary[];
   best_de_wins: Record<string, number>;
@@ -283,7 +284,7 @@ function content(d: ShowcaseData): HTMLElement {
       h(
         "p.faint",
         null,
-        `${d.cases} benchmark cases (real icons, emoji, synthetic probes and real brand logos; selection fixed from the seed ${d.seed}), each rendered from its source SVG, traced by every engine and scored against the render: CIEDE2000 colour difference, DISTS and DINOv3 perceptual similarity, and geometry against the artist's own file (1.00× is exactly the artist's number of parameters). Inkvec had the lowest colour difference on ${wins} of ${d.cases}; in the other sets, on ${bwins} of ${d.brands.cases} brand logos and ${cwins} of ${d.corpus.cases} more icons and emoji.`,
+        `${d.cases} benchmark cases (real icons, emoji, synthetic probes and real brand logos; selection fixed from the seed ${d.seed}), each rendered from its source SVG at ${d.size} px, traced by every engine from that raster and scored against the render: CIEDE2000 colour difference, DISTS and DINOv3 perceptual similarity, and geometry against the artist's own file (1.00× is exactly the artist's number of parameters). Inkvec had the lowest colour difference on ${wins} of ${d.cases}; in the other sets, on ${bwins} of ${d.brands.cases} brand logos and ${cwins} of ${d.corpus.cases} more icons and emoji.`,
       ),
       ink
         ? h(
@@ -295,13 +296,13 @@ function content(d: ShowcaseData): HTMLElement {
             bignum("seconds per case", ink.seconds_median.toFixed(2), "median, native command line"),
           )
         : null,
-      table(`${d.cases} benchmark cases`, d.engines),
+      table(`${d.cases} benchmark cases, re-run at ${d.size} px`, d.engines),
       table(`${d.brands.cases} brand logos`, d.brands.engines),
       table(`${d.corpus.cases} more icons and emoji`, d.corpus.engines),
       h(
         "p.faint.sc-note",
         null,
-        `Means over the cases except seconds (median). Inkvec was traced by the build named above; the other engines have not changed, so their traces and scores are from their recorded runs (the benchmark's: out/${d.run}/results.json, ${d.date}, bench/crosscompare_competitors.py). The brand logos beyond the first twenty, and the third set, were picked by the seed ${d.pick_seed} alone (hash order, a quota per kind), not by how any engine traces them. Computed by tools/showcase_data.py. `,
+        `Means over the cases except seconds (median). Every case is rendered at ${d.size} px on white, traced by every engine from that raster and scored at 1024 px: the pictures and the tables are the same traces. Inkvec was traced by the build named above; the other engines have not changed. The benchmark of record is the ${d.date} run at 512 px (out/${d.run}/results.json, bench/crosscompare_competitors.py); these tables re-run its cases at ${d.size} px, where a logo's fine detail survives. The brand logos beyond the first twenty, and the third set, were picked by the seed ${d.pick_seed} alone (hash order, a quota per kind), not by how any engine traces them. Computed by tools/showcase_data.py. `,
         h("a", { href: "#", onclick: (e: Event) => { e.preventDefault(); void openExternal("https://github.com/logolabs/inkvec#results"); } }, "Method and every case"),
       ),
       h(

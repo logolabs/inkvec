@@ -1,32 +1,34 @@
 #!/usr/bin/env python3
 """The before/after showcase and the results summary: one command to refresh both.
 
-    python tools/showcase_data.py --exe target/release/inkvec.exe
+    python tools/showcase_data.py --exe target/release/inkvec.exe [--size 1024]
         [--run out/crosscompare-competitors-2026-09-25]
         [--brands "M:/AI STORAGE/AITrains/BrandsDataset/dataset/brands"]
         [--work out/showcase] [--vendor tools/vendor]
 
-Inkvec is always traced afresh with `--exe`, so the pictures and the numbers are what the
-current engine does; the other engines did not change, so their traces are reused:
+Every case is rendered from its source SVG onto white, square, with a 4% margin, at
+`--size` pixels (1024 by default: a logo's fine detail -- an ear tip, a serif -- is a few
+pixels at 512 and is lost by every engine), traced by every engine from that raster, and
+scored at 1024 against the render exactly as `bench/crosscompare_competitors.py` scores
+(CIEDE2000, SSIM, DISTS, DINO; geometry against the artist's file). Three sets:
 
-* **Benchmark cases** are the competitor run's (`bench/crosscompare_competitors.py`, its
-  `results.json` and `cases/<key>/512/`). Inkvec re-traces each case's `input.png` and is
-  scored exactly as that script scores (CIEDE2000, SSIM, DISTS and DINO at 1024 against the
-  source render, geometry against the artist's file); the competitors' rows are the run's.
-* **Brand logos** are the twenty real brand marks the Space showed before 0.2 and thirty
-  more picked by PICK_SEED alone (hash order, a quota per kind of source file: gradients,
-  thin lines, multi-colour, flat), from an external dataset not in this repository.
-* **More icons and emoji** are three more files from each of the repository's corpora,
-  picked by the same seed.
+* **Benchmark cases**: the 21 of the competitor run named by `--run` (its seed and
+  selection). That run traced them at 512 px and is the benchmark of record; the gallery
+  re-runs them at `--size` so its pictures and its numbers are the same traces.
+* **Brand logos**: the twenty real brand marks the Space showed before 0.2 and thirty more
+  picked by PICK_SEED alone (hash order, a quota per kind of source file: gradients, thin
+  lines, multi-colour, flat), from an external dataset not in this repository.
+* **More icons and emoji**: three more files from each of the repository's corpora, picked
+  by the same seed.
 
-The last two sets are rendered with the benchmark's protocol (square viewBox, 4% margin,
-512 px on white, scored at 1024); their competitor traces are made once, with the same
-engines and flags as the competitor run, and kept in `--work`, so later runs only re-trace
-Inkvec.
+Inkvec is traced afresh on every run with `--exe`. The other engines have not changed, so
+their traces are made once and kept in `--work`, under a folder named for the size, so a
+trace at one size is never mistaken for another; later runs only re-trace Inkvec.
 
 Writes `web/showcase.json` (the summaries and each case's metrics and thumbnail) and
-`web/showcase/<key>.json` (a case's raster and every engine's SVG, fetched only when the
-case is opened). The Space's presentation page and the Studio's Showcase screen read both.
+`web/showcase/<key>.json` (a case's raster, lossless WebP, and the shown engines' SVGs,
+fetched only when the case is opened). The Space's presentation page and the Studio's
+Showcase screen read both.
 """
 
 from __future__ import annotations
@@ -103,15 +105,18 @@ def sha(p: Path) -> str:
 
 
 def data_url(path: Path, size: int | None = None) -> str:
+    """The case's raster as lossless WebP (the pixels exactly, about a third smaller than
+    PNG), or a thumbnail of it as lossy WebP."""
     from PIL import Image
 
-    im = Image.open(path)
-    if size:
-        im = im.convert("RGB")
-        im.thumbnail((size, size))
+    im = Image.open(path).convert("RGB")
     buf = io.BytesIO()
-    im.save(buf, "PNG", optimize=True)
-    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+    if size:
+        im.thumbnail((size, size), Image.LANCZOS)
+        im.save(buf, "WEBP", quality=82, method=6)
+    else:
+        im.save(buf, "WEBP", lossless=True, quality=100, method=6)
+    return "data:image/webp;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
 class Scorer:
@@ -212,49 +217,28 @@ def label_of(key: str) -> tuple[str, str]:
     return name.replace("_", " ").replace("-", " ")[:40], FAMILY_WHAT.get(family, family)
 
 
-def benchmark(s: Scorer, run: Path, work: Path) -> tuple[list[dict], list[dict]]:
-    """The competitor run with Inkvec re-traced: every row, and every case for the gallery."""
+def benchmark_cases(run: Path) -> list[tuple[str, str, str, Path]]:
+    """The competitor run's cases, from the source SVGs it kept: the labelled ones first."""
     rows = json.loads((run / "results.json").read_text(encoding="utf-8"))
-    keep = [r for r in rows if r["engine"] != "inkvec"]
-    fresh = []
     keys = sorted({r["key"] for r in rows})
-    for key in keys:
-        base = next(r for r in rows if r["key"] == key)
-        folder = run / "cases" / key / "512"
-        out = work / "bench" / key
-        out.mkdir(parents=True, exist_ok=True)
-        ref = s.ref(run / "cases" / key / "truth.png")
-        row = {k: base[k] for k in ("family", "name", "key", "source", "source_sha256", "gt")}
-        row.update(s.trace_and_score("inkvec", folder / "input.png", out / "inkvec.svg", ref, base["gt"]))
-        fresh.append(row)
-        print(f"  bench {key}: dE {row['de1024']:.3f}", flush=True)
-    all_rows = keep + fresh
-    # The labelled logos first, then the rest in the run's order.
-    order = [k for k, _, _ in BENCH_LABELS if k in keys] + [k for k in keys if k not in {k for k, _, _ in BENCH_LABELS}]
-    gallery = []
-    for key in order:
-        by = {r["engine"]: r for r in all_rows if r["key"] == key}
-        folder = run / "cases" / key / "512"
-        svgs = {e: (work / "bench" / key / "inkvec.svg") if e == "inkvec" else folder / f"{e}.svg" for e in GALLERY_ENGINES}
-        case_file(key, folder / "input.png", svgs)
-        label, what = label_of(key)
-        gallery.append(case_entry(key, label, what, by["inkvec"]["gt"], folder / "input.png", by))
-    return all_rows, gallery
+    labelled = [k for k, _, _ in BENCH_LABELS if k in keys]
+    order = labelled + [k for k in keys if k not in labelled]
+    return [(k, *label_of(k), run / "cases" / k / "original.svg") for k in order]
 
 
-def traced_set(s: Scorer, cases: list[tuple[str, str, str, Path]], work: Path, name: str) -> tuple[list[dict], list[dict]]:
-    """Cases outside the competitor run: rendered with its protocol, the competitors traced
-    once and kept in `work`, Inkvec always afresh."""
+def traced_set(s: Scorer, cases: list[tuple[str, str, str, Path]], work: Path, name: str, size: int) -> tuple[list[dict], list[dict]]:
+    """One set: each case rendered at `size`, the competitors traced once and kept in
+    `work/<size>px/<set>/`, Inkvec always afresh, everything scored at 1024."""
     c = s.c
     rows, gallery = [], []
     for key, label, what, src in cases:
-        out = work / name / key
+        out = work / f"{size}px" / name / key
         out.mkdir(parents=True, exist_ok=True)
         original = src.read_text(encoding="utf-8-sig")
         if not (out / "truth.png").exists():
             truth = c.render.fit_viewbox(c.render.normalize_svg(original)[0], 512, 512, 0.04)
             c.cc.png(c.cc.rgb(truth, 1024), out / "truth.png")
-            c.cc.png(c.cc.rgb(truth, 512), out / "input.png")
+            c.cc.png(c.cc.rgb(truth, size), out / "input.png")
         ref = s.ref(out / "truth.png")
         gt = c.cc.structure(original)
         by = {}
@@ -264,7 +248,10 @@ def traced_set(s: Scorer, cases: list[tuple[str, str, str, Path]], work: Path, n
                 if engine != "inkvec" and cached.exists() and (out / f"{engine}.svg").exists():
                     row = json.loads(cached.read_text(encoding="utf-8"))
                 else:
-                    row = s.trace_and_score(engine, out / "input.png", out / f"{engine}.svg", ref, gt)
+                    try:
+                        row = s.trace_and_score(engine, out / "input.png", out / f"{engine}.svg", ref, gt)
+                    except Exception as e:  # noqa: BLE001 - name the engine; its stderr may be empty
+                        raise RuntimeError(f"{engine}: {e!r}") from e
                     if engine != "inkvec":
                         cached.write_text(json.dumps(row), encoding="utf-8")
                 row.update(key=key, family=name, gt=gt)
@@ -355,6 +342,7 @@ def main() -> int:
     ap.add_argument("--brands", type=Path, default=Path("M:/AI STORAGE/AITrains/BrandsDataset/dataset/brands"))
     ap.add_argument("--work", type=Path, default=ROOT / "out" / "showcase")
     ap.add_argument("--vendor", type=Path, default=ROOT / "tools" / "vendor", help="where vtracer 1.0 and Trazor are")
+    ap.add_argument("--size", type=int, default=1024, help="the raster every engine traces, in pixels (square)")
     a = ap.parse_args()
     exe = a.exe.resolve()
     s = Scorer(exe, a.vendor if a.vendor.exists() else None)
@@ -362,13 +350,15 @@ def main() -> int:
     for old in (WEB / "showcase").glob("*.json") if (WEB / "showcase").exists() else []:
         old.unlink()
 
-    print("benchmark cases, Inkvec re-traced:", flush=True)
-    bench_rows, bench_gallery = benchmark(s, a.run, a.work)
-    bench_names = {r["name"] for r in bench_rows if r["family"] == "brands"}
+    print(f"benchmark cases at {a.size} px:", flush=True)
+    bench = benchmark_cases(a.run)
+    bench_rows, bench_gallery = traced_set(s, bench, a.work, "bench", a.size)
+    run_rows = json.loads((a.run / "results.json").read_text(encoding="utf-8"))
+    bench_names = {r["name"] for r in run_rows if r["family"] == "brands"}
     print("brand logos:", flush=True)
-    brand_rows, brand_gallery = traced_set(s, brand_cases(a.brands, bench_names), a.work, "brands")
+    brand_rows, brand_gallery = traced_set(s, brand_cases(a.brands, bench_names), a.work, "brands", a.size)
     print("more icons and emoji:", flush=True)
-    corpus_rows, corpus_gallery = traced_set(s, corpus_cases({r["key"] for r in bench_rows}), a.work, "corpus")
+    corpus_rows, corpus_gallery = traced_set(s, corpus_cases({k for k, *_ in bench}), a.work, "corpus", a.size)
 
     git = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
     date = "-".join(a.run.name.rsplit("-", 3)[-3:])
@@ -379,10 +369,11 @@ def main() -> int:
         "date": date,
         "seed": manifest.get("seed"),
         "pick_seed": PICK_SEED,
-        "cases": len({r["key"] for r in bench_rows}),
-        "families": sorted({r["family"] for r in bench_rows}),
+        "size": a.size,
+        "cases": len(bench_gallery),
+        "families": sorted({r["family"] for r in run_rows}),
         "gallery_engines": SHOWN_ENGINES,
-        "engines": [{"id": e, "name": n, **(summarise(bench_rows, e) or {})} for e, n in ENGINES],
+        "engines": [{"id": e, "name": n, **summarise(bench_rows, e)} for e, n in ENGINES if summarise(bench_rows, e)],
         "best_de_wins": wins_of(bench_rows),
         "brands": block(brand_rows, len(brand_gallery)),
         "corpus": block(corpus_rows, len(corpus_gallery)),
@@ -398,7 +389,7 @@ def main() -> int:
     print(f"wrote web/showcase.json ({(WEB / 'showcase.json').stat().st_size / 1024:.0f} KB) and "
           f"{len(list((WEB / 'showcase').glob('*.json')))} case files ({per_case / 1024:.0f} KB)")
     for title, b in (("benchmark", out), ("brands", out["brands"]), ("corpus", out["corpus"])):
-        print(f"{title}: {len(b['engines']) and b.get('cases')} cases, best dE00 {b['best_de_wins']}")
+        print(f"{title}: {b['cases']} cases, best dE00 {b['best_de_wins']}")
         for e in b["engines"]:
             if "de_mean" in e:
                 print(f"  {e['id']:22s} mean {e['de_mean']:.3f} median {e['de_median']:.3f} DISTS {e['dists']:.4f} "

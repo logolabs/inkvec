@@ -184,15 +184,18 @@ export function bootProgress(text: string, progress: number): void {
 /** The interface is drawn and its data loaded: the loading screen fades out at once. */
 export function bootReady(): void {
   if (bootGone) return;
+  // The bar runs to its end quickly, rather than still filling while the screen fades.
+  const fillEl = document.getElementById("boot-fill");
+  if (fillEl) fillEl.style.transitionDuration = "0.12s";
   bootStep("Ready", 1);
-  // The frame that shows the full bar, then the fade; the app is already underneath.
-  requestAnimationFrame(() => {
+  // Then the fade; the app is already drawn underneath.
+  window.setTimeout(() => {
     bootGone = true;
     const boot = document.getElementById("boot");
     if (!boot) return;
     boot.classList.add("leaving");
     window.setTimeout(() => boot.remove(), 260);
-  });
+  }, 130);
 }
 
 // The desktop imports this module too (its drop and launch helpers are shared), and has its

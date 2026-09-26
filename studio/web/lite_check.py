@@ -140,7 +140,16 @@ def check_boot(browser, url: str, out: pathlib.Path, note) -> None:
     ctx.close()
 
     # Inside a frame that stands in for Hugging Face's: their header, and the Space under it.
+    # The app's script is held back 2 s there, so the pictures are of a start in progress rather
+    # than of a local server that is faster than any real one.
     ctx = browser.new_context(viewport={"width": 1440, "height": 900})
+
+    def slow(route):
+        time.sleep(2)
+        route.continue_()
+
+    # The app's own script (a request of the framed page; a worker's fetches are not routed).
+    ctx.route("**/studio/assets/main-*.js", slow)
     page = ctx.new_page()
     header = (
         "<div style='height:56px;display:flex;align-items:center;gap:10px;padding:0 20px;background:#fff;"
@@ -172,7 +181,8 @@ def check_boot(browser, url: str, out: pathlib.Path, note) -> None:
             framed_states.append(s)
             page.screenshot(path=str(out / f"B{5 + shots}-boot-framed.png"))
             shots += 1
-        page.wait_for_timeout(150)
+            page.wait_for_timeout(600)
+        page.wait_for_timeout(100)
     frame_el = page.frame_locator("iframe")
     frame_el.locator(".appbar").wait_for(timeout=60_000)
     page.wait_for_timeout(600)

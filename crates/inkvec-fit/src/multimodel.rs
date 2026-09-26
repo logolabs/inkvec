@@ -1228,3 +1228,6 @@ pub fn path_cost(poly: &Polyline, path: &FittedPath, cfg: &FitConfig) -> f64 {
     let params: f64 = path.segments.iter().map(|s| s.params()).sum();
     0.5 * path_chi2(poly, path) + cfg.lambda * params
 }
+
+#[cfg(test)]
+mod tests;

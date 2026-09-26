@@ -63,7 +63,10 @@ function main() {
     { cwd: REPO, stdio: "inherit" },
   );
 
-  const built = join(REPO, "target", target, "release", `inkvec${exe}`);
+  let built = join(REPO, "target", target, "release", `inkvec${exe}`);
+  if (!existsSync(built)) {
+    built = join(REPO, "target", "release", `inkvec${exe}`);
+  }
   if (!existsSync(built)) {
     throw new Error(`cargo reported success but ${built} is not there`);
   }

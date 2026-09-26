@@ -19,16 +19,5 @@
     "crates/inkvec-fit/src/simple.rs",
     "crates/inkvec-trace/src/contour.rs"
   ],
-  "unused_dependencies": [
-    "inkvec-restore: burn-store",
-    "inkvec-server: bytes",
-    "inkvec-server: serde",
-    "inkvec-server: tower-http",
-    "inkvec-studio-core: inkvec-fab",
-    "inkvec-studio-wasm: inkvec-cli",
-    "inkvec-studio-wasm: inkvec-trace",
-    "inkvec-studio-wasm: rayon",
-    "inkvec-studio: inkvec-cli",
-    "inkvec-wasm: rayon"
-  ]
+  "unused_dependencies": []
 }

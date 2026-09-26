@@ -32,7 +32,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install markdown pygments
+      - run: pip install markdown==3.5.1 pygments==2.19.1  # as studio.yml, so the site and the app's guide render alike
       - run: python tools/build_site.py --base /inkvec/
       - uses: actions/upload-pages-artifact@v3
         with:

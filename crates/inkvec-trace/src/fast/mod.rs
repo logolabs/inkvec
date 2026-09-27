@@ -11,6 +11,8 @@
 //! * `palette`: inks from a 15-bit histogram of flat pixels (and, for strokes too thin to
 //!   have any, of coherent pixels that are no blend of other inks); a blend goes to a
 //!   neighbour's ink or to the ink it is made of, never to one it merely lies near;
+//! * `faces`: anti-aliased rims and inks the eye cannot tell apart joined to the faces they
+//!   belong to, speckles below a floor that grows with the image, and the faces;
 //! * `front`: faces and the planar map, without blend absorption or the boundary solve;
 //! * `bands`: posterised ramps put back together, one gradient fit per ramp;
 //! * `prims`: a closed boundary that is a circle or an ellipse is written as one;

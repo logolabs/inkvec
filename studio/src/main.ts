@@ -32,6 +32,7 @@ import { applyRemembered, currentInterface, traceForKeeping, watchRemembered } f
 import { APP_NAME, copyText, openExternal, pickedFile, pickedPath, pickFiles, WEB, type Picked } from "./lib/platform";
 import { markFramed, mountWebChrome, takeLaunch, webDrops, type Launch } from "./lib/web/chrome";
 import { Previews } from "./lib/previews";
+import { applyProgress, startClock, type TraceProgress } from "./lib/live";
 import { createRail, PROMOTED, type RailActions } from "./components/rail";
 import { createChooser, createWizard, type Snapshot, type WizardActions } from "./components/wizard";
 import { proposeGroups } from "./components/palette";
@@ -93,6 +94,19 @@ let samples: SampleInfo[] = [];
 let settleTimer = 0;
 /** The generation whose stages are currently being collected. */
 let watching = 0;
+/**
+ * The newest generation the backend has handed back. Never goes down: two starts whose
+ * replies cross must not put an older generation back in charge, or the newer trace's
+ * result would be ignored and the interface would wait for ever.
+ */
+let newest = 0;
+/**
+ * What arrived for a generation before its start came back. A trace served from the cache
+ * can finish before the reply to the command that started it reaches the page: its events
+ * wait here, and are applied the moment the generation is known, instead of being dropped
+ * as stale and leaving the interface tracing for ever.
+ */
+const early = new Map<number, { progress: TraceProgress[]; done?: Outcome }>();
 /** The colour groups each trace in flight was sent with, by generation. */
 const groupsSent = new Map<number, ColourGroup[]>();
 /** The wizard's preview drafts, queued one at a time behind the main trace. */
@@ -117,16 +131,56 @@ function traceSettings(): Settings {
 /** Start a trace. A draft keeps up with a moving control; a final is what gets exported. */
 async function trace(tier: "draft" | "final"): Promise<void> {
   if (!store.state.source) return;
+  // Counted from the moment it was asked for: that is the wait the user sees.
+  const asked = performance.now();
   try {
     const groups = store.state.colourGroups;
     const generation = await api.startTrace(traceSettings(), tier);
+    // A newer trace was started meanwhile and has already taken over.
+    if (generation < newest) return;
+    newest = generation;
     groupsSent.set(generation, groups);
     for (const old of groupsSent.keys()) if (old < generation - 8) groupsSent.delete(old);
     watching = generation;
-    store.set({ generation, tracing: true, tracingTier: tier, liveStages: [] });
+    store.set({
+      generation,
+      tracing: true,
+      tracingTier: tier,
+      liveStages: [],
+      liveNow: null,
+      traceLog: [],
+      traceStarted: asked,
+      traceEnded: 0,
+    });
+    // Anything that beat the reply here, in the order it came.
+    const held = early.get(generation);
+    for (const g of early.keys()) if (g <= generation) early.delete(g);
+    for (const p of held?.progress ?? []) progressed(p);
+    if (held?.done) applyOutcome(held.done, generation);
   } catch (e) {
-    store.set({ tracing: false, stageState: { kind: "failed", message: String(e) } });
+    store.set({ tracing: false, liveNow: null, traceEnded: performance.now(), stageState: { kind: "failed", message: String(e) } });
   }
+}
+
+/** The engine said what it is doing. */
+function progressed(p: TraceProgress): void {
+  if (p.generation !== watching) return;
+  store.set(applyProgress(store.state, p, performance.now()));
+}
+
+/**
+ * Stop the trace in flight and go back to the last result. The draft's pending full trace
+ * goes too: a Cancel that a timer undoes 800 ms later is not a cancel.
+ */
+function cancelTrace(): void {
+  window.clearTimeout(settleTimer);
+  void api.cancelTrace();
+  store.set({
+    tracing: false,
+    liveNow: null,
+    traceEnded: performance.now(),
+    stageState: store.state.svg ? { kind: "cancelled" } : { kind: "empty" },
+  });
 }
 
 /** A control moved: draft now, full trace once the controls have been still. */
@@ -197,6 +251,12 @@ function showOutcome(
   generation: number,
   painted: { svg: string; inks: Traced["palette"] } | null = null,
 ): void {
+  // A newer trace may have started while this one's snapped paint was being applied. The
+  // drawing is still the newest finished one and is shown, but the trace in flight is not
+  // this one, so the interface stays tracing and its log stays that trace's.
+  const running = generation !== store.state.generation && store.state.tracing;
+  if (outcome.state === "cancelled") return;
+  if (!running) store.set({ liveNow: null, traceEnded: performance.now() });
   if (outcome.state === "traced") {
     const wasDraft = store.state.result?.tier === "draft";
     // A draft is smaller than a final, so only a final is ever the yardstick: the readout
@@ -215,7 +275,7 @@ function showOutcome(
       losses: outcome.losses,
       worstCorner: outcome.worstCorner,
       stageState: { kind: "drawing" },
-      tracing: false,
+      tracing: running,
       justSwapped: wasDraft && outcome.tier === "final",
     });
     if (store.state.justSwapped) {
@@ -247,6 +307,7 @@ function showOutcome(
     return;
   }
 
+  if (running) return;
   store.set({ tracing: false });
   switch (outcome.state) {
     case "flat":
@@ -279,7 +340,16 @@ function showOutcome(
 async function openWith(fn: () => Promise<void>, offer = true): Promise<void> {
   // A wizard still open over the last image closes, keeping its choices: they are the controls.
   wizard.close();
+  // Whatever was tracing belongs to the image being replaced: the backend stops it when the
+  // new one opens, and nothing it still sends is wanted. Nor is a full trace a draft of the
+  // last image had queued.
+  window.clearTimeout(settleTimer);
+  watching = 0;
   store.set({
+    tracing: false,
+    liveNow: null,
+    liveStages: [],
+    traceLog: [],
     stageState: { kind: "decoding" },
     svg: null,
     report: null,
@@ -406,10 +476,7 @@ const workspace = createWorkspace(
         store.set({ source: info });
       }),
     traceNow: () => void trace("final"),
-    cancel: () => {
-      void api.cancelTrace();
-      store.set({ tracing: false, stageState: store.state.svg ? { kind: "cancelled" } : { kind: "empty" } });
-    },
+    cancel: cancelTrace,
     retryAt: (px) => {
       store.state.settings.traceSize = px;
       store.touch("settings");
@@ -512,10 +579,7 @@ const railActs: RailActions = {
     controlChanged();
   },
   traceNow: () => void trace("final"),
-  cancel: () => {
-    void api.cancelTrace();
-    store.set({ tracing: false, stageState: store.state.svg ? { kind: "cancelled" } : { kind: "empty" } });
-  },
+  cancel: cancelTrace,
   snap: (changes) => void snap(changes),
   setColourGroups: (groups) => {
     store.set({ colourGroups: groups, paletteSelection: [] });
@@ -773,10 +837,7 @@ function keyboard(e: KeyboardEvent): void {
     // Escape in the wizard keeps what is chosen so far; on the chooser it means Auto.
     else if (wizard.isOpen()) wizard.close(true);
     else if (store.state.chooser) store.set({ chooser: false });
-    else if (store.state.tracing) {
-      void api.cancelTrace();
-      store.set({ tracing: false, stageState: store.state.svg ? { kind: "cancelled" } : { kind: "empty" } });
-    }
+    else if (store.state.tracing) cancelTrace();
   }
 }
 
@@ -881,16 +942,30 @@ async function start(): Promise<void> {
     }
   });
 
-  await events.traceStage(({ generation, name, ms }) => {
-    if (generation !== watching) return;
-    const stages = [...store.state.liveStages];
-    const existing = stages.find((s) => s.name === name);
-    if (existing) existing.ms += ms;
-    else stages.push({ name, ms });
-    store.set({ liveStages: stages });
+  // The live counters: ten times a second while a trace runs, written in place.
+  const syncClock = startClock(
+    () => store.state.tracing,
+    () => store.state.traceStarted,
+    () => store.state.liveNow?.since ?? null,
+  );
+  store.on(["tracing", "liveNow", "traceLog", "liveStages", "tab", "railTab"], syncClock);
+  await events.traceProgress((p) => {
+    if (p.generation > newest) {
+      const held = early.get(p.generation) ?? { progress: [] };
+      held.progress.push(p);
+      early.set(p.generation, held);
+      return;
+    }
+    progressed(p);
   });
   await events.traceDone(({ generation, outcome }) => {
-    if (generation !== store.state.generation) return;
+    if (generation > newest) {
+      const held = early.get(generation) ?? { progress: [] };
+      held.done = outcome;
+      early.set(generation, held);
+      return;
+    }
+    if (generation !== store.state.generation || !store.state.tracing) return;
     // The confidence bands do not ride on the event, and are not fetched here either: the
     // viewer asks for them by generation the first time Certainty is shown.
     applyOutcome(outcome, generation);
@@ -1037,4 +1112,4 @@ void start().catch((e) => {
 });
 
 /** Exported so a test harness can drive the shell without a window. */
-export { applyOutcome, assignSetting, DEFAULT_SETTINGS, store, trace };
+export { applyOutcome, assignSetting, cancelTrace, DEFAULT_SETTINGS, store, trace };

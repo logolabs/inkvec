@@ -1539,6 +1539,7 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
     let mut sigma_noise = coverage::estimate_noise(&lum, w, h);
     let min_region = opts.min_region;
     let mut sw = Stopwatch::start();
+    inkvec_core::progress::begin("palette");
 
     let edge_width = coverage::intake_scale(&rgb, w, h);
     let ringing = coverage::ringing_score(&rgb, w, h);
@@ -1579,6 +1580,7 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
         },
     );
     sw.mark("palette");
+    inkvec_core::progress::begin("labels");
     let mut labels = label_image(&rgb, alpha, &pal);
     if soft_intake {
         let cap = color::MEASURED_SIGMA_CAP / 255.0;
@@ -1588,9 +1590,11 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
         sigma_noise = sigma_noise.max(measured);
     }
     sw.mark("labels");
+    inkvec_core::progress::begin("despeckle");
 
     crate::despeckle(&mut labels, w, h, min_region);
     sw.mark("despeckle");
+    inkvec_core::progress::begin("blend_absorb");
 
     if !inkvec_core::env::flag("INKVEC_NO_ABSORB") {
         let px4 = rgba_w(&rgb, alpha);
@@ -1602,6 +1606,7 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
         }
     }
     sw.mark("blend_absorb");
+    inkvec_core::progress::begin("merge_bands");
 
     let (mut fills_by_label, mut label_ink) = if opts.gradients {
         gradient::bands::merge_gradient_bands_guarded(
@@ -1619,6 +1624,7 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
         (Vec::new(), Vec::new())
     };
     sw.mark("merge_bands");
+    inkvec_core::progress::begin("carve");
 
     if opts.gradients && !inkvec_core::env::flag("INKVEC_NO_CARVE") {
         gradient::carve_residual_features_with_detail_noise(
@@ -1636,6 +1642,7 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
         );
     }
     sw.mark("carve");
+    inkvec_core::progress::begin("fades");
 
     let fade_of_label = if opts.gradients {
         merge_fades(
@@ -1654,6 +1661,7 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
         Vec::new()
     };
     sw.mark("fades");
+    inkvec_core::progress::begin("split");
 
     let (labels, face_src) = crate::split_components(&labels, w, h);
     sw.mark("split");

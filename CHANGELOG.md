@@ -18,6 +18,38 @@ API in particular should be treated as unstable release to release).
   opposite tone of what it sits on unless it is the same colour, so white-on-black art comes
   back as black letters and lettering on a coloured panel is knocked out of a black panel.
   Works in both engines. `--bilevel` (tone by lightness) is unchanged and takes precedence.
+- **Studio: live progress while a trace runs.** The elapsed time counts up ten times a second
+  from the moment a trace is asked for, and the stage the engine is running shows the moment
+  it starts, with its own running time and, for the long loops, how far through it is
+  (boundaries fitted, boundary-solve iterations, gradient merge rounds, palette candidates,
+  ring-repair rounds). An engine log in the bottom right of the stage lists every stage with
+  its start time and duration and what the engine noted on the way (inks found, gradient
+  fills, faces and boundaries, the solve's energy); it collapses to one line and keeps the
+  last trace's log once it has landed. Both the desktop app and Studio Lite.
+- **Engine: `inkvec_core::progress`,** a per-trace progress and cancellation seam: stages
+  report when they begin as well as when they end, the long loops count through their work,
+  and a cancelled trace unwinds at its next report. With nothing installed (the command line,
+  the library, every binding) the output is byte-identical and each report is a thread-local
+  read.
+
+### Fixed
+
+- **Studio: a new trace stops the old one.** Changing a setting, a preset, the engine or the
+  image, or pressing Cancel, used to leave the abandoned trace running to its end, holding
+  the only trace slot, so the trace wanted next waited behind it: up to the whole length of a
+  long Quality trace. The old trace now stops at the engine's next report (median 0.66 s on a
+  1672 px poster in Quality under load, against a median 47 s wait before; Fast about 10 ms).
+  A trace already making the very drawing asked for (a small image's draft before its final,
+  a Minify or Margin change) is let finish and then served from the cache. In Studio Lite a
+  superseded trace is stopped by replacing the engine worker once it has run as long as a
+  restart takes, and at once on Cancel or a new image.
+- **Studio: batch Cancel and wizard previews stop the trace in flight**, not only the next.
+- **Studio: races around the trace in flight.** Cancel no longer comes back 800 ms later as
+  the queued full trace; a trace finished so fast (a cache hit) that its result arrived
+  before the reply to the command that started it no longer leaves the Studio tracing for
+  ever; two starts whose replies cross can no longer put the older one in charge; a snapped
+  repaint of an older result no longer ends the trace running after it; opening an image
+  mid-trace no longer leaves the old trace's state behind.
 
 ## [0.2.2] - 2026-09-27
 

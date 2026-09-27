@@ -12,6 +12,8 @@ import { count, de00, modKey, plannedTracePx, seconds, type StageState, type Sto
 import { createViewer, type Viewer } from "../components/viewer";
 import { DESKTOP_URL, WEB } from "../lib/platform";
 import { fetchBar, fetchPercent } from "../components/denoiserfetch";
+import { createActivity } from "../components/activity";
+import { elapsedText, runningLabel } from "../lib/live";
 
 export interface WorkspaceActions {
   openFile(): void;
@@ -164,7 +166,7 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
   // the drawing for a chip changing its label. `display: contents` keeps the chrome's
   // children positioned against the stage exactly as if they were its own.
   const chrome = h("div", { style: { display: "contents" } });
-  stageBody.append(viewer.el, chrome);
+  stageBody.append(viewer.el, chrome, createActivity(store));
 
   const renderStage = () => {
     const st = store.state;
@@ -189,13 +191,13 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
     let lead = "Ready";
     let rest = "";
     let colour = "var(--dim)";
+    let live: HTMLElement | null = null;
 
     if (st.tracing) {
-      const last = st.liveStages[st.liveStages.length - 1];
-      lead = last?.name ?? "starting";
-      const elapsed = st.liveStages.reduce((a, x) => a + x.ms, 0) / 1000;
+      lead = runningLabel(st);
       const engineTag = st.settings.mode === "fast" ? "fast" : "quality";
-      rest = `· ${engineTag} · ${plannedTracePx(st, st.tracingTier) ?? "—"} px · ${seconds(elapsed)} elapsed · Esc to cancel`;
+      rest = `· ${engineTag} · ${plannedTracePx(st, st.tracingTier) ?? "—"} px ·`;
+      live = h("span", null, h("span.num", { "data-live": "elapsed" }, elapsedText(st)), " elapsed · Esc to cancel");
       colour = "var(--state-stale)";
     } else if (r && st.result) {
       const draft = st.result.tier === "draft";
@@ -214,6 +216,7 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
       strip,
       h("span.lead", { style: { color: colour } }, lead),
       rest ? h("span", null, rest) : null,
+      live,
       // The update chip lives here and nowhere else: never a modal, never timed.
       st.update?.newer
         ? h(
@@ -231,7 +234,7 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
 
   store.on(["source", "view", "show", "zoom", "fitted", "detail", "svg", "bandsMissing", "settings"], renderTools);
   store.on(["source", "svg", "stageState", "result", "detail", "worstCorner", "prefs"], renderStage);
-  store.on(["tracing", "liveStages", "report", "result", "source", "update", "denoiserFetch", "settings"], renderStrip);
+  store.on(["tracing", "liveStages", "liveNow", "report", "result", "source", "update", "denoiserFetch", "settings"], renderStrip);
 
   renderTools();
   renderStage();

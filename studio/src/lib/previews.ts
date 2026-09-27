@@ -142,7 +142,14 @@ export class Previews {
       const url = URL.createObjectURL(new Blob([outcome.svg], { type: "image/svg+xml" }));
       this.finish(run.key, { state: "done", svg: outcome.svg, url, report: outcome.report });
     } else {
-      const message = "message" in outcome ? outcome.message : outcome.state === "flat" ? "one flat colour" : "out of memory";
+      const message =
+        "message" in outcome
+          ? outcome.message
+          : outcome.state === "flat"
+            ? "one flat colour"
+            : outcome.state === "cancelled"
+              ? "stopped"
+              : "out of memory";
       this.finish(run.key, { state: "failed", message });
     }
   }

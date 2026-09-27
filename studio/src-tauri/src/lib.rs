@@ -31,7 +31,9 @@ pub mod settings;
 
 // The shared core's modules, under the names this crate has always used for them.
 use inkvec_studio_core::api::{Capabilities, SampleInfo, SourceInfo, TraceRequest};
-pub use inkvec_studio_core::{api, export, lost, minify, options, quality, trace, wizard};
+pub use inkvec_studio_core::{
+    api, export, lost, minify, options, progress, quality, trace, wizard,
+};
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -48,6 +50,10 @@ pub struct AppState {
     source: Mutex<Option<Arc<trace::Source>>>,
     /// Which trace the interface is waiting for.
     generation: trace::Generation,
+    /// That trace itself, so a newer request (or Cancel) can stop it. See [`trace::Watching`].
+    watching: trace::Watching,
+    /// The wizard preview being traced, so a newer one (or closing the wizard) stops it.
+    preview_live: Mutex<Option<Arc<progress::Progress>>>,
     /// Which wizard preview the interface is waiting for. A counter of its own, so a
     /// preview never retires the trace the viewer is waiting for. See [`wizard`].
     preview_generation: trace::Generation,
@@ -380,6 +386,10 @@ fn sample_path(app: &AppHandle, name: &str) -> Result<PathBuf, String> {
 fn adopt(source: trace::Source, state: &State<'_, AppState>) -> Result<SourceInfo, String> {
     let info = api::source_info(&source)?;
     *state.source.lock().map_err(lock)? = Some(Arc::new(source));
+    // A trace of the image that was open is of no use any more: stop it now rather than
+    // when the new image's first trace is asked for.
+    state.generation.cancel();
+    state.watching.cancel();
     // The drawing in hand belongs to the image that has just been replaced. Keying on the
     // image would miss it anyway; this is so its bytes are not held for an image nobody
     // has open any more.
@@ -389,12 +399,17 @@ fn adopt(source: trace::Source, state: &State<'_, AppState>) -> Result<SourceInf
 
 // --------------------------------------------------------------------------- trace ---
 
-/// Start a trace, retiring any that was already running, and return its generation.
+/// Start a trace, stopping any that was already running, and return its generation.
 ///
 /// Returns immediately. The result arrives as a `trace:done` event carrying the same
-/// generation, and stages arrive as `trace:stage` events before it. A result whose
-/// generation is no longer current is dropped here rather than sent, so the interface
-/// never has to reason about a stale trace.
+/// generation, and what the engine is doing arrives as `trace:progress` events before it
+/// (see [`Ticker`]). A result whose generation is no longer current is dropped here rather
+/// than sent, so the interface never has to reason about a stale trace.
+///
+/// The trace it replaces is stopped, not just ignored ([`trace::Watching`]): it unwinds at
+/// the engine's next report and gives up the slot this one is waiting for. The one
+/// exception is a trace already making the very drawing this one asks for, which is let
+/// finish and then served from the cache.
 #[tauri::command]
 fn start_trace(
     request: TraceRequest,
@@ -427,52 +442,68 @@ fn start_trace(
     state.prefs.lock().map_err(lock)?.trace = request.settings.clone().for_keeping();
 
     let generation = state.generation.next();
+    let live = state
+        .watching
+        .start(trace::Watched::new(generation, &source, &settings, tier));
     let pipeline = Arc::clone(&state.pipeline);
     let traced = Arc::clone(&state.traced);
     std::thread::Builder::new()
         .name(format!("inkvec-trace-{generation}"))
         .spawn(move || {
+            let done = |app: &AppHandle| app.state::<AppState>().watching.finished(generation);
             // One trace at a time. Waiting here rather than starting straight away is what
             // stops a handful of quick control changes becoming a handful of full traces
-            // sharing the cores, each slower for the others.
+            // sharing the cores, each slower for the others; stopping the trace this one
+            // replaced is what keeps the wait short.
             let slot = pipeline.interactive();
             // Whoever we were waiting for has finished, and the user may well have moved on
             // while we waited. A trace the interface is no longer waiting for is not worth
             // the cores: its result would be dropped on arrival anyway.
-            if !app.state::<AppState>().generation.is_current(generation) {
-                return;
+            if !app.state::<AppState>().generation.is_current(generation) || live.is_cancelled() {
+                return done(&app);
             }
-            let stage_app = app.clone();
-            let drawn = trace::draw(
-                &source,
-                &settings,
-                tier,
-                Some(&traced),
-                trace::MeasureLevel::Full,
-                move |name, ms| {
-                    let _ = stage_app.emit(
-                        "trace:stage",
-                        StageEvent {
-                            generation,
-                            name,
-                            ms,
-                        },
-                    );
-                },
-            );
+            let ticker = Ticker::start(app.clone(), generation, Arc::clone(&live));
+            let drawn = trace::cancellable(|| {
+                progress::with(Arc::clone(&live), || {
+                    trace::draw(
+                        &source,
+                        &settings,
+                        tier,
+                        Some(&traced),
+                        trace::MeasureLevel::Full,
+                        |_, _| {},
+                    )
+                })
+            })
+            .unwrap_or(Err(trace::Outcome::Cancelled));
             // The drawing is finished and kept; measuring it needs no slot, so the next
             // trace can start while this one is measured.
             drop(slot);
             let state = app.state::<AppState>();
             let mut outcome = match drawn {
-                // Superseded while it was drawn: nobody is waiting for its measurements.
-                // The drawing stays in the cache, where the next request may still find it.
-                Ok(_) if !state.generation.is_current(generation) => return,
+                // Stopped, or superseded while it was drawn: nobody is waiting for it. A
+                // finished drawing stays in the cache, where the next request may find it.
+                Err(trace::Outcome::Cancelled) => {
+                    ticker.stop(false);
+                    return done(&app);
+                }
+                Ok(_) if !state.generation.is_current(generation) => {
+                    ticker.stop(false);
+                    return done(&app);
+                }
                 Ok(drawn) => {
-                    trace::measure(&source, drawn, trace::MeasureLevel::Full, Some(&traced))
+                    let started = std::time::Instant::now();
+                    live.announce("measure");
+                    let measured =
+                        trace::measure(&source, drawn, trace::MeasureLevel::Full, Some(&traced));
+                    live.finished("measure", started.elapsed().as_secs_f64() * 1e3);
+                    measured
                 }
                 Err(outcome) => outcome,
             };
+            // Everything the engine said reaches the interface before the result does.
+            ticker.stop(true);
+            done(&app);
             // The bands stay here until the interface asks for them.
             let bands = match &mut outcome {
                 trace::Outcome::Traced(t) => t.bands.take(),
@@ -497,12 +528,67 @@ fn start_trace(
     Ok(generation)
 }
 
-/// One stage the engine passed, for the progress rail.
+/// What the engine reported since the last event, for the progress rail and the activity
+/// log.
 #[derive(Clone, Serialize)]
-struct StageEvent {
+struct ProgressEvent {
     generation: u64,
-    name: &'static str,
-    ms: f64,
+    #[serde(flatten)]
+    live: trace::Live,
+}
+
+/// Passes a trace's progress to the interface while it runs.
+///
+/// The engine reports from inside the pipeline, often from rayon's workers, and far more
+/// often than a window wants to hear: a boundary fitted is a tick, and a large logo has
+/// thousands. So it only writes into its [`progress::Progress`], and this thread reads it
+/// every [`TICK`] and sends what changed as one `trace:progress` event: fast enough that
+/// the log never looks stuck, coarse enough that the IPC is never flooded.
+struct Ticker {
+    stop: std::sync::mpsc::Sender<bool>,
+    thread: std::thread::JoinHandle<()>,
+}
+
+/// How often a running trace's progress is sent: 20 times a second at most.
+const TICK: Duration = Duration::from_millis(50);
+
+impl Ticker {
+    fn start(app: AppHandle, generation: u64, live: Arc<progress::Progress>) -> Self {
+        let (stop, stopped) = std::sync::mpsc::channel::<bool>();
+        let thread = std::thread::Builder::new()
+            .name(format!("inkvec-progress-{generation}"))
+            .spawn(move || {
+                let send = |app: &AppHandle| {
+                    if let Some(live) = trace::live(live.take()) {
+                        let _ = app.emit("trace:progress", ProgressEvent { generation, live });
+                    }
+                };
+                loop {
+                    match stopped.recv_timeout(TICK) {
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                            if app.state::<AppState>().generation.is_current(generation) {
+                                send(&app);
+                            }
+                        }
+                        Ok(flush) => {
+                            if flush {
+                                send(&app);
+                            }
+                            break;
+                        }
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                    }
+                }
+            })
+            .expect("a thread for the progress events");
+        Self { stop, thread }
+    }
+
+    /// Stop, sending whatever is still unsent first when `flush`.
+    fn stop(self, flush: bool) {
+        let _ = self.stop.send(flush);
+        let _ = self.thread.join();
+    }
 }
 
 /// A finished trace, for the interface. The confidence bands are not in it: see
@@ -527,15 +613,15 @@ fn trace_bands(generation: u64, state: State<'_, AppState>) -> Result<Option<Str
         .map(|(_, bands)| bands.as_str().to_owned()))
 }
 
-/// Retire whatever is in flight.
+/// Stop whatever is in flight.
 ///
-/// The pipeline has no cancellation point, so this does not interrupt it: it retires the
-/// generation, the interface goes straight back to the last result, and the abandoned
-/// thread's output is dropped when it arrives. Nothing waits for it, and the last full
-/// trace is still on screen and still exportable.
+/// The generation is retired, so the interface goes straight back to the last result, and
+/// the trace itself is stopped at the engine's next report: it frees its cores and the
+/// slot, and delivers nothing. The last full trace is still on screen and still exportable.
 #[tauri::command]
 fn cancel_trace(state: State<'_, AppState>) {
     state.generation.cancel();
+    state.watching.cancel();
 }
 
 // -------------------------------------------------------------------------- wizard ---
@@ -573,6 +659,16 @@ fn start_preview(
         (prefs.draft_px, prefs.draft_seconds)
     };
     let generation = state.preview_generation.next();
+    // A newer preview replaces the one being traced: that one stops where it is.
+    let live = Arc::new(progress::Progress::new());
+    if let Some(old) = state
+        .preview_live
+        .lock()
+        .map_err(lock)?
+        .replace(Arc::clone(&live))
+    {
+        old.cancel();
+    }
     let pipeline = Arc::clone(&state.pipeline);
     std::thread::Builder::new()
         .name(format!("inkvec-preview-{generation}"))
@@ -585,10 +681,16 @@ fn start_preview(
             let Some(slot) = pipeline.batch_row(|| !wanted()) else {
                 return;
             };
-            let mut outcome =
-                wizard::run_preview(&source, &request.settings, draft_px, draft_seconds);
+            let outcome = trace::cancellable(|| {
+                progress::with(Arc::clone(&live), || {
+                    wizard::run_preview(&source, &request.settings, draft_px, draft_seconds)
+                })
+            });
             drop(slot);
-            if !wanted() {
+            let Ok(mut outcome) = outcome else {
+                return;
+            };
+            if !wanted() || matches!(outcome, trace::Outcome::Cancelled) {
                 return;
             }
             if let trace::Outcome::Traced(t) = &mut outcome {
@@ -611,6 +713,11 @@ fn start_preview(
 #[tauri::command]
 fn cancel_previews(state: State<'_, AppState>) {
     state.preview_generation.cancel();
+    if let Ok(mut held) = state.preview_live.lock() {
+        if let Some(old) = held.take() {
+            old.cancel();
+        }
+    }
 }
 
 /// What the wizard wants to know about the open image: its noise, and whether it has any

@@ -209,7 +209,9 @@ pub(crate) fn repair_ring_crossings(
     use rayon::prelude::*;
     let rings: Vec<&Ring> = order.iter().flatten().collect();
     let mut changed: Option<std::collections::HashSet<usize>> = None;
-    for _ in 0..ROUNDS {
+    let live = inkvec_core::progress::handle();
+    for round in 0..ROUNDS {
+        inkvec_core::progress::step("repair rounds", round as u64, ROUNDS as u64);
         let round_t = inkvec_core::clock::Instant::now();
         // Detection per ring and refits per edge are both independent; run each wave on
         // every core. The refits are the expensive half — a capped refit re-runs the
@@ -245,6 +247,14 @@ pub(crate) fn repair_ring_crossings(
         if guilty.is_empty() {
             break;
         }
+        inkvec_core::progress::note(|| {
+            format!(
+                "round {}: {} crossing boundar{}, refitting",
+                round + 1,
+                guilty.len(),
+                if guilty.len() == 1 { "y" } else { "ies" }
+            )
+        });
         if inkvec_core::env::flag("INKVEC_TIMING") {
             let sizes: Vec<usize> = guilty.iter().map(|&k| polys[k].len()).collect();
             eprintln!(
@@ -257,10 +267,11 @@ pub(crate) fn repair_ring_crossings(
         let refits: Vec<(usize, multimodel::MultimodelFit)> = guilty
             .par_iter()
             .map(|&k| {
+                live.check();
                 let c = (cap[k] / 2).max(1);
                 (
                     k,
-                    multimodel::optimal_multimodel_capped_full(&polys[k], cfg, c),
+                    live.scoped(|| multimodel::optimal_multimodel_capped_full(&polys[k], cfg, c)),
                 )
             })
             .collect();
@@ -323,12 +334,15 @@ pub(crate) fn repair_ring_crossings(
                 spent
             );
         }
+        inkvec_core::progress::step("refits smoothed", 0, affordable.len() as u64);
         let merged: Vec<(usize, FittedPath)> = affordable
             .par_iter()
             .map(|&(k, verts)| {
+                live.check();
                 let mut path = fitted[k].clone();
                 inkvec_fit::merge::merge_free_cubics(&mut path, &polys[k], verts, cfg);
                 inkvec_fit::merge::sharpen_corners(&mut path);
+                live.tick();
                 (k, path)
             })
             .collect();
@@ -352,6 +366,7 @@ pub(crate) fn repair_ring_crossings(
         let mut keys: Vec<usize> = refit_vertices.keys().copied().collect();
         keys.sort_unstable();
         for k in keys {
+            inkvec_core::progress::checkpoint();
             // A capped refit that came back with many times the segments of the
             // unconstrained fit is not a repaired boundary; it is the cap having
             // collapsed toward one, where a refit reproduces the measured polyline point

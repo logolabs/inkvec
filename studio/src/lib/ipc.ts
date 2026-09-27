@@ -11,6 +11,7 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen, type EventCallback, type UnlistenFn } from "@tauri-apps/api/event";
 
 import { webBackend } from "./web/engine";
+import type { TraceProgress } from "./live";
 
 // ------------------------------------------------------------------- transport ---
 //
@@ -349,7 +350,9 @@ export type Outcome =
   | { state: "flat" }
   | { state: "undecodable"; message: string }
   | { state: "outOfMemory"; neededGb: number; suggestPx: number }
-  | { state: "failed"; message: string };
+  | { state: "failed"; message: string }
+  /** Stopped on request. Never delivered: whoever stopped it has moved on. */
+  | { state: "cancelled" };
 
 // --------------------------------------------------------------------- fabricate ---
 
@@ -629,8 +632,8 @@ export const api = {
 // ----------------------------------------------------------------------- events ---
 
 export const events = {
-  traceStage: (fn: (e: { generation: number; name: string; ms: number }) => void) =>
-    listen<{ generation: number; name: string; ms: number }>("trace:stage", (e) => fn(e.payload)),
+  /** What the engine is doing: stages as they begin and end, notes, and loop counts. */
+  traceProgress: (fn: (e: TraceProgress) => void) => listen<TraceProgress>("trace:progress", (e) => fn(e.payload)),
   traceDone: (fn: (e: { generation: number; outcome: Outcome }) => void) =>
     listen<{ generation: number; outcome: Outcome }>("trace:done", (e) => fn(e.payload)),
   previewDone: (fn: (e: { generation: number; outcome: Outcome }) => void) =>

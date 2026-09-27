@@ -518,6 +518,9 @@ impl SpanScorer<'_> {
 
         let mut i = 0;
         while i < n - 1 {
+            // A boundary of a few thousand points is seconds of this loop, and a trace
+            // somebody has moved past stops here rather than at the end of it.
+            inkvec_core::progress::checkpoint();
             let left = n - 1 - i;
             let w = width(left).clamp(1, left);
             if w < 2 {
@@ -541,14 +544,16 @@ impl SpanScorer<'_> {
             let b = (w * DP_STARTS_PER_THREAD)
                 .min((DP_BLOCK_SPANS / spans.max(1)).max(w))
                 .min(left);
-            let scans: Vec<Vec<SpanTerms>> = without_dp_cap_override(|| {
-                use rayon::prelude::*;
-                let _helpers = BusyThreads::claim(w - 1);
-                (i..i + b)
-                    .into_par_iter()
-                    .with_min_len(b.div_ceil(w))
-                    .map(|s| self.scan(s, jend(s)))
-                    .collect()
+            let scans: Vec<Vec<SpanTerms>> = inkvec_core::progress::detached(|| {
+                without_dp_cap_override(|| {
+                    use rayon::prelude::*;
+                    let _helpers = BusyThreads::claim(w - 1);
+                    (i..i + b)
+                        .into_par_iter()
+                        .with_min_len(b.div_ceil(w))
+                        .map(|s| self.scan(s, jend(s)))
+                        .collect()
+                })
             });
             for (s, scan) in (i..i + b).zip(scans) {
                 if !tab.best[s].is_finite() {

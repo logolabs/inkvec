@@ -4,8 +4,8 @@
  * The desktop app runs each command on a thread of its own and reports long work as
  * events; this worker is the browser's one such thread. It takes one job at a time from the
  * page (`engine.ts` decides the order: palette and export ahead of traces, traces ahead of
- * wizard previews, stale ones dropped) and answers it synchronously, streaming a trace's
- * stages as it goes. The pipeline's own parallelism is rayon's, on a pool of nested workers
+ * wizard previews, stale ones dropped) and answers it synchronously, streaming what a trace
+ * is doing as it goes (`progress` messages; see the core's `trace::live`). The pipeline's own parallelism is rayon's, on a pool of nested workers
  * where the page is cross-origin isolated.
  *
  * Two builds sit side by side, as on the old Space: `pkg-threads/` (atomics, shared memory,
@@ -23,7 +23,7 @@ interface StudioWasm {
     draftPx: number,
     draftSeconds: number,
     generation: number,
-    onStage: (name: string, ms: number) => void,
+    onProgress: (json: string) => void,
     isCurrent: (generation: number) => boolean,
   ): string | undefined;
   preview(request: string, draftPx: number, draftSeconds: number): string;
@@ -194,7 +194,7 @@ function run(job: Job): unknown {
         job.draftPx as number,
         job.draftSeconds as number,
         generation,
-        (name, ms) => scope.postMessage({ type: "stage", generation, name, ms }),
+        (json) => scope.postMessage({ type: "progress", generation, json }),
         isCurrent,
       );
       return out === undefined ? null : JSON.parse(out);

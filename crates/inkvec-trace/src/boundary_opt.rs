@@ -1177,6 +1177,8 @@ pub fn optimise_alpha(
             if budget.is_some_and(|b| clock.elapsed().as_millis() > b) {
                 break;
             }
+            // `iters` is the ceiling; a solve that converges stops well short of it.
+            inkvec_core::progress::step("iterations", it as u64, iters as u64);
             let dmax = dir.iter().map(|d| d.x.hypot(d.y)).fold(0.0f64, f64::max);
             if dmax < 1e-12 {
                 break;
@@ -1184,6 +1186,8 @@ pub fn optimise_alpha(
             let mut step = MAX_STEP / dmax;
             let mut stop = true;
             for _ in 0..6 {
+                // Each trial is a full render of the energy: worth a cancellation point.
+                inkvec_core::progress::checkpoint();
                 for v in 0..n {
                     let mut q = Point::new(pos[v].x + dir[v].x * step, pos[v].y + dir[v].y * step);
                     let (dx, dy) = (q.x - vars.start[v].x, q.y - vars.start[v].y);

@@ -14,8 +14,9 @@
  */
 
 import { fill, h, icon } from "../lib/dom";
+import { elapsedText, runningLabel } from "../lib/live";
 import type { ColourGroup, Control, OnOpen, PresetId, Report, Settings } from "../lib/ipc";
-import { appliesTo, bytes, count, de00, seconds, type Store, type WizardStep } from "../lib/state";
+import { appliesTo, bytes, count, de00, type Store, type WizardStep } from "../lib/state";
 import { previewKey, type Previews } from "../lib/previews";
 import { changedControls, describeAuto, looksDamaged, NOISY_LEVELS } from "../lib/suggest";
 import { autoChose, suggestionsOf, type AutoChoseActions } from "./autochose";
@@ -67,9 +68,7 @@ export function createChooser(store: Store, act: WizardActions, openWizard: () =
   const status = () => {
     const st = store.state;
     if (st.tracing && st.generation === st.auto?.generation) {
-      const last = st.liveStages[st.liveStages.length - 1];
-      const elapsed = st.liveStages.reduce((a, x) => a + x.ms, 0) / 1000;
-      return `Tracing now · ${last?.name ?? "starting"} · ${seconds(elapsed)}`;
+      return `Tracing now · ${runningLabel(st)} · ${elapsedText(st)}`;
     }
     const r = st.auto?.report;
     if (r) return `Done · ${de00(r.meanDe00)} dE00 · ${count(r.coordinates)} coordinates · ${bytes(r.bytes)}`;
@@ -150,7 +149,7 @@ export function createChooser(store: Store, act: WizardActions, openWizard: () =
     ["chooser", "source", "tab", "wizard", "screen", "auto", "facts", "prefs", "preset", "settings", "groupSuggestions", "palette", "stageState"],
     render,
   );
-  store.on(["tracing", "liveStages", "generation"], tick);
+  store.on(["tracing", "liveStages", "liveNow", "generation"], tick);
   render();
   return el;
 }

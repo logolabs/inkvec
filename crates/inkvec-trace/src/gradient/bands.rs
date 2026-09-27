@@ -309,11 +309,17 @@ pub(crate) fn merge_bands_with(
     // Hundreds of components each pay a full model selection (the radial-centre search
     // alone is six hundred residual evaluations), and none depends on another: fit them
     // on every core.
+    let live = inkvec_core::progress::handle();
+    inkvec_core::progress::step("regions fitted", 0, n_comp as u64);
     let mut fits: Vec<FillFit> = {
         use rayon::prelude::*;
         (0..n_comp)
             .into_par_iter()
-            .map(|c| fit_group(&group, &members[c], c as u32, c as u32, inner_blends))
+            .map(|c| {
+                let fit = fit_group(&group, &members[c], c as u32, c as u32, inner_blends);
+                live.tick();
+                fit
+            })
             .collect()
     };
 
@@ -371,6 +377,8 @@ pub(crate) fn merge_bands_with(
     let mut stale_refits = 0u64;
     loop {
         rounds += 1;
+        // A greedy merge accepts one union a round and cannot know how many it will find.
+        inkvec_core::progress::step("merge rounds", rounds - 1, 0);
         let t_round = inkvec_core::clock::Instant::now();
         // Out of time: leave the remaining bands as the separate fills they already
         // are. Every merge accepted so far stands, so the output is a correct trace
@@ -423,6 +431,7 @@ pub(crate) fn merge_bands_with(
             let computed: Vec<((u32, u32), (FillFit, bool))> = missing
                 .par_iter()
                 .map(|&(a, b)| {
+                    live.check();
                     let (ai, bi) = (a as usize, b as usize);
                     let mut px: Vec<usize> =
                         Vec::with_capacity(members[ai].len() + members[bi].len());
@@ -536,6 +545,7 @@ pub(crate) fn merge_bands_with(
             let Some((_, a, b)) = best else { break None };
             if cache.get(&(a, b)).is_some_and(|(_, stale)| *stale) {
                 // The winner was judged on a stale fit: refit it and choose again.
+                inkvec_core::progress::checkpoint();
                 let (ai, bi) = (a as usize, b as usize);
                 let mut px: Vec<usize> = Vec::with_capacity(members[ai].len() + members[bi].len());
                 px.extend_from_slice(&members[ai]);

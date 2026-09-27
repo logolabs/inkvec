@@ -51,6 +51,13 @@ const DENOISER_CACHE = "inkvec-denoiser-v1";
 const RUNTIME_CACHE_PREFIX = "inkvec-ort-";
 /** A background download that failed is tried once more, this long after. */
 const PREFETCH_RETRY_MS = 30_000;
+/**
+ * What starting a fresh engine worker costs, until one has been timed: loading the module
+ * from the HTTP cache, starting its thread pool and putting the image back. A superseded
+ * trace that has already run this long is stopped by replacing the worker, since it is
+ * likely to run at least as long again; a younger one gets the rest of that time to finish.
+ */
+const RESTART_MS_GUESS = 700;
 const UNAVAILABLE = "Not available in the browser. Inkvec Studio, the desktop app, has it.";
 
 /** The samples the first-run screen offers, as the desktop's `list_samples` names them. */
@@ -96,6 +103,12 @@ class WebBackend {
 
   /** The worker's thread count and isolation, once it has loaded; for About and the tests. */
   info: { threads: number; isolated: boolean; version: string } | null = null;
+  /** How long the last fresh worker took to be ready with the image back, in ms. */
+  restartMs: number | null = null;
+  /** Traces stopped by replacing the worker, and when each was asked to stop; for the tests. */
+  stopped: { generation: number; asked: number; killed: number }[] = [];
+  /** A stale trace's scheduled stop, while it is given the chance to finish first. */
+  private stopTimer = 0;
   /** How many times a trace has run the denoiser network in this page; for the tests. */
   denoiserRuns = 0;
   /** The WebAssembly memory after the last job and how long the worker spent on it. */
@@ -146,8 +159,8 @@ class WebBackend {
           resolve(m);
         } else if (m.type === "loadfail") {
           reject(new Error(`The engine could not load: ${m.error}`));
-        } else if (m.type === "stage") {
-          if (m.generation === this.generation) this.emit("trace:stage", { generation: m.generation, name: m.name, ms: m.ms });
+        } else if (m.type === "progress") {
+          if (m.generation === this.generation) this.emit("trace:progress", { generation: m.generation, ...JSON.parse(m.json) });
         } else if (m.type === "reply") {
           this.finish(m);
         }
@@ -185,6 +198,7 @@ class WebBackend {
   private crashed(message: string): void {
     const running = this.running;
     this.running = null;
+    window.clearTimeout(this.stopTimer);
     this.worker?.terminate();
     this.worker = null;
     this.ready = null;
@@ -193,12 +207,41 @@ class WebBackend {
     // the next one, or the two would take turns for ever.
     if (running?.op === "open_bytes") this.source = null;
     const reopen = this.source;
+    const began = performance.now();
     void this.whenReady().then(async () => {
       if (reopen) {
         await this.enqueue("open_bytes", -1, { bytes: reopen.bytes.slice(), name: reopen.name }).catch(() => {});
       }
+      this.restartMs = performance.now() - began;
       this.pump();
     });
+  }
+
+  /**
+   * The trace the worker is running has been replaced (a newer trace, Cancel, another
+   * image). WebAssembly cannot be interrupted from outside, so a trace is stopped by
+   * replacing the worker, which costs a fresh start. `now` (Cancel, another image) stops
+   * it at once. Otherwise it is stopped once it has run as long as a restart takes: a draft
+   * that is about to finish is let finish, and a long trace nobody wants no longer holds
+   * the only worker for the rest of its run. A running trace of the very settings asked
+   * for again is let finish, since its drawing is the one wanted (the core then serves the
+   * newer request from its cache).
+   */
+  private supersede(now: boolean, next?: Record<string, unknown>): void {
+    window.clearTimeout(this.stopTimer);
+    const running = this.running;
+    if (running?.op !== "trace" || running.payload.generation === this.generation) return;
+    if (!now && next && sameDrawing(running.payload.request as TraceAsk, next as TraceAsk)) return;
+    const asked = performance.now();
+    const stop = () => {
+      if (this.running !== running || running.payload.generation === this.generation) return;
+      this.stopped.push({ generation: running.payload.generation as number, asked, killed: performance.now() });
+      this.crashed("superseded by a newer request");
+    };
+    const ran = asked - (running.started ?? asked);
+    const wait = now ? 0 : Math.max(0, (this.restartMs ?? RESTART_MS_GUESS) - ran);
+    if (wait === 0) stop();
+    else this.stopTimer = window.setTimeout(stop, wait);
   }
 
   private finish(m: { id: number; ok: boolean; value?: unknown; error?: string; crashed?: boolean; ms?: number; mem?: number | null }): void {
@@ -206,6 +249,7 @@ class WebBackend {
     if (!job || job.id !== m.id) return;
     this.last = { op: job.op, ms: m.ms ?? 0, mem: m.mem ?? null };
     this.running = null;
+    window.clearTimeout(this.stopTimer);
     if (m.ok) job.resolve(m.value);
     else if (m.crashed) {
       this.crashed(m.error ?? "The engine stopped.");
@@ -313,6 +357,8 @@ class WebBackend {
         const generation = this.bump();
         this.rememberTrace(asked.settings);
         const request = this.withoutUnreadyDenoiser(asked);
+        // The trace running now, if any, is not the one wanted any more.
+        this.supersede(false, request);
         const p = await this.loadPrefs();
         this.enqueue(
           "trace",
@@ -334,6 +380,8 @@ class WebBackend {
       case "cancel_trace":
         this.bump();
         this.queue = this.queue.filter((j) => (j.kind === "trace" ? (j.resolve(null), false) : true));
+        // Cancel means stop: the worker is replaced now rather than left to finish.
+        this.supersede(true);
         return null;
       case "start_preview": {
         const request = this.withoutUnreadyDenoiser(a.request as { settings: Record<string, unknown> });
@@ -497,6 +545,9 @@ class WebBackend {
     this.source = { bytes: bytes.slice(), name };
     this.bump();
     this.queue = this.queue.filter((j) => (j.kind ? (j.resolve(null), false) : true));
+    // A trace of the image that was open is of no use to anybody now. The fresh worker is
+    // given this image first; the open below then reads its size again, which is cheap.
+    this.supersede(true);
     return this.enqueue("open_bytes", 0, { bytes, name });
   }
 
@@ -690,6 +741,25 @@ class WebBackend {
     this.denoiser.postMessage({ type: this.wanted ? "prepare" : "download" });
     return null;
   }
+}
+
+/** What a trace request carries, as far as deciding whether two draw the same thing. */
+type TraceAsk = { settings?: Record<string, unknown>; tier?: string };
+
+/**
+ * Whether two trace requests draw the same thing: the same settings but for the two that
+ * only rewrite the finished file (Minify, Margin). The tier is left out on purpose: a draft
+ * of these settings is either this very drawing (a small image) or a short, time-limited
+ * trace that is nearly done, and either way letting it finish is the cheaper path.
+ */
+function sameDrawing(a: TraceAsk | undefined, b: TraceAsk | undefined): boolean {
+  const key = (r: TraceAsk | undefined) => {
+    const s: Record<string, unknown> = { ...(r?.settings ?? {}) };
+    delete s.minify;
+    delete s.margin;
+    return JSON.stringify(Object.keys(s).sort().map((k) => [k, s[k]]));
+  };
+  return key(a) === key(b);
 }
 
 let backend: WebBackend | null = null;

@@ -14,6 +14,7 @@
 
 pub mod env;
 pub mod predicates;
+pub mod progress;
 
 /// A point in image space, in pixel units. Sub-pixel positions are the normal case.
 #[derive(Debug, Clone, Copy, PartialEq)]

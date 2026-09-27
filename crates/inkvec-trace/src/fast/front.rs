@@ -65,6 +65,7 @@ fn trace(
     let (w, h) = (img.width, img.height);
     let rgb = img.composited([1.0, 1.0, 1.0]);
     let mut sw = Stopwatch::start();
+    inkvec_core::progress::begin("palette");
     let (mut pal, mut labels) = super::palette::palette_and_labels(
         &rgb,
         native,
@@ -77,6 +78,7 @@ fn trace(
         crate::color::split_alpha_inks(&mut labels, &mut pal, a);
     }
     sw.mark("palette");
+    inkvec_core::progress::begin("slivers");
     {
         let px: Vec<[f32; 4]> = (0..w * h)
             .map(|p| {
@@ -99,10 +101,13 @@ fn trace(
         super::faces::merge_same_inks(&mut labels, &inks, w, h);
     }
     sw.mark("slivers");
+    inkvec_core::progress::begin("despeckle");
     super::faces::despeckle(&mut labels, w, h, speckle_floor(opts.min_region, w, h));
     sw.mark("despeckle");
+    inkvec_core::progress::begin("split");
     let (mut labels, mut face_color) = super::faces::faces(&labels, w, h);
     sw.mark("split");
+    inkvec_core::progress::begin("ramps");
     let mut face_fill: Vec<gradient::FillFit> =
         face_color.iter().map(|&l| flat_fill(&pal, l)).collect();
     if opts.gradients && native.is_none() {

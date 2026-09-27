@@ -18,6 +18,7 @@ import { closeOverlay, modal, openModal, tip, toast } from "./overlays";
 import { paletteCard, wirePaletteHover, type PaletteActions } from "./palette";
 import { autoChose, hasAutoNews, type AutoChoseActions } from "./autochose";
 import { fetchBar, fetchLine, sentence } from "./denoiserfetch";
+import { elapsedText, runningLabel, stepText } from "../lib/live";
 
 export interface RailActions extends PaletteActions, AutoChoseActions {
   setPreset(id: string): void;
@@ -96,9 +97,8 @@ export function createRail(store: Store, act: RailActions): HTMLElement {
     const st = store.state;
     const busy = foot.querySelector<HTMLElement>(".readout.busy");
     if (st.tracing && busy) {
-      const last = st.liveStages[st.liveStages.length - 1];
-      busy.querySelector(".stage")!.textContent = last?.name ?? "starting";
-      busy.querySelector(".elapsed")!.textContent = seconds(st.liveStages.reduce((a: number, x: Stage) => a + x.ms, 0) / 1000);
+      // The elapsed time is the live clock's to write (`lib/live.ts`).
+      busy.querySelector(".stage")!.textContent = runningLabel(st);
       return;
     }
     fill(foot, ...footer(store, act));
@@ -130,6 +130,7 @@ export function createRail(store: Store, act: RailActions): HTMLElement {
     [
       "tracing",
       "liveStages",
+      "liveNow",
       "result",
       "report",
       "palette",
@@ -609,7 +610,7 @@ function stageCard(store: Store): HTMLElement {
   const st = store.state;
   const all = st.caps?.stages ?? [];
   const done = new Map(st.liveStages.map((x: Stage) => [x.name, x.ms]));
-  const elapsed = st.liveStages.reduce((a, x) => a + x.ms, 0) / 1000;
+  const now = st.liveNow;
 
   return h(
     "div.card",
@@ -618,7 +619,7 @@ function stageCard(store: Store): HTMLElement {
       "div.cardhead",
       null,
       h("span", { style: { fontSize: "12px", fontWeight: "500" } }, `Tracing at ${plannedTracePx(st, st.tracingTier) ?? "—"} px`),
-      h("span.muted.num", { style: { fontSize: "11px" } }, seconds(elapsed)),
+      h("span.muted.num", { style: { fontSize: "11px" }, "data-live": "elapsed" }, elapsedText(st)),
     ),
     h("div.sweep", null, h("i")),
     h(
@@ -626,6 +627,16 @@ function stageCard(store: Store): HTMLElement {
       null,
       ...all.map((name) => {
         const ms = done.get(name);
+        // Running now: shown the moment the engine starts it, with its own clock.
+        if (now?.stage === name) {
+          return h(
+            "div.stagerow.running",
+            null,
+            h("span.mark", null, "›"),
+            h("span.name", null, name, h("span.sub", null, now.step ? stepText(now.step) : now.what)),
+            h("span.num", { "data-live": "stage" }),
+          );
+        }
         return h(
           `div.stagerow${ms === undefined ? "" : ".done"}`,
           null,
@@ -1104,14 +1115,12 @@ function readout(store: Store, act: RailActions): HTMLElement {
   const r = st.report;
 
   if (st.tracing) {
-    const last = st.liveStages[st.liveStages.length - 1];
-    const elapsed = st.liveStages.reduce((a: number, x: Stage) => a + x.ms, 0) / 1000;
     return h(
       "div.readout.busy",
       null,
       h("span.pulse"),
-      h("span.stage", null, last?.name ?? "starting"),
-      h("span.muted.num.elapsed", null, seconds(elapsed)),
+      h("span.stage", null, runningLabel(st)),
+      h("span.muted.num.elapsed", { "data-live": "elapsed" }, elapsedText(st)),
       h("button.reset", { onclick: act.cancel, title: "Esc" }, "Cancel"),
     );
   }

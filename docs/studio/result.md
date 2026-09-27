@@ -9,7 +9,7 @@ that comparison found.
 From the top, the Result tab shows:
 
 1. The **Denoiser** and **Editable** settings (shared with Tune; see
-   [Tune](tune.md#the-denoiser-and-editable)).
+   [Tune](tune.md#the-engine-the-denoiser-and-editable)).
 2. **Auto chose**, while it has something to offer (see
    [Getting started](getting-started.md#the-choice-card-keep-auto-or-customise)).
 3. The **quality report**.
@@ -87,7 +87,7 @@ an artist drew by hand. This card counts three of those habits on your drawing:
 
 Each bar shows your drawing's share, with the count, and a tick where hand-drawn files sit: the
 median of 1,544 SVGs drawn by artists, measured the same way. A plain trace starts near zero on
-the first two. **Make it editable** turns on [Editable structure](tune.md#the-denoiser-and-editable),
+the first two. **Make it editable** turns on [Editable structure](tune.md#the-engine-the-denoiser-and-editable),
 which moves the bars towards the ticks. It costs a little colour accuracy (about 0.04 dE00 on
 icons); the quality report shows the price on your image.
 

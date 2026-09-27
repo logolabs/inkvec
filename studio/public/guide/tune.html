@@ -12,7 +12,7 @@
   <aside class="side"><a class="guidebrand" href="index.html"><img src="logo-mono.svg" alt=""> <span>Inkvec Studio</span></a><div class="grp"><h4>User guide</h4><a href="index.html">Overview</a><a href="install.html">Install and first launch</a><a href="getting-started.html">Getting started</a><a href="viewer.html">The viewer</a><a href="result.html">Result</a><a href="tune.html" aria-current="page">Tune</a><a href="palette.html">Palette and colour groups</a><a href="export.html">Export</a><a href="minify.html">Minify SVG</a><a href="fabricate.html">Fabricate</a><a href="batch.html">Batch</a><a href="settings.html">Settings</a><a href="shortcuts.html">Keyboard and mouse</a><a href="troubleshooting.html">Troubleshooting</a></div><div class="grp"><h4>Tutorials</h4><a href="tutorials/jpeg-logo.html">Clean up a JPEG logo</a><a href="tutorials/favicon-asset-pack.html">A favicon and an asset pack</a><a href="tutorials/vinyl-htv.html">Layered vinyl and iron-on</a><a href="tutorials/laser.html">Laser: DXF and G-code</a></div><div class="grp"><h4>Online</h4><a href="https://logolabs.github.io/inkvec/">Inkvec documentation</a><a href="https://logolabs.github.io/inkvec/studio/tune.html">This page on the web</a></div><p class="guidenote">This copy of the guide is part of the app and works without a network.</p></aside>
   <main><article><h1 id="tune-presets-and-every-control">Tune: presets and every control</h1>
 <p>The <strong>Tune</strong> half of the rail holds the settings for the next trace: eight presets, any presets you
-saved, and twenty-two controls. Moving any of them starts a draft at once and a full trace a moment
+saved, and twenty-three controls. Moving any of them starts a draft at once and a full trace a moment
 later (see <a href="viewer.html#draft-and-full-traces">draft and full traces</a>); the readout at the foot of
 the rail shows what the change bought or cost.</p>
 <p><img alt="The Tune half of the rail: presets, then the Detail group with one control changed" src="img/tune.webp"></p>
@@ -35,9 +35,12 @@ are not sure where to start, <strong>Walk me through it</strong> at the top open
 has its own <strong>Reset</strong>. <strong>Output</strong> starts folded.</p>
 <p>The controls are the same ones the <code>inkvec</code> command line has; the Studio only gives them
 plain-language names. The table at the end of this page maps them.</p>
-<h2 id="the-denoiser-and-editable">The denoiser and Editable</h2>
-<p>Two settings sit above both halves of the rail, big, because they are the two people most often
+<h2 id="the-engine-the-denoiser-and-editable">The engine, the denoiser and Editable</h2>
+<p>Three settings sit above both halves of the rail, big, because they are the ones people most often
 come for. Each is one control, shown once.</p>
+<p><strong>Engine</strong>: <strong>Quality</strong> or <strong>Fast</strong>. Quality places every edge to a fraction of a pixel and fits
+the fewest curves that match the image; it is the default and the closest trace. Fast traces each
+shape in a single pass, many times quicker, for previews, batches and very large images.</p>
 <p><strong>Denoiser</strong>: <strong>Off</strong>, <strong>Auto</strong> or <strong>On</strong>. The denoiser is a trained model that repairs JPEG, WebP
 and screenshot damage at the image's own size before tracing, so the colours are the ones the
 artwork was drawn with rather than the ones the compression left.</p>
@@ -57,6 +60,24 @@ an artist can edit: joins that are smooth, handles that lie on an axis and have 
 lined up with each other, and shapes that are symmetric locked into exact mirrors. The outline stays
 within the same tolerance; the <a href="result.html#editability">Editability card</a> shows what it changed, and
 the quality report shows its price (about 0.04 dE00 on icons).</p>
+<h3 id="which-controls-each-engine-reads">Which controls each engine reads</h3>
+<p>Fast skips the stages several controls steer, so with Fast selected the Tune tab lists only the
+controls that change a Fast trace, and a line at the top says how many more are for Quality. The
+hidden ones keep their values: switch back to Quality and they are where you left them. The
+<em>changed</em> counts and each group's <strong>Reset</strong> count and reset only the controls on show; choosing a
+preset still sets every control. The <a href="getting-started.html#the-custom-wizard">Custom wizard</a> leaves
+the same controls out.</p>
+<p>Only Quality reads <strong>Precision</strong>, <strong>Time limit</strong>, <strong>Match repeated shapes</strong>, <strong>Match threshold</strong>,
+<strong>Fewer paths</strong>, <strong>Repair crossing rings</strong>, <strong>Curve cost</strong> and <strong>Smooth-join angle</strong>. Every other
+control changes the trace in both engines, though some only in company: <strong>Holes as cutouts</strong>
+only with Trace transparency off, and <strong>Flat fills</strong> in Fast only where the image has a smooth
+colour ramp. This was measured, not assumed: each control was moved on a range of images in both
+engines, and a control counts as read by an engine if any of those moves changed the SVG it
+wrote.</p>
+<p><strong>Black &amp; white</strong> and <strong>Line art</strong> trace the same way in either engine, with the fitter Quality
+uses, so while either is on, Fast shows the same controls as Quality. (Line art that declines, on
+a drawing that is not line art, leaves the trace to Fast, and those extra controls then do
+nothing.)</p>
 <h2 id="presets">Presets</h2>
 <p>A preset is a handful of settings chosen together. The tray shows the eight built-ins; the line
 under it describes the one selected.</p>
@@ -126,7 +147,7 @@ preset selected and counts the control as changed; <strong>Reset <em>N</em> chan
 <p><strong>Photo or scan</strong> needs the denoiser to do what it says. Without it the trace still runs, and the
 stage says the denoiser is missing and offers the download.</p>
 <h3 id="saving-your-own">Saving your own</h3>
-<p><strong>Save as preset</strong> stores all twenty-two controls exactly as they stand, under a name you give
+<p><strong>Save as preset</strong> stores all twenty-three controls exactly as they stand, under a name you give
 (up to 40 characters). It appears in the tray after the built-ins; the <strong>×</strong> on its chip forgets
 it. You can keep up to twelve. A saved preset is a complete snapshot rather than a list of
 differences, so it does not change if a future version changes the defaults.</p>
@@ -312,7 +333,7 @@ matters mainly when that is off.</p>
 </tbody>
 </table>
 <p><code>inkvec --help</code> lists them all with their exact spelling.</p><nav class="pagenav"><a class="prev" href="result.html"><span class="dir">Previous</span><span class="lbl">Result</span></a><a class="next" href="palette.html"><span class="dir">Next</span><span class="lbl">Palette and colour groups</span></a></nav></article></main>
-  <aside class="rail"><h5>On this page</h5><ul><ul><li class="l2"><a href="#how-the-controls-work">How the controls work</a></li><li class="l2"><a href="#the-denoiser-and-editable">The denoiser and Editable</a></li><li class="l2"><a href="#presets">Presets</a><ul><li class="l3"><a href="#saving-your-own">Saving your own</a></li></ul></li><li class="l2"><a href="#detail">Detail</a></li><li class="l2"><a href="#colour">Colour</a></li><li class="l2"><a href="#shape">Shape</a></li><li class="l2"><a href="#output">Output</a></li><li class="l2"><a href="#the-same-controls-on-the-command-line">The same controls on the command line</a></li></ul></ul></aside>
+  <aside class="rail"><h5>On this page</h5><ul><ul><li class="l2"><a href="#how-the-controls-work">How the controls work</a></li><li class="l2"><a href="#the-engine-the-denoiser-and-editable">The engine, the denoiser and Editable</a><ul><li class="l3"><a href="#which-controls-each-engine-reads">Which controls each engine reads</a></li></ul></li><li class="l2"><a href="#presets">Presets</a><ul><li class="l3"><a href="#saving-your-own">Saving your own</a></li></ul></li><li class="l2"><a href="#detail">Detail</a></li><li class="l2"><a href="#colour">Colour</a></li><li class="l2"><a href="#shape">Shape</a></li><li class="l2"><a href="#output">Output</a></li><li class="l2"><a href="#the-same-controls-on-the-command-line">The same controls on the command line</a></li></ul></ul></aside>
 </div>
 </body>
 </html>

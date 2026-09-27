@@ -18,10 +18,17 @@ use inkvec_fit::{curves::Segment, multimodel, simple, FitConfig, FittedPath};
 /// artist-authored SVGs surveyed use `<g>`. Emitting a flat list of paths renders
 /// identically and is materially worse to work with: selecting a shape and its
 /// decorations together becomes a manual rubber-band instead of one click.
-pub(crate) fn containment(pts: &[Vec<Vec<Point>>], outer: &[Vec<usize>]) -> Vec<Option<usize>> {
+///
+/// `info` is [`ring_infos`] of `pts`: the same answer as testing the rings themselves, with
+/// each ring's area and probes measured once instead of once per pair.
+pub(crate) fn containment(
+    pts: &[Vec<Vec<Point>>],
+    info: &[Vec<RingInfo>],
+    outer: &[Vec<usize>],
+) -> Vec<Option<usize>> {
     let n = pts.len();
     let area: Vec<f64> = (0..n)
-        .map(|i| outer[i].iter().map(|&k| ring_area(&pts[i][k])).sum())
+        .map(|i| outer[i].iter().map(|&k| info[i][k].area).sum())
         .collect();
 
     let mut parent = vec![None; n];
@@ -29,7 +36,7 @@ pub(crate) fn containment(pts: &[Vec<Vec<Point>>], outer: &[Vec<usize>]) -> Vec<
         if outer[i].is_empty() {
             continue;
         }
-        let probe = &pts[i][outer[i][0]];
+        let probe = &info[i][outer[i][0]];
         let mut best: Option<(usize, f64)> = None;
         for j in 0..n {
             if i == j || outer[j].is_empty() || area[j] <= area[i] {
@@ -37,7 +44,7 @@ pub(crate) fn containment(pts: &[Vec<Vec<Point>>], outer: &[Vec<usize>]) -> Vec<
             }
             let inside = outer[j]
                 .iter()
-                .any(|&k| pts[j][k].len() >= 3 && ring_inside(probe, &pts[j][k]));
+                .any(|&k| pts[j][k].len() >= 3 && ring_inside(probe, &pts[j][k], &info[j][k]));
             if inside && best.is_none_or(|(_, a)| area[j] < a) {
                 best = Some((j, area[j]));
             }
@@ -45,6 +52,64 @@ pub(crate) fn containment(pts: &[Vec<Vec<Point>>], outer: &[Vec<usize>]) -> Vec<
         parent[i] = best.map(|(j, _)| j);
     }
     parent
+}
+
+/// What the containment tests read from a ring, measured once: its area, its bounding box
+/// and its [`interior_probes`].
+pub(crate) struct RingInfo {
+    pub(crate) area: f64,
+    /// `[min x, min y, max x, max y]`, widened by [`BOX_SLACK`].
+    bbox: [f64; 4],
+    pub(crate) probes: Vec<Point>,
+}
+
+/// How far a bounding box is widened before a point outside it is called outside the ring.
+/// [`point_in_ring`] can only count a crossing to the right of a point that lies within the
+/// ring's extent, up to the rounding of one interpolation (a few ulps, 1e-11 px at this
+/// scale); this is far above that, so the box never rejects a point the full test accepts.
+const BOX_SLACK: f64 = 1e-6;
+
+impl RingInfo {
+    fn new(ring: &[Point]) -> Self {
+        let mut bbox = [
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+        ];
+        for p in ring {
+            bbox = [
+                bbox[0].min(p.x),
+                bbox[1].min(p.y),
+                bbox[2].max(p.x),
+                bbox[3].max(p.y),
+            ];
+        }
+        Self {
+            area: ring_area(ring),
+            bbox: [
+                bbox[0] - BOX_SLACK,
+                bbox[1] - BOX_SLACK,
+                bbox[2] + BOX_SLACK,
+                bbox[3] + BOX_SLACK,
+            ],
+            probes: interior_probes(ring),
+        }
+    }
+
+    /// False only where [`point_in_ring`] is false too: outside the ring's extent the
+    /// crossings to the right of a point are none or all, and all is an even number.
+    fn may_contain(&self, p: Point) -> bool {
+        p.x >= self.bbox[0] && p.y >= self.bbox[1] && p.x <= self.bbox[2] && p.y <= self.bbox[3]
+    }
+}
+
+/// [`RingInfo`] for every ring of every face.
+pub(crate) fn ring_infos(pts: &[Vec<Vec<Point>>]) -> Vec<Vec<RingInfo>> {
+    use rayon::prelude::*;
+    pts.par_iter()
+        .map(|face| face.iter().map(|r| RingInfo::new(r)).collect())
+        .collect()
 }
 
 /// Refit whichever edges take part in a self-crossing, under a tightening span cap, until
@@ -437,7 +502,9 @@ pub(crate) fn point_in_ring(p: Point, outer: &[Point]) -> bool {
     inside
 }
 
-pub(crate) fn ring_inside(inner: &[Point], outer: &[Point]) -> bool {
+/// Is the ring `inner` measures inside the ring `outer`? A majority of its interior probes
+/// has to be, and it has to enclose less area; `outer_info` is `outer` measured.
+pub(crate) fn ring_inside(inner: &RingInfo, outer: &[Point], outer_info: &RingInfo) -> bool {
     // Rings of a planar map never cross, so a ring inside another encloses strictly less
     // area. Without this the probe test alone could call a face's outer boundary a child
     // of its own hole: on a flag whose emblem is a thin dark rim around a disc plus the
@@ -446,14 +513,26 @@ pub(crate) fn ring_inside(inner: &[Point], outer: &[Point]) -> bool {
     // pixel. Both rings were then "inside" the other, the face had no outer ring left, and
     // the emblem vanished — a 0.1 px shift of the rim from the sub-pixel refinement was
     // enough to flip the majority (dE00 0.44 -> 4.59 on twemoji 1f1f3-1f1e8).
-    if outer.len() < 3 || ring_area(inner) >= ring_area(outer) {
+    if outer.len() < 3 || inner.area >= outer_info.area {
         return false;
     }
-    let probes = interior_probes(inner);
+    let probes = &inner.probes;
     if probes.is_empty() {
         return false;
     }
-    let hits = probes.iter().filter(|&&p| point_in_ring(p, outer)).count();
+    // A probe outside the box is outside the ring, so a majority has to be inside the box
+    // before any probe is worth the full test. The count is the full test's either way.
+    let boxed = probes
+        .iter()
+        .filter(|&&p| outer_info.may_contain(p))
+        .count();
+    if boxed * 2 <= probes.len() {
+        return false;
+    }
+    let hits = probes
+        .iter()
+        .filter(|&&p| outer_info.may_contain(p) && point_in_ring(p, outer))
+        .count();
     hits * 2 > probes.len()
 }
 

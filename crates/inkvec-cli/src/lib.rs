@@ -390,9 +390,10 @@ pub fn intake(
     // it is not fooled by a super-resolution model that returns sharp edges at high
     // resolution. It reads 1 for every native render, so this does nothing at all to a
     // native intake and the benchmark is untouched by construction.
-    // Fast mode reads neither: its fit has no lambda or precision, and its palette leaves no
-    // anti-aliasing confetti for a raised speckle floor to clear. The two measurements are
-    // three full-image round trips, the largest cost in a fast trace at 2048 px.
+    // Fast mode reads neither: its fit has no lambda or precision, and its front end sets its
+    // own speckle floor from the image's size (`inkvec_trace::fast::front`). The two
+    // measurements are three full-image round trips, the largest cost in a fast trace at
+    // 2048 px.
     let (oversample, redundancy) = if args.mode == TraceMode::Fast {
         (1.0, 1.0)
     } else {

@@ -1,5 +1,6 @@
-//! Fast mode's front end: palette and labels in two passes ([`super::palette`]), speckle
-//! removal and faces ([`super::faces`]), the ramp pass ([`super::bands`]), then the shared
+//! Fast mode's front end: palette and labels in two passes ([`super::palette`]), rims and
+//! near-identical inks put back into the faces they belong to, speckle removal and faces
+//! ([`super::faces`]), the ramp pass ([`super::bands`]), then the shared
 //! planar-map stages -- saddles, the map, symmetry, and the sub-pixel refinement of every
 //! boundary point.
 //!
@@ -25,6 +26,23 @@ pub(crate) fn trace_color(
     source_alpha: Option<&[f32]>,
 ) -> ColorTrace {
     trace(img, opts, None, source_alpha)
+}
+
+/// Speckle floor per 512 x 512 pixels of image, in pixels.
+const SPECKLE_PER_512: f64 = 4.0;
+/// Largest speckle floor, in pixels: VTracer's default (`filter_speckle` 4, a 4 x 4 patch).
+const SPECKLE_MAX: f64 = 16.0;
+
+/// The smallest face fast mode keeps, in pixels: `min_region`, or more on a large image.
+///
+/// Noise does not shrink as the raster grows, and a fixed floor of two pixels kept every
+/// grain of a textured 1672 px masthead as a face with an outline. The floor grows with the
+/// image's area, four pixels at 512 x 512, up to VTracer's sixteen from 1024 x 1024 on; a
+/// 128 px icon keeps `min_region`. On 20 brand logos rendered at 2048 px this removed 14% of
+/// the coordinates and lowered dE00 (0.0729 -> 0.0725); on the masthead 19% at +0.01.
+fn speckle_floor(min_region: usize, w: usize, h: usize) -> usize {
+    let scaled = (SPECKLE_PER_512 * (w * h) as f64 / (512.0 * 512.0)).min(SPECKLE_MAX);
+    min_region.max(scaled.round() as usize)
 }
 
 fn flat_fill(pal: &Palette, ink: usize) -> gradient::FillFit {
@@ -73,9 +91,15 @@ fn trace(
             })
             .collect();
         super::faces::absorb_slivers(&mut labels, &px, &inks, w, h);
+        // Every face costs an outline, and every place a face touches a boundary is a
+        // junction the fitter has to stop at. The rims of small text and the second black
+        // of large type were most of both on a textured masthead: 4,068 faces and 47,548
+        // coordinates, where these two passes leave 8,798 at a lower dE00.
+        super::faces::absorb_rims(&mut labels, &px, &inks, w, h);
+        super::faces::merge_same_inks(&mut labels, &inks, w, h);
     }
     sw.mark("slivers");
-    super::faces::despeckle(&mut labels, w, h, opts.min_region);
+    super::faces::despeckle(&mut labels, w, h, speckle_floor(opts.min_region, w, h));
     sw.mark("despeckle");
     let (mut labels, mut face_color) = super::faces::faces(&labels, w, h);
     sw.mark("split");

@@ -119,6 +119,15 @@ pub(crate) fn primitive(pts: &[Point]) -> Option<(PrimitiveFit, Point, Vec<Segme
             return Some((prim, start, segs));
         }
     }
+    let span = pts.iter().map(|p| p.dist(pts[0])).fold(0.0f64, f64::max);
+    // The orthogonal fit is iterative and costs as much as the rest of the fast fit put
+    // together on a long boundary (a 3,000-point rule across a masthead: 330 ms), so it runs
+    // only where the test below could pass. Every point within TOL of the ellipse puts the
+    // two points `span` apart within 2 (rx + TOL) of each other, and the area test with
+    // ry >= MIN_RADIUS bounds rx from above: when the two bounds cross, no ellipse passes.
+    if span / 2.0 - TOL > area.abs() / (MIN_AREA_SHARE * std::f64::consts::PI * MIN_RADIUS) {
+        return None;
+    }
     let alg = fit_ellipse_algebraic(pts, &sigma)?;
     if !(alg.rx.is_finite() && alg.ry.is_finite())
         || pts.iter().any(|&p| alg.contact(p).0.abs() > 2.0 * TOL)
@@ -126,7 +135,6 @@ pub(crate) fn primitive(pts: &[Point]) -> Option<(PrimitiveFit, Point, Vec<Segme
         return None;
     }
     let e = fit_ellipse(pts, &sigma)?;
-    let span = pts.iter().map(|p| p.dist(pts[0])).fold(0.0f64, f64::max);
     let ok = e.rx.is_finite()
         && e.ry.is_finite()
         && e.rx.min(e.ry) >= MIN_RADIUS

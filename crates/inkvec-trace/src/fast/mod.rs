@@ -8,7 +8,9 @@
 //! and the emitter with its seam underlap, compound paths and minify -- and replaces the
 //! rest with one-pass versions:
 //!
-//! * `palette`: inks from a 15-bit histogram of flat pixels; blends go to a neighbour's ink;
+//! * `palette`: inks from a 15-bit histogram of flat pixels (and, for strokes too thin to
+//!   have any, of coherent pixels that are no blend of other inks); a blend goes to a
+//!   neighbour's ink or to the ink it is made of, never to one it merely lies near;
 //! * `front`: faces and the planar map, without blend absorption or the boundary solve;
 //! * `bands`: posterised ramps put back together, one gradient fit per ramp;
 //! * `prims`: a closed boundary that is a circle or an ellipse is written as one;

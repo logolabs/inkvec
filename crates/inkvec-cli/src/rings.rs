@@ -54,6 +54,75 @@ pub(crate) fn containment(
     parent
 }
 
+/// How the faces of a drawing nest: every ring as points, what the containment tests read
+/// from each, each face's outline, and the face each one sits in.
+pub(crate) struct Nesting {
+    /// Every ring of every face, as the points [`ring_points`] follows it through.
+    pub(crate) pts: Vec<Vec<Vec<Point>>>,
+    /// [`ring_infos`] of `pts`.
+    pub(crate) info: Vec<Vec<RingInfo>>,
+    /// Per face, its outline: the rings enclosing some area that are not inside another of
+    /// its own rings.
+    pub(crate) outer: Vec<Vec<usize>>,
+    /// Per face, the smallest face containing it: [`containment`].
+    pub(crate) parent: Vec<Option<usize>>,
+}
+
+/// The [`Nesting`] of the faces `order` describes, drawn with `fitted`.
+pub(crate) fn nesting(order: &[FaceRings], fitted: &[FittedPath]) -> Nesting {
+    let pts: Vec<Vec<Vec<Point>>> = order
+        .iter()
+        .map(|face| face.iter().map(|r| ring_points(r, fitted)).collect())
+        .collect();
+
+    // Painted rings per face (holes dropped: in a partition every hole is another
+    // face's outer boundary, painted later and on top).
+    //
+    // A ring enclosing no area is dropped outright. The planar map can produce faces one
+    // pixel wide whose boundary walks out along a chain and straight back, and those were
+    // being emitted as paths like `M35.5,11.5 L37.5,10.5 Z` — twenty-seven of them on a
+    // plain green circle. They paint nothing at any resolution and cost coordinates, an
+    // id, and a line in the document a person has to read past.
+    //
+    // The threshold is far below a pixel so that genuinely thin features survive: a
+    // sliver forty pixels long and a third of a pixel wide still encloses about 13px^2.
+    let solid: Vec<Vec<usize>> = (0..order.len())
+        .map(|i| {
+            (0..order[i].len())
+                .filter(|&k| {
+                    pts[i][k].len() >= 3 && ring_area(&pts[i][k]) > crate::emit::MIN_RING_AREA
+                })
+                .collect()
+        })
+        .collect();
+    // `outer` is the face's outline: the rings not contained in another of its own. It
+    // decides containment and paint order.
+    // Every containment test below reads these, measured once per ring: a face with a
+    // thousand holes, or a document of four thousand faces, asks about each ring thousands
+    // of times, and measuring it afresh each time was two thirds of a fast trace.
+    let info = ring_infos(&pts);
+    let outer: Vec<Vec<usize>> = (0..order.len())
+        .map(|i| {
+            solid[i]
+                .iter()
+                .copied()
+                .filter(|&k| {
+                    !solid[i]
+                        .iter()
+                        .any(|&m| m != k && ring_inside(&info[i][k], &pts[i][m], &info[i][m]))
+                })
+                .collect()
+        })
+        .collect();
+    let parent = containment(&pts, &info, &outer);
+    Nesting {
+        pts,
+        info,
+        outer,
+        parent,
+    }
+}
+
 /// What the containment tests read from a ring, measured once: its area, its bounding box
 /// and its [`interior_probes`].
 pub(crate) struct RingInfo {

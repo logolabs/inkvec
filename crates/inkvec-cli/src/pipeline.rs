@@ -37,8 +37,21 @@ pub(crate) fn run_strokes(
 
     let decimals = emit_decimals(args.precision);
     let (w, h) = (img.width, img.height);
-    let ink = inkvec_trace::color::to_hex(cov.fg);
-    let paper = inkvec_trace::color::to_hex(cov.bg);
+    // Monochrome asks for pure black on white, and for no paper at all without a background
+    // (the knock-out in `post_process` stands aside under monochrome; see there).
+    let (ink, paper) = if args.monochrome {
+        ("#000000".to_string(), "#ffffff".to_string())
+    } else {
+        (
+            inkvec_trace::color::to_hex(cov.fg),
+            inkvec_trace::color::to_hex(cov.bg),
+        )
+    };
+    let paper_rect = if args.monochrome && args.no_background {
+        String::new()
+    } else {
+        format!("<rect x=\"-0.5\" y=\"-0.5\" width=\"{w}\" height=\"{h}\" fill=\"{paper}\"/>")
+    };
 
     // One width for the whole drawing when the strokes agree on it. The artist
     // wrote one number; recovering seven that differ in the third decimal and
@@ -199,7 +212,7 @@ pub(crate) fn run_strokes(
     // once. `round` is what this art uses: lucide sets both on every file.
     let svg = format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"-0.5 -0.5 {w} {h}\" width=\"{w}\" height=\"{h}\">\
-         <rect x=\"-0.5\" y=\"-0.5\" width=\"{w}\" height=\"{h}\" fill=\"{paper}\"/>{fills}\
+         {paper_rect}{fills}\
          <g fill=\"none\" stroke=\"{ink}\" stroke-linecap=\"round\" stroke-linejoin=\"round\"{sw}>{body}</g></svg>",
         sw = if shared {
             format!(" stroke-width=\"{med:.*}\"", decimals)
@@ -262,7 +275,10 @@ pub(crate) fn run_bilevel(
         })
         .collect();
 
-    let svg = emit_bilevel(&paths, w, h, args.precision);
+    // Under monochrome the knock-out in `post_process` stands aside, so the paper is left
+    // out here instead.
+    let paper = !(args.monochrome && args.no_background);
+    let svg = emit_bilevel(&paths, w, h, args.precision, paper);
     (
         svg,
         vec![
@@ -910,6 +926,32 @@ fn finish_color(
             eprintln!("{}", stats.summary());
         }
     }
+    // Monochrome: the ink faces as one black shape, from the same fitted edges. It replaces
+    // the colour document, and with it the layer form, which only ever repaints colours.
+    let mono = args.monochrome.then(|| {
+        let ground = mono::classify(&mono::Trace {
+            map: &map,
+            order: &order,
+            fitted: &fitted,
+            labels: &traced_labels,
+            fills: &fills,
+            face_color: &face_color,
+            pal: &pal,
+            clear: &clear,
+            opacity: &opacity,
+        });
+        let svg = mono::emit(
+            &map,
+            &ground.ink,
+            &fitted,
+            &prims,
+            args.no_background,
+            w,
+            h,
+            args.precision,
+        );
+        (svg, mono::report(&ground))
+    });
     let emit = |order: &[FaceRings], an: Option<Layers>| {
         emit_color(
             order,
@@ -935,10 +977,16 @@ fn finish_color(
             args.use_symbols,
         )
     };
-    let flat = emit(&order, None);
-    let svg = match layers.as_ref().filter(|an| !an.layers.is_empty()) {
-        None => flat,
-        Some(an) => {
+    let (mono_svg, mono_line) = match mono {
+        Some((svg, line)) => (Some(svg), Some(line)),
+        None => (None, None),
+    };
+    let layers = layers.filter(|_| mono_svg.is_none());
+    let svg = match (mono_svg, layers.as_ref().filter(|an| !an.layers.is_empty())) {
+        (Some(svg), _) => svg,
+        (None, None) => emit(&order, None),
+        (None, Some(an)) => {
+            let flat = emit(&order, None);
             // Every face a layer covers is relabelled onto the ground it belongs with, so
             // the cuts the layer made stop being drawn at all.
             let mut remap: Vec<u16> = (0..map.n_labels as u16).collect();
@@ -1031,6 +1079,7 @@ fn finish_color(
     } else {
         Vec::new()
     };
+    report.extend(mono_line);
     report.extend([
             format!(
                 "palette       {} colours, {} faces ({n_grad} gradient)",

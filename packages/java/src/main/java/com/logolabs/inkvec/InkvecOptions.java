@@ -21,6 +21,7 @@ public final class InkvecOptions {
     private final double timeBudget;
     private final double margin;
     private final boolean noBackground;
+    private final boolean monochrome;
     private final boolean minify;
     private final boolean editability;
     private final boolean nativeAlpha;
@@ -40,6 +41,7 @@ public final class InkvecOptions {
         this.timeBudget = b.timeBudget;
         this.margin = b.margin;
         this.noBackground = b.noBackground;
+        this.monochrome = b.monochrome;
         this.minify = b.minify;
         this.editability = b.editability;
         this.nativeAlpha = b.nativeAlpha;
@@ -153,6 +155,21 @@ public final class InkvecOptions {
      */
     public boolean noBackground() {
         return noBackground;
+    }
+
+    /**
+     * Black artwork only: every colour that is not the background is painted pure black, and the
+     * background, with every hole it shows through such as the counters of letters, is white -- or
+     * transparent with no_background, which gives black artwork on transparency with real holes.
+     * The edges are the colour trace's own, so a light colour on white (yellow) is kept and no
+     * pale fringe is left around the black. The background is the colour covering most of the
+     * image border, or transparency when the border is transparent; on white-on-black art the
+     * white is the artwork and comes back black. Off by default.
+     *
+     * @default false
+     */
+    public boolean monochrome() {
+        return monochrome;
     }
 
     /**
@@ -287,6 +304,7 @@ public final class InkvecOptions {
         sb.append(",\"time_budget\":").append(timeBudget);
         sb.append(",\"margin\":").append(margin);
         sb.append(",\"no_background\":").append(noBackground);
+        sb.append(",\"monochrome\":").append(monochrome);
         sb.append(",\"minify\":").append(minify);
         sb.append(",\"editability\":").append(editability);
         sb.append(",\"native_alpha\":").append(nativeAlpha);
@@ -357,6 +375,7 @@ public final class InkvecOptions {
         private double timeBudget = 0.0;
         private double margin = 0.0;
         private boolean noBackground = false;
+        private boolean monochrome = false;
         private boolean minify = false;
         private boolean editability = false;
         private boolean nativeAlpha = true;
@@ -469,6 +488,22 @@ public final class InkvecOptions {
          */
         public Builder noBackground(boolean noBackground) {
             this.noBackground = noBackground;
+            return this;
+        }
+
+        /**
+         * Black artwork only: every colour that is not the background is painted pure black, and the
+         * background, with every hole it shows through such as the counters of letters, is white -- or
+         * transparent with no_background, which gives black artwork on transparency with real holes.
+         * The edges are the colour trace's own, so a light colour on white (yellow) is kept and no
+         * pale fringe is left around the black. The background is the colour covering most of the
+         * image border, or transparency when the border is transparent; on white-on-black art the
+         * white is the artwork and comes back black. Off by default.
+         *
+         * @default false
+         */
+        public Builder monochrome(boolean monochrome) {
+            this.monochrome = monochrome;
             return this;
         }
 

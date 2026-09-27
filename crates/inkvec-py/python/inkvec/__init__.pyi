@@ -63,6 +63,7 @@ def trace(
     time_budget: float = 0.0,
     margin: float = 0.0,
     no_background: bool = False,
+    monochrome: bool = False,
     minify: bool = False,
     editability: bool = False,
     native_alpha: bool = True,
@@ -106,6 +107,16 @@ def trace(
         no_background:
             Knock the background out: the face that covers the whole canvas is not
             painted, so the artwork sits on transparency.
+        monochrome:
+            Black artwork only: every colour that is not the background is painted pure
+            black, and the background, with every hole it shows through such as the
+            counters of letters, is white -- or transparent with no_background, which
+            gives black artwork on transparency with real holes. The edges are the
+            colour trace's own, so a light colour on white (yellow) is kept and no pale
+            fringe is left around the black. The background is the colour covering most
+            of the image border, or transparency when the border is transparent; on
+            white-on-black art the white is the artwork and comes back black. Off by
+            default.
         minify:
             No ids or groups, no trailing zeros. Same geometry, typically about a tenth
             smaller.
@@ -187,6 +198,7 @@ def trace_rgba(
     time_budget: float = 0.0,
     margin: float = 0.0,
     no_background: bool = False,
+    monochrome: bool = False,
     minify: bool = False,
     editability: bool = False,
     native_alpha: bool = True,
@@ -231,6 +243,16 @@ def trace_rgba(
         no_background:
             Knock the background out: the face that covers the whole canvas is not
             painted, so the artwork sits on transparency.
+        monochrome:
+            Black artwork only: every colour that is not the background is painted pure
+            black, and the background, with every hole it shows through such as the
+            counters of letters, is white -- or transparent with no_background, which
+            gives black artwork on transparency with real holes. The edges are the
+            colour trace's own, so a light colour on white (yellow) is kept and no pale
+            fringe is left around the black. The background is the colour covering most
+            of the image border, or transparency when the border is transparent; on
+            white-on-black art the white is the artwork and comes back black. Off by
+            default.
         minify:
             No ids or groups, no trailing zeros. Same geometry, typically about a tenth
             smaller.

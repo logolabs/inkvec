@@ -77,6 +77,9 @@ pub struct Options {
     /// Knock the background out: the face that covers the whole canvas is not painted, so the artwork sits on transparency.
     pub no_background: bool,
 
+    /// Black artwork only: every colour that is not the background is painted pure black, and the background, with every hole it shows through such as the counters of letters, is white -- or transparent with no_background, which gives black artwork on transparency with real holes. The edges are the colour trace's own, so a light colour on white (yellow) is kept and no pale fringe is left around the black. The background is the colour covering most of the image border, or transparency when the border is transparent; on white-on-black art the white is the artwork and comes back black. Off by default.
+    pub monochrome: bool,
+
     /// No ids or groups, no trailing zeros. Same geometry, typically about a tenth smaller.
     pub minify: bool,
 
@@ -121,6 +124,7 @@ impl Default for Options {
             time_budget: a.time_budget,
             margin: a.margin,
             no_background: a.no_background,
+            monochrome: a.monochrome,
             minify: a.minify,
             editability: a.editability,
             native_alpha: a.native_alpha,
@@ -211,6 +215,7 @@ impl Options {
             time_budget,
             margin,
             no_background,
+            monochrome,
             minify,
             editability,
             native_alpha,
@@ -232,6 +237,7 @@ impl Options {
             time_budget,
             margin,
             no_background,
+            monochrome,
             minify,
             editability,
             native_alpha,

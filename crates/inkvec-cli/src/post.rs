@@ -313,8 +313,13 @@ pub(crate) fn annotate(svg: String) -> String {
 }
 
 /// The output options, in the order they compose: background knock-out, minify, margin.
+///
+/// Under `--monochrome` the knock-out stands aside: every emitter that runs then leaves the
+/// ground out itself when asked, and the one black shape can itself visit all four canvas
+/// corners (a frame, white-on-black art), which the text match below would take for the
+/// background and delete.
 pub fn post_process(args: &Args, svg: String, w: usize, h: usize) -> String {
-    let svg = if args.no_background {
+    let svg = if args.no_background && !args.monochrome {
         knock_out_background(svg, w, h)
     } else {
         svg

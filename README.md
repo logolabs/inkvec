@@ -165,6 +165,7 @@ inkvec <input> [-o <output.svg>] [OPTIONS]
 | `--max-dim <px>` | 2048 | Cap on the longer side; SVG is written at the original size. |
 | `--time-budget <s>` | 0 | Advisory wall-clock budget; trace is still correct if it runs out. |
 | `--no-background` | off | Drop the face that paints the whole canvas. |
+| `--monochrome` | off | Black artwork on white: every colour that is not the background is painted black. With `--no-background`, black on real transparency (letter counters are holes). Both engines. |
 | `--minify` | off | No ids, no groups, no trailing zeros — ~10% smaller, identical geometry. |
 | `--no-native-alpha` | off | Composite transparent input onto a matte before tracing, as releases up to 0.1.3 did. |
 | `--no-harmonize` | off | Skip shape harmonization (see below). |

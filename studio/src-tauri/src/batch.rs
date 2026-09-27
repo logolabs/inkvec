@@ -16,7 +16,9 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
+
+use crate::progress::{self, Progress};
 
 use serde::{Deserialize, Serialize};
 
@@ -156,6 +158,8 @@ impl Plan {
 pub struct Controls {
     paused: AtomicBool,
     cancelled: AtomicBool,
+    /// The row being traced, so a cancel stops it where it is rather than after it.
+    row: Mutex<Option<Arc<Progress>>>,
 }
 
 impl Controls {
@@ -163,9 +167,26 @@ impl Controls {
     pub fn pause(&self, on: bool) {
         self.paused.store(on, Ordering::SeqCst);
     }
-    /// Stop the run at the next row boundary.
+    /// Stop the run: the row being traced stops at its next report, and it goes back to
+    /// the queue as if it had never started.
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::SeqCst);
+        if let Some(row) = self.row().as_ref() {
+            row.cancel();
+        }
+    }
+    fn row(&self) -> std::sync::MutexGuard<'_, Option<Arc<Progress>>> {
+        self.row.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+    /// The progress the next row is traced under. Cancelled from the start if the run
+    /// was cancelled a moment ago, so no cancel can fall between the check and the row.
+    fn watch_row(&self) -> Arc<Progress> {
+        let live = Arc::new(Progress::new());
+        *self.row() = Some(Arc::clone(&live));
+        if self.is_cancelled() {
+            live.cancel();
+        }
+        live
     }
     /// Whether it has been told to stop.
     pub fn is_cancelled(&self) -> bool {
@@ -292,12 +313,22 @@ pub fn run(
                 let source = Arc::new(source);
                 // No cache: every row is a different image, so there is nothing a
                 // previous row could offer this one.
-                let drawn = trace::draw(&source, &settings, Tier::Final, None, level, |_, _| {});
+                let drawn = progress::with(controls.watch_row(), || {
+                    trace::draw(&source, &settings, Tier::Final, None, level, |_, _| {})
+                });
                 (source, drawn)
             });
         // The pipeline is done with; measuring the drawing, writing the file and reporting
         // the row are not trace work and must not keep a trace waiting.
         drop(slot);
+        *controls.row() = None;
+        // Cancelled in the middle of the row: it goes back to the queue unfinished, and the
+        // run stops here.
+        if matches!(drawn, Ok((_, Err(Outcome::Cancelled)))) {
+            rows[i].state = RowState::Queued;
+            on_row(&rows[i]);
+            break;
+        }
         let outcome = drawn.map(|(source, drawn)| {
             let outcome = match drawn {
                 Ok(drawn) => trace::measure(&source, drawn, level, None),
@@ -337,6 +368,10 @@ pub fn run(
             }
             Ok((Outcome::Undecodable { message }, _)) => fail(&mut rows[i], message, &mut totals),
             Ok((Outcome::Failed { message }, _)) => fail(&mut rows[i], message, &mut totals),
+            // Handled above, where the row is put back; here only for the match.
+            Ok((Outcome::Cancelled, _)) => {
+                rows[i].state = RowState::Queued;
+            }
             Ok((
                 Outcome::OutOfMemory {
                     needed_gb,
@@ -566,6 +601,68 @@ mod tests {
         assert_eq!(rows[0].state, RowState::Failed);
         assert!(rows[0].message.as_ref().unwrap().contains("PNG, JPEG"));
         assert_eq!(rows[1].state, RowState::Done, "the queue carried on");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A cancel that arrives while a row is being traced stops that row, not the one after
+    /// it: the trace unwinds at its next report, the row goes back to the queue, and the
+    /// run returns long before the row would have finished.
+    #[test]
+    fn cancelling_stops_the_row_that_is_running() {
+        let dir = workspace("cancel-running");
+        // Large and busy enough that a trace takes a good while: a noise field of many inks.
+        let mut img = image::RgbaImage::new(900, 900);
+        let mut state = 0x2545_f491_u32;
+        for px in img.pixels_mut() {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            let v = (state % 6) as u8 * 40;
+            *px = image::Rgba([v, 255 - v, v / 2, 255]);
+        }
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap();
+        std::fs::write(dir.join("busy.png"), bytes.into_inner()).unwrap();
+        let plan = Plan {
+            files: scan(&dir).unwrap(),
+            preset: Preset::Logo,
+            overrides: vec![],
+            output_dir: dir.join("svg"),
+            skip_existing: false,
+        };
+        let controls = Arc::new(Controls::default());
+        let c = Arc::clone(&controls);
+        let canceller = std::thread::spawn(move || {
+            // Once the row is running, cancel it.
+            while c.row().is_none() {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            let at = std::time::Instant::now();
+            c.cancel();
+            at
+        });
+        let rows = run(
+            &plan,
+            &Settings::default(),
+            &controls,
+            &Arc::new(trace::Scheduler::default()),
+            |_| {},
+            |_| {},
+        );
+        let stopped = canceller.join().unwrap().elapsed();
+        assert_eq!(
+            rows[0].state,
+            RowState::Queued,
+            "the row went back to the queue"
+        );
+        assert!(!rows[0].destination.exists(), "and wrote nothing");
+        assert!(
+            stopped < std::time::Duration::from_secs(2),
+            "the row stopped {stopped:?} after the cancel"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -1040,10 +1040,12 @@ pub fn extract_palette_mdl(
         None
     };
     let blend_tmin = BLEND_TMIN;
-    for (n, _key, c) in &modes {
+    for (tested, (n, _key, c)) in modes.iter().enumerate() {
         if colors.len() >= max_colors {
             break;
         }
+        // Each candidate is a pass over the pixels; most are turned down.
+        inkvec_core::progress::step("colour candidates", tested as u64, modes.len() as u64);
         // How many pixels would this candidate actually take? Not `n`, which counts one
         // bin of a 24-cubed grid in OKLab.
         //

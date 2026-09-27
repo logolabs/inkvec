@@ -60,6 +60,7 @@ pub mod taper;
 
 use std::path::Path;
 
+use inkvec_core::progress;
 use inkvec_core::Polyline;
 
 pub use color::{Oklab, Palette};
@@ -439,6 +440,7 @@ pub fn trace_color_full_with_alpha(
 
     let min_region = opts.min_region;
     let mut sw = Stopwatch::start();
+    progress::begin("palette");
 
     // The noise guard is free on a clean render and costs 2.8 % on the screen set when
     // it is on, so it is switched by what the raster is: the measured edge width. A
@@ -511,6 +513,8 @@ pub fn trace_color_full_with_alpha(
         },
     );
     sw.mark("palette");
+    progress::note(|| format!("{} inks", pal.colors.len()));
+    progress::begin("labels");
     let mut pal = pal;
     let mut labels = color::label_image(&rgb, &pal);
     if opts.lossy_intake && research_lossy_regularize() {
@@ -621,9 +625,11 @@ pub fn trace_color_full_with_alpha(
     };
     let _ = minted;
     sw.mark("labels");
+    progress::begin("despeckle");
 
     despeckle(&mut labels, img.width, img.height, min_region);
     sw.mark("despeckle");
+    progress::begin("blend_absorb");
 
     // Anti-aliased pixels between two inks are blends of those inks, but `label_image`
     // can only hand them the *nearest palette entry* - often a third colour entirely.
@@ -661,6 +667,7 @@ pub fn trace_color_full_with_alpha(
         }
     }
     sw.mark("blend_absorb");
+    progress::begin("merge_bands");
     if let Some(path) = inkvec_core::env::path("INKVEC_DUMP_LABELS") {
         dump_labels(path.as_os_str(), &labels, &pal, img.width, img.height);
     }
@@ -689,6 +696,14 @@ pub fn trace_color_full_with_alpha(
         (Vec::new(), Vec::new())
     };
     sw.mark("merge_bands");
+    progress::note(|| {
+        let g = fills_by_label
+            .iter()
+            .filter(|f| f.model.is_gradient())
+            .count();
+        format!("{g} gradient fill{}", if g == 1 { "" } else { "s" })
+    });
+    progress::begin("carve");
 
     // The residual against the FITTED fill, which is the one damage signal with no codec
     // bias and no gradient confound.
@@ -751,6 +766,7 @@ pub fn trace_color_full_with_alpha(
         }
     }
     sw.mark("carve");
+    progress::begin("split");
 
     // A face is a *connected region*, not "everywhere this colour appears".
     //
@@ -871,6 +887,7 @@ pub fn trace_color_from_labels(
     let lambda = gradient::bic_lambda(n);
 
     let mut sw = Stopwatch::start();
+    progress::begin("labels_in");
 
     // Anything the caller did not label is filled in from its labelled 4-neighbours, one
     // ring at a time, so an unlabelled band along a boundary closes from both sides at
@@ -915,9 +932,11 @@ pub fn trace_color_from_labels(
         }
     }
     sw.mark("labels_in");
+    progress::begin("despeckle");
 
     despeckle(&mut labels, w, h, opts.min_region);
     sw.mark("despeckle");
+    progress::begin("palette");
 
     // One palette entry per supplied label, standing in for the one `extract_palette_mdl`
     // would have produced. The stages below read `pal.rgb[l]` as "the ink this region is
@@ -958,6 +977,7 @@ pub fn trace_color_from_labels(
     };
     drop(px_by_label);
     sw.mark("palette");
+    progress::begin("merge_bands");
 
     // From here to `split_components` this is the classical path verbatim. A label map is
     // a statement about *where* regions are; it is not a statement that each region has
@@ -980,6 +1000,7 @@ pub fn trace_color_from_labels(
         (Vec::new(), Vec::new())
     };
     sw.mark("merge_bands");
+    progress::begin("carve");
 
     // A feature the labelling quantised into its surroundings — a seam, a dot, a stroke
     // end — is a cluster of pixels no fill explains. A supplied label map swallows those
@@ -1005,6 +1026,7 @@ pub fn trace_color_from_labels(
         }
     }
     sw.mark("carve");
+    progress::begin("split");
 
     // A face is a connected region, exactly as on the classical path: two disconnected
     // blobs the network gave the same id are two shapes, and an editor should be able to
@@ -1120,13 +1142,22 @@ pub(crate) fn finish_color_trace_alpha(
         sigma_noise,
     );
     sw.mark("saddles");
+    progress::begin("build_map");
 
     let mut map = planar::build(&labels, img.width, img.height, n_faces);
     sw.mark("build_map");
+    progress::note(|| {
+        format!(
+            "{} boundaries between {} faces",
+            map.edges.len(),
+            map.n_labels
+        )
+    });
     // Found here, on the lattice the extractor produced, where the comparison is exact.
     // Applied further down, once every stage that can break a tie has had its turn.
     let sym = symmetry::detect(&map, &labels, &face_color);
     sw.mark("symmetry_detect");
+    progress::begin("refine_subpix");
     let face_model: Vec<gradient::FillModel> = face_fill.iter().map(|f| f.model.clone()).collect();
     let face_alpha: Option<Vec<f32>> = source_alpha.map(|_| {
         face_alpha_override
@@ -1148,8 +1179,10 @@ pub(crate) fn finish_color_trace_alpha(
         alpha_pair,
     );
     sw.mark("refine_subpix");
+    progress::begin("refine_junc");
     planar::refine_junctions(&mut map);
     sw.mark("refine_junc");
+    progress::begin("boundary_opt");
 
     // Then solve the whole boundary against the image at once: every point above was
     // placed by a one-dimensional argument of its own, and a pixel's value is the area
@@ -1159,6 +1192,14 @@ pub(crate) fn finish_color_trace_alpha(
         None
     };
     sw.mark("boundary_opt");
+    if let Some(r) = boundary_opt.as_ref() {
+        progress::note(|| {
+            format!(
+                "energy {:.0} to {:.0} in {} iterations",
+                r.before, r.after, r.iters
+            )
+        });
+    }
 
     // A face too thin to own a fully covered pixel never had its colour read off the
     // image: the palette saw only blends. Its boundary was then fitted against that
@@ -1299,6 +1340,9 @@ impl Stopwatch {
         if let Some(sink) = sink {
             sink(name, ms);
         }
+        // The live log's copy of the same boundary, and a cancellation point: a stage
+        // boundary is always a safe place to stop. See `inkvec_core::progress`.
+        progress::end(name, ms);
         self.t = clock::Instant::now();
     }
 }

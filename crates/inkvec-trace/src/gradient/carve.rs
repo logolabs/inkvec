@@ -301,7 +301,9 @@ pub fn carve_residual_features_with_detail_noise(
         })
         .collect();
     let pure = fill_evidence(rgb, w, h, labels, &ink_rgb, sigma_noise);
-    for l in parents {
+    let refits = parents.len() as u64;
+    for (done, l) in parents.into_iter().enumerate() {
+        inkvec_core::progress::step("regions refitted", done as u64, refits);
         let pixels: Vec<usize> = (0..n).filter(|&p| labels[p] as usize == l).collect();
         let f = select(fit_pixels(
             rgb,

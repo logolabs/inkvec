@@ -11,8 +11,16 @@
 //! reports each pipeline stage as it is passed, and [`stage_label`] maps the pipeline's
 //! internal names onto the nine the interface names. Nothing is invented: a stage appears
 //! when the engine has finished it, with the time it took.
+//!
+//! While it runs, a watched trace also carries an `inkvec_core::progress::Progress`: the
+//! engine names each stage as it *starts*, counts through its longest loops (boundaries
+//! fitted, solve iterations, merge rounds) and notes what it found on the way. [`live`]
+//! turns what it reported into the `trace:progress` event, in the interface's words. The
+//! same progress is how a trace is stopped: cancelled, the pipeline unwinds at its next
+//! report and the trace ends as [`Outcome::Cancelled`], its slot free for the next one.
 
 use inkvec_core::clock::Instant;
+use inkvec_core::progress;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
@@ -133,11 +141,11 @@ pub const STAGES: [&str; 9] = [
 /// and adding it to the last stage would count every millisecond twice.
 pub fn stage_label(internal: &str) -> Option<&'static str> {
     Some(match internal {
-        "trace_total" => return None,
-        "decode" => "intake",
+        "trace_total" | "measure" => return None,
+        "decode" | "intake" | "restore" | "sr" => "intake",
         "palette" | "labels" | "labels_in" | "despeckle" | "blend_absorb" | "merge_bands"
-        | "carve" | "split" | "fades" => "palette",
-        "saddles" | "build_map" => "planar map",
+        | "carve" | "split" | "fades" | "slivers" | "ramps" | "merge_colors" => "palette",
+        "saddles" | "build_map" | "contours" | "strokes" => "planar map",
         "refine_subpix" | "refine_junc" | "boundary_opt" => "boundary solve",
         "symmetry" | "symmetry_detect" => "symmetry",
         "repair" => "repair",
@@ -148,6 +156,148 @@ pub fn stage_label(internal: &str) -> Option<&'static str> {
         // nearly all of the pipeline lives.
         _ => "boundary solve",
     })
+}
+
+/// What an internal stage is doing, in a few words, for the activity log. A name this does
+/// not know is "working": the stage list still places it, and the log does not guess.
+pub fn describe(internal: &str) -> &'static str {
+    match internal {
+        "intake" | "decode" => "reading the image",
+        "restore" => "running the denoiser",
+        "sr" => "cleaning the image",
+        "merge_colors" => "merging colour groups",
+        "palette" => "finding the inks",
+        "labels" | "labels_in" => "labelling every pixel",
+        "despeckle" => "removing specks",
+        "blend_absorb" => "absorbing anti-aliased blends",
+        "slivers" => "absorbing slivers",
+        "merge_bands" => "merging gradient bands",
+        "ramps" => "fitting colour ramps",
+        "carve" => "carving out small features",
+        "split" => "splitting regions into shapes",
+        "fades" => "finding fades",
+        "saddles" => "settling saddle points",
+        "build_map" => "building the planar map",
+        "contours" => "tracing contours",
+        "strokes" => "finding strokes",
+        "symmetry_detect" => "looking for symmetry",
+        "symmetry" => "restoring symmetry",
+        "refine_subpix" => "placing edges to a fraction of a pixel",
+        "refine_junc" => "placing junctions",
+        "boundary_opt" => "solving every boundary against the image",
+        "fit_dp" => "fitting curves",
+        "repair" => "repairing crossing rings",
+        "fills" => "choosing fills",
+        "emit" => "writing the SVG",
+        "measure" => "measuring the result against the image",
+        _ => "working",
+    }
+}
+
+/// What a watched trace reported since the last event: the `trace:progress` payload.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Live {
+    /// What happened, in order.
+    pub entries: Vec<LiveEntry>,
+    /// How far the running stage's loop has got, when it moved.
+    pub step: Option<LiveStep>,
+}
+
+/// One line of the activity log. `stage` is the interface's name for it (one of
+/// [`STAGES`], or `measure` for the measurement after the drawing), `what` the few words
+/// [`describe`] gives, and `at` the milliseconds since the trace started.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum LiveEntry {
+    /// A stage started.
+    Begin {
+        stage: &'static str,
+        what: &'static str,
+        at: f64,
+    },
+    /// A stage finished, after `ms`.
+    End {
+        stage: &'static str,
+        what: &'static str,
+        ms: f64,
+        at: f64,
+    },
+    /// Something the stage found.
+    Note {
+        stage: &'static str,
+        what: &'static str,
+        text: String,
+        at: f64,
+    },
+}
+
+/// How far through its loop the running stage is: `done` of `total` `unit`, `total` 0 when
+/// the loop cannot know in advance.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveStep {
+    pub stage: &'static str,
+    pub what: &'static str,
+    pub unit: &'static str,
+    pub done: u64,
+    pub total: u64,
+}
+
+/// The interface's name for an internal stage in the live log: [`stage_label`]'s, with the
+/// measurement named for itself. `None` for the one mark that is not a stage.
+fn live_label(internal: &str) -> Option<&'static str> {
+    match internal {
+        "measure" => Some("measure"),
+        other => stage_label(other),
+    }
+}
+
+/// What the engine reported, in the interface's words; `None` when there is nothing new.
+pub fn live(report: progress::Report) -> Option<Live> {
+    let entries: Vec<LiveEntry> = report
+        .entries
+        .into_iter()
+        .filter_map(|e| match e {
+            progress::Entry::Begin { stage, at_ms } => Some(LiveEntry::Begin {
+                stage: live_label(stage)?,
+                what: describe(stage),
+                at: at_ms,
+            }),
+            progress::Entry::End { stage, ms, at_ms } => Some(LiveEntry::End {
+                stage: live_label(&stage)?,
+                what: describe(&stage),
+                ms,
+                at: at_ms,
+            }),
+            progress::Entry::Note { stage, text, at_ms } => Some(LiveEntry::Note {
+                stage: live_label(stage).unwrap_or("intake"),
+                what: describe(stage),
+                text,
+                at: at_ms,
+            }),
+        })
+        .collect();
+    let step = report.step.and_then(|s| {
+        Some(LiveStep {
+            stage: live_label(s.stage)?,
+            what: describe(s.stage),
+            unit: s.unit,
+            done: s.done,
+            total: s.total,
+        })
+    });
+    (!entries.is_empty() || step.is_some()).then_some(Live { entries, step })
+}
+
+/// Run `f`, turning a cancellation that unwinds out of it into `Err`. Any other panic keeps
+/// unwinding: it is a bug, and the caller's own handling reports it as one.
+pub fn cancellable<T>(f: impl FnOnce() -> T) -> Result<T, progress::Cancelled> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(v) => Ok(v),
+        Err(payload) if progress::is_cancelled(payload.as_ref()) => Err(progress::Cancelled),
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
 }
 
 /// How a trace ended.
@@ -164,6 +314,9 @@ pub enum Outcome {
     OutOfMemory { needed_gb: f64, suggest_px: u32 },
     /// The pipeline failed. Worth a bug report.
     Failed { message: String },
+    /// Stopped on request: a newer trace replaced it, or the user cancelled. Never shown;
+    /// whoever cancelled it has already moved on.
+    Cancelled,
 }
 
 /// A finished trace and every number the interface shows about it.
@@ -407,11 +560,10 @@ fn svg_to_png(bytes: &[u8]) -> Result<Vec<u8>, String> {
 /// A trace's identity, so a result that arrives after the user has moved on can be
 /// recognised and dropped.
 ///
-/// Cancelling cannot interrupt the pipeline — it has no cancellation point, and inventing
-/// one would mean unwinding a numerical solve halfway. What cancelling does instead is
-/// retire the generation: the interface returns to the last result immediately, and when
-/// the abandoned trace finishes, its result is dropped because its generation is stale.
-/// The thread finishes its work; nothing waits for it.
+/// Retiring a generation is half of cancelling: the interface returns to the last result
+/// at once, and whatever the abandoned trace still delivers is dropped because its
+/// generation is stale. The other half is [`Watching`], which stops the abandoned trace
+/// itself, so that it neither delivers late nor holds the slot the next trace waits for.
 #[derive(Debug, Default)]
 pub struct Generation(AtomicU64);
 
@@ -427,6 +579,91 @@ impl Generation {
     /// Whether `id` is still the trace the interface is waiting for.
     pub fn is_current(&self, id: u64) -> bool {
         self.0.load(Ordering::SeqCst) == id
+    }
+}
+
+/// A trace somebody is waiting for: which drawing it makes, and the progress that can stop
+/// it.
+#[derive(Debug)]
+pub struct Watched {
+    /// Its generation.
+    pub generation: u64,
+    /// Its progress: what it reports, and the switch that stops it.
+    pub progress: Arc<progress::Progress>,
+    source: Arc<Source>,
+    key: (Settings, Tier),
+}
+
+impl Watched {
+    /// A trace of `source` with these (planned) settings, under a fresh progress.
+    pub fn new(generation: u64, source: &Arc<Source>, settings: &Settings, tier: Tier) -> Self {
+        Self {
+            generation,
+            progress: Arc::new(progress::Progress::new()),
+            source: Arc::clone(source),
+            key: drawing_key(&settings.clone().sanitised(), tier),
+        }
+    }
+
+    /// Whether this trace makes the very drawing `other` makes. Then a request for one
+    /// while the other runs need not stop it: the drawing it is making is the one wanted,
+    /// and once it is kept the newer request is served from the cache. That is a draft of
+    /// a small image followed by its final, or a change to Minify or Margin alone.
+    pub fn same_drawing(&self, other: &Watched) -> bool {
+        Arc::ptr_eq(&self.source, &other.source) && self.key == other.key
+    }
+}
+
+/// The trace the interface is waiting for, and the rule for what a newer request does to it.
+///
+/// One at a time: [`start`](Self::start) replaces the trace being watched with the new one
+/// and stops the old one, unless the old one is making the very drawing the new one asks
+/// for. A stopped trace unwinds at the engine's next report (a stage boundary, a boundary
+/// fitted, a solve iteration), gives up the trace slot, and delivers nothing. Before this,
+/// an abandoned trace ran to its end holding the slot, and the trace the user actually
+/// wanted waited behind it for as long as it took.
+#[derive(Debug, Default)]
+pub struct Watching(Mutex<Option<Watched>>);
+
+impl Watching {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<Watched>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Watch `next` from now on, stopping whatever was watched before unless it is making
+    /// the same drawing. Returns `next`'s progress, to trace under.
+    pub fn start(&self, next: Watched) -> Arc<progress::Progress> {
+        let live = Arc::clone(&next.progress);
+        let mut held = self.lock();
+        if let Some(old) = held.as_ref() {
+            if !old.same_drawing(&next) {
+                old.progress.cancel();
+            }
+        }
+        *held = Some(next);
+        live
+    }
+
+    /// Stop whatever is watched and watch nothing: the Cancel button, a new image.
+    pub fn cancel(&self) {
+        if let Some(old) = self.lock().take() {
+            old.progress.cancel();
+        }
+    }
+
+    /// The trace `generation` has finished; forget it if it is still the one watched.
+    pub fn finished(&self, generation: u64) {
+        let mut held = self.lock();
+        if held.as_ref().is_some_and(|w| w.generation == generation) {
+            *held = None;
+        }
+    }
+
+    /// The progress of the trace being watched, if any.
+    pub fn current(&self) -> Option<Arc<progress::Progress>> {
+        self.lock().as_ref().map(|w| Arc::clone(&w.progress))
     }
 }
 
@@ -840,6 +1077,7 @@ fn trace_pipeline(
                 on_stage(name, ms);
             },
             || {
+                progress::begin("intake");
                 // The pipeline takes its raster by value, so it gets a copy of the one the
                 // source keeps; the measurement afterwards reads the kept one.
                 let kept: Arc<inkvec_trace::Rgba> = source.raster(args.max_dim)?;
@@ -859,6 +1097,14 @@ fn trace_pipeline(
     let stages = collected.borrow().clone();
 
     let traced = match traced {
+        // Stopped on request, at one of the engine's reports. Everything it had built goes
+        // with the unwind: nothing was kept yet, so nothing is left half-kept.
+        Err(payload) if progress::is_cancelled(payload.as_ref()) => {
+            if let Some(file) = &bands_file {
+                let _ = std::fs::remove_file(file);
+            }
+            return Err(Outcome::Cancelled);
+        }
         Err(payload) => {
             return Err(Outcome::Failed {
                 message: panic_message(&payload),
@@ -1043,6 +1289,51 @@ mod tests {
                 }
                 if (18..34).contains(&x) && (18..30).contains(&y) {
                     img.put_pixel(x as u32, y as u32, image::Rgba([231, 176, 74, 255]));
+                }
+            }
+        }
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut out, image::ImageFormat::Png)
+            .unwrap();
+        out.into_inner()
+    }
+
+    /// A `side` x `side` PNG of overlapping discs in six colours with soft edges: enough
+    /// boundaries and inks that a trace of it takes a while at 640 px.
+    fn busy_png(side: u32) -> Vec<u8> {
+        let mut img = image::RgbaImage::from_pixel(side, side, image::Rgba([250, 248, 240, 255]));
+        let inks = [
+            [200, 40, 40],
+            [30, 60, 170],
+            [231, 176, 74],
+            [20, 69, 63],
+            [120, 30, 140],
+            [90, 160, 60],
+        ];
+        let n = 60;
+        let mut state = 0x9e37_79b9_u32;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state
+        };
+        for k in 0..n {
+            let cx = (next() % side) as f64;
+            let cy = (next() % side) as f64;
+            let r = (side as f64 / 30.0) + (next() % (side / 8)) as f64;
+            let c = inks[k % inks.len()];
+            for y in 0..side {
+                for x in 0..side {
+                    let d = ((x as f64 - cx).powi(2) + (y as f64 - cy).powi(2)).sqrt();
+                    let a = (r - d + 0.5).clamp(0.0, 1.0);
+                    if a > 0.0 {
+                        let p = img.get_pixel_mut(x, y);
+                        for i in 0..3 {
+                            p[i] = (p[i] as f64 * (1.0 - a) + c[i] as f64 * a).round() as u8;
+                        }
+                    }
                 }
             }
         }
@@ -1374,6 +1665,201 @@ mod tests {
         ));
         assert!(memory_estimate(20000, 20000, 16384) > MEMORY_CEILING);
         assert!(memory_estimate(20000, 20000, 2048) < MEMORY_CEILING);
+    }
+
+    /// The rule behind a newer request: another drawing stops the old trace, the same
+    /// drawing lets it finish, and Cancel stops it whatever it is.
+    #[test]
+    fn a_newer_request_stops_a_trace_making_another_drawing() {
+        let source = Arc::new(Source::open(sample_png(), None).unwrap());
+        let other = Arc::new(Source::open(sample_png(), None).unwrap());
+        let s = Settings::default();
+        let w = Watching::default();
+
+        let first = w.start(Watched::new(1, &source, &s, Tier::Final));
+        // Only Minify changed: the same drawing, so the first keeps going.
+        let second = w.start(Watched::new(
+            2,
+            &source,
+            &Settings {
+                minify: true,
+                ..s.clone()
+            },
+            Tier::Final,
+        ));
+        assert!(
+            !first.is_cancelled(),
+            "an output option does not stop the drawing"
+        );
+        // A setting that moves a line: the running trace is stopped.
+        let third = w.start(Watched::new(
+            3,
+            &source,
+            &Settings {
+                precision: 0.5,
+                ..s.clone()
+            },
+            Tier::Final,
+        ));
+        assert!(second.is_cancelled());
+        // Another image with the same settings is another drawing.
+        let fourth = w.start(Watched::new(
+            4,
+            &other,
+            &Settings {
+                precision: 0.5,
+                ..s.clone()
+            },
+            Tier::Final,
+        ));
+        assert!(third.is_cancelled());
+        // A finished trace that is no longer watched is not the one forgotten.
+        w.finished(3);
+        assert!(w.current().is_some_and(|p| Arc::ptr_eq(&p, &fourth)));
+        w.cancel();
+        assert!(fourth.is_cancelled());
+        assert!(w.current().is_none());
+    }
+
+    /// A trace stopped in the middle unwinds at the engine's next report, gives back what
+    /// it holds, keeps nothing in the cache, and the next trace runs as if it never had.
+    #[test]
+    fn a_cancelled_trace_stops_promptly_and_leaves_nothing_behind() {
+        let source = Arc::new(Source::open(busy_png(640), None).unwrap());
+        let settings = Settings::default();
+        let cache = Cache::default();
+
+        // Cancel from another thread once the pipeline has reported its first stage.
+        let live = Arc::new(progress::Progress::new());
+        let watcher = {
+            let live = Arc::clone(&live);
+            std::thread::spawn(move || {
+                loop {
+                    let r = live.take();
+                    if r.entries.iter().any(|e| {
+                        matches!(
+                            e,
+                            progress::Entry::Begin {
+                                stage: "palette",
+                                ..
+                            }
+                        )
+                    }) {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+                live.cancel();
+                std::time::Instant::now()
+            })
+        };
+        let outcome = progress::with(Arc::clone(&live), || {
+            draw(
+                &source,
+                &settings,
+                Tier::Final,
+                Some(&cache),
+                MeasureLevel::Full,
+                |_, _| {},
+            )
+        });
+        let latency = watcher.join().unwrap().elapsed();
+        assert!(
+            matches!(outcome, Err(Outcome::Cancelled)),
+            "stopped on request"
+        );
+        assert!(
+            // Generous: the test shares the machine with every other test.
+            latency < std::time::Duration::from_secs(5),
+            "stopped {latency:?} after the cancel"
+        );
+        assert!(
+            cache.reuse(&source, &settings, Tier::Final).is_none(),
+            "a cancelled trace keeps nothing"
+        );
+
+        // The same thread, the same pools: the next trace is exactly a fresh one.
+        let Outcome::Traced(after) = run(&source, &settings, Tier::Final, None, |_, _| {}) else {
+            panic!("the trace after a cancelled one did not draw")
+        };
+        let fresh = std::thread::spawn({
+            let source = Arc::clone(&source);
+            let settings = settings.clone();
+            move || match run(&source, &settings, Tier::Final, None, |_, _| {}) {
+                Outcome::Traced(t) => t.svg,
+                other => panic!("{other:?}"),
+            }
+        })
+        .join()
+        .unwrap();
+        assert_eq!(after.svg, fresh, "a cancelled trace left something behind");
+    }
+
+    /// Reporting progress changes nothing about the drawing: the same SVG with a progress
+    /// installed as without.
+    #[test]
+    fn watching_a_trace_does_not_change_it() {
+        let source = Arc::new(Source::open(busy_png(160), None).unwrap());
+        for mode in [
+            crate::options::TraceMode::Quality,
+            crate::options::TraceMode::Fast,
+        ] {
+            let settings = Settings {
+                mode,
+                ..Settings::default()
+            };
+            let plain = match run(&source, &settings, Tier::Final, None, |_, _| {}) {
+                Outcome::Traced(t) => t.svg,
+                other => panic!("{other:?}"),
+            };
+            let live = Arc::new(progress::Progress::new());
+            let watched = progress::with(Arc::clone(&live), || {
+                match run(&source, &settings, Tier::Final, None, |_, _| {}) {
+                    Outcome::Traced(t) => t.svg,
+                    other => panic!("{other:?}"),
+                }
+            });
+            assert_eq!(plain, watched, "{mode:?}");
+            let said = live.take();
+            assert!(
+                said.entries.iter().any(|e| matches!(
+                    e,
+                    progress::Entry::Begin {
+                        stage: "palette",
+                        ..
+                    }
+                )),
+                "{mode:?}: {:?}",
+                said.entries
+            );
+        }
+    }
+
+    /// The live log speaks the interface's words: every entry names one of the nine stages
+    /// (or the measurement), and the mark that is not a stage never appears.
+    #[test]
+    fn the_live_log_names_only_stages_the_interface_knows() {
+        let source = Arc::new(Source::open(sample_png(), None).unwrap());
+        let live = Arc::new(progress::Progress::new());
+        progress::with(Arc::clone(&live), || {
+            run(&source, &Settings::default(), Tier::Final, None, |_, _| {})
+        });
+        let said = super::live(live.take()).expect("the trace reported something");
+        let known = |s: &str| STAGES.contains(&s) || s == "measure";
+        for e in &said.entries {
+            let (LiveEntry::Begin { stage, what, .. }
+            | LiveEntry::End { stage, what, .. }
+            | LiveEntry::Note { stage, what, .. }) = e;
+            assert!(known(stage), "{e:?}");
+            assert_ne!(*what, "working", "{e:?} has no description");
+        }
+        assert!(said.entries.iter().any(|e| matches!(
+            e,
+            LiveEntry::End {
+                stage: "segments",
+                ..
+            }
+        )));
     }
 
     #[test]

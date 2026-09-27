@@ -6,6 +6,7 @@
  * that is expensive to rebuild — out of the update path entirely.
  */
 
+import type { LiveNow, LogLine } from "./live";
 import type {
   BatchRow,
   BatchTotals,
@@ -103,6 +104,16 @@ export interface State {
   tracingTier: "draft" | "final";
   /** Stages of the trace in flight, in the order they finished. */
   liveStages: Stage[];
+  /** When the trace in flight was asked for (`performance.now()`): the live counters count from here. */
+  traceStarted: number;
+  /** When the last trace ended, landed or was cancelled (`performance.now()`), or 0 while one runs. */
+  traceEnded: number;
+  /** What the engine is doing right now, as it last said; null between stages and when idle. */
+  liveNow: LiveNow | null;
+  /** The activity log of the trace in flight, or of the last one once it has landed. */
+  traceLog: LogLine[];
+  /** Whether the activity log is open. */
+  logOpen: boolean;
 
   result: Traced | null;
   /** The trace that produced `result`: what the backend keeps its confidence bands under. */
@@ -252,6 +263,11 @@ export function initial(settings: Settings, minify: MinifySettings): State {
     tracing: false,
     tracingTier: "final",
     liveStages: [],
+    traceStarted: 0,
+    traceEnded: 0,
+    liveNow: null,
+    traceLog: [],
+    logOpen: true,
     result: null,
     resultGeneration: 0,
     bandsMissing: false,

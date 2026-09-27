@@ -36,3 +36,6 @@ pub mod prefs;
 pub mod quality;
 pub mod trace;
 pub mod wizard;
+
+/// The engine's live progress and cancellation, for the shells that watch a trace.
+pub use inkvec_core::progress;

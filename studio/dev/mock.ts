@@ -165,9 +165,19 @@ function report(svg: string, tracedPx: number, structure: unknown, editable: boo
 
 async function runTrace(tier: string, gen: number, settings: Record<string, unknown>) {
   const draft = tier === "draft";
+  // What the engine reports (`trace:progress`): each stage as it begins, a loop count while
+  // it runs, and its time when it ends.
+  let at = 0;
   for (const name of STAGES) {
+    const ms = draft ? 12 : 60 + Math.random() * 300;
+    await emit("trace:progress", { generation: gen, entries: [{ kind: "begin", stage: name, what: name, at }], step: null });
     await new Promise((r) => setTimeout(r, draft ? 30 : 140));
-    await emit("trace:stage", { generation: gen, name, ms: draft ? 12 : 60 + Math.random() * 300 });
+    at += ms;
+    await emit("trace:progress", {
+      generation: gen,
+      entries: [{ kind: "end", stage: name, what: name, ms, at }],
+      step: null,
+    });
   }
   const stem = current.replace(".png", "");
   const editable = Boolean(settings.editability);

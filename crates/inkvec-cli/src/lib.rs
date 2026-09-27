@@ -841,6 +841,9 @@ fn restore_prepass(
     }
     let mut auto_probe = None;
     if args.restore == inkvec_restore::Mode::Auto {
+        inkvec_core::progress::note(|| {
+            "a first trace, to see whether the denoiser is needed".into()
+        });
         let probe = trace_once(&pass.img, args)?;
         let decision = inkvec_restore::decide(
             &pass.img,
@@ -889,7 +892,9 @@ fn restore_prepass(
         (Err(e), None) => return Err(e),
     };
     let t = inkvec_core::clock::Instant::now();
+    inkvec_core::progress::begin("restore");
     pass.img = inkvec_restore::restore_rgba(restorer.as_ref(), &pass.img)?;
+    inkvec_core::progress::end("restore", t.elapsed().as_secs_f64() * 1e3);
     let earlier = pass
         .note
         .take()

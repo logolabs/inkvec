@@ -20,6 +20,7 @@ pub(crate) fn run_strokes(
 ) -> Option<(String, Vec<String>)> {
     use inkvec_trace::centerline;
 
+    inkvec_core::progress::begin("strokes");
     let cov = inkvec_trace::coverage::bilevel_coverage(img);
     let labels = centerline::bilevel_labels(&cov);
     let mut an = centerline::analyse(&cov, &labels, img.width, img.height);
@@ -232,6 +233,7 @@ pub(crate) fn run_bilevel(
     cfg: &FitConfig,
 ) -> (String, Vec<String>) {
     let (w, h) = (img.width, img.height);
+    inkvec_core::progress::begin("contours");
     let (contours, field) = trace_bilevel(
         img,
         &TraceOptions {
@@ -250,6 +252,7 @@ pub(crate) fn run_bilevel(
         .iter()
         .map(|c| in_content_units(c, s_content))
         .collect();
+    inkvec_core::progress::begin("fit_dp");
     let segs: Vec<Segmentation> = contours.iter().map(|c| optimal_polygon(c, cfg)).collect();
     let anchors: usize = segs.iter().map(|s| s.segment_count()).sum();
 
@@ -262,6 +265,7 @@ pub(crate) fn run_bilevel(
         })
         .collect();
 
+    inkvec_core::progress::begin("emit");
     let svg = emit_bilevel(&paths, w, h, args.precision);
     (
         svg,
@@ -387,6 +391,7 @@ pub(crate) fn run_color_impl(
             &opts,
             alpha_src.map(|a| a.alpha.as_slice()),
         );
+        inkvec_core::progress::begin("merge_colors");
         let (out, outcomes) = regroup::apply(img, &first, &args.merge_colors);
         sw.mark("merge_colors");
         regrouped = out;
@@ -521,6 +526,7 @@ fn finish_color(
         }
     }
     let mut sw = inkvec_trace::Stopwatch::start();
+    inkvec_core::progress::begin("fit_dp");
     let traced_labels = traced.labels.clone();
     let boundary_report = traced.boundary_opt;
     let symmetry = traced.symmetry;
@@ -571,6 +577,8 @@ fn finish_color(
     let ring_timing = inkvec_core::env::flag("INKVEC_TIMING");
     let ring_times: std::sync::Mutex<Vec<(f64, usize)>> = std::sync::Mutex::new(Vec::new());
     let fast = fast::on(args);
+    inkvec_core::progress::step("boundaries fitted", 0, polys.len() as u64);
+    let live = inkvec_core::progress::handle();
     let results: Vec<(FittedPath, Option<PrimitiveFit>)> = if fast {
         fast::fit(&map, &face_fill)
     } else {
@@ -578,6 +586,9 @@ fn finish_color(
             .par_iter()
             .zip(lambda_scales.par_iter())
             .map(|(poly, &scale)| {
+                // A cancelled trace stops at the next boundary; the count moves as each
+                // one is finished.
+                live.check();
                 let poly = poly.clone();
                 // This boundary's own exchange rate. `cfg_k == *cfg` when the scale is 1.0,
                 // which is every path but the guided one.
@@ -586,7 +597,9 @@ fn finish_color(
                     ..*cfg
                 };
                 let t_ring = inkvec_core::clock::Instant::now();
-                let curve = multimodel::optimal_multimodel(&poly, &cfg_k);
+                // Scoped, so the dynamic program itself can stop a trace nobody wants in the
+                // middle of a boundary of thousands of points.
+                let curve = live.scoped(|| multimodel::optimal_multimodel(&poly, &cfg_k));
                 if ring_timing {
                     ring_times
                         .lock()
@@ -604,7 +617,7 @@ fn finish_color(
                 // (1.4818 -> 1.9341) and 9.01% of dE00, far more than any other lever
                 // measured on this tree.
                 let attempt = fit_primitive_or_arcs(&poly.points, &poly.sigma, poly.closed, &cfg_k);
-                match attempt {
+                let fitted = match attempt {
                     Some((segs, prim, cost)) if cost < path_cost(&poly, &curve, &cfg_k) => (
                         FittedPath {
                             start: poly.points[0],
@@ -614,7 +627,9 @@ fn finish_color(
                         prim,
                     ),
                     _ => (curve, None),
-                }
+                };
+                live.tick();
+                fitted
             })
             .collect()
     };
@@ -658,6 +673,7 @@ fn finish_color(
             None
         };
     sw.mark("fit_dp");
+    inkvec_core::progress::begin("repair");
     if ring_timing {
         let mut rt = ring_times.into_inner().unwrap();
         rt.sort_by(|a, b| b.0.total_cmp(&a.0));
@@ -847,6 +863,7 @@ fn finish_color(
         .filter(|f| !matches!(f.model, gradient::FillModel::Flat(_)))
         .count();
     sw.mark("fills");
+    inkvec_core::progress::begin("emit");
 
     let layers = alpha::recover_layers(args, &map, &face_color, &fills, &pal, &traced_labels);
 

@@ -24,11 +24,14 @@
 
 use std::sync::Arc;
 
+/// The most often a running loop's count is sent to the page, in milliseconds.
+const PROGRESS_MS: f64 = 50.0;
+
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
 
-use inkvec_studio_core::{api, minify, options, prefs, trace, wizard};
+use inkvec_studio_core::{api, minify, options, prefs, progress, trace, wizard};
 
 #[cfg(feature = "threads")]
 pub use wasm_bindgen_rayon::init_thread_pool;
@@ -160,17 +163,24 @@ impl Studio {
 
     /// Trace the open image (`start_trace`'s work), synchronously.
     ///
-    /// `on_stage(name, ms)` is called as the pipeline passes each stage; `is_current()` is
-    /// asked, once the drawing is done, whether the page still wants this generation --
+    /// `on_progress(json)` is called with what the engine reported (`trace:progress`'s
+    /// payload, without the generation) whenever a stage starts, ends or says something,
+    /// and at most every [`PROGRESS_MS`] for a loop's count. This worker is busy for the
+    /// whole trace, so the pipeline's own thread is the only place progress can leave from;
+    /// a count kept on rayon's workers shows at the next report made here. `is_current()`
+    /// is asked, once the drawing is done, whether the page still wants this generation --
     /// a drawing it has moved past is kept in the cache but not measured. Returns the
     /// outcome as JSON (`trace:done`'s `outcome`), or `undefined` when it was retired.
+    ///
+    /// A trace here is never cancelled from inside: WebAssembly cannot unwind, so the page
+    /// stops a trace nobody wants by terminating this worker (`engine.ts`).
     pub fn trace(
         &mut self,
         request: &str,
         draft_px: u32,
         draft_seconds: f64,
         generation: f64,
-        on_stage: &js_sys::Function,
+        on_progress: &js_sys::Function,
         is_current: &js_sys::Function,
     ) -> Result<Option<String>, JsValue> {
         let source = self.source()?;
@@ -189,27 +199,58 @@ impl Studio {
                 .map(|v| v.is_truthy())
                 .unwrap_or(true)
         };
-        let stage = on_stage.clone();
-        let drawn = trace::draw(
-            &source,
-            &settings,
-            tier,
-            Some(&self.traced),
-            trace::MeasureLevel::Full,
-            move |name, ms| {
-                let _ = stage.call2(&JsValue::NULL, &JsValue::from_str(name), &ms.into());
-            },
-        );
+        let send = {
+            let on_progress = on_progress.clone();
+            move |live: &progress::Progress| {
+                if let Some(said) = trace::live(live.take()) {
+                    if let Ok(json) = serde_json::to_string(&said) {
+                        let _ = on_progress.call1(&JsValue::NULL, &JsValue::from_str(&json));
+                    }
+                }
+            }
+        };
+        let live = Arc::new(progress::Progress::new());
+        let last = std::cell::Cell::new(f64::NEG_INFINITY);
+        let wake = {
+            let send = send.clone();
+            move |p: &progress::Progress| {
+                // A stage starting or ending goes at once; a loop's count at most every
+                // PROGRESS_MS, which is all an eye can follow.
+                let now = p.elapsed_ms();
+                if p.has_news() || now - last.get() >= PROGRESS_MS {
+                    last.set(now);
+                    send(p);
+                }
+            }
+        };
+        let drawn = progress::with_wake(Arc::clone(&live), wake, || {
+            trace::draw(
+                &source,
+                &settings,
+                tier,
+                Some(&self.traced),
+                trace::MeasureLevel::Full,
+                |_, _| {},
+            )
+        });
         let mut outcome = match drawn {
             Ok(_) if !current() => return Ok(None),
-            Ok(drawn) => trace::measure(
-                &source,
-                drawn,
-                trace::MeasureLevel::Full,
-                Some(&self.traced),
-            ),
+            Ok(drawn) => {
+                let started = live.elapsed_ms();
+                live.announce("measure");
+                send(&live);
+                let measured = trace::measure(
+                    &source,
+                    drawn,
+                    trace::MeasureLevel::Full,
+                    Some(&self.traced),
+                );
+                live.finished("measure", live.elapsed_ms() - started);
+                measured
+            }
             Err(outcome) => outcome,
         };
+        send(&live);
         let bands = match &mut outcome {
             trace::Outcome::Traced(t) => t.bands.take(),
             _ => None,

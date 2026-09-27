@@ -137,9 +137,57 @@ def check_a_pasted_palette_snaps_every_ink(pg: Page) -> list[str]:
     return [f"{len(missing)} of {len(wanted)} pasted colours never reached the drawing"] if missing else []
 
 
+def check_tune_shows_only_what_the_engine_reads(pg: Page) -> list[str]:
+    """Fast hides the Quality-only controls, keeps their values, and resets only what shows."""
+    open_sample(pg, "Flat logo")
+    pg.click(".railseg [role=tab]:has-text('Tune')")
+    pg.wait_for_selector("[data-ctl='precision:field']")
+    problems = []
+
+    def set_field(key: str, value: str) -> None:
+        f = pg.locator(f"[data-ctl='{key}:field']")
+        f.fill(value)
+        f.press("Enter")
+        pg.wait_for_timeout(200)
+
+    set_field("precision", "0.2")
+    pg.click("[data-ctl='mode:fast']")
+    pg.wait_for_timeout(300)
+    quality_only = [c["key"] for c in pg.evaluate("() => window.__store.state.caps.controls") if c["modes"] == "qualityOnly"]
+    shown = [k for k in quality_only if pg.locator(f"[data-ctl^='{k}:']").count()]
+    if shown:
+        problems.append(f"Fast still shows {shown}")
+    line = pg.locator("[data-note='quality-only']")
+    if not line.count() or f"{len(quality_only)} more controls" not in line.inner_text():
+        problems.append(f"no line saying {len(quality_only)} more controls are for Quality")
+    if pg.evaluate(STATE)["settings"]["precision"] != 0.2:
+        problems.append("a hidden control lost its value")
+
+    set_field("speckleFloor", "9")
+    pg.click("section.group:has([data-ctl='group:Detail']) button.reset")
+    pg.wait_for_timeout(300)
+    st = pg.evaluate(STATE)["settings"]
+    if st["speckleFloor"] == 9:
+        problems.append("Reset on Detail did not reset a control it shows")
+    if st["precision"] != 0.2:
+        problems.append("Reset on Detail reset a control Fast hides")
+    if st["mode"] != "fast":
+        problems.append("Reset on Detail switched the engine")
+
+    pg.click("[data-ctl='show-quality']")
+    pg.wait_for_timeout(300)
+    field = pg.locator("[data-ctl='precision:field']")
+    if not field.count() or field.input_value() != "0.20":
+        problems.append("switching back to Quality did not bring Precision back at 0.20")
+    if pg.locator("[data-note='quality-only']").count():
+        problems.append("the Fast line is still there in Quality")
+    return problems
+
+
 CHECKS: list[tuple[str, Callable[[Page], list[str]]]] = [
     ("a snap reaches the export", check_a_snap_reaches_the_export),
     ("a pasted palette snaps every ink", check_a_pasted_palette_snaps_every_ink),
+    ("tune shows only what the engine reads", check_tune_shows_only_what_the_engine_reads),
 ]
 
 

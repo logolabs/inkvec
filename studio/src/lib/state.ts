@@ -11,6 +11,7 @@ import type {
   BatchTotals,
   Capabilities,
   ColourGroup,
+  Control,
   DenoiserFetch,
   FabAnalysis,
   FabOptions,
@@ -428,6 +429,23 @@ export function plannedTracePx(st: State, tier: "draft" | "final"): number | nul
   const longer = Math.max(st.source.width, st.source.height);
   const cap = tier === "draft" ? Math.min(st.prefs?.draftPx ?? 512, st.settings.traceSize) : st.settings.traceSize;
   return Math.min(cap, longer);
+}
+
+/**
+ * Whether a control changes the drawing in the engine `settings` select. The Tune tab, its
+ * counts and its group resets, and the wizard all ask this, so a control that does nothing
+ * in the engine that is on is neither shown nor counted. Its value is kept either way.
+ */
+export function appliesTo(c: Control, settings: Settings): boolean {
+  // Black & white and line art take their own routes, the same in either engine (the core's
+  // test `black_and_white_and_line_art_trace_the_same_in_either_engine` pins it), and those
+  // routes fit with Quality's fitter: with either on, Fast reads what Quality reads. Line art
+  // declines on a drawing that is not line art, and the extra controls then do nothing; that
+  // is the lesser mistake than hiding the ones that shape the strokes when it does not.
+  const fast = settings.mode === "fast" && !settings.blackAndWhite && !settings.lineArt;
+  if (c.modes === "qualityOnly") return !fast;
+  if (c.modes === "fastOnly") return fast;
+  return true;
 }
 
 /** A share of the canvas. */

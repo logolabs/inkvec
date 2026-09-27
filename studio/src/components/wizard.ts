@@ -15,7 +15,7 @@
 
 import { fill, h, icon } from "../lib/dom";
 import type { ColourGroup, Control, OnOpen, PresetId, Report, Settings } from "../lib/ipc";
-import { bytes, count, de00, seconds, type Store, type WizardStep } from "../lib/state";
+import { appliesTo, bytes, count, de00, seconds, type Store, type WizardStep } from "../lib/state";
 import { previewKey, type Previews } from "../lib/previews";
 import { changedControls, describeAuto, looksDamaged, NOISY_LEVELS } from "../lib/suggest";
 import { autoChose, suggestionsOf, type AutoChoseActions } from "./autochose";
@@ -457,11 +457,12 @@ export function createWizard(store: Store, host: HTMLElement, act: WizardActions
 
   const controlByKey = (key: keyof Settings): Control | undefined => store.state.caps?.controls.find((c) => c.key === key);
 
+  // As in the Tune tab, a control the selected engine does not read is not offered.
   const rows = (keys: (keyof Settings)[]) => {
     const base = act.baseSettings();
     return keys
       .map((k) => controlByKey(k))
-      .filter((c): c is Control => Boolean(c))
+      .filter((c): c is Control => Boolean(c) && appliesTo(c!, store.state.settings))
       .map((c) => controlRow(store, c, act, base));
   };
 

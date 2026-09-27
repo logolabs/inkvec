@@ -1312,20 +1312,47 @@ fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> 
     // the MDL below would accept them by a wide margin. (`INKVEC_MIN_CONTRAST` scaled the
     // floor so the full set could price it; the default never moved.)
     let min_contrast = (3.0 * sigma).max(MIN_VISIBLE_CONTRAST);
-    for space in INTERPS {
-        let cols = s.colors(space);
-        let t_r = inkvec_core::clock::Instant::now();
-        let radial = fit_radial(s, &cols, space, w);
-        tick(&FIT_NS_RADIAL, t_r);
-        let t_e = inkvec_core::clock::Instant::now();
-        let elliptic = radial
-            .as_ref()
-            .and_then(|r| fit_radial_elliptic(s, &cols, space, r));
-        tick(&FIT_NS_ELLIPTIC, t_e);
-        let t_l = inkvec_core::clock::Instant::now();
-        let linear = fit_linear(s, &cols, space);
-        tick(&FIT_NS_LINEAR, t_l);
-        for cand in [linear, radial, elliptic].into_iter().flatten() {
+    // Every candidate and its multi-stop variants, per interpolation space and per model, are
+    // independent of one another, and the stop search is serial within one candidate: fit
+    // them side by side, then take them in the order the one-at-a-time loop did, which is
+    // the order `select` breaks ties in.
+    use rayon::prelude::*;
+    let per_space: Vec<(Interp, Vec<[f64; 3]>, Vec<FillModel>)> = INTERPS
+        .par_iter()
+        .map(|&space| {
+            let cols = s.colors(space);
+            let ((radial, elliptic), linear) = rayon::join(
+                || {
+                    let t_r = inkvec_core::clock::Instant::now();
+                    let radial = fit_radial(s, &cols, space, w);
+                    tick(&FIT_NS_RADIAL, t_r);
+                    let t_e = inkvec_core::clock::Instant::now();
+                    let elliptic = radial
+                        .as_ref()
+                        .and_then(|r| fit_radial_elliptic(s, &cols, space, r));
+                    tick(&FIT_NS_ELLIPTIC, t_e);
+                    (radial, elliptic)
+                },
+                || {
+                    let t_l = inkvec_core::clock::Instant::now();
+                    let linear = fit_linear(s, &cols, space);
+                    tick(&FIT_NS_LINEAR, t_l);
+                    linear
+                },
+            );
+            let cands = [linear, radial, elliptic].into_iter().flatten().collect();
+            (space, cols, cands)
+        })
+        .collect();
+    let jobs: Vec<(Interp, &[[f64; 3]], &FillModel)> = per_space
+        .iter()
+        .flat_map(|(space, cols, cands)| cands.iter().map(move |c| (*space, &cols[..], c)))
+        .collect();
+    let fitted: Vec<Vec<FillFit>> = jobs
+        .par_iter()
+        .map(|&(space, cols, cand)| {
+            let cand = cand.clone();
+            let mut out = Vec::new();
             let contrast = visible_contrast(&cand, s);
             let support = ramp_support(&cand, s, flat_c, contrast);
             if contrast < min_contrast || support < MIN_RAMP_SUPPORT {
@@ -1348,9 +1375,9 @@ fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> 
                         cand.kind(), s.len(), contrast, min_contrast, support, MIN_RAMP_SUPPORT, data_range
                     );
                 }
-                continue;
+                return out;
             }
-            let multi = fit_mid_stops(&cand, s, &cols, space);
+            let multi = fit_mid_stops(&cand, s, cols, space);
             out.push(score(cand));
             for m in multi {
                 let c = visible_contrast(&m, s);
@@ -1358,8 +1385,10 @@ fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> 
                     out.push(score(m));
                 }
             }
-        }
-    }
+            out
+        })
+        .collect();
+    out.extend(fitted.into_iter().flatten());
     // Is the variation in this region a ramp, or a step?
     //
     // A gradient is the right model for shading and the wrong one for two inks the palette

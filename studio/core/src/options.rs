@@ -468,6 +468,37 @@ pub enum Kind {
     Choice,
 }
 
+/// Which engine a control changes the drawing in.
+///
+/// Measured, not read off the code: `examples/tune_relevance.rs` traces varied inputs in
+/// both engines at the default and at non-default values of every control and records
+/// whether the SVG moved. A control applies to an engine if any value moved any output.
+/// The Tune tab shows a control only while the selected engine is one it applies to; its
+/// value is kept either way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Modes {
+    /// Changes the drawing in either engine.
+    Both,
+    /// Steers a stage only Quality runs (the boundary solve, the curve fit, gradient
+    /// recovery, ring repair, shape matching); Fast reads it nowhere.
+    QualityOnly,
+    /// Only Fast reads it. No control is this today; the value exists so the table can say
+    /// so when one is.
+    FastOnly,
+}
+
+impl Modes {
+    /// Whether a control with these modes changes the drawing in `mode`.
+    pub fn includes(self, mode: TraceMode) -> bool {
+        match self {
+            Modes::Both => true,
+            Modes::QualityOnly => mode == TraceMode::Quality,
+            Modes::FastOnly => mode == TraceMode::Fast,
+        }
+    }
+}
+
 /// A labelled stop on a slider's scale.
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct Stop {
@@ -504,9 +535,14 @@ pub struct Control {
     pub stops: &'static [Stop],
     /// The tooltip: the engine's own documentation for this option, unedited.
     pub help: &'static str,
+    /// Which engine it changes the drawing in; see [`Modes`].
+    pub modes: Modes,
 }
 
-/// The Tune tab's controls, in order. Four groups, nineteen rows.
+/// The Tune tab's controls, in order: four groups, twenty-three rows, three of them (the
+/// engine, the denoiser and Editable) drawn above the tabs instead. Each says which engine it
+/// changes the drawing in ([`Modes`]); the table was measured, and
+/// `quality_only_controls_are_the_ones_fast_mode_ignores` holds it to the engine's own list.
 pub const CONTROLS: &[Control] = &[
     // ----------------------------------------------------------------- Detail ---
     Control {
@@ -524,6 +560,7 @@ pub const CONTROLS: &[Control] = &[
             Stop { at: 1.0, label: "fast" },
         ],
         help: "Quality places every edge to a fraction of a pixel and fits the fewest curves that match the image: the closest trace, and the default. Fast traces each shape in a single pass, many times quicker, for previews, batches and very large images.",
+        modes: Modes::Both,
     },
     Control {
         group: "Detail",
@@ -541,6 +578,7 @@ pub const CONTROLS: &[Control] = &[
             Stop { at: 1.0, label: "coarse" },
         ],
         help: "Sets the description-length cost of a coordinate, in pixels: lambda = ln(extent / precision). Smaller values buy more detail with more coordinates. It does not set the digits written; coordinates are always written at 2 decimals.",
+        modes: Modes::QualityOnly,
     },
     Control {
         group: "Detail",
@@ -557,6 +595,7 @@ pub const CONTROLS: &[Control] = &[
             Stop { at: 1.0, label: "drop dust" },
         ],
         help: "Discard features smaller than this area, in square pixels. Raise it to drop scanner dust; lower it to keep small serifs.",
+        modes: Modes::Both,
     },
     Control {
         group: "Detail",
@@ -574,6 +613,7 @@ pub const CONTROLS: &[Control] = &[
             Stop { at: 1.0, label: "4096" },
         ],
         help: "Inputs larger than this on their longer side, in pixels, are traced at this size and the SVG is written at the original size. Trace time grows with the pixel count.",
+        modes: Modes::Both,
     },
     Control {
         group: "Detail",
@@ -590,6 +630,7 @@ pub const CONTROLS: &[Control] = &[
             Stop { at: 1.0, label: "60" },
         ],
         help: "Advisory wall-clock budget, in seconds; 0 means none. Gradient-band merging stops at 60% of it and the boundary solve gets 25%; the output is still a correct trace, with more fills or a less polished outline. A nonzero budget makes the output depend on machine speed and load, so it is no longer reproducible.",
+        modes: Modes::QualityOnly,
     },
     // ----------------------------------------------------------------- Colour ---
     Control {
@@ -608,6 +649,7 @@ pub const CONTROLS: &[Control] = &[
             Stop { at: 1.0, label: "2048" },
         ],
         help: "Maximum palette size.",
+        modes: Modes::Both,
     },
     Control {
         group: "Colour",
@@ -624,6 +666,7 @@ pub const CONTROLS: &[Control] = &[
             Stop { at: 1.0, label: "heavy" },
         ],
         help: "OKLab distance below which two colours are treated as one ink.",
+        modes: Modes::Both,
     },
     Control {
         group: "Colour",
@@ -637,6 +680,7 @@ pub const CONTROLS: &[Control] = &[
         decimals: 0,
         stops: &[],
         help: "Skip gradient fitting entirely and fill flat.",
+        modes: Modes::Both,
     },
     Control {
         group: "Colour",
@@ -650,6 +694,7 @@ pub const CONTROLS: &[Control] = &[
         decimals: 0,
         stops: &[],
         help: "Two-tone output (the Potrace-comparable mode).",
+        modes: Modes::Both,
     },
     Control {
         group: "Colour",
@@ -663,6 +708,7 @@ pub const CONTROLS: &[Control] = &[
         decimals: 0,
         stops: &[],
         help: "On (the default): transparency is traced as it is. Holes stay holes, every ink carries its opacity, and soft shadows, glows and feathered edges come back as translucent fills; the clear background is not counted towards Max colours. Off: the image is laid on a matte first and traced as solid colours, which fills holes and gaps with the matte colour. Changes nothing for an opaque image.",
+        modes: Modes::Both,
     },
     Control {
         group: "Colour",
@@ -676,6 +722,7 @@ pub const CONTROLS: &[Control] = &[
         decimals: 0,
         stops: &[],
         help: "The trained restorer: removes JPEG, WebP and decoder damage at the input's own size before tracing. Off by default, because on clean input it costs a little colour accuracy. Auto traces, measures the fit, and restores only if the trace disagrees with the input where it claims to be flat.",
+        modes: Modes::Both,
     },
     // ------------------------------------------------------------------ Shape ---
     Control {
@@ -690,6 +737,7 @@ pub const CONTROLS: &[Control] = &[
         decimals: 0,
         stops: &[],
         help: "Marks that repeat across the drawing are redrawn from one consensus geometry per cluster, which saves parameters. A mark takes the consensus only where that stays within 0.1 px of the boundary traced for it and costs fewer parameters; a face another face is drawn against, and a fitted circle or rounded rectangle, is never moved.",
+        modes: Modes::QualityOnly,
     },
     Control {
         group: "Shape",
@@ -706,6 +754,7 @@ pub const CONTROLS: &[Control] = &[
             Stop { at: 1.0, label: "identical" },
         ],
         help: "Shape-equivalence threshold for harmonization: the outline similarity (IoU after affine normalisation) above which two marks count as the same shape.",
+        modes: Modes::QualityOnly,
     },
     Control {
         group: "Shape",
@@ -719,6 +768,7 @@ pub const CONTROLS: &[Control] = &[
         decimals: 0,
         stops: &[],
         help: "Scale the fit tolerances with the raster, so a large, simple drawing gets the parameter count of a small one. Trades fidelity for parsimony: small squares can come back as circles and thin rings broken.",
+        modes: Modes::QualityOnly,
     },
     Control {
         group: "Shape",
@@ -732,6 +782,7 @@ pub const CONTROLS: &[Control] = &[
         decimals: 0,
         stops: &[],
         help: "Emit line art as strokes — one path and one width — instead of as filled outlines. Declines silently on anything else.",
+        modes: Modes::Both,
     },
     Control {
         group: "Shape",
@@ -745,6 +796,7 @@ pub const CONTROLS: &[Control] = &[
         decimals: 0,
         stops: &[],
         help: "The self-crossing ring repair pass that runs after fitting. Off leaves a fitted boundary exactly as the fitter wrote it, crossings and all.",
+        modes: Modes::QualityOnly,
     },
     Control {
         group: "Shape",
@@ -758,6 +810,7 @@ pub const CONTROLS: &[Control] = &[
         decimals: 0,
         stops: &[],
         help: "Post-fit passes that trade parameters for structure an artist can edit: G1-smooth joins, axis-aligned and equal-length handles, aligned nodes, and self-symmetric rings locked into exact mirrors. Fidelity stays within the same tolerance; only structure and parameters move.",
+        modes: Modes::Both,
     },
     Control {
         group: "Shape",
@@ -775,6 +828,7 @@ pub const CONTROLS: &[Control] = &[
             Stop { at: 1.0, label: "more lines" },
         ],
         help: "What one Bézier curve costs the fit, in parameters; a straight line costs 2. At the default, 6, a chain of short lines is cheaper than the one curve that describes it, which is why traces come out less curved than hand-drawn artwork. Lower it and the tracer draws more curves and fewer lines, at some cost in file size.",
+        modes: Modes::QualityOnly,
     },
     Control {
         group: "Shape",
@@ -792,6 +846,7 @@ pub const CONTROLS: &[Control] = &[
             Stop { at: 1.0, label: "smoother" },
         ],
         help: "The turn, in degrees, at a join that is charged as a full corner; below it the charge ramps up gradually. Raising it lets gentler bends stay smooth, which tends to give more curves and a little more detail, at a somewhat larger file. The default is 10°.",
+        modes: Modes::QualityOnly,
     },
     // ----------------------------------------------------------------- Output ---
     Control {
@@ -806,6 +861,7 @@ pub const CONTROLS: &[Control] = &[
         decimals: 0,
         stops: &[],
         help: "No ids or groups, no trailing zeros. Same geometry, typically about a tenth smaller.",
+        modes: Modes::Both,
     },
     Control {
         group: "Output",
@@ -819,6 +875,7 @@ pub const CONTROLS: &[Control] = &[
         decimals: 0,
         stops: &[],
         help: "Knock the background out: the face that covers the whole canvas is not painted, so the artwork sits on transparency.",
+        modes: Modes::Both,
     },
     Control {
         group: "Output",
@@ -835,6 +892,7 @@ pub const CONTROLS: &[Control] = &[
             Stop { at: 1.0, label: "25%" },
         ],
         help: "Transparent margin around the output, as a fraction of the larger side. The viewBox grows; the geometry does not move.",
+        modes: Modes::Both,
     },
     Control {
         group: "Output",
@@ -848,6 +906,7 @@ pub const CONTROLS: &[Control] = &[
         decimals: 0,
         stops: &[],
         help: "Carry the input's transparency into the SVG: a face the source drew transparent becomes a hole, one drawn at a single opacity keeps it as fill-opacity, and white artwork on a transparent ground survives. Changes nothing for an opaque input.",
+        modes: Modes::Both,
     },
 ];
 
@@ -1089,6 +1148,88 @@ mod tests {
         let old: Settings =
             serde_json::from_value(serde_json::json!({ "precision": 0.2 })).unwrap();
         assert!(old.colour_groups.is_empty());
+    }
+
+    /// The defaults with one control moved off its default, as the Tune tab would move it: a
+    /// switch flipped, a tri-state to On, a choice to its last option, a range to an end.
+    fn moved(c: &Control) -> Settings {
+        let mut json = serde_json::to_value(Settings::default()).unwrap();
+        let now = json[c.key].clone();
+        json[c.key] = match c.kind {
+            Kind::Switch => (!now.as_bool().unwrap()).into(),
+            Kind::Tri => "on".into(),
+            Kind::Choice => c.stops.last().unwrap().label.into(),
+            Kind::Range => {
+                let end = if (now.as_f64().unwrap() - c.max).abs() > 1e-9 {
+                    c.max
+                } else {
+                    c.min
+                };
+                if c.decimals == 0 {
+                    serde_json::json!(end as u64)
+                } else {
+                    serde_json::json!(end)
+                }
+            }
+        };
+        let s: Settings = serde_json::from_value(json).unwrap();
+        assert_ne!(s, Settings::default(), "{} did not move", c.key);
+        s
+    }
+
+    /// The table the Tune tab hides controls by, against the engine's own list of what fast
+    /// mode does not read (`inkvec_cli::fast_ignored`, which fast mode's report line prints).
+    /// A control is Quality-only exactly when moving it, in Fast, is something the engine
+    /// says it ignores; so neither list can change without the other.
+    #[test]
+    fn quality_only_controls_are_the_ones_fast_mode_ignores() {
+        for c in CONTROLS.iter().filter(|c| c.key != "mode") {
+            let s = Settings {
+                mode: TraceMode::Fast,
+                ..moved(c)
+            };
+            let ignored = inkvec_cli::fast_ignored(&s.to_args());
+            if c.key == "precision" {
+                // The one the report leaves out on purpose: the intake rescales `--precision`
+                // on an oversampled raster, so a changed value is not evidence the caller set
+                // it (see `fast_ignored`). Fast's fitter never reads it; the table was measured.
+                assert_eq!(c.modes, Modes::QualityOnly);
+                assert!(ignored.is_empty(), "{ignored:?}");
+                continue;
+            }
+            assert_eq!(
+                c.modes == Modes::QualityOnly,
+                !ignored.is_empty(),
+                "{}: the table says {:?}, fast mode ignores {ignored:?}",
+                c.key,
+                c.modes
+            );
+        }
+        let mode = CONTROLS.iter().find(|c| c.key == "mode").unwrap();
+        assert_eq!(
+            mode.modes,
+            Modes::Both,
+            "the engine switch shows in both engines"
+        );
+        assert!(CONTROLS.iter().all(|c| c.modes != Modes::FastOnly));
+    }
+
+    #[test]
+    fn modes_say_which_engine_a_control_is_shown_in() {
+        assert!(Modes::Both.includes(TraceMode::Fast) && Modes::Both.includes(TraceMode::Quality));
+        assert!(!Modes::QualityOnly.includes(TraceMode::Fast));
+        assert!(Modes::QualityOnly.includes(TraceMode::Quality));
+        assert!(Modes::FastOnly.includes(TraceMode::Fast));
+        assert!(!Modes::FastOnly.includes(TraceMode::Quality));
+        // Serialised the way the frontend reads it.
+        let json = serde_json::to_value(CONTROLS).unwrap();
+        let spelt: Vec<&str> = json
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["modes"].as_str().unwrap())
+            .collect();
+        assert!(spelt.contains(&"both") && spelt.contains(&"qualityOnly"));
     }
 
     #[test]

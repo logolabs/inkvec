@@ -43,6 +43,8 @@ for block in re.split(r"\n    Control \{", body)[1:]:
             "decimals": int(field("decimals")),
             "stops": stops,
             "help": text("help").replace('\\"', '"'),
+            # `Modes::QualityOnly` -> "qualityOnly", as serde's camelCase writes it.
+            "modes": (lambda v: v[0].lower() + v[1:])(field("modes").split("::")[1]),
         }
     )
 

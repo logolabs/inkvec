@@ -1,7 +1,7 @@
 # Tune: presets and every control
 
 The **Tune** half of the rail holds the settings for the next trace: eight presets, any presets you
-saved, and twenty-two controls. Moving any of them starts a draft at once and a full trace a moment
+saved, and twenty-three controls. Moving any of them starts a draft at once and a full trace a moment
 later (see [draft and full traces](viewer.md#draft-and-full-traces)); the readout at the foot of
 the rail shows what the change bought or cost.
 
@@ -29,10 +29,14 @@ has its own **Reset**. **Output** starts folded.
 The controls are the same ones the `inkvec` command line has; the Studio only gives them
 plain-language names. The table at the end of this page maps them.
 
-## The denoiser and Editable
+## The engine, the denoiser and Editable
 
-Two settings sit above both halves of the rail, big, because they are the two people most often
+Three settings sit above both halves of the rail, big, because they are the ones people most often
 come for. Each is one control, shown once.
+
+**Engine**: **Quality** or **Fast**. Quality places every edge to a fraction of a pixel and fits
+the fewest curves that match the image; it is the default and the closest trace. Fast traces each
+shape in a single pass, many times quicker, for previews, batches and very large images.
 
 **Denoiser**: **Off**, **Auto** or **On**. The denoiser is a trained model that repairs JPEG, WebP
 and screenshot damage at the image's own size before tracing, so the colours are the ones the
@@ -54,6 +58,28 @@ an artist can edit: joins that are smooth, handles that lie on an axis and have 
 lined up with each other, and shapes that are symmetric locked into exact mirrors. The outline stays
 within the same tolerance; the [Editability card](result.md#editability) shows what it changed, and
 the quality report shows its price (about 0.04 dE00 on icons).
+
+### Which controls each engine reads
+
+Fast skips the stages several controls steer, so with Fast selected the Tune tab lists only the
+controls that change a Fast trace, and a line at the top says how many more are for Quality. The
+hidden ones keep their values: switch back to Quality and they are where you left them. The
+*changed* counts and each group's **Reset** count and reset only the controls on show; choosing a
+preset still sets every control. The [Custom wizard](getting-started.md#the-custom-wizard) leaves
+the same controls out.
+
+Only Quality reads **Precision**, **Time limit**, **Match repeated shapes**, **Match threshold**,
+**Fewer paths**, **Repair crossing rings**, **Curve cost** and **Smooth-join angle**. Every other
+control changes the trace in both engines, though some only in company: **Holes as cutouts**
+only with Trace transparency off, and **Flat fills** in Fast only where the image has a smooth
+colour ramp. This was measured, not assumed: each control was moved on a range of images in both
+engines, and a control counts as read by an engine if any of those moves changed the SVG it
+wrote.
+
+**Black & white** and **Line art** trace the same way in either engine, with the fitter Quality
+uses, so while either is on, Fast shows the same controls as Quality. (Line art that declines, on
+a drawing that is not line art, leaves the trace to Fast, and those extra controls then do
+nothing.)
 
 ## Presets
 
@@ -80,7 +106,7 @@ stage says the denoiser is missing and offers the download.
 
 ### Saving your own
 
-**Save as preset** stores all twenty-two controls exactly as they stand, under a name you give
+**Save as preset** stores all twenty-three controls exactly as they stand, under a name you give
 (up to 40 characters). It appears in the tray after the built-ins; the **×** on its chip forgets
 it. You can keep up to twelve. A saved preset is a complete snapshot rather than a list of
 differences, so it does not change if a future version changes the defaults.

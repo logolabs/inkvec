@@ -19,7 +19,8 @@
     "label": "fast"
    }
   ],
-  "help": "Quality places every edge to a fraction of a pixel and fits the fewest curves that match the image: the closest trace, and the default. Fast traces each shape in a single pass, many times quicker, for previews, batches and very large images."
+  "help": "Quality places every edge to a fraction of a pixel and fits the fewest curves that match the image: the closest trace, and the default. Fast traces each shape in a single pass, many times quicker, for previews, batches and very large images.",
+  "modes": "both"
  },
  {
   "group": "Detail",
@@ -45,7 +46,8 @@
     "label": "coarse"
    }
   ],
-  "help": "Sets the description-length cost of a coordinate, in pixels: lambda = ln(extent / precision). Smaller values buy more detail with more coordinates. It does not set the digits written; coordinates are always written at 2 decimals."
+  "help": "Sets the description-length cost of a coordinate, in pixels: lambda = ln(extent / precision). Smaller values buy more detail with more coordinates. It does not set the digits written; coordinates are always written at 2 decimals.",
+  "modes": "qualityOnly"
  },
  {
   "group": "Detail",
@@ -67,7 +69,8 @@
     "label": "drop dust"
    }
   ],
-  "help": "Discard features smaller than this area, in square pixels. Raise it to drop scanner dust; lower it to keep small serifs."
+  "help": "Discard features smaller than this area, in square pixels. Raise it to drop scanner dust; lower it to keep small serifs.",
+  "modes": "both"
  },
  {
   "group": "Detail",
@@ -93,7 +96,8 @@
     "label": "4096"
    }
   ],
-  "help": "Inputs larger than this on their longer side, in pixels, are traced at this size and the SVG is written at the original size. Trace time grows with the pixel count."
+  "help": "Inputs larger than this on their longer side, in pixels, are traced at this size and the SVG is written at the original size. Trace time grows with the pixel count.",
+  "modes": "both"
  },
  {
   "group": "Detail",
@@ -115,7 +119,8 @@
     "label": "60"
    }
   ],
-  "help": "Advisory wall-clock budget, in seconds; 0 means none. Gradient-band merging stops at 60% of it and the boundary solve gets 25%; the output is still a correct trace, with more fills or a less polished outline. A nonzero budget makes the output depend on machine speed and load, so it is no longer reproducible."
+  "help": "Advisory wall-clock budget, in seconds; 0 means none. Gradient-band merging stops at 60% of it and the boundary solve gets 25%; the output is still a correct trace, with more fills or a less polished outline. A nonzero budget makes the output depend on machine speed and load, so it is no longer reproducible.",
+  "modes": "qualityOnly"
  },
  {
   "group": "Colour",
@@ -141,7 +146,8 @@
     "label": "2048"
    }
   ],
-  "help": "Maximum palette size."
+  "help": "Maximum palette size.",
+  "modes": "both"
  },
  {
   "group": "Colour",
@@ -163,7 +169,8 @@
     "label": "heavy"
    }
   ],
-  "help": "OKLab distance below which two colours are treated as one ink."
+  "help": "OKLab distance below which two colours are treated as one ink.",
+  "modes": "both"
  },
  {
   "group": "Colour",
@@ -176,7 +183,8 @@
   "curve": 1.0,
   "decimals": 0,
   "stops": [],
-  "help": "Skip gradient fitting entirely and fill flat."
+  "help": "Skip gradient fitting entirely and fill flat.",
+  "modes": "both"
  },
  {
   "group": "Colour",
@@ -189,7 +197,8 @@
   "curve": 1.0,
   "decimals": 0,
   "stops": [],
-  "help": "Two-tone output (the Potrace-comparable mode)."
+  "help": "Two-tone output (the Potrace-comparable mode).",
+  "modes": "both"
  },
  {
   "group": "Colour",
@@ -202,7 +211,8 @@
   "curve": 1.0,
   "decimals": 0,
   "stops": [],
-  "help": "On (the default): transparency is traced as it is. Holes stay holes, every ink carries its opacity, and soft shadows, glows and feathered edges come back as translucent fills; the clear background is not counted towards Max colours. Off: the image is laid on a matte first and traced as solid colours, which fills holes and gaps with the matte colour. Changes nothing for an opaque image."
+  "help": "On (the default): transparency is traced as it is. Holes stay holes, every ink carries its opacity, and soft shadows, glows and feathered edges come back as translucent fills; the clear background is not counted towards Max colours. Off: the image is laid on a matte first and traced as solid colours, which fills holes and gaps with the matte colour. Changes nothing for an opaque image.",
+  "modes": "both"
  },
  {
   "group": "Colour",
@@ -215,7 +225,8 @@
   "curve": 1.0,
   "decimals": 0,
   "stops": [],
-  "help": "The trained restorer: removes JPEG, WebP and decoder damage at the input's own size before tracing. Off by default, because on clean input it costs a little colour accuracy. Auto traces, measures the fit, and restores only if the trace disagrees with the input where it claims to be flat."
+  "help": "The trained restorer: removes JPEG, WebP and decoder damage at the input's own size before tracing. Off by default, because on clean input it costs a little colour accuracy. Auto traces, measures the fit, and restores only if the trace disagrees with the input where it claims to be flat.",
+  "modes": "both"
  },
  {
   "group": "Shape",
@@ -228,7 +239,8 @@
   "curve": 1.0,
   "decimals": 0,
   "stops": [],
-  "help": "Marks that repeat across the drawing are redrawn from one consensus geometry per cluster, which saves parameters. A mark takes the consensus only where that stays within 0.1 px of the boundary traced for it and costs fewer parameters; a face another face is drawn against, and a fitted circle or rounded rectangle, is never moved."
+  "help": "Marks that repeat across the drawing are redrawn from one consensus geometry per cluster, which saves parameters. A mark takes the consensus only where that stays within 0.1 px of the boundary traced for it and costs fewer parameters; a face another face is drawn against, and a fitted circle or rounded rectangle, is never moved.",
+  "modes": "qualityOnly"
  },
  {
   "group": "Shape",
@@ -250,7 +262,8 @@
     "label": "identical"
    }
   ],
-  "help": "Shape-equivalence threshold for harmonization: the outline similarity (IoU after affine normalisation) above which two marks count as the same shape."
+  "help": "Shape-equivalence threshold for harmonization: the outline similarity (IoU after affine normalisation) above which two marks count as the same shape.",
+  "modes": "qualityOnly"
  },
  {
   "group": "Shape",
@@ -263,7 +276,8 @@
   "curve": 1.0,
   "decimals": 0,
   "stops": [],
-  "help": "Scale the fit tolerances with the raster, so a large, simple drawing gets the parameter count of a small one. Trades fidelity for parsimony: small squares can come back as circles and thin rings broken."
+  "help": "Scale the fit tolerances with the raster, so a large, simple drawing gets the parameter count of a small one. Trades fidelity for parsimony: small squares can come back as circles and thin rings broken.",
+  "modes": "qualityOnly"
  },
  {
   "group": "Shape",
@@ -276,7 +290,8 @@
   "curve": 1.0,
   "decimals": 0,
   "stops": [],
-  "help": "Emit line art as strokes \u2014 one path and one width \u2014 instead of as filled outlines. Declines silently on anything else."
+  "help": "Emit line art as strokes \u2014 one path and one width \u2014 instead of as filled outlines. Declines silently on anything else.",
+  "modes": "both"
  },
  {
   "group": "Shape",
@@ -289,7 +304,8 @@
   "curve": 1.0,
   "decimals": 0,
   "stops": [],
-  "help": "The self-crossing ring repair pass that runs after fitting. Off leaves a fitted boundary exactly as the fitter wrote it, crossings and all."
+  "help": "The self-crossing ring repair pass that runs after fitting. Off leaves a fitted boundary exactly as the fitter wrote it, crossings and all.",
+  "modes": "qualityOnly"
  },
  {
   "group": "Shape",
@@ -302,7 +318,8 @@
   "curve": 1.0,
   "decimals": 0,
   "stops": [],
-  "help": "Post-fit passes that trade parameters for structure an artist can edit: G1-smooth joins, axis-aligned and equal-length handles, aligned nodes, and self-symmetric rings locked into exact mirrors. Fidelity stays within the same tolerance; only structure and parameters move."
+  "help": "Post-fit passes that trade parameters for structure an artist can edit: G1-smooth joins, axis-aligned and equal-length handles, aligned nodes, and self-symmetric rings locked into exact mirrors. Fidelity stays within the same tolerance; only structure and parameters move.",
+  "modes": "both"
  },
  {
   "group": "Shape",
@@ -328,7 +345,8 @@
     "label": "more lines"
    }
   ],
-  "help": "What one B\u00e9zier curve costs the fit, in parameters; a straight line costs 2. At the default, 6, a chain of short lines is cheaper than the one curve that describes it, which is why traces come out less curved than hand-drawn artwork. Lower it and the tracer draws more curves and fewer lines, at some cost in file size."
+  "help": "What one B\u00e9zier curve costs the fit, in parameters; a straight line costs 2. At the default, 6, a chain of short lines is cheaper than the one curve that describes it, which is why traces come out less curved than hand-drawn artwork. Lower it and the tracer draws more curves and fewer lines, at some cost in file size.",
+  "modes": "qualityOnly"
  },
  {
   "group": "Shape",
@@ -354,7 +372,8 @@
     "label": "smoother"
    }
   ],
-  "help": "The turn, in degrees, at a join that is charged as a full corner; below it the charge ramps up gradually. Raising it lets gentler bends stay smooth, which tends to give more curves and a little more detail, at a somewhat larger file. The default is 10\u00b0."
+  "help": "The turn, in degrees, at a join that is charged as a full corner; below it the charge ramps up gradually. Raising it lets gentler bends stay smooth, which tends to give more curves and a little more detail, at a somewhat larger file. The default is 10\u00b0.",
+  "modes": "qualityOnly"
  },
  {
   "group": "Output",
@@ -367,7 +386,8 @@
   "curve": 1.0,
   "decimals": 0,
   "stops": [],
-  "help": "No ids or groups, no trailing zeros. Same geometry, typically about a tenth smaller."
+  "help": "No ids or groups, no trailing zeros. Same geometry, typically about a tenth smaller.",
+  "modes": "both"
  },
  {
   "group": "Output",
@@ -380,7 +400,8 @@
   "curve": 1.0,
   "decimals": 0,
   "stops": [],
-  "help": "Knock the background out: the face that covers the whole canvas is not painted, so the artwork sits on transparency."
+  "help": "Knock the background out: the face that covers the whole canvas is not painted, so the artwork sits on transparency.",
+  "modes": "both"
  },
  {
   "group": "Output",
@@ -402,7 +423,8 @@
     "label": "25%"
    }
   ],
-  "help": "Transparent margin around the output, as a fraction of the larger side. The viewBox grows; the geometry does not move."
+  "help": "Transparent margin around the output, as a fraction of the larger side. The viewBox grows; the geometry does not move.",
+  "modes": "both"
  },
  {
   "group": "Output",
@@ -415,6 +437,7 @@
   "curve": 1.0,
   "decimals": 0,
   "stops": [],
-  "help": "Carry the input's transparency into the SVG: a face the source drew transparent becomes a hole, one drawn at a single opacity keeps it as fill-opacity, and white artwork on a transparent ground survives. Changes nothing for an opaque input."
+  "help": "Carry the input's transparency into the SVG: a face the source drew transparent becomes a hole, one drawn at a single opacity keeps it as fill-opacity, and white artwork on a transparent ground survives. Changes nothing for an opaque input.",
+  "modes": "both"
  }
 ]

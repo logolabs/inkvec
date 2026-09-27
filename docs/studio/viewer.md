@@ -46,7 +46,7 @@ The **Show** toggles draw on the SVG pane.
 
 A key to the marks appears at the right of the toolbar while any overlay is on. Anchors and
 handles are how you judge what the file will be like to edit: fewer nodes, and handles that line
-up, are easier to work with. [Editable structure](tune.md#the-denoiser-and-editable) is the setting
+up, are easier to work with. [Editable structure](tune.md#the-engine-the-denoiser-and-editable) is the setting
 that moves them towards what an artist would draw.
 
 ## Detail: the pixel grid under the edge

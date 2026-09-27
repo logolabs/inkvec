@@ -107,6 +107,11 @@ export interface Control {
   decimals: number;
   stops: { at: number; label: string }[];
   help: string;
+  /**
+   * Which engine the control changes the drawing in (`options::Modes`), measured by tracing.
+   * The Tune tab shows a control only while the selected engine is one it applies to.
+   */
+  modes: "both" | "qualityOnly" | "fastOnly";
 }
 
 export interface PresetInfo {

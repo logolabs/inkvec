@@ -11,7 +11,7 @@
  */
 
 import { fill, h, icon, s } from "../lib/dom";
-import { bytes, count, de00, modKey, percent, plannedTracePx, seconds, type Store } from "../lib/state";
+import { appliesTo, bytes, count, de00, modKey, percent, plannedTracePx, seconds, type Store } from "../lib/state";
 import type { Control, Loss, Report, Settings, Stage } from "../lib/ipc";
 import { WEB } from "../lib/platform";
 import { closeOverlay, modal, openModal, tip, toast } from "./overlays";
@@ -48,7 +48,7 @@ export interface RailActions extends PaletteActions, AutoChoseActions {
  * top of the rail. They are the things people most often come for, so they are not left
  * three folds down a list; and each is drawn once, so a setting never has two controls.
  */
-const PROMOTED: ReadonlySet<string> = new Set(["mode", "cleanUpDamage", "editability"]);
+export const PROMOTED: ReadonlySet<string> = new Set(["mode", "cleanUpDamage", "editability"]);
 
 /** What hand-drawn files do, from the 1,544 artist-drawn SVGs in the evaluation corpus. */
 const ARTIST = { axisHandles: 0.34, smoothJoins: 0.89, alignedNodes: 0.86 } as const;
@@ -302,11 +302,15 @@ function modesBlock(store: Store, act: RailActions): HTMLElement[] {
 
 // ---------------------------------------------------------------------- the tabs ---
 
-/** How many controls are away from where the selected preset put them. */
+/**
+ * How many controls are away from where the selected preset put them, among those that
+ * change the drawing in the engine that is on. One hidden in this engine keeps its value,
+ * but it is not a change to this drawing, so it is not counted as one.
+ */
 function changedCount(store: Store, act: RailActions): number {
   const base = act.baseSettings();
   const st = store.state;
-  return (st.caps?.controls ?? []).filter((c) => st.settings[c.key] !== base[c.key]).length;
+  return (st.caps?.controls ?? []).filter((c) => appliesTo(c, st.settings) && st.settings[c.key] !== base[c.key]).length;
 }
 
 /** What the Result tab says about itself: the colour difference of the drawing on screen. */
@@ -357,28 +361,30 @@ function railTabs(store: Store, act: RailActions): HTMLElement[] {
 
 // ------------------------------------------------------------------------- tune ---
 
-/** In Fast mode some Tune controls do nothing (they steer stages only Quality runs): say so above them. */
-function fastModeBanner(store: Store, act: RailActions): HTMLElement | null {
-  if (store.state.settings.mode !== "fast") return null;
+/**
+ * In Fast, the controls that only Quality reads are not shown (they steer stages Fast skips).
+ * One quiet line says how many there are and where they went, so a control that vanished is
+ * not a control that was lost; their values are kept for when Quality is back on.
+ */
+function qualityOnlyLine(store: Store, act: RailActions): HTMLElement | null {
+  const st = store.state;
+  if (st.settings.mode !== "fast") return null;
+  const hidden = (st.caps?.controls ?? []).filter((c) => !PROMOTED.has(c.key) && !appliesTo(c, st.settings)).length;
+  if (!hidden) return null;
   return h(
-    "div.fastmode-banner",
-    null,
-    h(
-      "div.banner-text",
-      null,
-      h("span.banner-title", null, "Fast mode"),
-      h("span.banner-desc", null, "Each shape is traced in one pass. Controls for the edge solve and curve fitting apply in Quality."),
-    ),
+    "div.guideline",
+    { "data-note": "quality-only" },
+    h("span.faint", null, `${hidden} more control${hidden === 1 ? " is" : "s are"} for Quality: switch to see ${hidden === 1 ? "it" : "them"}.`),
     h(
       "button.reset",
-      { onclick: () => act.changeSetting("mode", "quality"), title: "Switch back to Quality mode" },
+      { "data-ctl": "show-quality", title: "Switch the engine to Quality", onclick: () => act.changeSetting("mode", "quality") },
       "Quality",
     ),
   );
 }
 
 function tunePane(store: Store, act: RailActions): (HTMLElement | null)[] {
-  return [guideLine(store, act), fastModeBanner(store, act), presets(store, act), ...controlGroups(store, act)];
+  return [guideLine(store, act), qualityOnlyLine(store, act), presets(store, act), ...controlGroups(store, act)];
 }
 
 /** The way back into the wizard, for an image that is already open. */
@@ -883,10 +889,13 @@ function lossRow(l: Loss, glyph: string): HTMLElement {
  * A group says how many of its controls are away from the preset, and can put just those
  * back — "what did I change?" is the question a wall of eighteen sliders makes hard, and
  * the one somebody comparing two traces keeps asking.
+ *
+ * Only the controls that change the drawing in the selected engine are listed, and a group
+ * with none of those left is not drawn at all.
  */
 function controlGroups(store: Store, act: RailActions): HTMLElement[] {
   const st = store.state;
-  const controls = (st.caps?.controls ?? []).filter((c) => !PROMOTED.has(c.key));
+  const controls = (st.caps?.controls ?? []).filter((c) => !PROMOTED.has(c.key) && appliesTo(c, st.settings));
   const base = act.baseSettings();
   const groups = [...new Set(controls.map((c) => c.group))];
 
@@ -921,16 +930,6 @@ function controlGroups(store: Store, act: RailActions): HTMLElement[] {
   });
 }
 
-const QUALITY_ONLY_CONTROLS: ReadonlySet<string> = new Set([
-  "bezierCost",
-  "cornerAngle",
-  "repairRings",
-  "matchRepeatedShapes",
-  "matchThreshold",
-  "fewerPaths",
-  "timeLimit",
-]);
-
 /**
  * One row: a plain-words label, its unit, the value shown numerically, and a slider on a
  * perceptual scale with named stops rather than a bare track.
@@ -939,10 +938,6 @@ export function controlRow(store: Store, c: Control, act: Pick<RailActions, "cha
   const value = store.state.settings[c.key];
   const changed = value !== base[c.key];
   const row = (...kids: (HTMLElement | null)[]) => h(changed ? "div.control.changed" : "div.control", null, ...kids);
-  const qualityOnly = store.state.settings.mode === "fast" && QUALITY_ONLY_CONTROLS.has(c.key);
-  const qualityTag = qualityOnly
-    ? tip(h("span.quality-only-tag", null, "Quality only"), "This control only affects Quality mode and is bypassed in Fast mode.")
-    : null;
 
   if (c.kind === "switch") {
     const sw = h("button.switch", {
@@ -956,7 +951,7 @@ export function controlRow(store: Store, c: Control, act: Pick<RailActions, "cha
       h(
         "div.controlhead",
         null,
-        h("div", { style: { display: "flex", alignItems: "baseline", gap: "6px" } }, tip(h("span.label", { tabindex: "0" }, c.label), c.help), qualityTag),
+        tip(h("span.label", { tabindex: "0" }, c.label), c.help),
         sw,
       ),
     );
@@ -968,7 +963,7 @@ export function controlRow(store: Store, c: Control, act: Pick<RailActions, "cha
       h(
         "div.controlhead",
         null,
-        h("div", { style: { display: "flex", alignItems: "baseline", gap: "6px" } }, tip(h("span.label", { tabindex: "0" }, c.label), c.help), qualityTag),
+        tip(h("span.label", { tabindex: "0" }, c.label), c.help),
         h(
           "div.seg",
           null,
@@ -994,7 +989,7 @@ export function controlRow(store: Store, c: Control, act: Pick<RailActions, "cha
       h(
         "div.controlhead",
         null,
-        h("div", { style: { display: "flex", alignItems: "baseline", gap: "6px" } }, tip(h("span.label", { tabindex: "0" }, c.label), c.help), qualityTag),
+        tip(h("span.label", { tabindex: "0" }, c.label), c.help),
         h(
           "div.seg",
           null,
@@ -1064,7 +1059,7 @@ export function controlRow(store: Store, c: Control, act: Pick<RailActions, "cha
     h(
       "div.controlhead",
       null,
-      h("div", { style: { display: "flex", alignItems: "baseline", gap: "6px" } }, tip(h("span.label", { tabindex: "0" }, c.label), c.help), qualityTag),
+      tip(h("span.label", { tabindex: "0" }, c.label), c.help),
       c.unit ? h("span.unit", null, c.unit) : null,
       field,
     ),

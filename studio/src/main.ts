@@ -27,12 +27,12 @@ import {
   type Snap,
   type Traced,
 } from "./lib/ipc";
-import { initial, modKey, Store, type State } from "./lib/state";
+import { appliesTo, initial, modKey, Store, type State } from "./lib/state";
 import { applyRemembered, currentInterface, traceForKeeping, watchRemembered } from "./lib/remember";
 import { APP_NAME, copyText, openExternal, pickedFile, pickedPath, pickFiles, WEB, type Picked } from "./lib/platform";
 import { markFramed, mountWebChrome, takeLaunch, webDrops, type Launch } from "./lib/web/chrome";
 import { Previews } from "./lib/previews";
-import { createRail, type RailActions } from "./components/rail";
+import { createRail, PROMOTED, type RailActions } from "./components/rail";
 import { createChooser, createWizard, type Snapshot, type WizardActions } from "./components/wizard";
 import { proposeGroups } from "./components/palette";
 import { openCardComposer } from "./components/card";
@@ -498,10 +498,15 @@ const railActs: RailActions = {
   },
   baseSettings,
   changeSetting: onSettingChanged,
+  // Only the rows the group is showing, which are the ones its count counted. A control hidden
+  // because the engine that is on does not read it keeps its value until that engine is back,
+  // and the three drawn above the tabs (the engine among them) are not the group's to reset:
+  // Reset on Detail used to switch Fast back to Quality.
   resetGroup: (group) => {
     const base = baseSettings();
+    const now = { ...store.state.settings };
     for (const c of store.state.caps?.controls ?? []) {
-      if (c.group === group) assignSetting(store.state.settings, c.key, base[c.key]);
+      if (c.group === group && !PROMOTED.has(c.key) && appliesTo(c, now)) assignSetting(store.state.settings, c.key, base[c.key]);
     }
     store.touch("settings");
     controlChanged();

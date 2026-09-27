@@ -7,6 +7,40 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+### Changed
+
+- **Fast mode is as fast as VTracer, with far fewer points.** A 1672×941 poster traces in
+  0.21 s (it took 2.4 s; VTracer 0.27 s) with 8,798 coordinates instead of 47,548 (VTracer
+  26,306), and closer to the image (dE00 0.989 -> 0.905); a serif "G" that took 677 anchors
+  takes 29. Anti-aliased rims around small text merge into the inks on either side, inks the
+  eye cannot tell apart merge, and the speckle floor grows with the image, so outlines are no
+  longer cut into short pieces. Over 13 images Fast is 0.81x VTracer's time at 1024 px and
+  0.86x at full size, and writes fewer coordinates than VTracer on every test set.
+- **Writing the SVG is much faster in both modes**: working out which face lies inside which
+  measured every ring again for each pair of faces; each is now measured once (1.6 s -> 6 ms
+  on that poster). The output is unchanged, byte for byte.
+
+- **Studio: the Tune tab shows what the chosen engine reads.** In Fast, the eight controls
+  only Quality uses (precision, time limit, fewer paths, repair crossing rings, curve cost,
+  smooth-join angle, match repeated shapes, match threshold) are hidden, and one line says
+  how many more Quality has. They come back under Black & white or Line art, which take the
+  same route in either engine. Hidden controls keep their values and presets still set them.
+  Which control each engine reads was measured by tracing both engines at different values,
+  and is held in one place with a test against the engine's own list. The Custom wizard
+  follows the same rule.
+
+### Fixed
+
+- **Fast mode no longer paints black text in another ink's colour.** The grey edge pixels of
+  dark text on a light ground are nearer a saturated colour used elsewhere (a red, say) than
+  they are to black or to the ground, so they were labelled with it; and text too thin to have
+  any flat pixels never got a black ink of its own. A pixel now takes an ink it could be made
+  of, and a thin colour becomes an ink when enough of its pixels touch their own colour and it
+  is not a mix of two others. On 50 brand logos the invented-colour pixels go from 5,799 to 0
+  and mean dE00 from 0.128 to 0.108; Fast's mean dE00 on the 246-icon screen set goes from
+  0.375 to 0.364. Quality mode is unchanged, byte for byte.
+- **Studio: Reset on the Detail group** no longer switches the engine back to Quality.
+
 ## [0.2.1] - 2026-09-27
 
 ### Added

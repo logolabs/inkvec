@@ -111,6 +111,54 @@ struct Seg {
     right: u16,
 }
 
+/// The segments incident to each node, in segment order: every node that has any, in
+/// increasing id, with its segments in one flat list. A map from node to segment list, in
+/// two sorted arrays rather than a hash map of vectors -- the same lists, without an
+/// allocation and a hash per boundary node.
+struct Incidence {
+    /// Nodes with at least one segment, increasing.
+    nodes: Vec<u32>,
+    /// Where each node's segments start in `segs`; one more entry than `nodes`.
+    start: Vec<usize>,
+    /// Segment indices, grouped by node and increasing within a node.
+    segs: Vec<usize>,
+}
+
+impl Incidence {
+    fn new(segs: &[Seg]) -> Self {
+        let mut pairs: Vec<(u32, usize)> = Vec::with_capacity(2 * segs.len());
+        for (k, s) in segs.iter().enumerate() {
+            pairs.push((s.a, k));
+            pairs.push((s.b, k));
+        }
+        pairs.sort_unstable();
+        let mut nodes = Vec::new();
+        let mut start = Vec::new();
+        for (i, &(n, _)) in pairs.iter().enumerate() {
+            if nodes.last() != Some(&n) {
+                nodes.push(n);
+                start.push(i);
+            }
+        }
+        start.push(pairs.len());
+        Self {
+            nodes,
+            start,
+            segs: pairs.into_iter().map(|(_, k)| k).collect(),
+        }
+    }
+
+    /// The segments at the `i`-th node of `nodes`.
+    fn at(&self, i: usize) -> &[usize] {
+        &self.segs[self.start[i]..self.start[i + 1]]
+    }
+
+    /// The segments at node `n`, if it has any.
+    fn get(&self, n: u32) -> Option<&[usize]> {
+        self.nodes.binary_search(&n).ok().map(|i| self.at(i))
+    }
+}
+
 /// Build the planar map from an integer label image.
 pub fn build(labels: &[u16], w: usize, h: usize, n_labels: usize) -> PlanarMap {
     let mut segs: Vec<Seg> = Vec::new();
@@ -180,17 +228,15 @@ pub fn build(labels: &[u16], w: usize, h: usize, n_labels: usize) -> PlanarMap {
     // Here it is read off the labels, and a node whose diagonals are both one face, or
     // neither, is left alone: still a junction, exactly as before.
     {
-        let mut by_node: HashMap<u32, Vec<usize>> = HashMap::new();
-        for (k, s) in segs.iter().enumerate() {
-            by_node.entry(s.a).or_default().push(k);
-            by_node.entry(s.b).or_default().push(k);
-        }
-        for j in 0..=h {
-            for i in 0..=w {
-                let real = node_id(i, j, w);
-                let Some(here) = by_node.get(&real) else {
-                    continue;
-                };
+        // Every node with segments, in increasing id -- which is row by row, left to right,
+        // the order the grid is scanned in -- and the lists are read before any segment
+        // below is given its copy of a corner.
+        let by_node = Incidence::new(&segs);
+        for ni in 0..by_node.nodes.len() {
+            let real = by_node.nodes[ni];
+            let here = by_node.at(ni);
+            let (i, j) = ((real as usize) % (w + 1), (real as usize) / (w + 1));
+            {
                 if here.len() != 4 {
                     continue;
                 }
@@ -237,30 +283,27 @@ pub fn build(labels: &[u16], w: usize, h: usize, n_labels: usize) -> PlanarMap {
     }
 
     // Adjacency, and node degree.
-    let mut inc: HashMap<u32, Vec<usize>> = HashMap::new();
-    for (k, s) in segs.iter().enumerate() {
-        inc.entry(s.a).or_default().push(k);
-        inc.entry(s.b).or_default().push(k);
-    }
+    let inc = Incidence::new(&segs);
 
     // A node is a junction when it is not a simple pass-through. Degree 4 (four pixels
     // meeting at a corner) is treated as a junction rather than guessed at: splitting
     // there is always topologically safe, whereas picking a diagonal pairing can weld two
     // regions that should be separate. What the split above resolved no longer arrives
-    // here as degree 4; everything else still does.
-    let is_junction = |n: u32| -> bool { inc.get(&n).map(|v| v.len()) != Some(2) };
+    // here as degree 4; everything else still does. A node with no segment at all is not
+    // on any chain.
+    let is_junction = |segs_here: Option<&[usize]>| segs_here.map(<[usize]>::len) != Some(2);
 
     let mut used = vec![false; segs.len()];
     let mut edges: Vec<Edge> = Vec::new();
 
-    // Walk chains that start at junctions.
-    let mut junctions: Vec<u32> = inc.keys().copied().filter(|&n| is_junction(n)).collect();
-    junctions.sort_unstable();
+    // Walk chains that start at junctions, in increasing node id.
+    let junctions: Vec<usize> = (0..inc.nodes.len())
+        .filter(|&i| is_junction(Some(inc.at(i))))
+        .collect();
 
-    for start in junctions {
-        let Some(list) = inc.get(&start) else {
-            continue;
-        };
+    for ji in junctions {
+        let start = inc.nodes[ji];
+        let list = inc.at(ji);
         for &first in list {
             if used[first] {
                 continue;
@@ -281,11 +324,12 @@ pub fn build(labels: &[u16], w: usize, h: usize, n_labels: usize) -> PlanarMap {
                 let s = segs[cur_seg];
                 let next_node = if s.a == cur_node { s.b } else { s.a };
                 chain_nodes.push(next_node);
-                if is_junction(next_node) {
+                let cands = inc.get(next_node);
+                if is_junction(cands) {
                     cur_node = next_node;
                     break;
                 }
-                let Some(cands) = inc.get(&next_node) else {
+                let Some(cands) = cands else {
                     break;
                 };
                 let Some(&nxt) = cands.iter().find(|&&k| k != cur_seg && !used[k]) else {
@@ -331,7 +375,7 @@ pub fn build(labels: &[u16], w: usize, h: usize, n_labels: usize) -> PlanarMap {
                 break;
             }
             chain_nodes.push(next_node);
-            let Some(cands) = inc.get(&next_node) else {
+            let Some(cands) = inc.get(next_node) else {
                 break;
             };
             let Some(&nxt) = cands.iter().find(|&&x| x != cur_seg && !used[x]) else {

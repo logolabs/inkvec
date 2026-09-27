@@ -7,6 +7,8 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-09-27
+
 ### Changed
 
 - **Fast mode is as fast as VTracer, with far fewer points.** A 1672×941 poster traces in
@@ -19,7 +21,6 @@ API in particular should be treated as unstable release to release).
 - **Writing the SVG is much faster in both modes**: working out which face lies inside which
   measured every ring again for each pair of faces; each is now measured once (1.6 s -> 6 ms
   on that poster). The output is unchanged, byte for byte.
-
 - **Studio: the Tune tab shows what the chosen engine reads.** In Fast, the eight controls
   only Quality uses (precision, time limit, fewer paths, repair crossing rings, curve cost,
   smooth-join angle, match repeated shapes, match threshold) are hidden, and one line says

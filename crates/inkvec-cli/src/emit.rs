@@ -26,9 +26,7 @@ use inkvec_trace::gradient;
 use crate::alpha::{unmatte, AlphaRamp};
 use crate::colour_name;
 use crate::pathdata::{fmt_path, fmt_ring, fmt_ring_with};
-use crate::rings::{
-    containment, interior_probes, point_in_ring, ring_area, ring_inside, ring_points,
-};
+use crate::rings::{containment, point_in_ring, ring_area, ring_infos, ring_inside, ring_points};
 use crate::seams;
 use crate::{FaceRings, Layers, Ring};
 
@@ -474,6 +472,10 @@ pub(crate) fn emit_color(
         .collect();
     // `outer` is the face's outline: the rings not contained in another of its own. It
     // decides containment and paint order.
+    // Every containment test below reads these, measured once per ring: a face with a
+    // thousand holes, or a document of four thousand faces, asks about each ring thousands
+    // of times, and measuring it afresh each time was two thirds of a fast trace.
+    let info = ring_infos(&pts);
     let outer: Vec<Vec<usize>> = (0..order.len())
         .map(|i| {
             solid[i]
@@ -482,7 +484,7 @@ pub(crate) fn emit_color(
                 .filter(|&k| {
                     !solid[i]
                         .iter()
-                        .any(|&m| m != k && ring_inside(&pts[i][k], &pts[i][m]))
+                        .any(|&m| m != k && ring_inside(&info[i][k], &pts[i][m], &info[i][m]))
                 })
                 .collect()
         })
@@ -495,7 +497,7 @@ pub(crate) fn emit_color(
     // another of the same face is not reliably a hole, and punching it makes one anyway.
     let drawn = &outer;
 
-    let parent = containment(&pts, &outer);
+    let parent = containment(&pts, &info, &outer);
     // A transparent face is a hole, not a colour.
     //
     // This emitter is *stacked*: a face's hole is drawn by painting the face inside it on
@@ -523,7 +525,7 @@ pub(crate) fn emit_color(
     // cannot prove where it belongs is painted as it always was rather than cut by guess.
     let strictly_inside = |c: usize, p: usize| -> bool {
         outer[c].iter().any(|&kc| {
-            let probes = interior_probes(&pts[c][kc]);
+            let probes = &info[c][kc].probes;
             !probes.is_empty()
                 && outer[p].iter().any(|&kp| {
                     pts[p][kp].len() >= 3 && probes.iter().all(|&q| point_in_ring(q, &pts[p][kp]))

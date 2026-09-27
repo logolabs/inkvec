@@ -27,11 +27,15 @@ pub(crate) fn fit(
     inkvec_trace::fast::fit_edges(&map.edges, fills, &cfg)
 }
 
-/// The report line fast mode writes: what it ran, and every option it was given that only
-/// steers a stage it skips.
-pub(crate) fn report(args: &Args) -> String {
+/// Every option in `args`, moved off its default, that fast mode's colour trace does not read:
+/// each one only steers a stage fast mode skips.
+///
+/// Public so a front end can check its own list of Quality-only settings against this one
+/// (Inkvec Studio's Tune tab hides them in Fast). Black & white and line art take their own
+/// routes, which do not depend on the mode; this list is about the colour trace.
+pub fn fast_ignored(args: &Args) -> Vec<&'static str> {
     let d = Args::default();
-    let mut ignored: Vec<&str> = Vec::new();
+    let mut ignored: Vec<&'static str> = Vec::new();
     // Not `--precision` or `--lambda-scale`: the intake rescales both on an oversampled
     // raster, so a change here is not evidence the caller set them.
     let mut check = |set: bool, flag: &'static str| {
@@ -50,6 +54,25 @@ pub(crate) fn report(args: &Args) -> String {
         "--harmonize-threshold",
     );
     check(args.use_symbols, "--use-symbols");
+    // Two of the stages the report line names as not run. Not `--no-gradients`: fast mode's
+    // front end still merges smooth ramps into one gradient fill on an opaque image, and the
+    // flag turns that off.
+    check(args.no_repair, "--no-repair");
+    check(
+        args.harmonize != d.harmonize,
+        if args.harmonize {
+            "--harmonize"
+        } else {
+            "--no-harmonize"
+        },
+    );
+    ignored
+}
+
+/// The report line fast mode writes: what it ran, and every option it was given that only
+/// steers a stage it skips.
+pub(crate) fn report(args: &Args) -> String {
+    let ignored = fast_ignored(args);
     let mut line = "fast mode     Potrace-class fit, flat fills; not run: boundary solve, \
                     curve DP, gradients, ring repair, harmonization"
         .to_string();
@@ -73,6 +96,24 @@ mod tests {
             ..Args::default()
         });
         assert!(tuned.ends_with("ignored: --tau --bezier-cost"), "{tuned}");
+    }
+
+    #[test]
+    fn the_stages_fast_mode_skips_are_named_when_their_options_are_set() {
+        let d = Args::default();
+        let tuned = fast_ignored(&Args {
+            no_repair: true,
+            harmonize: !d.harmonize,
+            ..Args::default()
+        });
+        assert_eq!(tuned, ["--no-repair", "--no-harmonize"]);
+        assert!(fast_ignored(&d).is_empty());
+        // Fast still merges smooth ramps, so turning gradients off is not ignored.
+        assert!(fast_ignored(&Args {
+            no_gradients: true,
+            ..Args::default()
+        })
+        .is_empty());
     }
 
     #[test]

@@ -64,6 +64,18 @@ public struct InkvecOptions: Codable, Hashable, Sendable {
     /// Default: `false`.
     public var noBackground: Bool?
 
+    /// Black artwork only: every colour that is not the background is painted pure black, and
+    /// the background, with every hole it shows through such as the counters of letters, is
+    /// white -- or transparent with no_background, which gives black artwork on transparency
+    /// with real holes. The edges are the colour trace's own, so a light colour on white
+    /// (yellow) is kept and no pale fringe is left around the black. The background is the
+    /// colour covering most of the image border, or transparency when the border is
+    /// transparent; on white-on-black art the white is the artwork and comes back black. Off by
+    /// default.
+    ///
+    /// Default: `false`.
+    public var monochrome: Bool?
+
     /// No ids or groups, no trailing zeros. Same geometry, typically about a tenth smaller.
     ///
     /// Default: `false`.
@@ -154,6 +166,7 @@ public struct InkvecOptions: Codable, Hashable, Sendable {
         timeBudget: Double? = nil,
         margin: Double? = nil,
         noBackground: Bool? = nil,
+        monochrome: Bool? = nil,
         minify: Bool? = nil,
         editability: Bool? = nil,
         nativeAlpha: Bool? = nil,
@@ -172,6 +185,7 @@ public struct InkvecOptions: Codable, Hashable, Sendable {
         self.timeBudget = timeBudget
         self.margin = margin
         self.noBackground = noBackground
+        self.monochrome = monochrome
         self.minify = minify
         self.editability = editability
         self.nativeAlpha = nativeAlpha
@@ -192,6 +206,7 @@ public struct InkvecOptions: Codable, Hashable, Sendable {
         case timeBudget = "time_budget"
         case margin
         case noBackground = "no_background"
+        case monochrome
         case minify
         case editability
         case nativeAlpha = "native_alpha"

@@ -7,6 +7,18 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+### Added
+
+- **Black & white and black-on-transparent output** (`--monochrome`, option `monochrome`;
+  issue #24). The finished colour trace is redrawn in two tones: the artwork as one black
+  even-odd path, the background white -- or, with `--no-background`, fully transparent, so
+  the counters of letters are real holes. The edges are the colour trace's own, so there is
+  no pale anti-aliasing fringe and a light colour on white (yellow) is kept. The background
+  is the colour covering most of the image border (or transparency); a shape takes the
+  opposite tone of what it sits on unless it is the same colour, so white-on-black art comes
+  back as black letters and lettering on a coloured panel is knocked out of a black panel.
+  Works in both engines. `--bilevel` (tone by lightness) is unchanged and takes precedence.
+
 ### Changed
 
 - **Fast mode is as fast as VTracer, with far fewer points.** A 1672×941 poster traces in

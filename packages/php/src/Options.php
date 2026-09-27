@@ -60,6 +60,15 @@ final class Options
      *     canvas is not painted, so the artwork sits on transparency. The tracer's default is
      *     false; leave it null to use that.
      *
+     * @param bool|null $monochrome Black artwork only: every colour that is not the background
+     *     is painted pure black, and the background, with every hole it shows through such as the
+     *     counters of letters, is white -- or transparent with no_background, which gives black
+     *     artwork on transparency with real holes. The edges are the colour trace's own, so a
+     *     light colour on white (yellow) is kept and no pale fringe is left around the black. The
+     *     background is the colour covering most of the image border, or transparency when the
+     *     border is transparent; on white-on-black art the white is the artwork and comes back
+     *     black. Off by default. The tracer's default is false; leave it null to use that.
+     *
      * @param bool|null $minify No ids or groups, no trailing zeros. Same geometry, typically
      *     about a tenth smaller. The tracer's default is false; leave it null to use that.
      *
@@ -132,6 +141,7 @@ final class Options
         public readonly ?float $timeBudget = null,
         public readonly ?float $margin = null,
         public readonly ?bool $noBackground = null,
+        public readonly ?bool $monochrome = null,
         public readonly ?bool $minify = null,
         public readonly ?bool $editability = null,
         public readonly ?bool $nativeAlpha = null,
@@ -176,6 +186,9 @@ final class Options
         }
         if ($this->noBackground !== null) {
             $set['no_background'] = $this->noBackground;
+        }
+        if ($this->monochrome !== null) {
+            $set['monochrome'] = $this->monochrome;
         }
         if ($this->minify !== null) {
             $set['minify'] = $this->minify;

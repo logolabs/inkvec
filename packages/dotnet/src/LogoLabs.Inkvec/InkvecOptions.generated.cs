@@ -86,6 +86,18 @@ namespace LogoLabs.Inkvec
         public bool? NoBackground { get; set; }
 
         /// <summary>
+        /// Black artwork only: every colour that is not the background is painted pure black, and the
+        /// background, with every hole it shows through such as the counters of letters, is white -- or
+        /// transparent with no_background, which gives black artwork on transparency with real holes.
+        /// The edges are the colour trace's own, so a light colour on white (yellow) is kept and no
+        /// pale fringe is left around the black. The background is the colour covering most of the
+        /// image border, or transparency when the border is transparent; on white-on-black art the
+        /// white is the artwork and comes back black. Off by default.
+        /// The tracer's default is false; leave this null to use it.
+        /// </summary>
+        public bool? Monochrome { get; set; }
+
+        /// <summary>
         /// No ids or groups, no trailing zeros. Same geometry, typically about a tenth smaller.
         /// The tracer's default is false; leave this null to use it.
         /// </summary>
@@ -230,6 +242,12 @@ namespace LogoLabs.Inkvec
                 if (!first) sb.Append(',');
                 first = false;
                 sb.Append("\"no_background\":").Append(NoBackground.Value ? "true" : "false");
+            }
+            if (Monochrome.HasValue)
+            {
+                if (!first) sb.Append(',');
+                first = false;
+                sb.Append("\"monochrome\":").Append(Monochrome.Value ? "true" : "false");
             }
             if (Minify.HasValue)
             {

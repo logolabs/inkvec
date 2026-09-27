@@ -96,6 +96,10 @@ pub struct Args {
     pub editability: bool,
     /// Two-tone output (the Potrace-comparable mode).
     pub bilevel: bool,
+    /// Paint every ink that is not the ground black, on a white ground -- or on
+    /// transparency with `no_background`. Applied to the finished colour trace, so the
+    /// edges are the colour trace's own. See `crate::mono`.
+    pub monochrome: bool,
     /// Skip gradient fitting entirely and fill flat.
     pub no_gradients: bool,
     /// Skip the self-crossing ring repair pass that runs after fitting.
@@ -207,6 +211,7 @@ impl Default for Args {
             minify: false,
             editability: false,
             bilevel: false,
+            monochrome: false,
             no_gradients: false,
             no_repair: false,
             merge_distance: inkvec_trace::color::DEFAULT_MERGE_DISTANCE,
@@ -364,7 +369,19 @@ OPTIONS:
                             colour after =. A gradient is its stops joined by >, and
                             '#f00>#00f,#0a0=@1' continues that gradient over the green.
                             Colours are matched to the nearest ink
-        --bilevel           Two-tone output (the Potrace-comparable mode)
+        --monochrome        Black artwork on a white ground: every colour that is not
+                            the background is painted pure black, and the background
+                            and everything the background colour shows through (the
+                            counters of letters) is white. With --no-background the
+                            ground is transparent instead, so counters are real holes.
+                            The edges are the colour trace's own, so a light ink on
+                            white (yellow) is kept and no pale fringe is left around the
+                            black. The ground is the colour covering most of the image
+                            border, or transparency when the border is transparent; on a
+                            white-on-black image the white is the artwork
+        --bilevel           Two-tone output by lightness alone (the Potrace-comparable
+                            mode, for scans, stamps and signatures). Takes precedence
+                            over --monochrome
         --no-gradients      Skip gradient fitting entirely and fill flat. A genuine
                             fast path: gradient fitting dominates runtime
         --no-repair         Skip the self-crossing ring repair pass that runs after
@@ -511,6 +528,7 @@ fn parse_args_from(mut it: impl Iterator<Item = String>) -> Result<Args, String>
             "--minify" => a.minify = true,
             "--editability" => a.editability = true,
             "--bilevel" => a.bilevel = true,
+            "--monochrome" => a.monochrome = true,
             "--lossy" => {
                 let v = it.next().ok_or("--lossy needs auto, on or off")?;
                 a.lossy = v
@@ -687,6 +705,8 @@ mod tests {
     fn flags_set_their_fields() {
         let a = parse("logo.png --tau 3 --cutout -o out.svg --restore on --colors 8 -q")
             .expect("parses");
+        assert!(!a.monochrome);
+        assert!(parse("logo.png --monochrome").expect("parses").monochrome);
         assert!((a.tau - 3.0).abs() < 1e-12);
         assert!(a.cutout && a.quiet);
         assert!(a.harmonize);

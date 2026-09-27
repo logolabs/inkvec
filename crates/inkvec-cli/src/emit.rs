@@ -26,7 +26,7 @@ use inkvec_trace::gradient;
 use crate::alpha::{unmatte, AlphaRamp};
 use crate::colour_name;
 use crate::pathdata::{fmt_path, fmt_ring, fmt_ring_with};
-use crate::rings::{containment, point_in_ring, ring_area, ring_infos, ring_inside, ring_points};
+use crate::rings::{point_in_ring, ring_area};
 use crate::seams;
 use crate::{FaceRings, Layers, Ring};
 
@@ -57,7 +57,7 @@ use crate::{FaceRings, Layers, Ring};
 const EMIT_DECIMALS: usize = 2;
 
 /// Smallest area, in square pixels, that a ring has to enclose to be worth emitting.
-const MIN_RING_AREA: f64 = 0.25;
+pub(crate) const MIN_RING_AREA: f64 = 0.25;
 
 pub(crate) fn emit_decimals(_precision: f64) -> usize {
     inkvec_core::env::count("INKVEC_EMIT_DECIMALS").unwrap_or(EMIT_DECIMALS)
@@ -447,48 +447,14 @@ pub(crate) fn emit_color(
 ) -> String {
     let decimals = emit_decimals(precision);
 
-    let pts: Vec<Vec<Vec<Point>>> = order
-        .iter()
-        .map(|face| face.iter().map(|r| ring_points(r, fitted)).collect())
-        .collect();
-
-    // Painted rings per face (holes dropped: in a partition every hole is another
-    // face's outer boundary, painted later and on top).
-    //
-    // A ring enclosing no area is dropped outright. The planar map can produce faces one
-    // pixel wide whose boundary walks out along a chain and straight back, and those were
-    // being emitted as paths like `M35.5,11.5 L37.5,10.5 Z` — twenty-seven of them on a
-    // plain green circle. They paint nothing at any resolution and cost coordinates, an
-    // id, and a line in the document a person has to read past.
-    //
-    // The threshold is far below a pixel so that genuinely thin features survive: a
-    // sliver forty pixels long and a third of a pixel wide still encloses about 13px^2.
-    let solid: Vec<Vec<usize>> = (0..order.len())
-        .map(|i| {
-            (0..order[i].len())
-                .filter(|&k| pts[i][k].len() >= 3 && ring_area(&pts[i][k]) > MIN_RING_AREA)
-                .collect()
-        })
-        .collect();
-    // `outer` is the face's outline: the rings not contained in another of its own. It
-    // decides containment and paint order.
-    // Every containment test below reads these, measured once per ring: a face with a
-    // thousand holes, or a document of four thousand faces, asks about each ring thousands
-    // of times, and measuring it afresh each time was two thirds of a fast trace.
-    let info = ring_infos(&pts);
-    let outer: Vec<Vec<usize>> = (0..order.len())
-        .map(|i| {
-            solid[i]
-                .iter()
-                .copied()
-                .filter(|&k| {
-                    !solid[i]
-                        .iter()
-                        .any(|&m| m != k && ring_inside(&info[i][k], &pts[i][m], &info[i][m]))
-                })
-                .collect()
-        })
-        .collect();
+    // Painted rings per face, which contain which, and the faces they nest in: see
+    // `crate::rings::nesting`.
+    let crate::rings::Nesting {
+        pts,
+        info,
+        outer,
+        parent,
+    } = crate::rings::nesting(order, fitted);
 
     // Drawing the holes too — making each path self-contained so any face could be
     // dropped freely — was tried and reverted. It fixes interior transparency and costs
@@ -497,7 +463,6 @@ pub(crate) fn emit_color(
     // another of the same face is not reliably a hole, and punching it makes one anyway.
     let drawn = &outer;
 
-    let parent = containment(&pts, &info, &outer);
     // A transparent face is a hole, not a colour.
     //
     // This emitter is *stacked*: a face's hole is drawn by painting the face inside it on
@@ -1458,16 +1423,28 @@ pub(crate) fn emit_color(
 }
 
 /// Bilevel output: every contour as one path with `evenodd`, so holes fall out of the
-/// winding rather than needing to be detected and paired up.
-pub(crate) fn emit_bilevel(paths: &[Vec<Point>], w: usize, h: usize, precision: f64) -> String {
+/// winding rather than needing to be detected and paired up. `paper` writes the white
+/// canvas rectangle under it.
+pub(crate) fn emit_bilevel(
+    paths: &[Vec<Point>],
+    w: usize,
+    h: usize,
+    precision: f64,
+    paper: bool,
+) -> String {
     let decimals = emit_decimals(precision);
     let mut d = String::new();
     for pts in paths {
         fmt_path(pts, decimals, &mut d);
     }
+    let rect = if paper {
+        format!("<rect x=\"-0.5\" y=\"-0.5\" width=\"{w}\" height=\"{h}\" fill=\"#ffffff\"/>")
+    } else {
+        String::new()
+    };
     // See emit_color: pixel-centre coordinates, so the canvas origin is (-0.5, -0.5).
     format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"-0.5 -0.5 {w} {h}\" width=\"{w}\" height=\"{h}\"><rect x=\"-0.5\" y=\"-0.5\" width=\"{w}\" height=\"{h}\" fill=\"#ffffff\"/><path d=\"{d}\" fill=\"#000000\" fill-rule=\"evenodd\"/></svg>"
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"-0.5 -0.5 {w} {h}\" width=\"{w}\" height=\"{h}\">{rect}<path d=\"{d}\" fill=\"#000000\" fill-rule=\"evenodd\"/></svg>"
     )
 }
 

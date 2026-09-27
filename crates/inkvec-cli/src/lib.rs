@@ -30,6 +30,7 @@ mod editable;
 mod emit;
 mod fast;
 mod harmonize;
+mod mono;
 mod pathdata;
 mod post;
 mod rings;
@@ -520,6 +521,11 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
     let restore_note = pass.note;
     let restored = pass.restored;
     let mut probe = pass.probe;
+    // A probe is traced in colour, because it is measured against the colour input (see
+    // `trace_once`); under monochrome it decides and is then traced again as asked.
+    if args.monochrome {
+        probe = None;
+    }
     if args.sr == inkvec_sr::Mode::Off {
         // `auto` kept the input, and nothing else is going to look at it: the probe is the trace.
         if let Some(svg) = probe.take() {
@@ -555,12 +561,24 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
     // `auto` needs a trace before it can decide, so it produces one and keeps it
     // when the input turns out to be undamaged -- the common case pays one trace
     // and never touches the upscaler.
+    let mut sr_on = args.sr != inkvec_sr::Mode::Off;
     if args.sr == inkvec_sr::Mode::Auto {
         let probe = match probe.take() {
             Some(p) => p,
             None => trace_once(&img, args)?,
         };
         match inkvec_sr::decide(&img, &probe, args.sr_threshold) {
+            // The probe is a colour trace; a monochrome one is traced below, uncleaned.
+            inkvec_sr::Decision::Keep { residual } if args.monochrome => {
+                sr_note = Some(match residual {
+                    Some(r) => format!(
+                        "sr            residual {r:.3} <= {:.3}, traced directly",
+                        args.sr_threshold
+                    ),
+                    None => "sr            could not measure the fit; traced directly".into(),
+                });
+                sr_on = false;
+            }
             inkvec_sr::Decision::Keep { residual } => {
                 let note = match residual {
                     Some(r) => format!(
@@ -591,7 +609,7 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
         }
     }
 
-    if args.sr != inkvec_sr::Mode::Off {
+    if sr_on {
         let up = build_upscaler(args)?;
         let opt = inkvec_sr::Options {
             out_scale: args.sr_scale,
@@ -619,7 +637,7 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
     // produced -- while the viewBox stays at the (capped) size the tracer actually saw.
     let (display_w, display_h) = if replicated {
         (display_w, display_h)
-    } else if args.sr != inkvec_sr::Mode::Off {
+    } else if sr_on {
         (img.width, img.height)
     } else {
         (display_w, display_h)
@@ -943,7 +961,21 @@ fn build_restorer(
 }
 
 /// Trace without any of the pre-pass logic, for `auto` to measure.
+///
+/// Always in colour: `auto` compares the probe with the input, and a monochrome drawing
+/// disagrees with a colour input everywhere it is not black or white, which would read as
+/// damage on every image. A monochrome trace discards the probe and traces again.
 fn trace_once(img: &inkvec_trace::Rgba, args: &Args) -> Result<String, Stop> {
+    let colour_args;
+    let args = if args.monochrome {
+        colour_args = Args {
+            monochrome: false,
+            ..args.clone()
+        };
+        &colour_args
+    } else {
+        args
+    };
     let cfg = fit_config(img, args);
     if args.bilevel {
         Ok(run_bilevel(img, args, &cfg).0)

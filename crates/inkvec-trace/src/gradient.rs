@@ -1266,6 +1266,34 @@ fn visible_contrast(model: &FillModel, s: &Samples) -> f64 {
     (0..3).map(|k| (hi[k] - lo[k]) as f64).fold(0.0, f64::max)
 }
 
+/// The linear, radial and elliptic ramps for the samples in one interpolation space, in
+/// that order, with the samples' colours in that space. The radial fit (and the elliptic
+/// one it seeds) runs beside the linear one.
+fn ramp_models(s: &Samples, w: usize, space: Interp) -> (Interp, Vec<[f64; 3]>, Vec<FillModel>) {
+    let cols = s.colors(space);
+    let ((radial, elliptic), linear) = rayon::join(
+        || {
+            let t_r = inkvec_core::clock::Instant::now();
+            let radial = fit_radial(s, &cols, space, w);
+            tick(&FIT_NS_RADIAL, t_r);
+            let t_e = inkvec_core::clock::Instant::now();
+            let elliptic = radial
+                .as_ref()
+                .and_then(|r| fit_radial_elliptic(s, &cols, space, r));
+            tick(&FIT_NS_ELLIPTIC, t_e);
+            (radial, elliptic)
+        },
+        || {
+            let t_l = inkvec_core::clock::Instant::now();
+            let linear = fit_linear(s, &cols, space);
+            tick(&FIT_NS_LINEAR, t_l);
+            linear
+        },
+    );
+    let cands = [linear, radial, elliptic].into_iter().flatten().collect();
+    (space, cols, cands)
+}
+
 /// Every admissible candidate for the samples, flat first.
 fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> Vec<FillFit> {
     let sigma = if sigma > 0.0 { sigma } else { 0.5 / 255.0 };
@@ -1319,30 +1347,7 @@ fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> 
     use rayon::prelude::*;
     let per_space: Vec<(Interp, Vec<[f64; 3]>, Vec<FillModel>)> = INTERPS
         .par_iter()
-        .map(|&space| {
-            let cols = s.colors(space);
-            let ((radial, elliptic), linear) = rayon::join(
-                || {
-                    let t_r = inkvec_core::clock::Instant::now();
-                    let radial = fit_radial(s, &cols, space, w);
-                    tick(&FIT_NS_RADIAL, t_r);
-                    let t_e = inkvec_core::clock::Instant::now();
-                    let elliptic = radial
-                        .as_ref()
-                        .and_then(|r| fit_radial_elliptic(s, &cols, space, r));
-                    tick(&FIT_NS_ELLIPTIC, t_e);
-                    (radial, elliptic)
-                },
-                || {
-                    let t_l = inkvec_core::clock::Instant::now();
-                    let linear = fit_linear(s, &cols, space);
-                    tick(&FIT_NS_LINEAR, t_l);
-                    linear
-                },
-            );
-            let cands = [linear, radial, elliptic].into_iter().flatten().collect();
-            (space, cols, cands)
-        })
+        .map(|&space| ramp_models(s, w, space))
         .collect();
     let jobs: Vec<(Interp, &[[f64; 3]], &FillModel)> = per_space
         .iter()

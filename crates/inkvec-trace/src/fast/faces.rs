@@ -151,7 +151,29 @@ pub(crate) fn despeckle(labels: &mut [u16], w: usize, h: usize, min_size: usize)
 
 /// Largest distance (sRGB and opacity, Euclidean) from a pixel to the line between two
 /// neighbouring inks for the pixel to count as a blend of them.
-const BLEND_TOL: f32 = 0.04;
+pub(crate) const BLEND_TOL: f32 = 0.04;
+
+/// `col` read as a blend of inks `a` and `b` (sRGB and opacity): how much of `b` it holds,
+/// clamped to [0, 1], and its squared distance from the line between them. `None` when the
+/// two inks are one colour.
+pub(crate) fn blend_of(col: [f32; 4], a: [f32; 4], b: [f32; 4]) -> Option<(f32, f32)> {
+    let ab: [f32; 4] = std::array::from_fn(|k| b[k] - a[k]);
+    let l2: f32 = ab.iter().map(|v| v * v).sum();
+    if l2 < 1e-9 {
+        return None;
+    }
+    let t = ((0..4).map(|k| (col[k] - a[k]) * ab[k]).sum::<f32>() / l2).clamp(0.0, 1.0);
+    let d = (0..4)
+        .map(|k| (col[k] - (a[k] + t * ab[k])).powi(2))
+        .sum::<f32>();
+    Some((t, d))
+}
+
+/// Whether `col` is a blend of inks `a` and `b`: within [`BLEND_TOL`] of the line between
+/// them.
+pub(crate) fn is_blend(col: [f32; 4], a: [f32; 4], b: [f32; 4]) -> bool {
+    blend_of(col, a, b).is_some_and(|(_, d)| d <= BLEND_TOL * BLEND_TOL)
+}
 
 /// Put anti-aliasing slivers back where they belong.
 ///
@@ -218,16 +240,9 @@ pub(crate) fn absorb_slivers(
             let ia = inks[a as usize];
             consider(a, d2(col, ia));
             for &b in &around[i + 1..] {
-                let ib = inks[b as usize];
-                let ab: Vec<f32> = (0..4).map(|k| ib[k] - ia[k]).collect();
-                let l2: f32 = ab.iter().map(|v| v * v).sum();
-                if l2 < 1e-9 {
+                let Some((t, d)) = blend_of(col, ia, inks[b as usize]) else {
                     continue;
-                }
-                let t =
-                    ((0..4).map(|k| (col[k] - ia[k]) * ab[k]).sum::<f32>() / l2).clamp(0.0, 1.0);
-                let on: [f32; 4] = std::array::from_fn(|k| ia[k] + t * ab[k]);
-                let d = d2(col, on);
+                };
                 // The blend goes to the ink it is mostly made of.
                 consider(if t < 0.5 { a } else { b }, d);
             }

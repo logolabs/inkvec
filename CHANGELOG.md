@@ -7,6 +7,29 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-27
+
+### Added
+
+- **Studio: Quality or Fast**, one choice beside the Denoiser in the Result rail, in the
+  desktop app and in the browser. Quality is the tracer as before and stays the default;
+  Fast traces each shape in one pass, for previews, batches and very large images. The
+  choice is remembered with the other trace controls, and in Fast the Tune controls that
+  steer only Quality's stages say so.
+
+### Fixed
+
+- **Inkvec Studio for Apple-silicon Macs** is in this release. 0.2.0 shipped without its
+  `.dmg` and `.app`: the build script expanded an empty argument list, which the macOS
+  runners' bash 3.2 treats as an error, and the release carried on without that row. The
+  Intel Mac app, and the command line on every platform, were not affected.
+- **The Studio's third-party notices** come out the same on every machine that writes them;
+  build scripts and proc macros, which cargo resolves for the build machine, are listed once
+  for all platforms and marked as build tools.
+- **Continuous integration** is green again: the PHP and Studio tests know the `mode`
+  option, the bundled guide is checked with the Markdown and Pygments it was built with,
+  and the Studio's Rust is formatted.
+
 ## [0.2.0] - 2026-09-26
 
 ### Added
@@ -94,8 +117,16 @@ API in particular should be treated as unstable release to release).
   are desktop-only and hidden. Full screen and "Open in its own tab" in the top bar.
   `npm run build:web` in `studio/` builds the site; `scripts/deploy-space.py` uploads it.
   In Hugging Face's frame a thin rule separates it from their header; "Inkvec home" returns
-  to the front page and "Desktop app" points to the releases. The loading screen is the
-  desktop splash.
+  to the front page and "Desktop app" points to the releases. It has a loading screen of its
+  own, one bar driven by the engine's real download and start (it opens in about 1 s instead
+  of about 3 s). The denoiser's model and ONNX Runtime Web download in the background from
+  the moment the page loads, into Cache Storage (not with the browser's Save-Data on); a
+  trace that wants the denoiser sooner shows the download's progress and traces again when
+  it is ready.
+- **Studio: choices are remembered**, in the desktop app and in the browser: the trace
+  controls, the preset, the tab and rail tab, the viewer's modes, export, Minify and
+  Fabricate choices, and the desktop window's size and place. Each value is read on its own,
+  so one bad value no longer resets the whole file; Reset keeps saved presets.
 - **The Space's front page**: what Inkvec is, what is new, and a before-and-after gallery
   of 92 cases in one scrolling panel (50 brand logos, the benchmark's 21 cases, 21 more
   icons and emoji, chosen by a fixed seed rather than by result), with fill, wireframe,

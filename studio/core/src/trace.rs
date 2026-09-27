@@ -1062,6 +1062,56 @@ mod tests {
         out.into_inner()
     }
 
+    /// A lucide icon: line art the stroke tracer takes rather than declines. Drawn shapes
+    /// with an even pen were tried here first and are refused by its fill-versus-stroke
+    /// test at this size; a real icon from the evaluation corpus is not.
+    fn line_art_png() -> Vec<u8> {
+        include_bytes!("../../../bench/data/corpus_raster/lucide/256ss/app-window-mac.png").to_vec()
+    }
+
+    /// Black & white and line art take their own routes through the engine, which read no
+    /// engine mode: the Tune tab relies on this to show Quality's controls in Fast while
+    /// either is on (see `appliesTo` in `src/lib/state.ts`). The colour trace is checked to
+    /// differ, or the comparison would say nothing.
+    #[test]
+    fn black_and_white_and_line_art_trace_the_same_in_either_engine() {
+        use crate::options::TraceMode::{Fast, Quality};
+        let svg = |png: Vec<u8>, s: Settings| {
+            let src = Arc::new(Source::open(png, None).unwrap());
+            match run_at(
+                &src,
+                &s,
+                Tier::Final,
+                None,
+                MeasureLevel::Summary,
+                |_, _| {},
+            ) {
+                Outcome::Traced(t) => t.svg,
+                other => panic!("{other:?}"),
+            }
+        };
+        let with = |mode, black_and_white, line_art| Settings {
+            mode,
+            black_and_white,
+            line_art,
+            ..Settings::default()
+        };
+        assert_ne!(
+            svg(sample_png(), with(Quality, false, false)),
+            svg(sample_png(), with(Fast, false, false))
+        );
+        assert_eq!(
+            svg(sample_png(), with(Quality, true, false)),
+            svg(sample_png(), with(Fast, true, false))
+        );
+        let stroked = svg(line_art_png(), with(Quality, false, true));
+        assert!(
+            stroked.contains("stroke-width"),
+            "the icon was not taken as line art: {stroked}"
+        );
+        assert_eq!(stroked, svg(line_art_png(), with(Fast, false, true)));
+    }
+
     #[test]
     fn every_internal_stage_name_lands_on_a_named_stage() {
         // The names the pipeline marks today. An unknown one must still map to something

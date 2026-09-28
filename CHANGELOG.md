@@ -30,6 +30,10 @@ API in particular should be treated as unstable release to release).
 - **Studio: dark artwork on a transparent background is previewed on a light checkerboard**, as
   the Minify tab already did, so black-on-transparent output is visible on the dark stage.
   Only the preview changes; the SVG stays black on true transparency.
+- **Studio: the colour difference ignores a background removed on purpose.** With Transparent
+  background on, pixels the SVG leaves fully clear are left out of the dE00 numbers and the
+  difference map; the removed ground used to read as a mean dE00 above 30 (a black signature
+  on white scored 31.9).
 - **Studio: live progress while a trace runs.** The elapsed time counts up ten times a second
   from the moment a trace is asked for, and the stage the engine is running shows the moment
   it starts, with its own running time and, for the long loops, how far through it is

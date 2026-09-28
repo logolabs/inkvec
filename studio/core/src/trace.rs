@@ -992,7 +992,9 @@ impl Measured {
             || {
                 let analysis = raster
                     .as_deref()
-                    .and_then(|r| quality::analyse(r, svg).ok());
+                    .and_then(|r| {
+                        quality::analyse(r, svg, settings.transparent_background).ok()
+                    });
                 let losses = match (full, raster.as_deref(), analysis.as_ref()) {
                     (true, Some(r), Some(a)) => lost::detect(r, a, svg, settings, source.container),
                     _ => Vec::new(),

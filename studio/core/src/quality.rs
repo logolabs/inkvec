@@ -257,7 +257,16 @@ pub struct Analysis {
 }
 
 /// Compare the raster the tracer saw with a render of the SVG it wrote.
-pub fn analyse(source: &inkvec_trace::Rgba, svg: &str) -> Result<Analysis, String> {
+///
+/// `mask_clear`: the background was removed on purpose (Transparent background), so a
+/// pixel the SVG leaves fully clear is not a difference. It is left out of the numbers and
+/// shows as zero in the map; without the mask the removed ground, grey on the matte against
+/// the source's white, read as a mean dE00 of 30 and more.
+pub fn analyse(
+    source: &inkvec_trace::Rgba,
+    svg: &str,
+    mask_clear: bool,
+) -> Result<Analysis, String> {
     let (w, h) = (source.width as u32, source.height as u32);
     let rendered = render(svg, w, h)?;
 
@@ -265,14 +274,32 @@ pub fn analyse(source: &inkvec_trace::Rgba, svg: &str) -> Result<Analysis, Strin
     if source.data.len() < n * 4 {
         return Err("the source raster is shorter than its own dimensions".into());
     }
-    let deltas = pixel_deltas(&source.data, &rendered, w as usize, n);
+    let mut deltas = pixel_deltas(&source.data, &rendered, w as usize, n);
+    let counted: Vec<f32> = if mask_clear {
+        for (i, d) in deltas.iter_mut().enumerate() {
+            if rendered[i * 4 + 3] == 0 {
+                *d = 0.0;
+            }
+        }
+        (0..n)
+            .filter(|&i| rendered[i * 4 + 3] != 0)
+            .map(|i| deltas[i])
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let stats: &[f32] = if mask_clear && !counted.is_empty() {
+        &counted
+    } else {
+        &deltas
+    };
 
     // The mean is summed in order, one pixel after another, so it is the same number
     // however the map above was split across threads.
     let ((mean, (median, worst)), corner) = rayon::join(
         || {
-            let mean = deltas.iter().map(|d| *d as f64).sum::<f64>() / n as f64;
-            (mean, median_and_p99(&deltas))
+            let mean = stats.iter().map(|d| *d as f64).sum::<f64>() / stats.len().max(1) as f64;
+            (mean, median_and_p99(stats))
         },
         || worst_corner(&deltas, w, h),
     );
@@ -1261,7 +1288,7 @@ mod tests {
     fn comparing_an_svg_with_itself_is_zero() {
         let rendered = render(SVG, 64, 64).unwrap();
         let source = inkvec_trace::rgba8_capped(&rendered, 64, 64, 0);
-        let a = analyse(&source, SVG).unwrap();
+        let a = analyse(&source, SVG, false).unwrap();
         assert!(a.mean < 0.01, "{}", a.mean);
         assert!(a.median < 0.01, "{}", a.median);
         assert!(a.corner.is_none(), "a perfect trace has no worst corner");
@@ -1272,9 +1299,25 @@ mod tests {
         let other = SVG.replace("#14453f", "#8a2f2f");
         let rendered = render(SVG, 64, 64).unwrap();
         let source = inkvec_trace::rgba8_capped(&rendered, 64, 64, 0);
-        let a = analyse(&source, &other).unwrap();
+        let a = analyse(&source, &other, false).unwrap();
         assert!(a.mean > 1.0, "{}", a.mean);
         assert!(a.corner.is_some());
+    }
+
+    #[test]
+    fn a_removed_background_is_masked_out_when_asked() {
+        // Black square on white; the trace keeps the square and leaves the ground clear.
+        let with_ground = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 64\">\
+            <rect width=\"64\" height=\"64\" fill=\"#ffffff\"/>\
+            <rect x=\"16\" y=\"16\" width=\"32\" height=\"32\" fill=\"#000000\"/></svg>";
+        let cut = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 64\">\
+            <rect x=\"16\" y=\"16\" width=\"32\" height=\"32\" fill=\"#000000\"/></svg>";
+        let source = inkvec_trace::rgba8_capped(&render(with_ground, 64, 64).unwrap(), 64, 64, 0);
+        let unmasked = analyse(&source, cut, false).unwrap();
+        assert!(unmasked.mean > 10.0, "{}", unmasked.mean);
+        let masked = analyse(&source, cut, true).unwrap();
+        assert!(masked.mean < 0.01, "{}", masked.mean);
+        assert!(masked.corner.is_none());
     }
 
     /// The two selections must land on exactly the values a full sort puts at the two

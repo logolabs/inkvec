@@ -137,32 +137,37 @@ fn to_stops(p: Oklab, stops: &[[f32; 3]]) -> f32 {
     }
 }
 
+/// The ground: `None` for transparency (most of the border clear, or no border at all),
+/// else the face whose colour covers the most border.
+fn ground_face(ev: &Evidence, means: &[Oklab]) -> Option<usize> {
+    let n = ev.stops.len();
+    let clear = |f: usize| ev.see_through.get(f).copied().unwrap_or(false);
+    let border = |f: usize| ev.border.get(f).copied().unwrap_or(0);
+    let total: usize = (0..n).map(border).sum();
+    let clear_border: usize = (0..n).filter(|&f| clear(f)).map(border).sum();
+    if total == 0 || 2 * clear_border >= total {
+        return None;
+    }
+    let on_border: Vec<usize> = (0..n).filter(|&f| border(f) > 0 && !clear(f)).collect();
+    let share = |g: usize| -> usize {
+        on_border
+            .iter()
+            .filter(|&&f| to_stops(means[f], &ev.stops[g]) <= SAME_COLOUR)
+            .map(|&f| border(f))
+            .sum()
+    };
+    on_border
+        .iter()
+        .copied()
+        .max_by_key(|&g| (share(g), border(g), std::cmp::Reverse(g)))
+}
+
 /// The tone of every face. See the module documentation for the rules.
 pub(crate) fn decide(ev: &Evidence) -> Ground {
     let n = ev.stops.len();
     let clear = |f: usize| ev.see_through.get(f).copied().unwrap_or(false);
     let means: Vec<Oklab> = ev.stops.iter().map(|s| mean(s)).collect();
-    let border = |f: usize| ev.border.get(f).copied().unwrap_or(0);
-
-    // The ground: transparency, or the colour covering the most border.
-    let total: usize = (0..n).map(border).sum();
-    let clear_border: usize = (0..n).filter(|&f| clear(f)).map(border).sum();
-    let ground: Option<usize> = if total == 0 || 2 * clear_border >= total {
-        None
-    } else {
-        let on_border: Vec<usize> = (0..n).filter(|&f| border(f) > 0 && !clear(f)).collect();
-        let share = |g: usize| -> usize {
-            on_border
-                .iter()
-                .filter(|&&f| to_stops(means[f], &ev.stops[g]) <= SAME_COLOUR)
-                .map(|&f| border(f))
-                .sum()
-        };
-        on_border
-            .iter()
-            .copied()
-            .max_by_key(|&g| (share(g), border(g), std::cmp::Reverse(g)))
-    };
+    let ground = ground_face(ev, &means);
 
     let thin = |f: usize| ev.width.get(f).is_some_and(|&w| w < THIN_WIDTH);
     let parent = |f: usize| ev.parent.get(f).copied().flatten().filter(|&p| p < n);

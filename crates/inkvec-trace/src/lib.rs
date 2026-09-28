@@ -1146,13 +1146,8 @@ pub(crate) fn finish_color_trace_alpha(
 
     let mut map = planar::build(&labels, img.width, img.height, n_faces);
     sw.mark("build_map");
-    progress::note(|| {
-        format!(
-            "{} boundaries between {} faces",
-            map.edges.len(),
-            map.n_labels
-        )
-    });
+    let (edges, faces) = (map.edges.len(), map.n_labels);
+    progress::note(|| format!("{edges} boundaries between {faces} faces"));
     // Found here, on the lattice the extractor produced, where the comparison is exact.
     // Applied further down, once every stage that can break a tie has had its turn.
     let sym = symmetry::detect(&map, &labels, &face_color);
@@ -1193,12 +1188,8 @@ pub(crate) fn finish_color_trace_alpha(
     };
     sw.mark("boundary_opt");
     if let Some(r) = boundary_opt.as_ref() {
-        progress::note(|| {
-            format!(
-                "energy {:.0} to {:.0} in {} iterations",
-                r.before, r.after, r.iters
-            )
-        });
+        let (from, to, n) = (r.before, r.after, r.iters);
+        progress::note(|| format!("energy {from:.0} to {to:.0} in {n} iterations"));
     }
 
     // A face too thin to own a fully covered pixel never had its colour read off the

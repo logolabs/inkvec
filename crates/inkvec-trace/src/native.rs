@@ -1540,7 +1540,6 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
     let min_region = opts.min_region;
     let mut sw = Stopwatch::start();
     inkvec_core::progress::begin("palette");
-
     let edge_width = coverage::intake_scale(&rgb, w, h);
     let ringing = coverage::ringing_score(&rgb, w, h);
     let ringing_gate = if w.min(h) >= color::RINGING_MIN_DIM {
@@ -1591,11 +1590,9 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
     }
     sw.mark("labels");
     inkvec_core::progress::begin("despeckle");
-
     crate::despeckle(&mut labels, w, h, min_region);
     sw.mark("despeckle");
     inkvec_core::progress::begin("blend_absorb");
-
     if !inkvec_core::env::flag("INKVEC_NO_ABSORB") {
         let px4 = rgba_w(&rgb, alpha);
         let inks4 = ink_rgba_w(&pal);
@@ -1607,7 +1604,6 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
     }
     sw.mark("blend_absorb");
     inkvec_core::progress::begin("merge_bands");
-
     let (mut fills_by_label, mut label_ink) = if opts.gradients {
         gradient::bands::merge_gradient_bands_guarded(
             &mut labels,
@@ -1625,7 +1621,6 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
     };
     sw.mark("merge_bands");
     inkvec_core::progress::begin("carve");
-
     if opts.gradients && !inkvec_core::env::flag("INKVEC_NO_CARVE") {
         gradient::carve_residual_features_with_detail_noise(
             &mut labels,
@@ -1643,7 +1638,6 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
     }
     sw.mark("carve");
     inkvec_core::progress::begin("fades");
-
     let fade_of_label = if opts.gradients {
         merge_fades(
             &mut labels,
@@ -1662,7 +1656,6 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
     };
     sw.mark("fades");
     inkvec_core::progress::begin("split");
-
     let (labels, face_src) = crate::split_components(&labels, w, h);
     sw.mark("split");
     let n_faces = face_src.len();

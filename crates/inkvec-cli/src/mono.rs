@@ -576,7 +576,10 @@ mod tests {
 
     #[test]
     fn a_light_ink_on_white_is_still_ink() {
-        let g = decide(&evidence(&[(WHITE, None, 100, 50.0), (YELLOW, Some(0), 0, 9.0)]));
+        let g = decide(&evidence(&[
+            (WHITE, None, 100, 50.0),
+            (YELLOW, Some(0), 0, 9.0),
+        ]));
         assert_eq!(g.ink, [false, true]);
     }
 
@@ -607,7 +610,10 @@ mod tests {
     fn a_coloured_ground_is_the_ground() {
         // Black lettering straight on a red poster.
         let red = [0.9, 0.1, 0.1];
-        let g = decide(&evidence(&[(red, None, 100, 50.0), (BLACK, Some(0), 0, 5.0)]));
+        let g = decide(&evidence(&[
+            (red, None, 100, 50.0),
+            (BLACK, Some(0), 0, 5.0),
+        ]));
         assert_eq!(g.ink, [false, true]);
     }
 
@@ -642,14 +648,20 @@ mod tests {
         ev.neighbours[1].push(4);
         ev.neighbours[2].push(3);
         let g = decide(&ev);
-        assert!(!g.ink[3], "the counter is judged against the O, past its rim");
+        assert!(
+            !g.ink[3],
+            "the counter is judged against the O, past its rim"
+        );
         assert!(g.ink[1]);
     }
 
     #[test]
     fn a_hairline_that_is_its_own_colour_is_a_line() {
         // A one-pixel black rule on white is drawn, not absorbed into the ground.
-        let g = decide(&evidence(&[(WHITE, None, 100, 50.0), (BLACK, Some(0), 0, 1.0)]));
+        let g = decide(&evidence(&[
+            (WHITE, None, 100, 50.0),
+            (BLACK, Some(0), 0, 1.0),
+        ]));
         assert_eq!(g.ink, [false, true]);
     }
 

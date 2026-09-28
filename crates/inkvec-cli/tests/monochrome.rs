@@ -33,7 +33,13 @@ fn draw(paint: impl Fn(f32, f32) -> [f32; 4]) -> Rgba {
                 }
             }
             let a = acc[3] / (SS * SS) as f32;
-            let un = |v: f32| if a > 0.0 { v / (SS * SS) as f32 / a } else { 0.0 };
+            let un = |v: f32| {
+                if a > 0.0 {
+                    v / (SS * SS) as f32 / a
+                } else {
+                    0.0
+                }
+            };
             data.extend_from_slice(&[un(acc[0]), un(acc[1]), un(acc[2]), a]);
         }
     }
@@ -201,7 +207,10 @@ fn edges_sit_where_the_source_drew_them() {
         let mean = err / n as f32;
         eprintln!("{mode:?}: mean alpha error {mean:.4} over {n} edge pixels");
         assert!(n > 100, "{n} edge pixels");
-        assert!(mean < 0.12, "{mode:?}: mean alpha error {mean:.3} on edge pixels");
+        assert!(
+            mean < 0.12,
+            "{mode:?}: mean alpha error {mean:.3} on edge pixels"
+        );
     }
 }
 
@@ -224,4 +233,3 @@ fn black_art_through_the_canvas_corners_survives_no_background() {
         assert_eq!(px(&r, W / 2, 4)[3], 0.0, "{mode:?}: the ground is gone");
     }
 }
-

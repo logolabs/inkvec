@@ -274,7 +274,16 @@ pub fn analyse(
     if source.data.len() < n * 4 {
         return Err("the source raster is shorter than its own dimensions".into());
     }
-    let mut deltas = pixel_deltas(&source.data, &rendered, w as usize, n);
+    // With the ground removed, a soft edge is the artwork over the ground that was taken
+    // away, not over the grey matte: laid over the matte, a half-covered edge pixel reads
+    // darker than the source's own edge and a clean trace scored dE00 near 7.
+    let over_ground = if mask_clear {
+        over_removed_ground(&source.data, &rendered, n)
+    } else {
+        None
+    };
+    let compared = over_ground.as_deref().unwrap_or(&rendered);
+    let mut deltas = pixel_deltas(&source.data, compared, w as usize, n);
     let counted: Vec<f32> = if mask_clear {
         for (i, d) in deltas.iter_mut().enumerate() {
             if rendered[i * 4 + 3] == 0 {
@@ -314,6 +323,32 @@ pub fn analyse(
         worst,
         corner,
     })
+}
+
+/// The render laid over the colour the trace removed: the source's mean colour where the
+/// render is fully clear. `None` when nothing is clear, or when the source is itself
+/// transparent there (then the matte already stands in for the same nothing on both sides).
+fn over_removed_ground(source: &[f32], rendered: &[u8], n: usize) -> Option<Vec<u8>> {
+    let (mut sum, mut count) = ([0.0f64; 4], 0usize);
+    for i in (0..n).filter(|&i| rendered[i * 4 + 3] == 0) {
+        for (k, s) in sum.iter_mut().enumerate() {
+            *s += source[i * 4 + k] as f64;
+        }
+        count += 1;
+    }
+    if count == 0 || sum[3] / (count as f64) < 0.5 {
+        return None;
+    }
+    let ground = [0, 1, 2].map(|k| (sum[k] / count as f64 * 255.0) as f32);
+    let mut out = rendered.to_vec();
+    for px in out.chunks_exact_mut(4) {
+        let a = px[3] as f32 / 255.0;
+        for k in 0..3 {
+            px[k] = (px[k] as f32 * a + ground[k] * (1.0 - a)).round() as u8;
+        }
+        px[3] = 255;
+    }
+    Some(out)
 }
 
 /// dE00 for every pixel, row by row across the cores.
@@ -1318,6 +1353,18 @@ mod tests {
         let masked = analyse(&source, cut, true).unwrap();
         assert!(masked.mean < 0.01, "{}", masked.mean);
         assert!(masked.corner.is_none());
+
+        // Soft edges: the anti-aliased rim is compared over the removed white, not the matte.
+        let disc = |ground: &str| {
+            format!(
+                "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 64\">{ground}\
+                 <circle cx=\"31.3\" cy=\"32.6\" r=\"17.7\" fill=\"#000000\"/></svg>"
+            )
+        };
+        let white = "<rect width=\"64\" height=\"64\" fill=\"#ffffff\"/>";
+        let source = inkvec_trace::rgba8_capped(&render(&disc(white), 64, 64).unwrap(), 64, 64, 0);
+        let soft = analyse(&source, &disc(""), true).unwrap();
+        assert!(soft.mean < 0.5, "{}", soft.mean);
     }
 
     /// The two selections must land on exactly the values a full sort puts at the two

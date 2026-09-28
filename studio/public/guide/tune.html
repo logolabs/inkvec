@@ -183,8 +183,13 @@ OKLab colour space) to be treated as one ink.
 genuinely different colours were merged.</p>
 <p><strong>Flat fills instead of gradients</strong> (off). Skips gradient fitting and fills every region with one
 colour. For flat artwork, or when the SVG must not contain gradients.</p>
-<p><strong>Black &amp; white</strong> (off). Two inks only: the Potrace-style mode, for stamps, signatures and scans
-of print.</p>
+<p><strong>One colour (black)</strong> (off). Every shape that is not the background is drawn black, light
+colours included, on a white background; with <strong>Transparent background</strong> on, on nothing, so the
+artwork can be placed on any design. Lettering on a coloured panel is cut out of a black panel. For logos and
+lettering. The presets <em>One-colour logo</em> and <em>Black, no background</em> turn it on.</p>
+<p><strong>Two tones by lightness</strong> (off). Dark becomes black and light becomes white, like a photocopy,
+so light colours drop out: the Potrace-style mode, for stamps, signatures and scans of print (the
+<em>Two-tone scan</em> preset). It wins over One colour when both are on.</p>
 <p><strong>Trace transparency</strong> (on). Transparency is traced as it is: holes stay holes, every ink carries
 its own opacity, and soft shadows, glows and feathered edges come back as translucent fills. Turned
 off, the image is laid on a solid background first and traced as solid colours, which fills holes

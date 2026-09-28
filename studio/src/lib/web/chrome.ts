@@ -41,10 +41,25 @@ export function webDrops(store: Store, take: (files: File[]) => void): void {
     const files = [...(e.dataTransfer?.files ?? [])];
     if (files.length) take(files);
   });
+  pastedImages(take);
+}
+
+/**
+ * Ctrl+V anywhere outside a text field: an image copied from another app (a screenshot, a
+ * browser's "Copy image") arrives as a file on the clipboard. Used by the desktop app too.
+ */
+export function pastedImages(take: (files: File[]) => void): void {
   window.addEventListener("paste", (e) => {
     const target = e.target as HTMLElement | null;
     if (target?.closest?.("input, textarea, [contenteditable]")) return;
-    const files = [...(e.clipboardData?.files ?? [])];
+    let files = [...(e.clipboardData?.files ?? [])];
+    // Some webviews hand a copied bitmap over only as an item, not in `files`.
+    if (!files.length) {
+      files = [...(e.clipboardData?.items ?? [])]
+        .filter((i) => i.kind === "file")
+        .map((i) => i.getAsFile())
+        .filter((f): f is File => f !== null);
+    }
     if (!files.length) return;
     e.preventDefault();
     take(files);

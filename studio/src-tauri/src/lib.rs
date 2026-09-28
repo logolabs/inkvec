@@ -1242,8 +1242,8 @@ mod tests {
         // mark, the model installed for whoever runs the tests.
         let missing = std::env::temp_dir().join(format!("inkvec-no-model-{}", std::process::id()));
         let c = describe(denoiser::status_at(Some(missing)));
-        assert_eq!(c.controls.len(), 23);
-        assert_eq!(c.presets.len(), 8);
+        assert_eq!(c.controls.len(), 24);
+        assert_eq!(c.presets.len(), 10);
         assert_eq!(c.stages.len(), 9);
         assert_eq!(c.version, env!("CARGO_PKG_VERSION"));
         assert!(c.build_target.starts_with(std::env::consts::ARCH));

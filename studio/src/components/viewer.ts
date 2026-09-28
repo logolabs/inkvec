@@ -18,6 +18,7 @@ import { fill, h, s } from "../lib/dom";
 import { api } from "../lib/ipc";
 import { anchorStyle, nodesOf, shapesOf, viewBoxOf } from "../lib/path";
 import type { State, Store } from "../lib/state";
+import { toneOf } from "../views/minify";
 
 /** The zoom stops the toolbar offers, plus the range scroll can reach. */
 export const ZOOM_MIN = 0.25;
@@ -85,6 +86,8 @@ export function createViewer(store: Store): Viewer {
   let shownSource: State["source"] | undefined;
   /** The result whose bands the certainty layer holds, or is fetching. */
   let shownBands: State["result"] | undefined;
+  /** Bumped per drawing, so a backdrop reading for an older drawing is ignored. */
+  let toneRequest = 0;
   /** Bumped whenever a bands request in flight stops being wanted. */
   let bandsRequest = 0;
   /** The zoom the documents were last sized at. */
@@ -165,6 +168,14 @@ export function createViewer(store: Store): Viewer {
         }
       }
       fill(vectorArt, drawing, overlay);
+      // Black artwork on a transparent ground vanishes on the dark stage: pick the
+      // backdrop from the drawing, as Minify does. The preview only; the SVG is untouched.
+      const asked = ++toneRequest;
+      void (svg ? toneOf(svg) : Promise.resolve(null)).then((tone) => {
+        if (asked !== toneRequest) return;
+        panes.classList.toggle("onlight", tone === "light");
+        panes.classList.toggle("ondark", tone === "dark");
+      });
       overlay.setAttribute("viewBox", `${box.x} ${box.y} ${box.w} ${box.h}`);
       shapes = null;
       nodes = null;

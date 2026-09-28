@@ -85,13 +85,13 @@ export function autoSuggestions(input: SuggestInput): AutoSuggestion[] {
   }
 
   const inks = visibleInks(palette);
-  if (!settings.blackAndWhite && blackAndWhitePair(inks)) {
+  if (!settings.blackAndWhite && !settings.monochrome && blackAndWhitePair(inks)) {
     out.push({
       id: "bw",
       preset: "black-and-white",
       title: "Two colours, black and white",
       evidence: `${inks.length} inks cover the canvas`,
-      action: "Black & white",
+      action: "Two-tone scan",
     });
   }
 

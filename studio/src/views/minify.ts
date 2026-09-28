@@ -644,7 +644,8 @@ export async function toneOf(svg: string): Promise<"light" | "dark" | null> {
       weight += a;
       light += (a * (0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2])) / 255;
     }
-    if (weight < 20) return null;
+    // An opaque drawing covers its own backdrop, so no backdrop needs choosing for it.
+    if (weight < 20 || weight > 0.97 * size * size) return null;
     const mean = light / weight;
     return mean < 0.3 ? "light" : mean > 0.8 ? "dark" : null;
   } catch {

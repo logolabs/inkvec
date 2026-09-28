@@ -63,6 +63,7 @@ const DEFAULTS = {
   colourMerging: 0.035,
   flatFills: false,
   blackAndWhite: false,
+  monochrome: false,
   cleanUpDamage: "off",
   matchRepeatedShapes: true,
   matchThreshold: 0.92,
@@ -85,7 +86,9 @@ const PRESETS = [
   ["fine-detail", "Fine detail", "Filigree, crests", { precision: 0.05, traceSize: 2048 }],
   ["fewer-paths", "Fewer paths", "Smallest file", { fewerPaths: true, colourMerging: 0.07 }],
   ["photo-or-scan", "Photo or scan", "Photographed or screenshotted", { cleanUpDamage: "auto" }],
-  ["black-and-white", "Black & white", "Stamps, signatures", { blackAndWhite: true }],
+  ["monochrome", "One-colour logo", "Black artwork on white", { monochrome: true }],
+  ["monochrome-transparent", "Black, no background", "Black artwork, transparent", { monochrome: true, transparentBackground: true }],
+  ["black-and-white", "Two-tone scan", "Stamps, signatures, by lightness", { blackAndWhite: true }],
   ["line-art", "Line art", "Uniform-stroke drawings", { lineArt: true }],
   ["editable", "Editable", "Tidy nodes for an artist to edit", { editability: true }],
 ].map(([id, name, subtitle, patch]) => ({

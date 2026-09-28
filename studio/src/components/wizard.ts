@@ -230,7 +230,13 @@ const KINDS: { preset: PresetId; name: string; why: string; note?: string }[] = 
   { preset: "icon", name: "Icon", why: "A small flat mark: keeps one-pixel details, at most 16 colours." },
   { preset: "fine-detail", name: "Illustration or emoji", why: "Gradients and fine detail: curves fitted twice as closely." },
   { preset: "line-art", name: "Line art", why: "Even-width lines come back as strokes you can re-weight." },
-  { preset: "black-and-white", name: "Black & white", why: "Two inks: stamps, signatures, scans of print." },
+  { preset: "monochrome", name: "One-colour logo", why: "Every shape drawn black on white, light colours included." },
+  {
+    preset: "monochrome-transparent",
+    name: "Black, no background",
+    why: "Black artwork on a transparent background, ready to place on any design.",
+  },
+  { preset: "black-and-white", name: "Two-tone scan", why: "Split by lightness, like a photocopy: stamps, signatures." },
   {
     preset: "photo-or-scan",
     name: "Photo or scan",

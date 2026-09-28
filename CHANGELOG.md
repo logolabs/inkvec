@@ -7,6 +7,8 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-09-28
+
 ### Added
 
 - **Black & white and black-on-transparent output** (`--monochrome`, option `monochrome`;
@@ -18,6 +20,16 @@ API in particular should be treated as unstable release to release).
   opposite tone of what it sits on unless it is the same colour, so white-on-black art comes
   back as black letters and lettering on a coloured panel is knocked out of a black panel.
   Works in both engines. `--bilevel` (tone by lightness) is unchanged and takes precedence.
+- **Studio: One colour and its presets.** A "One colour (black)" switch under Colour, and two
+  presets and wizard tiles: *One-colour logo* (black artwork on white) and *Black, no
+  background* (black artwork on transparency). The older two-tone mode is renamed to say what
+  it does, *Two tones by lightness* / the *Two-tone scan* preset, so the two are not confused.
+  Cmd/Ctrl+1 to 9 and 0 pick the ten presets.
+- **Studio: paste an image with Ctrl+V** (Cmd+V) in the desktop app, as Studio Lite already
+  could: a screenshot or a browser's "Copy image" opens without saving it first.
+- **Studio: dark artwork on a transparent background is previewed on a light checkerboard**, as
+  the Minify tab already did, so black-on-transparent output is visible on the dark stage.
+  Only the preview changes; the SVG stays black on true transparency.
 - **Studio: live progress while a trace runs.** The elapsed time counts up ten times a second
   from the moment a trace is asked for, and the stage the engine is running shows the moment
   it starts, with its own running time and, for the long loops, how far through it is

@@ -30,7 +30,7 @@ import {
 import { appliesTo, initial, modKey, Store, type State } from "./lib/state";
 import { applyRemembered, currentInterface, traceForKeeping, watchRemembered } from "./lib/remember";
 import { APP_NAME, copyText, openExternal, pickedFile, pickedPath, pickFiles, WEB, type Picked } from "./lib/platform";
-import { markFramed, mountWebChrome, takeLaunch, webDrops, type Launch } from "./lib/web/chrome";
+import { markFramed, mountWebChrome, pastedImages, takeLaunch, webDrops, type Launch } from "./lib/web/chrome";
 import { Previews } from "./lib/previews";
 import { applyProgress, startClock, type TraceProgress } from "./lib/live";
 import { createRail, PROMOTED, type RailActions } from "./components/rail";
@@ -58,6 +58,7 @@ const DEFAULT_SETTINGS: Settings = {
   colourMerging: 0.035,
   flatFills: false,
   blackAndWhite: false,
+  monochrome: false,
   cleanUpDamage: "off",
   matchRepeatedShapes: true,
   matchThreshold: 0.92,
@@ -822,9 +823,9 @@ function keyboard(e: KeyboardEvent): void {
   }
   if (typing) return;
 
-  // ⌘1–⌘8 switch presets, for people who already know them.
-  if (mod && /^[1-8]$/.test(e.key)) {
-    const preset = store.state.caps?.presets[Number(e.key) - 1];
+  // ⌘1–⌘9 and ⌘0 switch presets, for people who already know them.
+  if (mod && /^[0-9]$/.test(e.key)) {
+    const preset = store.state.caps?.presets[(Number(e.key) + 9) % 10];
     if (preset) {
       e.preventDefault();
       store.set({ preset: preset.id, settings: { ...preset.settings } });
@@ -854,6 +855,7 @@ async function wireDragDrop(): Promise<void> {
     webDrops(store, (files) => void dropped(files.map(pickedFile)));
     return;
   }
+  pastedImages((files) => void dropped(files.map(pickedFile)));
   await getCurrentWebview().onDragDropEvent(async (event) => {
     if (event.payload.type === "over") {
       store.set({ dragging: true });

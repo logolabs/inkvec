@@ -45,7 +45,10 @@ export interface Settings {
   maxColours: number;
   colourMerging: number;
   flatFills: boolean;
+  /** Two tones by lightness (the engine's bilevel): scans, stamps, signatures. */
   blackAndWhite: boolean;
+  /** One colour: every shape that is not the background drawn black. */
+  monochrome: boolean;
   cleanUpDamage: Cleanup;
   matchRepeatedShapes: boolean;
   matchThreshold: number;
@@ -92,6 +95,8 @@ export type PresetId =
   | "fine-detail"
   | "fewer-paths"
   | "photo-or-scan"
+  | "monochrome"
+  | "monochrome-transparent"
   | "black-and-white"
   | "line-art"
   | "editable";

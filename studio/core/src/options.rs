@@ -76,8 +76,11 @@ pub struct Settings {
     pub colour_merging: f64,
     /// Flat fills instead of gradients.
     pub flat_fills: bool,
-    /// Black & white.
+    /// Two tones by lightness (the engine's `bilevel`): scans, stamps, signatures.
     pub black_and_white: bool,
+    /// One colour: every shape that is not the background drawn black (the engine's
+    /// `monochrome`), on white or, with a transparent background, on nothing.
+    pub monochrome: bool,
     /// Trace transparency natively (inks with opacity, the clear ground an ink of its
     /// own) instead of compositing onto a matte first.
     pub trace_transparency: bool,
@@ -199,6 +202,7 @@ impl Default for Settings {
             colour_merging: a.merge_distance as f64,
             flat_fills: a.no_gradients,
             black_and_white: a.bilevel,
+            monochrome: a.monochrome,
             // On, as the engine defaults. It was off for a while so a colour cap would not
             // spend a slot on the clear ground; that cost holes, gaps and translucency (a
             // ring's hole filled white, 5% of transparent pixels painted on emoji), and the
@@ -240,6 +244,7 @@ impl Settings {
             colour_merging,
             flat_fills,
             black_and_white,
+            monochrome,
             trace_transparency,
             clean_up_damage,
             match_repeated_shapes,
@@ -287,6 +292,7 @@ impl Settings {
             merge_distance: colour_merging as f32,
             no_gradients: flat_fills,
             bilevel: black_and_white,
+            monochrome,
             native_alpha: trace_transparency,
             restore: clean_up_damage.restore(),
             harmonize: match_repeated_shapes,
@@ -374,18 +380,22 @@ pub enum Preset {
     FewerPaths,
     PhotoOrScan,
     BlackAndWhite,
+    Monochrome,
+    MonochromeTransparent,
     LineArt,
     Editable,
 }
 
 impl Preset {
     /// Every preset, in the order the tray shows them.
-    pub const ALL: [Preset; 8] = [
+    pub const ALL: [Preset; 10] = [
         Preset::Logo,
         Preset::Icon,
         Preset::FineDetail,
         Preset::FewerPaths,
         Preset::PhotoOrScan,
+        Preset::Monochrome,
+        Preset::MonochromeTransparent,
         Preset::BlackAndWhite,
         Preset::LineArt,
         Preset::Editable,
@@ -400,7 +410,11 @@ impl Preset {
             Preset::FineDetail => ("Fine detail", "Filigree, crests"),
             Preset::FewerPaths => ("Fewer paths", "Smallest file"),
             Preset::PhotoOrScan => ("Photo or scan", "Photographed or screenshotted"),
-            Preset::BlackAndWhite => ("Black & white", "Stamps, signatures"),
+            // Two different things, named apart: one colour keeps every shape of a logo
+            // and draws it black; two-tone splits a scan by lightness, like a photocopy.
+            Preset::Monochrome => ("One-colour logo", "Black artwork on white"),
+            Preset::MonochromeTransparent => ("Black, no background", "Black artwork, transparent"),
+            Preset::BlackAndWhite => ("Two-tone scan", "Stamps, signatures, by lightness"),
             Preset::LineArt => ("Line art", "Uniform-stroke drawings"),
             Preset::Editable => ("Editable", "Tidy nodes for an artist to edit"),
         }
@@ -440,6 +454,15 @@ impl Preset {
             },
             Preset::BlackAndWhite => Settings {
                 black_and_white: true,
+                ..base
+            },
+            Preset::Monochrome => Settings {
+                monochrome: true,
+                ..base
+            },
+            Preset::MonochromeTransparent => Settings {
+                monochrome: true,
+                transparent_background: true,
                 ..base
             },
             Preset::LineArt => Settings {
@@ -684,8 +707,8 @@ pub const CONTROLS: &[Control] = &[
     },
     Control {
         group: "Colour",
-        key: "blackAndWhite",
-        label: "Black & white",
+        key: "monochrome",
+        label: "One colour (black)",
         unit: "",
         kind: Kind::Switch,
         min: 0.0,
@@ -693,7 +716,24 @@ pub const CONTROLS: &[Control] = &[
         curve: 1.0,
         decimals: 0,
         stops: &[],
-        help: "Two-tone output (the Potrace-comparable mode).",
+        help: "Every shape that is not the background is drawn black, light colours included; \
+               the background is white, or nothing with Transparent background on. For logos \
+               and lettering.",
+        modes: Modes::Both,
+    },
+    Control {
+        group: "Colour",
+        key: "blackAndWhite",
+        label: "Two tones by lightness",
+        unit: "",
+        kind: Kind::Switch,
+        min: 0.0,
+        max: 1.0,
+        curve: 1.0,
+        decimals: 0,
+        stops: &[],
+        help: "Dark becomes black and light becomes white, like a photocopy: light colours \
+               drop out. For scans, stamps and signatures. Wins over One colour.",
         modes: Modes::Both,
     },
     Control {
@@ -929,7 +969,7 @@ mod tests {
 
     #[test]
     fn there_are_twenty_three_controls_in_four_groups() {
-        assert_eq!(CONTROLS.len(), 23);
+        assert_eq!(CONTROLS.len(), 24);
         let mut groups: Vec<&str> = CONTROLS.iter().map(|c| c.group).collect();
         groups.dedup();
         assert_eq!(groups, ["Detail", "Colour", "Shape", "Output"]);
@@ -947,6 +987,17 @@ mod tests {
             ..Settings::default()
         };
         assert_eq!(fast.to_args().mode, inkvec_cli::TraceMode::Fast);
+    }
+
+    #[test]
+    fn one_colour_presets_reach_the_engine_apart_from_two_tone() {
+        let a = Preset::Monochrome.settings().to_args();
+        assert!(a.monochrome && !a.bilevel && !a.no_background);
+        let a = Preset::MonochromeTransparent.settings().to_args();
+        assert!(a.monochrome && !a.bilevel && a.no_background);
+        let a = Preset::BlackAndWhite.settings().to_args();
+        assert!(a.bilevel && !a.monochrome);
+        assert!(!Settings::default().to_args().monochrome);
     }
 
     #[test]

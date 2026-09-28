@@ -10,7 +10,7 @@ On a Mac, read <kbd>⌘</kbd> for <kbd>Ctrl</kbd>.
 | <kbd>Ctrl</kbd>+<kbd>E</kbd> | Open the export sheet (once there is a drawing) |
 | <kbd>Ctrl</kbd>+<kbd>,</kbd> | Settings |
 | <kbd>F1</kbd> | This guide, at the page about what is on screen |
-| <kbd>Ctrl</kbd>+<kbd>1</kbd> … <kbd>Ctrl</kbd>+<kbd>8</kbd> | Choose a preset: Logo, Icon, Fine detail, Fewer paths, Photo or scan, Black & white, Line art, Editable |
+| <kbd>Ctrl</kbd>+<kbd>1</kbd> … <kbd>Ctrl</kbd>+<kbd>9</kbd>, <kbd>Ctrl</kbd>+<kbd>0</kbd> | Choose a preset: Logo, Icon, Fine detail, Fewer paths, Photo or scan, One-colour logo, Black no background, Two-tone scan, Line art, Editable |
 | <kbd>Esc</kbd> | Close, in this order: Settings, About or the guide; the Custom wizard (keeping what you chose); the choice card (keeping Auto). With none of those open, cancel the trace in progress. |
 
 The preset shortcuts do nothing while you are typing in a field.

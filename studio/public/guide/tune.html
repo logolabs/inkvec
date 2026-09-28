@@ -74,12 +74,12 @@ only with Trace transparency off, and <strong>Flat fills</strong> in Fast only w
 colour ramp. This was measured, not assumed: each control was moved on a range of images in both
 engines, and a control counts as read by an engine if any of those moves changed the SVG it
 wrote.</p>
-<p><strong>Black &amp; white</strong> and <strong>Line art</strong> trace the same way in either engine, with the fitter Quality
+<p><strong>Two tones by lightness</strong> and <strong>Line art</strong> trace the same way in either engine, with the fitter Quality
 uses, so while either is on, Fast shows the same controls as Quality. (Line art that declines, on
 a drawing that is not line art, leaves the trace to Fast, and those extra controls then do
 nothing.)</p>
 <h2 id="presets">Presets</h2>
-<p>A preset is a handful of settings chosen together. The tray shows the eight built-ins; the line
+<p>A preset is a handful of settings chosen together. The tray shows the ten built-ins; the line
 under it describes the one selected.</p>
 <table>
 <thead>
@@ -122,22 +122,34 @@ under it describes the one selected.</p>
 <td><kbd>Ctrl</kbd>+<kbd>5</kbd></td>
 </tr>
 <tr>
-<td><strong>Black &amp; white</strong></td>
-<td>Stamps, signatures</td>
-<td>Black &amp; white on</td>
+<td><strong>One-colour logo</strong></td>
+<td>Black artwork on white</td>
+<td>One colour on</td>
 <td><kbd>Ctrl</kbd>+<kbd>6</kbd></td>
+</tr>
+<tr>
+<td><strong>Black, no background</strong></td>
+<td>Black artwork, transparent</td>
+<td>One colour and Transparent background on</td>
+<td><kbd>Ctrl</kbd>+<kbd>7</kbd></td>
+</tr>
+<tr>
+<td><strong>Two-tone scan</strong></td>
+<td>Stamps, signatures, by lightness</td>
+<td>Two tones by lightness on</td>
+<td><kbd>Ctrl</kbd>+<kbd>8</kbd></td>
 </tr>
 <tr>
 <td><strong>Line art</strong></td>
 <td>Uniform-stroke drawings</td>
 <td>Line art on</td>
-<td><kbd>Ctrl</kbd>+<kbd>7</kbd></td>
+<td><kbd>Ctrl</kbd>+<kbd>9</kbd></td>
 </tr>
 <tr>
 <td><strong>Editable</strong></td>
 <td>Tidy nodes for an artist to edit</td>
 <td>Editable structure on</td>
-<td><kbd>Ctrl</kbd>+<kbd>8</kbd></td>
+<td><kbd>Ctrl</kbd>+<kbd>0</kbd></td>
 </tr>
 </tbody>
 </table>
@@ -185,8 +197,8 @@ genuinely different colours were merged.</p>
 colour. For flat artwork, or when the SVG must not contain gradients.</p>
 <p><strong>One colour (black)</strong> (off). Every shape that is not the background is drawn black, light
 colours included, on a white background; with <strong>Transparent background</strong> on, on nothing, so the
-artwork can be placed on any design. Lettering on a coloured panel is cut out of a black panel. For logos and
-lettering. The presets <em>One-colour logo</em> and <em>Black, no background</em> turn it on.</p>
+artwork can be placed on any design. Lettering on a coloured panel is cut out of a black panel.
+For logos and lettering. The presets <em>One-colour logo</em> and <em>Black, no background</em> turn it on.</p>
 <p><strong>Two tones by lightness</strong> (off). Dark becomes black and light becomes white, like a photocopy,
 so light colours drop out: the Potrace-style mode, for stamps, signatures and scans of print (the
 <em>Two-tone scan</em> preset). It wins over One colour when both are on.</p>
@@ -272,7 +284,11 @@ matters mainly when that is off.</p>
 <td><code>--no-gradients</code></td>
 </tr>
 <tr>
-<td>Black &amp; white</td>
+<td>One colour (black)</td>
+<td><code>--monochrome</code></td>
+</tr>
+<tr>
+<td>Two tones by lightness</td>
 <td><code>--bilevel</code></td>
 </tr>
 <tr>

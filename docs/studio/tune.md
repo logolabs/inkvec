@@ -76,14 +76,14 @@ colour ramp. This was measured, not assumed: each control was moved on a range o
 engines, and a control counts as read by an engine if any of those moves changed the SVG it
 wrote.
 
-**Black & white** and **Line art** trace the same way in either engine, with the fitter Quality
+**Two tones by lightness** and **Line art** trace the same way in either engine, with the fitter Quality
 uses, so while either is on, Fast shows the same controls as Quality. (Line art that declines, on
 a drawing that is not line art, leaves the trace to Fast, and those extra controls then do
 nothing.)
 
 ## Presets
 
-A preset is a handful of settings chosen together. The tray shows the eight built-ins; the line
+A preset is a handful of settings chosen together. The tray shows the ten built-ins; the line
 under it describes the one selected.
 
 | Preset | For | What it changes from Logo | Shortcut |
@@ -93,9 +93,11 @@ under it describes the one selected.
 | **Fine detail** | Filigree, crests, emoji | Precision 0.05 px | <kbd>Ctrl</kbd>+<kbd>3</kbd> |
 | **Fewer paths** | The smallest file | Fewer paths on, Colour merging doubled (0.07) | <kbd>Ctrl</kbd>+<kbd>4</kbd> |
 | **Photo or scan** | Photographed or screenshotted marks | Denoiser Auto | <kbd>Ctrl</kbd>+<kbd>5</kbd> |
-| **Black & white** | Stamps, signatures | Black & white on | <kbd>Ctrl</kbd>+<kbd>6</kbd> |
-| **Line art** | Uniform-stroke drawings | Line art on | <kbd>Ctrl</kbd>+<kbd>7</kbd> |
-| **Editable** | Tidy nodes for an artist to edit | Editable structure on | <kbd>Ctrl</kbd>+<kbd>8</kbd> |
+| **One-colour logo** | Black artwork on white | One colour on | <kbd>Ctrl</kbd>+<kbd>6</kbd> |
+| **Black, no background** | Black artwork, transparent | One colour and Transparent background on | <kbd>Ctrl</kbd>+<kbd>7</kbd> |
+| **Two-tone scan** | Stamps, signatures, by lightness | Two tones by lightness on | <kbd>Ctrl</kbd>+<kbd>8</kbd> |
+| **Line art** | Uniform-stroke drawings | Line art on | <kbd>Ctrl</kbd>+<kbd>9</kbd> |
+| **Editable** | Tidy nodes for an artist to edit | Editable structure on | <kbd>Ctrl</kbd>+<kbd>0</kbd> |
 
 On a Mac the shortcuts use <kbd>⌘</kbd>. Choosing a preset sets *every* control to that preset's
 values, so anything you had moved goes back. Moving a control after choosing a preset keeps the
@@ -153,8 +155,14 @@ genuinely different colours were merged.
 **Flat fills instead of gradients** (off). Skips gradient fitting and fills every region with one
 colour. For flat artwork, or when the SVG must not contain gradients.
 
-**Black & white** (off). Two inks only: the Potrace-style mode, for stamps, signatures and scans
-of print.
+**One colour (black)** (off). Every shape that is not the background is drawn black, light
+colours included, on a white background; with **Transparent background** on, on nothing, so the
+artwork can be placed on any design. Lettering on a coloured panel is cut out of a black panel.
+For logos and lettering. The presets *One-colour logo* and *Black, no background* turn it on.
+
+**Two tones by lightness** (off). Dark becomes black and light becomes white, like a photocopy,
+so light colours drop out: the Potrace-style mode, for stamps, signatures and scans of print (the
+*Two-tone scan* preset). It wins over One colour when both are on.
 
 **Trace transparency** (on). Transparency is traced as it is: holes stay holes, every ink carries
 its own opacity, and soft shadows, glows and feathered edges come back as translucent fills. Turned
@@ -228,7 +236,8 @@ matters mainly when that is off.
 | Max colours | `--colors` |
 | Colour merging | `--merge` |
 | Flat fills instead of gradients | `--no-gradients` |
-| Black & white | `--bilevel` |
+| One colour (black) | `--monochrome` |
+| Two tones by lightness | `--bilevel` |
 | Trace transparency | on by default; `--no-native-alpha` turns it off |
 | Denoiser (Clean up damage) | `--restore off`, `--restore auto`, `--restore on` |
 | Match repeated shapes | on by default; `--no-harmonize` turns it off |

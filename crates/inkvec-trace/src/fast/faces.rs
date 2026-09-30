@@ -15,15 +15,40 @@
 //! each ink's colour. Out: cleaned labels, then a face id per pixel and each face's ink.
 //! The blend test [`blend_of`] / [`is_blend`] is shared with [`super::palette`].
 
-/// Components of equal labels (4-connected): the component of every pixel, each
-/// component's size and label, in order of first appearance in scan order.
+/// One maximal run of a label image: pixels `x0..x1` (`x1` exclusive) of one row, all of
+/// label `label`, with another label or the image edge on either side.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Run {
+    x0: u32,
+    x1: u32,
+    label: u16,
+}
+
+/// Components of equal labels (4-connected), in order of first appearance in scan order:
+/// each component's size and label, and on request ([`Components::fill_pixels`]) the
+/// component of every pixel.
+///
+/// One value is made per trace and handed from pass to pass, so its buffers -- above all
+/// the 4 bytes per pixel of `comp`, 16 MB at 2048 px -- are allocated and faulted in once
+/// instead of once per pass (the shipped code allocated a fresh `comp` in each of its four
+/// to five calls, 34,350 page faults per 2048 px image in all).
 pub(crate) struct Components {
-    /// Component id per pixel.
+    /// Component id per pixel; valid only after [`Components::fill_pixels`].
     pub comp: Vec<u32>,
     /// Pixels per component.
     pub size: Vec<usize>,
     /// Label of each component.
     pub label: Vec<u16>,
+    /// The maximal runs of every row, in scan order.
+    runs: Vec<Run>,
+    /// `runs[row_start[y]..row_start[y + 1]]` are row `y`'s runs; `h + 1` entries.
+    row_start: Vec<usize>,
+    /// Component id of each run.
+    run_comp: Vec<u32>,
+    /// Union-find parent of each run (scratch).
+    parent: Vec<u32>,
+    /// Component id of each root run, `u32::MAX` for a run that is no root (scratch).
+    root_id: Vec<u32>,
 }
 
 /// Union-find root of run `x`, with path halving (each visited node is pointed at its
@@ -37,76 +62,202 @@ fn find(parent: &mut [u32], mut x: u32) -> u32 {
     x
 }
 
-/// The 4-connected components of equal labels in a `w × h` label image.
-///
-/// Connected-component labelling by union-find over row runs: each row is cut into maximal
-/// runs of one label, and a run is united with every run of the row above that overlaps it
-/// in x (`a.x0 < b.x1 && b.x0 < a.x1`) and has the same label; the two rows are walked with
-/// two pointers, so the pass is linear in the number of runs. The smaller run index is kept
-/// as the root, so component ids come out in order of first appearance in scan order, the
-/// same numbering a pixel flood fill in scan order gives (the tests check the partition
-/// against `regions::split_components`). An empty image gives no components.
+/// The 4-connected components of equal labels in a `w × h` label image, with the
+/// component of every pixel filled in. Allocates; the passes reuse one [`Components`], so
+/// only the tests call this.
+#[cfg(test)]
 pub(crate) fn components(labels: &[u16], w: usize, h: usize) -> Components {
-    // Runs: (x0, x1 exclusive, label), and where each row's runs start.
-    let mut runs: Vec<(u32, u32, u16)> = Vec::new();
-    let mut row_start = Vec::with_capacity(h + 1);
-    for y in 0..h {
-        row_start.push(runs.len());
-        let row = &labels[y * w..(y + 1) * w];
-        let mut x = 0;
-        while x < w {
-            let l = row[x];
-            let x0 = x;
-            while x < w && row[x] == l {
-                x += 1;
-            }
-            runs.push((x0 as u32, x as u32, l));
+    let mut c = Components::new();
+    c.analyse(labels, w, h);
+    c.fill_pixels(w, h);
+    c
+}
+
+impl Components {
+    /// Empty buffers, to be filled by [`Components::analyse`].
+    pub(crate) fn new() -> Self {
+        Self {
+            comp: Vec::new(),
+            size: Vec::new(),
+            label: Vec::new(),
+            runs: Vec::new(),
+            row_start: Vec::new(),
+            run_comp: Vec::new(),
+            parent: Vec::new(),
+            root_id: Vec::new(),
         }
     }
-    row_start.push(runs.len());
-    let mut parent: Vec<u32> = (0..runs.len() as u32).collect();
-    for y in 1..h {
-        let (mut i, mut j) = (row_start[y - 1], row_start[y]);
-        let (ie, je) = (row_start[y], row_start[y + 1]);
-        while i < ie && j < je {
-            let (a, b) = (runs[i], runs[j]);
-            if a.0 < b.1 && b.0 < a.1 && a.2 == b.2 {
-                let (ra, rb) = (find(&mut parent, i as u32), find(&mut parent, j as u32));
-                if ra != rb {
-                    // The earlier run is the root, so ids follow scan order.
-                    parent[ra.max(rb) as usize] = ra.min(rb);
+
+    /// The components of `labels` (`w × h`, row-major), in the buffers of `self`; the
+    /// per-pixel `comp` is left alone (see [`Components::fill_pixels`]).
+    ///
+    /// Connected-component labelling by union-find over row runs: each row is cut into
+    /// maximal runs of one label, and a run is united with every run of the row above that
+    /// overlaps it in x (`a.x0 < b.x1 && b.x0 < a.x1`) and has the same label; the two rows
+    /// are walked with two pointers, so the pass is linear in the number of runs. The
+    /// smaller run index is kept as the root, so every root is the first run of its
+    /// component in scan order, and component ids -- given to roots as they are met in run
+    /// order -- come out in order of first appearance in scan order, the numbering a pixel
+    /// flood fill in scan order gives (the tests check the partition against
+    /// `regions::split_components`). An empty image gives no components.
+    ///
+    /// Cost: one read of the labels (2 bytes per pixel) plus O(R α(R)) on the R runs; R is
+    /// 0.24% of the pixels at the median of the 2048 px benchmark images and 3.8-10.5% at
+    /// 128 px.
+    ///
+    /// Method from: Wu, Otoo & Suzuki (2009), "Optimizing two-pass connected-component
+    /// labeling algorithms", Pattern Analysis and Applications 12(2):117-135,
+    /// <https://doi.org/10.1007/s10044-008-0109-y> (union-find with the smaller index as
+    /// root, so provisional labels resolve to scan order), applied to runs rather than
+    /// pixels as in He, Chao, Suzuki & Wu (2009), "Fast connected-component labeling",
+    /// Pattern Recognition 42(9):1977-1987, <https://doi.org/10.1016/j.patcog.2008.10.013>.
+    pub(crate) fn analyse(&mut self, labels: &[u16], w: usize, h: usize) {
+        self.runs.clear();
+        self.row_start.clear();
+        for y in 0..h {
+            self.row_start.push(self.runs.len());
+            let row = &labels[y * w..(y + 1) * w];
+            let mut x = 0;
+            while x < w {
+                let l = row[x];
+                let x0 = x;
+                while x < w && row[x] == l {
+                    x += 1;
+                }
+                self.runs.push(Run {
+                    x0: x0 as u32,
+                    x1: x as u32,
+                    label: l,
+                });
+            }
+        }
+        self.row_start.push(self.runs.len());
+        self.union_and_number(h);
+    }
+
+    /// Union-find over `self.runs` (rows `0..h`), then a component id, size and label per
+    /// root, and a component id per run. See [`Components::analyse`].
+    fn union_and_number(&mut self, h: usize) {
+        let (runs, row_start, parent) = (&self.runs, &self.row_start, &mut self.parent);
+        parent.clear();
+        parent.extend(0..runs.len() as u32);
+        for y in 1..h {
+            let (mut i, mut j) = (row_start[y - 1], row_start[y]);
+            let (ie, je) = (row_start[y], row_start[y + 1]);
+            while i < ie && j < je {
+                let (a, b) = (runs[i], runs[j]);
+                if a.x0 < b.x1 && b.x0 < a.x1 && a.label == b.label {
+                    let (ra, rb) = (find(parent, i as u32), find(parent, j as u32));
+                    if ra != rb {
+                        // The earlier run is the root, so ids follow scan order.
+                        parent[ra.max(rb) as usize] = ra.min(rb);
+                    }
+                }
+                if a.x1 <= b.x1 {
+                    i += 1;
+                } else {
+                    j += 1;
                 }
             }
-            if a.1 <= b.1 {
-                i += 1;
-            } else {
-                j += 1;
+        }
+        self.root_id.clear();
+        self.root_id.resize(runs.len(), u32::MAX);
+        self.size.clear();
+        self.label.clear();
+        self.run_comp.clear();
+        for r in 0..runs.len() {
+            let root = find(parent, r as u32) as usize;
+            if self.root_id[root] == u32::MAX {
+                self.root_id[root] = self.size.len() as u32;
+                self.size.push(0);
+                self.label.push(runs[root].label);
+            }
+            let id = self.root_id[root];
+            self.run_comp.push(id);
+            self.size[id as usize] += (runs[r].x1 - runs[r].x0) as usize;
+        }
+    }
+
+    /// Write every pixel's component id into `comp` from the runs of the last
+    /// [`Components::analyse`]. The buffer is sized once and every pixel is overwritten
+    /// (the runs of a row tile it), so no clearing is needed between passes.
+    pub(crate) fn fill_pixels(&mut self, w: usize, h: usize) {
+        self.comp.resize(w * h, 0);
+        for y in 0..h {
+            for r in self.row_start[y]..self.row_start[y + 1] {
+                let Run { x0, x1, .. } = self.runs[r];
+                self.comp[y * w + x0 as usize..y * w + x1 as usize].fill(self.run_comp[r]);
             }
         }
     }
-    let mut id_of_root = vec![u32::MAX; runs.len()];
-    let mut size = Vec::new();
-    let mut label = Vec::new();
-    let mut run_comp = vec![0u32; runs.len()];
-    for r in 0..runs.len() {
-        let root = find(&mut parent, r as u32) as usize;
-        if id_of_root[root] == u32::MAX {
-            id_of_root[root] = size.len() as u32;
-            size.push(0);
-            label.push(runs[root].2);
+
+    /// Which components have an interior pixel: one off the image border whose four
+    /// neighbours are all in the same component. Read from the runs of the last
+    /// [`Components::analyse`]; `h` is the image height.
+    ///
+    /// **Reduction to runs.** A 4-neighbour is in a pixel's component exactly when it has
+    /// the pixel's label (same-label neighbours are connected; a component holds one
+    /// label), so pixel `(x, y)` of label `l` is interior iff `1 <= y <= h - 2` and its left,
+    /// right, upper and lower neighbours all have label `l`. In a maximal run `x0..x1` of
+    /// row `y` the left and right neighbours match exactly for `x` in `x0 + 1 .. x1 - 1`
+    /// (the pixels at `x0 - 1` and `x1` carry other labels or are off the image), which also
+    /// keeps `x` off the left and right borders. So the run holds an interior pixel iff some
+    /// `x` in `lo..hi = x0 + 1 .. x1 - 1` lies under a run of label `l` in row `y - 1` and
+    /// over one in row `y + 1`: the runs of those two rows are walked together over
+    /// `lo..hi` (both rows tile `0..w`, so advancing whichever current run ends first visits
+    /// every overlapping pair once), looking for such a pair whose common part meets
+    /// `lo..hi`. Runs shorter than 3 have no candidate `x`; a component already known to
+    /// be interior is skipped. The pointers into rows `y - 1` and `y + 1` only move forward
+    /// across row `y`, so the pass is linear in the number of runs.
+    ///
+    /// Measured on the 254 research dumps: 19.0 ms for the two per-pixel calls at 2048 px,
+    /// at most 0.26 ms from runs, with equal results on every dump.
+    ///
+    /// Not from the literature: interior-ness decided on runs, because the run-based
+    /// labelling papers (He et al. 2009; Lemaitre & Lacassagne 2020) compute areas and
+    /// bounding boxes on runs but no neighbourhood predicate such as this one.
+    /// See also: Lemaitre & Lacassagne (2020), "How to speed Connected Component Labeling
+    /// up with SIMD RLE algorithms", <https://arxiv.org/abs/2006.09299>, for features
+    /// accumulated per run instead of per pixel.
+    fn interiors(&self, h: usize) -> Vec<bool> {
+        let (runs, rs) = (&self.runs, &self.row_start);
+        let mut interior = vec![false; self.size.len()];
+        for y in 1..h.saturating_sub(1) {
+            let (a1, b1) = (rs[y], rs[y + 2]);
+            let (mut ia, mut ib) = (rs[y - 1], rs[y + 1]);
+            for r in rs[y]..rs[y + 1] {
+                let Run { x0, x1, label } = runs[r];
+                let c = self.run_comp[r] as usize;
+                if x1 - x0 < 3 || interior[c] {
+                    continue;
+                }
+                let (lo, hi) = (x0 + 1, x1 - 1);
+                // Skip the runs above and below that end at or before `lo`.
+                while ia < a1 && runs[ia].x1 <= lo {
+                    ia += 1;
+                }
+                while ib < b1 && runs[ib].x1 <= lo {
+                    ib += 1;
+                }
+                let (mut i, mut j) = (ia, ib);
+                while i < a1 && j < b1 && runs[i].x0 < hi && runs[j].x0 < hi {
+                    let (above, below) = (runs[i], runs[j]);
+                    let s = lo.max(above.x0).max(below.x0);
+                    let e = hi.min(above.x1).min(below.x1);
+                    if above.label == label && below.label == label && s < e {
+                        interior[c] = true;
+                        break;
+                    }
+                    if above.x1 <= below.x1 {
+                        i += 1;
+                    } else {
+                        j += 1;
+                    }
+                }
+            }
         }
-        let id = id_of_root[root];
-        run_comp[r] = id;
-        size[id as usize] += (runs[r].1 - runs[r].0) as usize;
+        interior
     }
-    let mut comp = vec![0u32; w * h];
-    for y in 0..h {
-        for r in row_start[y]..row_start[y + 1] {
-            let (x0, x1, _) = runs[r];
-            comp[y * w + x0 as usize..y * w + x1 as usize].fill(run_comp[r]);
-        }
-    }
-    Components { comp, size, label }
 }
 
 /// Relabel every component smaller than `min_size` pixels with the neighbouring label it
@@ -118,15 +269,22 @@ pub(crate) fn components(labels: &[u16], w: usize, h: usize) -> Components {
 /// the result does not depend on the order small components are visited; two adjacent
 /// speckles may therefore swap into each other's label rather than merge, which is
 /// harmless at this size. A component with no neighbour at all (the whole image) keeps
-/// its label. `min_size <= 1` does nothing.
-pub(crate) fn despeckle(labels: &mut [u16], w: usize, h: usize, min_size: usize) {
+/// its label. `min_size <= 1` does nothing. `c` is the reused component workspace.
+pub(crate) fn despeckle(
+    labels: &mut [u16],
+    w: usize,
+    h: usize,
+    min_size: usize,
+    c: &mut Components,
+) {
     if min_size <= 1 {
         return;
     }
-    let c = components(labels, w, h);
+    c.analyse(labels, w, h);
     if c.size.iter().all(|&s| s >= min_size) {
         return;
     }
+    c.fill_pixels(w, h);
     let mut tally: std::collections::HashMap<u32, Vec<(u16, u32)>> = Default::default();
     for p in 0..w * h {
         let id = c.comp[p];
@@ -264,15 +422,18 @@ pub(crate) fn is_blend(col: [f32; 4], a: [f32; 4], b: [f32; 4]) -> bool {
 /// within `BLEND_TOL²` wins; with none, the pixel keeps its label. Neighbour labels are
 /// read from a copy taken before the pass, so the order pixels are visited in does not
 /// matter. `px` and `inks` are sRGB 0..1 plus opacity; `labels` must index into `inks`.
+/// `c` is the reused component workspace.
 pub(crate) fn absorb_slivers(
     labels: &mut [u16],
     px: Pixels<'_>,
     inks: &[[f32; 4]],
     w: usize,
     h: usize,
+    c: &mut Components,
 ) {
-    let c = components(labels, w, h);
-    let interior = interiors(&c, w, h);
+    c.analyse(labels, w, h);
+    c.fill_pixels(w, h);
+    let interior = c.interiors(h);
     let d2 = |a: [f32; 4], b: [f32; 4]| (0..4).map(|k| (a[k] - b[k]).powi(2)).sum::<f32>();
     let src = labels.to_vec();
     for p in 0..w * h {
@@ -319,28 +480,6 @@ pub(crate) fn absorb_slivers(
     }
 }
 
-/// Which components have an interior pixel: one whose four neighbours are all in it.
-/// A pixel on the image border never counts as interior, so a strip along the edge of the
-/// image is still a strip.
-fn interiors(c: &Components, w: usize, h: usize) -> Vec<bool> {
-    let mut interior = vec![false; c.size.len()];
-    for p in 0..w * h {
-        let (x, y) = (p % w, p / w);
-        let id = c.comp[p];
-        if x > 0
-            && y > 0
-            && x + 1 < w
-            && y + 1 < h
-            && [p - 1, p + 1, p - w, p + w]
-                .iter()
-                .all(|&q| c.comp[q] == id)
-        {
-            interior[id as usize] = true;
-        }
-    }
-    interior
-}
-
 /// Put the rims [`absorb_slivers`] cannot reach back where they belong.
 ///
 /// A component with no interior pixel is a strip at most two pixels wide. When its ink is a
@@ -357,15 +496,18 @@ fn interiors(c: &Components, w: usize, h: usize) -> Vec<bool> {
 /// two sides. Each pixel of the strip then goes to `b` when its own colour's projection on
 /// that line has `t >= 0.5`, and to `a` otherwise (also when `a` and `b` are one colour).
 /// A strip bordering fewer than two inks, or labelled outside the palette, is left alone.
+/// `c` is the reused component workspace.
 pub(crate) fn absorb_rims(
     labels: &mut [u16],
     px: Pixels<'_>,
     inks: &[[f32; 4]],
     w: usize,
     h: usize,
+    c: &mut Components,
 ) {
-    let c = components(labels, w, h);
-    let interior = interiors(&c, w, h);
+    c.analyse(labels, w, h);
+    c.fill_pixels(w, h);
+    let interior = c.interiors(h);
     let n_inks = inks.len();
     // The labels each strip borders.
     let mut around: Vec<Vec<u16>> = vec![Vec::new(); c.size.len()];
@@ -445,8 +587,14 @@ pub(crate) fn absorb_rims(
 /// Components are ranked by size (larger first, lower id on a tie); a component may only
 /// take the settled ink of a higher-ranked neighbour, choosing the longest shared border in
 /// pixel edges (the higher rank on a tie). Returns early, unchanged, when no two inks are
-/// the same or no such pair of components touches.
-pub(crate) fn merge_same_inks(labels: &mut [u16], inks: &[[f32; 4]], w: usize, h: usize) {
+/// the same or no such pair of components touches. `c` is the reused component workspace.
+pub(crate) fn merge_same_inks(
+    labels: &mut [u16],
+    inks: &[[f32; 4]],
+    w: usize,
+    h: usize,
+    c: &mut Components,
+) {
     let n_inks = inks.len();
     let same: Vec<bool> = (0..n_inks * n_inks)
         .map(|k| {
@@ -460,7 +608,8 @@ pub(crate) fn merge_same_inks(labels: &mut [u16], inks: &[[f32; 4]], w: usize, h
     if !same.contains(&true) {
         return;
     }
-    let c = components(labels, w, h);
+    c.analyse(labels, w, h);
+    c.fill_pixels(w, h);
     let n = c.size.len();
     // Border shared by each pair of components whose inks are one ink to the eye.
     let mut border: std::collections::HashMap<(u32, u32), u32> = Default::default();
@@ -520,20 +669,28 @@ pub(crate) fn merge_same_inks(labels: &mut [u16], inks: &[[f32; 4]], w: usize, h
 /// Largest opacity difference between two inks that can be one ink.
 const SAME_ALPHA: f32 = 0.02;
 
-/// Faces: the components of `labels`, as a face id per pixel and each face's label. Past
-/// `u16::MAX - 1` faces the rest are folded into face 0, as `regions::split_components`
-/// does. Face ids are component ids ([`components`]), so they follow scan order; the
-/// second output is indexed by face id and holds the ink index of that face.
-pub(crate) fn faces(labels: &[u16], w: usize, h: usize) -> (Vec<u16>, Vec<usize>) {
-    let c = components(labels, w, h);
+/// Faces: the components of `labels`, written over `labels` as a face id per pixel, and
+/// each face's label (the returned vector, indexed by face id, holds the ink index of that
+/// face). Past `u16::MAX - 1` faces the rest are folded into face 0, as
+/// `regions::split_components` does. Face ids are component ids ([`Components::analyse`]),
+/// so they follow scan order. `c` is the reused component workspace.
+///
+/// The ids go straight from the runs into the label buffer, which the runs were read out
+/// of first: no per-pixel `u32` component image is written and then narrowed to `u16` in
+/// a second buffer, as before. The values are the same -- `min(id, cap)` folding and all --
+/// because every pixel of a run gets its run's component id either way.
+pub(crate) fn faces(labels: &mut [u16], w: usize, h: usize, c: &mut Components) -> Vec<usize> {
+    c.analyse(labels, w, h);
     let cap = (u16::MAX - 1) as usize;
-    let ids: Vec<u16> = c
-        .comp
-        .iter()
-        .map(|&id| if (id as usize) < cap { id as u16 } else { 0 })
-        .collect();
-    let face_label = c.label.iter().take(cap).map(|&l| l as usize).collect();
-    (ids, face_label)
+    for y in 0..h {
+        for r in c.row_start[y]..c.row_start[y + 1] {
+            let Run { x0, x1, .. } = c.runs[r];
+            let id = c.run_comp[r] as usize;
+            let face = if id < cap { id as u16 } else { 0 };
+            labels[y * w + x0 as usize..y * w + x1 as usize].fill(face);
+        }
+    }
+    c.label.iter().take(cap).map(|&l| l as usize).collect()
 }
 
 #[cfg(test)]

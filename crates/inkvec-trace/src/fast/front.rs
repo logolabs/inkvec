@@ -92,6 +92,8 @@ fn trace(
     }
     sw.mark("palette");
     inkvec_core::progress::begin("slivers");
+    // One component workspace for every pass below, so its buffers are allocated once.
+    let mut cc = super::faces::Components::new();
     {
         // Each pixel's colour and opacity, read in place where a pass needs it.
         let px = super::faces::Pixels {
@@ -104,20 +106,23 @@ fn trace(
                 [c[0], c[1], c[2], pal.alpha.get(i).copied().unwrap_or(1.0)]
             })
             .collect();
-        super::faces::absorb_slivers(&mut labels, px, &inks, w, h);
+        super::faces::absorb_slivers(&mut labels, px, &inks, w, h, &mut cc);
         // Every face costs an outline, and every place a face touches a boundary is a
         // junction the fitter has to stop at. The rims of small text and the second black
         // of large type were most of both on a textured masthead: 4,068 faces and 47,548
         // coordinates, where these two passes leave 8,798 at a lower dE00.
-        super::faces::absorb_rims(&mut labels, px, &inks, w, h);
-        super::faces::merge_same_inks(&mut labels, &inks, w, h);
+        super::faces::absorb_rims(&mut labels, px, &inks, w, h, &mut cc);
+        super::faces::merge_same_inks(&mut labels, &inks, w, h, &mut cc);
     }
     sw.mark("slivers");
     inkvec_core::progress::begin("despeckle");
-    super::faces::despeckle(&mut labels, w, h, speckle_floor(opts.min_region, w, h));
+    let floor = speckle_floor(opts.min_region, w, h);
+    super::faces::despeckle(&mut labels, w, h, floor, &mut cc);
     sw.mark("despeckle");
     inkvec_core::progress::begin("split");
-    let (mut labels, mut face_color) = super::faces::faces(&labels, w, h);
+    // The face ids overwrite the cleaned labels in place.
+    let mut face_color = super::faces::faces(&mut labels, w, h, &mut cc);
+    drop(cc);
     sw.mark("split");
     inkvec_core::progress::begin("ramps");
     let mut face_fill: Vec<gradient::FillFit> =

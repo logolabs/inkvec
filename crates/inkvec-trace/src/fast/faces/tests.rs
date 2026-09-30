@@ -21,7 +21,8 @@ fn faces_match_the_flood_fill() {
             u16::from((x + y) % 3 == 0 || (x == 3 && y > 0))
         })
         .collect();
-    let (a, fa) = faces(&labels, w, h);
+    let mut a = labels.clone();
+    let fa = faces(&mut a, w, h, &mut Components::new());
     let (b, fb) = crate::regions::split_components(&labels, w, h);
     assert_eq!(fa.len(), fb.len());
     // The same partition: two pixels share a face in one exactly when in the other.
@@ -35,7 +36,7 @@ fn faces_match_the_flood_fill() {
 #[test]
 fn a_lone_pixel_takes_its_surroundings() {
     let mut labels = vec![0u16, 0, 0, 0, 1, 0, 0, 0, 2];
-    despeckle(&mut labels, 3, 3, 2);
+    despeckle(&mut labels, 3, 3, 2, &mut Components::new());
     assert_eq!(labels, vec![0, 0, 0, 0, 0, 0, 0, 0, 0]);
 }
 
@@ -62,7 +63,7 @@ fn a_rim_of_a_blend_ink_goes_to_the_inks_either_side_and_a_hairline_stays() {
         rgb: &rgb,
         alpha: None,
     };
-    absorb_slivers(&mut labels, px, &inks, w, h);
+    absorb_slivers(&mut labels, px, &inks, w, h, &mut Components::new());
     assert!(
         (0..w).all(|x| labels[4 * w + x] == 0),
         "the grey strip is a blend"
@@ -101,7 +102,7 @@ fn the_grey_rim_of_a_thin_stroke_goes_to_the_stroke_and_the_paper() {
         alpha: None,
     };
     let mut hairline = labels.clone();
-    absorb_rims(&mut labels, px, &inks, w, h);
+    absorb_rims(&mut labels, px, &inks, w, h, &mut Components::new());
     assert!(
         (0..w).all(|x| labels[2 * w + x] == 0),
         "the rim above is paper"
@@ -121,7 +122,7 @@ fn the_grey_rim_of_a_thin_stroke_goes_to_the_stroke_and_the_paper() {
         hairline[5 * w + x] = 0;
     }
     let before = hairline.clone();
-    absorb_rims(&mut hairline, px, &inks, w, h);
+    absorb_rims(&mut hairline, px, &inks, w, h, &mut Components::new());
     assert_eq!(hairline, before);
 }
 
@@ -141,7 +142,7 @@ fn two_inks_one_eye_cannot_tell_apart_become_one_and_a_step_stays() {
     let mut labels: Vec<u16> = (0..w * h)
         .map(|p| if p / w >= 7 { 2 } else { u16::from(p % w >= 5) })
         .collect();
-    merge_same_inks(&mut labels, &inks, w, h);
+    merge_same_inks(&mut labels, &inks, w, h, &mut Components::new());
     // The larger of the two near-blacks (ink 1, 7 columns) takes the other.
     assert!(labels[..7 * w].iter().all(|&l| l == 1));
     assert!(labels[7 * w..].iter().all(|&l| l == 2));
@@ -301,23 +302,33 @@ fn check_case(c: &Case, min_size: usize, what: &str) {
     let full: Vec<[f32; 4]> = (0..w * h).map(|p| px.get(p)).collect();
     let mut want = c.labels.clone();
     let mut got = c.labels.clone();
+    // One workspace through every pass, as in `fast::front`.
+    let mut cc = Components::new();
+    let rc = reference::components(&want, w, h);
+    cc.analyse(&got, w, h);
+    assert_eq!(cc.size, rc.size, "{what}: component sizes");
+    assert_eq!(cc.label, rc.label, "{what}: component labels");
+    assert_eq!(
+        cc.interiors(h),
+        reference::interiors(&rc, w, h),
+        "{what}: interiors"
+    );
     reference::absorb_slivers(&mut want, &full, &c.inks, w, h);
-    absorb_slivers(&mut got, px, &c.inks, w, h);
+    absorb_slivers(&mut got, px, &c.inks, w, h, &mut cc);
     assert_eq!(got, want, "{what}: slivers");
     reference::absorb_rims(&mut want, &full, &c.inks, w, h);
-    absorb_rims(&mut got, px, &c.inks, w, h);
+    absorb_rims(&mut got, px, &c.inks, w, h, &mut cc);
     assert_eq!(got, want, "{what}: rims");
     reference::merge_same_inks(&mut want, &c.inks, w, h);
-    merge_same_inks(&mut got, &c.inks, w, h);
+    merge_same_inks(&mut got, &c.inks, w, h, &mut cc);
     assert_eq!(got, want, "{what}: same-ink merge");
     reference::despeckle(&mut want, w, h, min_size);
-    despeckle(&mut got, w, h, min_size);
+    despeckle(&mut got, w, h, min_size, &mut cc);
     assert_eq!(got, want, "{what}: despeckle to {min_size}");
-    assert_eq!(
-        faces(&got, w, h),
-        reference::faces(&want, w, h),
-        "{what}: faces"
-    );
+    let (want_ids, want_inks) = reference::faces(&want, w, h);
+    let got_inks = faces(&mut got, w, h, &mut cc);
+    assert_eq!(got_inks, want_inks, "{what}: face inks");
+    assert_eq!(got, want_ids, "{what}: face ids");
 }
 
 #[test]

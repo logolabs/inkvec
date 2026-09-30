@@ -1,10 +1,29 @@
 //! Stroke outline generation, circular joins/caps, pixel clipping, and coverage cost.
+//!
+//! The geometry `centerline` needs besides the skeleton: the marching-squares level set's
+//! building blocks, point-to-segment distance, and the outline a round-capped,
+//! round-joined stroke actually paints, with its exact per-pixel coverage (via
+//! [`crate::clip`]). The coverage is what `refine_to_coverage` and `stroke_residual_one`
+//! compare against the image. Coordinates are px with pixel centres at integer
+//! coordinates.
 
 use inkvec_core::Point;
 
 use super::Stroke;
 use crate::coverage::CoverageField;
 
+/// A window of whole pixels, `[x0, x1) x [y0, y1)`, as image pixel indices.
+#[derive(Clone, Copy)]
+pub(crate) struct Window {
+    pub(crate) x0: usize,
+    pub(crate) y0: usize,
+    pub(crate) x1: usize,
+    pub(crate) y1: usize,
+}
+
+/// Where the 0.5 level crosses a cell edge from value `a` to value `b`, as a fraction of
+/// the edge in `[0, 1]` measured from `a`'s end (linear interpolation). An edge with no
+/// change in value reports its midpoint.
 #[inline]
 pub(crate) fn cross(a: f32, b: f32) -> f64 {
     let d = (b - a) as f64;
@@ -45,6 +64,8 @@ pub(crate) fn ms_pairs(case: u8, centre_in: bool) -> &'static [(usize, usize)] {
     }
 }
 
+/// Distance from `p` to segment `ab`, and the closest point on it (the projection clamped
+/// to the segment). A degenerate segment is its first point.
 pub(crate) fn point_seg(p: Point, a: Point, b: Point) -> (f64, Point) {
     let ab = b - a;
     let l2 = ab.dot(ab);
@@ -59,6 +80,9 @@ pub(crate) fn point_seg(p: Point, a: Point, b: Point) -> (f64, Point) {
 /// Points per quarter turn when a round cap or join is turned into polygon edges.
 const ARC_STEPS: usize = 8;
 
+/// Append points on the circle of radius `r` about `c`, from angle `from` to `to` by the
+/// shorter way round (radians), excluding the start and including the end, at
+/// `ARC_STEPS` points per quarter turn (at least one point).
 pub(crate) fn arc_into(out: &mut Vec<Point>, c: Point, from: f64, to: f64, r: f64) {
     let mut d = to - from;
     while d <= -std::f64::consts::PI {
@@ -75,6 +99,14 @@ pub(crate) fn arc_into(out: &mut Vec<Point>, c: Point, from: f64, to: f64, r: f6
 }
 
 /// The outline a round-capped, round-joined stroke actually paints.
+///
+/// `hw` is the half-width in px. Each side is the path offset by `hw` along each
+/// segment's unit normal `(−t.y, t.x)` for tangent `t` (walking the path once each way
+/// gives the two sides), with a circular arc about each interior vertex joining
+/// consecutive offset segments. An open stroke is one polygon: up one side, a half-disc
+/// cap, back down the other, and a cap at the start. A closed stroke returns its two
+/// offset loops, the larger by area as the outer polygon and the smaller as the hole.
+/// Returns no polygon for fewer than two points or a non-positive width.
 pub(crate) fn offset_outline(
     path: &[Point],
     closed: bool,
@@ -165,6 +197,10 @@ pub(crate) fn offset_outline(
 
 /// Exact coverage the stroke's own outline puts on the pixel with lower corner
 /// `(x, y)`, using the same clip the rest of the tracer fits against.
+///
+/// Callers pass `(px − 0.5, py − 0.5)` for the pixel centred on `(px, py)`. The hole of a
+/// closed stroke is subtracted; the result is clamped to `[0, 1]`. `a` and `b` are scratch
+/// buffers for the clipper.
 pub(crate) fn outline_cover(
     outer: &[Point],
     inner: Option<&Vec<Point>>,
@@ -186,18 +222,20 @@ pub(crate) fn outline_cover(
 }
 
 /// Squared coverage residual over a window, for one stroke against the drawing.
-#[allow(clippy::too_many_arguments)]
+///
+/// `Σ_pixels (max(mine, other) − coverage)²`, where `mine` is this stroke's exact
+/// coverage at half-width `hw` and `other` what every other stroke paints there
+/// (`others`, laid out over the window as [`others_cover`] returns it). Taking the
+/// maximum models overlapping strokes of one ink. Infinite when the stroke has no outline.
 pub(crate) fn stroke_cost(
     coverage: &CoverageField,
     others: &[f32],
     path: &[Point],
     closed: bool,
     hw: f64,
-    x0: usize,
-    y0: usize,
-    x1: usize,
-    y1: usize,
+    win: Window,
 ) -> f64 {
+    let Window { x0, y0, x1, y1 } = win;
     let w = coverage.width;
     let ww = x1 - x0;
     let (outer, inner) = offset_outline(path, closed, hw);
@@ -224,15 +262,10 @@ pub(crate) fn stroke_cost(
     s
 }
 
-/// Coverage every stroke except `skip` puts on a window.
-pub(crate) fn others_cover(
-    strokes: &[Stroke],
-    skip: usize,
-    x0: usize,
-    y0: usize,
-    x1: usize,
-    y1: usize,
-) -> Vec<f32> {
+/// Coverage every stroke except `skip` puts on a window: row-major over the window, the
+/// maximum of their exact coverages at each pixel.
+pub(crate) fn others_cover(strokes: &[Stroke], skip: usize, win: Window) -> Vec<f32> {
+    let Window { x0, y0, x1, y1 } = win;
     let mut out = vec![0.0f32; (x1.saturating_sub(x0)) * (y1.saturating_sub(y0))];
     for (k, st) in strokes.iter().enumerate() {
         if k == skip || st.path.is_empty() {

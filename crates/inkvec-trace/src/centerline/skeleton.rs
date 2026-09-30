@@ -1,11 +1,24 @@
 //! Morphological skeleton thinning (Zhang-Suen), branch tracing, spur pruning,
 //! and junction pair collapse into geometric stroke chains.
+//!
+//! Works on one region's crop ([`RegionGrid`]), with pixel indices `y * w + x` into it.
+//! `centerline::analyse_region` runs [`zhang_suen`], then [`prune_spurs`], then
+//! [`geometric_chains`], whose chains are then moved onto the distance-field ridge and
+//! measured. Positions are the crop pixels' image-space centres.
 
 use inkvec_core::Point;
 
 use super::{median, LevelSet, RegionGrid, CAP_FRACTION};
 
 /// Zhang–Suen thinning to a one-pixel skeleton.
+///
+/// The classic two-subiteration algorithm. With the eight neighbours `p2..p9` clockwise
+/// from north, `B` the number set and `A` the number of off-to-on transitions around the
+/// ring, a set pixel is deleted when `2 <= B <= 6`, `A == 1`, and in the first
+/// subiteration `p2·p4·p6 = 0` and `p4·p6·p8 = 0` (in the second `p2·p4·p8 = 0` and
+/// `p2·p6·p8 = 0`). Deletions of a subiteration are applied together; repeats until
+/// nothing changes. Border pixels are never deleted, and a mask under 3x3 is returned as
+/// it is.
 pub(crate) fn zhang_suen(mask: &[bool], w: usize, h: usize) -> Vec<bool> {
     let mut m = mask.to_vec();
     if w < 3 || h < 3 {
@@ -123,6 +136,7 @@ impl SkelGraph {
         SkelGraph { pix, adj }
     }
 
+    /// Number of neighbours of skeleton pixel `k` in the reduced graph.
     #[inline]
     pub(crate) fn degree(&self, k: usize) -> usize {
         self.adj[k].len()
@@ -133,11 +147,20 @@ impl SkelGraph {
 pub(crate) struct Branch {
     /// `pix` indices along the branch, node to node inclusive.
     pub(crate) chain: Vec<usize>,
+    /// First node (a `pix` index).
     pub(crate) a: usize,
+    /// Last node; equal to `a` for a closed cycle.
     pub(crate) b: usize,
+    /// A pure cycle with no node on it.
     pub(crate) closed: bool,
 }
 
+/// Split the skeleton graph into branches: node to node along degree-2 pixels.
+///
+/// Every pixel whose degree is not 2 is a node. From each node, each unused incident
+/// step starts a branch that is followed until it reaches another node. Whatever is
+/// left afterwards consists of pure cycles, each returned once as a closed branch
+/// starting at its lowest-index pixel.
 pub(crate) fn trace_branches(g: &SkelGraph) -> Vec<Branch> {
     let mut out: Vec<Branch> = Vec::new();
     let n = g.pix.len();
@@ -215,6 +238,12 @@ pub(crate) fn trace_branches(g: &SkelGraph) -> Vec<Branch> {
 
 /// Iteratively remove dead-end branches shorter than `spur_factor` local stroke widths,
 /// or that end without a cap.
+///
+/// A spur is a branch with exactly one free end (degree 1) whose other end is a junction
+/// (degree 3 or more); a branch free at both ends is a whole stroke and stays. With `d`
+/// the distance to the boundary along the branch, the local width is `2·max(d)` and the
+/// branch ends in a cap when `d_tip >= CAP_FRACTION · median(d)`. Repeats, up to 16
+/// rounds, until a round removes nothing, since each removal changes the degrees around it.
 pub(crate) fn prune_spurs(
     mut skel: Vec<bool>,
     g: &RegionGrid,
@@ -271,11 +300,13 @@ pub(crate) fn prune_spurs(
     skel
 }
 
+/// Image position of crop pixel index `p` (row width `w`).
 #[inline]
 pub(crate) fn pixel_point(g: &RegionGrid, p: usize, w: usize) -> Point {
     g.point_of(p % w, p / w)
 }
 
+/// Length of a chain of skeleton pixels, as the sum of centre-to-centre steps (1 or √2).
 pub(crate) fn chain_length(graph: &SkelGraph, g: &RegionGrid, chain: &[usize], w: usize) -> f64 {
     chain
         .windows(2)
@@ -285,12 +316,19 @@ pub(crate) fn chain_length(graph: &SkelGraph, g: &RegionGrid, chain: &[usize], w
 
 /// A branch as geometry, before sub-pixel refinement.
 pub(crate) struct RawChain {
+    /// Pixel centres along the branch, image coordinates; a closed chain does not repeat
+    /// its first point.
     pub(crate) pts: Vec<Point>,
     pub(crate) closed: bool,
 }
 
 /// Turn the pruned skeleton into geometric chains, collapsing junction pairs that sit
 /// closer together than the width can resolve.
+///
+/// A branch between two junctions no longer than twice the smaller boundary distance at
+/// its ends is an artefact of thinning a thick crossing into two nearby junctions: it is
+/// dropped, and both junctions move to its midpoint, so the branches that met there now
+/// meet at one point.
 pub(crate) fn geometric_chains(
     skel: &[bool],
     g: &RegionGrid,

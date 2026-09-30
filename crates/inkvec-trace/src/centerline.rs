@@ -118,6 +118,18 @@
 //!   so the level set there falls back to the pixel midpoint. Topology stays right
 //!   (labels decide it); only the sub-pixel position of that one shared boundary
 //!   degrades to what a lattice tracer would have said.
+//!
+//! # Where this sits
+//!
+//! A separate path from the filled trace, for monochrome line art: `inkvec-cli`'s
+//! pipeline takes a [`CoverageField`] from `coverage::bilevel_coverage`, labels it with
+//! [`bilevel_labels`], calls [`analyse`], moves the strokes onto the coverage with
+//! [`refine_to_coverage`], keeps the ones [`stroke_residual_one`] accepts, and fits each
+//! centreline with [`Stroke::fit`]. `inkvec-fab`'s line mode calls [`analyse_with`] under
+//! [`GRAPH_CRITERIA`]. Regions not recovered as strokes go back to filled tracing.
+//!
+//! Coordinates are px with pixel centres at integer coordinates. The skeleton is in
+//! `skeleton`, the stroke outline and its coverage in `outline`.
 
 use inkvec_core::{Point, Polyline, Vec2};
 use inkvec_fit::multimodel::optimal_multimodel;
@@ -130,7 +142,7 @@ mod outline;
 mod skeleton;
 
 use outline::{
-    cross, ms_pairs, offset_outline, others_cover, outline_cover, point_seg, stroke_cost,
+    cross, ms_pairs, offset_outline, others_cover, outline_cover, point_seg, stroke_cost, Window,
 };
 use skeleton::{geometric_chains, prune_spurs, zhang_suen, RawChain};
 
@@ -343,6 +355,11 @@ pub struct StrokeAnalysis {
 /// [`crate::coverage::bilevel_coverage`], or a per-ink field on the colour path.
 /// `labels` is a per-pixel region id in the same layout as the image, as produced by
 /// [`bilevel_labels`] or by the colour front end's face labelling.
+///
+/// Each ink region (mean coverage at least 0.5, at least `MIN_REGION_PIXELS` pixels) is
+/// cropped, thinned, turned into chains, and each chain measured; the region counts as
+/// stroked only if its chains pass the aspect, constant-width and area tests (see the
+/// module docs). Mismatched sizes return an empty analysis.
 pub fn analyse(coverage: &CoverageField, labels: &[u16], w: usize, h: usize) -> StrokeAnalysis {
     analyse_with(coverage, labels, w, h, Criteria::default())
 }
@@ -401,6 +418,9 @@ pub fn analyse_with(
 /// A convenience for the bilevel front end and for tests: the colour path already
 /// produces face labels of its own. Background components are labelled too, so every
 /// pixel has a region and [`analyse`] can report the ones it declined.
+///
+/// Labels are assigned in raster order of each component's first pixel, by an explicit
+/// stack flood fill. Past 65,535 components the rest are folded into label 0.
 pub fn bilevel_labels(coverage: &CoverageField) -> Vec<u16> {
     let (w, h) = (coverage.width, coverage.height);
     let n = w * h;
@@ -454,6 +474,8 @@ pub fn bilevel_labels(coverage: &CoverageField) -> Vec<u16> {
 // Region bookkeeping
 // ---------------------------------------------------------------------------------
 
+/// Per-label totals: pixel count, summed coverage, and the inclusive pixel bounding box
+/// `[x0, x1] x [y0, y1]`.
 struct RegionStat {
     count: usize,
     cov_sum: f64,
@@ -463,6 +485,8 @@ struct RegionStat {
     y1: usize,
 }
 
+/// One pass over the image collecting a [`RegionStat`] per label, indexed by label;
+/// `None` for label values that never occur.
 fn region_stats(
     coverage: &CoverageField,
     labels: &[u16],
@@ -509,11 +533,15 @@ fn region_stats(
 /// lattice tracer would have said, and the disagreement is not allowed to change which
 /// pixels are in the region.
 pub(crate) struct RegionGrid {
+    /// Image position of the crop's first pixel (may be negative: the pad).
     x0: isize,
     y0: isize,
+    /// Crop size in pixels.
     w: usize,
     h: usize,
+    /// Effective coverage indicator, row-major over the crop.
     u: Vec<f32>,
+    /// Which crop pixels carry the label.
     mask: Vec<bool>,
 }
 
@@ -521,6 +549,9 @@ pub(crate) struct RegionGrid {
 const CLAMP_EPS: f32 = 1e-3;
 
 impl RegionGrid {
+    /// Crop region `label` (whose stats are `st`) out of the `iw x ih` image with a
+    /// two-pixel pad. Inside pixels get `max(a, 0.5 + CLAMP_EPS)`, outside ones
+    /// `min(a, 0.5 − CLAMP_EPS)`; pad pixels beyond the image read as background (0).
     fn build(
         coverage: &CoverageField,
         labels: &[u16],
@@ -574,6 +605,7 @@ impl RegionGrid {
         self.u.iter().map(|&a| a as f64).sum()
     }
 
+    /// Image position of crop pixel `(i, j)`'s centre.
     #[inline]
     pub(crate) fn point_of(&self, i: usize, j: usize) -> Point {
         Point::new((self.x0 + i as isize) as f64, (self.y0 + j as isize) as f64)
@@ -590,15 +622,22 @@ impl RegionGrid {
 /// but the segments are wanted as *geometry*, not as linked contours, so nothing here
 /// needs the grid-edge identity bookkeeping that makes contour linking exact.
 pub(crate) struct LevelSet {
+    /// The boundary's line segments, image coordinates.
     segs: Vec<(Point, Point)>,
+    /// Origin of the hash grid.
     ox: f64,
     oy: f64,
+    /// Hash grid size in cells of side `CELL`.
     nx: usize,
     ny: usize,
+    /// Per cell, the segments whose bounding box touches it.
     cells: Vec<Vec<u32>>,
 }
 
 impl LevelSet {
+    /// Marching squares over the crop's effective indicator: for every 2x2 block of pixel
+    /// centres whose corners straddle 0.5, the crossing points on its edges (by
+    /// [`cross`]) joined as [`ms_pairs`] says, saddles resolved by the block's mean.
     fn build(g: &RegionGrid) -> LevelSet {
         let mut segs: Vec<(Point, Point)> = Vec::new();
         if g.w < 2 || g.h < 2 {
@@ -631,6 +670,8 @@ impl LevelSet {
         LevelSet::index(segs)
     }
 
+    /// Build the spatial hash: a grid of `CELL`-sized cells covering the segments'
+    /// bounding box with a margin, each listing the segments whose bounding box it touches.
     fn index(segs: Vec<(Point, Point)>) -> LevelSet {
         if segs.is_empty() {
             return LevelSet {
@@ -680,6 +721,10 @@ impl LevelSet {
     /// Exact against the piecewise-linear level set, and evaluated at arbitrary
     /// sub-pixel positions rather than interpolated off a grid — interpolating a
     /// distance field smooths the very crease the ridge walk is looking for.
+    ///
+    /// Searches square rings of hash cells outward from `p`'s cell and stops once the
+    /// best distance found is no more than the ring radius, since every unexamined
+    /// segment is at least that far. `(∞, p)` when there is no boundary.
     pub(crate) fn nearest(&self, p: Point) -> (f64, Point) {
         if self.segs.is_empty() {
             return (f64::INFINITY, p);
@@ -745,24 +790,26 @@ const REFINE_H: f64 = 0.02;
 /// better curve. `boundary_opt` carries a kink term for the same reason.
 const REFINE_KINK: f64 = 0.35;
 
-/// How well the strokes, drawn as they will actually be drawn, reproduce the
-/// coverage they came from. Root-mean-square residual per pixel over the ink and
-/// its surround, in coverage units.
+/// How well one stroke reproduces the ink of *its own region*: the root-mean-square
+/// difference, in coverage units, between the coverage its outline paints and the
+/// measured coverage.
 ///
 /// This is the honest gate. Ink balance -- total length times width against total
 /// coverage -- is a proxy, and a loose one: `badge-pound-sterling` balances to
 /// within a tenth and still traces at dE00 2.57 against the filled path's 0.15,
 /// because two strokes in the right amount can be in the wrong places. Scoring
-/// the union of the real outlines against the real coverage cannot be fooled that
-/// way, and it costs one pass over the ink's bounding box.
-/// How well one stroke reproduces the ink of *its own region*.
+/// the stroke's real outline against the real coverage cannot be fooled that
+/// way, and it costs one pass over the stroke's bounding box.
 ///
-/// The pooled version below scores a set of strokes against the whole coverage
-/// field, which is right for a set and wrong for a member: a single stroke
-/// measured that way is charged for every pixel its neighbours cover, so on a
-/// drawing with four strokes each one looks catastrophic and none survives a
-/// threshold that ought to keep most. Restricting to the label the stroke came
-/// from asks the question that actually decides whether to keep it.
+/// Scoring a set of strokes against the whole coverage field is right for a set and
+/// wrong for a member: a single stroke measured that way is charged for every pixel its
+/// neighbours cover, so on a drawing with four strokes each one looks catastrophic and
+/// none survives a threshold that ought to keep most. Restricting to the label the
+/// stroke came from asks the question that actually decides whether to keep it.
+///
+/// The sum runs over the stroke's window, on pixels of its own label (target: their
+/// coverage) and on any other pixel it paints (target: 0). Infinite when there is
+/// nothing to score or the labels do not match the field's size.
 pub fn stroke_residual_one(st: &Stroke, coverage: &CoverageField, labels: &[u16]) -> f64 {
     let (w, h) = (coverage.width, coverage.height);
     if w == 0 || h == 0 || labels.len() < w * h {
@@ -772,7 +819,7 @@ pub fn stroke_residual_one(st: &Stroke, coverage: &CoverageField, labels: &[u16]
     if outer.len() < 3 {
         return f64::INFINITY;
     }
-    let (x0, y0, x1, y1) = stroke_window(&st.path, st.width * 0.5, w, h);
+    let Window { x0, y0, x1, y1 } = stroke_window(&st.path, st.width * 0.5, w, h);
     let (mut ca, mut cb) = (Vec::with_capacity(32), Vec::with_capacity(32));
     let (mut acc, mut n) = (0.0f64, 0usize);
     for y in y0..y1 {
@@ -801,55 +848,10 @@ pub fn stroke_residual_one(st: &Stroke, coverage: &CoverageField, labels: &[u16]
     (acc / n as f64).sqrt()
 }
 
-/// RMS residual between the coverage rendered from `strokes` and `coverage` itself,
-/// over each stroke's own pixels plus any pixel it paints outside them.
-pub fn stroke_residual(strokes: &[Stroke], coverage: &CoverageField) -> f64 {
-    let (w, h) = (coverage.width, coverage.height);
-    if w == 0 || h == 0 || strokes.is_empty() {
-        return f64::INFINITY;
-    }
-    let mut model = vec![0.0f32; w * h];
-    for st in strokes {
-        let (outer, inner) = offset_outline(&st.path, st.closed, st.width * 0.5);
-        if outer.len() < 3 {
-            continue;
-        }
-        let (x0, y0, x1, y1) = stroke_window(&st.path, st.width * 0.5, w, h);
-        let (mut ca, mut cb) = (Vec::with_capacity(32), Vec::with_capacity(32));
-        for y in y0..y1 {
-            for x in x0..x1 {
-                let c = outline_cover(
-                    &outer,
-                    inner.as_ref(),
-                    x as f64 - 0.5,
-                    y as f64 - 0.5,
-                    &mut ca,
-                    &mut cb,
-                ) as f32;
-                if c > model[y * w + x] {
-                    model[y * w + x] = c;
-                }
-            }
-        }
-    }
-    // Over every pixel that either side calls ink, plus what surrounds it: scoring
-    // the whole canvas would divide the error by the empty background and report
-    // any drawing as excellent.
-    let (mut acc, mut n) = (0.0f64, 0usize);
-    for i in 0..w * h {
-        let (a, b) = (model[i] as f64, coverage.data[i] as f64);
-        if a > 0.001 || b > 0.001 {
-            acc += (a - b) * (a - b);
-            n += 1;
-        }
-    }
-    if n == 0 {
-        return f64::INFINITY;
-    }
-    (acc / n as f64).sqrt()
-}
-
 /// Unit normal to the centreline at point `i`.
+///
+/// The perpendicular `(−t.y, t.x)` of the chord between the point's neighbours (a
+/// one-sided chord at the ends of an open path). Zero for a degenerate chord.
 fn normal_at(path: &[Point], i: usize, closed: bool) -> Point {
     let n = path.len();
     let (a, b) = if closed {
@@ -869,16 +871,25 @@ fn normal_at(path: &[Point], i: usize, closed: bool) -> Point {
     Point::new(-t.y / l, t.x / l)
 }
 
-fn point_window(p: Point, hw: f64, w: usize, h: usize) -> (usize, usize, usize, usize) {
+/// The pixels a stroke of half-width `hw` can touch around point `p`: its bounding box
+/// grown by `hw + 2` px and clipped to the `w x h` image.
+fn point_window(p: Point, hw: f64, w: usize, h: usize) -> Window {
     let r = hw + 2.0;
     let x0 = (p.x - r).floor().max(0.0) as usize;
     let y0 = (p.y - r).floor().max(0.0) as usize;
     let x1 = (((p.x + r).ceil().max(0.0) as usize) + 1).min(w);
     let y1 = (((p.y + r).ceil().max(0.0) as usize) + 1).min(h);
-    (x0.min(x1), y0.min(y1), x1, y1)
+    Window {
+        x0: x0.min(x1),
+        y0: y0.min(y1),
+        x1,
+        y1,
+    }
 }
 
-fn stroke_window(path: &[Point], hw: f64, w: usize, h: usize) -> (usize, usize, usize, usize) {
+/// [`point_window`] for a whole centreline: the bounding box of `path` grown by `hw + 2`
+/// px and clipped to the image.
+fn stroke_window(path: &[Point], hw: f64, w: usize, h: usize) -> Window {
     let (mut lox, mut loy, mut hix, mut hiy) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     for p in path {
         lox = lox.min(p.x);
@@ -891,7 +902,12 @@ fn stroke_window(path: &[Point], hw: f64, w: usize, h: usize) -> (usize, usize, 
     let y0 = (loy - r).floor().max(0.0) as usize;
     let x1 = (((hix + r).ceil().max(0.0) as usize) + 1).min(w);
     let y1 = (((hiy + r).ceil().max(0.0) as usize) + 1).min(h);
-    (x0.min(x1), y0.min(y1), x1, y1)
+    Window {
+        x0: x0.min(x1),
+        y0: y0.min(y1),
+        x1,
+        y1,
+    }
 }
 
 /// Move a recovered stroke onto the coverage it was measured from.
@@ -912,6 +928,11 @@ fn stroke_window(path: &[Point], hw: f64, w: usize, h: usize) -> (usize, usize, 
 /// Coordinate descent with a finite-difference Newton step. Each point's influence
 /// is local, so its cost is evaluated over a window around it rather than over the
 /// image, which keeps a pass linear in the number of points.
+///
+/// Each of `rounds` rounds updates the half-width ([`refine_half_width`]) and then every
+/// point in order ([`refine_point`]), each against the coverage the other strokes
+/// already paint. Strokes are refined one after another, each seeing the others'
+/// current state. `INKVEC_REFINEDBG=1` prints how far each stroke moved.
 pub fn refine_to_coverage(strokes: &mut [Stroke], coverage: &CoverageField, rounds: usize) {
     let (w, h) = (coverage.width, coverage.height);
     if w == 0 || h == 0 || coverage.data.len() < w * h {
@@ -929,101 +950,16 @@ pub fn refine_to_coverage(strokes: &mut [Stroke], coverage: &CoverageField, roun
         for _ in 0..rounds {
             // Width first: it is one number for the whole stroke, and the points
             // are then fitted against whatever it currently says.
-            let (bx0, by0, bx1, by1) = stroke_window(&st.path, hw, w, h);
-            let ob = others_cover(strokes, si, bx0, by0, bx1, by1);
-            let base = stroke_cost(coverage, &ob, &st.path, st.closed, hw, bx0, by0, bx1, by1);
-            let up = stroke_cost(
-                coverage,
-                &ob,
-                &st.path,
-                st.closed,
-                hw + REFINE_H,
-                bx0,
-                by0,
-                bx1,
-                by1,
-            );
-            let dn = stroke_cost(
-                coverage,
-                &ob,
-                &st.path,
-                st.closed,
-                hw - REFINE_H,
-                bx0,
-                by0,
-                bx1,
-                by1,
-            );
-            let g = (up - dn) / (2.0 * REFINE_H);
-            let curv = (up - 2.0 * base + dn) / (REFINE_H * REFINE_H);
-            if curv > 1e-9 {
-                hw = (hw - g / curv).clamp(hw0 - REFINE_MAX, hw0 + REFINE_MAX);
-            }
-
+            hw = refine_half_width(strokes, si, &st, coverage, hw, hw0);
             for i in 0..st.path.len() {
-                let nrm = normal_at(&st.path, i, st.closed);
-                if nrm.x == 0.0 && nrm.y == 0.0 {
-                    continue;
-                }
-                let (x0, y0, x1, y1) = point_window(st.path[i], hw, w, h);
-                if x1 <= x0 || y1 <= y0 {
-                    continue;
-                }
-                let orig = st.path[i];
-                let at = |d: f64| Point::new(orig.x + nrm.x * d, orig.y + nrm.y * d);
-
-                // Neighbouring offsets, so the smoothness term can be priced
-                // alongside the coverage one. An endpoint has one neighbour and is
-                // left to the data.
-                let n_pts = st.path.len();
-                let nb = if st.closed && n_pts > 2 {
-                    Some((moved[(i + n_pts - 1) % n_pts], moved[(i + 1) % n_pts]))
-                } else if i > 0 && i + 1 < n_pts {
-                    Some((moved[i - 1], moved[i + 1]))
-                } else {
-                    None
-                };
-                let kink = |u: f64| -> f64 {
-                    match nb {
-                        Some((a, b)) => {
-                            let d = u - 0.5 * (a + b);
-                            REFINE_KINK * d * d
-                        }
-                        None => 0.0,
-                    }
-                };
-
-                let op = others_cover(strokes, si, x0, y0, x1, y1);
-                let c0 = stroke_cost(coverage, &op, &st.path, st.closed, hw, x0, y0, x1, y1)
-                    + kink(moved[i]);
-                st.path[i] = at(REFINE_H);
-                let cp = stroke_cost(coverage, &op, &st.path, st.closed, hw, x0, y0, x1, y1)
-                    + kink(moved[i] + REFINE_H);
-                st.path[i] = at(-REFINE_H);
-                let cm = stroke_cost(coverage, &op, &st.path, st.closed, hw, x0, y0, x1, y1)
-                    + kink(moved[i] - REFINE_H);
-                st.path[i] = orig;
-
-                let g = (cp - cm) / (2.0 * REFINE_H);
-                let curv = (cp - 2.0 * c0 + cm) / (REFINE_H * REFINE_H);
-                if curv <= 1e-9 {
-                    continue;
-                }
-                // A Newton step on a ramp overshoots badly where the window is
-                // nearly saturated, so cap the step, and cap the total travel from
-                // where the ridge put the point.
-                let want =
-                    (moved[i] + (-g / curv).clamp(-0.35, 0.35)).clamp(-REFINE_MAX, REFINE_MAX);
-                if (want - moved[i]).abs() > 1e-6 {
-                    st.path[i] = Point::new(orig.x + nrm.x * want, orig.y + nrm.y * want);
-                    moved[i] = want;
-                }
+                refine_point(strokes, si, &mut st, coverage, hw, &mut moved, i);
             }
         }
         if inkvec_core::env::flag("INKVEC_REFINEDBG") {
             let tot: f64 = moved.iter().map(|d| d.abs()).sum();
             eprintln!(
-                "  [refine] stroke {si}: {} pts, closed {}, width {:.3} -> {:.3},                  moved {:.4} px total, max {:.4}",
+                "  [refine] stroke {si}: {} pts, closed {}, width {:.3} -> {:.3}, \
+                 moved {:.4} px total, max {:.4}",
                 st.path.len(),
                 st.closed,
                 hw0 * 2.0,
@@ -1037,12 +973,124 @@ pub fn refine_to_coverage(strokes: &mut [Stroke], coverage: &CoverageField, roun
     }
 }
 
-// ---------------------------------------------------------------------------------
+/// One Newton step on stroke `st`'s half-width `hw` against the coverage.
+///
+/// With `E(hw)` the [`stroke_cost`] over the stroke's window and `δ = REFINE_H`, the
+/// derivatives are central differences, `g = (E(hw+δ) − E(hw−δ)) / 2δ` and
+/// `c = (E(hw+δ) − 2E(hw) + E(hw−δ)) / δ²`; the new half-width is `hw − g/c`, kept within
+/// `REFINE_MAX` of the original `hw0`. Unchanged where the cost is not convex (`c <= 0`).
+fn refine_half_width(
+    strokes: &[Stroke],
+    si: usize,
+    st: &Stroke,
+    coverage: &CoverageField,
+    hw: f64,
+    hw0: f64,
+) -> f64 {
+    let (w, h) = (coverage.width, coverage.height);
+    let win = stroke_window(&st.path, hw, w, h);
+    let ob = others_cover(strokes, si, win);
+    let base = stroke_cost(coverage, &ob, &st.path, st.closed, hw, win);
+    let up = stroke_cost(coverage, &ob, &st.path, st.closed, hw + REFINE_H, win);
+    let dn = stroke_cost(coverage, &ob, &st.path, st.closed, hw - REFINE_H, win);
+    let g = (up - dn) / (2.0 * REFINE_H);
+    let curv = (up - 2.0 * base + dn) / (REFINE_H * REFINE_H);
+    if curv > 1e-9 {
+        (hw - g / curv).clamp(hw0 - REFINE_MAX, hw0 + REFINE_MAX)
+    } else {
+        hw
+    }
+}
+
+/// One Newton step on point `i` of `st`, along its normal.
+///
+/// The cost is the local [`stroke_cost`] plus a smoothness term on the offsets,
+/// `REFINE_KINK · (u_i − (u_{i−1} + u_{i+1})/2)²`, where `u` is each point's offset
+/// from its ridge position (`moved`); end points of an open stroke have no smoothness
+/// term. Derivatives are central differences at `±REFINE_H`; the step is capped at
+/// 0.35 px and the total offset at `REFINE_MAX`. The point is left alone where the cost
+/// is not convex or the normal is undefined. Updates `st.path[i]` and `moved[i]`.
+fn refine_point(
+    strokes: &[Stroke],
+    si: usize,
+    st: &mut Stroke,
+    coverage: &CoverageField,
+    hw: f64,
+    moved: &mut [f64],
+    i: usize,
+) {
+    let (w, h) = (coverage.width, coverage.height);
+    let nrm = normal_at(&st.path, i, st.closed);
+    if nrm.x == 0.0 && nrm.y == 0.0 {
+        return;
+    }
+    let win = point_window(st.path[i], hw, w, h);
+    if win.x1 <= win.x0 || win.y1 <= win.y0 {
+        return;
+    }
+    let orig = st.path[i];
+    let at = |d: f64| Point::new(orig.x + nrm.x * d, orig.y + nrm.y * d);
+
+    // Neighbouring offsets, so the smoothness term can be priced
+    // alongside the coverage one. An endpoint has one neighbour and is
+    // left to the data.
+    let n_pts = st.path.len();
+    let nb = if st.closed && n_pts > 2 {
+        Some((moved[(i + n_pts - 1) % n_pts], moved[(i + 1) % n_pts]))
+    } else if i > 0 && i + 1 < n_pts {
+        Some((moved[i - 1], moved[i + 1]))
+    } else {
+        None
+    };
+    let kink = |u: f64| -> f64 {
+        match nb {
+            Some((a, b)) => {
+                let d = u - 0.5 * (a + b);
+                REFINE_KINK * d * d
+            }
+            None => 0.0,
+        }
+    };
+
+    let op = others_cover(strokes, si, win);
+    let c0 = stroke_cost(coverage, &op, &st.path, st.closed, hw, win) + kink(moved[i]);
+    st.path[i] = at(REFINE_H);
+    let cp = stroke_cost(coverage, &op, &st.path, st.closed, hw, win) + kink(moved[i] + REFINE_H);
+    st.path[i] = at(-REFINE_H);
+    let cm = stroke_cost(coverage, &op, &st.path, st.closed, hw, win) + kink(moved[i] - REFINE_H);
+    st.path[i] = orig;
+
+    let g = (cp - cm) / (2.0 * REFINE_H);
+    let curv = (cp - 2.0 * c0 + cm) / (REFINE_H * REFINE_H);
+    if curv <= 1e-9 {
+        return;
+    }
+    // A Newton step on a ramp overshoots badly where the window is
+    // nearly saturated, so cap the step, and cap the total travel from
+    // where the ridge put the point.
+    let want = (moved[i] + (-g / curv).clamp(-0.35, 0.35)).clamp(-REFINE_MAX, REFINE_MAX);
+    if (want - moved[i]).abs() > 1e-6 {
+        st.path[i] = Point::new(orig.x + nrm.x * want, orig.y + nrm.y * want);
+        moved[i] = want;
+    }
+}
 
 // ---------------------------------------------------------------------------------
 // Sub-pixel ridge, width, and the stroke decision
 // ---------------------------------------------------------------------------------
 
+/// Decide one region: level set, thinning, spur pruning, chains, then the stroke tests.
+///
+/// Every chain must pass [`measure_stroke`] (with the per-edge aspect of `criteria` when
+/// there are several chains); with a relaxed per-edge aspect the summed length must still
+/// reach `MIN_ASPECT` median widths. Finally the strokes' area, `Σ length·width` plus
+/// `(π/8)·width²` for each open stroke's caps, must be between `AREA_EXPLAINED_MIN` and
+/// `AREA_EXPLAINED_MAX` of the region's sub-pixel area. `None` sends the region back to
+/// filled tracing.
+///
+/// Note that `(π/8)·width²` is half a disc per open stroke, while the comment where it is
+/// added argues for half a disc per free end (a whole disc per open stroke). The code is
+/// what the thresholds were tuned against, so it is documented here rather than changed.
 fn analyse_region(
     cov: &CoverageField,
     g: &RegionGrid,
@@ -1103,6 +1151,18 @@ fn analyse_region(
     Some(strokes)
 }
 
+/// Measure one chain as a stroke: its sub-pixel centreline, width and uncertainties, or
+/// `None` if it is not a constant-width stroke.
+///
+/// At each ridge point `p` with nearest boundary point `b1` at distance `d`, the width
+/// sample is `2d`; the far boundary `b2` is found by reflecting `b1` through `p` and
+/// snapping to the level set. With `s1`, `s2` their positional sigmas
+/// ([`CoverageField::position_sigma`]), the width's sigma is `sqrt(s1² + s2²)` and the
+/// centreline point's `½ sqrt(s1² + s2²)`. The width is the median over interior samples
+/// ([`interior_samples`]) and its spread their scaled MAD ([`robust_spread`]). Rejected
+/// when `length / width < min_aspect` or the spread exceeds `TAU_WIDTH` times the
+/// median width sigma (floored at `WIDTH_SIGMA_FLOOR`). The reported `width_sigma` is
+/// `hypot(spread / sqrt(n), WIDTH_SIGMA_FLOOR)`.
 fn measure_stroke(
     cov: &CoverageField,
     ls: &LevelSet,
@@ -1193,6 +1253,10 @@ fn measure_stroke(
 /// distance field near its ridge is `Dmax - |t - delta|`, and the parabolic vertex of
 /// three samples of a tent lands at `delta/2` rather than at `delta`. One step would
 /// leave half the error behind; the iteration is a geometric sequence that removes it.
+///
+/// With samples `y−`, `y0`, `y+` of the distance at offsets `−step, 0, +step` along the
+/// normal, the parabola's vertex is at `δ = ½·step·(y− − y+) / (y− − 2y0 + y+)`, clamped
+/// to `±step`. A point stops when `δ` is tiny or would take its total shift past `bound`.
 fn refine_ridge(ls: &LevelSet, pts: &[Point], closed: bool, step: f64, bound: f64) -> Vec<Point> {
     let n = pts.len();
     let mut out = Vec::with_capacity(n);
@@ -1250,6 +1314,9 @@ fn scan_for_max(sample: &impl Fn(f64) -> f64, here: f64, reach: f64) -> f64 {
     best_o
 }
 
+/// Unit tangent at point `k`: the chord from `TANGENT_WINDOW` points before to as many
+/// after (wrapping when closed, clamped at open ends), falling back to the immediate
+/// neighbours and then to `+x` when the chord is degenerate.
 fn tangent(pts: &[Point], k: usize, closed: bool) -> Vec2 {
     let n = pts.len() as i64;
     let idx = |d: i64| -> Point {
@@ -1303,6 +1370,7 @@ fn interior_samples(pts: &[Point], closed: bool, width: f64) -> Vec<usize> {
     }
 }
 
+/// Arc length of a polyline, with the closing segment when `closed`.
 fn polyline_length(pts: &[Point], closed: bool) -> f64 {
     let n = pts.len();
     if n < 2 {
@@ -1315,6 +1383,8 @@ fn polyline_length(pts: &[Point], closed: bool) -> f64 {
     l
 }
 
+/// Median of `v` (sorting it in place; the mean of the middle two for an even count).
+/// NaN for an empty slice.
 pub(crate) fn median(v: &mut [f64]) -> f64 {
     if v.is_empty() {
         return f64::NAN;
@@ -1331,6 +1401,9 @@ pub(crate) fn median(v: &mut [f64]) -> f64 {
 /// Median absolute deviation, scaled to a Gaussian sigma. Robust because a single
 /// junction sample that escaped the trim should not decide whether a stroke is
 /// constant-width.
+///
+/// `1.4826 · median(|v_i − centre|)`, where `1.4826 ≈ 1/0.6745` makes the MAD of a normal
+/// sample estimate its sigma. Zero for fewer than two samples.
 fn robust_spread(v: &[f64], centre: f64) -> f64 {
     if v.len() < 2 {
         return 0.0;

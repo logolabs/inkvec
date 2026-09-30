@@ -837,7 +837,7 @@ impl Problem<'_> {
         cell: usize,
         pos: &[Point],
         scratch: &mut Scratch,
-        mut grad: Option<&mut [Point]>,
+        grad: Option<&mut [Point]>,
         total: &mut f64,
     ) {
         let order = &scratch.order;
@@ -939,7 +939,7 @@ impl Problem<'_> {
             *total += r * r;
             dda += 2.0 * r * (l - r_);
         }
-        if let Some(g) = grad.as_deref_mut() {
+        if let Some(g) = grad {
             if a > 1e-9 && a < 1.0 - 1e-9 {
                 let lp = &scratch.loop_pts;
                 let n = lp.len();

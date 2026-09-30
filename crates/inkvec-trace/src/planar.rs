@@ -98,6 +98,7 @@ pub struct PlanarMap {
 }
 
 pub(crate) mod junctions;
+pub(crate) mod runs;
 pub use junctions::{node_position, refine_junctions};
 
 /// Grid node index. Nodes sit at pixel corners: node `(i, j)` is at image coordinate

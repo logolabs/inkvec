@@ -1,6 +1,7 @@
 //! Tests of the alpha-ramp fit's list form against the whole-image scan it replaced
 //! (2026-09-30), and of the skip rule `ramp_candidate`: bit-for-bit equality on random and
-//! degenerate label maps, and "skipped means `None`" checked against the scan itself.
+//! degenerate label maps, and "skipped means `None`" checked against the scan itself; and
+//! of `face_stats`, the run-based first pass, against the per-pixel loop it replaced.
 
 use super::*;
 
@@ -271,4 +272,103 @@ fn the_list_fit_equals_the_scan_on_degenerate_maps() {
     let img = image(&mut rng, w, h);
     let fade: Vec<f32> = (0..w * h).map(|p| 0.1 + 0.03 * (p % w) as f32).collect();
     assert_eq!(check(&vec![0u16; w * h], &fade, &img, 1), 1);
+}
+
+/// `face_alpha`'s first pass as a per-pixel loop, the form [`face_stats`] replaced: the
+/// reference its tests hold it to.
+fn face_stats_scan(labels: &[u16], alpha: &[f32], w: usize, h: usize, n_faces: usize) -> FaceStats {
+    let mut st = FaceStats {
+        a_sum: vec![0.0; n_faces],
+        a_n: vec![0; n_faces],
+        in_sum: vec![0.0; n_faces],
+        in_sq: vec![0.0; n_faces],
+        in_n: vec![0; n_faces],
+        in_faded: vec![false; n_faces],
+    };
+    for (i, &l) in labels.iter().enumerate() {
+        let f = l as usize;
+        if f >= n_faces {
+            continue;
+        }
+        let a32 = alpha.get(i).copied().unwrap_or(1.0);
+        let a = a32 as f64;
+        st.a_sum[f] += a;
+        st.a_n[f] += 1;
+        let (x, y) = (i % w, i / w);
+        let interior = x > 0
+            && y > 0
+            && x + 1 < w
+            && y + 1 < h
+            && labels[i - 1] == l
+            && labels[i + 1] == l
+            && labels[i - w] == l
+            && labels[i + w] == l;
+        if interior {
+            st.in_sum[f] += a;
+            st.in_sq[f] += a * a;
+            st.in_n[f] += 1;
+            st.in_faded[f] |= a32 != 1.0;
+        }
+    }
+    st
+}
+
+/// Two sets of statistics are the same bit for bit.
+fn same_stats(a: &FaceStats, b: &FaceStats) -> bool {
+    let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+    bits(&a.a_sum) == bits(&b.a_sum)
+        && bits(&a.in_sum) == bits(&b.in_sum)
+        && bits(&a.in_sq) == bits(&b.in_sq)
+        && a.a_n == b.a_n
+        && a.in_n == b.in_n
+        && a.in_faded == b.in_faded
+}
+
+#[test]
+fn face_statistics_from_runs_equal_the_pixel_loop() {
+    let mut rng = Rng(0xD1B5_4A32_D192_ED03);
+    let shapes = [
+        (1usize, 1usize),
+        (1, 9),
+        (9, 1),
+        (2, 2),
+        (3, 3),
+        (17, 11),
+        (64, 48),
+    ];
+    for (w, h) in shapes {
+        for case in 0..6 {
+            let n_faces = 1 + rng.below(4) as usize;
+            let bw = w.div_ceil(4);
+            let block: Vec<u16> = (0..bw * h.div_ceil(3))
+                .map(|_| rng.below(n_faces as u64 + 1) as u16)
+                .collect();
+            // Blocks, noise, one label, a checkerboard; label `n_faces` is out of range.
+            let labels: Vec<u16> = (0..w * h)
+                .map(|p| match case {
+                    0 | 1 => block[(p / w / 3) * bw + (p % w) / 4],
+                    2 => rng.below(n_faces as u64 + 1) as u16,
+                    3 => 0,
+                    _ => ((p % w + p / w) % 2) as u16,
+                })
+                .collect();
+            // Clear, opaque, 8-bit levels, and signed zeros.
+            let alpha: Vec<f32> = (0..w * h)
+                .map(|_| match rng.below(5) {
+                    0 => 0.0,
+                    1 => -0.0,
+                    2 => 1.0,
+                    _ => rng.below(256) as f32 / 255.0,
+                })
+                .collect();
+            let old = face_stats_scan(&labels, &alpha, w, h, n_faces);
+            let new = face_stats(&labels, &alpha, w, h, n_faces);
+            assert!(same_stats(&old, &new), "{w}x{h} case {case}");
+            // A short alpha channel reads as opaque past its end, in both.
+            let short = &alpha[..alpha.len() / 2];
+            let old = face_stats_scan(&labels, short, w, h, n_faces);
+            let new = face_stats(&labels, short, w, h, n_faces);
+            assert!(same_stats(&old, &new), "{w}x{h} case {case}, short alpha");
+        }
+    }
 }

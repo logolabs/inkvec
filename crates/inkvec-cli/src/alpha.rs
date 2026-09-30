@@ -918,11 +918,11 @@ pub(crate) fn recover_layers(
 ///
 /// # Passes
 ///
-/// 1. **Statistics**, one row-major pass over the label map: per face the pixel count and
-///    alpha sum over all its pixels, and the count, sum and sum of squares over its interior
-///    pixels, plus whether any interior alpha differs from exactly 1. Every f64 sum is
-///    accumulated in pixel order `i = 0, 1, ...`, as it always was, so each is the same
-///    double as before.
+/// 1. **Statistics** ([`face_stats`]), one pass over the rows' runs: per face the pixel
+///    count and alpha sum over all its pixels, and the count, sum and sum of squares over
+///    its interior pixels, plus whether any interior alpha differs from exactly 1. Every f64
+///    sum receives the same terms in the same order as the per-pixel loop it replaced, so
+///    each is the same double as before.
 /// 2. **Verdicts**: clear and opacity per face, from those sums alone.
 /// 3. **Ramps**, under the cutout only. A face is fitted only when [`ramp_candidate`] says
 ///    the fit can return anything; the others are provably `None` and skipped. The
@@ -940,7 +940,8 @@ pub(crate) fn recover_layers(
 /// [`fit_alpha_ramp`] carry the two halves of that argument.
 ///
 /// Inputs: `img` is the matted, opaque image the trace saw ([`AlphaSource::flat`]),
-/// `traced_labels` the `w · h` label map, and `face_color` is only read for the face count.
+/// `traced_labels` the `w · h` label map (exactly `w · h` long), and `face_color` is only
+/// read for the face count.
 /// Without an `alpha_src` (an opaque input) every face comes back opaque and not clear,
 /// with a white matte and no ramps. `INKVEC_ALPHADBG` prints the per-face numbers.
 #[allow(clippy::too_many_arguments)]
@@ -963,49 +964,19 @@ pub(crate) fn face_alpha(
     // that hold one opacity costs nothing.
     const FLAT_ALPHA_SD: f64 = 0.02;
     let n_faces = face_color.len();
-    let (mut a_sum, mut a_n) = (vec![0.0f64; n_faces], vec![0usize; n_faces]);
-    let (mut in_sum, mut in_n) = (vec![0.0f64; n_faces], vec![0usize; n_faces]);
-    let mut in_sq = vec![0.0f64; n_faces];
-    // Whether any interior pixel of the face has an alpha other than exactly 1: the one
-    // fact the ramp skip below needs that the sums do not carry exactly.
-    let mut in_faded = vec![false; n_faces];
-    if let Some(src) = alpha_src {
-        // Pass 1, row-major. `(x, y)` is carried along with `i` instead of being recomputed
-        // as `(i % w, i / w)`: two integer divisions per pixel were a measurable part of the
-        // pass at 2048 px, and the visiting order -- which every f64 sum below depends on --
-        // is the same `i = 0, 1, 2, ...` as before.
-        let (mut x, mut y) = (0usize, 0usize);
-        for (i, &l) in traced_labels.iter().enumerate() {
-            let (px, py) = (x, y);
-            x += 1;
-            if x == w {
-                x = 0;
-                y += 1;
-            }
-            let f = l as usize;
-            if f >= n_faces {
-                continue;
-            }
-            let a32 = src.alpha.get(i).copied().unwrap_or(1.0);
-            let a = a32 as f64;
-            a_sum[f] += a;
-            a_n[f] += 1;
-            let interior = px > 0
-                && py > 0
-                && px + 1 < w
-                && py + 1 < h
-                && traced_labels[i - 1] == l
-                && traced_labels[i + 1] == l
-                && traced_labels[i - w] == l
-                && traced_labels[i + w] == l;
-            if interior {
-                in_sum[f] += a;
-                in_sq[f] += a * a;
-                in_n[f] += 1;
-                in_faded[f] |= a32 != 1.0;
-            }
-        }
-    }
+    // Pass 1 (see `face_stats`); without a source alpha every sum stays zero.
+    debug_assert!(traced_labels.len() == w * h, "the label map is the image's");
+    let FaceStats {
+        a_sum,
+        a_n,
+        in_sum,
+        in_sq,
+        in_n,
+        in_faded,
+    } = match alpha_src {
+        Some(src) => face_stats(traced_labels, &src.alpha, w, h, n_faces),
+        None => face_stats(&[], &[], 0, 0, n_faces),
+    };
     // A small hole is mostly rim. The rim is anti-aliased against the opaque shape around
     // it, so its partial alpha lifts the face's mean over CLEAR_ALPHA even when nothing was
     // drawn inside: a 19 px transparent square in a cap measured mean 0.065 over 396 pixels
@@ -1082,6 +1053,134 @@ pub(crate) fn face_alpha(
         matte,
         alpha_ramps,
     }
+}
+
+/// Per face, what [`face_alpha`]'s first pass measures: all indexed by face id.
+struct FaceStats {
+    /// Sum of the source alpha over every pixel of the face.
+    a_sum: Vec<f64>,
+    /// Pixel count of the face.
+    a_n: Vec<usize>,
+    /// Sum of the alpha over the face's interior pixels.
+    in_sum: Vec<f64>,
+    /// Sum of the squared alpha over the interior pixels.
+    in_sq: Vec<f64>,
+    /// Interior pixel count.
+    in_n: Vec<usize>,
+    /// Whether any interior pixel's alpha differs from exactly 1: the one fact the ramp
+    /// skip ([`ramp_candidate`]) needs that the sums do not carry exactly.
+    in_faded: Vec<bool>,
+}
+
+/// [`face_alpha`]'s first pass: every face's alpha statistics, over all its pixels and over
+/// its interior ones, in one pass over the rows' runs.
+///
+/// "Interior" is the test the rest of the module uses: not on the image border, and the
+/// pixel's own label equal to its four neighbours'. `labels` is `w · h` row-major (the
+/// caller's label map is always the image's); `alpha` is the source alpha, row-major,
+/// with a pixel past its end read as 1 (opaque), as before. Labels at or past `n_faces`
+/// are ignored.
+///
+/// # Method
+///
+/// Each row is cut into maximal runs of one label, and a run's pixels are added to its
+/// face's sums with the sums held in local variables, stored back once per run. Inside a
+/// run the left and right neighbours of every pixel but the two ends carry the run's label
+/// by definition, so the interior test reduces to `x0 < x < x1 − 1` plus the pixels above
+/// and below. A pixel whose alpha is exactly zero is not added at all.
+///
+/// # Why the sums are the same doubles as the per-pixel loop's
+///
+/// * **Order.** A face's pixels are visited in row-major order, as before: rows in order,
+///   runs of a row left to right, pixels of a run left to right. Every accumulator belongs
+///   to one face, so it receives the same terms in the same order; interleaving with other
+///   faces' accumulators never mattered.
+/// * **Interior.** For `x` in a maximal run `x0..x1` of label `l`, `x > 0 && row[x − 1] =
+///   l` holds exactly when `x > x0` (at `x = x0` either `x0 = 0` or the pixel to the left
+///   has another label), and `x + 1 < w && row[x + 1] = l` exactly when `x < x1 − 1`.
+/// * **Zeros.** Adding `+0` or `−0` to a double `s` gives `s` back unless `s = −0`, and the
+///   sums start at `+0` and only ever receive terms that are `≥ +0` or `±0` (alphas are
+///   clamped to `[0, 1]`; `a·a ≥ +0`), so they are never `−0`. Skipping a zero alpha's `a`
+///   and `a·a` therefore changes no sum. (A NaN alpha is not zero and is added, as
+///   before.) Counts are integers and are added per run.
+///
+/// # Cost
+///
+/// `O(w · h)` label and alpha reads, but no per-pixel store into the per-face arrays: the
+/// old loop's `sum[f] += a` made every pixel wait on the previous pixel's store to the same
+/// slot (a store-to-load dependency of several cycles), and on a transparent image most
+/// pixels are clear and now cost a compare. The old loop is kept as
+/// `ramp_tests::face_stats_scan`, and the tests compare the two bit for bit.
+///
+/// Method from: He, Chao & Suzuki 2008, "A Run-Based Two-Scan Labeling Algorithm", IEEE
+/// TIP 17(5) 749–756, <https://doi.org/10.1109/TIP.2008.919369>: region statistics
+/// gathered per run instead of per pixel. The zero skip is not from the literature: it
+/// rests on IEEE 754 signed-zero addition, and the literature on run coding does not need it.
+fn face_stats(labels: &[u16], alpha: &[f32], w: usize, h: usize, n_faces: usize) -> FaceStats {
+    let mut st = FaceStats {
+        a_sum: vec![0.0; n_faces],
+        a_n: vec![0; n_faces],
+        in_sum: vec![0.0; n_faces],
+        in_sq: vec![0.0; n_faces],
+        in_n: vec![0; n_faces],
+        in_faded: vec![false; n_faces],
+    };
+    let a_at = |i: usize| alpha.get(i).copied().unwrap_or(1.0);
+    for y in 0..h {
+        let row = &labels[y * w..(y + 1) * w];
+        // The rows above and below, when both exist: only then can a pixel be interior.
+        let around = (y > 0 && y + 1 < h).then(|| {
+            (
+                &labels[(y - 1) * w..y * w],
+                &labels[(y + 1) * w..(y + 2) * w],
+            )
+        });
+        let mut x = 0;
+        while x < w {
+            let l = row[x];
+            let x0 = x;
+            while x < w && row[x] == l {
+                x += 1;
+            }
+            let f = l as usize;
+            if f >= n_faces {
+                continue;
+            }
+            let base = y * w;
+            st.a_n[f] += x - x0;
+            let mut s = st.a_sum[f];
+            for i in base + x0..base + x {
+                let a = a_at(i);
+                if a != 0.0 {
+                    s += a as f64;
+                }
+            }
+            st.a_sum[f] = s;
+            let Some((up, down)) = around else {
+                continue;
+            };
+            // Interior candidates: strictly inside the run (see the doc comment).
+            let (mut sum, mut sq, mut n, mut faded) = (st.in_sum[f], st.in_sq[f], 0, false);
+            for xx in x0 + 1..x.saturating_sub(1) {
+                if up[xx] != l || down[xx] != l {
+                    continue;
+                }
+                let a32 = a_at(base + xx);
+                n += 1;
+                faded |= a32 != 1.0;
+                if a32 != 0.0 {
+                    let a = a32 as f64;
+                    sum += a;
+                    sq += a * a;
+                }
+            }
+            st.in_sum[f] = sum;
+            st.in_sq[f] = sq;
+            st.in_n[f] += n;
+            st.in_faded[f] |= faded;
+        }
+    }
+    st
 }
 
 /// What [`face_alpha`]'s first two passes know about each face that [`alpha_ramps`] needs,

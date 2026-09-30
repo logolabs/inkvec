@@ -1,20 +1,9 @@
-//! The multimodel program's table, filled in parallel and with provably useless work
-//! skipped, without changing a bit of it.
+//! The multimodel program's table, filled endpoint by endpoint with provably useless work
+//! skipped, in parallel, without changing a bit of it.
 //!
-//! [`solve_open`] is a shortest path over the spans `i..j` of one boundary, and its wall
-//! time was that of one core scanning them in turn: a single-outline logo or the largest
-//! ring of an emoji waited on one thread while the rest of the pool sat idle. Every span
+//! [`solve_open`] is a shortest path over the spans `i..j` of one boundary. Every span
 //! costs `base(i) + terms(i, j)`, where only `base(i)`, the cost of reaching `i`, depends
-//! on the program's progress, and the search cut-off for a start reads only the terms. So
-//! [`SpanScorer::fill`] scans blocks of starts at once, one start per task, keeps the
-//! terms, and replays them in order with the sequential program's own expressions: the
-//! table, and so the output, is the sequential program's bit for bit whatever the number
-//! of threads or how the pool schedules them.
-//!
-//! Measured on sixteen Studio finals (2048 px, 16 threads, medians of five): the stage
-//! `fit_dp` fell to 0.67 of its time over the set (0.34 on a six-ring logo whose largest
-//! ring was the whole stage), and the self-intersection repair, which refits undecimated
-//! boundaries with the same program, to 0.35.
+//! on the program's progress, and the search cut-off for a start reads only the terms.
 //!
 //! # The recurrence
 //!
@@ -26,11 +15,11 @@
 //! ```
 //!
 //! where `cost_model` is the line, G1 cubic, free cubic, circular arc or elliptical arc
-//! price of `crate::candidates` (nats). `from[j]`, `kind[j]` and the fitted parameters
-//! record the winner. The scan from a start `i` stops after [`PRUNE_PATIENCE`]
-//! consecutive spans whose line and cubic fidelity terms both exceed
-//! `PRUNE_SLACK·λ·PARAMS_LINE·(j − i)`. A curved model is fitted only when the line (for
-//! the ellipse, the best candidate so far) already costs more than the curved model's
+//! price of `crate::candidates` (nats), ties going to the smallest `i`. `from[j]`,
+//! `kind[j]` and the fitted parameters record the winner. The scan from a start `i` stops
+//! after [`PRUNE_PATIENCE`] consecutive spans whose line and cubic fidelity terms both
+//! exceed `PRUNE_SLACK·λ·PARAMS_LINE·(j − i)`. A curved model is fitted only when the line
+//! (for the ellipse, the best candidate so far) already costs more than the curved model's
 //! parameter floor `λ·P`, which is a proof, not a heuristic, that it could not otherwise
 //! win. The one exception is the circle, also fitted wherever the line's residual exceeds
 //! one per point, because it is the evidence for the line's bow penalty.
@@ -38,13 +27,13 @@
 //! # Bounds: work the table can never use
 //!
 //! Almost every candidate loses. Measured on the 246-icon gate set, 65% of the G1 cubics
-//! the scan fitted could not beat the table's value at their end *at the moment they were
-//! fitted* (84-95% on the flat-art inputs), and 99.8% could not beat its final value. The
-//! program only ever reads a candidate through `offer`'s `c < best[j]`, the ellipse's
-//! price gate and the cut-off's "over" test, so a candidate whose price floor already
-//! reaches `best[j]` needs no residual at all, and one whose residual is being summed can
-//! stop the moment the partial sum settles all three. This is branch and bound inside a
-//! dynamic program, one candidate at a time:
+//! the start-by-start scan fitted could not beat the table's value at their end *at the
+//! moment they were fitted* (84-95% on the flat-art inputs), and 99.8% could not beat its
+//! final value. The program only ever reads a candidate through the minimum at `j`, the
+//! ellipse's price gate and the cut-off's "over" test, so a candidate whose price floor
+//! already reaches the best at `j` needs no residual at all, and one whose residual is
+//! being summed can stop the moment the partial sum settles all three. This is branch and
+//! bound inside a dynamic program, one candidate at a time:
 //!
 //! - Morin, T. L. & Marsten, R. E. (1976), "Branch-and-bound strategies for dynamic
 //!   programming", *Operations Research* 24(4):611–627, doi:10.1287/opre.24.4.611;
@@ -60,19 +49,19 @@
 //!   against the best so far (here: [`crate::candidates::best_cubic_bounded`]).
 //!
 //! Every bound is a floor on an IEEE expression the program itself evaluates:
-//! `fl(fl(base + x) + floor)` is monotone in `base` and `x`, every residual and penalty is
-//! non-negative, so `fl(base + λ·P) ≥ best[j]` proves the model's cost is at least
-//! `best[j]` and `offer` would refuse it. The sequential fill bounds with the exact `base`
-//! and the live `best[j]`; the parallel scan-ahead with a certified lower bound on `base`
-//! ([`SpanScorer::block_bases`]) and the block's starting `best[j]`, which only falls
-//! while the block is replayed.
+//! `fl(fl(base + x) + floor)` is monotone in `base` and `x`, and every residual and
+//! penalty is non-negative, so `fl(base + λ·P) ≥ best` proves the model's cost is at least
+//! `best` and it cannot win. [`SpanScorer::fill`] scores each endpoint's candidates
+//! ("pull"), the likeliest winner first, so the rest meet a bound near the final `F(j)`
+//! rather than whatever the table held when their start came round ("push").
 //!
 //! The cut-off is the one reader these papers do not have. *Not from the literature:*
 //! a span whose cubic is dead but whose line is over leaves its "over" answer unknown
 //! ([`Over::Unknown`]), and [`CutOff`] asks for it only when the last [`PRUNE_PATIENCE`]
 //! spans hold no known "not over", latest first — the same stop, at the same span, as
 //! counting every answer, because the stop is the first span ending such a window of
-//! "over"s. On the gate set that costs under 4% of the residual work it saves.
+//! "over"s. Simulated on the gate set, the answers it has to look up cost 2% (push order)
+//! to 8% (pull order) of the residual work the bounds save.
 
 use super::*;
 use crate::candidates::{
@@ -82,11 +71,12 @@ use crate::candidates::{
 /// Polylines shorter than this are solved sequentially: their scans are too short to pay
 /// for a fork.
 pub(super) const DP_PAR_MIN_POINTS: usize = 128;
-/// Starts scanned per thread in one parallel block (see [`SpanScorer::fill`]).
-const DP_STARTS_PER_THREAD: usize = 4;
-/// Most span candidates one parallel block holds at once, a few tens of megabytes; long
-/// uncapped scans (the repair's refits of undecimated boundaries) get smaller blocks.
-const DP_BLOCK_SPANS: usize = 1 << 16;
+/// Endpoints scored at once when the candidates are shared between threads (see
+/// [`SpanScorer::fill`]): enough work per start to pay for a task, few enough that the
+/// first start's spans still bound the block's endpoints well.
+const DP_BLOCK_ENDPOINTS: usize = 32;
+/// Fewest candidates at one endpoint worth sharing between threads.
+pub(super) const DP_PAR_MIN_LIVE: usize = 64;
 
 /// Threads the dynamic programs occupy right now: one per running program plus the
 /// helpers its current block has claimed. A program forks only onto threads this says
@@ -292,8 +282,6 @@ struct SpanTerms {
     chi2_c: f64,
     /// The cut-off's answer for this span.
     over: Over,
-    /// The ellipse, when it was fitted ahead of its price gate.
-    ellipse: Option<Option<EllipseSpan>>,
 }
 
 /// The cubics' share of a span's terms (see [`SpanScorer::cubic_terms`]).
@@ -359,10 +347,9 @@ struct SpanCandidate {
 
 /// Prices the candidate spans of one [`solve_open`] run.
 ///
-/// Split in two so the program can run ahead of itself: [`SpanScorer::terms`] is
-/// everything a span offers that does not depend on the cost of reaching its start, and
-/// [`SpanScorer::resolve`] adds that cost with the sequential program's own expressions,
-/// evaluated in the same order.
+/// In two steps: [`SpanScorer::terms`] fits the models a span offers, skipping what its
+/// [`Bound`] proves useless, and [`SpanScorer::resolve`] adds the cost of reaching the
+/// start with the program's own expressions, evaluated in the same order.
 pub(super) struct SpanScorer<'a> {
     /// The opened polyline's points (px, centred) and sigmas (px).
     pts: &'a [Point],
@@ -466,16 +453,13 @@ impl<'a> SpanScorer<'a> {
     }
 
     /// Everything the span `i..j` offers that does not depend on the cost of reaching
-    /// `i`, scored against `bd` (see the module overview). With `speculate`, the ellipse
-    /// is also fitted wherever its price gate might pass, so a scan run ahead of the
-    /// program has it ready.
+    /// `i`, scored against `bd` (see the module overview).
     ///
-    /// Inlined, with [`Self::resolve`], so the sequential scan (one thread, a busy pool,
-    /// the single-threaded WebAssembly build) fuses the two and never materialises the
-    /// terms: left to the compiler it measured several per cent slower than the loop this
-    /// replaced.
+    /// Inlined, with [`Self::resolve`], so the two fuse and the terms are never
+    /// materialised: left to the compiler it measured several per cent slower than the
+    /// loop this replaced.
     #[inline(always)]
-    fn terms(&self, i: usize, j: usize, speculate: bool, bd: Bound) -> SpanTerms {
+    fn terms(&self, i: usize, j: usize, bd: Bound) -> SpanTerms {
         let (pts, tan, pre, cfg) = (self.pts, self.tan, self.pre, self.cfg);
         let cubic_floor = self.cubic_floor;
         let chi2_l = pre.chi2_line(i, j);
@@ -526,30 +510,6 @@ impl<'a> SpanScorer<'a> {
             CubicTerms::NONE
         };
 
-        // The gate compares the best candidate's cost above `base` with the ellipse's
-        // floor. Ahead of the program `base` is unknown, and that difference is the
-        // candidate's own price up to rounding in `base`'s last bits, so fit it wherever
-        // the gate might pass with a margin far wider than the rounding. `resolve`
-        // applies the exact gate, and fits the ellipse itself if the margin ever missed.
-        let ellipse = if speculate
-            && Self::ellipse_asked(i, j, circle.as_ref())
-            && !bd.dead(self.ellipse_floor)
-        {
-            let mut m = line;
-            if let Some(g) = &g1 {
-                m = m.min(0.5 * g.chi2 + cubic_floor + g.wobble);
-            }
-            if let Some(f) = &free {
-                m = m.min(0.5 * f.chi2 + cubic_floor + f.brk);
-            }
-            if let Some(f) = &circle {
-                m = m.min(f.cost);
-            }
-            (m > self.ellipse_floor - 1e-6 * (1.0 + m.abs())).then(|| self.ellipse(i, j))
-        } else {
-            None
-        };
-
         SpanTerms {
             chi2_l,
             line,
@@ -558,7 +518,6 @@ impl<'a> SpanScorer<'a> {
             circle,
             chi2_c,
             over,
-            ellipse,
         }
     }
 
@@ -661,23 +620,6 @@ impl<'a> SpanScorer<'a> {
         }
     }
 
-    /// The terms of every span from `i` that the sequential program would evaluate, in
-    /// order: up to `end`, or to the cut-off. `base` is at most the cost of reaching `i`,
-    /// `best` at least the table's value at each end when the span is offered.
-    fn scan(&self, i: usize, end: usize, base: f64, best: &[f64]) -> Vec<SpanTerms> {
-        let mut scan = Vec::new();
-        let mut cut = CutOff::new(i);
-        for j in i + 1..end {
-            let t = self.terms(i, j, true, self.bound(base, best[j]));
-            let over = t.over;
-            scan.push(t);
-            if cut.push(j, over, |k| self.cubic_over(i, k)) {
-                break;
-            }
-        }
-        scan
-    }
-
     /// The span's cheapest model once `base`, the cost of reaching `i` and leaving it, is
     /// known; `best_j` is the table's value at `j` now.
     #[inline(always)]
@@ -730,11 +672,7 @@ impl<'a> SpanScorer<'a> {
             && c - base > self.ellipse_floor
             && !self.bound(base, best_j).dead(self.ellipse_floor)
         {
-            let e = match t.ellipse {
-                Some(e) => e,
-                None => self.ellipse(i, j),
-            };
-            if let Some(e) = e {
+            if let Some(e) = self.ellipse(i, j) {
                 let cc = base + e.cost;
                 if cc < c {
                     c = cc;
@@ -781,134 +719,297 @@ impl<'a> SpanScorer<'a> {
             );
         }
     }
+}
 
-    /// Lower bounds on `base(s)` for the starts `i..i + b` of a block, before any of them
-    /// is replayed; infinite for a start nothing can reach.
-    ///
-    /// `best[i]` is final when the block starts. For a later start `s` the table still
-    /// holds the value from before the block, and a start `s'` of the block can lower it
-    /// only by an offer, whose cost is at least `fl(base(s') + 2λ)` (every model's price
-    /// is at least a line's `λ·PARAMS_LINE`). So
-    /// `lb(s) = min(best[s], min over s' in i..s of fl(lb(s') + 2λ)) (+ vertex cost)`,
-    /// with the program's own expressions, is a floor on the `base(s)` the replay will
-    /// compute, by the monotonicity of IEEE addition.
-    fn block_bases(&self, tab: &Table, i: usize, b: usize) -> Vec<f64> {
-        let step = self.cfg.lambda * PARAMS_LINE;
-        let mut out = Vec::with_capacity(b);
-        let mut reach = f64::INFINITY;
-        for s in i..i + b {
-            let mut best = tab.best[s];
-            if reach < f64::INFINITY {
-                best = best.min(reach + step);
-            }
-            let base = if !best.is_finite() {
-                f64::INFINITY
-            } else if s > 0 {
-                best + vertex_cost(self.tan, s, self.cfg)
-            } else {
-                best
-            };
-            reach = reach.min(base);
-            out.push(base);
+/// One start the pull-order fill is still extending: its cost is final, its scan has not
+/// hit the cut-off, and its span cap has not run out.
+struct Start {
+    /// The start's index.
+    i: usize,
+    /// The cost of reaching it and leaving it, `base(i)`, nats.
+    base: f64,
+    /// Its scan's cut-off.
+    cut: CutOff,
+    /// The cut-off fired at the endpoint just scored: this start offers no further span.
+    stopped: bool,
+}
+
+/// The winning candidate at one endpoint so far: its start and what it offers.
+struct Winner {
+    i: usize,
+    s: SpanCandidate,
+}
+
+impl Winner {
+    /// Whether `s` from start `i` replaces the winner: cheaper, or as cheap from an earlier
+    /// start. That is `offer`'s strict `<` over starts taken in increasing order, the
+    /// order the push fill offers them in.
+    fn beaten_by(&self, i: usize, s: &SpanCandidate) -> bool {
+        s.cost < self.s.cost || (s.cost == self.s.cost && i < self.i)
+    }
+
+    /// The bound a span from start `i` is scored against: only a cost below the winner's
+    /// (or equal to it, from an earlier start) can replace it. `next_up` turns "at least
+    /// the winner's cost" into "above it" for the earlier starts, which win ties.
+    fn bound_for(&self, i: usize) -> f64 {
+        if i < self.i {
+            self.s.cost.next_up()
+        } else {
+            self.s.cost
         }
-        out
     }
 }
 
 impl SpanScorer<'_> {
     /// The program's table for spans of at most `max_span` points.
     ///
-    /// `width(left)`, asked before each block with `left` the starts still to go, says
-    /// how many threads to share the next block of starts with; one means scan the next
-    /// start alone, here.
+    /// Filled endpoint by endpoint ("pull"): every `F(i)` a span from `i` to `j` needs is
+    /// final before `j` is scored, and the candidates for `j` are scored against the best
+    /// one found so far rather than against whatever the table held when the start came
+    /// round ("push"). The span most likely to win — the one from the start that won
+    /// `j − 1` — is scored first, so the others meet a bound near `F(j)` itself: measured on
+    /// the gate set, 99.8% of the G1 cubics the push order fitted could not beat the final
+    /// `F(j)`. The bound is the per-candidate test of Killick, Fearnhead & Eckley (2012,
+    /// doi:10.1080/01621459.2012.737745) with the best candidate evaluated first, the
+    /// ordering Morin & Marsten (1976, doi:10.1287/opre.24.4.611) recommend for fathoming
+    /// (see the module overview).
     ///
-    /// A block scans its starts at once, one start per task. What a scan computes
-    /// ([`Self::terms`]) and where it stops (the cut-off reads only the residuals) do not
-    /// depend on the cost of reaching its start, so the scans can run before the program
-    /// has reached them, against bounds that stay valid until the replay
-    /// ([`Self::block_bases`]); the program then replays each start's spans in order on
-    /// this thread, which makes the table identical to the sequential program's whatever
-    /// the widths. No span is evaluated that the sequential program would not evaluate,
-    /// except the ellipses fitted ahead of a gate that then fails.
+    /// The table is the push fill's ([`Self::fill_push`]) bit for bit: each span's price is
+    /// the same expression of the same final `base(i)`, a winner is replaced only by a
+    /// cheaper span or an equal one from an earlier start, and a span is skipped only when
+    /// its bound proves it cannot replace the winner. Each start's cut-off sees its spans
+    /// in order, one per endpoint, so the scans stop where they did.
+    ///
+    /// `width(live)`, asked with the number of candidates, says how many threads to share
+    /// them with. Shared, a block of [`DP_BLOCK_ENDPOINTS`] endpoints is scored at once
+    /// ([`Self::block`]): one task per start runs through the block against the first
+    /// start's spans, and the winners are reduced endpoint by endpoint, so the table does
+    /// not depend on the widths either.
     pub(super) fn fill(&self, max_span: usize, mut width: impl FnMut(usize) -> usize) -> Table {
+        if !self.bounds {
+            return self.fill_push(max_span);
+        }
         let n = self.pts.len();
         let mut tab = Table::new(n);
-        let jend = |i: usize| (i.saturating_add(max_span).saturating_add(1)).min(n);
-        // Leaving `i` makes it a vertex; that is when its turn is paid.
-        let base_of = |tab: &Table, i: usize| {
-            tab.best[i]
-                + if i > 0 {
-                    vertex_cost(self.tan, i, self.cfg)
-                } else {
-                    0.0
-                }
-        };
-
-        let mut i = 0;
-        while i < n - 1 {
+        let mut live: Vec<Start> = Vec::new();
+        let mut j = 1;
+        let mut checked = 0;
+        while j < n {
             // A boundary of a few thousand points is seconds of this loop, and a trace
             // somebody has moved past stops here rather than at the end of it.
-            inkvec_core::progress::checkpoint();
-            let left = n - 1 - i;
-            let w = width(left).clamp(1, left);
-            if w < 2 {
-                if tab.best[i].is_finite() {
-                    let base = base_of(&tab, i);
-                    let mut cut = CutOff::new(i);
-                    for j in i + 1..jend(i) {
-                        let best_j = tab.best[j];
-                        let t = self.terms(i, j, false, self.bound(base, best_j));
-                        let over = t.over;
-                        let s = self.resolve(i, j, base, best_j, t);
-                        self.step(&mut tab, i, j, s);
-                        if cut.push(j, over, |k| self.cubic_over(i, k)) {
-                            break;
-                        }
-                    }
-                }
-                i += 1;
+            if j >= checked + 64 {
+                checked = j;
+                inkvec_core::progress::checkpoint();
+            }
+            self.admit(&tab, &mut live, j);
+            live.retain(|st| j - st.i <= max_span);
+            if live.is_empty() {
+                j += 1;
                 continue;
             }
+            let w = if live.len() >= DP_PAR_MIN_LIVE {
+                width(live.len()).clamp(1, live.len())
+            } else {
+                1
+            };
+            if w < 2 {
+                self.endpoint(&mut tab, &mut live, j);
+                live.retain(|st| !st.stopped);
+                j += 1;
+            } else {
+                let b = DP_BLOCK_ENDPOINTS.min(n - j);
+                self.block(&mut tab, &mut live, j, b, w, max_span);
+                j += b;
+            }
+        }
+        tab
+    }
 
-            // Enough starts to keep `w` threads busy, and no more spans held at once than
-            // the budget allows.
-            let spans = jend(i) - i;
-            let b = (w * DP_STARTS_PER_THREAD)
-                .min((DP_BLOCK_SPANS / spans.max(1)).max(w))
-                .min(left);
-            let bases = self.block_bases(&tab, i, b);
-            let best: &[f64] = &tab.best;
-            let scans: Vec<Vec<SpanTerms>> = inkvec_core::progress::detached(|| {
+    /// Add start `j − 1` to the candidates once its cost is final (and finite): leaving it
+    /// makes it a vertex, which pays its turn.
+    fn admit(&self, tab: &Table, live: &mut Vec<Start>, j: usize) {
+        let s = j - 1;
+        if tab.best[s].is_finite() {
+            let base = tab.best[s]
+                + if s > 0 {
+                    vertex_cost(self.tan, s, self.cfg)
+                } else {
+                    0.0
+                };
+            live.push(Start {
+                i: s,
+                base,
+                cut: CutOff::new(s),
+                stopped: false,
+            });
+        }
+    }
+
+    /// The start among `live` that won `j − 1`, which most often wins `j` too; the latest
+    /// start when it is gone.
+    fn guess(tab: &Table, live: &[Start], j: usize) -> usize {
+        live.iter()
+            .position(|st| st.i == tab.from[j - 1])
+            .unwrap_or(live.len() - 1)
+    }
+
+    /// Endpoint `j` on this thread: the guess first, unbounded, then every other start
+    /// against the winner so far; the winner goes into the table.
+    fn endpoint(&self, tab: &mut Table, live: &mut [Start], j: usize) {
+        let guess = Self::guess(tab, live, j);
+        let mut win = {
+            let st = &mut live[guess];
+            let s = self.score(st, j, f64::INFINITY);
+            Winner { i: st.i, s }
+        };
+        for (k, st) in live.iter_mut().enumerate() {
+            if k == guess {
+                continue;
+            }
+            let s = self.score(st, j, win.bound_for(st.i));
+            if win.beaten_by(st.i, &s) {
+                win = Winner { i: st.i, s };
+            }
+        }
+        self.step(tab, win.i, j, win.s);
+    }
+
+    /// Endpoints `j0..j0 + b` on `w` threads.
+    ///
+    /// 1. The guess (the start that won `j0 − 1`) runs through the block unbounded: its
+    ///    span at each endpoint is a real candidate, so its cost bounds `F` there.
+    /// 2. Every other start of `live` (all before `j0`, so all final) runs through the
+    ///    block as one task, each span scored against the guess's at that endpoint, and
+    ///    keeps only the spans that beat it.
+    /// 3. Endpoint by endpoint, on this thread: the winner among those, and among the
+    ///    starts inside the block, which become final one by one and are scored here
+    ///    against the running winner.
+    ///
+    /// Every start's cut-off sees its spans in order, as in [`Self::endpoint`].
+    fn block(
+        &self,
+        tab: &mut Table,
+        live: &mut Vec<Start>,
+        j0: usize,
+        b: usize,
+        w: usize,
+        max_span: usize,
+    ) {
+        let reaches = |st: &Start, j: usize| !st.stopped && j - st.i <= max_span;
+        let guess = Self::guess(tab, live, j0);
+        let mut first: Vec<Option<Winner>> = (0..b).map(|_| None).collect();
+        {
+            let st = &mut live[guess];
+            for (k, slot) in first.iter_mut().enumerate() {
+                if !reaches(st, j0 + k) {
+                    break;
+                }
+                let s = self.score(st, j0 + k, f64::INFINITY);
+                *slot = Some(Winner { i: st.i, s });
+            }
+        }
+        let found: Vec<Vec<(usize, usize, SpanCandidate)>> =
+            inkvec_core::progress::detached(|| {
                 without_dp_cap_override(|| {
                     use rayon::prelude::*;
                     let _helpers = BusyThreads::claim(w - 1);
-                    (i..i + b)
-                        .into_par_iter()
-                        .with_min_len(b.div_ceil(w))
-                        .map(|s| {
-                            // A start nothing reaches is skipped by the replay too.
-                            let base = bases[s - i];
-                            if base.is_finite() {
-                                self.scan(s, jend(s), base, best)
-                            } else {
-                                Vec::new()
+                    live.par_iter_mut()
+                        .enumerate()
+                        .filter(|(k, _)| *k != guess)
+                        .map(|(_, st)| {
+                            let mut out = Vec::new();
+                            for (k, first) in first.iter().enumerate() {
+                                if !reaches(st, j0 + k) {
+                                    break;
+                                }
+                                let bound =
+                                    first.as_ref().map_or(f64::INFINITY, |f| f.bound_for(st.i));
+                                let s = self.score(st, j0 + k, bound);
+                                if first.as_ref().is_none_or(|f| f.beaten_by(st.i, &s)) {
+                                    out.push((k, st.i, s));
+                                }
                             }
+                            out
                         })
                         .collect()
                 })
             });
-            for (s, scan) in (i..i + b).zip(scans) {
-                if !tab.best[s].is_finite() {
-                    continue;
-                }
-                let base = base_of(&tab, s);
-                for (j, t) in (s + 1..).zip(scan) {
-                    let best_j = tab.best[j];
-                    let c = self.resolve(s, j, base, best_j, t);
-                    self.step(&mut tab, s, j, c);
+        let mut by_end: Vec<Vec<(usize, SpanCandidate)>> = (0..b).map(|_| Vec::new()).collect();
+        for (k, i, s) in found.into_iter().flatten() {
+            by_end[k].push((i, s));
+        }
+
+        let mut inner: Vec<Start> = Vec::new();
+        for (k, (first, ends)) in first.into_iter().zip(by_end).enumerate() {
+            let j = j0 + k;
+            if k > 0 {
+                self.admit(tab, &mut inner, j);
+            }
+            let mut win = first;
+            for (i, s) in ends {
+                if win.as_ref().is_none_or(|w| w.beaten_by(i, &s)) {
+                    win = Some(Winner { i, s });
                 }
             }
-            i += b;
+            for st in inner.iter_mut() {
+                if !reaches(st, j) {
+                    continue;
+                }
+                let bound = win.as_ref().map_or(f64::INFINITY, |w| w.bound_for(st.i));
+                let s = self.score(st, j, bound);
+                if win.as_ref().is_none_or(|w| w.beaten_by(st.i, &s)) {
+                    win = Some(Winner { i: st.i, s });
+                }
+            }
+            if let Some(win) = win {
+                self.step(tab, win.i, j, win.s);
+            }
+        }
+        live.retain(|st| !st.stopped);
+        inner.retain(|st| !st.stopped);
+        live.extend(inner);
+    }
+
+    /// Score the span `st.i..j` against `best`, feed the start's cut-off, and return what
+    /// it offers.
+    #[inline(always)]
+    fn score(&self, st: &mut Start, j: usize, best: f64) -> SpanCandidate {
+        let t = self.terms(st.i, j, self.bound(st.base, best));
+        let over = t.over;
+        let s = self.resolve(st.i, j, st.base, best, t);
+        let i = st.i;
+        st.stopped = st.cut.push(j, over, |k| self.cubic_over(i, k));
+        s
+    }
+
+    /// The program's table filled start by start, every span scored in full: the program
+    /// as it was before the bounds, kept for the debug dump (which prints every span in
+    /// this order), for the research free cubic, and as the tests' reference.
+    fn fill_push(&self, max_span: usize) -> Table {
+        let n = self.pts.len();
+        let mut tab = Table::new(n);
+        for i in 0..n - 1 {
+            inkvec_core::progress::checkpoint();
+            if !tab.best[i].is_finite() {
+                continue;
+            }
+            let base = tab.best[i]
+                + if i > 0 {
+                    vertex_cost(self.tan, i, self.cfg)
+                } else {
+                    0.0
+                };
+            let mut cut = CutOff::new(i);
+            let end = (i.saturating_add(max_span).saturating_add(1)).min(n);
+            for j in i + 1..end {
+                let t = self.terms(i, j, Bound::NONE);
+                let over = t.over;
+                let s = self.resolve(i, j, base, f64::INFINITY, t);
+                self.step(&mut tab, i, j, s);
+                if cut.push(j, over, |k| self.cubic_over(i, k)) {
+                    break;
+                }
+            }
         }
         tab
     }
@@ -1041,25 +1142,33 @@ mod tests {
             .collect()
     }
 
+    /// The parallel endpoints fill the sequential table bit for bit, and both the push
+    /// reference's: the widths decide only where candidates are scored.
     #[test]
-    fn blocks_of_starts_fill_the_sequential_table_bit_for_bit() {
+    fn parallel_endpoints_fill_the_sequential_table_bit_for_bit() {
         let poly = boundary();
         let cfg = FitConfig::default();
         let tan = estimate_tangents(&poly, &cfg);
         let pre = Prefix::new(&poly.points, &poly.sigma);
+        let mut forked = false;
         for joins_at_ends in [false, true] {
             let sc = SpanScorer::new(&poly.points, &poly.sigma, &tan, &pre, &cfg, joins_at_ends);
             for max_span in [usize::MAX, 45] {
+                let push = bits(&sc.fill_push(max_span));
                 let seq = bits(&sc.fill(max_span, |_| 1));
                 assert!(seq.iter().all(|r| f64::from_bits(r.0).is_finite()));
+                assert!(seq == push, "sequential pull, max_span {max_span}");
                 for w in [2, 16] {
-                    let par = bits(&sc.fill(max_span, |_| w));
+                    let par = bits(&sc.fill(max_span, |live| {
+                        forked |= live >= DP_PAR_MIN_LIVE;
+                        w
+                    }));
                     assert!(
                         par == seq,
                         "width {w}, max_span {max_span}, joins {joins_at_ends}"
                     );
                 }
-                // Widths that change from block to block, as a busy pool's do.
+                // Widths that change from endpoint to endpoint, as a busy pool's do.
                 let mut k = 0usize;
                 let mixed = bits(&sc.fill(max_span, |_| {
                     k += 1;
@@ -1068,10 +1177,11 @@ mod tests {
                 assert!(mixed == seq, "mixed widths, max_span {max_span}");
             }
         }
+        assert!(forked, "no endpoint had enough candidates to share");
     }
 
     /// The bounds skip work, never a decision: with them on, at any width, the table is
-    /// the unbounded sequential program's bit for bit — on the test boundary and on
+    /// the unbounded push program's bit for bit — on the test boundary and on
     /// tracer-like and degenerate ones, at three prices, open and opened-loop, capped and
     /// not.
     #[test]
@@ -1115,8 +1225,8 @@ mod tests {
         assert!(compared > 100);
     }
 
-    /// And they do skip work: on the test boundary the bounded sequential fill projects
-    /// far fewer points than the unbounded one.
+    /// And they do skip work: on the test boundary the bounded fill projects far fewer
+    /// points than the unbounded one.
     #[test]
     fn bounds_skip_most_projections() {
         let poly = boundary();
@@ -1131,11 +1241,24 @@ mod tests {
         let plain = SpanScorer::new(&poly.points, &poly.sigma, &tan, &pre, &cfg, true).unbounded();
         let bounded = SpanScorer::new(&poly.points, &poly.sigma, &tan, &pre, &cfg, true);
         let (a, b) = (count(&plain), count(&bounded));
-        assert!(b * 10 < a * 9, "bounded {b} vs unbounded {a} projections");
+        assert!(b * 2 < a, "bounded {b} vs unbounded {a} projections");
     }
 
-    /// The lazily answered cut-off stops each scan where the plain counter does: the
-    /// bounded scan of every start holds exactly as many spans as the unbounded one.
+    /// Where a start's scan stops: the first endpoint whose span is the cut-off's, or the
+    /// end. Each span is scored against `bound(j)`.
+    fn stop(sc: &SpanScorer<'_>, i: usize, n: usize, bound: impl Fn(usize) -> Bound) -> usize {
+        let mut cut = CutOff::new(i);
+        for j in i + 1..n {
+            let t = sc.terms(i, j, bound(j));
+            if cut.push(j, t.over, |k| sc.cubic_over(i, k)) {
+                return j;
+            }
+        }
+        n
+    }
+
+    /// The lazily answered cut-off stops each scan where the plain counter does, whatever
+    /// the bounds leave unknown.
     #[test]
     fn lazy_cutoff_stops_where_the_counter_does() {
         let mut polys = vec![boundary()];
@@ -1157,11 +1280,12 @@ mod tests {
                 if !table.best[i].is_finite() {
                     continue;
                 }
-                let want = reference.scan(i, n, 0.0, &table.best).len();
+                let want = stop(&reference, i, n, |_| Bound::NONE);
                 // A high base makes most cubics dead, so most "over"s are left unknown.
-                let got = sc.scan(i, n, table.best[i] + 50.0, &table.best).len();
+                let high = table.best[i] + 50.0;
+                let got = stop(&sc, i, n, |j| sc.bound(high, table.best[j]));
                 assert_eq!(got, want, "start {i} of {n}");
-                if want < n - 1 - i {
+                if want < n {
                     stopped_early += 1;
                 }
             }
@@ -1169,85 +1293,41 @@ mod tests {
         assert!(stopped_early > 0, "the cut-off never fired");
     }
 
-    /// A start's lower bounds hold for every start of a block: the replay's `base` is
-    /// never below the one the scan-ahead assumed.
+    /// Ties at an endpoint go to the earlier start, as `offer`'s strict `<` over starts in
+    /// increasing order gives them, and the bound lets an earlier start through on a tie.
     #[test]
-    fn block_bases_are_lower_bounds() {
-        let poly = boundary();
-        let cfg = FitConfig::default();
-        let tan = estimate_tangents(&poly, &cfg);
-        let pre = Prefix::new(&poly.points, &poly.sigma);
-        let sc = SpanScorer::new(&poly.points, &poly.sigma, &tan, &pre, &cfg, false);
-        let full = sc.fill(usize::MAX, |_| 1);
-        let n = poly.len();
-        let base = |j: usize| {
-            full.best[j]
-                + if j > 0 {
-                    vertex_cost(&tan, j, &cfg)
-                } else {
-                    0.0
-                }
+    fn winner_ties_go_to_the_earlier_start() {
+        let cand = |cost: f64| SpanCandidate {
+            cost,
+            kind: SegKind::Line,
+            arms: None,
+            tans: None,
+            arc: None,
+            chi2_l: 0.0,
+            chi2_c: 0.0,
+            line: 0.0,
         };
-        // The table before a block: filled by the starts before it only.
-        for block_start in [0usize, 1, 37, 180, 300] {
-            let mut partial = Table::new(n);
-            for i in 0..block_start {
-                if !partial.best[i].is_finite() {
-                    continue;
-                }
-                let b = partial.best[i]
-                    + if i > 0 {
-                        vertex_cost(&tan, i, &cfg)
-                    } else {
-                        0.0
-                    };
-                for (j, t) in (i + 1..).zip(sc.scan(i, n, b, &partial.best)) {
-                    let bj = partial.best[j];
-                    let c = sc.resolve(i, j, b, bj, t);
-                    sc.step(&mut partial, i, j, c);
-                }
-            }
-            let lbs = sc.block_bases(&partial, block_start, 40.min(n - 1 - block_start));
-            for (k, lb) in lbs.iter().enumerate() {
-                let s = block_start + k;
-                if full.best[s].is_finite() {
-                    assert!(*lb <= base(s), "start {s}: {lb} > {}", base(s));
-                }
-            }
-            assert_eq!(lbs[0].to_bits(), base(block_start).to_bits());
-        }
-    }
-
-    #[test]
-    fn an_ellipse_fitted_ahead_resolves_as_one_fitted_on_demand() {
-        let poly = boundary();
-        let cfg = FitConfig::default();
-        let tan = estimate_tangents(&poly, &cfg);
-        let pre = Prefix::new(&poly.points, &poly.sigma);
-        let sc = SpanScorer::new(&poly.points, &poly.sigma, &tan, &pre, &cfg, false);
-        let key = |s: SpanCandidate| {
-            (
-                s.cost.to_bits(),
-                s.kind,
-                format!("{:?} {:?} {:?}", s.arms, s.tans, s.arc),
-            )
+        let win = Winner {
+            i: 10,
+            s: cand(5.0),
         };
-        let mut ahead = 0;
-        for i in (0..poly.len()).step_by(7) {
-            for j in (i + 1..poly.len()).step_by(3) {
-                if let Some(Some(_)) = sc.terms(i, j, true, Bound::NONE).ellipse {
-                    ahead += 1;
-                }
-                // A base of zero, and bases whose last bits round the gate's difference.
-                for base in [0.0, 1_234.567_890_1, 1.0e6 + 0.1, 3.0e9 + 0.7] {
-                    let inf = f64::INFINITY;
-                    let a = key(sc.resolve(i, j, base, inf, sc.terms(i, j, true, Bound::NONE)));
-                    let b = key(sc.resolve(i, j, base, inf, sc.terms(i, j, false, Bound::NONE)));
-                    assert!(a == b, "span {i}..{j}, base {base}");
-                }
+        assert!(win.beaten_by(3, &cand(5.0)));
+        assert!(!win.beaten_by(12, &cand(5.0)));
+        assert!(win.beaten_by(12, &cand(4.999)));
+        assert!(!win.beaten_by(3, &cand(5.0_f64.next_up())));
+        // An earlier start is dead only above the winner's cost, a later one at it: a floor
+        // that rounds away (5 + 1e-300 is 5) cannot kill an earlier start's tie.
+        let dead = |i: usize, floor: f64| {
+            Bound {
+                base: 5.0,
+                best: win.bound_for(i),
             }
-        }
-        assert!(ahead > 0, "the boundary never asked for an ellipse");
+            .dead(floor)
+        };
+        assert!(dead(3, 1e-9));
+        assert!(!dead(3, 1e-300));
+        assert!(!dead(3, 0.0));
+        assert!(dead(12, 0.0));
     }
 
     /// The cut-off helper against the plain counter, on random answer streams in which

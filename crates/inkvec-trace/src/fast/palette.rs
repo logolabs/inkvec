@@ -620,6 +620,23 @@ const REACH: usize = 4;
 /// black beside it in colour, a grey rim does not become red.
 const KEEP_OWN: f32 = 3.0;
 
+/// Below this many pixels (256 × 256) every pass of the palette runs on the calling thread.
+///
+/// Every pass here is exact whatever the thread count, so this only decides speed. At
+/// 128 px (16 384 pixels) the per-pixel work of a whole pass is a tenth of a millisecond,
+/// and handing it to rayon cost more than it saved: building the four-channel copy took
+/// 0.17 ms in parallel against 0.07 serially, keys 0.15 against 0.18 (before the inline
+/// rounding halved the serial figure), labels 0.08 against 0.11 (screen set, pool already
+/// running). In the command-line tool the palette is also the first parallel call of the
+/// process, which spawns the global pool (0.37 ms median); serial here, that cost moves to
+/// the next parallel stage rather than disappearing, so it is not counted as a gain.
+///
+/// Inspired by: rayon's `IndexedParallelIterator::with_min_len`
+/// (<https://docs.rs/rayon/latest/rayon/iter/trait.IndexedParallelIterator.html>), which sets
+/// the smallest job; a plain branch is used instead because asking rayon for even one job
+/// starts its thread pool.
+const PARALLEL_MIN_PIXELS: usize = 1 << 16;
+
 /// The inks, and one label (an ink index) per pixel. `alpha`, when given, is the source's
 /// opacity per pixel and `rgb` the image over white: inks then carry an opacity, and the
 /// clear ground is an ink of its own.
@@ -657,14 +674,21 @@ pub(crate) fn palette_and_labels(
             alpha_bits: 0,
         },
     };
-    let px: Vec<[f32; 4]> = (0..n)
-        .into_par_iter()
-        .map(|p| {
-            let c = rgb[p];
-            [c[0], c[1], c[2], alpha.map_or(1.0, |a| a[p])]
-        })
-        .collect();
-    let keys: Vec<u16> = px.par_iter().map(|&c| grid.key(c) as u16).collect();
+    let parallel = n >= PARALLEL_MIN_PIXELS;
+    let pixel = |p: usize| {
+        let c = rgb[p];
+        [c[0], c[1], c[2], alpha.map_or(1.0, |a| a[p])]
+    };
+    let px: Vec<[f32; 4]> = if parallel {
+        (0..n).into_par_iter().map(pixel).collect()
+    } else {
+        (0..n).map(pixel).collect()
+    };
+    let keys: Vec<u16> = if parallel {
+        px.par_iter().map(|&c| grid.key(c) as u16).collect()
+    } else {
+        px.iter().map(|&c| grid.key(c) as u16).collect()
+    };
     let bins = histogram(&px, &keys, w, h);
 
     let found = found_inks(&bins, grid, merge_distance, max_colors);
@@ -720,29 +744,35 @@ pub(crate) fn palette_and_labels(
         h,
     };
     let mut labels = vec![0u16; n];
-    // Row by row in parallel: each label reads only `keys` and the tables, so the result
-    // does not depend on the thread count. Each worker also counts its labels; integer
-    // counts add up to the same totals in any order.
+    // Row by row, in parallel on a large image: each label reads only `keys` and the
+    // tables, so the result does not depend on the thread count. Each worker also counts
+    // its labels; integer counts add up to the same totals in any order.
     let n_inks = inks.len();
-    let count = labels
-        .par_chunks_mut(w.max(1))
-        .enumerate()
-        .fold(
-            || vec![0usize; n_inks],
-            |mut count, (y, row)| {
-                label_rows(&blends, y, row, &mut count);
-                count
-            },
-        )
-        .reduce(
-            || vec![0usize; n_inks],
-            |mut a, b| {
-                for (s, v) in a.iter_mut().zip(b) {
-                    *s += v;
-                }
-                a
-            },
-        );
+    let count = if parallel {
+        labels
+            .par_chunks_mut(w.max(1))
+            .enumerate()
+            .fold(
+                || vec![0usize; n_inks],
+                |mut count, (y, row)| {
+                    label_rows(&blends, y, row, &mut count);
+                    count
+                },
+            )
+            .reduce(
+                || vec![0usize; n_inks],
+                |mut a, b| {
+                    for (s, v) in a.iter_mut().zip(b) {
+                        *s += v;
+                    }
+                    a
+                },
+            )
+    } else {
+        let mut count = vec![0usize; n_inks];
+        label_rows(&blends, 0, &mut labels, &mut count);
+        count
+    };
 
     let weight = ink_shares(&count, n);
     let rgb_inks: Vec<[f32; 3]> = inks.iter().map(|c| [c[0], c[1], c[2]]).collect();

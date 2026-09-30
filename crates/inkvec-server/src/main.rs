@@ -10,7 +10,13 @@ fn main() -> std::process::ExitCode {
     // curl or wget. A short-lived process that makes one request to its own /healthz and
     // exits 0 or 1; it never starts the server.
     if std::env::args().skip(1).any(|a| a == "--healthcheck") {
-        return std::process::ExitCode::from(inkvec_server::healthcheck() as u8);
+        return match inkvec_server::healthcheck() {
+            Ok(()) => std::process::ExitCode::SUCCESS,
+            Err(reason) => {
+                eprintln!("inkvec-server --healthcheck: {reason}");
+                std::process::ExitCode::FAILURE
+            }
+        };
     }
 
     init_logging();
@@ -27,6 +33,8 @@ fn main() -> std::process::ExitCode {
     runtime.block_on(serve())
 }
 
+/// Bind `0.0.0.0:<INKVEC_PORT>`, serve the router until a shutdown signal, and turn a bind or
+/// serve failure into a logged error and exit code 1.
 async fn serve() -> std::process::ExitCode {
     let state = AppState::from_env();
     let port = AppState::port();

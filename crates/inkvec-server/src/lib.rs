@@ -68,7 +68,11 @@ pub struct AppState {
 
 impl AppState {
     /// Read every `INKVEC_*` configuration variable from the process environment. Never
-    /// panics on a bad value; a variable that fails to parse is logged and its default used.
+    /// panics on a bad value; a variable that fails to parse silently falls back to its
+    /// default (`INKVEC_MAX_CONCURRENCY`: the number of cores; `INKVEC_MAX_BODY_BYTES`:
+    /// [`DEFAULT_MAX_BODY_BYTES`]; `INKVEC_REQUEST_TIMEOUT_SECS`:
+    /// [`DEFAULT_REQUEST_TIMEOUT_SECS`], 0 for none; `INKVEC_DEFAULT_TIME_BUDGET`: none, and
+    /// only a finite positive number of seconds counts).
     pub fn from_env() -> Self {
         let cores = std::thread::available_parallelism()
             .map(std::num::NonZeroUsize::get)
@@ -125,6 +129,8 @@ impl AppState {
     }
 }
 
+/// `name` parsed as a `usize` (surrounding whitespace ignored), or `default` when unset or
+/// unparseable.
 fn env_usize(name: &str, default: usize) -> usize {
     std::env::var(name)
         .ok()
@@ -132,6 +138,7 @@ fn env_usize(name: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
+/// [`env_usize`] for a `u64`.
 fn env_u64(name: &str, default: u64) -> u64 {
     std::env::var(name)
         .ok()
@@ -155,10 +162,13 @@ pub fn app(state: AppState) -> Router {
 // Simple endpoints
 // ---------------------------------------------------------------------------------------
 
+/// `GET /healthz`: `200 {"status":"ok"}` whenever the process can answer at all. It does not
+/// take a trace permit, so a busy server is still healthy.
 async fn healthz() -> impl IntoResponse {
     (StatusCode::OK, Json(json!({ "status": "ok" })))
 }
 
+/// `GET /version`: the engine version and the target triple it was built for.
 async fn version() -> impl IntoResponse {
     Json(json!({
         "version": inkvec::version(),
@@ -166,6 +176,7 @@ async fn version() -> impl IntoResponse {
     }))
 }
 
+/// `GET /options/schema`: the facade's JSON Schema for `inkvec::Options`, verbatim.
 async fn options_schema() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "application/json")],
@@ -173,10 +184,14 @@ async fn options_schema() -> impl IntoResponse {
     )
 }
 
+/// `GET /options/defaults`: `inkvec::Options::default()` serialised, i.e. what an empty
+/// options object means. (`null` if serialisation ever failed, which a plain data struct
+/// cannot.)
 async fn options_defaults() -> impl IntoResponse {
     Json(serde_json::to_value(inkvec::Options::default()).unwrap_or(Value::Null))
 }
 
+/// `GET /openapi.json`: [`OPENAPI_JSON`], verbatim.
 async fn openapi() -> impl IntoResponse {
     ([(header::CONTENT_TYPE, "application/json")], OPENAPI_JSON)
 }
@@ -185,6 +200,9 @@ async fn openapi() -> impl IntoResponse {
 // POST /trace
 // ---------------------------------------------------------------------------------------
 
+/// `POST /trace`: the image in the body (raw bytes, or the `image` part of a multipart form),
+/// options from any of the sources [`merge_options`] reads; `200` with the SVG, or a JSON
+/// error body from [`ApiError`].
 async fn trace(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -197,6 +215,11 @@ async fn trace(
     }
 }
 
+/// The body of [`trace`], with `?` for errors. In order: take a concurrency permit or fail
+/// `busy`; read the body up to the size cap; merge and validate the options (the server's
+/// default time budget applies only when the caller set none); trace on the blocking pool; and
+/// answer with the SVG, its pixel size in `X-Inkvec-Width`/`X-Inkvec-Height`, and
+/// `Cache-Control: no-store`. The permit is held until the response is built.
 async fn trace_inner(
     state: AppState,
     headers: HeaderMap,
@@ -327,6 +350,8 @@ async fn read_multipart(
     Ok((image, options))
 }
 
+/// A multipart failure as the service's error: exceeding the size cap is `too_large`,
+/// anything else (a malformed body) is `invalid_image`.
 fn map_multer_error(e: multer::Error) -> ApiError {
     if matches!(
         e,
@@ -338,6 +363,8 @@ fn map_multer_error(e: multer::Error) -> ApiError {
     }
 }
 
+/// Whether a `Content-Type` header value names the media type `wanted`, ignoring parameters
+/// (`; boundary=...`), surrounding space and ASCII case.
 fn content_type_is(content_type: &str, wanted: &str) -> bool {
     content_type
         .split(';')
@@ -396,12 +423,16 @@ fn merge_options(
     Ok(Value::Object(merged))
 }
 
+/// Shallow merge: every key of `source` replaces the same key in `target`. Nested objects are
+/// replaced whole, not merged.
 fn merge_into(target: &mut Map<String, Value>, source: Map<String, Value>) {
     for (k, v) in source {
         target.insert(k, v);
     }
 }
 
+/// One options source as a JSON object. Blank text is an empty object; anything that is not
+/// JSON, or is JSON but not an object, is `invalid_options` naming the source (`from`).
 fn parse_options_object(raw: &str, from: &str) -> Result<Map<String, Value>, ApiError> {
     let raw = raw.trim();
     if raw.is_empty() {
@@ -460,6 +491,7 @@ fn typed_query_options(
     Ok(out)
 }
 
+/// A query-string boolean: `true`/`1` or `false`/`0`, any case, surrounding space ignored.
 fn parse_query_bool(key: &str, raw: &str) -> Result<Value, ApiError> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "true" | "1" => Ok(Value::Bool(true)),
@@ -470,6 +502,11 @@ fn parse_query_bool(key: &str, raw: &str) -> Result<Value, ApiError> {
     }
 }
 
+/// A parsed query number as JSON. For an `integer`-typed field, a whole non-negative value
+/// within `u64` becomes a JSON integer (`8`, not `8.0`), which is what the facade's integer
+/// fields deserialise from; anything else stays a float and is left for the facade to reject
+/// or accept. `v` is finite (the caller filters), so the `null` fallback is unreachable in
+/// practice.
 fn json_number(v: f64, as_integer: bool) -> Value {
     if as_integer && v.fract() == 0.0 && v >= 0.0 && v <= u64::MAX as f64 {
         Value::from(v as u64)
@@ -488,14 +525,20 @@ fn json_number(v: f64, as_integer: bool) -> Value {
 /// [`inkvec::Error`] -- both bodies as `{ "error": { "code": ..., "message": ... } }`.
 #[derive(Debug)]
 enum ApiError {
+    /// `400`: no image, an undecodable one, or a malformed multipart body.
     InvalidImage(String),
+    /// `422`: options that are not JSON, not an object, mistyped, or rejected by the facade.
     InvalidOptions(String),
+    /// `500`: a trace that panicked, failed inside, or outran the request timeout.
     Internal(String),
+    /// `413`: the body is over the configured byte cap.
     TooLarge(String),
+    /// `503`: every trace permit is taken.
     Busy,
 }
 
 impl ApiError {
+    /// The machine-readable `error.code` string.
     fn code(&self) -> &'static str {
         match self {
             ApiError::InvalidImage(_) => "invalid_image",
@@ -506,6 +549,7 @@ impl ApiError {
         }
     }
 
+    /// The HTTP status this error is answered with.
     fn status(&self) -> StatusCode {
         match self {
             ApiError::InvalidImage(_) => StatusCode::BAD_REQUEST,
@@ -516,6 +560,7 @@ impl ApiError {
         }
     }
 
+    /// The human-readable `error.message` string.
     fn message(&self) -> String {
         match self {
             ApiError::InvalidImage(m)
@@ -556,49 +601,44 @@ impl IntoResponse for ApiError {
 /// Connect to `127.0.0.1:<INKVEC_PORT>/healthz` with a short timeout and check for a `200`
 /// status line. Blocking, by design: this runs as `inkvec-server --healthcheck` from Docker's
 /// `HEALTHCHECK`, a separate short-lived process with nothing else to do.
-pub fn healthcheck() -> i32 {
+///
+/// `Err` carries a one-line reason (connect, write or read failure, or the status line of an
+/// unhealthy response); `main.rs` prints it and exits 1.
+pub fn healthcheck() -> Result<(), String> {
+    probe(AppState::port())
+}
+
+/// [`healthcheck`] against a given local port: one `HTTP/1.0` `GET /healthz`, a 3-second
+/// timeout on each of connect, write and read, and success only for a `200` status line.
+fn probe(port: u16) -> Result<(), String> {
     use std::io::{Read, Write};
     use std::net::TcpStream;
 
-    let port = AppState::port();
-    let addr = format!("127.0.0.1:{port}");
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let deadline = Duration::from_secs(3);
-    let mut stream = match TcpStream::connect_timeout(
-        &addr
-            .parse()
-            .unwrap_or_else(|_| SocketAddr::from(([127, 0, 0, 1], port))),
-        deadline,
-    ) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("inkvec-server --healthcheck: connect to {addr} failed: {e}");
-            return 1;
-        }
-    };
+    let mut stream = TcpStream::connect_timeout(&addr, deadline)
+        .map_err(|e| format!("connect to {addr} failed: {e}"))?;
     let _ = stream.set_read_timeout(Some(deadline));
     let _ = stream.set_write_timeout(Some(deadline));
     let request =
         format!("GET /healthz HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
-    if let Err(e) = stream.write_all(request.as_bytes()) {
-        eprintln!("inkvec-server --healthcheck: write failed: {e}");
-        return 1;
-    }
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|e| format!("write failed: {e}"))?;
     let mut response = String::new();
-    if let Err(e) = stream.read_to_string(&mut response) {
-        // A short read after the headers is fine; only a failed read before any status
-        // line is fatal. `read_to_string` fails immediately on invalid UTF-8, which the
-        // status line never is, so treat any error here as a failure to be safe.
-        eprintln!("inkvec-server --healthcheck: read failed: {e}");
-        return 1;
-    }
+    // A short read after the headers is fine; only a failed read before any status line is
+    // fatal. `read_to_string` fails immediately on invalid UTF-8, which the status line never
+    // is, so treat any error here as a failure to be safe.
+    stream
+        .read_to_string(&mut response)
+        .map_err(|e| format!("read failed: {e}"))?;
     if response.starts_with("HTTP/1.0 200") || response.starts_with("HTTP/1.1 200") {
-        0
+        Ok(())
     } else {
-        eprintln!(
-            "inkvec-server --healthcheck: unhealthy response: {}",
+        Err(format!(
+            "unhealthy response: {}",
             response.lines().next().unwrap_or("")
-        );
-        1
+        ))
     }
 }
 
@@ -767,6 +807,42 @@ mod tests {
         assert_eq!(invalid_options.code(), "invalid_options");
         let internal: ApiError = inkvec::Error::Internal("bad".into()).into();
         assert_eq!(internal.code(), "internal");
+    }
+
+    /// A one-shot local server that answers the first connection with `reply`, and its port.
+    fn answer_once(reply: &'static str) -> u16 {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a free port");
+        let port = listener.local_addr().expect("bound").port();
+        std::thread::spawn(move || {
+            if let Ok((mut s, _)) = listener.accept() {
+                let mut buf = [0u8; 512];
+                let _ = s.read(&mut buf);
+                let _ = s.write_all(reply.as_bytes());
+            }
+        });
+        port
+    }
+
+    #[test]
+    fn the_healthcheck_passes_on_200_and_names_anything_else() {
+        assert_eq!(probe(answer_once("HTTP/1.1 200 OK\r\n\r\nok")), Ok(()));
+        assert_eq!(probe(answer_once("HTTP/1.0 200 OK\r\n\r\n")), Ok(()));
+        let err = probe(answer_once("HTTP/1.1 503 Service Unavailable\r\n\r\n")).unwrap_err();
+        assert_eq!(err, "unhealthy response: HTTP/1.1 503 Service Unavailable");
+    }
+
+    #[test]
+    fn the_healthcheck_fails_when_nothing_listens() {
+        let port = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a free port");
+            l.local_addr().expect("bound").port()
+        };
+        let err = probe(port).unwrap_err();
+        assert!(
+            err.starts_with(&format!("connect to 127.0.0.1:{port} failed")),
+            "{err}"
+        );
     }
 
     #[test]

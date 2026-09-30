@@ -52,13 +52,15 @@
 //! # Tangents and the DP state
 //!
 //! The state is the **vertex index alone**. The tangent at each vertex comes from the
-//! polyline itself, estimated once, one-sidedly, before the program runs: `t⁻_k` from a
-//! local quadratic fitted to the points *before* `k` and evaluated at `k`, and `t⁺_k`
-//! likewise from the points *after*. One-sided is essential — a symmetric window
-//! straddling a true corner returns the bisector, which is the wrong tangent for both
-//! neighbouring segments. The window is the widest whose quadratic fit is still
-//! consistent with the measurement model (`χ²/dof ≤ τ²`), so it is wide on smooth runs,
-//! where noise averaging matters, and narrow beside corners, where bias would matter.
+//! polyline itself, estimated once, before the program runs (`crate::tangents`). Where a
+//! local quadratic centred on `k` fits the points within the noise, `t⁻_k = t⁺_k` is its
+//! derivative. Where none does — across a true corner — `t⁻_k` comes from a quadratic
+//! fitted to the points *before* `k` and evaluated at `k`, and `t⁺_k` likewise from the
+//! points *after*. One-sided is essential there: a symmetric window straddling a true
+//! corner returns the bisector, which is the wrong tangent for both neighbouring
+//! segments. Each window is the widest whose quadratic fit is still consistent with the
+//! measurement model (`χ²/dof ≤ τ²`), so it is wide on smooth runs, where noise averaging
+//! matters, and narrow beside corners, where bias would matter.
 //!
 //! This was chosen over the alternative of a `(vertex, tangent-bin)` state because it is
 //! **exact**: there is no quantization, the objective is a sum of per-segment and
@@ -85,6 +87,17 @@
 //! Corners then **emerge** from the program: a true corner is where `t⁻ ≠ t⁺`, no single
 //! segment can span it without a large residual, and the vertex pays its turn cost
 //! whichever types meet there.
+//!
+//! # The order of work in this file
+//!
+//! [`optimal_multimodel`] (called by `inkvec-trace` for every ring) decimates a long ring
+//! (`solve_decimated`), centres the points (`centred`), and then either solves an open
+//! polyline directly or cuts a closed one twice (`solve_closed`). Each solve is the
+//! dynamic program (`solve_open`, filled by `scan`) followed by the continuous
+//! refinement (`refine`). The post-fit passes of `crate::merge` run last
+//! (`post_fit_passes`) and the result is moved back (`translate_path`). The evaluators at
+//! the end of the file ([`path_chi2`], [`path_cost`]) score any fitted path exactly and
+//! are what the tests compare fitters with.
 
 // The dynamic program indexes several parallel arrays by the same counter (points,
 // sigmas, prefix sums, tangents), so `needless_range_loop` would have us zip four
@@ -244,6 +257,12 @@ mod research {
     }
 }
 
+/// The body of every `optimal_multimodel*` entry point.
+///
+/// `max_span` caps how many measured points one segment may cover (`usize::MAX` for no
+/// cap; see [`optimal_multimodel_capped`]), and `structural` switches on the research
+/// simplifier. Coordinates in and out are in the caller's px; the work is done on a
+/// centred copy. Fewer than two points give an empty path.
 fn optimal_multimodel_impl(
     poly: &Polyline,
     cfg: &FitConfig,
@@ -264,43 +283,78 @@ fn optimal_multimodel_impl(
         };
     }
 
-    // The program is O(n²) in the measured points with a constant set by two cubic
-    // evaluations per span, and its cut-off never fires on a smooth arc, where a cubic
-    // spanning most of the loop is still a passable fit. A ring of a 512px image is
-    // 1,500 points; eleven of them took eleven seconds. Long boundaries are therefore
-    // decimated for the program only: one point per sampling cell, with sigma scaled so
-    // each kept point carries the weight of the run it stands for and χ² keeps its
-    // meaning against λ. Nothing downstream depends on the vertex grid being 1px — the
-    // path is polished against the image afterwards. Preserve significant bends within
-    // each cell: blindly keeping every stride-th sample clips exact corners and makes
-    // even a noiseless square require 6-8 segments instead of four. The capped variant
-    // is exempt: the
-    // self-intersection repair relies on the measured contour being reproducible at
-    // `max_span = 1`, and a decimated contour is not simple by construction.
+    // The capped variant is exempt from decimation: the self-intersection repair relies
+    // on the measured contour being reproducible at `max_span = 1`, and a decimated
+    // contour is not simple by construction.
     let stride = if max_span == usize::MAX {
         n.div_ceil(dp_max_points())
     } else {
         1
     };
     if stride > 1 {
-        let keep = crate::decimate::indices(poly, stride, cfg);
-        let w = (stride as f64).sqrt();
-        let dec = Polyline {
-            points: keep.iter().map(|&i| poly.points[i]).collect(),
-            sigma: keep.iter().map(|&i| poly.sigma[i] / w).collect(),
-            closed: poly.closed,
-        };
-        let mut fit = optimal_multimodel_impl(&dec, cfg, max_span, structural);
-        for v in &mut fit.vertices {
-            *v = keep[*v];
-        }
-        return fit;
+        return solve_decimated(poly, cfg, max_span, structural, stride);
     }
 
-    // Work about the bounding-box centre. The Green's-theorem sums involve x·y·dx, which
-    // for a 256px canvas reaches 1e7 per edge; the region moments we want are
-    // differences of such sums and are only ~chord³. Centring keeps the cancellation
-    // well inside f64's precision. The objective is translation invariant.
+    let (centre, shifted) = centred(poly);
+    let mut fit = if poly.closed && n >= 3 {
+        solve_closed(&shifted, cfg, max_span)
+    } else {
+        let tan = estimate_tangents(&shifted, cfg);
+        let (sol, path) = solve_and_refine(&shifted, &tan, cfg, false, max_span);
+        MultimodelFit {
+            path,
+            vertices: sol.vertices,
+            kinds: sol.kinds,
+            cost: sol.cost,
+        }
+    };
+    post_fit_passes(&mut fit, &shifted, cfg, max_span, structural);
+    translate_path(&mut fit.path, centre);
+    fit
+}
+
+/// Fit a long boundary on a decimated copy, then map the chosen vertices back to indices
+/// of the full polyline.
+///
+/// The program is O(n²) in the measured points with a constant set by two cubic
+/// evaluations per span, and its cut-off never fires on a smooth arc, where a cubic
+/// spanning most of the loop is still a passable fit. A ring of a 512px image is
+/// 1,500 points; eleven of them took eleven seconds. Long boundaries are therefore
+/// decimated for the program only: one point per sampling cell of `stride` points, with
+/// sigma divided by `√stride` so each kept point carries the weight of the run it stands
+/// for and χ² keeps its meaning against λ. Nothing downstream depends on the vertex grid
+/// being 1px — the path is polished against the image afterwards. Significant bends
+/// within each cell are preserved (`crate::decimate`): blindly keeping every stride-th
+/// sample clips exact corners and makes even a noiseless square require 6-8 segments
+/// instead of four.
+fn solve_decimated(
+    poly: &Polyline,
+    cfg: &FitConfig,
+    max_span: usize,
+    structural: bool,
+    stride: usize,
+) -> MultimodelFit {
+    let keep = crate::decimate::indices(poly, stride, cfg);
+    let w = (stride as f64).sqrt();
+    let dec = Polyline {
+        points: keep.iter().map(|&i| poly.points[i]).collect(),
+        sigma: keep.iter().map(|&i| poly.sigma[i] / w).collect(),
+        closed: poly.closed,
+    };
+    let mut fit = optimal_multimodel_impl(&dec, cfg, max_span, structural);
+    for v in &mut fit.vertices {
+        *v = keep[*v];
+    }
+    fit
+}
+
+/// The polyline moved so its bounding-box centre is the origin, and that centre (px).
+///
+/// The Green's-theorem sums involve x·y·dx, which for a 256px canvas reaches 1e7 per
+/// edge; the region moments we want are differences of such sums and are only ~chord³.
+/// Centring keeps the cancellation well inside f64's precision. The objective is
+/// translation invariant, so nothing else changes.
+fn centred(poly: &Polyline) -> (Vec2, Polyline) {
     let (mut lo, mut hi) = (
         (f64::INFINITY, f64::INFINITY),
         (f64::NEG_INFINITY, f64::NEG_INFINITY),
@@ -322,67 +376,66 @@ fn optimal_multimodel_impl(
         sigma: poly.sigma.clone(),
         closed: poly.closed,
     };
+    (centre, shifted)
+}
 
-    let mut fit = if poly.closed && n >= 3 {
-        solve_closed(&shifted, cfg, max_span)
-    } else {
-        let tan = estimate_tangents(&shifted, cfg);
-        let (sol, path) = solve_and_refine(&shifted, &tan, cfg, false, max_span);
-        MultimodelFit {
-            path,
-            vertices: sol.vertices,
-            kinds: sol.kinds,
-            cost: sol.cost,
-        }
-    };
-
-    // Corners come out of the program as chord + cubic + chord, because a cubic here is
-    // G1 and the tangent it inherits at a corner is wrong. Merge such runs into one cubic
-    // with free tangents wherever the same objective prefers it. Done here, on the
-    // centred polyline the fit was computed against, and before anything is translated
-    // back. See `crate::merge`.
-    //
-    // Not under a span cap. The cap exists for the self-intersection repair, which needs
-    // the constrained program's own answer: the merge re-joins short runs into free
-    // cubics that can cross again, so the repair never converged, and its cost grows
-    // with the segment count the cap produces - 1-2 s per round on a 250-point ring at
-    // span 7, against 0.2 ms for the program itself (family emoji: 11.8 s in repair).
+/// The passes that run after the dynamic program, on the centred polyline `shifted` the
+/// fit was computed against and before anything is translated back.
+///
+/// Corners come out of the program as chord + cubic + chord, because a cubic here is
+/// G1 and the tangent it inherits at a corner is wrong. `crate::merge::merge_free_cubics`
+/// merges such runs into one cubic with free tangents wherever the same objective
+/// prefers it, and `crate::merge::sharpen_corners` repairs the opposite failure, a cubic
+/// through the anti-aliasing chamfer where two lines meet. Research builds may add axis
+/// snapping, G1 snapping and the structural simplifier, each behind its own variable.
+///
+/// Not under a span cap. The cap exists for the self-intersection repair, which needs
+/// the constrained program's own answer: the merge re-joins short runs into free
+/// cubics that can cross again, so the repair never converged, and its cost grows
+/// with the segment count the cap produces - 1-2 s per round on a 250-point ring at
+/// span 7, against 0.2 ms for the program itself (family emoji: 11.8 s in repair).
+fn post_fit_passes(
+    fit: &mut MultimodelFit,
+    shifted: &Polyline,
+    cfg: &FitConfig,
+    max_span: usize,
+    structural: bool,
+) {
     if max_span == usize::MAX {
-        crate::merge::merge_free_cubics(&mut fit.path, &shifted, &fit.vertices, cfg);
-        // The opposite failure at sharp corners: a cubic through the anti-aliasing
-        // chamfer where two lines meet. See `crate::merge::sharpen_corners`.
+        crate::merge::merge_free_cubics(&mut fit.path, shifted, &fit.vertices, cfg);
         crate::merge::sharpen_corners(&mut fit.path);
         #[cfg(feature = "research")]
         {
             // A line the measurement cannot tell from axis-aligned has one degree of
             // freedom, not two. See `crate::merge::snap_axis_aligned`.
             if research::axis() {
-                crate::merge::snap_axis_aligned(&mut fit.path, &shifted, &fit.vertices, cfg);
+                crate::merge::snap_axis_aligned(&mut fit.path, shifted, &fit.vertices, cfg);
             }
             // A cubic that continues the one before it smoothly needs four numbers, not
             // six. See `crate::merge::snap_smooth_joins`.
             if research::g1() {
-                crate::merge::snap_smooth_joins(&mut fit.path, &shifted, &fit.vertices, cfg);
+                crate::merge::snap_smooth_joins(&mut fit.path, shifted, &fit.vertices, cfg);
             }
             // Structural MDL rate-distortion simplification across 4 primitives.
             // Experimental: keep opt-in until acceptance uses calibrated image evidence.
             if structural {
-                crate::structural::simplify_with_poly(&mut fit.path, &shifted, &fit.vertices, cfg);
+                crate::structural::simplify_with_poly(&mut fit.path, shifted, &fit.vertices, cfg);
             }
         }
     }
     #[cfg(not(feature = "research"))]
     let _ = structural;
+}
 
+/// Add `centre` (px) back to every point of `path`, undoing [`centred`].
+fn translate_path(path: &mut FittedPath, centre: Vec2) {
     let back = |p: Point| Point::new(p.x + centre.x, p.y + centre.y);
-    fit.path.start = back(fit.path.start);
-    for s in &mut fit.path.segments {
+    path.start = back(path.start);
+    for s in &mut path.segments {
         *s = match *s {
             Segment::Line(p) => Segment::Line(back(p)),
             Segment::Cubic(a, b, c) => Segment::Cubic(back(a), back(b), back(c)),
-            // Arcs are translation-invariant apart from their endpoint. This DP does not
-            // emit them itself; the arm exists so a path that has been through the
-            // primitive fitter can still be translated back.
+            // Arcs are translation-invariant apart from their endpoint.
             Segment::Arc {
                 rx,
                 ry,
@@ -400,7 +453,6 @@ fn optimal_multimodel_impl(
             },
         };
     }
-    fit
 }
 
 // --- prefix sums ---------------------------------------------------------------------
@@ -412,6 +464,8 @@ fn optimal_multimodel_impl(
 /// and first moments of any sub-polyline O(1); the arc length gives each point's initial
 /// parameter on a candidate cubic in O(1).
 struct Prefix {
+    /// `w[k]` = Σ over points `< k` of `1/σ²`; `x`, `y`, `xx`, `yy`, `xy` likewise of
+    /// `x/σ²`, `y/σ²`, `x²/σ²`, `y²/σ²` and `x·y/σ²`. `n + 1` entries each.
     w: Vec<f64>,
     x: Vec<f64>,
     y: Vec<f64>,
@@ -419,13 +473,17 @@ struct Prefix {
     yy: Vec<f64>,
     xy: Vec<f64>,
     /// `ga[k]` = Σ over edges `< k` of ∫ y dx; likewise `gx` for ∫ x y dx, `gy` for ∫ y² dx.
+    /// `n` entries each (edge `k` runs from point `k` to `k + 1`).
     ga: Vec<f64>,
     gx: Vec<f64>,
     gy: Vec<f64>,
+    /// Cumulative arc length at each point, px.
     s: Vec<f64>,
 }
 
 impl Prefix {
+    /// Accumulate every prefix sum of `pts` (px) with weights from `sigma` (px), O(n).
+    /// Sigma must be positive.
     fn new(pts: &[Point], sigma: &[f64]) -> Self {
         let n = pts.len();
         let mut p = Prefix {
@@ -490,8 +548,12 @@ impl Prefix {
 
 // --- the dynamic program -------------------------------------------------------------
 
+/// What the dynamic program chose, before the continuous refinement: one entry per
+/// segment in every vector except `vertices`, which has one more.
 struct Solution {
+    /// Indices into the (opened) polyline where segments meet, first to last.
     vertices: Vec<usize>,
+    /// The model of each segment.
     kinds: Vec<SegKind>,
     /// Arms `(d0, d1)` for cubic segments, `None` for lines.
     arms: Vec<Option<(f64, f64)>>,
@@ -501,13 +563,28 @@ struct Solution {
     /// `(rx, ry, phi, large_arc, sweep)` for arc segments, `None` for everything else.
     #[allow(clippy::type_complexity)]
     arcs: Vec<Option<(f64, f64, f64, bool, bool)>>,
+    /// The program's objective at its optimum, nats.
     cost: f64,
 }
 
 /// The dynamic program on an open polyline. `joins_at_ends` marks the endpoints as a
 /// join (the cut of a closed loop) so the line tangent terms apply there too.
-#[allow(clippy::too_many_arguments)]
-/// Why the program searches every endpoint, and what was measured when it was not.
+///
+/// With `cost(i, j)` the cheapest model for the span `(i, j)` (line, G1 or free cubic,
+/// arc or elliptical arc, as priced in `crate::candidates`) and `turn(i)` the
+/// [`vertex_cost`] of making `i` a vertex,
+///
+/// ```text
+///     best[0] = 0
+///     best[j] = min_{i < j, j − i ≤ max_span} ( best[i] + turn(i) + cost(i, j) )
+/// ```
+///
+/// (`turn` applies at interior vertices; see `scan` for the exact bookkeeping and the
+/// cut-off). The table is filled by `scan::SpanScorer`, in parallel blocks on long
+/// polylines with a result identical to the sequential fill, and the chosen vertices,
+/// models and fitted parameters are read back from `from[n − 1]` to 0.
+///
+/// # Why the program searches every endpoint, and what was measured when it was not
 ///
 /// The scan is the tracer's largest single cost — 978,236 spans evaluated on a 768-px
 /// wordmark to keep 448 segments, a ratio of two thousand to one — so it looks like the
@@ -569,6 +646,7 @@ struct Solution {
 /// constant. See [`crate::candidates::wobble_penalty_factor`]. The implementation is in
 /// this branch's history (commit 3f1abc0, reverted in e3746b0) if anyone wants to rerun
 /// it; nothing here suggests it is worth the two hundred lines.
+#[allow(clippy::too_many_arguments)]
 fn solve_open(
     pts: &[Point],
     sigma: &[f64],
@@ -742,6 +820,21 @@ pub fn segment_cost_direct(
 /// initialization, orthogonal-distance refinement); this is the refinement. Newton on
 /// two parameters with finite differences, with a gradient fallback when the Hessian
 /// is not positive definite, and a backtracking line search.
+///
+/// The objective is `f(d0, d1)` = [`chi2_cubic`] over *every* interior point of `(i, j)`
+/// (not the subsample the program scored with), for the cubic with end directions `t0`,
+/// `t1` and arms `d0`, `d1` as fractions of the chord. With `h = 1e-3`:
+///
+/// ```text
+///     g   = ((f(d0+h,d1) − f(d0−h,d1)) / 2h,  (f(d0,d1+h) − f(d0,d1−h)) / 2h)
+///     H00 = (f(d0+h,d1) − 2f + f(d0−h,d1)) / h²,   H11 likewise,
+///     H01 = (f(d0+h,d1+h) − f(d0+h,d1) − f(d0,d1+h) + f) / h²
+/// ```
+///
+/// The step is `−H⁻¹g` when `H` is positive definite and a fixed 0.05 along `−g`
+/// otherwise; it is halved from 1 down to 1e-4 until `f` decreases. The loop stops after
+/// 12 iterations or when the relative gain falls under 1e-9. Arms are kept in
+/// `[1e-3, 1.5]` throughout. Returns the arms and their `χ²`.
 #[allow(clippy::too_many_arguments)]
 fn polish_arms(
     pts: &[Point],
@@ -814,7 +907,9 @@ fn polish_arms(
 ///    the emitted path is exactly G1 there; accepted only when it does not cost more
 ///    residual than the break it removes.
 ///
-/// `poly` must be the (opened) polyline the solution indexes into.
+/// `poly` must be the (opened) polyline the solution indexes into. The emitted path is
+/// closed exactly when `poly` is and the solution's first and last vertex are the same
+/// index.
 fn refine(
     poly: &Polyline,
     tan: &Tangents,
@@ -822,18 +917,30 @@ fn refine(
     sol: &Solution,
     cfg: &FitConfig,
 ) -> FittedPath {
-    let pts = &poly.points;
-    let sigma = &poly.sigma;
-    let s = &pre.s;
     let v = &sol.vertices;
     let m = v.len();
-    let nseg = m - 1;
     // Corner adjustment and smooth joins treat the cut of an opened loop as a vertex
     // like any other (see `spans_loop`); the emitted path keeps the caller's notion.
     let closed = crate::spans_loop(poly, v);
     let emitted_closed = poly.closed && m >= 2 && v.first() == v.last();
 
     // 1. Corners.
+    let pos = adjust_line_corners(poly, sol, closed);
+    // 2. Arms.
+    let mut st = SegState::polished(poly, tan, pre, sol);
+    // 3. Smooth joins.
+    make_joins_smooth(poly, pre, sol, &pos, closed, cfg, &mut st);
+    assemble(poly, sol, &pos, &st, emitted_closed)
+}
+
+/// Step 1 of [`refine`]: every vertex position (px), with each vertex between two lines
+/// moved to the intersection of their fitted lines ([`adjust_vertices_at`], shift cap
+/// `3·max(σ_max, 0.25)` px). A vertex touching a cubic or an arc stays where it was
+/// measured, because the curve was fitted to pass through it.
+fn adjust_line_corners(poly: &Polyline, sol: &Solution, closed: bool) -> Vec<Point> {
+    let v = &sol.vertices;
+    let m = v.len();
+    let nseg = m - 1;
     let seg = Segmentation {
         vertices: v.clone(),
         cost: sol.cost,
@@ -850,42 +957,93 @@ fn refine(
         };
         kinds[a] == SegKind::Line && kinds[b] == SegKind::Line
     };
-    let arcs = &sol.arcs;
-    let max_shift = 3.0 * sigma.iter().copied().fold(0.0, f64::max).max(0.25);
-    let pos = adjust_vertices_at(poly, &seg, max_shift, is_corner);
+    let max_shift = 3.0 * poly.sigma.iter().copied().fold(0.0, f64::max).max(0.25);
+    adjust_vertices_at(poly, &seg, max_shift, is_corner)
+}
 
-    // Per-segment tangents (cubics only) and arms.
-    // A cubic the program fitted with free tangents carries its own directions; the rest
-    // inherit the estimator's, as before.
-    let mut t_start: Vec<Vec2> = (0..nseg)
-        .map(|q| {
-            sol.tans
-                .get(q)
-                .and_then(|t| *t)
-                .map_or(tan.outgoing[v[q]], |t| t.0)
-        })
-        .collect();
-    let mut t_end: Vec<Vec2> = (0..nseg)
-        .map(|q| {
-            sol.tans
-                .get(q)
-                .and_then(|t| *t)
-                .map_or(tan.incoming[v[q + 1]], |t| t.1)
-        })
-        .collect();
-    let mut arms: Vec<Option<(f64, f64)>> = sol.arms.clone();
-    let mut chi2: Vec<f64> = vec![0.0; nseg];
+/// The continuous parameters of a solution while [`refine`] improves them, one entry per
+/// segment. Only cubics use `arms` and `chi2`; lines and arcs carry `None` and 0.
+struct SegState {
+    /// Unit direction leaving each segment's start.
+    t_start: Vec<Vec2>,
+    /// Unit direction arriving at each segment's end.
+    t_end: Vec<Vec2>,
+    /// Arm lengths `(d0, d1)` as fractions of the chord.
+    arms: Vec<Option<(f64, f64)>>,
+    /// Each cubic's residual over all its interior points.
+    chi2: Vec<f64>,
+}
 
-    // 2. Arms.
-    for q in 0..nseg {
-        if let Some(a) = arms[q] {
-            let (d, c) = polish_arms(pts, sigma, s, v[q], v[q + 1], t_start[q], t_end[q], a);
-            arms[q] = Some(d);
-            chi2[q] = c;
+impl SegState {
+    /// Step 2 of [`refine`]: the solution's end directions, and every cubic's arms
+    /// polished against its full residual ([`polish_arms`]).
+    ///
+    /// A cubic the program fitted with free tangents carries its own directions; the rest
+    /// inherit the estimator's, `tan.outgoing` at the start and `tan.incoming` at the end.
+    fn polished(poly: &Polyline, tan: &Tangents, pre: &Prefix, sol: &Solution) -> Self {
+        let pts = &poly.points;
+        let sigma = &poly.sigma;
+        let s = &pre.s;
+        let v = &sol.vertices;
+        let nseg = v.len() - 1;
+        let t_start: Vec<Vec2> = (0..nseg)
+            .map(|q| {
+                sol.tans
+                    .get(q)
+                    .and_then(|t| *t)
+                    .map_or(tan.outgoing[v[q]], |t| t.0)
+            })
+            .collect();
+        let t_end: Vec<Vec2> = (0..nseg)
+            .map(|q| {
+                sol.tans
+                    .get(q)
+                    .and_then(|t| *t)
+                    .map_or(tan.incoming[v[q + 1]], |t| t.1)
+            })
+            .collect();
+        let mut arms: Vec<Option<(f64, f64)>> = sol.arms.clone();
+        let mut chi2: Vec<f64> = vec![0.0; nseg];
+        for q in 0..nseg {
+            if let Some(a) = arms[q] {
+                let (d, c) = polish_arms(pts, sigma, s, v[q], v[q + 1], t_start[q], t_end[q], a);
+                arms[q] = Some(d);
+                chi2[q] = c;
+            }
+        }
+        SegState {
+            t_start,
+            t_end,
+            arms,
+            chi2,
         }
     }
+}
 
-    // 3. Smooth joins.
+/// Step 3 of [`refine`]: make the joins the program left smooth exactly G1.
+///
+/// At every join whose turn is below the break angle ([`g1_break_radians`]) and that
+/// touches no arc, a shared direction is chosen ([`join_target`]) and the cubic(s) on
+/// either side are refitted to it (G1 arms by moments, then [`polish_arms`]). The change
+/// is kept when it does not cost more residual than the break it removes:
+/// `½·χ²_new ≤ ½·χ²_old + break_cost(old directions)`. Joins are visited in order, each
+/// seeing the previous ones' changes. `pos` are the vertex positions from step 1, which
+/// give a line its direction.
+fn make_joins_smooth(
+    poly: &Polyline,
+    pre: &Prefix,
+    sol: &Solution,
+    pos: &[Point],
+    closed: bool,
+    cfg: &FitConfig,
+    st: &mut SegState,
+) {
+    let pts = &poly.points;
+    let sigma = &poly.sigma;
+    let s = &pre.s;
+    let v = &sol.vertices;
+    let kinds = &sol.kinds;
+    let nseg = v.len() - 1;
     let line_dir = |q: usize| -> Option<Vec2> { unit(pos[q + 1] - pos[q]) };
     let solve_seg = |q: usize, t0: Vec2, t1: Vec2| -> Option<((f64, f64), f64)> {
         let (i, j) = (v[q], v[q + 1]);
@@ -908,41 +1066,17 @@ fn refine(
         }
         let out_a = match kinds[a] {
             SegKind::Line => line_dir(a),
-            SegKind::Cubic | SegKind::Arc => Some(t_end[a]),
+            SegKind::Cubic | SegKind::Arc => Some(st.t_end[a]),
         };
         let in_b = match kinds[b] {
             SegKind::Line => line_dir(b),
-            SegKind::Cubic | SegKind::Arc => Some(t_start[b]),
+            SegKind::Cubic | SegKind::Arc => Some(st.t_start[b]),
         };
         let (Some(out_a), Some(in_b)) = (out_a, in_b) else {
             continue;
         };
-        let angle = turn_angle(out_a, in_b);
-        if angle >= g1_break_radians() {
+        let Some(target) = join_target(poly, sol, (a, b), k, out_a, in_b, cfg) else {
             continue;
-        }
-        // An arc's direction is its own: it is the circle the points fit, and turning
-        // its end to meet a neighbour would move geometry the residual already settled.
-        // So a join with an arc on either side is left alone.
-        if matches!(kinds[a], SegKind::Arc) || matches!(kinds[b], SegKind::Arc) {
-            continue;
-        }
-        let target = match (kinds[a], kinds[b]) {
-            (SegKind::Line, SegKind::Line) => continue,
-            (SegKind::Line, SegKind::Cubic) => out_a,
-            (SegKind::Cubic, SegKind::Line) => in_b,
-            (SegKind::Arc, _) | (_, SegKind::Arc) => continue,
-            (SegKind::Cubic, SegKind::Cubic) => {
-                let half = ((v[a + 1] - v[a]) / 2).min((v[b + 1] - v[b]) / 2).max(1);
-                symmetric_tangent(poly, v[k % m], half, cfg)
-                    .or_else(|| {
-                        unit(Vec2 {
-                            x: out_a.x + in_b.x,
-                            y: out_a.y + in_b.y,
-                        })
-                    })
-                    .unwrap_or(out_a)
-            }
         };
         let old_break = break_cost(out_a, in_b, cfg.lambda);
         let mut new_a = None;
@@ -950,39 +1084,105 @@ fn refine(
         let mut old_chi2 = 0.0;
         let mut new_chi2 = 0.0;
         if kinds[a] == SegKind::Cubic {
-            let Some(r) = solve_seg(a, t_start[a], target) else {
+            let Some(r) = solve_seg(a, st.t_start[a], target) else {
                 continue;
             };
-            old_chi2 += chi2[a];
+            old_chi2 += st.chi2[a];
             new_chi2 += r.1;
             new_a = Some(r);
         }
         if kinds[b] == SegKind::Cubic {
-            let Some(r) = solve_seg(b, target, t_end[b]) else {
+            let Some(r) = solve_seg(b, target, st.t_end[b]) else {
                 continue;
             };
-            old_chi2 += chi2[b];
+            old_chi2 += st.chi2[b];
             new_chi2 += r.1;
             new_b = Some(r);
         }
         if 0.5 * new_chi2 <= 0.5 * old_chi2 + old_break {
             if let Some((d, c)) = new_a {
-                t_end[a] = target;
-                arms[a] = Some(d);
-                chi2[a] = c;
+                st.t_end[a] = target;
+                st.arms[a] = Some(d);
+                st.chi2[a] = c;
             }
             if let Some((d, c)) = new_b {
-                t_start[b] = target;
-                arms[b] = Some(d);
-                chi2[b] = c;
+                st.t_start[b] = target;
+                st.arms[b] = Some(d);
+                st.chi2[b] = c;
             }
         }
     }
+}
 
-    // Assemble.
+/// The shared direction to give the join `k` between segments `a` and `b`, or `None` to
+/// leave it alone.
+///
+/// Left alone: a turn at or above the break angle (a real corner), two lines (nothing to
+/// refit), and any join with an arc on either side — an arc's direction is its own: it is
+/// the circle the points fit, and turning its end to meet a neighbour would move geometry
+/// the residual already settled. A line next to a cubic gives the cubic the line's
+/// direction. Two cubics take a symmetric tangent estimated at the vertex over at most
+/// half of the shorter neighbour ([`symmetric_tangent`]), falling back to the bisector
+/// of their two directions, then to `out_a`.
+fn join_target(
+    poly: &Polyline,
+    sol: &Solution,
+    (a, b): (usize, usize),
+    k: usize,
+    out_a: Vec2,
+    in_b: Vec2,
+    cfg: &FitConfig,
+) -> Option<Vec2> {
+    let v = &sol.vertices;
+    let kinds = &sol.kinds;
+    let m = v.len();
+    let angle = turn_angle(out_a, in_b);
+    if angle >= g1_break_radians() {
+        return None;
+    }
+    if matches!(kinds[a], SegKind::Arc) || matches!(kinds[b], SegKind::Arc) {
+        return None;
+    }
+    match (kinds[a], kinds[b]) {
+        (SegKind::Line, SegKind::Line) => None,
+        (SegKind::Line, SegKind::Cubic) => Some(out_a),
+        (SegKind::Cubic, SegKind::Line) => Some(in_b),
+        (SegKind::Arc, _) | (_, SegKind::Arc) => None,
+        (SegKind::Cubic, SegKind::Cubic) => {
+            let half = ((v[a + 1] - v[a]) / 2).min((v[b + 1] - v[b]) / 2).max(1);
+            Some(
+                symmetric_tangent(poly, v[k % m], half, cfg)
+                    .or_else(|| {
+                        unit(Vec2 {
+                            x: out_a.x + in_b.x,
+                            y: out_a.y + in_b.y,
+                        })
+                    })
+                    .unwrap_or(out_a),
+            )
+        }
+    }
+}
+
+/// Build the emitted path from the refined state. Every segment ends at its vertex's
+/// position from step 1; a cubic keeps its measured start and end for its arms, so its
+/// shape is the one that was scored. An arc or cubic whose parameters are missing
+/// degrades to a line.
+fn assemble(
+    poly: &Polyline,
+    sol: &Solution,
+    pos: &[Point],
+    st: &SegState,
+    emitted_closed: bool,
+) -> FittedPath {
+    let pts = &poly.points;
+    let v = &sol.vertices;
+    let kinds = &sol.kinds;
+    let arcs = &sol.arcs;
+    let nseg = v.len() - 1;
     let mut segments = Vec::with_capacity(nseg);
     for q in 0..nseg {
-        match (kinds[q], arms[q]) {
+        match (kinds[q], st.arms[q]) {
             (SegKind::Arc, _) => match arcs.get(q).and_then(|a| *a) {
                 Some((rx, ry, phi, large_arc, sweep)) => segments.push(Segment::Arc {
                     rx,
@@ -999,8 +1199,8 @@ fn refine(
                 let cb = Cubic::from_arms(
                     pts[i],
                     pts[j],
-                    t_start[q],
-                    t_end[q],
+                    st.t_start[q],
+                    st.t_end[q],
                     pts[i].dist(pts[j]),
                     d0,
                     d1,
@@ -1017,6 +1217,9 @@ fn refine(
     }
 }
 
+/// Run the dynamic program on an opened polyline and refine its answer: the solution and
+/// the emitted path. With `INKVEC_TIMING` set, a capped fit (the self-intersection
+/// repair) reports its two timings on stderr.
 fn solve_and_refine(
     poly: &Polyline,
     tan: &Tangents,
@@ -1054,6 +1257,8 @@ fn solve_and_refine(
 
 /// Open a closed polyline at `cut`, duplicating the cut vertex at the end, with the
 /// wrapped tangent estimates re-indexed to match.
+///
+/// The result has `n + 1` points: index `k` is original index `(cut + k) mod n`.
 fn open_at(poly: &Polyline, tan: &Tangents, cut: usize) -> (Polyline, Tangents) {
     let n = poly.len();
     let mut points = Vec::with_capacity(n + 1);
@@ -1084,15 +1289,19 @@ fn open_at(poly: &Polyline, tan: &Tangents, cut: usize) -> (Polyline, Tangents) 
 /// from the chosen vertex farthest from that cut — a vertex of a near-optimal solution
 /// is a far better cut than an arbitrary point — and the cheaper result is kept.
 /// Potrace solves the cyclic problem exactly; that remains future work.
+///
+/// The cut vertex itself is charged its [`vertex_cost`], which the opened program cannot
+/// see. Returned vertex indices refer to `poly` (the cut appears at both ends).
 fn solve_closed(poly: &Polyline, cfg: &FitConfig, max_span: usize) -> MultimodelFit {
     let n = poly.len();
     let tan = estimate_tangents(poly, cfg);
 
+    // `total_cmp` orders these angles (in [0, π], never negative zero) and distances
+    // exactly as `partial_cmp` does, and gives NaN an order instead of a panic.
     let sharpest = (0..n)
         .max_by(|&a, &b| {
             turn_angle(tan.incoming[a], tan.outgoing[a])
-                .partial_cmp(&turn_angle(tan.incoming[b], tan.outgoing[b]))
-                .unwrap()
+                .total_cmp(&turn_angle(tan.incoming[b], tan.outgoing[b]))
         })
         .unwrap_or(0);
     let cut1 = if turn_angle(tan.incoming[sharpest], tan.outgoing[sharpest]) >= g1_break_radians() {
@@ -1102,12 +1311,7 @@ fn solve_closed(poly: &Polyline, cfg: &FitConfig, max_span: usize) -> Multimodel
         let cy = poly.points.iter().map(|p| p.y).sum::<f64>() / n as f64;
         let c = Point::new(cx, cy);
         (0..n)
-            .max_by(|&a, &b| {
-                poly.points[a]
-                    .dist(c)
-                    .partial_cmp(&poly.points[b].dist(c))
-                    .unwrap()
-            })
+            .max_by(|&a, &b| poly.points[a].dist(c).total_cmp(&poly.points[b].dist(c)))
             .unwrap_or(0)
     };
 
@@ -1164,7 +1368,8 @@ pub fn path_chi2(poly: &Polyline, path: &FittedPath) -> f64 {
         .sum()
 }
 
-/// Largest distance from any measured point to the path.
+/// Largest distance (px) from any measured point to the path, by the same exact nearest
+/// distance as [`path_chi2`]. Infinite for a path with no segments.
 pub fn path_max_deviation(poly: &Polyline, path: &FittedPath) -> f64 {
     let Some(segs) = kurbo_segments(path) else {
         return f64::INFINITY;
@@ -1175,11 +1380,16 @@ pub fn path_max_deviation(poly: &Polyline, path: &FittedPath) -> f64 {
         .fold(0.0, f64::max)
 }
 
+/// A path segment in kurbo's types, for its exact nearest-point queries.
 enum KSeg {
+    /// A straight segment.
     L(KLine),
+    /// A cubic Bézier.
     C(CubicBez),
 }
 
+/// `path` as kurbo segments, arcs replaced by fine chords (0.02 px spacing). `None` for a
+/// path with no segments.
 fn kurbo_segments(path: &FittedPath) -> Option<Vec<KSeg>> {
     if path.segments.is_empty() {
         return None;
@@ -1214,6 +1424,8 @@ fn kurbo_segments(path: &FittedPath) -> Option<Vec<KSeg>> {
     Some(segs)
 }
 
+/// Squared distance (px²) from `p` to the nearest of `segs`, using kurbo's nearest-point
+/// solvers (accuracy 1e-9 on lines, 1e-6 on cubics). Infinite for an empty list.
 fn nearest_dist2(segs: &[KSeg], p: Point) -> f64 {
     let q = KPoint::new(p.x, p.y);
     segs.iter()

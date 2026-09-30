@@ -14,6 +14,25 @@
 //! `fit_dp` fell to 0.67 of its time over the set (0.34 on a six-ring logo whose largest
 //! ring was the whole stage), and the self-intersection repair, which refits undecimated
 //! boundaries with the same program, to 0.35.
+//!
+//! # The recurrence
+//!
+//! For points `0..n` of the opened polyline, with `best[0] = 0`,
+//!
+//! ```text
+//!     base(i) = best[i] + (i > 0 ? vertex_cost(i) : 0)
+//!     best[j] = min over i < j, j − i ≤ max_span, of  base(i) + min_model cost_model(i, j)
+//! ```
+//!
+//! where `cost_model` is the line, G1 cubic, free cubic, circular arc or elliptical arc
+//! price of `crate::candidates` (nats). `from[j]`, `kind[j]` and the fitted parameters
+//! record the winner. The scan from a start `i` stops after [`PRUNE_PATIENCE`]
+//! consecutive spans whose line and cubic fidelity terms both exceed
+//! `PRUNE_SLACK·λ·PARAMS_LINE·(j − i)`. A curved model is fitted only when the line (for
+//! the ellipse, the best candidate so far) already costs more than the curved model's
+//! parameter floor `λ·P`, which is a proof, not a heuristic, that it could not otherwise
+//! win. The one exception is the circle, also fitted wherever the line's residual exceeds
+//! one per point, because it is the evidence for the line's bow penalty.
 
 use super::*;
 use crate::candidates::{ArcSpan, EllipseSpan, FreeFit};
@@ -39,6 +58,7 @@ static DP_THREADS_BUSY: std::sync::atomic::AtomicUsize = std::sync::atomic::Atom
 pub(super) struct BusyThreads(usize);
 
 impl BusyThreads {
+    /// Count `k` more threads as busy until the returned guard is dropped.
     pub(super) fn claim(k: usize) -> Self {
         DP_THREADS_BUSY.fetch_add(k, std::sync::atomic::Ordering::Relaxed);
         BusyThreads(k)
@@ -62,16 +82,23 @@ pub(super) fn fork_width(units: usize, threads: usize) -> usize {
 /// The dynamic program's table: for each point, the cheapest cost of reaching it and the
 /// last segment of the path that does.
 pub(super) struct Table {
+    /// Cheapest cost (nats) of describing points `0..=j`; infinite where unreached.
     pub(super) best: Vec<f64>,
+    /// Start of the last segment on that cheapest path; `usize::MAX` for point 0.
     pub(super) from: Vec<usize>,
+    /// That segment's model.
     pub(super) kind: Vec<SegKind>,
+    /// Its arm lengths, fractions of the chord, when it is a cubic.
     pub(super) arms: Vec<Option<(f64, f64)>>,
+    /// Its own end directions, when it is a free cubic or an arc.
     pub(super) tans: Vec<Option<(Vec2, Vec2)>>,
+    /// `(rx, ry, phi, large_arc, sweep)` when it is an arc.
     #[allow(clippy::type_complexity)]
     pub(super) arcs: Vec<Option<(f64, f64, f64, bool, bool)>>,
 }
 
 impl Table {
+    /// An empty table for `n` points: only point 0 is reached, at cost 0.
     fn new(n: usize) -> Self {
         let mut best = vec![f64::INFINITY; n];
         best[0] = 0.0;
@@ -100,19 +127,26 @@ impl Table {
 
 /// The G1 cubic's share of a span's terms.
 struct G1Terms {
+    /// Residual over the subsampled interior points.
     chi2: f64,
+    /// [`Cubic::wobble_penalty`], nats.
     wobble: f64,
+    /// Arm lengths as fractions of the chord.
     arms: (f64, f64),
 }
 
 /// Everything one candidate span `i..j` offers that does not depend on the cost of
 /// reaching `i`: the fitted models and their prices above it.
 struct SpanTerms {
+    /// The line's total-least-squares residual.
     chi2_l: f64,
     /// The line's cost, bow penalty included.
     line: f64,
+    /// The G1 cubic, when one was tried and had admissible arms.
     g1: Option<G1Terms>,
+    /// The free cubic (research builds only).
     free: Option<FreeFit>,
+    /// The circular arc, when it was tried and accepted.
     circle: Option<ArcSpan>,
     /// The better of the two cubics' residuals, for the cut-off and the debug dump.
     chi2_c: f64,
@@ -142,16 +176,24 @@ fn without_dp_cap_override<T>(f: impl FnOnce() -> T) -> T {
 /// What one candidate span `i..j` offers the dynamic program: its cheapest model, and
 /// what the search cut-off and the debug dump read.
 struct SpanCandidate {
+    /// `base + ` the winning model's cost, nats.
     cost: f64,
+    /// The winning model.
     kind: SegKind,
+    /// Its arms, when it is a cubic.
     arms: Option<(f64, f64)>,
+    /// Its own end directions, when it is a free cubic or an arc.
     tans: Option<(Vec2, Vec2)>,
+    /// Its `(rx, ry, phi, large_arc, sweep)`, when it is an arc.
     #[allow(clippy::type_complexity)]
     arc: Option<(f64, f64, f64, bool, bool)>,
     /// Both models' fidelity terms exceed the cut-off bound.
     over: bool,
+    /// The line's residual, for the debug dump.
     chi2_l: f64,
+    /// The better cubic's residual, for the debug dump.
     chi2_c: f64,
+    /// The line's cost above `base`, for the debug dump.
     line: f64,
 }
 
@@ -162,20 +204,28 @@ struct SpanCandidate {
 /// [`SpanScorer::resolve`] adds that cost with the sequential program's own expressions,
 /// evaluated in the same order.
 pub(super) struct SpanScorer<'a> {
+    /// The opened polyline's points (px, centred) and sigmas (px).
     pts: &'a [Point],
     sigma: &'a [f64],
+    /// Tangents estimated at every point.
     tan: &'a Tangents,
+    /// Line, moment and arc-length prefix sums of the same points.
     pre: &'a Prefix,
     cfg: &'a FitConfig,
+    /// Whether both ends of the polyline are joins (an opened loop).
     joins_at_ends: bool,
+    /// Moment sums for the circle fit.
     circles: Option<CirclePrefix>,
+    /// The parameter price of each curved model, `λ·P`, nats: the least it can cost.
     cubic_floor: f64,
     arc_floor: f64,
     ellipse_floor: f64,
+    /// `INKVEC_DPDBG`: dump every span's numbers to stderr.
     debug: bool,
 }
 
 impl<'a> SpanScorer<'a> {
+    /// A scorer for one opened polyline; builds the circle moment sums, O(n).
     pub(super) fn new(
         pts: &'a [Point],
         sigma: &'a [f64],
@@ -209,6 +259,7 @@ impl<'a> SpanScorer<'a> {
         !circle.is_some_and(|f| f.chi2 <= 4.0 * (j - i) as f64) && j >= i + 2
     }
 
+    /// The elliptical-arc candidate for `i..j` (see [`try_ellipse`]).
     fn ellipse(&self, i: usize, j: usize) -> Option<EllipseSpan> {
         try_ellipse(
             self.pts,
@@ -462,7 +513,7 @@ impl<'a> SpanScorer<'a> {
         // numbers for every span considered, so the answer comes from the program
         // rather than from a story about it.
         if self.debug && j >= i + 2 {
-            println!(
+            eprintln!(
                 "DP {i} {j} span {} line_chi2 {:.3} cubic_chi2 {:.3} line_cost {:.3} cubic_cost {:.3} chose {}",
                 j - i,
                 s.chi2_l,

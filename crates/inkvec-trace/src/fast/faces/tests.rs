@@ -407,12 +407,15 @@ fn long_runs_are_found_to_the_pixel_across_vector_blocks() {
 
 // ---------------------------------------------------------------- the research dumps
 
+/// What the shipped stage made of a dump: each face's ink, and a face id per pixel.
+type ShippedFaces = (Vec<usize>, Vec<u16>);
+
 /// A label image the fast front end dumped after its palette (`INKVEC_FACESDUMP`, research
 /// build): w, h, ink count (u32 LE), inks (`[f32; 4]`), labels (u16), composited sRGB
 /// (`[f32; 3]`), a native-alpha flag byte and, when set, the opacity (f32). Its `.out`
 /// holds what the shipped stage made of it: face count (u32), each face's ink (u32) and a
 /// face id per pixel (u16).
-fn load_dump(path: &std::path::Path) -> (Case, Option<(Vec<usize>, Vec<u16>)>) {
+fn load_dump(path: &std::path::Path) -> (Case, Option<ShippedFaces>) {
     let b = std::fs::read(path).expect("dump");
     let u32at = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap()) as usize;
     let f32at = |o: usize| f32::from_le_bytes(b[o..o + 4].try_into().unwrap());

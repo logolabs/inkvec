@@ -585,7 +585,6 @@ pub fn ringing_score(rgb: &[[f32; 3]], width: usize, height: usize) -> f64 {
     // selection returns exactly what sorting did. p60 is selected inside the part p90's
     // selection left below it.
     let at = |len: usize, q: f64| ((len - 1) as f64 * q).round() as usize;
-    let mut core = core;
     let k50 = at(core.len(), 0.50);
     let core_med = (kth_smallest(&mut core, k50) as f64).max(1e-9);
     let mut ring_sel = ring.clone();

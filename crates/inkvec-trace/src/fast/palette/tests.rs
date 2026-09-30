@@ -439,3 +439,25 @@ fn the_palette_is_capped() {
     assert_eq!(pal.len(), 4);
     assert!(labels.iter().all(|&l| l < 4));
 }
+
+/// The key map holds every key it is given, finds none it was not, and survives growing
+/// from 64 entries to the whole 16-bit key space.
+#[test]
+fn slots_map_every_key_to_its_id() {
+    let mut s = Slots::new();
+    // Every key once, in a scrambled order (7919 is odd, so k -> 7919 k is a bijection mod 2^16).
+    let order: Vec<u16> = (0..=u16::MAX).map(|i| i.wrapping_mul(7919)).collect();
+    for (id, &k) in order.iter().enumerate() {
+        assert_eq!(s.get(k), None, "{k} before insertion");
+        s.insert(k, id);
+        if id.is_multiple_of(4099) {
+            for (j, &q) in order[..=id].iter().enumerate() {
+                assert_eq!(s.get(q), Some(j));
+            }
+        }
+    }
+    for (id, &k) in order.iter().enumerate() {
+        assert_eq!(s.get(k), Some(id));
+    }
+    assert_eq!(s.len, 1 << 16);
+}

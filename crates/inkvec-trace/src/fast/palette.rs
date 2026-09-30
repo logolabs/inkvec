@@ -47,8 +47,8 @@
 //! * `rgb` (`[f32; 3]` per pixel) and `alpha` (`f32` per pixel, native path only) are read
 //!   in place, row-major, `p = y · w + x`; a pixel's four-vector is [`pixel`].
 //! * `keys`: one `u16` bin key per pixel ([`Grid::key`]), row-major.
-//! * [`Bins`]: statistics per *occupied* bin, reached from a key through a 65 536-entry slot
-//!   table (a sparse set); B, the number of occupied bins, is 16 at the median 128 px icon
+//! * [`Bins`]: statistics per *occupied* bin, reached from a key through a small hash
+//!   table ([`Slots`]); B, the number of occupied bins, is 16 at the median 128 px icon
 //!   and at most 610 on the 2048 px set.
 //! * A **run** is a maximal horizontal stretch of one row with one key (or, while keying, one
 //!   colour). Runs are found on the fly and never stored. On the 2048 px set 99.56 % of
@@ -212,16 +212,16 @@ fn level(v: f32, bits: u32) -> usize {
 /// # Layout
 ///
 /// A bin is identified by its 16-bit key `k` ([`Grid::key`]) and, once a pixel has fallen
-/// in it, by a dense index `id` into the per-bin vectors below (`key[id] = k`). `slot[k]`
-/// is `id + 1`, or 0 while the bin is empty. The vectors are as long as the number of
-/// occupied bins, B, which is tiny: a median of 16 on the 128 px screen set and at most 610
-/// on the 2048 px set, out of 65 536 possible keys.
+/// in it, by a dense index `id` into the per-bin vectors below (`key[id] = k`); [`Slots`]
+/// maps a key to its id. The vectors are as long as the number of occupied bins, B, which
+/// is tiny: a median of 16 on the 128 px screen set and at most 610 on the 2048 px set, out
+/// of 65 536 possible keys.
 ///
 /// The dense layout this replaces kept five 65 536-entry arrays (4.98 MB), plus a filled
 /// 1.5 MB `bin_point` table and three scans of all 65 536 keys, whatever the image. At
 /// 128 px (16 384 pixels) that was 0.65 of the stage's 1.27 ms: 4 table entries per pixel.
-/// `slot` is the only table left sized by the key space, and it is written only where a
-/// pixel lands. Everything else is O(B).
+/// Everything here is O(B), so the parallel histogram can give each row band a `Bins` of
+/// its own for the price of a few cache lines.
 ///
 /// *Why identical:* each bin still receives its pixels' values one at a time in raster
 /// order, so every sum is the same sequence of f64 roundings; the ids only rename bins,
@@ -233,17 +233,18 @@ fn level(v: f32, bits: u32) -> usize {
 /// ACM LOPLAS 2(1–4):59–69, 1993, DOI 10.1145/176454.176484, as described by R. Cox,
 /// "Using Uninitialized Memory for Fun and Profit", 2008, <https://research.swtch.com/sparse>:
 /// a sparse array from element to position and a dense array of members, so iteration costs
-/// the members, not the universe. Adapted: the sparse side is zero-initialised (0 = absent)
-/// instead of validated against the dense side, since a zeroed 65 536-entry table is cheap
-/// and safe Rust has no uninitialised memory.
+/// the members, not the universe. Adapted: the sparse side is a small hash table
+/// ([`Slots`]) rather than an array over the whole key universe, because safe Rust has no
+/// uninitialised memory and a zeroed 256 KB array per row band cost more than the band's
+/// counting in a fresh process (see [`Slots`]).
 ///
 /// Inspired by: M. E. Celebi, "Improving the Performance of K-Means for Color
 /// Quantization", Image and Vision Computing 29:260–271, 2011, DOI
 /// 10.1016/j.imavis.2010.10.002 -- working on the distinct colours with their counts
 /// rather than on the pixels. Here the "colours" are grid bins with coherence counts.
 struct Bins {
-    /// Per key: `1 + id` of its bin, or 0 when no pixel has that key. `BINS` entries.
-    slot: Vec<u32>,
+    /// Key to bin id, for the occupied keys.
+    slot: Slots,
     /// Per bin: its key.
     key: Vec<u16>,
     /// Per bin: its pixels.
@@ -260,12 +261,10 @@ struct Bins {
 }
 
 impl Bins {
-    /// No occupied bin yet. The `slot` table is zeroed by the allocator: an all-zero
-    /// `vec!` asks for zeroed memory, which the operating system hands out lazily for large
-    /// blocks, so pages no key touches are never written.
+    /// No occupied bin yet.
     fn new() -> Self {
         Bins {
-            slot: vec![0; BINS],
+            slot: Slots::new(),
             key: Vec::new(),
             count: Vec::new(),
             flat: Vec::new(),
@@ -280,23 +279,21 @@ impl Bins {
         self.key.len()
     }
 
-    /// The id of key `k`'s bin, which must be occupied. O(1).
+    /// The id of key `k`'s bin, which must be occupied. O(1) expected.
     #[inline]
     fn id(&self, k: u16) -> usize {
-        self.slot[k as usize] as usize - 1
+        self.slot.get(k).expect("every key read here was counted")
     }
 
     /// The id of key `k`'s bin, opening an empty one (all counts and sums zero) the first
     /// time the key is seen. O(1) amortised.
     #[inline]
     fn open(&mut self, k: u16) -> usize {
-        let s = self.slot[k as usize];
-        if s != 0 {
-            return s as usize - 1;
+        if let Some(id) = self.slot.get(k) {
+            return id;
         }
         let id = self.key.len();
-        // `id + 1 ≤ 65 536`: at most one bin per key, so it always fits a u32.
-        self.slot[k as usize] = id as u32 + 1;
+        self.slot.insert(k, id);
         self.key.push(k);
         self.count.push(0);
         self.flat.push(0);
@@ -304,6 +301,108 @@ impl Bins {
         self.flat_sum.push([0.0; 4]);
         self.all_sum.push([0.0; 4]);
         id
+    }
+}
+
+/// A map from bin key to bin id over the occupied keys only: open addressing with linear
+/// probing, power-of-two capacity, kept at most half full.
+///
+/// Each row band of the parallel histogram owns a [`Bins`], and rayon may make dozens of
+/// them. The dense slot array this replaces was 65 536 × 4 bytes, zeroed, per band; in a
+/// fresh process each one is new heap memory, so the 32 to 64 bands of a 512–2048 px image
+/// paid thousands of page faults before counting a pixel. This table starts at 64 entries
+/// (512 bytes) and doubles as bins open, so a band's map is as large as the bins it met.
+/// Lookups happen once per key run while counting (0.44 % of pixels at 2048 px, median) and
+/// once per blend pixel while labelling, never per pixel.
+///
+/// The probe sequence wraps with a mask, not `%` (wazero's arm64 compiler miscompiled
+/// `i32.rem_u` in a hot loop; the Go binding runs this crate as WebAssembly).
+///
+/// Method from: D. E. Knuth, *The Art of Computer Programming*, vol. 3, *Sorting and
+/// Searching*, §6.4 -- open addressing with linear probing (Algorithm L), and multiplicative
+/// hashing with the golden-ratio multiplier `⌊2³²/φ⌋`. Adapted: tags store the key plus one,
+/// so an all-zero table is empty and needs no separate occupancy array. See also: the
+/// Briggs–Torczon sparse set on [`Bins`], which this replaces where the universe is too
+/// large to allocate per band.
+struct Slots {
+    /// Per table entry: `key + 1`, or 0 when empty.
+    tag: Vec<u32>,
+    /// Per table entry: the bin id stored for key `tag − 1`.
+    id: Vec<u32>,
+    /// Occupied entries.
+    len: usize,
+    /// `32 − log2(capacity)`: the hash keeps the top bits of the product.
+    shift: u32,
+}
+
+impl Slots {
+    /// log2 of the starting capacity (64 entries).
+    const START_BITS: u32 = 6;
+    /// `⌊2³² / φ⌋`, the multiplicative hash's multiplier.
+    const GOLDEN: u32 = 0x9E37_79B9;
+
+    /// An empty map of 64 entries.
+    fn new() -> Self {
+        Self::with_bits(Self::START_BITS)
+    }
+
+    /// An empty map of `2^bits` entries.
+    fn with_bits(bits: u32) -> Self {
+        Slots {
+            tag: vec![0; 1 << bits],
+            id: vec![0; 1 << bits],
+            len: 0,
+            shift: 32 - bits,
+        }
+    }
+
+    /// Where tag `t` (a key plus one) starts probing: the top bits of `t · ⌊2³²/φ⌋`, which
+    /// spread consecutive keys -- neighbouring bins have them -- across the table.
+    #[inline]
+    fn home(&self, t: u32) -> usize {
+        (t.wrapping_mul(Self::GOLDEN) >> self.shift) as usize
+    }
+
+    /// The id stored for key `k`, if any. Expected O(1) at load at most 1/2.
+    #[inline]
+    fn get(&self, k: u16) -> Option<usize> {
+        let (t, mask) = (k as u32 + 1, self.tag.len() - 1);
+        let mut i = self.home(t);
+        loop {
+            match self.tag[i] {
+                x if x == t => return Some(self.id[i] as usize),
+                0 => return None,
+                // Wrap by mask: the capacity is a power of two.
+                _ => i = (i + 1) & mask,
+            }
+        }
+    }
+
+    /// Store `id` for key `k`, which must be absent; doubles the table first when it would
+    /// pass half full. At most 65 536 keys exist, so ids and tags fit a u32.
+    fn insert(&mut self, k: u16, id: usize) {
+        if 2 * (self.len + 1) > self.tag.len() {
+            let bits = 33 - self.shift;
+            let old = std::mem::replace(self, Slots::with_bits(bits));
+            for (t, v) in old.tag.into_iter().zip(old.id) {
+                if t != 0 {
+                    self.put(t, v);
+                }
+            }
+        }
+        self.put(k as u32 + 1, id as u32);
+    }
+
+    /// Place tag `t` with `id` in the first free entry of its probe sequence.
+    fn put(&mut self, t: u32, id: u32) {
+        let mask = self.tag.len() - 1;
+        let mut i = self.home(t);
+        while self.tag[i] != 0 {
+            i = (i + 1) & mask;
+        }
+        self.tag[i] = t;
+        self.id[i] = id;
+        self.len += 1;
     }
 }
 
@@ -876,8 +975,8 @@ struct Blends<'a> {
     /// Per key: its bin's nearest ink, and whether the bin is that ink. `BINS` entries,
     /// written only for occupied keys (no pixel reads the others).
     lut: &'a [(u16, bool)],
-    /// Per key: `1 + id` of its bin ([`Bins::slot`]).
-    slot: &'a [u32],
+    /// Key to bin id ([`Bins::slot`]).
+    slot: &'a Slots,
     /// Per bin id: its mean colour as a two-ground point.
     bin_point: &'a [Ink2],
     inks: &'a [[f32; 4]],
@@ -939,8 +1038,8 @@ impl Blends<'_> {
         if around.is_empty() {
             return own;
         }
-        // Every pixel's key is occupied, so its slot is at least 1.
-        let c = self.bin_point[self.slot[self.keys[p] as usize] as usize - 1];
+        // Every pixel's key was counted, so its bin exists.
+        let c = self.bin_point[self.slot.get(self.keys[p]).expect("counted key")];
         let mut best = (own, f32::INFINITY);
         for &l in &around {
             let d = self.points[l as usize].dist(c);

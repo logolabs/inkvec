@@ -144,6 +144,21 @@ impl FillModel {
 }
 
 impl FillEval<'_> {
+    /// The gradient coordinate at a pixel-centre position; see [`FillModel::t_at`].
+    ///
+    /// The same value bit for bit, with an ellipse's `angle.sin_cos()` taken once here
+    /// instead of once per position.
+    #[inline]
+    pub(crate) fn t_at(&self, x: f64, y: f64) -> f64 {
+        match *self.model {
+            FillModel::Flat(_) => 0.0,
+            FillModel::Linear { p0, p1, .. } => linear_t(x, y, p0, p1),
+            FillModel::Radial { c, r, aspect, .. } => {
+                radial_t_rot(x, y, c, r, aspect, self.sin_cos)
+            }
+        }
+    }
+
     /// The fill colour (sRGB) at a pixel-centre position; see [`FillModel::color_at`].
     #[inline]
     pub(crate) fn color_at(&self, x: f64, y: f64) -> [f32; 3] {

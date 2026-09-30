@@ -248,7 +248,7 @@ pub(crate) fn merge_bands_with(
         (0..n_comp)
             .into_par_iter()
             .map(|c| {
-                let fit = fitter.fit(&group, &members[c], c as u32, c as u32, inner_blends);
+                let fit = fitter.fit(&group, [&members[c], &[]], c as u32, c as u32, inner_blends);
                 live.tick();
                 fit
             })
@@ -416,9 +416,10 @@ impl UnionFitter<'_> {
     }
 
     /// Model selection over the pixels of components `a` and `b` (pass `a == b` for one
-    /// component), where `group` maps each pixel to its current component. With `inner`,
-    /// a blend whose partners all lie in the union counts as evidence too.
-    fn fit(&self, group: &[u32], pixels: &[usize], a: u32, b: u32, inner: bool) -> FillFit {
+    /// component), where `group` maps each pixel to its current component and `parts`
+    /// holds the pixels, `a`'s then `b`'s (the second part empty for one component). With
+    /// `inner`, a blend whose partners all lie in the union counts as evidence too.
+    fn fit(&self, group: &[u32], parts: [&[usize]; 2], a: u32, b: u32, inner: bool) -> FillFit {
         FIT_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let member = |p: usize| group[p] == a || group[p] == b;
         // A fit sees at most `FIT_PIXELS` pixels, taken uniformly, whatever the region's
@@ -428,16 +429,9 @@ impl UnionFitter<'_> {
         // by the subsampling factor so costs stay comparable across regions and with
         // the parameter terms. Measured identical in output on the two profiling logos
         // at 1024 and 2048 px against fitting every pixel.
-        let sub: Vec<usize> = if pixels.len() > FIT_PIXELS_CAP {
-            pixels
-                .iter()
-                .copied()
-                .step_by(pixels.len() / FIT_PIXELS_CAP)
-                .collect()
-        } else {
-            Vec::new()
-        };
-        let seen = if sub.is_empty() { pixels } else { &sub[..] };
+        let total = parts[0].len() + parts[1].len();
+        let seen = strided_union(parts);
+        let seen = &seen[..];
         FIT_PIXELS.fetch_add(seen.len(), std::sync::atomic::Ordering::Relaxed);
         let evidence = |p: usize| self.pure[p] || (inner && self.inner_of(group, p, a, b));
         let mut fit = select(fit_pixels(
@@ -450,14 +444,46 @@ impl UnionFitter<'_> {
             self.sigma_noise,
             self.lambda,
         ));
-        if seen.len() < pixels.len() {
-            let k = pixels.len() as f64 / seen.len() as f64;
+        if seen.len() < total {
+            let k = total as f64 / seen.len() as f64;
             let params_term = fit.cost - 0.5 * fit.chi2;
             fit.chi2 *= k;
             fit.cost = params_term + 0.5 * fit.chi2;
         }
         fit
     }
+}
+
+/// The pixels a fit gathers from the concatenation `parts[0] ++ parts[1]`: all of them,
+/// or, above [`FIT_PIXELS_CAP`], every `⌊len / FIT_PIXELS_CAP⌋`-th, starting at the first.
+///
+/// The `k`-th element of the concatenation is `parts[0][k]` below `parts[0].len()` and
+/// `parts[1][k − parts[0].len()]` from there on, so the stride is taken by index
+/// arithmetic without building the concatenation: the same pixels in the same order as
+/// `concat.step_by(stride)`. On a poster whose background is one 1.26-million-pixel
+/// component, every union with the background copied those 1.26 million indices to keep
+/// 65 thousand of them. A single part at or under the cap is borrowed, not copied.
+/// Not from the literature: an allocation removed.
+fn strided_union<'p>(parts: [&'p [usize]; 2]) -> std::borrow::Cow<'p, [usize]> {
+    use std::borrow::Cow;
+    let (la, total) = (parts[0].len(), parts[0].len() + parts[1].len());
+    if total <= FIT_PIXELS_CAP {
+        return if parts[1].is_empty() {
+            Cow::Borrowed(parts[0])
+        } else if parts[0].is_empty() {
+            Cow::Borrowed(parts[1])
+        } else {
+            Cow::Owned([parts[0], parts[1]].concat())
+        };
+    }
+    let at = |k: usize| {
+        if k < la {
+            parts[0][k]
+        } else {
+            parts[1][k - la]
+        }
+    };
+    Cow::Owned((0..total).step_by(total / FIT_PIXELS_CAP).map(at).collect())
 }
 
 /// Where the rounds of [`Agglomeration::run`] go, for the timing log: a greedy
@@ -612,12 +638,9 @@ impl Agglomeration<'_> {
         self.fits[a].model.is_gradient() || self.fits[b].model.is_gradient() || self.ramp_step(a, b)
     }
 
-    /// The pixels of components `a` and `b`, `a`'s first.
-    fn union_pixels(&self, a: usize, b: usize) -> Vec<usize> {
-        let mut px: Vec<usize> = Vec::with_capacity(self.members[a].len() + self.members[b].len());
-        px.extend_from_slice(&self.members[a]);
-        px.extend_from_slice(&self.members[b]);
-        px
+    /// The pixels of components `a` and `b`, `a`'s first, as the two parts a fit reads.
+    fn union_parts(&self, a: usize, b: usize) -> [&[usize]; 2] {
+        [&self.members[a], &self.members[b]]
     }
 
     /// The greedy loop: each round fits the unions it has not fitted yet, picks the pair
@@ -721,14 +744,14 @@ impl Agglomeration<'_> {
             .map(|&(a, b)| {
                 live.check();
                 let (ai, bi) = (a as usize, b as usize);
-                let px = this.union_pixels(ai, bi);
+                let px = this.union_parts(ai, bi);
                 // Every fit already sees at most FIT_PIXELS_CAP pixels, so a
                 // candidate union costs the same whatever its size and there is
                 // nothing to refit: the cached fit is the fit.
                 let inner = this.smooth_pair(ai, bi);
                 (
                     (a, b),
-                    (this.fitter.fit(&this.group, &px, a, b, inner), false),
+                    (this.fitter.fit(&this.group, px, a, b, inner), false),
                 )
             })
             .collect();
@@ -750,9 +773,9 @@ impl Agglomeration<'_> {
                 // The winner was judged on a stale fit: refit it and choose again.
                 inkvec_core::progress::checkpoint();
                 let (ai, bi) = (a as usize, b as usize);
-                let px = self.union_pixels(ai, bi);
+                let px = self.union_parts(ai, bi);
                 let inner = self.smooth_pair(ai, bi);
-                let fit = self.fitter.fit(&self.group, &px, a, b, inner);
+                let fit = self.fitter.fit(&self.group, px, a, b, inner);
                 self.cache.insert((a, b), (fit, false));
                 self.gains.remove(&(a, b));
                 *stale_refits += 1;
@@ -926,9 +949,8 @@ impl Agglomeration<'_> {
     /// neighbour (see [`debug::dump`]).
     fn dump(&self, win: [usize; 4]) {
         let fit = |a: u32, b: u32| {
-            let mut px = self.members[a as usize].clone();
-            px.extend_from_slice(&self.members[b as usize]);
-            self.fitter.fit(&self.group, &px, a, b, true)
+            let px = self.union_parts(a as usize, b as usize);
+            self.fitter.fit(&self.group, px, a, b, true)
         };
         debug::dump(
             win,
@@ -1106,6 +1128,36 @@ mod tests {
             1.0
         )
         .is_none());
+    }
+
+    #[test]
+    fn strided_union_takes_the_concatenations_stride_without_building_it() {
+        for &(la, lb) in &[
+            (0usize, 0usize),
+            (5, 0),
+            (0, 7),
+            (3, 4),
+            (FIT_PIXELS_CAP, 0),
+            (FIT_PIXELS_CAP, 1),
+            (1, FIT_PIXELS_CAP),
+            (40_000, 40_000),
+            (1_260_000, 9),
+            (7, 200_001),
+        ] {
+            let a: Vec<usize> = (0..la).map(|i| 3 * i + 1).collect();
+            let b: Vec<usize> = (0..lb).map(|i| 5 * i + 2).collect();
+            let concat: Vec<usize> = a.iter().chain(&b).copied().collect();
+            let want: Vec<usize> = if concat.len() > FIT_PIXELS_CAP {
+                concat
+                    .iter()
+                    .copied()
+                    .step_by(concat.len() / FIT_PIXELS_CAP)
+                    .collect()
+            } else {
+                concat.clone()
+            };
+            assert_eq!(&strided_union([&a, &b])[..], &want[..], "{la} + {lb}");
+        }
     }
 
     #[test]

@@ -1,29 +1,21 @@
-//! Speckle removal and faces for fast mode, in two linear passes over row runs.
-//!
-//! `regions::despeckle` and `regions::split_components` flood-fill pixel by pixel and keep
-//! every component's pixel list; at 2048 px that is most of a second of allocation. Here a
-//! component is found by union-find over horizontal runs of one label -- a run is joined to
-//! the runs above it that overlap it and carry the same label -- so the work is one pass
-//! over the pixels plus one over the runs. Components smaller than `min_size` take the
-//! label they share the longest border with (the smallest label on a tie), and the faces
-//! are the components of the result.
-//!
-//! The file also holds the label clean-ups that run between the palette and despeckling
-//! (stage 2 of the Fast pipeline, called from [`super::front`] in this order):
-//! [`absorb_slivers`], [`absorb_rims`] and [`merge_same_inks`], then [`despeckle`] and
-//! [`faces`]. In: one ink label per pixel, each pixel's colour (sRGB 0..1 plus opacity) and
-//! each ink's colour. Out: cleaned labels, then a face id per pixel and each face's ink.
-//! The blend test [`blend_of`] / [`is_blend`] is shared with [`super::palette`].
+//! The Fast label clean-up and faces as they shipped at 55ee4e0, kept verbatim as the
+//! oracle the run-based rewrite in `fast/faces.rs` is tested against (compiled only for
+//! tests). Every function here must give the same labels, faces and face inks as its
+//! counterpart; see `faces/tests.rs`. The one change is that the functions are private to
+//! the test build and share `blend_of`, `BLEND_TOL` and `SAME_ALPHA` with the product.
+#![allow(dead_code, clippy::needless_range_loop)]
+
+use super::{blend_of, BLEND_TOL, SAME_ALPHA};
 
 /// Components of equal labels (4-connected): the component of every pixel, each
 /// component's size and label, in order of first appearance in scan order.
-pub(crate) struct Components {
+pub(super) struct Components {
     /// Component id per pixel.
-    pub comp: Vec<u32>,
+    pub(super) comp: Vec<u32>,
     /// Pixels per component.
-    pub size: Vec<usize>,
+    pub(super) size: Vec<usize>,
     /// Label of each component.
-    pub label: Vec<u16>,
+    pub(super) label: Vec<u16>,
 }
 
 /// Union-find root of run `x`, with path halving (each visited node is pointed at its
@@ -46,7 +38,7 @@ fn find(parent: &mut [u32], mut x: u32) -> u32 {
 /// as the root, so component ids come out in order of first appearance in scan order, the
 /// same numbering a pixel flood fill in scan order gives (the tests check the partition
 /// against `regions::split_components`). An empty image gives no components.
-pub(crate) fn components(labels: &[u16], w: usize, h: usize) -> Components {
+pub(super) fn components(labels: &[u16], w: usize, h: usize) -> Components {
     // Runs: (x0, x1 exclusive, label), and where each row's runs start.
     let mut runs: Vec<(u32, u32, u16)> = Vec::new();
     let mut row_start = Vec::with_capacity(h + 1);
@@ -119,7 +111,7 @@ pub(crate) fn components(labels: &[u16], w: usize, h: usize) -> Components {
 /// speckles may therefore swap into each other's label rather than merge, which is
 /// harmless at this size. A component with no neighbour at all (the whole image) keeps
 /// its label. `min_size <= 1` does nothing.
-pub(crate) fn despeckle(labels: &mut [u16], w: usize, h: usize, min_size: usize) {
+pub(super) fn despeckle(labels: &mut [u16], w: usize, h: usize, min_size: usize) {
     if min_size <= 1 {
         return;
     }
@@ -175,79 +167,6 @@ pub(crate) fn despeckle(labels: &mut [u16], w: usize, h: usize, min_size: usize)
     }
 }
 
-/// Each pixel's colour as the clean-up passes read it: sRGB 0..1 over white, plus the source
-/// opacity when transparency is traced natively (1 otherwise).
-///
-/// Read on demand rather than copied. The passes look at a colour only for pixels of
-/// strips (components without an interior): at most 2.7% of the pixels of a 2048 px image
-/// and 0% at the median (the 7 `big` images of the Fast benchmark). The copy of every
-/// pixel as `[f32; 4]` it replaces was 64 MB and 18.3 ms at 2048 px, a quarter of the
-/// whole clean-up stage.
-///
-/// **Why the output is identical:** [`Pixels::get`] builds the same four `f32`s the copy
-/// held -- the three stored channels unchanged and `alpha[p]` or the literal `1.0` -- so
-/// every blend test downstream sees the same bits.
-///
-/// Inspired by: Ragan-Kelley, Barnes, Adams, Paris, Durand & Amarasinghe (2013), "Halide:
-/// a language and compiler for optimizing parallelism, locality, and recomputation in image
-/// processing pipelines", PLDI 2013, <https://doi.org/10.1145/2491956.2462176>. Halide
-/// schedules each stage between storing its result and recomputing it at the consumer;
-/// here the choice is made by hand at its trivial end: a value that is one load (and one
-/// branch) to rebuild, and is read at a few percent of the pixels, is never stored.
-#[derive(Clone, Copy)]
-pub(crate) struct Pixels<'a> {
-    /// sRGB 0..1 per pixel, composited over white.
-    pub rgb: &'a [[f32; 3]],
-    /// Source opacity per pixel in native mode; `None` reads as 1.
-    pub alpha: Option<&'a [f32]>,
-}
-
-impl Pixels<'_> {
-    /// Pixel `p`'s colour and opacity.
-    #[inline]
-    pub(crate) fn get(&self, p: usize) -> [f32; 4] {
-        let c = self.rgb[p];
-        [c[0], c[1], c[2], self.alpha.map_or(1.0, |a| a[p])]
-    }
-}
-
-/// Largest distance (sRGB and opacity, Euclidean) from a pixel to the line between two
-/// neighbouring inks for the pixel to count as a blend of them.
-pub(crate) const BLEND_TOL: f32 = 0.04;
-
-/// `col` read as a blend of inks `a` and `b` (sRGB and opacity): how much of `b` it holds,
-/// clamped to [0, 1], and its squared distance from the line between them. `None` when the
-/// two inks are one colour.
-///
-/// The orthogonal projection of `col` onto the segment from `a` to `b` in the 4-D space of
-/// straight (not linearised) sRGB 0..1 and opacity:
-///
-/// `t = clamp(((col − a) · (b − a)) / |b − a|², 0, 1)`, `d = |col − (a + t (b − a))|²`.
-///
-/// `t` is the coverage of `b` an anti-aliased pixel would have under a linear mix; `d` is
-/// in squared sRGB units and is compared with `BLEND_TOL²`. Clamping `t` makes a colour
-/// beyond either end measure its distance to that end, so a darker-than-black pixel is not
-/// read as a blend. `|b − a|² < 1e-9` (the same colour twice) has no line, hence `None`.
-pub(crate) fn blend_of(col: [f32; 4], a: [f32; 4], b: [f32; 4]) -> Option<(f32, f32)> {
-    let ab: [f32; 4] = std::array::from_fn(|k| b[k] - a[k]);
-    let l2: f32 = ab.iter().map(|v| v * v).sum();
-    if l2 < 1e-9 {
-        return None;
-    }
-    let t = ((0..4).map(|k| (col[k] - a[k]) * ab[k]).sum::<f32>() / l2).clamp(0.0, 1.0);
-    let d = (0..4)
-        .map(|k| (col[k] - (a[k] + t * ab[k])).powi(2))
-        .sum::<f32>();
-    Some((t, d))
-}
-
-/// Whether `col` is a blend of inks `a` and `b`: within [`BLEND_TOL`] of the line between
-/// them.
-pub(crate) fn is_blend(col: [f32; 4], a: [f32; 4], b: [f32; 4]) -> bool {
-    blend_of(col, a, b).is_some_and(|(_, d)| d <= BLEND_TOL * BLEND_TOL)
-}
-
-/// Put anti-aliasing slivers back where they belong.
 ///
 /// The palette sends a blend to a neighbour's ink only when the blend's colour is not an
 /// ink itself; a rim between white and a gradient crosses the gradient's own light bands,
@@ -264,9 +183,9 @@ pub(crate) fn is_blend(col: [f32; 4], a: [f32; 4], b: [f32; 4]) -> bool {
 /// within `BLEND_TOL²` wins; with none, the pixel keeps its label. Neighbour labels are
 /// read from a copy taken before the pass, so the order pixels are visited in does not
 /// matter. `px` and `inks` are sRGB 0..1 plus opacity; `labels` must index into `inks`.
-pub(crate) fn absorb_slivers(
+pub(super) fn absorb_slivers(
     labels: &mut [u16],
-    px: Pixels<'_>,
+    px: &[[f32; 4]],
     inks: &[[f32; 4]],
     w: usize,
     h: usize,
@@ -295,7 +214,7 @@ pub(crate) fn absorb_slivers(
                 around.push(src[q]);
             }
         }
-        let col = px.get(p);
+        let col = px[p];
         let mut best: Option<(u16, f32)> = None;
         let mut consider = |l: u16, d: f32| {
             if d <= BLEND_TOL * BLEND_TOL && best.is_none_or(|(_, e)| d < e) {
@@ -322,7 +241,7 @@ pub(crate) fn absorb_slivers(
 /// Which components have an interior pixel: one whose four neighbours are all in it.
 /// A pixel on the image border never counts as interior, so a strip along the edge of the
 /// image is still a strip.
-fn interiors(c: &Components, w: usize, h: usize) -> Vec<bool> {
+pub(super) fn interiors(c: &Components, w: usize, h: usize) -> Vec<bool> {
     let mut interior = vec![false; c.size.len()];
     for p in 0..w * h {
         let (x, y) = (p % w, p / w);
@@ -357,9 +276,9 @@ fn interiors(c: &Components, w: usize, h: usize) -> Vec<bool> {
 /// two sides. Each pixel of the strip then goes to `b` when its own colour's projection on
 /// that line has `t >= 0.5`, and to `a` otherwise (also when `a` and `b` are one colour).
 /// A strip bordering fewer than two inks, or labelled outside the palette, is left alone.
-pub(crate) fn absorb_rims(
+pub(super) fn absorb_rims(
     labels: &mut [u16],
-    px: Pixels<'_>,
+    px: &[[f32; 4]],
     inks: &[[f32; 4]],
     w: usize,
     h: usize,
@@ -420,7 +339,7 @@ pub(crate) fn absorb_rims(
         .collect();
     for (p, l) in labels.iter_mut().enumerate() {
         if let Some((a, b)) = pair[c.comp[p] as usize] {
-            *l = match blend_of(px.get(p), inks[a as usize], inks[b as usize]) {
+            *l = match blend_of(px[p], inks[a as usize], inks[b as usize]) {
                 Some((t, _)) if t >= 0.5 => b,
                 _ => a,
             };
@@ -446,7 +365,7 @@ pub(crate) fn absorb_rims(
 /// take the settled ink of a higher-ranked neighbour, choosing the longest shared border in
 /// pixel edges (the higher rank on a tie). Returns early, unchanged, when no two inks are
 /// the same or no such pair of components touches.
-pub(crate) fn merge_same_inks(labels: &mut [u16], inks: &[[f32; 4]], w: usize, h: usize) {
+pub(super) fn merge_same_inks(labels: &mut [u16], inks: &[[f32; 4]], w: usize, h: usize) {
     let n_inks = inks.len();
     let same: Vec<bool> = (0..n_inks * n_inks)
         .map(|k| {
@@ -517,14 +436,11 @@ pub(crate) fn merge_same_inks(labels: &mut [u16], inks: &[[f32; 4]], w: usize, h
     }
 }
 
-/// Largest opacity difference between two inks that can be one ink.
-const SAME_ALPHA: f32 = 0.02;
-
 /// Faces: the components of `labels`, as a face id per pixel and each face's label. Past
 /// `u16::MAX - 1` faces the rest are folded into face 0, as `regions::split_components`
 /// does. Face ids are component ids ([`components`]), so they follow scan order; the
 /// second output is indexed by face id and holds the ink index of that face.
-pub(crate) fn faces(labels: &[u16], w: usize, h: usize) -> (Vec<u16>, Vec<usize>) {
+pub(super) fn faces(labels: &[u16], w: usize, h: usize) -> (Vec<u16>, Vec<usize>) {
     let c = components(labels, w, h);
     let cap = (u16::MAX - 1) as usize;
     let ids: Vec<u16> = c
@@ -536,7 +452,20 @@ pub(crate) fn faces(labels: &[u16], w: usize, h: usize) -> (Vec<u16>, Vec<usize>
     (ids, face_label)
 }
 
-#[cfg(test)]
-mod reference_tests;
-#[cfg(test)]
-mod tests;
+/// The whole clean-up and split as `fast::front` ran it at 55ee4e0: slivers, rims, the
+/// same-ink merge, despeckling to `min_size`, then the faces. `px` is each pixel's colour
+/// (sRGB 0..1 plus opacity) and `inks` each ink's.
+pub(super) fn stage(
+    labels: &mut [u16],
+    px: &[[f32; 4]],
+    inks: &[[f32; 4]],
+    w: usize,
+    h: usize,
+    min_size: usize,
+) -> (Vec<u16>, Vec<usize>) {
+    absorb_slivers(labels, px, inks, w, h);
+    absorb_rims(labels, px, inks, w, h);
+    merge_same_inks(labels, inks, w, h);
+    despeckle(labels, w, h, min_size);
+    faces(labels, w, h)
+}

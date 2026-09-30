@@ -93,24 +93,23 @@ fn trace(
     sw.mark("palette");
     inkvec_core::progress::begin("slivers");
     {
-        let px: Vec<[f32; 4]> = (0..w * h)
-            .map(|p| {
-                let c = rgb[p];
-                [c[0], c[1], c[2], native.map_or(1.0, |a| a[p])]
-            })
-            .collect();
+        // Each pixel's colour and opacity, read in place where a pass needs it.
+        let px = super::faces::Pixels {
+            rgb: &rgb,
+            alpha: native,
+        };
         let inks: Vec<[f32; 4]> = (0..pal.len())
             .map(|i| {
                 let c = pal.rgb[i];
                 [c[0], c[1], c[2], pal.alpha.get(i).copied().unwrap_or(1.0)]
             })
             .collect();
-        super::faces::absorb_slivers(&mut labels, &px, &inks, w, h);
+        super::faces::absorb_slivers(&mut labels, px, &inks, w, h);
         // Every face costs an outline, and every place a face touches a boundary is a
         // junction the fitter has to stop at. The rims of small text and the second black
         // of large type were most of both on a textured masthead: 4,068 faces and 47,548
         // coordinates, where these two passes leave 8,798 at a lower dE00.
-        super::faces::absorb_rims(&mut labels, &px, &inks, w, h);
+        super::faces::absorb_rims(&mut labels, px, &inks, w, h);
         super::faces::merge_same_inks(&mut labels, &inks, w, h);
     }
     sw.mark("slivers");

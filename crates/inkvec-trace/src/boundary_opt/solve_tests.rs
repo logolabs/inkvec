@@ -669,7 +669,7 @@ fn count(edges: Vec<Edge>, w: usize, h: usize) -> usize {
         n_labels: 2,
     };
     let vars = build_vars(&map);
-    crossings_count(&map, &vars, &vars.start, w, h)
+    crossings_count(&map, &vars, &vars.start)
 }
 
 #[test]

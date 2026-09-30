@@ -73,6 +73,31 @@
 //! neighbours but are not driven by the image. `planar::refine_junctions` has already
 //! placed them by intersecting the boundaries that meet there, which is better evidence
 //! than a single pixel's colour.
+//!
+//! # Where this sits, and how it is solved
+//!
+//! Quality mode only: the crate root's trace calls [`optimise_alpha`] after
+//! `planar::refine_subpixel_alpha` and `planar::refine_junctions`, and before symmetry is
+//! re-imposed and the edges go to the fitter. It takes the [`PlanarMap`], the source image
+//! (sRGB `0..1`, row-major) and each face's fill model, and moves the map's points in
+//! place. Coordinates are in px with pixel centres at integer coordinates, so pixel
+//! `(x, y)` is the square `[x−0.5, x+0.5] x [y−0.5, y+0.5]`.
+//!
+//! The energy is minimised by **nonlinear conjugate gradient** (Fletcher–Reeves, with a
+//! restart to steepest descent whenever the new direction is not downhill) and a
+//! backtracking line search: the first trial step moves the furthest point `MAX_STEP`,
+//! and each rejected trial shrinks it by 0.4, at most six times. Every point is also kept
+//! within `MAX_TOTAL` of where the measurement put it. The solve stops after `ITERS`
+//! iterations, when a step buys less than 1e-4 of the energy, or when the caller's time
+//! budget runs out. Nothing is linearised: each trial re-renders the exact coverage.
+//!
+//! Afterwards a fold guard (`crossings_count`) scales the whole displacement back towards
+//! the start until it introduces no new self-crossing; if even a tenth of it does, the
+//! stage gives up and leaves the map as it was.
+//!
+//! The data term is accumulated in f64, and the mixture `a·c_left + (1−a)·c_right` is
+//! formed in f64 too (see `cut_pixel`): in f32 the energy is a staircase the line search
+//! cannot descend.
 
 use inkvec_core::clock::Instant;
 use std::collections::HashMap;
@@ -91,7 +116,12 @@ const MAX_TOTAL: f64 = 1.0;
 /// Kink and anchor weights, as a fraction of the data term's initial value. Scaling them to
 /// the data term is what makes them mean the same thing on a flat two-colour logo and on a
 /// crowded emoji, where the residual differs by orders of magnitude.
+///
+/// Concretely `w_kink = K_KINK · D0 / K0`, where `D0` is the initial data term and `K0` the
+/// initial kink sum at unit weight, so the kink term starts at 5% of the data term.
 const K_KINK: f64 = 0.05;
+/// Anchor weight: `w_anchor = K_ANCHOR · D0 / n` for `n` unknowns, so a point one pixel from
+/// its start costs a tenth of the average point's share of the initial data term.
 const K_ANCHOR: f64 = 0.10;
 /// Junction points are anchored harder, for the reason given in the module comment.
 const JUNCTION_ANCHOR: f64 = 4.0;
@@ -117,11 +147,16 @@ enum Prov {
 /// One piece of one boundary chain, lying inside one pixel.
 #[derive(Clone, Copy)]
 struct Piece {
+    /// Index of the edge in the map.
     edge: u32,
+    /// Where the piece enters the pixel (or starts inside it).
     from: Point,
+    /// Where the piece leaves the pixel (or ends inside it).
     to: Point,
     from_prov: Prov,
     to_prov: Prov,
+    /// Next piece in the same pixel's list (a singly linked list threaded through
+    /// `Problem::pieces`, headed by `Problem::head`), or -1.
     next: i32,
 }
 
@@ -130,10 +165,16 @@ struct Piece {
 struct Vars {
     /// `var[edge][i]` is the unknown holding point `i` of that edge.
     var: Vec<Vec<u32>>,
+    /// Each unknown's starting position: where the earlier stages put it.
     start: Vec<Point>,
+    /// Whether each unknown is a shared end point (a junction node).
     junction: Vec<bool>,
 }
 
+/// Number the unknowns. Every point of every edge gets its own, except that the end points
+/// of open edges are keyed by their node id, so all edges meeting at a node share one.
+/// Unknowns are numbered in edge order, then point order, which fixes the summation order
+/// of everything downstream.
 fn build_vars(map: &PlanarMap) -> Vars {
     let mut var: Vec<Vec<u32>> = Vec::with_capacity(map.edges.len());
     let mut start: Vec<Point> = Vec::new();
@@ -193,6 +234,14 @@ fn walkable(lo: f64, hi: f64) -> bool {
 }
 
 /// Gridline crossings of one segment, as parameters in `(0, 1)`, in order.
+///
+/// Pixel borders are the half-integer lines `x = m + 0.5` and `y = m + 0.5`. For segment
+/// `a → b`, each vertical border `x = m` strictly between `a.x` and `b.x` crosses at
+/// `t = (m − a.x) / (b.x − a.x)`, and likewise for horizontal ones; each crossing records
+/// its gridline and the two unknowns `va`, `vb` it moves with. Crossings within `1e-9` of
+/// either end are dropped (the end itself is a vertex), and an axis the segment does not
+/// move along, or cannot be walked (see [`walkable`]), contributes none. `out` is cleared
+/// first and reused, so this allocates nothing in the solve loop.
 fn crossings(a: Point, b: Point, va: u32, vb: u32, out: &mut Vec<(f64, Prov)>) {
     out.clear();
     let (dx, dy) = (b.x - a.x, b.y - a.y);
@@ -239,6 +288,11 @@ fn crossings(a: Point, b: Point, va: u32, vb: u32, out: &mut Vec<(f64, Prov)>) {
 
 /// Position on a pixel's border as a parameter in `[0, 4)`, running top, right, bottom,
 /// left. `NaN` when the point is not on the border.
+///
+/// The pixel is centred on `(cx, cy)`. The parameter goes clockwise on screen (y down):
+/// `0..1` along the top from the top-left corner, `1..2` down the right side, `2..3`
+/// leftwards along the bottom, `3..4` up the left side, so integer values are corners.
+/// "On the border" means within `1e-7` px of a side's line.
 fn perim(p: Point, cx: f64, cy: f64) -> f64 {
     const EPS: f64 = 1e-7;
     let (x0, y0, x1, y1) = (cx - 0.5, cy - 0.5, cx + 0.5, cy + 0.5);
@@ -257,6 +311,8 @@ fn perim(p: Point, cx: f64, cy: f64) -> f64 {
     f64::NAN
 }
 
+/// Corner `i` (mod 4) of the pixel centred on `(cx, cy)`, numbered as in [`perim`]:
+/// 0 top-left, 1 top-right, 2 bottom-right, 3 bottom-left.
 #[inline]
 fn corner(i: i64, cx: f64, cy: f64) -> Point {
     let (x0, y0, x1, y1) = (cx - 0.5, cy - 0.5, cx + 0.5, cy + 0.5);
@@ -269,6 +325,12 @@ fn corner(i: i64, cx: f64, cy: f64) -> Point {
 }
 
 /// The pixel corners passed walking the border from `s_from` to `s_to`.
+///
+/// `s_from` and `s_to` are [`perim`] parameters; `forward` walks in increasing parameter
+/// (clockwise on screen), otherwise decreasing. Corners are written to `out` (cleared
+/// first) in walk order; a corner within `1e-9` of either end is not "passed". Closing a
+/// chain's path through a pixel along these corners gives the clipped polygon whose
+/// shoelace area is a face's coverage.
 fn border_corners(s_from: f64, s_to: f64, forward: bool, cx: f64, cy: f64, out: &mut Vec<Point>) {
     out.clear();
     let span = if forward {
@@ -333,7 +395,9 @@ pub mod juncstat {
     }
 }
 
-/// Signed shoelace of a closed loop.
+/// Signed shoelace of a closed loop: `A = ½ Σ_i (x_i·y_{i+1} − x_{i+1}·y_i)`, indices
+/// modulo the length. Positive for a loop that is anticlockwise in y-up axes, which on
+/// screen (y down) is clockwise.
 fn shoelace(pts: &[Point]) -> f64 {
     let n = pts.len();
     let mut s = 0.0;
@@ -346,6 +410,15 @@ fn shoelace(pts: &[Point]) -> f64 {
 
 /// Push the gradient of a coverage with respect to one clipped vertex back onto the
 /// unknowns it depends on.
+///
+/// `(gx, gy)` is `∂E/∂q` for the clipped polygon's vertex `q`; this adds `∂E/∂q · ∂q/∂p`
+/// to `grad` for each unknown `p` that `q` depends on (the chain rule). A boundary point
+/// is its own unknown; a pixel corner is fixed. A gridline crossing
+/// `q = a + t(b − a)`, with `t = (line − a.x)/(b.x − a.x)` on a vertical gridline, has a
+/// fixed `x` and a `y` that depends on both ends: `∂q.y/∂a.y = 1 − t`, `∂q.y/∂b.y = t`,
+/// `∂q.y/∂a.x = dy(t − 1)/dx`, `∂q.y/∂b.x = −dy·t/dx`. Horizontal gridlines swap the
+/// roles of x and y. A crossing on a segment parallel to its gridline (`|dx| < 1e-9`)
+/// contributes nothing.
 fn scatter(prov: Prov, gx: f64, gy: f64, pos: &[Point], grad: &mut [Point]) {
     match prov {
         Prov::Corner => {}
@@ -385,6 +458,12 @@ fn scatter(prov: Prov, gx: f64, gy: f64, pos: &[Point], grad: &mut [Point]) {
 }
 
 /// Do the two segments cross, other than by sharing an endpoint?
+///
+/// The standard orientation test: `ab` and `cd` properly cross when each separates the
+/// other's endpoints, i.e. `orient2d(a, b, c)` and `orient2d(a, b, d)` have strictly
+/// opposite signs and so do `orient2d(c, d, a)` and `orient2d(c, d, b)`. `orient2d` is the
+/// crate's robust (exact-sign) predicate, so near-collinear cases are decided correctly.
+/// Collinear touching also counts, as explained below.
 fn segments_cross(a: Point, b: Point, c: Point, d: Point) -> bool {
     use inkvec_core::predicates::orient2d;
     let (d1, d2) = (orient2d(a, b, c), orient2d(a, b, d));
@@ -428,8 +507,10 @@ fn segments_cross(a: Point, b: Point, c: Point, d: Point) -> bool {
 /// crossing that was already there would give up most of the gain.
 ///
 /// Only segments sharing a pixel are compared. A point moves less than a pixel, so a new
-/// crossing is always local.
-fn crossings_count(map: &PlanarMap, vars: &Vars, pos: &[Point], _w: usize, _h: usize) -> usize {
+/// crossing is always local. Segments are bucketed by the cells of their bounding box
+/// grown by half a pixel (a segment spanning more than 64 cells is skipped), pairs that
+/// share an unknown are ignored, and each crossing pair is counted once.
+fn crossings_count(map: &PlanarMap, vars: &Vars, pos: &[Point]) -> usize {
     let mut segs: Vec<(u32, u32)> = Vec::new();
     for (k, e) in map.edges.iter().enumerate() {
         let ids = &vars.var[k];
@@ -486,30 +567,50 @@ fn crossings_count(map: &PlanarMap, vars: &Vars, pos: &[Point], _w: usize, _h: u
     found.len()
 }
 
+/// Part of one boundary inside a junction pixel: its vertices in order, each with where it
+/// came from.
+type Chain = Vec<(Point, Prov)>;
+
 /// Reused scratch, so an energy evaluation allocates nothing.
 #[derive(Default)]
 struct Scratch {
+    /// Gridline crossings of the segment being bucketed.
     cross: Vec<(f64, Prov)>,
+    /// The pieces in the current pixel, in walk order.
     order: Vec<usize>,
+    /// The clipped polygon of the current pixel, and where each vertex came from.
     loop_pts: Vec<Point>,
     loop_prov: Vec<Prov>,
+    /// Pixel corners closing the clipped polygon.
     corners: Vec<Point>,
 }
 
+/// The boundary solve's energy, and everything it needs to evaluate it.
+///
+/// `energy(pos)` is data + priors (see the module docs) at the unknown positions `pos`;
+/// `bucket` must run first on the same `pos` to cut the chains into per-pixel pieces,
+/// which `energy` does itself.
 struct Problem<'a> {
     map: &'a PlanarMap,
     vars: &'a Vars,
+    /// The source image, sRGB `0..1`, row-major `w x h`.
     rgb: &'a [[f32; 3]],
+    /// Each face's fill model, indexed by face id.
     face: &'a [FillModel],
     w: usize,
     h: usize,
+    /// Chain pieces, each lying in one pixel; rebuilt by `bucket`.
     pieces: Vec<Piece>,
+    /// Per pixel, the index of the last piece bucketed into it (-1 for none); the rest of
+    /// that pixel's pieces follow through `Piece::next`.
     head: Vec<i32>,
     scratch: Scratch,
     /// The source's alpha per pixel and each face's opacity, when alpha is a fourth
     /// channel of the data term.
     alpha: Option<(&'a [f32], &'a [f32])>,
+    /// Weight of the kink prior (see `K_KINK`).
     w_kink: f64,
+    /// Weight of the anchor prior (see `K_ANCHOR`).
     w_anchor: f64,
     /// Whether junction pixels take part in the data term.
     junctions: bool,
@@ -536,6 +637,11 @@ fn research_chunks() -> usize {
 
 impl Problem<'_> {
     /// Sort every chain piece into the pixel it lies in.
+    ///
+    /// Each segment of each edge between two faces with fill models is cut at its
+    /// gridline crossings; each resulting piece belongs to the pixel containing its
+    /// midpoint and is pushed onto that pixel's list. Pieces outside the image are
+    /// dropped. Within a pixel the list is newest first; `data_cells` reverses it.
     fn bucket(&mut self, pos: &[Point]) {
         self.pieces.clear();
         for &cell in &self.touched {
@@ -603,8 +709,8 @@ impl Problem<'_> {
         self.touched.sort_unstable();
     }
 
-    /// Data term, and its gradient when asked for. `bucket` must have run on `pos`.
-    /// The data term over every pixel.
+    /// The data term over every pixel, and its gradient (added into `grad`) when asked
+    /// for. `bucket` must have run on `pos`.
     ///
     /// Sequential by default, so the floating-point summation order and therefore the
     /// output are exactly what they always were. `INKVEC_BOPT_CHUNKS=16` (research builds
@@ -670,6 +776,10 @@ impl Problem<'_> {
         total
     }
 
+    /// Sum the data term over `cells`, in the order given, adding the gradient into
+    /// `grad` when asked for. A pixel holding pieces of one edge goes to `cut_pixel`; one
+    /// holding pieces of several is a junction, which counts only when `junctions` is on.
+    /// `scratch` is this caller's own, so ranges can be summed on separate threads.
     fn data_cells(
         &self,
         cells: impl Iterator<Item = usize>,
@@ -700,120 +810,180 @@ impl Problem<'_> {
                 }
                 continue;
             }
-            if order.windows(2).any(|pair| {
-                let (a, b) = (self.pieces[pair[0]].to, self.pieces[pair[1]].from);
-                (a.x - b.x).abs() > 1e-9 || (a.y - b.y).abs() > 1e-9
-            }) {
-                continue;
+            self.cut_pixel(cell, pos, scratch, grad.as_deref_mut(), &mut total);
+        }
+        total
+    }
+
+    /// A pixel cut in two by one chain of one boundary: its squared colour residual,
+    /// added to `total`, and the residual's gradient, added to `grad` when asked for.
+    ///
+    /// `scratch.order` holds the pixel's pieces in walk order, all of one edge. The pixel
+    /// is skipped (nothing added) unless the pieces join end to end, both ends of the
+    /// chain lie on the pixel's border, the two faces differ by at least `MIN_CONTRAST`,
+    /// and the clipped area is a plausible coverage. For coverage `a` of the left face,
+    /// colours `c_l`, `c_r` at the pixel centre and target `t`:
+    ///
+    /// ```text
+    ///     E_pixel = Σ_k (a·c_l[k] + (1−a)·c_r[k] − t[k])²
+    ///     ∂E/∂q_i = (dE/da) · ∂a/∂q_i,   dE/da = Σ_k 2·r_k·(c_l[k] − c_r[k])
+    /// ```
+    ///
+    /// with `∂a/∂q_i` from the shoelace formula at each vertex `q_i` of the clipped
+    /// polygon, pushed onto the unknowns by [`scatter`]. The gradient is skipped when the
+    /// pixel is (numerically) fully on one side.
+    fn cut_pixel(
+        &self,
+        cell: usize,
+        pos: &[Point],
+        scratch: &mut Scratch,
+        mut grad: Option<&mut [Point]>,
+        total: &mut f64,
+    ) {
+        let order = &scratch.order;
+        let edge = self.pieces[order[0]].edge;
+        if order.windows(2).any(|pair| {
+            let (a, b) = (self.pieces[pair[0]].to, self.pieces[pair[1]].from);
+            (a.x - b.x).abs() > 1e-9 || (a.y - b.y).abs() > 1e-9
+        }) {
+            return;
+        }
+        let first = self.pieces[order[0]];
+        let last = self.pieces[order[order.len() - 1]];
+        let (px, py) = ((cell % self.w) as f64, (cell / self.w) as f64);
+        // Both ends have to lie on the pixel's border, so that the chain really does
+        // cut the square in two. An end inside the pixel is an open end or a junction
+        // that was placed there, and then one chain does not divide it.
+        let s_in = perim(first.from, px, py);
+        let s_out = perim(last.to, px, py);
+        if !s_in.is_finite() || !s_out.is_finite() {
+            return;
+        }
+        let e = &self.map.edges[edge as usize];
+        let cl = self.face[e.left as usize].color_at(px, py);
+        let cr = self.face[e.right as usize].color_at(px, py);
+        let contrast = (0..3).map(|k| (cl[k] - cr[k]).abs()).fold(0.0f32, f32::max);
+        // The opacities either side, when alpha is a channel -- and only where the colour
+        // over white has no contrast to measure: white paint against the clear ground,
+        // two bands of one fade. Anywhere else the colour over white already carries
+        // the alpha (`W = 1 - a` for black on clear) and counting it again as a fourth
+        // channel moved every such edge: 0.07 px on `material-icons/table_rows`.
+        let opac = self
+            .alpha
+            .filter(|_| contrast < MIN_CONTRAST)
+            .map(|(img_a, fa)| {
+                (
+                    fa.get(e.left as usize).copied().unwrap_or(1.0),
+                    fa.get(e.right as usize).copied().unwrap_or(1.0),
+                    img_a[cell],
+                )
+            });
+        let contrast = match opac {
+            Some((al, ar, _)) => contrast.max((al - ar).abs()),
+            None => contrast,
+        };
+        if contrast < MIN_CONTRAST {
+            return;
+        }
+        // The pixel cut by the chain and closed along its own border: the side the
+        // left face lies on. Built one way round; the sign says whether that was the
+        // left side, and if not the other way round is the one.
+        let mut area = f64::NAN;
+        for &forward in &[true, false] {
+            let lp = &mut scratch.loop_pts;
+            let lv = &mut scratch.loop_prov;
+            lp.clear();
+            lv.clear();
+            lp.push(first.from);
+            lv.push(first.from_prov);
+            for &i in scratch.order.iter() {
+                lp.push(self.pieces[i].to);
+                lv.push(self.pieces[i].to_prov);
             }
-            let first = self.pieces[order[0]];
-            let last = self.pieces[order[order.len() - 1]];
-            let (px, py) = ((cell % self.w) as f64, (cell / self.w) as f64);
-            // Both ends have to lie on the pixel's border, so that the chain really does
-            // cut the square in two. An end inside the pixel is an open end or a junction
-            // that was placed there, and then one chain does not divide it.
-            let s_in = perim(first.from, px, py);
-            let s_out = perim(last.to, px, py);
-            if !s_in.is_finite() || !s_out.is_finite() {
-                continue;
+            border_corners(s_out, s_in, forward, px, py, &mut scratch.corners);
+            for &p in scratch.corners.iter() {
+                scratch.loop_pts.push(p);
+                scratch.loop_prov.push(Prov::Corner);
             }
-            let e = &self.map.edges[edge as usize];
-            let cl = self.face[e.left as usize].color_at(px, py);
-            let cr = self.face[e.right as usize].color_at(px, py);
-            let contrast = (0..3).map(|k| (cl[k] - cr[k]).abs()).fold(0.0f32, f32::max);
-            // The opacities either side, when alpha is a channel -- and only where the colour
-            // over white has no contrast to measure: white paint against the clear ground,
-            // two bands of one fade. Anywhere else the colour over white already carries
-            // the alpha (`W = 1 - a` for black on clear) and counting it again as a fourth
-            // channel moved every such edge: 0.07 px on `material-icons/table_rows`.
-            let opac = self
-                .alpha
-                .filter(|_| contrast < MIN_CONTRAST)
-                .map(|(img_a, fa)| {
-                    (
-                        fa.get(e.left as usize).copied().unwrap_or(1.0),
-                        fa.get(e.right as usize).copied().unwrap_or(1.0),
-                        img_a[cell],
-                    )
-                });
-            let contrast = match opac {
-                Some((al, ar, _)) => contrast.max((al - ar).abs()),
-                None => contrast,
-            };
-            if contrast < MIN_CONTRAST {
-                continue;
+            let s = shoelace(&scratch.loop_pts);
+            if s <= 0.0 {
+                area = -s;
+                break;
             }
-            // The pixel cut by the chain and closed along its own border: the side the
-            // left face lies on. Built one way round; the sign says whether that was the
-            // left side, and if not the other way round is the one.
-            let mut area = f64::NAN;
-            for &forward in &[true, false] {
-                let lp = &mut scratch.loop_pts;
-                let lv = &mut scratch.loop_prov;
-                lp.clear();
-                lv.clear();
-                lp.push(first.from);
-                lv.push(first.from_prov);
-                for &i in scratch.order.iter() {
-                    lp.push(self.pieces[i].to);
-                    lv.push(self.pieces[i].to_prov);
-                }
-                border_corners(s_out, s_in, forward, px, py, &mut scratch.corners);
-                for &p in scratch.corners.iter() {
-                    scratch.loop_pts.push(p);
-                    scratch.loop_prov.push(Prov::Corner);
-                }
-                let s = shoelace(&scratch.loop_pts);
-                if s <= 0.0 {
-                    area = -s;
-                    break;
-                }
-            }
-            if !area.is_finite() || !(-0.01..=1.01).contains(&area) {
-                continue;
-            }
-            if self.cells_dbg {
-                eprintln!(
-                    "  [bopt cell] ({px},{py}) edge {edge} pieces {} area {area:.6} ends {s_in:.3}->{s_out:.3}",
-                    scratch.order.len()
-                );
-            }
-            let a = area.clamp(0.0, 1.0);
-            let t = self.rgb[cell];
-            // In double precision: the mixture in f32 quantises the objective at a
-            // hundredth of the coverage resolution the solver works at, which turns a
-            // smooth energy into a staircase the line search cannot descend.
-            let mut dda = 0.0;
-            for k in 0..3 {
-                let (l, r_) = (cl[k] as f64, cr[k] as f64);
-                let c = a * l + (1.0 - a) * r_;
-                let r = c - t[k] as f64;
-                total += r * r;
-                dda += 2.0 * r * (l - r_);
-            }
-            if let Some((al, ar, ta)) = opac {
-                let (l, r_) = (al as f64, ar as f64);
-                let r = a * l + (1.0 - a) * r_ - ta as f64;
-                total += r * r;
-                dda += 2.0 * r * (l - r_);
-            }
-            if let Some(g) = grad.as_deref_mut() {
-                if a > 1e-9 && a < 1.0 - 1e-9 {
-                    let lp = &scratch.loop_pts;
-                    let n = lp.len();
-                    for i in 0..n {
-                        let prev = lp[(i + n - 1) % n];
-                        let next = lp[(i + 1) % n];
-                        // The coverage is minus the shoelace, so its derivative at vertex
-                        // `i` is minus the usual one.
-                        let gx = -0.5 * (next.y - prev.y) * dda;
-                        let gy = -0.5 * (prev.x - next.x) * dda;
-                        scatter(scratch.loop_prov[i], gx, gy, pos, g);
-                    }
+        }
+        if !area.is_finite() || !(-0.01..=1.01).contains(&area) {
+            return;
+        }
+        if self.cells_dbg {
+            eprintln!(
+                "  [bopt cell] ({px},{py}) edge {edge} pieces {} area {area:.6} ends {s_in:.3}->{s_out:.3}",
+                scratch.order.len()
+            );
+        }
+        let a = area.clamp(0.0, 1.0);
+        let t = self.rgb[cell];
+        // In double precision: the mixture in f32 quantises the objective at a
+        // hundredth of the coverage resolution the solver works at, which turns a
+        // smooth energy into a staircase the line search cannot descend.
+        let mut dda = 0.0;
+        for k in 0..3 {
+            let (l, r_) = (cl[k] as f64, cr[k] as f64);
+            let c = a * l + (1.0 - a) * r_;
+            let r = c - t[k] as f64;
+            *total += r * r;
+            dda += 2.0 * r * (l - r_);
+        }
+        if let Some((al, ar, ta)) = opac {
+            let (l, r_) = (al as f64, ar as f64);
+            let r = a * l + (1.0 - a) * r_ - ta as f64;
+            *total += r * r;
+            dda += 2.0 * r * (l - r_);
+        }
+        if let Some(g) = grad.as_deref_mut() {
+            if a > 1e-9 && a < 1.0 - 1e-9 {
+                let lp = &scratch.loop_pts;
+                let n = lp.len();
+                for i in 0..n {
+                    let prev = lp[(i + n - 1) % n];
+                    let next = lp[(i + 1) % n];
+                    // The coverage is minus the shoelace, so its derivative at vertex
+                    // `i` is minus the usual one.
+                    let gx = -0.5 * (next.y - prev.y) * dda;
+                    let gy = -0.5 * (prev.x - next.x) * dda;
+                    scatter(scratch.loop_prov[i], gx, gy, pos, g);
                 }
             }
         }
-        total
+    }
+
+    /// Group a junction pixel's pieces into chains: runs of consecutive pieces, in walk
+    /// order, that belong to one edge and join end to end. Returns each chain's vertices
+    /// with their provenance, and the edge each chain belongs to.
+    fn group_chains(&self, order: &[usize]) -> (Vec<Chain>, Vec<u32>) {
+        let mut chains: Vec<Chain> = Vec::new();
+        let mut edges: Vec<u32> = Vec::new();
+        for &i in order.iter() {
+            let pc = self.pieces[i];
+            let extend = match (chains.last(), edges.last()) {
+                (Some(c), Some(&ed)) => {
+                    let l = c[c.len() - 1].0;
+                    ed == pc.edge
+                        && (l.x - pc.from.x).abs() < 1e-9
+                        && (l.y - pc.from.y).abs() < 1e-9
+                }
+                _ => false,
+            };
+            if extend {
+                chains
+                    .last_mut()
+                    .expect("extend is only true when there is a previous chain")
+                    .push((pc.to, pc.to_prov));
+            } else {
+                chains.push(vec![(pc.from, pc.from_prov), (pc.to, pc.to_prov)]);
+                edges.push(pc.edge);
+            }
+        }
+        (chains, edges)
     }
 
     /// A pixel where several boundaries meet, as the wedges they cut it into.
@@ -840,61 +1010,14 @@ impl Problem<'_> {
     ) -> f64 {
         juncstat::bump(&juncstat::SEEN);
         let (px, py) = ((cell % self.w) as f64, (cell / self.w) as f64);
-        // Group the pieces by edge, in walk order, requiring each group to be contiguous.
-        let order = scratch.order.clone();
-        let mut chains: Vec<Vec<(Point, Prov)>> = Vec::new();
-        let mut edges: Vec<u32> = Vec::new();
-        for &i in order.iter() {
-            let pc = self.pieces[i];
-            let extend = match (chains.last(), edges.last()) {
-                (Some(c), Some(&ed)) => {
-                    let l = c[c.len() - 1].0;
-                    ed == pc.edge
-                        && (l.x - pc.from.x).abs() < 1e-9
-                        && (l.y - pc.from.y).abs() < 1e-9
-                }
-                _ => false,
-            };
-            if extend {
-                chains.last_mut().unwrap().push((pc.to, pc.to_prov));
-            } else {
-                chains.push(vec![(pc.from, pc.from_prov), (pc.to, pc.to_prov)]);
-                edges.push(pc.edge);
-            }
-        }
+        let (chains, edges) = self.group_chains(&scratch.order);
         if chains.len() < 2 || chains.len() > 6 {
             juncstat::bump(&juncstat::N_CHAINS);
             return 0.0;
         }
-        // Every chain has to run from the shared interior node out to the border. Orient
-        // it that way, and require them all to start at the same node.
-        let mut node = Point::new(f64::NAN, f64::NAN);
-        let mut outward: Vec<Vec<(Point, Prov)>> = Vec::with_capacity(chains.len());
-        let mut reversed: Vec<bool> = Vec::with_capacity(chains.len());
-        for c in chains.iter() {
-            let (a, b) = (c[0].0, c[c.len() - 1].0);
-            let (sa, sb) = (perim(a, px, py), perim(b, px, py));
-            let rev = match (sa.is_finite(), sb.is_finite()) {
-                (false, true) => false,
-                (true, false) => true,
-                _ => {
-                    juncstat::bump(&juncstat::ENDS);
-                    return 0.0;
-                }
-            };
-            let mut v = c.clone();
-            if rev {
-                v.reverse();
-            }
-            if node.x.is_nan() {
-                node = v[0].0;
-            } else if (node.x - v[0].0.x).abs() > 1e-9 || (node.y - v[0].0.y).abs() > 1e-9 {
-                juncstat::bump(&juncstat::NODE);
-                return 0.0;
-            }
-            outward.push(v);
-            reversed.push(rev);
-        }
+        let Some((node, outward, reversed)) = orient_outward(&chains, px, py) else {
+            return 0.0;
+        };
         let m = outward.len();
         let exits: Vec<f64> = outward
             .iter()
@@ -996,6 +1119,16 @@ impl Problem<'_> {
     }
 
     /// Kink and anchor terms, and their gradient when asked for.
+    ///
+    /// ```text
+    ///     P = w_kink · Σ sqrt(|p_{i−1} − 2p_i + p_{i+1}|² + 1e-4)
+    ///       + Σ_v w_v · |p_v − p_v⁰|²,       w_v = w_anchor (×4 at a junction)
+    /// ```
+    ///
+    /// The kink sum runs over interior points of open edges and every point of closed
+    /// ones; edges under three points have none. The small constant under the root is a
+    /// Charbonnier-style smoothing of the absolute value, so the gradient is defined on a
+    /// straight run.
     fn priors(&self, pos: &[Point], mut grad: Option<&mut [Point]>) -> f64 {
         // A floor inside the square root, so the absolute value is differentiable where a
         // boundary is already straight.
@@ -1048,6 +1181,8 @@ impl Problem<'_> {
         total
     }
 
+    /// The whole objective at `pos` (data + priors), re-bucketing the chains first. With
+    /// `grad`, it is zeroed and then filled with the objective's gradient per unknown.
     fn energy(&mut self, pos: &[Point], grad: Option<&mut [Point]>) -> f64 {
         self.bucket(pos);
         match grad {
@@ -1062,6 +1197,46 @@ impl Problem<'_> {
             }
         }
     }
+}
+
+/// A junction pixel's chains, each oriented from the shared interior node out to the
+/// pixel's border.
+///
+/// Returns the node, the oriented chains, and for each whether it had to be reversed
+/// (so that its edge's `left` and `right` swap). `None`, counted in [`juncstat`], when a
+/// chain does not have exactly one end on the border or the chains do not all start at
+/// the same node: then the wedge construction does not apply.
+fn orient_outward(chains: &[Chain], px: f64, py: f64) -> Option<(Point, Vec<Chain>, Vec<bool>)> {
+    // Every chain has to run from the shared interior node out to the border. Orient
+    // it that way, and require them all to start at the same node.
+    let mut node = Point::new(f64::NAN, f64::NAN);
+    let mut outward: Vec<Chain> = Vec::with_capacity(chains.len());
+    let mut reversed: Vec<bool> = Vec::with_capacity(chains.len());
+    for c in chains.iter() {
+        let (a, b) = (c[0].0, c[c.len() - 1].0);
+        let (sa, sb) = (perim(a, px, py), perim(b, px, py));
+        let rev = match (sa.is_finite(), sb.is_finite()) {
+            (false, true) => false,
+            (true, false) => true,
+            _ => {
+                juncstat::bump(&juncstat::ENDS);
+                return None;
+            }
+        };
+        let mut v = c.clone();
+        if rev {
+            v.reverse();
+        }
+        if node.x.is_nan() {
+            node = v[0].0;
+        } else if (node.x - v[0].0.x).abs() > 1e-9 || (node.y - v[0].0.y).abs() > 1e-9 {
+            juncstat::bump(&juncstat::NODE);
+            return None;
+        }
+        outward.push(v);
+        reversed.push(rev);
+    }
+    Some((node, outward, reversed))
 }
 
 /// What the stage did, for the run log.
@@ -1090,6 +1265,13 @@ pub fn optimise(
 
 /// [`optimise`] with alpha as a fourth channel of the data term: `alpha` is the source's
 /// alpha per pixel and each face's opacity. With `None` this is exactly [`optimise`].
+///
+/// `rgb` is the source image (sRGB `0..1`, row-major, the map's size) and `face[f]` face
+/// `f`'s fill model. `budget_ms` is the caller's wall-clock budget for the descent; with
+/// `None` the result depends only on the input. Returns `None`, leaving the map as it
+/// was, when the input is degenerate, the energy did not fall, or the fold guard could
+/// not keep enough of the displacement. On success every edge's points are overwritten
+/// (sigmas are not touched) and the report says how much moved.
 pub fn optimise_alpha(
     map: &mut PlanarMap,
     rgb: &[[f32; 3]],
@@ -1106,27 +1288,6 @@ pub fn optimise_alpha(
     if n < 3 {
         return None;
     }
-    // 48, not 24: at 24 this solve stops before it has converged, and the boundary
-    // it hands on is still moving. `gt_diff` attributes 94% of the remaining error
-    // to boundaries, so that mattered more than any threshold in the tracer.
-    //
-    // Full set, 980 icons: objective 0.4519 -> 0.4428, with dE00 0.1660 -> 0.1620,
-    // DISTS 0.0286 -> 0.0281 and parameters against the artist 1.46 -> 1.42. Every
-    // family improves or holds; simple-icons goes 1.31 -> 1.13 on parameters and
-    // material-icons 0.0743 -> 0.0604 on dE00. Improving fidelity and cost together
-    // is what says this is convergence rather than a trade.
-    //
-    // It is not monotone past that -- 96 reads 0.4157 and 192 reads 0.4160 on the
-    // screen split against 48's 0.4142 -- so the step schedule drifts once the
-    // residual stops driving it, and more iterations are not better iterations.
-    //
-    // Nearly free: 573 ms/icon to 578 ms. The iteration count is the bound. A wall clock
-    // runs only under a caller's time budget: the fixed 1200 ms one this had never bound
-    // on the corpus (a 60 s budget gave the same 0.4142) and made the answer depend on how
-    // fast the machine was -- WebAssembly or a loaded CI runner stopped sooner and wrote
-    // different bytes. (`INKVEC_BOPT_ITERS` and `INKVEC_BOPT_MS`, which overrode both, are
-    // gone: the count is `ITERS`, and a clock is the caller's time budget.)
-    let iters = ITERS;
     let budget: Option<u128> = budget_ms.map(u128::from);
     let dbg = inkvec_core::env::flag("INKVEC_BOPTDBG");
 
@@ -1150,134 +1311,11 @@ pub fn optimise_alpha(
             cells_dbg: inkvec_core::env::flag("INKVEC_BOPT_CELLS"),
             chunks: research_chunks(),
         };
-        let mut pos: Vec<Point> = vars.start.clone();
-
-        // The weights are set from the residual the measurement starts with, so that a
-        // prior means the same thing whatever the icon's contrast and size.
-        prob.bucket(&pos);
-        let data0 = prob.data(&pos, None);
-        let kink0 = prob.priors(&pos, None);
-        if data0 <= 0.0 || kink0 <= 0.0 {
-            return None;
-        }
-        prob.w_kink = K_KINK * data0 / kink0;
-        prob.w_anchor = K_ANCHOR * data0 / n as f64;
-
-        let mut grad = vec![Point::new(0.0, 0.0); n];
-        let mut e = prob.energy(&pos, Some(&mut grad));
-        let e0 = e;
-        let mut dir: Vec<Point> = grad.iter().map(|g| Point::new(-g.x, -g.y)).collect();
-        let mut gg: f64 = grad.iter().map(|g| g.x * g.x + g.y * g.y).sum();
-        let mut trial = pos.clone();
-        let mut newgrad = vec![Point::new(0.0, 0.0); n];
-        let clock = Instant::now();
-        let mut done = 0usize;
-
-        for it in 0..iters {
-            if budget.is_some_and(|b| clock.elapsed().as_millis() > b) {
-                break;
-            }
-            // `iters` is the ceiling; a solve that converges stops well short of it.
-            inkvec_core::progress::step("iterations", it as u64, iters as u64);
-            let dmax = dir.iter().map(|d| d.x.hypot(d.y)).fold(0.0f64, f64::max);
-            if dmax < 1e-12 {
-                break;
-            }
-            let mut step = MAX_STEP / dmax;
-            let mut stop = true;
-            for _ in 0..6 {
-                // Each trial is a full render of the energy: worth a cancellation point.
-                inkvec_core::progress::checkpoint();
-                for v in 0..n {
-                    let mut q = Point::new(pos[v].x + dir[v].x * step, pos[v].y + dir[v].y * step);
-                    let (dx, dy) = (q.x - vars.start[v].x, q.y - vars.start[v].y);
-                    let d = dx.hypot(dy);
-                    if d > MAX_TOTAL {
-                        let s = MAX_TOTAL / d;
-                        q = Point::new(vars.start[v].x + dx * s, vars.start[v].y + dy * s);
-                    }
-                    trial[v] = q;
-                }
-                let et = prob.energy(&trial, Some(&mut newgrad));
-                if et < e {
-                    let rel = (e - et) / e.max(1e-12);
-                    std::mem::swap(&mut pos, &mut trial);
-                    std::mem::swap(&mut grad, &mut newgrad);
-                    e = et;
-                    done = it + 1;
-                    if dbg {
-                        eprintln!("  [bopt] it {it} step {step:.4} E {e:.2} rel {rel:.5}");
-                    }
-                    // Keep the step, and stop if it bought almost nothing.
-                    stop = rel < 1e-4;
-                    break;
-                }
-                step *= 0.4;
-            }
-            if stop {
-                break;
-            }
-            let gg_new: f64 = grad.iter().map(|g| g.x * g.x + g.y * g.y).sum();
-            let beta = if gg > 1e-30 { gg_new / gg } else { 0.0 };
-            gg = gg_new;
-            let mut descent = 0.0;
-            for v in 0..n {
-                dir[v] = Point::new(beta * dir[v].x - grad[v].x, beta * dir[v].y - grad[v].y);
-                descent += dir[v].x * grad[v].x + dir[v].y * grad[v].y;
-            }
-            // Fletcher-Reeves can hand back a direction that is not downhill; restart then.
-            if descent >= 0.0 {
-                for v in 0..n {
-                    dir[v] = Point::new(-grad[v].x, -grad[v].y);
-                }
-            }
-        }
-        if e >= e0 || done == 0 {
-            return None;
-        }
-        (
-            Report {
-                before: e0,
-                after: e,
-                iters: done,
-                moved: 0,
-                scale: 1.0,
-            },
-            pos,
-        )
+        descend(&mut prob, &vars, budget, dbg)?
     };
 
-    // Scale the whole displacement back until it adds no fold of its own.
-    let base = crossings_count(map, &vars, &vars.start, w, h);
-    let mut scaled = pos.clone();
-    let mut scale = 1.0;
-    let mut ok = crossings_count(map, &vars, &scaled, w, h) <= base;
-    while !ok && scale > 0.1 {
-        scale *= 0.5;
-        for v in 0..n {
-            scaled[v] = Point::new(
-                vars.start[v].x + (pos[v].x - vars.start[v].x) * scale,
-                vars.start[v].y + (pos[v].y - vars.start[v].y) * scale,
-            );
-        }
-        ok = crossings_count(map, &vars, &scaled, w, h) <= base;
-    }
-    if dbg {
-        eprintln!("  [bopt] folds before {base}, scale kept {scale:.3}, accepted {ok}");
-    }
-    if !ok {
-        return None;
-    }
-    let mut moved = 0usize;
-    for (k, e) in map.edges.iter_mut().enumerate() {
-        for i in 0..e.points.len() {
-            let p = scaled[vars.var[k][i] as usize];
-            if e.points[i].dist(p) > 1e-6 {
-                moved += 1;
-            }
-            e.points[i] = p;
-        }
-    }
+    let (scaled, scale) = fold_guard(map, &vars, &pos, dbg)?;
+    let moved = write_back(map, &vars, &scaled);
     if inkvec_core::env::flag("INKVEC_JUNCDBG") {
         juncstat::report();
     }
@@ -1288,297 +1326,191 @@ pub fn optimise_alpha(
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Minimise `prob`'s energy from the measured positions by nonlinear conjugate gradient
+/// (see the module docs). Sets the prior weights from the starting residual first.
+///
+/// Returns the report (energies and iterations; `moved` and `scale` are filled in by the
+/// caller) and the final positions, or `None` when there is no residual to reduce or no
+/// iteration reduced it.
+fn descend(
+    prob: &mut Problem,
+    vars: &Vars,
+    budget: Option<u128>,
+    dbg: bool,
+) -> Option<(Report, Vec<Point>)> {
+    let n = vars.start.len();
+    // 48, not 24: at 24 this solve stops before it has converged, and the boundary
+    // it hands on is still moving. `gt_diff` attributes 94% of the remaining error
+    // to boundaries, so that mattered more than any threshold in the tracer.
+    //
+    // Full set, 980 icons: objective 0.4519 -> 0.4428, with dE00 0.1660 -> 0.1620,
+    // DISTS 0.0286 -> 0.0281 and parameters against the artist 1.46 -> 1.42. Every
+    // family improves or holds; simple-icons goes 1.31 -> 1.13 on parameters and
+    // material-icons 0.0743 -> 0.0604 on dE00. Improving fidelity and cost together
+    // is what says this is convergence rather than a trade.
+    //
+    // It is not monotone past that -- 96 reads 0.4157 and 192 reads 0.4160 on the
+    // screen split against 48's 0.4142 -- so the step schedule drifts once the
+    // residual stops driving it, and more iterations are not better iterations.
+    //
+    // Nearly free: 573 ms/icon to 578 ms. The iteration count is the bound. A wall clock
+    // runs only under a caller's time budget: the fixed 1200 ms one this had never bound
+    // on the corpus (a 60 s budget gave the same 0.4142) and made the answer depend on how
+    // fast the machine was -- WebAssembly or a loaded CI runner stopped sooner and wrote
+    // different bytes. (`INKVEC_BOPT_ITERS` and `INKVEC_BOPT_MS`, which overrode both, are
+    // gone: the count is `ITERS`, and a clock is the caller's time budget.)
+    let iters = ITERS;
+    let mut pos: Vec<Point> = vars.start.clone();
 
-    /// The gridline walk used to step `m += 1.0` until it passed the far end, which never
-    /// happens when that end is infinite or so large that adding one changes nothing. Run on
-    /// a thread with a deadline, so a regression fails instead of hanging the suite.
-    #[test]
-    fn crossings_end_on_non_finite_and_huge_coordinates() {
-        let (done, wait) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let p = Point::new;
-            let mut out = Vec::new();
-            // An ordinary segment still crosses every gridline it spans: x = 0.5 .. 3.5.
-            crossings(p(0.2, 0.2), p(3.7, 0.2), 0, 1, &mut out);
-            let lines: Vec<f64> = out.iter().map(|&(t, _)| 0.2 + 3.5 * t).collect();
-            assert_eq!(out.len(), 4, "{lines:?}");
-            for (got, want) in lines.iter().zip([0.5, 1.5, 2.5, 3.5]) {
-                assert!((got - want).abs() < 1e-9, "{lines:?}");
-            }
-            for (a, b) in [
-                (p(0.0, 0.0), p(f64::INFINITY, 1.0)),
-                (p(f64::NEG_INFINITY, 0.0), p(0.0, 0.0)),
-                (p(0.0, f64::NAN), p(2.0, f64::INFINITY)),
-                (p(1e20, 0.0), p(1e20 + 1e5, 0.0)),
-                (p(-1e300, 3.0), p(1e300, 3.0)),
-                (p(0.0, 0.0), p(1e12, 1e12)),
-            ] {
-                crossings(a, b, 0, 1, &mut out);
-                assert!(out.iter().all(|&(t, _)| t.is_finite()));
-            }
-            done.send(()).unwrap();
-        });
-        wait.recv_timeout(std::time::Duration::from_secs(20))
-            .expect("crossings() did not return on a non-finite or huge coordinate");
+    // The weights are set from the residual the measurement starts with, so that a
+    // prior means the same thing whatever the icon's contrast and size.
+    prob.bucket(&pos);
+    let data0 = prob.data(&pos, None);
+    let kink0 = prob.priors(&pos, None);
+    if data0 <= 0.0 || kink0 <= 0.0 {
+        return None;
     }
+    prob.w_kink = K_KINK * data0 / kink0;
+    prob.w_anchor = K_ANCHOR * data0 / n as f64;
 
-    /// Coverage of a pixel split by a straight vertical boundary, read off the geometry the
-    /// optimiser builds, against the area computed by hand.
-    #[test]
-    fn coverage_of_a_split_pixel() {
-        // Two faces, boundary at x = 0.3 through a 3x1 strip of pixels.
-        let mut map = PlanarMap {
-            edges: vec![crate::planar::Edge {
-                points: vec![Point::new(0.3, -0.5), Point::new(0.3, 2.5)],
-                sigma: vec![0.5, 0.5],
-                left: 0,
-                right: 1,
-                start_node: 0,
-                end_node: 1,
-                closed: false,
-                lambda_scale: 1.0,
-            }],
-            width: 3,
-            height: 3,
-            n_labels: 2,
-        };
-        let vars = build_vars(&map);
-        let face = vec![
-            FillModel::Flat([1.0, 1.0, 1.0]),
-            FillModel::Flat([0.0, 0.0, 0.0]),
-        ];
-        // Pixel (0, y) spans x in -0.5..0.5, so the boundary at x = 0.3 leaves a fifth of
-        // it on the +x side, and for a chain walking +y that side is `left` (the planar
-        // map's convention). The rendered value is therefore 0.2 of the left face's white.
-        let rgb = vec![[0.2, 0.2, 0.2]; 9];
-        let mut prob = Problem {
-            map: &map,
-            vars: &vars,
-            rgb: &rgb,
-            face: &face,
-            w: 3,
-            h: 3,
-            pieces: Vec::new(),
-            head: vec![-1; 9],
-            scratch: Scratch::default(),
-            alpha: None,
-            w_kink: 0.0,
-            w_anchor: 0.0,
-            junctions: true,
-            touched: Vec::new(),
-            cells_dbg: false,
-            chunks: 1,
-        };
-        let pos = vars.start.clone();
-        prob.bucket(&pos);
-        // Pixels (0,0), (0,1) and (0,2) are each cut in two, and each must read exactly
-        // the mixture the geometry implies.
-        let e = prob.data(&pos, None);
-        assert!(e < 1e-9, "expected an exact fit, got {e}");
-        assert_eq!(prob.pieces.len(), 3, "one piece per pixel crossed");
-        // And the sign matters: a target of 0.8 would be the other side, and wrong.
-        let rgb2 = vec![[0.8, 0.8, 0.8]; 9];
-        prob.rgb = &rgb2;
-        assert!(
-            prob.data(&pos, None) > 1.0,
-            "left/right must not be interchangeable"
-        );
-        let _ = &mut map;
-    }
+    let mut grad = vec![Point::new(0.0, 0.0); n];
+    let mut e = prob.energy(&pos, Some(&mut grad));
+    let e0 = e;
+    let mut dir: Vec<Point> = grad.iter().map(|g| Point::new(-g.x, -g.y)).collect();
+    let mut gg: f64 = grad.iter().map(|g| g.x * g.x + g.y * g.y).sum();
+    let mut trial = pos.clone();
+    let mut newgrad = vec![Point::new(0.0, 0.0); n];
+    let clock = Instant::now();
+    let mut done = 0usize;
 
-    /// A three-way junction: the wedges must partition the pixel, and the node must feel
-    /// the image through them.
-    #[test]
-    fn junction_wedges_partition_the_pixel() {
-        // One node at the centre of pixel (1, 1), three boundaries leaving it. Directions
-        // are deliberately off the diagonals so that no chain exits through a corner.
-        let edge = |to: Point, left: u16, right: u16, end: u32| crate::planar::Edge {
-            points: vec![Point::new(1.0, 1.0), to],
-            sigma: vec![0.5, 0.5],
-            left,
-            right,
-            start_node: 0,
-            end_node: end,
-            closed: false,
-            lambda_scale: 1.0,
-        };
-        let map = PlanarMap {
-            edges: vec![
-                edge(Point::new(1.0, -0.5), 2, 0, 1),
-                edge(Point::new(-0.5, 2.0), 1, 2, 2),
-                edge(Point::new(2.5, 2.2), 0, 1, 3),
-            ],
-            width: 3,
-            height: 3,
-            n_labels: 3,
-        };
-        let vars = build_vars(&map);
-        // The three edges share their first point, so it is one unknown.
-        assert_eq!(vars.var[0][0], vars.var[1][0]);
-        assert_eq!(vars.var[0][0], vars.var[2][0]);
-        assert!(vars.junction[vars.var[0][0] as usize]);
-        let face = vec![
-            FillModel::Flat([1.0, 0.0, 0.0]),
-            FillModel::Flat([0.0, 1.0, 0.0]),
-            FillModel::Flat([0.0, 0.0, 1.0]),
-        ];
-        let rgb = vec![[0.4, 0.4, 0.2]; 9];
-        let mut prob = Problem {
-            map: &map,
-            vars: &vars,
-            rgb: &rgb,
-            face: &face,
-            w: 3,
-            h: 3,
-            pieces: Vec::new(),
-            head: vec![-1; 9],
-            scratch: Scratch::default(),
-            alpha: None,
-            w_kink: 0.0,
-            w_anchor: 0.0,
-            junctions: false,
-            touched: Vec::new(),
-            cells_dbg: false,
-            chunks: 1,
-        };
-        let pos = vars.start.clone();
-        prob.bucket(&pos);
-        let without = prob.data(&pos, None);
-        prob.junctions = true;
-        prob.bucket(&pos);
-        let with = prob.data(&pos, None);
-        // The junction pixel was accepted, so it added a residual of its own. Had the
-        // wedges failed to partition the square, the term would have been skipped.
-        assert!(
-            with > without + 1e-9,
-            "junction pixel contributed nothing: {without} vs {with}"
-        );
-
-        // And the node moves under the image: analytic gradient against a central
-        // difference, at the junction unknown.
-        let n = vars.start.len();
-        let mut grad = vec![Point::new(0.0, 0.0); n];
-        prob.w_kink = 0.3;
-        prob.w_anchor = 0.2;
-        let pos: Vec<Point> = vars
-            .start
-            .iter()
-            .enumerate()
-            .map(|(i, p)| Point::new(p.x + 0.013 * i as f64, p.y - 0.011 * i as f64))
-            .collect();
-        prob.energy(&pos, Some(&mut grad));
-        let d = 1e-6;
-        let v = vars.var[0][0] as usize;
-        for axis in 0..2 {
-            let mut plus = pos.clone();
-            let mut minus = pos.clone();
-            if axis == 0 {
-                plus[v].x += d;
-                minus[v].x -= d;
-            } else {
-                plus[v].y += d;
-                minus[v].y -= d;
+    for it in 0..iters {
+        if budget.is_some_and(|b| clock.elapsed().as_millis() > b) {
+            break;
+        }
+        // `iters` is the ceiling; a solve that converges stops well short of it.
+        inkvec_core::progress::step("iterations", it as u64, iters as u64);
+        let dmax = dir.iter().map(|d| d.x.hypot(d.y)).fold(0.0f64, f64::max);
+        if dmax < 1e-12 {
+            break;
+        }
+        // Backtracking line search along `dir`: the first trial moves the furthest point
+        // `MAX_STEP`, each rejection shrinks the step by 0.4, and every trial point is
+        // clamped to within `MAX_TOTAL` of its start. The first trial that lowers the
+        // energy is taken.
+        let mut step = MAX_STEP / dmax;
+        let mut stop = true;
+        for _ in 0..6 {
+            // Each trial is a full render of the energy: worth a cancellation point.
+            inkvec_core::progress::checkpoint();
+            for v in 0..n {
+                let mut q = Point::new(pos[v].x + dir[v].x * step, pos[v].y + dir[v].y * step);
+                let (dx, dy) = (q.x - vars.start[v].x, q.y - vars.start[v].y);
+                let d = dx.hypot(dy);
+                if d > MAX_TOTAL {
+                    let s = MAX_TOTAL / d;
+                    q = Point::new(vars.start[v].x + dx * s, vars.start[v].y + dy * s);
+                }
+                trial[v] = q;
             }
-            let num = (prob.energy(&plus, None) - prob.energy(&minus, None)) / (2.0 * d);
-            let ana = if axis == 0 { grad[v].x } else { grad[v].y };
-            assert!(
-                (num - ana).abs() < 1e-3 * (1.0 + ana.abs()),
-                "junction axis {axis}: analytic {ana}, numeric {num}"
+            let et = prob.energy(&trial, Some(&mut newgrad));
+            if et < e {
+                let rel = (e - et) / e.max(1e-12);
+                std::mem::swap(&mut pos, &mut trial);
+                std::mem::swap(&mut grad, &mut newgrad);
+                e = et;
+                done = it + 1;
+                if dbg {
+                    eprintln!("  [bopt] it {it} step {step:.4} E {e:.2} rel {rel:.5}");
+                }
+                // Keep the step, and stop if it bought almost nothing.
+                stop = rel < 1e-4;
+                break;
+            }
+            step *= 0.4;
+        }
+        if stop {
+            break;
+        }
+        // Fletcher-Reeves: beta = |g_new|² / |g_old|², d = beta·d − g_new.
+        let gg_new: f64 = grad.iter().map(|g| g.x * g.x + g.y * g.y).sum();
+        let beta = if gg > 1e-30 { gg_new / gg } else { 0.0 };
+        gg = gg_new;
+        let mut descent = 0.0;
+        for v in 0..n {
+            dir[v] = Point::new(beta * dir[v].x - grad[v].x, beta * dir[v].y - grad[v].y);
+            descent += dir[v].x * grad[v].x + dir[v].y * grad[v].y;
+        }
+        // Fletcher-Reeves can hand back a direction that is not downhill; restart then.
+        if descent >= 0.0 {
+            for v in 0..n {
+                dir[v] = Point::new(-grad[v].x, -grad[v].y);
+            }
+        }
+    }
+    if e >= e0 || done == 0 {
+        return None;
+    }
+    Some((
+        Report {
+            before: e0,
+            after: e,
+            iters: done,
+            moved: 0,
+            scale: 1.0,
+        },
+        pos,
+    ))
+}
+
+/// Scale the whole displacement back until it adds no fold of its own.
+///
+/// With `p⁰` the start and `p` the solution, tries `p⁰ + s(p − p⁰)` for
+/// `s = 1, ½, ¼, …` while `s > 0.1`, and keeps the first whose self-crossing count
+/// ([`crossings_count`]) is no higher than the start's. Returns those positions and `s`,
+/// or `None` when no tried scale is clean.
+fn fold_guard(map: &PlanarMap, vars: &Vars, pos: &[Point], dbg: bool) -> Option<(Vec<Point>, f64)> {
+    let n = vars.start.len();
+    let base = crossings_count(map, vars, &vars.start);
+    let mut scaled = pos.to_vec();
+    let mut scale = 1.0;
+    let mut ok = crossings_count(map, vars, &scaled) <= base;
+    while !ok && scale > 0.1 {
+        scale *= 0.5;
+        for v in 0..n {
+            scaled[v] = Point::new(
+                vars.start[v].x + (pos[v].x - vars.start[v].x) * scale,
+                vars.start[v].y + (pos[v].y - vars.start[v].y) * scale,
             );
         }
+        ok = crossings_count(map, vars, &scaled) <= base;
     }
+    if dbg {
+        eprintln!("  [bopt] folds before {base}, scale kept {scale:.3}, accepted {ok}");
+    }
+    if !ok {
+        return None;
+    }
+    Some((scaled, scale))
+}
 
-    /// The analytic gradient against a central difference of the energy.
-    #[test]
-    fn gradient_matches_finite_differences() {
-        let map = PlanarMap {
-            edges: vec![crate::planar::Edge {
-                // Deliberately off the gridlines: a point sitting exactly on one is a
-                // configuration where the objective is not differentiable, because moving
-                // it changes which pixel its piece belongs to.
-                points: vec![
-                    Point::new(0.13, -0.42),
-                    Point::new(0.35, 0.61),
-                    Point::new(0.19, 1.43),
-                    Point::new(0.31, 2.38),
-                ],
-                sigma: vec![0.5; 4],
-                left: 0,
-                right: 1,
-                start_node: 0,
-                end_node: 1,
-                closed: false,
-                lambda_scale: 1.0,
-            }],
-            width: 3,
-            height: 3,
-            n_labels: 2,
-        };
-        let vars = build_vars(&map);
-        let face = vec![
-            FillModel::Flat([1.0, 0.9, 0.8]),
-            FillModel::Flat([0.1, 0.2, 0.3]),
-        ];
-        let rgb = vec![[0.55, 0.5, 0.45]; 9];
-        let mut prob = Problem {
-            map: &map,
-            vars: &vars,
-            rgb: &rgb,
-            face: &face,
-            w: 3,
-            h: 3,
-            pieces: Vec::new(),
-            head: vec![-1; 9],
-            scratch: Scratch::default(),
-            alpha: None,
-            w_kink: 0.7,
-            w_anchor: 0.3,
-            junctions: true,
-            touched: Vec::new(),
-            cells_dbg: false,
-            chunks: 1,
-        };
-        let n = vars.start.len();
-        // Away from the start, so the anchor term is not sitting at its minimum.
-        let pos: Vec<Point> = vars
-            .start
-            .iter()
-            .enumerate()
-            .map(|(i, p)| Point::new(p.x + 0.01 * i as f64, p.y - 0.007 * i as f64))
-            .collect();
-        for (wk, wa) in [(0.0, 0.0), (0.7, 0.0), (0.0, 0.3), (0.7, 0.3)] {
-            prob.w_kink = wk;
-            prob.w_anchor = wa;
-            let mut grad = vec![Point::new(0.0, 0.0); n];
-            prob.energy(&pos, Some(&mut grad));
-            let d = 1e-6;
-            for v in 0..n {
-                for axis in 0..2 {
-                    let mut plus = pos.clone();
-                    let mut minus = pos.clone();
-                    if axis == 0 {
-                        plus[v].x += d;
-                        minus[v].x -= d;
-                    } else {
-                        plus[v].y += d;
-                        minus[v].y -= d;
-                    }
-                    let ep = prob.energy(&plus, None);
-                    let em = prob.energy(&minus, None);
-                    let num = (ep - em) / (2.0 * d);
-                    let ana = if axis == 0 { grad[v].x } else { grad[v].y };
-                    assert!(
-                        (num - ana).abs() < 1e-3 * (1.0 + ana.abs()),
-                        "kink {wk} anchor {wa} var {v} axis {axis}: analytic {ana}, numeric {num}"
-                    );
-                }
+/// Copy the solved unknowns back onto every edge's points (shared ends get the same
+/// value on every edge) and count the points that moved by more than `1e-6` px.
+fn write_back(map: &mut PlanarMap, vars: &Vars, pos: &[Point]) -> usize {
+    let mut moved = 0usize;
+    for (k, e) in map.edges.iter_mut().enumerate() {
+        for i in 0..e.points.len() {
+            let p = pos[vars.var[k][i] as usize];
+            if e.points[i].dist(p) > 1e-6 {
+                moved += 1;
             }
+            e.points[i] = p;
         }
     }
+    moved
 }
+
+#[cfg(test)]
+mod tests;
 
 #[cfg(test)]
 mod solve_tests;

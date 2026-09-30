@@ -37,7 +37,7 @@
 //!    [`open`]): scan `j = i+1, i+2, …` while the cone of directions from `p_i` that pass
 //!    within `tol` of every point seen is not empty, at most [`MAX_SPAN`] points on.
 //!    Every `j` whose direction lies in the cone is an admissible side `i → j`, and
-//!    relaxes `best[j]` ([`Table::offer`]). Where the anchor's next points are one
+//!    relaxes `best[j]` ([`Relax::admit`]). Where the anchor's next points are one
 //!    lattice run, the scan jumps to the run's end in closed form, offering the same
 //!    sides in the same order.
 //! 3. The polygon is read back from the last point along the winning predecessors.
@@ -232,27 +232,6 @@ struct Table {
     prev: Vec<usize>,
 }
 
-impl Table {
-    /// Offer side `i → j` to the table: a path with `count = best[i].sides + 1` sides,
-    /// penalty `pen = best[i].penalty` plus the side's own squared distances, from `i`.
-    ///
-    /// The side is priced only when its count does not already lose at `j` (branch and
-    /// bound; see [`open`]); it replaces `best[j]` when it has fewer sides, or as many and
-    /// a strictly smaller penalty, so on a tie the earlier anchor keeps `j`. O(1).
-    #[inline(always)]
-    fn offer(&mut self, sums: &Sums, i: usize, j: usize, count: u32, pen: f64, a: Point, b: Point) {
-        let (sides, best_pen) = self.best[j];
-        if count > sides {
-            return;
-        }
-        let cand = pen + sums.sq_dist(i + 1, j, a, b);
-        if count < sides || cand < best_pen {
-            self.best[j] = (count, cand);
-            self.prev[j] = i;
-        }
-    }
-}
-
 /// Polygon vertices of an open run, as indices into `pts`: always the first and the last
 /// point, and the fewest interior points such that every point lies within `tol` of the
 /// side that spans it.
@@ -308,7 +287,7 @@ impl Table {
 /// square root and four cross products, on a loop-carried dependency) is skipped: every
 /// point to the run's end is admitted, and the cone and the reach after it are those
 /// of the run's last point alone. The sides are still offered one by one, in order,
-/// through the same [`Table::offer`], because their penalties decide ties between
+/// through the same [`Relax::admit`], because their penalties decide ties between
 /// equal side counts by rounding and must be the same IEEE values.
 ///
 /// Why it is exact. Let the run start at the anchor `a = p_i` with step `s` (the IEEE
@@ -401,8 +380,9 @@ trait Sides {
     fn admit(&mut self, j: usize);
 }
 
-/// The sequential scan's sink: every admissible side is offered to the table at once,
-/// with the anchor's count and penalty ([`Table::offer`]).
+/// The relaxation: every admissible side is offered to the table at once, with the
+/// anchor's count and penalty ([`Relax::admit`]). The sink of the sequential scan, and
+/// what the parallel path replays its [`SideSet`]s into.
 struct Relax<'a> {
     t: &'a mut Table,
     sums: &'a Sums,
@@ -423,12 +403,25 @@ impl Sides for Relax<'_> {
         self.count <= self.t.best[j].0
     }
 
-    /// Offer the side to the table ([`Table::offer`]).
+    /// Offer side `i → j` to the table: a path with `count = best[i].sides + 1` sides and
+    /// penalty `pen = best[i].penalty` plus the side's own squared distances
+    /// ([`Sums::sq_dist`]), from `i`.
+    ///
+    /// The side is priced only when its count does not already lose at `j` (branch and
+    /// bound; see [`open`]); it replaces `best[j]` when it has fewer sides, or as many and
+    /// a strictly smaller penalty, so on a tie the earlier anchor keeps `j`. O(1).
     #[inline(always)]
     fn admit(&mut self, j: usize) {
-        let (i, a) = (self.i, self.pts[self.i]);
-        self.t
-            .offer(self.sums, i, j, self.count, self.pen, a, self.pts[j]);
+        let (sides, best_pen) = self.t.best[j];
+        if self.count > sides {
+            return;
+        }
+        let (i, pts) = (self.i, self.pts);
+        let cand = self.pen + self.sums.sq_dist(i + 1, j, pts[i], pts[j]);
+        if self.count < sides || cand < best_pen {
+            self.t.best[j] = (self.count, cand);
+            self.t.prev[j] = i;
+        }
     }
 }
 
@@ -497,7 +490,7 @@ const PARALLEL_CHUNK: usize = 128;
 /// on every core, while the relaxation that reads and writes the table stays sequential
 /// in anchor order ([`open`]) and offers the same sides in the same order. The sequential
 /// scan skips the cone test for sides its table does not want ([`Sides::wants`]), and
-/// offering such a side is a no-op ([`Table::offer`] returns before pricing it), so the
+/// offering such a side is a no-op ([`Relax::admit`] returns before pricing it), so the
 /// table, and the polygon, come out bit for bit the same whatever the thread count. The
 /// price is that anchors the table would have fathomed are scanned too, and 24 bytes per
 /// point.
@@ -754,38 +747,27 @@ pub(crate) mod tests {
         }
     }
 
-    /// Point runs that exercise every branch of the scan: random walks, lattice staircases
-    /// and straight lattice runs (the image frame's shape), a checkerboard zigzag, points
-    /// that coincide, a run that doubles back, one point, two, one row and one column.
-    pub(crate) fn cases() -> Vec<Vec<Point>> {
-        let mut out: Vec<Vec<Point>> = vec![
-            vec![p(0.0, 0.0)],
-            vec![p(0.0, 0.0), p(1.0, 0.0)],
-            vec![p(3.0, 3.0); 7],
-            (0..40).map(|k| p(k as f64 - 0.5, -0.5)).collect(),
-            (0..40).map(|k| p(-0.5, k as f64 - 0.5)).collect(),
-            (0..30)
-                .map(|k| p(k as f64, if k % 2 == 0 { 0.0 } else { 1.0 }))
-                .collect(),
-        ];
-        // The image frame: four straight lattice runs round a rectangle.
-        for (w, h) in [(5usize, 3usize), (40, 25), (200, 170), (400, 3)] {
-            let mut f = Vec::new();
-            for x in 0..w {
-                f.push(p(x as f64 - 0.5, -0.5));
-            }
-            for y in 0..h {
-                f.push(p(w as f64 - 0.5, y as f64 - 0.5));
-            }
-            for x in (1..=w).rev() {
-                f.push(p(x as f64 - 0.5, h as f64 - 0.5));
-            }
-            for y in (1..=h).rev() {
-                f.push(p(-0.5, y as f64 - 0.5));
-            }
-            out.push(f);
-        }
-        // Staircases: lattice runs of several slopes, joined.
+    /// The image frame of a `w` × `h` raster, as the planar map traces it: four straight
+    /// lattice runs round the rectangle `[-0.5, w − 0.5] × [-0.5, h − 0.5]`, starting at
+    /// the top-left corner.
+    pub(crate) fn frame(w: usize, h: usize) -> Vec<Point> {
+        let mut f = Vec::with_capacity(2 * (w + h));
+        f.extend((0..w).map(|x| p(x as f64 - 0.5, -0.5)));
+        f.extend((0..h).map(|y| p(w as f64 - 0.5, y as f64 - 0.5)));
+        f.extend((1..=w).rev().map(|x| p(x as f64 - 0.5, h as f64 - 0.5)));
+        f.extend((1..=h).rev().map(|y| p(-0.5, y as f64 - 0.5)));
+        f
+    }
+
+    /// Lattice cases: frames, a staircase of several slopes, runs of sub-pixel and of
+    /// long steps (past [`RUN_MAX_STEP`]) accumulated in floating point so that some steps
+    /// round equal and some do not, and a long line with one point nudged off it, past and
+    /// within tolerance.
+    fn lattice_cases() -> Vec<Vec<Point>> {
+        let mut out: Vec<Vec<Point>> = [(5, 3), (40, 25), (200, 170), (400, 3)]
+            .iter()
+            .map(|&(w, h)| frame(w, h))
+            .collect();
         let mut s = vec![p(0.0, 0.0)];
         for (dx, dy, len) in [
             (1.0, 0.0, 12),
@@ -799,11 +781,6 @@ pub(crate) mod tests {
             }
         }
         out.push(s);
-        let mut back: Vec<Point> = (0..=10).map(|k| p(k as f64, 0.0)).collect();
-        back.extend((0..10).rev().map(|k| p(k as f64, 0.2)));
-        out.push(back);
-        // Runs of sub-pixel and of long steps (past RUN_MAX_STEP), accumulated in floating
-        // point so that some steps round equal and some do not, joined at corners.
         for (sx, sy) in [(0.7, 0.3), (0.1, 0.1), (4.5, 0.0), (1.0 / 3.0, 2.0 / 3.0)] {
             let mut q = vec![p(100.3, 7.9)];
             for leg in 0..4 {
@@ -815,36 +792,29 @@ pub(crate) mod tests {
             }
             out.push(q);
         }
-        // Boundaries past PARALLEL_MIN, which scan their anchors in parallel: a large frame,
-        // a long wobbly curve, and a long random walk with lattice stretches.
-        let mut f = Vec::new();
-        for x in 0..600 {
-            f.push(p(x as f64 - 0.5, -0.5));
+        for nudge in [0.2, 0.9] {
+            let mut q: Vec<Point> = (0..300).map(|k| p(k as f64 * 0.5, 3.0)).collect();
+            q[150].y += nudge;
+            out.push(q);
         }
-        for y in 0..500 {
-            f.push(p(599.5, y as f64 - 0.5));
-        }
-        for x in (1..=600).rev() {
-            f.push(p(x as f64 - 0.5, 499.5));
-        }
-        for y in (1..=500).rev() {
-            f.push(p(-0.5, y as f64 - 0.5));
-        }
-        out.push(f);
-        out.push(
-            (0..2600)
-                .map(|k| {
-                    let t = k as f64 / 2600.0 * std::f64::consts::TAU;
-                    let r = 380.0 + 6.0 * (7.0 * t).sin();
-                    p(400.0 + r * t.cos(), 400.0 + r * t.sin())
-                })
-                .collect(),
-        );
+        out
+    }
+
+    /// Boundaries past [`PARALLEL_MIN`], which scan their anchors in parallel: a large
+    /// frame, a long wobbly ring, and a long random walk with lattice stretches.
+    fn long_cases() -> Vec<Vec<Point>> {
+        let ring = (0..2600)
+            .map(|k| {
+                let t = k as f64 / 2600.0 * std::f64::consts::TAU;
+                let r = 380.0 + 6.0 * (7.0 * t).sin();
+                p(400.0 + r * t.cos(), 400.0 + r * t.sin())
+            })
+            .collect();
         let mut rng = Rng(0x2545_F491_4F6C_DD1D);
-        let mut q = Vec::with_capacity(3100);
+        let mut walk = Vec::with_capacity(3100);
         let (mut x, mut y, mut ang) = (0.0f64, 0.0f64, 0.0f64);
         for _ in 0..3100 {
-            q.push(p(x, y));
+            walk.push(p(x, y));
             ang += (rng.unit() - 0.5) * 0.4;
             if rng.unit() < 0.2 {
                 x = (x + ang.cos()).round();
@@ -854,13 +824,13 @@ pub(crate) mod tests {
                 y += ang.sin();
             }
         }
-        out.push(q);
-        // A long lattice line with one point nudged off it, past and within tolerance.
-        for nudge in [0.2, 0.9] {
-            let mut q: Vec<Point> = (0..300).map(|k| p(k as f64 * 0.5, 3.0)).collect();
-            q[150].y += nudge;
-            out.push(q);
-        }
+        vec![frame(600, 500), ring, walk]
+    }
+
+    /// Random walks of several lengths and roughnesses, with some repeated points and
+    /// some steps snapped to the lattice.
+    fn random_walks() -> Vec<Vec<Point>> {
+        let mut out = Vec::new();
         let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
         for len in [3usize, 5, 17, 64, 170, 400] {
             for rough in [0.05, 0.3, 1.0] {
@@ -872,7 +842,6 @@ pub(crate) mod tests {
                     let step = 0.6 + 0.8 * rng.unit();
                     x += step * ang.cos();
                     y += step * ang.sin();
-                    // Some repeated points and some exact lattice steps.
                     if rng.unit() < 0.05 {
                         q.push(p(x, y));
                     }
@@ -884,6 +853,29 @@ pub(crate) mod tests {
                 out.push(q);
             }
         }
+        out
+    }
+
+    /// Point runs that exercise every branch of the scan: one point, two, coincident
+    /// points, one row and one column of the lattice, a checkerboard zigzag, a run that
+    /// doubles back, and the [`lattice_cases`], [`long_cases`] and [`random_walks`].
+    pub(crate) fn cases() -> Vec<Vec<Point>> {
+        let mut back: Vec<Point> = (0..=10).map(|k| p(k as f64, 0.0)).collect();
+        back.extend((0..10).rev().map(|k| p(k as f64, 0.2)));
+        let mut out: Vec<Vec<Point>> = vec![
+            vec![p(0.0, 0.0)],
+            vec![p(0.0, 0.0), p(1.0, 0.0)],
+            vec![p(3.0, 3.0); 7],
+            (0..40).map(|k| p(k as f64 - 0.5, -0.5)).collect(),
+            (0..40).map(|k| p(-0.5, k as f64 - 0.5)).collect(),
+            (0..30)
+                .map(|k| p(k as f64, if k % 2 == 0 { 0.0 } else { 1.0 }))
+                .collect(),
+            back,
+        ];
+        out.extend(lattice_cases());
+        out.extend(long_cases());
+        out.extend(random_walks());
         out
     }
 

@@ -64,7 +64,7 @@ pub(crate) fn load(path: &Path) -> Vec<DumpEdge> {
 
 /// Every `*.ffd` under `INKVEC_FFD_DIR`, sorted, or `None` when the variable is not set.
 pub(crate) fn dump_files() -> Option<Vec<PathBuf>> {
-    let root = PathBuf::from(std::env::var_os("INKVEC_FFD_DIR")?);
+    let root = inkvec_core::env::path("INKVEC_FFD_DIR")?;
     let mut out = Vec::new();
     let mut stack = vec![root];
     while let Some(d) = stack.pop() {
@@ -165,6 +165,25 @@ fn min_ms(reps: usize, mut f: impl FnMut()) -> f64 {
         .fold(f64::INFINITY, f64::min)
 }
 
+/// `INKVEC_FFD_REPS`, the number of timed runs a replay keeps the smallest of, or
+/// `default` when unset.
+fn reps(default: usize) -> usize {
+    inkvec_core::env::count("INKVEC_FFD_REPS").unwrap_or(default)
+}
+
+/// Run the polygon of one prepared input, [`open`](polygon::open) or
+/// [`closed`](polygon::closed), or with `reference` their kept references.
+fn run_polygon(pts: &[Point], closed: bool, tol: f64, reference: bool) {
+    use std::hint::black_box;
+    let v = match (closed, reference) {
+        (true, false) => polygon::closed(black_box(pts), tol),
+        (false, false) => polygon::open(black_box(pts), tol),
+        (true, true) => polygon::tests::closed_ref(black_box(pts), tol),
+        (false, true) => polygon::tests::open_ref(black_box(pts), tol),
+    };
+    black_box(v);
+}
+
 /// The polygon of every dumped edge of at least `INKVEC_FFD_MIN` points (default 2048),
 /// each timed alone, smallest of `INKVEC_FFD_REPS` (default 30) runs, against the kept
 /// reference timed the same way: on a shared machine the minimum over many runs is what
@@ -172,18 +191,12 @@ fn min_ms(reps: usize, mut f: impl FnMut()) -> f64 {
 #[test]
 #[ignore = "needs INKVEC_FFD_DIR"]
 fn replay_long_edges() {
-    use std::hint::black_box;
     let Some(files) = dump_files() else {
         eprintln!("INKVEC_FFD_DIR not set; nothing replayed");
         return;
     };
-    let env = |k: &str, d: usize| {
-        std::env::var(k)
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(d)
-    };
-    let (min_n, reps) = (env("INKVEC_FFD_MIN", 2048), env("INKVEC_FFD_REPS", 30));
+    let min_n = inkvec_core::env::count("INKVEC_FFD_MIN").unwrap_or(2048);
+    let reps = reps(30);
     let (mut edges, mut new, mut old) = (0usize, 0.0, 0.0);
     for f in &files {
         for e in load(f) {
@@ -195,20 +208,8 @@ fn replay_long_edges() {
             }
             let tol = tolerances(&e)[0];
             edges += 1;
-            new += min_ms(reps, || {
-                if e.closed {
-                    drop(black_box(polygon::closed(black_box(&pts), tol)));
-                } else {
-                    drop(black_box(polygon::open(black_box(&pts), tol)));
-                }
-            });
-            old += min_ms(reps, || {
-                if e.closed {
-                    drop(black_box(polygon::tests::closed_ref(black_box(&pts), tol)));
-                } else {
-                    drop(black_box(polygon::tests::open_ref(black_box(&pts), tol)));
-                }
-            });
+            new += min_ms(reps, || run_polygon(&pts, e.closed, tol, false));
+            old += min_ms(reps, || run_polygon(&pts, e.closed, tol, true));
         }
     }
     eprintln!("{edges} edges of {min_n}+ points: polygon {new:.2} ms, reference {old:.2} ms");
@@ -236,35 +237,98 @@ fn frame_flags(edges: &[DumpEdge]) -> Vec<bool> {
         .collect()
 }
 
-/// Single-threaded timings per dump set, smallest of `INKVEC_FFD_REPS` (default 5), in
-/// ms: the whole `fit_edge` over every edge; the primitive test on the rings; the polygon
-/// stage on the image frame and on the other edges, and on all of them with the kept
-/// reference; and the sum over images of the slowest edge's `fit_edge` (what bounds the
-/// parallel fit's wall time).
+/// The columns of [`replay_timing`], in order.
+const TIMING_COLUMNS: [&str; 6] = [
+    "fit_edge",
+    "prims",
+    "poly frame",
+    "poly other",
+    "poly ref",
+    "sum slowest",
+];
+
+/// One dump's row of [`replay_timing`], in ms, smallest of `reps` runs each: the whole
+/// `fit_edge` over every edge; the primitive test on the rings; the polygon stage on the
+/// image frame, on the other edges, and on all of them with the kept reference; and the
+/// slowest single edge's `fit_edge`.
+fn time_dump(edges: &[DumpEdge], reps: usize) -> [f64; 6] {
+    use std::hint::black_box;
+    let base = FastFit::default();
+    let frame = frame_flags(edges);
+    let cfgs: Vec<FastFit> = edges
+        .iter()
+        .map(|e| base.for_contrast(e.contrast))
+        .collect();
+    let inputs: Vec<(Vec<Point>, bool, f64, bool)> = edges
+        .iter()
+        .zip(&cfgs)
+        .zip(&frame)
+        .filter_map(|((e, c), &fr)| polygon_input(e).map(|p| (p, e.closed, c.poly_tol, fr)))
+        .collect();
+    let rings: Vec<Vec<Point>> = edges
+        .iter()
+        .filter(|e| e.closed)
+        .map(|e| {
+            let pts = if e.pts.len() >= 8 {
+                &e.pts[1..]
+            } else {
+                &e.pts[..]
+            };
+            smooth::denoise(pts, true)
+        })
+        .collect();
+    // The polygon of the frame's inputs (`Some(true)`), the others' (`Some(false)`), or
+    // all of them through the reference (`None`).
+    let poly = |which: Option<bool>| {
+        min_ms(reps, || {
+            for (p, closed, tol, fr) in &inputs {
+                if which.is_some_and(|w| w != *fr) {
+                    continue;
+                }
+                run_polygon(p, *closed, *tol, which.is_none());
+            }
+        })
+    };
+    let whole = |e: &DumpEdge, c: &FastFit| {
+        black_box(super::fit_edge(black_box(&e.pts), e.closed, c));
+    };
+    [
+        min_ms(reps, || {
+            for (e, c) in edges.iter().zip(&cfgs) {
+                whole(e, c);
+            }
+        }),
+        min_ms(reps, || {
+            for r in &rings {
+                black_box(super::prims::primitive(black_box(r)));
+            }
+        }),
+        poly(Some(true)),
+        poly(Some(false)),
+        poly(None),
+        edges
+            .iter()
+            .zip(&cfgs)
+            .map(|(e, c)| min_ms(reps, || whole(e, c)))
+            .fold(0.0f64, f64::max),
+    ]
+}
+
+/// Timings per dump set (the dump directory's first component below `INKVEC_FFD_DIR`),
+/// summed over its dumps, smallest of `INKVEC_FFD_REPS` (default 5) runs each; see
+/// [`time_dump`] for the columns. The edges are fitted one after another, so everything
+/// but a boundary long enough for the polygon's parallel scan runs on one thread; the
+/// last column, the sum over images of the slowest edge, is what bounds the parallel
+/// fit's wall time.
 #[test]
 #[ignore = "needs INKVEC_FFD_DIR"]
 fn replay_timing() {
-    use std::hint::black_box;
-    let Some(files) = dump_files() else {
+    let (Some(files), Some(root)) = (dump_files(), inkvec_core::env::path("INKVEC_FFD_DIR")) else {
         eprintln!("INKVEC_FFD_DIR not set; nothing replayed");
         return;
     };
-    let reps: usize = std::env::var("INKVEC_FFD_REPS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(5);
-    let base = FastFit::default();
-    const COLS: [&str; 6] = [
-        "fit_edge",
-        "prims",
-        "poly frame",
-        "poly other",
-        "poly ref",
-        "sum slowest",
-    ];
-    // Per top-level set (the dump directory's first component below the root).
+    let reps = reps(5);
     let mut sets: std::collections::BTreeMap<String, [f64; 6]> = Default::default();
-    let root = PathBuf::from(std::env::var_os("INKVEC_FFD_DIR").expect("set"));
     for f in &files {
         let set = f
             .strip_prefix(&root)
@@ -272,80 +336,13 @@ fn replay_timing() {
             .and_then(|r| r.components().next())
             .map(|c| c.as_os_str().to_string_lossy().into_owned())
             .unwrap_or_default();
-        let edges = load(f);
-        let frame = frame_flags(&edges);
-        let cfgs: Vec<FastFit> = edges
-            .iter()
-            .map(|e| base.for_contrast(e.contrast))
-            .collect();
-        let inputs: Vec<(Vec<Point>, bool, f64, bool)> = edges
-            .iter()
-            .zip(&cfgs)
-            .zip(&frame)
-            .filter_map(|((e, c), &fr)| polygon_input(e).map(|p| (p, e.closed, c.poly_tol, fr)))
-            .collect();
-        let rings: Vec<Vec<Point>> = edges
-            .iter()
-            .filter(|e| e.closed)
-            .map(|e| {
-                let pts = if e.pts.len() >= 8 {
-                    &e.pts[1..]
-                } else {
-                    &e.pts[..]
-                };
-                smooth::denoise(pts, true)
-            })
-            .collect();
-        let poly = |want_frame: bool, reference: bool| {
-            min_ms(reps, || {
-                for (p, closed, tol, fr) in &inputs {
-                    if *fr != want_frame && !reference {
-                        continue;
-                    }
-                    match (*closed, reference) {
-                        (true, false) => drop(black_box(polygon::closed(black_box(p), *tol))),
-                        (false, false) => drop(black_box(polygon::open(black_box(p), *tol))),
-                        (true, true) => {
-                            drop(black_box(polygon::tests::closed_ref(black_box(p), *tol)))
-                        }
-                        (false, true) => {
-                            drop(black_box(polygon::tests::open_ref(black_box(p), *tol)))
-                        }
-                    }
-                }
-            })
-        };
-        let row = [
-            min_ms(reps, || {
-                for (e, c) in edges.iter().zip(&cfgs) {
-                    black_box(super::fit_edge(black_box(&e.pts), e.closed, c));
-                }
-            }),
-            min_ms(reps, || {
-                for r in &rings {
-                    black_box(super::prims::primitive(black_box(r)));
-                }
-            }),
-            poly(true, false),
-            poly(false, false),
-            poly(false, true),
-            edges
-                .iter()
-                .zip(&cfgs)
-                .map(|(e, c)| {
-                    min_ms(reps, || {
-                        black_box(super::fit_edge(black_box(&e.pts), e.closed, c));
-                    })
-                })
-                .fold(0.0f64, f64::max),
-        ];
-        let s = sets.entry(set).or_default();
-        for (a, b) in s.iter_mut().zip(row) {
+        let row = time_dump(&load(f), reps);
+        for (a, b) in sets.entry(set).or_default().iter_mut().zip(row) {
             *a += b;
         }
     }
     eprint!("{:<10}", "set");
-    for c in COLS {
+    for c in TIMING_COLUMNS {
         eprint!("{c:>13}");
     }
     eprintln!();

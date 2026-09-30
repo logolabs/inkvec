@@ -252,7 +252,7 @@ pub(crate) fn symmetric_tangent(
 
 /// Estimate the tangents at every vertex.
 ///
-/// Where a symmetric window fits ([`symmetric_tangent`]), incoming and outgoing are the
+/// Where a symmetric window fits (`symmetric_tangent`), incoming and outgoing are the
 /// same direction: the point is on a smooth run. Otherwise each side is estimated on its
 /// own (`one_sided_tangent`); if only one side exists (the ends of an open polyline) both
 /// take it, and with neither the x axis stands in. All tangents are unit vectors pointing
@@ -298,7 +298,7 @@ pub(crate) fn turn_angle(a: Vec2, b: Vec2) -> f64 {
 ///     cost = λ · min(1, (θ / θ_break)²)
 /// ```
 ///
-/// with `θ` the [`turn_angle`] and `θ_break` the break angle in force
+/// with `θ` the `turn_angle` and `θ_break` the break angle in force
 /// ([`G1_BREAK_DEGREES`] unless a [`crate::cost::CostModel`] says otherwise). A corner is
 /// one extra free parameter (the outgoing direction is no longer implied by the incoming
 /// one), hence the saturation at `λ`; the quadratic ramp below it keeps tangent-estimate

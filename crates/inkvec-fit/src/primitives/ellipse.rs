@@ -184,7 +184,7 @@ pub(crate) fn canonical_angle(mut angle: f64) -> f64 {
 /// residual approximate a squared distance and removes most of the plain algebraic fit's
 /// bias. That is the generalised eigenproblem `C·θ = μ·N·θ` for the smallest `μ`
 /// (`solver::gen_eigen_5`); `f = −z̄·θ`. The conic is converted with
-/// [`conic_to_ellipse`], scaled back to px, and given `rx ≥ ry`.
+/// `conic_to_ellipse`, scaled back to px, and given `rx ≥ ry`.
 ///
 /// `None` for fewer than six points, zero weight, coincident points or a conic that is
 /// not an ellipse. `chi2` is the orthogonal residual of this algebraic solution.

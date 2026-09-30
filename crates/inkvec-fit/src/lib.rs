@@ -615,7 +615,7 @@ pub fn adjust_vertices(poly: &Polyline, seg: &Segmentation, max_shift: f64) -> V
 /// worth its parameters. Curve fitting looked broken; the actual fault was here.
 ///
 /// For each selected interior vertex `k`, the segments on either side are fitted with a
-/// weighted total-least-squares line `p + t·d` ([`segment_line`]), and the vertex moves
+/// weighted total-least-squares line `p + t·d` (`segment_line`), and the vertex moves
 /// to their intersection
 ///
 /// ```text
@@ -935,12 +935,12 @@ pub const CORNER_DEGREES: f64 = 45.0;
 /// The steps:
 ///
 /// 1. [`optimal_polygon`] chooses the vertices;
-/// 2. [`corner_breaks`] marks the vertices whose polygon turn is at least
+/// 2. `corner_breaks` marks the vertices whose polygon turn is at least
 ///    [`CORNER_DEGREES`] (and the ends of an open path) as breaks;
 /// 3. [`adjust_vertices_at`] moves only those breaks to the intersection of their
 ///    neighbouring fitted lines, with a shift cap of `3·max(σ_max, 0.25)` px;
 /// 4. each run between consecutive breaks is described by lines or by cubics, whichever
-///    costs less ([`fit_run`]).
+///    costs less (`fit_run`).
 ///
 /// This is the two-pass reference the multimodel program is tested against; the shipping
 /// path is [`multimodel::optimal_multimodel`]. Output coordinates are in the input's

@@ -810,7 +810,7 @@ fn distances(pts: &[Point], samples: &[Point]) -> Vec<f64> {
 
 /// Maximum distance from `pts` to a fitted run, in px.
 ///
-/// The run starts at `start` and is sampled every 0.25 px (see [`sample_run`] and
+/// The run starts at `start` and is sampled every 0.25 px (see `sample_run` and
 /// `distances`). Infinite when there are no segments or fewer than two points, so an
 /// empty fit never passes a tolerance test.
 pub fn max_deviation(pts: &[Point], start: Point, segs: &[Segment]) -> f64 {

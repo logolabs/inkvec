@@ -6,11 +6,23 @@
 //! fits each instance independently, producing differing corner fillets and wobbles.
 //!
 //! This module normalizes closed contours into a canonical, scale- and translation-
-//! invariant frame using 0th, 1st, and 2nd-order geometric moments. In canonical space,
-//! equivalent shapes are identified via topological matching and contour IoU.
-//! A consensus master shape is computed and re-projected back to each instance's
-//! target pose via the inverse affine transform, restoring pixel-perfect consistency
-//! and enabling compact SVG `<use>` symbol instancing.
+//! invariant frame: each shape is translated so its centroid (first moments) sits at
+//! `(100, 100)` and scaled uniformly so its area (zeroth moment) is 10000 px², i.e. a
+//! 100 x 100 square's. Rotation is not normalised. In canonical space, equivalent shapes
+//! are identified by matching hole counts, a cheap second-moment aspect-ratio check
+//! (`μ20/μ02` within 35%) and the IoU of 48 x 48 occupancy masks over the canonical
+//! 200 x 200 box. A consensus master shape is computed and re-projected back to each
+//! instance's target pose via the inverse affine transform, restoring pixel-perfect
+//! consistency and enabling compact SVG `<use>` symbol instancing.
+//!
+//! # Where this sits
+//!
+//! After fitting, at emission: `inkvec-cli`'s `harmonize` module builds a
+//! [`CompoundShape`] per filled face (outer ring, holes, their fitted segments and their
+//! boundary points, in px), clusters them with [`cluster_compound_shapes`], and redraws a
+//! member from the cluster's consensus only where its own evidence agrees. The
+//! single-ring [`NormalizedContour`] / [`cluster_equivalent_shapes`] pair is the earlier,
+//! hole-blind version, kept for its tests.
 
 use crate::curves::Segment;
 use inkvec_core::Point;
@@ -24,13 +36,13 @@ use inkvec_core::Point;
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AffineTransform {
-    /// Horizontal scale / shear component $M_{00}$.
+    /// Horizontal scale / shear component, matrix entry `M00`.
     pub a: f64,
-    /// Vertical shear / scale component $M_{10}$.
+    /// Vertical shear / scale component, matrix entry `M10`.
     pub b: f64,
-    /// Horizontal shear / scale component $M_{01}$.
+    /// Horizontal shear / scale component, matrix entry `M01`.
     pub c: f64,
-    /// Vertical scale / shear component $M_{11}$.
+    /// Vertical scale / shear component, matrix entry `M11`.
     pub d: f64,
     /// Horizontal translation component.
     pub tx: f64,
@@ -97,7 +109,11 @@ impl AffineTransform {
         self.a * self.d - self.b * self.c
     }
 
-    /// Inverts the affine transformation, returning `None` if degenerate.
+    /// Inverts the affine transformation, returning `None` if degenerate
+    /// (`|det| < 1e-12`).
+    ///
+    /// The linear part inverts as `[[d, −c], [−b, a]] / det`, and the translation as
+    /// `−M⁻¹·t`.
     pub fn invert(&self) -> Option<Self> {
         let d = self.det();
         if d.abs() < 1e-12 {
@@ -130,6 +146,12 @@ impl AffineTransform {
     }
 
     /// Applies the transform to a path segment.
+    ///
+    /// Exact for lines and cubics, which are affine-invariant (transform the control
+    /// points). An arc is only approximated: its radii are scaled by `√|det|` and its
+    /// rotation kept, which is exact for a similarity (uniform scale, rotation,
+    /// translation, the only transforms this module builds) but not for a shear or a
+    /// non-uniform scale. A reflection (`det < 0`) flips the sweep direction.
     pub fn apply_segment(&self, seg: &Segment) -> Segment {
         match seg {
             Segment::Line(p) => Segment::Line(self.apply_point(*p)),
@@ -161,7 +183,7 @@ impl AffineTransform {
         }
     }
 
-    /// Formats as an SVG `transform="matrix(a b c d e f)"` string.
+    /// Formats as an SVG `transform="matrix(a b c d e f)"` string, four decimals each.
     pub fn svg_matrix(&self) -> String {
         format!(
             "matrix({:.4} {:.4} {:.4} {:.4} {:.4} {:.4})",
@@ -173,21 +195,34 @@ impl AffineTransform {
 /// Geometric moments of a 2D closed polygon contour.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PolygonMoments {
-    /// Signed area (0th moment $M_{00}$).
+    /// Signed area (0th moment `M00`), px²; positive for a counter-clockwise ring in a
+    /// y-up frame.
     pub area: f64,
     /// Center of mass horizontal coordinate.
     pub cx: f64,
     /// Center of mass vertical coordinate.
     pub cy: f64,
-    /// Second central moment $\mu_{20}$ (horizontal variance).
+    /// Second central moment `μ20` per unit area (horizontal variance), px².
     pub mu20: f64,
-    /// Second central moment $\mu_{02}$ (vertical variance).
+    /// Second central moment `μ02` per unit area (vertical variance), px².
     pub mu02: f64,
-    /// Second central moment $\mu_{11}$ (covariance).
+    /// Second central moment `μ11` per unit area (covariance), px².
     pub mu11: f64,
 }
 
 /// Computes the exact geometric moments of a closed polygon via Green's Theorem.
+///
+/// With `c_i = x_i·y_{i+1} − x_{i+1}·y_i` summed over the edges (wrapping):
+///
+/// ```text
+///     A   = ½ Σ c_i
+///     cx  = Σ (x_i + x_{i+1})·c_i / 6A            cy likewise
+///     μ20 = Σ (x_i² + x_i·x_{i+1} + x_{i+1}²)·c_i / 12A − cx²      μ02 likewise
+///     μ11 = Σ (2x_i·y_i + x_i·y_{i+1} + x_{i+1}·y_i + 2x_{i+1}·y_{i+1})·c_i / 24A − cx·cy
+/// ```
+///
+/// the standard polygon-moment formulas, exact for the polygon through `pts` (px).
+/// `None` for fewer than three points or an area under 1e-6 px².
 pub fn compute_polygon_moments(pts: &[Point]) -> Option<PolygonMoments> {
     if pts.len() < 3 {
         return None;
@@ -259,30 +294,12 @@ pub struct NormalizedContour {
 
 impl NormalizedContour {
     /// Builds a normalized contour from fitted segments and boundary points.
+    ///
+    /// `None` when the boundary points enclose less than 1 px² (see
+    /// `canonical_frame`).
     pub fn new(start: Point, segments: Vec<Segment>, sample_points: Vec<Point>) -> Option<Self> {
         let moments = compute_polygon_moments(&sample_points)?;
-        let abs_area = moments.area.abs();
-        if abs_area < 1.0 {
-            return None;
-        }
-
-        // Scale factor: normalize area to target canonical area (e.g. 100x100 = 10000.0)
-        let target_area = 10000.0;
-        let scale = (target_area / abs_area).sqrt();
-
-        // T(p) = scale * (p - centroid) + (canonical_center)
-        let canon_center = 100.0;
-        let to_canonical = AffineTransform {
-            a: scale,
-            b: 0.0,
-            c: 0.0,
-            d: scale,
-            tx: canon_center - scale * moments.cx,
-            ty: canon_center - scale * moments.cy,
-        };
-
-        let from_canonical = to_canonical.invert()?;
-
+        let (to_canonical, from_canonical) = canonical_frame(&moments)?;
         Some(Self {
             start,
             segments,
@@ -294,6 +311,10 @@ impl NormalizedContour {
     }
 
     /// Rasterizes the canonical shape into a fixed-size binary occupancy bitmask for fast IoU.
+    ///
+    /// The canonical box `[0, 200)²` is divided into `grid_size²` cells, row-major, and a
+    /// cell is set when its centre is inside the ring by the even-odd rule
+    /// (`inside_even_odd`). All clear for fewer than three points.
     pub fn rasterize_canonical(&self, grid_size: usize) -> Vec<bool> {
         let mut mask = vec![false; grid_size * grid_size];
         let canon_pts: Vec<Point> = self
@@ -306,25 +327,11 @@ impl NormalizedContour {
             return mask;
         }
 
-        let n = canon_pts.len();
         for y in 0..grid_size {
             let py = (y as f64 + 0.5) * (200.0 / grid_size as f64);
             for x in 0..grid_size {
                 let px = (x as f64 + 0.5) * (200.0 / grid_size as f64);
-                // Ray casting winding check
-                let mut inside = false;
-                let mut j = n - 1;
-                for i in 0..n {
-                    let pi = canon_pts[i];
-                    let pj = canon_pts[j];
-                    if ((pi.y > py) != (pj.y > py))
-                        && (px < (pj.x - pi.x) * (py - pi.y) / (pj.y - pi.y) + pi.x)
-                    {
-                        inside = !inside;
-                    }
-                    j = i;
-                }
-                if inside {
+                if inside_even_odd(&canon_pts, px, py) {
                     mask[y * grid_size + x] = true;
                 }
             }
@@ -333,7 +340,58 @@ impl NormalizedContour {
     }
 }
 
+/// The transforms into and out of the canonical frame of a shape with these moments:
+/// `p ↦ s·(p − centroid) + (100, 100)` with `s = √(10000 / |area|)`, and its inverse.
+///
+/// `None` for an area under 1 px², which has no stable scale, or a transform that does
+/// not invert.
+fn canonical_frame(moments: &PolygonMoments) -> Option<(AffineTransform, AffineTransform)> {
+    let abs_area = moments.area.abs();
+    if abs_area < 1.0 {
+        return None;
+    }
+
+    // Scale factor: normalize area to target canonical area (e.g. 100x100 = 10000.0)
+    let target_area = 10000.0;
+    let scale = (target_area / abs_area).sqrt();
+
+    // T(p) = scale * (p - centroid) + (canonical_center)
+    let canon_center = 100.0;
+    let to_canonical = AffineTransform {
+        a: scale,
+        b: 0.0,
+        c: 0.0,
+        d: scale,
+        tx: canon_center - scale * moments.cx,
+        ty: canon_center - scale * moments.cy,
+    };
+
+    let from_canonical = to_canonical.invert()?;
+    Some((to_canonical, from_canonical))
+}
+
+/// Whether `(px, py)` is inside the closed polygon `poly` by the even-odd rule: cast a
+/// ray towards +x and count the edges it crosses. `poly` must not be empty.
+fn inside_even_odd(poly: &[Point], px: f64, py: f64) -> bool {
+    let n = poly.len();
+    let mut inside = false;
+    let mut j = n - 1;
+    for i in 0..n {
+        let pi = poly[i];
+        let pj = poly[j];
+        if ((pi.y > py) != (pj.y > py)) && (px < (pj.x - pi.x) * (py - pi.y) / (pj.y - pi.y) + pi.x)
+        {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}
+
 /// Measures the Intersection-over-Union (IoU) of two canonical occupancy grids.
+///
+/// `|A ∩ B| / |A ∪ B|`, 0 when both are empty. Panics if the masks differ in length:
+/// they must come from the same `grid_size`.
 pub fn canonical_iou(mask1: &[bool], mask2: &[bool]) -> f64 {
     assert_eq!(mask1.len(), mask2.len());
     let mut intersection = 0usize;
@@ -357,6 +415,16 @@ pub fn canonical_iou(mask1: &[bool], mask2: &[bool]) -> f64 {
     }
 }
 
+/// Whether two shapes' second-moment aspect ratios `μ20/μ02` differ by more than 35% of
+/// the larger: a cheap test that rejects, before any mask is compared, a shape that is
+/// its neighbour turned a quarter turn or stretched. `μ02` is floored at 1e-4 against
+/// division by zero.
+fn aspect_differs(a: &PolygonMoments, b: &PolygonMoments) -> bool {
+    let ar_i = a.mu20 / (a.mu02.max(1e-4));
+    let ar_j = b.mu20 / (b.mu02.max(1e-4));
+    (ar_i - ar_j).abs() > 0.35 * ar_i.max(ar_j)
+}
+
 /// A cluster of equivalent recurring shapes.
 #[derive(Debug, Clone)]
 pub struct EquivalenceClass {
@@ -369,6 +437,11 @@ pub struct EquivalenceClass {
 }
 
 /// Groups candidate contours into equivalence classes based on canonical IoU.
+///
+/// Greedy and order-dependent: each unassigned contour, in order, opens a class and
+/// takes every later unassigned contour that `aspect_differs` does not reject and whose
+/// 48 x 48 mask overlaps its own with IoU at least `iou_threshold`. The class's
+/// consensus is its member with the fewest segments, carried into the canonical frame.
 pub fn cluster_equivalent_shapes(
     contours: &[NormalizedContour],
     iou_threshold: f64,
@@ -400,9 +473,7 @@ pub fn cluster_equivalent_shapes(
             }
 
             // Quick moment ratio check: moments must be reasonably similar
-            let ar_i = contours[i].moments.mu20 / (contours[i].moments.mu02.max(1e-4));
-            let ar_j = contours[j].moments.mu20 / (contours[j].moments.mu02.max(1e-4));
-            if (ar_i - ar_j).abs() > 0.35 * ar_i.max(ar_j) {
+            if aspect_differs(&contours[i].moments, &contours[j].moments) {
                 continue;
             }
 
@@ -458,6 +529,10 @@ pub struct CompoundShape {
 
 impl CompoundShape {
     /// Builds a new compound shape.
+    ///
+    /// The canonical frame comes from the outer ring's boundary points alone (holes do
+    /// not move the centroid or the scale). `None` when that ring encloses less than
+    /// 1 px² (see `canonical_frame`).
     pub fn new(
         outer_start: Point,
         outer_segments: Vec<Segment>,
@@ -465,26 +540,7 @@ impl CompoundShape {
         holes: Vec<(Point, Vec<Segment>, Vec<Point>)>,
     ) -> Option<Self> {
         let moments = compute_polygon_moments(&outer_points)?;
-        let abs_area = moments.area.abs();
-        if abs_area < 1.0 {
-            return None;
-        }
-
-        let target_area = 10000.0;
-        let scale = (target_area / abs_area).sqrt();
-        let canon_center = 100.0;
-
-        let to_canonical = AffineTransform {
-            a: scale,
-            b: 0.0,
-            c: 0.0,
-            d: scale,
-            tx: canon_center - scale * moments.cx,
-            ty: canon_center - scale * moments.cy,
-        };
-
-        let from_canonical = to_canonical.invert()?;
-
+        let (to_canonical, from_canonical) = canonical_frame(&moments)?;
         Some(Self {
             outer_start,
             outer_segments,
@@ -497,6 +553,10 @@ impl CompoundShape {
     }
 
     /// Rasterizes the compound shape (outer minus holes) into a canonical binary bitmask.
+    ///
+    /// As [`NormalizedContour::rasterize_canonical`], a cell being set when its centre is
+    /// inside the outer ring and inside none of the holes (holes with fewer than three
+    /// points are ignored).
     pub fn rasterize_canonical(&self, grid_size: usize) -> Vec<bool> {
         let mut mask = vec![false; grid_size * grid_size];
         let canon_outer: Vec<Point> = self
@@ -519,53 +579,16 @@ impl CompoundShape {
             })
             .collect();
 
-        let n_outer = canon_outer.len();
         for y in 0..grid_size {
             let py = (y as f64 + 0.5) * (200.0 / grid_size as f64);
             for x in 0..grid_size {
                 let px = (x as f64 + 0.5) * (200.0 / grid_size as f64);
-
-                let mut inside_outer = false;
-                let mut j = n_outer - 1;
-                for i in 0..n_outer {
-                    let pi = canon_outer[i];
-                    let pj = canon_outer[j];
-                    if ((pi.y > py) != (pj.y > py))
-                        && (px < (pj.x - pi.x) * (py - pi.y) / (pj.y - pi.y) + pi.x)
-                    {
-                        inside_outer = !inside_outer;
-                    }
-                    j = i;
-                }
-
-                if !inside_outer {
+                if !inside_even_odd(&canon_outer, px, py) {
                     continue;
                 }
-
-                let mut inside_hole = false;
-                for hole_pts in &canon_holes {
-                    let n_h = hole_pts.len();
-                    if n_h < 3 {
-                        continue;
-                    }
-                    let mut hj = n_h - 1;
-                    let mut in_this_hole = false;
-                    for hi in 0..n_h {
-                        let pi = hole_pts[hi];
-                        let pj = hole_pts[hj];
-                        if ((pi.y > py) != (pj.y > py))
-                            && (px < (pj.x - pi.x) * (py - pi.y) / (pj.y - pi.y) + pi.x)
-                        {
-                            in_this_hole = !in_this_hole;
-                        }
-                        hj = hi;
-                    }
-                    if in_this_hole {
-                        inside_hole = true;
-                        break;
-                    }
-                }
-
+                let inside_hole = canon_holes
+                    .iter()
+                    .any(|hole| hole.len() >= 3 && inside_even_odd(hole, px, py));
                 if !inside_hole {
                     mask[y * grid_size + x] = true;
                 }
@@ -591,6 +614,12 @@ pub struct CompoundEquivalenceClass {
 }
 
 /// Clusters compound shapes based on matching hole topology and canonical IoU.
+///
+/// Greedy and order-dependent, as [`cluster_equivalent_shapes`], with one more test: two
+/// shapes must have the same number of holes. Each class's exemplar is the member with
+/// the fewest segments (outer ring and holes together), carried into the canonical
+/// frame; when the class has more than one member, the exemplar's vertices are then moved
+/// to the members' consensus (`median_consensus`) to cancel raster-phase noise.
 pub fn cluster_compound_shapes(
     shapes: &[CompoundShape],
     iou_threshold: f64,
@@ -625,9 +654,7 @@ pub fn cluster_compound_shapes(
                 continue;
             }
 
-            let ar_i = shapes[i].moments.mu20 / (shapes[i].moments.mu02.max(1e-4));
-            let ar_j = shapes[j].moments.mu20 / (shapes[j].moments.mu02.max(1e-4));
-            if (ar_i - ar_j).abs() > 0.35 * ar_i.max(ar_j) {
+            if aspect_differs(&shapes[i].moments, &shapes[j].moments) {
                 continue;
             }
 
@@ -638,157 +665,151 @@ pub fn cluster_compound_shapes(
             }
         }
 
-        let exemplar_idx = *members
-            .iter()
-            .min_by_key(|&&m| {
-                shapes[m].outer_segments.len()
-                    + shapes[m]
-                        .holes
-                        .iter()
-                        .map(|(_, segs, _)| segs.len())
-                        .sum::<usize>()
-            })
-            .unwrap_or(&i);
-
-        let exemplar = &shapes[exemplar_idx];
-        let mut canon_outer_start = exemplar.to_canonical.apply_point(exemplar.outer_start);
-        let mut canon_outer_segments: Vec<Segment> = exemplar
-            .outer_segments
-            .iter()
-            .map(|seg| exemplar.to_canonical.apply_segment(seg))
-            .collect();
-
-        let mut canon_holes: Vec<(Point, Vec<Segment>)> = exemplar
-            .holes
-            .iter()
-            .map(|(start, segs, _)| {
-                (
-                    exemplar.to_canonical.apply_point(*start),
-                    segs.iter()
-                        .map(|s| exemplar.to_canonical.apply_segment(s))
-                        .collect(),
-                )
-            })
-            .collect();
-
-        // When multiple equivalent instances exist, compute the robust spatial median consensus
-        // across all members in canonical space. This cancels out raster-phase quantization noise
-        // and rejects single-glyph outliers / defects.
-        if members.len() > 1 {
-            let member_outer_polys: Vec<Vec<Point>> = members
-                .iter()
-                .map(|&m| {
-                    shapes[m]
-                        .outer_points
-                        .iter()
-                        .map(|&p| shapes[m].to_canonical.apply_point(p))
-                        .collect()
-                })
-                .collect();
-
-            let candidates: Vec<Point> = member_outer_polys
-                .iter()
-                .map(|poly| closest_point_on_closed_polyline(canon_outer_start, poly))
-                .collect();
-            let new_start = median_point(&candidates);
-            let mut cur_delta = Point::new(
-                new_start.x - canon_outer_start.x,
-                new_start.y - canon_outer_start.y,
-            );
-            canon_outer_start = new_start;
-
-            for seg in canon_outer_segments.iter_mut() {
-                let end = seg.end();
-                let end_candidates: Vec<Point> = member_outer_polys
-                    .iter()
-                    .map(|poly| closest_point_on_closed_polyline(end, poly))
-                    .collect();
-                let new_end = median_point(&end_candidates);
-                let next_delta = Point::new(new_end.x - end.x, new_end.y - end.y);
-
-                match seg {
-                    Segment::Line(ref mut p) => {
-                        *p = new_end;
-                    }
-                    Segment::Cubic(ref mut c1, ref mut c2, ref mut p) => {
-                        c1.x += cur_delta.x;
-                        c1.y += cur_delta.y;
-                        c2.x += next_delta.x;
-                        c2.y += next_delta.y;
-                        *p = new_end;
-                    }
-                    Segment::Arc { ref mut end, .. } => {
-                        *end = new_end;
-                    }
-                }
-                cur_delta = next_delta;
-            }
-
-            for (hole_idx, (h_start, h_segs)) in canon_holes.iter_mut().enumerate() {
-                let member_hole_polys: Vec<Vec<Point>> = members
-                    .iter()
-                    .filter_map(|&m| {
-                        shapes[m].holes.get(hole_idx).map(|(_, _, pts)| {
-                            pts.iter()
-                                .map(|&p| shapes[m].to_canonical.apply_point(p))
-                                .collect()
-                        })
-                    })
-                    .collect();
-
-                if member_hole_polys.len() == members.len() {
-                    let h_start_candidates: Vec<Point> = member_hole_polys
-                        .iter()
-                        .map(|poly| closest_point_on_closed_polyline(*h_start, poly))
-                        .collect();
-                    let new_h_start = median_point(&h_start_candidates);
-                    let mut h_cur_delta =
-                        Point::new(new_h_start.x - h_start.x, new_h_start.y - h_start.y);
-                    *h_start = new_h_start;
-
-                    for seg in h_segs.iter_mut() {
-                        let end = seg.end();
-                        let end_candidates: Vec<Point> = member_hole_polys
-                            .iter()
-                            .map(|poly| closest_point_on_closed_polyline(end, poly))
-                            .collect();
-                        let new_end = median_point(&end_candidates);
-                        let next_delta = Point::new(new_end.x - end.x, new_end.y - end.y);
-
-                        match seg {
-                            Segment::Line(ref mut p) => {
-                                *p = new_end;
-                            }
-                            Segment::Cubic(ref mut c1, ref mut c2, ref mut p) => {
-                                c1.x += h_cur_delta.x;
-                                c1.y += h_cur_delta.y;
-                                c2.x += next_delta.x;
-                                c2.y += next_delta.y;
-                                *p = new_end;
-                            }
-                            Segment::Arc { ref mut end, .. } => {
-                                *end = new_end;
-                            }
-                        }
-                        h_cur_delta = next_delta;
-                    }
-                }
-            }
-        }
-
-        clusters.push(CompoundEquivalenceClass {
-            members,
-            exemplar: exemplar_idx,
-            canonical_outer_start: canon_outer_start,
-            canonical_outer_segments: canon_outer_segments,
-            canonical_holes: canon_holes,
-        });
+        clusters.push(compound_class(shapes, members, i));
     }
 
     clusters
 }
 
+/// The equivalence class of `members` (whose first member is `first`): the exemplar with
+/// the fewest segments, in canonical coordinates, moved to the members' consensus when
+/// there is more than one.
+fn compound_class(
+    shapes: &[CompoundShape],
+    members: Vec<usize>,
+    first: usize,
+) -> CompoundEquivalenceClass {
+    let exemplar_idx = *members
+        .iter()
+        .min_by_key(|&&m| {
+            shapes[m].outer_segments.len()
+                + shapes[m]
+                    .holes
+                    .iter()
+                    .map(|(_, segs, _)| segs.len())
+                    .sum::<usize>()
+        })
+        .unwrap_or(&first);
+
+    let exemplar = &shapes[exemplar_idx];
+    let mut canon_outer_start = exemplar.to_canonical.apply_point(exemplar.outer_start);
+    let mut canon_outer_segments: Vec<Segment> = exemplar
+        .outer_segments
+        .iter()
+        .map(|seg| exemplar.to_canonical.apply_segment(seg))
+        .collect();
+
+    let mut canon_holes: Vec<(Point, Vec<Segment>)> = exemplar
+        .holes
+        .iter()
+        .map(|(start, segs, _)| {
+            (
+                exemplar.to_canonical.apply_point(*start),
+                segs.iter()
+                    .map(|s| exemplar.to_canonical.apply_segment(s))
+                    .collect(),
+            )
+        })
+        .collect();
+
+    // When multiple equivalent instances exist, compute the robust spatial median consensus
+    // across all members in canonical space. This cancels out raster-phase quantization noise
+    // and rejects single-glyph outliers / defects.
+    if members.len() > 1 {
+        let member_outer_polys: Vec<Vec<Point>> = members
+            .iter()
+            .map(|&m| {
+                shapes[m]
+                    .outer_points
+                    .iter()
+                    .map(|&p| shapes[m].to_canonical.apply_point(p))
+                    .collect()
+            })
+            .collect();
+        median_consensus(
+            &mut canon_outer_start,
+            &mut canon_outer_segments,
+            &member_outer_polys,
+        );
+
+        for (hole_idx, (h_start, h_segs)) in canon_holes.iter_mut().enumerate() {
+            let member_hole_polys: Vec<Vec<Point>> = members
+                .iter()
+                .filter_map(|&m| {
+                    shapes[m].holes.get(hole_idx).map(|(_, _, pts)| {
+                        pts.iter()
+                            .map(|&p| shapes[m].to_canonical.apply_point(p))
+                            .collect()
+                    })
+                })
+                .collect();
+
+            if member_hole_polys.len() == members.len() {
+                median_consensus(h_start, h_segs, &member_hole_polys);
+            }
+        }
+    }
+
+    CompoundEquivalenceClass {
+        members,
+        exemplar: exemplar_idx,
+        canonical_outer_start: canon_outer_start,
+        canonical_outer_segments: canon_outer_segments,
+        canonical_holes: canon_holes,
+    }
+}
+
+/// Move a ring's vertices (its `start` and every segment end, canonical px) to the
+/// consensus of the member rings `polys`.
+///
+/// Each vertex is projected onto every member's boundary polyline
+/// ([`closest_point_on_closed_polyline`]) and replaced by the coordinate-wise median of
+/// the projections ([`median_point`]), which a single deviant member cannot drag. A
+/// cubic's control points travel with the vertex they belong to (the first with the
+/// segment's start, the second with its end), so its shape relative to its ends is kept;
+/// an arc keeps its radii.
+fn median_consensus(start: &mut Point, segs: &mut [Segment], polys: &[Vec<Point>]) {
+    let candidates: Vec<Point> = polys
+        .iter()
+        .map(|poly| closest_point_on_closed_polyline(*start, poly))
+        .collect();
+    let new_start = median_point(&candidates);
+    let mut cur_delta = Point::new(new_start.x - start.x, new_start.y - start.y);
+    *start = new_start;
+
+    for seg in segs.iter_mut() {
+        let end = seg.end();
+        let end_candidates: Vec<Point> = polys
+            .iter()
+            .map(|poly| closest_point_on_closed_polyline(end, poly))
+            .collect();
+        let new_end = median_point(&end_candidates);
+        let next_delta = Point::new(new_end.x - end.x, new_end.y - end.y);
+
+        match seg {
+            Segment::Line(ref mut p) => {
+                *p = new_end;
+            }
+            Segment::Cubic(ref mut c1, ref mut c2, ref mut p) => {
+                c1.x += cur_delta.x;
+                c1.y += cur_delta.y;
+                c2.x += next_delta.x;
+                c2.y += next_delta.y;
+                *p = new_end;
+            }
+            Segment::Arc { ref mut end, .. } => {
+                *end = new_end;
+            }
+        }
+        cur_delta = next_delta;
+    }
+}
+
 /// Finds the closest point on a closed polyline to point `p`.
+///
+/// Projects `p` onto every edge (wrapping from the last point to the first), clamped to
+/// the edge, and keeps the nearest projection; ties keep the earlier edge. Returns `p`
+/// for an empty polyline and the single point for a one-point one.
 pub fn closest_point_on_closed_polyline(p: Point, poly: &[Point]) -> Point {
     if poly.is_empty() {
         return p;
@@ -822,6 +843,10 @@ pub fn closest_point_on_closed_polyline(p: Point, poly: &[Point]) -> Point {
 }
 
 /// Computes the coordinate-wise median of a list of points.
+///
+/// The x and y medians are taken separately (the result need not be one of the points);
+/// an even count averages the middle two. The origin for an empty list. NaN coordinates
+/// compare as equal to everything, so they land wherever the sort leaves them.
 pub fn median_point(pts: &[Point]) -> Point {
     if pts.is_empty() {
         return Point::new(0.0, 0.0);

@@ -156,7 +156,7 @@ pub(crate) fn weight_at(sigma: &[f64], k: usize) -> f64 {
 
 /// Weighted sum of squared orthogonal distances from `pts` to the circle.
 ///
-/// `χ² = Σ w_k·(|p_k − c| − r)²` with `w_k = 1/σ_k²` ([`weights`]); dimensionless.
+/// `χ² = Σ w_k·(|p_k − c| − r)²` with `w_k = 1/σ_k²` (`weights`); dimensionless.
 pub fn circle_chi2(pts: &[Point], sigma: &[f64], c: Point, r: f64) -> f64 {
     let w = weights(sigma, pts.len());
     pts.iter()

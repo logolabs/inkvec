@@ -67,7 +67,7 @@ const MAX_SPAN: usize = 96;
 
 /// Most segments a single cubic may absorb in one round.
 ///
-/// This and [`MAX_ROUNDS`] were once overridable (`INKVEC_MERGE_RUN`,
+/// This and `MAX_ROUNDS` were once overridable (`INKVEC_MERGE_RUN`,
 /// `INKVEC_MERGE_ROUNDS`), but no sweep ever moved either, so they are plain constants
 /// again; `SMOOTH_SLACK` below is the merge knob that was actually measured.
 const MAX_RUN: usize = 4;
@@ -108,7 +108,7 @@ use crate::multimodel::MAX_ARM;
 /// Weighted sum of squared distances from the measured points `a..=b` to a curve.
 ///
 /// `χ² = Σ_k (d_k/σ_k)²` (sigma floored at 1e-6 px), with `d_k` the distance from point
-/// `k` to the nearest of [`SAMPLES`]` + 1` points evenly spaced in the curve parameter.
+/// `k` to the nearest of `SAMPLES`` + 1` points evenly spaced in the curve parameter.
 /// Nearest-sample distance overstates the true distance by up to half the sample spacing;
 /// every description in a comparison is scored the same way, so the comparison stays
 /// fair. A line is passed as the degenerate cubic `[start, start, end, end]`.
@@ -118,14 +118,14 @@ pub fn chi2(c: &[Point; 4], poly: &Polyline, a: usize, b: usize) -> f64 {
 
 /// `chi2_n` is the hottest function in this pass — its pattern search calls it millions
 /// of times per icon — and both call sites pass one of exactly two compile-time
-/// constants, [`SAMPLES`] or [`COARSE_SAMPLES`], neither exceeding `SAMPLES`. A stack
+/// constants, `SAMPLES` or [`COARSE_SAMPLES`], neither exceeding `SAMPLES`. A stack
 /// buffer sized to `SAMPLES` therefore always has room, and replacing the `Vec<Point>`
 /// that used to be heap-allocated fresh on every call removes a malloc/free pair from
 /// each of those millions of calls without changing which points are sampled or in what
 /// order the distances are folded.
 ///
 /// [`chi2`] with `n + 1` samples instead of `SAMPLES + 1`; `n` must not exceed
-/// [`SAMPLES`].
+/// `SAMPLES`.
 fn chi2_n(c: &[Point; 4], poly: &Polyline, a: usize, b: usize, n: usize) -> f64 {
     // On the stack: both callers pass one of two compile-time constants, neither above
     // `SAMPLES`, and this function is called thousands of times per merge candidate.
@@ -188,9 +188,9 @@ fn chi2_n(c: &[Point; 4], poly: &Polyline, a: usize, b: usize, n: usize) -> f64 
 /// The cubic is parametrised by four numbers: the rotations `r0`, `r1` (degrees) of its end
 /// directions away from the contour's own directions at `p0` and `p3` (the chords to the
 /// second point in from each end), and the arm lengths `d0`, `d1` as fractions of the
-/// chord `|p3 − p0|`. A coarse grid ([`FreeCubicSearch::grid`]) picks the basin and a
-/// compass search ([`FreeCubicSearch::refine`]) finishes; cubics that cross themselves,
-/// arms outside `[0.02, MAX_ARM]` and rotations beyond [`SEARCH_DEGREES`] score infinity.
+/// chord `|p3 − p0|`. A coarse grid (`FreeCubicSearch::grid`) picks the basin and a
+/// compass search (`FreeCubicSearch::refine`) finishes; cubics that cross themselves,
+/// arms outside `[0.02, MAX_ARM]` and rotations beyond `SEARCH_DEGREES` score infinity.
 ///
 /// `None` for a zero-length chord, fewer than two interior points, a contour of zero
 /// length, or when no admissible cubic was found.
@@ -406,7 +406,7 @@ fn params_of(s: &Segment) -> f64 {
 /// Merge runs of segments into single free-tangent cubics wherever the objective prefers
 /// it. `vertices` are the measured-point indices the segmentation chose.
 ///
-/// Runs [`MAX_ROUNDS`] sweeps at most, stopping early when a sweep merges nothing, and
+/// Runs `MAX_ROUNDS` sweeps at most, stopping early when a sweep merges nothing, and
 /// returns how many merges were made. Does nothing unless there are at least two
 /// segments and exactly one more vertex than segments. The path's start and end never
 /// move.

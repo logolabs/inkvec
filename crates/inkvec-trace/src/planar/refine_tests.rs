@@ -51,10 +51,11 @@ fn refine_serial(
     }
 }
 
-/// A `w x h` scene of three shapes (a large disc, a bar, a small disc) over a ground,
-/// rendered with 4x4 supersampling so the boundaries are anti-aliased, plus a little
-/// deterministic noise. Returns the labels (the face at each pixel centre), the image,
-/// and the four face colours.
+/// A `w x h` scene of three shapes (a large disc, a bar, a small disc) over a ground
+/// (face 0; from 320 px wide on, wavy bands of faces 0 and 3), rendered with 4x4
+/// supersampling so the boundaries are anti-aliased, plus a little deterministic noise.
+/// Returns the labels (the face at each pixel centre), the image, and the four face
+/// colours.
 fn scene(w: usize, h: usize, seed: u64) -> (Vec<u16>, Vec<[f32; 3]>, Vec<[f32; 3]>) {
     let colors = vec![
         [0.95f32, 0.93, 0.90],
@@ -63,6 +64,7 @@ fn scene(w: usize, h: usize, seed: u64) -> (Vec<u16>, Vec<[f32; 3]>, Vec<[f32; 3
         [0.20, 0.70, 0.30],
     ];
     let (cx, cy, r) = (w as f64 * 0.45, h as f64 * 0.5, w.min(h) as f64 * 0.38);
+    let bands = w >= 320;
     let face = |x: f64, y: f64| -> u16 {
         if (x - w as f64 * 0.75).hypot(y - h as f64 * 0.3) < w as f64 * 0.08 {
             3
@@ -70,8 +72,12 @@ fn scene(w: usize, h: usize, seed: u64) -> (Vec<u16>, Vec<[f32; 3]>, Vec<[f32; 3
             2
         } else if (x - cx).hypot(y - cy) < r {
             1
-        } else {
+        } else if !bands || ((y + 2.0 * (x / 7.0).sin()) / 5.0).floor().rem_euclid(2.0) == 0.0 {
+            // From 320 px on, wavy bands over the ground: many long boundaries, so the
+            // scene has enough vertices for the parallel schedule.
             0
+        } else {
+            3
         }
     };
     let mut s = seed | 1;
@@ -125,6 +131,7 @@ fn parallel_refinement_equals_the_serial_loop() {
     for (w, h, seed) in [
         (96usize, 80usize, 3u64),
         (160, 150, 11),
+        (320, 300, 13),
         (1, 1, 5),
         (9, 1, 7),
     ] {
@@ -156,11 +163,13 @@ fn parallel_refinement_equals_the_serial_loop() {
             }
         }
         if w >= 96 {
-            // The large disc's edge is long enough for the vertex-parallel path.
+            // An edge long enough for the vertex-parallel path (used from 320 px on).
             assert!(base
                 .edges
                 .iter()
                 .any(|e| e.points.len() >= 2 * PAR_VERTICES));
         }
+        // The larger scenes take the parallel schedule, the tiny ones the serial one.
+        assert_eq!(refine_in_parallel(&base), w >= 96, "{w}x{h}");
     }
 }

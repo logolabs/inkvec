@@ -505,6 +505,26 @@ impl Refined {
 /// 2048 px) against rayon's few-µs cost per split.
 const PAR_VERTICES: usize = 64;
 
+/// Fewest boundary vertices in the whole map for the refinement to run in parallel at all
+/// (and beside symmetry detection, in the crate root); below it everything runs on the
+/// calling thread. 512 vertices are about 0.23 ms of serial work.
+///
+/// Handing work to rayon's pool costs waking its sleeping workers, which only pays when
+/// there is enough to share. Measured per icon (refinement and symmetry detection, the
+/// minimum of 3 interleaved runs, serial / parallel, ms): 512–1,024 vertices 0.263 / 0.206
+/// (16 screen icons), 1,024–2,048 0.506 / 0.253 (187), 2,048–4,096 0.998 / 0.351 (43),
+/// 4,096–8,192 2.162 / 0.627 (37 icons at 512 px), over 8,192 4.300 / 0.930 (10). The
+/// parallel form already wins in the smallest bucket measured, so the cutoff sits at its
+/// lower end; no icon of either set had fewer vertices. The result is the same either
+/// way; only the schedule changes.
+const PAR_MAP_VERTICES: usize = 512;
+
+/// Whether `map` has enough boundary vertices for [`measure_subpixel`] to use threads
+/// (at least [`PAR_MAP_VERTICES`]). `O(edges)`.
+pub(crate) fn refine_in_parallel(map: &PlanarMap) -> bool {
+    map.edges.iter().map(|e| e.points.len()).sum::<usize>() >= PAR_MAP_VERTICES
+}
+
 /// Measure the sub-pixel position and sigma of every vertex of `map` (the arguments are
 /// [`refine_subpixel_alpha`]'s), without changing `map`.
 ///
@@ -533,7 +553,8 @@ const PAR_VERTICES: usize = 64;
 ///
 /// The two diagnostics keep the serial order: with `INKVEC_SUBPXDBG` (a line per vertex)
 /// or `INKVEC_DUMP_CONTOUR` (a block per edge, appended to a file) set, everything runs on
-/// the calling thread in edge and vertex order, as before. The dump path is read once.
+/// the calling thread in edge and vertex order, as before. The dump path is read once. A
+/// small map ([`refine_in_parallel`] false) runs on the calling thread too.
 ///
 /// Method from: Blelloch, Fineman, Gibbons & Shun 2012, "Internally deterministic parallel
 /// algorithms can be fast", PPoPP 2012, 181–192, <https://doi.org/10.1145/2145816.2145840>:
@@ -567,7 +588,7 @@ pub(crate) fn measure_subpixel(
         debug: inkvec_core::env::flag("INKVEC_SUBPXDBG"),
         dump: inkvec_core::env::path("INKVEC_DUMP_CONTOUR"),
     };
-    let edges = if ctx.debug || ctx.dump.is_some() {
+    let edges = if ctx.debug || ctx.dump.is_some() || !refine_in_parallel(map) {
         map.edges
             .iter()
             .map(|e| refine_edge(&ctx, face_fill, e, false))

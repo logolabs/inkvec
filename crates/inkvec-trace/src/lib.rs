@@ -1106,19 +1106,23 @@ pub(crate) fn finish_color_trace_alpha(
     // PLDI 2013, 519–530, <https://doi.org/10.1145/2491956.2462176>: independent pipeline
     // stages scheduled to run concurrently. Here the schedule is written by hand for one
     // pair of stages, not derived by a compiler.
-    let (sym, refined) = rayon::join(
-        || symmetry::detect(&map, &labels, &face_color),
-        || {
-            planar::measure_subpixel(
-                &map,
-                rgb,
-                &face_model,
-                sigma_noise,
-                opts.simplify_faint,
-                alpha_pair,
-            )
-        },
-    );
+    let measure = || {
+        planar::measure_subpixel(
+            &map,
+            rgb,
+            &face_model,
+            sigma_noise,
+            opts.simplify_faint,
+            alpha_pair,
+        )
+    };
+    // A small map is refined on this thread, after detection, as before: handing it to the
+    // pool costs more than it saves (see `planar::refine_in_parallel`).
+    let (sym, refined) = if planar::refine_in_parallel(&map) {
+        rayon::join(|| symmetry::detect(&map, &labels, &face_color), measure)
+    } else {
+        (symmetry::detect(&map, &labels, &face_color), measure())
+    };
     refined.apply(&mut map);
     sw.mark("refine_subpix");
     progress::begin("refine_junc");

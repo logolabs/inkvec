@@ -969,7 +969,7 @@ mod tests {
     }
 
     #[test]
-    fn there_are_twenty_three_controls_in_four_groups() {
+    fn there_are_twenty_four_controls_in_four_groups() {
         assert_eq!(CONTROLS.len(), 24);
         let mut groups: Vec<&str> = CONTROLS.iter().map(|c| c.group).collect();
         groups.dedup();

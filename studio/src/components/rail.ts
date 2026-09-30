@@ -421,7 +421,7 @@ function presets(store: Store, act: RailActions): HTMLElement {
       remove ? "button.preset.saved" : "button.preset",
       {
         "aria-pressed": String(st.preset === id),
-        title: `${name} — ${sub}${hotkey ? ` (${mod}+${hotkey})` : ""}`,
+        title: `${name} — ${sub}${hotkey !== null ? ` (${mod}+${hotkey})` : ""}`,
         onclick: () => act.setPreset(id),
       },
       h("span.name", null, name),
@@ -469,7 +469,8 @@ function presets(store: Store, act: RailActions): HTMLElement {
     h(
       "div.presets",
       { role: "group", "aria-label": "Presets" },
-      ...list.map((p, i) => chip(p.id, p.name, p.subtitle, i < 9 ? i + 1 : null, null)),
+      // Ctrl+1 to Ctrl+9, then Ctrl+0 for the tenth, as the shortcut handler reads them.
+      ...list.map((p, i) => chip(p.id, p.name, p.subtitle, i < 10 ? (i + 1) % 10 : null, null)),
       ...saved.map((p) => chip(p.id, p.name, "Saved preset", null, () => act.deletePreset(p.id))),
     ),
     h(

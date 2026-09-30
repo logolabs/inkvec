@@ -630,9 +630,9 @@ fn dominant_color_axis(s: &Samples, idx: &[usize], mean: [f64; 3]) -> Option<[f6
 }
 
 /// Residual of the best *two* flat colours for these samples, on the same scale as
-/// [`chi2`]. This is not a model the emitter can write, and it is not meant to be: it
-/// exists only to answer a question about the alternative, which is whether the
-/// variation in a region is a ramp or a step (see [`BIMODAL_MARGIN`]).
+/// [`Predictions::chi2`]. This is not a model the emitter can write, and it is not meant
+/// to be: it exists only to answer a question about the alternative, which is whether
+/// the variation in a region is a ramp or a step (see [`BIMODAL_MARGIN`]).
 ///
 /// The method is one-dimensional k-means with k = 2 (Lloyd's iteration) along the
 /// samples' dominant colour axis ([`dominant_color_axis`]): project each sRGB colour to
@@ -764,7 +764,7 @@ fn ramp_models(s: &Samples, w: usize, space: Interp) -> (Interp, Vec<[f64; 3]>, 
 /// Every admissible candidate for the samples, flat first.
 ///
 /// The model-selection core. Each candidate is scored `cost = 0.5·chi² + λ·params`
-/// ([`chi2`], [`FillModel::params`]); `sigma` is the per-channel noise in sRGB (floored
+/// ([`Predictions::chi2`], [`FillModel::params`]); `sigma` is the per-channel noise in sRGB (floored
 /// at 0.5/255 when not positive) and `lambda` the price of one editable number. The
 /// steps, in order:
 ///

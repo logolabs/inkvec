@@ -24,6 +24,18 @@
 use inkvec_trace::Rgba;
 
 /// Exact box average by an integer factor. Alpha rides along with the colour.
+///
+/// Output pixel `(x, y)` is the plain mean of the `k x k` input block whose top-left
+/// corner is `(k·x, k·y)`, for `k = factor`:
+///
+/// ```text
+/// out(x, y) = (1 / k²) Σ_{dx, dy ∈ 0..k} in(k·x + dx, k·y + dy)
+/// ```
+///
+/// All four channels are averaged as stored (straight alpha, not premultiplied), which is
+/// what the reference Python pre-pass does. The output is `floor(w / k) x floor(h / k)`:
+/// rows and columns that do not fill a whole block are dropped, which never happens for an
+/// upscaler's output since its size is a multiple of `k`. Panics when `factor` is 0.
 pub fn box_downsample(img: &Rgba, factor: usize) -> Rgba {
     assert!(factor >= 1, "factor must be positive");
     if factor == 1 {
@@ -59,6 +71,24 @@ pub fn box_downsample(img: &Rgba, factor: usize) -> Rgba {
 /// Bicubic resample to an explicit size. Catmull-Rom (a = -0.5), matching what
 /// PIL calls BICUBIC, because the recolour map is fitted against it and a
 /// different kernel would move the flat mask.
+///
+/// This is Keys' cubic convolution. The images are aligned by their outer edges: output
+/// pixel `x`, whose centre is at `x + 0.5` in continuous coordinates, maps to the input
+/// position `fx = (x + 0.5)·W/w − 0.5`, measured in input pixel indices (input pixel `i`
+/// sits at `fx = i`). Each output is the weighted sum of the 4 x 4 input pixels around
+/// `(fx, fy)` with the separable kernel
+///
+/// ```text
+/// W(t) = (a+2)|t|³ − (a+3)|t|² + 1          for |t| ≤ 1
+///      = a(|t|³ − 5|t|² + 8|t| − 4)         for 1 < |t| < 2
+///      = 0                                  otherwise,   a = −0.5
+/// ```
+///
+/// Samples outside the image are clamped to the nearest edge pixel. The sum is divided by
+/// the total weight (which is 1 up to rounding for this kernel) and clamped to `0..1`,
+/// since the kernel's negative lobes can overshoot at edges. The kernel is applied without
+/// widening when downscaling, so it is a proper resampler only for upsampling, which is
+/// the one use here.
 pub fn bicubic(img: &Rgba, w: usize, h: usize) -> Rgba {
     fn weight(t: f32) -> f32 {
         const A: f32 = -0.5;
@@ -118,6 +148,11 @@ pub fn bicubic(img: &Rgba, w: usize, h: usize) -> Rgba {
 
 /// True where the 3x3 neighbourhood of the luma spans less than `tol`. Border
 /// pixels are never flat: they have no full neighbourhood to be judged on.
+///
+/// "Luma" here is the plain mean `(R + G + B) / 3` of the stored channels, not a
+/// perceptual weighting, and alpha is ignored; `tol` is in the same `0..1` units. The
+/// mask is row-major, one entry per pixel, and all `false` for images narrower or shorter
+/// than 3 pixels.
 pub fn flat_mask(img: &Rgba, tol: f32) -> Vec<bool> {
     let (w, h) = (img.width, img.height);
     let luma: Vec<f32> = (0..w * h)
@@ -152,6 +187,22 @@ pub fn flat_mask(img: &Rgba, tol: f32) -> Vec<bool> {
 /// upsample of the same input, over the pixels the bicubic image says are flat.
 /// Uses nothing but the input, so it is available at inference; the artist's
 /// file is never consulted.
+///
+/// For each colour channel this is ordinary least squares for `y ≈ a·x + b`, where `x` is
+/// the upscaled value and `y` the bicubic value at the same pixel, over the flat pixels
+/// `M`. The closed form from the normal equations, with `n = |M|`, is
+///
+/// ```text
+/// a = (n Σxy − Σx Σy) / (n Σx² − (Σx)²),    b = (Σy − a Σx) / n
+/// ```
+///
+/// and every pixel of `hi` is then replaced by `clamp(a·x + b, 0, 1)`. Alpha is left
+/// alone. The flat mask is the bicubic image's with a 3-level tolerance; when under 1% of
+/// the pixels qualify, every pixel is used instead. A channel is left untouched when fewer
+/// than 16 pixels are fitted or the denominator is near zero (the upscaled channel is
+/// constant, so it carries no slope).
+///
+/// `hi` must be the size the bicubic is taken to; `src` is the source it was upscaled from.
 pub fn match_flats(hi: &mut Rgba, src: &Rgba) {
     const TOL: f32 = 3.0 / 255.0;
     let bi = bicubic(src, hi.width, hi.height);
@@ -196,7 +247,8 @@ pub fn match_flats(hi: &mut Rgba, src: &Rgba) {
     }
 }
 
-/// Composite onto white, dropping alpha.
+/// Composite onto white, dropping alpha: `c' = c·α + (1 − α)` per channel, on the stored
+/// sRGB values (the blend is done in gamma-encoded space, as a browser composites).
 pub fn on_white(img: &Rgba) -> Vec<[f32; 3]> {
     (0..img.width * img.height)
         .map(|i| {
@@ -237,6 +289,76 @@ mod tests {
         assert_eq!(d.width, 2);
         assert!((d.pixel(0, 0)[0] - 1.0).abs() < 1e-6);
         assert!((d.pixel(1, 0)[0] - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn box_by_one_is_a_copy_and_a_ragged_edge_is_dropped() {
+        let img = solid(5, 3, [0.2, 0.4, 0.6, 0.8]);
+        let same = box_downsample(&img, 1);
+        assert_eq!((same.width, same.height, &same.data), (5, 3, &img.data));
+        let d = box_downsample(&img, 2);
+        assert_eq!(
+            (d.width, d.height),
+            (2, 1),
+            "the fifth column and third row are dropped"
+        );
+        assert!(d
+            .data
+            .iter()
+            .zip([0.2, 0.4, 0.6, 0.8])
+            .all(|(a, b)| (a - b).abs() < 1e-6));
+    }
+
+    #[test]
+    fn bicubic_interpolates_a_ramp_and_clamps_overshoot() {
+        // A horizontal ramp 0, 1/3, 2/3, 1 upsampled x2: interior samples fall between
+        // their neighbours, and the step at the edge cannot overshoot 0..1.
+        let mut img = solid(4, 1, [0.0, 0.0, 0.0, 1.0]);
+        for x in 0..4 {
+            img.data[x * 4] = x as f32 / 3.0;
+        }
+        let up = bicubic(&img, 8, 2);
+        assert_eq!((up.width, up.height), (8, 2));
+        let row: Vec<f32> = (0..8).map(|x| up.pixel(x, 0)[0]).collect();
+        assert!(
+            row.windows(2).all(|w| w[1] >= w[0] - 1e-6),
+            "monotone: {row:?}"
+        );
+        assert!(row.iter().all(|v| (0.0..=1.0).contains(v)));
+        let mut step = solid(4, 1, [0.0, 0.0, 0.0, 1.0]);
+        step.data[8] = 1.0;
+        step.data[12] = 1.0;
+        let up = bicubic(&step, 16, 1);
+        assert!(up.data.iter().all(|v| (0.0..=1.0).contains(v)), "clamped");
+    }
+
+    #[test]
+    fn a_tiny_image_has_no_flat_pixels() {
+        let img = solid(2, 5, [0.5, 0.5, 0.5, 1.0]);
+        assert!(flat_mask(&img, 1.0).iter().all(|&m| !m));
+    }
+
+    #[test]
+    fn recolour_leaves_a_constant_channel_alone() {
+        // An upscale whose channels are constant has no slope to fit; it must survive
+        // unchanged rather than divide by zero.
+        let src = solid(8, 8, [0.25, 0.25, 0.25, 1.0]);
+        let mut hi = solid(16, 16, [0.5, 0.5, 0.5, 1.0]);
+        match_flats(&mut hi, &src);
+        assert!(hi.data.iter().all(|v| v.is_finite()));
+        assert_eq!(hi.pixel(5, 5), [0.5, 0.5, 0.5, 1.0]);
+    }
+
+    #[test]
+    fn on_white_blends_by_alpha() {
+        let img = Rgba {
+            width: 2,
+            height: 1,
+            data: vec![0.0, 0.5, 1.0, 1.0, 0.0, 0.0, 0.0, 0.25],
+        };
+        let c = on_white(&img);
+        assert_eq!(c[0], [0.0, 0.5, 1.0]);
+        assert_eq!(c[1], [0.75, 0.75, 0.75]);
     }
 
     #[test]

@@ -140,6 +140,9 @@ pub fn run_command(
     Ok(())
 }
 
+/// Write `img` to `path` as an 8-bit straight-alpha PNG, each channel clamped to `0..1` and
+/// rounded to the nearest level. Fails if the data length does not match the dimensions or
+/// the file cannot be written.
 fn write_png(img: &Rgba, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let buf: Vec<u8> = img
         .data
@@ -157,6 +160,9 @@ impl Upscaler for External {
         self.scale
     }
 
+    /// Round-trip through the file system: write `img` as `in.png` in a fresh [`RunDir`], run
+    /// the command, read `out.png` back, and check it is exactly `scale` times the input in
+    /// each dimension. The run directory is removed on every way out.
     fn upscale(&self, img: &Rgba) -> Result<Rgba, Box<dyn std::error::Error>> {
         let dir = RunDir::new("inkvec-sr")?;
         let src = dir.path().join("in.png");
@@ -185,5 +191,92 @@ impl Upscaler for External {
 
     fn describe(&self) -> String {
         format!("external x{} via `{}`", self.scale, self.program)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A program name no system has on its path.
+    const MISSING: &str = "inkvec-sr-test-no-such-program";
+
+    #[test]
+    fn the_python_command_asks_for_the_raster_at_the_given_scale() {
+        let e = External::python(Path::new("tools"), 4);
+        assert_eq!(e.scale, 4);
+        assert_eq!(e.work_dir.as_deref(), Some(Path::new("tools")));
+        assert_eq!(e.args[..2], ["-m", "inkvec_sr"]);
+        assert!(e.args.contains(&"{in}".to_string()) && e.args.contains(&"{out}".to_string()));
+        assert!(e.args.contains(&"--png-only".to_string()));
+        assert_eq!(e.args.last().map(String::as_str), Some("4"));
+        assert!(e.describe().starts_with("external x4 via"));
+    }
+
+    #[test]
+    fn a_run_dir_is_fresh_and_removed_on_drop() {
+        let a = RunDir::new("inkvec-sr-test").expect("temp dir");
+        let b = RunDir::new("inkvec-sr-test").expect("temp dir");
+        assert_ne!(a.path(), b.path(), "two runs never share a directory");
+        assert!(a.path().is_dir());
+        let kept = a.path().to_path_buf();
+        drop(a);
+        assert!(!kept.exists(), "dropping the run removes its files");
+    }
+
+    #[test]
+    fn a_program_that_cannot_start_is_reported_by_name() {
+        let dir = RunDir::new("inkvec-sr-test").expect("temp dir");
+        let (src, dst) = (dir.path().join("in.png"), dir.path().join("out.png"));
+        let err = run_command("upscaler", MISSING, &[], None, &src, &dst)
+            .expect_err("the program does not exist");
+        let msg = err.to_string();
+        assert!(msg.contains("could not run the external upscaler") && msg.contains(MISSING));
+    }
+
+    #[test]
+    fn upscale_fails_cleanly_when_the_command_is_missing() {
+        let e = External {
+            program: MISSING.to_string(),
+            args: vec!["{in}".into(), "{out}".into()],
+            scale: 2,
+            work_dir: None,
+        };
+        let img = Rgba {
+            width: 2,
+            height: 2,
+            data: vec![0.5; 16],
+        };
+        assert!(e.upscale(&img).is_err());
+    }
+
+    #[test]
+    fn a_png_round_trips_through_the_file_the_command_is_handed() {
+        let dir = RunDir::new("inkvec-sr-test").expect("temp dir");
+        let path = dir.path().join("in.png");
+        // Out-of-range values are clamped before quantising.
+        let img = Rgba {
+            width: 2,
+            height: 1,
+            data: vec![0.0, 1.0, 1.5, 1.0, -0.5, 0.5, 128.0 / 255.0, 0.25],
+        };
+        write_png(&img, &path).expect("writes");
+        let back = inkvec_trace::load_image(&path).expect("reads");
+        assert_eq!((back.width, back.height), (2, 1));
+        let bytes: Vec<u8> = back
+            .data
+            .iter()
+            .map(|v| (v * 255.0).round() as u8)
+            .collect();
+        assert_eq!(bytes, [0, 255, 255, 255, 0, 128, 128, 64]);
+        let short = Rgba {
+            width: 4,
+            height: 4,
+            data: vec![0.0; 4],
+        };
+        assert!(
+            write_png(&short, &path).is_err(),
+            "a short buffer is an error"
+        );
     }
 }

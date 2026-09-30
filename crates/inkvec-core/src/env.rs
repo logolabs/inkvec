@@ -66,6 +66,8 @@ pub fn count(name: &'static str) -> Option<usize> {
     raw(name)?.to_str()?.trim().parse().ok()
 }
 
+/// The rule behind [`flag`] and [`switch`], separated from the cached read so it can be
+/// tested: unset or empty keeps `default`, `"0"` is off, anything else is on.
 fn parse_switch(v: Option<&OsStr>, default: bool) -> bool {
     match v {
         None => default,
@@ -74,6 +76,8 @@ fn parse_switch(v: Option<&OsStr>, default: bool) -> bool {
     }
 }
 
+/// The rule behind [`number`]: surrounding whitespace is ignored, and a value that does not
+/// parse as `f64` or parses to infinity or NaN reads as unset.
 fn parse_number(v: Option<&OsStr>) -> Option<f64> {
     v?.to_str()?
         .trim()

@@ -16,6 +16,13 @@ use crate::Point;
 
 /// Sign of the orientation determinant of `(a, b, c)`.
 ///
+/// The determinant is the 2D cross product `(b − a) × (c − a) = (b.x − a.x)(c.y − a.y) −
+/// (b.y − a.y)(c.x − a.x)`, twice the signed area of the triangle. The magnitude returned
+/// is only approximate; the sign is exact.
+///
+/// "Counter-clockwise" is in the mathematical convention (`y` up). In image coordinates,
+/// where `y` points down, a positive result appears clockwise on screen.
+///
 /// Returns `> 0` for counter-clockwise, `< 0` for clockwise, and **exactly** `0` for
 /// collinear. The zero case is the one that matters: an epsilon test can report three
 /// points as collinear when they are not, and the resulting topology is inconsistent
@@ -58,6 +65,12 @@ pub fn incircle(a: Point, b: Point, c: Point, d: Point) -> f64 {
 /// Exact, including all the degenerate cases that epsilon tests get wrong: shared
 /// endpoints, collinear overlap, and a vertex lying exactly on the interior of the
 /// other segment. Used to certify that no fitted face self-intersects.
+///
+/// This is the standard straddle test: the segments cross properly when `p1` and `p2`
+/// lie strictly on opposite sides of line `q1q2` *and* `q1`, `q2` strictly on opposite
+/// sides of line `p1p2`. Otherwise they can only meet if some endpoint is exactly
+/// collinear with the other segment and lies within its bounding box. A zero-length
+/// segment is handled by the same rules (it is a point, tested for lying on the other).
 pub fn segments_intersect(p1: Point, p2: Point, q1: Point, q2: Point) -> bool {
     let d1 = orient2d(q1, q2, p1);
     let d2 = orient2d(q1, q2, p2);

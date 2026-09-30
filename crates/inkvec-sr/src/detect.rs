@@ -57,6 +57,11 @@ impl std::error::Error for RenderError {}
 
 /// Rasterise an SVG to `w` x `h`, premultiplied alpha undone, in [0, 1].
 ///
+/// The SVG's own size is stretched to `w` x `h` independently in each axis, so the caller
+/// passes the dimensions of the raster the SVG was traced from. A pixel with zero alpha
+/// comes back as transparent black. Fails when the text does not parse or a `0` dimension
+/// makes the pixmap impossible.
+///
 /// resvg deliberately, and not by accident of what was available: it is the same
 /// renderer the benchmark harness scores with, so a residual measured here and a
 /// score measured there cannot disagree about what the SVG looks like.
@@ -104,8 +109,17 @@ pub fn render_svg(svg: &str, w: usize, h: usize) -> Result<Rgba, RenderError> {
 /// clean icon across the threshold -- which is exactly what it did when this was
 /// first written the "right" way.
 ///
-/// Returns `None` when the trace has too little flat area to judge on -- the
-/// caller should treat that as "cannot tell" rather than as "clean".
+/// Written out, with `a_i` and `b_i` the input and model composited on white (sRGB,
+/// `0..1`), and `M` the model's flat pixels ([`clean::flat_mask`] with a 1.5-level
+/// tolerance on the composited model):
+///
+/// ```text
+/// r = sqrt( Σ_{i ∈ M} Σ_{c ∈ R,G,B} (255 · (b_ic − a_ic))² / (9 · |M|) )
+/// ```
+///
+/// Returns `None` when the trace has too little flat area to judge on (fewer than 100
+/// flat pixels) or when the two images differ in size -- the caller should treat that as
+/// "cannot tell" rather than as "clean".
 pub fn interior_residual(input: &Rgba, model: &Rgba) -> Option<f64> {
     if input.width != model.width || input.height != model.height {
         return None;
@@ -169,6 +183,38 @@ mod tests {
         let r = interior_residual(&a, &b).unwrap();
         let want = 4.0 / 3.0f64.sqrt();
         assert!((r - want).abs() < 0.05, "expected ~{want:.3}, got {r}");
+    }
+
+    #[test]
+    fn images_of_different_sizes_or_without_flat_area_cannot_be_judged() {
+        assert!(interior_residual(&solid(32, 32, 0.5), &solid(32, 16, 0.5)).is_none());
+        // 9 x 9 has 49 interior pixels, under the 100 the residual insists on.
+        assert!(interior_residual(&solid(9, 9, 0.5), &solid(9, 9, 0.9)).is_none());
+        // 12 x 12 has 100, just enough.
+        assert!(interior_residual(&solid(12, 12, 0.5), &solid(12, 12, 0.9)).is_some());
+    }
+
+    #[test]
+    fn transparent_input_agrees_with_an_svg_that_draws_nothing_there() {
+        // Colour under alpha 0 is arbitrary; both sides composite to white.
+        let clear = Rgba {
+            width: 16,
+            height: 16,
+            data: (0..256).flat_map(|_| [0.3, 0.1, 0.9, 0.0]).collect(),
+        };
+        let nothing = solid(16, 16, 1.0);
+        assert!(interior_residual(&clear, &nothing).unwrap() < 1e-9);
+    }
+
+    #[test]
+    fn a_broken_svg_is_a_parse_error_and_a_zero_size_is_an_allocation_error() {
+        let err = render_svg("<svg", 8, 8).expect_err("unterminated");
+        assert!(matches!(err, RenderError::Parse(_)));
+        assert!(err.to_string().starts_with("could not parse"));
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"/>"#;
+        let err = render_svg(svg, 0, 8).expect_err("no pixels");
+        assert!(matches!(err, RenderError::Alloc));
+        assert!(err.to_string().contains("allocate"));
     }
 
     #[test]

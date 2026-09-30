@@ -41,6 +41,7 @@ export interface Picked {
   file: File | null;
 }
 
+/** A file-type filter for a dialog: a name and the extensions it accepts, without dots. */
 export interface Filter {
   name: string;
   extensions: string[];
@@ -158,6 +159,7 @@ export async function saveFiles(
 /** Show a written file in the system's file manager. A browser cannot; the caller hides it. */
 export const CAN_REVEAL = !WEB;
 
+/** Show `path` selected in the system's file manager; does nothing in a browser. */
 export function reveal(path: string): void {
   if (!WEB) void revealItemInDir(path);
 }

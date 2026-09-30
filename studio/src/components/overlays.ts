@@ -145,6 +145,12 @@ function watch(): void {
   watchdog = window.requestAnimationFrame(watch);
 }
 
+/**
+ * Give `el` a tooltip of `text`: shown 350 ms into a hover, or at once on keyboard focus
+ * (not on focus from a click), above `el` or below it when there is no room, kept inside the
+ * window. It goes when the pointer or focus leaves, on a press, or on Escape. Returns `el`,
+ * so a label can be wrapped where it is built.
+ */
 export function tip(el: HTMLElement, text: string): HTMLElement {
   let timer = 0;
 

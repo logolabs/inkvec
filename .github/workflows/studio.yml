@@ -38,9 +38,9 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # The fast half: types, lint, the backend's own tests, and the assets. Runs on Linux
-  # only because none of it is platform-dependent, and it fails long before the slow
-  # matrix would.
+  # The fast half: types, the frontend's unit tests, lint, the backend's own tests, and
+  # the assets. Runs on Linux only because none of it is platform-dependent, and it fails
+  # long before the slow matrix would.
   check:
     name: check
     runs-on: ubuntu-latest
@@ -74,6 +74,12 @@ jobs:
       - name: Frontend types and bundle
         working-directory: studio
         run: npm run build
+
+      # The interface's own logic (the trace loop's races, presets, remembered choices,
+      # suggestions, path parsing): Vitest in Node, with happy-dom for the few DOM calls.
+      - name: Frontend unit tests
+        working-directory: studio
+        run: npm test
 
       # The app declares the `inkvec` command as an external binary, so it has to exist
       # before any cargo command in `src-tauri` — the build script checks for it.

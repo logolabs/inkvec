@@ -23,6 +23,7 @@ import { windowControls } from "../components/wincontrols";
 import { openHelp } from "../components/help";
 import { showcaseScreen } from "./showcase";
 
+/** What the full-window screens ask the app to do. */
 export interface ScreenActions {
   applyPrefs(patch: Partial<Prefs>): void;
   /** The preferences were reset: put the theme and the interface back to what they say. */
@@ -30,6 +31,10 @@ export interface ScreenActions {
   close(): void;
 }
 
+/**
+ * The full-window screens over the tabs (Settings, About, Showcase), shown while
+ * `State.screen` names one and hidden otherwise.
+ */
 export function createScreens(store: Store, act: ScreenActions): HTMLElement {
   const host = h("div");
 
@@ -46,7 +51,7 @@ export function createScreens(store: Store, act: ScreenActions): HTMLElement {
       st.screen === "settings"
         ? settings(store, act)
         : st.screen === "showcase"
-          ? showcaseScreen(store, act.close)
+          ? showcaseScreen(act.close)
           : about(store, act),
     );
   };

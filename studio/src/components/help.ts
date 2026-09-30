@@ -139,6 +139,7 @@ export function openHelp(page = "index.html"): void {
   (document.getElementById("app") ?? document.body).append(screen);
 }
 
+/** Close the guide, if it is open, and give the app its keyboard back. */
 export function closeHelp(): void {
   window.removeEventListener("keydown", guard, true);
   screen?.remove();

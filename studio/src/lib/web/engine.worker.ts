@@ -98,6 +98,11 @@ function withProgress(res: Response, known: number | undefined): Response {
   return new Response(counted, { status: res.status, headers: { "content-type": "application/wasm" } });
 }
 
+/**
+ * Load the engine: the threaded WebAssembly build when the page is cross-origin isolated
+ * (shared memory is allowed), the single-threaded one otherwise. The module's bytes are
+ * fetched alongside its JavaScript and counted as they arrive, for the loading screen.
+ */
 async function init(m: Init): Promise<void> {
   const isolated = typeof crossOriginIsolated !== "undefined" && crossOriginIsolated;
   const dir = isolated ? "pkg-threads" : "pkg";
@@ -173,10 +178,17 @@ function installDenoiseBridge(port: MessagePort): void {
   };
 }
 
+/**
+ * Whether `generation` is still the trace the page wants, read from the generation counter
+ * the page shares with this worker. The engine asks once the drawing is done: a drawing the
+ * page has moved past is kept in the cache but not measured (`trace` in `wasm/src/lib.rs`).
+ * Without shared memory the answer is always yes.
+ */
 function isCurrent(generation: number): boolean {
   return generations ? Atomics.load(generations, 0) === generation : true;
 }
 
+/** Run one queued command on the loaded engine and return its reply, parsed from the engine's JSON. */
 function run(job: Job): unknown {
   const s = studio;
   if (!s) throw new Error("the engine is not loaded");

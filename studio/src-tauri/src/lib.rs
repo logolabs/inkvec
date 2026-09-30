@@ -370,6 +370,8 @@ fn list_samples(app: AppHandle) -> Vec<SampleInfo> {
         .collect()
 }
 
+/// Where the bundled sample `name` is on disk, among the app's resources. Only a bare file
+/// name is accepted, so a request cannot reach outside the samples folder.
 fn sample_path(app: &AppHandle, name: &str) -> Result<PathBuf, String> {
     // Only a bare file name: a sample is one of the four the app ships, never a path.
     if !api::is_bare_name(name) {
@@ -383,6 +385,8 @@ fn sample_path(app: &AppHandle, name: &str) -> Result<PathBuf, String> {
         .map_err(|e| format!("cannot find the bundled samples: {e}"))
 }
 
+/// Make `source` the open image: stop whatever was tracing the last one, drop its drawing,
+/// and describe the new one for the interface.
 fn adopt(source: trace::Source, state: &State<'_, AppState>) -> Result<SourceInfo, String> {
     let info = api::source_info(&source)?;
     *state.source.lock().map_err(lock)? = Some(Arc::new(source));
@@ -553,6 +557,8 @@ struct Ticker {
 const TICK: Duration = Duration::from_millis(50);
 
 impl Ticker {
+    /// Start the thread that sends `generation`'s progress, read from `live`, every [`TICK`]
+    /// while that generation is still the current one.
     fn start(app: AppHandle, generation: u64, live: Arc<progress::Progress>) -> Self {
         let (stop, stopped) = std::sync::mpsc::channel::<bool>();
         let thread = std::thread::Builder::new()

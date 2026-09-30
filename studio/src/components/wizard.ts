@@ -21,13 +21,15 @@ import { previewKey, type Previews } from "../lib/previews";
 import { changedControls, describeAuto, looksDamaged, NOISY_LEVELS } from "../lib/suggest";
 import { autoChose, suggestionsOf, type AutoChoseActions } from "./autochose";
 import { paletteCard, wirePaletteHover } from "./palette";
-import { controlRow, type RailActions } from "./rail";
+import { controlRow } from "./controlrow";
+import type { RailActions } from "./rail";
 import { toast } from "./overlays";
 import { fetchBar, fetchLine, sentence } from "./denoiserfetch";
 import { WEB } from "../lib/platform";
 
 const DOCS = "https://logolabs.github.io/inkvec/";
 
+/** What the chooser and the wizard ask the app to do: the rail's actions and a few of their own. */
 export interface WizardActions extends RailActions, AutoChoseActions {
   /** Put the controls and colour groups back to a snapshot; a new trace follows. */
   restore(snapshot: Snapshot): void;
@@ -264,6 +266,12 @@ export interface Wizard {
   isOpen(): boolean;
 }
 
+/**
+ * The Custom wizard, as a sheet over `host` (the rail): the main choices one step at a time,
+ * each with preview traces of the choices beside Auto's result (`previews`). Every choice is
+ * an ordinary setting change through `act`, so closing the wizard keeps what was chosen; the
+ * controls as they were when it opened are kept too, for its "Undo my changes".
+ */
 export function createWizard(store: Store, host: HTMLElement, act: WizardActions, previews: Previews): Wizard {
   let sheet: HTMLElement | null = null;
   let stops: (() => void)[] = [];

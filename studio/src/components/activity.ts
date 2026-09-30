@@ -14,6 +14,10 @@ import type { Store } from "../lib/state";
 /** The most lines drawn at once; the log keeps more, the newest are what matter. */
 const SHOWN = 160;
 
+/**
+ * The activity log's panel, built once: a header that folds it open or shut and the lines of
+ * the trace in flight (or the last one), redrawn from `State.traceLog` as it changes.
+ */
 export function createActivity(store: Store): HTMLElement {
   const el = h("aside.activity", { "aria-label": "Engine activity", "aria-live": "off" });
   const head = h("button.activityhead", {

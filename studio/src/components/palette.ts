@@ -37,6 +37,7 @@ import {
 } from "../lib/colour";
 import { closeOverlay, modal, openModal, openPopover, toast } from "./overlays";
 
+/** What the palette card asks the app to do: snap inks and change the colour groups. */
 export interface PaletteActions {
   /** Snap inks, each named by the colour it was traced as, in one rewrite of the drawing. */
   snap(snaps: Snap[]): void;

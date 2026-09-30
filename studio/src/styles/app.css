@@ -955,7 +955,7 @@ kbd {
 }
 
 /* Forgetting a saved preset. The cross appears on hover and on keyboard focus rather
-   than sitting on every tile: seven of the nine tiles cannot be deleted at all, and a
+   than sitting on every tile: the built-in tiles cannot be deleted at all, and a
    permanent row of crosses would suggest otherwise. */
 .preset {
   position: relative;

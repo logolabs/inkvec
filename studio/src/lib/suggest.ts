@@ -12,6 +12,7 @@
 import { lab, parseHex } from "./colour";
 import type { Capabilities, Ink, Loss, PresetId, Report, Settings, SourceFacts, SourceInfo } from "./ipc";
 
+/** One suggestion: what was noticed, the evidence, and the preset that would suit it. */
 export interface AutoSuggestion {
   id: "photo" | "bw" | "lineart" | "icon";
   preset: PresetId;
@@ -33,6 +34,7 @@ export const NOISY_LEVELS = 2.5;
 /** A small image, on its longer side: where Icon's one-pixel speckle floor matters. */
 const ICON_PX = 256;
 
+/** What the suggestions are read from: the automatic trace's results and the image's facts. */
 export interface SuggestInput {
   source: SourceInfo | null;
   report: Report | null;

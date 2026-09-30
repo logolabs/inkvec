@@ -19,6 +19,11 @@ const ROW_HEIGHT = 30;
 /** Rows drawn above and below the visible window, so a fast scroll does not flash. */
 const OVERSCAN = 8;
 
+/**
+ * The Batch tab (desktop only): pick a folder and a preset, trace every image in it into a
+ * folder of SVGs, and watch the rows land. The table is virtualised, drawing only the rows
+ * in view plus `OVERSCAN`, because a folder can hold thousands of files.
+ */
 export function createBatch(store: Store): HTMLElement {
   const bar = h("div.batchbar");
   const head = h("div.batchhead.eyebrow");

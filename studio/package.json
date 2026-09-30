@@ -10,6 +10,7 @@
     "mock": "vite --open /dev/index.html",
     "build": "tsc --noEmit && vite build",
     "build:web": "node scripts/build-web.mjs",
+    "test": "vitest run",
     "dev:web": "vite --mode web",
     "serve:web": "python web/serve.py",
     "preview": "vite preview",
@@ -24,7 +25,9 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.9.0",
+    "happy-dom": "^20.14.5",
     "typescript": "^5.9.2",
-    "vite": "^6.3.5"
+    "vite": "^6.3.5",
+    "vitest": "^5.0.2"
   }
 }

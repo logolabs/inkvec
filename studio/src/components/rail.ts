@@ -10,16 +10,19 @@
  * Export, which stays reachable at every window width.
  */
 
-import { fill, h, icon, s } from "../lib/dom";
-import { appliesTo, bytes, count, de00, modKey, percent, plannedTracePx, seconds, type Store } from "../lib/state";
-import type { Control, Loss, Report, Settings, Stage } from "../lib/ipc";
+import { fill, h, icon } from "../lib/dom";
+import { appliesTo, bytes, count, de00, modKey, seconds, type Store } from "../lib/state";
+import type { Report, Settings } from "../lib/ipc";
 import { WEB } from "../lib/platform";
-import { closeOverlay, modal, openModal, tip, toast } from "./overlays";
+import { closeOverlay, modal, openModal, tip } from "./overlays";
 import { paletteCard, wirePaletteHover, type PaletteActions } from "./palette";
 import { autoChose, hasAutoNews, type AutoChoseActions } from "./autochose";
 import { fetchBar, fetchLine, sentence } from "./denoiserfetch";
-import { elapsedText, runningLabel, stepText } from "../lib/live";
+import { controlRow } from "./controlrow";
+import { benchmarkNote, emptyResult, lostCard, reportCard, stageCard, structureCard } from "./report";
+import { elapsedText, runningLabel } from "../lib/live";
 
+/** Everything the rail's controls ask the app to do; `main.ts` provides them. */
 export interface RailActions extends PaletteActions, AutoChoseActions {
   setPreset(id: string): void;
   savePreset(name: string): void;
@@ -51,9 +54,11 @@ export interface RailActions extends PaletteActions, AutoChoseActions {
  */
 export const PROMOTED: ReadonlySet<string> = new Set(["mode", "cleanUpDamage", "editability"]);
 
-/** What hand-drawn files do, from the 1,544 artist-drawn SVGs in the evaluation corpus. */
-const ARTIST = { axisHandles: 0.34, smoothJoins: 0.89, alignedNodes: 0.86 } as const;
-
+/**
+ * The rail, built once: the Result/Tune tab strip, the engine, denoiser and editability
+ * block, the scrolling half that is showing, and the pinned foot. Each part subscribes to the
+ * keys it reads and is rebuilt only when one of those changes.
+ */
 export function createRail(store: Store, act: RailActions): HTMLElement {
   const tabs = h("div.railtabs");
   const modes = h("div.railmodes");
@@ -384,6 +389,7 @@ function qualityOnlyLine(store: Store, act: RailActions): HTMLElement | null {
   );
 }
 
+/** The Tune half: the way into the wizard, the Fast note, the presets, and the control groups. */
 function tunePane(store: Store, act: RailActions): (HTMLElement | null)[] {
   return [guideLine(store, act), qualityOnlyLine(store, act), presets(store, act), ...controlGroups(store, act)];
 }
@@ -565,333 +571,6 @@ function autoCard(store: Store, act: RailActions): HTMLElement | null {
   );
 }
 
-/** Before any image is open there is nothing to report, and a card of dashes says so badly. */
-function emptyResult(): HTMLElement {
-  return h(
-    "div.card.emptycard",
-    null,
-    h("span.eyebrow", null, "Quality report"),
-    h(
-      "p",
-      null,
-      "Open an image and its report lands here: the measured colour difference, what the drawing cost in coordinates, how editable it is, what could not be recovered, and its palette.",
-    ),
-    h("span.faint", null, "The controls are under Tune; they apply to whatever you open next."),
-  );
-}
-
-/** The one line that puts our numbers beside someone else's, kept apart from the measurements. */
-function benchmarkNote(): HTMLElement {
-  // Our published 21-case average, labelled as such. It must never read as a
-  // measurement of the user's own file, because we did not run VTracer on it.
-  return h(
-    "div.benchmark",
-    null,
-    h("span.eyebrow.label", null, "Benchmark"),
-    h(
-      "p",
-      null,
-      "Across our published 21-case set, VTracer's defaults average 4.4× the coordinates at 10× the colour error. ",
-      h("span.dim", null, "Not a measurement of this file."),
-    ),
-  );
-}
-
-// -------------------------------------------------------------- stage list ---
-
-/**
- * The stage list, shown while a trace runs.
- *
- * Every row is a stage the engine has actually finished, with the time it took. It
- * expands automatically once a trace passes three seconds, which is the point at which a
- * single status line stops being enough information.
- */
-function stageCard(store: Store): HTMLElement {
-  const st = store.state;
-  const all = st.caps?.stages ?? [];
-  const done = new Map(st.liveStages.map((x: Stage) => [x.name, x.ms]));
-  const now = st.liveNow;
-
-  return h(
-    "div.card",
-    null,
-    h(
-      "div.cardhead",
-      null,
-      h("span", { style: { fontSize: "12px", fontWeight: "500" } }, `Tracing at ${plannedTracePx(st, st.tracingTier) ?? "—"} px`),
-      h("span.muted.num", { style: { fontSize: "11px" }, "data-live": "elapsed" }, elapsedText(st)),
-    ),
-    h("div.sweep", null, h("i")),
-    h(
-      "div.stagelist",
-      null,
-      ...all.map((name) => {
-        const ms = done.get(name);
-        // Running now: shown the moment the engine starts it, with its own clock.
-        if (now?.stage === name) {
-          return h(
-            "div.stagerow.running",
-            null,
-            h("span.mark", null, "›"),
-            h("span.name", null, name, h("span.sub", null, now.step ? stepText(now.step) : now.what)),
-            h("span.num", { "data-live": "stage" }),
-          );
-        }
-        return h(
-          `div.stagerow${ms === undefined ? "" : ".done"}`,
-          null,
-          h("span.mark", null, ms === undefined ? "·" : "✓"),
-          h("span.name", null, name),
-          h("span.muted", null, ms === undefined ? "—" : `${ms.toFixed(0)} ms`),
-        );
-      }),
-    ),
-  );
-}
-
-// ----------------------------------------------------------- quality report ---
-
-/**
- * The quality report.
- *
- * An instrument readout: monospace figures, units, restrained colour, and a scale beside
- * the headline number showing where "invisible" sits. Never a score badge — the
- * credibility is the point.
- */
-function reportCard(store: Store, act: RailActions): HTMLElement {
-  const st = store.state;
-  const r = st.report;
-  const scope = !r ? "—" : st.result?.tier === "draft" ? `draft · ${r.tracedPx} px` : `full trace · ${r.tracedPx} px`;
-
-  // The meter runs 0–5 dE00 on a square-root scale: a good trace lands near 0.1 and a
-  // linear axis would put every real result in the first two percent of the track.
-  const position = (v: number) => `${(Math.sqrt(Math.min(v, 5) / 5) * 100).toFixed(1)}%`;
-
-  return h(
-    "div.card",
-    { style: { opacity: st.tracing ? "0.45" : "1", transition: "opacity var(--d-fast)" } },
-    h("div.cardhead", null, h("span.eyebrow", null, "Quality report"), h("span.muted", { style: { fontSize: "11px" } }, scope)),
-    h(
-      "div.headline",
-      null,
-      h("span.figure", null, de00(r?.meanDe00)),
-      h(
-        "div.of",
-        null,
-        h("span.dim", { style: { fontSize: "11.5px" } }, "mean colour difference"),
-        h("span.muted.num", { style: { fontSize: "11px" } }, `median ${de00(r?.medianDe00)} · dE00`),
-      ),
-    ),
-    h(
-      "div",
-      { style: { display: "flex", flexDirection: "column", gap: "5px" } },
-      h(
-        "div.meter",
-        { role: "img", "aria-label": `Colour difference ${de00(r?.meanDe00)} of a 0 to 5 scale` },
-        h("span.threshold", { style: { left: position(1) } }),
-        r?.meanDe00 != null ? h("span.needle", { style: { left: position(r.meanDe00) } }) : null,
-      ),
-      h(
-        "div.meterscale",
-        null,
-        h("span", null, "0 invisible"),
-        h("span", null, "1.0 just visible"),
-        h("span", null, "5.0"),
-      ),
-    ),
-    h(
-      "div.stats",
-      null,
-      ...statPairs(store).map(([k, v]) => h("div", null, h("span.k", null, k), h("span.v", null, v))),
-    ),
-    r && st.worstCorner
-      ? h(
-          "button.reset",
-          { style: { textAlign: "left" }, onclick: act.jumpToWorst },
-          `Find the worst corner · ${de00(st.worstCorner.de00)} dE00 →`,
-        )
-      : null,
-  );
-}
-
-function statPairs(store: Store): [string, string][] {
-  const r = store.state.report;
-  if (!r) return [["coordinates", "—"], ["paths", "—"], ["colours found", "—"], ["segments", "—"], ["file size", "—"], ["minified", "—"]];
-  return [
-    ["coordinates", count(r.coordinates)],
-    ["paths", count(r.paths)],
-    ["colours found", count(r.colours)],
-    ["segments", count(r.segments)],
-    ["file size", bytes(r.bytes)],
-    ["minified", r.minifiedBytes === null ? "already" : bytes(r.minifiedBytes)],
-    ["traced at", `${r.tracedPx} px`],
-    ["time taken", seconds(r.seconds)],
-  ];
-}
-
-// ----------------------------------------------------------- editability ---
-
-/**
- * How editable the drawing is: the three habits of hand-drawn vector files, counted on
- * this one, each beside what artists' own files do.
- *
- * A traced file is fitted for pixels alone, so it starts near zero on all three; the
- * editable-structure control moves them, and this is where that is shown rather than
- * claimed. The reference tick is the median of 1,544 artist-drawn SVGs — measured with
- * the same function, `inkvec_svgmin::structure`, so the two are the same kind of number.
- */
-function structureCard(store: Store, act: RailActions): HTMLElement | null {
-  const st = store.state;
-  const m = st.report?.structure;
-  if (st.report && !m) return null;
-
-  const on = st.settings.editability;
-  const rows: { label: string; help: string; part: number; whole: number; artist: number }[] = m
-    ? [
-        {
-          label: "Handles on an axis",
-          help: "Curve handles that point exactly along x or y, as an artist places them with the keyboard. Counted over every cubic handle in the drawing.",
-          part: m.axisHandles,
-          whole: m.handles,
-          artist: ARTIST.axisHandles,
-        },
-        {
-          label: "Smooth joins",
-          help: "Places where two curves meet with their tangents within a degree of each other, so the outline has no kink for a hand to trip on.",
-          part: m.smoothJoins,
-          whole: m.joins,
-          artist: ARTIST.smoothJoins,
-        },
-        {
-          label: "Nodes sharing a coordinate",
-          help: "Nodes with the same x or the same y as another node, so a group of them can be selected and aligned in one move.",
-          part: m.alignedNodes,
-          whole: m.nodes,
-          artist: ARTIST.alignedNodes,
-        },
-      ]
-    : [];
-
-  // A drawing of lines and arcs has no curve handles to be on an axis and no two curves
-  // to join, and an empty bar for each would read as a failure rather than as not applying.
-  const measured = rows.filter((r) => r.whole > 0);
-  const curveless = m !== undefined && m.cubics === 0;
-
-  return h(
-    "div.card.structure",
-    { style: { opacity: st.tracing ? "0.45" : "1", transition: "opacity var(--d-fast)" } },
-    h(
-      "div.cardhead",
-      null,
-      h("span.eyebrow", null, "Editability"),
-      h(
-        "button.reset",
-        {
-          title: on
-            ? "Stop moving nodes and handles onto what an artist would draw"
-            : "Move nodes and handles onto what an artist would draw. Costs about 0.04 dE00 on icons, and the report above shows the price on this image.",
-          onclick: () => act.changeSetting("editability", !on),
-        },
-        on ? "Editable structure on · turn off" : "Make it editable",
-      ),
-    ),
-    ...measured.map((r) => {
-      const share = r.part / r.whole;
-      return h(
-        "div.srow",
-        { title: r.help },
-        h("span.k", null, r.label),
-        h("span.v", null, percent(share), h("span.of", null, `${r.part} of ${r.whole}`)),
-        h(
-          "div.sbar",
-          { role: "img", "aria-label": `${r.label}: ${percent(share)}, ${r.part} of ${r.whole}; hand-drawn files ${percent(r.artist)}` },
-          h("i", { style: { width: `${(share * 100).toFixed(1)}%` } }),
-          h("b", { style: { left: `${(r.artist * 100).toFixed(1)}%` } }),
-        ),
-      );
-    }),
-    curveless
-      ? h(
-          "span.muted",
-          { style: { fontSize: "11px", lineHeight: "1.45" } },
-          "This drawing is lines and arcs, so there are no curve handles to tidy; only its nodes can line up.",
-        )
-      : null,
-    h(
-      "span.muted",
-      { style: { fontSize: "11px", lineHeight: "1.45" } },
-      "The tick is where hand-drawn files sit (median of 1,544 artist SVGs). ",
-      on
-        ? "Nothing moves further than the trace's own tolerance."
-        : "A trace fitted for pixels alone starts near zero on all three.",
-    ),
-  );
-}
-
-// ------------------------------------------------------------ what was lost ---
-
-/**
- * "What this trace could not recover".
- *
- * Always visible, because a panel that only ever appears to deliver bad news trains people
- * to read it as an advertisement. When nothing is detected it says so, calmly.
- */
-function lostCard(store: Store): HTMLElement {
-  const st = store.state;
-  const glyphFor = (kind: string) =>
-    ({ lettering: "type", lossy: "image", strokes: "wand", ramp: "droplet", detail: "layers" })[kind] ?? "info";
-
-  return h(
-    "div.card",
-    null,
-    h("span.eyebrow", null, "What this trace could not recover"),
-    ...st.losses.map((l: Loss) => lossRow(l, glyphFor(l.kind))),
-    h(
-      "div.nothinglost",
-      null,
-      h("span.glyph", null, icon("checkCircle", 15)),
-      h("span", null, st.losses.length ? "Nothing else we can detect was lost." : "Nothing we can detect was lost."),
-    ),
-  );
-}
-
-function lossRow(l: Loss, glyph: string): HTMLElement {
-  const why = h("div.why", { hidden: true }, l.why);
-  const toggle = h(
-    "button.expand",
-    {
-      "aria-expanded": "false",
-      onclick: () => {
-        const open = why.hasAttribute("hidden");
-        why.toggleAttribute("hidden", !open);
-        toggle.setAttribute("aria-expanded", String(open));
-        toggle.textContent = open ? "Hide" : "Why";
-      },
-    },
-    "Why",
-  );
-  return h(
-    "div.loss",
-    null,
-    h("span.glyph", null, icon(glyph, 15)),
-    h(
-      "div",
-      { style: { display: "flex", flexDirection: "column", gap: "3px", minWidth: "0" } },
-      h("span.text", null, l.text),
-      h(
-        "div.meta",
-        null,
-        toggle,
-        // At most one text link, at the same weight as everything else. Never a
-        // button, never accent-filled: the moment one looks like an ad, the honesty
-        // that makes this panel work is gone.
-        l.link ? h("a", { href: l.link.href, "data-external": l.link.href.startsWith("http") ? "1" : null }, l.link.label) : null,
-      ),
-      why,
-    ),
-  );
-}
-
 // -------------------------------------------------------- control groups ---
 
 /**
@@ -941,144 +620,6 @@ function controlGroups(store: Store, act: RailActions): HTMLElement[] {
   });
 }
 
-/**
- * One row: a plain-words label, its unit, the value shown numerically, and a slider on a
- * perceptual scale with named stops rather than a bare track.
- */
-export function controlRow(store: Store, c: Control, act: Pick<RailActions, "changeSetting">, base: Settings): HTMLElement {
-  const value = store.state.settings[c.key];
-  const changed = value !== base[c.key];
-  const row = (...kids: (HTMLElement | null)[]) => h(changed ? "div.control.changed" : "div.control", null, ...kids);
-
-  if (c.kind === "switch") {
-    const sw = h("button.switch", {
-      role: "switch",
-      "aria-checked": String(Boolean(value)),
-      "aria-label": c.label,
-      "data-ctl": `${c.key}:switch`,
-      onclick: () => act.changeSetting(c.key, !value as never),
-    });
-    return row(
-      h(
-        "div.controlhead",
-        null,
-        tip(h("span.label", { tabindex: "0" }, c.label), c.help),
-        sw,
-      ),
-    );
-  }
-
-  if (c.kind === "tri") {
-    const options: [string, string][] = [["off", "Off"], ["auto", "Auto"], ["on", "On"]];
-    return row(
-      h(
-        "div.controlhead",
-        null,
-        tip(h("span.label", { tabindex: "0" }, c.label), c.help),
-        h(
-          "div.seg",
-          null,
-          ...options.map(([id, label]) =>
-            h(
-              "button",
-              {
-                "aria-pressed": String(value === id),
-                "data-ctl": `${c.key}:${id}`,
-                onclick: () => act.changeSetting(c.key, id as never),
-              },
-              label,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  if (c.kind === "choice") {
-    const options = c.stops.map((s) => [s.label.toLowerCase(), s.label]);
-    return row(
-      h(
-        "div.controlhead",
-        null,
-        tip(h("span.label", { tabindex: "0" }, c.label), c.help),
-        h(
-          "div.seg",
-          null,
-          ...options.map(([id, label]) =>
-            h(
-              "button",
-              {
-                "aria-pressed": String(value === id),
-                "data-ctl": `${c.key}:${id}`,
-                onclick: () => act.changeSetting(c.key, id as never),
-              },
-              label,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  // A power scale: precision runs 0.02–0.5 and is perceptually nowhere near linear,
-  // so the slider's position is the value raised to the control's own curve.
-  const toSlider = (v: number) => Math.pow((Number(v) - c.min) / (c.max - c.min || 1), 1 / c.curve) * 1000;
-  const fromSlider = (p: number) => c.min + Math.pow(p / 1000, c.curve) * (c.max - c.min);
-  const show = (v: number) => (c.decimals === 0 ? String(Math.round(v)) : v.toFixed(c.decimals));
-
-  const field = h("input.numberfield", {
-    type: "text",
-    value: show(Number(value)),
-    inputmode: "decimal",
-    "aria-label": `${c.label}${c.unit ? ` in ${c.unit}` : ""}`,
-    "data-ctl": `${c.key}:field`,
-    onchange: (e: Event) => {
-      const n = Number((e.target as HTMLInputElement).value);
-      if (Number.isFinite(n)) act.changeSetting(c.key, Math.min(c.max, Math.max(c.min, n)) as never);
-    },
-  }) as HTMLInputElement;
-
-  const valueAt = (el: HTMLInputElement) => {
-    const v = fromSlider(Number(el.value));
-    return c.decimals === 0 ? Math.round(v) : Number(v.toFixed(c.decimals));
-  };
-
-  // Dragging only moves the readout. A trace is Rust work and the rail rebuilds itself
-  // when a setting changes — either one on every pixel of a drag is what made the
-  // controls stutter — so the setting is committed once, when the thumb is let go. The
-  // `change` event also fires once per key press, so the arrow keys still work, and the
-  // rebuild hands focus back to the slider so the next press lands too.
-  const slider = h("input.slider", {
-    type: "range",
-    min: "0",
-    max: "1000",
-    step: "1",
-    value: String(Math.round(toSlider(Number(value)))),
-    "aria-label": c.label,
-    "aria-valuetext": `${show(Number(value))} ${c.unit}`.trim(),
-    "data-ctl": `${c.key}:slider`,
-    oninput: (e: Event) => {
-      const el = e.target as HTMLInputElement;
-      const rounded = valueAt(el);
-      field.value = show(rounded);
-      el.setAttribute("aria-valuetext", `${show(rounded)} ${c.unit}`.trim());
-    },
-    onchange: (e: Event) => act.changeSetting(c.key, valueAt(e.target as HTMLInputElement) as never),
-  });
-
-  return row(
-    h(
-      "div.controlhead",
-      null,
-      tip(h("span.label", { tabindex: "0" }, c.label), c.help),
-      c.unit ? h("span.unit", null, c.unit) : null,
-      field,
-    ),
-    slider,
-    c.stops.length ? h("div.stops", null, ...c.stops.map((x) => h("span", null, x.label))) : null,
-  );
-}
-
 // ------------------------------------------------------------------ footer ---
 
 /**
@@ -1110,6 +651,11 @@ function footer(store: Store, act: RailActions): HTMLElement[] {
   ];
 }
 
+/**
+ * The foot's readout: the running stage and its clock with Cancel while a trace runs; else
+ * the engine, the time taken, and dE00, coordinates and file size, each with its change
+ * since the previous full trace.
+ */
 function readout(store: Store, act: RailActions): HTMLElement {
   const st = store.state;
   const r = st.report;
@@ -1189,14 +735,3 @@ function change(
   const cls = d < 0 ? "better" : costWhenHigher ? "worse" : "same";
   return h(`span.delta.${cls}`, null, `${d < 0 ? "−" : "+"}${fmt(Math.abs(d))}`);
 }
-
-/** A tiny helper the export sheet and the batch bar both want. */
-export function pill(label: string, onclick: () => void, pressed?: boolean): HTMLElement {
-  return h("button.btn.compact", { "aria-pressed": pressed === undefined ? null : String(pressed), onclick }, label);
-}
-
-/** Let other modules raise a toast without importing the overlay module directly. */
-export { toast };
-
-/** Re-exported for the export sheet, which lives in its own module. */
-export { s };

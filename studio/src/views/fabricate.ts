@@ -95,6 +95,11 @@ const PRESETS: { id: string; label: string; glyph: string; note: string; apply: 
   },
 ];
 
+/**
+ * The Fabricate tab: an SVG in, sheets out for a cutter, plotter or laser (vinyl, stickers,
+ * stencils, inlays, line work), with the preflight's problems drawn over them. The engine
+ * does the geometry (`fab_prepare`); this view holds the request and draws what came back.
+ */
 export function createFabricate(store: Store): HTMLElement {
   const tools = h("div.viewertools");
   const pane = h("div.pane", null);

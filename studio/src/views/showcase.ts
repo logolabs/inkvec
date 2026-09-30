@@ -12,7 +12,6 @@
  */
 
 import { fill, h } from "../lib/dom";
-import type { Store } from "../lib/state";
 import { openExternal } from "../lib/platform";
 import { windowControls } from "../components/wincontrols";
 
@@ -109,13 +108,17 @@ function loadCase(key: string): Promise<CaseBody> {
   return loader().then((m) => ((m as { default?: unknown }).default ?? m) as CaseBody);
 }
 
-export function showcaseScreen(store: Store, close: () => void): HTMLElement {
+/**
+ * The Showcase screen: before-and-after pairs on real logos and how Inkvec compares with
+ * other tracers, loaded from the Space's gallery data when the screen opens. `close` is the
+ * screen bar's Done button.
+ */
+export function showcaseScreen(close: () => void): HTMLElement {
   const body = h("div.screenbody", null, h("div.sc-loading.faint", null, "Loading the showcase…"));
   void load().then(
     (d) => fill(body, content(d)),
     (e) => fill(body, h("div.sc-loading.faint", null, `The showcase could not be loaded: ${String(e)}`)),
   );
-  void store;
   return h(
     "div.screen",
     null,

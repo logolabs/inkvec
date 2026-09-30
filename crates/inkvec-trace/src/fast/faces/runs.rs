@@ -182,8 +182,16 @@ fn push_merged(out: &mut Vec<Run>, row0: usize, run: Run) {
 }
 
 impl RunLabels {
-    /// The runs of `labels`, a `w × h` label image in row-major order. One read of the
-    /// labels (2 bytes per pixel); the components are computed on first use.
+    /// The runs of `labels`, a `w × h` label image in row-major order (`labels.len()`
+    /// must be `w · h`). One read of the labels, 2 bytes per pixel: about 1 ms at 2048 px,
+    /// most of the stage's remaining cost together with [`RunLabels::write_faces`]. The
+    /// components are computed on first use. A zero width gives `h` empty rows, a zero
+    /// height no rows; both have no runs and no components.
+    ///
+    /// Rows are walked as rows, so no pixel index is ever split into `(p % w, p / w)`: the
+    /// per-pixel code paid a division per pixel for that, and `%` in a hot loop is also
+    /// what wazero's arm64 compiler miscompiled in the Go binding (see
+    /// `boundary_opt/band.rs`).
     pub(crate) fn new(labels: &[u16], w: usize, h: usize) -> Self {
         let mut runs = Vec::new();
         let mut row_start = Vec::with_capacity(h + 1);
@@ -397,8 +405,15 @@ impl RunLabels {
         }
     }
 
-    /// Give every run the label `to[c]` of its component `c` (needs fresh components),
-    /// rebuilding the run list with equal neighbours merged. One pass over the runs.
+    /// Give every run the label `to[c]` of its component `c` (needs fresh components;
+    /// `to` has one entry per component), rebuilding the run list with equal neighbours
+    /// merged. One pass over the runs, O(R).
+    ///
+    /// **Invariant kept:** the rebuilt runs are the maximal runs of the relabelled image.
+    /// Each row's pieces are pushed left to right and tile the row, and
+    /// [`push_merged`] joins a piece to the previous one whenever their labels agree, so no
+    /// two consecutive runs of a row end up with one label. The components are marked
+    /// stale; the next [`RunLabels::components`] recomputes them from the new runs.
     pub(super) fn relabel_components(&mut self, to: &[u16]) {
         debug_assert!(self.fresh);
         self.spare.clear();
@@ -418,8 +433,10 @@ impl RunLabels {
     /// Set single pixels to new labels: `edits` holds `(run, x, label)` for pixel `x` of
     /// run `run`, sorted by run then `x`, at most one edit per pixel. The run list is
     /// rebuilt in one pass over the runs, each edited run cut into its unchanged stretches
-    /// and its edited pixels, with equal neighbours merged. An empty list changes nothing
-    /// and keeps the components.
+    /// and its edited pixels, with equal neighbours merged (the invariant of
+    /// [`RunLabels::relabel_components`] holds the same way). An edit may give a pixel its
+    /// own label; it then simply merges back. An empty list changes nothing and keeps the
+    /// components fresh. O(R + number of edits).
     pub(super) fn apply_pixel_edits(&mut self, edits: &[(u32, u32, u16)]) {
         if edits.is_empty() {
             return;
@@ -463,7 +480,9 @@ impl RunLabels {
         self.finish_rebuild();
     }
 
-    /// Swap the rebuilt runs in and mark the components stale.
+    /// Close the last row of the rebuilt run list (`spare_rows` gets its `h + 1`-th
+    /// entry), swap it in for `runs` -- the old buffers become the next scratch, so no
+    /// allocation after the first rebuild -- and mark the components stale.
     fn finish_rebuild(&mut self) {
         self.spare_rows.push(self.spare.len());
         std::mem::swap(&mut self.runs, &mut self.spare);
@@ -478,7 +497,8 @@ impl RunLabels {
     /// This is the one per-pixel write of the clean-up: each run is one `fill` of its
     /// component id. It gives the same ids as the per-pixel `u32` component image the code
     /// used to fill and then narrow, since every pixel of a run gets its run's id either
-    /// way.
+    /// way. Every pixel is written (the runs tile each row), so `out` needs no clearing and
+    /// may still hold the palette's labels. An empty image writes nothing and has no faces.
     pub(crate) fn write_faces(&mut self, out: &mut [u16]) -> Vec<usize> {
         self.components();
         let cap = (u16::MAX - 1) as usize;

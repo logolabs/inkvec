@@ -20,7 +20,8 @@
 //! 3. [`RunLabels::merge_same_inks`] (`slivers`): a component takes the ink of a larger
 //!    neighbour whose ink the eye cannot tell from its own (region merging on the graph).
 //! 4. [`RunLabels::despeckle`] (`despeckle`): components under the speckle floor take the
-//!    label they share the longest border with (an area opening, a connected operator).
+//!    label they share the longest border with (an area filter on flat zones, a
+//!    connected operator).
 //! 5. [`RunLabels::write_faces`] (`split`): the components of the result are the faces;
 //!    their ids are written over the label buffer.
 //!
@@ -43,7 +44,11 @@
 //! of that the union-find itself was 1.05 ms. Yet all the passes together change at most
 //! 3.6% of the pixels (none at the median), strip pixels are at most 2.7%, and runs are
 //! 0.24% of the pixels at the median. The necessary traffic -- read the labels, write the
-//! faces -- is about 16 MB, roughly 1 ms on one thread.
+//! faces -- is about 16 MB, roughly 1 ms on one thread. On runs the whole stage takes
+//! 2.1-7.4 ms on the 2048 px dumps (reading the runs and writing the faces about 1 ms
+//! each) and 11-13 ms on the 1672 x 941 masthead, whose text makes 42k strip pixels,
+//! against 86-137 ms and 46-75 ms for the per-pixel code in the same runs (best of 5,
+//! `faces/tests.rs`'s timing test, on a loaded machine).
 //!
 //! # Why the output is the same as the per-pixel code's
 //!
@@ -98,7 +103,13 @@
 //!   under a pairwise predicate, as [`RunLabels::merge_same_inks`] merges under "one ink to
 //!   the eye"; theirs merges by edge weight order, this one by component size.
 //! - Rejected: caching the sliver decision per (colour, candidate inks) key -- measured
-//!   about one distinct key per strip pixel, so nothing to reuse.
+//!   about one distinct key per strip pixel, so nothing to reuse; and evaluating slivers
+//!   per stretch of equal candidates -- 82% of the masthead's strip pixels have
+//!   candidates, and their scattered colour reads, not the candidate search, are the cost.
+//!   Threads (rayon over pixel passes, or over image stripes as OpenCV's
+//!   `connectedComponents` does) are not used: once on runs the stage is a few
+//!   milliseconds, about half of it the one read of the labels and the one write of the
+//!   faces, which are bound by memory bandwidth rather than by one core.
 
 mod runs;
 
@@ -319,7 +330,16 @@ impl RunLabels {
     }
 
     /// The pixel edits of [`RunLabels::absorb_slivers`], as `(run, x, new label)` in scan
-    /// order. Needs fresh components; `interior` is [`RunLabels::interiors`].
+    /// order, the order [`RunLabels::apply_pixel_edits`] needs. Needs fresh components;
+    /// `interior` is [`RunLabels::interiors`].
+    ///
+    /// Edge cases: on the first row there is no upper neighbour and on the last no lower
+    /// one (their cursors are never read there); a run starting at `x = 0` has no left
+    /// neighbour and one ending at `w` no right one, so in a one-column image only the
+    /// rows above and below offer candidates. A strip pixel without any candidate reads no
+    /// colour. Measured (masthead, 1672 x 941): 41,884 strip pixels, 34,189 with
+    /// candidates, 5,853 edits, 1.8 ms -- mostly the colour reads, scattered over a 19 MB
+    /// image, so grouping pixels with equal candidates would not pay.
     fn sliver_edits(
         &self,
         px: Pixels<'_>,

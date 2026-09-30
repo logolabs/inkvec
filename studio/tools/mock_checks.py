@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Regression checks for the Studio's interface, driven in the browser dev mock.
 
-The Rust half of the Studio has `cargo test`; the TypeScript half has no test runner, and
-some of its bugs live only in how the interface sequences calls (a fresh trace landing on
-top of a snap, several snaps racing each other). These checks drive the real interface in
+The Rust half of the Studio has `cargo test` and the TypeScript half's pure logic has unit
+tests (`npm test`, Vitest), but some of its bugs live only in how the whole interface
+sequences calls (a fresh trace landing on top of a snap, several snaps racing each other,
+Export's own fresh trace). These checks drive the real interface in
 headless Microsoft Edge against `dev/index.html`, the mock backend `npm run mock` serves,
 and read what it would have sent to the backend. The desktop app itself is never launched:
 it reads and writes the user's real preferences file.

@@ -102,7 +102,7 @@ For applications demanding reproducible, certifiable, and zero-hallucination vec
 │ 1. Sub-Pixel Linear Unmixing:  Inverts optical anti-aliasing in 3D RGB │
 │ 2. MDL Palette Clustering:     Minimum Description Length in OKLab     │
 │ 3. Planar DCEL Map:            Shared half-edge topological boundaries │
-│ 4. Boundary Optimization:      Fletcher-Reeves nonlinear CG solver     │
+│ 4. Boundary Optimization:      L-BFGS on exact box coverage (band)     │
 │ 5. Curve Fitting:              Dynamic Programming over Bézier / Arcs  │
 │ 6. Topological Repair:         Winding-number resolution & G1 fairing  │
 └────────────────────────────────────────────────────────────────────────┘

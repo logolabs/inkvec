@@ -230,7 +230,7 @@ Inkvec sits at the confluence of classical computational geometry, perceptual co
   1. Intake & SR       : Dual-tier restoration (Custom U-Net / MambaIRv2) + Area-weighted downsampling
   2. Physical Inversion: alpha = (P-B).(F-B)/||F-B||^2  ==>  sigma_pos = sigma_pixel / (||F-B|| * ||grad alpha||)
   3. Discrete Topology : Planar Map (Half-Edge DCEL) + Shewchuk Predicates  ==>  Internal overdraw = 1.000, Zero Seams
-  4. Boundary Solve    : Fletcher-Reeves Nonlinear CG on Exact Shoelace Pixels + Coupled Ribbon Constraints (LOG-44)
+  4. Boundary Solve    : L-BFGS on Exact Box Coverage over a Narrow Band + Coupled Ribbon Constraints (LOG-44)
   5. Multi-Model DP    : O(N^2) Global Optimization over {Line, Arc, Circle, G1 Cubic} via Levien Quartic & Ahn ODF
   6. Governing Law     : min [ 0.5 * chi^2(I, render(D)) + ln(R/delta) * K_params(D) ]
 ========================================================================================================================
@@ -305,7 +305,7 @@ flowchart TD
         direction TB
         S1["1. Physical Coverage Inversion: α = (P-B)·(F-B) / ||F-B||²"]
         S2["2. Planar Map DCEL + Shewchuk Exact Predicates: Internal Overdraw = 1.000"]
-        S3["3. Fletcher-Reeves Nonlinear CG Shoelace Boundary Optimization"]
+        S3["3. L-BFGS Narrow-Band Boundary Optimization"]
         S4["4. Multi-Model Dynamic Programming via Levien Quartic & Ahn ODF"]
         S5["Governing Objective: min [ 0.5·χ²(I, render(D)) + ln(R/δ)·K(D) ]"]
         S1 --> S2 --> S3 --> S4 --> S5
@@ -1029,7 +1029,7 @@ To evaluate gradients without expensive numerical finite differencing, Inkvec tr
 * `Prov::CrossH { line, a, b }`: Intersection with a horizontal grid line.
 * `Prov::Corner`: Fixed pixel corner; contributes zero gradient.
 
-The system is optimized using **nonlinear conjugate gradient (Fletcher–Reeves)** with a backtracking line search and topological fold-guards, moving thousands of points simultaneously into exact photometric agreement with the source pixels.
+The system is optimized with **L-BFGS** (memory 3, Liu & Nocedal 1989) and a projected Armijo backtracking line search, run separately on each independent part of the boundary, with topological fold-guards, moving thousands of points simultaneously into exact photometric agreement with the source pixels.
 
 #### The Sawtooth Null Space & Thin-Ribbon Constraints (LOG-44)
 Area coverage alone does not uniquely determine a boundary. Any high-frequency spatial wiggle that preserves how much of each pixel falls on either side leaves the data term unchanged. On thin strokes (~2 px wide) where opposing boundaries compete for the identical pixel cells, unconstrained solvers can wander into this null space, generating rows of alternating triangular "sawtooth" teeth.

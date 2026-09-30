@@ -4,426 +4,361 @@
 > rendered coverage* matches the image, instead of refining each point along its own
 > one-dimensional normal.
 
-**Source:** `crates/inkvec-trace/src/boundary_opt.rs`
-**Entry point:** `optimise()` (`boundary_opt.rs:973`)
-**Pipeline position:** after `refine_junc` (`planar::refine_junctions`, `lib.rs:462`), before
-`decode` (stage mark `"boundary_opt"`, `lib.rs:473`). Called once, from
-`trace_color_full_with_alpha` only (`lib.rs:469`) — the bilevel front end
-(`trace_bilevel`, `lib.rs:156`) never calls it.
+**Source:** `crates/inkvec-trace/src/boundary_opt.rs` (unknowns, priors, energy, fold
+guard), `boundary_opt/band.rs` (the data term), `boundary_opt/lbfgs.rs` (the solver),
+`boundary_opt/folds.rs` (self-crossing count)
+**Entry point:** `optimise_alpha()` (`boundary_opt.rs:579`); `optimise()` is the same
+without alpha
+**Pipeline position:** after `refine_junc` (`planar::refine_junctions`, `lib.rs:1090`),
+before `decode` (stage mark `"boundary_opt"`, `lib.rs:1103`). Called once, from
+`trace_color_full_with_alpha` only (`lib.rs:1098-1099`), and only in Quality mode (skipped
+when `opts.fast` is set). The bilevel front end (`trace_bilevel`) never calls it.
 
 ## What problem this solves
 
 Every stage upstream of this one decides a boundary point on its own. `planar::build`
 places it on the integer lattice; `refine_subpixel` slides it along its own normal until
 the coverage read there is a half; `refine_junctions` intersects the edges that meet at a
-node. Each of those is a one-dimensional argument about one point, and the module doc
-comment (`boundary_opt.rs:1-9`) states plainly what a one-dimensional argument cannot see:
-"A pixel's value is the area coverage of *every* region that touches it, so a point's
-neighbours along the boundary change what that pixel should read; and a pixel says
+node. Each of those is a one-dimensional argument about one point, and it cannot see two
+facts: "A pixel's value is the area coverage of *every* region that touches it, so a
+point's neighbours along the boundary change what that pixel should read; and a pixel says
 nothing at all about motion *along* the boundary, so a point is free to slide unless
-something holds it."
+something holds it" (module doc, `boundary_opt.rs:5-9`).
 
 So the boundary is solved as one problem: every point is an unknown in a single
-optimisation, and the objective being minimised is the actual rendering error — not a
-proxy for it, not a per-point residual, but the exact clipped-pixel coverage the geometry
-would paint, compared against the image.
+optimisation, and the objective is the actual rendering error — the exact box-filtered
+coverage the geometry would paint, compared against the image.
 
 ## Inputs and outputs
 
-**Input:** a mutable `PlanarMap` (`crates/inkvec-trace/src/planar.rs:47-53` — `edges`,
-`width`, `height`, `n_labels`), the rendered image `rgb: &[[f32; 3]]`, the per-face
-`face: &[FillModel]` (`gradient.rs:99`), and an optional time budget in milliseconds.
+**Input:** a mutable `PlanarMap` (`edges`, `width`, `height`, `n_labels`), the image
+`rgb: &[[f32; 3]]` (sRGB `0..1`, row-major), each face's `FillModel`, an optional
+wall-clock budget `budget_ms` (the CLI's `--time-budget`; none by default, and then the
+result depends only on the input), and optionally the source alpha and each face's
+opacity.
 
-**Output:** the map is edited in place — every boundary point's position may move — and
-`optimise` returns `Option<Report>`:
+**Output:** the map is edited in place and `optimise_alpha` returns `Option<Report>`:
 
 ```rust
 pub struct Report {
     pub before: f64,   // energy before the solve
     pub after: f64,    // energy after
-    pub iters: usize,  // iterations actually taken
+    pub iters: usize,  // most iterations any independent part took
     pub moved: usize,  // points whose position changed by more than 1e-6 px
-    pub scale: f64,    // fraction of the solved displacement kept, after the fold guard
+    pub scale: f64,    // fraction of the solved displacement kept by the fold guard
 }
 ```
 
-`None` means nothing was gained: the map is empty, has fewer than three unknowns, the
-initial data or kink term is zero, the solve failed to improve the energy, or the
-self-crossing guard (below) could not accept any displacement at all.
+`None` means nothing changed: the map is empty or has fewer than three unknowns, the
+starting data or kink term is zero, the energy did not fall, or the fold guard could not
+keep a tenth of the displacement. The working positions live in a local vector until the
+whole solve and guard have succeeded.
 
 ## How it works
+
+### The unknowns
+
+`build_vars` (`boundary_opt.rs:177`) gives every point of every edge its own unknown,
+except that the end points of open edges are keyed by their node id, so all the edges
+meeting at a junction share one unknown and move it together. That is what keeps the map a
+partition however far the points move. Unknowns are numbered in edge order, then point
+order, which fixes every summation order downstream.
+
+`band::pin_frame` then snaps points lying on the image frame (within `1e-3` px of
+`x = −½`, `x = w − ½`, `y = −½` or `y = h − ½`, on an edge against the outside) exactly
+onto it and lets them move only along it. Not from the literature: a boundary condition,
+needed because the coverage accumulation starts from the outside at `x = −½`.
 
 ### The objective
 
 ```text
-E = sum over boundary pixels || a·c_left + (1-a)·c_right - target ||^2
-  + w_kink   * sum over points |p_{i-1} - 2*p_i + p_{i+1}|
-  + w_anchor * sum over points |p_i - p_i^0|^2
+E = Σ_{p ∈ B} w_p · ‖ Σ_f cov_f(p)·c_f(p) − t_p ‖²
+  + w_kink   · Σ over points sqrt(|p_{i−1} − 2p_i + p_{i+1}|² + 10⁻⁴)
+  + w_anchor · Σ over points |p_i − p_i⁰|²
 ```
 
-`a` is the **exact area** of the pixel square on the left face's side of the boundary —
-the pixel clipped by the chain that crosses it, closed along the pixel's own border. That
-is the quantity a rasteriser actually computes, so the data term is the rendering error
-itself, and — the reason the whole stage is tractable — its gradient is analytic: area is
-a shoelace sum over the clipped polygon, and every vertex of that polygon is one of three
-things: a boundary point (moving with its own unknown), a crossing of a pixel gridline
-(moving as the two boundary points either side of it move), or a fixed corner of the
-pixel.
+`cov_f(p)` is the exact area of face `f` inside pixel `p` (the faces partition the pixel,
+so these sum to one), `c_f(p)` the face's fill evaluated at the pixel centre, `t_p` the
+image, and `B` a fixed band of pixels. The residual is the Chan–Vese region term with each
+face's fill as its constant (T. F. Chan, L. A. Vese (2001), *Active contours without
+edges*, IEEE TIP 10(2), <https://doi.org/10.1109/83.902291>; formula as in P. Getreuer
+(2012), *Chan–Vese Segmentation*, IPOL, <https://doi.org/10.5201/ipol.2012.g-cv>), with the
+fills held fixed during the solve.
 
-### `Prov` and the analytic Jacobian
+### The band
+
+`B` is every pixel within one pixel (Chebyshev, `band::REACH = 1`) of a pixel a boundary
+crosses at the start. No point moves more than `MAX_TOTAL` = 1 px, so a piece of boundary
+can only ever land inside `B`, and `B` never has to be rebuilt: the narrow band of
+D. Adalsteinsson, J. A. Sethian (1995), *A fast level set method for propagating
+interfaces*, J. Comput. Phys. 118, <https://doi.org/10.1006/jcph.1995.1098>, fixed for the
+whole solve. (`nearest_in_band` handles the one exception: a piece whose midpoint sits
+exactly on a pixel border one and a half pixels out is filed under the neighbouring band
+pixel, which keeps its carried height, and so every coverage in the row, exact.)
+
+Rendering *every* band pixel, not only the pixels a boundary cuts, is what makes the energy
+continuous: leaving a pixel costs exactly what being a pure pixel of the other face costs.
+The first form of this stage summed only the cut pixels, deciding in each which side was
+which. That made the energy jump whenever a boundary left or entered a pixel, and it put a
+piece lying exactly on a pixel border on the wrong side. Measured on the 246-icon screen
+set, a quarter of every accepted decrease came from pixels leaving the sum rather than from
+fitting them, and 170 of 246 solves stopped because a step of 0.0014 px raised the energy
+by a whole pixel's residual.
+
+### Exact coverage by signed-area accumulation
+
+`Problem::bucket_band` walks every edge, cuts each segment where it crosses a pixel
+gridline (`crossings`), and files each `Piece` (one fragment of one chain inside one
+pixel) into that pixel's list. Each end of a piece carries a `Prov`:
 
 ```rust
 enum Prov {
     Vertex(u32),                          // a boundary point, moving with its unknown
-    CrossV { line: f64, a: u32, b: u32 },  // crosses vertical gridline `line`
-    CrossH { line: f64, a: u32, b: u32 },  // crosses horizontal gridline `line`
-    Corner,                                // a pixel corner: fixed
+    CrossV { line: f64, a: u32, b: u32 },  // where segment a→b crosses vertical gridline `line`
+    CrossH { line: f64, a: u32, b: u32 },  // where segment a→b crosses horizontal gridline `line`
 }
 ```
-(`boundary_opt.rs:111-120`)
 
-`Prov` records, for every vertex of a clipped polygon, where that vertex came from and
-therefore how it depends on the unknowns. This is what makes the derivative closed-form
-instead of a finite difference: a finite-difference gradient would need to re-clip and
-re-shoelace the polygon once per unknown per pixel, which is exactly the cost this stage
-cannot afford at thousands of unknowns and pixels per icon. Instead, `scatter`
-(`boundary_opt.rs:309-345`) takes `d(area)/d(vertex)` at one clipped vertex and pushes it
-back onto whichever underlying unknowns produced that vertex:
+`scatter` uses it to push a derivative with respect to a piece end back onto the unknowns
+that produced it (a gridline crossing moves with both ends of its segment, in proportion to
+where it lies between them), so the gradient is analytic.
 
-- `Prov::Corner` contributes nothing — its position never varies.
-- `Prov::Vertex(v)` passes the gradient straight through to unknown `v`.
-- `Prov::CrossV { line, a, b }` is a point on the segment `a -> b` where it crosses a
-  fixed vertical gridline `line`. Its `x` is pinned by the gridline, so only its `y`
-  gradient propagates; parametrising the crossing as `a.y + t*(b.y - a.y)` with
-  `t = (line - a.x)/(b.x - a.x)` and differentiating gives the four terms in
-  `boundary_opt.rs:318-330`, split between `a` and `b` in proportion to `t`. `CrossH` is
-  the mirror case.
+`Problem::band_data` then renders each row's band runs left to right. Every piece deposits
+into its pixel the signed area between itself and the pixel's right side, for the faces on
+its left and right, and carries its height to every pixel further right; a pixel's
+coverage of face `f` is its own deposits plus the carry. This is the accumulation-buffer
+rasteriser of libart and R. Levien's font-rs (<https://github.com/raphlinus/font-rs>), an
+exact box filter as in J. Manson, S. Schaefer (2011), *Wavelet Rasterization*, Computer
+Graphics Forum 30(2), <https://doi.org/10.1111/j.1467-8659.2011.01887.x>. Adapted: one carry
+per face instead of one winding number, since the faces are a partition; the carry's
+derivative is a suffix sum along the row, so the gradient costs one more pass; and a piece
+lying on a pixel border simply deposits zero area and a full carry, so no pixel ever
+decides which side is which.
 
-The area itself is the shoelace sum `shoelace(pts)` (`boundary_opt.rs:297-305`), and its
-derivative with respect to one vertex `i` is the standard `-0.5*(next.y - prev.y)`,
-`-0.5*(prev.x - next.x)` pair (the sign is negative because the stored coverage is minus
-the shoelace of the loop as built — `boundary_opt.rs:704-708`), scattered through `Prov`
-at every vertex of the loop.
+A run's *seed* (the face filling everything left of it) is fixed once at the start: the
+pixel left of a run is never touched, so it is one face, found by carrying from the left
+edge of the image. A run at column 0 also takes the pieces left of the image every time.
 
-### `build_vars`: one unknown per point, junctions pinned
+Two details keep the evaluation cheap. Consecutive pixels a single straight piece stretches
+across are summed at once as a quadratic form in the carry vector (`stretch_energy`, with
+per-run prefix sums of the fills, `fill_prefix`). Runs are independent, so large bands are
+evaluated in parallel with a fixed partition and a fixed order of summation, and the result
+does not depend on the thread count.
 
-```rust
-struct Vars {
-    var: Vec<Vec<u32>>,   // var[edge][i] = the unknown holding point i of that edge
-    start: Vec<Point>,
-    junction: Vec<bool>,
-}
-```
-(`boundary_opt.rs:135-140`, built by `build_vars`, `boundary_opt.rs:142-177`)
+The data term and the mixture are computed in f64: in f32 the energy is a staircase the
+line search cannot descend.
 
-An edge's interior points each get their own unknown. An edge's *endpoints*, where several
-edges meet at a shared node, are collapsed: `by_node` maps each planar-map node id to one
-unknown, so every edge that touches that junction moves it together rather than each
-edge dragging its own copy apart. Those shared endpoints are marked `junction[v] = true`.
+### Which pixels count
 
-Junction points are anchored four times harder (`JUNCTION_ANCHOR = 4.0`, applied in
-`priors`, `boundary_opt.rs:927-932`) and are excluded from the data term entirely unless
-`INKVEC_BOPT_JUNC` (*research build*) is set (see below). The module doc comment gives the reason
-(`boundary_opt.rs:70-75`): "Where three or more faces meet, one chain no longer divides
-the pixel in two and the coverages need the full clipped partition; the points there keep
-their priors and their anchor, so they move with their neighbours but are not driven by
-the image. `planar::refine_junctions` has already placed them by intersecting the
-boundaries that meet there, which is better evidence than a single pixel's colour."
+Each band pixel's weight `w_p` is fixed at the start (`band::setup`):
 
-### Assembling the data term: `bucket` and `data_cells`
+- **Zero where two boundaries meet.** A pixel holding pieces of two or more boundaries
+  between modelled faces at the start (a junction, or both sides of a stroke too thin to
+  have an interior) is left out of the data term for the whole solve (`exclude_junctions`).
+  Its colour is a three-way mixture the fills are least reliable at, and on a thin stroke
+  the two sides compete for one pixel's evidence (the sawtooth below). Measured on the
+  screen set: objective 0.3713 leaving them out, 0.3908 with them in, and 0.3908 again
+  leaving out only the pixels round the junction nodes.
+- **Zero where the seed is uncertain.** A run whose seed is not a single face with full
+  coverage has weight zero.
+- **One elsewhere.**
 
-`Problem::bucket` (`boundary_opt.rs:474-530`) walks every edge, finds where each segment
-crosses pixel gridlines (`crossings`, `boundary_opt.rs:180-206`), and files each resulting
-`Piece` — one chain fragment lying inside one pixel — into that pixel's linked list
-(`head`/`next`).
+With alpha (`optimise_alpha` given the source alpha and the faces' opacities), a band pixel
+within reach of a boundary whose faces differ in opacity by at least `MIN_CONTRAST` = 2/255
+but in colour by less (white paint on the clear ground, the bands of one fade), and of no
+boundary whose faces differ in colour, also compares the coverage-weighted opacity with the
+source alpha, as a fourth channel (`alpha_channels`).
 
-`Problem::data_cells` (`boundary_opt.rs:595-714`) then walks every pixel that has pieces
-in it:
-
-- If the pixel's pieces all belong to one edge and chain contiguously from one border
-  point to another, the chain divides the pixel cleanly in two. `border_corners`
-  (`boundary_opt.rs:240-264`) walks the pixel's own border between the chain's two
-  endpoints to close the loop, `shoelace` gives the area of one side (tried both
-  orientations, keeping whichever is non-positive so the sign always reads as the `left`
-  face's side, `boundary_opt.rs:652-674`), and the mixture `a*c_left + (1-a)*c_right` is
-  compared against the pixel's measured colour.
-- If several edges' pieces land in the same pixel, that pixel is a **junction pixel** and
-  is handled by `junction_pixel` (`boundary_opt.rs:731-891`, described below) only when
-  `self.junctions` is set.
-- A pixel below `MIN_CONTRAST = 2.0/255.0` (`boundary_opt.rs:99`) across the two faces'
-  colours is skipped: "a pixel carries no usable evidence" below that contrast.
-
-The residual is computed in `f64`, not `f32`, and the comment at `boundary_opt.rs:686-688`
-explains why: "the mixture in f32 quantises the objective at a hundredth of the coverage
-resolution the solver works at, which turns a smooth energy into a staircase the line
-search cannot descend."
-
-`Problem::data` (`boundary_opt.rs:542-593`) is the entry point that either runs
-`data_cells` over the whole image sequentially, or — if `INKVEC_BOPT_CHUNKS` (*research build*) is set to
-more than one — splits the pixel range into that many contiguous chunks, one per rayon
-task, each with its own scratch buffer and gradient, summed back in chunk order. The
-default is sequential summation, and the doc comment explains the trade explicitly
-(`boundary_opt.rs:536-541`): parallel summation changes floating-point addition order,
-"the last-bit differences cascade through tie-sensitive fit decisions — on one 300-path
-logo they cost 8 paths and 16% more coordinates at the same colour error — so it stays
-opt-in until the full set has priced it."
-
-### Junction pixels: wedges, not a two-face split
-
-`junction_pixel` (`boundary_opt.rs:731-891`) handles a pixel where several boundary
-chains meet at a shared node, when `INKVEC_BOPT_JUNC` (*research build*) turns it on. It groups the pixel's
-pieces into contiguous chains, requires every chain to run outward from the same interior
-node to the pixel's border, and sorts them by where they exit. Consecutive chains (by exit
-position around the border) bound a **wedge** — one face's exact coverage of that
-corner of the pixel — found by walking outward along one chain, along the border to the
-next chain's exit, then back along that chain to the shared node. Summing every wedge's
-colour, weighted by its area, gives the pixel's modelled colour; the sum of wedge areas is
-required to equal 1.0 within `1e-6`, or the construction is judged not to apply and the
-pixel contributes nothing (`boundary_opt.rs:849-855`). This is the same statement as
-solving a non-negative colour mixture for an anti-aliased pixel, "with the weights
-constrained to be areas of an actual partition rather than free numbers"
-(`boundary_opt.rs:727-730`).
-
-The diagnostic counters in `pub mod juncstat` (`boundary_opt.rs:270-294`, dumped by
-`INKVEC_JUNCDBG`) record why a candidate junction pixel was declined — wrong chain count,
-mismatched ends, disagreeing node, an unrecognised face, or a partition that did not sum
-to one — because, as the comment above the module says, "the construction below only
-handles one shape of junction, and the point of these is to find out which shapes it is
-actually meeting" (`boundary_opt.rs:267-269`).
+`setup` also records the starting residual split two ways: the pixels the boundary cuts
+(`data0`, what the prior weights are scaled to) and the rest (a constant per run, used by
+the stopping rule).
 
 ### Priors: kink and anchor
 
-`Problem::priors` (`boundary_opt.rs:894-944`) adds two regularisers.
+`Problem::priors` adds two terms. **Kink** is the *absolute* value of the discrete second
+difference at each interior point of each edge, smoothed by `10⁻⁴` inside the square root:
+a corner then costs in proportion to how sharply it turns, so one sharp corner is cheaper
+than the many small kinks a squared term would spread it into. **Anchor** is the squared
+distance from each point's start, four times heavier at a junction (`JUNCTION_ANCHOR`); it
+removes the tangential freedom and holds points the image cannot see where the measurement
+put them.
 
-**Kink** is the *absolute* value of the discrete second difference at each interior point
-of each edge, smoothed by a small floor inside the square root
-(`sqrt(dx^2 + dy^2 + EPS)`, `EPS = 1e-4`) so it is differentiable where the boundary is
-already straight. The module doc comment explains why the absolute value and not the
-square (`boundary_opt.rs:29-32`): "a corner then costs in proportion to how sharply it
-turns, so one sharp corner is cheaper than the many small kinks a squared term would
-spread it into — the staircase is smoothed and the corner survives."
-
-**Anchor** is a plain squared distance from each point's starting position, weighted
-`w_anchor` (or `w_anchor * JUNCTION_ANCHOR` at a junction). It "removes the tangential
-freedom and holds a point the image cannot see (the interior of a long straight run, a
-boundary between two nearly equal colours) where the measurement put it"
-(`boundary_opt.rs:33-35`).
-
-Both weights are set *relative to the data term's own initial value* rather than as
-absolute numbers (`boundary_opt.rs:1028-1036`):
+Both weights are relative to the data term (`lbfgs::descend`):
 
 ```rust
-prob.w_kink   = env_f64("INKVEC_BOPT_KINK",   K_KINK)   * data0 / kink0;
-prob.w_anchor = env_f64("INKVEC_BOPT_ANCHOR", K_ANCHOR) * data0 / n as f64;
+prob.w_kink   = K_KINK   * data0 / kink0;   // kink starts at 5% of the data term
+prob.w_anchor = K_ANCHOR * data0 / n as f64; // 1 px costs a tenth of a point's share
 ```
 
-"Scaling them to the data term is what makes them mean the same thing on a flat
-two-colour logo and on a crowded emoji, where the residual differs by orders of
-magnitude" (`boundary_opt.rs:91-93`).
+so they mean the same thing on a flat two-colour logo and on a crowded emoji.
 
-### The solve: conjugate gradient with a leashed line search
+### Independent parts
 
-`optimise` runs Fletcher–Reeves nonlinear conjugate gradient (`boundary_opt.rs:1038-1103`):
+`band::components` splits the problem with a union-find: two boundaries are in one part
+when they share an unknown (a junction) or when pieces of both lie within reach of one band
+run. The energy is exactly the sum of the parts' energies (each run belongs to one part),
+so each part is minimised on its own and stops when *it* has converged, instead of every
+part paying for the slowest one. A median icon has five parts; a page of text has
+hundreds. Parts with no band run (the frame's top, right and bottom edges, which no pixel
+reads) are skipped. Block-separable minimisation, as a sparse solver's independent residual
+blocks (Ceres Solver documentation, <https://github.com/ceres-solver/ceres-solver>,
+`docs/source/nnls_solving.rst`).
 
-1. Compute the energy and its gradient at the start; the initial direction is steepest
-   descent.
-2. Each iteration, scale the step so the largest per-point displacement is `MAX_STEP`
-   (`0.35` px), then leash every trial point back to within `MAX_TOTAL` (`1.0` px) of
-   where the measurement originally put it (`boundary_opt.rs:1060-1069`).
-3. Backtrack up to six times (`step *= 0.4` each retry) until the trial energy improves;
-   stop the whole solve if even the smallest backtrack does not help, or if the relative
-   improvement drops below `1e-4` (`boundary_opt.rs:1081`).
-4. Otherwise update the conjugate-gradient direction with the Fletcher–Reeves ratio
-   `beta = gg_new / gg`, restarting to steepest descent whenever the resulting direction
-   is not itself downhill (`boundary_opt.rs:1097-1102`) — a known failure mode of
-   Fletcher–Reeves on a non-quadratic objective.
-5. Stop when the iteration budget or the time budget (`INKVEC_BOPT_MS` (*removed*), default `1200` ms,
-   or the caller-supplied `budget_ms`) is exhausted.
+### The solver: L-BFGS with a projected Armijo line search
 
-If the final energy is not below the starting energy, or no iteration was accepted at
-all, `optimise` returns `None` and the map is left untouched — the caller passed `&mut
-map` by reference, but the mutation only happens after the whole solve-and-guard sequence
-below succeeds (the working positions live in a local `pos: Vec<Point>` until then).
+`lbfgs::solve` runs, per part:
+
+1. **Direction:** limited-memory BFGS, the two-loop recursion over the last `MEMORY` = 3
+   steps with initial scaling `γ = sᵀy / yᵀy` (D. C. Liu, J. Nocedal (1989), *On the
+   limited memory BFGS method for large scale optimization*, Math. Programming 45,
+   <https://doi.org/10.1007/BF01589116>; J. Nocedal, S. J. Wright (2006), *Numerical
+   Optimization*, Algorithm 7.4, <https://doi.org/10.1007/978-0-387-40065-5>). A pair with
+   non-positive curvature is not stored; a direction that is not downhill clears the memory
+   and falls back to steepest descent.
+2. **Step length:** the unit step (on the first iteration, a move of `MAX_STEP`), capped so
+   no point moves more than `MAX_STEP` = 0.35 px, then halved up to `MAX_TRIALS` = 8 times
+   until the Armijo condition `E(trial) ≤ E + 10⁻⁴·a·gᵀd` holds (Nocedal & Wright,
+   Algorithm 3.1). Every trial point is projected back into the 1 px disc round its start
+   and onto the frame where it is pinned. The energy is continuous but only piecewise
+   smooth (its slope jumps where a piece meets a gridline), the setting of A. S. Lewis,
+   M. L. Overton (2013), *Nonsmooth optimization via quasi-Newton methods*, Math. Program.
+   141, <https://doi.org/10.1007/s10107-012-0514-2>, who found BFGS with an inexact line
+   search reliable there.
+3. **Stop** when no trial is accepted, when a step moves no point more than `PARAM_TOL` =
+   0.005 px (half the 0.01 px the SVG writes), when a step lowers the part's energy by less
+   than `FUNC_TOL` = 10⁻⁴ of what the geometry can still change (its energy less the
+   constant of its untouched pixels), after `MAX_ITERS` = 32 iterations, or when the
+   caller's budget runs out.
+
+Nothing is linearised: every trial re-renders the exact coverage of the part's runs.
 
 ### The fold guard
 
 A solved displacement can make the boundary self-intersect: two sides of a thin ribbon can
-be pulled toward the same ink between them and pass through each other. `crossings_count`
-(`boundary_opt.rs:386-444`) counts segment pairs that cross, using a spatial hash bucketed
-by pixel so only segments sharing a pixel are ever compared (a point moves less than a
-pixel per solve, so a new crossing is always local). The count is taken **before** the
-solve and compared against the count **after**, not against zero — earlier stages can
-already have left a fold behind, "which is what the repair stage exists for, and refusing
-to improve a boundary because of a crossing that was already there would give up most of
-the gain" (`boundary_opt.rs:380-382`). If the solved displacement introduces a *new*
-crossing, the whole displacement (every point, uniformly) is scaled back toward the
-starting position by successive halving (`scale *= 0.5`) until no new crossing remains or
-`scale` drops to `0.1`, at which point the solve is abandoned entirely
-(`boundary_opt.rs:1113-1133`). The doc comment on `crossings_count`
-(`boundary_opt.rs:373-377`) states the cost of not guarding this: "downstream that costs
-far more than the boundary error it bought — the repair stage refits the offending rings
-round after round (2.5 s on one logo) and the emitter paints a face over its own
-interior."
+be pulled toward the same ink and pass through each other. Downstream that costs far more
+than the boundary error it bought (the repair stage refits the offending rings round after
+round, 2.5 s on one logo, and the emitter paints a face over its own interior).
+`fold_guard` counts crossing segment pairs at the start and at the solution, and while the
+solution adds crossings scales the whole displacement back (`p⁰ + s(p − p⁰)`,
+`s = 1, ½, ¼, …` while `s > 0.1`). The count is compared with the start's, not with zero:
+an earlier stage may already have left a fold for the repair stage, and refusing to
+improve a boundary because of it would give up most of the gain.
+
+The count (`folds::FoldCounter`) is a spatial join after J. Dittrich, B. Seeger (2000),
+*Data redundancy and duplicate detection in spatial join processing*, ICDE,
+<https://doi.org/10.1109/ICDE.2000.839452>: segments are entered in a coarse grid by their
+range swept over every position the guard will ask about, and a pair is reported only in
+the cell holding the reference point of the two ranges' intersection. The candidate list
+is built once and each count re-applies the exact per-position test, so the count is the
+same integer the per-count hash grid it replaced produced (byte-identical output on every
+mode, commit `a192c46`).
 
 ## Constants and thresholds
 
-| name | value | controls | stated derivation |
-|---|---|---|---|
-| `MAX_STEP` | `0.35` px | largest per-point displacement in one CG step | none stated beyond its role |
-| `MAX_TOTAL` | `1.0` px | total leash from the point's starting (measured) position | "This is a refinement of the boundary, not a search for it: a point a pixel away from its own level set has stopped describing the same piece of the image" (`boundary_opt.rs:88-90`) — qualitative, no swept value |
-| `K_KINK` | `0.05` | kink weight, as a fraction of the data term's initial value | scaling rule is derived (relative to `data0`); the specific `0.05` is not swept in this comment |
-| `K_ANCHOR` | `0.10` | anchor weight, as a fraction of the data term's initial value | same as above; `0.10` itself not swept here |
-| `JUNCTION_ANCHOR` | `4.0` | multiplier on `w_anchor` at a junction point | "anchored harder, for the reason given in the module comment" (junctions need better evidence than one pixel) — the multiplier's own value is not derived |
-| `MIN_CONTRAST` | `2.0/255.0` | pixel usable-evidence floor for the data term | no stated derivation |
-| `EPS` (in `priors`) | `1e-4` | floor inside the kink term's square root, for differentiability at zero curvature | stated purpose, no numeric derivation |
-| `INKVEC_BOPT_ITERS` (*removed*) default | `48` | iteration cap | **measured**: 24 was found unconverged; see Failure modes / Environment overrides |
-| `INKVEC_BOPT_MS` (*removed*) default | `1200` ms | time budget | "the 1200 ms budget below was never the binding constraint. Measuring at a 60 s budget gave the same 0.4142" (`boundary_opt.rs:1002-1003`) |
-| degenerate-box guard (in `crossings_count`) | `(x1-x0)*(y1-y0) > 64` | skips a segment whose bounding box would touch too many spatial-hash cells | "A degenerate box would put a segment in every cell; the map never has one" (`boundary_opt.rs:406-407`) — asserted, not derived |
-| fold-guard floor | `scale > 0.1` | how far the solve will keep halving the accepted displacement before giving up entirely | no stated derivation |
-| backtracking factor | `step *= 0.4`, up to 6 tries | line-search backoff | no stated derivation |
-| relative-improvement stop | `rel < 1e-4` | early stop once a step buys almost nothing | no stated derivation |
-| partition tolerance (`junction_pixel`) | `(sum - 1.0).abs() > 1e-6` | rejects a wedge set that does not sum to one pixel of area | exact geometric identity, not a tuned threshold |
-
-## Failure modes and edge cases
-
-### The sawtooth, and four rejected cures
-
-The module's longest piece of institutional knowledge is its own section on a failure it
-could not fix by tuning (`boundary_opt.rs:37-68`), reproduced because it is the most
-load-bearing paragraph in the file:
-
-> Area coverage does not determine a boundary. Any wiggle that preserves how much of each
-> pixel falls on either side leaves the data term exactly unchanged, and on a stroke about
-> two pixels wide — where both of its sides compete for the same pixels, and most of those
-> pixels are excluded as junction pixels anyway — the solver wanders into that null space
-> and returns a row of triangular teeth. They render almost as well as a straight edge and
-> look nothing like one, which is the whole problem: `openmoji/1F3A1` moves by 0.008 in
-> colour error while turning a smooth grey stroke into a saw.
->
-> Measured 2026-09-03, all rejected, none shipped:
->
-> * **More smoothing.** The teeth do clear, at about twenty times the shipped kink weight.
->   They take real detail with them: on 246 icons DISTS goes 0.0310 to 0.0363.
-> * **A length term** on the boundary, the textbook cure for this null space, since a
->   zigzag is much longer than the straight edge with the same per-pixel areas. At weights
->   that leave the rest of the corpus alone it barely touches the teeth.
-> * **Anchoring each point by its own measured uncertainty**, which is appealing because
->   `refine_subpixel` already marks thin-ribbon points uncertain (its coverage gradient is
->   small there) and it needs no new threshold. It does not remove the teeth either.
-> * **Stopping the solver early.** The teeth grow with iteration count: one iteration is
->   clean, three shows them, twenty-four is a saw. On thin-stroke icons four iterations
->   beat twenty-four on every axis (dE00 0.7625 against 0.7852, DISTS 0.0568 against
->   0.0633) — but on the 246-icon screening set the full count wins (0.2249 against
->   0.2293), because everything that is not a thin ribbon is still converging usefully.
->
-> The pattern in all four is the same: this is a *local* failure of the model and a global
-> knob cannot serve both cases. The model's own domain is the honest place to fix it — a
-> ribbon two pixels wide has no interior, so its two sides are not two independent
-> boundaries and should not be solved as though they were. That is LOG-44, fitting a thin
-> face as a centreline and a width, and it is the same root cause as the lumpy strokes and
-> the failure of a wider tangent window in `refine_subpixel`. **Do not add a fifth knob
-> here.**
-
-What the sawtooth *is*, in plain terms: area coverage is a many-to-one map from boundary
-shape to rendered pixels. A thin, near-symmetric stroke has a large family of boundary
-shapes — including jagged ones — that render almost identically, because whatever one side
-loses to a wiggle the other side gains back inside the same pixel. The solver has no reason
-to prefer the smooth member of that family over a jagged one, and every generic
-regulariser tried (more smoothing, a length penalty, per-point uncertainty weighting,
-fewer iterations) either failed to separate them or cost real detail elsewhere on the
-corpus to do so. `research/decoding`'s later work (see `09-decode.md`) is the model-order
-fix this note points at: treat a thin face as a centreline-plus-width rather than as two
-independent boundaries.
-
-### The junction wedge term, tested and found worse
-
-`INKVEC_BOPT_JUNC` (*research build*) (default off) turns on `junction_pixel` so junction pixels enter the
-data term through the wedge construction above. A development corpus measurement of
-turning it on (screen set, 246 icons, paired against the shipped default) recorded:
-
-| | dE00 | DISTS | params ratio | objective |
+| name | value | where | controls | basis |
 |---|---|---|---|---|
-| junctions off (shipped) | 0.1582 | 0.0275 | 1.41 | **0.4328** |
-| junctions on | 0.1668 | 0.0289 | 1.46 | 0.4562 |
+| `MAX_STEP` | 0.35 px | `boundary_opt.rs:110` | largest displacement of any point in one L-BFGS step | none |
+| `MAX_TOTAL` | 1.0 px | `boundary_opt.rs:114` | leash round each point's start; also why the band never moves | "a point a pixel away from its own level set has stopped describing the same piece of the image" |
+| `K_KINK` | 0.05 | `boundary_opt.rs:121` | kink weight, fraction of the starting data term | scaling rule derived, value not swept |
+| `K_ANCHOR` | 0.10 | `boundary_opt.rs:124` | anchor weight, fraction of a point's share of the starting data term | as above |
+| `JUNCTION_ANCHOR` | 4.0 | `boundary_opt.rs:126` | anchor multiplier at a shared end point | not derived |
+| `MIN_CONTRAST` | 2/255 | `boundary_opt.rs:128` | colour or opacity difference that counts as a boundary when choosing the pixels where alpha is a fourth channel | none |
+| `EPS` (kink) | 1e-4 | `boundary_opt.rs:440` | floor inside the kink term's square root | for differentiability |
+| `REACH` | 1 px | `band.rs:71` | band width round the pixels the start crosses | follows from `MAX_TOTAL` |
+| `MEMORY` | 3 | `lbfgs.rs:41` | L-BFGS pairs kept | measured: 3 did as well as 7, 15 or 30 |
+| `C1` | 1e-4 | `lbfgs.rs:43` | Armijo constant | textbook (Nocedal & Wright) |
+| `MAX_TRIALS` | 8 | `lbfgs.rs:45` | halvings per line search | none |
+| `MAX_ITERS` | 32 | `lbfgs.rs:49` | iterations per independent part | measured (below) |
+| `PARAM_TOL` | 0.005 px | `lbfgs.rs:52` | stop when no point moves more | half the SVG's 0.01 px resolution |
+| `FUNC_TOL` | 1e-4 | `lbfgs.rs:55` | stop on relative decrease of the changeable energy | none |
+| fold-guard floor | `s > 0.1` | `boundary_opt.rs:658` | how far the guard halves the displacement before giving up | none |
+| segment bucket limit | cell range `(x1−x0)(y1−y0) ≤ 64` | `folds.rs` | segments counted by the fold guard (the map never has a larger one) | kept exactly from the grid it replaced |
 
-"noto-emoji 0.389 -> 0.418, openmoji 0.168 -> 0.187, twemoji 0.137 -> 0.151; lucide
-unchanged because it never fires. Including junction pixels through the wedge model moves
-the boundaries the wrong way. Left off." The same report also corrects an earlier,
-mistaken diagnosis that junction pixels carried 88% of the corpus's remaining error — that
-number came from a classifier that conflated antialiasing with genuine junctions; measured
-directly, junction pixels are 2.07% of the image and about 12.9% of the remaining error,
-and `boundary_opt`'s own instrumentation shows the wedge branch is `seen 0` times on the
-icons the mistaken classifier was scored on.
+## Measurements
 
-### The unconverged iteration count
+Against the per-pixel term with Fletcher–Reeves conjugate gradients it replaced (the
+behaviour on `4f1fb88`):
 
-The comment above the `INKVEC_BOPT_ITERS` (*removed*) default (`boundary_opt.rs:988-1003`) is a second
-piece of measured history worth quoting closely:
+| set | objective | mean dE00 | worst tenth dE00 | DISTS | params vs artist | better / worse |
+|---|---|---|---|---|---|---|
+| screen (246) | 0.3873 → **0.3585** | 0.1563 → 0.1427 | 0.5048 → 0.4669 | 0.0259 → 0.0242 | 1.488 → 1.503 | 155 / 82 |
+| held_a (156) | 0.3958 → **0.3366** | 0.1480 → 0.1366 | 0.4626 → 0.4183 | 0.0243 → 0.0218 | 1.477 → 1.472 | 104 / 46 |
 
-> 48, not 24: at 24 this solve stops before it has converged, and the boundary it hands on
-> is still moving. `gt_diff` attributes 94% of the remaining error to boundaries, so that
-> mattered more than any threshold in the tracer.
->
-> Full set, 980 icons: objective 0.4519 -> 0.4428, with dE00 0.1660 -> 0.1620, DISTS 0.0286
-> -> 0.0281 and parameters against the artist 1.46 -> 1.42. Every family improves or holds;
-> simple-icons goes 1.31 -> 1.13 on parameters and material-icons 0.0743 -> 0.0604 on
-> dE00. Improving fidelity and cost together is what says this is convergence rather than a
-> trade.
->
-> It is not monotone past that — 96 reads 0.4157 and 192 reads 0.4160 on the screen split
-> against 48's 0.4142 — so the step schedule drifts once the residual stops driving it, and
-> more iterations are not better iterations.
->
-> Nearly free: 573 ms/icon to 578 ms, and the 1200 ms budget below was never the binding
-> constraint. Measuring at a 60 s budget gave the same 0.4142.
+Stage time on the four standard inputs (ms, new against old): flat logo 26.5 / 25.0,
+Noto gradient emoji 70.2 / 58.1, 2048 px Twemoji globe 193.6 / 185.1, masthead 319.2 /
+332.0; about a fifth less on the screen set's icons. Whole-trace times are equal within
+noise. Fast mode is untouched (246/246 byte-identical).
 
-Note the two different objective figures quoted are on two different splits — `0.4519 ->
-0.4428` is the full 980-icon set (the number that justified 24 -> 48), while `0.4142` /
-`0.4157` / `0.4160` are on the 246-icon screen split (used only to show that going past 48
-does not help). They should not be conflated.
+## Failure modes and history
+
+### The sawtooth
+
+Area coverage does not determine a boundary. Any wiggle that preserves how much of each
+pixel falls on either side leaves the data term unchanged, and on a stroke about two
+pixels wide, where both sides compete for the same pixels, a solver can wander into that
+null space and return a row of triangular teeth that render almost as well as a straight
+edge and look nothing like one (`openmoji/1F3A1` moved by 0.008 in colour error while
+turning a smooth grey stroke into a saw).
+
+Measured 2026-09-03, all rejected: twenty times the kink weight (clears the teeth, costs
+detail: DISTS 0.0310 to 0.0363 on 246 icons); a length term (barely touches them);
+anchoring each point by its measured uncertainty (does not remove them); stopping early
+(wins on thin strokes, loses on the rest). A ribbon two pixels wide has no interior, so
+its two sides are not two independent boundaries: that is LOG-44, fitting a thin face as a
+centreline and a width. Until then its pixels are left out of the data term (above).
+**Do not add another knob here.**
+
+### What the solver replaced, and what was tried
+
+On the continuous band energy the Fletcher–Reeves solver moved the furthest point 0.35 px
+on every one of its 48 iterations while the energy fell by a hundredth of a percent: it
+took the first trial that lowered the energy from a fresh 0.35 px step each time, and
+wandered along the energy's flat directions. Measured and dropped while choosing its
+replacement:
+
+- **Levenberg–Marquardt** with a Gauss–Newton Hessian (banded Cholesky): the same
+  wandering at about a hundred times the cost.
+- **Polak–Ribière+ and Hager–Zhang conjugate gradients** with a Wolfe line search: more
+  energy evaluations than L-BFGS for the same result.
+- **L-BFGS preconditioned** with the priors' exact banded Hessian: steps far too short,
+  because the smoothed ℓ1 kink term is a hundred times stiffer at a straight run than
+  anywhere a real corner is.
+- **Clipping each point's step** separately instead of scaling the whole step: no gain.
+- **Iteration cap:** 24 reads 0.3666 on the screen set, 32 reads 0.3585, 48 reads 0.3558;
+  48 made the stage a fifth to nine tenths slower on the standard inputs, so 32 ships.
+- **Junction pixels in the data term:** measured worse twice, first as the wedge
+  partition of the old per-pixel term (objective 0.4328 → 0.4562 on the screen set, with
+  noto-emoji 0.389 → 0.418), then in the band (0.3713 → 0.3908, above).
+
+The earlier finding that the Fletcher–Reeves solve was unconverged at 24 iterations (980
+icons, objective 0.4519 → 0.4428 at 48) is what the stopping rules above now settle per
+part: a part stops when its points stop moving, not at a global count.
 
 ## Environment overrides
 
-Since the settings cleanup (CHANGELOG, *Unreleased*) the engine reads its environment through one helper (`inkvec_core::env`): a switch is off when unset, empty or `0`, and every variable is read once per process. Variables marked *removed* below are gone (their defaults are constants now); those marked *research build* are read only by a binary built with `--features research`. The full list, with what is left and why, is [`docs/internal/env-vars.md`](../internal/env-vars.md).
+The engine reads its environment through `inkvec_core::env`; the full list, with what was
+removed and why, is [`docs/internal/env-vars.md`](../internal/env-vars.md).
 
 | variable | default | effect |
 |---|---|---|
-| `INKVEC_BOPT` | on (any value other than `"0"`) | read in `lib.rs`, not in this file: disables the whole stage when set to `"0"` |
-| `INKVEC_BOPT_ITERS` (*removed*) | `48` | iteration cap |
-| `INKVEC_BOPT_MS` (*removed*) | `1200` | time budget in milliseconds; overridden by the caller's `budget_ms` when supplied |
-| `INKVEC_BOPT_KINK` (*removed*) | `K_KINK = 0.05` | kink-weight fraction of the initial data term |
-| `INKVEC_BOPT_ANCHOR` (*removed*) | `K_ANCHOR = 0.10` | anchor-weight fraction of the initial data term, divided by point count |
-| `INKVEC_BOPT_JUNC` (*research build*) | off | enables the wedge construction for junction pixels — measured worse on the corpus (see Failure modes) |
-| `INKVEC_BOPT_CHUNKS` (*research build*) | `1` (sequential) | parallel chunk count for the data-term sum; more than one changes summation order and, downstream, tie-sensitive fit decisions |
-| `INKVEC_BOPTDBG` | off | per-iteration `eprintln!` of step, energy, and relative improvement, plus the fold-guard summary |
-| `INKVEC_BOPT_CELLS` | off | per-pixel `eprintln!` of the clipped area computed in `data_cells` |
-| `INKVEC_JUNCDBG` | off | dumps the `juncstat` counters explaining why candidate junction pixels were accepted or declined |
+| `INKVEC_BOPT` | on | read in `lib.rs`: `0` disables the whole stage |
+| `INKVEC_BOPTDBG` | off | per-iteration `eprintln!` of step, energy, relative decrease and largest move, plus the fold-guard summary |
+
+The former `INKVEC_BOPT_ITERS`, `INKVEC_BOPT_MS`, `INKVEC_BOPT_KINK`,
+`INKVEC_BOPT_ANCHOR`, `INKVEC_BOPT_JUNC`, `INKVEC_BOPT_CHUNKS`, `INKVEC_BOPT_CELLS` and
+`INKVEC_JUNCDBG` are gone: the stage has one behaviour.
 
 ## Open questions
 
-- **`K_KINK = 0.05`, `K_ANCHOR = 0.10`, `JUNCTION_ANCHOR = 4.0`, `MAX_STEP = 0.35`,
-  `MAX_TOTAL = 1.0`, `MIN_CONTRAST = 2.0/255.0`** all have a stated *reason for existing*
-  (why a kink term, why an anchor, why a leash, why a contrast floor) but none carries a
-  swept numeric derivation the way the iteration count and the merge distance elsewhere in
-  the tracer do. These read as engineering choices consistent with the design, not values
-  independently justified by a measurement.
-- **`INKVEC_BOPT_CHUNKS` (*research build*)'s default of `1`** is justified by a single anecdote — "on one
-  300-path logo they cost 8 paths and 16% more coordinates at the same colour error" — and
-  the comment says outright that this is provisional ("stays opt-in until the full set has
-  priced it"). This is explicitly a one-test-case measurement standing in for a corpus
-  sweep that has not yet been run.
-- **The fold-guard floor `scale > 0.1`** and the backtracking factor `0.4` have no stated
-  derivation; they read as reasonable defaults rather than measured ones.
-- **Why does the objective drift upward past 48 iterations** (0.4142 at 48, 0.4157 at 96,
-  0.4160 at 192, on the screen split) is observed but not explained mathematically — the
-  comment offers "the step schedule drifts once the residual stops driving it" as a
-  description, not a mechanism.
-- **The degenerate-box guard in `crossings_count`** (`(x1-x0)*(y1-y0) > 64`) is asserted
-  ("the map never has one") rather than derived from a bound on segment length or pixel
-  size.
-- **This module and `refine_subpixel`/`refine_junctions` do not share a common notion of
-  positional confidence.** `boundary_opt` anchors every point equally hard except at
-  junctions; it does not consume `CoverageField::position_sigma` (see `02-coverage.md`) or
-  any per-point sigma from upstream, even though one rejected sawtooth cure was exactly
-  "anchoring each point by its own measured uncertainty." Whether a *different* use of
-  per-point sigma (not the one tried) would behave differently is not addressed.
+- **`K_KINK`, `K_ANCHOR`, `JUNCTION_ANCHOR`, `MAX_STEP`, `MIN_CONTRAST`** have a reason to
+  exist but no swept value. They were tuned for the per-pixel solver; the band energy's
+  scale (every band pixel, not only the cut ones) is different, and a joint sweep may pay.
+- **The sawtooth's pixels are simply left out.** LOG-44 (a thin face as a centreline and a
+  width) is the model-order fix; until then a two-pixel stroke is solved from its ends and
+  its priors.
+- **Twenty gradients cost more.** The one standard input where the stage is clearly slower
+  than before is a Noto emoji with twenty gradient fills (+21%, 58 ms to 70 ms); where that
+  time goes has not been profiled.
+- **No per-point confidence.** The anchor is the same for every non-junction point; it
+  does not consume `refine_subpixel`'s per-point sigma. One use of it was tried against the
+  sawtooth and failed; whether another use would help is untested.

@@ -19,6 +19,15 @@ API in particular should be treated as unstable release to release).
     - The DP's CPU is about halved on the screen set, and cut to 0.43× on the 2048 px globe.
   - **Gradient fills:** one set of predictions is shared by all three scores. The small solves run on the stack, and unions no longer copy their members.
   - **Overall:** the whole trace is about 1.8× faster on the screen set. On the 2048 px globe it went from 1.29 s to 0.84 s.
+- **Quality mode traces closer to the source.** The boundary solve now compares the SVG with the image over a narrow band of pixels round every boundary, not only the pixels a boundary cuts.
+  - Each pixel's coverage is exact box coverage, accumulated row by row, so the score no longer jumps when a boundary leaves a pixel. The narrow band follows Chan & Vese 2001 and Adalsteinsson & Sethian 1995; the row accumulation follows font-rs and Manson & Schaefer 2011.
+  - The solver is L-BFGS with a backtracking line search, run separately on each independent part of the boundary (Liu & Nocedal 1989; Nocedal & Wright 2006; Lewis & Overton 2013).
+  - The fold guard counts crossings as a spatial join (Dittrich & Seeger 2000).
+  - **Screen set:** mean dE00 0.1557 → 0.1425, better on 155 icons and worse on 82; the worst tenth 0.5009 → 0.4665.
+  - **Held-out set:** mean dE00 0.1476 → 0.1366, better on 105 and worse on 45; the worst tenth 0.4601 → 0.4224.
+  - DISTS improves on both sets. Path counts barely move: 1.488 → 1.503 × the artist's on the screen set, and 1.475 → 1.471 on the held-out set.
+  - It is faster too. On 80 screen-set icons the solve went from 28.7 to 7.9 ms, and the whole trace from 162 to 131 ms. On the seven 2048 px images the solve went from 320 to 227 ms.
+  - Fast mode's output is unchanged.
 - **Gradient stops are placed on the 3-decimal grid the SVG writes them to.** Samples are binned once, and every offset is priced exactly from running sums (Hudson 1966; Bai & Perron 2003; Chakraborty et al. 2025). The band merge on a gradient emoji went from 721 to 507 ms. Mean dE00 is slightly better: 0.15635 → 0.15572 on the screen set, 0.14802 → 0.14761 on held-out icons. Only gradient icons change.
 - **The code explains itself.**
   - About 900 functions across the engine, the bindings and the Studio gained or improved their doc comments: they say what they compute. The mathematical ones give the formula with every symbol defined, the units, why the method was chosen, and the edge cases.

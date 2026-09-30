@@ -332,7 +332,7 @@ Each stage is documented in depth in the [pipeline series](https://logolabs.gith
 2. **Sub-Pixel Coverage.** Linear unmixing across 3D RGB channels inverts anti-aliasing to a fraction of a pixel, establishing honest per-point uncertainty $\sigma_{\text{pos}}$.
 3. **Palette.** Minimum description length clustering in OKLab ($\Delta E_{00}$) eliminates spurious bands and fake inks.
 4. **Planar Map (DCEL).** Boundaries are stored once between adjacent faces, so the model has no overdraw ($1.000\times$ internally); seams are unrepresentable.
-5. **Boundary Solve.** Analysis-by-synthesis moves all boundary points simultaneously under nonlinear conjugate gradient (Fletcher–Reeves) with a backtracking line search and an analytic Shoelace-derived gradient.
+5. **Boundary Solve.** Analysis-by-synthesis moves all boundary points simultaneously under L-BFGS with a backtracking line search, against the exact box coverage of every pixel in a narrow band around the boundary, with an analytic gradient.
 6. **Curve Fitting.** Global dynamic programming over lines, arcs, Raph Levien quartic G1 Béziers, and primitives (`<circle>`, `<ellipse>`, `<rect>`).
 7. **Repair & Emit.** Capped span refitting eliminates self-crossing rings; output is emitted with shared geometry and clean even-odd paths.
 
@@ -363,7 +363,7 @@ Inkvec is engineered specifically for graphic artwork, logotypes, icons, and dia
 | **Variable-Width Art / Sketches** | Medial axis stroke recovery (`--strokes`) requires uniform width; rough sketches fall back to filled outlines. | Use manual vector pen tools or specialized sketch tracers. |
 | **Sub-Pixel Gaps (< 1px)** | Optical anti-aliasing ramps overlap, merging fine gaps into single faces. | Enable `--sr on` (MambaIR) to upsample before tracing. |
 | **Exotic Gradients & Blurs** | Linear and radial gradients are supported; mesh gradients, angular sweeps, and drop shadows are quantised into bands. | SVG 1.1 limitation; manual gradient mesh authoring. |
-| **Real-Time / 60 FPS Video** | Heavy global optimization (nonlinear conjugate gradient + MDL DP) takes $\approx 1.2\text{s}$ per graphic. | Use Potrace (<0.01s) or VTracer (~0.04s) for interactive speed. |
+| **Real-Time / 60 FPS Video** | Heavy global optimization (L-BFGS boundary solve + MDL DP) takes $\approx 1.2\text{s}$ per graphic. | Use Potrace (<0.01s) or VTracer (~0.04s) for interactive speed. |
 
 ---
 

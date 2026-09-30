@@ -70,7 +70,7 @@ This document outlines Inkvec's known limitations, failure modes, performance tr
 
 ### 4.2 Large Image Memory Footprint
 - **Scaling:** The Doubly Connected Edge List (DCEL), per-pixel label arrays, coverage gradient fields, and dynamic programming memory matrices scale linearly with pixel dimensions $\mathcal{O}(W \times H)$.
-- **Limitation:** Processing ultra-high-resolution images (e.g., 8,000 × 8,000 pixels or larger) requires several gigabytes of RAM during the global nonlinear conjugate gradient boundary solve and DP curve fitting.
+- **Limitation:** Processing ultra-high-resolution images (e.g., 8,000 × 8,000 pixels or larger) requires several gigabytes of RAM during the global boundary solve and DP curve fitting.
 - **Mitigation:** Inkvec's intake normalizer automatically detects oversampled artwork and downsamples to $\le 8.0\times$ detail resolution unless overridden.
 
 ---

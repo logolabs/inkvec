@@ -138,15 +138,105 @@ fn level(v: f32, bits: u32) -> usize {
     (v.clamp(0.0, 1.0) * top + BELOW_HALF) as usize
 }
 
-/// Per-bin statistics: all pixels, and flat pixels, with their colour-and-opacity sums.
+/// Per-bin statistics over the *occupied* bins only: all pixels, and flat pixels, with
+/// their colour-and-opacity sums.
+///
+/// # Layout
+///
+/// A bin is identified by its 16-bit key `k` ([`Grid::key`]) and, once a pixel has fallen
+/// in it, by a dense index `id` into the per-bin vectors below (`key[id] = k`). `slot[k]`
+/// is `id + 1`, or 0 while the bin is empty. The vectors are as long as the number of
+/// occupied bins, B, which is tiny: a median of 16 on the 128 px screen set and at most 610
+/// on the 2048 px set, out of 65 536 possible keys.
+///
+/// The dense layout this replaces kept five 65 536-entry arrays (4.98 MB), plus a filled
+/// 1.5 MB `bin_point` table and three scans of all 65 536 keys, whatever the image. At
+/// 128 px (16 384 pixels) that was 0.65 of the stage's 1.27 ms: 4 table entries per pixel.
+/// `slot` is the only table left sized by the key space, and it is written only where a
+/// pixel lands. Everything else is O(B).
+///
+/// *Why identical:* each bin still receives its pixels' values one at a time in raster
+/// order, so every sum is the same sequence of f64 roundings; the ids only rename bins,
+/// and every consumer either works bin by bin (the lookup table) or sorts by a key that
+/// includes the bin key (the candidate orders), so the order ids were handed out in never
+/// shows.
+///
+/// Method from: P. Briggs, L. Torczon, "An Efficient Representation for Sparse Sets",
+/// ACM LOPLAS 2(1–4):59–69, 1993, DOI 10.1145/176454.176484, as described by R. Cox,
+/// "Using Uninitialized Memory for Fun and Profit", 2008, <https://research.swtch.com/sparse>:
+/// a sparse array from element to position and a dense array of members, so iteration costs
+/// the members, not the universe. Adapted: the sparse side is zero-initialised (0 = absent)
+/// instead of validated against the dense side, since a zeroed 65 536-entry table is cheap
+/// and safe Rust has no uninitialised memory.
+///
+/// Inspired by: M. E. Celebi, "Improving the Performance of K-Means for Color
+/// Quantization", Image and Vision Computing 29:260–271, 2011, DOI
+/// 10.1016/j.imavis.2010.10.002 -- working on the distinct colours with their counts
+/// rather than on the pixels. Here the "colours" are grid bins with coherence counts.
 struct Bins {
+    /// Per key: `1 + id` of its bin, or 0 when no pixel has that key. `BINS` entries.
+    slot: Vec<u32>,
+    /// Per bin: its key.
+    key: Vec<u16>,
+    /// Per bin: its pixels.
     count: Vec<u32>,
+    /// Per bin: its flat pixels (every 4-neighbour inside the image in the same bin).
     flat: Vec<u32>,
-    /// Pixels with at least one of their four neighbours in the same bin: the bin's
-    /// pixels that belong to a run of it, not to scattered noise.
+    /// Per bin: pixels with at least one of their four neighbours in the same bin: the
+    /// bin's pixels that belong to a run of it, not to scattered noise.
     paired: Vec<u32>,
+    /// Per bin: the colour-and-opacity sum of its flat pixels.
     flat_sum: Vec<[f64; 4]>,
+    /// Per bin: the colour-and-opacity sum of all its pixels.
     all_sum: Vec<[f64; 4]>,
+}
+
+impl Bins {
+    /// No occupied bin yet. The `slot` table is zeroed by the allocator: an all-zero
+    /// `vec!` asks for zeroed memory, which the operating system hands out lazily for large
+    /// blocks, so pages no key touches are never written.
+    fn new() -> Self {
+        Bins {
+            slot: vec![0; BINS],
+            key: Vec::new(),
+            count: Vec::new(),
+            flat: Vec::new(),
+            paired: Vec::new(),
+            flat_sum: Vec::new(),
+            all_sum: Vec::new(),
+        }
+    }
+
+    /// The number of occupied bins, B.
+    fn len(&self) -> usize {
+        self.key.len()
+    }
+
+    /// The id of key `k`'s bin, which must be occupied. O(1).
+    #[inline]
+    fn id(&self, k: u16) -> usize {
+        self.slot[k as usize] as usize - 1
+    }
+
+    /// The id of key `k`'s bin, opening an empty one (all counts and sums zero) the first
+    /// time the key is seen. O(1) amortised.
+    #[inline]
+    fn open(&mut self, k: u16) -> usize {
+        let s = self.slot[k as usize];
+        if s != 0 {
+            return s as usize - 1;
+        }
+        let id = self.key.len();
+        // `id + 1 ≤ 65 536`: at most one bin per key, so it always fits a u32.
+        self.slot[k as usize] = id as u32 + 1;
+        self.key.push(k);
+        self.count.push(0);
+        self.flat.push(0);
+        self.paired.push(0);
+        self.flat_sum.push([0.0; 4]);
+        self.all_sum.push([0.0; 4]);
+        id
+    }
 }
 
 /// One pass over the `w × h` image: per bin, how many pixels fall in it (`count`, with
@@ -154,38 +244,42 @@ struct Bins {
 /// same bin) and how many are *flat* (every 4-neighbour inside the image in the same bin,
 /// with their sums `flat_sum`).
 ///
-/// A neighbour outside the image counts as agreeing, so a filled region touching the
-/// border keeps its flat pixels there. Sums are in f64 so a 2048 px image's totals do not
-/// lose the low bits of each 0..1 channel. `px` is sRGB 0..1 plus opacity; `keys` is
-/// [`Grid::key`] of each pixel.
+/// In morphological terms the flat pixels of bin `k` are the erosion of its indicator set
+/// `X_k = {p : key(p) = k}` by the 4-cross, with the image padded by `k`, and the paired
+/// pixels are `X_k` without its isolated points. A neighbour outside the image counts as
+/// agreeing, so a filled region touching the border keeps its flat pixels there.
+///
+/// Sums are in f64 so a 2048 px image's totals do not lose the low bits of each 0..1
+/// channel. `px` is sRGB 0..1 plus opacity; `keys` is [`Grid::key`] of each pixel. Θ(n)
+/// time; memory O(B) besides the `slot` table.
+///
+/// Inspired by: G. Pass, R. Zabih, J. Miller, "Comparing Images Using Color Coherence
+/// Vectors", ACM Multimedia '96, pp. 65–73, DOI 10.1145/244130.244148, which splits each
+/// colour bucket's pixels into coherent and incoherent by the size of their connected
+/// component. Flatness is the local version: a pixel is coherent when its whole 4-cross stays
+/// in its bucket, which needs no component labelling.
 fn histogram(px: &[[f32; 4]], keys: &[u16], w: usize, h: usize) -> Bins {
-    let mut b = Bins {
-        count: vec![0; BINS],
-        flat: vec![0; BINS],
-        paired: vec![0; BINS],
-        flat_sum: vec![[0.0; 4]; BINS],
-        all_sum: vec![[0.0; 4]; BINS],
-    };
+    let mut b = Bins::new();
     for y in 0..h {
         for x in 0..w {
             let p = y * w + x;
             let k = keys[p];
-            let ku = k as usize;
+            let id = b.open(k);
             let c = px[p];
-            b.count[ku] += 1;
-            for (s, v) in b.all_sum[ku].iter_mut().zip(c) {
+            b.count[id] += 1;
+            for (s, v) in b.all_sum[id].iter_mut().zip(c) {
                 *s += v as f64;
             }
             let same = |q: usize| keys[q] == k;
             let (l, r) = (x > 0 && same(p - 1), x + 1 < w && same(p + 1));
             let (u, d) = (y > 0 && same(p - w), y + 1 < h && same(p + w));
             if l || r || u || d {
-                b.paired[ku] += 1;
+                b.paired[id] += 1;
             }
             let flat = (x == 0 || l) && (x + 1 == w || r) && (y == 0 || u) && (y + 1 == h || d);
             if flat {
-                b.flat[ku] += 1;
-                for (s, v) in b.flat_sum[ku].iter_mut().zip(c) {
+                b.flat[id] += 1;
+                for (s, v) in b.flat_sum[id].iter_mut().zip(c) {
                     *s += v as f64;
                 }
             }
@@ -255,17 +349,32 @@ struct Ink {
 /// `d` is [`Ink2::dist`] in OKLab. A joined bin adds its flat sums to the ink, so the
 /// ink's final colour is the flat-pixel mean over all its bins, not its founder's colour.
 /// Most populous first means the dominant colour of a cluster founds it, which keeps a
-/// faint neighbour bin from pulling the ink off its true colour.
+/// faint neighbour bin from pulling the ink off its true colour. `Ink::bins` holds keys.
+///
+/// Candidates are the occupied bins (ids), so the scan is O(B) rather than O(65 536); the
+/// sort key `(flat descending, key ascending)` is the one the dense version sorted bin keys
+/// by, a total order because keys are distinct, so the candidate sequence -- and with it
+/// every join and founding -- is the same. Then O(C · K) distances for C candidates
+/// (≤ 36 measured) and K inks.
+///
+/// Method from: J. A. Hartigan, *Clustering Algorithms*, Wiley, 1975 -- the leader
+/// algorithm (one pass; a point joins the nearest leader within a radius or becomes a
+/// leader), as described in T. B. Arnold's R package `leaderCluster` 1.5,
+/// <https://cran.r-project.org/web/packages/leaderCluster/leaderCluster.pdf>. Adapted: points
+/// are weighted bins taken in popularity order, and joining also needs grid adjacency.
 fn found_inks(bins: &Bins, grid: Grid, merge_distance: f32, max_colors: usize) -> Vec<Ink> {
     // The key breaks ties so the order is total.
-    let mut cands: Vec<usize> = (0..BINS).filter(|&k| bins.flat[k] >= MIN_FLAT).collect();
-    cands.sort_unstable_by_key(|&k| (std::cmp::Reverse(bins.flat[k]), k));
+    let mut cands: Vec<usize> = (0..bins.len())
+        .filter(|&id| bins.flat[id] >= MIN_FLAT)
+        .collect();
+    cands.sort_unstable_by_key(|&id| (std::cmp::Reverse(bins.flat[id]), bins.key[id]));
     let max_colors = max_colors.clamp(1, u16::MAX as usize);
     let mut inks: Vec<Ink> = Vec::new();
     let mut points: Vec<Ink2> = Vec::new();
-    for &k in &cands {
-        let f = bins.flat[k] as f64;
-        let s = bins.flat_sum[k];
+    for &id in &cands {
+        let k = bins.key[id] as usize;
+        let f = bins.flat[id] as f64;
+        let s = bins.flat_sum[id];
         let point = ink2(mean(s, f));
         let (i, d) = nearest(&points, point);
         let joins = !inks.is_empty()
@@ -303,6 +412,14 @@ fn found_inks(bins: &Bins, grid: Grid, merge_distance: f32, max_colors: usize) -
 /// `merge_distance` of an ink, is a candidate; candidates are then dropped, least
 /// populous first, while they lie on the line between two other inks or candidates -- the
 /// grey rim of the text is a blend of the text and the paper, the text itself is not.
+///
+/// `used` is per bin id: the bins [`found_inks`] took. The candidate scan is O(B) over the
+/// occupied bins and sorts by `(paired descending, key ascending)`, the dense version's
+/// total order, so the picks are the same. Then at most [`MAX_THIN_CANDIDATES`] picks and
+/// O(picks · (K + picks)²) blend tests.
+///
+/// Inspired by: the Quality palette's share-and-blend admission (`color::extract_palette_mdl`);
+/// the blend test is `absorb_slivers`' segment distance.
 fn thin_inks(
     bins: &Bins,
     used: &[bool],
@@ -315,15 +432,15 @@ fn thin_inks(
         return Vec::new();
     }
     let min_paired = ((THIN_SHARE as f64 * n as f64).ceil() as u32).max(MIN_PAIRED);
-    let mut cands: Vec<usize> = (0..BINS)
-        .filter(|&k| !used[k] && bins.paired[k] >= min_paired)
+    let mut cands: Vec<usize> = (0..bins.len())
+        .filter(|&id| !used[id] && bins.paired[id] >= min_paired)
         .collect();
-    cands.sort_unstable_by_key(|&k| (std::cmp::Reverse(bins.paired[k]), k));
+    cands.sort_unstable_by_key(|&id| (std::cmp::Reverse(bins.paired[id]), bins.key[id]));
     let mut points: Vec<Ink2> = inks.iter().map(|&c| ink2(c)).collect();
     // Candidate colours, most paired pixels first.
     let mut picked: Vec<[f32; 4]> = Vec::new();
-    for &k in &cands {
-        let c = mean(bins.all_sum[k], bins.count[k] as f64);
+    for &id in &cands {
+        let c = mean(bins.all_sum[id], bins.count[id] as f64);
         let p = ink2(c);
         if nearest(&points, p).1 < merge_distance {
             continue;
@@ -367,9 +484,12 @@ fn thin_inks(
 struct Blends<'a> {
     px: &'a [[f32; 4]],
     keys: &'a [u16],
-    /// Per bin: its nearest ink, and whether the bin is that ink.
+    /// Per key: its bin's nearest ink, and whether the bin is that ink. `BINS` entries,
+    /// written only for occupied keys (no pixel reads the others).
     lut: &'a [(u16, bool)],
-    /// Per bin: its mean colour.
+    /// Per key: `1 + id` of its bin ([`Bins::slot`]).
+    slot: &'a [u32],
+    /// Per bin id: its mean colour as a two-ground point.
     bin_point: &'a [Ink2],
     inks: &'a [[f32; 4]],
     points: &'a [Ink2],
@@ -430,7 +550,8 @@ impl Blends<'_> {
         if around.is_empty() {
             return own;
         }
-        let c = self.bin_point[self.keys[p] as usize];
+        // Every pixel's key is occupied, so its slot is at least 1.
+        let c = self.bin_point[self.slot[self.keys[p] as usize] as usize - 1];
         let mut best = (own, f32::INFINITY);
         for &l in &around {
             let d = self.points[l as usize].dist(c);
@@ -547,10 +668,11 @@ pub(crate) fn palette_and_labels(
     let bins = histogram(&px, &keys, w, h);
 
     let found = found_inks(&bins, grid, merge_distance, max_colors);
-    let mut used = vec![false; BINS];
+    // Per bin id: taken by a flat ink.
+    let mut used = vec![false; bins.len()];
     for i in &found {
-        for &b in &i.bins {
-            used[b] = true;
+        for &k in &i.bins {
+            used[bins.id(k as u16)] = true;
         }
     }
     let mut inks: Vec<[f32; 4]> = found.iter().map(|i| mean(i.sum, i.flat)).collect();
@@ -571,24 +693,25 @@ pub(crate) fn palette_and_labels(
     }
     let points: Vec<Ink2> = inks.iter().map(|&c| ink2(c)).collect();
 
-    // Each occupied bin, once: its nearest ink, and whether the bin *is* that ink.
+    // Each occupied bin, once: its nearest ink, and whether the bin *is* that ink -- the
+    // inverse colour map, restricted to occupied cells and keyed by each cell's mean rather
+    // than its centre (Thomas, "Efficient Inverse Color Map Computation", Graphics Gems II,
+    // 1991). `lut` stays indexed by key, since every pixel looks itself up by key, but only
+    // occupied entries are written; the all-zero initial value is a zeroed allocation.
     let mut lut = vec![(0u16, false); BINS];
-    let mut bin_point = vec![Ink2::opaque(rgb_to_oklab([0.0; 3])); BINS];
-    for k in 0..BINS {
-        let m = bins.count[k];
-        if m == 0 {
-            continue;
-        }
-        let c = ink2(mean(bins.all_sum[k], m as f64));
+    let mut bin_point = Vec::with_capacity(bins.len());
+    for id in 0..bins.len() {
+        let c = ink2(mean(bins.all_sum[id], bins.count[id] as f64));
         let (i, d) = nearest(&points, c);
-        bin_point[k] = c;
-        lut[k] = (i as u16, d < merge_distance);
+        bin_point.push(c);
+        lut[bins.key[id] as usize] = (i as u16, d < merge_distance);
     }
 
     let blends = Blends {
         px: &px,
         keys: &keys,
         lut: &lut,
+        slot: &bins.slot,
         bin_point: &bin_point,
         inks: &inks,
         points: &points,

@@ -23,14 +23,20 @@ example rather than derived or measured.
 | 3 | Palette | `trace/color.rs` | [03-palette.md](03-palette.md) | [03-palette.html](03-palette.html) |
 | 4 | Regions | `trace/lib.rs` | [04-regions.md](04-regions.md) | [04-regions.html](04-regions.html) |
 | 5 | Gradients | `trace/gradient.rs` | [05-gradients.md](05-gradients.md) | [05-gradients.html](05-gradients.html) |
-| 6 | Planar map | `trace/planar.rs` | [06-planar-map.md](06-planar-map.md) | [06-planar-map.html](06-planar-map.html) |
-| 7 | Sub-pixel | `trace/planar.rs` | [07-subpixel.md](07-subpixel.md) | [07-subpixel.html](07-subpixel.html) |
+| 6 | Planar map | `trace/planar.rs`, `trace/planar/cracks.rs`, `trace/planar/runs.rs` | [06-planar-map.md](06-planar-map.md) | [06-planar-map.html](06-planar-map.html) |
+| 7 | Sub-pixel | `trace/planar.rs`, `trace/planar/junctions.rs` | [07-subpixel.md](07-subpixel.md) | [07-subpixel.html](07-subpixel.html) |
 | 8 | Boundary solve | `trace/boundary_opt.rs` | [08-boundary-solve.md](08-boundary-solve.md) | [08-boundary-solve.html](08-boundary-solve.html) |
 | 9 | Decode | `trace/decode.rs` | [09-decode.md](09-decode.md) | [09-decode.html](09-decode.html) |
 | 10 | Symmetry | `trace/symmetry.rs` | [10-symmetry.md](10-symmetry.md) | [10-symmetry.html](10-symmetry.html) |
 | 11 | Curve fitting | `inkvec-fit` | [11-fitting.md](11-fitting.md) | [11-fitting.html](11-fitting.html) |
 | 12 | Repair | `cli/rings.rs` | [12-repair.md](12-repair.md) | [12-repair.html](12-repair.html) |
 | 13 | Emit | `cli/emit.rs` | [13-emit.md](13-emit.md) | [13-emit.html](13-emit.html) |
+| 14 | Fast mode | `trace/fast/`, `cli/fast.rs` | [14-fast-mode.md](14-fast-mode.md) | [14-fast-mode.html](14-fast-mode.html) |
+
+Stages 1–13 follow the default route, Quality mode. Fast mode (`--mode fast`) shares
+stages 1, 6, 7, 10 and 13 with it (and stage 2's coverage reading, which the shared sub-pixel
+refinement applies), replaces 3–5 and 11 with its own versions, and skips 8, 9 and 12;
+stage 14 follows that route end to end.
 
 ## The one idea
 

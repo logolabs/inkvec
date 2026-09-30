@@ -9,7 +9,7 @@
 <body>
 <div class="wrap">
   <header class="masthead">
-    <p class="eyebrow">Stage 00 of 14</p>
+    <p class="eyebrow">Stage 00 of 15</p>
     <h1>What inkvec does, and why it isn't just "trace the edges"</h1>
     <p class="standfirst">inkvec turns a raster image — a logo, an icon, a PNG or JPEG —
     into an SVG document: shapes with fills, not a photograph. This page explains the one
@@ -207,6 +207,14 @@
       rectangles) are tried against the same measured points and kept only when they cost
       fewer numbers than the general-purpose curve fit for the same accuracy — the
       objective described above, applied one more time.</p>
+
+    <h3>A second, faster route</h3>
+    <p>Everything above describes the full engine, called Quality. inkvec also has a Fast
+      mode that shares the middle of this pipeline — the map in which every border is stored
+      once, the placement of each border point between the pixels, and the writer — but
+      replaces the slow searches around it with single-pass versions and draws its curves
+      the way the classic tracer Potrace does. It is described step by step in
+      <a href="14-fast-mode.html">Fast mode</a>.</p>
   </section>
 
   <section>
@@ -285,6 +293,7 @@
     <a href="11-fitting.html">11 Curve fitting</a>
     <a href="12-repair.html">12 Repair</a>
     <a href="13-emit.html">13 Emit</a>
+    <a href="14-fast-mode.html">14 Fast mode</a>
     <a href="constants.md">Constants</a>
   </nav>
 </div>

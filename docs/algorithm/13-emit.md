@@ -270,18 +270,57 @@ recorded only in that commit narrative, not enforced as a hard gate: `bench/ci_g
 
 ### Gradient and fill emission
 
-Built in one loop in `emit_color` (`emit.rs:590-665`). A translucent face's flat colour is
-"un-matted" before writing, since it was measured over the compositing matte
-(`emit.rs:593-596`). An alpha *ramp* — a measured fade — is written as the gradient an editor
-would use: one colour, two `stop-opacity` values, along the axis the fade was measured to run
-(`emit.rs:620-629`); its endpoints are hard-coded to 2 decimals regardless of
-`EMIT_DECIMALS`. Everything else — flat opaque colours and every genuine gradient — is
-delegated to `gradient::fill_to_svg` (`crates/inkvec-trace/src/gradient.rs:1974`), which
+Each face's fill attribute comes from `face_fill` (`emit.rs:693-735`). A translucent face's
+flat colour is "un-matted" before writing, since it was measured over the compositing matte
+(`emit.rs:722-724`). A fade traced natively is written by `gradient::fade_to_svg`
+(`emit.rs:703-709`). An alpha *ramp* — a measured fade — is written as the gradient an
+editor would use: one colour, two `stop-opacity` values, along the axis the fade was
+measured to run (`emit.rs:710-718`); its endpoints are hard-coded to 2 decimals regardless
+of `EMIT_DECIMALS`. Everything else — flat opaque colours and every genuine gradient — is
+delegated to `gradient::fill_to_svg` (`crates/inkvec-trace/src/gradient/svg.rs:74`), which
 returns a `(defs fragment, fill attribute)` pair: `FillModel::Flat` needs no defs at all;
 `FillModel::Linear`/`Radial` write a `<linearGradient>`/`<radialGradient>` with
 `gradientUnits="userSpaceOnUse"`, and an elliptical radial gradient carries a
 `gradientTransform` built as translate-squash-rotate-translate back, "so it reads right to
 left." No empty `<defs>` block is written when there is nothing to put in it.
+
+**Where the alpha ramps come from, and which faces are fitted.** The ramps are measured
+just before writing, inside the `emit` mark: `face_transparency` (`pipeline.rs:989`) calls
+`alpha::face_alpha` (`crates/inkvec-cli/src/alpha.rs:1237`), which under `--cutout` tries,
+for each face that is neither clear nor already one flat opacity, to fit a plane to its
+interior alpha (`fit_alpha_ramp`, `alpha.rs:179`) and keeps it only when it fades by at
+least `RAMP_MIN_FADE = 0.15`, with an RMS residual of at most `RAMP_MAX_RESIDUAL = 0.06`,
+over at least `RAMP_MIN_INTERIOR = 64` interior pixels (`alpha.rs:96-102`). Since
+2026-09-30 the pass is linear in the pixel count (`face_alpha`'s "Passes", `alpha.rs:1208-1219`):
+
+1. one pass over each row's runs gathers every face's alpha statistics (`face_stats`,
+   `alpha.rs:1408`): pixel count and alpha sum over all pixels; count, sum and sum of squares
+   over interior pixels; and whether any interior alpha differs from exactly 1. Each f64
+   sum receives the same terms in the same order as the per-pixel loop it replaced; a zero
+   alpha is skipped, which changes no sum because the sums are never `−0`;
+2. the clear and opacity verdicts come from those sums alone;
+3. a face goes to the fit only when `ramp_candidate` (`alpha.rs:1569`) says the fit can
+   return anything, and the candidates' interior pixels are gathered in one more pass
+   (`interior_pixels`, `alpha.rs:1593`).
+
+The skip is a proof, not a heuristic. A face with fewer than 64 interior pixels fails the
+fit's own first test. A face whose interior alphas are all exactly `1.0` gets an exactly
+flat plane: with every `a = 1.0`, the right-hand side of the normal equations is bit for bit
+the matrix's first column, so Cramer's rule (`solve3x3`) evaluates `det(M_1)` and `det(M_2)`
+to exactly `0` in floating point — equal columns cancel term for term, and round-to-nearest
+is symmetric — the gradient is `±0 < 1e-9`, and the fit returns `None`
+(`alpha.rs:1527-1568`). On the research sets 96% of the calls were such provable `None`s,
+and none of the 3,125 calls ever returned a ramp. Each face is then fitted from its own
+interior list rather than by scanning the whole label map, which had made the pass
+`O(faces · w · h)`: 88.5 ms of Fast mode's 333 ms at 2048 px on the three transparent test
+images, 60.7 ms of it in those scans. The colour of a fitted pixel is read by `over_white`
+(`alpha.rs:287`) instead of building the whole composite for a few pixels. The output is
+unchanged bit for bit; the old whole-image fit is kept as `fit_alpha_ramp_scan` in
+`alpha/ramp_tests.rs`. Citations, as the doc comments give them: the run-based statistics
+are "Method from" He, Chao & Suzuki 2008, "A Run-Based Two-Scan Labeling Algorithm", IEEE
+TIP 17(5); the skip is "Not from the literature: a proof that a least-squares fit is
+degenerate", with "See also" He & Chao 2015 (a region's features computed during the
+labelling scan).
 
 ### `--minify` and `--no-background`
 

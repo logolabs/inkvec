@@ -71,6 +71,7 @@ STAGES = [
     ("11-fitting", "Curve fitting"),
     ("12-repair", "Repair"),
     ("13-emit", "Emit"),
+    ("14-fast-mode", "Fast mode"),
 ]
 
 # Site slug -> (markdown source, sidebar label). "" is the home page. The stage pages

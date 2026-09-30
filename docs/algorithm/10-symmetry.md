@@ -5,10 +5,17 @@
 > boundary point back into exact agreement.
 
 **Source:** `crates/inkvec-trace/src/symmetry.rs` (467 lines)
-**Entry points:** `fn detect()` (`symmetry.rs:253`, stage mark `"symmetry_detect"`, `lib.rs:457-458`)
-and `fn enforce()` (`symmetry.rs:285`, stage mark `"symmetry"`, `lib.rs:494-495`)
-**Pipeline position:** `detect` runs immediately after `build_map`, before `refine_subpix`
-(`lib.rs:453-461`); `enforce` runs last of all, after `decode` (`lib.rs:489-495`)
+**Entry points:** `fn detect()` (`symmetry.rs:293`, called at `lib.rs:1121-1125` and timed
+under the stage mark `"refine_subpix"`, `lib.rs:1127`) and `fn enforce()` (`symmetry.rs:342`,
+stage mark `"symmetry"`, `lib.rs:1169-1174`)
+**Pipeline position:** `detect` runs right after `build_map`, *beside* the measuring phase of
+the sub-pixel refinement: on a map of at least 512 boundary vertices the two run side by side
+under `rayon::join`, on a smaller one `detect` runs first and the refinement after it, on
+the same thread (`lib.rs:1093-1125`). The measured points are written back only once both
+have returned (`lib.rs:1126`). `enforce` runs last of all, after `decode`
+(`lib.rs:1166-1174`). Since 2026-09-30 the `"symmetry_detect"` mark (`lib.rs:1092`) times
+only the setup of the refinement's inputs; detection's time is reported with the
+refinement's. Shared by Quality and Fast mode.
 
 ## What problem this solves
 
@@ -43,7 +50,7 @@ pub fn detect(map: &PlanarMap, labels: &[u16], ink: &[usize]) -> Symmetry
 per-connected-component, and a symmetric shape's two mirrored halves are never the same
 component; comparing face ids directly would reject every real symmetry there is
 (`symmetry.rs:140-142`). In the pipeline this is `face_color` — the palette entry each
-face was cut from (`lib.rs:457`).
+face was cut from (`lib.rs:1122`, `:1124`).
 
 ```rust
 pub struct Symmetry {
@@ -137,17 +144,44 @@ support." (`symmetry.rs:282-284`)
 ### Why detection happens early and enforcement happens last
 
 `detect` is run once, immediately after `build_map`, "on the lattice the extractor
-produced, where the comparison is exact" (`lib.rs:455-456`) — this has to happen before
-any sub-pixel refinement moves points off that exact lattice, or the point-identity
+produced, where the comparison is exact" (`lib.rs:1094-1095`) — it has to see the map
+before any sub-pixel refinement moves points off that exact lattice, or the point-identity
 matching in `pair_edges` would need a tolerance instead of exact equality.
 
+Since 2026-09-30 "before the refinement" means *before the refinement writes*, not before it
+starts. The refinement was split into a measuring phase, which reads the lattice map and
+writes nothing (`planar::measure_subpixel`), and a write-back (`Refined::apply`). Detection
+and the measuring phase both only read the map, so they run side by side under
+`rayon::join`, and the moved points are applied after both have returned
+(`lib.rs:1093-1126`):
+
+```rust
+let (sym, refined) = if planar::refine_in_parallel(&map) {
+    rayon::join(|| symmetry::detect(&map, &labels, &face_color), measure)
+} else {
+    (symmetry::detect(&map, &labels, &face_color), measure())
+};
+refined.apply(&mut map);
+```
+
+Each computes exactly what it computed alone, since neither sees the other's output:
+`detect` still compares exact half-integer lattice points, because nothing has been written
+back when it reads them. A small map (under 512 boundary vertices,
+`planar::refine_in_parallel`) is detected and then measured on the calling thread, as
+before, because handing it to the pool costs more than it saves; where rayon has a single
+thread (the WebAssembly build) `join` runs the two in turn with no work added. The comment
+at the call site cites Ragan-Kelley et al., "Halide", PLDI 2013 ("Inspired by":
+independent pipeline stages scheduled to run concurrently, here by hand for one pair of
+stages). Detection's time is therefore reported inside `"refine_subpix"`; the
+`"symmetry_detect"` mark now only closes the setup before it (`lib.rs:1092`).
+
 `enforce` is deferred to the very end of `trace_color_full_with_alpha`, run "once every
-stage that can break a tie has had its turn" (`lib.rs:456`) — after `refine_subpixel`,
+stage that can break a tie has had its turn" (`lib.rs:1095-1096`) — after `refine_subpixel`,
 `refine_junctions`, `boundary_opt::optimise`, and `decode::decode_faces` have all had a
 chance to nudge points asymmetrically. The comment at the call site makes the intent
 explicit: "The label map is exactly symmetric whenever the artist's drawing was, and every
 stage above breaks that symmetry a little by breaking ties. Put it back." (`lib.rs:
-492-493`)
+1167-1168`)
 
 ### The interaction hazard: a stage between `detect` and `enforce` can be undone
 

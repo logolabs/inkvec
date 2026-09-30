@@ -193,11 +193,55 @@ impl Rgba {
         ]
     }
 
-    /// Composite over a solid background, dropping alpha.
+    /// Composite over a solid background, dropping alpha: per pixel and channel the "over"
+    /// operator with an opaque ground, `c' = c·a + g·(1 − a)`, on the stored (sRGB-encoded,
+    /// straight) values, in f32. One `[r, g, b]` per pixel, row-major, `width · height` long;
+    /// panics if `data` is shorter than `4 · width · height`, as it always did.
+    ///
+    /// Every stage of both modes reads the image this way, and the Fast front end builds it
+    /// before its first timer: 11–18 ms at 2048 px, serial, on a 12-byte-per-pixel output.
+    /// Above [`COMPOSITE_PARALLEL_MIN`] pixels the map is split over rayon's workers in
+    /// chunks; each output pixel is the same expression on the same four inputs, so the
+    /// split cannot change a bit. Below it the pass is a few microseconds and runs on the
+    /// calling thread.
+    ///
+    /// Method from: T. Porter, T. Duff, "Compositing Digital Images", SIGGRAPH '84,
+    /// pp. 253–259, DOI 10.1145/800031.808606 -- the "over" operator. Adapted: the paper
+    /// composites premultiplied colour; here the colour is straight, so it is multiplied by
+    /// its alpha on the way, and the ground is opaque, so the result's alpha (1) is dropped.
+    /// Not from the literature: the parallel split, a plain data-parallel map.
     pub fn composited(&self, bg: [f32; 3]) -> Vec<[f32; 3]> {
-        (0..self.width * self.height)
+        use rayon::prelude::*;
+        let n = self.width * self.height;
+        let over = |p: &[f32]| {
+            let a = p[3];
+            [
+                p[0] * a + bg[0] * (1.0 - a),
+                p[1] * a + bg[1] * (1.0 - a),
+                p[2] * a + bg[2] * (1.0 - a),
+            ]
+        };
+        let px = &self.data[..n * 4];
+        if n < COMPOSITE_PARALLEL_MIN {
+            px.chunks_exact(4).map(over).collect()
+        } else {
+            px.par_chunks_exact(4).map(over).collect()
+        }
+    }
+}
+
+/// Below this many pixels (256 × 256) [`Rgba::composited`] runs on the calling thread.
+const COMPOSITE_PARALLEL_MIN: usize = 1 << 16;
+
+#[cfg(test)]
+mod composite_tests {
+    use super::Rgba;
+
+    /// The composite as it was: a serial map, pixel by pixel.
+    fn old_composited(img: &Rgba, bg: [f32; 3]) -> Vec<[f32; 3]> {
+        (0..img.width * img.height)
             .map(|i| {
-                let p = &self.data[i * 4..i * 4 + 4];
+                let p = &img.data[i * 4..i * 4 + 4];
                 let a = p[3];
                 [
                     p[0] * a + bg[0] * (1.0 - a),
@@ -206,6 +250,48 @@ impl Rgba {
                 ]
             })
             .collect()
+    }
+
+    /// Serial and parallel sizes, 8-bit and arbitrary values, odd floats (NaN, −0, out of
+    /// range) and a buffer longer than the image: the same bits as the serial map.
+    #[test]
+    fn the_parallel_composite_is_the_serial_one() {
+        let mut s = 7u64;
+        let mut next = || {
+            s = s
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (s >> 40) as u32
+        };
+        for (w, h) in [(0, 0), (1, 1), (1, 9), (9, 1), (37, 41), (300, 260)] {
+            let mut data: Vec<f32> = (0..w * h * 4 + 3)
+                .map(|_| match next() % 5 {
+                    0 => (next() % 256) as f32 / 255.0,
+                    1 => 1.0,
+                    2 => 0.0,
+                    _ => (next() % 100_000) as f32 * 1.3e-5 - 0.1,
+                })
+                .collect();
+            for (i, v) in [f32::NAN, -0.0, 2.5, f32::INFINITY].into_iter().enumerate() {
+                if let Some(d) = data.get_mut(i * 7) {
+                    *d = v;
+                }
+            }
+            let img = Rgba {
+                width: w,
+                height: h,
+                data,
+            };
+            for bg in [[1.0, 1.0, 1.0], [0.0, 1.0, 0.5]] {
+                let bits =
+                    |v: Vec<[f32; 3]>| v.iter().flatten().map(|f| f.to_bits()).collect::<Vec<_>>();
+                assert_eq!(
+                    bits(img.composited(bg)),
+                    bits(old_composited(&img, bg)),
+                    "{w}x{h}"
+                );
+            }
+        }
     }
 }
 

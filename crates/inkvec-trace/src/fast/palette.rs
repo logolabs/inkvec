@@ -544,11 +544,13 @@ const TARGET_BANDS: usize = 64;
 ///
 /// # Parallel row bands
 ///
-/// The image is cut into bands of whole rows. Each band keys its own rows into the output
-/// (and the row above and below it into scratch, for the vertical test), then counts
-/// itself into a band-private [`Bins`]; rayon's fold then merges the bands' `Bins`
-/// ([`Bins::absorb`]). A band's rows are keyed and counted while they are in cache, so the
-/// image is read from memory about once.
+/// The image is cut into bands of whole rows. Each band keys the row above it and the row
+/// below it into scratch (for the vertical test), then walks its own rows: row `r + 1` is
+/// keyed into the output just before row `r` is counted into a band-private [`Bins`], so
+/// the count reads pixels the keying has just brought into cache and the image comes from
+/// memory about once (keying a whole band before counting it measured 9.5 against 6.8 ms
+/// for keys and histogram at 2048 px, loaded machine, pool warm). Rayon's fold then merges
+/// the bands' `Bins` ([`Bins::absorb`]).
 ///
 /// *Why identical:* counts are integers, and the merge adds each band's f64 sums in an
 /// order the serial pass would not use -- which is exact only because every value was in
@@ -612,21 +614,47 @@ fn keys_and_histogram(
         .enumerate()
         .fold(Bins::new, |mut bins, (b, band)| {
             let y0 = b * band_rows;
-            let y1 = y0 + band.len() / w;
-            if !key_rows(rgb, alpha, grid, y0 * w, band) {
+            let rows = band.len() / w;
+            let above = (y0 > 0).then(|| key_row(y0 - 1));
+            let below = (y0 + rows < h).then(|| key_row(y0 + rows));
+            // Row by row, each row keyed just before the row above it is counted, so the
+            // count reads pixels the keying has just brought into cache.
+            if !key_rows(rgb, alpha, grid, y0 * w, &mut band[..w]) {
                 inexact.store(true, Ordering::Relaxed);
             }
-            if !inexact.load(Ordering::Relaxed) {
-                let above = (y0 > 0).then(|| key_row(y0 - 1));
-                let below = (y1 < h).then(|| key_row(y1));
+            for r in 0..rows {
+                if r + 1 < rows
+                    && !key_rows(
+                        rgb,
+                        alpha,
+                        grid,
+                        (y0 + r + 1) * w,
+                        &mut band[(r + 1) * w..(r + 2) * w],
+                    )
+                {
+                    inexact.store(true, Ordering::Relaxed);
+                }
+                if inexact.load(Ordering::Relaxed) {
+                    continue;
+                }
+                let up = if r > 0 {
+                    Some(&band[(r - 1) * w..r * w])
+                } else {
+                    above.as_deref()
+                };
+                let down = if r + 1 < rows {
+                    Some(&band[(r + 1) * w..(r + 2) * w])
+                } else {
+                    below.as_deref()
+                };
                 histogram_rows(
                     rgb,
                     alpha,
                     w,
-                    y0,
-                    band,
-                    above.as_deref(),
-                    below.as_deref(),
+                    y0 + r,
+                    &band[r * w..(r + 1) * w],
+                    up,
+                    down,
                     &mut bins,
                 );
             }

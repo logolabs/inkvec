@@ -207,20 +207,25 @@ pub fn fit_ellipse_algebraic(pts: &[Point], sigma: &[f64]) -> Option<EllipseFit>
 /// (7.6% and 9.1% of the whole trace's CPU), all of it discarded. The geometry is the
 /// same computation, so it is bit-identical to [`fit_ellipse_algebraic`]'s.
 ///
-/// Not from the literature: this only removes a quantity nobody reads.
+/// Not from the literature: this only removes a quantity nobody reads. For the same
+/// reason of cost, the passes below reuse each point's weight and lifted row, and the
+/// 5×5 eigen solve runs on stack arrays (`solver::gen_eigen_5`): the arithmetic and its
+/// order are those of the original, so the fit is bit-identical.
 pub(crate) fn taubin_ellipse(pts: &[Point], sigma: &[f64]) -> Option<EllipseFit> {
     let n = pts.len();
     if n < 6 {
         return None;
     }
+    // Each point's weight and lifted row are computed once and reused by every pass
+    // below, instead of once per pass: the same values, so the same sums.
+    let w: Vec<f64> = (0..n).map(|k| weight_at(sigma, k)).collect();
     let mut sw = 0.0;
     let mut mx = 0.0;
     let mut my = 0.0;
-    for (k, p) in pts.iter().enumerate() {
-        let w = weight_at(sigma, k);
-        sw += w;
-        mx += p.x * w;
-        my += p.y * w;
+    for (p, &wk) in pts.iter().zip(&w) {
+        sw += wk;
+        mx += p.x * wk;
+        my += p.y * wk;
     }
     if sw <= 0.0 {
         return None;
@@ -228,25 +233,25 @@ pub(crate) fn taubin_ellipse(pts: &[Point], sigma: &[f64]) -> Option<EllipseFit>
     mx /= sw;
     my /= sw;
     let mut var = 0.0;
-    for (k, p) in pts.iter().enumerate() {
-        let w = weight_at(sigma, k);
-        var += w * ((p.x - mx).powi(2) + (p.y - my).powi(2));
+    for (p, &wk) in pts.iter().zip(&w) {
+        var += wk * ((p.x - mx).powi(2) + (p.y - my).powi(2));
     }
     let scale = (var / sw).sqrt();
     if scale.is_nan() || scale <= 1e-12 {
         return None;
     }
 
-    let row_of = |p: &Point| -> [f64; 5] {
-        let (u, v) = ((p.x - mx) / scale, (p.y - my) / scale);
-        [u * u, u * v, v * v, u, v]
-    };
+    let rows: Vec<[f64; 5]> = pts
+        .iter()
+        .map(|p| {
+            let (u, v) = ((p.x - mx) / scale, (p.y - my) / scale);
+            [u * u, u * v, v * v, u, v]
+        })
+        .collect();
     let mut mean = [0.0f64; 5];
-    for (k, p) in pts.iter().enumerate() {
-        let w = weight_at(sigma, k);
-        let row = row_of(p);
+    for (row, &wk) in rows.iter().zip(&w) {
         for a in 0..5 {
-            mean[a] += w * row[a];
+            mean[a] += wk * row[a];
         }
     }
     for m in &mut mean {
@@ -254,9 +259,7 @@ pub(crate) fn taubin_ellipse(pts: &[Point], sigma: &[f64]) -> Option<EllipseFit>
     }
     let mut cov = [[0.0f64; 5]; 5];
     let mut nrm = [[0.0f64; 5]; 5];
-    for (k, p) in pts.iter().enumerate() {
-        let w = weight_at(sigma, k);
-        let row = row_of(p);
+    for (row, &wk) in rows.iter().zip(&w) {
         let (u, v) = (row[3], row[4]);
         let gx = [2.0 * u, v, 0.0, 1.0, 0.0];
         let gy = [0.0, u, 2.0 * v, 0.0, 1.0];
@@ -269,13 +272,11 @@ pub(crate) fn taubin_ellipse(pts: &[Point], sigma: &[f64]) -> Option<EllipseFit>
         ];
         for a in 0..5 {
             for b in 0..5 {
-                cov[a][b] += w * d[a] * d[b];
-                nrm[a][b] += w * (gx[a] * gx[b] + gy[a] * gy[b]);
+                cov[a][b] += wk * d[a] * d[b];
+                nrm[a][b] += wk * (gx[a] * gx[b] + gy[a] * gy[b]);
             }
         }
     }
-    let cov: Vec<Vec<f64>> = cov.iter().map(|r| r.to_vec()).collect();
-    let nrm: Vec<Vec<f64>> = nrm.iter().map(|r| r.to_vec()).collect();
     let theta = gen_eigen_5(&cov, &nrm)?;
     let f = -(0..5).map(|k| mean[k] * theta[k]).sum::<f64>();
     let (c, r1, r2, angle) =
@@ -428,6 +429,140 @@ mod tests {
     fn test_canonical_angle() {
         assert!((canonical_angle(PI) - 0.0).abs() < 1e-10);
         assert!((canonical_angle(PI / 4.0) - PI / 4.0).abs() < 1e-10);
+    }
+
+    /// `fit_ellipse_algebraic` as it was before its passes shared their weights and rows
+    /// (its eigen solve is proved bit-identical to the old one in `solver`'s tests).
+    fn reference_algebraic(pts: &[Point], sigma: &[f64]) -> Option<EllipseFit> {
+        let n = pts.len();
+        if n < 6 {
+            return None;
+        }
+        let mut sw = 0.0;
+        let mut mx = 0.0;
+        let mut my = 0.0;
+        for (k, p) in pts.iter().enumerate() {
+            let w = weight_at(sigma, k);
+            sw += w;
+            mx += p.x * w;
+            my += p.y * w;
+        }
+        if sw <= 0.0 {
+            return None;
+        }
+        mx /= sw;
+        my /= sw;
+        let mut var = 0.0;
+        for (k, p) in pts.iter().enumerate() {
+            let w = weight_at(sigma, k);
+            var += w * ((p.x - mx).powi(2) + (p.y - my).powi(2));
+        }
+        let scale = (var / sw).sqrt();
+        if scale.is_nan() || scale <= 1e-12 {
+            return None;
+        }
+
+        let row_of = |p: &Point| -> [f64; 5] {
+            let (u, v) = ((p.x - mx) / scale, (p.y - my) / scale);
+            [u * u, u * v, v * v, u, v]
+        };
+        let mut mean = [0.0f64; 5];
+        for (k, p) in pts.iter().enumerate() {
+            let w = weight_at(sigma, k);
+            let row = row_of(p);
+            for a in 0..5 {
+                mean[a] += w * row[a];
+            }
+        }
+        for m in &mut mean {
+            *m /= sw;
+        }
+        let mut cov = [[0.0f64; 5]; 5];
+        let mut nrm = [[0.0f64; 5]; 5];
+        for (k, p) in pts.iter().enumerate() {
+            let w = weight_at(sigma, k);
+            let row = row_of(p);
+            let (u, v) = (row[3], row[4]);
+            let gx = [2.0 * u, v, 0.0, 1.0, 0.0];
+            let gy = [0.0, u, 2.0 * v, 0.0, 1.0];
+            let d = [
+                row[0] - mean[0],
+                row[1] - mean[1],
+                row[2] - mean[2],
+                row[3] - mean[3],
+                row[4] - mean[4],
+            ];
+            for a in 0..5 {
+                for b in 0..5 {
+                    cov[a][b] += w * d[a] * d[b];
+                    nrm[a][b] += w * (gx[a] * gx[b] + gy[a] * gy[b]);
+                }
+            }
+        }
+        let theta = gen_eigen_5(&cov, &nrm)?;
+        let f = -(0..5).map(|k| mean[k] * theta[k]).sum::<f64>();
+        let (c, r1, r2, angle) =
+            conic_to_ellipse([theta[0], theta[1], theta[2], theta[3], theta[4], f])?;
+        let (rx, ry, angle) = if r1 >= r2 {
+            (r1, r2, angle)
+        } else {
+            (r2, r1, angle + PI / 2.0)
+        };
+        let mut e = EllipseFit {
+            c: Point::new(mx + scale * c.x, my + scale * c.y),
+            rx: rx * scale,
+            ry: ry * scale,
+            angle: canonical_angle(angle),
+            chi2: 0.0,
+        };
+        e.chi2 = ellipse_chi2(pts, sigma, &e);
+        Some(e)
+    }
+
+    /// The shared weights and rows change no bit of the fit, χ² included.
+    #[test]
+    fn algebraic_fit_matches_its_former_self() {
+        let mut st = 23u64;
+        let mut rnd = || {
+            st = st
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (st >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let mut fitted = 0;
+        for case in 0..400 {
+            let n = 4 + case % 90;
+            let (rx, ry, rot, sweep) = (
+                1.0 + 60.0 * rnd(),
+                1.0 + 30.0 * rnd(),
+                3.0 * rnd(),
+                0.2 + 6.1 * rnd(),
+            );
+            let noise = [0.0, 0.02, 0.3, 2.0][case % 4];
+            let pts: Vec<Point> = (0..n)
+                .map(|k| {
+                    let t = sweep * k as f64 / n as f64;
+                    let (x, y) = (rx * t.cos(), ry * t.sin());
+                    let (s, c) = rot.sin_cos();
+                    Point::new(
+                        300.0 + c * x - s * y + noise * (rnd() - 0.5),
+                        -120.0 + s * x + c * y + noise * (rnd() - 0.5),
+                    )
+                })
+                .collect();
+            // Short sigma slices too: missing sigmas default to 0.5.
+            let sigma: Vec<f64> = (0..n - case % 3).map(|_| 0.01 + rnd()).collect();
+            let got = fit_ellipse_algebraic(&pts, &sigma);
+            let want = reference_algebraic(&pts, &sigma);
+            assert_eq!(got.is_some(), want.is_some(), "case {case}");
+            if let (Some(g), Some(w)) = (got, want) {
+                let bits =
+                    |e: EllipseFit| [e.c.x, e.c.y, e.rx, e.ry, e.angle, e.chi2].map(f64::to_bits);
+                assert_eq!(bits(g), bits(w), "case {case}");
+                fitted += 1;
+            }
+        }
+        assert!(fitted > 100);
     }
 
     /// The unscored fit is the scored one minus its χ², bit for bit, on arcs, full rings,

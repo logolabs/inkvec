@@ -26,6 +26,15 @@
 //! as a blend of its own face's fill and the neighbouring face's fill that best explains
 //! it, and only the ends that belong to a group are replaced. An edge against a face left
 //! alone stays a correct blend; an edge inside a group collapses to the group's fill.
+//!
+//! # Where this sits
+//!
+//! Outside the pipeline proper: the CLI's `--merge-colors` (and Studio's colour groups,
+//! through it) trace once, call [`apply`] on that trace, and trace the returned image again
+//! with the same options (`inkvec-cli`'s `pipeline.rs`). In: the source image (straight
+//! RGBA in `[0, 1]`), the first [`ColorTrace`] and the groups. Out: the repainted image and
+//! one [`GroupOutcome`] per group for the CLI to report. Colour matching is done in OKLab;
+//! unmixing and repainting in sRGB `[0, 1]`, the space the fills were fitted in.
 
 use crate::color::rgb_to_oklab;
 use crate::coverage::Rgba;
@@ -53,6 +62,8 @@ pub enum Member {
 }
 
 impl Member {
+    /// The member's colour for reporting: the flat colour, or a gradient's first stop
+    /// (black for a gradient with no stops).
     fn first_colour(&self) -> [f32; 3] {
         match self {
             Member::Flat(c) => *c,
@@ -109,6 +120,11 @@ fn stops_of(model: &FillModel) -> Option<Vec<[f32; 3]>> {
 }
 
 /// Whether a face's fill is the member the caller named.
+///
+/// A flat member names a flat face within [`MATCH_DISTANCE`] in OKLab. A gradient member
+/// names a gradient face (linear or radial, either kind) with the same number of stops,
+/// each within [`STOP_MATCH`] in OKLab of the named stop in the same position. A flat
+/// member never names a gradient face; a gradient member never names a flat one.
 fn names(model: &FillModel, member: &Member) -> bool {
     match (member, model) {
         (Member::Flat(c), FillModel::Flat(f)) => {
@@ -164,6 +180,21 @@ pub fn apply(img: &Rgba, trace: &ColorTrace, groups: &[InkGroup]) -> (Rgba, Vec<
 }
 
 /// Match each group's members to faces and decide what the group becomes.
+///
+/// Groups are handled in order, and a face already claimed by an earlier group is not
+/// offered to a later one. For each group:
+///
+/// * a member's faces are the unclaimed faces whose fill it [`names`];
+/// * the group does nothing when no member matched a face, or when only one did and the
+///   target is [`Target::Auto`] (one fill with nothing to become is not a merge);
+/// * otherwise the paint is the target colour ([`Target::Colour`]), or the picked member's
+///   fill: the named member for [`Target::Member`], the member whose faces cover the most
+///   pixels for [`Target::Auto`] (ties to the later member, `max_by_key`'s rule). A picked
+///   gradient member is refitted per region later ([`fit_regions`]), with the kind of the
+///   member's largest face; an out-of-range [`Target::Member`] falls back to the first
+///   member's colour.
+///
+/// `area[f]` is face `f`'s pixel count.
 fn plan(trace: &ColorTrace, area: &[usize], groups: &[InkGroup]) -> (Plan, Vec<GroupOutcome>) {
     let n_faces = trace.face_fill.len();
     let mut plan = Plan {
@@ -341,6 +372,22 @@ fn best_gradient(cands: &[gradient::FillFit], radial: bool) -> FillModel {
 
 /// Repaint every pixel whose face, or the neighbouring face it is a blend with, is in a
 /// group: unmix it between the two fills and replace the ends that belong to a group.
+///
+/// # The formula
+///
+/// All colours sRGB `[0, 1]`, fills evaluated at the pixel's integer coordinates `(x, y)`.
+/// With `c` the pixel, `a` its own face's fill and, for each other face `b` among its eight
+/// neighbours, `t_b = clamp(((c − a) · (b − a)) / |b − a|², 0, 1)`, the partner is the face
+/// minimising `|c − (a + t_b (b − a))|²` (first found wins a tie; faces whose fill equals
+/// `a` are skipped). With `a'`, `b'` the repainted fills (unchanged when that face is in no
+/// group) the pixel becomes
+///
+/// `c' = clamp(c + ((1 − t) a' + t b') − ((1 − t) a + t b), 0, 1)`,
+///
+/// which moves only the modelled part and keeps the pixel's own deviation (noise,
+/// texture). A pixel with no partner uses `t = 0`. Fully transparent pixels and pixels
+/// with neither end in a group are left alone; alpha is never changed. Rows run in
+/// parallel; each pixel reads only the labels and fills, so the result is order-free.
 fn repaint(out: &mut Rgba, trace: &ColorTrace, plan: &Plan, region: &[u32]) {
     let (w, h) = (out.width, out.height);
     let labels = &trace.labels;
@@ -418,11 +465,13 @@ fn repaint(out: &mut Rgba, trace: &ColorTrace, plan: &Plan, region: &[u32]) {
         });
 }
 
+/// `a − b`, per channel.
 #[inline]
 fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
+/// Dot product of two colour vectors.
 #[inline]
 fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
@@ -459,15 +508,18 @@ mod tests {
         }
     }
 
+    /// The RGB of pixel `(x, y)`.
     fn at(img: &Rgba, x: usize, y: usize) -> [f32; 3] {
         let p = img.pixel(x, y);
         [p[0], p[1], p[2]]
     }
 
+    /// Whether every channel of `a` is within `tol` of `b`.
     fn near(a: [f32; 3], b: [f32; 3], tol: f32) -> bool {
         (0..3).all(|k| (a[k] - b[k]).abs() <= tol)
     }
 
+    /// The flat fill of the face under pixel `(x, y)`; panics on a gradient face.
     fn fill_of(trace: &ColorTrace, img: &Rgba, x: usize, y: usize) -> [f32; 3] {
         let f = trace.labels[y * img.width + x] as usize;
         match trace.face_fill[f].model {

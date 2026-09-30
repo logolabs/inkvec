@@ -7,9 +7,9 @@
   "lint:clippy::unnecessary_sort_by": 0,
   "lint:missing_docs": 0,
   "lint:unused_qualifications": 0,
-  "max_file_lines": 1693,
+  "max_file_lines": 1516,
   "rustfmt_hunks": 0,
-  "test_functions": 665,
+  "test_functions": 700,
   "untested_modules": [
     "crates/inkvec-cli/src/alpha.rs",
     "crates/inkvec-cli/src/rings.rs",

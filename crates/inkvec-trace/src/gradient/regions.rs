@@ -1,5 +1,11 @@
 //! Gradient regions: fitting a gradient to the whole region an artist filled with one,
 //! rather than to whichever pair of palette bands happens to be adjacent.
+//!
+//! These are the switches and seam tests of the band merger's "region recovery" mode
+//! (`inner_blends` in `bands.rs`): a seam between two components counts as *inside* one
+//! smooth region when most of its pixel pairs step by less than [`SMOOTH_STEP`] in Lab;
+//! across such a seam blends are evidence for the union's fit, and two flat bands whose
+//! inks differ by less than [`RAMP_STEP_DE00`] are tried as one ramp.
 
 use std::collections::HashMap;
 
@@ -27,14 +33,18 @@ const SMOOTH_STEP: f32 = 3.0;
 const SMOOTH_FRACTION: f64 = 0.5;
 
 /// Whether the step from pixel colour `p` to `q` (sRGB) is small enough to lie inside a
-/// smooth region.
+/// smooth region: the CIE76 difference `|Lab(p) − Lab(q)| < SMOOTH_STEP` (compared
+/// squared).
 pub(crate) fn smooth_step(p: [f32; 3], q: [f32; 3]) -> bool {
     let (a, b) = (crate::color::srgb_to_lab(p), crate::color::srgb_to_lab(q));
     let d2 = (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2);
     d2 < SMOOTH_STEP.powi(2)
 }
 
-/// Whether the seam between regions `a` and `b` is mostly smooth steps.
+/// Whether the seam between regions `a` and `b` is mostly smooth steps:
+/// `smooth[a][b] ≥ SMOOTH_FRACTION · adj[a][b]` with a non-empty seam, where `adj`
+/// counts every 4-neighbour pixel pair across the seam and `smooth` those that pass
+/// [`smooth_step`].
 pub(crate) fn is_smooth(
     adj: &[HashMap<u32, u32>],
     smooth: &[HashMap<u32, u32>],
@@ -47,6 +57,11 @@ pub(crate) fn is_smooth(
 }
 
 /// Region `b` was absorbed into `a`: move `b`'s seam counts onto `a`.
+///
+/// `counts` is a symmetric adjacency (`counts[x][y] == counts[y][x]`); the invariant is
+/// kept by adding each of `b`'s counts to both `a`'s row and the neighbour's, and
+/// dropping the `a`–`b` seam, which is now interior. Neighbours are visited in sorted
+/// order so the result does not depend on the hash map's iteration order.
 pub(crate) fn absorb_counts(counts: &mut [HashMap<u32, u32>], a: usize, b: usize) {
     let taken = std::mem::take(&mut counts[b]);
     let mut taken: Vec<_> = taken.into_iter().collect();

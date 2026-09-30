@@ -16,6 +16,32 @@
 //! does with them. Quantizing by bin instead turns every anti-aliased ramp into its own
 //! set of spurious colours, which is where gradient banding and the 44x parameter blow-up
 //! on `gradient_linear` come from.
+//!
+//! # Where this sits
+//!
+//! This is the first colour stage of the Quality pipeline
+//! ([`crate::trace_color_full_with_alpha`]): **palette**, then **labels**.
+//!
+//! * [`extract_palette_mdl`] takes the image as sRGB `[0, 1]` (composited onto white) and
+//!   returns a [`Palette`]: the inks in OKLab and sRGB, each with its share of the pixels.
+//! * [`label_image`] assigns every pixel its nearest ink in OKLab, giving the label map
+//!   that [`crate::regions`] cleans and the gradient stages build on.
+//! * [`split_alpha_inks`] runs after labelling when the source had an alpha channel, and
+//!   gives an ink drawn at two flat opacities one entry per opacity.
+//!
+//! The transparent-image path ([`crate::native`]) has four-channel copies of the palette
+//! tests below; see that module for which function mirrors which.
+//!
+//! Three colour spaces appear, each for a reason:
+//!
+//! * **OKLab** for "is this the same colour?": Euclidean distance there is roughly
+//!   perceptual, so one merge radius means the same thing everywhere.
+//! * **linear RGB and sRGB** for "is this a blend?": light mixes linearly in linear RGB,
+//!   and many renderers mix the encoded sRGB values instead, so a blend is looked for in
+//!   both and the residual is then judged back in OKLab.
+//! * **CIELAB with CIEDE2000** ([`de00`]) for "could anybody tell them apart?", because
+//!   that is what the benchmark scores with and OKLab's cube-root lightness makes the
+//!   first few levels above black look far apart when nobody can see them.
 
 /// A colour in OKLab. Euclidean distance here is approximately perceptually uniform.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -37,6 +63,10 @@ impl Oklab {
     }
 }
 
+/// The sRGB decoding curve (IEC 61966-2-1): an encoded channel in `[0, 1]` to linear light.
+///
+/// `c / 12.92` below `0.04045`, `((c + 0.055) / 1.055)^2.4` above. Values outside
+/// `[0, 1]` are not clamped; the power branch returns NaN for inputs below `-0.055`.
 #[inline]
 pub(crate) fn srgb_to_linear(c: f32) -> f32 {
     if c <= 0.04045 {
@@ -46,6 +76,9 @@ pub(crate) fn srgb_to_linear(c: f32) -> f32 {
     }
 }
 
+/// The sRGB encoding curve, inverse of [`srgb_to_linear`]: linear light to an encoded
+/// channel. `12.92 c` below `0.0031308`, `1.055 c^(1/2.4) − 0.055` above. Not clamped;
+/// callers clamp where the input may leave `[0, 1]`.
 #[inline]
 pub(crate) fn linear_to_srgb(c: f32) -> f32 {
     if c <= 0.003_130_8 {
@@ -72,6 +105,11 @@ fn palette_rgb_space() -> bool {
 }
 
 /// sRGB in `[0, 1]` to OKLab (Ottosson).
+///
+/// Decode to linear RGB, multiply by Ottosson's `M1` to get cone-like `(l, m, s)`, take the
+/// cube root of each, and multiply by `M2` to get `(L, a, b)`. `L` is about 0 for black and
+/// 1 for white; `a` and `b` stay within about ±0.4 for sRGB colours. The cube root is
+/// defined for negative input, so out-of-gamut values do not produce NaN.
 pub fn rgb_to_oklab(rgb: [f32; 3]) -> Oklab {
     if palette_rgb_space() {
         return Oklab {
@@ -100,6 +138,11 @@ pub fn rgb_to_oklab(rgb: [f32; 3]) -> Oklab {
 }
 
 /// OKLab (Ottosson) to sRGB in `[0, 1]`, clamped.
+///
+/// The inverse of [`rgb_to_oklab`] with Ottosson's published inverse matrices: `M2⁻¹`,
+/// cube each component, `M1⁻¹`, encode. A colour outside the sRGB gamut is clamped per
+/// channel after encoding, so the round trip holds (to float rounding) only inside the
+/// gamut.
 pub fn oklab_to_rgb(c: Oklab) -> [f32; 3] {
     if palette_rgb_space() {
         return [c.l, c.a, c.b];
@@ -164,32 +207,6 @@ pub const DEFAULT_MERGE_DISTANCE: f32 = 0.035;
 /// entries; `is_blend` removes the rest.
 pub const MIN_INK_WEIGHT: f32 = 0.004;
 
-/// A candidate this close to the chord between two accepted inks is a blend whatever
-/// *shape* it makes on the page.
-///
-/// [`BLEND_INTERIOR_FRACTION`] asks whether a colour is a thin band or covers area, and
-/// its premise is stated in its own comment: "anti-aliasing is a band one pixel wide lying
-/// along a boundary". That is true of a native render and false of anything upscaled. A x4
-/// intake spreads the same boundary over four pixels, so the ramp has an interior, covers
-/// area, and is kept -- and the shape test vetoes colour-space evidence that is not close
-/// to ambiguous. Measured on a real brand mark upscaled x4: seven invented tones sitting
-/// 0.0000 to 0.0037 from a chord, several kept because their interior read 0.253 or their
-/// straddle 0.458, against real inks 33 to 122 8-bit units clear of any chord.
-///
-/// A distance of zero in a three-dimensional colour space is not a coincidence; it is the
-/// definition of a mixture. So a conclusive chord lifts the *thickness* gate. It does not
-/// lift the straddle test, which is the semantic one and stays required: a real ink that
-/// happens to be a mixture of two others -- a designer may legitimately pick a 50 % tint --
-/// occupies its own region and does not lie spatially *between* them, so it does not
-/// straddle and is kept.
-///
-/// The value is an order of magnitude below the merge tolerance it is measured against
-/// (`merge_distance * 1.6`, 0.056 at the default). Across thirty clean corpus icons every
-/// one of 1284 blend candidates reads exactly 0.0000 and every one is already dropped, so
-/// on native intake this changes nothing by construction.
-#[allow(dead_code)]
-pub const CONCLUSIVE_CHORD: f32 = 0.006;
-
 /// Below this share of its own pixels being *interior*, a colour that tests as a blend is
 /// anti-aliasing rather than ink.
 ///
@@ -236,6 +253,27 @@ pub(crate) const PAR_MIN_LEN: usize = 8192;
 ///
 /// Position along the axis is measured in the space the blend was accepted in, by
 /// projecting every pixel onto the A–B segment.
+///
+/// # The formula
+///
+/// In linear RGB when `linear`, else sRGB, with `A`, `B` the two inks in that space:
+/// `t(p) = ((p − A) · (B − A)) / |B − A|²`, so `t = 0` at A and `t = 1` at B. A claimed
+/// pixel (one with `|lab_i − c| < nearest_i` in OKLab, visited every `stride_px` pixels)
+/// *straddles* when its 3x3 neighbourhood holds a pixel with `t < t_c − step_lo` and one with
+/// `t > t_c + step_hi`, where `t_c = t(c)` and
+/// `step_lo = max(min(STRADDLE_STEP, t_c / 2), 0.02)`,
+/// `step_hi = max(min(STRADDLE_STEP, (1 − t_c) / 2), 0.02)`.
+/// Returns `straddling / claimed`.
+///
+/// `lab`, `px_srgb` and `px_lin` are the same image in three spaces, precomputed by
+/// [`extract_palette_mdl`]; `nearest[i]` is pixel `i`'s OKLab distance to the nearest ink
+/// accepted so far.
+///
+/// # Edge cases
+///
+/// A size mismatch or an empty image, and a degenerate axis (`|B − A|² < 1e-9`), return 0
+/// (never straddles, so the candidate is kept). A candidate that claims no pixel returns 1:
+/// with nothing of its own to protect, the interior test's verdict stands.
 #[allow(clippy::too_many_arguments)]
 fn straddle_fraction(
     lab: &[Oklab],
@@ -351,6 +389,13 @@ pub const PARAMS_PER_INK: f64 = 3.0;
 pub const SAME_INK_DE00: f32 = 1.5;
 use rayon::prelude::*;
 
+/// sRGB in `[0, 1]` to CIELAB (D65 white), as `[L*, a*, b*]` with `L*` in `[0, 100]`.
+///
+/// Decode to linear RGB, convert to XYZ with the sRGB (D65) matrix, divide by the white
+/// point `(0.95047, 1, 1.08883)`, then `L* = 116 f(Y) − 16`, `a* = 500 (f(X) − f(Y))`,
+/// `b* = 200 (f(Y) − f(Z))` with `f(t) = t^(1/3)` above `0.008856` and
+/// `7.787 t + 16/116` below (the classic rounded CIE constants). Computed in `f64`,
+/// returned as `f32`. This is the input to [`de00`].
 pub(crate) fn srgb_to_lab(rgb: [f32; 3]) -> [f32; 3] {
     let (r, g, b) = (
         srgb_to_linear(rgb[0]) as f64,
@@ -382,6 +427,22 @@ pub fn de00(a: [f32; 3], b: [f32; 3]) -> f32 {
 
 /// [`de00`] on CIELAB values (D65 white). Split out so the formula can be held to Sharma,
 /// Wu and Dalal's 34 published reference pairs, which are given in Lab (`color/tests.rs`).
+///
+/// The standard CIEDE2000 steps, with `k_L = k_C = k_H = 1`:
+///
+/// 1. Stretch `a*` by `1 + G`, `G = ½ (1 − √(C̄⁷ / (C̄⁷ + 25⁷)))`, which matters only
+///    for near-neutral colours; recompute chroma `C'` and hue `h'` (degrees in `[0, 360)`,
+///    0 for a neutral colour).
+/// 2. Differences `ΔL'`, `ΔC'`, and `ΔH' = 2 √(C'₁C'₂) sin(Δh'/2)` with `Δh'` wrapped to
+///    `[−180, 180]` (zero when either colour is neutral).
+/// 3. Weights from the means: `S_L = 1 + 0.015 (L̄' − 50)² / √(20 + (L̄' − 50)²)`,
+///    `S_C = 1 + 0.045 C̄'`, `S_H = 1 + 0.015 C̄' T` with `T` the four-cosine hue term, and
+///    the rotation `R_T = −sin(2 Δθ) R_C` that corrects the blue region.
+/// 4. `ΔE00 = √((ΔL'/S_L)² + (ΔC'/S_C)² + (ΔH'/S_H)² + R_T (ΔC'/S_C)(ΔH'/S_H))`.
+///
+/// The mean hue `h̄'` follows Sharma's rule for pairs more than 180° apart, and is the plain
+/// sum when either colour is neutral. The radicand is clamped at zero before the square
+/// root so rounding can never produce NaN.
 pub(crate) fn de00_lab(lab1: [f64; 3], lab2: [f64; 3]) -> f64 {
     let [l1, a1, b1] = lab1;
     let [l2, a2, b2] = lab2;
@@ -571,6 +632,11 @@ pub const SOFT_SAME_INK_DE00: f32 = 5.0;
 /// way, the green-circle case got worse rather than better, 29 faces to 40.
 ///
 /// Near zero for an anti-aliased boundary band; near one for a filled region.
+///
+/// Formally: with the claim `M = { i : |lab_i − c| < nearest_i }` (OKLab), visited every
+/// `stride_px` pixels, returns `|{ i ∈ M : all in-image 4-neighbours of i are in M }| / |M|`.
+/// This is one step of binary erosion with a 4-neighbour cross. Returns 0 when `c` claims
+/// nothing, and 1 when the geometry is missing (size mismatch or empty image).
 fn interior_fraction(
     lab: &[Oklab],
     width: usize,
@@ -631,6 +697,16 @@ pub(crate) const BLEND_TMIN: f32 = 0.04;
 /// whether it straddles them; the caller tries them all.
 ///
 /// `tmin` is [`BLEND_TMIN`].
+///
+/// # The formula
+///
+/// For each pair `(A, B)` of accepted inks and each space (linear RGB first, then sRGB),
+/// with `p` the candidate in that space: `t = ((p − A) · (B − A)) / |B − A|²`, the nearest
+/// point on the chord `q = A + t (B − A)`, and the residual
+/// `off = |c − OKLab(clamp(q, 0, 1))|` measured in OKLab. The pair is returned as
+/// `(i, j, linear, off)` when `tmin ≤ t ≤ 1 − tmin` and `off ≤ tol`. Pairs whose inks
+/// coincide in that space (`|B − A|² < 1e-9`) are skipped; fewer than two inks give an
+/// empty list. A pair can appear twice, once per space.
 fn blend_pairs(
     c: Oklab,
     accepted: &[Oklab],
@@ -669,7 +745,6 @@ fn blend_pairs(
                     continue;
                 }
                 let q = [a[0] + d[0] * t, a[1] + d[1] * t, a[2] + d[2] * t];
-                let e = [p[0] - q[0], p[1] - q[1], p[2] - q[2]];
                 // Compare the residual perceptually, in OKLab.
                 let back = if space == 0 {
                     rgb_to_oklab([
@@ -684,7 +759,6 @@ fn blend_pairs(
                         q[2].clamp(0.0, 1.0),
                     ])
                 };
-                let _ = e;
                 let off = c.dist(back);
                 if off <= tol {
                     out.push((i, j, space == 0, off));
@@ -722,7 +796,10 @@ impl Palette {
         self.colors.is_empty()
     }
 
-    /// Index of the nearest palette entry, with its distance.
+    /// Index of the nearest palette entry, with its OKLab distance.
+    ///
+    /// A linear scan; ties go to the lower index. An empty palette returns
+    /// `(0, f32::MAX)`, so callers must not index with the result without checking.
     pub fn nearest(&self, c: Oklab) -> (usize, f32) {
         let mut best = (0usize, f32::MAX);
         for (i, &p) in self.colors.iter().enumerate() {
@@ -735,13 +812,6 @@ impl Palette {
     }
 }
 
-/// Recover the palette by frequency-ranked mode seeking in OKLab.
-///
-/// Colours are bucketed coarsely only to make counting tractable; the palette entry is
-/// then the *weighted mean* of the pixels that fall to it, so the recovered colour is not
-/// snapped to a bucket centre. Entries are taken in descending frequency and a candidate
-/// is rejected if it is within `merge_distance` of one already accepted, which is what
-/// keeps an anti-aliased ramp from contributing entries of its own.
 /// Smallest OKLab separation we will ever treat as two inks.
 ///
 /// Below this a viewer cannot tell the colours apart at all, so no amount of evidence
@@ -787,25 +857,61 @@ pub fn extract_palette(
     )
 }
 
-/// Palette extraction that decides how many inks there are by minimum description
-/// length, rather than by a fixed distance.
+/// Pixels visited by the palette's statistical passes.
 ///
-/// A fixed threshold cannot be right everywhere in a perceptual space. Saturated inks sit
-/// far apart and survive it; pale ones cluster and do not. Ten concentric rings of ten
-/// distinct hues came back as six colours, because the five pale rings fell inside the
-/// threshold of each other — and the five that vanished then made their regions look like
-/// gradients, which is where a DISTS@4x of 0.197 came from.
+/// Claim, spread, interior fraction and straddle fraction are all estimates of a
+/// *fraction* of the image, and a fraction does not need every pixel to be
+/// measured. Visiting a strided subset bounds the cost of one pass at any input
+/// size, which is what stops trace time growing with resolution: these passes run
+/// once per palette candidate, so an unbounded pass makes the stage quadratic in
+/// everything at once.
 ///
-/// The MDL test asks the same question the rest of the pipeline asks. Folding a candidate
-/// into the nearest accepted ink saves its three parameters but pays a residual over
-/// every one of its pixels: `0.5·n·(d/sigma)²` against `lambda·3`. A mode with thousands
-/// of pixels and a separation far above the noise is therefore kept however close the
-/// fixed threshold would call it, while a handful of pixels a hair away from an existing
-/// ink is folded in — which is exactly the behaviour wanted from both.
+/// The cap sits above 128 x 128 = 16384 deliberately. Every constant in this
+/// module was tuned on a 128 px corpus, and at or below the cap the stride is one
+/// and the arithmetic is bit-identical to visiting every pixel. Only inputs
+/// larger than the corpus see any change at all, and today those do not finish.
+pub const STAT_PIXELS: usize = 1 << 16;
+
+/// Greatest common divisor by Euclid's algorithm; `gcd(a, 0) = a`.
+fn gcd(a: usize, b: usize) -> usize {
+    if b == 0 {
+        a
+    } else {
+        gcd(b, a % b)
+    }
+}
+
+/// Stride for the statistical passes over an image of `n` pixels and `width` columns.
 ///
-/// `sigma_noise` is the per-channel pixel noise in sRGB units; passing `0.0` disables the
-/// MDL test and leaves only the fixed threshold.
-/// Mean distance from a candidate's own pixels to the candidate, in OKLab.
+/// 1 up to [`STAT_PIXELS`] pixels (and for a zero width); above it the smallest
+/// `s ≥ ⌈n / STAT_PIXELS⌉` coprime with `width`, so that visiting pixels `0, s, 2s, …` of
+/// the row-major image walks diagonally through the columns instead of revisiting the
+/// same few.
+pub(crate) fn stat_stride(n: usize, width: usize) -> usize {
+    if n <= STAT_PIXELS || width == 0 {
+        return 1;
+    }
+    let mut s = n.div_ceil(STAT_PIXELS);
+    // A stride sharing a factor with the row width lands on the same columns of
+    // every row, which would sample a few vertical stripes rather than the image.
+    while s > 1 && gcd(s, width) != 1 {
+        s += 1;
+    }
+    s
+}
+
+/// How many pixels candidate `c` would claim, and how tightly its own members sit.
+///
+/// Returns `(claim, spread)`:
+///
+/// * `claim`: the number of pixels strictly nearer to `c` than to any accepted ink
+///   (`|lab_i − c| < nearest_px_i`, OKLab), counted every `stride_px` pixels and scaled
+///   back up by `stride_px`, so it estimates a full-image pixel count;
+/// * `spread`: the **median** OKLab distance from `c` of the claimed pixels that also lie
+///   within `tol` of it (its *members*), taken only at pixel indices that are multiples of
+///   `max(⌊n / 8192⌋, 1)` to bound the sort. 0 when there are none.
+///
+/// # Why the spread
 ///
 /// This is the scale at which the image itself says "these pixels are the same colour",
 /// and it is measured rather than assumed, which matters because no single number can
@@ -825,43 +931,6 @@ pub fn extract_palette(
 /// so it scales with the colour space where the colour is; it is zero on an exact-coverage
 /// intake, so the shipped behaviour is unchanged; and it needs nothing to be estimated
 /// globally at all.
-/// Pixels visited by the palette's statistical passes.
-///
-/// Claim, spread, interior fraction and straddle fraction are all estimates of a
-/// *fraction* of the image, and a fraction does not need every pixel to be
-/// measured. Visiting a strided subset bounds the cost of one pass at any input
-/// size, which is what stops trace time growing with resolution: these passes run
-/// once per palette candidate, so an unbounded pass makes the stage quadratic in
-/// everything at once.
-///
-/// The cap sits above 128 x 128 = 16384 deliberately. Every constant in this
-/// module was tuned on a 128 px corpus, and at or below the cap the stride is one
-/// and the arithmetic is bit-identical to visiting every pixel. Only inputs
-/// larger than the corpus see any change at all, and today those do not finish.
-pub const STAT_PIXELS: usize = 1 << 16;
-
-fn gcd(a: usize, b: usize) -> usize {
-    if b == 0 {
-        a
-    } else {
-        gcd(b, a % b)
-    }
-}
-
-/// Stride for the statistical passes over an image of `n` pixels and `width` columns.
-pub(crate) fn stat_stride(n: usize, width: usize) -> usize {
-    if n <= STAT_PIXELS || width == 0 {
-        return 1;
-    }
-    let mut s = n.div_ceil(STAT_PIXELS);
-    // A stride sharing a factor with the row width lands on the same columns of
-    // every row, which would sample a few vertical stripes rather than the image.
-    while s > 1 && gcd(s, width) != 1 {
-        s += 1;
-    }
-    s
-}
-
 fn claim_spread(
     lab: &[Oklab],
     nearest_px: &[f32],
@@ -932,6 +1001,59 @@ pub struct PaletteEvidence {
 
 /// Recover the palette by frequency-ranked mode seeking in OKLab, using `ev` to decide
 /// whether two nearby candidates are one ink measured twice or genuinely two inks.
+///
+/// # The idea
+///
+/// Colours are bucketed coarsely only to make counting tractable; the palette entry is
+/// then the *weighted mean* of the pixels that fall to it, so the recovered colour is not
+/// snapped to a bucket centre. Entries are taken in descending frequency and a candidate
+/// is rejected if it is within `merge_distance` of one already accepted, which is what
+/// keeps an anti-aliased ramp from contributing entries of its own.
+///
+/// How many inks there are is decided by minimum description length, not by that fixed
+/// distance alone. A fixed threshold cannot be right everywhere in a perceptual space.
+/// Saturated inks sit far apart and survive it; pale ones cluster and do not. Ten
+/// concentric rings of ten distinct hues came back as six colours, because the five pale
+/// rings fell inside the threshold of each other — and the five that vanished then made
+/// their regions look like gradients, which is where a DISTS@4x of 0.197 came from.
+///
+/// The MDL test asks the same question the rest of the pipeline asks. Folding a candidate
+/// into the nearest accepted ink saves its three parameters but pays a residual over
+/// every one of its pixels: `0.5·n·(d/sigma)²` against `lambda·3`. A mode with thousands
+/// of pixels and a separation far above the noise is therefore kept however close the
+/// fixed threshold would call it, while a handful of pixels a hair away from an existing
+/// ink is folded in — which is exactly the behaviour wanted from both.
+///
+/// # The stages
+///
+/// 1. Convert every pixel once to OKLab, sRGB and linear RGB ([`PixelViews`]).
+/// 2. Bin in OKLab and rank the bins by pixel count ([`frequency_modes`]).
+/// 3. Walk the candidates in that order and accept one only if it passes every gate, in
+///    this order (stopping once `max_colors` are accepted):
+///    * **rarity**: it would claim at least [`MIN_INK_WEIGHT`] of the image (the first
+///      ink is exempt);
+///    * **perceptual floor**: CIEDE2000 to its nearest accepted ink is at least
+///      `same_ink_de00` ([`same_ink_as_accepted`]);
+///    * **separation**: its OKLab distance `d` to the nearest accepted ink exceeds
+///      `max(merge_distance, reach)`, `reach = noise_sigmas · spread`; or, failing that,
+///      the MDL escape `0.5 · claim · (d / σ)² > λ · PARAMS_PER_INK` with `d` above both
+///      [`JND_FLOOR`] and `reach`;
+///    * **not coverage**: it is not a blend of two accepted inks that is also thin and
+///      straddling ([`BlendEvidence`]).
+/// 4. Move each accepted ink to the mean of the pixels that chose it and record its share
+///    ([`refine_to_members`]).
+///
+/// # Units and edge cases
+///
+/// `rgb` is sRGB `[0, 1]`, row-major `width × height`; `merge_distance`, `d`, `spread` and
+/// `reach` are OKLab distances; `σ = ev.sigma_noise` is per-channel noise in sRGB units and
+/// `λ = ev.lambda` nats per parameter. The escape's `d / σ` therefore divides an OKLab
+/// distance by an sRGB one; both scales run over about `[0, 1]`, and the test treats the
+/// ratio as a number of standard deviations. `σ = 0` disables the escape.
+///
+/// The result always has at least one ink: with `max_colors == 0` it is the most frequent
+/// mode, and an empty image gives white with weight 0. Palette order is acceptance order,
+/// which is deterministic (ties in frequency are broken by bin index).
 pub fn extract_palette_mdl(
     rgb: &[[f32; 3]],
     width: usize,
@@ -946,92 +1068,15 @@ pub fn extract_palette_mdl(
         noise_sigmas,
         same_ink_de00,
     } = ev;
-    const BINS: usize = 24;
 
-    let lab: Vec<Oklab> = rgb.par_iter().map(|&c| rgb_to_oklab(c)).collect();
+    let view = PixelViews::new(rgb, width, height);
+    let modes = frequency_modes(&view.lab);
 
-    // How many pixels each statistical pass visits. These passes run once per
-    // palette candidate, so leaving them unbounded makes the stage grow with
-    // resolution on top of everything else: a 512 px input spent 36 s here and a
-    // 1024 px one over four minutes. At or below the cap this is 1 and nothing
-    // changes, which is every image in the corpus.
-    let stride_px = stat_stride(lab.len(), width);
-
-    // Each pixel's sRGB and linear-RGB value, converted once. `straddle_fraction`
-    // needs them to place a pixel on a colour axis, the axis changes per candidate
-    // pair while the pixel's own colour does not, and the conversion is a cube root
-    // plus three powf calls. Converting from `lab` rather than reusing `rgb` keeps
-    // the arithmetic bit-identical to what the per-pixel call computed.
-    let px_srgb: Vec<[f32; 3]> = lab.par_iter().map(|&p| oklab_to_rgb(p)).collect();
-    let px_lin: Vec<[f32; 3]> = px_srgb
-        .par_iter()
-        .map(|r| {
-            [
-                srgb_to_linear(r[0]),
-                srgb_to_linear(r[1]),
-                srgb_to_linear(r[2]),
-            ]
-        })
-        .collect();
-
-    // Bin keys on every core; the accumulation stays sequential and in pixel order so
-    // the centroid sums are bit-identical to the single-threaded version. A dense table
-    // over the 24^3 bins replaces the hash map, which was most of this pass's cost.
-    let keys: Vec<u32> = lab
-        .par_iter()
-        .map(|c| {
-            let li =
-                ((c.l.clamp(0.0, 1.0) * (BINS - 1) as f32).round() as u32).min(BINS as u32 - 1);
-            let ai = (((c.a + 0.4) / 0.8).clamp(0.0, 1.0) * (BINS - 1) as f32).round() as u32;
-            let bi = (((c.b + 0.4) / 0.8).clamp(0.0, 1.0) * (BINS - 1) as f32).round() as u32;
-            li * (BINS * BINS) as u32 + ai * BINS as u32 + bi
-        })
-        .collect();
-    let mut dense: Vec<(u32, f64, f64, f64)> = vec![(0, 0.0, 0.0, 0.0); BINS * BINS * BINS];
-    for (c, &key) in lab.iter().zip(keys.iter()) {
-        let e = &mut dense[key as usize];
-        e.0 += 1;
-        e.1 += c.l as f64;
-        e.2 += c.a as f64;
-        e.3 += c.b as f64;
-    }
-    let counts: std::collections::HashMap<u32, (u32, f64, f64, f64)> = dense
-        .into_iter()
-        .enumerate()
-        .filter(|(_, e)| e.0 > 0)
-        .map(|(k, e)| (k as u32, e))
-        .collect();
-
-    // Carry the bin key through, purely so ties can be broken by it.
-    //
-    // Sorting modes by pixel count alone leaves equal-frequency colours ordered by
-    // whatever order the hash map yielded them in, which differs between runs of the
-    // same binary on the same input. Palette order decides which colour is accepted
-    // first and therefore what everything downstream sees, so the whole tracer was
-    // non-deterministic: the junction accuracy test measured 0.054-0.134px across ten
-    // consecutive runs of one binary. An identical input must give an identical file.
-    let mut modes: Vec<(u32, u32, Oklab)> = counts
-        .into_iter()
-        .map(|(key, (n, sl, sa, sb))| {
-            let f = n as f64;
-            (
-                n,
-                key,
-                Oklab {
-                    l: (sl / f) as f32,
-                    a: (sa / f) as f32,
-                    b: (sb / f) as f32,
-                },
-            )
-        })
-        .collect();
-    modes.sort_by_key(|&(n, key, _)| (std::cmp::Reverse(n), key));
-
-    let total_px = lab.len().max(1) as f32;
+    let total_px = view.lab.len().max(1) as f32;
     let mut colors: Vec<Oklab> = Vec::new();
     // Distance from each pixel to the nearest ink accepted so far, so a candidate's own
     // territory can be read off without rescanning the whole palette.
-    let mut nearest_px: Vec<f32> = vec![f32::INFINITY; lab.len()];
+    let mut nearest_px: Vec<f32> = vec![f32::INFINITY; view.lab.len()];
     let paldbg = inkvec_core::env::flag("INKVEC_PALDBG");
     // The perceptual-merge experiment below, in a `research` build only.
     let de00_radius: Option<f32> = if cfg!(feature = "research") {
@@ -1039,7 +1084,6 @@ pub fn extract_palette_mdl(
     } else {
         None
     };
-    let blend_tmin = BLEND_TMIN;
     for (tested, (n, _key, c)) in modes.iter().enumerate() {
         if colors.len() >= max_colors {
             break;
@@ -1056,9 +1100,10 @@ pub fn extract_palette_mdl(
         // measurable downstream: the regions the tracer paints flat where the artwork
         // varies are two inks merged into one, and fitting them showed the best pair of
         // flat colours removing 66 % of the error there against 13 % for the best linear
-        // ramp. Counting the territory
-        // costs one pass over the image per candidate and answers the question asked.
-        let (claim, spread) = claim_spread(&lab, &nearest_px, *c, merge_distance, stride_px);
+        // ramp. Counting the territory costs one pass over the image per candidate and
+        // answers the question asked.
+        let (claim, spread) =
+            claim_spread(&view.lab, &nearest_px, *c, merge_distance, view.stride_px);
         if (claim as f32 / total_px) < MIN_INK_WEIGHT && !colors.is_empty() {
             continue;
         }
@@ -1076,24 +1121,8 @@ pub fn extract_palette_mdl(
         // Two inks nobody can tell apart are one ink. Decided perceptually, before any
         // description-length argument, because the argument counts pixels and pixels
         // are exactly what an anti-aliasing ramp near an ink has plenty of.
-        if let Some(&near_ink) = colors.iter().min_by(|&&p, &&q| {
-            p.dist(*c)
-                .partial_cmp(&q.dist(*c))
-                .unwrap_or(std::cmp::Ordering::Equal)
-        }) {
-            let perceptual = de00(oklab_to_rgb(*c), oklab_to_rgb(near_ink));
-            if perceptual < same_ink_de00 {
-                if paldbg {
-                    eprintln!(
-                        "  cand {:<9} same ink as {} (dE00 {:.2} < {})",
-                        to_hex(oklab_to_rgb(*c)),
-                        to_hex(oklab_to_rgb(near_ink)),
-                        perceptual,
-                        same_ink_de00
-                    );
-                }
-                continue;
-            }
+        if same_ink_as_accepted(*c, &colors, same_ink_de00, paldbg) {
+            continue;
         }
         // EXPERIMENT (`INKVEC_MERGE_DE00=<radius>`, research builds only): decide the merge PERCEPTUALLY rather
         // than by Euclidean distance in OKLab.
@@ -1134,49 +1163,9 @@ pub fn extract_palette_mdl(
                 continue;
             }
         }
-        let _ = n;
-        // Explained as a blend of inks already accepted: coverage evidence, not a new
-        // colour — unless it covers too much of the image to be a boundary effect.
         // Explained as a blend of inks already accepted *and* shaped like a boundary
         // band rather than a region: coverage evidence, not a new colour.
-        let pairs = blend_pairs(*c, &colors, merge_distance * 1.6, blend_tmin);
-        let blend = !pairs.is_empty();
-        // How far the candidate sits from the nearest chord between two accepted inks.
-        // Zero means it lies exactly on the line between them, which in a three-dimensional
-        // colour space is not a coincidence -- it is what a blend *is*.
-        let chord_off = pairs
-            .iter()
-            .map(|&(_, _, _, off)| off)
-            .fold(f32::INFINITY, f32::min);
-        let interior = if blend {
-            interior_fraction(&lab, width, height, *c, &nearest_px, stride_px)
-        } else {
-            1.0
-        };
-        // The pairs on every core: each is a count ratio and a max of finite values does
-        // not depend on the order it is taken in.
-        let straddle = if blend && interior < BLEND_INTERIOR_FRACTION {
-            pairs
-                .par_iter()
-                .map(|&(i, j, linear, _off)| {
-                    straddle_fraction(
-                        &lab,
-                        &px_srgb,
-                        &px_lin,
-                        width,
-                        height,
-                        *c,
-                        &nearest_px,
-                        colors[i],
-                        colors[j],
-                        linear,
-                        stride_px,
-                    )
-                })
-                .reduce(|| 0.0f32, f32::max)
-        } else {
-            0.0
-        };
+        let shape = BlendEvidence::measure(&view, *c, &colors, &nearest_px, merge_distance);
         // Why every candidate was kept or dropped. A wrong palette does not look like a
         // palette bug downstream — the green-circle case surfaced as a spurious radial
         // gradient and twenty-seven junk paths — so the decision has to be readable
@@ -1191,16 +1180,19 @@ pub fn extract_palette_mdl(
                 sigma_noise,
                 reach,
                 nearest,
-                blend,
-                if blend { chord_off } else { f32::NAN },
-                interior,
-                straddle
+                shape.blend,
+                if shape.blend { shape.chord_off } else { f32::NAN },
+                shape.interior,
+                shape.straddle
             );
         }
         // Both spatial tests are required, and the colour-space distance does not override
         // them. **Letting a conclusive chord decide alone was tried on 2026-09-09 and is a
         // 20 % regression** -- screen-set objective 0.4005 -> 0.4826 at 128, and worse on
-        // every tier, losing on colour error and parameter count at once.
+        // every tier, losing on colour error and parameter count at once. (The rule tried
+        // was: a candidate within 0.006 of a chord is a blend whatever its shape. It was
+        // motivated by a brand mark upscaled x4, where seven invented tones sat 0.0000 to
+        // 0.0037 from a chord and several survived because the wider ramp had an interior.)
         //
         // The reason is worth keeping, because the idea is seductive and correct in theory:
         // a colour lying exactly on the chord between two inks *is* a mixture of them, and
@@ -1215,12 +1207,12 @@ pub fn extract_palette_mdl(
         // candidate the existing rule *dropped* (1284 of 1284 across thirty icons) and never
         // asked what the chord rule would newly drop. Agreement on the accepted set says
         // nothing about the rejected set.
-        if blend && interior < BLEND_INTERIOR_FRACTION && straddle >= BLEND_STRADDLE_FRACTION {
+        if shape.is_coverage() {
             continue;
         }
         nearest_px
             .par_iter_mut()
-            .zip(lab.par_iter())
+            .zip(view.lab.par_iter())
             .for_each(|(d, &q)| *d = d.min(q.dist(*c)));
         colors.push(*c);
     }
@@ -1232,9 +1224,260 @@ pub fn extract_palette_mdl(
         }));
     }
 
-    // Refine each entry to the mean of the pixels that actually chose it. Anti-aliased
-    // pixels sit far from every entry, so excluding them keeps blends from dragging a
-    // palette colour off its true value.
+    let weight = refine_to_members(&view.lab, &mut colors, merge_distance, total_px);
+    let rgb_out: Vec<[f32; 3]> = colors.iter().map(|&c| oklab_to_rgb(c)).collect();
+    let alpha = vec![1.0; colors.len()];
+    Palette {
+        colors,
+        rgb: rgb_out,
+        weight,
+        alpha,
+    }
+}
+
+/// The image in the three colour spaces the palette's tests read, converted once.
+///
+/// `straddle_fraction` places a pixel on a colour axis that changes with every candidate
+/// pair, while the pixel's own colour does not, and the conversion is a cube root plus
+/// three `powf` calls; converting per call was 200 million cube roots on a 512 px input.
+struct PixelViews {
+    /// Every pixel in OKLab.
+    lab: Vec<Oklab>,
+    /// Every pixel back in sRGB `[0, 1]`, converted *from `lab`* rather than copied from
+    /// the input, so the arithmetic is bit-identical to what a per-pixel call computed.
+    px_srgb: Vec<[f32; 3]>,
+    /// Every pixel in linear RGB, decoded from `px_srgb`.
+    px_lin: Vec<[f32; 3]>,
+    width: usize,
+    height: usize,
+    /// Stride of the statistical passes, from [`stat_stride`].
+    stride_px: usize,
+}
+
+impl PixelViews {
+    /// Convert `rgb` (sRGB `[0, 1]`, row-major `width × height`) on every core.
+    fn new(rgb: &[[f32; 3]], width: usize, height: usize) -> Self {
+        let lab: Vec<Oklab> = rgb.par_iter().map(|&c| rgb_to_oklab(c)).collect();
+
+        // How many pixels each statistical pass visits. These passes run once per
+        // palette candidate, so leaving them unbounded makes the stage grow with
+        // resolution on top of everything else: a 512 px input spent 36 s here and a
+        // 1024 px one over four minutes. At or below the cap this is 1 and nothing
+        // changes, which is every image in the corpus.
+        let stride_px = stat_stride(lab.len(), width);
+
+        let px_srgb: Vec<[f32; 3]> = lab.par_iter().map(|&p| oklab_to_rgb(p)).collect();
+        let px_lin: Vec<[f32; 3]> = px_srgb
+            .par_iter()
+            .map(|r| {
+                [
+                    srgb_to_linear(r[0]),
+                    srgb_to_linear(r[1]),
+                    srgb_to_linear(r[2]),
+                ]
+            })
+            .collect();
+        PixelViews {
+            lab,
+            px_srgb,
+            px_lin,
+            width,
+            height,
+            stride_px,
+        }
+    }
+}
+
+/// The palette candidates: occupied OKLab bins, most populous first.
+///
+/// OKLab is cut into a 24 × 24 × 24 grid (`L` over `[0, 1]`, `a` and `b` over
+/// `[−0.4, 0.4]`, each clamped; bin index `round(x · 23)` per axis). Each occupied bin
+/// yields `(count, key, mean)`, where `mean` is the average OKLab colour of the pixels in
+/// the bin (summed in `f64`, in pixel order) and `key = L_i · 24² + a_i · 24 + b_i`.
+///
+/// Sorted by count descending, then key ascending. Sorting by count alone left
+/// equal-frequency colours in hash-map order, which differed between runs of the same
+/// binary; palette order decides which colour is accepted first and so everything
+/// downstream, and the junction accuracy test measured 0.054-0.134 px across ten
+/// consecutive runs of one binary. An identical input must give an identical file.
+fn frequency_modes(lab: &[Oklab]) -> Vec<(u32, u32, Oklab)> {
+    const BINS: usize = 24;
+    // Bin keys on every core; the accumulation stays sequential and in pixel order so
+    // the centroid sums are bit-identical to the single-threaded version. A dense table
+    // over the 24^3 bins replaces the hash map, which was most of this pass's cost.
+    let keys: Vec<u32> = lab
+        .par_iter()
+        .map(|c| {
+            let li =
+                ((c.l.clamp(0.0, 1.0) * (BINS - 1) as f32).round() as u32).min(BINS as u32 - 1);
+            let ai = (((c.a + 0.4) / 0.8).clamp(0.0, 1.0) * (BINS - 1) as f32).round() as u32;
+            let bi = (((c.b + 0.4) / 0.8).clamp(0.0, 1.0) * (BINS - 1) as f32).round() as u32;
+            li * (BINS * BINS) as u32 + ai * BINS as u32 + bi
+        })
+        .collect();
+    let mut dense: Vec<(u32, f64, f64, f64)> = vec![(0, 0.0, 0.0, 0.0); BINS * BINS * BINS];
+    for (c, &key) in lab.iter().zip(keys.iter()) {
+        let e = &mut dense[key as usize];
+        e.0 += 1;
+        e.1 += c.l as f64;
+        e.2 += c.a as f64;
+        e.3 += c.b as f64;
+    }
+    let mut modes: Vec<(u32, u32, Oklab)> = dense
+        .into_iter()
+        .enumerate()
+        .filter(|(_, e)| e.0 > 0)
+        .map(|(key, (n, sl, sa, sb))| {
+            let f = n as f64;
+            (
+                n,
+                key as u32,
+                Oklab {
+                    l: (sl / f) as f32,
+                    a: (sa / f) as f32,
+                    b: (sb / f) as f32,
+                },
+            )
+        })
+        .collect();
+    modes.sort_by_key(|&(n, key, _)| (std::cmp::Reverse(n), key));
+    modes
+}
+
+/// The perceptual floor: is `c` within `same_ink_de00` (CIEDE2000) of the accepted ink
+/// nearest to it in OKLab? False when nothing is accepted yet.
+///
+/// Only the OKLab-nearest ink is compared (ties to the earlier one), not the ink nearest
+/// in CIEDE2000. `paldbg` prints the verdict (`INKVEC_PALDBG`).
+fn same_ink_as_accepted(c: Oklab, colors: &[Oklab], same_ink_de00: f32, paldbg: bool) -> bool {
+    let Some(&near_ink) = colors.iter().min_by(|&&p, &&q| {
+        p.dist(c)
+            .partial_cmp(&q.dist(c))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }) else {
+        return false;
+    };
+    let perceptual = de00(oklab_to_rgb(c), oklab_to_rgb(near_ink));
+    if perceptual < same_ink_de00 {
+        if paldbg {
+            eprintln!(
+                "  cand {:<9} same ink as {} (dE00 {:.2} < {})",
+                to_hex(oklab_to_rgb(c)),
+                to_hex(oklab_to_rgb(near_ink)),
+                perceptual,
+                same_ink_de00
+            );
+        }
+        return true;
+    }
+    false
+}
+
+/// Whether a palette candidate is anti-aliasing (coverage evidence) rather than an ink.
+///
+/// Three measurements, each computed only when the one before it leaves the verdict open:
+///
+/// * `blend`: [`blend_pairs`] finds `c` on a chord between two accepted inks, within
+///   `merge_distance · 1.6` in OKLab and at least [`BLEND_TMIN`] in from either end;
+/// * `interior`: [`interior_fraction`] of the pixels `c` would claim (1 when not a blend);
+/// * `straddle`: the largest [`straddle_fraction`] over the blend pairs (0 unless a blend
+///   with `interior < BLEND_INTERIOR_FRACTION`).
+///
+/// The candidate is coverage when all three agree ([`BlendEvidence::is_coverage`]).
+struct BlendEvidence {
+    blend: bool,
+    /// OKLab distance to the nearest qualifying chord; infinite when there is none.
+    chord_off: f32,
+    interior: f32,
+    straddle: f32,
+}
+
+impl BlendEvidence {
+    /// Measure candidate `c` against the accepted inks `colors`; `nearest_px` is each
+    /// pixel's OKLab distance to its nearest accepted ink.
+    fn measure(
+        view: &PixelViews,
+        c: Oklab,
+        colors: &[Oklab],
+        nearest_px: &[f32],
+        merge_distance: f32,
+    ) -> Self {
+        let pairs = blend_pairs(c, colors, merge_distance * 1.6, BLEND_TMIN);
+        let blend = !pairs.is_empty();
+        // How far the candidate sits from the nearest chord between two accepted inks.
+        // Zero means it lies exactly on the line between them, which in a three-dimensional
+        // colour space is not a coincidence -- it is what a blend *is*.
+        let chord_off = pairs
+            .iter()
+            .map(|&(_, _, _, off)| off)
+            .fold(f32::INFINITY, f32::min);
+        let interior = if blend {
+            interior_fraction(
+                &view.lab,
+                view.width,
+                view.height,
+                c,
+                nearest_px,
+                view.stride_px,
+            )
+        } else {
+            1.0
+        };
+        // The pairs on every core: each is a count ratio and a max of finite values does
+        // not depend on the order it is taken in.
+        let straddle = if blend && interior < BLEND_INTERIOR_FRACTION {
+            pairs
+                .par_iter()
+                .map(|&(i, j, linear, _off)| {
+                    straddle_fraction(
+                        &view.lab,
+                        &view.px_srgb,
+                        &view.px_lin,
+                        view.width,
+                        view.height,
+                        c,
+                        nearest_px,
+                        colors[i],
+                        colors[j],
+                        linear,
+                        view.stride_px,
+                    )
+                })
+                .reduce(|| 0.0f32, f32::max)
+        } else {
+            0.0
+        };
+        BlendEvidence {
+            blend,
+            chord_off,
+            interior,
+            straddle,
+        }
+    }
+
+    /// A blend, thin (`interior < BLEND_INTERIOR_FRACTION`) and straddling
+    /// (`straddle ≥ BLEND_STRADDLE_FRACTION`): anti-aliasing, not an ink.
+    fn is_coverage(&self) -> bool {
+        self.blend
+            && self.interior < BLEND_INTERIOR_FRACTION
+            && self.straddle >= BLEND_STRADDLE_FRACTION
+    }
+}
+
+/// Move each accepted ink to the mean of the pixels that chose it, and return each ink's
+/// share of the image.
+///
+/// A pixel chooses its nearest ink in OKLab (ties to the lower index) only when that ink
+/// is within `merge_distance`; anti-aliased pixels sit far from every entry, so excluding
+/// them keeps blends from dragging a palette colour off its true value. An ink no pixel
+/// chose keeps its candidate colour and gets weight 0. Weights are `members / total_px`,
+/// so they sum to less than 1 when some pixels chose nothing.
+fn refine_to_members(
+    lab: &[Oklab],
+    colors: &mut [Oklab],
+    merge_distance: f32,
+    total_px: f32,
+) -> Vec<f32> {
     let mut acc = vec![(0.0f64, 0.0f64, 0.0f64, 0u32); colors.len()];
     // The nearest-entry search is the cost and runs on every core; the sums are
     // taken in pixel order afterwards so the means are bit-identical.
@@ -1277,15 +1520,7 @@ pub fn extract_palette_mdl(
         }
         weight.push(e.3 as f32 / total);
     }
-
-    let rgb_out: Vec<[f32; 3]> = colors.iter().map(|&c| oklab_to_rgb(c)).collect();
-    let alpha = vec![1.0; colors.len()];
-    Palette {
-        colors,
-        rgb: rgb_out,
-        weight,
-        alpha,
-    }
+    weight
 }
 
 /// Split each ink by the opacity the source drew it at.
@@ -1300,6 +1535,20 @@ pub fn extract_palette_mdl(
 /// single opacity describes it, and splitting it would mint a band per level; the test is
 /// therefore a two-mode one — the label's alphas must fall into groups that are each tight
 /// and clearly apart — and anything else is left alone.
+///
+/// # The procedure
+///
+/// For each ink with at least 16 pixels, sort its pixels' source alphas and cut the sorted
+/// list wherever two neighbours differ by more than `LEVEL_GAP` (0.15). A group is a
+/// *level* when its range is at most `LEVEL_SPREAD` (0.06) and it holds at least
+/// `MIN_SHARE` (2 %) of the ink's pixels; its opacity is the group mean, snapped to 0 below
+/// `CLEAR`. One level just sets that ink's `pal.alpha`. Two or more: the most opaque keeps
+/// the original entry and each other level becomes a new entry with the same colour and
+/// weight 0, and every pixel of the ink moves to the entry whose opacity is nearest its own
+/// alpha (ties keep the original entry). Inks with no level are left as they are.
+///
+/// `labels` and `pal` are edited in place; `alpha` is the source alpha in `[0, 1]`, one
+/// per pixel. A length mismatch or an empty palette changes nothing.
 ///
 /// Returns the number of new inks minted.
 pub fn split_alpha_inks(labels: &mut [u16], pal: &mut Palette, alpha: &[f32]) -> usize {
@@ -1332,7 +1581,7 @@ pub fn split_alpha_inks(labels: &mut [u16], pal: &mut Palette, alpha: &[f32]) ->
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         // Cut wherever consecutive values jump by more than the gap; that is a histogram
         // split without a histogram, and it is exact on flat art.
-        let mut groups: Vec<(f32, f32, usize)> = Vec::new(); // (sum, count as f32, count)
+        let mut groups: Vec<(f32, f32, usize)> = Vec::new(); // (mean, spread, count)
         let mut start = 0usize;
         for k in 1..=sorted.len() {
             let cut = k == sorted.len() || sorted[k] - sorted[k - 1] > LEVEL_GAP;
@@ -1411,6 +1660,12 @@ pub fn split_alpha_inks(labels: &mut [u16], pal: &mut Palette, alpha: &[f32]) ->
 }
 
 /// Assign every pixel to its nearest palette entry.
+///
+/// `rgb` is sRGB `[0, 1]`; the distance is Euclidean in OKLab ([`Palette::nearest`], ties
+/// to the lower index). This is hard nearest-ink labelling: an anti-aliased pixel gets
+/// whichever ink is closest, often a third colour, which is what
+/// [`crate::regions::absorb_blend_slivers`] later repairs. Returns one `u16` label per
+/// pixel, in the same order.
 pub fn label_image(rgb: &[[f32; 3]], pal: &Palette) -> Vec<u16> {
     rgb.par_iter()
         .map(|&c| pal.nearest(rgb_to_oklab(c)).0 as u16)

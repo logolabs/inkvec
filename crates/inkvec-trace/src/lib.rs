@@ -3,20 +3,50 @@
 //! Everything that decides *what is in the image* lives here. The crate above turns the
 //! answer into SVG; the crate beside it fits curves to the boundaries this one finds.
 //!
-//! The stages, in the order [`trace_color_full`] runs them:
+//! # The Quality pipeline, stage by stage
 //!
-//! | stage | module | what it settles |
-//! |---|---|---|
-//! | noise, coverage | [`coverage`] | how much of the measurement is real |
-//! | palette | [`color`] | how many inks, and which |
-//! | labels, despeckle | [`color`] | which ink each pixel is |
-//! | blend absorb | [`color`] | which pixels are only a mixture of two inks |
-//! | bands, carve | [`gradient`] | which neighbouring regions are one gradient |
-//! | planar map | [`planar`] | faces, and the edges they share |
-//! | symmetry | [`symmetry`] | which boundaries are reflections of each other |
-//! | sub-pixel, junctions | [`planar`] | where the boundaries actually are |
-//! | boundary solve | [`boundary_opt`] | all boundary points at once, against the image |
-//! | fills | [`gradient`] | flat, linear or radial, whichever pays |
+//! [`trace_color_full_with_alpha`] runs these in order; the names are the stage names the
+//! [`Stopwatch`] and the progress log report. Pixels are row-major, `p = y·w + x`, colours
+//! sRGB `[0, 1]` composited onto white unless a stage says otherwise.
+//!
+//! 1. **noise, intake** ([`coverage`]): the pixel noise `σ` from the luminance, and
+//!    whether the intake is soft (wide edges, a lossy container, JPEG ringing), which
+//!    switches the palette's noise guard.
+//! 2. **palette** ([`color::extract_palette_mdl`]): how many inks, and which.
+//! 3. **labels** ([`color::label_image`]): the nearest ink per pixel; on a soft intake `σ`
+//!    is then re-measured against the labels ([`regularize`]); with alpha inks,
+//!    [`color::split_alpha_inks`].
+//! 4. **despeckle** ([`regions::despeckle`]): components under `min_region` pixels go.
+//! 5. **blend_absorb** ([`regions::absorb_blend_slivers`],
+//!    [`regions::reassign_blend_pixels`]): anti-aliasing slivers and pixels go back to the
+//!    inks they are blends of.
+//! 6. **merge_bands** ([`gradient::bands`]): adjacent palette bands that one gradient
+//!    explains become one label, and every label gets its fitted fill (flat, linear or
+//!    radial, whichever pays).
+//! 7. **carve** ([`gradient::carve`]): clusters of pixels no fill explains become labels of
+//!    their own.
+//! 8. **fades** (native-alpha path only, `native/fade.rs`): translucent bands become one
+//!    opacity gradient.
+//! 9. **split** ([`regions::split_components`]): labels become faces, one per 4-connected
+//!    component, each with its label's fill and ink.
+//!
+//! From here `finish_color_trace_alpha` takes over, shared by every entry point:
+//!
+//! 10. **saddles** (research only, `regions::merge_saddle_faces`);
+//! 11. **build_map** ([`planar::build`]): faces, and the edges and junctions they share;
+//! 12. **symmetry_detect** ([`symmetry::detect`]): mirrors of the label map;
+//! 13. **refine_subpix** ([`planar::refine_subpixel_alpha`]): each boundary point moved to
+//!     its sub-pixel position by unmixing the two faces' fills;
+//! 14. **refine_junc** ([`planar::refine_junctions`]): where three or more faces meet;
+//! 15. **boundary_opt** ([`boundary_opt`]): all boundary points solved at once against an
+//!     exact coverage render of the image (Quality only);
+//! 16. **decode** (research only);
+//! 17. **symmetry** ([`symmetry::enforce`]): mirrored boundaries made exactly symmetric.
+//!
+//! The result, a [`ColorTrace`], goes to the curve fitter (`inkvec-fit`, stage `fit_dp`)
+//! and the SVG emitter in `inkvec-cli`. Fast mode ([`fast`]) and the native-alpha path
+//! ([`native`]) replace stages 1–9 and share 10–17 (Fast skips 15); [`trace_color_from_labels`] replaces
+//! 2–5 with a caller's label map.
 //!
 //! Two things run beside that path rather than in it: [`alpha`] recovers a translucent
 //! layer seen against two grounds, and [`centerline`] recovers strokes rather than
@@ -49,6 +79,7 @@ pub mod fast;
 pub mod gradient;
 #[cfg(feature = "research")]
 pub mod ink_ideas;
+mod load;
 pub mod native;
 pub mod occlusion;
 pub mod planar;
@@ -58,13 +89,15 @@ pub mod regularize;
 pub mod symmetry;
 pub mod taper;
 
-use std::path::Path;
-
 use inkvec_core::progress;
 use inkvec_core::Polyline;
 
 pub use color::{Oklab, Palette};
 pub use coverage::{CoverageField, Rgba};
+pub use load::{
+    decode_image, decode_image_capped, load_image, load_image_capped, lossy_container,
+    rgba8_capped, TraceError,
+};
 pub use planar::PlanarMap;
 pub use regions::{
     absorb_blend_slivers, despeckle, dump_labels, reassign_blend_pixels, split_components,
@@ -72,181 +105,9 @@ pub use regions::{
 #[cfg(feature = "research")]
 pub use regions::{merge_saddle_faces, SADDLE_SIGMAS};
 
-/// Error loading or decoding a raster image.
-#[derive(Debug)]
-pub enum TraceError {
-    /// The file could not be read.
-    Io(String),
-    /// The bytes could not be decoded as a supported image format.
-    Decode(String),
-}
-
-impl std::fmt::Display for TraceError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TraceError::Io(m) => write!(f, "io error: {m}"),
-            TraceError::Decode(m) => write!(f, "decode error: {m}"),
-        }
-    }
-}
-
-impl std::error::Error for TraceError {}
-
-/// Load a raster into straight RGBA floats.
+/// The clock behind [`ColorOptions::deadline`] and [`Stopwatch`], re-exported so a caller
+/// can build a deadline with the same `Instant` type on every target.
 pub use inkvec_core::clock;
-
-/// Was this file written by a lossy codec?
-///
-/// This is a fact about the container, not a statistic about the pixels, and that is the
-/// whole reason it exists. A lossy codec reconstructs flat regions with ringing and
-/// blocking, so an image that came out of one carries colours near every edge that no
-/// designer ever chose. The palette has a guard for exactly that (`color::SOFT_NOISE_SIGMAS`),
-/// but it was switched only by `coverage::intake_scale` -- the *edge width* -- which sees
-/// resampling and blur and is blind to compression: JPEG rings flat areas without widening
-/// an edge, so a q50 logo measured 1.15 px, under the 1.75 px threshold, and the guard
-/// stayed off while the palette took 200-odd ringing colours for inks.
-///
-/// Two pixel-level detectors were tried first and both failed, for the same reason the
-/// 8x8 block signature failed before them: the Laplacian of a lossily-coded flat region and
-/// the Laplacian of a cleanly-rendered 8-bit colour ramp are the same size. A clean radial
-/// gradient measured a *higher* "damage" score than a q50 flat icon. There is no separating
-/// the two from the pixels alone, so this asks the file instead, where the answer is exact.
-///
-/// Returns `None` when the format cannot be determined; the caller treats that as "not
-/// known to be lossy", because switching the guard on costs quality on a clean intake.
-pub fn lossy_container(bytes: &[u8]) -> Option<bool> {
-    match image::guess_format(bytes).ok()? {
-        image::ImageFormat::Jpeg => Some(true),
-        // WebP is both codecs in one container. The RIFF chunk after the 12-byte header
-        // says which: `VP8 ` (with the trailing space) is lossy, `VP8L` is lossless, and
-        // `VP8X` is the extended form whose sub-chunks have to be walked to find out --
-        // treat that last one as unknown rather than guessing.
-        image::ImageFormat::WebP => match bytes.get(12..16)? {
-            b"VP8 " => Some(true),
-            b"VP8L" => Some(false),
-            _ => None,
-        },
-        // Everything else the tracer accepts stores exact samples.
-        image::ImageFormat::Png
-        | image::ImageFormat::Gif
-        | image::ImageFormat::Bmp
-        | image::ImageFormat::Tiff => Some(false),
-        _ => None,
-    }
-}
-
-/// Load a raster image from a file path into straight RGBA floats.
-pub fn load_image(path: &Path) -> Result<Rgba, TraceError> {
-    let img = image::open(path).map_err(|e| TraceError::Decode(e.to_string()))?;
-    Ok(from_dynamic(&img))
-}
-
-/// Decode a raster image from in-memory bytes into straight RGBA floats.
-pub fn decode_image(bytes: &[u8]) -> Result<Rgba, TraceError> {
-    let img = image::load_from_memory(bytes).map_err(|e| TraceError::Decode(e.to_string()))?;
-    Ok(from_dynamic(&img))
-}
-
-fn from_dynamic(img: &image::DynamicImage) -> Rgba {
-    let rgba = img.to_rgba8();
-    let (w, h) = (rgba.width() as usize, rgba.height() as usize);
-    let data = rgba.into_raw().iter().map(|&b| b as f32 / 255.0).collect();
-    Rgba {
-        width: w,
-        height: h,
-        data,
-    }
-}
-
-/// The decode-time target for a `w x h` raster capped at `max_dim` on its longer side,
-/// or `None` when no cap applies. `max_dim == 0` means no cap.
-fn target_dims(w: u32, h: u32, max_dim: usize) -> Option<(u32, u32)> {
-    if max_dim == 0 {
-        return None;
-    }
-    let longest = w.max(h);
-    if longest <= max_dim as u32 {
-        return None;
-    }
-    let s = longest as f64 / max_dim as f64;
-    Some((
-        ((w as f64 / s).round() as u32).max(1),
-        ((h as f64 / s).round() as u32).max(1),
-    ))
-}
-
-/// Load a raster from a file path into straight RGBA floats, capping the longer side at
-/// `max_dim` pixels (0 = no cap) before the pixels are read into floats, and returning the
-/// file's original dimensions alongside so a caller can present the result at the size that
-/// arrived.
-///
-/// The size is decided from the file's header first, so the cap is known before the decode
-/// allocates. The full-resolution 8-bit buffer may still be decoded once, but the cap is an
-/// exact-area box average over that buffer, and the f32 conversion -- four bytes per channel,
-/// the dominant allocation -- then runs at the capped size rather than at the file's size,
-/// which is what used to blow past the decoder's 512 MiB guard on very large rasters.
-pub fn load_image_capped(path: &Path, max_dim: usize) -> Result<(Rgba, (u32, u32)), TraceError> {
-    let (w, h) = image::ImageReader::open(path)
-        .map_err(|e| TraceError::Decode(e.to_string()))?
-        .into_dimensions()
-        .map_err(|e| TraceError::Decode(e.to_string()))?;
-    let img = image::open(path).map_err(|e| TraceError::Decode(e.to_string()))?;
-    let out = match target_dims(w, h, max_dim) {
-        Some((nw, nh)) => {
-            let rgba = img.to_rgba8();
-            let raw = rgba.into_raw();
-            coverage::box_downsample_rgba8(&raw, w as usize, h as usize, nw as usize, nh as usize)
-        }
-        None => from_dynamic(&img),
-    };
-    Ok((out, (w, h)))
-}
-
-/// Decode in-memory bytes into straight RGBA floats, capping the longer side at `max_dim`
-/// pixels (0 = no cap) before the pixels are read into floats, and returning the original
-/// dimensions alongside. See [`load_image_capped`].
-pub fn decode_image_capped(bytes: &[u8], max_dim: usize) -> Result<(Rgba, (u32, u32)), TraceError> {
-    let (w, h) = image::ImageReader::new(std::io::Cursor::new(bytes))
-        .with_guessed_format()
-        .map_err(|e| TraceError::Decode(e.to_string()))?
-        .into_dimensions()
-        .map_err(|e| TraceError::Decode(e.to_string()))?;
-    let img = image::load_from_memory(bytes).map_err(|e| TraceError::Decode(e.to_string()))?;
-    let out = match target_dims(w, h, max_dim) {
-        Some((nw, nh)) => {
-            let rgba = img.to_rgba8();
-            let raw = rgba.into_raw();
-            coverage::box_downsample_rgba8(&raw, w as usize, h as usize, nw as usize, nh as usize)
-        }
-        None => from_dynamic(&img),
-    };
-    Ok((out, (w, h)))
-}
-
-/// Raw straight RGBA8 pixels (row-major, tightly packed, `w * h * 4` bytes) into straight
-/// RGBA floats, capping the longer side at `max_dim` (0 = no cap) exactly as
-/// [`decode_image_capped`] caps a decoded file.
-///
-/// The two share the cap and the 8-bit conversion so that a caller holding pixels and a
-/// caller holding the encoded file trace the same raster, byte for byte. The caller checks
-/// the length; a short buffer reads as transparent black past its end.
-pub fn rgba8_capped(raw: &[u8], w: u32, h: u32, max_dim: usize) -> Rgba {
-    match target_dims(w, h, max_dim) {
-        Some((nw, nh)) => {
-            coverage::box_downsample_rgba8(raw, w as usize, h as usize, nw as usize, nh as usize)
-        }
-        None => {
-            let n = w as usize * h as usize * 4;
-            let mut data: Vec<f32> = raw.iter().take(n).map(|&b| b as f32 / 255.0).collect();
-            data.resize(n, 0.0);
-            Rgba {
-                width: w as usize,
-                height: h as usize,
-                data,
-            }
-        }
-    }
-}
 
 /// Options for the bilevel path.
 #[derive(Debug, Clone, Copy)]
@@ -391,6 +252,31 @@ pub fn trace_color_full(img: &Rgba, opts: &ColorOptions) -> ColorTrace {
 /// When it does, the stages that ask "was anything drawn here" would otherwise see a solid
 /// alpha channel and answer wrongly: sliver absorption and blend reassignment both read it,
 /// and it is what tells an anti-aliased rim from a face. So the true alphas come alongside.
+///
+/// # Dispatch
+///
+/// * `opts.native_alpha` and a `source_alpha` of the right length with some pixel below
+///   [`native::OPAQUE`]: the native-alpha path, [`native::trace_color`] (or its Fast
+///   counterpart when `opts.fast`);
+/// * otherwise `opts.fast`: the Fast engine's front end ([`fast`]);
+/// * otherwise the Quality pipeline below, stages 1–9 of the crate overview, then
+///   `finish_color_trace` for the geometry.
+///
+/// # Inputs and outputs
+///
+/// `img` is straight RGBA in `[0, 1]`; every stage here reads it composited onto white.
+/// `source_alpha`, when given, must have one value per pixel to be used; otherwise the
+/// image's own alpha channel stands in where alpha is read. The returned [`ColorTrace`]
+/// has one face per 4-connected region, each with its palette ink, its fitted fill and
+/// its boundaries at sub-pixel positions.
+///
+/// # Noise
+///
+/// `σ` (`sigma_noise`, sRGB units per channel) is estimated once from the luminance
+/// before the palette exists and is then only ever raised: on a soft intake, by
+/// `regularize::residual_sigma` measured against the labels (scaled by
+/// [`color::MEASURED_SIGMA_SCALE`] and capped at [`color::MEASURED_SIGMA_CAP`] levels). The
+/// value the palette saw is kept as `detail_sigma` for the research carve variant.
 pub fn trace_color_full_with_alpha(
     img: &Rgba,
     opts: &ColorOptions,
@@ -617,13 +503,11 @@ pub fn trace_color_full_with_alpha(
         );
     }
 
-    let minted = match source_alpha {
-        Some(a) if opts.alpha_inks && a.len() == labels.len() => {
-            color::split_alpha_inks(&mut labels, &mut pal, a)
+    if let Some(a) = source_alpha {
+        if opts.alpha_inks && a.len() == labels.len() {
+            color::split_alpha_inks(&mut labels, &mut pal, a);
         }
-        _ => 0,
-    };
-    let _ = minted;
+    }
     sw.mark("labels");
     progress::begin("despeckle");
 
@@ -825,7 +709,10 @@ pub fn trace_color_full_with_alpha(
 /// Research entry: run the colour tracer from a caller-supplied label map.
 ///
 /// `labels[y*w+x]` is a region id in `0..n_labels` (any value >= `n_labels` is treated as
-/// unlabelled and reassigned to the nearest labelled 4-neighbour by repeated dilation).
+/// unlabelled and reassigned to the nearest labelled 4-neighbour by repeated dilation; a
+/// `labels` shorter than the image leaves the rest unlabelled). `img` is straight RGBA in
+/// `[0, 1]`, read composited onto white. Returns a [`ColorTrace`] exactly as
+/// [`trace_color_full`] does, with the palette standing for the supplied labels.
 ///
 /// From there this is the classical path, stage for stage, differing only in where the
 /// labels came from:
@@ -1077,7 +964,8 @@ pub fn trace_color_from_labels(
 /// how the labels were arrived at.
 ///
 /// Shared by [`trace_color_full_with_alpha`] and [`trace_color_from_labels`] so the
-/// research entry cannot drift away from the shipped one.
+/// research entry cannot drift away from the shipped one. The opaque form of
+/// [`finish_color_trace_alpha`], which documents the arguments.
 #[allow(clippy::too_many_arguments)]
 fn finish_color_trace(
     img: &Rgba,
@@ -1111,6 +999,30 @@ fn finish_color_trace(
 /// boundary solve then unmix in four channels, each face at its palette entry's opacity, so
 /// an edge between white paint and the clear ground is found although over white it has no
 /// contrast at all. With `None` this is exactly the classic function.
+///
+/// # Stages
+///
+/// saddles (research only) → `build_map` ([`planar::build`]) → `symmetry_detect` →
+/// `refine_subpix` ([`planar::refine_subpixel_alpha`]) → `refine_junc` → `boundary_opt`
+/// (skipped in Fast mode or with `INKVEC_BOPT=0`) → decode (research only) → `symmetry`
+/// ([`symmetry::enforce`]). Stages 10–17 of the crate overview.
+///
+/// # Arguments
+///
+/// * `rgb`: the image composited onto white, sRGB `[0, 1]`, row-major;
+/// * `pal`: the palette, moved into the result;
+/// * `labels`: the **face** map (one id per 4-connected component, from
+///   [`regions::split_components`]), with `n_faces` ids;
+/// * `face_fill`, `face_color`: per face, its fitted fill and its palette index;
+/// * `sigma_noise`: per-channel noise in sRGB units, which sets how far the sub-pixel
+///   refinement trusts each pixel;
+/// * `sw`: the caller's stopwatch, so stage timings continue in one sequence;
+/// * `source_alpha`: the source's alpha per pixel, or `None` on the opaque path;
+/// * `face_alpha_override`: per face, the opacity at which it meets the ground (the
+///   native path's fades and washes); used only with `source_alpha` and when its length
+///   matches `face_color`, otherwise each face takes its ink's `pal.alpha`.
+///
+/// Returns the finished [`ColorTrace`], with `face_fade` empty (the native path fills it).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn finish_color_trace_alpha(
     img: &Rgba,
@@ -1181,6 +1093,8 @@ pub(crate) fn finish_color_trace_alpha(
 
     // Then solve the whole boundary against the image at once: every point above was
     // placed by a one-dimensional argument of its own, and a pixel's value is the area
+    // each face covers in it, so neighbouring points share evidence and have to be moved
+    // together. See `boundary_opt`.
     let boundary_opt = if !opts.fast && inkvec_core::env::switch("INKVEC_BOPT", true) {
         boundary_opt::optimise_alpha(&mut map, rgb, &face_model, opts.boundary_ms, alpha_pair)
     } else {
@@ -1243,6 +1157,10 @@ fn research_lossy_regularize() -> bool {
 }
 
 /// Stopwatch for logging wall-clock timing across tracing stages.
+///
+/// Each [`Stopwatch::mark`] closes one stage: it reports the milliseconds since the
+/// previous mark to stderr when `INKVEC_TIMING` is set, to the thread's stage sink
+/// ([`with_stage_sink`]) and to the progress log, and then restarts the clock.
 pub struct Stopwatch {
     on: bool,
     t: clock::Instant,
@@ -1419,90 +1337,6 @@ mod stage_sink_tests {
 }
 
 #[cfg(test)]
-mod lossy_container_tests {
-    use super::lossy_container;
-
-    /// A real encode of each, so the test fails if the `image` crate ever disagrees with
-    /// the byte patterns this reads.
-    fn encode(fmt: image::ImageFormat) -> Vec<u8> {
-        let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(24, 24, |x, y| {
-            image::Rgb([(x * 10) as u8, (y * 10) as u8, 90])
-        }));
-        let mut buf = std::io::Cursor::new(Vec::new());
-        img.write_to(&mut buf, fmt).unwrap();
-        buf.into_inner()
-    }
-
-    #[test]
-    fn jpeg_is_lossy_and_png_is_not() {
-        assert_eq!(
-            lossy_container(&encode(image::ImageFormat::Jpeg)),
-            Some(true)
-        );
-        assert_eq!(
-            lossy_container(&encode(image::ImageFormat::Png)),
-            Some(false)
-        );
-    }
-
-    #[test]
-    fn a_header_is_enough() {
-        // The caller only reads the first bytes of the file, so the answer must not need
-        // the rest of it.
-        let jpeg = encode(image::ImageFormat::Jpeg);
-        assert_eq!(lossy_container(&jpeg[..32.min(jpeg.len())]), Some(true));
-    }
-
-    #[test]
-    fn webp_is_read_from_the_riff_chunk() {
-        let mut b = b"RIFF\0\0\0\0WEBPVP8 ".to_vec();
-        assert_eq!(lossy_container(&b), Some(true));
-        b[12..16].copy_from_slice(b"VP8L");
-        assert_eq!(lossy_container(&b), Some(false));
-        // The extended container needs its sub-chunks walked; do not guess at it.
-        b[12..16].copy_from_slice(b"VP8X");
-        assert_eq!(lossy_container(&b), None);
-    }
-
-    #[test]
-    fn nonsense_is_unknown_not_clean() {
-        assert_eq!(lossy_container(b"not an image at all"), None);
-    }
-}
-
-#[cfg(test)]
-mod rgba8_capped_tests {
-    use super::{decode_image_capped, rgba8_capped};
-
-    /// Raw pixels and the same pixels encoded as a PNG must reach the tracer as the same
-    /// raster, capped or not: the language bindings promise that the two inputs agree.
-    #[test]
-    fn raw_pixels_match_the_decoded_file_with_and_without_a_cap() {
-        let (w, h) = (40u32, 24u32);
-        let img = image::RgbaImage::from_fn(w, h, |x, y| {
-            image::Rgba([
-                (x * 6) as u8,
-                (y * 9) as u8,
-                200,
-                if x > 20 { 255 } else { 90 },
-            ])
-        });
-        let mut png = std::io::Cursor::new(Vec::new());
-        image::DynamicImage::ImageRgba8(img.clone())
-            .write_to(&mut png, image::ImageFormat::Png)
-            .unwrap();
-        let png = png.into_inner();
-        for max_dim in [0usize, 2048, 16] {
-            let (decoded, dims) = decode_image_capped(&png, max_dim).unwrap();
-            let raw = rgba8_capped(img.as_raw(), w, h, max_dim);
-            assert_eq!(dims, (w, h));
-            assert_eq!((raw.width, raw.height), (decoded.width, decoded.height));
-            assert_eq!(raw.data, decoded.data, "max_dim {max_dim}");
-        }
-    }
-}
-
-#[cfg(test)]
 mod from_labels_tests {
     use super::*;
 
@@ -1609,66 +1443,5 @@ mod from_labels_tests {
             reps.iter().any(|c| c.iter().all(|&v| v < 0.05)),
             "one of the fills is the square's black, got {reps:?}"
         );
-    }
-}
-
-#[cfg(test)]
-mod decode_cap_tests {
-    use super::*;
-
-    fn png_bytes(w: u32, h: u32) -> Vec<u8> {
-        let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
-            w,
-            h,
-            image::Rgb([200, 30, 30]),
-        ));
-        let mut buf = std::io::Cursor::new(Vec::new());
-        img.write_to(&mut buf, image::ImageFormat::Png).unwrap();
-        buf.into_inner()
-    }
-
-    #[test]
-    fn decode_cap_bounds_a_large_raster() {
-        let bytes = png_bytes(512, 256);
-
-        // No cap decodes at full size.
-        let (full, _) = decode_image_capped(&bytes, 0).unwrap();
-        assert_eq!((full.width, full.height), (512, 256));
-
-        // A cap reduces the raster before the f32 conversion, so the buffer that comes
-        // back is bounded by the cap rather than by the file's dimensions -- and the
-        // original dimensions still come back alongside.
-        let (capped, (aw, ah)) = decode_image_capped(&bytes, 64).unwrap();
-        assert_eq!((aw, ah), (512, 256), "arrival dimensions must be preserved");
-        assert!(
-            capped.width <= 64 && capped.height <= 64,
-            "capped raster is {}x{}, want at most 64 on the longer side",
-            capped.width,
-            capped.height
-        );
-        assert_eq!(capped.data.len(), capped.width * capped.height * 4);
-        assert!(capped.width < full.width);
-    }
-
-    #[test]
-    fn load_cap_bounds_a_large_file() {
-        let path = std::env::temp_dir().join(format!("inkvec-load-cap-{}.png", std::process::id()));
-        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
-            300,
-            100,
-            image::Rgb([0, 0, 0]),
-        ))
-        .save(&path)
-        .unwrap();
-        let (capped, (aw, ah)) = load_image_capped(&path, 40).unwrap();
-        std::fs::remove_file(&path).ok();
-        assert_eq!((aw, ah), (300, 100), "arrival dimensions must be preserved");
-        assert!(
-            capped.width <= 40 && capped.height <= 40,
-            "capped file is {}x{}, want at most 40 on the longer side",
-            capped.width,
-            capped.height
-        );
-        assert_eq!(capped.data.len(), capped.width * capped.height * 4);
     }
 }

@@ -1,8 +1,25 @@
 //! Hoisted evaluation of gradient fill models over many pixel coordinates.
+//!
+//! Every scoring loop of the gradient stage (chi², contrast, support, the stop search,
+//! the band merger's common-pixel gain) evaluates one [`FillModel`] at thousands of
+//! sample positions. [`FillModel::eval`] builds a [`FillEval`] that does the per-model
+//! work once; its `color_at` is bit-identical to [`FillModel::color_at`]. The small
+//! helpers here (`radial_t_rot`, `lerp_lin`, `segment`) are shared by both paths so they
+//! cannot drift apart.
 
 use super::{eval_stops, linear_t, to_lin, to_srgb, FillModel, Interp};
 
-/// [`radial_t`] with the rotation's `angle.sin_cos()` given (unused when `aspect` is 1).
+/// `radial_t` with the rotation's `angle.sin_cos()` given (unused when `aspect` is 1).
+///
+/// The normalised elliptical radius of `(x, y)` about the centre `c`, px:
+///
+/// `u = dx·cos θ + dy·sin θ`, `v = (−dx·sin θ + dy·cos θ)·aspect`,
+/// `t = clamp(√(u² + v²) / r, 0, 1)`
+///
+/// where `(dx, dy) = (x, y) − c` and `(sin θ, cos θ) = sin_cos`. So `t = 1` on the
+/// ellipse with semi-axis `r` along `θ` and `r / aspect` across it; with `aspect == 1`
+/// it is the plain distance over `r`. The clamp is SVG's pad spread. A non-positive
+/// radius gives 0 everywhere (the centre colour).
 #[inline]
 pub(super) fn radial_t_rot(
     x: f64,
@@ -27,7 +44,8 @@ pub(super) fn radial_t_rot(
     (rho / r).clamp(0.0, 1.0)
 }
 
-/// Interpolate two stops already in linear light, returning sRGB.
+/// Interpolate two stops already in linear light, returning sRGB:
+/// `to_srgb(a + t·(b − a))`, clamped to `[0, 1]` by `to_srgb`.
 #[inline]
 pub(super) fn lerp_lin(a: [f64; 3], b: [f64; 3], t: f64) -> [f32; 3] {
     to_srgb([
@@ -39,6 +57,11 @@ pub(super) fn lerp_lin(a: [f64; 3], b: [f64; 3], t: f64) -> [f32; 3] {
 
 /// Which piece of a multi-stop profile `t` falls in, as the index of its first stop
 /// (`c0` is 0, `mids[i]` is `i + 1`), and where along that piece, 0 to 1.
+///
+/// The stop offsets are `0, mids[0].0, …, mids[last].0, 1`; the piece is the first
+/// whose upper offset is at or above `t`, and `u = (t − lo) / (hi − lo)`. A zero-length
+/// piece (two stops at one offset) gives `u = 0`, i.e. the lower stop, and a last stop
+/// at 1 gives `u = 1`. `mids` must be sorted by offset; `t` is expected in `[0, 1]`.
 #[inline]
 pub(super) fn segment(mids: &[(f64, [f32; 3])], t: f64) -> (usize, f64) {
     if mids.is_empty() {

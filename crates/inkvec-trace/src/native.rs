@@ -5,19 +5,51 @@
 //! white mark on a transparent ground is one flat colour, a translucent wash is baked into
 //! whatever it resembles, and a glow becomes a colour ramp towards the matte. Here nothing
 //! is thrown away: every pixel is kept as its colour over white `W` together with its alpha
-//! `a`. That pair is an invertible transform of premultiplied RGBA, so an anti-aliased pixel
-//! between two inks is still a straight-line blend of them in all four channels -- between
-//! two opaque inks, between an ink and the clear ground, or at a junction of both -- and
-//! every stage that unmixes linearly needs one more channel and nothing else.
+//! `a`. That pair is an invertible transform of premultiplied RGBA (`W = P + (1 − a)` with
+//! `P = s·a` the premultiplied colour), so an anti-aliased pixel between two inks is still
+//! a straight-line blend of them in all four channels -- between two opaque inks, between
+//! an ink and the clear ground, or at a junction of both -- and every stage that unmixes
+//! linearly needs one more channel and nothing else.
 //!
-//! Perceptual comparisons use the colour over both grounds, `W` and `K = W - (1 - a)` (over
-//! black): two inks are one ink only if they look the same on white *and* on black. For an
-//! opaque colour `K = W` and this is plain OKLab distance; white paint and the clear ground
-//! are as far apart as white and black.
+//! Perceptual comparisons use the colour over two grounds: `W` over white and
+//! `K = W − (1 − a)(1 − g)` over a second, grey ground `g` ([`SECOND_GROUND`], mid-grey;
+//! the names `k` and [`over_black`] date from when that ground was black). Two inks are
+//! one ink only if they look the same over both. For an opaque colour `K = W` and this is
+//! plain OKLab distance; white paint and the clear ground are as far apart as white and
+//! mid-grey.
 //!
 //! Opaque input never reaches this module. `trace_color_full_with_alpha` dispatches here
 //! only when the caller asked for native alpha and the source has transparency, so the
 //! classic path is untouched by construction.
+//!
+//! # Mirrors of the classic path, and why they are forks
+//!
+//! Most of this module is a four-channel (or two-ground) copy of a classic function:
+//!
+//! | here | classic | what changes |
+//! |---|---|---|
+//! | [`trace_color`] | [`crate::trace_color_full_with_alpha`] | the stages below, plus `merge_fades` (in `native/fade.rs`) |
+//! | [`extract_palette`] | [`color::extract_palette_mdl`] | [`Ink2`] points; the clear ink is not counted against `max_colors`; a translucent candidate needs an interior |
+//! | [`label_image`] | [`color::label_image`] | [`Ink2::dist`] |
+//! | `frequency_modes` | `color::frequency_modes` | bins over both grounds, `u64` keys, hash map |
+//! | `claim_spread` | `color::claim_spread` | [`Ink2::dist`] |
+//! | `interior_fraction` | `color::interior_fraction` | [`Ink2::dist`] |
+//! | `blend_pairs` | `color::blend_pairs` | six coordinates ([`six`]) |
+//! | `straddle_fraction` | `color::straddle_fraction` | six coordinates |
+//! | `BlendEvidence` | `color::BlendEvidence` | the translucent-interior rule |
+//! | `refine_to_members` | `color::refine_to_members` | means over both grounds |
+//! | [`mixture`] | [`crate::regions::mixture`] | `N` channels |
+//! | [`absorb_blend_slivers`] | [`crate::regions::absorb_blend_slivers`] | `[W, a]`; [`CLEAR`] for the white backdrop |
+//! | [`reassign_blend_pixels`] | [`crate::regions::reassign_blend_pixels`] | `[W, a]`; [`CLEAR`] for the white backdrop |
+//!
+//! They are deliberately not merged into generic code. The classic functions are the
+//! shipped default and are held byte-identical by the gate; making them generic over
+//! channel count and distance would put every opaque trace at the mercy of a change made
+//! for transparency, and would cost the opaque path the two-ground conversions it does not
+//! need. Keeping the fork means a change here cannot move an opaque result. The price is
+//! that a fix to one side has to be considered for the other; the table above is the list
+//! to check. Only the colour-free label-graph helpers (connected components and contact
+//! counts) are shared, from [`crate::regions`].
 
 use std::collections::HashMap;
 
@@ -28,18 +60,25 @@ use crate::color::{
     PaletteEvidence, BLEND_INTERIOR_FRACTION, BLEND_STRADDLE_FRACTION, JND_FLOOR, MIN_INK_WEIGHT,
     PARAMS_PER_INK,
 };
-use crate::{coverage, diag, gradient, regularize, ColorOptions, ColorTrace, Rgba, Stopwatch};
+use crate::regions::{label_components, tally_contacts};
+use crate::{coverage, gradient, regularize, ColorOptions, ColorTrace, Rgba, Stopwatch};
+
+mod fade;
+use fade::merge_fades;
+pub use fade::Fade;
+#[cfg(test)]
+use fade::{alpha_params, fade_chi2, fit_colour_stops, fit_opacity, model_stops, solve};
 
 /// Alpha at or above which a pixel or an ink is opaque.
 pub const OPAQUE: f32 = 0.999;
 
-/// A colour seen over both grounds: `w` over white, `k` over black, in OKLab. For an opaque
-/// colour the two are the same point.
+/// A colour seen over both grounds: `w` over white, `k` over the second ground
+/// ([`SECOND_GROUND`]), in OKLab. For an opaque colour the two are the same point.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Ink2 {
     /// Over white.
     pub w: Oklab,
-    /// Over black.
+    /// Over the second ground (historically black, now [`SECOND_GROUND`]).
     pub k: Oklab,
 }
 
@@ -51,6 +90,10 @@ impl Ink2 {
 
     /// The larger of the two grounds' OKLab distances. Plain OKLab distance when both
     /// colours are opaque.
+    ///
+    /// The maximum, not a sum or a mean, because the question is "can the two be told
+    /// apart over *some* ground": white paint and the clear ground are identical over
+    /// white and far apart over grey, and the distance must say they differ.
     #[inline]
     pub fn dist(self, o: Ink2) -> f32 {
         self.w.dist(o.w).max(self.k.dist(o.k))
@@ -64,6 +107,10 @@ impl Ink2 {
 
     /// The opacity the two grounds imply: over white and over the second ground differ by
     /// `(1 - a)(1 - g)`.
+    ///
+    /// Solved per channel and averaged: `a = 1 − mean_c(W_c − K_c) / (1 − g)`, with `W`,
+    /// `K` converted back to sRGB `[0, 1]`, then [`snap_alpha`]. Exact for a colour built
+    /// by [`over_black`] unless that clamped a channel at 0.
     pub fn alpha(self) -> f32 {
         let (w, k) = (oklab_to_rgb(self.w), oklab_to_rgb(self.k));
         let d = ((w[0] - k[0]) + (w[1] - k[1]) + (w[2] - k[2])) / 3.0;
@@ -85,6 +132,9 @@ pub fn second_ground() -> f32 {
 }
 
 /// Opacity pinned to exactly 0 or 1 when it is within measurement of either.
+///
+/// Clamped to `[0, 1]` first; above 0.995 becomes 1 and below 0.005 becomes 0, which is
+/// about one 8-bit level either side.
 pub fn snap_alpha(a: f32) -> f32 {
     let a = a.clamp(0.0, 1.0);
     if a > 0.995 {
@@ -98,6 +148,10 @@ pub fn snap_alpha(a: f32) -> f32 {
 
 /// The colour over the second ground (see [`second_ground`]), from the colour over white
 /// and the alpha: `W - (1 - a)(1 - g)`.
+///
+/// Derivation: a colour `s` at opacity `a` shows `s·a + (1 − a)·G` over a ground `G`, so
+/// over white `W = s·a + (1 − a)` and over grey `g` it is `W − (1 − a)(1 − g)`. sRGB
+/// `[0, 1]` in and out; `a` is clamped to `[0, 1]` and each channel floored at 0.
 #[inline]
 pub fn over_black(w: [f32; 3], a: f32) -> [f32; 3] {
     let m = (1.0 - a.clamp(0.0, 1.0)) * (1.0 - second_ground());
@@ -109,6 +163,9 @@ pub fn over_black(w: [f32; 3], a: f32) -> [f32; 3] {
 }
 
 /// Every pixel as a two-ground point.
+///
+/// `rgb` is the image composited onto white (sRGB `[0, 1]`), `alpha` the source alpha.
+/// Opaque pixels (`a ≥ OPAQUE`) skip the second conversion and get `k = w`.
 pub fn pixel_points(rgb: &[[f32; 3]], alpha: &[f32]) -> Vec<Ink2> {
     rgb.par_iter()
         .zip(alpha.par_iter())
@@ -126,7 +183,8 @@ pub fn pixel_points(rgb: &[[f32; 3]], alpha: &[f32]) -> Vec<Ink2> {
         .collect()
 }
 
-/// Every palette entry as a two-ground point.
+/// Every palette entry as a two-ground point, from its colour over white and its opacity
+/// (1 when the palette has no opacity for it).
 pub fn ink_points(pal: &Palette) -> Vec<Ink2> {
     (0..pal.len())
         .map(|i| {
@@ -145,6 +203,8 @@ pub fn ink_points(pal: &Palette) -> Vec<Ink2> {
 }
 
 /// Each pixel as `[W, a]`, the four channels every linear stage works in.
+///
+/// `W` is sRGB `[0, 1]` over white, `a` the alpha clamped to `[0, 1]`.
 pub fn rgba_w(rgb: &[[f32; 3]], alpha: &[f32]) -> Vec<[f32; 4]> {
     rgb.iter()
         .zip(alpha)
@@ -152,7 +212,7 @@ pub fn rgba_w(rgb: &[[f32; 3]], alpha: &[f32]) -> Vec<[f32; 4]> {
         .collect()
 }
 
-/// Each palette entry as `[W, a]`.
+/// Each palette entry as `[W, a]` (opacity 1 when the palette has none for it).
 pub fn ink_rgba_w(pal: &Palette) -> Vec<[f32; 4]> {
     (0..pal.len())
         .map(|i| {
@@ -166,8 +226,11 @@ pub fn ink_rgba_w(pal: &Palette) -> Vec<[f32; 4]> {
 // Palette
 // ---------------------------------------------------------------------------------------
 
+/// Bins per OKLab axis, as in the classic palette.
 const BINS: usize = 24;
 
+/// A colour's OKLab bin, `L_i · 24² + a_i · 24 + b_i`, with the classic palette's ranges
+/// (`L` over `[0, 1]`, `a` and `b` over `[−0.4, 0.4]`, clamped).
 fn bin(c: Oklab) -> u64 {
     let li = ((c.l.clamp(0.0, 1.0) * (BINS - 1) as f32).round() as u64).min(BINS as u64 - 1);
     let ai = (((c.a + 0.4) / 0.8).clamp(0.0, 1.0) * (BINS - 1) as f32).round() as u64;
@@ -175,6 +238,9 @@ fn bin(c: Oklab) -> u64 {
     li * (BINS * BINS) as u64 + ai * BINS as u64 + bi
 }
 
+/// [`color`]'s `claim_spread` with two-ground distances: how many pixels `c` would claim
+/// (strictly nearer to it than to any accepted ink, counted every `stride_px` pixels and
+/// scaled back up), and the median [`Ink2::dist`] of the claimed pixels within `tol` of it.
 fn claim_spread(
     px: &[Ink2],
     nearest_px: &[f32],
@@ -209,6 +275,9 @@ fn claim_spread(
     (n, d_in[d_in.len() / 2])
 }
 
+/// [`color`]'s `interior_fraction` with two-ground distances: the share of the pixels `c`
+/// would claim whose four in-image neighbours it would claim too (one step of erosion).
+/// 1 when the geometry is missing, 0 when `c` claims nothing.
 fn interior_fraction(
     px: &[Ink2],
     width: usize,
@@ -246,12 +315,18 @@ fn interior_fraction(
 
 /// A two-ground point's six blend coordinates: the colour over white and over black, in
 /// linear light or in sRGB.
+///
+/// `[W_r, W_g, W_b, K_r, K_g, K_b]`. Both halves are affine in `(P, a)`, so a coverage
+/// blend of two inks is a straight segment in these six numbers, which is what the chord
+/// tests need.
 fn six(c: Ink2, linear: bool) -> [f32; 6] {
     let (w, k) = (oklab_to_rgb(c.w), oklab_to_rgb(c.k));
     let f = |v: f32| if linear { srgb_to_linear(v) } else { v };
     [f(w[0]), f(w[1]), f(w[2]), f(k[0]), f(k[1]), f(k[2])]
 }
 
+/// The inverse of [`six`]: clamp each coordinate to `[0, 1]`, encode if `linear`, and
+/// convert both halves back to OKLab.
 fn from_six(q: [f32; 6], linear: bool) -> Ink2 {
     let f = |v: f32| {
         let v = v.clamp(0.0, 1.0);
@@ -270,6 +345,11 @@ fn from_six(q: [f32; 6], linear: bool) -> Ink2 {
 /// [`color`]'s blend test in six dimensions: `c` lies on the chord between two accepted
 /// inks over white *and* over black. An anti-aliased rim between an ink and the clear ground
 /// is on such a chord (flat over white for a white ink, a ramp to black over black).
+///
+/// Same formula as the classic `blend_pairs` with `p`, `A`, `B` the [`six`] coordinates:
+/// `t = ((p − A) · (B − A)) / |B − A|²` kept for `tmin ≤ t ≤ 1 − tmin`, and the residual
+/// `off = Ink2::dist(c, from_six(A + t (B − A)))`, kept when `off ≤ tol`. Returns
+/// `(i, j, linear, off)`, linear-light pairs first.
 fn blend_pairs(c: Ink2, accepted: &[Ink2], tol: f32, tmin: f32) -> Vec<(usize, usize, bool, f32)> {
     let mut out = Vec::new();
     if accepted.len() < 2 {
@@ -309,6 +389,13 @@ fn blend_pairs(c: Ink2, accepted: &[Ink2], tol: f32, tmin: f32) -> Vec<(usize, u
     out
 }
 
+/// [`color`]'s `straddle_fraction` in six coordinates: the share of the pixels `c` would
+/// claim that have, within their 3x3 neighbourhood, one pixel further towards `a` and one
+/// further towards `b` along the `a`–`b` axis than `c` is (steps as in the classic version,
+/// [`color::STRADDLE_STEP`] clipped to half the room on each side, floor 0.02).
+///
+/// `px6_srgb` and `px6_lin` are every pixel's [`six`] coordinates, precomputed. Returns 0
+/// on a size mismatch or a degenerate axis, 1 when `c` claims nothing.
 #[allow(clippy::too_many_arguments)]
 fn straddle_fraction(
     px: &[Ink2],
@@ -386,6 +473,17 @@ fn straddle_fraction(
 /// The clear ground comes out as an ink of its own -- white over white, black over black,
 /// opacity 0 -- and a translucent wash as one with its own opacity, with no alpha splitting
 /// after the fact. `Palette::colors`/`rgb` hold each ink over white; `alpha` its opacity.
+///
+/// Differences from the classic walk, beyond the distance:
+///
+/// * the clear ink (opacity ≤ [`CLEAR_INK_ALPHA`]) does not count against `max_colors`;
+///   once the cap is full the scan continues only to find it, and stops once it is found;
+/// * a translucent candidate that is not a blend must have an interior (see
+///   `BlendEvidence::measure`);
+/// * there is no `INKVEC_MERGE_DE00` experiment and the same-ink floor does not print.
+///
+/// `rgb` is sRGB `[0, 1]` composited onto white and `alpha` the source alpha, both
+/// row-major `width × height`. At least one ink is always returned.
 #[allow(clippy::too_many_arguments)]
 pub fn extract_palette(
     rgb: &[[f32; 3]],
@@ -402,12 +500,136 @@ pub fn extract_palette(
         noise_sigmas,
         same_ink_de00,
     } = ev;
-    let px = pixel_points(rgb, alpha);
-    let stride_px = color::stat_stride(px.len(), width);
-    let px6_srgb: Vec<[f32; 6]> = px.par_iter().map(|&p| six(p, false)).collect();
-    let px6_lin: Vec<[f32; 6]> = px.par_iter().map(|&p| six(p, true)).collect();
+    let view = PixelViews::new(rgb, alpha, width, height);
+    let modes = frequency_modes(&view.px);
 
-    // Modes in pixel order, so the centroids are the same on every run.
+    let total_px = view.px.len().max(1) as f32;
+    let mut colors: Vec<Ink2> = Vec::new();
+    let mut nearest_px: Vec<f32> = vec![f32::INFINITY; view.px.len()];
+    let paldbg = inkvec_core::env::flag("INKVEC_PALDBG");
+    // The clear ground draws nothing, so it is found but not counted against the cap; once
+    // the cap is full the scan goes on only to look for it.
+    let clear = |c: &Ink2| c.alpha() <= CLEAR_INK_ALPHA;
+    for &(n, _key, c) in &modes {
+        let full = colors.iter().filter(|p| !clear(p)).count() >= max_colors;
+        if full && colors.iter().any(clear) {
+            break;
+        }
+        if full && !clear(&c) {
+            continue;
+        }
+        let (claim, spread) =
+            claim_spread(&view.px, &nearest_px, c, merge_distance, view.stride_px);
+        if (claim as f32 / total_px) < MIN_INK_WEIGHT && !colors.is_empty() {
+            continue;
+        }
+        let nearest = colors
+            .iter()
+            .map(|&p| p.dist(c))
+            .fold(f32::INFINITY, f32::min);
+        let reach = noise_sigmas * spread;
+        if same_ink_as_accepted(c, &colors, same_ink_de00) {
+            continue;
+        }
+        if nearest <= merge_distance.max(reach) {
+            let worth_it = sigma_noise > 0.0
+                && nearest > JND_FLOOR
+                && nearest > reach
+                && 0.5 * (claim as f64) * ((nearest as f64 / sigma_noise).powi(2))
+                    > lambda * PARAMS_PER_INK;
+            if !worth_it {
+                continue;
+            }
+        }
+        let Some(shape) = BlendEvidence::measure(&view, c, &colors, &nearest_px, merge_distance)
+        else {
+            continue;
+        };
+        if paldbg {
+            eprintln!(
+                "  native cand w={} k={} a={:.3} bin={n} claim={claim} near={nearest:.4} blend={} interior={:.3} straddle={:.3}",
+                color::to_hex(oklab_to_rgb(c.w)),
+                color::to_hex(oklab_to_rgb(c.k)),
+                c.alpha(),
+                shape.blend,
+                shape.interior,
+                shape.straddle
+            );
+        }
+        if shape.is_coverage() {
+            continue;
+        }
+        nearest_px
+            .par_iter_mut()
+            .zip(view.px.par_iter())
+            .for_each(|(d, &q)| *d = d.min(q.dist(c)));
+        colors.push(c);
+    }
+    if colors.is_empty() {
+        colors.push(modes.first().map(|m| m.2).unwrap_or(Ink2::opaque(Oklab {
+            l: 1.0,
+            a: 0.0,
+            b: 0.0,
+        })));
+    }
+
+    let weight = refine_to_members(&view.px, &mut colors, merge_distance, total_px);
+    let alpha: Vec<f32> = colors.iter().map(|c| c.alpha()).collect();
+    if paldbg {
+        for (c, a) in colors.iter().zip(&alpha) {
+            eprintln!(
+                "  native ink {} alpha {a:.3}",
+                color::to_hex(oklab_to_rgb(c.w))
+            );
+        }
+    }
+    Palette {
+        colors: colors.iter().map(|c| c.w).collect(),
+        rgb: colors.iter().map(|c| oklab_to_rgb(c.w)).collect(),
+        weight,
+        alpha,
+    }
+}
+
+/// The image as two-ground points and as [`six`] coordinates in both spaces, converted
+/// once for the whole palette walk (the classic `PixelViews` in two grounds).
+struct PixelViews {
+    px: Vec<Ink2>,
+    px6_srgb: Vec<[f32; 6]>,
+    px6_lin: Vec<[f32; 6]>,
+    width: usize,
+    height: usize,
+    /// Stride of the statistical passes, from [`color::stat_stride`].
+    stride_px: usize,
+}
+
+impl PixelViews {
+    /// Convert the composited image and its alpha on every core.
+    fn new(rgb: &[[f32; 3]], alpha: &[f32], width: usize, height: usize) -> Self {
+        let px = pixel_points(rgb, alpha);
+        let stride_px = color::stat_stride(px.len(), width);
+        let px6_srgb: Vec<[f32; 6]> = px.par_iter().map(|&p| six(p, false)).collect();
+        let px6_lin: Vec<[f32; 6]> = px.par_iter().map(|&p| six(p, true)).collect();
+        PixelViews {
+            px,
+            px6_srgb,
+            px6_lin,
+            width,
+            height,
+            stride_px,
+        }
+    }
+}
+
+/// The palette candidates: occupied two-ground bins, most populous first.
+///
+/// A pixel's key is `bin(w) · 24³ + bin(k)`, so two colours share a bin only if they share
+/// it over both grounds. Each bin yields `(count, key, mean)`, the mean taken over both
+/// grounds in `f64`, in pixel order, so the centroids are the same on every run. Sorted by
+/// count descending, then key ascending; keys are unique, so the order is total and does
+/// not depend on the hash map's iteration order. (A hash map rather than the classic dense
+/// table because there are 24⁶ possible keys.)
+fn frequency_modes(px: &[Ink2]) -> Vec<(u32, u64, Ink2)> {
     let keys: Vec<u64> = px
         .par_iter()
         .map(|p| bin(p.w) * (BINS * BINS * BINS) as u64 + bin(p.k))
@@ -447,52 +669,41 @@ pub fn extract_palette(
         })
         .collect();
     modes.sort_by_key(|&(n, key, _)| (std::cmp::Reverse(n), key));
+    modes
+}
 
-    let total_px = px.len().max(1) as f32;
-    let mut colors: Vec<Ink2> = Vec::new();
-    let mut nearest_px: Vec<f32> = vec![f32::INFINITY; px.len()];
-    let paldbg = inkvec_core::env::flag("INKVEC_PALDBG");
-    let blend_tmin = color::BLEND_TMIN;
-    // The clear ground draws nothing, so it is found but not counted against the cap; once
-    // the cap is full the scan goes on only to look for it.
-    let clear = |c: &Ink2| c.alpha() <= CLEAR_INK_ALPHA;
-    for &(n, _key, c) in &modes {
-        let full = colors.iter().filter(|p| !clear(p)).count() >= max_colors;
-        if full && colors.iter().any(clear) {
-            break;
-        }
-        if full && !clear(&c) {
-            continue;
-        }
-        let (claim, spread) = claim_spread(&px, &nearest_px, c, merge_distance, stride_px);
-        if (claim as f32 / total_px) < MIN_INK_WEIGHT && !colors.is_empty() {
-            continue;
-        }
-        let nearest = colors
-            .iter()
-            .map(|&p| p.dist(c))
-            .fold(f32::INFINITY, f32::min);
-        let reach = noise_sigmas * spread;
-        if let Some(&near_ink) = colors.iter().min_by(|&&p, &&q| {
+/// The perceptual floor in two grounds: is `c` within `same_ink_de00` ([`Ink2::de00`]) of
+/// the accepted ink nearest to it by [`Ink2::dist`]? False when nothing is accepted yet.
+fn same_ink_as_accepted(c: Ink2, colors: &[Ink2], same_ink_de00: f32) -> bool {
+    colors
+        .iter()
+        .min_by(|&&p, &&q| {
             p.dist(c)
                 .partial_cmp(&q.dist(c))
                 .unwrap_or(std::cmp::Ordering::Equal)
-        }) {
-            if c.de00(near_ink) < same_ink_de00 {
-                continue;
-            }
-        }
-        if nearest <= merge_distance.max(reach) {
-            let worth_it = sigma_noise > 0.0
-                && nearest > JND_FLOOR
-                && nearest > reach
-                && 0.5 * (claim as f64) * ((nearest as f64 / sigma_noise).powi(2))
-                    > lambda * PARAMS_PER_INK;
-            if !worth_it {
-                continue;
-            }
-        }
-        let pairs = blend_pairs(c, &colors, merge_distance * 1.6, blend_tmin);
+        })
+        .is_some_and(|&near_ink| c.de00(near_ink) < same_ink_de00)
+}
+
+/// Whether a candidate is anti-aliasing rather than an ink, over both grounds: the
+/// classic `BlendEvidence` plus the translucent-interior rule.
+struct BlendEvidence {
+    blend: bool,
+    interior: f32,
+    straddle: f32,
+}
+
+impl BlendEvidence {
+    /// Measure candidate `c` against the accepted inks, or `None` when it is rejected
+    /// outright as a translucent band with no interior.
+    fn measure(
+        view: &PixelViews,
+        c: Ink2,
+        colors: &[Ink2],
+        nearest_px: &[f32],
+        merge_distance: f32,
+    ) -> Option<Self> {
+        let pairs = blend_pairs(c, colors, merge_distance * 1.6, color::BLEND_TMIN);
         let blend = !pairs.is_empty();
         // Partly transparent is exactly what an anti-aliased silhouette pixel is, and the
         // chord test above cannot always say so: a rim where shading meets the ground mixes
@@ -518,12 +729,19 @@ pub fn extract_palette(
             a > 0.0 && a < 1.0
         };
         let interior = if blend || translucent {
-            interior_fraction(&px, width, height, c, &nearest_px, stride_px)
+            interior_fraction(
+                &view.px,
+                view.width,
+                view.height,
+                c,
+                nearest_px,
+                view.stride_px,
+            )
         } else {
             1.0
         };
         if translucent && !blend && interior < BLEND_INTERIOR_FRACTION {
-            continue;
+            return None;
         }
         // The pairs on every core, as in `color`: the max of finite ratios is order-free.
         let straddle = if blend && interior < BLEND_INTERIOR_FRACTION {
@@ -531,49 +749,50 @@ pub fn extract_palette(
                 .par_iter()
                 .map(|&(i, j, linear, _)| {
                     straddle_fraction(
-                        &px,
-                        &px6_srgb,
-                        &px6_lin,
-                        width,
-                        height,
+                        &view.px,
+                        &view.px6_srgb,
+                        &view.px6_lin,
+                        view.width,
+                        view.height,
                         c,
-                        &nearest_px,
+                        nearest_px,
                         colors[i],
                         colors[j],
                         linear,
-                        stride_px,
+                        view.stride_px,
                     )
                 })
                 .reduce(|| 0.0f32, f32::max)
         } else {
             0.0
         };
-        if paldbg {
-            eprintln!(
-                "  native cand w={} k={} a={:.3} bin={n} claim={claim} near={nearest:.4} blend={blend} interior={interior:.3} straddle={straddle:.3}",
-                color::to_hex(oklab_to_rgb(c.w)),
-                color::to_hex(oklab_to_rgb(c.k)),
-                c.alpha()
-            );
-        }
-        if blend && interior < BLEND_INTERIOR_FRACTION && straddle >= BLEND_STRADDLE_FRACTION {
-            continue;
-        }
-        nearest_px
-            .par_iter_mut()
-            .zip(px.par_iter())
-            .for_each(|(d, &q)| *d = d.min(q.dist(c)));
-        colors.push(c);
-    }
-    if colors.is_empty() {
-        colors.push(modes.first().map(|m| m.2).unwrap_or(Ink2::opaque(Oklab {
-            l: 1.0,
-            a: 0.0,
-            b: 0.0,
-        })));
+        Some(BlendEvidence {
+            blend,
+            interior,
+            straddle,
+        })
     }
 
-    // Refine each ink to the mean of the pixels that chose it, over both grounds.
+    /// A blend, thin and straddling: anti-aliasing, not an ink.
+    fn is_coverage(&self) -> bool {
+        self.blend
+            && self.interior < BLEND_INTERIOR_FRACTION
+            && self.straddle >= BLEND_STRADDLE_FRACTION
+    }
+}
+
+/// Refine each ink to the mean of the pixels that chose it, over both grounds, and return
+/// each ink's share of the image.
+///
+/// A pixel chooses its nearest ink by [`Ink2::dist`] (ties to the lower index) only when
+/// that ink is within `merge_distance`. An ink no pixel chose keeps its candidate value
+/// and gets weight 0.
+fn refine_to_members(
+    px: &[Ink2],
+    colors: &mut [Ink2],
+    merge_distance: f32,
+    total_px: f32,
+) -> Vec<f32> {
     let chosen: Vec<u32> = px
         .par_iter()
         .map(|c| {
@@ -624,24 +843,13 @@ pub fn extract_palette(
         }
         weight.push(*n as f32 / total_px);
     }
-    let alpha: Vec<f32> = colors.iter().map(|c| c.alpha()).collect();
-    if paldbg {
-        for (c, a) in colors.iter().zip(&alpha) {
-            eprintln!(
-                "  native ink {} alpha {a:.3}",
-                color::to_hex(oklab_to_rgb(c.w))
-            );
-        }
-    }
-    Palette {
-        colors: colors.iter().map(|c| c.w).collect(),
-        rgb: colors.iter().map(|c| oklab_to_rgb(c.w)).collect(),
-        weight,
-        alpha,
-    }
+    weight
 }
 
 /// Every pixel to its nearest ink, over both grounds.
+///
+/// The two-ground [`color::label_image`]: nearest by [`Ink2::dist`], ties to the lower
+/// index; label 0 for an empty palette.
 pub fn label_image(rgb: &[[f32; 3]], alpha: &[f32], pal: &Palette) -> Vec<u16> {
     let px = pixel_points(rgb, alpha);
     let inks = ink_points(pal);
@@ -669,6 +877,7 @@ pub const CLEAR: [f32; 4] = [1.0, 1.0, 1.0, 0.0];
 /// Opacity at or below which an ink is the clear ground, not a colour (for the colour cap).
 pub const CLEAR_INK_ALPHA: f32 = 0.02;
 
+/// Squared Euclidean distance in `N` channels.
 fn d2<const N: usize>(a: [f32; N], b: [f32; N]) -> f32 {
     let mut s = 0.0;
     for k in 0..N {
@@ -680,6 +889,12 @@ fn d2<const N: usize>(a: [f32; N], b: [f32; N]) -> f32 {
 
 /// [`crate::regions::mixture`] in `N` channels: `c` as the nearest convex mixture of two or
 /// three of `cols`, returning the residual and the dominant one.
+///
+/// The same computation in `N` dimensions: segments by clamped projection, triangles by the
+/// 2x2 normal equations with only interior solutions offered, dominant ink by largest
+/// weight, first candidate winning ties. With `[W, a]` (`N = 4`) the residual is a
+/// Euclidean distance over colour-over-white and alpha, both in `[0, 1]`. `None` with
+/// fewer than two inks or when all pairs and triples are degenerate.
 pub fn mixture<const N: usize>(c: [f32; N], cols: &[[f32; N]]) -> Option<(f32, usize)> {
     let k = cols.len();
     if k < 2 {
@@ -758,6 +973,13 @@ pub fn mixture<const N: usize>(c: [f32; N], cols: &[[f32; N]]) -> Option<(f32, u
 
 /// [`crate::regions::absorb_blend_slivers`] in four channels. The white backdrop becomes
 /// the clear ink, which is what a partly transparent pixel is partly made of.
+///
+/// `px` and `inks` are `[W, a]` ([`rgba_w`], [`ink_rgba_w`]); `labels` is edited in place.
+/// Same tests, tolerance `max(3 σ_noise, 0.025)` and two rounds as the classic version
+/// (see [`crate::regions::absorb_blend_slivers`] for the reasoning). The differences:
+/// [`CLEAR`] joins the candidate inks when a pixel of the sliver is translucent
+/// (`a < 0.99`) and no candidate is already clear (`a < 0.005`), and there are no debug
+/// prints. Returns the number of components absorbed.
 pub fn absorb_blend_slivers(
     labels: &mut [u16],
     px: &[[f32; 4]],
@@ -766,41 +988,10 @@ pub fn absorb_blend_slivers(
     inks: &[[f32; 4]],
     sigma_noise: f64,
 ) -> usize {
-    let n = w * h;
     let tol = (3.0 * sigma_noise).max(0.025) as f32;
     let mut absorbed = 0usize;
     for _round in 0..2 {
-        let mut comp = vec![u32::MAX; n];
-        let mut members: Vec<Vec<usize>> = Vec::new();
-        for start in 0..n {
-            if comp[start] != u32::MAX {
-                continue;
-            }
-            let id = members.len() as u32;
-            let lab = labels[start];
-            let mut stack = vec![start];
-            let mut group = Vec::new();
-            comp[start] = id;
-            while let Some(p) = stack.pop() {
-                group.push(p);
-                let (x, y) = (p % w, p / w);
-                for q in [
-                    (x > 0).then(|| p - 1),
-                    (x + 1 < w).then(|| p + 1),
-                    (y > 0).then(|| p - w),
-                    (y + 1 < h).then(|| p + w),
-                ]
-                .into_iter()
-                .flatten()
-                {
-                    if comp[q] == u32::MAX && labels[q] == lab {
-                        comp[q] = id;
-                        stack.push(q);
-                    }
-                }
-            }
-            members.push(group);
-        }
+        let (comp, members) = label_components(labels, w, h);
         let mut changed = 0usize;
         let n_labels = labels
             .iter()
@@ -810,91 +1001,9 @@ pub fn absorb_blend_slivers(
             .max(inks.len());
         let mut contacts: Vec<usize> = vec![0; n_labels];
         for group in &members {
-            let area = group.len();
-            if area == 0 {
-                continue;
+            if absorb_sliver(group, &comp, labels, px, w, h, inks, tol, &mut contacts) {
+                changed += 1;
             }
-            let id = comp[group[0]];
-            let mut interior = 0usize;
-            contacts.iter_mut().for_each(|c| *c = 0);
-            let mut foreign = 0usize;
-            for &p in group {
-                let (x, y) = (p % w, p / w);
-                let mut inside = true;
-                for q in [
-                    (x > 0).then(|| p - 1),
-                    (x + 1 < w).then(|| p + 1),
-                    (y > 0).then(|| p - w),
-                    (y + 1 < h).then(|| p + w),
-                ]
-                .into_iter()
-                .flatten()
-                {
-                    if comp[q] != id {
-                        inside = false;
-                        contacts[labels[q] as usize] += 1;
-                        foreign += 1;
-                    }
-                }
-                if inside {
-                    interior += 1;
-                }
-            }
-            if interior * 5 >= area || foreign == 0 {
-                continue;
-            }
-            let mut tally: Vec<(usize, u16)> = contacts
-                .iter()
-                .enumerate()
-                .filter(|(_, &c)| c > 0)
-                .map(|(l, &c)| (c, l as u16))
-                .collect();
-            tally.sort_by_key(|&(c, l)| (std::cmp::Reverse(c), l));
-            tally.truncate(3);
-            let covered: usize = tally.iter().map(|&(c, _)| c).sum();
-            if covered * 5 < foreign * 4 {
-                continue;
-            }
-            let mut labs: Vec<Option<u16>> = tally.iter().map(|&(_, l)| Some(l)).collect();
-            let mut cols: Vec<[f32; 4]> = Vec::with_capacity(4);
-            for l in &labs {
-                let Some(&c) = inks.get(l.unwrap() as usize) else {
-                    continue;
-                };
-                cols.push(c);
-            }
-            if cols.len() != labs.len() || cols.len() < 2 {
-                continue;
-            }
-            if group.iter().any(|&p| px[p][3] < 0.99) && !cols.iter().any(|c| c[3] < 0.005) {
-                cols.push(CLEAR);
-                labs.push(None);
-            }
-            let mut pass = 0usize;
-            let mut dest: Vec<u16> = Vec::with_capacity(area);
-            for &p in group {
-                let Some((r, who)) = mixture(px[p], &cols) else {
-                    dest.push(labels[p]);
-                    continue;
-                };
-                if r <= tol {
-                    pass += 1;
-                }
-                dest.push(match labs[who] {
-                    Some(l) => l,
-                    None => match mixture(px[p], &cols[..labs.len() - 1]) {
-                        Some((_, w2)) => labs[w2].unwrap(),
-                        None => tally[0].1,
-                    },
-                });
-            }
-            if pass * 5 < area * 4 {
-                continue;
-            }
-            for (&p, &l) in group.iter().zip(&dest) {
-                labels[p] = l;
-            }
-            changed += 1;
         }
         absorbed += changed;
         if changed == 0 {
@@ -904,7 +1013,94 @@ pub fn absorb_blend_slivers(
     absorbed
 }
 
+/// Try to dissolve one component in four channels; returns whether it was absorbed.
+///
+/// The thin / few-inks / blend tests of `regions::absorb_sliver`, with [`CLEAR`] as the
+/// backdrop pseudo-ink. On success each pixel moves to the dominant ink of its nearest
+/// [`mixture`]; when the clear ink dominates, to the dominant real ink (or the most-touched
+/// neighbour if no mixture of the real inks exists).
+#[allow(clippy::too_many_arguments)]
+fn absorb_sliver(
+    group: &[usize],
+    comp: &[u32],
+    labels: &mut [u16],
+    px: &[[f32; 4]],
+    w: usize,
+    h: usize,
+    inks: &[[f32; 4]],
+    tol: f32,
+    contacts: &mut [usize],
+) -> bool {
+    let area = group.len();
+    if area == 0 {
+        return false;
+    }
+    let id = comp[group[0]];
+    let (interior, foreign) = tally_contacts(group, id, comp, labels, w, h, contacts);
+    if interior * 5 >= area || foreign == 0 {
+        return false;
+    }
+    let mut tally: Vec<(usize, u16)> = contacts
+        .iter()
+        .enumerate()
+        .filter(|(_, &c)| c > 0)
+        .map(|(l, &c)| (c, l as u16))
+        .collect();
+    tally.sort_by_key(|&(c, l)| (std::cmp::Reverse(c), l));
+    tally.truncate(3);
+    let covered: usize = tally.iter().map(|&(c, _)| c).sum();
+    if covered * 5 < foreign * 4 {
+        return false;
+    }
+    let mut labs: Vec<Option<u16>> = tally.iter().map(|&(_, l)| Some(l)).collect();
+    let mut cols: Vec<[f32; 4]> = Vec::with_capacity(4);
+    for &(_, l) in &tally {
+        let Some(&c) = inks.get(l as usize) else {
+            continue;
+        };
+        cols.push(c);
+    }
+    if cols.len() != labs.len() || cols.len() < 2 {
+        return false;
+    }
+    if group.iter().any(|&p| px[p][3] < 0.99) && !cols.iter().any(|c| c[3] < 0.005) {
+        cols.push(CLEAR);
+        labs.push(None);
+    }
+    let mut pass = 0usize;
+    let mut dest: Vec<u16> = Vec::with_capacity(area);
+    for &p in group {
+        let Some((r, who)) = mixture(px[p], &cols) else {
+            dest.push(labels[p]);
+            continue;
+        };
+        if r <= tol {
+            pass += 1;
+        }
+        dest.push(match labs[who] {
+            Some(l) => l,
+            None => match mixture(px[p], &cols[..labs.len() - 1]) {
+                Some((_, w2)) => labs[w2]
+                    .expect("only the clear entry is None, and it is last, outside the slice"),
+                None => tally[0].1,
+            },
+        });
+    }
+    if pass * 5 < area * 4 {
+        return false;
+    }
+    for (&p, &l) in group.iter().zip(&dest) {
+        labels[p] = l;
+    }
+    true
+}
+
 /// [`crate::regions::reassign_blend_pixels`] in four channels.
+///
+/// Same rule (move a pixel to the dominant ink of its nearest [`mixture`] of its own and
+/// up to three neighbouring inks when the residual is within `max(3 σ_noise, 0.025)` and
+/// below half its distance to its own ink; up to four snapshot rounds), with `[W, a]`
+/// pixels and inks and [`CLEAR`] as the backdrop pseudo-ink. Returns the number of moves.
 pub fn reassign_blend_pixels(
     labels: &mut [u16],
     px: &[[f32; 4]],
@@ -966,7 +1162,8 @@ pub fn reassign_blend_pixels(
             let target = match keep[who] {
                 Some(l) => l,
                 None => match mixture(c, &cols[..cols.len() - 1]) {
-                    Some((_, w2)) => keep[w2].unwrap(),
+                    Some((_, w2)) => keep[w2]
+                        .expect("only the clear entry is None, and it is last, outside the slice"),
                     None => return None,
                 },
             };
@@ -989,534 +1186,16 @@ pub fn reassign_blend_pixels(
 }
 
 // ---------------------------------------------------------------------------------------
-// Fades
-// ---------------------------------------------------------------------------------------
-
-/// A face whose opacity varies across it: a glow, a soft shadow, a vignette, a flame's
-/// halo. Written as one gradient carrying `stop-color` and `stop-opacity` at each stop.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Fade {
-    /// The colour profile, straight (not composited over anything), on the geometry and
-    /// at the stop offsets of `alpha`. Most fades in the corpus change colour as they fade
-    /// (175 of the 308 files that use `stop-opacity`), so this is a profile, not a colour.
-    pub color: gradient::FillModel,
-    /// The opacity profile, as a fill model whose every stop is a grey equal to the
-    /// opacity there: the geometry and the stops of an ordinary gradient.
-    pub alpha: gradient::FillModel,
-}
-
-/// A model's stops in order, `(offset, colour)`: one stop for a flat fill.
-pub(crate) fn model_stops(m: &gradient::FillModel) -> Vec<(f64, [f32; 3])> {
-    match m {
-        gradient::FillModel::Flat(c) => vec![(0.0, *c)],
-        gradient::FillModel::Linear { c0, c1, mids, .. }
-        | gradient::FillModel::Radial { c0, c1, mids, .. } => {
-            let mut v = vec![(0.0, *c0)];
-            v.extend(mids.iter().copied());
-            v.push((1.0, *c1));
-            v
-        }
-    }
-}
-
-/// `m` with its stop colours replaced, in order; offsets and geometry kept.
-fn restop(m: &gradient::FillModel, cols: &[[f32; 3]]) -> gradient::FillModel {
-    match m {
-        gradient::FillModel::Flat(_) => gradient::FillModel::Flat(cols[0]),
-        gradient::FillModel::Linear { mids, .. } | gradient::FillModel::Radial { mids, .. } => {
-            let k = mids.len();
-            m.with_stops(
-                cols[0],
-                mids.iter()
-                    .zip(&cols[1..=k])
-                    .map(|(&(o, _), &c)| (o, c))
-                    .collect(),
-                cols[k + 1],
-            )
-        }
-    }
-}
-
-impl Fade {
-    /// The lowest opacity the profile reaches: at a fade's rim, where it meets the ground.
-    pub fn rim_alpha(&self) -> f32 {
-        let stops = |m: &gradient::FillModel| -> Vec<f32> {
-            match m {
-                gradient::FillModel::Flat(c) => vec![c[0]],
-                gradient::FillModel::Linear { c0, c1, mids, .. }
-                | gradient::FillModel::Radial { c0, c1, mids, .. } => {
-                    let mut v = vec![c0[0], c1[0]];
-                    v.extend(mids.iter().map(|m| m.1[0]));
-                    v
-                }
-            }
-        };
-        stops(&self.alpha).into_iter().fold(1.0f32, f32::min)
-    }
-
-    /// The same fade as a fill over white, which is how every other stage sees a face:
-    /// `W = s·a + (1 - a)`, linear in the gradient coordinate exactly as `a` is.
-    pub fn over_white(&self) -> gradient::FillModel {
-        let a_stops = model_stops(&self.alpha);
-        let c_stops = model_stops(&self.color);
-        let cols: Vec<[f32; 3]> = a_stops
-            .iter()
-            .enumerate()
-            .map(|(i, &(_, ag))| {
-                let a = ag[0].clamp(0.0, 1.0);
-                let s = c_stops.get(i).or(c_stops.last()).map_or([1.0; 3], |c| c.1);
-                [s[0] * a + 1.0 - a, s[1] * a + 1.0 - a, s[2] * a + 1.0 - a]
-            })
-            .collect();
-        restop(&self.alpha, &cols)
-    }
-}
-
-/// Solve the small symmetric system `a·x = b` by Gaussian elimination with partial
-/// pivoting; `None` when it is singular.
-fn solve(mut a: Vec<Vec<f64>>, mut b: Vec<[f64; 3]>) -> Option<Vec<[f64; 3]>> {
-    let n = b.len();
-    for col in 0..n {
-        let piv = (col..n).max_by(|&i, &j| a[i][col].abs().total_cmp(&a[j][col].abs()))?;
-        if a[piv][col].abs() < 1e-12 {
-            return None;
-        }
-        a.swap(col, piv);
-        b.swap(col, piv);
-        for row in col + 1..n {
-            let f = a[row][col] / a[col][col];
-            for k in col..n {
-                a[row][k] -= f * a[col][k];
-            }
-            for c in 0..3 {
-                b[row][c] -= f * b[col][c];
-            }
-        }
-    }
-    let mut x = vec![[0.0f64; 3]; n];
-    for row in (0..n).rev() {
-        for c in 0..3 {
-            let mut s = b[row][c];
-            for k in row + 1..n {
-                s -= a[row][k] * x[k][c];
-            }
-            x[row][c] = s / a[row][row];
-        }
-    }
-    Some(x)
-}
-
-/// The colour profile of a fade, on the geometry and stops of its opacity profile.
-///
-/// With the geometry fixed every pixel has its gradient coordinate `t`, and the colour is
-/// piecewise linear in `t` between the stops, so the stop colours are a small linear least
-/// squares. Weighted by `a²`, which is the residual in premultiplied colour -- what the
-/// pixel actually shows -- so a pixel too faint to see cannot steer the colour. A stop no
-/// pixel testifies about (a halo's inner stop under an opaque flame) is held to the fade's
-/// mean colour by a light ridge.
-fn fit_colour_stops(
-    alpha_model: &gradient::FillModel,
-    px: &[usize],
-    rgb: &[[f32; 3]],
-    alpha: &[f32],
-    w: usize,
-) -> gradient::FillModel {
-    let offs: Vec<f64> = model_stops(alpha_model).iter().map(|s| s.0).collect();
-    let m = offs.len();
-    let mut a = vec![vec![0.0f64; m]; m];
-    let mut b = vec![[0.0f64; 3]; m];
-    let (mut mean, mut msum) = ([0.0f64; 3], 0.0f64);
-    for &p in px {
-        let ap = alpha[p] as f64;
-        if ap < 1e-3 {
-            continue;
-        }
-        let pm = [
-            (rgb[p][0] as f64 - (1.0 - ap)),
-            (rgb[p][1] as f64 - (1.0 - ap)),
-            (rgb[p][2] as f64 - (1.0 - ap)),
-        ];
-        for k in 0..3 {
-            mean[k] += pm[k];
-        }
-        msum += ap;
-        // s(t) = (1-u)·S_j + u·S_{j+1}; residual a·s(t) - pm, so the design row is a·basis.
-        let t = alpha_model.t_at((p % w) as f64, (p / w) as f64);
-        let j = (0..m - 1).rfind(|&j| t >= offs[j]).unwrap_or(0);
-        let span = (offs[j + 1] - offs[j]).max(1e-9);
-        let u = ((t - offs[j]) / span).clamp(0.0, 1.0);
-        let (r0, r1) = (ap * (1.0 - u), ap * u);
-        a[j][j] += r0 * r0;
-        a[j][j + 1] += r0 * r1;
-        a[j + 1][j] += r0 * r1;
-        a[j + 1][j + 1] += r1 * r1;
-        for k in 0..3 {
-            b[j][k] += r0 * pm[k];
-            b[j + 1][k] += r1 * pm[k];
-        }
-    }
-    let mean = if msum > 1e-9 {
-        [mean[0] / msum, mean[1] / msum, mean[2] / msum]
-    } else {
-        [1.0; 3]
-    };
-    let ridge = 1e-6 + 1e-3 * (0..m).map(|i| a[i][i]).sum::<f64>() / m as f64;
-    for i in 0..m {
-        a[i][i] += ridge;
-        for k in 0..3 {
-            b[i][k] += ridge * mean[k];
-        }
-    }
-    let x = solve(a, b).unwrap_or_else(|| vec![mean; m]);
-    let cols: Vec<[f32; 3]> = x
-        .iter()
-        .map(|c| {
-            [
-                c[0].clamp(0.0, 1.0) as f32,
-                c[1].clamp(0.0, 1.0) as f32,
-                c[2].clamp(0.0, 1.0) as f32,
-            ]
-        })
-        .collect();
-    restop(alpha_model, &cols)
-}
-
-/// Chi-square of a model of a region's pixels -- opacity and premultiplied colour, each
-/// beyond the half-level quantisation dead zone -- where `model(p)` is `(colour, alpha)`.
-fn fade_chi2(
-    px: &[usize],
-    rgb: &[[f32; 3]],
-    alpha: &[f32],
-    sigma: f64,
-    model: impl Fn(usize) -> ([f32; 3], f32),
-) -> f64 {
-    const DEAD: f64 = 0.5 / 255.0;
-    let r = |e: f64| {
-        let e = (e.abs() - DEAD).max(0.0) / sigma;
-        e * e
-    };
-    px.iter()
-        .map(|&p| {
-            let (s, am) = model(p);
-            let (ap, am) = (alpha[p] as f64, am as f64);
-            let mut c2 = r(ap - am);
-            for k in 0..3 {
-                let pm = rgb[p][k] as f64 - (1.0 - ap);
-                c2 += r(pm - s[k] as f64 * am);
-            }
-            c2
-        })
-        .sum()
-}
-
-/// Editable numbers in an opacity profile: the geometry, and one number per stop where a
-/// colour stop has three.
-fn alpha_params(m: &gradient::FillModel) -> f64 {
-    match m {
-        gradient::FillModel::Flat(_) => 1.0,
-        gradient::FillModel::Linear { mids, .. } => 4.0 + 2.0 + 2.0 * mids.len() as f64,
-        gradient::FillModel::Radial { aspect, mids, .. } => {
-            let geom = if *aspect == 1.0 { 3.0 } else { 5.0 };
-            geom + 2.0 + 2.0 * mids.len() as f64
-        }
-    }
-}
-
-/// An opacity profile fitted by the ordinary fill fitter, run on the alpha as a grey image.
-/// Only sRGB-space candidates: `stop-opacity` interpolates linearly in opacity, and a
-/// linear-light fit of a grey would be a different curve. The grey repeats the alpha in
-/// three channels, so its chi-square counts the evidence three times; the cost here counts
-/// it once, and prices each stop at one number.
-fn fit_opacity(
-    grey: &[[f32; 3]],
-    w: usize,
-    h: usize,
-    pixels: &[usize],
-    member: impl Fn(usize) -> bool + Sync,
-    sigma: f64,
-    lambda: f64,
-    flat_only: bool,
-) -> (gradient::FillModel, f64) {
-    gradient::fit_pixels(grey, w, h, pixels, member, |_| true, sigma, lambda)
-        .into_iter()
-        .filter(|f| match &f.model {
-            gradient::FillModel::Flat(_) => true,
-            gradient::FillModel::Linear { interp, .. }
-            | gradient::FillModel::Radial { interp, .. } => {
-                !flat_only && *interp == gradient::Interp::Srgb
-            }
-        })
-        .map(|f| {
-            let cost = 0.5 * f.chi2 / 3.0 + lambda * alpha_params(&f.model);
-            (f.model, cost)
-        })
-        .min_by(|a, b| a.1.total_cmp(&b.1))
-        .unwrap_or((gradient::FillModel::Flat([1.0; 3]), f64::INFINITY))
-}
-
-/// Turn each connected run of translucent regions into one fade, where one opacity profile
-/// and one colour profile on it cost less than the separate washes.
-///
-/// The palette finds a fade as bands, one ink per opacity level, and the colour merge
-/// cannot join them: over white a white glow is white everywhere, and the difference is all
-/// in the alpha. Here translucent regions are gathered into connected clusters; the ordinary
-/// fill fitter is asked for the geometry from the alpha alone -- linear, radial or
-/// elliptical, with interior stops -- then the colour stops are fitted on that geometry,
-/// and the whole is priced against the separate washes by the same description length as
-/// every other merge, opacity and premultiplied colour residuals both. A single region
-/// whose opacity ramps is a fade on its own.
-///
-/// Returns, per label id (new ids included), the fade that label is, if any.
-#[allow(clippy::too_many_arguments)]
-fn merge_fades(
-    labels: &mut [u16],
-    fills_by_label: &mut Vec<gradient::FillFit>,
-    label_ink: &mut Vec<usize>,
-    rgb: &[[f32; 3]],
-    alpha: &[f32],
-    w: usize,
-    h: usize,
-    pal: &Palette,
-    sigma: f64,
-    lambda: f64,
-) -> Vec<Option<Fade>> {
-    /// An opacity at or above this is paint, not a fade.
-    const OPAQUE_BAND: f32 = 0.98;
-    let n = w * h;
-    let n_labels = labels
-        .iter()
-        .map(|&l| l as usize + 1)
-        .max()
-        .unwrap_or(0)
-        .max(fills_by_label.len())
-        .max(label_ink.len())
-        .max(pal.len());
-    let ink_of = |l: usize, label_ink: &[usize]| label_ink.get(l).copied().unwrap_or(l);
-
-    // Each translucent label's colour, from its own pixels: every pixel of a colour `s` at
-    // opacity `a` is `W - (1 - a) = s·a` exactly, so `s = Σ(W - (1 - a)) / Σa` whatever the
-    // opacities are. Un-matting the band's one colour by its one opacity instead divides a
-    // colour error by `a`: a black shadow's faint bands came out #353535 and #2a2a2a and were
-    // never recognised as one colour.
-    let mut pm = vec![([0.0f64; 3], 0.0f64); n_labels];
-    for p in 0..n {
-        let (c, a) = (rgb[p], alpha[p]);
-        let e = &mut pm[labels[p] as usize];
-        for k in 0..3 {
-            e.0[k] += (c[k] - (1.0 - a)) as f64;
-        }
-        e.1 += a as f64;
-    }
-    let colour_of = |acc: &([f64; 3], f64)| -> Option<[f32; 3]> {
-        (acc.1 > 1e-6).then(|| {
-            [
-                (acc.0[0] / acc.1).clamp(0.0, 1.0) as f32,
-                (acc.0[1] / acc.1).clamp(0.0, 1.0) as f32,
-                (acc.0[2] / acc.1).clamp(0.0, 1.0) as f32,
-            ]
-        })
-    };
-
-    // The washes: every translucent label, whatever fill the colour merge gave it. A band
-    // of a fade carries a stretch of the ramp inside it, so the merge over white often fits
-    // it a colour gradient -- five of the candle halo's did -- and a colour gradient over
-    // white is not something a translucent face can be written as: its stops already hold
-    // the white, and `fill-opacity` would apply it twice. The fit below starts from the
-    // pixels, opacity and colour both, so the fill it replaces does not matter.
-    let wash: Vec<bool> = (0..n_labels)
-        .map(|l| {
-            let a = pal.alpha.get(ink_of(l, label_ink)).copied().unwrap_or(1.0);
-            (0.05..OPAQUE_BAND).contains(&a) && colour_of(&pm[l]).is_some()
-        })
-        .collect();
-    if !wash.iter().any(|&b| b) {
-        return vec![None; n_labels];
-    }
-
-    // Connected clusters of wash pixels. Colour does not split them: two washes of
-    // different colours join only if one colour profile explains both, and the cost below
-    // says whether it does.
-    let mut cluster = vec![u32::MAX; n];
-    let mut clusters: Vec<Vec<usize>> = Vec::new();
-    for start in 0..n {
-        if !wash[labels[start] as usize] || cluster[start] != u32::MAX {
-            continue;
-        }
-        let id = clusters.len() as u32;
-        let mut stack = vec![start];
-        let mut px = Vec::new();
-        cluster[start] = id;
-        while let Some(p) = stack.pop() {
-            px.push(p);
-            let (x, y) = (p % w, p / w);
-            for q in [
-                (x > 0).then(|| p - 1),
-                (x + 1 < w).then(|| p + 1),
-                (y > 0).then(|| p - w),
-                (y + 1 < h).then(|| p + w),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                if cluster[q] == u32::MAX && wash[labels[q] as usize] {
-                    cluster[q] = id;
-                    stack.push(q);
-                }
-            }
-        }
-        px.sort_unstable();
-        clusters.push(px);
-    }
-
-    let grey: Vec<[f32; 3]> = alpha.iter().map(|&a| [a, a, a]).collect();
-    let mut fade_of: Vec<Option<Fade>> = vec![None; n_labels];
-    let mut next = n_labels;
-    let dbg = inkvec_core::env::flag("INKVEC_FADEDBG");
-    if dbg {
-        let translucent_gradient = (0..n_labels)
-            .filter(|&l| {
-                let a = pal.alpha.get(ink_of(l, label_ink)).copied().unwrap_or(1.0);
-                (0.05..OPAQUE_BAND).contains(&a)
-                    && fills_by_label.get(l).is_some_and(|f| f.model.is_gradient())
-            })
-            .count();
-        eprintln!(
-            "  fades: {} washes, {} translucent labels with a colour gradient, {} clusters",
-            wash.iter().filter(|&&b| b).count(),
-            translucent_gradient,
-            clusters.len()
-        );
-    }
-    for (cid, px) in clusters.iter().enumerate() {
-        let mut bands: Vec<u16> = px.iter().map(|&p| labels[p]).collect();
-        bands.sort_unstable();
-        bands.dedup();
-        // One band is enough: a single region whose opacity ramps is a fade on its own.
-        if px.len() < 16 || next >= u16::MAX as usize {
-            if dbg {
-                eprintln!(
-                    "  fade cluster {cid}: {} band(s), {} px -- too small",
-                    bands.len(),
-                    px.len()
-                );
-            }
-            continue;
-        }
-        let cid = cid as u32;
-        // The geometry comes from the opacity, which is what a fade is.
-        let (alpha_model, _) =
-            fit_opacity(&grey, w, h, px, |p| cluster[p] == cid, sigma, lambda, false);
-        if !alpha_model.is_gradient() {
-            if dbg {
-                eprintln!(
-                    "  fade cluster {cid}: {} bands, {} px -- opacity fits flat",
-                    bands.len(),
-                    px.len()
-                );
-            }
-            continue;
-        }
-        let color_model = fit_colour_stops(&alpha_model, px, rgb, alpha, w);
-        let n_stops = model_stops(&alpha_model).len() as f64;
-        let union_chi2 = fade_chi2(px, rgb, alpha, sigma, |p| {
-            let (x, y) = ((p % w) as f64, (p / w) as f64);
-            (color_model.color_at(x, y), alpha_model.color_at(x, y)[0])
-        });
-        let union = 0.5 * union_chi2 + lambda * (alpha_params(&alpha_model) + 3.0 * n_stops);
-        // The separate washes: each band one opacity and one colour of its own.
-        let mut separate = 0.0;
-        for &b in &bands {
-            let bp: Vec<usize> = px.iter().copied().filter(|&p| labels[p] == b).collect();
-            let Some(s) = colour_of(&pm[b as usize]) else {
-                continue;
-            };
-            let mut av: Vec<f32> = bp.iter().map(|&p| alpha[p]).collect();
-            let mid = av.len() / 2;
-            let a_b = *av.select_nth_unstable_by(mid, |x, y| x.total_cmp(y)).1;
-            separate += 0.5 * fade_chi2(&bp, rgb, alpha, sigma, |_| (s, a_b)) + lambda * 4.0;
-        }
-        if dbg {
-            eprintln!(
-                "  fade cluster {cid}: {} bands, {} px, {} union {union:.1} vs separate {separate:.1}",
-                bands.len(),
-                px.len(),
-                alpha_model.kind()
-            );
-        }
-        if union >= separate {
-            continue;
-        }
-        let fade = Fade {
-            color: color_model,
-            alpha: alpha_model,
-        };
-        let id = next;
-        next += 1;
-        let first_ink = ink_of(bands[0] as usize, label_ink);
-        for &p in px {
-            labels[p] = id as u16;
-        }
-        // Any label without a fill of its own falls back to its palette colour downstream;
-        // padding must say the same, not invent one.
-        while fills_by_label.len() <= id {
-            let l = fills_by_label.len();
-            fills_by_label.push(gradient::FillFit {
-                model: gradient::FillModel::Flat(pal.rgb.get(l).copied().unwrap_or([1.0; 3])),
-                chi2: 0.0,
-                params: gradient::PARAMS_FLAT,
-                cost: 0.0,
-            });
-        }
-        fills_by_label[id] = gradient::FillFit {
-            model: fade.over_white(),
-            chi2: union_chi2,
-            params: alpha_params(&fade.alpha) + 3.0 * n_stops,
-            cost: union,
-        };
-        if label_ink.len() <= id {
-            let len = label_ink.len();
-            label_ink.extend(len..=id);
-        }
-        label_ink[id] = first_ink;
-        if fade_of.len() <= id {
-            fade_of.resize(id + 1, None);
-        }
-        fade_of[id] = Some(fade);
-    }
-
-    // The washes that stay washes get the same colour estimate. The emitter recovers a
-    // wash's colour by un-matting its fill at its opacity, so the fill is written as that
-    // colour over white at that opacity, and the division by `a` recovers it exactly.
-    let still_present: std::collections::HashSet<u16> = labels.iter().copied().collect();
-    for l in 0..n_labels {
-        if !wash[l] || !still_present.contains(&(l as u16)) {
-            continue;
-        }
-        let (Some(s), Some(&a)) = (colour_of(&pm[l]), pal.alpha.get(ink_of(l, label_ink))) else {
-            continue;
-        };
-        while fills_by_label.len() <= l {
-            let k = fills_by_label.len();
-            fills_by_label.push(gradient::FillFit {
-                model: gradient::FillModel::Flat(pal.rgb.get(k).copied().unwrap_or([1.0; 3])),
-                chi2: 0.0,
-                params: gradient::PARAMS_FLAT,
-                cost: 0.0,
-            });
-        }
-        fills_by_label[l].model =
-            gradient::FillModel::Flat([s[0] * a + 1.0 - a, s[1] * a + 1.0 - a, s[2] * a + 1.0 - a]);
-    }
-    fade_of
-}
-
-// ---------------------------------------------------------------------------------------
 // The colour path
 // ---------------------------------------------------------------------------------------
 
 /// Two palette entries may be merged into one gradient only when they are drawn at the
 /// same opacity: a fill here is fitted over white, where the clear ground and white paint
 /// are the same colour.
+///
+/// Returns the gate handed to `merge_gradient_bands_guarded`: true when the two entries'
+/// opacities differ by less than 0.05 (a missing opacity counts as 1). No classic mirror;
+/// on the opaque path every ink has opacity 1 and the gate would always pass.
 pub fn same_opacity(pal: &Palette) -> impl Fn(u16, u16) -> bool + Sync + '_ {
     move |a: u16, b: u16| {
         let fa = pal.alpha.get(a as usize).copied().unwrap_or(1.0);
@@ -1528,6 +1207,28 @@ pub fn same_opacity(pal: &Palette) -> impl Fn(u16, u16) -> bool + Sync + '_ {
 /// The colour path with transparency carried natively. Mirrors
 /// [`crate::trace_color_full_with_alpha`] stage for stage; see the module docs for what
 /// changes and why.
+///
+/// `img` is the source (straight RGBA `[0, 1]`), `alpha` its alpha per pixel (the caller
+/// has checked that some pixel is below [`OPAQUE`]). The stages, in order:
+///
+/// 1. **intake**: noise estimate on luminance, soft-intake test (edge width, lossy
+///    container, ringing), exactly as the classic path;
+/// 2. **palette**: [`extract_palette`] (two grounds);
+/// 3. **labels**: [`label_image`], then on a soft intake the measured residual noise
+///    raises `σ` (capped at [`color::MEASURED_SIGMA_CAP`]);
+/// 4. **despeckle**: [`crate::despeckle`];
+/// 5. **blend_absorb**: [`absorb_blend_slivers`] and [`reassign_blend_pixels`] in `[W, a]`,
+///    then despeckle again if anything moved (skipped with `INKVEC_NO_ABSORB`);
+/// 6. **merge_bands**: the classic gradient-band merge over white, gated by
+///    [`same_opacity`] (only with `opts.gradients`);
+/// 7. **carve**: the classic residual-feature carve (with `opts.gradients`, unless
+///    `INKVEC_NO_CARVE`);
+/// 8. **fades**: `merge_fades` joins translucent bands into opacity gradients (with
+///    `opts.gradients`);
+/// 9. **split**: [`crate::split_components`], then each face's fill, ink, fade and rim
+///    opacity;
+/// 10. everything after the face map is shared: [`crate::finish_color_trace_alpha`] with
+///     the source alpha and each face's opacity, and the fades attached to the result.
 pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace {
     let (w, h) = (img.width, img.height);
     let rgb = img.composited([1.0, 1.0, 1.0]);
@@ -1693,7 +1394,6 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
             None => pal.alpha.get(ink).copied().unwrap_or(1.0),
         })
         .collect();
-    let _ = diag::Stop::Floor;
     let mut tr = crate::finish_color_trace_alpha(
         img,
         opts,

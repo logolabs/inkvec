@@ -1,8 +1,16 @@
 //! SVG representation of fill models (linear and radial gradients, flat colours).
+//!
+//! Called by the CLI emitter (`inkvec-cli/src/emit.rs`) once per fill: [`fill_to_svg`]
+//! for an opaque fill, [`fade_to_svg`] for a fill with an opacity profile (a fade).
+//! Both return a `<defs>` fragment and the `fill` attribute value.
+//! Coordinates are written with three decimals, stop offsets with three, opacities with
+//! three and the ellipse squash with four.
 
 use super::{FillModel, Interp};
 use crate::color::to_hex;
 
+/// The `color-interpolation` attribute a gradient needs: none for sRGB (SVG's default),
+/// `linearRGB` for a linear-light fit.
 fn interp_attr(interp: Interp) -> &'static str {
     match interp {
         Interp::Srgb => "",

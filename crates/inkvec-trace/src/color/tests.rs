@@ -185,6 +185,7 @@ fn transfer_functions_are_the_srgb_standard() {
 
 // ------------------------------------------------------------------ blends
 
+/// Shorthand for [`rgb_to_oklab`].
 fn lab(c: [f32; 3]) -> Oklab {
     rgb_to_oklab(c)
 }
@@ -277,6 +278,7 @@ struct Fixture {
     lin: Vec<[f32; 3]>,
 }
 
+/// Build a [`Fixture`] whose pixel `i` has colour `col(i % w)` (vertical stripes).
 fn fixture(w: usize, h: usize, col: impl Fn(usize) -> [f32; 3]) -> Fixture {
     let lab: Vec<Oklab> = (0..w * h).map(|i| rgb_to_oklab(col(i % w))).collect();
     let srgb: Vec<[f32; 3]> = lab.iter().map(|&p| oklab_to_rgb(p)).collect();
@@ -300,6 +302,7 @@ fn fixture(w: usize, h: usize, col: impl Fn(usize) -> [f32; 3]) -> Fixture {
 }
 
 impl Fixture {
+    /// Each pixel's OKLab distance to the nearest of `inks`, as the palette tracks it.
     fn nearest(&self, inks: &[Oklab]) -> Vec<f32> {
         self.lab
             .iter()
@@ -310,6 +313,7 @@ impl Fixture {
             })
             .collect()
     }
+    /// [`straddle_fraction`] over this fixture, in linear light, visiting every pixel.
     fn straddle(&self, c: Oklab, a: Oklab, b: Oklab, nearest: &[f32]) -> f32 {
         straddle_fraction(
             &self.lab, &self.srgb, &self.lin, self.w, self.h, c, nearest, a, b, true, 1,
@@ -564,6 +568,7 @@ fn stripes(inks: &[[f32; 3]], stripe: usize, h: usize) -> (Vec<[f32; 3]>, usize)
     (rgb, w)
 }
 
+/// Assert that `pal` holds exactly `inks`, each recovered to within 1e-4 in OKLab.
 fn assert_palette_is(pal: &Palette, inks: &[[f32; 3]]) {
     assert_eq!(pal.len(), inks.len(), "palette {:?}", pal.rgb);
     for ink in inks {
@@ -730,6 +735,7 @@ fn a_rare_colour_is_not_an_ink() {
 
 // ------------------------------------------------------------------ alpha levels
 
+/// An opaque one-entry palette of colour `c`.
 fn one_ink_palette(c: [f32; 3]) -> Palette {
     Palette {
         colors: vec![lab(c)],

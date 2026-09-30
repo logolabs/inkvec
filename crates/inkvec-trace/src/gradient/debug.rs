@@ -1,6 +1,11 @@
 //! `INKVEC_GRADDBG=x0,y0,x1,y1`: after band merging, print every surviving component whose
 //! bounding box meets the window, and a fresh union fit with each neighbour -- including the
 //! flat-flat pairs the merge never looks at. Diagnostic only.
+//!
+//! Called from the end of the band merger (`bands.rs`) when the variable is set, and
+//! from [`super::fit_samples`] while a dump is in progress. Everything here writes to
+//! stderr and nothing feeds back into the trace: the union fits made for the dump are
+//! thrown away.
 
 use super::*;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -8,6 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// Set while `dump` fits a union, so `fit_samples` prints its candidates.
 pub(crate) static VERBOSE: AtomicBool = AtomicBool::new(false);
 
+/// Whether a dump is fitting a union right now (see [`VERBOSE`]).
 pub(crate) fn verbose() -> bool {
     VERBOSE.load(Ordering::Relaxed)
 }
@@ -35,6 +41,9 @@ pub(crate) fn window() -> Option<[usize; 4]> {
     (p.len() == 4).then(|| [p[0], p[1], p[2], p[3]])
 }
 
+/// Inclusive pixel bounding box `[x0, y0, x1, y1]` of pixel indices `px` in a raster of
+/// width `w`. Empty input gives the inverted box `[MAX, MAX, 0, 0]`, which meets no
+/// window.
 fn bbox(px: &[usize], w: usize) -> [usize; 4] {
     let mut b = [usize::MAX, usize::MAX, 0, 0];
     for &p in px {
@@ -49,6 +58,11 @@ fn bbox(px: &[usize], w: usize) -> [usize; 4] {
 
 /// Dump the components in the window. `fit` fits the union of two components. The
 /// merger's state, passed piece by piece: it lives in separate locals there.
+///
+/// `win` is `[x0, y0, x1, y1]`, inclusive, px. For each live component whose bounding
+/// box meets it: its size, mean colour, model and cost; then for each neighbour sharing
+/// at least 3 boundary pairs, a fresh union fit and the gain `cost(a) + cost(b) −
+/// cost(a ∪ b)` the merger would have seen.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dump(
     win: [usize; 4],
@@ -105,6 +119,7 @@ pub(crate) fn dump(
     }
 }
 
+/// Mean sRGB colour of the pixels `px`; black for none.
 fn mean_rgb(rgb: &[[f32; 3]], px: &[usize]) -> [f32; 3] {
     let mut m = [0.0f32; 3];
     for &p in px {
@@ -116,6 +131,7 @@ fn mean_rgb(rgb: &[[f32; 3]], px: &[usize]) -> [f32; 3] {
     [m[0] / n, m[1] / n, m[2] / n]
 }
 
+/// `#rrggbb` of an sRGB colour in 0..1, for the log.
 fn hex(c: [f32; 3]) -> String {
     format!(
         "#{:02x}{:02x}{:02x}",

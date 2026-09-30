@@ -9,6 +9,11 @@
 //! explains the cluster's pixels at least about as well as the flat bands did. A step
 //! between two genuinely different inks cannot be fitted by a ramp, fails that test and
 //! stays two faces.
+//!
+//! Stage 3 of the Fast pipeline, after [`super::faces::faces`] and only for opaque images
+//! with gradients on. In: the image over white (sRGB 0..1), the palette, and a face id per
+//! pixel with each face's fill and ink. Out: the same three rewritten, with each accepted
+//! cluster renumbered as one face carrying a gradient fill. Called from [`super::front`].
 
 use crate::color::{rgb_to_oklab, Palette};
 use crate::gradient::{self, FillFit, FillModel};
@@ -38,6 +43,7 @@ const INVISIBLE: f64 = 2.0 / 255.0;
 /// Absolute slack on the acceptance test, in sRGB units (one display level).
 const SLACK: f64 = 1.0 / 255.0;
 
+/// Union-find root of face `x`, with path halving.
 fn find(parent: &mut [usize], mut x: usize) -> usize {
     while parent[x] != x {
         parent[x] = parent[parent[x]];
@@ -46,7 +52,8 @@ fn find(parent: &mut [usize], mut x: usize) -> usize {
     x
 }
 
-/// Contact length between every pair of adjacent faces.
+/// Contact length between every pair of adjacent faces, in pixel edges: the number of
+/// 4-neighbour pixel pairs with one pixel in each face. Keys are `(min, max)` face ids.
 fn contacts(labels: &[u16], w: usize, h: usize) -> HashMap<(u16, u16), u32> {
     let mut out: HashMap<(u16, u16), u32> = HashMap::new();
     let mut touch = |a: u16, b: u16| {
@@ -70,6 +77,14 @@ fn contacts(labels: &[u16], w: usize, h: usize) -> HashMap<(u16, u16), u32> {
 
 /// RMS residual over sampled pixels of the cluster's interior: of `model` (zero without
 /// one), and of each pixel's own flat band colour.
+///
+/// Over every `step`-th pixel `p` of `pixels`, `step = max(1, |pixels| / CHECK_SAMPLES)`:
+///
+/// `g = sqrt(Σ_p Σ_k (I_k(p) − M_k(p))² / 3N)`, `f = sqrt(Σ_p Σ_k (I_k(p) − B_k(p))² / 3N)`
+///
+/// with `I` the image, `M` the model evaluated at the pixel's integer coordinates, `B` the
+/// band's flat colour, `k` over the three sRGB channels (0..1) and `N` the pixels read.
+/// Both are in sRGB units. An empty `pixels` gives `(0, 0)`.
 fn residuals(
     rgb: &[[f32; 3]],
     w: usize,
@@ -96,6 +111,28 @@ fn residuals(
 /// Merge ramps of bands into gradient faces. `labels` are face ids; the three per-face
 /// vectors are rewritten with the merged faces renumbered. Returns the number of gradient
 /// faces made.
+///
+/// 1. **Clusters.** Faces are joined by union-find when they share at least
+///    [`MIN_CONTACT`] pixel edges and their inks lie within [`RAMP_STEP`] in OKLab. Pairs
+///    are visited in sorted order and the smaller root wins, so the clustering does not
+///    depend on hash order.
+/// 2. **Samples.** Each cluster of two or more faces and at least [`MIN_PIXELS`] pixels is
+///    sampled on an even grid of stride `s = ceil(sqrt(count / SAMPLE_PIXELS))`.
+/// 3. **Fit and test**, in parallel per cluster. The flat bands' residual `f` and, after
+///    the fit, the gradient's `g` are measured on the sampled pixels whose four neighbours
+///    are all in the cluster ([`residuals`]), so the anti-aliased rim does not count
+///    against either. A pair of faces with `f <= FLAT_ENOUGH` is two flat inks and is not
+///    fitted. Otherwise the quality fitter's models are tried (`gradient::fit_pixels`
+///    at the noise floor and the BIC penalty `gradient::bic_lambda`, then
+///    `gradient::select`), and a gradient is kept when
+///    `g <= max(RATIO · f + SLACK, INVISIBLE)`.
+/// 4. **Renumber.** Faces of an accepted cluster become one face with the gradient fill
+///    and the root face's ink; every other face keeps its fill. New ids follow the order
+///    of the old ones.
+///
+/// Edge cases: fewer than two faces, or no accepted cluster, leaves everything untouched
+/// and returns 0. A cluster with no interior sample reads both residuals as 0, so a pair
+/// is left flat and a ramp of three or more bands is accepted on the fit alone.
 pub(crate) fn merge_ramps(
     rgb: &[[f32; 3]],
     w: usize,

@@ -9,6 +9,23 @@ API in particular should be treated as unstable release to release).
 
 ### Changed
 
+- **Fast mode is several times faster, with the same output.** It went through the same process as Quality mode: each hot spot was measured, described precisely, matched to published work, and rewritten. The papers are cited in the code, with labels saying whether the code implements a paper's method, was inspired by it, or is our own. On large images the wall time of a whole CLI run fell 3.6× to 4.2×:
+
+  | Input | Engine time | Whole CLI run |
+  | --- | --- | --- |
+  | 7 opaque images at 2048 px | 161 → 31 ms | 245 → 69 ms |
+  | 3 transparent images at 2048 px | 157 → 26 ms | 355 → 85 ms |
+  | 51 images at 512 px | 17.1 → 6.6 ms | 42 → 26 ms |
+  | 246 icons at 128 px | 4.3 → 2.5 ms | unchanged (process start dominates) |
+
+  - **Region clean-up** (slivers, rims, same-ink merge, specks, faces) now works on row runs instead of pixels, and writes the face ids once. At 2048 px it went from 76 to 4 ms. Methods: Lemaitre & Lacassagne 2020; Wu, Otoo & Suzuki 2009; Salembier & Serra 1995.
+  - **The palette** builds its histogram in parallel over row runs. This is exact because sums of 8-bit values are exact in 64-bit floats. It also keeps state only for occupied bins (Podlozhnyuk 2007; Henriksen et al. 2020; Briggs & Torczon 1993). At 2048 px it went from 45 to 6 ms.
+  - **Intake** reads the file once and widens 8-bit samples through a table, in parallel. Matting runs in place. The check for pixel-upscaled images now tests only the factors that divide the gcd of the positions where pixels change.
+  - **Transparent images** skip alpha-ramp fits that provably cannot succeed, and fit the rest in one pass. At 2048 px the transparency pass went from 95 to 13 ms.
+  - **Shared with Quality mode:** the planar map is built from row runs, with a radix-sorted incidence table (He, Chao & Suzuki 2008). Sub-pixel refinement runs in parallel per vertex (Blelloch et al. 2012).
+  - **The fitter** skips polygon sides that cannot win (Morin & Marsten 1976) and scans exact straight runs in closed form. Long edges scan in parallel. At 2048 px it went from 26 to 5 ms.
+  - **Output:** unchanged byte for byte in both modes on 1,051 traces, covering JPEG, WebP, 16-bit, upscaled and oversized inputs and the cutout, monochrome and no-background modes. The one intended change is the image frame, below.
+- **Fast mode writes the image frame as a rectangle.** It used to end in a small curve that cut off one corner. This saves 6 parameters on every opaque image with a background. dE00 is unchanged or better: 0.3641 → 0.3640 on the screen set, 0.3632 on held-out icons.
 - **Quality mode is much faster, with the same output.** Each hot spot was measured, matched to a published method, and rewritten so that it reproduces today's SVG byte for byte. The papers are cited in the code.
   - **Palette and labels:** worked out once per distinct colour instead of once per pixel (Celebi 2011; Swain & Ballard 1991). Each candidate's claimed pixels are computed once (Korn & Muthukrishnan 2000). Connected components use run-based union-find (Wu, Otoo & Suzuki 2009). The palette is 12× faster on the 246-icon screen set.
   - **Curve fitting:** the unread χ² of the ellipse candidate is gone. The curve merge stops scoring a candidate once it cannot win (Bei & Gray 1985), and never re-tries a run it has already turned down (Garland & Heckbert 1997). The fitting stage is 47 % faster on the screen set.

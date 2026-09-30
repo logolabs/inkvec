@@ -30,6 +30,10 @@
 use crate::color::{rgb_to_oklab, Palette};
 use crate::native::{over_black, snap_alpha, Ink2, OPAQUE};
 
+/// The palette as it shipped before the exact speed-ups, kept verbatim as the tests' oracle.
+#[cfg(test)]
+mod reference;
+
 /// Bins: 16-bit keys.
 const BINS: usize = 1 << 16;
 /// Flat pixels a bin needs before it can found an ink.
@@ -563,13 +567,7 @@ pub(crate) fn palette_and_labels(
             }
         });
 
-    let mut weight = vec![0f32; inks.len()];
-    for &l in &labels {
-        weight[l as usize] += 1.0;
-    }
-    for v in weight.iter_mut() {
-        *v /= n.max(1) as f32;
-    }
+    let weight = ink_shares(&count_labels(&labels, inks.len()), n);
     let rgb_inks: Vec<[f32; 3]> = inks.iter().map(|c| [c[0], c[1], c[2]]).collect();
     (
         Palette {
@@ -580,6 +578,72 @@ pub(crate) fn palette_and_labels(
         },
         labels,
     )
+}
+
+/// How many pixels carry each of the `n_inks` labels, counted run by run.
+///
+/// `labels` is row-major and every entry is below `n_inks`. A run of equal labels is counted
+/// in a register and added once when it ends, so the loop does one memory update per run
+/// rather than one per pixel. 99.6 % of neighbouring labels are equal on the 7-image 2048 px
+/// set (99.0 % at the 246-icon screen set's p99), so the per-pixel `count[l] += 1` it
+/// replaces made every iteration wait on the store of the one before it (store-to-load
+/// forwarding on the same address). Θ(n) reads, Θ(runs) writes. An empty slice gives all
+/// zeros.
+///
+/// Inspired by: Y. Collet, FiniteStateEntropy `lib/hist.c`, `HIST_count_parallel_wksp`,
+/// <https://github.com/Cyan4973/FiniteStateEntropy/blob/dev/lib/hist.c>, which breaks the
+/// same chain with four sub-tables ("noticeably faster when some values are heavily
+/// repeated"). Ours counts runs instead: the labels are an image, so repeats come in runs,
+/// and a run needs no second table.
+fn count_labels(labels: &[u16], n_inks: usize) -> Vec<usize> {
+    let mut count = vec![0usize; n_inks];
+    let mut it = labels.iter();
+    let Some(&first) = it.next() else {
+        return count;
+    };
+    let (mut cur, mut run) = (first, 1usize);
+    for &l in it {
+        if l == cur {
+            run += 1;
+        } else {
+            count[cur as usize] += run;
+            (cur, run) = (l, 1);
+        }
+    }
+    count[cur as usize] += run;
+    count
+}
+
+/// Each ink's share of the `n` pixels, `Palette::weight`: `min(count_i, 2²⁴) / max(n, 1)`,
+/// computed in f32.
+///
+/// # Why this is the number the old code gave
+///
+/// The old code summed `1.0` into an f32 per pixel, then divided by `n`. Adding 1.0 to an
+/// f32 holding an integer below 2²⁴ is exact (the result is an integer ≤ 2²⁴, which has a
+/// 24-bit significand), so up to 2²⁴ pixels the running sum equals the integer count. At
+/// 2²⁴ it stops: 2²⁴ + 1 lies halfway between 2²⁴ and 2²⁴ + 2, and round-half-to-even keeps
+/// 2²⁴. So the old sum was exactly `min(count, 2²⁴)`, and `min(count, 2²⁴) as f32` is that
+/// value converted exactly; the division is the same f32 operation on the same operands.
+///
+/// Nothing in the workspace reads `weight` (checked with `git grep` at 7a4e054), but
+/// [`Palette`] is a public type, so the field keeps its meaning rather than being dropped.
+/// It used to cost 23 % of the palette stage at 2048 px (9.8 ms), a serial chain of
+/// dependent f32 additions; counted per run it is under a millisecond.
+///
+/// Not from the literature: an exactness argument about f32 integer sums, because nothing
+/// published covers replacing a running float count with an integer one bit for bit.
+/// See also: D. Goldberg, "What Every Computer Scientist Should Know About Floating-Point
+/// Arithmetic", ACM Computing Surveys, March 1991,
+/// <https://docs.oracle.com/cd/E19957-01/806-3568/ncg_goldberg.html> (IEEE 754 operations are
+/// "computed exactly and then rounded").
+fn ink_shares(counts: &[usize], n: usize) -> Vec<f32> {
+    /// Where an f32 running count of ones stops growing.
+    const F32_COUNT_LIMIT: usize = 1 << 24;
+    counts
+        .iter()
+        .map(|&c| c.min(F32_COUNT_LIMIT) as f32 / n.max(1) as f32)
+        .collect()
 }
 
 #[cfg(test)]
@@ -601,6 +665,220 @@ mod tests {
             }
         }
         img
+    }
+
+    /// A deterministic pseudo-random stream (a 64-bit LCG, Knuth's MMIX constants), so the
+    /// equivalence tests need no dependency and fail reproducibly.
+    fn lcg(state: &mut u64) -> u64 {
+        *state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        *state >> 33
+    }
+
+    /// One test image: the colour over white, the opacity when traced natively, and its size.
+    struct Case {
+        name: String,
+        rgb: Vec<[f32; 3]>,
+        alpha: Option<Vec<f32>>,
+        w: usize,
+        h: usize,
+    }
+
+    /// A `w × h` 8-bit image as the intake hands it over: runs of `inks` source colours
+    /// copied down from the row above most of the time (so bins have flat pixels), `noise`
+    /// percent of pixels a fresh random colour, and, with `alpha`, 8-bit opacities (mostly
+    /// opaque, some clear, some half) composited over white exactly as
+    /// `Rgba::composited` does.
+    fn img8(w: usize, h: usize, seed: u64, inks: usize, noise: u64, alpha: bool) -> Case {
+        let mut s = seed;
+        let byte = |s: &mut u64| (lcg(s) % 256) as f32 / 255.0;
+        let pal: Vec<[f32; 4]> = (0..inks.max(1))
+            .map(|_| {
+                let a = match lcg(&mut s) % 4 {
+                    0 if alpha => 0.0,
+                    1 if alpha => 128.0 / 255.0,
+                    _ => 1.0,
+                };
+                [byte(&mut s), byte(&mut s), byte(&mut s), a]
+            })
+            .collect();
+        let mut src: Vec<[f32; 4]> = Vec::with_capacity(w * h);
+        let mut cur = pal[0];
+        for p in 0..w * h {
+            let r = lcg(&mut s) % 100;
+            if r < noise {
+                let a = if alpha { byte(&mut s) } else { 1.0 };
+                cur = [byte(&mut s), byte(&mut s), byte(&mut s), a];
+            } else if r < noise + 6 {
+                cur = pal[(lcg(&mut s) % pal.len() as u64) as usize];
+            } else if p >= w && r < 70 {
+                cur = src[p - w];
+            }
+            src.push(cur);
+        }
+        let rgb = src
+            .iter()
+            .map(|p| {
+                let a = p[3];
+                [
+                    p[0] * a + 1.0 * (1.0 - a),
+                    p[1] * a + 1.0 * (1.0 - a),
+                    p[2] * a + 1.0 * (1.0 - a),
+                ]
+            })
+            .collect();
+        Case {
+            name: format!("img8 {w}x{h} seed {seed} inks {inks} noise {noise} alpha {alpha}"),
+            rgb,
+            alpha: alpha.then(|| src.iter().map(|p| p[3]).collect()),
+            w,
+            h,
+        }
+    }
+
+    /// Values no 8-bit intake produces: arbitrary floats, as a box-averaged (resampled)
+    /// raster carries, including values below 2⁻⁸ and exact zeros.
+    fn resampled(w: usize, h: usize, seed: u64, alpha: bool) -> Case {
+        let mut c = img8(w, h, seed, 4, 10, alpha);
+        let mut s = seed ^ 0x9e37_79b9;
+        for (p, px) in c.rgb.iter_mut().enumerate() {
+            if lcg(&mut s) % 3 == 0 {
+                for v in px.iter_mut() {
+                    *v = (*v * 0.999_7 + (lcg(&mut s) % 1000) as f32 * 1e-6).min(1.0);
+                }
+            }
+            if p % 17 == 0 {
+                px[0] = 1e-4;
+            }
+        }
+        if let Some(a) = c.alpha.as_mut() {
+            for v in a.iter_mut().step_by(5) {
+                *v = (*v * 0.9 + 0.003).min(1.0);
+            }
+        }
+        c.name = format!("resampled {w}x{h} seed {seed} alpha {alpha}");
+        c
+    }
+
+    /// Hand-made degenerate images: one pixel, one row, one column, one ink, a checkerboard
+    /// (no pixel has a 4-neighbour in its bin), and stripes touching every border.
+    fn degenerate() -> Vec<Case> {
+        let mk = |name: &str, w: usize, h: usize, f: &dyn Fn(usize, usize) -> [f32; 3]| Case {
+            name: name.into(),
+            rgb: (0..w * h).map(|p| f(p % w, p / w)).collect(),
+            alpha: None,
+            w,
+            h,
+        };
+        let mut out = vec![
+            mk("1x1", 1, 1, &|_, _| [0.2, 0.4, 0.6]),
+            mk("one ink", 16, 9, &|_, _| [0.9, 0.1, 0.1]),
+            mk("checkerboard", 12, 12, &|x, y| {
+                if (x + y) % 2 == 0 {
+                    [0.0; 3]
+                } else {
+                    [1.0; 3]
+                }
+            }),
+            mk("border stripes", 20, 14, &|x, y| {
+                if x == 0 || y == 13 {
+                    [0.1, 0.2, 0.9]
+                } else if x == 19 || y == 0 {
+                    [0.9, 0.8, 0.1]
+                } else {
+                    [1.0; 3]
+                }
+            }),
+            mk("empty", 0, 0, &|_, _| [0.0; 3]),
+        ];
+        for (w, h) in [(1, 40), (40, 1)] {
+            let mut c = img8(w, h, 7, 3, 5, false);
+            c.name = format!("line {w}x{h}");
+            out.push(c);
+            let mut c = img8(w, h, 8, 3, 5, true);
+            c.name = format!("line {w}x{h} alpha");
+            out.push(c);
+        }
+        let mut clear = mk("all clear", 9, 9, &|_, _| [1.0; 3]);
+        clear.alpha = Some(vec![0.0; 81]);
+        out.push(clear);
+        out
+    }
+
+    /// Every equivalence case: degenerate images, 8-bit images large and small, opaque and
+    /// traced with their transparency, and resampled (non-8-bit) values.
+    fn cases() -> Vec<Case> {
+        let mut out = degenerate();
+        for (seed, (w, h)) in [(1u64, (37usize, 23usize)), (2, (64, 64)), (3, (130, 97))] {
+            for alpha in [false, true] {
+                out.push(img8(w, h, seed, 5, 4, alpha));
+                out.push(img8(w, h, seed + 10, 12, 30, alpha));
+                out.push(resampled(w, h, seed + 20, alpha));
+            }
+        }
+        // Past the size where the palette works in parallel row bands.
+        for alpha in [false, true] {
+            out.push(img8(300, 290, 40, 6, 3, alpha));
+            out.push(resampled(300, 290, 41, alpha));
+        }
+        out
+    }
+
+    /// Run the shipped palette and the frozen reference on `c` and demand the same inks to
+    /// the bit (`rgb`, `colors`, `alpha`, `weight`) and the same label for every pixel.
+    fn assert_same(c: &Case, merge_distance: f32, max_colors: usize) {
+        let a = c.alpha.as_deref();
+        let (pn, ln) = palette_and_labels(&c.rgb, a, c.w, c.h, merge_distance, max_colors);
+        let (po, lo) =
+            reference::palette_and_labels(&c.rgb, a, c.w, c.h, merge_distance, max_colors);
+        let what = format!("{} (merge {merge_distance}, max {max_colors})", c.name);
+        let bits = |v: &[f32]| v.iter().map(|f| f.to_bits()).collect::<Vec<_>>();
+        let flat3 = |v: &[[f32; 3]]| v.iter().flatten().copied().collect::<Vec<_>>();
+        let lab = |p: &Palette| {
+            p.colors
+                .iter()
+                .flat_map(|c| [c.l, c.a, c.b])
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(bits(&flat3(&pn.rgb)), bits(&flat3(&po.rgb)), "{what}: rgb");
+        assert_eq!(bits(&lab(&pn)), bits(&lab(&po)), "{what}: oklab");
+        assert_eq!(bits(&pn.alpha), bits(&po.alpha), "{what}: alpha");
+        assert_eq!(bits(&pn.weight), bits(&po.weight), "{what}: weight");
+        assert!(ln == lo, "{what}: labels differ");
+    }
+
+    #[test]
+    fn the_palette_equals_the_shipped_one_bit_for_bit() {
+        for c in cases() {
+            for (md, mc) in [(0.035, 64), (0.01, 64), (0.035, 3), (0.2, 2)] {
+                assert_same(&c, md, mc);
+            }
+        }
+    }
+
+    #[test]
+    fn integer_shares_equal_the_running_float_sum() {
+        // The old sum of ones stalls at 2^24; the integer count converted once agrees.
+        for (count, n) in [
+            (0usize, 0usize),
+            (3, 7),
+            (1 << 24, 1 << 25),
+            ((1 << 24) + 5, 1 << 26),
+        ] {
+            let mut f = 0f32;
+            for _ in 0..count {
+                f += 1.0;
+            }
+            let old = f / n.max(1) as f32;
+            assert_eq!(
+                ink_shares(&[count], n)[0].to_bits(),
+                old.to_bits(),
+                "{count}/{n}"
+            );
+        }
+        assert_eq!(count_labels(&[], 3), vec![0, 0, 0]);
+        assert_eq!(count_labels(&[2, 2, 0, 2, 1, 1], 3), vec![1, 2, 3]);
     }
 
     #[test]

@@ -35,11 +35,18 @@
 //! Halving the cap rather than decrementing it keeps the repair logarithmic in the worst
 //! case, and the first cap that yields a simple path is kept, so the objective still
 //! chooses everything it is allowed to choose.
+//!
+//! # Where this sits
+//!
+//! The crossing test ([`self_crossings`], [`self_crossings_touching`]) is what
+//! `inkvec-cli`'s ring assembly calls on every assembled ring, and it drives its own
+//! repair there with [`crate::multimodel::optimal_multimodel_capped`]. [`fit_simple`] is
+//! the self-contained version of that loop for one boundary. Paths are in px.
 
 use inkvec_core::predicates::segments_intersect;
 use inkvec_core::{Point, Polyline};
 
-use crate::curves::{cubic_self_intersects, Segment};
+use crate::curves::{cubic_self_intersects, eval_cubic, Segment};
 use crate::multimodel::{optimal_multimodel, optimal_multimodel_capped};
 use crate::{FitConfig, FittedPath};
 
@@ -55,6 +62,9 @@ const FLATTEN: usize = 16;
 const EPS: f64 = 1e-6;
 
 /// Flatten one segment to a polyline, given where it starts.
+///
+/// Into `out` (cleared first): the start, then a line's end, [`FLATTEN`] points of a
+/// cubic evenly spaced in its parameter, or an arc's end.
 fn flatten(start: Point, seg: &Segment, out: &mut Vec<Point>) {
     out.clear();
     out.push(start);
@@ -64,12 +74,7 @@ fn flatten(start: Point, seg: &Segment, out: &mut Vec<Point>) {
             let q = [start, c1, c2, p];
             for k in 1..=FLATTEN {
                 let t = k as f64 / FLATTEN as f64;
-                let u = 1.0 - t;
-                let b = [u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t];
-                out.push(Point::new(
-                    b[0] * q[0].x + b[1] * q[1].x + b[2] * q[2].x + b[3] * q[3].x,
-                    b[0] * q[0].y + b[1] * q[1].y + b[2] * q[2].y + b[3] * q[3].y,
-                ));
+                out.push(eval_cubic(q, t));
             }
         }
         Segment::Arc { end, .. } => {
@@ -80,6 +85,8 @@ fn flatten(start: Point, seg: &Segment, out: &mut Vec<Point>) {
     }
 }
 
+/// Axis-aligned bounding box of `pts` as `(x0, y0, x1, y1)`; inverted (`x0 > x1`) for
+/// an empty slice, which then overlaps nothing.
 fn bbox(pts: &[Point]) -> (f64, f64, f64, f64) {
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     for p in pts {
@@ -91,6 +98,7 @@ fn bbox(pts: &[Point]) -> (f64, f64, f64, f64) {
     (x0, y0, x1, y1)
 }
 
+/// Whether two `(x0, y0, x1, y1)` boxes overlap or touch.
 #[inline]
 fn boxes_overlap(a: (f64, f64, f64, f64), b: (f64, f64, f64, f64)) -> bool {
     a.0 <= b.2 && b.0 <= a.2 && a.1 <= b.3 && b.1 <= a.3
@@ -140,6 +148,15 @@ pub fn self_crossings_touching(
     self_crossings_inner(path, limit, Some(mask))
 }
 
+/// The crossing test behind [`self_crossings`] and [`self_crossings_touching`]: up to
+/// `limit` crossing pairs `(i, j)`, `i ≤ j`, in order of `i` then `j`, testing only pairs
+/// with a segment in `mask` when one is given.
+///
+/// Every segment is flattened (`flatten`) and boxed. A cubic is tested against itself
+/// exactly ([`cubic_self_intersects`]); two different segments whose boxes overlap cross
+/// when any two of their flattened sub-segments intersect ([`segments_intersect`], an
+/// exact predicate), except the one pair that legitimately meets where they join
+/// (`exempt_join`). O(n²) in segments, pruned by the boxes.
 fn self_crossings_inner(
     path: &FittedPath,
     limit: usize,
@@ -186,78 +203,13 @@ fn self_crossings_inner(
             if !touched(i, j) || !boxes_overlap(boxes[i], boxes[j]) {
                 continue;
             }
-            // The criterion is the renderer's, not a per-segment one: a ring is invalid
-            // exactly when two *non-consecutive* sub-segments of its flattened outline
-            // intersect. Consecutive sub-segments share a point by construction, and that
-            // single pair is the only exemption.
-            //
-            // Getting this granularity wrong is what made three earlier versions of this
-            // function useless. Skipping whole segments that share an endpoint hid the
-            // shape that actually occurs — a cusp where a cubic doubles back across the
-            // line feeding it, crossing about half a pixel from the join. Nudging the
-            // shared point instead over-fired, because the chord error from flattening a
-            // cubic dwarfs any nudge small enough to be safe.
-            let ends_i = (starts[i], path.segments[i].end());
-            let ends_j = (starts[j], path.segments[j].end());
-            let touch = |a: Point, b: Point| (a.x - b.x).abs() < EPS && (a.y - b.y).abs() < EPS;
-            let (ni, nj) = (flat[i].len(), flat[j].len());
-            // The one sub-segment pair that legitimately meets, if these two segments are
-            // consecutive in the chain.
-            let exempt: Option<(usize, usize)> = if touch(ends_i.1, ends_j.0) {
-                Some((ni - 2, 0))
-            } else if touch(ends_j.1, ends_i.0) {
-                Some((0, nj - 2))
-            } else if touch(ends_i.0, ends_j.0) {
-                Some((0, 0))
-            } else if touch(ends_i.1, ends_j.1) {
-                Some((ni - 2, nj - 2))
-            } else {
-                None
-            };
-
-            // The all-pairs walk over two flattened outlines is quadratic in their
-            // sub-segments, and two long arcs flattened to hundreds of points made this
-            // the dominant cost on large inputs. Blocks of sixteen sub-segments carry a
-            // bounding box each, so the quadratic work only happens where the outlines
-            // actually come near each other; the answer is identical.
-            const BLK: usize = 16;
-            let (nbi, nbj) = (ni - 1, nj - 1);
-            /// A block of consecutive segments: `(first, last, bounding box)`.
-            type Block = (usize, usize, (f64, f64, f64, f64));
-            let j_blocks: Vec<Block> = (0..nbj)
-                .step_by(BLK)
-                .map(|b0| {
-                    let b1 = (b0 + BLK).min(nbj);
-                    (b0, b1, bbox(&flat[j][b0..=b1]))
-                })
-                .collect();
-            let mut hit = false;
-            'blocks: for a0 in (0..nbi).step_by(BLK) {
-                let a1 = (a0 + BLK).min(nbi);
-                let bb_a = bbox(&flat[i][a0..=a1]);
-                for &(b0, b1, bb_b) in &j_blocks {
-                    if !boxes_overlap(bb_a, bb_b) {
-                        continue;
-                    }
-                    for a in a0..a1 {
-                        for b in b0..b1 {
-                            if exempt == Some((a, b)) {
-                                continue;
-                            }
-                            if segments_intersect(
-                                flat[i][a],
-                                flat[i][a + 1],
-                                flat[j][b],
-                                flat[j][b + 1],
-                            ) {
-                                hit = true;
-                                break 'blocks;
-                            }
-                        }
-                    }
-                }
-            }
-            if hit {
+            let exempt = exempt_join(
+                (starts[i], path.segments[i].end()),
+                (starts[j], path.segments[j].end()),
+                flat[i].len(),
+                flat[j].len(),
+            );
+            if outlines_cross(&flat[i], &flat[j], exempt) {
                 found.push((i, j));
                 if found.len() >= limit {
                     break 'outer;
@@ -266,6 +218,86 @@ fn self_crossings_inner(
         }
     }
     found
+}
+
+/// The one pair of flattened sub-segments that legitimately meets, if segments `i` and
+/// `j` (given by their end points, flattened to `ni` and `nj` points) are consecutive
+/// in the chain: `(sub-segment of i, sub-segment of j)`.
+///
+/// The criterion is the renderer's, not a per-segment one: a ring is invalid exactly when
+/// two *non-consecutive* sub-segments of its flattened outline intersect. Consecutive
+/// sub-segments share a point by construction, and that single pair is the only
+/// exemption.
+///
+/// Getting this granularity wrong is what made three earlier versions of the crossing
+/// test useless. Skipping whole segments that share an endpoint hid the shape that
+/// actually occurs — a cusp where a cubic doubles back across the line feeding it,
+/// crossing about half a pixel from the join. Nudging the shared point instead
+/// over-fired, because the chord error from flattening a cubic dwarfs any nudge small
+/// enough to be safe.
+///
+/// Ends meet when both coordinates agree to within [`EPS`]; all four pairings are
+/// checked, end-to-start first.
+fn exempt_join(
+    ends_i: (Point, Point),
+    ends_j: (Point, Point),
+    ni: usize,
+    nj: usize,
+) -> Option<(usize, usize)> {
+    let touch = |a: Point, b: Point| (a.x - b.x).abs() < EPS && (a.y - b.y).abs() < EPS;
+    if touch(ends_i.1, ends_j.0) {
+        Some((ni - 2, 0))
+    } else if touch(ends_j.1, ends_i.0) {
+        Some((0, nj - 2))
+    } else if touch(ends_i.0, ends_j.0) {
+        Some((0, 0))
+    } else if touch(ends_i.1, ends_j.1) {
+        Some((ni - 2, nj - 2))
+    } else {
+        None
+    }
+}
+
+/// Whether any sub-segment of the flattened outline `fi` intersects any of `fj`, other
+/// than the `exempt` pair.
+///
+/// The all-pairs walk over two flattened outlines is quadratic in their sub-segments, and
+/// two long arcs flattened to hundreds of points made this the dominant cost on large
+/// inputs. Blocks of sixteen sub-segments carry a bounding box each, so the quadratic
+/// work only happens where the outlines actually come near each other; the answer is
+/// identical.
+fn outlines_cross(fi: &[Point], fj: &[Point], exempt: Option<(usize, usize)>) -> bool {
+    const BLK: usize = 16;
+    let (nbi, nbj) = (fi.len() - 1, fj.len() - 1);
+    /// A block of consecutive segments: `(first, last, bounding box)`.
+    type Block = (usize, usize, (f64, f64, f64, f64));
+    let j_blocks: Vec<Block> = (0..nbj)
+        .step_by(BLK)
+        .map(|b0| {
+            let b1 = (b0 + BLK).min(nbj);
+            (b0, b1, bbox(&fj[b0..=b1]))
+        })
+        .collect();
+    for a0 in (0..nbi).step_by(BLK) {
+        let a1 = (a0 + BLK).min(nbi);
+        let bb_a = bbox(&fi[a0..=a1]);
+        for &(b0, b1, bb_b) in &j_blocks {
+            if !boxes_overlap(bb_a, bb_b) {
+                continue;
+            }
+            for a in a0..a1 {
+                for b in b0..b1 {
+                    if exempt == Some((a, b)) {
+                        continue;
+                    }
+                    if segments_intersect(fi[a], fi[a + 1], fj[b], fj[b + 1]) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Fit a boundary, and if the result crosses itself, fit it again under a tightening span

@@ -1,14 +1,40 @@
 //! Preserve sharp corners when reducing the dynamic program's sampling grid.
+//!
+//! Stage 1 of the shipping fit (see the crate overview): the multimodel program is O(n²)
+//! in its points, so `crate::multimodel` fits a ring of more than 768 points on every
+//! `stride`-th point only, with sigma scaled by `√stride`. A plain stride clips corners
+//! that fall between grid points, so [`indices`] lets each grid sample move, within its
+//! own cell, onto a sharp bend the coarse polygon would otherwise cut.
 
 use crate::FitConfig;
 use inkvec_core::Polyline;
 
 /// Keep a bounded sampling grid, moving each sample within its own cell to a bend
 /// that the chord would otherwise miss by more than the measurement tolerance.
+///
+/// The grid is every `stride`-th index, plus the last point of an open polyline. Each
+/// grid sample `k` (not the two ends of an open polyline) owns the cell of indices
+/// halfway to its grid neighbours, `prev` and `next` (wrapping on a closed polyline).
+/// Within that cell, a candidate `j` is eligible only where the polyline turns sharply
+/// there, by at least the break angle (`crate::tangents::g1_break_radians`), measured
+/// between `p_j − p_prev` and `p_next − p_j`: moving samples on smooth arcs or noisy
+/// straight runs would only chase noise peaks. The eligible candidate farthest from the
+/// chord `p_prev → p_next`, in units of its own sigma,
+///
+/// ```text
+///     r_j = ((p_j − p_prev) × (p_next − p_prev))² / (|p_next − p_prev|²·σ_j²)
+/// ```
+///
+/// replaces sample `k` if `r_j > τ²`. Neighbours are always the original grid positions,
+/// so moves do not interact, and the count never changes. Returned ascending. `stride`
+/// must be at least 1 and the polyline non-empty.
 pub(crate) fn indices(poly: &Polyline, stride: usize, cfg: &FitConfig) -> Vec<usize> {
     let n = poly.len();
     let mut grid: Vec<usize> = (0..n).step_by(stride).collect();
-    if !poly.closed && *grid.last().unwrap() != n - 1 {
+    let last = *grid
+        .last()
+        .expect("the grid holds index 0 of a non-empty polyline");
+    if !poly.closed && last != n - 1 {
         grid.push(n - 1);
     }
     let mut keep = grid.clone();

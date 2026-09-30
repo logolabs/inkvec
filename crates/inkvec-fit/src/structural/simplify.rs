@@ -29,6 +29,20 @@
 //! - **Independent intra-path batching**: Replacements leave their outside neighbours
 //!   unchanged and are applied in descending index order, preserving tangent evidence
 //!   and index stability, including the seam of a closed path.
+//!
+//! # Where this sits
+//!
+//! Research builds only (`INKVEC_STRUCTURAL`): `crate::multimodel` calls
+//! [`simplify_with_poly`] last among the post-fit passes, on the centred polyline, and
+//! scores candidates against the measured points with the same `½·χ² + λ·params` as the
+//! fit. [`simplify_path_structural`] is the geometry-only variant (no measured points:
+//! distortion is the candidate's squared distance from the run it replaces) used by the
+//! tests and `examples/structural_demo.rs`. Coordinates are px, angles radians.
+//!
+//! The pre-filter's `max_dist` is 0.6 px in [`StructuralConfig::default`] but 0.85 px
+//! from [`StructuralConfig::from_fit_config`] (overridable by
+//! `INKVEC_STRUCTURAL_MAX_DIST`), and [`simplify_with_poly`] caps it further by the
+//! run's own sigma.
 
 use crate::curves::{arc_ellipse_center, cubic_self_intersects, Segment, PARAMS_ARC};
 use crate::{FitConfig, FittedPath, PARAMS_LINE};
@@ -124,6 +138,11 @@ pub fn vector_angle(a: Vec2, b: Vec2) -> f64 {
 }
 
 /// Outgoing tangent unit vector of a segment at its end (t = 1).
+///
+/// A line's direction; a cubic's last non-degenerate control-polygon leg (`end − c2`,
+/// else `end − c1`, else the chord, each needing more than 1e-9 px); an arc's
+/// derivative of `c + R(φ)·(rx cos θ, ry sin θ)` at its end angle, in the direction of
+/// travel. `None` when the direction has no length.
 pub fn segment_tangent_end(seg: &Segment, start: Point) -> Option<Vec2> {
     match *seg {
         Segment::Line(end) => unit_vec(end - start),
@@ -163,6 +182,9 @@ pub fn segment_tangent_end(seg: &Segment, start: Point) -> Option<Vec2> {
 }
 
 /// Incoming tangent unit vector of a segment at its start (t = 0).
+///
+/// As [`segment_tangent_end`], at the other end: `c1 − start`, else `c2 − start`, else
+/// the chord for a cubic, the derivative at the start angle for an arc.
 pub fn segment_tangent_start(seg: &Segment, start: Point) -> Option<Vec2> {
     match *seg {
         Segment::Line(end) => unit_vec(end - start),
@@ -204,6 +226,12 @@ pub fn segment_tangent_start(seg: &Segment, start: Point) -> Option<Vec2> {
 /// Sample a run of segments at roughly uniform arc-length intervals.
 ///
 /// Returns `(samples, total_arc_length)`.
+///
+/// Each segment is first evaluated at `clamp(48 / segments, 4, 16)` parameters evenly
+/// spaced in `t`, ends included; `count` points are then placed at equal steps of the
+/// cumulative length of that dense polyline, by linear interpolation, and the first and
+/// last are pinned exactly to `start` and the run's end. The length is that of the dense
+/// polyline, px. `None` for no segments, `count < 2` or a run of (near) zero length.
 pub fn sample_run_uniform(
     start: Point,
     segs: &[Segment],
@@ -246,7 +274,11 @@ pub fn sample_run_uniform(
             cursor += 1;
         }
         if cursor + 1 >= cum_dist.len() {
-            out.push(*raw_pts.last().unwrap());
+            out.push(
+                *raw_pts
+                    .last()
+                    .expect("raw_pts holds at least four samples per segment"),
+            );
         } else {
             let s0 = cum_dist[cursor];
             let s1 = cum_dist[cursor + 1];
@@ -266,7 +298,10 @@ pub fn sample_run_uniform(
         *first = start;
     }
     if let Some(last) = out.last_mut() {
-        *last = segs.last().unwrap().end();
+        *last = segs
+            .last()
+            .expect("segs is non-empty: checked on entry")
+            .end();
     }
     Some((out, total_len))
 }
@@ -281,26 +316,90 @@ pub fn segment_rate(seg: &Segment, cfg: &StructuralConfig) -> f64 {
 }
 
 /// Compute maximum distance from points `samples` to the polyline `ref_pts` using a monotonic cursor.
+///
+/// Both sequences run along the same curve in the same direction, so the nearest
+/// reference point advances monotonically and only a window of `clamp(m/8, 8, 64)`
+/// reference points around the expected position needs searching; see
+/// `NearestScan::distance`. Infinite when either is empty. px.
 pub fn max_deviation_to_samples(samples: &[Point], ref_pts: &[Point]) -> f64 {
     if samples.is_empty() || ref_pts.is_empty() {
         return f64::INFINITY;
     }
-    let m = ref_pts.len();
-    let mut cursor = 0usize;
-    let window = (m / 8).clamp(8, 64);
+    let mut scan = NearestScan::new(samples.len(), ref_pts);
     let mut max_d = 0.0f64;
-
     for (k, &p) in samples.iter().enumerate() {
-        let guess = if samples.len() > 1 {
-            (k * (m - 1)) / (samples.len() - 1)
+        let d = scan.distance(k, p);
+        if d > max_d {
+            max_d = d;
+        }
+    }
+    max_d
+}
+
+/// Check if the maximum deviation from `samples` to `ref_pts` is within `max_dist`, early-exiting on failure.
+///
+/// The same distance as [`max_deviation_to_samples`]. False when either is empty. The
+/// test is one-sided (every sample is near the reference, not the reverse); callers that
+/// need both directions call it twice.
+pub fn is_deviation_within(samples: &[Point], ref_pts: &[Point], max_dist: f64) -> bool {
+    if samples.is_empty() || ref_pts.is_empty() {
+        return false;
+    }
+    let mut scan = NearestScan::new(samples.len(), ref_pts);
+    for (k, &p) in samples.iter().enumerate() {
+        if scan.distance(k, p) > max_dist {
+            return false;
+        }
+    }
+    true
+}
+
+/// The nearest-distance search shared by [`max_deviation_to_samples`],
+/// [`is_deviation_within`] and [`mean_sq_deviation`].
+struct NearestScan<'a> {
+    /// The reference polyline.
+    ref_pts: &'a [Point],
+    /// How many samples will be asked about, to place each one's expected position.
+    samples: usize,
+    /// Index of the previous sample's nearest reference point.
+    cursor: usize,
+    /// Half-width of the searched window, in reference points.
+    window: usize,
+}
+
+impl<'a> NearestScan<'a> {
+    /// A scan over `ref_pts` (non-empty) for `samples` samples.
+    fn new(samples: usize, ref_pts: &'a [Point]) -> Self {
+        let m = ref_pts.len();
+        NearestScan {
+            ref_pts,
+            samples,
+            cursor: 0,
+            window: (m / 8).clamp(8, 64),
+        }
+    }
+
+    /// Distance (px) from sample `k`, at `p`, to the reference polyline.
+    ///
+    /// The nearest reference point is searched within `window` of the larger of the
+    /// sample's proportional position `k·(m−1)/(samples−1)` and the previous match less
+    /// half a window; the distance is then the least of that point's and the two
+    /// adjoining edges', so a point on the curve between two reference points reads as
+    /// on it.
+    fn distance(&mut self, k: usize, p: Point) -> f64 {
+        let ref_pts = self.ref_pts;
+        let m = ref_pts.len();
+        let window = self.window;
+        let guess = if self.samples > 1 {
+            (k * (m - 1)) / (self.samples - 1)
         } else {
             0
         };
-        let centre = guess.max(cursor.saturating_sub(window / 2));
+        let centre = guess.max(self.cursor.saturating_sub(window / 2));
         let lo = centre.saturating_sub(window);
         let hi = (centre + window).min(m - 1);
         let mut best = f64::INFINITY;
-        let mut best_i = cursor;
+        let mut best_i = self.cursor;
         for (i, &q) in ref_pts[lo..=hi].iter().enumerate() {
             let d2 = (p.x - q.x) * (p.x - q.x) + (p.y - q.y) * (p.y - q.y);
             if d2 < best {
@@ -308,7 +407,7 @@ pub fn max_deviation_to_samples(samples: &[Point], ref_pts: &[Point]) -> f64 {
                 best_i = lo + i;
             }
         }
-        cursor = best_i;
+        self.cursor = best_i;
         let mut d = best.sqrt();
         if best_i > 0 {
             d = d.min(point_to_segment_dist(
@@ -324,61 +423,8 @@ pub fn max_deviation_to_samples(samples: &[Point], ref_pts: &[Point]) -> f64 {
                 ref_pts[best_i + 1],
             ));
         }
-        if d > max_d {
-            max_d = d;
-        }
+        d
     }
-    max_d
-}
-
-/// Check if the maximum deviation from `samples` to `ref_pts` is within `max_dist`, early-exiting on failure.
-pub fn is_deviation_within(samples: &[Point], ref_pts: &[Point], max_dist: f64) -> bool {
-    if samples.is_empty() || ref_pts.is_empty() {
-        return false;
-    }
-    let m = ref_pts.len();
-    let mut cursor = 0usize;
-    let window = (m / 8).clamp(8, 64);
-
-    for (k, &p) in samples.iter().enumerate() {
-        let guess = if samples.len() > 1 {
-            (k * (m - 1)) / (samples.len() - 1)
-        } else {
-            0
-        };
-        let centre = guess.max(cursor.saturating_sub(window / 2));
-        let lo = centre.saturating_sub(window);
-        let hi = (centre + window).min(m - 1);
-        let mut best_d2 = f64::INFINITY;
-        let mut best_i = cursor;
-        for (i, &q) in ref_pts[lo..=hi].iter().enumerate() {
-            let d2 = (p.x - q.x) * (p.x - q.x) + (p.y - q.y) * (p.y - q.y);
-            if d2 < best_d2 {
-                best_d2 = d2;
-                best_i = lo + i;
-            }
-        }
-        cursor = best_i;
-        let mut d = best_d2.sqrt();
-        if best_i > 0 {
-            d = d.min(point_to_segment_dist(
-                p,
-                ref_pts[best_i - 1],
-                ref_pts[best_i],
-            ));
-        }
-        if best_i + 1 < m {
-            d = d.min(point_to_segment_dist(
-                p,
-                ref_pts[best_i],
-                ref_pts[best_i + 1],
-            ));
-        }
-        if d > max_dist {
-            return false;
-        }
-    }
-    true
 }
 
 /// Distance from point `p` to line segment `a -> b`.
@@ -394,55 +440,33 @@ fn point_to_segment_dist(p: Point, a: Point, b: Point) -> f64 {
 }
 
 /// Mean squared distance from `samples` to polyline `ref_pts`.
+///
+/// px², with the distance of [`max_deviation_to_samples`]; infinite when either is empty.
 pub fn mean_sq_deviation(samples: &[Point], ref_pts: &[Point]) -> f64 {
     if samples.is_empty() || ref_pts.is_empty() {
         return f64::INFINITY;
     }
-    let m = ref_pts.len();
-    let mut cursor = 0usize;
-    let window = (m / 8).clamp(8, 64);
+    let mut scan = NearestScan::new(samples.len(), ref_pts);
     let mut sum_sq = 0.0;
-
     for (k, &p) in samples.iter().enumerate() {
-        let guess = if samples.len() > 1 {
-            (k * (m - 1)) / (samples.len() - 1)
-        } else {
-            0
-        };
-        let centre = guess.max(cursor.saturating_sub(window / 2));
-        let lo = centre.saturating_sub(window);
-        let hi = (centre + window).min(m - 1);
-        let mut best = f64::INFINITY;
-        let mut best_i = cursor;
-        for (i, &q) in ref_pts[lo..=hi].iter().enumerate() {
-            let d2 = (p.x - q.x) * (p.x - q.x) + (p.y - q.y) * (p.y - q.y);
-            if d2 < best {
-                best = d2;
-                best_i = lo + i;
-            }
-        }
-        cursor = best_i;
-        let mut d = best.sqrt();
-        if best_i > 0 {
-            d = d.min(point_to_segment_dist(
-                p,
-                ref_pts[best_i - 1],
-                ref_pts[best_i],
-            ));
-        }
-        if best_i + 1 < m {
-            d = d.min(point_to_segment_dist(
-                p,
-                ref_pts[best_i],
-                ref_pts[best_i + 1],
-            ));
-        }
+        let d = scan.distance(k, p);
         sum_sq += d * d;
     }
     sum_sq / samples.len() as f64
 }
 
 /// Generate candidate replacements for `run`, filtered by geometric deviation and tangent continuity.
+///
+/// The run (starting at `start`) is resampled at 48 points of equal arc length
+/// ([`sample_run_uniform`]), and four single-segment candidates with the same end
+/// points are fitted to them: the chord, a cubic whose end directions are the outside
+/// neighbours' (`before` is the previous segment with its start point, `after` the next
+/// segment; the run's own end directions stand in where there is no neighbour), a free
+/// cubic, and a circular arc. A candidate survives if its 48 samples and the run's are
+/// within `cfg.max_dist` of each other both ways, and if at each end the kink it makes
+/// with the neighbour is no worse than `max(existing kink, cfg.min_kink_rad) + 1e-6`.
+/// Empty when the run is empty, degenerate, or closes on itself (ends under 1e-5 px
+/// apart).
 pub fn generate_replacements(
     start: Point,
     run: &[Segment],
@@ -450,16 +474,16 @@ pub fn generate_replacements(
     after: Option<&Segment>,
     cfg: &StructuralConfig,
 ) -> Vec<Segment> {
-    if run.is_empty() {
+    let Some(last) = run.last() else {
         return Vec::new();
-    }
+    };
     let count = 48;
     let Some((z, total_len)) = sample_run_uniform(start, run, count) else {
         return Vec::new();
     };
 
     let a = start;
-    let b = run.last().unwrap().end();
+    let b = last.end();
     if a.dist(b) < 1e-5 {
         return Vec::new();
     }
@@ -475,7 +499,7 @@ pub fn generate_replacements(
         .or_else(|| segment_tangent_start(&run[0], a));
     let w_opt = after
         .and_then(|s| segment_tangent_start(s, b))
-        .or_else(|| segment_tangent_end(run.last().unwrap(), run_prev_point(start, run)));
+        .or_else(|| segment_tangent_end(last, run_prev_point(start, run)));
 
     if let (Some(v), Some(w)) = (v_opt, w_opt) {
         if let Some(cubic) = fit_c1_cubic(&z, a, b, v, w, total_len) {
@@ -497,7 +521,7 @@ pub fn generate_replacements(
     let mut filtered = Vec::with_capacity(candidates.len());
     let ref_before_tan = before.and_then(|(s, st)| segment_tangent_end(s, st));
     let ref_run_start_tan = segment_tangent_start(&run[0], a);
-    let ref_run_end_tan = segment_tangent_end(run.last().unwrap(), run_prev_point(start, run));
+    let ref_run_end_tan = segment_tangent_end(last, run_prev_point(start, run));
     let ref_after_tan = after.and_then(|s| segment_tangent_start(s, b));
 
     for cand in candidates {
@@ -555,6 +579,22 @@ fn run_prev_point(start: Point, run: &[Segment]) -> Point {
 }
 
 /// Fit C1-constrained cubic using 2x2 non-negative least squares for handle lengths.
+///
+/// Despite the name the constraint is G1: the end directions are fixed to the unit
+/// vectors `v` (leaving `a`) and `w` (arriving at `b`) and only the arm lengths `x0`,
+/// `x1` (px) are fitted. Sample `k` of `z` is given the parameter `t_k = k/(n−1)`, a
+/// chord-length parametrisation since `z` is evenly spaced along the run, and
+///
+/// ```text
+///     B(t) = (b0 + b1)·a + (b2 + b3)·b + b1·x0·v − b2·x1·w
+/// ```
+///
+/// is linear in `(x0, x1)`, so `Σ|z_k − B(t_k)|²` is a convex quadratic with normal
+/// matrix `[[Σb1², −(v·w)·Σb1b2], [−(v·w)·Σb1b2, Σb2²]]`. It is minimised over the box
+/// `0 ≤ x ≤ 2·total_len`: the unconstrained minimiser if it lies inside, otherwise the
+/// best of the clamped one-dimensional minimisers along the four edges (and the
+/// origin), which for a convex quadratic is the box minimum. `None` for fewer than two
+/// samples or a cubic that crosses itself.
 fn fit_c1_cubic(
     z: &[Point],
     a: Point,
@@ -651,6 +691,11 @@ fn fit_c1_cubic(
 }
 
 /// Fit free cubic through endpoints using linear least squares on Bernstein basis.
+///
+/// Ends pinned to `a` and `b`, parameters `t_k = k/(n−1)` as in `fit_c1_cubic`, and the
+/// two control points solved from the 2x2 normal equations shared by x and y (Cramer's
+/// rule), unweighted. `None` for fewer than two samples, a singular system or a cubic
+/// that crosses itself.
 fn fit_free_cubic(z: &[Point], a: Point, b: Point) -> Option<Segment> {
     let n = z.len();
     if n < 2 {
@@ -703,6 +748,14 @@ fn fit_free_cubic(z: &[Point], a: Point, b: Point) -> Option<Segment> {
 }
 
 /// Fit circular arc through endpoints minimizing radial error via golden section search.
+///
+/// Every circle through `a` and `b` has its centre on their perpendicular bisector,
+/// `c(h) = mid + h·n`, so the fit is one-dimensional: minimise the mean squared radial
+/// error `mean_k (|z_k − c(h)| − |a − c(h)|)²` over `h ∈ [−10, 10]·chord` by golden-section
+/// search (38 steps shrink the bracket by about 1e-8). The sweep is the unwrapped change
+/// of the samples' angle about the centre; arcs sweeping under 0.02 rad (a line's job) or
+/// over 1.9π are refused, as is a chord under 1e-6 px. Assumes the loss is unimodal in
+/// `h`, which holds for samples that really lie near one arc.
 fn fit_circular_arc(z: &[Point], a: Point, b: Point) -> Option<Segment> {
     let chord = a.dist(b);
     if chord <= 1e-6 {
@@ -804,6 +857,10 @@ pub struct Proposal {
 /// Each proposal was checked against unchanged outside tangents. Adjacent
 /// replacements share that evidence and must be deferred to a later round.
 /// The first and last runs are adjacent too when the path is closed.
+///
+/// The runs are the segment ranges `[s, e)` and `[bs, be)` of a path of `n` segments.
+/// They are independent when at least one untouched segment separates them (`e < bs`
+/// or `s > be`) and, on a closed path, they do not meet across the seam.
 fn independent_runs(s: usize, e: usize, bs: usize, be: usize, n: usize, closed: bool) -> bool {
     (e < bs || s > be) && !(closed && ((s == 0 && be == n) || (bs == 0 && e == n)))
 }
@@ -812,6 +869,19 @@ fn independent_runs(s: usize, e: usize, bs: usize, be: usize, n: usize, closed: 
 ///
 /// Runs multiple greedy rounds of candidate generation and non-overlapping batch
 /// replacement. Returns the total number of segments eliminated.
+///
+/// Geometry only: each run of `cfg.run_lengths` segments is replaced by a candidate from
+/// [`generate_replacements`] when that saves parameters and
+///
+/// ```text
+///     gain = −Δdistortion + λ·(params_old − params_new) > 1e-9
+/// ```
+///
+/// with distortion the mean squared distance (px²) of 64 candidate samples from 64
+/// samples of the run, and `λ` = `cfg.lambda`. Each round takes the proposals in
+/// descending gain, keeps those independent of every one already kept, and applies them
+/// back to front; rounds stop when nothing is proposed or after `cfg.max_rounds`. A path
+/// whose end meets its start is treated as closed.
 pub fn simplify_path_structural(path: &mut FittedPath, cfg: &StructuralConfig) -> usize {
     if path.segments.len() < 2 {
         return 0;
@@ -826,86 +896,7 @@ pub fn simplify_path_structural(path: &mut FittedPath, cfg: &StructuralConfig) -
             break;
         }
 
-        // Cache cumulative start points
-        let mut starts = Vec::with_capacity(n);
-        let mut cur = path.start;
-        for s in &path.segments {
-            starts.push(cur);
-            cur = s.end();
-        }
-
-        let mut proposals: Vec<Proposal> = Vec::new();
-
-        for start_idx in 0..n {
-            for &run_len in &cfg.run_lengths {
-                let end_idx = start_idx + run_len;
-                if end_idx > n {
-                    continue;
-                }
-
-                let run = &path.segments[start_idx..end_idx];
-                let run_start = starts[start_idx];
-
-                let before = if start_idx > 0 {
-                    Some((&path.segments[start_idx - 1], starts[start_idx - 1]))
-                } else if closed && n > 1 {
-                    Some((&path.segments[n - 1], starts[n - 1]))
-                } else {
-                    None
-                };
-
-                let after = if end_idx < n {
-                    Some(&path.segments[end_idx])
-                } else if closed && n > 1 {
-                    Some(&path.segments[0])
-                } else {
-                    None
-                };
-
-                let cand_list = generate_replacements(run_start, run, before, after, cfg);
-                if cand_list.is_empty() {
-                    continue;
-                }
-
-                // Sample run ground truth
-                let Some((ref_samples, _)) = sample_run_uniform(run_start, run, 64) else {
-                    continue;
-                };
-
-                let old_rate: f64 = run.iter().map(|s| segment_rate(s, cfg)).sum();
-                let old_dist = mean_sq_deviation(&ref_samples, &ref_samples); // 0.0
-
-                for cand in cand_list {
-                    let repl_rate = segment_rate(&cand, cfg);
-                    let saving = old_rate - repl_rate;
-                    if saving <= 0.0 {
-                        continue;
-                    }
-
-                    // Sample candidate
-                    let mut cand_samples = Vec::with_capacity(64);
-                    for k in 0..64 {
-                        let t = k as f64 / 63.0;
-                        cand_samples.push(eval_segment(&cand, run_start, t));
-                    }
-
-                    let new_dist = mean_sq_deviation(&cand_samples, &ref_samples);
-                    let delta_dist = new_dist - old_dist;
-                    let gain = -delta_dist + cfg.lambda * saving;
-
-                    if gain > 1e-9 {
-                        proposals.push(Proposal {
-                            start: start_idx,
-                            end: end_idx,
-                            repl: cand,
-                            saving,
-                            gain,
-                        });
-                    }
-                }
-            }
-        }
-
+        let mut proposals = structural_proposals(path, cfg, closed);
         if proposals.is_empty() {
             break;
         }
@@ -914,15 +905,7 @@ pub fn simplify_path_structural(path: &mut FittedPath, cfg: &StructuralConfig) -
         proposals.sort_by(|a, b| b.gain.total_cmp(&a.gain));
 
         // Greedy disjoint interval packing
-        let mut batch: Vec<Proposal> = Vec::new();
-        for prop in proposals {
-            let overlaps = batch
-                .iter()
-                .any(|b| !independent_runs(prop.start, prop.end, b.start, b.end, n, closed));
-            if !overlaps {
-                batch.push(prop);
-            }
-        }
+        let mut batch = independent_batch(proposals, n, closed, |p| (p.start, p.end));
 
         if batch.is_empty() {
             break;
@@ -942,8 +925,149 @@ pub fn simplify_path_structural(path: &mut FittedPath, cfg: &StructuralConfig) -
     eliminated
 }
 
+/// Every proposal of one round of [`simplify_path_structural`], in scan order.
+fn structural_proposals(path: &FittedPath, cfg: &StructuralConfig, closed: bool) -> Vec<Proposal> {
+    let n = path.segments.len();
+    let starts = segment_starts(path);
+    let mut proposals: Vec<Proposal> = Vec::new();
+
+    for start_idx in 0..n {
+        for &run_len in &cfg.run_lengths {
+            let end_idx = start_idx + run_len;
+            if end_idx > n {
+                continue;
+            }
+
+            let run = &path.segments[start_idx..end_idx];
+            let run_start = starts[start_idx];
+            let (before, after) = run_neighbours(path, &starts, (start_idx, end_idx), closed);
+
+            let cand_list = generate_replacements(run_start, run, before, after, cfg);
+            if cand_list.is_empty() {
+                continue;
+            }
+
+            // Sample run ground truth
+            let Some((ref_samples, _)) = sample_run_uniform(run_start, run, 64) else {
+                continue;
+            };
+
+            let old_rate: f64 = run.iter().map(|s| segment_rate(s, cfg)).sum();
+            let old_dist = mean_sq_deviation(&ref_samples, &ref_samples); // 0.0
+
+            for cand in cand_list {
+                let repl_rate = segment_rate(&cand, cfg);
+                let saving = old_rate - repl_rate;
+                if saving <= 0.0 {
+                    continue;
+                }
+
+                // Sample candidate
+                let mut cand_samples = Vec::with_capacity(64);
+                for k in 0..64 {
+                    let t = k as f64 / 63.0;
+                    cand_samples.push(eval_segment(&cand, run_start, t));
+                }
+
+                let new_dist = mean_sq_deviation(&cand_samples, &ref_samples);
+                let delta_dist = new_dist - old_dist;
+                let gain = -delta_dist + cfg.lambda * saving;
+
+                if gain > 1e-9 {
+                    proposals.push(Proposal {
+                        start: start_idx,
+                        end: end_idx,
+                        repl: cand,
+                        saving,
+                        gain,
+                    });
+                }
+            }
+        }
+    }
+    proposals
+}
+
+/// Where each segment of `path` starts: `path.start`, then every segment's end but the
+/// last.
+fn segment_starts(path: &FittedPath) -> Vec<Point> {
+    let mut starts = Vec::with_capacity(path.segments.len());
+    let mut cur = path.start;
+    for s in &path.segments {
+        starts.push(cur);
+        cur = s.end();
+    }
+    starts
+}
+
+/// The segments outside the run `[start_idx, end_idx)`: the one before it with its start
+/// point, and the one after it. On a closed path the seam wraps; on an open one the ends
+/// have none.
+fn run_neighbours<'p>(
+    path: &'p FittedPath,
+    starts: &[Point],
+    (start_idx, end_idx): (usize, usize),
+    closed: bool,
+) -> (Option<(&'p Segment, Point)>, Option<&'p Segment>) {
+    let n = path.segments.len();
+    let before = if start_idx > 0 {
+        Some((&path.segments[start_idx - 1], starts[start_idx - 1]))
+    } else if closed && n > 1 {
+        Some((&path.segments[n - 1], starts[n - 1]))
+    } else {
+        None
+    };
+
+    let after = if end_idx < n {
+        Some(&path.segments[end_idx])
+    } else if closed && n > 1 {
+        Some(&path.segments[0])
+    } else {
+        None
+    };
+    (before, after)
+}
+
+/// Greedy disjoint packing: walk `proposals` in the order given (best first) and keep each
+/// whose run, `span(proposal)`, is independent of every run already kept
+/// ([`independent_runs`]).
+fn independent_batch<T>(
+    proposals: Vec<T>,
+    n: usize,
+    closed: bool,
+    span: impl Fn(&T) -> (usize, usize),
+) -> Vec<T> {
+    let mut batch: Vec<T> = Vec::new();
+    for prop in proposals {
+        let (s, e) = span(&prop);
+        let overlaps = batch.iter().any(|b| {
+            let (bs, be) = span(b);
+            !independent_runs(s, e, bs, be, n, closed)
+        });
+        if !overlaps {
+            batch.push(prop);
+        }
+    }
+    batch
+}
+
 /// Simplify a [`FittedPath`] using the exact contour points and chi2 weights from tracing.
 /// Missing contour correspondence is not permission to substitute a different loss.
+///
+/// `poly` is the measured polyline the path was fitted to and `vertices` the index in it
+/// of every segment end (one more than there are segments). A run is replaced by a
+/// candidate from [`generate_replacements`] when the candidate has fewer parameters and
+///
+/// ```text
+///     ½·χ²_new + λ·params_new < ½·χ²_old + λ·params_old − 1e-9
+/// ```
+///
+/// with `χ²` sampled against the run's measured points (`crate::curves::chi2`) and `λ`
+/// from `cfg`. A run whose vertex indices wrap across the seam of a closed contour is
+/// skipped rather than scored some other way. Batching is as in
+/// [`simplify_path_structural`], and `vertices` is kept aligned. Returns the number of
+/// segments eliminated; 0 without changing anything when the correspondence is
+/// inconsistent.
 pub fn simplify_with_poly(
     path: &mut FittedPath,
     poly: &Polyline,
@@ -970,124 +1094,14 @@ pub fn simplify_with_poly(
             break;
         }
 
-        let mut starts = Vec::with_capacity(n);
-        let mut cur = path.start;
-        for s in &path.segments {
-            starts.push(cur);
-            cur = s.end();
-        }
-
-        let mut proposals: Vec<(usize, usize, Segment, f64)> = Vec::new();
-
-        for start_idx in 0..n {
-            for &run_len in &struct_cfg.run_lengths {
-                let end_idx = start_idx + run_len;
-                if end_idx > n {
-                    continue;
-                }
-
-                let run = &path.segments[start_idx..end_idx];
-                let run_start = starts[start_idx];
-
-                let before = if start_idx > 0 {
-                    Some((&path.segments[start_idx - 1], starts[start_idx - 1]))
-                } else if closed && n > 1 {
-                    Some((&path.segments[n - 1], starts[n - 1]))
-                } else {
-                    None
-                };
-
-                let after = if end_idx < n {
-                    Some(&path.segments[end_idx])
-                } else if closed && n > 1 {
-                    Some(&path.segments[0])
-                } else {
-                    None
-                };
-
-                // Vertex correspondence must be resolved before we can compute
-                // sigma — do the bounds check here and skip early if invalid.
-                let a_vert = verts[start_idx];
-                let b_vert = verts[end_idx];
-                // Closed contour indices wrap at the seam. That is valid
-                // correspondence; only this non-contiguous span is unsupported.
-                if b_vert <= a_vert || b_vert >= poly.points.len() {
-                    continue;
-                }
-
-                let pts_span = &poly.points[a_vert..=b_vert];
-                let sig_span = &poly.sigma[a_vert..=b_vert];
-
-                let cand_list = {
-                    // The fixed max_dist bound (default 0.85 px) prevents the simplified
-                    // curve from deviating too far from the *run's own* polyline.  But it
-                    // does not prevent the candidate from bulging toward an adjacent
-                    // boundary — and if it does, the ring-repair stage introduces extra
-                    // capped refits, inflating the final output.
-                    //
-                    // A tighter, signal-aware limit: the trace already tells us how
-                    // uncertain each boundary point is (sigma).  A highly-confident
-                    // boundary (small sigma) is precisely located and probably close to
-                    // a neighbouring edge.  Cap max_dist to sigma_cap * mean_sigma(span)
-                    // for such spans, so the structural pass is more conservative exactly
-                    // where crossing risk is highest.
-                    let mean_sig = if !sig_span.is_empty() {
-                        sig_span.iter().sum::<f64>() / sig_span.len() as f64
-                    } else {
-                        struct_cfg.max_dist
-                    };
-                    let run_max_dist = struct_cfg.max_dist.min(sigma_cap() * mean_sig);
-                    let run_cfg = StructuralConfig {
-                        max_dist: run_max_dist,
-                        ..struct_cfg.clone()
-                    };
-                    generate_replacements(run_start, run, before, after, &run_cfg)
-                };
-
-                if cand_list.is_empty() {
-                    continue;
-                }
-
-                let old_chi2 = crate::curves::chi2(pts_span, sig_span, run_start, run);
-                let old_params: f64 = run.iter().map(|s| s.params()).sum();
-                let old_cost = 0.5 * old_chi2 + cfg.lambda * old_params;
-
-                for cand in cand_list {
-                    let new_chi2 = crate::curves::chi2(
-                        pts_span,
-                        sig_span,
-                        run_start,
-                        std::slice::from_ref(&cand),
-                    );
-                    let new_params = cand.params();
-                    if new_params >= old_params {
-                        continue;
-                    }
-                    let new_cost = 0.5 * new_chi2 + cfg.lambda * new_params;
-
-                    if new_cost < old_cost - 1e-9 {
-                        let gain = old_cost - new_cost;
-                        proposals.push((start_idx, end_idx, cand, gain));
-                    }
-                }
-            }
-        }
-
+        let mut proposals = poly_proposals(path, poly, &verts, cfg, &struct_cfg, closed);
         if proposals.is_empty() {
             break;
         }
 
         proposals.sort_by(|a, b| b.3.total_cmp(&a.3));
 
-        let mut batch = Vec::new();
-        for (s, e, repl, _) in proposals {
-            let overlaps = batch
-                .iter()
-                .any(|&(bs, be, _, _)| !independent_runs(s, e, bs, be, n, closed));
-            if !overlaps {
-                batch.push((s, e, repl, ()));
-            }
-        }
+        let mut batch = independent_batch(proposals, n, closed, |p| (p.0, p.1));
 
         if batch.is_empty() {
             break;
@@ -1104,6 +1118,97 @@ pub fn simplify_with_poly(
     }
 
     eliminated
+}
+
+/// Every proposal of one round of [`simplify_with_poly`], in scan order, as
+/// `(start, end, replacement, gain)` with the gain in nats.
+fn poly_proposals(
+    path: &FittedPath,
+    poly: &Polyline,
+    verts: &[usize],
+    cfg: &FitConfig,
+    struct_cfg: &StructuralConfig,
+    closed: bool,
+) -> Vec<(usize, usize, Segment, f64)> {
+    let n = path.segments.len();
+    let starts = segment_starts(path);
+    let mut proposals: Vec<(usize, usize, Segment, f64)> = Vec::new();
+
+    for start_idx in 0..n {
+        for &run_len in &struct_cfg.run_lengths {
+            let end_idx = start_idx + run_len;
+            if end_idx > n {
+                continue;
+            }
+
+            let run = &path.segments[start_idx..end_idx];
+            let run_start = starts[start_idx];
+            let (before, after) = run_neighbours(path, &starts, (start_idx, end_idx), closed);
+
+            // Vertex correspondence must be resolved before we can compute
+            // sigma — do the bounds check here and skip early if invalid.
+            let a_vert = verts[start_idx];
+            let b_vert = verts[end_idx];
+            // Closed contour indices wrap at the seam. That is valid
+            // correspondence; only this non-contiguous span is unsupported.
+            if b_vert <= a_vert || b_vert >= poly.points.len() {
+                continue;
+            }
+
+            let pts_span = &poly.points[a_vert..=b_vert];
+            let sig_span = &poly.sigma[a_vert..=b_vert];
+
+            let cand_list = {
+                // The fixed max_dist bound (default 0.85 px) prevents the simplified
+                // curve from deviating too far from the *run's own* polyline.  But it
+                // does not prevent the candidate from bulging toward an adjacent
+                // boundary — and if it does, the ring-repair stage introduces extra
+                // capped refits, inflating the final output.
+                //
+                // A tighter, signal-aware limit: the trace already tells us how
+                // uncertain each boundary point is (sigma).  A highly-confident
+                // boundary (small sigma) is precisely located and probably close to
+                // a neighbouring edge.  Cap max_dist to sigma_cap * mean_sigma(span)
+                // for such spans, so the structural pass is more conservative exactly
+                // where crossing risk is highest.
+                let mean_sig = if !sig_span.is_empty() {
+                    sig_span.iter().sum::<f64>() / sig_span.len() as f64
+                } else {
+                    struct_cfg.max_dist
+                };
+                let run_max_dist = struct_cfg.max_dist.min(sigma_cap() * mean_sig);
+                let run_cfg = StructuralConfig {
+                    max_dist: run_max_dist,
+                    ..struct_cfg.clone()
+                };
+                generate_replacements(run_start, run, before, after, &run_cfg)
+            };
+
+            if cand_list.is_empty() {
+                continue;
+            }
+
+            let old_chi2 = crate::curves::chi2(pts_span, sig_span, run_start, run);
+            let old_params: f64 = run.iter().map(|s| s.params()).sum();
+            let old_cost = 0.5 * old_chi2 + cfg.lambda * old_params;
+
+            for cand in cand_list {
+                let new_chi2 =
+                    crate::curves::chi2(pts_span, sig_span, run_start, std::slice::from_ref(&cand));
+                let new_params = cand.params();
+                if new_params >= old_params {
+                    continue;
+                }
+                let new_cost = 0.5 * new_chi2 + cfg.lambda * new_params;
+
+                if new_cost < old_cost - 1e-9 {
+                    let gain = old_cost - new_cost;
+                    proposals.push((start_idx, end_idx, cand, gain));
+                }
+            }
+        }
+    }
+    proposals
 }
 
 #[cfg(test)]

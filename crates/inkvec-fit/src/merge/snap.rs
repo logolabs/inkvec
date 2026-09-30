@@ -231,7 +231,7 @@ pub const PARAMS_SMOOTH_CUBIC: f64 = 4.0;
 /// control point's two), for a χ² budget of `λ`: half the `2λ` the saved parameter
 /// would justify, so a stricter test than the cubic pair's. A join is only considered when
 /// its turn is within 20 degrees. Each constrained fit is found by a compass search
-/// ([`compass_search`]) on the subsampled cubic residual (`chi2_cubic`). With
+/// (`compass_search`) on the subsampled cubic residual (`chi2_cubic`). With
 /// `INKVEC_G1DBG` set, every decision is reported on stderr.
 pub fn snap_smooth_joins(
     path: &mut FittedPath,

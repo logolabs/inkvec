@@ -4,6 +4,9 @@
 //! of global optimality over all SVGs. Callers must measure all candidates against
 //! the same image formation model, covariance, support, and smoothness definition.
 //! No epsilon dominance is used: it is generally not transitive.
+//!
+//! Not in the tracing path: nothing in the shipping pipeline calls it. It is exercised
+//! by `examples/pareto_probe.rs` and, for [`refinement`], `examples/refinement_gate.rs`.
 
 pub mod refinement;
 
@@ -42,6 +45,9 @@ impl Score {
 
 /// Return every non-dominated valid input index, including equal-score duplicates.
 ///
+/// Indices are returned in input order. Equal scores do not dominate each other (strict
+/// dominance needs one strictly better objective), which is why duplicates all survive.
+///
 /// O(n²) time and O(n) output storage. Intended for complete drawing proposals,
 /// not for the millions of spans visited by the curve-fitting dynamic program.
 pub fn frontier(scores: &[Score]) -> Vec<usize> {
@@ -54,7 +60,8 @@ pub fn frontier(scores: &[Score]) -> Vec<usize> {
         .collect()
 }
 
-/// Fixed admissibility budgets, shared by every candidate.
+/// Fixed admissibility budgets, shared by every candidate. Each must be finite and
+/// non-negative for [`select`] to consider any candidate.
 #[derive(Clone, Copy, Debug)]
 pub struct Budget {
     /// Maximum allowed pixel-domain loss.

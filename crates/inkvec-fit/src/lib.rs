@@ -312,6 +312,7 @@ struct DirectionCone {
 }
 
 impl DirectionCone {
+    /// A cone no point has constrained yet: every direction is admissible.
     fn new() -> Self {
         Self {
             lo: 0.0,
@@ -321,6 +322,7 @@ impl DirectionCone {
         }
     }
 
+    /// True once the constraints exclude every direction.
     fn is_empty(&self) -> bool {
         self.initialized && self.lo > self.hi
     }

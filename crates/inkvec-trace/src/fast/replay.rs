@@ -165,9 +165,33 @@ fn min_ms(reps: usize, mut f: impl FnMut()) -> f64 {
         .fold(f64::INFINITY, f64::min)
 }
 
-/// Single-threaded timings per dump set, smallest of `INKVEC_FFD_REPS` (default 5): the
-/// whole `fit_edge` over every edge, the polygon stage against its reference, and the sum
-/// over images of the slowest edge's `fit_edge` (what bounds the parallel fit's wall time).
+/// True for the image-frame ring of a dump: a closed edge whose bounding box is the
+/// bounding box of every edge of the map, with its corner at the image's (-0.5, -0.5).
+fn frame_flags(edges: &[DumpEdge]) -> Vec<bool> {
+    let bbox = |pts: &mut dyn Iterator<Item = Point>| {
+        pts.fold(
+            (f64::MAX, f64::MAX, f64::MIN, f64::MIN),
+            |(x0, y0, x1, y1), p| (x0.min(p.x), y0.min(p.y), x1.max(p.x), y1.max(p.y)),
+        )
+    };
+    let all = bbox(&mut edges.iter().flat_map(|e| e.pts.iter().copied()));
+    edges
+        .iter()
+        .map(|e| {
+            e.closed
+                && !e.pts.is_empty()
+                && all.0 == -0.5
+                && all.1 == -0.5
+                && bbox(&mut e.pts.iter().copied()) == all
+        })
+        .collect()
+}
+
+/// Single-threaded timings per dump set, smallest of `INKVEC_FFD_REPS` (default 5), in
+/// ms: the whole `fit_edge` over every edge; the primitive test on the rings; the polygon
+/// stage on the image frame and on the other edges, and on all of them with the kept
+/// reference; and the sum over images of the slowest edge's `fit_edge` (what bounds the
+/// parallel fit's wall time).
 #[test]
 #[ignore = "needs INKVEC_FFD_DIR"]
 fn replay_timing() {
@@ -181,8 +205,16 @@ fn replay_timing() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(5);
     let base = FastFit::default();
+    const COLS: [&str; 6] = [
+        "fit_edge",
+        "prims",
+        "poly frame",
+        "poly other",
+        "poly ref",
+        "sum slowest",
+    ];
     // Per top-level set (the dump directory's first component below the root).
-    let mut sets: std::collections::BTreeMap<String, [f64; 4]> = Default::default();
+    let mut sets: std::collections::BTreeMap<String, [f64; 6]> = Default::default();
     let root = PathBuf::from(std::env::var_os("INKVEC_FFD_DIR").expect("set"));
     for f in &files {
         let set = f
@@ -192,61 +224,87 @@ fn replay_timing() {
             .map(|c| c.as_os_str().to_string_lossy().into_owned())
             .unwrap_or_default();
         let edges = load(f);
+        let frame = frame_flags(&edges);
         let cfgs: Vec<FastFit> = edges
             .iter()
             .map(|e| base.for_contrast(e.contrast))
             .collect();
-        let inputs: Vec<(Vec<Point>, bool, f64)> = edges
+        let inputs: Vec<(Vec<Point>, bool, f64, bool)> = edges
             .iter()
             .zip(&cfgs)
-            .filter_map(|(e, c)| polygon_input(e).map(|p| (p, e.closed, c.poly_tol)))
+            .zip(&frame)
+            .filter_map(|((e, c), &fr)| polygon_input(e).map(|p| (p, e.closed, c.poly_tol, fr)))
             .collect();
-        let whole = min_ms(reps, || {
-            for (e, c) in edges.iter().zip(&cfgs) {
-                black_box(super::fit_edge(black_box(&e.pts), e.closed, c));
-            }
-        });
-        let poly_new = min_ms(reps, || {
-            for (p, closed, tol) in &inputs {
-                if *closed {
-                    black_box(polygon::closed(black_box(p), *tol));
-                } else {
-                    black_box(polygon::open(black_box(p), *tol));
-                }
-            }
-        });
-        let poly_old = min_ms(reps, || {
-            for (p, closed, tol) in &inputs {
-                if *closed {
-                    black_box(polygon::tests::closed_ref(black_box(p), *tol));
-                } else {
-                    black_box(polygon::tests::open_ref(black_box(p), *tol));
-                }
-            }
-        });
-        let slowest = edges
+        let rings: Vec<Vec<Point>> = edges
             .iter()
-            .zip(&cfgs)
-            .map(|(e, c)| {
-                min_ms(reps, || {
-                    black_box(super::fit_edge(black_box(&e.pts), e.closed, c));
-                })
+            .filter(|e| e.closed)
+            .map(|e| {
+                let pts = if e.pts.len() >= 8 {
+                    &e.pts[1..]
+                } else {
+                    &e.pts[..]
+                };
+                smooth::denoise(pts, true)
             })
-            .fold(0.0f64, f64::max);
+            .collect();
+        let poly = |want_frame: bool, reference: bool| {
+            min_ms(reps, || {
+                for (p, closed, tol, fr) in &inputs {
+                    if *fr != want_frame && !reference {
+                        continue;
+                    }
+                    match (*closed, reference) {
+                        (true, false) => drop(black_box(polygon::closed(black_box(p), *tol))),
+                        (false, false) => drop(black_box(polygon::open(black_box(p), *tol))),
+                        (true, true) => {
+                            drop(black_box(polygon::tests::closed_ref(black_box(p), *tol)))
+                        }
+                        (false, true) => {
+                            drop(black_box(polygon::tests::open_ref(black_box(p), *tol)))
+                        }
+                    }
+                }
+            })
+        };
+        let row = [
+            min_ms(reps, || {
+                for (e, c) in edges.iter().zip(&cfgs) {
+                    black_box(super::fit_edge(black_box(&e.pts), e.closed, c));
+                }
+            }),
+            min_ms(reps, || {
+                for r in &rings {
+                    black_box(super::prims::primitive(black_box(r)));
+                }
+            }),
+            poly(true, false),
+            poly(false, false),
+            poly(false, true),
+            edges
+                .iter()
+                .zip(&cfgs)
+                .map(|(e, c)| {
+                    min_ms(reps, || {
+                        black_box(super::fit_edge(black_box(&e.pts), e.closed, c));
+                    })
+                })
+                .fold(0.0f64, f64::max),
+        ];
         let s = sets.entry(set).or_default();
-        s[0] += whole;
-        s[1] += poly_new;
-        s[2] += poly_old;
-        s[3] += slowest;
+        for (a, b) in s.iter_mut().zip(row) {
+            *a += b;
+        }
     }
-    eprintln!(
-        "{:<10}{:>14}{:>14}{:>14}{:>16}",
-        "set", "fit_edge ms", "polygon ms", "polygon ref", "sum of slowest"
-    );
+    eprint!("{:<10}", "set");
+    for c in COLS {
+        eprint!("{c:>13}");
+    }
+    eprintln!();
     for (k, s) in &sets {
-        eprintln!(
-            "{k:<10}{:>14.2}{:>14.2}{:>14.2}{:>16.2}",
-            s[0], s[1], s[2], s[3]
-        );
+        eprint!("{k:<10}");
+        for v in s {
+            eprint!("{v:>13.2}");
+        }
+        eprintln!();
     }
 }

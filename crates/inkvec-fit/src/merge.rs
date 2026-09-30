@@ -289,6 +289,19 @@ fn chi2_n_below(c: &[Point; 4], poly: &Polyline, a: usize, b: usize, n: usize, b
 /// `None` for a zero-length chord, fewer than two interior points, a contour of zero
 /// length, or when no admissible cubic was found.
 pub fn free_cubic(poly: &Polyline, a: usize, b: usize, p0: Point, p3: Point) -> Option<[Point; 4]> {
+    free_cubic_scored(poly, a, b, p0, p3).map(|(c, _)| c)
+}
+
+/// [`free_cubic`], also returning the cubic's residual, `chi2(&cubic, poly, a, b)` bit for
+/// bit: the search's last best score is exactly that call on exactly that cubic, so the
+/// merge need not compute it a second time.
+fn free_cubic_scored(
+    poly: &Polyline,
+    a: usize,
+    b: usize,
+    p0: Point,
+    p3: Point,
+) -> Option<([Point; 4], f64)> {
     let chord = p0.dist(p3);
     if chord <= 1e-9 || b <= a + 1 {
         return None;
@@ -349,7 +362,7 @@ pub fn free_cubic(poly: &Polyline, a: usize, b: usize, p0: Point, p3: Point) -> 
     if !best.is_finite() {
         return None;
     }
-    Some(search.build(cur[0], cur[1], cur[2], cur[3]))
+    Some((search.build(cur[0], cur[1], cur[2], cur[3]), best))
 }
 
 /// The search space of [`free_cubic`]: the measured run `a..=b`, the fixed end points and
@@ -662,7 +675,7 @@ fn merge_round(
                 path.segments[m - 1].end()
             };
             let run_end = path.segments[m + run - 1].end();
-            let Some(c) = free_cubic(poly, a, b, run_start, run_end) else {
+            let Some((c, new_chi2)) = free_cubic_scored(poly, a, b, run_start, run_end) else {
                 rejected.0.insert(key);
                 continue;
             };
@@ -670,7 +683,6 @@ fn merge_round(
                 rejected.0.insert(key);
                 continue;
             }
-            let new_chi2 = chi2(&c, poly, a, b);
             let new_cost = 0.5 * new_chi2 + floor;
             if new_cost < limit {
                 best = Some((run, c, new_cost));

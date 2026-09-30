@@ -422,3 +422,21 @@ fn a_free_cubic_never_costs_less_than_its_parameters() {
         }
     }
 }
+
+/// The residual the search hands back is the residual of the cubic it hands back.
+#[test]
+fn scored_free_cubic_reports_its_own_residual() {
+    let mut rng = Rng(41);
+    let mut found = 0;
+    for case in 0..40 {
+        let n = 6 + (case * 5) % 50;
+        let (poly, _) = noisy_run(&mut rng, n, [0.0, 0.3][case % 2]);
+        let (a, b) = (0, n - 1);
+        let (p0, p3) = (poly.points[a], poly.points[b]);
+        if let Some((c, x)) = free_cubic_scored(&poly, a, b, p0, p3) {
+            assert_eq!(x.to_bits(), chi2(&c, &poly, a, b).to_bits(), "case {case}");
+            found += 1;
+        }
+    }
+    assert!(found > 30);
+}

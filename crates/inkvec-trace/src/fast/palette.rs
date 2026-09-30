@@ -358,7 +358,9 @@ impl Blends<'_> {
         }
     }
 
-    /// The label of pixel (x, y). An ink-coloured pixel keeps its ink. Any other pixel
+    /// The label of a *blend* pixel (x, y): one whose bin is not itself an ink colour, so
+    /// the lookup table only gave it its nearest ink `own`. (An ink-coloured, "sure", pixel
+    /// keeps its ink; [`label_rows`] settles those inline and never calls this.) The pixel
     /// takes the nearer of its own nearest ink and its ink-coloured neighbours' nearest,
     /// when it is made of that ink: is it, or a blend of it and an ink around. Its own
     /// nearest is how a thin stroke keeps its ink: it has no flat pixel anywhere near, and
@@ -373,12 +375,15 @@ impl Blends<'_> {
     ///
     /// Neighbours are the ink-coloured pixels within one pixel, or, when there are none
     /// (small text downscaled is all blends), within up to [`REACH`].
-    fn label(&self, x: usize, y: usize) -> u16 {
+    ///
+    /// A pure function of the keys in the 9 × 9 window around (x, y), the tables and the
+    /// pixel's own colour: it reads no other label, so pixels may be labelled in any order
+    /// and on any thread. Cost: a window of 9 to 81 table reads, then O(|A| + K) distances
+    /// and, in `explain`, O(|A| · K) blend tests for K inks and |A| inks around. Blends are
+    /// 0.29 % of pixels at 2048 px and 4.4 % on the 128 px screen set (medians).
+    #[inline(never)]
+    fn blend_label(&self, x: usize, y: usize, own: u16) -> u16 {
         let p = y * self.w + x;
-        let (own, is_ink) = self.lut[self.keys[p] as usize];
-        if is_ink {
-            return own;
-        }
         let mut around = Vec::with_capacity(9);
         for r in 1..=REACH {
             self.around(x, y, r, &mut around);
@@ -466,7 +471,7 @@ const KEEP_OWN: f32 = 3.0;
 /// ([`found_inks`]) and add stroke inks with no flat pixel ([`thin_inks`]); snap each
 /// ink's opacity ([`snap_alpha`]); give every occupied bin its nearest ink once, marking it
 /// "is that ink" when within `merge_distance` (OKLab); then label each pixel from that table
-/// ([`Blends::label`]). With no flat bin anywhere (pure noise, or a tiny image) the palette
+/// ([`label_rows`], [`Blends::blend_label`]). With no flat bin anywhere (pure noise, or a tiny image) the palette
 /// is one ink, the mean colour of the image.
 ///
 /// Outputs: the [`Palette`] with `rgb` (sRGB 0..1), `colors` (OKLab of `rgb`), `alpha`
@@ -557,17 +562,30 @@ pub(crate) fn palette_and_labels(
     };
     let mut labels = vec![0u16; n];
     // Row by row in parallel: each label reads only `keys` and the tables, so the result
-    // does not depend on the thread count.
-    labels
+    // does not depend on the thread count. Each worker also counts its labels; integer
+    // counts add up to the same totals in any order.
+    let n_inks = inks.len();
+    let count = labels
         .par_chunks_mut(w.max(1))
         .enumerate()
-        .for_each(|(y, row)| {
-            for (x, out) in row.iter_mut().enumerate() {
-                *out = blends.label(x, y);
-            }
-        });
+        .fold(
+            || vec![0usize; n_inks],
+            |mut count, (y, row)| {
+                label_rows(&blends, y, row, &mut count);
+                count
+            },
+        )
+        .reduce(
+            || vec![0usize; n_inks],
+            |mut a, b| {
+                for (s, v) in a.iter_mut().zip(b) {
+                    *s += v;
+                }
+                a
+            },
+        );
 
-    let weight = ink_shares(&count_labels(&labels, inks.len()), n);
+    let weight = ink_shares(&count, n);
     let rgb_inks: Vec<[f32; 3]> = inks.iter().map(|c| [c[0], c[1], c[2]]).collect();
     (
         Palette {
@@ -580,26 +598,60 @@ pub(crate) fn palette_and_labels(
     )
 }
 
-/// How many pixels carry each of the `n_inks` labels, counted run by run.
+/// Label the pixels of `rows` -- whole image rows, the first of them row `y0` -- and add each
+/// ink's pixel count to `count` (indexed by ink).
 ///
-/// `labels` is row-major and every entry is below `n_inks`. A run of equal labels is counted
-/// in a register and added once when it ends, so the loop does one memory update per run
-/// rather than one per pixel. 99.6 % of neighbouring labels are equal on the 7-image 2048 px
-/// set (99.0 % at the 246-icon screen set's p99), so the per-pixel `count[l] += 1` it
-/// replaces made every iteration wait on the store of the one before it (store-to-load
-/// forwarding on the same address). Θ(n) reads, Θ(runs) writes. An empty slice gives all
-/// zeros.
+/// Per pixel `p` with bin key `k_p`, the lookup table gives `(own, sure) = lut[k_p]`. A sure
+/// pixel's label is `own` and is written here, inline; only the others go to
+/// [`Blends::blend_label`]. That split is the whole change from the per-pixel call it
+/// replaces: 99.7 % of pixels are sure at 2048 px and 95.6 % on the 128 px screen set
+/// (medians), and for them the call was pure overhead -- 3.3 ms of the stage at 2048 px,
+/// 1.0 ms inline (labels identical on 254 images).
+///
+/// *Why identical:* the old `label(x, y)` began `if sure { return own }`, and
+/// `blend_label` is the rest of that function verbatim, so each pixel gets the same value
+/// from the same expression.
+///
+/// Method from: M. J. Swain, D. H. Ballard, "Color Indexing", IJCV 7(1):11–32, 1991,
+/// DOI 10.1007/BF00130487 -- histogram backprojection: a pixel is labelled by looking its
+/// colour bin up in a table built from the histogram. Adapted: the table holds the bin's
+/// nearest ink and whether the bin *is* that ink, and the pixels it cannot decide go to the
+/// neighbourhood rule.
+///
+/// The counts are taken per run of equal labels, in a register, and added once when the
+/// run ends. 99.6 % of neighbouring labels are equal on the 7-image 2048 px set, so the
+/// per-pixel `count[l] += 1` made every iteration wait on the store of the one before it
+/// (store-to-load forwarding on one address). Θ(pixels) reads, Θ(runs) count updates;
+/// an empty `rows` changes nothing.
 ///
 /// Inspired by: Y. Collet, FiniteStateEntropy `lib/hist.c`, `HIST_count_parallel_wksp`,
 /// <https://github.com/Cyan4973/FiniteStateEntropy/blob/dev/lib/hist.c>, which breaks the
 /// same chain with four sub-tables ("noticeably faster when some values are heavily
-/// repeated"). Ours counts runs instead: the labels are an image, so repeats come in runs,
-/// and a run needs no second table.
-fn count_labels(labels: &[u16], n_inks: usize) -> Vec<usize> {
-    let mut count = vec![0usize; n_inks];
+/// repeated"). Ours counts runs instead: labels are an image, so repeats come in runs, and
+/// a run needs no second table.
+fn label_rows(blends: &Blends, y0: usize, rows: &mut [u16], count: &mut [usize]) {
+    let w = blends.w.max(1);
+    let keys = &blends.keys[y0 * w..y0 * w + rows.len()];
+    for (dy, (row, krow)) in rows.chunks_mut(w).zip(keys.chunks(w)).enumerate() {
+        for (x, (out, &k)) in row.iter_mut().zip(krow).enumerate() {
+            let (own, sure) = blends.lut[k as usize];
+            *out = if sure {
+                own
+            } else {
+                blends.blend_label(x, y0 + dy, own)
+            };
+        }
+    }
+    add_label_runs(rows, count);
+}
+
+/// Add to `count[l]` the number of entries of `labels` equal to `l`, one update per run of
+/// equal entries (see [`label_rows`] for why). Every entry must be a valid index into
+/// `count`. An empty slice adds nothing.
+fn add_label_runs(labels: &[u16], count: &mut [usize]) {
     let mut it = labels.iter();
     let Some(&first) = it.next() else {
-        return count;
+        return;
     };
     let (mut cur, mut run) = (first, 1usize);
     for &l in it {
@@ -611,7 +663,6 @@ fn count_labels(labels: &[u16], n_inks: usize) -> Vec<usize> {
         }
     }
     count[cur as usize] += run;
-    count
 }
 
 /// Each ink's share of the `n` pixels, `Palette::weight`: `min(count_i, 2²⁴) / max(n, 1)`,
@@ -877,8 +928,12 @@ mod tests {
                 "{count}/{n}"
             );
         }
-        assert_eq!(count_labels(&[], 3), vec![0, 0, 0]);
-        assert_eq!(count_labels(&[2, 2, 0, 2, 1, 1], 3), vec![1, 2, 3]);
+        let mut count = vec![0; 3];
+        add_label_runs(&[], &mut count);
+        assert_eq!(count, vec![0, 0, 0]);
+        add_label_runs(&[2, 2, 0, 2, 1, 1], &mut count);
+        add_label_runs(&[1], &mut count);
+        assert_eq!(count, vec![1, 3, 3]);
     }
 
     #[test]

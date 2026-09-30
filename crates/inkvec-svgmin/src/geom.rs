@@ -1,6 +1,17 @@
 //! Measuring how far one curve is from another, exactly: the guards that
 //! decide whether a rewrite kept the tolerance promise, and the point-on-cubic
 //! searches the least-squares refit is built on.
+//!
+//! Used by `fit` (the per-segment guard and the refit's reprojection) and `driver` (the
+//! read-back check). Every distance is Euclidean, in the path's own user units.
+//!
+//! Point-to-curve distance has no closed form for a cubic (it is the root of a degree-5
+//! polynomial), so it is found numerically: a coarse scan over the parameter `t ∈ [0, 1]`
+//! picks the best of 33 samples, and a **golden-section search** refines `t` inside the
+//! bracket formed by its two neighbours (1/16 of the parameter range). Golden-section search
+//! needs only that the distance be unimodal in the bracket, which so narrow a bracket around
+//! the nearest sample is in practice, and it shrinks the bracket by the factor
+//! `φ − 1 ≈ 0.618` per step, so 28 to 30 steps take it below 1e-7 in `t`.
 
 use inkvec_core::Point;
 use inkvec_fit::curves::Segment;
@@ -11,6 +22,11 @@ use inkvec_fit::FittedPath;
 /// golden-section search on the parameter around the nearest sample. Sampling alone would
 /// report the chord sagitta of the scan as error -- 0.04 units on a 120° arc of radius 40
 /// -- and that is three times the tolerance this tool promises.
+///
+/// `start` is where the segment begins (a [`Segment`] stores only its end). A line is exact
+/// ([`point_segment_dist`]); a cubic or an arc is evaluated through `eval_segment`, 33 scan
+/// samples then 28 golden-section steps. The result is the smallest distance seen, so it can
+/// only overestimate the true distance, and then by the search's final bracket.
 pub(crate) fn dist_to_segment(p: Point, seg: &Segment, start: Point) -> f64 {
     if let Segment::Line(b) = *seg {
         return point_segment_dist(p, start, b);
@@ -68,6 +84,8 @@ pub(crate) struct Curve {
 const COARSE: usize = 8;
 
 impl Curve {
+    /// Tabulate `path`: [`COARSE`]` + 1` samples per segment (both ends included), each tagged
+    /// with its segment, and each segment's `reach`.
     pub(crate) fn new(path: &FittedPath) -> Self {
         let mut c = Curve {
             starts: Vec::with_capacity(path.segments.len()),
@@ -105,6 +123,13 @@ impl Curve {
     /// ring the far side's sample can be nearer than the near side's, the guard then reads
     /// the stroke's width as the deviation (60 tolerances, on a fit 1.4 off), and a third
     /// of one corpus's savings were thrown away on that misreading.
+    ///
+    /// The pruning test for segment `j` is a lower bound: every point of `j` is taken to lie
+    /// within `reach_j` of one of its samples (three quarters of the widest sample gap: half
+    /// the gap, plus slack for the bow of a fitted segment, not a proven bound for every
+    /// curve), so by the triangle inequality its distance to `p` is at least
+    /// `min_s |p − s| − reach_j`. A segment is skipped only when that bound is already no
+    /// better than the best exact distance found. An empty path answers `(0, ∞)`.
     pub(crate) fn nearest(&self, p: Point) -> (usize, f64) {
         if self.segs.is_empty() {
             return (0, f64::INFINITY);
@@ -136,11 +161,15 @@ impl Curve {
         out
     }
 }
-/// Largest distance from any of `pts` to the fitted path.
+/// Largest distance from any of `pts` to the fitted path: `max_i min_{q ∈ path} |p_i − q|`,
+/// the one-sided Hausdorff distance from the points to the curve. `0` for no points.
 pub(crate) fn max_deviation(pts: &[Point], path: &FittedPath) -> f64 {
     let curve = Curve::new(path);
     pts.iter().map(|&p| curve.nearest(p).1).fold(0.0, f64::max)
 }
+/// Exact distance from `p` to the closed segment `ab`: project `p` onto the line,
+/// `t = ((p − a)·(b − a)) / |b − a|²`, clamp `t` to `[0, 1]`, and measure to `a + t(b − a)`.
+/// A segment shorter than 1e-9 is treated as the point `a`.
 pub(crate) fn point_segment_dist(p: Point, a: Point, b: Point) -> f64 {
     let (dx, dy) = (b.x - a.x, b.y - a.y);
     let l2 = dx * dx + dy * dy;
@@ -151,6 +180,8 @@ pub(crate) fn point_segment_dist(p: Point, a: Point, b: Point) -> f64 {
     };
     p.dist(Point::new(a.x + t * dx, a.y + t * dy))
 }
+/// The cubic Bézier with control points `p0, c1, c2, p3` at parameter `t`, in Bernstein form:
+/// `(1−t)³·p0 + 3(1−t)²t·c1 + 3(1−t)t²·c2 + t³·p3`.
 pub(crate) fn cubic_at(p0: Point, c1: Point, c2: Point, p3: Point, t: f64) -> Point {
     let u = 1.0 - t;
     let (w0, w1, w2, w3) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);

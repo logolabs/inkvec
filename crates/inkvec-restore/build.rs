@@ -5,6 +5,8 @@
 //! at it, or place it at `crates/inkvec-restore/models/restorer.onnx`. It is produced by
 //! `export_restorer_onnx.py` in the training repository.
 
+/// Build-script entry. The `println!`s are cargo directives, not output: they make cargo rerun
+/// the script when it or the ONNX path changes.
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=INKVEC_RESTORE_ONNX");
@@ -14,6 +16,9 @@ fn main() {
     generate();
 }
 
+/// Find the ONNX export (downloading it with `curl` if missing), then have burn-onnx turn it
+/// into Rust source and a `.bpk` weights file under `OUT_DIR/model/`. Panics, failing the
+/// build with instructions, when the export cannot be found or fetched.
 #[cfg(feature = "model")]
 fn generate() {
     let onnx_str =

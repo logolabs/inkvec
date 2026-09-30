@@ -5,6 +5,11 @@
 //! becomes an [`Item`]: its region (strokes are outlined), its colour, and what kind of
 //! paint it was, because a gradient or a translucent fill has no physical equivalent in a
 //! sheet of vinyl and the preflight has to say so.
+//!
+//! The first stage of both [`crate::analyze`] and [`crate::prepare`]. `usvg` resolves CSS,
+//! `<use>`, shapes and transforms; this module flattens each path to polylines within a
+//! tolerance, scales it from CSS pixels to millimetres (y stays down), and turns fills into
+//! normalised regions and strokes into their outlines.
 
 use kurbo::{BezPath, PathEl, Point};
 
@@ -99,6 +104,8 @@ pub fn load(svg: &str, width_mm: f64, tolerance_mm: f64) -> Result<Artwork, Load
     Ok(art)
 }
 
+/// Visit `group`'s children in paint order, multiplying group opacities down the tree, adding
+/// every visible path and noting images and unconverted text as unsupported.
 fn walk(group: &usvg::Group, opacity: f32, scale: f64, tol: f64, art: &mut Artwork) {
     let opacity = opacity * group.opacity().get();
     for node in group.children() {
@@ -114,6 +121,13 @@ fn walk(group: &usvg::Group, opacity: f32, scale: f64, tol: f64, art: &mut Artwo
     }
 }
 
+/// Add one path's fill and stroke, in that order (SVG paints the fill first), as items.
+///
+/// The path is mapped through its absolute transform and `scale` (millimetres per CSS
+/// pixel), flattened within `tol` millimetres, and its fill normalised under the path's own
+/// fill rule. A stroke is outlined at its width times the transform's mean scale
+/// `sqrt(|sx·sy − kx·ky|)`, and keeps its flattened subpaths as centrelines. An empty region
+/// adds nothing.
 fn add_path(p: &usvg::Path, opacity: f32, scale: f64, tol: f64, art: &mut Artwork) {
     let ts = p.abs_transform();
     let map = |x: f32, y: f32| -> Point {
@@ -188,7 +202,8 @@ fn add_path(p: &usvg::Path, opacity: f32, scale: f64, tol: f64, art: &mut Artwor
     }
 }
 
-/// Subpaths as polylines, with whether each was closed.
+/// Subpaths as polylines, with whether each was closed. Curves are flattened by `kurbo`
+/// within `tol`; a subpath of fewer than two points is dropped.
 fn flatten(bez: &BezPath, tol: f64) -> Vec<(Contour, bool)> {
     let mut out: Vec<(Contour, bool)> = Vec::new();
     let mut cur: Contour = Vec::new();
@@ -212,6 +227,8 @@ fn flatten(bez: &BezPath, tol: f64) -> Vec<(Contour, bool)> {
     out
 }
 
+/// The one colour a paint is cut as: a solid colour itself; a gradient the unweighted mean
+/// of its stops' colours (grey when it has none); a pattern mid grey.
 fn paint_colour(paint: &usvg::Paint) -> ([u8; 3], PaintKind) {
     let stops_mean = |stops: &[usvg::Stop]| -> [u8; 3] {
         if stops.is_empty() {

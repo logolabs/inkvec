@@ -30,6 +30,8 @@ pub struct Settings {
 /// Largest sagitta written as a straight G1, millimetres.
 const SAGITTA_AS_LINE_MM: f64 = 0.002;
 
+/// Unsigned area of the polygon through the vertices (the shoelace formula), ignoring the
+/// arcs' bulges: good enough to put small contours before large ones.
 fn shoelace(v: &[(Pt, f64)]) -> f64 {
     let n = v.len();
     (0..n)
@@ -42,11 +44,18 @@ fn shoelace(v: &[(Pt, f64)]) -> f64 {
         / 2.0
 }
 
+/// `X… Y…` for a point, shifted left by `x0`, to three decimals (a micrometre).
 fn xy(p: Pt, x0: f64) -> String {
     format!("X{:.3} Y{:.3}", p[0] - x0, p[1])
 }
 
 /// The move from `a` to `b` along the edge `bulge` describes.
+///
+/// A G1 line when the arc's sagitta, approximated as `|β|·L/2` for chord length `L`, is under
+/// [`SAGITTA_AS_LINE_MM`]. Otherwise G3 (counter-clockwise, positive bulge) or G2, with the
+/// centre given as the offset `I J` from the start, found as in [`crate::biarc`]:
+/// `θ = 4 atan β`, `r = L / (2 sin(θ/2))`, and the centre `r cos(θ/2)` to the left of the
+/// chord's midpoint.
 fn edge(a: Pt, b: Pt, bulge: f64, x0: f64) -> String {
     let (cx, cy) = (b[0] - a[0], b[1] - a[1]);
     let len = cx.hypot(cy);
@@ -72,6 +81,11 @@ fn edge(a: Pt, b: Pt, bulge: f64, x0: f64) -> String {
 }
 
 /// The G-code for already-fitted sheets, one after another.
+///
+/// A preamble (millimetres, absolute, XY plane; laser off, then dynamic-power M4 at the
+/// feed), then per sheet and per pass: closed contours smallest first, then open lines, each
+/// as a G0 rapid to its start, `S<power>`, the cutting moves, and `S0`. Ends with the laser
+/// off, a rapid home and M2.
 pub fn write(cam: &[CamSheet], s: &Settings) -> String {
     let mut out = String::new();
     let mut line = |t: &str| {

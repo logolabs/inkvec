@@ -11,6 +11,19 @@
 //! pixel and should be fitted tightly. One recovered from a faint edge is barely
 //! localized at all and should be simplified aggressively. Both facts are already in
 //! `sigma`; no stage below needs to re-derive them.
+//!
+//! This crate sits below every other engine crate and depends on nothing of theirs. Besides
+//! the geometry types it holds four small services the whole pipeline shares:
+//!
+//! - [`predicates`]: exact orientation and intersection tests (Shewchuk's adaptive
+//!   arithmetic), so topology decisions never depend on an epsilon;
+//! - [`env`]: the one place the engine reads environment variables (diagnostics and A/B
+//!   switches only; options travel through `inkvec::Options`);
+//! - [`progress`]: live progress reports and cooperative cancellation for one trace;
+//! - [`clock`]: a monotonic clock that also works on `wasm32-unknown-unknown`.
+//!
+//! Coordinates throughout are in pixels of the input raster, `x` to the right and `y`
+//! down, as `f64`.
 
 pub mod env;
 pub mod predicates;
@@ -90,9 +103,11 @@ impl Vec2 {
 /// A measured boundary: positions plus the uncertainty of each position.
 ///
 /// `sigma[k]` is the standard deviation, in pixels, of point `k`'s position along the
-/// boundary normal. It comes from S2's posterior covariance. Until S2 exists,
-/// [`Polyline::with_uniform_sigma`] supplies a constant, which reproduces classical
-/// tracing behaviour and is the right way to A/B the sub-pixel front end later.
+/// boundary normal. The tracer fills it from the sub-pixel boundary stage (S2 in
+/// `docs/DESIGN.md`): noise divided by the local edge gradient, combined in quadrature
+/// with the method's own resolution limit. [`Polyline::with_uniform_sigma`] supplies a
+/// constant instead, which reproduces classical tracing behaviour; tests, examples and
+/// A/B experiments use it.
 #[derive(Debug, Clone)]
 pub struct Polyline {
     /// The measured boundary positions, in order.
@@ -140,7 +155,9 @@ impl Polyline {
         self.points.is_empty()
     }
 
-    /// Total arc length of the measured polyline.
+    /// Total arc length of the measured polyline, in pixels: the sum of its segment
+    /// lengths. For a closed polyline the closing segment (last point back to the first)
+    /// is not included. Zero for fewer than two points.
     pub fn length(&self) -> f64 {
         self.points.windows(2).map(|w| w[0].dist(w[1])).sum()
     }

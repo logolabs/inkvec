@@ -11,6 +11,10 @@
 //! the region is rasterised here at about ten pixels a millimetre with exact horizontal
 //! coverage, handed to the tracer's analysis, and its strokes come back in millimetres.
 //! Every part the analysis does not call a stroke keeps its outline.
+//!
+//! Used by [`crate::plan`]'s lines mode, per colour: [`colour_lines`] takes the colour's
+//! region and the file's own stroke centrelines, [`simplify`] thins each line for writing, and
+//! [`order`] sequences them for the pen.
 
 use inkvec_trace::centerline;
 use inkvec_trace::coverage::{CoverageField, DEFAULT_SIGMA_MODEL};
@@ -52,6 +56,11 @@ const SUB_ROWS: usize = 4;
 
 /// Coverage of `r` on a grid of `k` pixels per millimetre whose pixel (0, 0) is centred at
 /// `origin`: exact along x, `SUB_ROWS` samples along y, even-odd over every contour.
+///
+/// Scanline filling: each of the [`SUB_ROWS`] sample lines per pixel row is intersected with
+/// every edge (half-open in y, so a vertex on the line counts once), the crossings are sorted
+/// and taken in pairs as inside spans, and each pixel gains the length of span overlapping it,
+/// divided by [`SUB_ROWS`]. Returns `w · h` values in `0..=1`, row-major.
 fn rasterise(r: &Region, origin: Pt, k: f64, w: usize, h: usize) -> Vec<f32> {
     let mut data = vec![0.0f32; w * h];
     let edges: Vec<(Pt, Pt)> = r
@@ -157,6 +166,11 @@ fn band_measure(s: &geom::Shape) -> (f64, f64) {
 
 /// Split `r` into single lines (its parts no wider than `max_width_mm`, or any width when
 /// it is 0, that the tracer's analysis calls strokes) and the parts that keep their outline.
+///
+/// A part is a candidate when its band width `w` ([`band_measure`]) is at most 1.25 times the
+/// limit and its length at least [`MIN_SLENDERNESS`] widths. Candidates are sorted widest
+/// first and grouped so each group's widths lie within [`WIDTH_BUCKET`] of its widest; each
+/// group is rasterised at its own density ([`split_group`]).
 pub fn split(r: &Region, max_width_mm: f64) -> (Vec<Line>, Region) {
     let limit = if max_width_mm > 0.0 {
         max_width_mm
@@ -198,6 +212,13 @@ pub fn split(r: &Region, max_width_mm: f64) -> (Vec<Line>, Region) {
 
 /// [`split`] for candidate parts no wider than `wide`, rasterised so that `wide` spans
 /// [`PX_ACROSS_WIDEST`] pixels.
+///
+/// The density `k` (pixels per millimetre) is also capped by [`PX_PER_MM`] and by
+/// [`MAX_PIXELS`] over the group's bounds, and never below 0.5. The raster, padded by three
+/// pixels, is analysed as an ideal bilevel coverage field (no noise, black on white); each
+/// labelled stroke region's lines are accepted only if none is wider than `limit` and,
+/// stroked at their widths, they redraw the parts under that label within [`MAX_MISFIT`].
+/// Parts whose label was not accepted keep their outline.
 fn split_group(r: &Region, wide: f64, limit: f64) -> (Vec<Line>, Region) {
     let Some(b) = geom::bounds(r) else {
         return (Vec::new(), Vec::new());
@@ -369,6 +390,11 @@ fn interior_point(s: &geom::Shape) -> Option<Pt> {
 /// A path simplified to `tol` (Douglas-Peucker), ends kept. A loop's ends meet, and
 /// distances to a chord of length zero are all zero, so a loop is first split at its point
 /// farthest from the start and each half simplified on its own.
+///
+/// Douglas–Peucker: keep the point of `lo..hi` farthest from the line through `p[lo]` and
+/// `p[hi]` when that distance exceeds `tol`, and recurse on both sides of it. A path counts as
+/// a loop when its ends are within `tol` of each other. Paths of fewer than 3 points come back
+/// unchanged.
 pub fn simplify(path: &[Pt], tol: f64) -> Vec<Pt> {
     fn dp(p: &[Pt], tol: f64, keep: &mut [bool], lo: usize, hi: usize) {
         if hi <= lo + 1 {
@@ -418,6 +444,10 @@ pub fn simplify(path: &[Pt], tol: f64) -> Vec<Pt> {
 
 /// Order `lines` nearest-neighbour from the origin, reversing an open line when its far
 /// end is the nearer: a pen plotter's pen-up travel, greedily shortened.
+///
+/// The greedy nearest-neighbour tour: O(n²) in the number of lines, not optimal, but it
+/// removes the long criss-crossing travel of an unordered file. A closed line is entered
+/// and left at its first point. Every line must have at least one point.
 pub fn order(mut lines: Vec<Line>) -> Vec<Line> {
     let mut out = Vec::with_capacity(lines.len());
     let mut at = [0.0, 0.0];

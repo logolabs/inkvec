@@ -103,7 +103,9 @@ pub unsafe extern "C" fn inkvec_trace(
         if bytes.is_null() {
             return Err(Failure::argument("bytes is NULL"));
         }
-        // SAFETY: the caller promises `len` readable bytes at a non-NULL `bytes`.
+        // SAFETY: `bytes` is non-NULL (checked above) and the caller promises `len` readable
+        // bytes there that stay unchanged for the duration of this call; `u8` has alignment 1,
+        // and the slice does not outlive the call.
         let image = unsafe { std::slice::from_raw_parts(bytes, len) };
         // SAFETY: forwarded from the caller's promise about `options_json`.
         let opts = unsafe { parse_options(options_json) }?;
@@ -134,7 +136,10 @@ pub unsafe extern "C" fn inkvec_trace_rgba(
         if rgba.is_null() {
             return Err(Failure::argument("rgba is NULL"));
         }
-        // SAFETY: the caller promises `len` readable bytes at a non-NULL `rgba`.
+        // SAFETY: `rgba` is non-NULL (checked above) and the caller promises `len` readable
+        // bytes there that stay unchanged for the duration of this call; `u8` has alignment 1,
+        // and the slice does not outlive the call. Whether `len` matches the dimensions is
+        // checked by the facade, not assumed here.
         let pixels = unsafe { std::slice::from_raw_parts(rgba, len) };
         // SAFETY: forwarded from the caller's promise about `options_json`.
         let opts = unsafe { parse_options(options_json) }?;
@@ -155,11 +160,15 @@ pub unsafe extern "C" fn inkvec_result_free(result: *mut InkvecResult) {
         return;
     }
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        // SAFETY: non-NULL and, per the contract, a result this library filled.
+        // SAFETY: non-NULL (checked above) and, per the contract, a properly aligned
+        // `InkvecResult` this library filled (or the caller zeroed), which nothing else
+        // accesses during this call.
         let r = unsafe { &mut *result };
         for p in [&mut r.svg, &mut r.error] {
             if !p.is_null() {
-                // SAFETY: produced by `CString::into_raw` in `fill` and not freed since.
+                // SAFETY: a non-NULL string field was produced by `CString::into_raw` in
+                // `fill` and, per the contract, not freed since; it is reset to NULL right
+                // after, so a second call cannot free it again.
                 drop(unsafe { CString::from_raw(*p) });
                 *p = std::ptr::null_mut();
             }
@@ -213,11 +222,14 @@ pub extern "C" fn inkvec_default_options() -> *const c_char {
 
 /// A failed call: its status code and message.
 struct Failure {
+    /// One of the `INKVEC_ERR_*` codes.
     status: i32,
+    /// What went wrong, for `InkvecResult::error`.
     message: String,
 }
 
 impl Failure {
+    /// [`INKVEC_ERR_INVALID_ARGUMENT`] with `message`.
     fn argument(message: &str) -> Self {
         Self {
             status: INKVEC_ERR_INVALID_ARGUMENT,
@@ -249,7 +261,8 @@ unsafe fn parse_options(json: *const c_char) -> Result<facade::Options, Failure>
     if json.is_null() {
         return Ok(facade::Options::default());
     }
-    // SAFETY: non-NULL and NUL-terminated, per the caller.
+    // SAFETY: non-NULL (checked above) and, per the caller, a NUL-terminated string that
+    // stays valid and unchanged while it is read here; the borrow ends with this function.
     let text = unsafe { CStr::from_ptr(json) }.to_str().map_err(|_| {
         Failure::from(facade::Error::InvalidOptions(
             "options are not UTF-8".into(),
@@ -259,11 +272,18 @@ unsafe fn parse_options(json: *const c_char) -> Result<facade::Options, Failure>
 }
 
 /// Every trace entry point: check `out`, run `work` with panics caught, and fill `out`.
+///
+/// `out` is validated before anything is written: NULL, or a `struct_size` smaller than this
+/// library's `InkvecResult` (a caller built against an older, smaller struct), returns
+/// [`INKVEC_ERR_INVALID_ARGUMENT`] without touching it. A panic in `work` becomes
+/// [`INKVEC_ERR_INTERNAL`], so no unwind crosses the C boundary.
 fn entry(out: *mut InkvecResult, work: impl FnOnce() -> Result<facade::Traced, Failure>) -> i32 {
     if out.is_null() {
         return INKVEC_ERR_INVALID_ARGUMENT;
     }
-    // SAFETY: `out` is non-NULL and, per the contract, points to at least a `u32`.
+    // SAFETY: `out` is non-NULL and, per the contract, points to at least the leading `u32`
+    // of an `InkvecResult`. Only that field is read, unaligned, so neither the struct's full
+    // size nor its alignment is assumed before `struct_size` has vouched for them.
     let caller_size = unsafe { std::ptr::addr_of!((*out).struct_size).read_unaligned() };
     if (caller_size as usize) < size_of::<InkvecResult>() {
         return INKVEC_ERR_INVALID_ARGUMENT;
@@ -274,12 +294,17 @@ fn entry(out: *mut InkvecResult, work: impl FnOnce() -> Result<facade::Traced, F
             message: "internal error: panic in the C binding".into(),
         })
     });
-    // SAFETY: `out` is writable and at least as large as this library's struct.
+    // SAFETY: `out` is non-NULL, the caller's `struct_size` says it is at least as large as
+    // this library's struct, and per the contract it is a properly aligned, writable
+    // `InkvecResult` that no other thread uses during this call.
     let out = unsafe { &mut *out };
     fill(out, outcome)
 }
 
-/// Store an outcome in the caller's result and return its status.
+/// Store an outcome in the caller's result and return its status. Every field but
+/// `struct_size` is overwritten, so stale pointers from an earlier call are not kept (the
+/// caller must have freed them); the strings are handed over with `CString::into_raw` and
+/// reclaimed only by [`inkvec_result_free`].
 fn fill(out: &mut InkvecResult, outcome: Result<facade::Traced, Failure>) -> i32 {
     out.svg = std::ptr::null_mut();
     out.svg_len = 0;

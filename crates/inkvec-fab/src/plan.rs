@@ -1,4 +1,10 @@
-//! From visible colours to sheets: the four modes, and what every sheet gets added.
+//! From visible colours to sheets: the modes, and what every sheet gets added.
+//!
+//! Called by [`crate::prepare`] with the artwork's visible colour regions (millimetres, from
+//! [`crate::regions`]). Out comes a [`Plan`]: one SVG per sheet, a combined SVG, a stacked
+//! preview, a problems overlay, DXF and G-code, and the preflight findings. Every mode but
+//! [`Mode::Lines`] goes through [`plan`]'s shared path (regions per sheet, then machine
+//! preparation, marks, framing and writing); lines are drawn by [`plan_lines`].
 
 use crate::corners;
 use crate::dxf;
@@ -18,6 +24,8 @@ const MARK_ARM_MM: f64 = 5.0;
 /// Width of a registration cross's bars and of a weed border.
 const MARK_BAR_MM: f64 = 0.8;
 
+/// `#rrggbb` (the `#` optional, surrounding space ignored) as bytes; `None` for any other
+/// form, including the three-digit one.
 fn parse_hex(s: &str) -> Option<[u8; 3]> {
     let s = s.trim().trim_start_matches('#');
     if s.len() != 6 {
@@ -28,6 +36,11 @@ fn parse_hex(s: &str) -> Option<[u8; 3]> {
 }
 
 /// The colours to cut, in the order asked for (bottom first).
+///
+/// Every non-background colour unless [`Options::include`] names some; a named colour picks
+/// the visible colour nearest to it in CIEDE2000, if one is within
+/// `max(merge_delta_e, 0.5)`. Adjacent duplicates are dropped, and [`Options::order`] then
+/// sorts the set (colours it does not name go last, in their original order).
 fn chosen<'a>(colours: &'a [ColourRegion], o: &Options) -> Vec<&'a ColourRegion> {
     let pick = |list: &[String]| -> Vec<&'a ColourRegion> {
         list.iter()
@@ -75,6 +88,12 @@ const LIGHTBURN: [&str; 6] = [
 const STENCIL_HEX: &str = "#5f7489";
 
 /// Base sheets, bottom first, before marks: `(name, hex, region)`.
+///
+/// Per mode: a stencil is the union of the chosen colours cut out of a framed sheet, with bridges
+/// ([`stencil::stencil`]); a single-colour sheet is their union; inlay is each colour as
+/// drawn; layered is each colour grown by the bleed where (and only where) the colours above
+/// hide it, stopping [`BLEED_HIDE_MM`] short of their edge, with holes the colours above cover
+/// filled; a sticker is the union grown by the margin, closed and with its holes dropped.
 fn sheets(
     set: &[&ColourRegion],
     o: &Options,
@@ -302,7 +321,9 @@ fn sticker_print(set: &[&ColourRegion], contour: &Region, o: &Options) -> String
 
 /// Where every document of one plan sits: its size and origin, millimetres.
 struct Frame {
+    /// Width and height.
     size: [f64; 2],
+    /// Top-left corner, in the artwork's coordinates (y down).
     origin: [f64; 2],
 }
 
@@ -462,6 +483,14 @@ fn plan_lines(
 }
 
 /// Build the sheets for `o` from the artwork's visible colours.
+///
+/// `colours` are the artwork's visible colour regions in millimetres ([`crate::regions`]),
+/// `canvas_mm` the artwork's page size, `unsupported` what the loader could not read. The
+/// steps: choose and order the colours; build one base region per sheet for the mode
+/// ([`sheets`]); check and prepare each for the machine ([`machine_sheets`]); add the marks,
+/// weed border and size-check square every sheet shares ([`shared_extras`]); frame all of it
+/// on one page ([`frame_around`]); and write the sheets, the combined file, the preview, the
+/// problems overlay, DXF and G-code. [`Mode::Lines`] takes its own path ([`plan_lines`]).
 pub fn plan(
     colours: &[ColourRegion],
     canvas_mm: [f64; 2],
@@ -474,6 +503,71 @@ pub fn plan(
         return plan_lines(&set, canvas_mm, checks, o);
     }
     let mut base = sheets(&set, o, &mut checks);
+    machine_sheets(&mut base, &set, canvas_mm, o, &mut checks);
+    let problems = problems_body(&base, o);
+    let print = match (o.mode, base.first()) {
+        (Mode::Sticker, Some((_, _, contour))) => sticker_print(&set, contour, o),
+        _ => String::new(),
+    };
+    let extras = shared_extras(&base, canvas_mm, o, &mut checks);
+    // Each sheet's own extent, before the marks every sheet shares are added.
+    let extents: Vec<[f64; 2]> = base
+        .iter()
+        .map(|(_, _, r)| geom::bounds(r).map_or([0.0, 0.0], |b| [b[2] - b[0], b[3] - b[1]]))
+        .collect();
+    let sheet_regions: Vec<(String, String, Region)> = base
+        .into_iter()
+        .map(|(n, h, r)| {
+            let mut r = r;
+            for extra in extras.iter().flatten() {
+                r = geom::union(&r, extra);
+            }
+            (n, h, r)
+        })
+        .collect();
+    let frame = frame_around(&sheet_regions, canvas_mm);
+    let (size, origin) = (frame.size, frame.origin);
+
+    let dxf_sheets: Vec<(String, &Region)> = sheet_regions
+        .iter()
+        .map(|(n, _, r)| (n.clone(), r))
+        .collect();
+    let cam = dxf::cam_sheets(&dxf_sheets, &[], o.tolerance_mm, origin[1] + size[1]);
+    drop(dxf_sheets);
+    let dxf = dxf::write(&cam);
+    let gcode = gcode::write(&cam, &gcode_settings(o, origin));
+    let (layers, preview, drawn) =
+        write_sheets(sheet_regions, &extents, &frame, &print, o, &mut checks);
+    let combined = if o.mode == Mode::Sticker {
+        layers.first().map(|l| l.svg.clone()).unwrap_or_default()
+    } else {
+        write::document(size, origin, &combined_body(&drawn, o))
+    };
+    Plan {
+        preview_svg: write::document(size, origin, &preview),
+        problems_svg: write::document(size, origin, &problems),
+        combined_svg: combined,
+        dxf,
+        gcode,
+        layers,
+        size_mm: size,
+        checks,
+    }
+}
+
+/// Check each base sheet and prepare it for the machine, in place, in this order: the
+/// preflight checks (a layered sheet judged by what shows of it); thin parts removed when
+/// [`Options::remove_thin`]; mirrored about the canvas's vertical centre line when
+/// [`Options::mirror`]; grown by half the kerf so the cut lands on the drawn edge; and
+/// dogbones cut for a router bit of radius [`Options::dogbone_mm`], with a warning where waste
+/// is narrower than the bit. Adds one info finding counting the dogbones.
+fn machine_sheets(
+    base: &mut [(String, String, Region)],
+    set: &[&ColourRegion],
+    canvas_mm: [f64; 2],
+    o: &Options,
+    checks: &mut Vec<Check>,
+) {
     let mut dogbones = 0;
     for (k, (name, _, r)) in base.iter_mut().enumerate() {
         // A layered sheet is judged by what shows of it: its bleed lies hidden under the
@@ -530,11 +624,19 @@ pub fn plan(
             ),
         });
     }
-    let problems = problems_body(&base, o);
-    let print = match (o.mode, base.first()) {
-        (Mode::Sticker, Some((_, _, contour))) => sticker_print(&set, contour, o),
-        _ => String::new(),
-    };
+}
+
+/// What every sheet shares, placed around the bounds of all base sheets together (the
+/// canvas when they are empty): registration crosses when [`Options::registration`] and
+/// there is more than one sheet, a weed border when [`Options::weed_border_mm`] is positive,
+/// and the size-check square, below everything else, when [`Options::size_check_mm`] is.
+/// Returned in that order, each `None` when not asked for; the square adds its finding.
+fn shared_extras(
+    base: &[(String, String, Region)],
+    canvas_mm: [f64; 2],
+    o: &Options,
+    checks: &mut Vec<Check>,
+) -> [Option<Region>; 3] {
     // Everything the marks and borders are placed around.
     let art_bounds = geom::bounds(&geom::union_all(base.iter().map(|(_, _, r)| r))).unwrap_or([
         0.0,
@@ -560,21 +662,12 @@ pub fn plan(
         checks.push(size_check_note(o.size_check_mm));
         size_check(around, o.size_check_mm)
     });
-    // Each sheet's own extent, before the marks every sheet shares are added.
-    let extents: Vec<[f64; 2]> = base
-        .iter()
-        .map(|(_, _, r)| geom::bounds(r).map_or([0.0, 0.0], |b| [b[2] - b[0], b[3] - b[1]]))
-        .collect();
-    let sheet_regions: Vec<(String, String, Region)> = base
-        .into_iter()
-        .map(|(n, h, r)| {
-            let mut r = r;
-            for extra in [&marks, &border, &check].into_iter().flatten() {
-                r = geom::union(&r, extra);
-            }
-            (n, h, r)
-        })
-        .collect();
+    [marks, border, check]
+}
+
+/// The page every document of one plan is drawn on: the bounds of all the sheets, widened
+/// to include the canvas's own `(0, 0)`–`canvas_mm` rectangle, plus 1 mm all round.
+fn frame_around(sheet_regions: &[(String, String, Region)], canvas_mm: [f64; 2]) -> Frame {
     let all = geom::union_all(sheet_regions.iter().map(|(_, _, r)| r));
     let b = geom::bounds(&all).unwrap_or([0.0, 0.0, canvas_mm[0], canvas_mm[1]]);
     let pad = 1.0;
@@ -583,33 +676,7 @@ pub fn plan(
         b[2].max(canvas_mm[0]) + pad - origin[0],
         b[3].max(canvas_mm[1]) + pad - origin[1],
     ];
-
-    let frame = Frame { size, origin };
-    let dxf_sheets: Vec<(String, &Region)> = sheet_regions
-        .iter()
-        .map(|(n, _, r)| (n.clone(), r))
-        .collect();
-    let cam = dxf::cam_sheets(&dxf_sheets, &[], o.tolerance_mm, origin[1] + size[1]);
-    drop(dxf_sheets);
-    let dxf = dxf::write(&cam);
-    let gcode = gcode::write(&cam, &gcode_settings(o, origin));
-    let (layers, preview, drawn) =
-        write_sheets(sheet_regions, &extents, &frame, &print, o, &mut checks);
-    let combined = if o.mode == Mode::Sticker {
-        layers.first().map(|l| l.svg.clone()).unwrap_or_default()
-    } else {
-        write::document(size, origin, &combined_body(&drawn, o))
-    };
-    Plan {
-        preview_svg: write::document(size, origin, &preview),
-        problems_svg: write::document(size, origin, &problems),
-        combined_svg: combined,
-        dxf,
-        gcode,
-        layers,
-        size_mm: size,
-        checks,
-    }
+    Frame { size, origin }
 }
 
 #[cfg(test)]

@@ -9,6 +9,11 @@
 //! island is joined Prim-style, shortest first, to the material already connected to the
 //! sheet's frame, so the bridges added are few and short and each crosses the least
 //! artwork there is to cross.
+//!
+//! Used by [`crate::plan`]'s stencil mode on the union of the chosen colours, in
+//! millimetres. Distances between pieces are measured between contour samples at most half a
+//! bridge width apart (never closer than 0.2 mm), so a bridge's length is exact to about
+//! that spacing.
 
 use crate::geom::{self, Contour, Pt, Region, Shape};
 
@@ -41,6 +46,8 @@ fn samples(s: &Shape, step: f64) -> Vec<Pt> {
     out
 }
 
+/// The closest pair between two point sets, by brute force: `(distance, point of a, point of
+/// b)`. Infinite distance when either set is empty.
 fn nearest(a: &[Pt], b: &[Pt]) -> (f64, Pt, Pt) {
     let mut best = (f64::INFINITY, [0.0; 2], [0.0; 2]);
     for p in a {
@@ -67,6 +74,14 @@ fn strip(from: Pt, to: Pt, width: f64) -> Region {
 
 /// The stencil sheet for `art` inside a frame `margin` wide, with bridges `width` wide
 /// joining every island to the frame. Returns the sheet and the bridges it needed.
+///
+/// The sheet is the frame (the artwork's bounds grown by `margin`) minus the artwork. The
+/// piece touching the frame's top or left edge is the connected material; every other piece
+/// is an island. Prim's algorithm then grows the connected set: at each step the island
+/// nearest to anything already connected is bridged by a straight strip along that shortest
+/// gap, and an island over [`TWO_BRIDGE_AREA_MM2`] gets a second strip from the half of its
+/// outline facing away from the first (points whose direction from the island's sample
+/// centroid makes a right angle or more with the first bridge's).
 pub fn stencil(art: &Region, margin: f64, width: f64) -> (Region, Vec<Bridge>) {
     let Some(b) = geom::bounds(art) else {
         return (Vec::new(), Vec::new());

@@ -7,6 +7,13 @@
 //!
 //! Everything is behind the `python` feature, which maturin enables; a plain
 //! `cargo build --workspace` compiles this crate empty and needs no Python.
+//!
+//! The public Python API (`python/inkvec/__init__.py`) wraps these underscore-prefixed
+//! functions: it turns keyword arguments into the JSON object, and re-exports the `Traced`
+//! result class and the exception classes. The trace itself runs with the GIL released
+//! (`py.detach`), so other Python threads keep running during a long trace. Errors map one to
+//! one onto the facade's kinds: `InvalidImageError`, `InvalidOptionsError`, `InternalError`,
+//! all subclasses of `InkvecError`.
 
 #[cfg(feature = "python")]
 mod module {

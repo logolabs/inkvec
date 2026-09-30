@@ -5,6 +5,10 @@
 //! counterclockwise and the holes clockwise (the orientation `i_overlay` returns). Every
 //! operation here takes regions in that form and returns them in that form, so results can
 //! be fed straight back in.
+//!
+//! Coordinates are millimetres with y pointing down, as in the SVG the artwork came from, so
+//! "counterclockwise" means counterclockwise in the mathematical y-up sense. Contours are
+//! implicitly closed: the last point joins back to the first and is not repeated.
 
 use i_overlay::core::fill_rule::FillRule;
 use i_overlay::core::overlay_rule::OverlayRule;
@@ -28,6 +32,8 @@ pub type Region = Vec<Shape>;
 /// Chord tolerance of round joins, as `segment length / radius`.
 const ROUND_STEP: f64 = 0.25;
 
+/// Every contour of every shape, flattened into one list: the form `i_overlay` takes as a
+/// subject or clip, with nonzero winding telling outers from holes.
 fn all_contours(r: &Region) -> Vec<Contour> {
     r.iter().flat_map(|s| s.iter().cloned()).collect()
 }
@@ -81,7 +87,9 @@ pub fn intersection(a: &Region, b: &Region) -> Region {
 }
 
 /// Grow (`d > 0`) or shrink (`d < 0`) a region by `d` millimetres, with round joins so a
-/// grown corner stays a corner's distance away and does not spike.
+/// grown corner stays a corner's distance away and does not spike. Growing is the
+/// Minkowski sum with a disc of radius `d` (morphological dilation); shrinking is erosion,
+/// and parts narrower than `2|d|` vanish.
 pub fn offset(r: &Region, d: f64) -> Region {
     if r.is_empty() || d == 0.0 {
         return r.clone();
@@ -102,7 +110,9 @@ pub fn closing(r: &Region, w: f64) -> Region {
     offset(&offset(r, w / 2.0), -w / 2.0)
 }
 
-/// The outline of an open or closed polyline drawn with a round-capped pen of `width`.
+/// The outline of an open or closed polyline drawn with a round-capped pen of `width`: the
+/// Minkowski sum of the path with a disc of diameter `width`, round joins and caps
+/// approximated by chords. Empty for fewer than two points or a non-positive width.
 pub fn stroke(path: &[Pt], width: f64, closed: bool) -> Region {
     if path.len() < 2 || width <= 0.0 {
         return Vec::new();
@@ -117,6 +127,11 @@ pub fn stroke(path: &[Pt], width: f64, closed: bool) -> Region {
 /// The parts of a polyline inside `r`, each with whether it is still a closed loop. A line
 /// wholly inside comes back as it was, not cut at its own crossings; pieces the clip
 /// splits are rejoined end to end where they meet.
+///
+/// "Wholly inside" means the clipped pieces keep all but a millionth of the length. Otherwise
+/// pieces are chained greedily: any piece with an end within 1e-6 mm of either end of the
+/// current chain is appended (reversed if need be) until none is left, and every chain comes
+/// back as open, since a clip that cut the line has broken any loop.
 pub fn clip_line(path: &[Pt], closed: bool, r: &Region) -> Vec<(Vec<Pt>, bool)> {
     if path.len() < 2 || r.is_empty() {
         return Vec::new();
@@ -176,7 +191,9 @@ pub fn clip_line(path: &[Pt], closed: bool, r: &Region) -> Vec<(Vec<Pt>, bool)> 
     out
 }
 
-/// Signed area of a contour (positive counterclockwise in a y-up frame).
+/// Signed area of a contour (positive counterclockwise in a y-up frame), by the shoelace
+/// formula `A = ½ Σ_i (x_i·y_{i+1} − x_{i+1}·y_i)` with indices wrapping. `0` for fewer than
+/// three points.
 pub fn contour_area(c: &[Pt]) -> f64 {
     let n = c.len();
     if n < 3 {
@@ -190,7 +207,8 @@ pub fn contour_area(c: &[Pt]) -> f64 {
     0.5 * a
 }
 
-/// Area of a shape: its outer contour less its holes.
+/// Area of a shape: its outer contour less its holes. Relies on the holes being wound
+/// opposite to the outer, so their signed areas subtract.
 pub fn shape_area(s: &Shape) -> f64 {
     s.iter().map(|c| contour_area(c)).sum::<f64>().abs()
 }
@@ -217,7 +235,10 @@ pub fn bounds(r: &Region) -> Option<[f64; 4]> {
     (b[0] <= b[2]).then_some(b)
 }
 
-/// True when `p` is inside `r` (even-odd over all its contours).
+/// True when `p` is inside `r` (even-odd over all its contours): a ray cast to the right of
+/// `p` crosses an odd number of edges. Each edge counts when it straddles the horizontal
+/// through `p` half-open (one endpoint strictly above, the other not), so a ray through a
+/// vertex is counted once. A point exactly on an edge may read either way.
 pub fn contains(r: &Region, p: Pt) -> bool {
     let mut inside = false;
     for c in r.iter().flatten() {
@@ -246,7 +267,8 @@ pub fn fill_holes(r: &Region) -> Region {
     normalise(&outers, false)
 }
 
-/// Mirror horizontally about `x = axis`.
+/// Mirror horizontally about `x = axis`: `x ↦ 2·axis − x`. Each contour's point order is
+/// reversed as well, since a reflection flips orientation, and the result is renormalised.
 pub fn mirror_x(r: &Region, axis: f64) -> Region {
     let flipped: Vec<Contour> = r
         .iter()

@@ -107,6 +107,13 @@ const JOURNAL_CAP: usize = 2048;
 
 /// One trace's progress, shared between the thread running it, the workers it fans out to,
 /// and whoever is watching.
+///
+/// The loop counters are atomics because rayon's workers tick them concurrently; the rest
+/// (stage names and the journal) sits behind one mutex that only stage boundaries and notes
+/// take. Relaxed ordering is enough for `cancelled`, `done` and `total`: each is a single
+/// value read on its own, and a reader seeing it one tick late is harmless. `moved` is
+/// bumped with `Release` after the counters change and read with `Acquire` in
+/// [`take`](Self::take), so a report that sees the bump also sees the counts that caused it.
 #[derive(Debug)]
 pub struct Progress {
     started: Instant,
@@ -120,10 +127,15 @@ pub struct Progress {
     state: Mutex<State>,
 }
 
+/// The part of a [`Progress`] that changes rarely and is not a single number.
 #[derive(Debug, Default)]
 struct State {
+    /// The stage last begun, `""` before any.
     stage: &'static str,
+    /// What the running stage's loop counts, `""` until it reports a [`step`]. A stage with
+    /// no unit reports no [`Step`].
     unit: &'static str,
+    /// Entries not yet taken, oldest first, at most [`JOURNAL_CAP`].
     journal: Vec<Entry>,
 }
 
@@ -185,6 +197,9 @@ impl Progress {
         Report { entries, step }
     }
 
+    /// The shared state, recovered even if a thread panicked while holding it: a cancelled
+    /// trace unwinds through here by design, and the state it leaves is still consistent
+    /// (every write under the lock is a single assignment or push).
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -221,6 +236,7 @@ impl Progress {
         });
     }
 
+    /// Append `entry` to the journal, dropping it once [`JOURNAL_CAP`] entries are waiting.
     fn record(&self, entry: Entry) {
         let mut state = self.lock();
         if state.journal.len() < JOURNAL_CAP {
@@ -233,6 +249,7 @@ impl Progress {
 /// embedder with no thread to poll from (a browser worker); it should throttle itself.
 type Wake = Rc<dyn Fn(&Progress)>;
 
+/// What [`with`] or [`with_wake`] put on the pipeline's thread.
 struct Installed {
     progress: Arc<Progress>,
     wake: Option<Wake>,
@@ -280,6 +297,9 @@ pub fn with_wake<R>(
     )
 }
 
+/// Put `installed` on this thread for the duration of `f`. The previous occupant is held by
+/// a drop guard and restored however `f` leaves, including by unwinding, so nested traces
+/// on one thread each see their own progress.
 fn install<R>(installed: Installed, f: impl FnOnce() -> R) -> R {
     struct Restore(Option<Installed>);
     impl Drop for Restore {
@@ -306,6 +326,9 @@ pub fn active() -> bool {
     CURRENT.with(|c| c.borrow().is_some())
 }
 
+/// The common path of every pipeline-side report: nothing at all when no progress is
+/// installed; otherwise a cancellation check first (so a cancelled trace records nothing
+/// more), then `apply`, then the wake callback if there is one.
 fn report(apply: impl FnOnce(&Progress)) {
     if let Some((p, wake)) = current() {
         p.check();

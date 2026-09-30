@@ -32,7 +32,9 @@ pub const BUILD_WEIGHTS: &str = concat!(env!("OUT_DIR"), "/model/restorer.bpk");
 /// Stack reserved for the worker thread. Address space only: pages are committed as used.
 const WORKER_STACK: usize = 256 << 20;
 
+/// Where the worker sends one job's result: the restored interleaved RGB, or why it failed.
 type Reply = mpsc::Sender<Result<Vec<f32>, String>>;
+/// One inference request: interleaved RGB, its width and height, and where to answer.
 type Job = (Vec<f32>, usize, usize, Reply);
 
 /// The restorer network on backend `B`, running on a dedicated worker thread.
@@ -130,6 +132,10 @@ impl<B: Backend> crate::Restore for Restorer<B> {
     }
 }
 
+/// One inference, on the worker thread: pad to the network's multiple, run the whole image
+/// as a single `1 x 3 x ph x pw` tensor, check the output has the same shape, and crop back to
+/// interleaved RGB at the input size. The values are returned as the network produced them;
+/// quantisation and snapping happen in the crate root, the same for every backend.
 fn forward<B: Backend>(
     net: &generated::Model<B>,
     device: &B::Device,

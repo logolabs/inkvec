@@ -7,6 +7,10 @@
 //! as the bulge (group 42) of the vertex it starts at, which CAM programs turn into G2/G3
 //! moves. CAM programs handle SPLINE entities badly, and R12 has none. DXF's y axis points
 //! up, so the drawing is flipped to stand the right way round before it is fitted.
+//!
+//! [`cam_sheets`] does the fitting once, and both this module's [`write()`] and
+//! [`crate::gcode::write()`] write from its result, so the DXF and the G-code cut exactly the
+//! same arcs. Called from [`crate::plan`].
 
 use crate::biarc;
 use crate::fitcurve::{self, Seg};
@@ -14,6 +18,10 @@ use crate::geom::{Pt, Region};
 
 /// A closed contour, already in the file's y-up frame, refitted and written as vertices
 /// with the bulge of the edge each one starts.
+///
+/// Refitted by [`fitcurve::fit_closed`] at `tolerance` (at least 0.1 µm); each line becomes a
+/// vertex with bulge 0 and each cubic a biarc chain at half the tolerance. A contour too small
+/// to fit comes back as its own points joined by straight edges.
 fn contour_vertices(c: &[Pt], tolerance: f64) -> Vec<(Pt, f64)> {
     let tol = tolerance.max(1e-4);
     let (start, segs) = fitcurve::fit_closed(c, tol);
@@ -38,6 +46,8 @@ fn contour_vertices(c: &[Pt], tolerance: f64) -> Vec<(Pt, f64)> {
     out
 }
 
+/// The DXF layer for sheet `i`: `SHEET-<i+1>-<name>`, with every character of the name that
+/// is not an ASCII letter or digit replaced by `-` (DXF layer names are restricted).
 fn layer_name(name: &str, i: usize) -> String {
     let clean: String = name
         .chars()
@@ -223,7 +233,7 @@ mod tests {
         for i in 0..verts.len() {
             let (a, b) = (verts[i], verts[(i + 1) % verts.len()].0);
             for s in [0.25, 0.5, 0.75] {
-                let p = crate::biarc::arc_at(a.0, b, a.1, s);
+                let p = biarc::arc_at(a.0, b, a.1, s);
                 let r = (p[0] - 30.0).hypot(p[1] - 5.0);
                 assert!((r - 5.0).abs() < 0.06, "{p:?} is {r} from the centre");
             }

@@ -350,6 +350,10 @@ impl Intake {
         self.into_svg()
     }
 
+    /// Run the rest of the pipeline on the prepared raster and apply the output options
+    /// (`minify`, the backlink header, …) as the command line does. A denoised raster is
+    /// traced with soft intake forced on (`lossy = On`), for the reason given at
+    /// [`Intake::take_denoiser_output`].
     fn into_svg(self) -> Result<String, JsValue> {
         let Self {
             mut inner,
@@ -515,6 +519,89 @@ mod tests {
         assert_eq!(denoiser_model_url(), inkvec_restore::HF_DENOISER_URL);
         assert_eq!(denoiser_model_sha256().len(), 64);
         assert_eq!(denoiser_threshold(), inkvec_sr::detect::DEGRADED_RESIDUAL);
+    }
+
+    /// The JSON exports are the facade: same bytes for the defaults and for a set of options.
+    /// (Only their success paths run here; an error is a `JsValue`, which needs the wasm
+    /// target.)
+    #[test]
+    fn the_json_trace_is_the_facade_trace() {
+        let png = contract_input("tiny.png");
+        let ok = |r: Result<String, JsValue>| r.unwrap_or_else(|_| panic!("trace failed"));
+        let d = inkvec::Options::default();
+        assert_eq!(
+            ok(trace_json(&png, "")),
+            inkvec::trace(&png, &d).unwrap().svg
+        );
+        let json = r#"{"colors": 8, "margin": 0.1}"#;
+        let opts = inkvec::Options::from_json(json).unwrap();
+        assert_eq!(
+            ok(trace_json(&png, json)),
+            inkvec::trace(&png, &opts).unwrap().svg
+        );
+    }
+
+    /// Raw pixels trace to the same bytes as the PNG they were taken from, through both the
+    /// raw-pixel export and the page's route.
+    #[test]
+    fn raw_pixels_trace_like_the_png_they_came_from() {
+        let ok = |r: Result<String, JsValue>| r.unwrap_or_else(|_| panic!("trace failed"));
+        let png = contract_input("tiny.png");
+        let rgba = contract_input("tiny.rgba");
+        assert_eq!(rgba.len(), 96 * 96 * 4, "the fixture is 96 x 96");
+        let from_pixels = ok(trace_rgba_json(&rgba, 96, 96, ""));
+        assert_eq!(from_pixels, ok(trace_json(&png, "")));
+        assert_eq!(from_pixels, ok(trace(&png, "")), "the page route agrees");
+    }
+
+    /// `trace` on an intake leaves it usable and says what `traceOnce` then says.
+    #[test]
+    fn tracing_an_intake_twice_or_once_gives_the_same_svg() {
+        let png = contract_input("white_on_clear.png");
+        let intake = prepare_inner(&png, "").expect("prepare");
+        let first = intake.trace().unwrap_or_else(|_| panic!("trace failed"));
+        let last = intake
+            .trace_once()
+            .unwrap_or_else(|_| panic!("traceOnce failed"));
+        assert_eq!(first, last);
+    }
+
+    /// `max_dim` from the page's options caps the raster the tracer (and the denoiser) sees.
+    #[test]
+    fn the_requested_max_dim_caps_the_intake() {
+        let png = contract_input("tiny.png");
+        let full = prepare_inner(&png, "").expect("prepare");
+        assert_eq!((full.width(), full.height()), (96, 96));
+        let capped = prepare_inner(&png, r#"{"max_dim": 48}"#).expect("prepare");
+        assert_eq!((capped.width(), capped.height()), (48, 48));
+        assert_eq!(capped.denoiser_input_size(), vec![48, 48]);
+        assert_eq!(capped.rgba8().len(), 48 * 48 * 4);
+    }
+
+    /// The residual the page decides on is the command line's: nothing to say about an SVG
+    /// that does not parse, and otherwise exactly the number `inkvec_restore::decide` reads.
+    #[test]
+    fn the_residual_is_the_restorers_own_measurement() {
+        let png = contract_input("tiny.png");
+        let intake = prepare_inner(&png, "").expect("prepare");
+        assert_eq!(intake.residual("not an svg"), None);
+        let svg = intake.trace().unwrap_or_else(|_| panic!("trace failed"));
+        let want = match inkvec_restore::decide(
+            &intake.inner.img,
+            &svg,
+            inkvec_restore::Options::default(),
+        ) {
+            inkvec_restore::Decision::Restore { residual }
+            | inkvec_restore::Decision::Keep { residual } => residual,
+        };
+        assert_eq!(intake.residual(&svg), want);
+        assert!(want.is_some_and(f64::is_finite), "{want:?}");
+    }
+
+    #[test]
+    fn the_build_describes_itself() {
+        assert_eq!(version(), env!("CARGO_PKG_VERSION"));
+        assert_eq!(threads_available(), cfg!(feature = "threads"));
     }
 
     #[test]

@@ -1,5 +1,10 @@
 //! The document plumbing: paths read out of the SVG, tolerance scaled out of
 //! the page, each rewrite weighed byte against byte, the results spliced back.
+//!
+//! [`run`] is what `minify` and `compact` call. The SVG is parsed once with `roxmltree`;
+//! every `<path d>` becomes a [`Job`] and is rewritten independently on rayon's pool; the
+//! document pass adds its own edits; and all edits, as byte ranges of the original text, are
+//! applied back to front. Nothing outside an edited range changes.
 
 use std::ops::Range;
 
@@ -14,7 +19,6 @@ use inkvec_fit::curves::Segment;
 use inkvec_fit::primitives::PrimitiveKind;
 use inkvec_fit::FitConfig;
 
-/// The longer side of the drawing in its own units: from `viewBox`, else `width`/`height`.
 /// The edits in document order with no two overlapping, keeping the enclosing one.
 ///
 /// Every edit names a byte range of the original text, and they are applied back to front so
@@ -37,6 +41,9 @@ fn disjoint(mut edits: Vec<(Range<usize>, String)>) -> Vec<(Range<usize>, String
     out
 }
 
+/// The longer side of the drawing in its own units: from `viewBox`, else `width`/`height`
+/// (units such as `px` or `%` are stripped, not converted). `None` when neither gives two
+/// positive numbers.
 fn extent(root: roxmltree::Node) -> Option<f64> {
     if let Some(vb) = root.attribute("viewBox") {
         let v: Vec<f64> = vb
@@ -61,6 +68,12 @@ fn extent(root: roxmltree::Node) -> Option<f64> {
 }
 /// The uniform scale a node's accumulated `transform` applies: `sqrt(|det|)`. A tolerance
 /// stated on the page has to be divided by this to hold in the path's own coordinates.
+///
+/// Only the linear 2 x 2 part `[a c; b d]` of each transform matters (translation does not
+/// scale); the parts of the node's own and every ancestor's `transform` lists are multiplied
+/// together and `sqrt(|ad − bc|)` is the factor by which the product scales area, square-
+/// rooted to a length. For a non-uniform scale this is the geometric mean of the two axis
+/// scales. A singular transform (determinant under 1e-12) reads as 1.
 pub(crate) fn node_scale(node: roxmltree::Node) -> f64 {
     let mut m = [1.0, 0.0, 0.0, 1.0];
     for anc in node.ancestors() {
@@ -122,20 +135,34 @@ fn text_cost(d: &str) -> (usize, f64) {
 }
 /// One `<path>` element, read out of the document so it can be fitted on any thread.
 struct Job {
+    /// The `d` attribute's value.
     d: String,
+    /// Byte range of the whole `d="…"` attribute in the source.
     d_range: Range<usize>,
+    /// The quote character the source used around `d`.
     quote: char,
+    /// Byte range of the whole `<path …/>` element.
     node_range: Range<usize>,
     /// The element's other attributes, as written, when it can be replaced whole.
     other_attrs: Option<Vec<String>>,
+    /// The accumulated transform's scale ([`node_scale`]).
     scale: f64,
 }
 /// What became of one path: the text to splice in, if any, and its share of the report.
 struct Outcome {
+    /// The replacement, for either the `d` attribute or the whole element.
     edit: Option<(Range<usize>, String)>,
+    /// This path's contribution to the [`Report`].
     delta: Report,
 }
 /// Fit one path and decide, byte against byte, whether the rewrite is kept.
+///
+/// `eps_units` is the tolerance in document units and `ext` the drawing's extent; both are
+/// divided by the path's transform scale to work in its own coordinates. With `fit` off only
+/// the spelling changes (the `compact` mode). A path whose whole geometry is one primitive,
+/// and that is a self-closing element, is replaced by a `<circle>`, `<ellipse>` or `<rect>`
+/// when that stores fewer numbers; otherwise the new `d` is kept only if it is shorter in
+/// bytes and reads back as the same drawing ([`parses_back`]).
 fn rewrite_path(job: &Job, eps_units: f64, ext: f64, opts: &Options, fit: bool) -> Outcome {
     let mut delta = Report {
         paths: 1,
@@ -277,6 +304,10 @@ fn parses_back(d: &str, source: &[Subpath], eps: f64) -> bool {
         })
     })
 }
+/// Rewrite `svg`: every path (refitted when `fit`, respelled otherwise), then, if
+/// [`Options::document`], the rest of the document and the whitespace between tags. The
+/// tolerance in document units is `tolerance_px · extent / judge`. Fails when the text is not
+/// XML or the root has no usable size.
 pub(crate) fn run(svg: &str, opts: &Options, fit: bool) -> Result<(String, Report), String> {
     let doc = roxmltree::Document::parse(svg).map_err(|e| format!("not an SVG document: {e}"))?;
     let root = doc.root_element();
@@ -356,7 +387,7 @@ pub(crate) fn run(svg: &str, opts: &Options, fit: bool) -> Result<(String, Repor
 mod tests {
     use super::*;
 
-    fn parsed(svg: &str) -> roxmltree::Document {
+    fn parsed(svg: &str) -> roxmltree::Document<'_> {
         roxmltree::Document::parse(svg).expect("parses")
     }
 

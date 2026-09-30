@@ -5,7 +5,13 @@
 //! at corners; a run that stays within the tolerance of its chord is one line; any other
 //! run gets one cubic by least squares with its end tangents fixed, reparameterised by
 //! Newton steps, and is split at its worst point and fitted again as two when it still
-//! misses. It is linear-logarithmic and has no input on which it fails to finish.
+//! misses. Splitting stops 25 levels deep (the run is then written as its points), and each
+//! level touches every point a bounded number of times, so it has no input on which it fails
+//! to finish.
+//!
+//! Called by [`crate::write`] for every contour of an SVG sheet and by [`crate::dxf`] before
+//! the cubics become arcs. Points are millimetres; `tol` is the largest distance, in
+//! millimetres, a fitted segment may leave any input point.
 //!
 //! The tracer's own fitter (MDL over lines, cubics and arcs) was tried first and is the
 //! better fitter on what it was built for, dense pixel boundaries. On boolean-operation
@@ -25,21 +31,27 @@ pub enum Seg {
 /// Turn at a vertex, in degrees, above which it is a corner.
 pub const CORNER_DEGREES: f64 = 40.0;
 
+/// `a − b`.
 fn sub(a: Pt, b: Pt) -> Pt {
     [a[0] - b[0], a[1] - b[1]]
 }
+/// `a + b`.
 fn add(a: Pt, b: Pt) -> Pt {
     [a[0] + b[0], a[1] + b[1]]
 }
+/// `s·a`.
 fn mul(a: Pt, s: f64) -> Pt {
     [a[0] * s, a[1] * s]
 }
+/// Dot product.
 fn dot(a: Pt, b: Pt) -> f64 {
     a[0] * b[0] + a[1] * b[1]
 }
+/// Euclidean length.
 fn len(a: Pt) -> f64 {
     a[0].hypot(a[1])
 }
+/// `a` scaled to length 1; the zero vector stays zero.
 fn unit(a: Pt) -> Pt {
     let l = len(a);
     if l > 0.0 {
@@ -49,6 +61,8 @@ fn unit(a: Pt) -> Pt {
     }
 }
 
+/// The cubic Bézier `p` at `t`: `B(t) = Σ_k b_k(t)·p_k` with the Bernstein weights
+/// `(1−t)³, 3(1−t)²t, 3(1−t)t², t³`.
 fn bez(p: &[Pt; 4], t: f64) -> Pt {
     let u = 1.0 - t;
     let (b0, b1, b2, b3) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
@@ -58,6 +72,7 @@ fn bez(p: &[Pt; 4], t: f64) -> Pt {
     ]
 }
 
+/// First derivative: `B'(t) = 3(1−t)²(p1−p0) + 6(1−t)t(p2−p1) + 3t²(p3−p2)`.
 fn bez_d1(p: &[Pt; 4], t: f64) -> Pt {
     let u = 1.0 - t;
     add(
@@ -69,6 +84,7 @@ fn bez_d1(p: &[Pt; 4], t: f64) -> Pt {
     )
 }
 
+/// Second derivative: `B''(t) = 6(1−t)(p2 − 2p1 + p0) + 6t(p3 − 2p2 + p1)`.
 fn bez_d2(p: &[Pt; 4], t: f64) -> Pt {
     let u = 1.0 - t;
     add(
@@ -78,6 +94,12 @@ fn bez_d2(p: &[Pt; 4], t: f64) -> Pt {
 }
 
 /// Fit a closed contour. Returns the start point and the segments back to it.
+///
+/// The contour is cut at its corners, vertices where the direction turns by more than
+/// [`CORNER_DEGREES`] (`acos(u·v)` of the unit edge directions either side), and each run
+/// between consecutive corners is fitted on its own with its ends pinned. A contour with no
+/// corner is cut at its sharpest vertex. The start point is the first corner. Fewer than three
+/// points give no segments.
 pub fn fit_closed(c: &[Pt], tol: f64) -> (Pt, Vec<Seg>) {
     let n = c.len();
     if n < 3 {
@@ -88,8 +110,7 @@ pub fn fit_closed(c: &[Pt], tol: f64) -> (Pt, Vec<Seg>) {
         let (u, v) = (unit(sub(b, a)), unit(sub(d, b)));
         dot(u, v).clamp(-1.0, 1.0).acos().to_degrees()
     };
-    let corner_cos = CORNER_DEGREES;
-    let mut corners: Vec<usize> = (0..n).filter(|&i| turn(i) > corner_cos).collect();
+    let mut corners: Vec<usize> = (0..n).filter(|&i| turn(i) > CORNER_DEGREES).collect();
     if corners.is_empty() {
         // A smooth loop: break it at its sharpest vertex and let the fit find the rest.
         let sharpest = (0..n)
@@ -119,7 +140,9 @@ pub fn fit_closed(c: &[Pt], tol: f64) -> (Pt, Vec<Seg>) {
     (start, out)
 }
 
-/// Fit an open run of points from `run[0]` to its last point.
+/// Fit an open run of points from `run[0]` to its last point: one line when every point is
+/// within `tol` of the chord, otherwise cubics whose end tangents follow the run's first and
+/// last edges.
 fn fit_run(run: &[Pt], tol: f64, out: &mut Vec<Seg>) {
     let last = run[run.len() - 1];
     if run.len() <= 2 || straight(run, tol) {
@@ -131,6 +154,9 @@ fn fit_run(run: &[Pt], tol: f64, out: &mut Vec<Seg>) {
     fit_cubic(run, t1, t2, tol, out, 0);
 }
 
+/// Whether every point lies within `tol` of the infinite line through the run's ends
+/// (perpendicular distance `|(p − a) × (b − a)| / |b − a|`), or, when the ends coincide,
+/// within `tol` of that point.
 fn straight(run: &[Pt], tol: f64) -> bool {
     let (a, b) = (run[0], run[run.len() - 1]);
     let d = sub(b, a);
@@ -142,6 +168,8 @@ fn straight(run: &[Pt], tol: f64) -> bool {
         .all(|p| ((p[0] - a[0]) * d[1] - (p[1] - a[1]) * d[0]).abs() / l <= tol)
 }
 
+/// Chord-length parameterisation: `u_i` is the polyline length up to point `i` over the
+/// total, so `u_0 = 0` and `u_last = 1`.
 fn chord_params(run: &[Pt]) -> Vec<f64> {
     let mut u = vec![0.0; run.len()];
     for i in 1..run.len() {
@@ -152,6 +180,20 @@ fn chord_params(run: &[Pt]) -> Vec<f64> {
     u
 }
 
+/// Schneider's tangent-constrained least-squares cubic.
+///
+/// The ends are pinned at the run's ends and the inner controls are constrained to the given
+/// unit tangents, `c1 = p0 + α_l·t1` and `c2 = p3 + α_r·t2`, leaving two unknowns. Minimising
+/// `Σ_i |B(u_i) − P_i|²` over `(α_l, α_r)` gives the 2 x 2 normal equations
+///
+/// ```text
+/// | Σ A1·A1  Σ A1·A2 | |α_l|   | Σ A1·X_i |      A1 = b1(u_i)·t1,  A2 = b2(u_i)·t2,
+/// | Σ A1·A2  Σ A2·A2 | |α_r| = | Σ A2·X_i |      X_i = P_i − (b0+b1)(u_i)·p0 − (b2+b3)(u_i)·p3
+/// ```
+///
+/// solved by Cramer's rule. When the system is singular, or either `α` comes out
+/// non-positive or negligible (under 1e-6 of the chord), both fall back to a third of the
+/// chord length, Schneider's own heuristic.
 fn least_squares(run: &[Pt], u: &[f64], t1: Pt, t2: Pt) -> [Pt; 4] {
     let (p0, p3) = (run[0], run[run.len() - 1]);
     let (mut c00, mut c01, mut c11, mut x0, mut x1) = (0.0, 0.0, 0.0, 0.0, 0.0);
@@ -180,6 +222,9 @@ fn least_squares(run: &[Pt], u: &[f64], t1: Pt, t2: Pt) -> [Pt; 4] {
     [p0, add(p0, mul(t1, al)), add(p3, mul(t2, ar)), p3]
 }
 
+/// The largest distance `|B(u_i) − P_i|` over the interior points, and the index where it
+/// occurs (the middle point when every error is zero). This is the error at the assigned
+/// parameters, an upper bound on the distance to the curve.
 fn max_error(run: &[Pt], u: &[f64], b: &[Pt; 4]) -> (f64, usize) {
     let mut worst = (0.0, run.len() / 2);
     for i in 1..run.len() - 1 {
@@ -191,6 +236,9 @@ fn max_error(run: &[Pt], u: &[f64], b: &[Pt; 4]) -> (f64, usize) {
     worst
 }
 
+/// One Newton–Raphson step per point towards its nearest place on the curve: the root of
+/// `f(u) = (B(u) − P)·B'(u)`, updated as `u ← u − f / f'` with
+/// `f' = B'·B' + (B − P)·B''`, clamped to `[0, 1]`. A near-zero `f'` leaves `u` alone.
 fn reparameterise(run: &[Pt], u: &mut [f64], b: &[Pt; 4]) {
     for (i, t) in u.iter_mut().enumerate() {
         let d = sub(bez(b, *t), run[i]);
@@ -202,6 +250,12 @@ fn reparameterise(run: &[Pt], u: &mut [f64], b: &[Pt; 4]) {
     }
 }
 
+/// Schneider's recursion for one run with end tangents `t1` (leaving the start) and `t2`
+/// (pointing back from the end). A straight run is a line. Otherwise fit a cubic at chord
+/// parameters; if it misses by no more than `4·tol`, try up to four rounds of
+/// reparameterisation and refit; if it still misses, split at the worst point with the
+/// tangent there taken from its neighbours (`P_{k−1} − P_{k+1}`, so both halves meet G1) and
+/// recurse. Past depth 24, or with fewer than 4 points, the points are written as lines.
 fn fit_cubic(run: &[Pt], t1: Pt, t2: Pt, tol: f64, out: &mut Vec<Seg>, depth: usize) {
     let last = run[run.len() - 1];
     if run.len() <= 2 {

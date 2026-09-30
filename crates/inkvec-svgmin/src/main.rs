@@ -39,6 +39,8 @@ fn main() -> ExitCode {
     }
 }
 
+/// Parse the arguments, rewrite each input, and write each result to `-o`, into `--out-dir`,
+/// or to stdout. The first error stops the run.
 fn run() -> Result<(), String> {
     let mut inputs: Vec<PathBuf> = Vec::new();
     let mut output: Option<PathBuf> = None;
@@ -117,16 +119,19 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
+/// A flag's value as a number.
 fn parse<T: std::str::FromStr>(s: &str) -> Result<T, String> {
     s.parse().map_err(|_| format!("not a number: {s}"))
 }
 
+/// The file name of `p`, for the `--stats` lines.
 fn name(p: &Path) -> String {
     p.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default()
 }
 
+/// One `--stats` line: what the rewrite did, and the parameter saving as a percentage.
 fn line(r: &Report) -> String {
     let pct = if r.params_before > 0.0 {
         100.0 * (1.0 - r.params_after / r.params_before)
@@ -148,6 +153,8 @@ fn line(r: &Report) -> String {
     )
 }
 
+/// Add one file's report to the running total. The tolerance is per file; the total keeps
+/// the last one.
 fn add(t: &mut Report, r: &Report) {
     t.paths += r.paths;
     t.rewritten += r.rewritten;

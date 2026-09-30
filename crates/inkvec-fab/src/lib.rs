@@ -11,6 +11,12 @@
 //! * [`Mode::Inlay`]: one sheet per colour, cut exactly, to lay edge to edge.
 //! * [`Mode::Sticker`]: the artwork with a smoothed contour around it for print-and-cut.
 //! * [`Mode::Stencil`]: a sheet with the artwork cut out, every loose counter bridged.
+//! * [`Mode::Lines`]: line-shaped parts drawn once along their centre for a pen, scoring
+//!   blade or laser line, everything else round its outline.
+//!
+//! Besides the SVG sheets, every plan carries a DXF and GRBL G-code of the same cuts
+//! ([`dxf`], [`gcode`], with curves as circular arcs from [`biarc`]) and the preflight's
+//! findings ([`preflight`]). The Studio's Fabricate pane is the caller.
 //!
 //! The work happens in millimetres on polygons: overlaps are cut back to what shows
 //! ([`regions`]), layers are grown and clipped ([`geom`]), and every contour is refitted as
@@ -42,6 +48,9 @@ pub use options::{
 const ANALYSIS_WIDTH_MM: f64 = 100.0;
 
 /// What is in `svg`: its colours and anything that cannot be cut.
+///
+/// Measured at a nominal 100 mm width, so coverage is a share of the canvas and does not
+/// depend on the size the caller will later ask for.
 pub fn analyze(svg: &str) -> Result<Analysis, LoadError> {
     let art = load::load(svg, ANALYSIS_WIDTH_MM, 0.05)?;
     let colours = regions::visible_colours(&art, Options::default().merge_delta_e);
@@ -66,6 +75,12 @@ pub fn analyze(svg: &str) -> Result<Analysis, LoadError> {
 }
 
 /// Build the sheets `o` asks for from `svg`.
+///
+/// Loads the artwork at `o.width_mm` (flattening curves to a quarter of the output
+/// tolerance, but no finer than 2 µm), cuts it back to its visible colours, plans the sheets,
+/// and restates the saved files' size in [`Options::file_units`]. Fails for a width that is
+/// not positive or an SVG that cannot be read. `INKVEC_FAB_TIMING` prints stage timings to
+/// stderr.
 pub fn prepare(svg: &str, o: &Options) -> Result<Plan, LoadError> {
     if o.width_mm.is_nan() || o.width_mm <= 0.0 {
         return Err(LoadError("the width must be positive".into()));

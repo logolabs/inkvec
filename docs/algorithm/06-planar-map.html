@@ -9,7 +9,7 @@
 <body>
 <div class="wrap">
   <header class="masthead">
-    <p class="eyebrow">Stage 6 of 14</p>
+    <p class="eyebrow">Stage 6 of 15</p>
     <h1>Storing a shared border once, not twice</h1>
     <p class="standfirst">When two regions touch, there are two easy ways to draw the line
       between them, and both are wrong: draw it twice and the two copies can drift apart
@@ -112,6 +112,14 @@
         two faces it separates, later stages are free to refine a boundary's exact position
         as precisely as the picture supports, without ever risking a shape suddenly
         belonging to the wrong neighbour.</p>
+      <p>To find the borders, the stage reads each row of the label grid as stretches of one
+        region — "runs" — rather than pixel by pixel. A border between two neighbours in a
+        row can only sit where one run ends and the next begins, and a border between two
+        rows only where the runs above and below overlap with different regions, so the work
+        follows the number of runs and borders, not the number of pixels. Borders are a tiny
+        fraction of a large picture, so this is much faster, and it finds exactly the same
+        borders in exactly the same order. The <a href="14-fast-mode.html">Fast mode</a> page
+        draws what a run is.</p>
     </section>
 
     <section>
@@ -159,6 +167,7 @@
     <a href="11-fitting.html">11 Curve fitting</a>
     <a href="12-repair.html">12 Repair</a>
     <a href="13-emit.html">13 Emit</a>
+    <a href="14-fast-mode.html">14 Fast mode</a>
     <a href="constants.md">Constants</a>
   </nav>
 </div>

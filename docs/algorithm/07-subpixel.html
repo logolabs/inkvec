@@ -9,7 +9,7 @@
 <body>
 <div class="wrap">
   <header class="masthead">
-    <p class="eyebrow">Stage 7 of 14</p>
+    <p class="eyebrow">Stage 7 of 15</p>
     <h1>Moving every point off the grid, onto the true edge</h1>
     <p class="standfirst">The previous stage settled which shapes touch which, using
       points that sit exactly on pixel corners. This stage moves each of those points to
@@ -163,6 +163,22 @@
     </section>
 
     <section>
+      <h2>Many points at once, the same answer</h2>
+      <p>Each point's new position depends only on the picture, the colours on its two
+        sides, and where its immediate neighbours sat on the grid — never on where another
+        point has just been moved. So the stage first measures every point's new position,
+        spreading the points over all the processor cores at once, and only then moves them
+        all. A long border is itself split between cores, because on a large picture one
+        border can hold most of the points.</p>
+      <p>Because no point's answer is added to or mixed with any other's, the order in which
+        the cores finish cannot change a single digit: the result is bit for bit what one
+        core working through the points in order produces, and the tests check exactly that.
+        A small picture is still done on one core, where sharing the work would cost more
+        than it saves, and so is any run with a debugging printout switched on, so the
+        printout stays in order.</p>
+    </section>
+
+    <section>
       <h2>Junctions need a different method entirely</h2>
       <p>Where three or more boundaries meet at one point, the two-colour reasoning this
         stage otherwise relies on breaks down — the pixels there are a genuine mixture of
@@ -214,6 +230,7 @@
     <a href="11-fitting.html">11 Curve fitting</a>
     <a href="12-repair.html">12 Repair</a>
     <a href="13-emit.html">13 Emit</a>
+    <a href="14-fast-mode.html">14 Fast mode</a>
     <a href="constants.md">Constants</a>
   </nav>
 </div>

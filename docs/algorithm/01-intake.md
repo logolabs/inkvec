@@ -5,13 +5,13 @@
 > if it is genuinely degraded, priced in units of content rather than pixels, and matted to
 > two opaque colours wherever it carries transparency.
 
-**Source:** `crates/inkvec-trace/src/lib.rs` (decode and lossy detection),
+**Source:** `crates/inkvec-trace/src/load.rs` (decode and lossy detection),
 `crates/inkvec-cli/src/lib.rs` (the driver: `trace_image`, resolution invariance),
 `crates/inkvec-cli/src/alpha.rs` (unblock detection, matting),
 `crates/inkvec-sr` (the super-resolution pre-pass, as a crate of its own)
-**Entry points:** `run()` (`crates/inkvec-cli/src/lib.rs:402`), which calls
-`load_image()` (`inkvec-trace/src/lib.rs:115`) then `resolve_lossy()`
-(`inkvec-cli/src/lib.rs:424`), then `trace_image()` (`inkvec-cli/src/lib.rs:196`) — the
+**Entry points:** `run()` (`crates/inkvec-cli/src/lib.rs:679`), which calls
+`load_image_capped()` (`inkvec-trace/src/load.rs:229`) then `resolve_lossy()`
+(`inkvec-cli/src/lib.rs:716`), then `trace_image_sized()` (`inkvec-cli/src/lib.rs:207`) — the
 function that does essentially everything this stage covers.
 **Pipeline position:** before the trace crate is invoked at all. `trace_image` ends by
 calling one of `run_strokes` / `run_bilevel` / `run_color`, and it is `run_color` that
@@ -49,12 +49,35 @@ have to be resolved before a single pixel reaches the palette:
 
 ## Inputs and outputs
 
-**Input:** a file path (`load_image`, `crates/inkvec-trace/src/lib.rs:115`) or an
-in-memory byte slice (`decode_image`, `lib.rs:120`), in any format the `image` crate
-recognises; in practice PNG, JPEG, WebP, GIF, BMP or TIFF (`crates/inkvec-cli/src/args.rs:103`
-lists the accepted extensions). Both funnel through `from_dynamic` (`lib.rs:125-134`),
-which calls `.to_rgba8()` and divides every byte by 255, producing straight
-(unpremultiplied) floats — the same `Rgba` type stage 02 consumes.
+**Input:** a file path (`load_image_capped`, `crates/inkvec-trace/src/load.rs:229`, which
+the command line uses, or the uncapped `load_image`, `load.rs:90`), an in-memory byte slice
+(`decode_image` / `decode_image_capped`, `load.rs:96`, `:293`), or raw RGBA8 pixels
+(`rgba8_capped`, `load.rs:310`), in any format the `image` crate recognises; in practice
+PNG, JPEG, WebP, GIF, BMP or TIFF (`crates/inkvec-cli/src/args.rs:103` lists the accepted
+extensions). Every decoded image funnels through `from_dynamic` (`load.rs:153-169`), which
+produces straight (unpremultiplied) floats in `[0, 1]`, alpha 1 where the image has none —
+the same `Rgba` type stage 02 consumes. How it gets there depends on the layout the decoder
+handed over:
+
+* **8-bit RGBA** is read straight from the decoder's own buffer, with no copy;
+* **8-bit RGB**, the common opaque layout (every JPEG, most opaque PNGs), is widened straight
+  to four floats with alpha 255, skipping the intermediate RGBA8 buffer;
+* **every other layout** (grey, grey plus alpha, 16-bit, float) still goes through the
+  library's `into_rgba8()`, whose colour conversion the loader does not reimplement.
+
+Each byte then becomes a float by a table lookup, `UNIT[k] = k as f32 / 255.0`
+(`load.rs:115-123`, built at compile time), in parallel chunks of 65,536 pixels
+(`CONVERT_CHUNK_PIXELS`, `load.rs:107`) from 256 × 256 pixels on (`PARALLEL_MIN_PIXELS`,
+`load.rs:103`); below that it runs on the calling thread (`widen`, `load.rs:175-200`). The
+table holds exactly the quotients the old per-byte division computed, and each output float
+depends on one input byte, so neither the table nor the split can change a value; the tests
+`the_table_holds_the_quotients` and `from_dynamic_is_the_old_conversion` check every layout
+bit for bit against the old `to_rgba8()`-then-divide path, which is kept as a test oracle
+(`load.rs:336-385`). At 2048 px the intake had cost 20 ms, all serial: decode 4.9, the RGBA
+copy 4.0 and the float conversion 10.1 (`load.rs:21-23`). The copy is gone for 8-bit RGB and
+RGBA files, and the conversion is split over the cores. The method is an engineering change,
+not a published one (the doc comment says "Not from the literature"; "See also" Ragan-Kelley
+et al., Halide, PLDI 2013, on fusing an image pipeline's stages).
 
 **Output:** an `Rgba` the size the tracer will actually trace at (which may differ from the
 file's own dimensions — see unblock, SR and `--max-dim` below), an `Args` whose `lossy` and
@@ -67,8 +90,23 @@ whatever size it was actually traced at.
 
 ### Decode and the lossy-container check
 
-`load_image` / `decode_image` do nothing exotic — decode, then `from_dynamic`. The
-interesting function next to them is `lossy_container` (`lib.rs:94-113`):
+The loaders do nothing exotic — decode, then `from_dynamic` — with one change of plumbing
+since 2026-09-30: **the file is read once.** `load_image_capped` reads the whole file into
+memory (`std::fs::read`, `load.rs:230`) and decodes both the header (the dimensions the
+`--max-dim` cap is decided from) and the pixels from those bytes (`load_file_bytes_capped`,
+`load.rs:248-274`). It used to open the file twice, once for the header and once for
+`image::open`. The in-memory reader is set up as `image::open` sets up its own: the format
+comes from the file's *extension*, not from sniffing the content, with default limits; a
+path whose extension names no format goes to `image::open` itself, so even its error text is
+unchanged. The decoders are deterministic functions of the bytes, so the pixels are the
+same; `one_read_equals_image_open` (`load.rs:480`) checks PNG, BMP, JPEG and TIFF files, a
+PNG named `.jpg`, a file with no extension and a missing file, capped and uncapped, against
+the old two-open loader. The research round estimated the saving at about 0.2 ms. The
+`--lossy auto` check below still opens the file separately for its first 32 bytes, and only
+when `--lossy` is `auto` (`crates/inkvec-cli/src/lib.rs:699-705`). The doc comment files the
+change as "Not from the literature: plumbing."
+
+The interesting function next to the loaders is `lossy_container` (`load.rs:68-87`):
 
 ```rust
 pub fn lossy_container(bytes: &[u8]) -> Option<bool> {
@@ -89,7 +127,7 @@ pub fn lossy_container(bytes: &[u8]) -> Option<bool> {
 ```
 
 This is a fact about the container, not a statistic about the pixels, and the doc comment
-(`lib.rs:75-93`) is explicit about why that distinction matters: the palette has a guard for
+(`load.rs:49-67`) is explicit about why that distinction matters: the palette has a guard for
 exactly this kind of damage (`color::SOFT_NOISE_SIGMAS`, documented in `03-palette.md`), but
 until 2026-09-08 it was switched only by `coverage::intake_scale` — the measured edge
 *width* — which is blind to compression, because JPEG rings flat regions without widening
@@ -99,7 +137,7 @@ is lossless, and `VP8X`, the extended container, is left `None` rather than gues
 sub-chunks would need walking to know for certain. Every other accepted format stores exact
 samples and reads `Some(false)`. An unrecognised format reads `None`.
 
-Four tests pin this down (`lossy_container_tests`, `lib.rs:1278-1321`): a real JPEG and PNG
+Four tests pin this down (`lossy_container_tests`, `load.rs:523-573`): a real JPEG and PNG
 encode read `Some(true)` / `Some(false)` (`jpeg_is_lossy_and_png_is_not`); only the first 32
 bytes of the JPEG are needed (`a_header_is_enough`) — which matters, because the caller only
 reads a small head of the file, not the whole thing; the three WebP RIFF tags resolve as
@@ -108,7 +146,7 @@ a guess (`nonsense_is_unknown_not_clean`).
 
 ### `resolve_lossy` and `--lossy auto|on|off`
 
-`resolve_lossy` (`crates/inkvec-cli/src/lib.rs:424-437`) turns the CLI's three-way `--lossy`
+`resolve_lossy` (`crates/inkvec-cli/src/lib.rs:716-729`) turns the CLI's three-way `--lossy`
 flag (itself `inkvec_sr::Mode`, reused rather than a separate enum) into a definite yes or
 no, once, before the trace crate ever sees a pixel:
 
@@ -126,11 +164,11 @@ pub fn resolve_lossy(args: &Args, head: impl FnOnce() -> Option<Vec<u8>>) -> Arg
 ```
 
 `head` is injected rather than read directly so the function is testable without touching
-disk; `run()` (`lib.rs:402-416`) supplies it by reading the first 32 bytes of the input
+disk; `run()` (`lib.rs:699-705`) supplies it by reading the first 32 bytes of the input
 file. An unreadable or unrecognised container resolves to `Off` — "not known to be lossy" —
 because, as the doc comment states, the guard this feeds costs **10.9%** on the 246-icon
 screen set when it runs on a clean intake (0.4005 → 0.4442, measured 2026-09-08) and must
-not fire on a guess (`lib.rs:420-423`). `--lossy` defaults to `Auto`
+not fire on a guess (`lib.rs:710-715`). `--lossy` defaults to `Auto`
 (`crates/inkvec-cli/src/args.rs:82`), so container-format detection runs on every trace
 unless a user overrides it; `On` is there for a file that no longer admits what was done to
 it — a screenshot of a JPEG re-saved as PNG (`args.rs:38-42`).
@@ -142,13 +180,14 @@ The resolved `args.lossy == Mode::On` becomes `ColorOptions::lossy_intake`
 
 ### The unblock pre-pass — undoing an exact upscale
 
-`pixel_grid` (`crates/inkvec-cli/src/alpha.rs:227-255`) answers a narrow, exact question:
+`pixel_grid` (`crates/inkvec-cli/src/alpha.rs:388-402`) answers a narrow, exact question:
 is this raster a nearest-neighbour replication of a smaller one? A `k`× replication is
 exactly invertible — average each `k`×`k` block and the original pixels return bit for
-bit — so the test is deliberately strict, not a tolerance-based heuristic:
+bit — so the test is deliberately strict, not a tolerance-based heuristic. The block test
+itself is `blocks_constant` (`alpha.rs:492-506`):
 
 ```rust
-let constant = (0..h / k).all(|by| {
+(0..h / k).all(|by| {
     (0..w / k).all(|bx| {
         let first = px(bx * k, by * k);
         (0..k).all(|dy| (0..k).all(|dx| {
@@ -156,26 +195,64 @@ let constant = (0..h / k).all(|by| {
             (0..4).all(|c| (p[c] - first[c]).abs() < 1.0 / 512.0)
         }))
     })
-});
+})
 ```
 
 Every pixel in every block must match its block's first pixel to within `1.0/512.0`
 per channel — no tolerance for "nearly", because a looser test would also catch a genuine
 drawing of large flat squares and averaging that away would be a real loss
-(`alpha.rs:219-223`). `k` is tried downwards from `MAX_FACTOR = 32` to `2` so an 8× upscale
-is reported as 8×, not folded into a coarser factor it also happens to divide; below
-`smallest = 64` pixels per side the search stops even trying, because an unblocked image
-that small would leave too few pixels for the later boundary solve to work with
-(`alpha.rs:231-234`).
+(`alpha.rs:337-347`). `k` is tried downwards from `MAX_FACTOR = 32` to `2` so an 8× upscale
+is reported as 8×, not folded into a coarser factor it also happens to divide; the factor
+must divide both sides and leave at least `smallest = 64` pixels on each, so a raster under
+128 px on either side is never unblocked, because an image that small would leave too few
+pixels for the later boundary solve to work with (`alpha.rs:343-347, 393-394`).
+
+**Which factors get the block test: the gcd of the change positions.** Since 2026-09-30 the
+block test no longer runs for every divisor of `w` and `h`. One early-exiting scan first
+computes
+
+```text
+g = gcd(w, h, every column x >= 1 where some pixel differs from its left neighbour by
+               more than 1/256 in some channel,
+               every row y >= 1 where some pixel differs that much from the one above)
+```
+
+(`change_gcd`, `alpha.rs:443-474`, with `SHARP = 1/256` at `:445`), stopping as soon as
+`g` reaches 1. Then only the `k` that divide `g` get the block test, from `k_max` down
+(`alpha.rs:399-401`). The answer is the old answer on any input, by the argument the doc
+comment gives (`alpha.rs:363-371`): if a factor `k` passes the block test, two horizontally
+adjacent pixels at `x − 1` and `x` with `k ∤ x` lie in one block, so each is within `1/512`
+of the block's first pixel and they differ by less than `2 · 2⁻⁹ = 1/256`. Every position
+where neighbours differ by more than `1/256` is therefore a multiple of `k`, and so are `w`
+and `h`: `k` divides `g`. Skipping the `k ∤ g` never skips a passing factor, and the others
+get the old test itself. For 8-bit input the two views coincide: distinct levels are at
+least `1/255 > 1/256` apart, so a "sharp change" is any change, and the block test only
+confirms.
+
+It is fast because on anything that is not an upscale two edges at coprime positions appear
+within the first rows of content, `g` falls to 1 and no block test runs. The old loop ran
+the block test once per divisor from 32 down, each scanning until its first non-constant
+block, most of it on the blank rows above the artwork: 7.1 ms at 2048 px
+(`alpha.rs:373-380`). Blank rows are skipped cheaply: a row is first compared with the row
+above, and with itself shifted by one pixel, bit for bit (`same_bits`, `alpha.rs:479-487`,
+64 floats at a time), and only a row that differs is examined pixel by pixel. The gcd is
+Stein's binary algorithm and divisibility is tested by multiplying back (`gcd`, `divides`,
+`alpha.rs:407-429`), because wazero's arm64 compiler once miscompiled `i32.rem_u` in a hot
+loop and the Go binding runs this crate as WebAssembly. Citation, as the doc comment gives
+it: "Not from the literature: the gcd of change positions as a candidate filter for exact
+block replication, because the published resampling detectors are statistical"; "See
+also" Popescu & Farid, "Exposing Digital Forgeries by Detecting Traces of Resampling", IEEE
+Trans. Signal Processing 53(2), 2005. The old serial loop is kept as an oracle in
+`alpha/intake_tests.rs`.
 
 `trace_image` runs this first, before anything else looks at the image
-(`crates/inkvec-cli/src/lib.rs:210-226`), and the doc comment above the call states the
+(`crates/inkvec-cli/src/lib.rs:255-279`), and the doc comment on `pixel_grid` states the
 measured cost of a naive tracer that skips it: a 96-px logo blown up to 768 traces its
 pixel boundaries directly, coming back as 13 inks instead of 3 and 1568 straight lines
-walking round pixel corners instead of the original curves. `--no-unblock` disables it.
-Detection is exact-match only; a resampled or anti-aliased upscale — where block boundaries
-are not perfectly constant — fails this test by design and is `--sr`'s problem instead
-(`alpha.rs:225-226`).
+walking round pixel corners instead of the original curves (`alpha.rs:330-335`).
+`--no-unblock` disables it. Detection is exact-match only; a resampled or anti-aliased
+upscale — where block boundaries are not perfectly constant — fails this test by design and
+is `--sr`'s problem instead (`alpha.rs:349-350`).
 
 ### Why the SR pre-pass runs after unblock, not before
 
@@ -373,6 +450,14 @@ stays within `tau * sigma` of it (stage 02's central idea), inflating `sigma` by
 the same *relative* deviation — now `s` times larger in raw pixels, because the boundary
 itself is `s` times bigger — pass the same test it would have passed at 128 px.
 
+Fast mode's fitter reads neither these polylines nor their sigmas: it fits the map's edges
+directly, in pixels, with its own tolerances (see `14-fast-mode.md`). **Unverified:** the
+Fast fitter round (merged into `integ/fast` at `5aa2566`, not yet on the branch this page
+was written on) is reported by its merge notes to stop building the content-unit
+polylines, and so to stop calling `content_scale`, in Fast mode unless `--editability` is
+set, whose structure passes read them; on this branch `fit_boundaries`
+(`crates/inkvec-cli/src/pipeline.rs`) still builds them in both modes.
+
 **`fit_config`** (`lib.rs:122-136`) goes further: it also multiplies `--precision` by `s`
 before deriving `lambda`, and then multiplies the resulting `lambda` by `s` again:
 
@@ -465,9 +550,10 @@ Everything from `coverage::bilevel_coverage` (stage 02) onward assumes an opaque
 coverage projection needs a definite foreground and background colour to unmix a pixel
 against, and the palette has no fourth, alpha, dimension to cluster on. So intake's last
 step, after every resampling decision above, is to matte transparency away
-(`crates/inkvec-cli/src/alpha.rs:319-320`).
+(`alpha_source_owned`, called at `crates/inkvec-cli/src/lib.rs:612-625`; see "Applying the
+matte" below).
 
-`choose_matte` (`alpha.rs:287-424`) picks the flattening colour by what it would *swallow*
+`choose_matte` (`alpha.rs:583-725`) picks the flattening colour by what it would *swallow*
 rather than by a fixed choice. White was the historical default, and white is exactly wrong
 for the input people bring most often: a white mark on a transparent ground composites to
 one flat white and traces to nothing at all; a pale translucent panel disappears into a
@@ -494,6 +580,46 @@ committed CI screen-set gate rejected an always-on content-aware matte outright 
 cannot see any of the gain a better matte buys on other backgrounds (`alpha.rs:436-442`).
 `INKVEC_MATTE=white|black|magenta` (*removed*) forces the answer from the environment
 (`alpha.rs:309-316`), bypassing `choose_matte` entirely.
+
+**Applying the matte: once, in place, in parallel.** Since 2026-09-30 the intake calls
+`alpha_source_owned` (`alpha.rs:797-808`) rather than the copying `alpha_source`
+(`alpha.rs:771-780`), which only the `--sr auto` probe trace still uses
+(`crates/inkvec-cli/src/lib.rs:967`). The steps:
+
+1. **Any transparency at all?** `has_transparency` (`alpha.rs:1023-1036`) reads the fourth
+   float of every whole pixel and stops at the first under 0.999 — the same set of floats the
+   old strided scan visited. On an opaque image that is a read of every alpha, 3.3 ms serial
+   at 2048 px; it is now split over rayon's workers from 256 × 256 pixels on
+   (`INTAKE_PARALLEL_MIN`, `alpha.rs:1011`), in jobs of at least 16,384 pixels
+   (`FLATTEN_CHUNK`, `:1013`). `any` is a pure predicate, so the answer cannot depend on the
+   split. An image with none goes on untouched (`Err(img)` hands it back).
+2. **The matte is decided on the untouched image** (`MattePlan`, `alpha.rs:812-885`):
+   white for the native-alpha path, otherwise `choose_matte` as above, with the cutout turned
+   on when too much of the silhouette would vanish into white.
+3. **Every pixel is flattened over the input's own buffer** (`flatten_in_place`,
+   `alpha.rs:980-1007`) by `flatten_pixel` (`alpha.rs:967-974`): with `a' = clamp(a, 0, 1)`,
+   `p ← [r·a' + M_r·(1 − a'), g·a' + M_g·(1 − a'), b·a' + M_b·(1 − a'), 1]`, the old push
+   loop's arithmetic operand for operand. The copy `flatten_over` made was a fresh 64 MB
+   buffer at 2048 px, whose page faults and release the shared-stage research measured at
+   5.7 + 1.7 ms, and it was a serial push loop, 26.7 ms of a 2048 px transparent trace. The
+   flatten is now parallel above the same threshold, and each output pixel depends on one
+   input pixel, so the split cannot change a bit.
+
+The notes printed to stderr (the matte, the share of clear pixels, why the cutout was turned
+on) are the old ones in the old order (`MattePlan::finish`). Oracles for all three rewrites
+(the strided scan, the copying flatten, the gcd-free unblock loop) are kept in
+`crates/inkvec-cli/src/alpha/intake_tests.rs`. Citations, as the doc comments give them:
+the flatten is "Method from" Porter & Duff, "Compositing Digital Images", SIGGRAPH '84 (the
+"over" operator with an opaque background, adapted to straight colour); writing it in place
+is "Not from the literature: buffer reuse", with "See also" Leijen, Zorn & de Moura,
+"Mimalloc: Free List Sharding in Action", APLAS 2019, the allocator-side answer to the same
+page-fault cost.
+
+Every stage of both modes then reads the image composited over white, and that composite,
+`Rgba::composited` (`crates/inkvec-trace/src/coverage.rs:213-230`), is parallel too from
+256 × 256 pixels on (`COMPOSITE_PARALLEL_MIN`, `coverage.rs:234`): 11–18 ms serial at
+2048 px before, the same "over" expression per pixel after, checked bit for bit against the
+serial map (`the_parallel_composite_is_the_serial_one`).
 
 `crates/inkvec-trace/src/alpha.rs` is a related but distinct mechanism, run *after* the
 trace rather than during intake: `decompose` (`alpha.rs:345`) recovers a translucent layer
@@ -522,9 +648,16 @@ twenty" of the census used to tune it — two of forty (`args.rs:126-132`,
 | `INTAKE_SCALE_CAP` | `8.0` | ceiling on how much `--intake-scale` will discard from one estimate | "A wrong estimate should cost detail slowly, not all at once" (`lib.rs:153-154`) |
 | `--max-dim` default | `2048` px | ceiling on traced (not emitted) size | qualitative: "keeps a typical logo under a few seconds" (`crates/inkvec-cli/src/args.rs:113-116`); no sweep cited |
 | `--time-budget` split | `0.6` merge / `0.25` boundary-solve | how an advisory wall-clock budget is allotted between the two most expensive stages | stated as a fixed split, no numeric derivation given (`args.rs:117-120`, `lib.rs:787-794`) |
-| `MAX_FACTOR` (`pixel_grid`) | `32` | largest replication factor the unblock pre-pass will try | tried downwards so an 8× upscale is reported as 8×, not folded into a smaller divisor; no numeric derivation for the cap itself (`crates/inkvec-cli/src/alpha.rs:222-223, 228`) |
-| `smallest` (`pixel_grid`) | `64` px | floor below which unblocking is not attempted | "leaves too few pixels for the boundary solve to work with" (`alpha.rs:231-234`); no swept value |
-| block-constant tolerance (`pixel_grid`) | `1.0/512.0` per channel | how exactly a block must match to be called a replication | "strict — no tolerance for 'nearly'"; qualitative only, no numeric derivation for `1/512` specifically (`alpha.rs:219-223`) |
+| `MAX_FACTOR` (`pixel_grid`) | `32` | largest replication factor the unblock pre-pass will try | tried downwards so an 8× upscale is reported as 8×, not folded into a smaller divisor; no numeric derivation for the cap itself (`crates/inkvec-cli/src/alpha.rs:340-341, 389`) |
+| `smallest` (`pixel_grid`) | `64` px | floor below which unblocking is not attempted | "leaves too few pixels for the boundary solve to work with" (`alpha.rs:391-394`); no swept value |
+| block-constant tolerance (`blocks_constant`) | `1.0/512.0` per channel | how exactly a block must match to be called a replication | "under half an 8-bit level, so for 8-bit input it is exact equality and only float round-off is forgiven" (`alpha.rs:343-345`); no swept value |
+| `SHARP` (`change_gcd`) | `1.0/256.0` per channel | a neighbour difference above this counts as a change position for the gcd filter | derived: twice the block tolerance, so two pixels of one passing block never differ by more (`alpha.rs:363-371, 445`) |
+| `INTAKE_PARALLEL_MIN` | `65,536` px (256 × 256) | below this the transparency scan and the flatten run on the calling thread | motivated: "at 128 px they take microseconds" (`alpha.rs:1009-1011`); no sweep |
+| `FLATTEN_CHUNK` | `16,384` px | pixels per parallel job of the flatten, and the smallest job of the transparency scan | none (`alpha.rs:1012-1013`) |
+| `PARALLEL_MIN_PIXELS` (`load.rs`) | `65,536` px (256 × 256) | below this the byte-to-float conversion runs on the calling thread | motivated: "at 128 px it is a few microseconds, less than handing it to rayon" (`crates/inkvec-trace/src/load.rs:101-103`) |
+| `CONVERT_CHUNK_PIXELS` | `65,536` px | pixels per parallel job of the byte-to-float conversion | motivated: "enough work to amortise the job and few enough jobs (64 at 2048 × 2048) for rayon to balance" (`load.rs:105-107`) |
+| `UNIT` | `k / 255` for `k` in `0..=255` | the float every 8-bit sample becomes | derived: holds exactly the quotients the old per-byte division gave (`load.rs:109-123`) |
+| `COMPOSITE_PARALLEL_MIN` | `65,536` px (256 × 256) | below this the composite over white runs on the calling thread | motivated: below it "the pass is a few microseconds" (`crates/inkvec-trace/src/coverage.rs:203-206, 233-234`) |
 | `MARGIN` (`choose_matte`) | `10.0` (CIEDE2000) | how close a composited colour must land to a matte candidate to count as "swallowed" | no stated numeric derivation |
 | `SWALLOWED` | `0.33` | share of drawn-and-translucent mass a matte candidate may swallow before rejection | motivated by the white-highlight and white-sock cases; the specific `0.33` itself is not swept (`alpha.rs:271-306`) |
 | `DRAWN` | `0.5` | alpha above which a pixel counts as part of the silhouette rather than a glow/translucency vote | "faint content is baked against the matte whatever it is... letting it vote flipped two emoji onto a black matte" — qualitative (`alpha.rs:297-307`) |
@@ -581,7 +714,7 @@ twenty" of the census used to tune it — two of forty (`args.rs:126-132`,
 - **`pixel_grid`'s exact-match requirement is a deliberate blind spot, not an oversight.**
   A resampled or anti-aliased upscale — bilinear, Lanczos, or anything that blends across
   block edges — fails the constant-block test by design; that class of damage is `--sr`'s
-  job (`alpha.rs:225-226`).
+  job (`alpha.rs:349-350`).
 
 ## Environment overrides
 
@@ -595,13 +728,12 @@ Since the settings cleanup (CHANGELOG, *Unreleased*) the engine reads its enviro
 | `INKVEC_LAYER_SIGMA` (*removed*) | overrides the sRGB noise sigma used when fitting a translucent layer | `LAYER_SIGMA_SRGB` | `crates/inkvec-cli/src/alpha.rs:567-571` |
 | `INKVEC_ALPHADBG` | prints alpha/layer diagnostics to stderr | unset (silent) | `crates/inkvec-cli/src/alpha.rs:708`, `crates/inkvec-cli/src/emit.rs:569` |
 
-No `INKVEC_*` variable is read inside `inkvec-trace/src/lib.rs`'s `load_image`
-(`lib.rs:127-130`), `decode_image` (`lib.rs:133-136`), `from_dynamic` (`lib.rs:138-147`) or
-`lossy_container` (`lib.rs:105-124`), nor anywhere in the `inkvec-sr` crate — every knob in
-the SR pre-pass and the lossy-container check is a CLI flag, not an environment variable.
-Other functions later in that same file (`lib.rs`) do read many `INKVEC_*` variables — for
-palette, boundary-solve, decode and other downstream stages — but none of those reads
-happen inside the four intake functions named above.
+No `INKVEC_*` variable is read anywhere in `inkvec-trace/src/load.rs` — `load_image_capped`,
+`load_image`, `decode_image`, `from_dynamic`, `lossy_container` and the rest — nor anywhere
+in the `inkvec-sr` crate: every knob in the SR pre-pass and the lossy-container check is a
+CLI flag, not an environment variable. Other files of the trace crate (`lib.rs` above all)
+do read many `INKVEC_*` variables — for palette, boundary-solve, decode and other downstream
+stages — but none of those reads happen in the loader.
 
 ## Open questions
 

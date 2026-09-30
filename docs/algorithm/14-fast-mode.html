@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fast mode — inkvec</title>
+<link rel="stylesheet" href="assets/doc.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="masthead">
+    <p class="eyebrow">Stage 14 of 15</p>
+    <h1>The fast route: the same map, lighter work</h1>
+    <p class="standfirst">Fast mode traces a picture in a fraction of the time the full
+      engine takes. It keeps the parts that make the drawing correct — shapes that share
+      their borders exactly, and edges placed to a fraction of a pixel — and swaps every
+      slow search for a quick, single-pass version. This page follows that route from the
+      file to the finished SVG, and explains how the latest round made it faster again
+      without changing a single byte of what it draws.</p>
+    <p class="pairlink">Technical reference: <a href="14-fast-mode.md">14-fast-mode.md</a></p>
+  </header>
+  <main>
+
+    <section>
+      <h2>Two routes through the same machine</h2>
+      <p>The full engine, called Quality, spends its time searching. It weighs every
+        possible colour against the evidence before accepting it, merges bands of a
+        colour fade two at a time and re-checks after each merge, moves every edge of the
+        picture at once until a re-drawing matches the pixels, and tries many ways of
+        drawing each outline before picking the cheapest.</p>
+      <p>Fast mode answers the same questions in one pass each. It shares the middle of the
+        pipeline with Quality unchanged — the map in which every border is stored once, the
+        step that moves each border point onto the true edge, the symmetry check, and the
+        writer that produces the file — and replaces the rest.</p>
+      <figure>
+        <svg viewBox="0 0 760 256" role="img" aria-label="Two lanes, Quality above and Fast below, passing through the same shared middle stages; Fast replaces the colour, region and curve stages with quick versions and skips the whole-picture boundary solve">
+          <defs>
+            <marker id="arr14" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" class="fig-ink"></path>
+            </marker>
+          </defs>
+          <text x="20" y="28" class="fig-label-strong">QUALITY</text>
+          <text x="20" y="148" class="fig-label-strong">FAST</text>
+          <!-- Quality lane -->
+          <rect x="20" y="40" width="110" height="44" rx="5" fill="none" stroke="var(--rule)" stroke-width="1.5"></rect>
+          <text x="75" y="60" class="fig-label" text-anchor="middle">evidence-weighed</text>
+          <text x="75" y="75" class="fig-label" text-anchor="middle">palette</text>
+          <rect x="142" y="40" width="110" height="44" rx="5" fill="none" stroke="var(--rule)" stroke-width="1.5"></rect>
+          <text x="197" y="60" class="fig-label" text-anchor="middle">regions, fades</text>
+          <text x="197" y="75" class="fig-label" text-anchor="middle">merged in pairs</text>
+          <rect x="386" y="40" width="110" height="44" rx="5" fill="none" stroke="var(--rule)" stroke-width="1.5"></rect>
+          <text x="441" y="60" class="fig-label" text-anchor="middle">every edge moved</text>
+          <text x="441" y="75" class="fig-label" text-anchor="middle">at once</text>
+          <rect x="508" y="40" width="110" height="44" rx="5" fill="none" stroke="var(--rule)" stroke-width="1.5"></rect>
+          <text x="563" y="60" class="fig-label" text-anchor="middle">best of many</text>
+          <text x="563" y="75" class="fig-label" text-anchor="middle">curve choices</text>
+          <!-- Fast lane -->
+          <rect x="20" y="160" width="110" height="44" rx="5" class="fig-accent" opacity="0.18"></rect>
+          <text x="75" y="180" class="fig-label" text-anchor="middle">one-pass</text>
+          <text x="75" y="195" class="fig-label" text-anchor="middle">colour count</text>
+          <rect x="142" y="160" width="110" height="44" rx="5" class="fig-accent" opacity="0.18"></rect>
+          <text x="197" y="180" class="fig-label" text-anchor="middle">tidy regions,</text>
+          <text x="197" y="195" class="fig-label" text-anchor="middle">rebuild fades</text>
+          <rect x="386" y="160" width="110" height="44" rx="5" fill="none" stroke="var(--ink-faint)" stroke-dasharray="4 4"></rect>
+          <text x="441" y="186" class="fig-label" text-anchor="middle">skipped</text>
+          <rect x="508" y="160" width="110" height="44" rx="5" class="fig-accent" opacity="0.18"></rect>
+          <text x="563" y="180" class="fig-label" text-anchor="middle">Potrace-style</text>
+          <text x="563" y="195" class="fig-label" text-anchor="middle">curves</text>
+          <!-- shared -->
+          <rect x="264" y="40" width="110" height="164" rx="6" fill="none" stroke="var(--ink)" stroke-width="1.5"></rect>
+          <text x="319" y="104" class="fig-label-strong" text-anchor="middle">shared:</text>
+          <text x="319" y="122" class="fig-label" text-anchor="middle">border map,</text>
+          <text x="319" y="137" class="fig-label" text-anchor="middle">edge placement,</text>
+          <text x="319" y="152" class="fig-label" text-anchor="middle">symmetry</text>
+          <rect x="630" y="40" width="110" height="164" rx="6" fill="none" stroke="var(--ink)" stroke-width="1.5"></rect>
+          <text x="685" y="118" class="fig-label-strong" text-anchor="middle">shared:</text>
+          <text x="685" y="136" class="fig-label" text-anchor="middle">write the SVG</text>
+          <!-- arrows -->
+          <g stroke="var(--ink-soft)" stroke-width="1.5" fill="none">
+            <line x1="130" y1="62" x2="140" y2="62" marker-end="url(#arr14)"></line>
+            <line x1="252" y1="62" x2="262" y2="62" marker-end="url(#arr14)"></line>
+            <line x1="374" y1="62" x2="384" y2="62" marker-end="url(#arr14)"></line>
+            <line x1="496" y1="62" x2="506" y2="62" marker-end="url(#arr14)"></line>
+            <line x1="618" y1="62" x2="628" y2="62" marker-end="url(#arr14)"></line>
+            <line x1="130" y1="182" x2="140" y2="182" marker-end="url(#arr14)"></line>
+            <line x1="252" y1="182" x2="262" y2="182" marker-end="url(#arr14)"></line>
+            <path d="M374,200 C 400,240 480,240 506,200" marker-end="url(#arr14)"></path>
+            <line x1="618" y1="182" x2="628" y2="182" marker-end="url(#arr14)"></line>
+          </g>
+          <text x="441" y="248" class="fig-label" text-anchor="middle">edges go straight to the curve step</text>
+        </svg>
+        <figcaption><b>Where the two routes part.</b> Thinly outlined boxes are Quality's own
+          stages; copper boxes are Fast mode's replacements; the two tall boxes with a heavy
+          outline are the same code in both. Fast mode also leaves out two tidy-up steps after the curves (repairing
+          outlines that cross themselves, and making a shape that repeats, like the dots of an
+          ellipsis, exactly identical each time).</figcaption>
+      </figure>
+    </section>
+
+    <section>
+      <h2>Colours from the flat middles of shapes</h2>
+      <p>The first job is deciding which colours — "inks" — the picture is made of. Fast
+        mode sorts every pixel into one of a few tens of thousands of small colour boxes and
+        counts them. But a box earns an ink only through its <b>flat</b> pixels: pixels
+        whose four neighbours, left, right, above and below, fall in the same box.</p>
+      <figure>
+        <svg viewBox="0 0 640 240" role="img" aria-label="A dark shape with a one-pixel grey rim on a light background; copper dots mark the pixels whose four neighbours match them: the middle of the shape and the open background, never the rim">
+          <g transform="translate(30,24)">
+            <rect x="0" y="0" width="264" height="192" fill="var(--paper-raised)"/>
+            <rect x="48" y="24" width="168" height="144" fill="var(--ink-faint)" opacity="0.6"/>
+            <rect x="72" y="48" width="120" height="96" fill="var(--ink)" opacity="0.88"/>
+            <g stroke="var(--rule)" stroke-width="1"><line x1="0" y1="0" x2="0" y2="192"/><line x1="24" y1="0" x2="24" y2="192"/><line x1="48" y1="0" x2="48" y2="192"/><line x1="72" y1="0" x2="72" y2="192"/><line x1="96" y1="0" x2="96" y2="192"/><line x1="120" y1="0" x2="120" y2="192"/><line x1="144" y1="0" x2="144" y2="192"/><line x1="168" y1="0" x2="168" y2="192"/><line x1="192" y1="0" x2="192" y2="192"/><line x1="216" y1="0" x2="216" y2="192"/><line x1="240" y1="0" x2="240" y2="192"/><line x1="264" y1="0" x2="264" y2="192"/><line x1="0" y1="0" x2="264" y2="0"/><line x1="0" y1="24" x2="264" y2="24"/><line x1="0" y1="48" x2="264" y2="48"/><line x1="0" y1="72" x2="264" y2="72"/><line x1="0" y1="96" x2="264" y2="96"/><line x1="0" y1="120" x2="264" y2="120"/><line x1="0" y1="144" x2="264" y2="144"/><line x1="0" y1="168" x2="264" y2="168"/><line x1="0" y1="192" x2="264" y2="192"/></g>
+            <g class="fig-accent"><circle cx="12" cy="12" r="4"/><circle cx="36" cy="12" r="4"/><circle cx="228" cy="12" r="4"/><circle cx="252" cy="12" r="4"/><circle cx="12" cy="36" r="4"/><circle cx="252" cy="36" r="4"/><circle cx="12" cy="60" r="4"/><circle cx="252" cy="60" r="4"/><circle cx="12" cy="84" r="4"/><circle cx="108" cy="84" r="4"/><circle cx="132" cy="84" r="4"/><circle cx="156" cy="84" r="4"/><circle cx="252" cy="84" r="4"/><circle cx="12" cy="108" r="4"/><circle cx="108" cy="108" r="4"/><circle cx="132" cy="108" r="4"/><circle cx="156" cy="108" r="4"/><circle cx="252" cy="108" r="4"/><circle cx="12" cy="132" r="4"/><circle cx="252" cy="132" r="4"/><circle cx="12" cy="156" r="4"/><circle cx="252" cy="156" r="4"/><circle cx="12" cy="180" r="4"/><circle cx="36" cy="180" r="4"/><circle cx="228" cy="180" r="4"/><circle cx="252" cy="180" r="4"/></g>
+          </g>
+          <text x="330" y="50" class="fig-label-strong">Copper dot: a flat pixel.</text>
+          <text x="330" y="70" class="fig-label">All four of its neighbours are the same colour</text>
+          <text x="330" y="86" class="fig-label">as it is. Only flat pixels vote for an ink.</text>
+          <text x="330" y="120" class="fig-label-strong">The grey rim never has one.</text>
+          <text x="330" y="140" class="fig-label">An anti-aliased edge is one pixel wide: every</text>
+          <text x="330" y="156" class="fig-label">rim pixel touches the shape on one side and the</text>
+          <text x="330" y="172" class="fig-label">background on the other, so a blend between two</text>
+          <text x="330" y="188" class="fig-label">inks can never become an ink of its own.</text>
+        </svg>
+        <figcaption><b>Flat pixels.</b> A filled region of any size has plenty of them; the
+          blurry rim between two regions has none. That single rule does most of the work the
+          full engine's careful evidence tests do.</figcaption>
+      </figure>
+      <p>The boxes are then taken busiest first. A box joins an existing ink when its colour
+        is almost the same, or close and right next to one of that ink's boxes — one ink
+        spread over neighbouring boxes by noise. Otherwise it starts an ink of its own. Lines
+        too thin to have any flat pixel, such as small text, get a second chance from pixels
+        that have at least one matching neighbour, unless their colour is simply a blend of
+        two other inks. Finally every pixel gets its ink: most straight from a table built
+        once per box, and only the in-between pixels by looking at their neighbours.</p>
+    </section>
+
+    <section>
+      <h2>Counting in stretches, not pixel by pixel</h2>
+      <p>Logos are mostly large areas of one colour. Read along any row and the colour stays
+        the same for long stretches — "runs" — before it changes. On the large test images a
+        pixel continues its left neighbour's colour almost every time, so most of the
+        latest round's speed comes from one idea used over and over: do the work once per
+        run, not once per pixel.</p>
+      <figure>
+        <svg viewBox="0 0 640 180" role="img" aria-label="One row of sixteen pixels, five of background, six of ink and five of background, read as three runs">
+          <text x="20" y="24" class="fig-label-strong">One row of sixteen pixels…</text>
+          <g transform="translate(80,36)">
+            <g stroke="var(--rule)">
+              <rect x="0" y="0" width="30" height="30" fill="var(--paper-raised)"/><rect x="30" y="0" width="30" height="30" fill="var(--paper-raised)"/><rect x="60" y="0" width="30" height="30" fill="var(--paper-raised)"/><rect x="90" y="0" width="30" height="30" fill="var(--paper-raised)"/><rect x="120" y="0" width="30" height="30" fill="var(--paper-raised)"/>
+              <rect x="150" y="0" width="30" height="30" fill="var(--ink)" opacity="0.85"/><rect x="180" y="0" width="30" height="30" fill="var(--ink)" opacity="0.85"/><rect x="210" y="0" width="30" height="30" fill="var(--ink)" opacity="0.85"/><rect x="240" y="0" width="30" height="30" fill="var(--ink)" opacity="0.85"/><rect x="270" y="0" width="30" height="30" fill="var(--ink)" opacity="0.85"/><rect x="300" y="0" width="30" height="30" fill="var(--ink)" opacity="0.85"/>
+              <rect x="330" y="0" width="30" height="30" fill="var(--paper-raised)"/><rect x="360" y="0" width="30" height="30" fill="var(--paper-raised)"/><rect x="390" y="0" width="30" height="30" fill="var(--paper-raised)"/><rect x="420" y="0" width="30" height="30" fill="var(--paper-raised)"/><rect x="450" y="0" width="30" height="30" fill="var(--paper-raised)"/>
+            </g>
+          </g>
+          <text x="20" y="104" class="fig-label-strong">…is three runs.</text>
+          <g transform="translate(80,114)">
+            <rect x="2" y="0" width="146" height="26" rx="4" class="fig-accent" opacity="0.18"/>
+            <text x="75" y="17" class="fig-label" text-anchor="middle">5 × background</text>
+            <rect x="152" y="0" width="176" height="26" rx="4" class="fig-accent" opacity="0.35"/>
+            <text x="240" y="17" class="fig-label" text-anchor="middle">6 × ink</text>
+            <rect x="332" y="0" width="146" height="26" rx="4" class="fig-accent" opacity="0.18"/>
+            <text x="405" y="17" class="fig-label" text-anchor="middle">5 × background</text>
+          </g>
+          <text x="80" y="168" class="fig-label">The colour box is worked out once per run; a whole run's pixels are added up in one go.</text>
+        </svg>
+        <figcaption><b>Runs.</b> At 2048 pixels across, the runs of the finished region map are
+          about a quarter of a percent of the pixels. The border map, the region clean-up and
+          the fade rebuilding below all read the picture as runs.</figcaption>
+      </figure>
+    </section>
+
+    <section>
+      <h2>Why splitting the counting over many cores changes nothing</h2>
+      <p>A big image is cut into horizontal bands, and each processor core counts its own
+        band. At the end the band totals are added together. That sounds harmless, but for
+        a computer it usually is not: adding the same numbers in a different order can give
+        a result that differs in the last digit, because each addition rounds. A tracer that
+        wants the same output on every machine has to care about that last digit.</p>
+      <figure>
+        <svg viewBox="0 0 640 200" role="img" aria-label="An image split into four bands, each counted separately, and the four counts added into one total">
+          <g transform="translate(30,20)">
+            <rect x="0" y="0" width="150" height="160" fill="none" stroke="var(--rule)" stroke-width="1.5"/>
+            <g stroke="var(--rule)"><line x1="0" y1="40" x2="150" y2="40"/><line x1="0" y1="80" x2="150" y2="80"/><line x1="0" y1="120" x2="150" y2="120"/></g>
+            <text x="75" y="25" class="fig-label" text-anchor="middle">band 1</text>
+            <text x="75" y="65" class="fig-label" text-anchor="middle">band 2</text>
+            <text x="75" y="105" class="fig-label" text-anchor="middle">band 3</text>
+            <text x="75" y="145" class="fig-label" text-anchor="middle">band 4</text>
+          </g>
+          <g transform="translate(230,20)">
+            <rect x="0" y="4" width="120" height="30" rx="4" class="fig-accent" opacity="0.18"/><text x="60" y="24" class="fig-label" text-anchor="middle">core 1 counts</text>
+            <rect x="0" y="44" width="120" height="30" rx="4" class="fig-accent" opacity="0.18"/><text x="60" y="64" class="fig-label" text-anchor="middle">core 2 counts</text>
+            <rect x="0" y="84" width="120" height="30" rx="4" class="fig-accent" opacity="0.18"/><text x="60" y="104" class="fig-label" text-anchor="middle">core 3 counts</text>
+            <rect x="0" y="124" width="120" height="30" rx="4" class="fig-accent" opacity="0.18"/><text x="60" y="144" class="fig-label" text-anchor="middle">core 4 counts</text>
+          </g>
+          <g stroke="var(--ink-soft)" stroke-width="1.2">
+            <line x1="180" y1="39" x2="228" y2="39"/><line x1="180" y1="79" x2="228" y2="79"/><line x1="180" y1="119" x2="228" y2="119"/><line x1="180" y1="159" x2="228" y2="159"/>
+            <line x1="350" y1="39" x2="420" y2="99"/><line x1="350" y1="79" x2="420" y2="99"/><line x1="350" y1="119" x2="420" y2="99"/><line x1="350" y1="159" x2="420" y2="99"/>
+          </g>
+          <rect x="420" y="80" width="120" height="38" rx="5" fill="none" stroke="var(--ink)" stroke-width="1.5"/>
+          <text x="480" y="104" class="fig-label-strong" text-anchor="middle">one total</text>
+          <text x="420" y="150" class="fig-label">exactly the total one core</text>
+          <text x="420" y="166" class="fig-label">would reach, to the last bit</text>
+        </svg>
+        <figcaption><b>Order-free sums.</b> For the colour sums the palette keeps, the order
+          of addition provably cannot matter on an ordinary 8-bit image.</figcaption>
+      </figure>
+      <p>Here it provably does not matter. Every colour in an ordinary 8-bit image is a whole
+        number of very small, equal steps, and the running totals the palette keeps are wide
+        enough to hold every sum of up to about four million of them — a 2048 × 2048 image —
+        without rounding anything. A sum that never rounds is the exact answer, whatever
+        order the numbers arrive in. The code checks this condition on every value it reads;
+        an image that has been resized in between (whose colours are averages, not whole
+        steps) fails the check and is counted the slow way, one row after another, so the
+        answer is still the same. The technical page gives the short proof.</p>
+    </section>
+
+    <section>
+      <h2>Tidying the regions</h2>
+      <p>Once every pixel has an ink, pixels of one ink that touch form a region. Before the
+        border map is built, five quick passes tidy them:</p>
+      <ul>
+        <li><b>Slivers</b> — thin strips along an edge that are only a blend of the two
+          regions either side go back to whichever of the two they mostly are.</li>
+        <li><b>Rims</b> — the grey outline around small text, itself a strip between two
+          inks, is split between the letter and the paper.</li>
+        <li><b>Near-identical inks</b> — a patch whose ink the eye cannot tell from its
+          larger neighbour's joins it.</li>
+        <li><b>Speckles</b> — regions below a size that grows with the picture are given to
+          the neighbour they share the longest border with, so no hole is left.</li>
+        <li><b>Faces</b> — what remains is numbered, one number per connected region.</li>
+      </ul>
+      <p>All five now work on the runs. The pixel labels are read once, when the runs are
+        made, and written once, at the end. In between, everything the passes need — a
+        region's size, whether it has an inside at all, the length of its border with each
+        neighbour — is read off the runs. On a 2048-pixel image the whole tidy-up went from
+        76.2 milliseconds to 3.86.</p>
+    </section>
+
+    <section>
+      <h2>Putting smooth fades back together</h2>
+      <p>A smooth colour fade has no flat colour, so the ink-finding step turns it into bands,
+        and each band would get a border of its own. Neighbouring regions whose inks are only
+        a small step apart are grouped, each group gets one gradient fitted to it, and the
+        gradient is kept when it explains the pixels about as well as the bands did.</p>
+      <p>The latest round added a shortcut that is a proof, not a guess: two regions that
+        touch always have different inks, so if no two different inks in the whole picture
+        are close enough to be steps of one fade, nothing could ever be grouped — and the
+        pass stops before looking at a single pixel. That settled 5 of the 7 large test
+        images outright.</p>
+    </section>
+
+    <section>
+      <h2>The shared middle</h2>
+      <p>From here Fast mode runs the same code as Quality: the <a href="06-planar-map.html">border
+        map</a>, the step that moves each border point onto the <a href="07-subpixel.html">true
+        edge</a>, and the <a href="10-symmetry.html">symmetry</a> check. All three got faster
+        for both modes: the map's borders are read off runs, and the edge placement, which
+        looks at each point on its own, now measures many points at once on different cores
+        while the symmetry check runs beside it. Only the whole-picture adjustment that
+        Quality runs next is left out.</p>
+    </section>
+
+    <section>
+      <h2>Drawing the curves the Potrace way</h2>
+      <p>For the curves, Fast mode follows the classic method of Potrace, a well-known tracer
+        from 2003, restated for points that already sit at their true positions between the
+        pixels rather than on the pixel corners Potrace starts from. Each shared border is
+        fitted once, so the two regions either side draw exactly the same curve.</p>
+      <figure>
+        <svg viewBox="0 0 760 230" role="img" aria-label="Four panels: measured points along a boundary with a corner; the fewest straight sides that stay close to them; the corner kept and the rest smoothed into curves; and the smooth run merged into one curve">
+          <g transform="translate(10,20)">
+            <text x="0" y="0" class="fig-label-strong">1. measured points</text>
+            <g class="fig-accent">
+              <circle cx="10" cy="150" r="2.6"/><circle cx="22" cy="150.5" r="2.6"/><circle cx="34" cy="149.6" r="2.6"/><circle cx="46" cy="150.3" r="2.6"/><circle cx="58" cy="150" r="2.6"/><circle cx="60" cy="138" r="2.6"/><circle cx="59.6" cy="126" r="2.6"/><circle cx="60.4" cy="114" r="2.6"/><circle cx="61" cy="102" r="2.6"/><circle cx="63" cy="90" r="2.6"/><circle cx="68" cy="79" r="2.6"/><circle cx="75" cy="69" r="2.6"/><circle cx="84" cy="60" r="2.6"/><circle cx="95" cy="52" r="2.6"/><circle cx="107" cy="46" r="2.6"/><circle cx="120" cy="42" r="2.6"/><circle cx="134" cy="40" r="2.6"/><circle cx="148" cy="39" r="2.6"/>
+            </g>
+          </g>
+          <g transform="translate(200,20)">
+            <text x="0" y="0" class="fig-label-strong">2. fewest straight sides</text>
+            <polyline points="10,150 60,150 61,102 75,69 107,46 148,39" fill="none" stroke="var(--ink)" stroke-width="1.8"/>
+            <g fill="var(--ink)"><rect x="7" y="147" width="6" height="6"/><rect x="57" y="147" width="6" height="6"/><rect x="58" y="99" width="6" height="6"/><rect x="72" y="66" width="6" height="6"/><rect x="104" y="43" width="6" height="6"/><rect x="145" y="36" width="6" height="6"/></g>
+          </g>
+          <g transform="translate(390,20)">
+            <text x="0" y="0" class="fig-label-strong">3. corners and curves</text>
+            <polyline points="10,150 60,150 61,102 75,69 107,46 148,39" fill="none" stroke="var(--ink-faint)" stroke-width="1" stroke-dasharray="3 3"/>
+            <path d="M10,150 L60,150 L60.5,126 C61,98 70,72 91,57 C104,48 124,41 148,39" fill="none" stroke="var(--ink)" stroke-width="1.8"/>
+            <rect x="56" y="146" width="8" height="8" fill="none" stroke="var(--copper)" stroke-width="2"/>
+            <g class="fig-accent"><circle cx="60.5" cy="126" r="3"/><circle cx="91" cy="57" r="3"/></g>
+            <text x="70" y="172" class="fig-label">corner stays sharp</text>
+          </g>
+          <g transform="translate(580,20)">
+            <text x="0" y="0" class="fig-label-strong">4. merged curves</text>
+            <path d="M60.5,126 L61,78" stroke="var(--ink-faint)" stroke-dasharray="3 3" fill="none"/>
+            <path d="M148,39 L96,40" stroke="var(--ink-faint)" stroke-dasharray="3 3" fill="none"/>
+            <path d="M10,150 L60,150 L60.5,126 C61,78 96,40 148,39" fill="none" stroke="var(--copper)" stroke-width="2.2"/>
+            <g fill="var(--paper-raised)" stroke="var(--ink-soft)"><circle cx="61" cy="78" r="3"/><circle cx="96" cy="40" r="3"/></g>
+            <text x="20" y="172" class="fig-label">two lines and one curve</text>
+          </g>
+        </svg>
+        <figcaption><b>The four steps.</b> (1) The border points, already placed between the
+          pixels. (2) The fewest straight sides that stay within half a pixel of every point.
+          (3) Each corner of that outline is either kept sharp — where rounding it would miss
+          the points — or rounded into a curve fitted to the points around it. (4) Runs of
+          smooth curves bending one way are merged wherever a single curve says the same
+          thing.</figcaption>
+      </figure>
+      <p>Before those steps, a closed outline that is really a circle or an ellipse is
+        recognised as one and written with three or five numbers instead of a chain of curves;
+        and a border between two nearly identical colours is fitted more loosely, because a
+        small misplacement there is invisible. Borders are fitted on all cores at once, each
+        on its own.</p>
+      <p class="aside">A further round of work on this curve step was finished just after
+        this page was written. It makes the step several times faster, and also writes the
+        picture's outer frame as the exact rectangle it is; the technical page lists what it
+        reports, marked as not yet checked against the code.</p>
+    </section>
+
+    <section>
+      <h2>Faster, and not one byte different</h2>
+      <p>Every change to the steps described above was made with the output held fixed (the
+        outer-frame change in the curve step, mentioned just above, is the one deliberate
+        exception, and belongs to the later round). Each rewritten step
+        keeps the code it replaced as a reference, the tests compare the two on random and
+        awkward inputs, and the finished SVG files were compared byte for byte across
+        hundreds of test images in both modes. Measured per image on a busy development
+        machine, so the milliseconds are approximate:</p>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Step</th><th>Image size</th><th>Before</th><th>After</th></tr></thead>
+          <tbody>
+            <tr><td>Finding the inks</td><td>2048 px</td><td class="num">47.7 ms</td><td class="num">7.1 ms</td></tr>
+            <tr><td>Finding the inks</td><td>128 px</td><td class="num">1.85 ms</td><td class="num">0.40 ms</td></tr>
+            <tr><td>Tidying the regions</td><td>2048 px</td><td class="num">76.2 ms</td><td class="num">3.86 ms</td></tr>
+            <tr><td>Tidying the regions</td><td>128 px</td><td class="num">0.50 ms</td><td class="num">0.09 ms</td></tr>
+            <tr><td>Fades, border map, edge placement</td><td>2048 px</td><td class="num">42 ms</td><td class="num">13 ms</td></tr>
+            <tr><td>The same, plus transparency, on a transparent image</td><td>2048 px</td><td class="num">130 ms</td><td class="num">21 ms</td></tr>
+            <tr><td>The same</td><td>128 px</td><td class="num">1.8 ms</td><td class="num">1.2 ms</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>The shared middle is shared: Quality mode gained the border map and edge placement
+        speed-ups too.</p>
+    </section>
+
+    <section>
+      <h2>Writing the file</h2>
+      <p>The last step is Quality's own writer, with one difference: Fast mode does not
+        make repeated, near-identical shapes exactly identical. For a transparent picture, the check
+        for shapes that fade from solid to see-through now skips every shape where a fade is
+        mathematically impossible — too small, or completely solid inside — instead of
+        testing every shape against the whole picture. The <a href="13-emit.html">writer's
+        page</a> has the details.</p>
+    </section>
+
+  </main>
+  <nav class="stages">
+    <a href="00-overview.html">Overview</a>
+    <a href="01-intake.html">1 Intake</a>
+    <a href="02-coverage.html">2 Coverage</a>
+    <a href="03-palette.html">3 Palette</a>
+    <a href="04-regions.html">4 Regions</a>
+    <a href="05-gradients.html">5 Gradients</a>
+    <a href="06-planar-map.html">6 Planar map</a>
+    <a href="07-subpixel.html">7 Sub-pixel</a>
+    <a href="08-boundary-solve.html">8 Boundary solve</a>
+    <a href="09-decode.html">9 Decode</a>
+    <a href="10-symmetry.html">10 Symmetry</a>
+    <a href="11-fitting.html">11 Curve fitting</a>
+    <a href="12-repair.html">12 Repair</a>
+    <a href="13-emit.html">13 Emit</a>
+    <a href="14-fast-mode.html" aria-current="page">14 Fast mode</a>
+    <a href="constants.md">Constants</a>
+  </nav>
+</div>
+</body>
+</html>

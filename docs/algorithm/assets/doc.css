@@ -1,7 +1,7 @@
 /* Shared stylesheet for the plain-language stage pages in docs/algorithm/.
  *
  * The LogoLabs system: warm charcoal ground, one copper accent, Playfair for display and
- * Inter for text. Every stage page links this file and writes content only, so fourteen
+ * Inter for text. Every stage page links this file and writes content only, so fifteen
  * pages written separately still read as one document. Fonts come from Google with a real
  * fallback stack, because these pages are opened from disk and may well be offline.
  */

@@ -3,10 +3,15 @@
 > Moves every boundary point from an exact pixel-grid corner to the sub-pixel position
 > the image actually supports, and attaches an honest uncertainty to each one.
 
-**Source:** `crates/inkvec-trace/src/planar.rs`
-**Entry points:** `fn refine_subpixel()` (`planar.rs:369`, 360 lines, stage mark `"refine_subpix"`) and
-`fn refine_junctions()` (`planar.rs:1032`, stage mark `"refine_junc"`)
-**Pipeline position:** after `build_map` / `symmetry_detect`, before `boundary_opt` (`lib.rs:460-463`)
+**Source:** `crates/inkvec-trace/src/planar.rs`, `crates/inkvec-trace/src/planar/junctions.rs`
+**Entry points:** `fn refine_subpixel_alpha()` (`planar.rs:468-477`; `refine_subpixel`,
+`planar.rs:445`, is its opaque form), which is `measure_subpixel` (`planar.rs:528-603`)
+followed by `Refined::apply` (`planar.rs:487-500`), stage mark `"refine_subpix"`; and
+`fn refine_junctions()` (`planar/junctions.rs:340`, stage mark `"refine_junc"`)
+**Pipeline position:** after `build_map`, before `boundary_opt`. The measuring phase runs
+side by side with symmetry detection under `rayon::join` (`lib.rs:1093-1127`); both read the
+lattice map and neither writes it, and the measured points are written back afterwards.
+Shared by Quality and Fast mode.
 
 ## What problem this solves
 
@@ -36,10 +41,22 @@ pub fn refine_subpixel(
 )
 ```
 
-Mutates every open and closed edge's `points` and `sigma` in place. `face_fill[f]` is the
+Replaces every open and closed edge's `points` and `sigma`. `face_fill[f]` is the
 fill model for face `f` (`Flat` or a gradient) — not the palette entry, because several
 faces can share one ink and a gradient face has no single palette colour at all
-(`planar.rs:350-352`).
+(`planar.rs:718-720`). `refine_subpixel_alpha` takes the same arguments plus the source
+alpha and each face's opacity, for unmixing in four channels on a transparent image.
+
+Since 2026-09-30 the work is split in two phases:
+
+```rust
+pub(crate) fn measure_subpixel(map: &PlanarMap, /* same inputs */) -> Refined
+impl Refined { pub(crate) fn apply(self, map: &mut PlanarMap) }
+```
+
+`measure_subpixel` reads the map and returns, per edge in edge order, the moved points and
+their sigmas, or `None` for an edge the refinement leaves as it is (one side outside the
+image, or a face without a fill model); `apply` moves those vectors into the map, `O(edges)`.
 
 ```rust
 pub fn refine_junctions(map: &mut PlanarMap)
@@ -83,6 +100,65 @@ For each edge point `p` (`planar.rs:427-699`):
    inflation (`crate::contour::inflate_for_curvature`, shared with the bilevel front end —
    see stage 08/09 docs for that mechanism), and clamps to `[0.02, 2.0]`
    (`planar.rs:658-699`).
+
+### Measure, then apply: the parallel schedule
+
+The per-point search above reads only the image, the two faces' fills and its own edge's
+*original* points (its lattice neighbours, for the normal), and writes only its own
+result: it is a pure map over vertices. The curvature correction of a vertex's sigma then
+reads the edge's *moved* points, all of which are known by then: a pure map again. So since
+2026-09-30 both run as parallel maps (`measure_subpixel`, `planar.rs:528-603`;
+`refine_edge`, `planar.rs:697-759`):
+
+- **edges in parallel**, and, inside an edge of at least `PAR_VERTICES = 64` points
+  (`planar.rs:502-506`), **vertices in parallel too**, in chunks of at least 64, so a task
+  is at least about 30 µs of work (0.44 µs per vertex measured at 2048 px) against rayon's
+  few-µs cost per split. The second level matters because one edge can hold most of an
+  image's vertices: longest edge 8,192 points, median edge 450, on the opaque `big` set;
+- each result goes to its own slot of an indexed output (rayon's `collect` and `unzip` over
+  an indexed iterator keep positions);
+- the measuring phase does not write the map, so no vertex can see another's moved
+  position. The serial loop could not either: it wrote an edge's points only after the whole
+  edge was measured.
+
+**Why the output is bit-for-bit the serial loop's.** Every vertex is computed from the same
+inputs by the same operations; scheduling changes only *when* a value is computed. No value
+is combined across vertices or threads — there is no parallel reduction, so no
+floating-point sum whose rounding depends on how the work was split. "Method from"
+Blelloch, Fineman, Gibbons & Shun, "Internally deterministic parallel algorithms can be
+fast", PPoPP 2012: a parallel loop whose iterations are independent and write disjoint,
+indexed outputs computes the serial result on every schedule; adapted to two nested levels
+with a minimum task size. The doc comment names Demmel & Nguyen, "Fast Reproducible
+Floating-Point Summation", ARITH 2013, as the related work behind the no-reductions rule;
+nothing here sums across vertices, so no reproducible summation is needed
+(`planar.rs:537-567`). The serial loop is kept as `refine_serial` in
+`planar/refine_tests.rs`, and `parallel_refinement_equals_the_serial_loop` compares points
+and sigmas bit for bit on anti-aliased scenes with flat and gradient fills, with and without
+the alpha channel, down to one pixel and one row.
+
+**When it stays serial.** Three cases run everything on the calling thread, in edge and
+vertex order, as before:
+
+- a small map: fewer than `PAR_MAP_VERTICES = 512` boundary vertices in all
+  (`refine_in_parallel`, `planar.rs:508-526`). Waking rayon's sleeping workers only pays
+  when there is enough to share; measured per icon (refinement and symmetry detection, the
+  minimum of 3 interleaved runs, serial / parallel, ms): 512–1,024 vertices 0.263 / 0.206
+  (16 screen icons), 1,024–2,048 0.506 / 0.253 (187), 2,048–4,096 0.998 / 0.351 (43),
+  4,096–8,192 2.162 / 0.627 (37 icons at 512 px), over 8,192 4.300 / 0.930 (10). The
+  parallel form already wins in the smallest bucket measured, so the cutoff sits at its lower
+  end; 512 vertices are about 0.23 ms of serial work;
+- `INKVEC_SUBPXDBG` set: it prints a line per vertex, which must come out in order;
+- `INKVEC_DUMP_CONTOUR` set: it appends a block per edge to a file, which must keep edge
+  order. The path is now read once per map (it was read per edge).
+
+The same `refine_in_parallel` test decides whether symmetry detection runs beside the
+measuring phase under `rayon::join` or before it (`lib.rs:1119-1125`); on a single-thread
+build (WebAssembly) `join` runs the two in turn with no work added. Measured at 2048 px
+before the change, the refinement took 10.6 ms, serial, at 0.44 µs per vertex (shared-stage
+research, 2026-09-30). The shared stages that round rewrote (the ramp pass, the planar map
+and this refinement, plus the face-alpha pass on transparent images) went from 42 to 13 ms
+per 2048 px opaque image and from 130 to 21 ms per transparent one, output byte-identical
+in Fast and Quality; Quality gains the planar-map and refinement part too.
 
 ### The exact inversion, and why it replaced a biased root-find
 
@@ -248,8 +324,10 @@ as the taper's entire net parameter cost across the 180-image measurement
 
 | name | value | controls | derivation |
 |---|---|---|---|
-| `MIN_UNMIX_CONTRAST` (`planar.rs:337`) | `0.02` | floor on unmixing contrast below which a point is not moved at all | no stated derivation |
-| `CORNER_COS` (`planar.rs:367`) | `0.5` (60°) | turning angle above which the tangent window narrows to 1 point | stated: "A staircase at any slope turns by at most 45 degrees between chords two points long, so slanted edges stay smooth" (`planar.rs:365-366`) — a geometric bound, not a sweep |
+| `MIN_UNMIX_CONTRAST` (`planar.rs:414`) | `0.02` | floor on unmixing contrast below which a point is not moved at all | no stated derivation |
+| `CORNER_COS` (`planar.rs:424`) | `0.5` (60°) | turning angle above which the tangent window narrows to 1 point | stated: "A staircase at any slope turns by at most 45 degrees between chords two points long, so slanted edges stay smooth" (`planar.rs:421-423`) — a geometric bound, not a sweep |
+| `PAR_VERTICES` (`planar.rs:506`) | `64` | fewest points an edge needs before its vertices are refined in parallel, and the smallest chunk of a long edge one thread takes | motivated by a measured cost: a task of at least ~30 µs (0.44 µs per vertex at 2048 px) against rayon's few-µs cost per split (`planar.rs:502-505`); chooses only the schedule, never the result |
+| `PAR_MAP_VERTICES` (`planar.rs:520`) | `512` | fewest boundary vertices in the whole map for the refinement (and symmetry detection beside it) to use threads at all | measured: per-icon serial / parallel timings by vertex count, parallel already ahead in the smallest bucket (512–1,024: 0.263 / 0.206 ms), so the cutoff sits at its lower end (`planar.rs:508-519`); chooses only the schedule, never the result |
 | `INKVEC_SUBPX_WIN` (*removed*) (`planar.rs:353-362`) | default `1`, range `1..=8` | width of the tangent-estimation window | measured trade-off: widening to 2 improved dE00 0.2663→0.2534 on a 620-icon subset but cost DISTS 0.0418→0.0435 and caused a face-order regression on one icon (0.23→3.20 dE00); default left at 1 "until that is understood (LOG-43)" (`planar.rs:432-442`) |
 | `DEFAULT_SIGMA_MODEL` (`coverage.rs:39`) | `0.05` px | irreducible resolution limit of level-set extraction, added in quadrature to statistical noise | stated: "Measured on analytic circles..., level-set extraction lands within roughly 0.05px" (`coverage.rs:59-60`) |
 | `CONTRAST_REF` (`planar.rs:688`) | `0.25` | reference contrast for `simplify_faint`'s inflation | no stated derivation |
@@ -301,14 +379,14 @@ Since the settings cleanup (CHANGELOG, *Unreleased*) the engine reads its enviro
 | variable | effect |
 |---|---|
 | `INKVEC_SUBPX_WIN` (*removed*) | tangent-window width for `refine_subpixel`, `1..=8`, default `1` (`planar.rs:356-360`) |
-| `INKVEC_SUBPXDBG` | per-point debug trace of the subpixel search (`planar.rs:648-653`) |
+| `INKVEC_SUBPXDBG` | per-point debug trace of the subpixel search; read once per map into the refinement context (`planar.rs:588`), and while set the whole refinement runs serially, in edge and vertex order, so the lines come out as before (`planar.rs:591`) |
 | `INKVEC_SIGMA_FLOOR` (*removed*) | overrides `contour::sigma_floor()`, shared with the bilevel front end (`contour.rs:320-329`) |
 | `INKVEC_CURV_GAIN` (*removed*) | overrides `contour::curv_gain()` used by `inflate_for_curvature` (`contour.rs:231-243`) |
-| `INKVEC_DUMP_CONTOUR` | appends every refined edge's points and sigmas to a file, for offline study of extraction error structure (`planar.rs:712-724`) |
+| `INKVEC_DUMP_CONTOUR` | appends every refined edge's points and sigmas to a file, for offline study of extraction error structure (`dump_contour`, `planar.rs:769-781`); the path is read once per map (`planar.rs:589`; it used to be read per edge), and while it is set the refinement runs serially so the file keeps edge order |
 | `INKVEC_NO_TAPER` | disables `taper_junction` when set to a non-empty value (`planar.rs:1260-1269`) — cached in a `OnceLock`, and the doc comment records a real bug where an *empty* value used to be treated as "set": "a shell that exports `VAR=` should not silently turn the estimator off, which it did once here and made an A/B compare a binary to itself" (`planar.rs:1261-1262`) |
-| `INKVEC_TAPERDBG` | per-node taper fit debug trace (`planar.rs:1340-1348`) |
+| `INKVEC_TAPERDBG` | per-node taper fit debug trace; read once per process into a `OnceLock` (`taperdbg`, `planar/junctions.rs:66-70`) |
 | `INKVEC_TAPER_SKIP=<n>` (*removed*) | skips the n-th accepted taper relocation, to attribute a corpus-level change to one junction (`planar.rs:1350-1357`) |
-| `INKVEC_JDBG` | debug trace for `end_tangent`'s polynomial fit and `refine_junctions`'s per-node solve (`planar.rs:925-943, 1084-1097`) |
+| `INKVEC_JDBG` | debug trace for `end_tangent`'s polynomial fit and `refine_junctions`'s per-node solve. Since 2026-09-30 read once per process into a `OnceLock` (`jdbg`, `planar/junctions.rs:54-64`), so the check on every junction node and twice per open edge, in both modes, is one atomic load; it used to go through `inkvec_core::env::flag` each time, which takes the environment cache's mutex and searches it. `env::flag` caches its first read, so the value seen is the same |
 
 ## Open questions
 

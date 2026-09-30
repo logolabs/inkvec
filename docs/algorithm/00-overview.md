@@ -98,9 +98,9 @@ each timed by the `Stopwatch` (`crates/inkvec-trace/src/lib.rs:1030-1055`, print
 | `carve` | `crates/inkvec-trace/src/lib.rs:633` (`gradient::carve_residual_features`) | carve | cut out a feature the palette quantised into its surroundings before a gradient is asked to explain it |
 | `split` | `crates/inkvec-trace/src/lib.rs:646` (`split_components`) | split | a face is a *connected* region, not "everywhere this colour appears" |
 | `saddles` | `crates/inkvec-trace/src/lib.rs:965` (`merge_saddle_faces`) | saddle join | resolve the one ambiguity labels cannot: four pixels meeting diagonally at one corner |
-| `build_map` | `crates/inkvec-trace/src/lib.rs:968` (`planar::build`) | planar map | shared edges between exactly two faces, from the exact integer label grid |
-| `symmetry_detect` | `crates/inkvec-trace/src/lib.rs:972` (`symmetry::detect`) | symmetry detect | find mirror/rotation pairs on the label lattice, where the comparison is exact |
-| `refine_subpix` | `crates/inkvec-trace/src/lib.rs:975` (`planar::refine_subpixel`) | sub-pixel | slide each boundary point along its local normal to the measured 0.5-coverage level |
+| `build_map` | `crates/inkvec-trace/src/lib.rs:1077` (`planar::build`) | planar map | shared edges between exactly two faces, from the exact integer label grid, read off its row runs (`planar/cracks.rs`, `planar/runs.rs`) |
+| `symmetry_detect` | `crates/inkvec-trace/src/lib.rs:1092` | refinement setup | since 2026-09-30 this mark times only the setup of the refinement's inputs (each face's fill model and opacity); `symmetry::detect` itself runs inside the next mark |
+| `refine_subpix` | `crates/inkvec-trace/src/lib.rs:1127` (`symmetry::detect` beside `planar::measure_subpixel`, `lib.rs:1121-1125`; `Refined::apply`, `:1126`) | symmetry detect + sub-pixel | find mirror pairs on the label lattice, where the comparison is exact, and, at the same time, measure where each boundary point sits along its local normal (the 0.5-coverage level); both only read the lattice map, so they run side by side under `rayon::join`, and the measured points are written back afterwards |
 | `refine_junc` | `crates/inkvec-trace/src/lib.rs:977` (`planar::refine_junctions`) | junctions | settle shared endpoints |
 | `boundary_opt` | `crates/inkvec-trace/src/lib.rs:987` (`boundary_opt::optimise`) | boundary solve | move every boundary point at once so the *rendered* partition matches the image |
 | `decode` | `crates/inkvec-trace/src/lib.rs:1003` (`decode::decode_faces`) | decode | order-first colour/geometry fix for faces too thin to own a fully-covered pixel; off unless `INKVEC_DECODE` (*research build*) is set |
@@ -111,6 +111,15 @@ each timed by the `Stopwatch` (`crates/inkvec-trace/src/lib.rs:1030-1055`, print
 | — | `crates/inkvec-cli/src/pipeline.rs:774` (`fills`) | fills | per-face fill model already chosen upstream; demote imperceptible gradients to flat here |
 | — | `crates/inkvec-cli/src/pipeline.rs:894` (`emit`) | emit | fitted geometry to SVG text; layers vs. flat form costed against each other |
 | — | `crates/inkvec-cli/src/post.rs` | post | viewBox retarget, background knock-out, margin, minify |
+
+Fast mode (`--mode fast`) takes another route through the same table. Its front end
+(`crates/inkvec-trace/src/fast/front.rs`) replaces the marks from `palette` to `split` with
+its own `palette`, `slivers`, `despeckle`, `split` and `ramps`; it shares `build_map`,
+`refine_subpix`, `refine_junc` and `symmetry`, and skips `boundary_opt` and `decode`
+(`lib.rs:1137`, `:1152`). Under `fit_dp` it runs a Potrace-class fitter instead of the DP,
+and it skips `repair` and shape harmonization (`repair_fits` and `emit_options` in
+`crates/inkvec-cli/src/pipeline.rs`). [`14-fast-mode.md`](14-fast-mode.md) follows that
+route end to end.
 
 Crates: `inkvec-core` (geometry primitives), `inkvec-trace` (raster → planar map),
 `inkvec-fit` (points → curves), `inkvec-sr` (super-resolution pre-pass), `inkvec-cli`
@@ -158,7 +167,9 @@ edge has been merged into the interior of a layer and no longer belongs to any r
 `01-intake.md` covers everything before the palette runs — decode, the unblock pre-pass,
 the SR pre-pass, resolution-invariant tolerances, alpha matting. Stages 02 onward (numbered
 per the pipeline table above) go module by module through `inkvec-trace` and `inkvec-fit`.
-`constants.md` collects every named constant across the tree in one table.
+`14-fast-mode.md` then covers Fast mode: which of those stages it replaces, which it shares,
+and how each of its own stages works. `constants.md` collects every named constant across the
+tree in one table.
 
 ## `docs/DESIGN.md` against the code as it stands
 
@@ -210,9 +221,10 @@ disagreements are where the real design lives:
   still describes the removed stages as the specified design.
 * **Symmetry as a first-class constraint.** DESIGN.md's region graph (§4) models symmetry as
   a constraint enforced *during* optimisation. The code detects symmetry once, early
-  (`symmetry_detect` at `trace/lib.rs:458`, on the exact label lattice, before any geometry
-  moves), and enforces it twice more downstream — once on the map (`symmetry::enforce`,
-  `trace/lib.rs:494`) and once on the fitted curves, by reflecting one boundary's fit onto
+  (`symmetry::detect` at `trace/lib.rs:1121-1125`, on the exact label lattice, before any
+  geometry moves: it runs beside the sub-pixel refinement's measuring phase, which writes
+  nothing to the map until detection has returned), and enforces it twice more downstream —
+  once on the map (`symmetry::enforce`, `trace/lib.rs:1172`) and once on the fitted curves, by reflecting one boundary's fit onto
   its mirror rather than re-solving both (`cli/lib.rs:1009-1039`). That is "detect once,
   then copy," which is cheaper and exact by construction, but it is a different design from
   "enforced as a constraint during re-optimisation."

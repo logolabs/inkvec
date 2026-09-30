@@ -9,7 +9,7 @@
 <body>
 <div class="wrap">
   <header class="masthead">
-    <p class="eyebrow">Stage 10 of 14</p>
+    <p class="eyebrow">Stage 10 of 15</p>
     <h1>Putting back the symmetry the pipeline quietly broke</h1>
     <p class="standfirst">Many logos are mirror-symmetric by design, and drawn that way
       exactly. This stage finds that exact symmetry early, while it is still easy to prove,
@@ -65,6 +65,12 @@
         early: once later stages start moving points to their true sub-pixel positions, the
         same comparison would need a tolerance, and a tolerance is exactly the kind of
         judgement call this test is built to avoid.</p>
+      <p>"Before any point has moved" does not have to mean "before the next stage starts".
+        The next stage first only <em>measures</em> where every point should go, and moves
+        them all afterwards. So on any picture big enough for it to pay, the symmetry check
+        and that measuring now run at the same time on different processor cores, and the
+        points are moved only once both have finished: the check still sees every point
+        exactly on the grid, and gives exactly the answer it gave when it ran alone.</p>
     </section>
 
     <section>
@@ -169,6 +175,7 @@
     <a href="11-fitting.html">11 Curve fitting</a>
     <a href="12-repair.html">12 Repair</a>
     <a href="13-emit.html">13 Emit</a>
+    <a href="14-fast-mode.html">14 Fast mode</a>
     <a href="constants.md">Constants</a>
   </nav>
 </div>

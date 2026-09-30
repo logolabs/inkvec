@@ -55,6 +55,8 @@ mod front;
 mod palette;
 mod polygon;
 mod prims;
+#[cfg(test)]
+mod replay;
 mod smooth;
 
 pub(crate) use front::{trace_color, trace_color_native};

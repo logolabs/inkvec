@@ -3,6 +3,29 @@
 //! Refines junction positions where 3 or more boundaries meet, using weighted
 //! least-squares intersection of boundary tangents, falling back to taper fits
 //! where boundaries meet tangentially.
+//!
+//! # Where this sits
+//!
+//! Runs right after [`super::refine_subpixel_alpha`] in the crate root's trace. That pass
+//! places every *interior* boundary point from the two colours either side of it, but a
+//! junction pixel mixes three or more colours and two-colour unmixing cannot place it, so
+//! junction nodes are still on their pixel corners when this starts. Here each junction
+//! is moved to where its incident boundaries, extrapolated from their refined interiors,
+//! actually meet, and every incident edge's end point is set to that one position (so
+//! the edges still share it exactly). Coordinates are pixel-centre coordinates, in px.
+//!
+//! Two estimators, tried in order:
+//!
+//! 1. **Tangent intersection** (`solve_junction`). Each incident edge contributes a line
+//!    fitted to its points near the junction, with a variance; the junction is the
+//!    weighted least-squares point closest to all the lines.
+//! 2. **Taper** (`taper_junction`). When the lines are nearly parallel the intersection
+//!    is ill-conditioned; this is the Y where a thin wedge between two boundaries tapers
+//!    to nothing, and the junction goes where the wedge's width extrapolates to zero
+//!    (see [`crate::taper`]).
+//!
+//! If neither is trustworthy the node stays on its grid corner with sigma 0.5 px.
+//! `INKVEC_JDBG=1` and `INKVEC_TAPERDBG=1` print each decision to stderr.
 
 use super::{node_point, Edge, PlanarMap};
 use inkvec_core::{Point, Vec2};
@@ -21,6 +44,9 @@ fn junction_skip() -> usize {
     1
 }
 
+/// Number of interior points, nearest the junction, over which an edge is tested for
+/// curvature (`fit_end_polynomial` decides linear against quadratic on these, which is
+/// better determined than on the `junction_fit_points` used to extrapolate).
 fn junction_curvature_points() -> usize {
     16
 }
@@ -34,7 +60,7 @@ const JUNCTION_MAX_MOVE: f64 = 1.5;
 const JUNCTION_MIN_CONDITION: f64 = 0.02;
 
 /// One incident edge's end tangent, as a line `n . p = c` with unit normal `n`, and the
-/// variance of its perpendicular position at the junction.
+/// variance of its perpendicular position at the junction (px²).
 #[derive(Clone, Copy)]
 struct TangentLine {
     n: (f64, f64),
@@ -53,6 +79,18 @@ pub fn node_position(id: u32, w: usize, h: usize) -> Point {
 
 /// Weighted least-squares line through the interior points of `e` nearest the end at
 /// `at_start`, extrapolated to the junction at `origin`.
+///
+/// The points used are up to `junction_curvature_points` interior points, nearest first,
+/// skipping `junction_skip` next to the junction; each is weighted `w_k = 1/sigma_k²`.
+/// Their weighted principal direction `u` (angle `theta = ½·atan2(2·Sxy, Sxx − Syy)` of
+/// the weighted scatter matrix) and its perpendicular `v` give local coordinates: `t`
+/// along `u` from the junction, `r` along `v`. [`fit_end_polynomial`] fits `r(t)` and
+/// returns its value `a` and slope `b` at `t = 0`, so the tangent passes through
+/// `origin + a·v` with direction `u + b·v`.
+///
+/// An edge along the image border is exact by construction and returns its first
+/// segment's line with a negligible variance. `None` for an edge too short to fit (fewer
+/// than two usable points) or a degenerate fit.
 fn end_tangent(e: &Edge, at_start: bool, origin: Point) -> Option<TangentLine> {
     let n = e.points.len();
     if n < 2 {
@@ -144,6 +182,17 @@ fn end_tangent(e: &Edge, at_start: bool, origin: Point) -> Option<TangentLine> {
 
 /// Weighted least-squares polynomial `r(t)` through local samples, returning its tangent
 /// line at `t = 0` — intercept `a`, slope `b` — and the variance of `a`.
+///
+/// Samples are ordered nearest the junction first; the fit uses the first `n_fit`. A
+/// straight line `r = a + b·t` is the default. A quadratic `r = a + b·t + c·t²` replaces
+/// it when the edge is measurably curved: fitted over *all* samples (at least 5), its `c`
+/// must exceed 3 standard deviations. The curved fit then extrapolates from the nearest
+/// `n_fit` points again.
+///
+/// Each fit solves the normal equations `(Aᵀ W A) x = Aᵀ W r` (weighted least squares),
+/// and its parameter variances are the diagonal of `(Aᵀ W A)⁻¹` scaled by the reduced
+/// chi-square `max(χ²/dof, 1)`, so a scatter larger than the stated sigmas widens the
+/// variance but a smaller one never narrows it. `None` if the normal matrix is singular.
 fn fit_end_polynomial(ts: &[f64], rs: &[f64], ws: &[f64], n_fit: usize) -> Option<(f64, f64, f64)> {
     const MIN_QUADRATIC_POINTS: usize = 5;
     const CURVATURE_SIGNIFICANCE: f64 = 3.0;
@@ -223,7 +272,8 @@ fn fit_end_polynomial(ts: &[f64], rs: &[f64], ws: &[f64], n_fit: usize) -> Optio
 }
 
 /// Inverse of the leading `m x m` block of a symmetric positive matrix, by Gauss-Jordan
-/// elimination with partial pivoting. `None` when singular.
+/// elimination with partial pivoting. `None` when singular: a pivot below `1e-12` times
+/// the largest diagonal entry. `m` is at most 3; entries outside the block are zero.
 fn invert_small(mat: &[[f64; 3]; 3], m: usize) -> Option<[[f64; 3]; 3]> {
     let mut a = *mat;
     let mut inv = [[0.0; 3]; 3];
@@ -234,7 +284,7 @@ fn invert_small(mat: &[[f64; 3]; 3], m: usize) -> Option<[[f64; 3]; 3]> {
     for col in 0..m {
         let piv = (col..m)
             .max_by(|&p, &q| a[p][col].abs().total_cmp(&a[q][col].abs()))
-            .unwrap();
+            .expect("col < m, so the pivot range is not empty");
         if a[piv][col].abs() <= 1e-12 * scale {
             return None;
         }
@@ -263,6 +313,12 @@ fn invert_small(mat: &[[f64; 3]; 3], m: usize) -> Option<[[f64; 3]; 3]> {
 }
 
 /// Move every junction node to the sub-pixel point where its incident boundaries meet.
+///
+/// Visits every node where at least two open-edge ends meet, in increasing node id so the
+/// result does not depend on hash order. Tries the tangent intersection first
+/// and the taper fit only when that fails; a taper move also trims edge points the
+/// junction slid past (`trim_passed_over`). Every incident edge's end point and its sigma
+/// are then overwritten with the one solution, so the shared node stays shared.
 pub fn refine_junctions(map: &mut PlanarMap) {
     let (w, h) = (map.width, map.height);
 
@@ -331,6 +387,13 @@ const TRIM_MIN_POINTS: usize = 4;
 const TRIM_LOOK: usize = 3;
 
 /// Drop the measured points a moved junction has slid past.
+///
+/// With `step` the unit direction of the move from `origin` to `p`: an incident edge
+/// that leaves the junction in that same direction (its point `TRIM_LOOK` along lies
+/// ahead of its end along `step`) now starts at `p`, so its interior points that still
+/// lie behind `p` along `step` would make it double back. Those are removed, nearest the
+/// junction first, while the edge keeps at least `TRIM_MIN_POINTS` points. The end point
+/// itself is kept; the caller overwrites it with `p`.
 fn trim_passed_over(map: &mut PlanarMap, list: &[(usize, bool)], origin: Point, p: Point) {
     let m = p - origin;
     let len = m.norm();
@@ -382,12 +445,29 @@ fn trim_passed_over(map: &mut PlanarMap, list: &[(usize, bool)], origin: Point, 
     }
 }
 
+/// Largest angle, in degrees, between a branch and the through boundary (either way along
+/// it) for the branch to count as tapering into it.
 const TAPER_DEGREES: f64 = 55.0;
+/// Farthest the taper fit may move a junction, in px.
 const TAPER_MAX_MOVE: f64 = 8.0;
+/// Largest fraction of the shortest incident edge's length the move may consume.
 const TAPER_MAX_CONSUMED: f64 = 0.35;
+/// Largest acceptable uncertainty of the vanishing point, in px.
 const TAPER_MAX_SIGMA: f64 = 1.0;
 
 /// Place a junction where two boundaries meet tangentially, from the region that tapers.
+///
+/// Needs at least three incident edges. Each edge's direction leaving the junction is
+/// taken from its end point to the point three along. The pair of directions with the
+/// widest angle between them is the *through* boundary; another edge within
+/// `TAPER_DEGREES` of that line is the *branch* (the last one found, if several). The
+/// branch's points, as `(t, |r|)` with `t` along the through direction from the grid node
+/// and `|r|` their distance from the through line, are the wedge's half-width profile,
+/// and [`crate::taper::fit`] finds the `t` at which it vanishes. The junction moves to
+/// `origin + t·through`, with the fit's sigma clamped to `[0.05, 1]` px.
+///
+/// `None` when there is no branch, the fit fails, or the move is too large (see the
+/// `TAPER_*` limits). `INKVEC_NO_TAPER=1` disables this path.
 fn taper_junction(map: &PlanarMap, list: &[(usize, bool)], origin: Point) -> Option<(Point, f64)> {
     static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if list.len() < 3 || *DISABLED.get_or_init(|| inkvec_core::env::flag("INKVEC_NO_TAPER")) {
@@ -497,6 +577,18 @@ fn taper_junction(map: &PlanarMap, list: &[(usize, bool)], origin: Point) -> Opt
 
 /// Weighted least-squares intersection of `lines`, with the standard deviation of the
 /// result, or `None` when the problem is not well posed.
+///
+/// Minimises `E(p) = Σ_i (n_i·p − c_i)² / var_i`, the weighted squared perpendicular
+/// distances from `p` to each line. Setting the gradient to zero gives the 2x2 normal
+/// equations `A p = b` with `A = Σ n_i n_iᵀ / var_i` and `b = Σ c_i n_i / var_i`, solved
+/// in closed form. The reported sigma is `sqrt(1/λ_min(A))`, the standard deviation
+/// along the worst-determined direction.
+///
+/// Rejected when: fewer than two lines; the *unweighted* geometry is too close to
+/// parallel (`JUNCTION_MIN_CONDITION` on the eigenvalue ratio of `Σ n_i n_iᵀ`, so that
+/// one very confident line cannot make a shallow crossing look well posed); `A` is
+/// singular; or the solution is non-finite or more than `JUNCTION_MAX_MOVE` px from
+/// `origin`.
 fn solve_junction(lines: &[TangentLine], origin: Point) -> Option<(Point, f64)> {
     if lines.len() < 2 {
         return None;
@@ -536,7 +628,8 @@ fn solve_junction(lines: &[TangentLine], origin: Point) -> Option<(Point, f64)> 
     Some((p, sigma))
 }
 
-/// Eigenvalues `(min, max)` of the symmetric matrix `[[a, b], [b, c]]`.
+/// Eigenvalues `(min, max)` of the symmetric matrix `[[a, b], [b, c]]`, in closed form:
+/// `(a+c)/2 ∓ sqrt(((a−c)/2)² + b²)`.
 fn eigen2(a: f64, b: f64, c: f64) -> (f64, f64) {
     let m = 0.5 * (a + c);
     let d = (0.25 * (a - c) * (a - c) + b * b).sqrt();

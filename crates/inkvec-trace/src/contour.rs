@@ -12,6 +12,15 @@
 //! linking segments into closed contours is exact rather than a matter of comparing
 //! floating-point positions within a tolerance. It is the same reasoning as the exact
 //! predicates in `inkvec-core`: topology should not be decided by an epsilon.
+//!
+//! # Where this sits
+//!
+//! [`trace`] is the boundary extractor of the monochrome (bilevel) path: the crate root
+//! runs it on the output of `coverage::bilevel_coverage` and hands the closed contours to
+//! the fitter. The colour path extracts boundaries through `planar` instead, but shares
+//! this module's uncertainty model: [`inflate_for_curvature`] and [`SIGMA_FLOOR`] are
+//! used by `planar` and `centerline` too, so every front end reports sigma the same way.
+//! Coordinates are px with pixel centres at integer coordinates.
 
 use std::collections::HashMap;
 
@@ -23,13 +32,21 @@ use crate::coverage::CoverageField;
 pub const LEVEL: f32 = 0.5;
 
 /// Grid of coverage samples, padded with background so every contour closes.
+///
+/// The grid's corners are the pixel centres, plus a one-sample ring of zeros around
+/// them, so corner `(i, j)` is pixel `(i − 1, j − 1)`. Marching-squares cells sit between
+/// four neighbouring centres.
 struct Grid {
-    w: usize, // corners across, = image width + 2
+    /// Corners across, = image width + 2.
+    w: usize,
+    /// Corners down, = image height + 2.
     h: usize,
+    /// Coverage at each corner, row-major.
     v: Vec<f32>,
 }
 
 impl Grid {
+    /// Copy the field into the interior of a zero-padded grid.
     fn from_field(f: &CoverageField) -> Self {
         let (w, h) = (f.width + 2, f.height + 2);
         let mut v = vec![0.0f32; w * h];
@@ -41,11 +58,13 @@ impl Grid {
         Grid { w, h, v }
     }
 
+    /// Coverage at corner `(i, j)`.
     #[inline]
     fn at(&self, i: usize, j: usize) -> f32 {
         self.v[j * self.w + i]
     }
 
+    /// Whether corner `(i, j)` is inside the shape (coverage at or above [`LEVEL`]).
     #[inline]
     fn inside(&self, i: usize, j: usize) -> bool {
         self.at(i, j) >= LEVEL
@@ -72,6 +91,7 @@ impl Grid {
         Point::new(i as f64 - 1.0 + lerp_t(a, b), j as f64 - 1.0)
     }
 
+    /// Sub-pixel position of the level crossing on a vertical edge; see [`Self::h_point`].
     fn v_point(&self, i: usize, j: usize) -> Point {
         let (a, b) = (self.at(i, j), self.at(i, j + 1));
         Point::new(i as f64 - 1.0, j as f64 - 1.0 + lerp_t(a, b))
@@ -80,6 +100,9 @@ impl Grid {
 
 /// Where between two samples the level sits. This is the sub-pixel information a
 /// thresholding tracer throws away.
+///
+/// Linear interpolation: `t = (LEVEL − a) / (b − a)`, clamped to `[0, 1]`, as a fraction of
+/// the way from `a` to `b`. Equal samples report the midpoint.
 #[inline]
 fn lerp_t(a: f32, b: f32) -> f64 {
     let d = b - a;
@@ -122,6 +145,13 @@ fn segments_for(case: u8) -> &'static [(Side, Side)] {
 
 /// Trace every closed contour at the 0.5 level, with sub-pixel vertex positions and a
 /// per-vertex positional uncertainty read from the coverage gradient.
+///
+/// Each cell emits its oriented segments as a successor map from the grid edge a segment
+/// enters by to the edge it leaves by, keyed by edge id; the map is then walked into
+/// loops, starting from the smallest unvisited id so the output order is deterministic.
+/// Every vertex is a crossing point on a grid edge, and its sigma comes from
+/// `sigmas_for`. Loops of fewer than three points are dropped. The zero padding means
+/// every contour closes, including shapes touching the image border.
 pub fn trace(field: &CoverageField) -> Vec<Polyline> {
     let g = Grid::from_field(field);
 
@@ -203,6 +233,7 @@ pub fn trace(field: &CoverageField) -> Vec<Polyline> {
     out
 }
 
+/// The id and crossing position of side `s` of the cell whose top-left corner is `(i, j)`.
 fn side_edge(g: &Grid, i: usize, j: usize, s: Side) -> (u64, Point) {
     match s {
         Side::Top => (g.h_id(i, j), g.h_point(i, j)),
@@ -267,6 +298,9 @@ const MAX_CURVATURE_SIGMA: f64 = 0.354;
 /// A gently curved boundary is barely affected: a circle of radius 46px has a sagitta of
 /// about 0.02px over a 3px window, so curves keep their fine tolerance and only genuine
 /// corners are treated as poorly localized — which is what they are.
+///
+/// Per point: `field.position_sigma(p)` (noise and model limit in quadrature), floored at
+/// [`SIGMA_FLOOR`], then passed through [`inflate_for_curvature`] with wraparound.
 fn sigmas_for(field: &CoverageField, pts: &[Point]) -> Vec<f64> {
     let n = pts.len();
     let floor = SIGMA_FLOOR;
@@ -330,100 +364,113 @@ pub const SIGMA_FLOOR: f64 = 0.0;
 /// Omitting this on the planar path was a real defect. A ring of radius 11px came back as
 /// 52 segments from 96 measured points — almost no simplification — because every point
 /// claimed 0.05px accuracy that the reconstruction could not deliver at that curvature.
+///
+/// Over the window of `2W + 1` points centred on `k` (`W = LINEARITY_WINDOW`; wrapping
+/// when `wrap`, clamped at the ends otherwise):
+///
+/// ```text
+///     r           = distance of p_k from the window's total-least-squares line
+///     c_i         = (p_i − p_{i−1}) × (p_{i+1} − p_i)      (signed turn at each inner point)
+///     consistency = |Σ c_i| / Σ |c_i|                      (1 for an arc, 0 for a staircase)
+///     sigma       = hypot(base, min(NONLINEARITY_GAIN · r · (1 − consistency),
+///                                   MAX_CURVATURE_SIGMA))
+/// ```
+///
+/// The line is the window's principal axis (the major eigenvector of its 2x2 scatter
+/// matrix). Returns `base` unchanged for a polyline of fewer than `2W + 3` points or a
+/// degenerate window.
 pub fn inflate_for_curvature(pts: &[Point], k: usize, base: f64, wrap: bool) -> f64 {
     let n = pts.len();
     let w = LINEARITY_WINDOW;
-    {
-        {
-            if n < 2 * w + 3 {
-                return base;
-            }
-            // Total-least-squares line over the window, then this point's residual.
-            let idx = |d: i64| {
-                let i = k as i64 + d;
-                let i = if wrap {
-                    i.rem_euclid(n as i64)
-                } else {
-                    i.clamp(0, n as i64 - 1)
-                };
-                pts[i as usize]
-            };
-            let m = (2 * w + 1) as f64;
-            let (mut mx, mut my) = (0.0, 0.0);
-            for d in -(w as i64)..=(w as i64) {
-                let q = idx(d);
-                mx += q.x;
-                my += q.y;
-            }
-            mx /= m;
-            my /= m;
-            let (mut cxx, mut cyy, mut cxy) = (0.0, 0.0, 0.0);
-            for d in -(w as i64)..=(w as i64) {
-                let q = idx(d);
-                let (dx, dy) = (q.x - mx, q.y - my);
-                cxx += dx * dx;
-                cyy += dy * dy;
-                cxy += dx * dy;
-            }
-            let tr = cxx + cyy;
-            let diff = cxx - cyy;
-            let disc = (diff * diff + 4.0 * cxy * cxy).max(0.0).sqrt();
-            let major = 0.5 * (tr + disc);
-            let (ux, uy) = if cxy.abs() > 1e-12 {
-                (major - cyy, cxy)
-            } else if cxx >= cyy {
-                (1.0, 0.0)
-            } else {
-                (0.0, 1.0)
-            };
-            let nrm = ux.hypot(uy);
-            if nrm <= 1e-12 {
-                return base;
-            }
-            let (ux, uy) = (ux / nrm, uy / nrm);
-            let (dx, dy) = (pts[k].x - mx, pts[k].y - my);
-            let residual = (dx * uy - dy * ux).abs();
-
-            // Only the part of that residual which is *not* consistent turning counts as
-            // uncertainty.
-            //
-            // The residual alone cannot tell a rasterised straight edge from a genuine
-            // curve: both depart from a local straight line. But they depart differently.
-            // A staircase alternates — left, right, left — so its turns cancel. An arc
-            // turns the same way at every step. Comparing the signed sum of the turns
-            // against the sum of their magnitudes separates the two with no threshold to
-            // pick: the ratio is 1 for a pure arc and 0 for a pure staircase.
-            //
-            // Inflating on genuine curvature is not a harmless over-estimate. It tells the
-            // fitter accuracy does not matter exactly where a viewer looks hardest, and
-            // measurably so: on an 11px corner, arc sigma 0.35 fits four cubics and 0.45
-            // fits eight straight chords instead — visible faceting on every rounded
-            // rectangle, which is most icons. See `inkvec-fit/examples/corner_fit.rs`.
-            //
-            // The residual cannot be used raw for another reason: the total-least-squares
-            // line passes through the window's centroid, so the signed residuals over the
-            // window sum to zero by construction and their mean carries no information.
-            let (mut turn_sum, mut turn_abs) = (0.0f64, 0.0f64);
-            for d in -(w as i64 - 1)..=(w as i64 - 1) {
-                let (a, b, c) = (idx(d - 1), idx(d), idx(d + 1));
-                let cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
-                turn_sum += cross;
-                turn_abs += cross.abs();
-            }
-            let consistency = if turn_abs > 1e-12 {
-                (turn_sum.abs() / turn_abs).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            let wobble = residual * (1.0 - consistency);
-
-            base.hypot((NONLINEARITY_GAIN * wobble).min(MAX_CURVATURE_SIGMA))
-        }
+    if n < 2 * w + 3 {
+        return base;
     }
+    // Total-least-squares line over the window, then this point's residual.
+    let idx = |d: i64| {
+        let i = k as i64 + d;
+        let i = if wrap {
+            i.rem_euclid(n as i64)
+        } else {
+            i.clamp(0, n as i64 - 1)
+        };
+        pts[i as usize]
+    };
+    let m = (2 * w + 1) as f64;
+    let (mut mx, mut my) = (0.0, 0.0);
+    for d in -(w as i64)..=(w as i64) {
+        let q = idx(d);
+        mx += q.x;
+        my += q.y;
+    }
+    mx /= m;
+    my /= m;
+    let (mut cxx, mut cyy, mut cxy) = (0.0, 0.0, 0.0);
+    for d in -(w as i64)..=(w as i64) {
+        let q = idx(d);
+        let (dx, dy) = (q.x - mx, q.y - my);
+        cxx += dx * dx;
+        cyy += dy * dy;
+        cxy += dx * dy;
+    }
+    let tr = cxx + cyy;
+    let diff = cxx - cyy;
+    let disc = (diff * diff + 4.0 * cxy * cxy).max(0.0).sqrt();
+    let major = 0.5 * (tr + disc);
+    let (ux, uy) = if cxy.abs() > 1e-12 {
+        (major - cyy, cxy)
+    } else if cxx >= cyy {
+        (1.0, 0.0)
+    } else {
+        (0.0, 1.0)
+    };
+    let nrm = ux.hypot(uy);
+    if nrm <= 1e-12 {
+        return base;
+    }
+    let (ux, uy) = (ux / nrm, uy / nrm);
+    let (dx, dy) = (pts[k].x - mx, pts[k].y - my);
+    let residual = (dx * uy - dy * ux).abs();
+
+    // Only the part of that residual which is *not* consistent turning counts as
+    // uncertainty.
+    //
+    // The residual alone cannot tell a rasterised straight edge from a genuine
+    // curve: both depart from a local straight line. But they depart differently.
+    // A staircase alternates — left, right, left — so its turns cancel. An arc
+    // turns the same way at every step. Comparing the signed sum of the turns
+    // against the sum of their magnitudes separates the two with no threshold to
+    // pick: the ratio is 1 for a pure arc and 0 for a pure staircase.
+    //
+    // Inflating on genuine curvature is not a harmless over-estimate. It tells the
+    // fitter accuracy does not matter exactly where a viewer looks hardest, and
+    // measurably so: on an 11px corner, arc sigma 0.35 fits four cubics and 0.45
+    // fits eight straight chords instead — visible faceting on every rounded
+    // rectangle, which is most icons. See `inkvec-fit/examples/corner_fit.rs`.
+    //
+    // The residual cannot be used raw for another reason: the total-least-squares
+    // line passes through the window's centroid, so the signed residuals over the
+    // window sum to zero by construction and their mean carries no information.
+    let (mut turn_sum, mut turn_abs) = (0.0f64, 0.0f64);
+    for d in -(w as i64 - 1)..=(w as i64 - 1) {
+        let (a, b, c) = (idx(d - 1), idx(d), idx(d + 1));
+        let cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+        turn_sum += cross;
+        turn_abs += cross.abs();
+    }
+    let consistency = if turn_abs > 1e-12 {
+        (turn_sum.abs() / turn_abs).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let wobble = residual * (1.0 - consistency);
+
+    base.hypot((NONLINEARITY_GAIN * wobble).min(MAX_CURVATURE_SIGMA))
 }
 
-/// Signed area of a closed polyline (shoelace). Positive is counter-clockwise in a
-/// y-down image coordinate system.
+/// Signed area of a closed polyline (shoelace):
+/// `A = ½ Σ_k (x_k·y_{k+1} − x_{k+1}·y_k)`, indices modulo the length. Positive when the
+/// loop runs anticlockwise in y-up axes, which is clockwise as seen in a y-down image.
+/// Zero for fewer than three points.
 pub fn signed_area(poly: &Polyline) -> f64 {
     let p = &poly.points;
     let n = p.len();

@@ -75,6 +75,12 @@
 //! 128px with corner radius 4, so the tangent point is at 13.72. From the measured
 //! coverage the fit says 13.93; in the tracer, from map geometry alone, all eight corners
 //! land within 0.15px of the true correction. The intersection put the junction at 10.5.
+//!
+//! # Where this sits
+//!
+//! Called only from `planar::junctions`, as the fallback when intersecting a junction's
+//! tangent lines is ill-conditioned. Units are whatever the samples are in; there they
+//! are pixels.
 
 /// Result of fitting the taper.
 #[derive(Debug, Clone, Copy)]
@@ -83,7 +89,7 @@ pub struct Taper {
     pub vanish: f64,
     /// Standard error of `vanish`, from the regression's own residuals.
     pub sigma: f64,
-    /// Radius implied by the slope. A cross-check, not an output.
+    /// Radius of the fitted tangent circle. A cross-check, not an output.
     pub implied_radius: f64,
     /// Samples the fit used.
     pub used: usize,
@@ -146,8 +152,23 @@ const MAX_DEFECT: f64 = 0.15;
 /// 0.75` it biased the intercept by 0.33px on exact data, where this form is exact
 /// throughout.
 ///
+/// Concretely, over the samples with `MIN_WIDTH < w < MAX_WIDTH` (`x = u`, `y = w`):
+///
+/// ```text
+///     R(a) = Σ ((x−a)² + y²)·y / (2 Σ y²)                  (least squares in R)
+///     F(a) = Σ ((x−a)² + y² − 2R(a)·y)²
+/// ```
+///
+/// `F` is minimised over `a` by a grid of 2001 values spanning three times the samples'
+/// extent beyond each end (the tangent point lies past the thin end, not among the
+/// samples), then refined by 50 rounds of a halving pattern search. The defect is
+/// `sqrt(F/n) / 2R`, the algebraic residual turned back into a distance, and
+/// `sigma = sqrt(2s²/F''(a))` with `s² = F/(n−2)`, the usual least-squares standard error
+/// with `F''` taken by central difference.
+///
 /// Returns `None` when too few samples fall in the trustworthy band, or when the fit does
-/// not describe a plausible corner.
+/// not describe a plausible corner: a radius of half a pixel or less, a non-finite
+/// result, or a defect over `MAX_DEFECT`.
 pub fn fit(samples: &[(f64, f64)]) -> Option<Taper> {
     let pts: Vec<(f64, f64)> = samples
         .iter()

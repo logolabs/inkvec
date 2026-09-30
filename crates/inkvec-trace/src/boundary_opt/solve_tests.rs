@@ -7,6 +7,7 @@
 use super::*;
 use crate::planar::Edge;
 
+/// An edge with the given points and faces, sigma 0.5 everywhere and a neutral lambda.
 fn edge(points: Vec<Point>, left: u16, right: u16, nodes: (u32, u32), closed: bool) -> Edge {
     let n = points.len();
     Edge {
@@ -21,6 +22,8 @@ fn edge(points: Vec<Point>, left: u16, right: u16, nodes: (u32, u32), closed: bo
     }
 }
 
+/// A [`Problem`] over `map` with both priors off, junction wedges off and one chunk, as
+/// the tests' starting point; each test switches on what it exercises.
 fn problem<'a>(
     map: &'a PlanarMap,
     vars: &'a Vars,
@@ -548,6 +551,7 @@ fn the_chunked_data_term_sums_to_the_sequential_one() {
 
 // ------------------------------------------------------------------ crossings
 
+/// Shorthand for [`Point::new`].
 fn p(x: f64, y: f64) -> Point {
     Point::new(x, y)
 }
@@ -661,6 +665,7 @@ fn gridline_crossings_in_parameter_order() {
     assert!(out.is_empty());
 }
 
+/// Self-crossings of a map made of `edges`, at the measured positions.
 fn count(edges: Vec<Edge>, w: usize, h: usize) -> usize {
     let map = PlanarMap {
         edges,
@@ -669,7 +674,7 @@ fn count(edges: Vec<Edge>, w: usize, h: usize) -> usize {
         n_labels: 2,
     };
     let vars = build_vars(&map);
-    crossings_count(&map, &vars, &vars.start, w, h)
+    crossings_count(&map, &vars, &vars.start)
 }
 
 #[test]

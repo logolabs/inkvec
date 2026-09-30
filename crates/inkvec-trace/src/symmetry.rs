@@ -27,6 +27,16 @@
 //! walks a chain in one direction and its partner in the other. That is handled where the
 //! fitting happens, by fitting one of each pair and reflecting the result, which is both
 //! exact and half the work — see `mirror_of` and its use in the CLI.
+//!
+//! # Where this sits
+//!
+//! In the crate root's colour trace, [`detect`] runs right after `planar::build`, while
+//! every boundary point is still an exact lattice point (half-integer coordinates), so
+//! pairing boundaries is an exact comparison. [`enforce`] runs after the sub-pixel,
+//! junction and boundary solves have moved the points, just before the edges go to the
+//! fitter. The `reflect_*` and `centre_primitive` helpers are used by `inkvec-cli` when it
+//! fits one boundary of each pair and reflects the result onto the other. Coordinates are
+//! px with pixel centres at integer coordinates.
 
 use std::collections::HashMap;
 
@@ -57,6 +67,7 @@ pub enum Mirror {
 }
 
 impl Mirror {
+    /// The pixel that pixel `(x, y)` reflects to (possibly outside the image).
     #[inline]
     fn pixel(self, x: i64, y: i64) -> (i64, i64) {
         match self {
@@ -149,6 +160,9 @@ impl Symmetry {
 /// `ink[label]` is what makes two faces interchangeable: face ids are connected components
 /// and a shape's two halves are never the same component, so comparing them directly would
 /// reject every symmetry there is.
+///
+/// Only the two centred mirrors, `V(w − 1)` and `H(h − 1)`, can hold (see below), and each
+/// is tested on every pixel. A pixel whose label has no ink entry compares as "no ink".
 fn mirrors_of(labels: &[u16], ink: &[usize], w: usize, h: usize) -> Vec<Mirror> {
     let at = |x: i64, y: i64| -> Option<usize> {
         if x < 0 || y < 0 || x >= w as i64 || y >= h as i64 {
@@ -194,6 +208,13 @@ fn mirrors_of(labels: &[u16], ink: &[usize], w: usize, h: usize) -> Vec<Mirror> 
 /// up to where the walk began and which way round it went, and the pairing has to recover
 /// both. This runs on the lattice points the extractor produced, where every coordinate is
 /// an exact half-integer, so the comparison is exact and needs no tolerance.
+///
+/// For each edge, its points are reflected and looked for among the edges of the same
+/// length and openness: for a closed edge at every rotation of the candidate whose point
+/// matches the reflected first point, in both directions; for an open edge only starting
+/// from either end. The first exact match is the pairing. `None` when any edge (including
+/// an empty one) finds no partner, since a mirror that pairs only some boundaries is not
+/// acted on.
 fn pair_edges(map: &PlanarMap, m: Mirror) -> Option<Vec<Option<Pairing>>> {
     // Exact key for a lattice point: coordinates are half-integers, so doubling is integral.
     let key = |p: Point| -> (i64, i64) { ((p.x * 2.0).round() as i64, (p.y * 2.0).round() as i64) };
@@ -312,6 +333,12 @@ pub fn detect(map: &PlanarMap, labels: &[u16], ink: &[usize]) -> Symmetry {
 /// Averaging rather than copying one onto the other keeps the result unbiased: the two
 /// sides carry the same evidence and disagree only by whatever tie was broken between
 /// them, so the midpoint is the estimate both of them support.
+///
+/// For each mirror in turn, every paired point becomes `½(p_i + M(q_{π(i)}))`, where `q`
+/// is the partner edge as it was before this mirror's pass, `π` the [`Pairing`]'s index
+/// map and `M` the reflection; both members of a pair then come out as exact reflections
+/// of each other, and a boundary paired with itself becomes symmetric on its own. Returns
+/// how many points moved by more than `1e-12` px.
 pub fn enforce(map: &mut PlanarMap, sym: &Symmetry) -> usize {
     let mut moved = 0usize;
     for (mi, &m) in sym.mirrors.iter().enumerate() {

@@ -1,13 +1,25 @@
 //! Exact Sutherland-Hodgman polygon clipping, shoelace area, and pixel coverage.
+//!
+//! The exact area of a polygon inside a pixel is what a rasteriser computes, so it is the
+//! coverage a traced shape will actually render with. `centerline`'s stroke solve needs
+//! the same exact coverage the fitter is judged by -- a stroke scored by any other rule is
+//! optimised towards a picture the emitter will not draw, which is measurably what went
+//! wrong the first time. The research decoders (`decode`, `decode::ribbon`) use the
+//! same routines to score candidate outlines.
+//!
+//! **Coordinates.** These functions take a pixel by its *lower corner*: [`clip_area`] at
+//! `(x, y)` measures the unit square `[x, x+1] x [y, y+1]`, and [`coverage`] treats pixel
+//! `(i, j)` of its box as `[i, i+1] x [j, j+1]` (centre `(i + 0.5, j + 0.5)`). A caller in
+//! the pixel-centre convention the rest of the tracer uses passes `(x − 0.5, y − 0.5)`, as
+//! `centerline::outline::outline_cover` does.
 
 use inkvec_core::predicates::orient2d;
 use inkvec_core::Point;
 
-/// Signed shoelace of a closed loop.
-/// Exact area of a simple polygon clipped to one pixel, and the shoelace it uses.
-/// `centerline`'s stroke solve needs the same exact coverage this module fits
-/// against -- a stroke scored by any other rule is optimised towards a picture the
-/// emitter will not draw, which is measurably what went wrong the first time.
+/// Signed area of a closed loop by the shoelace formula,
+/// `A = ½ Σ_i (x_i·y_{i+1} − x_{i+1}·y_i)` with indices modulo the length. Positive for
+/// a loop that is anticlockwise in y-up axes (clockwise on screen, y down); its absolute
+/// value is the area of a simple polygon.
 pub(crate) fn shoelace(pts: &[Point]) -> f64 {
     let n = pts.len();
     let mut s = 0.0;
@@ -19,6 +31,13 @@ pub(crate) fn shoelace(pts: &[Point]) -> f64 {
 }
 
 /// Sutherland-Hodgman against one half-plane, in place through two scratch buffers.
+///
+/// Writes to `dst` (cleared first) the part of the closed polygon `src` on one side of an
+/// axis-aligned line: `axis` 0 is the line `x = lim`, 1 is `y = lim`; `keep_ge` keeps
+/// the side where that coordinate is `>= lim`, otherwise `<= lim`. Each edge that
+/// crosses the line contributes its intersection point. Clipping a simple polygon by the
+/// four sides of a square in turn gives its intersection with the square (possibly with
+/// zero-width slivers along the square's border, which add no area).
 pub(crate) fn clip_axis(src: &[Point], dst: &mut Vec<Point>, axis: usize, lim: f64, keep_ge: bool) {
     dst.clear();
     let n = src.len();
@@ -51,6 +70,10 @@ pub(crate) fn clip_axis(src: &[Point], dst: &mut Vec<Point>, axis: usize, lim: f
 }
 
 /// Area of `poly` inside the unit pixel whose lower corner is (x, y).
+///
+/// `poly` should be a simple polygon (either orientation). Clipped against the square's
+/// four sides with [`clip_axis`], using `a` and `b` as scratch, then measured with
+/// [`shoelace`]. In `[0, 1]` up to rounding.
 pub(crate) fn clip_area(
     poly: &[Point],
     x: f64,
@@ -77,6 +100,8 @@ pub(crate) fn clip_area(
     shoelace(b).abs()
 }
 
+/// Whether `(x, y)` is inside `poly`, by the even-odd rule: count the edges a ray from the
+/// point towards `+x` crosses. Points exactly on the boundary may go either way.
 pub(crate) fn point_in_poly(poly: &[Point], x: f64, y: f64) -> bool {
     let mut inside = false;
     let n = poly.len();
@@ -102,6 +127,9 @@ pub(crate) struct Bbox {
 }
 
 impl Bbox {
+    /// The pixels a polygon can touch: its bounding box grown by `pad` px, rounded
+    /// outwards (with one extra column and row on the high side), clamped to the `w x h`
+    /// image. `None` for an empty polygon or an empty result.
     pub(crate) fn of(poly: &[Point], w: usize, h: usize, pad: f64) -> Option<Bbox> {
         if poly.is_empty() {
             return None;
@@ -123,6 +151,7 @@ impl Bbox {
         Some(Bbox { x0, y0, x1, y1 })
     }
 
+    /// Number of pixels in the box.
     pub(crate) fn len(&self) -> usize {
         (self.x1 - self.x0) * (self.y1 - self.y0)
     }
@@ -132,6 +161,11 @@ impl Bbox {
 ///
 /// Pixels the boundary does not touch are filled by one point-in-polygon test each; only
 /// pixels a polygon edge passes through are clipped. `mark` is scratch, reused.
+///
+/// Edge pixels are found by sampling every edge at four points per pixel of length and
+/// marking each sample's pixel with its 8 neighbours, which over-marks rather than misses
+/// (a marked interior pixel is simply clipped and comes out 1). `out` and `mark` need at
+/// least `bb.len()` entries. A polygon with fewer than three points covers nothing.
 pub(crate) fn coverage(poly: &[Point], bb: Bbox, out: &mut [f64], mark: &mut [bool]) {
     let (bw, bh) = (bb.x1 - bb.x0, bb.y1 - bb.y0);
     out[..bw * bh].fill(0.0);
@@ -181,6 +215,9 @@ pub(crate) fn coverage(poly: &[Point], bb: Bbox, out: &mut [f64], mark: &mut [bo
     }
 }
 
+/// Whether a closed polygon is simple: no two non-adjacent edges properly cross
+/// ([`seg_cross`]). Quadratic in the number of edges. Touching or overlapping edges are
+/// not detected, since `seg_cross` counts only proper crossings.
 pub(crate) fn simple(poly: &[Point]) -> bool {
     let n = poly.len();
     for i in 0..n {
@@ -196,6 +233,9 @@ pub(crate) fn simple(poly: &[Point]) -> bool {
     true
 }
 
+/// Whether segments `ab` and `cd` properly cross: each strictly separates the other's
+/// endpoints, by the signs of the robust `orient2d` predicate. Touching at an endpoint or
+/// along a collinear overlap is not a crossing.
 pub(crate) fn seg_cross(a: Point, b: Point, c: Point, d: Point) -> bool {
     let (d1, d2) = (orient2d(a, b, c), orient2d(a, b, d));
     let (d3, d4) = (orient2d(c, d, a), orient2d(c, d, b));

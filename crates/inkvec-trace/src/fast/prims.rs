@@ -13,9 +13,8 @@
 
 use inkvec_core::{Point, Vec2};
 use inkvec_fit::curves::Segment;
-use inkvec_fit::primitives::{
-    fit_circle, fit_circle_kasa, fit_ellipse, fit_ellipse_algebraic, PrimitiveFit, PrimitiveKind,
-};
+use inkvec_fit::primitives::ellipse::{fit_ellipse_seeded, taubin_ellipse};
+use inkvec_fit::primitives::{fit_circle, fit_circle_kasa, PrimitiveFit, PrimitiveKind};
 
 /// Largest distance, in pixels, from any measured point to the primitive.
 const TOL: f64 = 0.3;
@@ -111,14 +110,48 @@ fn ellipse_cubics(
 ///    `span` the largest distance from the first point, an ellipse within `TOL` of all
 ///    points has `rx >= span/2 − TOL`, while the area test with `ry >= MIN_RADIUS` needs
 ///    `rx <= |A| / (MIN_AREA_SHARE · π · MIN_RADIUS)`. Then Taubin's algebraic ellipse
-///    (`fit_ellipse_algebraic`) must be within `2 · TOL` of every point, and the
-///    orthogonal-distance ellipse (`fit_ellipse`) within `TOL`, with both radii at least
-///    `MIN_RADIUS`, the larger at most `span`, and the area test passed: accepted as an
-///    ellipse (5 parameters).
+///    (`taubin_ellipse`) must be within `2 · TOL` of every point, and the
+///    orthogonal-distance ellipse (`fit_ellipse_seeded`, Levenberg–Marquardt) within
+///    `TOL`, with both radii at least `MIN_RADIUS`, the larger at most `span`, and the
+///    area test passed: accepted as an ellipse (5 parameters).
+///
+/// Step 3 computes nothing it does not read, and nothing twice:
+///
+/// * the algebraic ellipse is Taubin's conic alone. The library's `fit_ellipse_algebraic`
+///   also returns the ellipse's orthogonal χ², a Newton foot-point solve per point that
+///   nothing here reads: measured on the phase-1 replay of the 246-icon screen set it was
+///   5.0% of the whole fast fit's CPU (2.0% at 2048 px), most of it on the image-frame
+///   ring, which reaches this test (a square is roughly round) and fails it. The conic's
+///   geometry is the same computation with or without its χ² (the library proves this in
+///   its own tests), so dropping it changed nothing;
+/// * the orthogonal fit starts from that conic alone. The library's `fit_ellipse` also
+///   starts from four near-circles about the orthogonal circle (radii 1.02 r and 0.98 r,
+///   at 0°, 45°, 90° and 135°) and keeps the lowest χ² of the five; here those four run
+///   only when the algebraic start fails, reusing the circle of step 2 when step 2 fitted
+///   it. The five-start fit was 13.9% of the fast fit's CPU on the screen set and 10.9%
+///   at 2048 px (phase-1 replay), and in the library's own measurement on the screen set
+///   and a poster, every one of the 93 ellipses the Quality search chose came from the
+///   algebraic start (see `fit_ellipse_screened`). This one does change the output where
+///   a near-circle reached a lower χ²; the Fast gate judged it.
+///
+/// Method from: Taubin, G. (1991), "Estimation of planar curves, surfaces, and nonplanar
+/// space curves defined by implicit equations with applications to edge and range image
+/// segmentation", IEEE TPAMI 13(11):1115–1138, doi:10.1109/34.103273, for the algebraic
+/// conic; Ahn, S. J., Rauh, W. & Warnecke, H.-J. (2001), "Least-squares orthogonal
+/// distances fitting of circle, sphere, ellipse, hyperbola, and parabola", *Pattern
+/// Recognition* 34:2283–2303, doi:10.1016/S0031-3203(00)00152-7, for the orthogonal fit
+/// (both implemented in `inkvec_fit::primitives`); and Halíř, R. & Flusser, J. (1998),
+/// "Numerically stable direct least squares fitting of ellipses", WSCG,
+/// <https://autotrace.sourceforge.net/WSCG98.pdf>, for starting the orthogonal fit from
+/// the algebraic one alone, which they recommend as "a fast and robust estimator of a
+/// good initial solution" (their direct fit; Taubin's conic plays that part here).
+/// Not from the literature: dropping the unread χ², because nothing reads it.
 ///
 /// Returns the primitive, the path's start point, and its four cubics
 /// ([`ellipse_cubics`]), running in the ring's own direction from near `pts[0]`. Fewer
 /// than [`MIN_POINTS`] points, a fit that fails, or a non-finite radius give `None`.
+/// Cost: O(n) for the algebraic fits and tests, and O(n) per Levenberg–Marquardt
+/// iteration for the orthogonal fits (up to 100 for the circle, 200 per ellipse start).
 pub(crate) fn primitive(pts: &[Point]) -> Option<(PrimitiveFit, Point, Vec<Segment>)> {
     let n = pts.len();
     if n < MIN_POINTS {
@@ -144,6 +177,8 @@ pub(crate) fn primitive(pts: &[Point]) -> Option<(PrimitiveFit, Point, Vec<Segme
     if rough > ROUGHLY_ROUND * k.r {
         return None;
     }
+    // The orthogonal circle, when step 2 fits it: it is also one of the ellipse's seeds.
+    let mut circle = None;
     if rough <= 2.0 * TOL {
         let f = fit_circle(pts, &sigma)?;
         let ok = f.r.is_finite()
@@ -158,6 +193,7 @@ pub(crate) fn primitive(pts: &[Point]) -> Option<(PrimitiveFit, Point, Vec<Segme
             };
             return Some((prim, start, segs));
         }
+        circle = Some(f);
     }
     let span = pts.iter().map(|p| p.dist(pts[0])).fold(0.0f64, f64::max);
     // The orthogonal fit is iterative and costs as much as the rest of the fast fit put
@@ -168,13 +204,20 @@ pub(crate) fn primitive(pts: &[Point]) -> Option<(PrimitiveFit, Point, Vec<Segme
     if span / 2.0 - TOL > area.abs() / (MIN_AREA_SHARE * std::f64::consts::PI * MIN_RADIUS) {
         return None;
     }
-    let alg = fit_ellipse_algebraic(pts, &sigma)?;
+    // Taubin's conic without the orthogonal χ² `fit_ellipse_algebraic` adds: only its
+    // geometry is read, here and as the orthogonal fit's first start.
+    let alg = taubin_ellipse(pts, &sigma)?;
     if !(alg.rx.is_finite() && alg.ry.is_finite())
         || pts.iter().any(|&p| alg.contact(p).0.abs() > 2.0 * TOL)
     {
         return None;
     }
-    let e = fit_ellipse(pts, &sigma)?;
+    // Levenberg–Marquardt from the algebraic conic alone; the four near-circles about the
+    // orthogonal circle (fitted now if step 2 did not) only when that start fails.
+    let e = fit_ellipse_seeded(pts, &sigma, Some(alg), None).or_else(|| {
+        let circle = circle.or_else(|| fit_circle(pts, &sigma));
+        fit_ellipse_seeded(pts, &sigma, None, circle)
+    })?;
     let ok = e.rx.is_finite()
         && e.ry.is_finite()
         && e.rx.min(e.ry) >= MIN_RADIUS
@@ -224,6 +267,161 @@ mod tests {
     fn an_ellipse_is_an_ellipse() {
         let (p, _, _) = primitive(&ring(160, 30.0, 12.0, 0.0)).expect("an ellipse");
         assert!(matches!(p.kind, PrimitiveKind::Ellipse { .. }));
+    }
+
+    /// [`primitive`] as it was before its ellipse step changed: the algebraic ellipse with
+    /// its unread χ², and `fit_ellipse` fitting both seeds again and running
+    /// Levenberg–Marquardt from all five starts.
+    fn primitive_ref(pts: &[Point]) -> Option<(PrimitiveFit, Point, Vec<Segment>)> {
+        use inkvec_fit::primitives::{fit_ellipse, fit_ellipse_algebraic};
+        let n = pts.len();
+        if n < MIN_POINTS {
+            return None;
+        }
+        let area = signed_area(pts);
+        let ccw = area > 0.0;
+        let sigma = vec![0.5; n];
+        let worst_of = |c: Point, r: f64| {
+            pts.iter()
+                .map(|p| (p.dist(c) - r).abs())
+                .fold(0.0f64, f64::max)
+        };
+        let k = fit_circle_kasa(pts, &sigma)?;
+        if !(k.r.is_finite() && k.r >= MIN_RADIUS) {
+            return None;
+        }
+        let rough = worst_of(k.c, k.r);
+        if rough > ROUGHLY_ROUND * k.r {
+            return None;
+        }
+        if rough <= 2.0 * TOL {
+            let f = fit_circle(pts, &sigma)?;
+            let ok = f.r.is_finite()
+                && worst_of(f.c, f.r) <= TOL
+                && area.abs() >= MIN_AREA_SHARE * std::f64::consts::PI * f.r * f.r;
+            if ok {
+                let (start, segs) = ellipse_cubics(f.c, f.r, f.r, 0.0, pts[0], ccw);
+                let prim = PrimitiveFit {
+                    kind: PrimitiveKind::Circle { c: f.c, r: f.r },
+                    chi2: f.chi2,
+                    params: 3.0,
+                };
+                return Some((prim, start, segs));
+            }
+        }
+        let span = pts.iter().map(|p| p.dist(pts[0])).fold(0.0f64, f64::max);
+        if span / 2.0 - TOL > area.abs() / (MIN_AREA_SHARE * std::f64::consts::PI * MIN_RADIUS) {
+            return None;
+        }
+        let alg = fit_ellipse_algebraic(pts, &sigma)?;
+        if !(alg.rx.is_finite() && alg.ry.is_finite())
+            || pts.iter().any(|&p| alg.contact(p).0.abs() > 2.0 * TOL)
+        {
+            return None;
+        }
+        let e = fit_ellipse(pts, &sigma)?;
+        let ok = e.rx.is_finite()
+            && e.ry.is_finite()
+            && e.rx.min(e.ry) >= MIN_RADIUS
+            && e.rx.max(e.ry) <= span.max(1.0)
+            && area.abs() >= MIN_AREA_SHARE * std::f64::consts::PI * e.rx * e.ry
+            && pts.iter().all(|&p| e.contact(p).0.abs() <= TOL);
+        if !ok {
+            return None;
+        }
+        let (start, segs) = ellipse_cubics(e.c, e.rx, e.ry, e.angle, pts[0], ccw);
+        let prim = PrimitiveFit {
+            kind: PrimitiveKind::Ellipse {
+                c: e.c,
+                rx: e.rx,
+                ry: e.ry,
+                angle: e.angle,
+            },
+            chi2: e.chi2,
+            params: 5.0,
+        };
+        Some((prim, start, segs))
+    }
+
+    /// A rotated, noisy ellipse ring, or a rounded square when `square` is set.
+    fn shape(n: usize, rx: f64, ry: f64, angle: f64, noise: f64, seed: u64) -> Vec<Point> {
+        let mut rng = super::super::polygon::tests::Rng(seed);
+        let (s, c) = angle.sin_cos();
+        (0..n)
+            .map(|k| {
+                let t = k as f64 / n as f64 * std::f64::consts::TAU;
+                let (x, y) = (
+                    rx * t.cos() + noise * (rng.unit() - 0.5),
+                    ry * t.sin() + noise * (rng.unit() - 0.5),
+                );
+                Point::new(60.0 + c * x - s * y, 50.0 + s * x + c * y)
+            })
+            .collect()
+    }
+
+    /// The rings of [`the_single_start_finds_the_primitives_the_five_starts_found`]:
+    /// circles and rotated ellipses, clean and noisy, of several sizes, and the frame.
+    fn test_rings() -> Vec<Vec<Point>> {
+        let mut rings: Vec<Vec<Point>> = Vec::new();
+        let mut seed = 1u64;
+        for n in [12usize, 40, 150] {
+            for (rx, ry) in [(8.0, 8.0), (20.0, 12.0), (30.0, 6.0), (3.0, 2.0)] {
+                for angle in [0.0, 0.4, 1.2] {
+                    for noise in [0.0, 0.3, 0.9] {
+                        seed += 1;
+                        rings.push(shape(n, rx, ry, angle, noise, seed));
+                    }
+                }
+            }
+        }
+        rings.push(super::super::polygon::tests::frame(40, 36));
+        rings
+    }
+
+    /// Levenberg–Marquardt from the algebraic start alone finds the same primitives as
+    /// from all five starts on every test ring -- the same outcome, the same kind, and the
+    /// same geometry to 1e-6 px -- where the two differ only by where each stopped.
+    #[test]
+    fn the_single_start_finds_the_primitives_the_five_starts_found() {
+        let rings = test_rings();
+        let mut hits = 0;
+        for r in &rings {
+            let (new, old) = (primitive(r), primitive_ref(r));
+            assert_eq!(new.is_some(), old.is_some());
+            let (Some((a, _, _)), Some((b, _, _))) = (new, old) else {
+                continue;
+            };
+            hits += 1;
+            let close = |x: f64, y: f64| (x - y).abs() < 1e-6;
+            match (a.kind, b.kind) {
+                (PrimitiveKind::Circle { c, r }, PrimitiveKind::Circle { c: c2, r: r2 }) => {
+                    assert!(close(c.x, c2.x) && close(c.y, c2.y) && close(r, r2));
+                }
+                (
+                    PrimitiveKind::Ellipse { c, rx, ry, angle },
+                    PrimitiveKind::Ellipse {
+                        c: c2,
+                        rx: rx2,
+                        ry: ry2,
+                        angle: angle2,
+                    },
+                ) => {
+                    assert!(close(c.x, c2.x) && close(c.y, c2.y), "{c:?} {c2:?}");
+                    assert!(close(rx, rx2) && close(ry, ry2), "{rx} {ry} / {rx2} {ry2}");
+                    // The angle is only defined up to a half turn, and not at all for a
+                    // circle-like ellipse.
+                    let d = (angle - angle2).rem_euclid(std::f64::consts::PI);
+                    assert!(rx - ry < 1e-3 || d.min(std::f64::consts::PI - d) < 1e-6);
+                }
+                (k, k2) => panic!("{k:?} against {k2:?}"),
+            }
+        }
+        // The cases cover both outcomes.
+        assert!(
+            hits > 10 && hits < rings.len() - 10,
+            "{hits} of {}",
+            rings.len()
+        );
     }
 
     #[test]

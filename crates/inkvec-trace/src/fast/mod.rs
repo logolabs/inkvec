@@ -39,11 +39,14 @@
 //! 3. **Ramps** -- `bands::merge_ramps` (opaque images with gradients on).
 //! 4. **Planar map and sub-pixel refinement** -- shared with quality mode, in
 //!    `crate::finish_color_trace_alpha`.
-//! 5. **Fit**, per edge of the map ([`fit_edges`] → [`fit_edge`]):
-//!    a closed edge that is a circle or ellipse becomes one (`prims::primitive`); every
-//!    other edge goes through [`fit_points`]: `smooth::denoise` → `polygon::open` /
-//!    `polygon::closed` → `smooth::adjust_vertices` → `smooth::pieces` →
-//!    `curve::optimise` → `curve::to_segments`.
+//! 5. **Fit**, per edge of the map, in parallel ([`fit_edges`] → [`fit_edge`]):
+//!    the image frame, when one face runs round the whole border, is written as the image
+//!    rectangle (`frame_rectangle`); a closed edge that is a circle or ellipse becomes one
+//!    (`prims::primitive`, on the ring denoised once); every other edge goes through
+//!    [`fit_points`]: `smooth::denoise` → `polygon::open` / `polygon::closed` (a
+//!    boundary of 2048 points or more scans its anchors in parallel) →
+//!    `smooth::adjust_vertices` → `smooth::pieces` → `curve::optimise` →
+//!    `curve::to_segments`.
 //!
 //! Everything after the fit -- fills, seams, the emitter, minify -- is shared with quality
 //! mode.
@@ -55,6 +58,8 @@ mod front;
 mod palette;
 mod polygon;
 mod prims;
+#[cfg(test)]
+mod replay;
 mod smooth;
 
 pub(crate) use front::{trace_color, trace_color_native};
@@ -105,41 +110,67 @@ impl Default for FastFit {
 /// drawn as straight lines through the (denoised, where it ran) points; an empty input is
 /// an empty path at the origin.
 pub fn fit_points(pts: &[Point], closed: bool, cfg: &FastFit) -> FittedPath {
-    let n = pts.len();
-    let lines = |pts: &[Point]| FittedPath {
-        start: pts[0],
+    if too_short(pts.len(), closed) {
+        return lines(pts, closed);
+    }
+    fit_denoised(&smooth::denoise(pts, closed), closed, cfg)
+}
+
+/// True when a boundary of `n` points is too short for a polygon: fewer than 3 points, or
+/// fewer than 4 for a ring. [`fit_points`] draws such a boundary as [`lines`] through its
+/// points as measured.
+fn too_short(n: usize, closed: bool) -> bool {
+    n < 3 || (closed && n < 4)
+}
+
+/// Straight lines through `pts`, from the first point, and back to it when `closed`: the
+/// fallback for a boundary no stage could fit. An empty input is an empty path at the
+/// origin. O(n).
+fn lines(pts: &[Point], closed: bool) -> FittedPath {
+    let Some(&first) = pts.first() else {
+        return FittedPath {
+            start: Point::new(0.0, 0.0),
+            segments: Vec::new(),
+            closed,
+        };
+    };
+    FittedPath {
+        start: first,
         segments: pts[1..]
             .iter()
             .copied()
-            .chain(closed.then_some(pts[0]))
+            .chain(closed.then_some(first))
             .map(inkvec_fit::curves::Segment::Line)
             .collect(),
         closed,
-    };
-    if n < 3 || (closed && n < 4) {
-        if n == 0 {
-            return FittedPath {
-                start: Point::new(0.0, 0.0),
-                segments: Vec::new(),
-                closed,
-            };
-        }
-        return lines(pts);
     }
-    let pts = &smooth::denoise(pts, closed)[..];
+}
+
+/// [`fit_points`] after its denoising: the optimal polygon, vertex adjustment, smoothing
+/// into pieces, curve-run optimisation and conversion to segments, on points `pts` that
+/// [`smooth::denoise`] has already smoothed (at least 3, or 4 for a ring; see
+/// [`too_short`]). The fallbacks draw [`lines`] through these denoised points, and an open
+/// boundary starts and ends exactly on `pts[0]` and `pts[n − 1]`, which the denoising
+/// leaves where they were measured. Cost: that of `polygon::open`, O(n · MAX_SPAN) at
+/// worst; the stages after it are linear in the points and the polygon's vertices.
+///
+/// Split out of [`fit_points`] so that [`fit_edge`] can hand a ring the points it has
+/// already denoised for the primitive test instead of denoising them a second time.
+fn fit_denoised(pts: &[Point], closed: bool, cfg: &FastFit) -> FittedPath {
+    let n = pts.len();
     let vtx = if closed {
         polygon::closed(pts, cfg.poly_tol)
     } else {
         polygon::open(pts, cfg.poly_tol)
     };
     if vtx.len() < 2 {
-        return lines(pts);
+        return lines(pts, closed);
     }
     let v = smooth::adjust_vertices(pts, &vtx, closed, cfg.vertex_box);
     let pieces = smooth::pieces(pts, &vtx, &v, closed, cfg.corner_tol);
     let curves = curve::optimise(&pieces, closed, cfg.opt_tol);
     let Some(first) = curves.first() else {
-        return lines(pts);
+        return lines(pts, closed);
     };
     let start = first[0];
     let mut segments = curve::to_segments(&curves, cfg.flat);
@@ -188,6 +219,13 @@ impl FastFit {
 
 /// Fit one boundary of the map: as a circle or an ellipse when a closed boundary is one,
 /// and with [`fit_points`] otherwise.
+///
+/// A ring is denoised once, for the primitive test, and the same points go on to the
+/// polygon when no primitive fits. [`fit_points`] would denoise them again; `denoise` is a
+/// pure function of the points and the closed flag, so the second call could only return
+/// the same vector (measured: 996 of 996 rings on the screen set, 238 of 238 at 2048 px),
+/// and the output is unchanged. Not from the literature: this only removes a repeated
+/// computation.
 pub fn fit_edge(pts: &[Point], closed: bool, cfg: &FastFit) -> (FittedPath, Option<PrimitiveFit>) {
     // A closed boundary starts at a lattice node the sub-pixel refinement leaves where it
     // was, up to 0.6 px off the edge; the ring closes just as well without it.
@@ -196,17 +234,84 @@ pub fn fit_edge(pts: &[Point], closed: bool, cfg: &FastFit) -> (FittedPath, Opti
     } else {
         pts
     };
-    if closed {
-        if let Some((prim, start, segments)) = prims::primitive(&smooth::denoise(pts, true)) {
-            let path = FittedPath {
-                start,
-                segments,
-                closed: true,
-            };
-            return (path, Some(prim));
-        }
+    if !closed {
+        return (fit_points(pts, false, cfg), None);
     }
-    (fit_points(pts, closed, cfg), None)
+    let den = smooth::denoise(pts, true);
+    if let Some((prim, start, segments)) = prims::primitive(&den) {
+        let path = FittedPath {
+            start,
+            segments,
+            closed: true,
+        };
+        return (path, Some(prim));
+    }
+    // `fit_points(pts, true, cfg)`, without denoising `pts` a second time.
+    let path = if too_short(pts.len(), true) {
+        lines(pts, true)
+    } else {
+        fit_denoised(&den, true, cfg)
+    };
+    (path, None)
+}
+
+/// The image frame, written as what it is: the rectangle `[-0.5, w − 0.5] × [-0.5,
+/// h − 0.5]` of a `width` × `height` raster (pixel centres at integers), as four lines
+/// through its corners in the ring's own order, starting at the first corner the ring
+/// reaches. `None` for anything else: an open edge, a ring with a point off that
+/// rectangle's border, or one that does not pass each corner exactly once.
+///
+/// When one face runs round the whole image border (a transparent icon's clear ground,
+/// or a background colour), the planar map traces the border as one closed ring. Its
+/// points lie on the pixel lattice's outer nodes, which the sub-pixel refinement leaves
+/// in place, so the ring *is* the rectangle; fitting it only loses that. The fit also
+/// cost the most of any edge: the frame was the slowest boundary on 161 of the 246 screen
+/// icons and all 7 of the 2048 px test images (31–38% of the fitter's CPU), and because
+/// [`fit_edge`] drops a ring's first point -- the lattice node the refinement did not
+/// move, here the corner -- the fit came back as four lines and a spurious cubic that
+/// chamfered the start corner: 6 parameters too many on 166 of the 246 screen icons.
+///
+/// Four lines, 8 parameters, O(n) to recognise. Not from the literature: the border of
+/// the raster is known exactly, so there is nothing to estimate. See also: Potrace
+/// (Selinger 2003, <https://potrace.sourceforge.net/potrace.pdf>), which traces a bitmap's
+/// border like any other boundary.
+fn frame_rectangle(pts: &[Point], closed: bool, width: usize, height: usize) -> Option<FittedPath> {
+    if !closed || pts.len() < 4 {
+        return None;
+    }
+    let (x0, y0) = (-0.5, -0.5);
+    let (x1, y1) = (width as f64 - 0.5, height as f64 - 0.5);
+    // Exact comparisons: the border nodes are exact binary fractions, never refined.
+    let on_side = |v: f64, lo: f64, hi: f64| v == lo || v == hi;
+    let within = |v: f64, lo: f64, hi: f64| (lo..=hi).contains(&v);
+    let on_border = |p: &Point| {
+        (on_side(p.x, x0, x1) && within(p.y, y0, y1))
+            || (on_side(p.y, y0, y1) && within(p.x, x0, x1))
+    };
+    if !pts.iter().all(on_border) {
+        return None;
+    }
+    let corners: Vec<Point> = pts
+        .iter()
+        .copied()
+        .filter(|p| on_side(p.x, x0, x1) && on_side(p.y, y0, y1))
+        .collect();
+    // A ring on the border that reaches each corner once is the rectangle.
+    let distinct = |a: &Point, b: &Point| a.x != b.x || a.y != b.y;
+    if corners.len() != 4 || !(0..4).all(|k| (k + 1..4).all(|m| distinct(&corners[k], &corners[m])))
+    {
+        return None;
+    }
+    Some(FittedPath {
+        start: corners[0],
+        segments: corners[1..]
+            .iter()
+            .copied()
+            .chain([corners[0]])
+            .map(inkvec_fit::curves::Segment::Line)
+            .collect(),
+        closed: true,
+    })
 }
 
 /// Fit every edge of a planar map, in parallel. Each shared edge is fitted once and both
@@ -215,12 +320,16 @@ pub fn fit_edge(pts: &[Point], closed: bool, cfg: &FastFit) -> (FittedPath, Opti
 ///
 /// An edge's contrast is the OKLab distance between its two faces' representative
 /// colours, 1 when either face is outside `fills` (the image border), and at most
-/// `FAINT / GRADIENT_LOOSEN` when either face is a gradient. The output is in edge order,
+/// `FAINT / GRADIENT_LOOSEN` when either face is a gradient. The image frame of a
+/// `width` × `height` raster, when one face runs round the whole border, is written as
+/// the image rectangle ([`frame_rectangle`]) and not fitted. The output is in edge order,
 /// whatever the thread count.
 pub fn fit_edges(
     edges: &[Edge],
     fills: &[crate::gradient::FillFit],
     cfg: &FastFit,
+    width: usize,
+    height: usize,
 ) -> Vec<(FittedPath, Option<PrimitiveFit>)> {
     use rayon::prelude::*;
     let lab = |f: u16| {
@@ -236,6 +345,9 @@ pub fn fit_edges(
     edges
         .par_iter()
         .map(|e| {
+            if let Some(path) = frame_rectangle(&e.points, e.closed, width, height) {
+                return (path, None);
+            }
             let mut contrast = match (lab(e.left), lab(e.right)) {
                 (Some(a), Some(b)) => a.dist(b) as f64,
                 _ => 1.0,
@@ -319,6 +431,99 @@ mod tests {
         let f = fit_points(&pts, false, &FastFit::default());
         assert_eq!(f.segments.len(), 1, "{:?}", f.segments);
         assert_eq!(f.end(), pts[999]);
+    }
+
+    /// [`fit_edge`] as it was before a ring's denoised points were reused: the primitive
+    /// test on one denoising, [`fit_points`] on a second.
+    fn fit_edge_ref(
+        pts: &[Point],
+        closed: bool,
+        cfg: &FastFit,
+    ) -> (FittedPath, Option<PrimitiveFit>) {
+        let pts = if closed && pts.len() >= 8 {
+            &pts[1..]
+        } else {
+            pts
+        };
+        if closed {
+            if let Some((prim, start, segments)) = prims::primitive(&smooth::denoise(pts, true)) {
+                let path = FittedPath {
+                    start,
+                    segments,
+                    closed: true,
+                };
+                return (path, Some(prim));
+            }
+        }
+        (fit_points(pts, closed, cfg), None)
+    }
+
+    /// The reuse against [`fit_edge_ref`] on every polygon test case, open and closed, at
+    /// the default and the loosest tolerances, plus circles (which the primitive takes).
+    #[test]
+    fn reusing_the_denoised_ring_keeps_every_fit_bit_for_bit() {
+        let mut cases = polygon::tests::cases();
+        for n in [0usize, 1, 2, 3, 4, 5, 7, 8, 9, 13] {
+            cases.push(
+                (0..n)
+                    .map(|k| Point::new((k * 3 % 7) as f64, (k * 5 % 11) as f64))
+                    .collect(),
+            );
+        }
+        for r in [3.0, 12.0] {
+            cases.push(
+                (0..64)
+                    .map(|k| {
+                        let t = k as f64 / 64.0 * std::f64::consts::TAU;
+                        Point::new(20.0 + r * t.cos(), 20.0 + r * t.sin())
+                    })
+                    .collect(),
+            );
+        }
+        for pts in &cases {
+            for contrast in [1.0, 0.0] {
+                let cfg = FastFit::default().for_contrast(contrast);
+                for closed in [false, true] {
+                    let new = fit_edge(pts, closed, &cfg);
+                    let old = fit_edge_ref(pts, closed, &cfg);
+                    assert_eq!(format!("{new:?}"), format!("{old:?}"));
+                }
+            }
+        }
+    }
+
+    /// The frame of a raster is its rectangle, four lines from the ring's first corner in
+    /// the ring's own direction; an inner rectangle, an open run and a ring with a point
+    /// off the border are not frames.
+    #[test]
+    fn the_image_frame_is_the_image_rectangle() {
+        let f = polygon::tests::frame(40, 25);
+        let path = frame_rectangle(&f, true, 40, 25).expect("the frame");
+        assert_eq!(path.start, Point::new(-0.5, -0.5));
+        let ends: Vec<Point> = path.segments.iter().map(|s| s.end()).collect();
+        assert_eq!(
+            ends,
+            [
+                Point::new(39.5, -0.5),
+                Point::new(39.5, 24.5),
+                Point::new(-0.5, 24.5),
+                Point::new(-0.5, -0.5)
+            ]
+        );
+        assert!(path.segments.iter().all(|s| matches!(s, Segment::Line(_))));
+        // Traced the other way round, from another corner.
+        let mut back: Vec<Point> = f.iter().rev().copied().collect();
+        back.rotate_left(7);
+        let path = frame_rectangle(&back, true, 40, 25).expect("the frame");
+        assert_eq!(path.start, Point::new(-0.5, 24.5));
+        assert_eq!(path.segments[0].end(), Point::new(39.5, 24.5));
+        assert!(frame_rectangle(&f, false, 40, 25).is_none());
+        assert!(frame_rectangle(&f, true, 41, 25).is_none());
+        let mut off = f.clone();
+        off[10].y += 0.25;
+        assert!(frame_rectangle(&off, true, 40, 25).is_none());
+        let inner: Vec<Point> = f.iter().map(|p| Point::new(p.x + 3.0, p.y + 2.0)).collect();
+        assert!(frame_rectangle(&inner, true, 46, 30).is_none());
     }
 
     #[test]

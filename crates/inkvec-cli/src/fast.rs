@@ -33,13 +33,15 @@ pub(crate) fn on(args: &Args) -> bool {
 /// The result is parallel to `map.edges`: entry `i` is edge `i`'s path, in the map's own
 /// pixel coordinates (pixel centres at integers, so the canvas spans `-0.5 .. w - 0.5`),
 /// with `Some` primitive when the edge was recognised as a circle or an ellipse. Each shared
-/// edge is fitted once, so both faces that meet along it draw the same curve.
+/// edge is fitted once, so both faces that meet along it draw the same curve. The map's
+/// size goes along so that the image frame, when one face runs round the whole border, is
+/// written as the image rectangle rather than fitted.
 pub(crate) fn fit(
     map: &PlanarMap,
     fills: &[inkvec_trace::gradient::FillFit],
 ) -> Vec<(FittedPath, Option<PrimitiveFit>)> {
     let cfg = inkvec_trace::fast::FastFit::default();
-    inkvec_trace::fast::fit_edges(&map.edges, fills, &cfg)
+    inkvec_trace::fast::fit_edges(&map.edges, fills, &cfg, map.width, map.height)
 }
 
 /// Every option in `args`, moved off its default, that fast mode's colour trace does not read:

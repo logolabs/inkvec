@@ -357,7 +357,9 @@ fn finish_color(
     }
     let mut sw = inkvec_trace::Stopwatch::start();
     inkvec_core::progress::begin("fit_dp");
-    let traced_labels = traced.labels.clone();
+    // Moved out, not cloned: nothing reads `traced.labels` again (the trace is taken apart
+    // field by field below), and a 2048 px image's labels are 8 MB (1.28 ms to copy).
+    let traced_labels = traced.labels;
     let boundary_report = traced.boundary_opt;
     let symmetry = traced.symmetry;
     let symmetrised = traced.symmetrised;
@@ -588,9 +590,12 @@ fn dump_map(traced: &inkvec_trace::ColorTrace, w: usize, h: usize) -> Option<Sto
 /// Every boundary of the planar map fitted: what [`fit_boundaries`] produces and
 /// [`repair_fits`] refines. All vectors are indexed by edge.
 struct Fits {
-    /// Each edge's measured points, sigmas in content units: the fit's input.
+    /// Each edge's measured points, sigmas in content units: the fit's input. Empty in fast
+    /// mode unless `--editability` or the research structural baseline reads it (see
+    /// [`fit_boundaries`]).
     polys: Vec<inkvec_core::Polyline>,
-    /// Each edge's lambda multiplier: its own scale times `--lambda-scale`.
+    /// Each edge's lambda multiplier: its own scale times `--lambda-scale`. Empty whenever
+    /// `polys` is.
     lambda_scales: Vec<f64>,
     /// Each edge's fitted curve.
     fitted: Vec<FittedPath>,
@@ -624,6 +629,13 @@ fn scaled(cfg: &FitConfig, scale: f64) -> FitConfig {
 /// ([`prefer_primitive`]).
 ///
 /// Fast mode fits nothing here: `fast::fit` turns the map's edges into paths directly.
+/// It reads neither the content-unit polylines nor the per-edge λ multipliers, so it does
+/// not build them unless `--editability` (which reads the polylines) or the research
+/// structural baseline asks for them; `Fits::polys` and `Fits::lambda_scales` are then
+/// empty. Building them was 0.47 ms of the fit stage at 2048 px, plus the content scale's
+/// two raster passes under `--content-units`, which Fast ignores. The fitted paths do not
+/// depend on either, so the output is unchanged. Not from the literature: this only skips
+/// work nothing in Fast reads.
 fn fit_boundaries(
     img: &inkvec_trace::Rgba,
     args: &Args,
@@ -632,30 +644,38 @@ fn fit_boundaries(
     face_fill: &[gradient::FillFit],
     fast: bool,
 ) -> Fits {
-    let s_content = content_scale(img, args);
-    let polys: Vec<inkvec_core::Polyline> = map
-        .edges
-        .iter()
-        .map(|e| in_content_units(&e.as_polyline(), s_content))
-        .collect();
+    let structural = cfg!(feature = "research") && inkvec_core::env::flag("INKVEC_STRUCTURAL");
+    let need_polys = !fast || args.editability || structural;
+    let polys: Vec<inkvec_core::Polyline> = if need_polys {
+        let s_content = content_scale(img, args);
+        map.edges
+            .iter()
+            .map(|e| in_content_units(&e.as_polyline(), s_content))
+            .collect()
+    } else {
+        Vec::new()
+    };
     // What a parameter costs on *this* boundary. `lambda` is one exchange rate for the
     // whole drawing, which prices a boundary the artist lavished detail on exactly like a
     // plain straight run; the per-edge scale is where a predictor of local parameter
     // density is allowed to disagree with that average, and the global one is the leeway
     // over the drawing as a whole. Both are 1.0 unless something set them, and at 1.0
     // `cfg_k` is `cfg`, so the fit is unchanged.
-    let lambda_scales: Vec<f64> = map
-        .edges
-        .iter()
-        .map(|e| e.lambda_scale * args.lambda_scale)
-        .collect();
+    let lambda_scales: Vec<f64> = if need_polys {
+        map.edges
+            .iter()
+            .map(|e| e.lambda_scale * args.lambda_scale)
+            .collect()
+    } else {
+        Vec::new()
+    };
     // Every boundary is fitted independently, so fit them on every core. The work per
     // edge varies by orders of magnitude (a two-point sliver against a thousand-point
     // outline), which is exactly the shape of problem rayon's work stealing handles.
     use rayon::prelude::*;
     let ring_timing = inkvec_core::env::flag("INKVEC_TIMING");
     let ring_times: std::sync::Mutex<Vec<(f64, usize)>> = std::sync::Mutex::new(Vec::new());
-    inkvec_core::progress::step("boundaries fitted", 0, polys.len() as u64);
+    inkvec_core::progress::step("boundaries fitted", 0, map.edges.len() as u64);
     let live = inkvec_core::progress::handle();
     let results: Vec<(FittedPath, Option<PrimitiveFit>)> = if fast {
         fast::fit(map, face_fill)
@@ -697,22 +717,21 @@ fn fit_boundaries(
     // an independent baseline through primitive selection and repair so the
     // trial is judged on the geometry that those stages actually return.
     // The structural simplifier's transactional baseline: research builds only.
-    let structural_baseline =
-        if cfg!(feature = "research") && inkvec_core::env::flag("INKVEC_STRUCTURAL") {
-            let results: Vec<_> = polys
-                .par_iter()
-                .zip(lambda_scales.par_iter())
-                .map(|(poly, &scale)| {
-                    let cfg_k = scaled(cfg, scale);
-                    let curve = multimodel::optimal_multimodel_without_structural(poly, &cfg_k);
-                    prefer_primitive(poly, curve, &cfg_k)
-                })
-                .collect();
-            let (paths, primitives): (Vec<_>, Vec<_>) = results.into_iter().unzip();
-            Some((paths, primitives))
-        } else {
-            None
-        };
+    let structural_baseline = if structural {
+        let results: Vec<_> = polys
+            .par_iter()
+            .zip(lambda_scales.par_iter())
+            .map(|(poly, &scale)| {
+                let cfg_k = scaled(cfg, scale);
+                let curve = multimodel::optimal_multimodel_without_structural(poly, &cfg_k);
+                prefer_primitive(poly, curve, &cfg_k)
+            })
+            .collect();
+        let (paths, primitives): (Vec<_>, Vec<_>) = results.into_iter().unzip();
+        Some((paths, primitives))
+    } else {
+        None
+    };
     Fits {
         polys,
         lambda_scales,

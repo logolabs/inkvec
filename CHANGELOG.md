@@ -7,6 +7,33 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+### Changed
+
+- **The code explains itself.**
+  - About 900 functions across the engine, the bindings and the Studio gained or improved their doc comments: they say what they compute. The mathematical ones give the formula with every symbol defined, the units, why the method was chosen, and the edge cases.
+  - Every source file opens with where it sits in the pipeline.
+  - `inkvec-trace`'s crate docs list the Quality pipeline stage by stage, and `native.rs` has a table of the functions it mirrors for transparent images.
+  - Wrong or stale comments were corrected where they had drifted onto the wrong item or described the opposite sign.
+- **Long functions split into named stages.**
+  - The SVG writer (`emit_color`, 1,011 lines) and the colour finish (`finish_color`, 639 lines) are now documented stages with small context structs, as are the gradient band merge, the sub-pixel refinement, the palette, smooth-join snapping and about 40 others.
+  - Functions over 100 lines: 38 → 8. The longest file: 1,722 → 1,693 lines.
+  - The module cycle in `inkvec-cli` is gone.
+- **Output is unchanged, byte for byte.** Checked in Quality and Fast on the 246-icon screen set, in monochrome, editable, minify and line-art modes, and on 582 minify and fabrication cases.
+- **Library code no longer prints or panics on the way.** Debug output goes through one gated channel. Unwraps in `inkvec-fit` and most of `inkvec-trace` became real handling or a stated reason.
+
+### Added
+
+- **Studio tests.**
+  - 118 unit tests (Vitest), run in CI.
+  - The trace bookkeeping is now a pure module (`lib/traceflow.ts`) whose every race is tested: crossing start replies, results arriving before their start reply, Cancel undone by a queued trace, stale generations.
+  - `main.ts` and `rail.ts` are split into smaller modules.
+- **42 engine tests** for the upscaler, denoiser, WASM and server code, which had the least coverage.
+- **`tools/prepush.py`**, the no-build CI checks in about a minute, and `tools/install_hooks.py` to run it before every push. See CONTRIBUTING.md.
+
+### Fixed
+
+- **Studio:** the tenth preset's tooltip names its shortcut, Ctrl+0.
+
 ## [0.2.3] - 2026-09-28
 
 ### Added

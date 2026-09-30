@@ -19,7 +19,9 @@ const ALIGN: usize = 16;
 #[no_mangle]
 extern "C" fn inkvec_alloc(len: usize) -> *mut u8 {
     match Layout::from_size_align(len, ALIGN) {
-        // SAFETY: the layout has a nonzero size.
+        // SAFETY: `alloc` requires a layout of nonzero size, which the guard ensures; the
+        // alignment is a power of two by construction. A failed allocation returns NULL,
+        // which is what the host is told to expect.
         Ok(layout) if len > 0 => unsafe { alloc(layout) },
         _ => std::ptr::null_mut(),
     }
@@ -37,7 +39,8 @@ unsafe extern "C" fn inkvec_dealloc(ptr: *mut u8, len: usize) {
         return;
     }
     if let Ok(layout) = Layout::from_size_align(len, ALIGN) {
-        // SAFETY: allocated by `inkvec_alloc` with this same layout, per the caller.
+        // SAFETY: per the caller, `ptr` came from `inkvec_alloc(len)`, which allocated it
+        // with exactly this layout (same `len`, same `ALIGN`), and has not been released.
         unsafe { dealloc(ptr, layout) }
     }
 }

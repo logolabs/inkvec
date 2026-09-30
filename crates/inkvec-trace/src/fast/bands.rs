@@ -10,7 +10,7 @@
 //! between two genuinely different inks cannot be fitted by a ramp, fails that test and
 //! stays two faces.
 //!
-//! Stage 3 of the Fast pipeline, after [`super::faces::faces`] and only for opaque images
+//! Stage 3 of the Fast pipeline, after [`super::faces::RunLabels::write_faces`] and only for opaque images
 //! with gradients on. In: the image over white (sRGB 0..1), the palette, and a face id per
 //! pixel with each face's fill and ink. Out: the same three rewritten, with each accepted
 //! cluster renumbered as one face carrying a gradient fill. Called from [`super::front`].
@@ -165,7 +165,7 @@ fn contacts_scan(labels: &[u16], w: usize, h: usize) -> HashMap<(u16, u16), u32>
 ///
 /// [`merge_ramps`] joins two faces only when they touch (share a 4-neighbour pixel pair)
 /// and their colours are within `RAMP_STEP`. The faces are the 4-connected components of
-/// the ink map (`faces::faces`), so two pixels that are 4-neighbours and carry the same
+/// the ink map (`faces::RunLabels::write_faces`), so two pixels that are 4-neighbours and carry the same
 /// ink are in the same face: two faces that touch always have **different** inks. Their
 /// distance is then the distance between two different inks' colours, computed by the same
 /// `Oklab::dist` on the same values (the distance is exactly symmetric, since
@@ -174,7 +174,7 @@ fn contacts_scan(labels: &[u16], w: usize, h: usize) -> HashMap<(u16, u16), u32>
 /// members, and `merge_ramps` returns 0 with the labels and fills untouched — the value
 /// this early return gives.
 ///
-/// One exception is guarded: past `u16::MAX − 1` components, `faces::faces` folds the rest
+/// One exception is guarded: past `u16::MAX − 1` components, `faces::RunLabels::write_faces` folds the rest
 /// into face 0, which then holds pixels of several inks under one colour, and the argument
 /// fails. With that many faces this returns `true` and the full pass decides.
 ///
@@ -191,7 +191,7 @@ fn contacts_scan(labels: &[u16], w: usize, h: usize) -> HashMap<(u16, u16), u32>
 /// Computing", IEEE TIP 24(9) 2725–2735, <https://doi.org/10.1109/TIP.2015.2425540>, on
 /// deciding region facts without a second pass over the pixels.
 fn inks_may_join(face_color: &[usize], pal: &Palette) -> bool {
-    /// Faces past this count are folded into face 0 by `faces::faces`; see above.
+    /// Faces past this count are folded into face 0 by `faces::RunLabels::write_faces`; see above.
     const FOLDED: usize = (u16::MAX - 1) as usize;
     if face_color.len() >= FOLDED {
         return true;
@@ -337,7 +337,7 @@ fn gather_samples(
 /// after step 1, when no pair joined, it returns 0 the same way. Steps 1 and 2 read the row
 /// runs of `labels` ([`contacts`], [`gather_samples`]) rather than its pixels.
 ///
-/// Preconditions: `labels` are the faces of `faces::faces`, the 4-connected components of
+/// Preconditions: `labels` are the faces of `faces::RunLabels::write_faces`, the 4-connected components of
 /// the ink map, with `face_color` their inks (the palette precheck relies on it), and every
 /// label is below `face_color.len()`.
 ///
@@ -626,7 +626,9 @@ mod tests {
                 .collect();
             let checker: Vec<u16> = (0..w * h).map(|p| ((p % w + p / w) % 2) as u16).collect();
             for ink_map in [noise, blocks, stripes, vec![0u16; w * h], checker] {
-                let (labels, face_color) = super::super::faces::faces(&ink_map, w, h);
+                let mut labels = ink_map.clone();
+                let face_color =
+                    super::super::faces::RunLabels::new(&ink_map, w, h).write_faces(&mut labels);
                 out.push((labels, face_color, w, h));
             }
         }

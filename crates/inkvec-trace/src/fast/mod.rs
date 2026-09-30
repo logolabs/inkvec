@@ -33,9 +33,10 @@
 //!
 //! 1. **Palette and labels** -- `palette::palette_and_labels`: inks from flat bins, then
 //!    one ink per pixel, blends sent to the ink they are made of.
-//! 2. **Label clean-up** -- `faces::absorb_slivers`, `faces::absorb_rims`,
-//!    `faces::merge_same_inks`, then `faces::despeckle` with the floor from
-//!    `front::speckle_floor`, then `faces::faces` (one face per connected component).
+//! 2. **Label clean-up**, on the label image's row runs (`faces::RunLabels`):
+//!    `absorb_slivers`, `absorb_rims`, `merge_same_inks`, then `despeckle` with the floor
+//!    from `front::speckle_floor`, then `write_faces` (one face per 4-connected component,
+//!    written once over the label buffer).
 //! 3. **Ramps** -- `bands::merge_ramps` (opaque images with gradients on).
 //! 4. **Planar map and sub-pixel refinement** -- shared with quality mode, in
 //!    `crate::finish_color_trace_alpha`.

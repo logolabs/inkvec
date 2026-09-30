@@ -8,6 +8,11 @@
 //! geometry over near-misses and cost releases up to 0.1.3 half their fidelity on the
 //! screen set (dE00 0.151 -> 0.299). So nothing here is moved unless its own evidence
 //! agrees; see [`harmonize`].
+//!
+//! Part of writing the colour document: the colour emitter ([`crate::emit`]) calls
+//! [`harmonize`] once the stacking is settled (with `--harmonize`, not in fast mode), and
+//! writes each face the result names from its consensus `d` or as a `<use>` of a shared
+//! symbol instead of from its own rings. Geometry is in the traced image's pixels.
 
 use std::collections::{HashMap, HashSet};
 
@@ -22,8 +27,8 @@ use inkvec_fit::{
     FittedPath,
 };
 
+use crate::faces::FaceRings;
 use crate::pathdata::{fmt_segments, ring_to_segments};
-use crate::FaceRings;
 
 /// How far a harmonized shape may stray from the boundary its own pixels put it at, in
 /// pixels. See [`shape_deviation`]; `INKVEC_HARMONIZE_TOL` overrides it.
@@ -36,8 +41,11 @@ const HARMONIZE_TOL: f64 = 0.1;
 
 /// The faces of one document, as the emitter holds them once the stacking is settled.
 pub(crate) struct Faces<'a> {
+    /// The rings of each face.
     pub order: &'a [FaceRings],
+    /// The fitted curve of each edge.
     pub fitted: &'a [FittedPath],
+    /// Per edge, the whole-edge primitive it fitted, if any.
     pub prims: &'a [Option<PrimitiveFit>],
     /// Each face's rings as points.
     pub pts: &'a [Vec<Vec<Point>>],
@@ -141,6 +149,12 @@ pub(crate) fn harmonize(
 }
 
 /// The faces harmonizing may move, as compound shapes, and the face each one is.
+///
+/// A face qualifies when it is painted, draws exactly one ring, is not itself punched out
+/// of another face, and that ring is not a fitted primitive; and when every face punched
+/// out of it is dropped (so nothing is painted in its holes), draws one ring, and is not a
+/// primitive either. Its shape is its outline plus those holes, each as segments and as
+/// sampled points.
 fn candidates(f: &Faces<'_>) -> (Vec<CompoundShape>, Vec<usize>) {
     let (order, drawn, holes) = (f.order, f.drawn, f.holes);
     let punched: HashSet<usize> = holes.iter().flatten().copied().collect();
@@ -183,7 +197,9 @@ fn candidates(f: &Faces<'_>) -> (Vec<CompoundShape>, Vec<usize>) {
     (shapes, face_of)
 }
 
-/// The cluster's consensus placed where `shape` is: its outline, then its holes.
+/// The cluster's consensus placed where `shape` is: its outline, then its holes, each
+/// mapped by the member's transform from the cluster's canonical frame
+/// (`shape.from_canonical`).
 fn stamped(
     cluster: &CompoundEquivalenceClass,
     shape: &CompoundShape,
@@ -206,7 +222,8 @@ fn stamped(
     rings
 }
 
-/// Whether the consensus lands within `tol` of the boundary `shape` was traced at.
+/// Whether the consensus lands within `tol` (px) of the boundary `shape` was traced at:
+/// both drawings sampled ([`run_samples`]) and compared by [`shape_deviation`].
 fn faithful(cluster: &CompoundEquivalenceClass, shape: &CompoundShape, tol: f64) -> bool {
     let own: Vec<Vec<Point>> =
         std::iter::once(run_samples(shape.outer_start, &shape.outer_segments))
@@ -219,7 +236,8 @@ fn faithful(cluster: &CompoundEquivalenceClass, shape: &CompoundShape, tol: f64)
     shape_deviation(&own, &new, tol) <= tol
 }
 
-/// Whether the consensus costs fewer parameters than `shape`'s own drawing.
+/// Whether the consensus costs fewer parameters than `shape`'s own drawing, counting the
+/// outline and every hole by the fitter's own parameter count per segment.
 fn cheaper(cluster: &CompoundEquivalenceClass, shape: &CompoundShape) -> bool {
     let cost = |segs: &[Segment]| segs.iter().map(|s| s.params()).sum::<f64>();
     let own = cost(&shape.outer_segments)
@@ -239,6 +257,11 @@ fn cheaper(cluster: &CompoundEquivalenceClass, shape: &CompoundShape) -> bool {
 
 /// Points along a run of segments, half a pixel apart, so the polyline through them is
 /// within 0.02 px of the curve down to a two-pixel radius.
+///
+/// (A chord of length `c` on a circle of radius `R` departs from the arc by the sagitta
+/// `c²/(8R)`: 0.25/16 ≈ 0.016 px for `c = 0.5`, `R = 2`.) Each segment's length is
+/// estimated from eight chords, and it is then cut into `ceil(length / 0.5)` equal steps in
+/// its parameter, between 1 and 1024.
 fn run_samples(start: Point, segs: &[Segment]) -> Vec<Point> {
     use inkvec_fit::structural::eval_segment;
     let mut out = vec![start];
@@ -262,6 +285,14 @@ fn run_samples(start: Point, segs: &[Segment]) -> Vec<Point> {
 
 /// How far one drawing of a compound shape strays from another: the largest distance from
 /// a point of either to the nearest ring of the other. Stops counting once past `limit`.
+///
+/// This is the symmetric Hausdorff distance between the two sets of rings, measured from
+/// the sample points of each to the closed polylines of the other:
+/// `H(A, B) = max(max_{a∈A} d(a, B), max_{b∈B} d(b, A))`, px. Two-directional on purpose:
+/// one direction alone misses a hole that one drawing has and the other lacks. Rings of
+/// fewer than two points are ignored as targets; with no target at all the distance is
+/// infinite. The early exit returns some value above `limit` rather than the true maximum,
+/// which is all a caller comparing against `limit` needs.
 fn shape_deviation(a: &[Vec<Point>], b: &[Vec<Point>], limit: f64) -> f64 {
     let one_way = |from: &[Vec<Point>], to: &[Vec<Point>]| -> f64 {
         let mut worst: f64 = 0.0;

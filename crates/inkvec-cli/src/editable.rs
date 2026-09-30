@@ -14,12 +14,35 @@
 //! within 0.05° of an axis), the 45° bump (5x lift) and the dead 10–30° trough come
 //! from the committed artist GT corpus (313k handle angles, scratchpad/angle_prior.py);
 //! the G1 and handle-length lifts from scratchpad/artist_priors.py.
+//!
+//! Where it sits: after fitting, ring repair and shape harmonization, just before the
+//! emitter, so nothing downstream re-breaks what was locked. `pipeline.rs` calls
+//! [`edit_all`] once per colour trace when `--editability` is on and prints
+//! [`EditStats::summary`]. In: one measured polyline per planar-map edge (its sub-pixel
+//! points and their sigma), the fitted path for each edge, and which of them were fitted
+//! as primitives. Out: the same fitted paths, edited in place, and counts of what changed.
+//! A "ring" below is one such fitted path; it is closed for an isolated boundary and open
+//! for a run between two junctions.
+//!
+//! Units: positions in px of the traced raster, with pixel centres at integer coordinates
+//! (the canvas spans `-0.5 .. w - 0.5`); sigma in px; angles in degrees. Image y points
+//! down, which none of the passes care about: the axis, diagonal and mirror tests are all
+//! symmetric under that flip.
+//!
+//! The acceptance test, used by every pass: sample the edited ring at 8 points per segment
+//! and require every sample `s` to have some source point `q_j` with
+//! `|s − q_j| ≤ 3·σ_j + slack`, where `σ_j` is that point's positional sigma and `slack` is
+//! [`EDIT_SLACK`] (or [`MIRROR_SLACK`] for mirror lock). It is one-sided on purpose: it asks
+//! that the new curve stay on the evidence, not that it visit every point, because the
+//! passes only rotate, rescale, slide or reflect pieces the fit already placed.
 
 use inkvec_core::Point;
 use inkvec_fit::curves::Segment;
 use inkvec_fit::primitives::PrimitiveFit;
 use inkvec_fit::structural::eval_segment;
 use inkvec_fit::FittedPath;
+
+use crate::diag;
 
 /// A handle direction is "on" an axis (0/90/180/270) within this many degrees.
 const AXIS_SNAP: f64 = 2.5;
@@ -54,19 +77,30 @@ const EMIT_GRID: f64 = 0.01;
 /// rather than split beside it.
 const AXIS_NODE: f64 = 1.0;
 
+/// What the editability passes did, counted over one drawing.
 #[derive(Default, Debug, Clone)]
 pub(crate) struct EditStats {
+    /// Rings (fitted paths) handed in, primitives included.
     pub(crate) rings: usize,
+    /// Joins made G1-smooth by [`pass_g1`].
     pub(crate) g1_joins: usize,
+    /// Handles snapped onto 0/90/180/270 degrees by [`pass_handles`].
     pub(crate) axis_snaps: usize,
+    /// Handles snapped onto a 45-degree diagonal by [`pass_handles`].
     pub(crate) diag_snaps: usize,
+    /// Cubics whose two handles [`pass_equalize`] set to one length.
     pub(crate) len_sym: usize,
+    /// Node coordinate moves kept by [`pass_nodes`]; a node that moved in both x and y
+    /// counts twice.
     pub(crate) nodes_aligned: usize,
+    /// Rings rewritten as exact mirrors by [`pass_mirror`].
     pub(crate) mirror_rings: usize,
+    /// Edits tried and undone because the result left the acceptance budget.
     pub(crate) reverted: usize,
 }
 
 impl EditStats {
+    /// The one-line report the pipeline prints under `--editability`.
     pub(crate) fn summary(&self) -> String {
         format!(
             "  editability   {} rings: {} G1 joins, {} axis + {} diagonal handle snaps, \
@@ -83,7 +117,9 @@ impl EditStats {
     }
 }
 
-/// `starts[i]` is where segment i begins; segment i is `Cubic(c1, c2, starts[i+1])`.
+/// The ring's on-curve nodes in order: `starts[i]` is where segment `i` begins and
+/// `starts[i + 1]` where it ends, whatever kind of segment it is. There are
+/// `segments.len() + 1` of them; on a closed ring the last repeats the first.
 fn chain_starts(fp: &FittedPath) -> Vec<Point> {
     let mut starts = Vec::with_capacity(fp.segments.len() + 1);
     starts.push(fp.start);
@@ -93,6 +129,10 @@ fn chain_starts(fp: &FittedPath) -> Vec<Point> {
     starts
 }
 
+/// Points along a chain of segments, `per` to a segment at `t = 1/per, 2/per, …, 1`.
+/// `t = 0` is left out because it is the previous segment's `t = 1`, so only the chain's
+/// very first node is not sampled. `starts[i]` must be segment `i`'s start (see
+/// [`chain_starts`]).
 fn samples(segs: &[Segment], starts: &[Point], per: usize) -> Vec<Point> {
     let mut v = Vec::new();
     for (i, seg) in segs.iter().enumerate() {
@@ -104,10 +144,19 @@ fn samples(segs: &[Segment], starts: &[Point], per: usize) -> Vec<Point> {
 }
 
 /// The changed geometry stays within the editability budget of the source points.
+/// [`guarded_slack`] with the handle and node budget, [`EDIT_SLACK`].
 fn guarded(segs: &[Segment], starts: &[Point], pts: &[Point], sigma: &[f64]) -> bool {
     guarded_slack(segs, starts, pts, sigma, EDIT_SLACK)
 }
 
+/// The acceptance test from the module docs: every one of 8 samples per segment must lie
+/// within `3·σ_j + slack` px of at least one source point `q_j`.
+///
+/// `pts` are the traced boundary points (px) and `sigma` their positional sigmas (px),
+/// parallel to `pts`; a shorter `sigma` repeats its last value, and it must not be empty
+/// while `pts` is not. The search is brute force, O(samples × points), which is fine at
+/// the size of one ring and is only paid under `--editability`. With no source points
+/// nothing can be matched and every ring with a segment fails.
 fn guarded_slack(
     segs: &[Segment],
     starts: &[Point],
@@ -124,6 +173,10 @@ fn guarded_slack(
 
 /// Greedy per-item acceptance: apply one change, keep it if the whole ring still
 /// guards, revert just that change otherwise.
+///
+/// The caller has already applied the change to `fp` and passes the segments from before
+/// it as `before`. Returns whether it was kept; `count` goes up by one if so. Only segments
+/// are restored, so a change must not have moved `fp.start`.
 fn keep_if_guarded(
     fp: &mut FittedPath,
     before: &[Segment],
@@ -141,6 +194,7 @@ fn keep_if_guarded(
     }
 }
 
+/// A cubic's two control points and end, or `None` for a line or an arc.
 fn cubic(seg: &Segment) -> Option<(Point, Point, Point)> {
     match *seg {
         Segment::Cubic(c1, c2, e) => Some((c1, c2, e)),
@@ -150,6 +204,21 @@ fn cubic(seg: &Segment) -> Option<(Point, Point, Point)> {
 
 /// G1: joins whose tangents disagree by at most [`G1_SNAP_DEG`] rotate onto their
 /// shared bisector, so an editor drags one tangent and the curve stays smooth.
+///
+/// At the node `N` between cubic `i` (second control point `c2`) and cubic `j = i + 1`
+/// (first control point `c1`), the incoming tangent is `d_in = N − c2` and the outgoing
+/// one `d_out = c1 − N`. Their angle is `θ = acos(d_in·d_out / (|d_in| |d_out|))`, in
+/// degrees. When `θ ≤ G1_SNAP_DEG` both handles are turned onto the unit bisector
+/// `b = normalise(d_in/|d_in| + d_out/|d_out|)` (flipped if needed so it points the way the
+/// curve leaves the node) and keep their own lengths: `c2 ← N − |d_in|·b`,
+/// `c1 ← N + |d_out|·b`. The node does not move, and each handle turns by `θ/2`, so the
+/// correction is split evenly between them. That is G1 continuity: one tangent direction
+/// at the node, with the two handle lengths still free.
+///
+/// Only cubic–cubic joins are considered; a join next to a line or an arc, or with a
+/// zero-length handle, is skipped. On an open ring the join
+/// from the last segment back to the first does not exist and is skipped too. Each join is
+/// accepted or reverted on its own ([`keep_if_guarded`]).
 fn pass_g1(
     fp: &mut FittedPath,
     starts: &[Point],
@@ -210,6 +279,18 @@ fn pass_g1(
 /// Axis and diagonal handle snaps, greedy per handle: each snap is applied alone
 /// and kept only if the whole ring still guards, so one bad handle never vetoes
 /// another and none ever escapes the budget.
+///
+/// A handle is the vector `h` from a cubic's node to its control point (start → `c1`, end
+/// → `c2`). Its direction `φ = atan2(h_y, h_x)` in degrees is reduced to `r = φ mod 90` in
+/// `[0, 90)`. If `min(r, 90 − r) ≤ AXIS_SNAP` (2.5°) it snaps to the nearest multiple of
+/// 90°; otherwise, if `|r − 45| ≤ DIAG_SNAP` (1.5°), to the 45° diagonal in the same
+/// quadrant. The snapped handle keeps its length `|h|`, so only its angle moves and the
+/// node stays put. The targets and the narrow windows come from the artist corpus: a sharp
+/// spike of handles at the axes, a smaller bump at 45°, and nothing to aim for between
+/// 10° and 30° (see the module docs).
+///
+/// Lines and arcs have no handles and are skipped, as is a zero-length handle or one that
+/// is already exactly on its target.
 fn pass_handles(
     fp: &mut FittedPath,
     starts: &[Point],
@@ -274,7 +355,16 @@ fn pass_handles(
     }
 }
 
-/// Equal handle lengths within [`LEN_MATCH`]: the smooth-point tool's signature.
+/// Equal handle lengths within [`LEN_MATCH`]. (This used to be called "the smooth-point
+/// tool's signature", but a smooth node in an editor equalises the two handles *at a
+/// node*, which belong to different segments; this pass does something else.)
+///
+/// Per cubic, not per node: the two handles compared are the same segment's, `l1 =
+/// |c1 − start|` and `l2 = |end − c2|` (px). When the shorter is at least `1 − LEN_MATCH`
+/// (90%) of the longer, both are rescaled to their mean `m = (l1 + l2) / 2` along their own
+/// directions, so the curve's two ends pull equally. Directions and nodes do not move.
+/// Lines, arcs, zero-length handles and handles already equal are skipped; each change is
+/// kept or reverted on its own.
 fn pass_equalize(
     fp: &mut FittedPath,
     starts: &[Point],
@@ -324,6 +414,12 @@ fn pass_equalize(
 /// The same curve reflected about `cx` and traversed backwards, so that it ends
 /// where the original began. Reversing an arc flips its sweep and reflecting it
 /// flips the sweep again, so the two cancel and only the rotation negates.
+///
+/// The reflection is `mir(x, y) = (2·cx − x, y)`, a mirror in the vertical line `x = cx`.
+/// A cubic from `s` through `c1`, `c2` to `e` becomes one from `mir(e)` through `mir(c2)`,
+/// `mir(c1)` to `mir(s)`: reversing a Bézier curve reverses its control points. The
+/// caller supplies `seg_start` because a segment stores only its end; the new segment's
+/// start is implied by whatever precedes it, and must be `mir(e)`.
 fn mirror_reverse(seg: &Segment, seg_start: Point, cx: f64) -> Segment {
     let mir = |p: Point| Point::new(2.0 * cx - p.x, p.y);
     match *seg {
@@ -350,6 +446,12 @@ fn mirror_reverse(seg: &Segment, seg_start: Point, cx: f64) -> Segment {
 /// One segment cut in two at `t`, drawing exactly what it drew before. De
 /// Casteljau for a cubic, a lerp for a line; an arc has no exact split here and
 /// declines, so a ring whose axis crosses one is left alone.
+///
+/// De Casteljau: interpolate each consecutive pair of control points at `t`, then the
+/// results again, until one point is left. That point `m` is the curve at `t`, and the
+/// intermediate points are the control points of the two halves, `(s, p01, p012, m)` and
+/// `(m, p123, p23, e)`. It is exact, so the two halves draw precisely the original curve.
+/// `t` is expected in `(0, 1)`; the caller only splits strictly inside a segment.
 fn split_at(seg: &Segment, start: Point, t: f64) -> Option<(Segment, Segment)> {
     let lerp = |p: Point, q: Point| Point::new(p.x + (q.x - p.x) * t, p.y + (q.y - p.y) * t);
     match *seg {
@@ -367,6 +469,13 @@ fn split_at(seg: &Segment, start: Point, t: f64) -> Option<(Segment, Segment)> {
 /// Where inside a segment the vertical line `x = cx` cuts it, if it does. Found by
 /// bracketing a sign change and bisecting, which needs nothing of the segment but
 /// the ability to evaluate it.
+///
+/// `f(t) = x(t) − cx` is sampled at 32 even steps of `t`; the first interval where `f`
+/// changes sign or touches zero is narrowed by 50 rounds of bisection, far below any
+/// visible distance. Only the first crossing in the segment is found. Returns
+/// `t` strictly inside `(1e-6, 1 − 1e-6)`, and `None` when the segment does not cross,
+/// when the crossing is at an end (already a node), or when two crossings fall inside one
+/// sampling step and cancel out.
 fn interior_crossing(seg: &Segment, start: Point, cx: f64) -> Option<f64> {
     const STEPS: usize = 32;
     let x = |t: f64| eval_segment(seg, start, t).x - cx;
@@ -406,6 +515,10 @@ fn interior_crossing(seg: &Segment, start: Point, cx: f64) -> Option<f64> {
 /// each one falls inside. Returns the segments, the chain of node positions and how
 /// many splits it took; `None` when a crossing lands inside an arc, which has no
 /// exact split here.
+///
+/// A segment whose start or end is already within [`AXIS_NODE`] (1 px) of the axis is
+/// not split: that node will serve as the crossing. The chain is rebuilt only when
+/// something was split; otherwise it is `starts` unchanged.
 fn with_axis_nodes(
     fp: &FittedPath,
     starts: &[Point],
@@ -440,6 +553,18 @@ fn with_axis_nodes(
 /// better: that half kept as drawn, and the other replaced by its reflection.
 /// Returns how far the result strays from those points, where it starts, and its
 /// segments.
+///
+/// `poles` are the indices in `chain` of the two nodes on the axis. Both are first moved
+/// horizontally onto `x = cx`, since a point on the mirror line is its own reflection;
+/// that is what lets the rebuilt ring close. For each direction, pole to pole, the
+/// segments of that half are kept (the last one ending on the far pole) and followed by the
+/// same segments reflected and reversed ([`mirror_reverse`]), which walk back to the start.
+///
+/// The "stray" is the one-sided (directed) Hausdorff distance from the new ring to the
+/// traced points: `max over samples s of min over points q of |s − q|`, in px, with 16
+/// samples per segment. The direction with the smaller stray wins (the first on a tie).
+/// `None` only when neither half has a segment to keep, which cannot happen with two
+/// distinct poles.
 fn better_half(
     segs: &[Segment],
     chain: &[Point],
@@ -514,6 +639,26 @@ fn better_half(
 ///
 /// Both halves are tried and the one that strays less from the traced points wins,
 /// so the sloppier half is the one that gets replaced.
+///
+/// The steps, all in px:
+///
+/// 1. Only a ring that is closed (by flag, or with its end within 0.05 px of its start)
+///    and has at least four segments is considered.
+/// 2. The candidate axis is the vertical line through the middle of the traced points'
+///    x range, `cx = (min x + max x) / 2`, rounded to the emitter's grid [`EMIT_GRID`].
+///    Only left-right symmetry is looked for.
+/// 3. Symmetry test on the evidence, not the fit: at least [`MIRROR_KEEP`] (95%) of the
+///    traced points must have a traced point within `3·σ_0 + EDIT_SLACK` of their
+///    reflection. `σ_0` is the first point's sigma, used for every point here (unlike the
+///    acceptance test, which uses each point's own).
+/// 4. The axis crossings are made into nodes ([`with_axis_nodes`]); exactly two nodes must
+///    then lie within [`AXIS_NODE`] of the axis. An arc at a crossing, or any other count,
+///    declines.
+/// 5. The better half is mirrored ([`better_half`]) and the result is kept only if it
+///    passes the acceptance test with the larger [`MIRROR_SLACK`] budget; otherwise the
+///    ring is left exactly as it was and counted as reverted.
+///
+/// `INKVEC_EDIT_DEBUG` prints why each ring was declined or how far the locked one strays.
 fn pass_mirror(
     fp: &mut FittedPath,
     starts: &[Point],
@@ -556,9 +701,9 @@ fn pass_mirror(
     }
 
     let Some((segs, chain, splits)) = with_axis_nodes(fp, starts, cx) else {
-        if debug {
-            eprintln!("    mirror: the axis crosses an arc -- declined");
-        }
+        diag::debug(debug, || {
+            "    mirror: the axis crosses an arc -- declined".into()
+        });
         return;
     };
     let n = segs.len();
@@ -566,12 +711,12 @@ fn pass_mirror(
         .filter(|&k| (chain[k].x - cx).abs() <= AXIS_NODE)
         .collect();
     if poles.len() != 2 {
-        if debug {
-            eprintln!(
+        diag::debug(debug, || {
+            format!(
                 "    mirror: {} points on the axis after {splits} split(s), want 2 -- declined",
                 poles.len(),
-            );
-        }
+            )
+        });
         return;
     }
 
@@ -579,15 +724,15 @@ fn pass_mirror(
     let Some((stray, start, out)) = better_half(&segs, &chain, (p, q), cx, pts) else {
         return;
     };
-    if debug {
-        eprintln!(
+    diag::debug(debug, || {
+        format!(
             "    mirror: {}/{} points reflect, {} split(s), poles {p},{q}, \
 locked ring strays {stray:.3} px (budget {MIRROR_SLACK})",
             hit,
             pts.len(),
             splits
-        );
-    }
+        )
+    });
 
     // Judged against the mirror budget, not the handle one: locking moves geometry
     // by the asymmetry between the two traced halves, which is the whole point of
@@ -604,7 +749,10 @@ locked ring strays {stray:.3} px (budget {MIRROR_SLACK})",
     }
 }
 
-/// Move a segment's on-curve endpoint, whatever kind of segment it is.
+/// Move a segment's on-curve endpoint, whatever kind of segment it is. Control points
+/// and arc parameters stay as they were: an arc, which SVG defines by its endpoints, is
+/// redrawn with the same radii and flags between the new endpoints (SVG scales the radii
+/// up if they have become too small to span them).
 fn set_end(seg: &mut Segment, p: Point) {
     match seg {
         Segment::Cubic(_, _, e) | Segment::Line(e) => *e = p,
@@ -621,6 +769,22 @@ fn set_end(seg: &mut Segment, p: Point) {
 /// There is no start field to write, and `Cubic`'s first field is a control point --
 /// treating it as the node moved handles onto node positions and collapsed every
 /// `Line` to zero length, which is how the heart lost its bottom point.
+///
+/// The clustering is one-dimensional and done for x and for y separately. All nodes of
+/// the rings listed in `free` (the non-primitive ones) are sorted by that coordinate; a
+/// cluster is a run of consecutive values each within [`NODE_ALIGN`] (0.3 px) of the run's
+/// first value, and every member moves to the value of the run's middle element (its
+/// median). A node can therefore join one cluster in x and another in y. Handles are not
+/// touched, so a moved node's handles shift relative to it by at most `NODE_ALIGN` in each
+/// axis.
+///
+/// The moves are then applied ring by ring, and each ring is held to the acceptance test
+/// against its own polyline (`polys[i]` belongs to `fps[i]`). Unlike the other passes the
+/// unit of acceptance is the whole ring: if any of its moves breaks the budget, all of that
+/// ring's moves are undone and it counts as one revert. Because a shared cluster target is
+/// computed before any ring is judged, a node in one ring may stay put while its partner in
+/// another ring moves; they then no longer line up exactly, but neither has left the
+/// evidence.
 fn pass_nodes(
     fps: &mut [FittedPath],
     free: &[usize],
@@ -729,11 +893,18 @@ fn pass_nodes(
     }
 }
 
-/// Apply every pass to every ring, in the order an artist would notice them:
-/// mirror lock first (it rewrites halves wholesale), then G1, then the handle
-/// snaps, then equal lengths, and node alignment last (it crosses ring borders).
+/// Apply every pass to every ring: first the passes that move on-curve nodes, mirror
+/// lock (it rewrites halves wholesale) and then node alignment across the whole drawing
+/// (it crosses ring borders); then, ring by ring, G1, the handle snaps and equal lengths.
+/// The comment in the body gives the measurement behind that order.
 /// Rings that are already a primitive element (circle/ellipse/rect) are finished
 /// geometry — their nodes are load-bearing for the element and are left alone.
+///
+/// `polys`, `fps` and `prims` are parallel, one entry per planar-map edge: the measured
+/// boundary (points and sigma, px), its fitted path (edited in place) and its primitive,
+/// if the fit found one. Each pass is guarded, so the output never strays from the
+/// evidence further than the budgets in the module docs. In a `research` build
+/// `INKVEC_EDIT_PASSES` can switch passes off ([`on`]).
 pub(crate) fn edit_all(
     polys: &[inkvec_core::Polyline],
     fps: &mut [FittedPath],

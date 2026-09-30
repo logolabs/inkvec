@@ -2,16 +2,61 @@
 //!
 //! A face's outline is a ring of edges from the planar map, each stored once and walked
 //! forwards or backwards by the faces either side of it; these assemble a ring from its
-//! edges and write it, a stroke, or a bare polygon, to a fixed number of decimals (see
-//! [`crate::emit`] for why the count is the emitter's own).
+//! edges and write it, a stroke, or a bare polygon, to a fixed number of decimals
+//! ([`emit_decimals`]; see [`EMIT_DECIMALS`] for why the count is the emitter's own and
+//! not `--precision`).
+//!
+//! Coordinates are written as they come, in the traced image's pixels with pixel centres
+//! at integers. Every writer appends to a caller's `String`, so a compound path is built by
+//! calling one after another. Called from the emitters ([`crate::emit`],
+//! [`crate::mono`]), the stroke and bilevel pipelines, and [`crate::harmonize`]. Depends
+//! only on [`crate::faces`].
 
 use inkvec_core::Point;
 use inkvec_fit::{curves::Segment, FittedPath};
 
-use crate::Ring;
+use crate::faces::Ring;
 
-/// Serialise one fitted path. `fmt_ring` does this for a closed ring of planar
-/// edges; a stroke is a single open or closed curve and needs no ring walk.
+/// Decimals written per coordinate.
+///
+/// This used to be derived from `precision`, which at the default of 0.1 wrote one
+/// decimal and so rounded every coordinate to a tenth of a pixel. That was throwing the
+/// geometry away. Displacing the ground truth by a known sub-pixel amount and inverting
+/// the error it produces (via sub-pixel boundary calibration) measures
+/// the boundaries this tracer produces as accurate to **0.021 px on lucide and 0.060 px at
+/// worst** -- between two and five times finer than the grid they were being written on,
+/// so up to half the emitted error was quantisation of an answer that was already right.
+///
+/// A coordinate should not be rounded more coarsely than the geometry is accurate, and
+/// there is no reason to write it finer either. Two decimals, 0.01 px, is the first grid
+/// below the measured accuracy; the full 980-icon devset agrees, and stops agreeing
+/// immediately afterwards, which is what a bound being reached looks like:
+///
+///   1 decimal   objective 0.4922      2 decimals  objective 0.4601
+///   3 decimals  objective 0.4599 -- a fortieth of the gain, for another digit everywhere
+///
+/// Every family improves at two decimals, material-icons by 40 % and simple-icons by 16 %,
+/// and the parameter count against the artist does not move at all: this buys accuracy
+/// with digits, not with shapes. `INKVEC_EMIT_DECIMALS` still overrides, which is how the
+/// rounding was separated from the segment price in the first place -- a finer price with
+/// the old rounding makes the corpus *worse* (0.4790 against 0.4760), so this is the
+/// emitter's bound and not the fitter's.
+pub(crate) const EMIT_DECIMALS: usize = 2;
+
+/// Decimals to write per coordinate: [`EMIT_DECIMALS`], or `INKVEC_EMIT_DECIMALS` when
+/// set. `_precision` (px) is ignored and kept only so callers need not change: the digit
+/// count is deliberately not derived from `--precision` (see [`EMIT_DECIMALS`]).
+pub(crate) fn emit_decimals(_precision: f64) -> usize {
+    inkvec_core::env::count("INKVEC_EMIT_DECIMALS").unwrap_or(EMIT_DECIMALS)
+}
+
+/// Serialise one fitted path, appending to `d`, with `Z` when `closed`. `fmt_ring` does
+/// this for a closed ring of planar edges; a stroke is a single open or closed curve and
+/// needs no ring walk.
+///
+/// A cubic whose first control point is within 5e-4 px of the reflection of the previous
+/// cubic's second control point about their join is written as `S`. Arcs are written with
+/// their rotation in degrees to three decimals.
 pub(crate) fn fmt_fitted(path: &FittedPath, closed: bool, decimals: usize, d: &mut String) {
     d.push_str(&format!(
         "M{:.*},{:.*}",
@@ -86,6 +131,8 @@ pub(crate) fn fmt_fitted(path: &FittedPath, closed: bool, decimals: usize, d: &m
     }
 }
 
+/// A closed polygon through `pts` as `M…L…Z`, appended to `d`; nothing for fewer than
+/// three points, which enclose no area.
 pub(crate) fn fmt_path(pts: &[Point], decimals: usize, d: &mut String) {
     if pts.len() < 3 {
         return;
@@ -100,13 +147,20 @@ pub(crate) fn fmt_path(pts: &[Point], decimals: usize, d: &mut String) {
     d.push('Z');
 }
 
-/// Serialize one ring, assembled from the shared edges that bound it.
+/// Serialize one ring, assembled from the shared edges that bound it: each edge's fit in
+/// its own direction or reversed, as the ring walks it. See [`fmt_ring_with`].
 pub(crate) fn fmt_ring(ring: &Ring, fitted: &[FittedPath], decimals: usize, d: &mut String) {
     fmt_ring_with(ring, fitted, &|_| None, decimals, d);
 }
 
 /// [`fmt_ring`], with some edges replaced by geometry already oriented as this ring walks
-/// them (see [`crate::seams`]).
+/// them (see [`crate::seams`]): `over(edge)` returns the replacement, or `None` to use the
+/// fitted edge.
+///
+/// The ring starts at the first non-empty edge's start and is closed with `Z`. Edges with
+/// no segments are skipped, and a ring of fewer than two segments in all is not written at
+/// all: it encloses nothing. Unlike [`fmt_fitted`], the `S` test here is made on the
+/// rounded numbers, as explained inside.
 pub(crate) fn fmt_ring_with(
     ring: &Ring,
     fitted: &[FittedPath],
@@ -224,7 +278,9 @@ pub(crate) fn fmt_ring_with(
     }
 }
 
-/// Assembles a ring's fitted edges into a starting point and a list of segments.
+/// Assembles a ring's fitted edges into a starting point and a list of segments, each edge
+/// reversed where the ring walks it backwards. The start is the first non-empty edge's, or
+/// the origin for a ring with no segments at all.
 pub(crate) fn ring_to_segments(ring: &Ring, fitted: &[FittedPath]) -> (Point, Vec<Segment>) {
     let mut start = Point::new(0.0, 0.0);
     let mut segments = Vec::new();
@@ -242,7 +298,9 @@ pub(crate) fn ring_to_segments(ring: &Ring, fitted: &[FittedPath]) -> (Point, Ve
     (start, segments)
 }
 
-/// Serializes a sequence of fitted segments starting from `start` into SVG path data.
+/// Serializes a sequence of fitted segments starting from `start` into SVG path data,
+/// closed with `Z`; nothing for an empty sequence. Every cubic is written as `C` (no `S`
+/// shortening), for the consensus shapes [`crate::harmonize`] writes.
 pub(crate) fn fmt_segments(start: Point, segments: &[Segment], decimals: usize, d: &mut String) {
     if segments.is_empty() {
         return;

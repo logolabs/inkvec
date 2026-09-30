@@ -2,7 +2,17 @@
 //!
 //! One struct of settled options, one help text, one parser. Every default lives in
 //! [`Args::default`] so that the library entry points can be driven without a command
-//! line at all — the Gradio desk app and the WASM build both do exactly that.
+//! line at all: the `inkvec` crate's `Options` (and through it the WASM build and the
+//! language bindings) starts from these defaults, and Inkvec Studio builds its own `Args`
+//! (`studio/core/src/options.rs`).
+//!
+//! This is the front of the pipeline, before any pixel is read. `lib.rs` calls
+//! [`parse_args`] from `run` for the `inkvec` binary and prints [`usage`] on an error; every
+//! later stage reads the resulting [`Args`] and nothing else. [`parse_color_groups`] is
+//! public on its own so other front ends can read the `--merge-colors` syntax too.
+//!
+//! Units, where a field has one: lengths and areas in px of the raster being traced, colour
+//! distances in OKLab, angles in degrees.
 
 use std::path::PathBuf;
 
@@ -31,6 +41,8 @@ impl TraceMode {
 impl std::str::FromStr for TraceMode {
     type Err = String;
 
+    /// `quality` or `fast`, ignoring case and surrounding spaces; anything else is an error
+    /// that names the two accepted values.
     fn from_str(s: &str) -> Result<Self, String> {
         match s.trim().to_ascii_lowercase().as_str() {
             "quality" => Ok(TraceMode::Quality),
@@ -50,8 +62,10 @@ pub struct Args {
     pub output: Option<PathBuf>,
     /// Chord tolerance, in standard deviations of the measurement uncertainty.
     pub tau: f64,
-    /// Output coordinate precision, in pixels. Also sets the MDL cost of a
-    /// coordinate: `lambda = ln(extent / precision)`.
+    /// The positional precision, in pixels, that a coordinate is priced at: it sets the MDL
+    /// cost of one coordinate as `lambda = ln(extent / precision)` nats, with `extent` the
+    /// traced raster's longer side in px. It does not set the digits the emitter writes,
+    /// which are fixed at two decimals (`EMIT_DECIMALS`).
     pub precision: f64,
     /// Discard features below this area, in px².
     pub min_area: f64,
@@ -62,7 +76,7 @@ pub struct Args {
     /// 512-px logo gets the parameter count of a 128-px one.
     pub content_units: bool,
     /// Inputs larger than this on their longer side are traced at this size and the
-    /// SVG is written at the original size, in pixels.
+    /// SVG is written at the original size, in pixels. 0 means no cap.
     pub max_dim: usize,
     /// Advisory wall-clock budget, in seconds. 0 means no budget.
     pub time_budget: f64,
@@ -86,7 +100,8 @@ pub struct Args {
     /// An opaque input traces exactly as without it. On by default; `--no-native-alpha` (or
     /// `INKVEC_NATIVE_ALPHA=0`) goes back to compositing onto a matte first.
     pub native_alpha: bool,
-    /// No ids or groups, no trailing zeros. Same geometry, typically about a tenth
+    /// No ids or groups, no trailing zeros, and the path data rewritten in the fewest bytes
+    /// (see `post::compact_paths`). Same geometry, nothing rounded, typically about a twelfth
     /// smaller.
     pub minify: bool,
     /// Post-fit passes that trade parameters for structure an artist can edit:
@@ -111,7 +126,9 @@ pub struct Args {
     /// Colours to draw as one: each group's inks become one ink before tracing, so the
     /// shapes between them join. See [`inkvec_trace::regroup`].
     pub merge_colors: Vec<inkvec_trace::regroup::InkGroup>,
-    /// Only write the file; suppress other output.
+    /// Only write the file; suppress other output. On in [`Args::default`], because a
+    /// library caller wants silence; the command-line parser turns it off unless `-q` is
+    /// given.
     pub quiet: bool,
     /// Treat the intake as lossily compressed, so the palette's noise guard runs even
     /// though the edges are sharp. `Auto` reads the container: JPEG and lossy WebP are
@@ -129,9 +146,10 @@ pub struct Args {
     pub sr_scale: usize,
     /// Skip putting flat colours back on the source's values after upscaling.
     pub sr_no_recolour: bool,
-    /// Upscale with an external command instead of the built-in model. `{in}` and
-    /// `{out}` are replaced with PNG paths; the command must write an image
-    /// `sr_scale` times larger.
+    /// Upscale with an external command instead of the packaged Python pre-pass. `{in}`
+    /// and `{out}` are replaced with PNG paths; the command must write an image four times
+    /// larger, as the help text says: `build_upscaler` in `lib.rs` gives an external command
+    /// a fixed scale of 4, whatever `sr_scale` is.
     pub sr_command: Option<String>,
     /// The trained restorer: removes JPEG, WebP and decoder damage at the input's own size
     /// before tracing. Off by default for the same reason SR is: on clean input it costs a
@@ -189,6 +207,10 @@ pub struct Args {
 }
 
 impl Default for Args {
+    /// Every default in one place, as the library and every front end see them. `quiet`
+    /// is on (the parser turns it off for a terminal), and `native_alpha` is the one value
+    /// read from the environment, so a test that checks it has to allow for
+    /// `INKVEC_NATIVE_ALPHA` being set.
     fn default() -> Self {
         Self {
             input: PathBuf::new(),
@@ -477,6 +499,9 @@ INTAKE SCALE (opt-in; trades structural accuracy for speed):
         --intake-scale      Resample an oversampled input before tracing
 ";
 
+/// The process's own command line, parsed by [`parse_args_from`]. `-h` and `-V` print and
+/// exit the process from inside the parser; any other problem comes back as an `Err`
+/// message for the caller to print above the help text.
 pub(crate) fn parse_args() -> Result<Args, String> {
     parse_args_from(std::env::args().skip(1))
 }
@@ -484,6 +509,12 @@ pub(crate) fn parse_args() -> Result<Args, String> {
 /// Parse a command line, without the program name, into [`Args`]. Every option starts at
 /// its [`Args::default`] value except `quiet`: a library caller wants silence, a person at
 /// a terminal wants the log.
+///
+/// Flags are read left to right and a later one overrides an earlier one (`--harmonize
+/// --no-harmonize` ends with harmonization off). The one bare argument is the input; if
+/// several are given the last wins, and none at all is the error `no input file`. An
+/// unknown flag, a missing value or a value that does not parse is an error naming the
+/// flag. Values are only parsed here, not range-checked.
 fn parse_args_from(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut a = Args {
         quiet: false,
@@ -593,6 +624,12 @@ fn parse_args_from(mut it: impl Iterator<Item = String>) -> Result<Args, String>
 /// gradient there continues over the rest of the group); without it, the member covering
 /// the most of the image. Colours are `#rgb` or `#rrggbb`, `#` optional. Empty groups are
 /// skipped, so a trailing `;` is harmless.
+///
+/// Returns the groups in the order written, colours as sRGB in `[0, 1]`; an empty or
+/// all-blank `spec` is no groups. Errors quote what was wrong: a group with no colours
+/// before its `=`, an `@n` outside `1..=members`, or a colour that is not hex. Matching the
+/// colours to the inks the palette actually found happens later, in
+/// `inkvec_trace::regroup`.
 pub fn parse_color_groups(spec: &str) -> Result<Vec<inkvec_trace::regroup::InkGroup>, String> {
     use inkvec_trace::regroup::{InkGroup, Member, Target};
     let mut groups = Vec::new();
@@ -650,7 +687,9 @@ fn color_groups_value(
     parse_color_groups(&parse_value::<String>(it, "--merge-colors")?)
 }
 
-/// `#rgb` or `#rrggbb` (the `#` optional) as sRGB in `[0, 1]`.
+/// `#rgb` or `#rrggbb` (the `#` optional) as sRGB in `[0, 1]`. A short digit stands for
+/// itself repeated (`#f80` is `#ff8800`, hence the factor 17), and each byte is divided by
+/// 255. Any other length or a non-hex digit is an error quoting the input.
 fn parse_hex_color(s: &str) -> Result<[f32; 3], String> {
     let h = s.trim().trim_start_matches('#');
     let digits: Vec<u8> = match h.len() {

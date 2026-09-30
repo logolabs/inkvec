@@ -594,7 +594,8 @@ fn absorb_sliver(
 ///
 /// Same rule (move a pixel to the dominant ink of its nearest [`mixture`] of its own and
 /// up to three neighbouring inks when the residual is within `max(3 σ_noise, 0.025)` and
-/// below half its distance to its own ink; up to four snapshot rounds), with `[W, a]`
+/// below half its distance to its own ink; up to four snapshot rounds, run by
+/// [`crate::regions::relabel_rounds`]), with `[W, a]`
 /// pixels and inks and [`CLEAR`] as the backdrop pseudo-ink. Returns the number of moves.
 pub fn reassign_blend_pixels(
     labels: &mut [u16],
@@ -605,79 +606,62 @@ pub fn reassign_blend_pixels(
     sigma_noise: f64,
 ) -> usize {
     const ROUNDS: usize = 4;
-    let n = w * h;
     let tol = (3.0 * sigma_noise).max(0.025) as f32;
-    let mut moved_total = 0usize;
-    for _ in 0..ROUNDS {
-        let snap = labels.to_vec();
-        let decide = |p: usize| -> Option<u16> {
-            let (x, y) = (p % w, p / w);
-            let own = snap[p];
-            let mut labs = [own; 4];
-            let mut nl = 1usize;
-            for (dx, dy) in [
-                (-1i32, -1i32),
-                (0, -1),
-                (1, -1),
-                (-1, 0),
-                (1, 0),
-                (-1, 1),
-                (0, 1),
-                (1, 1),
-            ] {
-                let (qx, qy) = (x as i32 + dx, y as i32 + dy);
-                if qx < 0 || qy < 0 || qx >= w as i32 || qy >= h as i32 {
-                    continue;
-                }
-                let l = snap[qy as usize * w + qx as usize];
-                if !labs[..nl].contains(&l) && nl < 4 {
-                    labs[nl] = l;
-                    nl += 1;
-                }
+    let decide = |snap: &[u16], p: usize| -> Option<u16> {
+        let (x, y) = (p % w, p / w);
+        let own = snap[p];
+        let mut labs = [own; 4];
+        let mut nl = 1usize;
+        for (dx, dy) in [
+            (-1i32, -1i32),
+            (0, -1),
+            (1, -1),
+            (-1, 0),
+            (1, 0),
+            (-1, 1),
+            (0, 1),
+            (1, 1),
+        ] {
+            let (qx, qy) = (x as i32 + dx, y as i32 + dy);
+            if qx < 0 || qy < 0 || qx >= w as i32 || qy >= h as i32 {
+                continue;
             }
-            if nl < 2 {
-                return None;
+            let l = snap[qy as usize * w + qx as usize];
+            if !labs[..nl].contains(&l) && nl < 4 {
+                labs[nl] = l;
+                nl += 1;
             }
-            let c = px[p];
-            let oc = *inks.get(own as usize)?;
-            let resid_own = d2(c, oc).sqrt();
-            let mut cols: Vec<[f32; 4]> = Vec::with_capacity(5);
-            let mut keep: Vec<Option<u16>> = Vec::with_capacity(5);
-            for &l in &labs[..nl] {
-                if let Some(&cc) = inks.get(l as usize) {
-                    cols.push(cc);
-                    keep.push(Some(l));
-                }
+        }
+        if nl < 2 {
+            return None;
+        }
+        let c = px[p];
+        let oc = *inks.get(own as usize)?;
+        let resid_own = d2(c, oc).sqrt();
+        let mut cols: Vec<[f32; 4]> = Vec::with_capacity(5);
+        let mut keep: Vec<Option<u16>> = Vec::with_capacity(5);
+        for &l in &labs[..nl] {
+            if let Some(&cc) = inks.get(l as usize) {
+                cols.push(cc);
+                keep.push(Some(l));
             }
-            if c[3] < 0.99 && !cols.iter().any(|q| q[3] < 0.005) {
-                cols.push(CLEAR);
-                keep.push(None);
-            }
-            let (r, who) = mixture(c, &cols)?;
-            let target = match keep[who] {
-                Some(l) => l,
-                None => match mixture(c, &cols[..cols.len() - 1]) {
-                    Some((_, w2)) => keep[w2]
-                        .expect("only the clear entry is None, and it is last, outside the slice"),
-                    None => return None,
-                },
-            };
-            (target != own && r <= tol && r < 0.5 * resid_own).then_some(target)
+        }
+        if c[3] < 0.99 && !cols.iter().any(|q| q[3] < 0.005) {
+            cols.push(CLEAR);
+            keep.push(None);
+        }
+        let (r, who) = mixture(c, &cols)?;
+        let target = match keep[who] {
+            Some(l) => l,
+            None => match mixture(c, &cols[..cols.len() - 1]) {
+                Some((_, w2)) => keep[w2]
+                    .expect("only the clear entry is None, and it is last, outside the slice"),
+                None => return None,
+            },
         };
-        let decided: Vec<Option<u16>> = (0..n).into_par_iter().map(decide).collect();
-        let mut moved = 0usize;
-        for (p, d) in decided.into_iter().enumerate() {
-            if let Some(t) = d {
-                labels[p] = t;
-                moved += 1;
-            }
-        }
-        moved_total += moved;
-        if moved == 0 {
-            break;
-        }
-    }
-    moved_total
+        (target != own && r <= tol && r < 0.5 * resid_own).then_some(target)
+    };
+    crate::regions::relabel_rounds(labels, w, h, ROUNDS, decide)
 }
 
 // ---------------------------------------------------------------------------------------

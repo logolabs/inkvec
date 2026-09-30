@@ -689,3 +689,118 @@ fn the_per_point_rewrite_matches_on_degenerate_shapes() {
         assert_eq!(label_image(r, a, &old), super::label_image(r, a, &new));
     }
 }
+
+/// The shipped four-channel `reassign_blend_pixels`: every pixel, every round.
+fn old_reassign4(
+    labels: &mut [u16],
+    px: &[[f32; 4]],
+    w: usize,
+    h: usize,
+    inks: &[[f32; 4]],
+    sigma_noise: f64,
+) -> usize {
+    const ROUNDS: usize = 4;
+    let n = w * h;
+    let tol = (3.0 * sigma_noise).max(0.025) as f32;
+    let mut moved_total = 0usize;
+    for _ in 0..ROUNDS {
+        let snap = labels.to_vec();
+        let decide = |p: usize| -> Option<u16> {
+            let (x, y) = (p % w, p / w);
+            let own = snap[p];
+            let mut labs = [own; 4];
+            let mut nl = 1usize;
+            for (dx, dy) in [
+                (-1i32, -1i32),
+                (0, -1),
+                (1, -1),
+                (-1, 0),
+                (1, 0),
+                (-1, 1),
+                (0, 1),
+                (1, 1),
+            ] {
+                let (qx, qy) = (x as i32 + dx, y as i32 + dy);
+                if qx < 0 || qy < 0 || qx >= w as i32 || qy >= h as i32 {
+                    continue;
+                }
+                let l = snap[qy as usize * w + qx as usize];
+                if !labs[..nl].contains(&l) && nl < 4 {
+                    labs[nl] = l;
+                    nl += 1;
+                }
+            }
+            if nl < 2 {
+                return None;
+            }
+            let c = px[p];
+            let oc = *inks.get(own as usize)?;
+            let resid_own = d2(c, oc).sqrt();
+            let mut cols: Vec<[f32; 4]> = Vec::with_capacity(5);
+            let mut keep: Vec<Option<u16>> = Vec::with_capacity(5);
+            for &l in &labs[..nl] {
+                if let Some(&cc) = inks.get(l as usize) {
+                    cols.push(cc);
+                    keep.push(Some(l));
+                }
+            }
+            if c[3] < 0.99 && !cols.iter().any(|q| q[3] < 0.005) {
+                cols.push(CLEAR);
+                keep.push(None);
+            }
+            let (r, who) = mixture(c, &cols)?;
+            let target = match keep[who] {
+                Some(l) => l,
+                None => match mixture(c, &cols[..cols.len() - 1]) {
+                    Some((_, w2)) => keep[w2]
+                        .expect("only the clear entry is None, and it is last, outside the slice"),
+                    None => return None,
+                },
+            };
+            (target != own && r <= tol && r < 0.5 * resid_own).then_some(target)
+        };
+        let decided: Vec<Option<u16>> = (0..n).into_par_iter().map(decide).collect();
+        let mut moved = 0usize;
+        for (p, d) in decided.into_iter().enumerate() {
+            if let Some(t) = d {
+                labels[p] = t;
+                moved += 1;
+            }
+        }
+        moved_total += moved;
+        if moved == 0 {
+            break;
+        }
+    }
+    moved_total
+}
+
+#[test]
+fn four_channel_active_set_reassignment_equals_every_pixel_every_round() {
+    let mut rng = Lcg(0x4ea5);
+    for case in 0..100 {
+        let (w, h) = (2 + rng.below(50) as usize, 2 + rng.below(50) as usize);
+        let (rgb, alpha) = random_transparent(&mut rng, w, h);
+        let pal = super::extract_palette(
+            &rgb,
+            &alpha,
+            w,
+            h,
+            color::DEFAULT_MERGE_DISTANCE,
+            64,
+            PaletteEvidence::default(),
+        );
+        let mut labels = super::label_image(&rgb, &alpha, &pal);
+        for l in labels.iter_mut() {
+            if rng.below(12) == 0 {
+                *l = rng.below(pal.len() as u64) as u16;
+            }
+        }
+        let (px, inks) = (rgba_w(&rgb, &alpha), ink_rgba_w(&pal));
+        let sigma = [0.0, 0.004, 0.02][case % 3];
+        let (mut a, mut b) = (labels.clone(), labels);
+        let na = old_reassign4(&mut a, &px, w, h, &inks, sigma);
+        let nb = reassign_blend_pixels(&mut b, &px, w, h, &inks, sigma);
+        assert_eq!((na, &a), (nb, &b), "case {case} {w}x{h}");
+    }
+}

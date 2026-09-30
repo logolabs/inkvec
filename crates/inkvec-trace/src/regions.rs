@@ -705,6 +705,74 @@ impl SliverRound {
     }
 }
 
+/// Synchronous relabelling rounds over an active set of pixels.
+///
+/// Each round decides pixels from the labels as they stood when it began, then applies every
+/// move; up to `rounds` rounds, stopping once nothing moves. Returns the number of moves.
+///
+/// `decide(labels, p)` must read only pixel `p`'s 3x3 neighbourhood of labels (and data
+/// that never changes). A pixel whose neighbourhood did not change in a round then decides
+/// as it did in that round, and that was "stay": had it moved, its own label would have
+/// changed. So the first round decides every pixel and each later one only the 3x3
+/// neighbourhoods of the pixels that just moved; the moves are the same as deciding every
+/// pixel every round. Not from the literature: a plain worklist, because the moves after the
+/// first round are few (on the screen set 94 % of them happen in round one) while every
+/// round used to decide every pixel.
+pub(crate) fn relabel_rounds(
+    labels: &mut [u16],
+    w: usize,
+    h: usize,
+    rounds: usize,
+    decide: impl Fn(&[u16], usize) -> Option<u16> + Sync,
+) -> usize {
+    use rayon::prelude::*;
+    let n = w * h;
+    let mut active: Option<Vec<usize>> = None;
+    let mut stamp: Vec<usize> = Vec::new();
+    let mut total = 0usize;
+    for round in 0..rounds {
+        let snap: &[u16] = labels;
+        let moves: Vec<(usize, u16)> = match &active {
+            None => (0..n)
+                .into_par_iter()
+                .filter_map(|p| decide(snap, p).map(|t| (p, t)))
+                .collect(),
+            Some(list) => list
+                .par_iter()
+                .with_min_len(1024)
+                .filter_map(|&p| decide(snap, p).map(|t| (p, t)))
+                .collect(),
+        };
+        if moves.is_empty() {
+            break;
+        }
+        for &(p, t) in &moves {
+            labels[p] = t;
+        }
+        total += moves.len();
+        if round + 1 < rounds {
+            if stamp.is_empty() {
+                stamp = vec![usize::MAX; n];
+            }
+            let mut next = Vec::new();
+            for &(p, _) in &moves {
+                let (x, y) = (p % w, p / w);
+                for qy in y.saturating_sub(1)..(y + 2).min(h) {
+                    for qx in x.saturating_sub(1)..(x + 2).min(w) {
+                        let q = qy * w + qx;
+                        if stamp[q] != round {
+                            stamp[q] = round;
+                            next.push(q);
+                        }
+                    }
+                }
+            }
+            active = Some(next);
+        }
+    }
+    total
+}
+
 /// Reassign individual boundary pixels that a neighbour-pair blend explains strictly better.
 ///
 /// The per-pixel sequel to [`absorb_blend_slivers`]: after whole slivers are gone, single
@@ -720,9 +788,11 @@ impl SliverRound {
 ///   it has, so a pixel that is a plausible match for its own ink is left alone.
 ///
 /// When the backdrop dominates, the dominant real ink is used instead, as in
-/// [`absorb_blend_slivers`]. Each round decides every pixel from a snapshot (in parallel,
-/// so the result does not depend on scan order) and then applies the moves; up to four
-/// rounds, stopping early when nothing moves. Returns the number of moves.
+/// [`absorb_blend_slivers`]. Each round decides pixels from the labels as the round found
+/// them (in parallel, so the result does not depend on scan order) and then applies the
+/// moves; up to four rounds, stopping early when nothing moves ([`relabel_rounds`], which
+/// after the first round decides only around the pixels that moved). Returns the number of
+/// moves.
 pub fn reassign_blend_pixels(
     labels: &mut [u16],
     rgb: &[[f32; 3]],
@@ -733,92 +803,72 @@ pub fn reassign_blend_pixels(
     sigma_noise: f64,
 ) -> usize {
     const ROUNDS: usize = 4;
-    let n = w * h;
     let tol = (3.0 * sigma_noise).max(0.025) as f32;
-    let mut moved_total = 0usize;
+    let decide = |snap: &[u16], p: usize| -> Option<u16> {
+        let (x, y) = (p % w, p / w);
+        let own = snap[p];
+        let mut labs = [own; 4];
+        let mut nl = 1usize;
+        for (dx, dy) in [
+            (-1i32, -1i32),
+            (0, -1),
+            (1, -1),
+            (-1, 0),
+            (1, 0),
+            (-1, 1),
+            (0, 1),
+            (1, 1),
+        ] {
+            let (qx, qy) = (x as i32 + dx, y as i32 + dy);
+            if qx < 0 || qy < 0 || qx >= w as i32 || qy >= h as i32 {
+                continue;
+            }
+            let l = snap[qy as usize * w + qx as usize];
+            if !labs[..nl].contains(&l) && nl < 4 {
+                labs[nl] = l;
+                nl += 1;
+            }
+        }
+        if nl < 2 {
+            return None;
+        }
+        let c = rgb[p];
+        let col = |l: u16| -> Option<[f32; 3]> { pal.rgb.get(l as usize).copied() };
+        let oc = col(own)?;
+        let e0 = [c[0] - oc[0], c[1] - oc[1], c[2] - oc[2]];
+        let resid_own = (e0[0] * e0[0] + e0[1] * e0[1] + e0[2] * e0[2]).sqrt();
 
-    for _ in 0..ROUNDS {
-        let snap = labels.to_vec();
-        let decide = |p: usize| -> Option<u16> {
-            let (x, y) = (p % w, p / w);
-            let own = snap[p];
-            let mut labs = [own; 4];
-            let mut nl = 1usize;
-            for (dx, dy) in [
-                (-1i32, -1i32),
-                (0, -1),
-                (1, -1),
-                (-1, 0),
-                (1, 0),
-                (-1, 1),
-                (0, 1),
-                (1, 1),
-            ] {
-                let (qx, qy) = (x as i32 + dx, y as i32 + dy);
-                if qx < 0 || qy < 0 || qx >= w as i32 || qy >= h as i32 {
-                    continue;
-                }
-                let l = snap[qy as usize * w + qx as usize];
-                if !labs[..nl].contains(&l) && nl < 4 {
-                    labs[nl] = l;
-                    nl += 1;
-                }
+        let mut cols: Vec<[f32; 3]> = Vec::with_capacity(5);
+        let mut keep: Vec<Option<u16>> = Vec::with_capacity(5);
+        for &l in &labs[..nl] {
+            if let Some(cc) = col(l) {
+                cols.push(cc);
+                keep.push(Some(l));
             }
-            if nl < 2 {
-                return None;
-            }
-            let c = rgb[p];
-            let col = |l: u16| -> Option<[f32; 3]> { pal.rgb.get(l as usize).copied() };
-            let oc = col(own)?;
-            let e0 = [c[0] - oc[0], c[1] - oc[1], c[2] - oc[2]];
-            let resid_own = (e0[0] * e0[0] + e0[1] * e0[1] + e0[2] * e0[2]).sqrt();
-
-            let mut cols: Vec<[f32; 3]> = Vec::with_capacity(5);
-            let mut keep: Vec<Option<u16>> = Vec::with_capacity(5);
-            for &l in &labs[..nl] {
-                if let Some(cc) = col(l) {
-                    cols.push(cc);
-                    keep.push(Some(l));
+        }
+        if alpha[p] < 0.99 && !cols.contains(&BACKDROP) {
+            cols.push(BACKDROP);
+            keep.push(None);
+        }
+        let (r, who) = mixture(c, &cols)?;
+        let target = match keep[who] {
+            Some(l) => l,
+            None => {
+                let real = &cols[..cols.len() - 1];
+                match mixture(c, real) {
+                    Some((_, w2)) => keep[w2]
+                        .expect("only the backdrop entry is None, and it is last, outside `real`"),
+                    None => return None,
                 }
-            }
-            if alpha[p] < 0.99 && !cols.contains(&BACKDROP) {
-                cols.push(BACKDROP);
-                keep.push(None);
-            }
-            let (r, who) = mixture(c, &cols)?;
-            let target = match keep[who] {
-                Some(l) => l,
-                None => {
-                    let real = &cols[..cols.len() - 1];
-                    match mixture(c, real) {
-                        Some((_, w2)) => keep[w2].expect(
-                            "only the backdrop entry is None, and it is last, outside `real`",
-                        ),
-                        None => return None,
-                    }
-                }
-            };
-            if target != own && r <= tol && r < 0.5 * resid_own {
-                Some(target)
-            } else {
-                None
             }
         };
-        use rayon::prelude::*;
-        let decided: Vec<Option<u16>> = (0..n).into_par_iter().map(decide).collect();
-        let mut moved = 0usize;
-        for (p, d) in decided.into_iter().enumerate() {
-            if let Some(t) = d {
-                labels[p] = t;
-                moved += 1;
-            }
+        if target != own && r <= tol && r < 0.5 * resid_own {
+            Some(target)
+        } else {
+            None
         }
-        moved_total += moved;
-        if moved == 0 {
-            break;
-        }
-    }
-    moved_total
+    };
+    relabel_rounds(labels, w, h, ROUNDS, decide)
 }
 
 /// Absorb connected components smaller than `min_size` into their largest neighbour.

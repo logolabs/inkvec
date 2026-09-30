@@ -22,6 +22,16 @@
 //! What is *not* done here: refinement against the image (S4 says candidate primitives
 //! should be refined against pixels, not the polyline). The polyline is what this crate
 //! receives; that refinement belongs in the analysis-by-synthesis stage.
+//!
+//! # Where this sits
+//!
+//! Beside the dynamic program rather than inside it: `inkvec-cli`'s pipeline and
+//! `inkvec-svgmin` call [`fit_primitive_or_arcs`] on a whole ring (points in px, sigma in
+//! px) and compare its cost with the multimodel fit of the same ring; the cheaper wins.
+//! The sub-modules hold the ellipse fitter ([`ellipse`]), the rounded-rectangle fitter
+//! ([`round_rect`]) and the small dense solvers both use (`solver`). This file holds the
+//! circle fits, the path forms (arcs, four-cubic ellipses, rounded-rectangle outlines)
+//! and the entry point.
 
 use crate::curves::{self, Segment};
 use crate::{optimal_polygon, FitConfig};
@@ -111,6 +121,8 @@ pub use ellipse::{ellipse_chi2, fit_ellipse, fit_ellipse_algebraic, EllipseFit};
 pub use round_rect::{fit_round_rect, round_rect_distance, RoundRectFit};
 pub(crate) use solver::{levenberg_marquardt, solve};
 
+/// Inverse-variance weights `1/σ²` for the first `n` points (px⁻²); a missing sigma is
+/// taken as 0.5 px and every sigma is floored at 1e-3 px.
 pub(crate) fn weights(sigma: &[f64], n: usize) -> Vec<f64> {
     (0..n)
         .map(|k| {
@@ -143,6 +155,8 @@ pub(crate) fn weight_at(sigma: &[f64], k: usize) -> f64 {
 }
 
 /// Weighted sum of squared orthogonal distances from `pts` to the circle.
+///
+/// `χ² = Σ w_k·(|p_k − c| − r)²` with `w_k = 1/σ_k²` ([`weights`]); dimensionless.
 pub fn circle_chi2(pts: &[Point], sigma: &[f64], c: Point, r: f64) -> f64 {
     let w = weights(sigma, pts.len());
     pts.iter()
@@ -204,6 +218,20 @@ pub fn fit_circle_kasa(pts: &[Point], sigma: &[f64]) -> Option<CircleFit> {
 /// bias-free — no algebraic fit is — but it is a good enough start that the geometric
 /// refinement converges in a handful of steps. Reported `chi2` is the *orthogonal*
 /// residual of this algebraic solution, so it can be compared with [`fit_circle`].
+///
+/// The steps, all in coordinates centred on the weighted centroid: accumulate the
+/// weighted mean moments `Mxx, Myy, Mxy, Mxz, Myz, Mzz` of `(x, y, z = x² + y²)`; form
+/// the cubic characteristic polynomial `P(η) = a3·η³ + a2·η² + a1·η + a0` of Taubin's
+/// generalised eigenproblem; find its smallest non-negative root by Newton's method from
+/// `η = 0` (at most 40 steps, stopping once `|P|` no longer decreases); then
+///
+/// ```text
+///     c = ( (Mxz·(Myy − η) − Myz·Mxy) / 2D,  (Myz·(Mxx − η) − Mxz·Mxy) / 2D ),
+///     D = η² − η·Mz + (Mxx·Myy − Mxy²),   r = √(|c|² + Mz),   Mz = Mxx + Myy
+/// ```
+///
+/// `None` for fewer than three points, a vanishing `D` (collinear points) or a
+/// non-finite radius.
 pub fn fit_circle_algebraic(pts: &[Point], sigma: &[f64]) -> Option<CircleFit> {
     let n = pts.len();
     if n < 3 {
@@ -285,6 +313,14 @@ pub fn fit_circle(pts: &[Point], sigma: &[f64]) -> Option<CircleFit> {
     refine_circle(pts, sigma, init)
 }
 
+/// Levenberg–Marquardt on the orthogonal residuals `e_k = |p_k − c| − r`, weighted by
+/// `1/σ²`, from `init`.
+///
+/// The Jacobian of `e_k` with respect to `(cx, cy, r)` is `(−(p_k − c)/|p_k − c|, −1)`;
+/// a point sitting on the centre has no defined direction and is skipped. The radius is
+/// kept positive (at least 1e-6 px) after each step, and at most 100 iterations run (see
+/// `solver::levenberg_marquardt`). Returns whichever of the refined and initial circles
+/// has the smaller χ².
 fn refine_circle(pts: &[Point], sigma: &[f64], init: CircleFit) -> Option<CircleFit> {
     let w = weights(sigma, pts.len());
     let eval = |p: &[f64]| -> Option<(f64, Vec<Vec<f64>>, Vec<f64>)> {
@@ -352,6 +388,10 @@ fn total_sweep(pts: &[Point], c: Point, closed: bool) -> f64 {
 /// Emit the arc of `circle` from angle `a0` sweeping `delta`, starting at the caller's
 /// current point and ending exactly at `end`, split into pieces of at most
 /// [`MAX_ARC_DEGREES`]. Intermediate split points lie exactly on the circle.
+///
+/// The piece count is `ceil(|delta| / MAX_ARC_DEGREES)` (at least one; the `1e-9` keeps
+/// an exact multiple from rounding up), each piece sweeping `delta / pieces`. Angles in
+/// radians, `c` and `r` in px.
 fn arc_segments(c: Point, r: f64, a0: f64, delta: f64, end: Point) -> Vec<Segment> {
     let pieces = ((delta.abs() / MAX_ARC_DEGREES.to_radians()) - 1e-9)
         .ceil()
@@ -390,6 +430,11 @@ pub fn fit_arcs(pts: &[Point], sigma: &[f64], closed: bool) -> Option<Vec<Segmen
     fit_arcs_inner(pts, sigma, closed).map(|(segs, _)| segs)
 }
 
+/// [`fit_arcs`], also returning the circle the arcs lie on.
+///
+/// Refuses (with `None`) fewer than four points, a fit whose χ² exceeds
+/// `MAX_REDUCED_CHI2·n`, a radius over a thousand times the run's extent (a straight run
+/// in disguise) and a total sweep under 1e-3 rad.
 fn fit_arcs_inner(pts: &[Point], sigma: &[f64], closed: bool) -> Option<(Vec<Segment>, CircleFit)> {
     let n = pts.len();
     if n < 4 {
@@ -420,6 +465,12 @@ fn fit_arcs_inner(pts: &[Point], sigma: &[f64], closed: bool) -> Option<(Vec<Seg
 
 /// Cubic approximation of the ellipse, four pieces from the point nearest `start`,
 /// traversed in the direction of `sign`, ending exactly at `end`.
+///
+/// Each piece spans a quarter of the parametric angle, `Δ = ±π/2`, and uses the standard
+/// circular-arc construction carried through the ellipse's affine map: the control points
+/// are `P(t1) + α·P'(t1)` and `P(t2) − α·P'(t2)` with `α = 4/3·tan(|Δ|/4)` and `P'` the
+/// derivative with respect to the parametric angle. The error of that construction is
+/// about 2.7e-4 of the radius per quarter. The last piece is pinned to `end`.
 fn ellipse_cubics(e: &EllipseFit, start: Point, sign: f64, end: Point) -> Vec<Segment> {
     let (_, t0, _) = e.contact(start);
     let step = sign * PI / 2.0;
@@ -439,12 +490,14 @@ fn ellipse_cubics(e: &EllipseFit, start: Point, sign: f64, end: Point) -> Vec<Se
 /// One piece of a rounded rectangle's outline, in increasing-angle order.
 #[derive(Clone, Copy)]
 enum Piece {
+    /// A straight side, from the first point to the second.
     Line(Point, Point),
     /// Centre, radius, start angle; always a quarter turn of increasing angle.
     Arc(Point, f64, f64),
 }
 
 impl Piece {
+    /// Length of the piece, px.
     fn len(&self) -> f64 {
         match *self {
             Piece::Line(a, b) => a.dist(b),
@@ -524,6 +577,12 @@ fn round_rect_pieces(rr: &RoundRectFit) -> Vec<Piece> {
 
 /// Path form of a rounded rectangle from the outline point nearest `start`, traversed in
 /// the direction of `sign`, ending exactly at `end`.
+///
+/// The outline is the eight pieces of [`round_rect_pieces`] (four for a plain
+/// rectangle). The path runs from the nearest point on the nearest piece to that piece's
+/// end, through every other piece in turn, and back along the first piece to `end`; a
+/// closing segment of zero length is folded into the one before it. Empty for a
+/// degenerate rectangle with no pieces.
 fn round_rect_segments(rr: &RoundRectFit, start: Point, sign: f64, end: Point) -> Vec<Segment> {
     let pieces = round_rect_pieces(rr);
     if pieces.is_empty() {
@@ -539,7 +598,7 @@ fn round_rect_segments(rr: &RoundRectFit, start: Point, sign: f64, end: Point) -
         })
         .min_by(|a, b| a.2.total_cmp(&b.2))
         .map(|(k, u, _)| (k, u))
-        .unwrap();
+        .expect("pieces is non-empty: the empty case returned above");
     let forward = sign >= 0.0;
     let mut out = Vec::with_capacity(m + 1);
     // Rest of the starting piece, then every other piece, then the starting piece back
@@ -587,6 +646,9 @@ fn round_rect_segments(rr: &RoundRectFit, start: Point, sign: f64, end: Point) -
 }
 
 /// Signed area of the closed polygon; positive when the angle about the interior increases.
+///
+/// The shoelace formula `½·Σ (x_i·y_{i+1} − x_{i+1}·y_i)`, px², wrapping from the last
+/// point to the first.
 fn signed_area(pts: &[Point]) -> f64 {
     let n = pts.len();
     (0..n)
@@ -660,146 +722,28 @@ pub fn fit_primitive_or_arcs(
         return None;
     }
     let sigma = &sigma[..n];
-    let gate = cfg.tau * cfg.tau * n as f64;
-    let start = pts[0];
-    let end = if closed && pts[n - 1].dist(pts[0]) >= 1e-9 {
-        pts[0]
-    } else {
-        pts[n - 1]
-    };
-
-    // No candidate may place geometry far outside the points it claims to describe.
-    // Each fitter has its own conditioning guards; this is the one place that catches a
-    // divergence none of them anticipated, before it reaches an emitter or a renderer.
-    let (mut lo_x, mut lo_y, mut hi_x, mut hi_y) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
-    for p in pts {
-        lo_x = lo_x.min(p.x);
-        lo_y = lo_y.min(p.y);
-        hi_x = hi_x.max(p.x);
-        hi_y = hi_y.max(p.y);
-    }
-    let slack = 8.0 * (hi_x - lo_x).max(hi_y - lo_y).max(1.0);
-    let in_bounds = |p: Point| {
-        p.x.is_finite()
-            && p.y.is_finite()
-            && p.x >= lo_x - slack
-            && p.x <= hi_x + slack
-            && p.y >= lo_y - slack
-            && p.y <= hi_y + slack
-    };
-
-    let mut best: Option<(Vec<Segment>, Option<PrimitiveFit>, f64)> = None;
-    let mut consider = |segs: Vec<Segment>, prim: Option<PrimitiveFit>, cost: f64| {
-        if segs.is_empty() || !cost.is_finite() {
-            return;
-        }
-        let sane = segs.iter().all(|s| match *s {
-            Segment::Line(p) => in_bounds(p),
-            Segment::Cubic(a, b, p) => in_bounds(a) && in_bounds(b) && in_bounds(p),
-            Segment::Arc { rx, ry, end, .. } => {
-                rx.is_finite() && ry.is_finite() && rx.max(ry) <= slack && in_bounds(end)
-            }
-        });
-        if !sane {
-            return;
-        }
-        match best {
-            Some((_, _, c)) if c <= cost => {}
-            _ => best = Some((segs, prim, cost)),
-        }
-    };
-
-    // Arcs: the only candidate for an open run, and the path form of a closed circle.
-    let arcs = fit_arcs_inner(pts, sigma, closed);
-    if let Some((segs, cf)) = &arcs {
-        if !closed {
-            let chi2 = curves::chi2(pts, sigma, start, segs);
-            let params: f64 = segs.iter().map(|s| s.params()).sum();
-            consider(segs.clone(), None, 0.5 * chi2 + cfg.lambda * params);
+    let run = PrimRun {
+        pts,
+        sigma,
+        closed,
+        cfg,
+        gate: cfg.tau * cfg.tau * n as f64,
+        start: pts[0],
+        end: if closed && pts[n - 1].dist(pts[0]) >= 1e-9 {
+            pts[0]
         } else {
-            let sweep = total_sweep(pts, cf.c, true);
-            if sweep.abs() > 1.9 * PI && cf.chi2 <= gate {
-                let prim = PrimitiveFit {
-                    kind: PrimitiveKind::Circle { c: cf.c, r: cf.r },
-                    chi2: cf.chi2,
-                    params: PARAMS_CIRCLE,
-                };
-                consider(segs.clone(), Some(prim), prim.cost(cfg));
-            }
-        }
-    }
+            pts[n - 1]
+        },
+    };
 
+    let mut best = Cheapest::new(pts);
+    offer_arcs(&run, &mut best);
     if closed {
         let sign = if signed_area(pts) >= 0.0 { 1.0 } else { -1.0 };
-
-        // The same bound the circle fit applies (see `fit_arcs_inner`), which the
-        // ellipse lacked. A thin sliver is described *well* by an absurdly eccentric
-        // ellipse - two nearly parallel edges are a good local fit to one - so chi2 is
-        // small, the sweep around a centre inside the sliver is a full turn, and every
-        // gate passes while `rx` runs to 1e9. The cubics that approximate it then carry
-        // control points a billion units away, which is not a shape any renderer is
-        // obliged to survive: tiny-skia panics on it.
-        //
-        // Found when blend absorption started producing slivers this fitter had never
-        // been offered before. The defect was always here; nothing upstream had reached
-        // it.
-        let span = pts
-            .iter()
-            .map(|p| p.dist(pts[0]))
-            .fold(0.0f64, f64::max)
-            .max(1.0);
-        if let Some(e) = fit_ellipse(pts, sigma) {
-            let sane = e.rx.is_finite()
-                && e.ry.is_finite()
-                && e.c.x.is_finite()
-                && e.c.y.is_finite()
-                && e.rx.max(e.ry) <= 1e3 * span;
-            if sane && e.chi2 <= gate && total_sweep(pts, e.c, true).abs() > 1.9 * PI {
-                let prim = PrimitiveFit {
-                    kind: PrimitiveKind::Ellipse {
-                        c: e.c,
-                        rx: e.rx,
-                        ry: e.ry,
-                        angle: e.angle,
-                    },
-                    chi2: e.chi2,
-                    params: PARAMS_ELLIPSE,
-                };
-                consider(
-                    ellipse_cubics(&e, start, sign, end),
-                    Some(prim),
-                    prim.cost(cfg),
-                );
-            }
-        }
-
-        // Rounded rectangle, and the plain rectangle it collapses to. Both are costed
-        // and the objective picks; a corner radius the noise cannot resolve is not
-        // worth two parameters.
-        let rr_free = fit_round_rect(pts, sigma, None);
-        let rr_zero = fit_round_rect(pts, sigma, Some(0.0));
-        for (rr, params) in [(rr_free, PARAMS_ROUND_RECT), (rr_zero, PARAMS_RECT)] {
-            let Some(rr) = rr else { continue };
-            if rr.chi2 > gate || rr.w <= 0.0 || rr.h <= 0.0 {
-                continue;
-            }
-            let prim = PrimitiveFit {
-                kind: PrimitiveKind::RoundRect {
-                    x: rr.x,
-                    y: rr.y,
-                    w: rr.w,
-                    h: rr.h,
-                    rx: rr.rx,
-                },
-                chi2: rr.chi2,
-                params,
-            };
-            let segs = round_rect_segments(&rr, start, sign, end);
-            consider(segs, Some(prim), prim.cost(cfg));
-        }
+        offer_ellipse(&run, sign, &mut best);
+        offer_round_rects(&run, sign, &mut best);
     }
-
-    let best = best?;
+    let best = best.best?;
 
     // Not fitting: the line-only optimum over the same points.
     let poly = Polyline::new(pts.to_vec(), sigma.to_vec(), closed);
@@ -808,5 +752,198 @@ pub fn fit_primitive_or_arcs(
         Some(best)
     } else {
         None
+    }
+}
+
+/// The run [`fit_primitive_or_arcs`] is describing, and what every candidate is judged
+/// against.
+struct PrimRun<'a> {
+    /// The measured points, px.
+    pts: &'a [Point],
+    /// Their uncertainties, px; exactly as many as `pts`.
+    sigma: &'a [f64],
+    closed: bool,
+    cfg: &'a FitConfig,
+    /// The acceptance gate on a whole primitive's χ²: `τ²·n`, a reduced χ² of `τ²`.
+    gate: f64,
+    /// Where the path form starts: the first point.
+    start: Point,
+    /// Where it ends: the last point, or the first again for a closed run whose last
+    /// point is not already a repeat of it.
+    end: Point,
+}
+
+/// A candidate description: path form, the whole-ring primitive if it is one, cost.
+type Candidate = (Vec<Segment>, Option<PrimitiveFit>, f64);
+
+/// The cheapest sane candidate offered so far.
+///
+/// No candidate may place geometry far outside the points it claims to describe. Each
+/// fitter has its own conditioning guards; this is the one place that catches a
+/// divergence none of them anticipated, before it reaches an emitter or a renderer. The
+/// allowed box is the points' bounding box grown by eight times its larger side (at
+/// least 8 px) on every side; an arc's radii must also stay under that margin.
+struct Cheapest {
+    lo_x: f64,
+    lo_y: f64,
+    hi_x: f64,
+    hi_y: f64,
+    slack: f64,
+    best: Option<Candidate>,
+}
+
+impl Cheapest {
+    /// An empty pool, with the bounds taken from `pts`.
+    fn new(pts: &[Point]) -> Self {
+        let (mut lo_x, mut lo_y, mut hi_x, mut hi_y) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        for p in pts {
+            lo_x = lo_x.min(p.x);
+            lo_y = lo_y.min(p.y);
+            hi_x = hi_x.max(p.x);
+            hi_y = hi_y.max(p.y);
+        }
+        let slack = 8.0 * (hi_x - lo_x).max(hi_y - lo_y).max(1.0);
+        Cheapest {
+            lo_x,
+            lo_y,
+            hi_x,
+            hi_y,
+            slack,
+            best: None,
+        }
+    }
+
+    /// Whether `p` is finite and inside the allowed box.
+    fn in_bounds(&self, p: Point) -> bool {
+        p.x.is_finite()
+            && p.y.is_finite()
+            && p.x >= self.lo_x - self.slack
+            && p.x <= self.hi_x + self.slack
+            && p.y >= self.lo_y - self.slack
+            && p.y <= self.hi_y + self.slack
+    }
+
+    /// Keep this candidate if it is non-empty, finite, inside the box and strictly
+    /// cheaper than the best so far (ties keep the earlier one).
+    fn consider(&mut self, segs: Vec<Segment>, prim: Option<PrimitiveFit>, cost: f64) {
+        if segs.is_empty() || !cost.is_finite() {
+            return;
+        }
+        let sane = segs.iter().all(|s| match *s {
+            Segment::Line(p) => self.in_bounds(p),
+            Segment::Cubic(a, b, p) => self.in_bounds(a) && self.in_bounds(b) && self.in_bounds(p),
+            Segment::Arc { rx, ry, end, .. } => {
+                rx.is_finite() && ry.is_finite() && rx.max(ry) <= self.slack && self.in_bounds(end)
+            }
+        });
+        if !sane {
+            return;
+        }
+        match self.best {
+            Some((_, _, c)) if c <= cost => {}
+            _ => self.best = Some((segs, prim, cost)),
+        }
+    }
+}
+
+/// Offer the circular-arc description: the only candidate for an open run, costed as a
+/// path (`½·χ²` sampled against the arcs, plus the arcs' parameters), and the path form
+/// of a whole `<circle>` for a closed run that goes more than 1.9π round the centre and
+/// passes the χ² gate, costed as the circle's three parameters.
+fn offer_arcs(run: &PrimRun<'_>, best: &mut Cheapest) {
+    let (pts, sigma, cfg) = (run.pts, run.sigma, run.cfg);
+    let arcs = fit_arcs_inner(pts, sigma, run.closed);
+    if let Some((segs, cf)) = &arcs {
+        if !run.closed {
+            let chi2 = curves::chi2(pts, sigma, run.start, segs);
+            let params: f64 = segs.iter().map(|s| s.params()).sum();
+            best.consider(segs.clone(), None, 0.5 * chi2 + cfg.lambda * params);
+        } else {
+            let sweep = total_sweep(pts, cf.c, true);
+            if sweep.abs() > 1.9 * PI && cf.chi2 <= run.gate {
+                let prim = PrimitiveFit {
+                    kind: PrimitiveKind::Circle { c: cf.c, r: cf.r },
+                    chi2: cf.chi2,
+                    params: PARAMS_CIRCLE,
+                };
+                best.consider(segs.clone(), Some(prim), prim.cost(cfg));
+            }
+        }
+    }
+}
+
+/// Offer a whole `<ellipse>` for a closed run: orthogonal-distance fit, sane radii,
+/// the χ² gate, and more than 1.9π of sweep round its centre. `sign` is the run's
+/// orientation (+1 when its signed area is positive), which the four-cubic path form
+/// follows.
+fn offer_ellipse(run: &PrimRun<'_>, sign: f64, best: &mut Cheapest) {
+    let pts = run.pts;
+    // The same bound the circle fit applies (see `fit_arcs_inner`), which the
+    // ellipse lacked. A thin sliver is described *well* by an absurdly eccentric
+    // ellipse - two nearly parallel edges are a good local fit to one - so chi2 is
+    // small, the sweep around a centre inside the sliver is a full turn, and every
+    // gate passes while `rx` runs to 1e9. The cubics that approximate it then carry
+    // control points a billion units away, which is not a shape any renderer is
+    // obliged to survive: tiny-skia panics on it.
+    //
+    // Found when blend absorption started producing slivers this fitter had never
+    // been offered before. The defect was always here; nothing upstream had reached
+    // it.
+    let span = pts
+        .iter()
+        .map(|p| p.dist(pts[0]))
+        .fold(0.0f64, f64::max)
+        .max(1.0);
+    if let Some(e) = fit_ellipse(pts, run.sigma) {
+        let sane = e.rx.is_finite()
+            && e.ry.is_finite()
+            && e.c.x.is_finite()
+            && e.c.y.is_finite()
+            && e.rx.max(e.ry) <= 1e3 * span;
+        if sane && e.chi2 <= run.gate && total_sweep(pts, e.c, true).abs() > 1.9 * PI {
+            let prim = PrimitiveFit {
+                kind: PrimitiveKind::Ellipse {
+                    c: e.c,
+                    rx: e.rx,
+                    ry: e.ry,
+                    angle: e.angle,
+                },
+                chi2: e.chi2,
+                params: PARAMS_ELLIPSE,
+            };
+            best.consider(
+                ellipse_cubics(&e, run.start, sign, run.end),
+                Some(prim),
+                prim.cost(run.cfg),
+            );
+        }
+    }
+}
+
+/// Offer the rounded rectangle, and the plain rectangle it collapses to, for a closed
+/// run. Both are costed and the objective picks; a corner radius the noise cannot
+/// resolve is not worth two parameters. Each must pass the χ² gate and have a positive
+/// width and height.
+fn offer_round_rects(run: &PrimRun<'_>, sign: f64, best: &mut Cheapest) {
+    let rr_free = fit_round_rect(run.pts, run.sigma, None);
+    let rr_zero = fit_round_rect(run.pts, run.sigma, Some(0.0));
+    for (rr, params) in [(rr_free, PARAMS_ROUND_RECT), (rr_zero, PARAMS_RECT)] {
+        let Some(rr) = rr else { continue };
+        if rr.chi2 > run.gate || rr.w <= 0.0 || rr.h <= 0.0 {
+            continue;
+        }
+        let prim = PrimitiveFit {
+            kind: PrimitiveKind::RoundRect {
+                x: rr.x,
+                y: rr.y,
+                w: rr.w,
+                h: rr.h,
+                rx: rr.rx,
+            },
+            chi2: rr.chi2,
+            params,
+        };
+        let segs = round_rect_segments(&rr, run.start, sign, run.end);
+        best.consider(segs, Some(prim), prim.cost(run.cfg));
     }
 }

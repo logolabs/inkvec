@@ -11,6 +11,10 @@ use crate::geom::{Contour, Region};
 
 /// A contour refitted as lines and cubics within `tolerance` (see [`crate::fitcurve`]):
 /// appends its `d` data and returns its segment count.
+///
+/// Numbers are written to three decimals (a micrometre) with trailing zeros trimmed. A
+/// contour of fewer than three points writes nothing; one the fitter returns nothing for is
+/// written as a simplified polyline instead.
 pub fn contour_d(c: &Contour, tolerance: f64, d: &mut String) -> usize {
     if c.len() < 3 {
         return 0;
@@ -47,7 +51,9 @@ pub fn contour_d(c: &Contour, tolerance: f64, d: &mut String) -> usize {
     segs.len()
 }
 
-/// A contour as a polyline, Douglas-Peucker simplified to `tol`.
+/// A contour as a polyline, Douglas-Peucker simplified to `tol`: the ring is closed by
+/// repeating its first point, simplified with both ends kept, and written as `M`, `L`s and `Z`.
+/// Returns the number of points written.
 fn polyline_d(c: &Contour, tol: f64, d: &mut String) -> usize {
     fn dp(c: &[[f64; 2]], tol: f64, keep: &mut Vec<bool>, lo: usize, hi: usize) {
         if hi <= lo + 1 {

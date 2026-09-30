@@ -12,6 +12,16 @@
 //! whole path stays G1 wherever the curve was. The junction is the equal-tangent-length
 //! point. The fit is checked both ways, cubic against arcs and arcs against cubic, and a
 //! cubic that does not fit within the tolerance is halved and each half fitted again.
+//!
+//! Called from [`crate::dxf`] for every cubic of a refitted contour; the DXF writer and the
+//! G-code writer then share the result. Coordinates are millimetres in the machine's y-up
+//! frame, so a positive bulge is a counter-clockwise arc (G3) and a negative one clockwise
+//! (G2).
+//!
+//! **Bulge.** An arc from `a` to `b` that sweeps the signed angle `θ` has bulge
+//! `β = tan(θ/4)`. From it, with chord `c = b − a` of length `L`: the radius is
+//! `r = L / (2 sin(θ/2))` (signed), and the centre sits on the chord's perpendicular
+//! bisector, `h = r cos(θ/2)` to the left of the chord. `β = 0` is a straight segment.
 
 use crate::geom::Pt;
 
@@ -20,23 +30,29 @@ const MAX_DEPTH: usize = 12;
 /// Samples along a cubic for the fit check.
 const SAMPLES: usize = 24;
 
+/// `a − b`.
 fn sub(a: Pt, b: Pt) -> Pt {
     [a[0] - b[0], a[1] - b[1]]
 }
+/// Dot product.
 fn dot(a: Pt, b: Pt) -> f64 {
     a[0] * b[0] + a[1] * b[1]
 }
+/// 2D cross product (z of the 3D one): positive when `b` turns counter-clockwise from `a`.
 fn cross(a: Pt, b: Pt) -> f64 {
     a[0] * b[1] - a[1] * b[0]
 }
+/// Euclidean length.
 fn norm(a: Pt) -> f64 {
     a[0].hypot(a[1])
 }
+/// `a` scaled to length 1, or `None` when it is shorter than 1e-12.
 fn unit(a: Pt) -> Option<Pt> {
     let n = norm(a);
     (n > 1e-12).then(|| [a[0] / n, a[1] / n])
 }
 
+/// The cubic Bézier with control points `c` at parameter `t`, in Bernstein form.
 fn cubic_at(c: &[Pt; 4], t: f64) -> Pt {
     let u = 1.0 - t;
     let (b0, b1, b2, b3) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
@@ -46,6 +62,8 @@ fn cubic_at(c: &[Pt; 4], t: f64) -> Pt {
     ]
 }
 
+/// The cubic halved at `t = ½` by de Casteljau's construction: two cubics tracing exactly the
+/// same curve.
 fn split(c: &[Pt; 4]) -> ([Pt; 4], [Pt; 4]) {
     let mid = |a: Pt, b: Pt| [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
     let (p01, p12, p23) = (mid(c[0], c[1]), mid(c[1], c[2]), mid(c[2], c[3]));
@@ -56,13 +74,17 @@ fn split(c: &[Pt; 4]) -> ([Pt; 4], [Pt; 4]) {
 
 /// The bulge of the arc from `a` to `b` that leaves `a` along `t` (unit): the tangent of a
 /// quarter of its signed sweep, positive counter-clockwise in a y-up frame.
+///
+/// By the tangent–chord angle theorem, the angle `φ` from the tangent `t` to the chord
+/// `b − a` is half the arc's sweep, so `β = tan(θ/4) = tan(φ/2)`.
 fn bulge_leaving(a: Pt, b: Pt, t: Pt) -> f64 {
     let c = sub(b, a);
     let half = cross(t, c).atan2(dot(t, c));
     (half / 2.0).tan()
 }
 
-/// The bulge of the arc from `a` to `b` that arrives at `b` along `t` (unit).
+/// The bulge of the arc from `a` to `b` that arrives at `b` along `t` (unit): the same
+/// theorem at the other end, with the angle measured from the chord to the tangent.
 fn bulge_arriving(a: Pt, b: Pt, t: Pt) -> f64 {
     let c = sub(b, a);
     let half = cross(c, t).atan2(dot(c, t));
@@ -70,6 +92,10 @@ fn bulge_arriving(a: Pt, b: Pt, t: Pt) -> f64 {
 }
 
 /// Distance from `p` to the arc (or segment, at bulge 0) from `a` to `b`.
+///
+/// When `p`'s angle about the centre lies within the arc's sweep, the distance is
+/// `| |p − centre| − |r| |`; otherwise the nearest point of the arc is an endpoint. A bulge
+/// under 1e-9, or a chord under 1e-12 mm, is treated as the straight segment.
 fn arc_distance(p: Pt, a: Pt, b: Pt, bulge: f64) -> f64 {
     let c = sub(b, a);
     let len = norm(c);
@@ -102,7 +128,8 @@ fn arc_distance(p: Pt, a: Pt, b: Pt, bulge: f64) -> f64 {
     }
 }
 
-/// A point on the arc from `a` to `b` with `bulge`, at fraction `s` of its sweep.
+/// A point on the arc from `a` to `b` with `bulge`, at fraction `s` of its sweep
+/// (`s = 0` is `a`, `s = 1` is `b`); a straight segment when the bulge is under 1e-9.
 pub(crate) fn arc_at(a: Pt, b: Pt, bulge: f64, s: f64) -> Pt {
     if bulge.abs() < 1e-9 {
         return [a[0] + s * (b[0] - a[0]), a[1] + s * (b[1] - a[1])];
@@ -123,6 +150,19 @@ pub(crate) fn arc_at(a: Pt, b: Pt, bulge: f64, s: f64) -> Pt {
 
 /// The biarc for one cubic: its junction and the two bulges, or `None` when the end
 /// tangents admit no equal-length junction (a cusp, or a curve that doubles back).
+///
+/// With unit end tangents `t0` (leaving `p0`) and `t1` (arriving at `p3`), the
+/// equal-tangent-length construction places `q0 = p0 + d·t0` and `q1 = p3 − d·t1` and puts the
+/// junction at their midpoint, which needs `|q1 − q0| = 2d`. Writing `v = p3 − p0` and
+/// `t = t0 + t1`, that is `|v − d·t|² = 4d²`, the quadratic
+///
+/// ```text
+/// 2(t0·t1 − 1)·d² − 2(v·t)·d + v·v = 0
+/// ```
+///
+/// whose smallest positive root is taken; when the tangents are parallel (`t0·t1 = 1`) it is
+/// linear, `d = v·v / (2 v·t)`. A degenerate end tangent (a control point on its endpoint)
+/// falls back to the next control point.
 fn biarc(c: &[Pt; 4]) -> Option<(Pt, f64, f64)> {
     let t0 = unit(sub(c[1], c[0])).or_else(|| unit(sub(c[2], c[0])))?;
     let t1 = unit(sub(c[3], c[2])).or_else(|| unit(sub(c[3], c[1])))?;
@@ -151,7 +191,9 @@ fn biarc(c: &[Pt; 4]) -> Option<(Pt, f64, f64)> {
     Some((j, bulge_leaving(c[0], j, t0), bulge_arriving(j, c[3], t1)))
 }
 
-/// Largest distance, both ways, between the cubic and the two arcs.
+/// Largest distance, both ways, between the cubic and the two arcs: 25 samples of the cubic
+/// measured to the nearer arc, and 7 interior samples of each arc measured to the cubic's
+/// sampled polyline (a sampled two-sided Hausdorff distance).
 fn misfit(c: &[Pt; 4], j: Pt, b1: f64, b2: f64) -> f64 {
     let curve: Vec<Pt> = (0..=SAMPLES)
         .map(|k| cubic_at(c, k as f64 / SAMPLES as f64))
@@ -176,6 +218,9 @@ fn misfit(c: &[Pt; 4], j: Pt, b1: f64, b2: f64) -> f64 {
     to_arcs.max(back)
 }
 
+/// Append `c` as `(start, bulge)` vertices: its biarc when that fits within `tol`, else its
+/// two halves recursively. At [`MAX_DEPTH`] the biarc is taken whatever its misfit, or, if
+/// there is none, a straight segment.
 fn push_cubic(c: &[Pt; 4], tol: f64, depth: usize, out: &mut Vec<(Pt, f64)>) {
     if let Some((j, b1, b2)) = biarc(c) {
         if depth >= MAX_DEPTH || misfit(c, j, b1, b2) <= tol {

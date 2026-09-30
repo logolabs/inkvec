@@ -11,6 +11,11 @@
 //! at one vertex, so a curve flattened into many small turns is not mistaken for corners,
 //! and it is an inside corner when the outline turns away from the material there. Holes
 //! count too: every corner of a square hole is an inside corner of the plate.
+//!
+//! Used by [`crate::plan`] when a dogbone radius is set, on each sheet's region in
+//! millimetres. The turn at a vertex is the signed angle `atan2(u × v, u · v)` between the
+//! unit directions `u` (from the point [`TURN_WINDOW_MM`] behind to the vertex) and `v` (from
+//! the vertex to the point that far ahead), measured along the contour.
 
 use crate::geom::{self, Pt, Region};
 
@@ -22,15 +27,19 @@ const MIN_TURN_DEG: f64 = 30.0;
 /// read as a ring of corners.
 const TURN_WINDOW_MM: f64 = 0.25;
 
+/// `a − b`.
 fn sub(a: Pt, b: Pt) -> Pt {
     [a[0] - b[0], a[1] - b[1]]
 }
+/// `a` scaled to length 1, or `None` when it is shorter than 1e-12.
 fn unit(a: Pt) -> Option<Pt> {
     let n = a[0].hypot(a[1]);
     (n > 1e-12).then(|| [a[0] / n, a[1] / n])
 }
 
-/// The point `reach` along the closed contour `c` from vertex `i`, forwards or back.
+/// The point `reach` along the closed contour `c` from vertex `i`, forwards or back
+/// (arc length, not straight-line distance). A contour shorter than `reach` all round gives
+/// the vertex itself, after one full lap.
 fn walk(c: &[Pt], i: usize, reach: f64, forward: bool) -> Pt {
     let n = c.len();
     let mut at = c[i];
@@ -56,6 +65,11 @@ fn walk(c: &[Pt], i: usize, reach: f64, forward: bool) -> Pt {
 
 /// Inside corners of `r`: each corner point and the unit direction into the material
 /// along its bisector. Corners closer together than `window` count once.
+///
+/// A vertex qualifies when its turn is at least [`MIN_TURN_DEG`] and against the sense of
+/// its shape's outer contour (the material side), and no vertex within `window` of it along
+/// the contour turns more sharply. The bisector into the material is `unit(u − v)`, the
+/// incoming direction minus the outgoing one.
 pub fn inside_corners(r: &Region, window: f64) -> Vec<(Pt, Pt)> {
     let mut out = Vec::new();
     for shape in r {
@@ -130,7 +144,12 @@ pub fn inside_corners(r: &Region, window: f64) -> Vec<(Pt, Pt)> {
     out
 }
 
-/// `r` with a dogbone of `radius` cut at every inside corner.
+/// `r` with a dogbone of `radius` cut at every inside corner, and how many were cut.
+///
+/// Each dogbone is a disc of the bit's radius (0.1% larger, drawn as a 48-gon) centred one
+/// radius from the corner along the bisector, so its edge passes through the corner itself;
+/// all the discs are subtracted from `r` in one boolean. The corner search window is the
+/// radius. A non-positive radius changes nothing.
 pub fn dogbones(r: &Region, radius: f64) -> (Region, usize) {
     if radius <= 0.0 {
         return (r.clone(), 0);

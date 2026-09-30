@@ -10,6 +10,9 @@
 //!
 //! Colours closer than a threshold in CIELAB are one colour: nobody owns two vinyls that
 //! differ by a JND, and a trace can carry both.
+//!
+//! Called by [`crate::analyze`] and [`crate::prepare`] on the loaded artwork (millimetres);
+//! the result feeds [`crate::plan`].
 
 use crate::geom::{self, Region};
 use crate::load::{Artwork, Centreline, PaintKind};
@@ -33,6 +36,10 @@ pub struct ColourRegion {
     pub strokes: Vec<Centreline>,
 }
 
+/// sRGB bytes to CIELAB (D65 white): undo the sRGB transfer curve to linear light, take
+/// XYZ with the sRGB primaries' matrix, divide by the white point, then
+/// `L = 116 f(Y) − 16`, `a = 500 (f(X) − f(Y))`, `b = 200 (f(Y) − f(Z))` with the cube-root
+/// `f` and its linear segment near black. `L` runs 0 (black) to 100 (white).
 fn lab(rgb: [u8; 3]) -> [f64; 3] {
     let lin = |c: u8| {
         let c = c as f64 / 255.0;
@@ -129,6 +136,13 @@ pub fn hex(rgb: [u8; 3]) -> String {
 
 /// The visible area of every colour, colours within `merge_de` of each other joined,
 /// largest first.
+///
+/// Walked top down, each item's visible part is its region minus the union of everything
+/// painted after it. Visible parts are then grouped: an item joins the first group whose
+/// colour (the first item's colour) is within `merge_de` in CIEDE2000, so grouping depends on
+/// paint order. Each group's region is the union of its parts, its strokes are clipped to that
+/// union, and at most one group, the largest that runs along most of the canvas border
+/// ([`spans_canvas`]), is marked as the background.
 pub fn visible_colours(art: &Artwork, merge_de: f64) -> Vec<ColourRegion> {
     // Top down: what each item shows is what the items above it have not covered.
     let mut covered: Region = Vec::new();
@@ -227,6 +241,9 @@ const BACKGROUND_BORDER_SHARE: f64 = 0.75;
 
 /// True when a region runs along most of the canvas border: the page, not a shape. Reaching
 /// all four sides is not enough — a round logo touches every side at one point each.
+///
+/// Tested on 400 points evenly spaced round a rectangle inset from the canvas edge by 0.5%
+/// of its longer side: at least [`BACKGROUND_BORDER_SHARE`] of them must be inside.
 fn spans_canvas(r: &Region, canvas: [f64; 2]) -> bool {
     let inset = 0.005 * canvas[0].max(canvas[1]);
     let (w, h) = (canvas[0] - 2.0 * inset, canvas[1] - 2.0 * inset);

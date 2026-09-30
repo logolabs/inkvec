@@ -4,6 +4,12 @@
 //! colour, a sliver too thin to weed, a speck that lifts with the transfer tape, a file
 //! the cutter's software refuses. The findings are measurements, in millimetres, not
 //! badges: the same honesty the Studio's quality report is built on.
+//!
+//! Called from [`crate::plan`]: colour findings once, layer findings per sheet, and node
+//! findings per written sheet. Thin parts and narrow gaps are found by morphology: the
+//! opening at the minimum feature width removes exactly the parts narrower than it, and the
+//! closing fills exactly the gaps narrower than it, so the difference with the sheet is the
+//! problem area.
 
 use crate::geom::{self, Region};
 use crate::options::{Check, Level};
@@ -16,6 +22,7 @@ pub const DESIGN_SPACE_MAX_PATHS: usize = 5_000;
 /// Above this many segments in one sheet, cutter software becomes slow to edit.
 pub const COMFORTABLE_NODES: usize = 2_000;
 
+/// A finding, built in one line.
 fn check(level: Level, code: &'static str, message: String) -> Check {
     Check {
         level,

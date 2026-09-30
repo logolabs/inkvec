@@ -93,7 +93,7 @@ fn bounded_residual_keeps_nan() {
     assert!(exact.is_nan());
     for bound in [0.1, 10.0, 1e9] {
         let got = chi2_n_below(&c, &poly, 0, 19, SAMPLES, bound);
-        assert!(!(got < bound));
+        assert!(got.is_nan() || got >= bound, "{got} under {bound}");
     }
 }
 

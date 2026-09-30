@@ -5,6 +5,11 @@
 //! against the line-only optimum. Fast mode asks the cheaper question: do the quality
 //! fitters' circle or ellipse pass within [`TOL`] of every measured point, and do the
 //! points go all the way round it? Rounded rectangles are left to the curve fit.
+//!
+//! Part of the Fast fit (stage 5), tried first on every closed boundary by
+//! [`super::fit_edge`]. In: the boundary's denoised sub-pixel points, in px. Out: the
+//! primitive and the four cubics that draw it, or `None` to fall through to the polygon
+//! and curve fit.
 
 use inkvec_core::{Point, Vec2};
 use inkvec_fit::curves::Segment;
@@ -25,6 +30,10 @@ const MIN_RADIUS: f64 = 1.5;
 /// running along an arc and back fits a circle well and encloses nothing.
 const MIN_AREA_SHARE: f64 = 0.8;
 
+/// Signed area of the closed polygon through `pts`, in px², by the shoelace formula
+/// `A = ½ Σ_k (x_k y_{k+1} − x_{k+1} y_k)` with the index taken mod `n`. Positive when the
+/// ring turns towards increasing angle in image coordinates (y down), which is clockwise
+/// on screen. Zero for fewer than three distinct points.
 fn signed_area(pts: &[Point]) -> f64 {
     let n = pts.len();
     (0..n)
@@ -38,6 +47,16 @@ fn signed_area(pts: &[Point]) -> f64 {
 
 /// Four cubics round the ellipse `c + R(angle) (rx cos t, ry sin t)`, starting at the
 /// point nearest `from` and running the way `ccw` says (increasing `t`).
+///
+/// Each quarter from `t_a` to `t_b = t_a ± π/2` is the standard cubic approximation of an
+/// elliptic arc: end points `P(t_a)`, `P(t_b)` and control points `P(t_a) + k P'(t_a)`,
+/// `P(t_b) − k P'(t_b)` with `k = 4/3 · tan(Δt / 4)` and `Δt = ±π/2`; `k` is negative
+/// when running backwards, which moves the control points along `−P'`. The radial error
+/// is about 0.03 % of the radius. `angle` is in radians. The start parameter
+/// `t_0 = atan2(rx q_y, ry q_x)`, with `q` = `from − c` rotated by `−angle`, is the
+/// parameter whose point lies on the ray from the centre through `from` -- "nearest" in
+/// angle, which is what matters for keeping the path's start where the boundary's was.
+/// The last cubic ends exactly on the start point so the ring closes without a gap.
 fn ellipse_cubics(
     c: Point,
     rx: f64,
@@ -79,6 +98,27 @@ fn ellipse_cubics(
 }
 
 /// The circle or ellipse `pts` (a closed boundary) is, with the path that draws it.
+///
+/// A cascade of cheap tests before expensive fits, every point weighted with σ = 0.5 px:
+///
+/// 1. Kåsa's algebraic circle fit (`fit_circle_kasa`, one linear least-squares solve).
+///    Reject when its radius is under [`MIN_RADIUS`] or not finite, or when some point is
+///    more than `ROUGHLY_ROUND · r` from the circle: not round at all.
+/// 2. When the Kåsa circle is within `2 · TOL` everywhere, the orthogonal-distance circle
+///    fit (`fit_circle`, Levenberg–Marquardt) must be within [`TOL`] of every point and the
+///    ring must enclose `MIN_AREA_SHARE · π r²`: accepted as a circle (3 parameters).
+/// 3. Otherwise an ellipse. A bound rules most boundaries out before any ellipse fit: with
+///    `span` the largest distance from the first point, an ellipse within `TOL` of all
+///    points has `rx >= span/2 − TOL`, while the area test with `ry >= MIN_RADIUS` needs
+///    `rx <= |A| / (MIN_AREA_SHARE · π · MIN_RADIUS)`. Then Taubin's algebraic ellipse
+///    (`fit_ellipse_algebraic`) must be within `2 · TOL` of every point, and the
+///    orthogonal-distance ellipse (`fit_ellipse`) within `TOL`, with both radii at least
+///    `MIN_RADIUS`, the larger at most `span`, and the area test passed: accepted as an
+///    ellipse (5 parameters).
+///
+/// Returns the primitive, the path's start point, and its four cubics
+/// ([`ellipse_cubics`]), running in the ring's own direction from near `pts[0]`. Fewer
+/// than [`MIN_POINTS`] points, a fit that fails, or a non-finite radius give `None`.
 pub(crate) fn primitive(pts: &[Point]) -> Option<(PrimitiveFit, Point, Vec<Segment>)> {
     let n = pts.len();
     if n < MIN_POINTS {

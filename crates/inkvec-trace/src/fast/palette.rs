@@ -21,6 +21,11 @@
 //! whose bin is not itself an ink colour (a blend) takes the nearest of the inks its
 //! ink-coloured neighbours carry, or its own nearest ink when it is a blend of that ink and
 //! one of theirs (a thin stroke over its ground) -- never an ink its pixels are not made of.
+//!
+//! Stage 1 of the Fast pipeline. In: the image over white as sRGB 0..1 per pixel, and the
+//! source opacity when transparency is traced natively. Out: a [`Palette`] (sRGB, OKLab,
+//! opacity and pixel share per ink) and one ink index per pixel. Called once per trace from
+//! [`super::front`].
 
 use crate::color::{rgb_to_oklab, Palette};
 use crate::native::{over_black, snap_alpha, Ink2, OPAQUE};
@@ -39,6 +44,10 @@ const MIN_PAIRED: u32 = 8;
 const THIN_SHARE: f32 = 0.0005;
 
 /// How pixels are binned: bits per colour channel and for opacity.
+///
+/// An opaque image uses 5 bits per sRGB channel and none for opacity (15-bit keys); an
+/// image traced with its transparency uses 4 + 4 + 4 colour bits and 4 opacity bits. Both
+/// fit the 16-bit key space of [`BINS`].
 #[derive(Clone, Copy)]
 struct Grid {
     bits: u32,
@@ -46,6 +55,13 @@ struct Grid {
 }
 
 impl Grid {
+    /// The bin of a colour `c = [r, g, b, a]` (sRGB 0..1 and opacity 0..1).
+    ///
+    /// Each channel is clamped to 0..1 and rounded to the nearest of `2^bits` levels,
+    /// `q(v) = round(v · (2^bits − 1))`; the key packs `q(r) q(g) q(b)` from the most
+    /// significant end, followed by `q(a)` on `alpha_bits` when opacity is binned. Rounding
+    /// (not truncation) puts a pure colour at the centre of its bin, so noise around it
+    /// spreads into both neighbours evenly.
     fn key(self, c: [f32; 4]) -> usize {
         let q = |v: f32, bits: u32| {
             let top = ((1usize << bits) - 1) as f32;
@@ -59,6 +75,9 @@ impl Grid {
         k
     }
 
+    /// The inverse of [`Grid::key`] on the quantised levels: `[q(r), q(g), q(b), q(a)]`,
+    /// with `q(a) = 0` when opacity is not binned. Signed, so that [`Grid::touch`] can
+    /// subtract levels.
     fn parts(self, k: usize) -> [isize; 4] {
         let (b, ab) = (self.bits, self.alpha_bits);
         let m = (1usize << b) - 1;
@@ -90,6 +109,15 @@ struct Bins {
     all_sum: Vec<[f64; 4]>,
 }
 
+/// One pass over the `w × h` image: per bin, how many pixels fall in it (`count`, with
+/// their colour sums `all_sum`), how many are *paired* (at least one 4-neighbour in the
+/// same bin) and how many are *flat* (every 4-neighbour inside the image in the same bin,
+/// with their sums `flat_sum`).
+///
+/// A neighbour outside the image counts as agreeing, so a filled region touching the
+/// border keeps its flat pixels there. Sums are in f64 so a 2048 px image's totals do not
+/// lose the low bits of each 0..1 channel. `px` is sRGB 0..1 plus opacity; `keys` is
+/// [`Grid::key`] of each pixel.
 fn histogram(px: &[[f32; 4]], keys: &[u16], w: usize, h: usize) -> Bins {
     let mut b = Bins {
         count: vec![0; BINS],
@@ -126,6 +154,8 @@ fn histogram(px: &[[f32; 4]], keys: &[u16], w: usize, h: usize) -> Bins {
     b
 }
 
+/// The mean colour-and-opacity `s / f` of `f` summed pixels. The caller guarantees
+/// `f > 0` (a bin or ink with at least one pixel, or `n.max(1)`).
 fn mean(s: [f64; 4], f: f64) -> [f32; 4] {
     [
         (s[0] / f) as f32,
@@ -148,6 +178,9 @@ fn ink2(c: [f32; 4]) -> Ink2 {
     }
 }
 
+/// The index of the ink nearest `c` by [`Ink2::dist`] (OKLab distance, the larger over
+/// the two grounds), and that distance. The first ink wins a tie. With no inks it returns
+/// `(0, ∞)`, which every caller treats as "no ink near enough".
 fn nearest(inks: &[Ink2], c: Ink2) -> (usize, f32) {
     let mut best = (0, f32::INFINITY);
     for (i, &k) in inks.iter().enumerate() {
@@ -161,13 +194,28 @@ fn nearest(inks: &[Ink2], c: Ink2) -> (usize, f32) {
 
 /// One accepted ink while the palette is built: its bins and its flat pixels' sums.
 struct Ink {
-    point: Ink2,
     bins: Vec<usize>,
     sum: [f64; 4],
     flat: f64,
 }
 
 /// Found inks from the candidate bins, most flat pixels first.
+///
+/// A greedy clustering in a single pass. Candidates are the bins with at least
+/// [`MIN_FLAT`] flat pixels, sorted by flat count (bin key breaking ties, so the order is
+/// total and the result deterministic). Each candidate's flat mean is compared with the
+/// inks founded so far, whose points stay where their founding bin put them:
+///
+/// * it joins the nearest ink `i` when `d < SAME_INK`, or when `d < merge_distance` and
+///   one of `i`'s bins touches it ([`Grid::touch`]): one ink spread over adjacent bins by
+///   noise or anti-aliasing;
+/// * once `max_colors` inks exist, every further candidate joins its nearest;
+/// * otherwise it founds a new ink.
+///
+/// `d` is [`Ink2::dist`] in OKLab. A joined bin adds its flat sums to the ink, so the
+/// ink's final colour is the flat-pixel mean over all its bins, not its founder's colour.
+/// Most populous first means the dominant colour of a cluster founds it, which keeps a
+/// faint neighbour bin from pulling the ink off its true colour.
 fn found_inks(bins: &Bins, grid: Grid, merge_distance: f32, max_colors: usize) -> Vec<Ink> {
     // The key breaks ties so the order is total.
     let mut cands: Vec<usize> = (0..BINS).filter(|&k| bins.flat[k] >= MIN_FLAT).collect();
@@ -194,7 +242,6 @@ fn found_inks(bins: &Bins, grid: Grid, merge_distance: f32, max_colors: usize) -
         } else {
             points.push(point);
             inks.push(Ink {
-                point,
                 bins: vec![k],
                 sum: s,
                 flat: f,
@@ -410,6 +457,20 @@ const KEEP_OWN: f32 = 3.0;
 /// The inks, and one label (an ink index) per pixel. `alpha`, when given, is the source's
 /// opacity per pixel and `rgb` the image over white: inks then carry an opacity, and the
 /// clear ground is an ink of its own.
+///
+/// Steps: bin every pixel ([`Grid::key`], [`histogram`]); found inks from flat bins
+/// ([`found_inks`]) and add stroke inks with no flat pixel ([`thin_inks`]); snap each
+/// ink's opacity ([`snap_alpha`]); give every occupied bin its nearest ink once, marking it
+/// "is that ink" when within `merge_distance` (OKLab); then label each pixel from that table
+/// ([`Blends::label`]). With no flat bin anywhere (pure noise, or a tiny image) the palette
+/// is one ink, the mean colour of the image.
+///
+/// Outputs: the [`Palette`] with `rgb` (sRGB 0..1), `colors` (OKLab of `rgb`), `alpha`
+/// (0..1) and `weight` (each ink's share of the labels, summing to 1), and `w · h` labels,
+/// every one a valid ink index. `max_colors` caps the palette (flat inks and thin inks
+/// together); [`found_inks`] clamps it to `1..=65535` so a label fits a `u16`. Labelling
+/// runs row by row in parallel but reads only immutable tables, so the result does not
+/// depend on the thread count.
 pub(crate) fn palette_and_labels(
     rgb: &[[f32; 3]],
     alpha: Option<&[f32]>,
@@ -447,13 +508,7 @@ pub(crate) fn palette_and_labels(
             used[b] = true;
         }
     }
-    let mut inks: Vec<[f32; 4]> = found
-        .iter()
-        .map(|i| {
-            let _ = i.point;
-            mean(i.sum, i.flat)
-        })
-        .collect();
+    let mut inks: Vec<[f32; 4]> = found.iter().map(|i| mean(i.sum, i.flat)).collect();
     let thin = thin_inks(&bins, &used, &inks, n, merge_distance, max_colors);
     inks.extend(thin);
     if inks.is_empty() {

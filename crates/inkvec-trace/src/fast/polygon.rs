@@ -9,6 +9,10 @@
 //! directions (each point narrows it by the angle it subtends at `tol`), which keeps the
 //! test O(1) per candidate side, and the dynamic program over sides is Potrace's: fewest
 //! sides first, then the smallest sum of squared distances, read in O(1) from prefix sums.
+//!
+//! Stage 5a of the Fast fit, run by [`super::fit_points`] after [`super::smooth::denoise`].
+//! In: one boundary's sub-pixel points, in px. Out: the indices of the polygon's vertices,
+//! which [`super::smooth::adjust_vertices`] then moves off the points.
 
 use inkvec_core::{Point, Vec2};
 
@@ -21,6 +25,9 @@ struct Sums {
 }
 
 impl Sums {
+    /// Prefix sums over `pts`, taken relative to the first point so that the squares of
+    /// large coordinates (a 2048 px image) do not swamp the small differences
+    /// [`Sums::sq_dist`] subtracts.
     fn new(pts: &[Point]) -> Self {
         let origin = pts.first().copied().unwrap_or(Point::new(0.0, 0.0));
         let mut s = Vec::with_capacity(pts.len() + 1);
@@ -39,6 +46,16 @@ impl Sums {
     }
 
     /// Sum of squared distances from points `lo..hi` to the line through `a` and `b`.
+    ///
+    /// With `n = (u, v) = (−Δy, Δx)` the (unnormalised) normal of `b − a` and
+    /// `c = −n · (a − origin)`, the signed distance of a point `p` times `|b − a|` is
+    /// `u x + v y + c`. Expanding its square and summing over the run:
+    ///
+    /// `Σ d² = (u² Σx² + v² Σy² + 2uv Σxy + 2uc Σx + 2vc Σy + c² m) / |b − a|²`
+    ///
+    /// with every `Σ` read as a difference of two prefix sums and `m = hi − lo`. Rounding
+    /// can make the numerator a hair negative, so it is clamped at 0. An empty run or a
+    /// degenerate line (`|b − a|² < 1e-18`) gives 0.
     fn sq_dist(&self, lo: usize, hi: usize, a: Point, b: Point) -> f64 {
         if hi <= lo {
             return 0.0;
@@ -74,6 +91,8 @@ struct Cone {
 }
 
 impl Cone {
+    /// The cone before any point has narrowed it: every direction is admissible
+    /// (`open == false`; the two bounds are unused until the first [`Cone::narrow`]).
     fn full() -> Self {
         Self {
             right: Vec2 { x: 0.0, y: 0.0 },
@@ -90,6 +109,14 @@ impl Cone {
 
     /// Narrow the cone by a point at offset `v`, distance `r > tol` from the anchor.
     /// Returns false when nothing is left.
+    ///
+    /// A ray from the anchor passes within `tol` of the point exactly when its direction is
+    /// within `θ = asin(tol / r)` of `u = v / r`. The point's own cone is `u` rotated by
+    /// `±θ` (using `sin θ = tol / r`, `cos θ = sqrt(1 − sin² θ)`), and the running cone is
+    /// intersected with it by keeping the tighter bound on each side (compared by the sign
+    /// of the 2-D cross product). The cone is empty once its bounds cross
+    /// (`right × left < 0`) or it has opened to half a turn or more
+    /// (`right · left <= 0`), which also rejects a degenerate wrap-around.
     fn narrow(&mut self, v: Vec2, r: f64, tol: f64) -> bool {
         let s = (tol / r).min(1.0);
         let c = (1.0 - s * s).max(0.0).sqrt();
@@ -129,6 +156,19 @@ const MAX_SPAN: usize = 160;
 /// Polygon vertices of an open run, as indices into `pts`: always the first and the last
 /// point, and the fewest interior points such that every point lies within `tol` of the
 /// side that spans it.
+///
+/// Dynamic programming over vertices in index order. A side `i → j` is admissible when
+/// `j − i <= MAX_SPAN`, the direction of `p_j − p_i` lies in the cone of every point
+/// strictly between them seen from `p_i` ([`Cone`]), and no point before `j` has fallen
+/// back towards `p_i` by more than `tol`. The value of reaching `j` is the pair
+///
+/// `best[j] = min_i (best[i].sides + 1, best[i].pen + Σ_{i<k<j} dist(p_k, line p_i p_j)²)`
+///
+/// compared lexicographically, fewest sides first -- Potrace's optimal-polygon criterion,
+/// with the sum from [`Sums::sq_dist`]. `tol` is in px. Two or fewer points are their own
+/// polygon. A zero-length side is never admissible, so a run ending in points that all
+/// coincide with a vertex could leave the last point unreachable; the fallback then makes
+/// every point a vertex rather than fail.
 pub(crate) fn open(pts: &[Point], tol: f64) -> Vec<usize> {
     let n = pts.len();
     if n <= 2 {
@@ -206,6 +246,11 @@ pub(crate) fn closed(pts: &[Point], tol: f64) -> Vec<usize> {
 }
 
 /// The point of a closed ring where it turns hardest over a short window.
+///
+/// For each `k`, with `m = max(1, min(2, n/3))`, `u = p_k − p_{k−m}` and
+/// `v = p_{k+m} − p_k`, the turn is `1 − cos∠(u, v) = 1 − u·v / (|u||v|)`, 0 for straight on
+/// and 2 for a full reversal. The first maximum wins (a later one must beat it by 1e-12).
+/// Zero-length windows are skipped; if every window is, point 0 is returned.
 fn sharpest(pts: &[Point]) -> usize {
     let n = pts.len();
     let m = 2.min(n / 3).max(1);

@@ -7,6 +7,13 @@
 //! over the pixels plus one over the runs. Components smaller than `min_size` take the
 //! label they share the longest border with (the smallest label on a tie), and the faces
 //! are the components of the result.
+//!
+//! The file also holds the label clean-ups that run between the palette and despeckling
+//! (stage 2 of the Fast pipeline, called from [`super::front`] in this order):
+//! [`absorb_slivers`], [`absorb_rims`] and [`merge_same_inks`], then [`despeckle`] and
+//! [`faces`]. In: one ink label per pixel, each pixel's colour (sRGB 0..1 plus opacity) and
+//! each ink's colour. Out: cleaned labels, then a face id per pixel and each face's ink.
+//! The blend test [`blend_of`] / [`is_blend`] is shared with [`super::palette`].
 
 /// Components of equal labels (4-connected): the component of every pixel, each
 /// component's size and label, in order of first appearance in scan order.
@@ -19,6 +26,8 @@ pub(crate) struct Components {
     pub label: Vec<u16>,
 }
 
+/// Union-find root of run `x`, with path halving (each visited node is pointed at its
+/// grandparent), so repeated finds stay near constant time without recursion.
 fn find(parent: &mut [u32], mut x: u32) -> u32 {
     while parent[x as usize] != x {
         let p = parent[x as usize];
@@ -28,6 +37,15 @@ fn find(parent: &mut [u32], mut x: u32) -> u32 {
     x
 }
 
+/// The 4-connected components of equal labels in a `w × h` label image.
+///
+/// Connected-component labelling by union-find over row runs: each row is cut into maximal
+/// runs of one label, and a run is united with every run of the row above that overlaps it
+/// in x (`a.x0 < b.x1 && b.x0 < a.x1`) and has the same label; the two rows are walked with
+/// two pointers, so the pass is linear in the number of runs. The smaller run index is kept
+/// as the root, so component ids come out in order of first appearance in scan order, the
+/// same numbering a pixel flood fill in scan order gives (the tests check the partition
+/// against `regions::split_components`). An empty image gives no components.
 pub(crate) fn components(labels: &[u16], w: usize, h: usize) -> Components {
     // Runs: (x0, x1 exclusive, label), and where each row's runs start.
     let mut runs: Vec<(u32, u32, u16)> = Vec::new();
@@ -93,6 +111,14 @@ pub(crate) fn components(labels: &[u16], w: usize, h: usize) -> Components {
 
 /// Relabel every component smaller than `min_size` pixels with the neighbouring label it
 /// shares the longest border with.
+///
+/// Border length is counted in pixel edges: every 4-neighbour pair across the component's
+/// boundary is one vote for the label on the far side. The label with the most votes wins,
+/// the smallest label on a tie. Votes read the labels as they were before this pass, so
+/// the result does not depend on the order small components are visited; two adjacent
+/// speckles may therefore swap into each other's label rather than merge, which is
+/// harmless at this size. A component with no neighbour at all (the whole image) keeps
+/// its label. `min_size <= 1` does nothing.
 pub(crate) fn despeckle(labels: &mut [u16], w: usize, h: usize, min_size: usize) {
     if min_size <= 1 {
         return;
@@ -156,6 +182,16 @@ pub(crate) const BLEND_TOL: f32 = 0.04;
 /// `col` read as a blend of inks `a` and `b` (sRGB and opacity): how much of `b` it holds,
 /// clamped to [0, 1], and its squared distance from the line between them. `None` when the
 /// two inks are one colour.
+///
+/// The orthogonal projection of `col` onto the segment from `a` to `b` in the 4-D space of
+/// straight (not linearised) sRGB 0..1 and opacity:
+///
+/// `t = clamp(((col − a) · (b − a)) / |b − a|², 0, 1)`, `d = |col − (a + t (b − a))|²`.
+///
+/// `t` is the coverage of `b` an anti-aliased pixel would have under a linear mix; `d` is
+/// in squared sRGB units and is compared with `BLEND_TOL²`. Clamping `t` makes a colour
+/// beyond either end measure its distance to that end, so a darker-than-black pixel is not
+/// read as a blend. `|b − a|² < 1e-9` (the same colour twice) has no line, hence `None`.
 pub(crate) fn blend_of(col: [f32; 4], a: [f32; 4], b: [f32; 4]) -> Option<(f32, f32)> {
     let ab: [f32; 4] = std::array::from_fn(|k| b[k] - a[k]);
     let l2: f32 = ab.iter().map(|v| v * v).sum();
@@ -184,6 +220,14 @@ pub(crate) fn is_blend(col: [f32; 4], a: [f32; 4], b: [f32; 4]) -> bool {
 /// pixels are each a blend of two inks that meet across it -- or simply one of them -- is
 /// such a strip: every pixel takes the nearer of those inks. A hairline is not a blend of
 /// what lies either side of it, and stays.
+///
+/// Per pixel of a component without interior, the candidate inks are the labels of its
+/// 4-neighbours that belong to components *with* an interior. Among "the pixel is ink `a`"
+/// (squared distance to `a`) and "the pixel is a blend of `a` and `b`" ([`blend_of`],
+/// assigned to `a` when `t < 0.5` and to `b` otherwise), the smallest squared distance
+/// within `BLEND_TOL²` wins; with none, the pixel keeps its label. Neighbour labels are
+/// read from a copy taken before the pass, so the order pixels are visited in does not
+/// matter. `px` and `inks` are sRGB 0..1 plus opacity; `labels` must index into `inks`.
 pub(crate) fn absorb_slivers(
     labels: &mut [u16],
     px: &[[f32; 4]],
@@ -240,6 +284,8 @@ pub(crate) fn absorb_slivers(
 }
 
 /// Which components have an interior pixel: one whose four neighbours are all in it.
+/// A pixel on the image border never counts as interior, so a strip along the edge of the
+/// image is still a strip.
 fn interiors(c: &Components, w: usize, h: usize) -> Vec<bool> {
     let mut interior = vec![false; c.size.len()];
     for p in 0..w * h {
@@ -268,6 +314,13 @@ fn interiors(c: &Components, w: usize, h: usize) -> Vec<bool> {
 /// paper, both strips, stayed a face of its own and cut every glyph's outline into pieces
 /// at the junctions it made. A hairline still stays: its ink is no blend of what lies either
 /// side of it.
+///
+/// Unlike [`absorb_slivers`], the test is made once per strip on its *ink*: of all pairs
+/// of labels bordering the strip, the pair `(a, b)` whose line the strip's ink lies nearest
+/// ([`blend_of`] distance within `BLEND_TOL²`; ties broken by the smaller pair) is the rim's
+/// two sides. Each pixel of the strip then goes to `b` when its own colour's projection on
+/// that line has `t >= 0.5`, and to `a` otherwise (also when `a` and `b` are one colour).
+/// A strip bordering fewer than two inks, or labelled outside the palette, is left alone.
 pub(crate) fn absorb_rims(
     labels: &mut [u16],
     px: &[[f32; 4]],
@@ -350,6 +403,13 @@ pub(crate) fn absorb_rims(
 /// ink is within the threshold of its own, so no pixel's colour moves further than that
 /// however the joins chain -- a ramp of close bands is thinned, not flattened, and the
 /// ramp pass after this still sees its bands.
+///
+/// Two inks are "the same" when their opacities differ by less than [`SAME_ALPHA`] and
+/// their CIEDE2000 difference (on sRGB, ignoring opacity) is below `SAME_INK_DE00`.
+/// Components are ranked by size (larger first, lower id on a tie); a component may only
+/// take the settled ink of a higher-ranked neighbour, choosing the longest shared border in
+/// pixel edges (the higher rank on a tie). Returns early, unchanged, when no two inks are
+/// the same or no such pair of components touches.
 pub(crate) fn merge_same_inks(labels: &mut [u16], inks: &[[f32; 4]], w: usize, h: usize) {
     let n_inks = inks.len();
     let same: Vec<bool> = (0..n_inks * n_inks)
@@ -426,7 +486,8 @@ const SAME_ALPHA: f32 = 0.02;
 
 /// Faces: the components of `labels`, as a face id per pixel and each face's label. Past
 /// `u16::MAX - 1` faces the rest are folded into face 0, as `regions::split_components`
-/// does.
+/// does. Face ids are component ids ([`components`]), so they follow scan order; the
+/// second output is indexed by face id and holds the ink index of that face.
 pub(crate) fn faces(labels: &[u16], w: usize, h: usize) -> (Vec<u16>, Vec<usize>) {
     let c = components(labels, w, h);
     let cap = (u16::MAX - 1) as usize;

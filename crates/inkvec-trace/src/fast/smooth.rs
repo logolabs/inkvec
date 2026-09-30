@@ -13,6 +13,11 @@
 //! vertex is a corner when that curve misses the points by more than `corner_tol` and the
 //! two sides through the vertex miss them by much less -- Potrace's `alphamax` test, stated
 //! as a distance -- and the piece then becomes two lines.
+//!
+//! Stages 5 (the [`denoise`] pre-pass) and 5b of the Fast fit, run by
+//! [`super::fit_points`]: `denoise` → `polygon` → [`adjust_vertices`] → [`pieces`] →
+//! `curve::optimise`. In: one boundary's sub-pixel points and polygon vertex indices, in
+//! px. Out: a chain of cubic [`Piece`]s, each flagged smooth or corner at its start.
 
 use inkvec_core::{Point, Vec2};
 
@@ -28,6 +33,8 @@ pub(crate) struct Piece {
 }
 
 impl Piece {
+    /// The straight piece from `a` to `b` as a degenerate cubic, controls at thirds, so
+    /// that it parametrises the segment uniformly like a line would.
     fn line(a: Point, b: Point, smooth_in: bool) -> Self {
         Self {
             p: [a, lerp(a, b, 1.0 / 3.0), lerp(a, b, 2.0 / 3.0), b],
@@ -36,6 +43,7 @@ impl Piece {
     }
 }
 
+/// The point `a + t (b − a)`.
 pub(crate) fn lerp(a: Point, b: Point, t: f64) -> Point {
     Point::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
 }
@@ -47,6 +55,10 @@ pub(crate) fn lerp(a: Point, b: Point, t: f64) -> Point {
 /// point where the boundary turns sharply over two steps each way is a corner, not a stair,
 /// and is kept: averaging it would round a small square's corners before the polygon sees
 /// them.
+///
+/// `p'_k = ¼ p_{k−1} + ½ p_k + ¼ p_{k+1}` (a binomial low-pass filter), except where
+/// `cos∠(p_k − p_{k−2}, p_{k+2} − p_k) < CORNER_COS`. All reads are from the input, so the
+/// filter is applied once, not cascaded. Fewer than four points are returned unchanged.
 pub(crate) fn denoise(pts: &[Point], closed: bool) -> Vec<Point> {
     let n = pts.len();
     if n < 4 {
@@ -94,6 +106,13 @@ pub(crate) fn denoise(pts: &[Point], closed: bool) -> Vec<Point> {
 
 /// The least-squares line through `pts` as a quadratic form in (x, y, 1): the squared
 /// distance from a point to the line is `[x y 1] Q [x y 1]^T`.
+///
+/// Total least squares (orthogonal regression): the line passes through the centroid
+/// `(c_x, c_y)` along the principal axis of the scatter matrix, at angle
+/// `θ = ½ atan2(2 S_xy, S_xx − S_yy)`. Its unit normal is `(a, b) = (−sin θ, cos θ)` and
+/// `c = −(a c_x + b c_y)`, so `Q = v vᵀ` with `v = (a, b, c)` and the form evaluates to
+/// `(a x + b y + c)²`. An empty slice gives the line through the origin along x, and a
+/// single point any line through it; the ridge in [`constrained_min`] keeps either usable.
 fn line_form(pts: &[Point]) -> [[f64; 3]; 3] {
     let n = pts.len().max(1) as f64;
     let (mut cx, mut cy) = (0.0, 0.0);
@@ -124,6 +143,7 @@ fn line_form(pts: &[Point]) -> [[f64; 3]; 3] {
     q
 }
 
+/// `[x y 1] Q [x y 1]ᵀ`.
 fn quad_eval(q: &[[f64; 3]; 3], x: f64, y: f64) -> f64 {
     let v = [x, y, 1.0];
     let mut s = 0.0;
@@ -136,6 +156,14 @@ fn quad_eval(q: &[[f64; 3]; 3], x: f64, y: f64) -> f64 {
 }
 
 /// The minimum of the quadratic form over the box `c +- h`, Potrace's constrained vertex.
+///
+/// Minimises `E(x, y) = [x y 1] Q [x y 1]ᵀ + ρ |(x, y) − c|²` with the ridge `ρ = 1e-3`.
+/// The unconstrained minimum solves the 2 × 2 system
+/// `[[Q00+ρ, Q01], [Q01, Q11+ρ]] (x, y)ᵀ = −(Q02 − ρ c_x, Q12 − ρ c_y)ᵀ` by Cramer's rule;
+/// if it lies inside the box it is the answer. Otherwise the minimum is on the box's
+/// boundary: on each of the four edges one coordinate is fixed and the other is the 1-D
+/// quadratic's minimiser clamped to the edge, and the best of those four and `c` itself
+/// wins. `h` is in px.
 fn constrained_min(q: &[[f64; 3]; 3], c: Point, h: f64) -> Point {
     // A small pull toward the polygon's own vertex keeps parallel sides well posed.
     const RIDGE: f64 = 1e-3;
@@ -180,6 +208,13 @@ fn constrained_min(q: &[[f64; 3]; 3], c: Point, h: f64) -> Point {
 
 /// Vertex positions for polygon `vtx` (indices into `pts`). The ends of an open run stay
 /// exactly where they are: they are junctions, shared with other boundaries.
+///
+/// Each side gets the total-least-squares line through the points it spans, both end
+/// vertices included ([`line_form`]; a side that wraps past the end of a closed ring takes
+/// the points across the wrap). Each interior vertex then moves to the point minimising the
+/// sum of its two sides' squared distances, within the box of half-width `h` px around the
+/// polygon's point ([`constrained_min`]) -- where the two lines cross when that is near,
+/// as in Potrace. Fewer than two vertices are returned at their points.
 pub(crate) fn adjust_vertices(pts: &[Point], vtx: &[usize], closed: bool, h: f64) -> Vec<Point> {
     let m = vtx.len();
     let n = pts.len();
@@ -244,6 +279,7 @@ const CORNER_COS: f64 = 0.64;
 /// Largest distance, in pixels, a join is moved off its side's line towards the data.
 const JOIN_MAX: f64 = 0.5;
 
+/// `v / |v|`, or the x axis for a zero vector so a degenerate side still has a direction.
 fn unit(v: Vec2) -> Vec2 {
     let n = v.norm();
     if n > 1e-12 {
@@ -256,7 +292,9 @@ fn unit(v: Vec2) -> Vec2 {
     }
 }
 
-/// Largest distance from `pts` to the polyline `a`-`b`-`c`.
+/// Largest distance from `pts` to the polyline `a`-`b`-`c`: for each point the nearer of
+/// its distances to the two segments (projection clamped to the segment), then the
+/// maximum over points, in px. 0 for no points.
 fn corner_error(a: Point, b: Point, c: Point, pts: &[Point]) -> f64 {
     let seg = |p: Point, s: Point, e: Point| {
         let d = e - s;
@@ -280,6 +318,17 @@ fn corner_error(a: Point, b: Point, c: Point, pts: &[Point]) -> f64 {
 /// line, and moves along the side's normal to the data there: on a curve the line runs a
 /// third of a sagitta inside the points at mid-side, and a curve drawn through the
 /// unmoved midpoints would shrink every round shape by that much.
+///
+/// The join's offset is the mean of the three points around the side's middle index,
+/// projected on the side's normal and clamped to ±[`JOIN_MAX`] px. At each vertex the
+/// cubic from one join to the next, tangent to both sides, has its two arm lengths fitted
+/// to the points between the joins (`curve::fit`), then capped so neither control point
+/// passes the vertex. With `e_s` that cubic's largest distance to those points and `e_c`
+/// the polyline's through the vertex ([`corner_error`]), the vertex is a corner -- two
+/// line pieces meeting at `v[i]` -- when `e_s > corner_tol` and `e_s > 2 e_c`, or when the
+/// fit fails. With no points between the joins, the controls sit two thirds of the way to
+/// the vertex, Potrace's own curve. An open run starts and ends with a line from its end
+/// vertex to the first and last join, and a two-vertex open run is one line.
 pub(crate) fn pieces(
     pts: &[Point],
     vtx: &[usize],

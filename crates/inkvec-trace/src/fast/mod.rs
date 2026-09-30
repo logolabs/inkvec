@@ -24,6 +24,29 @@
 //! Each stage is linear or near-linear in the number of pixels or boundary points, and
 //! nothing reads a clock, so the output is the same on every machine. Written from the
 //! paper; no Potrace or Trazor source was read or used.
+//!
+//! # The pipeline, in order
+//!
+//! Entered through `trace_color` / `trace_color_native` (from
+//! `crate::trace_color_full_with_alpha` when `ColorOptions::fast` is set); the fit is
+//! driven by `inkvec-cli`'s `fast::fit`, which calls [`fit_edges`].
+//!
+//! 1. **Palette and labels** -- `palette::palette_and_labels`: inks from flat bins, then
+//!    one ink per pixel, blends sent to the ink they are made of.
+//! 2. **Label clean-up** -- `faces::absorb_slivers`, `faces::absorb_rims`,
+//!    `faces::merge_same_inks`, then `faces::despeckle` with the floor from
+//!    `front::speckle_floor`, then `faces::faces` (one face per connected component).
+//! 3. **Ramps** -- `bands::merge_ramps` (opaque images with gradients on).
+//! 4. **Planar map and sub-pixel refinement** -- shared with quality mode, in
+//!    `crate::finish_color_trace_alpha`.
+//! 5. **Fit**, per edge of the map ([`fit_edges`] → [`fit_edge`]):
+//!    a closed edge that is a circle or ellipse becomes one (`prims::primitive`); every
+//!    other edge goes through [`fit_points`]: `smooth::denoise` → `polygon::open` /
+//!    `polygon::closed` → `smooth::adjust_vertices` → `smooth::pieces` →
+//!    `curve::optimise` → `curve::to_segments`.
+//!
+//! Everything after the fit -- fills, seams, the emitter, minify -- is shared with quality
+//! mode.
 
 mod bands;
 mod curve;
@@ -73,6 +96,14 @@ impl Default for FastFit {
 
 /// Fit one measured boundary. The ends of an open boundary are kept exactly: they are
 /// junctions every boundary meeting there shares.
+///
+/// `pts` are sub-pixel boundary points in px; `closed` says whether the last point joins
+/// the first. The stages are the Potrace pipeline of this module's overview:
+/// `smooth::denoise`, the optimal polygon, vertex adjustment, smoothing into pieces, and
+/// curve-run optimisation, then conversion to path segments. Boundaries too short for a
+/// polygon (fewer than 3 points, or 4 for a ring) and any stage that leaves nothing are
+/// drawn as straight lines through the (denoised, where it ran) points; an empty input is
+/// an empty path at the origin.
 pub fn fit_points(pts: &[Point], closed: bool, cfg: &FastFit) -> FittedPath {
     let n = pts.len();
     let lines = |pts: &[Point]| FittedPath {
@@ -140,7 +171,9 @@ const GRADIENT_LOOSEN: f64 = 1.6;
 const MAX_LOOSEN: f64 = 3.0;
 
 impl FastFit {
-    /// These tolerances, loosened for a boundary of OKLab `contrast`.
+    /// These tolerances, loosened for a boundary of OKLab `contrast`: every distance
+    /// tolerance except `flat` is multiplied by `k = clamp(FAINT / contrast, 1, MAX_LOOSEN)`.
+    /// A zero or negative contrast is treated as 1e-6, which gives the largest `k`.
     fn for_contrast(&self, contrast: f64) -> FastFit {
         let k = (FAINT / contrast.max(1e-6)).clamp(1.0, MAX_LOOSEN);
         FastFit {
@@ -179,6 +212,11 @@ pub fn fit_edge(pts: &[Point], closed: bool, cfg: &FastFit) -> (FittedPath, Opti
 /// Fit every edge of a planar map, in parallel. Each shared edge is fitted once and both
 /// of its faces draw the same curve. `fills` is each face's fill; an edge between two faces
 /// of similar colour, or along a gradient, is fitted with looser tolerances.
+///
+/// An edge's contrast is the OKLab distance between its two faces' representative
+/// colours, 1 when either face is outside `fills` (the image border), and at most
+/// `FAINT / GRADIENT_LOOSEN` when either face is a gradient. The output is in edge order,
+/// whatever the thread count.
 pub fn fit_edges(
     edges: &[Edge],
     fills: &[crate::gradient::FillFit],

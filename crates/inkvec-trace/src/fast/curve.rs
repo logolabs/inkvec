@@ -6,6 +6,12 @@
 //! tangents, and its two arm lengths are the least-squares fit to points sampled along the
 //! pieces. It is accepted when every sample lies within `tol` of it. A dynamic program then
 //! takes the fewest cubics over the whole run, as Potrace's `opticurve` does.
+//!
+//! Stage 5c, the last of the Fast fit, run by [`super::fit_points`] after
+//! [`super::smooth::pieces`]. In: a boundary's pieces, in px. Out: its cubics
+//! ([`optimise`]) and then its path segments, with near-straight cubics written as lines
+//! ([`to_segments`]). The tangent-constrained cubic fit [`fit`] is also what
+//! `smooth::pieces` uses to place each vertex's curve.
 
 use super::smooth::{lerp, Piece};
 use inkvec_core::{Point, Vec2};
@@ -17,6 +23,7 @@ const MAX_TURN: f64 = 3.10;
 /// cap bounds the program on a long wavy boundary.
 const MAX_RUN: usize = 24;
 
+/// The cubic Bézier `B(t) = (1−t)³ P0 + 3(1−t)² t P1 + 3(1−t) t² P2 + t³ P3` at `t`.
 fn eval(p: &[Point; 4], t: f64) -> Point {
     let s = 1.0 - t;
     let w = [s * s * s, 3.0 * s * s * t, 3.0 * s * t * t, t * t * t];
@@ -26,6 +33,7 @@ fn eval(p: &[Point; 4], t: f64) -> Point {
     )
 }
 
+/// Its derivative `B'(t) = 3(1−t)² (P1−P0) + 6(1−t) t (P2−P1) + 3 t² (P3−P2)`.
 fn deriv(p: &[Point; 4], t: f64) -> Vec2 {
     let s = 1.0 - t;
     let (a, b, c) = (p[1] - p[0], p[2] - p[1], p[3] - p[2]);
@@ -36,6 +44,7 @@ fn deriv(p: &[Point; 4], t: f64) -> Vec2 {
     }
 }
 
+/// `v / |v|`, or `None` for a vector shorter than 1e-9.
 fn unit(v: Vec2) -> Option<Vec2> {
     let n = v.norm();
     (n > 1e-9).then(|| Vec2 {
@@ -44,7 +53,9 @@ fn unit(v: Vec2) -> Option<Vec2> {
     })
 }
 
-/// Tangent direction leaving the start of a piece, and arriving at its end.
+/// Tangent direction leaving the start of a piece, and arriving at its end, as unit
+/// vectors. A control point that coincides with its end point falls back to the next
+/// control point, then the far end; `None` only for a piece of zero length.
 fn end_tangents(p: &[Point; 4]) -> Option<(Vec2, Vec2)> {
     let t0 = unit(p[1] - p[0])
         .or_else(|| unit(p[2] - p[0]))
@@ -55,7 +66,9 @@ fn end_tangents(p: &[Point; 4]) -> Option<(Vec2, Vec2)> {
     Some((t0, t1))
 }
 
-/// Signed turn of a piece from its start tangent to its end tangent.
+/// Signed turn of a piece from its start tangent `a` to its end tangent `b`, in radians:
+/// `atan2(a × b, a · b)`, in (−π, π], positive towards increasing angle in image
+/// coordinates. 0 for a zero-length piece.
 fn turn(p: &[Point; 4]) -> f64 {
     match end_tangents(p) {
         Some((a, b)) => a.cross(b).atan2(a.dot(b)),
@@ -63,8 +76,23 @@ fn turn(p: &[Point; 4]) -> f64 {
     }
 }
 
-/// The cubic from `p0` leaving along `t0` to `p3` arriving along `t3` that best fits
-/// `samples` (with their chord-length parameters), and its worst sample distance.
+/// The cubic from `p0` leaving along `t0` to `p3` that best fits `samples` (with their
+/// chord-length parameters), and its worst sample distance. `t3` is the unit direction
+/// from `p3` *back* towards its control point -- the reverse of the arrival tangent --
+/// so both arms are `P1 = p0 + l0 t0`, `P2 = p3 + l3 t3` with positive lengths.
+///
+/// Schneider's Bézier fit with fixed end tangents. With `u_k` the parameter of sample
+/// `s_k` and `b_i(u)` the Bernstein weights, the residual is linear in the two arm lengths:
+///
+/// `s_k − [(b0+b1) p0 + (b2+b3) p3] = l0 b1 t0 + l3 b2 t3 + e_k`
+///
+/// and `Σ |e_k|²` is minimised through the 2 × 2 normal equations, solved by Cramer's rule.
+/// Parameters start as normalised chord length (the polyline `p0, s_1, …, s_m, p3`) and
+/// are improved by one Newton step on `(B(u) − s) · B'(u) = 0` after each of three
+/// solves. Returns `None` when the samples span no length, the system is singular, or an
+/// arm comes out non-positive (the tangents cannot be honoured), so the caller falls back
+/// to a corner or keeps the pieces. The error is the largest distance `|s_k − B(u_k)|` in
+/// px.
 pub(super) fn fit(
     p0: Point,
     t0: Vec2,
@@ -145,7 +173,9 @@ pub(super) fn fit(
 }
 
 /// Largest distance from `samples` to `curve`, each sample placed by its chord-length
-/// parameter and two Newton steps.
+/// parameter and two Newton steps. An approximation of the true point-to-curve distance
+/// from above (a sample's nearest point could lie at another parameter), in px; 0 when the
+/// samples and the curve's ends span no length.
 pub(super) fn max_error(curve: &[Point; 4], samples: &[Point]) -> f64 {
     let mut acc = 0.0;
     let mut last = curve[0];
@@ -177,7 +207,8 @@ pub(super) fn max_error(curve: &[Point; 4], samples: &[Point]) -> f64 {
     worst
 }
 
-/// Points sampled along pieces `run`, excluding the run's own two ends.
+/// Points sampled along pieces `run`, excluding the run's own two ends: each piece at
+/// `t = ¼, ½, ¾`, and every join between two pieces, in order along the run.
 fn samples(run: &[Piece]) -> Vec<Point> {
     let mut out = Vec::with_capacity(run.len() * 4);
     for (k, pc) in run.iter().enumerate() {
@@ -192,6 +223,10 @@ fn samples(run: &[Piece]) -> Vec<Point> {
 }
 
 /// One cubic for the whole of `run`, when it turns one way, less than `MAX_TURN`, and fits.
+///
+/// The turn conditions are checked by the caller ([`optimise_run`]); this keeps the run's
+/// end points and end tangents, fits the arm lengths to [`samples`] of the pieces
+/// ([`fit`]) and accepts the cubic when no sample is more than `tol` px from it.
 fn merge(run: &[Piece], tol: f64) -> Option<[Point; 4]> {
     let (t0, _) = end_tangents(&run[0].p)?;
     let (_, t3) = end_tangents(&run[run.len() - 1].p)?;
@@ -203,6 +238,13 @@ fn merge(run: &[Piece], tol: f64) -> Option<[Point; 4]> {
 }
 
 /// Fewest cubics for one run of smooth pieces.
+///
+/// Dynamic programming over piece boundaries: `best[j+1]` is the fewest cubics that draw
+/// pieces `0..=j`, `best[j+1] = min_i best[i] + 1` over every `i` for which pieces `i..=j`
+/// all turn the same way (pieces turning less than 1e-6 rad count as either), turn at most
+/// `MAX_TURN` in total, number at most `MAX_RUN`, and [`merge`] into one cubic within `tol`.
+/// A single piece is always its own cubic, so every prefix is reachable. On a tie the
+/// smallest `i` is kept. The chosen cubics are read back from the last piece.
 fn optimise_run(run: &[Piece], tol: f64) -> Vec<[Point; 4]> {
     let n = run.len();
     let turns: Vec<f64> = run.iter().map(|p| turn(&p.p)).collect();
@@ -256,6 +298,10 @@ fn optimise_run(run: &[Piece], tol: f64) -> Vec<[Point; 4]> {
 
 /// Merge the pieces of one boundary. A closed boundary is rotated to start at a corner when
 /// it has one, so no run is cut in two by where the ring happens to start.
+///
+/// Runs are maximal stretches of pieces joined smoothly (`smooth_in`); each is optimised
+/// on its own by [`optimise_run`], so a corner is never smoothed over. A ring with no
+/// corner is one run starting at piece 0.
 pub(crate) fn optimise(pieces: &[Piece], closed: bool, tol: f64) -> Vec<[Point; 4]> {
     let n = pieces.len();
     if n == 0 {
@@ -281,6 +327,9 @@ pub(crate) fn optimise(pieces: &[Piece], closed: bool, tol: f64) -> Vec<[Point; 
 }
 
 /// Distance from `p` to the segment `a`-`b`, and where along it `p` projects (0 to 1).
+/// The distance uses the projection clamped to the segment; the returned parameter is
+/// unclamped, so callers can tell a point beyond an end. A degenerate segment gives the
+/// distance to `a` and parameter 0.
 fn to_chord(p: Point, a: Point, b: Point) -> (f64, f64) {
     let d = b - a;
     let l2 = d.dot(d);
@@ -294,6 +343,12 @@ fn to_chord(p: Point, a: Point, b: Point) -> (f64, f64) {
 
 /// The cubics as path segments: a cubic whose control points lie on its chord is a line,
 /// and consecutive lines along one direction are one line.
+///
+/// A cubic is straight when both control points lie within `flat` px of the chord and
+/// project inside it (parameter within −0.01..1.01, so a control point beyond an end --
+/// a hook -- keeps the cubic). A line is merged into the line before it when their shared
+/// point lies within `flat` px of the merged chord and strictly inside it. The segments
+/// continue from `curves[0][0]`, which the caller writes as the path's start.
 pub(crate) fn to_segments(curves: &[[Point; 4]], flat: f64) -> Vec<Segment> {
     let mut out: Vec<(Point, Segment)> = Vec::with_capacity(curves.len());
     for c in curves {

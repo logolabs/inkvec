@@ -45,6 +45,9 @@ fn speckle_floor(min_region: usize, w: usize, h: usize) -> usize {
     min_region.max(scaled.round() as usize)
 }
 
+/// A face's fill before the ramp pass: ink `ink`'s sRGB colour as a flat fill, with no
+/// fit cost (fast mode never compares fill models by cost). An index outside the palette
+/// gives black rather than panicking.
 fn flat_fill(pal: &Palette, ink: usize) -> gradient::FillFit {
     gradient::FillFit {
         model: gradient::FillModel::Flat(pal.rgb.get(ink).copied().unwrap_or([0.0; 3])),
@@ -56,6 +59,16 @@ fn flat_fill(pal: &Palette, ink: usize) -> gradient::FillFit {
 
 /// The front end. `native` is the source alpha when transparency is traced natively;
 /// `cutout` the source alpha when the image was matted and `--cutout` splits inks by it.
+///
+/// Every stage reads the image composited over white (sRGB 0..1); in native mode the
+/// source opacity rides along as a fourth channel. The stages, each timed by the
+/// stopwatch under its progress name: `palette` ([`super::palette::palette_and_labels`],
+/// then `color::split_alpha_inks` for `--cutout`), `slivers` ([`super::faces::absorb_slivers`],
+/// [`super::faces::absorb_rims`], [`super::faces::merge_same_inks`]), `despeckle`, `split`
+/// ([`super::faces::faces`]), and `ramps` ([`super::bands::merge_ramps`], opaque images with
+/// gradients on only). The faces, their fills and inks then go to
+/// [`crate::finish_color_trace_alpha`], which builds the planar map and refines it; the
+/// caller (`inkvec-cli`'s `fast::fit`) then fits the map's edges with [`super::fit_edges`].
 fn trace(
     img: &Rgba,
     opts: &ColorOptions,

@@ -165,6 +165,55 @@ fn min_ms(reps: usize, mut f: impl FnMut()) -> f64 {
         .fold(f64::INFINITY, f64::min)
 }
 
+/// The polygon of every dumped edge of at least `INKVEC_FFD_MIN` points (default 2048),
+/// each timed alone, smallest of `INKVEC_FFD_REPS` (default 30) runs, against the kept
+/// reference timed the same way: on a shared machine the minimum over many runs is what
+/// catches the cores idle, which a parallel scan needs. Prints the sums, in ms.
+#[test]
+#[ignore = "needs INKVEC_FFD_DIR"]
+fn replay_long_edges() {
+    use std::hint::black_box;
+    let Some(files) = dump_files() else {
+        eprintln!("INKVEC_FFD_DIR not set; nothing replayed");
+        return;
+    };
+    let env = |k: &str, d: usize| {
+        std::env::var(k)
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(d)
+    };
+    let (min_n, reps) = (env("INKVEC_FFD_MIN", 2048), env("INKVEC_FFD_REPS", 30));
+    let (mut edges, mut new, mut old) = (0usize, 0.0, 0.0);
+    for f in &files {
+        for e in load(f) {
+            let Some(pts) = polygon_input(&e) else {
+                continue;
+            };
+            if pts.len() < min_n {
+                continue;
+            }
+            let tol = tolerances(&e)[0];
+            edges += 1;
+            new += min_ms(reps, || {
+                if e.closed {
+                    drop(black_box(polygon::closed(black_box(&pts), tol)));
+                } else {
+                    drop(black_box(polygon::open(black_box(&pts), tol)));
+                }
+            });
+            old += min_ms(reps, || {
+                if e.closed {
+                    drop(black_box(polygon::tests::closed_ref(black_box(&pts), tol)));
+                } else {
+                    drop(black_box(polygon::tests::open_ref(black_box(&pts), tol)));
+                }
+            });
+        }
+    }
+    eprintln!("{edges} edges of {min_n}+ points: polygon {new:.2} ms, reference {old:.2} ms");
+}
+
 /// True for the image-frame ring of a dump: a closed edge whose bounding box is the
 /// bounding box of every edge of the map, with its corner at the image's (-0.5, -0.5).
 fn frame_flags(edges: &[DumpEdge]) -> Vec<bool> {

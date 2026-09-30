@@ -355,73 +355,26 @@ pub(crate) fn open(pts: &[Point], tol: f64) -> Vec<usize> {
         prev: vec![usize::MAX; n],
     };
     t.best[0] = (0, 0.0);
+    // A long boundary scans every anchor first, in parallel, and relaxes afterwards; see
+    // [`admitted_sides`]. A short one scans and relaxes anchor by anchor.
+    let admitted = (n >= PARALLEL_MIN).then(|| admitted_sides(pts, &runs, tol, may_run));
     for i in 0..n - 1 {
         let (sides, pen) = t.best[i];
         // Unreached, or fathomed: nothing through `i` can beat what reaches the end.
         if sides == u32::MAX || sides >= t.best[n - 1].0 {
             continue;
         }
-        let count = sides + 1;
-        let a = pts[i];
-        let end = n.min(i + MAX_SPAN + 1);
-        // The last point of the anchor's lattice run the closed form may take, or `i`
-        // for none: `p_{i+1} ..= p_{run_last}` are one step `s` apart, starting at `a`.
-        let s = pts[i + 1] - a;
-        let run_last = if may_run && s.dot(s) <= RUN_MAX_STEP * RUN_MAX_STEP {
-            (i + runs[i] as usize).min(end - 1)
-        } else {
-            i
+        let mut relax = Relax {
+            t: &mut t,
+            sums: &sums,
+            pts,
+            i,
+            count: sides + 1,
+            pen,
         };
-        let mut cone = Cone::full();
-        let mut reach = 0.0f64;
-        // Distance of the point before `j` from the anchor (0 for the anchor itself).
-        let mut last_r = 0.0f64;
-        let mut j = i + 1;
-        while j < end {
-            if j < run_last && cone.open && last_r > 2.0 * tol {
-                // The rest of the lattice run, in closed form (see the proof above):
-                // every point is admitted, and the cone and reach are the last point's.
-                for k in j..=run_last {
-                    t.offer(&sums, i, k, count, pen, a, pts[k]);
-                }
-                let v = pts[run_last] - a;
-                let r = v.norm();
-                reach = reach.max(r);
-                // Always alive here (the cone spans at most 60°); the test keeps the scan
-                // correct even if it were not.
-                if !cone.narrow(v, r, tol) {
-                    break;
-                }
-                last_r = r;
-                j = run_last + 1;
-                continue;
-            }
-            let v = pts[j] - a;
-            let r = v.norm();
-            // The run must move away from its anchor: a point that falls back by more than
-            // the tolerance is doubling back, and no chord from `a` describes it.
-            if r + tol < reach {
-                break;
-            }
-            let d = if r > 1e-12 {
-                Vec2 {
-                    x: v.x / r,
-                    y: v.y / r,
-                }
-            } else {
-                Vec2 { x: 1.0, y: 0.0 }
-            };
-            // A count that loses at `j` loses whatever its penalty: fathomed unpriced
-            // (checked before the cone, which costs more).
-            if r > 1e-12 && count <= t.best[j].0 && cone.admits(d) {
-                t.offer(&sums, i, j, count, pen, a, pts[j]);
-            }
-            reach = reach.max(r);
-            if r > tol && !cone.narrow(v, r, tol) {
-                break;
-            }
-            last_r = r;
-            j += 1;
+        match &admitted {
+            Some(sets) => sets[i].for_each(i, |j| relax.admit(j)),
+            None => scan_anchor(pts, &runs, i, tol, may_run, &mut relax),
         }
     }
     let prev = t.prev;
@@ -437,6 +390,233 @@ pub(crate) fn open(pts: &[Point], tol: f64) -> Vec<usize> {
     }
     out.reverse();
     out
+}
+
+/// What the scan of one anchor ([`scan_anchor`]) does with the sides it finds.
+trait Sides {
+    /// False when side `i → j` could change nothing even if admissible, so the scan may
+    /// skip its admission test (it still narrows the cone by `p_j`).
+    fn wants(&self, j: usize) -> bool;
+    /// Side `i → j` is admissible. Called in increasing `j`.
+    fn admit(&mut self, j: usize);
+}
+
+/// The sequential scan's sink: every admissible side is offered to the table at once,
+/// with the anchor's count and penalty ([`Table::offer`]).
+struct Relax<'a> {
+    t: &'a mut Table,
+    sums: &'a Sums,
+    pts: &'a [Point],
+    /// The anchor.
+    i: usize,
+    /// `best[i].sides + 1`: the side count of every path through this anchor's sides.
+    count: u32,
+    /// `best[i].penalty`.
+    pen: f64,
+}
+
+impl Sides for Relax<'_> {
+    /// A side whose count already loses at `j` loses whatever its penalty (branch and
+    /// bound; see [`open`]).
+    #[inline(always)]
+    fn wants(&self, j: usize) -> bool {
+        self.count <= self.t.best[j].0
+    }
+
+    /// Offer the side to the table ([`Table::offer`]).
+    #[inline(always)]
+    fn admit(&mut self, j: usize) {
+        let (i, a) = (self.i, self.pts[self.i]);
+        self.t
+            .offer(self.sums, i, j, self.count, self.pen, a, self.pts[j]);
+    }
+}
+
+/// The admissible sides of one anchor `i`, as a set of offsets: bit `b = j − i − 1` of
+/// word `b / 64` is set when side `i → j` is admissible. Three words hold the
+/// [`MAX_SPAN`] = 160 offsets a scan can reach.
+#[derive(Clone, Copy, Default)]
+struct SideSet([u64; 3]);
+
+const _: () = assert!(MAX_SPAN <= 3 * 64, "a SideSet holds MAX_SPAN offsets");
+
+impl SideSet {
+    /// Call `f(j)` for every side `i → j` in the set, in increasing `j`: word by word,
+    /// lowest set bit first (`trailing_zeros`, then `w & (w − 1)` clears that bit).
+    /// O(words + sides).
+    #[inline(always)]
+    fn for_each(&self, i: usize, mut f: impl FnMut(usize)) {
+        for (k, &word) in self.0.iter().enumerate() {
+            let mut w = word;
+            while w != 0 {
+                f(i + 1 + 64 * k + w.trailing_zeros() as usize);
+                w &= w - 1;
+            }
+        }
+    }
+}
+
+/// The parallel scan's sink: every admissible side of anchor `i` goes into a [`SideSet`].
+struct Collect {
+    i: usize,
+    set: SideSet,
+}
+
+impl Sides for Collect {
+    /// The table is not known while scanning in parallel, so every side is wanted.
+    #[inline(always)]
+    fn wants(&self, _j: usize) -> bool {
+        true
+    }
+
+    /// Set the side's bit (`b / 64` and `b % 64` of a constant power of two are a shift
+    /// and a mask).
+    #[inline(always)]
+    fn admit(&mut self, j: usize) {
+        let b = j - self.i - 1;
+        self.set.0[b / 64] |= 1 << (b % 64);
+    }
+}
+
+/// Boundaries with at least this many points scan their anchors in parallel
+/// ([`admitted_sides`]). Below it a boundary's scan takes a few milliseconds at most. A
+/// boundary this long is rare -- in the phase-1 replay, none of the 6,645 edges of the
+/// screen set, and 34 of the 564 edges of the 2048 px set, where those took 68% of the
+/// fit's time and set its wall time.
+const PARALLEL_MIN: usize = 2048;
+
+/// Anchors per parallel task: enough that a task outweighs its scheduling.
+const PARALLEL_CHUNK: usize = 128;
+
+/// Every anchor's admissible sides, scanned in parallel: entry `i` is anchor `i`'s
+/// [`SideSet`], for `i` in `0..n−1`.
+///
+/// Which sides an anchor admits depends only on the points and the tolerance -- the
+/// cone, the reach and the span cap -- and never on the dynamic program's table, which
+/// only decides what an admitted side is worth. So the scans are independent and can run
+/// on every core, while the relaxation that reads and writes the table stays sequential
+/// in anchor order ([`open`]) and offers the same sides in the same order. The sequential
+/// scan skips the cone test for sides its table does not want ([`Sides::wants`]), and
+/// offering such a side is a no-op ([`Table::offer`] returns before pricing it), so the
+/// table, and the polygon, come out bit for bit the same whatever the thread count. The
+/// price is that anchors the table would have fathomed are scanned too, and 24 bytes per
+/// point.
+///
+/// Measured on the 16 edges of 2048 points or more in the phase-1 replay's 2048 px set
+/// (a shared machine; smallest of 25 runs): the scan takes 52 ms on one thread and 11 ms
+/// on all of them, and the relaxation, which prices the 5.8 M live sides of the 12 M
+/// admitted, stays at 40 ms; the polygon of those edges goes from 91 ms to 53–58 ms.
+/// Pricing every admitted side in the parallel pass instead would take the relaxation
+/// off the critical path, but needs 8 bytes per admitted side (96 MB here) and twice the
+/// pricing work, so it is not done.
+///
+/// Inspired by: Brent, R. P. (1974), "The parallel evaluation of general arithmetic
+/// expressions", *J. ACM* 21:201–206, doi:10.1145/321812.321815 -- split the work into
+/// the part with no dependencies, done in parallel, and the short dependent chain, done
+/// in order. Scheduled by rayon's work stealing (Blumofe, R. D. & Leiserson, C. E.
+/// (1999), "Scheduling multithreaded computations by work stealing", *J. ACM*
+/// 46:720–748, doi:10.1145/324133.324234), which also lets the cores the per-edge loop in
+/// `super::fit_edges` leaves idle join in. O(n · MAX_SPAN) work, as the sequential scan.
+fn admitted_sides(pts: &[Point], runs: &[u32], tol: f64, may_run: bool) -> Vec<SideSet> {
+    use rayon::prelude::*;
+    (0..pts.len() - 1)
+        .into_par_iter()
+        .with_min_len(PARALLEL_CHUNK)
+        .map(|i| {
+            let mut c = Collect {
+                i,
+                set: SideSet::default(),
+            };
+            scan_anchor(pts, runs, i, tol, may_run, &mut c);
+            c.set
+        })
+        .collect()
+}
+
+/// Scan anchor `i` (`i < n − 1`): hand every admissible side `i → j` to `sink`, in
+/// increasing `j`.
+///
+/// `j` runs from `i + 1` while `j − i <= MAX_SPAN`, stopping when `p_j` falls back
+/// towards `p_i` by more than `tol` (`|p_j − p_i| + tol < max_{k<j} |p_k − p_i|`: the
+/// boundary doubles back, and no chord from `p_i` describes it) or when the cone of
+/// directions within `tol` of every point seen empties ([`Cone::narrow`]). A side is
+/// admissible when `p_j ≠ p_i` (distance above 1e-12 px) and its direction lies in the
+/// cone of the points strictly before it ([`Cone::admits`]); sides the sink does not
+/// want skip that test. Where the anchor's next points are one lattice run (`runs`,
+/// from [`lattice_runs`]) and `may_run` holds, the scan takes the run's remainder in
+/// closed form once under way, admitting every point to its end (the proof is on
+/// [`open`]). O(MAX_SPAN) per anchor, and O(1) per point of a lattice run's remainder
+/// beyond handing it to the sink.
+#[inline(always)]
+fn scan_anchor(
+    pts: &[Point],
+    runs: &[u32],
+    i: usize,
+    tol: f64,
+    may_run: bool,
+    sink: &mut impl Sides,
+) {
+    let n = pts.len();
+    let a = pts[i];
+    let end = n.min(i + MAX_SPAN + 1);
+    // The last point of the anchor's lattice run the closed form may take, or `i` for
+    // none: `p_{i+1} ..= p_{run_last}` are one step `s` apart, starting at `a`.
+    let s = pts[i + 1] - a;
+    let run_last = if may_run && s.dot(s) <= RUN_MAX_STEP * RUN_MAX_STEP {
+        (i + runs[i] as usize).min(end - 1)
+    } else {
+        i
+    };
+    let mut cone = Cone::full();
+    let mut reach = 0.0f64;
+    // Distance of the point before `j` from the anchor (0 for the anchor itself).
+    let mut last_r = 0.0f64;
+    let mut j = i + 1;
+    while j < end {
+        if j < run_last && cone.open && last_r > 2.0 * tol {
+            // The rest of the lattice run, in closed form (see the proof on `open`):
+            // every point is admitted, and the cone and reach are the last point's.
+            for k in j..=run_last {
+                sink.admit(k);
+            }
+            let v = pts[run_last] - a;
+            let r = v.norm();
+            reach = reach.max(r);
+            // Always alive here (the cone spans at most 60°); the test keeps the scan
+            // correct even if it were not.
+            if !cone.narrow(v, r, tol) {
+                break;
+            }
+            last_r = r;
+            j = run_last + 1;
+            continue;
+        }
+        let v = pts[j] - a;
+        let r = v.norm();
+        // The run must move away from its anchor: a point that falls back by more than
+        // the tolerance is doubling back, and no chord from `a` describes it.
+        if r + tol < reach {
+            break;
+        }
+        let d = if r > 1e-12 {
+            Vec2 {
+                x: v.x / r,
+                y: v.y / r,
+            }
+        } else {
+            Vec2 { x: 1.0, y: 0.0 }
+        };
+        // Whether the sink wants the side is checked before the cone, which costs more.
+        if r > 1e-12 && sink.wants(j) && cone.admits(d) {
+            sink.admit(j);
+        }
+        reach = reach.max(r);
+        if r > tol && !cone.narrow(v, r, tol) {
+            break;
+        }
+        last_r = r;
+        j += 1;
+    }
 }
 
 /// Polygon vertices of a closed ring, as indices into `pts` in ring order.
@@ -635,6 +815,46 @@ pub(crate) mod tests {
             }
             out.push(q);
         }
+        // Boundaries past PARALLEL_MIN, which scan their anchors in parallel: a large frame,
+        // a long wobbly curve, and a long random walk with lattice stretches.
+        let mut f = Vec::new();
+        for x in 0..600 {
+            f.push(p(x as f64 - 0.5, -0.5));
+        }
+        for y in 0..500 {
+            f.push(p(599.5, y as f64 - 0.5));
+        }
+        for x in (1..=600).rev() {
+            f.push(p(x as f64 - 0.5, 499.5));
+        }
+        for y in (1..=500).rev() {
+            f.push(p(-0.5, y as f64 - 0.5));
+        }
+        out.push(f);
+        out.push(
+            (0..2600)
+                .map(|k| {
+                    let t = k as f64 / 2600.0 * std::f64::consts::TAU;
+                    let r = 380.0 + 6.0 * (7.0 * t).sin();
+                    p(400.0 + r * t.cos(), 400.0 + r * t.sin())
+                })
+                .collect(),
+        );
+        let mut rng = Rng(0x2545_F491_4F6C_DD1D);
+        let mut q = Vec::with_capacity(3100);
+        let (mut x, mut y, mut ang) = (0.0f64, 0.0f64, 0.0f64);
+        for _ in 0..3100 {
+            q.push(p(x, y));
+            ang += (rng.unit() - 0.5) * 0.4;
+            if rng.unit() < 0.2 {
+                x = (x + ang.cos()).round();
+                y = (y + ang.sin()).round();
+            } else {
+                x += ang.cos();
+                y += ang.sin();
+            }
+        }
+        out.push(q);
         // A long lattice line with one point nudged off it, past and within tolerance.
         for nudge in [0.2, 0.9] {
             let mut q: Vec<Point> = (0..300).map(|k| p(k as f64 * 0.5, 3.0)).collect();
@@ -680,6 +900,31 @@ pub(crate) mod tests {
                     closed_ref(&pts, tol),
                     "closed, tol {tol}"
                 );
+            }
+        }
+    }
+
+    /// The parallel scan gives the same polygon on 1, 4 and 16 threads as the reference,
+    /// on every case long enough to take it.
+    #[test]
+    fn the_parallel_scan_is_the_same_on_any_thread_count() {
+        let long: Vec<Vec<Point>> = cases()
+            .into_iter()
+            .filter(|c| c.len() >= PARALLEL_MIN)
+            .collect();
+        assert!(long.len() >= 3);
+        for threads in [1, 4, 16] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .expect("a thread pool");
+            for pts in &long {
+                for tol in [0.5, 1.5] {
+                    let want = open_ref(pts, tol);
+                    assert_eq!(pool.install(|| open(pts, tol)), want, "{threads} threads");
+                    let want = closed_ref(pts, tol);
+                    assert_eq!(pool.install(|| closed(pts, tol)), want, "{threads} threads");
+                }
             }
         }
     }

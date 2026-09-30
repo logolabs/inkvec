@@ -1254,7 +1254,8 @@ pub(crate) fn ellipse_sampson_chi2(
 /// algebraic fit is O(j − i), so this keeps the ellipse to a sparse grid of candidate
 /// ends rather than making the dynamic program cubic. Then:
 ///
-/// 1. fit an ellipse algebraically (`crate::primitives::fit_ellipse_algebraic`) and
+/// 1. fit an ellipse algebraically (Taubin's fit, `crate::primitives::ellipse::taubin_ellipse`,
+///    which skips the orthogonal χ² this candidate never reads) and
 ///    refuse aspect ratios over 12 or a major radius over a thousand times the span's
 ///    extent;
 /// 2. the points must advance round it monotonically ([`ellipse_turn`]) through a total
@@ -1284,7 +1285,7 @@ pub(crate) fn try_ellipse(
     }
     let span_pts = &pts[i..=j];
     let span_sigma = &sigma[i..=j];
-    let fit = crate::primitives::fit_ellipse_algebraic(span_pts, span_sigma)?;
+    let fit = crate::primitives::ellipse::taubin_ellipse(span_pts, span_sigma)?;
     if !(fit.rx.is_finite() && fit.ry.is_finite()) || fit.rx <= 1e-6 || fit.ry <= 1e-6 {
         return None;
     }

@@ -45,12 +45,19 @@ pub(crate) fn solve(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Option<Vec<f64>> {
     Some(x)
 }
 
+/// A small dense square matrix on the stack, row-major.
+pub(crate) type Mat<const N: usize> = [[f64; N]; N];
+
 /// Lower Cholesky factor of a symmetric positive-definite matrix: `L` with `L·Lᵀ = a`.
 /// `None` when a diagonal pivot is not positive, i.e. `a` is not positive definite.
-pub(crate) fn cholesky(a: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
-    let n = a.len();
-    let mut l = vec![vec![0.0; n]; n];
-    for i in 0..n {
+///
+/// On fixed-size arrays rather than `Vec<Vec<f64>>`: the elliptical-arc candidate of the
+/// dynamic program calls this through [`gen_eigen_5`] tens of thousands of times per
+/// trace, and the heap allocations were most of its cost. The arithmetic, and its order,
+/// is unchanged.
+pub(crate) fn cholesky<const N: usize>(a: &Mat<N>) -> Option<Mat<N>> {
+    let mut l = [[0.0; N]; N];
+    for i in 0..N {
         for j in 0..=i {
             let mut s = a[i][j];
             s -= l[i][..j]
@@ -72,10 +79,9 @@ pub(crate) fn cholesky(a: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
 }
 
 /// `x = L⁻¹ b`, by forward substitution on the lower-triangular `l`.
-pub(crate) fn forward_sub(l: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
-    let n = b.len();
-    let mut x = vec![0.0; n];
-    for i in 0..n {
+pub(crate) fn forward_sub<const N: usize>(l: &Mat<N>, b: &[f64; N]) -> [f64; N] {
+    let mut x = [0.0; N];
+    for i in 0..N {
         let mut s = b[i];
         for k in 0..i {
             s -= l[i][k] * x[k];
@@ -86,12 +92,11 @@ pub(crate) fn forward_sub(l: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
 }
 
 /// `x = L⁻ᵀ b`, by back substitution on the transpose of the lower-triangular `l`.
-pub(crate) fn back_sub_t(l: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
-    let n = b.len();
-    let mut x = vec![0.0; n];
-    for i in (0..n).rev() {
+pub(crate) fn back_sub_t<const N: usize>(l: &Mat<N>, b: &[f64; N]) -> [f64; N] {
+    let mut x = [0.0; N];
+    for i in (0..N).rev() {
         let mut s = b[i];
-        for k in i + 1..n {
+        for k in i + 1..N {
             s -= l[k][i] * x[k];
         }
         x[i] = s / l[i][i];
@@ -106,9 +111,8 @@ pub(crate) fn back_sub_t(l: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
 /// root of `t² + 2·t·cot 2θ − 1 = 0` for stability. Sweeps repeat until the sum of
 /// squared upper off-diagonal entries falls below 1e-30, or 100 sweeps. Eigenvalues are
 /// unsorted; eigenvectors are orthonormal.
-pub(crate) fn sym_eigen(mut a: Vec<Vec<f64>>) -> (Vec<f64>, Vec<Vec<f64>>) {
-    let n = a.len();
-    let mut v = vec![vec![0.0; n]; n];
+pub(crate) fn sym_eigen<const N: usize>(mut a: Mat<N>) -> ([f64; N], Mat<N>) {
+    let mut v = [[0.0; N]; N];
     for (i, row) in v.iter_mut().enumerate() {
         row[i] = 1.0;
     }
@@ -121,8 +125,8 @@ pub(crate) fn sym_eigen(mut a: Vec<Vec<f64>>) -> (Vec<f64>, Vec<Vec<f64>>) {
         if off < 1e-30 {
             break;
         }
-        for p in 0..n {
-            for q in p + 1..n {
+        for p in 0..N {
+            for q in p + 1..N {
                 if a[p][q].abs() < 1e-300 {
                     continue;
                 }
@@ -150,7 +154,10 @@ pub(crate) fn sym_eigen(mut a: Vec<Vec<f64>>) -> (Vec<f64>, Vec<Vec<f64>>) {
             }
         }
     }
-    let evals = (0..n).map(|i| a[i][i]).collect();
+    let mut evals = [0.0; N];
+    for (i, e) in evals.iter_mut().enumerate() {
+        *e = a[i][i];
+    }
     (evals, v)
 }
 
@@ -162,20 +169,22 @@ pub(crate) fn sym_eigen(mut a: Vec<Vec<f64>>) -> (Vec<f64>, Vec<Vec<f64>>) {
 /// is `A`'s eigenvector for its smallest eigenvalue, and `theta = L⁻ᵀ·y`. `theta` is
 /// normalised in the `nrm` metric, not to unit length. `None` if `nrm` is not positive
 /// definite.
-pub(crate) fn gen_eigen_5(cov: &[Vec<f64>], nrm: &[Vec<f64>]) -> Option<Vec<f64>> {
+///
+/// Also returns the smallest generalised eigenvalue `μ = θᵀ·cov·θ / θᵀ·nrm·θ`, the
+/// minimised ratio itself.
+pub(crate) fn gen_eigen_5(cov: &Mat<5>, nrm: &Mat<5>) -> Option<([f64; 5], f64)> {
     let l = cholesky(nrm)?;
-    let mut tmp = vec![vec![0.0; 5]; 5];
+    let mut tmp = [[0.0; 5]; 5];
     for j in 0..5 {
-        let col: Vec<f64> = (0..5).map(|i| cov[i][j]).collect();
+        let col: [f64; 5] = std::array::from_fn(|i| cov[i][j]);
         let x = forward_sub(&l, &col);
         for i in 0..5 {
             tmp[i][j] = x[i];
         }
     }
-    let mut a = vec![vec![0.0; 5]; 5];
+    let mut a = [[0.0; 5]; 5];
     for i in 0..5 {
-        let x = forward_sub(&l, &tmp[i]);
-        a[i][..5].copy_from_slice(&x[..5]);
+        a[i] = forward_sub(&l, &tmp[i]);
     }
     for i in 0..5 {
         let (head, tail) = a.split_at_mut(i + 1);
@@ -187,8 +196,8 @@ pub(crate) fn gen_eigen_5(cov: &[Vec<f64>], nrm: &[Vec<f64>]) -> Option<Vec<f64>
     }
     let (evals, evecs) = sym_eigen(a);
     let best = (0..5).min_by(|&i, &j| evals[i].total_cmp(&evals[j]))?;
-    let y: Vec<f64> = (0..5).map(|i| evecs[i][best]).collect();
-    Some(back_sub_t(&l, &y))
+    let y: [f64; 5] = std::array::from_fn(|i| evecs[i][best]);
+    Some((back_sub_t(&l, &y), evals[best]))
 }
 
 /// Levenberg–Marquardt on a residual vector whose normal equations `eval` supplies.
@@ -257,6 +266,182 @@ pub(crate) fn levenberg_marquardt(
 mod tests {
     use super::*;
 
+    /// The dense solvers as they were on `Vec<Vec<f64>>`, kept to prove the array
+    /// versions compute the same bits.
+    mod reference {
+        pub(super) fn cholesky(a: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
+            let n = a.len();
+            let mut l = vec![vec![0.0; n]; n];
+            for i in 0..n {
+                for j in 0..=i {
+                    let mut s = a[i][j];
+                    s -= l[i][..j]
+                        .iter()
+                        .zip(&l[j][..j])
+                        .map(|(x, y)| x * y)
+                        .sum::<f64>();
+                    if i == j {
+                        if s <= 0.0 {
+                            return None;
+                        }
+                        l[i][j] = s.sqrt();
+                    } else {
+                        l[i][j] = s / l[j][j];
+                    }
+                }
+            }
+            Some(l)
+        }
+
+        pub(super) fn forward_sub(l: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
+            let n = b.len();
+            let mut x = vec![0.0; n];
+            for i in 0..n {
+                let mut s = b[i];
+                for k in 0..i {
+                    s -= l[i][k] * x[k];
+                }
+                x[i] = s / l[i][i];
+            }
+            x
+        }
+
+        pub(super) fn back_sub_t(l: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
+            let n = b.len();
+            let mut x = vec![0.0; n];
+            for i in (0..n).rev() {
+                let mut s = b[i];
+                for k in i + 1..n {
+                    s -= l[k][i] * x[k];
+                }
+                x[i] = s / l[i][i];
+            }
+            x
+        }
+
+        pub(super) fn sym_eigen(mut a: Vec<Vec<f64>>) -> (Vec<f64>, Vec<Vec<f64>>) {
+            let n = a.len();
+            let mut v = vec![vec![0.0; n]; n];
+            for (i, row) in v.iter_mut().enumerate() {
+                row[i] = 1.0;
+            }
+            for _sweep in 0..100 {
+                let off: f64 = a
+                    .iter()
+                    .enumerate()
+                    .map(|(i, row)| row[i + 1..].iter().map(|x| x * x).sum::<f64>())
+                    .sum();
+                if off < 1e-30 {
+                    break;
+                }
+                for p in 0..n {
+                    for q in p + 1..n {
+                        if a[p][q].abs() < 1e-300 {
+                            continue;
+                        }
+                        let theta = (a[q][q] - a[p][p]) / (2.0 * a[p][q]);
+                        let t = theta.signum() / (theta.abs() + (theta * theta + 1.0).sqrt());
+                        let t = if theta == 0.0 { 1.0 } else { t };
+                        let c = 1.0 / (t * t + 1.0).sqrt();
+                        let s = t * c;
+                        for row in a.iter_mut() {
+                            let (akp, akq) = (row[p], row[q]);
+                            row[p] = c * akp - s * akq;
+                            row[q] = s * akp + c * akq;
+                        }
+                        let (head, tail) = a.split_at_mut(q);
+                        for (apk, aqk) in head[p].iter_mut().zip(tail[0].iter_mut()) {
+                            let (x, y) = (*apk, *aqk);
+                            *apk = c * x - s * y;
+                            *aqk = s * x + c * y;
+                        }
+                        for row in v.iter_mut() {
+                            let (vkp, vkq) = (row[p], row[q]);
+                            row[p] = c * vkp - s * vkq;
+                            row[q] = s * vkp + c * vkq;
+                        }
+                    }
+                }
+            }
+            let evals = (0..n).map(|i| a[i][i]).collect();
+            (evals, v)
+        }
+
+        pub(super) fn gen_eigen_5(cov: &[Vec<f64>], nrm: &[Vec<f64>]) -> Option<Vec<f64>> {
+            let l = cholesky(nrm)?;
+            let mut tmp = vec![vec![0.0; 5]; 5];
+            for j in 0..5 {
+                let col: Vec<f64> = (0..5).map(|i| cov[i][j]).collect();
+                let x = forward_sub(&l, &col);
+                for i in 0..5 {
+                    tmp[i][j] = x[i];
+                }
+            }
+            let mut a = vec![vec![0.0; 5]; 5];
+            for i in 0..5 {
+                let x = forward_sub(&l, &tmp[i]);
+                a[i][..5].copy_from_slice(&x[..5]);
+            }
+            for i in 0..5 {
+                let (head, tail) = a.split_at_mut(i + 1);
+                for (j, row) in tail.iter_mut().enumerate() {
+                    let m = 0.5 * (head[i][i + 1 + j] + row[i]);
+                    head[i][i + 1 + j] = m;
+                    row[i] = m;
+                }
+            }
+            let (evals, evecs) = sym_eigen(a);
+            let best = (0..5).min_by(|&i, &j| evals[i].total_cmp(&evals[j]))?;
+            let y: Vec<f64> = (0..5).map(|i| evecs[i][best]).collect();
+            Some(back_sub_t(&l, &y))
+        }
+    }
+
+    /// The stack-array eigen solve returns the very bits of the heap version it replaced,
+    /// on random positive semi-definite `cov` and positive definite `nrm`, including
+    /// near-singular and badly scaled ones, and fails exactly when it failed.
+    #[test]
+    fn gen_eigen_5_on_arrays_matches_the_vec_version_bit_for_bit() {
+        let mut st = 5u64;
+        let mut rnd = || {
+            st = st
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (st >> 11) as f64 / (1u64 << 53) as f64 - 0.5
+        };
+        for case in 0..2000 {
+            let rows = 1 + case % 12;
+            let scale = [1.0, 1e-6, 1e6, 1.0][case % 4];
+            let mut cov = [[0.0f64; 5]; 5];
+            let mut nrm = [[0.0f64; 5]; 5];
+            for _ in 0..rows {
+                let z: [f64; 5] = std::array::from_fn(|_| scale * rnd());
+                let g: [f64; 5] = std::array::from_fn(|_| rnd());
+                for a in 0..5 {
+                    for b in 0..5 {
+                        cov[a][b] += z[a] * z[b];
+                        nrm[a][b] += g[a] * g[b];
+                    }
+                }
+            }
+            if case % 7 == 0 {
+                for (a, row) in nrm.iter_mut().enumerate() {
+                    row[a] += 1.0;
+                }
+            }
+            let got = gen_eigen_5(&cov, &nrm).map(|(theta, _)| theta);
+            let cv: Vec<Vec<f64>> = cov.iter().map(|r| r.to_vec()).collect();
+            let nv: Vec<Vec<f64>> = nrm.iter().map(|r| r.to_vec()).collect();
+            let want = reference::gen_eigen_5(&cv, &nv);
+            assert_eq!(got.is_some(), want.is_some(), "case {case}");
+            if let (Some(g), Some(w)) = (got, want) {
+                for k in 0..5 {
+                    assert_eq!(g[k].to_bits(), w[k].to_bits(), "case {case}, k {k}");
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_solve_linear_system() {
         // 2x + y = 5
@@ -271,13 +456,13 @@ mod tests {
 
     #[test]
     fn test_cholesky_and_subs() {
-        let a = vec![vec![4.0, 2.0], vec![2.0, 5.0]];
+        let a = [[4.0, 2.0], [2.0, 5.0]];
         let l = cholesky(&a).expect("pos-def matrix has cholesky");
         assert!((l[0][0] - 2.0).abs() < 1e-10);
         assert!((l[1][0] - 1.0).abs() < 1e-10);
         assert!((l[1][1] - 2.0).abs() < 1e-10);
 
-        let b = vec![6.0, 8.0];
+        let b = [6.0, 8.0];
         let y = forward_sub(&l, &b);
         let x = back_sub_t(&l, &y);
         // a * x should equal b:
@@ -287,7 +472,7 @@ mod tests {
 
     #[test]
     fn test_sym_eigen() {
-        let a = vec![vec![2.0, 1.0], vec![1.0, 2.0]];
+        let a = [[2.0, 1.0], [1.0, 2.0]];
         let (evals, _) = sym_eigen(a);
         let mut sorted = evals;
         sorted.sort_by(|x, y| x.total_cmp(y));

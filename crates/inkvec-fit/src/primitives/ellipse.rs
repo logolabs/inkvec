@@ -189,18 +189,55 @@ pub(crate) fn canonical_angle(mut angle: f64) -> f64 {
 /// `None` for fewer than six points, zero weight, coincident points or a conic that is
 /// not an ellipse. `chi2` is the orthogonal residual of this algebraic solution.
 pub fn fit_ellipse_algebraic(pts: &[Point], sigma: &[f64]) -> Option<EllipseFit> {
+    let mut e = taubin_ellipse(pts, sigma)?;
+    e.chi2 = ellipse_chi2(pts, sigma, &e);
+    Some(e)
+}
+
+/// [`fit_ellipse_algebraic`] without its orthogonal χ²: the conic's geometry only, with
+/// `chi2` left at infinity ("not scored"), the value the near-circle starts of
+/// [`fit_ellipse`] carry too.
+///
+/// The two internal callers never read that χ². The dynamic program's elliptical-arc
+/// candidate (`crate::candidates::try_ellipse`) rebuilds the arc through its end points
+/// and scores it by the Sampson distance, and [`fit_ellipse`] hands the algebraic fit to
+/// Levenberg–Marquardt as a start, which reads only the centre, radii and angle. The χ²
+/// costs a Newton foot-point solve per point (`EllipseFit::contact`), and measured on a
+/// 512 px flat logo and a 2048 px icon it was 54% and 63% of the algebraic fit's time
+/// (7.6% and 9.1% of the whole trace's CPU), all of it discarded. The geometry is the
+/// same computation, so it is bit-identical to [`fit_ellipse_algebraic`]'s.
+///
+/// Not from the literature: this only removes a quantity nobody reads. For the same
+/// reason of cost, the passes below reuse each point's weight and lifted row, and the
+/// 5×5 eigen solve runs on stack arrays (`solver::gen_eigen_5`): the arithmetic and its
+/// order are those of the original, so the fit is bit-identical.
+pub(crate) fn taubin_ellipse(pts: &[Point], sigma: &[f64]) -> Option<EllipseFit> {
+    taubin_ellipse_with_residual(pts, sigma).map(|(e, _)| e)
+}
+
+/// [`taubin_ellipse`], also returning Taubin's minimised residual in px² as a weighted
+/// sum over the points, `μ·s²·Σw`: `μ = Σ w·Q² / Σ w·|∇Q|²` is the smallest generalised
+/// eigenvalue in the scaled frame, `s` the frame's scale and `Σw` the total weight. It
+/// approximates the Sampson χ² `Σ w·Q²/|∇Q|²` of the conic (Taubin 1991), and so, near
+/// the curve, its orthogonal χ² (see [`fit_ellipse_screened`]).
+pub(crate) fn taubin_ellipse_with_residual(
+    pts: &[Point],
+    sigma: &[f64],
+) -> Option<(EllipseFit, f64)> {
     let n = pts.len();
     if n < 6 {
         return None;
     }
+    // Each point's weight and lifted row are computed once and reused by every pass
+    // below, instead of once per pass: the same values, so the same sums.
+    let w: Vec<f64> = (0..n).map(|k| weight_at(sigma, k)).collect();
     let mut sw = 0.0;
     let mut mx = 0.0;
     let mut my = 0.0;
-    for (k, p) in pts.iter().enumerate() {
-        let w = weight_at(sigma, k);
-        sw += w;
-        mx += p.x * w;
-        my += p.y * w;
+    for (p, &wk) in pts.iter().zip(&w) {
+        sw += wk;
+        mx += p.x * wk;
+        my += p.y * wk;
     }
     if sw <= 0.0 {
         return None;
@@ -208,25 +245,25 @@ pub fn fit_ellipse_algebraic(pts: &[Point], sigma: &[f64]) -> Option<EllipseFit>
     mx /= sw;
     my /= sw;
     let mut var = 0.0;
-    for (k, p) in pts.iter().enumerate() {
-        let w = weight_at(sigma, k);
-        var += w * ((p.x - mx).powi(2) + (p.y - my).powi(2));
+    for (p, &wk) in pts.iter().zip(&w) {
+        var += wk * ((p.x - mx).powi(2) + (p.y - my).powi(2));
     }
     let scale = (var / sw).sqrt();
     if scale.is_nan() || scale <= 1e-12 {
         return None;
     }
 
-    let row_of = |p: &Point| -> [f64; 5] {
-        let (u, v) = ((p.x - mx) / scale, (p.y - my) / scale);
-        [u * u, u * v, v * v, u, v]
-    };
+    let rows: Vec<[f64; 5]> = pts
+        .iter()
+        .map(|p| {
+            let (u, v) = ((p.x - mx) / scale, (p.y - my) / scale);
+            [u * u, u * v, v * v, u, v]
+        })
+        .collect();
     let mut mean = [0.0f64; 5];
-    for (k, p) in pts.iter().enumerate() {
-        let w = weight_at(sigma, k);
-        let row = row_of(p);
+    for (row, &wk) in rows.iter().zip(&w) {
         for a in 0..5 {
-            mean[a] += w * row[a];
+            mean[a] += wk * row[a];
         }
     }
     for m in &mut mean {
@@ -234,9 +271,7 @@ pub fn fit_ellipse_algebraic(pts: &[Point], sigma: &[f64]) -> Option<EllipseFit>
     }
     let mut cov = [[0.0f64; 5]; 5];
     let mut nrm = [[0.0f64; 5]; 5];
-    for (k, p) in pts.iter().enumerate() {
-        let w = weight_at(sigma, k);
-        let row = row_of(p);
+    for (row, &wk) in rows.iter().zip(&w) {
         let (u, v) = (row[3], row[4]);
         let gx = [2.0 * u, v, 0.0, 1.0, 0.0];
         let gy = [0.0, u, 2.0 * v, 0.0, 1.0];
@@ -249,14 +284,12 @@ pub fn fit_ellipse_algebraic(pts: &[Point], sigma: &[f64]) -> Option<EllipseFit>
         ];
         for a in 0..5 {
             for b in 0..5 {
-                cov[a][b] += w * d[a] * d[b];
-                nrm[a][b] += w * (gx[a] * gx[b] + gy[a] * gy[b]);
+                cov[a][b] += wk * d[a] * d[b];
+                nrm[a][b] += wk * (gx[a] * gx[b] + gy[a] * gy[b]);
             }
         }
     }
-    let cov: Vec<Vec<f64>> = cov.iter().map(|r| r.to_vec()).collect();
-    let nrm: Vec<Vec<f64>> = nrm.iter().map(|r| r.to_vec()).collect();
-    let theta = gen_eigen_5(&cov, &nrm)?;
+    let (theta, mu) = gen_eigen_5(&cov, &nrm)?;
     let f = -(0..5).map(|k| mean[k] * theta[k]).sum::<f64>();
     let (c, r1, r2, angle) =
         conic_to_ellipse([theta[0], theta[1], theta[2], theta[3], theta[4], f])?;
@@ -265,15 +298,14 @@ pub fn fit_ellipse_algebraic(pts: &[Point], sigma: &[f64]) -> Option<EllipseFit>
     } else {
         (r2, r1, angle + PI / 2.0)
     };
-    let mut e = EllipseFit {
+    let fit = EllipseFit {
         c: Point::new(mx + scale * c.x, my + scale * c.y),
         rx: rx * scale,
         ry: ry * scale,
         angle: canonical_angle(angle),
-        chi2: 0.0,
+        chi2: f64::INFINITY,
     };
-    e.chi2 = ellipse_chi2(pts, sigma, &e);
-    Some(e)
+    Some((fit, mu * scale * scale * sw))
 }
 
 /// Orthogonal-distance ellipse fit (Ahn et al. 2001).
@@ -289,11 +321,27 @@ pub fn fit_ellipse(pts: &[Point], sigma: &[f64]) -> Option<EllipseFit> {
     if pts.len() < 6 {
         return None;
     }
+    fit_ellipse_from(pts, sigma, fit_circle(pts, sigma))
+}
+
+/// [`fit_ellipse`] with its orthogonal circle fit (`fit_circle(pts, sigma)`, whose centre
+/// and radius seed the near-circle starts) supplied by a caller that has already fitted
+/// it. `None` for fewer than six points or when every start fails.
+pub(crate) fn fit_ellipse_from(
+    pts: &[Point],
+    sigma: &[f64],
+    circle: Option<super::CircleFit>,
+) -> Option<EllipseFit> {
+    if pts.len() < 6 {
+        return None;
+    }
     let mut starts: Vec<EllipseFit> = Vec::new();
-    if let Some(e) = fit_ellipse_algebraic(pts, sigma) {
+    // Levenberg–Marquardt reads only the start's geometry, so the algebraic fit's own
+    // orthogonal χ² is not computed (see `taubin_ellipse`).
+    if let Some(e) = taubin_ellipse(pts, sigma) {
         starts.push(e);
     }
-    if let Some(cf) = fit_circle(pts, sigma) {
+    if let Some(cf) = circle {
         for k in 0..4 {
             starts.push(EllipseFit {
                 c: cf.c,
@@ -314,6 +362,52 @@ pub fn fit_ellipse(pts: &[Point], sigma: &[f64]) -> Option<EllipseFit> {
         }
     }
     best
+}
+
+/// Taubin's residual, as a share of the orthogonal χ² the Levenberg–Marquardt fit
+/// reaches from it, never fell below 0.28 over the 1,131 closed rings of the 246-icon
+/// screen set and the 232 of a 1672×941 poster. A residual this multiple of which already
+/// exceeds the caller's χ² gate marks an ellipse the gate would refuse.
+const SCREEN_SHARE: f64 = 0.25;
+
+/// The orthogonal ellipse fit the whole-ring primitive search offers, or `None` where the
+/// χ² `gate` it must then pass would refuse it anyway.
+///
+/// Two economies over [`fit_ellipse_from`], both taken from the literature on algebraic
+/// fits as initialisers. Taubin's normalisation makes the algebraic residual approximate
+/// the squared geometric distance: Taubin (1991), "Estimation of planar curves, surfaces,
+/// and nonplanar space curves defined by implicit equations with applications to edge and
+/// range image segmentation", IEEE TPAMI 13(11):1115–1138, doi:10.1109/34.103273; and
+/// Kanatani & Rangarajan (2011), "Hyper least squares fitting of circles and ellipses",
+/// Comput. Stat. Data Anal. 55:2197–2208, doi:10.1016/j.csda.2010.12.012, eqs. 14–17 and
+/// 23, cast it as the eigenproblem solved here. So:
+///
+/// * the fit is not run when `SCREEN_SHARE` of Taubin's residual already exceeds `gate`
+///   (the gate refused 924 of the screen set's 1,131 closed-ring ellipses; this screen
+///   catches 806 of them, and never one the gate passed);
+/// * Levenberg–Marquardt starts from the algebraic fit alone, as Halíř & Flusser (1998),
+///   "Numerically stable direct least squares fitting of ellipses", WSCG,
+///   https://autotrace.sourceforge.net/WSCG98.pdf, recommend for the direct fit ("a fast
+///   and robust estimator of a good initial solution"), rather than from it and four
+///   near-circles. Over the screen set and the poster, every one of the 93 ellipses chosen
+///   came from the algebraic start. The near-circles remain the fallback when there is no
+///   algebraic ellipse, or when Levenberg–Marquardt fails from it.
+pub(crate) fn fit_ellipse_screened(
+    pts: &[Point],
+    sigma: &[f64],
+    circle: Option<super::CircleFit>,
+    gate: f64,
+) -> Option<EllipseFit> {
+    if pts.len() < 6 {
+        return None;
+    }
+    let Some((alg, residual)) = taubin_ellipse_with_residual(pts, sigma) else {
+        return fit_ellipse_from(pts, sigma, circle);
+    };
+    if SCREEN_SHARE * residual > gate {
+        return None;
+    }
+    refine_ellipse(pts, sigma, alg).or_else(|| fit_ellipse_from(pts, sigma, circle))
 }
 
 /// Levenberg–Marquardt on the signed orthogonal distances `d_k` of [`EllipseFit::contact`],
@@ -394,6 +488,279 @@ mod tests {
     fn test_canonical_angle() {
         assert!((canonical_angle(PI) - 0.0).abs() < 1e-10);
         assert!((canonical_angle(PI / 4.0) - PI / 4.0).abs() < 1e-10);
+    }
+
+    /// `fit_ellipse_algebraic` as it was before its passes shared their weights and rows
+    /// (its eigen solve is proved bit-identical to the old one in `solver`'s tests).
+    fn reference_algebraic(pts: &[Point], sigma: &[f64]) -> Option<EllipseFit> {
+        let n = pts.len();
+        if n < 6 {
+            return None;
+        }
+        let mut sw = 0.0;
+        let mut mx = 0.0;
+        let mut my = 0.0;
+        for (k, p) in pts.iter().enumerate() {
+            let w = weight_at(sigma, k);
+            sw += w;
+            mx += p.x * w;
+            my += p.y * w;
+        }
+        if sw <= 0.0 {
+            return None;
+        }
+        mx /= sw;
+        my /= sw;
+        let mut var = 0.0;
+        for (k, p) in pts.iter().enumerate() {
+            let w = weight_at(sigma, k);
+            var += w * ((p.x - mx).powi(2) + (p.y - my).powi(2));
+        }
+        let scale = (var / sw).sqrt();
+        if scale.is_nan() || scale <= 1e-12 {
+            return None;
+        }
+
+        let row_of = |p: &Point| -> [f64; 5] {
+            let (u, v) = ((p.x - mx) / scale, (p.y - my) / scale);
+            [u * u, u * v, v * v, u, v]
+        };
+        let mut mean = [0.0f64; 5];
+        for (k, p) in pts.iter().enumerate() {
+            let w = weight_at(sigma, k);
+            let row = row_of(p);
+            for a in 0..5 {
+                mean[a] += w * row[a];
+            }
+        }
+        for m in &mut mean {
+            *m /= sw;
+        }
+        let mut cov = [[0.0f64; 5]; 5];
+        let mut nrm = [[0.0f64; 5]; 5];
+        for (k, p) in pts.iter().enumerate() {
+            let w = weight_at(sigma, k);
+            let row = row_of(p);
+            let (u, v) = (row[3], row[4]);
+            let gx = [2.0 * u, v, 0.0, 1.0, 0.0];
+            let gy = [0.0, u, 2.0 * v, 0.0, 1.0];
+            let d = [
+                row[0] - mean[0],
+                row[1] - mean[1],
+                row[2] - mean[2],
+                row[3] - mean[3],
+                row[4] - mean[4],
+            ];
+            for a in 0..5 {
+                for b in 0..5 {
+                    cov[a][b] += w * d[a] * d[b];
+                    nrm[a][b] += w * (gx[a] * gx[b] + gy[a] * gy[b]);
+                }
+            }
+        }
+        let (theta, _) = gen_eigen_5(&cov, &nrm)?;
+        let f = -(0..5).map(|k| mean[k] * theta[k]).sum::<f64>();
+        let (c, r1, r2, angle) =
+            conic_to_ellipse([theta[0], theta[1], theta[2], theta[3], theta[4], f])?;
+        let (rx, ry, angle) = if r1 >= r2 {
+            (r1, r2, angle)
+        } else {
+            (r2, r1, angle + PI / 2.0)
+        };
+        let mut e = EllipseFit {
+            c: Point::new(mx + scale * c.x, my + scale * c.y),
+            rx: rx * scale,
+            ry: ry * scale,
+            angle: canonical_angle(angle),
+            chi2: 0.0,
+        };
+        e.chi2 = ellipse_chi2(pts, sigma, &e);
+        Some(e)
+    }
+
+    /// The shared weights and rows change no bit of the fit, χ² included.
+    #[test]
+    fn algebraic_fit_matches_its_former_self() {
+        let mut st = 23u64;
+        let mut rnd = || {
+            st = st
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (st >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let mut fitted = 0;
+        for case in 0..400 {
+            let n = 4 + case % 90;
+            let (rx, ry, rot, sweep) = (
+                1.0 + 60.0 * rnd(),
+                1.0 + 30.0 * rnd(),
+                3.0 * rnd(),
+                0.2 + 6.1 * rnd(),
+            );
+            let noise = [0.0, 0.02, 0.3, 2.0][case % 4];
+            let pts: Vec<Point> = (0..n)
+                .map(|k| {
+                    let t = sweep * k as f64 / n as f64;
+                    let (x, y) = (rx * t.cos(), ry * t.sin());
+                    let (s, c) = rot.sin_cos();
+                    Point::new(
+                        300.0 + c * x - s * y + noise * (rnd() - 0.5),
+                        -120.0 + s * x + c * y + noise * (rnd() - 0.5),
+                    )
+                })
+                .collect();
+            // Short sigma slices too: missing sigmas default to 0.5.
+            let sigma: Vec<f64> = (0..n - case % 3).map(|_| 0.01 + rnd()).collect();
+            let got = fit_ellipse_algebraic(&pts, &sigma);
+            let want = reference_algebraic(&pts, &sigma);
+            assert_eq!(got.is_some(), want.is_some(), "case {case}");
+            if let (Some(g), Some(w)) = (got, want) {
+                let bits =
+                    |e: EllipseFit| [e.c.x, e.c.y, e.rx, e.ry, e.angle, e.chi2].map(f64::to_bits);
+                assert_eq!(bits(g), bits(w), "case {case}");
+                fitted += 1;
+            }
+        }
+        assert!(fitted > 100);
+    }
+
+    /// The screened, single-start fit reaches the whole-ring search's verdict on the full
+    /// five-start fit (sane radii, the χ² gate, a full turn round the centre, as
+    /// `super::offer_ellipse` asks) on ellipses, noisy ellipses, rounded squares, stars and
+    /// slivers, and where both are offered it is no worse.
+    #[test]
+    fn screened_fit_agrees_with_the_full_search_at_the_gate() {
+        let mut st = 77u64;
+        let mut rnd = || {
+            st = st
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (st >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let (mut passed, mut refused) = (0, 0);
+        for case in 0..240 {
+            let n = 24 + case % 150;
+            let (rx, ry, rot) = (3.0 + 40.0 * rnd(), 2.0 + 25.0 * rnd(), 3.0 * rnd());
+            let noise = [0.0, 0.1, 0.4, 1.0][case % 4];
+            // 0: ellipse; 1: superellipse (rounded square); 2: star; 3: thin sliver.
+            let shape = (case / 4) % 4;
+            let pts: Vec<Point> = (0..n)
+                .map(|k| {
+                    let t = std::f64::consts::TAU * k as f64 / n as f64;
+                    let (c, s) = (t.cos(), t.sin());
+                    let (x, y) = match shape {
+                        0 => (rx * c, ry * s),
+                        1 => (
+                            rx * c.signum() * c.abs().sqrt(),
+                            ry * s.signum() * s.abs().sqrt(),
+                        ),
+                        2 => {
+                            let r = 1.0 + 0.3 * (5.0 * t).cos();
+                            (rx * r * c, rx * r * s)
+                        }
+                        _ => (rx * c, 0.05 * ry * s),
+                    };
+                    let (sr, cr) = rot.sin_cos();
+                    Point::new(
+                        cr * x - sr * y + noise * (rnd() - 0.5),
+                        sr * x + cr * y + noise * (rnd() - 0.5),
+                    )
+                })
+                .collect();
+            let sigma = vec![0.25; n];
+            let gate = 4.0 * n as f64;
+            let full = fit_ellipse(&pts, &sigma);
+            let screened = fit_ellipse_screened(&pts, &sigma, fit_circle(&pts, &sigma), gate);
+            let span = pts
+                .iter()
+                .map(|p| p.dist(pts[0]))
+                .fold(0.0f64, f64::max)
+                .max(1.0);
+            let offered = |e: &EllipseFit| {
+                e.rx.is_finite()
+                    && e.ry.is_finite()
+                    && e.rx.max(e.ry) <= 1e3 * span
+                    && e.chi2 <= gate
+                    && super::super::total_sweep(&pts, e.c, true).abs() > 1.9 * PI
+            };
+            let full_ok = full.as_ref().is_some_and(offered);
+            let screened_ok = screened.as_ref().is_some_and(offered);
+            let res = taubin_ellipse_with_residual(&pts, &sigma)
+                .map(|(e, r)| (r, refine_ellipse(&pts, &sigma, e).map(|f| f.chi2)));
+            assert_eq!(
+                full_ok,
+                screened_ok,
+                "case {case}, shape {shape}: gate {gate} full {:?} screened {:?} residual/refined {:?}",
+                full.map(|e| (e.chi2, e.rx, e.ry)),
+                screened.map(|e| (e.chi2, e.rx, e.ry)),
+                res
+            );
+            if let (true, Some(f), Some(s)) = (full_ok, full, screened) {
+                assert!(s.chi2 <= f.chi2 * (1.0 + 1e-6) + 1e-9, "case {case}");
+                passed += 1;
+            } else {
+                refused += 1;
+            }
+        }
+        assert!(
+            passed > 20 && refused > 20,
+            "{passed} passed, {refused} refused"
+        );
+    }
+
+    /// The unscored fit is the scored one minus its χ², bit for bit, on arcs, full rings,
+    /// noisy points and inputs too few or too degenerate to fit.
+    #[test]
+    fn taubin_ellipse_is_the_algebraic_fit_without_its_chi2() {
+        let mut st = 11u64;
+        let mut rnd = || {
+            st = st
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (st >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for case in 0..300 {
+            let n = 3 + case % 40;
+            let (rx, ry, rot) = (2.0 + 30.0 * rnd(), 1.0 + 20.0 * rnd(), 3.0 * rnd());
+            let sweep = 0.3 + 6.0 * rnd();
+            let noise = [0.0, 0.05, 0.5][case % 3];
+            let pts: Vec<Point> = (0..n)
+                .map(|k| {
+                    let t = sweep * k as f64 / n as f64;
+                    let (x, y) = (rx * t.cos(), ry * t.sin());
+                    let (s, c) = rot.sin_cos();
+                    Point::new(
+                        40.0 + c * x - s * y + noise * (rnd() - 0.5),
+                        -7.0 + s * x + c * y + noise * (rnd() - 0.5),
+                    )
+                })
+                .collect();
+            let sigma: Vec<f64> = (0..n).map(|_| 0.1 + rnd()).collect();
+            let lean = taubin_ellipse(&pts, &sigma);
+            let full = fit_ellipse_algebraic(&pts, &sigma);
+            assert_eq!(lean.is_some(), full.is_some(), "case {case}");
+            if let (Some(l), Some(f)) = (lean, full) {
+                assert!(l.chi2.is_infinite());
+                for (a, b) in [(l.c.x, f.c.x), (l.c.y, f.c.y), (l.rx, f.rx), (l.ry, f.ry)] {
+                    assert_eq!(a.to_bits(), b.to_bits(), "case {case}");
+                }
+                assert_eq!(l.angle.to_bits(), f.angle.to_bits(), "case {case}");
+                let chi2 = ellipse_chi2(&pts, &sigma, &l);
+                assert_eq!(chi2.to_bits(), f.chi2.to_bits(), "case {case}");
+            }
+        }
+        // Collinear and coincident points fit nothing, either way.
+        let line: Vec<Point> = (0..10)
+            .map(|k| Point::new(k as f64, 2.0 * k as f64))
+            .collect();
+        let same = vec![Point::new(3.0, 4.0); 10];
+        for pts in [line, same] {
+            let sigma = vec![0.5; pts.len()];
+            assert_eq!(
+                taubin_ellipse(&pts, &sigma).is_some(),
+                fit_ellipse_algebraic(&pts, &sigma).is_some()
+            );
+        }
     }
 
     #[test]

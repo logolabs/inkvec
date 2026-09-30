@@ -1,6 +1,11 @@
 //! Two post-fit passes that trade a little residual for fewer numbers: an axis-aligned line
 //! (`INKVEC_AXIS`) and a G1-smooth join (`INKVEC_G1`). Research only: neither runs in a
 //! release build.
+//!
+//! Called from `crate::multimodel` after the merge passes, on the centred polyline the
+//! fit was computed against, when a research build has the variable set. Both work on a
+//! [`FittedPath`] in px whose `vertices` are the measured-point indices of its segment
+//! ends, and both return how many segments they changed.
 
 use inkvec_core::{Point, Polyline};
 
@@ -154,6 +159,9 @@ pub fn snap_axis_aligned(
 /// The largest normalised perpendicular distance from any single point in `poly[a..=b]`
 /// to the line through `p` and `q`. A trend the aggregate chi2 in [`chi2_about`] cannot
 /// see shows up here as one number well past a few sigma.
+///
+/// `max_k |(p_k − p)·n| / σ_k`, with `n` the unit normal of `q − p` and sigma floored at
+/// 1e-6 (0.5 where missing). Infinite when `p` and `q` coincide.
 fn max_dev_sigma(poly: &Polyline, a: usize, b: usize, p: Point, q: Point) -> f64 {
     let (dx, dy) = (q.x - p.x, q.y - p.y);
     let len = (dx * dx + dy * dy).sqrt();
@@ -173,7 +181,7 @@ fn max_dev_sigma(poly: &Polyline, a: usize, b: usize, p: Point, q: Point) -> f64
 
 /// Weighted sum of squared perpendicular distances from `poly[a..=b]` to the line through
 /// `p` and `q`, each point scaled by its own measured sigma -- the same chi2 the program
-/// minimises, for one candidate segment.
+/// minimises, for one candidate segment. Infinite when `p` and `q` coincide.
 fn chi2_about(poly: &Polyline, a: usize, b: usize, p: Point, q: Point) -> f64 {
     let (dx, dy) = (q.x - p.x, q.y - p.y);
     let len = (dx * dx + dy * dy).sqrt();
@@ -216,6 +224,15 @@ pub const PARAMS_SMOOTH_CUBIC: f64 = 4.0;
 /// and everything before it are untouched, so there is no neighbour to drag off its own
 /// evidence and no successor in another edge's fit to worry about. Only the second
 /// cubic's own shape changes, and its own residual is exactly what the test measures.
+///
+/// Two cubics are offered the reflection (`S`, four numbers for the second instead of
+/// six). A line followed by a cubic, or a cubic followed by a line, is offered a cubic
+/// whose arm at the join lies along the line (one number, its length, instead of a
+/// control point's two), for a χ² budget of `λ`: half the `2λ` the saved parameter
+/// would justify, so a stricter test than the cubic pair's. A join is only considered when
+/// its turn is within 20 degrees. Each constrained fit is found by a compass search
+/// (`compass_search`) on the subsampled cubic residual (`chi2_cubic`). With
+/// `INKVEC_G1DBG` set, every decision is reported on stderr.
 pub fn snap_smooth_joins(
     path: &mut FittedPath,
     poly: &Polyline,
@@ -225,10 +242,16 @@ pub fn snap_smooth_joins(
     if path.segments.len() < 2 || vertices.len() != path.segments.len() + 1 {
         return 0;
     }
-    let budget = 2.0 * cfg.lambda * (crate::multimodel::params_cubic() - PARAMS_SMOOTH_CUBIC);
-    let s = arc_lengths_of(&poly.points);
-    let dbg = inkvec_core::env::flag("INKVEC_G1DBG");
+    let cx = JoinCtx {
+        poly,
+        s: arc_lengths_of(&poly.points),
+        budget: 2.0 * cfg.lambda * (crate::multimodel::params_cubic() - PARAMS_SMOOTH_CUBIC),
+        lambda: cfg.lambda,
+        dbg: inkvec_core::env::flag("INKVEC_G1DBG"),
+    };
     let mut snapped = 0usize;
+    // Every change here moves control points only, never a segment end, so the starts
+    // computed once up front stay right.
     let mut starts: Vec<Point> = Vec::with_capacity(path.segments.len());
     let mut cur = path.start;
     for seg in &path.segments {
@@ -242,280 +265,32 @@ pub fn snap_smooth_joins(
         if b0 <= a0 || b1 <= a1 || b1 >= poly.points.len() {
             continue;
         }
-        let (q0, q1) = (starts[k - 1], starts[k]);
+        let j = Join {
+            k,
+            prev: (a0, b0),
+            next: (a1, b1),
+            q0: starts[k - 1],
+            q1: starts[k],
+        };
 
         match (path.segments[k - 1].clone(), path.segments[k].clone()) {
             (Segment::Cubic(pc1, pc2, pp3), Segment::Cubic(c1, c2, p3)) => {
-                let v_in = (pp3.x - pc2.x, pp3.y - pc2.y);
-                let v_out = (c1.x - q1.x, c1.y - q1.y);
-                let (n_in, n_out) = (v_in.0.hypot(v_in.1), v_out.0.hypot(v_out.1));
-                if n_in < 1e-9 || n_out < 1e-9 {
-                    continue;
-                }
-                let ang = (v_in.1.atan2(v_in.0) - v_out.1.atan2(v_out.0) + std::f64::consts::PI)
-                    .rem_euclid(2.0 * std::f64::consts::PI)
-                    - std::f64::consts::PI;
-                if ang.abs() > 20.0_f64.to_radians() {
-                    continue;
-                }
-
-                let chi2_of = |pc2: Point, c1: Point, c2: Point| -> f64 {
-                    let prev = crate::multimodel::Cubic {
-                        p0: q0,
-                        p1: pc1,
-                        p2: pc2,
-                        p3: pp3,
-                    };
-                    let next = crate::multimodel::Cubic {
-                        p0: q1,
-                        p1: c1,
-                        p2: c2,
-                        p3,
-                    };
-                    crate::multimodel::chi2_cubic(
-                        &poly.points,
-                        &poly.sigma,
-                        &s,
-                        a0,
-                        b0,
-                        &prev,
-                        true,
-                    ) + crate::multimodel::chi2_cubic(
-                        &poly.points,
-                        &poly.sigma,
-                        &s,
-                        a1,
-                        b1,
-                        &next,
-                        true,
-                    )
-                };
-                let free = chi2_of(pc2, c1, c2);
-
-                let reflect = |pc2: Point| Point::new(2.0 * q1.x - pc2.x, 2.0 * q1.y - pc2.y);
-                let cost = |v: &[f64; 4]| -> f64 {
-                    let p = Point::new(v[0], v[1]);
-                    chi2_of(p, reflect(p), Point::new(v[2], v[3]))
-                };
-                let mut v = [pc2.x, pc2.y, c2.x, c2.y];
-                let mut best = cost(&v);
-                let mut step = 0.25_f64.max(q1.dist(p3) * 0.05);
-                for _ in 0..12 {
-                    let mut moved = false;
-                    for i in 0..4 {
-                        for dir in [-1.0, 1.0] {
-                            let mut t = v;
-                            t[i] += dir * step;
-                            let c = cost(&t);
-                            if c < best - 1e-9 {
-                                best = c;
-                                v = t;
-                                moved = true;
-                            }
-                        }
-                    }
-                    if !moved {
-                        step *= 0.5;
-                        if step < 1e-4 {
-                            break;
-                        }
-                    }
-                }
-
-                if dbg {
-                    eprintln!(
-                        "  [g1] pair {k}: free chi2 {free:.2} -> constrained {best:.2} \
-        (d {:.2}) vs budget {budget:.2} -> {}",
-                        best - free,
-                        if best - free < budget { "SNAP" } else { "keep" }
-                    );
-                }
-                if best - free < budget {
-                    let new_pc2 = Point::new(v[0], v[1]);
-                    path.segments[k - 1] = Segment::Cubic(pc1, new_pc2, pp3);
-                    path.segments[k] = Segment::Cubic(reflect(new_pc2), Point::new(v[2], v[3]), p3);
+                if let Some((prev, next)) = snap_cubic_cubic(&cx, &j, [pc1, pc2, pp3], [c1, c2, p3])
+                {
+                    path.segments[k - 1] = prev;
+                    path.segments[k] = next;
                     snapped += 1;
                 }
             }
             (Segment::Line(_), Segment::Cubic(c1, c2, p3)) => {
-                let v_in = (q1.x - q0.x, q1.y - q0.y);
-                let v_out = (c1.x - q1.x, c1.y - q1.y);
-                let (n_in, n_out) = (v_in.0.hypot(v_in.1), v_out.0.hypot(v_out.1));
-                if n_in < 1e-9 || n_out < 1e-9 {
-                    continue;
-                }
-                let ang = (v_in.1.atan2(v_in.0) - v_out.1.atan2(v_out.0) + std::f64::consts::PI)
-                    .rem_euclid(2.0 * std::f64::consts::PI)
-                    - std::f64::consts::PI;
-                if ang.abs() > 20.0_f64.to_radians() {
-                    continue;
-                }
-                let u_in = (v_in.0 / n_in, v_in.1 / n_in);
-                let chi2_of = |arm: f64, c2: Point| -> f64 {
-                    let next = crate::multimodel::Cubic {
-                        p0: q1,
-                        p1: Point::new(q1.x + u_in.0 * arm, q1.y + u_in.1 * arm),
-                        p2: c2,
-                        p3,
-                    };
-                    crate::multimodel::chi2_cubic(
-                        &poly.points,
-                        &poly.sigma,
-                        &s,
-                        a1,
-                        b1,
-                        &next,
-                        true,
-                    )
-                };
-                let free = crate::multimodel::chi2_cubic(
-                    &poly.points,
-                    &poly.sigma,
-                    &s,
-                    a1,
-                    b1,
-                    &crate::multimodel::Cubic {
-                        p0: q1,
-                        p1: c1,
-                        p2: c2,
-                        p3,
-                    },
-                    true,
-                );
-                let mut v = [n_out, c2.x, c2.y];
-                let mut best = chi2_of(v[0], Point::new(v[1], v[2]));
-                let mut step = 0.25_f64.max(q1.dist(p3) * 0.05);
-                for _ in 0..12 {
-                    let mut moved = false;
-                    for i in 0..3 {
-                        for dir in [-1.0, 1.0] {
-                            let mut t = v;
-                            t[i] += dir * step;
-                            if i == 0 && t[0] < 1e-4 {
-                                continue;
-                            }
-                            let c = chi2_of(t[0], Point::new(t[1], t[2]));
-                            if c < best - 1e-9 {
-                                best = c;
-                                v = t;
-                                moved = true;
-                            }
-                        }
-                    }
-                    if !moved {
-                        step *= 0.5;
-                        if step < 1e-4 {
-                            break;
-                        }
-                    }
-                }
-                let lc_budget = cfg.lambda;
-                if dbg {
-                    eprintln!(
-                        "  [g1-lc] pair {k}: free chi2 {free:.2} -> constrained {best:.2} \
-        (d {:.2}) vs budget {lc_budget:.2} -> {}",
-                        best - free,
-                        if best - free < lc_budget {
-                            "SNAP"
-                        } else {
-                            "keep"
-                        }
-                    );
-                }
-                if best - free < lc_budget {
-                    let new_c1 = Point::new(q1.x + u_in.0 * v[0], q1.y + u_in.1 * v[0]);
-                    path.segments[k] = Segment::Cubic(new_c1, Point::new(v[1], v[2]), p3);
+                if let Some(next) = snap_line_cubic(&cx, &j, [c1, c2, p3]) {
+                    path.segments[k] = next;
                     snapped += 1;
                 }
             }
             (Segment::Cubic(pc1, pc2, pp3), Segment::Line(p3)) => {
-                let v_in = (pp3.x - pc2.x, pp3.y - pc2.y);
-                let v_out = (p3.x - q1.x, p3.y - q1.y);
-                let (n_in, n_out) = (v_in.0.hypot(v_in.1), v_out.0.hypot(v_out.1));
-                if n_in < 1e-9 || n_out < 1e-9 {
-                    continue;
-                }
-                let ang = (v_in.1.atan2(v_in.0) - v_out.1.atan2(v_out.0) + std::f64::consts::PI)
-                    .rem_euclid(2.0 * std::f64::consts::PI)
-                    - std::f64::consts::PI;
-                if ang.abs() > 20.0_f64.to_radians() {
-                    continue;
-                }
-                let u_out = (v_out.0 / n_out, v_out.1 / n_out);
-                let chi2_of = |pc1: Point, arm: f64| -> f64 {
-                    let prev = crate::multimodel::Cubic {
-                        p0: q0,
-                        p1: pc1,
-                        p2: Point::new(q1.x - u_out.0 * arm, q1.y - u_out.1 * arm),
-                        p3: q1,
-                    };
-                    crate::multimodel::chi2_cubic(
-                        &poly.points,
-                        &poly.sigma,
-                        &s,
-                        a0,
-                        b0,
-                        &prev,
-                        true,
-                    )
-                };
-                let free = crate::multimodel::chi2_cubic(
-                    &poly.points,
-                    &poly.sigma,
-                    &s,
-                    a0,
-                    b0,
-                    &crate::multimodel::Cubic {
-                        p0: q0,
-                        p1: pc1,
-                        p2: pc2,
-                        p3: pp3,
-                    },
-                    true,
-                );
-                let mut v = [pc1.x, pc1.y, n_in];
-                let mut best = chi2_of(Point::new(v[0], v[1]), v[2]);
-                let mut step = 0.25_f64.max(q0.dist(q1) * 0.05);
-                for _ in 0..12 {
-                    let mut moved = false;
-                    for i in 0..3 {
-                        for dir in [-1.0, 1.0] {
-                            let mut t = v;
-                            t[i] += dir * step;
-                            if i == 2 && t[2] < 1e-4 {
-                                continue;
-                            }
-                            let c = chi2_of(Point::new(t[0], t[1]), t[2]);
-                            if c < best - 1e-9 {
-                                best = c;
-                                v = t;
-                                moved = true;
-                            }
-                        }
-                    }
-                    if !moved {
-                        step *= 0.5;
-                        if step < 1e-4 {
-                            break;
-                        }
-                    }
-                }
-                let cl_budget = cfg.lambda;
-                if dbg {
-                    eprintln!(
-                        "  [g1-cl] pair {k}: free chi2 {free:.2} -> constrained {best:.2} \
-        (d {:.2}) vs budget {cl_budget:.2} -> {}",
-                        best - free,
-                        if best - free < cl_budget {
-                            "SNAP"
-                        } else {
-                            "keep"
-                        }
-                    );
-                }
-                if best - free < cl_budget {
-                    let new_pc2 = Point::new(q1.x - u_out.0 * v[2], q1.y - u_out.1 * v[2]);
-                    path.segments[k - 1] = Segment::Cubic(Point::new(v[0], v[1]), new_pc2, pp3);
+                if let Some(prev) = snap_cubic_line(&cx, &j, [pc1, pc2, pp3], p3) {
+                    path.segments[k - 1] = prev;
                     snapped += 1;
                 }
             }
@@ -525,7 +300,258 @@ pub fn snap_smooth_joins(
     snapped
 }
 
-/// Cumulative chord length, the parameterisation `chi2_cubic` expects.
+/// What every join test in [`snap_smooth_joins`] reads.
+struct JoinCtx<'a> {
+    /// The measured polyline, px.
+    poly: &'a Polyline,
+    /// Its cumulative arc length, px.
+    s: Vec<f64>,
+    /// The χ² two cubics may give up for the reflection: `2λ·(params_cubic − 4)`.
+    budget: f64,
+    /// `λ`: the χ² a line-cubic join may give up.
+    lambda: f64,
+    /// `INKVEC_G1DBG`: report every decision on stderr.
+    dbg: bool,
+}
+
+impl JoinCtx<'_> {
+    /// Subsampled residual of the measured points `a..=b` against `cb`.
+    fn chi2(&self, (a, b): (usize, usize), cb: &crate::multimodel::Cubic) -> f64 {
+        crate::multimodel::chi2_cubic(&self.poly.points, &self.poly.sigma, &self.s, a, b, cb, true)
+    }
+}
+
+/// One join between segments `k − 1` and `k`: their measured-point ranges and start
+/// points (`q1` is the join itself).
+struct Join {
+    k: usize,
+    prev: (usize, usize),
+    next: (usize, usize),
+    q0: Point,
+    q1: Point,
+}
+
+/// The lengths of the incoming and outgoing directions at a join, if both are
+/// non-degenerate (at least 1e-9 px) and the turn between them is within 20 degrees.
+fn nearly_smooth(v_in: (f64, f64), v_out: (f64, f64)) -> Option<(f64, f64)> {
+    let (n_in, n_out) = (v_in.0.hypot(v_in.1), v_out.0.hypot(v_out.1));
+    if n_in < 1e-9 || n_out < 1e-9 {
+        return None;
+    }
+    let ang = (v_in.1.atan2(v_in.0) - v_out.1.atan2(v_out.0) + std::f64::consts::PI)
+        .rem_euclid(2.0 * std::f64::consts::PI)
+        - std::f64::consts::PI;
+    if ang.abs() > 20.0_f64.to_radians() {
+        return None;
+    }
+    Some((n_in, n_out))
+}
+
+/// Compass search: from `v`, try `± step` along each coordinate that `admissible` allows,
+/// move whenever the cost drops by more than 1e-9, halve `step` after a sweep with no
+/// move, and stop when it falls under 1e-4 or after 12 sweeps. Returns the point and
+/// its cost.
+fn compass_search<const N: usize>(
+    mut v: [f64; N],
+    mut step: f64,
+    admissible: impl Fn(usize, &[f64; N]) -> bool,
+    cost: impl Fn(&[f64; N]) -> f64,
+) -> ([f64; N], f64) {
+    let mut best = cost(&v);
+    for _ in 0..12 {
+        let mut moved = false;
+        for i in 0..N {
+            for dir in [-1.0, 1.0] {
+                let mut t = v;
+                t[i] += dir * step;
+                if !admissible(i, &t) {
+                    continue;
+                }
+                let c = cost(&t);
+                if c < best - 1e-9 {
+                    best = c;
+                    v = t;
+                    moved = true;
+                }
+            }
+        }
+        if !moved {
+            step *= 0.5;
+            if step < 1e-4 {
+                break;
+            }
+        }
+    }
+    (v, best)
+}
+
+/// Two cubics meeting nearly smoothly: search the first cubic's second control point
+/// and the second cubic's second control point, with the second cubic's first control
+/// point fixed to the reflection of the first's about the join. Returns the replacement
+/// pair when the extra residual is under the budget.
+fn snap_cubic_cubic(
+    cx: &JoinCtx<'_>,
+    j: &Join,
+    [pc1, pc2, pp3]: [Point; 3],
+    [c1, c2, p3]: [Point; 3],
+) -> Option<(Segment, Segment)> {
+    let (k, q0, q1, budget) = (j.k, j.q0, j.q1, cx.budget);
+    nearly_smooth((pp3.x - pc2.x, pp3.y - pc2.y), (c1.x - q1.x, c1.y - q1.y))?;
+
+    let chi2_of = |pc2: Point, c1: Point, c2: Point| -> f64 {
+        let prev = crate::multimodel::Cubic {
+            p0: q0,
+            p1: pc1,
+            p2: pc2,
+            p3: pp3,
+        };
+        let next = crate::multimodel::Cubic {
+            p0: q1,
+            p1: c1,
+            p2: c2,
+            p3,
+        };
+        cx.chi2(j.prev, &prev) + cx.chi2(j.next, &next)
+    };
+    let free = chi2_of(pc2, c1, c2);
+
+    let reflect = |pc2: Point| Point::new(2.0 * q1.x - pc2.x, 2.0 * q1.y - pc2.y);
+    let (v, best) = compass_search(
+        [pc2.x, pc2.y, c2.x, c2.y],
+        0.25_f64.max(q1.dist(p3) * 0.05),
+        |_, _| true,
+        |v| {
+            let p = Point::new(v[0], v[1]);
+            chi2_of(p, reflect(p), Point::new(v[2], v[3]))
+        },
+    );
+
+    if cx.dbg {
+        eprintln!(
+            "  [g1] pair {k}: free chi2 {free:.2} -> constrained {best:.2} \
+             (d {:.2}) vs budget {budget:.2} -> {}",
+            best - free,
+            if best - free < budget { "SNAP" } else { "keep" }
+        );
+    }
+    (best - free < budget).then(|| {
+        let new_pc2 = Point::new(v[0], v[1]);
+        (
+            Segment::Cubic(pc1, new_pc2, pp3),
+            Segment::Cubic(reflect(new_pc2), Point::new(v[2], v[3]), p3),
+        )
+    })
+}
+
+/// A line then a nearly smooth cubic: search the cubic's first arm length along the
+/// line's direction and its second control point. Returns the replacement cubic when the
+/// extra residual is under `λ`.
+fn snap_line_cubic(cx: &JoinCtx<'_>, j: &Join, [c1, c2, p3]: [Point; 3]) -> Option<Segment> {
+    let (k, q0, q1) = (j.k, j.q0, j.q1);
+    let v_in = (q1.x - q0.x, q1.y - q0.y);
+    let (n_in, n_out) = nearly_smooth(v_in, (c1.x - q1.x, c1.y - q1.y))?;
+    let u_in = (v_in.0 / n_in, v_in.1 / n_in);
+    let chi2_of = |arm: f64, c2: Point| -> f64 {
+        let next = crate::multimodel::Cubic {
+            p0: q1,
+            p1: Point::new(q1.x + u_in.0 * arm, q1.y + u_in.1 * arm),
+            p2: c2,
+            p3,
+        };
+        cx.chi2(j.next, &next)
+    };
+    let free = cx.chi2(
+        j.next,
+        &crate::multimodel::Cubic {
+            p0: q1,
+            p1: c1,
+            p2: c2,
+            p3,
+        },
+    );
+    let (v, best) = compass_search(
+        [n_out, c2.x, c2.y],
+        0.25_f64.max(q1.dist(p3) * 0.05),
+        |i, t| !(i == 0 && t[0] < 1e-4),
+        |t| chi2_of(t[0], Point::new(t[1], t[2])),
+    );
+    let lc_budget = cx.lambda;
+    if cx.dbg {
+        eprintln!(
+            "  [g1-lc] pair {k}: free chi2 {free:.2} -> constrained {best:.2} \
+             (d {:.2}) vs budget {lc_budget:.2} -> {}",
+            best - free,
+            if best - free < lc_budget {
+                "SNAP"
+            } else {
+                "keep"
+            }
+        );
+    }
+    (best - free < lc_budget).then(|| {
+        let new_c1 = Point::new(q1.x + u_in.0 * v[0], q1.y + u_in.1 * v[0]);
+        Segment::Cubic(new_c1, Point::new(v[1], v[2]), p3)
+    })
+}
+
+/// A cubic then a nearly smooth line: search the cubic's first control point and its
+/// second arm length along the line's direction. Returns the replacement cubic when the
+/// extra residual is under `λ`.
+fn snap_cubic_line(
+    cx: &JoinCtx<'_>,
+    j: &Join,
+    [pc1, pc2, pp3]: [Point; 3],
+    p3: Point,
+) -> Option<Segment> {
+    let (k, q0, q1) = (j.k, j.q0, j.q1);
+    let v_out = (p3.x - q1.x, p3.y - q1.y);
+    let (n_in, n_out) = nearly_smooth((pp3.x - pc2.x, pp3.y - pc2.y), v_out)?;
+    let u_out = (v_out.0 / n_out, v_out.1 / n_out);
+    let chi2_of = |pc1: Point, arm: f64| -> f64 {
+        let prev = crate::multimodel::Cubic {
+            p0: q0,
+            p1: pc1,
+            p2: Point::new(q1.x - u_out.0 * arm, q1.y - u_out.1 * arm),
+            p3: q1,
+        };
+        cx.chi2(j.prev, &prev)
+    };
+    let free = cx.chi2(
+        j.prev,
+        &crate::multimodel::Cubic {
+            p0: q0,
+            p1: pc1,
+            p2: pc2,
+            p3: pp3,
+        },
+    );
+    let (v, best) = compass_search(
+        [pc1.x, pc1.y, n_in],
+        0.25_f64.max(q0.dist(q1) * 0.05),
+        |i, t| !(i == 2 && t[2] < 1e-4),
+        |t| chi2_of(Point::new(t[0], t[1]), t[2]),
+    );
+    let cl_budget = cx.lambda;
+    if cx.dbg {
+        eprintln!(
+            "  [g1-cl] pair {k}: free chi2 {free:.2} -> constrained {best:.2} \
+             (d {:.2}) vs budget {cl_budget:.2} -> {}",
+            best - free,
+            if best - free < cl_budget {
+                "SNAP"
+            } else {
+                "keep"
+            }
+        );
+    }
+    (best - free < cl_budget).then(|| {
+        let new_pc2 = Point::new(q1.x - u_out.0 * v[2], q1.y - u_out.1 * v[2]);
+        Segment::Cubic(Point::new(v[0], v[1]), new_pc2, pp3)
+    })
+}
+
+/// Cumulative chord length, the parameterisation `chi2_cubic` expects (px; the same
+/// values as `crate::tangents::arc_lengths`).
 fn arc_lengths_of(pts: &[Point]) -> Vec<f64> {
     let mut out = Vec::with_capacity(pts.len());
     let mut acc = 0.0;

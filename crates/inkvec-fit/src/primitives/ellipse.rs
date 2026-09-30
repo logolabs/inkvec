@@ -1,4 +1,12 @@
 //! Ellipse geometry and fitting (Taubin algebraic + orthogonal Levenberg-Marquardt).
+//!
+//! Used by the whole-ring primitive search (`super::fit_primitive_or_arcs`, through
+//! [`fit_ellipse`]) and by the dynamic program's elliptical-arc candidate
+//! (`crate::candidates::try_ellipse`, through [`fit_ellipse_algebraic`] alone, which is
+//! cheap enough to run per span). Points and radii are in px, angles in radians.
+//!
+//! An ellipse here is `c + R(angle)·(rx·cos t, ry·sin t)` for the parametric angle `t`,
+//! with `R` the rotation matrix. After fitting, `rx ≥ ry` and `angle ∈ (−π/2, π/2]`.
 
 use inkvec_core::{Point, Vec2};
 use std::f64::consts::PI;
@@ -29,7 +37,7 @@ impl EllipseFit {
         Point::new(self.c.x + c * x - s * y, self.c.y + s * x + c * y)
     }
 
-    /// Derivative with respect to `t`.
+    /// Derivative with respect to `t`: `R(angle)·(−rx·sin t, ry·cos t)`, px per radian.
     pub(crate) fn deriv(&self, t: f64) -> Vec2 {
         let (s, c) = self.angle.sin_cos();
         let (x, y) = (-self.rx * t.sin(), self.ry * t.cos());
@@ -41,6 +49,19 @@ impl EllipseFit {
 
     /// Orthogonal contact: `(signed distance, parametric angle t, unit outward normal
     /// in the ellipse frame)`. Positive distance is outside.
+    ///
+    /// In the ellipse's own frame the point is `q` and the curve `E(t) = (rx cos t,
+    /// ry sin t)`. The foot of the perpendicular satisfies `(q − E(t))·E'(t) = 0`, i.e.
+    ///
+    /// ```text
+    ///     f(t) = −rx·qx·sin t + ry·qy·cos t + (rx² − ry²)·sin t·cos t = 0
+    /// ```
+    ///
+    /// solved by Newton's method from `t = atan2(rx·qy, ry·qx)` (exact on a circle), with
+    /// steps clamped to ±0.5 rad and at most 12 iterations. The normal at `E(t)` is
+    /// `(ry cos t, rx sin t)` normalised, and the distance is `(q − E(t))·n`. Near the
+    /// centre of an eccentric ellipse `f` has several roots and Newton may settle on a
+    /// local rather than the nearest foot; fits never have their points there.
     pub fn contact(&self, p: Point) -> (f64, f64, Vec2) {
         let (s, c) = self.angle.sin_cos();
         let (dx, dy) = (p.x - self.c.x, p.y - self.c.y);
@@ -89,6 +110,9 @@ impl EllipseFit {
 }
 
 /// Weighted sum of squared orthogonal distances from `pts` to the ellipse.
+///
+/// `χ² = Σ w_k·d_k²`, `d_k` from [`EllipseFit::contact`] and `w_k = 1/σ_k²`
+/// (`super::weights`); dimensionless.
 pub fn ellipse_chi2(pts: &[Point], sigma: &[f64], e: &EllipseFit) -> f64 {
     let w = weights(sigma, pts.len());
     pts.iter()
@@ -101,6 +125,19 @@ pub fn ellipse_chi2(pts: &[Point], sigma: &[f64], e: &EllipseFit) -> f64 {
 }
 
 /// Geometry of the conic `a x² + b xy + c y² + d x + e y + f = 0`, if it is an ellipse.
+///
+/// Returns `(centre, r1, r2, angle)`, with `r1` the semi-axis along `angle` and `r2` the
+/// one across it (either may be the larger). The centre is where the gradient vanishes,
+///
+/// ```text
+///     x0 = (b·e − 2c·d) / (4ac − b²),     y0 = (b·d − 2a·e) / (4ac − b²),
+/// ```
+///
+/// `f0 = f + ½(d·x0 + e·y0)` is the conic's value there, the axes are rotated by
+/// `angle = ½·atan2(b, a − c)`, and with `l1`, `l2` the quadratic form's values along the
+/// two axes the semi-axes are `√(−f0/l1)` and `√(−f0/l2)`. `None` unless
+/// `b² − 4ac < 0` (an ellipse, not a parabola or hyperbola), `f0 ≠ 0` and both
+/// `−f0/l` are positive (a real, non-empty ellipse).
 pub(crate) fn conic_to_ellipse(k: [f64; 6]) -> Option<(Point, f64, f64, f64)> {
     let [a, b, c, d, e, f] = k;
     let disc = b * b - 4.0 * a * c;
@@ -137,6 +174,20 @@ pub(crate) fn canonical_angle(mut angle: f64) -> f64 {
 }
 
 /// Taubin's algebraic conic fit, weighted by `1/σ²`, returned only if it is an ellipse.
+///
+/// The points are first centred on their weighted centroid and scaled by their RMS
+/// distance from it, so the conic's coefficients are of order one. Each point then gives
+/// the row `z = (u², u·v, v², u, v)`; the constant term is eliminated by centring the rows
+/// on their weighted mean `z̄`. Taubin's fit minimises the algebraic residual
+/// `θᵀ·C·θ`, `C = Σ w (z − z̄)(z − z̄)ᵀ`, subject to `θᵀ·N·θ = 1` with
+/// `N = Σ w (∂z/∂u ∂z/∂uᵀ + ∂z/∂v ∂z/∂vᵀ)`, the gradient normalisation that makes the
+/// residual approximate a squared distance and removes most of the plain algebraic fit's
+/// bias. That is the generalised eigenproblem `C·θ = μ·N·θ` for the smallest `μ`
+/// (`solver::gen_eigen_5`); `f = −z̄·θ`. The conic is converted with
+/// `conic_to_ellipse`, scaled back to px, and given `rx ≥ ry`.
+///
+/// `None` for fewer than six points, zero weight, coincident points or a conic that is
+/// not an ellipse. `chi2` is the orthogonal residual of this algebraic solution.
 pub fn fit_ellipse_algebraic(pts: &[Point], sigma: &[f64]) -> Option<EllipseFit> {
     let n = pts.len();
     if n < 6 {
@@ -226,6 +277,14 @@ pub fn fit_ellipse_algebraic(pts: &[Point], sigma: &[f64]) -> Option<EllipseFit>
 }
 
 /// Orthogonal-distance ellipse fit (Ahn et al. 2001).
+///
+/// Levenberg–Marquardt on the orthogonal distances (`refine_ellipse`) from several
+/// starts, keeping the lowest χ²: the algebraic fit when there is one, and four
+/// near-circles (radii 1.02·r and 0.98·r about the orthogonal circle fit) at 0°, 45°, 90°
+/// and 135°. Several starts because the orthogonal objective has local minima, and the
+/// near-circles still give a start where the algebraic fit returns nothing (it offers
+/// only ellipses) or lands far off. `None` for fewer than six points or when every start
+/// fails.
 pub fn fit_ellipse(pts: &[Point], sigma: &[f64]) -> Option<EllipseFit> {
     if pts.len() < 6 {
         return None;
@@ -257,6 +316,20 @@ pub fn fit_ellipse(pts: &[Point], sigma: &[f64]) -> Option<EllipseFit> {
     best
 }
 
+/// Levenberg–Marquardt on the signed orthogonal distances `d_k` of [`EllipseFit::contact`],
+/// over `(cx, cy, rx, ry, angle)`, weighted by `1/σ²`.
+///
+/// The Jacobian uses the envelope argument of the `primitives` overview: the contact angle is
+/// held fixed, so with `n` the unit normal in the ellipse frame, `n_w` the same normal in
+/// the world frame and `(ex, ey) = (rx cos t, ry sin t)`,
+///
+/// ```text
+///     ∂d/∂c = −n_w,   ∂d/∂rx = −n_x·cos t,   ∂d/∂ry = −n_y·sin t,   ∂d/∂angle = n_x·ey − n_y·ex
+/// ```
+///
+/// Radii are kept at least 1e-3 px, and at most 200 iterations run. The result is
+/// normalised to `rx ≥ ry`, `angle ∈ (−π/2, π/2]`. `None` if a contact distance turns
+/// non-finite or the solver fails.
 fn refine_ellipse(pts: &[Point], sigma: &[f64], init: EllipseFit) -> Option<EllipseFit> {
     let w = weights(sigma, pts.len());
     let eval = |p: &[f64]| -> Option<(f64, Vec<Vec<f64>>, Vec<f64>)> {

@@ -1,4 +1,19 @@
 //! Tangent estimation and turn cost models (DESIGN.md S4).
+//!
+//! Stage 3 of the shipping fit (see the crate overview): before the multimodel dynamic
+//! program runs, every measured point gets an incoming and an outgoing unit tangent
+//! ([`estimate_tangents`]). The program's cubics inherit these directions at their ends
+//! (only the arm lengths are fitted), and every chosen vertex is charged for the turn
+//! between its two tangents ([`vertex_cost`], [`break_cost`]). Called from
+//! `crate::multimodel` (and its `scan` and `refine` steps) and from `crate::candidates`.
+//!
+//! The tangent at a point is the derivative of a weighted least-squares quadratic fitted
+//! to the points around it, parametrized by arc length. The window is the widest (up to
+//! [`TANGENT_WINDOW_MAX`] points a side) whose quadratic is still consistent with the
+//! measurement model, `χ² ≤ τ²·dof`. A window centred on the point is tried first; it
+//! passes on smooth runs, where averaging both sides beats noise, and fails across a
+//! true corner, where no quadratic fits, and there the two sides are estimated
+//! separately so each keeps its own direction instead of their bisector.
 
 use crate::FitConfig;
 use inkvec_core::{Point, Polyline, Vec2};
@@ -26,7 +41,7 @@ pub struct Tangents {
     pub outgoing: Vec<Vec2>,
 }
 
-/// Cumulative arc length at each vertex.
+/// Cumulative arc length at each vertex, in px: `s[0] = 0`, `s[k] = s[k−1] + |p_k − p_{k−1}|`.
 pub(crate) fn arc_lengths(pts: &[Point]) -> Vec<f64> {
     let mut s = Vec::with_capacity(pts.len());
     let mut acc = 0.0;
@@ -39,6 +54,11 @@ pub(crate) fn arc_lengths(pts: &[Point]) -> Vec<f64> {
 }
 
 /// Solve a symmetric 3x3 system by Cramer's rule. `m` is row-major.
+///
+/// `x_c = det(M with column c replaced by r) / det(M)`. `None` when `|det(M)| < 1e-18`,
+/// i.e. the system is (numerically) singular; the threshold is absolute, so callers pass
+/// systems whose entries are of order one or larger. Cramer's rule is fine at 3x3 and
+/// avoids pivoting logic; nothing here needs better conditioning.
 pub(crate) fn solve3(m: [[f64; 3]; 3], r: [f64; 3]) -> Option<[f64; 3]> {
     let det = |a: [[f64; 3]; 3]| {
         a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1])
@@ -62,6 +82,20 @@ pub(crate) fn solve3(m: [[f64; 3]; 3], r: [f64; 3]) -> Option<[f64; 3]> {
 
 /// Weighted least-squares quadratic `a + b·u + c·u²` through `(u, x, y, w)` samples,
 /// returning the derivative `(b_x, b_y)` at `u = 0` and the normalized residual.
+///
+/// Each sample is `(u, p, w)`: its signed arc-length offset from the point of interest
+/// (px), its position (px) and its weight `1/σ²`. The normal equations
+///
+/// ```text
+///     [S0 S1 S2] [a]   [Σw·x    ]
+///     [S1 S2 S3] [b] = [Σw·u·x  ]      S_m = Σ w·u^m
+///     [S2 S3 S4] [c]   [Σw·u²·x ]
+/// ```
+///
+/// are solved for x and y separately ([`solve3`]). The returned direction is `(b_x, b_y)`
+/// normalised, which points towards increasing `u`; the residual is
+/// `Σ w·|p − q(u)|²`, a χ² in units of sigma, with `2·len − 6` degrees of freedom.
+/// `None` for a singular system or a zero or non-finite derivative.
 fn quadratic_tangent(samples: &[(f64, Point, f64)]) -> Option<(Vec2, f64)> {
     let mut s = [0.0f64; 5];
     let mut tx = [0.0f64; 3];
@@ -101,6 +135,15 @@ fn quadratic_tangent(samples: &[(f64, Point, f64)]) -> Option<(Vec2, f64)> {
 }
 
 /// Tangent at vertex `k` from the points on one side of it only.
+///
+/// `forward` uses `k, k+1, …` (the outgoing tangent), otherwise `k, k−1, …` (the incoming
+/// one, with negative `u` so the direction still points along the boundary). Windows of
+/// `w = wmax..2` points beyond `k` are tried widest first and the first whose quadratic
+/// satisfies `χ² ≤ τ²·(2(w+1) − 6)` is taken; at `w = 2` the fit has no spare degrees of
+/// freedom and is always accepted. `wmax` is [`TANGENT_WINDOW_MAX`], less near the end of
+/// an open polyline; a closed one wraps. With only one point available on that side, or
+/// if every fit is singular, the chord to the neighbour is used. `None` when there is no
+/// neighbour on that side (the end of an open polyline) or it coincides with `k`.
 fn one_sided_tangent(poly: &Polyline, k: usize, forward: bool, cfg: &FitConfig) -> Option<Vec2> {
     let n = poly.len();
     let avail = if poly.closed {
@@ -155,6 +198,12 @@ fn one_sided_tangent(poly: &Polyline, k: usize, forward: bool, cfg: &FitConfig) 
 }
 
 /// Symmetric tangent at vertex `k` from the widest window of at most `half` points each side.
+///
+/// Windows of `w = half..2` points on each side (capped by [`TANGENT_WINDOW_MAX`] and by
+/// what the polyline has) are fitted with a quadratic in signed arc length, widest first;
+/// the first with `χ² ≤ τ²·(2(2w+1) − 6)` wins. `None` when fewer than two points are
+/// available on a side or no window is consistent, which is what happens across a
+/// corner: that `None` is the signal to fall back to one-sided estimates.
 pub(crate) fn symmetric_tangent(
     poly: &Polyline,
     k: usize,
@@ -202,6 +251,12 @@ pub(crate) fn symmetric_tangent(
 }
 
 /// Estimate the tangents at every vertex.
+///
+/// Where a symmetric window fits (`symmetric_tangent`), incoming and outgoing are the
+/// same direction: the point is on a smooth run. Otherwise each side is estimated on its
+/// own (`one_sided_tangent`); if only one side exists (the ends of an open polyline) both
+/// take it, and with neither the x axis stands in. All tangents are unit vectors pointing
+/// along the polyline's direction of travel.
 pub fn estimate_tangents(poly: &Polyline, cfg: &FitConfig) -> Tangents {
     let n = poly.len();
     let fallback = Vec2 { x: 1.0, y: 0.0 };
@@ -227,7 +282,8 @@ pub fn estimate_tangents(poly: &Polyline, cfg: &FitConfig) -> Tangents {
     Tangents { incoming, outgoing }
 }
 
-/// Unsigned angle between two directions, in radians.
+/// Unsigned angle between two directions, in radians, in `[0, π]`: `acos(a·b / (|a||b|))`.
+/// A zero vector has no direction and gives 0.
 pub(crate) fn turn_angle(a: Vec2, b: Vec2) -> f64 {
     let (na, nb) = (a.norm(), b.norm());
     if na < 1e-12 || nb < 1e-12 {
@@ -236,7 +292,17 @@ pub(crate) fn turn_angle(a: Vec2, b: Vec2) -> f64 {
     (a.dot(b) / (na * nb)).clamp(-1.0, 1.0).acos()
 }
 
-/// Cost of a tangent break between directions `a` and `b`.
+/// Cost of a tangent break between directions `a` and `b`, in nats.
+///
+/// ```text
+///     cost = λ · min(1, (θ / θ_break)²)
+/// ```
+///
+/// with `θ` the `turn_angle` and `θ_break` the break angle in force
+/// ([`G1_BREAK_DEGREES`] unless a [`crate::cost::CostModel`] says otherwise). A corner is
+/// one extra free parameter (the outgoing direction is no longer implied by the incoming
+/// one), hence the saturation at `λ`; the quadratic ramp below it keeps tangent-estimate
+/// noise on a smooth join nearly free.
 pub fn break_cost(a: Vec2, b: Vec2, lambda: f64) -> f64 {
     // Quadratic in the turn, saturating at a full corner (the exponent was once
     // `INKVEC_BREAK_EXP`; nothing measured another).
@@ -244,7 +310,8 @@ pub fn break_cost(a: Vec2, b: Vec2, lambda: f64) -> f64 {
     lambda * (r * r).min(1.0)
 }
 
-/// Turn cost charged when vertex `k` is chosen as a segment boundary.
+/// Turn cost charged when vertex `k` is chosen as a segment boundary: the
+/// [`break_cost`] between its incoming and outgoing tangents, in nats.
 pub fn vertex_cost(tan: &Tangents, k: usize, cfg: &FitConfig) -> f64 {
     break_cost(tan.incoming[k], tan.outgoing[k], cfg.lambda)
 }

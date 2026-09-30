@@ -20,6 +20,28 @@
 //! what they were, so a trace that asks for nothing is byte-identical to what it was; the
 //! two environment variables are gone.
 //!
+//! # What a parameter costs, and why
+//!
+//! Every fitter in the crate minimises `E = ½·χ² + λ·P + (break costs)`, all in nats:
+//!
+//! - `½·χ²` is the Gaussian negative log-likelihood of the measured points given the
+//!   emitted geometry, `χ² = Σ (d_k/σ_k)²`;
+//! - `λ` ([`crate::FitConfig::lambda`]) is the price of writing one number, derived as
+//!   `ln(extent / precision)`: a coordinate that can take `extent / precision`
+//!   distinguishable values carries that many nats of information (about 7.85 for a
+//!   256 px canvas at 0.1 px);
+//! - `P` counts the numbers a segment writes: a line 2 ([`crate::PARAMS_LINE`]), a cubic
+//!   [`cubic_params`] (6 by default), a circular arc 5 ([`crate::curves::PARAMS_ARC`]),
+//!   an elliptical arc 7 ([`crate::curves::PARAMS_ELLIPTICAL_ARC`]). The start point
+//!   of a segment is the previous one's end and is not charged again;
+//! - a join where the tangent turns costs up to one more parameter, `λ`, because the
+//!   outgoing direction is then a number of its own rather than implied by the incoming
+//!   one (`crate::tangents::break_cost`, ramping quadratically up to
+//!   [`g1_break_radians`]).
+//!
+//! So a segment is kept exactly when the misfit it removes is worth more than the numbers
+//! it adds. The two prices in [`CostModel`] are the ones exposed to users.
+//!
 //! # How the scope works
 //!
 //! The values live in two atomics that the fitter reads, so they are visible on every rayon
@@ -78,10 +100,13 @@ impl CostModel {
     }
 }
 
-/// "No override": the value in this slot is the standard one.
+/// "No override": the value in this slot is the standard one. A NaN bit pattern, which no
+/// clamped price can have (see [`CostModel::with_overrides`]).
 const UNSET: u64 = f64::NAN.to_bits();
 
+/// The cubic price in force, as `f64` bits, or [`UNSET`].
 static CUBIC: AtomicU64 = AtomicU64::new(UNSET);
+/// The full-corner turn in force, degrees as `f64` bits, or [`UNSET`].
 static G1_DEGREES: AtomicU64 = AtomicU64::new(UNSET);
 
 /// Serialises traces that change the prices against every other trace.

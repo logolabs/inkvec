@@ -2,6 +2,33 @@
 //!
 //! Evaluates candidate models — straight lines, circular arcs, elliptical arcs,
 //! moment-matched G1 cubic Béziers, and free-tangent cubic Béziers — for any sub-polyline span (i, j).
+//!
+//! # Where this sits
+//!
+//! Stage 4 of the shipping fit (see the crate overview). The multimodel dynamic program
+//! (`crate::multimodel::scan`) asks, for every candidate span `(i, j)` of the measured
+//! polyline, what each model would cost there; this file answers. Inputs are the points
+//! (px), their sigmas (px), their cumulative arc lengths `s` (px), the tangents
+//! estimated at every point (`crate::tangents`) and prefix sums that make a span's
+//! moments O(1). Outputs are a residual `χ²` (dimensionless, in units of each point's
+//! sigma), the fitted parameters, and a cost in nats:
+//!
+//! | model | fitter | cost |
+//! |---|---|---|
+//! | line | total least squares ([`scatter_min_eigen`]) | `½χ² + 2λ + breaks` ([`line_cost_terms`]) |
+//! | G1 cubic | area and moment matching, Levien's quartic ([`best_cubic`]) | `½χ² + 6λ + wobble` |
+//! | free cubic (research) | linear least squares, ends pinned ([`try_free_cubic`]) | `½χ² + 6λ + wobble + breaks` |
+//! | circular arc | Kåsa algebraic circle ([`CirclePrefix`], [`try_arc`]) | `½χ² + 5λ + breaks` |
+//! | elliptical arc | algebraic ellipse, Sampson distance ([`try_ellipse`]) | `½χ² + 7λ + breaks` |
+//!
+//! "breaks" is the [`break_cost`] between the model's own end directions and the
+//! estimated tangents at whichever ends are joins; the G1 cubic takes the estimated
+//! tangents as its end directions and so pays none. "6" is [`params_cubic`], which a
+//! trace may reprice (see `crate::cost`).
+//!
+//! Every fitter here is closed form or a fixed small number of steps, so a candidate
+//! costs O(1) in the span length (or O([`MAX_RESIDUAL_SAMPLES`]) for a cubic's
+//! residual), which is what keeps the dynamic program O(n²).
 
 use crate::tangents::{break_cost, turn_angle, Tangents};
 use crate::{FitConfig, PARAMS_LINE};
@@ -55,7 +82,8 @@ pub(crate) fn free_cubic_enabled() -> bool {
     cfg!(feature = "research") && inkvec_core::env::flag("INKVEC_FREE_CUBIC")
 }
 
-/// Normalize vector to unit length, if non-degenerate.
+/// Normalize vector to unit length, if non-degenerate: `None` for a length below 1e-12 or
+/// a non-finite one.
 #[inline]
 pub(crate) fn unit(v: Vec2) -> Option<Vec2> {
     let n = v.norm();
@@ -70,6 +98,18 @@ pub(crate) fn unit(v: Vec2) -> Option<Vec2> {
 }
 
 /// Green's-theorem contributions of one straight edge.
+///
+/// For the edge `a -> b`, parametrized linearly with `dx = b.x − a.x`, `dy = b.y − a.y`,
+/// returns the exact line integrals
+///
+/// ```text
+///     ∫ y dx   = dx·(a.y + dy/2)
+///     ∫ x·y dx = dx·(a.x·a.y + (a.x·dy + a.y·dx)/2 + dx·dy/3)
+///     ∫ y² dx  = dx·(a.y² + a.y·dy + dy²/3)
+/// ```
+///
+/// in px², px³ and px³. Summed round a closed loop they give its area and first moments
+/// (see the `crate::multimodel` overview).
 #[inline]
 pub(crate) fn edge_terms(a: Point, b: Point) -> (f64, f64, f64) {
     let (dx, dy) = (b.x - a.x, b.y - a.y);
@@ -81,6 +121,10 @@ pub(crate) fn edge_terms(a: Point, b: Point) -> (f64, f64, f64) {
 }
 
 /// Raw (∫ y dx, ∫ x y dx, ∫ y² dx) computed directly over points without prefix sums.
+///
+/// Sums [`edge_terms`] over the edges `i -> i+1 … j−1 -> j`, O(j − i). The dynamic
+/// program reads the same quantity as a difference of prefix sums; this is the
+/// independent version the tests and `segment_cost_direct` use.
 pub(crate) fn raw_moments_direct(pts: &[Point], i: usize, j: usize) -> (f64, f64, f64) {
     let mut a = 0.0;
     let mut x = 0.0;
@@ -95,6 +139,17 @@ pub(crate) fn raw_moments_direct(pts: &[Point], i: usize, j: usize) -> (f64, f64
 }
 
 /// Smaller eigenvalue of the weighted scatter matrix, from raw sums.
+///
+/// With `w = Σw_k`, `sx = Σw_k·x_k`, `sxx = Σw_k·x_k²` and so on (weights `1/σ²`), the
+/// scatter about the weighted centroid is `C = [[Cxx, Cxy], [Cxy, Cyy]]` with
+/// `Cxx = sxx − sx²/w` etc., and
+///
+/// ```text
+///     λ_min = ½ (Cxx + Cyy − √((Cxx − Cyy)² + 4·Cxy²))
+/// ```
+///
+/// is the weighted sum of squared perpendicular distances to the total-least-squares
+/// line: the line's χ². Clamped at 0 against cancellation; `w` must be positive.
 pub(crate) fn scatter_min_eigen(w: f64, sx: f64, sy: f64, sxx: f64, syy: f64, sxy: f64) -> f64 {
     let cxx = sxx - sx * sx / w;
     let cyy = syy - sy * sy / w;
@@ -105,6 +160,7 @@ pub(crate) fn scatter_min_eigen(w: f64, sx: f64, sy: f64, sxx: f64, syy: f64, sx
     (0.5 * (tr - disc)).max(0.0)
 }
 
+/// Wrap an angle (radians) into `[−π, π]` by subtracting the nearest whole turn.
 #[inline]
 fn mod_2pi(th: f64) -> f64 {
     let scaled = th * std::f64::consts::FRAC_1_PI * 0.5;
@@ -113,14 +169,37 @@ fn mod_2pi(th: f64) -> f64 {
 
 /// A cubic in the frame Levien's quartic is stated in: unit chord on the x-axis.
 struct G1Frame {
+    /// Angle of the start tangent from the chord, radians in `[−π, π]`.
     th0: f64,
+    /// Angle of the chord from the end tangent, radians in `[−π, π]`.
     th1: f64,
+    /// Signed area between the points and the chord, divided by chord².
     area: f64,
+    /// First moment of that region along the chord, divided by chord⁴.
     mx: f64,
+    /// Chord length, in px.
     chord: f64,
 }
 
 /// Reduce raw path integrals to the unit-chord frame.
+///
+/// `raw` holds `(∫ y dx, ∫ x·y dx, ∫ y² dx)` along the points from `p0` to `p1`. The
+/// steps:
+///
+/// 1. subtract the same integrals along the chord `p0 -> p1`, which closes the path into
+///    a loop (points forward, chord back) so the integrals become loop integrals:
+///    `A = ∮ y dx`, `X = ∮ x·y dx`, `Y = ∮ y² dx`;
+/// 2. move the origin to `p0`. Round a closed loop `∮ dx = ∮ x dx = 0`, so
+///    `X' = X − x0·A` and `½·Y' = ½·Y − y0·A`;
+/// 3. by Green's theorem `X' = −∬ x dA` and `½·Y' = −∬ y dA` (origin at `p0`), so
+///    `M = dx·X' + dy·½Y'` is the region's first moment along the chord direction `d`,
+///    times `|d|` and with Green's sign;
+/// 4. scale to a unit chord: area scales as length², a first moment as length³, and the
+///    extra `|d|` from step 3 makes `M / |d|⁴`.
+///
+/// `(area, mx)` are then the two numbers `kurbo::fit::cubic_fit` consumes, in its own sign
+/// convention. `None` for a zero-length or non-finite chord. The tangents need not be
+/// unit length; only their angles are used.
 fn g1_frame(p0: Point, p1: Point, t0: Vec2, t1: Vec2, raw: (f64, f64, f64)) -> Option<G1Frame> {
     let d = p1 - p0;
     let chord2 = d.dot(d);
@@ -151,19 +230,22 @@ fn g1_frame(p0: Point, p1: Point, t0: Vec2, t1: Vec2, raw: (f64, f64, f64)) -> O
     })
 }
 
-/// Up to four `(d0, d1)` arm pairs.
+/// Up to four `(d0, d1)` arm pairs, the real solutions of Levien's quartic. A fixed
+/// array rather than a `Vec`, because one is built per candidate span.
 struct Arms {
     items: [(f64, f64); 4],
     len: usize,
 }
 
 impl Arms {
+    /// Append a pair; a fifth is silently dropped (a quartic has at most four roots).
     fn push(&mut self, d: (f64, f64)) {
         if self.len < 4 {
             self.items[self.len] = d;
             self.len += 1;
         }
     }
+    /// The pairs pushed so far, in order.
     fn iter(&self) -> impl Iterator<Item = (f64, f64)> + '_ {
         self.items[..self.len].iter().copied()
     }
@@ -171,6 +253,27 @@ impl Arms {
 
 /// Levien's quartic: arm lengths of the G1 cubics matching signed area and x-moment on
 /// a unit chord. Coefficients as in `kurbo::fit::cubic_fit`.
+///
+/// On a unit chord with end-tangent angles `θ0`, `θ1` fixed, a cubic has two free
+/// numbers, its arm lengths `d0` and `d1` (as fractions of the chord). Requiring its
+/// signed area to equal `area` gives `d1` in terms of `d0`,
+///
+/// ```text
+///     d1 = (d0·sin θ0 − 10/3·area) / (½·d0·sin(θ0 + θ1) − sin θ1)
+/// ```
+///
+/// and substituting that into the requirement that its x-moment equal `mx` leaves a
+/// quartic `a4·d0⁴ + … + a0 = 0` whose coefficients are the expressions below (taken
+/// from kurbo, not re-derived). Its real roots are found with kurbo's closed-form
+/// solvers, falling back to the cubic or quadratic formula when the leading coefficients
+/// vanish; a factor with a complex pair contributes its real part, the nearest real
+/// candidate. When every coefficient vanishes the conventional `(1/3, 1/3)` is returned.
+///
+/// Following kurbo, a negative `d0` is replaced by `(0, sin θ0 / sin(θ0+θ1))` and a
+/// non-positive `d1` by `(sin θ1 / sin(θ0+θ1), 0)`: the nearest cubic with one arm
+/// collapsed. Pairs that are negative or non-finite after that are dropped, so the result
+/// may be empty. The caller scores every pair and keeps the best, which is why all are
+/// returned rather than one.
 fn arms_from_moments(th0: f64, th1: f64, area: f64, mx: f64) -> Arms {
     let mut out = Arms {
         items: [(0.0, 0.0); 4],
@@ -260,7 +363,8 @@ fn arms_from_moments(th0: f64, th1: f64, area: f64, mx: f64) -> Arms {
     out
 }
 
-/// A cubic Bézier with its four control points.
+/// A cubic Bézier with its four control points, in px: start `p0`, controls `p1` and
+/// `p2`, end `p3`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Cubic {
     pub(crate) p0: Point,
@@ -271,6 +375,9 @@ pub(crate) struct Cubic {
 
 impl Cubic {
     /// The G1 cubic with arms `d0`, `d1` (fractions of the chord) along `t0`, `t1`.
+    ///
+    /// `p1 = p0 + d0·chord·t0` and `p2 = p3 − d1·chord·t1`. `t0` and `t1` must be unit
+    /// vectors pointing along the direction of travel; `chord` is `|p3 − p0|` in px.
     pub(crate) fn from_arms(
         p0: Point,
         p3: Point,
@@ -288,6 +395,8 @@ impl Cubic {
         }
     }
 
+    /// The point at parameter `t`, Bernstein form (the same expression as
+    /// [`crate::curves::eval_cubic`], kept inline here for the projection's hot loop).
     #[inline]
     fn eval(&self, t: f64) -> Point {
         let mt = 1.0 - t;
@@ -298,6 +407,7 @@ impl Cubic {
         )
     }
 
+    /// The derivative `B'(t)` at `t`, unnormalised (px per unit `t`).
     #[inline]
     fn deriv(&self, t: f64) -> Vec2 {
         let mt = 1.0 - t;
@@ -314,6 +424,13 @@ impl Cubic {
 
     /// Squared distance from `p` to the curve, starting Newton from parameter `t`: the
     /// reference [`Self::dist2_lanes`] reproduces bit for bit.
+    ///
+    /// Newton's method on `f(t) = (B(t) − p)·B'(t)`, dropping the second-derivative term
+    /// (Gauss–Newton for the foot of the perpendicular):
+    /// `t ← clamp(t − (B(t) − p)·B'(t) / |B'(t)|², 0, 1)`, for [`NEWTON_STEPS`] steps or
+    /// until `t` stops moving or `B'` vanishes. Started from the point's chord-length
+    /// parameter, which is close, three steps are enough; from a poor start this can land
+    /// on a local rather than the global nearest point.
     #[cfg(test)]
     fn dist2_from(&self, p: Point, t_init: f64) -> f64 {
         let mut t = t_init.clamp(0.0, 1.0);
@@ -370,6 +487,11 @@ impl Cubic {
     }
 
     /// Internal inflection check: does the cubic reverse its turning direction?
+    ///
+    /// A control-polygon test: the cross products of consecutive control-polygon edges
+    /// `(p1 − p0) × (p2 − p1)` and `(p2 − p1) × (p3 − p2)` have opposite signs, beyond a
+    /// tolerance of `1e-6·max(chord², 1)` px². Cheap, and it catches the S-shaped cubics
+    /// the wobble penalty is aimed at; it is not an exact inflection test.
     pub(crate) fn has_inflection(&self) -> bool {
         let d0 = self.p1 - self.p0;
         let d1 = self.p2 - self.p1;
@@ -381,6 +503,11 @@ impl Cubic {
     }
 
     /// Dimensionless normalized bending energy: 12 * (|A|^2 + A.B + |B|^2) / L^2
+    ///
+    /// With `A = p2 − 2p1 + p0` and `B = p3 − 2p2 + p1`, the second derivative is
+    /// `B''(t) = 6((1 − t)·A + t·B)`, so `∫₀¹ |B''(t)|² dt = 12(|A|² + A·B + |B|²)`;
+    /// dividing by the squared chord `L²` makes it scale-free. 0 for a chord shorter than
+    /// 1e-6 px.
     pub(crate) fn bending_energy(&self) -> f64 {
         let chord2 = (self.p3.x - self.p0.x).powi(2) + (self.p3.y - self.p0.y).powi(2);
         if chord2 <= 1e-12 {
@@ -397,6 +524,16 @@ impl Cubic {
     }
 
     /// Penalty charged against wobbly/inflecting cubics to suppress micro-oscillations.
+    ///
+    /// In nats, with `f` = [`WOBBLE_PENALTY`] and `E` the [`Self::bending_energy`]:
+    ///
+    /// ```text
+    ///     penalty = f·λ·( 2·[has an inflection] + ½·min(10, max(0, E − 2.5)) )
+    /// ```
+    ///
+    /// A gentle arc has `E` below 2.5 and pays nothing; an S-bend pays two parameters'
+    /// worth. The residual alone cannot see these shapes, because a wobbly cubic can pass
+    /// through noisy points as well as a smooth one.
     pub(crate) fn wobble_penalty(&self, lambda: f64) -> f64 {
         let factor = WOBBLE_PENALTY;
         let mut penalty = 0.0;
@@ -438,10 +575,16 @@ pub(crate) const WOBBLE_PENALTY: f64 = 1.0;
 /// The points are gathered once per span, in [`LANES`]-wide groups (the tail padded with
 /// points never read), since every candidate cubic of the span is scored on them.
 struct CubicSamples {
+    /// The sampled points, in px.
     pt: [Point; MAX_RESIDUAL_SAMPLES],
+    /// Each point's chord-length parameter `(s_k − s_i) / (s_j − s_i)`, Newton's start.
     t: [f64; MAX_RESIDUAL_SAMPLES],
+    /// Each point's variance `σ²`, px², sigma floored at 1e-6.
     s2: [f64; MAX_RESIDUAL_SAMPLES],
+    /// How many entries are real.
     len: usize,
+    /// `interior / len`: each sample stands for this many interior points, so the
+    /// weighted sum estimates the residual over all of them.
     weight: f64,
 }
 
@@ -456,6 +599,9 @@ fn lanes<T>(a: &[T], m: usize) -> &[T; LANES] {
 }
 
 impl CubicSamples {
+    /// Pick up to [`MAX_RESIDUAL_SAMPLES`] interior points of `(i, j)`, evenly spaced by
+    /// index: sample `m` of `count` is point `i + 1 + floor((m + ½)·interior / count)`.
+    /// `None` when the span has no interior points.
     fn new(pts: &[Point], sigma: &[f64], s: &[f64], i: usize, j: usize) -> Option<Self> {
         let interior = j.saturating_sub(i + 1);
         if interior == 0 {
@@ -499,6 +645,14 @@ impl CubicSamples {
 }
 
 /// Weighted residual of the interior points of `(i, j)` against a cubic.
+///
+/// `χ² = weight · Σ_m d_m² / σ_m²` over the sampled interior points, `d_m` the distance
+/// (px) from the point to the curve found by Newton projection (see `Cubic::dist2_from`)
+/// from its chord-length parameter. With `subsample` the points are thinned to
+/// [`MAX_RESIDUAL_SAMPLES`] as in `CubicSamples` and `weight = interior / count`
+/// compensates; without it every interior point is used and `weight = 1`. The end
+/// points are not scored: the cubic passes through them by construction. 0 for a span
+/// with no interior points.
 pub(crate) fn chi2_cubic(
     pts: &[Point],
     sigma: &[f64],
@@ -537,6 +691,20 @@ pub(crate) fn chi2_cubic(
     acc
 }
 
+/// Control points of the least-squares cubic through `pts[i..=j]` with its end points
+/// pinned to `pts[i]` and `pts[j]`.
+///
+/// Each interior point `k` is given the chord-length parameter
+/// `t_k = (s_k − s_i) / (s_j − s_i)`, and `P1`, `P2` minimise
+///
+/// ```text
+///     Σ_k w_k · |p_k − (b0(t_k)·p0 + b1(t_k)·P1 + b2(t_k)·P2 + b3(t_k)·p3)|²,   w_k = 1/σ_k²
+/// ```
+///
+/// with `b` the Bernstein weights. That is linear least squares: a 2x2 system shared by
+/// x and y, solved by Cramer's rule. The parameters are not re-optimised, so this is
+/// the first step of Schneider's Bézier fit without its reparametrization loop. `None`
+/// for fewer than two interior points, a singular system or a non-finite result.
 fn free_cubic(
     pts: &[Point],
     sigma: &[f64],
@@ -579,6 +747,9 @@ fn free_cubic(
 }
 
 /// Free-tangent least-squares cubic through points `i..=j` of `pts`, endpoints pinned.
+///
+/// Returns the two control points `(P1, P2)` in px. `s` is the cumulative arc length of
+/// `pts` and `sigma` their uncertainties, both in px. See `free_cubic` for the method.
 pub fn free_cubic_fit(
     pts: &[Point],
     sigma: &[f64],
@@ -592,13 +763,24 @@ pub fn free_cubic_fit(
 /// A free-tangent candidate, scored.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FreeFit {
+    /// Residual plus twice the wobble penalty, so that `½·chi2` carries the penalty once.
     pub(crate) chi2: f64,
+    /// Break costs (nats) between the estimated tangents and the cubic's own end
+    /// directions.
     pub(crate) brk: f64,
+    /// The cubic's own unit end directions, start and end.
     pub(crate) tans: (Vec2, Vec2),
+    /// Its arm lengths as fractions of the chord.
     pub(crate) arms: (f64, f64),
 }
 
 /// Fit and score the free-tangent cubic for one span, or refuse it.
+///
+/// `None` unless the research switch is on ([`free_cubic_enabled`]). Otherwise the cubic
+/// from `free_cubic` is refused if either end direction swings [`FREE_MAX_SWING`] degrees
+/// or more from the estimated tangent (`t0` outgoing at `i`, `t1` incoming at `j`), if
+/// either arm exceeds [`MAX_ARM`] chords, or if the chord or an arm has zero length. The
+/// caller's cost is `½·chi2 + λ·params_cubic() + brk`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn try_free_cubic(
     pts: &[Point],
@@ -649,6 +831,15 @@ pub(crate) fn try_free_cubic(
 }
 
 /// Best G1 cubic for `(i, j)` given tangents and raw moments: `(chi2, d0, d1)`.
+///
+/// The end points are the measured `pts[i]` and `pts[j]`, the end directions the unit
+/// tangents `t0` (leaving `i`) and `t1` (arriving at `j`); only the arm lengths are
+/// chosen. `raw` is `(∫ y dx, ∫ x y dx, ∫ y² dx)` along the points from `i` to `j`. Every
+/// real solution of Levien's quartic (`arms_from_moments`) with both arms at most
+/// [`MAX_ARM`] chords is scored by [`chi2_cubic`] and the lowest residual wins; with
+/// `subsample` the scoring stops early once a candidate can no longer beat the best so
+/// far. `None` for a zero-length chord or when no candidate is admissible, which is not
+/// the same as "no cubic fits": the caller may still try a free cubic.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn best_cubic(
     pts: &[Point],
@@ -703,6 +894,11 @@ pub fn fit_cubic_moments(pts: &[Point], t0: Vec2, t1: Vec2) -> Vec<(Point, Point
 }
 
 /// What a line's residual sign pattern says against it.
+///
+/// When a circular arc through the same span fits at least four times better
+/// (`4·χ²_arc < χ²_line`), the line's residuals are not noise: they bow systematically to
+/// one side. The line is then charged `span·ln 2` nats, one bit per point, the price of
+/// describing which side of the line each point falls on. Otherwise 0. `span` is `j − i`.
 pub(crate) fn bow_penalty(chi2_line: f64, chi2_arc: f64, span: usize) -> f64 {
     if chi2_arc * 4.0 < chi2_line {
         span as f64 * std::f64::consts::LN_2
@@ -713,6 +909,13 @@ pub(crate) fn bow_penalty(chi2_line: f64, chi2_arc: f64, span: usize) -> f64 {
 
 /// Cost of the line `i -> j`: residual, two parameters, and its disagreement with the
 /// polyline tangents at whichever ends are joins.
+///
+/// ```text
+///     cost = ½·χ² + λ·PARAMS_LINE + brk(t_out[i], chord) + brk(chord, t_in[j])
+/// ```
+///
+/// in nats, `brk` being [`break_cost`]. An end is a join unless it is the first or last
+/// point of an open polyline; `joins_at_ends` marks both ends of an opened loop as joins.
 pub(crate) fn line_cost_terms(
     pts: &[Point],
     tan: &Tangents,
@@ -722,25 +925,58 @@ pub(crate) fn line_cost_terms(
     cfg: &FitConfig,
     joins_at_ends: bool,
 ) -> f64 {
-    let n = pts.len();
     let chord = pts[j] - pts[i];
+    let dev = end_break_cost(
+        tan,
+        pts.len(),
+        (i, j),
+        (chord, chord),
+        cfg.lambda,
+        joins_at_ends,
+    );
+    0.5 * chi2 + cfg.lambda * PARAMS_LINE + dev
+}
+
+/// The break costs (nats) a segment from `i` to `j` pays at its ends: between the
+/// estimated tangent leaving `i` and the segment's own start direction `d0`, and between
+/// its end direction `d1` and the estimated tangent arriving at `j`.
+///
+/// An end is charged only where it is a join: not at the first or last point of an open
+/// polyline of `n` points, unless `joins_at_ends` says the polyline is an opened loop.
+fn end_break_cost(
+    tan: &Tangents,
+    n: usize,
+    (i, j): (usize, usize),
+    (d0, d1): (Vec2, Vec2),
+    lambda: f64,
+    joins_at_ends: bool,
+) -> f64 {
     let mut dev = 0.0;
     if i > 0 || joins_at_ends {
-        dev += break_cost(tan.outgoing[i], chord, cfg.lambda);
+        dev += break_cost(tan.outgoing[i], d0, lambda);
     }
     if j + 1 < n || joins_at_ends {
-        dev += break_cost(chord, tan.incoming[j], cfg.lambda);
+        dev += break_cost(d1, tan.incoming[j], lambda);
     }
-    0.5 * chi2 + cfg.lambda * PARAMS_LINE + dev
+    dev
 }
 
 /// Weighted moments of `(x, y, x² + y²)` along the polyline, so a circle can be fitted to
 /// any span in constant time.
+///
+/// The circle fit is Kåsa's algebraic fit. Writing `z = x² + y²`, a circle is
+/// `z + a·x + b·y + c = 0` with centre `(−a/2, −b/2)` and `r² = (a² + b²)/4 − c`, and the
+/// algebraic residual `z + a·x + b·y + c = |p − centre|² − r²` is linear in `(a, b, c)`.
+/// Minimising `Σ w·(z + a·x + b·y + c)²` is therefore a 3x3 linear least-squares problem
+/// whose normal equations need only the ten weighted moments kept here.
 pub(crate) struct CirclePrefix {
+    /// `m[k]` = sums over points `0..k` of `w·[1, x, y, z, x², x·y, y², x·z, y·z, z²]`,
+    /// `w = 1/σ²` (sigma defaulting to 0.5 where missing, floored at 1e-3).
     m: Vec<[f64; 10]>,
 }
 
 impl CirclePrefix {
+    /// Accumulate the moments of `pts` (px) with weights from `sigma` (px), O(n).
     pub(crate) fn new(pts: &[Point], sigma: &[f64]) -> Self {
         let mut m = Vec::with_capacity(pts.len() + 1);
         let mut acc = [0.0f64; 10];
@@ -765,6 +1001,7 @@ impl CirclePrefix {
         Self { m }
     }
 
+    /// The ten moments over the inclusive range `[i, j]`.
     #[inline]
     fn window(&self, i: usize, j: usize) -> [f64; 10] {
         let (a, b) = (&self.m[i], &self.m[j + 1]);
@@ -775,6 +1012,8 @@ impl CirclePrefix {
         out
     }
 
+    /// RMS distance (px) of the points `[i, j]` from their weighted centroid, floored at 1:
+    /// the span's size, against which an implausibly large radius is judged.
     fn scale(&self, i: usize, j: usize) -> f64 {
         let [s0, sx, sy, _, sxx, _, syy, _, _, _] = self.window(i, j);
         if s0 <= 0.0 {
@@ -785,6 +1024,11 @@ impl CirclePrefix {
         (var_x + var_y).sqrt().max(1.0)
     }
 
+    /// χ² of the points `[i, j]` about a given circle (centre `c`, radius `r`, px).
+    ///
+    /// Uses the algebraic residual `e = |p − c|² − r² = d·(2r + d)`, with `d` the signed
+    /// distance to the circle, so `e² / 4r² ≈ d²` for points near it. Summed from the
+    /// moments in O(1). Infinite for a radius at or below 1e-12.
     pub(crate) fn residual_about(&self, i: usize, j: usize, c: Point, r: f64) -> f64 {
         if r <= 1e-12 {
             return f64::INFINITY;
@@ -800,6 +1044,14 @@ impl CirclePrefix {
         resid.max(0.0) / (4.0 * r * r)
     }
 
+    /// Kåsa fit to the points `[i, j]`: `(centre, radius, χ²)`, px and dimensionless, the
+    /// χ² as in [`Self::residual_about`].
+    ///
+    /// `None` for zero total weight, a (numerically) singular system, as from fewer than
+    /// three distinct points, or a non-positive `r²`. Nearly collinear points give a huge
+    /// radius rather than `None`; [`try_arc`] refuses those. The algebraic fit is biased towards
+    /// smaller radii on short arcs; callers score the arc they will actually draw, not
+    /// this one.
     pub(crate) fn fit(&self, i: usize, j: usize) -> Option<(Point, f64, f64)> {
         let [s0, sx, sy, sz, sxx, sxy, syy, sxz, syz, szz] = self.window(i, j);
         if s0 <= 0.0 {
@@ -826,14 +1078,34 @@ impl CirclePrefix {
 
 /// A circular arc fitted to one span, with what it costs to use it there.
 pub(crate) struct ArcSpan {
+    /// `½·chi2 + λ·PARAMS_ARC + end breaks`, nats.
     pub(crate) cost: f64,
+    /// Residual about the arc as it will be drawn.
     pub(crate) chi2: f64,
+    /// Radius to write, px: the mean distance of the two end points from the fitted centre.
     pub(crate) radius: f64,
+    /// SVG `large-arc-flag`.
     pub(crate) large_arc: bool,
+    /// SVG `sweep-flag`: true when the arc turns towards increasing angle.
     pub(crate) sweep: bool,
+    /// The arc's own unit tangents at its start and end, in the direction of travel.
     pub(crate) tans: (Vec2, Vec2),
 }
 
+/// Fit a circular arc to the span `(i, j)` and cost it, or refuse it.
+///
+/// 1. Kåsa-fit a circle to the points ([`CirclePrefix::fit`]); refuse a radius over a
+///    thousand times the span's own size, which is a straight run in disguise.
+/// 2. The points must go round the centre one way only: the cross products of
+///    consecutive radius vectors, checked at about eight strides along the span, never
+///    change sign.
+/// 3. The turn from start to end must agree with that sense and lie between 1e-3 rad and
+///    `crate::primitives::MAX_ARC_DEGREES`.
+/// 4. Score the arc a renderer would draw: SVG reconstructs the circle from the two end
+///    points and a radius, so the radius written is the mean end-point distance from the
+///    centre, and χ² is measured about the circle `arc_center` rebuilds from it.
+///
+/// The span needs at least one interior point (`j ≥ i + 2`). See [`ArcSpan`] for the cost.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn try_arc(
     pts: &[Point],
@@ -848,8 +1120,7 @@ pub(crate) fn try_arc(
     if j < i + 2 {
         return None;
     }
-    let (c, r, chi2_fit) = pre.fit(i, j)?;
-    let _ = chi2_fit;
+    let (c, r, _) = pre.fit(i, j)?;
     if !r.is_finite() || r <= 1e-6 {
         return None;
     }
@@ -908,14 +1179,7 @@ pub(crate) fn try_arc(
     let t0 = tangent_at(start)?;
     let t1 = tangent_at(end)?;
 
-    let n = pts.len();
-    let mut dev = 0.0;
-    if i > 0 || joins_at_ends {
-        dev += break_cost(tan.outgoing[i], t0, cfg.lambda);
-    }
-    if j + 1 < n || joins_at_ends {
-        dev += break_cost(t1, tan.incoming[j], cfg.lambda);
-    }
+    let dev = end_break_cost(tan, pts.len(), (i, j), (t0, t1), cfg.lambda, joins_at_ends);
 
     let large_arc = turn > std::f64::consts::PI;
     let radius = 0.5 * (start.dist(c) + end.dist(c));
@@ -933,16 +1197,30 @@ pub(crate) fn try_arc(
 
 /// An elliptical arc fitted to one span.
 pub(crate) struct EllipseSpan {
+    /// `½·χ² + λ·PARAMS_ELLIPTICAL_ARC + end breaks`, nats.
     pub(crate) cost: f64,
+    /// Radius along the ellipse's own x-axis, as drawn, px.
     pub(crate) rx: f64,
+    /// Radius along the ellipse's own y-axis, as drawn, px.
     pub(crate) ry: f64,
+    /// Rotation of the x-axis, radians.
     pub(crate) phi: f64,
+    /// SVG `large-arc-flag`.
     pub(crate) large_arc: bool,
+    /// SVG `sweep-flag`.
     pub(crate) sweep: bool,
+    /// The arc's own unit tangents at its start and end, in the direction of travel.
     pub(crate) tans: (Vec2, Vec2),
 }
 
 /// Weighted Sampson distance of the points from the ellipse `(c, rx, ry, phi)`.
+///
+/// In the ellipse's own frame `(u, v)` the curve is `Q = u²/rx² + v²/ry² − 1 = 0`, and
+/// the Sampson distance is the first-order approximation of the geometric distance,
+/// `d ≈ Q / |∇Q|` with `|∇Q| = √(4u²/rx⁴ + 4v²/ry⁴)`. Accurate near the curve, which is
+/// where a candidate worth keeping has its points, and closed form where the exact
+/// distance to an ellipse needs a quartic. Returns `Σ (d_k / σ_k)²` (sigma defaulting to
+/// 0.5, floored at 1e-3); infinite if a point sits at the centre, where `∇Q` vanishes.
 pub(crate) fn ellipse_sampson_chi2(
     pts: &[Point],
     sigma: &[f64],
@@ -970,6 +1248,24 @@ pub(crate) fn ellipse_sampson_chi2(
     sum
 }
 
+/// Fit an elliptical arc to the span `(i, j)` and cost it, or refuse it.
+///
+/// Only spans of at least 24 points whose length is a multiple of 16 are tried: the
+/// algebraic fit is O(j − i), so this keeps the ellipse to a sparse grid of candidate
+/// ends rather than making the dynamic program cubic. Then:
+///
+/// 1. fit an ellipse algebraically (`crate::primitives::fit_ellipse_algebraic`) and
+///    refuse aspect ratios over 12 or a major radius over a thousand times the span's
+///    extent;
+/// 2. the points must advance round it monotonically ([`ellipse_turn`]) through a total
+///    turn between 1e-3 rad and `MAX_ARC_DEGREES`;
+/// 3. rescale the radii by the end points' mean normalised radius (refused outside
+///    0.5..2), so the arc a renderer rebuilds from the end points is the one scored, and
+///    rebuild it with [`crate::curves::arc_ellipse_center`];
+/// 4. score by Sampson distance ([`ellipse_sampson_chi2`]) and charge end breaks against
+///    the arc's own tangents ([`ellipse_end_tangents`]).
+///
+/// See [`EllipseSpan`] for the cost.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn try_ellipse(
     pts: &[Point],
@@ -1004,40 +1300,8 @@ pub(crate) fn try_ellipse(
         return None;
     }
 
-    // The parametric angle, straight from the projected point — no iteration, and monotone
-    // in the true one for points near the curve, which is all the direction test needs.
+    let (turn, ccw) = ellipse_turn(span_pts, &fit)?;
     let (sp0, cp0) = fit.angle.sin_cos();
-    let angle_of = |p: Point| -> f64 {
-        let (dx, dy) = (p.x - fit.c.x, p.y - fit.c.y);
-        let u = cp0 * dx + sp0 * dy;
-        let v = -sp0 * dx + cp0 * dy;
-        (v / fit.ry).atan2(u / fit.rx)
-    };
-    let step = |a: f64, prev: f64| -> f64 {
-        let mut d = a - prev;
-        if d > std::f64::consts::PI {
-            d -= std::f64::consts::TAU;
-        } else if d < -std::f64::consts::PI {
-            d += std::f64::consts::TAU;
-        }
-        d
-    };
-    let mut prev = angle_of(span_pts[0]);
-    let ccw = step(angle_of(span_pts[1]), prev) > 0.0;
-    let mut total = 0.0;
-    for p in &span_pts[1..] {
-        let a = angle_of(*p);
-        let d = step(a, prev);
-        if (ccw && d < -1e-3) || (!ccw && d > 1e-3) {
-            return None;
-        }
-        total += d;
-        prev = a;
-    }
-    let turn = total.abs();
-    if !(1e-3..=crate::primitives::MAX_ARC_DEGREES.to_radians()).contains(&turn) {
-        return None;
-    }
 
     // The radii that are *drawn*. As with the circle, the arc a renderer reconstructs
     // passes through the two endpoints, so the fitted radii are rescaled to put them on
@@ -1071,7 +1335,69 @@ pub(crate) fn try_ellipse(
         return None;
     }
 
-    // End tangents: the derivative of the parametrization, in the direction of travel.
+    let (t0, t1) = ellipse_end_tangents(&frame)?;
+    let dev = end_break_cost(tan, pts.len(), (i, j), (t0, t1), cfg.lambda, joins_at_ends);
+    Some(EllipseSpan {
+        cost: 0.5 * chi2 + cfg.lambda * crate::curves::PARAMS_ELLIPTICAL_ARC + dev,
+        rx: frame.rx,
+        ry: frame.ry,
+        phi: frame.phi,
+        large_arc,
+        sweep: ccw,
+        tans: (t0, t1),
+    })
+}
+
+/// How far, and which way, the points go round a fitted ellipse: `(|total turn|, ccw)`,
+/// radians, or `None` if they do not go round it monotonically or the turn is outside
+/// `[1e-3, MAX_ARC_DEGREES]`.
+///
+/// Each point's parametric angle is read straight from its projection into the ellipse's
+/// frame, `atan2(v/ry, u/rx)` — no iteration, and monotone in the true one for points
+/// near the curve, which is all the direction test needs. The sense is set by the first
+/// step; any later step backwards by more than 1e-3 rad refuses the arc. Steps are
+/// unwrapped into `(−π, π]`. `span_pts` must hold at least two points.
+fn ellipse_turn(span_pts: &[Point], fit: &crate::primitives::EllipseFit) -> Option<(f64, bool)> {
+    let (sp0, cp0) = fit.angle.sin_cos();
+    let angle_of = |p: Point| -> f64 {
+        let (dx, dy) = (p.x - fit.c.x, p.y - fit.c.y);
+        let u = cp0 * dx + sp0 * dy;
+        let v = -sp0 * dx + cp0 * dy;
+        (v / fit.ry).atan2(u / fit.rx)
+    };
+    let step = |a: f64, prev: f64| -> f64 {
+        let mut d = a - prev;
+        if d > std::f64::consts::PI {
+            d -= std::f64::consts::TAU;
+        } else if d < -std::f64::consts::PI {
+            d += std::f64::consts::TAU;
+        }
+        d
+    };
+    let mut prev = angle_of(span_pts[0]);
+    let ccw = step(angle_of(span_pts[1]), prev) > 0.0;
+    let mut total = 0.0;
+    for p in &span_pts[1..] {
+        let a = angle_of(*p);
+        let d = step(a, prev);
+        if (ccw && d < -1e-3) || (!ccw && d > 1e-3) {
+            return None;
+        }
+        total += d;
+        prev = a;
+    }
+    let turn = total.abs();
+    if !(1e-3..=crate::primitives::MAX_ARC_DEGREES.to_radians()).contains(&turn) {
+        return None;
+    }
+    Some((turn, ccw))
+}
+
+/// Unit tangents of a drawn elliptical arc at its start and end, in the direction of
+/// travel: the derivative of `c + R(φ)·(rx cos t, ry sin t)`, i.e.
+/// `R(φ)·(−rx sin t, ry cos t)`, reversed when the sweep is negative. `None` if either
+/// vanishes.
+fn ellipse_end_tangents(frame: &crate::curves::ArcFrame) -> Option<(Vec2, Vec2)> {
     let tangent_at = |t: f64| -> Option<Vec2> {
         let (sp, cp) = frame.phi.sin_cos();
         let (dx, dy) = (-frame.rx * t.sin(), frame.ry * t.cos());
@@ -1088,24 +1414,7 @@ pub(crate) fn try_ellipse(
     };
     let t0 = tangent_at(frame.theta1)?;
     let t1 = tangent_at(frame.theta1 + frame.delta)?;
-
-    let n = pts.len();
-    let mut dev = 0.0;
-    if i > 0 || joins_at_ends {
-        dev += break_cost(tan.outgoing[i], t0, cfg.lambda);
-    }
-    if j + 1 < n || joins_at_ends {
-        dev += break_cost(t1, tan.incoming[j], cfg.lambda);
-    }
-    Some(EllipseSpan {
-        cost: 0.5 * chi2 + cfg.lambda * crate::curves::PARAMS_ELLIPTICAL_ARC + dev,
-        rx: frame.rx,
-        ry: frame.ry,
-        phi: frame.phi,
-        large_arc,
-        sweep: ccw,
-        tans: (t0, t1),
-    })
+    Some((t0, t1))
 }
 
 #[cfg(test)]

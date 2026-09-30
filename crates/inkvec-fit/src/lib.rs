@@ -1,4 +1,62 @@
-//! Global optimal segmentation of a measured boundary (DESIGN.md S4).
+//! Curve fitting: from a measured boundary polyline to lines, cubics and arcs
+//! (DESIGN.md S4).
+//!
+//! # Where this crate sits
+//!
+//! The tracer (`inkvec-trace`) extracts each region boundary as a [`Polyline`]: points in
+//! pixels, pixel centres at integer coordinates, each carrying its own measurement
+//! uncertainty `sigma` (px). This crate turns such a polyline into a [`FittedPath`], a
+//! start point plus a list of [`curves::Segment`]s, by minimising one objective
+//! everywhere, the MDL (minimum description length) cost
+//!
+//! ```text
+//!     E = ½·χ² + λ·P,        χ² = Σ_k (d_k / σ_k)²
+//! ```
+//!
+//! where `d_k` is the distance (px) from measured point `k` to the emitted geometry, `σ_k`
+//! its uncertainty (px), `P` the number of numbers the segments write into the SVG
+//! (a line 2, a cubic 6, a circular arc 5, an elliptical arc 7), and `λ` the price of one
+//! number in nats ([`FitConfig::lambda`]). `½·χ²` is the Gaussian negative
+//! log-likelihood, so both terms are in nats and a segment is worth adding exactly when it
+//! removes more misfit than it costs to write down.
+//!
+//! # The order in which a path is fitted (the shipping path)
+//!
+//! [`multimodel::optimal_multimodel`], called by `inkvec-trace` for every ring:
+//!
+//! 1. long rings are decimated to at most 768 points (`decimate`), sigma rescaled so χ²
+//!    keeps its meaning;
+//! 2. the points are centred on their bounding box, so the Green's-theorem sums stay
+//!    well conditioned;
+//! 3. one-sided tangents are estimated at every point (`tangents`);
+//! 4. one dynamic program over breakpoints chooses, for every span, a line, a G1 cubic, a
+//!    free cubic or an arc (`multimodel::scan`, with the per-span fitters in `candidates`);
+//!    a closed ring is cut at its sharpest corner and solved again from a second cut;
+//! 5. the continuous parameters the program left fixed are refined: line-line corners are
+//!    moved to the intersection of their fitted lines ([`adjust_vertices_at`]), cubic arms
+//!    are polished, smooth joins are made exactly G1;
+//! 6. corner runs of chord + cubic + chord are merged into one free cubic where cheaper,
+//!    and cubics cut through a corner's anti-aliasing chamfer are sharpened back into two
+//!    lines (`merge`);
+//! 7. research builds only: axis snapping, G1 snapping (`merge::snap`) and the structural
+//!    simplifier (`structural`).
+//!
+//! Around that entry point: [`simple`] repairs rings whose fit crosses itself by
+//! refitting under a span cap, [`primitives`] recognises whole-ring circles, ellipses and
+//! rounded rectangles, [`harmonize`] makes shapes that should be identical identical,
+//! [`cost`] selects the parameter-pricing model, and [`pareto`] holds the multi-objective
+//! selection used by the research examples.
+//!
+//! # What this file holds
+//!
+//! The line-only program [`optimal_polygon`] and the older two-pass fitter [`fit_path`]
+//! (line program for the corners, then cubics per smooth run). Neither is the shipping
+//! path any more: `fit_path` is the reference the multimodel tests compare against,
+//! and `optimal_polygon` is still used on its own by the bilevel pipeline in
+//! `inkvec-cli` and by `inkvec-trace` to propose breakpoints. The vertex adjustment
+//! ([`adjust_vertices_at`]) and loop test ([`spans_loop`]) here are shared by both paths.
+//!
+//! # The line-only program
 //!
 //! This is the stage VTracer dropped for speed, and `docs/M0-BASELINE.md` §5 measures
 //! what dropping it costs: under smooth boundary perturbation, Potrace's parameter count
@@ -93,6 +151,10 @@ impl FitConfig {
     ///
     /// This ties the fidelity/compactness trade to two quantities that are known rather
     /// than tuned: how big the image is, and how precisely we intend to write numbers.
+    ///
+    /// `extent` and `precision` are in the same unit (px). `λ = ln(extent / precision)`,
+    /// floored at 1 nat (the ratio is floored at `e`), and a non-positive `precision` is
+    /// treated as the smallest positive float rather than dividing by zero.
     pub fn from_precision(extent: f64, precision: f64, tau: f64) -> Self {
         let ratio = (extent / precision.max(f64::MIN_POSITIVE)).max(std::f64::consts::E);
         Self {
@@ -116,6 +178,11 @@ impl Default for FitConfig {
 /// `1`, each weighted by `1 / sigma^2`. Because the chord's *origin* `v_i` also varies,
 /// the sums are expanded about the origin so that every term is a plain prefix sum.
 /// This is Potrace's constant-time penalty trick, generalized to per-point weights.
+///
+/// Each vector has `n + 1` entries and entry `k` is the sum over points `0..k`, so the
+/// sum over the inclusive range `[i, j]` is `v[j + 1] − v[i]`. With `w_k = 1 / σ_k²`:
+/// `w` = Σ w_k, `x` = Σ w_k·x_k, `y` = Σ w_k·y_k, `xx` = Σ w_k·x_k², `yy` = Σ w_k·y_k²,
+/// `xy` = Σ w_k·x_k·y_k (coordinates in px, so the squared sums are px²/σ²).
 struct PrefixSums {
     w: Vec<f64>,
     x: Vec<f64>,
@@ -126,6 +193,10 @@ struct PrefixSums {
 }
 
 impl PrefixSums {
+    /// Accumulate the six weighted prefix sums of `poly`, in O(n).
+    ///
+    /// Relies on every `sigma` being positive and finite: a zero sigma is an infinite
+    /// weight, and every range containing it then sums to infinity or NaN.
     fn new(poly: &Polyline) -> Self {
         let n = poly.len();
         let mut s = PrefixSums {
@@ -163,6 +234,19 @@ impl PrefixSums {
     /// matrix, which is a closed form in exactly the prefix sums already maintained — so
     /// the principled fit is also the O(1) one. (DESIGN.md S4 specifies orthogonal
     /// distance fitting; algebraic fitting carries a high-curvature bias.)
+    ///
+    /// With `W = Σ w_k` and the sums taken over `[i, j]`, the scatter about the weighted
+    /// centroid is
+    ///
+    /// ```text
+    ///     Cxx = Σw·x² − (Σw·x)²/W     Cyy = Σw·y² − (Σw·y)²/W     Cxy = Σw·x·y − Σw·x·Σw·y/W
+    ///     χ²  = λ_min(C) = ½ (Cxx + Cyy − √((Cxx − Cyy)² + 4·Cxy²))
+    /// ```
+    ///
+    /// which is the weighted sum of squared perpendicular distances to the best line, in
+    /// units of each point's own sigma (dimensionless). Returns 0 for a range of fewer
+    /// than two points or zero total weight, and clamps the small negative values that
+    /// cancellation can produce on exactly collinear points.
     fn chi2_line(&self, i: usize, j: usize) -> f64 {
         if j <= i {
             return 0.0;
@@ -191,7 +275,8 @@ impl PrefixSums {
 }
 
 /// Bring `angle` within +/- pi of `reference`, so an interval can be intersected
-/// without wrap-around bookkeeping.
+/// without wrap-around bookkeeping. Both in radians; the result differs from `angle` by
+/// a whole number of turns.
 #[inline]
 fn wrap_near(angle: f64, reference: f64) -> f64 {
     let two_pi = std::f64::consts::TAU;
@@ -227,6 +312,7 @@ struct DirectionCone {
 }
 
 impl DirectionCone {
+    /// A cone no point has constrained yet: every direction is admissible.
     fn new() -> Self {
         Self {
             lo: 0.0,
@@ -236,6 +322,7 @@ impl DirectionCone {
         }
     }
 
+    /// True once the constraints exclude every direction.
     fn is_empty(&self) -> bool {
         self.initialized && self.lo > self.hi
     }
@@ -307,6 +394,28 @@ impl Segmentation {
 /// Exact: the dynamic program considers every admissible segmentation, so the result is
 /// the global minimum of `0.5 * chi^2 + lambda * params` over all of them. There is no
 /// greedy step and no local corner decision to get wrong.
+///
+/// The idea: the cheapest way to describe the points `0..=j` ends with some last segment
+/// `(i, j)`, and whatever comes before it must itself be the cheapest description of
+/// `0..=i`. So, as a dynamic program over breakpoints,
+///
+/// ```text
+///     best[0] = 0
+///     best[j] = min_{i < j} ( best[i] + ½·χ²(i, j) + λ·PARAMS_LINE )
+/// ```
+///
+/// where `χ²(i, j)` is the total-least-squares residual of points `[i, j]` about their
+/// best line (`PrefixSums::chi2_line`, O(1)) and `from[j]` records the minimising `i`.
+/// The answer is read back from `from[n − 1]` to 0. The start point is not charged, so
+/// `cost` is `best[n − 1]`.
+///
+/// The inner scan from `i` stops once `½·χ²(i, j) > PRUNE_SLACK · λ·PARAMS_LINE·(j − i)`:
+/// a single segment that already misfits by more than one segment per point would cost
+/// can never win, and χ² only grows with the span. That makes the program O(n²) in the
+/// worst case and close to O(n) on corner-rich input.
+///
+/// Edge cases: fewer than two points returns every index at cost 0; a closed polyline is
+/// cut and solved as an open one (`optimal_polygon_closed`). Sigma must be positive.
 pub fn optimal_polygon(poly: &Polyline, cfg: &FitConfig) -> Segmentation {
     let n = poly.len();
     if n < 2 {
@@ -382,6 +491,9 @@ pub fn optimal_polygon(poly: &Polyline, cfg: &FitConfig) -> Segmentation {
 /// from the centroid, which is stable under rotation and under resampling, then solve the
 /// open problem.
 ///
+/// The opened polyline repeats the cut point at both ends (`n + 1` points), so the
+/// returned vertex list starts and ends on the same original index.
+///
 /// This is an approximation: the true optimum is a minimum-cost *cycle*, and fixing a cut
 /// point can cost one extra segment. Potrace solves the cyclic problem properly and we
 /// should too — tracked as future work rather than hidden here.
@@ -390,13 +502,10 @@ fn optimal_polygon_closed(poly: &Polyline, cfg: &FitConfig) -> Segmentation {
     let cx = poly.points.iter().map(|p| p.x).sum::<f64>() / n as f64;
     let cy = poly.points.iter().map(|p| p.y).sum::<f64>() / n as f64;
     let c = Point::new(cx, cy);
+    // `total_cmp` orders finite distances exactly as `partial_cmp` does (they are never
+    // negative zero), and gives NaN coordinates an order instead of a panic.
     let cut = (0..n)
-        .max_by(|&a, &b| {
-            poly.points[a]
-                .dist(c)
-                .partial_cmp(&poly.points[b].dist(c))
-                .unwrap()
-        })
+        .max_by(|&a, &b| poly.points[a].dist(c).total_cmp(&poly.points[b].dist(c)))
         .unwrap_or(0);
 
     let mut points = Vec::with_capacity(n + 1);
@@ -436,23 +545,14 @@ pub fn is_admissible(poly: &Polyline, i: usize, j: usize, cfg: &FitConfig) -> bo
 }
 
 /// MDL cost of a single candidate segment: `0.5 * chi^2 + lambda * params`.
+///
+/// Builds the prefix sums from scratch, so it is O(n) per call: a test and example
+/// helper for checking the dynamic program, not something to call in a loop.
 pub fn segment_cost(poly: &Polyline, i: usize, j: usize, cfg: &FitConfig) -> f64 {
     let sums = PrefixSums::new(poly);
     0.5 * sums.chi2_line(i, j) + cfg.lambda * PARAMS_LINE
 }
 
-/// Move each vertex to the intersection of its two adjacent best-fit lines.
-///
-/// Marching squares cannot represent a sharp corner: the level set cuts across the corner
-/// pixel, chamfering it over a point or two. Trusting those measured points as vertices
-/// both rounds the corner and costs an extra segment to cross the chamfer — measured
-/// effect, a hexagon coming back with 12 vertices instead of 6.
-///
-/// The corner is not where the contour was sampled; it is where the two edges *meet*, so
-/// intersecting their fitted lines recovers it. This is Potrace's vertex adjustment step,
-/// with the constraint generalized from its fixed unit square to `max_shift`, which the
-/// caller can scale by the measurement uncertainty. Near-parallel neighbours and
-/// intersections that land implausibly far away fall back to the measured point.
 /// Whether the vertex list `v` runs all the way round a closed contour, so that its first
 /// and last vertex are one point and the join between the last and first segment is a
 /// vertex like any other.
@@ -483,7 +583,21 @@ pub const CORNER_CHAMFER: f64 = 1.0;
 /// chamfer the intersection may cross (30 degrees).
 pub const CORNER_TURN_MIN: f64 = std::f64::consts::PI / 6.0;
 
-/// As [`adjust_vertices_at`], moving every vertex.
+/// Move each vertex to the intersection of its two adjacent best-fit lines.
+///
+/// Marching squares cannot represent a sharp corner: the level set cuts across the corner
+/// pixel, chamfering it over a point or two. Trusting those measured points as vertices
+/// both rounds the corner and costs an extra segment to cross the chamfer — measured
+/// effect, a hexagon coming back with 12 vertices instead of 6.
+///
+/// The corner is not where the contour was sampled; it is where the two edges *meet*, so
+/// intersecting their fitted lines recovers it. This is Potrace's vertex adjustment step,
+/// with the constraint generalized from its fixed unit square to `max_shift`, which the
+/// caller can scale by the measurement uncertainty. Near-parallel neighbours and
+/// intersections that land implausibly far away fall back to the measured point.
+///
+/// As [`adjust_vertices_at`] with every vertex treated as a corner; see there for the
+/// formula and for why the shipping path restricts it to corners.
 pub fn adjust_vertices(poly: &Polyline, seg: &Segmentation, max_shift: f64) -> Vec<Point> {
     adjust_vertices_at(poly, seg, max_shift, |_| true)
 }
@@ -501,6 +615,32 @@ pub fn adjust_vertices(poly: &Polyline, seg: &Segmentation, max_shift: f64) -> V
 /// polygon's turn angles erratic, corner detection then fired every few vertices, a
 /// circle was cut into sixteen short runs, and no run was long enough for a cubic to be
 /// worth its parameters. Curve fitting looked broken; the actual fault was here.
+///
+/// For each selected interior vertex `k`, the segments on either side are fitted with a
+/// weighted total-least-squares line `p + t·d` (`segment_line`), and the vertex moves
+/// to their intersection
+///
+/// ```text
+///     hit = p0 + t·d0,    t = ((p1 − p0) × d1) / (d0 × d1)
+/// ```
+///
+/// (`×` the 2-D cross product), provided it lies within the allowed distance of the
+/// measured vertex:
+///
+/// ```text
+///     allowed = max_shift + min(3, CORNER_CHAMFER / max(0.2, sin(½(π − turn))))   if turn ≥ 30°
+///     allowed = max_shift                                                         otherwise
+/// ```
+///
+/// where `turn` is the angle between `d0` and `d1` (radians) and `½(π − turn)` is half
+/// the corner's interior angle: a sharper corner's chamfer sits further inside it.
+///
+/// Inputs: `max_shift` in px; `is_corner(k)` receives `k` as a position in
+/// `seg.vertices`, not a polyline index. Output: one point per entry of
+/// `seg.vertices`, in px; vertices that are not selected, whose neighbours are parallel
+/// (`|d0 × d1| < 1e-6`) or whose intersection is too far keep their measured position.
+/// On a loop ([`spans_loop`]) the last point is set equal to the first. Fewer than three
+/// vertices are returned unchanged.
 pub fn adjust_vertices_at(
     poly: &Polyline,
     seg: &Segmentation,
@@ -512,48 +652,12 @@ pub fn adjust_vertices_at(
     if v.len() < 3 {
         return out;
     }
-    let n_pts = poly.len();
     let closed = spans_loop(poly, v);
     let n = v.len();
     let seg_count = n - 1;
 
-    // Fit each segment's line from its actual points.
-    //
-    // Deliberately not via the prefix sums: on a closed contour the chosen vertex indices
-    // wrap around the cut point, so a range like `350..12` is not expressible as a prefix
-    // difference. An earlier version used the prefix path and silently returned `None`
-    // for every wrapped segment, which made this whole function a no-op on exactly the
-    // inputs it exists for. Walking the points is O(total points) and always correct.
     let lines: Vec<Option<(Point, Vec2)>> = (0..seg_count)
-        .map(|k| {
-            let (a, b) = (v[k], v[k + 1]);
-            let (pa, pb) = (poly.points[a], poly.points[b]);
-            let mut pts = Vec::new();
-            let mut i = a;
-            loop {
-                pts.push((poly.points[i], 1.0 / (poly.sigma[i] * poly.sigma[i])));
-                if i == b {
-                    break;
-                }
-                i = (i + 1) % n_pts;
-                if pts.len() > n_pts {
-                    break;
-                }
-            }
-            // The samples nearest a vertex sit on the chamfer, inside the true edge;
-            // they are exactly the points that must not vote on where the edge is.
-            // Drop the first pixel at each end when enough of the edge remains.
-            let trimmed: Vec<(Point, f64)> = pts
-                .iter()
-                .copied()
-                .filter(|(p, _)| p.dist(pa) > CORNER_CHAMFER && p.dist(pb) > CORNER_CHAMFER)
-                .collect();
-            if trimmed.len() >= 3 {
-                fit_line(&trimmed)
-            } else {
-                fit_line(&pts)
-            }
-        })
+        .map(|k| segment_line(poly, v[k], v[k + 1]))
         .collect();
 
     let interior: Vec<usize> = if closed {
@@ -612,7 +716,58 @@ pub fn adjust_vertices_at(
     out
 }
 
+/// The best-fit line of the polyline points from index `a` to `b` (wrapping on a closed
+/// contour), as `(centroid, unit direction)`, for [`adjust_vertices_at`].
+///
+/// Fitted from the actual points, deliberately not via the prefix sums: on a closed
+/// contour the chosen vertex indices wrap around the cut point, so a range like `350..12`
+/// is not expressible as a prefix difference. An earlier version used the prefix path and
+/// silently returned `None` for every wrapped segment, which made the vertex adjustment a
+/// no-op on exactly the inputs it exists for. Walking the points is O(total points) and
+/// always correct.
+///
+/// The samples within [`CORNER_CHAMFER`] of either end sit on the chamfer, inside the
+/// true edge; they are exactly the points that must not vote on where the edge is. They
+/// are dropped when at least three samples remain without them. `None` when the line is
+/// undefined (see [`fit_line`]).
+fn segment_line(poly: &Polyline, a: usize, b: usize) -> Option<(Point, Vec2)> {
+    let n_pts = poly.len();
+    let (pa, pb) = (poly.points[a], poly.points[b]);
+    let mut pts = Vec::new();
+    let mut i = a;
+    loop {
+        pts.push((poly.points[i], 1.0 / (poly.sigma[i] * poly.sigma[i])));
+        if i == b {
+            break;
+        }
+        i = (i + 1) % n_pts;
+        if pts.len() > n_pts {
+            break;
+        }
+    }
+    let trimmed: Vec<(Point, f64)> = pts
+        .iter()
+        .copied()
+        .filter(|(p, _)| p.dist(pa) > CORNER_CHAMFER && p.dist(pb) > CORNER_CHAMFER)
+        .collect();
+    if trimmed.len() >= 3 {
+        fit_line(&trimmed)
+    } else {
+        fit_line(&pts)
+    }
+}
+
 /// Weighted total-least-squares line through points, as (centroid, unit direction).
+///
+/// `pts` pairs each point (px) with its weight (normally `1/σ²`). The line passes through
+/// the weighted centroid `m` and runs along the major eigenvector of the weighted scatter
+/// matrix `C = Σ w (p − m)(p − m)ᵀ`, the direction that minimises the sum of weighted
+/// squared perpendicular distances. With `λ_max = ½(Cxx + Cyy + √((Cxx − Cyy)² + 4·Cxy²))`
+/// that eigenvector is `(λ_max − Cyy, Cxy)`; when `Cxy` is (numerically) zero the
+/// matrix is diagonal and the axis with the larger spread is taken.
+///
+/// `None` for fewer than two points or a non-positive total weight. Coincident points
+/// have no direction and get the x axis.
 fn fit_line(pts: &[(Point, f64)]) -> Option<(Point, Vec2)> {
     let w: f64 = pts.iter().map(|p| p.1).sum();
     if pts.len() < 2 || w <= 0.0 {
@@ -651,7 +806,9 @@ fn fit_line(pts: &[(Point, f64)]) -> Option<(Point, Vec2)> {
     ))
 }
 
-/// Perpendicular distance from `p` to the infinite line through `a` and `b`.
+/// Perpendicular distance from `p` to the infinite line through `a` and `b`, in px:
+/// `|(p − a) × (b − a)| / |b − a|`. When `a` and `b` coincide there is no line, and the
+/// distance to `a` is returned instead.
 pub fn line_distance(p: Point, a: Point, b: Point) -> f64 {
     let d = b - a;
     let len = d.norm();
@@ -663,6 +820,11 @@ pub fn line_distance(p: Point, a: Point, b: Point) -> f64 {
 
 /// Largest perpendicular deviation of the source polyline from a segmentation,
 /// in units of each point's own sigma. This is the quantity `tau` bounds.
+///
+/// Measured against each chord's infinite line, for the points strictly between its
+/// two vertices. A pair whose indices wrap (`j < i`, the cut of a closed loop) has no
+/// points between them in index order and is skipped. 0 when there are no interior
+/// points.
 pub fn max_normalized_deviation(poly: &Polyline, seg: &Segmentation) -> f64 {
     let mut worst: f64 = 0.0;
     for pair in seg.vertices.windows(2) {
@@ -771,6 +933,21 @@ pub const CORNER_DEGREES: f64 = 45.0;
 /// it removes at least that much residual — on a circle it removes an enormous amount,
 /// on a straight edge none at all, and the objective sorts the two cases out without a
 /// special case for either.
+///
+/// The steps:
+///
+/// 1. [`optimal_polygon`] chooses the vertices;
+/// 2. `corner_breaks` marks the vertices whose polygon turn is at least
+///    [`CORNER_DEGREES`] (and the ends of an open path) as breaks;
+/// 3. [`adjust_vertices_at`] moves only those breaks to the intersection of their
+///    neighbouring fitted lines, with a shift cap of `3·max(σ_max, 0.25)` px;
+/// 4. each run between consecutive breaks is described by lines or by cubics, whichever
+///    costs less (`fit_run`).
+///
+/// This is the two-pass reference the multimodel program is tested against; the shipping
+/// path is [`multimodel::optimal_multimodel`]. Output coordinates are in the input's
+/// px. Fewer than two vertices give an empty path at the first point (or the origin
+/// for an empty polyline).
 pub fn fit_path(poly: &Polyline, cfg: &FitConfig) -> FittedPath {
     let seg = optimal_polygon(poly, cfg);
     let v = &seg.vertices;
@@ -786,11 +963,48 @@ pub fn fit_path(poly: &Polyline, cfg: &FitConfig) -> FittedPath {
     }
 
     let closed = poly.closed && v.first() == v.last();
-    let n_seg = n_v - 1;
+    let breaks = corner_breaks(&raw, closed);
 
-    // Which joins are corners? Measured on the *unadjusted* polygon: the DP has already
-    // removed the staircase wobble, and adjustment must not run before this decision,
-    // since adjustment is only meaningful at corners in the first place.
+    // Now sharpen the corners, and only the corners.
+    let corner_set: std::collections::HashSet<usize> = breaks.iter().copied().collect();
+    let max_shift = 3.0 * poly.sigma.iter().copied().fold(0.0, f64::max).max(0.25);
+    let adjusted = adjust_vertices_at(poly, &seg, max_shift, |k| corner_set.contains(&k));
+
+    let start = adjusted[breaks[0]];
+    let mut segments: Vec<curves::Segment> = Vec::new();
+    // A closed path with a single break is one run all the way round.
+    let run_closed = closed && breaks.len() == 2;
+    for w in breaks.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        if b <= a {
+            continue;
+        }
+        segments.extend(fit_run(poly, cfg, v, &adjusted, (a, b), run_closed));
+    }
+
+    FittedPath {
+        start,
+        segments,
+        closed,
+    }
+}
+
+/// Where [`fit_path`] breaks the polygon into smooth runs: positions in the vertex list
+/// `raw` (px) whose turn is at least [`CORNER_DEGREES`].
+///
+/// Measured on the *unadjusted* polygon: the dynamic program has already removed the
+/// staircase wobble, and adjustment must not run before this decision, since adjustment
+/// is only meaningful at corners in the first place. The turn at vertex `k` is the angle
+/// between its incoming and outgoing edges, `acos(a·b / (|a||b|))` in degrees; a
+/// zero-length edge counts as no turn.
+///
+/// An open path always breaks at both ends. A closed path (`raw` repeats its first vertex
+/// at the end) with no corner at all is broken at `0` and `n − 1`, i.e. treated as one
+/// run round the loop, and always ends on `n − 1`. The result is ascending and free of
+/// repeats.
+fn corner_breaks(raw: &[Point], closed: bool) -> Vec<usize> {
+    let n_v = raw.len();
+    let n_seg = n_v - 1;
     let turn_at = |k: usize| -> f64 {
         let (prev, next) = if closed {
             ((k + n_seg - 1) % n_seg, k % n_seg)
@@ -823,151 +1037,185 @@ pub fn fit_path(poly: &Polyline, cfg: &FitConfig) -> FittedPath {
             breaks.push(n_v - 1);
         }
     }
-    if closed && *breaks.last().unwrap() != n_v - 1 {
+    let last = *breaks
+        .last()
+        .expect("breaks is non-empty: an empty list was given index 0 above");
+    if closed && last != n_v - 1 {
         breaks.push(n_v - 1);
     }
     breaks.dedup();
+    breaks
+}
 
-    // Now sharpen the corners, and only the corners.
-    let corner_set: std::collections::HashSet<usize> = breaks.iter().copied().collect();
-    let max_shift = 3.0 * poly.sigma.iter().copied().fold(0.0, f64::max).max(0.25);
-    let adjusted = adjust_vertices_at(poly, &seg, max_shift, |k| corner_set.contains(&k));
+/// One smooth run of [`fit_path`]: the measured points between polygon vertices
+/// `v[a]` and `v[b]`, the chosen vertex positions after corner adjustment, and whether
+/// the run goes all the way round a loop.
+struct Run<'a> {
+    /// The measured points of the run, in px, both end vertices included.
+    pts: &'a [Point],
+    /// Their uncertainties, in px.
+    sig: &'a [f64],
+    /// The adjusted position of the run's first vertex, where the emitted geometry starts.
+    start: Point,
+    /// True when the run is a whole closed loop, so the smoother may wrap.
+    closed: bool,
+}
 
-    let start = adjusted[breaks[0]];
-    let mut segments: Vec<curves::Segment> = Vec::new();
+/// Describe the run between breaks `a` and `b` (positions in `v`) as lines or as cubics,
+/// whichever has the lower MDL cost `½·χ² + λ·P`.
+///
+/// Both descriptions are scored the *same way*: distance from every measured point to
+/// the geometry that would actually be emitted (`curves::chi2`).
+///
+/// The previous version costed the straight branch with `chi2_line` over vertex index
+/// ranges, which was wrong twice over. On a closed contour the chosen vertices wrap past
+/// the cut point, so `min`/`max` turned a short span into one covering nearly the whole
+/// boundary. And even where indices behaved, it measured residual to each span's
+/// *best-fit line* rather than to the chord actually drawn — a systematically smaller
+/// number. Lines were therefore compared against cubics on favourable terms, and won runs
+/// they should have lost.
+///
+/// The returned segments start at `adjusted[a]` (implicitly) and end exactly on
+/// `adjusted[b]`, so neighbouring runs stay joined.
+fn fit_run(
+    poly: &Polyline,
+    cfg: &FitConfig,
+    v: &[usize],
+    adjusted: &[Point],
+    (a, b): (usize, usize),
+    run_closed: bool,
+) -> Vec<curves::Segment> {
+    let line_segs: Vec<curves::Segment> = (a..b)
+        .map(|k| curves::Segment::Line(adjusted[k + 1]))
+        .collect();
+    let line_params = line_segs.len() as f64 * PARAMS_LINE;
+    let run_pts = gather(poly, v[a], v[b]);
+    let run_sig = gather_sigma(poly, v[a], v[b]);
+    let line_chi2 = curves::chi2(&run_pts, &run_sig, adjusted[a], &line_segs);
+    let line_cost = 0.5 * line_chi2 + cfg.lambda * line_params;
 
-    for w in breaks.windows(2) {
-        let (a, b) = (w[0], w[1]);
-        if b <= a {
-            continue;
+    let run = Run {
+        pts: &run_pts,
+        sig: &run_sig,
+        start: adjusted[a],
+        closed: run_closed,
+    };
+    let (cubic, best_cost) = cheapest_smoothed_cubics(&run, line_cost, cfg);
+
+    if inkvec_core::env::flag("INKVEC_DEBUG_FIT") {
+        eprintln!(
+            "    run {a}..{b}: {} pts | LINE {} segs chi2 {:.0} cost {:.0} | CUBIC {} segs cost {:.0}",
+            run_pts.len(),
+            line_segs.len(),
+            line_chi2,
+            line_cost,
+            cubic.as_ref().map(|c| c.len()).unwrap_or(0),
+            best_cost
+        );
+    }
+
+    match cubic {
+        Some(mut segs) => {
+            // Pin the run's end to the polygon vertex so neighbouring runs stay joined.
+            pin_end(&mut segs, adjusted[b]);
+            segs
         }
-        // Build the straight description explicitly, and score it the *same way* the
-        // curved one is scored: distance from every measured point to the geometry that
-        // would actually be emitted.
-        //
-        // The previous version costed this branch with `chi2_line` over vertex index
-        // ranges, which was wrong twice over. On a closed contour the chosen vertices wrap
-        // past the cut point, so `min`/`max` turned a short span into one covering nearly
-        // the whole boundary. And even where indices behaved, it measured residual to each
-        // span's *best-fit line* rather than to the chord actually drawn — a systematically
-        // smaller number. Lines were therefore compared against cubics on favourable
-        // terms, and won runs they should have lost.
-        let line_segs: Vec<curves::Segment> = (a..b)
-            .map(|k| curves::Segment::Line(adjusted[k + 1]))
-            .collect();
-        let line_params = line_segs.len() as f64 * PARAMS_LINE;
-        let run_pts = gather(poly, v[a], v[b]);
-        let run_sig = gather_sigma(poly, v[a], v[b]);
-        let line_chi2 = curves::chi2(&run_pts, &run_sig, adjusted[a], &line_segs);
-        let line_cost = 0.5 * line_chi2 + cfg.lambda * line_params;
+        None => line_segs,
+    }
+}
 
-        let tol = cfg.tau * run_sig.iter().copied().fold(0.0f64, f64::max).max(0.05);
+/// The cheapest cubic description of a run, if any beats `line_cost`, with its cost.
+///
+/// How smooth should the fit be? kurbo fits the source faithfully, and our source is a
+/// *measurement*: a polyline carrying about 0.05px of extraction wobble. Asked for 0.1px
+/// accuracy it will dutifully chase every wiggle — 92 cubics for a circle that four would
+/// describe. Its author flags exactly this, noting the method was never validated on
+/// noisy input.
+///
+/// Rather than invent a smoothing constant, let the objective decide. The run is fitted
+/// over a grid of Savitzky–Golay half-windows `hw` (points) and tolerances
+/// `t = mult · τ · max(σ_max, 0.05)` (px), and whichever description is cheapest under
+/// the same MDL cost used everywhere else is kept. Chasing noise is then rejected on its
+/// own terms: the extra cubics cost more than the residual they remove.
+///
+/// The search is wide, deliberately. The governing directive is quality over speed, and
+/// the (smoothing, tolerance) surface turned out to be sharp: a coarse grid landed a
+/// circle on 9 segments and an ellipse on 34, from what is essentially the same problem.
+/// Smoothing is capped at a sixth of the run so a window can never span enough of the
+/// shape to flatten it.
+///
+/// Every candidate is scored against the *original* measurements, never the smoothed
+/// copy, so oversmoothing is punished rather than hidden. The grid is ranked with kurbo's
+/// fast fitter; the optimal (and far slower) one is paid for only at the winning setting,
+/// and kept only if it is no worse. The returned cost is the fast fitter's (or
+/// `line_cost` when nothing beat it).
+fn cheapest_smoothed_cubics(
+    run: &Run<'_>,
+    line_cost: f64,
+    cfg: &FitConfig,
+) -> (Option<Vec<curves::Segment>>, f64) {
+    let score = |segs: &[curves::Segment]| -> f64 {
+        let chi2 = curves::chi2(run.pts, run.sig, run.start, segs);
+        let params: f64 = segs.iter().map(|s| s.params()).sum();
+        0.5 * chi2 + cfg.lambda * params
+    };
+    let tol = cfg.tau * run.sig.iter().copied().fold(0.0f64, f64::max).max(0.05);
 
-        // How smooth should the fit be? kurbo fits the source faithfully, and our source
-        // is a *measurement*: a polyline carrying about 0.05px of extraction wobble. Asked
-        // for 0.1px accuracy it will dutifully chase every wiggle — 92 cubics for a circle
-        // that four would describe. Its author flags exactly this, noting the method was
-        // never validated on noisy input.
-        //
-        // Rather than invent a smoothing constant, let the objective decide. Fit at a
-        // range of tolerances and keep whichever description is cheapest under the same
-        // MDL cost used everywhere else. Chasing noise is then rejected on its own terms:
-        // the extra cubics cost more than the residual they remove.
-        let mut cubic: Option<Vec<curves::Segment>> = None;
-        let mut best_cost = line_cost;
-        let mut best: Option<(f64, usize)> = None;
-        let run_closed = closed && breaks.len() == 2;
-        // Wide search, deliberately. The governing directive is quality over speed, and
-        // the (smoothing, tolerance) surface turned out to be sharp: a coarse grid landed
-        // a circle on 9 segments and an ellipse on 34, from what is essentially the same
-        // problem. Smoothing is capped at a sixth of the run so a window can never span
-        // enough of the shape to flatten it.
-        let hw_cap = (run_pts.len() / 6).max(1);
-        for hw in [0usize, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64] {
-            if hw > hw_cap {
-                break;
-            }
-            for mult in [0.25f64, 0.5, 0.75, 1.0, 1.5, 2.0, 4.0, 8.0] {
-                let t = tol * mult;
-                let Some(segs) = curves::fit_cubics_smoothed(&run_pts, t, hw, run_closed, false)
-                else {
-                    continue;
-                };
-                // Always scored against the *original* measurements, never the smoothed
-                // copy, so oversmoothing is punished rather than hidden.
-                let chi2 = curves::chi2(&run_pts, &run_sig, adjusted[a], &segs);
-                let params: f64 = segs.iter().map(|s| s.params()).sum();
-                let cost = 0.5 * chi2 + cfg.lambda * params;
-                if cost < best_cost {
-                    best_cost = cost;
-                    best = Some((t, hw));
-                    cubic = Some(segs);
-                }
-            }
+    let mut cubic: Option<Vec<curves::Segment>> = None;
+    let mut best_cost = line_cost;
+    let mut best: Option<(f64, usize)> = None;
+    let hw_cap = (run.pts.len() / 6).max(1);
+    for hw in [0usize, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64] {
+        if hw > hw_cap {
+            break;
         }
-        // Pay for kurbo's optimal (and far slower) fitter only at the winning setting.
-        if let Some((t, hw)) = best {
-            if let Some(segs) = curves::fit_cubics_smoothed(&run_pts, t, hw, run_closed, true) {
-                let chi2 = curves::chi2(&run_pts, &run_sig, adjusted[a], &segs);
-                let params: f64 = segs.iter().map(|s| s.params()).sum();
-                if 0.5 * chi2 + cfg.lambda * params <= best_cost {
-                    cubic = Some(segs);
-                }
-            }
-        }
-
-        if inkvec_core::env::flag("INKVEC_DEBUG_FIT") {
-            eprintln!(
-                "    run {a}..{b}: {} pts | LINE {} segs chi2 {:.0} cost {:.0} | CUBIC {} segs cost {:.0}",
-                run_pts.len(),
-                line_segs.len(),
-                line_chi2,
-                line_cost,
-                cubic.as_ref().map(|c| c.len()).unwrap_or(0),
-                best_cost
-            );
-        }
-
-        match cubic {
-            Some(mut segs) => {
-                // Pin the run's end to the polygon vertex so neighbouring runs stay joined.
-                if let Some(last) = segs.last_mut() {
-                    *last = match *last {
-                        curves::Segment::Line(_) => curves::Segment::Line(adjusted[b]),
-                        curves::Segment::Cubic(c1, c2, _) => {
-                            curves::Segment::Cubic(c1, c2, adjusted[b])
-                        }
-                        curves::Segment::Arc {
-                            rx,
-                            ry,
-                            phi,
-                            large_arc,
-                            sweep,
-                            ..
-                        } => curves::Segment::Arc {
-                            rx,
-                            ry,
-                            phi,
-                            large_arc,
-                            sweep,
-                            end: adjusted[b],
-                        },
-                    };
-                }
-                segments.extend(segs);
-            }
-            None => {
-                for k in a..b {
-                    segments.push(curves::Segment::Line(adjusted[k + 1]));
-                }
+        for mult in [0.25f64, 0.5, 0.75, 1.0, 1.5, 2.0, 4.0, 8.0] {
+            let t = tol * mult;
+            let Some(segs) = curves::fit_cubics_smoothed(run.pts, t, hw, run.closed, false) else {
+                continue;
+            };
+            let cost = score(&segs);
+            if cost < best_cost {
+                best_cost = cost;
+                best = Some((t, hw));
+                cubic = Some(segs);
             }
         }
     }
+    // Pay for kurbo's optimal (and far slower) fitter only at the winning setting.
+    if let Some((t, hw)) = best {
+        if let Some(segs) = curves::fit_cubics_smoothed(run.pts, t, hw, run.closed, true) {
+            if score(&segs) <= best_cost {
+                cubic = Some(segs);
+            }
+        }
+    }
+    (cubic, best_cost)
+}
 
-    FittedPath {
-        start,
-        segments,
-        closed,
+/// Move the endpoint of the last segment in `segs` to `end`, keeping its type and shape
+/// parameters (control points, radii, flags).
+fn pin_end(segs: &mut [curves::Segment], end: Point) {
+    if let Some(last) = segs.last_mut() {
+        *last = match *last {
+            curves::Segment::Line(_) => curves::Segment::Line(end),
+            curves::Segment::Cubic(c1, c2, _) => curves::Segment::Cubic(c1, c2, end),
+            curves::Segment::Arc {
+                rx,
+                ry,
+                phi,
+                large_arc,
+                sweep,
+                ..
+            } => curves::Segment::Arc {
+                rx,
+                ry,
+                phi,
+                large_arc,
+                sweep,
+                end,
+            },
+        };
     }
 }
 
@@ -993,6 +1241,7 @@ fn gather(poly: &Polyline, a: usize, b: usize) -> Vec<Point> {
     out
 }
 
+/// The sigmas matching [`gather`]`(poly, a, b)`, index for index.
 fn gather_sigma(poly: &Polyline, a: usize, b: usize) -> Vec<f64> {
     let n = poly.len();
     let mut out = vec![poly.sigma[a]];

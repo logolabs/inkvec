@@ -1,4 +1,8 @@
 //! Rounded-rectangle geometry and orthogonal-distance fitting.
+//!
+//! Used by the whole-ring primitive search (`super::fit_primitive_or_arcs`), which asks
+//! for both a free corner radius and a radius pinned to zero (a plain rectangle) and lets
+//! the objective choose. Axis-aligned only; px throughout.
 
 use inkvec_core::Point;
 
@@ -33,11 +37,15 @@ pub struct RoundRectFit {
 pub fn round_rect_distance(p: Point, cx: f64, cy: f64, hw: f64, hh: f64, rx: f64) -> f64 {
     let qx = (p.x - cx).abs() - (hw - rx);
     let qy = (p.y - cy).abs() - (hh - rx);
+    // The inner rectangle's signed distance: Euclidean outside it, the (negative) distance
+    // to the nearer side inside it.
     let outside = qx.max(0.0).hypot(qy.max(0.0));
     let inside = qx.max(qy).min(0.0);
     outside + inside - rx
 }
 
+/// `Σ w_k·d_k²` for the rounded rectangle `p = [cx, cy, hw, hh, rx]` (centre, half-width,
+/// half-height, corner radius; px), with `w` the per-point weights `1/σ²`.
 pub(crate) fn round_rect_chi2(pts: &[Point], w: &[f64], p: &[f64]) -> f64 {
     pts.iter()
         .zip(w)
@@ -48,7 +56,14 @@ pub(crate) fn round_rect_chi2(pts: &[Point], w: &[f64], p: &[f64]) -> f64 {
         .sum()
 }
 
-/// Orthogonal-distance rounded-rectangle fit. `fixed_rx` pins the corner radius (to
+/// Starting corner radii for [`fit_round_rect`]'s Levenberg–Marquardt runs.
+///
+/// With `fixed_rx` there is one, the pinned radius clamped to `[0, rmax]`. Otherwise six
+/// fractions of `rmax` (0, 0.1, 0.25, 0.5, 0.8, 1) plus one read off the data: a straight
+/// side stops where its corner arc begins, one radius short of the bounding box's corner.
+/// For each side of the box (`bounds = [x0, x1, y0, y1]`), the points within
+/// `3·max(σ_max, 0.05)` px of it are gathered, and how far each end of their extent falls
+/// short of the box is a radius estimate; the median of those estimates is added.
 fn corner_radius_guesses(
     pts: &[Point],
     sigma: &[f64],
@@ -86,6 +101,18 @@ fn corner_radius_guesses(
 
 /// Orthogonal-distance rounded-rectangle fit. `fixed_rx` pins the corner radius (to
 /// zero, for a plain rectangle) so that the alternative can be costed on its own terms.
+///
+/// Levenberg–Marquardt over `(cx, cy, hw, hh[, rx])` on the exact signed distance
+/// [`round_rect_distance`], weighted by `1/σ²`, started from the points' bounding box and
+/// each radius of `corner_radius_guesses`; the lowest χ² wins. The distance field has
+/// creases where the contact point moves from a side to an arc, so the Jacobian is taken
+/// by central differences (step `1e-6·max(rmax, 1)` px) rather than analytically. After
+/// each step the half-extents are kept at least 1e-3 px and the radius within
+/// `[0, min(hw, hh)]`; each run is capped at 100 iterations.
+///
+/// `None` for fewer than eight points, a bounding box thinner than 2e-6 px, or when every
+/// run fails. The result gives the top-left corner, the full width and height, the
+/// radius and the χ².
 pub fn fit_round_rect(pts: &[Point], sigma: &[f64], fixed_rx: Option<f64>) -> Option<RoundRectFit> {
     let n = pts.len();
     if n < 8 {

@@ -18,11 +18,25 @@
 //! than through kurbo's cusp callback because we have better information than curve
 //! geometry alone — the line dynamic program has already decided, under the MDL
 //! objective, where the corners are.
+//!
+//! # What else lives here
+//!
+//! This file is also the crate's shared geometry vocabulary, used by every later stage
+//! and by `inkvec-trace`, `inkvec-cli` and `inkvec-svgmin`:
+//!
+//! - [`Segment`], the emitted alphabet (line, cubic, SVG arc), and its parameter price;
+//! - evaluation: [`bernstein`], [`eval_cubic`], [`cubic_tangent`], the SVG
+//!   endpoint-to-centre arc conversion ([`arc_ellipse_center`], [`arc_center`]) and
+//!   [`cubic_self_intersects`];
+//! - scoring a fitted run against measured points by dense sampling ([`chi2`],
+//!   [`max_deviation`]), which is what [`crate::fit_path`] ranks candidates with.
+//!
+//! All coordinates are in pixels; angles are in radians.
 
 use inkvec_core::{Point, Vec2};
 use kurbo::{
-    fit_to_bezpath_opt, BezPath, CurveFitSample, ParamCurve, ParamCurveDeriv, ParamCurveFit,
-    PathEl, Point as KPoint, Vec2 as KVec2,
+    fit_to_bezpath_opt, BezPath, CurveFitSample, ParamCurveFit, PathEl, Point as KPoint,
+    Vec2 as KVec2,
 };
 
 /// A measured polyline presented to kurbo as a smooth source curve.
@@ -37,6 +51,8 @@ struct PolylineCurve<'a> {
 }
 
 impl<'a> PolylineCurve<'a> {
+    /// Wrap `pts` (px), precomputing cumulative arc length. `None` for fewer than two
+    /// points or a total length of (numerically) zero, which have no parametrization.
     fn new(pts: &'a [Point]) -> Option<Self> {
         if pts.len() < 2 {
             return None;
@@ -54,11 +70,17 @@ impl<'a> PolylineCurve<'a> {
         Some(Self { pts, cum })
     }
 
+    /// Total arc length of the polyline, in px.
     fn total(&self) -> f64 {
         *self.cum.last().unwrap_or(&0.0)
     }
 
     /// Position at normalized arc length `t`, by linear interpolation.
+    ///
+    /// `t` is clamped to `[0, 1]` and scaled to a length `s = t·L`. A binary search finds
+    /// the edge `lo..hi` with `cum[lo] ≤ s < cum[hi]`, and the point is
+    /// `p_lo + u·(p_hi − p_lo)` with `u = (s − cum[lo]) / (cum[hi] − cum[lo])`. A
+    /// zero-length edge is guarded by a 1e-12 floor on its length.
     fn pos(&self, t: f64) -> KPoint {
         let s = t.clamp(0.0, 1.0) * self.total();
         let mut lo = 0usize;
@@ -88,6 +110,9 @@ impl<'a> PolylineCurve<'a> {
     ///
     /// Smoothing only the tangent leaves position exact, so the fit still passes through
     /// the measurements; it just stops treating sampling artefacts as shape.
+    ///
+    /// The difference is taken between `pos(t − 1e-4)` and `pos(t + 1e-4)` (clamped to the
+    /// ends), and normalised; where both land on the same point the x axis is returned.
     fn at(&self, t: f64) -> (KPoint, KVec2) {
         let p = self.pos(t);
         let e = 1e-4;
@@ -210,7 +235,7 @@ impl Segment {
     /// Every arm reads the constant that names the count rather than restating it. A line
     /// really is two numbers and a cubic really is six, so literals here would be correct
     /// today and silently stale the moment either constant moved -- and this function and
-    /// `merge::segment_params`, which does reference them, would then disagree about the
+    /// `merge::params_of`, which does reference them, would then disagree about the
     /// price of the same segment.
     pub fn params(&self) -> f64 {
         match self {
@@ -227,14 +252,19 @@ impl Segment {
     }
 }
 
-/// Cubic Bernstein basis at `t`.
+/// Cubic Bernstein basis at `t`: `[(1−t)³, 3(1−t)²t, 3(1−t)t², t³]`.
+///
+/// The four weights sum to 1 for every `t`; on `[0, 1]` they are all non-negative, which
+/// is why a cubic stays inside the convex hull of its control points. `t` outside
+/// `[0, 1]` is not clamped.
 #[inline]
 pub fn bernstein(t: f64) -> [f64; 4] {
     let u = 1.0 - t;
     [u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t]
 }
 
-/// A cubic Bezier at `t`.
+/// A cubic Bezier at `t`: `B(t) = Σ_k b_k(t)·p_k` with `b_k` the [`bernstein`] weights,
+/// `p[0]` the start, `p[1]`, `p[2]` the control points and `p[3]` the end.
 ///
 /// One copy, because three modules had grown their own and a curve evaluated two
 /// different ways is two different curves once the results are compared bit for bit.
@@ -248,6 +278,10 @@ pub fn eval_cubic(p: [Point; 4], t: f64) -> Point {
 }
 
 /// The derivative of a cubic Bezier at `t`: a tangent, unnormalised.
+///
+/// `B'(t) = 3(1−t)²·(p1 − p0) + 6(1−t)t·(p2 − p1) + 3t²·(p3 − p2)`, in px per unit of
+/// `t`. It is zero at an end whose control point coincides with that end, so a caller
+/// that needs a direction there must handle the zero vector.
 ///
 /// `merge::cubic_tangent_at` computes the same quantity but factors the 3 out, which is
 /// a different rounding, so it is deliberately not folded in here.
@@ -360,6 +394,24 @@ impl ArcFrame {
 }
 
 /// Endpoint-to-centre conversion of an SVG arc (elliptical case). See [`ArcFrame`].
+///
+/// The steps of SVG appendix F.6.5, with `R(φ)` the rotation by `phi`:
+///
+/// 1. Express the half-chord in the ellipse's own frame:
+///    `(x1', y1') = R(−φ)·(start − end)/2`.
+/// 2. If `Λ = x1'²/rx² + y1'²/ry² > 1` the ellipse is too small to span the chord, and
+///    both radii are scaled by `√Λ` (F.6.6).
+/// 3. The centre in that frame is
+///    `c' = ±√((rx²ry² − rx²y1'² − ry²x1'²) / (rx²y1'² + ry²x1'²)) · (rx·y1'/ry, −ry·x1'/rx)`,
+///    with the sign negative when `large_arc == sweep`; the radicand is clamped at 0.
+/// 4. `c = R(φ)·c' + (start + end)/2`.
+/// 5. `theta1` is the angle of `((x1' − cx')/rx, (y1' − cy')/ry)`, and `delta` the angle
+///    to `((−x1' − cx')/rx, (−y1' − cy')/ry)`, wrapped into `(−2π, 0]` for `sweep = false`
+///    and `[0, 2π)` for `sweep = true`.
+///
+/// Inputs in px and radians; negative radii are taken by absolute value. Coincident
+/// endpoints or a zero radius give a frame with `delta = 0`, which samples to nothing:
+/// SVG draws no arc in that case either.
 pub fn arc_ellipse_center(
     start: Point,
     rx: f64,
@@ -430,6 +482,10 @@ pub fn arc_ellipse_center(
 }
 
 /// The circular case: `(centre, radius, start_angle, sweep)`.
+///
+/// The radius returned is the one drawn, which exceeds `radius` when the chord is longer
+/// than a diameter (see [`arc_ellipse_center`]). Angles in radians, `sweep` signed as
+/// [`ArcFrame::delta`].
 pub fn arc_center(
     start: Point,
     radius: f64,
@@ -445,6 +501,9 @@ pub fn arc_center(
 ///
 /// Returns `None` when the run is too short or degenerate to fit, in which case the
 /// caller should keep the straight segmentation.
+///
+/// `accuracy` is kurbo's error tolerance, in px (floored at 1e-4). Uses the optimal
+/// subdivision; see [`fit_cubics_with`].
 pub fn fit_cubics(pts: &[Point], accuracy: f64) -> Option<Vec<Segment>> {
     fit_cubics_with(pts, accuracy, true)
 }
@@ -468,6 +527,19 @@ pub fn fit_cubics(pts: &[Point], accuracy: f64) -> Option<Vec<Segment>> {
 /// bias stays below the measurement uncertainty it is removing. Chi-squared is always
 /// evaluated against the *original* points, so a window that oversmooths is rejected by
 /// the objective rather than quietly accepted.
+///
+/// The filter is Savitzky–Golay of order 2: for each point `k`, fit
+/// `p(t) = a + b·t + c·t²` by least squares to the `2h + 1` points at index offsets
+/// `t = −h..h` and keep `a = p(0)`. On a symmetric window the odd moments vanish, and
+///
+/// ```text
+///     a = (Σp · S4 − Σp·t² · S2) / (S0·S4 − S2²),     S_m = Σ_t t^m
+/// ```
+///
+/// per coordinate. The offsets are vertex indices, not arc length, so the filter assumes
+/// roughly even spacing, which traced boundaries have. A closed run wraps; an open one
+/// repeats its end points. `half_window` 0, or a run shorter than `2h + 3`, is returned
+/// unchanged.
 fn smooth(pts: &[Point], half_window: usize, closed: bool) -> Vec<Point> {
     let n = pts.len();
     let h = half_window as i64;
@@ -530,6 +602,11 @@ fn smooth(pts: &[Point], half_window: usize, closed: bool) -> Vec<Point> {
 }
 
 /// Fit cubics to a denoised copy of the run.
+///
+/// `half_window` is the Savitzky–Golay half-width in points (0 = no smoothing),
+/// `closed` lets the window wrap, `accuracy` is in px, and `optimal` picks kurbo's
+/// fitter as in [`fit_cubics_with`]. The fitted curve interpolates the *smoothed* points,
+/// so callers score it against the original ones.
 pub fn fit_cubics_smoothed(
     pts: &[Point],
     accuracy: f64,
@@ -547,6 +624,11 @@ pub fn fit_cubics_smoothed(
 /// equalize error and is near-minimal in segment count — and roughly fifty times slower.
 /// The tolerance sweep uses the fast fitter to rank candidates and pays for the optimal
 /// one only on the winner.
+///
+/// kurbo's output is translated element by element: lines stay lines, a quadratic
+/// `(p0, a, b)` is degree-elevated to the identical cubic with controls
+/// `p0 + ⅔(a − p0)` and `b + ⅔(a − b)`, and move/close elements are dropped (the caller
+/// owns the start point). `None` when the source is degenerate or kurbo returns nothing.
 pub fn fit_cubics_with(pts: &[Point], accuracy: f64, optimal: bool) -> Option<Vec<Segment>> {
     let curve = PolylineCurve::new(pts)?;
     let acc = accuracy.max(1e-4);
@@ -594,6 +676,13 @@ pub fn fit_cubics_with(pts: &[Point], accuracy: f64, optimal: bool) -> Option<Ve
 /// half that. The floor then scales with segment length, which silently penalises exactly
 /// the long segments the fit is trying to find: measured effect, the objective preferring
 /// 68 cubics for a circle over 4, because the 4 looked inaccurate when they were not.
+///
+/// `spacing` is in px. The sample count per segment is `ceil(length / spacing)`, with
+/// the length of a cubic bounded from above by its control polygon and that of an arc
+/// by `max(rx, ry)·|delta|`; counts are clamped to `[1, 4096]` for lines, `[4, 4096]`
+/// for cubics and `[2, 4096]` for arcs. Cubic samples are uniform in the parameter `t`,
+/// so only roughly uniform in space. The output starts with `start` and ends exactly on
+/// the last segment's endpoint.
 pub(crate) fn sample_run(start: Point, segs: &[Segment], spacing: f64) -> Vec<Point> {
     let mut out = Vec::new();
     let mut cur = start;
@@ -650,7 +739,9 @@ pub(crate) fn sample_run(start: Point, segs: &[Segment], spacing: f64) -> Vec<Po
     out
 }
 
-/// Distance from `p` to the segment `a -> b`.
+/// Distance from `p` to the segment `a -> b`, in px: the distance to the closest point
+/// `a + t·(b − a)`, `t = clamp((p − a)·(b − a) / |b − a|², 0, 1)`. A zero-length segment
+/// is the point `a`.
 fn segment_distance(p: Point, a: Point, b: Point) -> f64 {
     let d = b - a;
     let l2 = d.dot(d);
@@ -717,7 +808,11 @@ fn distances(pts: &[Point], samples: &[Point]) -> Vec<f64> {
     out
 }
 
-/// Maximum distance from `pts` to a fitted run.
+/// Maximum distance from `pts` to a fitted run, in px.
+///
+/// The run starts at `start` and is sampled every 0.25 px (see `sample_run` and
+/// `distances`). Infinite when there are no segments or fewer than two points, so an
+/// empty fit never passes a tolerance test.
 pub fn max_deviation(pts: &[Point], start: Point, segs: &[Segment]) -> f64 {
     if segs.is_empty() || pts.len() < 2 {
         return f64::INFINITY;
@@ -729,6 +824,14 @@ pub fn max_deviation(pts: &[Point], start: Point, segs: &[Segment]) -> f64 {
 }
 
 /// Weighted chi-squared of a fitted run against the measured points.
+///
+/// `χ² = Σ_k (d_k / σ_k)²`, with `d_k` the distance (px) from point `k` to the run
+/// sampled every 0.25 px from `start` (see `distances`) and `σ_k` its uncertainty (px),
+/// floored at 1e-3 so a zero sigma cannot divide by zero. Points beyond the end of
+/// `sigma` are given σ = 0.5. Dimensionless; infinite for an empty run.
+///
+/// The sampled distance has a small floor of its own; [`crate::multimodel::path_chi2`]
+/// is the exact alternative used to compare fitters.
 pub fn chi2(pts: &[Point], sigma: &[f64], start: Point, segs: &[Segment]) -> f64 {
     if segs.is_empty() {
         return f64::INFINITY;
@@ -742,11 +845,4 @@ pub fn chi2(pts: &[Point], sigma: &[f64], start: Point, segs: &[Segment]) -> f64
             (d / s) * (d / s)
         })
         .sum()
-}
-
-// Silence unused-import warnings from the trait bounds kurbo requires.
-#[allow(unused)]
-fn _assert_traits(p: &kurbo::CubicBez) {
-    let _ = p.eval(0.5);
-    let _ = p.deriv();
 }

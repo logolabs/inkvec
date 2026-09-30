@@ -8,6 +8,13 @@ use crate::curves::{arc_ellipse_center, eval_cubic, Segment};
 use inkvec_core::Point;
 
 /// Sample a single segment at parameter `t` in [0, 1].
+///
+/// `start` is where the segment begins (the previous segment's end). A line is
+/// interpolated linearly, a cubic evaluated by [`eval_cubic`], and an arc at the angle
+/// `theta1 + t·delta` of its SVG centre parametrisation ([`arc_ellipse_center`]), so
+/// uniform `t` is uniform in angle rather than in arc length on an ellipse. `t` is
+/// clamped to `[0, 1]`, and the two ends return `start` and the stored end exactly, not
+/// as recomputed, so consecutive segments sampled this way share their join bit for bit.
 pub fn eval_segment(seg: &Segment, start: Point, t: f64) -> Point {
     let t = t.clamp(0.0, 1.0);
     // Preserve the stored incidence exactly, including SVG arc roundoff.

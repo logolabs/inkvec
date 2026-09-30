@@ -1,6 +1,14 @@
 //! Small dense linear algebra and Levenberg-Marquardt optimizer.
+//!
+//! The primitive fitters' numerical kit: at most 5x5 systems (a circle has three
+//! parameters, an ellipse or rounded rectangle five), so plain `Vec<Vec<f64>>` matrices
+//! and textbook algorithms are the right size. Used by `super::fit_circle`,
+//! `super::ellipse` and `super::round_rect`.
 
 /// Solve `a x = b` by Gaussian elimination with partial pivoting. `None` if singular.
+///
+/// Singular means a pivot below 1e-300 in magnitude, or a non-finite solution; the test
+/// is absolute, so callers pass reasonably scaled systems.
 pub(crate) fn solve(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Option<Vec<f64>> {
     let n = b.len();
     for col in 0..n {
@@ -37,7 +45,8 @@ pub(crate) fn solve(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Option<Vec<f64>> {
     Some(x)
 }
 
-/// Lower Cholesky factor of a symmetric positive-definite matrix.
+/// Lower Cholesky factor of a symmetric positive-definite matrix: `L` with `L·Lᵀ = a`.
+/// `None` when a diagonal pivot is not positive, i.e. `a` is not positive definite.
 pub(crate) fn cholesky(a: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
     let n = a.len();
     let mut l = vec![vec![0.0; n]; n];
@@ -62,7 +71,7 @@ pub(crate) fn cholesky(a: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
     Some(l)
 }
 
-/// `x = L⁻¹ b`.
+/// `x = L⁻¹ b`, by forward substitution on the lower-triangular `l`.
 pub(crate) fn forward_sub(l: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
     let n = b.len();
     let mut x = vec![0.0; n];
@@ -76,7 +85,7 @@ pub(crate) fn forward_sub(l: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
     x
 }
 
-/// `x = L⁻ᵀ b`.
+/// `x = L⁻ᵀ b`, by back substitution on the transpose of the lower-triangular `l`.
 pub(crate) fn back_sub_t(l: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
     let n = b.len();
     let mut x = vec![0.0; n];
@@ -92,6 +101,11 @@ pub(crate) fn back_sub_t(l: &[Vec<f64>], b: &[f64]) -> Vec<f64> {
 
 /// Eigen-decomposition of a small symmetric matrix by cyclic Jacobi rotations.
 /// Returns `(eigenvalues, eigenvectors)` with eigenvectors as columns.
+///
+/// Each rotation zeroes one off-diagonal entry `a[p][q]`, with `t = tan θ` the smaller
+/// root of `t² + 2·t·cot 2θ − 1 = 0` for stability. Sweeps repeat until the sum of
+/// squared upper off-diagonal entries falls below 1e-30, or 100 sweeps. Eigenvalues are
+/// unsorted; eigenvectors are orthonormal.
 pub(crate) fn sym_eigen(mut a: Vec<Vec<f64>>) -> (Vec<f64>, Vec<Vec<f64>>) {
     let n = a.len();
     let mut v = vec![vec![0.0; n]; n];
@@ -140,8 +154,14 @@ pub(crate) fn sym_eigen(mut a: Vec<Vec<f64>>) -> (Vec<f64>, Vec<Vec<f64>>) {
     (evals, v)
 }
 
-/// Solve the 5x5 generalized symmetric eigenvalue problem: finds unit vector `theta`
+/// Solve the 5x5 generalized symmetric eigenvalue problem: finds the vector `theta`
 /// minimizing `thetaᵀ cov theta` subject to `thetaᵀ nrm theta = 1`.
+///
+/// With `nrm = L·Lᵀ` (Cholesky) and `y = Lᵀ·theta`, the problem becomes the ordinary
+/// symmetric one for `A = L⁻¹·cov·L⁻ᵀ` (symmetrised against rounding): the minimiser
+/// is `A`'s eigenvector for its smallest eigenvalue, and `theta = L⁻ᵀ·y`. `theta` is
+/// normalised in the `nrm` metric, not to unit length. `None` if `nrm` is not positive
+/// definite.
 pub(crate) fn gen_eigen_5(cov: &[Vec<f64>], nrm: &[Vec<f64>]) -> Option<Vec<f64>> {
     let l = cholesky(nrm)?;
     let mut tmp = vec![vec![0.0; 5]; 5];
@@ -178,6 +198,12 @@ pub(crate) fn gen_eigen_5(cov: &[Vec<f64>], nrm: &[Vec<f64>]) -> Option<Vec<f64>
 /// parameters and their chi². Damping is multiplicative on the diagonal, so a badly
 /// scaled problem still takes a sensible step, and the iteration stops when a step no
 /// longer changes chi² by a relative 1e-10 — well past what the noise can resolve.
+///
+/// Each iteration solves `(JᵀWJ + μ·diag|JᵀWJ|)·δ = −JᵀWr` and tries `p + δ`, projected.
+/// A step that does not raise χ² is taken and `μ` divided by 3 (floor 1e-15); a rejected
+/// step multiplies `μ` by 4 and a singular system by 10; once `μ` exceeds 1e12 the
+/// search gives up and returns the best point so far. At most `max_iter` iterations.
+/// `None` only if `eval` fails at the (projected) start.
 pub(crate) fn levenberg_marquardt(
     p0: Vec<f64>,
     max_iter: usize,

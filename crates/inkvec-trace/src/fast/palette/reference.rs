@@ -454,3 +454,10 @@ pub(super) fn palette_and_labels(
         labels,
     )
 }
+
+/// The original channel level, rounded by `f32::round`, for the rounding tests in
+/// [`super`].
+pub(super) fn level(v: f32, bits: u32) -> usize {
+    let top = ((1usize << bits) - 1) as f32;
+    (v.clamp(0.0, 1.0) * top).round() as usize
+}

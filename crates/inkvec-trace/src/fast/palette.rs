@@ -62,19 +62,16 @@ impl Grid {
     /// The bin of a colour `c = [r, g, b, a]` (sRGB 0..1 and opacity 0..1).
     ///
     /// Each channel is clamped to 0..1 and rounded to the nearest of `2^bits` levels,
-    /// `q(v) = round(v · (2^bits − 1))`; the key packs `q(r) q(g) q(b)` from the most
-    /// significant end, followed by `q(a)` on `alpha_bits` when opacity is binned. Rounding
-    /// (not truncation) puts a pure colour at the centre of its bin, so noise around it
-    /// spreads into both neighbours evenly.
+    /// `q(v) = round(v · (2^bits − 1))` ([`level`]); the key packs `q(r) q(g) q(b)` from the
+    /// most significant end, followed by `q(a)` on `alpha_bits` when opacity is binned.
+    /// Rounding (not truncation) puts a pure colour at the centre of its bin, so noise
+    /// around it spreads into both neighbours evenly. A NaN channel lands in level 0.
+    #[inline]
     fn key(self, c: [f32; 4]) -> usize {
-        let q = |v: f32, bits: u32| {
-            let top = ((1usize << bits) - 1) as f32;
-            (v.clamp(0.0, 1.0) * top).round() as usize
-        };
         let (b, ab) = (self.bits, self.alpha_bits);
-        let mut k = (q(c[0], b) << (2 * b)) | (q(c[1], b) << b) | q(c[2], b);
+        let mut k = (level(c[0], b) << (2 * b)) | (level(c[1], b) << b) | level(c[2], b);
         if ab > 0 {
-            k = (k << ab) | q(c[3], ab);
+            k = (k << ab) | level(c[3], ab);
         }
         k
     }
@@ -100,6 +97,45 @@ impl Grid {
         let (p, q) = (self.parts(a), self.parts(b));
         p.iter().zip(q).all(|(x, y)| (x - y).abs() <= 1)
     }
+}
+
+/// The largest f32 below one half, `0.5 − 2⁻²⁵`: the addend that makes truncation round
+/// half away from zero (see [`level`]).
+const BELOW_HALF: f32 = 0.5 - f32::EPSILON / 4.0;
+
+/// The level `q(v) = round(clamp(v, 0, 1) · T)` of one channel on a grid of `T = 2^bits − 1`
+/// steps, rounding half away from zero, as `f32::round` does. `bits` is 4 or 5 here, so
+/// the level is 0..=15 or 0..=31.
+///
+/// Computed as `trunc(x + h)` with `x = clamp(v, 0, 1) · T` and `h` = [`BELOW_HALF`],
+/// because `f32::round` compiles to a call into libm's `roundf` on the default x86-64
+/// target (no SSE4.1 `roundss`): 12 calls in `Grid::key`, 6.7 ns per pixel serial, where
+/// this is about half that (micro-benchmark over 4 M pixels, 5.5–7.0 against 13.0–13.5 ns
+/// for the 5-bit grid).
+///
+/// *Why it is the same number* (x ≥ 0, `k = ⌊x⌋`, `f = x − k`):
+/// * `f < 1/2`: then `x ≤ k + 1/2 − u` with `u` the spacing of floats at `x`, so
+///   `x + h ≤ k + 1 − u − 2⁻²⁵`, which rounds to a float below `k + 1`: `trunc = k`. At
+///   `k = 0` the largest such `x` is `1/2 − 2⁻²⁵` and `x + h = 1 − 2⁻²⁴` exactly.
+/// * `f ≥ 1/2`: `x + h ≥ k + 1 − 2⁻²⁵`, within half a spacing of `k + 1` (floats below
+///   `k + 1 ≥ 1` are at most `2⁻²⁴` apart), so it rounds to `k + 1` -- at `x = 1/2` it is an
+///   exact tie that round-half-to-even sends to 1.0, the even neighbour: `trunc = k + 1`.
+/// * A plain `+ 0.5` fails the first case: `(1/2 − 2⁻²⁵) + 1/2` ties to 1.0.
+///
+/// Checked, not only argued: identical to `(x).round() as usize` on every one of the
+/// 1 065 353 217 floats in `[0, 1]` for both grids (`rounding_is_exact_on_every_float`).
+/// NaN gives 0 either way (`NaN as usize` saturates to 0); `−0.0` clamps to `−0.0` and gives
+/// 0 either way.
+///
+/// Not from the literature: an exactness argument about one IEEE 754 addition, because this
+/// is a code-generation workaround, not a method. See also: D. Goldberg, "What Every
+/// Computer Scientist Should Know About Floating-Point Arithmetic", ACM Computing Surveys,
+/// March 1991, <https://docs.oracle.com/cd/E19957-01/806-3568/ncg_goldberg.html>; Rust's
+/// `f32::round` documentation (half away from zero).
+#[inline]
+fn level(v: f32, bits: u32) -> usize {
+    let top = ((1usize << bits) - 1) as f32;
+    (v.clamp(0.0, 1.0) * top + BELOW_HALF) as usize
 }
 
 /// Per-bin statistics: all pixels, and flat pixels, with their colour-and-opacity sums.
@@ -904,6 +940,57 @@ mod tests {
         for c in cases() {
             for (md, mc) in [(0.035, 64), (0.01, 64), (0.035, 3), (0.2, 2)] {
                 assert_same(&c, md, mc);
+            }
+        }
+    }
+
+    /// Every float in `[0, 1]` on both grids: 1 065 353 217 values, a few seconds in release
+    /// on all cores. Skipped in debug builds, where it would take minutes;
+    /// `cargo test --release` runs it.
+    #[test]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "exhaustive over every float in [0, 1]; run with --release"
+    )]
+    fn rounding_is_exact_on_every_float() {
+        use rayon::prelude::*;
+        assert_eq!(BELOW_HALF.to_bits(), 0.5f32.to_bits() - 1);
+        let bad = (0..=1.0f32.to_bits())
+            .into_par_iter()
+            .filter(|&b| {
+                let v = f32::from_bits(b);
+                [4, 5]
+                    .iter()
+                    .any(|&bits| level(v, bits) != reference::level(v, bits))
+            })
+            .count();
+        assert_eq!(bad, 0);
+    }
+
+    /// The cheap half of the exhaustive test, run in every build: every float within 2¹⁶
+    /// steps of each half-level boundary `(j + 1/2) / T`, and the values outside `[0, 1]`.
+    #[test]
+    fn rounding_is_exact_near_every_half_level_and_off_range() {
+        for bits in [4u32, 5] {
+            let t = ((1u32 << bits) - 1) as f32;
+            for j in 0..(1u32 << bits) {
+                let centre = ((j as f32 + 0.5) / t).to_bits();
+                for b in centre.saturating_sub(1 << 16)..=centre + (1 << 16) {
+                    let v = f32::from_bits(b);
+                    assert_eq!(level(v, bits), reference::level(v, bits), "{v} on {bits}");
+                }
+            }
+            for v in [
+                f32::NAN,
+                -0.0,
+                -1.0,
+                2.0,
+                f32::INFINITY,
+                f32::NEG_INFINITY,
+                f32::MIN_POSITIVE,
+                f32::from_bits(1),
+            ] {
+                assert_eq!(level(v, bits), reference::level(v, bits), "{v} on {bits}");
             }
         }
     }

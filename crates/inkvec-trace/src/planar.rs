@@ -545,6 +545,9 @@ pub fn refine_subpixel(
 /// its sigma is in `[0.02, 2]` px before the curvature correction of
 /// [`crate::contour::inflate_for_curvature`]. `INKVEC_SUBPXDBG=1` prints every vertex's
 /// probes to stderr; `INKVEC_DUMP_CONTOUR=<file>` appends every refined edge to a file.
+///
+/// Two phases, [`measure_subpixel`] (reads the map, in parallel) and [`Refined::apply`]
+/// (writes it); see [`measure_subpixel`] for the parallel schedule and why it is exact.
 pub fn refine_subpixel_alpha(
     map: &mut PlanarMap,
     rgb: &[[f32; 3]],
@@ -553,6 +556,86 @@ pub fn refine_subpixel_alpha(
     simplify_faint: bool,
     src_alpha: Option<(&[f32], &[f32])>,
 ) {
+    measure_subpixel(map, rgb, face_fill, sigma_noise, simplify_faint, src_alpha).apply(map);
+}
+
+/// The refined geometry of every edge of a map, measured but not yet written back: what
+/// [`measure_subpixel`] returns and [`Refined::apply`] consumes.
+pub(crate) struct Refined {
+    /// Per edge, in edge order: the moved points and their sigmas, or `None` for an edge
+    /// the refinement leaves as it is (the image border, or a face without a fill model).
+    edges: Vec<Option<(Vec<Point>, Vec<f64>)>>,
+}
+
+impl Refined {
+    /// Write the measured geometry into `map`, edge by edge; an edge measured as `None` is
+    /// left untouched. `map` must be the map that was measured (same edges, same order).
+    /// `O(edges)`: each edge's two vectors are moved, not copied.
+    pub(crate) fn apply(self, map: &mut PlanarMap) {
+        debug_assert_eq!(self.edges.len(), map.edges.len());
+        for (e, r) in map.edges.iter_mut().zip(self.edges) {
+            if let Some((points, sigma)) = r {
+                e.points = points;
+                e.sigma = sigma;
+            }
+        }
+    }
+}
+
+/// Fewest vertices an edge must have before its vertices are refined in parallel; shorter
+/// edges run as one task each. Also the smallest chunk of a long edge's vertices one
+/// thread takes, so a task is at least ~30 µs of work (0.44 µs per vertex measured at
+/// 2048 px) against rayon's few-µs cost per split.
+const PAR_VERTICES: usize = 64;
+
+/// Measure the sub-pixel position and sigma of every vertex of `map` (the arguments are
+/// [`refine_subpixel_alpha`]'s), without changing `map`.
+///
+/// # Schedule
+///
+/// Refining a vertex reads only the image, the two faces' fills and its own edge's
+/// *original* points (its neighbours on the lattice, for the normal), and writes only its
+/// own output: it is a pure map over vertices. The curvature correction of a vertex's sigma
+/// then reads the edge's *moved* points, all of which are known by then: a pure map again.
+/// So both are run as parallel maps, edges in parallel and, inside an edge of at least
+/// [`PAR_VERTICES`] points, vertices in parallel too — at 2048 px one edge can hold most
+/// of the image's vertices (longest edge 8,192 points, median edge 450, on the opaque
+/// `big` set), so edge-level parallelism alone would leave one thread doing most of the
+/// work. Each result is written to its own slot of an indexed output (rayon's `collect`
+/// and `unzip` over an indexed iterator keep positions), and the values are those the
+/// serial loop computed.
+///
+/// # Why the output is identical to the serial loop
+///
+/// The serial loop computed each vertex from the same inputs with the same operations;
+/// scheduling only changes *when* each value is computed, not how. No value is combined
+/// across vertices or threads — there is no parallel reduction, so no floating-point sum
+/// whose rounding depends on how the work was split. The measuring phase does not write
+/// the map, so no vertex can see another's moved position (the serial loop wrote an edge's
+/// points only after the whole edge was measured, so it could not either).
+///
+/// The two diagnostics keep the serial order: with `INKVEC_SUBPXDBG` (a line per vertex)
+/// or `INKVEC_DUMP_CONTOUR` (a block per edge, appended to a file) set, everything runs on
+/// the calling thread in edge and vertex order, as before. The dump path is read once.
+///
+/// Method from: Blelloch, Fineman, Gibbons & Shun 2012, "Internally deterministic parallel
+/// algorithms can be fast", PPoPP 2012, 181–192, <https://doi.org/10.1145/2145816.2145840>:
+/// a parallel loop whose iterations are independent and write disjoint, indexed outputs
+/// computes the same result as the serial loop on every schedule ("internal determinism").
+/// Adapted: two nested levels (edges, then vertices of long edges) with a minimum task size.
+/// Related work that shaped the "no reductions" rule: Demmel & Nguyen 2013, "Fast
+/// Reproducible Floating-Point Summation", ARITH 2013, 163–172,
+/// <https://doi.org/10.1109/ARITH.2013.9>, on how a parallel sum's result depends on the
+/// split; nothing here sums across vertices, so no reproducible summation is needed.
+pub(crate) fn measure_subpixel(
+    map: &PlanarMap,
+    rgb: &[[f32; 3]],
+    face_fill: &[FillModel],
+    sigma_noise: f64,
+    simplify_faint: bool,
+    src_alpha: Option<(&[f32], &[f32])>,
+) -> Refined {
+    use rayon::prelude::*;
     let ctx = RefineCtx {
         src: Source {
             rgb,
@@ -565,10 +648,20 @@ pub fn refine_subpixel_alpha(
         min_contrast: (3.0 * sigma_noise).max(MIN_UNMIX_CONTRAST),
         simplify_faint,
         debug: inkvec_core::env::flag("INKVEC_SUBPXDBG"),
+        dump: inkvec_core::env::path("INKVEC_DUMP_CONTOUR"),
     };
-    for e in &mut map.edges {
-        refine_edge(&ctx, face_fill, e);
-    }
+    let edges = if ctx.debug || ctx.dump.is_some() {
+        map.edges
+            .iter()
+            .map(|e| refine_edge(&ctx, face_fill, e, false))
+            .collect()
+    } else {
+        map.edges
+            .par_iter()
+            .map(|e| refine_edge(&ctx, face_fill, e, true))
+            .collect()
+    };
+    Refined { edges }
 }
 
 /// The source image, sampled bilinearly at pixel-centre coordinates.
@@ -659,14 +752,30 @@ struct RefineCtx<'a> {
     simplify_faint: bool,
     /// `INKVEC_SUBPXDBG`: print every vertex's probes to stderr.
     debug: bool,
+    /// `INKVEC_DUMP_CONTOUR`: the file every refined edge is appended to.
+    dump: Option<std::path::PathBuf>,
 }
 
 /// Refine every vertex of one edge (see [`refine_subpixel_alpha`]), then apply the
-/// curvature correction to its sigmas and optionally dump it.
-fn refine_edge(ctx: &RefineCtx, face_fill: &[FillModel], e: &mut Edge) {
+/// curvature correction to its sigmas and optionally dump it. Returns the moved points and
+/// their sigmas, or `None` when the edge is left as it is: one side is outside the image
+/// (`u16::MAX`), or a face has no fill model.
+///
+/// With `par`, an edge of at least [`PAR_VERTICES`] points is refined as a parallel map
+/// over its vertices, in chunks of at least that many; otherwise serially. Either way
+/// vertex `k`'s result is `refine_vertex(.., &e.points, k)` on the original points, and its
+/// sigma is `inflate_for_curvature(&moved, k, ..)` on the moved ones, so the output does not
+/// depend on `par` (see [`measure_subpixel`]). `O(points)` work.
+fn refine_edge(
+    ctx: &RefineCtx,
+    face_fill: &[FillModel],
+    e: &Edge,
+    par: bool,
+) -> Option<(Vec<Point>, Vec<f64>)> {
+    use rayon::prelude::*;
     if e.left == u16::MAX || e.right == u16::MAX {
         // One side is outside the image; there is nothing to unmix against.
-        return;
+        return None;
     }
     // `left`/`right` are face ids. Unmixing needs each face's own colour, which is
     // not the palette indexed by face id — several faces share one ink, and a face
@@ -675,23 +784,40 @@ fn refine_edge(ctx: &RefineCtx, face_fill: &[FillModel], e: &mut Edge) {
         face_fill.get(e.left as usize),
         face_fill.get(e.right as usize),
     ) else {
-        return;
+        return None;
     };
 
-    let (moved, sigmas): (Vec<Point>, Vec<f64>) = (0..e.points.len())
-        .map(|k| refine_vertex(ctx, fa, fb, e.left, e.right, &e.points, k))
-        .unzip();
+    let n = e.points.len();
+    let par = par && n >= PAR_VERTICES;
+    let vertex = |k: usize| refine_vertex(ctx, fa, fb, e.left, e.right, &e.points, k);
+    let (moved, sigmas): (Vec<Point>, Vec<f64>) = if par {
+        (0..n)
+            .into_par_iter()
+            .with_min_len(PAR_VERTICES)
+            .map(vertex)
+            .unzip()
+    } else {
+        (0..n).map(vertex).unzip()
+    };
 
     // The planar path extracts boundaries as level sets on a pixel grid exactly as
     // the bilevel path does, so it inherits the same curvature-dependent systematic
     // error and needs the same correction.
     let closed = e.closed;
-    let sigmas: Vec<f64> = (0..moved.len())
-        .map(|k| crate::contour::inflate_for_curvature(&moved, k, sigmas[k], closed))
-        .collect();
-    dump_contour(&moved, &sigmas, closed);
-    e.points = moved;
-    e.sigma = sigmas;
+    let inflate = |k: usize| crate::contour::inflate_for_curvature(&moved, k, sigmas[k], closed);
+    let sigmas: Vec<f64> = if par {
+        (0..n)
+            .into_par_iter()
+            .with_min_len(PAR_VERTICES)
+            .map(inflate)
+            .collect()
+    } else {
+        (0..n).map(inflate).collect()
+    };
+    if let Some(path) = ctx.dump.as_deref() {
+        dump_contour(path, &moved, &sigmas, closed);
+    }
+    Some((moved, sigmas))
 }
 
 /// Dump the measured boundary for offline study of its error structure
@@ -699,19 +825,19 @@ fn refine_edge(ctx: &RefineCtx, face_fill: &[FillModel], e: &mut Edge) {
 /// `# edge <n> closed <bool>` header). The whole faceting question turns on how the
 /// extraction error is correlated along a boundary, and that is a property of these
 /// numbers, not of an argument about them. Write errors are ignored: this is a debugging
-/// aid and must never fail a trace.
-fn dump_contour(points: &[Point], sigmas: &[f64], closed: bool) {
-    if let Some(path) = inkvec_core::env::path("INKVEC_DUMP_CONTOUR") {
-        use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-        {
-            let _ = writeln!(f, "# edge {} closed {}", points.len(), closed);
-            for (q, sg) in points.iter().zip(sigmas.iter()) {
-                let _ = writeln!(f, "{:.6} {:.6} {:.6}", q.x, q.y, sg);
-            }
+/// aid and must never fail a trace. `path` is the variable's value, read once per map by
+/// [`measure_subpixel`], which runs serially whenever it is set so the file keeps edge
+/// order.
+fn dump_contour(path: &std::path::Path, points: &[Point], sigmas: &[f64], closed: bool) {
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(f, "# edge {} closed {}", points.len(), closed);
+        for (q, sg) in points.iter().zip(sigmas.iter()) {
+            let _ = writeln!(f, "{:.6} {:.6} {:.6}", q.x, q.y, sg);
         }
     }
 }
@@ -1364,3 +1490,6 @@ mod saddle_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod refine_tests;

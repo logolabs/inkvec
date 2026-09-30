@@ -36,7 +36,8 @@
 //! 11. **build_map** ([`planar::build`]): faces, and the edges and junctions they share;
 //! 12. **symmetry_detect** ([`symmetry::detect`]): mirrors of the label map;
 //! 13. **refine_subpix** ([`planar::refine_subpixel_alpha`]): each boundary point moved to
-//!     its sub-pixel position by unmixing the two faces' fills;
+//!     its sub-pixel position by unmixing the two faces' fills. Stages 12 and 13 both only
+//!     read the lattice map, so they run side by side and are timed together as this one;
 //! 14. **refine_junc** ([`planar::refine_junctions`]): where three or more faces meet;
 //! 15. **boundary_opt** ([`boundary_opt`]): all boundary points solved at once against an
 //!     exact coverage render of the image (Quality only);
@@ -1076,11 +1077,6 @@ pub(crate) fn finish_color_trace_alpha(
     sw.mark("build_map");
     let (edges, faces) = (map.edges.len(), map.n_labels);
     progress::note(|| format!("{edges} boundaries between {faces} faces"));
-    // Found here, on the lattice the extractor produced, where the comparison is exact.
-    // Applied further down, once every stage that can break a tie has had its turn.
-    let sym = symmetry::detect(&map, &labels, &face_color);
-    sw.mark("symmetry_detect");
-    progress::begin("refine_subpix");
     let face_model: Vec<gradient::FillModel> = face_fill.iter().map(|f| f.model.clone()).collect();
     let face_alpha: Option<Vec<f32>> = source_alpha.map(|_| {
         face_alpha_override
@@ -1093,14 +1089,37 @@ pub(crate) fn finish_color_trace_alpha(
             })
     });
     let alpha_pair = source_alpha.zip(face_alpha.as_deref());
-    planar::refine_subpixel_alpha(
-        &mut map,
-        rgb,
-        &face_model,
-        sigma_noise,
-        opts.simplify_faint,
-        alpha_pair,
+    sw.mark("symmetry_detect");
+    progress::begin("refine_subpix");
+    // Symmetry is found here, on the lattice the extractor produced, where the comparison
+    // is exact, and applied further down, once every stage that can break a tie has had
+    // its turn. The sub-pixel refinement's measuring phase reads the same lattice map and
+    // writes nothing, so the two run side by side (`rayon::join`) and the refinement is
+    // written back afterwards; each computes exactly what it computed alone, since
+    // neither sees the other's output (see `planar::measure_subpixel`). Their time is
+    // reported together as `refine_subpix`; `symmetry_detect` now only marks the setup
+    // above. Where rayon has one thread (the WebAssembly build) `join` runs the two in
+    // turn, with no work added.
+    //
+    // Inspired by: Ragan-Kelley et al. 2013, "Halide: a language and compiler for
+    // optimizing parallelism, locality, and recomputation in image processing pipelines",
+    // PLDI 2013, 519–530, <https://doi.org/10.1145/2491956.2462176>: independent pipeline
+    // stages scheduled to run concurrently. Here the schedule is written by hand for one
+    // pair of stages, not derived by a compiler.
+    let (sym, refined) = rayon::join(
+        || symmetry::detect(&map, &labels, &face_color),
+        || {
+            planar::measure_subpixel(
+                &map,
+                rgb,
+                &face_model,
+                sigma_noise,
+                opts.simplify_faint,
+                alpha_pair,
+            )
+        },
     );
+    refined.apply(&mut map);
     sw.mark("refine_subpix");
     progress::begin("refine_junc");
     planar::refine_junctions(&mut map);

@@ -189,7 +189,11 @@ impl Problem<'_> {
             }
             let last = if e.closed { n } else { n - 1 };
             for i in 0..last {
-                let (va, vb) = (ids[i], ids[(i + 1) % n]);
+                // The next vertex without `%`: under wazero's arm64 compiler (v1.12.0, the Go
+                // package on Apple silicon) this loop's `i32.rem_u` divided a clobbered
+                // register and indexed `ids` at 1 - 168 * 6, "len is 6 but the index is
+                // 4294966289". The same module ran correctly under wazero on amd64.
+                let (va, vb) = (ids[i], if i + 1 == n { ids[0] } else { ids[i + 1] });
                 let pieces = &mut self.pieces;
                 let (head, vhead, touched) = (&mut self.head, &mut self.vhead, &mut self.touched);
                 cut_segment(

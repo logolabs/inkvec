@@ -69,7 +69,9 @@ pub(super) fn segments(map: &PlanarMap, vars: &Vars) -> Vec<(u32, u32)> {
         }
         let last = if e.closed { n } else { n - 1 };
         for i in 0..last {
-            segs.push((ids[i], ids[(i + 1) % n]));
+            // No `%`, as in `band.rs`'s `bucket_band`: wazero's arm64 compiler miscompiled
+            // that loop's `i32.rem_u`.
+            segs.push((ids[i], if i + 1 == n { ids[0] } else { ids[i + 1] }));
         }
     }
     segs

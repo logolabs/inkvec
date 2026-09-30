@@ -67,6 +67,13 @@
 //! a single junction is exactly the case a caller must not trust. Whether that agreement
 //! rate is high enough on *real* art, not just synthetic negatives, is measured in
 //! `bench/occlusion_survey.py`.
+//!
+//! # Where this sits
+//!
+//! Nothing in the shipping trace calls it yet. It reads a [`PlanarMap`] (any stage after
+//! `planar::build`; coordinates in px, pixel centres at integer coordinates) and is driven
+//! by the `occlusion_survey`, `occlusion_conflicts` and `zrank_dump` examples, which
+//! measure whether its verdicts could order faces for painting.
 
 use std::collections::HashMap;
 
@@ -104,9 +111,13 @@ pub struct TJunction {
 /// that measurement says once it exists.
 pub const MAX_BEND_DEG: f64 = 30.0;
 
-/// The two edges at `node` that touch `face`, as unit tangents pointing *away* from the
-/// node along each edge (so two collinear edges point in opposite directions and the
-/// angle between them is near 180 degrees, not 0).
+/// One edge's unit tangent at a node, pointing *away* from the node along the edge (so
+/// the two edges of one straight run point in opposite directions and the angle between
+/// them is near 180 degrees, not 0).
+///
+/// `at_start` says which end of `points` is at the node, whose position is `origin`. The
+/// tangent is the direction to the first point, walking inward from that end, that is
+/// not on the node itself; `None` if every point is.
 fn tangents_away(points: &[Point], at_start: bool, origin: Point) -> Option<Vec2> {
     // The first interior point in the direction the edge actually runs, skipping any
     // duplicate that sits on the node itself (refine_junctions can leave one).
@@ -133,6 +144,11 @@ fn tangents_away(points: &[Point], at_start: bool, origin: Point) -> Option<Vec2
 /// genuine multi-way meeting (or the two-shapes-touch-at-a-corner "kiss" the saddle pass
 /// already splits, see `planar::saddle_tests`) and is skipped — the collinearity test
 /// only has a clean answer for exactly three.
+///
+/// Nodes are visited in increasing id. At each, [`node_arms`] reads the three edges and
+/// [`straightest_face`] finds the face whose two edges bend least from a straight line;
+/// if that bend is within [`MAX_BEND_DEG`], the node yields two [`TJunction`]s, one per
+/// neighbour along the occluder's straight run.
 pub fn find(map: &PlanarMap) -> Vec<TJunction> {
     let mut inc: HashMap<u32, Vec<(usize, bool)>> = HashMap::new();
     for (k, e) in map.edges.iter().enumerate() {
@@ -158,63 +174,10 @@ pub fn find(map: &PlanarMap) -> Vec<TJunction> {
             map.edges[incident[0].0].points.len() - 1
         }];
 
-        // Per incident edge: its face pair and its outward tangent at this node. A face
-        // equal to the sentinel is the out-of-bounds virtual background `planar::build`
-        // invents to close shapes at the image edge (`label_at` returns `u16::MAX`
-        // there) -- a construction device, never a real face, and a shape merely
-        // touching the canvas border must never be read as occluded by "the void".
-        let mut arms: Vec<(u16, u16, Vec2)> = Vec::with_capacity(3);
-        let mut ok = true;
-        for &(k, at_start) in incident {
-            let e = &map.edges[k];
-            if e.left == u16::MAX || e.right == u16::MAX {
-                ok = false;
-                break;
-            }
-            let Some(t) = tangents_away(&e.points, at_start, origin) else {
-                ok = false;
-                break;
-            };
-            arms.push((e.left, e.right, t));
-        }
-        if !ok {
+        let Some(arms) = node_arms(map, incident, origin) else {
             continue;
-        }
-
-        // The three distinct faces present, however the pairs name them.
-        let mut faces: Vec<u16> = Vec::with_capacity(3);
-        for &(l, r, _) in &arms {
-            for f in [l, r] {
-                if !faces.contains(&f) {
-                    faces.push(f);
-                }
-            }
-        }
-        if faces.len() != 3 {
-            // Not three mutually distinct faces -- a degenerate or higher-multiplicity
-            // node the merge/split invariants do not produce here; skip rather than guess.
-            continue;
-        }
-
-        // For each face, find its two arms and the angle between their tangents.
-        let mut best: Option<(u16, f64, [usize; 2])> = None;
-        for &f in &faces {
-            let idx: Vec<usize> = (0..3)
-                .filter(|&i| arms[i].0 == f || arms[i].1 == f)
-                .collect();
-            if idx.len() != 2 {
-                continue;
-            }
-            let (a, b) = (arms[idx[0]].2, arms[idx[1]].2);
-            // Two edges of the same straight run point away from the node in opposite
-            // directions, so the angle between their outward tangents is near 180 deg,
-            // not 0.
-            let cos = (a.dot(b) / (a.norm() * b.norm())).clamp(-1.0, 1.0);
-            let bend = 180.0 - cos.acos().to_degrees();
-            if best.map(|(_, bb, _)| bend < bb).unwrap_or(true) {
-                best = Some((f, bend, [idx[0], idx[1]]));
-            }
-        }
+        };
+        let best = straightest_face(&arms);
 
         let Some((occluder, bend, used)) = best else {
             continue;
@@ -238,6 +201,85 @@ pub fn find(map: &PlanarMap) -> Vec<TJunction> {
         }
     }
     out
+}
+
+/// The three edges at a node as `(left face, right face, outward tangent)`.
+///
+/// `None` when an edge borders the outside of the image or has no usable tangent, or when
+/// the edges do not name exactly three distinct faces.
+fn node_arms(
+    map: &PlanarMap,
+    incident: &[(usize, bool)],
+    origin: Point,
+) -> Option<Vec<(u16, u16, Vec2)>> {
+    // Per incident edge: its face pair and its outward tangent at this node. A face
+    // equal to the sentinel is the out-of-bounds virtual background `planar::build`
+    // invents to close shapes at the image edge (`label_at` returns `u16::MAX`
+    // there) -- a construction device, never a real face, and a shape merely
+    // touching the canvas border must never be read as occluded by "the void".
+    let mut arms: Vec<(u16, u16, Vec2)> = Vec::with_capacity(3);
+    for &(k, at_start) in incident {
+        let e = &map.edges[k];
+        if e.left == u16::MAX || e.right == u16::MAX {
+            return None;
+        }
+        let t = tangents_away(&e.points, at_start, origin)?;
+        arms.push((e.left, e.right, t));
+    }
+
+    // The three distinct faces present, however the pairs name them.
+    let mut faces: Vec<u16> = Vec::with_capacity(3);
+    for &(l, r, _) in &arms {
+        for f in [l, r] {
+            if !faces.contains(&f) {
+                faces.push(f);
+            }
+        }
+    }
+    if faces.len() != 3 {
+        // Not three mutually distinct faces -- a degenerate or higher-multiplicity
+        // node the merge/split invariants do not produce here; skip rather than guess.
+        return None;
+    }
+    Some(arms)
+}
+
+/// The face whose two arms at a node are closest to one straight line, with that bend in
+/// degrees and the indices of its two arms.
+///
+/// For a face with arms `a` and `b` (outward unit tangents), `bend = 180° − acos(a·b)`:
+/// zero for a perfectly straight run. Faces are tried in the order they first appear in
+/// `arms`; the first strictly smallest bend wins.
+fn straightest_face(arms: &[(u16, u16, Vec2)]) -> Option<(u16, f64, [usize; 2])> {
+    // The three distinct faces present, however the pairs name them.
+    let mut faces: Vec<u16> = Vec::with_capacity(3);
+    for &(l, r, _) in arms {
+        for f in [l, r] {
+            if !faces.contains(&f) {
+                faces.push(f);
+            }
+        }
+    }
+    // For each face, find its two arms and the angle between their tangents.
+    let mut best: Option<(u16, f64, [usize; 2])> = None;
+    for &f in &faces {
+        let idx: Vec<usize> = (0..3)
+            .filter(|&i| arms[i].0 == f || arms[i].1 == f)
+            .collect();
+        if idx.len() != 2 {
+            continue;
+        }
+        let (a, b) = (arms[idx[0]].2, arms[idx[1]].2);
+        // Two edges of the same straight run point away from the node in opposite
+        // directions, so the angle between their outward tangents is near 180 deg,
+        // not 0.
+        let cos = (a.dot(b) / (a.norm() * b.norm())).clamp(-1.0, 1.0);
+        let bend = 180.0 - cos.acos().to_degrees();
+        if best.map(|(_, bb, _)| bend < bb).unwrap_or(true) {
+            best = Some((f, bend, [idx[0], idx[1]]));
+        }
+    }
+    best
 }
 
 /// Per unordered face pair: how many junctions named them, and whether they agreed on

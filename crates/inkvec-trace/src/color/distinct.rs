@@ -37,9 +37,9 @@
 //! nearest-ink distances until a candidate is accepted, so the set is the same for the claim
 //! count, the spread, the interior test and every straddle pair: [`Claim`] holds it once.
 //!
-//! Not from the literature: the straddle test's pixels are grouped by the set of colours in
-//! their 3x3 neighbourhood ([`Neighbourhoods`]), because the test's outcome for a pixel is a
-//! function of that set alone, so one evaluation per distinct set per blend pair suffices.
+//! Not from the literature: each claimed pixel's 3x3 neighbourhood is gathered once per
+//! candidate as colour ids ([`Neighbourhoods`]), so a blend pair classifies each colour once
+//! and each pixel reads nine bytes, instead of projecting nine pixels onto the pair's axis.
 
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hash, Hasher};
@@ -394,33 +394,47 @@ impl<'a> DistinctImage<'a> {
         interior as f32 / total as f32
     }
 
-    /// The claimed visited pixels grouped by the colours of their 3x3 neighbourhoods.
+    /// Every claimed visited pixel's 3x3 neighbourhood as colour ids, gathered once per
+    /// candidate for all its blend pairs.
     pub(crate) fn neighbourhoods(&self, claim: &Claim) -> Neighbourhoods {
-        if !self.has_geometry() {
-            return Neighbourhoods::from_sets(Vec::new(), false);
+        let outside = self.colours() as u32;
+        let mut hoods = Neighbourhoods {
+            ids: Vec::new(),
+            colours: Vec::new(),
+            outside,
+            geometry: self.has_geometry(),
+        };
+        if !hoods.geometry {
+            return hoods;
         }
-        let (w, h) = (self.width as isize, self.height as isize);
-        let mut sets: Vec<[u32; 9]> = Vec::new();
+        let (w, h) = (self.width, self.height);
+        let claimed: usize = (0..self.colours())
+            .filter(|&d| claim.claimed[d])
+            .map(|d| self.count[d] as usize)
+            .sum();
+        hoods.ids.reserve(9 * claimed);
+        let mut seen = vec![false; self.colours() + 1];
+        seen[outside as usize] = true;
         for d in (0..self.colours()).filter(|&d| claim.claimed[d]) {
             for i in self.visited(d) {
-                let (x, y) = ((i % self.width) as isize, (i / self.width) as isize);
-                let mut set = [u32::MAX; 9];
-                let mut k = 0;
-                for dy in -1..=1 {
-                    for dx in -1..=1 {
-                        let (nx, ny) = (x + dx, y + dy);
-                        if nx < 0 || ny < 0 || nx >= w || ny >= h {
-                            continue;
+                let (x, y) = (i % w, i / w);
+                for ny in [y.wrapping_sub(1), y, y + 1] {
+                    for nx in [x.wrapping_sub(1), x, x + 1] {
+                        let id = if nx < w && ny < h {
+                            self.cid[ny * w + nx]
+                        } else {
+                            outside
+                        };
+                        if !seen[id as usize] {
+                            seen[id as usize] = true;
+                            hoods.colours.push(id);
                         }
-                        set[k] = self.cid[(ny * w + nx) as usize];
-                        k += 1;
+                        hoods.ids.push(id);
                     }
                 }
-                set.sort_unstable();
-                sets.push(set);
             }
         }
-        Neighbourhoods::from_sets(sets, self.has_geometry())
+        hoods
     }
 }
 
@@ -462,79 +476,43 @@ pub(crate) fn weighted_lower_median(items: &mut [(f32, u32)]) -> f32 {
     items[items.len() - 1].0
 }
 
-/// The straddle test's pixels, grouped: each distinct set of neighbourhood colours with the
-/// number of claimed pixels that have it.
+/// The straddle test's pixels: each claimed visited pixel's nine neighbourhood ids (an
+/// out-of-image neighbour is the id `outside`, whose side is always 0), and every colour
+/// that occurs among them.
 pub(crate) struct Neighbourhoods {
-    /// Flattened sorted id sets (`u32::MAX` padding removed), `start[k]..start[k + 1]`.
+    /// Nine ids per claimed pixel, row by row.
     ids: Vec<u32>,
-    start: Vec<u32>,
-    mult: Vec<u32>,
-    /// Every colour that occurs in any set, ascending.
+    /// Every colour that occurs in `ids`, `outside` excluded.
     colours: Vec<u32>,
-    /// Number of claimed pixels (the sum of `mult`).
-    total: u32,
+    /// The id standing for "outside the image": the number of distinct colours.
+    outside: u32,
     /// Whether the image had a full grid to read.
     geometry: bool,
 }
 
 impl Neighbourhoods {
-    fn from_sets(mut sets: Vec<[u32; 9]>, geometry: bool) -> Self {
-        sets.sort_unstable();
-        let total = sets.len() as u32;
-        let (mut ids, mut start, mut mult) = (Vec::new(), vec![0u32], Vec::new());
-        let mut k = 0;
-        while k < sets.len() {
-            let mut run = 1;
-            while k + run < sets.len() && sets[k + run] == sets[k] {
-                run += 1;
-            }
-            let mut last = u32::MAX;
-            for &c in sets[k].iter().take_while(|&&c| c != u32::MAX) {
-                if c != last {
-                    ids.push(c);
-                    last = c;
-                }
-            }
-            start.push(ids.len() as u32);
-            mult.push(run as u32);
-            k += run;
-        }
-        let mut colours = ids.clone();
-        colours.sort_unstable();
-        colours.dedup();
-        Neighbourhoods {
-            ids,
-            start,
-            mult,
-            colours,
-            total,
-            geometry,
-        }
-    }
-
     /// The straddle fraction along one blend axis. `side(d)` says where colour `d` sits on
     /// it: bit 0 set when it is below the candidate by more than the step, bit 1 when above.
     /// A pixel straddles when its neighbourhood has both. `scratch` must have one entry per
-    /// distinct colour; only the colours that occur here are written and read.
+    /// distinct colour plus one; only the colours that occur here are written and read.
     ///
     /// Returns `straddling / claimed`, and 1 when nothing is claimed, as the per-pixel test
     /// did. The caller has already returned 0 for a missing grid or a degenerate axis.
     pub(crate) fn straddle(&self, side: impl Fn(usize) -> u8, scratch: &mut [u8]) -> f32 {
-        if self.total == 0 {
+        let total = (self.ids.len() / 9) as u32;
+        if total == 0 {
             return 1.0;
         }
         for &d in &self.colours {
             scratch[d as usize] = side(d as usize);
         }
-        let mut straddle = 0u32;
-        for k in 0..self.mult.len() {
-            let set = &self.ids[self.start[k] as usize..self.start[k + 1] as usize];
-            let both = set.iter().fold(0u8, |acc, &d| acc | scratch[d as usize]);
-            if both == 3 {
-                straddle += self.mult[k];
-            }
-        }
-        straddle as f32 / self.total as f32
+        scratch[self.outside as usize] = 0;
+        let straddle = self
+            .ids
+            .chunks_exact(9)
+            .filter(|hood| hood.iter().fold(0u8, |acc, &d| acc | scratch[d as usize]) == 3)
+            .count() as u32;
+        straddle as f32 / total as f32
     }
 
     /// Whether the image had a full grid (the straddle test's precondition).

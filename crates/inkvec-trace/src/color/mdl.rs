@@ -133,7 +133,7 @@ pub(crate) fn extract(
         axes: InkAxes::default(),
         nearest: vec![f32::INFINITY; colours],
         claim: Claim::new(colours),
-        scratch: vec![0u8; colours],
+        scratch: vec![0u8; colours + 1],
         paldbg: inkvec_core::env::flag("INKVEC_PALDBG"),
         // The perceptual-merge experiment, in a `research` build only.
         de00_radius: if cfg!(feature = "research") {
@@ -560,7 +560,7 @@ mod adapters {
         let mut claim = Claim::new(ids.len());
         view.img.claim(&mut claim, &near, |d| view.lab[d].dist(c));
         let hoods = view.img.neighbourhoods(&claim);
-        let mut scratch = vec![0u8; ids.len()];
+        let mut scratch = vec![0u8; ids.len() + 1];
         straddle(
             &view,
             &hoods,

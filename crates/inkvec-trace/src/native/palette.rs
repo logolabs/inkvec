@@ -179,7 +179,7 @@ pub(crate) fn extract(
         six: InkSix::default(),
         nearest: vec![f32::INFINITY; points],
         claim: Claim::new(points),
-        scratch: vec![0u8; points],
+        scratch: vec![0u8; points + 1],
         paldbg: inkvec_core::env::flag("INKVEC_PALDBG"),
     };
     // The clear ground draws nothing, so it is found but not counted against the cap; once
@@ -675,7 +675,7 @@ mod adapters {
         let mut claim = Claim::new(ids.len());
         view.img.claim(&mut claim, &near, |d| view.pts[d].dist(c));
         let hoods = view.img.neighbourhoods(&claim);
-        let mut scratch = vec![0u8; ids.len()];
+        let mut scratch = vec![0u8; ids.len() + 1];
         straddle(
             &view,
             &hoods,

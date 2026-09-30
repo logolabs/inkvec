@@ -712,7 +712,7 @@ pub(crate) fn alpha_source(
     cutout: bool,
     native: bool,
 ) -> Option<AlphaSource> {
-    if !img.data.iter().skip(3).step_by(4).any(|&a| a < 0.999) {
+    if !has_transparency(img) {
         return None;
     }
     if native {
@@ -787,22 +787,39 @@ pub(crate) fn cutout_args<'a>(
 /// does when it paints a translucent SVG fill, and so what [`unmatte`] has to undo.
 ///
 /// Returns the opaque image (every alpha 1) and the clamped alphas, row-major, one per
-/// pixel. A NaN alpha is not cleaned up: `clamp` passes it through.
+/// pixel. A NaN alpha is not cleaned up: `clamp` passes it through. Panics if `img.data` is
+/// shorter than `4 · width · height`, as it always did.
+///
+/// Every pixel is computed by [`flatten_pixel`] alone, so the image is cut into chunks of
+/// [`FLATTEN_CHUNK`] pixels and flattened in parallel above [`INTAKE_PARALLEL_MIN`] pixels:
+/// the same expression on the same inputs, whatever thread runs it. It was a serial push loop,
+/// 26.7 ms of a 2048 px transparent trace.
 pub(crate) fn flatten_over(
     img: &inkvec_trace::Rgba,
     matte: [f32; 3],
 ) -> (inkvec_trace::Rgba, Vec<f32>) {
+    use rayon::prelude::*;
     let n = img.width * img.height;
-    let mut data = Vec::with_capacity(n * 4);
-    let mut alpha = Vec::with_capacity(n);
-    for i in 0..n {
-        let p = &img.data[i * 4..i * 4 + 4];
-        let a = p[3].clamp(0.0, 1.0);
-        for c in 0..3 {
-            data.push(p[c] * a + matte[c] * (1.0 - a));
+    let src = &img.data[..n * 4];
+    let mut data = vec![0.0f32; n * 4];
+    let mut alpha = vec![0.0f32; n];
+    let run = |((out, a), src): ((&mut [f32], &mut [f32]), &[f32])| {
+        for ((o, a), p) in out
+            .chunks_exact_mut(4)
+            .zip(a.iter_mut())
+            .zip(src.chunks_exact(4))
+        {
+            o.copy_from_slice(p);
+            *a = flatten_pixel(o, matte);
         }
-        data.push(1.0);
-        alpha.push(a);
+    };
+    if n >= INTAKE_PARALLEL_MIN {
+        data.par_chunks_mut(4 * FLATTEN_CHUNK)
+            .zip(alpha.par_chunks_mut(FLATTEN_CHUNK))
+            .zip(src.par_chunks(4 * FLATTEN_CHUNK))
+            .for_each(run);
+    } else {
+        run(((&mut data, &mut alpha), src));
     }
     (
         inkvec_trace::Rgba {
@@ -812,6 +829,47 @@ pub(crate) fn flatten_over(
         },
         alpha,
     )
+}
+
+/// Flatten one pixel `p = [r, g, b, a]` over `matte` in place and return its clamped alpha:
+/// with `a' = clamp(a, 0, 1)`, `p ← [r·a' + M_r·(1 − a'), g·a' + M_g·(1 − a'),
+/// b·a' + M_b·(1 − a'), 1]`. The arithmetic of the old push loop, operand for operand, so
+/// the floats are the same.
+#[inline]
+fn flatten_pixel(p: &mut [f32], matte: [f32; 3]) -> f32 {
+    let a = p[3].clamp(0.0, 1.0);
+    for c in 0..3 {
+        p[c] = p[c] * a + matte[c] * (1.0 - a);
+    }
+    p[3] = 1.0;
+    a
+}
+
+/// Below this many pixels (256 × 256) the intake's alpha scan and flatten run on the
+/// calling thread: at 128 px they take microseconds.
+const INTAKE_PARALLEL_MIN: usize = 1 << 16;
+/// Pixels per parallel job of [`flatten_over`] and [`has_transparency`].
+const FLATTEN_CHUNK: usize = 1 << 14;
+
+/// Whether any pixel of `img` has an alpha under 0.999 ([`alpha_source`]'s "any
+/// transparency").
+///
+/// Reads the fourth float of every whole pixel -- indices `4i + 3` below `data.len()`, the
+/// same set the old `iter().skip(3).step_by(4)` visited -- and stops at the first
+/// translucent one. On an opaque image that is a read of every alpha (3.3 ms serial at
+/// 2048 px), now split over rayon's workers above [`INTAKE_PARALLEL_MIN`] pixels. `any` is
+/// a pure predicate, so the answer does not depend on the split.
+fn has_transparency(img: &inkvec_trace::Rgba) -> bool {
+    use rayon::prelude::*;
+    let translucent = |p: &[f32]| p[3] < 0.999;
+    if img.data.len() / 4 >= INTAKE_PARALLEL_MIN {
+        img.data
+            .par_chunks_exact(4)
+            .with_min_len(FLATTEN_CHUNK)
+            .any(translucent)
+    } else {
+        img.data.chunks_exact(4).any(translucent)
+    }
 }
 
 /// Undo [`flatten_over`] for a face the source drew translucent.
@@ -1195,6 +1253,102 @@ mod intake_tests {
             width: w,
             height: h,
             data,
+        }
+    }
+
+    /// `flatten_over` as it was: a serial push loop.
+    fn old_flatten_over(img: &Rgba, matte: [f32; 3]) -> (Rgba, Vec<f32>) {
+        let n = img.width * img.height;
+        let mut data = Vec::with_capacity(n * 4);
+        let mut alpha = Vec::with_capacity(n);
+        for i in 0..n {
+            let p = &img.data[i * 4..i * 4 + 4];
+            let a = p[3].clamp(0.0, 1.0);
+            for c in 0..3 {
+                data.push(p[c] * a + matte[c] * (1.0 - a));
+            }
+            data.push(1.0);
+            alpha.push(a);
+        }
+        (
+            Rgba {
+                width: img.width,
+                height: img.height,
+                data,
+            },
+            alpha,
+        )
+    }
+
+    /// Random straight RGBA with odd values mixed in: NaN, −0, alpha outside [0, 1].
+    fn random_rgba(w: usize, h: usize, seed: u64, extra: usize) -> Rgba {
+        let mut s = seed;
+        let mut data: Vec<f32> = (0..w * h * 4 + extra)
+            .map(|i| match lcg(&mut s) % 6 {
+                0 if i % 4 == 3 => 1.0,
+                1 => 0.0,
+                2 => (lcg(&mut s) % 256) as f32 / 255.0,
+                _ => (lcg(&mut s) % 100_000) as f32 * 1.2e-5 - 0.05,
+            })
+            .collect();
+        for (i, v) in [f32::NAN, -0.0, 1.5, -0.25].into_iter().enumerate() {
+            if let Some(d) = data.get_mut(i * 13 + 3) {
+                *d = v;
+            }
+        }
+        Rgba {
+            width: w,
+            height: h,
+            data,
+        }
+    }
+
+    fn bits(v: &[f32]) -> Vec<u32> {
+        v.iter().map(|f| f.to_bits()).collect()
+    }
+
+    /// Serial and parallel sizes, every matte the ladder uses: the same image and alphas,
+    /// bit for bit, as the serial push loop.
+    #[test]
+    fn the_parallel_flatten_is_the_serial_one() {
+        for (w, h) in [(0, 0), (1, 1), (7, 1), (1, 7), (50, 40), (300, 260)] {
+            let img = random_rgba(w, h, (w * 31 + h) as u64, 0);
+            for matte in [[1.0, 1.0, 1.0], [0.0, 0.0, 0.0], [1.0, 0.5, 0.0]] {
+                let (a, aa) = flatten_over(&img, matte);
+                let (b, ba) = old_flatten_over(&img, matte);
+                assert_eq!(bits(&a.data), bits(&b.data), "{w}x{h}");
+                assert_eq!(bits(&aa), bits(&ba), "{w}x{h}");
+            }
+        }
+    }
+
+    /// The parallel scan against the old strided scan, on opaque images with one translucent
+    /// pixel anywhere (first, last, middle, in a trailing partial pixel), on NaN alpha, and
+    /// on buffers whose length is not a multiple of four.
+    #[test]
+    fn the_transparency_scan_is_the_old_one() {
+        let old = |img: &Rgba| img.data.iter().skip(3).step_by(4).any(|&a| a < 0.999);
+        for (w, h) in [(0usize, 0usize), (1, 1), (9, 3), (300, 260)] {
+            for extra in [0usize, 1, 3] {
+                let n = w * h;
+                let mut img = Rgba {
+                    width: w,
+                    height: h,
+                    data: vec![1.0; n * 4 + extra],
+                };
+                assert_eq!(has_transparency(&img), old(&img));
+                for at in [0, n / 2, n.saturating_sub(1), n] {
+                    for v in [0.5, 0.9989, f32::NAN] {
+                        let mut t = img.clone();
+                        if let Some(d) = t.data.get_mut(at * 4 + 3) {
+                            *d = v;
+                        }
+                        assert_eq!(has_transparency(&t), old(&t), "{w}x{h}+{extra} at {at}");
+                    }
+                }
+                img.data.iter_mut().for_each(|v| *v = 0.2);
+                assert_eq!(has_transparency(&img), old(&img));
+            }
         }
     }
 

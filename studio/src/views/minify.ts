@@ -15,8 +15,14 @@ import { remember, remembered } from "../lib/remember";
 import { api } from "../lib/ipc";
 import { copyText, pickFiles, readPickedText, revealAction, saveFile, WEB, type Picked } from "../lib/platform";
 import { bytes, count, de00, percent, seconds, type Store } from "../lib/state";
+import { toneOfPixels } from "../lib/tone";
 import { toast } from "../components/overlays";
 
+/**
+ * The Minify tab's view, built once and kept: the drawing before and after, the tolerance
+ * and the other controls, and Save. It also takes an SVG dropped anywhere on the window
+ * (`acceptDropped` on the returned element, which `main.ts` calls).
+ */
 export function createMinify(store: Store): HTMLElement {
   const before = h("div.pane", null, h("span.eyebrow.panelabel", null, "Before"));
   const after = h("div.pane", null, h("span.eyebrow.panelabel", null, "After"));
@@ -613,7 +619,9 @@ function drawable(svg: string): SVGSVGElement | null {
  *
  * Read from the rendered pixels rather than from the markup, because colour in an SVG
  * comes from attributes, style sheets, classes and inheritance, and the picture is the
- * one place all of that has already been resolved.
+ * one place all of that has already been resolved. The drawing is rendered at 64 × 64 and
+ * the decision rule is `toneOfPixels` (`lib/tone.ts`); anything that fails to render is
+ * `null`, the default backdrop.
  */
 export async function toneOf(svg: string): Promise<"light" | "dark" | null> {
   const el = drawable(svg);
@@ -635,19 +643,7 @@ export async function toneOf(svg: string): Promise<"light" | "dark" | null> {
     const g = canvas.getContext("2d", { willReadFrequently: true });
     if (!g) return null;
     g.drawImage(img, 0, 0, size, size);
-    const px = g.getImageData(0, 0, size, size).data;
-    let weight = 0;
-    let light = 0;
-    for (let i = 0; i < px.length; i += 4) {
-      const a = px[i + 3] / 255;
-      if (a < 0.05) continue;
-      weight += a;
-      light += (a * (0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2])) / 255;
-    }
-    // An opaque drawing covers its own backdrop, so no backdrop needs choosing for it.
-    if (weight < 20 || weight > 0.97 * size * size) return null;
-    const mean = light / weight;
-    return mean < 0.3 ? "light" : mean > 0.8 ? "dark" : null;
+    return toneOfPixels(g.getImageData(0, 0, size, size).data);
   } catch {
     return null;
   }

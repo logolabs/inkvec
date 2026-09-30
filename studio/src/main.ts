@@ -9,12 +9,18 @@
  * once, so the viewer keeps up with the slider, and arms a timer; when the controls have
  * been still for `settleMs` the full-resolution trace is queued and swapped in with a
  * visible crossfade. Draft and final are two states of one result, never a silent
- * substitution.
+ * substitution. Its bookkeeping (generations, events that arrive early or late, Cancel) is
+ * `lib/traceflow.ts`, which has no DOM or backend in it and is tested on its own; this file
+ * wires it to the store and the backend and decides what a finished trace does to the
+ * interface.
+ *
+ * Also here: opening an image (every entry point goes through `openWith`), the actions the
+ * rail and the wizard call, preferences, the keyboard, drag and drop, and start-up.
  */
 
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 
-import { appMark, fill, h } from "./lib/dom";
+import { fill, h } from "./lib/dom";
 import {
   api,
   events,
@@ -27,9 +33,11 @@ import {
   type Snap,
   type Traced,
 } from "./lib/ipc";
-import { appliesTo, initial, modKey, Store, type State } from "./lib/state";
+import { appliesTo, initial, Store, type State } from "./lib/state";
 import { applyRemembered, currentInterface, traceForKeeping, watchRemembered } from "./lib/remember";
 import { APP_NAME, copyText, openExternal, pickedFile, pickedPath, pickFiles, WEB, type Picked } from "./lib/platform";
+import { DEFAULT_SETTINGS, presetIndexForKey, resolvePreset as resolvePresetIn } from "./lib/presets";
+import { Latest, TraceLoop, type Tier } from "./lib/traceflow";
 import { markFramed, mountWebChrome, pastedImages, takeLaunch, webDrops, type Launch } from "./lib/web/chrome";
 import { Previews } from "./lib/previews";
 import { applyProgress, startClock, type TraceProgress } from "./lib/live";
@@ -38,42 +46,15 @@ import { createChooser, createWizard, type Snapshot, type WizardActions } from "
 import { proposeGroups } from "./components/palette";
 import { openCardComposer } from "./components/card";
 import { openExportSheet } from "./components/exportsheet";
-import { helpPageFor, installHelp, openHelp } from "./components/help";
-import { closeOverlay, openPopover, toast } from "./components/overlays";
-import { windowControls } from "./components/wincontrols";
+import { installHelp } from "./components/help";
+import { toast } from "./components/overlays";
+import { renderAppBar } from "./components/appbar";
 import { fetchLine, sentence } from "./components/denoiserfetch";
 import { createBatch } from "./views/batch";
 import { createMinify } from "./views/minify";
 import { createFabricate } from "./views/fabricate";
 import { createScreens, openDenoiserModal } from "./views/screens";
 import { createWorkspace, jumpToWorst } from "./views/workspace";
-
-const DEFAULT_SETTINGS: Settings = {
-  mode: "quality",
-  precision: 0.1,
-  speckleFloor: 2,
-  traceSize: 2048,
-  timeLimit: 0,
-  maxColours: 64,
-  colourMerging: 0.035,
-  flatFills: false,
-  blackAndWhite: false,
-  monochrome: false,
-  cleanUpDamage: "off",
-  matchRepeatedShapes: true,
-  matchThreshold: 0.92,
-  fewerPaths: false,
-  lineArt: false,
-  repairRings: true,
-  editability: false,
-  bezierCost: 6,
-  cornerAngle: 10,
-  minify: false,
-  transparentBackground: false,
-  margin: 0,
-  holesAsCutouts: false,
-  traceTransparency: true,
-};
 
 /**
  * Write one control's value into the settings object.
@@ -91,25 +72,8 @@ const store = new Store(
   initial(DEFAULT_SETTINGS, { tolerancePx: 0.1, judgePx: 1024, cornerDegrees: 30, documentCleanup: true }),
 );
 
+/** The bundled sample images the empty stage offers, once the backend has listed them. */
 let samples: SampleInfo[] = [];
-let settleTimer = 0;
-/** The generation whose stages are currently being collected. */
-let watching = 0;
-/**
- * The newest generation the backend has handed back. Never goes down: two starts whose
- * replies cross must not put an older generation back in charge, or the newer trace's
- * result would be ignored and the interface would wait for ever.
- */
-let newest = 0;
-/**
- * What arrived for a generation before its start came back. A trace served from the cache
- * can finish before the reply to the command that started it reaches the page: its events
- * wait here, and are applied the moment the generation is known, instead of being dropped
- * as stale and leaving the interface tracing for ever.
- */
-const early = new Map<number, { progress: TraceProgress[]; done?: Outcome }>();
-/** The colour groups each trace in flight was sent with, by generation. */
-const groupsSent = new Map<number, ColourGroup[]>();
 /** The wizard's preview drafts, queued one at a time behind the main trace. */
 const previews = new Previews();
 
@@ -129,20 +93,17 @@ function traceSettings(): Settings {
   return sent;
 }
 
-/** Start a trace. A draft keeps up with a moving control; a final is what gets exported. */
-async function trace(tier: "draft" | "final"): Promise<void> {
-  if (!store.state.source) return;
-  // Counted from the moment it was asked for: that is the wait the user sees.
-  const asked = performance.now();
-  try {
-    const groups = store.state.colourGroups;
-    const generation = await api.startTrace(traceSettings(), tier);
-    // A newer trace was started meanwhile and has already taken over.
-    if (generation < newest) return;
-    newest = generation;
-    groupsSent.set(generation, groups);
-    for (const old of groupsSent.keys()) if (old < generation - 8) groupsSent.delete(old);
-    watching = generation;
+/**
+ * The trace loop (`lib/traceflow.ts`), wired to this store and the backend: which trace the
+ * interface is waiting for, what each backend event does, and the settle timer.
+ */
+const loop = new TraceLoop<TraceProgress, Outcome, ColourGroup[]>({
+  hasSource: () => Boolean(store.state.source),
+  groups: () => store.state.colourGroups,
+  start: (tier) => api.startTrace(traceSettings(), tier),
+  settleMs: () => store.state.prefs?.settleMs ?? 800,
+  shown: () => ({ generation: store.state.generation, tracing: store.state.tracing }),
+  began: (generation, tier, asked) =>
     store.set({
       generation,
       tracing: true,
@@ -152,44 +113,41 @@ async function trace(tier: "draft" | "final"): Promise<void> {
       traceLog: [],
       traceStarted: asked,
       traceEnded: 0,
+    }),
+  // The engine said what it is doing.
+  progressed: (p) => store.set(applyProgress(store.state, p, performance.now())),
+  // The confidence bands do not ride on the outcome, and are not fetched here either: the
+  // viewer asks for them by generation the first time Certainty is shown.
+  finished: (outcome, generation) => applyOutcome(outcome, generation),
+  failed: (e) =>
+    store.set({ tracing: false, liveNow: null, traceEnded: performance.now(), stageState: { kind: "failed", message: String(e) } }),
+  cancel: () => {
+    void api.cancelTrace();
+    store.set({
+      tracing: false,
+      liveNow: null,
+      traceEnded: performance.now(),
+      stageState: store.state.svg ? { kind: "cancelled" } : { kind: "empty" },
     });
-    // Anything that beat the reply here, in the order it came.
-    const held = early.get(generation);
-    for (const g of early.keys()) if (g <= generation) early.delete(g);
-    for (const p of held?.progress ?? []) progressed(p);
-    if (held?.done) applyOutcome(held.done, generation);
-  } catch (e) {
-    store.set({ tracing: false, liveNow: null, traceEnded: performance.now(), stageState: { kind: "failed", message: String(e) } });
-  }
-}
+  },
+});
 
-/** The engine said what it is doing. */
-function progressed(p: TraceProgress): void {
-  if (p.generation !== watching) return;
-  store.set(applyProgress(store.state, p, performance.now()));
+/** Start a trace. A draft keeps up with a moving control; a final is what gets exported. */
+function trace(tier: Tier): Promise<void> {
+  return loop.trace(tier);
 }
 
 /**
- * Stop the trace in flight and go back to the last result. The draft's pending full trace
- * goes too: a Cancel that a timer undoes 800 ms later is not a cancel.
+ * Stop the trace in flight and go back to the last result. The full trace a moved control
+ * had armed goes too (`TraceLoop.cancel`).
  */
 function cancelTrace(): void {
-  window.clearTimeout(settleTimer);
-  void api.cancelTrace();
-  store.set({
-    tracing: false,
-    liveNow: null,
-    traceEnded: performance.now(),
-    stageState: store.state.svg ? { kind: "cancelled" } : { kind: "empty" },
-  });
+  loop.cancel();
 }
 
 /** A control moved: draft now, full trace once the controls have been still. */
 function controlChanged(): void {
-  window.clearTimeout(settleTimer);
-  if (!store.state.source) return;
-  void trace("draft");
-  settleTimer = window.setTimeout(() => void trace("final"), store.state.prefs?.settleMs ?? 800);
+  loop.controlChanged();
 }
 
 /** Run a full trace and wait for it, which is what Export needs before it writes. */
@@ -205,13 +163,13 @@ function traceAndWait(): Promise<void> {
         resolve();
       }
     });
-    window.clearTimeout(settleTimer);
+    loop.clearSettle();
     void trace("final");
   });
 }
 
 /** Which trace outcome arrived last, so one whose snapped paint finishes late is dropped. */
-let outcomeSeq = 0;
+const outcomes = new Latest();
 
 /**
  * A trace has finished. The user's snaps belong to the image rather than to one trace, so a
@@ -219,17 +177,17 @@ let outcomeSeq = 0;
  * every exported format then agree, and the export's own fresh trace keeps them too.
  */
 function applyOutcome(outcome: Outcome, generation = store.state.generation): void {
-  const seq = ++outcomeSeq;
+  const seq = outcomes.take();
   if (outcome.state !== "traced" || !store.state.snaps.length) {
     showOutcome(outcome, generation);
     return;
   }
   paintWithSnaps(outcome).then(
     (painted) => {
-      if (seq === outcomeSeq) showOutcome(outcome, generation, painted);
+      if (outcomes.isNewest(seq)) showOutcome(outcome, generation, painted);
     },
     (e) => {
-      if (seq !== outcomeSeq) return;
+      if (!outcomes.isNewest(seq)) return;
       toast(`The snapped colours could not be applied to this trace: ${e}`, { kind: "bad" });
       showOutcome(outcome, generation);
     },
@@ -247,6 +205,11 @@ async function paintWithSnaps(traced: Traced): Promise<{ svg: string; inks: Trac
   }
 }
 
+/**
+ * Put a finished trace on screen, or say why there is nothing to show. `painted` is the
+ * drawing with the user's snaps applied, when there are any. A cancelled trace shows
+ * nothing: whoever cancelled it has already put the interface back.
+ */
 function showOutcome(
   outcome: Outcome,
   generation: number,
@@ -267,7 +230,7 @@ function showOutcome(
     store.set({
       result: outcome,
       resultGeneration: generation,
-      resultGroups: groupsSent.get(generation) ?? store.state.resultGroups,
+      resultGroups: loop.groupsFor(generation) ?? store.state.resultGroups,
       bandsMissing: false,
       previous: outcome.tier === "final" ? before : store.state.previous,
       svg: painted?.svg ?? outcome.svg,
@@ -344,8 +307,7 @@ async function openWith(fn: () => Promise<void>, offer = true): Promise<void> {
   // Whatever was tracing belongs to the image being replaced: the backend stops it when the
   // new one opens, and nothing it still sends is wanted. Nor is a full trace a draft of the
   // last image had queued.
-  window.clearTimeout(settleTimer);
-  watching = 0;
+  loop.detach();
   store.set({
     tracing: false,
     liveNow: null,
@@ -399,6 +361,7 @@ function offerChoice(): void {
   else if (on === "ask") store.set({ chooser: true });
 }
 
+/** Open an image by its path on this computer (the desktop's dialogs, drops and Recent menu). */
 async function openPath(path: string): Promise<void> {
   await openWith(async () => {
     const info = await api.openPath(path);
@@ -419,6 +382,7 @@ async function openPicked(picked: Picked): Promise<void> {
   });
 }
 
+/** Ask for an image (or an SVG to re-trace) with the platform's file dialog, and open it. */
 async function chooseFile(): Promise<void> {
   const [picked] = await pickFiles([
     // An SVG is accepted too: it is traced from its render, which is how a messy drawing
@@ -455,6 +419,10 @@ const screens = createScreens(store, {
   close: () => store.set({ screen: null }),
 });
 
+/**
+ * A control in the rail, the wizard or on the stage changed one setting: write it, say so if
+ * it asks for a denoiser that is not ready, and trace.
+ */
 function onSettingChanged<K extends keyof Settings>(key: K, value: Settings[K]): void {
   assignSetting(store.state.settings, key, value);
   store.touch("settings");
@@ -496,16 +464,9 @@ const workspace = createWorkspace(
   () => samples,
 );
 
-/**
- * A preset id to the settings it means, whether it is one of the built-in seven or one
- * the user saved. Returns `null` for an id that no longer exists — a saved preset can be
- * deleted while it is the selected one.
- */
+/** A preset id to the settings it means, against the presets loaded now (`lib/presets.ts`). */
 function resolvePreset(id: string): { settings: Settings; wantsDenoiser: boolean } | null {
-  const builtin = store.state.caps?.presets.find((p) => p.id === id);
-  if (builtin) return { settings: builtin.settings, wantsDenoiser: builtin.wantsDenoiser };
-  const saved = store.state.prefs?.saved.find((p) => p.id === id);
-  return saved ? { settings: saved.settings, wantsDenoiser: false } : null;
+  return resolvePresetIn(store.state.caps, store.state.prefs, id);
 }
 
 /** Where the controls started: the selected preset's values, or the defaults if none is selected. */
@@ -646,10 +607,12 @@ async function snap(changes: Snap[]): Promise<void> {
   }
 }
 
+/** The other tabs' views, built the first time each is shown and kept from then on. */
 let minifyView: HTMLElement | null = null;
 let fabView: HTMLElement | null = null;
 let batchView: HTMLElement | null = null;
 
+/** Show the selected tab's view under the app bar. */
 function renderTab(): void {
   const st = store.state;
   if (st.tab === "vectorize") {
@@ -666,94 +629,9 @@ function renderTab(): void {
   }
 }
 
-function renderAppBar(): void {
-  const st = store.state;
-
-  fill(
-    appbar,
-    h("span.brand", null, appMark(18), APP_NAME),
-    st.tab === "vectorize" && st.source
-      ? h(
-          "div.filechip",
-          null,
-          h("span.name", null, st.source.name),
-          h("span.muted.num", null, `${st.source.width} × ${st.source.height} · ${st.source.container}`),
-        )
-      : null,
-    h(
-      "div.seg",
-      { style: { marginLeft: "auto" } },
-      ...(
-        [
-          ["vectorize", "Vectorize"],
-          ["minify", "Minify SVG"],
-          ["fabricate", "Fabricate"],
-          // A folder of images in, a folder of SVGs out: nothing a browser tab can do.
-          ...(WEB ? [] : ([["batch", "Batch"]] as const)),
-        ] as const
-      ).map(([id, label]) =>
-        h("button", { "aria-pressed": String(st.tab === id), onclick: () => store.set({ tab: id }) }, label),
-      ),
-    ),
-    h(
-      "div",
-      { style: { marginLeft: "auto", display: "flex", alignItems: "center", gap: "2px" } },
-      h("button.btn.ghost.compact", { onclick: () => void chooseFile() }, `Open…`),
-      // Recent files are paths on this computer; a browser never learns them.
-      WEB
-        ? null
-        : h(
-            "button.btn.ghost.compact",
-            {
-              disabled: !(st.prefs?.recent.length),
-              onclick: (e: Event) => openRecent(e.currentTarget as HTMLElement),
-            },
-            "Recent",
-          ),
-      h("button.btn.ghost.compact", { onclick: () => store.set({ screen: "settings" }) }, "Settings"),
-      h("button.btn.ghost.compact", { onclick: () => store.set({ screen: "about" }) }, "About"),
-      h("button.btn.ghost.compact", { title: "Before and after on real logos, and how Inkvec compares", onclick: () => store.set({ screen: "showcase" }) }, "Showcase"),
-      h("button.btn.ghost.compact", { title: "The user guide (F1)", onclick: () => openHelp(helpPageFor(store.state)) }, "Help"),
-      h("div.sep"),
-      windowControls(),
-    ),
-  );
-  appbar.setAttribute("data-tauri-drag-region", "");
-}
-
-function openRecent(anchor: HTMLElement): void {
-  const recent = store.state.prefs?.recent ?? [];
-  openPopover(
-    anchor,
-    h(
-      "div.menu",
-      null,
-      ...recent.map((path) =>
-        h(
-          "button.item",
-          {
-            onclick: () => {
-              closeOverlay();
-              void openPath(path);
-            },
-          },
-          h("span", { style: { flex: "1", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, path.split(/[\\/]/).pop()),
-        ),
-      ),
-      h("div.rule"),
-      h(
-        "button.item",
-        {
-          onclick: () => {
-            closeOverlay();
-            void chooseFile();
-          },
-        },
-        h("span", { style: { flex: "1" } }, "Open…"),
-        h("span.when", null, `${modKey(store.state.caps?.platform)}+O`),
-      ),
-    ),
-  );
+/** Draw the app bar (`components/appbar.ts`) from the state as it is now. */
+function drawAppBar(): void {
+  renderAppBar(appbar, store, { openFile: () => void chooseFile(), openPath: (path) => void openPath(path) });
 }
 
 /**
@@ -795,6 +673,7 @@ function putBack(prefs: Prefs): void {
   applyRemembered(store, prefs, TABS, (id) => resolvePreset(id) !== null);
 }
 
+/** Light or dark, as the preferences say; "system" follows the operating system's setting. */
 function applyTheme(theme: Prefs["theme"]): void {
   const dark = theme === "dark" || (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
   document.documentElement.dataset.theme = dark ? "dark" : "light";
@@ -802,6 +681,11 @@ function applyTheme(theme: Prefs["theme"]): void {
 
 // ------------------------------------------------------------------ keyboard ---
 
+/**
+ * The window's shortcuts: Ctrl/⌘+O opens, +E exports, +, opens Settings, +1…9 and +0 pick
+ * a preset, and Escape closes whatever is on top or cancels the trace. Only the first three
+ * work while typing in a field.
+ */
 function keyboard(e: KeyboardEvent): void {
   const mod = e.metaKey || e.ctrlKey;
   const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
@@ -824,8 +708,9 @@ function keyboard(e: KeyboardEvent): void {
   if (typing) return;
 
   // ⌘1–⌘9 and ⌘0 switch presets, for people who already know them.
-  if (mod && /^[0-9]$/.test(e.key)) {
-    const preset = store.state.caps?.presets[(Number(e.key) + 9) % 10];
+  const presetAt = presetIndexForKey(e.key);
+  if (mod && presetAt !== null) {
+    const preset = store.state.caps?.presets[presetAt];
     if (preset) {
       e.preventDefault();
       store.set({ preset: preset.id, settings: { ...preset.settings } });
@@ -912,6 +797,11 @@ async function dropped(files: Picked[]): Promise<void> {
 
 // ---------------------------------------------------------------------- start ---
 
+/**
+ * Start the app: mount the shell, subscribe to the backend's events, load the capabilities
+ * and preferences, put the interface back as it was left, and open whatever the app was
+ * launched with. Each step reports to the splash window (desktop) or loading screen (browser).
+ */
 async function start(): Promise<void> {
   const app = document.getElementById("app");
   if (!app) return;
@@ -921,9 +811,9 @@ async function start(): Promise<void> {
     markFramed();
   }
 
-  renderAppBar();
+  drawAppBar();
   renderTab();
-  store.on(["tab", "source", "prefs", "caps"], renderAppBar);
+  store.on(["tab", "source", "prefs", "caps"], drawAppBar);
   store.on(["tab"], renderTab);
 
   window.addEventListener("keydown", keyboard);
@@ -951,27 +841,8 @@ async function start(): Promise<void> {
     () => store.state.liveNow?.since ?? null,
   );
   store.on(["tracing", "liveNow", "traceLog", "liveStages", "tab", "railTab"], syncClock);
-  await events.traceProgress((p) => {
-    if (p.generation > newest) {
-      const held = early.get(p.generation) ?? { progress: [] };
-      held.progress.push(p);
-      early.set(p.generation, held);
-      return;
-    }
-    progressed(p);
-  });
-  await events.traceDone(({ generation, outcome }) => {
-    if (generation > newest) {
-      const held = early.get(generation) ?? { progress: [] };
-      held.done = outcome;
-      early.set(generation, held);
-      return;
-    }
-    if (generation !== store.state.generation || !store.state.tracing) return;
-    // The confidence bands do not ride on the event, and are not fetched here either: the
-    // viewer asks for them by generation the first time Certainty is shown.
-    applyOutcome(outcome, generation);
-  });
+  await events.traceProgress((p) => loop.onProgress(p));
+  await events.traceDone(({ generation, outcome }) => loop.onDone(generation, outcome));
   // A second launch (the context menu's "Vectorize with Inkvec" while the app is open)
   // hands its file to this window.
   await events.openPath((path) => void openFromOutside(path));
@@ -1068,6 +939,10 @@ function noteDenoiserWait(): void {
   );
 }
 
+/**
+ * The browser's denoiser download moved on: keep the capabilities' "installed" current, trace
+ * again once it is ready if the controls want it, and say so once if it failed.
+ */
 function denoiserFetched(f: DenoiserFetch): void {
   const before = store.state.denoiserFetch?.phase;
   store.set({ denoiserFetch: f });
@@ -1113,5 +988,8 @@ void start().catch((e) => {
   }
 });
 
-/** Exported so a test harness can drive the shell without a window. */
-export { applyOutcome, assignSetting, cancelTrace, DEFAULT_SETTINGS, store, trace };
+/**
+ * The store, for the dev mock (`dev/boot.ts`), which puts it on the window for
+ * `tools/mock_checks.py` to read.
+ */
+export { store };

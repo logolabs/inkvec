@@ -27,6 +27,7 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 import type { DenoiserFetch } from "../ipc";
 import { bootEngineBytes, bootEngineStarting, bootProgress, bootReady } from "./chrome";
 import { download } from "./files";
+import { readStoredPrefs, writeStoredPrefs } from "./prefstore";
 
 /** -1 is reserved for putting the image back into a fresh worker, ahead of everything. */
 type Priority = -1 | 0 | 1 | 2;
@@ -44,7 +45,6 @@ interface Job {
   reject: (e: Error) => void;
 }
 
-const PREFS_KEY = "inkvec-studio-lite:prefs";
 /** Where `denoise.js` keeps the verified weights (its `CACHE`). */
 const DENOISER_CACHE = "inkvec-denoiser-v1";
 /** Where `denoise.js` keeps ONNX Runtime Web's WebAssembly (its `ORT_CACHE`), for a removal. */
@@ -553,15 +553,13 @@ class WebBackend {
 
   // -------------------------------------------------------------- preferences ---
 
+  /**
+   * The preferences, loaded once: what this browser kept, through the core's sanitiser, or
+   * the core's defaults when nothing usable was kept.
+   */
   private async loadPrefs(): Promise<Record<string, unknown>> {
     if (this.prefs) return this.prefs;
-    let stored: unknown = null;
-    try {
-      const text = localStorage.getItem(PREFS_KEY);
-      stored = text ? JSON.parse(text) : null;
-    } catch {
-      stored = null;
-    }
+    const stored = readStoredPrefs();
     this.prefs = (await (stored
       ? this.enqueue("sanitise_prefs", 0, { args: { prefs: stored } })
       : this.enqueue("default_prefs", 0, { args: {} }))) as Record<string, unknown>;
@@ -578,12 +576,9 @@ class WebBackend {
     this.prefsTimer = window.setTimeout(() => this.storePrefs(), 1000);
   }
 
+  /** Keep the preferences in this browser. Storage full or blocked: the session carries on unsaved. */
   private storePrefs(): void {
-    try {
-      localStorage.setItem(PREFS_KEY, JSON.stringify(this.prefs));
-    } catch {
-      // Storage full or blocked: the session still works, it just starts fresh next time.
-    }
+    writeStoredPrefs(this.prefs);
   }
 
   // ------------------------------------------------------------------ denoiser ---

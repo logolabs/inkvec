@@ -63,10 +63,13 @@ fn flat_fill(pal: &Palette, ink: usize) -> gradient::FillFit {
 /// Every stage reads the image composited over white (sRGB 0..1); in native mode the
 /// source opacity rides along as a fourth channel. The stages, each timed by the
 /// stopwatch under its progress name: `palette` ([`super::palette::palette_and_labels`],
-/// then `color::split_alpha_inks` for `--cutout`), `slivers` ([`super::faces::absorb_slivers`],
-/// [`super::faces::absorb_rims`], [`super::faces::merge_same_inks`]), `despeckle`, `split`
-/// ([`super::faces::faces`]), and `ramps` ([`super::bands::merge_ramps`], opaque images with
-/// gradients on only). The faces, their fills and inks then go to
+/// then `color::split_alpha_inks` for `--cutout`); `slivers` (the labels read into row runs,
+/// [`super::faces::RunLabels::new`], then [`super::faces::RunLabels::absorb_slivers`],
+/// [`super::faces::RunLabels::absorb_rims`] and [`super::faces::RunLabels::merge_same_inks`]);
+/// `despeckle` ([`super::faces::RunLabels::despeckle`]); `split`
+/// ([`super::faces::RunLabels::write_faces`], the face ids written over the label buffer,
+/// the only per-pixel write of the clean-up); and `ramps` ([`super::bands::merge_ramps`],
+/// opaque images with gradients on only). The faces, their fills and inks then go to
 /// [`crate::finish_color_trace_alpha`], which builds the planar map and refines it; the
 /// caller (`inkvec-cli`'s `fast::fit`) then fits the map's edges with [`super::fit_edges`].
 fn trace(

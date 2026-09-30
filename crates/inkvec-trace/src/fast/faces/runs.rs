@@ -53,8 +53,10 @@
 //! labeling algorithms", Pattern Analysis and Applications 12(2):117-135,
 //! <https://doi.org/10.1007/s10044-008-0109-y>, for the equivalence table: union-find in
 //! a flat array whose root is always the smallest index of its class, so provisional
-//! labels resolve to scan order without a sort. Path halving replaces their path
-//! compression; both keep finds near constant time.
+//! labels resolve to scan order without a sort, and their FLATTEN pass, which numbers the
+//! classes in one forward sweep reading each entry's parent (its parent has a smaller
+//! index and is already numbered). Path halving replaces their path compression; both
+//! keep finds near constant time.
 //!
 //! See also: He, Chao, Suzuki & Wu (2009), "Fast connected-component labeling", Pattern
 //! Recognition 42(9):1977-1987, <https://doi.org/10.1016/j.patcog.2008.10.013>, the
@@ -101,8 +103,6 @@ pub(crate) struct RunLabels {
     fresh: bool,
     /// Union-find parent of each run (scratch, reused).
     parent: Vec<u32>,
-    /// Component id of each root run, `u32::MAX` for a run that is no root (scratch).
-    root_id: Vec<u32>,
     /// The next run list while an edit rebuilds it (scratch, swapped with `runs`).
     spare: Vec<Run>,
     /// The next `row_start` while an edit rebuilds it (scratch).
@@ -202,7 +202,6 @@ impl RunLabels {
             label: Vec::new(),
             fresh: false,
             parent: Vec::new(),
-            root_id: Vec::new(),
             spare: Vec::new(),
             spare_rows: Vec::new(),
         }
@@ -223,10 +222,14 @@ impl RunLabels {
     /// **Same ids as the per-pixel code:** that code ran this very union-find on the runs
     /// it read off the pixels. The runs here are the maximal runs of the same image (the
     /// edits keep them maximal), and maximal runs are unique, so the input and hence every
-    /// id, size and label are the same.
+    /// id, size and label are the same. The numbering pass differs -- the per-pixel code
+    /// ran a find per run and looked the root up in a table, this one reads the parent's
+    /// id (Wu, Otoo & Suzuki's FLATTEN) -- but both give each class, in order of its
+    /// smallest run index, the next id.
     ///
-    /// Cost O(R α(R)); 0.08-0.65 ms at 2048 px on the benchmark images. An empty image
-    /// gives no components.
+    /// Cost O(R α(R)) for the unions plus O(R) for the numbering; 0.08-0.65 ms at 2048 px
+    /// on the benchmark images before the numbering lost its finds. An empty image gives no
+    /// components.
     pub(super) fn components(&mut self) {
         if self.fresh {
             return;
@@ -253,19 +256,25 @@ impl RunLabels {
                 }
             }
         }
-        self.root_id.clear();
-        self.root_id.resize(runs.len(), u32::MAX);
+        // Flatten: one forward pass numbers the classes, with no find. `parent[r] <= r`
+        // always holds (a union points the larger root at the smaller, and path halving
+        // only moves a parent pointer to an ancestor, which has a smaller index), and a
+        // root is the smallest index of its class. So walking the runs in order, a root is
+        // the first run of its class met and takes the next id, and any other run's parent
+        // is an earlier run of the same class whose id is already known.
         self.size.clear();
         self.label.clear();
         self.run_comp.clear();
         for r in 0..runs.len() {
-            let root = find(parent, r as u32) as usize;
-            if self.root_id[root] == u32::MAX {
-                self.root_id[root] = self.size.len() as u32;
+            let p = parent[r] as usize;
+            let id = if p == r {
+                let id = self.size.len() as u32;
                 self.size.push(0);
-                self.label.push(runs[root].label);
-            }
-            let id = self.root_id[root];
+                self.label.push(runs[r].label);
+                id
+            } else {
+                self.run_comp[p]
+            };
             self.run_comp.push(id);
             self.size[id as usize] += (runs[r].x1 - runs[r].x0) as usize;
         }

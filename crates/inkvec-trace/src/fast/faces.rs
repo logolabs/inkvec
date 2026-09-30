@@ -249,6 +249,19 @@ fn rim_pair(own: usize, sides: &[u16], inks: &[[f32; 4]]) -> Option<(u16, u16)> 
     best.map(|(a, b, _)| (a, b))
 }
 
+/// Move the distinct values of the sorted slice `v` to its front, in order, and return how
+/// many there are (`Vec::dedup` for a slice). Empty gives 0.
+fn dedup_sorted(v: &mut [u16]) -> usize {
+    let mut k = 0;
+    for i in 0..v.len() {
+        if k == 0 || v[i] != v[k - 1] {
+            v[k] = v[i];
+            k += 1;
+        }
+    }
+    k
+}
+
 /// `same[a · n + b]`: whether inks `a` and `b` (of `n`) are one ink to the eye -- distinct
 /// indices, opacities within [`SAME_ALPHA`], and CIEDE2000 (on sRGB, ignoring opacity)
 /// below [`crate::color::SAME_INK_DE00`]. `n²` colour differences; the palette has tens
@@ -390,9 +403,11 @@ impl RunLabels {
     /// ([`RunLabels::for_each_contact`]): the set of labels of other components touching
     /// the strip's runs is the set the per-pixel code gathered from each strip pixel's
     /// 4-neighbours (every such neighbour is in a touching run, and every touching run
-    /// holds such a neighbour). Only the set matters, as [`rim_pair`] is order-free. Work:
-    /// O(R + E log E) for the E strip contacts, plus one blend test per pixel of a strip
-    /// that is a rim.
+    /// holds such a neighbour). Only the set matters, as [`rim_pair`] is order-free. The
+    /// sides are grouped by strip with a counting sort on the component id and each
+    /// strip's few labels sorted and deduplicated in place ([`dedup_sorted`]). Work:
+    /// O(R + E + C) for the E strip contacts and C components, plus one blend test per
+    /// pixel of a strip that is a rim.
     pub(crate) fn absorb_rims(&mut self, px: Pixels<'_>, inks: &[[f32; 4]]) {
         self.components();
         let interior = self.interiors();
@@ -412,14 +427,33 @@ impl RunLabels {
                 sides.push((cj, li));
             }
         });
-        sides.sort_unstable();
-        sides.dedup();
-        let mut pair: Vec<Option<(u16, u16)>> = vec![None; self.size.len()];
+        // Group the sides by strip with a counting sort on the component id, O(E + C), then
+        // sort and deduplicate each strip's few labels in place. (A comparison sort of all
+        // E sides was 1.6 ms of the 4.9 ms pass on the masthead, E = 53,087.)
+        let n = self.size.len();
+        let mut start = vec![0usize; n + 1];
+        for &(c, _) in &sides {
+            start[c as usize + 1] += 1;
+        }
+        for c in 0..n {
+            start[c + 1] += start[c];
+        }
+        let mut next = start.clone();
+        let mut by_strip = vec![0u16; sides.len()];
+        for &(c, l) in &sides {
+            by_strip[next[c as usize]] = l;
+            next[c as usize] += 1;
+        }
+        let mut pair: Vec<Option<(u16, u16)>> = vec![None; n];
         let mut any = false;
-        for group in sides.chunk_by(|a, b| a.0 == b.0) {
-            let c = group[0].0 as usize;
-            let labels: Vec<u16> = group.iter().map(|&(_, l)| l).collect();
-            pair[c] = rim_pair(self.label[c] as usize, &labels, inks);
+        for c in 0..n {
+            let group = &mut by_strip[start[c]..start[c + 1]];
+            if group.len() < 2 {
+                continue;
+            }
+            group.sort_unstable();
+            let distinct = dedup_sorted(group);
+            pair[c] = rim_pair(self.label[c] as usize, &group[..distinct], inks);
             any |= pair[c].is_some();
         }
         if !any {

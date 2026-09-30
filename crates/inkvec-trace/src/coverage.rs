@@ -31,8 +31,32 @@
 //! what feeds the `tau * sigma` admissibility envelope in `inkvec-fit`, and it is why
 //! adaptive simplification needs no separate heuristic: the places we are allowed to
 //! simplify hard are exactly the places we measured badly.
+//!
+//! # Where this sits
+//!
+//! This is the intake stage. It holds the raster type the whole crate works on ([`Rgba`],
+//! straight sRGB `0..1`), the two-colour coverage field ([`bilevel_coverage`], the input to
+//! the monochrome trace in the crate root and `inkvec-cli`'s pipeline, and to
+//! `centerline`), and the image-wide measurements
+//! every later stage is tuned by:
+//!
+//! * [`estimate_noise`], the pixel noise `sigma_pixel` in sRGB units, which the palette's
+//!   same-ink test and the fitter's tolerance divide by;
+//! * [`intake_scale`], how many pixels an edge takes to cross;
+//! * [`ringing_score`], whether compression ringing surrounds the edges;
+//! * [`oversample_factor`], how many times more pixels the raster has than its drawing needs.
+//!
+//! Resampling ([`downsample_to`], [`box_downsample_rgba8`]) lives in the `resample`
+//! submodule and is re-exported here. Callers are the crate root (decode and intake),
+//! `color`, `contour`, `centerline`, `regularize`, and `inkvec-cli`'s intake.
+//!
+//! Unless a function says otherwise, pixel `(x, y)` is sampled at its centre, which sits at
+//! integer coordinates `(x, y)`.
 
 use inkvec_core::Point;
+
+mod resample;
+pub use resample::{box_downsample_rgba8, downsample_to};
 
 /// Systematic positional error of level-set extraction, in pixels. See
 /// [`CoverageField::sigma_model`].
@@ -114,6 +138,10 @@ impl CoverageField {
     }
 
     /// Central-difference gradient magnitude, in coverage units per pixel.
+    ///
+    /// `|grad a| = sqrt(gx² + gy²)` with `gx = (a[x+1, y] − a[x−1, y]) / 2` and likewise for
+    /// `gy`, evaluated at the pixel nearest `(x, y)` (no interpolation). Neighbours outside
+    /// the field are clamped to the edge, so the gradient there is one-sided and halved.
     pub fn gradient_magnitude(&self, x: f64, y: f64) -> f64 {
         let (xi, yi) = (x.round() as isize, y.round() as isize);
         let gx = 0.5 * (self.get_clamped(xi + 1, yi) - self.get_clamped(xi - 1, yi)) as f64;
@@ -123,9 +151,11 @@ impl CoverageField {
 
     /// Positional uncertainty, in pixels, of a boundary point at `p`.
     ///
-    /// `sigma_alpha / |grad alpha|`, floored so that a vanishing gradient — a plateau
-    /// where the level set is genuinely unlocalizable — yields a large but finite value
-    /// rather than an infinity that would poison the fit.
+    /// `sigma = sqrt((sigma_alpha / |grad a|)² + sigma_model²)`, clamped to `[0.001, 4]` px.
+    /// The first term is noise propagated through the level set (see the module docs), the
+    /// second the method's own resolution limit. A vanishing gradient — a plateau where the
+    /// level set is genuinely unlocalizable — yields the 4 px ceiling rather than an
+    /// infinity that would poison the fit.
     pub fn position_sigma(&self, p: Point) -> f64 {
         const MAX_SIGMA: f64 = 4.0;
         let g = self.gradient_magnitude(p.x, p.y);
@@ -198,16 +228,28 @@ const MAD_TO_SIGMA: f64 = 0.6745;
 /// step is the smallest deviation an 8-bit file could even represent.
 pub const NOISE_FLOOR: f64 = 0.5 / 255.0;
 
-/// Estimate per-channel pixel noise by the median absolute deviation of a Laplacian.
+/// Estimate the pixel noise of one grey channel (row-major, `w x h`, sRGB `0..1`) from a
+/// low quantile of the absolute Laplacian. Returns a Gaussian sigma in sRGB units, never
+/// below [`NOISE_FLOOR`].
 ///
 /// The Laplacian annihilates smooth content, so what survives in a flat region is noise.
-/// The median (rather than the mean) keeps genuine edges from inflating the estimate —
-/// an edge is a large deviation, but a rare one.
+/// A robust order statistic (rather than the mean) keeps genuine edges from inflating the
+/// estimate — an edge is a large deviation, but a rare one. This used to be the median
+/// absolute deviation (MAD); it now reads the 10th percentile, for the reason given inside
+/// `estimate_noise_at`. With `L(x, y) = 4·g(x,y) − g(x−1,y) − g(x+1,y) − g(x,y−1) − g(x,y+1)`
+/// over interior pixels:
 ///
-/// `MAD_TO_SIGMA` converts the MAD to a Gaussian sigma. The second divisor undoes the
-/// gain the kernel applies to independent noise: for a linear filter that gain is the root
-/// of the sum of its squared coefficients, so it is computed from `LAPLACIAN_KERNEL`
-/// rather than written down.
+/// ```text
+///     sigma = max(Q_q(|L|) / z_q / sqrt(Σ k_i²), NOISE_FLOOR)
+/// ```
+///
+/// `Q_q` is the `q = 0.10` quantile, `z_q` the same quantile of a unit half-normal
+/// (`Z10`; `MAD_TO_SIGMA` plays this role for the median), and `k_i` the kernel
+/// coefficients. The last divisor undoes the gain the kernel applies to independent
+/// noise: for a linear filter that gain is the root of the sum of its squared
+/// coefficients, so it is computed from `LAPLACIAN_KERNEL` rather than written down.
+///
+/// An image smaller than 3x3, or a buffer shorter than `w * h`, returns `1/255`.
 ///
 /// **That computation is the fix for a real bug, and the reason it is not a literal.**
 /// Until 2026-09-08 this divided by `sqrt(6)`, described in the comment as the 4-neighbour
@@ -227,8 +269,10 @@ pub fn estimate_noise(gray: &[f32], w: usize, h: usize) -> f64 {
     estimate_noise_at(gray, w, h, NOISE_QUANTILE, Z10)
 }
 
-/// [`estimate_noise`] at the `at` quantile, `z` being that quantile of the half-normal. The
-/// test reads the median it replaced here (it was `INKVEC_NOISE_MEDIAN=1`).
+/// [`estimate_noise`] at the `at` quantile (a fraction in `0..1`), `z` being that quantile
+/// of the half-normal. The test reads the median it replaced here (it was
+/// `INKVEC_NOISE_MEDIAN=1`). The quantile is read by index `floor(n·at)` into the sorted
+/// `|L|` values, with no interpolation.
 fn estimate_noise_at(gray: &[f32], w: usize, h: usize, at: f64, z: f64) -> f64 {
     if w < 3 || h < 3 || gray.len() < w * h {
         return 1.0 / 255.0;
@@ -268,14 +312,26 @@ fn estimate_noise_at(gray: &[f32], w: usize, h: usize, at: f64, z: f64) -> f64 {
 const NOISE_QUANTILE: f64 = 0.10;
 
 /// The tenth percentile of the half-normal: `Phi^-1(0.55)`. Dividing the tenth percentile of
-/// `|x|` by this recovers sigma, as dividing the median by [`MAD_TO_SIGMA`] does.
+/// `|x|` by this recovers sigma, as dividing the median by `MAD_TO_SIGMA` does. (For a unit
+/// normal `P(|Z| <= z) = 2·Phi(z) − 1`, so the 10% point solves `Phi(z) = 0.55`.)
 const Z10: f64 = 0.12566;
 
 /// Recover a coverage field for a two-colour (bilevel) image.
 ///
-/// `F` and `B` are estimated as robust extremes of the luminance distribution rather
-/// than as the min and max, so a stray speck or a JPEG overshoot cannot define the
-/// colour axis for the whole image.
+/// The image is first composited over white, so transparency reads as paper. `F` and `B`
+/// are estimated as robust extremes of the luminance distribution (Rec. 709 weights on the
+/// sRGB values) rather than as the min and max, so a stray speck or a JPEG overshoot cannot
+/// define the colour axis for the whole image: each is the mean colour of the pixels whose
+/// luminance lies within 15% of the range from its extreme. Each pixel's coverage is then
+/// the least-squares projection from the module docs, `a = (P−B)·(F−B) / |F−B|²`, clamped
+/// to `[0, 1]`. The darker extreme is always taken as the foreground.
+///
+/// `sigma_alpha = sigma_pixel / |F−B| · min(1 / max(saturation, 0.05), 8)`: noise
+/// propagated through the projection, inflated when the foreground was never observed
+/// (see `saturation` below and on [`CoverageField`]).
+///
+/// Edge cases: an empty image returns an empty field; a uniform one (`F == B`) returns an
+/// all-zero field with `sigma_alpha = 0`, since there is no boundary to find.
 pub fn bilevel_coverage(img: &Rgba) -> CoverageField {
     let (w, h) = (img.width, img.height);
     let rgb = img.composited([1.0, 1.0, 1.0]);
@@ -392,6 +448,10 @@ pub fn bilevel_coverage(img: &Rgba) -> CoverageField {
     }
 }
 
+/// Mean colour of the pixels whose luminance satisfies `pred`, or `fallback` if none does.
+///
+/// `rgb` and `lum` are parallel per-pixel arrays (sRGB `0..1` and its luminance). The sum
+/// is accumulated in f64 so a large image does not lose precision.
 fn mean_rgb_where(
     rgb: &[[f32; 3]],
     lum: &[f32],
@@ -424,7 +484,8 @@ fn mean_rgb_where(
 /// 1.00 on a JPEG and says so in its own doc: compression adds ringing rather than width,
 /// and that is the noise estimate's business, not this one's. But [`estimate_noise`] cannot
 /// see it either, and says so too: an icon is mostly empty, so more than half its pixels are
-/// exactly flat, the median Laplacian is zero, and the estimate sits on [`NOISE_FLOOR`]
+/// exactly flat, the median (and so the lower quantile it now reads) of the Laplacian is
+/// zero, and the estimate sits on [`NOISE_FLOOR`]
 /// however damaged the file is. Measured over 150 rendered SVGs at four qualities, the
 /// shipped estimate is the same constant 0.00196 for a clean render, a quality-85 JPEG and a
 /// quality-35 JPEG, while the true deviation from the clean original rises 0.0000, 0.0042,
@@ -451,8 +512,20 @@ fn mean_rgb_where(
 /// threshold it takes clean brand logos from 19% to 3.8% while still catching 82 to 91% of
 /// JPEG. Measured across benchmark datasets.
 ///
+/// In symbols, with `L` the 4-neighbour Laplacian of Rec. 709 luminance and `d` the chamfer
+/// distance to the nearest pixel whose gradient exceeds 24/255:
+///
+/// ```text
+///     core  = { |L_i| : d_i <= 1 px }         ring = { |L_i| : 3 px < d_i <= 7 px }
+///     ratio = P90(ring) / P50(core)
+///     hot   = ring pixels with |L| > P60(ring)
+///     score = ratio · (#hot right/down neighbour pairs whose L changes sign) / (#hot pairs)
+/// ```
+///
 /// Returns 0.0 when there is no edge to measure around, which is the safe answer: the guard
-/// this feeds is only ever switched on by positive evidence.
+/// this feeds is only ever switched on by positive evidence. The same holds for images
+/// under 9x9, a buffer shorter than `width * height`, or fewer than 64 samples in either
+/// set or 64 hot pairs.
 pub fn ringing_score(rgb: &[[f32; 3]], width: usize, height: usize) -> f64 {
     /// A gradient magnitude below this is not an edge worth measuring around.
     const EDGE_FLOOR: f32 = 24.0 / 255.0;
@@ -472,60 +545,9 @@ pub fn ringing_score(rgb: &[[f32; 3]], width: usize, height: usize) -> f64 {
         .map(|p| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2])
         .collect();
 
-    let mut dist = vec![u16::MAX / 2; width * height];
-    let mut any_edge = false;
-    for y in 1..height - 1 {
-        for x in 1..width - 1 {
-            let i = y * width + x;
-            let gx = lum[i + 1] - lum[i - 1];
-            let gy = lum[i + width] - lum[i - width];
-            if (gx * gx + gy * gy).sqrt() > EDGE_FLOOR {
-                dist[i] = 0;
-                any_edge = true;
-            }
-        }
-    }
-    if !any_edge {
+    let Some(dist) = chamfer_distance_to_edges(&lum, width, height, EDGE_FLOOR) else {
         return 0.0;
-    }
-    for y in 0..height {
-        for x in 0..width {
-            let i = y * width + x;
-            let mut best = dist[i];
-            if y > 0 {
-                best = best.min(dist[i - width] + 3);
-                if x > 0 {
-                    best = best.min(dist[i - width - 1] + 4);
-                }
-                if x + 1 < width {
-                    best = best.min(dist[i - width + 1] + 4);
-                }
-            }
-            if x > 0 {
-                best = best.min(dist[i - 1] + 3);
-            }
-            dist[i] = best;
-        }
-    }
-    for y in (0..height).rev() {
-        for x in (0..width).rev() {
-            let i = y * width + x;
-            let mut best = dist[i];
-            if y + 1 < height {
-                best = best.min(dist[i + width] + 3);
-                if x > 0 {
-                    best = best.min(dist[i + width - 1] + 4);
-                }
-                if x + 1 < width {
-                    best = best.min(dist[i + width + 1] + 4);
-                }
-            }
-            if x + 1 < width {
-                best = best.min(dist[i + 1] + 3);
-            }
-            dist[i] = best;
-        }
-    }
+    };
 
     let lap = |i: usize| -> f32 {
         4.0 * lum[i] - lum[i - 1] - lum[i + 1] - lum[i - width] - lum[i + width]
@@ -592,6 +614,81 @@ pub fn ringing_score(rgb: &[[f32; 3]], width: usize, height: usize) -> f64 {
     ratio * (flips as f64 / pairs as f64)
 }
 
+/// Chamfer 3-4 distance from every pixel to the nearest strong edge of `lum`.
+///
+/// A pixel is an edge (distance 0) when its central-difference gradient
+/// `sqrt((l[x+1]−l[x−1])² + (l[y+1]−l[y−1])²)` exceeds `edge_floor`; border pixels are never
+/// edges. Distances are then propagated by the classic two-pass chamfer transform: a
+/// forward raster pass taking the minimum over the already-visited N, NW, NE and W
+/// neighbours, then a backward pass over S, SW, SE and E, with axial steps costing 3 and
+/// diagonal steps 4. The result approximates Euclidean distance times 3 (3 units to a
+/// pixel), in integers. Pixels with no edge anywhere keep `u16::MAX / 2`, so the additions
+/// cannot overflow.
+///
+/// Returns `None` when the image has no edge at all. Needs `width, height >= 3`.
+fn chamfer_distance_to_edges(
+    lum: &[f32],
+    width: usize,
+    height: usize,
+    edge_floor: f32,
+) -> Option<Vec<u16>> {
+    let mut dist = vec![u16::MAX / 2; width * height];
+    let mut any_edge = false;
+    for y in 1..height - 1 {
+        for x in 1..width - 1 {
+            let i = y * width + x;
+            let gx = lum[i + 1] - lum[i - 1];
+            let gy = lum[i + width] - lum[i - width];
+            if (gx * gx + gy * gy).sqrt() > edge_floor {
+                dist[i] = 0;
+                any_edge = true;
+            }
+        }
+    }
+    if !any_edge {
+        return None;
+    }
+    for y in 0..height {
+        for x in 0..width {
+            let i = y * width + x;
+            let mut best = dist[i];
+            if y > 0 {
+                best = best.min(dist[i - width] + 3);
+                if x > 0 {
+                    best = best.min(dist[i - width - 1] + 4);
+                }
+                if x + 1 < width {
+                    best = best.min(dist[i - width + 1] + 4);
+                }
+            }
+            if x > 0 {
+                best = best.min(dist[i - 1] + 3);
+            }
+            dist[i] = best;
+        }
+    }
+    for y in (0..height).rev() {
+        for x in (0..width).rev() {
+            let i = y * width + x;
+            let mut best = dist[i];
+            if y + 1 < height {
+                best = best.min(dist[i + width] + 3);
+                if x > 0 {
+                    best = best.min(dist[i + width - 1] + 4);
+                }
+                if x + 1 < width {
+                    best = best.min(dist[i + width + 1] + 4);
+                }
+            }
+            if x + 1 < width {
+                best = best.min(dist[i + 1] + 3);
+            }
+            dist[i] = best;
+        }
+    }
+    Some(dist)
+}
+
 /// How many raster pixels one unit of genuine detail occupies — the intake's
 /// point-spread width, in pixels.
 ///
@@ -614,6 +711,17 @@ pub fn ringing_score(rgb: &[[f32; 3]], width: usize, height: usize) -> f64 {
 /// `d/w^2`, so their ratio is `w` and the contrast cancels: this reads a width
 /// without needing to know how strong the edge is. Taken as a median over pixels
 /// that sit on a real edge, so flat interiors and single-pixel noise do not vote.
+///
+/// Concretely, for every run of three pixels `a, b, c` along a row or a column of the
+/// channel mean `(r+g+b)/3`, with `d0 = b − a` and `d1 = c − b`:
+///
+/// ```text
+///     w_obs = max(|d0|, |d1|) / |d1 − d0|     kept when max(|d0|, |d1|) > 2/255
+///     scale = max(1, median(clamp(w_obs, 0.25, 64)))
+/// ```
+///
+/// A straight ramp has `d1 = d0` and says nothing (skipped, as is any non-finite ratio);
+/// fewer than 16 votes returns 1.0.
 ///
 /// Measured behaviour: exactly
 /// 1.00 for native renders at 128, 512 and 1024; 2.39 and 4.00 for 4x and 8x
@@ -672,208 +780,6 @@ pub fn intake_scale(rgb: &[[f32; 3]], width: usize, height: usize) -> f64 {
     w_obs[mid].max(1.0)
 }
 
-/// Area-average an image down to `nw` x `nh` via exact continuous 2D area integration.
-///
-/// For non-integer downsampling ratios `(sx, sy)`, target pixel cells partition continuous
-/// source space with exact area weights summing to `sx * sy`. Source pixels spanning multiple
-/// target cells are partitioned proportionally according to continuous box cell overlap,
-/// eliminating pixel double-counting and periodic spatial aliasing ripples along edges.
-///
-/// Colour is averaged premultiplied and then un-premultiplied, so a transparent
-/// pixel's stored colour cannot bleed into its neighbours as a dark halo — which
-/// downstream would become a traced contour that is not in the artwork.
-pub fn downsample_to(img: &Rgba, nw: usize, nh: usize) -> Rgba {
-    let (w, h) = (img.width, img.height);
-    if w == 0 || h == 0 || nw == 0 || nh == 0 || (nw == w && nh == h) || img.data.len() < w * h * 4
-    {
-        return img.clone();
-    }
-    let mut data = vec![0.0f32; nw * nh * 4];
-    let sx = w as f64 / nw as f64;
-    let sy = h as f64 / nh as f64;
-
-    for oy in 0..nh {
-        let y_start = oy as f64 * sy;
-        let y_end = if oy + 1 == nh {
-            h as f64
-        } else {
-            (oy + 1) as f64 * sy
-        };
-        let y0 = (y_start.floor() as usize).min(h);
-        let y1 = (y_end.ceil() as usize).min(h);
-
-        for ox in 0..nw {
-            let x_start = ox as f64 * sx;
-            let x_end = if ox + 1 == nw {
-                w as f64
-            } else {
-                (ox + 1) as f64 * sx
-            };
-            let x0 = (x_start.floor() as usize).min(w);
-            let x1 = (x_end.ceil() as usize).min(w);
-
-            let (mut acc, mut a_sum, mut total_weight) = ([0.0f64; 3], 0.0f64, 0.0f64);
-
-            for y in y0..y1 {
-                let wy = ((y + 1) as f64).min(y_end) - (y as f64).max(y_start);
-                if wy <= 0.0 {
-                    continue;
-                }
-                for x in x0..x1 {
-                    let wx = ((x + 1) as f64).min(x_end) - (x as f64).max(x_start);
-                    if wx <= 0.0 {
-                        continue;
-                    }
-                    let weight = wx * wy;
-                    total_weight += weight;
-                    let p = img.pixel(x, y);
-                    let a = p[3] as f64;
-                    let wa = a * weight;
-                    for c in 0..3 {
-                        acc[c] += p[c] as f64 * wa;
-                    }
-                    a_sum += wa;
-                }
-            }
-
-            let o = (oy * nw + ox) * 4;
-            let alpha = if total_weight > 0.0 {
-                let a = (a_sum / total_weight) as f32;
-                if a.is_finite() {
-                    a.clamp(0.0, 1.0)
-                } else {
-                    0.0
-                }
-            } else {
-                0.0
-            };
-            for c in 0..3 {
-                data[o + c] = if a_sum > 1e-9 {
-                    let v = (acc[c] / a_sum) as f32;
-                    if v.is_finite() {
-                        v.clamp(0.0, 1.0)
-                    } else {
-                        0.0
-                    }
-                } else {
-                    0.0
-                };
-            }
-            data[o + 3] = alpha;
-        }
-    }
-
-    Rgba {
-        width: nw,
-        height: nh,
-        data,
-    }
-}
-
-/// Exact-area (box) downsample of an 8-bit RGBA buffer to `nw x nh` — the same operator
-/// [`downsample_to`] applies to an f32 [`Rgba`], read straight from the decoder's 8-bit
-/// buffer so the decode-time `--max-dim` cap never has to materialise the full-resolution
-/// f32 image.
-///
-/// The arithmetic is identical to [`downsample_to`]: each target pixel is the exact
-/// area-weighted average of the source pixels under its footprint, with fractional weights
-/// on the boundary pixels, colour averaged premultiplied and then un-premultiplied. The only
-/// difference is that source channels are read at 8 bits per channel, which differs from the
-/// f32 path by at most the 8-bit quantisation of the input.
-pub fn box_downsample_rgba8(src: &[u8], w: usize, h: usize, nw: usize, nh: usize) -> Rgba {
-    if w == 0 || h == 0 || nw == 0 || nh == 0 || (nw == w && nh == h) {
-        let mut data = vec![0.0f32; w * h * 4];
-        for (i, &b) in src.iter().take(w * h * 4).enumerate() {
-            data[i] = b as f32 / 255.0;
-        }
-        return Rgba {
-            width: w,
-            height: h,
-            data,
-        };
-    }
-    let mut data = vec![0.0f32; nw * nh * 4];
-    let sx = w as f64 / nw as f64;
-    let sy = h as f64 / nh as f64;
-
-    for oy in 0..nh {
-        let y_start = oy as f64 * sy;
-        let y_end = if oy + 1 == nh {
-            h as f64
-        } else {
-            (oy + 1) as f64 * sy
-        };
-        let y0 = (y_start.floor() as usize).min(h);
-        let y1 = (y_end.ceil() as usize).min(h);
-
-        for ox in 0..nw {
-            let x_start = ox as f64 * sx;
-            let x_end = if ox + 1 == nw {
-                w as f64
-            } else {
-                (ox + 1) as f64 * sx
-            };
-            let x0 = (x_start.floor() as usize).min(w);
-            let x1 = (x_end.ceil() as usize).min(w);
-
-            let (mut acc, mut a_sum, mut total_weight) = ([0.0f64; 3], 0.0f64, 0.0f64);
-
-            for y in y0..y1 {
-                let wy = ((y + 1) as f64).min(y_end) - (y as f64).max(y_start);
-                if wy <= 0.0 {
-                    continue;
-                }
-                for x in x0..x1 {
-                    let wx = ((x + 1) as f64).min(x_end) - (x as f64).max(x_start);
-                    if wx <= 0.0 {
-                        continue;
-                    }
-                    let weight = wx * wy;
-                    total_weight += weight;
-                    let p = (y * w + x) * 4;
-                    let a = src[p + 3] as f64 / 255.0;
-                    let wa = a * weight;
-                    for c in 0..3 {
-                        acc[c] += (src[p + c] as f64 / 255.0) * wa;
-                    }
-                    a_sum += wa;
-                }
-            }
-
-            let o = (oy * nw + ox) * 4;
-            let alpha = if total_weight > 0.0 {
-                let a = (a_sum / total_weight) as f32;
-                if a.is_finite() {
-                    a.clamp(0.0, 1.0)
-                } else {
-                    0.0
-                }
-            } else {
-                0.0
-            };
-            for c in 0..3 {
-                data[o + c] = if a_sum > 1e-9 {
-                    let v = (acc[c] / a_sum) as f32;
-                    if v.is_finite() {
-                        v.clamp(0.0, 1.0)
-                    } else {
-                        0.0
-                    }
-                } else {
-                    0.0
-                };
-            }
-            data[o + 3] = alpha;
-        }
-    }
-
-    Rgba {
-        width: nw,
-        height: nh,
-        data,
-    }
-}
-
 /// Mean absolute round-trip error, in 8-bit levels, above which a downsample has lost
 /// something.
 ///
@@ -906,8 +812,16 @@ const OVERSAMPLE_TOL: f64 = 3.0;
 /// drawing. Repeated, that gives the factor, and it is indifferent to whether the surplus
 /// pixels are crisp or blurred, asking only whether they say anything.
 ///
+/// For `k` in 2, 4, 8: box-average `k x k` blocks (the trailing `width mod k` columns and
+/// rows are dropped), resample back to full size bilinearly — pixel centre `x` maps to
+/// `(x + 0.5)/k − 0.5` in the small image, clamped to its edge — and take the mean absolute
+/// error over all pixels and channels, in 8-bit levels. The largest `k` whose error stays
+/// under `OVERSAMPLE_TOL`, with every smaller `k` also passing, is the answer. The search
+/// stops once the small image would be under 8 px on a side.
+///
 /// Returns 1 for a native render, which is every raster in the corpus, so a caller that
-/// scales by this leaves native intake exactly as it found it.
+/// scales by this leaves native intake exactly as it found it; also for anything under
+/// 16x16 or a buffer shorter than `width * height`.
 pub fn oversample_factor(rgb: &[[f32; 3]], width: usize, height: usize) -> usize {
     if width < 16 || height < 16 || rgb.len() < width * height {
         return 1;
@@ -1289,9 +1203,9 @@ mod tests {
                  gate story in `crate::lossy_container` needs revisiting"
         );
         // And neither does the noise estimate, which is the part that makes this a real
-        // hole rather than a merely awkward one. `estimate_noise` is a *median* of the
-        // Laplacian: ringing lives in a band beside the edge while most of the image stays
-        // flat, so the median never leaves its floor. Measured on the JPEG that prompted
+        // hole rather than a merely awkward one. `estimate_noise` reads a low quantile of
+        // the Laplacian: ringing lives in a band beside the edge while most of the image
+        // stays flat, so that quantile never leaves its floor. Measured on the JPEG that prompted
         // the fix it read 0.50/255 -- the floor -- exactly as a clean render does. With
         // both pixel detectors blind, the container is the only honest witness left.
         let clean = ramp(w, h, 30.0, 1.0);
@@ -1318,350 +1232,6 @@ mod tests {
     }
 
     #[test]
-    fn downsample_to_is_identity_at_the_same_size() {
-        let img = Rgba {
-            width: 8,
-            height: 8,
-            data: (0..8 * 8 * 4).map(|i| (i % 255) as f32 / 255.0).collect(),
-        };
-        let same = downsample_to(&img, 8, 8);
-        assert_eq!(same.data, img.data);
-    }
-
-    #[test]
-    fn downsample_does_not_bleed_colour_from_transparent_pixels() {
-        // The halo bug this function's doc comment exists to prevent: a transparent pixel
-        // storing black must not darken an opaque white neighbour.
-        let (w, h) = (4, 4);
-        let mut data = vec![0.0f32; w * h * 4];
-        for i in 0..w * h {
-            let opaque = i % 2 == 0;
-            let px = if opaque {
-                [1.0, 1.0, 1.0, 1.0]
-            } else {
-                [0.0, 0.0, 0.0, 0.0]
-            };
-            data[i * 4..i * 4 + 4].copy_from_slice(&px);
-        }
-        let small = downsample_to(
-            &Rgba {
-                width: w,
-                height: h,
-                data,
-            },
-            2,
-            2,
-        );
-        for i in 0..4 {
-            let c = &small.data[i * 4..i * 4 + 3];
-            assert!(
-                c.iter().all(|&v| v > 0.99),
-                "transparent black bled into the average: {c:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn downsample_non_integer_ratio_partitions_pixels_proportionally() {
-        // 5x5 down to 2x2: sx = 2.5, sy = 2.5
-        // A single delta pixel at (2, 2) spans continuous coordinates [2, 3] x [2, 3].
-        // Target cells:
-        // (0, 0): [0, 2.5] x [0, 2.5] -> overlaps [2, 2.5] x [2, 2.5] -> area 0.25
-        // (1, 0): [2.5, 5] x [0, 2.5] -> overlaps [2.5, 3] x [2, 2.5] -> area 0.25
-        // (0, 1): [0, 2.5] x [2.5, 5] -> overlaps [2, 2.5] x [2.5, 3] -> area 0.25
-        // (1, 1): [2.5, 5] x [2.5, 5] -> overlaps [2.5, 3] x [2.5, 3] -> area 0.25
-        // Total area = 1.0 (exact partition of unity without double-counting).
-        let (w, h) = (5, 5);
-        let mut data = vec![0.0f32; w * h * 4];
-        let p_idx = (2 * w + 2) * 4;
-        data[p_idx] = 1.0;
-        data[p_idx + 1] = 1.0;
-        data[p_idx + 2] = 1.0;
-        data[p_idx + 3] = 1.0;
-
-        let img = Rgba {
-            width: w,
-            height: h,
-            data,
-        };
-        let small = downsample_to(&img, 2, 2);
-
-        // Each target cell area is sx * sy = 2.5 * 2.5 = 6.25.
-        // The expected alpha in each target pixel is 0.25 / 6.25 = 0.04.
-        let expected_alpha = 0.25 / 6.25;
-        let mut total_alpha = 0.0f64;
-        for i in 0..4 {
-            let a = small.data[i * 4 + 3] as f64;
-            total_alpha += a;
-            assert!(
-                (a - expected_alpha).abs() < 1e-6,
-                "target pixel {i} alpha {a} != expected {expected_alpha}"
-            );
-            // Color should remain [1.0, 1.0, 1.0] without darkening
-            for c in 0..3 {
-                assert!(
-                    (small.data[i * 4 + c] - 1.0).abs() < 1e-5,
-                    "target pixel {i} channel {c} corrupted"
-                );
-            }
-        }
-        // Total alpha integrated over all target cells: sum(a * 6.25) = 4 * (0.04 * 6.25) = 1.0
-        assert!((total_alpha * 6.25 - 1.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn downsample_ramp_matches_piecewise_constant_integral() {
-        // Pixel values are constant on each source cell, not a continuous ramp.
-        let (w, h, nw, nh) = (100, 4, 41, 3);
-        let mut data = vec![0.0; w * h * 4];
-        for y in 0..h {
-            for x in 0..w {
-                let i = (y * w + x) * 4;
-                data[i..i + 3].fill(x as f32 / w as f32);
-                data[i + 3] = 1.0;
-            }
-        }
-        let small = downsample_to(
-            &Rgba {
-                width: w,
-                height: h,
-                data,
-            },
-            nw,
-            nh,
-        );
-        // Closed-form antiderivative of floor(x)/w, independent of overlap code.
-        let integral = |x: f64| {
-            let n = x.floor();
-            (n * (n - 1.0) / 2.0 + n * (x - n)) / w as f64
-        };
-        let sx = w as f64 / nw as f64;
-        for y in 0..nh {
-            for x in 0..nw {
-                let expected = (integral((x + 1) as f64 * sx) - integral(x as f64 * sx)) / sx;
-                assert!((small.pixel(x, y)[0] as f64 - expected).abs() < 1e-7);
-            }
-        }
-    }
-
-    #[test]
-    fn downsample_partitions_every_source_impulse() {
-        // Exercise the real downsampler for every source pixel, including borders,
-        // with asymmetric fractional ratios and mixed up/downsampling.
-        for (w, h, nw, nh) in [(7, 5, 3, 2), (11, 7, 4, 3), (5, 3, 2, 7)] {
-            let area = (w * h) as f64 / (nw * nh) as f64;
-            let mut target_sums = vec![0.0; nw * nh];
-            for source in 0..w * h {
-                let mut data = vec![0.0; w * h * 4];
-                data[source * 4..source * 4 + 4].fill(1.0);
-                let small = downsample_to(
-                    &Rgba {
-                        width: w,
-                        height: h,
-                        data,
-                    },
-                    nw,
-                    nh,
-                );
-                let mut mass = 0.0;
-                for (i, sum) in target_sums.iter_mut().enumerate() {
-                    let alpha = small.data[i * 4 + 3] as f64;
-                    mass += alpha * area;
-                    *sum += alpha;
-                }
-                assert!((mass - 1.0).abs() < 1e-6, "source {source}: {mass}");
-            }
-            for sum in target_sums {
-                assert!((sum - 1.0).abs() < 1e-6, "target coverage {sum}");
-            }
-        }
-    }
-
-    #[test]
-    fn downsample_edge_dimensions_preserve_safety() {
-        // 1x1 image downsampled / upsampled
-        let one = Rgba {
-            width: 1,
-            height: 1,
-            data: vec![0.5, 0.4, 0.3, 0.8],
-        };
-        let down1 = downsample_to(&one, 1, 1);
-        assert_eq!(down1.data, one.data);
-
-        let up2 = downsample_to(&one, 2, 2);
-        assert_eq!(up2.width, 2);
-        assert_eq!(up2.height, 2);
-        for i in 0..4 {
-            assert!((up2.data[i * 4] - 0.5).abs() < 1e-5);
-            assert!((up2.data[i * 4 + 1] - 0.4).abs() < 1e-5);
-            assert!((up2.data[i * 4 + 2] - 0.3).abs() < 1e-5);
-            assert!((up2.data[i * 4 + 3] - 0.8).abs() < 1e-5);
-        }
-
-        // Large to 1x1
-        let img = Rgba {
-            width: 7,
-            height: 5,
-            data: vec![1.0; 7 * 5 * 4],
-        };
-        let down_to_one = downsample_to(&img, 1, 1);
-        assert_eq!(down_to_one.width, 1);
-        assert_eq!(down_to_one.height, 1);
-        assert!((down_to_one.data[0] - 1.0).abs() < 1e-5);
-        assert!((down_to_one.data[3] - 1.0).abs() < 1e-5);
-    }
-
-    #[test]
-    fn downsample_conserves_total_energy_for_arbitrary_non_integer_ratios() {
-        let (w, h) = (37, 23);
-        let mut data = vec![0.0f32; w * h * 4];
-        let mut src_sum = 0.0f64;
-        for y in 0..h {
-            for x in 0..w {
-                let v = ((x * 7 + y * 13) % 256) as f32 / 255.0;
-                let a = ((x * 11 + y * 5) % 256) as f32 / 255.0;
-                let i = (y * w + x) * 4;
-                data[i] = v;
-                data[i + 1] = v;
-                data[i + 2] = v;
-                data[i + 3] = a;
-                src_sum += (v * a) as f64;
-            }
-        }
-        let img = Rgba {
-            width: w,
-            height: h,
-            data,
-        };
-        let (nw, nh) = (17, 11);
-        let small = downsample_to(&img, nw, nh);
-
-        let sx = w as f64 / nw as f64;
-        let sy = h as f64 / nh as f64;
-        let cell_area = sx * sy;
-        let mut dst_sum = 0.0f64;
-        for oy in 0..nh {
-            for ox in 0..nw {
-                let i = (oy * nw + ox) * 4;
-                let v = small.data[i] as f64;
-                let a = small.data[i + 3] as f64;
-                dst_sum += v * a * cell_area;
-            }
-        }
-        let rel_err = (dst_sum - src_sum).abs() / src_sum;
-        assert!(
-            rel_err < 1e-5,
-            "energy not conserved: src={src_sum}, dst={dst_sum}, rel_err={rel_err}"
-        );
-    }
-
-    #[test]
-    fn downsample_zero_dimensions_or_truncated_buffer_is_safe() {
-        // Zero dimensions
-        let empty_w = Rgba {
-            width: 0,
-            height: 5,
-            data: vec![],
-        };
-        let out = downsample_to(&empty_w, 10, 10);
-        assert_eq!(out.width, 0);
-
-        let empty_h = Rgba {
-            width: 5,
-            height: 0,
-            data: vec![],
-        };
-        let out = downsample_to(&empty_h, 10, 10);
-        assert_eq!(out.height, 0);
-
-        let valid = Rgba {
-            width: 4,
-            height: 4,
-            data: vec![0.5; 64],
-        };
-        let out_zero_nw = downsample_to(&valid, 0, 4);
-        assert_eq!(out_zero_nw.width, 4);
-
-        let out_zero_nh = downsample_to(&valid, 4, 0);
-        assert_eq!(out_zero_nh.height, 4);
-
-        // Truncated data buffer
-        let truncated = Rgba {
-            width: 4,
-            height: 4,
-            data: vec![0.5; 10],
-        };
-        let out_trunc = downsample_to(&truncated, 2, 2);
-        assert_eq!(out_trunc.data.len(), 10);
-    }
-
-    #[test]
-    fn downsample_anisotropic_scaling_conserves_weights() {
-        // Downsampling along X (sx = 3.333), upsampling along Y (sy = 0.25)
-        let (w, h) = (10, 2);
-        let (nw, nh) = (3, 8);
-        let mut data = vec![0.0f32; w * h * 4];
-        for y in 0..h {
-            for x in 0..w {
-                let i = (y * w + x) * 4;
-                data[i] = 0.8;
-                data[i + 1] = 0.4;
-                data[i + 2] = 0.2;
-                data[i + 3] = 1.0;
-            }
-        }
-        let img = Rgba {
-            width: w,
-            height: h,
-            data,
-        };
-        let out = downsample_to(&img, nw, nh);
-        assert_eq!(out.width, nw);
-        assert_eq!(out.height, nh);
-        for i in 0..nw * nh {
-            assert!((out.data[i * 4] - 0.8).abs() < 1e-5);
-            assert!((out.data[i * 4 + 1] - 0.4).abs() < 1e-5);
-            assert!((out.data[i * 4 + 2] - 0.2).abs() < 1e-5);
-            assert!((out.data[i * 4 + 3] - 1.0).abs() < 1e-5);
-        }
-    }
-
-    #[test]
-    fn downsample_solid_color_and_transparent_pixels_preserve_exact_invariants() {
-        // Solid opaque color
-        let (w, h) = (33, 19);
-        let (nw, nh) = (11, 7);
-        let data = [0.7f32, 0.2, 0.9, 1.0].repeat(w * h);
-        let img = Rgba {
-            width: w,
-            height: h,
-            data,
-        };
-        let out = downsample_to(&img, nw, nh);
-        for i in 0..nw * nh {
-            assert!((out.data[i * 4] - 0.7).abs() < 1e-5);
-            assert!((out.data[i * 4 + 1] - 0.2).abs() < 1e-5);
-            assert!((out.data[i * 4 + 2] - 0.9).abs() < 1e-5);
-            assert!((out.data[i * 4 + 3] - 1.0).abs() < 1e-5);
-        }
-
-        // Fully transparent pixels
-        let data_trans = [1.0f32, 0.5, 0.2, 0.0].repeat(w * h);
-        let img_trans = Rgba {
-            width: w,
-            height: h,
-            data: data_trans,
-        };
-        let out_trans = downsample_to(&img_trans, nw, nh);
-        for i in 0..nw * nh {
-            assert_eq!(out_trans.data[i * 4 + 3], 0.0);
-            assert_eq!(out_trans.data[i * 4], 0.0);
-            assert_eq!(out_trans.data[i * 4 + 1], 0.0);
-            assert_eq!(out_trans.data[i * 4 + 2], 0.0);
-        }
-    }
-
-    #[test]
     fn intake_scale_with_degenerate_or_nan_data_never_panics() {
         // Small dimensions
         assert_eq!(intake_scale(&[], 0, 0), 1.0);
@@ -1674,49 +1244,5 @@ mod tests {
         nan_rgb[25] = [0.5, f32::INFINITY, 0.5];
         let scale = intake_scale(&nan_rgb, 32, 32);
         assert!(scale.is_finite() && scale >= 1.0);
-    }
-
-    /// The decode-time box cap is the *same operator* as the f32 exact-area downsample, read
-    /// from an 8-bit source. The only difference allowed is the 8-bit quantisation of the
-    /// input, so the two must agree to within a couple of levels.
-    #[test]
-    fn box_downsample_rgba8_matches_downsample_to_within_8_bit_rounding() {
-        for &(w, h, nw, nh) in &[(37, 23, 17, 11), (64, 48, 8, 8), (40, 40, 15, 15)] {
-            let mut seed = 7u32;
-            let mut next = move || {
-                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-                ((seed >> 8) as f64 + 0.5) / 16777216.0
-            };
-            let src = {
-                let mut data = vec![0.0f32; w * h * 4];
-                for p in 0..w * h {
-                    for c in 0..3 {
-                        data[p * 4 + c] = next() as f32;
-                    }
-                    data[p * 4 + 3] = (0.5 + 0.5 * next()) as f32;
-                }
-                Rgba {
-                    width: w,
-                    height: h,
-                    data,
-                }
-            };
-            let u8buf: Vec<u8> = src
-                .data
-                .iter()
-                .map(|&v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
-                .collect();
-
-            let reference = downsample_to(&src, nw, nh);
-            let from_u8 = box_downsample_rgba8(&u8buf, w, h, nw, nh);
-            assert_eq!((from_u8.width, from_u8.height), (nw, nh));
-            for i in 0..nw * nh * 4 {
-                let (a, b) = (reference.data[i] as f64, from_u8.data[i] as f64);
-                assert!(
-                    (a - b).abs() < 2.0 / 255.0,
-                    "{w}x{h} -> {nw}x{nh}: channel {i}: f32 {a} vs u8 {b}"
-                );
-            }
-        }
     }
 }

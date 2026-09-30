@@ -296,3 +296,129 @@ fn remembered_rejections_change_no_merge() {
     }
     assert!(total > 0, "the test boundaries never merged anything");
 }
+
+/// The merge pass as it was before its speed-ups: every run tried in every sweep, every
+/// candidate searched exhaustively and priced afterwards.
+fn merge_reference(
+    path: &mut FittedPath,
+    poly: &Polyline,
+    vertices: &[usize],
+    cfg: &FitConfig,
+) -> usize {
+    if path.segments.len() < 2 || vertices.len() != path.segments.len() + 1 {
+        return 0;
+    }
+    let mut verts = vertices.to_vec();
+    let mut merged = 0usize;
+    for _ in 0..MAX_ROUNDS {
+        let before = merged;
+        let mut m = 0usize;
+        while m + 1 < path.segments.len() {
+            let mut best: Option<(usize, [Point; 4])> = None;
+            for run in (2..=MAX_RUN.min(path.segments.len() - m)).rev() {
+                if m + run >= verts.len() {
+                    continue;
+                }
+                let (a, b) = (verts[m], verts[m + run]);
+                if b <= a + 3 || b - a > MAX_SPAN {
+                    continue;
+                }
+                if path.segments[m..m + run]
+                    .iter()
+                    .any(|s| matches!(s, Segment::Arc { .. }))
+                {
+                    continue;
+                }
+                let run_start = if m == 0 {
+                    path.start
+                } else {
+                    path.segments[m - 1].end()
+                };
+                let run_end = path.segments[m + run - 1].end();
+                let Some(c) = free_cubic_reference(poly, a, b, run_start, run_end) else {
+                    continue;
+                };
+                if cubic_self_intersects(c[0], c[1], c[2], c[3]) {
+                    continue;
+                }
+                let (mut old_chi2, mut old_params, mut cur) = (0.0, 0.0, run_start);
+                for q in m..m + run {
+                    let seg = &path.segments[q];
+                    old_params += params_of(seg);
+                    let quad = match *seg {
+                        Segment::Cubic(c1, c2, e) => [cur, c1, c2, e],
+                        Segment::Line(e) => [cur, cur, e, e],
+                        Segment::Arc { end, .. } => [cur, cur, end, end],
+                    };
+                    old_chi2 += chi2(&quad, poly, verts[q], verts[q + 1]);
+                    cur = seg.end();
+                }
+                let new_chi2 = chi2(&c, poly, a, b);
+                let old_cost = 0.5 * old_chi2 + cfg.lambda * old_params;
+                let new_cost = 0.5 * new_chi2
+                    + cfg.lambda * (crate::multimodel::params_cubic() + BREAK_PARAMS);
+                if new_cost < old_cost + SMOOTH_SLACK * cfg.lambda {
+                    best = Some((run, c));
+                    break;
+                }
+            }
+            if let Some((run, c)) = best {
+                path.segments
+                    .splice(m..m + run, [Segment::Cubic(c[1], c[2], c[3])]);
+                verts.drain(m + 1..m + run);
+                merged += 1;
+            }
+            m += 1;
+        }
+        if merged == before {
+            break;
+        }
+    }
+    merged
+}
+
+/// The whole pass, with its early exits, memory and price floor, against the pass as it
+/// was: the same merges and the same cubics, bit for bit.
+#[test]
+fn merge_pass_is_unchanged_by_its_speed_ups() {
+    let mut rng = Rng(31);
+    let cfg = FitConfig::default();
+    let mut total = 0;
+    for poly in test_rings(&mut rng).into_iter().take(8) {
+        for span in [3, 6] {
+            let fit = crate::multimodel::optimal_multimodel_capped_full(&poly, &cfg, span);
+            let mut fast = fit.path.clone();
+            let merged = merge_free_cubics(&mut fast, &poly, &fit.vertices, &cfg);
+            let mut slow = fit.path.clone();
+            let merged_slow = merge_reference(&mut slow, &poly, &fit.vertices, &cfg);
+            assert_eq!(merged, merged_slow);
+            assert_eq!(format!("{fast:?}"), format!("{slow:?}"));
+            total += merged;
+        }
+    }
+    assert!(total > 0, "the test boundaries never merged anything");
+}
+
+/// The price floor's one piece of arithmetic: a non-negative half-residual added to the
+/// floor never rounds below it, for residuals from subnormal to huge.
+#[test]
+fn a_free_cubic_never_costs_less_than_its_parameters() {
+    let mut rng = Rng(5);
+    for lambda in [1e-3, 1.0, 7.85, 9.9, 1e3] {
+        let floor = lambda * (crate::multimodel::params_cubic() + BREAK_PARAMS);
+        for x in [
+            0.0,
+            f64::MIN_POSITIVE / 4.0,
+            1e-300,
+            1e-17,
+            1e-8,
+            0.3,
+            1e3,
+            1e300,
+        ] {
+            assert!(0.5 * x + floor >= floor);
+            let y = x * rng.next();
+            assert!(0.5 * y + floor >= floor);
+        }
+    }
+}

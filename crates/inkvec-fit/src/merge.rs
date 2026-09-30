@@ -612,23 +612,8 @@ fn merge_round(
             if rejected.0.contains(&key) {
                 continue;
             }
-            // Where this run actually starts and ends on the path, not on the contour.
-            let run_start = if m == 0 {
-                path.start
-            } else {
-                path.segments[m - 1].end()
-            };
-            let run_end = path.segments[m + run - 1].end();
-            let Some(c) = free_cubic(poly, a, b, run_start, run_end) else {
-                rejected.0.insert(key);
-                continue;
-            };
-            if cubic_self_intersects(c[0], c[1], c[2], c[3]) {
-                rejected.0.insert(key);
-                continue;
-            }
-
-            // Both sides scored by the objective that chose the run.
+            // Both sides are scored by the objective that chose the run. The old side does
+            // not depend on the candidate, so it is priced first.
             let mut old_chi2 = 0.0;
             let mut old_params = 0.0;
             let mut cur = if m == 0 {
@@ -648,10 +633,7 @@ fn merge_round(
                 old_chi2 += chi2(&quad, poly, sa, sb);
                 cur = seg.end();
             }
-            let new_chi2 = chi2(&c, poly, a, b);
             let old_cost = 0.5 * old_chi2 + cfg.lambda * old_params;
-            let new_cost =
-                0.5 * new_chi2 + cfg.lambda * (crate::multimodel::params_cubic() + BREAK_PARAMS);
             // A smoothness prior, expressed where it can be paid for.
             //
             // The objective has no preference between a curve and a polyline that fit
@@ -661,7 +643,36 @@ fn merge_round(
             // without disturbing anything else: the run's own vertices are kept, only the
             // model through them changes, and the cost of being wrong is bounded by the
             // slack allowed here. Zero slack is the objective's own answer.
-            if new_cost < old_cost + SMOOTH_SLACK * cfg.lambda {
+            let limit = old_cost + SMOOTH_SLACK * cfg.lambda;
+            // The free cubic costs at least its parameters: `½·χ² ≥ 0`, and adding a
+            // non-negative number cannot round below the other addend. A run that already
+            // costs no more than that floor can never be replaced, so its search, most of
+            // the pass's time, is not run. This is the dynamic program's own price-floor
+            // argument (`crate::multimodel`) applied to the merge. Not from the literature:
+            // it is a bound of this objective.
+            let floor = cfg.lambda * (crate::multimodel::params_cubic() + BREAK_PARAMS);
+            if floor >= limit {
+                rejected.0.insert(key);
+                continue;
+            }
+            // Where this run actually starts and ends on the path, not on the contour.
+            let run_start = if m == 0 {
+                path.start
+            } else {
+                path.segments[m - 1].end()
+            };
+            let run_end = path.segments[m + run - 1].end();
+            let Some(c) = free_cubic(poly, a, b, run_start, run_end) else {
+                rejected.0.insert(key);
+                continue;
+            };
+            if cubic_self_intersects(c[0], c[1], c[2], c[3]) {
+                rejected.0.insert(key);
+                continue;
+            }
+            let new_chi2 = chi2(&c, poly, a, b);
+            let new_cost = 0.5 * new_chi2 + floor;
+            if new_cost < limit {
                 best = Some((run, c, new_cost));
                 break;
             }

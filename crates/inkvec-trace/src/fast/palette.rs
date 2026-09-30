@@ -981,7 +981,8 @@ const REACH: usize = 4;
 /// black beside it in colour, a grey rim does not become red.
 const KEEP_OWN: f32 = 3.0;
 
-/// Below this many pixels (256 × 256) every pass of the palette runs on the calling thread.
+/// Below this many pixels (256 × 256) every pass of the palette runs on the calling thread,
+/// and so does every pass when rayon has a single worker.
 ///
 /// Every pass here is exact whatever the thread count, so this only decides speed. At
 /// 128 px (16 384 pixels) the per-pixel work of a whole pass is a tenth of a millisecond,
@@ -1042,7 +1043,9 @@ pub(crate) fn palette_and_labels(
             alpha_bits: 0,
         },
     };
-    let parallel = n >= PARALLEL_MIN_PIXELS;
+    // With one worker (the single-threaded WebAssembly build runs rayon inline) the banded
+    // histogram would only add its halo rows and merges, so it runs serially there too.
+    let parallel = n >= PARALLEL_MIN_PIXELS && rayon::current_num_threads() > 1;
     let (keys, bins) = keys_and_histogram(rgb, alpha, w, h, grid, parallel);
 
     let found = found_inks(&bins, grid, merge_distance, max_colors);

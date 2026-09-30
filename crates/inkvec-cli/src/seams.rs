@@ -31,8 +31,8 @@ use inkvec_core::Point;
 use inkvec_fit::curves::{arc_ellipse_center, Segment};
 use inkvec_fit::FittedPath;
 
+use crate::faces::FaceRings;
 use crate::rings::point_in_ring;
-use crate::FaceRings;
 
 /// How far a lower face reaches under an upper one, in pixels of the traced image.
 ///

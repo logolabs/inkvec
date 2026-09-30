@@ -45,10 +45,10 @@ use inkvec_trace::{
     Palette,
 };
 
-use crate::emit::{emit_decimals, primitive_d, MIN_RING_AREA};
-use crate::pathdata::fmt_ring;
-use crate::rings::{ring_area, ring_points};
-use crate::FaceRings;
+use crate::faces::FaceRings;
+use crate::pathdata::{emit_decimals, fmt_ring};
+use crate::primitive::primitive_d;
+use crate::rings::{ring_area, ring_points, MIN_RING_AREA};
 
 /// OKLab distance within which two faces are one colour: a shape this close to what it sits
 /// in takes the same tone, and a face this close to the border's colour is the ground.

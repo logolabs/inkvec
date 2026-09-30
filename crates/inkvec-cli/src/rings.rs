@@ -5,13 +5,41 @@
 //! fitted curves themselves rather than from the planar map, because by this point the
 //! curves are what will actually be drawn and they can differ from the polyline the map
 //! recorded by a fraction of a pixel.
+//!
+//! Two jobs live here, both on rings of fitted edges ([`crate::faces::Ring`]) in the traced
+//! image's pixel coordinates:
+//!
+//! * **Nesting** ([`nesting`]), for the emitters: each ring is flattened to a polygon that
+//!   follows its curves ([`ring_points`]), measured once ([`RingInfo`]: shoelace area,
+//!   bounding box, interior probe points), and tested for containment by the even-odd
+//!   crossing rule ([`point_in_ring`]) on a majority of probes ([`ring_inside`]). From
+//!   that come each face's outline rings and the smallest face containing it
+//!   ([`containment`]). Called from [`crate::emit`] and [`crate::mono`].
+//! * **Repair** ([`repair_ring_crossings`]), for the colour pipeline after the fit: find
+//!   rings whose assembled curves cross themselves, and refit the guilty edges under a
+//!   tightening cap on the span of each segment until none do. Called from
+//!   [`crate::pipeline`].
 
-use crate::{FaceRings, Ring};
+use crate::diag;
+use crate::faces::{FaceRings, Ring};
 use inkvec_core::Point;
 use inkvec_fit::{curves::Segment, multimodel, simple, FitConfig, FittedPath};
 
+/// Smallest area, in square pixels, that a ring has to enclose to be worth emitting.
+///
+/// Far below a pixel, so that genuinely thin features survive (see [`nesting`]); what it
+/// removes are the zero-area walks out along a chain and straight back that the planar
+/// map can produce. Also the floor the monochrome emitter ([`crate::mono`]) writes with.
+pub(crate) const MIN_RING_AREA: f64 = 0.25;
+
 /// Containment forest over faces: `parent[i]` is the smallest face strictly containing
 /// face `i`, if any.
+///
+/// "Contains" means some outline ring of the candidate encloses more area than face `i`'s
+/// outline does and holds a majority of the interior probes of `i`'s first outline ring
+/// ([`ring_inside`]); "smallest" is by total outline area. A face with no outline has no
+/// parent. Quadratic in the number of faces, with each pair's test cut short by the
+/// bounding box.
 ///
 /// This is structure the planar map already knows and the output was throwing away. An
 /// artist's file is a tree — a body with its markings nested inside it — and 42% of the
@@ -89,9 +117,7 @@ pub(crate) fn nesting(order: &[FaceRings], fitted: &[FittedPath]) -> Nesting {
     let solid: Vec<Vec<usize>> = (0..order.len())
         .map(|i| {
             (0..order[i].len())
-                .filter(|&k| {
-                    pts[i][k].len() >= 3 && ring_area(&pts[i][k]) > crate::emit::MIN_RING_AREA
-                })
+                .filter(|&k| pts[i][k].len() >= 3 && ring_area(&pts[i][k]) > MIN_RING_AREA)
                 .collect()
         })
         .collect();
@@ -126,9 +152,11 @@ pub(crate) fn nesting(order: &[FaceRings], fitted: &[FittedPath]) -> Nesting {
 /// What the containment tests read from a ring, measured once: its area, its bounding box
 /// and its [`interior_probes`].
 pub(crate) struct RingInfo {
+    /// Enclosed area, px² ([`ring_area`]).
     pub(crate) area: f64,
     /// `[min x, min y, max x, max y]`, widened by [`BOX_SLACK`].
     bbox: [f64; 4],
+    /// Points strictly inside the ring ([`interior_probes`]).
     pub(crate) probes: Vec<Point>,
 }
 
@@ -139,6 +167,7 @@ pub(crate) struct RingInfo {
 const BOX_SLACK: f64 = 1e-6;
 
 impl RingInfo {
+    /// Measure `ring` (a closed polygon, px): its area, widened bounding box and probes.
     fn new(ring: &[Point]) -> Self {
         let mut bbox = [
             f64::INFINITY,
@@ -182,13 +211,33 @@ pub(crate) fn ring_infos(pts: &[Vec<Vec<Point>>]) -> Vec<Vec<RingInfo>> {
 }
 
 /// Refit whichever edges take part in a self-crossing, under a tightening span cap, until
-/// the assembled rings stop crossing themselves.
+/// the assembled rings stop crossing themselves. Returns the number of refits made.
 ///
 /// An edge is shared by the two faces either side of it, and it is refitted *once* — so
 /// both faces continue to reference the same curve and the property the planar map exists
 /// to guarantee is preserved. Tightening cannot fail to terminate: at a cap of one, an
 /// edge's fit reproduces its measured polyline, and the measured boundary of a face on a
 /// partition is simple.
+///
+/// The algorithm runs in rounds, at most ten:
+///
+/// 1. Every ring (after the first round, only rings touching an edge refitted in the last
+///    round) is assembled into one path ([`ring_as_path`]) and tested for pairs of
+///    crossing segments (`inkvec_fit::simple::self_crossings`, 32 samples per segment);
+///    both segments' edges are guilty.
+/// 2. Each guilty edge's cap -- the most measured points one segment may span -- is
+///    halved (it starts at the edge's point count) and the edge refitted by the capped
+///    dynamic program. Halving reaches a cap of one in about `log2(n)` rounds.
+///
+/// A capped refit is correct but faceted, so afterwards each refitted edge is offered,
+/// in turn, its original unconstrained fit and then a smoothed version of its capped fit
+/// (free cubics merged, corners sharpened, under a segment budget), and keeps the first
+/// that crosses nothing in the rings it belongs to. A capped refit that exploded to many
+/// times the segments of the original fit is replaced by the original outright; see the
+/// comment at that test for why.
+///
+/// `polys` are the measured boundaries the fits came from (indexed like `fitted`), `cfg`
+/// the fit configuration the refits use. `INKVEC_TIMING` prints the time of each phase.
 pub(crate) fn repair_ring_crossings(
     order: &[FaceRings],
     fitted: &mut [FittedPath],
@@ -210,6 +259,7 @@ pub(crate) fn repair_ring_crossings(
     let rings: Vec<&Ring> = order.iter().flatten().collect();
     let mut changed: Option<std::collections::HashSet<usize>> = None;
     let live = inkvec_core::progress::handle();
+    let timing = inkvec_core::env::flag("INKVEC_TIMING");
     for round in 0..ROUNDS {
         inkvec_core::progress::step("repair rounds", round as u64, ROUNDS as u64);
         let round_t = inkvec_core::clock::Instant::now();
@@ -255,15 +305,15 @@ pub(crate) fn repair_ring_crossings(
                 if guilty.len() == 1 { "y" } else { "ies" }
             )
         });
-        if inkvec_core::env::flag("INKVEC_TIMING") {
+        diag::debug(timing, || {
             let sizes: Vec<usize> = guilty.iter().map(|&k| polys[k].len()).collect();
-            eprintln!(
+            format!(
                 "  [t] repair round: {} guilty, sizes {:?}, detect {:.1} ms",
                 guilty.len(),
                 sizes,
                 round_t.elapsed().as_secs_f64() * 1e3
-            );
-        }
+            )
+        });
         let refits: Vec<(usize, multimodel::MultimodelFit)> = guilty
             .par_iter()
             .map(|&k| {
@@ -281,12 +331,12 @@ pub(crate) fn repair_ring_crossings(
             refit_vertices.insert(k, f.vertices);
             repaired += 1;
         }
-        if inkvec_core::env::flag("INKVEC_TIMING") {
-            eprintln!(
+        diag::debug(timing, || {
+            format!(
                 "  [t] repair round total {:.1} ms",
                 round_t.elapsed().as_secs_f64() * 1e3
-            );
-        }
+            )
+        });
         changed = Some(guilty.iter().copied().collect());
     }
 
@@ -326,14 +376,14 @@ pub(crate) fn repair_ring_crossings(
                 false
             }
         });
-        if inkvec_core::env::flag("INKVEC_TIMING") && affordable.len() < refit_vertices.len() {
-            eprintln!(
+        diag::debug(timing && affordable.len() < refit_vertices.len(), || {
+            format!(
                 "  [t] repair merge budget: {} of {} boundary/ies, {} segment(s)",
                 affordable.len(),
                 refit_vertices.len(),
                 spent
-            );
-        }
+            )
+        });
         inkvec_core::progress::step("refits smoothed", 0, affordable.len() as u64);
         let merged: Vec<(usize, FittedPath)> = affordable
             .par_iter()
@@ -351,13 +401,13 @@ pub(crate) fn repair_ring_crossings(
         // ring to be discarded too, leaving a full staircase of capped pixel chords.
         // Fixed endpoints mean accepted candidates cannot open seams; re-checking each
         // incident ring preserves the same no-crossing invariant as the repair itself.
-        if inkvec_core::env::flag("INKVEC_TIMING") {
-            eprintln!(
+        diag::debug(timing, || {
+            format!(
                 "  [t] repair merge {} edge(s) {:.1} ms",
                 merged.len(),
                 merge_t.elapsed().as_secs_f64() * 1e3
-            );
-        }
+            )
+        });
         let safety_t = inkvec_core::clock::Instant::now();
         // Every refitted edge gets its compact fit offered back, not only the ones the
         // merge pass could afford. The edges the budget refused are precisely the ones
@@ -383,9 +433,9 @@ pub(crate) fn repair_ring_crossings(
             };
             if exploded {
                 fitted[k] = full_fit[k].clone();
-                if inkvec_core::env::flag("INKVEC_TIMING") {
-                    eprintln!("  [t] repair: edge {k} refit exploded, full fit restored");
-                }
+                diag::debug(timing, || {
+                    format!("  [t] repair: edge {k} refit exploded, full fit restored")
+                });
                 continue;
             }
             // First try the original, MDL-optimal boundary. Most repaired rings have a
@@ -417,17 +467,24 @@ pub(crate) fn repair_ring_crossings(
                 fitted[k] = previous;
             }
         }
-        if inkvec_core::env::flag("INKVEC_TIMING") {
-            eprintln!(
+        diag::debug(timing, || {
+            format!(
                 "  [t] repair safety {:.1} ms",
                 safety_t.elapsed().as_secs_f64() * 1e3
-            );
-        }
+            )
+        });
     }
     repaired
 }
 
 /// A ring as a polygon that follows its curves, not only its joins.
+///
+/// Each edge is walked in the ring's direction; every segment contributes its end point,
+/// and a cubic or arc also [`RING_SAMPLES`] points evenly spaced in its parameter. A cubic
+/// with ends `P0`, `P3` and controls `P1`, `P2` is sampled from the Bernstein form
+/// `B(t) = (1-t)³P0 + 3(1-t)²t P1 + 3(1-t)t² P2 + t³P3`; an arc through its centre
+/// parameterisation (SVG 1.1 F.6.5, `inkvec_fit::curves::arc_ellipse_center`), at evenly
+/// spaced angles. The polygon is left open: its last point is the ring's start again.
 ///
 /// Endpoints alone are not the shape. A circle closed by two arcs, or a disc fitted as
 /// one edge of two cubics, has its joins at two opposite points: the polygon through them
@@ -482,6 +539,12 @@ pub(crate) fn ring_points(ring: &Ring, fitted: &[FittedPath]) -> Vec<Point> {
     out
 }
 
+/// The area a closed polygon encloses, px², by the shoelace formula:
+/// `A = |Σ_k (x_k·y_(k+1) - x_(k+1)·y_k)| / 2`, indices modulo `n`.
+///
+/// Unsigned, so either winding gives the same answer; zero for fewer than three points. A
+/// self-crossing polygon gets the net of its lobes, which is fine here because the rings
+/// it measures come from a planar partition.
 pub(crate) fn ring_area(r: &[Point]) -> f64 {
     let n = r.len();
     if n < 3 {
@@ -495,9 +558,9 @@ pub(crate) fn ring_area(r: &[Point]) -> f64 {
     (0.5 * a).abs()
 }
 
-/// Is `inner` strictly inside `outer`? A point-in-polygon on one vertex suffices, because
-/// planar-map rings never cross.
-/// A point strictly inside `ring`, for asking whether the ring lies within another.
+/// Points strictly inside `ring`, for asking whether the ring lies within another: up to
+/// five, never empty for a ring of three or more points (the first vertex is the fallback),
+/// empty for fewer.
 ///
 /// Probing with the ring's first vertex is wrong wherever two faces share a boundary,
 /// which in a planar map is everywhere: the vertex lies exactly *on* the neighbour's ring,
@@ -519,6 +582,10 @@ pub(crate) fn ring_area(r: &[Point]) -> f64 {
 /// pixel from a boundary the two rings *share* is on neither side in particular, and two of
 /// four corner wedges were still being called children of the square they only touch. The
 /// caller takes a majority, which no single ambiguous point can overturn.
+///
+/// Concretely: the forty longest polygon edges, longest first; from each edge's midpoint a
+/// step of 1, 0.5, 0.25, 0.1 or 0.03 px along either normal, keeping the first point that
+/// [`point_in_ring`] puts inside.
 pub(crate) fn interior_probes(ring: &[Point]) -> Vec<Point> {
     if ring.len() < 3 {
         return Vec::new();
@@ -565,7 +632,15 @@ pub(crate) fn interior_probes(ring: &[Point]) -> Vec<Point> {
     out
 }
 
-/// Even-odd test for a point against one ring.
+/// Even-odd test for a point against one ring (a closed polygon, px).
+///
+/// The crossing-number rule: cast a ray from `p` towards +x and count the polygon edges it
+/// crosses; `p` is inside when the count is odd. An edge from `a` to `b` is counted when
+/// it straddles the ray's height -- exactly one of `a.y`, `b.y` above `p.y`, which counts a
+/// vertex on the ray once and ignores horizontal edges -- and the crossing
+/// `x = a.x + (p.y - a.y)(b.x - a.x)/(b.y - a.y)` lies to the right of `p.x`. A point
+/// exactly on the boundary may go either way, which is why [`interior_probes`] keeps its
+/// probes off the boundary. False for fewer than three points.
 pub(crate) fn point_in_ring(p: Point, outer: &[Point]) -> bool {
     if outer.len() < 3 {
         return false;

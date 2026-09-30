@@ -1,6 +1,43 @@
-//! Tracing pipelines for strokes, bilevel, and full-colour inputs.
+//! The three tracing pipelines -- centreline strokes, bilevel and full colour -- from an
+//! opaque raster to an SVG document and its report lines.
+//!
+//! The crate root prepares the image (intake, the restorer and SR pre-passes, the alpha
+//! matte) and calls [`run_strokes`], [`run_bilevel`] or [`run_color`]; the research
+//! entries call the colour pipeline with a hook on the trace. Each pipeline runs the same
+//! three steps with its own tracer:
+//!
+//! * **trace** -- `inkvec_trace` finds the boundaries: bilevel contours, stroke
+//!   centrelines, or the colour tracer's palette, labels and planar map of shared edges;
+//! * **fit** -- `inkvec_fit` replaces each boundary's measured points by the curve that
+//!   minimises the description length `χ²/2 + λ·k` (see [`path_cost`]);
+//! * **emit** -- [`crate::emit`] (or [`crate::mono`]) writes the document.
+//!
+//! Everything the colour pipeline does after its trace is [`finish_color`], split into
+//! stages that are documented where they are defined. Output coordinates are the traced
+//! raster's pixels, with pixel centres at integers; [`crate::post`] applies the output
+//! options afterwards.
 
-use super::*;
+use crate::alpha::{self, AlphaRamp, AlphaSource, FaceAlpha};
+use crate::args::Args;
+use crate::diag;
+use crate::editable;
+use crate::emit::{emit_bilevel, emit_color, ColorDoc, EmitOptions};
+use crate::faces::FaceRings;
+use crate::fast;
+use crate::mono;
+use crate::pathdata::{emit_decimals, fmt_fitted};
+use crate::rings::repair_ring_crossings;
+use crate::uncertainty;
+use crate::units::{content_scale, in_content_units};
+use inkvec_core::Point;
+use inkvec_fit::{
+    adjust_vertices,
+    curves::Segment,
+    multimodel, optimal_polygon,
+    primitives::{fit_primitive_or_arcs, PrimitiveFit},
+    FitConfig, FittedPath, Segmentation,
+};
+use inkvec_trace::{gradient, planar, regroup, trace_bilevel, ColorOptions, TraceOptions};
 
 /// Emit recovered strokes as strokes: one path and one width, the way the artist
 /// drew them.
@@ -196,12 +233,12 @@ pub(crate) fn run_strokes(
     if ink_have > 1.0 {
         let bal = ink_draw / ink_have;
         if !(args.stroke_balance..=(2.0 - args.stroke_balance)).contains(&bal) {
-            if !args.quiet {
-                eprintln!(
+            diag::stage(args.quiet, || {
+                format!(
                     "  strokes       declined: would draw {:.0}% of the ink present",
                     bal * 100.0
-                );
-            }
+                )
+            });
             return None;
         }
     }
@@ -240,6 +277,15 @@ pub(crate) fn run_strokes(
     ))
 }
 
+/// The bilevel pipeline (`--bilevel`): the image thresholded to ink and paper, each
+/// contour fitted with straight lines only, and written as one even-odd black path.
+///
+/// The Potrace-comparable mode. `inkvec_trace::trace_bilevel` extracts sub-pixel contours
+/// from the coverage field; `optimal_polygon` chooses each contour's vertices by the same
+/// MDL objective the colour fit uses, restricted to lines (a dynamic program, globally
+/// optimal); `adjust_vertices` then moves each vertex towards the intersection of the lines
+/// fitted either side of it, by at most four times the contour's largest sigma (at least a
+/// pixel). Returns the SVG and three report lines.
 pub(crate) fn run_bilevel(
     img: &inkvec_trace::Rgba,
     args: &Args,
@@ -299,6 +345,10 @@ pub(crate) fn run_bilevel(
     )
 }
 
+/// The colour pipeline, the default: [`run_color_impl`] with no research hook.
+///
+/// `img` is opaque (matted by the caller when the source had alpha, the true alphas in
+/// `alpha_src`) and `cfg` comes from [`crate::units::fit_config`].
 pub(crate) fn run_color(
     img: &inkvec_trace::Rgba,
     args: &Args,
@@ -316,7 +366,7 @@ pub fn trace_color_guided(
     args: &Args,
     guide: impl FnOnce(&mut inkvec_trace::ColorTrace),
 ) -> Result<(String, Vec<String>), Stop> {
-    run_color_impl(img, args, &fit_config(img, args), None, guide)
+    run_color_impl(img, args, &crate::units::fit_config(img, args), None, guide)
 }
 
 /// The tracer options the colour path runs with, as the command line asks for them.
@@ -383,9 +433,22 @@ pub fn trace_color_from_labels_guided(
     let mut traced = inkvec_trace::trace_color_from_labels(img, &opts, labels, n_labels);
     guide(&mut traced);
     sw.mark("trace_total");
-    finish_color(img, args, &fit_config(img, args), None, traced)
+    finish_color(
+        img,
+        args,
+        &crate::units::fit_config(img, args),
+        None,
+        traced,
+    )
 }
 
+/// The colour pipeline: colour groups (`--merge-colors`) applied, the colour trace, the
+/// research hook `guide` on the finished trace, then [`finish_color`]. The colour-group
+/// report lines come first in the report.
+///
+/// Colour groups name fills a person saw in a trace, so a first trace finds them, the
+/// image is recoloured by `regroup::apply`, and the real trace runs on the recoloured
+/// image.
 pub(crate) fn run_color_impl(
     img: &inkvec_trace::Rgba,
     args: &Args,
@@ -496,10 +559,24 @@ impl std::fmt::Display for Stop {
 }
 
 impl std::error::Error for Stop {}
-
 /// Everything after the trace: fit each boundary, repair crossings, choose fills, and
 /// emit. It reads nothing but the `ColorTrace` and the raster, which is what lets a
 /// research entry swap the tracer out and keep the rest of the pipeline intact.
+///
+/// The stages, each a function below:
+///
+/// 1. [`dump_map`] -- `INKVEC_DUMP_MAP` stops here with the planar map written out.
+/// 2. [`fit_boundaries`] -- one MDL fit per boundary, or a primitive where that is cheaper.
+/// 3. [`repair_fits`] -- refit boundaries whose assembled rings cross themselves.
+/// 4. [`apply_mirrors`] -- mirrored boundary pairs made to agree exactly.
+/// 5. [`final_fills`] -- each face's fill model, imperceptible gradients demoted to flat.
+/// 6. [`face_transparency`] -- what the emitter needs to know about alpha, per face.
+/// 7. `--editability` passes and `--monochrome`, when asked for.
+/// 8. [`write_colour`] -- the document, flat or with translucent layers.
+///
+/// `img` is the raster that was traced (already matted when it had transparency, with the
+/// true alphas in `alpha_src`); `cfg` the fit configuration from [`crate::units::fit_config`].
+/// Returns the SVG and the report lines, or a [`Stop`].
 fn finish_color(
     img: &inkvec_trace::Rgba,
     args: &Args,
@@ -508,35 +585,11 @@ fn finish_color(
     traced: inkvec_trace::ColorTrace,
 ) -> Result<(String, Vec<String>), Stop> {
     let (w, h) = (img.width, img.height);
-    // Label generation needs the planar map and nothing after it: `INKVEC_DUMP_MAP=<path>`
-    // writes it in a compact binary form and stops before the curve fit, which is half the
-    // run. Format (little endian): u32 w, h, n_labels, n_edges; then per edge u32 left,
-    // right, u8 closed, u32 n, then n x (f32 x, f32 y, f32 sigma). Same intake as a trace.
-    if let Some(path) = inkvec_core::env::path("INKVEC_DUMP_MAP") {
-        let mut buf: Vec<u8> = Vec::new();
-        let m = &traced.map;
-        for v in [w as u32, h as u32, m.n_labels as u32, m.edges.len() as u32] {
-            buf.extend_from_slice(&v.to_le_bytes());
-        }
-        for e in &m.edges {
-            buf.extend_from_slice(&(e.left as u32).to_le_bytes());
-            buf.extend_from_slice(&(e.right as u32).to_le_bytes());
-            buf.push(u8::from(e.closed));
-            buf.extend_from_slice(&(e.points.len() as u32).to_le_bytes());
-            for (k, p) in e.points.iter().enumerate() {
-                let s = e.sigma.get(k).copied().unwrap_or(0.1);
-                buf.extend_from_slice(&(p.x as f32).to_le_bytes());
-                buf.extend_from_slice(&(p.y as f32).to_le_bytes());
-                buf.extend_from_slice(&(s as f32).to_le_bytes());
-            }
-        }
-        return match std::fs::write(&path, buf) {
-            Ok(()) => Err(Stop::MapDumped(path)),
-            Err(e) => Err(Stop::MapDumpFailed(e.to_string())),
-        };
+    if let Some(stop) = dump_map(&traced, w, h) {
+        return Err(stop);
     }
     if traced.palette.len() <= 1 {
-        eprintln!("warning: nothing to trace -- the image is a single flat colour");
+        diag::warn(|| "warning: nothing to trace -- the image is a single flat colour".into());
         if args.strict {
             return Err(Stop::FlatInput);
         }
@@ -555,16 +608,234 @@ fn finish_color(
         traced.face_fill,
     );
 
-    // Each boundary is fitted exactly once, with a mixed line/cubic alphabet chosen by
-    // MDL. Both faces that touch it then reference the same fitted curve — that is what
-    // makes seams unrepresentable rather than merely rare.
     let measured: usize = map.edges.iter().map(|e| e.points.len()).sum();
-    // One global dynamic program per boundary, with lines and cubics in the same
-    // alphabet. This replaces the earlier two-pass fitter (line DP for corners, then a
-    // swept kurbo fit per run), which was both slower — a 96-point smoothing/tolerance
-    // sweep per run, enough to time out on complex inputs — and, on smooth lobed shapes,
-    // catastrophically wrong: it reached 20px of deviation on a star where this reaches
-    // 0.09px.
+    let fast = fast::on(args);
+    let mut fits = fit_boundaries(img, args, cfg, &map, &face_fill, fast);
+    sw.mark("fit_dp");
+    inkvec_core::progress::begin("repair");
+    report_ring_times(fits.ring_times.as_deref());
+
+    // Rings before polish, so a boundary refitted by the repair below is polished
+    // afterwards rather than losing it. The traversal depends only on the map.
+    let order = planar::face_edge_order(&map);
+    let repaired = repair_fits(&order, &mut fits, args, cfg, fast);
+    sw.mark("repair");
+    let Fits {
+        polys,
+        mut fitted,
+        mut prims,
+        ..
+    } = fits;
+
+    let (n_line, n_cubic) = segment_counts(&fitted);
+    let mirrored_fits = apply_mirrors(&symmetry, &mut fitted, &mut prims);
+    let fills = final_fills(face_fill, &face_color, &pal, args.no_gradients);
+    let n_grad = fills
+        .iter()
+        .filter(|f| !matches!(f.model, gradient::FillModel::Flat(_)))
+        .count();
+    sw.mark("fills");
+    inkvec_core::progress::begin("emit");
+
+    let layers = alpha::recover_layers(args, &map, &face_color, &fills, &pal, &traced_labels);
+    let alpha = face_transparency(
+        img,
+        args,
+        alpha_src,
+        &face_color,
+        &pal,
+        &traced_labels,
+        &face_fade,
+    );
+
+    // Editability mode: post-fit structure passes, every one guarded to the ring's
+    // own tolerance. Runs after repair and harmonization so nothing downstream
+    // re-breaks what was locked.
+    if args.editability {
+        let stats = editable::edit_all(&polys, &mut fitted, &prims);
+        diag::stage(args.quiet, || stats.summary());
+    }
+    let doc = ColorDoc {
+        order: &order,
+        fitted: &fitted,
+        prims: &prims,
+        fill_fits: &fills,
+        pal: &pal,
+        face_color: &face_color,
+        clear: &alpha.clear,
+        opacity: &alpha.opacity,
+        alpha_ramps: &alpha.alpha_ramps,
+        fades: &alpha.fades,
+        layers: None,
+        matte: alpha.matte,
+        w,
+        h,
+    };
+    // Monochrome: the ink faces as one black shape, from the same fitted edges. It replaces
+    // the colour document, and with it the layer form, which only ever repaints colours.
+    let (svg, mono_line) = if args.monochrome {
+        let (svg, line) = monochrome(&doc, &map, &traced_labels, args);
+        (svg, Some(line))
+    } else {
+        let opts = emit_options(args, fast);
+        (write_colour(&doc, &opts, &map, layers, args.quiet), None)
+    };
+    sw.mark("emit");
+    write_uncertainty(args, &svg, &map);
+
+    let mut report = if fast {
+        vec![fast::report(args)]
+    } else {
+        Vec::new()
+    };
+    report.extend(mono_line);
+    report.extend(
+        ColourReport {
+            palette: pal.len(),
+            faces: face_color.len(),
+            gradients: n_grad,
+            edges: map.edges.len(),
+            primitives: prims.iter().filter(|p| p.is_some()).count(),
+            boundary: boundary_report.as_ref(),
+            symmetry: &symmetry,
+            symmetrised,
+            mirrored_fits,
+            repaired,
+            n_line,
+            n_cubic,
+            measured,
+        }
+        .lines(),
+    );
+    Ok((svg, report))
+}
+
+/// The emitter's options, from the command line. Harmonizing is skipped in fast mode.
+fn emit_options(args: &Args, fast: bool) -> EmitOptions {
+    EmitOptions {
+        cutout: args.cutout,
+        native: args.native_alpha,
+        no_background: args.no_background,
+        precision: args.precision,
+        harmonize: args.harmonize && !fast,
+        harmonize_threshold: args.harmonize_threshold,
+        use_symbols: args.use_symbols,
+    }
+}
+
+/// `--monochrome`: every face classified as ink or ground ([`crate::mono`]) and the ink
+/// written as one black even-odd path, from the same fitted edges `doc` holds. Returns the
+/// document and its report line.
+fn monochrome(
+    doc: &ColorDoc,
+    map: &planar::PlanarMap,
+    labels: &[u16],
+    args: &Args,
+) -> (String, String) {
+    let ground = mono::classify(&mono::Trace {
+        map,
+        order: doc.order,
+        fitted: doc.fitted,
+        labels,
+        fills: doc.fill_fits,
+        face_color: doc.face_color,
+        pal: doc.pal,
+        clear: doc.clear,
+        opacity: doc.opacity,
+    });
+    let svg = mono::emit(
+        map,
+        &ground.ink,
+        doc.fitted,
+        doc.prims,
+        args.no_background,
+        doc.w,
+        doc.h,
+        args.precision,
+    );
+    (svg, mono::report(&ground))
+}
+
+/// `INKVEC_DUMP_MAP=<path>`: write the planar map and stop, for label generation, which
+/// needs the map and nothing after it.
+///
+/// It writes the map in a compact binary form and stops before the curve fit, which is
+/// half the run. Format (little endian): u32 w, h, n_labels, n_edges; then per edge u32
+/// left, right, u8 closed, u32 n, then n x (f32 x, f32 y, f32 sigma), coordinates in px of
+/// the traced raster. Same intake as a trace. Returns the [`Stop`] to hand back -- written,
+/// or the write failed -- or `None` when the variable is not set.
+fn dump_map(traced: &inkvec_trace::ColorTrace, w: usize, h: usize) -> Option<Stop> {
+    let path = inkvec_core::env::path("INKVEC_DUMP_MAP")?;
+    let mut buf: Vec<u8> = Vec::new();
+    let m = &traced.map;
+    for v in [w as u32, h as u32, m.n_labels as u32, m.edges.len() as u32] {
+        buf.extend_from_slice(&v.to_le_bytes());
+    }
+    for e in &m.edges {
+        buf.extend_from_slice(&(e.left as u32).to_le_bytes());
+        buf.extend_from_slice(&(e.right as u32).to_le_bytes());
+        buf.push(u8::from(e.closed));
+        buf.extend_from_slice(&(e.points.len() as u32).to_le_bytes());
+        for (k, p) in e.points.iter().enumerate() {
+            let s = e.sigma.get(k).copied().unwrap_or(0.1);
+            buf.extend_from_slice(&(p.x as f32).to_le_bytes());
+            buf.extend_from_slice(&(p.y as f32).to_le_bytes());
+            buf.extend_from_slice(&(s as f32).to_le_bytes());
+        }
+    }
+    Some(match std::fs::write(&path, buf) {
+        Ok(()) => Stop::MapDumped(path),
+        Err(e) => Stop::MapDumpFailed(e.to_string()),
+    })
+}
+
+/// Every boundary of the planar map fitted: what [`fit_boundaries`] produces and
+/// [`repair_fits`] refines. All vectors are indexed by edge.
+struct Fits {
+    /// Each edge's measured points, sigmas in content units: the fit's input.
+    polys: Vec<inkvec_core::Polyline>,
+    /// Each edge's lambda multiplier: its own scale times `--lambda-scale`.
+    lambda_scales: Vec<f64>,
+    /// Each edge's fitted curve.
+    fitted: Vec<FittedPath>,
+    /// Each edge's whole-boundary primitive, where one won.
+    prims: Vec<Option<PrimitiveFit>>,
+    /// Research builds under `INKVEC_STRUCTURAL` only: the same fit without the structural
+    /// simplifier, for the transactional comparison in [`repair_fits`].
+    structural_baseline: Option<(Vec<FittedPath>, Vec<Option<PrimitiveFit>>)>,
+    /// Under `INKVEC_TIMING`, (milliseconds, points) of each boundary's dynamic program.
+    ring_times: Option<Vec<(f64, usize)>>,
+}
+
+/// `cfg` with its lambda multiplied by `scale`: one boundary's own exchange rate.
+fn scaled(cfg: &FitConfig, scale: f64) -> FitConfig {
+    FitConfig {
+        lambda: cfg.lambda * scale,
+        ..*cfg
+    }
+}
+
+/// Stage 2: fit every boundary once, on every core.
+///
+/// Each boundary is fitted exactly once, with a mixed line/cubic alphabet chosen by
+/// MDL. Both faces that touch it then reference the same fitted curve — that is what
+/// makes seams unrepresentable rather than merely rare. One global dynamic program per
+/// boundary, with lines and cubics in the same alphabet, replaced an earlier two-pass
+/// fitter (line DP for corners, then a swept kurbo fit per run), which was both slower — a
+/// 96-point smoothing/tolerance sweep per run, enough to time out on complex inputs — and,
+/// on smooth lobed shapes, catastrophically wrong: it reached 20px of deviation on a star
+/// where this reaches 0.09px. Each fit then competes with a whole-boundary primitive
+/// ([`prefer_primitive`]).
+///
+/// Fast mode fits nothing here: `fast::fit` turns the map's edges into paths directly.
+fn fit_boundaries(
+    img: &inkvec_trace::Rgba,
+    args: &Args,
+    cfg: &FitConfig,
+    map: &planar::PlanarMap,
+    face_fill: &[gradient::FillFit],
+    fast: bool,
+) -> Fits {
     let s_content = content_scale(img, args);
     let polys: Vec<inkvec_core::Polyline> = map
         .edges
@@ -582,21 +853,16 @@ fn finish_color(
         .iter()
         .map(|e| e.lambda_scale * args.lambda_scale)
         .collect();
-    let cfg_repair = FitConfig {
-        lambda: cfg.lambda * args.lambda_scale,
-        ..*cfg
-    };
     // Every boundary is fitted independently, so fit them on every core. The work per
     // edge varies by orders of magnitude (a two-point sliver against a thousand-point
     // outline), which is exactly the shape of problem rayon's work stealing handles.
     use rayon::prelude::*;
     let ring_timing = inkvec_core::env::flag("INKVEC_TIMING");
     let ring_times: std::sync::Mutex<Vec<(f64, usize)>> = std::sync::Mutex::new(Vec::new());
-    let fast = fast::on(args);
     inkvec_core::progress::step("boundaries fitted", 0, polys.len() as u64);
     let live = inkvec_core::progress::handle();
     let results: Vec<(FittedPath, Option<PrimitiveFit>)> = if fast {
-        fast::fit(&map, &face_fill)
+        fast::fit(map, face_fill)
     } else {
         polys
             .par_iter()
@@ -608,10 +874,7 @@ fn finish_color(
                 let poly = poly.clone();
                 // This boundary's own exchange rate. `cfg_k == *cfg` when the scale is 1.0,
                 // which is every path but the guided one.
-                let cfg_k = FitConfig {
-                    lambda: cfg.lambda * scale,
-                    ..*cfg
-                };
+                let cfg_k = scaled(cfg, scale);
                 let t_ring = inkvec_core::clock::Instant::now();
                 // Scoped, so the dynamic program itself can stop a trace nobody wants in the
                 // middle of a boundary of thousands of points.
@@ -619,31 +882,10 @@ fn finish_color(
                 if ring_timing {
                     ring_times
                         .lock()
-                        .unwrap()
+                        .expect("nothing panics while holding the ring timer")
                         .push((t_ring.elapsed().as_secs_f64() * 1e3, poly.points.len()));
                 }
-
-                // A boundary that *is* a circle should be described as one. Both candidates
-                // are scored by the same MDL cost, so the three numbers of a circle beat the
-                // twenty-four of four cubics whenever the evidence actually supports a
-                // circle, and lose when it does not.
-                // It is worth a great deal: measured by taking this whole-boundary primitive
-                // path out (the `INKVEC_NO_PRIMITIVE` ablation, since removed) over the
-                // 246-icon gate set, removing it costs 30.52% of the parameter ratio
-                // (1.4818 -> 1.9341) and 9.01% of dE00, far more than any other lever
-                // measured on this tree.
-                let attempt = fit_primitive_or_arcs(&poly.points, &poly.sigma, poly.closed, &cfg_k);
-                let fitted = match attempt {
-                    Some((segs, prim, cost)) if cost < path_cost(&poly, &curve, &cfg_k) => (
-                        FittedPath {
-                            start: poly.points[0],
-                            segments: segs,
-                            closed: poly.closed,
-                        },
-                        prim,
-                    ),
-                    _ => (curve, None),
-                };
+                let fitted = prefer_primitive(&poly, curve, &cfg_k);
                 live.tick();
                 fitted
             })
@@ -659,28 +901,15 @@ fn finish_color(
     // an independent baseline through primitive selection and repair so the
     // trial is judged on the geometry that those stages actually return.
     // The structural simplifier's transactional baseline: research builds only.
-    let mut structural_baseline =
+    let structural_baseline =
         if cfg!(feature = "research") && inkvec_core::env::flag("INKVEC_STRUCTURAL") {
             let results: Vec<_> = polys
                 .par_iter()
                 .zip(lambda_scales.par_iter())
                 .map(|(poly, &scale)| {
-                    let cfg_k = FitConfig {
-                        lambda: cfg.lambda * scale,
-                        ..*cfg
-                    };
+                    let cfg_k = scaled(cfg, scale);
                     let curve = multimodel::optimal_multimodel_without_structural(poly, &cfg_k);
-                    match fit_primitive_or_arcs(&poly.points, &poly.sigma, poly.closed, &cfg_k) {
-                        Some((segs, prim, cost)) if cost < path_cost(poly, &curve, &cfg_k) => (
-                            FittedPath {
-                                start: poly.points[0],
-                                segments: segs,
-                                closed: poly.closed,
-                            },
-                            prim,
-                        ),
-                        _ => (curve, None),
-                    }
+                    prefer_primitive(poly, curve, &cfg_k)
                 })
                 .collect();
             let (paths, primitives): (Vec<_>, Vec<_>) = results.into_iter().unzip();
@@ -688,56 +917,96 @@ fn finish_color(
         } else {
             None
         };
-    sw.mark("fit_dp");
-    inkvec_core::progress::begin("repair");
-    if ring_timing {
-        let mut rt = ring_times.into_inner().unwrap();
-        rt.sort_by(|a, b| b.0.total_cmp(&a.0));
-        let total: f64 = rt.iter().map(|r| r.0).sum();
-        let top: Vec<String> = rt
-            .iter()
-            .take(5)
-            .map(|(ms, n)| format!("{ms:.0} ms/{n} pts"))
-            .collect();
-        eprintln!(
+    Fits {
+        polys,
+        lambda_scales,
+        fitted,
+        prims,
+        structural_baseline,
+        ring_times: ring_timing.then(|| {
+            ring_times
+                .into_inner()
+                .expect("nothing panics while holding the ring timer")
+        }),
+    }
+}
+
+/// A boundary's fitted `curve`, or the whole-boundary primitive (circle, ellipse, rounded
+/// rectangle, or a run of arcs) when that describes `poly` more cheaply.
+///
+/// A boundary that *is* a circle should be described as one. Both candidates are scored by
+/// the same MDL cost ([`path_cost`]), so the three numbers of a circle beat the
+/// twenty-four of four cubics whenever the evidence actually supports a circle, and lose
+/// when it does not. It is worth a great deal: measured by taking this whole-boundary
+/// primitive path out (the `INKVEC_NO_PRIMITIVE` ablation, since removed) over the 246-icon
+/// gate set, removing it costs 30.52% of the parameter ratio (1.4818 -> 1.9341) and 9.01%
+/// of dE00, far more than any other lever measured on this tree.
+fn prefer_primitive(
+    poly: &inkvec_core::Polyline,
+    curve: FittedPath,
+    cfg: &FitConfig,
+) -> (FittedPath, Option<PrimitiveFit>) {
+    match fit_primitive_or_arcs(&poly.points, &poly.sigma, poly.closed, cfg) {
+        Some((segs, prim, cost)) if cost < path_cost(poly, &curve, cfg) => (
+            FittedPath {
+                start: poly.points[0],
+                segments: segs,
+                closed: poly.closed,
+            },
+            prim,
+        ),
+        _ => (curve, None),
+    }
+}
+
+/// `INKVEC_TIMING`: the total time of the boundary fits and the five slowest boundaries.
+fn report_ring_times(ring_times: Option<&[(f64, usize)]>) {
+    let Some(rt) = ring_times else {
+        return;
+    };
+    let mut rt = rt.to_vec();
+    rt.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let total: f64 = rt.iter().map(|r| r.0).sum();
+    let top: Vec<String> = rt
+        .iter()
+        .take(5)
+        .map(|(ms, n)| format!("{ms:.0} ms/{n} pts"))
+        .collect();
+    diag::debug(true, || {
+        format!(
             "  [t] fit_dp rings: {} rings, {:.0} ms of ring work, top {}",
             rt.len(),
             total,
             top.join(", ")
-        );
-    }
+        )
+    });
+}
 
-    // Rings before polish, so a boundary refitted by the repair below is polished
-    // afterwards rather than losing it. The traversal depends only on the map.
-    let order = planar::face_edge_order(&map);
-
-    /// The faces a layer covers, merged into the ground beneath them.
-    ///
-    /// A layer cuts every shape it crosses into pieces, and painting those pieces back is
-    /// what makes the layer form *bigger* than the flat one: the cut is drawn twice, once
-    /// on each side, and neither drawing means anything once the layer is composited over
-    /// them. Relabelling the pieces to a single face makes the cut interior, and an
-    /// interior edge belongs to no ring — so it stops being written at all, and the
-    /// geometry is untouched otherwise. The boundary points, their fits and their sigmas
-    /// are per *edge* and are not disturbed by any of this.
-    fn merge_map(map: &planar::PlanarMap, remap: &[u16]) -> planar::PlanarMap {
-        let mut out = map.clone();
-        for e in out.edges.iter_mut() {
-            let l = remap.get(e.left as usize).copied().unwrap_or(e.left);
-            let r = remap.get(e.right as usize).copied().unwrap_or(e.right);
-            if l == r {
-                // Interior now: `face_edge_order` skips a label out of range, which is how
-                // an edge leaves every ring without disturbing the indices the fits use.
-                e.left = u16::MAX;
-                e.right = u16::MAX;
-            } else {
-                e.left = l;
-                e.right = r;
-            }
-        }
-        out
-    }
-
+/// Stage 3: refit whichever boundaries make a ring cross itself, and return how many were
+/// refitted. Skipped under `--no-repair` and in fast mode.
+///
+/// A self-crossing boundary is invisible to the objective — both curves pass through
+/// their measured points and the render barely changes — but the ring it produces is
+/// invalid and unpleasant to edit. Measured over 180 real emoji, 53 (29%) emitted at
+/// least one, against VTracer's 10 (5.6%), and classifying 2126 rings showed *none*
+/// were a single cubic looping: every one is two different edges of a face crossing
+/// after each was fitted within its own tolerance. See [`crate::rings::repair_ring_crossings`].
+///
+/// This runs *after* polish, not before. Polish moves control points by up to a pixel,
+/// and a thin neck is exactly where that reopens a crossing the repair had closed —
+/// measured over 40 emoji, repairing first left 12 invalid rings where repairing last
+/// leaves 9. The repair has to see the geometry that is actually emitted. (Polish itself
+/// has since been removed; see the note below.)
+///
+/// In research builds with a structural baseline, the baseline is repaired too and kept
+/// instead unless [`structural_trial_improves`] says the simplified fit is strictly better.
+fn repair_fits(
+    order: &[FaceRings],
+    fits: &mut Fits,
+    args: &Args,
+    cfg: &FitConfig,
+    fast: bool,
+) -> usize {
     // Removed: two stages that refined curves against the image after the fit, and a
     // third switch that turned one of them off.
     //
@@ -774,92 +1043,115 @@ fn finish_color(
     // judged by a full-scene render before it was accepted: at dense junctions a move
     // can lower every incident one-dimensional residual and still make a neighbouring
     // face's raster coverage worse.
-
-    // A self-crossing boundary is invisible to the objective — both curves pass through
-    // their measured points and the render barely changes — but the ring it produces is
-    // invalid and unpleasant to edit. Measured over 180 real emoji, 53 (29%) emitted at
-    // least one, against VTracer's 10 (5.6%), and classifying 2126 rings showed *none*
-    // were a single cubic looping: every one is two different edges of a face crossing
-    // after each was fitted within its own tolerance.
-    //
-    // This runs *after* polish, not before. Polish moves control points by up to a pixel,
-    // and a thin neck is exactly where that reopens a crossing the repair had closed —
-    // measured over 40 emoji, repairing first left 12 invalid rings where repairing last
-    // leaves 9. The repair has to see the geometry that is actually emitted.
+    let cfg_repair = scaled(cfg, args.lambda_scale);
     let mut repaired = if args.no_repair || fast {
         0
     } else {
-        repair_ring_crossings(&order, &mut fitted, &polys, &cfg_repair)
+        repair_ring_crossings(order, &mut fits.fitted, &fits.polys, &cfg_repair)
     };
-    if let Some((mut baseline, baseline_prims)) = structural_baseline.take() {
+    if let Some((mut baseline, baseline_prims)) = fits.structural_baseline.take() {
         let baseline_repaired = if args.no_repair {
             0
         } else {
-            repair_ring_crossings(&order, &mut baseline, &polys, &cfg_repair)
+            repair_ring_crossings(order, &mut baseline, &fits.polys, &cfg_repair)
         };
-        if !structural_trial_improves(&polys, &fitted, &baseline, &lambda_scales, cfg) {
-            fitted = baseline;
-            prims = baseline_prims;
+        if !structural_trial_improves(
+            &fits.polys,
+            &fits.fitted,
+            &baseline,
+            &fits.lambda_scales,
+            cfg,
+        ) {
+            fits.fitted = baseline;
+            fits.prims = baseline_prims;
             repaired = baseline_repaired;
         }
     }
-    sw.mark("repair");
+    repaired
+}
 
-    let n_cubic: usize = fitted
-        .iter()
-        .flat_map(|f| f.segments.iter())
-        .filter(|s| matches!(s, Segment::Cubic(..)))
-        .count();
-    let n_line: usize = fitted
-        .iter()
-        .flat_map(|f| f.segments.iter())
-        .filter(|s| matches!(s, Segment::Line(..)))
-        .count();
+/// The number of line and of cubic segments across all fitted boundaries (arcs are
+/// counted in neither).
+fn segment_counts(fitted: &[FittedPath]) -> (usize, usize) {
+    let count = |want: fn(&Segment) -> bool| {
+        fitted
+            .iter()
+            .flat_map(|f| f.segments.iter())
+            .filter(|s| want(s))
+            .count()
+    };
+    (
+        count(|s| matches!(s, Segment::Line(..))),
+        count(|s| matches!(s, Segment::Cubic(..))),
+    )
+}
 
-    // Per-face fill model. A region shaded by a gradient is one region, not a stack of
-    // flat bands: fitting it as a gradient replaces a pile of near-duplicate faces with
-    // four numbers and two stops, and the same MDL objective decides whether the evidence
-    // supports that.
-    // Every stage above is free to break a mirror by breaking a tie, and the fitter breaks
-    // them most of all: a dynamic program walks one boundary forwards and its reflection
-    // backwards, and can segment them differently. So the fits are made to agree here,
-    // after everyone else has finished: one boundary of each mirrored pair keeps its own
-    // fit, and its partner takes that fit reflected. Exact by construction, and no search.
+/// Stage 4: make mirrored boundaries agree exactly. Returns how many fits were reflected
+/// or centred.
+///
+/// Every stage above is free to break a mirror by breaking a tie, and the fitter breaks
+/// them most of all: a dynamic program walks one boundary forwards and its reflection
+/// backwards, and can segment them differently. So the fits are made to agree here,
+/// after everyone else has finished: one boundary of each mirrored pair keeps its own
+/// fit, and its partner takes that fit reflected (and reversed where the pairing walks it
+/// the other way). Exact by construction, and no search.
+fn apply_mirrors(
+    symmetry: &inkvec_trace::symmetry::Symmetry,
+    fitted: &mut [FittedPath],
+    prims: &mut [Option<PrimitiveFit>],
+) -> usize {
     let mut mirrored_fits = 0usize;
-    if !symmetry.is_empty() {
-        for k in 0..fitted.len() {
-            // A shape that is its own reflection keeps its fit; where that fit is a
-            // primitive, centring it on the axis makes it symmetric exactly.
-            for m in symmetry.self_mirrors(k) {
-                if let Some(pf) = prims.get(k).and_then(|p| p.as_ref()) {
-                    let centred = inkvec_trace::symmetry::centre_primitive(pf, m);
-                    prims[k] = Some(centred);
-                    mirrored_fits += 1;
-                }
-            }
-            let Some((m, pr)) = symmetry.mirror_of(k) else {
-                continue;
-            };
-            if pr.edge >= fitted.len() {
-                continue;
-            }
-            let mut path = inkvec_trace::symmetry::reflect_path(&fitted[pr.edge], m);
-            if pr.rev {
-                path = path.reversed();
-            }
-            fitted[k] = path;
-            prims[k] = prims[pr.edge]
-                .as_ref()
-                .map(|pf| inkvec_trace::symmetry::reflect_primitive(pf, m));
-            mirrored_fits += 1;
-        }
+    if symmetry.is_empty() {
+        return mirrored_fits;
     }
+    for k in 0..fitted.len() {
+        // A shape that is its own reflection keeps its fit; where that fit is a
+        // primitive, centring it on the axis makes it symmetric exactly.
+        for m in symmetry.self_mirrors(k) {
+            if let Some(pf) = prims.get(k).and_then(|p| p.as_ref()) {
+                let centred = inkvec_trace::symmetry::centre_primitive(pf, m);
+                prims[k] = Some(centred);
+                mirrored_fits += 1;
+            }
+        }
+        let Some((m, pr)) = symmetry.mirror_of(k) else {
+            continue;
+        };
+        if pr.edge >= fitted.len() {
+            continue;
+        }
+        let mut path = inkvec_trace::symmetry::reflect_path(&fitted[pr.edge], m);
+        if pr.rev {
+            path = path.reversed();
+        }
+        fitted[k] = path;
+        prims[k] = prims[pr.edge]
+            .as_ref()
+            .map(|pf| inkvec_trace::symmetry::reflect_primitive(pf, m));
+        mirrored_fits += 1;
+    }
+    mirrored_fits
+}
 
-    let fills: Vec<gradient::FillFit> = face_fill
+/// Stage 5: each face's fill model as it will be written.
+///
+/// A region shaded by a gradient is one region, not a stack of flat bands: fitting it as a
+/// gradient replaces a pile of near-duplicate faces with four numbers and two stops, and
+/// the same MDL objective decides whether the evidence supports that. What the tracer
+/// chose is kept, except that `--no-gradients` paints every face its palette ink (black
+/// when it has none) and a gradient nobody could see is demoted to its mean
+/// ([`demote_imperceptible_gradient`]).
+fn final_fills(
+    face_fill: Vec<gradient::FillFit>,
+    face_color: &[usize],
+    pal: &inkvec_trace::Palette,
+    no_gradients: bool,
+) -> Vec<gradient::FillFit> {
+    face_fill
         .into_iter()
         .enumerate()
         .map(|(fi, f)| {
-            if args.no_gradients {
+            if no_gradients {
                 let c = face_color
                     .get(fi)
                     .and_then(|&ci| pal.rgb.get(ci))
@@ -873,26 +1165,47 @@ fn finish_color(
                 demote_imperceptible_gradient(f)
             }
         })
-        .collect();
-    let n_grad = fills
-        .iter()
-        .filter(|f| !matches!(f.model, gradient::FillModel::Flat(_)))
-        .count();
-    sw.mark("fills");
-    inkvec_core::progress::begin("emit");
+        .collect()
+}
 
-    let layers = alpha::recover_layers(args, &map, &face_color, &fills, &pal, &traced_labels);
+/// Per face, what the emitter needs to know about transparency: [`face_transparency`].
+struct Transparency {
+    /// Transparent in the source: a hole, not a colour.
+    clear: Vec<bool>,
+    /// The opacity to write, 1.0 for opaque.
+    opacity: Vec<f32>,
+    /// The colour the image was composited onto before tracing, sRGB 0..1.
+    matte: [f32; 3],
+    /// A linear fade of one colour, as a two-stop gradient of `stop-opacity`.
+    alpha_ramps: Vec<Option<AlphaRamp>>,
+    /// A fade traced natively: (opacity profile, colour profile).
+    fades: Vec<Option<(gradient::FillModel, gradient::FillModel)>>,
+}
 
+/// Stage 6: per-face transparency, from the source's alpha ([`alpha::face_alpha`]) and,
+/// when transparency was traced natively, from the palette's own inks.
+///
+/// Traced natively, a face's opacity is its ink's: the palette found the ink *as* a
+/// colour at an opacity, so a band of a fade is one opacity by construction, where the
+/// flatness test in `face_alpha` would call it varying and bake it opaque. An ink under
+/// 0.05 opacity is clear and one over 0.98 opaque. The ramp fit stays for the faces the
+/// palette did find opaque.
+fn face_transparency(
+    img: &inkvec_trace::Rgba,
+    args: &Args,
+    alpha_src: Option<&AlphaSource>,
+    face_color: &[usize],
+    pal: &inkvec_trace::Palette,
+    traced_labels: &[u16],
+    face_fade: &[Option<inkvec_trace::native::Fade>],
+) -> Transparency {
+    let (w, h) = (img.width, img.height);
     let FaceAlpha {
         mut clear,
         mut opacity,
         matte,
         alpha_ramps,
-    } = alpha::face_alpha(img, args, alpha_src, &face_color, &traced_labels, w, h);
-    // Traced natively, a face's opacity is its ink's: the palette found the ink *as* a
-    // colour at an opacity, so a band of a fade is one opacity by construction, where the
-    // flatness test above would call it varying and bake it opaque. The ramp fit stays for
-    // the faces the palette did find opaque.
+    } = alpha::face_alpha(img, args, alpha_src, face_color, traced_labels, w, h);
     if args.native_alpha && alpha_src.is_some() {
         for (f, &ink) in face_color.iter().enumerate() {
             let a = pal.alpha.get(ink).copied().unwrap_or(1.0);
@@ -926,209 +1239,239 @@ fn finish_color(
                 .map(|fd| (fd.alpha, fd.color))
         })
         .collect();
+    Transparency {
+        clear,
+        opacity,
+        matte,
+        alpha_ramps,
+        fades,
+    }
+}
 
-    // Both forms of the document, costed against each other.
-    //
-    // A layer is only worth having if it says the same thing in fewer marks. It repaints
-    // the faces it covers with the ground and composites itself over them, so the image is
-    // identical either way and the whole decision is a parameter count — the same test
-    // every fill model and every arc has to pass, with the residual term equal on both
-    // sides. Where the layer does not pay, the flat form is what is written.
-    // Editability mode: post-fit structure passes, every one guarded to the ring's
-    // own tolerance. Runs after repair and harmonization so nothing downstream
-    // re-breaks what was locked.
-    if args.editability {
-        let stats = editable::edit_all(&polys, &mut fitted, &prims);
-        if !args.quiet {
-            eprintln!("{}", stats.summary());
+/// The faces a layer covers, merged into the ground beneath them.
+///
+/// A layer cuts every shape it crosses into pieces, and painting those pieces back is
+/// what makes the layer form *bigger* than the flat one: the cut is drawn twice, once
+/// on each side, and neither drawing means anything once the layer is composited over
+/// them. Relabelling the pieces to a single face makes the cut interior, and an
+/// interior edge belongs to no ring — so it stops being written at all, and the
+/// geometry is untouched otherwise. The boundary points, their fits and their sigmas
+/// are per *edge* and are not disturbed by any of this.
+///
+/// `remap[f]` is the label face `f` becomes; a label past its end is left as it is.
+fn merge_map(map: &planar::PlanarMap, remap: &[u16]) -> planar::PlanarMap {
+    let mut out = map.clone();
+    for e in out.edges.iter_mut() {
+        let l = remap.get(e.left as usize).copied().unwrap_or(e.left);
+        let r = remap.get(e.right as usize).copied().unwrap_or(e.right);
+        if l == r {
+            // Interior now: `face_edge_order` skips a label out of range, which is how
+            // an edge leaves every ring without disturbing the indices the fits use.
+            e.left = u16::MAX;
+            e.right = u16::MAX;
+        } else {
+            e.left = l;
+            e.right = r;
         }
     }
-    // Monochrome: the ink faces as one black shape, from the same fitted edges. It replaces
-    // the colour document, and with it the layer form, which only ever repaints colours.
-    let mono = args.monochrome.then(|| {
-        let ground = mono::classify(&mono::Trace {
-            map: &map,
-            order: &order,
-            fitted: &fitted,
-            labels: &traced_labels,
-            fills: &fills,
-            face_color: &face_color,
-            pal: &pal,
-            clear: &clear,
-            opacity: &opacity,
-        });
-        let svg = mono::emit(
-            &map,
-            &ground.ink,
-            &fitted,
-            &prims,
-            args.no_background,
-            w,
-            h,
-            args.precision,
-        );
-        (svg, mono::report(&ground))
-    });
-    let emit = |order: &[FaceRings], an: Option<Layers>| {
-        emit_color(
-            order,
-            &fitted,
-            &prims,
-            &fills,
-            &pal,
-            &face_color,
-            &clear,
-            args.cutout,
-            args.native_alpha,
-            args.no_background,
-            &opacity,
-            &alpha_ramps,
-            &fades,
-            an,
-            matte,
-            w,
-            h,
-            args.precision,
-            args.harmonize && !fast,
-            args.harmonize_threshold,
-            args.use_symbols,
-        )
+    out
+}
+
+/// Stage 8: the colour document, as `doc` describes it (`doc.layers` is ignored), with or
+/// without the recovered translucent `layers`.
+///
+/// Both forms of the document, costed against each other.
+///
+/// A layer is only worth having if it says the same thing in fewer marks. It repaints
+/// the faces it covers with the ground and composites itself over them, so the image is
+/// identical either way and the whole decision is a parameter count — the same test
+/// every fill model and every arc has to pass, with the residual term equal on both
+/// sides. Where the layer does not pay, the flat form is what is written.
+fn write_colour(
+    doc: &ColorDoc,
+    opts: &EmitOptions,
+    map: &planar::PlanarMap,
+    layers: Option<inkvec_trace::alpha::AlphaAnalysis>,
+    quiet: bool,
+) -> String {
+    let flat_doc = ColorDoc {
+        layers: None,
+        ..*doc
     };
-    let (mono_svg, mono_line) = match mono {
-        Some((svg, line)) => (Some(svg), Some(line)),
-        None => (None, None),
+    let Some(an) = layers.as_ref().filter(|an| !an.layers.is_empty()) else {
+        return emit_color(&flat_doc, opts);
     };
-    let layers = layers.filter(|_| mono_svg.is_none());
-    let svg = match (mono_svg, layers.as_ref().filter(|an| !an.layers.is_empty())) {
-        (Some(svg), _) => svg,
-        (None, None) => emit(&order, None),
-        (None, Some(an)) => {
-            let flat = emit(&order, None);
-            // Every face a layer covers is relabelled onto the ground it belongs with, so
-            // the cuts the layer made stop being drawn at all.
-            let mut remap: Vec<u16> = (0..map.n_labels as u16).collect();
-            for l in &an.layers {
-                for &f in &l.faces {
-                    if f >= map.n_labels {
-                        continue;
-                    }
-                    let base = an.base_rgb.get(f).copied().unwrap_or([0.0, 0.0, 0.0]);
-                    // The ground this piece belongs with: a face not under the layer whose
-                    // own colour is the colour underneath this one.
-                    let host = (0..map.n_labels).find(|&g| {
-                        g != f
-                            && !l.faces.contains(&g)
-                            && an
-                                .base_rgb
-                                .get(g)
-                                .is_some_and(|c| inkvec_trace::color::de00(*c, base) < 1.0)
-                    });
-                    if let Some(g) = host {
-                        remap[f] = g as u16;
-                    }
+    let flat = emit_color(&flat_doc, opts);
+    // Every face a layer covers is relabelled onto the ground it belongs with, so
+    // the cuts the layer made stop being drawn at all.
+    let mut remap: Vec<u16> = (0..map.n_labels as u16).collect();
+    for l in &an.layers {
+        for &f in &l.faces {
+            if f >= map.n_labels {
+                continue;
+            }
+            let base = an.base_rgb.get(f).copied().unwrap_or([0.0, 0.0, 0.0]);
+            // The ground this piece belongs with: a face not under the layer whose
+            // own colour is the colour underneath this one.
+            let host = (0..map.n_labels).find(|&g| {
+                g != f
+                    && !l.faces.contains(&g)
+                    && an
+                        .base_rgb
+                        .get(g)
+                        .is_some_and(|c| inkvec_trace::color::de00(*c, base) < 1.0)
+            });
+            if let Some(g) = host {
+                remap[f] = g as u16;
+            }
+        }
+    }
+    let merged = merge_map(map, &remap);
+    let order_m = planar::face_edge_order(&merged);
+    // The layer's own outline, by the same trick: its pieces become one face, so
+    // the cuts *inside* the layer stop being drawn as well. Without this the layer
+    // path repeats every edge the ground merge just removed, and the document comes
+    // out with fewer shapes and more coordinates, which is not simpler.
+    let layer_shapes: Vec<FaceRings> = an
+        .layers
+        .iter()
+        .map(|l| {
+            let Some(&first) = l.faces.first() else {
+                return Vec::new();
+            };
+            let mut remap_l: Vec<u16> = (0..map.n_labels as u16).collect();
+            for &f in &l.faces {
+                if f < map.n_labels {
+                    remap_l[f] = first as u16;
                 }
             }
-            let merged = merge_map(&map, &remap);
-            let order_m = planar::face_edge_order(&merged);
-            // The layer's own outline, by the same trick: its pieces become one face, so
-            // the cuts *inside* the layer stop being drawn as well. Without this the layer
-            // path repeats every edge the ground merge just removed, and the document comes
-            // out with fewer shapes and more coordinates, which is not simpler.
-            let layer_shapes: Vec<FaceRings> = an
-                .layers
-                .iter()
-                .map(|l| {
-                    let Some(&first) = l.faces.first() else {
-                        return Vec::new();
-                    };
-                    let mut remap_l: Vec<u16> = (0..map.n_labels as u16).collect();
-                    for &f in &l.faces {
-                        if f < map.n_labels {
-                            remap_l[f] = first as u16;
-                        }
-                    }
-                    planar::face_edge_order(&merge_map(&map, &remap_l))
-                        .get(first)
-                        .cloned()
-                        .unwrap_or_default()
-                })
-                .collect();
-            let layered = emit(&order_m, Some((an, &layer_shapes)));
-            let cost = |doc: &str| -> (usize, usize) {
-                let shapes = ["<path", "<rect", "<circle", "<ellipse"]
-                    .iter()
-                    .map(|t| doc.matches(t).count())
-                    .sum::<usize>();
-                (shapes, doc.len())
-            };
-            let (pf, bf) = cost(&flat);
-            let (pl, bl) = cost(&layered);
-            // Fewer shapes *and* not more coordinates. A document with fewer paths and
-            // more numbers in them is not the simpler one, whatever the path count says.
-            let pays = pl < pf && bl <= bf;
-            if !args.quiet {
-                eprintln!(
-                    "                as layers {pl} shapes / {bl} bytes, flat {pf} / {bf}: {}",
-                    if pays { "kept" } else { "dropped" }
-                );
-            }
-            if pays {
-                layered
-            } else {
-                flat
-            }
-        }
+            planar::face_edge_order(&merge_map(map, &remap_l))
+                .get(first)
+                .cloned()
+                .unwrap_or_default()
+        })
+        .collect();
+    let layered = emit_color(
+        &ColorDoc {
+            order: &order_m,
+            layers: Some((an, &layer_shapes)),
+            ..*doc
+        },
+        opts,
+    );
+    let cost = |doc: &str| -> (usize, usize) {
+        let shapes = ["<path", "<rect", "<circle", "<ellipse"]
+            .iter()
+            .map(|t| doc.matches(t).count())
+            .sum::<usize>();
+        (shapes, doc.len())
     };
-    sw.mark("emit");
-    if let Some(path) = &args.uncertainty {
-        let bands =
-            uncertainty::bands_svg(&svg, &map.edges, map.width, map.height, args.uncertainty_k);
-        if let Err(e) = std::fs::write(path, bands) {
-            eprintln!(
+    let (pf, bf) = cost(&flat);
+    let (pl, bl) = cost(&layered);
+    // Fewer shapes *and* not more coordinates. A document with fewer paths and
+    // more numbers in them is not the simpler one, whatever the path count says.
+    let pays = pl < pf && bl <= bf;
+    diag::stage(quiet, || {
+        format!(
+            "                as layers {pl} shapes / {bl} bytes, flat {pf} / {bf}: {}",
+            if pays { "kept" } else { "dropped" }
+        )
+    });
+    if pays {
+        layered
+    } else {
+        flat
+    }
+}
+
+/// `--uncertainty <path>`: write the confidence bands of the traced boundaries beside the
+/// document (see [`crate::uncertainty`]). A write failure is reported and does not fail
+/// the trace.
+fn write_uncertainty(args: &Args, svg: &str, map: &planar::PlanarMap) {
+    let Some(path) = &args.uncertainty else {
+        return;
+    };
+    let bands = uncertainty::bands_svg(svg, &map.edges, map.width, map.height, args.uncertainty_k);
+    if let Err(e) = std::fs::write(path, bands) {
+        diag::warn(|| {
+            format!(
                 "could not write the confidence bands to {}: {e}",
                 path.display()
-            );
-        }
+            )
+        });
     }
-    let anchors = n_cubic + n_line;
-    let mut report = if fast {
-        vec![fast::report(args)]
-    } else {
-        Vec::new()
-    };
-    report.extend(mono_line);
-    report.extend([
+}
+
+/// The numbers the colour pipeline reports: one line per stage, in [`ColourReport::lines`].
+struct ColourReport<'a> {
+    /// Palette entries.
+    palette: usize,
+    /// Faces of the planar map.
+    faces: usize,
+    /// Faces written with a gradient fill.
+    gradients: usize,
+    /// Shared edges of the planar map.
+    edges: usize,
+    /// Edges written as one primitive.
+    primitives: usize,
+    /// What the global boundary solve did, if it gained anything.
+    boundary: Option<&'a inkvec_trace::boundary_opt::Report>,
+    /// The label map's mirrors.
+    symmetry: &'a inkvec_trace::symmetry::Symmetry,
+    /// Boundary points the symmetry pass averaged.
+    symmetrised: usize,
+    /// Fits reflected or centred by [`apply_mirrors`].
+    mirrored_fits: usize,
+    /// Boundaries refitted to stop rings crossing.
+    repaired: usize,
+    /// Line segments fitted, before mirroring.
+    n_line: usize,
+    /// Cubic segments fitted, before mirroring.
+    n_cubic: usize,
+    /// Boundary points measured by the tracer.
+    measured: usize,
+}
+
+impl ColourReport<'_> {
+    /// The report lines, in pipeline order.
+    fn lines(&self) -> [String; 6] {
+        let (n_line, n_cubic, measured) = (self.n_line, self.n_cubic, self.measured);
+        let (symmetrised, mirrored_fits, repaired) =
+            (self.symmetrised, self.mirrored_fits, self.repaired);
+        let n_grad = self.gradients;
+        let anchors = n_cubic + n_line;
+        [
             format!(
                 "palette       {} colours, {} faces ({n_grad} gradient)",
-                pal.len(),
-                face_color.len()
+                self.palette, self.faces
             ),
             format!(
                 "planar map    {} shared edges ({} primitive)",
-                map.edges.len(),
-                prims.iter().filter(|p| p.is_some()).count()
+                self.edges, self.primitives
             ),
-            boundary_report.as_ref().map_or_else(
+            self.boundary.map_or_else(
                 || "boundary solve  no gain".to_string(),
-                |r| format!(
-                    "boundary solve  E {:.1} -> {:.1} in {} iteration(s), {} point(s) moved{}",
-                    r.before,
-                    r.after,
-                    r.iters,
-                    r.moved,
-                    if r.scale < 1.0 {
-                        format!(", scaled to {:.0}% to stay simple", r.scale * 100.0)
-                    } else {
-                        String::new()
-                    }
-                ),
+                |r| {
+                    format!(
+                        "boundary solve  E {:.1} -> {:.1} in {} iteration(s), {} point(s) moved{}",
+                        r.before,
+                        r.after,
+                        r.iters,
+                        r.moved,
+                        if r.scale < 1.0 {
+                            format!(", scaled to {:.0}% to stay simple", r.scale * 100.0)
+                        } else {
+                            String::new()
+                        }
+                    )
+                },
             ),
-            if symmetry.is_empty() {
+            if self.symmetry.is_empty() {
                 "symmetry      none in the label map".to_string()
             } else {
                 format!(
                     "symmetry      {} mirror(s), {symmetrised} point(s) averaged, {mirrored_fits} fit(s) reflected",
-                    symmetry.mirrors.len()
+                    self.symmetry.mirrors.len()
                 )
             },
             format!("repair        {repaired} boundary refit(s) to stop rings crossing"),
@@ -1136,12 +1479,17 @@ fn finish_color(
                 "segments      {anchors}  ({n_line} line, {n_cubic} cubic) from {measured} measured points, {:.1}x reduction",
                 measured as f64 / anchors.max(1) as f64
             ),
-        ]);
-    Ok((svg, report))
+        ]
+    }
 }
 
-/// MDL cost of a fitted path against the measurements it came from, in the same units
-/// the fitters minimise, so a primitive and a curve description are directly comparable.
+/// Research builds: whether the structurally simplified fit `trial` should replace the
+/// `baseline` fit, boundary by boundary priced at each one's own lambda (`scales`).
+///
+/// A transaction: the trial is accepted only if, on *every* boundary, it spends no more
+/// parameters (by the fitter's count and by the numbers SVG would write) and costs no more
+/// by [`path_cost`], and on at least one boundary it spends strictly fewer. Mismatched
+/// lengths or a non-finite cost reject it.
 fn structural_trial_improves(
     polys: &[inkvec_core::Polyline],
     trial: &[FittedPath],
@@ -1188,6 +1536,14 @@ fn structural_trial_improves(
     strict
 }
 
+/// MDL cost of a fitted path against the measurements it came from, in the same units
+/// the fitters minimise, so a primitive and a curve description are directly comparable:
+///
+/// `cost = χ²/2 + λ·k`, where `χ² = Σ_i (d_i / σ_i)²` sums each measured point's squared
+/// distance `d_i` (px) to the path (sampled every quarter pixel) over its sigma `σ_i` (px),
+/// `λ` is `cfg.lambda` (nats per parameter) and `k` the path's parameter count. Half of χ²
+/// is the negative log-likelihood of the points under independent Gaussian errors, so both
+/// terms are in nats. A path with no segments costs infinity.
 fn path_cost(poly: &inkvec_core::Polyline, path: &FittedPath, cfg: &FitConfig) -> f64 {
     let chi2 = inkvec_fit::curves::chi2(&poly.points, &poly.sigma, path.start, &path.segments);
     0.5 * chi2 + cfg.lambda * path.params()
@@ -1226,46 +1582,6 @@ fn demote_imperceptible_gradient(f: gradient::FillFit) -> gradient::FillFit {
         model: gradient::FillModel::Flat(mid),
         ..f
     }
-}
-
-/// A basic colour name for an OKLab colour, for use as an element id.
-///
-/// Not a semantic label — it does not know that a shape is a wing or a wheel — but it is
-/// the part of naming that can be done from the geometry alone, and it is the difference
-/// between an editor showing `path4728` and showing `blue-3`. Semantic naming needs a
-/// model that has seen the picture (DESIGN.md S6); this needs nothing.
-pub(crate) fn colour_name(rgb: [f32; 3]) -> &'static str {
-    let c = inkvec_trace::color::rgb_to_oklab(rgb);
-    let chroma = (c.a * c.a + c.b * c.b).sqrt();
-    if chroma < 0.03 {
-        return match c.l {
-            l if l > 0.93 => "white",
-            l if l > 0.72 => "light-grey",
-            l if l > 0.42 => "grey",
-            l if l > 0.18 => "dark-grey",
-            _ => "black",
-        };
-    }
-    // Hue in degrees, measured the usual way round the OKLab a/b plane.
-    let hue = c.b.atan2(c.a).to_degrees().rem_euclid(360.0);
-    let base = match hue {
-        h if h < 20.0 => "red",
-        h if h < 45.0 => "orange",
-        h if h < 70.0 => "yellow",
-        h if h < 100.0 => "olive",
-        h if h < 165.0 => "green",
-        h if h < 200.0 => "teal",
-        h if h < 240.0 => "cyan",
-        h if h < 285.0 => "blue",
-        h if h < 320.0 => "purple",
-        h if h < 345.0 => "magenta",
-        _ => "red",
-    };
-    // Brown is dark orange, and calling it orange reads wrong in a layer list.
-    if (base == "orange" || base == "red") && c.l < 0.5 {
-        return "brown";
-    }
-    base
 }
 
 #[cfg(test)]
@@ -1317,14 +1633,6 @@ mod tests {
             &[1.0],
             &cfg
         ));
-    }
-
-    #[test]
-    fn test_colour_name() {
-        assert_eq!(colour_name([1.0, 1.0, 1.0]), "white");
-        assert_eq!(colour_name([0.0, 0.0, 0.0]), "black");
-        assert_eq!(colour_name([1.0, 0.0, 0.0]), "orange");
-        assert_eq!(colour_name([0.0, 0.0, 1.0]), "blue");
     }
 
     #[test]

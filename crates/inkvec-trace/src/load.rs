@@ -177,9 +177,13 @@ fn widen<const C: usize>(raw: &[u8], rgba: impl Fn(&[u8; C]) -> [u8; 4] + Sync) 
     let n = raw.len() / C;
     let mut data = vec![0.0f32; n * 4];
     let convert = |(out, src): (&mut [f32], &[u8])| {
-        for (o, s) in out.chunks_exact_mut(4).zip(src.chunks_exact(C)) {
-            // `chunks_exact(C)` yields exactly C bytes, so the conversion cannot fail.
-            let q = rgba(s.try_into().expect("C bytes"));
+        for (o, s) in out
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(src.as_chunks::<C>().0)
+        {
+            let q = rgba(s);
             for c in 0..4 {
                 o[c] = UNIT[q[c] as usize];
             }

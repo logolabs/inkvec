@@ -96,7 +96,7 @@ fn resampled(w: usize, h: usize, seed: u64, alpha: bool) -> Case {
     let mut c = img8(w, h, seed, 4, 10, alpha);
     let mut s = seed ^ 0x9e37_79b9;
     for (p, px) in c.rgb.iter_mut().enumerate() {
-        if lcg(&mut s) % 3 == 0 {
+        if lcg(&mut s).is_multiple_of(3) {
             for v in px.iter_mut() {
                 *v = (*v * 0.999_7 + (lcg(&mut s) % 1000) as f32 * 1e-6).min(1.0);
             }

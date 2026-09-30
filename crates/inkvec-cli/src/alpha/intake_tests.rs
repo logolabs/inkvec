@@ -177,7 +177,7 @@ fn the_transparency_scan_is_the_old_one() {
 fn flattening_in_place_is_flattening_a_copy() {
     for (w, h) in [(1usize, 1usize), (40, 30), (300, 260)] {
         let mut white_mark = random_rgba(w, h, 5, 0);
-        for p in white_mark.data.chunks_exact_mut(4) {
+        for p in white_mark.data.as_chunks_mut::<4>().0 {
             p[..3].copy_from_slice(&[1.0, 1.0, 1.0]);
         }
         for mut img in [random_rgba(w, h, 3, 0), white_mark] {
@@ -185,9 +185,9 @@ fn flattening_in_place_is_flattening_a_copy() {
             img.data[w * h * 4 - 1] = 0.4;
             for (cutout, native) in [(false, false), (true, false), (false, true)] {
                 let a = alpha_source(&img, true, cutout, native).expect("translucent");
-                let b = alpha_source_owned(img.clone(), true, cutout, native)
-                    .ok()
-                    .expect("translucent");
+                let Ok(b) = alpha_source_owned(img.clone(), true, cutout, native) else {
+                    panic!("translucent");
+                };
                 let what = format!("{w}x{h} cutout {cutout} native {native}");
                 assert_eq!(bits(&a.flat.data), bits(&b.flat.data), "{what}");
                 assert_eq!((a.flat.width, a.flat.height), (b.flat.width, b.flat.height));
@@ -205,9 +205,9 @@ fn flattening_in_place_is_flattening_a_copy() {
                 .collect(),
         };
         assert!(alpha_source(&opaque, true, false, true).is_none());
-        let back = alpha_source_owned(opaque.clone(), true, false, true)
-            .err()
-            .expect("opaque");
+        let Err(back) = alpha_source_owned(opaque.clone(), true, false, true) else {
+            panic!("opaque");
+        };
         assert_eq!(bits(&back.data), bits(&opaque.data));
     }
 }

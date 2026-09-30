@@ -213,7 +213,7 @@ impl Rgba {
     pub fn composited(&self, bg: [f32; 3]) -> Vec<[f32; 3]> {
         use rayon::prelude::*;
         let n = self.width * self.height;
-        let over = |p: &[f32]| {
+        let over = |p: &[f32; 4]| {
             let a = p[3];
             [
                 p[0] * a + bg[0] * (1.0 - a),
@@ -223,9 +223,9 @@ impl Rgba {
         };
         let px = &self.data[..n * 4];
         if n < COMPOSITE_PARALLEL_MIN {
-            px.chunks_exact(4).map(over).collect()
+            px.as_chunks::<4>().0.iter().map(over).collect()
         } else {
-            px.par_chunks_exact(4).map(over).collect()
+            px.as_chunks::<4>().0.par_iter().map(over).collect()
         }
     }
 }

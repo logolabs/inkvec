@@ -875,9 +875,11 @@ pub(crate) fn flatten_over(
     let mut alpha = vec![0.0f32; n];
     let run = |((out, a), src): ((&mut [f32], &mut [f32]), &[f32])| {
         for ((o, a), p) in out
-            .chunks_exact_mut(4)
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
             .zip(a.iter_mut())
-            .zip(src.chunks_exact(4))
+            .zip(src.as_chunks::<4>().0)
         {
             o.copy_from_slice(p);
             *a = flatten_pixel(o, matte);
@@ -906,7 +908,7 @@ pub(crate) fn flatten_over(
 /// b·a' + M_b·(1 − a'), 1]`. The arithmetic of the old push loop, operand for operand, so
 /// the floats are the same.
 #[inline]
-fn flatten_pixel(p: &mut [f32], matte: [f32; 3]) -> f32 {
+fn flatten_pixel(p: &mut [f32; 4], matte: [f32; 3]) -> f32 {
     let a = p[3].clamp(0.0, 1.0);
     for c in 0..3 {
         p[c] = p[c] * a + matte[c] * (1.0 - a);
@@ -933,7 +935,7 @@ fn flatten_in_place(
     );
     let mut alpha = vec![0.0f32; n];
     let run = |(px, a): (&mut [f32], &mut [f32])| {
-        for (p, a) in px.chunks_exact_mut(4).zip(a.iter_mut()) {
+        for (p, a) in px.as_chunks_mut::<4>().0.iter_mut().zip(a.iter_mut()) {
             *a = flatten_pixel(p, matte);
         }
     };
@@ -964,14 +966,16 @@ const FLATTEN_CHUNK: usize = 1 << 14;
 /// a pure predicate, so the answer does not depend on the split.
 fn has_transparency(img: &inkvec_trace::Rgba) -> bool {
     use rayon::prelude::*;
-    let translucent = |p: &[f32]| p[3] < 0.999;
+    let translucent = |p: &[f32; 4]| p[3] < 0.999;
     if img.data.len() / 4 >= INTAKE_PARALLEL_MIN {
         img.data
-            .par_chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .par_iter()
             .with_min_len(FLATTEN_CHUNK)
             .any(translucent)
     } else {
-        img.data.chunks_exact(4).any(translucent)
+        img.data.as_chunks::<4>().0.iter().any(translucent)
     }
 }
 

@@ -227,3 +227,72 @@ fn free_cubic_is_unchanged_by_the_early_exit() {
         );
     }
 }
+
+/// Closed test boundaries with corners, fillets and wobble: what the merge pass is for.
+fn test_rings(rng: &mut Rng) -> Vec<Polyline> {
+    let mut rings = Vec::new();
+    for case in 0..12 {
+        let n = 60 + 20 * (case % 5);
+        let (w, h, r) = (
+            20.0 + 10.0 * rng.next(),
+            14.0 + 10.0 * rng.next(),
+            1.0 + 5.0 * rng.next(),
+        );
+        let wobble = [0.0, 0.15, 0.4][case % 3];
+        let pts: Vec<Point> = (0..n)
+            .map(|k| {
+                let t = std::f64::consts::TAU * k as f64 / n as f64;
+                // A superellipse: square-ish with rounded corners, sharper as `e` grows.
+                let e = 2.0 + r;
+                let (c, s) = (t.cos(), t.sin());
+                let x = w * c.signum() * c.abs().powf(2.0 / e);
+                let y = h * s.signum() * s.abs().powf(2.0 / e);
+                Point::new(
+                    x + wobble * (rng.next() - 0.5),
+                    y + wobble * (rng.next() - 0.5),
+                )
+            })
+            .collect();
+        rings.push(Polyline::new(pts, vec![0.1 + 0.2 * rng.next(); n], true));
+    }
+    rings
+}
+
+/// Remembering turned-down runs across sweeps changes nothing: the pass with the memory
+/// makes exactly the merges, and the cubics, of the pass that forgets after every sweep
+/// (within one sweep no run is tried twice, so a fresh memory per sweep is no memory).
+#[test]
+fn remembered_rejections_change_no_merge() {
+    let mut rng = Rng(29);
+    let cfg = FitConfig::default();
+    let mut total = 0;
+    for poly in test_rings(&mut rng) {
+        for span in [3, 5, 8] {
+            let fit = crate::multimodel::optimal_multimodel_capped_full(&poly, &cfg, span);
+            let mut with = fit.path.clone();
+            let merged = merge_free_cubics(&mut with, &poly, &fit.vertices, &cfg);
+            let mut without = fit.path.clone();
+            let mut verts = fit.vertices.clone();
+            let mut merged_without = 0;
+            if without.segments.len() >= 2 && verts.len() == without.segments.len() + 1 {
+                for _ in 0..MAX_ROUNDS {
+                    let got = merge_round(
+                        &mut without,
+                        &poly,
+                        &mut verts,
+                        &cfg,
+                        &mut RejectedRuns::default(),
+                    );
+                    merged_without += got;
+                    if got == 0 {
+                        break;
+                    }
+                }
+            }
+            assert_eq!(merged, merged_without);
+            assert_eq!(format!("{with:?}"), format!("{without:?}"));
+            total += merged;
+        }
+    }
+    assert!(total > 0, "the test boundaries never merged anything");
+}

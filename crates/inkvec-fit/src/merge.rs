@@ -526,14 +526,43 @@ pub fn merge_free_cubics(
     // purpose is to remove segments, which is impossible if the bookkeeping is right.
     let mut verts: Vec<usize> = vertices.to_vec();
     let mut merged = 0usize;
+    let mut rejected = RejectedRuns::default();
     for _ in 0..MAX_ROUNDS {
         let before = merged;
-        merged += merge_round(path, poly, &mut verts, cfg);
+        merged += merge_round(path, poly, &mut verts, cfg, &mut rejected);
         if merged == before {
             break;
         }
     }
     merged
+}
+
+/// The runs a [`merge_free_cubics`] call has already tried and turned down, each named by
+/// its vertex indices (`verts[m..=m + run]`, padded with `usize::MAX`).
+///
+/// Local invalidation, as in the pair-contraction simplifier of Garland & Heckbert (1997),
+/// "Surface Simplification Using Quadric Error Metrics", SIGGRAPH,
+/// https://www.cs.cmu.edu/~garland/Papers/quadrics.pdf: after a contraction only the
+/// candidates that touch the changed element are re-costed. Here the sweep is kept in its
+/// own order (so which merges happen does not change) and a run is simply not re-tried
+/// unless it touches a segment a merge created. A run is a pure function of its vertices:
+/// the path's start and every segment's end point never move (a merged cubic ends where
+/// its run ended), and a segment between two consecutive vertices can never be replaced
+/// while both survive, because a merge only creates segments between vertices that had
+/// others between them. So a run seen again with the same vertices is the same run, with
+/// the same free cubic and the same costs, and it would be turned down again. Measured on
+/// the 246-icon screen set: 2,467 of 12,248 attempts (20%) were such repeats, all turned
+/// down again, and sweeps after the first found 16 merges in 2,996 attempts.
+#[derive(Default)]
+struct RejectedRuns(std::collections::HashSet<[usize; MAX_RUN + 1]>);
+
+impl RejectedRuns {
+    /// The key of the run of `run` segments from segment `m`.
+    fn key(verts: &[usize], m: usize, run: usize) -> [usize; MAX_RUN + 1] {
+        let mut k = [usize::MAX; MAX_RUN + 1];
+        k[..=run].copy_from_slice(&verts[m..=m + run]);
+        k
+    }
 }
 
 /// One sweep of the pass. Repeated by the caller until it stops finding anything.
@@ -555,6 +584,7 @@ fn merge_round(
     poly: &Polyline,
     verts: &mut Vec<usize>,
     cfg: &FitConfig,
+    rejected: &mut RejectedRuns,
 ) -> usize {
     let mut merged = 0usize;
     let mut m = 0usize;
@@ -577,6 +607,11 @@ fn merge_round(
             {
                 continue;
             }
+            // Turned down before with these very vertices, so turned down again.
+            let key = RejectedRuns::key(verts, m, run);
+            if rejected.0.contains(&key) {
+                continue;
+            }
             // Where this run actually starts and ends on the path, not on the contour.
             let run_start = if m == 0 {
                 path.start
@@ -585,9 +620,11 @@ fn merge_round(
             };
             let run_end = path.segments[m + run - 1].end();
             let Some(c) = free_cubic(poly, a, b, run_start, run_end) else {
+                rejected.0.insert(key);
                 continue;
             };
             if cubic_self_intersects(c[0], c[1], c[2], c[3]) {
+                rejected.0.insert(key);
                 continue;
             }
 
@@ -628,6 +665,7 @@ fn merge_round(
                 best = Some((run, c, new_cost));
                 break;
             }
+            rejected.0.insert(key);
         }
 
         if let Some((run, c, _)) = best {

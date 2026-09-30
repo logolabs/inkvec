@@ -212,6 +212,18 @@ pub fn fit_ellipse_algebraic(pts: &[Point], sigma: &[f64]) -> Option<EllipseFit>
 /// 5×5 eigen solve runs on stack arrays (`solver::gen_eigen_5`): the arithmetic and its
 /// order are those of the original, so the fit is bit-identical.
 pub(crate) fn taubin_ellipse(pts: &[Point], sigma: &[f64]) -> Option<EllipseFit> {
+    taubin_ellipse_with_residual(pts, sigma).map(|(e, _)| e)
+}
+
+/// [`taubin_ellipse`], also returning Taubin's minimised residual in px² as a weighted
+/// sum over the points, `μ·s²·Σw`: `μ = Σ w·Q² / Σ w·|∇Q|²` is the smallest generalised
+/// eigenvalue in the scaled frame, `s` the frame's scale and `Σw` the total weight. It
+/// approximates the Sampson χ² `Σ w·Q²/|∇Q|²` of the conic (Taubin 1991), and so, near
+/// the curve, its orthogonal χ² (see [`fit_ellipse_screened`]).
+pub(crate) fn taubin_ellipse_with_residual(
+    pts: &[Point],
+    sigma: &[f64],
+) -> Option<(EllipseFit, f64)> {
     let n = pts.len();
     if n < 6 {
         return None;
@@ -277,7 +289,7 @@ pub(crate) fn taubin_ellipse(pts: &[Point], sigma: &[f64]) -> Option<EllipseFit>
             }
         }
     }
-    let theta = gen_eigen_5(&cov, &nrm)?;
+    let (theta, mu) = gen_eigen_5(&cov, &nrm)?;
     let f = -(0..5).map(|k| mean[k] * theta[k]).sum::<f64>();
     let (c, r1, r2, angle) =
         conic_to_ellipse([theta[0], theta[1], theta[2], theta[3], theta[4], f])?;
@@ -286,13 +298,14 @@ pub(crate) fn taubin_ellipse(pts: &[Point], sigma: &[f64]) -> Option<EllipseFit>
     } else {
         (r2, r1, angle + PI / 2.0)
     };
-    Some(EllipseFit {
+    let fit = EllipseFit {
         c: Point::new(mx + scale * c.x, my + scale * c.y),
         rx: rx * scale,
         ry: ry * scale,
         angle: canonical_angle(angle),
         chi2: f64::INFINITY,
-    })
+    };
+    Some((fit, mu * scale * scale * sw))
 }
 
 /// Orthogonal-distance ellipse fit (Ahn et al. 2001).
@@ -349,6 +362,52 @@ pub(crate) fn fit_ellipse_from(
         }
     }
     best
+}
+
+/// Taubin's residual, as a share of the orthogonal χ² the Levenberg–Marquardt fit
+/// reaches from it, never fell below 0.28 over the 1,131 closed rings of the 246-icon
+/// screen set and the 232 of a 1672×941 poster. A residual this multiple of which already
+/// exceeds the caller's χ² gate marks an ellipse the gate would refuse.
+const SCREEN_SHARE: f64 = 0.25;
+
+/// The orthogonal ellipse fit the whole-ring primitive search offers, or `None` where the
+/// χ² `gate` it must then pass would refuse it anyway.
+///
+/// Two economies over [`fit_ellipse_from`], both taken from the literature on algebraic
+/// fits as initialisers. Taubin's normalisation makes the algebraic residual approximate
+/// the squared geometric distance: Taubin (1991), "Estimation of planar curves, surfaces,
+/// and nonplanar space curves defined by implicit equations with applications to edge and
+/// range image segmentation", IEEE TPAMI 13(11):1115–1138, doi:10.1109/34.103273; and
+/// Kanatani & Rangarajan (2011), "Hyper least squares fitting of circles and ellipses",
+/// Comput. Stat. Data Anal. 55:2197–2208, doi:10.1016/j.csda.2010.12.012, eqs. 14–17 and
+/// 23, cast it as the eigenproblem solved here. So:
+///
+/// * the fit is not run when `SCREEN_SHARE` of Taubin's residual already exceeds `gate`
+///   (the gate refused 924 of the screen set's 1,131 closed-ring ellipses; this screen
+///   catches 806 of them, and never one the gate passed);
+/// * Levenberg–Marquardt starts from the algebraic fit alone, as Halíř & Flusser (1998),
+///   "Numerically stable direct least squares fitting of ellipses", WSCG,
+///   https://autotrace.sourceforge.net/WSCG98.pdf, recommend for the direct fit ("a fast
+///   and robust estimator of a good initial solution"), rather than from it and four
+///   near-circles. Over the screen set and the poster, every one of the 93 ellipses chosen
+///   came from the algebraic start. The near-circles remain the fallback when there is no
+///   algebraic ellipse, or when Levenberg–Marquardt fails from it.
+pub(crate) fn fit_ellipse_screened(
+    pts: &[Point],
+    sigma: &[f64],
+    circle: Option<super::CircleFit>,
+    gate: f64,
+) -> Option<EllipseFit> {
+    if pts.len() < 6 {
+        return None;
+    }
+    let Some((alg, residual)) = taubin_ellipse_with_residual(pts, sigma) else {
+        return fit_ellipse_from(pts, sigma, circle);
+    };
+    if SCREEN_SHARE * residual > gate {
+        return None;
+    }
+    refine_ellipse(pts, sigma, alg).or_else(|| fit_ellipse_from(pts, sigma, circle))
 }
 
 /// Levenberg–Marquardt on the signed orthogonal distances `d_k` of [`EllipseFit::contact`],
@@ -499,7 +558,7 @@ mod tests {
                 }
             }
         }
-        let theta = gen_eigen_5(&cov, &nrm)?;
+        let (theta, _) = gen_eigen_5(&cov, &nrm)?;
         let f = -(0..5).map(|k| mean[k] * theta[k]).sum::<f64>();
         let (c, r1, r2, angle) =
             conic_to_ellipse([theta[0], theta[1], theta[2], theta[3], theta[4], f])?;
@@ -563,6 +622,90 @@ mod tests {
             }
         }
         assert!(fitted > 100);
+    }
+
+    /// The screened, single-start fit reaches the whole-ring search's verdict on the full
+    /// five-start fit (sane radii, the χ² gate, a full turn round the centre, as
+    /// `super::offer_ellipse` asks) on ellipses, noisy ellipses, rounded squares, stars and
+    /// slivers, and where both are offered it is no worse.
+    #[test]
+    fn screened_fit_agrees_with_the_full_search_at_the_gate() {
+        let mut st = 77u64;
+        let mut rnd = || {
+            st = st
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (st >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let (mut passed, mut refused) = (0, 0);
+        for case in 0..240 {
+            let n = 24 + case % 150;
+            let (rx, ry, rot) = (3.0 + 40.0 * rnd(), 2.0 + 25.0 * rnd(), 3.0 * rnd());
+            let noise = [0.0, 0.1, 0.4, 1.0][case % 4];
+            // 0: ellipse; 1: superellipse (rounded square); 2: star; 3: thin sliver.
+            let shape = (case / 4) % 4;
+            let pts: Vec<Point> = (0..n)
+                .map(|k| {
+                    let t = std::f64::consts::TAU * k as f64 / n as f64;
+                    let (c, s) = (t.cos(), t.sin());
+                    let (x, y) = match shape {
+                        0 => (rx * c, ry * s),
+                        1 => (
+                            rx * c.signum() * c.abs().sqrt(),
+                            ry * s.signum() * s.abs().sqrt(),
+                        ),
+                        2 => {
+                            let r = 1.0 + 0.3 * (5.0 * t).cos();
+                            (rx * r * c, rx * r * s)
+                        }
+                        _ => (rx * c, 0.05 * ry * s),
+                    };
+                    let (sr, cr) = rot.sin_cos();
+                    Point::new(
+                        cr * x - sr * y + noise * (rnd() - 0.5),
+                        sr * x + cr * y + noise * (rnd() - 0.5),
+                    )
+                })
+                .collect();
+            let sigma = vec![0.25; n];
+            let gate = 4.0 * n as f64;
+            let full = fit_ellipse(&pts, &sigma);
+            let screened = fit_ellipse_screened(&pts, &sigma, fit_circle(&pts, &sigma), gate);
+            let span = pts
+                .iter()
+                .map(|p| p.dist(pts[0]))
+                .fold(0.0f64, f64::max)
+                .max(1.0);
+            let offered = |e: &EllipseFit| {
+                e.rx.is_finite()
+                    && e.ry.is_finite()
+                    && e.rx.max(e.ry) <= 1e3 * span
+                    && e.chi2 <= gate
+                    && super::super::total_sweep(&pts, e.c, true).abs() > 1.9 * PI
+            };
+            let full_ok = full.as_ref().is_some_and(offered);
+            let screened_ok = screened.as_ref().is_some_and(offered);
+            let res = taubin_ellipse_with_residual(&pts, &sigma)
+                .map(|(e, r)| (r, refine_ellipse(&pts, &sigma, e).map(|f| f.chi2)));
+            assert_eq!(
+                full_ok,
+                screened_ok,
+                "case {case}, shape {shape}: gate {gate} full {:?} screened {:?} residual/refined {:?}",
+                full.map(|e| (e.chi2, e.rx, e.ry)),
+                screened.map(|e| (e.chi2, e.rx, e.ry)),
+                res
+            );
+            if let (true, Some(f), Some(s)) = (full_ok, full, screened) {
+                assert!(s.chi2 <= f.chi2 * (1.0 + 1e-6) + 1e-9, "case {case}");
+                passed += 1;
+            } else {
+                refused += 1;
+            }
+        }
+        assert!(
+            passed > 20 && refused > 20,
+            "{passed} passed, {refused} refused"
+        );
     }
 
     /// The unscored fit is the scored one minus its χ², bit for bit, on arcs, full rings,

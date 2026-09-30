@@ -169,7 +169,10 @@ pub(crate) fn sym_eigen<const N: usize>(mut a: Mat<N>) -> ([f64; N], Mat<N>) {
 /// is `A`'s eigenvector for its smallest eigenvalue, and `theta = L⁻ᵀ·y`. `theta` is
 /// normalised in the `nrm` metric, not to unit length. `None` if `nrm` is not positive
 /// definite.
-pub(crate) fn gen_eigen_5(cov: &Mat<5>, nrm: &Mat<5>) -> Option<[f64; 5]> {
+///
+/// Also returns the smallest generalised eigenvalue `μ = θᵀ·cov·θ / θᵀ·nrm·θ`, the
+/// minimised ratio itself.
+pub(crate) fn gen_eigen_5(cov: &Mat<5>, nrm: &Mat<5>) -> Option<([f64; 5], f64)> {
     let l = cholesky(nrm)?;
     let mut tmp = [[0.0; 5]; 5];
     for j in 0..5 {
@@ -194,7 +197,7 @@ pub(crate) fn gen_eigen_5(cov: &Mat<5>, nrm: &Mat<5>) -> Option<[f64; 5]> {
     let (evals, evecs) = sym_eigen(a);
     let best = (0..5).min_by(|&i, &j| evals[i].total_cmp(&evals[j]))?;
     let y: [f64; 5] = std::array::from_fn(|i| evecs[i][best]);
-    Some(back_sub_t(&l, &y))
+    Some((back_sub_t(&l, &y), evals[best]))
 }
 
 /// Levenberg–Marquardt on a residual vector whose normal equations `eval` supplies.
@@ -426,7 +429,7 @@ mod tests {
                     row[a] += 1.0;
                 }
             }
-            let got = gen_eigen_5(&cov, &nrm);
+            let got = gen_eigen_5(&cov, &nrm).map(|(theta, _)| theta);
             let cv: Vec<Vec<f64>> = cov.iter().map(|r| r.to_vec()).collect();
             let nv: Vec<Vec<f64>> = nrm.iter().map(|r| r.to_vec()).collect();
             let want = reference::gen_eigen_5(&cv, &nv);

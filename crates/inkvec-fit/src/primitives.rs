@@ -903,7 +903,7 @@ fn offer_ellipse(run: &PrimRun<'_>, circle: Option<CircleFit>, sign: f64, best: 
         .map(|p| p.dist(pts[0]))
         .fold(0.0f64, f64::max)
         .max(1.0);
-    if let Some(e) = ellipse::fit_ellipse_from(pts, run.sigma, circle) {
+    if let Some(e) = ellipse::fit_ellipse_screened(pts, run.sigma, circle, run.gate) {
         let sane = e.rx.is_finite()
             && e.ry.is_finite()
             && e.c.x.is_finite()

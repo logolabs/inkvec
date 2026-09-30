@@ -51,6 +51,10 @@ impl OnnxRestorer {
     }
 
     /// Restore straight RGB in `[0, 1]`, row-major, 3 floats per pixel. Same size out.
+    ///
+    /// The whole image is one tensor, padded to a multiple of [`crate::MULTIPLE`] and cropped
+    /// back afterwards; the session is locked for the duration of the run, so concurrent
+    /// callers take turns.
     pub fn restore(
         &self,
         rgb: &[f32],

@@ -41,6 +41,9 @@ impl External {
     }
 }
 
+/// Write interleaved RGB (`0..1`) to `path` as an 8-bit RGB PNG, each value clamped and
+/// rounded to the nearest level. Fails when the buffer does not hold exactly
+/// `3·width·height` values or the file cannot be written.
 fn write_png(
     rgb: &[f32],
     width: usize,
@@ -58,6 +61,10 @@ fn write_png(
 }
 
 impl Restore for External {
+    /// Round-trip through the file system in a fresh temporary folder: `in.png` out, the
+    /// command run, `out.png` read back. A result of a different size is an error; any alpha
+    /// the command wrote is dropped. The values come back on the 8-bit grid, which is the
+    /// recipe the in-process backends reproduce with their own quantisation.
     fn restore(
         &self,
         rgb: &[f32],
@@ -97,5 +104,40 @@ impl Restore for External {
 
     fn describe(&self) -> String {
         format!("external via `{}`", self.program)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_python_command_runs_restore_cli_in_the_training_repo() {
+        let e = External::python(Path::new("repo"), Path::new("ck.pt"));
+        assert_eq!(e.args, ["restore_cli.py", "{in}", "{out}", "--ckpt", "ck.pt"]);
+        assert_eq!(e.work_dir.as_deref(), Some(Path::new("repo")));
+        assert!(e.describe().starts_with("external via"));
+    }
+
+    #[test]
+    fn a_missing_command_is_an_error() {
+        let e = External {
+            program: "inkvec-restore-test-no-such-program".into(),
+            args: vec!["{in}".into(), "{out}".into()],
+            work_dir: None,
+        };
+        let err = e.restore(&[0.5; 12], 2, 2).expect_err("cannot start");
+        assert!(err.to_string().contains("could not run the external restorer"));
+    }
+
+    #[test]
+    fn a_png_is_written_on_the_eight_bit_grid() {
+        let dir = RunDir::new("inkvec-restore-test").expect("temp dir");
+        let path = dir.path().join("x.png");
+        write_png(&[0.0, 0.5, 1.2, -1.0, 1.0, 0.25], 2, 1, &path).expect("writes");
+        let back = inkvec_trace::load_image(&path).expect("reads");
+        let bytes: Vec<u8> = back.data.iter().map(|v| (v * 255.0).round() as u8).collect();
+        assert_eq!(bytes, [0, 128, 255, 255, 0, 255, 64, 255]);
+        assert!(write_png(&[0.0; 5], 2, 1, &path).is_err(), "short buffer");
     }
 }

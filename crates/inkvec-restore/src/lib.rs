@@ -20,6 +20,17 @@
 //! (feature `onnxruntime`), Burn (feature `model` plus a backend), or an external command. The
 //! mode logic does not know the difference, the same split `inkvec-sr` uses and for the same
 //! reason: the network pulls in a full ML runtime, and nothing else here should have to.
+//!
+//! The data path, for every backend: an RGBA image (straight alpha, sRGB `0..1`) is composited
+//! onto white ([`composite_on_white`]), laid out planar and padded to a multiple of
+//! [`MULTIPLE`] ([`planar`]), run through the network at that padded size in one pass (there
+//! is no tiling: the whole image is one tensor), cropped back, quantised to 256 levels,
+//! near-black and near-white snapped to the extremes, and given the input's alpha back
+//! ([`restore_rgba`]). The same size comes out as went in.
+//!
+//! Called from `inkvec-cli`'s driver before tracing, when `--restore` is `on`, or `auto` and
+//! [`decide`] says the probe trace disagrees with the input; the browser build reaches the
+//! same pre- and post-processing through [`network_input`] and [`network_output`].
 
 pub mod external;
 pub mod planar;
@@ -50,6 +61,7 @@ pub enum Mode {
 impl std::str::FromStr for Mode {
     type Err = String;
 
+    /// Parses the command-line spelling: exactly `auto`, `on` or `off` (lower case).
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "auto" => Ok(Mode::Auto),
@@ -92,12 +104,18 @@ pub const SNAP_LEVELS: u8 = 6;
 /// estimate reads those levels. An in-process backend hands back unquantised floats; rounding
 /// them here keeps every backend on the recipe that was validated instead of a near neighbour
 /// of it.
+///
+/// Per value: `v' = round(255 · clamp(v, 0, 1)) / 255`. NaN clamps to NaN and stays NaN.
 fn quantize_levels(rgb: &mut [f32]) {
     for v in rgb.iter_mut() {
         *v = (v.clamp(0.0, 1.0) * 255.0).round() / 255.0;
     }
 }
 
+/// Snap every interleaved RGB pixel whose three channels are all within [`SNAP_LEVELS`]/255
+/// of 1 to pure white, and every one whose channels are all within that of 0 to pure black.
+/// A pixel near an extreme on only some channels (a saturated colour) is left alone. A
+/// trailing partial pixel, if the length is not a multiple of 3, is ignored.
 fn snap_extremes(rgb: &mut [f32]) {
     for px in rgb.as_chunks_mut::<3>().0 {
         let hi = px.iter().all(|&v| v >= 1.0 - SNAP_LEVELS as f32 / 255.0);
@@ -118,6 +136,9 @@ fn snap_extremes(rgb: &mut [f32]) {
 /// raster; there is no alpha-aware restoration to do). Compositing on white with straight
 /// alpha matches how every restorer-eval script this project has produced its
 /// training/validation input from a transparent source.
+///
+/// Per channel: `c' = c·α + (1 − α)`, on the stored (gamma-encoded) sRGB values. The result is
+/// `3 · width · height` floats.
 pub fn composite_on_white(img: &Rgba) -> Vec<f32> {
     let n = img.width * img.height;
     let mut rgb = vec![0f32; n * 3];
@@ -223,7 +244,10 @@ pub const HF_DENOISER_REPO: &str = "Logolabs/inkvec-denoiser-001";
 pub const HF_DENOISER_URL: &str =
     "https://huggingface.co/Logolabs/inkvec-denoiser-001/resolve/main/restorer.onnx";
 
-/// Path to user-level cache directory for inkvec models.
+/// Where the auto-pulled `restorer.onnx` lives in the user's cache:
+/// `<cache>/inkvec/models/restorer.onnx`, with `<cache>` being `%LOCALAPPDATA%` (else
+/// `%USERPROFILE%\AppData\Local`) on Windows and `$XDG_CACHE_HOME` (else `$HOME/.cache`)
+/// elsewhere. `None` when none of those variables is set. The file need not exist.
 pub fn user_cache_model_path() -> Option<std::path::PathBuf> {
     #[cfg(windows)]
     let base = std::env::var_os("LOCALAPPDATA")
@@ -284,9 +308,55 @@ fn verify_weights(path: &std::path::Path) -> Result<(), Box<dyn std::error::Erro
     Ok(())
 }
 
+/// Tell the person running the program about the weights download.
+///
+/// The only console output in this crate, and deliberately so: a first run can spend minutes
+/// fetching tens of megabytes, and the callers (`load_builtin` from the command line) have no
+/// other channel to say why nothing is happening. Removing it cleanly needs a notice callback
+/// threaded through [`load_builtin`] from the caller, which would then decide (and honour
+/// `--quiet`).
+fn notice(msg: std::fmt::Arguments<'_>) {
+    eprintln!("{msg}");
+}
+
+/// The downloaders [`pull_onnx_weights`] tries, in order, each writing the weights to `to`:
+/// `curl` if installed, then Python's `urllib` (as `python`), then, on Windows, PowerShell's
+/// `WebClient`. Building a command runs nothing; each is run only if the ones before it failed.
+fn downloaders(to: &std::path::Path) -> Vec<std::process::Command> {
+    let mut curl = std::process::Command::new("curl");
+    curl.arg("-fSL").arg("-o").arg(to).arg(HF_DENOISER_URL);
+    let mut python = std::process::Command::new("python");
+    python.arg("-c").arg(format!(
+        "import urllib.request; urllib.request.urlretrieve(r'{}', r'{}')",
+        HF_DENOISER_URL,
+        to.display()
+    ));
+    // Only Windows adds a third downloader.
+    #[cfg_attr(not(windows), allow(unused_mut))]
+    let mut all = vec![curl, python];
+    #[cfg(windows)]
+    {
+        let mut ps = std::process::Command::new("powershell");
+        ps.args(["-NoProfile", "-Command"]).arg(format!(
+            "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('{}', '{}')",
+            HF_DENOISER_URL,
+            to.display()
+        ));
+        all.push(ps);
+    }
+    all
+}
+
 /// Auto-pull the restorer ONNX weights from Hugging Face if not already present, verifying the
 /// result against this crate's expected SHA256 in both cases (already present, or just
 /// downloaded).
+///
+/// The download goes to `dest` with a `.tmp` extension and is renamed into place only after it
+/// verifies, so an interrupted or corrupt download never sits at `dest`. Each downloader of
+/// [`downloaders`] is tried in turn until one exits successfully having written the file; a
+/// file that downloads but fails verification is an error at once rather than a reason to try
+/// the next downloader. When every downloader fails, the temporary file is removed and the
+/// error says how to fetch the model by hand.
 pub fn pull_onnx_weights(dest: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     if dest.is_file() {
         return verify_weights(dest);
@@ -294,79 +364,23 @@ pub fn pull_onnx_weights(dest: &std::path::Path) -> Result<(), Box<dyn std::erro
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    eprintln!(
+    notice(format_args!(
         "Restorer ONNX weights not found locally. Auto-pulling from Hugging Face ({HF_DENOISER_REPO})..."
-    );
+    ));
 
     let temp_dest = dest.with_extension("tmp");
     let _ = std::fs::remove_file(&temp_dest);
 
-    // 1. Try curl if available
-    let curl_status = std::process::Command::new("curl")
-        .args([
-            "-fSL",
-            "-o",
-            temp_dest.to_str().unwrap_or(""),
-            HF_DENOISER_URL,
-        ])
-        .status();
-
-    if let Ok(status) = curl_status {
-        if status.success() && temp_dest.is_file() {
+    for mut downloader in downloaders(&temp_dest) {
+        let ran = downloader.status().is_ok_and(|s| s.success());
+        if ran && temp_dest.is_file() {
             verify_weights(&temp_dest)?;
             std::fs::rename(&temp_dest, dest)?;
-            eprintln!(
+            notice(format_args!(
                 "Successfully downloaded restorer weights to {}",
                 dest.display()
-            );
+            ));
             return Ok(());
-        }
-    }
-
-    // 2. Try python via urllib
-    let py_script = format!(
-        "import urllib.request; urllib.request.urlretrieve(r'{}', r'{}')",
-        HF_DENOISER_URL,
-        temp_dest.display()
-    );
-    let py_status = std::process::Command::new("python")
-        .args(["-c", &py_script])
-        .status();
-
-    if let Ok(status) = py_status {
-        if status.success() && temp_dest.is_file() {
-            verify_weights(&temp_dest)?;
-            std::fs::rename(&temp_dest, dest)?;
-            eprintln!(
-                "Successfully downloaded restorer weights to {}",
-                dest.display()
-            );
-            return Ok(());
-        }
-    }
-
-    // 3. Try powershell on Windows
-    #[cfg(windows)]
-    {
-        let ps_cmd = format!(
-            "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('{}', '{}')",
-            HF_DENOISER_URL,
-            temp_dest.display()
-        );
-        let ps_status = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-Command", &ps_cmd])
-            .status();
-
-        if let Ok(status) = ps_status {
-            if status.success() && temp_dest.is_file() {
-                verify_weights(&temp_dest)?;
-                std::fs::rename(&temp_dest, dest)?;
-                eprintln!(
-                    "Successfully downloaded restorer weights to {}",
-                    dest.display()
-                );
-                return Ok(());
-            }
         }
     }
 
@@ -456,6 +470,9 @@ pub fn load_builtin(
     }
 }
 
+/// Load the Burn restorer from a `.bpk` file on the one backend this build selected. Several
+/// backend features may be on at once; the first of CUDA, wgpu, flex, ndarray wins, and a
+/// `model` build with none of them is an error rather than a compile failure.
 #[cfg(feature = "model")]
 fn load_burn(path: &std::path::Path) -> Result<Box<dyn Restore>, Box<dyn std::error::Error>> {
     #[cfg(feature = "cuda")]
@@ -542,6 +559,9 @@ pub enum Decision {
 /// questions are "does this input disagree with its own trace where the trace claims flat",
 /// and a second, differently-calibrated detector for the same question would be a second thing
 /// to keep in sync, not a more accurate one.
+///
+/// `svg` is the probe trace of `img`. An SVG that does not render, or leaves too little flat
+/// area to judge, is kept (`residual: None`): "cannot tell" does not become "restore".
 pub fn decide(img: &Rgba, svg: &str, opt: Options) -> Decision {
     let Ok(model) = inkvec_sr::detect::render_svg(svg, img.width, img.height) else {
         return Decision::Keep { residual: None };
@@ -641,6 +661,153 @@ mod tests {
             "error must name the expected hash, got: {err}"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn mode_parses_its_three_spellings() {
+        assert_eq!("auto".parse::<Mode>(), Ok(Mode::Auto));
+        assert_eq!("on".parse::<Mode>(), Ok(Mode::On));
+        assert_eq!("off".parse::<Mode>(), Ok(Mode::Off));
+        assert!("yes".parse::<Mode>().unwrap_err().contains("\"yes\""));
+    }
+
+    #[test]
+    fn compositing_on_white_blends_by_alpha() {
+        let img = Rgba {
+            width: 2,
+            height: 1,
+            data: vec![0.2, 0.4, 0.6, 1.0, 0.0, 0.0, 0.0, 0.5],
+        };
+        assert_eq!(composite_on_white(&img), [0.2, 0.4, 0.6, 0.5, 0.5, 0.5]);
+    }
+
+    #[test]
+    fn quantising_rounds_to_eight_bits_and_clamps() {
+        let mut v = [-0.1, 0.0, 0.5, 100.0 / 255.0 + 0.4 / 255.0, 1.7];
+        quantize_levels(&mut v);
+        assert_eq!(v, [0.0, 0.0, 128.0 / 255.0, 100.0 / 255.0, 1.0]);
+    }
+
+    /// A backend that brightens everything by a fixed amount, to see what the wrapper does
+    /// with a result that is off the 8-bit grid and past white.
+    struct Brighten(f32);
+
+    impl Restore for Brighten {
+        fn restore(
+            &self,
+            rgb: &[f32],
+            _w: usize,
+            _h: usize,
+        ) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+            Ok(rgb.iter().map(|v| v + self.0).collect())
+        }
+        fn describe(&self) -> String {
+            "brighten".into()
+        }
+    }
+
+    #[test]
+    fn restore_rgba_quantises_snaps_and_keeps_alpha() {
+        let img = Rgba {
+            width: 2,
+            height: 1,
+            // A mid grey at alpha 0.25, and a near-white opaque pixel.
+            data: vec![0.4, 0.4, 0.4, 0.25, 0.98, 0.98, 0.98, 1.0],
+        };
+        let out = restore_rgba(&Brighten(0.001), &img).expect("runs");
+        assert_eq!((out.width, out.height), (2, 1));
+        // Grey composites to 0.4*0.25 + 0.75 = 0.85, +0.001, rounded to the nearest level.
+        let want = (0.851f32 * 255.0).round() / 255.0;
+        assert_eq!(out.pixel(0, 0), [want, want, want, 0.25]);
+        // 0.981 rounds to level 250, within 6 levels of white on every channel, so it snaps.
+        assert_eq!(out.pixel(1, 0), [1.0, 1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn a_failing_backend_is_an_error_not_a_panic() {
+        struct Broken;
+        impl Restore for Broken {
+            fn restore(
+                &self,
+                _: &[f32],
+                _: usize,
+                _: usize,
+            ) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+                Err("no network".into())
+            }
+            fn describe(&self) -> String {
+                "broken".into()
+            }
+        }
+        let img = Rgba {
+            width: 1,
+            height: 1,
+            data: vec![0.0, 0.0, 0.0, 1.0],
+        };
+        assert_eq!(
+            restore_rgba(&Broken, &img).unwrap_err().to_string(),
+            "no network"
+        );
+    }
+
+    #[test]
+    fn network_input_at_a_multiple_of_sixteen_needs_no_padding() {
+        let img = Rgba {
+            width: 16,
+            height: 32,
+            data: (0..16 * 32 * 4).map(|i| (i % 7) as f32 / 7.0).collect(),
+        };
+        let t = network_input(&img);
+        assert_eq!((t.width, t.height, t.data.len()), (16, 32, 3 * 16 * 32));
+        // Red plane first: pixel (1, 0)'s red is the composite of its stored red.
+        let rgb = composite_on_white(&img);
+        assert_eq!(t.data[1], rgb[3]);
+        // Green plane starts after the whole red plane.
+        assert_eq!(t.data[16 * 32], rgb[1]);
+    }
+
+    #[test]
+    fn decide_keeps_a_fitting_trace_and_restores_a_damaged_input() {
+        let grey = |v: f32| Rgba {
+            width: 32,
+            height: 32,
+            data: (0..32 * 32).flat_map(|_| [v, v, v, 1.0]).collect(),
+        };
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32"><rect width="32" height="32" fill="#808080"/></svg>"##;
+        let opt = Options::default();
+        assert!(matches!(
+            decide(&grey(128.0 / 255.0), svg, opt),
+            Decision::Keep { residual: Some(r) } if r < 1e-6
+        ));
+        assert!(matches!(
+            decide(&grey(160.0 / 255.0), svg, opt),
+            Decision::Restore { residual: Some(r) } if r > opt.residual_threshold
+        ));
+        assert!(matches!(
+            decide(&grey(0.5), "<svg", opt),
+            Decision::Keep { residual: None }
+        ));
+    }
+
+    #[test]
+    fn file_sha256_matches_the_standard_test_vector() {
+        let dir = std::env::temp_dir().join(format!("inkvec-restore-sha-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("abc");
+        std::fs::write(&path, b"abc").unwrap();
+        assert_eq!(
+            file_sha256(&path).unwrap(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert!(file_sha256(&dir.join("missing")).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_cache_path_ends_in_the_models_folder() {
+        if let Some(p) = user_cache_model_path() {
+            assert!(p.ends_with(std::path::Path::new("inkvec/models/restorer.onnx")));
+        }
     }
 
     #[test]

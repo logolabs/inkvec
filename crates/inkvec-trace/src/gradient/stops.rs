@@ -63,16 +63,14 @@ impl FillModel {
     }
 }
 
+mod knots;
+
 /// Rounds of reweighting when a stop count's final profile is fitted.
 const IRLS_ROUNDS: usize = 2;
 
 /// How much worse, in median residual, a sliver of samples cut off by a new stop may be
 /// fitted than the rest of its segment; see [`fit_mid_stops`].
 const MAX_SLIVER_MISFIT: f64 = 4.0;
-
-/// Intervals of the coarse grid a new knot's position is first searched on, before a
-/// golden-section search refines it.
-const KNOT_GRID: usize = 16;
 
 /// Most profile nodes a fit has: the two end stops and [`MAX_MID_STOPS`] interior ones.
 const MAX_NODES: usize = MAX_MID_STOPS + 2;
@@ -265,9 +263,10 @@ fn fit_piecewise(
 /// coordinate `t`; an artist's three- or four-stop gradient is a polyline. With the
 /// candidate's geometry held fixed, each sample has a `t`, and the question reduces to
 /// fitting a piecewise-linear profile with one or two free break points ("knots") to
-/// the points `(t_i, c_i)`. Knots are added greedily, one per round: the new knot's
-/// position minimises the Huber objective of [`fit_piecewise`] (a 16-interval grid,
-/// then 16 golden-section steps), and the profile is then refitted with
+/// the points `(t_i, c_i)`. Knots are added greedily, one per round: the new knot is the
+/// stop offset (a multiple of 1/1000, the precision the SVG carries) found by the exact
+/// binned scan of [`knots`] -- a segmented-regression search on moments, reweighted
+/// towards the Huber loss -- and the profile is then refitted on the samples with
 /// [`IRLS_ROUNDS`] of reweighting.
 ///
 /// Robustness: the Huber threshold is `δ = max(3 · 1.4826 · median_i r_i, 1/255)`, where
@@ -409,61 +408,25 @@ impl<'a> StopProblem<'a> {
         })
     }
 
-    /// Where one more knot, added to `knots`, lowers most the Huber objective of one
-    /// solve at the starting weights: the best of a [`KNOT_GRID`]-interval grid over `[k_lo, k_hi]` (fitted in
-    /// parallel, chosen in grid order so ties go to the lowest position), then 16
-    /// golden-section steps within one grid step of it. `None` when no grid position
-    /// gives a finite objective.
+    /// Where one more knot, added to `knots`, goes: the stop offset in `[k_lo, k_hi]` (a
+    /// multiple of 1/1000) chosen by [`knots::best_knot`], the exact binned scan
+    /// reweighted towards the Huber loss. `knots` must hold offsets on that grid, as this
+    /// returns them. `None` when the range holds no grid offset or no offset gives a
+    /// solvable profile.
     fn best_knot(&self, knots: &[f64]) -> Option<f64> {
-        let (k_lo, k_hi) = (self.k_lo, self.k_hi);
-        let resid_with = |k: f64| -> f64 {
-            let mut ks = knots.to_vec();
-            ks.push(k);
-            ks.sort_by(f64::total_cmp);
-            fit_piecewise(&self.c, &self.t, &ks, &self.weight, self.delta, 0)
-                .map_or(f64::MAX, |(r, _)| r)
-        };
-        let mut best = (f64::NAN, f64::MAX);
-        let step = (k_hi - k_lo) / KNOT_GRID as f64;
-        // The grid's fits are independent, and on a large gradient region they are the
-        // stage's longest serial stretch: fit them side by side, then pick in grid order
-        // exactly as the one-at-a-time loop did.
-        let grid: Vec<f64> = {
-            use rayon::prelude::*;
-            (0..=KNOT_GRID)
-                .into_par_iter()
-                .map(|g| resid_with(k_lo + g as f64 * step))
-                .collect()
-        };
-        for (g, &r) in grid.iter().enumerate() {
-            let k = k_lo + g as f64 * step;
-            if r < best.1 {
-                best = (k, r);
-            }
-        }
-        if !best.0.is_finite() {
+        let steps = knots::OFFSET_STEPS as f64;
+        let fixed: Vec<usize> = knots
+            .iter()
+            .map(|&k| (k * steps).round() as usize)
+            .collect();
+        // A whisker of slack so an end of the range that is itself a grid offset counts.
+        let lo = ((self.k_lo * steps - 1e-9).ceil().max(1.0)) as usize;
+        let hi = ((self.k_hi * steps + 1e-9).floor() as usize).min(knots::OFFSET_STEPS - 1);
+        if lo > hi {
             return None;
         }
-        let (mut lo, mut hi) = ((best.0 - step).max(k_lo), (best.0 + step).min(k_hi));
-        let phi = 0.5 * (5.0f64.sqrt() - 1.0);
-        let (mut a, mut b) = (hi - phi * (hi - lo), lo + phi * (hi - lo));
-        let (mut fa, mut fb) = (resid_with(a), resid_with(b));
-        for _ in 0..16 {
-            if fa < fb {
-                hi = b;
-                b = a;
-                fb = fa;
-                a = hi - phi * (hi - lo);
-                fa = resid_with(a);
-            } else {
-                lo = a;
-                a = b;
-                fa = fb;
-                b = lo + phi * (hi - lo);
-                fb = resid_with(b);
-            }
-        }
-        Some(0.5 * (lo + hi))
+        knots::best_knot(&self.t, &self.c, &self.weight, self.delta, &fixed, (lo, hi))
+            .map(|j| j as f64 / steps)
     }
 
     /// Whether the knot `k` (already in the sorted `knots`) cuts its segment into a

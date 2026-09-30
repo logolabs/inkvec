@@ -17,8 +17,14 @@
 //! Where each piece is called from:
 //!
 //! * intake, in `lib.rs`: [`pixel_grid`] (undoing a nearest-neighbour upscale), then, once
-//!   every resampling step is done, [`alpha_source`] and [`cutout_args`]; everything after
-//!   traces [`AlphaSource::flat`];
+//!   every resampling step is done, [`alpha_source_owned`] (the matte written over the
+//!   input's own buffer; the probe trace uses the copying [`alpha_source`]) and
+//!   [`cutout_args`]; everything after traces [`AlphaSource::flat`];
+//!
+//! The intake functions here are exact rewrites of their earlier serial versions, kept as
+//! test oracles in `intake_tests`: [`pixel_grid`] finds its candidate factors from the gcd
+//! of the image's change positions before running the unchanged block test, and the alpha
+//! scan and the flatten are parallel maps whose every output depends on one input pixel.
 //! * emit time, in `pipeline.rs`: [`recover_layers`] (`--layers`) and [`face_alpha`], whose
 //!   [`FaceAlpha`] tells the emitter which faces are holes, which are translucent and which
 //!   fade;
@@ -854,6 +860,10 @@ pub(crate) fn cutout_args<'a>(
 /// [`FLATTEN_CHUNK`] pixels and flattened in parallel above [`INTAKE_PARALLEL_MIN`] pixels:
 /// the same expression on the same inputs, whatever thread runs it. It was a serial push loop,
 /// 26.7 ms of a 2048 px transparent trace.
+///
+/// Method from: T. Porter, T. Duff, "Compositing Digital Images", SIGGRAPH '84,
+/// pp. 253–259, DOI 10.1145/800031.808606 -- "over" with an opaque background. Adapted to
+/// straight (unpremultiplied) colour, as `inkvec_trace::Rgba` stores it.
 pub(crate) fn flatten_over(
     img: &inkvec_trace::Rgba,
     matte: [f32; 3],

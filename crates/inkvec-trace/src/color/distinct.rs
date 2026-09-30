@@ -507,9 +507,9 @@ impl Neighbourhoods {
             scratch[d as usize] = side(d as usize);
         }
         scratch[self.outside as usize] = 0;
-        let straddle = self
-            .ids
-            .chunks_exact(9)
+        let (hoods, _) = self.ids.as_chunks::<9>();
+        let straddle = hoods
+            .iter()
             .filter(|hood| hood.iter().fold(0u8, |acc, &d| acc | scratch[d as usize]) == 3)
             .count() as u32;
         straddle as f32 / total as f32

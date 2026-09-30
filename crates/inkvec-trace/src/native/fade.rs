@@ -1,5 +1,17 @@
 //! Fades: translucent regions whose opacity varies across them, written as one gradient
-//! with `stop-color` and `stop-opacity`. Moved out of `native.rs` unchanged.
+//! with `stop-color` and `stop-opacity`.
+//!
+//! The **fades** stage of the native-alpha path ([`super::trace_color`]), after the
+//! gradient-band merge and the carve and before faces are split. It has no counterpart on
+//! the opaque path, which cannot see opacity. In: the label map, the per-label fills and
+//! inks from the band merge, the image over white (sRGB `[0, 1]`) and its alpha. Out: the
+//! label map with each accepted fade relabelled as one new label, that label's fill
+//! rewritten as the fade seen over white, and a [`Fade`] per label for the emitter.
+//!
+//! Colour conventions: `s` is a straight (un-premultiplied) colour, `a` an opacity,
+//! `P = s·a = W − (1 − a)` the premultiplied colour recovered from the pixel over white
+//! `W`. An opacity profile is stored as an ordinary grey [`gradient::FillModel`] whose
+//! every channel holds the opacity.
 
 use crate::color::Palette;
 use crate::gradient;
@@ -32,6 +44,8 @@ pub(crate) fn model_stops(m: &gradient::FillModel) -> Vec<(f64, [f32; 3])> {
 }
 
 /// `m` with its stop colours replaced, in order; offsets and geometry kept.
+///
+/// `cols` must hold one colour per stop of `m` ([`model_stops`]); a shorter slice panics.
 fn restop(m: &gradient::FillModel, cols: &[[f32; 3]]) -> gradient::FillModel {
     match m {
         gradient::FillModel::Flat(_) => gradient::FillModel::Flat(cols[0]),
@@ -51,6 +65,9 @@ fn restop(m: &gradient::FillModel, cols: &[[f32; 3]]) -> gradient::FillModel {
 
 impl Fade {
     /// The lowest opacity the profile reaches: at a fade's rim, where it meets the ground.
+    ///
+    /// The minimum over the opacity model's stops (channel 0 of each grey stop), capped at
+    /// 1. Between stops the profile is linear, so the minimum is always at a stop.
     pub fn rim_alpha(&self) -> f32 {
         let stops = |m: &gradient::FillModel| -> Vec<f32> {
             match m {
@@ -68,6 +85,11 @@ impl Fade {
 
     /// The same fade as a fill over white, which is how every other stage sees a face:
     /// `W = s·a + (1 - a)`, linear in the gradient coordinate exactly as `a` is.
+    ///
+    /// Computed per stop on the opacity model's geometry and offsets (the colour model has
+    /// the same stops). It is exact at the stops; between two stops whose colours differ,
+    /// the true `s(t)·a(t) + 1 − a(t)` is quadratic in `t` and the linear stop-to-stop
+    /// ramp is its chord.
     pub fn over_white(&self) -> gradient::FillModel {
         let a_stops = model_stops(&self.alpha);
         let c_stops = model_stops(&self.color);
@@ -86,6 +108,10 @@ impl Fade {
 
 /// Solve the small symmetric system `a·x = b` by Gaussian elimination with partial
 /// pivoting; `None` when it is singular.
+///
+/// `a` is `n × n`, `b` holds three right-hand sides (one per colour channel) per row, and
+/// so does the result. "Singular" means a pivot below `1e-12` in absolute value. `O(n³)`,
+/// meant for the handful of stops in a fade.
 pub(super) fn solve(mut a: Vec<Vec<f64>>, mut b: Vec<[f64; 3]>) -> Option<Vec<[f64; 3]>> {
     let n = b.len();
     for col in 0..n {
@@ -126,6 +152,21 @@ pub(super) fn solve(mut a: Vec<Vec<f64>>, mut b: Vec<[f64; 3]>) -> Option<Vec<[f
 /// pixel actually shows -- so a pixel too faint to see cannot steer the colour. A stop no
 /// pixel testifies about (a halo's inner stop under an opaque flame) is held to the fade's
 /// mean colour by a light ridge.
+///
+/// # The formula
+///
+/// With `S_0 … S_{m−1}` the unknown stop colours at the opacity model's offsets `o_j`, a
+/// pixel at gradient coordinate `t` in span `[o_j, o_{j+1}]`, `u = (t − o_j)/(o_{j+1} − o_j)`,
+/// is modelled as `s(t) = (1 − u) S_j + u S_{j+1}`, and the fit minimises
+///
+/// `E(S) = Σ_p (a_p s(t_p) − P_p)² + ρ Σ_j |S_j − s̄|²`
+///
+/// over pixels with `a_p ≥ 1e-3`, `P_p = W_p − (1 − a_p)` per channel. The normal
+/// equations are tridiagonal (`m × m`, three right-hand sides) and solved with [`solve`].
+/// `s̄ = Σ P_p / Σ a_p` is the fade's mean straight colour (white when no pixel counts);
+/// the ridge is `ρ = 1e-6 + 1e-3 · mean(diag)`. A singular system falls back to `s̄` at
+/// every stop. Stop colours are clamped to `[0, 1]` and returned on the opacity model's
+/// geometry and offsets.
 pub(super) fn fit_colour_stops(
     alpha_model: &gradient::FillModel,
     px: &[usize],
@@ -195,6 +236,12 @@ pub(super) fn fit_colour_stops(
 
 /// Chi-square of a model of a region's pixels -- opacity and premultiplied colour, each
 /// beyond the half-level quantisation dead zone -- where `model(p)` is `(colour, alpha)`.
+///
+/// `χ² = Σ_p [ ρ(a_p − â_p) + Σ_c ρ(P_{p,c} − ŝ_c(p) â_p) ]`, with `(ŝ, â) = model(p)`,
+/// `P = W − (1 − a)` the observed premultiplied colour and
+/// `ρ(e) = (max(|e| − 0.5/255, 0) / σ)²`. The dead zone means a model within half an 8-bit
+/// level of a pixel pays nothing for it, since the pixel cannot say more than that.
+/// `σ` is the per-channel noise in `[0, 1]` units.
 pub(super) fn fade_chi2(
     px: &[usize],
     rgb: &[[f32; 3]],
@@ -223,6 +270,10 @@ pub(super) fn fade_chi2(
 
 /// Editable numbers in an opacity profile: the geometry, and one number per stop where a
 /// colour stop has three.
+///
+/// Flat: 1. Linear: 4 (two end points) + 2 (end opacities) + 2 per interior stop (offset
+/// and opacity). Radial: 3 for a circle or 5 for an ellipse (`aspect != 1`), plus the same
+/// stop count.
 pub(super) fn alpha_params(m: &gradient::FillModel) -> f64 {
     match m {
         gradient::FillModel::Flat(_) => 1.0,
@@ -239,6 +290,12 @@ pub(super) fn alpha_params(m: &gradient::FillModel) -> f64 {
 /// linear-light fit of a grey would be a different curve. The grey repeats the alpha in
 /// three channels, so its chi-square counts the evidence three times; the cost here counts
 /// it once, and prices each stop at one number.
+///
+/// Returns the cheapest `(model, cost)` with `cost = ½ χ²/3 + λ · alpha_params(model)`
+/// over the fitter's candidates for `pixels` (those passing `member`), restricted to flat
+/// fills when `flat_only`. `grey` is the alpha replicated into three channels, `σ` its
+/// noise and `λ` nats per parameter. With no candidate at all it returns a flat opacity of
+/// 1 at infinite cost.
 pub(super) fn fit_opacity(
     grey: &[[f32; 3]],
     w: usize,
@@ -279,6 +336,25 @@ pub(super) fn fit_opacity(
 /// whose opacity ramps is a fade on its own.
 ///
 /// Returns, per label id (new ids included), the fade that label is, if any.
+///
+/// # The steps
+///
+/// 1. For every label, its straight colour `s = Σ(W − (1 − a)) / Σ a` over its pixels.
+/// 2. *Washes*: labels whose ink has an opacity in `[0.05, 0.98)` and a defined colour.
+/// 3. *Clusters*: 4-connected components of wash pixels, regardless of colour.
+/// 4. For each cluster of at least 16 pixels (and while `u16` ids remain): fit the opacity
+///    geometry on the alpha alone ([`fit_opacity`]); a flat fit ends it. Otherwise fit the
+///    colour stops on that geometry ([`fit_colour_stops`]) and price
+///    `union = ½ χ²_fade + λ (alpha_params + 3 · stops)` against
+///    `separate = Σ_bands (½ χ²_band + 4 λ)`, each band one colour (its step-1 estimate) at
+///    one opacity (its median alpha). A cheaper union becomes a fresh label covering the
+///    whole cluster, with fill [`Fade::over_white`], the first band's ink, and its [`Fade`].
+/// 5. Washes that stayed washes get their fill rewritten as `s·a + (1 − a)` from step 1,
+///    so that the emitter's un-matting by `a` recovers `s` exactly.
+///
+/// `fills_by_label` and `label_ink` are padded as new ids are created, with flat palette
+/// colours (white past the palette) and identity inks. `INKVEC_FADEDBG` prints each
+/// cluster's verdict.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn merge_fades(
     labels: &mut [u16],

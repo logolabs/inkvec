@@ -24,10 +24,12 @@ fn ink(s: [f32; 3], a: f32) -> Ink2 {
     pixel_points(&[on_white(s, a)], &[a])[0]
 }
 
+/// The point a fraction `t` of the way from `a` to `b`, channel by channel.
 fn mix<const N: usize>(a: [f32; N], b: [f32; N], t: f32) -> [f32; N] {
     std::array::from_fn(|k| a[k] * (1.0 - t) + b[k] * t)
 }
 
+/// Whether every channel of `got` is within `tol` of `want`.
 fn close<const N: usize>(got: [f32; N], want: [f32; N], tol: f32) -> bool {
     got.iter().zip(&want).all(|(g, w)| (g - w).abs() <= tol)
 }
@@ -481,6 +483,7 @@ fn reassign_moves_blend_pixels_to_the_ink_they_are_mostly() {
 // Fades
 // ---------------------------------------------------------------------------------------
 
+/// A horizontal sRGB linear gradient from `(0, 0)` to `(len, 0)` with the given stops.
 fn linear_model(c0: [f32; 3], mids: Vec<(f64, [f32; 3])>, c1: [f32; 3], len: f64) -> FillModel {
     FillModel::Linear {
         p0: (0.0, 0.0),
@@ -582,8 +585,9 @@ fn solve_returns_the_exact_solution_and_refuses_a_singular_system() {
     assert_eq!(solve(singular, vec![[1.0; 3], [2.0; 3]]), None);
 }
 
-/// The colour a three-stop fade was painted with at `t`.
+/// The stop colours of the test fade, at offsets 0, 0.5 and 1.
 const STOPS: [[f32; 3]; 3] = [[0.9, 0.2, 0.1], [0.3, 0.7, 0.2], [0.1, 0.3, 0.8]];
+/// The colour a three-stop fade was painted with at `t`.
 fn painted(t: f32) -> [f32; 3] {
     if t <= 0.5 {
         mix(STOPS[0], STOPS[1], t / 0.5)
@@ -834,6 +838,7 @@ fn image(n: usize, f: impl Fn(usize, usize) -> ([f32; 3], f32)) -> (Vec<[f32; 3]
         .unzip()
 }
 
+/// Palette evidence with the noise guard off (`noise_sigmas` 0).
 fn evidence(sigma_noise: f64, lambda: f64, same_ink_de00: f32) -> PaletteEvidence {
     PaletteEvidence {
         sigma_noise,
@@ -855,6 +860,7 @@ fn red_square(x: usize, y: usize) -> ([f32; 3], f32) {
     }
 }
 
+/// The index of the ink drawn at opacity `alpha` (to 0.01); panics if there is none.
 fn find(pal: &Palette, alpha: f32) -> usize {
     pal.alpha
         .iter()
@@ -985,6 +991,7 @@ fn an_ink_no_pixel_is_close_to_keeps_its_seed_and_no_weight() {
     );
 }
 
+/// An `n × n` straight-RGBA image from `f(x, y) = (colour, alpha)`, with its alpha.
 fn rgba(n: usize, f: impl Fn(usize, usize) -> ([f32; 3], f32)) -> (Rgba, Vec<f32>) {
     let mut data = Vec::with_capacity(n * n * 4);
     let mut alpha = Vec::with_capacity(n * n);

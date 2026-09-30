@@ -17,8 +17,14 @@
 //! Where each piece is called from:
 //!
 //! * intake, in `lib.rs`: [`pixel_grid`] (undoing a nearest-neighbour upscale), then, once
-//!   every resampling step is done, [`alpha_source`] and [`cutout_args`]; everything after
-//!   traces [`AlphaSource::flat`];
+//!   every resampling step is done, [`alpha_source_owned`] (the matte written over the
+//!   input's own buffer; the probe trace uses the copying [`alpha_source`]) and
+//!   [`cutout_args`]; everything after traces [`AlphaSource::flat`];
+//!
+//! The intake functions here are exact rewrites of their earlier serial versions, kept as
+//! test oracles in `intake_tests`: [`pixel_grid`] finds its candidate factors from the gcd
+//! of the image's change positions before running the unchanged block test, and the alpha
+//! scan and the flatten are parallel maps whose every output depends on one input pixel.
 //! * emit time, in `pipeline.rs`: [`recover_layers`] (`--layers`) and [`face_alpha`], whose
 //!   [`FaceAlpha`] tells the emitter which faces are holes, which are translucent and which
 //!   fade;
@@ -345,34 +351,158 @@ fn solve3x3(m: [[f64; 3]; 3], r: [f64; 3]) -> Option<[f64; 3]> {
 ///
 /// Called by the intake in `lib.rs` (unless `--no-unblock`), before any other resampling;
 /// it only measures, and the caller downsamples by `k`.
+///
+/// # How: the gcd of the change positions, then the block test
+///
+/// The factors worth testing are found first, in one early-exiting scan
+/// ([`change_gcd`]): `g = gcd(w, h, every x where a pixel differs sharply from its left
+/// neighbour, every y where a row differs sharply from the row above)`. Then, from the
+/// largest factor down, only the `k` that divide `g` get the block test
+/// ([`blocks_constant`], the test this function always ran).
+///
+/// *Why the answer is the same.* The old loop returned the largest `k ≤ k_max` dividing
+/// `w` and `h` whose blocks pass the test. Take any such `k` that passes. Two horizontally
+/// adjacent pixels at `x − 1` and `x` with `k ∤ x` lie in one block, so each is within
+/// `1/512` of the block's first pixel (the test's comparison is on a rounded f32
+/// difference, but `2⁻⁹` is a float and rounding is monotone, so the exact difference is
+/// below `2⁻⁹` too) and they differ by less than `2 · 2⁻⁹ = 1/256`. So every position where
+/// neighbours differ by more than `1/256` is a multiple of `k`, and so are `w` and `h`:
+/// `k` divides `g`. Skipping the `k ∤ g` therefore never skips a passing factor, and the
+/// others get the old test itself, so the result is the old result for any input.
+///
+/// *Why it is fast.* On anything that is not an upscale, two edges at coprime positions
+/// appear within the first rows of content and `g` falls to 1: the scan stops there and no
+/// block test runs. The old loop ran the block test for every divisor of `w` and `h` from
+/// 32 down, each scanning until its first non-constant block -- 7.1 ms at 2048 px, most of it
+/// spent on the blank rows above the artwork, once per divisor. For 8-bit input the two
+/// views coincide: distinct levels are at least `1/255 > 1/256` apart, so a "sharp change" is
+/// any change, the divisors of `g` are exactly the factors whose blocks are constant, and
+/// the block test only confirms.
+///
+/// Not from the literature: the gcd of change positions as a candidate filter for exact
+/// block replication, because the published resampling detectors are statistical (they
+/// estimate a periodic correlation of an interpolated signal) and would not reproduce this
+/// function's exact answer. See also: A. C. Popescu, H. Farid, "Exposing Digital Forgeries by
+/// Detecting Traces of Resampling", IEEE Trans. Signal Processing 53(2):758–767, 2005, DOI
+/// 10.1109/TSP.2004.839932.
 pub(crate) fn pixel_grid(img: &inkvec_trace::Rgba) -> Option<usize> {
     const MAX_FACTOR: usize = 32;
     let (w, h) = (img.width, img.height);
-    let px = |x: usize, y: usize| -> &[f32] { &img.data[(y * w + x) * 4..(y * w + x) * 4 + 4] };
     // Below this there is nothing to gain and something to lose: a 2x undo of a small icon
     // leaves too few pixels for the boundary solve to work with.
     let smallest = 64;
-    let mut k = MAX_FACTOR.min(w / smallest.min(w)).min(h / smallest.min(h));
-    while k >= 2 {
-        if w % k == 0 && h % k == 0 {
-            let constant = (0..h / k).all(|by| {
-                (0..w / k).all(|bx| {
-                    let first = px(bx * k, by * k);
-                    (0..k).all(|dy| {
-                        (0..k).all(|dx| {
-                            let p = px(bx * k + dx, by * k + dy);
-                            (0..4).all(|c| (p[c] - first[c]).abs() < 1.0 / 512.0)
-                        })
-                    })
-                })
-            });
-            if constant {
-                return Some(k);
+    let k_max = MAX_FACTOR.min(w / smallest.min(w)).min(h / smallest.min(h));
+    if k_max < 2 {
+        return None;
+    }
+    let g = change_gcd(img);
+    (2..=k_max)
+        .rev()
+        .find(|&k| divides(k, g) && blocks_constant(img, k))
+}
+
+/// Whether `k` divides `n` (`k ≥ 1`), without the remainder operator: wazero's arm64
+/// compiler miscompiled `i32.rem_u` in a hot loop last round (the Go binding runs this
+/// crate as WebAssembly), so new code here tests divisibility by multiplying back.
+fn divides(k: usize, n: usize) -> bool {
+    (n / k) * k == n
+}
+
+/// The greatest common divisor, by Stein's binary algorithm (shifts and subtraction only,
+/// for the same reason as [`divides`]). `gcd(0, n) = n`.
+fn gcd(mut a: usize, mut b: usize) -> usize {
+    if a == 0 || b == 0 {
+        return a | b;
+    }
+    let shift = (a | b).trailing_zeros();
+    a >>= a.trailing_zeros();
+    loop {
+        b >>= b.trailing_zeros();
+        if a > b {
+            std::mem::swap(&mut a, &mut b);
+        }
+        b -= a;
+        if b == 0 {
+            return a << shift;
+        }
+    }
+}
+
+/// `gcd(w, h, X, Y)` for the `w × h` image, where `X` is every column `x ≥ 1` at which some
+/// row's pixel differs from its left neighbour by more than `1/256` in some channel, and
+/// `Y` every row `y ≥ 1` in which some pixel differs that much from the one above. The
+/// scan runs row by row and stops as soon as the gcd reaches 1. NaN differences count as
+/// no change (a NaN pixel fails the block test anyway). O(pixels read); on typical art the
+/// read stops a few rows into the content.
+///
+/// Blank rows are the common case before the content starts (a logo on a white page), so a
+/// row is first compared with the row above, and with itself shifted by one pixel, bit for
+/// bit ([`same_bits`], which vectorises); only a row that differs is examined pixel by
+/// pixel. Identical bits mean every difference is 0 (or NaN), which is never sharp, so the
+/// shortcut cannot hide a change.
+fn change_gcd(img: &inkvec_trace::Rgba) -> usize {
+    /// Neighbours in one block differ by less than this (see [`pixel_grid`]).
+    const SHARP: f32 = 1.0 / 256.0;
+    let (w, h) = (img.width, img.height);
+    let sharp = |a: &[f32], b: &[f32]| a.iter().zip(b).any(|(p, q)| (p - q).abs() > SHARP);
+    let mut g = gcd(w, h);
+    for y in 0..h {
+        if g < 2 {
+            break;
+        }
+        let row = &img.data[y * w * 4..(y + 1) * w * 4];
+        if y > 0 {
+            let above = &img.data[(y - 1) * w * 4..y * w * 4];
+            if !same_bits(above, row) && sharp(above, row) {
+                g = gcd(g, y);
             }
         }
-        k -= 1;
+        // Each pixel against its left neighbour: the row against itself one pixel over.
+        if same_bits(&row[4..], &row[..row.len() - 4]) {
+            continue;
+        }
+        for x in 1..w {
+            if g < 2 {
+                break;
+            }
+            if sharp(&row[(x - 1) * 4..x * 4], &row[x * 4..x * 4 + 4]) {
+                g = gcd(g, x);
+            }
+        }
     }
-    None
+    g
+}
+
+/// Whether two equally long float slices hold the same bits. Compared 64 floats at a time
+/// with an OR of XORs, a loop without an early exit that the compiler vectorises; the early
+/// exit is per block.
+fn same_bits(a: &[f32], b: &[f32]) -> bool {
+    a.len() == b.len()
+        && a.chunks(64).zip(b.chunks(64)).all(|(x, y)| {
+            x.iter()
+                .zip(y)
+                .fold(0u32, |acc, (p, q)| acc | (p.to_bits() ^ q.to_bits()))
+                == 0
+        })
+}
+
+/// The block test: every channel of every pixel in every `k × k` block within `1/512` of
+/// the block's top-left pixel (so for 8-bit input, exactly equal). `k` must divide both
+/// sides. Stops at the first block that fails; a full scan when every block passes.
+fn blocks_constant(img: &inkvec_trace::Rgba, k: usize) -> bool {
+    let (w, h) = (img.width, img.height);
+    let px = |x: usize, y: usize| -> &[f32] { &img.data[(y * w + x) * 4..(y * w + x) * 4 + 4] };
+    (0..h / k).all(|by| {
+        (0..w / k).all(|bx| {
+            let first = px(bx * k, by * k);
+            (0..k).all(|dy| {
+                (0..k).all(|dx| {
+                    let p = px(bx * k + dx, by * k + dy);
+                    (0..4).all(|c| (p[c] - first[c]).abs() < 1.0 / 512.0)
+                })
+            })
+        })
+    })
 }
 
 /// Share of the artwork a candidate matte may hide before it is rejected.
@@ -644,54 +774,114 @@ pub(crate) fn alpha_source(
     cutout: bool,
     native: bool,
 ) -> Option<AlphaSource> {
-    if !img.data.iter().skip(3).step_by(4).any(|&a| a < 0.999) {
-        return None;
+    let plan = MattePlan::of(img, cutout, native)?;
+    let (flat, alpha) = flatten_over(img, plan.matte);
+    Some(plan.finish(flat, alpha, quiet))
+}
+
+/// [`alpha_source`] for an image the caller is done with: the matted image is written over
+/// the input's own buffer instead of a new one. `Err` gives the image back untouched when
+/// it has no transparency (where `alpha_source` returns `None`).
+///
+/// The intake calls this once every resampling step is done, and never reads the unmatted
+/// image again, so the copy [`flatten_over`] makes was pure cost: a fresh 64 MB buffer at
+/// 2048 px, whose page faults and release the shared-stage research measured at 5.7 +
+/// 1.7 ms. The matte is decided on the untouched image first ([`MattePlan::of`]), then
+/// every pixel is flattened by the same [`flatten_pixel`] -- the same values, in the same
+/// places, so the result is the image `alpha_source` returns.
+///
+/// Not from the literature: buffer reuse, because there is nothing to choose between.
+/// See also: D. Leijen, B. Zorn, L. de Moura, "Mimalloc: Free List Sharding in Action",
+/// APLAS 2019 -- the allocator-side answer to the same page-fault cost, which would also
+/// help the stages this cannot reach.
+pub(crate) fn alpha_source_owned(
+    img: inkvec_trace::Rgba,
+    quiet: bool,
+    cutout: bool,
+    native: bool,
+) -> Result<AlphaSource, inkvec_trace::Rgba> {
+    let Some(plan) = MattePlan::of(&img, cutout, native) else {
+        return Err(img);
+    };
+    let (flat, alpha) = flatten_in_place(img, plan.matte);
+    Ok(plan.finish(flat, alpha, quiet))
+}
+
+/// What [`alpha_source`] decided for an image with transparency, before any pixel is
+/// flattened: the matte, whether the cutout is on, and what to tell the user.
+struct MattePlan {
+    /// The colour to flatten onto, sRGB 0..1.
+    matte: [f32; 3],
+    /// Whether the transparency is carried out as `--cutout` does.
+    cutout: bool,
+    /// Native alpha: nothing was chosen, the image is only written over white.
+    native: bool,
+    /// Share of the silhouette lost to a white matte, when that turned the cutout on here.
+    swallowed: Option<f64>,
+}
+
+impl MattePlan {
+    /// `None` for an image with no alpha under 0.999 ([`has_transparency`]). Natively
+    /// traced: white, cutout on. Otherwise [`choose_matte`] on the untouched image, with the
+    /// cutout turned on when more than [`LOST_TO_WHITE`] of the silhouette would vanish into
+    /// white; the chosen matte only applies under the cutout.
+    fn of(img: &inkvec_trace::Rgba, cutout: bool, native: bool) -> Option<Self> {
+        if !has_transparency(img) {
+            return None;
+        }
+        if native {
+            // Nothing is chosen and nothing is lost: over white is only how the colour is
+            // written down, and the alpha travels beside it into every stage that unmixes.
+            // The output carries the transparency out, as the cutout does.
+            return Some(MattePlan {
+                matte: [1.0, 1.0, 1.0],
+                cutout: true,
+                native: true,
+                swallowed: None,
+            });
+        }
+        let (chosen, _, lost_to_white) = choose_matte(img);
+        let swallowed = !cutout && lost_to_white > LOST_TO_WHITE;
+        let cutout = cutout || swallowed;
+        Some(MattePlan {
+            matte: if cutout { chosen } else { [1.0, 1.0, 1.0] },
+            cutout,
+            native: false,
+            swallowed: swallowed.then_some(lost_to_white),
+        })
     }
-    if native {
-        // Nothing is chosen and nothing is lost: over white is only how the colour is
-        // written down, and the alpha travels beside it into every stage that unmixes.
-        // The output carries the transparency out, as the cutout does.
-        let (flat, alpha) = flatten_over(img, [1.0, 1.0, 1.0]);
+
+    /// The [`AlphaSource`] for the flattened image, with the stderr notes the old
+    /// `alpha_source` printed, in the same order: the matte (or "native") and the share of
+    /// clear pixels (alpha under 0.05), then, when the cutout was turned on here, why.
+    fn finish(self, flat: inkvec_trace::Rgba, alpha: Vec<f32>, quiet: bool) -> AlphaSource {
         diag::stage(quiet, || {
             let clear = alpha.iter().filter(|&&a| a < 0.05).count();
-            format!(
-                "  alpha         native, {:.0}% of the image transparent",
-                100.0 * clear as f64 / alpha.len().max(1) as f64
-            )
+            let share = 100.0 * clear as f64 / alpha.len().max(1) as f64;
+            if self.native {
+                format!("  alpha         native, {share:.0}% of the image transparent")
+            } else {
+                format!(
+                    "  alpha         {} matte, {share:.0}% of the image transparent",
+                    inkvec_trace::color::to_hex(self.matte)
+                )
+            }
         });
-        return Some(AlphaSource {
+        if let Some(lost_to_white) = self.swallowed {
+            diag::stage(quiet, || {
+                format!(
+                    "  cutout        {:.0}% of the outline is white and would vanish into a white matte; carrying the transparency out as --cutout does",
+                    100.0 * lost_to_white
+                )
+            });
+        }
+        AlphaSource {
             flat,
             alpha,
-            matte: [1.0, 1.0, 1.0],
-            cutout: true,
-        });
+            matte: self.matte,
+            cutout: self.cutout,
+        }
     }
-    let (chosen, _, lost_to_white) = choose_matte(img);
-    let swallowed = !cutout && lost_to_white > LOST_TO_WHITE;
-    let cutout = cutout || swallowed;
-    let matte = if cutout { chosen } else { [1.0, 1.0, 1.0] };
-    let (flat, alpha) = flatten_over(img, matte);
-    diag::stage(quiet, || {
-        let clear = alpha.iter().filter(|&&a| a < 0.05).count();
-        format!(
-            "  alpha         {} matte, {:.0}% of the image transparent",
-            inkvec_trace::color::to_hex(matte),
-            100.0 * clear as f64 / alpha.len().max(1) as f64
-        )
-    });
-    diag::stage(quiet || !swallowed, || {
-        format!(
-            "  cutout        {:.0}% of the outline is white and would vanish into a white \
-matte; carrying the transparency out as --cutout does",
-            100.0 * lost_to_white
-        )
-    });
-    Some(AlphaSource {
-        flat,
-        alpha,
-        matte,
-        cutout,
-    })
 }
 
 /// `args` as the rest of the trace must see them once [`alpha_source`] has decided: with
@@ -719,22 +909,45 @@ pub(crate) fn cutout_args<'a>(
 /// does when it paints a translucent SVG fill, and so what [`unmatte`] has to undo.
 ///
 /// Returns the opaque image (every alpha 1) and the clamped alphas, row-major, one per
-/// pixel. A NaN alpha is not cleaned up: `clamp` passes it through.
+/// pixel. A NaN alpha is not cleaned up: `clamp` passes it through. Panics if `img.data` is
+/// shorter than `4 · width · height`, as it always did.
+///
+/// Every pixel is computed by [`flatten_pixel`] alone, so the image is cut into chunks of
+/// [`FLATTEN_CHUNK`] pixels and flattened in parallel above [`INTAKE_PARALLEL_MIN`] pixels:
+/// the same expression on the same inputs, whatever thread runs it. It was a serial push loop,
+/// 26.7 ms of a 2048 px transparent trace.
+///
+/// Method from: T. Porter, T. Duff, "Compositing Digital Images", SIGGRAPH '84,
+/// pp. 253–259, DOI 10.1145/800031.808606 -- "over" with an opaque background. Adapted to
+/// straight (unpremultiplied) colour, as `inkvec_trace::Rgba` stores it.
 pub(crate) fn flatten_over(
     img: &inkvec_trace::Rgba,
     matte: [f32; 3],
 ) -> (inkvec_trace::Rgba, Vec<f32>) {
+    use rayon::prelude::*;
     let n = img.width * img.height;
-    let mut data = Vec::with_capacity(n * 4);
-    let mut alpha = Vec::with_capacity(n);
-    for i in 0..n {
-        let p = &img.data[i * 4..i * 4 + 4];
-        let a = p[3].clamp(0.0, 1.0);
-        for c in 0..3 {
-            data.push(p[c] * a + matte[c] * (1.0 - a));
+    let src = &img.data[..n * 4];
+    let mut data = vec![0.0f32; n * 4];
+    let mut alpha = vec![0.0f32; n];
+    let run = |((out, a), src): ((&mut [f32], &mut [f32]), &[f32])| {
+        for ((o, a), p) in out
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(a.iter_mut())
+            .zip(src.as_chunks::<4>().0)
+        {
+            o.copy_from_slice(p);
+            *a = flatten_pixel(o, matte);
         }
-        data.push(1.0);
-        alpha.push(a);
+    };
+    if n >= INTAKE_PARALLEL_MIN {
+        data.par_chunks_mut(4 * FLATTEN_CHUNK)
+            .zip(alpha.par_chunks_mut(FLATTEN_CHUNK))
+            .zip(src.par_chunks(4 * FLATTEN_CHUNK))
+            .for_each(run);
+    } else {
+        run(((&mut data, &mut alpha), src));
     }
     (
         inkvec_trace::Rgba {
@@ -744,6 +957,82 @@ pub(crate) fn flatten_over(
         },
         alpha,
     )
+}
+
+/// Flatten one pixel `p = [r, g, b, a]` over `matte` in place and return its clamped alpha:
+/// with `a' = clamp(a, 0, 1)`, `p ← [r·a' + M_r·(1 − a'), g·a' + M_g·(1 − a'),
+/// b·a' + M_b·(1 − a'), 1]`. The arithmetic of the old push loop, operand for operand, so
+/// the floats are the same.
+#[inline]
+fn flatten_pixel(p: &mut [f32; 4], matte: [f32; 3]) -> f32 {
+    let a = p[3].clamp(0.0, 1.0);
+    for c in 0..3 {
+        p[c] = p[c] * a + matte[c] * (1.0 - a);
+    }
+    p[3] = 1.0;
+    a
+}
+
+/// [`flatten_over`] written over `img`'s own buffer: the same pixels, flattened by the same
+/// [`flatten_pixel`], and the same clamped alphas, without a second image-sized buffer.
+/// Parallel above [`INTAKE_PARALLEL_MIN`] pixels. Panics if `img.data` is shorter than
+/// `4 · width · height`; floats past that length are dropped, as the copy never had them.
+fn flatten_in_place(
+    mut img: inkvec_trace::Rgba,
+    matte: [f32; 3],
+) -> (inkvec_trace::Rgba, Vec<f32>) {
+    use rayon::prelude::*;
+    let n = img.width * img.height;
+    img.data.truncate(n * 4);
+    assert_eq!(
+        img.data.len(),
+        n * 4,
+        "an RGBA image holds four floats per pixel"
+    );
+    let mut alpha = vec![0.0f32; n];
+    let run = |(px, a): (&mut [f32], &mut [f32])| {
+        for (p, a) in px.as_chunks_mut::<4>().0.iter_mut().zip(a.iter_mut()) {
+            *a = flatten_pixel(p, matte);
+        }
+    };
+    if n >= INTAKE_PARALLEL_MIN {
+        img.data
+            .par_chunks_mut(4 * FLATTEN_CHUNK)
+            .zip(alpha.par_chunks_mut(FLATTEN_CHUNK))
+            .for_each(run);
+    } else {
+        run((&mut img.data, &mut alpha));
+    }
+    (img, alpha)
+}
+
+/// Below this many pixels (256 × 256) the intake's alpha scan and flatten run on the
+/// calling thread: at 128 px they take microseconds.
+const INTAKE_PARALLEL_MIN: usize = 1 << 16;
+/// Pixels per parallel job of [`flatten_over`] and [`has_transparency`].
+const FLATTEN_CHUNK: usize = 1 << 14;
+
+/// Whether any pixel of `img` has an alpha under 0.999 ([`alpha_source`]'s "any
+/// transparency").
+///
+/// Reads the fourth float of every whole pixel -- indices `4i + 3` below `data.len()`, the
+/// same set the old `iter().skip(3).step_by(4)` visited -- and stops at the first
+/// translucent one. On an opaque image that is a read of every alpha (3.3 ms serial at
+/// 2048 px), now split over rayon's workers above [`INTAKE_PARALLEL_MIN`] pixels. `any` is
+/// a pure predicate, so the answer does not depend on the split.
+fn has_transparency(img: &inkvec_trace::Rgba) -> bool {
+    use rayon::prelude::*;
+    let translucent = |p: &[f32; 4]| p[3] < 0.999;
+    if img.data.len() / 4 >= INTAKE_PARALLEL_MIN {
+        img.data
+            .as_chunks::<4>()
+            .0
+            .par_iter()
+            .with_min_len(FLATTEN_CHUNK)
+            .any(translucent)
+    } else {
+        img.data.as_chunks::<4>().0.iter().any(translucent)
+    }
 }
 
 /// Undo [`flatten_over`] for a face the source drew translucent.
@@ -1339,5 +1628,7 @@ fn interior_pixels(
     out
 }
 
+#[cfg(test)]
+mod intake_tests;
 #[cfg(test)]
 mod ramp_tests;

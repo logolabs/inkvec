@@ -611,9 +611,18 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
 
     // Transparency, once, after every resampling step: put the image against a matte the
     // artwork is not made of and keep the alphas for the emitter. Everything from here
-    // traces the matted copy.
-    let alpha_src = alpha_source(&img, args.quiet, args.cutout, args.native_alpha);
-    let img = alpha_src.as_ref().map(|s| &s.flat).unwrap_or(&img);
+    // traces the matted image, which is written over the input's own buffer: nothing reads
+    // the unmatted one again (see `alpha::alpha_source_owned`).
+    let (alpha_src, opaque) =
+        match alpha::alpha_source_owned(img, args.quiet, args.cutout, args.native_alpha) {
+            Ok(src) => (Some(src), None),
+            Err(img) => (None, Some(img)),
+        };
+    let img = match (&alpha_src, &opaque) {
+        (Some(src), _) => &src.flat,
+        (None, Some(img)) => img,
+        (None, None) => unreachable!("alpha_source_owned returns the image or its source"),
+    };
     let cut_args = alpha::cutout_args(args, alpha_src.as_ref());
     let args = &*cut_args;
 

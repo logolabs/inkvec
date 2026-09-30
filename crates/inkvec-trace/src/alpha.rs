@@ -119,6 +119,19 @@
 //!
 //! A missed layer costs parameters. An invented one is a visible error. The asymmetry in
 //! those two tables is the whole design.
+//!
+//! # Where this sits
+//!
+//! After the trace, on its result: `inkvec-cli`'s `alpha` module hands [`decompose_with`]
+//! one mean sRGB colour and one pixel count per traced face plus the face adjacency, once
+//! per [`Space`], and keeps the better fit. The recovered [`Layer`]s go to the emitter,
+//! which writes each as one shape with `fill-opacity`. Nothing here sees pixels or
+//! geometry; the input is the face graph and its colours only.
+//!
+//! The pipeline inside is: enumerate every quad of faces that could be one layer over two
+//! backgrounds (`Ctx::enumerate`, solving each with `Ctx::solve_pair`); cluster the
+//! solutions by `(a, C)`; refit each cluster jointly and grow it to every face the layer
+//! explains (`Ctx::fit_cluster`); keep the best-supported layer, peel it, and repeat.
 
 use std::collections::HashMap;
 
@@ -258,13 +271,16 @@ const MAX_SIGMA_SCALE: f64 = 24.0;
 /// quantity it bounds is the right one: how well the data actually pin the opacity.
 const MAX_ALPHA_SD: f64 = 0.04;
 
+/// A colour in the working space (see [`Space`]), one `f64` per channel.
 type V3 = [f64; 3];
 
+/// `a − b`, channel by channel.
 #[inline]
 fn sub3(a: V3, b: V3) -> V3 {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
+/// Dot product of two colour vectors.
 #[inline]
 fn dot3(a: V3, b: V3) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
@@ -291,6 +307,8 @@ pub fn composite_in(color: [f32; 3], alpha: f32, under: [f32; 3], space: Space) 
     )
 }
 
+/// An sRGB colour (`0..1`) in the working space: linear light through the sRGB transfer
+/// function, or unchanged for [`Space::Srgb`].
 fn to_work(c: [f32; 3], space: Space) -> V3 {
     match space {
         Space::Linear => [
@@ -302,6 +320,8 @@ fn to_work(c: [f32; 3], space: Space) -> V3 {
     }
 }
 
+/// The inverse of [`to_work`], clamping each channel to `[0, 1]` first, so an
+/// out-of-gamut working value comes back as the nearest representable sRGB colour.
 fn from_work(c: V3, space: Space) -> [f32; 3] {
     let cl = |v: f64| v.clamp(0.0, 1.0) as f32;
     match space {
@@ -318,6 +338,10 @@ fn from_work(c: V3, space: Space) -> [f32; 3] {
 /// sRGB-domain measurement error is worth here. Near white in linear light this is 2.27,
 /// so a 2/255 error on a white background is 0.018 of linear range; ignoring that is how
 /// a noise model ends up rejecting every layer over a light background.
+///
+/// For linear light this is the derivative of the sRGB decoding function at the sRGB
+/// value `s` that encodes `work_val`: `1/12.92` for `s <= 0.04045`, otherwise
+/// `(2.4/1.055)·((s + 0.055)/1.055)^1.4`, floored at `MIN_SLOPE`. It is 1 in sRGB space.
 fn slope(work_val: f64, space: Space) -> f64 {
     match space {
         Space::Srgb => 1.0,
@@ -367,23 +391,7 @@ pub fn decompose_with(
         };
     }
 
-    // Neighbours: deduplicated, self-pairs dropped, largest-area first then capped.
-    let mut nb: Vec<Vec<usize>> = vec![Vec::new(); n];
-    let mut adj_set: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
-    for &(u, v) in adjacency {
-        if u >= n || v >= n || u == v {
-            continue;
-        }
-        nb[u].push(v);
-        nb[v].push(u);
-        adj_set.insert((u.min(v), u.max(v)));
-    }
-    for list in nb.iter_mut() {
-        list.sort_unstable();
-        list.dedup();
-        list.sort_by_key(|&f| std::cmp::Reverse(face_area[f]));
-        list.truncate(opt.max_neighbors);
-    }
+    let (nb, adj_set) = neighbours(adjacency, face_area, opt.max_neighbors);
 
     let mut ctx = Ctx {
         work: face_rgb.iter().map(|&c| to_work(c, opt.space)).collect(),
@@ -415,6 +423,125 @@ pub fn decompose_with(
         for &(f, _) in &found.inst {
             claimed[f] = true;
         }
+        ctx.peel(&found);
+        let mut faces: Vec<usize> = found.inst.iter().map(|&(f, _)| f).collect();
+        faces.sort_unstable();
+        layers.push(Layer {
+            color: from_work(found.c, opt.space),
+            alpha: found.a as f32,
+            faces,
+            residual: found.residual,
+        });
+    }
+
+    AlphaAnalysis {
+        layers,
+        opaque_faces: (0..n).filter(|&f| !claimed[f]).collect(),
+        base_rgb: ctx.work.iter().map(|&c| from_work(c, opt.space)).collect(),
+    }
+}
+
+/// Each face's neighbours, and the set of adjacent pairs as `(min, max)`.
+///
+/// Out-of-range ids and self-pairs are dropped and duplicates removed. Each face's list
+/// is ordered largest neighbour first (by pixel area, ties by id) and cut at
+/// `max_neighbors`; the pair set is not cut, so `Ctx::adjacent` answers for every pair.
+fn neighbours(
+    adjacency: &[(usize, usize)],
+    face_area: &[usize],
+    max_neighbors: usize,
+) -> (Vec<Vec<usize>>, std::collections::HashSet<(usize, usize)>) {
+    let n = face_area.len();
+    // Neighbours: deduplicated, self-pairs dropped, largest-area first then capped.
+    let mut nb: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut adj_set: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
+    for &(u, v) in adjacency {
+        if u >= n || v >= n || u == v {
+            continue;
+        }
+        nb[u].push(v);
+        nb[v].push(u);
+        adj_set.insert((u.min(v), u.max(v)));
+    }
+    for list in nb.iter_mut() {
+        list.sort_unstable();
+        list.dedup();
+        list.sort_by_key(|&f| std::cmp::Reverse(face_area[f]));
+        list.truncate(max_neighbors);
+    }
+    (nb, adj_set)
+}
+
+// --- internals ---------------------------------------------------------------------
+
+/// The face graph being peeled, with each face's current colour and its uncertainty.
+struct Ctx<'a> {
+    /// Current face colours in the working space; rewritten as layers are peeled.
+    work: Vec<V3>,
+    /// The same colours in OKLab, for the perceptual separation gates.
+    lab: Vec<Oklab>,
+    /// Per face and channel, `d(working)/d(sRGB)` at the current colour (see [`slope`]).
+    slope: Vec<[f64; 3]>,
+    /// Per-face multiplier on `sigma_srgb`, growing by `1/(1-a)` each time a layer is
+    /// peeled off that face.
+    scale: Vec<f64>,
+    /// Pixel count per face.
+    area: &'a [usize],
+    /// Each face's neighbours, largest first, capped (see [`neighbours`]).
+    nb: Vec<Vec<usize>>,
+    /// Every adjacent pair, as `(min, max)`.
+    adj_set: std::collections::HashSet<(usize, usize)>,
+    opt: AlphaOptions,
+    /// `sigma_srgb²`.
+    sig2: f64,
+}
+
+/// One solved `(F1 over G1, F2 over G2)` hypothesis.
+struct Sol {
+    /// Opacity.
+    a: f64,
+    /// Layer colour, working space.
+    c: V3,
+    /// Parallelism chi-square (2 dof).
+    chi2: f64,
+    f1: usize,
+    g1: usize,
+    f2: usize,
+    g2: usize,
+}
+
+/// A cluster of solutions agreeing on `(a, C)`, after the joint refit.
+struct Fitted {
+    /// Opacity.
+    a: f64,
+    /// Layer colour, working space.
+    c: V3,
+    /// RMS colour residual over every face and channel (see [`Layer::residual`]).
+    residual: f64,
+    /// `(layer face, background face)` pairs, ascending.
+    inst: Vec<(usize, usize)>,
+}
+
+/// Solutions agreeing on `(a, C)`, accumulated while clustering: running sums for the
+/// centroid, and every `(face, background, chi2)` hypothesis the members contributed.
+struct Cluster {
+    a_sum: f64,
+    c_sum: V3,
+    n: f64,
+    inst: Vec<(usize, usize, f64)>,
+}
+
+impl Ctx<'_> {
+    /// Replace every face of a recovered layer by the background it recovers, and widen
+    /// that face's uncertainty to match.
+    ///
+    /// ```text
+    ///     c_G     = clamp((c_F − a·C) / (1 − a), 0, 1)
+    ///     scale' = min(sqrt(scale² + 1/n) / (1 − a), MAX_SIGMA_SCALE)
+    /// ```
+    ///
+    /// with `n` the number of the layer's faces.
+    fn peel(&mut self, found: &Fitted) {
         // Substitute the recovered background so a layer beneath this one becomes
         // visible to the next round. This is the recovered value, not the neighbour's
         // colour: it is what the algebra says is under *this* face.
@@ -430,70 +557,19 @@ pub fn decompose_with(
         let a = found.a;
         let n_inst = found.inst.len() as f64;
         for &(f, _) in &found.inst {
-            let c = ctx.work[f];
+            let c = self.work[f];
             let bg = [
                 ((c[0] - a * found.c[0]) / (1.0 - a)).clamp(0.0, 1.0),
                 ((c[1] - a * found.c[1]) / (1.0 - a)).clamp(0.0, 1.0),
                 ((c[2] - a * found.c[2]) / (1.0 - a)).clamp(0.0, 1.0),
             ];
-            let prev = ctx.scale[f];
-            ctx.scale[f] = ((prev * prev + 1.0 / n_inst).sqrt() / (1.0 - a)).min(MAX_SIGMA_SCALE);
-            ctx.set_face(f, bg);
+            let prev = self.scale[f];
+            self.scale[f] = ((prev * prev + 1.0 / n_inst).sqrt() / (1.0 - a)).min(MAX_SIGMA_SCALE);
+            self.set_face(f, bg);
         }
-        let mut faces: Vec<usize> = found.inst.iter().map(|&(f, _)| f).collect();
-        faces.sort_unstable();
-        layers.push(Layer {
-            color: from_work(found.c, opt.space),
-            alpha: a as f32,
-            faces,
-            residual: found.residual,
-        });
     }
 
-    AlphaAnalysis {
-        layers,
-        opaque_faces: (0..n).filter(|&f| !claimed[f]).collect(),
-        base_rgb: ctx.work.iter().map(|&c| from_work(c, opt.space)).collect(),
-    }
-}
-
-// --- internals ---------------------------------------------------------------------
-
-struct Ctx<'a> {
-    /// Current face colours in the working space; rewritten as layers are peeled.
-    work: Vec<V3>,
-    lab: Vec<Oklab>,
-    slope: Vec<[f64; 3]>,
-    /// Per-face multiplier on `sigma_srgb`, growing by `1/(1-a)` each time a layer is
-    /// peeled off that face.
-    scale: Vec<f64>,
-    area: &'a [usize],
-    nb: Vec<Vec<usize>>,
-    adj_set: std::collections::HashSet<(usize, usize)>,
-    opt: AlphaOptions,
-    sig2: f64,
-}
-
-/// One solved `(F1 over G1, F2 over G2)` hypothesis.
-struct Sol {
-    a: f64,
-    c: V3,
-    chi2: f64,
-    f1: usize,
-    g1: usize,
-    f2: usize,
-    g2: usize,
-}
-
-/// A cluster of solutions agreeing on `(a, C)`, after the joint refit.
-struct Fitted {
-    a: f64,
-    c: V3,
-    residual: f64,
-    inst: Vec<(usize, usize)>,
-}
-
-impl Ctx<'_> {
+    /// Set face `f`'s working colour to `w`, and refresh its OKLab colour and slopes.
     fn set_face(&mut self, f: usize, w: V3) {
         self.work[f] = w;
         let rgb = from_work(w, self.opt.space);
@@ -505,84 +581,28 @@ impl Ctx<'_> {
         ];
     }
 
+    /// Is face `f` large enough to take part (`min_face_area`)?
     #[inline]
     fn usable(&self, f: usize) -> bool {
         self.area[f] >= self.opt.min_face_area
     }
 
+    /// Do faces `u` and `v` share a boundary?
     #[inline]
     fn adjacent(&self, u: usize, v: usize) -> bool {
         self.adj_set.contains(&(u.min(v), u.max(v)))
     }
 
     /// Enumerate hypotheses, cluster them, refit, and return the best-supported layer.
+    ///
+    /// "Best" is the fit covering the most faces, then the most pixels, then with the
+    /// smallest residual.
     fn peel_once(&self) -> Option<Fitted> {
         let sols = self.enumerate();
         if sols.is_empty() {
             return None;
         }
-
-        // Greedy clustering in (a, C), best-fitting solutions first so a cluster's
-        // centroid is seeded by its most reliable evidence.
-        let mut order: Vec<usize> = (0..sols.len()).collect();
-        order.sort_by(|&i, &j| {
-            sols[i]
-                .chi2
-                .partial_cmp(&sols[j].chi2)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(i.cmp(&j))
-        });
-
-        struct Clu {
-            a_sum: f64,
-            c_sum: V3,
-            n: f64,
-            inst: Vec<(usize, usize, f64)>,
-        }
-        let mut clusters: Vec<Clu> = Vec::new();
-
-        for &si in &order {
-            let s = &sols[si];
-            let lab_c = rgb_to_oklab(from_work(s.c, self.opt.space));
-            let tol_c = TOL_C / (s.a as f32).clamp(0.3, 1.0);
-            let mut hit = None;
-            for (ci, cl) in clusters.iter().enumerate() {
-                let ca = cl.a_sum / cl.n;
-                if (ca - s.a).abs() > TOL_A {
-                    continue;
-                }
-                let cc = [cl.c_sum[0] / cl.n, cl.c_sum[1] / cl.n, cl.c_sum[2] / cl.n];
-                if rgb_to_oklab(from_work(cc, self.opt.space)).dist(lab_c) <= tol_c {
-                    hit = Some(ci);
-                    break;
-                }
-            }
-            let ci = match hit {
-                Some(ci) => ci,
-                None => {
-                    if clusters.len() >= 64 {
-                        continue;
-                    }
-                    clusters.push(Clu {
-                        a_sum: 0.0,
-                        c_sum: [0.0; 3],
-                        n: 0.0,
-                        inst: Vec::new(),
-                    });
-                    clusters.len() - 1
-                }
-            };
-            let cl = &mut clusters[ci];
-            cl.a_sum += s.a;
-            cl.c_sum = [
-                cl.c_sum[0] + s.c[0],
-                cl.c_sum[1] + s.c[1],
-                cl.c_sum[2] + s.c[2],
-            ];
-            cl.n += 1.0;
-            cl.inst.push((s.f1, s.g1, s.chi2));
-            cl.inst.push((s.f2, s.g2, s.chi2));
-        }
+        let clusters = self.cluster(&sols);
 
         // Refit each cluster jointly and keep the ones that survive every gate.
         let mut best: Option<(usize, usize, f64, Fitted)> = None;
@@ -621,6 +641,72 @@ impl Ctx<'_> {
         best.map(|(_, _, _, f)| f)
     }
 
+    /// Greedy clustering of solutions in `(a, C)`.
+    ///
+    /// Solutions are taken best-fitting first (smallest chi-square, ties by index), so a
+    /// cluster's centroid is seeded by its most reliable evidence. Each joins the first
+    /// cluster whose mean `a` is within `TOL_A` and whose mean colour is within
+    /// `TOL_C / clamp(a, 0.3, 1)` in OKLab (the recovered colour's noise grows as `1/a`);
+    /// otherwise it starts a new cluster, up to 64.
+    fn cluster(&self, sols: &[Sol]) -> Vec<Cluster> {
+        // Greedy clustering in (a, C), best-fitting solutions first so a cluster's
+        // centroid is seeded by its most reliable evidence.
+        let mut order: Vec<usize> = (0..sols.len()).collect();
+        order.sort_by(|&i, &j| {
+            sols[i]
+                .chi2
+                .partial_cmp(&sols[j].chi2)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(i.cmp(&j))
+        });
+
+        let mut clusters: Vec<Cluster> = Vec::new();
+
+        for &si in &order {
+            let s = &sols[si];
+            let lab_c = rgb_to_oklab(from_work(s.c, self.opt.space));
+            let tol_c = TOL_C / (s.a as f32).clamp(0.3, 1.0);
+            let mut hit = None;
+            for (ci, cl) in clusters.iter().enumerate() {
+                let ca = cl.a_sum / cl.n;
+                if (ca - s.a).abs() > TOL_A {
+                    continue;
+                }
+                let cc = [cl.c_sum[0] / cl.n, cl.c_sum[1] / cl.n, cl.c_sum[2] / cl.n];
+                if rgb_to_oklab(from_work(cc, self.opt.space)).dist(lab_c) <= tol_c {
+                    hit = Some(ci);
+                    break;
+                }
+            }
+            let ci = match hit {
+                Some(ci) => ci,
+                None => {
+                    if clusters.len() >= 64 {
+                        continue;
+                    }
+                    clusters.push(Cluster {
+                        a_sum: 0.0,
+                        c_sum: [0.0; 3],
+                        n: 0.0,
+                        inst: Vec::new(),
+                    });
+                    clusters.len() - 1
+                }
+            };
+            let cl = &mut clusters[ci];
+            cl.a_sum += s.a;
+            cl.c_sum = [
+                cl.c_sum[0] + s.c[0],
+                cl.c_sum[1] + s.c[1],
+                cl.c_sum[2] + s.c[2],
+            ];
+            cl.n += 1.0;
+            cl.inst.push((s.f1, s.g1, s.chi2));
+            cl.inst.push((s.f2, s.g2, s.chi2));
+        }
+        clusters
+    }
+
     /// Every `((F1, G1), (F2, G2))` hypothesis that survives the pair-level gates.
     ///
     /// Enumeration is driven by the adjacency `F1 - F2` rather than by all face pairs:
@@ -628,6 +714,12 @@ impl Ctx<'_> {
     /// them meet, so a layer that is not connected across the background boundary is not
     /// evidence we are willing to use. That also turns an `O(F^2 · deg^2)` search into
     /// `O(E · deg^2)`.
+    ///
+    /// For each adjacent pair `F1 < F2`, each neighbour `G1` of `F1` and each neighbour
+    /// `G2` of `F2` (all distinct, all at least `min_face_area`), the quad must pass the
+    /// cheap gates (`F1` visibly different from `G1`, then [`Self::is_crossing_quad`])
+    /// before the pair is solved. Stops at `MAX_SOLUTIONS` so a pathological map cannot
+    /// run away. The order is deterministic: faces by id, neighbours by area.
     fn enumerate(&self) -> Vec<Sol> {
         let mut out = Vec::new();
         for f1 in 0..self.work.len() {
@@ -649,40 +741,7 @@ impl Ctx<'_> {
                         if g2 == f1 || g2 == g1 || !self.usable(g2) {
                             continue;
                         }
-                        // The quad: F1-F2 and G1-G2 are the same boundary, once above
-                        // the layer and once below it. If the two candidate backgrounds
-                        // do not meet, the two candidate layer faces are not two views
-                        // of one layer crossing one edge.
-                        if !self.adjacent(g1, g2) {
-                            continue;
-                        }
-                        // ...and the quad's *diagonals* must not both be edges. Where a
-                        // translucent silhouette crosses a background boundary, four
-                        // regions meet at a point in the cyclic order F1, F2, G2, G1, so
-                        // F1 touches G2 only at that point, never along a curve. Faces
-                        // joined across both diagonals are not arranged the way the
-                        // hypothesis claims, whatever their colours happen to satisfy.
-                        //
-                        // *Both*, not either, and that weakening is a concession to
-                        // rasterisation. Traced from the real 128px `stack_overlap.png`,
-                        // the map carries five adjacencies beyond the twelve the three
-                        // circles induce — every one a lens tip two or three pixel
-                        // corners long, where an arc crossing should have been a single
-                        // point. One of them, white touching blue-over-red, is a diagonal
-                        // of exactly the quad that recovers the blue layer. Rejecting on
-                        // either diagonal loses that layer on the real image and gains
-                        // nothing on a planar map, where diagonals do not arise at all;
-                        // it pays only on adjacency graphs too dense to be planar, which
-                        // a face map is not. A caller that drops shared boundaries under
-                        // a pixel or so in length can afford the stricter rule, and
-                        // should.
-                        if self.adjacent(f1, g2) && self.adjacent(f2, g1) {
-                            continue;
-                        }
-                        if self.lab[f2].dist(self.lab[g2]) < MIN_LAYER_EFFECT {
-                            continue;
-                        }
-                        if self.lab[g1].dist(self.lab[g2]) < MIN_BG_SEP {
+                        if !self.is_crossing_quad(f1, f2, g1, g2) {
                             continue;
                         }
                         if let Some(s) = self.solve_pair(f1, g1, f2, g2) {
@@ -698,8 +757,68 @@ impl Ctx<'_> {
         out
     }
 
+    /// The geometric and colour gates on one candidate quad: `F1` over `G1`, `F2` over
+    /// `G2`, with `F1-F2` already known adjacent.
+    ///
+    /// Passes when `G1-G2` is adjacent (the same boundary seen under and outside the
+    /// layer), the diagonals `F1-G2` and `F2-G1` are not both adjacent, `F2` differs from
+    /// `G2` by at least `MIN_LAYER_EFFECT` in OKLab, and the backgrounds differ by at least
+    /// `MIN_BG_SEP`.
+    fn is_crossing_quad(&self, f1: usize, f2: usize, g1: usize, g2: usize) -> bool {
+        // The quad: F1-F2 and G1-G2 are the same boundary, once above
+        // the layer and once below it. If the two candidate backgrounds
+        // do not meet, the two candidate layer faces are not two views
+        // of one layer crossing one edge.
+        if !self.adjacent(g1, g2) {
+            return false;
+        }
+        // ...and the quad's *diagonals* must not both be edges. Where a
+        // translucent silhouette crosses a background boundary, four
+        // regions meet at a point in the cyclic order F1, F2, G2, G1, so
+        // F1 touches G2 only at that point, never along a curve. Faces
+        // joined across both diagonals are not arranged the way the
+        // hypothesis claims, whatever their colours happen to satisfy.
+        //
+        // *Both*, not either, and that weakening is a concession to
+        // rasterisation. Traced from the real 128px `stack_overlap.png`,
+        // the map carries five adjacencies beyond the twelve the three
+        // circles induce — every one a lens tip two or three pixel
+        // corners long, where an arc crossing should have been a single
+        // point. One of them, white touching blue-over-red, is a diagonal
+        // of exactly the quad that recovers the blue layer. Rejecting on
+        // either diagonal loses that layer on the real image and gains
+        // nothing on a planar map, where diagonals do not arise at all;
+        // it pays only on adjacency graphs too dense to be planar, which
+        // a face map is not. A caller that drops shared boundaries under
+        // a pixel or so in length can afford the stricter rule, and
+        // should.
+        if self.adjacent(f1, g2) && self.adjacent(f2, g1) {
+            return false;
+        }
+        if self.lab[f2].dist(self.lab[g2]) < MIN_LAYER_EFFECT {
+            return false;
+        }
+        if self.lab[g1].dist(self.lab[g2]) < MIN_BG_SEP {
+            return false;
+        }
+        true
+    }
+
     /// The two-pair solve of the module header: least-squares scale between `c_F1 - c_F2`
     /// and `c_G1 - c_G2`, accepted on its parallelism residual.
+    ///
+    /// With `dF = c_F1 − c_F2` and `dG = c_G1 − c_G2` (working space):
+    ///
+    /// ```text
+    ///     s    = (dF·dG) / |dG|²,   a = 1 − s
+    ///     chi2 = Σ_k (dF_k − s·dG_k)² / var_k
+    ///     var_k = σ² (σ_F1² + σ_F2² + s² (σ_G1² + σ_G2²))     σ_X = slope_X,k · scale_X
+    ///     C    = (½(c_F1 + c_F2) − s·½(c_G1 + c_G2)) / a
+    /// ```
+    ///
+    /// `None` when `|dG|²` is under `1e-6`, `a` is outside `[A_MIN, A_MAX]`, the
+    /// chi-square exceeds `CHI2_PAIR_MAX` (2 dof: three channels, one fitted scale), or
+    /// `C` leaves the gamut by more than `GAMUT_SLACK`.
     fn solve_pair(&self, f1: usize, g1: usize, f2: usize, g2: usize) -> Option<Sol> {
         let (cf1, cf2) = (self.work[f1], self.work[f2]);
         let (cg1, cg2) = (self.work[g1], self.work[g2]);
@@ -760,6 +879,18 @@ impl Ctx<'_> {
     /// With `s = 1-a` and `u = a·C` the model `c_F = u + s·c_G` is *linear* in `(u, s)`,
     /// so the fit is a centred covariance ratio — no iteration, no initialisation, and
     /// the same estimator as the two-pair case generalised to n pairs.
+    ///
+    /// With weights `w_i = 1 / (scale_F² + scale_G²)` and weighted means `F̄`, `Ḡ` over
+    /// the pairs (each channel a separate observation):
+    ///
+    /// ```text
+    ///     s = Σ_i,k w_i (G_ik − Ḡ_k)(F_ik − F̄_k) / Σ_i,k w_i (G_ik − Ḡ_k)²
+    ///     a = 1 − s,   C = (F̄ − s·Ḡ) / a
+    /// ```
+    ///
+    /// Returns `(a, C)`, or `None` with fewer than two pairs, backgrounds that do not
+    /// spread (the unit-weight denominator under `2e-3`), a standard error on `a`
+    /// (`sqrt(σ²/den)`) over `MAX_ALPHA_SD`, `a` out of range, or `C` out of gamut.
     fn solve_ls(&self, inst: &[(usize, usize)]) -> Option<(f64, V3)> {
         if inst.len() < 2 {
             return None;
@@ -830,6 +961,9 @@ impl Ctx<'_> {
     }
 
     /// Goodness of fit of one `(face, background)` hypothesis against a stated layer.
+    ///
+    /// `chi2 = Σ_k (c_F,k − (a·C_k + (1−a)·c_G,k))² / (σ² (σ_F,k² + (1−a)² σ_G,k²))`, three
+    /// degrees of freedom; infinite when a variance is not positive.
     fn instance_chi2(&self, f: usize, g: usize, a: f64, c: V3) -> f64 {
         let s = 1.0 - a;
         let mut chi2 = 0.0;
@@ -856,6 +990,10 @@ impl Ctx<'_> {
     /// what? That is what makes the recovered face set complete — and it cuts both ways,
     /// because a layer invented from a coincidence gains no new faces from it: every
     /// addition is another three-dimensional colour equation that has to come out right.
+    ///
+    /// Each usable face takes the visibly different neighbour with the smallest
+    /// [`Self::instance_chi2`] under `CHI2_INSTANCE_MAX`, if any; faces that are some
+    /// other face's background are then dropped. Output is in face order.
     fn consensus(&self, a: f64, c: V3) -> Vec<(usize, usize)> {
         let mut out: Vec<(usize, usize)> = Vec::new();
         for f in 0..self.work.len() {
@@ -886,7 +1024,8 @@ impl Ctx<'_> {
         out
     }
 
-    /// Do the layer's faces form one connected region of the map?
+    /// Do the layer's faces form one connected region of the map? A depth-first search
+    /// from the first face through neighbours that are also layer faces. Empty is `false`.
     fn connected(&self, inst: &[(usize, usize)]) -> bool {
         let Some(&(start, _)) = inst.first() else {
             return false;
@@ -906,6 +1045,13 @@ impl Ctx<'_> {
     }
 
     /// Fit a cluster's seed hypotheses, grow the fit to consensus, and apply the gates.
+    ///
+    /// Alternates [`Self::solve_ls`] and [`Self::consensus`] up to four times, stopping
+    /// early when the face set no longer changes. Then: the faces must be connected; the
+    /// backgrounds' largest OKLab separation must reach `MIN_BG_SEP` (`MIN_BG_SEP_STRICT`
+    /// for exactly two pairs); every pair must pass `CHI2_INSTANCE_MAX`; and the total
+    /// chi-square must stay within `CHI2_MINIMAL_MAX` for two pairs, or
+    /// `CHI2_CLUSTER_PER_DOF · (3n − 4)` for `n` pairs (3 equations per pair, 4 unknowns).
     fn fit_cluster(&self, seed: Vec<(usize, usize)>) -> Option<Fitted> {
         let mut inst = seed;
         let (mut a, mut c) = self.solve_ls(&inst)?;

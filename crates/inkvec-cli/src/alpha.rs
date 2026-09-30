@@ -712,54 +712,114 @@ pub(crate) fn alpha_source(
     cutout: bool,
     native: bool,
 ) -> Option<AlphaSource> {
-    if !has_transparency(img) {
-        return None;
+    let plan = MattePlan::of(img, cutout, native)?;
+    let (flat, alpha) = flatten_over(img, plan.matte);
+    Some(plan.finish(flat, alpha, quiet))
+}
+
+/// [`alpha_source`] for an image the caller is done with: the matted image is written over
+/// the input's own buffer instead of a new one. `Err` gives the image back untouched when
+/// it has no transparency (where `alpha_source` returns `None`).
+///
+/// The intake calls this once every resampling step is done, and never reads the unmatted
+/// image again, so the copy [`flatten_over`] makes was pure cost: a fresh 64 MB buffer at
+/// 2048 px, whose page faults and release the shared-stage research measured at 5.7 +
+/// 1.7 ms. The matte is decided on the untouched image first ([`MattePlan::of`]), then
+/// every pixel is flattened by the same [`flatten_pixel`] -- the same values, in the same
+/// places, so the result is the image `alpha_source` returns.
+///
+/// Not from the literature: buffer reuse, because there is nothing to choose between.
+/// See also: D. Leijen, B. Zorn, L. de Moura, "Mimalloc: Free List Sharding in Action",
+/// APLAS 2019 -- the allocator-side answer to the same page-fault cost, which would also
+/// help the stages this cannot reach.
+pub(crate) fn alpha_source_owned(
+    img: inkvec_trace::Rgba,
+    quiet: bool,
+    cutout: bool,
+    native: bool,
+) -> Result<AlphaSource, inkvec_trace::Rgba> {
+    let Some(plan) = MattePlan::of(&img, cutout, native) else {
+        return Err(img);
+    };
+    let (flat, alpha) = flatten_in_place(img, plan.matte);
+    Ok(plan.finish(flat, alpha, quiet))
+}
+
+/// What [`alpha_source`] decided for an image with transparency, before any pixel is
+/// flattened: the matte, whether the cutout is on, and what to tell the user.
+struct MattePlan {
+    /// The colour to flatten onto, sRGB 0..1.
+    matte: [f32; 3],
+    /// Whether the transparency is carried out as `--cutout` does.
+    cutout: bool,
+    /// Native alpha: nothing was chosen, the image is only written over white.
+    native: bool,
+    /// Share of the silhouette lost to a white matte, when that turned the cutout on here.
+    swallowed: Option<f64>,
+}
+
+impl MattePlan {
+    /// `None` for an image with no alpha under 0.999 ([`has_transparency`]). Natively
+    /// traced: white, cutout on. Otherwise [`choose_matte`] on the untouched image, with the
+    /// cutout turned on when more than [`LOST_TO_WHITE`] of the silhouette would vanish into
+    /// white; the chosen matte only applies under the cutout.
+    fn of(img: &inkvec_trace::Rgba, cutout: bool, native: bool) -> Option<Self> {
+        if !has_transparency(img) {
+            return None;
+        }
+        if native {
+            // Nothing is chosen and nothing is lost: over white is only how the colour is
+            // written down, and the alpha travels beside it into every stage that unmixes.
+            // The output carries the transparency out, as the cutout does.
+            return Some(MattePlan {
+                matte: [1.0, 1.0, 1.0],
+                cutout: true,
+                native: true,
+                swallowed: None,
+            });
+        }
+        let (chosen, _, lost_to_white) = choose_matte(img);
+        let swallowed = !cutout && lost_to_white > LOST_TO_WHITE;
+        let cutout = cutout || swallowed;
+        Some(MattePlan {
+            matte: if cutout { chosen } else { [1.0, 1.0, 1.0] },
+            cutout,
+            native: false,
+            swallowed: swallowed.then_some(lost_to_white),
+        })
     }
-    if native {
-        // Nothing is chosen and nothing is lost: over white is only how the colour is
-        // written down, and the alpha travels beside it into every stage that unmixes.
-        // The output carries the transparency out, as the cutout does.
-        let (flat, alpha) = flatten_over(img, [1.0, 1.0, 1.0]);
+
+    /// The [`AlphaSource`] for the flattened image, with the stderr notes the old
+    /// `alpha_source` printed, in the same order: the matte (or "native") and the share of
+    /// clear pixels (alpha under 0.05), then, when the cutout was turned on here, why.
+    fn finish(self, flat: inkvec_trace::Rgba, alpha: Vec<f32>, quiet: bool) -> AlphaSource {
         diag::stage(quiet, || {
             let clear = alpha.iter().filter(|&&a| a < 0.05).count();
-            format!(
-                "  alpha         native, {:.0}% of the image transparent",
-                100.0 * clear as f64 / alpha.len().max(1) as f64
-            )
+            let share = 100.0 * clear as f64 / alpha.len().max(1) as f64;
+            if self.native {
+                format!("  alpha         native, {share:.0}% of the image transparent")
+            } else {
+                format!(
+                    "  alpha         {} matte, {share:.0}% of the image transparent",
+                    inkvec_trace::color::to_hex(self.matte)
+                )
+            }
         });
-        return Some(AlphaSource {
+        if let Some(lost_to_white) = self.swallowed {
+            diag::stage(quiet, || {
+                format!(
+                    "  cutout        {:.0}% of the outline is white and would vanish into a white matte; carrying the transparency out as --cutout does",
+                    100.0 * lost_to_white
+                )
+            });
+        }
+        AlphaSource {
             flat,
             alpha,
-            matte: [1.0, 1.0, 1.0],
-            cutout: true,
-        });
+            matte: self.matte,
+            cutout: self.cutout,
+        }
     }
-    let (chosen, _, lost_to_white) = choose_matte(img);
-    let swallowed = !cutout && lost_to_white > LOST_TO_WHITE;
-    let cutout = cutout || swallowed;
-    let matte = if cutout { chosen } else { [1.0, 1.0, 1.0] };
-    let (flat, alpha) = flatten_over(img, matte);
-    diag::stage(quiet, || {
-        let clear = alpha.iter().filter(|&&a| a < 0.05).count();
-        format!(
-            "  alpha         {} matte, {:.0}% of the image transparent",
-            inkvec_trace::color::to_hex(matte),
-            100.0 * clear as f64 / alpha.len().max(1) as f64
-        )
-    });
-    diag::stage(quiet || !swallowed, || {
-        format!(
-            "  cutout        {:.0}% of the outline is white and would vanish into a white \
-matte; carrying the transparency out as --cutout does",
-            100.0 * lost_to_white
-        )
-    });
-    Some(AlphaSource {
-        flat,
-        alpha,
-        matte,
-        cutout,
-    })
 }
 
 /// `args` as the rest of the trace must see them once [`alpha_source`] has decided: with
@@ -843,6 +903,39 @@ fn flatten_pixel(p: &mut [f32], matte: [f32; 3]) -> f32 {
     }
     p[3] = 1.0;
     a
+}
+
+/// [`flatten_over`] written over `img`'s own buffer: the same pixels, flattened by the same
+/// [`flatten_pixel`], and the same clamped alphas, without a second image-sized buffer.
+/// Parallel above [`INTAKE_PARALLEL_MIN`] pixels. Panics if `img.data` is shorter than
+/// `4 · width · height`; floats past that length are dropped, as the copy never had them.
+fn flatten_in_place(
+    mut img: inkvec_trace::Rgba,
+    matte: [f32; 3],
+) -> (inkvec_trace::Rgba, Vec<f32>) {
+    use rayon::prelude::*;
+    let n = img.width * img.height;
+    img.data.truncate(n * 4);
+    assert_eq!(
+        img.data.len(),
+        n * 4,
+        "an RGBA image holds four floats per pixel"
+    );
+    let mut alpha = vec![0.0f32; n];
+    let run = |(px, a): (&mut [f32], &mut [f32])| {
+        for (p, a) in px.chunks_exact_mut(4).zip(a.iter_mut()) {
+            *a = flatten_pixel(p, matte);
+        }
+    };
+    if n >= INTAKE_PARALLEL_MIN {
+        img.data
+            .par_chunks_mut(4 * FLATTEN_CHUNK)
+            .zip(alpha.par_chunks_mut(FLATTEN_CHUNK))
+            .for_each(run);
+    } else {
+        run((&mut img.data, &mut alpha));
+    }
+    (img, alpha)
 }
 
 /// Below this many pixels (256 × 256) the intake's alpha scan and flatten run on the
@@ -1349,6 +1442,48 @@ mod intake_tests {
                 img.data.iter_mut().for_each(|v| *v = 0.2);
                 assert_eq!(has_transparency(&img), old(&img));
             }
+        }
+    }
+
+    /// Flattening over the input's own buffer gives what flattening into a copy gives: the
+    /// same matted image, alphas, matte and cutout decision, in every mode; and an opaque
+    /// image comes back untouched.
+    #[test]
+    fn flattening_in_place_is_flattening_a_copy() {
+        for (w, h) in [(1usize, 1usize), (40, 30), (300, 260)] {
+            let mut white_mark = random_rgba(w, h, 5, 0);
+            for p in white_mark.data.chunks_exact_mut(4) {
+                p[..3].copy_from_slice(&[1.0, 1.0, 1.0]);
+            }
+            for mut img in [random_rgba(w, h, 3, 0), white_mark] {
+                // At least one translucent pixel, whatever the random draw.
+                img.data[w * h * 4 - 1] = 0.4;
+                for (cutout, native) in [(false, false), (true, false), (false, true)] {
+                    let a = alpha_source(&img, true, cutout, native).expect("translucent");
+                    let b = alpha_source_owned(img.clone(), true, cutout, native)
+                        .ok()
+                        .expect("translucent");
+                    let what = format!("{w}x{h} cutout {cutout} native {native}");
+                    assert_eq!(bits(&a.flat.data), bits(&b.flat.data), "{what}");
+                    assert_eq!((a.flat.width, a.flat.height), (b.flat.width, b.flat.height));
+                    assert_eq!(bits(&a.alpha), bits(&b.alpha), "{what}");
+                    assert_eq!(bits(&a.matte), bits(&b.matte), "{what}");
+                    assert_eq!(a.cutout, b.cutout, "{what}");
+                }
+            }
+            let opaque = Rgba {
+                width: w,
+                height: h,
+                data: vec![0.5; w * h * 4]
+                    .chunks(4)
+                    .flat_map(|_| [0.3, 0.6, 0.9, 1.0])
+                    .collect(),
+            };
+            assert!(alpha_source(&opaque, true, false, true).is_none());
+            let back = alpha_source_owned(opaque.clone(), true, false, true)
+                .err()
+                .expect("opaque");
+            assert_eq!(bits(&back.data), bits(&opaque.data));
         }
     }
 

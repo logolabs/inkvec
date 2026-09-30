@@ -163,19 +163,24 @@ to the upstream saddle merge:
 
 | name | value | file:line | controls | basis |
 |---|---|---|---|---|
-| `MAX_STEP` | 0.35 px | `inkvec-trace/src/boundary_opt.rs` | largest per-point displacement in one CG step | none |
-| `MAX_TOTAL` | 1.0 px | `inkvec-trace/src/boundary_opt.rs:88-90` | total leash from the point's starting position | motivated |
-| `K_KINK` | 0.05 | `inkvec-trace/src/boundary_opt.rs` | kink weight, fraction of the data term's initial value | motivated (scaling rule derived, value not swept) |
-| `K_ANCHOR` | 0.10 | `inkvec-trace/src/boundary_opt.rs` | anchor weight, fraction of the data term's initial value | motivated |
-| `JUNCTION_ANCHOR` | 4.0 | `inkvec-trace/src/boundary_opt.rs` | multiplier on `w_anchor` at a junction point | motivated |
-| `MIN_CONTRAST` | 2.0/255 | `inkvec-trace/src/boundary_opt.rs` | pixel usable-evidence floor for the data term | none |
-| `EPS` (in `priors`) | 1e-4 | `inkvec-trace/src/boundary_opt.rs` | floor inside the kink term's square root | motivated |
-| `INKVEC_BOPT_ITERS` (*removed*) (env) | 48 | `inkvec-trace/src/boundary_opt.rs` | iteration cap | measured (24 was found unconverged) |
-| `INKVEC_BOPT_MS` (*removed*) (env) | 1200 ms | `inkvec-trace/src/boundary_opt.rs:1002-1003` | time budget | measured (60s budget gave the same result) |
-| degenerate-box guard | `(x1-x0)*(y1-y0) > 64` | `inkvec-trace/src/boundary_opt.rs:406-407` | skips a segment whose bbox would touch too many spatial-hash cells | motivated |
-| fold-guard floor | `scale > 0.1` | `inkvec-trace/src/boundary_opt.rs` | how far the solve halves the accepted displacement before giving up | none |
-| backtracking factor | `step *= 0.4`, up to 6 tries | `inkvec-trace/src/boundary_opt.rs` | line-search backoff | none |
-| relative-improvement stop | `rel < 1e-4` | `inkvec-trace/src/boundary_opt.rs` | early stop once a step buys almost nothing | none |
+| `MAX_STEP` | 0.35 px | `inkvec-trace/src/boundary_opt.rs:110` | largest displacement of any point in one L-BFGS step | none |
+| `MAX_TOTAL` | 1.0 px | `inkvec-trace/src/boundary_opt.rs:114` | total leash from the point's starting position; also why the band never moves | motivated |
+| `K_KINK` | 0.05 | `inkvec-trace/src/boundary_opt.rs:121` | kink weight, fraction of the data term's initial value | motivated (scaling rule derived, value not swept) |
+| `K_ANCHOR` | 0.10 | `inkvec-trace/src/boundary_opt.rs:124` | anchor weight, fraction of the data term's initial value | motivated |
+| `JUNCTION_ANCHOR` | 4.0 | `inkvec-trace/src/boundary_opt.rs:126` | multiplier on `w_anchor` at a junction point | motivated |
+| `MIN_CONTRAST` | 2.0/255 | `inkvec-trace/src/boundary_opt.rs:128` | colour or opacity difference that counts as a boundary when choosing where alpha is a fourth channel | none |
+| `EPS` (in `priors`) | 1e-4 | `inkvec-trace/src/boundary_opt.rs:440` | floor inside the kink term's square root | motivated |
+| `REACH` | 1 px | `inkvec-trace/src/boundary_opt/band.rs:71` | band width (Chebyshev) round the pixels the starting boundary crosses | derived (follows from `MAX_TOTAL`) |
+| `MEMORY` | 3 | `inkvec-trace/src/boundary_opt/lbfgs.rs:41` | L-BFGS pairs kept | measured (3 did as well as 7, 15 or 30) |
+| `C1` | 1e-4 | `inkvec-trace/src/boundary_opt/lbfgs.rs:43` | Armijo sufficient-decrease constant | motivated (the textbook value, Nocedal & Wright 2006) |
+| `MAX_TRIALS` | 8 | `inkvec-trace/src/boundary_opt/lbfgs.rs:45` | step halvings per line search | none |
+| `MAX_ITERS` | 32 | `inkvec-trace/src/boundary_opt/lbfgs.rs:49` | iterations per independent part | measured (24 read 0.3666, 32 read 0.3585, 48 read 0.3558 on the screen set; 48 up to 1.9x slower) |
+| `PARAM_TOL` | 0.005 px | `inkvec-trace/src/boundary_opt/lbfgs.rs:52` | stop once no point moves more in a step | derived (half the SVG's 0.01 px) |
+| `FUNC_TOL` | 1e-4 | `inkvec-trace/src/boundary_opt/lbfgs.rs:55` | stop once a step lowers the changeable energy by less than this fraction | none |
+| `INKVEC_BOPT_ITERS` (*removed*) (env) | 48 | `inkvec-trace/src/boundary_opt/lbfgs.rs` | iteration cap of the former conjugate-gradient solve; now `MAX_ITERS` | measured (24 was found unconverged) |
+| `INKVEC_BOPT_MS` (*removed*) (env) | 1200 ms | `inkvec-trace/src/boundary_opt.rs` | time budget; now only the caller's `budget_ms` | measured (60s budget gave the same result) |
+| segment bucket limit | cell range `(x1-x0)*(y1-y0) <= 64` | `inkvec-trace/src/boundary_opt/folds.rs` | segments the fold guard counts | motivated (kept exactly from the hash grid it replaced) |
+| fold-guard floor | `s > 0.1` | `inkvec-trace/src/boundary_opt.rs:658` | how far the guard halves the displacement before giving up | none |
 
 ## 09 — Decode ([09-decode.md](09-decode.md))
 

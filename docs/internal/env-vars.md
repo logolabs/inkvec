@@ -61,8 +61,7 @@ Every name read anywhere in `crates/` on main 34caf25, by class. *Read at* is wh
 | `INKVEC_ABSDBG` | flag | off | crates/inkvec-trace/src/regions.rs:363 | docs/algorithm/04-regions.md | sliver-absorption rejections. |
 | `INKVEC_ALPHADBG` | flag | off | crates/inkvec-cli/src/alpha.rs:821, crates/inkvec-cli/src/emit.rs:785 | docs/algorithm/01-intake.md, docs/algorithm/13-emit.md | alpha / layer / emit face dump. |
 | `INKVEC_BOPT` | switch | on | crates/inkvec-cli/examples/neural_trace.rs:246, crates/inkvec-trace/src/lib.rs:1143 | bench/ablate.py, bench/spikes.py, docs/algorithm/08-boundary-solve.md | `0` skips the global boundary solve. bench/ablate.py and bench/spikes.py price the stage with it. |
-| `INKVEC_BOPTDBG` | flag | off | crates/inkvec-trace/src/boundary_opt.rs:1131 | docs/algorithm/08-boundary-solve.md | boundary-solve iteration trace. |
-| `INKVEC_BOPT_CELLS` | flag | off | crates/inkvec-trace/src/boundary_opt.rs:1150 | docs/algorithm/08-boundary-solve.md | boundary-solve per-cell clipped areas. |
+| `INKVEC_BOPTDBG` | flag | off | crates/inkvec-trace/src/boundary_opt.rs:596 | docs/algorithm/08-boundary-solve.md | boundary-solve iteration trace. |
 | `INKVEC_DEBUG_FIT` | flag | off | crates/inkvec-fit/src/lib.rs:919 | nothing | line-vs-cubic run decisions in the fitter. |
 | `INKVEC_DIAG` | text | off | crates/inkvec-trace/src/diag.rs:44 | docs/TRAZOR_REVIEW.md | `1`/any: diagnostics as text on stderr, `json`: as JSON lines. |
 | `INKVEC_DPDBG` | flag | off | crates/inkvec-fit/src/multimodel.rs:119 | nothing | multimodel dynamic-program decisions. |
@@ -78,7 +77,6 @@ Every name read anywhere in `crates/` on main 34caf25, by class. *Read at* is wh
 | `INKVEC_GRAD_REGIONS` | switch | on | crates/inkvec-trace/src/gradient/regions.rs:10 | CHANGELOG.md | `0` switches region-level gradient recovery off (CHANGELOG 0.2.0). |
 | `INKVEC_HARMONIZE_TOL` | number | `HARMONIZE_TOL` | crates/inkvec-cli/src/harmonize.rs:89 | bench/perceptual_probe.py | shape-harmonize tolerance; bench/perceptual_probe.py sets 1000 to disable it. |
 | `INKVEC_JDBG` | flag | off | crates/inkvec-trace/src/planar/junctions.rs:188, crates/inkvec-trace/src/planar/junctions.rs:300 | docs/algorithm/07-subpixel.md | junction end-tangent fits (was `JDBG`, renamed to the prefix). |
-| `INKVEC_JUNCDBG` | flag | off | crates/inkvec-trace/src/boundary_opt.rs:1277 | docs/algorithm/08-boundary-solve.md | boundary-solve junction counters. |
 | `INKVEC_MERGEDBG` | flag | off | crates/inkvec-trace/src/gradient/bands.rs:324 | docs/algorithm/05-gradients.md | band-merge trace. |
 | `INKVEC_NATIVE_ALPHA` | switch | on | crates/inkvec/tests/api.rs:211, crates/inkvec-cli/src/args.rs:169, crates/inkvec-cli/src/args.rs:655 | CHANGELOG.md, bindings/openapi.json, bindings/options.schema.json, crates/inkvec-py/README.md, crates/inkvec-py/python/inkvec/__init__.pyi, crates/inkvec-py/tests/test_inkvec.py, crates/inkvec-server/README.md, crates/inkvec/README.md, crates/inkvec/tests/api.rs, docs/BINDINGS.md, packages/dotnet/README.md, packages/dotnet/src/LogoLabs.Inkvec/InkvecOptions.generated.cs, packages/go/README.md, packages/go/options_generated.go, packages/java/README.md, packages/java/src/main/java/com/logolabs/inkvec/InkvecOptions.java, packages/npm/README.md, packages/npm/src/options.generated.ts, packages/php/README.md, packages/swift/README.md, packages/swift/Sources/Inkvec/InkvecOptions.generated.swift, studio/core/src/options.rs | `0` makes the CLI default `--no-native-alpha` (CHANGELOG 0.1.4; docs/BINDINGS.md). |
 | `INKVEC_NO_ABSORB` | flag | off | crates/inkvec-trace/src/lib.rs:620, crates/inkvec-trace/src/native.rs:1595 | bench/ablate.py, docs/algorithm/04-regions.md | skips blend-sliver absorption. bench/ablate.py. |
@@ -97,8 +95,6 @@ Every name read anywhere in `crates/` on main 34caf25, by class. *Read at* is wh
 | variable | type | default | read at | set by (outside the source) | what / why |
 |---|---|---|---|---|---|
 | `INKVEC_AXIS` | flag | off | crates/inkvec-fit/src/multimodel.rs:238 | docs/algorithm/11-fitting.md | `merge::snap_axis_aligned`. |
-| `INKVEC_BOPT_CHUNKS` | count | 1 | crates/inkvec-trace/src/boundary_opt.rs:529 | docs/algorithm/08-boundary-solve.md | chunked parallel data term (changes summation order). |
-| `INKVEC_BOPT_JUNC` | flag | off | crates/inkvec-trace/src/boundary_opt.rs:1148 | docs/algorithm/08-boundary-solve.md | junction wedges in the boundary solve (measured worse). |
 | `INKVEC_DECODE` | flag | off | crates/inkvec-trace/src/lib.rs:1154 | docs/algorithm/00-overview.md, docs/algorithm/09-decode.md | order-first decoding (`decode` module, 2,100 lines; `decode_faces` was 57 KiB of the release binary). |
 | `INKVEC_DECODEDBG` | flag | off | crates/inkvec-trace/src/decode.rs:576, crates/inkvec-trace/src/decode.rs:905, crates/inkvec-trace/src/decode.rs:912 | docs/algorithm/09-decode.md | decode trace. |
 | `INKVEC_DECODE_GAIN` | number | `MIN_GAIN` 0.5 | crates/inkvec-trace/src/decode.rs:773 | docs/algorithm/09-decode.md | decode residual cut. |
@@ -139,7 +135,11 @@ Every name read anywhere in `crates/` on main 34caf25, by class. *Read at* is wh
 | `INKVEC_BIMODAL` | number | 0.85 | was crates/inkvec-trace/src/gradient.rs:1420 | docs/algorithm/05-gradients.md, docs/algorithm/constants.md | `BIMODAL_MARGIN`. |
 | `INKVEC_BLEND_TMIN` | number | 0.04 | was crates/inkvec-trace/src/color.rs:608 | docs/algorithm/03-palette.md, docs/algorithm/constants.md | now `color::BLEND_TMIN`. |
 | `INKVEC_BOPT_ANCHOR` | number | `K_ANCHOR` 0.10 | was crates/inkvec-trace/src/boundary_opt.rs:1155 | docs/algorithm/08-boundary-solve.md | constant. |
-| `INKVEC_BOPT_ITERS` | count | 48 | was crates/inkvec-trace/src/boundary_opt.rs:1117 | docs/algorithm/08-boundary-solve.md, docs/algorithm/constants.md | now `boundary_opt::ITERS`; the 24/48/96/192 sweep is in the comment. |
+| `INKVEC_BOPT_ITERS` | count | 48 | was crates/inkvec-trace/src/boundary_opt.rs:1117 | docs/algorithm/08-boundary-solve.md, docs/algorithm/constants.md | now `boundary_opt::lbfgs::MAX_ITERS` (32 per independent part since the band solve); the 24/48/96/192 sweep of the old solver is in docs/algorithm/08-boundary-solve.md. |
+| `INKVEC_BOPT_JUNC` | flag (research) | off | was crates/inkvec-trace/src/boundary_opt.rs:1148 | docs/algorithm/08-boundary-solve.md | junction wedges of the per-pixel data term; gone with that term (the band term leaves pixels holding two boundaries out). |
+| `INKVEC_BOPT_CHUNKS` | count (research) | 1 | was crates/inkvec-trace/src/boundary_opt.rs:529 | docs/algorithm/08-boundary-solve.md | chunked per-pixel sum; the band term is deterministic in parallel by construction. |
+| `INKVEC_BOPT_CELLS` | flag | off | was crates/inkvec-trace/src/boundary_opt.rs:1150 | docs/algorithm/08-boundary-solve.md | per-pixel clipped areas of the per-pixel term, gone with it. |
+| `INKVEC_JUNCDBG` | flag | off | was crates/inkvec-trace/src/boundary_opt.rs:1277 | docs/algorithm/08-boundary-solve.md | junction-wedge counters, gone with the wedges. |
 | `INKVEC_BOPT_KINK` | number | `K_KINK` 0.05 | was crates/inkvec-trace/src/boundary_opt.rs:1154 | docs/algorithm/08-boundary-solve.md | constant. |
 | `INKVEC_BOPT_MS` | number (ms) | none | was crates/inkvec-trace/src/boundary_opt.rs:1119 | docs/algorithm/08-boundary-solve.md, docs/algorithm/constants.md | forced a wall clock; a clock is the caller's `time_budget` only. |
 | `INKVEC_BREAK_EXP` | number | 2.0 | was crates/inkvec-fit/src/tangents.rs:250 | nothing | turn-cost exponent; nothing measured another. |

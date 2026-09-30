@@ -22,16 +22,27 @@ fn edge(points: Vec<Point>, left: u16, right: u16, nodes: (u32, u32), closed: bo
     }
 }
 
-/// A [`Problem`] over `map` with both priors off, junction wedges off and one chunk, as
-/// the tests' starting point; each test switches on what it exercises.
+/// A [`Problem`] over `map` with both priors off and the band set up, as the tests'
+/// starting point; each test switches on what it exercises.
 fn problem<'a>(
     map: &'a PlanarMap,
     vars: &'a Vars,
     rgb: &'a [[f32; 3]],
     face: &'a [FillModel],
 ) -> Problem<'a> {
+    problem_alpha(map, vars, rgb, face, None)
+}
+
+/// [`problem`] with alpha as a fourth channel.
+fn problem_alpha<'a>(
+    map: &'a PlanarMap,
+    vars: &'a Vars,
+    rgb: &'a [[f32; 3]],
+    face: &'a [FillModel],
+    alpha: Option<(&'a [f32], &'a [f32])>,
+) -> Problem<'a> {
     let (w, h) = (map.width, map.height);
-    Problem {
+    let mut p = Problem {
         map,
         vars,
         rgb,
@@ -40,15 +51,20 @@ fn problem<'a>(
         h,
         pieces: Vec::new(),
         head: vec![-1; w * h],
+        vhead: vec![-1; h],
+        touched: Vec::new(),
+        spare: Vec::new(),
         scratch: Scratch::default(),
-        alpha: None,
+        alpha,
         w_kink: 0.0,
         w_anchor: 0.0,
-        junctions: false,
-        touched: Vec::new(),
-        cells_dbg: false,
-        chunks: 1,
-    }
+        band: None,
+        bscratch: Default::default(),
+        band_norm: (0.0, 0.0),
+        active: None,
+    };
+    band::setup(&mut p);
+    p
 }
 
 /// A vertical boundary at `x = x0` down a `w x h` image: white (the chain's left, +x
@@ -96,8 +112,8 @@ fn a_mismeasured_edge_moves_onto_the_true_subpixel_position() {
         // The middle of the chain lands within 0.025 px of the truth, from 0.28-0.85 px
         // away, and every interior point at least two thirds of the way. What is left is
         // by design: the kink prior keeps the chain straight and its two ends are nodes,
-        // anchored four times harder (they still move a sixth of the way or more, and never
-        // past the truth). Points slide along the edge only slightly.
+        // anchored four times harder (they still move a twentieth of the way or more, and
+        // pass the truth by at most a twentieth). Points slide along the edge only slightly.
         let xs: Vec<f64> = map.edges[0].points.iter().map(|p| p.x).collect();
         assert_converged(&xs, start, truth);
         for (p, q) in map.edges[0].points.iter().zip(&before) {
@@ -118,7 +134,9 @@ fn assert_converged(xs: &[f64], start: f64, truth: f64) {
         let what = format!("truth {truth}: points at {xs:.4?} (started at {start})");
         if i == 0 || i + 1 == n {
             let frac = (x - start) / (truth - start);
-            assert!((0.05..=1.0).contains(&frac), "end {i}: {what}");
+            // An end may pass the truth by a hair: it is on the image border, where half its
+            // pixel lies outside the image.
+            assert!((0.05..=1.05).contains(&frac), "end {i}: {what}");
         } else if (n / 4..3 * n / 4).contains(&i) {
             let limit = if err0 > 0.5 { err0 * 0.5 } else { 0.025 };
             assert!(err < limit, "middle point {i}: {what}");
@@ -215,21 +233,32 @@ fn the_alpha_channel_enters_the_data_term_where_colour_is_silent() {
     let face = [FillModel::Flat([1.0; 3]), FillModel::Flat([1.0; 3])];
     let rgb = vec![[1.0f32; 3]; 9];
     let opacity = [0.8f32, 0.1];
-    let exact = 0.2 * 0.8 + 0.8 * 0.1;
-    let img_a = vec![exact; 9];
-    let mut prob = problem(&map, &vars, &rgb, &face);
-    prob.alpha = Some((&img_a, &opacity));
+    // Column 0 is cut (0.2 left paint at 0.8, 0.8 right at 0.1); the columns right of the
+    // boundary are the left face's paint.
+    let exact: Vec<f32> = (0..9)
+        .map(|i| {
+            if i % 3 == 0 {
+                0.2 * 0.8 + 0.8 * 0.1
+            } else {
+                0.8
+            }
+        })
+        .collect();
     let pos = vars.start.clone();
-    prob.bucket(&pos);
-    assert!(prob.data(&pos, None) < 1e-12);
-    // Off by 0.1 in alpha in each of the three pixels.
-    let off = vec![exact + 0.1; 9];
-    prob.alpha = Some((&off, &opacity));
-    let d = prob.data(&pos, None);
+    let mut prob = problem_alpha(&map, &vars, &rgb, &face, Some((&exact, &opacity)));
+    assert!(prob.energy(&pos, None) < 1e-12);
+    // Off by 0.1 in alpha in each of the three cut pixels.
+    let off: Vec<f32> = exact
+        .iter()
+        .enumerate()
+        .map(|(i, &a)| if i % 3 == 0 { a + 0.1 } else { a })
+        .collect();
+    let mut prob = problem_alpha(&map, &vars, &rgb, &face, Some((&off, &opacity)));
+    let d = prob.energy(&pos, None);
     assert!((d - 3.0 * 0.01).abs() < 1e-9, "{d}");
     // Without the alpha channel the pixels have no contrast at all.
-    prob.alpha = None;
-    assert_eq!(prob.data(&pos, None), 0.0);
+    let mut prob = problem(&map, &vars, &rgb, &face);
+    assert!(prob.energy(&pos, None) < 1e-12);
 }
 
 #[test]
@@ -256,8 +285,7 @@ fn the_alpha_gradient_matches_finite_differences() {
     let rgb = vec![[0.5f32; 3]; 9];
     let opacity = [0.9f32, 0.3];
     let img_a = vec![0.55f32; 9];
-    let mut prob = problem(&map, &vars, &rgb, &face);
-    prob.alpha = Some((&img_a, &opacity));
+    let mut prob = problem_alpha(&map, &vars, &rgb, &face, Some((&img_a, &opacity)));
     let n = vars.start.len();
     let pos: Vec<Point> = vars
         .start
@@ -354,97 +382,9 @@ fn the_gradient_through_vertical_gridline_crossings_is_exact() {
         .enumerate()
         .map(|(i, p)| Point::new(p.x - 0.013 * i as f64, p.y + 0.017 * i as f64))
         .collect();
-    prob.bucket(&pos);
-    let e = prob.data(&pos, None);
+    let e = prob.energy(&pos, None);
     assert!(e > 1e-3, "{e}");
     assert_gradient_matches(&mut prob, &pos);
-}
-
-#[test]
-fn a_three_way_junction_pixel_reads_its_wedge_areas() {
-    // Node at the centre of pixel (1, 1); chains leave it up, right and down. They cut the
-    // pixel into the top-right quarter (face 0, red), the bottom-right quarter (face 1,
-    // green) and the left half (face 2, blue), so it renders (0.25, 0.25, 0.5). The up
-    // chain has a collinear point inside the pixel, so it is two pieces there.
-    let map = PlanarMap {
-        edges: vec![
-            edge(
-                vec![
-                    Point::new(1.0, 1.0),
-                    Point::new(1.0, 0.8),
-                    Point::new(1.0, -0.5),
-                ],
-                2,
-                0,
-                (0, 1),
-                false,
-            ),
-            edge(
-                vec![Point::new(1.0, 1.0), Point::new(2.5, 1.0)],
-                0,
-                1,
-                (0, 2),
-                false,
-            ),
-            edge(
-                vec![Point::new(1.0, 1.0), Point::new(1.0, 2.5)],
-                1,
-                2,
-                (0, 3),
-                false,
-            ),
-        ],
-        width: 3,
-        height: 3,
-        n_labels: 3,
-    };
-    let vars = build_vars(&map);
-    let face = [
-        FillModel::Flat([1.0, 0.0, 0.0]),
-        FillModel::Flat([0.0, 1.0, 0.0]),
-        FillModel::Flat([0.0, 0.0, 1.0]),
-    ];
-    // Every pixel a chain crosses, rendered exactly: (1,0) is split blue | red, (2,1) red
-    // over green, (1,2) blue | green; (1,1) is the junction.
-    let mut rgb = vec![[0.0f32; 3]; 9];
-    rgb[1] = [0.5, 0.0, 0.5];
-    rgb[5] = [0.5, 0.5, 0.0];
-    rgb[7] = [0.0, 0.5, 0.5];
-    rgb[4] = [0.25, 0.25, 0.5];
-    let pos = vars.start.clone();
-    let mut prob = problem(&map, &vars, &rgb, &face);
-    prob.junctions = true;
-    prob.bucket(&pos);
-    assert!(
-        prob.data(&pos, None) < 1e-12,
-        "exact render must fit exactly"
-    );
-    // A black target at the junction: the residual is the wedge mixture itself,
-    // 0.25^2 + 0.25^2 + 0.5^2.
-    let mut dark = rgb.clone();
-    dark[4] = [0.0; 3];
-    prob.rgb = &dark;
-    let d = prob.data(&pos, None);
-    assert!((d - 0.375).abs() < 1e-9, "{d}");
-    // Excluded when junctions are off.
-    prob.junctions = false;
-    assert!(prob.data(&pos, None) < 1e-12);
-    // With the node and the chains moved off their exact places, the junction's wedges
-    // still carry an exact gradient to every unknown.
-    prob.junctions = true;
-    prob.w_kink = 0.2;
-    prob.w_anchor = 0.1;
-    let moved: Vec<Point> = pos
-        .iter()
-        .enumerate()
-        .map(|(i, p)| {
-            Point::new(
-                p.x + 0.031 * (i % 3) as f64 - 0.02,
-                p.y - 0.023 * (i % 2) as f64 + 0.01,
-            )
-        })
-        .collect();
-    assert_gradient_matches(&mut prob, &moved);
 }
 
 #[test]
@@ -517,36 +457,6 @@ fn junction_points_are_anchored_four_times_harder() {
     assert!((shift(1) - 0.01).abs() < 1e-12);
     assert!((shift(0) - 4.0 * 0.01).abs() < 1e-12);
     assert!((shift(2) - 4.0 * 0.01).abs() < 1e-12);
-}
-
-#[test]
-fn the_chunked_data_term_sums_to_the_sequential_one() {
-    // 64 x 64 cells, so the chunked path is taken.
-    let (w, h) = (64usize, 64usize);
-    let rgb = vertical_edge_image(w, h, 30.3);
-    let map = PlanarMap {
-        edges: vec![edge(vertical_chain(30.1, h), 0, 1, (0, 1), false)],
-        width: w,
-        height: h,
-        n_labels: 2,
-    };
-    let vars = build_vars(&map);
-    let pos = vars.start.clone();
-    let n = pos.len();
-    let mut prob = problem(&map, &vars, &rgb, &WHITE_BLACK);
-    prob.bucket(&pos);
-    let mut g1 = vec![Point::new(0.0, 0.0); n];
-    let seq = prob.data(&pos, Some(&mut g1));
-    // Each of the 64 rows is off by 0.2 in coverage in three channels.
-    assert!((seq - 64.0 * 3.0 * 0.04).abs() < 1e-5, "{seq}");
-    prob.chunks = 16;
-    let mut g16 = vec![Point::new(0.0, 0.0); n];
-    let par = prob.data(&pos, Some(&mut g16));
-    assert!((par - seq).abs() < 1e-9, "{par} vs {seq}");
-    assert!((prob.data(&pos, None) - seq).abs() < 1e-9);
-    for (a, b) in g1.iter().zip(&g16) {
-        assert!((a.x - b.x).abs() < 1e-9 && (a.y - b.y).abs() < 1e-9);
-    }
 }
 
 // ------------------------------------------------------------------ crossings

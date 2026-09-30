@@ -83,6 +83,15 @@
         re-measuring. Nudging-and-re-measuring for every point against every pixel would
         be far too slow; having the exact formula in hand is what lets the whole boundary
         move together in reasonable time.</p>
+      <p>The comparison covers every pixel near the boundary, not only the pixels a
+        boundary happens to cross right now. That matters more than it sounds. An earlier
+        version compared only the crossed pixels, so the moment a boundary slid out of a
+        pixel, that pixel simply dropped out of the score, and the score jumped. The
+        solver spent most of its effort bumping into those jumps instead of settling.
+        Scoring a fixed strip of pixels around the boundary, each painted exactly from
+        the current shape, makes the score change smoothly as points move: a pixel a
+        boundary leaves is still scored, as a plain pixel of the colour now covering
+        it.</p>
     </section>
 
     <section>
@@ -111,8 +120,9 @@
         a single pixel there is a blend of three or more shapes at once, and reading a
         clean signal out of that blend is much less reliable than reading it from an
         ordinary two-colour edge. This stage handles that by holding those meeting points
-        firmly in place, several times more firmly than an ordinary point, and by default
-        leaves them out of the pixel-matching comparison entirely: they still move,
+        firmly in place, several times more firmly than an ordinary point, and leaves
+        the pixels where two boundaries meet out of the pixel-matching comparison
+        entirely: they still move,
         because the ordinary boundary points on either side of them pull them along, but
         the pixels right at the meeting point do not get a vote on exactly where it sits.
         An earlier stage has already placed that point by working out precisely where the
@@ -193,20 +203,21 @@
 
     <section>
       <h2>How long to keep solving</h2>
-      <p>Like any iterative process, this one can be stopped early or run longer. Early
-        testing used a smaller number of passes; a careful measurement later found that
-        setting was stopping the process before it had actually settled down — the
-        boundary handed to the next stage was still visibly moving. Running roughly twice
-        as many passes let it finish properly, and measured across the project's full test
-        set, every family of icons improved or held steady on accuracy <em>and</em> got
-        cheaper to describe at the same time — which is the signature of a process that
-        has genuinely converged, rather than one that has simply been tuned to trade one
-        thing for another. The extra passes cost only a few milliseconds per image.</p>
-      <p>Interestingly, running for far more passes than that does not keep helping, and on
-        one measurement set it very slightly hurt. The explanation on record is that once
-        the true signal in the pixels has been mostly extracted, additional passes are
-        chasing smaller and smaller effects where the process's own step-taking behaviour
-        starts to wander rather than usefully improve the picture.</p>
+      <p>Like any iterative process, this one has to decide when to stop. The boundaries of
+        one picture usually fall into a handful of separate groups that share no pixel
+        (the letters of a word, the pieces of an emoji), and each group is solved on its
+        own, so a simple shape can finish while a complicated one keeps going.</p>
+      <p>A group stops when a step moves no point by more than half of the
+        smallest distance the finished SVG file can even record, since nothing smaller
+        could change the output; or when a step stops paying for itself; or after 32
+        steps at most. The earlier solver used a fixed number of passes for the whole
+        picture, and on the smooth score described above it no longer settled: it kept
+        taking full-sized steps while the score barely moved. The method now used
+        remembers its last few steps to judge how curved the score is, a standard
+        technique from numerical optimisation, and settles instead of wandering.</p>
+      <p>Measured on two sets of test icons, one of them held out from development,
+        the shapes it hands on reproduce the images more closely than before, on
+        average and on the hardest tenth, at about the same cost in time.</p>
     </section>
 
   </main>

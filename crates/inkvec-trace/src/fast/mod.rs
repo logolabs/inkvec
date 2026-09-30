@@ -107,41 +107,67 @@ impl Default for FastFit {
 /// drawn as straight lines through the (denoised, where it ran) points; an empty input is
 /// an empty path at the origin.
 pub fn fit_points(pts: &[Point], closed: bool, cfg: &FastFit) -> FittedPath {
-    let n = pts.len();
-    let lines = |pts: &[Point]| FittedPath {
-        start: pts[0],
+    if too_short(pts.len(), closed) {
+        return lines(pts, closed);
+    }
+    fit_denoised(&smooth::denoise(pts, closed), closed, cfg)
+}
+
+/// True when a boundary of `n` points is too short for a polygon: fewer than 3 points, or
+/// fewer than 4 for a ring. [`fit_points`] draws such a boundary as [`lines`] through its
+/// points as measured.
+fn too_short(n: usize, closed: bool) -> bool {
+    n < 3 || (closed && n < 4)
+}
+
+/// Straight lines through `pts`, from the first point, and back to it when `closed`: the
+/// fallback for a boundary no stage could fit. An empty input is an empty path at the
+/// origin. O(n).
+fn lines(pts: &[Point], closed: bool) -> FittedPath {
+    let Some(&first) = pts.first() else {
+        return FittedPath {
+            start: Point::new(0.0, 0.0),
+            segments: Vec::new(),
+            closed,
+        };
+    };
+    FittedPath {
+        start: first,
         segments: pts[1..]
             .iter()
             .copied()
-            .chain(closed.then_some(pts[0]))
+            .chain(closed.then_some(first))
             .map(inkvec_fit::curves::Segment::Line)
             .collect(),
         closed,
-    };
-    if n < 3 || (closed && n < 4) {
-        if n == 0 {
-            return FittedPath {
-                start: Point::new(0.0, 0.0),
-                segments: Vec::new(),
-                closed,
-            };
-        }
-        return lines(pts);
     }
-    let pts = &smooth::denoise(pts, closed)[..];
+}
+
+/// [`fit_points`] after its denoising: the optimal polygon, vertex adjustment, smoothing
+/// into pieces, curve-run optimisation and conversion to segments, on points `pts` that
+/// [`smooth::denoise`] has already smoothed (at least 3, or 4 for a ring; see
+/// [`too_short`]). The fallbacks draw [`lines`] through these denoised points, and an open
+/// boundary starts and ends exactly on `pts[0]` and `pts[n − 1]`, which the denoising
+/// leaves where they were measured. Cost: that of `polygon::open`, O(n · MAX_SPAN) at
+/// worst; the stages after it are linear in the points and the polygon's vertices.
+///
+/// Split out of [`fit_points`] so that [`fit_edge`] can hand a ring the points it has
+/// already denoised for the primitive test instead of denoising them a second time.
+fn fit_denoised(pts: &[Point], closed: bool, cfg: &FastFit) -> FittedPath {
+    let n = pts.len();
     let vtx = if closed {
         polygon::closed(pts, cfg.poly_tol)
     } else {
         polygon::open(pts, cfg.poly_tol)
     };
     if vtx.len() < 2 {
-        return lines(pts);
+        return lines(pts, closed);
     }
     let v = smooth::adjust_vertices(pts, &vtx, closed, cfg.vertex_box);
     let pieces = smooth::pieces(pts, &vtx, &v, closed, cfg.corner_tol);
     let curves = curve::optimise(&pieces, closed, cfg.opt_tol);
     let Some(first) = curves.first() else {
-        return lines(pts);
+        return lines(pts, closed);
     };
     let start = first[0];
     let mut segments = curve::to_segments(&curves, cfg.flat);
@@ -190,6 +216,13 @@ impl FastFit {
 
 /// Fit one boundary of the map: as a circle or an ellipse when a closed boundary is one,
 /// and with [`fit_points`] otherwise.
+///
+/// A ring is denoised once, for the primitive test, and the same points go on to the
+/// polygon when no primitive fits. [`fit_points`] would denoise them again; `denoise` is a
+/// pure function of the points and the closed flag, so the second call could only return
+/// the same vector (measured: 996 of 996 rings on the screen set, 238 of 238 at 2048 px),
+/// and the output is unchanged. Not from the literature: this only removes a repeated
+/// computation.
 pub fn fit_edge(pts: &[Point], closed: bool, cfg: &FastFit) -> (FittedPath, Option<PrimitiveFit>) {
     // A closed boundary starts at a lattice node the sub-pixel refinement leaves where it
     // was, up to 0.6 px off the edge; the ring closes just as well without it.
@@ -198,17 +231,25 @@ pub fn fit_edge(pts: &[Point], closed: bool, cfg: &FastFit) -> (FittedPath, Opti
     } else {
         pts
     };
-    if closed {
-        if let Some((prim, start, segments)) = prims::primitive(&smooth::denoise(pts, true)) {
-            let path = FittedPath {
-                start,
-                segments,
-                closed: true,
-            };
-            return (path, Some(prim));
-        }
+    if !closed {
+        return (fit_points(pts, false, cfg), None);
     }
-    (fit_points(pts, closed, cfg), None)
+    let den = smooth::denoise(pts, true);
+    if let Some((prim, start, segments)) = prims::primitive(&den) {
+        let path = FittedPath {
+            start,
+            segments,
+            closed: true,
+        };
+        return (path, Some(prim));
+    }
+    // `fit_points(pts, true, cfg)`, without denoising `pts` a second time.
+    let path = if too_short(pts.len(), true) {
+        lines(pts, true)
+    } else {
+        fit_denoised(&den, true, cfg)
+    };
+    (path, None)
 }
 
 /// Fit every edge of a planar map, in parallel. Each shared edge is fitted once and both
@@ -321,6 +362,65 @@ mod tests {
         let f = fit_points(&pts, false, &FastFit::default());
         assert_eq!(f.segments.len(), 1, "{:?}", f.segments);
         assert_eq!(f.end(), pts[999]);
+    }
+
+    /// [`fit_edge`] as it was before a ring's denoised points were reused: the primitive
+    /// test on one denoising, [`fit_points`] on a second.
+    fn fit_edge_ref(
+        pts: &[Point],
+        closed: bool,
+        cfg: &FastFit,
+    ) -> (FittedPath, Option<PrimitiveFit>) {
+        let pts = if closed && pts.len() >= 8 {
+            &pts[1..]
+        } else {
+            pts
+        };
+        if closed {
+            if let Some((prim, start, segments)) = prims::primitive(&smooth::denoise(pts, true)) {
+                let path = FittedPath {
+                    start,
+                    segments,
+                    closed: true,
+                };
+                return (path, Some(prim));
+            }
+        }
+        (fit_points(pts, closed, cfg), None)
+    }
+
+    /// The reuse against [`fit_edge_ref`] on every polygon test case, open and closed, at
+    /// the default and the loosest tolerances, plus circles (which the primitive takes).
+    #[test]
+    fn reusing_the_denoised_ring_keeps_every_fit_bit_for_bit() {
+        let mut cases = polygon::tests::cases();
+        for n in [0usize, 1, 2, 3, 4, 5, 7, 8, 9, 13] {
+            cases.push(
+                (0..n)
+                    .map(|k| Point::new((k * 3 % 7) as f64, (k * 5 % 11) as f64))
+                    .collect(),
+            );
+        }
+        for r in [3.0, 12.0] {
+            cases.push(
+                (0..64)
+                    .map(|k| {
+                        let t = k as f64 / 64.0 * std::f64::consts::TAU;
+                        Point::new(20.0 + r * t.cos(), 20.0 + r * t.sin())
+                    })
+                    .collect(),
+            );
+        }
+        for pts in &cases {
+            for contrast in [1.0, 0.0] {
+                let cfg = FastFit::default().for_contrast(contrast);
+                for closed in [false, true] {
+                    let new = fit_edge(pts, closed, &cfg);
+                    let old = fit_edge_ref(pts, closed, &cfg);
+                    assert_eq!(format!("{new:?}"), format!("{old:?}"));
+                }
+            }
+        }
     }
 
     #[test]

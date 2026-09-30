@@ -17,6 +17,17 @@
 //! picture, where "0.01 units" depends on an arbitrary viewBox. Only `d` attributes are
 //! touched; paint, ids, groups, gradients and transforms pass through untouched, and a
 //! path that would not get cheaper is left exactly as it was.
+//!
+//! The modules, in the order a document goes through them: `driver` parses the document,
+//! scales the tolerance to each path's units and runs every path in parallel; `path` reads a
+//! `d` attribute into absolute lines and cubics and finds its corners; `fit` refits each run
+//! between corners under the MDL objective and the tolerance guard, with `geom` measuring the
+//! distances; `write` spells the result in the fewest bytes; `document` (when
+//! [`Options::document`] is on) shortens everything that is not path geometry. [`structure`]
+//! is a separate measurement of how editable a document is.
+//!
+//! Called by the tracer's `--minify` (`inkvec-cli`, through [`compact`]), by Studio's export
+//! and minify pane, by the WebAssembly build, and by this crate's own `inkvec-svgmin` binary.
 
 mod document;
 mod driver;
@@ -36,8 +47,14 @@ pub use structure::{structure, Structure};
 /// How the rewrite is judged.
 #[derive(Debug, Clone, Copy)]
 pub struct Options {
-    /// Largest deviation from the original curve, in pixels, when the drawing is viewed at
-    /// `judge` pixels on its longer side. 0.1 px at 1024 px is below what a screen shows.
+    /// The fitting tolerance `ε`, in pixels, when the drawing is viewed at `judge` pixels on
+    /// its longer side. 0.1 px at 1024 px is below what a screen shows.
+    ///
+    /// The fitter treats `ε` as the positional uncertainty of every sample (the `σ` of its
+    /// objective) and admits a rewritten segment only if each sample it replaces lies within
+    /// `3ε` of it, a three-sigma guard; coordinates are then rounded by at most `ε/4` (unless
+    /// [`decimals`](Self::decimals) fixes the precision). So the
+    /// hard bound on how far a rewrite may move the drawing is about `3ε`, not `ε`.
     pub tolerance_px: f64,
     /// The viewing size the tolerance is stated at.
     pub judge: f64,

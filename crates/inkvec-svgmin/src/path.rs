@@ -8,22 +8,28 @@ use inkvec_fit::curves::Segment;
 /// One segment of a source path, absolute, with its start point.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Src {
+    /// From the first point to the second.
     Line(Point, Point),
+    /// Start, first control point, second control point, end.
     Cubic(Point, Point, Point, Point),
 }
 
 impl Src {
+    /// Where the segment begins.
     pub(crate) fn start(&self) -> Point {
         match *self {
             Src::Line(a, _) | Src::Cubic(a, _, _, _) => a,
         }
     }
+    /// What the segment costs in the fitter's parameter units: 2 for a line, 6 for a cubic.
     pub(crate) fn params(&self) -> f64 {
         match self {
             Src::Line(..) => 2.0,
             Src::Cubic(..) => 6.0,
         }
     }
+    /// The same segment in the fitter's form, which stores only the end (the start is the
+    /// previous segment's end).
     pub(crate) fn segment(&self) -> Segment {
         match *self {
             Src::Line(_, b) => Segment::Line(b),
@@ -40,6 +46,8 @@ impl Src {
                 .or_else(|| unit(sub(b, a))),
         }
     }
+    /// Direction of travel arriving at the end, with the same fallbacks from the other side.
+    /// `None` for a segment of zero length.
     pub(crate) fn tangent_in(&self) -> Option<Point> {
         match *self {
             Src::Line(a, b) => unit(sub(b, a)),
@@ -48,6 +56,8 @@ impl Src {
                 .or_else(|| unit(sub(b, a))),
         }
     }
+    /// The point at parameter `t ∈ [0, 1]`: linear interpolation for a line, the Bernstein
+    /// form for a cubic.
     pub(crate) fn at(&self, t: f64) -> Point {
         match *self {
             Src::Line(a, b) => Point::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t),
@@ -63,6 +73,10 @@ impl Src {
     }
     /// The part of this segment between two parameters, as a segment of its own: the
     /// exact same curve, so a span that falls back to its source loses nothing.
+    ///
+    /// For a cubic, two de Casteljau cuts: keep `[0, t1]`, then cut that at `t0 / t1` (where
+    /// `t0` falls on the kept part's own parameter) and keep the second half. `0 ≤ t0 ≤ t1 ≤ 1`
+    /// is assumed; the whole segment comes back unchanged when the range covers it.
     pub(crate) fn piece(&self, t0: f64, t1: f64) -> Src {
         if t0 <= 0.0 && t1 >= 1.0 {
             return *self;
@@ -89,12 +103,16 @@ impl Src {
         }
     }
 }
+/// `a − b`, kept as a [`Point`] (this crate uses points for vectors too).
 pub(crate) fn sub(a: Point, b: Point) -> Point {
     Point::new(a.x - b.x, a.y - b.y)
 }
 
-/// De Casteljau's construction: the cubic cut at `t`, as its two halves.
+/// A cubic's four control points: start, first control, second control, end.
 type Cubic = (Point, Point, Point, Point);
+/// De Casteljau's construction: the cubic cut at `t`, as its two halves. Each level mixes
+/// neighbouring points at ratio `t`; the three levels give the new control points and the
+/// cut point `m`, which both halves share. Exact: the two halves trace the same curve.
 fn split_cubic(a: Point, c1: Point, c2: Point, b: Point, t: f64) -> (Cubic, Cubic) {
     let mix = |p: Point, q: Point| Point::new(p.x + (q.x - p.x) * t, p.y + (q.y - p.y) * t);
     let (p01, p12, p23) = (mix(a, c1), mix(c1, c2), mix(c2, b));
@@ -103,6 +121,7 @@ fn split_cubic(a: Point, c1: Point, c2: Point, b: Point, t: f64) -> (Cubic, Cubi
     ((a, p01, p012, m), (m, p123, p23, b))
 }
 
+/// `v` scaled to length 1, or `None` when it is shorter than 1e-9.
 fn unit(v: Point) -> Option<Point> {
     let n = v.x.hypot(v.y);
     (n > 1e-9).then(|| Point::new(v.x / n, v.y / n))
@@ -110,11 +129,19 @@ fn unit(v: Point) -> Option<Point> {
 /// A subpath: consecutive segments, and whether it closes back on its start.
 #[derive(Debug, Clone)]
 pub(crate) struct Subpath {
+    /// The segments, each starting where the one before ended. Never empty.
     pub(crate) segs: Vec<Src>,
+    /// Ended by `Z`; the closing line, if it had length, is the last segment.
     pub(crate) closed: bool,
 }
 /// Parse a `d` attribute into absolute subpaths of lines and cubics. Arcs and quadratics
 /// become cubics (the arc conversion is the only lossy step, at ~1e-6 of the radius).
+///
+/// `svgtypes`' simplifying parser resolves relative, `H`/`V`, smooth and arc commands; a
+/// quadratic with control point `q` is raised exactly to the cubic with controls
+/// `p0 + 2/3·(q − p0)` and `p + 2/3·(q − p)`. Zero-length lines are dropped, a `Z` adds the
+/// closing line when the pen is away from the start, and a subpath with no segments (a bare
+/// `M`) is not returned. Fails with the parser's message on malformed data.
 pub(crate) fn parse_d(d: &str) -> Result<Vec<Subpath>, String> {
     use svgtypes::SimplePathSegment as S;
     let mut out: Vec<Subpath> = Vec::new();
@@ -179,6 +206,10 @@ pub(crate) fn parse_d(d: &str) -> Result<Vec<Subpath>, String> {
 }
 /// Which joins of a subpath are corners: index `k` means the join entering `segs[k]`
 /// (for a closed subpath, `0` is the join from the last segment back to the first).
+///
+/// A join is a corner when the turn between the incoming and outgoing unit tangents `a`, `b`
+/// exceeds `corner_degrees`, tested as `a·b < cos(corner_degrees)`. The start of an open
+/// subpath, and any join next to a zero-length segment (no tangent), is a corner.
 pub(crate) fn corners(sp: &Subpath, corner_degrees: f64) -> Vec<bool> {
     let n = sp.segs.len();
     let cos_limit = corner_degrees.to_radians().cos();

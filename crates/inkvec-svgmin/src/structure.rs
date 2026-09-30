@@ -69,15 +69,21 @@ const AXIS_DEGREES: f64 = 0.05;
 /// Turn between two tangents at or below which a join counts as smooth.
 const SMOOTH_DEGREES: f64 = 1.0;
 
+/// A point `(x, y)` in the path's user units.
 type P = (f64, f64);
 
+/// One segment of a subpath, absolute. Only cubics carry handles; every other kind is
+/// reduced to where it ends.
 #[derive(Clone, Copy)]
 enum Seg {
+    /// Start, both control points, end.
     Cubic { a: P, c1: P, c2: P, b: P },
+    /// A line, quadratic or arc, by its end point.
     Other { b: P },
 }
 
 impl Seg {
+    /// Where the segment ends.
     fn end(&self) -> P {
         match *self {
             Seg::Cubic { b, .. } | Seg::Other { b } => b,
@@ -242,18 +248,22 @@ fn finish(sub: &mut Vec<Seg>, start: P, closed: bool, out: &mut Structure, nodes
     sub.clear();
 }
 
+/// Euclidean distance between two points.
 fn dist(a: P, b: P) -> f64 {
     (a.0 - b.0).hypot(a.1 - b.1)
 }
 
-/// Whether a handle vector runs along the x or the y axis.
+/// Whether a handle vector runs along the x or the y axis: its smaller component is within
+/// [`AXIS_EPS`] of zero, or makes an angle of at most [`AXIS_DEGREES`] with the larger one.
 fn on_axis(v: P) -> bool {
     let (ax, ay) = (v.0.abs(), v.1.abs());
     let (along, across) = if ax >= ay { (ax, ay) } else { (ay, ax) };
     across <= AXIS_EPS || (across / along).atan().to_degrees() <= AXIS_DEGREES
 }
 
-/// The angle between two directions, in degrees, 0 when they agree.
+/// The angle between two directions, in degrees, 0 when they agree:
+/// `|atan2(a × b, a · b)|`, which is well conditioned for small angles where `acos` of the
+/// normalised dot product is not.
 fn turn_degrees(a: P, b: P) -> f64 {
     let cross = a.0 * b.1 - a.1 * b.0;
     let dot = a.0 * b.0 + a.1 * b.1;

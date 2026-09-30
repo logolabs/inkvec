@@ -352,6 +352,11 @@ fn shorter_numbers(v: &str) -> String {
     out
 }
 
+/// What [`hoist_shared_attrs`] returns: the edits, the start of each group written into — one
+/// that has just been given an attribute is no longer an empty group to collapse — and the
+/// attribute ranges the hoist has already claimed.
+type Hoists = (Vec<(Range<usize>, String)>, Vec<usize>, Vec<Range<usize>>);
+
 /// Attributes every child of a group sets to the same value, moved onto the group and
 /// taken off the children: SVGO's `moveElemsAttrsToGroup`, restricted to the properties
 /// that are actually inherited.
@@ -360,11 +365,9 @@ fn shorter_numbers(v: &str) -> String {
 /// instead of using the initial one, and `stroke="none"` becoming a stroke is not a
 /// smaller file, it is a different picture.
 ///
-/// The edits, the start of each group written into — one that has just been given an
-/// attribute is no longer an empty group to collapse — and the attribute ranges the hoist
-/// has already claimed.
-type Hoists = (Vec<(Range<usize>, String)>, Vec<usize>, Vec<Range<usize>>);
-
+/// Only groups with at least two element children are considered, and a hoist is made only
+/// when the bytes it removes from the children exceed the bytes it adds to the group (plus,
+/// for a group that would otherwise have been collapsed, the cost of keeping its two tags).
 fn hoist_shared_attrs(svg: &str, doc: &roxmltree::Document, taken: &[Range<usize>]) -> Hoists {
     let clear = |r: &Range<usize>| !taken.iter().any(|t| r.start < t.end && t.start < r.end);
     let mut edits = Vec::new();
@@ -469,6 +472,13 @@ fn removed_whole(n: roxmltree::Node) -> bool {
 /// `taken` are ranges another pass has already claimed (a rewritten path, an element
 /// replaced by a primitive); anything overlapping one of those is left alone, because the
 /// text it refers to is about to be replaced wholesale.
+///
+/// Walks the document in order and, for each node, makes at most one kind of edit: a comment,
+/// processing instruction or [`removed_whole`] element is deleted; an attribute-less group is
+/// unwrapped ([`Pass::collapse_group`]); otherwise each attribute gets at most one edit
+/// ([`Pass::attribute`]). Group hoists ([`hoist_shared_attrs`]) come first, and the ranges
+/// they claim are added to `taken`. The edits may overlap each other (a removed element and an
+/// edit the hoist made inside it); `driver::disjoint` resolves that before they are applied.
 pub(crate) fn edits(
     svg: &str,
     doc: &roxmltree::Document,
@@ -477,10 +487,14 @@ pub(crate) fn edits(
     let (mut out, hoisted, consumed) = hoist_shared_attrs(svg, doc, taken);
     let mut taken: Vec<Range<usize>> = taken.to_vec();
     taken.extend(consumed);
-    let clear = |r: &Range<usize>| !taken.iter().any(|t| r.start < t.end && t.start < r.end);
-    let has_css = doc
-        .descendants()
-        .any(|n| n.tag_name().name() == "style" && n.is_element());
+    let pass = Pass {
+        svg,
+        taken,
+        has_css: doc
+            .descendants()
+            .any(|n| n.tag_name().name() == "style" && n.is_element()),
+        hoisted,
+    };
 
     for node in doc.descendants() {
         // Nothing inside an element removed whole is edited: its text is going anyway, and an
@@ -488,9 +502,12 @@ pub(crate) fn edits(
         if node.ancestors().skip(1).any(removed_whole) {
             continue;
         }
-        if node.is_comment() || node.is_pi() {
+        // Comments and processing instructions say nothing to a renderer. Editor metadata
+        // and boilerplate descriptions render nothing. `<title>` stays: a screen reader
+        // reads it, which is not a byte anyone should be saving.
+        if node.is_comment() || node.is_pi() || removed_whole(node) {
             let r = node.range();
-            if clear(&r) {
+            if pass.clear(&r) {
                 out.push((r, String::new()));
             }
             continue;
@@ -498,99 +515,143 @@ pub(crate) fn edits(
         if !node.is_element() {
             continue;
         }
-        // Editor metadata and descriptions render nothing. `<title>` stays: a screen
-        // reader reads it, which is not a byte anyone should be saving.
-        let name = node.tag_name().name();
-        if INERT.contains(&name) || (name == "desc" && is_boilerplate_desc(node)) {
-            let r = node.range();
-            if clear(&r) {
-                out.push((r, String::new()));
-            }
+        if pass.collapses(node) {
+            pass.collapse_group(node, &mut out);
             continue;
         }
-        // A `<g>` that says nothing groups nothing: its children inherit the same
-        // everything with it gone. Only a group with no attributes at all qualifies —
-        // this is SVGO's `collapseGroups` without the part that moves a transform or a
-        // clip path down into the children, which is where that plugin gets interesting
-        // and where it gets dangerous.
-        if name == "g"
+        out.extend(
+            node.attributes()
+                .filter_map(|attr| pass.attribute(node, &attr)),
+        );
+    }
+    out
+}
+
+/// The document-wide facts [`edits`] consults while it walks the nodes.
+struct Pass<'a> {
+    /// The original text every range points into.
+    svg: &'a str,
+    /// Ranges already claimed: path rewrites, primitives, and the attributes a hoist moved.
+    taken: Vec<Range<usize>>,
+    /// Whether the document has a `<style>` element, which forbids moving `style` into
+    /// attributes (see [`style_as_attrs`]).
+    has_css: bool,
+    /// Start offsets of the groups a hoist wrote an attribute into; they are no longer empty.
+    hoisted: Vec<usize>,
+}
+
+impl Pass<'_> {
+    /// Whether `r` overlaps no claimed range. Ranges are half-open, so ranges that only touch
+    /// do not overlap.
+    fn clear(&self, r: &Range<usize>) -> bool {
+        !self
+            .taken
+            .iter()
+            .any(|t| r.start < t.end && t.start < r.end)
+    }
+
+    /// A `<g>` that says nothing groups nothing: its children inherit the same everything with
+    /// it gone. Only a group with no attributes at all qualifies (and not one a hoist has just
+    /// written into) — this is SVGO's `collapseGroups` without the part that moves a transform
+    /// or a clip path down into the children, which is where that plugin gets interesting and
+    /// where it gets dangerous.
+    fn collapses(&self, node: roxmltree::Node) -> bool {
+        node.tag_name().name() == "g"
             && node.attributes().len() == 0
             && node.has_children()
-            && !hoisted.contains(&node.range().start)
-        {
-            if let Some((open, close)) = tag_ranges(svg, node.range()) {
-                if clear(&open) && clear(&close) {
-                    out.push((open, String::new()));
-                    out.push((close, String::new()));
-                }
-            }
-            continue;
-        }
-        for attr in node.attributes() {
-            let name = attr.name();
-            let value = attr.value();
-            let r = attr.range();
-            if !clear(&r) {
-                continue;
-            }
-            // Removing `stroke="none"` from `<path fill="#fff" stroke="none" d="…"/>` and
-            // leaving its space behind trades one attribute for one wasted byte.
-            let with_space = with_leading_space(svg, r.clone());
-            // `attr=""` says nothing at all.
-            if value.is_empty() && !PAINT_ATTRS.contains(&name) {
-                out.push((with_space, String::new()));
-                continue;
-            }
-            // An `id` nothing points at is a name no one uses.
-            if name == "id" && !svg.contains(&format!("#{value}")) {
-                out.push((with_space, String::new()));
-                continue;
-            }
-            // A namespace nothing is written in, and a version number nothing reads.
-            if (name.starts_with("xmlns:")
-                && !svg.contains(&format!("{}:", name.trim_start_matches("xmlns:"))))
-                || (name == "version" && node.tag_name().name() == "svg")
-            {
-                out.push((with_space, String::new()));
-                continue;
-            }
-            if name == "style" {
-                if let Some(attrs) = style_as_attrs(node, value, has_css) {
-                    if attrs.len() < svg[r.clone()].len() {
-                        out.push((r, attrs));
-                    }
-                }
-                continue;
-            }
-            if let Some((_, def)) = DEFAULTS.iter().find(|(n, _)| *n == name) {
-                if value.trim() == *def && !overrides_an_ancestor(node, name, value.trim()) {
-                    out.push((with_space, String::new()));
-                    continue;
-                }
-            }
-            let replacement = if PAINT_ATTRS.contains(&name) {
-                shorter_colour(value)
-            } else if NUMERIC_ATTRS.contains(&name) {
-                let s = shorter_numbers(value);
-                (s != value).then_some(s)
-            } else {
-                None
-            };
-            if let Some(v) = replacement {
-                // The attribute's range covers `name="value"`; the quote is whatever the
-                // source used.
-                let text = &svg[r.clone()];
-                let quote = text.chars().next_back().unwrap_or('"');
-                // Equal length still counts: `#FCEA2B` and `#fcea2b` are the same size,
-                // and the one that matches its neighbours compresses with them.
-                let new = format!("{name}={quote}{v}{quote}");
-                if new.len() <= text.len() && new != text {
-                    out.push((r, new));
-                }
+            && !self.hoisted.contains(&node.range().start)
+    }
+
+    /// Remove a collapsing group's opening and closing tags, keeping its children, when
+    /// neither tag is claimed. A self-closing group has no closing tag and is left alone.
+    fn collapse_group(&self, node: roxmltree::Node, out: &mut Vec<(Range<usize>, String)>) {
+        if let Some((open, close)) = tag_ranges(self.svg, node.range()) {
+            if self.clear(&open) && self.clear(&close) {
+                out.push((open, String::new()));
+                out.push((close, String::new()));
             }
         }
     }
-    out
+
+    /// The one edit, if any, for one attribute of `node`: removed when it
+    /// [says nothing](attribute_says_nothing), a `style` turned into attributes when that is
+    /// shorter, or a colour or number respelled ([`respelled`]). Nothing when its range is
+    /// claimed.
+    fn attribute(
+        &self,
+        node: roxmltree::Node,
+        attr: &roxmltree::Attribute,
+    ) -> Option<(Range<usize>, String)> {
+        let (name, value, r) = (attr.name(), attr.value(), attr.range());
+        if !self.clear(&r) {
+            return None;
+        }
+        if attribute_says_nothing(self.svg, node, name, value) {
+            // Removing `stroke="none"` from `<path fill="#fff" stroke="none" d="…"/>` and
+            // leaving its space behind trades one attribute for one wasted byte.
+            return Some((with_leading_space(self.svg, r), String::new()));
+        }
+        if name == "style" {
+            return style_as_attrs(node, value, self.has_css)
+                .filter(|attrs| attrs.len() < self.svg[r.clone()].len())
+                .map(|attrs| (r, attrs));
+        }
+        respelled(self.svg, name, value, r)
+    }
+}
+
+/// Whether an attribute can go without changing what renders or what a reader hears:
+///
+/// - `attr=""` on anything but a paint says nothing at all;
+/// - an `id` nothing points at (no `#id` anywhere in the text) is a name no one uses;
+/// - an `xmlns:prefix` whose prefix is never written, and `version` on the root `<svg>`,
+///   which nothing reads;
+/// - a presentation attribute set to its initial value ([`DEFAULTS`]) where no ancestor sets
+///   the property to something else ([`overrides_an_ancestor`]).
+fn attribute_says_nothing(svg: &str, node: roxmltree::Node, name: &str, value: &str) -> bool {
+    if value.is_empty() && !PAINT_ATTRS.contains(&name) {
+        return true;
+    }
+    if name == "id" && !svg.contains(&format!("#{value}")) {
+        return true;
+    }
+    if (name.starts_with("xmlns:")
+        && !svg.contains(&format!("{}:", name.trim_start_matches("xmlns:"))))
+        || (name == "version" && node.tag_name().name() == "svg")
+    {
+        return true;
+    }
+    DEFAULTS.iter().any(|(n, def)| {
+        *n == name && value.trim() == *def && !overrides_an_ancestor(node, name, value.trim())
+    })
+}
+
+/// A paint attribute in its shortest colour spelling, or a numeric one with its numbers
+/// shortened, as an edit replacing the whole `name="value"` range `r`. The source's quote
+/// character is kept. Equal length still counts: `#FCEA2B` and `#fcea2b` are the same size,
+/// and the one that matches its neighbours compresses with them. `None` when nothing
+/// changes or the attribute is neither kind.
+fn respelled(
+    svg: &str,
+    name: &str,
+    value: &str,
+    r: Range<usize>,
+) -> Option<(Range<usize>, String)> {
+    let v = if PAINT_ATTRS.contains(&name) {
+        shorter_colour(value)?
+    } else if NUMERIC_ATTRS.contains(&name) {
+        let s = shorter_numbers(value);
+        if s == value {
+            return None;
+        }
+        s
+    } else {
+        return None;
+    };
+    let text = &svg[r.clone()];
+    let quote = text.chars().next_back().unwrap_or('"');
+    let new = format!("{name}={quote}{v}{quote}");
+    (new.len() <= text.len() && new != text).then_some((r, new))
 }
 
 /// The whitespace *inside* one tag: a run of it between two attributes is a single space,

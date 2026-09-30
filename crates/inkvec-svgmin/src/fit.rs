@@ -1,5 +1,31 @@
 //! The fitter: source runs in, cheapest descriptions out, everything guarded
 //! by the tolerance it must keep.
+//!
+//! Called from `driver::rewrite_path`, once per subpath, through [`minify_subpath`]. What
+//! comes in is a subpath of absolute lines and cubics ([`Src`]) in the path's own user units;
+//! what goes out is a start point and a list of `inkvec_fit` segments (lines, cubics, arcs),
+//! or `None` when nothing got cheaper.
+//!
+//! **The objective (MDL over vector input).** The tracer's curve fitter chooses segments by
+//! minimum description length, `E = 0.5·χ² + λ·k`, where `χ² = Σ_i (d_i / σ_i)²` sums the
+//! squared distances `d_i` of the samples from the candidate curve in units of their
+//! positional uncertainty `σ_i`, `k` is the number of parameters the segments cost, and `λ`
+//! is the price of one parameter in nats. Here the input is exact, so `σ_i = ε` for every
+//! sample, where `ε` is the tolerance in path units, and `λ = ln(extent / ε)` is what one
+//! coordinate costs to write at that precision (`FitConfig::from_precision`). The samples are
+//! taken along the source about `2ε` apart (between 4 and [`PER_SEGMENT`] per source
+//! segment).
+//!
+//! The dynamic program only *chooses* the structure. Fidelity is then decided here, in three
+//! layers, all against the same bound: every fitted segment is refitted by least squares
+//! ([`ls_cubic_from`]) and must keep each sample it stands for within `3ε` (a three-sigma
+//! guard, `σ = ε`); a segment that does not is fitted again at a finer cap, and past the last
+//! cap replaced by the exact source it covers. Finally neighbouring segments are merged where
+//! that makes the *written* description shorter ([`params_of`]), under the same guard.
+//!
+//! Corners are facts of the source ([`crate::path::corners`]) and cut a subpath into runs
+//! with pinned ends; a closed subpath with no corner is fitted whole, which is how circles,
+//! ellipses and rectangles are found.
 
 use crate::geom::{cubic_at, dist_to_segment, max_deviation, nearest_t_cubic, point_segment_dist};
 use crate::path::{corners, sample_mapped, sub, Src, Subpath};
@@ -21,6 +47,29 @@ use inkvec_fit::{FitConfig, FittedPath};
 /// only guesses. It matters: a piece of a cubic, walked at its own rate, *is* a cubic and
 /// the solve lands on it in one round, where from chord length the alternation settles
 /// into a local minimum twenty-five tolerances away -- measured, on one cubic cut at 0.79.
+///
+/// The linear step, for fixed parameters `t_k`: with the cubic Bernstein weights
+/// `B0 = (1−t)³, B1 = 3(1−t)²t, B2 = 3(1−t)t², B3 = t³` and the residual each point leaves once
+/// the pinned ends are accounted for, `r_k = p_k − B0(t_k)·p0 − B3(t_k)·p3`, minimise
+///
+/// ```text
+/// E(c1, c2) = Σ_k | B1(t_k)·c1 + B2(t_k)·c2 − r_k |²
+/// ```
+///
+/// Setting the gradient to zero gives the 2 x 2 normal equations (one system shared by x and
+/// y), solved here by Cramer's rule:
+///
+/// ```text
+/// | s11 s12 | |c1|   |Σ B1·r_k|        s11 = Σ B1², s12 = Σ B1·B2, s22 = Σ B2²
+/// | s12 s22 | |c2| = |Σ B2·r_k|
+/// ```
+///
+/// Each round then reprojects every `t_k` onto the new curve ([`nearest_t_cubic`]) and
+/// measures the worst distance. Up to 40 rounds; stops after three rounds in a row that fail
+/// to improve on the best. Returns the best round's control points, or `None` when there are
+/// fewer than 3 points, `t` does not match `pts`, the system is singular (`|det| < 1e-18`:
+/// every `t` at an end, so the interior carries no information), or no round produced finite
+/// control points.
 pub(crate) fn ls_cubic_from(
     pts: &[Point],
     p0: Point,
@@ -119,6 +168,7 @@ fn refit_cubic(seg: &Segment, start: Point, span: &[Point], along: Vec<f64>) -> 
 /// Points the dynamic program is shown on the first pass; the tracer's own cap
 /// (`inkvec_fit::multimodel::DP_MAX_POINTS`) on the second.
 pub(crate) const COARSE_CAP: usize = 128;
+/// The second pass's cap: see [`COARSE_CAP`].
 pub(crate) const FINE_CAP: usize = 768;
 
 /// Runs of at most this many samples are *also* fitted whole, at the fine cap, and the
@@ -143,6 +193,11 @@ pub(crate) const PER_SEGMENT: usize = 24;
 /// a cubic that continues the previous one smoothly as an `S`, four numbers instead of
 /// six, so a chain of cubics is cheaper than its segments suggest and an arc -- five,
 /// always -- has more to beat than it looks.
+///
+/// Counted per segment: a line 2, an arc 5, a cubic 6, or 4 when its first control point is
+/// the mirror of the previous cubic's second about their shared end (`c1 ≈ 2·p − c2_prev`,
+/// within 5e-4 units), which is exactly when the writer can say `S`. The start point is not
+/// counted; it is the same for every candidate of one run.
 fn params_of(segs: &[Segment]) -> f64 {
     let mut total = 0.0;
     let mut prev: Option<(Point, Point)> = None;
@@ -180,6 +235,7 @@ struct RunFit<'a> {
 }
 
 impl RunFit<'_> {
+    /// Unwrapped sample `i`: on a closed run, `i` and `i + n` are the same sample.
     fn point(&self, i: usize) -> Point {
         self.pts[i % self.pts.len()]
     }
@@ -262,6 +318,11 @@ impl RunFit<'_> {
     ///
     /// Judging the run as a whole instead is what the first version did, and on the
     /// corpus's heaviest file it threw away 62 runs entirely for one bad segment each.
+    ///
+    /// `looped` means `lo..hi` is a whole closed run (the sample at `hi` is the one at `lo`),
+    /// so the program may choose where the loop starts. Spans of fewer than 4 samples, and a
+    /// program whose vertices cannot be located on the samples once no finer cap is left,
+    /// fall back to the exact source. The recursion depth is bounded by `caps.len()`.
     fn fit(&self, lo: usize, hi: usize, looped: bool, caps: &[usize]) -> (Point, Vec<Segment>) {
         let count = if looped { hi - lo } else { hi - lo + 1 };
         let exact = || (self.point(lo), self.source(lo, hi));
@@ -314,6 +375,10 @@ impl RunFit<'_> {
     /// come back, and every sample will still find some part of it nearby. Merging two
     /// segments into one is exactly where that happens, and unchecked it cost 0.68 dE00 on
     /// a corpus the rest of this tool keeps under 0.01.
+    ///
+    /// Computed as the largest distance from 17 evenly spaced points of `seg` (parameter
+    /// steps of 1/16) to the sample polyline `a..=b`: a one-sided Hausdorff distance from the
+    /// curve to the polyline, sampled.
     fn wanders(&self, seg: &Segment, from: Point, a: usize, b: usize) -> f64 {
         let m = 16;
         (0..=m)
@@ -335,6 +400,13 @@ impl RunFit<'_> {
     /// description that is optimal to *fit* can still be cheaper to *write*, and this says
     /// so in the only terms that matter here. One cubic exactly subdivided in two comes
     /// back as two arcs and a cubic, sixteen numbers for a curve that needs six.
+    ///
+    /// Greedy: each round refits every neighbouring pair `k, k+1` as one cubic over their
+    /// samples (pinned at the pair's outer ends), keeps those within `3ε` of the samples that
+    /// also lower [`params_of`] for the whole path, then takes the one that saves most whose
+    /// curve does not [`wander`](Self::wanders) more than `3ε` from them. Rounds repeat until
+    /// no pair qualifies, so at most `segments − 1` rounds. A path whose vertices cannot be
+    /// located on the samples is returned unchanged.
     fn merge_pairs(&self, path: FittedPath, lo: usize, hi: usize) -> FittedPath {
         if path.segments.len() < 2 {
             return path;
@@ -416,6 +488,13 @@ impl RunFit<'_> {
 }
 /// The cheapest description of one run within `eps`, or `None` when the source is already
 /// as cheap (the caller then keeps the source exactly as it was written).
+///
+/// In order: sample the run; fit it with the coarse-then-fine cascade, and for mid-sized runs
+/// also whole at the fine cap, keeping the cheaper; merge neighbouring segments; then offer one
+/// primitive (circle, ellipse, rounded rectangle, or else a chain of arcs) for the whole run
+/// and keep it if it is cheaper (a true primitive also wins a tie) and inside `3ε` of every
+/// sample. The second element is the kind
+/// of primitive when the whole run is one. Runs of fewer than 4 samples are left alone.
 fn fit_run(
     run: &[Src],
     eps: f64,
@@ -580,6 +659,11 @@ fn sharp_rect(sp: &Subpath, eps: f64) -> Option<PrimitiveKind> {
 /// One subpath rewritten: `(start, segments, guarded_runs, primitive)`, the primitive
 /// being `Some` when one element describes the whole subpath; `None` if nothing in it
 /// got cheaper.
+///
+/// `eps` is the tolerance in the path's own units (already divided by the element's
+/// transform scale), `corner_degrees` the turn above which a join is a corner. A
+/// `guarded_run` is a run of more than one segment that could not be made cheaper within the
+/// guard and was kept as written.
 pub(crate) fn minify_subpath(
     sp: &Subpath,
     eps: f64,

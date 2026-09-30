@@ -7,6 +7,11 @@ use inkvec_fit::primitives::PrimitiveKind;
 
 /// `v` at the fewest decimals that still lands within `quantum` of it, never more than
 /// `most`, with the leading zero of `0.5` and `-0.5` dropped -- a parser does not need it.
+///
+/// Tries `0, 1, …, most − 1` decimals and takes the first whose value read back is within
+/// `quantum` of `v`; if none is, `most` decimals. Trailing zeros and a bare trailing point are
+/// then trimmed, and `-0` becomes `0`. With `quantum = 0` only an exact spelling is accepted
+/// early, so the number is written at `most` decimals unless fewer reproduce it exactly.
 fn short_num(v: f64, quantum: f64, most: usize) -> String {
     let mut best = format!("{v:.most$}");
     for d in 0..most {
@@ -32,7 +37,9 @@ fn short_num(v: f64, quantum: f64, most: usize) -> String {
 /// Decimals allowed when nothing may be rounded: enough that a coordinate written back
 /// is the coordinate that was read, at a scale no renderer resolves.
 pub(crate) const LOSSLESS_DECIMALS: usize = 9;
-/// How many decimals a coordinate can need at this tolerance.
+/// How many decimals a coordinate can need at this tolerance: the fewest `d` with
+/// `10^−d ≤ ε/4`, i.e. `d = ceil(log10(4 / ε))`, clamped to `0..=6`. At that precision
+/// rounding moves a number by at most half a step, `ε/8`.
 pub(crate) fn decimals_for(eps: f64) -> usize {
     ((1.0 / (0.25 * eps)).log10().ceil().max(0.0) as usize).min(6)
 }
@@ -40,11 +47,15 @@ pub(crate) fn decimals_for(eps: f64) -> usize {
 /// separator in front of it at all.
 #[derive(Clone, Copy, PartialEq)]
 enum Tail {
+    /// Nothing written yet.
     Empty,
     /// A command letter, or an arc flag: both are exactly one character, so a parser
     /// stops after them whatever comes next.
     Single,
+    /// A number, and whether it contained a decimal point (after which a following `.`
+    /// starts a new number).
     Number {
+        /// The number already has its decimal point.
         dot: bool,
     },
 }
@@ -73,10 +84,13 @@ pub(crate) struct Writer {
     prev_c2: Option<Point>,
     /// Largest rounding allowed in one written number.
     quantum: f64,
+    /// Most decimals any number is written with.
     most: usize,
 }
 
 impl Writer {
+    /// An empty writer that rounds each number by at most `quantum` and writes at most
+    /// `most` decimals. The pen starts at the origin, as a parser's does.
     pub(crate) fn new(quantum: f64, most: usize) -> Self {
         Writer {
             out: String::new(),
@@ -90,10 +104,13 @@ impl Writer {
         }
     }
 
+    /// `v` spelled at this writer's precision ([`short_num`]).
     fn num(&self, v: f64) -> String {
         short_num(v, self.quantum, self.most)
     }
 
+    /// What a parser reads from a number this writer produced. [`short_num`] only produces
+    /// valid numbers, so the `0` fallback is unreachable.
     fn parse_back(s: &str) -> f64 {
         s.parse().unwrap_or(0.0)
     }
@@ -173,6 +190,7 @@ impl Writer {
         )
     }
 
+    /// Start a subpath at `p` (`M` or `m`); `first` forces the absolute form.
     fn move_to(&mut self, p: Point, first: bool) {
         let (abs, rel) = self.pair(p);
         let vals = if first {
@@ -191,6 +209,8 @@ impl Writer {
         self.prev_c2 = None;
     }
 
+    /// A line to `p`: the shortest of `L`, `l`, and, when the written line is exactly
+    /// axis-aligned, `H`/`h` or `V`/`v`.
     fn line_to(&mut self, p: Point) {
         let (abs, rel) = self.pair(p);
         let mut forms = vec![
@@ -219,6 +239,8 @@ impl Writer {
         self.prev_c2 = None;
     }
 
+    /// A cubic to `p`: the shortest of `C`, `c`, and, when `c1` is within `quantum` of the
+    /// mirror of the last written second control point about the pen, `S`/`s`.
     fn cubic_to(&mut self, c1: Point, c2: Point, p: Point) {
         let (a1, r1) = self.pair(c1);
         let (a2, r2) = self.pair(c2);
@@ -258,6 +280,8 @@ impl Writer {
         self.prev_c2 = Some(c2_written);
     }
 
+    /// An elliptical arc to `p` (`A` or `a`): radii in path units, `phi` the x-axis rotation
+    /// in radians (written in degrees, as SVG wants), and the two flags as `0`/`1`.
     fn arc_to(&mut self, rx: f64, ry: f64, phi: f64, large: bool, sweep: bool, p: Point) {
         let (ap, rp) = self.pair(p);
         let head = vec![
@@ -282,6 +306,7 @@ impl Writer {
         self.prev_c2 = None;
     }
 
+    /// `Z`: the pen returns to the subpath's written start.
     fn close(&mut self) {
         self.out.push('Z');
         self.last = b'Z';

@@ -31,6 +31,7 @@ pub struct Status {
 }
 
 impl Status {
+    /// An integration this platform or build cannot offer, with the reason to show.
     fn unavailable(note: &str) -> Self {
         Self {
             available: false,
@@ -275,6 +276,7 @@ mod windows_menu {
         format!("Software\\Classes\\SystemFileAssociations\\{ext}\\shell\\InkvecStudio")
     }
 
+    /// Whether the context-menu entry is installed, judged by the first image type's key.
     pub(super) fn status() -> Status {
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         let installed = hkcu
@@ -291,6 +293,8 @@ mod windows_menu {
         }
     }
 
+    /// Add "Vectorize with Inkvec" to the context menu of every image type, for this user
+    /// only (`HKEY_CURRENT_USER`), running `app_exe` with the file as its argument.
     pub(super) fn install(app_exe: &Path) -> Result<(), String> {
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         for ext in IMAGE_TYPES {
@@ -311,6 +315,7 @@ mod windows_menu {
         Ok(())
     }
 
+    /// Remove the context-menu entry from every image type; one that is already gone is fine.
     pub(super) fn remove() -> Result<(), String> {
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         for ext in IMAGE_TYPES {

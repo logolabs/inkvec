@@ -1,4 +1,4 @@
-//! The twenty-two controls and the eight presets, and how both become `inkvec_cli::Args`.
+//! The twenty-four controls and the ten presets, and how both become `inkvec_cli::Args`.
 //!
 //! The interface never shows an engine flag. Every control carries the user-facing name
 //! from the terminology table (`min_area` is "Speckle floor", `max_dim` is "Trace size",
@@ -28,6 +28,7 @@ pub enum Cleanup {
 }
 
 impl Cleanup {
+    /// The same position as the engine's denoiser pre-pass names it.
     fn restore(self) -> inkvec_restore::Mode {
         match self {
             Cleanup::Off => inkvec_restore::Mode::Off,
@@ -48,7 +49,7 @@ pub enum TraceMode {
     Fast,
 }
 
-/// The twenty-three controls, exactly as the Tune tab shows them.
+/// The twenty-four controls, exactly as the Tune tab shows them.
 ///
 /// Serialised with the names the frontend uses. Defaults are the command line's, read
 /// through `Args::default()` so the app and `inkvec logo.png` cannot drift apart.
@@ -367,7 +368,7 @@ impl Settings {
     }
 }
 
-/// One of the seven presets.
+/// One of the ten built-in presets.
 ///
 /// The names are plain language and the flags never appear beside them; the mapping is
 /// the one in the design brief's preset table.
@@ -562,7 +563,7 @@ pub struct Control {
     pub modes: Modes,
 }
 
-/// The Tune tab's controls, in order: four groups, twenty-three rows, three of them (the
+/// The Tune tab's controls, in order: four groups, twenty-four rows, three of them (the
 /// engine, the denoiser and Editable) drawn above the tabs instead. Each says which engine it
 /// changes the drawing in ([`Modes`]); the table was measured, and
 /// `quality_only_controls_are_the_ones_fast_mode_ignores` holds it to the engine's own list.

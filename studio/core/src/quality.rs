@@ -191,6 +191,8 @@ pub fn canvas_size(svg: &str) -> Result<(f32, f32), String> {
     Ok((size.width(), size.height()))
 }
 
+/// Parse an SVG document with usvg. Fails for a document usvg cannot read and for one whose
+/// canvas has no area, which could not be scaled onto a pixmap.
 fn parse_tree(svg: &str) -> Result<usvg::Tree, String> {
     // No font database is loaded on purpose: the tracer never writes <text>, and a render
     // that silently substituted a font would be comparing against something the SVG does
@@ -204,6 +206,13 @@ fn parse_tree(svg: &str) -> Result<usvg::Tree, String> {
     Ok(tree)
 }
 
+/// Render `tree` through `transform` into a `w` x `h` pixmap, and return it as straight
+/// (not premultiplied) RGBA8, row-major.
+///
+/// tiny-skia works premultiplied; each colour channel is divided back out by alpha with
+/// rounding to nearest, `c = min(255, (c_premul * 255 + a / 2) / a)` in integers, and a fully
+/// clear pixel is written as `[0, 0, 0, 0]`. Fails for a zero-sized pixmap or one too large
+/// to allocate.
 fn render_tree(
     tree: &usvg::Tree,
     w: u32,
@@ -257,6 +266,17 @@ pub struct Analysis {
 }
 
 /// Compare the raster the tracer saw with a render of the SVG it wrote.
+///
+/// `source` is the traced raster: straight RGBA as `f32` in 0..1, `width * height * 4`
+/// long. The SVG is rendered at exactly that size (its viewBox stretched onto the pixmap,
+/// see [`render`]) and every pixel is compared by `pixel_deltas`. The summary figures are
+///
+/// ```text
+/// mean   = (1 / N) · Σ_i ΔE_i        median, p99 = the order statistics at N/2 and 0.99·N
+/// ```
+///
+/// over the N counted pixels, all in dE00. Errors when the SVG cannot be rendered or the
+/// raster is shorter than its own dimensions say.
 ///
 /// `mask_clear`: the background was removed on purpose (Transparent background), so a
 /// pixel the SVG leaves fully clear is not a difference. It is left out of the numbers and
@@ -328,6 +348,20 @@ pub fn analyse(
 /// The render laid over the colour the trace removed: the source's mean colour where the
 /// render is fully clear. `None` when nothing is clear, or when the source is itself
 /// transparent there (then the matte already stands in for the same nothing on both sides).
+///
+/// The removed ground `G` is estimated as the plain mean of the source's RGB over the `m`
+/// pixels the render leaves fully clear (alpha 0), and each rendered pixel is composited
+/// onto it with the "over" operator:
+///
+/// ```text
+/// G = (1 / m) · Σ_{i : α_i = 0} S_i            (0..1, scaled to 0..255)
+/// out_i = round(R_i · α_i + G · (1 − α_i)),    alpha set to 255
+/// ```
+///
+/// `S_i` is the source's straight RGB (0..1), `R_i` the render's straight RGB (0..255) and
+/// `α_i` its alpha (0..1). The source's mean alpha over those pixels must be at least 0.5,
+/// or the "ground" was mostly transparent and `None` is returned. `source` is `n * 4`
+/// floats and `rendered` `n * 4` bytes.
 fn over_removed_ground(source: &[f32], rendered: &[u8], n: usize) -> Option<Vec<u8>> {
     let (mut sum, mut count) = ([0.0f64; 4], 0usize);
     for i in (0..n).filter(|&i| rendered[i * 4 + 3] == 0) {
@@ -352,6 +386,17 @@ fn over_removed_ground(source: &[f32], rendered: &[u8], n: usize) -> Option<Vec<
 }
 
 /// dE00 for every pixel, row by row across the cores.
+///
+/// Both sides are first laid over the grey matte ([`over_matte`]) and converted to CIELAB
+/// ([`lab`]), then compared with [`ciede2000`]:
+///
+/// ```text
+/// ΔE_i = CIEDE2000( Lab(over_matte(S_i, a_i)), Lab(over_matte(R_i / 255, r_i / 255)) )
+/// ```
+///
+/// with `S_i`, `a_i` the source's straight RGB and alpha (0..1) and `R_i`, `r_i` the
+/// render's (0..255). `w` is the row length in pixels and `n` the pixel count; the result is
+/// `n` values, row-major.
 ///
 /// Each pixel's number is computed exactly as it would be alone: a row is one task, and
 /// inside a row a pixel whose source and render are both bit-for-bit the pixel before it
@@ -430,11 +475,15 @@ fn rendered_lab(r: [u8; 4]) -> [f64; 3] {
 }
 
 /// The median and the 99th percentile: the values a full sort would put at `n / 2` and
-/// at `n * 0.99`.
+/// at `n * 0.99` (truncated, and never past the last index), with `n` the number of values.
 ///
 /// Two selections instead of a sort. The 99th percentile goes first, which leaves every
 /// smaller value in front of it, and the median is then selected inside that front part.
 /// Same comparator, same indices, same two values.
+///
+/// `deltas` must not be empty: [`analyse`] never passes an empty slice, because a render
+/// of a zero-sized canvas fails first. NaN compares as equal to everything, so it cannot
+/// make the selection panic, though the dE00 values here are always finite.
 fn median_and_p99(deltas: &[f32]) -> (f64, f64) {
     use std::cmp::Ordering;
     let n = deltas.len();
@@ -455,6 +504,13 @@ fn median_and_p99(deltas: &[f32]) -> (f64, f64) {
 ///
 /// This is what "find the worst corner" jumps to. A grid rather than a search: the point
 /// is to land somewhere the disagreement is visible at 12x, not to find a global optimum.
+///
+/// The window is square, `s = clamp(min(w, h) / 12, 8, 96)` pixels on a side, and slides in
+/// steps of `s / 2` (so neighbouring windows overlap by half). Each window's score is its
+/// mean `(1 / s²) · Σ ΔE` over the `s²` pixels it covers of the row-major `deltas`
+/// (`w * h` long). The highest score wins, the first in scan order on a tie, and the result
+/// is the window's centre in traced-raster pixels. `None` when the canvas is smaller than
+/// one window, or when even the worst window averages 0.05 dE00 or less.
 fn worst_corner(deltas: &[f32], w: u32, h: u32) -> Option<WorstCorner> {
     let win = (w.min(h) / 12).clamp(8, 96);
     if w < win || h < win {
@@ -505,7 +561,17 @@ fn worst_corner(deltas: &[f32], w: u32, h: u32) -> Option<WorstCorner> {
     best.filter(|b| b.de00 > 0.05)
 }
 
-/// Composite a straight RGBA colour onto the shared matte.
+/// Composite a straight RGBA colour onto the shared matte ([`MATTE`], mid-grey), channel by
+/// channel with the "over" operator:
+///
+/// ```text
+/// out = a · rgb + (1 − a) · MATTE
+/// ```
+///
+/// `rgb` is straight sRGB in 0..1 and `a` the alpha, clamped to 0..1. The blend is done on
+/// the encoded sRGB values, as a browser composites, so the comparison sees what a viewer
+/// sees. Laying both sides on the same ground is what makes a wrong transparency count as a
+/// colour error rather than being skipped.
 fn over_matte(rgb: [f32; 3], a: f32) -> [f32; 3] {
     let a = a.clamp(0.0, 1.0);
     [
@@ -516,6 +582,23 @@ fn over_matte(rgb: [f32; 3], a: f32) -> [f32; 3] {
 }
 
 /// sRGB (0..1) to CIE L*a*b* under D65, the space dE00 is defined in.
+///
+/// Three steps, each the standard one:
+///
+/// 1. Undo the sRGB transfer curve (IEC 61966-2-1): `c_lin = c / 12.92` for `c ≤ 0.04045`,
+///    else `((c + 0.055) / 1.055)^2.4`. Inputs are clamped to 0..1 first.
+/// 2. Linear RGB to CIE XYZ with the sRGB (D65) matrix, each of X and Z divided by the D65
+///    white point (Xn = 0.95047, Zn = 1.08883; Yn = 1), so white maps to (1, 1, 1).
+/// 3. XYZ to L*a*b*:
+///
+/// ```text
+/// L* = 116 f(Y) − 16,   a* = 500 (f(X) − f(Y)),   b* = 200 (f(Y) − f(Z))
+/// f(t) = t^(1/3)                 if t > ε = 216/24389
+///      = (κ t + 16) / 116        otherwise, κ = 24389/27
+/// ```
+///
+/// using the exact rational forms of the CIE constants, so the two branches of `f` meet
+/// without a step. L* runs from 0 (black) to 100 (white); a* and b* are 0 for greys.
 pub fn lab(rgb: [f32; 3]) -> [f64; 3] {
     let lin = |c: f32| -> f64 {
         let c = c.clamp(0.0, 1.0) as f64;
@@ -546,6 +629,32 @@ pub fn lab(rgb: [f32; 3]) -> [f64; 3] {
 /// The standard formulation (Sharma, Wu & Dalal 2005), including the hue-rotation term
 /// that the simplified versions drop. Around 1.0 is where a trained eye starts to see a
 /// difference; a good trace lands near 0.1.
+///
+/// The idea: the plain Euclidean distance in L*a*b* over-counts differences in saturated
+/// colours and under-counts some in blues and near-greys. CIEDE2000 re-weights lightness,
+/// chroma and hue differences separately, with weights that depend on where in the colour
+/// space the pair sits, and adds a term that rotates the chroma-hue ellipses in the blue
+/// region. With `C = sqrt(a² + b²)` and bars meaning the mean of the two colours:
+///
+/// ```text
+/// G   = 0.5 (1 − sqrt(C̄⁷ / (C̄⁷ + 25⁷)))           a′ = (1 + G) a
+/// C′  = sqrt(a′² + b²)                             h′ = atan2(b, a′) in degrees, 0..360
+/// ΔL′ = L₂ − L₁    ΔC′ = C′₂ − C′₁    ΔH′ = 2 sqrt(C′₁ C′₂) sin(Δh′ / 2)
+/// T   = 1 − 0.17 cos(h̄′ − 30°) + 0.24 cos(2h̄′) + 0.32 cos(3h̄′ + 6°) − 0.20 cos(4h̄′ − 63°)
+/// S_L = 1 + 0.015 (L̄′ − 50)² / sqrt(20 + (L̄′ − 50)²)
+/// S_C = 1 + 0.045 C̄′        S_H = 1 + 0.015 C̄′ T
+/// R_T = −sin(2 Δθ) R_C,     Δθ = 30° exp(−((h̄′ − 275°) / 25°)²),   R_C = 2 sqrt(C̄′⁷ / (C̄′⁷ + 25⁷))
+///
+/// ΔE00 = sqrt( (ΔL′/S_L)² + (ΔC′/S_C)² + (ΔH′/S_H)² + R_T (ΔC′/S_C)(ΔH′/S_H) )
+/// ```
+///
+/// with the parametric factors k_L = k_C = k_H = 1 (reference conditions). The hue
+/// difference Δh′ is taken the short way round the circle (into −180..180), and the mean hue
+/// h̄′ is averaged the short way too. Edge cases follow the standard: a colour with zero
+/// chroma has hue 0, and when either chroma is zero Δh′ is 0 and h̄′ is the plain sum of
+/// the two hues. The result is never negative (|R_T| < 2, so the cross term cannot outweigh
+/// the two squares) and is 0 exactly for identical inputs; the tests check it against the
+/// published reference pairs.
 pub fn ciede2000(l1: [f64; 3], l2: [f64; 3]) -> f64 {
     const K_L: f64 = 1.0;
     const K_C: f64 = 1.0;

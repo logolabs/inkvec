@@ -41,6 +41,7 @@ pub enum Tier {
 }
 
 impl Tier {
+    /// The tier as the interface names it, `"draft"` or `"final"` (`Traced::tier`).
     fn label(self) -> &'static str {
         match self {
             Tier::Draft => "draft",
@@ -626,6 +627,9 @@ impl Watched {
 pub struct Watching(Mutex<Option<Watched>>);
 
 impl Watching {
+    /// The watched trace, locked. A poisoned lock is taken over rather than propagated: the
+    /// value is a plain handle, left consistent by every writer, and a panic elsewhere must
+    /// not stop the next trace from being watched.
     fn lock(&self) -> std::sync::MutexGuard<'_, Option<Watched>> {
         self.0
             .lock()
@@ -974,6 +978,12 @@ pub struct Measured {
 }
 
 impl Measured {
+    /// Measure `svg`, traced at `traced_w` x `traced_h`, against the raster the tracer saw.
+    ///
+    /// Always the colour-difference figures ([`quality::analyse`]); at
+    /// [`MeasureLevel::Full`] also the palette and what could not be recovered. Anything that
+    /// cannot be measured (the raster cannot be decoded again, the SVG cannot be rendered)
+    /// is left empty rather than failing the trace: the drawing is still the result.
     fn of(
         source: &Source,
         settings: &Settings,
@@ -1157,6 +1167,7 @@ pub fn set_external_denoiser(denoise: ExternalDenoiser) {
     let _ = EXTERNAL_DENOISER.set(denoise);
 }
 
+/// The denoiser a shell installed with [`set_external_denoiser`], if any.
 fn external_denoiser() -> Option<ExternalDenoiser> {
     EXTERNAL_DENOISER.get().copied()
 }

@@ -97,6 +97,18 @@ const NOISE_WINDOW: usize = 1024;
 /// large image it is read from the centred window of [`NOISE_WINDOW`] pixels a side, at full
 /// resolution (downsampling would average the noise away). Transparency is counted over
 /// the whole image.
+///
+/// In numbers, with straight RGB and alpha `a` in 0..1 per pixel:
+///
+/// ```text
+/// Y            = (0.2126 R + 0.7152 G + 0.0722 B) · a + (1 − a)     (luminance over white)
+/// noise_levels = 255 · σ(Y)                                          (σ: `estimate_noise`)
+/// has_alpha    = more than 1 pixel in 1000 has a < 0.99
+/// clear_share  = (pixels with a < 0.5) / (all pixels)
+/// ```
+///
+/// An image under 3 px on a side has no Laplacian to read, and the estimator's fallback
+/// makes it one level.
 pub fn facts_of(img: &inkvec_trace::Rgba) -> Facts {
     let (w, h) = (img.width, img.height);
     let n = w * h;

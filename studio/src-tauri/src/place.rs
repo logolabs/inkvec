@@ -16,6 +16,7 @@ use crate::AppState;
 /// The window the place belongs to.
 pub const MAIN: &str = "main";
 
+/// Every monitor's rectangle, as (x, y, width, height) in physical pixels on the desktop.
 fn screens<R: Runtime>(w: &WebviewWindow<R>) -> Vec<(f64, f64, f64, f64)> {
     w.available_monitors()
         .unwrap_or_default()

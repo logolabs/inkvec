@@ -65,6 +65,8 @@ pub struct Row {
 }
 
 impl Row {
+    /// A queued row for the image at `path`, to be written into `out_dir` under the same
+    /// name with `.svg`.
     fn new(id: usize, path: PathBuf, preset: Preset, out_dir: &Path) -> Self {
         let file = path
             .file_name()
@@ -175,6 +177,7 @@ impl Controls {
             row.cancel();
         }
     }
+    /// The progress of the row being traced, locked; a poisoned lock is taken over.
     fn row(&self) -> std::sync::MutexGuard<'_, Option<Arc<Progress>>> {
         self.row.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -192,6 +195,7 @@ impl Controls {
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::SeqCst)
     }
+    /// Whether it has been told to wait before starting the next row.
     fn is_paused(&self) -> bool {
         self.paused.load(Ordering::SeqCst)
     }
@@ -210,6 +214,8 @@ pub fn scan(folder: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(out)
 }
 
+/// Whether a file is one the batch traces, by its extension (any case). SVG is not: a
+/// batch turns images into SVGs.
 fn is_image(path: &Path) -> bool {
     matches!(
         path.extension()
@@ -396,12 +402,17 @@ pub fn run(
     rows
 }
 
+/// Mark `row` failed with the reason, and count it.
 fn fail(row: &mut Row, why: String, totals: &mut Totals) {
     row.state = RowState::Failed;
     row.message = Some(why);
     totals.failed += 1;
 }
 
+/// Bring the running totals up to date: the time elapsed since `started`, the mean dE00
+/// over the `count` rows measured so far (`sum` is their total), and the time remaining,
+/// estimated as the mean time per finished row times the rows left. No estimate before the
+/// first row has finished or after the last.
 fn update_totals(totals: &mut Totals, started: std::time::Instant, sum: f64, count: usize) {
     totals.elapsed = started.elapsed().as_secs_f64();
     totals.mean_de00 = (count > 0).then(|| sum / count as f64);

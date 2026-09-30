@@ -209,6 +209,8 @@ fn lettering(svg: &str) -> Option<Loss> {
 
 // -------------------------------------------------------------------- lossy source ---
 
+/// The row for a source that arrived lossily compressed (a JPEG or a lossy WebP): its
+/// colours are the codec's, not the artwork's. `None` for any other container.
 fn lossy_source(container: Container) -> Option<Loss> {
     if !container.is_lossy() {
         return None;
@@ -485,15 +487,19 @@ impl Bbox {
         x1: f64::MIN,
         y1: f64::MIN,
     };
+    /// Width, never negative (0 for [`Bbox::EMPTY`]).
     fn width(&self) -> f64 {
         (self.x1 - self.x0).max(0.0)
     }
+    /// Height, never negative (0 for [`Bbox::EMPTY`]).
     fn height(&self) -> f64 {
         (self.y1 - self.y0).max(0.0)
     }
+    /// Width times height.
     fn area(&self) -> f64 {
         self.width() * self.height()
     }
+    /// The smallest box holding both.
     fn union(self, o: &Bbox) -> Bbox {
         Bbox {
             x0: self.x0.min(o.x0),
@@ -511,6 +517,7 @@ struct Shape {
     area: f64,
 }
 
+/// The bounding box of every `<path>` in the document, for the heuristics that read boxes only.
 fn path_boxes(svg: &str) -> Vec<Bbox> {
     path_shapes(svg).into_iter().map(|s| s.bbox).collect()
 }
@@ -530,11 +537,31 @@ fn path_shapes(svg: &str) -> Vec<Shape> {
     out
 }
 
-/// Walk one `d` attribute, collecting the on-curve points.
+/// Walk one `d` attribute, collecting the on-curve points, and reduce them to a bounding
+/// box and a signed area. Coordinates are the SVG's own user units.
 ///
 /// Control points are skipped on purpose: a curve's hull is wider than the curve, and
 /// both of the measurements above want the shape, not its envelope. Arcs contribute
 /// their endpoint, which is the same reasoning.
+///
+/// Parsing follows the path grammar closely enough for any SVG the tracer or an editor
+/// writes: absolute and relative commands, implicit repeats of a command (each run of its
+/// arguments is one more segment), numbers packed without separators (`10-5`, `.5.5`) and
+/// exponents. `Z` returns the current point to the subpath's start. A number that does not
+/// parse is skipped, and a trailing partial run is ignored.
+///
+/// The area is the shoelace formula over the points `p_0 … p_{n−1}` as one closed polygon:
+///
+/// ```text
+/// A = ½ · Σ_k (x_k · y_{k+1} − x_{k+1} · y_k),    indices mod n
+/// ```
+///
+/// Positive for a polygon that runs clockwise on screen (SVG's y axis points down),
+/// negative the other way; callers use its magnitude. The chords that replace the curves
+/// make it an approximation, and a path with several subpaths is walked as one polygon,
+/// so the edges joining the subpaths add an error too. That is enough for its one use, the
+/// baked-stroke test, which only asks whether the area is under a fifth of the bounding
+/// box. `None` when the path has fewer than three on-curve points and so no area.
 fn shape_of(d: &str) -> Option<Shape> {
     let mut points: Vec<(f64, f64)> = Vec::new();
     let mut cur = (0.0f64, 0.0f64);

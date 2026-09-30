@@ -51,6 +51,24 @@ fn junction_curvature_points() -> usize {
     16
 }
 
+/// `INKVEC_JDBG`: print every junction's decision and every end fit to stderr.
+///
+/// Read once per process and kept in a `OnceLock`, so the check on every node and every
+/// edge end is one atomic load. It used to go through `inkvec_core::env::flag` each time,
+/// which takes the environment cache's mutex and searches it: cheap alone, but it ran for
+/// every junction node and twice per open edge in both Fast and Quality mode.
+/// `env::flag` itself caches the first read, so the value seen is the same.
+fn jdbg() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| inkvec_core::env::flag("INKVEC_JDBG"))
+}
+
+/// `INKVEC_TAPERDBG`: print every taper fit to stderr. Read once, like [`jdbg`].
+fn taperdbg() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| inkvec_core::env::flag("INKVEC_TAPERDBG"))
+}
+
 /// Farthest a junction may move from its grid node before the solution is distrusted.
 const JUNCTION_MAX_MOVE: f64 = 1.5;
 
@@ -234,7 +252,7 @@ fn fit_end_polynomial(ts: &[f64], rs: &[f64], ws: &[f64], n_fit: usize) -> Optio
     let n_all = ts.len();
     let n_fit = n_fit.min(n_all);
     let (xl, vl) = fit(1, n_fit)?;
-    if inkvec_core::env::flag("INKVEC_JDBG") {
+    if jdbg() {
         let q = if n_all >= MIN_QUADRATIC_POINTS {
             fit(2, n_all)
         } else {
@@ -353,7 +371,7 @@ pub fn refine_junctions(map: &mut PlanarMap) {
         };
         let slid = taper.is_some();
         let (p, sigma) = taper.or(solved).unwrap_or((origin, 0.5));
-        if inkvec_core::env::flag("INKVEC_JDBG") {
+        if jdbg() {
             eprintln!(
                 "JDBG node {node} deg {} lines {} origin ({:.2},{:.2}) -> ({:.3},{:.3}) move {:.3} sigma {:.3} vars {:?}",
                 list.len(),
@@ -540,7 +558,7 @@ fn taper_junction(map: &PlanarMap, list: &[(usize, bool)], origin: Point) -> Opt
         .collect();
 
     let t = crate::taper::fit(&samples);
-    if inkvec_core::env::flag("INKVEC_TAPERDBG") {
+    if taperdbg() {
         eprintln!(
             "  taper node at ({:.1},{:.1}): edge {bk}, {} pts -> {:?}",
             origin.x,

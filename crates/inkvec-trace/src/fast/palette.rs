@@ -182,12 +182,14 @@ const BELOW_HALF: f32 = 0.5 - f32::EPSILON / 4.0;
 /// for the 5-bit grid).
 ///
 /// *Why it is the same number* (x ≥ 0, `k = ⌊x⌋`, `f = x − k`):
-/// * `f < 1/2`: then `x ≤ k + 1/2 − u` with `u` the spacing of floats at `x`, so
-///   `x + h ≤ k + 1 − u − 2⁻²⁵`, which rounds to a float below `k + 1`: `trunc = k`. At
-///   `k = 0` the largest such `x` is `1/2 − 2⁻²⁵` and `x + h = 1 − 2⁻²⁴` exactly.
-/// * `f ≥ 1/2`: `x + h ≥ k + 1 − 2⁻²⁵`, within half a spacing of `k + 1` (floats below
-///   `k + 1 ≥ 1` are at most `2⁻²⁴` apart), so it rounds to `k + 1` -- at `x = 1/2` it is an
-///   exact tie that round-half-to-even sends to 1.0, the even neighbour: `trunc = k + 1`.
+/// * `f < 1/2`: then `x ≤ k + 1/2 − u` with `u` the spacing of floats at `x`, so the exact
+///   `x + h ≤ k + 1 − u − 2⁻²⁵` lies below the float `k + 1 − u` and rounds to at most it:
+///   `trunc = k`. At `k = 0` the largest such `x` is `1/2 − 2⁻²⁵`, and `x + h = 1 − 2⁻²⁴`
+///   exactly.
+/// * `f ≥ 1/2`: the exact `x + h` lies in `[k + 1 − 2⁻²⁵, k + 3/2)`. Floats just below
+///   `k + 1 ≥ 1` are at least `2⁻²⁴` apart, so anything within `2⁻²⁵` below `k + 1` rounds
+///   up to it -- at `x = 1/2` it is an exact tie, which round-half-to-even sends to 1.0, the
+///   even neighbour: `trunc = k + 1`.
 /// * A plain `+ 0.5` fails the first case: `(1/2 − 2⁻²⁵) + 1/2` ties to 1.0.
 ///
 /// Checked, not only argued: identical to `(x).round() as usize` on every one of the
@@ -548,11 +550,14 @@ fn key_rows(
 /// left to right -- so every f64 sum is the same sequence of roundings, whatever the values.
 /// Counts are integers. Θ(pixels) time, one bin lookup per run.
 ///
-/// Method from: T. M. Breuel, "Efficient Binary and Run Length Morphology and its
-/// Application to Document Image Processing", 2007, <https://arxiv.org/abs/0712.0121> -- the
-/// erosion is evaluated on the run-length representation, horizontally at run ends and
-/// vertically per pixel. Adapted: a greyscale "run" is a run of one bin key, and the erosion
-/// only has to be counted, not produced.
+/// Inspired by: T. M. Breuel, "Efficient Binary and Run Length Morphology and its
+/// Application to Document Image Processing", 2007, <https://arxiv.org/abs/0712.0121> --
+/// morphology on the run-length representation, whose cost follows the runs rather than the
+/// pixels. Ours differs: the horizontal half of the erosion comes from run ends as there,
+/// but the vertical half reads the key rows above and below per pixel instead of
+/// intersecting runs, because those rows are in cache and the erosion only has to be
+/// counted, never produced as an image; and a "run" is a run of one bin key, not of set
+/// pixels.
 ///
 /// Inspired by: G. Pass, R. Zabih, J. Miller, "Comparing Images Using Color Coherence
 /// Vectors", ACM Multimedia '96, pp. 65–73, DOI 10.1145/244130.244148, which splits each
@@ -638,8 +643,10 @@ const TARGET_BANDS: usize = 64;
 ///
 /// # Serial
 ///
-/// Below [`PARALLEL_MIN_PIXELS`]: the keys by [`key_rows`], then one band covering the
-/// whole image.
+/// Below [`PARALLEL_MIN_PIXELS`] (the caller's `parallel` is false): the keys by
+/// [`key_rows`], then one band covering the whole image. Also, with the keys computed in
+/// parallel, when the bands' sums could not be merged exactly anyway -- more than
+/// [`EXACT_SUM_MAX_PIXELS`] pixels -- or the image is under two bands tall.
 ///
 /// # Parallel row bands
 ///
@@ -659,8 +666,9 @@ const TARGET_BANDS: usize = 64;
 /// histogram is redone serially over the finished keys, in raster order. Keys are the same
 /// either way, being a function of each pixel alone.
 ///
-/// Measured: the run-based parallel histogram gave 0 differing bins on 254 images against
-/// the serial one, at 2.4–3.3 ms where the serial pass took 17.8 ms at 2048 px.
+/// Measured: the research prototype of the run-based parallel histogram gave 0 differing
+/// bins on 254 images against the serial one, at 2.4–3.3 ms where the serial pass took
+/// 17.8 ms at 2048 px.
 ///
 /// Method from: V. Podlozhnyuk, "Histogram calculation in CUDA", NVIDIA, 2007,
 /// <https://developer.download.nvidia.com/compute/cuda/1.1-Beta/x86_website/projects/histogram64/doc/histogram.pdf>,

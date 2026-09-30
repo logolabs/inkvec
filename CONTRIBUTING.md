@@ -25,6 +25,37 @@ cargo clippy --workspace --all-targets -- -D clippy::correctness -D clippy::susp
 cargo test --release --workspace
 ```
 
+## Before you push
+
+Most red CI runs are not failed tests but things that need no build to find: code left
+unformatted in one of the four Cargo workspaces (the root, `studio/core`, `studio/src-tauri`,
+`studio/wasm`), a copy of the version number that was not bumped, or a generated file (the
+bindings, the Studio's copy of the guide, the Studio's licence notices) left stale.
+`tools/prepush.py` runs exactly those checks, in the order CI does, and stops at the first
+failure with a one-line hint saying how to fix it:
+
+```
+python tools/prepush.py            # about a minute; most of it is the licence notices
+python tools/prepush.py --full     # also the quality ratchet (bench/quality.py), minutes
+python tools/prepush.py --list     # what it runs
+python tools/prepush.py --skip tsc # leave one check out
+```
+
+The TypeScript check uses the Studio's own compiler, so run `npm ci` in `studio/` once
+first (or skip it with `--skip tsc` if you did not touch the Studio). Every check runs at
+below-normal priority, so it does not starve a build running beside it.
+
+To have git run it on every push:
+
+```
+python tools/install_hooks.py          # add --full to include the quality ratchet
+python tools/install_hooks.py --uninstall
+```
+
+The hook lives where git looks for hooks, so every worktree of the checkout shares it, and
+the installer refuses to replace a pre-push hook it did not write (unless `--force`).
+`git push --no-verify` skips it for one push.
+
 ## The regression gate
 
 `bench/ci_gate.py` scores the committed 246-icon screen set (`bench/data`, kept in the

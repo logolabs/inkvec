@@ -200,10 +200,29 @@ A candidate is finally discarded as coverage — not kept as an ink — only whe
 **and** interior is below the threshold **and** the straddle fraction clears its own threshold
 (`color.rs:1019-1021`).
 
+### How it is computed: once per distinct colour
+
+Every per-pixel quantity the loop reads (OKLab, sRGB, linear light, the distance to a candidate or
+to the nearest accepted ink) is a function of the pixel's colour bits, and vector art repeats a
+few colours many times (screen set: 232 distinct colours in 16 384 pixels at the median). So the
+image is first reduced to its distinct colours (`color/distinct.rs`, `ColourIds`), each quantity
+is computed per colour, and pixel positions for the spatial tests come from each colour's list of
+sampled pixels (`DistinctImage`). This is the unique-colour reduction of Celebi's k-means colour
+quantiser (Celebi 2011, doi:10.1016/j.imavis.2010.10.002) with Swain and Ballard's histogram
+backprojection (IJCV 1991) for the spatial tests. A candidate's claimed set is a weighted
+bichromatic reverse-nearest-neighbour set (Korn and Muthukrishnan, SIGMOD 2000; Wong et al.,
+PVLDB 2009) that does not change until a candidate is accepted, so it is computed once and
+shared by the rarity count, the spread, the interior test and every straddle pair. The candidate
+and ink means are still summed over the pixels in order, so the result is bit-identical to the
+per-pixel loop; the per-pixel loop is kept as a test-only oracle (`color/reference_tests.rs`,
+`native/reference_tests.rs`). The walk itself is `color/mdl.rs` (opaque) and
+`native/palette.rs` (two grounds).
+
 ### `label_image`
 
-`label_image(rgb, pal)` (`color.rs:1211-1215`) assigns every pixel to its nearest palette entry
-in OKLab, independent of the extraction pass — a straightforward nearest-neighbour scan.
+`label_image(rgb, pal)` assigns every pixel to its nearest palette entry in OKLab, independent of
+the extraction pass: a nearest-neighbour scan, made once per distinct colour and read back
+through each pixel's colour id.
 
 ### `split_alpha_inks`
 

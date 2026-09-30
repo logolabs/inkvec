@@ -295,7 +295,7 @@ fn blend_pairs(c: Ink2, accepted: &[Ink2], tol: f32, tmin: f32) -> Vec<(usize, u
 /// * the clear ink (opacity ≤ [`CLEAR_INK_ALPHA`]) does not count against `max_colors`;
 ///   once the cap is full the scan continues only to find it, and stops once it is found;
 /// * a translucent candidate that is not a blend must have an interior (see
-///   `BlendEvidence::measure`);
+///   `palette::BlendEvidence::measure`);
 /// * there is no `INKVEC_MERGE_DE00` experiment and the same-ink floor does not print.
 ///
 /// `rgb` is sRGB `[0, 1]` composited onto white and `alpha` the source alpha, both

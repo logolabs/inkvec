@@ -289,7 +289,6 @@ fn estimate_noise_at(gray: &[f32], w: usize, h: usize, at: f64, z: f64) -> f64 {
             lap.push(v.abs());
         }
     }
-    lap.sort_by(|a, b| a.total_cmp(b));
     // Read a LOW quantile, not the median, with the Gaussian factor for that quantile.
     //
     // The median is robust only while edges are rare: half the pixels are then flat, so the
@@ -303,9 +302,20 @@ fn estimate_noise_at(gray: &[f32], w: usize, h: usize, at: f64, z: f64) -> f64 {
     // `Z10` is that quantile of the half-normal; the cost is variance, which the floor
     // absorbs. Measured over 246 icons at 128, 512 and 1024 px: every output byte-identical,
     // because on clean art both readings sit on the floor. JPEG and added grain improve.
-    let mad = lap[((lap.len() as f64) * at) as usize] as f64;
+    let k = ((lap.len() as f64) * at) as usize;
+    let mad = kth_smallest(&mut lap, k) as f64;
     let gain = LAPLACIAN_KERNEL.iter().map(|c| c * c).sum::<f64>().sqrt();
     (mad / z / gain).max(NOISE_FLOOR)
+}
+
+/// The value at index `k` of `v` sorted ascending by `f32::total_cmp`, found by selection
+/// (`select_nth_unstable_by`: the element a sort would put at `k`, in linear expected time)
+/// rather than a full sort; `v` is reordered. Under a total order equal elements have equal
+/// bits, so the value is exactly the sorted one. Not from the literature: the noise and
+/// ringing measures read one or two order statistics, and sorting a whole image's worth of
+/// Laplacians for them cost 60-75 ms on a 2048 px render.
+pub(crate) fn kth_smallest(v: &mut [f32], k: usize) -> f32 {
+    *v.select_nth_unstable_by(k, f32::total_cmp).1
 }
 
 /// The quantile of `|Laplacian|` read as the noise level.
@@ -570,17 +580,17 @@ pub fn ringing_score(rgb: &[[f32; 3]], width: usize, height: usize) -> f64 {
     if core.len() < MIN_SAMPLES || ring.len() < MIN_SAMPLES {
         return 0.0;
     }
-    let pct = |v: &[f32], q: f64| -> f64 {
-        let k = ((v.len() - 1) as f64 * q).round() as usize;
-        v[k] as f64
-    };
-    let mut core_sorted = core;
-    core_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let mut ring_sorted = ring.clone();
-    ring_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let ring_p90 = pct(&ring_sorted, 0.90);
-    let ring_p60 = pct(&ring_sorted, 0.60).max(1e-9);
-    let core_med = pct(&core_sorted, 0.50).max(1e-9);
+    // Percentile `q` is the element at `round((len - 1) q)` of the sorted values. The values
+    // are magnitudes (no NaN, no negative zero), where `total_cmp` orders as `<` does, so a
+    // selection returns exactly what sorting did. p60 is selected inside the part p90's
+    // selection left below it.
+    let at = |len: usize, q: f64| ((len - 1) as f64 * q).round() as usize;
+    let k50 = at(core.len(), 0.50);
+    let core_med = (kth_smallest(&mut core, k50) as f64).max(1e-9);
+    let mut ring_sel = ring.clone();
+    let (k90, k60) = (at(ring_sel.len(), 0.90), at(ring_sel.len(), 0.60));
+    let ring_p90 = kth_smallest(&mut ring_sel, k90) as f64;
+    let ring_p60 = (kth_smallest(&mut ring_sel[..=k90], k60) as f64).max(1e-9);
     let ratio = ring_p90 / core_med;
     if ratio <= 0.0 {
         return 0.0;
@@ -742,36 +752,39 @@ pub fn intake_scale(rgb: &[[f32; 3]], width: usize, height: usize) -> f64 {
     if width < 3 || height < 3 || rgb.len() < width * height {
         return 1.0;
     }
-    let lum = |i: usize| -> f32 { (rgb[i][0] + rgb[i][1] + rgb[i][2]) / 3.0 };
-
-    let mut w_obs: Vec<f64> = Vec::new();
-    // Along each axis: |first difference| / |second difference| at the same place.
-    for axis in 0..2 {
-        let (n_outer, n_inner, step) = if axis == 0 {
-            (height, width, 1usize)
-        } else {
-            (width, height, width)
-        };
-        for o in 0..n_outer {
-            for k in 0..n_inner.saturating_sub(2) {
-                let base = if axis == 0 {
-                    o * width + k
-                } else {
-                    k * width + o
-                };
-                let (a, b, c) = (lum(base), lum(base + step), lum(base + 2 * step));
-                let (d0, d1) = (b - a, c - b);
-                let first = d0.abs().max(d1.abs());
-                let second = (d1 - d0).abs();
-                if first > EDGE_FLOOR && second > 1e-6 {
-                    let r = (first / second) as f64;
-                    if r.is_finite() {
-                        w_obs.push(r.clamp(MIN_W, MAX_W));
-                    }
-                }
+    use rayon::prelude::*;
+    let lum: Vec<f32> = rgb[..width * height]
+        .par_iter()
+        .map(|c| (c[0] + c[1] + c[2]) / 3.0)
+        .collect();
+    // One run of three pixels `a, b, c`: |first difference| / |second difference|.
+    let vote = |a: f32, b: f32, c: f32| -> Option<f64> {
+        let (d0, d1) = (b - a, c - b);
+        let first = d0.abs().max(d1.abs());
+        let second = (d1 - d0).abs();
+        if first > EDGE_FLOOR && second > 1e-6 {
+            let r = (first / second) as f64;
+            if r.is_finite() {
+                return Some(r.clamp(MIN_W, MAX_W));
             }
         }
-    }
+        None
+    };
+    // Every run of three along a row and along a column votes once. The median below does
+    // not depend on the order the votes arrive in, so the columns are walked row by row too
+    // (a column-major walk jumps a whole row per step), and the rows in parallel.
+    let rows = lum
+        .par_chunks(width)
+        .flat_map_iter(|row| row.windows(3).filter_map(move |t| vote(t[0], t[1], t[2])));
+    let cols = (0..height - 2).into_par_iter().flat_map_iter(|y| {
+        let (r0, r1, r2) = (
+            &lum[y * width..(y + 1) * width],
+            &lum[(y + 1) * width..(y + 2) * width],
+            &lum[(y + 2) * width..(y + 3) * width],
+        );
+        (0..width).filter_map(move |x| vote(r0[x], r1[x], r2[x]))
+    });
+    let mut w_obs: Vec<f64> = rows.chain(cols).collect();
     if w_obs.len() < 16 {
         return 1.0;
     }
@@ -1009,6 +1022,99 @@ mod tests {
         assert_eq!(ringing_score(&vec![[0.5; 3]; 64 * 64], 64, 64), 0.0);
         // Mismatched dimensions must not index out of bounds.
         assert_eq!(ringing_score(&[[0.5; 3]; 16], 100, 100), 0.0);
+    }
+
+    /// `intake_scale` as it shipped: rows, then columns walked column by column.
+    fn intake_scale_reference(rgb: &[[f32; 3]], width: usize, height: usize) -> f64 {
+        if width < 3 || height < 3 || rgb.len() < width * height {
+            return 1.0;
+        }
+        let lum = |i: usize| -> f32 { (rgb[i][0] + rgb[i][1] + rgb[i][2]) / 3.0 };
+        let mut w_obs: Vec<f64> = Vec::new();
+        for axis in 0..2 {
+            let (n_outer, n_inner, step) = if axis == 0 {
+                (height, width, 1usize)
+            } else {
+                (width, height, width)
+            };
+            for o in 0..n_outer {
+                for k in 0..n_inner.saturating_sub(2) {
+                    let base = if axis == 0 {
+                        o * width + k
+                    } else {
+                        k * width + o
+                    };
+                    let (a, b, c) = (lum(base), lum(base + step), lum(base + 2 * step));
+                    let (d0, d1) = (b - a, c - b);
+                    let first = d0.abs().max(d1.abs());
+                    let second = (d1 - d0).abs();
+                    if first > 2.0 / 255.0 && second > 1e-6 {
+                        let r = (first / second) as f64;
+                        if r.is_finite() {
+                            w_obs.push(r.clamp(0.25, 64.0));
+                        }
+                    }
+                }
+            }
+        }
+        if w_obs.len() < 16 {
+            return 1.0;
+        }
+        let mid = w_obs.len() / 2;
+        w_obs.select_nth_unstable_by(mid, |a, b| a.total_cmp(b));
+        w_obs[mid].max(1.0)
+    }
+
+    #[test]
+    fn intake_scale_walking_rows_only_equals_the_column_walk() {
+        let mut s = 0xfeed_beefu64;
+        let mut next = move || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            (s >> 40) as f32 / (1u64 << 24) as f32
+        };
+        for case in 0..60 {
+            let (w, h) = (1 + (next() * 70.0) as usize, 1 + (next() * 70.0) as usize);
+            let width = 1.0 + next() * 6.0;
+            let img: Vec<[f32; 3]> = (0..w * h)
+                .map(|i| {
+                    let (x, y) = ((i % w) as f32, (i / w) as f32);
+                    let t = (((x + 0.7 * y) % 17.0) / width).min(1.0);
+                    let n = if case % 3 == 0 { next() * 0.02 } else { 0.0 };
+                    [t + n, 0.5 * t, 1.0 - t]
+                })
+                .collect();
+            let (a, b) = (intake_scale(&img, w, h), intake_scale_reference(&img, w, h));
+            assert_eq!(a.to_bits(), b.to_bits(), "case {case} {w}x{h}");
+        }
+    }
+
+    #[test]
+    fn selection_returns_what_sorting_did_including_nested_percentiles() {
+        let mut s = 0x1234_5678_9abc_def1u64;
+        for len in 1..200usize {
+            let v: Vec<f32> = (0..len)
+                .map(|_| {
+                    s ^= s << 13;
+                    s ^= s >> 7;
+                    s ^= s << 17;
+                    // Few distinct values, so ties are common.
+                    ((s >> 40) % 23) as f32 * 0.125
+                })
+                .collect();
+            let mut sorted = v.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let at = |q: f64| ((len - 1) as f64 * q).round() as usize;
+            for q in [0.0, 0.1, 0.5, 0.6, 0.9, 1.0] {
+                let mut w = v.clone();
+                assert_eq!(kth_smallest(&mut w, at(q)), sorted[at(q)]);
+            }
+            let mut w = v.clone();
+            let (k90, k60) = (at(0.9), at(0.6));
+            assert_eq!(kth_smallest(&mut w, k90), sorted[k90]);
+            assert_eq!(kth_smallest(&mut w[..=k90], k60), sorted[k60]);
+        }
     }
 
     #[test]

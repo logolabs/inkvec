@@ -385,8 +385,11 @@ pub fn trace_color_full_with_alpha(
             opts.lossy_intake
         );
     }
-    let pal = color::extract_palette_mdl(
+    // The image's distinct colours, numbered once for the palette and the labels.
+    let ids = color::distinct::ColourIds::of_rgb(&rgb);
+    let pal = color::extract_palette_mdl_ids(
         &rgb,
+        &ids,
         img.width,
         img.height,
         opts.merge_distance,
@@ -402,7 +405,8 @@ pub fn trace_color_full_with_alpha(
     progress::note(|| format!("{} inks", pal.colors.len()));
     progress::begin("labels");
     let mut pal = pal;
-    let mut labels = color::label_image(&rgb, &pal);
+    let mut labels = color::label_image_ids(&rgb, &ids, &pal);
+    drop(ids);
     if opts.lossy_intake && research_lossy_regularize() {
         let sigma_lossy = sigma_noise.max(regularize::residual_sigma(
             &rgb, &labels, img.width, img.height, &pal,
@@ -436,18 +440,28 @@ pub fn trace_color_full_with_alpha(
     // guard: a wide edge, a lossy container, or measured ringing. On a clean intake this
     // branch is not taken and the trace is bit-identical to before. It can only ever RAISE
     // the estimate, never lower it, and `residual_sigma` clamps itself to 8 display levels.
-    // Always MEASURE, even when the gate is shut, so the diagnostic can say what the gate is
-    // turning down. One pass over the pixels. `coverage::ringing_score` is built around a JPEG
-    // artefact and fires on only 21% of VAE output against 88% of JPEG, so the measurement is
-    // the more general signal and this is how we find out whether it can gate itself.
-    let measured_always = regularize::residual_sigma(&rgb, &labels, img.width, img.height, &pal);
-    let incoherence = regularize::residual_incoherence(&rgb, &labels, img.width, img.height, &pal);
-    crate::diag!(
-        "noise",
-        "residual_sigma={measured_always:.5} levels={:.2} incoherence={incoherence:.3} gate={}",
-        measured_always * 255.0,
-        soft_intake
-    );
+    // With the diagnostic on, MEASURE even when the gate is shut, so it can say what the gate
+    // is turning down. `coverage::ringing_score` is built around a JPEG artefact and fires on
+    // only 21% of VAE output against 88% of JPEG, so the measurement is the more general
+    // signal and this is how we find out whether it can gate itself. Without the diagnostic,
+    // a shut gate and a clean build read neither number, so neither is computed (on a 2048 px
+    // render the two passes cost 50 ms), and the gated branch reuses this measurement.
+    let measure = soft_intake || diag::on() || cfg!(feature = "research");
+    let measured_always = if measure {
+        regularize::residual_sigma(&rgb, &labels, img.width, img.height, &pal)
+    } else {
+        coverage::NOISE_FLOOR
+    };
+    if diag::on() {
+        let incoherence =
+            regularize::residual_incoherence(&rgb, &labels, img.width, img.height, &pal);
+        crate::diag!(
+            "noise",
+            "residual_sigma={measured_always:.5} levels={:.2} incoherence={incoherence:.3} gate={}",
+            measured_always * 255.0,
+            soft_intake
+        );
+    }
     if soft_intake {
         let scale = color::MEASURED_SIGMA_SCALE;
         // `residual_sigma` clamps itself to 8 display levels, which is far too generous for
@@ -457,9 +471,7 @@ pub fn trace_color_full_with_alpha(
         // diagram TAIL reaches the 8-level ceiling, and those are exactly the files whose
         // colour error doubled. The cap is therefore set from the tail, not the median.
         let cap = color::MEASURED_SIGMA_CAP / 255.0;
-        let measured = (regularize::residual_sigma(&rgb, &labels, img.width, img.height, &pal)
-            * scale)
-            .min(cap);
+        let measured = (measured_always * scale).min(cap);
         if measured > sigma_noise {
             crate::diag!(
                 "noise",

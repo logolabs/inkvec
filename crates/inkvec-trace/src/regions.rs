@@ -31,8 +31,11 @@
 //! [`crate::native`].
 
 use crate::color::Palette;
+
+mod components;
 #[cfg(feature = "research")]
 use crate::gradient;
+pub(crate) use components::Components;
 
 /// How far from the half-way mark a corner must sit before the image is taken to have
 /// answered: three sigma of the propagated coverage noise. Below that the two readings
@@ -363,12 +366,13 @@ pub fn mixture(c: [f32; 3], cols: &[[f32; 3]]) -> Option<(f32, usize)> {
     best.map(|(r2, who)| (r2.sqrt(), who))
 }
 
-/// 4-connected components of equal label.
+/// 4-connected components of equal label, by flood fill: the reference [`Components`] is
+/// tested against.
 ///
 /// Returns `(comp, members)`: `comp[p]` is the component id of pixel `p`, and
 /// `members[id]` lists that component's pixels in flood-fill order. Components are numbered
-/// in raster order of their first pixel. The flood visits neighbours left, right, up, down
-/// from a stack; callers that walk `members` depend on that order being stable, so keep it.
+/// in raster order of their first pixel.
+#[cfg(test)]
 pub(crate) fn label_components(labels: &[u16], w: usize, h: usize) -> (Vec<u32>, Vec<Vec<usize>>) {
     let n = w * h;
     let mut comp = vec![u32::MAX; n];
@@ -633,7 +637,7 @@ pub fn absorb_blend_slivers(
     let mut absorbed = 0usize;
 
     for _round in 0..2 {
-        let (comp, members) = label_components(labels, w, h);
+        let round = SliverRound::of(labels, w, h);
         let mut changed = 0usize;
         let n_labels = labels
             .iter()
@@ -642,8 +646,15 @@ pub fn absorb_blend_slivers(
             .map_or(1, |m| m as usize + 1)
             .max(pal.rgb.len());
         let mut contacts: Vec<usize> = vec![0; n_labels];
-        for group in &members {
-            if absorb_sliver(&scene, group, &comp, labels, &mut contacts) {
+        for id in 0..round.comps.len() {
+            let Some(group) = round.thin(id) else {
+                let (area, interior) = (round.comps.size[id], round.interior[id]);
+                if scene.debug && area > 15 && interior * 5 >= area {
+                    eprintln!("abs: comp area {area} NOT thin (interior {interior})");
+                }
+                continue;
+            };
+            if absorb_sliver(&scene, group, &round.comps.comp, labels, &mut contacts) {
                 changed += 1;
             }
         }
@@ -653,6 +664,113 @@ pub fn absorb_blend_slivers(
         }
     }
     absorbed
+}
+
+/// One round of sliver absorption's view of the label map: its components, and the member
+/// lists of the thin ones only.
+///
+/// A component can be absorbed only when it is thin (`5 · interior < area`) and touches
+/// another (`foreign > 0`); [`absorb_sliver`] turns every other one down on exactly those
+/// counts, which depend on the components and not on the labels, so they are counted for
+/// all components in one pass and only the thin ones get member lists.
+pub(crate) struct SliverRound {
+    /// The label map's components.
+    pub(crate) comps: Components,
+    /// Per component, its interior pixel count.
+    pub(crate) interior: Vec<u32>,
+    thin: Vec<bool>,
+    members: components::Members,
+}
+
+impl SliverRound {
+    /// The components of `labels` (`w x h`) and the members of the thin ones.
+    pub(crate) fn of(labels: &[u16], w: usize, h: usize) -> Self {
+        let comps = Components::of(labels, w, h);
+        let (interior, foreign) = comps.shape(w, h);
+        let thin: Vec<bool> = (0..comps.len())
+            .map(|c| interior[c] * 5 < comps.size[c] && foreign[c] > 0)
+            .collect();
+        let members = comps.members(|c| thin[c]);
+        SliverRound {
+            comps,
+            interior,
+            thin,
+            members,
+        }
+    }
+
+    /// The pixels of component `id` when it is thin, else `None`.
+    pub(crate) fn thin(&self, id: usize) -> Option<&[usize]> {
+        self.thin[id].then(|| self.members.of(id))
+    }
+}
+
+/// Synchronous relabelling rounds over an active set of pixels.
+///
+/// Each round decides pixels from the labels as they stood when it began, then applies every
+/// move; up to `rounds` rounds, stopping once nothing moves. Returns the number of moves.
+///
+/// `decide(labels, p)` must read only pixel `p`'s 3x3 neighbourhood of labels (and data
+/// that never changes). A pixel whose neighbourhood did not change in a round then decides
+/// as it did in that round, and that was "stay": had it moved, its own label would have
+/// changed. So the first round decides every pixel and each later one only the 3x3
+/// neighbourhoods of the pixels that just moved; the moves are the same as deciding every
+/// pixel every round. Not from the literature: a plain worklist, because the moves after the
+/// first round are few (on the screen set 94 % of them happen in round one) while every
+/// round used to decide every pixel.
+pub(crate) fn relabel_rounds(
+    labels: &mut [u16],
+    w: usize,
+    h: usize,
+    rounds: usize,
+    decide: impl Fn(&[u16], usize) -> Option<u16> + Sync,
+) -> usize {
+    use rayon::prelude::*;
+    let n = w * h;
+    let mut active: Option<Vec<usize>> = None;
+    let mut stamp: Vec<usize> = Vec::new();
+    let mut total = 0usize;
+    for round in 0..rounds {
+        let snap: &[u16] = labels;
+        let moves: Vec<(usize, u16)> = match &active {
+            None => (0..n)
+                .into_par_iter()
+                .filter_map(|p| decide(snap, p).map(|t| (p, t)))
+                .collect(),
+            Some(list) => list
+                .par_iter()
+                .with_min_len(1024)
+                .filter_map(|&p| decide(snap, p).map(|t| (p, t)))
+                .collect(),
+        };
+        if moves.is_empty() {
+            break;
+        }
+        for &(p, t) in &moves {
+            labels[p] = t;
+        }
+        total += moves.len();
+        if round + 1 < rounds {
+            if stamp.is_empty() {
+                stamp = vec![usize::MAX; n];
+            }
+            let mut next = Vec::new();
+            for &(p, _) in &moves {
+                let (x, y) = (p % w, p / w);
+                for qy in y.saturating_sub(1)..(y + 2).min(h) {
+                    for qx in x.saturating_sub(1)..(x + 2).min(w) {
+                        let q = qy * w + qx;
+                        if stamp[q] != round {
+                            stamp[q] = round;
+                            next.push(q);
+                        }
+                    }
+                }
+            }
+            active = Some(next);
+        }
+    }
+    total
 }
 
 /// Reassign individual boundary pixels that a neighbour-pair blend explains strictly better.
@@ -670,9 +788,11 @@ pub fn absorb_blend_slivers(
 ///   it has, so a pixel that is a plausible match for its own ink is left alone.
 ///
 /// When the backdrop dominates, the dominant real ink is used instead, as in
-/// [`absorb_blend_slivers`]. Each round decides every pixel from a snapshot (in parallel,
-/// so the result does not depend on scan order) and then applies the moves; up to four
-/// rounds, stopping early when nothing moves. Returns the number of moves.
+/// [`absorb_blend_slivers`]. Each round decides pixels from the labels as the round found
+/// them (in parallel, so the result does not depend on scan order) and then applies the
+/// moves; up to four rounds, stopping early when nothing moves ([`relabel_rounds`], which
+/// after the first round decides only around the pixels that moved). Returns the number of
+/// moves.
 pub fn reassign_blend_pixels(
     labels: &mut [u16],
     rgb: &[[f32; 3]],
@@ -683,139 +803,137 @@ pub fn reassign_blend_pixels(
     sigma_noise: f64,
 ) -> usize {
     const ROUNDS: usize = 4;
-    let n = w * h;
     let tol = (3.0 * sigma_noise).max(0.025) as f32;
-    let mut moved_total = 0usize;
+    let decide = |snap: &[u16], p: usize| -> Option<u16> {
+        let (x, y) = (p % w, p / w);
+        let own = snap[p];
+        let mut labs = [own; 4];
+        let mut nl = 1usize;
+        for (dx, dy) in [
+            (-1i32, -1i32),
+            (0, -1),
+            (1, -1),
+            (-1, 0),
+            (1, 0),
+            (-1, 1),
+            (0, 1),
+            (1, 1),
+        ] {
+            let (qx, qy) = (x as i32 + dx, y as i32 + dy);
+            if qx < 0 || qy < 0 || qx >= w as i32 || qy >= h as i32 {
+                continue;
+            }
+            let l = snap[qy as usize * w + qx as usize];
+            if !labs[..nl].contains(&l) && nl < 4 {
+                labs[nl] = l;
+                nl += 1;
+            }
+        }
+        if nl < 2 {
+            return None;
+        }
+        let c = rgb[p];
+        let col = |l: u16| -> Option<[f32; 3]> { pal.rgb.get(l as usize).copied() };
+        let oc = col(own)?;
+        let e0 = [c[0] - oc[0], c[1] - oc[1], c[2] - oc[2]];
+        let resid_own = (e0[0] * e0[0] + e0[1] * e0[1] + e0[2] * e0[2]).sqrt();
 
-    for _ in 0..ROUNDS {
-        let snap = labels.to_vec();
-        let decide = |p: usize| -> Option<u16> {
-            let (x, y) = (p % w, p / w);
-            let own = snap[p];
-            let mut labs = [own; 4];
-            let mut nl = 1usize;
-            for (dx, dy) in [
-                (-1i32, -1i32),
-                (0, -1),
-                (1, -1),
-                (-1, 0),
-                (1, 0),
-                (-1, 1),
-                (0, 1),
-                (1, 1),
-            ] {
-                let (qx, qy) = (x as i32 + dx, y as i32 + dy);
-                if qx < 0 || qy < 0 || qx >= w as i32 || qy >= h as i32 {
-                    continue;
-                }
-                let l = snap[qy as usize * w + qx as usize];
-                if !labs[..nl].contains(&l) && nl < 4 {
-                    labs[nl] = l;
-                    nl += 1;
-                }
+        let mut cols: Vec<[f32; 3]> = Vec::with_capacity(5);
+        let mut keep: Vec<Option<u16>> = Vec::with_capacity(5);
+        for &l in &labs[..nl] {
+            if let Some(cc) = col(l) {
+                cols.push(cc);
+                keep.push(Some(l));
             }
-            if nl < 2 {
-                return None;
-            }
-            let c = rgb[p];
-            let col = |l: u16| -> Option<[f32; 3]> { pal.rgb.get(l as usize).copied() };
-            let oc = col(own)?;
-            let e0 = [c[0] - oc[0], c[1] - oc[1], c[2] - oc[2]];
-            let resid_own = (e0[0] * e0[0] + e0[1] * e0[1] + e0[2] * e0[2]).sqrt();
-
-            let mut cols: Vec<[f32; 3]> = Vec::with_capacity(5);
-            let mut keep: Vec<Option<u16>> = Vec::with_capacity(5);
-            for &l in &labs[..nl] {
-                if let Some(cc) = col(l) {
-                    cols.push(cc);
-                    keep.push(Some(l));
+        }
+        if alpha[p] < 0.99 && !cols.contains(&BACKDROP) {
+            cols.push(BACKDROP);
+            keep.push(None);
+        }
+        let (r, who) = mixture(c, &cols)?;
+        let target = match keep[who] {
+            Some(l) => l,
+            None => {
+                let real = &cols[..cols.len() - 1];
+                match mixture(c, real) {
+                    Some((_, w2)) => keep[w2]
+                        .expect("only the backdrop entry is None, and it is last, outside `real`"),
+                    None => return None,
                 }
-            }
-            if alpha[p] < 0.99 && !cols.contains(&BACKDROP) {
-                cols.push(BACKDROP);
-                keep.push(None);
-            }
-            let (r, who) = mixture(c, &cols)?;
-            let target = match keep[who] {
-                Some(l) => l,
-                None => {
-                    let real = &cols[..cols.len() - 1];
-                    match mixture(c, real) {
-                        Some((_, w2)) => keep[w2].expect(
-                            "only the backdrop entry is None, and it is last, outside `real`",
-                        ),
-                        None => return None,
-                    }
-                }
-            };
-            if target != own && r <= tol && r < 0.5 * resid_own {
-                Some(target)
-            } else {
-                None
             }
         };
-        use rayon::prelude::*;
-        let decided: Vec<Option<u16>> = (0..n).into_par_iter().map(decide).collect();
-        let mut moved = 0usize;
-        for (p, d) in decided.into_iter().enumerate() {
-            if let Some(t) = d {
-                labels[p] = t;
-                moved += 1;
-            }
+        if target != own && r <= tol && r < 0.5 * resid_own {
+            Some(target)
+        } else {
+            None
         }
-        moved_total += moved;
-        if moved == 0 {
-            break;
-        }
-    }
-    moved_total
+    };
+    relabel_rounds(labels, w, h, ROUNDS, decide)
 }
 
 /// Absorb connected components smaller than `min_size` into their largest neighbour.
 ///
 /// "Largest" means the neighbouring label sharing the most pixel edges with the component
 /// (ties to the lower label), not the biggest region. Components are 4-connected and are
-/// found once, before any is absorbed; each speckle's neighbours are then read from the
-/// labels as they are at that moment, so a speckle absorbed earlier counts under its new
-/// label. A component with no neighbour at all (the whole image one label) is left
-/// alone. `min_size <= 1` is a no-op.
+/// found once, before any is absorbed ([`Components`]: runs and union-find, with member
+/// lists for the small ones only); each speckle's neighbours are then read from the labels
+/// as they are at that moment, so a speckle absorbed earlier counts under its new label. A
+/// component with no neighbour at all (the whole image one label) is left alone.
+/// `min_size <= 1` is a no-op.
 pub fn despeckle(labels: &mut [u16], w: usize, h: usize, min_size: usize) {
     if min_size <= 1 {
         return;
     }
-    let (comp, members) = label_components(labels, w, h);
-
-    for (id, group) in members.iter().enumerate() {
-        if group.len() >= min_size {
+    let comps = Components::of(labels, w, h);
+    let small = comps.members(|c| (comps.size[c] as usize) < min_size);
+    for id in 0..comps.len() {
+        let group = small.of(id);
+        if group.is_empty() {
             continue;
         }
-        let mut tally: std::collections::HashMap<u16, usize> = std::collections::HashMap::new();
-        for &p in group {
-            let (x, y) = (p % w, p / w);
-            for (nx, ny) in [
-                (x as isize - 1, y as isize),
-                (x as isize + 1, y as isize),
-                (x as isize, y as isize - 1),
-                (x as isize, y as isize + 1),
-            ] {
-                if nx < 0 || ny < 0 || nx >= w as isize || ny >= h as isize {
-                    continue;
-                }
-                let q = ny as usize * w + nx as usize;
-                if comp[q] != id as u32 {
-                    *tally.entry(labels[q]).or_insert(0) += 1;
-                }
-            }
-        }
-        if let Some((&best, _)) = tally
-            .iter()
-            .max_by_key(|(&lab, &c)| (c, std::cmp::Reverse(lab)))
-        {
+        if let Some(best) = commonest_neighbour(group, id as u32, &comps.comp, labels, w, h) {
             for &p in group {
                 labels[p] = best;
             }
         }
     }
+}
+
+/// The label sharing the most pixel edges with component `id` (pixels `group`), read from
+/// `labels` as they are now; ties to the lower label. `None` when it touches nothing.
+fn commonest_neighbour(
+    group: &[usize],
+    id: u32,
+    comp: &[u32],
+    labels: &[u16],
+    w: usize,
+    h: usize,
+) -> Option<u16> {
+    let mut tally: Vec<(u16, usize)> = Vec::new();
+    for &p in group {
+        let (x, y) = (p % w, p / w);
+        for q in [
+            (x > 0).then(|| p - 1),
+            (x + 1 < w).then(|| p + 1),
+            (y > 0).then(|| p - w),
+            (y + 1 < h).then(|| p + w),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if comp[q] != id {
+                let l = labels[q];
+                match tally.iter_mut().find(|e| e.0 == l) {
+                    Some(e) => e.1 += 1,
+                    None => tally.push((l, 1)),
+                }
+            }
+        }
+    }
+    tally
+        .iter()
+        .max_by_key(|&&(lab, c)| (c, std::cmp::Reverse(lab)))
+        .map(|&(lab, _)| lab)
 }
 
 /// Diagnostic: write the label image as a binary PPM, each pixel its palette colour.
@@ -832,6 +950,9 @@ pub fn dump_labels(path: &std::ffi::OsStr, labels: &[u16], pal: &Palette, w: usi
     }
     let _ = std::fs::write(path, out);
 }
+
+#[cfg(test)]
+mod reference_tests;
 
 #[cfg(test)]
 mod tests {

@@ -266,6 +266,11 @@ pub fn build_target() -> &'static str {
 }
 
 /// The pipeline and the output options, on a raster already decoded and capped.
+///
+/// `w` and `h` are the input's size before any cap, which the SVG is written at and
+/// [`Traced`] reports; `img` may be smaller. The trace is `inkvec_cli`'s, followed by its
+/// output options (background knock-out, minify or the metadata header, margin) exactly as
+/// the command line applies them.
 fn run(img: inkvec_trace::Rgba, args: &inkvec_cli::Args, w: u32, h: u32) -> Result<Traced, Error> {
     let t = inkvec_cli::trace_image_sized(img, args, Some((w as usize, h as usize)))
         .map_err(|e| Error::Internal(e.to_string()))?;

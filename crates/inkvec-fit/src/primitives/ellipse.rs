@@ -211,7 +211,10 @@ pub fn fit_ellipse_algebraic(pts: &[Point], sigma: &[f64]) -> Option<EllipseFit>
 /// reason of cost, the passes below reuse each point's weight and lifted row, and the
 /// 5×5 eigen solve runs on stack arrays (`solver::gen_eigen_5`): the arithmetic and its
 /// order are those of the original, so the fit is bit-identical.
-pub(crate) fn taubin_ellipse(pts: &[Point], sigma: &[f64]) -> Option<EllipseFit> {
+///
+/// Public for the fast fitter's whole-ring test (`inkvec_trace::fast`), which reads only
+/// the geometry too and then seeds [`fit_ellipse_seeded`] with it.
+pub fn taubin_ellipse(pts: &[Point], sigma: &[f64]) -> Option<EllipseFit> {
     taubin_ellipse_with_residual(pts, sigma).map(|(e, _)| e)
 }
 
@@ -335,10 +338,31 @@ pub(crate) fn fit_ellipse_from(
     if pts.len() < 6 {
         return None;
     }
-    let mut starts: Vec<EllipseFit> = Vec::new();
     // Levenberg–Marquardt reads only the start's geometry, so the algebraic fit's own
     // orthogonal χ² is not computed (see `taubin_ellipse`).
-    if let Some(e) = taubin_ellipse(pts, sigma) {
+    fit_ellipse_seeded(pts, sigma, taubin_ellipse(pts, sigma), circle)
+}
+
+/// [`fit_ellipse`] with both of its seeds supplied by a caller that already has them:
+/// `algebraic` is [`taubin_ellipse`]`(pts, sigma)` and `circle` is
+/// [`fit_circle`]`(pts, sigma)`. Levenberg–Marquardt runs from the algebraic start, then
+/// from the four near-circles about `circle`, and the lowest χ² wins (ties to the earlier
+/// start), exactly as [`fit_ellipse`] does, so given those two values the result is
+/// bit-identical to it. Either seed may be `None`, which drops its starts: the fast
+/// fitter's whole-ring test (`inkvec_trace::fast`) reuses the fits it made while deciding
+/// whether a ring is round at all, instead of repeating them. `None` for fewer than six
+/// points or when every start fails.
+pub fn fit_ellipse_seeded(
+    pts: &[Point],
+    sigma: &[f64],
+    algebraic: Option<EllipseFit>,
+    circle: Option<super::CircleFit>,
+) -> Option<EllipseFit> {
+    if pts.len() < 6 {
+        return None;
+    }
+    let mut starts: Vec<EllipseFit> = Vec::new();
+    if let Some(e) = algebraic {
         starts.push(e);
     }
     if let Some(cf) = circle {

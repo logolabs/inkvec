@@ -634,7 +634,8 @@ fn scaled(cfg: &FitConfig, scale: f64) -> FitConfig {
 /// structural baseline asks for them; `Fits::polys` and `Fits::lambda_scales` are then
 /// empty. Building them was 0.47 ms of the fit stage at 2048 px, plus the content scale's
 /// two raster passes under `--content-units`, which Fast ignores. The fitted paths do not
-/// depend on either, so the output is unchanged.
+/// depend on either, so the output is unchanged. Not from the literature: this only skips
+/// work nothing in Fast reads.
 fn fit_boundaries(
     img: &inkvec_trace::Rgba,
     args: &Args,

@@ -11,36 +11,51 @@
 //! sides first, then the smallest sum of squared distances, read in O(1) from prefix sums.
 //!
 //! In the field's terms this is the min-# problem of polygonal approximation: the fewest
-//! segments within a tolerance of every point, stated by Imai, H. & Iri, M. (1986),
-//! "Computational-geometric methods for polygonal approximations of a curve", *Computer
-//! Vision, Graphics, and Image Processing* 36:31–41,
-//! doi:10.1016/S0734-189X(86)80027-5, as a shortest path over the admissible sides, and
-//! solved in O(n²) by Chan, W. S. & Chin, F. (1996), "Approximation of polygonal curves
-//! with minimum number of line segments or minimum error", *IJCGA* 6:59–77,
-//! doi:10.1142/S0218195996000058. The spans here are capped at [`MAX_SPAN`] points, so
-//! the program is O(n · MAX_SPAN). The cone test is the cone-intersection idea of the
-//! greedy scan-along fitters -- Williams, C. M. (1978), "An efficient algorithm for the
-//! piecewise linear approximation of planar curves", *CGIP* 8:286–293; Sklansky, J. &
-//! Gonzalez, V. (1980), "Fast polygonal approximation of digitized curves", *Pattern
-//! Recognition* 12:327–331, doi:10.1016/0031-3203(80)90031-X -- used here only to decide
-//! which sides are admissible. The greedy fitters themselves are not used: they are
-//! faster but not min-#, so the polygon, and the drawing, would change. Neither is
-//! Agarwal, P. K. & Varadarajan, K. R. (2000), "Efficient algorithms for approximating
-//! polygonal chains", *Discrete Comput. Geom.* 23:273–291, doi:10.1007/PL00009500, whose
-//! subquadratic bound is for a different error metric.
+//! segments within a tolerance of every point.
+//!
+//! * Method from: Selinger, P. (2003), "Potrace: a polygon-based tracing algorithm",
+//!   <https://potrace.sourceforge.net/potrace.pdf>, section 2.2 -- the optimal polygon as a
+//!   shortest path, fewest sides then least squared distance, with capped spans.
+//! * See also: Imai, H. & Iri, M. (1986), "Computational-geometric methods for polygonal
+//!   approximations of a curve", *Computer Vision, Graphics, and Image Processing*
+//!   36:31–41, doi:10.1016/S0734-189X(86)80027-5, who state min-# as a shortest path over
+//!   the admissible sides; and Chan, W. S. & Chin, F. (1996), "Approximation of polygonal
+//!   curves with minimum number of line segments or minimum error", *IJCGA* 6:59–77,
+//!   doi:10.1142/S0218195996000058, who solve it in O(n²). The spans here are capped at
+//!   [`MAX_SPAN`] points, so the program is O(n · MAX_SPAN).
+//! * Inspired by: the cone-intersection test of the greedy scan-along fitters -- Williams,
+//!   C. M. (1978), "An efficient algorithm for the piecewise linear approximation of
+//!   planar curves", *CGIP* 8:286–293; Sklansky, J. & Gonzalez, V. (1980), "Fast polygonal
+//!   approximation of digitized curves", *Pattern Recognition* 12:327–331,
+//!   doi:10.1016/0031-3203(80)90031-X. Here it only decides which sides are admissible.
+//!   The greedy fitters themselves are not used: they are faster but not min-#, so the
+//!   polygon, and the drawing, would change. Nor is Agarwal, P. K. & Varadarajan, K. R.
+//!   (2000), "Efficient algorithms for approximating polygonal chains", *Discrete Comput.
+//!   Geom.* 23:273–291, doi:10.1007/PL00009500, whose subquadratic bound is for a
+//!   different error metric; nor an approximate multiresolution program, which the
+//!   Quality fitter's research already refuted for changing the output.
 //!
 //! # The passes, in order
 //!
 //! 1. Prefix sums of the points' coordinates and their products ([`Sums`]), and the
 //!    lattice runs, the stretches of equal steps ([`lattice_runs`]); one pass each.
-//! 2. For each anchor `i` in index order, unless the dynamic program has fathomed it (see
-//!    [`open`]): scan `j = i+1, i+2, …` while the cone of directions from `p_i` that pass
-//!    within `tol` of every point seen is not empty, at most [`MAX_SPAN`] points on.
-//!    Every `j` whose direction lies in the cone is an admissible side `i → j`, and
-//!    relaxes `best[j]` ([`Relax::admit`]). Where the anchor's next points are one
-//!    lattice run, the scan jumps to the run's end in closed form, offering the same
-//!    sides in the same order.
-//! 3. The polygon is read back from the last point along the winning predecessors.
+//! 2. A boundary of [`PARALLEL_MIN`] points or more first scans every anchor's
+//!    admissible sides on all cores ([`admitted_sides`]); the table does not enter the
+//!    scan, only the relaxation below.
+//! 3. For each anchor `i` in index order, unless the dynamic program has fathomed it (see
+//!    [`open`]): scan `j = i+1, i+2, …` ([`scan_anchor`]) while the cone of directions
+//!    from `p_i` that pass within `tol` of every point seen is not empty, at most
+//!    [`MAX_SPAN`] points on -- or replay the anchor's sides from step 2. Every `j` whose
+//!    direction lies in the cone is an admissible side `i → j`, and relaxes `best[j]`
+//!    ([`Relax::admit`]). Where the anchor's next points are one lattice run, the scan
+//!    jumps to the run's end in closed form, offering the same sides in the same order.
+//! 4. The polygon is read back from the last point along the winning predecessors.
+//!
+//! Every speed-up in steps 1–3 is exact: the vertex lists are bit for bit those of the
+//! plain program, which the tests keep as `tests::open_ref` and compare against on
+//! random, degenerate and lattice runs, at any thread count. Measured on the phase-1
+//! replay (11,021 dumped edges, single thread), they take the polygon stage from 318 ms
+//! to 104 ms on the 246-icon screen set and from 467 ms to 201 ms on the 2048 px set.
 //!
 //! A closed ring ([`closed`]) is cut at its sharpest point and solved as an open run from
 //! there back to it.
@@ -248,6 +263,11 @@ struct Table {
 /// polygon. A zero-length side is never admissible, so a run ending in points that all
 /// coincide with a vertex could leave the last point unreachable; the fallback then makes
 /// every point a vertex rather than fail.
+///
+/// Cost: O(n) for the sums and runs, then at most MAX_SPAN cone steps per unfathomed
+/// anchor, O(1) each; the remainder of a lattice run costs O(1) per point beyond offering
+/// it, and a side is priced (O(1), [`Sums::sq_dist`]) only when its count can still win.
+/// Memory O(n), plus 24 bytes per point on the parallel path.
 ///
 /// # Work the table can never use
 ///
@@ -462,12 +482,15 @@ impl Sides for Collect {
         true
     }
 
-    /// Set the side's bit (`b / 64` and `b % 64` of a constant power of two are a shift
-    /// and a mask).
+    /// Set the side's bit: word `b >> 6`, bit `b & 63`, for the offset `b = j − i − 1`
+    /// (below [`MAX_SPAN`], so the word index is at most 2). Written as a shift and a
+    /// mask rather than `/ 64` and `% 64`, which compile to the same, so that no
+    /// remainder appears in a hot loop: wazero's arm64 compiler miscompiled `i32.rem_u` in
+    /// one (see the Go binding's build notes).
     #[inline(always)]
     fn admit(&mut self, j: usize) {
         let b = j - self.i - 1;
-        self.set.0[b / 64] |= 1 << (b % 64);
+        self.set.0[b >> 6] |= 1u64 << (b & 63);
     }
 }
 

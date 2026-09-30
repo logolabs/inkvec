@@ -39,11 +39,14 @@
 //! 3. **Ramps** -- `bands::merge_ramps` (opaque images with gradients on).
 //! 4. **Planar map and sub-pixel refinement** -- shared with quality mode, in
 //!    `crate::finish_color_trace_alpha`.
-//! 5. **Fit**, per edge of the map ([`fit_edges`] → [`fit_edge`]):
-//!    a closed edge that is a circle or ellipse becomes one (`prims::primitive`); every
-//!    other edge goes through [`fit_points`]: `smooth::denoise` → `polygon::open` /
-//!    `polygon::closed` → `smooth::adjust_vertices` → `smooth::pieces` →
-//!    `curve::optimise` → `curve::to_segments`.
+//! 5. **Fit**, per edge of the map, in parallel ([`fit_edges`] → [`fit_edge`]):
+//!    the image frame, when one face runs round the whole border, is written as the image
+//!    rectangle (`frame_rectangle`); a closed edge that is a circle or ellipse becomes one
+//!    (`prims::primitive`, on the ring denoised once); every other edge goes through
+//!    [`fit_points`]: `smooth::denoise` → `polygon::open` / `polygon::closed` (a
+//!    boundary of 2048 points or more scans its anchors in parallel) →
+//!    `smooth::adjust_vertices` → `smooth::pieces` → `curve::optimise` →
+//!    `curve::to_segments`.
 //!
 //! Everything after the fit -- fills, seams, the emitter, minify -- is shared with quality
 //! mode.

@@ -26,6 +26,74 @@
 //! source opacity when transparency is traced natively. Out: a [`Palette`] (sRGB, OKLab,
 //! opacity and pixel share per ink) and one ink index per pixel. Called once per trace from
 //! [`super::front`].
+//!
+//! # In the field's terms
+//!
+//! * The histogram is a **colour coherence vector** in its local form: per colour bucket,
+//!   the pixels whose 4-cross stays in the bucket (Pass, Zabih & Miller 1996 count coherence
+//!   by connected-component size instead).
+//! * Founding inks is **leader clustering** (Hartigan 1975) over weighted bins taken in
+//!   popularity order, working on distinct colours with counts as Celebi (2011) does.
+//! * The per-bin nearest-ink table is an **inverse colour map** (Thomas 1991) restricted to
+//!   occupied cells, and labelling sure pixels through it is **histogram backprojection**
+//!   (Swain & Ballard 1991).
+//! * The parallel histogram is a **privatised generalised histogram** (Podlozhnyuk 2007;
+//!   Henriksen et al. 2020), computed on **runs** (Breuel 2007).
+//!
+//! Full citations sit on the functions that use each method.
+//!
+//! # Data layout
+//!
+//! * `rgb` (`[f32; 3]` per pixel) and `alpha` (`f32` per pixel, native path only) are read
+//!   in place, row-major, `p = y · w + x`; a pixel's four-vector is [`pixel`].
+//! * `keys`: one `u16` bin key per pixel ([`Grid::key`]), row-major.
+//! * [`Bins`]: statistics per *occupied* bin, reached from a key through a 65 536-entry slot
+//!   table (a sparse set); B, the number of occupied bins, is 16 at the median 128 px icon
+//!   and at most 610 on the 2048 px set.
+//! * A **run** is a maximal horizontal stretch of one row with one key (or, while keying, one
+//!   colour). Runs are found on the fly and never stored. On the 2048 px set 99.56 % of
+//!   pixels continue their left neighbour's run (median), 92 % on the 128 px screen set.
+//! * `lut`: per key, the bin's nearest ink and whether the bin *is* that ink ("sure").
+//!
+//! # The passes
+//!
+//! 1. **Keys and histogram** ([`keys_and_histogram`]): one pass over row bands, in parallel
+//!    on a large image. Each band keys its rows once per colour run ([`key_rows`]), then
+//!    walks key runs counting pixels, paired and flat pixels and their f64 colour sums
+//!    ([`histogram_rows`]); band histograms are merged. Merging is exact because 8-bit
+//!    values make every such sum exact ([`in_exact_set`]); anything else is counted
+//!    serially in raster order.
+//! 2. **Inks** ([`found_inks`], then [`thin_inks`]) from the O(B) bin table, then opacity
+//!    snapping. Microscopic: at most 36 candidates and 36 inks measured.
+//! 3. **Lookup table**: each occupied bin's nearest ink, once.
+//! 4. **Labels** ([`label_rows`]): sure pixels straight from the table, the rest (0.29 % at
+//!    2048 px, 4.4 % at 128 px) through the neighbourhood rule ([`Blends::blend_label`]);
+//!    ink shares counted per label run ([`ink_shares`]).
+//!
+//! Below [`PARALLEL_MIN_PIXELS`] everything runs on the calling thread.
+//!
+//! # Exactness
+//!
+//! This module was rewritten for speed with its output held fixed: every ink to the bit
+//! and every label identical to the implementation shipped at 55ee4e0, which the tests keep
+//! as an oracle (`palette/reference.rs`) and compare on degenerate, 8-bit, native-alpha
+//! and resampled images. Each function that replaced an old one says in its comment why its
+//! result is the same. Measured at 2048 px before the rewrite: 42.6 ms, 99 % of it in the
+//! four-channel copy (6.9), the keys (4.3), the serial histogram (17.8), labelling (3.3) and
+//! an unread running share (9.8); the decisions themselves cost 0.16 ms.
+//!
+//! # Considered and not used
+//!
+//! * Accelerated nearest-ink search (Elkan's and Hamerly's triangle-inequality k-means
+//!   bounds): the lookup table needs at most 11 590 distances on any measured image, 0.05 ms.
+//! * A distance transform (Rosenfeld & Pfaltz 1966) for a blend pixel's nearest sure
+//!   neighbours: the first ring already holds one for every blend pixel of the median image.
+//! * Memoising blend labels by (colour, neighbour inks): exact, and 0.66 % of blend pixels
+//!   are distinct at 2048 px, but once sure pixels are labelled inline the blend work is too
+//!   small to repay a hash table.
+//! * VTracer's clustering (visioncortex `color_clusters`, <https://github.com/visioncortex/vtracer>):
+//!   merges same-colour neighbours into clusters with running sums and has no global
+//!   palette; adopting it would change the output, and this rewrite had to keep it.
 
 use crate::color::{rgb_to_oklab, Palette};
 use crate::native::{over_black, snap_alpha, Ink2, OPAQUE};
@@ -934,19 +1002,26 @@ const PARALLEL_MIN_PIXELS: usize = 1 << 16;
 /// opacity per pixel and `rgb` the image over white: inks then carry an opacity, and the
 /// clear ground is an ink of its own.
 ///
-/// Steps: bin every pixel ([`Grid::key`], [`histogram`]); found inks from flat bins
-/// ([`found_inks`]) and add stroke inks with no flat pixel ([`thin_inks`]); snap each
-/// ink's opacity ([`snap_alpha`]); give every occupied bin its nearest ink once, marking it
-/// "is that ink" when within `merge_distance` (OKLab); then label each pixel from that table
-/// ([`label_rows`], [`Blends::blend_label`]). With no flat bin anywhere (pure noise, or a tiny image) the palette
-/// is one ink, the mean colour of the image.
+/// Steps (see the module documentation for the layout): bin every pixel and count the bins
+/// ([`keys_and_histogram`]); found inks from flat bins ([`found_inks`]) and add stroke inks
+/// with no flat pixel ([`thin_inks`]); snap each ink's opacity ([`snap_alpha`]); give every
+/// occupied bin its nearest ink once, marking it "is that ink" when within
+/// `merge_distance` (OKLab); then label each pixel from that table ([`label_rows`],
+/// [`Blends::blend_label`]). With no flat bin anywhere (pure noise, or a tiny image) the
+/// palette is one ink, the mean colour of the image.
 ///
 /// Outputs: the [`Palette`] with `rgb` (sRGB 0..1), `colors` (OKLab of `rgb`), `alpha`
 /// (0..1) and `weight` (each ink's share of the labels, summing to 1), and `w · h` labels,
 /// every one a valid ink index. `max_colors` caps the palette (flat inks and thin inks
-/// together); [`found_inks`] clamps it to `1..=65535` so a label fits a `u16`. Labelling
-/// runs row by row in parallel but reads only immutable tables, so the result does not
-/// depend on the thread count.
+/// together); [`found_inks`] clamps it to `1..=65535` so a label fits a `u16`. An empty
+/// image gives one ink (the mean of nothing, zeros) and no labels.
+///
+/// From [`PARALLEL_MIN_PIXELS`] on, the keys, the histogram and the labels run in
+/// parallel row bands. None of it depends on the thread count: keys and labels are pure
+/// functions of the pixels and immutable tables, counts are integers, and the histogram's
+/// f64 sums are merged across bands only when they are exact (see [`keys_and_histogram`]).
+/// Time Θ(n) with small constants plus O(B · K) for the table; memory: the keys and labels
+/// (2 bytes per pixel each) and O(B) per band.
 pub(crate) fn palette_and_labels(
     rgb: &[[f32; 3]],
     alpha: Option<&[f32]>,
@@ -997,11 +1072,14 @@ pub(crate) fn palette_and_labels(
     }
     let points: Vec<Ink2> = inks.iter().map(|&c| ink2(c)).collect();
 
-    // Each occupied bin, once: its nearest ink, and whether the bin *is* that ink -- the
-    // inverse colour map, restricted to occupied cells and keyed by each cell's mean rather
-    // than its centre (Thomas, "Efficient Inverse Color Map Computation", Graphics Gems II,
-    // 1991). `lut` stays indexed by key, since every pixel looks itself up by key, but only
-    // occupied entries are written; the all-zero initial value is a zeroed allocation.
+    // Each occupied bin, once: its nearest ink, and whether the bin *is* that ink. O(B · K).
+    //
+    // Method from: S. W. Thomas, "Efficient Inverse Color Map Computation", Graphics Gems II,
+    // pp. 116–125, 1991 -- the inverse colour map, "the colormap entry that is closest to the
+    // (quantized) color" per grid cell. Adapted: only occupied cells are filled, each keyed by
+    // its pixels' mean rather than the cell centre, with a flag for "is that ink". `lut` stays
+    // indexed by key, since every pixel looks itself up by key, but only occupied entries are
+    // written; the all-zero initial value is a zeroed allocation, and no pixel reads the rest.
     let mut lut = vec![(0u16, false); BINS];
     let mut bin_point = Vec::with_capacity(bins.len());
     for id in 0..bins.len() {

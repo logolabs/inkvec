@@ -63,10 +63,13 @@ fn flat_fill(pal: &Palette, ink: usize) -> gradient::FillFit {
 /// Every stage reads the image composited over white (sRGB 0..1); in native mode the
 /// source opacity rides along as a fourth channel. The stages, each timed by the
 /// stopwatch under its progress name: `palette` ([`super::palette::palette_and_labels`],
-/// then `color::split_alpha_inks` for `--cutout`), `slivers` ([`super::faces::absorb_slivers`],
-/// [`super::faces::absorb_rims`], [`super::faces::merge_same_inks`]), `despeckle`, `split`
-/// ([`super::faces::faces`]), and `ramps` ([`super::bands::merge_ramps`], opaque images with
-/// gradients on only). The faces, their fills and inks then go to
+/// then `color::split_alpha_inks` for `--cutout`); `slivers` (the labels read into row runs,
+/// [`super::faces::RunLabels::new`], then [`super::faces::RunLabels::absorb_slivers`],
+/// [`super::faces::RunLabels::absorb_rims`] and [`super::faces::RunLabels::merge_same_inks`]);
+/// `despeckle` ([`super::faces::RunLabels::despeckle`]); `split`
+/// ([`super::faces::RunLabels::write_faces`], the face ids written over the label buffer,
+/// the only per-pixel write of the clean-up); and `ramps` ([`super::bands::merge_ramps`],
+/// opaque images with gradients on only). The faces, their fills and inks then go to
 /// [`crate::finish_color_trace_alpha`], which builds the planar map and refines it; the
 /// caller (`inkvec-cli`'s `fast::fit`) then fits the map's edges with [`super::fit_edges`].
 fn trace(
@@ -92,33 +95,37 @@ fn trace(
     }
     sw.mark("palette");
     inkvec_core::progress::begin("slivers");
+    // The clean-up works on the label image's row runs (`faces::RunLabels`): the labels
+    // are read here once, and the pixels are written once, with the face ids, at the end.
+    let mut runs = super::faces::RunLabels::new(&labels, w, h);
     {
-        let px: Vec<[f32; 4]> = (0..w * h)
-            .map(|p| {
-                let c = rgb[p];
-                [c[0], c[1], c[2], native.map_or(1.0, |a| a[p])]
-            })
-            .collect();
+        // Each pixel's colour and opacity, read in place where a pass needs it.
+        let px = super::faces::Pixels {
+            rgb: &rgb,
+            alpha: native,
+        };
         let inks: Vec<[f32; 4]> = (0..pal.len())
             .map(|i| {
                 let c = pal.rgb[i];
                 [c[0], c[1], c[2], pal.alpha.get(i).copied().unwrap_or(1.0)]
             })
             .collect();
-        super::faces::absorb_slivers(&mut labels, &px, &inks, w, h);
+        runs.absorb_slivers(px, &inks);
         // Every face costs an outline, and every place a face touches a boundary is a
         // junction the fitter has to stop at. The rims of small text and the second black
         // of large type were most of both on a textured masthead: 4,068 faces and 47,548
         // coordinates, where these two passes leave 8,798 at a lower dE00.
-        super::faces::absorb_rims(&mut labels, &px, &inks, w, h);
-        super::faces::merge_same_inks(&mut labels, &inks, w, h);
+        runs.absorb_rims(px, &inks);
+        runs.merge_same_inks(&inks);
     }
     sw.mark("slivers");
     inkvec_core::progress::begin("despeckle");
-    super::faces::despeckle(&mut labels, w, h, speckle_floor(opts.min_region, w, h));
+    runs.despeckle(speckle_floor(opts.min_region, w, h));
     sw.mark("despeckle");
     inkvec_core::progress::begin("split");
-    let (mut labels, mut face_color) = super::faces::faces(&labels, w, h);
+    // The face ids overwrite the palette's labels in place: one write per pixel.
+    let mut face_color = runs.write_faces(&mut labels);
+    drop(runs);
     sw.mark("split");
     inkvec_core::progress::begin("ramps");
     let mut face_fill: Vec<gradient::FillFit> =

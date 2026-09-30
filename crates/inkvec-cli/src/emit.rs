@@ -54,9 +54,7 @@ use crate::alpha::{unmatte, AlphaRamp};
 use crate::faces::{FaceRings, Layers, Ring};
 use crate::harmonize;
 use crate::naming::colour_name;
-use crate::pathdata::{fmt_path, fmt_ring, fmt_ring_with};
-// TEMP: re-exported until post.rs imports it from pathdata.
-pub(crate) use crate::pathdata::emit_decimals;
+use crate::pathdata::{emit_decimals, fmt_path, fmt_ring, fmt_ring_with};
 use crate::primitive::{annulus_stroke, primitive_d, primitive_element, stroke_element};
 use crate::rings::{self, point_in_ring, ring_area, Nesting};
 use crate::seams;

@@ -35,6 +35,10 @@
 //! path. Only pure black is written -- no grey, no pale fringe -- so an anti-aliased edge is
 //! the renderer's coverage of a black shape: over transparency its colour channels are black
 //! and only its alpha varies.
+//!
+//! Called from [`crate::pipeline`] after the colour fit, in place of the colour emitter:
+//! [`classify`] reads the finished trace and returns each face's tone, [`emit`] writes the
+//! document and [`report`] its report line. Colour distances are Euclidean in OKLab.
 
 use inkvec_core::Point;
 use inkvec_fit::{primitives::PrimitiveFit, FittedPath};
@@ -110,6 +114,9 @@ fn mean(stops: &[[f32; 3]]) -> Oklab {
 }
 
 /// Distance from `p` to the segment `a`-`b` in OKLab.
+///
+/// The closest point is `a + t·(b - a)` with `t = ((p - a)·(b - a)) / |b - a|²` clamped to
+/// `0..1` (the projection onto the line, kept on the segment); `t = 0` when `a = b`.
 fn to_segment(p: Oklab, a: Oklab, b: Oklab) -> f32 {
     let d = [b.l - a.l, b.a - a.a, b.b - a.b];
     let q = [p.l - a.l, p.a - a.a, p.b - a.b];
@@ -289,13 +296,19 @@ fn face_stops(f: usize, fills: &[FillFit], face_color: &[usize], pal: &Palette) 
 
 /// The finished colour trace, as [`classify`] reads it.
 pub(crate) struct Trace<'a> {
+    /// The planar map: faces and the shared edges between them.
     pub map: &'a PlanarMap,
+    /// The rings of each face.
     pub order: &'a [FaceRings],
+    /// The fitted curve of each edge.
     pub fitted: &'a [FittedPath],
     /// Per-pixel face id.
     pub labels: &'a [u16],
+    /// Per face, its fill model.
     pub fills: &'a [FillFit],
+    /// Per face, its palette index.
     pub face_color: &'a [usize],
+    /// The palette.
     pub pal: &'a Palette,
     /// Per face, transparent in the source.
     pub clear: &'a [bool],
@@ -356,6 +369,12 @@ fn sits_on(t: &Trace, length: &[f64], n: usize) -> Vec<Option<usize>> {
 }
 
 /// The tone of every face of a finished colour trace.
+///
+/// Gathers the [`Evidence`] [`decide`] needs: each face's colours, whether it is see-through
+/// (clear, or under [`INK_OPACITY`]), the image-border pixels it covers (from `labels`), its
+/// width `2·area/perimeter` in px (area in pixels, perimeter the summed length of its
+/// edges' measured polylines), its neighbours across each edge, and the face it sits on
+/// ([`sits_on`]).
 pub(crate) fn classify(t: &Trace) -> Ground {
     let (w, h) = (t.map.width, t.map.height);
     let n = t.face_color.len().max(t.fills.len()).max(t.order.len());

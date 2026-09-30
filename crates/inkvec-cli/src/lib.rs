@@ -19,6 +19,24 @@
 //!
 //! The objective is the same at every stage — squared residual against the image plus
 //! `lambda` per parameter written — so a stage only keeps what it can pay for.
+//!
+//! Where things live, driver first:
+//!
+//! * this file: [`cli_main`], [`intake`] (unblock, intake normalisation, `--max-dim`, knob
+//!   pricing) and [`trace_prepared`] (the restorer and SR pre-passes, the alpha matte, then
+//!   one of the three pipelines);
+//! * `args` (the command line), `units` (content units), `alpha` (transparency),
+//!   `pipeline` (the three pipelines), `fast` (fast mode's fit);
+//! * writing: `emit` (colour and bilevel documents), `mono` (`--monochrome`), `harmonize`
+//!   (repeated shapes), `seams` (underlap), `editable` (`--editability`), `uncertainty`
+//!   (`--uncertainty` bands), `post` (output options);
+//! * leaves every stage may use: `faces` (ring types), `rings` (ring geometry and
+//!   repair), `pathdata` (path text), `primitive` (circle, ellipse, rectangle), `naming`
+//!   (element ids), `diag` (standard error).
+//!
+//! Coordinates everywhere below the driver are pixels of the traced raster with pixel
+//! centres at integers, so the canvas spans `-0.5..w-0.5`; colours are sRGB in 0..1 unless
+//! a comment says OKLab.
 
 // As in `inkvec_trace`: the pixel loops here address several parallel arrays by one index,
 // and an enumerate over one of them reads worse than the index does.
@@ -40,6 +58,7 @@ mod post;
 mod primitive;
 mod rings;
 mod seams;
+mod strokes;
 mod uncertainty;
 mod units;
 
@@ -49,12 +68,13 @@ pub use args::{parse_color_groups, Args, TraceMode};
 pub use fast::fast_ignored;
 pub use inkvec_trace::regroup;
 pub use pipeline::Stop;
-use pipeline::{run_bilevel, run_color, run_strokes};
+use pipeline::{run_bilevel, run_color};
 #[cfg(feature = "research-guidance")]
 pub use pipeline::{trace_color_from_labels_guided, trace_color_guided};
 pub use post::post_process;
 use post::retarget;
 pub use std::process::ExitCode;
+use strokes::run_strokes;
 use units::{fit_config, REF_EXTENT};
 
 use inkvec_trace::load_image_capped;
@@ -98,6 +118,31 @@ const INTAKE_SCALE_FLOOR: f64 = 1.5;
 /// the input is. A wrong estimate should cost detail slowly, not all at once.
 const INTAKE_SCALE_CAP: f64 = 8.0;
 
+/// `--intake-scale`: resample an oversampled intake down to one pixel per unit of real
+/// detail.
+///
+/// This is the whole answer to "make the thresholds work at any resolution", and
+/// it is one change rather than a scale factor threaded through every constant.
+/// The thresholds are in pixels and were tuned where one pixel was one unit of
+/// detail; rather than restate each of them in some other unit, put the input back
+/// into the units they were written in.
+///
+/// It has to be the *point spread* that decides, not the image size. A native
+/// render at 1024 resolves genuine detail — it reads a scale of exactly 1.00 and
+/// is not touched, and it already traces in 1.7 s. An upsample, a blur or a
+/// photograph of a screen carries fewer units of detail than it has pixels, and
+/// those extra pixels are not information: they are what shatters the palette into
+/// a thousand regions and what the tracer then spends a minute describing.
+///
+/// Nothing is lost in the output. The SVG keeps its `width` and `height` in the
+/// original units and only its `viewBox` shrinks, so it renders at exactly the
+/// size it always did — and being a vector, at any other size too.
+///
+/// The edge width `s` (`intake_scale`, px per unit of detail) is measured on the image
+/// composited over white. At or above [`INTAKE_SCALE_FLOOR`] the raster is box-filtered
+/// down by `min(s, INTAKE_SCALE_CAP)` (each side rounded, at least 8 px); otherwise, or if
+/// that would not shrink both sides, it is returned untouched. The flag says whether it was
+/// resampled, which later decides that the SVG is retargeted to the arrival size.
 fn normalise_intake(img: inkvec_trace::Rgba, quiet: bool) -> (inkvec_trace::Rgba, bool) {
     let rgb = img.composited([1.0, 1.0, 1.0]);
     let scale = inkvec_trace::coverage::intake_scale(&rgb, img.width, img.height);
@@ -112,12 +157,12 @@ fn normalise_intake(img: inkvec_trace::Rgba, quiet: bool) -> (inkvec_trace::Rgba
     if nw >= img.width || nh >= img.height {
         return (img, false);
     }
-    if !quiet {
-        eprintln!(
+    diag::stage(quiet, || {
+        format!(
             "  intake        {:.2} px per detail unit; tracing at {}x{} and              emitting at {}x{}",
             scale, nw, nh, img.width, img.height
-        );
-    }
+        )
+    });
     let (w, h) = (img.width, img.height);
     let out = inkvec_trace::coverage::downsample_to(&img, nw, nh);
     debug_assert!(out.width < w && out.height < h);
@@ -217,15 +262,15 @@ pub fn intake(
     let mut replicated = false;
     if !args.no_unblock {
         if let Some(k) = pixel_grid(&img) {
-            if !args.quiet {
-                eprintln!(
+            diag::stage(args.quiet, || {
+                format!(
                     "  unblock       {}x{} is a {k}x pixel upscale of {}x{}; tracing the original",
                     img.width,
                     img.height,
                     img.width / k,
                     img.height / k
-                );
-            }
+                )
+            });
             let (nw, nh) = (img.width / k, img.height / k);
             img = inkvec_trace::coverage::downsample_to(&img, nw, nh);
             replicated = true;
@@ -257,16 +302,42 @@ pub fn intake(
             ((img.width as f64) / s).round().max(8.0) as usize,
             ((img.height as f64) / s).round().max(8.0) as usize,
         );
-        if !args.quiet {
-            eprintln!(
+        diag::stage(args.quiet, || {
+            format!(
                 "  max-dim       {}x{} -> {}x{} for tracing; output keeps {}x{}",
                 img.width, img.height, nw, nh, display_w, display_h
-            );
-        }
+            )
+        });
         img = inkvec_trace::coverage::downsample_to(&img, nw, nh);
         normalised = true;
     }
 
+    let args = price_in_raster_units(&img, args);
+
+    Intake {
+        img,
+        args,
+        replicated,
+        normalised,
+        display: (display_w, display_h),
+    }
+}
+
+/// `args` with `--precision`, `--min-area` and lambda priced in this raster's own units:
+/// scaled up when the raster carries the drawing on more pixels than the drawing needs.
+///
+/// Two measurements of `img` decide it (neither in fast mode, which reads none of the
+/// three): the edge width `e` (`intake_scale`, 1.00 for an honest one-pixel boundary) and
+/// the round-trip factor `r` (`oversample_factor`, how far the raster can be downsampled
+/// and put back without loss). Then, with `R` the reference extent ([`REF_EXTENT`]):
+///
+/// * precision `× r` when `e` exceeds the soft-intake threshold, else unchanged;
+/// * min-area `× r²` when the longest side exceeds `R`, else unchanged;
+/// * lambda `× r` when the longest side exceeds `R` and `r > 1`, else unchanged.
+///
+/// On a natively rendered raster `r = 1` and nothing changes. The reasons for each factor,
+/// and the measurements behind them, are in the comments below.
+fn price_in_raster_units(img: &inkvec_trace::Rgba, args: &Args) -> Args {
     // Two of the knobs below are denominated in pixels, and a raster that carries the
     // same drawing at more pixels per unit therefore gets read as if it were a more
     // detailed drawing. `--precision` asks for accuracy in pixels, so at 4x it silently
@@ -353,18 +424,18 @@ pub fn intake(
     } else {
         1.0
     };
-    let args = if oversample > 1.0 || floor_scale > 1.0 || redundancy_lambda > 1.0 {
-        if !args.quiet {
+    if oversample > 1.0 || floor_scale > 1.0 || redundancy_lambda > 1.0 {
+        diag::stage(args.quiet, || {
             if oversample > 1.0 {
-                eprintln!(
+                format!(
                     "  intake        oversampled x{oversample:.0}: scaling precision x{oversample:.0}, min-area x{floor_scale:.0}, lambda x{redundancy_lambda:.0}"
-                );
+                )
             } else {
-                eprintln!(
+                format!(
                     "  intake        {redundancy:.0}x more pixels than detail: scaling min-area x{floor_scale:.0} and lambda x{redundancy_lambda:.0}"
-                );
+                )
             }
-        }
+        });
         let mut a = args.clone();
         a.precision *= oversample;
         a.min_area *= floor_scale;
@@ -372,14 +443,6 @@ pub fn intake(
         a
     } else {
         args.clone()
-    };
-
-    Intake {
-        img,
-        args,
-        replicated,
-        normalised,
-        display: (display_w, display_h),
     }
 }
 
@@ -396,6 +459,14 @@ pub fn trace_prepared(prepared: Intake) -> Result<Traced, Box<dyn std::error::Er
     inkvec_fit::cost::with_cost_model(model, || trace_prepared_priced(prepared))
 }
 
+/// [`trace_prepared`] under the cost model it installed.
+///
+/// In order: the restorer pre-pass ([`restore_prepass`]), soft intake forced on for a
+/// restored image, the SR pre-pass (with `auto` deciding from a probe trace, which is kept
+/// as the result when the input measures clean), the alpha matte ([`alpha_source`]), the
+/// fit configuration, and then one pipeline -- strokes when asked for and the drawing is
+/// line art, else bilevel or colour. The SVG is retargeted to the presentation size
+/// whenever anything resampled the raster.
 fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error::Error>> {
     let Intake {
         mut img,
@@ -591,6 +662,9 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
     })
 }
 
+/// The command line's whole job for one file: check the input and output paths, decode
+/// (capped at `--max-dim` during the decode), resolve `--lossy auto` from the file's first
+/// bytes, trace, and [`finish`].
 fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     // Checked here rather than left to the decoder, which reports a missing file as a decode
     // error carrying the operating system's own wording.
@@ -889,6 +963,9 @@ fn trace_once(img: &inkvec_trace::Rgba, args: &Args) -> Result<String, Stop> {
     }
 }
 
+/// Apply the output options ([`post_process`]), write the SVG to `--output` (default: the
+/// input with an `.svg` extension), and print the stage log unless `--quiet`. This is the
+/// command line's own output, so it prints directly rather than through `diag`.
 fn finish(
     args: &Args,
     svg: String,

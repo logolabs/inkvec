@@ -24,6 +24,16 @@
 //! outline, so no span is split: a line or cubic moves its own points, a span pinned at
 //! both ends bows out instead (see [`bulge`]), and a straight span only gains a vertex
 //! where it is long enough to taper gently.
+//!
+//! Called from the colour emitter ([`crate::emit`]) after a first writing pass has settled
+//! the paint order; it returns replacement geometry for some `(face, edge)` pairs
+//! ([`Overrides`]) and the emitter writes the document again with them
+//! ([`crate::pathdata::fmt_ring_with`]). All geometry is in the traced image's pixels. The
+//! moves are offsets of curves: a line or a cubic's control polygon moved along its
+//! normals, with mitred corners ([`displace_run`]); a circular arc replaced by the
+//! concentric arc ([`move_arc`]); a span whose ends must stay bowed by its sagitta
+//! ([`bulge`]). Every candidate is checked at a few probe parameters ([`PROBES`]) to have
+//! moved outward, and against the two faces' own interiors, before it is accepted.
 
 use std::collections::HashMap;
 
@@ -68,7 +78,9 @@ pub(crate) type Overrides = HashMap<(usize, usize), FittedPath>;
 
 /// What the underlap needs to know about the document.
 pub(crate) struct Faces<'a> {
+    /// The rings of each face.
     pub order: &'a [FaceRings],
+    /// The fitted curve of each edge.
     pub fitted: &'a [FittedPath],
     /// Each ring flattened, indexed like `order`.
     pub pts: &'a [Vec<Vec<Point>>],
@@ -87,23 +99,32 @@ pub(crate) struct Faces<'a> {
     pub contrast: &'a dyn Fn(usize, usize) -> f32,
 }
 
+// Plane-vector helpers on `Point`: sum, difference, scalar multiple, dot product, and the
+// unit vector (`None` for a vector shorter than 1e-9 px, which has no direction).
+
+/// `a + b`.
 fn add(a: Point, b: Point) -> Point {
     Point::new(a.x + b.x, a.y + b.y)
 }
+/// `a - b`.
 fn sub(a: Point, b: Point) -> Point {
     Point::new(a.x - b.x, a.y - b.y)
 }
+/// `s·a`.
 fn scale(a: Point, s: f64) -> Point {
     Point::new(a.x * s, a.y * s)
 }
+/// `a · b`.
 fn dot(a: Point, b: Point) -> f64 {
     a.x * b.x + a.y * b.y
 }
+/// `a / |a|`, or `None` when `|a| <= 1e-9`.
 fn unit(a: Point) -> Option<Point> {
     let l = a.x.hypot(a.y);
     (l > 1e-9).then(|| scale(a, 1.0 / l))
 }
 
+/// Edge `k`'s fitted path as a ring walks it: reversed when `rev`.
 fn oriented(fitted: &[FittedPath], (k, rev): (usize, bool)) -> FittedPath {
     if rev {
         fitted[k].reversed()
@@ -112,6 +133,8 @@ fn oriented(fitted: &[FittedPath], (k, rev): (usize, bool)) -> FittedPath {
     }
 }
 
+/// The signed shoelace area of a closed polygon, px²: `Σ_k (x_k·y_(k+1) - x_(k+1)·y_k) / 2`.
+/// Its sign gives the ring's winding, which fixes which side of each edge is the face's.
 fn signed_area(r: &[Point]) -> f64 {
     let n = r.len();
     (0..n)
@@ -123,14 +146,18 @@ fn signed_area(r: &[Point]) -> f64 {
         * 0.5
 }
 
-/// Derivative of an arc's ellipse with respect to its angle parameter.
+/// Derivative of an arc's ellipse with respect to its angle parameter: for the ellipse
+/// `E(θ) = c + R(φ)·(rx cos θ, ry sin θ)`, `E'(θ) = R(φ)·(-rx sin θ, ry cos θ)`, with
+/// `R(φ)` the rotation by the ellipse's tilt. Not normalised.
 fn arc_deriv(f: &inkvec_fit::curves::ArcFrame, t: f64) -> Point {
     let (sp, cp) = f.phi.sin_cos();
     let (x, y) = (-f.rx * t.sin(), f.ry * t.cos());
     Point::new(cp * x - sp * y, sp * x + cp * y)
 }
 
-/// Unit tangents at the start and the end of a segment that starts at `a`.
+/// Unit tangents at the start and the end of a segment that starts at `a`, in the
+/// direction of travel. A cubic whose control point coincides with its end falls back to
+/// the next control point, then to the chord. `None` for a segment of zero length.
 fn tangents(a: Point, s: &Segment) -> Option<(Point, Point)> {
     match *s {
         Segment::Line(p) => {
@@ -225,6 +252,14 @@ const PROBES: [f64; 7] = [0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875];
 /// everywhere: two opposite end displacements can cancel in the middle of a cubic that
 /// turns far and pull it *into* the lower face -- the brim of `twemoji/1faa3`, one cubic
 /// turning 150 degrees, came out with a hairline of ground along it.
+///
+/// `q` is the cubic's control polygon, `ds`/`de` the moves of its start and end, `delta`
+/// the reach (px) and `normal` maps a unit tangent to the outward unit normal. "Gently
+/// turning" means the end tangents are within 60 degrees (`t0 · t1 >= 0.5`). Moving the
+/// control points by `m0..m3` moves the curve by `Σ b_i(t)·m_i` with the Bernstein weights
+/// `b_i`, and the move is accepted when that has a non-negative outward component at every
+/// probe. The mitred inner points are `delta·(n_a + n_b)/(1 + n_a·n_b)`, the point `delta`
+/// from both adjacent legs (see [`displace_run`]).
 fn move_cubic(
     q: [Point; 4],
     ds: Point,
@@ -354,6 +389,16 @@ fn move_segment(
 /// control points moved together, a circular arc through the same ends with a sagitta `r`
 /// larger or smaller. Neither adds a number to the path. `None` for a line, which cannot bow
 /// without one, or where the bow would not point outward all along.
+///
+/// For the cubic: moving both inner control points by a vector `k` moves the curve by
+/// `(3(1-t)²t + 3(1-t)t²)·k = 3t(1-t)·k`, which is `3/4·k` at the middle, so
+/// `k = 4/3·r·n` (with `n` the outward normal at the middle) moves the middle exactly `r`.
+/// Refused when the curve's own normal turns more than 60 degrees from `n` anywhere.
+///
+/// For a circular arc (not the large-arc branch): the chord `c` stays and the sagitta `s`
+/// (the middle's distance from the chord) becomes `s ± r`; the radius through both ends
+/// with that sagitta is `R = (c²/4 + s²) / (2s)`. Refused when the new sagitta is under
+/// 0.05 px or reaches half the chord, where the short arc would stop being the short arc.
 fn bulge(a: Point, seg: &Segment, r: f64, normal: &dyn Fn(Point) -> Point) -> Option<Segment> {
     match *seg {
         Segment::Line(_) => None,
@@ -458,6 +503,20 @@ fn spans(
 /// Move one run -- consecutive edges of the lower face with one upper neighbour, oriented
 /// as the lower face walks them -- `delta` into the upper face, its two ends pinned. One
 /// path per edge, or `None` when nothing could be moved safely.
+///
+/// `sgn` is the sign of the lower ring's signed area and fixes the outward normal
+/// `n(t) = sgn·(t.y, -t.x)` of a unit tangent `t`; `inside_u` and `inside_v` test a point
+/// against the upper and the lower face. `arcs_move` says whether an arc's ends may move
+/// with the run.
+///
+/// Each span first gets its own reach: the full `delta`, half of it, or nothing, the
+/// largest for which a point that far out plus [`CLEARANCE`] from its middle is still in
+/// the upper face. Each interior vertex then moves along the mitre of the two spans'
+/// normals `n1`, `n2`: the point at distance `a` from both offset lines is
+/// `a·(n1 + n2)/(1 + n1·n2)`, with the denominator floored at 0.5 so a sharp corner moves
+/// at most `2a`; `a` is the smaller of the two spans' reaches, halved or dropped if the
+/// corner would not be hidden. Spans whose ends both stay [`bulge`]; the others move
+/// ([`move_segment`]), and one that cuts into the lower face sinks the whole run.
 fn displace_run(
     paths: &[FittedPath],
     sgn: f64,
@@ -573,6 +632,14 @@ fn displace_run(
 ///
 /// `under(v, u)` says `v` is already painted whole beneath `u` (an ancestor in the stack),
 /// where no seam can form and nothing moves.
+///
+/// For every painted lower face `v` and each ring it draws (of at least 1 px² area), each
+/// edge is paired with the face across it when that face `u` is the edge's only other
+/// owner, may be reached under, is painted later, is not already above `v`'s paint, and
+/// the pair's seam would show ([`FAINT_SEAM`]). Maximal runs of consecutive edges with the
+/// same `u` are moved together by [`displace_run`], trying the full reach and then half,
+/// each first with arcs' ends moving and then with them pinned; the first that succeeds is
+/// kept. `delta <= 0` moves nothing.
 pub(crate) fn underlap(f: &Faces, under: &dyn Fn(usize, usize) -> bool, delta: f64) -> Overrides {
     let mut out = Overrides::new();
     if delta <= 0.0 {

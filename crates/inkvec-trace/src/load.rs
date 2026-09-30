@@ -7,8 +7,9 @@
 //!
 //! # The passes, for a file
 //!
-//! 1. **Read** the header, then the file, with the format named by the file's extension
-//!    ([`load_image_capped`], as `image::open` names it).
+//! 1. **Read** the file into memory once ([`load_image_capped`]); the header and the pixels
+//!    are both decoded from those bytes, with the format named by the file's extension, as
+//!    `image::open` names it.
 //! 2. **Decode** with the `image` crate into whatever layout the file holds (8-bit RGB for
 //!    most opaque PNGs and every JPEG, 8-bit RGBA for most transparent ones).
 //! 3. **Cap**: above `max_dim` on the longer side, box-average the 8-bit buffer down
@@ -222,11 +223,49 @@ fn target_dims(w: u32, h: u32, max_dim: usize) -> Option<(u32, u32)> {
 /// the dominant allocation -- then runs at the capped size rather than at the file's size,
 /// which is what used to blow past the decoder's 512 MiB guard on very large rasters.
 pub fn load_image_capped(path: &Path, max_dim: usize) -> Result<(Rgba, (u32, u32)), TraceError> {
-    let (w, h) = image::ImageReader::open(path)
-        .map_err(|e| TraceError::Decode(e.to_string()))?
-        .into_dimensions()
-        .map_err(|e| TraceError::Decode(e.to_string()))?;
-    let img = image::open(path).map_err(|e| TraceError::Decode(e.to_string()))?;
+    let bytes = std::fs::read(path).map_err(|e| TraceError::Decode(e.to_string()))?;
+    load_file_bytes_capped(path, &bytes, max_dim)
+}
+
+/// [`load_image_capped`] for a file the caller has already read into `bytes`: the same
+/// raster, the same dimensions, the same errors, from one read of the file.
+///
+/// `load_image_capped` used to open the file twice -- once for the header, once to decode
+/// through `image::open` -- and the command line opened it a third time for the first bytes
+/// `--lossy auto` inspects. Reading it once and decoding from memory gives the same pixels:
+/// the decoders are deterministic functions of the bytes, and the reader here is set up as
+/// `image::open` sets up its own, with the format taken from the *file extension* (not
+/// guessed from the content, which `decode_image_capped` does), default limits, and no
+/// decoding hooks registered anywhere in this workspace. A path whose extension names no
+/// format (or has none) is handed to `image::open` itself, so even its error message is the
+/// one it always was.
+///
+/// Not from the literature: plumbing.
+fn load_file_bytes_capped(
+    path: &Path,
+    bytes: &[u8],
+    max_dim: usize,
+) -> Result<(Rgba, (u32, u32)), TraceError> {
+    let err = |e: image::ImageError| TraceError::Decode(e.to_string());
+    let Some(format) = path
+        .extension()
+        .and_then(image::ImageFormat::from_extension)
+    else {
+        // `image::open`'s own path: an unknown or missing extension, and its own error.
+        let (w, h) = image::ImageReader::open(path)
+            .map_err(|e| TraceError::Decode(e.to_string()))?
+            .into_dimensions()
+            .map_err(err)?;
+        let img = image::open(path).map_err(err)?;
+        return Ok((cap_decoded(img, w, h, max_dim), (w, h)));
+    };
+    let reader = || {
+        let mut r = image::ImageReader::new(std::io::Cursor::new(bytes));
+        r.set_format(format);
+        r
+    };
+    let (w, h) = reader().into_dimensions().map_err(err)?;
+    let img = reader().decode().map_err(err)?;
     Ok((cap_decoded(img, w, h, max_dim), (w, h)))
 }
 

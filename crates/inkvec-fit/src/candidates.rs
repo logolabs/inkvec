@@ -35,6 +35,9 @@ use crate::{FitConfig, PARAMS_LINE};
 use inkvec_core::{Point, Vec2};
 use kurbo::common::{factor_quartic_inner, solve_cubic, solve_quadratic};
 
+mod bounded;
+pub(crate) use bounded::{best_cubic_bounded, Abandon, G1Fit};
+
 /// Maximum points a cubic's residual is evaluated on.
 pub const MAX_RESIDUAL_SAMPLES: usize = 32;
 
@@ -632,6 +635,8 @@ impl CubicSamples {
     fn chi2(&self, cb: &Cubic, bound: f64) -> f64 {
         let mut acc = 0.0;
         for m in (0..self.len).step_by(LANES) {
+            #[cfg(test)]
+            count_projections();
             let d2 = cb.dist2_lanes(lanes(&self.pt, m), lanes(&self.t, m));
             for (q, d2) in d2.iter().enumerate().take(self.len - m) {
                 acc += self.weight * d2 / self.s2[m + q];
@@ -642,6 +647,19 @@ impl CubicSamples {
         }
         acc
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Groups of [`LANES`] points this thread has projected, for the tests that check the
+    /// bounds actually skip work.
+    pub(crate) static PROJECTIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Count one projected group of lanes (test builds only).
+#[cfg(test)]
+fn count_projections() {
+    PROJECTIONS.with(|c| c.set(c.get() + 1));
 }
 
 /// Weighted residual of the interior points of `(i, j)` against a cubic.

@@ -580,9 +580,10 @@ struct Solution {
 /// ```
 ///
 /// (`turn` applies at interior vertices; see `scan` for the exact bookkeeping and the
-/// cut-off). The table is filled by `scan::SpanScorer`, in parallel blocks on long
-/// polylines with a result identical to the sequential fill, and the chosen vertices,
-/// models and fitted parameters are read back from `from[n − 1]` to 0.
+/// cut-off). The table is filled by `scan::SpanScorer` endpoint by endpoint, skipping the
+/// candidates a bound proves cannot win, sharing an endpoint's candidates between threads
+/// on long polylines, with a result identical to the unbounded sequential fill; the
+/// chosen vertices, models and fitted parameters are read back from `from[n − 1]` to 0.
 ///
 /// # Why the program searches every endpoint, and what was measured when it was not
 ///
@@ -657,14 +658,14 @@ fn solve_open(
     max_span: usize,
 ) -> Solution {
     let n = pts.len();
-    // Long polylines are filled in parallel blocks of starts, onto whatever threads the
+    // On long polylines an endpoint's candidates are shared out onto whatever threads the
     // pool has free; the result is the sequential program's, bit for bit (see `scan`).
     let threads = rayon::current_num_threads();
     let parallel = n >= scan::DP_PAR_MIN_POINTS && threads > 1;
     let _running = scan::BusyThreads::claim(1);
-    let tab = SpanScorer::new(pts, sigma, tan, pre, cfg, joins_at_ends).fill(max_span, |left| {
+    let tab = SpanScorer::new(pts, sigma, tan, pre, cfg, joins_at_ends).fill(max_span, |live| {
         if parallel {
-            scan::fork_width(left, threads)
+            scan::fork_width(live, threads)
         } else {
             1
         }

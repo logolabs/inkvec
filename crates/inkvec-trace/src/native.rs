@@ -58,7 +58,7 @@ use crate::color::{
     self, de00, linear_to_srgb, oklab_to_rgb, rgb_to_oklab, srgb_to_linear, Oklab, Palette,
     PaletteEvidence,
 };
-use crate::regions::{label_components, tally_contacts};
+use crate::regions::{tally_contacts, SliverRound};
 use crate::{coverage, gradient, regularize, ColorOptions, ColorTrace, Rgba, Stopwatch};
 
 mod fade;
@@ -485,7 +485,7 @@ pub fn absorb_blend_slivers(
     let tol = (3.0 * sigma_noise).max(0.025) as f32;
     let mut absorbed = 0usize;
     for _round in 0..2 {
-        let (comp, members) = label_components(labels, w, h);
+        let round = SliverRound::of(labels, w, h);
         let mut changed = 0usize;
         let n_labels = labels
             .iter()
@@ -494,8 +494,9 @@ pub fn absorb_blend_slivers(
             .map_or(1, |m| m as usize + 1)
             .max(inks.len());
         let mut contacts: Vec<usize> = vec![0; n_labels];
-        for group in &members {
-            if absorb_sliver(group, &comp, labels, px, w, h, inks, tol, &mut contacts) {
+        for group in (0..round.comps.len()).filter_map(|id| round.thin(id)) {
+            let comp = &round.comps.comp;
+            if absorb_sliver(group, comp, labels, px, w, h, inks, tol, &mut contacts) {
                 changed += 1;
             }
         }

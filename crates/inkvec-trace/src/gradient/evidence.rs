@@ -1,4 +1,8 @@
 //! Which pixels testify about a region's fill, and which are blends towards a neighbour.
+//!
+//! Used by the band merger (`bands.rs`, which needs the partners) and the residual
+//! carver (`carve.rs`, which needs only the pure/blend verdict). Input: the sRGB image
+//! (0..1), the label map and one ink colour per label; output: one verdict per pixel.
 
 /// Which pixels are evidence for their region's *fill*, as opposed to blends of that
 /// region's ink with a neighbouring one.
@@ -45,6 +49,17 @@ pub(crate) const PARTNERS: usize = 3;
 /// clusters of colour, which the ramp-or-step test reads as a step. A blend towards a
 /// region that is itself part of the fit is not a blend with anything foreign, and is
 /// evidence for the fit.
+///
+/// The test, in sRGB (0..1): with `c` the pixel's colour, `a` its own ink and `b` the ink
+/// of another label within the 5x5 window around it, write `d = c − a`, `e = b − a` and
+/// `t = (d·e) / |e|²`. The pixel is a blend towards `b` when `0 < t < 1` (it lies between
+/// the two inks) and the perpendicular distance `|d − t·e|` is at most
+/// `tol = max(3·σ·√3, 2/255)`, where `σ` is the per-channel noise so `σ·√3` is its
+/// Euclidean size over three channels. A pixel within `tol` of its own ink is pure without
+/// looking further. Each other label is tried at the first pixel of it met in raster
+/// order within the window (the first eight distinct labels are remembered, so a ninth
+/// may be tried again); labels without an ink and inks equal to `a` are skipped, and a
+/// pixel whose own label has no ink stays pure.
 pub(crate) fn blend_partners(
     rgb: &[[f32; 3]],
     w: usize,

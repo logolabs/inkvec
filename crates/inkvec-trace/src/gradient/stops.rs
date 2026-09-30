@@ -1,14 +1,22 @@
 //! Multi-stop interior knot fitting for gradients (DESIGN.md S1).
 //!
-//! Adds interior color stops piecewise-linearly using IRLS (Iteratively Reweighted
+//! Adds interior colour stops piecewise-linearly using IRLS (Iteratively Reweighted
 //! Least Squares) with a Huber loss to robustly fit non-linear gradient profiles.
+//!
+//! Called from [`super::fit_samples`] once per two-stop ramp candidate. Input: the
+//! candidate (its geometry fixes each sample's gradient coordinate `t`), the samples and
+//! their colours in the candidate's interpolation space. Output: up to
+//! [`MAX_MID_STOPS`] variants of the same geometry with one, then two, interior stops;
+//! the caller scores each against the plain ramp by MDL, so a stop is only kept when it
+//! pays for its [`super::PARAMS_STOP`] parameters.
 
 use super::{
     fit_cap, from_space, to_lin, FillModel, Interp, Samples, MAX_MID_STOPS, MIN_GRADIENT_PIXELS,
 };
 
 impl FillModel {
-    /// The gradient coordinate `t` of a position: 0 at the first stop, 1 at the last.
+    /// The gradient coordinate `t` of a position: 0 at the first stop, 1 at the last,
+    /// padded to `[0, 1]`; always 0 for a flat fill.
     pub(crate) fn t_at(&self, x: f64, y: f64) -> f64 {
         match *self {
             FillModel::Flat(_) => 0.0,
@@ -23,7 +31,8 @@ impl FillModel {
         }
     }
 
-    /// The same geometry with the colour profile replaced.
+    /// The same geometry with the colour profile replaced (sRGB stops, `mids` sorted by
+    /// offset). A flat fill is returned unchanged.
     pub(crate) fn with_stops(
         &self,
         c0: [f32; 3],
@@ -61,10 +70,14 @@ const IRLS_ROUNDS: usize = 2;
 /// fitted than the rest of its segment; see [`fit_mid_stops`].
 const MAX_SLIVER_MISFIT: f64 = 4.0;
 
+/// Intervals of the coarse grid a new knot's position is first searched on, before a
+/// golden-section search refines it.
 const KNOT_GRID: usize = 16;
 
 /// Solve the small system `A·x = b` for three right-hand sides at once (Gaussian
-/// elimination with partial pivoting). `None` when singular.
+/// elimination with partial pivoting). `None` when singular (a pivot below 1e-12).
+/// `a` is `n×n` with `n = b.len()`; here `n` is the number of profile nodes, at most
+/// four, so a dense solve is cheaper than anything cleverer.
 fn solve_small(mut a: Vec<Vec<f64>>, mut b: Vec<[f64; 3]>) -> Option<Vec<[f64; 3]>> {
     let n = b.len();
     for i in 0..n {
@@ -168,6 +181,17 @@ fn normal_equations(
 /// Robust least squares of a piecewise-linear colour profile in `t` with nodes at
 /// `0, knots.., 1` (hat-function basis). Returns the Huber objective — quadratic within
 /// `delta` of the fit, linear beyond — and the colour at each node, first to last.
+///
+/// Model: a sample at `t` in the piece `[τ_{j−1}, τ_j]`, at `u = (t − τ_{j−1}) /
+/// (τ_j − τ_{j−1})`, is predicted as `(1 − u)·x_{j−1} + u·x_j`, where `x` are the node
+/// colours. Each round solves the weighted normal equations `AᵀWA x = AᵀWc`
+/// ([`normal_equations`]); after the first, the weights are reset by the Huber rule
+/// `w_i = 1` when the residual norm `r_i ≤ δ`, else `δ / r_i` (iteratively reweighted
+/// least squares, `rounds` extra rounds). The objective is `Σ_i ρ(r_i)` with
+/// `ρ(r) = r²` for `r ≤ δ` and `δ(2r − δ)` beyond. `weight` is the starting weight per
+/// sample; `knots` must be sorted and inside `(0, 1)`. `None` when [`solve_small`] meets
+/// a pivot below 1e-12; the 1e-9 ridge on the diagonal keeps even a piece with no
+/// samples from doing that in practice.
 fn fit_piecewise(
     cols: &[[f64; 3]],
     t: &[f64],
@@ -228,64 +252,168 @@ fn fit_piecewise(
 }
 
 /// Fit multi-stop interior knots for a candidate model.
+///
+/// The idea: a two-stop ramp is a straight line in colour against the gradient
+/// coordinate `t`; an artist's three- or four-stop gradient is a polyline. With the
+/// candidate's geometry held fixed, each sample has a `t`, and the question reduces to
+/// fitting a piecewise-linear profile with one or two free break points ("knots") to
+/// the points `(t_i, c_i)`. Knots are added greedily, one per round: the new knot's
+/// position minimises the Huber objective of [`fit_piecewise`] (a 16-interval grid,
+/// then 16 golden-section steps), and the profile is then refitted with
+/// [`IRLS_ROUNDS`] of reweighting.
+///
+/// Robustness: the Huber threshold is `δ = max(3 · 1.4826 · median_i r_i, 1/255)`, where
+/// `r_i` is each sample's colour distance to the two-stop parent and `1.4826·median` is
+/// the median absolute deviation scaled to a Gaussian σ. Samples the parent misfits by
+/// more than `δ` start down-weighted as `δ / r_i`.
+///
+/// A round stops the search, keeping what was found so far, when: no knot position gives
+/// a finite objective; the new knot lands within 5 % of the `t` span of an existing one;
+/// the refit is singular; or the knot cuts off a sliver (under a tenth of the samples)
+/// that is fitted more than [`MAX_SLIVER_MISFIT`] times worse, in median residual, than
+/// the rest of its segment — a stop bought to explain a feature at one end, not a
+/// shading. Knots are confined to the central 90 % of the 2–98 % quantile range of `t`.
+///
+/// Returns the variants in order of stop count (one stop, then two). Empty when fewer
+/// than `4·MIN_GRADIENT_PIXELS` samples survive the stride or the samples span under 0.1
+/// of `t`.
 pub(crate) fn fit_mid_stops(
     model: &FillModel,
     s: &Samples,
     cols: &[[f64; 3]],
     space: Interp,
 ) -> Vec<FillModel> {
-    let n = s.len();
-    let stride = (n / fit_cap()).max(1);
-    let idx: Vec<usize> = (0..n).step_by(stride).collect();
-    if idx.len() < 4 * MIN_GRADIENT_PIXELS {
+    let Some(p) = StopProblem::new(model, s, cols, space) else {
         return Vec::new();
-    }
-    let t: Vec<f64> = idx.iter().map(|&i| model.t_at(s.x[i], s.y[i])).collect();
-    let c: Vec<[f64; 3]> = idx.iter().map(|&i| cols[i]).collect();
-    let parent = model.eval();
-    let parent_r: Vec<f64> = idx
-        .iter()
-        .map(|&i| {
-            let p = parent.color_at(s.x[i], s.y[i]);
-            let p = match space {
-                Interp::LinearRgb => to_lin(p),
-                Interp::Srgb => [p[0] as f64, p[1] as f64, p[2] as f64],
-            };
-            cols[i]
-                .iter()
-                .zip(&p)
-                .map(|(a, b)| (a - b) * (a - b))
-                .sum::<f64>()
-                .sqrt()
-        })
-        .collect();
-    let delta = {
-        let mut r = parent_r.clone();
-        let mid = r.len() / 2;
-        let (_, med, _) = r.select_nth_unstable_by(mid, f64::total_cmp);
-        (3.0 * 1.4826 * *med).max(1.0 / 255.0)
     };
-    let weight: Vec<f64> = parent_r
-        .iter()
-        .map(|&r| if r > delta { delta / r } else { 1.0 })
-        .collect();
-    let mut sorted = t.clone();
-    sorted.sort_by(f64::total_cmp);
-    let q = |f: f64| sorted[((sorted.len() - 1) as f64 * f).round() as usize];
-    let (q_lo, q_hi) = (q(0.02), q(0.98));
-    let span = q_hi - q_lo;
-    if span < 0.1 {
-        return Vec::new();
-    }
-    let (k_lo, k_hi) = (q_lo + 0.05 * span, q_hi - 0.05 * span);
     let mut out = Vec::new();
     let mut knots: Vec<f64> = Vec::new();
     for _ in 0..MAX_MID_STOPS {
+        let Some(k) = p.best_knot(&knots) else {
+            break;
+        };
+        if knots.iter().any(|&q| (q - k).abs() < 0.05 * p.span) {
+            break;
+        }
+        knots.push(k);
+        knots.sort_by(f64::total_cmp);
+        let Some((_, x)) = fit_piecewise(&p.c, &p.t, &knots, &p.weight, p.delta, IRLS_ROUNDS)
+        else {
+            break;
+        };
+        let m = x.len();
+        let mids: Vec<(f64, [f32; 3])> = knots
+            .iter()
+            .zip(&x[1..m - 1])
+            .map(|(&off, &col)| (off, from_space(col, space)))
+            .collect();
+        let cand = model.with_stops(from_space(x[0], space), mids, from_space(x[m - 1], space));
+        if p.cuts_a_misfit_sliver(&cand, &knots, k) {
+            break;
+        }
+        out.push(cand);
+    }
+    out
+}
+
+/// The fixed data of one [`fit_mid_stops`] search: the strided subsample, each sample's
+/// gradient coordinate and colour, the Huber threshold and starting weights, and the
+/// range new knots may take.
+struct StopProblem<'a> {
+    /// The region's samples.
+    s: &'a Samples,
+    /// Indices into `s` of the strided subsample.
+    idx: Vec<usize>,
+    /// Gradient coordinate `t` of each subsample, under the parent's geometry.
+    t: Vec<f64>,
+    /// Colour of each subsample in the fitting space.
+    c: Vec<[f64; 3]>,
+    /// Starting IRLS weight of each subsample.
+    weight: Vec<f64>,
+    /// Huber threshold `δ`, in fitting-space colour units.
+    delta: f64,
+    /// Width of the 2–98 % quantile range of `t`.
+    span: f64,
+    /// Lowest position a knot may take.
+    k_lo: f64,
+    /// Highest position a knot may take.
+    k_hi: f64,
+}
+
+impl<'a> StopProblem<'a> {
+    /// Build the search for `model`'s samples; `None` when there are too few samples or
+    /// too little spread in `t` to place a stop (see [`fit_mid_stops`]).
+    fn new(model: &FillModel, s: &'a Samples, cols: &[[f64; 3]], space: Interp) -> Option<Self> {
+        let n = s.len();
+        let stride = (n / fit_cap()).max(1);
+        let idx: Vec<usize> = (0..n).step_by(stride).collect();
+        if idx.len() < 4 * MIN_GRADIENT_PIXELS {
+            return None;
+        }
+        let t: Vec<f64> = idx.iter().map(|&i| model.t_at(s.x[i], s.y[i])).collect();
+        let c: Vec<[f64; 3]> = idx.iter().map(|&i| cols[i]).collect();
+        let parent = model.eval();
+        let parent_r: Vec<f64> = idx
+            .iter()
+            .map(|&i| {
+                let p = parent.color_at(s.x[i], s.y[i]);
+                let p = match space {
+                    Interp::LinearRgb => to_lin(p),
+                    Interp::Srgb => [p[0] as f64, p[1] as f64, p[2] as f64],
+                };
+                cols[i]
+                    .iter()
+                    .zip(&p)
+                    .map(|(a, b)| (a - b) * (a - b))
+                    .sum::<f64>()
+                    .sqrt()
+            })
+            .collect();
+        let delta = {
+            let mut r = parent_r.clone();
+            let mid = r.len() / 2;
+            let (_, med, _) = r.select_nth_unstable_by(mid, f64::total_cmp);
+            (3.0 * 1.4826 * *med).max(1.0 / 255.0)
+        };
+        let weight: Vec<f64> = parent_r
+            .iter()
+            .map(|&r| if r > delta { delta / r } else { 1.0 })
+            .collect();
+        let mut sorted = t.clone();
+        sorted.sort_by(f64::total_cmp);
+        let q = |f: f64| sorted[((sorted.len() - 1) as f64 * f).round() as usize];
+        let (q_lo, q_hi) = (q(0.02), q(0.98));
+        let span = q_hi - q_lo;
+        if span < 0.1 {
+            return None;
+        }
+        let (k_lo, k_hi) = (q_lo + 0.05 * span, q_hi - 0.05 * span);
+        Some(Self {
+            s,
+            idx,
+            t,
+            c,
+            weight,
+            delta,
+            span,
+            k_lo,
+            k_hi,
+        })
+    }
+
+    /// Where one more knot, added to `knots`, lowers most the Huber objective of one
+    /// solve at the starting weights: the best of a [`KNOT_GRID`]-interval grid over `[k_lo, k_hi]` (fitted in
+    /// parallel, chosen in grid order so ties go to the lowest position), then 16
+    /// golden-section steps within one grid step of it. `None` when no grid position
+    /// gives a finite objective.
+    fn best_knot(&self, knots: &[f64]) -> Option<f64> {
+        let (k_lo, k_hi) = (self.k_lo, self.k_hi);
         let resid_with = |k: f64| -> f64 {
-            let mut ks = knots.clone();
+            let mut ks = knots.to_vec();
             ks.push(k);
             ks.sort_by(f64::total_cmp);
-            fit_piecewise(&c, &t, &ks, &weight, delta, 0).map_or(f64::MAX, |(r, _)| r)
+            fit_piecewise(&self.c, &self.t, &ks, &self.weight, self.delta, 0)
+                .map_or(f64::MAX, |(r, _)| r)
         };
         let mut best = (f64::NAN, f64::MAX);
         let step = (k_hi - k_lo) / KNOT_GRID as f64;
@@ -306,7 +434,7 @@ pub(crate) fn fit_mid_stops(
             }
         }
         if !best.0.is_finite() {
-            break;
+            return None;
         }
         let (mut lo, mut hi) = ((best.0 - step).max(k_lo), (best.0 + step).min(k_hi));
         let phi = 0.5 * (5.0f64.sqrt() - 1.0);
@@ -327,23 +455,24 @@ pub(crate) fn fit_mid_stops(
                 fb = resid_with(b);
             }
         }
-        let k = 0.5 * (lo + hi);
-        if knots.iter().any(|&q| (q - k).abs() < 0.05 * span) {
-            break;
-        }
-        knots.push(k);
-        knots.sort_by(f64::total_cmp);
-        let Some((_, x)) = fit_piecewise(&c, &t, &knots, &weight, delta, IRLS_ROUNDS) else {
-            break;
-        };
-        let m = x.len();
-        let mids: Vec<(f64, [f32; 3])> = knots
+        Some(0.5 * (lo + hi))
+    }
+
+    /// Whether the knot `k` (already in the sorted `knots`) cuts its segment into a
+    /// sliver that `cand` fits much worse than the rest.
+    ///
+    /// The segment is `[previous knot, next knot]` (open-ended at the profile's ends).
+    /// Its samples are split at `k`, each side's residuals taken as the sRGB distance
+    /// between `cand` and the observed colour, and the smaller side is a sliver when it
+    /// holds under a tenth of all subsamples. The knot is rejected when the sliver's
+    /// median residual exceeds [`MAX_SLIVER_MISFIT`] times the other side's (floored at
+    /// 1/255). An empty side has median 0.
+    fn cuts_a_misfit_sliver(&self, cand: &FillModel, knots: &[f64], k: f64) -> bool {
+        let s = self.s;
+        let seg = knots
             .iter()
-            .zip(&x[1..m - 1])
-            .map(|(&off, &col)| (off, from_space(col, space)))
-            .collect();
-        let cand = model.with_stops(from_space(x[0], space), mids, from_space(x[m - 1], space));
-        let seg = knots.iter().position(|&q| q == k).unwrap();
+            .position(|&q| q == k)
+            .expect("k was just inserted into knots and is finite");
         let lo_t = if seg == 0 {
             f64::NEG_INFINITY
         } else {
@@ -356,8 +485,8 @@ pub(crate) fn fit_mid_stops(
         };
         let mut resid: [Vec<f64>; 2] = [Vec::new(), Vec::new()];
         let cand_eval = cand.eval();
-        for (j, &i) in idx.iter().enumerate() {
-            if t[j] < lo_t || t[j] > hi_t {
+        for (j, &i) in self.idx.iter().enumerate() {
+            if self.t[j] < lo_t || self.t[j] > hi_t {
                 continue;
             }
             let p = cand_eval.color_at(s.x[i], s.y[i]);
@@ -365,7 +494,7 @@ pub(crate) fn fit_mid_stops(
                 .map(|q| (p[q] - s.srgb[i][q]).powi(2))
                 .sum::<f32>()
                 .sqrt() as f64;
-            resid[usize::from(t[j] >= k)].push(r);
+            resid[usize::from(self.t[j] >= k)].push(r);
         }
         let median = |v: &mut Vec<f64>| -> f64 {
             if v.is_empty() {
@@ -376,14 +505,10 @@ pub(crate) fn fit_mid_stops(
             v[m]
         };
         let short = usize::from(resid[1].len() < resid[0].len());
-        let sliver = resid[short].len() < sorted.len() / 10;
+        let sliver = resid[short].len() < self.t.len() / 10;
         let (m_short, m_long) = (median(&mut resid[short]), median(&mut resid[1 - short]));
-        if sliver && m_short > MAX_SLIVER_MISFIT * m_long.max(1.0 / 255.0) {
-            break;
-        }
-        out.push(cand);
+        sliver && m_short > MAX_SLIVER_MISFIT * m_long.max(1.0 / 255.0)
     }
-    out
 }
 
 #[cfg(test)]

@@ -40,6 +40,34 @@
 //!
 //! [`merge_gradient_bands`] closes the loop with the palette: adjacent regions whose union
 //! is described more cheaply by one gradient than by two flats are merged back into one.
+//!
+//! # Where this sits in the pipeline
+//!
+//! The Quality pipeline in `lib.rs` runs palette → labels → despeckle → blend absorption,
+//! then this module's two passes: [`bands::merge_gradient_bands_with_ink`] (the
+//! `merge_bands` stage) and [`carve::carve_residual_features_with_detail_noise`] (the
+//! `carve` stage). The native-alpha path in `native.rs` calls the same two passes through
+//! [`bands::merge_gradient_bands_guarded`]. What comes in is the composited sRGB image
+//! (0..1 per channel), the label map, the palette and the noise estimate; what goes out is
+//! an updated label map and one [`FillFit`] per label, which `planar.rs` reads to unmix
+//! boundary pixels ([`unmix_pair`]) and the CLI emitter writes with [`fill_to_svg`] and
+//! [`fade_to_svg`]. `regroup.rs` calls [`fit_candidates`] directly.
+//!
+//! # Files
+//!
+//! * this file: the model types, colour helpers, sample gathering, scoring (chi², ramp
+//!   support, contrast), the ramp-or-step test and model selection;
+//! * `fit`: the individual fitters (flat, linear, circular and elliptical radial);
+//! * `stops`: interior stops for a fitted ramp;
+//! * `eval`: the hoisted per-pixel evaluator every scoring loop uses;
+//! * `evidence`: which pixels testify about a fill and which are blends;
+//! * `bands`: the band-merging agglomeration; `regions`: its region-recovery switches;
+//! * `carve`: residual features carved out as their own regions;
+//! * `budget`: sampling caps and timing counters; `debug`: `INKVEC_GRADDBG` output;
+//! * `svg`: the SVG writer for fills and fades.
+//!
+//! Coordinates are pixel centres throughout: pixel `(x, y)` is centred at `(x, y)`, in
+//! the tracer's `-0.5 -0.5 w h` viewBox.
 
 use std::collections::HashMap;
 
@@ -138,7 +166,9 @@ pub enum FillModel {
         c1: [f32; 3],
         /// Colour space the interpolation is done in.
         interp: Interp,
-        /// Ratio of the semi-axis across `angle` to `r`. `1.0` is a plain circular gradient.
+        /// Ratio of `r` to the semi-axis across `angle`: that semi-axis is `r / aspect`.
+        /// `1.0` is a plain circular gradient; the elliptical fitter only produces values
+        /// in `[1.02, 8]`.
         aspect: f64,
         /// Direction of the `r` semi-axis, in radians from +x towards +y.
         angle: f64,
@@ -148,6 +178,11 @@ pub enum FillModel {
 }
 
 /// Normalised axial coordinate of `(x, y)`: 0 at `p0`, 1 at `p1`, padded beyond.
+///
+/// The projection of the point onto the axis, as a fraction of the axis length:
+/// `t = clamp(((P − p0)·d) / |d|², 0, 1)` with `d = p1 − p0`, all in pixel-centre units.
+/// The clamp is SVG's `spreadMethod="pad"`: beyond either end the end colour holds. A
+/// degenerate axis (`p0 == p1`) gives 0 everywhere, the first stop.
 #[inline]
 fn linear_t(x: f64, y: f64, p0: (f64, f64), p1: (f64, f64)) -> f64 {
     let (dx, dy) = (p1.0 - p0.0, p1.1 - p0.1);
@@ -160,6 +195,9 @@ fn linear_t(x: f64, y: f64, p0: (f64, f64), p1: (f64, f64)) -> f64 {
 }
 
 /// Normalised radial coordinate of `(x, y)`: 0 at the centre, 1 on the ellipse.
+///
+/// See [`eval::radial_t_rot`] for the formula. For a circle (`aspect == 1`) or a
+/// non-positive radius the rotation is irrelevant and `sin_cos` is not computed.
 #[inline]
 fn radial_t(x: f64, y: f64, c: (f64, f64), r: f64, aspect: f64, angle: f64) -> f64 {
     if r <= 0.0 || aspect == 1.0 {
@@ -169,7 +207,10 @@ fn radial_t(x: f64, y: f64, c: (f64, f64), r: f64, aspect: f64, angle: f64) -> f
 }
 
 impl FillModel {
-    /// Description length in editable numbers.
+    /// Description length in editable numbers: the base count of the model family
+    /// ([`PARAMS_FLAT`], [`PARAMS_LINEAR`], [`PARAMS_RADIAL`] or
+    /// [`PARAMS_RADIAL_ELLIPTIC`]) plus [`PARAMS_STOP`] per interior stop. This is the
+    /// `params` term of the MDL cost `0.5·chi² + λ·params`.
     pub fn params(&self) -> f64 {
         match self {
             FillModel::Flat(_) => PARAMS_FLAT,
@@ -213,7 +254,12 @@ impl FillModel {
         !matches!(self, FillModel::Flat(_))
     }
 
-    /// The fill colour (sRGB) this model predicts at a pixel-centre position.
+    /// The fill colour (sRGB, 0..1) this model predicts at a pixel-centre position.
+    ///
+    /// The position is mapped to the gradient coordinate `t` ([`linear_t`] or
+    /// [`radial_t`], padded to `[0, 1]`) and the stop profile is evaluated there
+    /// ([`eval_stops`]). For many positions of one model use [`FillModel::eval`], which
+    /// returns the same bits with the per-model work hoisted out.
     pub fn color_at(&self, x: f64, y: f64) -> [f32; 3] {
         match *self {
             FillModel::Flat(c) => c,
@@ -284,6 +330,8 @@ pub fn bic_lambda(n: usize) -> f64 {
 // Colour helpers
 // ---------------------------------------------------------------------------------------
 
+/// An sRGB colour (0..1, gamma-encoded) in linear light, widened to `f64` for fitting.
+/// Uses the sRGB transfer function of [`crate::color::srgb_to_linear`].
 pub(crate) fn to_lin(c: [f32; 3]) -> [f64; 3] {
     [
         srgb_to_linear(c[0]) as f64,
@@ -292,6 +340,9 @@ pub(crate) fn to_lin(c: [f32; 3]) -> [f64; 3] {
     ]
 }
 
+/// A linear-light colour back to sRGB (0..1). Each channel is clamped to `[0, 1]` first,
+/// because a least-squares stop can overshoot the gamut and the transfer function is
+/// only defined on that range.
 fn to_srgb(c: [f64; 3]) -> [f32; 3] {
     [
         linear_to_srgb(c[0].clamp(0.0, 1.0) as f32),
@@ -300,7 +351,9 @@ fn to_srgb(c: [f64; 3]) -> [f32; 3] {
     ]
 }
 
-/// A colour in the fitting space `space`, as an sRGB stop.
+/// A colour in the fitting space `space`, as an sRGB stop: converted from linear light
+/// for [`Interp::LinearRgb`], taken as is for [`Interp::Srgb`]; clamped to `[0, 1]`
+/// either way, since fitted stops may overshoot.
 pub(crate) fn from_space(c: [f64; 3], space: Interp) -> [f32; 3] {
     match space {
         Interp::LinearRgb => to_srgb(c),
@@ -312,7 +365,9 @@ pub(crate) fn from_space(c: [f64; 3], space: Interp) -> [f32; 3] {
     }
 }
 
-/// Interpolate two sRGB stops in the given space.
+/// Interpolate two sRGB stops in the given space: `c(t) = c0 + t·(c1 − c0)`, taken on
+/// the sRGB values for [`Interp::Srgb`] and on their linear-light values (then converted
+/// back) for [`Interp::LinearRgb`]. `t` is expected in `[0, 1]`.
 fn lerp_stops(c0: [f32; 3], c1: [f32; 3], t: f64, interp: Interp) -> [f32; 3] {
     match interp {
         Interp::LinearRgb => eval::lerp_lin(to_lin(c0), to_lin(c1), t),
@@ -329,6 +384,11 @@ fn lerp_stops(c0: [f32; 3], c1: [f32; 3], t: f64, interp: Interp) -> [f32; 3] {
 
 /// Evaluate a multi-stop profile: `c0` at 0, `c1` at 1, `mids` between, piecewise linear
 /// in `interp`.
+///
+/// [`eval::segment`] finds the piece `k` that `t` falls in and the position `u` along
+/// it; stop 0 is `c0`, stop `i` (1 ≤ i ≤ mids.len()) is `mids[i − 1]`, and the last is
+/// `c1`. The two stops bounding the piece are then lerped at `u`. `mids` must be sorted
+/// by offset.
 pub(super) fn eval_stops(
     c0: [f32; 3],
     mids: &[(f64, [f32; 3])],
@@ -349,11 +409,14 @@ pub(super) fn eval_stops(
 // Samples
 // ---------------------------------------------------------------------------------------
 
-/// The interior pixels of one region, in raster order.
+/// The interior pixels of one region, in raster order: the observations every fill fit
+/// is made on. The five vectors are parallel, one entry per sample.
 pub(crate) struct Samples {
-    /// Pixel indices, sorted ascending.
+    /// Pixel indices (`y·w + x`), sorted ascending.
     pub(crate) px: Vec<usize>,
+    /// Pixel-centre x coordinate of each sample, px.
     pub(crate) x: Vec<f64>,
+    /// Pixel-centre y coordinate of each sample, px.
     pub(crate) y: Vec<f64>,
     /// Observed sRGB.
     pub(crate) srgb: Vec<[f32; 3]>,
@@ -367,10 +430,13 @@ impl Samples {
         self.px.len()
     }
 
+    /// The sample index of pixel `p`, if `p` is a sample (binary search: `px` is sorted).
     fn sample_at(&self, p: usize) -> Option<usize> {
         self.px.binary_search(&p).ok()
     }
 
+    /// Mean sample position, px. With no samples the sums are divided by 1 and the
+    /// centroid is `(0, 0)`.
     fn centroid(&self) -> (f64, f64) {
         let n = self.len().max(1) as f64;
         (
@@ -392,6 +458,8 @@ impl Samples {
     }
 }
 
+/// Per-channel mean of `cols`; `[0, 0, 0]` for an empty slice (the divisor is floored
+/// at 1).
 fn mean3(cols: &[[f64; 3]]) -> [f64; 3] {
     let n = cols.len().max(1) as f64;
     let mut m = [0.0; 3];
@@ -432,6 +500,11 @@ fn interior_count(pixels: &[usize], w: usize, h: usize, member: impl Fn(usize) -
 ///
 /// With `strict == false` every member pixel is taken. That is the fallback for regions
 /// too thin to have an interior at all (a 1px line), which can only ever be flat.
+///
+/// Either way a pixel must also pass `evidence` (see [`fill_evidence`]): blends towards
+/// a neighbouring ink say nothing about this region's fill. `rgb` is the sRGB image
+/// (0..1), `w`×`h` its size; the returned [`Samples`] are sorted by pixel index whatever
+/// order `pixels` came in, so the fit does not depend on how the caller built the list.
 fn collect_samples(
     rgb: &[[f32; 3]],
     w: usize,
@@ -486,562 +559,6 @@ fn collect_samples(
     }
 }
 
-// ---------------------------------------------------------------------------------------
-// Fitting
-// ---------------------------------------------------------------------------------------
-
-/// Least squares of `colour = a + g·t` per channel.
-///
-/// Returns the residual sum of squares over all channels and the coefficients.
-fn fit_1d(cols: &[[f64; 3]], t: &[f64]) -> (f64, [f64; 3], [f64; 3]) {
-    let n = cols.len() as f64;
-    let tbar = t.iter().sum::<f64>() / n;
-    let cbar = mean3(cols);
-    let mut stt = 0.0;
-    let mut stc = [0.0; 3];
-    let mut scc = [0.0; 3];
-    for (c, &ti) in cols.iter().zip(t) {
-        let dt = ti - tbar;
-        stt += dt * dt;
-        for k in 0..3 {
-            let dc = c[k] - cbar[k];
-            stc[k] += dt * dc;
-            scc[k] += dc * dc;
-        }
-    }
-    let mut g = [0.0; 3];
-    let mut a = [0.0; 3];
-    let mut resid = 0.0;
-    for k in 0..3 {
-        g[k] = if stt > 1e-12 { stc[k] / stt } else { 0.0 };
-        a[k] = cbar[k] - g[k] * tbar;
-        resid += (scc[k] - g[k] * g[k] * stt).max(0.0);
-    }
-    (resid, a, g)
-}
-
-/// The half of [`fit_1d`] a centre search recomputes for nothing.
-///
-/// `fit_1d` forms five sums. Two of them -- the colour mean and the per-channel colour
-/// variance -- are properties of the samples alone and do not mention `t`, so a search
-/// that moves a centre, an angle or an aspect around recomputes the same two numbers on
-/// every evaluation. There are up to 600 of those for a circular gradient and 836 for an
-/// elliptical one, on a subsample of a thousand pixels: the elliptical fit was 663 ms of
-/// the 683 ms `merge_bands` spent on one emoji.
-///
-/// So they are formed once, here, over the same slice in the same order -- and the sums
-/// that do depend on the geometry are formed exactly as `fit_1d` forms them. Every number
-/// is bit for bit the one the search would have arrived at anyway; only the arithmetic
-/// that was redundant is gone. The distances land in a buffer the struct owns, which also
-/// retires one allocation per evaluation.
-struct Resid1d<'a> {
-    /// The sample coordinates, gathered contiguous: the search reads them once per
-    /// evaluation and the stride made every read a scattered one.
-    xs: Vec<f64>,
-    ys: Vec<f64>,
-    cols: &'a [[f64; 3]],
-    cbar: [f64; 3],
-    scc: [f64; 3],
-    t: Vec<f64>,
-}
-
-impl<'a> Resid1d<'a> {
-    fn new(s: &Samples, idx: &[usize], cols: &'a [[f64; 3]]) -> Self {
-        let cbar = mean3(cols);
-        let mut scc = [0.0; 3];
-        for c in cols {
-            for k in 0..3 {
-                let dc = c[k] - cbar[k];
-                scc[k] += dc * dc;
-            }
-        }
-        Self {
-            xs: idx.iter().map(|&i| s.x[i]).collect(),
-            ys: idx.iter().map(|&i| s.y[i]).collect(),
-            cols,
-            cbar,
-            scc,
-            t: vec![0.0; idx.len()],
-        }
-    }
-
-    /// Distance to a point.
-    fn radial(&mut self, c: (f64, f64)) -> f64 {
-        for j in 0..self.t.len() {
-            self.t[j] = ((self.xs[j] - c.0).powi(2) + (self.ys[j] - c.1).powi(2)).sqrt();
-        }
-        self.finish()
-    }
-
-    /// Distance in the frame `(angle, aspect)` about a point.
-    fn elliptic(&mut self, c: (f64, f64), sn: f64, cs: f64, k: f64) -> f64 {
-        for j in 0..self.t.len() {
-            let (dx, dy) = (self.xs[j] - c.0, self.ys[j] - c.1);
-            let u = dx * cs + dy * sn;
-            let v = (-dx * sn + dy * cs) * k;
-            self.t[j] = (u * u + v * v).sqrt();
-        }
-        self.finish()
-    }
-
-    /// The residual of the least-squares line through `(t, colour)`, the `.0` of `fit_1d`.
-    fn finish(&self) -> f64 {
-        let n = self.cols.len() as f64;
-        let tbar = self.t.iter().sum::<f64>() / n;
-        let mut stt = 0.0;
-        let mut stc = [0.0; 3];
-        for (c, &ti) in self.cols.iter().zip(&self.t) {
-            let dt = ti - tbar;
-            stt += dt * dt;
-            for k in 0..3 {
-                stc[k] += dt * (c[k] - self.cbar[k]);
-            }
-        }
-        let mut resid = 0.0;
-        for k in 0..3 {
-            let g = if stt > 1e-12 { stc[k] / stt } else { 0.0 };
-            resid += (self.scc[k] - g * g * stt).max(0.0);
-        }
-        resid
-    }
-}
-
-/// The flat fill is the mean in linear light: the average of the light the region emits.
-/// The flat model is scored by the same sRGB residual as every other candidate, so it has
-/// to be the colour that minimises that residual, not the linear-light mean converted
-/// back: for a dark region with a few light outliers (blend pixels the evidence test
-/// let through, a lost dot) the linear mean lands at a grey no pixel has, every pure
-/// pixel then pays for the outliers, and a gradient that puts the true colour in the
-/// middle and the outliers at its rim wins on solid black (luanti: flat fitted at 0.16
-/// on a region whose interior is 0.00). The per-channel median is the residual's own
-/// robust optimum; on a clean region it is the mean.
-fn fit_flat(s: &Samples) -> FillModel {
-    let n = s.len();
-    if n == 0 {
-        return FillModel::Flat([0.0; 3]);
-    }
-    let stride = (n / fit_cap()).max(1);
-    let mut c = [0.0f32; 3];
-    for k in 0..3 {
-        let mut v: Vec<f32> = (0..n).step_by(stride).map(|i| s.srgb[i][k]).collect();
-        let m = v.len() / 2;
-        let (_, med, _) = v.select_nth_unstable_by(m, |a, b| a.total_cmp(b));
-        c[k] = *med;
-    }
-    FillModel::Flat(c)
-}
-
-/// Linear gradient: axis by PCA of the colour-versus-position slope, direction refined
-/// by golden-section search on the exact 1-D residual, stops by least squares.
-///
-/// The full affine model `colour = a + B·(x, y)` is a 3x2 slope matrix `B`; a linear
-/// gradient is the rank-1 case where every channel varies along one direction. The top
-/// right-singular vector of `B` is that direction's PCA estimate. Given the direction,
-/// the residual of the 1-D fit is a closed form in the second moments, so refining the
-/// angle costs nothing per step: a coarse scan around the PCA angle guards against the
-/// estimate being poor when the channels disagree, and golden section finishes it.
-fn fit_linear(s: &Samples, cols: &[[f64; 3]], space: Interp) -> Option<FillModel> {
-    let n = s.len();
-    if n < MIN_GRADIENT_PIXELS {
-        return None;
-    }
-    let (xc, yc) = s.centroid();
-    let cbar = mean3(cols);
-    let (mut sxx, mut sxy, mut syy) = (0.0, 0.0, 0.0);
-    let mut sxc = [0.0; 3];
-    let mut syc = [0.0; 3];
-    let mut scc = [0.0; 3];
-    for (i, c) in cols.iter().enumerate() {
-        let (dx, dy) = (s.x[i] - xc, s.y[i] - yc);
-        sxx += dx * dx;
-        sxy += dx * dy;
-        syy += dy * dy;
-        for k in 0..3 {
-            let dc = c[k] - cbar[k];
-            sxc[k] += dx * dc;
-            syc[k] += dy * dc;
-            scc[k] += dc * dc;
-        }
-    }
-    let det = sxx * syy - sxy * sxy;
-    if det <= 1e-9 * (sxx + syy).powi(2) {
-        return None; // positions collinear: no 2-D axis to find
-    }
-
-    // PCA of the affine slope matrix.
-    let (mut m00, mut m01, mut m11) = (0.0, 0.0, 0.0);
-    for k in 0..3 {
-        let bx = (syy * sxc[k] - sxy * syc[k]) / det;
-        let by = (sxx * syc[k] - sxy * sxc[k]) / det;
-        m00 += bx * bx;
-        m01 += bx * by;
-        m11 += by * by;
-    }
-    let theta0 = 0.5 * (2.0 * m01).atan2(m00 - m11);
-
-    // Exact residual of the 1-D fit along direction theta, from the moments.
-    let resid = |theta: f64| -> f64 {
-        let (c, sn) = (theta.cos(), theta.sin());
-        let sss = c * c * sxx + 2.0 * c * sn * sxy + sn * sn * syy;
-        if sss <= 1e-12 {
-            return f64::MAX;
-        }
-        let mut explained = 0.0;
-        for k in 0..3 {
-            let ssc = c * sxc[k] + sn * syc[k];
-            explained += ssc * ssc / sss;
-        }
-        scc.iter().sum::<f64>() - explained
-    };
-
-    let deg = std::f64::consts::PI / 180.0;
-    let mut best = (theta0, resid(theta0));
-    for k in -45..=45 {
-        let th = theta0 + k as f64 * deg;
-        let r = resid(th);
-        if r < best.1 {
-            best = (th, r);
-        }
-    }
-    let (mut lo, mut hi) = (best.0 - deg, best.0 + deg);
-    let phi = 0.5 * (5.0f64.sqrt() - 1.0);
-    let (mut a, mut b) = (hi - phi * (hi - lo), lo + phi * (hi - lo));
-    let (mut fa, mut fb) = (resid(a), resid(b));
-    for _ in 0..40 {
-        if fa < fb {
-            hi = b;
-            b = a;
-            fb = fa;
-            a = hi - phi * (hi - lo);
-            fa = resid(a);
-        } else {
-            lo = a;
-            a = b;
-            fa = fb;
-            b = lo + phi * (hi - lo);
-            fb = resid(b);
-        }
-    }
-    let theta = 0.5 * (lo + hi);
-    let (dc, ds) = (theta.cos(), theta.sin());
-
-    let t: Vec<f64> = (0..n)
-        .map(|i| (s.x[i] - xc) * dc + (s.y[i] - yc) * ds)
-        .collect();
-    let smin = t.iter().cloned().fold(f64::MAX, f64::min);
-    let smax = t.iter().cloned().fold(f64::MIN, f64::max);
-    if smax - smin < 1e-6 {
-        return None;
-    }
-    let (_, a, g) = fit_1d(cols, &t);
-    let at = |sv: f64| [a[0] + g[0] * sv, a[1] + g[1] * sv, a[2] + g[2] * sv];
-    Some(FillModel::Linear {
-        p0: (xc + smin * dc, yc + smin * ds),
-        p1: (xc + smax * dc, yc + smax * ds),
-        c0: from_space(at(smin), space),
-        c1: from_space(at(smax), space),
-        interp: space,
-        mids: Vec::new(),
-    })
-}
-
-/// Principal direction of the colours, by power iteration on their covariance.
-fn color_axis(cols: &[[f64; 3]]) -> Option<[f64; 3]> {
-    let cbar = mean3(cols);
-    let mut cov = [[0.0f64; 3]; 3];
-    for c in cols {
-        let d = [c[0] - cbar[0], c[1] - cbar[1], c[2] - cbar[2]];
-        for (i, row) in cov.iter_mut().enumerate() {
-            for (j, v) in row.iter_mut().enumerate() {
-                *v += d[i] * d[j];
-            }
-        }
-    }
-    let trace = cov[0][0] + cov[1][1] + cov[2][2];
-    if trace <= 1e-12 {
-        return None;
-    }
-    let mut v = [1.0 / 3.0f64.sqrt(); 3];
-    for _ in 0..30 {
-        let mut nv = [0.0; 3];
-        for i in 0..3 {
-            for j in 0..3 {
-                nv[i] += cov[i][j] * v[j];
-            }
-        }
-        let norm = (nv[0] * nv[0] + nv[1] * nv[1] + nv[2] * nv[2]).sqrt();
-        if norm <= 1e-15 {
-            return None;
-        }
-        v = [nv[0] / norm, nv[1] / norm, nv[2] / norm];
-    }
-    Some(v)
-}
-
-/// Radial gradient: centre by a weighted least-squares intersection of the gradient
-/// lines, refined by pattern search on the exact 1-D residual; stops by least squares.
-///
-/// In a radial gradient the spatial gradient of any scalar function of colour points at
-/// (or away from) the centre, so every interior pixel with a measurable gradient
-/// contributes a line the centre must lie on. The centre that minimises the weighted
-/// squared distance to all of those lines is a 2x2 linear solve. That estimate is then
-/// polished by pattern search on the residual of `colour = a + g·|P - C|`, which is a
-/// 1-D least squares per candidate centre.
-///
-/// The centre is confined to within one bounding-box width of the region. Any radial
-/// gradient with its centre farther out than that is, across this region, a linear
-/// gradient — and should be described as one.
-fn fit_radial(s: &Samples, cols: &[[f64; 3]], space: Interp, w: usize) -> Option<FillModel> {
-    let n = s.len();
-    if n < MIN_GRADIENT_PIXELS {
-        return None;
-    }
-    let axis = color_axis(cols)?;
-    let f: Vec<f64> = cols
-        .iter()
-        .map(|c| c[0] * axis[0] + c[1] * axis[1] + c[2] * axis[2])
-        .collect();
-
-    // Weighted least squares for the point nearest all gradient lines.
-    let (mut a00, mut a01, mut a11, mut b0, mut b1) = (0.0, 0.0, 0.0, 0.0, 0.0);
-    let stride = (n / fit_cap()).max(1);
-    for i in (0..n).step_by(stride) {
-        let p = s.px[i];
-        let x = p % w;
-        if x == 0 || p < w {
-            continue;
-        }
-        let (Some(l), Some(r), Some(u), Some(d)) = (
-            s.sample_at(p - 1),
-            s.sample_at(p + 1),
-            s.sample_at(p - w),
-            s.sample_at(p + w),
-        ) else {
-            continue;
-        };
-        let gx = 0.5 * (f[r] - f[l]);
-        let gy = 0.5 * (f[d] - f[u]);
-        let mag = (gx * gx + gy * gy).sqrt();
-        if mag <= 1e-9 {
-            continue;
-        }
-        // Perpendicular to the gradient: distance of C from the line through P along g.
-        let (nx, ny) = (-gy / mag, gx / mag);
-        let rhs = nx * s.x[i] + ny * s.y[i];
-        a00 += mag * nx * nx;
-        a01 += mag * nx * ny;
-        a11 += mag * ny * ny;
-        b0 += mag * nx * rhs;
-        b1 += mag * ny * rhs;
-    }
-    let (xc, yc) = s.centroid();
-    let det = a00 * a11 - a01 * a01;
-    let mut c = if det > 1e-9 * (a00 + a11).powi(2) {
-        ((a11 * b0 - a01 * b1) / det, (a00 * b1 - a01 * b0) / det)
-    } else {
-        (xc, yc)
-    };
-
-    let xmin = s.x.iter().cloned().fold(f64::MAX, f64::min);
-    let xmax = s.x.iter().cloned().fold(f64::MIN, f64::max);
-    let ymin = s.y.iter().cloned().fold(f64::MAX, f64::min);
-    let ymax = s.y.iter().cloned().fold(f64::MIN, f64::max);
-    let (bw, bh) = ((xmax - xmin).max(4.0), (ymax - ymin).max(4.0));
-    let clamp = |p: (f64, f64)| {
-        (
-            p.0.clamp(xmin - bw, xmax + bw),
-            p.1.clamp(ymin - bh, ymax + bh),
-        )
-    };
-    c = clamp(c);
-
-    let radii = |c: (f64, f64)| -> Vec<f64> {
-        (0..n)
-            .map(|i| ((s.x[i] - c.0).powi(2) + (s.y[i] - c.1).powi(2)).sqrt())
-            .collect()
-    };
-    // The centre search evaluates its residual up to six hundred times; on a strided
-    // subsample each evaluation is O(MAX_FIT_SAMPLES) instead of O(n). The final fit
-    // below still uses every pixel.
-    let cstride = (n / CENTRE_SEARCH_SAMPLES).max(1);
-    let idx: Vec<usize> = (0..n).step_by(cstride).collect();
-    let cols_sub: Vec<[f64; 3]> = idx.iter().map(|&i| cols[i]).collect();
-    let mut rz = Resid1d::new(s, &idx, &cols_sub);
-
-    let mut best = rz.radial(c);
-    let mut step = 4.0;
-    let mut evals = 0;
-    const DIRS: [(f64, f64); 8] = [
-        (1.0, 0.0),
-        (-1.0, 0.0),
-        (0.0, 1.0),
-        (0.0, -1.0),
-        (1.0, 1.0),
-        (1.0, -1.0),
-        (-1.0, 1.0),
-        (-1.0, -1.0),
-    ];
-    while step > 0.03 && evals < 600 {
-        let mut improved = false;
-        for (dx, dy) in DIRS {
-            let cand = clamp((c.0 + dx * step, c.1 + dy * step));
-            let r = rz.radial(cand);
-            evals += 1;
-            if r < best - 1e-12 {
-                best = r;
-                c = cand;
-                improved = true;
-                break;
-            }
-        }
-        if !improved {
-            step *= 0.5;
-        }
-    }
-
-    let rho = radii(c);
-    let r = rho.iter().cloned().fold(f64::MIN, f64::max);
-    if r < 0.5 {
-        return None;
-    }
-    let (_, a, g) = fit_1d(cols, &rho);
-    Some(FillModel::Radial {
-        c,
-        r,
-        c0: from_space(a, space),
-        c1: from_space([a[0] + g[0] * r, a[1] + g[1] * r, a[2] + g[2] * r], space),
-        interp: space,
-        aspect: 1.0,
-        angle: 0.0,
-        mids: Vec::new(),
-    })
-}
-
-/// Largest aspect ratio an elliptical gradient may take. Beyond this the gradient is,
-/// across any region it could plausibly fill, a linear one.
-const MAX_ASPECT: f64 = 8.0;
-
-/// Elliptical radial gradient: the circular fit's centre, then a pattern search over
-/// centre, orientation and aspect on the exact 1-D residual.
-///
-/// The centre search of [`fit_radial`] is a good start even when the truth is
-/// elliptical - the weighted line intersection lands near the middle of the ellipse -
-/// but its residual is left with the whole anisotropy. Four coordinates, `(cx, cy,
-/// angle, ln aspect)`, are then searched together: with the aspect free the centre
-/// often moves, so the two cannot be settled one after the other. Each evaluation is a
-/// 1-D least squares on the strided subsample; the final stops use every pixel.
-fn fit_radial_elliptic(
-    s: &Samples,
-    cols: &[[f64; 3]],
-    space: Interp,
-    circular: &FillModel,
-) -> Option<FillModel> {
-    let FillModel::Radial { c: c_start, .. } = *circular else {
-        return None;
-    };
-    let n = s.len();
-    if n < 2 * MIN_GRADIENT_PIXELS {
-        return None;
-    }
-    let cstride = (n / CENTRE_SEARCH_SAMPLES).max(1);
-    let idx: Vec<usize> = (0..n).step_by(cstride).collect();
-    let cols_sub: Vec<[f64; 3]> = idx.iter().map(|&i| cols[i]).collect();
-    let mut rz = Resid1d::new(s, &idx, &cols_sub);
-
-    let xmin = s.x.iter().cloned().fold(f64::MAX, f64::min);
-    let xmax = s.x.iter().cloned().fold(f64::MIN, f64::max);
-    let ymin = s.y.iter().cloned().fold(f64::MAX, f64::min);
-    let ymax = s.y.iter().cloned().fold(f64::MIN, f64::max);
-    let (bw, bh) = ((xmax - xmin).max(4.0), (ymax - ymin).max(4.0));
-
-    // State: centre, angle, ln(aspect). Radius is not searched: the residual of a
-    // 1-D fit on unnormalised elliptical distance is what the search minimises, and
-    // the radius falls out of the final fit as the largest distance seen.
-    let mut st = [c_start.0, c_start.1, 0.0, 0.0];
-    let clamp = |st: [f64; 4]| -> [f64; 4] {
-        [
-            st[0].clamp(xmin - bw, xmax + bw),
-            st[1].clamp(ymin - bh, ymax + bh),
-            st[2],
-            st[3].clamp(0.0, MAX_ASPECT.ln()),
-        ]
-    };
-    let resid = |rz: &mut Resid1d, st: [f64; 4]| -> f64 {
-        let (sn, cs) = st[2].sin_cos();
-        rz.elliptic((st[0], st[1]), sn, cs, st[3].exp())
-    };
-
-    // Seed the orientation: a coarse sweep at a moderate aspect is cheap and keeps the
-    // pattern search out of the wrong local minimum of the angle.
-    let mut best = resid(&mut rz, st);
-    for deg in (0..180).step_by(15) {
-        // Aspects 2 and 3. There is no need for the reciprocals: the angle sweep
-        // already reaches a 1:2 ellipse as a 2:1 one turned ninety degrees. (A fourth
-        // seed used to sit here written `0.5f64.ln() * -1.0`, which is ln 2 — the same
-        // candidate as the second, scored twice for nothing.)
-        for &la in &[2.0f64.ln(), 3.0f64.ln()] {
-            let cand = clamp([st[0], st[1], (deg as f64).to_radians(), la]);
-            let r = resid(&mut rz, cand);
-            if r < best - 1e-12 {
-                best = r;
-                st = cand;
-            }
-        }
-    }
-    let scale = [1.0, 1.0, 10f64.to_radians(), 0.25];
-    let mut step = 4.0;
-    let mut evals = 0;
-    while step > 0.03 && evals < 800 {
-        let mut improved = false;
-        'axes: for ax in 0..4 {
-            for sign in [1.0, -1.0] {
-                let mut cand = st;
-                cand[ax] += sign * step * scale[ax];
-                let cand = clamp(cand);
-                let r = resid(&mut rz, cand);
-                evals += 1;
-                if r < best - 1e-12 {
-                    best = r;
-                    st = cand;
-                    improved = true;
-                    break 'axes;
-                }
-            }
-        }
-        if !improved {
-            step *= 0.5;
-        }
-    }
-    let aspect = st[3].exp();
-    if aspect < 1.02 {
-        return None; // the circle already has it
-    }
-    let (sn, cs) = st[2].sin_cos();
-    let rho: Vec<f64> = (0..n)
-        .map(|i| {
-            let (dx, dy) = (s.x[i] - st[0], s.y[i] - st[1]);
-            let u = dx * cs + dy * sn;
-            let v = (-dx * sn + dy * cs) * aspect;
-            (u * u + v * v).sqrt()
-        })
-        .collect();
-    let r = rho.iter().cloned().fold(f64::MIN, f64::max);
-    if r < 0.5 {
-        return None;
-    }
-    let (_, a, g) = fit_1d(cols, &rho);
-    Some(FillModel::Radial {
-        c: (st[0], st[1]),
-        r,
-        c0: from_space(a, space),
-        c1: from_space([a[0] + g[0] * r, a[1] + g[1] * r, a[2] + g[2] * r], space),
-        interp: space,
-        aspect,
-        angle: st[2],
-        mids: Vec::new(),
-    })
-}
-
 /// The pair of colours to unmix a boundary pixel at `(x, y)` between fills `a` and `b`
 /// against, and their separation (sRGB, Euclidean).
 ///
@@ -1077,12 +594,15 @@ pub fn unmix_pair(a: &FillModel, b: &FillModel, x: f64, y: f64) -> ([f32; 3], [f
     }
 }
 
-/// chi² of a model against the samples: per channel in sRGB, the part of the residual
-/// beyond the half-LSB quantisation dead zone, in units of `sigma`.
-/// Residual of the best *two* flat colours for these samples, on the same scale as
-/// [`chi2`].
+/// The principal axis of the samples' sRGB colours about `mean`, by eight rounds of
+/// power iteration on their scatter matrix `S = Σ_i d_i d_iᵀ`, `d_i = c_i − mean`, over
+/// the sample indices `idx`.
 ///
-/// One-dimensional k-means along the samples' dominant colour axis. This is not a fill the
+/// Each round computes `v ← S v / |S v|` without forming `S` (as `Σ_i (d_i·v) d_i`),
+/// starting from the grey direction `(1, 1, 1)`. Eight rounds suffice because only the
+/// split direction for a two-cluster test is wanted, not a precise eigenvector. `None`
+/// when the samples have no spread along the iterate (all one colour, or a spread
+/// exactly orthogonal to grey that the start vector cannot see).
 fn dominant_color_axis(s: &Samples, idx: &[usize], mean: [f64; 3]) -> Option<[f64; 3]> {
     let mut axis = [1.0f64, 1.0, 1.0];
     for _ in 0..8 {
@@ -1109,9 +629,22 @@ fn dominant_color_axis(s: &Samples, idx: &[usize], mean: [f64; 3]) -> Option<[f6
     Some(axis)
 }
 
-/// A two-flat-colour fit of the samples, split along their dominant colour axis. This is not a model the
-/// emitter can write, and it is not meant to be: it exists only to answer a question about
-/// the alternative, which is whether the variation in a region is a ramp or a step.
+/// Residual of the best *two* flat colours for these samples, on the same scale as
+/// [`chi2`]. This is not a model the emitter can write, and it is not meant to be: it
+/// exists only to answer a question about the alternative, which is whether the
+/// variation in a region is a ramp or a step (see [`BIMODAL_MARGIN`]).
+///
+/// The method is one-dimensional k-means with k = 2 (Lloyd's iteration) along the
+/// samples' dominant colour axis ([`dominant_color_axis`]): project each sRGB colour to
+/// `t_i = (c_i − mean)·v`, start the split at the midpoint of the range and move it to
+/// the midpoint of the two cluster means, 24 times. The two clusters' mean colours
+/// `μ_0`, `μ_1` are then scored like any model:
+///
+/// `chi² = (n/m) · Σ_i Σ_ch max(|c_i,ch − μ_g(i),ch| − ½LSB, 0)² / σ²`
+///
+/// over a strided subsample of `m` of the `n` samples, scaled back to `n`. Returns
+/// infinity when there is no split to make: fewer than two samples, fewer than four in
+/// the subsample, no colour axis, no spread along it, or one cluster empty.
 fn chi2_two_flats(s: &Samples, sigma: f64) -> f64 {
     let n = s.len();
     if n < 2 {
@@ -1123,7 +656,7 @@ fn chi2_two_flats(s: &Samples, sigma: f64) -> f64 {
     if m < 4 {
         return f64::INFINITY;
     }
-    // Mean, then the dominant axis by one round of power iteration on the covariance.
+    // Mean, then the dominant axis by power iteration on the covariance.
     let mut mean = [0.0f64; 3];
     for &i in &idx {
         for c in 0..3 {
@@ -1200,6 +733,17 @@ fn chi2_two_flats(s: &Samples, sigma: f64) -> f64 {
     acc / (sigma * sigma) * (n as f64 / m as f64)
 }
 
+/// chi² of a model against the samples: per channel in sRGB, the part of the residual
+/// beyond the half-LSB quantisation dead zone, in units of `sigma`.
+///
+/// `chi² = (n/m) · Σ_i Σ_ch max(|o_i,ch − p_ch(x_i, y_i)| − ½LSB, 0)² / σ²`
+///
+/// where `o` is the observed sRGB colour, `p` the model's prediction ([`FillModel::eval`]),
+/// `½LSB = 0.5/255` ([`QUANT_HALF_STEP`]), and the sum runs over a strided subsample of
+/// `m` of the `n` samples (at most [`fit_cap`]). The `n/m` factor restores the full
+/// count so a large region's chi² is comparable with its parameter cost and with smaller
+/// regions. The dead zone is the exact likelihood of an 8-bit-rounded Gaussian
+/// observation, as the module docs explain. No samples gives 0.
 fn chi2(model: &FillModel, s: &Samples, sigma: f64) -> f64 {
     let inv = 1.0 / (sigma * sigma);
     let n = s.len();
@@ -1225,11 +769,15 @@ fn chi2(model: &FillModel, s: &Samples, sigma: f64) -> f64 {
     sum * inv * (n as f64 / used as f64)
 }
 
-/// Largest per-channel sRGB range the model spans over the samples.
 /// Fraction of the samples at which `model` predicts a colour at least a quarter of its
 /// own contrast away from the region's mean colour — how much of the region the ramp
 /// actually shades. Half for a linear ramp; near zero for a ramp that is flat except at
 /// one end.
+///
+/// `support = #{ i : |p(x_i, y_i) − mean| > contrast/4 } / m`, Euclidean distance in
+/// sRGB, over a strided subsample of `m` samples. `mean` is the flat fit's colour
+/// (a per-channel median), `contrast` comes from [`visible_contrast`]. Compared with
+/// [`MIN_RAMP_SUPPORT`]. No samples gives 0.
 fn ramp_support(model: &FillModel, s: &Samples, mean: [f32; 3], contrast: f64) -> f64 {
     let thr = (0.25 * contrast) as f32;
     let thr2 = thr * thr;
@@ -1251,6 +799,12 @@ fn ramp_support(model: &FillModel, s: &Samples, mean: [f32; 3], contrast: f64) -
     }
 }
 
+/// Largest per-channel sRGB range the model spans over the samples:
+/// `max_ch (max_i p_ch − min_i p_ch)` over a strided subsample, where `p` is the model's
+/// prediction at each sample position. It measures the gradient the model *draws* on
+/// this region, not the data's range, so a ramp whose visible part is below the noise
+/// can be refused (see `min_contrast` in [`fit_samples`]). A flat model gives 0; so does
+/// an empty sample set, whose sentinel range is negative and loses to the fold's 0.
 fn visible_contrast(model: &FillModel, s: &Samples) -> f64 {
     let mut lo = [f32::MAX; 3];
     let mut hi = [f32::MIN; 3];
@@ -1295,6 +849,24 @@ fn ramp_models(s: &Samples, w: usize, space: Interp) -> (Interp, Vec<[f64; 3]>, 
 }
 
 /// Every admissible candidate for the samples, flat first.
+///
+/// The model-selection core. Each candidate is scored `cost = 0.5·chi² + λ·params`
+/// ([`chi2`], [`FillModel::params`]); `sigma` is the per-channel noise in sRGB (floored
+/// at 0.5/255 when not positive) and `lambda` the price of one editable number. The
+/// steps, in order:
+///
+/// 1. the flat fit ([`fit_flat`]), always first, so [`select`]'s tie rule prefers it;
+/// 2. an early exit when `strict` is off, the region is below [`MIN_GRADIENT_PIXELS`],
+///    or flat already costs no more than the cheapest possible gradient;
+/// 3. linear, radial and elliptical ramps in both interpolation spaces, each gated on a
+///    visible contrast of `max(3σ, 1.5/255)` and a [`MIN_RAMP_SUPPORT`], plus their
+///    multi-stop variants ([`fit_mid_stops`]) under the same gates;
+/// 4. the ramp-or-step test: when two flat colours ([`chi2_two_flats`]) fit better than
+///    [`BIMODAL_MARGIN`] times the best gradient's chi², every gradient is dropped.
+///
+/// `w` is the image width, needed to find a sample's 4-neighbours by pixel index. The
+/// work is parallel (rayon) but the output order is the serial one, so ties are broken
+/// the same way on any number of threads.
 fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> Vec<FillFit> {
     let sigma = if sigma > 0.0 { sigma } else { 0.5 / 255.0 };
     let score = |model: FillModel| {
@@ -1429,6 +1001,11 @@ fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> 
 }
 
 /// The cheapest candidate; on a tie the earlier (simpler) one.
+///
+/// # Panics
+///
+/// On an empty list. Every producer ([`fit_samples`], [`fit_pixels`]) returns at least
+/// the flat fit.
 pub(crate) fn select(mut candidates: Vec<FillFit>) -> FillFit {
     let mut best = 0;
     for (i, c) in candidates.iter().enumerate() {
@@ -1439,6 +1016,9 @@ pub(crate) fn select(mut candidates: Vec<FillFit>) -> FillFit {
     candidates.swap_remove(best)
 }
 
+/// A flat fill of sRGB colour `c` scored as if it fitted perfectly: chi² 0, cost
+/// `λ·PARAMS_FLAT`. Used where a fill is assigned rather than fitted (a palette label
+/// with no pixels, a carved feature) or where there is nothing to fit.
 pub(crate) fn flat_only(c: [f32; 3], lambda: f64) -> FillFit {
     FillFit {
         model: FillModel::Flat(c),
@@ -1450,6 +1030,15 @@ pub(crate) fn flat_only(c: [f32; 3], lambda: f64) -> FillFit {
 
 /// Fit the pixels `pixels` (region membership given by `member`): interior pixels if
 /// there are any, otherwise all of them and flat only.
+///
+/// Three tiers of samples, taken in order until one is non-empty: strictly interior
+/// pixels that pass `evidence` (all candidates are fitted); any pixel that passes
+/// `evidence`; any pixel at all (both flat only). An empty `pixels` gives a black flat
+/// fill at the cost of its parameters. Returns every candidate, flat first; the caller
+/// picks with [`select`]. `sigma` is the sRGB noise, `lambda` the parameter price.
+///
+/// With `INKVEC_EVDBG` set, the samples and the chosen model are printed to stderr.
+///
 /// Two of the arguments are closures the caller builds per region; they cannot live
 /// in a struct shared between calls.
 #[allow(clippy::too_many_arguments)]
@@ -1594,6 +1183,7 @@ pub mod carve;
 mod debug;
 pub(crate) mod eval;
 mod evidence;
+mod fit;
 pub(crate) mod regions;
 pub(crate) mod stops;
 pub mod svg;
@@ -1602,6 +1192,7 @@ pub use bands::{merge_gradient_bands, merge_gradient_bands_with_ink};
 pub(crate) use budget::*;
 pub use carve::{carve_residual_features, carve_residual_features_with_detail_noise};
 pub(crate) use evidence::*;
+use fit::*;
 pub(crate) use stops::fit_mid_stops;
 pub use svg::{fade_to_svg, fill_to_svg};
 

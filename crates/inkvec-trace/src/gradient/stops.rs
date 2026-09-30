@@ -63,6 +63,8 @@ impl FillModel {
     }
 }
 
+mod knots;
+
 /// Rounds of reweighting when a stop count's final profile is fitted.
 const IRLS_ROUNDS: usize = 2;
 
@@ -70,16 +72,25 @@ const IRLS_ROUNDS: usize = 2;
 /// fitted than the rest of its segment; see [`fit_mid_stops`].
 const MAX_SLIVER_MISFIT: f64 = 4.0;
 
-/// Intervals of the coarse grid a new knot's position is first searched on, before a
-/// golden-section search refines it.
-const KNOT_GRID: usize = 16;
+/// Most profile nodes a fit has: the two end stops and [`MAX_MID_STOPS`] interior ones.
+const MAX_NODES: usize = MAX_MID_STOPS + 2;
+
+/// A normal-equations matrix on the stack: the leading `n×n` block is used.
+type Mat = [[f64; MAX_NODES]; MAX_NODES];
+/// Its right-hand sides, one per colour channel.
+type Rhs = [[f64; 3]; MAX_NODES];
 
 /// Solve the small system `A·x = b` for three right-hand sides at once (Gaussian
 /// elimination with partial pivoting). `None` when singular (a pivot below 1e-12).
-/// `a` is `n×n` with `n = b.len()`; here `n` is the number of profile nodes, at most
-/// four, so a dense solve is cheaper than anything cleverer.
-fn solve_small(mut a: Vec<Vec<f64>>, mut b: Vec<[f64; 3]>) -> Option<Vec<[f64; 3]>> {
-    let n = b.len();
+/// Only the leading `n×n` block of `a` and the first `n` rows of `b` are read; here `n`
+/// is the number of profile nodes, at most four, so a dense solve is cheaper than
+/// anything cleverer.
+///
+/// The matrix lives on the stack: this runs once per candidate knot, tens of thousands
+/// of times per image, and the heap `Vec<Vec<f64>>` it used to take cost an allocation
+/// per row. The elimination is the same one, operation for operation, so the solution is
+/// the same bits. Not from the literature: an allocation removed.
+fn solve_small(mut a: Mat, mut b: Rhs, n: usize) -> Option<Vec<[f64; 3]>> {
     for i in 0..n {
         let piv = (i..n).max_by(|&p, &q| a[p][i].abs().total_cmp(&a[q][i].abs()))?;
         if a[piv][i].abs() < 1e-12 {
@@ -87,19 +98,17 @@ fn solve_small(mut a: Vec<Vec<f64>>, mut b: Vec<[f64; 3]>) -> Option<Vec<[f64; 3
         }
         a.swap(i, piv);
         b.swap(i, piv);
-        let (top, rest) = a.split_at_mut(i + 1);
-        let (btop, brest) = b.split_at_mut(i + 1);
-        let (pivot_row, pivot_b) = (&top[i], &btop[i]);
-        for (row, brow) in rest.iter_mut().zip(brest.iter_mut()) {
-            let f = row[i] / pivot_row[i];
+        let (pivot_row, pivot_b) = (a[i], b[i]);
+        for r in i + 1..n {
+            let f = a[r][i] / pivot_row[i];
             if f == 0.0 {
                 continue;
             }
-            for (x, &y) in row[i..].iter_mut().zip(&pivot_row[i..]) {
-                *x -= f * y;
+            for c in i..n {
+                a[r][c] -= f * pivot_row[c];
             }
-            for (x, &y) in brow.iter_mut().zip(pivot_b) {
-                *x -= f * y;
+            for k in 0..3 {
+                b[r][k] -= f * pivot_b[k];
             }
         }
     }
@@ -130,11 +139,11 @@ fn normal_equations(
     basis: &[(usize, f64)],
     weight: &[f64],
     m: usize,
-) -> (Vec<Vec<f64>>, Vec<[f64; 3]>) {
-    let mut diag = vec![0.0; m];
+) -> (Mat, Rhs) {
+    let mut diag = [0.0; MAX_NODES];
     // `off[j]` couples nodes `j - 1` and `j`.
-    let mut off = vec![0.0; m];
-    let mut atb = vec![[0.0; 3]; m];
+    let mut off = [0.0; MAX_NODES];
+    let mut atb: Rhs = [[0.0; 3]; MAX_NODES];
     // The piece whose sums are in the locals; pieces are numbered from 1, so 0 is none.
     let mut cur = 0usize;
     let (mut d0, mut d1, mut o) = (0.0, 0.0, 0.0);
@@ -162,19 +171,16 @@ fn normal_equations(
         (diag[cur - 1], diag[cur], off[cur]) = (d0, d1, o);
         (atb[cur - 1], atb[cur]) = (b0, b1);
     }
-    let ata = (0..m)
-        .map(|i| {
-            let mut row = vec![0.0; m];
-            row[i] = diag[i] + 1e-9;
-            if i > 0 {
-                row[i - 1] = off[i];
-            }
-            if i + 1 < m {
-                row[i + 1] = off[i + 1];
-            }
-            row
-        })
-        .collect();
+    let mut ata: Mat = [[0.0; MAX_NODES]; MAX_NODES];
+    for (i, row) in ata.iter_mut().enumerate().take(m) {
+        row[i] = diag[i] + 1e-9;
+        if i > 0 {
+            row[i - 1] = off[i];
+        }
+        if i + 1 < m {
+            row[i + 1] = off[i + 1];
+        }
+    }
     (ata, atb)
 }
 
@@ -228,7 +234,7 @@ fn fit_piecewise(
             }
         }
         let (ata, atb) = normal_equations(cols, &basis, &weight, m);
-        x = solve_small(ata, atb)?;
+        x = solve_small(ata, atb, m)?;
     }
     let mut objective = 0.0;
     for (c, &(j, u)) in cols.iter().zip(&basis) {
@@ -257,9 +263,10 @@ fn fit_piecewise(
 /// coordinate `t`; an artist's three- or four-stop gradient is a polyline. With the
 /// candidate's geometry held fixed, each sample has a `t`, and the question reduces to
 /// fitting a piecewise-linear profile with one or two free break points ("knots") to
-/// the points `(t_i, c_i)`. Knots are added greedily, one per round: the new knot's
-/// position minimises the Huber objective of [`fit_piecewise`] (a 16-interval grid,
-/// then 16 golden-section steps), and the profile is then refitted with
+/// the points `(t_i, c_i)`. Knots are added greedily, one per round: the new knot is the
+/// stop offset (a multiple of 1/1000, the precision the SVG carries) found by the exact
+/// binned scan of [`knots`] -- a segmented-regression search on moments, reweighted
+/// towards the Huber loss -- and the profile is then refitted on the samples with
 /// [`IRLS_ROUNDS`] of reweighting.
 ///
 /// Robustness: the Huber threshold is `δ = max(3 · 1.4826 · median_i r_i, 1/255)`, where
@@ -350,9 +357,9 @@ impl<'a> StopProblem<'a> {
         if idx.len() < 4 * MIN_GRADIENT_PIXELS {
             return None;
         }
-        let t: Vec<f64> = idx.iter().map(|&i| model.t_at(s.x[i], s.y[i])).collect();
-        let c: Vec<[f64; 3]> = idx.iter().map(|&i| cols[i]).collect();
         let parent = model.eval();
+        let t: Vec<f64> = idx.iter().map(|&i| parent.t_at(s.x[i], s.y[i])).collect();
+        let c: Vec<[f64; 3]> = idx.iter().map(|&i| cols[i]).collect();
         let parent_r: Vec<f64> = idx
             .iter()
             .map(|&i| {
@@ -401,61 +408,25 @@ impl<'a> StopProblem<'a> {
         })
     }
 
-    /// Where one more knot, added to `knots`, lowers most the Huber objective of one
-    /// solve at the starting weights: the best of a [`KNOT_GRID`]-interval grid over `[k_lo, k_hi]` (fitted in
-    /// parallel, chosen in grid order so ties go to the lowest position), then 16
-    /// golden-section steps within one grid step of it. `None` when no grid position
-    /// gives a finite objective.
+    /// Where one more knot, added to `knots`, goes: the stop offset in `[k_lo, k_hi]` (a
+    /// multiple of 1/1000) chosen by [`knots::best_knot`], the exact binned scan
+    /// reweighted towards the Huber loss. `knots` must hold offsets on that grid, as this
+    /// returns them. `None` when the range holds no grid offset or no offset gives a
+    /// solvable profile.
     fn best_knot(&self, knots: &[f64]) -> Option<f64> {
-        let (k_lo, k_hi) = (self.k_lo, self.k_hi);
-        let resid_with = |k: f64| -> f64 {
-            let mut ks = knots.to_vec();
-            ks.push(k);
-            ks.sort_by(f64::total_cmp);
-            fit_piecewise(&self.c, &self.t, &ks, &self.weight, self.delta, 0)
-                .map_or(f64::MAX, |(r, _)| r)
-        };
-        let mut best = (f64::NAN, f64::MAX);
-        let step = (k_hi - k_lo) / KNOT_GRID as f64;
-        // The grid's fits are independent, and on a large gradient region they are the
-        // stage's longest serial stretch: fit them side by side, then pick in grid order
-        // exactly as the one-at-a-time loop did.
-        let grid: Vec<f64> = {
-            use rayon::prelude::*;
-            (0..=KNOT_GRID)
-                .into_par_iter()
-                .map(|g| resid_with(k_lo + g as f64 * step))
-                .collect()
-        };
-        for (g, &r) in grid.iter().enumerate() {
-            let k = k_lo + g as f64 * step;
-            if r < best.1 {
-                best = (k, r);
-            }
-        }
-        if !best.0.is_finite() {
+        let steps = knots::OFFSET_STEPS as f64;
+        let fixed: Vec<usize> = knots
+            .iter()
+            .map(|&k| (k * steps).round() as usize)
+            .collect();
+        // A whisker of slack so an end of the range that is itself a grid offset counts.
+        let lo = ((self.k_lo * steps - 1e-9).ceil().max(1.0)) as usize;
+        let hi = ((self.k_hi * steps + 1e-9).floor() as usize).min(knots::OFFSET_STEPS - 1);
+        if lo > hi {
             return None;
         }
-        let (mut lo, mut hi) = ((best.0 - step).max(k_lo), (best.0 + step).min(k_hi));
-        let phi = 0.5 * (5.0f64.sqrt() - 1.0);
-        let (mut a, mut b) = (hi - phi * (hi - lo), lo + phi * (hi - lo));
-        let (mut fa, mut fb) = (resid_with(a), resid_with(b));
-        for _ in 0..16 {
-            if fa < fb {
-                hi = b;
-                b = a;
-                fb = fa;
-                a = hi - phi * (hi - lo);
-                fa = resid_with(a);
-            } else {
-                lo = a;
-                a = b;
-                fa = fb;
-                b = lo + phi * (hi - lo);
-                fb = resid_with(b);
-            }
-        }
-        Some(0.5 * (lo + hi))
+        knots::best_knot(&self.t, &self.c, &self.weight, self.delta, &fixed, (lo, hi))
+            .map(|j| j as f64 / steps)
     }
 
     /// Whether the knot `k` (already in the sorted `knots`) cuts its segment into a
@@ -582,7 +553,86 @@ mod tests {
                     b.map(f32::to_bits),
                     "{model:?} at {x},{y}"
                 );
+                assert_eq!(
+                    model.t_at(x, y).to_bits(),
+                    eval.t_at(x, y).to_bits(),
+                    "t of {model:?} at {x},{y}"
+                );
             }
+        }
+    }
+
+    /// The heap-allocated solver `solve_small` replaced, verbatim.
+    fn solve_small_vec(mut a: Vec<Vec<f64>>, mut b: Vec<[f64; 3]>) -> Option<Vec<[f64; 3]>> {
+        let n = b.len();
+        for i in 0..n {
+            let piv = (i..n).max_by(|&p, &q| a[p][i].abs().total_cmp(&a[q][i].abs()))?;
+            if a[piv][i].abs() < 1e-12 {
+                return None;
+            }
+            a.swap(i, piv);
+            b.swap(i, piv);
+            let (top, rest) = a.split_at_mut(i + 1);
+            let (btop, brest) = b.split_at_mut(i + 1);
+            let (pivot_row, pivot_b) = (&top[i], &btop[i]);
+            for (row, brow) in rest.iter_mut().zip(brest.iter_mut()) {
+                let f = row[i] / pivot_row[i];
+                if f == 0.0 {
+                    continue;
+                }
+                for (x, &y) in row[i..].iter_mut().zip(&pivot_row[i..]) {
+                    *x -= f * y;
+                }
+                for (x, &y) in brow.iter_mut().zip(pivot_b) {
+                    *x -= f * y;
+                }
+            }
+        }
+        let mut x = vec![[0.0; 3]; n];
+        for i in (0..n).rev() {
+            for k in 0..3 {
+                let mut s = b[i][k];
+                for c in i + 1..n {
+                    s -= a[i][c] * x[c][k];
+                }
+                x[i][k] = s / a[i][i];
+            }
+        }
+        Some(x)
+    }
+
+    #[test]
+    fn stack_solve_matches_the_heap_solve_bit_for_bit() {
+        let mut st = 3u64;
+        for case in 0..400 {
+            let n = 1 + case % MAX_NODES;
+            let mut a: Mat = [[0.0; MAX_NODES]; MAX_NODES];
+            let mut b: Rhs = [[0.0; 3]; MAX_NODES];
+            for i in 0..n {
+                for j in 0..n {
+                    // Dense, tridiagonal, pivot-hungry (tiny diagonal) and singular cases.
+                    let v = lcg(&mut st) - 0.5;
+                    a[i][j] = match case % 4 {
+                        0 => v,
+                        1 if i.abs_diff(j) > 1 => 0.0,
+                        2 if i == j => 1e-14 * v,
+                        3 if i + 1 == n => a[0][j],
+                        _ => v,
+                    };
+                }
+                b[i] = [lcg(&mut st), lcg(&mut st) - 0.5, 3.0 * lcg(&mut st)];
+            }
+            let av: Vec<Vec<f64>> = (0..n).map(|i| a[i][..n].to_vec()).collect();
+            let bv: Vec<[f64; 3]> = b[..n].to_vec();
+            let (x1, x2) = (solve_small(a, b, n), solve_small_vec(av, bv));
+            let bits = |x: &Option<Vec<[f64; 3]>>| {
+                x.as_ref().map(|v| {
+                    v.iter()
+                        .flat_map(|r| r.map(f64::to_bits))
+                        .collect::<Vec<_>>()
+                })
+            };
+            assert_eq!(bits(&x1), bits(&x2), "case {case}");
         }
     }
 

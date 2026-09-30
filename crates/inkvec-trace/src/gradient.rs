@@ -630,9 +630,9 @@ fn dominant_color_axis(s: &Samples, idx: &[usize], mean: [f64; 3]) -> Option<[f6
 }
 
 /// Residual of the best *two* flat colours for these samples, on the same scale as
-/// [`chi2`]. This is not a model the emitter can write, and it is not meant to be: it
-/// exists only to answer a question about the alternative, which is whether the
-/// variation in a region is a ramp or a step (see [`BIMODAL_MARGIN`]).
+/// [`Predictions::chi2`]. This is not a model the emitter can write, and it is not meant
+/// to be: it exists only to answer a question about the alternative, which is whether
+/// the variation in a region is a ramp or a step (see [`BIMODAL_MARGIN`]).
 ///
 /// The method is one-dimensional k-means with k = 2 (Lloyd's iteration) along the
 /// samples' dominant colour axis ([`dominant_color_axis`]): project each sRGB colour to
@@ -733,93 +733,6 @@ fn chi2_two_flats(s: &Samples, sigma: f64) -> f64 {
     acc / (sigma * sigma) * (n as f64 / m as f64)
 }
 
-/// chi² of a model against the samples: per channel in sRGB, the part of the residual
-/// beyond the half-LSB quantisation dead zone, in units of `sigma`.
-///
-/// `chi² = (n/m) · Σ_i Σ_ch max(|o_i,ch − p_ch(x_i, y_i)| − ½LSB, 0)² / σ²`
-///
-/// where `o` is the observed sRGB colour, `p` the model's prediction ([`FillModel::eval`]),
-/// `½LSB = 0.5/255` ([`QUANT_HALF_STEP`]), and the sum runs over a strided subsample of
-/// `m` of the `n` samples (at most [`fit_cap`]). The `n/m` factor restores the full
-/// count so a large region's chi² is comparable with its parameter cost and with smaller
-/// regions. The dead zone is the exact likelihood of an 8-bit-rounded Gaussian
-/// observation, as the module docs explain. No samples gives 0.
-fn chi2(model: &FillModel, s: &Samples, sigma: f64) -> f64 {
-    let inv = 1.0 / (sigma * sigma);
-    let n = s.len();
-    let stride = (n / fit_cap()).max(1);
-    let mut sum = 0.0;
-    let mut used = 0usize;
-    let mut i = 0;
-    let model = model.eval();
-    while i < n {
-        let p = model.color_at(s.x[i], s.y[i]);
-        for (obs, pred) in s.srgb[i].iter().zip(p.iter()) {
-            let d = ((obs - pred).abs() as f64 - QUANT_HALF_STEP).max(0.0);
-            sum += d * d;
-        }
-        used += 1;
-        i += stride;
-    }
-    if used == 0 {
-        return 0.0;
-    }
-    // Scaled back to the full pixel count so the MDL cost stays comparable with
-    // parameter costs and with fits of other regions.
-    sum * inv * (n as f64 / used as f64)
-}
-
-/// Fraction of the samples at which `model` predicts a colour at least a quarter of its
-/// own contrast away from the region's mean colour — how much of the region the ramp
-/// actually shades. Half for a linear ramp; near zero for a ramp that is flat except at
-/// one end.
-///
-/// `support = #{ i : |p(x_i, y_i) − mean| > contrast/4 } / m`, Euclidean distance in
-/// sRGB, over a strided subsample of `m` samples. `mean` is the flat fit's colour
-/// (a per-channel median), `contrast` comes from [`visible_contrast`]. Compared with
-/// [`MIN_RAMP_SUPPORT`]. No samples gives 0.
-fn ramp_support(model: &FillModel, s: &Samples, mean: [f32; 3], contrast: f64) -> f64 {
-    let thr = (0.25 * contrast) as f32;
-    let thr2 = thr * thr;
-    let stride = (s.len() / fit_cap()).max(1);
-    let (mut n, mut k) = (0usize, 0usize);
-    let model = model.eval();
-    for i in (0..s.len()).step_by(stride) {
-        let p = model.color_at(s.x[i], s.y[i]);
-        let d = [p[0] - mean[0], p[1] - mean[1], p[2] - mean[2]];
-        n += 1;
-        if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > thr2 {
-            k += 1;
-        }
-    }
-    if n == 0 {
-        0.0
-    } else {
-        k as f64 / n as f64
-    }
-}
-
-/// Largest per-channel sRGB range the model spans over the samples:
-/// `max_ch (max_i p_ch − min_i p_ch)` over a strided subsample, where `p` is the model's
-/// prediction at each sample position. It measures the gradient the model *draws* on
-/// this region, not the data's range, so a ramp whose visible part is below the noise
-/// can be refused (see `min_contrast` in [`fit_samples`]). A flat model gives 0; so does
-/// an empty sample set, whose sentinel range is negative and loses to the fold's 0.
-fn visible_contrast(model: &FillModel, s: &Samples) -> f64 {
-    let mut lo = [f32::MAX; 3];
-    let mut hi = [f32::MIN; 3];
-    let stride = (s.len() / fit_cap()).max(1);
-    let model = model.eval();
-    for i in (0..s.len()).step_by(stride) {
-        let p = model.color_at(s.x[i], s.y[i]);
-        for k in 0..3 {
-            lo[k] = lo[k].min(p[k]);
-            hi[k] = hi[k].max(p[k]);
-        }
-    }
-    (0..3).map(|k| (hi[k] - lo[k]) as f64).fold(0.0, f64::max)
-}
-
 /// The linear, radial and elliptic ramps for the samples in one interpolation space, in
 /// that order, with the samples' colours in that space. The radial fit (and the elliptic
 /// one it seeds) runs beside the linear one.
@@ -851,7 +764,7 @@ fn ramp_models(s: &Samples, w: usize, space: Interp) -> (Interp, Vec<[f64; 3]>, 
 /// Every admissible candidate for the samples, flat first.
 ///
 /// The model-selection core. Each candidate is scored `cost = 0.5·chi² + λ·params`
-/// ([`chi2`], [`FillModel::params`]); `sigma` is the per-channel noise in sRGB (floored
+/// ([`Predictions::chi2`], [`FillModel::params`]); `sigma` is the per-channel noise in sRGB (floored
 /// at 0.5/255 when not positive) and `lambda` the price of one editable number. The
 /// steps, in order:
 ///
@@ -869,8 +782,9 @@ fn ramp_models(s: &Samples, w: usize, space: Interp) -> (Interp, Vec<[f64; 3]>, 
 /// the same way on any number of threads.
 fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> Vec<FillFit> {
     let sigma = if sigma > 0.0 { sigma } else { 0.5 / 255.0 };
-    let score = |model: FillModel| {
-        let c2 = chi2(&model, s, sigma);
+    // A candidate and its predictions at the scored samples, scored.
+    let scored = |model: FillModel, preds: &Predictions| {
+        let c2 = preds.chi2(s, sigma);
         let params = model.params();
         FillFit {
             model,
@@ -878,6 +792,10 @@ fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> 
             params,
             cost: 0.5 * c2 + lambda * params,
         }
+    };
+    let score = |model: FillModel| {
+        let preds = Predictions::new(&model, s);
+        scored(model, &preds)
     };
     let t_f = inkvec_core::clock::Instant::now();
     let flat = fit_flat(s);
@@ -930,8 +848,11 @@ fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> 
         .map(|&(space, cols, cand)| {
             let cand = cand.clone();
             let mut out = Vec::new();
-            let contrast = visible_contrast(&cand, s);
-            let support = ramp_support(&cand, s, flat_c, contrast);
+            // One evaluation of the candidate per scored sample, read by all three
+            // scores (see `score`).
+            let preds = Predictions::new(&cand, s);
+            let contrast = preds.contrast();
+            let support = preds.support(flat_c, contrast);
             if contrast < min_contrast || support < MIN_RAMP_SUPPORT {
                 // Which gate refused a candidate is otherwise invisible: a region that
                 // ends up "cands 1" looks identical whether no ramp was ever tried or
@@ -955,11 +876,12 @@ fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> 
                 return out;
             }
             let multi = fit_mid_stops(&cand, s, cols, space);
-            out.push(score(cand));
+            out.push(scored(cand, &preds));
             for m in multi {
-                let c = visible_contrast(&m, s);
-                if c >= min_contrast && ramp_support(&m, s, flat_c, c) >= MIN_RAMP_SUPPORT {
-                    out.push(score(m));
+                let pm = Predictions::new(&m, s);
+                let c = pm.contrast();
+                if c >= min_contrast && pm.support(flat_c, c) >= MIN_RAMP_SUPPORT {
+                    out.push(scored(m, &pm));
                 }
             }
             out
@@ -1185,6 +1107,7 @@ pub(crate) mod eval;
 mod evidence;
 mod fit;
 pub(crate) mod regions;
+mod score;
 pub(crate) mod stops;
 pub mod svg;
 
@@ -1193,6 +1116,7 @@ pub(crate) use budget::*;
 pub use carve::{carve_residual_features, carve_residual_features_with_detail_noise};
 pub(crate) use evidence::*;
 use fit::*;
+use score::{ramp_support, visible_contrast, Predictions};
 pub(crate) use stops::fit_mid_stops;
 pub use svg::{fade_to_svg, fill_to_svg};
 

@@ -385,8 +385,11 @@ pub fn trace_color_full_with_alpha(
             opts.lossy_intake
         );
     }
-    let pal = color::extract_palette_mdl(
+    // The image's distinct colours, numbered once for the palette and the labels.
+    let ids = color::distinct::ColourIds::of_rgb(&rgb);
+    let pal = color::extract_palette_mdl_ids(
         &rgb,
+        &ids,
         img.width,
         img.height,
         opts.merge_distance,
@@ -402,7 +405,8 @@ pub fn trace_color_full_with_alpha(
     progress::note(|| format!("{} inks", pal.colors.len()));
     progress::begin("labels");
     let mut pal = pal;
-    let mut labels = color::label_image(&rgb, &pal);
+    let mut labels = color::label_image_ids(&rgb, &ids, &pal);
+    drop(ids);
     if opts.lossy_intake && research_lossy_regularize() {
         let sigma_lossy = sigma_noise.max(regularize::residual_sigma(
             &rgb, &labels, img.width, img.height, &pal,

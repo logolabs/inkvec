@@ -85,6 +85,7 @@ export type RailTab = "result" | "tune";
 /** How the two panes are arranged. */
 export type ViewMode = "side" | "wipe" | "ab";
 
+/** Everything the interface shows, in one object the store owns. */
 export interface State {
   caps: Capabilities | null;
   prefs: Prefs | null;

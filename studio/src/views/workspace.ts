@@ -15,6 +15,7 @@ import { fetchBar, fetchPercent } from "../components/denoiserfetch";
 import { createActivity } from "../components/activity";
 import { elapsedText, runningLabel } from "../lib/live";
 
+/** What the stage's buttons ask the app to do. */
 export interface WorkspaceActions {
   openFile(): void;
   openSample(file: string): void;
@@ -31,6 +32,7 @@ export interface WorkspaceActions {
   changeSetting?: (key: keyof Settings, value: Settings[keyof Settings]) => void;
 }
 
+/** The stage, as `main.ts` holds it. */
 export interface Workspace {
   el: HTMLElement;
   viewer: Viewer;
@@ -38,6 +40,11 @@ export interface Workspace {
   mount(node: HTMLElement): void;
 }
 
+/**
+ * The Vectorize tab's stage: the viewer's toolbar, the viewer (or the empty state with the
+ * samples before an image is open, or a message when a trace could not be shown), the
+ * activity log, and the status strip along the bottom.
+ */
 export function createWorkspace(store: Store, act: WorkspaceActions, samples: () => SampleInfo[]): Workspace {
   const viewer = createViewer(store);
   const tools = h("div.viewertools");

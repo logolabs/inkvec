@@ -18,6 +18,10 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { h, icon } from "../lib/dom";
 import { DESKTOP_URL, DESKTOP_WHY, WEB } from "../lib/platform";
 
+/**
+ * The window's controls for this build: minimise, maximise and close on the desktop; in a
+ * browser, Full screen or "Open in its own tab" (`webControls`).
+ */
 export function windowControls(): HTMLElement {
   if (WEB) return webControls();
   const win = getCurrentWindow();

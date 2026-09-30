@@ -48,6 +48,7 @@ let module: Promise<DenoiseModule> | null = null;
 let storing: Promise<{ cached: boolean }> | null = null;
 let preparing: Promise<string> | null = null;
 
+/** The denoiser's loader module (`denoise.js`), imported once and shared; a failed import is retried next time. */
 function denoise(): Promise<DenoiseModule> {
   if (!module) {
     module = import(/* @vite-ignore */ new URL(`denoise.js${token ? `?v=${token}` : ""}`, base).href) as Promise<DenoiseModule>;
@@ -107,6 +108,14 @@ function prepare(): Promise<string> {
   return preparing;
 }
 
+/**
+ * Denoise one image for the engine worker, which is blocked waiting on `shared`.
+ *
+ * The buffer's first two 32-bit integers are the reply's header: slot 0 is the state (1 done,
+ * 2 failed), slot 1 the byte length of an error message. From byte 8 on it holds the
+ * denoised floats, or the message as UTF-8, cut to fit. Slot 0 is written last and then
+ * notified, so the waiting worker never reads a half-written reply.
+ */
 async function runOnce(m: { input: Float32Array; width: number; height: number; shared: SharedArrayBuffer }) {
   const head = new Int32Array(m.shared, 0, 2);
   try {

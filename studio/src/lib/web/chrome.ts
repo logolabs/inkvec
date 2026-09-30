@@ -153,6 +153,7 @@ let lastStep = performance.now();
 
 const mb = (n: number) => (n / (1024 * 1024)).toFixed(1);
 
+/** Paint the newest queued step onto the loading screen: once per animation frame at most. */
 function paintBoot(): void {
   frame = 0;
   const step = queued;

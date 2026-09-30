@@ -119,6 +119,11 @@ export function swatchBackground(member: string, radial = false): string {
 }
 
 const labCache = new Map<string, [number, number, number]>();
+/**
+ * `#rrggbb` (or `#rgb`) to CIELAB, memoised: the palette compares the same few dozen inks
+ * with each other over and over. Null for text that is not a hex colour. The cache is
+ * simply emptied once it passes 4,096 entries.
+ */
 function labOf(hex: string): [number, number, number] | null {
   const hit = labCache.get(hex);
   if (hit) return hit;

@@ -15,6 +15,10 @@ const CRC_TABLE = (() => {
   return t;
 })();
 
+/**
+ * The CRC-32 a zip entry carries (the IEEE 802.3 polynomial, reflected, 0xedb88320), as an
+ * unsigned 32-bit integer. Table-driven, one byte at a time.
+ */
 export function crc32(data: Uint8Array): number {
   let c = 0xffffffff;
   for (let i = 0; i < data.length; i++) c = CRC_TABLE[(c ^ data[i]) & 0xff] ^ (c >>> 8);

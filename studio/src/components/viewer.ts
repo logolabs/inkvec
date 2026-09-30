@@ -24,6 +24,7 @@ import { toneOf } from "../views/minify";
 export const ZOOM_MIN = 0.25;
 export const ZOOM_MAX = 64;
 
+/** The viewer, as the workspace holds it. */
 export interface Viewer {
   el: HTMLElement;
   /** Rebuild the artwork. Call when the drawing or the source changes. */
@@ -38,6 +39,12 @@ export interface Viewer {
   zoomTo(zoom: number): void;
 }
 
+/**
+ * The viewer: the source and the vector drawing side by side, wiped or flicked A/B, with the
+ * overlays (wireframe, anchors, handles, certainty bands) over the drawing, and zoom and pan
+ * shared by both panes. Built once; it redraws only the parts whose state changed, because
+ * the drawing is the one part of the interface that is expensive to rebuild.
+ */
 export function createViewer(store: Store): Viewer {
   const sourceArt = h("div.art");
   const compareArt = h("div.art.compare");
@@ -987,9 +994,4 @@ export function isolateCss(keys: string[]): string {
     `${DRAWING} :is(${any("fill")}) { fill-opacity: 1 !important; stroke: var(--ink, #faf8f5) !important; stroke-opacity: 1 !important; stroke-width: 3px !important; vector-effect: non-scaling-stroke !important; paint-order: stroke !important; }`,
     `${DRAWING} :is(${any("stroke")}) { stroke-opacity: 1 !important; }`,
   ].join("\n");
-}
-
-/** Whether a state has something for the viewer to show. */
-export function hasDrawing(st: State): boolean {
-  return Boolean(st.source);
 }

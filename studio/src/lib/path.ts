@@ -160,15 +160,6 @@ export function nodesOf(d: string): Node[] {
   return out;
 }
 
-/** Every `d` attribute in a document, in order. */
-export function pathData(svg: string): string[] {
-  const out: string[] = [];
-  const re = /\sd="([^"]*)"/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(svg)) !== null) out.push(m[1]);
-  return out;
-}
-
 /** Elements the overlay knows how to draw, in document order. */
 const SHAPES = "path, circle, ellipse, rect, line, polyline, polygon";
 
@@ -194,6 +185,7 @@ export function shapesOf(root: Element): string[] {
   return out;
 }
 
+/** A numeric attribute of `el`, or `fallback` when it is absent, empty or not a finite number. */
 function num(el: Element, name: string, fallback = 0): number {
   // An absent attribute is the fallback, not zero: `Number(null)` is 0, which quietly
   // turned `<rect rx="8">` (no `ry`) into a square-cornered rectangle.
@@ -209,6 +201,7 @@ function rotation(el: Element): number {
   return m ? Number(m[1]) : 0;
 }
 
+/** One drawable element as path data (see `shapesOf`); null for a shape with nothing to draw. */
 function shapeData(el: Element): string | null {
   const f = (n: number) => (Math.round(n * 1000) / 1000).toString();
   switch (el.nodeName.toLowerCase()) {

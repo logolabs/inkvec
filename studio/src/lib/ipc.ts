@@ -1,7 +1,9 @@
 /**
  * The backend, typed.
  *
- * Every shape here mirrors a `serde` struct in `src-tauri`. They are written out rather
+ * Every shape here mirrors a `serde` struct on the Rust side: most in the Studio's shared
+ * core (`studio/core`, which both backends use), the rest in `src-tauri` or `inkvec-fab`,
+ * named in each type's comment. They are written out rather
  * than generated because there are about twenty of them and a code generator is a build
  * step somebody has to maintain; the backend's tests assert the field names, so a rename
  * on either side shows up as a type error here or a failing test there.
@@ -21,10 +23,12 @@ import type { TraceProgress } from "./live";
 // same core compiled to WebAssembly. `__INKVEC_WEB__` is a build-time constant, so each
 // bundle keeps only its own branch.
 
+/** Send one command to whichever backend this build has. */
 function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   return __INKVEC_WEB__ ? webBackend().invoke<T>(cmd, args) : tauriInvoke<T>(cmd, args);
 }
 
+/** Subscribe to one backend event, in whichever backend this build has. */
 function listen<T>(event: string, fn: EventCallback<T>): Promise<UnlistenFn> {
   return __INKVEC_WEB__
     ? webBackend().listen<T>(event, fn as (e: { payload: T }) => void)
@@ -33,9 +37,12 @@ function listen<T>(event: string, fn: EventCallback<T>): Promise<UnlistenFn> {
 
 // ---------------------------------------------------------------------- settings ---
 
+/** The denoiser: never, only on an image that reads as damaged, or always. Mirrors `options::Cleanup`. */
 export type Cleanup = "off" | "auto" | "on";
+/** Which tracing engine. Mirrors `options::TraceMode`. */
 export type TraceMode = "quality" | "fast";
 
+/** Every trace control, as the engine reads them. Mirrors `options::Settings`. */
 export interface Settings {
   mode: TraceMode;
   precision: number;
@@ -89,6 +96,7 @@ export interface ColourGroup {
   target: string | null;
 }
 
+/** The built-in presets' ids, in the order the rail shows them. Mirrors `options::Preset`. */
 export type PresetId =
   | "logo"
   | "icon"
@@ -101,6 +109,7 @@ export type PresetId =
   | "line-art"
   | "editable";
 
+/** One control of the Tune tab, as the engine describes it. Mirrors `options::Control`. */
 export interface Control {
   group: "Detail" | "Colour" | "Shape" | "Output";
   key: keyof Settings;
@@ -120,6 +129,7 @@ export interface Control {
   modes: "both" | "qualityOnly" | "fastOnly";
 }
 
+/** A built-in preset, with the settings it selects. Mirrors `api::PresetInfo`. */
 export interface PresetInfo {
   id: PresetId;
   name: string;
@@ -128,6 +138,7 @@ export interface PresetInfo {
   wantsDenoiser: boolean;
 }
 
+/** Whether this build has the denoiser and whether its weights are on disk. Mirrors `api::DenoiserStatus`. */
 export interface DenoiserStatus {
   supported: boolean;
   installed: boolean;
@@ -161,6 +172,7 @@ export interface DenoiserFetch {
   retrace?: boolean;
 }
 
+/** What this build can do: its controls, presets, stages and denoiser. Mirrors `api::Capabilities`. */
 export interface Capabilities {
   version: string;
   engineVersion: string;
@@ -172,13 +184,14 @@ export interface Capabilities {
   denoiser: DenoiserStatus;
 }
 
+/** The colour theme; `system` follows the operating system. Mirrors `prefs::Theme`. */
 export type Theme = "system" | "dark" | "light";
 
 /**
- * A preset the user saved. Unlike the built-in seven it is a whole snapshot of the
+ * A preset the user saved. Unlike the ten built-in ones it is a whole snapshot of the
  * controls, and its id is a string rather than a `PresetId` — saved presets are a
  * Vectorize-tab affordance and never reach the batch queue, whose CSV column has to say
- * which of the seven a row was measured with.
+ * which built-in preset a row was measured with.
  */
 export interface SavedPreset {
   id: string;
@@ -218,6 +231,7 @@ export interface InterfacePrefs {
   batchFailuresFirst: boolean;
 }
 
+/** The preferences, as the backend keeps and sanitises them. Mirrors `prefs::Prefs`. */
 export interface Prefs {
   /** The schema the preferences were written with; the backend brings older ones forward. */
   schema: number;
@@ -262,6 +276,7 @@ export interface SourceInfo {
   preview: string;
 }
 
+/** A bundled sample image the empty stage offers. Mirrors `api::SampleInfo`. */
 export interface SampleInfo {
   file: string;
   label: string;
@@ -283,6 +298,7 @@ export interface Structure {
   alignedNodes: number;
 }
 
+/** A trace's quality report: its colour difference and what the drawing cost. Mirrors `quality::Report`. */
 export interface Report {
   meanDe00: number | null;
   medianDe00: number | null;
@@ -298,6 +314,7 @@ export interface Report {
   tracedPx: number;
 }
 
+/** One colour of the traced drawing, flat or a gradient. Mirrors `quality::Ink`. */
 export interface Ink {
   /** The measured colour; a gradient's first stop. */
   traced: string;
@@ -313,6 +330,7 @@ export interface Ink {
   gradient?: "linear" | "radial";
 }
 
+/** Something the trace could not recover, in words, with why. Mirrors `lost::Loss`. */
 export interface Loss {
   kind: string;
   text: string;
@@ -320,17 +338,20 @@ export interface Loss {
   link: { label: string; href: string } | null;
 }
 
+/** Where the trace differs most from the source. Mirrors `quality::WorstCorner`. */
 export interface WorstCorner {
   x: number;
   y: number;
   de00: number;
 }
 
+/** One of the stages a trace reports, with the milliseconds it took. Mirrors `trace::Stage`. */
 export interface Stage {
   name: string;
   ms: number;
 }
 
+/** A finished trace: the drawing and everything measured about it. Mirrors `trace::Traced`. */
 export interface Traced {
   tier: "draft" | "final";
   svg: string;
@@ -350,6 +371,7 @@ export interface Traced {
   sourcePx: [number, number];
 }
 
+/** How a trace ended. Mirrors `trace::Outcome`. */
 export type Outcome =
   | ({ state: "traced" } & Traced)
   | { state: "flat" }
@@ -361,8 +383,11 @@ export type Outcome =
 
 // --------------------------------------------------------------------- fabricate ---
 
+/** What a fabrication plan makes. Mirrors `inkvec_fab::Mode`. */
 export type FabMode = "singleColour" | "layered" | "inlay" | "sticker" | "stencil" | "lines";
+/** Whether cut shapes are drawn filled or as hairline outlines. Mirrors `inkvec_fab::CutStyle`. */
 export type CutStyle = "filled" | "hairline";
+/** The unit a cut file's coordinates are written in. Mirrors `inkvec_fab::FileUnits`. */
 export type FileUnits = "mm" | "px96" | "px72";
 
 /** A fabrication request; lengths in millimetres. Mirrors `inkvec_fab::Options`. */
@@ -402,6 +427,7 @@ export interface FabOptions {
   mergeDeltaE: number;
 }
 
+/** One colour of a drawing prepared for fabrication. Mirrors `inkvec_fab::ColourInfo`. */
 export interface FabColour {
   hex: string;
   coverage: number;
@@ -410,6 +436,7 @@ export interface FabColour {
   translucent: boolean;
 }
 
+/** What a drawing holds, before any plan is made. Mirrors `inkvec_fab::Analysis`. */
 export interface FabAnalysis {
   sizePx: [number, number];
   aspect: number;
@@ -419,12 +446,14 @@ export interface FabAnalysis {
   unsupported: string[];
 }
 
+/** One preflight finding on a plan. Mirrors `inkvec_fab::Check`. */
 export interface FabCheck {
   level: "info" | "warn" | "error";
   code: string;
   message: string;
 }
 
+/** One sheet of a plan. Mirrors `inkvec_fab::Layer`. */
 export interface FabLayer {
   name: string;
   hex: string;
@@ -435,6 +464,7 @@ export interface FabLayer {
   materialMm: [number, number];
 }
 
+/** The sheets and the preflight for a fabrication request. Mirrors `inkvec_fab::Plan`. */
 export interface FabPlan {
   layers: FabLayer[];
   previewSvg: string;
@@ -455,6 +485,7 @@ export interface MinifySettings {
   documentCleanup: boolean;
 }
 
+/** A minified SVG and what minifying it cost and saved. Mirrors `minify::MinifyResult`. */
 export interface MinifyResult {
   svg: string;
   bytesBefore: number;
@@ -475,8 +506,10 @@ export interface MinifyResult {
 
 // ------------------------------------------------------------------------- batch ---
 
+/** Where one file of a batch stands. Mirrors `batch::RowState` in `src-tauri`. */
 export type RowState = "queued" | "running" | "done" | "failed" | "skipped";
 
+/** One file of a batch. Mirrors `batch::Row` in `src-tauri`. */
 export interface BatchRow {
   id: number;
   path: string;
@@ -491,6 +524,7 @@ export interface BatchRow {
   seconds: number | null;
 }
 
+/** A running batch's counts. Mirrors `batch::Totals` in `src-tauri`. */
 export interface BatchTotals {
   finished: number;
   total: number;
@@ -503,6 +537,7 @@ export interface BatchTotals {
   remaining: number | null;
 }
 
+/** What a batch will do before it runs. Mirrors `batch::Plan` in `src-tauri`. */
 export interface BatchPlan {
   files: string[];
   preset: PresetId;
@@ -521,12 +556,14 @@ export interface Formats {
   assetPack: boolean;
 }
 
+/** One file an export will write. Mirrors `api::PlannedFile`. */
 export interface PlannedFile {
   name: string;
   bytes: number;
   group: string;
 }
 
+/** Everything an export writes from. Mirrors `api::ExportRequest`. */
 export interface ExportRequest {
   svg: string;
   report: { meanDe00: number | null; coordinates: number; paths: number; tracedPx: number };
@@ -543,6 +580,7 @@ export interface IntegrationStatus {
   note: string | null;
 }
 
+/** A newer release, when the update check found one. Mirrors `UpdateInfo` in `src-tauri`'s `lib.rs`. */
 export interface UpdateInfo {
   latest: string | null;
   newer: boolean;

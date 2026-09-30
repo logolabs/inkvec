@@ -13,12 +13,14 @@
 
 import { api, events, type Outcome, type Report, type Settings } from "./ipc";
 
+/** Where one preview stands. */
 export type Preview =
   | { state: "queued" }
   | { state: "running" }
   | { state: "done"; svg: string; url: string; report: Report }
   | { state: "failed"; message: string };
 
+/** A preview asked for: its key and the settings it traces with. */
 export interface PreviewJob {
   key: string;
   settings: Settings;
@@ -34,6 +36,11 @@ export function previewKey(settings: Settings): string {
   return JSON.stringify(Object.keys(plain).sort().map((k) => [k, plain[k]]));
 }
 
+/**
+ * The queue and the results of the wizard's preview traces, for the image that is open.
+ * Components ask for a preview by settings (`previewKey`) and subscribe to hear when one
+ * lands; `reset` forgets everything when another image is opened.
+ */
 export class Previews {
   private results = new Map<string, Preview>();
   private queue: PreviewJob[] = [];

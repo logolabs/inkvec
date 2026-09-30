@@ -1,3 +1,8 @@
+/**
+ * The dev mock's entry point (`dev/index.html`, served by `npm run mock`): installs the mock
+ * backend (`mock.ts`) before the app's own modules load, then starts the real app on it.
+ */
+
 await import("./mock");
 const app = await import("../src/main");
 

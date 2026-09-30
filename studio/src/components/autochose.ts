@@ -15,6 +15,7 @@ import { type Store } from "../lib/state";
 import { autoSuggestions, changedControls, describeAuto, type AutoSuggestion } from "../lib/suggest";
 import { liveSuggestions } from "./palette";
 
+/** What the "Auto chose" note asks the app to do. */
 export interface AutoChoseActions {
   setPreset(id: string): void;
   setColourGroups(groups: ColourGroup[]): void;

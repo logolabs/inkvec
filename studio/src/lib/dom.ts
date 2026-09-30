@@ -54,6 +54,11 @@ export function s(spec: string, attrs: Attrs | null = null, ...children: Child[]
   return el;
 }
 
+/**
+ * Set `attrs` on `el`: `class` is appended, `style` (an object) is assigned, `on…` functions
+ * become event listeners, `value` sets an input's value, `true` is an empty attribute, and
+ * `null`, `undefined` and `false` leave the attribute off.
+ */
 function apply(el: HTMLElement, attrs: Attrs | null) {
   for (const [k, v] of Object.entries(attrs ?? {})) {
     if (v === null || v === undefined || v === false) continue;
@@ -73,6 +78,7 @@ function apply(el: HTMLElement, attrs: Attrs | null) {
   }
 }
 
+/** Append `children`, flattened, skipping `null`, `undefined` and `false`; anything not a node becomes text. */
 function append(el: Element, children: Child[]) {
   for (const child of children.flat(8) as Child[]) {
     if (child === null || child === undefined || child === false) continue;
@@ -149,11 +155,6 @@ export function icon(name: keyof typeof PATHS | string, size = 16): SVGElement {
     },
     s("path", { d }),
   );
-}
-
-/** Whether an icon name is one the set actually has. */
-export function hasIcon(name: string): boolean {
-  return name in PATHS;
 }
 
 /**

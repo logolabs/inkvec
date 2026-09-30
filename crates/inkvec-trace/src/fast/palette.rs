@@ -239,53 +239,342 @@ impl Bins {
     }
 }
 
-/// One pass over the `w × h` image: per bin, how many pixels fall in it (`count`, with
-/// their colour sums `all_sum`), how many are *paired* (at least one 4-neighbour in the
-/// same bin) and how many are *flat* (every 4-neighbour inside the image in the same bin,
-/// with their sums `flat_sum`).
+impl Bins {
+    /// Add every bin of `other` into `self`: counts, and the sums channel by channel.
+    ///
+    /// Used only to merge the row bands of [`keys_and_histogram`], and only when
+    /// [`in_exact_set`] held for every value: then each sum is exact (see there), so adding
+    /// a band's partial sum equals adding its pixels one by one, in any order. O(B_other).
+    fn absorb(&mut self, other: &Bins) {
+        for id in 0..other.len() {
+            let j = self.open(other.key[id]);
+            self.count[j] += other.count[id];
+            self.flat[j] += other.flat[id];
+            self.paired[j] += other.paired[id];
+            for c in 0..4 {
+                self.all_sum[j][c] += other.all_sum[id][c];
+                self.flat_sum[j][c] += other.flat_sum[id][c];
+            }
+        }
+    }
+}
+
+/// Pixel `p`'s colour and opacity, `[r, g, b, a]`: the image over white (sRGB 0..1) and the
+/// source's opacity when transparency is traced natively, 1 otherwise.
 ///
-/// In morphological terms the flat pixels of bin `k` are the erosion of its indicator set
+/// Read in place: the palette used to copy the image into a four-channel buffer of its own
+/// first (64 MB and 6.9 ms at 2048 px, 16 % of the stage) and read that. The values are the
+/// same floats, so everything computed from them is too.
+#[inline]
+fn pixel(rgb: &[[f32; 3]], alpha: Option<&[f32]>, p: usize) -> [f32; 4] {
+    let c = rgb[p];
+    [c[0], c[1], c[2], alpha.map_or(1.0, |a| a[p])]
+}
+
+/// Most pixels for which [`in_exact_set`] makes the per-bin sums exact: 2²² (2048 × 2048,
+/// the default `--max-dim`).
+const EXACT_SUM_MAX_PIXELS: usize = 1 << 22;
+
+/// Whether `v` is 0 or lies in `[2⁻⁸, 1]`: the values for which the histogram's f64 sums
+/// are exact whatever order they are formed in.
+///
+/// # The lemma
+///
+/// Let V be a multiset of f32 values, each 0 or in `[2⁻⁸, 1]`, with `|V| ≤ 2²²`. Then
+/// summing V into an f64 in any order, grouped in any way, gives the exact real sum.
+///
+/// *Proof.* A float `v ≥ 2⁻⁸` has an exponent of at least −8 and a 24-bit significand, so
+/// it is an integer multiple of `2⁻⁸⁻²³ = 2⁻³¹`. Every partial sum is then `j · 2⁻³¹` with
+/// `0 ≤ j · 2⁻³¹ ≤ |V| ≤ 2²²`, so `j ≤ 2⁵³`, and every such number is representable in
+/// binary64 (a 53-bit significand holds every integer up to 2⁵³). IEEE 754 addition is
+/// "computed exactly and then rounded"; a representable exact result is returned
+/// unrounded. By induction every partial sum is exact, so the final sum is the real sum,
+/// independent of order. ∎
+///
+/// Every 8-bit input that has not been resampled satisfies it: channels are `k / 255`
+/// (`k / 255 ≥ 1/255 > 2⁻⁸` for `k ≥ 1`), and a translucent pixel over white is
+/// `fl(fl(s·a) + fl(1 − a)) ≥ fl(1 − a) ≥ 1/255` (0 violations on 253 of 253 measured
+/// images). Resampled rasters (a `--max-dim` reduction, `--intake-scale`) carry arbitrary
+/// box averages and fail it; for them the histogram keeps its serial raster order.
+///
+/// Not from the literature: the lemma is derived here from IEEE 754's exact rounding,
+/// because published reproducible summation (J. Demmel, H. D. Nguyen, "Fast Reproducible
+/// Floating-Point Summation", ARITH 2013) makes *any* sum order-independent by pre-rounding
+/// to a common grid, which would change the values; this only has to *recognise* inputs
+/// whose sums are already exact, and keep the old order for the rest. See also: D.
+/// Goldberg, "What Every Computer Scientist Should Know About Floating-Point Arithmetic",
+/// ACM Computing Surveys, March 1991,
+/// <https://docs.oracle.com/cd/E19957-01/806-3568/ncg_goldberg.html>.
+#[inline]
+fn in_exact_set(v: f32) -> bool {
+    /// 2⁻⁸.
+    const LOW: f32 = 1.0 / 256.0;
+    // NaN fails both comparisons and so is not in the set.
+    v == 0.0 || (LOW..=1.0).contains(&v)
+}
+
+/// Write the bin key of pixels `p0 .. p0 + out.len()` into `out`, and report whether every
+/// channel value read lies in [`in_exact_set`].
+///
+/// The key is a pure function of the pixel's four floats, so it is computed once per run
+/// of identical colours and copied along the run. On the 2048 px set 99.56 % of pixels
+/// repeat their left neighbour's colour (medians; the textured masthead only 33 %), so
+/// [`Grid::key`] runs on well under 1 % of them. The set check rides on the same test:
+/// a repeated colour was already checked. `f32` equality treats `−0.0` and `0.0` as equal,
+/// which is harmless (both give level 0 and both are in the set); a NaN never equals the
+/// previous colour and is always keyed afresh. Θ(len) comparisons.
+///
+/// Inspired by: T. M. Breuel, "Efficient Binary and Run Length Morphology and its
+/// Application to Document Image Processing", 2007, <https://arxiv.org/abs/0712.0121> --
+/// work per run rather than per pixel, because "an almost blank image takes the same amount
+/// of time to process as a highly detailed image" otherwise. Here the runs are found on the
+/// fly, not stored.
+fn key_rows(
+    rgb: &[[f32; 3]],
+    alpha: Option<&[f32]>,
+    grid: Grid,
+    p0: usize,
+    out: &mut [u16],
+) -> bool {
+    let mut exact = true;
+    // A colour no pixel equals (NaN != NaN), so the first pixel is always keyed.
+    let (mut last, mut key) = ([f32::NAN; 4], 0u16);
+    for (i, o) in out.iter_mut().enumerate() {
+        let c = pixel(rgb, alpha, p0 + i);
+        if c != last {
+            key = grid.key(c) as u16;
+            exact &= c.iter().all(|&v| in_exact_set(v));
+            last = c;
+        }
+        *o = key;
+    }
+    exact
+}
+
+/// Add rows `y0 ..` of the `w × h` image to `bins`: `band` holds those rows' keys (a whole
+/// number of rows), `above` the keys of row `y0 − 1` (`None` at the top of the image) and
+/// `below` those of the row after the band (`None` at the bottom).
+///
+/// Per bin, how many pixels fall in it (`count`, with their colour sums `all_sum`), how
+/// many are *paired* (at least one 4-neighbour in the same bin) and how many are *flat*
+/// (every 4-neighbour inside the image in the same bin, with their sums `flat_sum`). In
+/// morphological terms the flat pixels of bin `k` are the erosion of its indicator set
 /// `X_k = {p : key(p) = k}` by the 4-cross, with the image padded by `k`, and the paired
 /// pixels are `X_k` without its isolated points. A neighbour outside the image counts as
-/// agreeing, so a filled region touching the border keeps its flat pixels there.
+/// agreeing, so a filled region touching the border keeps its flat pixels there. Sums are
+/// in f64 so a 2048 px image's totals keep the low bits of each 0..1 channel.
 ///
-/// Sums are in f64 so a 2048 px image's totals do not lose the low bits of each 0..1
-/// channel. `px` is sRGB 0..1 plus opacity; `keys` is [`Grid::key`] of each pixel. Θ(n)
-/// time; memory O(B) besides the `slot` table.
+/// # One run at a time
+///
+/// Each row is walked as maximal runs of one key. Inside a run `[s, e)` a pixel's left
+/// neighbour is in the bin exactly when it is not the run's first pixel, and its right one
+/// when it is not the last -- a run is maximal, so the pixel before `s` and the one at `e`
+/// (if inside the row) hold other keys. Only the rows above and below are read per pixel.
+/// A run's additions go into registers loaded from the bin before the run and stored after
+/// it: on flat art nine pixels in ten continue their left neighbour's run, and adding each
+/// into the bin's memory made every addition wait on the store of the one before
+/// (store-to-load forwarding); the dense pixel-by-pixel pass took 17.8 ms at 2048 px, 42 %
+/// of the stage.
+///
+/// *Why identical to the pixel-by-pixel pass:* every bin still receives its pixels' values
+/// one at a time in raster order -- runs are visited in raster order, and a run's own pixels
+/// left to right -- so every f64 sum is the same sequence of roundings, whatever the values.
+/// Counts are integers. Θ(pixels) time, one bin lookup per run.
+///
+/// Method from: T. M. Breuel, "Efficient Binary and Run Length Morphology and its
+/// Application to Document Image Processing", 2007, <https://arxiv.org/abs/0712.0121> -- the
+/// erosion is evaluated on the run-length representation, horizontally at run ends and
+/// vertically per pixel. Adapted: a greyscale "run" is a run of one bin key, and the erosion
+/// only has to be counted, not produced.
 ///
 /// Inspired by: G. Pass, R. Zabih, J. Miller, "Comparing Images Using Color Coherence
 /// Vectors", ACM Multimedia '96, pp. 65–73, DOI 10.1145/244130.244148, which splits each
 /// colour bucket's pixels into coherent and incoherent by the size of their connected
-/// component. Flatness is the local version: a pixel is coherent when its whole 4-cross stays
-/// in its bucket, which needs no component labelling.
-fn histogram(px: &[[f32; 4]], keys: &[u16], w: usize, h: usize) -> Bins {
-    let mut b = Bins::new();
-    for y in 0..h {
-        for x in 0..w {
-            let p = y * w + x;
-            let k = keys[p];
-            let id = b.open(k);
-            let c = px[p];
-            b.count[id] += 1;
-            for (s, v) in b.all_sum[id].iter_mut().zip(c) {
-                *s += v as f64;
+/// component. Flatness is the local version: a pixel is coherent when its whole 4-cross
+/// stays in its bucket, which needs no component labelling.
+#[allow(clippy::too_many_arguments)]
+fn histogram_rows(
+    rgb: &[[f32; 3]],
+    alpha: Option<&[f32]>,
+    w: usize,
+    y0: usize,
+    band: &[u16],
+    above: Option<&[u16]>,
+    below: Option<&[u16]>,
+    bins: &mut Bins,
+) {
+    let rows = band.len() / w;
+    for r in 0..rows {
+        let at = (y0 + r) * w;
+        let row = &band[r * w..(r + 1) * w];
+        let up = if r > 0 {
+            Some(&band[(r - 1) * w..r * w])
+        } else {
+            above
+        };
+        let down = if r + 1 < rows {
+            Some(&band[(r + 1) * w..(r + 2) * w])
+        } else {
+            below
+        };
+        let mut x = 0;
+        while x < w {
+            let k = row[x];
+            let start = x;
+            while x < w && row[x] == k {
+                x += 1;
             }
-            let same = |q: usize| keys[q] == k;
-            let (l, r) = (x > 0 && same(p - 1), x + 1 < w && same(p + 1));
-            let (u, d) = (y > 0 && same(p - w), y + 1 < h && same(p + w));
-            if l || r || u || d {
-                b.paired[id] += 1;
-            }
-            let flat = (x == 0 || l) && (x + 1 == w || r) && (y == 0 || u) && (y + 1 == h || d);
-            if flat {
-                b.flat[id] += 1;
-                for (s, v) in b.flat_sum[id].iter_mut().zip(c) {
+            let id = bins.open(k);
+            let (mut all, mut flat_sum) = (bins.all_sum[id], bins.flat_sum[id]);
+            let (mut flat, mut paired) = (0u32, 0u32);
+            for xx in start..x {
+                let c = pixel(rgb, alpha, at + xx);
+                for (s, v) in all.iter_mut().zip(c) {
                     *s += v as f64;
                 }
+                let (l, rr) = (xx > start, xx + 1 < x);
+                let u = up.is_some_and(|row| row[xx] == k);
+                let d = down.is_some_and(|row| row[xx] == k);
+                if l || rr || u || d {
+                    paired += 1;
+                }
+                // Outside the image counts as agreeing: the first column has no left
+                // neighbour (start = 0 there), the top row no row above (`up` is None).
+                let flat_here = (xx == 0 || l)
+                    && (xx + 1 == w || rr)
+                    && (up.is_none() || u)
+                    && (down.is_none() || d);
+                if flat_here {
+                    flat += 1;
+                    for (s, v) in flat_sum.iter_mut().zip(c) {
+                        *s += v as f64;
+                    }
+                }
             }
+            bins.count[id] += (x - start) as u32;
+            bins.flat[id] += flat;
+            bins.paired[id] += paired;
+            bins.all_sum[id] = all;
+            bins.flat_sum[id] = flat_sum;
         }
     }
-    b
+}
+
+/// Fewest rows in a band of [`keys_and_histogram`]: each band keys two rows beyond its
+/// own, so a thin band would spend a large share of its work on them.
+const MIN_BAND_ROWS: usize = 16;
+/// About how many bands an image is cut into, so rayon can balance them over its workers.
+const TARGET_BANDS: usize = 64;
+
+/// Every pixel's bin key ([`Grid::key`], row-major) and the per-bin statistics
+/// ([`histogram_rows`]), in one pass over the image when it can be done in parallel.
+///
+/// # Serial
+///
+/// Below [`PARALLEL_MIN_PIXELS`]: the keys by [`key_rows`], then one band covering the
+/// whole image.
+///
+/// # Parallel row bands
+///
+/// The image is cut into bands of whole rows. Each band keys its own rows into the output
+/// (and the row above and below it into scratch, for the vertical test), then counts
+/// itself into a band-private [`Bins`]; rayon's fold then merges the bands' `Bins`
+/// ([`Bins::absorb`]). A band's rows are keyed and counted while they are in cache, so the
+/// image is read from memory about once.
+///
+/// *Why identical:* counts are integers, and the merge adds each band's f64 sums in an
+/// order the serial pass would not use -- which is exact only because every value was in
+/// [`in_exact_set`] and there are at most [`EXACT_SUM_MAX_PIXELS`] pixels (the lemma there):
+/// then both the serial sum and any regrouping of it equal the exact real sum. When a band
+/// finds a value outside the set (a resampled image), the bands stop counting and the
+/// histogram is redone serially over the finished keys, in raster order. Keys are the same
+/// either way, being a function of each pixel alone.
+///
+/// Measured: the run-based parallel histogram gave 0 differing bins on 254 images against
+/// the serial one, at 2.4–3.3 ms where the serial pass took 17.8 ms at 2048 px.
+///
+/// Method from: V. Podlozhnyuk, "Histogram calculation in CUDA", NVIDIA, 2007,
+/// <https://developer.download.nvidia.com/compute/cuda/1.1-Beta/x86_website/projects/histogram64/doc/histogram.pdf>,
+/// and T. Henriksen, S. Hellfritzsch, P. Sadayappan, C. Oancea, "Compiling Generalized
+/// Histograms for GPU", SC20, 2020,
+/// <https://hjemmesider.diku.dk/~zgh600/Publications/gen-histo-sc20.pdf> -- privatised
+/// sub-histograms, one per worker, merged at the end; the per-bin state (count, flat,
+/// paired, sums) is a generalised histogram with an associative, commutative operator.
+/// Adapted: the sub-histograms are sparse ([`Bins`]) because the H = 65 536 bins would dwarf
+/// N at 128 px, the case Henriksen et al. call inefficient ("when H is close to N"), and
+/// associativity of the f64 sums is not assumed but checked per input.
+fn keys_and_histogram(
+    rgb: &[[f32; 3]],
+    alpha: Option<&[f32]>,
+    w: usize,
+    h: usize,
+    grid: Grid,
+    parallel: bool,
+) -> (Vec<u16>, Bins) {
+    use rayon::prelude::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let n = w * h;
+    let mut keys = vec![0u16; n];
+    if n == 0 {
+        return (keys, Bins::new());
+    }
+    if !parallel || n > EXACT_SUM_MAX_PIXELS || h < 2 * MIN_BAND_ROWS {
+        if parallel {
+            keys.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+                key_rows(rgb, alpha, grid, y * w, row);
+            });
+        } else {
+            key_rows(rgb, alpha, grid, 0, &mut keys);
+        }
+        let mut bins = Bins::new();
+        histogram_rows(rgb, alpha, w, 0, &keys, None, None, &mut bins);
+        return (keys, bins);
+    }
+    let band_rows = h.div_ceil(TARGET_BANDS).max(MIN_BAND_ROWS);
+    // Set by the first band that meets a value outside the exact set; later bands then
+    // only key their rows.
+    let inexact = AtomicBool::new(false);
+    let key_row = |y: usize| {
+        let mut row = vec![0u16; w];
+        key_rows(rgb, alpha, grid, y * w, &mut row);
+        row
+    };
+    let bins = keys
+        .par_chunks_mut(band_rows * w)
+        .enumerate()
+        .fold(Bins::new, |mut bins, (b, band)| {
+            let y0 = b * band_rows;
+            let y1 = y0 + band.len() / w;
+            if !key_rows(rgb, alpha, grid, y0 * w, band) {
+                inexact.store(true, Ordering::Relaxed);
+            }
+            if !inexact.load(Ordering::Relaxed) {
+                let above = (y0 > 0).then(|| key_row(y0 - 1));
+                let below = (y1 < h).then(|| key_row(y1));
+                histogram_rows(
+                    rgb,
+                    alpha,
+                    w,
+                    y0,
+                    band,
+                    above.as_deref(),
+                    below.as_deref(),
+                    &mut bins,
+                );
+            }
+            bins
+        })
+        .reduce(Bins::new, |mut a, b| {
+            a.absorb(&b);
+            a
+        });
+    if inexact.load(Ordering::Relaxed) {
+        // Resampled values: the sums must keep the serial order.
+        let mut bins = Bins::new();
+        histogram_rows(rgb, alpha, w, 0, &keys, None, None, &mut bins);
+        return (keys, bins);
+    }
+    (keys, bins)
 }
 
 /// The mean colour-and-opacity `s / f` of `f` summed pixels. The caller guarantees
@@ -482,7 +771,11 @@ fn thin_inks(
 
 /// What labelling a blend pixel reads: the pixels, their bins, and the inks.
 struct Blends<'a> {
-    px: &'a [[f32; 4]],
+    /// The image over white, sRGB 0..1, read with `alpha` through [`pixel`].
+    rgb: &'a [[f32; 3]],
+    /// The source's opacity, when transparency is traced natively.
+    alpha: Option<&'a [f32]>,
+    /// Every pixel's bin key, row-major.
     keys: &'a [u16],
     /// Per key: its bin's nearest ink, and whether the bin is that ink. `BINS` entries,
     /// written only for occupied keys (no pixel reads the others).
@@ -559,7 +852,7 @@ impl Blends<'_> {
                 best = (l, d);
             }
         }
-        let col = self.px[p];
+        let col = pixel(self.rgb, self.alpha, p);
         // Whether the pixel is ink `i`, or a blend of it and an ink around.
         let made_of = |i: u16| {
             let ci = self.inks[i as usize];
@@ -675,21 +968,7 @@ pub(crate) fn palette_and_labels(
         },
     };
     let parallel = n >= PARALLEL_MIN_PIXELS;
-    let pixel = |p: usize| {
-        let c = rgb[p];
-        [c[0], c[1], c[2], alpha.map_or(1.0, |a| a[p])]
-    };
-    let px: Vec<[f32; 4]> = if parallel {
-        (0..n).into_par_iter().map(pixel).collect()
-    } else {
-        (0..n).map(pixel).collect()
-    };
-    let keys: Vec<u16> = if parallel {
-        px.par_iter().map(|&c| grid.key(c) as u16).collect()
-    } else {
-        px.iter().map(|&c| grid.key(c) as u16).collect()
-    };
-    let bins = histogram(&px, &keys, w, h);
+    let (keys, bins) = keys_and_histogram(rgb, alpha, w, h, grid, parallel);
 
     let found = found_inks(&bins, grid, merge_distance, max_colors);
     // Per bin id: taken by a flat ink.
@@ -703,11 +982,12 @@ pub(crate) fn palette_and_labels(
     let thin = thin_inks(&bins, &used, &inks, n, merge_distance, max_colors);
     inks.extend(thin);
     if inks.is_empty() {
-        // Nothing flat anywhere (noise, or a tiny image): one ink, the mean colour.
+        // Nothing flat anywhere (noise, or a tiny image): one ink, the mean colour, summed
+        // in raster order as before (rare, so not worth an exactness check).
         let mut s = [0.0f64; 4];
-        for c in &px {
-            for (t, v) in s.iter_mut().zip(c) {
-                *t += *v as f64;
+        for p in 0..n {
+            for (t, v) in s.iter_mut().zip(pixel(rgb, alpha, p)) {
+                *t += v as f64;
             }
         }
         inks.push(mean(s, n.max(1) as f64));
@@ -732,7 +1012,8 @@ pub(crate) fn palette_and_labels(
     }
 
     let blends = Blends {
-        px: &px,
+        rgb,
+        alpha,
         keys: &keys,
         lut: &lut,
         slot: &bins.slot,
@@ -1086,6 +1367,73 @@ mod tests {
         assert_eq!(bits(&pn.alpha), bits(&po.alpha), "{what}: alpha");
         assert_eq!(bits(&pn.weight), bits(&po.weight), "{what}: weight");
         assert!(ln == lo, "{what}: labels differ");
+    }
+
+    /// The banded parallel histogram against the serial run walk, bin by bin and bit for
+    /// bit, on images that pass the exactness check (8-bit values, where the bands' partial
+    /// sums are merged) and on one that does not (where the serial order is kept).
+    #[test]
+    fn banded_histogram_equals_the_serial_one() {
+        for c in [
+            img8(97, 70, 3, 6, 5, false),
+            img8(64, 200, 4, 9, 20, true),
+            img8(33, 33, 5, 3, 2, true),
+            img8(300, 290, 6, 12, 40, false),
+            resampled(80, 90, 7, true),
+        ] {
+            let a = c.alpha.as_deref();
+            let grid = if a.is_some() {
+                Grid {
+                    bits: 4,
+                    alpha_bits: 4,
+                }
+            } else {
+                Grid {
+                    bits: 5,
+                    alpha_bits: 0,
+                }
+            };
+            let (ks, bs) = keys_and_histogram(&c.rgb, a, c.w, c.h, grid, false);
+            let (kp, bp) = keys_and_histogram(&c.rgb, a, c.w, c.h, grid, true);
+            assert!(ks == kp, "{}: keys", c.name);
+            assert_eq!(bs.len(), bp.len(), "{}: occupied bins", c.name);
+            let bits = |s: [f64; 4]| s.map(f64::to_bits);
+            for id in 0..bs.len() {
+                let j = bp.id(bs.key[id]);
+                let what = format!("{}: bin {}", c.name, bs.key[id]);
+                assert_eq!(bs.count[id], bp.count[j], "{what}");
+                assert_eq!(bs.flat[id], bp.flat[j], "{what}");
+                assert_eq!(bs.paired[id], bp.paired[j], "{what}");
+                assert_eq!(bits(bs.all_sum[id]), bits(bp.all_sum[j]), "{what}");
+                assert_eq!(bits(bs.flat_sum[id]), bits(bp.flat_sum[j]), "{what}");
+            }
+        }
+    }
+
+    #[test]
+    fn exact_set_is_zero_or_two_to_minus_eight_through_one() {
+        for v in [0.0f32, -0.0, 1.0 / 256.0, 1.0 / 255.0, 0.5, 1.0] {
+            assert!(in_exact_set(v), "{v}");
+        }
+        let below = f32::from_bits((1.0f32 / 256.0).to_bits() - 1);
+        for v in [
+            below,
+            1e-4,
+            f32::from_bits(1.0f32.to_bits() + 1),
+            -0.5,
+            f32::NAN,
+        ] {
+            assert!(!in_exact_set(v), "{v}");
+        }
+        // Every 8-bit level, and every translucent 8-bit colour over white, is in the set.
+        for k in 0..=255u32 {
+            let s = k as f32 / 255.0;
+            assert!(in_exact_set(s));
+            for j in 0..=255u32 {
+                let a = j as f32 / 255.0;
+                assert!(in_exact_set(s * a + 1.0 * (1.0 - a)), "{k} at {j}");
+            }
+        }
     }
 
     #[test]

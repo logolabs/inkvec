@@ -121,15 +121,18 @@ fn ellipse_cubics(
 ///   also returns the ellipse's orthogonal χ², a Newton foot-point solve per point that
 ///   nothing here reads: measured on the phase-1 replay of the 246-icon screen set it was
 ///   5.0% of the whole fast fit's CPU (2.0% at 2048 px), most of it on the image-frame
-///   ring, which reaches this test (a square is roughly round) and fails it;
-/// * the orthogonal fit is seeded with that same conic and with the orthogonal circle
-///   of step 2 when step 2 ran, where `fit_ellipse` would fit both again.
-///
-/// The result is bit for bit what `fit_ellipse_algebraic` then `fit_ellipse` gave: the
-/// conic's geometry is the same computation with or without its χ² (the library proves
-/// this in its own tests), the tests here read only the geometry, and
-/// `fit_ellipse_seeded` given `taubin_ellipse(pts, σ)` and `fit_circle(pts, σ)` runs the
-/// same starts in the same order as `fit_ellipse(pts, σ)`.
+///   ring, which reaches this test (a square is roughly round) and fails it. The conic's
+///   geometry is the same computation with or without its χ² (the library proves this in
+///   its own tests), so dropping it changed nothing;
+/// * the orthogonal fit starts from that conic alone. The library's `fit_ellipse` also
+///   starts from four near-circles about the orthogonal circle (radii 1.02 r and 0.98 r,
+///   at 0°, 45°, 90° and 135°) and keeps the lowest χ² of the five; here those four run
+///   only when the algebraic start fails, reusing the circle of step 2 when step 2 fitted
+///   it. The five-start fit was 13.9% of the fast fit's CPU on the screen set and 10.9%
+///   at 2048 px (phase-1 replay), and in the library's own measurement on the screen set
+///   and a poster, every one of the 93 ellipses the Quality search chose came from the
+///   algebraic start (see `fit_ellipse_screened`). This one does change the output where
+///   a near-circle reached a lower χ²; the Fast gate judged it.
 ///
 /// Method from: Taubin, G. (1991), "Estimation of planar curves, surfaces, and nonplanar
 /// space curves defined by implicit equations with applications to edge and range image
@@ -137,8 +140,12 @@ fn ellipse_cubics(
 /// conic; Ahn, S. J., Rauh, W. & Warnecke, H.-J. (2001), "Least-squares orthogonal
 /// distances fitting of circle, sphere, ellipse, hyperbola, and parabola", *Pattern
 /// Recognition* 34:2283–2303, doi:10.1016/S0031-3203(00)00152-7, for the orthogonal fit
-/// (both implemented in `inkvec_fit::primitives`). Not from the literature: skipping the
-/// χ² and the repeated seeds, because it only removes work nothing reads.
+/// (both implemented in `inkvec_fit::primitives`); and Halíř, R. & Flusser, J. (1998),
+/// "Numerically stable direct least squares fitting of ellipses", WSCG,
+/// <https://autotrace.sourceforge.net/WSCG98.pdf>, for starting the orthogonal fit from
+/// the algebraic one alone, which they recommend as "a fast and robust estimator of a
+/// good initial solution" (their direct fit; Taubin's conic plays that part here).
+/// Not from the literature: dropping the unread χ², because nothing reads it.
 ///
 /// Returns the primitive, the path's start point, and its four cubics
 /// ([`ellipse_cubics`]), running in the ring's own direction from near `pts[0]`. Fewer
@@ -205,10 +212,12 @@ pub(crate) fn primitive(pts: &[Point]) -> Option<(PrimitiveFit, Point, Vec<Segme
     {
         return None;
     }
-    // `fit_ellipse(pts, σ)` is `fit_ellipse_seeded(pts, σ, taubin_ellipse(pts, σ),
-    // fit_circle(pts, σ))`; both seeds are already in hand when step 2 ran.
-    let circle = circle.or_else(|| fit_circle(pts, &sigma));
-    let e = fit_ellipse_seeded(pts, &sigma, Some(alg), circle)?;
+    // Levenberg–Marquardt from the algebraic conic alone; the four near-circles about the
+    // orthogonal circle (fitted now if step 2 did not) only when that start fails.
+    let e = fit_ellipse_seeded(pts, &sigma, Some(alg), None).or_else(|| {
+        let circle = circle.or_else(|| fit_circle(pts, &sigma));
+        fit_ellipse_seeded(pts, &sigma, None, circle)
+    })?;
     let ok = e.rx.is_finite()
         && e.ry.is_finite()
         && e.rx.min(e.ry) >= MIN_RADIUS
@@ -260,8 +269,9 @@ mod tests {
         assert!(matches!(p.kind, PrimitiveKind::Ellipse { .. }));
     }
 
-    /// [`primitive`] as it was before its ellipse step reused its seeds: the algebraic
-    /// ellipse with its unread χ², and `fit_ellipse` fitting both seeds again.
+    /// [`primitive`] as it was before its ellipse step changed: the algebraic ellipse with
+    /// its unread χ², and `fit_ellipse` fitting both seeds again and running
+    /// Levenberg–Marquardt from all five starts.
     fn primitive_ref(pts: &[Point]) -> Option<(PrimitiveFit, Point, Vec<Segment>)> {
         use inkvec_fit::primitives::{fit_ellipse, fit_ellipse_algebraic};
         let n = pts.len();
@@ -349,8 +359,9 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn reusing_the_seeds_keeps_every_primitive_bit_for_bit() {
+    /// The rings of [`the_single_start_finds_the_primitives_the_five_starts_found`]:
+    /// circles and rotated ellipses, clean and noisy, of several sizes, and the frame.
+    fn test_rings() -> Vec<Vec<Point>> {
         let mut rings: Vec<Vec<Point>> = Vec::new();
         let mut seed = 1u64;
         for n in [12usize, 40, 150] {
@@ -363,26 +374,47 @@ mod tests {
                 }
             }
         }
-        // The image frame and a square: roughly round, and no ellipse.
-        let mut frame = Vec::new();
-        for x in 0..40 {
-            frame.push(Point::new(x as f64 - 0.5, -0.5));
-        }
-        for y in 0..36 {
-            frame.push(Point::new(39.5, y as f64 - 0.5));
-        }
-        for x in (1..=40).rev() {
-            frame.push(Point::new(x as f64 - 0.5, 35.5));
-        }
-        for y in (1..=36).rev() {
-            frame.push(Point::new(-0.5, y as f64 - 0.5));
-        }
-        rings.push(frame);
+        rings.push(super::super::polygon::tests::frame(40, 36));
+        rings
+    }
+
+    /// Levenberg–Marquardt from the algebraic start alone finds the same primitives as
+    /// from all five starts on every test ring -- the same outcome, the same kind, and the
+    /// same geometry to 1e-6 px -- where the two differ only by where each stopped.
+    #[test]
+    fn the_single_start_finds_the_primitives_the_five_starts_found() {
+        let rings = test_rings();
         let mut hits = 0;
         for r in &rings {
             let (new, old) = (primitive(r), primitive_ref(r));
-            assert_eq!(format!("{new:?}"), format!("{old:?}"));
-            hits += usize::from(new.is_some());
+            assert_eq!(new.is_some(), old.is_some());
+            let (Some((a, _, _)), Some((b, _, _))) = (new, old) else {
+                continue;
+            };
+            hits += 1;
+            let close = |x: f64, y: f64| (x - y).abs() < 1e-6;
+            match (a.kind, b.kind) {
+                (PrimitiveKind::Circle { c, r }, PrimitiveKind::Circle { c: c2, r: r2 }) => {
+                    assert!(close(c.x, c2.x) && close(c.y, c2.y) && close(r, r2));
+                }
+                (
+                    PrimitiveKind::Ellipse { c, rx, ry, angle },
+                    PrimitiveKind::Ellipse {
+                        c: c2,
+                        rx: rx2,
+                        ry: ry2,
+                        angle: angle2,
+                    },
+                ) => {
+                    assert!(close(c.x, c2.x) && close(c.y, c2.y), "{c:?} {c2:?}");
+                    assert!(close(rx, rx2) && close(ry, ry2), "{rx} {ry} / {rx2} {ry2}");
+                    // The angle is only defined up to a half turn, and not at all for a
+                    // circle-like ellipse.
+                    let d = (angle - angle2).rem_euclid(std::f64::consts::PI);
+                    assert!(rx - ry < 1e-3 || d.min(std::f64::consts::PI - d) < 1e-6);
+                }
+                (k, k2) => panic!("{k:?} against {k2:?}"),
+            }
         }
         // The cases cover both outcomes.
         assert!(

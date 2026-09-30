@@ -289,34 +289,158 @@ fn solve3x3(m: [[f64; 3]; 3], r: [f64; 3]) -> Option<[f64; 3]> {
 ///
 /// Called by the intake in `lib.rs` (unless `--no-unblock`), before any other resampling;
 /// it only measures, and the caller downsamples by `k`.
+///
+/// # How: the gcd of the change positions, then the block test
+///
+/// The factors worth testing are found first, in one early-exiting scan
+/// ([`change_gcd`]): `g = gcd(w, h, every x where a pixel differs sharply from its left
+/// neighbour, every y where a row differs sharply from the row above)`. Then, from the
+/// largest factor down, only the `k` that divide `g` get the block test
+/// ([`blocks_constant`], the test this function always ran).
+///
+/// *Why the answer is the same.* The old loop returned the largest `k ≤ k_max` dividing
+/// `w` and `h` whose blocks pass the test. Take any such `k` that passes. Two horizontally
+/// adjacent pixels at `x − 1` and `x` with `k ∤ x` lie in one block, so each is within
+/// `1/512` of the block's first pixel (the test's comparison is on a rounded f32
+/// difference, but `2⁻⁹` is a float and rounding is monotone, so the exact difference is
+/// below `2⁻⁹` too) and they differ by less than `2 · 2⁻⁹ = 1/256`. So every position where
+/// neighbours differ by more than `1/256` is a multiple of `k`, and so are `w` and `h`:
+/// `k` divides `g`. Skipping the `k ∤ g` therefore never skips a passing factor, and the
+/// others get the old test itself, so the result is the old result for any input.
+///
+/// *Why it is fast.* On anything that is not an upscale, two edges at coprime positions
+/// appear within the first rows of content and `g` falls to 1: the scan stops there and no
+/// block test runs. The old loop ran the block test for every divisor of `w` and `h` from
+/// 32 down, each scanning until its first non-constant block -- 7.1 ms at 2048 px, most of it
+/// spent on the blank rows above the artwork, once per divisor. For 8-bit input the two
+/// views coincide: distinct levels are at least `1/255 > 1/256` apart, so a "sharp change" is
+/// any change, the divisors of `g` are exactly the factors whose blocks are constant, and
+/// the block test only confirms.
+///
+/// Not from the literature: the gcd of change positions as a candidate filter for exact
+/// block replication, because the published resampling detectors are statistical (they
+/// estimate a periodic correlation of an interpolated signal) and would not reproduce this
+/// function's exact answer. See also: A. C. Popescu, H. Farid, "Exposing Digital Forgeries by
+/// Detecting Traces of Resampling", IEEE Trans. Signal Processing 53(2):758–767, 2005, DOI
+/// 10.1109/TSP.2004.839932.
 pub(crate) fn pixel_grid(img: &inkvec_trace::Rgba) -> Option<usize> {
     const MAX_FACTOR: usize = 32;
     let (w, h) = (img.width, img.height);
-    let px = |x: usize, y: usize| -> &[f32] { &img.data[(y * w + x) * 4..(y * w + x) * 4 + 4] };
     // Below this there is nothing to gain and something to lose: a 2x undo of a small icon
     // leaves too few pixels for the boundary solve to work with.
     let smallest = 64;
-    let mut k = MAX_FACTOR.min(w / smallest.min(w)).min(h / smallest.min(h));
-    while k >= 2 {
-        if w % k == 0 && h % k == 0 {
-            let constant = (0..h / k).all(|by| {
-                (0..w / k).all(|bx| {
-                    let first = px(bx * k, by * k);
-                    (0..k).all(|dy| {
-                        (0..k).all(|dx| {
-                            let p = px(bx * k + dx, by * k + dy);
-                            (0..4).all(|c| (p[c] - first[c]).abs() < 1.0 / 512.0)
-                        })
-                    })
-                })
-            });
-            if constant {
-                return Some(k);
+    let k_max = MAX_FACTOR.min(w / smallest.min(w)).min(h / smallest.min(h));
+    if k_max < 2 {
+        return None;
+    }
+    let g = change_gcd(img);
+    (2..=k_max)
+        .rev()
+        .find(|&k| divides(k, g) && blocks_constant(img, k))
+}
+
+/// Whether `k` divides `n` (`k ≥ 1`), without the remainder operator: wazero's arm64
+/// compiler miscompiled `i32.rem_u` in a hot loop last round (the Go binding runs this
+/// crate as WebAssembly), so new code here tests divisibility by multiplying back.
+fn divides(k: usize, n: usize) -> bool {
+    (n / k) * k == n
+}
+
+/// The greatest common divisor, by Stein's binary algorithm (shifts and subtraction only,
+/// for the same reason as [`divides`]). `gcd(0, n) = n`.
+fn gcd(mut a: usize, mut b: usize) -> usize {
+    if a == 0 || b == 0 {
+        return a | b;
+    }
+    let shift = (a | b).trailing_zeros();
+    a >>= a.trailing_zeros();
+    loop {
+        b >>= b.trailing_zeros();
+        if a > b {
+            std::mem::swap(&mut a, &mut b);
+        }
+        b -= a;
+        if b == 0 {
+            return a << shift;
+        }
+    }
+}
+
+/// `gcd(w, h, X, Y)` for the `w × h` image, where `X` is every column `x ≥ 1` at which some
+/// row's pixel differs from its left neighbour by more than `1/256` in some channel, and
+/// `Y` every row `y ≥ 1` in which some pixel differs that much from the one above. The
+/// scan runs row by row and stops as soon as the gcd reaches 1. NaN differences count as
+/// no change (a NaN pixel fails the block test anyway). O(pixels read); on typical art the
+/// read stops a few rows into the content.
+///
+/// Blank rows are the common case before the content starts (a logo on a white page), so a
+/// row is first compared with the row above, and with itself shifted by one pixel, bit for
+/// bit ([`same_bits`], which vectorises); only a row that differs is examined pixel by
+/// pixel. Identical bits mean every difference is 0 (or NaN), which is never sharp, so the
+/// shortcut cannot hide a change.
+fn change_gcd(img: &inkvec_trace::Rgba) -> usize {
+    /// Neighbours in one block differ by less than this (see [`pixel_grid`]).
+    const SHARP: f32 = 1.0 / 256.0;
+    let (w, h) = (img.width, img.height);
+    let sharp = |a: &[f32], b: &[f32]| a.iter().zip(b).any(|(p, q)| (p - q).abs() > SHARP);
+    let mut g = gcd(w, h);
+    for y in 0..h {
+        if g < 2 {
+            break;
+        }
+        let row = &img.data[y * w * 4..(y + 1) * w * 4];
+        if y > 0 {
+            let above = &img.data[(y - 1) * w * 4..y * w * 4];
+            if !same_bits(above, row) && sharp(above, row) {
+                g = gcd(g, y);
             }
         }
-        k -= 1;
+        // Each pixel against its left neighbour: the row against itself one pixel over.
+        if same_bits(&row[4..], &row[..row.len() - 4]) {
+            continue;
+        }
+        for x in 1..w {
+            if g < 2 {
+                break;
+            }
+            if sharp(&row[(x - 1) * 4..x * 4], &row[x * 4..x * 4 + 4]) {
+                g = gcd(g, x);
+            }
+        }
     }
-    None
+    g
+}
+
+/// Whether two equally long float slices hold the same bits. Compared 64 floats at a time
+/// with an OR of XORs, a loop without an early exit that the compiler vectorises; the early
+/// exit is per block.
+fn same_bits(a: &[f32], b: &[f32]) -> bool {
+    a.len() == b.len()
+        && a.chunks(64).zip(b.chunks(64)).all(|(x, y)| {
+            x.iter()
+                .zip(y)
+                .fold(0u32, |acc, (p, q)| acc | (p.to_bits() ^ q.to_bits()))
+                == 0
+        })
+}
+
+/// The block test: every channel of every pixel in every `k × k` block within `1/512` of
+/// the block's top-left pixel (so for 8-bit input, exactly equal). `k` must divide both
+/// sides. Stops at the first block that fails; a full scan when every block passes.
+fn blocks_constant(img: &inkvec_trace::Rgba, k: usize) -> bool {
+    let (w, h) = (img.width, img.height);
+    let px = |x: usize, y: usize| -> &[f32] { &img.data[(y * w + x) * 4..(y * w + x) * 4 + 4] };
+    (0..h / k).all(|by| {
+        (0..w / k).all(|bx| {
+            let first = px(bx * k, by * k);
+            (0..k).all(|dy| {
+                (0..k).all(|dx| {
+                    let p = px(bx * k + dx, by * k + dy);
+                    (0..4).all(|c| (p[c] - first[c]).abs() < 1.0 / 512.0)
+                })
+            })
+        })
+    })
 }
 
 /// Share of the artwork a candidate matte may hide before it is rejected.
@@ -996,5 +1120,158 @@ pub(crate) fn face_alpha(
         opacity,
         matte,
         alpha_ramps,
+    }
+}
+
+#[cfg(test)]
+mod intake_tests {
+    use super::*;
+    use inkvec_trace::Rgba;
+
+    /// Deterministic pseudo-random numbers (a 64-bit LCG).
+    fn lcg(s: &mut u64) -> u64 {
+        *s = s
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        *s >> 33
+    }
+
+    /// `pixel_grid` as it was: every divisor of both sides from the largest down, each with
+    /// the block test.
+    fn old_pixel_grid(img: &Rgba) -> Option<usize> {
+        const MAX_FACTOR: usize = 32;
+        let (w, h) = (img.width, img.height);
+        let smallest = 64;
+        let mut k = MAX_FACTOR.min(w / smallest.min(w)).min(h / smallest.min(h));
+        while k >= 2 {
+            if w % k == 0 && h % k == 0 && blocks_constant(img, k) {
+                return Some(k);
+            }
+            k -= 1;
+        }
+        None
+    }
+
+    /// A `w × h` 8-bit image of flat rectangles on a ground (edges at arbitrary positions),
+    /// optionally with a few noisy pixels.
+    fn art(w: usize, h: usize, seed: u64, noise: usize) -> Rgba {
+        let mut s = seed;
+        let mut data = vec![1.0f32; w * h * 4];
+        for _ in 0..6 {
+            let (x0, y0) = ((lcg(&mut s) as usize) % w, (lcg(&mut s) as usize) % h);
+            let (x1, y1) = (
+                (x0 + 1 + (lcg(&mut s) as usize) % w).min(w),
+                (y0 + 1 + (lcg(&mut s) as usize) % h).min(h),
+            );
+            let c = [0, 1, 2, 3].map(|_| (lcg(&mut s) % 256) as f32 / 255.0);
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    data[(y * w + x) * 4..(y * w + x) * 4 + 4].copy_from_slice(&c);
+                }
+            }
+        }
+        for _ in 0..noise {
+            let p = (lcg(&mut s) as usize) % (w * h);
+            data[p * 4] = (lcg(&mut s) % 256) as f32 / 255.0;
+        }
+        Rgba {
+            width: w,
+            height: h,
+            data,
+        }
+    }
+
+    /// Nearest-neighbour upscale by `k`.
+    fn upscale(img: &Rgba, k: usize) -> Rgba {
+        let (w, h) = (img.width * k, img.height * k);
+        let mut data = Vec::with_capacity(w * h * 4);
+        for y in 0..h {
+            for x in 0..w {
+                let p = (y / k) * img.width + x / k;
+                data.extend_from_slice(&img.data[p * 4..p * 4 + 4]);
+            }
+        }
+        Rgba {
+            width: w,
+            height: h,
+            data,
+        }
+    }
+
+    #[test]
+    fn gcd_is_euclid() {
+        let euclid = |mut a: usize, mut b: usize| {
+            while b != 0 {
+                (a, b) = (b, a % b);
+            }
+            a
+        };
+        for a in 0..200 {
+            for b in 0..200 {
+                assert_eq!(gcd(a, b), euclid(a, b), "{a} {b}");
+            }
+        }
+        assert!(divides(4, 2048) && !divides(3, 2048) && divides(7, 0));
+    }
+
+    /// The gcd filter against the old full search: plain art, upscales by 2 to 8 (the
+    /// factor must come back the same), upscales with one pixel broken early or late,
+    /// odd sizes, a flat image, blocks that vary inside the 1/512 tolerance (not 8-bit, so
+    /// the block test has to decide), and a NaN.
+    #[test]
+    fn the_gcd_filter_finds_what_the_full_search_found() {
+        let mut cases: Vec<(String, Rgba)> = Vec::new();
+        for (seed, (w, h)) in [(1u64, (160usize, 128usize)), (2, (96, 80)), (3, (64, 64))] {
+            let a = art(w, h, seed, 0);
+            cases.push((format!("art {w}x{h}"), a.clone()));
+            for k in [2, 3, 4, 5, 8] {
+                let up = upscale(&a, k);
+                cases.push((format!("art {w}x{h} x{k}"), up.clone()));
+                for at in [7usize, up.width * up.height - 3] {
+                    let mut b = up.clone();
+                    b.data[at * 4 + 1] = if b.data[at * 4 + 1] > 0.5 { 0.0 } else { 1.0 };
+                    cases.push((format!("art {w}x{h} x{k} broken at {at}"), b));
+                }
+            }
+            cases.push((format!("noisy {w}x{h}"), upscale(&art(w, h, seed, 40), 2)));
+        }
+        let flat = Rgba {
+            width: 256,
+            height: 192,
+            data: vec![0.25; 256 * 192 * 4],
+        };
+        cases.push(("flat".into(), flat));
+        let mut odd = upscale(&art(97, 64, 9, 0), 2);
+        odd.width -= 1;
+        odd.data.truncate(odd.width * odd.height * 4);
+        cases.push(("odd width".into(), odd));
+        // Within-block wobble below the tolerance: the old test passes, and the new one must
+        // not be fooled by neighbours that differ by up to 2/512.
+        let mut wobble = upscale(&art(80, 64, 4, 0), 4);
+        let mut s = 99u64;
+        for v in wobble.data.iter_mut() {
+            *v += ((lcg(&mut s) % 7) as f32 - 3.0) * (0.45 / 512.0) / 3.0;
+        }
+        assert_eq!(
+            old_pixel_grid(&wobble),
+            Some(4),
+            "the old test forgives the wobble"
+        );
+        cases.push(("wobble".into(), wobble.clone()));
+        let mut drift = wobble;
+        for (i, v) in drift.data.iter_mut().enumerate() {
+            if (i / 4) % drift.width % 4 == 3 {
+                *v += 1.5 / 512.0;
+            }
+        }
+        cases.push(("drift".into(), drift));
+        let mut nan = upscale(&art(64, 64, 5, 0), 2);
+        nan.data[1000] = f32::NAN;
+        cases.push(("nan".into(), nan));
+        for (name, img) in &cases {
+            assert_eq!(pixel_grid(img), old_pixel_grid(img), "{name}");
+        }
+        // And the factors really are recovered.
+        assert_eq!(pixel_grid(&upscale(&art(160, 128, 1, 0), 4)), Some(4));
     }
 }

@@ -753,36 +753,39 @@ pub fn intake_scale(rgb: &[[f32; 3]], width: usize, height: usize) -> f64 {
     if width < 3 || height < 3 || rgb.len() < width * height {
         return 1.0;
     }
-    let lum = |i: usize| -> f32 { (rgb[i][0] + rgb[i][1] + rgb[i][2]) / 3.0 };
-
-    let mut w_obs: Vec<f64> = Vec::new();
-    // Along each axis: |first difference| / |second difference| at the same place.
-    for axis in 0..2 {
-        let (n_outer, n_inner, step) = if axis == 0 {
-            (height, width, 1usize)
-        } else {
-            (width, height, width)
-        };
-        for o in 0..n_outer {
-            for k in 0..n_inner.saturating_sub(2) {
-                let base = if axis == 0 {
-                    o * width + k
-                } else {
-                    k * width + o
-                };
-                let (a, b, c) = (lum(base), lum(base + step), lum(base + 2 * step));
-                let (d0, d1) = (b - a, c - b);
-                let first = d0.abs().max(d1.abs());
-                let second = (d1 - d0).abs();
-                if first > EDGE_FLOOR && second > 1e-6 {
-                    let r = (first / second) as f64;
-                    if r.is_finite() {
-                        w_obs.push(r.clamp(MIN_W, MAX_W));
-                    }
-                }
+    use rayon::prelude::*;
+    let lum: Vec<f32> = rgb[..width * height]
+        .par_iter()
+        .map(|c| (c[0] + c[1] + c[2]) / 3.0)
+        .collect();
+    // One run of three pixels `a, b, c`: |first difference| / |second difference|.
+    let vote = |a: f32, b: f32, c: f32| -> Option<f64> {
+        let (d0, d1) = (b - a, c - b);
+        let first = d0.abs().max(d1.abs());
+        let second = (d1 - d0).abs();
+        if first > EDGE_FLOOR && second > 1e-6 {
+            let r = (first / second) as f64;
+            if r.is_finite() {
+                return Some(r.clamp(MIN_W, MAX_W));
             }
         }
-    }
+        None
+    };
+    // Every run of three along a row and along a column votes once. The median below does
+    // not depend on the order the votes arrive in, so the columns are walked row by row too
+    // (a column-major walk jumps a whole row per step), and the rows in parallel.
+    let rows = lum
+        .par_chunks(width)
+        .flat_map_iter(|row| row.windows(3).filter_map(move |t| vote(t[0], t[1], t[2])));
+    let cols = (0..height - 2).into_par_iter().flat_map_iter(|y| {
+        let (r0, r1, r2) = (
+            &lum[y * width..(y + 1) * width],
+            &lum[(y + 1) * width..(y + 2) * width],
+            &lum[(y + 2) * width..(y + 3) * width],
+        );
+        (0..width).filter_map(move |x| vote(r0[x], r1[x], r2[x]))
+    });
+    let mut w_obs: Vec<f64> = rows.chain(cols).collect();
     if w_obs.len() < 16 {
         return 1.0;
     }
@@ -1020,6 +1023,72 @@ mod tests {
         assert_eq!(ringing_score(&vec![[0.5; 3]; 64 * 64], 64, 64), 0.0);
         // Mismatched dimensions must not index out of bounds.
         assert_eq!(ringing_score(&[[0.5; 3]; 16], 100, 100), 0.0);
+    }
+
+    /// `intake_scale` as it shipped: rows, then columns walked column by column.
+    fn intake_scale_reference(rgb: &[[f32; 3]], width: usize, height: usize) -> f64 {
+        if width < 3 || height < 3 || rgb.len() < width * height {
+            return 1.0;
+        }
+        let lum = |i: usize| -> f32 { (rgb[i][0] + rgb[i][1] + rgb[i][2]) / 3.0 };
+        let mut w_obs: Vec<f64> = Vec::new();
+        for axis in 0..2 {
+            let (n_outer, n_inner, step) = if axis == 0 {
+                (height, width, 1usize)
+            } else {
+                (width, height, width)
+            };
+            for o in 0..n_outer {
+                for k in 0..n_inner.saturating_sub(2) {
+                    let base = if axis == 0 {
+                        o * width + k
+                    } else {
+                        k * width + o
+                    };
+                    let (a, b, c) = (lum(base), lum(base + step), lum(base + 2 * step));
+                    let (d0, d1) = (b - a, c - b);
+                    let first = d0.abs().max(d1.abs());
+                    let second = (d1 - d0).abs();
+                    if first > 2.0 / 255.0 && second > 1e-6 {
+                        let r = (first / second) as f64;
+                        if r.is_finite() {
+                            w_obs.push(r.clamp(0.25, 64.0));
+                        }
+                    }
+                }
+            }
+        }
+        if w_obs.len() < 16 {
+            return 1.0;
+        }
+        let mid = w_obs.len() / 2;
+        w_obs.select_nth_unstable_by(mid, |a, b| a.total_cmp(b));
+        w_obs[mid].max(1.0)
+    }
+
+    #[test]
+    fn intake_scale_walking_rows_only_equals_the_column_walk() {
+        let mut s = 0xfeed_beefu64;
+        let mut next = move || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            (s >> 40) as f32 / (1u64 << 24) as f32
+        };
+        for case in 0..60 {
+            let (w, h) = (1 + (next() * 70.0) as usize, 1 + (next() * 70.0) as usize);
+            let width = 1.0 + next() * 6.0;
+            let img: Vec<[f32; 3]> = (0..w * h)
+                .map(|i| {
+                    let (x, y) = ((i % w) as f32, (i / w) as f32);
+                    let t = (((x + 0.7 * y) % 17.0) / width).min(1.0);
+                    let n = if case % 3 == 0 { next() * 0.02 } else { 0.0 };
+                    [t + n, 0.5 * t, 1.0 - t]
+                })
+                .collect();
+            let (a, b) = (intake_scale(&img, w, h), intake_scale_reference(&img, w, h));
+            assert_eq!(a.to_bits(), b.to_bits(), "case {case} {w}x{h}");
+        }
     }
 
     #[test]

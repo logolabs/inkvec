@@ -22,7 +22,7 @@ fn faces_match_the_flood_fill() {
         })
         .collect();
     let mut a = labels.clone();
-    let fa = faces(&mut a, w, h, &mut Components::new());
+    let fa = RunLabels::new(&labels, w, h).write_faces(&mut a);
     let (b, fb) = crate::regions::split_components(&labels, w, h);
     assert_eq!(fa.len(), fb.len());
     // The same partition: two pixels share a face in one exactly when in the other.
@@ -35,9 +35,10 @@ fn faces_match_the_flood_fill() {
 
 #[test]
 fn a_lone_pixel_takes_its_surroundings() {
-    let mut labels = vec![0u16, 0, 0, 0, 1, 0, 0, 0, 2];
-    despeckle(&mut labels, 3, 3, 2, &mut Components::new());
-    assert_eq!(labels, vec![0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    let labels = vec![0u16, 0, 0, 0, 1, 0, 0, 0, 2];
+    let mut runs = RunLabels::new(&labels, 3, 3);
+    runs.despeckle(2);
+    assert_eq!(runs.to_labels(), vec![0, 0, 0, 0, 0, 0, 0, 0, 0]);
 }
 
 #[test]
@@ -63,7 +64,9 @@ fn a_rim_of_a_blend_ink_goes_to_the_inks_either_side_and_a_hairline_stays() {
         rgb: &rgb,
         alpha: None,
     };
-    absorb_slivers(&mut labels, px, &inks, w, h, &mut Components::new());
+    let mut runs = RunLabels::new(&labels, w, h);
+    runs.absorb_slivers(px, &inks);
+    let labels = runs.to_labels();
     assert!(
         (0..w).all(|x| labels[4 * w + x] == 0),
         "the grey strip is a blend"
@@ -102,7 +105,9 @@ fn the_grey_rim_of_a_thin_stroke_goes_to_the_stroke_and_the_paper() {
         alpha: None,
     };
     let mut hairline = labels.clone();
-    absorb_rims(&mut labels, px, &inks, w, h, &mut Components::new());
+    let mut runs = RunLabels::new(&labels, w, h);
+    runs.absorb_rims(px, &inks);
+    let labels = runs.to_labels();
     assert!(
         (0..w).all(|x| labels[2 * w + x] == 0),
         "the rim above is paper"
@@ -121,9 +126,9 @@ fn the_grey_rim_of_a_thin_stroke_goes_to_the_stroke_and_the_paper() {
         hairline[2 * w + x] = 0;
         hairline[5 * w + x] = 0;
     }
-    let before = hairline.clone();
-    absorb_rims(&mut hairline, px, &inks, w, h, &mut Components::new());
-    assert_eq!(hairline, before);
+    let mut runs = RunLabels::new(&hairline, w, h);
+    runs.absorb_rims(px, &inks);
+    assert_eq!(runs.to_labels(), hairline);
 }
 
 #[test]
@@ -139,10 +144,12 @@ fn two_inks_one_eye_cannot_tell_apart_become_one_and_a_step_stays() {
     assert!(
         crate::color::de00([0.02, 0.02, 0.02], [0.035, 0.035, 0.03]) < crate::color::SAME_INK_DE00
     );
-    let mut labels: Vec<u16> = (0..w * h)
+    let labels: Vec<u16> = (0..w * h)
         .map(|p| if p / w >= 7 { 2 } else { u16::from(p % w >= 5) })
         .collect();
-    merge_same_inks(&mut labels, &inks, w, h, &mut Components::new());
+    let mut runs = RunLabels::new(&labels, w, h);
+    runs.merge_same_inks(&inks);
+    let labels = runs.to_labels();
     // The larger of the two near-blacks (ink 1, 7 columns) takes the other.
     assert!(labels[..7 * w].iter().all(|&l| l == 1));
     assert!(labels[7 * w..].iter().all(|&l| l == 2));
@@ -154,9 +161,11 @@ fn a_u_shape_is_one_component() {
     // 1 . . 1
     // 1 1 1 1
     let labels = vec![1u16, 1, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1];
-    let c = components(&labels, 4, 3);
-    assert_eq!(c.size.len(), 2);
-    assert_eq!(c.comp[0], c.comp[3]);
+    let mut runs = RunLabels::new(&labels, 4, 3);
+    runs.components();
+    assert_eq!(runs.size, vec![9, 3]);
+    // The runs of pixel 0 (row 0, x 0..2) and pixel 3 (row 0, x 3..4).
+    assert_eq!(runs.run_comp[0], runs.run_comp[2]);
 }
 
 // ---------------------------------------------------------------- the oracle
@@ -301,32 +310,39 @@ fn check_case(c: &Case, min_size: usize, what: &str) {
     };
     let full: Vec<[f32; 4]> = (0..w * h).map(|p| px.get(p)).collect();
     let mut want = c.labels.clone();
-    let mut got = c.labels.clone();
-    // One workspace through every pass, as in `fast::front`.
-    let mut cc = Components::new();
+    // One run image through every pass, as in `fast::front`.
+    let mut runs = RunLabels::new(&c.labels, w, h);
+    runs.assert_canonical();
+    assert_eq!(runs.to_labels(), want, "{what}: runs");
     let rc = reference::components(&want, w, h);
-    cc.analyse(&got, w, h);
-    assert_eq!(cc.size, rc.size, "{what}: component sizes");
-    assert_eq!(cc.label, rc.label, "{what}: component labels");
+    runs.components();
+    assert_eq!(runs.size, rc.size, "{what}: component sizes");
+    assert_eq!(runs.label, rc.label, "{what}: component labels");
     assert_eq!(
-        cc.interiors(h),
+        runs.interiors(),
         reference::interiors(&rc, w, h),
         "{what}: interiors"
     );
     reference::absorb_slivers(&mut want, &full, &c.inks, w, h);
-    absorb_slivers(&mut got, px, &c.inks, w, h, &mut cc);
-    assert_eq!(got, want, "{what}: slivers");
+    runs.absorb_slivers(px, &c.inks);
+    runs.assert_canonical();
+    assert_eq!(runs.to_labels(), want, "{what}: slivers");
     reference::absorb_rims(&mut want, &full, &c.inks, w, h);
-    absorb_rims(&mut got, px, &c.inks, w, h, &mut cc);
-    assert_eq!(got, want, "{what}: rims");
+    runs.absorb_rims(px, &c.inks);
+    runs.assert_canonical();
+    assert_eq!(runs.to_labels(), want, "{what}: rims");
     reference::merge_same_inks(&mut want, &c.inks, w, h);
-    merge_same_inks(&mut got, &c.inks, w, h, &mut cc);
-    assert_eq!(got, want, "{what}: same-ink merge");
+    runs.merge_same_inks(&c.inks);
+    runs.assert_canonical();
+    assert_eq!(runs.to_labels(), want, "{what}: same-ink merge");
     reference::despeckle(&mut want, w, h, min_size);
-    despeckle(&mut got, w, h, min_size, &mut cc);
-    assert_eq!(got, want, "{what}: despeckle to {min_size}");
+    runs.despeckle(min_size);
+    runs.assert_canonical();
+    assert_eq!(runs.to_labels(), want, "{what}: despeckle to {min_size}");
     let (want_ids, want_inks) = reference::faces(&want, w, h);
-    let got_inks = faces(&mut got, w, h, &mut cc);
+    // The face ids overwrite whatever the buffer held, as over the palette's labels.
+    let mut got = c.labels.clone();
+    let got_inks = runs.write_faces(&mut got);
     assert_eq!(got_inks, want_inks, "{what}: face inks");
     assert_eq!(got, want_ids, "{what}: face ids");
 }
@@ -344,6 +360,8 @@ fn the_clean_up_equals_the_shipped_passes_on_random_and_degenerate_images() {
         (16, 9),
         (33, 17),
         (40, 40),
+        (67, 5),
+        (130, 3),
     ];
     let mut r = Rng(0x9E37_79B9_7F4A_7C15);
     for round in 0..400 {
@@ -351,6 +369,39 @@ fn the_clean_up_equals_the_shipped_passes_on_random_and_degenerate_images() {
         let c = random_case(&mut r, w, h);
         let min_size = [0, 1, 2, 3, 4, 16][r.below(6)];
         check_case(&c, min_size, &format!("round {round}, {w}x{h}"));
+    }
+}
+
+#[test]
+fn empty_images_have_no_runs_no_components_and_no_faces() {
+    for (w, h) in [(0, 0), (0, 3), (3, 0)] {
+        let inks = [[0.0f32, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]];
+        let px = Pixels {
+            rgb: &[],
+            alpha: None,
+        };
+        let mut runs = RunLabels::new(&[], w, h);
+        runs.assert_canonical();
+        runs.absorb_slivers(px, &inks);
+        runs.absorb_rims(px, &inks);
+        runs.merge_same_inks(&inks);
+        runs.despeckle(4);
+        assert!(runs.write_faces(&mut []).is_empty(), "{w}x{h}");
+    }
+}
+
+#[test]
+fn long_runs_are_found_to_the_pixel_across_vector_blocks() {
+    // Runs whose ends fall at every offset of the 8-label blocks the scan compares.
+    let w = 70;
+    for cut in 0..w {
+        for tail in [0u16, 1] {
+            let row: Vec<u16> = (0..w).map(|x| if x < cut { 0 } else { 1 + tail }).collect();
+            let runs = RunLabels::new(&row, w, 1);
+            runs.assert_canonical();
+            assert_eq!(runs.to_labels(), row, "cut at {cut}");
+            assert_eq!(runs.runs.len(), 1 + usize::from(cut > 0 && cut < w));
+        }
     }
 }
 
@@ -441,4 +492,85 @@ fn the_clean_up_equals_the_shipped_passes_on_the_research_dumps() {
     }
     eprintln!("{n} dumps equal pass by pass; the reference reproduces {out_same} .out files");
     assert!(n > 0, "no dumps in {}", dir.display());
+}
+
+/// Per-pass wall time of the run-based clean-up against the shipped per-pixel code on
+/// every research dump of at least `INKVEC_FACES_BENCH_MIN` pixels (default 1: all), best
+/// of 5 runs each, printed as one line per dump. A measurement, not a check.
+#[test]
+#[ignore = "timing; needs INKVEC_FACES_DUMPS"]
+fn time_the_passes_on_the_research_dumps() {
+    use std::time::Instant;
+    let Some(dir) = inkvec_core::env::path("INKVEC_FACES_DUMPS") else {
+        return;
+    };
+    let min_px = inkvec_core::env::count("INKVEC_FACES_BENCH_MIN").unwrap_or(1);
+    let mut files: Vec<_> = std::fs::read_dir(&dir)
+        .expect("dump directory")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|e| e == "bin"))
+        .collect();
+    files.sort();
+    let best = |f: &mut dyn FnMut() -> f64| (0..5).map(|_| f()).fold(f64::MAX, f64::min);
+    eprintln!("dump w h runs | new slivers rims merge despeckle faces total | reference");
+    for f in &files {
+        let (c, _) = load_dump(f);
+        if c.w * c.h < min_px {
+            continue;
+        }
+        let floor = (4.0 * (c.w * c.h) as f64 / (512.0 * 512.0))
+            .min(16.0)
+            .round()
+            .max(2.0) as usize;
+        let px = Pixels {
+            rgb: &c.rgb,
+            alpha: c.alpha.as_deref(),
+        };
+        let mut t = [0.0f64; 6];
+        let mut n_runs = 0;
+        for _ in 0..5 {
+            let mut lap = [0.0f64; 6];
+            let mut out = c.labels.clone();
+            let s = Instant::now();
+            let mut runs = RunLabels::new(&c.labels, c.w, c.h);
+            lap[0] = s.elapsed().as_secs_f64();
+            n_runs = runs.runs.len();
+            runs.absorb_slivers(px, &c.inks);
+            lap[1] = s.elapsed().as_secs_f64();
+            runs.absorb_rims(px, &c.inks);
+            lap[2] = s.elapsed().as_secs_f64();
+            runs.merge_same_inks(&c.inks);
+            lap[3] = s.elapsed().as_secs_f64();
+            runs.despeckle(floor);
+            lap[4] = s.elapsed().as_secs_f64();
+            std::hint::black_box(runs.write_faces(&mut out));
+            lap[5] = s.elapsed().as_secs_f64();
+            if t[5] == 0.0 || lap[5] < t[5] {
+                t = lap;
+            }
+        }
+        let full: Vec<[f32; 4]> = (0..c.w * c.h).map(|p| px.get(p)).collect();
+        let reference_s = best(&mut || {
+            let mut l = c.labels.clone();
+            let s = Instant::now();
+            std::hint::black_box(reference::stage(&mut l, &full, &c.inks, c.w, c.h, floor));
+            s.elapsed().as_secs_f64()
+        });
+        let ms = |a: f64| a * 1e3;
+        eprintln!(
+            "{} {} {} {} | {:.3} {:.3} {:.3} {:.3} {:.3} {:.3} {:.3} | {:.3}",
+            f.file_stem().unwrap().to_string_lossy(),
+            c.w,
+            c.h,
+            n_runs,
+            ms(t[0]),
+            ms(t[1] - t[0]),
+            ms(t[2] - t[1]),
+            ms(t[3] - t[2]),
+            ms(t[4] - t[3]),
+            ms(t[5] - t[4]),
+            ms(t[5]),
+            ms(reference_s)
+        );
+    }
 }

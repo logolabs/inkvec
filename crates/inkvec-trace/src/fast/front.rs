@@ -92,8 +92,9 @@ fn trace(
     }
     sw.mark("palette");
     inkvec_core::progress::begin("slivers");
-    // One component workspace for every pass below, so its buffers are allocated once.
-    let mut cc = super::faces::Components::new();
+    // The clean-up works on the label image's row runs (`faces::RunLabels`): the labels
+    // are read here once, and the pixels are written once, with the face ids, at the end.
+    let mut runs = super::faces::RunLabels::new(&labels, w, h);
     {
         // Each pixel's colour and opacity, read in place where a pass needs it.
         let px = super::faces::Pixels {
@@ -106,23 +107,22 @@ fn trace(
                 [c[0], c[1], c[2], pal.alpha.get(i).copied().unwrap_or(1.0)]
             })
             .collect();
-        super::faces::absorb_slivers(&mut labels, px, &inks, w, h, &mut cc);
+        runs.absorb_slivers(px, &inks);
         // Every face costs an outline, and every place a face touches a boundary is a
         // junction the fitter has to stop at. The rims of small text and the second black
         // of large type were most of both on a textured masthead: 4,068 faces and 47,548
         // coordinates, where these two passes leave 8,798 at a lower dE00.
-        super::faces::absorb_rims(&mut labels, px, &inks, w, h, &mut cc);
-        super::faces::merge_same_inks(&mut labels, &inks, w, h, &mut cc);
+        runs.absorb_rims(px, &inks);
+        runs.merge_same_inks(&inks);
     }
     sw.mark("slivers");
     inkvec_core::progress::begin("despeckle");
-    let floor = speckle_floor(opts.min_region, w, h);
-    super::faces::despeckle(&mut labels, w, h, floor, &mut cc);
+    runs.despeckle(speckle_floor(opts.min_region, w, h));
     sw.mark("despeckle");
     inkvec_core::progress::begin("split");
-    // The face ids overwrite the cleaned labels in place.
-    let mut face_color = super::faces::faces(&mut labels, w, h, &mut cc);
-    drop(cc);
+    // The face ids overwrite the palette's labels in place: one write per pixel.
+    let mut face_color = runs.write_faces(&mut labels);
+    drop(runs);
     sw.mark("split");
     inkvec_core::progress::begin("ramps");
     let mut face_fill: Vec<gradient::FillFit> =

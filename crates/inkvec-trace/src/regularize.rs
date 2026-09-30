@@ -2,6 +2,17 @@
 //!
 //! Reduces the sum of colour residual and a boundary-length cost. Unlike an area
 //! cutoff, strong one-pixel features can pay for their boundaries and survive.
+//!
+//! # Where this sits
+//!
+//! Between labelling and the planar map, in the crate root's colour trace. Every pixel
+//! already carries the index of its nearest palette ink; this module measures how far
+//! the pixels sit from their inks ([`residual_sigma`], [`residual_incoherence`], which
+//! feed the noise estimate and its diagnostics on every trace) and, for explicitly lossy
+//! input in a research build, relabels pixels to trade colour error against boundary
+//! length ([`labels`], a Potts-model descent). Colours are sRGB `0..1`; label maps are
+//! row-major `u16` indices into the palette.
+
 use crate::color::Palette;
 
 /// How much of the colour residual is INCOHERENT, in display levels: a codec-free damage signal.
@@ -34,6 +45,16 @@ use crate::color::Palette;
 ///
 /// Returns display levels (0 to 255), so it can be compared with a threshold written in the
 /// same units a designer would use.
+///
+/// In symbols, with `r_i = sqrt(|I_i − c(L_i)|² / 3)` each pixel's RMS-over-channels
+/// residual against its own ink and `L` the 4-neighbour Laplacian of `r`:
+///
+/// ```text
+///     incoherence = 255 · sqrt(mean_{interior i}(L_i²) / 20)
+/// ```
+///
+/// over pixels at least two in from the border whose four neighbours share their label.
+/// Zero for images under 5x5, mismatched buffers, or fewer than 256 such pixels.
 pub fn residual_incoherence(
     rgb: &[[f32; 3]],
     labels: &[u16],
@@ -41,9 +62,11 @@ pub fn residual_incoherence(
     h: usize,
     pal: &Palette,
 ) -> f64 {
-    /// Root of the sum of squared coefficients of the 4-neighbour Laplacian, which is the gain
-    /// it applies to independent noise. Derived, not written down, for the reason
-    /// `coverage::estimate_noise` records at length.
+    /// Sum of squared coefficients of the 4-neighbour Laplacian, `4² + 4·1² = 20`: the
+    /// factor by which it multiplies the *variance* of independent noise. The mean square
+    /// is divided by it before the square root, which divides the RMS by `sqrt(20)`, the
+    /// kernel's amplitude gain. (Written as a literal here; `coverage` derives the same
+    /// number from its `LAPLACIAN_KERNEL`.)
     const GAIN: f64 = 20.0;
     /// Too few interior samples and the statistic is meaningless.
     const MIN_SAMPLES: usize = 256;
@@ -87,6 +110,20 @@ pub fn residual_incoherence(
 
 /// Estimate active-region residual noise, excluding label boundaries and exact flats.
 /// JPEG error is spatially heterogeneous: an empty background must not dominate it.
+///
+/// Two populations, each summarised by its median (when it has at least 32 samples,
+/// otherwise [`crate::coverage::NOISE_FLOOR`]):
+///
+/// * interior pixels (all four neighbours share the label): the RMS-over-channels
+///   residual `sqrt(|I − c|² / 3)` against their own ink, counting only pixels off it by
+///   more than half a level, so exactly flat areas do not vote;
+/// * boundary pixels: the distance from the pixel to the segment between its own ink and
+///   a neighbouring ink (the best such neighbour), as `sqrt(|residual⊥|² / 2)`. The
+///   component along the segment is what anti-aliasing explains and is removed, leaving
+///   two degrees of freedom.
+///
+/// Returns the larger of the two, in sRGB units, clamped to `[NOISE_FLOOR, 8/255]`.
+/// Images under 3x3 return the floor.
 pub fn residual_sigma(rgb: &[[f32; 3]], labels: &[u16], w: usize, h: usize, pal: &Palette) -> f64 {
     let mut errors = Vec::new();
     let mut edge_errors = Vec::new();
@@ -155,6 +192,29 @@ pub fn residual_sigma(rgb: &[[f32; 3]], labels: &[u16], w: usize, h: usize, pal:
 }
 
 /// Deterministic four-neighbour Potts descent. Every change strictly lowers energy.
+///
+/// Relabels `labels` (row-major `w x h`, indices into `pal`) in place to lower
+///
+/// ```text
+///     E(L) = Σ_i |I_i − c(L_i)|²  +  β · #{4-neighbour pairs i~j : L_i ≠ L_j}
+///     β    = 2σ² · ln(max(N, 3)),   N = w·h
+/// ```
+///
+/// where `I_i` is pixel `i`'s sRGB colour, `c(l)` ink `l`'s colour and `σ` the noise
+/// estimate in sRGB units. The data term is squared sRGB distance summed over channels;
+/// `β` prices one unit of boundary in the same units, scaled by the noise variance so a
+/// boundary costs the same number of noise units at any noise level, and growing slowly
+/// with the image.
+///
+/// Two stages, both greedy descents on `E` (so neither can raise it):
+///
+/// 1. [`pixel_descent`]: iterated conditional modes, one pixel at a time, each pixel
+///    trying only the labels of its 4-neighbours.
+/// 2. [`merge_components`]: whole 4-connected components relabelled at once, which is
+///    what removes a weak island whose pixels all agree with each other.
+///
+/// Returns the number of pixel label changes. Called only on explicitly lossy intake, in
+/// a research build (`INKVEC_LOSSY_REGULARIZE`), from the crate root.
 pub fn labels(
     rgb: &[[f32; 3]],
     labels: &mut [u16],
@@ -167,6 +227,52 @@ pub fn labels(
         return 0;
     }
     let penalty = (2.0 * sigma * sigma * ((w * h).max(3) as f64).ln()) as f32;
+    let mut changes = pixel_descent(rgb, labels, w, h, pal, penalty);
+    changes += merge_components(rgb, labels, w, h, pal, penalty);
+    changes
+}
+
+/// The in-image 4-neighbours of pixel `i = y·w + x`, in the order left, right, up, down,
+/// and how many there are.
+fn neighbours4(i: usize, x: usize, y: usize, w: usize, h: usize) -> ([usize; 4], usize) {
+    let mut neighbours = [i; 4];
+    let mut n = 0;
+    if x > 0 {
+        neighbours[n] = i - 1;
+        n += 1;
+    }
+    if x + 1 < w {
+        neighbours[n] = i + 1;
+        n += 1;
+    }
+    if y > 0 {
+        neighbours[n] = i - w;
+        n += 1;
+    }
+    if y + 1 < h {
+        neighbours[n] = i + w;
+        n += 1;
+    }
+    (neighbours, n)
+}
+
+/// Stage 1 of [`labels`]: single-pixel moves.
+///
+/// Each pixel takes whichever of its own label and its neighbours' labels minimises its
+/// local energy `|I_i − c(l)|² + β·#{neighbours j with L_j ≠ l}`, switching only on a
+/// decrease of more than `1e-9`. Because every boundary pair touching `i` is in that local
+/// sum, a switch lowers the global energy by the same amount. Pixels are visited in two
+/// checkerboard half-sweeps (red–black ordering), so each half-sweep's decisions read
+/// neighbours that half-sweep does not change. At most 12 sweeps; stops early on a sweep
+/// with no change. Returns the number of changes.
+fn pixel_descent(
+    rgb: &[[f32; 3]],
+    labels: &mut [u16],
+    w: usize,
+    h: usize,
+    pal: &Palette,
+    penalty: f32,
+) -> usize {
     let mut changes = 0;
     for _ in 0..12 {
         let mut moved = 0;
@@ -177,24 +283,7 @@ pub fn labels(
                         continue;
                     }
                     let i = y * w + x;
-                    let mut neighbours = [i; 4];
-                    let mut n = 0;
-                    if x > 0 {
-                        neighbours[n] = i - 1;
-                        n += 1;
-                    }
-                    if x + 1 < w {
-                        neighbours[n] = i + 1;
-                        n += 1;
-                    }
-                    if y > 0 {
-                        neighbours[n] = i - w;
-                        n += 1;
-                    }
-                    if y + 1 < h {
-                        neighbours[n] = i + w;
-                        n += 1;
-                    }
+                    let (neighbours, n) = neighbours4(i, x, y, w, h);
                     let energy = |l: u16| {
                         let ink = pal.rgb[l as usize];
                         (0..3).map(|c| (rgb[i][c] - ink[c]).powi(2)).sum::<f32>()
@@ -223,6 +312,34 @@ pub fn labels(
             break;
         }
     }
+    changes
+}
+
+/// Stage 2 of [`labels`]: joint moves of whole components.
+///
+/// Single-pixel descent cannot escape a weak island whose interior pixels all agree with
+/// one another. So each 4-connected component `C` (label `a`) is tested against every
+/// label `b` it touches:
+///
+/// ```text
+///     ΔE = Σ_{i∈C} (|I_i − c(b)|² − |I_i − c(a)|²) − β·shared(C, b) − 9β
+/// ```
+///
+/// `shared` counts the pixel sides between `C` and `b`, which stop being boundary; the
+/// `9β` is the component's own description, at least a closed three-point path plus an
+/// RGB fill (9 scalars), which removing it saves. The most negative `ΔE`, if any, is
+/// applied. Components are found by breadth-first flood from each unseen pixel in raster
+/// order, so later components see earlier merges. Up to 4 passes, stopping early on a
+/// pass with no merge. Returns the number of pixels relabelled.
+fn merge_components(
+    rgb: &[[f32; 3]],
+    labels: &mut [u16],
+    w: usize,
+    h: usize,
+    pal: &Palette,
+    penalty: f32,
+) -> usize {
+    let mut changes = 0;
     // Single-pixel descent cannot escape a weak island whose interior pixels all
     // agree with one another. Test whole connected components as joint moves.
     // A component costs at least a closed three-point path plus an RGB fill (9
@@ -236,31 +353,7 @@ pub fn labels(
                 continue;
             }
             let current = labels[seed];
-            let mut pixels = vec![seed];
-            seen[seed] = true;
-            let mut head = 0;
-            let mut contacts = std::collections::BTreeMap::<u16, usize>::new();
-            while head < pixels.len() {
-                let i = pixels[head];
-                head += 1;
-                let (x, y) = (i % w, i / w);
-                for j in [
-                    if x > 0 { Some(i - 1) } else { None },
-                    if x + 1 < w { Some(i + 1) } else { None },
-                    if y > 0 { Some(i - w) } else { None },
-                    if y + 1 < h { Some(i + w) } else { None },
-                ]
-                .into_iter()
-                .flatten()
-                {
-                    if labels[j] != current {
-                        *contacts.entry(labels[j]).or_default() += 1;
-                    } else if !seen[j] {
-                        seen[j] = true;
-                        pixels.push(j);
-                    }
-                }
-            }
+            let (pixels, contacts) = flood_component(labels, &mut seen, seed, w, h);
             let mut best = current;
             let mut gain = 0.0;
             for (target, shared) in contacts {
@@ -295,6 +388,45 @@ pub fn labels(
         }
     }
     changes
+}
+
+/// The 4-connected component of same-label pixels containing `seed` (breadth-first, in
+/// visiting order), marking them in `seen`, and for each other label it touches the number
+/// of pixel sides it shares with that label, in label order.
+fn flood_component(
+    labels: &[u16],
+    seen: &mut [bool],
+    seed: usize,
+    w: usize,
+    h: usize,
+) -> (Vec<usize>, std::collections::BTreeMap<u16, usize>) {
+    let current = labels[seed];
+    let mut pixels = vec![seed];
+    seen[seed] = true;
+    let mut head = 0;
+    let mut contacts = std::collections::BTreeMap::<u16, usize>::new();
+    while head < pixels.len() {
+        let i = pixels[head];
+        head += 1;
+        let (x, y) = (i % w, i / w);
+        for j in [
+            if x > 0 { Some(i - 1) } else { None },
+            if x + 1 < w { Some(i + 1) } else { None },
+            if y > 0 { Some(i - w) } else { None },
+            if y + 1 < h { Some(i + w) } else { None },
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if labels[j] != current {
+                *contacts.entry(labels[j]).or_default() += 1;
+            } else if !seen[j] {
+                seen[j] = true;
+                pixels.push(j);
+            }
+        }
+    }
+    (pixels, contacts)
 }
 
 #[cfg(test)]

@@ -173,16 +173,19 @@ pub fn residual_sigma(rgb: &[[f32; 3]], labels: &[u16], w: usize, h: usize, pal:
             }
         }
     }
-    errors.sort_by(f64::total_cmp);
-    edge_errors.sort_by(f64::total_cmp);
-    // Residual includes palette bias, so limit its influence to 8 display levels.
+    // Residual includes palette bias, so limit its influence to 8 display levels. Each
+    // median is found by selection (the element a `total_cmp` sort puts there, exactly).
+    let median = |v: &mut Vec<f64>| {
+        let k = v.len() / 2;
+        *v.select_nth_unstable_by(k, f64::total_cmp).1
+    };
     let interior = if errors.len() >= 32 {
-        errors[errors.len() / 2]
+        median(&mut errors)
     } else {
         crate::coverage::NOISE_FLOOR
     };
     let edge = if edge_errors.len() >= 32 {
-        edge_errors[edge_errors.len() / 2]
+        median(&mut edge_errors)
     } else {
         crate::coverage::NOISE_FLOOR
     };

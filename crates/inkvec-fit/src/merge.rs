@@ -40,6 +40,15 @@
 //! parameters for the two joins it disturbs, and only replaces a run when the same
 //! `0.5·chi² + λ·params` that chose the run prefers it. It is also refused if the cubic
 //! crosses itself.
+//!
+//! # Where this sits
+//!
+//! Stage 6 of the shipping fit (see the crate overview): `crate::multimodel` calls
+//! [`merge_free_cubics`] and then [`sharpen_corners`] on every uncapped fit, on the
+//! centred polyline, and `inkvec-cli`'s ring assembly calls both again after its own
+//! edits. The research-only snaps (`snap`) are the same kind of peephole pass. Paths come
+//! in and go out as [`FittedPath`]s in px; `vertices` are indices into the measured
+//! polyline and are kept aligned with the segments.
 
 use inkvec_core::{Point, Polyline, Vec2};
 
@@ -97,6 +106,12 @@ const COARSE_SAMPLES: usize = 24;
 use crate::multimodel::MAX_ARM;
 
 /// Weighted sum of squared distances from the measured points `a..=b` to a curve.
+///
+/// `χ² = Σ_k (d_k/σ_k)²` (sigma floored at 1e-6 px), with `d_k` the distance from point
+/// `k` to the nearest of [`SAMPLES`]` + 1` points evenly spaced in the curve parameter.
+/// Nearest-sample distance overstates the true distance by up to half the sample spacing;
+/// every description in a comparison is scored the same way, so the comparison stays
+/// fair. A line is passed as the degenerate cubic `[start, start, end, end]`.
 pub fn chi2(c: &[Point; 4], poly: &Polyline, a: usize, b: usize) -> f64 {
     chi2_n(c, poly, a, b, SAMPLES)
 }
@@ -108,6 +123,9 @@ pub fn chi2(c: &[Point; 4], poly: &Polyline, a: usize, b: usize) -> f64 {
 /// that used to be heap-allocated fresh on every call removes a malloc/free pair from
 /// each of those millions of calls without changing which points are sampled or in what
 /// order the distances are folded.
+///
+/// [`chi2`] with `n + 1` samples instead of `SAMPLES + 1`; `n` must not exceed
+/// [`SAMPLES`].
 fn chi2_n(c: &[Point; 4], poly: &Polyline, a: usize, b: usize, n: usize) -> f64 {
     // On the stack: both callers pass one of two compile-time constants, neither above
     // `SAMPLES`, and this function is called thousands of times per merge candidate.
@@ -166,6 +184,16 @@ fn chi2_n(c: &[Point; 4], poly: &Polyline, a: usize, b: usize, n: usize) -> f64 
 /// length across a quarter turn is not those parameters: it returned chi-squared 210 where
 /// the true optimum is 100, and reprojecting between solves did not rescue it. Solving the
 /// arms in closed form for fixed directions has the same flaw for the same reason.
+///
+/// The cubic is parametrised by four numbers: the rotations `r0`, `r1` (degrees) of its end
+/// directions away from the contour's own directions at `p0` and `p3` (the chords to the
+/// second point in from each end), and the arm lengths `d0`, `d1` as fractions of the
+/// chord `|p3 − p0|`. A coarse grid ([`FreeCubicSearch::grid`]) picks the basin and a
+/// compass search ([`FreeCubicSearch::refine`]) finishes; cubics that cross themselves,
+/// arms outside `[0.02, MAX_ARM]` and rotations beyond [`SEARCH_DEGREES`] score infinity.
+///
+/// `None` for a zero-length chord, fewer than two interior points, a contour of zero
+/// length, or when no admissible cubic was found.
 pub fn free_cubic(poly: &Polyline, a: usize, b: usize, p0: Point, p3: Point) -> Option<[Point; 4]> {
     let chord = p0.dist(p3);
     if chord <= 1e-9 || b <= a + 1 {
@@ -212,103 +240,151 @@ pub fn free_cubic(poly: &Polyline, a: usize, b: usize, p0: Point, p3: Point) -> 
         return None;
     }
 
-    // Pattern search on the residual that actually decides the merge.
-    //
-    // Solving the arms in closed form is tempting and wrong: that least-squares minimises
-    // distance to `B(t_k)` at chord-length parameters, which is not the point-to-curve
-    // residual the objective measures. Fitted that way the corner came out at chi-squared
-    // 210-250 where searching the true residual finds 100, and the merge never fired.
-    let build = |r0: f64, r1: f64, d0: f64, d1: f64| -> [Point; 4] {
-        let (e0, e1) = (rotate(base0, r0), rotate(base1, r1));
+    let search = FreeCubicSearch {
+        poly,
+        a,
+        b,
+        p0,
+        p3,
+        chord,
+        base0,
+        base1,
+    };
+    let cur = search.grid()?;
+    let (cur, best) = search.refine(cur);
+    if !best.is_finite() {
+        return None;
+    }
+    Some(search.build(cur[0], cur[1], cur[2], cur[3]))
+}
+
+/// The search space of [`free_cubic`]: the measured run `a..=b`, the fixed end points and
+/// chord, and the contour's own unit directions at each end, from which the rotations
+/// are measured.
+///
+/// Pattern search on the residual that actually decides the merge. Solving the arms in
+/// closed form is tempting and wrong: that least-squares minimises distance to `B(t_k)`
+/// at chord-length parameters, which is not the point-to-curve residual the objective
+/// measures. Fitted that way the corner came out at chi-squared 210-250 where searching
+/// the true residual finds 100, and the merge never fired.
+struct FreeCubicSearch<'a> {
+    poly: &'a Polyline,
+    a: usize,
+    b: usize,
+    p0: Point,
+    p3: Point,
+    /// `|p3 − p0|`, px.
+    chord: f64,
+    base0: Vec2,
+    base1: Vec2,
+}
+
+impl FreeCubicSearch<'_> {
+    /// The cubic with end directions rotated `r0`, `r1` degrees from the base directions
+    /// and arms `d0`, `d1` chords long.
+    fn build(&self, r0: f64, r1: f64, d0: f64, d1: f64) -> [Point; 4] {
+        let (p0, p3, chord) = (self.p0, self.p3, self.chord);
+        let (e0, e1) = (rotate(self.base0, r0), rotate(self.base1, r1));
         [
             p0,
             Point::new(p0.x + e0.x * d0 * chord, p0.y + e0.y * d0 * chord),
             Point::new(p3.x - e1.x * d1 * chord, p3.y - e1.y * d1 * chord),
             p3,
         ]
-    };
-    let score = |r0: f64, r1: f64, d0: f64, d1: f64| -> f64 {
+    }
+
+    /// The full residual ([`chi2`]) of a candidate, or infinity outside the search box or
+    /// for a self-crossing cubic.
+    fn score(&self, r0: f64, r1: f64, d0: f64, d1: f64) -> f64 {
         if !(0.02..=MAX_ARM).contains(&d0) || !(0.02..=MAX_ARM).contains(&d1) {
             return f64::INFINITY;
         }
         if r0.abs() > SEARCH_DEGREES || r1.abs() > SEARCH_DEGREES {
             return f64::INFINITY;
         }
-        let c = build(r0, r1, d0, d1);
+        let c = self.build(r0, r1, d0, d1);
         if cubic_self_intersects(c[0], c[1], c[2], c[3]) {
             return f64::INFINITY;
         }
-        chi2(&c, poly, a, b)
-    };
+        chi2(&c, self.poly, self.a, self.b)
+    }
 
-    // Coarse grid first, on a cheap residual, then refine on the full one.
-    //
-    // A pattern search alone gets stuck here: the fits that matter are *asymmetric* —
-    // around -10 and +55 degrees at the two ends — and a search started from equal arms
-    // and equal angles settles into a symmetric basin at chi-squared 174 where the true
-    // optimum is 101. The grid is what escapes it; the refinement is what makes the grid
-    // affordable, since it can then be coarse.
-    let coarse = |r0: f64, r1: f64, d0: f64, d1: f64| -> f64 {
+    /// The cheap residual used to rank grid points: [`COARSE_SAMPLES`] samples. The grid
+    /// stays inside the rotation limit, so only the arm and crossing checks apply.
+    fn coarse(&self, r0: f64, r1: f64, d0: f64, d1: f64) -> f64 {
         if !(0.02..=MAX_ARM).contains(&d0) || !(0.02..=MAX_ARM).contains(&d1) {
             return f64::INFINITY;
         }
-        let c = build(r0, r1, d0, d1);
+        let c = self.build(r0, r1, d0, d1);
         if cubic_self_intersects(c[0], c[1], c[2], c[3]) {
             return f64::INFINITY;
         }
-        chi2_n(&c, poly, a, b, COARSE_SAMPLES)
-    };
+        chi2_n(&c, self.poly, self.a, self.b, COARSE_SAMPLES)
+    }
 
-    const ANGLES: [f64; 9] = [-90.0, -65.0, -45.0, -22.0, 0.0, 22.0, 45.0, 65.0, 90.0];
-    const ARMS: [f64; 5] = [0.15, 0.3, 0.45, 0.6, 0.8];
-    let mut cur = [0.0f64, 0.0, 0.35, 0.35];
-    let mut rough = f64::INFINITY;
-    for &r0 in &ANGLES {
-        for &r1 in &ANGLES {
-            for &d0 in &ARMS {
-                for &d1 in &ARMS {
-                    let x = coarse(r0, r1, d0, d1);
-                    if x < rough {
-                        rough = x;
-                        cur = [r0, r1, d0, d1];
+    /// Coarse grid first, on a cheap residual: 9 rotations at each end by 5 arm lengths
+    /// at each, 2025 candidates. `None` if every one is inadmissible.
+    ///
+    /// A pattern search alone gets stuck here: the fits that matter are *asymmetric* —
+    /// around -10 and +55 degrees at the two ends — and a search started from equal arms
+    /// and equal angles settles into a symmetric basin at chi-squared 174 where the true
+    /// optimum is 101. The grid is what escapes it; the refinement is what makes the grid
+    /// affordable, since it can then be coarse.
+    fn grid(&self) -> Option<[f64; 4]> {
+        const ANGLES: [f64; 9] = [-90.0, -65.0, -45.0, -22.0, 0.0, 22.0, 45.0, 65.0, 90.0];
+        const ARMS: [f64; 5] = [0.15, 0.3, 0.45, 0.6, 0.8];
+        let mut cur = [0.0f64, 0.0, 0.35, 0.35];
+        let mut rough = f64::INFINITY;
+        for &r0 in &ANGLES {
+            for &r1 in &ANGLES {
+                for &d0 in &ARMS {
+                    for &d1 in &ARMS {
+                        let x = self.coarse(r0, r1, d0, d1);
+                        if x < rough {
+                            rough = x;
+                            cur = [r0, r1, d0, d1];
+                        }
                     }
                 }
             }
         }
-    }
-    if !rough.is_finite() {
-        return None;
+        rough.is_finite().then_some(cur)
     }
 
-    let mut best = score(cur[0], cur[1], cur[2], cur[3]);
-    let mut step = [10.0f64, 10.0, 0.1, 0.1];
-    for _ in 0..6 {
-        let mut improved = true;
-        while improved {
-            improved = false;
-            for k in 0..4 {
-                for sign in [-1.0f64, 1.0] {
-                    let mut trial = cur;
-                    trial[k] += sign * step[k];
-                    let x = score(trial[0], trial[1], trial[2], trial[3]);
-                    if x < best {
-                        best = x;
-                        cur = trial;
-                        improved = true;
+    /// Compass search from `cur` on the full residual: try ± one step in each of the four
+    /// coordinates, move on any improvement, repeat until none; then halve the steps
+    /// (from 10° and 0.1 chord) and go again, six times. Returns the final point and its
+    /// residual.
+    fn refine(&self, mut cur: [f64; 4]) -> ([f64; 4], f64) {
+        let mut best = self.score(cur[0], cur[1], cur[2], cur[3]);
+        let mut step = [10.0f64, 10.0, 0.1, 0.1];
+        for _ in 0..6 {
+            let mut improved = true;
+            while improved {
+                improved = false;
+                for k in 0..4 {
+                    for sign in [-1.0f64, 1.0] {
+                        let mut trial = cur;
+                        trial[k] += sign * step[k];
+                        let x = self.score(trial[0], trial[1], trial[2], trial[3]);
+                        if x < best {
+                            best = x;
+                            cur = trial;
+                            improved = true;
+                        }
                     }
                 }
             }
+            for v in step.iter_mut() {
+                *v *= 0.5;
+            }
         }
-        for v in step.iter_mut() {
-            *v *= 0.5;
-        }
+        (cur, best)
     }
-    if !best.is_finite() {
-        return None;
-    }
-    Some(build(cur[0], cur[1], cur[2], cur[3]))
 }
 
+/// `v` rotated by `deg` degrees (counter-clockwise in a y-up frame, clockwise on a y-down
+/// screen).
 fn rotate(v: Vec2, deg: f64) -> Vec2 {
     let (s, c) = deg.to_radians().sin_cos();
     Vec2 {
@@ -317,6 +393,8 @@ fn rotate(v: Vec2, deg: f64) -> Vec2 {
     }
 }
 
+/// Parameters a segment costs under the cost model in force: [`PARAMS_LINE`] for a line,
+/// `params_cubic()` for a cubic, and the arc's own count.
 fn params_of(s: &Segment) -> f64 {
     match s {
         Segment::Line(_) => PARAMS_LINE,
@@ -327,6 +405,11 @@ fn params_of(s: &Segment) -> f64 {
 
 /// Merge runs of segments into single free-tangent cubics wherever the objective prefers
 /// it. `vertices` are the measured-point indices the segmentation chose.
+///
+/// Runs [`MAX_ROUNDS`] sweeps at most, stopping early when a sweep merges nothing, and
+/// returns how many merges were made. Does nothing unless there are at least two
+/// segments and exactly one more vertex than segments. The path's start and end never
+/// move.
 pub fn merge_free_cubics(
     path: &mut FittedPath,
     poly: &Polyline,
@@ -353,6 +436,19 @@ pub fn merge_free_cubics(
 }
 
 /// One sweep of the pass. Repeated by the caller until it stops finding anything.
+///
+/// At each segment `m`, runs of `MAX_RUN` down to 2 segments starting there are tried,
+/// longest first; a run qualifies if it covers more than three and at most [`MAX_SPAN`]
+/// measured points and contains no arc. The first run whose free cubic ([`free_cubic`],
+/// through the run's actual start and end on the path) costs less than the segments it
+/// replaces,
+///
+/// ```text
+///     ½·χ²_new + λ·(params_cubic + BREAK_PARAMS)  <  ½·Σχ²_old + λ·Σparams_old (+ SMOOTH_SLACK·λ)
+/// ```
+///
+/// is spliced in and `verts` loses the absorbed interior vertices. Returns the number of
+/// merges.
 fn merge_round(
     path: &mut FittedPath,
     poly: &Polyline,
@@ -503,109 +599,31 @@ pub fn sharpen_corners(path: &mut FittedPath) -> usize {
     // in `out` yet; remember where it must end.
     let mut last_end: Option<Point> = None;
     let mut sharpened = 0usize;
-    let mut i = 0usize;
-    while i < n {
-        let seg = path.segments[i].clone();
-        let prev = if i >= 1 {
-            Some(i - 1)
-        } else if looped {
-            Some(n - 1)
-        } else {
-            None
+    for i in 0..n {
+        let (prev, next) = ring_neighbours(i, n, looped);
+        let Some((h1, h2)) = corner_for(path, &starts, i, prev, next) else {
+            out.push(path.segments[i].clone());
+            continue;
         };
-        let next = if i + 1 < n {
-            Some(i + 1)
-        } else if looped {
-            Some(0)
+        // The segment is dropped; the line before it now runs on to the corner.
+        if i == 0 {
+            last_end = Some(h1);
+            new_start = h1;
+        } else if i == n - 1 && looped {
+            new_start = h1;
+            end_last_line_at(&mut out, h1);
         } else {
-            None
-        };
-        let prev_is_line = prev.is_some_and(|p| matches!(path.segments[p], Segment::Line(_)));
-        let next_is_line = next.is_some_and(|p| matches!(path.segments[p], Segment::Line(_)));
-
-        if let Segment::Cubic(c1, c2, e) = seg {
-            let s0 = starts[i];
-            if prev_is_line && next_is_line && s0.dist(e) <= SHARPEN_MAX_EDGE {
-                let a = starts[prev.unwrap()];
-                let b = path.segments[next.unwrap()].end();
-                if let (Some(d0), Some(d1)) = (unit_vec(s0 - a), unit_vec(b - e)) {
-                    let m = cubic_at([s0, c1, c2, e], 0.5);
-                    let dm = unit_vec(cubic_tangent_at([s0, c1, c2, e], 0.5));
-                    // One corner (the cubic is the chamfer itself), else two corners
-                    // (a short edge with a chamfer at each end, direction from the
-                    // cubic's own middle).
-                    let mut found: Option<(Point, Option<Point>)> = None;
-                    if s0.dist(e) <= SHARPEN_MAX_CHORD {
-                        if let Some(hit) = corner_between(a, d0, s0, b, d1, e) {
-                            found = Some((hit, None));
-                        }
-                    }
-                    if found.is_none() {
-                        if let Some(dm) = dm {
-                            let h1 = corner_between(a, d0, s0, m, dm, s0);
-                            let h2 = corner_between(m, dm, e, b, d1, e);
-                            if let (Some(h1), Some(h2)) = (h1, h2) {
-                                if h1.dist(h2) >= 1.0 && h1.dist(h2) <= SHARPEN_MAX_EDGE {
-                                    found = Some((h1, Some(h2)));
-                                }
-                            }
-                        }
-                    }
-                    if let Some((h1, h2)) = found {
-                        if i == 0 {
-                            last_end = Some(h1);
-                            new_start = h1;
-                        } else if i == n - 1 && looped {
-                            new_start = h1;
-                            if let Some(Segment::Line(_)) = out.last() {
-                                *out.last_mut().unwrap() = Segment::Line(h1);
-                            }
-                        } else if let Some(Segment::Line(_)) = out.last() {
-                            *out.last_mut().unwrap() = Segment::Line(h1);
-                        }
-                        if let Some(h2) = h2 {
-                            out.push(Segment::Line(h2));
-                            sharpened += 1;
-                        }
-                        sharpened += 1;
-                        i += 1;
-                        continue;
-                    }
-                }
-            }
-        } else if let Segment::Line(e) = seg {
-            let s0 = starts[i];
-            if prev_is_line && next_is_line && s0.dist(e) <= SHARPEN_MAX_CHORD {
-                let a = starts[prev.unwrap()];
-                let b = path.segments[next.unwrap()].end();
-                if let (Some(d0), Some(d1)) = (unit_vec(s0 - a), unit_vec(b - e)) {
-                    if let Some(hit) = corner_between(a, d0, s0, b, d1, e) {
-                        if i == 0 {
-                            last_end = Some(hit);
-                            new_start = hit;
-                        } else if i == n - 1 && looped {
-                            new_start = hit;
-                            if let Some(Segment::Line(_)) = out.last() {
-                                *out.last_mut().unwrap() = Segment::Line(hit);
-                            }
-                        } else if let Some(Segment::Line(_)) = out.last() {
-                            *out.last_mut().unwrap() = Segment::Line(hit);
-                        }
-                        sharpened += 1;
-                        i += 1;
-                        continue;
-                    }
-                }
-            }
+            end_last_line_at(&mut out, h1);
         }
-        out.push(seg);
-        i += 1;
+        if let Some(h2) = h2 {
+            out.push(Segment::Line(h2));
+            sharpened += 1;
+        }
+        sharpened += 1;
     }
     if sharpened > 0 {
         if let Some(p) = last_end {
-            if let Some(Segment::Line(_)) = out.last() {
-                *out.last_mut().unwrap() = Segment::Line(p);
-            }
+            end_last_line_at(&mut out, p);
         }
         path.start = new_start;
         path.segments = out;
@@ -613,11 +631,116 @@ pub fn sharpen_corners(path: &mut FittedPath) -> usize {
     sharpened
 }
 
+/// Indices of the segments before and after segment `i` of `n`, wrapping round a ring;
+/// `None` past the ends of an open path.
+fn ring_neighbours(i: usize, n: usize, looped: bool) -> (Option<usize>, Option<usize>) {
+    let prev = if i >= 1 {
+        Some(i - 1)
+    } else if looped {
+        Some(n - 1)
+    } else {
+        None
+    };
+    let next = if i + 1 < n {
+        Some(i + 1)
+    } else if looped {
+        Some(0)
+    } else {
+        None
+    };
+    (prev, next)
+}
+
+/// If segment `i` (starting at `starts[i]`) should be sharpened away, the corner(s) that
+/// replace it: `(h1, None)` when the line before and the line after meet at one corner
+/// `h1`, `(h1, Some(h2))` when a short cubic was a whole edge with a corner at each end.
+///
+/// Only a segment between two lines qualifies. A cubic with a chord up to
+/// [`SHARPEN_MAX_EDGE`] is tried as described in [`corners_of_short_cubic`]; a line with
+/// a chord up to [`SHARPEN_MAX_CHORD`] is a chamfer the program drew straight, and is
+/// replaced by the neighbours' own meeting point ([`corner_between`]). Arcs are left
+/// alone.
+fn corner_for(
+    path: &FittedPath,
+    starts: &[Point],
+    i: usize,
+    prev: Option<usize>,
+    next: Option<usize>,
+) -> Option<(Point, Option<Point>)> {
+    let (Some(p), Some(q)) = (prev, next) else {
+        return None;
+    };
+    if !matches!(path.segments[p], Segment::Line(_))
+        || !matches!(path.segments[q], Segment::Line(_))
+    {
+        return None;
+    }
+    let a = starts[p];
+    let b = path.segments[q].end();
+    let s0 = starts[i];
+    match path.segments[i] {
+        Segment::Cubic(c1, c2, e) if s0.dist(e) <= SHARPEN_MAX_EDGE => {
+            let (d0, d1) = (unit_vec(s0 - a)?, unit_vec(b - e)?);
+            corners_of_short_cubic([s0, c1, c2, e], (a, d0), (b, d1))
+        }
+        Segment::Line(e) if s0.dist(e) <= SHARPEN_MAX_CHORD => {
+            let (d0, d1) = (unit_vec(s0 - a)?, unit_vec(b - e)?);
+            corner_between(a, d0, s0, b, d1, e).map(|hit| (hit, None))
+        }
+        _ => None,
+    }
+}
+
+/// The corner(s) that replace a short cubic `c` between the incoming line (through `a`,
+/// direction `d0`) and the outgoing one (through `b`, direction `d1`).
+///
+/// One corner, if the cubic is the chamfer itself: its chord is at most
+/// [`SHARPEN_MAX_CHORD`] and the two lines meet within the chamfer allowance of its ends.
+/// Otherwise two corners, if it is a short edge with a chamfer at each end: the edge's
+/// own line is taken through the cubic's midpoint along its tangent there, and it must
+/// meet each neighbour at a corner, the two corners between 1 px and
+/// [`SHARPEN_MAX_EDGE`] apart.
+fn corners_of_short_cubic(
+    c: [Point; 4],
+    (a, d0): (Point, Vec2),
+    (b, d1): (Point, Vec2),
+) -> Option<(Point, Option<Point>)> {
+    let (s0, e) = (c[0], c[3]);
+    let m = eval_cubic(c, 0.5);
+    let dm = unit_vec(cubic_tangent_at(c, 0.5));
+    if s0.dist(e) <= SHARPEN_MAX_CHORD {
+        if let Some(hit) = corner_between(a, d0, s0, b, d1, e) {
+            return Some((hit, None));
+        }
+    }
+    let dm = dm?;
+    let h1 = corner_between(a, d0, s0, m, dm, s0);
+    let h2 = corner_between(m, dm, e, b, d1, e);
+    if let (Some(h1), Some(h2)) = (h1, h2) {
+        if h1.dist(h2) >= 1.0 && h1.dist(h2) <= SHARPEN_MAX_EDGE {
+            return Some((h1, Some(h2)));
+        }
+    }
+    None
+}
+
+/// Move the end of the last segment in `out` to `p`, if that segment is a line.
+fn end_last_line_at(out: &mut [Segment], p: Point) {
+    if let Some(last @ Segment::Line(_)) = out.last_mut() {
+        *last = Segment::Line(p);
+    }
+}
+
 /// The corner where the line through `a` with direction `d0` meets the line through `b`
 /// with direction `d1`, if the two turn by at least [`SHARPEN_MIN_TURN`], the meeting
 /// lies ahead of `p0` along the first line and behind `p1` along the second (a convex
 /// corner between them, not a crossing behind the cubic), and it is within the chamfer
 /// allowance of both `p0` and `p1` — the measured points the corner is recovered from.
+///
+/// The intersection is `a + t·d0` with `t = ((b − a) × d1) / (d0 × d1)`, and the
+/// allowance is `min(3, CORNER_CHAMFER / max(0.2, sin(½(π − turn)))) + 0.5` px, the
+/// chamfer allowance of [`crate::adjust_vertices_at`] plus half a pixel. `d0` and `d1`
+/// must be unit vectors; near-parallel lines (`|d0 × d1| ≤ 1e-9`) have no corner.
 fn corner_between(a: Point, d0: Vec2, p0: Point, b: Point, d1: Vec2, p1: Point) -> Option<Point> {
     let turn = d0.cross(d1).abs().atan2(d0.dot(d1));
     let denom = d0.cross(d1);
@@ -640,15 +763,8 @@ fn corner_between(a: Point, d0: Vec2, p0: Point, b: Point, d1: Vec2, p1: Point) 
     }
 }
 
-fn cubic_at(p: [Point; 4], t: f64) -> Point {
-    let u = 1.0 - t;
-    let (b0, b1, b2, b3) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
-    Point::new(
-        b0 * p[0].x + b1 * p[1].x + b2 * p[2].x + b3 * p[3].x,
-        b0 * p[0].y + b1 * p[1].y + b2 * p[2].y + b3 * p[3].y,
-    )
-}
-
+/// The derivative of a cubic at `t`, `3·((1−t)²(p1−p0) + 2(1−t)t(p2−p1) + t²(p3−p2))`.
+/// Kept apart from [`crate::curves::cubic_tangent`], which rounds differently.
 fn cubic_tangent_at(p: [Point; 4], t: f64) -> Vec2 {
     let u = 1.0 - t;
     Vec2 {
@@ -663,6 +779,7 @@ fn cubic_tangent_at(p: [Point; 4], t: f64) -> Vec2 {
     }
 }
 
+/// `v` normalised, or `None` for a length at or below 1e-12.
 fn unit_vec(v: Vec2) -> Option<Vec2> {
     let n = v.norm();
     if n > 1e-12 {

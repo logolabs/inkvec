@@ -235,7 +235,7 @@ impl Segment {
     /// Every arm reads the constant that names the count rather than restating it. A line
     /// really is two numbers and a cubic really is six, so literals here would be correct
     /// today and silently stale the moment either constant moved -- and this function and
-    /// `merge::segment_params`, which does reference them, would then disagree about the
+    /// `merge::params_of`, which does reference them, would then disagree about the
     /// price of the same segment.
     pub fn params(&self) -> f64 {
         match self {

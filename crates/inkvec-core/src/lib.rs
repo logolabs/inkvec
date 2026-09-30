@@ -17,7 +17,7 @@
 //!
 //! - [`predicates`]: exact orientation and intersection tests (Shewchuk's adaptive
 //!   arithmetic), so topology decisions never depend on an epsilon;
-//! - [`env`]: the one place the engine reads environment variables (diagnostics and A/B
+//! - [`env`](mod@env): the one place the engine reads environment variables (diagnostics and A/B
 //!   switches only; options travel through `inkvec::Options`);
 //! - [`progress`]: live progress reports and cooperative cancellation for one trace;
 //! - [`clock`]: a monotonic clock that also works on `wasm32-unknown-unknown`.

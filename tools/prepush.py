@@ -51,6 +51,8 @@ class Check:
     full_only: bool = False
     #: A file the command needs that a fresh checkout lacks, and how to get it.
     needs: tuple[Path, str] | None = None
+    #: Extra environment variables for the command.
+    env: tuple[tuple[str, str], ...] = ()
 
 
 def checks() -> list[Check]:
@@ -103,6 +105,15 @@ def checks() -> list[Check]:
             ),
         ),
         Check(
+            name="docs",
+            # CI's `cargo doc` runs with warnings denied: a doc link that names nothing, or one
+            # name that is both a module and a macro, fails the push there.
+            command=["cargo", "doc", "--workspace", "--no-deps", "-q"],
+            env=(("RUSTDOCFLAGS", "-D warnings"),),
+            full_only=True,
+            hint="fix the doc links named above (an ambiguous name takes `mod@` or `macro@`)",
+        ),
+        Check(
             name="quality",
             command=[py, "bench/quality.py"],
             full_only=True,
@@ -140,6 +151,7 @@ def run(check: Check) -> tuple[bool, str, float]:
         text=True,
         encoding="utf-8",
         errors="replace",
+        env={**os.environ, **dict(check.env)} if check.env else None,
         **low_priority(),
     )
     return done.returncode == 0, done.stdout, time.perf_counter() - start
@@ -149,7 +161,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("--full", action="store_true", help="also run bench/quality.py (slower)")
+    ap.add_argument("--full", action="store_true", help="also run cargo doc and bench/quality.py (slower)")
     ap.add_argument(
         "--skip", action="append", default=[], metavar="NAME", help="skip a check by name (repeatable)"
     )

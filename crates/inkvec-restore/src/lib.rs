@@ -32,6 +32,9 @@
 //! [`decide`] says the probe trace disagrees with the input; the browser build reaches the
 //! same pre- and post-processing through [`network_input`] and [`network_output`].
 
+// As in `inkvec_trace`: doc comments point at the private helper doing each step.
+#![allow(rustdoc::private_intra_doc_links)]
+
 pub mod external;
 pub mod planar;
 

@@ -41,6 +41,8 @@
 // As in `inkvec_trace`: the pixel loops here address several parallel arrays by one index,
 // and an enumerate over one of them reads worse than the index does.
 #![allow(clippy::needless_range_loop)]
+// As in `inkvec_trace`: doc comments point at the private helper doing each step.
+#![allow(rustdoc::private_intra_doc_links)]
 
 mod alpha;
 mod args;

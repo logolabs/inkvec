@@ -24,6 +24,9 @@
 //! sheet carries a few hundred path segments rather than the tens of thousands of points
 //! that make cutter software refuse a traced file.
 
+// As in `inkvec_trace`: doc comments point at the private helper doing each step.
+#![allow(rustdoc::private_intra_doc_links)]
+
 pub mod biarc;
 pub mod corners;
 pub mod dxf;

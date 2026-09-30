@@ -12,6 +12,11 @@ API in particular should be treated as unstable release to release).
 - **Quality mode is much faster, with the same output.** Each hot spot was measured, matched to a published method, and rewritten so that it reproduces today's SVG byte for byte. The papers are cited in the code.
   - **Palette and labels:** worked out once per distinct colour instead of once per pixel (Celebi 2011; Swain & Ballard 1991). Each candidate's claimed pixels are computed once (Korn & Muthukrishnan 2000). Connected components use run-based union-find (Wu, Otoo & Suzuki 2009). The palette is 12× faster on the 246-icon screen set.
   - **Curve fitting:** the unread χ² of the ellipse candidate is gone. The curve merge stops scoring a candidate once it cannot win (Bei & Gray 1985), and never re-tries a run it has already turned down (Garland & Heckbert 1997). The fitting stage is 47 % faster on the screen set.
+  - **Curve-fitting DP:**
+    - A candidate curve is skipped once a provable lower bound shows it cannot win (Morin & Marsten 1976).
+    - A curve's error stops being summed once the outcome is settled (Rakthanmanon et al. 2012).
+    - The table is filled endpoint by endpoint, trying the likely winner first.
+    - The DP's CPU is about halved on the screen set, and cut to 0.43× on the 2048 px globe.
   - **Gradient fills:** one set of predictions is shared by all three scores. The small solves run on the stack, and unions no longer copy their members.
   - **Overall:** the whole trace is about 1.8× faster on the screen set. On the 2048 px globe it went from 1.29 s to 0.84 s.
 - **Gradient stops are placed on the 3-decimal grid the SVG writes them to.** Samples are binned once, and every offset is priced exactly from running sums (Hudson 1966; Bai & Perron 2003; Chakraborty et al. 2025). The band merge on a gradient emoji went from 721 to 507 ms. Mean dE00 is slightly better: 0.15635 → 0.15572 on the screen set, 0.14802 → 0.14761 on held-out icons. Only gradient icons change.

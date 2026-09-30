@@ -61,6 +61,10 @@
 // index reads worse than the index does. Where a loop really does touch a single slice it
 // is written as an iterator; this turns off the blanket suggestion, not the practice.
 #![allow(clippy::needless_range_loop)]
+// The doc comments explain the maths by pointing at the private helper that does each step.
+// Those links resolve under `--document-private-items` and read as plain names in the public
+// docs; broken links still fail the build.
+#![allow(rustdoc::private_intra_doc_links)]
 
 pub mod alpha;
 pub mod boundary_opt;

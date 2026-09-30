@@ -34,6 +34,26 @@
 //! The fast pipeline, `occlusion`, `symmetry`, `taper` and the research decoders read the
 //! map too.
 //!
+//! # How the map is built and refined
+//!
+//! 1. **Cracks from runs** (`cracks::dual_segments`): the label map is coded once as
+//!    maximal runs per row (`runs`), and every pixel side between two labels — a *crack* —
+//!    is read off the runs: vertical cracks at run starts, horizontal ones where the runs
+//!    of two consecutive rows overlap with different labels. Work is proportional to the
+//!    runs and cracks, not to the pixel sides, after one fast pass to code the runs.
+//! 2. **Saddles** (`split_saddle_corners`) give the two shapes that touch at a corner a
+//!    copy of it each.
+//! 3. **Incidence** (`cracks::Incidence`): the cracks grouped by node, by a radix sort of
+//!    their ends in emission order, with each crack end's node recorded so a walk steps to
+//!    the next node's list in `O(1)`.
+//! 4. **Walks**: junction to junction into open edges, then the junction-free loops.
+//! 5. **Refinement** ([`refine_subpixel_alpha`]): every vertex measured in parallel
+//!    (a pure map over vertices, so the result does not depend on the schedule), then
+//!    written back.
+//!
+//! Steps 1, 3 and 5 were rewritten on 2026-09-30 for speed; each keeps its previous form
+//! as a test reference and states why its output is bit-for-bit the same.
+//!
 //! Coordinates are in pixels with pixel centres at integer coordinates, so pixel `(x, y)`
 //! covers `[x−0.5, x+0.5] x [y−0.5, y+0.5]` and grid node `(i, j)` is at `(i−0.5, j−0.5)`.
 
@@ -97,7 +117,10 @@ pub struct PlanarMap {
     pub n_labels: usize,
 }
 
+mod cracks;
 pub(crate) mod junctions;
+pub(crate) mod runs;
+use cracks::{dual_segments, Incidence, Seg};
 pub use junctions::{node_position, refine_junctions};
 
 /// Grid node index. Nodes sit at pixel corners: node `(i, j)` is at image coordinate
@@ -125,73 +148,11 @@ fn label_at(labels: &[u16], w: usize, h: usize, x: isize, y: isize) -> u16 {
     }
 }
 
-/// A boundary segment on the dual grid, separating two pixels of differing label.
-///
-/// It runs from node `a` to node `b`, one pixel side long; `left` and `right` are the face
-/// labels on either side when walking from `a` to `b` (`u16::MAX` outside the image).
-#[derive(Clone, Copy)]
-struct Seg {
-    a: u32,
-    b: u32,
-    left: u16,
-    right: u16,
-}
-
-/// The segments incident to each node, in segment order: every node that has any, in
-/// increasing id, with its segments in one flat list. A map from node to segment list, in
-/// two sorted arrays rather than a hash map of vectors -- the same lists, without an
-/// allocation and a hash per boundary node.
-struct Incidence {
-    /// Nodes with at least one segment, increasing.
-    nodes: Vec<u32>,
-    /// Where each node's segments start in `segs`; one more entry than `nodes`.
-    start: Vec<usize>,
-    /// Segment indices, grouped by node and increasing within a node.
-    segs: Vec<usize>,
-}
-
-impl Incidence {
-    /// Index `segs` by endpoint: each segment is listed under both of its nodes. Built by
-    /// sorting `(node, segment)` pairs, so the order within a node is segment order.
-    fn new(segs: &[Seg]) -> Self {
-        let mut pairs: Vec<(u32, usize)> = Vec::with_capacity(2 * segs.len());
-        for (k, s) in segs.iter().enumerate() {
-            pairs.push((s.a, k));
-            pairs.push((s.b, k));
-        }
-        pairs.sort_unstable();
-        let mut nodes = Vec::new();
-        let mut start = Vec::new();
-        for (i, &(n, _)) in pairs.iter().enumerate() {
-            if nodes.last() != Some(&n) {
-                nodes.push(n);
-                start.push(i);
-            }
-        }
-        start.push(pairs.len());
-        Self {
-            nodes,
-            start,
-            segs: pairs.into_iter().map(|(_, k)| k).collect(),
-        }
-    }
-
-    /// The segments at the `i`-th node of `nodes`.
-    fn at(&self, i: usize) -> &[usize] {
-        &self.segs[self.start[i]..self.start[i + 1]]
-    }
-
-    /// The segments at node `n`, if it has any.
-    fn get(&self, n: u32) -> Option<&[usize]> {
-        self.nodes.binary_search(&n).ok().map(|i| self.at(i))
-    }
-}
-
 /// Build the planar map from an integer label image.
 ///
 /// `labels` is row-major, `w x h`, one face id per pixel, ids below `n_labels`. Every
 /// pixel side between two different labels (including the image border, against a
-/// virtual outside label `u16::MAX`) becomes a unit [`Seg`] between two grid nodes. A node
+/// virtual outside label `u16::MAX`) becomes a unit `Seg` between two grid nodes. A node
 /// touched by exactly two segments is a pass-through; any other node is a junction.
 /// Segments are then chained, junction to junction, into [`Edge`]s, and whatever remains
 /// forms closed loops with no junction on them. The result is exact topology: vertices on
@@ -216,49 +177,6 @@ pub fn build(labels: &[u16], w: usize, h: usize, n_labels: usize) -> PlanarMap {
         height: h,
         n_labels,
     }
-}
-
-/// Every pixel side separating two labels, as a unit segment on the dual grid.
-///
-/// Vertical sides first (row by row), then horizontal ones. Each is oriented so that the
-/// label it records as `left` is on the left when walking from `a` to `b` in image
-/// coordinates (y down).
-fn dual_segments(labels: &[u16], w: usize, h: usize) -> Vec<Seg> {
-    let mut segs: Vec<Seg> = Vec::new();
-
-    // Vertical dual edges: node (i, j) -> (i, j+1) separates pixel (i-1, j) from (i, j).
-    for j in 0..h {
-        for i in 0..=w {
-            let l = label_at(labels, w, h, i as isize - 1, j as isize);
-            let r = label_at(labels, w, h, i as isize, j as isize);
-            if l != r {
-                // Walking downward (+y), the pixel on the left in screen terms is (i, j).
-                segs.push(Seg {
-                    a: node_id(i, j, w),
-                    b: node_id(i, j + 1, w),
-                    left: r,
-                    right: l,
-                });
-            }
-        }
-    }
-    // Horizontal dual edges: node (i, j) -> (i+1, j) separates pixel (i, j-1) from (i, j).
-    for j in 0..=h {
-        for i in 0..w {
-            let u = label_at(labels, w, h, i as isize, j as isize - 1);
-            let d = label_at(labels, w, h, i as isize, j as isize);
-            if u != d {
-                // Walking rightward (+x), the pixel above is on the left.
-                segs.push(Seg {
-                    a: node_id(i, j, w),
-                    b: node_id(i + 1, j, w),
-                    left: u,
-                    right: d,
-                });
-            }
-        }
-    }
-    segs
 }
 
 /// Where four pixels meet at a corner and one diagonal is a single face, give the other
@@ -400,14 +318,14 @@ fn walk_open_chains(
                 let s = segs[cur_seg];
                 let next_node = if s.a == cur_node { s.b } else { s.a };
                 chain_nodes.push(next_node);
-                let cands = inc.get(next_node);
-                if is_junction(cands) {
+                // The segments at `next_node`, the far end of `cur_seg`: the list
+                // `inc.get(next_node)` returned, read in O(1) (see `Incidence::end`).
+                // (`get` found every such node, so its `None` branch never ran.)
+                let cands = inc.end(cur_seg, s.a == cur_node);
+                if is_junction(Some(cands)) {
                     cur_node = next_node;
                     break;
                 }
-                let Some(cands) = cands else {
-                    break;
-                };
                 let Some(&nxt) = cands.iter().find(|&&k| k != cur_seg && !used[k]) else {
                     cur_node = next_node;
                     break;
@@ -463,9 +381,9 @@ fn walk_closed_loops(
                 break;
             }
             chain_nodes.push(next_node);
-            let Some(cands) = inc.get(next_node) else {
-                break;
-            };
+            // `next_node` is an end of `cur_seg`, so it has segments: the list
+            // `inc.get(next_node)` returned, read in O(1) (see `Incidence::end`).
+            let cands = inc.end(cur_seg, s.a == cur_node);
             let Some(&nxt) = cands.iter().find(|&&x| x != cur_seg && !used[x]) else {
                 break;
             };
@@ -544,6 +462,9 @@ pub fn refine_subpixel(
 /// its sigma is in `[0.02, 2]` px before the curvature correction of
 /// [`crate::contour::inflate_for_curvature`]. `INKVEC_SUBPXDBG=1` prints every vertex's
 /// probes to stderr; `INKVEC_DUMP_CONTOUR=<file>` appends every refined edge to a file.
+///
+/// Two phases, [`measure_subpixel`] (reads the map, in parallel) and [`Refined::apply`]
+/// (writes it); see [`measure_subpixel`] for the parallel schedule and why it is exact.
 pub fn refine_subpixel_alpha(
     map: &mut PlanarMap,
     rgb: &[[f32; 3]],
@@ -552,6 +473,107 @@ pub fn refine_subpixel_alpha(
     simplify_faint: bool,
     src_alpha: Option<(&[f32], &[f32])>,
 ) {
+    measure_subpixel(map, rgb, face_fill, sigma_noise, simplify_faint, src_alpha).apply(map);
+}
+
+/// The refined geometry of every edge of a map, measured but not yet written back: what
+/// [`measure_subpixel`] returns and [`Refined::apply`] consumes.
+pub(crate) struct Refined {
+    /// Per edge, in edge order: the moved points and their sigmas, or `None` for an edge
+    /// the refinement leaves as it is (the image border, or a face without a fill model).
+    edges: Vec<Option<(Vec<Point>, Vec<f64>)>>,
+}
+
+impl Refined {
+    /// Write the measured geometry into `map`, edge by edge; an edge measured as `None` is
+    /// left untouched. `map` must be the map that was measured (same edges, same order).
+    /// `O(edges)`: each edge's two vectors are moved, not copied.
+    pub(crate) fn apply(self, map: &mut PlanarMap) {
+        debug_assert_eq!(self.edges.len(), map.edges.len());
+        for (e, r) in map.edges.iter_mut().zip(self.edges) {
+            if let Some((points, sigma)) = r {
+                e.points = points;
+                e.sigma = sigma;
+            }
+        }
+    }
+}
+
+/// Fewest vertices an edge must have before its vertices are refined in parallel; shorter
+/// edges run as one task each. Also the smallest chunk of a long edge's vertices one
+/// thread takes, so a task is at least ~30 µs of work (0.44 µs per vertex measured at
+/// 2048 px) against rayon's few-µs cost per split.
+const PAR_VERTICES: usize = 64;
+
+/// Fewest boundary vertices in the whole map for the refinement to run in parallel at all
+/// (and beside symmetry detection, in the crate root); below it everything runs on the
+/// calling thread. 512 vertices are about 0.23 ms of serial work.
+///
+/// Handing work to rayon's pool costs waking its sleeping workers, which only pays when
+/// there is enough to share. Measured per icon (refinement and symmetry detection, the
+/// minimum of 3 interleaved runs, serial / parallel, ms): 512–1,024 vertices 0.263 / 0.206
+/// (16 screen icons), 1,024–2,048 0.506 / 0.253 (187), 2,048–4,096 0.998 / 0.351 (43),
+/// 4,096–8,192 2.162 / 0.627 (37 icons at 512 px), over 8,192 4.300 / 0.930 (10). The
+/// parallel form already wins in the smallest bucket measured, so the cutoff sits at its
+/// lower end; no icon of either set had fewer vertices. The result is the same either
+/// way; only the schedule changes.
+const PAR_MAP_VERTICES: usize = 512;
+
+/// Whether `map` has enough boundary vertices for [`measure_subpixel`] to use threads
+/// (at least [`PAR_MAP_VERTICES`]). `O(edges)`.
+pub(crate) fn refine_in_parallel(map: &PlanarMap) -> bool {
+    map.edges.iter().map(|e| e.points.len()).sum::<usize>() >= PAR_MAP_VERTICES
+}
+
+/// Measure the sub-pixel position and sigma of every vertex of `map` (the arguments are
+/// [`refine_subpixel_alpha`]'s), without changing `map`.
+///
+/// # Schedule
+///
+/// Refining a vertex reads only the image, the two faces' fills and its own edge's
+/// *original* points (its neighbours on the lattice, for the normal), and writes only its
+/// own output: it is a pure map over vertices. The curvature correction of a vertex's sigma
+/// then reads the edge's *moved* points, all of which are known by then: a pure map again.
+/// So both are run as parallel maps, edges in parallel and, inside an edge of at least
+/// [`PAR_VERTICES`] points, vertices in parallel too — at 2048 px one edge can hold most
+/// of the image's vertices (longest edge 8,192 points, median edge 450, on the opaque
+/// `big` set), so edge-level parallelism alone would leave one thread doing most of the
+/// work. Each result is written to its own slot of an indexed output (rayon's `collect`
+/// and `unzip` over an indexed iterator keep positions), and the values are those the
+/// serial loop computed.
+///
+/// # Why the output is identical to the serial loop
+///
+/// The serial loop computed each vertex from the same inputs with the same operations;
+/// scheduling only changes *when* each value is computed, not how. No value is combined
+/// across vertices or threads — there is no parallel reduction, so no floating-point sum
+/// whose rounding depends on how the work was split. The measuring phase does not write
+/// the map, so no vertex can see another's moved position (the serial loop wrote an edge's
+/// points only after the whole edge was measured, so it could not either).
+///
+/// The two diagnostics keep the serial order: with `INKVEC_SUBPXDBG` (a line per vertex)
+/// or `INKVEC_DUMP_CONTOUR` (a block per edge, appended to a file) set, everything runs on
+/// the calling thread in edge and vertex order, as before. The dump path is read once. A
+/// small map ([`refine_in_parallel`] false) runs on the calling thread too.
+///
+/// Method from: Blelloch, Fineman, Gibbons & Shun 2012, "Internally deterministic parallel
+/// algorithms can be fast", PPoPP 2012, 181–192, <https://doi.org/10.1145/2145816.2145840>:
+/// a parallel loop whose iterations are independent and write disjoint, indexed outputs
+/// computes the same result as the serial loop on every schedule ("internal determinism").
+/// Adapted: two nested levels (edges, then vertices of long edges) with a minimum task size.
+/// Related work that shaped the "no reductions" rule: Demmel & Nguyen 2013, "Fast
+/// Reproducible Floating-Point Summation", ARITH 2013, 163–172,
+/// <https://doi.org/10.1109/ARITH.2013.9>, on how a parallel sum's result depends on the
+/// split; nothing here sums across vertices, so no reproducible summation is needed.
+pub(crate) fn measure_subpixel(
+    map: &PlanarMap,
+    rgb: &[[f32; 3]],
+    face_fill: &[FillModel],
+    sigma_noise: f64,
+    simplify_faint: bool,
+    src_alpha: Option<(&[f32], &[f32])>,
+) -> Refined {
+    use rayon::prelude::*;
     let ctx = RefineCtx {
         src: Source {
             rgb,
@@ -564,10 +586,20 @@ pub fn refine_subpixel_alpha(
         min_contrast: (3.0 * sigma_noise).max(MIN_UNMIX_CONTRAST),
         simplify_faint,
         debug: inkvec_core::env::flag("INKVEC_SUBPXDBG"),
+        dump: inkvec_core::env::path("INKVEC_DUMP_CONTOUR"),
     };
-    for e in &mut map.edges {
-        refine_edge(&ctx, face_fill, e);
-    }
+    let edges = if ctx.debug || ctx.dump.is_some() || !refine_in_parallel(map) {
+        map.edges
+            .iter()
+            .map(|e| refine_edge(&ctx, face_fill, e, false))
+            .collect()
+    } else {
+        map.edges
+            .par_iter()
+            .map(|e| refine_edge(&ctx, face_fill, e, true))
+            .collect()
+    };
+    Refined { edges }
 }
 
 /// The source image, sampled bilinearly at pixel-centre coordinates.
@@ -658,14 +690,30 @@ struct RefineCtx<'a> {
     simplify_faint: bool,
     /// `INKVEC_SUBPXDBG`: print every vertex's probes to stderr.
     debug: bool,
+    /// `INKVEC_DUMP_CONTOUR`: the file every refined edge is appended to.
+    dump: Option<std::path::PathBuf>,
 }
 
 /// Refine every vertex of one edge (see [`refine_subpixel_alpha`]), then apply the
-/// curvature correction to its sigmas and optionally dump it.
-fn refine_edge(ctx: &RefineCtx, face_fill: &[FillModel], e: &mut Edge) {
+/// curvature correction to its sigmas and optionally dump it. Returns the moved points and
+/// their sigmas, or `None` when the edge is left as it is: one side is outside the image
+/// (`u16::MAX`), or a face has no fill model.
+///
+/// With `par`, an edge of at least [`PAR_VERTICES`] points is refined as a parallel map
+/// over its vertices, in chunks of at least that many; otherwise serially. Either way
+/// vertex `k`'s result is `refine_vertex(.., &e.points, k)` on the original points, and its
+/// sigma is `inflate_for_curvature(&moved, k, ..)` on the moved ones, so the output does not
+/// depend on `par` (see [`measure_subpixel`]). `O(points)` work.
+fn refine_edge(
+    ctx: &RefineCtx,
+    face_fill: &[FillModel],
+    e: &Edge,
+    par: bool,
+) -> Option<(Vec<Point>, Vec<f64>)> {
+    use rayon::prelude::*;
     if e.left == u16::MAX || e.right == u16::MAX {
         // One side is outside the image; there is nothing to unmix against.
-        return;
+        return None;
     }
     // `left`/`right` are face ids. Unmixing needs each face's own colour, which is
     // not the palette indexed by face id — several faces share one ink, and a face
@@ -674,23 +722,40 @@ fn refine_edge(ctx: &RefineCtx, face_fill: &[FillModel], e: &mut Edge) {
         face_fill.get(e.left as usize),
         face_fill.get(e.right as usize),
     ) else {
-        return;
+        return None;
     };
 
-    let (moved, sigmas): (Vec<Point>, Vec<f64>) = (0..e.points.len())
-        .map(|k| refine_vertex(ctx, fa, fb, e.left, e.right, &e.points, k))
-        .unzip();
+    let n = e.points.len();
+    let par = par && n >= PAR_VERTICES;
+    let vertex = |k: usize| refine_vertex(ctx, fa, fb, e.left, e.right, &e.points, k);
+    let (moved, sigmas): (Vec<Point>, Vec<f64>) = if par {
+        (0..n)
+            .into_par_iter()
+            .with_min_len(PAR_VERTICES)
+            .map(vertex)
+            .unzip()
+    } else {
+        (0..n).map(vertex).unzip()
+    };
 
     // The planar path extracts boundaries as level sets on a pixel grid exactly as
     // the bilevel path does, so it inherits the same curvature-dependent systematic
     // error and needs the same correction.
     let closed = e.closed;
-    let sigmas: Vec<f64> = (0..moved.len())
-        .map(|k| crate::contour::inflate_for_curvature(&moved, k, sigmas[k], closed))
-        .collect();
-    dump_contour(&moved, &sigmas, closed);
-    e.points = moved;
-    e.sigma = sigmas;
+    let inflate = |k: usize| crate::contour::inflate_for_curvature(&moved, k, sigmas[k], closed);
+    let sigmas: Vec<f64> = if par {
+        (0..n)
+            .into_par_iter()
+            .with_min_len(PAR_VERTICES)
+            .map(inflate)
+            .collect()
+    } else {
+        (0..n).map(inflate).collect()
+    };
+    if let Some(path) = ctx.dump.as_deref() {
+        dump_contour(path, &moved, &sigmas, closed);
+    }
+    Some((moved, sigmas))
 }
 
 /// Dump the measured boundary for offline study of its error structure
@@ -698,19 +763,19 @@ fn refine_edge(ctx: &RefineCtx, face_fill: &[FillModel], e: &mut Edge) {
 /// `# edge <n> closed <bool>` header). The whole faceting question turns on how the
 /// extraction error is correlated along a boundary, and that is a property of these
 /// numbers, not of an argument about them. Write errors are ignored: this is a debugging
-/// aid and must never fail a trace.
-fn dump_contour(points: &[Point], sigmas: &[f64], closed: bool) {
-    if let Some(path) = inkvec_core::env::path("INKVEC_DUMP_CONTOUR") {
-        use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-        {
-            let _ = writeln!(f, "# edge {} closed {}", points.len(), closed);
-            for (q, sg) in points.iter().zip(sigmas.iter()) {
-                let _ = writeln!(f, "{:.6} {:.6} {:.6}", q.x, q.y, sg);
-            }
+/// aid and must never fail a trace. `path` is the variable's value, read once per map by
+/// [`measure_subpixel`], which runs serially whenever it is set so the file keeps edge
+/// order.
+fn dump_contour(path: &std::path::Path, points: &[Point], sigmas: &[f64], closed: bool) {
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(f, "# edge {} closed {}", points.len(), closed);
+        for (q, sg) in points.iter().zip(sigmas.iter()) {
+            let _ = writeln!(f, "{:.6} {:.6} {:.6}", q.x, q.y, sg);
         }
     }
 }
@@ -1363,3 +1428,9 @@ mod saddle_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod refine_tests;
+
+#[cfg(test)]
+mod cracks_tests;

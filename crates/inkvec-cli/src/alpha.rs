@@ -29,6 +29,15 @@
 //! usual "over" operator applied to those encoded values, `c' = a·c + (1 − a)·M`. Positions
 //! are in px with pixel centres at integer coordinates, so the canvas spans
 //! `-0.5 .. w - 0.5`. Pixel arrays are row-major, index `y · w + x`.
+//!
+//! # The emit side, in passes
+//!
+//! [`face_alpha`] is linear in the pixel count: one pass gathers every face's alpha
+//! statistics, the verdicts (clear, one opacity) come from those sums, and the alpha-ramp
+//! fit runs only for faces where it can succeed ([`ramp_candidate`] proves the rest `None`),
+//! each on its own interior pixels gathered in one more pass ([`interior_pixels`]). Each
+//! function says why its output is bit-identical to the per-face whole-image scans it
+//! replaced.
 
 use inkvec_core::Point;
 use inkvec_trace::{gradient, planar};
@@ -76,6 +85,16 @@ pub(crate) struct AlphaRamp {
     pub(crate) color: [f32; 3],
 }
 
+/// A fade has to actually fade: at least this much opacity across the face, or it is a
+/// wash ([`fit_alpha_ramp`]).
+const RAMP_MIN_FADE: f32 = 0.15;
+/// And it has to fade *linearly*: the largest RMS residual of the plane fit, in opacity
+/// ([`fit_alpha_ramp`]).
+const RAMP_MAX_RESIDUAL: f32 = 0.06;
+/// Fewest interior pixels a face needs before a plane is fitted to its alpha
+/// ([`fit_alpha_ramp`]); [`face_alpha`] skips a face below it without calling the fit.
+const RAMP_MIN_INTERIOR: usize = 64;
+
 /// Fit [`AlphaRamp`] to one face's interior pixels.
 ///
 /// Returns `None` for a face that is flat (that is a `fill-opacity`, handled elsewhere),
@@ -103,67 +122,80 @@ pub(crate) struct AlphaRamp {
 ///    line through the origin, which is enough because a linear gradient is constant along
 ///    every line perpendicular to its axis. The end opacities are the plane there,
 ///    `a0 = b0 + |g|·t_min` and `a1 = b0 + |g|·t_max`, clamped to `[0, 1]`.
-/// 3. **Tests.** The RMS residual of the plane must be at most `MAX_RESIDUAL` (0.06 in
-///    opacity) and the fade must span at least `MIN_FADE` (0.15), or the face is a wash or
-///    something that is not linear.
+/// 3. **Tests.** The RMS residual of the plane must be at most [`RAMP_MAX_RESIDUAL`] (0.06
+///    in opacity) and the fade must span at least [`RAMP_MIN_FADE`] (0.15), or the face is a
+///    wash or something that is not linear.
 /// 4. **Colour.** Each interior pixel with `a ≥ 0.25` is un-matted,
 ///    `C = (c − (1 − a)·M) / a` with `c` its matted colour and `M` the matte, and the
 ///    estimates are averaged with weight `a²` (see the comment at that step for why).
 ///
-/// Inputs: `labels`, `alpha` and `rgb` are `w · h` row-major arrays, the label map, the
-/// source alpha in `[0, 1]`, and the image matted over `matte` (sRGB `[0, 1]`). `None` when
-/// there are fewer than `MIN_INTERIOR` (64) interior pixels, when the normal equations are
-/// singular (all interior pixels on one line), when the plane is flat (`|g| < 1e-9`), when
-/// either test fails, or when no interior pixel is opaque enough to take the colour from.
-/// The alphas are assumed finite, as a decoded image's are: every test here is written as
-/// "reject when above/below", and a comparison with NaN is false, so a NaN alpha would slip
-/// through all of them and come out as a NaN ramp rather than `None`.
+/// # Inputs
+///
+/// * `interior`: the face's interior pixels as `(x, y)`, **in row-major order** (increasing
+///   `y · w + x`), as [`face_alpha`] gathers them. The order is part of the contract: every
+///   sum below is a floating-point sum, and it is accumulated in exactly the order the
+///   earlier whole-image scan visited the pixels, which is what keeps the result
+///   bit-identical to that scan (see "Why this equals the scan" below);
+/// * `alpha`: the source alpha per pixel, `w · h` row-major, in `[0, 1]`;
+/// * `img`: the image the trace saw, matted over `matte` and opaque (every alpha 1),
+///   `w` wide; its colour at a pixel is read through [`over_white`];
+/// * `matte`: the colour `img` was composited onto, sRGB `[0, 1]`;
+/// * `w`: the width the pixel index `i = y · w + x` into `alpha` and `img` is taken with,
+///   the label map's width (the image's).
+///
+/// `None` when there are fewer than [`RAMP_MIN_INTERIOR`] (64) interior pixels, when the
+/// normal equations are singular (all interior pixels on one line), when the plane is flat
+/// (`|g| < 1e-9`), when either test fails, or when no interior pixel is opaque enough to take
+/// the colour from. The alphas are assumed finite, as a decoded image's are: every test here
+/// is written as "reject when above/below", and a comparison with NaN is false, so a NaN
+/// alpha would slip through all of them and come out as a NaN ramp rather than `None`.
+///
+/// # Cost
+///
+/// `O(|interior|)`: two passes over the list (sums, then extent and residual) and one more
+/// for the colour when the tests pass. The function used to take the whole label map and
+/// find the face's pixels itself, which made [`face_alpha`] `O(faces · w · h)`: at 2048 px on
+/// the three transparent test images that was 60.7 ms of an 88.5 ms stage (research
+/// 2026-09-30, `research-fast-shared`).
+///
+/// # Why this equals the scan
+///
+/// The scan visited `y` in `1..h−1`, then `x` in `1..w−1`, kept the pixels whose own label
+/// and four neighbours' labels were `face`, and accumulated each sum (`n`, `Σx`, ..., `Σa·y`)
+/// in that visiting order, then iterated its list of kept pixels in the same order for the
+/// extent, the residual and the colour. [`face_alpha`] keeps exactly the same pixels (the
+/// same interior test on the same labels) in the same row-major order, and this function
+/// performs the same floating-point operations on the same values in the same order, so
+/// every intermediate is the same double, bit for bit. The one changed read is the colour:
+/// the scan read `img.composited([1, 1, 1])[i]`, and [`over_white`] evaluates that same
+/// expression for pixel `i` alone. The old function is kept as `fit_alpha_ramp_scan` in the
+/// test module `alpha/ramp_tests.rs`, which asserts equality on random and degenerate maps.
 pub(crate) fn fit_alpha_ramp(
-    face: usize,
-    labels: &[u16],
+    interior: &[(u32, u32)],
     alpha: &[f32],
-    rgb: &[[f32; 3]],
+    img: &inkvec_trace::Rgba,
     matte: [f32; 3],
     w: usize,
-    h: usize,
 ) -> Option<AlphaRamp> {
-    /// A fade has to actually fade: this much opacity across the face, or it is a wash.
-    const MIN_FADE: f32 = 0.15;
-    /// And it has to fade *linearly*: residual of the plane fit, in opacity.
-    const MAX_RESIDUAL: f32 = 0.06;
-    const MIN_INTERIOR: usize = 64;
-
     let (mut n, mut sx, mut sy, mut sxx, mut sxy, mut syy) = (0.0f64, 0.0, 0.0, 0.0, 0.0, 0.0);
     let (mut sa, mut sax, mut say) = (0.0f64, 0.0, 0.0);
-    let mut interior: Vec<(f64, f64, f32)> = Vec::new();
-    for y in 1..h.saturating_sub(1) {
-        for x in 1..w.saturating_sub(1) {
-            let i = y * w + x;
-            if labels[i] as usize != face {
-                continue;
-            }
-            let same = labels[i - 1] as usize == face
-                && labels[i + 1] as usize == face
-                && labels[i - w] as usize == face
-                && labels[i + w] as usize == face;
-            if !same {
-                continue;
-            }
-            let (fx, fy) = (x as f64, y as f64);
-            let a = alpha[i] as f64;
-            n += 1.0;
-            sx += fx;
-            sy += fy;
-            sxx += fx * fx;
-            sxy += fx * fy;
-            syy += fy * fy;
-            sa += a;
-            sax += a * fx;
-            say += a * fy;
-            interior.push((fx, fy, alpha[i]));
-        }
+    // Pass 1: the moments of the plane fit's normal equations. Each accumulator sees its
+    // terms in row-major pixel order, as the scan's did.
+    for &(x, y) in interior {
+        let i = y as usize * w + x as usize;
+        let (fx, fy) = (f64::from(x), f64::from(y));
+        let a = alpha[i] as f64;
+        n += 1.0;
+        sx += fx;
+        sy += fy;
+        sxx += fx * fx;
+        sxy += fx * fy;
+        syy += fy * fy;
+        sa += a;
+        sax += a * fx;
+        say += a * fy;
     }
-    if n < MIN_INTERIOR as f64 {
+    if n < RAMP_MIN_INTERIOR as f64 {
         return None;
     }
 
@@ -177,26 +209,28 @@ pub(crate) fn fit_alpha_ramp(
         return None;
     }
 
-    // The extremes of the face along the gradient direction.
+    // Pass 2: the extremes of the face along the gradient direction, and the residual.
     let (ux, uy) = (b1 / grad, b2 / grad);
     let (mut tmin, mut tmax) = (f64::MAX, f64::MIN);
     let mut resid = 0.0f64;
-    for &(x, y, a) in &interior {
-        let t = x * ux + y * uy;
+    for &(x, y) in interior {
+        let (x_, y_) = (f64::from(x), f64::from(y));
+        let a = alpha[y as usize * w + x as usize];
+        let t = x_ * ux + y_ * uy;
         tmin = tmin.min(t);
         tmax = tmax.max(t);
-        let model = b0 + b1 * x + b2 * y;
+        let model = b0 + b1 * x_ + b2 * y_;
         resid += (a as f64 - model) * (a as f64 - model);
     }
     let rms = (resid / n).sqrt() as f32;
-    if rms > MAX_RESIDUAL {
+    if rms > RAMP_MAX_RESIDUAL {
         return None;
     }
     let (a0, a1) = (
         (b0 + grad * tmin).clamp(0.0, 1.0) as f32,
         (b0 + grad * tmax).clamp(0.0, 1.0) as f32,
     );
-    if (a1 - a0).abs() < MIN_FADE {
+    if (a1 - a0).abs() < RAMP_MIN_FADE {
         return None;
     }
 
@@ -204,14 +238,16 @@ pub(crate) fn fit_alpha_ramp(
     // end: `c_obs = a C + (1-a) M`, so `C = (c_obs - (1-a) M) / a`, whose noise blows up as
     // `a` falls. Weighting by `a²` is the inverse-variance weight for exactly that.
     let (mut cw, mut acc) = (0.0f64, [0.0f64; 3]);
-    for &(x, y, a) in &interior {
+    for &(x, y) in interior {
+        let i = y as usize * w + x as usize;
+        let a = alpha[i];
         if a < 0.25 {
             continue;
         }
-        let i = y as usize * w + x as usize;
         let wgt = (a * a) as f64;
+        let rgb = over_white(img, i);
         for k in 0..3 {
-            let c = (rgb[i][k] - (1.0 - a) * matte[k]) / a;
+            let c = (rgb[k] - (1.0 - a) * matte[k]) / a;
             acc[k] += wgt * c as f64;
         }
         cw += wgt;
@@ -231,6 +267,26 @@ pub(crate) fn fit_alpha_ramp(
         a1,
         color,
     })
+}
+
+/// Pixel `i` of `img` composited over white: `c_k · a + 1 · (1 − a)` per channel `k`, with
+/// `c` the pixel's straight colour and `a` its alpha, sRGB `[0, 1]`.
+///
+/// This is `img.composited([1.0, 1.0, 1.0])[i]`, written out for one pixel with the same
+/// operations in the same order (`bg · (1 − a)` with `bg = 1.0`, then the sum), so the f32
+/// result is the same bit pattern. [`fit_alpha_ramp`] needs the colour of a few interior
+/// pixels, and building the whole composited image for them cost a full pass and a
+/// `12 · w · h`-byte allocation per trace with transparency, whether or not any fit ran.
+/// `O(1)`; panics if `i` is outside the image, as indexing the composited image would.
+fn over_white(img: &inkvec_trace::Rgba, i: usize) -> [f32; 3] {
+    let p = &img.data[i * 4..i * 4 + 4];
+    let a = p[3];
+    let bg = [1.0f32; 3];
+    [
+        p[0] * a + bg[0] * (1.0 - a),
+        p[1] * a + bg[1] * (1.0 - a),
+        p[2] * a + bg[2] * (1.0 - a),
+    ]
 }
 
 /// 3x3 solve by Cramer's rule; `None` when the system is singular.
@@ -860,8 +916,32 @@ pub(crate) fn recover_layers(
 /// * an **alpha ramp** ([`fit_alpha_ramp`]) is tried only under the cutout, and only for a
 ///   face that is neither clear nor already given an opacity.
 ///
+/// # Passes
+///
+/// 1. **Statistics** ([`face_stats`]), one pass over the rows' runs: per face the pixel
+///    count and alpha sum over all its pixels, and the count, sum and sum of squares over
+///    its interior pixels, plus whether any interior alpha differs from exactly 1. Every f64
+///    sum receives the same terms in the same order as the per-pixel loop it replaced, so
+///    each is the same double as before.
+/// 2. **Verdicts**: clear and opacity per face, from those sums alone.
+/// 3. **Ramps**, under the cutout only. A face is fitted only when [`ramp_candidate`] says
+///    the fit can return anything; the others are provably `None` and skipped. The
+///    candidates' interior pixels are gathered in one pass ([`interior_pixels`]) and each
+///    is fitted from its own list.
+///
+/// # Cost
+///
+/// `O(w · h)` for pass 1, plus `O(w · h)` once for pass 3 when at least one face is a
+/// candidate, plus each candidate's own pixel count for its fit. Until 2026-09-30 every
+/// non-clear, non-wash face scanned the whole image for its fit, `O(faces · w · h)`, and
+/// the image was composited over white for it whether or not any fit ran: 88.5 ms of Fast
+/// mode's 333 ms at 2048 px on the three transparent test images (`bigalpha`), 60.7 ms of it
+/// in those scans. The output is unchanged bit for bit; [`ramp_candidate`] and
+/// [`fit_alpha_ramp`] carry the two halves of that argument.
+///
 /// Inputs: `img` is the matted, opaque image the trace saw ([`AlphaSource::flat`]),
-/// `traced_labels` the `w · h` label map, and `face_color` is only read for the face count.
+/// `traced_labels` the `w · h` label map (exactly `w · h` long), and `face_color` is only
+/// read for the face count.
 /// Without an `alpha_src` (an opaque input) every face comes back opaque and not clear,
 /// with a white matte and no ramps. `INKVEC_ALPHADBG` prints the per-face numbers.
 #[allow(clippy::too_many_arguments)]
@@ -884,34 +964,19 @@ pub(crate) fn face_alpha(
     // that hold one opacity costs nothing.
     const FLAT_ALPHA_SD: f64 = 0.02;
     let n_faces = face_color.len();
-    let (mut a_sum, mut a_n) = (vec![0.0f64; n_faces], vec![0usize; n_faces]);
-    let (mut in_sum, mut in_n) = (vec![0.0f64; n_faces], vec![0usize; n_faces]);
-    let mut in_sq = vec![0.0f64; n_faces];
-    if let Some(src) = alpha_src {
-        for (i, &l) in traced_labels.iter().enumerate() {
-            let f = l as usize;
-            if f >= n_faces {
-                continue;
-            }
-            let a = src.alpha.get(i).copied().unwrap_or(1.0) as f64;
-            a_sum[f] += a;
-            a_n[f] += 1;
-            let (x, y) = (i % w, i / w);
-            let interior = x > 0
-                && y > 0
-                && x + 1 < w
-                && y + 1 < h
-                && traced_labels[i - 1] == l
-                && traced_labels[i + 1] == l
-                && traced_labels[i - w] == l
-                && traced_labels[i + w] == l;
-            if interior {
-                in_sum[f] += a;
-                in_sq[f] += a * a;
-                in_n[f] += 1;
-            }
-        }
-    }
+    // Pass 1 (see `face_stats`); without a source alpha every sum stays zero.
+    debug_assert!(traced_labels.len() == w * h, "the label map is the image's");
+    let FaceStats {
+        a_sum,
+        a_n,
+        in_sum,
+        in_sq,
+        in_n,
+        in_faded,
+    } = match alpha_src {
+        Some(src) => face_stats(traced_labels, &src.alpha, w, h, n_faces),
+        None => face_stats(&[], &[], 0, 0, n_faces),
+    };
     // A small hole is mostly rim. The rim is anti-aliased against the opaque shape around
     // it, so its partial alpha lifts the face's mean over CLEAR_ALPHA even when nothing was
     // drawn inside: a 19 px transparent square in a cap measured mean 0.065 over 396 pixels
@@ -949,34 +1014,25 @@ pub(crate) fn face_alpha(
     // face whose alpha is not a clean linear fade is left baked (see below for why the
     // face's fitted fill is not consulted).
     //
-    // `img` is already opaque (matted over `matte`), so compositing it over white changes
-    // no value and only turns it into RGB triples; the ramp fit un-mattes against `matte`.
-    let matted_rgb = alpha_src.map(|_| img.composited([1.0, 1.0, 1.0]));
-    let alpha_ramps: Vec<Option<AlphaRamp>> = (0..n_faces)
-        .map(|f| {
-            let src = alpha_src?;
-            if !args.cutout {
-                return None;
-            }
-            // Deliberately not restricted to flat-filled faces. A fade over a white matte
-            // *looks* like a colour ramp towards white — the ramp case here fits
-            // `#ca774d -> #fbf3ef` — and the alpha channel is the evidence that says which
-            // of the two it is. Where the source's alpha fades linearly across the face,
-            // that is the explanation, and it is the one an editor can work with.
-            if opacity[f] < 1.0 || clear[f] {
-                return None; // a wash, or nothing at all
-            }
-            fit_alpha_ramp(
-                f,
-                traced_labels,
-                &src.alpha,
-                matted_rgb.as_ref()?,
-                matte,
-                w,
-                h,
-            )
-        })
-        .collect();
+    // Deliberately not restricted to flat-filled faces. A fade over a white matte *looks*
+    // like a colour ramp towards white — the ramp case here fits `#ca774d -> #fbf3ef` — and
+    // the alpha channel is the evidence that says which of the two it is. Where the
+    // source's alpha fades linearly across the face, that is the explanation, and it is the
+    // one an editor can work with.
+    //
+    // Which faces are fitted, and how: `alpha_ramps`.
+    let alpha_ramps = match alpha_src {
+        Some(src) if args.cutout => {
+            let facts = RampFacts {
+                opacity: &opacity,
+                clear: &clear,
+                in_n: &in_n,
+                in_faded: &in_faded,
+            };
+            alpha_ramps(img, src, &facts, traced_labels, w, h)
+        }
+        _ => vec![None; n_faces],
+    };
     let dump = inkvec_core::env::flag("INKVEC_ALPHADBG");
     for f in (0..n_faces).filter(|&f| dump && a_n[f] > 0) {
         diag::debug(dump, || {
@@ -998,3 +1054,290 @@ pub(crate) fn face_alpha(
         alpha_ramps,
     }
 }
+
+/// Per face, what [`face_alpha`]'s first pass measures: all indexed by face id.
+struct FaceStats {
+    /// Sum of the source alpha over every pixel of the face.
+    a_sum: Vec<f64>,
+    /// Pixel count of the face.
+    a_n: Vec<usize>,
+    /// Sum of the alpha over the face's interior pixels.
+    in_sum: Vec<f64>,
+    /// Sum of the squared alpha over the interior pixels.
+    in_sq: Vec<f64>,
+    /// Interior pixel count.
+    in_n: Vec<usize>,
+    /// Whether any interior pixel's alpha differs from exactly 1: the one fact the ramp
+    /// skip ([`ramp_candidate`]) needs that the sums do not carry exactly.
+    in_faded: Vec<bool>,
+}
+
+/// [`face_alpha`]'s first pass: every face's alpha statistics, over all its pixels and over
+/// its interior ones, in one pass over the rows' runs.
+///
+/// "Interior" is the test the rest of the module uses: not on the image border, and the
+/// pixel's own label equal to its four neighbours'. `labels` is `w · h` row-major (the
+/// caller's label map is always the image's); `alpha` is the source alpha, row-major,
+/// with a pixel past its end read as 1 (opaque), as before. Labels at or past `n_faces`
+/// are ignored.
+///
+/// # Method
+///
+/// Each row is cut into maximal runs of one label, and a run's pixels are added to its
+/// face's sums with the sums held in local variables, stored back once per run. Inside a
+/// run the left and right neighbours of every pixel but the two ends carry the run's label
+/// by definition, so the interior test reduces to `x0 < x < x1 − 1` plus the pixels above
+/// and below. A pixel whose alpha is exactly zero is not added at all.
+///
+/// # Why the sums are the same doubles as the per-pixel loop's
+///
+/// * **Order.** A face's pixels are visited in row-major order, as before: rows in order,
+///   runs of a row left to right, pixels of a run left to right. Every accumulator belongs
+///   to one face, so it receives the same terms in the same order; interleaving with other
+///   faces' accumulators never mattered.
+/// * **Interior.** For `x` in a maximal run `x0..x1` of label `l`, `x > 0 && row[x − 1] =
+///   l` holds exactly when `x > x0` (at `x = x0` either `x0 = 0` or the pixel to the left
+///   has another label), and `x + 1 < w && row[x + 1] = l` exactly when `x < x1 − 1`.
+/// * **Zeros.** Adding `+0` or `−0` to a double `s` gives `s` back unless `s = −0`, and the
+///   sums start at `+0` and only ever receive terms that are `≥ +0` or `±0` (alphas are
+///   clamped to `[0, 1]`; `a·a ≥ +0`), so they are never `−0`. Skipping a zero alpha's `a`
+///   and `a·a` therefore changes no sum. (A NaN alpha is not zero and is added, as
+///   before.) Counts are integers and are added per run.
+///
+/// # Cost
+///
+/// `O(w · h)` label and alpha reads, but no per-pixel store into the per-face arrays: the
+/// old loop's `sum[f] += a` made every pixel wait on the previous pixel's store to the same
+/// slot (a store-to-load dependency of several cycles), and on a transparent image most
+/// pixels are clear and now cost a compare. The old loop is kept as
+/// `ramp_tests::face_stats_scan`, and the tests compare the two bit for bit.
+///
+/// Method from: He, Chao & Suzuki 2008, "A Run-Based Two-Scan Labeling Algorithm", IEEE
+/// TIP 17(5) 749–756, <https://doi.org/10.1109/TIP.2008.919369>: region statistics
+/// gathered per run instead of per pixel. The zero skip is not from the literature: it
+/// rests on IEEE 754 signed-zero addition, and the literature on run coding does not need it.
+fn face_stats(labels: &[u16], alpha: &[f32], w: usize, h: usize, n_faces: usize) -> FaceStats {
+    let mut st = FaceStats {
+        a_sum: vec![0.0; n_faces],
+        a_n: vec![0; n_faces],
+        in_sum: vec![0.0; n_faces],
+        in_sq: vec![0.0; n_faces],
+        in_n: vec![0; n_faces],
+        in_faded: vec![false; n_faces],
+    };
+    let a_at = |i: usize| alpha.get(i).copied().unwrap_or(1.0);
+    for y in 0..h {
+        let row = &labels[y * w..(y + 1) * w];
+        // The rows above and below, when both exist: only then can a pixel be interior.
+        let around = (y > 0 && y + 1 < h).then(|| {
+            (
+                &labels[(y - 1) * w..y * w],
+                &labels[(y + 1) * w..(y + 2) * w],
+            )
+        });
+        let mut x = 0;
+        while x < w {
+            let l = row[x];
+            let x0 = x;
+            while x < w && row[x] == l {
+                x += 1;
+            }
+            let f = l as usize;
+            if f >= n_faces {
+                continue;
+            }
+            let base = y * w;
+            st.a_n[f] += x - x0;
+            let mut s = st.a_sum[f];
+            for i in base + x0..base + x {
+                let a = a_at(i);
+                if a != 0.0 {
+                    s += a as f64;
+                }
+            }
+            st.a_sum[f] = s;
+            let Some((up, down)) = around else {
+                continue;
+            };
+            // Interior candidates: strictly inside the run (see the doc comment).
+            let (mut sum, mut sq, mut n, mut faded) = (st.in_sum[f], st.in_sq[f], 0, false);
+            for xx in x0 + 1..x.saturating_sub(1) {
+                if up[xx] != l || down[xx] != l {
+                    continue;
+                }
+                let a32 = a_at(base + xx);
+                n += 1;
+                faded |= a32 != 1.0;
+                if a32 != 0.0 {
+                    let a = a32 as f64;
+                    sum += a;
+                    sq += a * a;
+                }
+            }
+            st.in_sum[f] = sum;
+            st.in_sq[f] = sq;
+            st.in_n[f] += n;
+            st.in_faded[f] |= faded;
+        }
+    }
+    st
+}
+
+/// What [`face_alpha`]'s first two passes know about each face that [`alpha_ramps`] needs,
+/// all indexed by face id.
+struct RampFacts<'a> {
+    /// The face's one opacity, 1.0 when it has none.
+    opacity: &'a [f32],
+    /// Whether the face is a hole.
+    clear: &'a [bool],
+    /// The face's interior pixel count.
+    in_n: &'a [usize],
+    /// Whether any interior pixel's alpha differs from exactly 1.
+    in_faded: &'a [bool],
+}
+
+/// [`face_alpha`]'s third pass: an [`AlphaRamp`] for every face whose alpha fades linearly,
+/// `None` for the rest; one entry per face.
+///
+/// A face that is clear or already a wash has its answer; the test is "opacity not below 1,
+/// or NaN", the negation of the `opacity < 1.0` it used to be, so a NaN opacity still goes to
+/// the fit as it always did. Of the rest, a face is fitted only when [`ramp_candidate`] says
+/// the fit can succeed — on the research sets 96% of these calls were provably `None` and
+/// are skipped — and the candidates' interior pixels are gathered in one pass
+/// ([`interior_pixels`]), each face then fitted from its own list ([`fit_alpha_ramp`]).
+///
+/// `img` is the matted image, `src` the source alpha and matte, `labels` the `w · h` label
+/// map. `O(w · h)` once when any face is a candidate, nothing otherwise, plus each fit's own
+/// pixels. The result is bit-identical to calling the whole-image fit on every face that
+/// is neither clear nor a wash; see [`ramp_candidate`] and [`fit_alpha_ramp`].
+fn alpha_ramps(
+    img: &inkvec_trace::Rgba,
+    src: &AlphaSource,
+    facts: &RampFacts,
+    labels: &[u16],
+    w: usize,
+    h: usize,
+) -> Vec<Option<AlphaRamp>> {
+    let fit_face: Vec<bool> = (0..facts.opacity.len())
+        .map(|f| {
+            (facts.opacity[f] >= 1.0 || facts.opacity[f].is_nan())
+                && !facts.clear[f]
+                && ramp_candidate(facts.in_n[f], facts.in_faded[f])
+        })
+        .collect();
+    interior_pixels(labels, w, h, &fit_face, facts.in_n)
+        .iter()
+        .map(|px| {
+            (!px.is_empty())
+                .then(|| fit_alpha_ramp(px, &src.alpha, img, src.matte, w))
+                .flatten()
+        })
+        .collect()
+}
+
+/// Whether [`fit_alpha_ramp`] can return anything but `None` for a face with `n` interior
+/// pixels, `faded` saying whether any of them has an alpha other than exactly `1.0`.
+///
+/// `false` means the fit is **provably** `None`, so [`face_alpha`] does not gather the
+/// face's pixels or call it. Two cases, both decided from pass-1 facts alone:
+///
+/// 1. `n < RAMP_MIN_INTERIOR` (64): the fit's own first test.
+/// 2. Every interior alpha is exactly `1.0` (`!faded`). Then the fit's plane is exactly flat
+///    and it returns `None`, by this argument about the floating-point operations it
+///    performs (not only about the real numbers they approximate):
+///    * each `a` is `1.0` in f64, so `a · x = x` and `a · y = y` exactly, and `Σa`, `Σa·x`,
+///      `Σa·y` are accumulated from the same terms in the same order as `n`, `Σx`, `Σy`:
+///      they are the same doubles. The right-hand side `r` of the normal equations `M b = r`
+///      is therefore *bit for bit* `M`'s first column `(n, Σx, Σy)`.
+///    * [`solve3x3`] computes `b_k = det(M_k) / det(M)`, `M_k` being `M` with column `k`
+///      replaced by `r`. For `k = 1` two columns are equal; the cofactor formula
+///      `a00(a11 a22 − a12 a21) − a01(a10 a22 − a12 a20) + a02(a10 a21 − a11 a20)` then
+///      evaluates its first two products from identical operands, so they cancel to `0`,
+///      and the third bracket is `fl(Σx·Σy) − fl(Σx·Σy) = 0`: `det(M_1) = 0` exactly. For
+///      `k = 2` the first and third brackets are `P` and `−P` for the same rounded `P`
+///      (round-to-nearest is symmetric, `fl(u − v) = −fl(v − u)`), so the first and third
+///      products are `fl(n·P)` and `−fl(n·P)`, and the middle bracket is again an exact
+///      `0`: `det(M_2) = 0` exactly.
+///    * So `b1 = b2 = ±0`, the gradient `|g| = 0 < 1e-9`, and the fit returns `None` (or
+///      earlier, when `|det M| < 1e-12`). Nothing overflows on the way: the largest product
+///      in `det(M)` is about `n³·w²·h²`, below `2^200` for any raster that fits in memory.
+///      Rust never contracts `a·b + c` into a fused multiply-add on its own, so the
+///      operations are the ones written.
+///
+/// `n` and `faded` describe the same pixels the fit would use: [`face_alpha`]'s pass 1
+/// applies the fit's interior test (own label and all four neighbours' labels equal, not on
+/// the image border) to the same labels and reads the same alphas.
+///
+/// Measured on the research sets (screen, s512, big, bigalpha; 3,125 calls): 96% of the
+/// calls fell in one of the two cases, and no call ever returned a ramp.
+///
+/// Not from the literature: a proof that a least-squares fit is degenerate, read off
+/// statistics the pass already had, because the fit is ours (a plane through the alpha
+/// channel). See also: He & Chao 2015, "A Very Fast Algorithm for Simultaneously Performing
+/// Connected-Component Labeling and Euler Number Computing", IEEE TIP 24(9) 2725–2735,
+/// <https://doi.org/10.1109/TIP.2015.2425540>, which likewise computes a region's features
+/// during the labelling scan instead of re-scanning per region.
+fn ramp_candidate(n: usize, faded: bool) -> bool {
+    n >= RAMP_MIN_INTERIOR && faded
+}
+
+/// The interior pixels of every face flagged in `want`, as `(x, y)` in row-major order; an
+/// empty list for every other face.
+///
+/// A pixel is interior when it is not on the image border and its own label and its four
+/// neighbours' labels are all equal: the test [`face_alpha`]'s pass 1 counts with, and the
+/// one [`fit_alpha_ramp`] expects of its input. `labels` is `w · h` row-major; `in_n[f]` is
+/// face `f`'s interior count from pass 1, used only to size each list exactly. Labels at or
+/// past `want.len()` are ignored.
+///
+/// One pass over the image (`O(w · h)`), and none at all when no face is wanted, which on
+/// the research sets was most traces. This replaces one whole-image scan *per fitted face*:
+/// every wanted face's pixels are bucketed in a single pass, as a labelling scan gathers its
+/// per-component features. Rows are read as three slices (above, this, below), so each
+/// neighbour read is a slice index rather than `i ± w` arithmetic. Border rows and columns
+/// hold no interior pixel, so an image under 3 px on a side gives only empty lists.
+///
+/// Not from the literature: a bucket pass, the standard replacement for per-key scans.
+/// See also: He, Chao & Suzuki 2008, "A Run-Based Two-Scan Labeling Algorithm", IEEE TIP
+/// 17(5) 749–756, <https://doi.org/10.1109/TIP.2008.919369>, for gathering per-region data
+/// in one scan.
+fn interior_pixels(
+    labels: &[u16],
+    w: usize,
+    h: usize,
+    want: &[bool],
+    in_n: &[usize],
+) -> Vec<Vec<(u32, u32)>> {
+    let mut out: Vec<Vec<(u32, u32)>> = want
+        .iter()
+        .zip(in_n)
+        .map(|(&wanted, &n)| {
+            if wanted {
+                Vec::with_capacity(n)
+            } else {
+                Vec::new()
+            }
+        })
+        .collect();
+    if !want.iter().any(|&b| b) {
+        return out;
+    }
+    for y in 1..h.saturating_sub(1) {
+        let up = &labels[(y - 1) * w..y * w];
+        let row = &labels[y * w..(y + 1) * w];
+        let down = &labels[(y + 1) * w..(y + 2) * w];
+        for x in 1..w.saturating_sub(1) {
+            let l = row[x];
+            if !want.get(l as usize).copied().unwrap_or(false) {
+                continue;
+            }
+            if row[x - 1] == l && row[x + 1] == l && up[x] == l && down[x] == l {
+                out[l as usize].push((x as u32, y as u32));
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod ramp_tests;

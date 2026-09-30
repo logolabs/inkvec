@@ -34,6 +34,26 @@
 //! The fast pipeline, `occlusion`, `symmetry`, `taper` and the research decoders read the
 //! map too.
 //!
+//! # How the map is built and refined
+//!
+//! 1. **Cracks from runs** (`cracks::dual_segments`): the label map is coded once as
+//!    maximal runs per row (`runs`), and every pixel side between two labels — a *crack* —
+//!    is read off the runs: vertical cracks at run starts, horizontal ones where the runs
+//!    of two consecutive rows overlap with different labels. Work is proportional to the
+//!    runs and cracks, not to the pixel sides, after one fast pass to code the runs.
+//! 2. **Saddles** (`split_saddle_corners`) give the two shapes that touch at a corner a
+//!    copy of it each.
+//! 3. **Incidence** (`cracks::Incidence`): the cracks grouped by node, by a radix sort of
+//!    their ends in emission order, with each crack end's node recorded so a walk steps to
+//!    the next node's list in `O(1)`.
+//! 4. **Walks**: junction to junction into open edges, then the junction-free loops.
+//! 5. **Refinement** ([`refine_subpixel_alpha`]): every vertex measured in parallel
+//!    (a pure map over vertices, so the result does not depend on the schedule), then
+//!    written back.
+//!
+//! Steps 1, 3 and 5 were rewritten on 2026-09-30 for speed; each keeps its previous form
+//! as a test reference and states why its output is bit-for-bit the same.
+//!
 //! Coordinates are in pixels with pixel centres at integer coordinates, so pixel `(x, y)`
 //! covers `[x−0.5, x+0.5] x [y−0.5, y+0.5]` and grid node `(i, j)` is at `(i−0.5, j−0.5)`.
 
@@ -97,8 +117,10 @@ pub struct PlanarMap {
     pub n_labels: usize,
 }
 
+mod cracks;
 pub(crate) mod junctions;
 pub(crate) mod runs;
+use cracks::{dual_segments, Incidence, Seg};
 pub use junctions::{node_position, refine_junctions};
 
 /// Grid node index. Nodes sit at pixel corners: node `(i, j)` is at image coordinate
@@ -126,73 +148,11 @@ fn label_at(labels: &[u16], w: usize, h: usize, x: isize, y: isize) -> u16 {
     }
 }
 
-/// A boundary segment on the dual grid, separating two pixels of differing label.
-///
-/// It runs from node `a` to node `b`, one pixel side long; `left` and `right` are the face
-/// labels on either side when walking from `a` to `b` (`u16::MAX` outside the image).
-#[derive(Clone, Copy)]
-struct Seg {
-    a: u32,
-    b: u32,
-    left: u16,
-    right: u16,
-}
-
-/// The segments incident to each node, in segment order: every node that has any, in
-/// increasing id, with its segments in one flat list. A map from node to segment list, in
-/// two sorted arrays rather than a hash map of vectors -- the same lists, without an
-/// allocation and a hash per boundary node.
-struct Incidence {
-    /// Nodes with at least one segment, increasing.
-    nodes: Vec<u32>,
-    /// Where each node's segments start in `segs`; one more entry than `nodes`.
-    start: Vec<usize>,
-    /// Segment indices, grouped by node and increasing within a node.
-    segs: Vec<usize>,
-}
-
-impl Incidence {
-    /// Index `segs` by endpoint: each segment is listed under both of its nodes. Built by
-    /// sorting `(node, segment)` pairs, so the order within a node is segment order.
-    fn new(segs: &[Seg]) -> Self {
-        let mut pairs: Vec<(u32, usize)> = Vec::with_capacity(2 * segs.len());
-        for (k, s) in segs.iter().enumerate() {
-            pairs.push((s.a, k));
-            pairs.push((s.b, k));
-        }
-        pairs.sort_unstable();
-        let mut nodes = Vec::new();
-        let mut start = Vec::new();
-        for (i, &(n, _)) in pairs.iter().enumerate() {
-            if nodes.last() != Some(&n) {
-                nodes.push(n);
-                start.push(i);
-            }
-        }
-        start.push(pairs.len());
-        Self {
-            nodes,
-            start,
-            segs: pairs.into_iter().map(|(_, k)| k).collect(),
-        }
-    }
-
-    /// The segments at the `i`-th node of `nodes`.
-    fn at(&self, i: usize) -> &[usize] {
-        &self.segs[self.start[i]..self.start[i + 1]]
-    }
-
-    /// The segments at node `n`, if it has any.
-    fn get(&self, n: u32) -> Option<&[usize]> {
-        self.nodes.binary_search(&n).ok().map(|i| self.at(i))
-    }
-}
-
 /// Build the planar map from an integer label image.
 ///
 /// `labels` is row-major, `w x h`, one face id per pixel, ids below `n_labels`. Every
 /// pixel side between two different labels (including the image border, against a
-/// virtual outside label `u16::MAX`) becomes a unit [`Seg`] between two grid nodes. A node
+/// virtual outside label `u16::MAX`) becomes a unit `Seg` between two grid nodes. A node
 /// touched by exactly two segments is a pass-through; any other node is a junction.
 /// Segments are then chained, junction to junction, into [`Edge`]s, and whatever remains
 /// forms closed loops with no junction on them. The result is exact topology: vertices on
@@ -217,49 +177,6 @@ pub fn build(labels: &[u16], w: usize, h: usize, n_labels: usize) -> PlanarMap {
         height: h,
         n_labels,
     }
-}
-
-/// Every pixel side separating two labels, as a unit segment on the dual grid.
-///
-/// Vertical sides first (row by row), then horizontal ones. Each is oriented so that the
-/// label it records as `left` is on the left when walking from `a` to `b` in image
-/// coordinates (y down).
-fn dual_segments(labels: &[u16], w: usize, h: usize) -> Vec<Seg> {
-    let mut segs: Vec<Seg> = Vec::new();
-
-    // Vertical dual edges: node (i, j) -> (i, j+1) separates pixel (i-1, j) from (i, j).
-    for j in 0..h {
-        for i in 0..=w {
-            let l = label_at(labels, w, h, i as isize - 1, j as isize);
-            let r = label_at(labels, w, h, i as isize, j as isize);
-            if l != r {
-                // Walking downward (+y), the pixel on the left in screen terms is (i, j).
-                segs.push(Seg {
-                    a: node_id(i, j, w),
-                    b: node_id(i, j + 1, w),
-                    left: r,
-                    right: l,
-                });
-            }
-        }
-    }
-    // Horizontal dual edges: node (i, j) -> (i+1, j) separates pixel (i, j-1) from (i, j).
-    for j in 0..=h {
-        for i in 0..w {
-            let u = label_at(labels, w, h, i as isize, j as isize - 1);
-            let d = label_at(labels, w, h, i as isize, j as isize);
-            if u != d {
-                // Walking rightward (+x), the pixel above is on the left.
-                segs.push(Seg {
-                    a: node_id(i, j, w),
-                    b: node_id(i + 1, j, w),
-                    left: u,
-                    right: d,
-                });
-            }
-        }
-    }
-    segs
 }
 
 /// Where four pixels meet at a corner and one diagonal is a single face, give the other
@@ -401,14 +318,14 @@ fn walk_open_chains(
                 let s = segs[cur_seg];
                 let next_node = if s.a == cur_node { s.b } else { s.a };
                 chain_nodes.push(next_node);
-                let cands = inc.get(next_node);
-                if is_junction(cands) {
+                // The segments at `next_node`, the far end of `cur_seg`: the list
+                // `inc.get(next_node)` returned, read in O(1) (see `Incidence::end`).
+                // (`get` found every such node, so its `None` branch never ran.)
+                let cands = inc.end(cur_seg, s.a == cur_node);
+                if is_junction(Some(cands)) {
                     cur_node = next_node;
                     break;
                 }
-                let Some(cands) = cands else {
-                    break;
-                };
                 let Some(&nxt) = cands.iter().find(|&&k| k != cur_seg && !used[k]) else {
                     cur_node = next_node;
                     break;
@@ -464,9 +381,9 @@ fn walk_closed_loops(
                 break;
             }
             chain_nodes.push(next_node);
-            let Some(cands) = inc.get(next_node) else {
-                break;
-            };
+            // `next_node` is an end of `cur_seg`, so it has segments: the list
+            // `inc.get(next_node)` returned, read in O(1) (see `Incidence::end`).
+            let cands = inc.end(cur_seg, s.a == cur_node);
             let Some(&nxt) = cands.iter().find(|&&x| x != cur_seg && !used[x]) else {
                 break;
             };
@@ -1493,3 +1410,6 @@ mod saddle_tests {
 
 #[cfg(test)]
 mod refine_tests;
+
+#[cfg(test)]
+mod cracks_tests;

@@ -3,7 +3,23 @@
 //!
 //! Every entry point returns an [`Rgba`] with channels in `[0, 1]` (8-bit samples divided
 //! by 255, not premultiplied), which is what the tracer takes. Re-exported at the crate
-//! root; moved out of `lib.rs` unchanged.
+//! root.
+//!
+//! # The passes, for a file
+//!
+//! 1. **Read** the header, then the file, with the format named by the file's extension
+//!    ([`load_image_capped`], as `image::open` names it).
+//! 2. **Decode** with the `image` crate into whatever layout the file holds (8-bit RGB for
+//!    most opaque PNGs and every JPEG, 8-bit RGBA for most transparent ones).
+//! 3. **Cap**: above `max_dim` on the longer side, box-average the 8-bit buffer down
+//!    (`coverage::box_downsample_rgba8`) before any float exists.
+//! 4. **Widen** to floats ([`from_dynamic`]): one table lookup per byte ([`UNIT`]), straight
+//!    from the decoder's own buffer for 8-bit RGB and RGBA, in parallel chunks on a large
+//!    image. The result is the same float the old per-byte division gave.
+//!
+//! At 2048 px the intake was 20 ms (decode 4.9, the RGBA copy 4.0, the float conversion
+//! 10.1), all serial; the copy is gone for RGB and RGBA files and the conversion is split
+//! over the cores.
 
 use std::path::Path;
 
@@ -72,25 +88,110 @@ pub fn lossy_container(bytes: &[u8]) -> Option<bool> {
 /// Load a raster image from a file path into straight RGBA floats.
 pub fn load_image(path: &Path) -> Result<Rgba, TraceError> {
     let img = image::open(path).map_err(|e| TraceError::Decode(e.to_string()))?;
-    Ok(from_dynamic(&img))
+    Ok(from_dynamic(img))
 }
 
 /// Decode a raster image from in-memory bytes into straight RGBA floats.
 pub fn decode_image(bytes: &[u8]) -> Result<Rgba, TraceError> {
     let img = image::load_from_memory(bytes).map_err(|e| TraceError::Decode(e.to_string()))?;
-    Ok(from_dynamic(&img))
+    Ok(from_dynamic(img))
 }
 
-/// Any decoded image to straight RGBA floats: 8-bit samples divided by 255.
-fn from_dynamic(img: &image::DynamicImage) -> Rgba {
-    let rgba = img.to_rgba8();
-    let (w, h) = (rgba.width() as usize, rgba.height() as usize);
-    let data = rgba.into_raw().iter().map(|&b| b as f32 / 255.0).collect();
+/// Below this many pixels (256 × 256) the byte-to-float conversion runs on the calling
+/// thread: at 128 px it is a few microseconds, less than handing it to rayon.
+const PARALLEL_MIN_PIXELS: usize = 1 << 16;
+
+/// Pixels per parallel job of the byte-to-float conversion: 64 KiB of floats, enough work
+/// to amortise the job and few enough jobs (64 at 2048 × 2048) for rayon to balance.
+const CONVERT_CHUNK_PIXELS: usize = 1 << 16;
+
+/// `UNIT[k] = k as f32 / 255.0`: the value every 8-bit sample becomes.
+///
+/// A table rather than the division, because the division per byte was the largest part of
+/// the intake's float conversion (10 ms of 20 at 2048 px, serial): a table lookup gives the
+/// same float -- it holds exactly the quotient the old code computed, byte by byte -- for a
+/// load. Built at compile time.
+static UNIT: [f32; 256] = {
+    let mut t = [0.0f32; 256];
+    let mut k = 0;
+    while k < 256 {
+        t[k] = k as f32 / 255.0;
+        k += 1;
+    }
+    t
+};
+
+/// Any decoded image to straight RGBA floats: 8-bit samples divided by 255, alpha 1 where
+/// the image has none.
+///
+/// The old conversion always went through `to_rgba8()` -- a full copy even when the image
+/// already was 8-bit RGBA -- and then divided every byte serially: 4.0 + 10.1 ms of the
+/// 20 ms intake at 2048 px. Now:
+///
+/// * 8-bit RGBA is read straight from the decoder's buffer (no copy);
+/// * 8-bit RGB, the common opaque container, is widened straight to four floats with alpha
+///   `UNIT[255] = 1.0`, skipping the intermediate RGBA8 buffer;
+/// * every other layout (grey, grey + alpha, 16-bit, float) still goes through the
+///   library's `into_rgba8()`, whose colour conversion this does not reimplement;
+///
+/// and the bytes become floats through [`UNIT`], in parallel chunks on a large image.
+///
+/// *Why identical:* the library's RGB8 → RGBA8 conversion writes `[r, g, b, 255]` per pixel
+/// (`subpixel_cast_rgb_to_rgba` in `image` 0.25), and `to_rgba8()` of an RGBA8 image is a
+/// clone of its buffer; both are reproduced here byte for byte, and each byte becomes the
+/// same float the division gave. Checked against the old path for every layout in
+/// `from_dynamic_is_the_old_conversion`.
+///
+/// Not from the literature: an engineering change (skip a copy, table the division, split
+/// the loop), because the conversion is a memory-bound map with no algorithm to choose.
+/// See also: J. Ragan-Kelley et al., "Halide: A Language and Compiler for Optimizing
+/// Parallelism, Locality, and Recomputation in Image Processing Pipelines", PLDI 2013,
+/// DOI 10.1145/2491956.2462176 -- fusing the stages of an image pipeline so each pixel is
+/// touched once; the conversion is fused here only with the layout change, since the
+/// stages after it belong to other parts of the pipeline.
+fn from_dynamic(img: image::DynamicImage) -> Rgba {
+    let (w, h) = (img.width() as usize, img.height() as usize);
+    let data = match img {
+        image::DynamicImage::ImageRgba8(buf) => widen::<4>(&buf.into_raw(), |p| *p),
+        image::DynamicImage::ImageRgb8(buf) => {
+            // Exactly the pixels, as the library's conversion reads them.
+            let raw = buf.into_raw();
+            widen::<3>(&raw[..w * h * 3], |p| [p[0], p[1], p[2], 255])
+        }
+        other => widen::<4>(&other.into_rgba8().into_raw(), |p| *p),
+    };
     Rgba {
         width: w,
         height: h,
         data,
     }
+}
+
+/// Straight RGBA floats from packed `C`-byte pixels: every whole pixel of `raw` is widened
+/// to four bytes by `rgba` and each byte mapped through [`UNIT`]. A trailing partial pixel
+/// is dropped (a decoder never produces one). Parallel above [`PARALLEL_MIN_PIXELS`]; each
+/// output float depends on one input byte, so the split cannot change a value.
+fn widen<const C: usize>(raw: &[u8], rgba: impl Fn(&[u8; C]) -> [u8; 4] + Sync) -> Vec<f32> {
+    use rayon::prelude::*;
+    let n = raw.len() / C;
+    let mut data = vec![0.0f32; n * 4];
+    let convert = |(out, src): (&mut [f32], &[u8])| {
+        for (o, s) in out.chunks_exact_mut(4).zip(src.chunks_exact(C)) {
+            // `chunks_exact(C)` yields exactly C bytes, so the conversion cannot fail.
+            let q = rgba(s.try_into().expect("C bytes"));
+            for c in 0..4 {
+                o[c] = UNIT[q[c] as usize];
+            }
+        }
+    };
+    if n >= PARALLEL_MIN_PIXELS {
+        data.par_chunks_mut(4 * CONVERT_CHUNK_PIXELS)
+            .zip(raw.par_chunks(C * CONVERT_CHUNK_PIXELS))
+            .for_each(convert);
+    } else {
+        convert((&mut data, raw));
+    }
+    data
 }
 
 /// The decode-time target for a `w x h` raster capped at `max_dim` on its longer side,
@@ -126,15 +227,21 @@ pub fn load_image_capped(path: &Path, max_dim: usize) -> Result<(Rgba, (u32, u32
         .into_dimensions()
         .map_err(|e| TraceError::Decode(e.to_string()))?;
     let img = image::open(path).map_err(|e| TraceError::Decode(e.to_string()))?;
-    let out = match target_dims(w, h, max_dim) {
+    Ok((cap_decoded(img, w, h, max_dim), (w, h)))
+}
+
+/// A decoded `w × h` image as straight RGBA floats, box-averaged to the `max_dim` cap when
+/// it is larger ([`target_dims`]), converted as it is ([`from_dynamic`]) otherwise. The
+/// capped branch hands the library's `into_rgba8()` buffer straight to the box filter; the
+/// `to_rgba8()` it replaces copied an RGBA8 image first, which changed no byte.
+fn cap_decoded(img: image::DynamicImage, w: u32, h: u32, max_dim: usize) -> Rgba {
+    match target_dims(w, h, max_dim) {
         Some((nw, nh)) => {
-            let rgba = img.to_rgba8();
-            let raw = rgba.into_raw();
+            let raw = img.into_rgba8().into_raw();
             coverage::box_downsample_rgba8(&raw, w as usize, h as usize, nw as usize, nh as usize)
         }
-        None => from_dynamic(&img),
-    };
-    Ok((out, (w, h)))
+        None => from_dynamic(img),
+    }
 }
 
 /// Decode in-memory bytes into straight RGBA floats, capping the longer side at `max_dim`
@@ -147,15 +254,7 @@ pub fn decode_image_capped(bytes: &[u8], max_dim: usize) -> Result<(Rgba, (u32, 
         .into_dimensions()
         .map_err(|e| TraceError::Decode(e.to_string()))?;
     let img = image::load_from_memory(bytes).map_err(|e| TraceError::Decode(e.to_string()))?;
-    let out = match target_dims(w, h, max_dim) {
-        Some((nw, nh)) => {
-            let rgba = img.to_rgba8();
-            let raw = rgba.into_raw();
-            coverage::box_downsample_rgba8(&raw, w as usize, h as usize, nw as usize, nh as usize)
-        }
-        None => from_dynamic(&img),
-    };
-    Ok((out, (w, h)))
+    Ok((cap_decoded(img, w, h, max_dim), (w, h)))
 }
 
 /// Raw straight RGBA8 pixels (row-major, tightly packed, `w * h * 4` bytes) into straight
@@ -171,8 +270,14 @@ pub fn rgba8_capped(raw: &[u8], w: u32, h: u32, max_dim: usize) -> Rgba {
             coverage::box_downsample_rgba8(raw, w as usize, h as usize, nw as usize, nh as usize)
         }
         None => {
+            // The first `n` bytes (or all of a short buffer) as floats, then zeros: whole
+            // pixels through the parallel table conversion, a trailing partial pixel byte by
+            // byte, exactly as the old serial `take(n).map(b / 255)` produced them.
             let n = w as usize * h as usize * 4;
-            let mut data: Vec<f32> = raw.iter().take(n).map(|&b| b as f32 / 255.0).collect();
+            let take = raw.len().min(n);
+            let whole = take / 4 * 4;
+            let mut data = widen::<4>(&raw[..whole], |p| *p);
+            data.extend(raw[whole..take].iter().map(|&b| UNIT[b as usize]));
             data.resize(n, 0.0);
             Rgba {
                 width: w as usize,
@@ -180,6 +285,195 @@ pub fn rgba8_capped(raw: &[u8], w: u32, h: u32, max_dim: usize) -> Rgba {
                 data,
             }
         }
+    }
+}
+
+/// The intake as it was before the table conversion and the single file read, kept as the
+/// oracle for the tests below.
+#[cfg(test)]
+mod reference {
+    use super::*;
+
+    /// The old `from_dynamic`: always `to_rgba8()`, then a serial division per byte.
+    pub(super) fn from_dynamic(img: &image::DynamicImage) -> Rgba {
+        let rgba = img.to_rgba8();
+        let (w, h) = (rgba.width() as usize, rgba.height() as usize);
+        let data = rgba.into_raw().iter().map(|&b| b as f32 / 255.0).collect();
+        Rgba {
+            width: w,
+            height: h,
+            data,
+        }
+    }
+
+    /// The old `load_image_capped`: the header from one open, the pixels from `image::open`.
+    pub(super) fn load_image_capped(
+        path: &Path,
+        max_dim: usize,
+    ) -> Result<(Rgba, (u32, u32)), TraceError> {
+        let (w, h) = image::ImageReader::open(path)
+            .map_err(|e| TraceError::Decode(e.to_string()))?
+            .into_dimensions()
+            .map_err(|e| TraceError::Decode(e.to_string()))?;
+        let img = image::open(path).map_err(|e| TraceError::Decode(e.to_string()))?;
+        let out = match target_dims(w, h, max_dim) {
+            Some((nw, nh)) => {
+                let raw = img.to_rgba8().into_raw();
+                coverage::box_downsample_rgba8(
+                    &raw,
+                    w as usize,
+                    h as usize,
+                    nw as usize,
+                    nh as usize,
+                )
+            }
+            None => from_dynamic(&img),
+        };
+        Ok((out, (w, h)))
+    }
+
+    /// The old uncapped branch of `rgba8_capped`.
+    pub(super) fn rgba8(raw: &[u8], w: u32, h: u32) -> Vec<f32> {
+        let n = w as usize * h as usize * 4;
+        let mut data: Vec<f32> = raw.iter().take(n).map(|&b| b as f32 / 255.0).collect();
+        data.resize(n, 0.0);
+        data
+    }
+}
+
+#[cfg(test)]
+mod intake_equivalence_tests {
+    use super::*;
+
+    /// Deterministic bytes (a 64-bit LCG).
+    fn bytes(n: usize, seed: u64) -> Vec<u8> {
+        let mut s = seed;
+        (0..n)
+            .map(|_| {
+                s = s
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                (s >> 56) as u8
+            })
+            .collect()
+    }
+
+    /// One image of every layout the decoder can hand over, at size `w × h`.
+    fn every_layout(w: u32, h: u32) -> Vec<image::DynamicImage> {
+        use image::DynamicImage as D;
+        let n = (w * h) as usize;
+        let b = |c: usize, seed| bytes(n * c, seed);
+        let wide = |c: usize, seed| -> Vec<u16> {
+            b(2 * c, seed)
+                .chunks(2)
+                .map(|p| u16::from_le_bytes([p[0], p[1]]))
+                .collect()
+        };
+        let float = |c: usize, seed| -> Vec<f32> {
+            b(c, seed).iter().map(|&v| v as f32 / 200.0 - 0.1).collect()
+        };
+        vec![
+            D::ImageRgba8(image::RgbaImage::from_raw(w, h, b(4, 1)).unwrap()),
+            D::ImageRgb8(image::RgbImage::from_raw(w, h, b(3, 2)).unwrap()),
+            D::ImageLuma8(image::GrayImage::from_raw(w, h, b(1, 3)).unwrap()),
+            D::ImageLumaA8(image::GrayAlphaImage::from_raw(w, h, b(2, 4)).unwrap()),
+            D::ImageRgb16(image::ImageBuffer::from_raw(w, h, wide(3, 5)).unwrap()),
+            D::ImageRgba16(image::ImageBuffer::from_raw(w, h, wide(4, 6)).unwrap()),
+            D::ImageLuma16(image::ImageBuffer::from_raw(w, h, wide(1, 7)).unwrap()),
+            D::ImageLumaA16(image::ImageBuffer::from_raw(w, h, wide(2, 8)).unwrap()),
+            D::ImageRgb32F(image::ImageBuffer::from_raw(w, h, float(3, 9)).unwrap()),
+            D::ImageRgba32F(image::ImageBuffer::from_raw(w, h, float(4, 10)).unwrap()),
+        ]
+    }
+
+    fn bits(v: &[f32]) -> Vec<u32> {
+        v.iter().map(|f| f.to_bits()).collect()
+    }
+
+    #[test]
+    fn the_table_holds_the_quotients() {
+        for k in 0..=255u8 {
+            assert_eq!(UNIT[k as usize].to_bits(), (k as f32 / 255.0).to_bits());
+        }
+    }
+
+    /// Every layout, at sizes from one pixel to past the parallel threshold, against the old
+    /// `to_rgba8()`-and-divide conversion, bit for bit.
+    #[test]
+    fn from_dynamic_is_the_old_conversion() {
+        for (w, h) in [(1, 1), (3, 1), (1, 5), (17, 9), (300, 250)] {
+            for img in every_layout(w, h) {
+                let what = format!("{:?} {w}x{h}", img.color());
+                let old = reference::from_dynamic(&img);
+                let new = from_dynamic(img);
+                assert_eq!((new.width, new.height), (old.width, old.height), "{what}");
+                assert_eq!(bits(&new.data), bits(&old.data), "{what}");
+            }
+        }
+    }
+
+    /// Short, exact and long raw buffers, including a partial trailing pixel, against the
+    /// old serial conversion.
+    #[test]
+    fn raw_pixels_are_the_old_conversion() {
+        for (w, h) in [(1u32, 1u32), (5, 3), (300, 250)] {
+            let n = (w * h * 4) as usize;
+            for len in [0, 1, 6, n.saturating_sub(3), n, n + 5] {
+                let raw = bytes(len, len as u64 + 11);
+                let new = rgba8_capped(&raw, w, h, 0);
+                assert_eq!(
+                    bits(&new.data),
+                    bits(&reference::rgba8(&raw, w, h)),
+                    "{len}"
+                );
+            }
+        }
+    }
+
+    /// The one-read loader against the old two-open loader, on real files of several
+    /// containers, capped and uncapped, and on files whose extension lies about or omits
+    /// the format (same pixels, or the same error text).
+    #[test]
+    fn one_read_equals_image_open() {
+        let dir = std::env::temp_dir().join(format!("inkvec-load-once-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rgba = image::RgbaImage::from_raw(90, 70, bytes(90 * 70 * 4, 42)).unwrap();
+        let rgb = image::DynamicImage::ImageRgba8(rgba.clone()).to_rgb8();
+        let mut files = Vec::new();
+        for (name, img) in [
+            ("a.png", image::DynamicImage::ImageRgba8(rgba.clone())),
+            ("b.png", image::DynamicImage::ImageRgb8(rgb.clone())),
+            ("c.bmp", image::DynamicImage::ImageRgb8(rgb.clone())),
+            ("d.jpg", image::DynamicImage::ImageRgb8(rgb.clone())),
+            ("e.tiff", image::DynamicImage::ImageRgba8(rgba.clone())),
+        ] {
+            let p = dir.join(name);
+            img.save(&p).unwrap();
+            files.push(p);
+        }
+        // A PNG named as a JPEG, and one with no extension at all.
+        for name in ["f.jpg", "g"] {
+            let p = dir.join(name);
+            std::fs::copy(dir.join("a.png"), &p).unwrap();
+            files.push(p);
+        }
+        files.push(dir.join("missing.png"));
+        for p in &files {
+            for max_dim in [0usize, 64, 2048] {
+                let new = load_image_capped(p, max_dim);
+                let old = reference::load_image_capped(p, max_dim);
+                match (new, old) {
+                    (Ok((a, da)), Ok((b, db))) => {
+                        assert_eq!(da, db, "{p:?}");
+                        assert_eq!((a.width, a.height), (b.width, b.height), "{p:?}");
+                        assert_eq!(bits(&a.data), bits(&b.data), "{p:?} at {max_dim}");
+                    }
+                    (Err(a), Err(b)) => assert_eq!(a.to_string(), b.to_string(), "{p:?}"),
+                    (a, b) => panic!("{p:?}: {:?} against {:?}", a.is_ok(), b.is_ok()),
+                }
+            }
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
 

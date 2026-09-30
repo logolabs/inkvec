@@ -436,11 +436,17 @@ pub fn fit_arcs(pts: &[Point], sigma: &[f64], closed: bool) -> Option<Vec<Segmen
 /// `MAX_REDUCED_CHI2·n`, a radius over a thousand times the run's extent (a straight run
 /// in disguise) and a total sweep under 1e-3 rad.
 fn fit_arcs_inner(pts: &[Point], sigma: &[f64], closed: bool) -> Option<(Vec<Segment>, CircleFit)> {
-    let n = pts.len();
-    if n < 4 {
+    if pts.len() < 4 {
         return None;
     }
-    let cf = fit_circle(pts, sigma)?;
+    arcs_on_circle(pts, closed, fit_circle(pts, sigma)?)
+}
+
+/// [`fit_arcs_inner`] on a circle already fitted to `pts` ([`fit_circle`]), so that
+/// [`fit_primitive_or_arcs`] can fit the circle once and hand the same fit to the ellipse
+/// search as its near-circle starts.
+fn arcs_on_circle(pts: &[Point], closed: bool, cf: CircleFit) -> Option<(Vec<Segment>, CircleFit)> {
+    let n = pts.len();
     if cf.chi2 > MAX_REDUCED_CHI2 * n as f64 {
         return None;
     }
@@ -736,11 +742,14 @@ pub fn fit_primitive_or_arcs(
         },
     };
 
+    // One orthogonal circle fit serves both the arcs and the ellipse search's starts,
+    // which used to fit the same circle to the same points a second time.
+    let circle = fit_circle(pts, sigma);
     let mut best = Cheapest::new(pts);
-    offer_arcs(&run, &mut best);
+    offer_arcs(&run, circle, &mut best);
     if closed {
         let sign = if signed_area(pts) >= 0.0 { 1.0 } else { -1.0 };
-        offer_ellipse(&run, sign, &mut best);
+        offer_ellipse(&run, circle, sign, &mut best);
         offer_round_rects(&run, sign, &mut best);
     }
     let best = best.best?;
@@ -850,9 +859,9 @@ impl Cheapest {
 /// path (`½·χ²` sampled against the arcs, plus the arcs' parameters), and the path form
 /// of a whole `<circle>` for a closed run that goes more than 1.9π round the centre and
 /// passes the χ² gate, costed as the circle's three parameters.
-fn offer_arcs(run: &PrimRun<'_>, best: &mut Cheapest) {
+fn offer_arcs(run: &PrimRun<'_>, circle: Option<CircleFit>, best: &mut Cheapest) {
     let (pts, sigma, cfg) = (run.pts, run.sigma, run.cfg);
-    let arcs = fit_arcs_inner(pts, sigma, run.closed);
+    let arcs = circle.and_then(|cf| arcs_on_circle(pts, run.closed, cf));
     if let Some((segs, cf)) = &arcs {
         if !run.closed {
             let chi2 = curves::chi2(pts, sigma, run.start, segs);
@@ -876,7 +885,7 @@ fn offer_arcs(run: &PrimRun<'_>, best: &mut Cheapest) {
 /// the χ² gate, and more than 1.9π of sweep round its centre. `sign` is the run's
 /// orientation (+1 when its signed area is positive), which the four-cubic path form
 /// follows.
-fn offer_ellipse(run: &PrimRun<'_>, sign: f64, best: &mut Cheapest) {
+fn offer_ellipse(run: &PrimRun<'_>, circle: Option<CircleFit>, sign: f64, best: &mut Cheapest) {
     let pts = run.pts;
     // The same bound the circle fit applies (see `fit_arcs_inner`), which the
     // ellipse lacked. A thin sliver is described *well* by an absurdly eccentric
@@ -894,7 +903,7 @@ fn offer_ellipse(run: &PrimRun<'_>, sign: f64, best: &mut Cheapest) {
         .map(|p| p.dist(pts[0]))
         .fold(0.0f64, f64::max)
         .max(1.0);
-    if let Some(e) = fit_ellipse(pts, run.sigma) {
+    if let Some(e) = ellipse::fit_ellipse_from(pts, run.sigma, circle) {
         let sane = e.rx.is_finite()
             && e.ry.is_finite()
             && e.c.x.is_finite()

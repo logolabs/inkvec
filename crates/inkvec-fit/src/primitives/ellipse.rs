@@ -307,13 +307,27 @@ pub fn fit_ellipse(pts: &[Point], sigma: &[f64]) -> Option<EllipseFit> {
     if pts.len() < 6 {
         return None;
     }
+    fit_ellipse_from(pts, sigma, fit_circle(pts, sigma))
+}
+
+/// [`fit_ellipse`] with its orthogonal circle fit (`fit_circle(pts, sigma)`, whose centre
+/// and radius seed the near-circle starts) supplied by a caller that has already fitted
+/// it. `None` for fewer than six points or when every start fails.
+pub(crate) fn fit_ellipse_from(
+    pts: &[Point],
+    sigma: &[f64],
+    circle: Option<super::CircleFit>,
+) -> Option<EllipseFit> {
+    if pts.len() < 6 {
+        return None;
+    }
     let mut starts: Vec<EllipseFit> = Vec::new();
     // Levenberg–Marquardt reads only the start's geometry, so the algebraic fit's own
     // orthogonal χ² is not computed (see `taubin_ellipse`).
     if let Some(e) = taubin_ellipse(pts, sigma) {
         starts.push(e);
     }
-    if let Some(cf) = fit_circle(pts, sigma) {
+    if let Some(cf) = circle {
         for k in 0..4 {
             starts.push(EllipseFit {
                 c: cf.c,

@@ -26,6 +26,14 @@
 //! A stage that says "kept 6 of 41 candidates" is useful; a stage that says "kept 6 of 41,
 //! 35 dropped as blends, noise 0.50/255 AT FLOOR" tells you where to look next without a
 //! second run.
+//!
+//! # Where it is used
+//!
+//! Any stage may call [`crate::diag!`] or [`saturated`]; the colour path does so for the
+//! noise estimate, the intake gates and the palette. All output goes to stderr and never
+//! changes the trace. This is separate from the older per-stage switches
+//! (`INKVEC_PALDBG`, `INKVEC_TIMING`, `INKVEC_ABSDBG`, ...) that print free-form lines
+//! from inside individual stages.
 
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -36,6 +44,9 @@ const UNSET: u8 = 255;
 
 static MODE: AtomicU8 = AtomicU8::new(UNSET);
 
+/// The output mode, read from `INKVEC_DIAG` on first use and cached: unset, empty or `0`
+/// is off, `json` is JSON, anything else is text. Two threads racing on the first call
+/// both read the same variable and store the same value, so the relaxed ordering is enough.
 fn mode() -> u8 {
     let m = MODE.load(Ordering::Relaxed);
     if m != UNSET {
@@ -92,6 +103,7 @@ pub enum Stop {
 }
 
 impl Stop {
+    /// The upper-case tag printed after a saturated value.
     fn label(self) -> &'static str {
         match self {
             Stop::Floor => "AT FLOOR",

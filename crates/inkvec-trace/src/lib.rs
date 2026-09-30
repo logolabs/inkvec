@@ -3,20 +3,50 @@
 //! Everything that decides *what is in the image* lives here. The crate above turns the
 //! answer into SVG; the crate beside it fits curves to the boundaries this one finds.
 //!
-//! The stages, in the order [`trace_color_full`] runs them:
+//! # The Quality pipeline, stage by stage
 //!
-//! | stage | module | what it settles |
-//! |---|---|---|
-//! | noise, coverage | [`coverage`] | how much of the measurement is real |
-//! | palette | [`color`] | how many inks, and which |
-//! | labels, despeckle | [`color`] | which ink each pixel is |
-//! | blend absorb | [`color`] | which pixels are only a mixture of two inks |
-//! | bands, carve | [`gradient`] | which neighbouring regions are one gradient |
-//! | planar map | [`planar`] | faces, and the edges they share |
-//! | symmetry | [`symmetry`] | which boundaries are reflections of each other |
-//! | sub-pixel, junctions | [`planar`] | where the boundaries actually are |
-//! | boundary solve | [`boundary_opt`] | all boundary points at once, against the image |
-//! | fills | [`gradient`] | flat, linear or radial, whichever pays |
+//! [`trace_color_full_with_alpha`] runs these in order; the names are the stage names the
+//! [`Stopwatch`] and the progress log report. Pixels are row-major, `p = y·w + x`, colours
+//! sRGB `[0, 1]` composited onto white unless a stage says otherwise.
+//!
+//! 1. **noise, intake** ([`coverage`]): the pixel noise `σ` from the luminance, and
+//!    whether the intake is soft (wide edges, a lossy container, JPEG ringing), which
+//!    switches the palette's noise guard.
+//! 2. **palette** ([`color::extract_palette_mdl`]): how many inks, and which.
+//! 3. **labels** ([`color::label_image`]): the nearest ink per pixel; on a soft intake `σ`
+//!    is then re-measured against the labels ([`regularize`]); with alpha inks,
+//!    [`color::split_alpha_inks`].
+//! 4. **despeckle** ([`regions::despeckle`]): components under `min_region` pixels go.
+//! 5. **blend_absorb** ([`regions::absorb_blend_slivers`],
+//!    [`regions::reassign_blend_pixels`]): anti-aliasing slivers and pixels go back to the
+//!    inks they are blends of.
+//! 6. **merge_bands** ([`gradient::bands`]): adjacent palette bands that one gradient
+//!    explains become one label, and every label gets its fitted fill (flat, linear or
+//!    radial, whichever pays).
+//! 7. **carve** ([`gradient::carve`]): clusters of pixels no fill explains become labels of
+//!    their own.
+//! 8. **fades** (native-alpha path only, `native/fade.rs`): translucent bands become one
+//!    opacity gradient.
+//! 9. **split** ([`regions::split_components`]): labels become faces, one per 4-connected
+//!    component, each with its label's fill and ink.
+//!
+//! From here `finish_color_trace_alpha` takes over, shared by every entry point:
+//!
+//! 10. **saddles** (research only, `regions::merge_saddle_faces`);
+//! 11. **build_map** ([`planar::build`]): faces, and the edges and junctions they share;
+//! 12. **symmetry_detect** ([`symmetry::detect`]): mirrors of the label map;
+//! 13. **refine_subpix** ([`planar::refine_subpixel_alpha`]): each boundary point moved to
+//!     its sub-pixel position by unmixing the two faces' fills;
+//! 14. **refine_junc** ([`planar::refine_junctions`]): where three or more faces meet;
+//! 15. **boundary_opt** ([`boundary_opt`]): all boundary points solved at once against an
+//!     exact coverage render of the image (Quality only);
+//! 16. **decode** (research only);
+//! 17. **symmetry** ([`symmetry::enforce`]): mirrored boundaries made exactly symmetric.
+//!
+//! The result, a [`ColorTrace`], goes to the curve fitter (`inkvec-fit`, stage `fit_dp`)
+//! and the SVG emitter in `inkvec-cli`. Fast mode ([`fast`]) and the native-alpha path
+//! ([`native`]) replace stages 1–9 and share 10–17 (Fast skips 15); [`trace_color_from_labels`] replaces
+//! 2–5 with a caller's label map.
 //!
 //! Two things run beside that path rather than in it: [`alpha`] recovers a translucent
 //! layer seen against two grounds, and [`centerline`] recovers strokes rather than
@@ -75,7 +105,8 @@ pub use regions::{
 #[cfg(feature = "research")]
 pub use regions::{merge_saddle_faces, SADDLE_SIGMAS};
 
-/// Load a raster into straight RGBA floats.
+/// The clock behind [`ColorOptions::deadline`] and [`Stopwatch`], re-exported so a caller
+/// can build a deadline with the same `Instant` type on every target.
 pub use inkvec_core::clock;
 
 /// Options for the bilevel path.
@@ -221,6 +252,31 @@ pub fn trace_color_full(img: &Rgba, opts: &ColorOptions) -> ColorTrace {
 /// When it does, the stages that ask "was anything drawn here" would otherwise see a solid
 /// alpha channel and answer wrongly: sliver absorption and blend reassignment both read it,
 /// and it is what tells an anti-aliased rim from a face. So the true alphas come alongside.
+///
+/// # Dispatch
+///
+/// * `opts.native_alpha` and a `source_alpha` of the right length with some pixel below
+///   [`native::OPAQUE`]: the native-alpha path, [`native::trace_color`] (or its Fast
+///   counterpart when `opts.fast`);
+/// * otherwise `opts.fast`: the Fast engine's front end ([`fast`]);
+/// * otherwise the Quality pipeline below, stages 1–9 of the crate overview, then
+///   `finish_color_trace` for the geometry.
+///
+/// # Inputs and outputs
+///
+/// `img` is straight RGBA in `[0, 1]`; every stage here reads it composited onto white.
+/// `source_alpha`, when given, must have one value per pixel to be used; otherwise the
+/// image's own alpha channel stands in where alpha is read. The returned [`ColorTrace`]
+/// has one face per 4-connected region, each with its palette ink, its fitted fill and
+/// its boundaries at sub-pixel positions.
+///
+/// # Noise
+///
+/// `σ` (`sigma_noise`, sRGB units per channel) is estimated once from the luminance
+/// before the palette exists and is then only ever raised: on a soft intake, by
+/// `regularize::residual_sigma` measured against the labels (scaled by
+/// [`color::MEASURED_SIGMA_SCALE`] and capped at [`color::MEASURED_SIGMA_CAP`] levels). The
+/// value the palette saw is kept as `detail_sigma` for the research carve variant.
 pub fn trace_color_full_with_alpha(
     img: &Rgba,
     opts: &ColorOptions,
@@ -447,13 +503,11 @@ pub fn trace_color_full_with_alpha(
         );
     }
 
-    let minted = match source_alpha {
-        Some(a) if opts.alpha_inks && a.len() == labels.len() => {
-            color::split_alpha_inks(&mut labels, &mut pal, a)
+    if let Some(a) = source_alpha {
+        if opts.alpha_inks && a.len() == labels.len() {
+            color::split_alpha_inks(&mut labels, &mut pal, a);
         }
-        _ => 0,
-    };
-    let _ = minted;
+    }
     sw.mark("labels");
     progress::begin("despeckle");
 
@@ -655,7 +709,10 @@ pub fn trace_color_full_with_alpha(
 /// Research entry: run the colour tracer from a caller-supplied label map.
 ///
 /// `labels[y*w+x]` is a region id in `0..n_labels` (any value >= `n_labels` is treated as
-/// unlabelled and reassigned to the nearest labelled 4-neighbour by repeated dilation).
+/// unlabelled and reassigned to the nearest labelled 4-neighbour by repeated dilation; a
+/// `labels` shorter than the image leaves the rest unlabelled). `img` is straight RGBA in
+/// `[0, 1]`, read composited onto white. Returns a [`ColorTrace`] exactly as
+/// [`trace_color_full`] does, with the palette standing for the supplied labels.
 ///
 /// From there this is the classical path, stage for stage, differing only in where the
 /// labels came from:
@@ -907,7 +964,8 @@ pub fn trace_color_from_labels(
 /// how the labels were arrived at.
 ///
 /// Shared by [`trace_color_full_with_alpha`] and [`trace_color_from_labels`] so the
-/// research entry cannot drift away from the shipped one.
+/// research entry cannot drift away from the shipped one. The opaque form of
+/// [`finish_color_trace_alpha`], which documents the arguments.
 #[allow(clippy::too_many_arguments)]
 fn finish_color_trace(
     img: &Rgba,
@@ -941,6 +999,30 @@ fn finish_color_trace(
 /// boundary solve then unmix in four channels, each face at its palette entry's opacity, so
 /// an edge between white paint and the clear ground is found although over white it has no
 /// contrast at all. With `None` this is exactly the classic function.
+///
+/// # Stages
+///
+/// saddles (research only) → `build_map` ([`planar::build`]) → `symmetry_detect` →
+/// `refine_subpix` ([`planar::refine_subpixel_alpha`]) → `refine_junc` → `boundary_opt`
+/// (skipped in Fast mode or with `INKVEC_BOPT=0`) → decode (research only) → `symmetry`
+/// ([`symmetry::enforce`]). Stages 10–17 of the crate overview.
+///
+/// # Arguments
+///
+/// * `rgb`: the image composited onto white, sRGB `[0, 1]`, row-major;
+/// * `pal`: the palette, moved into the result;
+/// * `labels`: the **face** map (one id per 4-connected component, from
+///   [`regions::split_components`]), with `n_faces` ids;
+/// * `face_fill`, `face_color`: per face, its fitted fill and its palette index;
+/// * `sigma_noise`: per-channel noise in sRGB units, which sets how far the sub-pixel
+///   refinement trusts each pixel;
+/// * `sw`: the caller's stopwatch, so stage timings continue in one sequence;
+/// * `source_alpha`: the source's alpha per pixel, or `None` on the opaque path;
+/// * `face_alpha_override`: per face, the opacity at which it meets the ground (the
+///   native path's fades and washes); used only with `source_alpha` and when its length
+///   matches `face_color`, otherwise each face takes its ink's `pal.alpha`.
+///
+/// Returns the finished [`ColorTrace`], with `face_fade` empty (the native path fills it).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn finish_color_trace_alpha(
     img: &Rgba,
@@ -1011,6 +1093,8 @@ pub(crate) fn finish_color_trace_alpha(
 
     // Then solve the whole boundary against the image at once: every point above was
     // placed by a one-dimensional argument of its own, and a pixel's value is the area
+    // each face covers in it, so neighbouring points share evidence and have to be moved
+    // together. See `boundary_opt`.
     let boundary_opt = if !opts.fast && inkvec_core::env::switch("INKVEC_BOPT", true) {
         boundary_opt::optimise_alpha(&mut map, rgb, &face_model, opts.boundary_ms, alpha_pair)
     } else {
@@ -1073,6 +1157,10 @@ fn research_lossy_regularize() -> bool {
 }
 
 /// Stopwatch for logging wall-clock timing across tracing stages.
+///
+/// Each [`Stopwatch::mark`] closes one stage: it reports the milliseconds since the
+/// previous mark to stderr when `INKVEC_TIMING` is set, to the thread's stage sink
+/// ([`with_stage_sink`]) and to the progress log, and then restarts the clock.
 pub struct Stopwatch {
     on: bool,
     t: clock::Instant,

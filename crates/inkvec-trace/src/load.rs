@@ -81,6 +81,7 @@ pub fn decode_image(bytes: &[u8]) -> Result<Rgba, TraceError> {
     Ok(from_dynamic(&img))
 }
 
+/// Any decoded image to straight RGBA floats: 8-bit samples divided by 255.
 fn from_dynamic(img: &image::DynamicImage) -> Rgba {
     let rgba = img.to_rgba8();
     let (w, h) = (rgba.width() as usize, rgba.height() as usize);

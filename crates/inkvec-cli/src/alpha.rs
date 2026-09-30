@@ -1,43 +1,47 @@
 //! Transparency, on the way in and on the way out.
 //!
-//! The tracer proper is opaque: palette, labels, unmix and fills are all RGB and never see
-//! an alpha channel. So an RGBA input is **matted** here — composited onto one chosen
-//! opaque colour, with the original alphas kept aside — and the transparency is put back
-//! at the end as holes, `fill-opacity` and alpha ramps.
+//! Under `--no-native-alpha` the tracer proper is opaque: palette, labels, unmix and fills
+//! are all RGB and never see an alpha channel. So an RGBA input is **matted** here —
+//! composited onto one chosen opaque colour, with the original alphas kept aside — and the
+//! transparency is put back at the end as holes, `fill-opacity` and alpha ramps. Native
+//! alpha (the default) still writes the image down over white, but hands the alphas to
+//! the colour trace as well, so its palette finds inks with an opacity of their own. The
+//! pipeline then replaces [`face_alpha`]'s per-face "clear" and opacity verdicts with the
+//! inks' own and keeps its alpha ramps for the faces whose ink is opaque.
 //!
 //! Which matte is chosen matters and is not free: it must differ from the ink it meets or
 //! the silhouette dissolves, and must not differ from whatever a soft edge will be
 //! composited against or that edge bakes wrong. [`choose_matte`] resolves that, and
 //! `docs/ALPHA.md` records what the compromise costs and what would remove it.
+//!
+//! Where each piece is called from:
+//!
+//! * intake, in `lib.rs`: [`pixel_grid`] (undoing a nearest-neighbour upscale), then, once
+//!   every resampling step is done, [`alpha_source`] and [`cutout_args`]; everything after
+//!   traces [`AlphaSource::flat`];
+//! * emit time, in `pipeline.rs`: [`recover_layers`] (`--layers`) and [`face_alpha`], whose
+//!   [`FaceAlpha`] tells the emitter which faces are holes, which are translucent and which
+//!   fade;
+//! * the emitter, `emit.rs`: [`unmatte`] and [`AlphaRamp`] when writing a translucent face.
+//!
+//! Conventions: colours are sRGB-encoded channel values in `[0, 1]` with straight
+//! (unpremultiplied) alpha, as `inkvec_trace::Rgba` holds them, and compositing is the
+//! usual "over" operator applied to those encoded values, `c' = a·c + (1 − a)·M`. Positions
+//! are in px with pixel centres at integer coordinates, so the canvas spans
+//! `-0.5 .. w - 0.5`. Pixel arrays are row-major, index `y · w + x`.
 
 use inkvec_core::Point;
 use inkvec_trace::{gradient, planar};
 
-use crate::Args;
+use crate::args::Args;
+use crate::diag;
 
-/// Resample an oversampled intake down to one pixel per unit of real detail.
-///
-/// This is the whole answer to "make the thresholds work at any resolution", and
-/// it is one change rather than a scale factor threaded through every constant.
-/// The thresholds are in pixels and were tuned where one pixel was one unit of
-/// detail; rather than restate each of them in some other unit, put the input back
-/// into the units they were written in.
-///
-/// It has to be the *point spread* that decides, not the image size. A native
-/// render at 1024 resolves genuine detail — it reads a scale of exactly 1.00 and
-/// is not touched, and it already traces in 1.7 s. An upsample, a blur or a
-/// photograph of a screen carries fewer units of detail than it has pixels, and
-/// those extra pixels are not information: they are what shatters the palette into
-/// a thousand regions and what the tracer then spends a minute describing.
-///
-/// Nothing is lost in the output. The SVG keeps its `width` and `height` in the
-/// original units and only its `viewBox` shrinks, so it renders at exactly the
-/// size it always did — and being a vector, at any other size too.
 /// Uncertainty of a face's mean colour, in sRGB units, for the layer hypothesis.
 ///
-/// The module's default is 1.5/255, the noise of its own tests. Our face colours are
-/// medians over evidence pixels of a matted image and carry more than that: on a synthetic
-/// stack of three translucent discs, 1.5 finds nothing and 3 finds the layer with a
+/// The module (`inkvec_trace::alpha`) defaults to 1.5/255, the noise of its own tests. Our
+/// face colours are medians over evidence pixels of a matted image and carry more than
+/// that: on a synthetic stack of three translucent discs, 1.5 finds nothing and 3 finds
+/// the layer with a
 /// residual of 0.0007. The false-alarm rate grows with the square of this, so it is the
 /// smallest value that finds a layer we know is there.
 const LAYER_SIGMA_SRGB: f64 = 3.0 / 255.0;
@@ -54,12 +58,21 @@ const LAYER_SIGMA_SRGB: f64 = 3.0 / 255.0;
 /// once from the whole face — un-matted per pixel, weighted towards the opaque end where
 /// the division by alpha is well conditioned — is both simpler and better posed than
 /// letting it vary.
+///
+/// The emitter writes it as a `linearGradient` with `gradientUnits="userSpaceOnUse"` from
+/// `p0` to `p1`, so the two points are in the trace's own pixel coordinates.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AlphaRamp {
+    /// Start of the gradient axis, px: the face's most transparent end. The axis points up
+    /// the fitted alpha gradient, so `a0 <= a1` always; see [`fit_alpha_ramp`].
     pub(crate) p0: Point,
+    /// End of the gradient axis, px: the face's most opaque end.
     pub(crate) p1: Point,
+    /// Opacity at `p0`, in `[0, 1]`: the `stop-opacity` of the gradient's first stop.
     pub(crate) a0: f32,
+    /// Opacity at `p1`, in `[0, 1]`: the `stop-opacity` of the second stop.
     pub(crate) a1: f32,
+    /// The one ink colour both stops share, un-matted, as sRGB in `[0, 1]`.
     pub(crate) color: [f32; 3],
 }
 
@@ -70,6 +83,41 @@ pub(crate) struct AlphaRamp {
 /// whose alpha is not linear enough to be called a fade — a face that is opaque in two
 /// places and clear between them is not a ramp, and inventing one would be worse than
 /// baking it.
+///
+/// The idea: if a face fades linearly, its alpha is a tilted plane over the image, and an
+/// SVG linear gradient is exactly that plane restricted to the face. So fit the plane,
+/// check it really explains the alpha, read the two end opacities off it, and recover the
+/// one colour under the fade.
+///
+/// 1. **Plane.** Over the face's interior pixels (the pixel and its four neighbours all
+///    carry label `face`, so the anti-aliased rim does not vote), fit
+///    `a(x, y) ≈ b0 + b1·x + b2·y` by ordinary least squares: minimise
+///    `Σ_i (a_i − b0 − b1·x_i − b2·y_i)²`, where `(x_i, y_i)` is pixel `i`'s centre in px and
+///    `a_i` its source alpha. The normal equations are the 3x3 system `M b = r` with
+///    `M = [[n, Σx, Σy], [Σx, Σx², Σxy], [Σy, Σxy, Σy²]]` and `r = [Σa, Σa·x, Σa·y]`,
+///    solved by [`solve3x3`].
+/// 2. **Axis.** The plane's gradient `g = (b1, b2)` gives the fade's direction
+///    `u = g / |g|` and its slope `|g|` (opacity per px). Projecting every interior pixel
+///    onto `u`, `t_i = x_i·u_x + y_i·u_y`, gives the face's extent along the fade,
+///    `[t_min, t_max]`. The axis ends are `p0 = t_min·u` and `p1 = t_max·u`: points on the
+///    line through the origin, which is enough because a linear gradient is constant along
+///    every line perpendicular to its axis. The end opacities are the plane there,
+///    `a0 = b0 + |g|·t_min` and `a1 = b0 + |g|·t_max`, clamped to `[0, 1]`.
+/// 3. **Tests.** The RMS residual of the plane must be at most `MAX_RESIDUAL` (0.06 in
+///    opacity) and the fade must span at least `MIN_FADE` (0.15), or the face is a wash or
+///    something that is not linear.
+/// 4. **Colour.** Each interior pixel with `a ≥ 0.25` is un-matted,
+///    `C = (c − (1 − a)·M) / a` with `c` its matted colour and `M` the matte, and the
+///    estimates are averaged with weight `a²` (see the comment at that step for why).
+///
+/// Inputs: `labels`, `alpha` and `rgb` are `w · h` row-major arrays, the label map, the
+/// source alpha in `[0, 1]`, and the image matted over `matte` (sRGB `[0, 1]`). `None` when
+/// there are fewer than `MIN_INTERIOR` (64) interior pixels, when the normal equations are
+/// singular (all interior pixels on one line), when the plane is flat (`|g| < 1e-9`), when
+/// either test fails, or when no interior pixel is opaque enough to take the colour from.
+/// The alphas are assumed finite, as a decoded image's are: every test here is written as
+/// "reject when above/below", and a comparison with NaN is false, so a NaN alpha would slip
+/// through all of them and come out as a NaN ramp rather than `None`.
 pub(crate) fn fit_alpha_ramp(
     face: usize,
     labels: &[u16],
@@ -186,6 +234,14 @@ pub(crate) fn fit_alpha_ramp(
 }
 
 /// 3x3 solve by Cramer's rule; `None` when the system is singular.
+///
+/// `x_k = det(M_k) / det(M)`, where `M_k` is `m` with column `k` replaced by `r`. For a 3x3
+/// system this is as cheap as elimination and needs no pivoting code. "Singular" means
+/// `|det(M)| < 1e-12`, an absolute threshold: it is meant for the normal equations of
+/// [`fit_alpha_ramp`], whose determinant grows with the pixel count and the spread of the
+/// coordinates, so a genuine face is far above it and a degenerate one (every pixel on one
+/// line) is at or near zero. A NaN determinant fails the test and gives NaN results rather
+/// than `None`.
 fn solve3x3(m: [[f64; 3]; 3], r: [f64; 3]) -> Option<[f64; 3]> {
     let det = |a: [[f64; 3]; 3]| {
         a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1])
@@ -222,8 +278,17 @@ fn solve3x3(m: [[f64; 3]; 3], r: [f64; 3]) -> Option<[f64; 3]> {
 /// averaging that away would be a real loss. `k` is the largest factor that passes, tried
 /// downwards so an 8x upscale is undone as 8x and not as 2x.
 ///
+/// "Constant" means every channel of every pixel in a block, alpha included, within
+/// `1/512` of the block's top-left pixel: under half an 8-bit level, so for 8-bit input it
+/// is exact equality and only float round-off is forgiven. A factor must divide both sides
+/// exactly, and it is capped at 32 and so that at least 64 px remain on each side; a raster
+/// under 128 px on either side is never unblocked.
+///
 /// Anti-aliased and resampled upscales are a different problem and not this one: their
 /// blocks are not constant, they fail here, and `--sr` is what addresses them.
+///
+/// Called by the intake in `lib.rs` (unless `--no-unblock`), before any other resampling;
+/// it only measures, and the caller downsamples by `k`.
 pub(crate) fn pixel_grid(img: &inkvec_trace::Rgba) -> Option<usize> {
     const MAX_FACTOR: usize = 32;
     let (w, h) = (img.width, img.height);
@@ -253,6 +318,25 @@ pub(crate) fn pixel_grid(img: &inkvec_trace::Rgba) -> Option<usize> {
     }
     None
 }
+
+/// Share of the artwork a candidate matte may hide before it is rejected.
+///
+/// Module-level rather than local to `choose_matte`, because `alpha_source` warns the user
+/// at the same threshold and restated it as a literal `0.33` until 2026-09-08 -- two
+/// numbers that had to agree, with nothing keeping them in agreement.
+pub(crate) const SWALLOWED: f64 = 0.33;
+
+/// Share of the drawn silhouette that, composited over white, the palette cannot tell from
+/// white at all ([`inkvec_trace::color::SAME_INK_DE00`]). Above it the white matte has erased
+/// the artwork's outline and [`alpha_source`] turns the cutout on.
+///
+/// Deliberately not [`SWALLOWED`], whose margin (dE00 10) is for choosing a matte colour:
+/// at that margin a near-white edge counts as lost although the tracer separates it from
+/// white easily, and turning the cutout on for those images made the printer and bride emoji
+/// worse on every ground (`noto-emoji/emoji_u1f5a8` dE00 0.53 -> 0.76). At the same-ink
+/// margin, white marks on a transparent ground read 1.00 and no icon of the 246-icon screen
+/// set reads above 0.32, so a majority is far from both.
+pub(crate) const LOST_TO_WHITE: f64 = 0.5;
 
 /// What the transparent parts of the input are put against before tracing.
 ///
@@ -284,27 +368,32 @@ pub(crate) fn pixel_grid(img: &inkvec_trace::Rgba) -> Option<usize> {
 /// The matte never reaches the output — a face whose source pixels are transparent is
 /// dropped (and punched out as a hole under `--cutout`), and a face the source drew
 /// translucent is un-composited against this same colour before it is written.
-/// Share of the artwork a candidate matte may hide before it is rejected.
 ///
-/// Module-level rather than local to `choose_matte`, because `alpha_source` warns the user
-/// at the same threshold and restated it as a literal `0.33` until 2026-09-08 -- two
-/// numbers that had to agree, with nothing keeping them in agreement.
-pub(crate) const SWALLOWED: f64 = 0.33;
-
-/// Share of the drawn silhouette that, composited over white, the palette cannot tell from
-/// white at all ([`inkvec_trace::color::SAME_INK_DE00`]). Above it the white matte has erased
-/// the artwork's outline and [`alpha_source`] turns the cutout on.
+/// The measurement, in one pass over the pixels with alpha `a ≥ 0.05` (`DRAWN_FLOOR`):
 ///
-/// Deliberately not [`SWALLOWED`], whose margin (dE00 10) is for choosing a matte colour:
-/// at that margin a near-white edge counts as lost although the tracer separates it from
-/// white easily, and turning the cutout on for those images made the printer and bride emoji
-/// worse on every ground (`noto-emoji/emoji_u1f5a8` dE00 0.53 -> 0.76). At the same-ink
-/// margin, white marks on a transparent ground read 1.00 and no icon of the 246-icon screen
-/// set reads above 0.32, so a majority is far from both.
-pub(crate) const LOST_TO_WHITE: f64 = 0.5;
-
-/// The matte, the share of the drawn mass it swallows at [`SWALLOWED`]'s margin, and the
-/// share of it that is indistinguishable from white ([`LOST_TO_WHITE`]).
+/// * the **drawn mass** is the pixels that vote: every pixel with `0.5 ≤ a < 0.999`, every
+///   opaque pixel with a clear 4-neighbour (`a < 0.05`), and every pixel with `a < 0.5`
+///   whose neighbourhood alpha is flat (range at most 0.02) or which touches a solid
+///   neighbour. Opaque pixels deep inside a shape do not vote: no matte reaches them;
+/// * a **glow** is a pixel with `a < 0.5`, alpha varying across its neighbourhood and no
+///   solid neighbour. Glows do not vote, and if they are more than 5% (`SOFT_SHARE`) of
+///   glow plus drawn mass, white is returned at once (with both shares reported as 0);
+/// * a candidate matte `M` **swallows** a drawn pixel of colour `c` when its composite
+///   over `M` is within CIEDE2000 distance 10 (`MARGIN`) of `M` itself:
+///   `ΔE00(a·c + (1 − a)·M, M) < 10`. Its cost is the swallowed share of the drawn mass,
+///   computed on a histogram with 16 levels per channel and 16 of alpha, so each
+///   candidate costs a pass over at most 16⁴ buckets (far fewer in practice) rather than
+///   over the image.
+///
+/// The first candidate, in the order white, black, magenta, green, cyan, orange, whose cost
+/// is under [`SWALLOWED`] is the matte; if none is, the cheapest (the earlier on a tie).
+///
+/// Returns `(matte, white's cost, lost to white)`, the matte as sRGB in `[0, 1]`. The
+/// second value is white's cost whichever matte won, not the winner's. The third is the
+/// share of the drawn mass that, composited over white, is at least 0.9 in every channel
+/// and within [`inkvec_trace::color::SAME_INK_DE00`] of white, which [`alpha_source`]
+/// compares with [`LOST_TO_WHITE`]. An image with nothing drawn returns white and two
+/// zeros.
 pub(crate) fn choose_matte(img: &inkvec_trace::Rgba) -> ([f32; 3], f64, f64) {
     // In order of preference. The two neutrals first, then colours artwork rarely uses.
     const CANDIDATES: [[f32; 3]; 6] = [
@@ -451,8 +540,14 @@ pub(crate) fn choose_matte(img: &inkvec_trace::Rgba) -> ([f32; 3], f64, f64) {
 
 /// The input made opaque over `matte`, and the alphas it had, kept for the emitter.
 pub(crate) struct AlphaSource {
+    /// The input composited over `matte` ([`flatten_over`]): same size, every alpha 1.
+    /// This is the image the rest of the trace sees.
     pub(crate) flat: inkvec_trace::Rgba,
+    /// The input's own alpha per pixel, clamped to `[0, 1]`, row-major, `width · height`
+    /// long.
     pub(crate) alpha: Vec<f32>,
+    /// The colour `flat` was composited onto, sRGB in `[0, 1]`: white unless the matte was
+    /// chosen against the artwork (see [`alpha_source`]).
     pub(crate) matte: [f32; 3],
     /// Whether the transparency is carried out as `--cutout` does: asked for, or turned on
     /// here because the white matte would have swallowed the artwork. Everything downstream
@@ -479,6 +574,14 @@ pub(crate) struct AlphaSource {
 /// [`LOST_TO_WHITE`] of the drawn silhouette is paint the palette cannot tell from white.
 /// Artwork with a soft glow reports nothing lost (white is kept for the glow's sake) and so
 /// stays as it was.
+///
+/// With `native` (native alpha, the default) none of that applies: the image is written
+/// over white, no matte is chosen, and the cutout is always on, because the alpha travels
+/// with the image into the colour trace and the output carries it out.
+///
+/// "Any transparency" means at least one pixel with alpha under 0.999. Unless `quiet`, the
+/// matte and the share of clear pixels (alpha under 0.05) go to stderr, and so does a note
+/// when the cutout was turned on here.
 pub(crate) fn alpha_source(
     img: &inkvec_trace::Rgba,
     quiet: bool,
@@ -493,13 +596,13 @@ pub(crate) fn alpha_source(
         // written down, and the alpha travels beside it into every stage that unmixes.
         // The output carries the transparency out, as the cutout does.
         let (flat, alpha) = flatten_over(img, [1.0, 1.0, 1.0]);
-        if !quiet {
+        diag::stage(quiet, || {
             let clear = alpha.iter().filter(|&&a| a < 0.05).count();
-            eprintln!(
+            format!(
                 "  alpha         native, {:.0}% of the image transparent",
                 100.0 * clear as f64 / alpha.len().max(1) as f64
-            );
-        }
+            )
+        });
         return Some(AlphaSource {
             flat,
             alpha,
@@ -512,21 +615,21 @@ pub(crate) fn alpha_source(
     let cutout = cutout || swallowed;
     let matte = if cutout { chosen } else { [1.0, 1.0, 1.0] };
     let (flat, alpha) = flatten_over(img, matte);
-    if !quiet {
+    diag::stage(quiet, || {
         let clear = alpha.iter().filter(|&&a| a < 0.05).count();
-        eprintln!(
+        format!(
             "  alpha         {} matte, {:.0}% of the image transparent",
             inkvec_trace::color::to_hex(matte),
             100.0 * clear as f64 / alpha.len().max(1) as f64
-        );
-        if swallowed {
-            eprintln!(
-                "  cutout        {:.0}% of the outline is white and would vanish into a white \
+        )
+    });
+    diag::stage(quiet || !swallowed, || {
+        format!(
+            "  cutout        {:.0}% of the outline is white and would vanish into a white \
 matte; carrying the transparency out as --cutout does",
-                100.0 * lost_to_white
-            );
-        }
-    }
+            100.0 * lost_to_white
+        )
+    });
     Some(AlphaSource {
         flat,
         alpha,
@@ -536,7 +639,8 @@ matte; carrying the transparency out as --cutout does",
 }
 
 /// `args` as the rest of the trace must see them once [`alpha_source`] has decided: with
-/// `--cutout` on when it turned the cutout on for this image.
+/// `--cutout` on when it turned the cutout on for this image. Borrowed unchanged in every
+/// other case, so the common path clones nothing.
 pub(crate) fn cutout_args<'a>(
     args: &'a Args,
     src: Option<&AlphaSource>,
@@ -550,6 +654,16 @@ pub(crate) fn cutout_args<'a>(
     }
 }
 
+/// Composite `img` over an opaque `matte` and set its alpha aside.
+///
+/// This is the "over" operator of alpha compositing with an opaque background, per pixel
+/// and channel: `c' = a·c + (1 − a)·M`, where `c` is the pixel's straight (unpremultiplied)
+/// colour, `a` its alpha clamped to `[0, 1]`, and `M` the matte, all sRGB-encoded values in
+/// `[0, 1]`. It blends the encoded values rather than linear light, which is what a browser
+/// does when it paints a translucent SVG fill, and so what [`unmatte`] has to undo.
+///
+/// Returns the opaque image (every alpha 1) and the clamped alphas, row-major, one per
+/// pixel. A NaN alpha is not cleaned up: `clamp` passes it through.
 pub(crate) fn flatten_over(
     img: &inkvec_trace::Rgba,
     matte: [f32; 3],
@@ -577,6 +691,14 @@ pub(crate) fn flatten_over(
 }
 
 /// Undo [`flatten_over`] for a face the source drew translucent.
+///
+/// Solving `c = a·C + (1 − a)·M` for the ink `C` gives `C = (c − (1 − a)·M) / a`, with `c`
+/// the matted colour the tracer measured, `a` the face's opacity and `M` the matte (sRGB
+/// `[0, 1]` throughout). The division amplifies any error in `c` by `1 / a`, so a faint face
+/// comes back with a noisy colour; the result is clamped to `[0, 1]` to keep it paintable,
+/// and `a` is floored at 0.001 so a clear face cannot divide by zero. Written with that
+/// `C` at `fill-opacity = a` over the same matte, the face reproduces `c` (unless the clamp
+/// had to act).
 pub(crate) fn unmatte(c: [f32; 3], a: f32, matte: [f32; 3]) -> [f32; 3] {
     let a = a.max(1e-3);
     [
@@ -587,12 +709,16 @@ pub(crate) fn unmatte(c: [f32; 3], a: f32, matte: [f32; 3]) -> [f32; 3] {
 }
 
 /// The four things the emitter needs to know about transparency, per face.
+///
+/// The three vectors are indexed by face id (the planar map's labels) and are all as long
+/// as the face count.
 pub(crate) struct FaceAlpha {
     /// The source put nothing here: the face is a hole punched out of what is above it.
     pub(crate) clear: Vec<bool>,
     /// One opacity for the whole face, or 1.0 where the alpha is not flat enough to claim.
     pub(crate) opacity: Vec<f32>,
-    /// The colour the image was composited onto before the tracer saw it.
+    /// The colour the image was composited onto before the tracer saw it, sRGB in
+    /// `[0, 1]`; white when the input had no transparency.
     pub(crate) matte: [f32; 3],
     /// A face whose alpha fades linearly, as the gradient an editor would have drawn.
     pub(crate) alpha_ramps: Vec<Option<AlphaRamp>>,
@@ -600,25 +726,33 @@ pub(crate) struct FaceAlpha {
 
 /// Translucent layers: one shape at one opacity, seen against several grounds.
 ///
-/// `alpha::decompose` recovers these from the face partition alone — no alpha channel
-/// needed, because the evidence is that the differences between a layer's faces are
-/// parallel to the differences between the grounds beneath them, scaled by `1 - a`. It
-/// is what turns three overlapping circles at 85% into three circles instead of five
-/// flat patches.
+/// `inkvec_trace::alpha::decompose_with` recovers these from the face partition alone — no
+/// alpha channel needed, because the evidence is that the differences between a layer's
+/// faces are parallel to the differences between the grounds beneath them, scaled by
+/// `1 - a`. A face under a layer of colour `L` and opacity `a` reads
+/// `c_f = a·L + (1 − a)·G_f`, with `G_f` the ground it covers, so two covered faces differ
+/// by `c_f − c_g = (1 − a)·(G_f − G_g)`. It is what turns three overlapping circles at 85%
+/// into three circles instead of five flat patches.
 ///
-/// Two things make it safe to act on. The hypothesis is only entertained where the
-/// cutout is already carrying transparency out, and it is only accepted when it
-/// explains the faces to well inside the uncertainty of a face's own colour: a missed
-/// layer costs parameters, an invented one is a visible error, and the module's own
-/// documentation is emphatic about which way to lean.
+/// It is only accepted when it explains the faces to well inside the uncertainty of a
+/// face's own colour ([`LAYER_SIGMA_SRGB`]): a missed layer costs parameters, an invented
+/// one is a visible error, and the module's own documentation is emphatic about which way
+/// to lean.
 ///
-/// Off by default, and the reason is compactness rather than correctness. The layer
-/// reproduces the image exactly — the faces beneath it are repainted with the ground
-/// and the layer is composited over them — but it *adds* a path rather than removing
-/// any, because the ground pieces it should reunite are still separate faces at
-/// different levels of the paint order. Reuniting them means relabelling and rebuilding
-/// the map, which is the work this waits on. On real art it is rare besides: two of
-/// forty icons in the census.
+/// Off by default (`--layers`), and the reason is compactness rather than correctness. The
+/// layer reproduces the image exactly — the faces beneath it are repainted with the ground
+/// and the layer is composited over them — but it only pays when the ground pieces it
+/// reunites merge back into fewer shapes. The pipeline does that merge and then keeps the
+/// layered document only when it has fewer shapes and no more bytes than the flat one. On
+/// real art it is rare besides: two of forty icons in the census.
+///
+/// Inputs, all indexed by face id: `face_color` (palette index per face), `fills` (a flat
+/// fill's colour is used as the face colour, anything else falls back to the palette ink),
+/// and `traced_labels` (the label map, for each face's pixel area). Adjacency comes from
+/// the map's edges. Both compositing spaces, sRGB-encoded and linear light, are tried and
+/// the one that finds more layers is kept (linear on a tie, as `max_by_key` keeps the last
+/// maximum). Returns `None` when `--layers` is off or no layer was found; unless `quiet`,
+/// each found layer is described on stderr.
 pub(crate) fn recover_layers(
     args: &Args,
     map: &planar::PlanarMap,
@@ -655,7 +789,8 @@ pub(crate) fn recover_layers(
         adjacency.sort_unstable();
         adjacency.dedup();
         // The module's own advice: the compositing space is a property of the file, not a
-        // constant, so try both and keep the fit that explains the faces better.
+        // constant, so try both. "Better" is judged by how many layers each finds; on a tie
+        // `max_by_key` keeps the last, the linear-light fit.
         let sigma_srgb = LAYER_SIGMA_SRGB;
         let best = [
             inkvec_trace::alpha::Space::Srgb,
@@ -675,21 +810,24 @@ pub(crate) fn recover_layers(
         })
         .max_by_key(|(_, an)| an.layers.len());
         if let Some((space, an)) = &best {
-            if !args.quiet && !an.layers.is_empty() {
-                eprintln!(
+            let quiet = args.quiet || an.layers.is_empty();
+            diag::stage(quiet, || {
+                format!(
                     "  layers        {} translucent layer(s) over a continuous ground ({:?})",
                     an.layers.len(),
                     space
-                );
-                for l in &an.layers {
-                    eprintln!(
+                )
+            });
+            for l in &an.layers {
+                diag::stage(quiet, || {
+                    format!(
                         "                {} at {:.3} across {} faces, residual {:.5}",
                         inkvec_trace::color::to_hex(l.color),
                         l.alpha,
                         l.faces.len(),
                         l.residual
-                    );
-                }
+                    )
+                });
             }
         }
         best.map(|(_, an)| an).filter(|an| !an.layers.is_empty())
@@ -698,9 +836,9 @@ pub(crate) fn recover_layers(
     }
 }
 
-/// What the source's alpha says about each face.
-/// or opaque. Upstream works on the image matted opaque, because unmixing a boundary
-/// needs two opaque colours; this is where the transparency comes back.
+/// What the source's alpha says about each face: clear, translucent at one opacity, fading
+/// across it, or opaque. Upstream works on the image matted opaque, because unmixing a
+/// boundary needs two opaque colours; this is where the transparency comes back.
 ///
 /// Two measurements, and they are deliberately different. *Clear* is the mean over
 /// every pixel of the face — the question is only "did the source put anything here",
@@ -709,6 +847,23 @@ pub(crate) fn recover_layers(
 /// alpha for a geometric reason, not a painterly one: taking the mean there would file
 /// every small opaque mark, and every thin stroke, as half-transparent. A face with no
 /// interior — a hairline, a one-pixel sliver — is therefore never thinned.
+///
+/// The rules, with "interior" meaning a pixel whose four neighbours carry the same label
+/// (the image border excluded), and `ā` a mean alpha:
+///
+/// * **clear** when `ā` over all its pixels is under 0.05, or when it has at least 24
+///   interior pixels and their `ā` is under 0.01 (a small hole whose rim lifts the full
+///   mean; see the comment at that step);
+/// * **opacity** is the interior `ā` when there are at least 24 interior pixels, `ā` lies in
+///   `[0.05, 0.98]` and their standard deviation is at most 0.02; otherwise 1.0, meaning
+///   "no single opacity to claim";
+/// * an **alpha ramp** ([`fit_alpha_ramp`]) is tried only under the cutout, and only for a
+///   face that is neither clear nor already given an opacity.
+///
+/// Inputs: `img` is the matted, opaque image the trace saw ([`AlphaSource::flat`]),
+/// `traced_labels` the `w · h` label map, and `face_color` is only read for the face count.
+/// Without an `alpha_src` (an opaque input) every face comes back opaque and not clear,
+/// with a white matte and no ramps. `INKVEC_ALPHADBG` prints the per-face numbers.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn face_alpha(
     img: &inkvec_trace::Rgba,
@@ -788,10 +943,14 @@ pub(crate) fn face_alpha(
         })
         .collect();
     let matte = alpha_src.map(|s| s.matte).unwrap_or([1.0, 1.0, 1.0]);
-    // A face whose opacity fades across it gets a gradient instead of one number. Only
-    // where the cutout is carrying transparency out at all, and only for flat-coloured
-    // faces: a colour ramp and an alpha ramp in one face is a fill model this does not
-    // have, and guessing at it would be worse than baking.
+    // A face whose opacity fades across it gets a gradient instead of one number, only
+    // where the cutout is carrying transparency out at all. The ramp has one colour: a
+    // colour ramp and an alpha ramp in one face is a fill model this does not have, so a
+    // face whose alpha is not a clean linear fade is left baked (see below for why the
+    // face's fitted fill is not consulted).
+    //
+    // `img` is already opaque (matted over `matte`), so compositing it over white changes
+    // no value and only turns it into RGB triples; the ramp fit un-mattes against `matte`.
     let matted_rgb = alpha_src.map(|_| img.composited([1.0, 1.0, 1.0]));
     let alpha_ramps: Vec<Option<AlphaRamp>> = (0..n_faces)
         .map(|f| {
@@ -818,20 +977,19 @@ pub(crate) fn face_alpha(
             )
         })
         .collect();
-    if inkvec_core::env::flag("INKVEC_ALPHADBG") {
-        for f in 0..n_faces {
-            if a_n[f] > 0 {
-                eprintln!(
-                    "  face {f}: {} px, mean alpha {:.4}, interior {} at {:.4}, clear {}, opacity {:.3}",
-                    a_n[f],
-                    a_sum[f] / a_n[f] as f64,
-                    in_n[f],
-                    if in_n[f] > 0 { in_sum[f] / in_n[f] as f64 } else { f64::NAN },
-                    clear[f],
-                    opacity[f]
-                );
-            }
-        }
+    let dump = inkvec_core::env::flag("INKVEC_ALPHADBG");
+    for f in (0..n_faces).filter(|&f| dump && a_n[f] > 0) {
+        diag::debug(dump, || {
+            format!(
+                "  face {f}: {} px, mean alpha {:.4}, interior {} at {:.4}, clear {}, opacity {:.3}",
+                a_n[f],
+                a_sum[f] / a_n[f] as f64,
+                in_n[f],
+                if in_n[f] > 0 { in_sum[f] / in_n[f] as f64 } else { f64::NAN },
+                clear[f],
+                opacity[f]
+            )
+        });
     }
     FaceAlpha {
         clear,

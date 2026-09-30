@@ -1,11 +1,24 @@
 //! What happens to the document after the tracer has finished with it.
 //!
-//! Each of these rewrites finished SVG text rather than geometry, and each is optional and
-//! independent: retarget the viewBox, drop the canvas-filling background face, add a
-//! margin, strip the bytes that carry no meaning. They compose in [`post_process`] in the
-//! order the flags imply.
+//! The last stage of the pipeline (image -> intake -> trace -> fit -> repair -> emit ->
+//! post -> SVG). Each of these rewrites finished SVG text rather than geometry, and each is
+//! optional and independent: drop the canvas-filling background face, strip the bytes that
+//! carry no meaning, add a margin, and stamp the generator comment and metadata. They
+//! compose in [`post_process`] in the order the flags imply; `lib.rs` calls it once on the
+//! finished trace (`finish`, for the command line), and library callers such as the README
+//! example and the monochrome tests call it themselves on what `trace_image` returns.
+//!
+//! [`retarget`] is the one piece that is not an output option: `lib.rs` calls it inside the
+//! trace whenever the raster was resampled or capped, to present the document at the size
+//! that arrived rather than the size that was traced.
+//!
+//! All of it works on the emitter's own text by string matching, so it relies on the
+//! header every emitter writes: a root `<svg ... viewBox="-0.5 -0.5 {w} {h}" width="{w}"
+//! height="{h}">`, with pixel centres at integer coordinates and the canvas spanning
+//! `-0.5 .. w - 0.5`. Outside [`retarget`], whose `w` and `h` are the presentation size,
+//! `w` and `h` below are the traced raster's size in px.
 
-use crate::Args;
+use crate::args::Args;
 
 /// The generator comment and the Dublin Core `<metadata>` block, both injected immediately
 /// after the opening `<svg>` tag on every non-minified output.
@@ -23,19 +36,19 @@ use crate::Args;
 ///   index comment text see the primary brand link.
 /// * `github.com/logolabs/inkvec` — the open-source repository, second.
 ///
-/// The SVG specification explicitly reserves `<metadata>` for machine-readable data; every
-/// renderer ignores it and every major crawler (Google, Bing, DuckDuckGo) reads Dublin Core
-/// structured data. Nothing about the rendered picture changes: no geometry, no colour, no
-/// presentation attribute is touched.
+/// The SVG specification reserves `<metadata>` for machine-readable data and every renderer
+/// ignores it; Dublin Core is the long-established vocabulary for saying who made a file
+/// and where it came from. Nothing about the rendered picture changes: no geometry, no
+/// colour, no presentation attribute is touched.
 const GENERATOR_COMMENT: &str =
     "<!-- Generator: Inkvec (https://logolabs.org) | https://github.com/logolabs/inkvec -->";
 
 /// The Dublin Core `<metadata>` block.
 ///
 /// Uses the `dc:` prefix bound to `http://purl.org/dc/elements/1.1/`, the canonical
-/// Dublin Core namespace that search engines recognise. Two `dc:identifier` triples state
-/// the product website and the source repository. The block is valid SVG 1.1 / SVG 2 and
-/// is invisible to every rasteriser and browser renderer.
+/// Dublin Core namespace. `dc:creator` names the tool and its website, and `dc:source` the
+/// source repository, both about the document itself (`rdf:about=""`). The block is valid
+/// SVG 1.1 / SVG 2 and is invisible to every rasteriser and browser renderer.
 const METADATA_BLOCK: &str = "\
 <metadata>\
 <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" \
@@ -49,6 +62,16 @@ xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\
 
 /// Make an SVG traced at one size render at another, by leaving the geometry alone
 /// and changing only the presentation size.
+///
+/// The viewBox keeps the traced raster's frame; only the root's `width` and `height` become
+/// `w` and `h`, the presentation size in px. A renderer then scales the viewBox to fit, so
+/// a logo traced at a capped 2048 px still displays at the 4000 px it arrived at.
+///
+/// It relies on the emitter's header: the first `width="` in the document belongs to the
+/// root element, and the root's `height="` follows it in the same tag. Everything from the
+/// start of `width="` to the end of the height value is replaced, which is safe because
+/// every emitter writes the two attributes next to each other. A document that does not
+/// match is returned unchanged.
 pub(crate) fn retarget(svg: &str, w: usize, h: usize) -> String {
     // `emit_color` and `emit_bilevel` both write the same header shape, and only
     // the first occurrence is the root element's own size.
@@ -83,8 +106,22 @@ pub(crate) fn retarget(svg: &str, w: usize, h: usize) -> String {
 /// silently -- `--no-background` would simply stop removing the background, with no error
 /// and no warning. Anything that formats a coordinate for comparison against emitted SVG
 /// belongs downstream of `emit_decimals`.
+///
+/// The two tests, with the canvas corners at `(−0.5, −0.5)` and `(w − 0.5, h − 0.5)`:
+///
+/// * a `<rect x y width height>` is the background when all four of its edges are within
+///   `CANVAS_TOL` = 0.25 px of the canvas's: `|x + 0.5|`, `|y + 0.5|`,
+///   `|x + width − (w − 0.5)|` and `|y + height − (h − 0.5)|` are each at most 0.25. A rect
+///   missing any of the four attributes, or with one that does not parse, is not a match;
+/// * a `<path>` is the background when its text contains all four corners, each written as
+///   `x,y` at the emitter's decimal count.
+///
+/// Only the first element that matches is removed, and only `<rect .../>` and
+/// `<path .../>` are looked at; the scan relies on the emitter closing both with `/>`. The
+/// input is the raw emitter output, so this runs before [`minify_svg`] changes how the
+/// numbers are written.
 pub(crate) fn knock_out_background(svg: String, w: usize, h: usize) -> String {
-    let d = crate::emit::emit_decimals(0.0);
+    let d = crate::pathdata::emit_decimals(0.0);
     let (x1, y1) = (w as f64 - 0.5, h as f64 - 0.5);
     // A rectangle fitted to the canvas edges lands a hundredth of a pixel or two off them: a
     // 64 px canvas came back as x=-0.51 y=-0.49 width=64.02 height=63.98, failed a text match
@@ -148,6 +185,20 @@ pub(crate) fn knock_out_background(svg: String, w: usize, h: usize) -> String {
 }
 
 /// Strip unreferenced ids, empty groups and trailing zeros in generated SVG.
+///
+/// Three passes over the text, none of which changes what is drawn:
+///
+/// 1. Every ` id="…"` attribute is dropped unless `#` followed by that id appears
+///    anywhere in the document (a `url(#…)` fill or an `href="#…"`). The test is a plain
+///    substring search, so an id that merely prefixes a referenced one is kept too; a false
+///    positive costs bytes, never a broken reference.
+/// 2. A `<g>` left with no attributes is removed together with its matching `</g>`. Groups
+///    are matched with a stack, so a group that still carries a transform, an opacity or a
+///    referenced id keeps both of its tags and the nesting stays balanced.
+/// 3. Decimal numbers lose their trailing zeros and a bare point: `12.50` → `12.5`,
+///    `3.00` → `3`, `-0.00` → `0`. A token counts as a decimal only with digits on both
+///    sides of the point, and a digit straight after `#` never starts one, so URLs and hex
+///    colours (which have no point) pass through untouched.
 pub(crate) fn minify_svg(svg: &str) -> String {
     // ids and the groups that exist only to carry them
     let mut s = String::with_capacity(svg.len());
@@ -242,6 +293,14 @@ pub(crate) fn minify_svg(svg: &str) -> String {
 /// tracing (`--max-dim`, or an undone pixel-block upscale) is presented at the size that
 /// arrived, and each presented side grows in proportion to its viewBox side. Matching the
 /// presented size against `w` x `h` used to drop the margin silently on every such input.
+///
+/// With `m = margin · max(w, h)` px, the viewBox `(−0.5, −0.5, w, h)` becomes
+/// `(−0.5 − m, −0.5 − m, w + 2m, h + 2m)`. A presented side `d` that equals its viewBox
+/// side is written as the new viewBox side; any other is scaled by the same factor, to
+/// `d · (w + 2m) / w` (and likewise for `h`). All six numbers are written with two decimals.
+/// A margin that is zero, negative or NaN, a document whose root is not the emitter's
+/// `viewBox="-0.5 -0.5 {w} {h}" width="…" height="…"` header, and a size that does not
+/// parse all leave the document exactly as it was.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub(crate) fn with_margin(svg: String, w: usize, h: usize, margin: f64) -> String {
     // Negated deliberately: `--margin nan` should leave the document alone, and it would
@@ -295,6 +354,10 @@ pub(crate) fn with_margin(svg: String, w: usize, h: usize, margin: f64) -> Strin
 /// Called only on non-minified output. Minified SVG is optimised for byte count and
 /// embedding; the comment and metadata are intentionally human-readable and machine-
 /// readable overhead that a minify pass strips on purpose.
+///
+/// The insertion point is the first `>` in the document, which is the end of the root's
+/// opening tag because the emitter starts every document with `<svg` and nothing before it.
+/// A document with no `>` at all is returned unchanged.
 pub(crate) fn annotate(svg: String) -> String {
     // Everything is inserted right after the first `>` that closes the <svg ...> opening
     // tag, so the document's own first bytes are still `<svg` and nothing precedes the root.
@@ -313,6 +376,16 @@ pub(crate) fn annotate(svg: String) -> String {
 }
 
 /// The output options, in the order they compose: background knock-out, minify, margin.
+///
+/// In detail: `--no-background` runs [`knock_out_background`]; then either `--minify` runs
+/// [`minify_svg`] and [`compact_paths`], or, without it, [`annotate`] adds the generator
+/// comment and metadata; last, [`with_margin`] applies `--margin`. The knock-out must come
+/// first because it matches the emitter's unminified numbers, and the margin last because
+/// it matches the emitter's header and writes its own numbers at two decimals.
+///
+/// `svg` is a finished trace as `trace_image` returns it (already retargeted where that was
+/// needed), and `w` by `h` is the raster it was traced at, in px (`Traced::width` and
+/// `Traced::height`), not the presentation size.
 ///
 /// Under `--monochrome` the knock-out stands aside: every emitter that runs then leaves the
 /// ground out itself when asked, and the one black shape can itself visit all four canvas
@@ -346,6 +419,9 @@ pub fn post_process(args: &Args, svg: String, w: usize, h: usize) -> String {
 /// path data and more than that elsewhere, so two decimals is not the precision it chose.
 /// `--minify` promises the same geometry, so it keeps the same geometry;
 /// `inkvec-svgmin --decimals` is where precision is spent for bytes on purpose.
+///
+/// If the writer fails to parse the document, or its result is not strictly shorter, the
+/// input is returned as it was, so this can never make a file larger.
 fn compact_paths(svg: String) -> String {
     match inkvec_svgmin::compact(&svg, &inkvec_svgmin::Options::default()) {
         Ok((out, _)) if out.len() < svg.len() => out,

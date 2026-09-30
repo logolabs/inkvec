@@ -7,8 +7,16 @@
 //! program, and the ring repair and shape harmonization after it do not run. Everything
 //! from the fills onward -- alpha, seams, the emitter, minify -- is shared with quality
 //! mode, so the two write the same kind of document.
+//!
+//! Where it plugs in: `pipeline.rs` asks [`on`] twice, once to set the front end's fast
+//! flag in the colour options and once to pick [`fit`] instead of the per-edge dynamic
+//! program; after emitting, it puts [`report`] at the top of the stats. [`fast_ignored`]
+//! is re-exported from `lib.rs` so Inkvec Studio (`studio/core/src/options.rs`) can check
+//! its own list of Quality-only settings against it. In: the settled [`Args`], and for the
+//! fit the planar map and each face's fill. Out: one fitted path per map edge, and a line
+//! of text for the report.
 
-use crate::{Args, TraceMode};
+use crate::args::{Args, TraceMode};
 use inkvec_fit::{primitives::PrimitiveFit, FittedPath};
 use inkvec_trace::planar::PlanarMap;
 
@@ -19,6 +27,13 @@ pub(crate) fn on(args: &Args) -> bool {
 
 /// Every boundary of the map, fitted by the fast fitter: a closed boundary that is a circle
 /// or an ellipse as that primitive, everything else as lines and cubics.
+///
+/// `fills` is indexed by face id, so the fitter can loosen its tolerance on an edge between
+/// two faces of similar colour or along a gradient (see `inkvec_trace::fast::fit_edges`).
+/// The result is parallel to `map.edges`: entry `i` is edge `i`'s path, in the map's own
+/// pixel coordinates (pixel centres at integers, so the canvas spans `-0.5 .. w - 0.5`),
+/// with `Some` primitive when the edge was recognised as a circle or an ellipse. Each shared
+/// edge is fitted once, so both faces that meet along it draw the same curve.
 pub(crate) fn fit(
     map: &PlanarMap,
     fills: &[inkvec_trace::gradient::FillFit],
@@ -33,6 +48,10 @@ pub(crate) fn fit(
 /// Public so a front end can check its own list of Quality-only settings against this one
 /// (Inkvec Studio's Tune tab hides them in Fast). Black & white and line art take their own
 /// routes, which do not depend on the mode; this list is about the colour trace.
+///
+/// A setting counts as "moved" when it differs from [`Args::default`], so the answer does
+/// not depend on whether fast mode is actually on: callers ask it about a mode they may be
+/// about to switch to. The flags come back in a fixed order, spelled as on the command line.
 pub fn fast_ignored(args: &Args) -> Vec<&'static str> {
     let d = Args::default();
     let mut ignored: Vec<&'static str> = Vec::new();
@@ -70,7 +89,8 @@ pub fn fast_ignored(args: &Args) -> Vec<&'static str> {
 }
 
 /// The report line fast mode writes: what it ran, and every option it was given that only
-/// steers a stage it skips.
+/// steers a stage it skips. The ignored list is [`fast_ignored`]'s, appended only when it is
+/// not empty, so a run on default settings prints the fixed first half alone.
 pub(crate) fn report(args: &Args) -> String {
     let ignored = fast_ignored(args);
     let mut line = "fast mode     Potrace-class fit, flat fills; not run: boundary solve, \

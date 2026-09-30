@@ -674,7 +674,7 @@ fn count(edges: Vec<Edge>, w: usize, h: usize) -> usize {
         n_labels: 2,
     };
     let vars = build_vars(&map);
-    crossings_count(&map, &vars, &vars.start)
+    folds::FoldCounter::new(&map, &vars, &vars.start, &vars.start).count(&vars.start)
 }
 
 #[test]

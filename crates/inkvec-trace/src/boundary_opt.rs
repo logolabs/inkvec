@@ -91,7 +91,7 @@
 //! iterations, when a step buys less than 1e-4 of the energy, or when the caller's time
 //! budget runs out. Nothing is linearised: each trial re-renders the exact coverage.
 //!
-//! Afterwards a fold guard (`crossings_count`) scales the whole displacement back towards
+//! Afterwards a fold guard (`fold_guard`) scales the whole displacement back towards
 //! the start until it introduces no new self-crossing; if even a tenth of it does, the
 //! stage gives up and leaves the map as it was.
 //!
@@ -106,6 +106,8 @@ use inkvec_core::Point;
 
 use crate::gradient::FillModel;
 use crate::planar::PlanarMap;
+
+mod folds;
 
 /// How far one point may move in a single step, in pixels.
 const MAX_STEP: f64 = 0.35;
@@ -493,80 +495,6 @@ fn segments_cross(a: Point, b: Point, c: Point, d: Point) -> bool {
         || (d4 == 0.0 && on(c, d, b))
 }
 
-/// How many pairs of boundary segments cross.
-///
-/// The solve can fold the boundary: on a ribbon two pixels wide the two sides are both
-/// pulled towards the ink between them and can pass through each other. Downstream that
-/// costs far more than the boundary error it bought — the repair stage refits the offending
-/// rings round after round (2.5 s on one logo) and the emitter paints a face over its own
-/// interior. So the displacement is scaled back until no *new* crossing remains.
-///
-/// The count is compared with the count before the solve rather than against zero: the
-/// sub-pixel refinement and the junction solve can already have left a fold behind (which
-/// is what the repair stage exists for), and refusing to improve a boundary because of a
-/// crossing that was already there would give up most of the gain.
-///
-/// Only segments sharing a pixel are compared. A point moves less than a pixel, so a new
-/// crossing is always local. Segments are bucketed by the cells of their bounding box
-/// grown by half a pixel (a segment spanning more than 64 cells is skipped), pairs that
-/// share an unknown are ignored, and each crossing pair is counted once.
-fn crossings_count(map: &PlanarMap, vars: &Vars, pos: &[Point]) -> usize {
-    let mut segs: Vec<(u32, u32)> = Vec::new();
-    for (k, e) in map.edges.iter().enumerate() {
-        let ids = &vars.var[k];
-        let n = ids.len();
-        if n < 2 {
-            continue;
-        }
-        let last = if e.closed { n } else { n - 1 };
-        for i in 0..last {
-            segs.push((ids[i], ids[(i + 1) % n]));
-        }
-    }
-    let mut cells: HashMap<(i64, i64), Vec<u32>> = HashMap::new();
-    for (i, &(a, b)) in segs.iter().enumerate() {
-        let (p, q) = (pos[a as usize], pos[b as usize]);
-        let x0 = (p.x.min(q.x) - 0.5).floor() as i64;
-        let x1 = (p.x.max(q.x) + 0.5).ceil() as i64;
-        let y0 = (p.y.min(q.y) - 0.5).floor() as i64;
-        let y1 = (p.y.max(q.y) + 0.5).ceil() as i64;
-        // A degenerate box would put a segment in every cell; the map never has one.
-        if (x1 - x0) * (y1 - y0) > 64 {
-            continue;
-        }
-        for y in y0..=y1 {
-            for x in x0..=x1 {
-                cells.entry((x, y)).or_default().push(i as u32);
-            }
-        }
-    }
-    let mut found: Vec<(u32, u32)> = Vec::new();
-    for bucket in cells.values() {
-        for (ai, &i) in bucket.iter().enumerate() {
-            for &j in bucket[ai + 1..].iter() {
-                let (s, t) = (segs[i as usize], segs[j as usize]);
-                // Segments sharing a point meet there legitimately.
-                if s.0 == t.0 || s.0 == t.1 || s.1 == t.0 || s.1 == t.1 {
-                    continue;
-                }
-                if segments_cross(
-                    pos[s.0 as usize],
-                    pos[s.1 as usize],
-                    pos[t.0 as usize],
-                    pos[t.1 as usize],
-                ) {
-                    found.push((i.min(j), i.max(j)));
-                }
-            }
-        }
-    }
-    // A segment pair can share more than one pixel, so the same crossing can be seen
-    // several times.
-    found.sort_unstable();
-    found.dedup();
-    found.len()
-}
-
 /// Part of one boundary inside a junction pixel: its vertices in order, each with where it
 /// came from.
 type Chain = Vec<(Point, Prov)>;
@@ -583,6 +511,32 @@ struct Scratch {
     loop_prov: Vec<Prov>,
     /// Pixel corners closing the clipped polygon.
     corners: Vec<Point>,
+    /// Gradient faces' colours at pixel centres already evaluated, keyed by
+    /// `cell << 16 | face` (see [`face_colour`]).
+    colour: HashMap<u64, [f32; 3]>,
+}
+
+/// Face `f`'s colour at the centre of `cell`, i.e. `face[f].color_at(px, py)`.
+///
+/// A flat face is its colour. A gradient face costs several `powf` per call and the
+/// solve asks for the same pixels on every one of its dozens of evaluations, so its
+/// colours are kept in `cache` the first time. The cached value is that call's result, so
+/// the energy is the same to the bit. Not from the literature: plain memoisation.
+#[inline]
+fn face_colour(
+    face: &[FillModel],
+    cache: &mut HashMap<u64, [f32; 3]>,
+    cell: usize,
+    f: usize,
+    px: f64,
+    py: f64,
+) -> [f32; 3] {
+    match &face[f] {
+        FillModel::Flat(c) => *c,
+        m => *cache
+            .entry(((cell as u64) << 16) | f as u64)
+            .or_insert_with(|| m.color_at(px, py)),
+    }
 }
 
 /// The boundary solve's energy, and everything it needs to evaluate it.
@@ -860,8 +814,9 @@ impl Problem<'_> {
             return;
         }
         let e = &self.map.edges[edge as usize];
-        let cl = self.face[e.left as usize].color_at(px, py);
-        let cr = self.face[e.right as usize].color_at(px, py);
+        let cache = &mut scratch.colour;
+        let [cl, cr] =
+            [e.left, e.right].map(|f| face_colour(self.face, cache, cell, f as usize, px, py));
         let contrast = (0..3).map(|k| (cl[k] - cr[k]).abs()).fold(0.0f32, f32::max);
         // The opacities either side, when alpha is a channel -- and only where the colour
         // over white has no contrast to measure: white paint against the clear ground,
@@ -1464,16 +1419,30 @@ fn descend(
 
 /// Scale the whole displacement back until it adds no fold of its own.
 ///
+/// The solve can fold the boundary: on a ribbon two pixels wide the two sides are both
+/// pulled towards the ink between them and can pass through each other. Downstream that
+/// costs far more than the boundary error it bought — the repair stage refits the offending
+/// rings round after round (2.5 s on one logo) and the emitter paints a face over its own
+/// interior. So the displacement is scaled back until no *new* crossing remains.
+///
+/// The count is compared with the count before the solve rather than against zero: the
+/// sub-pixel refinement and the junction solve can already have left a fold behind (which
+/// is what the repair stage exists for), and refusing to improve a boundary because of a
+/// crossing that was already there would give up most of the gain.
+///
 /// With `p⁰` the start and `p` the solution, tries `p⁰ + s(p − p⁰)` for
 /// `s = 1, ½, ¼, …` while `s > 0.1`, and keeps the first whose self-crossing count
-/// ([`crossings_count`]) is no higher than the start's. Returns those positions and `s`,
-/// or `None` when no tried scale is clean.
+/// ([`folds::FoldCounter`], which says exactly which pairs count) is no higher than the
+/// start's. Returns those positions and `s`, or `None` when no tried scale is clean.
 fn fold_guard(map: &PlanarMap, vars: &Vars, pos: &[Point], dbg: bool) -> Option<(Vec<Point>, f64)> {
     let n = vars.start.len();
-    let base = crossings_count(map, vars, &vars.start);
+    // Every position tried lies on the path from the start to `pos`, so one candidate
+    // list serves them all.
+    let folds = folds::FoldCounter::new(map, vars, &vars.start, pos);
+    let base = folds.count(&vars.start);
     let mut scaled = pos.to_vec();
     let mut scale = 1.0;
-    let mut ok = crossings_count(map, vars, &scaled) <= base;
+    let mut ok = folds.count(&scaled) <= base;
     while !ok && scale > 0.1 {
         scale *= 0.5;
         for v in 0..n {
@@ -1482,7 +1451,7 @@ fn fold_guard(map: &PlanarMap, vars: &Vars, pos: &[Point], dbg: bool) -> Option<
                 vars.start[v].y + (pos[v].y - vars.start[v].y) * scale,
             );
         }
-        ok = crossings_count(map, vars, &scaled) <= base;
+        ok = folds.count(&scaled) <= base;
     }
     if dbg {
         eprintln!("  [bopt] folds before {base}, scale kept {scale:.3}, accepted {ok}");

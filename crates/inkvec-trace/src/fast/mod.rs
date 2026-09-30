@@ -252,18 +252,81 @@ pub fn fit_edge(pts: &[Point], closed: bool, cfg: &FastFit) -> (FittedPath, Opti
     (path, None)
 }
 
+/// The image frame, written as what it is: the rectangle `[-0.5, w − 0.5] × [-0.5,
+/// h − 0.5]` of a `width` × `height` raster (pixel centres at integers), as four lines
+/// through its corners in the ring's own order, starting at the first corner the ring
+/// reaches. `None` for anything else: an open edge, a ring with a point off that
+/// rectangle's border, or one that does not pass each corner exactly once.
+///
+/// When one face runs round the whole image border (a transparent icon's clear ground,
+/// or a background colour), the planar map traces the border as one closed ring. Its
+/// points lie on the pixel lattice's outer nodes, which the sub-pixel refinement leaves
+/// in place, so the ring *is* the rectangle; fitting it only loses that. The fit also
+/// cost the most of any edge: the frame was the slowest boundary on 161 of the 246 screen
+/// icons and all 7 of the 2048 px test images (31–38% of the fitter's CPU), and because
+/// [`fit_edge`] drops a ring's first point -- the lattice node the refinement did not
+/// move, here the corner -- the fit came back as four lines and a spurious cubic that
+/// chamfered the start corner: 6 parameters too many on 166 of the 246 screen icons.
+///
+/// Four lines, 8 parameters, O(n) to recognise. Not from the literature: the border of
+/// the raster is known exactly, so there is nothing to estimate. See also: Potrace
+/// (Selinger 2003, <https://potrace.sourceforge.net/potrace.pdf>), which traces a bitmap's
+/// border like any other boundary.
+fn frame_rectangle(pts: &[Point], closed: bool, width: usize, height: usize) -> Option<FittedPath> {
+    if !closed || pts.len() < 4 {
+        return None;
+    }
+    let (x0, y0) = (-0.5, -0.5);
+    let (x1, y1) = (width as f64 - 0.5, height as f64 - 0.5);
+    // Exact comparisons: the border nodes are exact binary fractions, never refined.
+    let on_side = |v: f64, lo: f64, hi: f64| v == lo || v == hi;
+    let within = |v: f64, lo: f64, hi: f64| (lo..=hi).contains(&v);
+    let on_border = |p: &Point| {
+        (on_side(p.x, x0, x1) && within(p.y, y0, y1))
+            || (on_side(p.y, y0, y1) && within(p.x, x0, x1))
+    };
+    if !pts.iter().all(on_border) {
+        return None;
+    }
+    let corners: Vec<Point> = pts
+        .iter()
+        .copied()
+        .filter(|p| on_side(p.x, x0, x1) && on_side(p.y, y0, y1))
+        .collect();
+    // A ring on the border that reaches each corner once is the rectangle.
+    let distinct = |a: &Point, b: &Point| a.x != b.x || a.y != b.y;
+    if corners.len() != 4 || !(0..4).all(|k| (k + 1..4).all(|m| distinct(&corners[k], &corners[m])))
+    {
+        return None;
+    }
+    Some(FittedPath {
+        start: corners[0],
+        segments: corners[1..]
+            .iter()
+            .copied()
+            .chain([corners[0]])
+            .map(inkvec_fit::curves::Segment::Line)
+            .collect(),
+        closed: true,
+    })
+}
+
 /// Fit every edge of a planar map, in parallel. Each shared edge is fitted once and both
 /// of its faces draw the same curve. `fills` is each face's fill; an edge between two faces
 /// of similar colour, or along a gradient, is fitted with looser tolerances.
 ///
 /// An edge's contrast is the OKLab distance between its two faces' representative
 /// colours, 1 when either face is outside `fills` (the image border), and at most
-/// `FAINT / GRADIENT_LOOSEN` when either face is a gradient. The output is in edge order,
+/// `FAINT / GRADIENT_LOOSEN` when either face is a gradient. The image frame of a
+/// `width` × `height` raster, when one face runs round the whole border, is written as
+/// the image rectangle ([`frame_rectangle`]) and not fitted. The output is in edge order,
 /// whatever the thread count.
 pub fn fit_edges(
     edges: &[Edge],
     fills: &[crate::gradient::FillFit],
     cfg: &FastFit,
+    width: usize,
+    height: usize,
 ) -> Vec<(FittedPath, Option<PrimitiveFit>)> {
     use rayon::prelude::*;
     let lab = |f: u16| {
@@ -279,6 +342,9 @@ pub fn fit_edges(
     edges
         .par_iter()
         .map(|e| {
+            if let Some(path) = frame_rectangle(&e.points, e.closed, width, height) {
+                return (path, None);
+            }
             let mut contrast = match (lab(e.left), lab(e.right)) {
                 (Some(a), Some(b)) => a.dist(b) as f64,
                 _ => 1.0,
@@ -421,6 +487,40 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The frame of a raster is its rectangle, four lines from the ring's first corner in
+    /// the ring's own direction; an inner rectangle, an open run and a ring with a point
+    /// off the border are not frames.
+    #[test]
+    fn the_image_frame_is_the_image_rectangle() {
+        let f = polygon::tests::frame(40, 25);
+        let path = frame_rectangle(&f, true, 40, 25).expect("the frame");
+        assert_eq!(path.start, Point::new(-0.5, -0.5));
+        let ends: Vec<Point> = path.segments.iter().map(|s| s.end()).collect();
+        assert_eq!(
+            ends,
+            [
+                Point::new(39.5, -0.5),
+                Point::new(39.5, 24.5),
+                Point::new(-0.5, 24.5),
+                Point::new(-0.5, -0.5)
+            ]
+        );
+        assert!(path.segments.iter().all(|s| matches!(s, Segment::Line(_))));
+        // Traced the other way round, from another corner.
+        let mut back: Vec<Point> = f.iter().rev().copied().collect();
+        back.rotate_left(7);
+        let path = frame_rectangle(&back, true, 40, 25).expect("the frame");
+        assert_eq!(path.start, Point::new(-0.5, 24.5));
+        assert_eq!(path.segments[0].end(), Point::new(39.5, 24.5));
+        assert!(frame_rectangle(&f, false, 40, 25).is_none());
+        assert!(frame_rectangle(&f, true, 41, 25).is_none());
+        let mut off = f.clone();
+        off[10].y += 0.25;
+        assert!(frame_rectangle(&off, true, 40, 25).is_none());
+        let inner: Vec<Point> = f.iter().map(|p| Point::new(p.x + 3.0, p.y + 2.0)).collect();
+        assert!(frame_rectangle(&inner, true, 46, 30).is_none());
     }
 
     #[test]

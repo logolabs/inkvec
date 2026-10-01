@@ -16,7 +16,8 @@
       their borders exactly, and edges placed to a fraction of a pixel — and swaps every
       slow search for a quick, single-pass version. This page follows that route from the
       file to the finished SVG, and explains how the latest round made it faster again
-      without changing a single byte of what it draws.</p>
+      while changing what it draws in one place only: the picture's outer frame, now
+      written as the exact rectangle it is.</p>
     <p class="pairlink">Technical reference: <a href="14-fast-mode.md">14-fast-mode.md</a></p>
   </header>
   <main>
@@ -307,17 +308,34 @@
         and a border between two nearly identical colours is fitted more loosely, because a
         small misplacement there is invisible. Borders are fitted on all cores at once, each
         on its own.</p>
-      <p class="aside">A further round of work on this curve step was finished just after
-        this page was written. It makes the step several times faster, and also writes the
-        picture's outer frame as the exact rectangle it is; the technical page lists what it
-        reports, marked as not yet checked against the code.</p>
+      <p>The picture's outer border is not fitted at all. When one region runs all the way
+        round the edge of the picture — a background colour, or the clear ground of a
+        transparent icon — its outline is exactly the picture's rectangle, so Fast mode now
+        writes it as four straight lines. Fitting it used to be the slowest single job on
+        most pictures, and it left a small cut across one corner: a wasted curve on two icons
+        in three.</p>
+      <p>The search for the fewest straight sides, where most of this step's time went, got
+        three shortcuts that give exactly the same outline. It stops working out the cost of
+        sides that already need more pieces than the best way found so far; it jumps over
+        straight runs of the pixel grid, where the outcome is known in advance; and on very
+        long borders it works out which sides are allowed on all cores at once, then chooses
+        among them in the usual order. The circle and ellipse check stopped computing a
+        score that nothing read, and now starts its search for an ellipse from one good
+        guess instead of five. Together, the curve step became two to five times faster,
+        the most on the largest pictures.</p>
+      <p class="aside">The outer frame is the one change here that alters the drawing on
+        purpose, and only on pictures with a coloured background: a transparent icon's clear
+        ground is not drawn, so there it only saves time. The single starting guess for
+        ellipses changed no file in the test sets, but unlike the other shortcuts it is not
+        proven to give the same answer, so the quality check judged it instead.</p>
     </section>
 
     <section>
-      <h2>Faster, and not one byte different</h2>
+      <h2>Faster, with the drawing held fixed</h2>
       <p>Every change to the steps described above was made with the output held fixed (the
-        outer-frame change in the curve step, mentioned just above, is the one deliberate
-        exception, and belongs to the later round). Each rewritten step
+        outer-frame change in the curve step, described just above, is the one deliberate
+        exception, and the ellipse starting guess was judged rather than proven). Each
+        rewritten step
         keeps the code it replaced as a reference, the tests compare the two on random and
         awkward inputs, and the finished SVG files were compared byte for byte across
         hundreds of test images in both modes. Measured per image on a busy development
@@ -333,9 +351,15 @@
             <tr><td>Fades, border map, edge placement</td><td>2048 px</td><td class="num">42 ms</td><td class="num">13 ms</td></tr>
             <tr><td>The same, plus transparency, on a transparent image</td><td>2048 px</td><td class="num">130 ms</td><td class="num">21 ms</td></tr>
             <tr><td>The same</td><td>128 px</td><td class="num">1.8 ms</td><td class="num">1.2 ms</td></tr>
+            <tr><td>Drawing the curves</td><td>2048 px</td><td class="num">26.3 ms</td><td class="num">5.4 ms</td></tr>
+            <tr><td>Drawing the curves</td><td>128 px</td><td class="num">1.00 ms</td><td class="num">0.46 ms</td></tr>
           </tbody>
         </table>
       </div>
+      <p>The curve rows come from one run of all the changes together; the others measure
+        each step's own work against its own earlier run. Measured the same way, the whole
+        trace before the curves went from 161.5 ms to 31.0 ms on a 2048 px picture, and from
+        4.3 ms to 2.5 ms on a 128 px icon.</p>
       <p>The shared middle is shared: Quality mode gained the border map and edge placement
         speed-ups too.</p>
     </section>

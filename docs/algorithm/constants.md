@@ -311,11 +311,10 @@ half-integer lattice points (`inkvec-trace/src/symmetry.rs:19-21,156-163,243-245
 
 ## 14 — Fast mode ([14-fast-mode.md](14-fast-mode.md))
 
-Fast mode's own stages, under `inkvec-trace/src/fast/`. The palette, clean-up and ramp
-rows carry line numbers; the fitter rows name the file only, because the fitter files were
-rewritten again by the fitter round merged into `integ/fast` after this table was written
-(see 14-fast-mode.md). Several rows only choose a schedule (serial or parallel, how the
-work is cut): those say so, and none of them can change the output.
+Fast mode's own stages, under `inkvec-trace/src/fast/`. Several rows only choose a
+schedule (serial or parallel, how the work is cut) or where an exact shortcut applies:
+those say so, and none of them can change the output. The fitter round of 2026-09-30 added
+`RUN_MAX_STEP`, `RUN_MIN_TOL`, `PARALLEL_MIN` and `PARALLEL_CHUNK` (all in `polygon.rs`).
 
 | name | value | file:line | controls | basis |
 |---|---|---|---|---|
@@ -345,12 +344,20 @@ work is cut): those say so, and none of them can change the output.
 | `SAMPLE_PIXELS` / `CHECK_SAMPLES` | 65,536 / 4,096 | `inkvec-trace/src/fast/bands.rs:48-50` | pixels gathered per cluster for its fit / sampled by the acceptance test | motivated / none |
 | `RATIO` / `SLACK` | 1.25 / 1/255 | `inkvec-trace/src/fast/bands.rs:54, 61` | a gradient is kept when its RMS residual is at most `RATIO` x the bands' plus `SLACK` | motivated |
 | `FLAT_ENOUGH` / `INVISIBLE` | 1.5/255 / 2/255 | `inkvec-trace/src/fast/bands.rs:56, 59` | two bands this well explained stay flat / a gradient this close is kept regardless | motivated |
-| `FastFit` defaults | `poly_tol` 0.5, `vertex_box` 0.5, `corner_tol` 0.25, `opt_tol` 0.2, `flat` 0.05 px | `inkvec-trace/src/fast/mod.rs` | the fitter's tolerances: polygon, vertex box, corner test (Potrace's `alphamax` as a distance), curve merge (Potrace's `opttolerance`), cubic-to-line | none |
-| `FAINT` / `GRADIENT_LOOSEN` / `MAX_LOOSEN` | 0.12 / 1.6 / 3.0 | `inkvec-trace/src/fast/mod.rs` | tolerances grow as `FAINT / contrast` up to `MAX_LOOSEN` on a faint boundary; a gradient face's boundary is fitted as if its contrast were at most `FAINT / GRADIENT_LOOSEN` | motivated |
-| `MAX_SPAN` (polygon) | 160 points | `inkvec-trace/src/fast/polygon.rs` | most points one polygon side may span | motivated (without it the scan is quadratic on long straight boundaries) |
-| `CORNER_COS` (`denoise`) | 0.64 (50 deg) | `inkvec-trace/src/fast/smooth.rs` | two-step turn above which the smoothing filter keeps a point as a corner | none |
-| `JOIN_MAX` | 0.5 px | `inkvec-trace/src/fast/smooth.rs` | largest distance a join is moved off its side's line towards the data | none |
-| `RIDGE` | 1e-3 | `inkvec-trace/src/fast/smooth.rs` | pull towards the polygon's own vertex in the constrained vertex placement | motivated (keeps parallel sides well posed) |
-| `MAX_TURN` / `MAX_RUN` | 3.10 rad / 24 pieces | `inkvec-trace/src/fast/curve.rs` | most a merged cubic may turn / longest run one merge may cover | motivated |
-| `TOL` (prims) | 0.3 px | `inkvec-trace/src/fast/prims.rs` | largest distance from any point to an accepted circle or ellipse | none |
-| `ROUGHLY_ROUND` / `MIN_POINTS` / `MIN_RADIUS` / `MIN_AREA_SHARE` | 0.6 / 12 / 1.5 px / 0.8 | `inkvec-trace/src/fast/prims.rs` | gates of the primitive cascade | motivated (`MIN_AREA_SHARE` rejects a sliver along an arc) / none |
+| `FastFit` defaults | `poly_tol` 0.5, `vertex_box` 0.5, `corner_tol` 0.25, `opt_tol` 0.2, `flat` 0.05 px | `inkvec-trace/src/fast/mod.rs:91-101` | the fitter's tolerances: polygon, vertex box, corner test (Potrace's `alphamax` as a distance), curve merge (Potrace's `opttolerance`), cubic-to-line | none |
+| `FAINT` / `GRADIENT_LOOSEN` / `MAX_LOOSEN` | 0.12 / 1.6 / 3.0 | `inkvec-trace/src/fast/mod.rs:199, 201, 203` | tolerances grow as `FAINT / contrast` up to `MAX_LOOSEN` on a faint boundary; a gradient face's boundary is fitted as if its contrast were at most `FAINT / GRADIENT_LOOSEN` | motivated |
+| first-point drop (`fit_edge`) | rings of 8 points or more | `inkvec-trace/src/fast/mod.rs:233` | a ring that long drops its first point, the lattice node the refinement left up to 0.6 px off the edge | none |
+| image frame (`frame_rectangle`) | the rectangle `[-0.5, w - 0.5] x [-0.5, h - 0.5]` | `inkvec-trace/src/fast/mod.rs:283-284` | a ring every point of which lies exactly on this border, passing each corner once, is written as its four lines instead of fitted | derived (pixel centres at integers; the border nodes are exact and never refined) |
+| `MAX_SPAN` (polygon) | 160 points | `inkvec-trace/src/fast/polygon.rs:204` | most points one polygon side may span | motivated (without it the scan is quadratic on long straight boundaries) |
+| `RUN_MAX_STEP` | 4.0 px | `inkvec-trace/src/fast/polygon.rs:209` | longest lattice step the polygon scan takes in closed form | derived (bounds the step in the closed form's exactness proof; points are about 1 px apart, so it never binds); speed only |
+| `RUN_MIN_TOL` | 1/16 px | `inkvec-trace/src/fast/polygon.rs:213` | smallest tolerance at which lattice runs are scanned in closed form (the fitter's own is at least 0.5 px) | derived (bounds the proof's margins); speed only |
+| admission slack (`Cone::admits`) | 1e-9 | `inkvec-trace/src/fast/polygon.rs:156` | how far outside the cone a side's direction may fall (cross products) and still be admitted | none (the closed-form proof shows its margins are far beyond it) |
+| `PARALLEL_MIN` (polygon) | 2048 points | `inkvec-trace/src/fast/polygon.rs:502` | boundaries this long scan their anchors in parallel before the sequential relaxation | measured (phase-1 replay: none of 6,645 screen edges, 34 of 564 at 2048 px, which took 68% of the fit's time); schedule only |
+| `PARALLEL_CHUNK` | 128 anchors | `inkvec-trace/src/fast/polygon.rs:505` | anchors per parallel task (rayon `with_min_len`) | motivated (enough that a task outweighs its scheduling); schedule only |
+| `CORNER_COS` (`denoise`) | 0.64 (50 deg) | `inkvec-trace/src/fast/smooth.rs:277` | two-step turn above which the smoothing filter keeps a point as a corner | none |
+| `JOIN_MAX` | 0.5 px | `inkvec-trace/src/fast/smooth.rs:280` | largest distance a join is moved off its side's line towards the data | none |
+| `RIDGE` | 1e-3 | `inkvec-trace/src/fast/smooth.rs:169` | pull towards the polygon's own vertex in the constrained vertex placement | motivated (keeps parallel sides well posed) |
+| `MAX_TURN` / `MAX_RUN` | 3.10 rad / 24 pieces | `inkvec-trace/src/fast/curve.rs:21, 24` | most a merged cubic may turn / longest run one merge may cover | motivated |
+| `TOL` (prims) | 0.3 px | `inkvec-trace/src/fast/prims.rs:20` | largest distance from any point to an accepted circle or ellipse; `2 * TOL` is the screen for the Kasa circle and Taubin's conic | none |
+| `ROUGHLY_ROUND` / `MIN_POINTS` / `MIN_RADIUS` / `MIN_AREA_SHARE` | 0.6 / 12 / 1.5 px / 0.8 | `inkvec-trace/src/fast/prims.rs:23, 25, 27, 30` | gates of the primitive cascade | motivated (`MIN_AREA_SHARE` rejects a sliver along an arc) / none |
+| point weight (prims) | sigma 0.5 px | `inkvec-trace/src/fast/prims.rs:164` | the per-point sigma every circle and ellipse fit in the primitive test uses | none |

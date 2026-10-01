@@ -451,12 +451,20 @@ the same *relative* deviation — now `s` times larger in raw pixels, because th
 itself is `s` times bigger — pass the same test it would have passed at 128 px.
 
 Fast mode's fitter reads neither these polylines nor their sigmas: it fits the map's edges
-directly, in pixels, with its own tolerances (see `14-fast-mode.md`). **Unverified:** the
-Fast fitter round (merged into `integ/fast` at `5aa2566`, not yet on the branch this page
-was written on) is reported by its merge notes to stop building the content-unit
-polylines, and so to stop calling `content_scale`, in Fast mode unless `--editability` is
-set, whose structure passes read them; on this branch `fit_boundaries`
-(`crates/inkvec-cli/src/pipeline.rs`) still builds them in both modes.
+directly, in pixels, with its own tolerances (see `14-fast-mode.md`). So in Fast mode
+`fit_boundaries` (`crates/inkvec-cli/src/pipeline.rs:619-671`) builds the content-unit
+polylines, the per-edge λ multipliers and the `content_scale` they need only when something
+reads them: `--editability`, whose passes read the polylines, or the research build's
+structural baseline (`INKVEC_STRUCTURAL`). The condition is
+`need_polys = !fast || args.editability || structural` (`pipeline.rs:647-648`); otherwise
+`Fits::polys` and `Fits::lambda_scales` are empty, and the fitted paths, which depend on
+neither, are unchanged (commit `9f290b6`, byte-identical; 0.47 ms of the fit stage at
+2048 px). Quality builds them as before. Fast mode does still call `content_scale` once,
+through `fit_config` (`crates/inkvec-cli/src/units.rs:92-98`, called from
+`crates/inkvec-cli/src/lib.rs:639` for every trace, whatever the mode): it returns 1.0 at
+once unless `--content-units` is set, and under that flag, which Fast lists among the
+options it ignores (`crates/inkvec-cli/src/fast.rs:68`), it still runs the scale's two
+raster passes there.
 
 **`fit_config`** (`lib.rs:122-136`) goes further: it also multiplies `--precision` by `s`
 before deriving `lambda`, and then multiplies the resulting `lambda` by `s` again:

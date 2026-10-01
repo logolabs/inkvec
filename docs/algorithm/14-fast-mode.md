@@ -3,19 +3,23 @@
 > A second route through the pipeline: the same planar map, sub-pixel refinement and
 > emitter as Quality mode, with every expensive search replaced by a one-pass version and
 > the curve fitter replaced by a Potrace-class one — and, since the 2026-09-30 round, each
-> of its own stages computed on row runs, in parallel where it pays, to the same bytes.
+> of its own stages computed on row runs, in parallel where it pays, to the same bytes, but
+> for the image frame, which is now written as the image rectangle.
 
 **Source:** `crates/inkvec-trace/src/fast/` — `front.rs` (the front end), `palette.rs`,
 `faces.rs` and `faces/runs.rs` (the clean-up), `bands.rs` (ramps), `mod.rs`, `polygon.rs`,
-`smooth.rs`, `curve.rs` and `prims.rs` (the fitter); `crates/inkvec-cli/src/fast.rs` (the
-command line's side). The stages it shares are documented in `01-intake.md`,
+`smooth.rs`, `curve.rs` and `prims.rs` (the fitter), `replay.rs` (a test-only replay of
+dumped fitter inputs); `crates/inkvec-fit/src/primitives/ellipse.rs` (`taubin_ellipse`,
+`fit_ellipse_seeded`, which the fitter's primitive test calls);
+`crates/inkvec-cli/src/fast.rs` (the command line's side). The stages it shares are
+documented in `01-intake.md`,
 `06-planar-map.md`, `07-subpixel.md`, `10-symmetry.md` and `13-emit.md`.
 **Entry points:** `--mode fast` (`TraceMode::Fast`, `crates/inkvec-cli/src/args.rs:21-29`,
 default `quality`). The trace crate dispatches to `fast::trace_color` or, for an image
 traced with its transparency, `fast::trace_color_native` (`fast/front.rs:17-29`) when
 `ColorOptions::fast` is set (`crates/inkvec-trace/src/lib.rs:290-302`); the command line
 fits the result with `fast::fit` (`crates/inkvec-cli/src/fast.rs`), which calls
-`inkvec_trace::fast::fit_edges` (`fast/mod.rs`).
+`inkvec_trace::fast::fit_edges` (`fast/mod.rs:318-365`) with the map's width and height.
 **Pipeline position:** it replaces stages 03–05 (palette, regions, gradients) with its own
 front end; shares stages 01, 06, 07, 10 and 13; skips 08 (the boundary solve,
 `lib.rs:1137`) and 09 (decode, `lib.rs:1152`); and replaces 11 (curve fitting) with its own fitter,
@@ -38,7 +42,11 @@ command line describes the trade as "several times faster, a little less faithfu
 
 The round of 2026-09-30 rewrote Fast's own stages and the stages it shares for speed,
 **with the output held fixed**: every rewrite is exact, keeps the code it replaced as a test
-oracle, and was byte-compared on the benchmark sets. This page describes the pipeline as it
+oracle, and was byte-compared on the benchmark sets. Two changes in the fitter are the
+exceptions, and the quality gate judged them instead (§6): the image frame is written as the
+image rectangle, which changes opaque images with a background face, and the orthogonal
+ellipse starts from the algebraic conic alone, which changed no file on the gate but is not
+provably identical. This page describes the pipeline as it
 stands after that round, stage by stage, with what each stage computes in the field's
 standard terms, the method, its citations as the code's doc comments label them, and the
 measured costs before and after.
@@ -46,7 +54,11 @@ measured costs before and after.
 **How the numbers were measured.** Stage timings come from the implementing branches' merge
 notes and the research reports of 2026-09-30, on the development machine (an 8-core Ryzen 7
 5800X, shared with other work, so milliseconds are approximate and counts and ratios are the
-reliable part). The sets: *screen*, 246 icons at 128 × 128 (241 of them RGBA, traced with
+reliable part). The combined figures — every branch of the round together — come from one
+run of `main` at `55ee4e0` against the merged `integ/fast` tip, per image, mean ms. The
+fitter's stage figures marked "replay" come from the phase-1 replay: 11,021 map edges dumped
+by the research build and fitted again on one thread without the engine (`fast/replay.rs`).
+The sets: *screen*, 246 icons at 128 × 128 (241 of them RGBA, traced with
 native alpha); *held_a*, 156 held-out icons; *s512*, 58 images at 512 px; *big*, 7 opaque
 images (six at 2048 × 2048 and a 1672 × 941 masthead); *bigalpha*, 3 transparent images at
 2048 px; *flat*, one flat logo at 512 px. "Byte-identical" means the SVG files compared equal
@@ -76,7 +88,7 @@ fitter; one SVG document out of the emitter. Two differences in what comes out:
 | 3 | region clean-up and faces | `slivers`, `despeckle`, `split` | `fast/faces.rs`, `fast/faces/runs.rs` | 04 (regions) | 76.2 → 3.86 ms at 2048 px; 0.50 → 0.09 ms at 128 px |
 | 4 | ramps | `ramps` | `fast/bands.rs` | 05 (gradients) | in the shared totals below |
 | 5 | planar map and refinement | `build_map`, `symmetry_detect`, `refine_subpix`, `refine_junc`, `symmetry` | `planar.rs`, `planar/*.rs`, `symmetry.rs` | shared (06, 07, 10) | ramps + map + refinement: 42 → 13 ms at 2048 px opaque |
-| 6 | Potrace-class fitter | `fit_dp` | `fast/mod.rs`, `polygon.rs`, `smooth.rs`, `curve.rs`, `prims.rs` | 11, 12 | see §6 |
+| 6 | Potrace-class fitter | `fit_dp` | `fast/mod.rs`, `polygon.rs`, `smooth.rs`, `curve.rs`, `prims.rs` | 11, 12 | combined: 26.27 → 5.42 ms at 2048 px opaque; 1.00 → 0.46 ms at 128 px (§6) |
 | 7 | emit | `fills`, `emit` | `cli/pipeline.rs`, `cli/alpha.rs`, `cli/emit.rs` | shared (13) | with stage 5 on transparent images: 130 → 21 ms at 2048 px |
 
 Whole-trace effect, each branch measured on its own against its own baseline run, so the
@@ -84,6 +96,18 @@ figures below are not additive: the clean-up round took
 `trace_total` at 2048 px from 193 to 116 ms; the palette-and-intake round took it from 179 to
 131 ms and the process's wall time from 282 to 203 ms. At 128 px the palette round took
 `trace_total` from 4.34 to 2.80 ms.
+
+Measured together, `main` `55ee4e0` against the merged tip, per image, mean ms.
+`trace_total` is the stopwatch mark after the trace crate returns (stages 2–5; set in
+`run_color_impl`, `crates/inkvec-cli/src/pipeline.rs`); `fit_dp` is the fit (stage 6) plus
+what `finish_color` does before it:
+
+| set | `fit_dp` | `trace_total` |
+|---|---|---|
+| 2048 px opaque (7 images) | 26.27 → 5.42 | 161.5 → 31.0 |
+| 2048 px transparent (3) | 23.03 → 7.49 | 157.5 → 26.2 |
+| 512 px (51) | 5.66 → 1.79 | 17.1 → 6.6 |
+| 128 px (246 icons) | 1.00 → 0.46 | 4.29 → 2.48 |
 
 ## How it works
 
@@ -442,111 +466,299 @@ a lattice path of pixel corners, where these points already sit at their measure
 positions, so every lattice test becomes a metric one (the module overview of `fast/mod.rs`
 and of `polygon.rs`). "Written from the paper; no Potrace or Trazor source was read or used."
 
-What follows describes the fitter as it is on the branch this page was written on (the base
-of the 2026-09-30 round). The fitter round of the same date, merged into `integ/fast` later,
-changes how several of these steps are computed; see "The fitter round of 2026-09-30" at the
-end of this section.
+This section describes the fitter as it stands after the fitter round of 2026-09-30, which
+changed how the polygon and the primitive test are computed and writes the image frame as
+the image rectangle; "The fitter round of 2026-09-30", at the end of the section, lists each
+change and how it was checked.
 
-**Per edge, in parallel** (`fit_edges`, `fast/mod.rs`): the edges are fitted as a rayon
-parallel map, output in edge order whatever the thread count. Each edge's tolerances depend on
-the OKLab contrast between its two faces: at or above `FAINT = 0.12` they are as given; below,
-every distance tolerance but `flat` grows as `FAINT / contrast`, up to 3×, because where the
-two sides are close in colour a misplaced boundary costs little; a boundary of a gradient face
-is fitted as if its contrast were at most `FAINT / 1.6` (`FastFit::for_contrast`). The
-defaults (`FastFit::default`): polygon tolerance 0.5 px, vertex box 0.5 px, corner tolerance
-0.25 px (Potrace's `alphamax` as a distance), merge tolerance 0.2 px (Potrace's
-`opttolerance`), and 0.05 px for a cubic to count as a line. A closed edge of 8 points or
-more drops its first point, the lattice node the refinement leaves up to 0.6 px off the edge
-(`fit_edge`).
+**Per edge, in parallel** (`fit_edges`, `fast/mod.rs:318-365`): the edges are fitted as a
+rayon parallel map, output in edge order whatever the thread count. The image frame is
+recognised first and written without fitting (below). Every other edge's tolerances
+depend on the OKLab contrast between its two faces' representative colours (1 when either
+face is outside the fills, at the image border): at or above `FAINT = 0.12` they are as
+given; below, every distance tolerance but `flat` grows as `FAINT / contrast`, up to
+`MAX_LOOSEN = 3`×, because where the two sides are close in colour a misplaced boundary costs
+little; a boundary of a gradient face is fitted as if its contrast were at most
+`FAINT / GRADIENT_LOOSEN = FAINT / 1.6`, because a fitted gradient is a coarser model of its
+pixels than a flat ink and its boundary comes back rougher (`FastFit::for_contrast`,
+`mod.rs:195-219`). The defaults (`FastFit::default`, `mod.rs:91-101`): polygon tolerance
+0.5 px, vertex box 0.5 px, corner tolerance 0.25 px (Potrace's `alphamax` as a distance),
+merge tolerance 0.2 px (Potrace's `opttolerance`), and 0.05 px for a cubic to count as a
+line. A closed edge of 8 points or more drops its first point, the lattice node the
+refinement leaves up to 0.6 px off the edge (`fit_edge`, `mod.rs:230-237`).
 
-The steps, per edge (`fit_edge`, `fit_points`):
+The steps follow the order of the module overview (`fast/mod.rs:43-50`): `fit_edges` →
+`frame_rectangle`, then `fit_edge` → `prims::primitive`, then `fit_denoised`.
 
-1. **Primitives** (`prims::primitive`), closed edges only, on the denoised points: a cascade
-   of cheap tests before expensive fits. Kåsa's algebraic circle fit (one linear solve)
-   rejects anything not roughly round; when it lies within 0.6 px of every point, a circle is
-   accepted if the orthogonal-distance circle fit (Levenberg–Marquardt) lies within 0.3 px of
-   every point and the ring encloses at least 80% of its area; otherwise a bound on the
-   ring's span and area rules most boundaries out of an ellipse before any ellipse fit, and
-   an ellipse is accepted when Taubin's algebraic ellipse
-   lies within 0.6 px of every point and the orthogonal-distance ellipse within 0.3 px, with
-   both radii at least 1.5 px. The primitive is drawn as four cubics, the standard
-   approximation of a quarter arc with control arms `k = 4/3 · tan(Δt / 4)`. Rounded
-   rectangles are left to the curve fit.
-2. **Denoise** (`smooth::denoise`): a `[1 2 1] / 4` binomial low-pass along the boundary,
-   which removes the 0.1 px alternation the lattice leaves in refined points and moves a
-   curve of radius `r` by only `1 / 4r` px; a point that turns sharply over two steps each way
-   (more than 50°) is kept as a corner, and the ends of an open boundary, which are junctions,
-   stay put.
-3. **Optimal polygon** (`polygon::open`, `polygon::closed`; Selinger §2.2): the fewest
-   straight sides that stay within `poly_tol` of every point, and among those the one closest
-   to the points. A side `i → j` is admissible when the direction `p_j − p_i` lies in the
-   *cone* of directions from `p_i` that pass within `tol` of every point between them (each
-   point narrows the cone by `asin(tol / r)`), no point has fallen back towards `p_i` by more
-   than `tol`, and it spans at most 160 points. A dynamic program over vertices minimises
-   `(sides, Σ squared distances)` lexicographically, the distances read in `O(1)` from prefix
-   sums. A closed ring is cut at its sharpest point and solved as an open run.
-4. **Vertex adjustment** (`smooth::adjust_vertices`; Selinger §2.3.1): each side gets the
-   total-least-squares line through the points it spans, and each interior vertex moves to the
-   point minimising its two sides' squared distances within a box of half-width `vertex_box`
-   around its polygon position, with a small ridge towards that position so parallel sides stay
-   well posed. The ends of an open run stay exactly where they are.
-5. **Smoothing into pieces** (`smooth::pieces`; Selinger §2.3.2): one join per side, moved off
-   the side's line to where the points are (by at most 0.5 px, since a curve drawn through the
-   unmoved midpoints would shrink every round shape), and at each vertex the cubic from join to
-   join, tangent to both sides, with its two arm lengths fitted to the points between the joins
-   by Schneider's tangent-constrained Bézier fit (`curve::fit`) and capped so neither control
-   point passes the vertex (Potrace's `alpha ≤ 1`). The vertex is a *corner* — two line pieces —
-   when that cubic misses the points by more than `corner_tol` and by more than twice what the
-   polyline through the vertex misses them by.
-6. **Curve-run optimisation** (`curve::optimise`; Selinger §2.4, Potrace's `opticurve`): runs of
-   smooth pieces between corners are merged where one cubic says the same thing — a run that
-   turns one way, by less than 3.10 rad in total, of at most 24 pieces, whose merged cubic
-   (same end points and tangents, arms fitted to samples of the pieces) stays within `opt_tol`
-   of every sample. A dynamic program takes the fewest cubics per run.
-7. **Segments** (`curve::to_segments`): a cubic whose control points lie within 0.05 px of its
-   chord, and project inside it, is written as a line; consecutive collinear lines are joined;
-   the ends are pinned to the junctions exactly.
+**First, the image frame** (`frame_rectangle`, `mod.rs:259-316`). When one face runs round
+the whole image border — a transparent icon's clear ground, or a background colour — the
+planar map traces the border as one closed ring on the lattice's outer nodes, which the
+sub-pixel refinement leaves in place, so the ring *is* the rectangle
+`[-0.5, w − 0.5] × [-0.5, h − 0.5]` (pixel centres at integers). A closed edge of at
+least 4 points whose every point lies on that rectangle's border, and which passes each
+of its four corners exactly once, is written as four lines through the corners, in the
+ring's own direction, from the first corner the ring reaches: 8 parameters, `O(n)` to
+recognise. The comparisons are exact, because the border nodes are exact binary
+fractions the refinement never moves. Anything else — an open edge, a ring with a point
+off the border, an inner rectangle — goes on to the fit.
 
-Boundaries too short for a polygon (fewer than 3 points, or 4 for a ring) are drawn as straight
-lines through their points.
+**Then, for every other edge** (`fit_edge`, `fit_denoised`):
 
-**Citations**, as the doc comments on this branch name them: Selinger, "Potrace: a
-polygon-based tracing algorithm", 2003 (§2.2, §2.3.1, §2.3.2, §2.4); Schneider's Bézier fit
-with fixed end tangents (the research report cites Schneider's 1990 Graphics Gems code,
-`FitCurves.c`); Kåsa's algebraic circle fit; Taubin's algebraic ellipse fit (Taubin 1991 in the
-research report); Levenberg–Marquardt for the orthogonal-distance fits. The fitter files on
-this branch do not yet carry the "Method from" / "Inspired by" labels the other Fast files use;
-the fitter round's docs pass added them.
+1. **Primitives** (`prims::primitive`, `prims.rs:99-242`), closed edges of at least 12
+   points only, on the ring's denoised points, every point weighted with σ = 0.5 px: a
+   cascade of cheap tests before expensive fits.
+    * Kåsa's algebraic circle fit (`fit_circle_kasa`, one linear least-squares solve)
+      rejects a ring whose radius is under 1.5 px or not finite, or that has a point more
+      than `0.6 r` from the circle: not round at all.
+    * When the Kåsa circle lies within 0.6 px (`2 · TOL`) of every point, the
+      orthogonal-distance circle (`fit_circle`, Levenberg–Marquardt) is accepted, with 3
+      parameters, if it lies within 0.3 px (`TOL`) of every point and the ring encloses at
+      least 80% of `π r²`.
+    * Otherwise an ellipse. A bound rules most rings out before any ellipse fit: with `span`
+      the largest distance from the first point, an ellipse within `TOL` of every point has
+      `rx ≥ span / 2 − TOL`, while the area test with `ry ≥ 1.5` px needs
+      `rx ≤ |A| / (0.8 · π · 1.5)`; when the bounds cross, no ellipse can pass. Then Taubin's
+      algebraic conic (`taubin_ellipse`) must lie within 0.6 px of every point, and the
+      orthogonal-distance ellipse within 0.3 px, with both radii at least 1.5 px, the larger
+      at most `span`, and the area test passed: accepted with 5 parameters. The algebraic
+      conic is Taubin's geometry alone: the library's `fit_ellipse_algebraic` also computes
+      the ellipse's orthogonal χ², a Newton foot-point solve per point that nothing here
+      reads. Levenberg–Marquardt then starts from that conic alone (`fit_ellipse_seeded`,
+      `crates/inkvec-fit/src/primitives/ellipse.rs:346-389`; `taubin_ellipse`, `:197-219`).
+      The library's `fit_ellipse` also starts from four near-circles about the orthogonal
+      circle (radii 1.02 r and 0.98 r, at 0°, 45°, 90° and 135°) and keeps the lowest χ² of
+      the five; here those four run only when the algebraic start fails, reusing the circle
+      the round test already fitted when it fitted one.
 
-**Where the time went** (fitter research, 2026-09-30, before the fitter round). `fit_dp` took
-1.01 ms per 128 px icon (16% of the engine's stages) and 26.75 ms at 2048 px (14%); its wall
-time is the slowest edge's (0.81 ms and 23.2 of 23.8 ms). Replayed on one thread, the polygon
-was 59% of the fitter at 128 px, 75% at 2048 px and 86% on the flat logo, the primitives 21.8%
-and 15.2%. The image-frame ring alone was 31%, 38% and 57% of the fitter's CPU and the slowest
-edge on 161 of 246 icons and 7 of 7 big images; its output was always four lines plus one
-spurious cubic chamfering the start corner (6 parameters per framed image, on 166 of 246
-screen icons), because `fit_edge` drops the ring's first point.
+    The primitive is drawn as four cubics, the standard approximation of a quarter arc with
+    control arms `k = 4/3 · tan(Δt / 4)`, starting on the ray from the centre through the
+    ring's first point and running the ring's own way (`ellipse_cubics`, `prims.rs:47-97`).
+    Rounded rectangles are left to the curve fit.
 
-**The fitter round of 2026-09-30.** **Unverified:** merged into `integ/fast` at `5aa2566`
-after this page's branch was cut, and not read here; what follows is what the round's merge
-notes report, with the citations the research report verified, for whoever brings this page
-up to that code to check against its doc comments. Exact, byte-identical changes: the polygon
-DP *fathoms* sides and anchors that cannot win (branch and bound, Morin & Marsten 1976); runs
-that lie on exact lattice lines are scanned in closed form (reported as "Not from the
-literature", inspired by VTracer's walker and Freeman's chain codes, 1961, see also
-Debled-Rennesson & Reveillès 1995 on digital straight segments); the admissibility scan of
-edges of 2,048 points or more runs in parallel while the relaxation stays sequential (Brent
-1974; Blumofe & Leiserson 1999); the primitives no longer compute an unread χ², and the
-Levenberg–Marquardt ellipse reuses the Taubin fit (Taubin 1991; Ahn et al. 2001); a ring is
-denoised once, not twice; the labels are moved rather than cloned, and Fast builds no
-polylines or λ scales. Output-changing, judged by the gate: the image frame is written as the
-image rectangle, removing the chamfer cubic (screen dE00 0.3641 → 0.3640, parameter ratio
-2.127 → 2.120; held_a dE00 equal, 2.149 → 2.137; only opaque images with a background face
-change); and the ellipse fit starts from the algebraic conic alone (Halíř & Flusser 1998; 0 of
-464 SVGs changed). Reported `fit_dp` per image: 2048 px opaque 26.2 → 6.1 ms, 2048 px
-transparent 23.3 → 9.1 ms, 512 px 5.74 → 1.96 ms, 128 px 1.00 → 0.47 ms; exact tip identical
-on Fast 464/464 and Quality 256/256, and all 11,021 replayed edges bitwise equal at 1, 4 and
-16 threads.
+2. **Denoise** (`smooth::denoise`, `smooth.rs:51-105`): a `[1 2 1] / 4` binomial low-pass
+   along the boundary, which removes the 0.1 px alternation the lattice leaves in refined
+   points and moves a curve of radius `r` by only `1 / 4r` px; a point that turns sharply
+   over two steps each way (more than 50°) is kept as a corner, and the ends of an open
+   boundary, which are junctions, stay put. A ring is denoised once: `fit_edge` hands the
+   points it denoised for the primitive test straight on to `fit_denoised`
+   (`mod.rs:150-193`, `221-257`), because `denoise` is a pure function of the points and the
+   closed flag and a second call could only return the same vector.
+
+3. **Optimal polygon** (`polygon::open`, `polygon.rs:250-392`; `polygon::closed`,
+   `:638-652`; Selinger §2.2) — in the field's terms the *min-#* problem of polygonal
+   approximation: the fewest straight sides that stay within `poly_tol` of every point, and
+   among those the one closest to the points. A side `i → j` is admissible when the
+   direction `p_j − p_i` lies in the *cone* of directions from `p_i` that pass within `tol`
+   of every point between them (each point narrows the cone by `asin(tol / r)`; `Cone`,
+   `:135-199`), no point has fallen back towards `p_i` by more than `tol`, and it spans at
+   most `MAX_SPAN = 160` points. A dynamic program over vertices minimises
+   `(sides, Σ squared distances)` lexicographically, the distances read in `O(1)` from
+   prefix sums taken relative to the first point, so that the squares of large coordinates
+   do not swamp the differences (`Sums`, `:69-133`). A closed ring is cut at its sharpest
+   point and solved as an open run back to it. Three exact speed-ups, all keeping the vertex
+   lists bit for bit those of the plain program, which the tests keep as `tests::open_ref`:
+    * **Fathoming** (`:272-298`): branch and bound inside the dynamic program, with the side
+      count as an exact integer bound. A side whose count `best[i].sides + 1` already exceeds
+      `best[j].sides` cannot win at `j` whatever its penalty, so the penalty is not computed
+      (89% of the admitted sides on the screen set, 55% at 2048 px, replay); an anchor with
+      `best[i].sides ≥ best[n−1].sides` is not scanned, since every path through it ends
+      with more sides than one the end already has (18.9% of the scan steps on the screen
+      set start at such an anchor). The doc comment proves by induction over the index that
+      every entry with fewer sides than the final count is decided by the same anchors
+      through the same IEEE expressions in the same order, so the path is unchanged.
+    * **Lattice runs in closed form** (`lattice_runs`, `:215-240`; `scan_anchor`,
+      `:552-636`): 62–72% of the scan steps, and 98% of the image frame's, lie on a run of
+      exactly equal steps, counted for every step in one backwards pass. Once the scan is
+      under way on one — cone open, the last point more than `2 tol` from the anchor, the
+      step at most `RUN_MAX_STEP = 4` px, `tol ≥ RUN_MIN_TOL = 1/16` px — every point to the
+      run's end is admitted, and the cone and reach after it are the last point's alone, so
+      the per-point cone work (a `hypot`, three divisions, a square root and four cross
+      products on a loop-carried dependency) is skipped. The sides are still offered one by
+      one, in order, because their penalties break ties by rounding. The proof (`:313-333`):
+      rounding moves each run point's computed direction and cone bounds by less than
+      10⁻¹⁴ rad; the distances grow by `|s|` per point, so the reach test never fires; each
+      point's cone is strictly tighter than the last's by at least 6·10⁻⁷ rad; every
+      direction lies inside the previous point's cone by at least 9·10⁻⁵, far beyond the
+      admission slack of 10⁻⁹; and `r > 2 tol` keeps the cone within 60°, so it never
+      empties.
+    * **Parallel admissibility** (`admitted_sides`, `:507-550`): which sides an anchor
+      admits depends only on the points and the tolerance, never on the table. A boundary of
+      `PARALLEL_MIN = 2048` points or more scans every anchor on all cores first, into a
+      160-bit set per anchor (`SideSet`, `:448-470`), then relaxes the table sequentially in
+      anchor order, offering the same sides in the same order; the sequential scan's skipped
+      cone tests are exactly the sides whose offer is a no-op, so the polygon is the same on
+      any thread count. The price: anchors the table would have fathomed are scanned too,
+      and 24 bytes per point. Such boundaries are rare — none of the 6,645 edges of the
+      screen set, 34 of the 564 at 2048 px, where they took 68% of the fit's time and set
+      its wall time (replay). The set's bits are written by shift and mask, not `/ 64` and
+      `% 64`, so that no remainder appears in a hot loop after wazero's arm64 `i32.rem_u`
+      miscompile.
+
+4. **Vertex adjustment** (`smooth::adjust_vertices`, `smooth.rs:209-253`; Selinger
+   §2.3.1): each side gets the total-least-squares line through the points it spans, and
+   each interior vertex moves to the point minimising its two sides' squared distances
+   within a box of half-width `vertex_box` around its polygon position, with a small ridge
+   (`RIDGE = 1e-3`) towards that position so parallel sides stay well posed. The ends of an
+   open run stay exactly where they are.
+
+5. **Smoothing into pieces** (`smooth::pieces`, `smooth.rs:314-432`; Selinger §2.3.2): one
+   join per side, moved off the side's line to where the points are (by at most
+   `JOIN_MAX = 0.5` px, since a curve drawn through the unmoved midpoints would shrink every
+   round shape), and at each vertex the cubic from join to join, tangent to both sides, with
+   its two arm lengths fitted to the points between the joins by Schneider's
+   tangent-constrained Bézier fit (`curve::fit`, `curve.rs:79-173`) and capped so neither
+   control point passes the vertex (Potrace's `alpha ≤ 1`). The vertex is a *corner* — two
+   line pieces — when that cubic misses the points by more than `corner_tol` and by more
+   than twice what the polyline through the vertex misses them by, or when the fit fails.
+
+6. **Curve-run optimisation** (`curve::optimise`, `curve.rs:299-327`; Selinger §2.4,
+   Potrace's `opticurve`): runs of smooth pieces between corners are merged where one cubic
+   says the same thing — a run that turns one way, by less than `MAX_TURN = 3.10` rad in
+   total, of at most `MAX_RUN = 24` pieces, whose merged cubic (same end points and
+   tangents, arms fitted to samples of the pieces) stays within `opt_tol` of every sample.
+   A dynamic program takes the fewest cubics per run.
+
+7. **Segments** (`curve::to_segments`, `curve.rs:344-378`): a cubic whose control points lie
+   within 0.05 px of its chord, and project inside it, is written as a line; consecutive
+   collinear lines are joined; the ends are pinned to the junctions exactly
+   (`fit_denoised`, `mod.rs:177-187`).
+
+Boundaries too short for a polygon (fewer than 3 points, or 4 for a ring), and any stage that
+leaves nothing, are drawn as straight lines through their points (`too_short`, `lines`,
+`mod.rs:120-148`).
+
+**The fitter round of 2026-09-30** (branch `impl/fast-fit`, merged into `integ/fast` at
+`e30fa8e`). Byte-identical changes: fathoming (`ebf9ecb`), lattice runs in closed form
+(`0cb5017`), parallel admissibility (`b9660c6`), the primitive test without the unread χ²
+and with its seeds reused (`37a4e40`), the ring denoised once (`d3ea154`), and the side
+bits by shift and mask (`e183cac`). Outside the fitter's files, and inside the `fit_dp`
+mark: `finish_color` moves the traced labels instead of cloning them, and Fast builds no
+content-unit polylines or λ multipliers unless `--editability` asks for them (`9f290b6`,
+`crates/inkvec-cli/src/pipeline.rs`; see `01-intake.md`). Each rewrite keeps the code it
+replaced as a test reference (`polygon::tests::open_ref` and `closed_ref`,
+`prims::tests::primitive_ref`, `tests::fit_edge_ref`). Identity of the exact tip against
+`main` `55ee4e0`: Fast 464/464 files, Quality 256/256, `--no-background` and `--monochrome`
+60 each, `--editability` 30; and the polygons of all 11,021 replayed edges (21,072 polygon
+runs, at each edge's own tolerance and at the loosest) equal to the reference at 1, 4 and
+16 threads. Quality's own ellipse fit is unchanged: `fit_ellipse` now hands both of its
+seeds to `fit_ellipse_seeded`, which given those seeds is bit-identical to it.
+
+Two changes alter the output, and the gate (`--mode fast`) judged them:
+
+* **The frame as the image rectangle** (`5520e6b`). Screen: dE00 0.3641 → 0.3640 (1 image
+  better, 0 worse), worst tenth 0.9218 → 0.9218, DISTS 0.0571 → 0.0570, parameter ratio
+  2.127 → 2.120. held_a: dE00 0.3632 → 0.3632, worst tenth equal, DISTS 0.0538 → 0.0538,
+  parameter ratio 2.149 → 2.137. 12 of 253 screen and 2048 px outputs change, all opaque
+  images with a background face: on a transparent icon the frame bounds the clear ground,
+  which is not drawn, so only the fitting time goes.
+* **The orthogonal ellipse from the algebraic start alone** (`d403d3b`). It changes the
+  output wherever a near-circle start would have reached a lower χ², so it is not provably
+  identical. On the gate 0 of 464 SVGs changed (screen, held_a, the 2048 px set, s512, the
+  2048 px transparent set, the flat logo), and a unit test checks that the single start
+  finds the same primitives as the five on 109 rings (circles, rotated noisy ellipses and
+  the frame), to 10⁻⁶ px. It agrees with the library's own measurement: every one of the
+  93 ellipses the Quality search chose on the screen set and a poster came from the
+  algebraic start (`fit_ellipse_screened`). Kept as a speed-up.
+
+The final tip was checked again on Quality: 256/256 identical.
+
+**Citations** (labels as in the doc comments):
+
+* the optimal polygon, "Method from" Selinger, "Potrace: a polygon-based tracing
+  algorithm", 2003, §2.2 (the optimal polygon as a shortest path, fewest sides then least
+  squared distance, with capped spans); "See also" Imai & Iri, "Computational-geometric
+  methods for polygonal approximations of a curve", CVGIP 1986 (min-# as a shortest path
+  over the admissible sides), and Chan & Chin, "Approximation of polygonal curves with
+  minimum number of line segments or minimum error", IJCGA 1996 (min-# in `O(n²)`; the span
+  cap makes this program `O(n · MAX_SPAN)`); "Inspired by" the cone-intersection test of
+  Williams, "An efficient algorithm for the piecewise linear approximation of planar
+  curves", CGIP 1978, and Sklansky & Gonzalez, "Fast polygonal approximation of digitized
+  curves", Pattern Recognition 1980, used here only to decide which sides are admissible.
+  Not used, with the reasons in `polygon.rs:26-36`: the greedy scan-along fitters
+  themselves (faster, but not min-#, so the polygon would change), Agarwal & Varadarajan,
+  "Efficient algorithms for approximating polygonal chains", DCG 2000 (its subquadratic
+  bound is for a different error metric), and an approximate multiresolution program
+  (refuted by the Quality fitter's research for changing the output);
+* fathoming, "Method from" Morin & Marsten, "Branch-and-bound strategies for dynamic
+  programming", Operations Research 1976 (adapted to the lexicographic value, where the side
+  count is an exact integer bound, so no relaxation has to be solved to get one);
+* lattice runs: counting them, "Inspired by" VTracer's straight-run walker (visioncortex)
+  and Freeman, "On the encoding of arbitrary geometric configurations", IRE Trans.
+  Electronic Computers 1961 (here the runs are only looked up, not compressed, because the
+  dynamic program must still see every point); the closed form, "Not from the literature"
+  (the published speed-ups for straight runs change what is fitted), "Inspired by" VTracer's
+  walker, which compresses runs before fitting instead, "See also" Debled-Rennesson &
+  Reveillès, "A linear algorithm for segmentation of digital curves", IJPRAI 1995 (digital
+  straight segments of any slope; on sub-pixel points only an exactly repeated step is a
+  run, so the simpler test suffices). A tangential-cover bound on how far a scan can reach
+  (Faure, Buzer & Feschet 2009) was measured and dropped: it would have saved at most 9.5%
+  of the steps;
+* parallel admissibility, "Inspired by" Brent, "The parallel evaluation of general
+  arithmetic expressions", J. ACM 1974 (the part with no dependencies in parallel, the short
+  dependent chain in order), scheduled by rayon's work stealing (Blumofe & Leiserson,
+  "Scheduling multithreaded computations by work stealing", J. ACM 1999), which also lets
+  the cores the per-edge loop leaves idle join in;
+* the primitives, "Method from" Taubin, "Estimation of planar curves, surfaces, and
+  nonplanar space curves defined by implicit equations with applications to edge and range
+  image segmentation", IEEE TPAMI 1991 (the algebraic conic), Ahn, Rauh & Warnecke,
+  "Least-squares orthogonal distances fitting of circle, sphere, ellipse, hyperbola, and
+  parabola", Pattern Recognition 2001 (the orthogonal fit), and Halíř & Flusser,
+  "Numerically stable direct least squares fitting of ellipses", WSCG 1998, for starting
+  the orthogonal fit from the algebraic one alone, which they recommend as "a fast and
+  robust estimator of a good initial solution" (their direct fit; Taubin's conic plays that
+  part here); dropping the unread χ², "Not from the literature". Kåsa's circle fit and
+  Levenberg–Marquardt are named in `prims.rs` without a citation;
+* the image frame, "Not from the literature" (the border of the raster is known exactly,
+  so there is nothing to estimate), "See also" Selinger 2003, which traces a bitmap's border
+  like any other boundary; the ring denoised once, "Not from the literature" (it only
+  removes a repeated computation);
+* the smoothing and curve stages (`smooth.rs`, `curve.rs`), which the round did not change,
+  name their sources in the text without the labels: Selinger 2003 §2.3.1, §2.3.2 and §2.4,
+  and Schneider's Bézier fit with fixed end tangents (the research report cites Schneider's
+  1990 Graphics Gems code, `FitCurves.c`).
+
+**Where the time went.** Before the round (fitter research, 2026-09-30, on `main`):
+`fit_dp` took 1.01 ms per 128 px icon (16% of the engine's stages) and 26.75 ms at 2048 px
+(14%); its wall time is the slowest edge's (0.81 ms and 23.2 of 23.8 ms). Replayed on one
+thread, the polygon was 59% of the fitter at 128 px, 75% at 2048 px and 86% on the flat
+logo, the primitives 21.8% and 15.2%. The image-frame ring alone was 31%, 38% and 57% of the
+fitter's CPU and the slowest edge on 161 of 246 icons and 7 of 7 big images; its output was
+always four lines plus one spurious cubic chamfering the start corner (6 parameters too
+many, on 166 of 246 screen icons), because `fit_edge` drops the ring's first point, here the
+corner. In the primitive test, the unread χ² was 5.0% of the fast fit's CPU on the screen
+set (2.0% at 2048 px), most of it on the frame, which is roughly round and reaches the
+ellipse test; the five-start ellipse fit was 13.9% (10.9% at 2048 px).
+
+After, combined (all four branches, `main` `55ee4e0` against the merged tip; the table under
+"The pipeline, in order"), `fit_dp` per image: 26.27 → 5.42 ms at 2048 px opaque (4.8×),
+23.03 → 7.49 ms at 2048 px transparent (3.1×), 5.66 → 1.79 ms at 512 px (3.2×) and
+1.00 → 0.46 ms at 128 px (2.2×). The fit branch measured alone against its own baseline
+(merge notes): 26.2 → 6.1, 23.3 → 9.1, 5.74 → 1.96 and 1.00 → 0.47 ms on the same four
+sets. By stage, on the replay, one thread:
+
+* **the frame** is no longer fitted at all; the closed-form runs had already cut its
+  polygon to a sixth of the other edges' (`0cb5017`);
+* **the polygon stage**: fathoming took it from 381 to 211 ms on the screen set and from
+  622 to 504 ms on the 2048 px set (`ebf9ecb`); the closed-form lattice runs, measured on
+  top of fathoming under a different load, from 318 to 104 ms and from 467 to 201 ms
+  (`0cb5017`). The module overview (`polygon.rs:54-58`) quotes the second pair for all
+  three speed-ups together;
+* **long boundaries** (2048 points or more, 2048 px set, smallest of 25 runs): the scan
+  takes 52 ms on one thread and 11 ms on all cores, the sequential relaxation, which prices
+  the 5.8 M live sides of the 12 M admitted, stays at 40 ms, and the polygon of those edges
+  goes from 91 to 53–58 ms (`polygon.rs:521-524`). That doc comment counts 16 such edges in
+  the set; the one on `PARALLEL_MIN` counts 34 of 564 (`polygon.rs:497-502`); the source
+  does not reconcile the two;
+* **the primitive test**: 59 → 15 ms on the screen set and 54 → 13 ms on the 2048 px set
+  for the single ellipse start, and the whole `fit_edge` 202 → 158 ms and 227 → 175 ms at
+  that commit (`d403d3b`);
+* **inside `fit_dp`, outside the fitter**: the label clone was 1.28 ms at 2048 px and the
+  polylines and λ multipliers 0.47 ms (`9f290b6`).
+
+What is left on a long boundary is the sequential relaxation. Pricing every admitted side in
+the parallel pass would take it off the critical path, but needs 8 bytes per admitted side
+(96 MB on that set) and twice the pricing work, so it is not done (`polygon.rs:525-527`). At
+128 px, `fit_dp` also pays the rayon pool start the palette no longer pays (stage 2).
 
 ### 7. Emit
 
@@ -576,8 +788,10 @@ Fast mode's own constants are listed, with their basis, in [`constants.md`](cons
 section 14; the shared stages' new ones (`PAR_VERTICES`, `PAR_MAP_VERTICES`, the radix digit,
 `RAMP_MIN_INTERIOR`, the intake's serial thresholds) in sections 01, 06, 07 and 13. Every
 serial-versus-parallel threshold added in this round (256 × 256 pixels for the palette, the
-composite and the intake passes; 512 vertices for the refinement) chooses only the schedule,
-never the output.
+composite and the intake passes; 512 vertices for the refinement; 2048 points for the
+polygon's parallel scan) chooses only the schedule, never the output. The polygon's
+`RUN_MAX_STEP` and `RUN_MIN_TOL` only decide where the closed form for lattice runs applies,
+which by its proof gives the same sides either way.
 
 ## Failure modes and edge cases
 
@@ -592,32 +806,54 @@ never the output.
   parallel call spawns the global pool (0.37 ms median). With the palette serial at 128 px,
   `fit_dp` pays it instead (+0.35 ms at 128 px); the Studio and the WebAssembly Space keep a warm
   pool.
-- **The image frame's spurious chamfer** (four lines plus one cubic per framed image, 6
-  parameters) is present on this page's branch; the fitter round's frame-as-rectangle change
-  removes it (see §6).
+- **The image frame is written, not fitted, and the chamfer is gone.** Since `5520e6b` the
+  ring that runs round the whole image border is written as the image rectangle, four lines
+  and 8 parameters (`frame_rectangle`, `fast/mod.rs:259-316`), so the spurious cubic that
+  chamfered its start corner (6 parameters too many, on 166 of 246 screen icons) no longer
+  appears. The test compares coordinates exactly, which holds because the refinement never
+  moves the lattice's outer nodes; a frame ring with any point off the border, or that does
+  not pass each corner exactly once, falls back to the ordinary fit. Only opaque images with
+  a background face change: on a transparent icon the frame bounds the clear ground, which
+  is not drawn.
+- **The single ellipse start is judged, not proven.** Levenberg–Marquardt now starts from
+  Taubin's conic alone and tries the four near-circles only when that start fails
+  (`d403d3b`). Where a near-circle would have reached a lower χ² the ellipse, or whether one
+  is accepted at all, could differ; on the gate no SVG changed (0 of 464).
 - **Two run encodings exist**: `planar::runs::RowRuns` (the planar map and ramps) and
   `fast/faces/runs.rs` (the clean-up). Unifying them, and letting `RunLabels::for_each_contact`
   feed the ramp contacts, are open opportunities, not defects.
-- **Stale overview on this branch.** `fast/mod.rs`'s pipeline overview still names
-  `faces::absorb_slivers` and `faces::faces`, which became `faces::RunLabels::{absorb_slivers,
-  absorb_rims, merge_same_inks, despeckle, write_faces}`; `integ/fast` corrects it
-  (`5aa2566`).
 
 ## Environment overrides
 
-On this page's branch, Fast mode's own stages read no environment variable. The shared
-stages keep theirs (see `07-subpixel.md`: `INKVEC_SUBPXDBG` and `INKVEC_DUMP_CONTOUR` make
-the refinement run serially, in order), and `INKVEC_TIMING` prints the stage marks listed
-above. **Unverified:** the fitter round adds an edge-replay harness (`fast/replay.rs`) whose
-commit message says it reads its knobs through `inkvec_core::env`; its variables are not
-listed here.
+Fast mode's own stages read no environment variable. The shared stages keep theirs (see
+`07-subpixel.md`: `INKVEC_SUBPXDBG` and `INKVEC_DUMP_CONTOUR` make the refinement run
+serially, in order), and `INKVEC_TIMING` prints the stage marks listed above.
+
+Two test-only harnesses read variables, through `inkvec_core::env`. Both are compiled only
+under `cargo test` (`replay` and `faces::tests` are declared `#[cfg(test)]`,
+`fast/mod.rs:62-63`, `fast/faces.rs:660-661`), and their tests are `#[ignore]`d, so they run
+only when asked for:
+
+| variable | read in | what it sets |
+|---|---|---|
+| `INKVEC_FFD_DIR` | `fast/replay.rs:65-85` (`dump_files`); also `replay_timing`, `:326` | directory searched recursively for `*.ffd` edge dumps. Unset, the three replay tests print a note and return. The dump sets for `replay_timing` are its first-level subdirectories |
+| `INKVEC_FFD_REPS` | `fast/replay.rs:168-172` (`reps`) | how many timed runs a replay keeps the smallest of: default 30 in `replay_long_edges`, 5 in `replay_timing` |
+| `INKVEC_FFD_MIN` | `fast/replay.rs:187-199` (`replay_long_edges`) | fewest points an edge needs to be timed there; default 2048, the parallel scan's threshold |
+| `INKVEC_FACES_DUMPS` | `fast/faces/tests.rs:457-498`, `:500-510` | directory of the clean-up's research label dumps (`*.bin`) for its differential test and its per-pass timing |
+| `INKVEC_FACES_BENCH_MIN` | `fast/faces/tests.rs:510` | smallest dump, in pixels, the per-pass timing measures; default 1 (all) |
+
+The replay tests are run as `INKVEC_FFD_DIR=<dir> cargo test --release -p inkvec-trace
+replay -- --ignored --nocapture` (`replay.rs:5-7`). They compare the polygon with its kept
+reference on every dumped edge, at the edge's own tolerance and the loosest
+(`replay_polygon_matches_the_reference_on_every_dumped_edge`), time the long edges
+(`replay_long_edges`), and time each stage per dump set (`replay_timing`: the whole
+`fit_edge`, the primitive test, the polygon on the frame, on the other edges and through the
+reference, and the sum of each image's slowest edge). A dump ("FFD1", little endian: an edge
+count, then per edge a closed flag, the contrast and the points as f64 pairs) is written by
+the phase-1 research build's `INKVEC_FFDUMP`, which is not in this tree.
 
 ## Open questions
 
-- The fitter section above describes the code before the fitter round; §6 needs rewriting
-  against `integ/fast`'s `fast/mod.rs`, `polygon.rs` and `prims.rs` (and the fitter constants
-  in `constants.md`, section 14, need their line numbers), with the citations and labels its
-  doc comments carry.
 - The per-stage cost of intake after the round was not measured separately from the palette.
 - Fast's front end composites the image over white again (`fast/front.rs:82`); for an image
   the intake already matted (alpha 1 everywhere) that is an identity, about 9 ms at 2048 px

@@ -497,8 +497,8 @@ impl Sides for Collect {
 /// Boundaries with at least this many points scan their anchors in parallel
 /// ([`admitted_sides`]). Below it a boundary's scan takes a few milliseconds at most. A
 /// boundary this long is rare -- in the phase-1 replay, none of the 6,645 edges of the
-/// screen set, and 34 of the 564 edges of the 2048 px set, where those took 68% of the
-/// fit's time and set its wall time.
+/// screen set, and 16 of the 564 edges of the 2048 px set, which include the image frame
+/// and set the fit's wall time (the replay times them in `replay_long_edges`).
 const PARALLEL_MIN: usize = 2048;
 
 /// Anchors per parallel task: enough that a task outweighs its scheduling.

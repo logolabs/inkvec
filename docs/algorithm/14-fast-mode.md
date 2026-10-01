@@ -589,8 +589,8 @@ off the border, an inner rectangle — goes on to the fit.
       cone tests are exactly the sides whose offer is a no-op, so the polygon is the same on
       any thread count. The price: anchors the table would have fathomed are scanned too,
       and 24 bytes per point. Such boundaries are rare — none of the 6,645 edges of the
-      screen set, 34 of the 564 at 2048 px, where they took 68% of the fit's time and set
-      its wall time (replay). The set's bits are written by shift and mask, not `/ 64` and
+      screen set, 16 of the 564 at 2048 px, which include the image frame and set the fit's
+      wall time (replay). The set's bits are written by shift and mask, not `/ 64` and
       `% 64`, so that no remainder appears in a hot loop after wazero's arm64 `i32.rem_u`
       miscompile.
 

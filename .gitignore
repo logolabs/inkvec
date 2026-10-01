@@ -89,3 +89,6 @@ Thumbs.db
 
 # Node (web tooling, if any is installed locally)
 node_modules/
+
+# Local screenshots and logs from the Studio Lite smoke checks
+studio/.shots-web/

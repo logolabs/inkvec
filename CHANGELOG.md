@@ -7,6 +7,8 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-10-01
+
 ### Changed
 
 - **Fast mode is several times faster, with the same output.** It went through the same process as Quality mode: each hot spot was measured, described precisely, matched to published work, and rewritten. The papers are cited in the code, with labels saying whether the code implements a paper's method, was inspired by it, or is our own. On large images the wall time of a whole CLI run fell 3.6× to 4.2×:

@@ -24,6 +24,19 @@
 
 use std::sync::Arc;
 
+// The threaded build allocates through a bounded per-thread cache in front of std's one
+// spinning allocator lock, which the rayon pool otherwise fights over (see `tcache`). The
+// one-core build has no lock to contend for and keeps std's allocator. The module compiles
+// everywhere so its tests run natively.
+#[cfg_attr(
+    not(all(feature = "threads", target_arch = "wasm32")),
+    allow(dead_code)
+)]
+mod tcache;
+#[cfg(all(feature = "threads", target_arch = "wasm32"))]
+#[global_allocator]
+static ALLOCATOR: tcache::ThreadCaching = tcache::ThreadCaching;
+
 /// The most often a running loop's count is sent to the page, in milliseconds.
 const PROGRESS_MS: f64 = 50.0;
 

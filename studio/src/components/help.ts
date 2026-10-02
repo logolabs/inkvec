@@ -143,7 +143,7 @@ export function openHelp(page = "index.html"): void {
   // A modal dialog over the whole window: focus moves in, the window behind is inert, and
   // focus goes back to the Help button (or wherever F1 was pressed) when it closes. `guard`
   // above already owns Escape and keeps the window's shortcuts out.
-  release = holdModal(screen, { onEscape: closeHelp });
+  release = holdModal(screen, { onEscape: closeHelp, fallback: () => document.querySelector<HTMLElement>('.appbar [data-ctl="help"]') });
 }
 
 /** Close the guide, if it is open, and give the app its keyboard back. */

@@ -3722,7 +3722,8 @@ html.framed:not(.fullscreen) #app {
 .sc-case[aria-pressed="true"] {
   border-color: var(--accent);
   background: var(--accent-subtle);
-  color: var(--accent);
+  /* The text token, not the fill: #c9754a as 11 px text on this tile is 4.33:1. */
+  color: var(--accent-text);
 }
 .sc-thumb {
   aspect-ratio: 1;

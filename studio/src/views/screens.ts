@@ -44,6 +44,8 @@ export function createScreens(store: Store, act: ScreenActions): HTMLElement {
   // while the host stays put. Named by the screen's title (`id="screen-title"`).
   const host = h("div", { role: "dialog", "aria-modal": "true", "aria-labelledby": "screen-title" });
   let release: ((returnFocus?: boolean) => void) | null = null;
+  /** The screen on show, for the focus to go back to its app bar button. */
+  let shown: string | null = null;
 
   const render = () => {
     const st = store.state;
@@ -67,10 +69,14 @@ export function createScreens(store: Store, act: ScreenActions): HTMLElement {
           ? showcaseScreen(act.close)
           : about(store, act),
     );
+    shown = st.screen;
     if (!release) {
       release = holdModal(host, {
         // The screen's first control is its Done button, top right.
         onEscape: act.close,
+        // The app bar is redrawn whenever the preferences change, which every Settings
+        // control does; the button that opened the screen is then a new element.
+        fallback: () => document.querySelector<HTMLElement>(`.appbar [data-ctl="screen:${shown}"]`),
       });
     } else if (at >= 0) {
       focusables(host)[at]?.focus({ preventScroll: true });
@@ -471,7 +477,8 @@ export function openDenoiserModal(store: Store): void {
 
 function about(store: Store, act: ScreenActions): HTMLElement {
   const caps = store.state.caps;
-  const notices = h("pre", null, "Loading the notices…");
+  // The notices scroll in their box, so the box is a Tab stop: the keyboard can scroll it.
+  const notices = h("pre", { tabindex: "0", "aria-label": "Licence and third-party notices" }, "Loading the notices…");
   void api
     .thirdPartyNotices()
     .then((text) => {

@@ -370,7 +370,10 @@ class WebBackend {
       case "start_trace": {
         const asked = a.request as { settings: Record<string, unknown>; tier: string };
         const generation = this.bump();
-        this.rememberTrace(asked.settings);
+        // A draft's settings are not a choice to keep: either the full trace of the same
+        // settings follows it, or it is the Fast draft of an image just opened, whose engine
+        // nobody chose. The controls themselves are kept by `lib/remember.ts` either way.
+        if (asked.tier !== "draft") this.rememberTrace(asked.settings);
         const request = this.withoutUnreadyDenoiser(asked);
         // The trace running now, if any, is not the one wanted any more.
         this.supersede(false, request);

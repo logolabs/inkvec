@@ -33,7 +33,7 @@ import {
   type Snap,
   type Traced,
 } from "./lib/ipc";
-import { appliesTo, initial, Store, type State } from "./lib/state";
+import { appliesTo, initial, plannedTracePx, Store, type State } from "./lib/state";
 import { applyRemembered, currentInterface, traceForKeeping, watchRemembered } from "./lib/remember";
 import { APP_NAME, copyText, openExternal, pickedFile, pickedPath, pickFiles, WEB, type Picked } from "./lib/platform";
 import { DEFAULT_SETTINGS, presetIndexForKey, resolvePreset as resolvePresetIn } from "./lib/presets";
@@ -100,7 +100,8 @@ function traceSettings(): Settings {
 const loop = new TraceLoop<TraceProgress, Outcome, ColourGroup[]>({
   hasSource: () => Boolean(store.state.source),
   groups: () => store.state.colourGroups,
-  start: (tier) => api.startTrace(traceSettings(), tier),
+  // `fast`: the Fast draft of an image just opened (`fastDraftFirst`); the controls keep theirs.
+  start: (tier, fast) => api.startTrace(fast ? { ...traceSettings(), mode: "fast" } : traceSettings(), tier),
   settleMs: () => store.state.prefs?.settleMs ?? 800,
   shown: () => ({ generation: store.state.generation, tracing: store.state.tracing }),
   began: (generation, tier, asked) =>
@@ -339,7 +340,8 @@ async function openWith(fn: () => Promise<void>, offer = true): Promise<void> {
   try {
     await fn();
     store.set({ zoom: 1, pan: { x: 0, y: 0 }, stageState: { kind: "drawing" } });
-    await trace("final");
+    // A large image in the browser: a Fast draft first, then this full trace.
+    await loop.open(fastDraftFirst());
     // Everything below happens after the automatic trace has been started.
     previews.reset();
     const st = store.state;
@@ -352,6 +354,22 @@ async function openWith(fn: () => Promise<void>, offer = true): Promise<void> {
   } catch (e) {
     store.set({ stageState: { kind: "undecodable", message: String(e) } });
   }
+}
+
+/**
+ * Whether an image just opened is drawn by the Fast engine at the draft size before its full
+ * trace (`TraceLoop.open`): in Inkvec Studio Lite, when the full trace is a Quality one larger
+ * than the draft size. A browser tab's Quality trace of a 2048 px image takes 4-33 s and the
+ * Fast draft well under one (r2-product); at or under the draft size there is no draft to
+ * make (the engine would make the "draft" the final). The desktop's own threads trace a
+ * 2048 px image in about two seconds, and it opens with the full trace alone, as before.
+ */
+function fastDraftFirst(): boolean {
+  const st = store.state;
+  if (!WEB || st.settings.mode === "fast") return false;
+  const full = plannedTracePx(st, "final");
+  const draft = plannedTracePx(st, "draft");
+  return full !== null && draft !== null && full > draft;
 }
 
 /** What opening an image offers besides Auto: the chooser card, the wizard, or nothing. */

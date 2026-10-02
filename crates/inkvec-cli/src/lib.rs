@@ -374,6 +374,11 @@ fn price_in_raster_units(img: &inkvec_trace::Rgba, args: &Args) -> Args {
         // exactly, but cannot be trusted to make the first decision -- smooth native
         // artwork survives halving too, and would be rewritten for no reason.
         let edge = inkvec_trace::coverage::intake_scale(&rgb, w, h);
+        // The round trip must keep the drawing in absolute terms (a mean error under 3
+        // levels) and in relative ones (at most half of the image's detail lost): a
+        // near-empty 144 px raster with one 38 px² disc passed the first test at every
+        // factor, because the empty canvas dilutes the mean, read as 8x, and its disc
+        // fell under the 64-fold speckle floor. See `coverage::oversample_factor`.
         let round_trip = inkvec_trace::coverage::oversample_factor(&rgb, w, h) as f64;
         let up = if edge > inkvec_trace::color::SOFT_INTAKE_EDGE {
             round_trip

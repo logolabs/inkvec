@@ -340,6 +340,29 @@ fn a_lone_small_shape_on_a_transparent_canvas_is_drawn() {
     assert!(fills(&svg).contains("#000000"), "{svg}");
 }
 
+/// A near-empty 144 px raster, a 38 px² black disc on white, was read as eight times
+/// more pixels than detail (the round trip's mean error is diluted by the empty canvas),
+/// so the speckle floor rose 64-fold to 128 px² and the disc was removed. It must be drawn.
+#[test]
+fn a_lone_small_shape_on_a_near_empty_canvas_is_drawn() {
+    let r = (38.0f32 / std::f32::consts::PI).sqrt();
+    let img = image(144, 144, |x, y| {
+        let d = ((x as f32 - 72.0).powi(2) + (y as f32 - 72.0).powi(2)).sqrt();
+        let v = 1.0 - (r + 0.5 - d).clamp(0.0, 1.0);
+        [v, v, v, 1.0]
+    });
+    let svg = traced_svg(img, &Args::default());
+    // Drawn in (near) black: the opaque palette leaves a shape this rare to the carve
+    // stage, which paints it its pixels' median colour.
+    let dark = |f: &String| {
+        f.len() == 7
+            && (1..7)
+                .step_by(2)
+                .all(|i| u8::from_str_radix(&f[i..i + 2], 16).is_ok_and(|v| v < 0x20))
+    };
+    assert!(fills(&svg).iter().any(dark), "{svg}");
+}
+
 /// Weights that cannot be loaded: no restorer for a build without the network, and a failed
 /// load for one with it, so both builds take the same path.
 fn no_restorer(mode: inkvec_restore::Mode) -> Args {

@@ -214,7 +214,11 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
     const st = store.state;
     if (!st.source) {
       viewer.el.style.display = "none";
-      fill(chrome, firstRun(store, act, samples()));
+      // No image is open, but the last attempt may have failed: a file that would not open
+      // as the first of the session used to leave this screen exactly as it was, so the
+      // user got no answer at all (3 of 16 inputs, r2-product). The empty state now leads
+      // with what went wrong, and keeps the drop zone and the samples to carry on from.
+      fill(chrome, firstRun(store, act, samples(), firstFailure(st.stageState)));
       return;
     }
     viewer.el.style.display = "";
@@ -403,7 +407,7 @@ function stateOverlay(state: StageState, st: ReturnType<Store["state"]["valueOf"
     case "flat":
       return frame("info", "var(--gold)", "This image is one flat colour", "There are no boundaries to trace. A single rectangle would be the whole output.", ["Open another image", act.openFile]);
     case "undecodable":
-      return frame("alert", "var(--bad)", "This file will not decode", state.message, ["Open another image", act.openFile]);
+      return frame("alert", "var(--bad)", "This file will not decode", plainMessage(state.message), ["Open another image", act.openFile]);
     case "outOfMemory":
       return frame(
         "alert",
@@ -470,13 +474,65 @@ function firstRunIntro(store: Store, act: WorkspaceActions): HTMLElement | null 
   );
 }
 
-/** First run, and the empty state the app returns to. */
-function firstRun(store: Store, act: WorkspaceActions, samples: SampleInfo[]): HTMLElement {
+/**
+ * What to say over the empty state when the file just chosen did not open: the backend's
+ * message, which names the format it found, and what can be opened instead. Null when the
+ * stage is not in a failed state.
+ */
+export function firstFailure(state: StageState): { title: string; body: string } | null {
+  switch (state.kind) {
+    case "undecodable":
+      return { title: "That file did not open", body: plainMessage(state.message, true) };
+    case "failed":
+      return { title: "The trace stopped", body: plainMessage(state.message) };
+    case "outOfMemory":
+      return { title: "That image is too large to open here", body: `About ${state.neededGb.toFixed(1)} GB would be needed. A smaller copy of it will open.` };
+    default:
+      return null;
+  }
+}
+
+/**
+ * A backend message as a sentence for the screen: without the `Error: ` a thrown error's
+ * text starts with, and, where the screen says which formats open in its own words
+ * (`withoutFormats`), without the core's sentence listing them, so it is not said twice.
+ */
+export function plainMessage(message: string, withoutFormats = false): string {
+  let m = message.replace(/^(Error:\s*)+/, "");
+  if (withoutFormats) m = m.replace(/\s*PNG, JPEG, WebP, BMP, GIF and TIFF are supported\.?\s*$/, "");
+  return m;
+}
+
+/** The formats the open dialog and the drop zone take, as the drop zone says them. */
+export const OPENS = "PNG, JPEG, WebP, GIF, BMP, TIFF or SVG";
+
+/** First run, and the empty state the app returns to; `failed` leads it when a file did not open. */
+function firstRun(store: Store, act: WorkspaceActions, samples: SampleInfo[], failed: { title: string; body: string } | null = null): HTMLElement {
   const mod = modKey(store.state.caps?.platform);
   return h(
     "div.firstrun",
     null,
-    firstRunIntro(store, act),
+    failed
+      ? h(
+          "div.firstfail",
+          // An alert, so a screen reader says it the moment it appears: the file chooser has
+          // just closed and nothing else on the screen changed.
+          { role: "alert" },
+          h("span.glyph", null, icon("alert", 20)),
+          h(
+            "div",
+            null,
+            h("span.title", null, failed.title),
+            h("span.body", null, failed.body),
+            h(
+              "span.body.faint",
+              null,
+              `Inkvec opens ${OPENS} files. A photo from a phone (HEIC, AVIF) or a PDF opens once it is saved as a PNG or JPEG.`,
+            ),
+          ),
+        )
+      : null,
+    failed ? null : firstRunIntro(store, act),
     h(
       "div.drop",
       null,
@@ -484,8 +540,11 @@ function firstRun(store: Store, act: WorkspaceActions, samples: SampleInfo[]): H
       h(
         "div",
         { style: { display: "flex", flexDirection: "column", gap: "6px" } },
-        h("span.headline.resting", null, "Drop a PNG, JPEG or WebP"),
+        h("span.headline.resting", null, "Drop an image"),
         h("span.headline.release", null, "Release to trace"),
+        // Every format the open dialog takes, not three of them (the old line named PNG, JPEG
+        // and WebP while seven were accepted).
+        h("span.faint.resting", { style: { fontSize: "13px" } }, OPENS),
         h(
           "span.faint.resting",
           { style: { fontSize: "13px" } },
@@ -494,7 +553,7 @@ function firstRun(store: Store, act: WorkspaceActions, samples: SampleInfo[]): H
           " to choose a file",
         ),
       ),
-      h("button.btn.primary.resting", { onclick: act.openFile }, "Open an image"),
+      h("button.btn.primary.resting", { onclick: act.openFile }, failed ? "Open another image" : "Open an image"),
     ),
     samples.length
       ? h(

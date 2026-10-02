@@ -2068,6 +2068,43 @@ body.dragging-ink [data-drop="list"] {
   background: var(--stage);
   padding: 24px;
 }
+/* A file that did not open, over the empty state (views/workspace.ts `firstFailure`): the
+   drop zone and the samples stay under it to carry on from. */
+.firstfail {
+  width: min(620px, 80%);
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--bad) 45%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--badbg);
+  user-select: text;
+}
+.firstfail .glyph {
+  color: var(--bad);
+  display: flex;
+  padding-top: 1px;
+}
+.firstfail > div {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.firstfail .title {
+  font-size: 15px;
+  font-weight: 500;
+}
+.firstfail .body {
+  font-size: var(--t-chrome);
+  line-height: 1.55;
+  color: var(--dim);
+  overflow-wrap: anywhere;
+}
+.firstfail .body.faint {
+  color: var(--faint);
+}
 .drop {
   width: min(620px, 80%);
   padding: 44px 24px;

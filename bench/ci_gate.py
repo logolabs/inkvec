@@ -236,8 +236,9 @@ def baseline_document(exe: Path, results: dict) -> dict:
 
 
 def write_json(path: Path, doc: dict) -> None:
+    """Write `doc` as JSON with LF line ends on every platform (the repository is LF)."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(doc, indent=1, sort_keys=False) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(doc, indent=1, sort_keys=False) + "\n", encoding="utf-8", newline="\n")
 
 
 # --------------------------------------------------------------------------- comparison

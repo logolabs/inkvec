@@ -474,19 +474,26 @@ function firstRunIntro(store: Store, act: WorkspaceActions): HTMLElement | null 
   );
 }
 
+/** A failure to say over the empty state; `formats` adds the line naming what opens. */
+export interface Failure {
+  title: string;
+  body: string;
+  formats: boolean;
+}
+
 /**
  * What to say over the empty state when the file just chosen did not open: the backend's
  * message, which names the format it found, and what can be opened instead. Null when the
  * stage is not in a failed state.
  */
-export function firstFailure(state: StageState): { title: string; body: string } | null {
+export function firstFailure(state: StageState): Failure | null {
   switch (state.kind) {
     case "undecodable":
-      return { title: "That file did not open", body: plainMessage(state.message, true) };
+      return { title: "That file did not open", body: plainMessage(state.message, true), formats: true };
     case "failed":
-      return { title: "The trace stopped", body: plainMessage(state.message) };
+      return { title: "The trace stopped", body: plainMessage(state.message), formats: false };
     case "outOfMemory":
-      return { title: "That image is too large to open here", body: `About ${state.neededGb.toFixed(1)} GB would be needed. A smaller copy of it will open.` };
+      return { title: "That image is too large to open here", body: `About ${state.neededGb.toFixed(1)} GB would be needed. A smaller copy of it will open.`, formats: false };
     default:
       return null;
   }
@@ -507,7 +514,7 @@ export function plainMessage(message: string, withoutFormats = false): string {
 export const OPENS = "PNG, JPEG, WebP, GIF, BMP, TIFF or SVG";
 
 /** First run, and the empty state the app returns to; `failed` leads it when a file did not open. */
-function firstRun(store: Store, act: WorkspaceActions, samples: SampleInfo[], failed: { title: string; body: string } | null = null): HTMLElement {
+function firstRun(store: Store, act: WorkspaceActions, samples: SampleInfo[], failed: Failure | null = null): HTMLElement {
   const mod = modKey(store.state.caps?.platform);
   return h(
     "div.firstrun",
@@ -524,11 +531,13 @@ function firstRun(store: Store, act: WorkspaceActions, samples: SampleInfo[], fa
             null,
             h("span.title", null, failed.title),
             h("span.body", null, failed.body),
-            h(
-              "span.body.faint",
-              null,
-              `Inkvec opens ${OPENS} files. A photo from a phone (HEIC, AVIF) or a PDF opens once it is saved as a PNG or JPEG.`,
-            ),
+            failed.formats
+              ? h(
+                  "span.body.faint",
+                  null,
+                  `Inkvec opens ${OPENS} files. A photo from a phone (HEIC, AVIF) or a PDF opens once it is saved as a PNG or JPEG.`,
+                )
+              : null,
           ),
         )
       : null,

@@ -14,7 +14,8 @@ describe("a file that did not open, as the empty state says it", () => {
 
   it("leads the empty state for an undecodable file, a failed trace and an out-of-memory one", () => {
     expect(firstFailure({ kind: "undecodable", message: core })?.title).toBe("That file did not open");
-    expect(firstFailure({ kind: "failed", message: "unreachable" })).toEqual({ title: "The trace stopped", body: "unreachable" });
+    expect(firstFailure({ kind: "undecodable", message: core })?.formats).toBe(true);
+    expect(firstFailure({ kind: "failed", message: "unreachable" })).toEqual({ title: "The trace stopped", body: "unreachable", formats: false });
     expect(firstFailure({ kind: "outOfMemory", neededGb: 5.25, suggestPx: 2048 })?.body).toContain("5.3 GB");
   });
 

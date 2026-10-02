@@ -25,7 +25,8 @@
  *   a toast must still be announced, and a modal opened from inside the dialog lives there.
  * - Keys pressed inside the dialog stop at the dialog, unless Ctrl or Cmd is held, so the
  *   window's single-key shortcuts (Space flicks the viewer, +/- zoom, Escape cancels a trace)
- *   never act on the app behind it. The shortcuts with a modifier still work.
+ *   never act on the app behind it. The shortcuts with a modifier, and the function keys
+ *   (F1, the guide), still work.
  * - Dialogs stack: only the top one handles Tab and Escape, and each undoes only the `inert`
  *   it set itself, so a modal opened over the export sheet hands the sheet back intact.
  *
@@ -152,9 +153,13 @@ function onPointer(e: PointerEvent): void {
   top.opts.onOutside();
 }
 
-/** Single-key shortcuts stop at the dialog; see the module comment. Bubble phase, on the root. */
+/**
+ * Single-key shortcuts stop at the dialog; see the module comment. Bubble phase, on the root.
+ * Modified keys and the function keys go on to the window: F1 over Settings still opens the
+ * guide at the Settings page.
+ */
 function stopAtDialog(e: KeyboardEvent): void {
-  if (e.ctrlKey || e.metaKey || e.key === "Tab") return;
+  if (e.ctrlKey || e.metaKey || e.key === "Tab" || /^F\d{1,2}$/.test(e.key)) return;
   e.stopPropagation();
 }
 

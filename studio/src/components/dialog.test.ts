@@ -106,7 +106,8 @@ describe("holdModal: the WAI-ARIA modal dialog contract", () => {
     expect(behind).not.toHaveBeenCalled();
     press("o", { ctrlKey: true });
     press("o", { metaKey: true });
-    expect(behind).toHaveBeenCalledTimes(2);
+    press("F1");
+    expect(behind).toHaveBeenCalledTimes(3);
     window.removeEventListener("keydown", behind);
   });
 

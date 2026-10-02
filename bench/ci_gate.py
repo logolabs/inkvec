@@ -477,7 +477,9 @@ def main() -> int:
         for name, rows in results.items():
             s = doc["conditions"][name]["summary"]
             print(f"  {name:16s} " + "  ".join(f"{ax} {s[ax]:.5f}" for ax in REPORTED_AXES))
-        if LEGACY_CONDITION in results:
+        if LEGACY_CONDITION in results and a.sample is not None:
+            print(f"\n(--sample: the legacy rule compares whole-set numbers, so it is not applied)")
+        elif LEGACY_CONDITION in results:
             if not BASELINE.exists():
                 print("no baseline; run with --write-baseline")
                 return 1

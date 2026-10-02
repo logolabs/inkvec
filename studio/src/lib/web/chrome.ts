@@ -100,16 +100,27 @@ export type Launch = { sample: string } | { name: string; bytes: Uint8Array } | 
 
 /**
  * The presentation page (the Space's root) opens the Studio with `?sample=<file>` for one of
- * the bundled samples, or `?open=handoff` for a file dropped on it, which it left in this
- * origin's IndexedDB (`inkvec-handoff`) rather than sending anywhere. The file is taken
- * once and deleted, and the query string is cleared so a reload does not open it again.
+ * the bundled samples, and hands over a file dropped on it in one of two ways:
+ *
+ * - `?open=handoff`: the page shares this tab's storage (the Space's own address, or "open
+ *   here" inside Hugging Face's frame), so it left the file in this origin's IndexedDB
+ *   (`inkvec-handoff`). Taken once and deleted.
+ * - `#open=<base64url>&name=<name>`: the page is inside Hugging Face's frame and opened this
+ *   tab of its own. Neither storage (partitioned under huggingface.co) nor messages (this
+ *   page's COOP cuts the tab off from its opener) cross from that frame, so the bytes come in
+ *   the URL fragment, which is never sent to a server; see `handOff` in `web/index.html`.
+ *
+ * Either way the address is cleared at once, so a reload does not open the file again and
+ * the bytes do not stay in this tab's history entry.
  */
 export async function takeLaunch(): Promise<Launch> {
   const q = new URLSearchParams(window.location.search);
   const sample = q.get("sample");
   const handoff = q.get("open") === "handoff";
-  if (!sample && !handoff) return null;
+  const carried = carriedFile(window.location.hash);
+  if (!sample && !handoff && !carried) return null;
   window.history.replaceState(null, "", window.location.pathname);
+  if (carried) return carried;
   if (sample) return { sample };
   return new Promise((resolve) => {
     let req: IDBOpenDBRequest;
@@ -132,6 +143,27 @@ export async function takeLaunch(): Promise<Launch> {
       get.onerror = () => resolve(null);
     };
   });
+}
+
+/**
+ * The file a URL fragment carries, `#open=<base64url bytes>&name=<URI-encoded name>`, or null
+ * when there is none or it does not decode. base64url is RFC 4648 section 5 (`-` and `_` for
+ * `+` and `/`, no padding), which needs no escaping in a fragment. Exported for the tests.
+ */
+export function carriedFile(hash: string): { name: string; bytes: Uint8Array } | null {
+  if (!hash.startsWith("#")) return null;
+  const f = new URLSearchParams(hash.slice(1));
+  const data = f.get("open");
+  if (!data) return null;
+  try {
+    const b64 = data.replace(/-/g, "+").replace(/_/g, "/");
+    const bin = atob(b64 + "=".repeat((4 - (b64.length & 3)) & 3));
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes.length ? { name: f.get("name") || "image", bytes } : null;
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------- the loading screen ---

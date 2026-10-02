@@ -35,10 +35,18 @@ jobs:
       - run: cargo test --release --workspace
 
   gate:
-    # The 246-icon screen set against bench/gate/baseline.json. dE00, turning and
-    # parameter ratio each gated on their own; see bench/ci_gate.py.
+    # The 246-icon screen set under Quality and Fast at 128 px, 512 px and 512 px flattened
+    # onto white, each condition's dE00, turning and parameter ratio judged against the
+    # per-icon baseline for this platform (bench/gate/baselines/linux-x86_64.json) by a
+    # paired bootstrap non-inferiority rule; see bench/ci_gate.py. Until that file is
+    # committed the gate runs the 09-19 rule against bench/gate/baseline.json. Either way
+    # the run is uploaded as `gate-baseline`, ready to commit as the Linux baseline.
+    #
+    # Before it, the hard-case suite (bench/cases.py) holds the set of passing cases in
+    # Quality and in Fast to the sets recorded in bench/quality_budget.json (`cases:*`).
     name: regression gate
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.98.0
@@ -47,8 +55,27 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install numpy pillow scikit-image resvg_py svgelements
-      - run: python bench/ci_gate.py --exe target/release/inkvec --workers 4
+      - run: pip install numpy scipy pillow scikit-image resvg_py svgelements
+      - name: gate's own tests
+        run: >-
+          python -m unittest bench/tests/test_gate_stats.py bench/tests/test_ci_gate.py
+          bench/tests/test_gate_scoring.py bench/tests/test_gt_diff.py
+          bench/tests/test_cases_ratchet.py
+      - name: hard cases, Quality
+        run: python bench/cases.py --exe target/release/inkvec --ratchet quality
+      - name: hard cases, Fast
+        if: ${{ !cancelled() }}
+        run: python bench/cases.py --exe target/release/inkvec --ratchet fast -- --mode fast
+      - name: regression gate
+        if: ${{ !cancelled() }}
+        run: >-
+          python bench/ci_gate.py --exe target/release/inkvec --workers 4
+          --report-json gate/report.json --artifact-dir gate
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: gate-baseline
+          path: gate/
 
   svgmin-gate:
     # The minifier's own gate, which is shaped differently on purpose: its job is to spend

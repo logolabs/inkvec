@@ -307,7 +307,7 @@ half-integer lattice points (`inkvec-trace/src/symmetry.rs:19-21,156-163,243-245
 | `INKVEC_EMIT_DECIMALS` (env) | overrides `EMIT_DECIMALS` | `inkvec-cli/src/emit.rs:126` | the mechanism used to isolate rounding from segment price in the 7.2% measurement | measured |
 | background-match precision | 2 decimals (hard-coded) | `inkvec-cli/src/post.rs:42-52` | `--no-background` element matching | none; coupled to `EMIT_DECIMALS` but not derived from it — breaks silently if the two diverge |
 | margin viewBox precision | 2 decimals | `inkvec-cli/src/post.rs:147` | `--margin` growth | none |
-| `ci_gate.py` ratio limit | 5% relative | `bench/ci_gate.py:33` | regression gate on parameter count vs. artist | measured (project's compactness regression budget) |
+| `ci_gate.py` ratio margin | 3% relative at the one-sided 95% upper bound (dE00 1%, turning 2%) | `bench/ci_gate.py` `MARGINS` | regression gate on parameter count vs. artist | measured (project's compactness regression budget) |
 
 ## 14 — Fast mode ([14-fast-mode.md](14-fast-mode.md))
 

@@ -95,7 +95,10 @@ def load_sets() -> dict:
     if v2.exists():
         d = json.loads(v2.read_text(encoding="utf-8"))
         global TIER, _TIER_RESOLVED
-        TIER = str(d.get("tier", "128"))
+        # INKVEC_TIER wins here as it does in `tier()`. Without this, a serial run (workers=1,
+        # scored in this process) of `INKVEC_TIER=512ss` read the 128ss rasters, because this
+        # line had already resolved the tier from the devset file.
+        TIER = os.environ.get("INKVEC_TIER") or str(d.get("tier", "128"))
         _TIER_RESOLVED = True
         sets = {k: d[k] for k in ("dev", "held_a", "held_b", "full")}
         # A stratified quarter of the full set, for screening a change before it is worth
@@ -134,7 +137,7 @@ def _every_corpus_icon(full: list) -> list:
         if not fam_dir.is_dir():
             continue
         fam = fam_dir.name
-        for png in sorted((fam_dir / tier()).glob("*.png")):
+        for png in sorted((fam_dir / base_tier(tier())).glob("*.png")):
             stem = png.stem
             if (fam, stem) in known:
                 continue
@@ -206,9 +209,71 @@ def tier() -> str:
     return TIER
 
 
+def set_tier(name: str) -> None:
+    """Score against raster tier `name` from now on, in this process and in every pool
+    worker it starts afterwards.
+
+    Both halves are needed. Spawned workers (Windows, macOS) are fresh interpreters that
+    resolve the tier from the environment; forked workers (Linux) inherit this module's
+    globals as they are at the fork, and a global already resolved to another tier would
+    win over the environment. Setting only one of the two scores the wrong rasters on one
+    platform and the right ones on the other."""
+    global TIER, _TIER_RESOLVED
+    os.environ["INKVEC_TIER"] = name
+    TIER = name
+    _TIER_RESOLVED = True
+
+
+#: A tier named `<base>op` is tier `<base>` flattened onto white: the same artwork as an
+#: opaque logo on a white page, the input most users send. The r2-eval research measured
+#: that it behaves differently from the transparent raster (v0.2.4 at 512 px: params ratio
+#: median 1.19 transparent vs 1.50 opaque; one background rect more), so the gate scores
+#: both. The flattened rasters are derived on first use, not committed.
+OPAQUE_SUFFIX = "op"
+
+
+def base_tier(name: str) -> str:
+    """The committed raster tier a tier is read from: `512ssop` -> `512ss`, else itself."""
+    if name.endswith(OPAQUE_SUFFIX) and len(name) > len(OPAQUE_SUFFIX):
+        return name[: -len(OPAQUE_SUFFIX)]
+    return name
+
+
+def flatten_onto_white(src: Path, dst: Path) -> None:
+    """Composite an RGBA raster over white and save it as 8-bit RGB.
+
+    out = rgb * a + (1 - a), per channel, in straight (non-premultiplied) alpha with every
+    value in [0, 1], then quantised as `floor(255 out + 0.5)`. This is the arithmetic the
+    r2-eval research used for its `512ssop` numbers, kept identical so they are comparable.
+    The write is atomic: two pool workers may derive the same file at once.
+    """
+    from PIL import Image
+    a = np.asarray(Image.open(src).convert("RGBA"), dtype=np.float32) / 255.0
+    rgb = a[..., :3] * a[..., 3:4] + (1.0 - a[..., 3:4])
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(f"{dst.stem}.{os.getpid()}.tmp.png")
+    Image.fromarray(_rgb8(rgb), "RGB").save(tmp)
+    try:
+        os.replace(tmp, dst)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+
+
 def item_paths(it: dict) -> tuple[Path, Path]:
-    png = ROOT / "bench" / "data" / "corpus_raster" / it["corpus"] / tier() / f"{it['stem']}.png"
+    """The input raster at the current tier and the artist's SVG for one icon.
+
+    A committed raster wins. For an opaque tier (`<base>op`) with no committed raster, the
+    base tier's raster is flattened onto white into the cache (`CACHE/raster/<tier>/`) once,
+    and that file is the input."""
+    t = tier()
+    png = ROOT / "bench" / "data" / "corpus_raster" / it["corpus"] / t / f"{it['stem']}.png"
     gt = ROOT / "bench" / "data" / "corpus_svg" / it["corpus"] / f"{it['stem']}.svg"
+    if not png.exists() and base_tier(t) != t:
+        src = ROOT / "bench" / "data" / "corpus_raster" / it["corpus"] / base_tier(t) / f"{it['stem']}.png"
+        derived = CACHE / "raster" / t / it["corpus"] / f"{it['stem']}.png"
+        if not derived.exists() and src.exists():
+            flatten_onto_white(src, derived)
+        png = derived
     return png, gt
 
 
@@ -358,6 +423,9 @@ class ImageScore:
     turning: float = 0.0
     mirror: float = 0.0
     svg: str = ""
+    # SHA-256 of the emitted SVG's bytes. Two builds that emit the same bytes for an icon
+    # score it identically, so the gate can tell "unchanged" from "changed by a tie".
+    sha256: str = ""
 
 
 @dataclass
@@ -458,17 +526,79 @@ def _init_worker():
         pass
 
 
+#: Bumped whenever the scorer's answer for the same SVG changes, so per-icon numbers that
+#: an older scorer cached (`cache_save`) or a baseline recorded (`bench/ci_gate.py`) are
+#: never compared with new ones as if they were the same measurement.
+#:
+#: 2 (2026-10-02): the reference render is always the 8-bit one, on a cache miss as on a
+#: hit (`gt_render`). Version 1 scored a cold cache against the float render, which moved
+#: the screen set's macro dE00 by +0.111 % and single icons by up to 0.037 between a fresh
+#: checkout (CI) and a warm one (every local run); see `gt_render`.
+SCORER_VERSION = 2
+
+
+def _rgb8(img: np.ndarray) -> np.ndarray:
+    """Quantise a composited float render in [0, 1] to 8-bit RGB, the way the cache stores it:
+    round half up, `floor(255 x + 0.5)`, after clipping to [0, 1]."""
+    return (np.clip(img, 0, 1) * 255 + 0.5).astype(np.uint8)
+
+
+def _from_rgb8(img8: np.ndarray) -> np.ndarray:
+    """The float32 image the scorer compares against: an 8-bit RGB array divided by 255.
+
+    Both branches of `gt_render` go through this one function, so they return the same
+    dtype and the same bits: a uint8 cast to float32 is exact, and dividing a float32 array
+    by the Python float 255.0 gives float32 under NumPy's scalar promotion (NEP 50)."""
+    return np.asarray(img8, dtype=np.float32) / 255.0
+
+
 def gt_render(gt: Path, corpus: str, stem: str) -> np.ndarray:
-    """GT rendered at JUDGE_SIZE, cached on disk as PNG (a few hundred KB each)."""
+    """The artist's SVG rendered at JUDGE_SIZE over white, as the 8-bit image the cache holds.
+
+    The render is cached on disk as an RGB PNG (a few hundred KB each). The function returns
+    the *same array* whether it rendered the file just now or read the cache: on a miss it
+    quantises the render to 8 bits, writes that, and returns what a later hit would decode.
+
+    Why this matters. Version 1 returned the float render on a miss and the 8-bit PNG on
+    every later call, so the score depended on the cache's history rather than on the SVGs.
+    CI always starts cold; a local checkout is usually warm. On v0.2.4's own 246 traces the
+    float reference gave a macro dE00 of 0.12819 and the 8-bit one 0.12833 (+0.111 %, at
+    most 0.037 on one icon), which is the "load-sensitive" wobble of 2026-09-25 (0.14418
+    vs 0.14432, +0.097 %, the lower number on the cold, fresh worktree): measured by the
+    r2-eval research, 2026-10-02. With both branches returning the stored image, scoring is
+    a pure function of the two SVGs.
+
+    Why 8 bits and not the float render. DISTS (`_dists_in_parent`) already reads the cached
+    PNG, so the 8-bit image is what every other metric sees; storing floats instead would
+    cost 12 MB per icon at 1024 px. The quantisation error, at most 0.5/255 per channel, is
+    far below a just-noticeable difference.
+
+    The write is atomic (a temporary file, then `os.replace`), because pool workers scoring
+    the same icon under different conditions can miss at the same moment; a reader must
+    never decode a half-written PNG. If another worker won the race, its file is identical
+    (rendering is deterministic), so losing the replace is harmless.
+
+    Not from the literature: a cache-coherence fix, because the score must be a function of
+    its inputs alone. See also: Bouthillier et al. 2021, "Accounting for Variance in Machine
+    Learning Benchmarks", MLSys 2021, arXiv 2103.03098, on removing incidental sources of
+    variation from a benchmark before reading its differences.
+    """
     from PIL import Image
     from inkvec_bench import render
     cp = CACHE / f"gt{JUDGE_SIZE}" / corpus / f"{stem}.png"
     if cp.exists():
-        return np.asarray(Image.open(cp).convert("RGB"), dtype=np.float32) / 255.0
-    ref = render.composite(render.render(gt.read_text(encoding="utf-8"), JUDGE_SIZE, JUDGE_SIZE))
+        return _from_rgb8(np.asarray(Image.open(cp).convert("RGB")))
+    ref8 = _rgb8(render.composite(render.render(gt.read_text(encoding="utf-8"), JUDGE_SIZE, JUDGE_SIZE)))
     cp.parent.mkdir(parents=True, exist_ok=True)
-    Image.fromarray((np.clip(ref, 0, 1) * 255 + 0.5).astype(np.uint8)).save(cp, optimize=False)
-    return ref
+    tmp = cp.with_name(f"{cp.stem}.{os.getpid()}.tmp.png")
+    Image.fromarray(ref8, "RGB").save(tmp, optimize=False)
+    try:
+        os.replace(tmp, cp)
+    except OSError:
+        # Windows refuses to replace a file another process has open; that process wrote
+        # the same bytes, so drop ours.
+        tmp.unlink(missing_ok=True)
+    return _from_rgb8(ref8)
 
 
 # --- result cache ---------------------------------------------------------------------
@@ -497,9 +627,12 @@ def exe_key(exe: Path) -> str:
 
 
 def _cache_path(exe: Path, extra_args) -> Path:
+    """Where one build's per-icon scores live, keyed by everything that changes them: the
+    build, the tracer arguments, the intake tier, the judging size, a free salt, and the
+    scorer version (so numbers from an older scorer are never read back)."""
     args = " ".join(extra_args)
     env = os.environ.get("INKVEC_CACHE_SALT", "")
-    tag = hashlib.sha1(f"{args}|{tier()}|{JUDGE_SIZE}|{env}".encode()).hexdigest()[:8]
+    tag = hashlib.sha1(f"{args}|{tier()}|{JUDGE_SIZE}|{env}|v{SCORER_VERSION}".encode()).hexdigest()[:8]
     return CACHE / "scores" / f"{exe_key(exe)}-{tag}.json"
 
 
@@ -524,7 +657,7 @@ def cache_save(exe: Path, extra_args, entries: dict) -> None:
 
 
 CACHE_FIELDS = ("de00", "dists", "ratio", "seconds", "corpus", "stem",
-                "self_res", "turning", "mirror")
+                "self_res", "turning", "mirror", "sha256")
 
 
 def structure_signals(svg: str, src_png: Path) -> dict:
@@ -606,7 +739,8 @@ def score_one(args: tuple) -> dict:
     if r.returncode != 0:
         return {"fail": f"{it['stem']}: exit {r.returncode}: "
                         f"{r.stderr.decode('utf-8', 'replace')[-300:]}"}
-    svg = out.read_text(encoding="utf-8")
+    raw = out.read_bytes()                  # hashed as written ...
+    svg = out.read_text(encoding="utf-8")   # ... and scored as before (newline-translated)
     try:
         b = render.composite(render.render(svg, JUDGE_SIZE, JUDGE_SIZE))
     except BaseException as e:  # resvg raises odd things on malformed output
@@ -619,7 +753,8 @@ def score_one(args: tuple) -> dict:
                de00=float(mcolor.delta_e00(ref, b)["de00_mean"]),
                dists=0.0,
                ratio=svgmodel.parse(svg).n_params / max(1, it["gt_params"]),
-               seconds=dt, svg=svg if keep_svg else "")
+               seconds=dt, svg=svg if keep_svg else "",
+               sha256=hashlib.sha256(raw).hexdigest())
     res["_render"] = str(rp)
     res["_gt"] = str(CACHE / f"gt{JUDGE_SIZE}" / it["corpus"] / f"{it['stem']}.png")
     if not keep_svg:

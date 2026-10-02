@@ -18,22 +18,49 @@ falsifiable.
 
 ```bash
 python bench/ci_gate.py --exe target/release/inkvec
-python bench/ci_gate.py --exe target/release/inkvec --write-baseline   # re-baseline after a deliberate change
+python bench/ci_gate.py --exe target/release/inkvec --conditions quality-512ss,fast-512ss  # a subset
+python bench/ci_gate.py --exe target/release/inkvec --sample 0.25    # a quick read, never a verdict
+python bench/ci_gate.py --exe target/release/inkvec --write-baseline   # re-baseline: a decision
 python bench/ci_gate.py --exe target/release/inkvec --bypass-gate "reason"  # explicit, justified override
+python tools/prepush.py --gate                                       # build, hard cases, gate
 ```
 
-Scores the committed 246-icon screen set (1.6 MB under `bench/data`, so this runs from a
-bare checkout) and compares three numbers against `bench/gate/baseline.json`:
+Scores the committed 246-icon screen set (under `bench/data`, so this runs from a bare
+checkout) under six conditions: Quality and Fast, each at 128 px (`128ss`), 512 px
+(`512ss`) and 512 px flattened onto white (`512ssop`, an opaque logo). Each condition's
+three axes are compared icon by icon with the per-platform baseline
+`bench/gate/baselines/<os>-<arch>.json`:
 
-| metric | may rise by at most |
-|---|---|
-| dE00 (colour error vs. the artist's file) | 1% |
-| turning (anchor turning per unit length) | 1% |
-| parameter ratio vs. the artist's file | 5% |
+| axis | aggregate | margin at the one-sided 95 % upper bound |
+|---|---|---|
+| dE00 (colour error vs. the artist's file) | family-macro mean | 1 % |
+| turning (anchor turning per unit length) | mean | 2 % |
+| parameter ratio vs. the artist's file | family-macro mean | 3 % |
 
-A regression on any of the three fails the gate. An improvement updates the baseline
-downward automatically — ground gained is never given back. This is the CI-facing check;
-run it before opening a PR that touches tracing behaviour.
+The change of each aggregate gets a paired, family-stratified bootstrap interval
+(`bench/gate_stats.py`). The gate passes an axis when the interval's one-sided upper bound
+is below the margin, or, where the 246 icons cannot resolve the margin (a broad edit at
+512 px), below the minimum detectable effect; that pass is reported as `within-noise`.
+There is no "inconclusive" verdict: the margin is floored at what the set can detect, so a
+change fails only when it is worse by more than the margin and the set can see it. Icons whose SVG is
+byte-identical to the baseline's keep its numbers. A baseline moves only by
+`--write-baseline` or, locally, on a demonstrable gain. Until a platform's baseline file is
+committed, the gate falls back to the old scalar rule against `bench/gate/baseline.json`
+on quality-128ss. CI uploads every run as the `gate-baseline` artifact, in the format to
+commit. The scorer is a pure function of the SVGs: the reference renders are the same
+8-bit images whether the cache is warm or cold.
+
+## Hard cases
+
+```bash
+python bench/cases.py --exe target/release/inkvec                    # 42 isolated cases
+python bench/cases.py --exe target/release/inkvec -- --mode fast     # tracer flags after --
+python bench/cases.py --exe target/release/inkvec --ratchet quality  # CI: hold the passing set
+```
+
+One property per case, against geometry written by hand. Cases may fail on the day they
+are written; CI holds the *set* that passes (`cases:quality`, `cases:fast` in
+`bench/quality_budget.json`): a case that passed and now fails fails the build.
 
 ## Full evaluation
 
@@ -61,7 +88,14 @@ case complexity, per-stage cost/benefit, and parameter sweeps, respectively).
 python bench/quality.py             # check; exit 1 on regression
 python bench/quality.py --report    # every metric, no gate
 python bench/quality.py --update    # re-baseline, after a deliberate decision
+python bench/quality.py --coverage  # ... plus per-crate line-coverage floors (CI)
+python bench/quality.py --mutants   # ... plus sampled mutation floors (weekly, hours)
 ```
+
+Coverage and mutation floors are committed (`coverage:*`, `mutation:*`); a floor that
+was never recorded fails. Mutation floors are sampled (every 32nd mutant of the engine's
+core module trees), so they are recorded at a lower confidence bound and fail only when a
+run's upper bound falls below them.
 
 Does not analyse anything itself — `cargo clippy` and `cargo fmt` do that, configured
 under `[workspace.lints]` in the workspace `Cargo.toml`. This wraps `cargo clippy

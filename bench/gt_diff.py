@@ -110,6 +110,22 @@ def labelled_document(svg: str) -> tuple[str, list[Region]]:
     Gradient fills become flat, opacity and filters are stripped at every level (groups
     too), strokes take their element's colour. Returns the rewritten document and the
     region table; `Region.label` k is painted with `_label_colour(k)`.
+
+    `fill` and `stroke` are both *inherited* properties in SVG (SVG 1.1 section 11.2,
+    "Specifying paint": `fill` and `stroke` are listed with "Inherited: yes"), so each is
+    resolved the way a renderer resolves it: the element's own value (attribute or
+    `style`), else the nearest ancestor's. Every drawable element then gets an explicit
+    `fill` and an explicit `stroke` (`none` when it is not stroked), so no ancestor's paint
+    can leak into the label render.
+
+    Until 2026-10-02 only `fill` was inherited. lucide writes `stroke="currentColor"` (and
+    `fill="none"`) on the root `<svg>` and nothing on its paths, so every lucide region was
+    classed unstroked and painted `fill="none"` with the root's black stroke: it decoded to
+    no label, and the whole family scored as backdrop. Found by the r2-fidelity research;
+    any earlier gt_diff reading of a family with inherited strokes is void.
+
+    Not from the literature: this is the SVG specification's inheritance rule applied to a
+    label render, https://www.w3.org/TR/SVG11/painting.html#SpecifyingPaint.
     """
     root = ET.fromstring(svg)
     grads: dict[str, int] = {}
@@ -124,7 +140,11 @@ def labelled_document(svg: str) -> tuple[str, list[Region]]:
 
     regions: list[Region] = []
 
-    def walk(el, opacity: float, inherited_fill: str | None, in_skip: bool):
+    def walk(el, opacity: float, inherited_fill: str | None, inherited_stroke: str | None,
+             in_skip: bool):
+        """Label one element and recurse. `inherited_fill` / `inherited_stroke` are the
+        nearest ancestor's paint values (None when no ancestor set one); `opacity` is the
+        product of the ancestors' opacities, kept only for the region table."""
         name = _local(el.tag)
         skip = in_skip or name in CONTAINER_SKIP
         op = opacity
@@ -137,6 +157,8 @@ def labelled_document(svg: str) -> tuple[str, list[Region]]:
                     pass
         fill_raw = _paint(el, "fill")
         fill_here = fill_raw if fill_raw is not None else inherited_fill
+        stroke_raw = _paint(el, "stroke")
+        stroke_here = stroke_raw if stroke_raw is not None else inherited_stroke
         # Strip transparency and effects everywhere so the id colour arrives intact.
         for a in OPACITY_ATTRS:
             if a in el.attrib:
@@ -150,9 +172,11 @@ def labelled_document(svg: str) -> tuple[str, list[Region]]:
             k = len(regions) + 1
             r, g, b = _label_colour(k)
             hexc = f"#{r:02x}{g:02x}{b:02x}"
-            fr = (fill_here or "black").strip()
-            stroke = _paint(el, "stroke")
-            stroked = stroke is not None and stroke.strip().lower() != "none"
+            fr = (fill_here or "black").strip()   # SVG's initial fill is black
+            # SVG's initial stroke is none, so an element with no stroke anywhere up its
+            # ancestry is unstroked.
+            stroked = (stroke_here is not None
+                       and stroke_here.strip().lower() not in ("none", "transparent"))
             if fr.lower().startswith("url("):
                 ref = re.sub(r"^url\(\s*#?|\s*\)$", "", fr).strip("'\"")
                 fill, stops = "gradient", grads.get(ref, 0)
@@ -161,16 +185,17 @@ def labelled_document(svg: str) -> tuple[str, list[Region]]:
             else:
                 fill, stops = "flat", 0
             el.set("fill", "none" if fill == "none" else hexc)
-            if stroked:
-                el.set("stroke", hexc)
+            # Explicit on every drawable, `none` included: an inherited stroke must paint
+            # this region's id, and an unstroked element must not pick up an ancestor's.
+            el.set("stroke", hexc if stroked else "none")
             regions.append(Region(k, name, el.get("id"), fill, stops, op, stroked))
         elif fill_raw is not None and not skip:
             # A group's own fill is only a default for its children; leave it in place.
             pass
         for c in list(el):
-            walk(c, op, fill_here, skip)
+            walk(c, op, fill_here, stroke_here, skip)
 
-    walk(root, 1.0, None, False)
+    walk(root, 1.0, None, None, False)
     # No anti-aliasing: every pixel then decodes to exactly one id.
     root.set("shape-rendering", "crispEdges")
     return ET.tostring(root, encoding="unicode"), regions

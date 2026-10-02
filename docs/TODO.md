@@ -24,7 +24,7 @@ We have trained a 20M vision-conditioned Graph Neural Network (`TraceRefineGNN20
 
 ## 2. High-Volume Benchmarking & Extended Corpus Evaluation
 
-The current continuous integration gate tests against a grandfathered 246-icon screen set (`bench/gate/baseline.json`). To further harden quality across diverse visual styles, higher-volume, large-scale benchmarks are required.
+The continuous integration gate tests the 246-icon screen set in six conditions (Quality and Fast, 128 and 512 px) against per-platform baselines in `bench/gate/baselines/`. To further harden quality across diverse visual styles, higher-volume, large-scale benchmarks are required.
 
 ### Implementation Tasks:
 - [ ] **Large-Scale Multi-Thousand Icon Benchmark Suite:**

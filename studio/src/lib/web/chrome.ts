@@ -1,9 +1,10 @@
 /**
  * What the browser build adds around the shared interface: files arriving by drag, drop or
- * paste (the desktop's webview reports dropped paths instead), and a plain word for phones.
+ * paste (the desktop's webview reports dropped paths instead), a one-line tip on phones,
+ * what the presentation page hands over, the loading screen, and the Hugging Face frame.
  */
 
-import { h } from "../dom";
+import { h, icon } from "../dom";
 import type { Store } from "../state";
 
 /**
@@ -66,33 +67,69 @@ export function pastedImages(take: (files: File[]) => void): void {
   });
 }
 
-/** Narrower than this, with a touch screen, the three-column interface does not fit. */
+/** Narrower than this, with a touch screen, is a phone (the interface's compact layout). */
 const PHONE_WIDTH = 760;
 
+/** Where a dismissed phone tip is remembered, for this tab's session only. */
+const PHONE_TIP_KEY = "inkvec-phone-tip-dismissed";
+
 /**
- * On a phone, say so rather than squeeze: the viewer, the rail and the palette need a
- * laptop's width. The note can be dismissed, and the app underneath works as it is.
+ * On a phone, one line at the foot of the screen: the app works here (it has a phone
+ * layout, one scrolling column upright and thin chrome on its side), and a larger screen
+ * shows the viewer, the controls and the palette side by side. It is a note, not a dialog:
+ * nothing waits for it, and its close button (32 px, over the 24 px of WCAG 2.2 SC 2.5.8)
+ * removes it for the rest of the session. It used to be a full-screen card saying the app
+ * did not fit a phone, which stopped being true when the phone layout arrived.
  */
 export function mountWebChrome(app: HTMLElement): void {
   const small = window.matchMedia(`(max-width: ${PHONE_WIDTH}px)`).matches;
   const touch = window.matchMedia("(pointer: coarse)").matches;
   if (!(small && touch)) return;
-  const note = h(
-    "div.phonenote",
-    { role: "dialog", "aria-label": "Best on a larger screen" },
+  try {
+    if (sessionStorage.getItem(PHONE_TIP_KEY)) return;
+  } catch {
+    // No session storage (blocked site data): the tip shows, and closes for this page only.
+  }
+  const tip = h(
+    "div.phonetip",
+    {
+      role: "note",
+      style: {
+        position: "fixed",
+        left: "0",
+        right: "0",
+        bottom: "0",
+        zIndex: "40",
+        display: "flex",
+        alignItems: "center",
+        gap: "8px",
+        padding: "6px 6px 6px 14px",
+        background: "var(--card)",
+        borderTop: "1px solid var(--rule)",
+        color: "var(--dim)",
+        fontSize: "13px",
+        lineHeight: "1.4",
+      },
+    },
+    h("span", { style: { flex: "1" } }, "Works on a phone; a larger screen shows the drawing, the controls and the palette side by side."),
     h(
-      "div.phonecard",
-      null,
-      h("span.serif", { style: { fontSize: "22px" } }, "Best on a larger screen"),
-      h(
-        "p",
-        null,
-        "Inkvec Studio Lite is a full editor: a viewer, a rail of controls and a palette side by side. On a phone they do not fit. Open this page on a laptop or desktop to use it; everything runs in your browser and nothing is uploaded.",
-      ),
-      h("button.btn", { onclick: () => note.remove() }, "Continue anyway"),
+      "button.btn.ghost.compact",
+      {
+        "aria-label": "Close this tip",
+        style: { minWidth: "32px", minHeight: "32px", justifyContent: "center" },
+        onclick: () => {
+          tip.remove();
+          try {
+            sessionStorage.setItem(PHONE_TIP_KEY, "1");
+          } catch {
+            // Not remembered: the next page load shows it once more.
+          }
+        },
+      },
+      icon("x", 14),
     ),
   );
-  app.append(note);
+  app.append(tip);
 }
 
 /** What the presentation page asked the Studio to open: a bundled sample, or a file. */

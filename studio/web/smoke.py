@@ -187,8 +187,12 @@ def phone(browser, url: str, out: pathlib.Path, note) -> None:
     ctx = browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True, device_scale_factor=2)
     page = ctx.new_page()
     page.goto(url)
-    page.wait_for_selector(".phonenote", timeout=60_000)
-    note("phone: 'best on a larger screen' note shown")
+    page.wait_for_selector(".phonetip", timeout=60_000)
+    page.wait_for_selector("#boot", state="detached", timeout=60_000)
+    # The tip is a note at the foot of the screen, not a dialog: the app takes clicks under it.
+    page.click(".phonetip button")
+    gone = page.locator(".phonetip").count() == 0
+    note(f"phone: one-line tip shown, closed with its button: {gone}")
     page.screenshot(path=str(out / "12-phone.png"))
     page.goto("about:blank")
 

@@ -40,13 +40,14 @@ const MIN_SHARED_BOUNDARY: u32 = 3;
 /// # Why these numbers
 ///
 /// Set from what images spend, with room, so that it never binds on the gate's. Measured
-/// 2026-10-02 (`INKVEC_DIAG`, `merge work=`): the most any image spent was 22.7 M units on
-/// the 246-icon screen set at 128 px (a Noto emoji whose many bands are small, so the
-/// spend is not proportional to area: 1,385 units a pixel), 21.8 M on the same icons at
-/// 512 px, 3.5 M on `held_a`, 18.0 M on the 51-image 512 px set and 24.4 M on the 2048 px
-/// inputs (the masthead, 15 units a pixel). Of the 772 non-pathological images of the
-/// r2-inputs stress set the most was 168 M (a wordmark on a diagonal gradient background,
-/// 34 s) and then 144 M (a scanned wordmark). The floor, 2²⁸ = 268 M, is 11 times the
+/// 2026-10-03 (`INKVEC_DIAG`, `merge work=`, union fits and common-pixel gains both
+/// charged): the most any image spent was 23.2 M units on the 246-icon screen set at
+/// 128 px (a Noto emoji whose many bands are small, so the spend is not proportional to
+/// area: 1,416 units a pixel), 24.4 M on the same icons at 512 px, 3.5 M on `held_a`,
+/// 18.5 M on the 51-image 512 px set, 24.5 M on the opaque 2048 px inputs (the masthead,
+/// 16 units a pixel) and 7.8 M on the transparent ones. Of the 772 non-pathological images
+/// of the r2-inputs stress set the most was 191 M (a scanned wordmark) and then 176 M (a
+/// wordmark on a diagonal gradient background). The floor, 2²⁸ = 268 M, is 11 times the
 /// gate's largest spend and above every one of those 772; the per-pixel term keeps an
 /// uncapped large image (`--max-dim 0`) at twice the masthead's rate. The images it stops
 /// are the ones that never finished: photographed and texture-backed prints.
@@ -92,6 +93,21 @@ fn union_work(n: usize) -> u64 {
 
 /// Gathered pixels one scored sample of a union fit is worth (see [`union_work`]).
 const MODEL_WORK_PER_SAMPLE: u64 = 13;
+
+/// What pricing one pair of `n` pixels on common pixels ([`common_pixel_gain`]) is
+/// charged, in the units of [`union_work`]: `n + min(n, MAX_FIT_SAMPLES)`.
+///
+/// The gain gathers every pixel of the union, with no stride (`collect_samples` over the
+/// concatenated member lists), and then scores at most [`MAX_FIT_SAMPLES`] of them under
+/// three models. It is computed once per union fit, but with region recovery on (the
+/// default) a merge drops every union and gain of the absorbing region, so a region that
+/// absorbs something each round has all its gains priced again over all its pixels. On a
+/// photographed `lucide/omega` that was 225 of the stage's 245 s (`INKVEC_TIMING`, "pick",
+/// 2026-10-03) against 20 s of union fits: the union fits alone were not the work to
+/// bound.
+fn gain_work(n: usize) -> u64 {
+    n as u64 + n.min(MAX_FIT_SAMPLES) as u64
+}
 
 /// One fitted union as the cache holds it: the pair `(a, b)`, `a < b`, its fit and the
 /// stale flag.
@@ -344,7 +360,7 @@ pub(crate) fn merge_bands_with(
     same_class: Option<&(dyn Fn(u16, u16) -> bool + Sync)>,
     inner_blends: bool,
 ) -> (Vec<FillFit>, Vec<usize>) {
-    merge_bands_budgeted(
+    let (fills, ink, _) = merge_bands_budgeted(
         labels,
         rgb,
         w,
@@ -355,10 +371,12 @@ pub(crate) fn merge_bands_with(
         same_class,
         inner_blends,
         MergeBudget::new(w, h, deadline),
-    )
+    );
+    (fills, ink)
 }
 
-/// [`merge_bands_with`] under an explicit [`MergeBudget`], so the tests can set the cap.
+/// [`merge_bands_with`] under an explicit [`MergeBudget`], so the tests can set the cap;
+/// also returns the budget as the loop left it (what it spent, and why it stopped).
 #[allow(clippy::too_many_arguments)]
 fn merge_bands_budgeted(
     labels: &mut [u16],
@@ -371,7 +389,7 @@ fn merge_bands_budgeted(
     same_class: Option<&(dyn Fn(u16, u16) -> bool + Sync)>,
     inner_blends: bool,
     budget: MergeBudget,
-) -> (Vec<FillFit>, Vec<usize>) {
+) -> (Vec<FillFit>, Vec<usize>, MergeBudget) {
     let n_pal = pal
         .len()
         .max(labels.iter().map(|&l| l as usize + 1).max().unwrap_or(0));
@@ -448,7 +466,8 @@ fn merge_bands_budgeted(
     }
 
     // 4. Write back.
-    merge.write_back(labels, pal, n_pal)
+    let (fills, ink) = merge.write_back(labels, pal, n_pal);
+    (fills, ink, merge.budget)
 }
 
 /// Diagnostic only: how many union fits the agglomeration asks for, and how many pixels
@@ -825,8 +844,10 @@ impl Agglomeration<'_> {
     /// * **Work**, deterministic: a wave is charged before it is fitted, the sum of
     ///   [`union_work`] over its unions (the sizes are known from the member lists), and a
     ///   wave that would pass the cap is not fitted at all; a stale refit is charged the
-    ///   same way. The charge is a function of the sizes alone, so where the loop stops is
-    ///   the same on every machine and every thread count.
+    ///   same way, and so is every common-pixel gain before the pick prices it
+    ///   ([`gain_work`], [`Self::pending_gain_work`]). The charges are functions of the
+    ///   sizes alone, so where the loop stops is the same on every machine and every thread
+    ///   count.
     /// * **Time**, only with a deadline: checked at the top of each round as before, and now
     ///   also before each fit inside a wave and before each stale refit, because one wave
     ///   could take most of a minute (a first wave of 1,485 unions on a textured backdrop
@@ -993,6 +1014,13 @@ impl Agglomeration<'_> {
     /// then ends the loop either way.
     fn pick_merge(&mut self, stale_refits: &mut u64) -> Option<(u32, u32)> {
         loop {
+            // The gains `best_gain` is about to price for the first time are charged before
+            // it prices any, as one sum over a set that does not depend on the order the
+            // pairs are visited in (the adjacency is a hash map), so where the cap stops the
+            // loop is still the same on every run.
+            if !self.budget.charge(self.pending_gain_work()) {
+                break None;
+            }
             let Some((_, a, b)) = self.best_gain() else {
                 break None;
             };
@@ -1017,6 +1045,38 @@ impl Agglomeration<'_> {
             }
             break Some((a, b));
         }
+    }
+
+    /// The [`gain_work`] of every common-pixel gain the next [`Self::best_gain`] will
+    /// compute: each candidate pair it visits whose union is cached and a gradient, priced on
+    /// common pixels ([`Self::pair_gain`]: a smooth pair, or every pair under
+    /// `INKVEC_MERGE_COMMON_PIXELS`) and not yet in `gains`. The same filters as
+    /// `best_gain`, in the same order; a sum, so the order of the hash maps does not matter.
+    fn pending_gain_work(&self) -> u64 {
+        let mut work = 0u64;
+        for a in 0..self.members.len() {
+            if !self.alive[a] {
+                continue;
+            }
+            for (&b, &shared) in self.adj[a].iter() {
+                if (b as usize) <= a || shared < MIN_SHARED_BOUNDARY {
+                    continue;
+                }
+                let b = b as usize;
+                if !self.worth_a_union(a, b) || self.gains.contains_key(&(a as u32, b as u32)) {
+                    continue;
+                }
+                let gradient_union = self
+                    .cache
+                    .get(&(a as u32, b as u32))
+                    .is_some_and(|(u, _)| u.model.is_gradient());
+                if gradient_union && (self.common_pixels || self.smooth_pair(a, b)) {
+                    work = work
+                        .saturating_add(gain_work(self.members[a].len() + self.members[b].len()));
+                }
+            }
+        }
+        work
     }
 
     /// The best `(gain, a, b)` over every cached candidate pair, fresh or stale.
@@ -1470,9 +1530,9 @@ mod tests {
         };
         let base: Vec<u16> = (0..w * h).map(|p| ((p % w) / band) as u16).collect();
         let (sigma, lambda) = (0.5 / 255.0, bic_lambda(w * h));
-        let run = |budget: MergeBudget| {
+        let spend = |budget: MergeBudget| {
             let mut labels = base.clone();
-            let (fills, ink) = merge_bands_budgeted(
+            let (fills, ink, left) = merge_bands_budgeted(
                 &mut labels,
                 &rgb,
                 w,
@@ -1484,15 +1544,24 @@ mod tests {
                 true,
                 budget,
             );
-            (labels, format!("{fills:?}"), ink)
+            ((labels, format!("{fills:?}"), ink), left)
         };
-        let unbounded = run(MergeBudget {
-            cap: u64::MAX,
+        let run = |budget: MergeBudget| spend(budget).0;
+        let capped = |cap: u64| MergeBudget {
+            cap,
             spent: 0,
             deadline: None,
             stop: None,
-        });
+        };
+        let (unbounded, all) = spend(capped(u64::MAX));
+        assert_eq!(all.stop, None, "the unbounded loop ends by itself");
         assert_eq!(run(MergeBudget::new(w, h, None)), unbounded);
+        // The cap is strict and every unit charged is spent: a cap of exactly what the whole
+        // loop spent changes nothing, one unit less stops it early, with a different result.
+        assert_eq!(run(capped(all.spent)), unbounded);
+        let (short, left) = spend(capped(all.spent - 1));
+        assert_eq!(left.stop, Some(MergeStop::Work));
+        assert_ne!(short, unbounded);
         let first = unbounded.0[0];
         assert!(unbounded.0.iter().all(|&l| l == first), "one region");
         let mut none = MergeBudget::new(w, h, None);

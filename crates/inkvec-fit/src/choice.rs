@@ -51,6 +51,23 @@
 //! path whenever a thread is idle -- at the stage's tail, where the largest ring is left
 //! running alone.
 //!
+//! Measured on this code (2026-10-02, 16 threads, the box under heavy load from other
+//! jobs, images interleaved, medians over reps), `fit_dp` stage time against v0.2.4 and
+//! then step 2 alone (against the same build without it):
+//!
+//! ```text
+//!                              v0.2.4 -> steps 1-2 (2 reps)   step 2 alone (2-3 reps)
+//!   128 px, 246 screen icons   -40 % sum, -37 % median        -8 % sum, -3 % median
+//!   512 px, 51 images          -20 % sum, -22 % median        -10 % sum, -5 % median
+//!   2048 px, 3 transparent     -10 % sum, -19 % median        -13 % sum, -13 % median
+//!   2048 px, 7 opaque          +10 % sum, +2 % median (noise) +1 % sum, +2 % median
+//! ```
+//!
+//! "v0.2.4 -> steps 1-2" includes `crate::merge`'s faster search. Step 1 is most of the
+//! 128 px gain: the frame alone took 31 % off `fit_dp` (sum) and 12 % off process CPU.
+//! On the opaque 2048 px images step 2 buys nothing measurable: hundreds of rings keep
+//! every thread busy until the end, so there is little idle time to give the search.
+//!
 //! # Literature
 //!
 //! - Inspired by: Morin, T. L. & Marsten, R. E. (1976), "Branch-and-bound strategies for
@@ -67,9 +84,11 @@
 //!   computations by work stealing", *J. ACM* 46(5):720–748, doi:10.1145/324133.324234 --
 //!   the randomised work-stealing fork-join that `rayon::join` implements, with expected
 //!   time `T1/P + O(T∞)`; step 2 lowers the span `T∞` (the largest ring) without adding
-//!   work. A thread waiting in a join may run another boundary's whole job meanwhile
-//!   (rayon's documentation of `join`), which can delay that join's return; measured, see
-//!   the commit that added it.
+//!   work. A thread waiting in a join may run another job meanwhile (rayon's documentation
+//!   of `join`). The program's own block-parallel scan waits that way, so on a large ring
+//!   its thread can pick up the ring's primitive search and finish it before resuming:
+//!   the ring then takes no longer than in sequence, but the program's own timer reads the
+//!   search too.
 //! - Not from the literature: the parameter-count floor itself, because it is a property
 //!   of this objective's prices (every segment costs at least two numbers). See also the
 //!   price floor of `crate::merge`, the same argument applied to one merge.

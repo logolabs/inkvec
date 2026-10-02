@@ -64,7 +64,11 @@
 //!   and the self-crossing test deferred to the candidates that would win.
 //!
 //! Together they cut the post-fit merge by 46 % in r2-qspeed's prototype (sum over the
-//! screen set, one thread), byte-identical on all 246 icons.
+//! screen set, one thread), byte-identical on all 246 icons. As shipped (2026-10-02, 16
+//! threads, under heavy load, 2 reps interleaved against v0.2.4): `fit_dp` -5 % and
+//! process CPU -7 % at 128 px (246 icons, sums), `fit_dp` -4 % and CPU -4 % at 512 px
+//! (51 images); the repair stage, which runs the same pass on refitted rings, -19 % at
+//! 128 px.
 
 use inkvec_core::{Point, Polyline, Vec2};
 

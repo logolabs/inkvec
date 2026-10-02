@@ -81,7 +81,10 @@
 //! 146 million point terms, each a brute-force nearest of 25 or 97 samples plus one
 //! `hypot`. The screen alone cut the post-fit merge by 39 % (sum over icons) and `fit_dp`
 //! by 11 %; with the cached grid of `super::grid`, by 46 % and 12 %. In WASM (Node, the
-//! wasip1 build, 8 icons) `fit_dp` fell 8.5 %. Byte-identical on all 246 icons.
+//! wasip1 build, 8 icons) `fit_dp` fell 8.5 %. Byte-identical on all 246 icons. As
+//! shipped, with the image-frame and parallel-primitive changes of `crate::choice` on top,
+//! the wasip1 build under Node (one thread, 31 screen icons, 3 alternating reps) traced
+//! 21 % faster than v0.2.4 and its `fit_dp` was 28 % faster (sums).
 //!
 //! # Literature
 //!

@@ -14,11 +14,14 @@
 //! 2. **Decode** with the `image` crate into whatever layout the file holds (8-bit RGB for
 //!    most opaque PNGs and every JPEG, 8-bit RGBA for most transparent ones), with a larger
 //!    allocation allowance when the cap will apply ([`capped_decode_limits`]).
-//! 3. **Turn** the image upright by its EXIF orientation ([`decode_upright`]), so a phone
+//! 3. **Colour-manage**: an embedded ICC profile that is not sRGB converts the 8-bit image
+//!    to sRGB (`icc::to_srgb`), so a Display P3 or Adobe RGB file is traced in the colours
+//!    a viewer shows.
+//! 4. **Turn** the image upright by its EXIF orientation ([`decode_upright`]), so a phone
 //!    photo is traced as it is shown; the dimensions reported from here on are upright.
-//! 4. **Cap**: above `max_dim` on the longer side, box-average the 8-bit buffer down
+//! 5. **Cap**: above `max_dim` on the longer side, box-average the 8-bit buffer down
 //!    (`coverage::box_downsample_rgba8`) before any float exists.
-//! 5. **Widen** to floats ([`from_dynamic`]): one table lookup per byte ([`UNIT`]), straight
+//! 6. **Widen** to floats ([`from_dynamic`]): one table lookup per byte ([`UNIT`]), straight
 //!    from the decoder's own buffer for 8-bit RGB and RGBA, in parallel chunks on a large
 //!    image. The result is the same float the old per-byte division gave.
 //!
@@ -29,6 +32,8 @@
 use std::path::Path;
 
 use crate::coverage::{self, Rgba};
+
+mod icc;
 
 /// Error loading or decoding a raster image.
 #[derive(Debug)]
@@ -156,8 +161,9 @@ fn decode_as(
     Ok((cap_decoded(img, w, h, max_dim), (w, h)))
 }
 
-/// `ImageReader::decode` under `limits`, then turned the way the file says it is to be
-/// shown: its EXIF orientation applied.
+/// `ImageReader::decode` under `limits`, then shown the way the file says it is to be
+/// shown: its embedded ICC profile converted to sRGB (`icc::to_srgb`, which leaves an image
+/// without a profile, or with an sRGB one, untouched) and its EXIF orientation applied.
 ///
 /// A camera stores the sensor's rows as they came and records how the picture is to be
 /// turned in the EXIF Orientation tag (274, values 1-8: identity, the two mirrors, the
@@ -189,10 +195,15 @@ fn decode_upright(
     let orientation = decoder
         .orientation()
         .unwrap_or(image::metadata::Orientation::NoTransforms);
+    // An unreadable profile is no profile: the pixels are still read as sRGB.
+    let icc = decoder.icc_profile().ok().flatten();
     let mut limits = limits;
     limits.reserve(decoder.total_bytes())?;
     decoder.set_limits(limits)?;
     let mut img = image::DynamicImage::from_decoder(decoder)?;
+    if let Some(icc) = icc {
+        img = icc::to_srgb(img, &icc);
+    }
     img.apply_orientation(orientation);
     Ok(img)
 }

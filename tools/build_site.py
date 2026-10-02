@@ -53,6 +53,12 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "site"
 GITHUB = "https://github.com/logolabs/inkvec"
 SPACE = "https://huggingface.co/spaces/Logolabs/inkvec"
+# Inkvec Studio Lite at the Space's static host, in a tab of its own: the host sends the
+# cross-origin isolation headers, so the Studio runs on every core with the denoiser. The
+# Space page above shows the same site inside an iframe on huggingface.co, which cannot be
+# isolated, so a Studio opened there runs on one core (2048 px Quality 1.7-3.5x slower,
+# r2-product). "Try it" links go straight here; "demo" names the Space.
+STUDIO = "https://logolabs-inkvec.static.hf.space/studio/index.html"
 LOGOLABS = "https://logolabs.org"
 DEFAULT_BASE = "/inkvec/"
 
@@ -544,7 +550,7 @@ __HEAD__
 <header class="top">
   <a class="brand" href="__BASE__"><img src="__BASE__logo-mono.svg" alt=""> <span>Inkvec</span></a>
   <nav class="toplinks">
-    <a href="__SPACE__">Try in the browser</a>
+    <a href="__STUDIO__">Try in the browser</a>
     <a href="__GITHUB__">GitHub</a>
   </nav>
 </header>
@@ -694,6 +700,7 @@ def write_page(out: Path, base: str, slug: str, title: str, body: str,
            .replace("__DESC__", html_mod.escape(first_paragraph(body)))
            .replace("__BASE__", base)
            .replace("__SPACE__", SPACE)
+           .replace("__STUDIO__", STUDIO)
            .replace("__GITHUB__", GITHUB)
            .replace("__LOGOLABS__", LOGOLABS)
            .replace("__HEAD__", extra_head)
@@ -796,7 +803,7 @@ def build(base: str) -> int:
                     f'<h1><img class="heromark" src="{base}logo-mono.svg" alt="">Inkvec</h1>'
                     f'<p class="pitch">Exact SVG from logos and icons. The geometry is decided '
                     f'by the evidence in the pixels &mdash; not by a tolerance slider.</p>'
-                    f'<div class="cta"><a class="btn primary" href="{SPACE}">Try it in the browser</a>'
+                    f'<div class="cta"><a class="btn primary" href="{STUDIO}">Try it in the browser</a>'
                     f'<a class="btn" href="{base}algorithm/">How it works</a>'
                     f'<a class="btn" href="{base}studio/">Studio guide</a>'
                     f'<a class="btn ghost" href="{GITHUB}/releases">Download</a></div></section>')
@@ -832,6 +839,7 @@ def build(base: str) -> int:
         .replace("__DESC__", "Page not found")
         .replace("__BASE__", base)
         .replace("__SPACE__", SPACE)
+        .replace("__STUDIO__", STUDIO)
         .replace("__GITHUB__", GITHUB)
         .replace("__HEAD__", "")
         .replace("__NAV__", render_nav(base, ""))

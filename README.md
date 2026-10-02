@@ -248,7 +248,7 @@ How it is built and the decisions behind it: [`studio/README.md`](studio/README.
 
 **Inkvec Studio Lite** is the whole Studio interface in the browser: the desktop app's own frontend and its shared Rust core (`studio/core`) compiled to WebAssembly and run in a Web Worker (`studio/wasm`) — Vectorize with drafts and the wizard, the palette and colour groups, export as downloads, Minify and Fabricate, with Full screen. `cd studio && npm run build:web` builds the Space (the presentation page at the root, the Studio under `studio/`); see [`studio/README.md`](studio/README.md#inkvec-studio-lite-in-the-browser).
 
-**Try it live:** [huggingface.co/spaces/logolabs/inkvec](https://huggingface.co/spaces/logolabs/inkvec)
+**Try it live:** [huggingface.co/spaces/logolabs/inkvec](https://huggingface.co/spaces/logolabs/inkvec), or straight into Inkvec Studio Lite in a tab of its own, where it runs on every core: [logolabs-inkvec.static.hf.space/studio/index.html](https://logolabs-inkvec.static.hf.space/studio/index.html). Inside the Space page's frame the browser cannot give the Studio its threads, so the front page opens it in its own tab.
 
 ### The denoiser in the browser
 

@@ -961,10 +961,11 @@ mod decode_cap_tests {
         );
         // 12000 x 12000 RGBA fits the capped allowance (on a 64-bit target); 20000 x 20000
         // does not.
-        if cfg!(target_pointer_width = "64") {
-            assert!(12_000u64 * 12_000 * 4 <= DEFAULT_MAX_ALLOC + CAPPED_EXTRA_ALLOC);
-        }
-        assert!(20_000u64 * 20_000 * 4 > DEFAULT_MAX_ALLOC + CAPPED_EXTRA_ALLOC);
+        #[cfg(target_pointer_width = "64")]
+        const {
+            assert!(12_000u64 * 12_000 * 4 <= DEFAULT_MAX_ALLOC + CAPPED_EXTRA_ALLOC)
+        };
+        const { assert!(20_000u64 * 20_000 * 4 > DEFAULT_MAX_ALLOC + CAPPED_EXTRA_ALLOC) };
     }
 
     /// The fuzz case `m1_00557_s0.gif`, made small: a GIF whose logical screen is 0 pixels

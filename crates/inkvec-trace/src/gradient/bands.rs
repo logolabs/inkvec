@@ -93,6 +93,10 @@ fn union_work(n: usize) -> u64 {
 /// Gathered pixels one scored sample of a union fit is worth (see [`union_work`]).
 const MODEL_WORK_PER_SAMPLE: u64 = 13;
 
+/// One fitted union as the cache holds it: the pair `(a, b)`, `a < b`, its fit and the
+/// stale flag.
+type CachedUnion = ((u32, u32), (FillFit, bool));
+
 /// Why the agglomeration stopped before running out of profitable merges.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MergeStop {
@@ -951,7 +955,7 @@ impl Agglomeration<'_> {
         use rayon::prelude::*;
         let this = &*self;
         let deadline = this.budget.deadline;
-        let computed: Vec<Option<((u32, u32), (FillFit, bool))>> = missing
+        let computed: Vec<Option<CachedUnion>> = missing
             .par_iter()
             .map(|&(a, b)| {
                 live.check();

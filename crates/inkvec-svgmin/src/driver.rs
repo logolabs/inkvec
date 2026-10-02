@@ -11,7 +11,7 @@ use std::ops::Range;
 use crate::document;
 use crate::fit::minify_subpath;
 use crate::geom::dist_to_segment;
-use crate::path::{parse_d, Src, Subpath};
+use crate::path::{parse_d, parse_d_written, Src, Subpath};
 use crate::write::{decimals_for, primitive_element, Writer, LOSSLESS_DECIMALS};
 use crate::{Options, Report};
 use inkvec_core::Point;
@@ -159,7 +159,8 @@ struct Outcome {
 ///
 /// `eps_units` is the tolerance in document units and `ext` the drawing's extent; both are
 /// divided by the path's transform scale to work in its own coordinates. With `fit` off only
-/// the spelling changes (the `compact` mode). A path whose whole geometry is one primitive,
+/// the spelling changes (the `compact` mode), and the segments are the ones the file wrote,
+/// arcs included ([`parse_d_written`]). A path whose whole geometry is one primitive,
 /// and that is a self-closing element, is replaced by a `<circle>`, `<ellipse>` or `<rect>`
 /// when that stores fewer numbers; otherwise the new `d` is kept only if it is shorter in
 /// bytes and reads back as the same drawing ([`parses_back`]).
@@ -196,25 +197,39 @@ fn rewrite_path(job: &Job, eps_units: f64, ext: f64, opts: &Options, fit: bool) 
     let mut w = Writer::new(quantum, most);
     let mut guarded = 0;
     let mut whole: Option<PrimitiveKind> = None;
-    for sp in &subpaths {
-        delta.subpaths += 1;
-        let first = w.out.is_empty();
-        match fit
-            .then(|| minify_subpath(sp, eps, &cfg, opts.corner_degrees))
-            .flatten()
-        {
-            Some((start, segs, g, prim)) => {
-                guarded += g;
-                if subpaths.len() == 1 {
-                    whole = prim;
+    if fit {
+        for sp in &subpaths {
+            delta.subpaths += 1;
+            let first = w.out.is_empty();
+            match minify_subpath(sp, eps, &cfg, opts.corner_degrees) {
+                Some((start, segs, g, prim)) => {
+                    guarded += g;
+                    if subpaths.len() == 1 {
+                        whole = prim;
+                    }
+                    w.subpath(start, &segs, sp.closed, first);
                 }
-                w.subpath(start, &segs, sp.closed, first);
+                None => {
+                    // The geometry stays exactly as it was; the bytes need not.
+                    let segs: Vec<Segment> = sp.segs.iter().map(Src::segment).collect();
+                    w.subpath(sp.segs[0].start(), &segs, sp.closed, first);
+                }
             }
-            None => {
-                // The geometry stays exactly as it was; the bytes need not.
-                let segs: Vec<Segment> = sp.segs.iter().map(Src::segment).collect();
-                w.subpath(sp.segs[0].start(), &segs, sp.closed, first);
-            }
+        }
+    } else {
+        // Respelling only: the segments exactly as the file wrote them, arcs included.
+        // Read through `parse_d` instead, an arc arrives as the cubics that approximate it,
+        // those are longer than the `A` they came from, and the byte test below then kept
+        // every path that held an arc exactly as it was: 57% of the tracer's `--minify`
+        // paths and 72% of their path bytes (screen set, 2026-10-02). The writer already
+        // spells arcs (`A`/`a`, flags without separators); it only needed to be given them.
+        let Ok(written) = parse_d_written(&job.d) else {
+            return keep(delta);
+        };
+        for sp in &written {
+            delta.subpaths += 1;
+            let first = w.out.is_empty();
+            w.subpath(sp.start, &sp.segs, sp.closed, first);
         }
     }
     let d = w.out;

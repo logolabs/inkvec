@@ -61,12 +61,8 @@
       },
       "svg": {
         "x86_64-windows-msvc": {
-          "bytes": 6565,
-          "sha256": "0ce1e0ceabea7848509ebb0d7e8095c1dc5df252185d700936c1ffbf3393de09"
-        },
-        "x86_64-linux-gnu": {
-          "bytes": 6565,
-          "sha256": "680438d448dda8cfce4914a44659431491ccc47c2e94dd763a821da0e0a8c75c"
+          "bytes": 5819,
+          "sha256": "f60ebf7af03eaab559b8d714f60478aa7a1b69aff00dcb6a5ed04fb7deaa9789"
         }
       }
     },

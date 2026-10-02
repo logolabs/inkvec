@@ -373,7 +373,7 @@ OPTIONS:
                             bytes: relative commands where they are shorter, repeated
                             letters and needless separators dropped, H/V/S where they say
                             the same thing. Nothing is rounded and nothing moves -- the
-                            same picture, pixel for pixel, about a twelfth smaller
+                            same picture, pixel for pixel, about a third smaller
         --editability       Post-fit passes for artists: G1-smooth joins, axis-aligned
                             and equal-length handles, aligned nodes, and self-symmetric
                             rings locked into exact mirrors. Every pass is guarded to the

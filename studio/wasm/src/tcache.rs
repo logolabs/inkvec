@@ -62,16 +62,17 @@
 //!   in the cache exceeds 2MB") enforced by moving L/2 blocks of each list back, where L is the
 //!   list's low-water mark since the last collection. Adapted: there is no central free list
 //!   or page heap of our own (the system `dlmalloc` is the central heap, behind its lock), the
-//!   classes are four per power of two rather than TCMalloc's table, and the budget is checked
-//!   on every free rather than by a separate collector.
+//!   classes are four per power of two rather than TCMalloc's table, the budget is checked on
+//!   every free rather than by a separate collector, and it is 128 KiB, not 2 MB, because a
+//!   smaller budget measured as fast and leaner here (see [`THREAD_CAP`]).
 //! * Inspired by: E. D. Berger, K. S. McKinley, R. D. Blumofe and P. R. Wilson, "Hoard: a
 //!   scalable memory allocator for multithreaded applications", ASPLOS 2000,
 //!   doi:10.1145/378993.379232: contention at one central heap is the scalability failure,
 //!   and per-thread heaps must keep the memory blow-up bounded. Our bound is [`THREAD_CAP`].
 //! * See also: D. Leijen, B. Zorn and L. de Moura, "Mimalloc: Free List Sharding in Action",
-//!   APLAS 2019 (also MSR-TR-2019-18): thread-local sharded free lists. Not used as a crate because none
-//!   of mimalloc, Hoard or TCMalloc builds for `wasm32-unknown-unknown` with shared memory
-//!   (they need an OS: `mmap`, real threads, blocking locks), and the pure-Rust wasm
+//!   APLAS 2019 (also MSR-TR-2019-18): thread-local sharded free lists. Not used as a crate
+//!   because none of mimalloc, Hoard or TCMalloc builds for `wasm32-unknown-unknown` with shared
+//!   memory (they need an OS: `mmap`, real threads, blocking locks), and the pure-Rust wasm
 //!   allocators (`talc`, `lol_alloc`, `dlmalloc` itself) are single-heap behind a lock, which
 //!   is the problem being solved.
 //! * The bug being worked around: Rust std, `library/std/src/sys/alloc/wasm.rs` (one
@@ -101,13 +102,20 @@ pub const NATURAL_ALIGN: usize = 2 * core::mem::size_of::<usize>();
 /// with a 4 MiB budget was no faster than 32 KiB (stage sum 1.00x) and raised the memory
 /// high-water from 179 to 194 MB; caching up to 4 MiB with no effective budget (the research
 /// prototype's reach) was slower on every gradient image (e.g. 6.3 -> 18.8 s) and grew memory
-/// to 863 MB, the pool spending its time growing memory instead of waiting on the lock.
+/// to 863 MB (growing memory happens inside the system heap, under the same lock).
 pub const SMALL_MAX: usize = 1 << 15;
 
-/// The most free-block bytes one thread may keep, in bytes (TCMalloc's 2007 figure). With it
-/// and [`SMALL_MAX`] the memory cost is small: high-water 158 -> 161 MB on the 39 images,
-/// where the unbounded research prototype went from 122 to 382 MB.
-pub const THREAD_CAP: usize = 2 << 20;
+/// The most free-block bytes one thread may keep, in bytes. TCMalloc's 2007 figure is 2 MB;
+/// here a smaller budget was as fast and leaner, because what the pool recycles is small
+/// blocks freed and taken again within moments on the same thread, while every block held
+/// beyond that is memory `dlmalloc` can neither reuse for another size nor coalesce. Measured
+/// (interleaved A/Bs in headless Edge, under load, w2-lite): 2 MiB -> 512 KiB: 39 images
+/// 0.84x the stage time, memory high-water 156 -> 141 MB, ten 2048 px images 0.91x and
+/// 526 -> 458 MB; 512 KiB -> 128 KiB: 1.00x and 134 -> 129 MB, 0.95x and 523 -> 442 MB
+/// (std's allocator alone: 431 MB on the same ten). A 2 MiB budget with every cache emptied
+/// after each trace was 1.08x slower and no leaner at 2048 px. At 16 threads the caches hold
+/// at most 2 MiB together; the research prototype, unbounded, went from 122 to 382 MB.
+pub const THREAD_CAP: usize = 128 << 10;
 
 /// A thread-local's value once its TLS block holds this thread's copy of the initial image.
 ///

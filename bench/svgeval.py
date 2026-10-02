@@ -134,7 +134,7 @@ def _every_corpus_icon(full: list) -> list:
         if not fam_dir.is_dir():
             continue
         fam = fam_dir.name
-        for png in sorted((fam_dir / tier()).glob("*.png")):
+        for png in sorted((fam_dir / base_tier(tier())).glob("*.png")):
             stem = png.stem
             if (fam, stem) in known:
                 continue
@@ -206,9 +206,71 @@ def tier() -> str:
     return TIER
 
 
+def set_tier(name: str) -> None:
+    """Score against raster tier `name` from now on, in this process and in every pool
+    worker it starts afterwards.
+
+    Both halves are needed. Spawned workers (Windows, macOS) are fresh interpreters that
+    resolve the tier from the environment; forked workers (Linux) inherit this module's
+    globals as they are at the fork, and a global already resolved to another tier would
+    win over the environment. Setting only one of the two scores the wrong rasters on one
+    platform and the right ones on the other."""
+    global TIER, _TIER_RESOLVED
+    os.environ["INKVEC_TIER"] = name
+    TIER = name
+    _TIER_RESOLVED = True
+
+
+#: A tier named `<base>op` is tier `<base>` flattened onto white: the same artwork as an
+#: opaque logo on a white page, the input most users send. The r2-eval research measured
+#: that it behaves differently from the transparent raster (v0.2.4 at 512 px: params ratio
+#: median 1.19 transparent vs 1.50 opaque; one background rect more), so the gate scores
+#: both. The flattened rasters are derived on first use, not committed.
+OPAQUE_SUFFIX = "op"
+
+
+def base_tier(name: str) -> str:
+    """The committed raster tier a tier is read from: `512ssop` -> `512ss`, else itself."""
+    if name.endswith(OPAQUE_SUFFIX) and len(name) > len(OPAQUE_SUFFIX):
+        return name[: -len(OPAQUE_SUFFIX)]
+    return name
+
+
+def flatten_onto_white(src: Path, dst: Path) -> None:
+    """Composite an RGBA raster over white and save it as 8-bit RGB.
+
+    out = rgb * a + (1 - a), per channel, in straight (non-premultiplied) alpha with every
+    value in [0, 1], then quantised as `floor(255 out + 0.5)`. This is the arithmetic the
+    r2-eval research used for its `512ssop` numbers, kept identical so they are comparable.
+    The write is atomic: two pool workers may derive the same file at once.
+    """
+    from PIL import Image
+    a = np.asarray(Image.open(src).convert("RGBA"), dtype=np.float32) / 255.0
+    rgb = a[..., :3] * a[..., 3:4] + (1.0 - a[..., 3:4])
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(f"{dst.stem}.{os.getpid()}.tmp.png")
+    Image.fromarray(_rgb8(rgb), "RGB").save(tmp)
+    try:
+        os.replace(tmp, dst)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+
+
 def item_paths(it: dict) -> tuple[Path, Path]:
-    png = ROOT / "bench" / "data" / "corpus_raster" / it["corpus"] / tier() / f"{it['stem']}.png"
+    """The input raster at the current tier and the artist's SVG for one icon.
+
+    A committed raster wins. For an opaque tier (`<base>op`) with no committed raster, the
+    base tier's raster is flattened onto white into the cache (`CACHE/raster/<tier>/`) once,
+    and that file is the input."""
+    t = tier()
+    png = ROOT / "bench" / "data" / "corpus_raster" / it["corpus"] / t / f"{it['stem']}.png"
     gt = ROOT / "bench" / "data" / "corpus_svg" / it["corpus"] / f"{it['stem']}.svg"
+    if not png.exists() and base_tier(t) != t:
+        src = ROOT / "bench" / "data" / "corpus_raster" / it["corpus"] / base_tier(t) / f"{it['stem']}.png"
+        derived = CACHE / "raster" / t / it["corpus"] / f"{it['stem']}.png"
+        if not derived.exists() and src.exists():
+            flatten_onto_white(src, derived)
+        png = derived
     return png, gt
 
 
@@ -358,6 +420,9 @@ class ImageScore:
     turning: float = 0.0
     mirror: float = 0.0
     svg: str = ""
+    # SHA-256 of the emitted SVG's bytes. Two builds that emit the same bytes for an icon
+    # score it identically, so the gate can tell "unchanged" from "changed by a tie".
+    sha256: str = ""
 
 
 @dataclass
@@ -589,7 +654,7 @@ def cache_save(exe: Path, extra_args, entries: dict) -> None:
 
 
 CACHE_FIELDS = ("de00", "dists", "ratio", "seconds", "corpus", "stem",
-                "self_res", "turning", "mirror")
+                "self_res", "turning", "mirror", "sha256")
 
 
 def structure_signals(svg: str, src_png: Path) -> dict:
@@ -671,7 +736,8 @@ def score_one(args: tuple) -> dict:
     if r.returncode != 0:
         return {"fail": f"{it['stem']}: exit {r.returncode}: "
                         f"{r.stderr.decode('utf-8', 'replace')[-300:]}"}
-    svg = out.read_text(encoding="utf-8")
+    raw = out.read_bytes()                  # hashed as written ...
+    svg = out.read_text(encoding="utf-8")   # ... and scored as before (newline-translated)
     try:
         b = render.composite(render.render(svg, JUDGE_SIZE, JUDGE_SIZE))
     except BaseException as e:  # resvg raises odd things on malformed output
@@ -684,7 +750,8 @@ def score_one(args: tuple) -> dict:
                de00=float(mcolor.delta_e00(ref, b)["de00_mean"]),
                dists=0.0,
                ratio=svgmodel.parse(svg).n_params / max(1, it["gt_params"]),
-               seconds=dt, svg=svg if keep_svg else "")
+               seconds=dt, svg=svg if keep_svg else "",
+               sha256=hashlib.sha256(raw).hexdigest())
     res["_render"] = str(rp)
     res["_gt"] = str(CACHE / f"gt{JUDGE_SIZE}" / it["corpus"] / f"{it['stem']}.png")
     if not keep_svg:

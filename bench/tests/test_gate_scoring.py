@@ -65,5 +65,43 @@ class GtRenderTests(unittest.TestCase):
         self.assertNotEqual(a, b)
 
 
+class OpaqueTierTests(unittest.TestCase):
+    def test_base_tier(self):
+        self.assertEqual(svgeval.base_tier("512ssop"), "512ss")
+        self.assertEqual(svgeval.base_tier("128ss"), "128ss")
+        self.assertEqual(svgeval.base_tier("op"), "op")
+
+    def test_flatten_onto_white(self):
+        from PIL import Image
+        rgba = np.array([[[255, 0, 0, 255], [255, 0, 0, 0]],
+                         [[0, 0, 255, 128], [10, 20, 30, 255]]], dtype=np.uint8)
+        with tempfile.TemporaryDirectory() as d:
+            src, dst = Path(d) / "a.png", Path(d) / "out" / "a.png"
+            Image.fromarray(rgba, "RGBA").save(src)
+            svgeval.flatten_onto_white(src, dst)
+            img = Image.open(dst)
+            self.assertEqual(img.mode, "RGB")
+            got = np.asarray(img).tolist()
+        # Half-covered blue over white: 255 * (1 - 128/255) + 0.5 -> 127 in red and green.
+        self.assertEqual(got, [[[255, 0, 0], [255, 255, 255]], [[127, 127, 255], [10, 20, 30]]])
+
+    def test_item_paths_derives_the_opaque_raster_once(self):
+        it = svgeval.load_sets()["screen"][0]
+        saved = (svgeval.TIER, svgeval._TIER_RESOLVED, svgeval.os.environ.get("INKVEC_TIER"))
+        try:
+            with tempfile.TemporaryDirectory() as d, patch.object(svgeval, "CACHE", Path(d)):
+                svgeval.set_tier("128ssop")
+                png, gt = svgeval.item_paths(it)
+                self.assertTrue(png.exists() and gt.exists())
+                self.assertTrue(str(png).startswith(d))
+                self.assertEqual(svgeval.os.environ["INKVEC_TIER"], "128ssop")
+        finally:
+            svgeval.TIER, svgeval._TIER_RESOLVED = saved[0], saved[1]
+            if saved[2] is None:
+                svgeval.os.environ.pop("INKVEC_TIER", None)
+            else:
+                svgeval.os.environ["INKVEC_TIER"] = saved[2]
+
+
 if __name__ == "__main__":
     unittest.main()

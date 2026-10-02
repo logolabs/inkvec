@@ -95,7 +95,10 @@ def load_sets() -> dict:
     if v2.exists():
         d = json.loads(v2.read_text(encoding="utf-8"))
         global TIER, _TIER_RESOLVED
-        TIER = str(d.get("tier", "128"))
+        # INKVEC_TIER wins here as it does in `tier()`. Without this, a serial run (workers=1,
+        # scored in this process) of `INKVEC_TIER=512ss` read the 128ss rasters, because this
+        # line had already resolved the tier from the devset file.
+        TIER = os.environ.get("INKVEC_TIER") or str(d.get("tier", "128"))
         _TIER_RESOLVED = True
         sets = {k: d[k] for k in ("dev", "held_a", "held_b", "full")}
         # A stratified quarter of the full set, for screening a change before it is worth

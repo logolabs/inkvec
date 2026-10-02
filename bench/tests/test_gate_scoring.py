@@ -85,6 +85,15 @@ class OpaqueTierTests(unittest.TestCase):
         # Half-covered blue over white: 255 * (1 - 128/255) + 0.5 -> 127 in red and green.
         self.assertEqual(got, [[[255, 0, 0], [255, 255, 255]], [[127, 127, 255], [10, 20, 30]]])
 
+    def test_environment_tier_survives_load_sets(self):
+        saved = (svgeval.TIER, svgeval._TIER_RESOLVED)
+        try:
+            with patch.dict(svgeval.os.environ, {"INKVEC_TIER": "512ss"}):
+                svgeval.load_sets()
+                self.assertEqual(svgeval.tier(), "512ss")
+        finally:
+            svgeval.TIER, svgeval._TIER_RESOLVED = saved
+
     def test_item_paths_derives_the_opaque_raster_once(self):
         it = svgeval.load_sets()["screen"][0]
         saved = (svgeval.TIER, svgeval._TIER_RESOLVED, svgeval.os.environ.get("INKVEC_TIER"))

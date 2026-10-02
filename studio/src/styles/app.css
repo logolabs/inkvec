@@ -254,10 +254,15 @@ kbd {
   background: var(--faint);
   transition: transform var(--d-micro) var(--ease-smooth), background var(--d-micro);
 }
-.switch[aria-checked="true"] {
+/* A switch is either the control itself (`button.switch` with `role="switch"`) or the knob
+   drawn inside a row that is the control (the card composer's option rows); either way the
+   state is read from whichever element carries `aria-checked`. */
+.switch[aria-checked="true"],
+[aria-checked="true"] > .switch {
   background: var(--accent);
 }
-.switch[aria-checked="true"]::after {
+.switch[aria-checked="true"]::after,
+[aria-checked="true"] > .switch::after {
   transform: translateX(14px);
   background: var(--accent-ink);
 }

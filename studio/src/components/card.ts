@@ -109,7 +109,10 @@ export function openCardComposer(store: Store): void {
   };
 
   const toggle = (key: Toggle, label: string, note: string) => {
-    const sw = h("span.switch");
+    // The row is the switch; the knob inside is drawn from the row's `aria-checked` by the
+    // stylesheet, and carries no state of its own (ARIA allows `aria-checked` only on roles
+    // with a checked state, and a bare span has none).
+    const sw = h("span.switch", { "aria-hidden": "true" });
     const row = h(
       "button.optrow",
       {
@@ -125,7 +128,6 @@ export function openCardComposer(store: Store): void {
     );
     syncers.push(() => {
       row.setAttribute("aria-checked", String(opts[key]));
-      sw.setAttribute("aria-checked", String(opts[key]));
     });
     return row;
   };

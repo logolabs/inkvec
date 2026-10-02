@@ -1,6 +1,7 @@
 //! The merge pass's speed-ups against the plain computations they replace: each must
 //! return the same bits wherever its caller can tell.
 
+use super::residual::chi2_n;
 use super::*;
 
 /// A small deterministic generator (PCG-style LCG), so failures reproduce.
@@ -220,6 +221,34 @@ fn free_cubic_is_unchanged_by_the_early_exit() {
         // The path's own end points sit near, not on, the contour's.
         let p0 = Point::new(poly.points[a].x + 0.1 * rng.next(), poly.points[a].y);
         let p3 = Point::new(poly.points[b].x, poly.points[b].y - 0.1 * rng.next());
+        assert_eq!(
+            bits(free_cubic(&poly, a, b, p0, p3)),
+            bits(free_cubic_reference(&poly, a, b, p0, p3)),
+            "case {case}"
+        );
+    }
+}
+
+/// The screened residual and the cached grid find the exhaustive search's cubic, bit for
+/// bit, on the runs most likely to expose a tie or a rounding difference: noiseless
+/// points on a cubic (many candidates within rounding of each other), runs of up to the
+/// longest span the merge tries, coordinates far from the origin, and sigmas from tiny to
+/// large.
+#[test]
+fn free_cubic_is_unchanged_by_the_screen_and_the_cache() {
+    let mut rng = Rng(53);
+    let bits = |c: Option<[Point; 4]>| c.map(|c| c.map(|p| (p.x.to_bits(), p.y.to_bits())));
+    for case in 0..48 {
+        let n = [5, 9, 24, 50, 97][case % 5];
+        let (mut poly, _) = noisy_run(&mut rng, n, [0.0, 0.05, 0.6][case % 3]);
+        let shift = [0.0, 2048.25, -1e5][case % 3];
+        let scale = [1e-4, 1.0, 30.0][case % 3];
+        for (p, s) in poly.points.iter_mut().zip(poly.sigma.iter_mut()) {
+            *p = Point::new(p.x + shift, p.y - shift);
+            *s *= scale;
+        }
+        let (a, b) = (0, n - 1);
+        let (p0, p3) = (poly.points[a], poly.points[b]);
         assert_eq!(
             bits(free_cubic(&poly, a, b, p0, p3)),
             bits(free_cubic_reference(&poly, a, b, p0, p3)),

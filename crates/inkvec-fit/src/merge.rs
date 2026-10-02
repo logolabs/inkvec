@@ -49,11 +49,37 @@
 //! edits. The research-only snaps (`snap`) are the same kind of peephole pass. Paths come
 //! in and go out as [`FittedPath`]s in px; `vertices` are indices into the measured
 //! polyline and are kept aligned with the segments.
+//!
+//! # What it costs, and where that is saved
+//!
+//! The free-cubic search is the hottest code of the fit: r2-qspeed (2026-10-01) measured
+//! the post-fit merge at 29 % of all boundary-fit work on the 246-icon screen set, and
+//! `merge::chi2_n_below` as the single hottest function (17.6 % self time). Each search is
+//! a 2,025-point grid and a compass search, every candidate scored by its residual. Two
+//! exact rewrites, in their own modules, cut that work without moving a bit of output:
+//!
+//! - `residual`: the residual, its early exit, and a screen on lower bounds of its terms
+//!   that needs no `hypot`; only a candidate that survives is scored exactly.
+//! - `grid`: the coarse grid, with every curve sample assembled from cached partial sums
+//!   and the self-crossing test deferred to the candidates that would win.
+//!
+//! Together they cut the post-fit merge by 46 % in r2-qspeed's prototype (sum over the
+//! screen set, one thread), byte-identical on all 246 icons. As shipped (2026-10-02, 16
+//! threads, under heavy load, 2 reps interleaved against v0.2.4): `fit_dp` -5 % and
+//! process CPU -7 % at 128 px (246 icons, sums), `fit_dp` -4 % and CPU -4 % at 512 px
+//! (51 images); the repair stage, which runs the same pass on refitted rings, -19 % at
+//! 128 px.
 
 use inkvec_core::{Point, Polyline, Vec2};
 
 use crate::curves::{cubic_self_intersects, eval_cubic, Segment};
 use crate::{FitConfig, FittedPath, PARAMS_LINE};
+
+mod grid;
+mod residual;
+
+pub use residual::chi2;
+use residual::chi2_n_below;
 
 /// Charged for the two joins a free-tangent cubic no longer meets smoothly.
 ///
@@ -104,163 +130,6 @@ const COARSE_SAMPLES: usize = 24;
 
 /// An arm longer than the chord describes more than a half turn.
 use crate::multimodel::MAX_ARM;
-
-/// Weighted sum of squared distances from the measured points `a..=b` to a curve.
-///
-/// `χ² = Σ_k (d_k/σ_k)²` (sigma floored at 1e-6 px), with `d_k` the distance from point
-/// `k` to the nearest of `SAMPLES`` + 1` points evenly spaced in the curve parameter.
-/// Nearest-sample distance overstates the true distance by up to half the sample spacing;
-/// every description in a comparison is scored the same way, so the comparison stays
-/// fair. A line is passed as the degenerate cubic `[start, start, end, end]`.
-pub fn chi2(c: &[Point; 4], poly: &Polyline, a: usize, b: usize) -> f64 {
-    chi2_n(c, poly, a, b, SAMPLES)
-}
-
-/// `chi2_n` is the hottest function in this pass — its pattern search calls it millions
-/// of times per icon — and both call sites pass one of exactly two compile-time
-/// constants, `SAMPLES` or [`COARSE_SAMPLES`], neither exceeding `SAMPLES`. A stack
-/// buffer sized to `SAMPLES` therefore always has room, and replacing the `Vec<Point>`
-/// that used to be heap-allocated fresh on every call removes a malloc/free pair from
-/// each of those millions of calls without changing which points are sampled or in what
-/// order the distances are folded.
-///
-/// [`chi2`] with `n + 1` samples instead of `SAMPLES + 1`; `n` must not exceed
-/// `SAMPLES`.
-fn chi2_n(c: &[Point; 4], poly: &Polyline, a: usize, b: usize, n: usize) -> f64 {
-    // On the stack: both callers pass one of two compile-time constants, neither above
-    // `SAMPLES`, and this function is called thousands of times per merge candidate.
-    debug_assert!(n <= SAMPLES);
-    let mut samples = [Point::new(0.0, 0.0); SAMPLES + 1];
-    for (k, s) in samples.iter_mut().enumerate().take(n + 1) {
-        *s = eval_cubic(*c, k as f64 / n as f64);
-    }
-    let samples = &samples[..=n];
-    let mut total = 0.0;
-    for i in a..=b {
-        total += point_term(poly.points[i], poly.sigma[i], samples);
-    }
-    total
-}
-
-/// One measured point's share of [`chi2_n`]: `(d/σ)²`, with `d` the distance to the
-/// nearest of `samples` and `σ` floored at 1e-6 px. Never negative.
-#[inline(always)]
-fn point_term(p: Point, sigma: f64, samples: &[Point]) -> f64 {
-    // The nearest of up to 97 sample points, by brute force, is what this pass spends
-    // almost all of its time on. `Point::dist` goes through `hypot`, priced for overflow
-    // safety we do not need at pixel-scale coordinates; calling it on every candidate just
-    // to throw away all but the smallest is the expense. Squared distance is monotone in
-    // true (unrounded) distance, so it ranks the same candidates in the same order without
-    // ever calling `hypot` — comparing `dx*dx + dy*dy` can only disagree with comparing
-    // `hypot` outputs if two candidates' true distances are so close that both round to
-    // the same winner regardless, which changes nothing downstream. `d` itself is then
-    // computed by calling `.dist()` on that one winning pair — the exact same call the old
-    // fold would have produced for it — so the value summed is bit-identical to before;
-    // only the `n` candidates that lose are spared a `hypot` call.
-    let mut best_dist2 = f64::INFINITY;
-    let mut best_q = samples[0];
-    for &q in samples {
-        let dx = p.x - q.x;
-        let dy = p.y - q.y;
-        let dist2 = dx * dx + dy * dy;
-        if dist2 < best_dist2 {
-            best_dist2 = dist2;
-            best_q = q;
-        }
-    }
-    let d = p.dist(best_q);
-    let s = sigma.max(1e-6);
-    (d / s) * (d / s)
-}
-
-/// Most measured points a merge run spans, `MAX_SPAN + 1`: the size of the stack buffer
-/// [`chi2_n_below`] keeps its terms in.
-const RUN_POINTS: usize = MAX_SPAN + 1;
-
-/// Safety factor on the early-exit bound of [`chi2_n_below`] when the partial sum is
-/// taken in a different order from [`chi2_n`]'s. Higham (1993) eq. 2.6 bounds the error
-/// of any recursive summation of `m` non-negative terms by `γ_{m−1} = (m−1)u/(1−(m−1)u)`
-/// times the exact sum; with `m ≤ RUN_POINTS = 97` that is under 1.1e-14, so a partial
-/// sum in any order that reaches `bound·(1 + 1e-12)` proves the in-order sum reaches
-/// `bound`, with room to spare for the rounding of the product itself.
-const REORDER_MARGIN: f64 = 1.0 + 1e-12;
-
-/// [`chi2_n`], except that it may stop early and return infinity once the sum is certain
-/// to be at least `bound`. Callers only ask whether the sum is *below* `bound`, and that
-/// answer is the same either way; a sum below `bound` is returned bit for bit as
-/// [`chi2_n`] returns it.
-///
-/// This is partial distance elimination: Bei & Gray (1985), "An improvement of the minimum
-/// distortion encoding algorithm for vector quantization", IEEE Trans. Commun. 33(10),
-/// doi:10.1109/TCOM.1985.1096214, stop accumulating a candidate's distortion once it
-/// exceeds the best found so far. It is the deterministic case of the sequential
-/// verification of Matas & Chum (2005), "Randomized RANSAC with Sequential Probability
-/// Ratio Test", ICCV, https://cmp.felk.cvut.cz/~matas/papers/chum-waldsac-iccv05.pdf,
-/// which rejects a hypothesis before every datum is checked; with an exact bound instead
-/// of a statistical test, nothing is ever rejected wrongly. Measured over the 246-icon
-/// screen set, the free-cubic grid could decide its candidates on 31% of the point terms
-/// taken in order and 17% taken from the middle of the run outwards: the run's ends are
-/// pinned to the curve's ends, so its middle is where a bad candidate is furthest off.
-///
-/// Adapted to keep every surviving sum bit-identical. Terms are visited middle-first and
-/// the running partial sum is compared with `bound·REORDER_MARGIN` (Higham 1993: "The
-/// accuracy of floating point summation", SIAM J. Sci. Comput. 14(4):783–799,
-/// doi:10.1137/0914050, eq. 2.6 bounds how far a reordered sum can fall below the
-/// in-order one); a survivor's terms are then added again in [`chi2_n`]'s own order.
-/// Terms are `(d/σ)² ≥ 0`, and a NaN term never triggers the exit, so the in-order NaN is
-/// returned as before. A `bound` that is infinite, NaN or too small for the margin's
-/// product to be exact, or a run longer than [`RUN_POINTS`], falls back to the in-order
-/// sum, stopping once it reaches `bound`: adding a non-negative term to a partial sum can
-/// never make it smaller, so that exit needs no margin.
-fn chi2_n_below(c: &[Point; 4], poly: &Polyline, a: usize, b: usize, n: usize, bound: f64) -> f64 {
-    debug_assert!(n <= SAMPLES);
-    if bound.is_nan() || bound == f64::INFINITY {
-        return chi2_n(c, poly, a, b, n);
-    }
-    let mut samples = [Point::new(0.0, 0.0); SAMPLES + 1];
-    for (k, s) in samples.iter_mut().enumerate().take(n + 1) {
-        *s = eval_cubic(*c, k as f64 / n as f64);
-    }
-    let samples = &samples[..=n];
-    let m = b + 1 - a;
-    if m > RUN_POINTS || bound < 1e-250 {
-        let mut total = 0.0;
-        for i in a..=b {
-            total += point_term(poly.points[i], poly.sigma[i], samples);
-            if total >= bound {
-                return f64::INFINITY;
-            }
-        }
-        return total;
-    }
-    let exit = bound * REORDER_MARGIN;
-    let mut terms = [0.0f64; RUN_POINTS];
-    let mut partial = 0.0;
-    // Middle first, then alternately one step further out on each side: `mid` points lie
-    // left of the middle and `m − 1 − mid` (the same or one more) right of it, so odd steps
-    // take the right side, even steps the left, and together they visit each index once.
-    let mid = (m - 1) / 2;
-    for step in 0..m {
-        let half = step.div_ceil(2);
-        let q = if step % 2 == 1 {
-            mid + half
-        } else {
-            mid - half
-        };
-        let i = a + q;
-        let t = point_term(poly.points[i], poly.sigma[i], samples);
-        terms[q] = t;
-        partial += t;
-        if partial >= exit {
-            return f64::INFINITY;
-        }
-    }
-    let mut total = 0.0;
-    for &t in &terms[..m] {
-        total += t;
-    }
-    total
-}
 
 /// The cubic from `p0` to `p3` that best fits the measured points `a..=b`, with both end
 /// tangents free.
@@ -416,51 +285,6 @@ impl FreeCubicSearch<'_> {
             return f64::INFINITY;
         }
         chi2_n_below(&c, self.poly, self.a, self.b, SAMPLES, bound)
-    }
-
-    /// The cheap residual used to rank grid points: [`COARSE_SAMPLES`] samples. The grid
-    /// stays inside the rotation limit, so only the arm and crossing checks apply. As in
-    /// [`Self::score`], a residual certain to reach `bound` may come back as infinity.
-    fn coarse(&self, r0: f64, r1: f64, d0: f64, d1: f64, bound: f64) -> f64 {
-        if !(0.02..=MAX_ARM).contains(&d0) || !(0.02..=MAX_ARM).contains(&d1) {
-            return f64::INFINITY;
-        }
-        let c = self.build(r0, r1, d0, d1);
-        if cubic_self_intersects(c[0], c[1], c[2], c[3]) {
-            return f64::INFINITY;
-        }
-        chi2_n_below(&c, self.poly, self.a, self.b, COARSE_SAMPLES, bound)
-    }
-
-    /// Coarse grid first, on a cheap residual: 9 rotations at each end by 5 arm lengths
-    /// at each, 2025 candidates. `None` if every one is inadmissible.
-    ///
-    /// A pattern search alone gets stuck here: the fits that matter are *asymmetric* —
-    /// around -10 and +55 degrees at the two ends — and a search started from equal arms
-    /// and equal angles settles into a symmetric basin at chi-squared 174 where the true
-    /// optimum is 101. The grid is what escapes it; the refinement is what makes the grid
-    /// affordable, since it can then be coarse.
-    fn grid(&self) -> Option<[f64; 4]> {
-        const ANGLES: [f64; 9] = [-90.0, -65.0, -45.0, -22.0, 0.0, 22.0, 45.0, 65.0, 90.0];
-        const ARMS: [f64; 5] = [0.15, 0.3, 0.45, 0.6, 0.8];
-        let mut cur = [0.0f64, 0.0, 0.35, 0.35];
-        let mut rough = f64::INFINITY;
-        for &r0 in &ANGLES {
-            for &r1 in &ANGLES {
-                for &d0 in &ARMS {
-                    for &d1 in &ARMS {
-                        // Only a residual below `rough` can move the search, so a
-                        // candidate is dropped as soon as it cannot be (`chi2_n_below`).
-                        let x = self.coarse(r0, r1, d0, d1, rough);
-                        if x < rough {
-                            rough = x;
-                            cur = [r0, r1, d0, d1];
-                        }
-                    }
-                }
-            }
-        }
-        rough.is_finite().then_some(cur)
     }
 
     /// Compass search from `cur` on the full residual: try ± one step in each of the four

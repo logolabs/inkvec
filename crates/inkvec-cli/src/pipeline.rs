@@ -30,11 +30,8 @@ use crate::uncertainty;
 use crate::units::{content_scale, in_content_units};
 use inkvec_core::Point;
 use inkvec_fit::{
-    adjust_vertices,
-    curves::Segment,
-    multimodel, optimal_polygon,
-    primitives::{fit_primitive_or_arcs, PrimitiveFit},
-    FitConfig, FittedPath, Segmentation,
+    adjust_vertices, choice, curves::Segment, multimodel, optimal_polygon,
+    primitives::PrimitiveFit, FitConfig, FittedPath, Segmentation,
 };
 use inkvec_trace::{gradient, planar, regroup, trace_bilevel, ColorOptions, TraceOptions};
 
@@ -691,17 +688,23 @@ fn fit_boundaries(
                 // This boundary's own exchange rate. `cfg_k == *cfg` when the scale is 1.0,
                 // which is every path but the guided one.
                 let cfg_k = scaled(cfg, scale);
-                let t_ring = inkvec_core::clock::Instant::now();
-                // Scoped, so the dynamic program itself can stop a trace nobody wants in the
-                // middle of a boundary of thousands of points.
-                let curve = live.scoped(|| multimodel::optimal_multimodel(&poly, &cfg_k));
-                if ring_timing {
-                    ring_times
-                        .lock()
-                        .expect("nothing panics while holding the ring timer")
-                        .push((t_ring.elapsed().as_secs_f64() * 1e3, poly.points.len()));
-                }
-                let fitted = prefer_primitive(&poly, curve, &cfg_k);
+                // The image frame's rectangle can be proved cheapest without its dynamic
+                // program, which is then not run (`inkvec_fit::choice`).
+                let frame =
+                    poly.closed && choice::lies_on_frame(&poly.points, map.width, map.height);
+                let fitted = choice::describe(&poly, &cfg_k, frame, || {
+                    let t_ring = inkvec_core::clock::Instant::now();
+                    // Scoped, so the dynamic program itself can stop a trace nobody wants in
+                    // the middle of a boundary of thousands of points.
+                    let curve = live.scoped(|| multimodel::optimal_multimodel(&poly, &cfg_k));
+                    if ring_timing {
+                        ring_times
+                            .lock()
+                            .expect("nothing panics while holding the ring timer")
+                            .push((t_ring.elapsed().as_secs_f64() * 1e3, poly.points.len()));
+                    }
+                    curve
+                });
                 live.tick();
                 fitted
             })
@@ -756,22 +759,16 @@ fn fit_boundaries(
 /// primitive path out (the `INKVEC_NO_PRIMITIVE` ablation, since removed) over the 246-icon
 /// gate set, removing it costs 30.52% of the parameter ratio (1.4818 -> 1.9341) and 9.01%
 /// of dE00, far more than any other lever measured on this tree.
+///
+/// [`fit_boundaries`] reaches the same choice through `inkvec_fit::choice::describe`,
+/// which also avoids work the choice discards; this plain form serves the research
+/// structural baseline.
 fn prefer_primitive(
     poly: &inkvec_core::Polyline,
     curve: FittedPath,
     cfg: &FitConfig,
 ) -> (FittedPath, Option<PrimitiveFit>) {
-    match fit_primitive_or_arcs(&poly.points, &poly.sigma, poly.closed, cfg) {
-        Some((segs, prim, cost)) if cost < path_cost(poly, &curve, cfg) => (
-            FittedPath {
-                start: poly.points[0],
-                segments: segs,
-                closed: poly.closed,
-            },
-            prim,
-        ),
-        _ => (curve, None),
-    }
+    choice::choose(poly, curve, choice::primitive_offer(poly, cfg), cfg)
 }
 
 /// `INKVEC_TIMING`: the total time of the boundary fits and the five slowest boundaries.
@@ -1359,9 +1356,11 @@ fn structural_trial_improves(
 /// `λ` is `cfg.lambda` (nats per parameter) and `k` the path's parameter count. Half of χ²
 /// is the negative log-likelihood of the points under independent Gaussian errors, so both
 /// terms are in nats. A path with no segments costs infinity.
+///
+/// Defined once, as `inkvec_fit::choice::boundary_cost`, beside the lower bound that lets
+/// the image frame skip its dynamic program.
 fn path_cost(poly: &inkvec_core::Polyline, path: &FittedPath, cfg: &FitConfig) -> f64 {
-    let chi2 = inkvec_fit::curves::chi2(&poly.points, &poly.sigma, path.start, &path.segments);
-    0.5 * chi2 + cfg.lambda * path.params()
+    choice::boundary_cost(poly, path, cfg)
 }
 
 /// Reject a gradient whose two stops a viewer could not tell apart.

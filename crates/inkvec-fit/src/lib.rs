@@ -45,7 +45,10 @@
 //! refitting under a span cap, [`primitives`] recognises whole-ring circles, ellipses and
 //! rounded rectangles, [`harmonize`] makes shapes that should be identical identical,
 //! [`cost`] selects the parameter-pricing model, and [`pareto`] holds the multi-objective
-//! selection used by the research examples.
+//! selection used by the research examples. [`choice`] makes each boundary's final choice
+//! between its fitted curve and its primitive, skipping the image frame's dynamic program
+//! when a lower bound proves the rectangle wins and running the other searches side by
+//! side.
 //!
 //! # What this file holds
 //!
@@ -97,6 +100,7 @@
 mod decimate;
 
 pub(crate) mod candidates;
+pub mod choice;
 pub mod cost;
 pub mod curves;
 pub mod harmonize;

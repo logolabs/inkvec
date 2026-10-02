@@ -38,6 +38,9 @@ use inkvec_fit::{
 };
 use inkvec_trace::{gradient, planar, regroup, trace_bilevel, ColorOptions, TraceOptions};
 
+mod demote;
+use demote::demote_imperceptible_gradient;
+
 /// The bilevel pipeline (`--bilevel`): the image thresholded to ink and paper, each
 /// contour fitted with straight lines only, and written as one even-odd black path.
 ///
@@ -1362,41 +1365,6 @@ fn structural_trial_improves(
 fn path_cost(poly: &inkvec_core::Polyline, path: &FittedPath, cfg: &FitConfig) -> f64 {
     let chi2 = inkvec_fit::curves::chi2(&poly.points, &poly.sigma, path.start, &path.segments);
     0.5 * chi2 + cfg.lambda * path.params()
-}
-
-/// Reject a gradient whose two stops a viewer could not tell apart.
-///
-/// MDL already charges a gradient for its extra parameters, but a gradient has more
-/// freedom than a flat fill and will always explain sensor noise a little better. When
-/// the noise estimate is even slightly low, that freedom wins on cost while describing
-/// something that is not there — flat concentric rings came back as four radial
-/// gradients, costing fidelity rather than buying it.
-///
-/// The guard is perceptual rather than statistical: if the fitted endpoints are within a
-/// just-noticeable difference in OKLab, there is no gradient to see, whatever the
-/// residual says.
-fn demote_imperceptible_gradient(f: gradient::FillFit) -> gradient::FillFit {
-    use inkvec_trace::color::rgb_to_oklab;
-    /// A conservative multiple of a just-noticeable difference in OKLab.
-    const JND: f32 = 0.02;
-
-    let (c0, c1) = match f.model {
-        gradient::FillModel::Flat(_) => return f,
-        gradient::FillModel::Linear { c0, c1, .. } => (c0, c1),
-        gradient::FillModel::Radial { c0, c1, .. } => (c0, c1),
-    };
-    if rgb_to_oklab(c0).dist(rgb_to_oklab(c1)) >= JND {
-        return f;
-    }
-    let mid = [
-        0.5 * (c0[0] + c1[0]),
-        0.5 * (c0[1] + c1[1]),
-        0.5 * (c0[2] + c1[2]),
-    ];
-    gradient::FillFit {
-        model: gradient::FillModel::Flat(mid),
-        ..f
-    }
 }
 
 #[cfg(test)]

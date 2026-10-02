@@ -64,6 +64,17 @@ class CompareTests(unittest.TestCase):
         cur = {k: v * 0.95 for k, v in base.items()}
         c = gs.compare(base, cur, fam)
         self.assertEqual(gs.decide(c, 0.01).label, "better")
+        self.assertEqual(gs.decide(c, 0.01, step=0.001).label, "better")
+
+    def test_negligible_consistent_gain_is_not_better_with_a_step(self):
+        # Every icon a hair lower: a degenerate interval just below zero.
+        base, fam = two_families()
+        cur = {k: v - 1e-6 for k, v in base.items()}
+        c = gs.compare(base, cur, fam)
+        self.assertLess(c.p95, 0.0)
+        self.assertGreater(c.p95, -0.001)
+        self.assertEqual(gs.decide(c, 0.02).label, "better")
+        self.assertEqual(gs.decide(c, 0.02, step=0.001).label, "non-inferior")
 
     def test_noisy_null_change_is_inconclusive_at_a_tight_margin(self):
         base, fam = two_families(200, 50)

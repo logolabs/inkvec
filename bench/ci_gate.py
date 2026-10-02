@@ -131,6 +131,11 @@ AGGREGATE = {"de00": "macro", "turning": "micro", "ratio": "macro", "self_res": 
 #: for narrow ones (standard error ~0.3 %: the point must be below about 1.5 %).
 MARGINS = {"de00": 0.02, "turning": 0.02, "ratio": 0.05}
 GATED_AXES = tuple(MARGINS)
+#: The Ladder's step (gate_stats.decide): a "better" verdict, the only one that moves a
+#: baseline, needs its one-sided upper bound below -0.1 %. Comparing the Linux and Windows
+#: builds of v0.2.4 read "better" on fast-512ss dE00 at -0.00 % (two icons, both a hair
+#: lower) without it.
+LADDER_STEP = 0.001
 REPORTED_AXES = GATED_AXES + ("self_res",)
 
 
@@ -295,7 +300,7 @@ def compare_condition(base_rows: dict, cur_rows: dict, margins: dict) -> dict:
     for ax in REPORTED_AXES:
         c = gate_stats.compare({k: r[ax] for k, r in base_rows.items()},
                                {k: r[ax] for k, r in cur.items()}, fam, AGGREGATE[ax])
-        out[ax] = (c, gate_stats.decide(c, margins.get(ax, float("inf"))))
+        out[ax] = (c, gate_stats.decide(c, margins.get(ax, float("inf")), LADDER_STEP))
     return out
 
 

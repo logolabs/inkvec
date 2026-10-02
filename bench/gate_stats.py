@@ -201,19 +201,24 @@ def compare(base: dict[str, float], cur: dict[str, float], family: dict[str, str
                       changed, better, worse)
 
 
-def decide(c: Comparison, margin: float) -> Verdict:
+def decide(c: Comparison, margin: float, step: float = 0.0) -> Verdict:
     """The non-inferiority verdict for one comparison at a relative `margin` (0.01 = 1 %).
 
     Read off the one-sided 95 % bounds (the 5th and 95th percentiles; Lakens 2017):
-    identical, better (upper bound below 0) and non-inferior (upper bound below the margin)
-    pass; worse (lower bound above the margin) and inconclusive (the margin inside the
-    interval) fail. With a margin of +inf every finite comparison passes, which is how an
-    axis is reported without being gated. Ties at a bound fail: the rule needs the bound
+    identical, better (upper bound below -`step`) and non-inferior (upper bound below the
+    margin) pass; worse (lower bound above the margin) and inconclusive (the margin inside
+    the interval) fail. With a margin of +inf every finite comparison passes, which is how
+    an axis is reported without being gated. Ties at a bound fail: the rule needs the bound
     strictly inside the margin.
+
+    `step` is the Ladder's threshold (Blum & Hardt 2015): "better", the only verdict that may
+    move a baseline, needs the whole one-sided interval below -step. Without it, two icons
+    that each improve by 1e-5 make a degenerate interval just below zero and read as a
+    demonstrable gain (seen when Linux and Windows builds of v0.2.4 were compared).
     """
     if c.changed == 0:
         return Verdict("identical", True, margin)
-    if c.p95 < 0.0:
+    if c.p95 < -step:
         return Verdict("better", True, margin)
     if c.p95 < margin:
         return Verdict("non-inferior", True, margin)

@@ -120,7 +120,7 @@ pub fn boundary_cost(poly: &Polyline, path: &FittedPath, cfg: &FitConfig) -> f64
 /// `curves::chi2` measures to, for any polyline under 2^20 points. O(n).
 pub fn cost_floor(poly: &Polyline, cfg: &FitConfig) -> f64 {
     let lambda = cfg.lambda;
-    if !(lambda >= 0.0) {
+    if lambda.is_nan() || lambda < 0.0 {
         return f64::NEG_INFINITY;
     }
     let two_segments = lambda * (3.0 * PARAMS_LINE);
@@ -150,7 +150,8 @@ fn line_chi2_floor(poly: &Polyline) -> f64 {
         sy += w * p.y;
         big = big.max(p.x.abs()).max(p.y.abs());
     }
-    if !(sw > 0.0) {
+    // No points, or weights that are NaN: nothing to bound.
+    if sw.is_nan() || sw <= 0.0 {
         return 0.0;
     }
     let centre = Point::new(sx / sw, sy / sw);

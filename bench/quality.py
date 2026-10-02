@@ -27,23 +27,27 @@ separately: documenting things cannot buy credit for a longer function.
     python bench/quality.py --coverage  # ... plus per-crate line-coverage floors (CI runs this)
     python bench/quality.py --report    # every metric, no gate
     python bench/quality.py --update    # re-baseline, after a deliberate decision
+    python bench/quality.py --coverage --update-only coverage:   # record coverage floors only
 
 Two measurements are too slow for every run and are opt-in:
 
 * `--coverage` runs the whole test suite under `cargo llvm-cov` (about as long as the
   release test run itself) and holds each crate's line coverage to a floor. CI's quality
   job runs it.
-* `--mutants` runs `cargo mutants` on the engine's core files (`MUTANT_FILES`) over a
-  fixed systematic sample (`MUTANT_SHARD`) and holds each file's kill rate to a floor. It
-  takes about two hours at four jobs, so it is a weekly job
+* `--mutants` runs `cargo mutants` on the engine's core module trees (`MUTANT_GROUPS`) over
+  a fixed systematic sample (`MUTANT_SHARD`) and holds each group's kill rate, and the
+  pooled rate, to a floor. It takes two to three hours at four jobs, so it is a weekly job
   (`.github/workflows/mutation.yml`) and a manual check before merging test or engine
-  work on those files; `--mutants-from DIR` scores an existing cargo-mutants output
-  directory instead of running one. Coverage says a line ran; the kill rate says a test
-  would notice if it were wrong, which is the stronger claim and the one that was found
-  missing (a 41 % kill rate under 81 % line coverage, 2026-09-26).
+  work on those files; `--mutants-from DIR` (repeatable) scores existing cargo-mutants
+  output directories instead of running one. Coverage says a line ran; the kill rate says
+  a test would notice if it were wrong, which is the stronger claim and the one that was
+  found missing (a 41 % kill rate under 81 % line coverage, 2026-09-26).
 
-Floors (`coverage:*`, `mutation:*`) are whole percentages, set at the measured value
-rounded down, and rise the same way when a measurement clears the next integer.
+Floors (`coverage:*`, `mutation:*`) are whole percentages. A coverage floor is set at the
+measured value rounded down and rises the same way when a measurement clears the next
+integer. A mutation floor comes from a sample, so it is recorded at the sample's lower
+confidence bound and checked against the next sample's upper bound (`mutation_bounds`).
+A floor that was never recorded fails the check: an unrecorded floor enforces nothing.
 
 `--update` is the only way a budget loosens, and it prints what it loosened so the change
 is visible in review. Improvements are absorbed automatically: a metric that got better
@@ -56,6 +60,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import fnmatch
 import json
 import math
 import os
@@ -167,19 +172,51 @@ def coverage_by_crate() -> dict[str, float]:
 
 # ---------------------------------------------------------------- mutation
 
-# The engine's core: palette and colour science, the native-alpha palette, the boundary
-# solve, gradient fitting and the segment DP. Chosen by the 2026-09-26 audit as the code
-# whose arithmetic decides the output and whose tests least pinned it.
-MUTANT_FILES = [
-    "crates/inkvec-trace/src/color.rs",
-    "crates/inkvec-trace/src/native.rs",
-    "crates/inkvec-trace/src/boundary_opt.rs",
-    "crates/inkvec-trace/src/gradient.rs",
-    "crates/inkvec-fit/src/multimodel.rs",
-]
-# Every 16th mutant, round-robin: a systematic sample of about 300 of the ~4,700, which
-# is what two hours buys. The floors in the budget were measured on this sample.
-MUTANT_SHARD = "0/16"
+# The engine's core, as module trees: palette and colour science, the native-alpha palette,
+# the boundary solve, gradient fitting and the segment DP (chosen by the 2026-09-26 audit as
+# the code whose arithmetic decides the output and whose tests least pinned it), plus Fast
+# mode and the cubic maths behind best_cubic (the r2-eval research, 2026-10-02).
+#
+# Trees, not files: the 09-30 clean-up moved most of the audited code into submodules
+# (color/, native/, ...), after which the five top-level files held 2,379 of the 6,593
+# candidate mutants of their trees, so 64 % of the audited code was outside the floor, and
+# none of Fast mode's 2,585.
+MUTANT_GROUPS: dict[str, list[str]] = {
+    "inkvec-trace/color": ["crates/inkvec-trace/src/color.rs", "crates/inkvec-trace/src/color/*.rs"],
+    "inkvec-trace/native": ["crates/inkvec-trace/src/native.rs", "crates/inkvec-trace/src/native/*.rs"],
+    "inkvec-trace/boundary_opt": ["crates/inkvec-trace/src/boundary_opt.rs",
+                                  "crates/inkvec-trace/src/boundary_opt/*.rs"],
+    "inkvec-trace/gradient": ["crates/inkvec-trace/src/gradient.rs",
+                              "crates/inkvec-trace/src/gradient/*.rs"],
+    "inkvec-trace/fast": ["crates/inkvec-trace/src/fast/**/*.rs"],
+    "inkvec-fit/multimodel": ["crates/inkvec-fit/src/multimodel.rs",
+                              "crates/inkvec-fit/src/multimodel/*.rs"],
+    "inkvec-fit/curves": ["crates/inkvec-fit/src/curves.rs"],
+}
+# The pooled kill rate over every group: one number with ~10x the sample of a group, so it
+# resolves a decline a single group's sample cannot.
+MUTANT_POOLED = "all"
+# Every 32nd mutant, round-robin: a systematic sample of about 310 of the ~9,900 in these
+# trees, which is what the weekly job's two-to-three hours buy.
+MUTANT_SHARD = "0/32"
+# One-sided confidence for a mutation floor (see `mutation_bounds`).
+MUTANT_ALPHA = 0.05
+
+
+def mutant_files() -> list[str]:
+    """Every glob of every group, in a fixed order, for cargo-mutants' `-f`."""
+    return [g for globs in MUTANT_GROUPS.values() for g in globs]
+
+
+def mutant_group(file: str) -> str | None:
+    """The group a mutated file belongs to, or None. `fnmatch` lets `*` cross `/`, so a
+    tree's glob also covers deeper submodules, which is what a module tree means."""
+    file = file.replace("\\", "/")
+    for group, globs in MUTANT_GROUPS.items():
+        if any(fnmatch.fnmatchcase(file, g.replace("**/", "")) or fnmatch.fnmatchcase(file, g)
+               for g in globs):
+            return group
+    return None
 
 
 def run_mutants(out: Path, shard: str = MUTANT_SHARD) -> Path:
@@ -190,7 +227,7 @@ def run_mutants(out: Path, shard: str = MUTANT_SHARD) -> Path:
     env.pop("CARGO_TARGET_DIR", None)  # each job builds in its own copy of the tree
     args = ["mutants", "--profile", "release", "-j", "4", "--minimum-test-timeout", "90",
             "--no-times", "-o", str(out), "--shard", shard, "--sharding", "round-robin"]
-    for f in MUTANT_FILES:
+    for f in mutant_files():
         args += ["-f", f]
     try:
         r = subprocess.run([CARGO, *args], cwd=ROOT, env=env)
@@ -202,26 +239,116 @@ def run_mutants(out: Path, shard: str = MUTANT_SHARD) -> Path:
     return out / "mutants.out"
 
 
-def mutation_scores(mdir: Path) -> dict[str, float]:
-    """Kill rate per core file from a cargo-mutants output directory: caught plus timed
-    out, over every viable mutant (unviable ones never compiled and say nothing)."""
-    f = mdir / "outcomes.json"
-    if not f.exists():
-        raise RuntimeError(f"{f} missing: not a cargo-mutants output directory")
+def mutation_counts(mdirs: list[Path]) -> dict[str, tuple[int, int]]:
+    """(killed, viable) per group, and pooled, from one or more cargo-mutants output
+    directories. Killed = caught plus timed out; viable = killed plus missed (unviable
+    mutants never compiled and say nothing). A mutant that an earlier directory already
+    scored (the same file, span and replacement) is not counted again."""
+    seen: set[tuple] = set()
     per: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
-    for o in json.loads(f.read_text(encoding="utf-8"))["outcomes"]:
-        if o.get("scenario") == "Baseline":
-            continue
-        per[o["scenario"]["Mutant"]["file"].replace("\\", "/")][o.get("summary")] += 1
+    for mdir in mdirs:
+        f = mdir / "outcomes.json"
+        if not f.exists():
+            raise RuntimeError(f"{f} missing: not a cargo-mutants output directory")
+        here: set[tuple] = set()
+        for o in json.loads(f.read_text(encoding="utf-8"))["outcomes"]:
+            if o.get("scenario") == "Baseline":
+                continue
+            m = o["scenario"]["Mutant"]
+            ident = (m.get("file"), json.dumps(m.get("span"), sort_keys=True),
+                     m.get("replacement"), m.get("genre"), m.get("name"))
+            if ident in seen:
+                continue
+            here.add(ident)
+            group = mutant_group(m["file"])
+            if group is not None:
+                per[group][o.get("summary")] += 1
+        seen |= here
     out = {}
-    for file in MUTANT_FILES:
-        c = per.get(file)
-        if not c:
-            continue
-        killed = c["CaughtMutant"] + c["Timeout"]
-        viable = killed + c["MissedMutant"]
-        if viable:
-            out[f"mutation:{file}"] = round(100.0 * killed / viable, 2)
+    for group in MUTANT_GROUPS:
+        c = per.get(group)
+        if c:
+            killed = c["CaughtMutant"] + c["Timeout"]
+            out[group] = (killed, killed + c["MissedMutant"])
+    if out:
+        out[MUTANT_POOLED] = (sum(k for k, _ in out.values()), sum(v for _, v in out.values()))
+    return {g: kv for g, kv in out.items() if kv[1]}
+
+
+def wilson_bounds(killed: int, viable: int, z: float) -> tuple[float, float]:
+    """Wilson score interval for a binomial proportion, as percentages (lower, upper).
+
+    With p = killed / viable, n = viable:
+        centre = (p + z^2 / 2n) / (1 + z^2 / n)
+        half   = z / (1 + z^2 / n) * sqrt(p (1 - p) / n + z^2 / 4n^2)
+    It stays inside [0, 100] and keeps close to its nominal coverage for the 10-50 mutants a
+    group draws, where the plain normal interval does not.
+
+    Method from: Wilson 1927, "Probable Inference, the Law of Succession, and Statistical
+    Inference", J. Am. Stat. Assoc. 22(158):209-212, doi:10.1080/01621459.1927.10502953.
+    Chosen on: Brown, Cai, DasGupta 2001, "Interval Estimation for a Binomial Proportion",
+    Statistical Science 16(2):101-133, doi:10.1214/ss/1009213286, which recommends Wilson
+    for small n.
+    """
+    n = float(viable)
+    p = killed / n
+    d = 1.0 + z * z / n
+    centre = (p + z * z / (2 * n)) / d
+    half = z / d * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))
+    return 100.0 * max(0.0, centre - half), 100.0 * min(1.0, centre + half)
+
+
+def mutation_bounds(counts: dict[str, tuple[int, int]]) -> dict[str, dict[str, float]]:
+    """For each group: the point kill rate, the lower bound a floor is recorded at, and the
+    upper bound a floor is checked against (percentages).
+
+    Why bounds and not the rate. A floor is measured on a sample (every 32nd mutant), and
+    the sample changes whenever the code does: round-robin sharding over the enumerated
+    mutants shifts every later assignment when one mutant is added. A group draws 10-50
+    mutants, so its rate has a standard error of 6-15 points. Recording the rate and
+    checking the next sample's rate against it would fail about half the time on unchanged
+    tests. Instead, asymmetrically:
+
+    * a floor is recorded at the one-sided (1 - MUTANT_ALPHA) Wilson **lower** bound, the
+      rate the sample demonstrates (rounded down to a whole percent);
+    * a measurement fails a floor only when its Wilson **upper** bound, at a Bonferroni
+      level over the groups measured (z = Phi^-1(1 - MUTANT_ALPHA / k)), is below it: the
+      sample demonstrates that the kill rate fell;
+    * a floor rises when a later lower bound clears the next whole percent.
+
+    With 8 keys (7 groups and the pool) a key whose true rate did not move fails by chance
+    with probability Phi(-(1.645 + 2.50) / sqrt 2) = 0.17 %, a whole run about 1.4 % of the
+    time (both samples are noisy, hence the sqrt 2), before the rounding down adds more
+    slack. What it catches is a real drop of about 4 standard errors: ~10 points pooled,
+    25-35 points for one group (the 09-26 audit measured 41 %, v0.2.4 78 %).
+
+    Not from the literature as a whole: a ratchet on sampled mutation scores. See also:
+    Petrovic, Ivankovic 2018, "State of Mutation Testing at Google", ICSE-SEIP 2018
+    (probabilistic, sampled mutation), and Just et al. 2014, "Are Mutants a Valid Substitute
+    for Real Faults in Software Testing?", FSE 2014 (why the kill rate is worth a floor).
+    """
+    from statistics import NormalDist
+    k = max(1, len(counts))
+    z_lo = NormalDist().inv_cdf(1 - MUTANT_ALPHA)
+    z_hi = NormalDist().inv_cdf(1 - MUTANT_ALPHA / k)
+    out = {}
+    for group, (killed, viable) in counts.items():
+        out[group] = {"rate": round(100.0 * killed / viable, 2),
+                      "lower": round(wilson_bounds(killed, viable, z_lo)[0], 2),
+                      "upper": round(wilson_bounds(killed, viable, z_hi)[1], 2),
+                      "killed": killed, "viable": viable}
+    return out
+
+
+def mutation_scores(mdirs: list[Path] | Path) -> dict:
+    """The measurement keys a mutation run contributes: `mutation:<group>` = the point kill
+    rate (what --report prints), plus `_mutation_bounds` with the bounds `check` and
+    `budget_value` use (underscore keys are never budget entries)."""
+    if isinstance(mdirs, Path):
+        mdirs = [mdirs]
+    bounds = mutation_bounds(mutation_counts(mdirs))
+    out: dict = {f"mutation:{g}": b["rate"] for g, b in bounds.items()}
+    out["_mutation_bounds"] = bounds
     return out
 
 
@@ -292,7 +419,8 @@ def cargo(*args: str, env: dict | None = None) -> str:
 
 # ---------------------------------------------------------------- metrics
 
-def measure(fast: bool = False, coverage: bool = False, mutants: Path | None = None) -> dict:
+def measure(fast: bool = False, coverage: bool = False,
+            mutants: list[Path] | Path | None = None) -> dict:
     files = {
         p.relative_to(ROOT).as_posix(): len(p.read_text(encoding="utf-8", errors="replace").splitlines())
         for p in rust_files()
@@ -320,7 +448,7 @@ def measure(fast: bool = False, coverage: bool = False, mutants: Path | None = N
         m["unused_dependencies"] = unused_dependencies()
     if coverage:
         m.update(coverage_by_crate())
-    if mutants is not None:
+    if mutants:
         m.update(mutation_scores(mutants))
     return m
 
@@ -345,9 +473,20 @@ def direction_of(key: str) -> str:
     return DIRECTION.get(key, "max")
 
 
-def budget_value(key: str, measured):
-    """What `--update` records for a measurement: floors are rounded down."""
+def budget_value(key: str, measured, now: dict | None = None):
+    """What `--update` records for a measurement: floors are rounded down, and a sampled
+    mutation floor is recorded at its lower confidence bound (`mutation_bounds`)."""
+    bound = _mutation_bound(key, now)
+    if bound is not None:
+        return math.floor(bound["lower"])
     return math.floor(measured) if direction_of(key) == "floor" else measured
+
+
+def _mutation_bound(key: str, now: dict | None) -> dict | None:
+    """The `mutation_bounds` row behind a `mutation:<group>` measurement, if it has one."""
+    if not key.startswith("mutation:") or not now:
+        return None
+    return now.get("_mutation_bounds", {}).get(key[len("mutation:"):])
 
 
 EXPLAIN = {
@@ -368,6 +507,11 @@ def explain(key: str) -> str:
     if key.startswith("mutation:"):
         return f"% of sampled mutants of {key[9:]} the tests kill"
     return EXPLAIN.get(key, key)
+
+
+def _shown(path: Path) -> str:
+    """A path for the console: repository-relative when it is inside the repository."""
+    return path.relative_to(ROOT).as_posix() if path.is_relative_to(ROOT) else path.as_posix()
 
 
 def load_budget() -> dict:
@@ -395,6 +539,13 @@ def check(now: dict, budget: dict) -> tuple[list[str], list[str], dict]:
         cur, old = measured[key], budget.get(key)
         if old is None and key.startswith("lint:"):
             old = 0
+        if old is None and how == "floor":
+            # A floor nobody recorded enforces nothing, and CI throws away what it records:
+            # before 2026-10-02 no coverage or mutation floor had ever been committed, so
+            # neither check had ever failed. A new crate or group must get one on purpose.
+            failures.append(f"{key}: no floor recorded (measured {cur}); record one with "
+                            f"--update and commit it ({explain(key)})")
+            continue
         if old is None:
             tightened[key] = cur
             continue
@@ -425,7 +576,18 @@ def check(now: dict, budget: dict) -> tuple[list[str], list[str], dict]:
                 gains.append(f"{key}: {old} -> {cur}")
                 tightened[key] = cur
         elif how == "floor":
-            if cur < old:
+            bound = _mutation_bound(key, now)
+            if bound is not None:
+                # A sampled kill rate: fail only on a demonstrated fall, rise only on a
+                # demonstrated gain (see mutation_bounds).
+                if bound["upper"] < old:
+                    failures.append(f"{key}: {cur} ({bound['killed']}/{bound['viable']}, upper "
+                                    f"bound {bound['upper']}) below the floor of {old} "
+                                    f"({explain(key)})")
+                elif math.floor(bound["lower"]) > old:
+                    gains.append(f"{key}: floor {old} -> {math.floor(bound['lower'])}")
+                    tightened[key] = math.floor(bound["lower"])
+            elif cur < old:
                 failures.append(f"{key}: {cur} below the floor of {old} ({explain(key)})")
             elif math.floor(cur) > old:
                 gains.append(f"{key}: floor {old} -> {math.floor(cur)}")
@@ -448,7 +610,10 @@ def report(now: dict) -> None:
         if rows:
             print()
             for k, v in sorted(rows.items()):
-                print(f"{v:6.2f}  {explain(k)}")
+                b = _mutation_bound(k, now)
+                extra = (f"   ({b['killed']}/{b['viable']}; recorded as a floor of "
+                         f"{math.floor(b['lower'])}, fails a floor above {b['upper']:.1f})") if b else ""
+                print(f"{v:6.2f}  {explain(k)}{extra}")
     if now.get("unused_dependencies"):
         print(f"\n{len(now['unused_dependencies'])} unused dependencies (cargo machete):")
         for dep in now["unused_dependencies"]:
@@ -463,6 +628,9 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--update", action="store_true",
                     help="re-baseline the budget, loosening it where needed")
+    ap.add_argument("--update-only", action="append", default=[], metavar="PREFIX",
+                    help="like --update, but only for keys starting with PREFIX (repeatable), "
+                         "e.g. coverage: or mutation:")
     ap.add_argument("--report", action="store_true", help="print every metric, gate nothing")
     ap.add_argument("--fast", action="store_true",
                     help="skip clippy, rustfmt and machete (source metrics only)")
@@ -470,19 +638,20 @@ def main() -> int:
                     help="also measure per-crate line coverage with cargo llvm-cov")
     ap.add_argument("--mutants", action="store_true",
                     help=f"also run cargo mutants on the core files (shard {MUTANT_SHARD}, ~2 h)")
-    ap.add_argument("--mutants-from", type=Path, metavar="DIR",
-                    help="score an existing cargo-mutants output dir instead of running one")
+    ap.add_argument("--mutants-from", type=Path, metavar="DIR", action="append", default=[],
+                    help="score existing cargo-mutants output dir(s) instead of running one "
+                         "(repeatable; a mutant in several is counted once)")
     ap.add_argument("--mutants-out", type=Path, default=ROOT / "target" / "mutants",
                     help="where --mutants writes (default target/mutants)")
     a = ap.parse_args()
 
     try:
-        mdir = None
+        mdirs: list[Path] = []
         if a.mutants_from:
-            mdir = a.mutants_from / "mutants.out" if (a.mutants_from / "mutants.out").is_dir() else a.mutants_from
+            mdirs = [d / "mutants.out" if (d / "mutants.out").is_dir() else d for d in a.mutants_from]
         elif a.mutants:
-            mdir = run_mutants(a.mutants_out)
-        now = measure(fast=a.fast, coverage=a.coverage, mutants=mdir)
+            mdirs = [run_mutants(a.mutants_out)]
+        now = measure(fast=a.fast, coverage=a.coverage, mutants=mdirs)
     except RuntimeError as exc:
         print(f"quality measurement FAILED: {exc}", file=sys.stderr)
         return 1
@@ -494,19 +663,32 @@ def main() -> int:
     budget = load_budget()
     failures, gains, tightened = check(now, budget)
 
-    if a.update:
+    if a.update or a.update_only:
+        if a.update_only:
+            # Record only the named families of keys; everything else stays as committed,
+            # so adding coverage floors cannot quietly re-baseline a lint count.
+            tightened = dict(budget)
+            failures = [f for f in failures if f.startswith(tuple(a.update_only))]
+            gains = []
         for key in now:
-            if not key.startswith("_"):
-                tightened[key] = budget_value(key, now[key])
+            if key.startswith("_") or (a.update_only and not key.startswith(tuple(a.update_only))):
+                continue
+            tightened[key] = budget_value(key, now[key], now)
         tightened["_note"] = ("Written by bench/quality.py --update. Every entry is a "
                               "ratchet: the check fails on a move away from these values. "
                               "Loosening one is a decision, and belongs in the commit "
                               "message that does it.")
         BUDGET.write_text(json.dumps(tightened, indent=2, sort_keys=True) + "\n",
-                          encoding="utf-8")
-        if failures:
+                          encoding="utf-8", newline="\n")
+        new = [f for f in failures if "no floor recorded" in f]
+        loosened = [f for f in failures if f not in new]
+        if new:
+            print("floors recorded for the first time:")
+            for f in new:
+                print("  " + f.split(":", 2)[0] + ":" + f.split(":", 2)[1])
+        if loosened:
             print("budget loosened:")
-            for f in failures:
+            for f in loosened:
                 print("  " + f.rstrip())
         if gains:
             print("budget tightened:")
@@ -514,11 +696,11 @@ def main() -> int:
                 print("  " + g)
         if not failures and not gains:
             print("budget unchanged")
-        print(f"\nwrote {BUDGET.relative_to(ROOT).as_posix()}")
+        print(f"\nwrote {_shown(BUDGET)}")
         return 0
 
     if not budget:
-        print(f"no budget at {BUDGET.relative_to(ROOT).as_posix()}; run --update to create it")
+        print(f"no budget at {_shown(BUDGET)}; run --update to create it")
         return 1
 
     for g in gains:
@@ -534,7 +716,7 @@ def main() -> int:
         # Gains are absorbed on the spot so ground taken is not quietly given back later.
         tightened["_note"] = budget.get("_note", "")
         BUDGET.write_text(json.dumps(tightened, indent=2, sort_keys=True) + "\n",
-                          encoding="utf-8")
+                          encoding="utf-8", newline="\n")
         print("\nquality ratchet passed, budget tightened to match")
     else:
         print("quality ratchet passed")

@@ -107,9 +107,88 @@ class QualityTests(unittest.TestCase):
                 + [outcome(f, "MissedMutant")] + [outcome(f, "Unviable")] * 5}
         with tempfile.TemporaryDirectory() as directory:
             (Path(directory) / "outcomes.json").write_text(json.dumps(data), encoding="utf-8")
-            self.assertEqual(quality.mutation_scores(Path(directory)), {f"mutation:{f}": 75.0})
+            scores = quality.mutation_scores(Path(directory))
+            self.assertEqual(scores["mutation:inkvec-trace/color"], 75.0)
+            self.assertEqual(scores["mutation:all"], 75.0)
+            self.assertEqual(scores["_mutation_bounds"]["inkvec-trace/color"]["viable"], 4)
             with self.assertRaises(RuntimeError):
                 quality.mutation_scores(Path(directory) / "missing")
+
+    def test_mutant_groups_are_module_trees(self):
+        self.assertEqual(quality.mutant_group("crates/inkvec-trace/src/color/mdl.rs"), "inkvec-trace/color")
+        self.assertEqual(quality.mutant_group("crates\\inkvec-trace\\src\\native.rs"), "inkvec-trace/native")
+        self.assertEqual(quality.mutant_group("crates/inkvec-trace/src/fast/mod.rs"), "inkvec-trace/fast")
+        self.assertEqual(quality.mutant_group("crates/inkvec-trace/src/fast/faces/runs.rs"),
+                         "inkvec-trace/fast")
+        self.assertEqual(quality.mutant_group("crates/inkvec-fit/src/curves.rs"), "inkvec-fit/curves")
+        self.assertIsNone(quality.mutant_group("crates/inkvec-fit/src/smooth.rs"))
+        self.assertIsNone(quality.mutant_group("crates/inkvec-trace/src/colorx.rs"))
+        for glob in quality.mutant_files():
+            self.assertTrue(glob.startswith("crates/"))
+
+    def test_mutants_counted_once_across_directories(self):
+        def outcome(line, summary):
+            return {"scenario": {"Mutant": {"file": "crates/inkvec-fit/src/curves.rs",
+                                            "span": {"start": {"line": line}}, "replacement": "0"}},
+                    "summary": summary}
+        with tempfile.TemporaryDirectory() as d:
+            a, b = Path(d) / "a", Path(d) / "b"
+            a.mkdir(); b.mkdir()
+            (a / "outcomes.json").write_text(json.dumps(
+                {"outcomes": [outcome(1, "CaughtMutant"), outcome(2, "MissedMutant")]}), encoding="utf-8")
+            (b / "outcomes.json").write_text(json.dumps(
+                {"outcomes": [outcome(2, "CaughtMutant"), outcome(3, "CaughtMutant")]}), encoding="utf-8")
+            self.assertEqual(quality.mutation_counts([a, b])["inkvec-fit/curves"], (2, 3))
+
+    def test_wilson_bounds(self):
+        lo, hi = quality.wilson_bounds(8, 10, 1.959963984540054)
+        # Textbook value for 8/10 at 95 %: [0.490, 0.943].
+        self.assertAlmostEqual(lo, 49.02, places=1)
+        self.assertAlmostEqual(hi, 94.33, places=1)
+        lo, hi = quality.wilson_bounds(10, 10, 1.645)
+        self.assertEqual(hi, 100.0)
+        self.assertGreater(lo, 70.0)
+
+    def test_sampled_mutation_floor_fails_only_on_a_demonstrated_fall(self):
+        key, group = "mutation:inkvec-trace/color", "inkvec-trace/color"
+
+        def now(killed, viable):
+            counts = {group: (killed, viable)}
+            return {key: round(100 * killed / viable, 2),
+                    "_mutation_bounds": quality.mutation_bounds(counts)}
+        # Recorded at the lower bound of 30/40 (75 %).
+        floor = quality.budget_value(key, 75.0, now(30, 40))
+        self.assertLess(floor, 75)
+        self.assertGreater(floor, 55)
+        # A different sample of unchanged tests reading 26/40 (65 %) is not a fall ...
+        self.assertFalse(quality.check(now(26, 40), {key: floor})[0])
+        # ... 10/40 (25 %) is.
+        self.assertTrue(quality.check(now(10, 40), {key: floor})[0])
+        # A floor rises only when the lower bound clears it.
+        _, gains, tightened = quality.check(now(39, 40), {key: floor})
+        self.assertTrue(gains)
+        self.assertGreater(tightened[key], floor)
+
+    def test_update_only_touches_the_named_keys(self):
+        with tempfile.TemporaryDirectory() as directory:
+            budget = Path(directory) / "budget.json"
+            budget.write_text('{"test_functions": 700, "lint:missing_docs": 0}\n', encoding="utf-8")
+            measured = {"test_functions": 650, "coverage:inkvec-trace": 81.7, "lint:missing_docs": 3}
+            with patch.object(quality, "BUDGET", budget), \
+                    patch.object(quality, "measure", return_value=measured), \
+                    patch.object(sys, "argv", ["quality.py", "--update-only", "coverage:"]):
+                self.assertEqual(quality.main(), 0)
+            written = json.loads(budget.read_text(encoding="utf-8"))
+            self.assertEqual(written["coverage:inkvec-trace"], 81)
+            self.assertEqual(written["test_functions"], 700)
+            self.assertEqual(written["lint:missing_docs"], 0)
+            self.assertNotIn(b"\r\n", budget.read_bytes())
+
+    def test_unrecorded_floor_fails(self):
+        failures, _, tightened = quality.check({"coverage:inkvec-new": 50.0}, {"test_functions": 1})
+        self.assertTrue(failures)
+        self.assertIn("no floor recorded", failures[0])
+        self.assertNotIn("coverage:inkvec-new", tightened)
 
     def test_failed_measurement_cannot_rewrite_budget_even_with_update(self):
         with tempfile.TemporaryDirectory() as directory:

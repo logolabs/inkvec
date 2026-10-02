@@ -535,8 +535,11 @@ pub(crate) fn emit(
         ));
     }
     if !d.is_empty() {
+        // Every ring of the ink, outlines, holes and islands in holes alike, wound by its
+        // nesting depth so the default fill rule paints what even-odd did.
+        let (d, rule) = crate::emit::for_nonzero(&d);
         body.push_str(&format!(
-            "<path id=\"black-1\" d=\"{d}\" fill=\"#000000\" fill-rule=\"evenodd\"/>"
+            "<path id=\"black-1\" d=\"{d}\" fill=\"#000000\"{rule}/>"
         ));
     }
     // The header every emitter writes, so retargeting and the margin find it.

@@ -8,8 +8,9 @@
 //! # The passes, for a file
 //!
 //! 1. **Read** the file into memory once ([`load_image_capped`]); the header and the pixels
-//!    are both decoded from those bytes, with the format named by the file's extension, as
-//!    `image::open` names it.
+//!    are both decoded from those bytes, in the format the bytes themselves announce (their
+//!    signature), and only when the bytes announce none, the one the file's extension names
+//!    ([`sniff`]).
 //! 2. **Decode** with the `image` crate into whatever layout the file holds (8-bit RGB for
 //!    most opaque PNGs and every JPEG, 8-bit RGBA for most transparent ones).
 //! 3. **Cap**: above `max_dim` on the longer side, box-average the 8-bit buffer down
@@ -86,18 +87,63 @@ pub fn lossy_container(bytes: &[u8]) -> Option<bool> {
     }
 }
 
-/// Load a raster image from a file path into straight RGBA floats.
+/// Load a raster image from a file path into straight RGBA floats: [`load_image_capped`]
+/// without a cap.
 pub fn load_image(path: &Path) -> Result<Rgba, TraceError> {
-    let img = image::open(path).map_err(|e| TraceError::Decode(e.to_string()))?;
-    has_pixels(img.width(), img.height())?;
-    Ok(from_dynamic(img))
+    load_image_capped(path, 0).map(|(img, _)| img)
 }
 
-/// Decode a raster image from in-memory bytes into straight RGBA floats.
+/// Decode a raster image from in-memory bytes into straight RGBA floats:
+/// [`decode_image_capped`] without a cap.
 pub fn decode_image(bytes: &[u8]) -> Result<Rgba, TraceError> {
-    let img = image::load_from_memory(bytes).map_err(|e| TraceError::Decode(e.to_string()))?;
-    has_pixels(img.width(), img.height())?;
-    Ok(from_dynamic(img))
+    decode_image_capped(bytes, 0).map(|(img, _)| img)
+}
+
+/// The format to decode `bytes` as: the one their signature announces, when it is a
+/// format the tracer reads; otherwise the one `path`'s extension names; `None` when
+/// neither says.
+///
+/// The extension used to decide alone (as `image::open` decides), so a JPEG saved as
+/// `.png` failed with "Invalid PNG signature" and a PNG saved as `.jpg` with "Illegal start
+/// bytes" (intake fuzz, 2026-10-02) -- a mislabelled file is common (a browser's "save
+/// image as", a rename) and the bytes say plainly what it is. A signature names a format
+/// unambiguously (`\x89PNG`, `\xFF\xD8\xFF`, `GIF8`, `RIFF....WEBP`, `BM`, `II*\0` /
+/// `MM\0*`), so where it is present it wins; where it is absent (a truncated or damaged
+/// file) the extension still chooses the decoder, whose error then describes the damage.
+/// A file whose extension is right decodes with the same decoder as before, so its pixels
+/// are unchanged.
+///
+/// Method from: magic-number content sniffing, the rule of the WHATWG MIME Sniffing
+/// Standard (§ 6.1, "Matching an image type pattern",
+/// <https://mimesniff.spec.whatwg.org/#matching-an-image-type-pattern>), by which
+/// browsers decide an image's type from its first bytes, not its name; the patterns are
+/// the `image` crate's `guess_format`.
+fn sniff(bytes: &[u8], path: Option<&Path>) -> Option<image::ImageFormat> {
+    use image::ImageFormat as F;
+    let read = |f: &F| matches!(f, F::Png | F::Jpeg | F::Gif | F::WebP | F::Bmp | F::Tiff);
+    image::guess_format(bytes).ok().filter(read).or_else(|| {
+        path.and_then(Path::extension)
+            .and_then(image::ImageFormat::from_extension)
+    })
+}
+
+/// Decode `bytes` as `format`, capped at `max_dim` (see [`load_image_capped`]), with the
+/// arrival dimensions.
+fn decode_as(
+    bytes: &[u8],
+    format: image::ImageFormat,
+    max_dim: usize,
+) -> Result<(Rgba, (u32, u32)), TraceError> {
+    let err = |e: image::ImageError| TraceError::Decode(e.to_string());
+    let reader = || {
+        let mut r = image::ImageReader::new(std::io::Cursor::new(bytes));
+        r.set_format(format);
+        r
+    };
+    let (w, h) = reader().into_dimensions().map_err(err)?;
+    has_pixels(w, h)?;
+    let img = reader().decode().map_err(err)?;
+    Ok((cap_decoded(img, w, h, max_dim), (w, h)))
 }
 
 /// Refuse a raster with no pixels: `Ok` when both sides are at least one pixel.
@@ -258,12 +304,10 @@ pub fn load_image_capped(path: &Path, max_dim: usize) -> Result<(Rgba, (u32, u32
 /// `load_image_capped` used to open the file twice -- once for the header, once to decode
 /// through `image::open` -- and the command line opened it a third time for the first bytes
 /// `--lossy auto` inspects. Reading it once and decoding from memory gives the same pixels:
-/// the decoders are deterministic functions of the bytes, and the reader here is set up as
-/// `image::open` sets up its own, with the format taken from the *file extension* (not
-/// guessed from the content, which `decode_image_capped` does), default limits, and no
-/// decoding hooks registered anywhere in this workspace. A path whose extension names no
-/// format (or has none) is handed to `image::open` itself, so even its error message is the
-/// one it always was.
+/// the decoders are deterministic functions of the bytes, the reader here is set up with
+/// default limits, and no decoding hooks are registered anywhere in this workspace. The
+/// format is the one the bytes announce, else the extension's ([`sniff`]); a file that
+/// names neither is handed to `image::open` itself, for its own error message.
 ///
 /// Not from the literature: plumbing.
 fn load_file_bytes_capped(
@@ -271,29 +315,14 @@ fn load_file_bytes_capped(
     bytes: &[u8],
     max_dim: usize,
 ) -> Result<(Rgba, (u32, u32)), TraceError> {
-    let err = |e: image::ImageError| TraceError::Decode(e.to_string());
-    let Some(format) = path
-        .extension()
-        .and_then(image::ImageFormat::from_extension)
-    else {
-        // `image::open`'s own path: an unknown or missing extension, and its own error.
-        let (w, h) = image::ImageReader::open(path)
-            .map_err(|e| TraceError::Decode(e.to_string()))?
-            .into_dimensions()
-            .map_err(err)?;
-        has_pixels(w, h)?;
-        let img = image::open(path).map_err(err)?;
-        return Ok((cap_decoded(img, w, h, max_dim), (w, h)));
-    };
-    let reader = || {
-        let mut r = image::ImageReader::new(std::io::Cursor::new(bytes));
-        r.set_format(format);
-        r
-    };
-    let (w, h) = reader().into_dimensions().map_err(err)?;
-    has_pixels(w, h)?;
-    let img = reader().decode().map_err(err)?;
-    Ok((cap_decoded(img, w, h, max_dim), (w, h)))
+    match sniff(bytes, Some(path)) {
+        Some(format) => decode_as(bytes, format, max_dim),
+        // Neither the content nor the extension names a format: `image::open`'s error.
+        None => Err(TraceError::Decode(image::open(path).err().map_or_else(
+            || "unrecognised image format".into(),
+            |e| e.to_string(),
+        ))),
+    }
 }
 
 /// A decoded `w × h` image as straight RGBA floats, box-averaged to the `max_dim` cap when
@@ -314,14 +343,15 @@ fn cap_decoded(img: image::DynamicImage, w: u32, h: u32, max_dim: usize) -> Rgba
 /// pixels (0 = no cap) before the pixels are read into floats, and returning the original
 /// dimensions alongside. See [`load_image_capped`].
 pub fn decode_image_capped(bytes: &[u8], max_dim: usize) -> Result<(Rgba, (u32, u32)), TraceError> {
-    let (w, h) = image::ImageReader::new(std::io::Cursor::new(bytes))
-        .with_guessed_format()
-        .map_err(|e| TraceError::Decode(e.to_string()))?
-        .into_dimensions()
-        .map_err(|e| TraceError::Decode(e.to_string()))?;
-    has_pixels(w, h)?;
-    let img = image::load_from_memory(bytes).map_err(|e| TraceError::Decode(e.to_string()))?;
-    Ok((cap_decoded(img, w, h, max_dim), (w, h)))
+    match sniff(bytes, None) {
+        Some(format) => decode_as(bytes, format, max_dim),
+        // No signature the tracer reads: the library's own error for such bytes.
+        None => Err(TraceError::Decode(
+            image::load_from_memory(bytes)
+                .err()
+                .map_or_else(|| "unrecognised image format".into(), |e| e.to_string()),
+        )),
+    }
 }
 
 /// Raw straight RGBA8 pixels (row-major, tightly packed, `w * h * 4` bytes) into straight
@@ -498,8 +528,10 @@ mod intake_equivalence_tests {
     }
 
     /// The one-read loader against the old two-open loader, on real files of several
-    /// containers, capped and uncapped, and on files whose extension lies about or omits
-    /// the format (same pixels, or the same error text).
+    /// containers, capped and uncapped (same pixels, or the same error text); and on files
+    /// whose extension lies about or omits the format, which the old loader refused and the
+    /// content-sniffing one decodes as what they are, pixel for pixel the correctly named
+    /// file.
     #[test]
     fn one_read_equals_image_open() {
         let dir = std::env::temp_dir().join(format!("inkvec-load-once-{}", std::process::id()));
@@ -518,12 +550,28 @@ mod intake_equivalence_tests {
             img.save(&p).unwrap();
             files.push(p);
         }
-        // A PNG named as a JPEG, and one with no extension at all.
-        for name in ["f.jpg", "g"] {
+        // A PNG named as a JPEG, one with no extension at all, and a JPEG named as a PNG:
+        // each must read exactly as the file it is a copy of.
+        let mut lying = Vec::new();
+        for (name, real) in [("f.jpg", "a.png"), ("g", "a.png"), ("h.png", "d.jpg")] {
             let p = dir.join(name);
-            std::fs::copy(dir.join("a.png"), &p).unwrap();
-            files.push(p);
+            std::fs::copy(dir.join(real), &p).unwrap();
+            lying.push((p, dir.join(real)));
         }
+        for (p, real) in &lying {
+            for max_dim in [0usize, 64, 2048] {
+                let (a, da) = load_image_capped(p, max_dim).unwrap();
+                let (b, db) = load_image_capped(real, max_dim).unwrap();
+                assert_eq!((da, a.width, a.height), (db, b.width, b.height), "{p:?}");
+                assert_eq!(bits(&a.data), bits(&b.data), "{p:?} at {max_dim}");
+                let (c, _) = decode_image_capped(&std::fs::read(p).unwrap(), max_dim).unwrap();
+                assert_eq!(bits(&a.data), bits(&c.data), "{p:?}: file and bytes agree");
+            }
+        }
+        // A file that is no image, under a name that promises one, keeps its decoder's error.
+        let text = dir.join("text.png");
+        std::fs::write(&text, b"this is not an image\n").unwrap();
+        files.push(text);
         files.push(dir.join("missing.png"));
         for p in &files {
             for max_dim in [0usize, 64, 2048] {

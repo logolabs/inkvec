@@ -17,6 +17,11 @@
   --ink:#faf8f5;--dim:rgba(250,248,245,.75);--faint:rgba(250,248,245,.55);--muted:rgba(250,248,245,.4);
   --rule:rgba(250,248,245,.08);--rule2:#2a2724;
   --accent:#c9754a;--accent-hover:#d4896a;--accent-ink:#1a1816;--accent-soft:rgba(201,117,74,.12);--accent-subtle:rgba(201,117,74,.08);
+  /* Copper as text on a copper-tinted ground (a pressed toggle, the chosen gallery case):
+     --accent-soft over --card composites to #352922, where --accent is 4.1:1 and fails WCAG 2.2
+     SC 1.4.3 (4.5:1 below 24 px; r2-product's axe run). The lighter copper is 5.1:1 there and
+     5.9:1 on --card. */
+  --accent-text:#d4896a;
   --gold:#b8976c;
   --good:#34d399;--goodbg:rgba(52,211,153,.15);--bad:#f87171;--check:#2a2724;
   --anchor:#f87171;--handle:#b8976c;--wire:#faf8f5;
@@ -28,13 +33,16 @@
 *{box-sizing:border-box}
 body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 var(--font-body);-webkit-font-smoothing:antialiased}
 a{color:var(--accent);text-decoration:none}a:hover{color:var(--accent-hover);text-decoration:underline}
+/* A link inside a sentence is underlined, not told apart by its colour alone (WCAG 2.2 SC
+   1.4.1); navigation, buttons and tiles keep their own shapes. */
+.note a,.lede a,.cta-note a,.caption a,.how a,footer a{text-decoration:underline;text-underline-offset:2px}
 button,.btn{font:600 13.5px/1 var(--font-body);color:var(--ink);background:var(--card);border:1px solid var(--rule);border-radius:var(--radius-sm);padding:10px 14px;cursor:pointer;transition:border-color .15s,background .15s,transform .1s,box-shadow .15s;display:inline-flex;align-items:center;gap:8px;text-decoration:none}
 button:hover,.btn:hover{border-color:rgba(250,248,245,.18);text-decoration:none;color:var(--ink)}button:active,.btn:active{transform:translateY(1px) scale(.98)}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);padding:15px 28px;font-size:16px;border-radius:var(--radius-full)}
 .btn.primary:hover{background:var(--accent-hover);border-color:var(--accent-hover);box-shadow:var(--glow);transform:translateY(-1px);color:var(--accent-ink)}
 .btn.big{padding:15px 24px;font-size:15px;border-radius:var(--radius-full)}
 .btn svg{width:18px;height:18px}
-button[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+button[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-text)}
 .mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
 code{font-family:var(--font-mono);font-size:.92em}
 h1,h2,h3{font-family:var(--font-display)}
@@ -113,7 +121,7 @@ h1{font-size:clamp(32px,4.6vw,52px);line-height:1.06;letter-spacing:-.025em;font
 .tools .legend i{display:inline-block;width:10px;height:10px;border-radius:50%;vertical-align:-1px;margin-right:5px}
 .seg{display:inline-flex;background:var(--card);border:1px solid var(--rule);border-radius:var(--radius-full);padding:3px;gap:2px;flex-wrap:wrap}
 .seg button{border:0;background:transparent;border-radius:var(--radius-full);padding:7px 10px;font-size:12.5px;color:var(--dim)}
-.seg button[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent)}
+.seg button[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent-text)}
 /* gallery */
 .gal{display:grid;grid-template-columns:300px 1fr;gap:16px;margin-top:18px;align-items:start}
 @media (max-width:820px){.gal{grid-template-columns:1fr}}
@@ -128,7 +136,7 @@ h1{font-size:clamp(32px,4.6vw,52px);line-height:1.06;letter-spacing:-.025em;font
 .case .th img{width:100%;height:100%;object-fit:contain}
 .case .nm{width:100%;font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dim)}
 .case[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft)}
-.case[aria-pressed="true"] .nm{color:var(--accent)}
+.case[aria-pressed="true"] .nm{color:var(--accent-text)}
 .caption{margin:8px 0 0;font-size:13px;color:var(--dim)}
 .caption b{color:var(--ink)}
 @media (max-width:820px){

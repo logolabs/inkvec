@@ -106,7 +106,7 @@ export function createFabricate(store: Store): HTMLElement {
   // Sheets are seen as they will be cut: on a light mat, where a thin red cut line and a
   // pale vinyl both show.
   const panes = h("div.panes.onlight", null, pane);
-  const stage = h("section.stage", null, tools, panes);
+  const stage = h("main.stage", null, tools, panes);
   const rail = h("aside.minifyrail");
   const el = h("div", { style: { flex: "1", minHeight: "0", display: "flex" } }, stage, rail);
 

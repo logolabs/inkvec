@@ -53,6 +53,15 @@ a {
 a:hover {
   text-decoration: underline;
 }
+/* A link inside a sentence is underlined, not told apart by its colour alone: WCAG 2.2
+   SC 1.4.1 (Use of Color). Copper beside faint text is 1.13-1.29:1 against the words around
+   it, under the 3:1 a colour-only cue needs. Links that stand alone (rows, menus) keep the
+   plain look. */
+p a,
+.stagestate .body a {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 
 button {
   font: inherit;
@@ -314,7 +323,9 @@ kbd {
   -webkit-app-region: no-drag;
 }
 
+/* The app's name is the page's one level-one heading (it is an `h1`), drawn as chrome. */
 .brand {
+  margin: 0;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1735,10 +1746,14 @@ kbd {
   border-color: var(--gold);
   border-style: dashed;
 }
+/* Both halves of a chip are at least 24 px tall, and the remove button 24 px square:
+   WCAG 2.2 SC 2.5.8 (Target Size, Minimum). At 18 px the remove button sat inside the
+   24 px circle of its neighbour, so the spacing exception did not apply either. */
 .cchipmain {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  min-height: 24px;
   padding: 2px 4px 2px 3px;
   border-radius: 999px;
 }
@@ -1748,9 +1763,9 @@ kbd {
 .cchipx {
   display: grid;
   place-items: center;
-  width: 18px;
-  height: 18px;
-  margin-right: 2px;
+  width: 24px;
+  height: 24px;
+  margin-right: 1px;
   border-radius: 999px;
   color: var(--muted);
 }

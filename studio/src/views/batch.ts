@@ -30,7 +30,7 @@ export function createBatch(store: Store): HTMLElement {
   const viewport = h("div.batchviewport");
   const foot = h("div.batchfoot");
   const el = h(
-    "section.stage",
+    "main.stage",
     { style: { background: "var(--paper)" } },
     bar,
     head,

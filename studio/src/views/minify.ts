@@ -29,7 +29,7 @@ export function createMinify(store: Store): HTMLElement {
   const divider = h("div.wipehandle", { role: "separator", "aria-label": "Wipe" });
   const panes = h("div.panes", null, before, after, divider);
   const tools = h("div.viewertools");
-  const stage = h("section.stage", null, tools, panes);
+  const stage = h("main.stage", null, tools, panes);
 
   // The same three arrangements as the Vectorize viewer, for the same reason: this tab's
   // whole claim is that nothing moved, and the only way to believe that is to look.

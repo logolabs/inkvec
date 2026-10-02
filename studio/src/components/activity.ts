@@ -25,7 +25,9 @@ export function createActivity(store: Store): HTMLElement {
     "data-ctl": "activity-toggle",
     onclick: () => store.set({ logOpen: !store.state.logOpen }),
   });
-  const body = h("div.activitybody", { role: "log" });
+  // The lines scroll, so the list is a Tab stop of its own: a keyboard can then scroll it
+  // with the arrow keys (axe-core `scrollable-region-focusable`, WCAG 2.1.1).
+  const body = h("div.activitybody", { role: "log", tabindex: "0", "aria-label": "Engine log lines" });
   el.append(head, body);
 
   const line = (l: LogLine, running: boolean) => {

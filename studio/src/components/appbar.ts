@@ -29,7 +29,8 @@ export function renderAppBar(appbar: HTMLElement, store: Store, act: AppBarActio
 
   fill(
     appbar,
-    h("span.brand", null, appMark(18), APP_NAME),
+    // The page's level-one heading: what a screen reader's heading list starts from.
+    h("h1.brand", null, appMark(18), APP_NAME),
     st.tab === "vectorize" && st.source
       ? h(
           "div.filechip",

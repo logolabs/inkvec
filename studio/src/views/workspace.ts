@@ -50,7 +50,10 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
   const tools = h("div.viewertools");
   const stageBody = h("div", { style: { flex: "1", minHeight: "0", position: "relative", display: "flex" } });
   const strip = h("div.statusstrip");
-  const el = h("section.stage", null, tools, stageBody, strip);
+  // The page's `main` landmark (the app bar is its banner, the rail its complementary
+  // region): every tab's stage is one, so the toolbar, the viewer and the status strip are
+  // inside a landmark and a screen reader can jump straight to them.
+  const el = h("main.stage", null, tools, stageBody, strip);
 
   // The toolbar reads the zoom only to say which stop is pressed. A wheel tick changes the
   // zoom every frame and the pressed stop almost never, so the bar is rebuilt only when

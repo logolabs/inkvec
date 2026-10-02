@@ -19,6 +19,7 @@ import {
 } from "../lib/ipc";
 import { bytes, type Store } from "../lib/state";
 import { closeOverlay, confirm, modal, openModal, toast } from "../components/overlays";
+import { focusables, holdModal } from "../components/dialog";
 import { windowControls } from "../components/wincontrols";
 import { openHelp } from "../components/help";
 import { showcaseScreen } from "./showcase";
@@ -36,16 +37,30 @@ export interface ScreenActions {
  * `State.screen` names one and hidden otherwise.
  */
 export function createScreens(store: Store, act: ScreenActions): HTMLElement {
-  const host = h("div");
+  // A screen covers the whole window, so it is a modal dialog (`components/dialog.ts`):
+  // focus moves into it, Tab stays in it, Escape closes it, and focus goes back to the app
+  // bar button that opened it. The host is the dialog rather than the screen, because the
+  // screen is rebuilt whenever the preferences change (every Settings control saves them)
+  // while the host stays put. Named by the screen's title (`id="screen-title"`).
+  const host = h("div", { role: "dialog", "aria-modal": "true", "aria-labelledby": "screen-title" });
+  let release: ((returnFocus?: boolean) => void) | null = null;
+  /** The screen on show, for the focus to go back to its app bar button. */
+  let shown: string | null = null;
 
   const render = () => {
     const st = store.state;
     if (!st.screen) {
       fill(host);
       host.style.display = "none";
+      release?.();
+      release = null;
       return;
     }
     host.style.display = "";
+    // A rebuild replaces every control, which would drop the keyboard from the one just
+    // changed; focus goes back to the control at the same place in the Tab order.
+    const before = release ? focusables(host) : [];
+    const at = before.indexOf(document.activeElement as HTMLElement);
     fill(
       host,
       st.screen === "settings"
@@ -54,6 +69,18 @@ export function createScreens(store: Store, act: ScreenActions): HTMLElement {
           ? showcaseScreen(act.close)
           : about(store, act),
     );
+    shown = st.screen;
+    if (!release) {
+      release = holdModal(host, {
+        // The screen's first control is its Done button, top right.
+        onEscape: act.close,
+        // The app bar is redrawn whenever the preferences change, which every Settings
+        // control does; the button that opened the screen is then a new element.
+        fallback: () => document.querySelector<HTMLElement>(`.appbar [data-ctl="screen:${shown}"]`),
+      });
+    } else if (at >= 0) {
+      focusables(host)[at]?.focus({ preventScroll: true });
+    }
   };
 
   store.on(["screen", "prefs", "caps"], render);
@@ -73,7 +100,7 @@ function settings(store: Store, act: ScreenActions): HTMLElement {
     h(
       "div.screenbar",
       { "data-tauri-drag-region": "" },
-      h("span", { style: { fontSize: "12.5px", fontWeight: "600" } }, "Settings"),
+      h("span", { id: "screen-title", style: { fontSize: "12.5px", fontWeight: "600" } }, "Settings"),
       h("div.spacer"),
       h("button.btn.compact", { onclick: act.close }, "Done"),
       // This screen covers the app bar, so the window's own controls come with it.
@@ -363,13 +390,14 @@ export function openDenoiserModal(store: Store): void {
 
   const bar = h("div.progress", null, h("i", { style: { width: "0%" } }));
   const line = h("span.faint.num", { style: { fontSize: "12.5px" } }, "");
-  const body = h("div.modal", { tabindex: "-1" });
+  // Named by its heading, which is redrawn with the same id on every render.
+  const body = h("div.modal", { tabindex: "-1", "aria-labelledby": "denoiser-title" });
   let downloading = false;
 
   const render = () => {
     fill(
       body,
-      h("h2", null, downloading ? "Downloading the denoiser" : "Download the denoiser"),
+      h("h2", { id: "denoiser-title" }, downloading ? "Downloading the denoiser" : "Download the denoiser"),
       downloading
         ? h("div", { style: { display: "flex", flexDirection: "column", gap: "10px" } }, bar, line)
         : h(
@@ -440,15 +468,17 @@ export function openDenoiserModal(store: Store): void {
     });
   })();
 
-  openModal(body);
+  // Drawn first, so the modal opens with its buttons in it and focus can move to one.
   render();
+  openModal(body);
 }
 
 // --------------------------------------------------------------------- about ---
 
 function about(store: Store, act: ScreenActions): HTMLElement {
   const caps = store.state.caps;
-  const notices = h("pre", null, "Loading the notices…");
+  // The notices scroll in their box, so the box is a Tab stop: the keyboard can scroll it.
+  const notices = h("pre", { tabindex: "0", "aria-label": "Licence and third-party notices" }, "Loading the notices…");
   void api
     .thirdPartyNotices()
     .then((text) => {
@@ -468,7 +498,7 @@ function about(store: Store, act: ScreenActions): HTMLElement {
     h(
       "div.screenbar",
       { "data-tauri-drag-region": "" },
-      h("span", { style: { fontSize: "12.5px", fontWeight: "600" } }, "About"),
+      h("span", { id: "screen-title", style: { fontSize: "12.5px", fontWeight: "600" } }, "About"),
       h("div.spacer"),
       h("button.btn.compact", { onclick: act.close }, "Done"),
       // This screen covers the app bar, so the window's own controls come with it.
@@ -678,15 +708,37 @@ function group(name: string, rows: (HTMLElement | null)[]): HTMLElement {
   return h("div.settinggroup", null, h("div.head.eyebrow", null, name), ...rows);
 }
 
+/** Bumped per row, so every row's label and help have ids of their own. */
+let rowSeq = 0;
+
+/**
+ * One Settings row: the label and its help on the left, the control on the right.
+ *
+ * The label is a `<span>` beside the control rather than a `<label>` around it, because the
+ * row is a two-column grid and some controls are buttons. So the control is named by
+ * reference: its form field (a `<select>`, the number `<input>`, a `role=switch` button) gets
+ * `aria-labelledby` pointing at the label and `aria-describedby` at the help, which is WCAG
+ * 2.2 SC 4.1.2 (Name, Role, Value) and the `label`/`select-name` rules axe-core checks. A
+ * control that carries its own name (a button with text) is left alone. Six fields had no
+ * name before this (three number inputs and three selects; axe-core 4.11.1, r2-product).
+ */
 function row(label: string, help: string, control: HTMLElement): HTMLElement {
+  const id = `setting-${++rowSeq}`;
+  const field = control.matches("select, input, [role=switch]")
+    ? control
+    : control.querySelector<HTMLElement>("select, input, [role=switch]");
+  if (field) {
+    field.setAttribute("aria-labelledby", `${id}-label`);
+    if (help) field.setAttribute("aria-describedby", `${id}-help`);
+  }
   return h(
     "div.settingrow",
     null,
     h(
       "div.about",
       null,
-      h("span.label", null, label),
-      help ? h("span.help", null, help) : null,
+      h("span.label", { id: `${id}-label` }, label),
+      help ? h("span.help", { id: `${id}-help` }, help) : null,
     ),
     h("div.control", null, control),
   );

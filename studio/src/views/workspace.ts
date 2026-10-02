@@ -50,7 +50,10 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
   const tools = h("div.viewertools");
   const stageBody = h("div", { style: { flex: "1", minHeight: "0", position: "relative", display: "flex" } });
   const strip = h("div.statusstrip");
-  const el = h("section.stage", null, tools, stageBody, strip);
+  // The page's `main` landmark (the app bar is its banner, the rail its complementary
+  // region): every tab's stage is one, so the toolbar, the viewer and the status strip are
+  // inside a landmark and a screen reader can jump straight to them.
+  const el = h("main.stage", null, tools, stageBody, strip);
 
   // The toolbar reads the zoom only to say which stop is pressed. A wheel tick changes the
   // zoom every frame and the pressed stop almost never, so the bar is rebuilt only when
@@ -63,15 +66,37 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
     const key = JSON.stringify([on, st.view, st.show, st.fitted, stops, st.detail, Boolean(st.svg), st.bandsMissing, st.settings.mode]);
     if (key === toolsDrawn) return;
     toolsDrawn = key;
+    // Pressing a stop changes what the bar shows, so the bar is rebuilt under the key that
+    // pressed it; focus goes back to the button's twin (by `data-ctl`), as the rail does.
+    const focused =
+      document.activeElement instanceof HTMLElement && tools.contains(document.activeElement)
+        ? document.activeElement.getAttribute("data-ctl")
+        : null;
     const zoomStop = (label: string, z: number | "fit") =>
       h(
         "button",
         {
           "aria-pressed": String(z === "fit" ? st.fitted : !st.fitted && Math.abs(st.zoom - z) < 0.01),
           disabled: !on,
+          "data-ctl": `zoom:${z}`,
           onclick: () => (z === "fit" ? viewer.fit() : viewer.zoomTo(z)),
         },
         label,
+      );
+    // The pan buttons: the single-pointer way to move a zoomed view (WCAG 2.2 SC 2.5.7;
+    // dragging was the only one). Each moves the view by a quarter of the pane. Shown once
+    // the view is not fitted, which is when there is anything off screen to pan to.
+    const panStep = 0.25;
+    const panButton = (dir: "left" | "up" | "down" | "right", dx: number, dy: number) =>
+      h(
+        `button.pan.${dir}`,
+        {
+          "aria-label": `Pan ${dir}`,
+          title: `Pan ${dir} (or focus the viewer and use the arrow keys)`,
+          "data-ctl": `pan:${dir}`,
+          onclick: () => viewer.panBy(dx * panStep, dy * panStep),
+        },
+        icon(dir === "left" || dir === "right" ? "chevronRight" : "chevronDown", 12),
       );
 
     fill(
@@ -85,13 +110,14 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
             {
               "aria-pressed": String(st.view === v),
               disabled: !on,
+              "data-ctl": `view:${v}`,
               onclick: () => store.set({ view: v }),
             },
             v === "side" ? "Side by side" : v === "wipe" ? "Wipe" : "A/B",
           ),
         ),
       ),
-      h("span.muted", { style: { fontSize: "11.5px" } }, "hold ", h("kbd", null, "Space"), " to flick"),
+      h("span.muted.flickhint", { style: { fontSize: "11.5px" } }, "hold ", h("kbd", null, "Space"), " to flick"),
       h("div.sep"),
       h("span.eyebrow", null, "Show"),
       h(
@@ -110,6 +136,7 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
             "button.toggle",
             {
               "aria-pressed": String(st.show[key]),
+              "data-ctl": `show:${key}`,
               // The bands are fetched when Certainty is first shown, so whether a trace
               // has any is only known once somebody asks.
               disabled: !st.svg || (key === "certainty" && st.bandsMissing),
@@ -151,6 +178,7 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
           {
             "aria-pressed": String(st.detail),
             disabled: !st.svg,
+            "data-ctl": "detail",
             title: "Show the source's pixel grid under the vector edge",
             onclick: () => {
               const on = !st.detail;
@@ -162,9 +190,16 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
           },
           "Detail",
         ),
+        on && !st.fitted
+          ? h("div.seg.panpad", { role: "group", "aria-label": "Pan the view" }, panButton("left", -1, 0), panButton("up", 0, -1), panButton("down", 0, 1), panButton("right", 1, 0))
+          : null,
         h("div.seg.num", null, zoomStop("Fit", "fit"), zoomStop("1×", 1), zoomStop("4×", 4), zoomStop("12×", 12)),
       ),
     );
+    if (focused) {
+      // A pan button that went away (the view was fitted) hands the keyboard to Fit.
+      (tools.querySelector<HTMLElement>(`[data-ctl="${focused}"]`) ?? (focused.startsWith("pan:") ? tools.querySelector<HTMLElement>('[data-ctl="zoom:fit"]') : null))?.focus({ preventScroll: true });
+    }
   };
 
   // The viewer stays mounted for good, hidden while there is nothing to view, and what
@@ -179,7 +214,11 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
     const st = store.state;
     if (!st.source) {
       viewer.el.style.display = "none";
-      fill(chrome, firstRun(store, act, samples()));
+      // No image is open, but the last attempt may have failed: a file that would not open
+      // as the first of the session used to leave this screen exactly as it was, so the
+      // user got no answer at all (3 of 16 inputs, r2-product). The empty state now leads
+      // with what went wrong, and keeps the drop zone and the samples to carry on from.
+      fill(chrome, firstRun(store, act, samples(), firstFailure(st.stageState)));
       return;
     }
     viewer.el.style.display = "";
@@ -368,7 +407,7 @@ function stateOverlay(state: StageState, st: ReturnType<Store["state"]["valueOf"
     case "flat":
       return frame("info", "var(--gold)", "This image is one flat colour", "There are no boundaries to trace. A single rectangle would be the whole output.", ["Open another image", act.openFile]);
     case "undecodable":
-      return frame("alert", "var(--bad)", "This file will not decode", state.message, ["Open another image", act.openFile]);
+      return frame("alert", "var(--bad)", "This file will not decode", plainMessage(state.message), ["Open another image", act.openFile]);
     case "outOfMemory":
       return frame(
         "alert",
@@ -435,13 +474,74 @@ function firstRunIntro(store: Store, act: WorkspaceActions): HTMLElement | null 
   );
 }
 
-/** First run, and the empty state the app returns to. */
-function firstRun(store: Store, act: WorkspaceActions, samples: SampleInfo[]): HTMLElement {
+/** A failure to say over the empty state; `formats` adds the line naming what opens. */
+export interface Failure {
+  title: string;
+  body: string;
+  formats: boolean;
+}
+
+/**
+ * What to say over the empty state when the file just chosen did not open: the backend's
+ * message, which names the format it found, and what can be opened instead. Null when the
+ * stage is not in a failed state.
+ */
+export function firstFailure(state: StageState): Failure | null {
+  switch (state.kind) {
+    case "undecodable":
+      return { title: "That file did not open", body: plainMessage(state.message, true), formats: true };
+    case "failed":
+      return { title: "The trace stopped", body: plainMessage(state.message), formats: false };
+    case "outOfMemory":
+      return { title: "That image is too large to open here", body: `About ${state.neededGb.toFixed(1)} GB would be needed. A smaller copy of it will open.`, formats: false };
+    default:
+      return null;
+  }
+}
+
+/**
+ * A backend message as a sentence for the screen: without the `Error: ` a thrown error's
+ * text starts with, and, where the screen says which formats open in its own words
+ * (`withoutFormats`), without the core's sentence listing them, so it is not said twice.
+ */
+export function plainMessage(message: string, withoutFormats = false): string {
+  let m = message.replace(/^(Error:\s*)+/, "");
+  if (withoutFormats) m = m.replace(/\s*PNG, JPEG, WebP, BMP, GIF and TIFF are supported\.?\s*$/, "");
+  return m;
+}
+
+/** The formats the open dialog and the drop zone take, as the drop zone says them. */
+export const OPENS = "PNG, JPEG, WebP, GIF, BMP, TIFF or SVG";
+
+/** First run, and the empty state the app returns to; `failed` leads it when a file did not open. */
+function firstRun(store: Store, act: WorkspaceActions, samples: SampleInfo[], failed: Failure | null = null): HTMLElement {
   const mod = modKey(store.state.caps?.platform);
   return h(
     "div.firstrun",
     null,
-    firstRunIntro(store, act),
+    failed
+      ? h(
+          "div.firstfail",
+          // An alert, so a screen reader says it the moment it appears: the file chooser has
+          // just closed and nothing else on the screen changed.
+          { role: "alert" },
+          h("span.glyph", null, icon("alert", 20)),
+          h(
+            "div",
+            null,
+            h("span.title", null, failed.title),
+            h("span.body", null, failed.body),
+            failed.formats
+              ? h(
+                  "span.body.faint",
+                  null,
+                  `Inkvec opens ${OPENS} files. A photo from a phone (HEIC, AVIF) or a PDF opens once it is saved as a PNG or JPEG.`,
+                )
+              : null,
+          ),
+        )
+      : null,
+    failed ? null : firstRunIntro(store, act),
     h(
       "div.drop",
       null,
@@ -449,17 +549,20 @@ function firstRun(store: Store, act: WorkspaceActions, samples: SampleInfo[]): H
       h(
         "div",
         { style: { display: "flex", flexDirection: "column", gap: "6px" } },
-        h("span.headline.resting", null, "Drop a PNG, JPEG or WebP"),
+        h("span.headline.resting", null, "Drop an image"),
         h("span.headline.release", null, "Release to trace"),
+        // Every format the open dialog takes, not three of them (the old line named PNG, JPEG
+        // and WebP while seven were accepted).
+        h("span.faint.resting", { style: { fontSize: "13px" } }, OPENS),
         h(
-          "span.faint.resting",
+          "span.faint.resting.kbdhint",
           { style: { fontSize: "13px" } },
           "or press ",
           h("kbd", null, `${mod}+O`),
           " to choose a file",
         ),
       ),
-      h("button.btn.primary.resting", { onclick: act.openFile }, "Open an image"),
+      h("button.btn.primary.resting", { onclick: act.openFile }, failed ? "Open another image" : "Open an image"),
     ),
     samples.length
       ? h(

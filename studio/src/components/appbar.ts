@@ -29,7 +29,8 @@ export function renderAppBar(appbar: HTMLElement, store: Store, act: AppBarActio
 
   fill(
     appbar,
-    h("span.brand", null, appMark(18), APP_NAME),
+    // The page's level-one heading: what a screen reader's heading list starts from.
+    h("h1.brand", null, appMark(18), APP_NAME),
     st.tab === "vectorize" && st.source
       ? h(
           "div.filechip",
@@ -39,8 +40,8 @@ export function renderAppBar(appbar: HTMLElement, store: Store, act: AppBarActio
         )
       : null,
     h(
-      "div.seg",
-      { style: { marginLeft: "auto" } },
+      "div.seg.apptabs",
+      { role: "group", "aria-label": "Tabs" },
       ...(
         [
           ["vectorize", "Vectorize"],
@@ -53,9 +54,10 @@ export function renderAppBar(appbar: HTMLElement, store: Store, act: AppBarActio
         h("button", { "aria-pressed": String(st.tab === id), onclick: () => store.set({ tab: id }) }, label),
       ),
     ),
+    // On a phone this row scrolls sideways on its own (app.css, "compact"), under the tabs.
     h(
-      "div",
-      { style: { marginLeft: "auto", display: "flex", alignItems: "center", gap: "2px" } },
+      "div.appactions",
+      null,
       h("button.btn.ghost.compact", { onclick: () => act.openFile() }, `Open…`),
       // Recent files are paths on this computer; a browser never learns them.
       WEB
@@ -68,10 +70,10 @@ export function renderAppBar(appbar: HTMLElement, store: Store, act: AppBarActio
             },
             "Recent",
           ),
-      h("button.btn.ghost.compact", { onclick: () => store.set({ screen: "settings" }) }, "Settings"),
-      h("button.btn.ghost.compact", { onclick: () => store.set({ screen: "about" }) }, "About"),
-      h("button.btn.ghost.compact", { title: "Before and after on real logos, and how Inkvec compares", onclick: () => store.set({ screen: "showcase" }) }, "Showcase"),
-      h("button.btn.ghost.compact", { title: "The user guide (F1)", onclick: () => openHelp(helpPageFor(store.state)) }, "Help"),
+      h("button.btn.ghost.compact", { "data-ctl": "screen:settings", onclick: () => store.set({ screen: "settings" }) }, "Settings"),
+      h("button.btn.ghost.compact", { "data-ctl": "screen:about", onclick: () => store.set({ screen: "about" }) }, "About"),
+      h("button.btn.ghost.compact", { "data-ctl": "screen:showcase", title: "Before and after on real logos, and how Inkvec compares", onclick: () => store.set({ screen: "showcase" }) }, "Showcase"),
+      h("button.btn.ghost.compact", { "data-ctl": "help", title: "The user guide (F1)", onclick: () => openHelp(helpPageFor(store.state)) }, "Help"),
       h("div.sep"),
       windowControls(),
     ),

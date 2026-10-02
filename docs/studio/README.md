@@ -5,7 +5,7 @@ shows you how close the SVG is to the image it came from, and prepares the resul
 for print or for a cutting machine. It runs on Windows, macOS and Linux, and everything it does
 happens on your own computer: your image is never uploaded.
 
-This guide describes the app as it is in version 0.2.0. It covers every screen, and ends with
+This guide describes the app as it is in version 0.2.4. It covers every screen, and ends with
 four tutorials that each take one job from start to finish.
 
 ![The Vectorize tab: the source on the left, the SVG on the right, the quality report in the rail](../../studio/public/guide/img/workspace.webp)
@@ -21,7 +21,11 @@ The window has four tabs, chosen in the middle of the app bar.
 | **Fabricate** | Turns a drawing into sheets for a vinyl cutter, a sticker, a stencil, a pen or a laser. | [Fabricate](fabricate.md) |
 | **Batch** | Traces every image in a folder, one SVG each. | [Batch](batch.md) |
 
-On the right of the app bar are **Open…**, **Recent**, **Settings**, **About** and **Help**.
+On the right of the app bar are **Open…**, **Recent**, **Settings**, **About**, **Showcase** and
+**Help**. **Showcase** is before and after on real logos: twenty brand logos and the benchmark's
+logos, icons and emoji, each traced by Inkvec and by other tracers, side by side with the source
+on one shared zoom (fill, wireframe, anchors and handles), above the summary tables of that run.
+It is bundled with the app, so it works offline.
 Help (or <kbd>F1</kbd>) opens this guide inside the app, at the page about what is on screen. The
 guide is bundled with the app, so it works without a network; **Open in browser** shows the same
 page on the web.
@@ -58,6 +62,14 @@ in a few places:
 - The denoiser downloads by itself, in the background, the first time Studio Lite opens, and is
   kept in the browser for later visits (see [the denoiser](settings.md#denoiser)).
 - Preferences and the choices you leave the app with are kept in the browser, not in a file.
+- In place of the window's own buttons, the app bar has **Full screen** (the page fills the
+  screen; <kbd>Esc</kbd> leaves it) and, inside the Hugging Face page, **Open in its own tab**.
+  In its own tab the engine uses every core and the denoiser can run; inside the Hugging Face
+  frame it runs on one core.
+- It works on a phone. Held upright, the app is one column that scrolls: the drawing first, then
+  the rail, with **Export** kept at the bottom of the screen. On its side, the drawing and the
+  rail stay side by side with the toolbars thinned to one row. Large images trace faster on a
+  laptop.
 
 Where a page describes something Studio Lite does differently, it says so.
 

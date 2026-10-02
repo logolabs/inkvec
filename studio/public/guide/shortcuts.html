@@ -11,7 +11,9 @@
 <div class="shell">
   <aside class="side"><a class="guidebrand" href="index.html"><img src="logo-mono.svg" alt=""> <span>Inkvec Studio</span></a><div class="grp"><h4>User guide</h4><a href="index.html">Overview</a><a href="install.html">Install and first launch</a><a href="getting-started.html">Getting started</a><a href="viewer.html">The viewer</a><a href="result.html">Result</a><a href="tune.html">Tune</a><a href="palette.html">Palette and colour groups</a><a href="export.html">Export</a><a href="minify.html">Minify SVG</a><a href="fabricate.html">Fabricate</a><a href="batch.html">Batch</a><a href="settings.html">Settings</a><a href="shortcuts.html" aria-current="page">Keyboard and mouse</a><a href="troubleshooting.html">Troubleshooting</a></div><div class="grp"><h4>Tutorials</h4><a href="tutorials/jpeg-logo.html">Clean up a JPEG logo</a><a href="tutorials/favicon-asset-pack.html">A favicon and an asset pack</a><a href="tutorials/vinyl-htv.html">Layered vinyl and iron-on</a><a href="tutorials/laser.html">Laser: DXF and G-code</a></div><div class="grp"><h4>Online</h4><a href="https://logolabs.github.io/inkvec/">Inkvec documentation</a><a href="https://logolabs.github.io/inkvec/studio/shortcuts.html">This page on the web</a></div><p class="guidenote">This copy of the guide is part of the app and works without a network.</p></aside>
   <main><article><h1 id="keyboard-and-mouse">Keyboard and mouse</h1>
-<p>On a Mac, read <kbd>⌘</kbd> for <kbd>Ctrl</kbd>.</p>
+<p>On a Mac, read <kbd>⌘</kbd> for <kbd>Ctrl</kbd>. Every drag in the viewer has a key and a single
+click or tap that does the same, and every drag in the palette has a button (tick and <strong>Merge</strong>,
+or a chip's <strong>×</strong>).</p>
 <h2 id="anywhere">Anywhere</h2>
 <table>
 <thead>
@@ -24,6 +26,10 @@
 <tr>
 <td><kbd>Ctrl</kbd>+<kbd>O</kbd></td>
 <td>Open an image</td>
+</tr>
+<tr>
+<td><kbd>Ctrl</kbd>+<kbd>V</kbd></td>
+<td>Open the image on the clipboard (a screenshot, or a picture copied with <em>Copy image</em>), outside a text field</td>
 </tr>
 <tr>
 <td><kbd>Ctrl</kbd>+<kbd>E</kbd></td>
@@ -43,11 +49,37 @@
 </tr>
 <tr>
 <td><kbd>Esc</kbd></td>
-<td>Close, in this order: Settings, About or the guide; the Custom wizard (keeping what you chose); the choice card (keeping Auto). With none of those open, cancel the trace in progress.</td>
+<td>Close, in this order: a dialog or the export sheet; Settings, About, Showcase or the guide; the Custom wizard (keeping what you chose); the choice card (keeping Auto). With none of those open, cancel the trace in progress.</td>
 </tr>
 </tbody>
 </table>
 <p>The preset shortcuts do nothing while you are typing in a field.</p>
+<h2 id="in-a-dialog">In a dialog</h2>
+<p>The export sheet, Settings, About, Showcase, the guide and every dialog over the window behave
+the same way:</p>
+<table>
+<thead>
+<tr>
+<th>Keys</th>
+<th>Does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>(opening it)</td>
+<td>The keyboard moves into it</td>
+</tr>
+<tr>
+<td><kbd>Tab</kbd>, <kbd>Shift</kbd>+<kbd>Tab</kbd></td>
+<td>Move between its controls; past the last one it goes back to the first, never to the window behind</td>
+</tr>
+<tr>
+<td><kbd>Esc</kbd></td>
+<td>Close it; the keyboard goes back to the button that opened it</td>
+</tr>
+</tbody>
+</table>
+<p>The window behind is out of reach while one is open, for the keyboard and for a screen reader.</p>
 <h2 id="in-the-vectorize-viewer">In the Vectorize viewer</h2>
 <table>
 <thead>
@@ -82,12 +114,25 @@
 <td>Pan</td>
 </tr>
 <tr>
-<td>Drag the wipe divider</td>
+<td>The arrow buttons beside the zoom stops</td>
+<td>Pan a quarter of the view (shown once you have zoomed or panned)</td>
+</tr>
+<tr>
+<td><kbd>Tab</kbd> to the viewer, then the arrow keys</td>
+<td>Pan a tenth of the view; with <kbd>Shift</kbd>, half</td>
+</tr>
+<tr>
+<td>Drag the wipe divider, or tap where it should go</td>
 <td>Move it (in Wipe)</td>
+</tr>
+<tr>
+<td><kbd>Tab</kbd> to the wipe divider, then <kbd>←</kbd> <kbd>→</kbd></td>
+<td>Move it 2% of the width; with <kbd>Shift</kbd>, or <kbd>Page Up</kbd> and <kbd>Page Down</kbd>, 10%; <kbd>Home</kbd> and <kbd>End</kbd> go to the ends</td>
 </tr>
 </tbody>
 </table>
-<p><kbd>Space</kbd> also flicks between Before and After in the Minify SVG tab.</p>
+<p><kbd>Space</kbd> also flicks between Before and After in the Minify SVG tab, whose wipe divider
+works the same way.</p>
 <h2 id="in-the-rail">In the rail</h2>
 <table>
 <thead>
@@ -125,9 +170,13 @@
 <td><kbd>Enter</kbd>, in the save-preset or colour field</td>
 <td>Save or use it</td>
 </tr>
+<tr>
+<td><kbd>Tab</kbd> to the engine log's lines</td>
+<td>Scroll them with the arrow keys</td>
+</tr>
 </tbody>
 </table><nav class="pagenav"><a class="prev" href="settings.html"><span class="dir">Previous</span><span class="lbl">Settings</span></a><a class="next" href="troubleshooting.html"><span class="dir">Next</span><span class="lbl">Troubleshooting</span></a></nav></article></main>
-  <aside class="rail"><h5>On this page</h5><ul><ul><li class="l2"><a href="#anywhere">Anywhere</a></li><li class="l2"><a href="#in-the-vectorize-viewer">In the Vectorize viewer</a></li><li class="l2"><a href="#in-the-rail">In the rail</a></li></ul></ul></aside>
+  <aside class="rail"><h5>On this page</h5><ul><ul><li class="l2"><a href="#anywhere">Anywhere</a></li><li class="l2"><a href="#in-a-dialog">In a dialog</a></li><li class="l2"><a href="#in-the-vectorize-viewer">In the Vectorize viewer</a></li><li class="l2"><a href="#in-the-rail">In the rail</a></li></ul></ul></aside>
 </div>
 </body>
 </html>

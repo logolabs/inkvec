@@ -10,6 +10,9 @@ Any of these opens an image in the **Vectorize** tab:
 - **Open…** in the app bar, **Open an image** on the empty stage, or <kbd>Ctrl</kbd>+<kbd>O</kbd>
   (<kbd>⌘</kbd>+<kbd>O</kbd> on a Mac).
 - **Drag a file onto the window.** The whole window takes the drop, not only the dashed box.
+- **Paste an image**: <kbd>Ctrl</kbd>+<kbd>V</kbd> (<kbd>⌘</kbd>+<kbd>V</kbd>) anywhere outside a
+  text field opens a picture on the clipboard, such as a screenshot or an image copied from a web
+  page with *Copy image*.
 - **Recent** in the app bar: the last eight files you opened.
 - **A sample** from the row under the drop area, on the empty stage: *Flat logo*, *Icon, 64 px*,
   *Crest, filigree* and *Signature, B&W*.
@@ -21,6 +24,10 @@ The app reads PNG, JPEG, WebP, GIF, BMP and TIFF. It also opens an **SVG**: the 
 1024 px on its longer side and traced from that picture, which is how a messy drawing comes back
 as clean shapes. To make an SVG smaller *without* re-drawing it, use [Minify SVG](minify.md)
 instead.
+
+It does not read a PDF, or the HEIC and AVIF photos phones take: save those as PNG or JPEG first.
+A file that does not open says so on the stage, with what the app found in it and the formats it
+reads, and the samples stay there to carry on with.
 
 What a dropped file does depends on what it is:
 
@@ -52,6 +59,9 @@ Over the stage, a small card appears while Auto traces.
   and file size. **Keep Auto** closes the card.
 - **Custom** opens the wizard (next section), which changes the settings a step at a time with
   your result shown beside Auto's.
+- On a phone the card is only its two buttons, **Keep Auto** and **Customise…**, and its close,
+  so it covers as little of the drawing as it can. What Auto chose appears in the rail's Result
+  half once the card is closed.
 - **Auto chose** says what Auto used, and anything its own report suggests. There are at most
   two suggestions, and each is a one-click preset change:
 

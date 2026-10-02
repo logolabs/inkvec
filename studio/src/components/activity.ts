@@ -10,6 +10,7 @@
 import { fill, h } from "../lib/dom";
 import { clock, stamp, stepText, type LogLine } from "../lib/live";
 import type { Store } from "../lib/state";
+import { isCompact } from "./layout";
 
 /** The most lines drawn at once; the log keeps more, the newest are what matter. */
 const SHOWN = 160;
@@ -20,12 +21,17 @@ const SHOWN = 160;
  */
 export function createActivity(store: Store): HTMLElement {
   const el = h("aside.activity", { "aria-label": "Engine activity", "aria-live": "off" });
+  // On a phone the open log would cover a third of the drawing, so it starts folded there;
+  // its header still shows the running clock, and one tap opens it.
+  if (isCompact()) store.set({ logOpen: false });
   const head = h("button.activityhead", {
     type: "button",
     "data-ctl": "activity-toggle",
     onclick: () => store.set({ logOpen: !store.state.logOpen }),
   });
-  const body = h("div.activitybody", { role: "log" });
+  // The lines scroll, so the list is a Tab stop of its own: a keyboard can then scroll it
+  // with the arrow keys (axe-core `scrollable-region-focusable`, WCAG 2.1.1).
+  const body = h("div.activitybody", { role: "log", tabindex: "0", "aria-label": "Engine log lines" });
   el.append(head, body);
 
   const line = (l: LogLine, running: boolean) => {

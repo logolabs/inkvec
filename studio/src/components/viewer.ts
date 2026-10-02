@@ -12,6 +12,15 @@
  * (`State.compare`). That one is shown as an image of the SVG rather than parsed into the
  * page: it is only ever looked at, never overlaid or isolated, and an `<img>` costs the
  * page one element however many paths the drawing has. It follows the same pan and zoom.
+ *
+ * Every gesture has a keyboard and a single-pointer way to do it too (WCAG 2.2 SC 2.1.1
+ * Keyboard and SC 2.5.7 Dragging Movements; before this, pan and wipe were drag-only,
+ * r2-product 2026-10-02):
+ * - the panes are one Tab stop; the arrow keys pan by a tenth of the pane, Shift+arrow by
+ *   half, and the window's + / - / 0 zoom and fit as before;
+ * - `panBy` is what the toolbar's pan buttons call (`views/workspace.ts`), the single-pointer
+ *   alternative to dragging the view that WCAG's Understanding 2.5.7 asks a map to offer;
+ * - the wipe divider is a slider (`wipe.ts`), and in Wipe a tap on the panes moves it there.
  */
 
 import { fill, h, s } from "../lib/dom";
@@ -19,6 +28,7 @@ import { api } from "../lib/ipc";
 import { anchorStyle, nodesOf, shapesOf, viewBoxOf } from "../lib/path";
 import type { State, Store } from "../lib/state";
 import { toneOf } from "../views/minify";
+import { tapToWipe, TAP_SLOP, wipeSlider, type WipeModel } from "./wipe";
 
 /** The zoom stops the toolbar offers, plus the range scroll can reach. */
 export const ZOOM_MIN = 0.25;
@@ -37,6 +47,11 @@ export interface Viewer {
   goTo(x: number, y: number, zoom: number): void;
   /** Change the zoom while holding whatever is in the middle of the pane. */
   zoomTo(zoom: number): void;
+  /**
+   * Move the view by a share of the pane's size: `fx` = 0.25 shows a quarter of a pane more of
+   * what is to the right, as scrolling would. The pan buttons and the arrow keys use it.
+   */
+  panBy(fx: number, fy: number): void;
 }
 
 /**
@@ -80,8 +95,21 @@ export function createViewer(store: Store): Viewer {
     vectorArt,
     anchorsCv,
   );
-  const divider = h("div.wipehandle", { role: "separator", "aria-label": "Wipe" });
-  const panes = h("div.panes", null, sourcePane, vectorPane, divider);
+  const divider = h("div.wipehandle");
+  // How to drive the viewer from the keyboard, read out when the panes take focus.
+  const hint = h(
+    "span.vh",
+    { id: "viewer-keys" },
+    "Arrow keys pan, Shift with an arrow pans further. Plus and minus zoom, 0 fits. In Wipe, Tab to the divider and use the arrow keys.",
+  );
+  const panes = h(
+    "div.panes",
+    { tabindex: "0", role: "group", "aria-label": "Source and vector, side by side", "aria-describedby": "viewer-keys" },
+    sourcePane,
+    vectorPane,
+    divider,
+    hint,
+  );
   const el = panes;
 
   /** The drawing's own coordinate space, from its viewBox. */
@@ -521,6 +549,10 @@ export function createViewer(store: Store): Viewer {
     const st = store.state;
     panes.classList.toggle("stacked", st.view !== "side");
     divider.style.display = st.view === "wipe" ? "" : "none";
+    syncWipe();
+    const [left, right] = paneNames();
+    const how = st.view === "side" ? "side by side" : st.view === "wipe" ? "wiped" : "A/B";
+    panes.setAttribute("aria-label", `${cap(left)} and ${right}, ${how}`);
 
     if (st.view === "side") {
       sourcePane.classList.remove("hidden");
@@ -596,6 +628,13 @@ export function createViewer(store: Store): Viewer {
     zoomAt(w / 2, ph / 2, Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, next)) / store.state.zoom);
   }
 
+  function panBy(fx: number, fy: number): void {
+    const { w, h: ph } = paneSize();
+    const st = store.state;
+    // Showing more of what is to the right moves the drawing left: the pan goes down.
+    store.set({ pan: { x: st.pan.x - fx * w, y: st.pan.y - fy * ph }, fitted: false });
+  }
+
   /** Zoom about a point in pane coordinates, so the pixel under the cursor stays put. */
   function zoomAt(px: number, py: number, factor: number): void {
     const st = store.state;
@@ -624,18 +663,26 @@ export function createViewer(store: Store): Viewer {
     pane.addEventListener("pointerdown", (e: PointerEvent) => {
       if (e.button !== 0) return;
       pane.setPointerCapture(e.pointerId);
+      const startX = e.clientX;
+      const startY = e.clientY;
       let lastX = e.clientX;
       let lastY = e.clientY;
+      // A press that never travels further than TAP_SLOP is a tap, not a drag. Small moves
+      // still pan as they happen (a drag must not lag behind the pointer), and are kept.
+      let travelled = 0;
       const move = (m: PointerEvent) => {
         const st = store.state;
+        travelled = Math.max(travelled, Math.hypot(m.clientX - startX, m.clientY - startY));
         store.set({ pan: { x: st.pan.x + (m.clientX - lastX), y: st.pan.y + (m.clientY - lastY) }, fitted: false });
         lastX = m.clientX;
         lastY = m.clientY;
       };
-      const up = () => {
+      const up = (u: PointerEvent) => {
         pane.removeEventListener("pointermove", move);
         pane.removeEventListener("pointerup", up);
         pane.removeEventListener("pointercancel", up);
+        // In Wipe, a tap moves the divider to it: the single-pointer way to wipe.
+        if (u.type === "pointerup" && travelled <= TAP_SLOP && store.state.view === "wipe") tapToWipe(panes, wipeModel, u.clientX);
       };
       pane.addEventListener("pointermove", move);
       pane.addEventListener("pointerup", up);
@@ -643,21 +690,31 @@ export function createViewer(store: Store): Viewer {
     });
   }
 
-  // The wipe divider follows the pointer 1:1, and releasing does not animate.
-  divider.addEventListener("pointerdown", (e: PointerEvent) => {
-    e.stopPropagation();
-    divider.setPointerCapture(e.pointerId);
-    const move = (m: PointerEvent) => {
-      const r = panes.getBoundingClientRect();
-      store.set({ wipe: Math.min(0.98, Math.max(0.02, (m.clientX - r.left) / r.width)) });
-    };
-    const up = () => {
-      divider.removeEventListener("pointermove", move);
-      divider.removeEventListener("pointerup", up);
-    };
-    divider.addEventListener("pointermove", move);
-    divider.addEventListener("pointerup", up);
+  // The arrow keys pan while the panes have focus: a tenth of the pane, half with Shift.
+  // Only on the panes themselves, so a focused wipe slider keeps its own arrow keys.
+  const PAN_KEYS: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+  panes.addEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.target !== panes || e.ctrlKey || e.metaKey || e.altKey) return;
+    const d = PAN_KEYS[e.key];
+    if (!d) return;
+    e.preventDefault();
+    const k = e.shiftKey ? 0.5 : 0.1;
+    panBy(d[0] * k, d[1] * k);
   });
+
+  // The wipe divider: a slider (wipe.ts), dragged 1:1, stepped by the keyboard.
+  const wipeModel: WipeModel = {
+    get: () => store.state.wipe,
+    set: (v) => store.set({ wipe: v }),
+    names: paneNames,
+  };
+  const syncWipe = wipeSlider(divider, panes, wipeModel);
+
+  /** What the two panes show now, for the slider's and the panes' names. */
+  function paneNames(): [string, string] {
+    const c = store.state.compare;
+    return c ? [c.label.toLowerCase(), "yours"] : ["source", "vector"];
+  }
 
   // ------------------------------------------------------------ isolate ---
 
@@ -723,7 +780,12 @@ export function createViewer(store: Store): Viewer {
   };
   watchDensity();
 
-  return { el, redraw, transform, fit, goTo, zoomTo };
+  return { el, redraw, transform, fit, goTo, zoomTo, panBy };
+}
+
+/** `s` with its first letter in capitals, for a name that starts a label. */
+function cap(s: string): string {
+  return s ? s[0].toUpperCase() + s.slice(1) : s;
 }
 
 /**

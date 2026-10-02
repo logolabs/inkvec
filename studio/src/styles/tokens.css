@@ -53,11 +53,21 @@
   --surface: #2a2724;
   --highlight: #35322e;
 
-  /* Text. Warm cream, never pure white. */
+  /* Text. Warm cream, never pure white.
+
+     Every step is body text somewhere, so every step has to pass WCAG 2.2 SC 1.4.3
+     (Contrast, Minimum: 4.5:1 below 24 px; https://www.w3.org/TR/WCAG22/#contrast-minimum).
+     The ratio is (L1 + 0.05) / (L2 + 0.05) on the relative luminances of the text, composited
+     at its alpha over the surface, and the surface. `--muted` was 0.40, which gives 3.51-3.68:1
+     on void/stage/paper/card/surface and failed on every one of them (axe-core 4.11.1 found 55
+     nodes in the traced state, r2-product 2026-10-02). At 0.50 it is 4.64-5.09:1 on those five
+     surfaces, and axe finds none. Only `--highlight` (#35322e, hover and tooltip grounds) stays
+     under, at 4.27:1, and nothing muted is drawn on it. Disabled controls are exempt from 1.4.3
+     and dim themselves with `opacity`, not with this token. */
   --ink: #faf8f5;
   --dim: rgba(250, 248, 245, 0.75);
   --faint: rgba(250, 248, 245, 0.55);
-  --muted: rgba(250, 248, 245, 0.4);
+  --muted: rgba(250, 248, 245, 0.5);
 
   /* Rules. */
   --rule: rgba(250, 248, 245, 0.08);
@@ -121,18 +131,27 @@
   --surface: #eae5dd;
   --highlight: #ded8ce;
 
+  /* Dark ink on a light ground needs more alpha for the same ratio: at 0.58 and 0.46 the old
+     `--faint` and `--muted` gave 3.87-4.34:1 and 2.78-3.00:1 (81 contrast nodes in the
+     traced state). The smallest alpha that clears 4.5:1 on the darkest light surface,
+     `--highlight` #ded8ce, is 0.635; `--muted` takes 0.64 (4.61-5.30:1 across the six
+     surfaces) and `--faint` 0.70 (5.52-6.53:1), so the three steps keep their order. */
   --ink: #1a1816;
   --dim: rgba(26, 24, 22, 0.75);
-  --faint: rgba(26, 24, 22, 0.58);
-  --muted: rgba(26, 24, 22, 0.46);
+  --faint: rgba(26, 24, 22, 0.7);
+  --muted: rgba(26, 24, 22, 0.64);
 
   --rule: rgba(26, 24, 22, 0.1);
   --rule2: #d8d2c8;
 
   --accent: #c9754a; /* fills are identical in both themes */
   --accent-text: #9c5730; /* AA on white at 13 px */
-  --accent-hover: #b3603a;
-  --accent-ink: #faf8f5;
+  /* What is drawn on a copper fill (a primary button's label, a pressed segment, a switch's
+     knob) is the dark theme's ink here too: cream on #c9754a is 3.23:1 and fails SC 1.4.3 at
+     13 px, #1a1816 on it is 5.17:1. The hover fill is the dark theme's lighter copper for
+     the same reason (6.40:1; the darker #b3603a gave 3.92:1 under dark ink). */
+  --accent-hover: #d4896a;
+  --accent-ink: #1a1816;
   --accent-soft: rgba(201, 117, 74, 0.14);
   --accent-subtle: rgba(201, 117, 74, 0.08);
   --gold: #8a6a3f;

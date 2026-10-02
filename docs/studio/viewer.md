@@ -9,9 +9,13 @@ an edge, not an enlarged bitmap.
 
 The three buttons at the left of the toolbar arrange the two panes.
 
-- **Side by side**: the two panes next to each other.
-- **Wipe**: one pane over the other, with a divider. Drag the divider to move it; the source is on
-  the left of it and the SVG on the right.
+- **Side by side**: the two panes next to each other (one above the other on a phone held
+  upright).
+- **Wipe**: one pane over the other, with a divider. Drag the divider to move it, or tap or click
+  where it should go; the source is on the left of it and the SVG on the right. From the keyboard,
+  <kbd>Tab</kbd> to the divider and move it with the arrow keys (see
+  [Keyboard and mouse](shortcuts.md#in-the-vectorize-viewer)); a screen reader announces how much
+  of each side is showing.
 - **A/B**: one pane at a time, the SVG. Hold <kbd>Space</kbd> to see the source instead, and
   release to go back. Flicking between the two in place is the quickest way to see a small
   difference.
@@ -21,13 +25,15 @@ The three buttons at the left of the toolbar arrange the two panes.
 | To | Do this |
 |---|---|
 | Zoom about a point | Scroll the wheel (or pinch on a trackpad) over either pane |
-| Pan | Drag with the left button |
+| Pan | Drag with the left button, or press the arrow buttons beside the zoom stops |
+| Pan from the keyboard | <kbd>Tab</kbd> to the viewer and use the arrow keys (<kbd>Shift</kbd> for a bigger step) |
 | Fit the drawing to the window | Double-click a pane, press <kbd>0</kbd>, or press **Fit** |
 | Zoom to a fixed stop | **1×**, **4×** or **12×** in the toolbar |
 | Zoom in or out a step | <kbd>+</kbd> and <kbd>-</kbd> |
 
 Zoom runs from a quarter of the image's size to 64×. The view fits the window until you zoom or
-pan; after that it stays where you put it when the window is resized. From 4× up, the source is
+pan; after that it stays where you put it when the window is resized. The four arrow buttons
+appear beside **Fit** once the view is no longer fitted, and each moves it a quarter of the pane. From 4× up, the source is
 drawn with square pixels rather than smoothed, because those pixels are the evidence the trace was
 measured against.
 
@@ -96,19 +102,28 @@ size, draft time limit and the wait before the full trace are in
 
 Only the full trace is ever exported: [Export](export.md) always runs one first.
 
+## The engine log
+
+The small panel at the bottom right of the stage, **Engine log**, is what the engine is doing,
+line by line: each stage of the trace with the time it started, what it does and how long it took
+(or, while it runs, its own clock), and the notes the engine makes on the way (*8 inks*). It keeps
+the last trace's log, with the total time in its header, until the next trace starts. **Hide** and
+**Show** fold it to its header; on a phone it starts folded so it does not cover the drawing.
+
 ## The status strip
 
 The line along the bottom of the stage says what is happening: the stage the trace is on and the
 time so far (with <kbd>Esc</kbd> to cancel), or how long the last trace took, at what size, and
 how many segments it has. When the update check has found a new version, it says so here and
 nowhere else. The right end always carries the same sentence: *Your image never leaves this
-computer.*
+computer.* (On a phone there is no room for it; Settings and About say the same.)
 
 ## When the stage is not showing a drawing
 
 | The stage says | What it means | What to do |
 |---|---|---|
 | Reading *file* | The image is being decoded; tracing starts as soon as it is in memory. | Wait. |
+| That file did not open | The first file you opened is not an image the app reads (a text file, an empty file, a PDF, a phone's HEIC or AVIF photo). The card says what the app found and lists the formats it opens; the drop area and the samples stay under it. | Open another image, or save the picture as PNG or JPEG first. |
 | This image is one flat colour | There is no boundary to trace; the whole output would be one rectangle. | Open another image. |
 | This file will not decode | The file is damaged or not an image the app reads. The message says why. | Open another image. |
 | The trace would run out of memory | The trace size needs more memory than is free; the card gives the estimate. | **Retry at** the smaller size it suggests; it usually costs nothing visible. |

@@ -53,6 +53,15 @@ a {
 a:hover {
   text-decoration: underline;
 }
+/* A link inside a sentence is underlined, not told apart by its colour alone: WCAG 2.2
+   SC 1.4.1 (Use of Color). Copper beside faint text is 1.13-1.29:1 against the words around
+   it, under the 3:1 a colour-only cue needs. Links that stand alone (rows, menus) keep the
+   plain look. */
+p a,
+.stagestate .body a {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 
 button {
   font: inherit;
@@ -254,10 +263,15 @@ kbd {
   background: var(--faint);
   transition: transform var(--d-micro) var(--ease-smooth), background var(--d-micro);
 }
-.switch[aria-checked="true"] {
+/* A switch is either the control itself (`button.switch` with `role="switch"`) or the knob
+   drawn inside a row that is the control (the card composer's option rows); either way the
+   state is read from whichever element carries `aria-checked`. */
+.switch[aria-checked="true"],
+[aria-checked="true"] > .switch {
   background: var(--accent);
 }
-.switch[aria-checked="true"]::after {
+.switch[aria-checked="true"]::after,
+[aria-checked="true"] > .switch::after {
   transform: translateX(14px);
   background: var(--accent-ink);
 }
@@ -272,12 +286,18 @@ kbd {
   place-items: center;
   color: var(--accent-ink);
 }
-.checkbox[aria-checked="true"] {
+/* The tick box is drawn from its control's state: the control (a `role="checkbox"` button)
+   carries `aria-checked`, and the box inside it is decoration. ARIA allows `aria-checked`
+   only on the roles that have a checked state, so the box itself never carries it. */
+[aria-checked="true"] > .checkbox {
   background: var(--accent);
   border-color: var(--accent);
 }
-.checkbox:not([aria-checked="true"]) > svg {
+.checkbox > svg {
   visibility: hidden;
+}
+[aria-checked="true"] > .checkbox > svg {
+  visibility: visible;
 }
 
 /* --------------------------------------------------------- the app bar ---- */
@@ -302,8 +322,20 @@ kbd {
 .appbar .nodrag {
   -webkit-app-region: no-drag;
 }
+/* The tab switcher sits in the middle, the buttons that are not about any tab at the end. */
+.apptabs {
+  margin-left: auto;
+}
+.appactions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
 
+/* The app's name is the page's one level-one heading (it is an `h1`), drawn as chrome. */
 .brand {
+  margin: 0;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -682,15 +714,63 @@ kbd {
   pointer-events: none;
 }
 
+/* The wipe divider is a slider (components/wipe.ts). Its box is 24 px wide and centred on
+   the wipe line (WCAG 2.2 SC 2.5.8, Target Size): the 2 px line is drawn by ::before and the
+   round grip by ::after, so it looks as it did and is easier to take hold of. */
 .wipehandle {
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 2px;
-  background: var(--ink);
+  width: 24px;
+  margin-left: -12px;
   z-index: 4;
   cursor: ew-resize;
   opacity: 0.7;
+  touch-action: none;
+}
+.wipehandle::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 11px;
+  width: 2px;
+  background: var(--ink);
+}
+.wipehandle:focus-visible {
+  opacity: 1;
+  outline-offset: -2px;
+}
+/* The viewer takes focus as a whole (arrow keys pan): its ring is drawn inside its edge,
+   where the toolbar's border would otherwise cover it. */
+.panes:focus-visible {
+  outline-offset: -3px;
+  border-radius: 0;
+}
+/* The pan buttons beside the zoom stops: chevrons, turned for left and up. */
+.panpad > button.pan {
+  display: grid;
+  place-items: center;
+  min-width: 26px;
+  min-height: 24px;
+  padding: 4px 6px;
+  color: var(--dim);
+}
+.panpad > button.left > svg,
+.panpad > button.up > svg {
+  transform: rotate(180deg);
+}
+/* Visually hidden, still read: the viewer's keyboard hint. */
+.vh {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 .wipehandle::after {
   content: "";
@@ -1724,10 +1804,14 @@ kbd {
   border-color: var(--gold);
   border-style: dashed;
 }
+/* Both halves of a chip are at least 24 px tall, and the remove button 24 px square:
+   WCAG 2.2 SC 2.5.8 (Target Size, Minimum). At 18 px the remove button sat inside the
+   24 px circle of its neighbour, so the spacing exception did not apply either. */
 .cchipmain {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  min-height: 24px;
   padding: 2px 4px 2px 3px;
   border-radius: 999px;
 }
@@ -1737,9 +1821,9 @@ kbd {
 .cchipx {
   display: grid;
   place-items: center;
-  width: 18px;
-  height: 18px;
-  margin-right: 2px;
+  width: 24px;
+  height: 24px;
+  margin-right: 1px;
   border-radius: 999px;
   color: var(--muted);
 }
@@ -1993,6 +2077,43 @@ body.dragging-ink [data-drop="list"] {
   gap: 34px;
   background: var(--stage);
   padding: 24px;
+}
+/* A file that did not open, over the empty state (views/workspace.ts `firstFailure`): the
+   drop zone and the samples stay under it to carry on from. */
+.firstfail {
+  width: min(620px, 80%);
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--bad) 45%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--badbg);
+  user-select: text;
+}
+.firstfail .glyph {
+  color: var(--bad);
+  display: flex;
+  padding-top: 1px;
+}
+.firstfail > div {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.firstfail .title {
+  font-size: 15px;
+  font-weight: 500;
+}
+.firstfail .body {
+  font-size: var(--t-chrome);
+  line-height: 1.55;
+  color: var(--dim);
+  overflow-wrap: anywhere;
+}
+.firstfail .body.faint {
+  color: var(--faint);
 }
 .drop {
   width: min(620px, 80%);
@@ -3601,7 +3722,8 @@ html.framed:not(.fullscreen) #app {
 .sc-case[aria-pressed="true"] {
   border-color: var(--accent);
   background: var(--accent-subtle);
-  color: var(--accent);
+  /* The text token, not the fill: #c9754a as 11 px text on this tile is 4.33:1. */
+  color: var(--accent-text);
 }
 .sc-thumb {
   aspect-ratio: 1;
@@ -3946,4 +4068,326 @@ html.framed:not(.fullscreen) #app {
 .activityline.note .w {
   color: var(--faint);
   padding-left: 10px;
+}
+
+/* ---------------------------------------------------------------- compact: phones ---
+
+   Phones, and any window too small for three columns. Two cases, one shared set of rules:
+
+   - Narrow (upright phones, at most 760 px wide and over 500 px tall): one column that
+     scrolls as a page. The stage comes first, at about three fifths of the screen's height,
+     so the drawing is the first thing on screen; the rail follows at its natural height,
+     with Export pinned to the bottom of the screen while it scrolls past. Before this the
+     three-column app was squeezed into the width: a viewer 50 px wide at 360 px, the sample
+     tiles under the rail where a tap could not reach them (r2-product layout runs,
+     2026-10-02).
+   - Short (landscape phones, at most 500 px tall): the columns stay, and everything that is
+     not the drawing gets thinner: one app bar row, one toolbar row, the engine log folded,
+     the chooser card reduced to its buttons, and the rail one scroll with Export pinned.
+
+   WCAG 2.2 SC 1.4.10 (Reflow) exempts editors whose toolbars must stay in view, so this is
+   about making the app usable on a phone, not about 320 px reflow. The same media query is
+   `COMPACT` in components/layout.ts, which folds the engine log on start. */
+
+@media (max-width: 760px), (max-height: 500px) {
+  /* The app bar: one row whose buttons scroll sideways rather than push anything off
+     screen (on a narrow screen they get a row of their own, below). */
+  .appbar {
+    height: auto;
+    min-height: var(--h-appbar);
+    flex-wrap: wrap;
+    row-gap: 4px;
+    padding: 6px 10px;
+  }
+  .appbar .filechip .muted {
+    display: none;
+  }
+  .appactions {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .appactions::-webkit-scrollbar {
+    display: none;
+  }
+  .appactions > * {
+    flex: none;
+  }
+  /* The web build's Full screen / own tab / home buttons keep their names for a screen
+     reader and show only their icons. The button is the label's containing block, so the
+     hidden label stays inside the row's sideways scroll instead of widening the page. */
+  .webcontrols .btn {
+    position: relative;
+  }
+  .webcontrols .btn > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  /* The viewer's toolbar: one row that scrolls sideways. A touch screen has no Space key to
+     hold, and the overlay legend can wait for a wider screen. */
+  .viewertools {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .viewertools::-webkit-scrollbar {
+    display: none;
+  }
+  .viewertools > *,
+  .viewertools > div > * {
+    flex: none;
+  }
+  .viewertools .flickhint,
+  .viewertools .legend {
+    display: none;
+  }
+
+  /* The chooser card: Keep Auto, Customise and its close, in one row at the foot of the
+     stage; nothing else over the drawing. What Auto chose is in the rail's Result half, and
+     the remember switch in Settings. */
+  .chooser {
+    flex-direction: row;
+    align-items: center;
+    bottom: 8px;
+    width: auto;
+    max-width: calc(100% - 16px);
+    padding: 6px;
+    gap: 6px;
+  }
+  .choosehead {
+    order: 2;
+  }
+  .choosehead .eyebrow,
+  .chooseintro,
+  .choicename,
+  .choicebody,
+  .choosenews,
+  .remember {
+    display: none;
+  }
+  .choices {
+    flex-direction: row;
+  }
+  .choice {
+    display: contents;
+  }
+  .choice .btn {
+    min-width: 0;
+  }
+
+  /* The engine log, folded by default here (components/activity.ts), sits small in the
+     corner, and steps aside while the chooser card is up; opened, it takes at most a third
+     of the stage. */
+  .activity {
+    width: min(300px, calc(100% - 16px));
+    right: 8px;
+    bottom: 8px;
+  }
+  .stage:has(.chooser:not([hidden])) .activity {
+    display: none;
+  }
+  .activitybody {
+    max-height: 30vh;
+  }
+
+  /* The status strip keeps what the trace did; the privacy line is in Settings and About. */
+  .statusstrip {
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .statusstrip .privacy {
+    display: none;
+  }
+
+  /* Sheets and screens cover the screen rather than their column, which may be taller
+     than the screen (narrow) or very short (landscape). */
+  .sheet {
+    position: fixed;
+    z-index: 40;
+  }
+  .screen {
+    position: fixed;
+  }
+  .settingsgrid {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 12px;
+  }
+  .settingrow {
+    flex-wrap: wrap;
+  }
+  .about {
+    flex-direction: column;
+  }
+  .aboutleft {
+    width: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--rule2);
+  }
+  .aboutright {
+    padding: 24px 16px;
+  }
+}
+
+/* A touch screen has no keyboard to press Ctrl+O on; the button below says the same. */
+@media (pointer: coarse) {
+  .drop .kbdhint {
+    display: none;
+  }
+}
+
+@media (max-height: 500px) {
+  /* The rail as one scroll, its foot pinned: the tabs and the mode switches above the
+     scrolling half are taller than a landscape phone by themselves. */
+  .rail {
+    overflow-y: auto;
+  }
+  .railscroll {
+    flex: none;
+    overflow: visible;
+  }
+  .railfoot {
+    position: sticky;
+    bottom: 0;
+    z-index: 5;
+  }
+  /* The foot keeps Export, Copy SVG and, while a trace runs, its stage and Cancel; the
+     finished trace's figures are in the Result half. */
+  .railfoot .readout:not(.busy),
+  .railfoot .note {
+    display: none;
+  }
+  /* The Custom wizard keeps to the rail's column, as on a laptop, so the comparison on the
+     stage stays beside it; fixed, because the rail under it may be scrolled. */
+  .sheet.wizsheet {
+    inset: 0 0 0 auto;
+    width: max(var(--rail-w), 400px);
+  }
+}
+
+/* Narrow and tall enough for a column: a phone held upright. A narrow window that is also
+   short (a small phone on its side, 667 x 375) keeps the two columns of the short layout. */
+@media (max-width: 760px) and (min-height: 501px) {
+  /* The app bar's buttons get a row of their own under the brand and the tabs. */
+  .appactions {
+    order: 3;
+    flex: none;
+    width: 100%;
+    margin-left: 0;
+  }
+
+  /* One column, scrolling as a page. Only the root scrolls: a body with an overflow of its
+     own would become the scroller, and Export's sticky foot would stick to it instead of to
+     the screen. */
+  html {
+    height: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+  body {
+    height: auto;
+    min-height: 100%;
+    overflow: visible;
+  }
+  #app {
+    height: auto;
+    min-height: 100vh;
+    min-height: 100svh;
+  }
+  .body {
+    flex: none;
+    flex-direction: column;
+  }
+  .stage {
+    flex: none;
+    height: 62vh;
+    height: 62svh;
+    min-height: 340px;
+  }
+  /* With nothing open the stage is the welcome: as tall as what it says. */
+  .stage:has(.firstrun) {
+    height: auto;
+  }
+  /* Side by side becomes one above the other: two panes 390 px wide and 230 tall show a
+     square logo larger than two 195 px columns do, and a wide one far larger. Wipe and A/B
+     stack the panes in place and are unchanged. */
+  .panes:not(.stacked) {
+    flex-direction: column;
+  }
+  .rail,
+  .rail.wizarding,
+  .minifyrail {
+    width: auto;
+    border-left: 0;
+    border-top: 1px solid var(--rule2);
+  }
+  .railscroll {
+    flex: none;
+    overflow: visible;
+  }
+  /* Export stays on screen while the rail scrolls past under it. */
+  .railfoot {
+    position: sticky;
+    bottom: 0;
+    z-index: 5;
+  }
+  /* The export sheet leaves a strip of the screen above it, so it reads as a sheet. */
+  .sheetbody {
+    max-height: 85vh;
+    max-height: 85svh;
+  }
+  /* The Custom wizard: a sheet over the lower part of the screen, so the comparison it
+     draws on the stage stays in view above it. */
+  .sheet.wizsheet {
+    inset: auto 0 0 0;
+    width: auto;
+    height: 58vh;
+    height: 58svh;
+    border-top: 1px solid var(--highlight);
+    box-shadow: var(--shadow-xl);
+  }
+
+  /* The welcome, in one column. */
+  .firstrun {
+    gap: 18px;
+    padding: 16px;
+    justify-content: flex-start;
+  }
+  .drop,
+  .intro,
+  .firstfail {
+    width: 100%;
+  }
+  .drop {
+    min-height: 0;
+    padding: 22px 16px;
+  }
+  .drop .headline {
+    font-size: 22px;
+  }
+  .samplerow {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .sample,
+  .sample .thumb {
+    width: 80px;
+  }
+  .sample .thumb {
+    height: 66px;
+  }
+  .sample img {
+    max-width: 56px;
+    max-height: 52px;
+  }
+
+  /* The other tabs (Minify, Fabricate, Batch): the same one column. */
+  .body > div:not(.stage) {
+    flex-direction: column;
+  }
 }

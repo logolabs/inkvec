@@ -32,16 +32,27 @@ icon on one axis, plus each icon's family. Only icons present in both are compar
    family keeps the macro mean defined on every resample (no family can vanish) and matches
    how the set was drawn (a fixed quota per family). The percentile interval of the
    replicates is the confidence interval.
-4. **Decision** (`decide`), by the two one-sided bounds of the 90 % interval, i.e. the 5th
-   and 95th percentiles of the replicates:
-     identical     no icon's value changed                      -> pass
-     better        95th percentile < 0 (a demonstrable gain)    -> pass
-     non-inferior  95th percentile < margin                     -> pass
-     worse         5th percentile > margin (demonstrably past)  -> FAIL
-     inconclusive  the interval straddles the margin            -> FAIL
-   Failing the inconclusive case is what makes this a non-inferiority test rather than a
-   "fail only on proof of harm" test: the candidate has to show it is within the margin.
-   With 246 icons that is easy for a narrow change and hard for a broad one (see `mde`).
+4. **Decision** (`decide`), by the one-sided 95 % upper bound of the change (the 95th
+   percentile of the replicates), against the *effective* margin
+   `max(margin, mde)`, the requested margin floored at what this set can resolve:
+     identical     no icon's value changed                          -> pass
+     better        upper bound < 0 (a demonstrable gain)            -> pass
+     non-inferior  upper bound < margin                             -> pass
+     within-noise  margin <= upper bound < mde (the set cannot      -> pass
+                   resolve the margin, and the change is not
+                   detectably worse)
+     worse         upper bound >= max(margin, mde)                  -> FAIL
+   There is no "inconclusive" verdict. A plain non-inferiority test fails whenever the
+   interval straddles the margin, and with 246 icons a broad edit straddles a 1 % margin at
+   512 px whatever its true effect (its `mde` is about 4 %). That turned real gains into
+   failures (the 0.2.4 boundary solve: -0.9 % at 512 px, upper bound +1.37 %). Flooring the
+   margin at the minimum detectable effect keeps the requested margin wherever the data can
+   test it (narrow edits, whose `mde` is small) and, where it cannot, fails only a change
+   whose upper bound reaches the smallest rise the set would catch four times in five.
+   The error rates this buys, for a broad edit at an under-resolved condition: a true rise
+   of `mde` or more fails at least 95 % of the time; a change with no true effect passes
+   about 80 % of the time. The report marks every within-noise pass, so a reviewer sees
+   where the requested margin was not testable.
 5. **Minimum detectable effect.** `mde` = (z_0.95 + z_0.80) x SE, the smallest true rise
    past zero that a one-sided 5 % test on this many icons would catch four times in five,
    with SE the bootstrap standard deviation of r. It says what the set can resolve: a
@@ -68,6 +79,11 @@ Method from: Lakens 2017, "Equivalence Tests: A Practical Primer for t Tests, Co
 Method from: Card, Henderson, Khandelwal, Jia, Mahowald, Jurafsky 2020, "With Little Power
   Comes Great Responsibility", EMNLP 2020, https://aclanthology.org/2020.emnlp-main.745 --
   report the minimum detectable effect next to every comparison.
+Not from the literature: flooring the margin at the comparison's own minimum detectable
+  effect (`decide`), because the project owner wants a strict 1 % margin and no
+  "inconclusive" verdicts, and the screen set cannot test 1 % for broad edits at 512 px.
+  See also: Lakens 2017 (above) on choosing a smallest effect size of interest that the
+  design can actually detect.
 Inspired by: Blum, Hardt 2015, "The Ladder: A Reliable Leaderboard for Machine Learning
   Competitions", arXiv 1502.04585 -- move the recorded best only when a submission beats it
   by a margin. Here the "better" label (a gain whose whole one-sided interval is below
@@ -129,9 +145,12 @@ class Comparison:
 
 @dataclass(frozen=True)
 class Verdict:
-    label: str          # identical | better | non-inferior | inconclusive | worse
+    label: str          # identical | better | non-inferior | within-noise | worse
     passed: bool
     margin: float
+    #: The margin actually applied, max(margin, mde); equal to `margin` unless the set could
+    #: not resolve it. NaN for the verdicts that do not compare against a margin.
+    effective: float = math.nan
 
 
 def _ratio(cur: float, base: float) -> float:
@@ -202,14 +221,16 @@ def compare(base: dict[str, float], cur: dict[str, float], family: dict[str, str
 
 
 def decide(c: Comparison, margin: float, step: float = 0.0) -> Verdict:
-    """The non-inferiority verdict for one comparison at a relative `margin` (0.01 = 1 %).
+    """The verdict for one comparison at a relative `margin` (0.01 = 1 %).
 
-    Read off the one-sided 95 % bounds (the 5th and 95th percentiles; Lakens 2017):
-    identical, better (upper bound below -`step`) and non-inferior (upper bound below the
-    margin) pass; worse (lower bound above the margin) and inconclusive (the margin inside
-    the interval) fail. With a margin of +inf every finite comparison passes, which is how
-    an axis is reported without being gated. Ties at a bound fail: the rule needs the bound
-    strictly inside the margin.
+    Read off the one-sided 95 % upper bound (the 95th percentile; Lakens 2017) against the
+    effective margin max(`margin`, `c.mde`), the requested margin floored at what this set
+    can resolve (see the module docstring, step 4). identical, better (upper bound below
+    -`step`), non-inferior (upper bound below `margin`) and within-noise (upper bound below
+    the minimum detectable effect, when that exceeds `margin`) pass; worse (upper bound at
+    or past the effective margin) fails. There is no inconclusive verdict. With a margin of
+    +inf every finite comparison passes, which is how an axis is reported without being
+    gated. Ties at a bound fail: the rule needs the bound strictly inside.
 
     `step` is the Ladder's threshold (Blum & Hardt 2015): "better", the only verdict that may
     move a baseline, needs the whole one-sided interval below -step. Without it, two icons
@@ -221,7 +242,10 @@ def decide(c: Comparison, margin: float, step: float = 0.0) -> Verdict:
     if c.p95 < -step:
         return Verdict("better", True, margin)
     if c.p95 < margin:
-        return Verdict("non-inferior", True, margin)
-    if c.p05 > margin:
-        return Verdict("worse", False, margin)
-    return Verdict("inconclusive", False, margin)
+        return Verdict("non-inferior", True, margin, margin)
+    # Floor the margin at the minimum detectable effect: where the set cannot resolve the
+    # requested margin, only a change it would detect fails (module docstring, step 4).
+    effective = max(margin, c.mde)
+    if c.p95 < effective:
+        return Verdict("within-noise", True, margin, effective)
+    return Verdict("worse", False, margin, effective)

@@ -265,8 +265,9 @@ and its fill *and* `fill-opacity` strings must match another sibling's exactly. 
 The **1.85x -> 0.75x** figure and the **1.5x** figure both come from this commit message —
 neither is a comment in the current source. The "under 1.5x author paths" project rule is
 recorded only in that commit narrative, not enforced as a hard gate: `bench/ci_gate.py`'s
-`LIMITS` dictionary caps the parameter-vs-artist *ratio's regression* at 5% relative
-(`"ratio": 0.05`), which is a change-detection gate, not an absolute 1.5x ceiling.
+`MARGINS` dictionary caps the parameter-vs-artist *ratio's regression* at 3% relative, judged
+at the one-sided 95% upper bound of a paired bootstrap (`"ratio": 0.03`), which is a
+change-detection gate, not an absolute 1.5x ceiling.
 
 ### Gradient and fill emission
 
@@ -414,7 +415,7 @@ Whichever wins becomes the output. `sw.mark("emit")` follows.
 | `INKVEC_EMIT_DECIMALS` | `emit.rs:126` | env override | overrides `EMIT_DECIMALS` | the mechanism used to isolate rounding from the segment price in the 7.2% measurement |
 | background-match precision | `post.rs:42-52` | hard-coded 2 decimals | `--no-background` element matching | coupled to `EMIT_DECIMALS`, not derived independently — breaks silently if the two diverge |
 | margin viewBox precision | `post.rs:147` | 2 decimals | `--margin` growth | no stated derivation |
-| `ci_gate.py` ratio limit | `bench/ci_gate.py:33` | 5% relative | regression gate on parameter count vs artist | project's compactness regression budget, not the 1.5x absolute rule cited in commit history |
+| `ci_gate.py` ratio margin | `bench/ci_gate.py` `MARGINS` | 3% relative, at the one-sided 95% upper bound | regression gate on parameter count vs artist | project's compactness regression budget, not the 1.5x absolute rule cited in commit history |
 
 ## Failure modes and edge cases
 
@@ -475,8 +476,8 @@ Since the settings cleanup (CHANGELOG, *Unreleased*) the engine reads its enviro
   disagree on when a join is "smooth enough," and the `5e-4` figure carries no derivation.
 - **The "1.85x -> 0.75x" compound-path figure and the "under 1.5x" project rule live only in
   a commit message (`b13bed6`), not in any code comment or enforced gate.** `ci_gate.py`
-  enforces a 5%-relative regression budget on the parameter ratio, which is a different and
-  weaker constraint than an absolute 1.5x ceiling.
+  enforces a 3%-relative regression budget on the parameter ratio (at the upper bound of a
+  paired bootstrap), which is a different and weaker constraint than an absolute 1.5x ceiling.
 - **`--no-background`'s background-face detection is a literal string match hard-coded to
   two decimals**, coupled to but not derived from `EMIT_DECIMALS`; changing
   `INKVEC_EMIT_DECIMALS` breaks it silently, with no error and no warning.

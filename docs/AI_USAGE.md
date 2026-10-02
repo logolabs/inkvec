@@ -47,7 +47,7 @@ During the development of Inkvec, agentic AI assistants were deployed for specif
   - Maintained zero warnings under `cargo fmt --check` and `cargo clippy -D clippy::correctness -D clippy::suspicious`.
 - **Benchmark Suite & Provenance Scripting:**
   - Authored automated scoring scripts (`bench/ci_gate.py`, `bench/svgeval.py`) evaluating perceptual color error ($\Delta E_{00}$ in OKLab space), parameter economy ratios, and angular turning metrics against a 246-icon screen set.
-  - Implemented cryptographic provenance recording (executable SHA256, compiler snapshot, git commit hash) embedded directly into `bench/gate/baseline.json`.
+  - Implemented cryptographic provenance recording (executable SHA256, compiler snapshot, git commit hash) embedded in the per-platform gate baselines (`bench/gate/baselines/<os>-<arch>.json`).
 - **Documentation & Visual Asset Generation:**
   - Generated technical breakdowns and algorithmic walkthroughs in `PIPELINE_EXPLANATION.md` and `docs/algorithm/`.
   - Created standalone SVG architectural diagrams (`docs/assets/pipeline-step-by-step.svg`, `docs/assets/planar-map-topology.svg`, etc.) to illustrate mathematical operations.

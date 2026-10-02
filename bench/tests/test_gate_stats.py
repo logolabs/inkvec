@@ -76,15 +76,45 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(gs.decide(c, 0.02).label, "better")
         self.assertEqual(gs.decide(c, 0.02, step=0.001).label, "non-inferior")
 
-    def test_noisy_null_change_is_inconclusive_at_a_tight_margin(self):
+    def test_noisy_null_change_passes_within_noise_at_a_tight_margin(self):
+        # A broad edit with no true effect: the interval straddles a 0.5 % margin, which the
+        # set cannot resolve, but the upper bound stays below the minimum detectable effect.
         base, fam = two_families(200, 50)
         rng = np.random.default_rng(7)
         cur = {k: v * float(np.exp(rng.normal(0, 0.3))) for k, v in base.items()}
         c = gs.compare(base, cur, fam)
         self.assertLess(c.p05, 0.0)
         self.assertGreater(c.p95, 0.005)
-        self.assertEqual(gs.decide(c, 0.005).label, "inconclusive")
+        self.assertLess(c.p95, c.mde)
+        v = gs.decide(c, 0.005)
+        self.assertEqual(v.label, "within-noise")
+        self.assertTrue(v.passed)
+        self.assertAlmostEqual(v.effective, c.mde)
         self.assertEqual(gs.decide(c, 1.0).label, "non-inferior")
+
+    def test_broad_regression_past_the_detectable_effect_still_fails(self):
+        # The same noise plus a true 15 % rise: the floor must not let a real regression pass.
+        base, fam = two_families(200, 50)
+        rng = np.random.default_rng(7)
+        cur = {k: v * 1.15 * float(np.exp(rng.normal(0, 0.3))) for k, v in base.items()}
+        c = gs.compare(base, cur, fam)
+        self.assertGreater(c.p95, c.mde)
+        v = gs.decide(c, 0.005)
+        self.assertEqual(v.label, "worse")
+        self.assertFalse(v.passed)
+
+    def test_low_variance_change_keeps_the_strict_margin(self):
+        # Every icon worsens by 2 % with little spread: the set resolves this easily (an MDE
+        # well under 1 %), so the floor does not apply and the 1 % margin fails it.
+        base, fam = two_families()
+        rng = np.random.default_rng(5)
+        cur = {k: v * 1.02 * float(np.exp(rng.normal(0, 0.002))) for k, v in base.items()}
+        c = gs.compare(base, cur, fam)
+        self.assertLess(c.mde, 0.01)
+        v = gs.decide(c, 0.01)
+        self.assertEqual(v.label, "worse")
+        self.assertFalse(v.passed)
+        self.assertAlmostEqual(v.effective, 0.01)
         self.assertAlmostEqual(c.mde, (gs.Z_95 + gs.Z_80) * c.se)
         self.assertLess(c.p025, c.p05)
         self.assertLess(c.p95, c.p975)

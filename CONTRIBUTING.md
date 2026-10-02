@@ -59,27 +59,37 @@ the installer refuses to replace a pre-push hook it did not write (unless `--for
 ## The regression gate
 
 `bench/ci_gate.py` scores the committed 246-icon screen set (`bench/data`, kept in the
-repository so the gate runs from a bare checkout) and compares three numbers against
-`bench/gate/baseline.json`:
+repository so the gate runs from a bare checkout) under six conditions: Quality and Fast mode,
+each at 128 px, 512 px with transparency and 512 px flattened onto white (an opaque logo).
+Each condition is compared icon by icon with the per-platform baseline
+`bench/gate/baselines/<os>-<arch>.json`, on three axes:
 
-- **dE00** (colour error against the artist's file) may rise at most 1%
-- **turning** (anchor turning per unit length) may rise at most 1%
-- **ratio** (parameter count versus the artist's) may rise at most 5%
+- **dE00** (colour error against the artist's file), margin 1%
+- **turning** (anchor turning per unit length), margin 2%
+- **ratio** (parameter count versus the artist's), margin 3%
 
-Run it against a release build:
+The verdict is statistical: a paired bootstrap interval for the change of each axis, and a
+non-inferiority test that passes when the one-sided 95% upper bound stays below the margin.
+Where a change is too broad for the 246 icons to resolve that margin (typically at 512 px),
+the margin is floored at the smallest effect the set can detect, and such a pass is
+reported as "within-noise"; there is no "inconclusive" verdict. Details and the
+literature are in `bench/README.md`.
+
+Run it against a release build (about 30 min for all six conditions on a desktop; pass
+`--conditions` for a subset while iterating):
 
 ```
 cargo build --release -p inkvec-cli
 python bench/ci_gate.py --exe target/release/inkvec --workers 4
 ```
 
-(needs `numpy`, `pillow`, `scikit-image`, `resvg_py`). If a metric genuinely improves, the
-baseline is tightened automatically on the spot — ground gained is never given back. If a
-change regresses one of the three numbers, the gate fails; it can only be bypassed with
+(needs `numpy`, `pillow`, `scikit-image`, `resvg_py`). `python tools/prepush.py --gate`
+runs it with the hard cases. Only a demonstrable gain moves a baseline. If a change
+regresses an axis, the gate fails; it can only be bypassed with
 `--exe ... --bypass-gate "<justification>"`, and only with a strong, explicit
 justification the maintainers agree with. Do not pass `--bypass-gate` in a pull request
-without discussing it first. If a change is a deliberate, agreed improvement, re-baseline
-with `--write-baseline` and include the updated `bench/gate/baseline.json` in your diff.
+without discussing it first. If a change is a deliberate, agreed trade, re-baseline with
+`--write-baseline` and include the updated `bench/gate/baselines/` files in your diff.
 
 ## The quality ratchet
 

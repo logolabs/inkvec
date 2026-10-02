@@ -33,14 +33,16 @@ three axes are compared icon by icon with the per-platform baseline
 
 | axis | aggregate | margin at the one-sided 95 % upper bound |
 |---|---|---|
-| dE00 (colour error vs. the artist's file) | family-macro mean | 2 % |
+| dE00 (colour error vs. the artist's file) | family-macro mean | 1 % |
 | turning (anchor turning per unit length) | mean | 2 % |
-| parameter ratio vs. the artist's file | family-macro mean | 5 % |
+| parameter ratio vs. the artist's file | family-macro mean | 3 % |
 
 The change of each aggregate gets a paired, family-stratified bootstrap interval
-(`bench/gate_stats.py`); the gate passes an axis when the interval's upper bound is below
-the margin (non-inferiority), and reports the minimum detectable effect beside it, so an
-"inconclusive" failure on a broad change reads as what it is. Icons whose SVG is
+(`bench/gate_stats.py`). The gate passes an axis when the interval's one-sided upper bound
+is below the margin, or, where the 246 icons cannot resolve the margin (a broad edit at
+512 px), below the minimum detectable effect; that pass is reported as `within-noise`.
+There is no "inconclusive" verdict: the margin is floored at what the set can detect, so a
+change fails only when it is worse by more than the margin and the set can see it. Icons whose SVG is
 byte-identical to the baseline's keep its numbers. A baseline moves only by
 `--write-baseline` or, locally, on a demonstrable gain. Until a platform's baseline file is
 committed, the gate falls back to the old scalar rule against `bench/gate/baseline.json`

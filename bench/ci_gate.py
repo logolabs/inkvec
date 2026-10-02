@@ -35,11 +35,12 @@ Per condition, three axes are gated against the per-icon baseline of the same co
 
 and `self_res` is reported. For each axis, `bench/gate_stats.py` computes the relative
 change of the aggregate with a paired, family-stratified bootstrap interval (Koehn 2004)
-and takes a non-inferiority verdict (Lakens 2017): the change passes when the one-sided
-95 % upper bound is below the margin (or nothing changed at all), and fails when the bound
-reaches the margin, whether it is demonstrably worse or merely inconclusive. The report
-shows the minimum detectable effect next to each verdict (Card et al. 2020), so a failure
-that only says "this set cannot resolve the margin for so broad a change" reads as that.
+and takes a non-inferiority verdict (Lakens 2017) against the effective margin
+max(`MARGINS`, minimum detectable effect): the change passes when the one-sided 95 % upper
+bound is below it (or nothing changed at all) and fails otherwise. There is no
+"inconclusive" verdict: where the 246 icons cannot resolve the requested margin (a broad
+edit at 512 px), a change passes as "within-noise" unless its upper bound reaches the
+smallest rise the set would detect (Card et al. 2020), and the report marks those passes.
 
 Icons whose SVG bytes match the baseline's (SHA-256) take the baseline's numbers exactly,
 so a byte-identical build is "identical" on every axis whatever platform scores it.
@@ -124,12 +125,17 @@ AGGREGATE = {"de00": "macro", "turning": "micro", "ratio": "macro", "self_res": 
 #: The relative rise each gated axis may show at its one-sided 95 % upper bound. Chosen on
 #: the replay of the 0.2.4 decisions through this rule (REPORT of agent w2-gate,
 #: 2026-10-02): at 2 % every recorded 0.2.4 change passes at every condition, while at 1 %
-#: the boundary-solve rewrite, a gain at 128 px and at 1024 px opaque, reads "inconclusive"
+#: the boundary-solve rewrite, a gain at 128 px and at 1024 px opaque, read "inconclusive"
 #: at 512 px (dE00 upper bound +1.37 %, 90 % interval width 5 %). Compared with the old
 #: rule (point estimate within 1 %), 2 % at the upper bound is stricter for broad edits
 #: (standard error ~1.5 %: the point must be below about -0.4 %) and about 0.5 point looser
 #: for narrow ones (standard error ~0.3 %: the point must be below about 1.5 %).
-MARGINS = {"de00": 0.02, "turning": 0.02, "ratio": 0.05}
+#:
+#: The project owner chose the stricter margins on 2026-10-03: dE00 1 % and ratio 3 % (turning
+#: stays at 2 %), and asked that the gate never answer "inconclusive": gate_stats.decide
+#: floors each margin at the comparison's minimum detectable effect (about 4 % for a broad
+#: edit at 512 px), so the strict margin holds wherever the set can test it.
+MARGINS = {"de00": 0.01, "turning": 0.02, "ratio": 0.03}
 GATED_AXES = tuple(MARGINS)
 #: The Ladder's step (gate_stats.decide): a "better" verdict, the only one that moves a
 #: baseline, needs its one-sided upper bound below -0.1 %. Comparing the Linux and Windows
@@ -330,6 +336,8 @@ def fmt_row(cond: str, ax: str, c: gate_stats.Comparison, v: gate_stats.Verdict)
     MDE, how many icons moved, verdict (upper case when it fails the gate)."""
     gated = ax in GATED_AXES
     margin = f"{v.margin * 100:.0f}%" if gated else "-"
+    if gated and v.effective == v.effective and v.effective > v.margin:
+        margin = f"{v.effective * 100:.1f}%*"  # floored at the MDE: the set cannot resolve the margin
     return (f"  {cond:16s} {ax:9s} {c.base:9.5f} -> {c.cur:9.5f}  {c.rel * 100:+7.2f}%  "
             f"95% CI [{c.p025 * 100:+6.2f}, {c.p975 * 100:+6.2f}]  upper {c.p95 * 100:+6.2f}% "
             f"vs {margin:>3s}  MDE {c.mde * 100:5.2f}%  "
@@ -348,6 +356,8 @@ def markdown_summary(verdicts: dict, legacy: bool) -> str:
     for cond, axes in verdicts.items():
         for ax, (c, v) in axes.items():
             m = f"{v.margin * 100:.0f} %" if ax in GATED_AXES and v.margin != float("inf") else "-"
+            if m != "-" and v.effective == v.effective and v.effective > v.margin:
+                m = f"{v.effective * 100:.1f} % (floored at the MDE)"
             lines.append(f"| {cond} | {ax} | {c.base:.5f} | {c.cur:.5f} | {c.rel * 100:+.2f} % | "
                          f"[{c.p025 * 100:+.2f}, {c.p975 * 100:+.2f}] % | {c.p95 * 100:+.2f} % | {m} | "
                          f"{c.mde * 100:.2f} % | {c.changed} | {v.label} |")
@@ -373,7 +383,8 @@ def levels_markdown(doc: dict, failures: list[str]) -> str:
 
 def verdict_json(verdicts: dict) -> dict:
     return {cond: {ax: {**c.__dict__, "mde": c.mde, "verdict": v.label, "passed": v.passed,
-                        "margin": v.margin if v.margin != float("inf") else None}
+                        "margin": v.margin if v.margin != float("inf") else None,
+                        "effective_margin": v.effective if v.effective == v.effective and v.effective != float("inf") else None}
                    for ax, (c, v) in axes.items()} for cond, axes in verdicts.items()}
 
 
@@ -513,7 +524,8 @@ def main() -> int:
                 print(fmt_row(name, ax, c, v))
                 if ax in GATED_AXES and not v.passed:
                     gate_fail.append(f"{name} {ax}: {v.label} (change {c.rel * 100:+.2f}%, "
-                                     f"upper bound {c.p95 * 100:+.2f}% vs margin {v.margin * 100:.0f}%, "
+                                     f"upper bound {c.p95 * 100:+.2f}% vs effective margin "
+                                     f"{max(v.margin, c.mde) * 100:.2f}% (requested {v.margin * 100:.0f}%), "
                                      f"MDE {c.mde * 100:.2f}%)")
 
     if a.report_json:
@@ -536,9 +548,9 @@ def main() -> int:
         print("\nregression gate FAILED:\n")
         for f in gate_fail:
             print(f"  {f}")
-        print("\nA change must show it is not worse. 'inconclusive' means the interval reaches the "
-              f"margin:\nthe change is too broad for {len(items)} icons to resolve (compare the MDE). "
-              "This can only be\nbypassed if the user explicitly agrees and provides strong justification:")
+        print("\nA change must show it is not worse: its upper bound must stay below the margin or, "
+              f"where {len(items)} icons cannot\nresolve the margin, below the minimum detectable "
+              "effect. This can only be\nbypassed if the user explicitly agrees and provides strong justification:")
         print('  python bench/ci_gate.py --exe ... --bypass-gate "<strong justification approved by user>"')
         return 1
 

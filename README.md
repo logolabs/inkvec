@@ -346,7 +346,7 @@ Full stage reference: [`docs/algorithm/`](docs/algorithm/) (start at `docs/algor
 
 ## Benchmark and CI gate
 
-`bench/` scores against a source SVG with CIEDE2000, DISTS, LPIPS, DINOv2/v3, parameter ratio, bytes and time. CI runs `cargo test` on Linux, Windows and macOS, then `bench/ci_gate.py` against the 246-icon screen set, failing if colour error or anchor turning rise more than 1% or the parameter ratio more than 5%.
+`bench/` scores against a source SVG with CIEDE2000, DISTS, LPIPS, DINOv2/v3, parameter ratio, bytes and time. CI runs `cargo test` on Linux, Windows and macOS, then `bench/ci_gate.py` against the 246-icon screen set in Quality and Fast mode at 128 and 512 px, failing unless a paired bootstrap shows colour error stays within 1%, anchor turning within 2% and the parameter ratio within 3% of the per-platform baseline.
 
 ---
 

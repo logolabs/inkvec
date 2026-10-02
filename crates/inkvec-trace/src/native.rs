@@ -29,7 +29,7 @@
 //! | here | classic | what changes |
 //! |---|---|---|
 //! | [`trace_color`] | [`crate::trace_color_full_with_alpha`] | the stages below, plus `merge_fades` (in `native/fade.rs`) |
-//! | [`extract_palette`] | [`color::extract_palette_mdl`] | [`Ink2`] points; the clear ink is not counted against `max_colors`; a translucent candidate needs an interior |
+//! | [`extract_palette`] | [`color::extract_palette_mdl`] | [`Ink2`] points; the clear ink is not counted against `max_colors` and does not use up the rarity exemption; a translucent candidate needs an interior |
 //! | [`label_image`] | [`color::label_image`] | [`Ink2::dist`] |
 //! | `palette::frequency_modes` | `color::mdl::frequency_modes` | bins over both grounds, `u64` keys |
 //! | `palette::Walk` (claim, spread) | `color::mdl::Walk` | [`Ink2::dist`] |
@@ -294,6 +294,9 @@ fn blend_pairs(c: Ink2, accepted: &[Ink2], tol: f32, tmin: f32) -> Vec<(usize, u
 ///
 /// * the clear ink (opacity ≤ [`CLEAR_INK_ALPHA`]) does not count against `max_colors`;
 ///   once the cap is full the scan continues only to find it, and stops once it is found;
+/// * nor does it use up the rarity exemption: the first ink that draws something skips
+///   the `MIN_INK_WEIGHT` gate as the first ink does, so a lone small shape on a clear
+///   canvas is an ink (see `palette::rarity_exempt`);
 /// * a translucent candidate that is not a blend must have an interior (see
 ///   `palette::BlendEvidence::measure`);
 /// * there is no `INKVEC_MERGE_DE00` experiment and the same-ink floor does not print.

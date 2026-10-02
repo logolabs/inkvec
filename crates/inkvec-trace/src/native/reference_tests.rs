@@ -1,5 +1,6 @@
 //! The per-pixel two-ground palette passes as they shipped before the per-point rewrite,
 //! kept verbatim as the oracle the rewrite is tested against (compiled only for tests).
+//! The one later change is the rarity exemption in `extract_palette`, made in both.
 #![allow(dead_code, clippy::too_many_arguments, unreachable_pub)]
 
 use std::collections::HashMap;
@@ -248,7 +249,11 @@ pub fn extract_palette(
         }
         let (claim, spread) =
             claim_spread(&view.px, &nearest_px, c, merge_distance, view.stride_px);
-        if (claim as f32 / total_px) < MIN_INK_WEIGHT && !colors.is_empty() {
+        // The rarity exemption of 2026-10-02 (`palette::rarity_exempt`: the first ink that
+        // draws something is exempt, not only the first ink), applied here as well, so this
+        // oracle still tests the per-point rewrite and nothing else.
+        let exempt = colors.is_empty() || (!clear(&c) && colors.iter().all(|p: &Ink2| clear(p)));
+        if (claim as f32 / total_px) < MIN_INK_WEIGHT && !exempt {
             continue;
         }
         let nearest = colors

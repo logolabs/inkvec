@@ -320,6 +320,26 @@ fn max_dim_cap_keeps_arrival_size_in_attributes() {
     assert!(svg0.contains("viewBox=\"-0.5 -0.5 128 96\""), "{svg0}");
 }
 
+/// A black disc of `area` px² centred on a transparent `n × n` canvas, its rim at the
+/// pixel's covered share.
+fn lone_disc(n: usize, area: f32) -> Rgba {
+    let r = (area / std::f32::consts::PI).sqrt();
+    let c = n as f32 / 2.0;
+    image(n, n, |x, y| {
+        let d = ((x as f32 - c).powi(2) + (y as f32 - c).powi(2)).sqrt();
+        [0.0, 0.0, 0.0, (r + 0.5 - d).clamp(0.0, 1.0)]
+    })
+}
+
+/// A lone 50 px² shape covers 0.3 % of a 128 px canvas, under the palette's rarity floor;
+/// it was traced to an empty SVG. It must be drawn, in its own colour.
+#[test]
+fn a_lone_small_shape_on_a_transparent_canvas_is_drawn() {
+    let svg = traced_svg(lone_disc(128, 50.0), &Args::default());
+    assert!(shapes(&svg) >= 1, "{svg}");
+    assert!(fills(&svg).contains("#000000"), "{svg}");
+}
+
 /// Weights that cannot be loaded: no restorer for a build without the network, and a failed
 /// load for one with it, so both builds take the same path.
 fn no_restorer(mode: inkvec_restore::Mode) -> Args {

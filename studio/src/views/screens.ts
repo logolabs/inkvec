@@ -678,15 +678,37 @@ function group(name: string, rows: (HTMLElement | null)[]): HTMLElement {
   return h("div.settinggroup", null, h("div.head.eyebrow", null, name), ...rows);
 }
 
+/** Bumped per row, so every row's label and help have ids of their own. */
+let rowSeq = 0;
+
+/**
+ * One Settings row: the label and its help on the left, the control on the right.
+ *
+ * The label is a `<span>` beside the control rather than a `<label>` around it, because the
+ * row is a two-column grid and some controls are buttons. So the control is named by
+ * reference: its form field (a `<select>`, the number `<input>`, a `role=switch` button) gets
+ * `aria-labelledby` pointing at the label and `aria-describedby` at the help, which is WCAG
+ * 2.2 SC 4.1.2 (Name, Role, Value) and the `label`/`select-name` rules axe-core checks. A
+ * control that carries its own name (a button with text) is left alone. Six fields had no
+ * name before this (three number inputs and three selects; axe-core 4.11.1, r2-product).
+ */
 function row(label: string, help: string, control: HTMLElement): HTMLElement {
+  const id = `setting-${++rowSeq}`;
+  const field = control.matches("select, input, [role=switch]")
+    ? control
+    : control.querySelector<HTMLElement>("select, input, [role=switch]");
+  if (field) {
+    field.setAttribute("aria-labelledby", `${id}-label`);
+    if (help) field.setAttribute("aria-describedby", `${id}-help`);
+  }
   return h(
     "div.settingrow",
     null,
     h(
       "div.about",
       null,
-      h("span.label", null, label),
-      help ? h("span.help", null, help) : null,
+      h("span.label", { id: `${id}-label` }, label),
+      help ? h("span.help", { id: `${id}-help` }, help) : null,
     ),
     h("div.control", null, control),
   );

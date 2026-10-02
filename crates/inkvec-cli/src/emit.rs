@@ -36,10 +36,16 @@
 //!   pricing coordinates more finely while still rounding coarsely made the corpus *worse*,
 //!   so `--precision` sets lambda and `INKVEC_EMIT_DECIMALS` sets the digits. This header
 //!   said `--precision` until 2026-09-08.
-//! * **Same-coloured siblings become one even-odd path.** An artist draws a letter and its
+//! * **Same-coloured siblings become one compound path.** An artist draws a letter and its
 //!   counter as one path with a hole; emitting them as two costs a shape and leaves a seam
-//!   along the shared edge. `fill-rule="evenodd"` says the same thing in fewer marks, and
-//!   the parity rules in [`crate::rings`] are what make it correct.
+//!   along the shared edge. What a compound path paints is decided by parity -- a point
+//!   inside an odd number of its rings is painted -- and the parity rules in
+//!   [`crate::rings`] and [`stack_faces`] are what make the rings right. Each ring is then
+//!   wound by its nesting depth ([`winding`]), so the default `nonzero` fill rule paints
+//!   exactly that parity and no `fill-rule` is written: fonts, cutters and old Android read
+//!   the same shape a browser does. Until 2026-10 the paths said `fill-rule="evenodd"`
+//!   instead, and 30% of the screen set's files filled their holes back in for any
+//!   consumer that ignored it.
 
 use std::collections::{HashMap, HashSet};
 
@@ -58,6 +64,9 @@ use crate::pathdata::{emit_decimals, fmt_path, fmt_ring, fmt_ring_with};
 use crate::primitive::{annulus_stroke, primitive_d, primitive_element, stroke_element};
 use crate::rings::{self, point_in_ring, ring_area, Nesting};
 use crate::seams;
+
+mod winding;
+pub(crate) use winding::for_nonzero;
 
 /// Everything the colour emitter writes from: the settled geometry, fills and transparency
 /// of every face. Per-face slices are indexed by face (the planar map's label), per-edge
@@ -880,6 +889,16 @@ fn annulus_strokes(
         .collect()
 }
 
+/// How a face is written, as [`Writer::face_element`] decides it.
+enum Element {
+    /// A finished element: a `<use>` of a symbol, a stroke, or a primitive element.
+    Ready(String),
+    /// A `<path>` still to be written, as its `d`: the face's own rings and its holes.
+    /// Kept apart because siblings of one colour merge into one path, and the merged path
+    /// is wound as a whole ([`Writer::path_element`]).
+    Path(String),
+}
+
 /// Stage 7: the element writer. Holds every per-face decision made so far and writes the
 /// paint tree as SVG elements.
 struct Writer<'a> {
@@ -927,7 +946,8 @@ impl Writer<'_> {
     }
 
     /// The `d` of a face: its drawn rings, then the transparent faces punched out of it,
-    /// for an even-odd fill. A harmonized face's `d` is its consensus instead.
+    /// for a fill by parity (wound for it in [`Writer::path_element`]). A harmonized face's
+    /// `d` is its consensus instead.
     fn face_d(&self, i: usize, under: &seams::Overrides) -> String {
         if let Some(h_d) = self.harmonized_d.get(&i) {
             return h_d.clone();
@@ -971,16 +991,21 @@ impl Writer<'_> {
     /// The element a face is written as on its own, and whether it is a primitive (or
     /// stroke) element rather than a path. In order: a `<use>` of a harmonized symbol, its
     /// annulus stroke, a primitive element when its whole outline is one and nothing is
-    /// punched out of it, else a `<path>`. `None` when the path would be empty.
-    fn face_element(&self, i: usize, under: &seams::Overrides) -> Option<(String, bool)> {
+    /// punched out of it, else a `<path>`, returned as its `d` so that only the path that
+    /// is finally written pays for [`winding::for_nonzero`] ([`Writer::path_element`]).
+    /// `None` when the path would be empty.
+    ///
+    /// A `<use>` carries no `fill-rule`: the symbol it shows was wound when harmonizing
+    /// wrote it, and carries `evenodd` itself in the one case where it could not be.
+    fn face_element(&self, i: usize, under: &seams::Overrides) -> Option<(Element, bool)> {
         let fill = &self.fills[i];
         let alpha = self.opac[i].as_str();
         let id = &self.ids[i];
         if let Some((sym_id, matrix)) = self.symbol_use.get(&i) {
             return Some((
-                format!(
-                    "<use id=\"{id}\" href=\"#{sym_id}\" transform=\"{matrix}\" fill=\"{fill}\"{alpha} fill-rule=\"evenodd\"/>"
-                ),
+                Element::Ready(format!(
+                    "<use id=\"{id}\" href=\"#{sym_id}\" transform=\"{matrix}\" fill=\"{fill}\"{alpha}/>"
+                )),
                 false,
             ));
         }
@@ -989,7 +1014,7 @@ impl Writer<'_> {
             if let Some(sp) = el.find(' ') {
                 el.insert_str(sp, &format!(" id=\"{id}\""));
             }
-            return Some((el, true));
+            return Some((Element::Ready(el), true));
         }
         // A primitive element cannot carry a hole, so a face that has to show one through
         // is written as a path even when its outline would have fitted a circle.
@@ -1001,7 +1026,7 @@ impl Writer<'_> {
                     if let Some(sp) = el.find(' ') {
                         el.insert_str(sp, &format!(" id=\"{id}\""));
                     }
-                    return Some((el, true));
+                    return Some((Element::Ready(el), true));
                 }
             }
         }
@@ -1009,10 +1034,22 @@ impl Writer<'_> {
         if d.is_empty() {
             return None;
         }
-        Some((
-            format!("<path id=\"{id}\" d=\"{d}\" fill=\"{fill}\"{alpha} fill-rule=\"evenodd\"/>"),
-            false,
-        ))
+        Some((Element::Path(d), false))
+    }
+
+    /// The `<path>` of face `i` -- its id, fill and opacity -- drawing `d`, a compound path
+    /// of its rings and, when siblings were merged into it, theirs.
+    ///
+    /// The rings are wound by their nesting depth ([`winding::for_nonzero`]), so the default
+    /// `nonzero` rule fills exactly what `evenodd` did and no `fill-rule` is written: every
+    /// consumer -- a browser, a font tool, a cutter that ignores the attribute -- reads the
+    /// same shape. A `d` the winding pass cannot read keeps `fill-rule="evenodd"`.
+    fn path_element(&self, i: usize, d: &str) -> String {
+        let (d, rule) = for_nonzero(d);
+        format!(
+            "<path id=\"{}\" d=\"{d}\" fill=\"{}\"{}{rule}/>",
+            self.ids[i], self.fills[i], self.opac[i]
+        )
     }
 
     /// Emit the faces of one nesting level, and recursively their children.
@@ -1066,21 +1103,23 @@ impl Writer<'_> {
                     group.push(j);
                 }
             }
-            let element = if group.len() == 1 {
-                element
-            } else {
-                let mut d = String::new();
-                for &j in &group {
-                    d.push_str(&self.face_d(j, under));
+            let element = match element {
+                Element::Ready(el) => el,
+                Element::Path(d) if group.len() == 1 => self.path_element(i, &d),
+                Element::Path(_) => {
+                    let mut d = String::new();
+                    for &j in &group {
+                        d.push_str(&self.face_d(j, under));
+                    }
+                    // Wound as one path: a member's depth is counted among every ring of
+                    // the merged element, not only its own.
+                    self.path_element(i, &d)
                 }
-                format!(
-                    "<path id=\"{}\" d=\"{d}\" fill=\"{}\"{} fill-rule=\"evenodd\"/>",
-                    ids[i], fills[i], opac[i]
-                )
             };
             // One element is one paint: its members share a rank, so none of them reaches
-            // under another -- inside one even-odd path an overlap would cancel to a hole,
-            // and a shared edge inside one path cannot seam in the first place.
+            // under another -- inside one compound path an overlap would cancel to a hole
+            // (or, wound for nonzero, count twice), and a shared edge inside one path cannot
+            // seam in the first place.
             let rank = painted.last().map_or(0, |&(_, r)| r + 1);
             painted.extend(group.iter().map(|&j| (j, rank)));
             let has_children = group.iter().any(|&j| !self.children[j].is_empty());
@@ -1232,14 +1271,24 @@ fn seam_overrides(
 /// appended to `body`.
 ///
 /// A layer's path is the union of its faces, from the rings they had before the ground
-/// under them was merged. They are disjoint, so even-odd paints their union; and because
-/// it is one path rather than one per face, the renderer composites the translucent paint
-/// once and no seam appears where two of them met.
+/// under them was merged: every ring of the merged face, its holes included, wound by depth
+/// ([`winding::for_nonzero`]) so that the default fill rule paints exactly the union; and
+/// because it is one path rather than one per face, the renderer composites the
+/// translucent paint once and no seam appears where two of them met.
+///
+/// The layers are written **back to front**. `an.layers` is in peel order, frontmost first
+/// (`inkvec_trace::alpha::AlphaAnalysis::layers`), because the decomposition can only take a
+/// layer off once nothing lies over it. Written in that order the frontmost layer went down
+/// first and every layer behind it was composited over it: on `synthetic/stack_overlap`
+/// the blue disc came out on top of the green one that covers it, dE00 0.019 -> 2.90 with
+/// `--layers`. Over a face both cover, the document now draws
+/// `a₀·C₀ + (1 − a₀)·(a₁·C₁ + (1 − a₁)·G)`, the stack the decomposition peeled. The ids
+/// keep the peel index, `layer-0` frontmost.
 fn write_layers(doc: &ColorDoc, decimals: usize, body: &mut String) {
     let Some((an, shape_order)) = doc.layers else {
         return;
     };
-    for (k, l) in an.layers.iter().enumerate() {
+    for (k, l) in an.layers.iter().enumerate().rev() {
         let mut d = String::new();
         if let Some(rings) = shape_order.get(k) {
             for ring in rings {
@@ -1249,17 +1298,19 @@ fn write_layers(doc: &ColorDoc, decimals: usize, body: &mut String) {
         if d.is_empty() {
             continue;
         }
+        let (d, rule) = for_nonzero(&d);
         body.push_str(&format!(
-            "<path id=\"layer-{k}\" d=\"{d}\" fill=\"{}\" fill-opacity=\"{:.3}\" fill-rule=\"evenodd\"/>",
+            "<path id=\"layer-{k}\" d=\"{d}\" fill=\"{}\" fill-opacity=\"{:.3}\"{rule}/>",
             inkvec_trace::color::to_hex(l.color),
             l.alpha
         ));
     }
 }
 
-/// Bilevel output: every contour as one path with `evenodd`, so holes fall out of the
-/// winding rather than needing to be detected and paired up. `paper` writes the white
-/// canvas rectangle under it.
+/// Bilevel output: every contour as one compound path, wound by its nesting depth
+/// ([`winding::for_nonzero`]), so holes fall out of the winding rather than needing to be
+/// detected and paired up, under the default fill rule and under `evenodd` alike. `paper`
+/// writes the white canvas rectangle under it.
 ///
 /// `paths` are closed polygons in the traced image's pixel coordinates (from
 /// `inkvec_fit::adjust_vertices`); polygons of fewer than three points are skipped.
@@ -1280,8 +1331,9 @@ pub(crate) fn emit_bilevel(
     } else {
         String::new()
     };
+    let (d, rule) = for_nonzero(&d);
     // See emit_color: pixel-centre coordinates, so the canvas origin is (-0.5, -0.5).
     format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"-0.5 -0.5 {w} {h}\" width=\"{w}\" height=\"{h}\">{rect}<path d=\"{d}\" fill=\"#000000\" fill-rule=\"evenodd\"/></svg>"
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"-0.5 -0.5 {w} {h}\" width=\"{w}\" height=\"{h}\">{rect}<path d=\"{d}\" fill=\"#000000\"{rule}/></svg>"
     )
 }

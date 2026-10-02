@@ -20,7 +20,8 @@
 //!
 //! The modules, in the order a document goes through them: `driver` parses the document,
 //! scales the tolerance to each path's units and runs every path in parallel; `path` reads a
-//! `d` attribute into absolute lines and cubics and finds its corners; `fit` refits each run
+//! `d` attribute into absolute lines and cubics and finds its corners (or, for [`compact`],
+//! into the segments exactly as written, arcs kept); `fit` refits each run
 //! between corners under the MDL objective and the tolerance guard, with `geom` measuring the
 //! distances; `write` spells the result in the fewest bytes; `document` (when
 //! [`Options::document`] is on) shortens everything that is not path geometry. [`structure`]
@@ -118,7 +119,9 @@ pub fn minify(svg: &str, opts: &Options) -> Result<(String, Report), String> {
 /// The same writer as [`minify`] without the fitter: no segment is removed, moved or
 /// re-chosen, and — unless `Options::decimals` says otherwise — no coordinate is rounded
 /// either, so the picture that comes out is the picture that went in, pixel for pixel.
-/// Only the spelling changes.
+/// Only the spelling changes. Arcs stay arcs: the path is read as written
+/// (`path::parse_d_written`), not through the fitter's reading, which turns each arc into
+/// the cubics that approximate it and made every path holding an arc too long to replace.
 ///
 /// This is what an emitter that already knows its own geometry wants: it can hand over
 /// the precision it chose (`decimals: Some(2)` for the tracer, which is what it already
@@ -335,6 +338,84 @@ mod tests {
         let (out, rep) = minify(&src, &opts).expect("minifies");
         assert_eq!(rep.rewritten, 0, "{rep:?}\n{out}");
         assert_eq!(out, src);
+    }
+
+    /// `compact` respells a path that holds arcs instead of leaving it alone, keeps every
+    /// arc an arc, and moves nothing: the two readings of the result, with arcs and with arcs
+    /// flattened to cubics, both agree with the source's to a billionth of a unit. This is
+    /// the tracer's own circle-with-a-hole spelling: absolute, two decimals, every letter.
+    #[test]
+    fn compact_keeps_arcs_and_moves_nothing() {
+        use crate::path::{parse_d_written, WrittenSubpath};
+        // The radii are a step short of half the chord, as the tracer writes them so that
+        // every reader centres the arc on the chord (see `inkvec-cli`'s `primitive_d`).
+        let src_d = "M44.38,64.00A19.61,19.61 0 1 0 83.62,64.00A19.61,19.61 0 1 0 44.38,64.00Z\
+                     M54.10,64.00A9.89,9.89 0 1 1 73.90,64.00A9.89,9.89 0 1 1 54.10,64.00Z\
+                     M20.00,20.00L40.50,20.00C45.00,20.00 47.25,22.25 47.25,26.75L47.25,40.00Z";
+        let opts = Options {
+            document: false,
+            ..Default::default()
+        };
+        let (out, rep) = compact(&doc(src_d), &opts).expect("compacts");
+        assert_eq!(rep.rewritten, 1, "{rep:?}\n{out}");
+        let d = attr_d(&out);
+        assert!(d.len() < src_d.len(), "{d}");
+        let (a, b) = (
+            parse_d_written(src_d).unwrap(),
+            parse_d_written(&d).unwrap(),
+        );
+        let arcs = |sps: &[WrittenSubpath]| {
+            sps.iter()
+                .flat_map(|sp| &sp.segs)
+                .filter(|s| matches!(s, inkvec_fit::curves::Segment::Arc { .. }))
+                .count()
+        };
+        assert_eq!((arcs(&a), arcs(&b)), (4, 4), "{d}");
+        assert_eq!(a.len(), b.len());
+        for (x, y) in a.iter().zip(&b) {
+            assert_eq!((x.closed, x.segs.len()), (y.closed, y.segs.len()), "{d}");
+            assert!(x.start.dist(y.start) < 1e-9);
+            for (s, t) in x.segs.iter().zip(&y.segs) {
+                use inkvec_fit::curves::Segment::Arc;
+                match (s, t) {
+                    (
+                        Arc {
+                            rx,
+                            ry,
+                            phi,
+                            large_arc,
+                            sweep,
+                            end,
+                        },
+                        Arc {
+                            rx: rx2,
+                            ry: ry2,
+                            phi: phi2,
+                            large_arc: l2,
+                            sweep: s2,
+                            end: e2,
+                        },
+                    ) => {
+                        assert!((rx - rx2).abs() < 1e-9 && (ry - ry2).abs() < 1e-9);
+                        assert!((phi - phi2).abs() < 1e-9);
+                        assert_eq!((large_arc, sweep), (l2, s2));
+                        assert!(end.dist(*e2) < 1e-9);
+                    }
+                    (Arc { .. }, _) | (_, Arc { .. }) => panic!("an arc changed kind: {d}"),
+                    (s, t) => assert!(s.end().dist(t.end()) < 1e-9, "{s:?} vs {t:?}"),
+                }
+            }
+        }
+        let flat = |d: &str| -> Vec<Point> {
+            parse_d(d)
+                .unwrap()
+                .iter()
+                .flat_map(|sp| sp.segs.iter().map(Src::start))
+                .collect()
+        };
+        let (fa, fb) = (flat(src_d), flat(&d));
+        assert_eq!(fa.len(), fb.len());
+        assert!(fa.iter().zip(&fb).all(|(p, q)| p.dist(*q) < 1e-9));
     }
 
     #[test]

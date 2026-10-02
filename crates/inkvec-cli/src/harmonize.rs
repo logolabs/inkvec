@@ -127,8 +127,12 @@ pub(crate) fn harmonize(
             for (h_start, h_segs) in &cluster.canonical_holes {
                 fmt_segments(*h_start, h_segs, decimals, &mut canon_d);
             }
+            // Wound by depth, so the `<use>` that shows it fills its holes under the default
+            // rule; a symbol the winding pass cannot read keeps `evenodd` on itself, where
+            // every `<use>` of it inherits nothing to override it.
+            let (canon_d, rule) = crate::emit::for_nonzero(&canon_d);
             out.defs
-                .push_str(&format!("<path id=\"{sym_id}\" d=\"{canon_d}\"/>"));
+                .push_str(&format!("<path id=\"{sym_id}\" d=\"{canon_d}\"{rule}/>"));
             for &m in &cluster.members {
                 out.symbols.insert(
                     face_of[m],

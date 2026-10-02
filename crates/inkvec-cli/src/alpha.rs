@@ -45,21 +45,12 @@
 //! function says why its output is bit-identical to the per-face whole-image scans it
 //! replaced.
 
-use inkvec_core::Point;
-use inkvec_trace::{gradient, planar};
-
 use crate::args::Args;
 use crate::diag;
+use inkvec_core::Point;
 
-/// Uncertainty of a face's mean colour, in sRGB units, for the layer hypothesis.
-///
-/// The module (`inkvec_trace::alpha`) defaults to 1.5/255, the noise of its own tests. Our
-/// face colours are medians over evidence pixels of a matted image and carry more than
-/// that: on a synthetic stack of three translucent discs, 1.5 finds nothing and 3 finds
-/// the layer with a
-/// residual of 0.0007. The false-alarm rate grows with the square of this, so it is the
-/// smallest value that finds a layer we know is there.
-const LAYER_SIGMA_SRGB: f64 = 3.0 / 255.0;
+mod layers;
+pub(crate) use layers::recover_layers;
 
 /// A face whose opacity fades across it: the axis, and the opacity at each end.
 ///
@@ -892,118 +883,6 @@ pub(crate) struct FaceAlpha {
     pub(crate) matte: [f32; 3],
     /// A face whose alpha fades linearly, as the gradient an editor would have drawn.
     pub(crate) alpha_ramps: Vec<Option<AlphaRamp>>,
-}
-
-/// Translucent layers: one shape at one opacity, seen against several grounds.
-///
-/// `inkvec_trace::alpha::decompose_with` recovers these from the face partition alone — no
-/// alpha channel needed, because the evidence is that the differences between a layer's
-/// faces are parallel to the differences between the grounds beneath them, scaled by
-/// `1 - a`. A face under a layer of colour `L` and opacity `a` reads
-/// `c_f = a·L + (1 − a)·G_f`, with `G_f` the ground it covers, so two covered faces differ
-/// by `c_f − c_g = (1 − a)·(G_f − G_g)`. It is what turns three overlapping circles at 85%
-/// into three circles instead of five flat patches.
-///
-/// It is only accepted when it explains the faces to well inside the uncertainty of a
-/// face's own colour ([`LAYER_SIGMA_SRGB`]): a missed layer costs parameters, an invented
-/// one is a visible error, and the module's own documentation is emphatic about which way
-/// to lean.
-///
-/// Off by default (`--layers`), and the reason is compactness rather than correctness. The
-/// layer reproduces the image exactly — the faces beneath it are repainted with the ground
-/// and the layer is composited over them — but it only pays when the ground pieces it
-/// reunites merge back into fewer shapes. The pipeline does that merge and then keeps the
-/// layered document only when it has fewer shapes and no more bytes than the flat one. On
-/// real art it is rare besides: two of forty icons in the census.
-///
-/// Inputs, all indexed by face id: `face_color` (palette index per face), `fills` (a flat
-/// fill's colour is used as the face colour, anything else falls back to the palette ink),
-/// and `traced_labels` (the label map, for each face's pixel area). Adjacency comes from
-/// the map's edges. Both compositing spaces, sRGB-encoded and linear light, are tried and
-/// the one that finds more layers is kept (linear on a tie, as `max_by_key` keeps the last
-/// maximum). Returns `None` when `--layers` is off or no layer was found; unless `quiet`,
-/// each found layer is described on stderr.
-pub(crate) fn recover_layers(
-    args: &Args,
-    map: &planar::PlanarMap,
-    face_color: &[usize],
-    fills: &[gradient::FillFit],
-    pal: &inkvec_trace::color::Palette,
-    traced_labels: &[u16],
-) -> Option<inkvec_trace::alpha::AlphaAnalysis> {
-    if args.layers {
-        let n_faces = face_color.len();
-        let mut area = vec![0usize; n_faces];
-        for &l in traced_labels.iter() {
-            if (l as usize) < n_faces {
-                area[l as usize] += 1;
-            }
-        }
-        let rgb_of: Vec<[f32; 3]> = (0..n_faces)
-            .map(|f| match fills.get(f).map(|x| &x.model) {
-                Some(gradient::FillModel::Flat(c)) => *c,
-                _ => face_color
-                    .get(f)
-                    .and_then(|&ci| pal.rgb.get(ci))
-                    .copied()
-                    .unwrap_or([0.0, 0.0, 0.0]),
-            })
-            .collect();
-        let mut adjacency: Vec<(usize, usize)> = map
-            .edges
-            .iter()
-            .filter(|e| e.left != e.right)
-            .map(|e| (e.left as usize, e.right as usize))
-            .filter(|&(a, b)| a < n_faces && b < n_faces)
-            .collect();
-        adjacency.sort_unstable();
-        adjacency.dedup();
-        // The module's own advice: the compositing space is a property of the file, not a
-        // constant, so try both. "Better" is judged by how many layers each finds; on a tie
-        // `max_by_key` keeps the last, the linear-light fit.
-        let sigma_srgb = LAYER_SIGMA_SRGB;
-        let best = [
-            inkvec_trace::alpha::Space::Srgb,
-            inkvec_trace::alpha::Space::Linear,
-        ]
-        .into_iter()
-        .map(|space| {
-            let opt = inkvec_trace::alpha::AlphaOptions {
-                space,
-                sigma_srgb,
-                ..Default::default()
-            };
-            (
-                space,
-                inkvec_trace::alpha::decompose_with(&rgb_of, &area, &adjacency, &opt),
-            )
-        })
-        .max_by_key(|(_, an)| an.layers.len());
-        if let Some((space, an)) = &best {
-            let quiet = args.quiet || an.layers.is_empty();
-            diag::stage(quiet, || {
-                format!(
-                    "  layers        {} translucent layer(s) over a continuous ground ({:?})",
-                    an.layers.len(),
-                    space
-                )
-            });
-            for l in &an.layers {
-                diag::stage(quiet, || {
-                    format!(
-                        "                {} at {:.3} across {} faces, residual {:.5}",
-                        inkvec_trace::color::to_hex(l.color),
-                        l.alpha,
-                        l.faces.len(),
-                        l.residual
-                    )
-                });
-            }
-        }
-        best.map(|(_, an)| an).filter(|an| !an.layers.is_empty())
-    } else {
-        None
-    }
 }
 
 /// What the source's alpha says about each face: clear, translucent at one opacity, fading

@@ -392,6 +392,60 @@ fn restore_auto_without_a_restorer_traces_directly() {
     assert_eq!(t.svg, direct.svg, "the fallback is the plain trace");
 }
 
+/// Upscaler flags that cannot give an upscaler: an empty `--sr-command`, the same failure a
+/// missing `tools/inkvec_sr` gives, without depending on what is installed beside the test.
+fn no_upscaler(mode: inkvec_sr::Mode) -> Args {
+    Args {
+        sr: mode,
+        // Below any residual, so `auto` always decides to clean.
+        sr_threshold: -1.0,
+        sr_command: Some(String::new()),
+        ..Args::default()
+    }
+}
+
+/// `--sr auto` asks for the clean-up only where it helps, so a machine without the
+/// upscaler traces the input as it is and says why, as `--restore auto` does. It used to
+/// fail the whole trace ("the packaged SR pre-pass ... was not found").
+#[test]
+fn sr_auto_without_an_upscaler_traces_directly() {
+    let args = no_upscaler(inkvec_sr::Mode::Auto);
+    let t = trace_image(square(), &args).expect("auto falls back to tracing directly");
+    let note = t
+        .stats
+        .iter()
+        .find(|l| l.starts_with("sr "))
+        .expect("an sr line");
+    assert!(note.contains("no upscaler is available"), "{note}");
+    assert!(note.contains("traced directly"), "{note}");
+    let direct = trace_image(square(), &Args::default()).expect("trace succeeds");
+    assert_eq!(t.svg, direct.svg, "the fallback is the plain trace");
+    // Monochrome: the probe is a colour trace, so the fallback traces again as asked.
+    let mono = Args {
+        monochrome: true,
+        ..no_upscaler(inkvec_sr::Mode::Auto)
+    };
+    let t = trace_image(square(), &mono).expect("auto falls back under monochrome too");
+    assert!(t
+        .stats
+        .iter()
+        .any(|l| l.contains("no upscaler is available")));
+    let plain_mono = Args {
+        monochrome: true,
+        ..Args::default()
+    };
+    assert_eq!(
+        t.svg,
+        trace_image(square(), &plain_mono).expect("trace").svg
+    );
+}
+
+/// `--sr on` asked for the clean-up outright: without an upscaler it is still an error.
+#[test]
+fn sr_on_without_an_upscaler_is_an_error() {
+    assert!(trace_image(square(), &no_upscaler(inkvec_sr::Mode::On)).is_err());
+}
+
 /// `--restore on` asked for the restorer outright: without one it is still an error.
 #[test]
 fn restore_on_without_a_restorer_is_an_error() {

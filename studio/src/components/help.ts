@@ -18,6 +18,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { fill, h } from "../lib/dom";
 import type { State, Store } from "../lib/state";
+import { holdModal } from "./dialog";
 import { toast } from "./overlays";
 import { windowControls } from "./wincontrols";
 
@@ -54,6 +55,8 @@ function openExternal(url: string): void {
 }
 
 let screen: HTMLElement | null = null;
+/** Undoes the guide's modal hold (`dialog.ts`) and puts focus back on what opened it. */
+let release: ((returnFocus?: boolean) => void) | null = null;
 
 /** Open the guide at `page` (a path under the guide, with an optional #fragment). */
 export function openHelp(page = "index.html"): void {
@@ -82,7 +85,7 @@ export function openHelp(page = "index.html"): void {
 
   screen = h(
     "div.screen",
-    { role: "dialog", "aria-label": "User guide" },
+    { role: "dialog", "aria-modal": "true", "aria-label": "User guide" },
     h(
       "div.screenbar",
       { "data-tauri-drag-region": "" },
@@ -137,6 +140,10 @@ export function openHelp(page = "index.html"): void {
 
   window.addEventListener("keydown", guard, true);
   (document.getElementById("app") ?? document.body).append(screen);
+  // A modal dialog over the whole window: focus moves in, the window behind is inert, and
+  // focus goes back to the Help button (or wherever F1 was pressed) when it closes. `guard`
+  // above already owns Escape and keeps the window's shortcuts out.
+  release = holdModal(screen, { onEscape: closeHelp });
 }
 
 /** Close the guide, if it is open, and give the app its keyboard back. */
@@ -144,6 +151,9 @@ export function closeHelp(): void {
   window.removeEventListener("keydown", guard, true);
   screen?.remove();
   screen = null;
+  const r = release;
+  release = null;
+  r?.();
 }
 
 /**

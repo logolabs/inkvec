@@ -6,6 +6,7 @@
  */
 
 import { fill, h, icon } from "../lib/dom";
+import { holdModal } from "./dialog";
 
 const layer = () => document.getElementById("overlays") as HTMLElement;
 const toastLayer = () => document.getElementById("toasts") as HTMLElement;
@@ -41,10 +42,24 @@ export function toast(
   window.setTimeout(() => el.remove(), 6000);
 }
 
-/** Close whatever overlay is open. */
+/** The modal on screen, held by `holdModal`; releasing it gives the window its focus back. */
+let releaseModal: ((returnFocus?: boolean) => void) | null = null;
+/** What had focus when a popover opened, to go back to when it closes. */
+let popoverOpener: HTMLElement | null = null;
+
+/** Close whatever overlay is open, and put the keyboard back where it was before it opened. */
 export function closeOverlay(): void {
+  const layerHadFocus = layer().contains(document.activeElement);
   fill(layer());
   document.removeEventListener("keydown", onEscape, true);
+  const release = releaseModal;
+  releaseModal = null;
+  release?.();
+  const opener = popoverOpener;
+  popoverOpener = null;
+  // A popover's item may already have moved focus on purpose (a file dialog, another
+  // view); only focus left in the emptied layer, or on nothing, goes back to the button.
+  if (opener?.isConnected && (layerHadFocus || document.activeElement === document.body)) opener.focus({ preventScroll: true });
 }
 
 function onEscape(e: KeyboardEvent) {
@@ -54,13 +69,18 @@ function onEscape(e: KeyboardEvent) {
   }
 }
 
+/** Bumped per modal, so each one's heading gets an id of its own. */
+let modalSeq = 0;
+
 /**
- * Put `content` on screen over a scrim.
- *
- * Escape closes, clicking the scrim closes, and focus moves into the dialog so the
- * keyboard does not stay behind in the window underneath.
+ * Put `content` on screen over a scrim, as a modal dialog (`dialog.ts`): focus moves in,
+ * Tab stays inside, Escape or a press on the scrim closes it, and focus goes back to what
+ * had it. The dialog is named by its first heading when it has no name of its own.
  */
 export function openModal(content: HTMLElement): void {
+  // One modal at a time: the layer is about to be replaced, so the last one lets go first.
+  releaseModal?.(false);
+  releaseModal = null;
   const scrim = h("div.scrim", {
     onmousedown: (e: MouseEvent) => {
       if (e.target === scrim) closeOverlay();
@@ -68,10 +88,18 @@ export function openModal(content: HTMLElement): void {
   });
   content.setAttribute("role", "dialog");
   content.setAttribute("aria-modal", "true");
+  const heading = content.querySelector<HTMLElement>("h1, h2, h3");
+  if (heading && !content.hasAttribute("aria-label") && !content.hasAttribute("aria-labelledby")) {
+    heading.id ||= `modal-title-${++modalSeq}`;
+    content.setAttribute("aria-labelledby", heading.id);
+  }
   scrim.append(content);
   fill(layer(), scrim);
-  document.addEventListener("keydown", onEscape, true);
-  (content.querySelector<HTMLElement>("button, input, [tabindex]") ?? content).focus();
+  document.removeEventListener("keydown", onEscape, true);
+  releaseModal = holdModal(content, {
+    initial: () => content.querySelector<HTMLElement>("button, input, select, textarea, [tabindex]:not([tabindex='-1'])"),
+    onEscape: closeOverlay,
+  });
 }
 
 /** A modal built from the usual parts. */
@@ -91,6 +119,9 @@ export function modal(
 
 /** Anchor a popover to an element, kept inside the window. */
 export function openPopover(anchor: HTMLElement, content: HTMLElement): void {
+  releaseModal?.(false);
+  releaseModal = null;
+  popoverOpener = anchor;
   const box = h("div.popover", null, content);
   const scrim = h("div", {
     style: { position: "fixed", inset: "0", zIndex: "44" },

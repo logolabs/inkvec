@@ -125,7 +125,7 @@ export function showcaseScreen(close: () => void): HTMLElement {
     h(
       "div.screenbar",
       { "data-tauri-drag-region": "" },
-      h("span", { style: { fontSize: "12.5px", fontWeight: "600" } }, "Showcase"),
+      h("span", { id: "screen-title", style: { fontSize: "12.5px", fontWeight: "600" } }, "Showcase"),
       h("div.spacer"),
       h("button.btn.compact", { onclick: close }, "Done"),
       h("div.sep"),

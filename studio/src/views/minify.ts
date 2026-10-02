@@ -17,6 +17,7 @@ import { copyText, pickFiles, readPickedText, revealAction, saveFile, WEB, type 
 import { bytes, count, de00, percent, seconds, type Store } from "../lib/state";
 import { toneOfPixels } from "../lib/tone";
 import { toast } from "../components/overlays";
+import { tapToWipe, wipeSlider, type WipeModel } from "../components/wipe";
 
 /**
  * The Minify tab's view, built once and kept: the drawing before and after, the tolerance
@@ -26,7 +27,7 @@ import { toast } from "../components/overlays";
 export function createMinify(store: Store): HTMLElement {
   const before = h("div.pane", null, h("span.eyebrow.panelabel", null, "Before"));
   const after = h("div.pane", null, h("span.eyebrow.panelabel", null, "After"));
-  const divider = h("div.wipehandle", { role: "separator", "aria-label": "Wipe" });
+  const divider = h("div.wipehandle");
   const panes = h("div.panes", null, before, after, divider);
   const tools = h("div.viewertools");
   const stage = h("main.stage", null, tools, panes);
@@ -72,6 +73,7 @@ export function createMinify(store: Store): HTMLElement {
       after.classList.remove("hidden");
       const pct = `${(wipe * 100).toFixed(2)}%`;
       divider.style.left = pct;
+      syncWipe();
       before.style.clipPath = `inset(0 ${(100 - wipe * 100).toFixed(2)}% 0 0)`;
       after.style.clipPath = `inset(0 0 0 ${pct})`;
     } else {
@@ -82,19 +84,20 @@ export function createMinify(store: Store): HTMLElement {
     }
   };
 
-  divider.addEventListener("pointerdown", (e: PointerEvent) => {
-    divider.setPointerCapture(e.pointerId);
-    const move = (m: PointerEvent) => {
-      const r = panes.getBoundingClientRect();
-      wipe = Math.min(0.98, Math.max(0.02, (m.clientX - r.left) / r.width));
+  // The divider is the same slider as the Vectorize viewer's (components/wipe.ts): dragged,
+  // stepped with the arrow keys, and in Wipe a click on the panes moves it there. This tab
+  // has no pan, so any click on the panes is that tap.
+  const wipeModel: WipeModel = {
+    get: () => wipe,
+    set: (v) => {
+      wipe = v;
       layout();
-    };
-    const up = () => {
-      divider.removeEventListener("pointermove", move);
-      divider.removeEventListener("pointerup", up);
-    };
-    divider.addEventListener("pointermove", move);
-    divider.addEventListener("pointerup", up);
+    },
+    names: () => ["before", "after"],
+  };
+  const syncWipe = wipeSlider(divider, panes, wipeModel);
+  panes.addEventListener("click", (e: MouseEvent) => {
+    if (view === "wipe" && e.target !== divider) tapToWipe(panes, wipeModel, e.clientX);
   });
 
   window.addEventListener("keydown", (e) => {

@@ -25,8 +25,11 @@
 //!    runs first, and when its cost is below [`cost_floor`] -- a lower bound on what *any*
 //!    fitted path of this polyline can cost -- the dynamic program is not run at all. When
 //!    it is not below the floor, the program runs and the choice is made as before.
-//! 2. **Every other boundary.** The dynamic program, then the primitive search, then the
-//!    comparison.
+//! 2. **Every other boundary.** The dynamic program and the primitive search run side by
+//!    side ([`rayon::join`]): the search reads only the polyline, and only the final
+//!    comparison needs both. The program runs on the calling thread and the search is
+//!    offered to an idle one, so the boundary's wall time falls from the sum of the two
+//!    towards the longer of them.
 //!
 //! # Why both are exact
 //!
@@ -43,7 +46,10 @@
 //! r2-qspeed (2026-10-01, a07b394, 246 screen icons at 128 px, one thread, 60.6 s of ring
 //! work): the frame's program was 8.1 s of it (13 %), its primitive search 1.1 s. The
 //! frame is the largest ring in 50 of the 246 icons, and at 128 px the stage's wall time
-//! is its largest ring (work/span 2.86, median).
+//! is its largest ring (work/span 2.86, median). In that ring the primitive search is
+//! 18 % of the time at 128 px and 33 % at 2048 px, which step 2 takes off the critical
+//! path whenever a thread is idle -- at the stage's tail, where the largest ring is left
+//! running alone.
 //!
 //! # Literature
 //!
@@ -57,6 +63,13 @@
 //!   least weighted sum of squared distances from points to any line is the smallest
 //!   eigenvalue of their weighted scatter matrix about the centroid; [`cost_floor`] uses
 //!   it to bound a single-line path.
+//! - Method from: Blumofe, R. D. & Leiserson, C. E. (1999), "Scheduling multithreaded
+//!   computations by work stealing", *J. ACM* 46(5):720–748, doi:10.1145/324133.324234 --
+//!   the randomised work-stealing fork-join that `rayon::join` implements, with expected
+//!   time `T1/P + O(T∞)`; step 2 lowers the span `T∞` (the largest ring) without adding
+//!   work. A thread waiting in a join may run another boundary's whole job meanwhile
+//!   (rayon's documentation of `join`), which can delay that join's return; measured, see
+//!   the commit that added it.
 //! - Not from the literature: the parameter-count floor itself, because it is a property
 //!   of this objective's prices (every segment costs at least two numbers). See also the
 //!   price floor of `crate::merge`, the same argument applied to one merge.
@@ -210,8 +223,7 @@ pub fn primitive_offer(poly: &Polyline, cfg: &FitConfig) -> Option<PrimitiveOffe
 /// A boundary's description, with no work the choice would discard: see the module
 /// comment. `frame` says the boundary is the image frame ([`lies_on_frame`]); `fit` runs
 /// the dynamic program on `poly` (with whatever cancellation and timing the caller wraps
-/// it in) and is called at most once. `Send` because a later step runs it beside the
-/// primitive search.
+/// it in) and is called at most once, possibly on another thread (hence `Send`).
 ///
 /// The result is exactly [`choose`]`(poly, fit(), primitive_offer(poly, cfg), cfg)`.
 /// Cost: one primitive search, plus the program unless the frame's primitive is below
@@ -232,8 +244,11 @@ pub fn describe(
         }
         return (fit(), None);
     }
-    let curve = fit();
-    choose(poly, curve, primitive_offer(poly, cfg), cfg)
+    // The program on this thread, the search offered to an idle one. Both are pure
+    // functions of `poly` and `cfg`, so which thread runs which, and in what order,
+    // changes nothing but the wall time.
+    let (curve, offer) = rayon::join(fit, || primitive_offer(poly, cfg));
+    choose(poly, curve, offer, cfg)
 }
 
 #[cfg(test)]

@@ -146,8 +146,12 @@
 
   --accent: #c9754a; /* fills are identical in both themes */
   --accent-text: #9c5730; /* AA on white at 13 px */
-  --accent-hover: #b3603a;
-  --accent-ink: #faf8f5;
+  /* What is drawn on a copper fill (a primary button's label, a pressed segment, a switch's
+     knob) is the dark theme's ink here too: cream on #c9754a is 3.23:1 and fails SC 1.4.3 at
+     13 px, #1a1816 on it is 5.17:1. The hover fill is the dark theme's lighter copper for
+     the same reason (6.40:1; the darker #b3603a gave 3.92:1 under dark ink). */
+  --accent-hover: #d4896a;
+  --accent-ink: #1a1816;
   --accent-soft: rgba(201, 117, 74, 0.14);
   --accent-subtle: rgba(201, 117, 74, 0.08);
   --gold: #8a6a3f;

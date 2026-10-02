@@ -52,13 +52,13 @@ jobs:
     name: Linux (system library)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       # The generated options struct and the header copy are committed and current.
       - run: python bindings/codegen/generate.py --check
-      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: dtolnay/rust-toolchain@1.120.0
       - uses: Swatinem/rust-cache@v2
         with:
           key: swift-linux
@@ -86,8 +86,8 @@ jobs:
     name: XCFramework (macOS, iOS)
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.120.0
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
       - uses: Swatinem/rust-cache@v2
@@ -120,7 +120,7 @@ jobs:
               CODE_SIGNING_ALLOWED=NO -quiet
           done
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: swift-xcframework
           path: |
@@ -138,8 +138,8 @@ jobs:
     env:
       SWIFT_MIRROR_TOKEN: ${{ secrets.SWIFT_MIRROR_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: swift-xcframework
           path: dist
@@ -155,7 +155,7 @@ jobs:
           echo "CHECKSUM=$have" >> "$GITHUB_ENV"
       # `draft: true` on purpose: the release stays a draft until a maintainer publishes
       # it (see release.yml). Leaving it out makes the action publish the draft it finds.
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           draft: true
           tag_name: ${{ github.ref_name }}
@@ -163,7 +163,7 @@ jobs:
           files: dist/InkvecFFI.xcframework.zip
       - name: Render the mirror
         run: python3 packages/swift/scripts/render_mirror.py "$RUNNER_TEMP/mirror" --checksum "$CHECKSUM"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: swift-mirror
           path: ${{ runner.temp }}/mirror

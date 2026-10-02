@@ -42,10 +42,10 @@ jobs:
       run:
         working-directory: packages/npm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Stable for the single-threaded build, nightly with rust-src for the threaded one
       # (it rebuilds std with atomics); see tools/build_wasm.sh.
-      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: dtolnay/rust-toolchain@1.120.0
         with:
           targets: wasm32-unknown-unknown
       - uses: dtolnay/rust-toolchain@nightly
@@ -59,7 +59,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: wasm-pack
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -77,7 +77,7 @@ jobs:
         env:
           CHROME: /usr/bin/google-chrome
       - run: npm pack
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: npm-package
           path: packages/npm/*.tgz
@@ -94,12 +94,12 @@ jobs:
     env:
       NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: npm-package
           path: dist-npm

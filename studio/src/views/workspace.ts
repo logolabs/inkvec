@@ -546,7 +546,7 @@ function firstRun(store: Store, act: WorkspaceActions, samples: SampleInfo[], fa
         // and WebP while seven were accepted).
         h("span.faint.resting", { style: { fontSize: "13px" } }, OPENS),
         h(
-          "span.faint.resting",
+          "span.faint.resting.kbdhint",
           { style: { fontSize: "13px" } },
           "or press ",
           h("kbd", null, `${mod}+O`),

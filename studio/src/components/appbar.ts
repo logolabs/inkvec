@@ -40,8 +40,8 @@ export function renderAppBar(appbar: HTMLElement, store: Store, act: AppBarActio
         )
       : null,
     h(
-      "div.seg",
-      { style: { marginLeft: "auto" } },
+      "div.seg.apptabs",
+      { role: "group", "aria-label": "Tabs" },
       ...(
         [
           ["vectorize", "Vectorize"],
@@ -54,9 +54,10 @@ export function renderAppBar(appbar: HTMLElement, store: Store, act: AppBarActio
         h("button", { "aria-pressed": String(st.tab === id), onclick: () => store.set({ tab: id }) }, label),
       ),
     ),
+    // On a phone this row scrolls sideways on its own (app.css, "compact"), under the tabs.
     h(
-      "div",
-      { style: { marginLeft: "auto", display: "flex", alignItems: "center", gap: "2px" } },
+      "div.appactions",
+      null,
       h("button.btn.ghost.compact", { onclick: () => act.openFile() }, `Open…`),
       // Recent files are paths on this computer; a browser never learns them.
       WEB

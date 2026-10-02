@@ -18,9 +18,13 @@ an edge, not an enlarged bitmap.</p>
 <h2 id="comparing-side-by-side-wipe-ab">Comparing: side by side, wipe, A/B</h2>
 <p>The three buttons at the left of the toolbar arrange the two panes.</p>
 <ul>
-<li><strong>Side by side</strong>: the two panes next to each other.</li>
-<li><strong>Wipe</strong>: one pane over the other, with a divider. Drag the divider to move it; the source is on
-  the left of it and the SVG on the right.</li>
+<li><strong>Side by side</strong>: the two panes next to each other (one above the other on a phone held
+  upright).</li>
+<li><strong>Wipe</strong>: one pane over the other, with a divider. Drag the divider to move it, or tap or click
+  where it should go; the source is on the left of it and the SVG on the right. From the keyboard,
+  <kbd>Tab</kbd> to the divider and move it with the arrow keys (see
+  <a href="shortcuts.html#in-the-vectorize-viewer">Keyboard and mouse</a>); a screen reader announces how much
+  of each side is showing.</li>
 <li><strong>A/B</strong>: one pane at a time, the SVG. Hold <kbd>Space</kbd> to see the source instead, and
   release to go back. Flicking between the two in place is the quickest way to see a small
   difference.</li>
@@ -40,7 +44,11 @@ an edge, not an enlarged bitmap.</p>
 </tr>
 <tr>
 <td>Pan</td>
-<td>Drag with the left button</td>
+<td>Drag with the left button, or press the arrow buttons beside the zoom stops</td>
+</tr>
+<tr>
+<td>Pan from the keyboard</td>
+<td><kbd>Tab</kbd> to the viewer and use the arrow keys (<kbd>Shift</kbd> for a bigger step)</td>
 </tr>
 <tr>
 <td>Fit the drawing to the window</td>
@@ -57,7 +65,8 @@ an edge, not an enlarged bitmap.</p>
 </tbody>
 </table>
 <p>Zoom runs from a quarter of the image's size to 64×. The view fits the window until you zoom or
-pan; after that it stays where you put it when the window is resized. From 4× up, the source is
+pan; after that it stays where you put it when the window is resized. The four arrow buttons
+appear beside <strong>Fit</strong> once the view is no longer fitted, and each moves it a quarter of the pane. From 4× up, the source is
 drawn with square pixels rather than smoothed, because those pixels are the evidence the trace was
 measured against.</p>
 <h2 id="overlays-what-the-svg-is-made-of">Overlays: what the SVG is made of</h2>
@@ -131,12 +140,18 @@ chip at the top right of the stage says which one you are looking at:</p>
 size, draft time limit and the wait before the full trace are in
 <a href="settings.html#performance">Settings, Performance</a>.</p>
 <p>Only the full trace is ever exported: <a href="export.html">Export</a> always runs one first.</p>
+<h2 id="the-engine-log">The engine log</h2>
+<p>The small panel at the bottom right of the stage, <strong>Engine log</strong>, is what the engine is doing,
+line by line: each stage of the trace with the time it started, what it does and how long it took
+(or, while it runs, its own clock), and the notes the engine makes on the way (<em>8 inks</em>). It keeps
+the last trace's log, with the total time in its header, until the next trace starts. <strong>Hide</strong> and
+<strong>Show</strong> fold it to its header; on a phone it starts folded so it does not cover the drawing.</p>
 <h2 id="the-status-strip">The status strip</h2>
 <p>The line along the bottom of the stage says what is happening: the stage the trace is on and the
 time so far (with <kbd>Esc</kbd> to cancel), or how long the last trace took, at what size, and
 how many segments it has. When the update check has found a new version, it says so here and
 nowhere else. The right end always carries the same sentence: <em>Your image never leaves this
-computer.</em></p>
+computer.</em> (On a phone there is no room for it; Settings and About say the same.)</p>
 <h2 id="when-the-stage-is-not-showing-a-drawing">When the stage is not showing a drawing</h2>
 <table>
 <thead>
@@ -151,6 +166,11 @@ computer.</em></p>
 <td>Reading <em>file</em></td>
 <td>The image is being decoded; tracing starts as soon as it is in memory.</td>
 <td>Wait.</td>
+</tr>
+<tr>
+<td>That file did not open</td>
+<td>The first file you opened is not an image the app reads (a text file, an empty file, a PDF, a phone's HEIC or AVIF photo). The card says what the app found and lists the formats it opens; the drop area and the samples stay under it.</td>
+<td>Open another image, or save the picture as PNG or JPEG first.</td>
 </tr>
 <tr>
 <td>This image is one flat colour</td>
@@ -192,7 +212,7 @@ computer.</em></p>
 <p>A large image is traced at the <strong>Trace size</strong> (2048 px on the longer side by default) and the SVG
 is still written at the image's full size. When that happens a note says so; it is normal, and the
 SVG scales without limit.</p><nav class="pagenav"><a class="prev" href="getting-started.html"><span class="dir">Previous</span><span class="lbl">Getting started</span></a><a class="next" href="result.html"><span class="dir">Next</span><span class="lbl">Result</span></a></nav></article></main>
-  <aside class="rail"><h5>On this page</h5><ul><ul><li class="l2"><a href="#comparing-side-by-side-wipe-ab">Comparing: side by side, wipe, A/B</a></li><li class="l2"><a href="#zooming-and-panning">Zooming and panning</a></li><li class="l2"><a href="#overlays-what-the-svg-is-made-of">Overlays: what the SVG is made of</a></li><li class="l2"><a href="#detail-the-pixel-grid-under-the-edge">Detail: the pixel grid under the edge</a></li><li class="l2"><a href="#certainty">Certainty</a></li><li class="l2"><a href="#draft-and-full-traces">Draft and full traces</a></li><li class="l2"><a href="#the-status-strip">The status strip</a></li><li class="l2"><a href="#when-the-stage-is-not-showing-a-drawing">When the stage is not showing a drawing</a></li></ul></ul></aside>
+  <aside class="rail"><h5>On this page</h5><ul><ul><li class="l2"><a href="#comparing-side-by-side-wipe-ab">Comparing: side by side, wipe, A/B</a></li><li class="l2"><a href="#zooming-and-panning">Zooming and panning</a></li><li class="l2"><a href="#overlays-what-the-svg-is-made-of">Overlays: what the SVG is made of</a></li><li class="l2"><a href="#detail-the-pixel-grid-under-the-edge">Detail: the pixel grid under the edge</a></li><li class="l2"><a href="#certainty">Certainty</a></li><li class="l2"><a href="#draft-and-full-traces">Draft and full traces</a></li><li class="l2"><a href="#the-engine-log">The engine log</a></li><li class="l2"><a href="#the-status-strip">The status strip</a></li><li class="l2"><a href="#when-the-stage-is-not-showing-a-drawing">When the stage is not showing a drawing</a></li></ul></ul></aside>
 </div>
 </body>
 </html>

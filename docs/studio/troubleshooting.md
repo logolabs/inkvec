@@ -139,7 +139,7 @@ folder.
 [Inkvec Studio and Inkvec Studio Lite](README.md#inkvec-studio-and-inkvec-studio-lite).
 
 **The first visit takes a few seconds to start.** The loading screen is the engine arriving
-(about 5 MB) and starting; its bar follows the real download. Later visits start from the
+(about 6 MB) and starting; its bar follows the real download. Later visits start from the
 browser's cache.
 
 **The denoiser is on but the trace looks the same, and the rail says it is downloading.** The
@@ -150,6 +150,16 @@ the status strip.
 **Nothing is downloaded in the background.** Your browser asks sites to save data, so Studio
 Lite waits until you turn the denoiser on. Inside the Hugging Face frame the denoiser cannot run
 at all: use **Open in its own tab**.
+
+**I opened a file and it says it did not open.** The file is not an image the app reads: a
+text file renamed to `.png`, an empty file, a PDF, or a phone photo in HEIC or AVIF. The card
+says what the app found in it. Save the picture as PNG or JPEG (any image editor, or a
+screenshot) and open that.
+
+**Can I use Studio Lite on a phone?** Yes. Held upright it is one column: the drawing, then the
+rail, with Export at the bottom of the screen; turned on its side it keeps the two side by side.
+Everything works, but a phone is slower and has less memory than a laptop, so a large image takes
+longer; the desktop app is the fastest.
 
 **My settings are not remembered.** A private window, or a browser set to block site data, gives
 the page nowhere to keep them. The app still works, from the defaults each time.

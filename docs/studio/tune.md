@@ -1,6 +1,6 @@
 # Tune: presets and every control
 
-The **Tune** half of the rail holds the settings for the next trace: eight presets, any presets you
+The **Tune** half of the rail holds the settings for the next trace: ten presets, any presets you
 saved, and twenty-three controls. Moving any of them starts a draft at once and a full trace a moment
 later (see [draft and full traces](viewer.md#draft-and-full-traces)); the readout at the foot of
 the rail shows what the change bought or cost.

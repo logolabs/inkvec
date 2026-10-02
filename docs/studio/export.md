@@ -26,7 +26,11 @@ estimate. The button at the bottom says how many files and how many bytes in tot
 
 **To** is the destination folder. It starts at the *Default output folder* from
 [Settings](settings.md#general) if you set one; **Choose** or **Change** picks another. With none
-chosen, Export asks for one. **Close**, or a click outside the sheet, closes it.
+chosen, Export asks for one. **Close**, <kbd>Esc</kbd>, or a click outside the sheet closes it.
+
+From the keyboard the sheet works like any dialog: it takes the focus when it opens (on the first
+format), <kbd>Tab</kbd> and <kbd>Shift</kbd>+<kbd>Tab</kbd> move between its rows without leaving it,
+<kbd>Space</kbd> ticks or unticks a row, and when it closes the focus goes back to where it was.
 
 **Export** always runs a **fresh full trace** first, then writes the files. What is on screen may be
 a draft, and a draft should never be shipped by accident. When the files are written, a note says

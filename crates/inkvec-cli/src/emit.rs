@@ -1235,11 +1235,20 @@ fn seam_overrides(
 /// under them was merged. They are disjoint, so even-odd paints their union; and because
 /// it is one path rather than one per face, the renderer composites the translucent paint
 /// once and no seam appears where two of them met.
+///
+/// The layers are written **back to front**. `an.layers` is in peel order, frontmost first
+/// (`inkvec_trace::alpha::AlphaAnalysis::layers`), because the decomposition can only take a
+/// layer off once nothing lies over it. Written in that order the frontmost layer went down
+/// first and every layer behind it was composited over it: on `synthetic/stack_overlap`
+/// the blue disc came out on top of the green one that covers it, dE00 0.019 -> 2.90 with
+/// `--layers`. Over a face both cover, the document now draws
+/// `a₀·C₀ + (1 − a₀)·(a₁·C₁ + (1 − a₁)·G)`, the stack the decomposition peeled. The ids
+/// keep the peel index, `layer-0` frontmost.
 fn write_layers(doc: &ColorDoc, decimals: usize, body: &mut String) {
     let Some((an, shape_order)) = doc.layers else {
         return;
     };
-    for (k, l) in an.layers.iter().enumerate() {
+    for (k, l) in an.layers.iter().enumerate().rev() {
         let mut d = String::new();
         if let Some(rings) = shape_order.get(k) {
             for ring in rings {

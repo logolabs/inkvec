@@ -304,9 +304,24 @@ fn grow_in_segment(inp: &Inputs, sid: u32, ids: &[u32], found: &mut Vec<(Vec<u32
             continue;
         }
         if inp.debug {
+            let members: Vec<String> = cur
+                .iter()
+                .map(|&c| {
+                    let f = &inp.fits[c as usize];
+                    format!(
+                        "{c}:{}px {} cost {:.0}",
+                        inp.members[c as usize].len(),
+                        f.model.kind(),
+                        f.cost
+                    )
+                })
+                .collect();
             eprintln!(
-                "gregions segment {sid}: grew {cur:?} -> {}",
-                cur_fit.model.kind()
+                "gregions segment {sid}: grew {cur:?} -> {} (gain {:?}) from [{}]; {:?}",
+                cur_fit.model.kind(),
+                group_gain(inp, &cur, &own_parts(inp, &cur), &cur_fit),
+                members.join(", "),
+                cur_fit.model
             );
         }
         found.push((cur, cur_fit));
@@ -401,12 +416,31 @@ fn mean_residual(inp: &Inputs, ids: &[u32], fit: &FillFit) -> f64 {
 /// `gain = ½ · (n/m) · Σ_i Σ_ch (e(split_i)² − e(union_i)²) / σ²
 ///         + λ · (Σ_parts params − params_union)`
 ///
-/// where `split_i` is the prediction of the part whose components hold pixel `i`. Positive
-/// means the union is the shorter description. Both alternatives are priced on the same
+/// where `split_i` is the prediction of the part whose components hold pixel `i` -- or, for
+/// a pixel with a 4-neighbour in another part, the best coverage blend of the two parts'
+/// fills there ([`seam_blend`]), when that is closer: the emitted SVG draws such a pixel as
+/// two shapes meeting inside it, and its anti-aliasing is what the boundary solve fits.
+/// Priced as one part's flat colour, a seam pixel favours any union that ramps across the
+/// seam: two flat tiles of a mosaic (synthetic mosaic_grid6, +0.031 dE00) were joined by a
+/// narrow ramp that "explained" their anti-aliasing. Positive means the union is the
+/// shorter description. Both alternatives are priced on the same
 /// pixels, so a cost measured on another population (each part's fit saw its own samples)
 /// cannot leak in -- the reason `common_pixel_gain` exists in `bands.rs`, of which this is
-/// the k-part form. `σ` is floored at half an LSB as in `fit_samples`. `None` when the union
-/// has no such pixel, a pixel belongs to no part, or the gain is not finite.
+/// the k-part form. `σ` is floored at half an LSB as in `fit_samples`.
+///
+/// One more condition, per part: the union must not describe any part's own pixels worse
+/// than the part's fill does by more than the part's parameters are worth (the part's share
+/// of the gain, `½·Σ_{i∈k}(e(split_i)² − e(union_i)²)/σ² + λ·params_k`, must not be
+/// negative); otherwise the gain is negative infinity. The total gain alone lets a part
+/// with a poor fill buy a union that degrades a well-fitted neighbour: in synthetic
+/// mosaic_grid6 a component holding two tiles under one palette ink (its flat costs 367k)
+/// bought an ellipse across three tiles, +0.031 dE00. Not from the literature: Zhu & Yuille
+/// accept a merge on the total energy alone; this asks the merge to be no worse for any
+/// member, a stricter rule, because here a member's fill can be wrong for reasons (the
+/// palette) the merge cannot repair.
+///
+/// `None` when the union has no such pixel, a pixel belongs to no part, or the gain is not
+/// finite.
 pub(crate) fn group_gain(
     inp: &Inputs,
     ids: &[u32],
@@ -420,11 +454,9 @@ pub(crate) fn group_gain(
     let group = inp.group;
     // Every strictly interior pixel, smooth or not. The fit took only smooth pixels as
     // evidence (a banded ramp has no other), but the price must also see the
-    // discontinuity pixels *inside* the union: they are where a union erases an edge
-    // between two of its members, which the split description keeps. Pricing only smooth
-    // pixels let a union of a light lobe and the darker bell around it (noto jellyfish,
-    // emoji_u1fabc) pass at +0.37 dE00. The union's outer rim is not interior and stays
-    // out, as in every other price here.
+    // discontinuity pixels *inside* the union: they are where a union would erase an edge
+    // between two of its members, which the split description keeps. The union's outer
+    // rim is not interior and stays out, as in every other price here.
     let s = collect_samples(
         inp.rgb,
         inp.w,
@@ -451,27 +483,82 @@ pub(crate) fn group_gain(
     } else {
         0.5 / 255.0
     };
+    let part_at = |q: usize| {
+        part_of
+            .binary_search_by_key(&group[q], |&(c, _)| c)
+            .ok()
+            .map(|j| part_of[j].1)
+    };
+    // Squared residual beyond the dead zone, summed over the channels.
+    let err = |o: [f32; 3], q: [f32; 3]| -> f64 {
+        (0..3)
+            .map(|c| {
+                let d = ((o[c] - q[c]).abs() as f64 - QUANT_HALF_STEP).max(0.0);
+                d * d
+            })
+            .sum()
+    };
+    let w = inp.w;
     let stride = (s.len() / fit_cap()).max(1);
     let (mut difference, mut used) = (0.0f64, 0usize);
+    // The same difference per part, for the per-part condition below.
+    let mut by_part = vec![0.0f64; parts.len()];
     for i in (0..s.len()).step_by(stride) {
-        let comp = group[s.px[i]];
-        let k = part_of
-            .binary_search_by_key(&comp, |&(c, _)| c)
-            .ok()
-            .map(|j| part_of[j].1)?;
-        let split = evals[k].color_at(s.x[i], s.y[i]);
-        let merged = union_eval.color_at(s.x[i], s.y[i]);
-        for c in 0..3 {
-            let old = ((s.srgb[i][c] - split[c]).abs() as f64 - QUANT_HALF_STEP).max(0.0);
-            let new = ((s.srgb[i][c] - merged[c]).abs() as f64 - QUANT_HALF_STEP).max(0.0);
-            difference += old * old - new * new;
+        let (p, o) = (s.px[i], s.srgb[i]);
+        let k = part_at(p)?;
+        let own = evals[k].color_at(s.x[i], s.y[i]);
+        // On a seam between two parts the split description does not paint one part's
+        // fill: the emitted boundary covers the pixel partly by each, so it is priced as
+        // the best coverage blend of the two fills there (`seam_blend`). A pixel is
+        // strictly interior, so its four neighbours exist and lie in the union.
+        let mut split_err = err(o, own);
+        for q in [p - 1, p + 1, p - w, p + w] {
+            match part_at(q) {
+                Some(k2) if k2 != k => {
+                    let other = evals[k2].color_at(s.x[i], s.y[i]);
+                    split_err = split_err.min(err(o, seam_blend(o, own, other)));
+                }
+                _ => {}
+            }
         }
+        let merged = union_eval.color_at(s.x[i], s.y[i]);
+        let d = split_err - err(o, merged);
+        difference += d;
+        by_part[k] += d;
         used += 1;
     }
+    let scale = 0.5 / (sigma * sigma) * s.len() as f64 / used as f64;
+    // No part may be described worse by the union, on its own pixels, than its own
+    // parameters are worth: `½·Σ_{i∈k} (e(split_i)² − e(union_i)²)/σ² + λ·params_k ≥ 0` for
+    // every part `k`. The total gain is the sum of these minus `λ·params_union`, so a part
+    // whose fill is poor (a component holding two flat colours the palette gave one ink)
+    // could otherwise pay for a union that degrades a well-described neighbour -- the
+    // mosaic tile next to it, the hair next to the crown's band.
+    if parts
+        .iter()
+        .zip(&by_part)
+        .any(|((_, f), &d)| scale * d + inp.lambda * f.params < 0.0)
+    {
+        return Some(f64::NEG_INFINITY);
+    }
     let params_split: f64 = parts.iter().map(|(_, f)| f.params).sum();
-    let gain = 0.5 * difference / (sigma * sigma) * s.len() as f64 / used as f64
-        + inp.lambda * (params_split - union.params);
+    let gain = scale * difference + inp.lambda * (params_split - union.params);
     gain.is_finite().then_some(gain)
+}
+
+/// The point on the segment between the colours `a` and `b` (sRGB) nearest the observed
+/// `o`: `a + t·(b − a)` with `t = clamp(((o − a)·(b − a)) / |b − a|², 0, 1)`, the linear
+/// coverage blend of two fills that best explains a pixel they share (the unmixing the
+/// planar map does at every boundary pixel). `a` itself when the two agree.
+fn seam_blend(o: [f32; 3], a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+    if dd <= 0.0 {
+        return a;
+    }
+    let t =
+        (((o[0] - a[0]) * d[0] + (o[1] - a[1]) * d[1] + (o[2] - a[2]) * d[2]) / dd).clamp(0.0, 1.0);
+    [a[0] + t * d[0], a[1] + t * d[1], a[2] + t * d[2]]
 }
 
 #[cfg(test)]
@@ -624,6 +711,61 @@ mod tests {
         assert!(worse < 0.0);
         // No component of the union in any part: nothing to price.
         assert!(group_gain(&inp, &ids, &[], &fits[0]).is_none());
+    }
+
+    #[test]
+    fn a_seam_pixel_is_priced_as_a_blend_of_its_two_fills() {
+        let (a, b) = ([0.2f32, 0.4, 0.6], [0.8f32, 0.4, 0.0]);
+        // Half way between: the blend reproduces it.
+        let mid = [0.5, 0.4, 0.3];
+        let q = seam_blend(mid, a, b);
+        assert!((0..3).all(|k| (q[k] - mid[k]).abs() < 1e-6));
+        // Beyond either end: clamped to that fill.
+        assert_eq!(seam_blend([0.0, 0.4, 0.9], a, b), a);
+        assert_eq!(seam_blend([1.0, 0.4, -0.3], a, b), b);
+        // Equal fills: that fill.
+        assert_eq!(seam_blend(mid, a, a), a);
+    }
+
+    #[test]
+    fn mdl_refuses_a_ramp_across_the_anti_aliased_seam_of_two_flats() {
+        // Two flat tiles meeting at column 24 with one anti-aliased column between them:
+        // a 2 px ramp across the seam reproduces the blend column exactly, but the split
+        // description reproduces it too (as a coverage blend), so the ramp buys nothing
+        // for its parameters.
+        let (w, h) = (48, 24);
+        let (ca, cb) = ([0.8f32, 0.3, 0.3], [0.8f32, 0.5, 0.3]);
+        let mut b = banded(w, h, 2, None);
+        for y in 0..h {
+            for x in 0..w {
+                b.rgb[y * w + x] = match x.cmp(&24) {
+                    std::cmp::Ordering::Less => ca,
+                    std::cmp::Ordering::Equal => [0.8, 0.4, 0.3],
+                    std::cmp::Ordering::Greater => cb,
+                };
+            }
+        }
+        let lambda = 0.5 * ((w * h) as f64).ln();
+        let fits = vec![flat_only(ca, lambda), flat_only(cb, lambda)];
+        let alive = vec![true; 2];
+        let ramp = FillModel::Linear {
+            p0: (23.0, 0.0),
+            p1: (25.0, 0.0),
+            c0: ca,
+            c1: cb,
+            interp: Interp::Srgb,
+            mids: vec![],
+        };
+        let union = FillFit {
+            params: ramp.params(),
+            cost: lambda * ramp.params(),
+            chi2: 0.0,
+            model: ramp,
+        };
+        let inp = inputs(&b, &fits, &alive, true);
+        let ids = [0u32, 1];
+        let gain = group_gain(&inp, &ids, &own_parts(&inp, &ids), &union).expect("pixels");
+        assert!(gain < 0.0, "gain {gain}");
     }
 
     #[test]

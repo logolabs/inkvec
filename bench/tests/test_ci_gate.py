@@ -3,6 +3,7 @@ mode, writing a baseline, the paired verdicts, and the rule that a byte-identica
 keeps the baseline's numbers. numpy only; no Rust build, no renders."""
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import re
@@ -28,8 +29,9 @@ def rows(scale: float = 1.0, changed: tuple[str, ...] | None = None) -> dict:
         k = f"{it['corpus']}/{it['stem']}"
         hit = changed is None or k in changed
         s = scale if hit else 1.0
+        digest = hashlib.sha256(f"{k}-{s if hit else 1.0}".encode()).hexdigest()
         out[k] = {"corpus": it["corpus"], "de00": 0.1 * (1 + n % 5) * s, "turning": 0.04 * s,
-                  "ratio": 1.2 * s, "self_res": 0.003, "sha256": f"{k}-{s if hit else 1.0}"}
+                  "ratio": 1.2 * s, "self_res": 0.003, "sha256": digest}
     return out
 
 
@@ -74,8 +76,13 @@ class GateFlowTests(unittest.TestCase):
 
     def test_pack_round_trip(self):
         r = rows()
-        back = ci_gate.unpack_rows(json.loads(json.dumps(ci_gate.pack_rows(r))))
-        self.assertEqual(back, r)
+        back = ci_gate.unpack_rows(json.loads(ci_gate.dumps({"icons": ci_gate.pack_rows(r)}))["icons"])
+        self.assertEqual(set(back), set(r))
+        for k in r:
+            self.assertEqual(back[k]["corpus"], r[k]["corpus"])
+            self.assertEqual(back[k]["sha256"], r[k]["sha256"][:ci_gate.SHA_CHARS])
+            for ax in ci_gate.REPORTED_AXES:
+                self.assertAlmostEqual(back[k][ax], r[k][ax], delta=abs(r[k][ax]) * 1e-8)
 
     def test_write_then_identical_build_passes(self):
         run = Run(self.tmp, {c.name: rows() for c in ci_gate.CONDITIONS})

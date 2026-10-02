@@ -187,7 +187,8 @@ def score_condition(exe: Path, cond: Condition, items: list[dict], workers: int)
     ss = svgeval.score_set(exe, cond.name, items, work, extra_args=cond.args,
                            workers=workers, use_cache=False)
     rows = {f"{i.corpus}/{i.stem}": {"corpus": i.corpus, "de00": i.de00, "turning": i.turning,
-                                     "ratio": i.ratio, "self_res": i.self_res, "sha256": i.sha256}
+                                     "ratio": i.ratio, "self_res": i.self_res,
+                                     "sha256": i.sha256[:SHA_CHARS]}
             for i in ss.images}
     print(f"  {cond.name}: {len(rows)} icons in {time.time() - t0:.0f} s"
           + (f", {len(ss.failures)} failed" if ss.failures else ""), flush=True)
@@ -207,9 +208,19 @@ def summarise(rows: dict) -> dict:
 
 
 # --------------------------------------------------------------------------- baselines
+#: Hex digits of an SVG's SHA-256 kept per icon: 64 bits, so two different SVGs of one icon
+#: collide with probability 2^-64, and the baseline stays a third smaller.
+SHA_CHARS = 16
+#: Significant digits kept per score in a baseline: a relative error of 5e-10, far below
+#: anything the gate can resolve, and stable text across platforms' float printing.
+DIGITS = 9
+
+
 def pack_rows(rows: dict) -> dict:
     """Per-icon rows as compact lists, [de00, turning, ratio, self_res, sha256], for the file."""
-    return {k: [r["de00"], r["turning"], r["ratio"], r["self_res"], r["sha256"]]
+    rnd = lambda x: float(f"{x:.{DIGITS}g}")  # noqa: E731
+    return {k: [rnd(r["de00"]), rnd(r["turning"]), rnd(r["ratio"]), rnd(r["self_res"]),
+                r["sha256"][:SHA_CHARS]]
             for k, r in sorted(rows.items())}
 
 
@@ -235,10 +246,35 @@ def baseline_document(exe: Path, results: dict) -> dict:
     }
 
 
+def dumps(doc: dict) -> str:
+    """JSON with one line per icon row, so a re-baseline reads as a diff of icons that
+    moved rather than a wall of numbers (and the Linux file stays ~150 KB)."""
+    rows: dict[str, dict] = {}
+
+    def placeholder(obj):
+        if isinstance(obj, dict):
+            out = {}
+            for k, v in obj.items():
+                if k == "icons" and isinstance(v, dict):
+                    tag = f"@@icons{len(rows)}@@"
+                    rows[tag] = v
+                    out[k] = tag
+                else:
+                    out[k] = placeholder(v)
+            return out
+        return obj
+
+    text = json.dumps(placeholder(doc), indent=1)
+    for tag, icons in rows.items():
+        body = ",\n".join(f"     {json.dumps(k)}: {json.dumps(v)}" for k, v in icons.items())
+        text = text.replace(f'"{tag}"', "{\n" + body + "\n    }" if icons else "{}")
+    return text + "\n"
+
+
 def write_json(path: Path, doc: dict) -> None:
     """Write `doc` as JSON with LF line ends on every platform (the repository is LF)."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(doc, indent=1, sort_keys=False) + "\n", encoding="utf-8", newline="\n")
+    path.write_text(dumps(doc), encoding="utf-8", newline="\n")
 
 
 # --------------------------------------------------------------------------- comparison
@@ -252,7 +288,9 @@ def compare_condition(base_rows: dict, cur_rows: dict, margins: dict) -> dict:
     cur = {}
     for k, r in cur_rows.items():
         b = base_rows.get(k)
-        cur[k] = b if b is not None and b["sha256"] and b["sha256"] == r["sha256"] else r
+        same = (b is not None and b["sha256"]
+                and b["sha256"][:SHA_CHARS] == r["sha256"][:SHA_CHARS])
+        cur[k] = b if same else r
     out = {}
     for ax in REPORTED_AXES:
         c = gate_stats.compare({k: r[ax] for k, r in base_rows.items()},

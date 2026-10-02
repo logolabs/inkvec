@@ -828,3 +828,57 @@ pub(super) fn fit_radial_elliptic_scored(
         mids: Vec::new(),
     })
 }
+
+/// A radial geometry found by a search (`geometry`, a [`FillModel::Radial`]) with its two
+/// stops refitted in another interpolation space: the samples' coordinate `ρ_i` under that
+/// geometry, `r = max ρ_i`, and the least-squares line `colour = a + g·ρ` in `space`
+/// ([`fit_1d`]), exactly as the tails of [`fit_radial_scored`] (aspect 1: the Euclidean
+/// distance) and [`fit_radial_elliptic_scored`] (the elliptical distance) compute them --
+/// so in the space the search ran in, the model is the search's own, bit for bit.
+///
+/// Research prototype A10, part `profile`: one spline-scored search serves both spaces
+/// (see `profile_scored_radials`). `None` for a non-radial model, or when `r < 0.5` px.
+pub(super) fn restop_radial(
+    s: &Samples,
+    cols: &[[f64; 3]],
+    space: Interp,
+    geometry: &FillModel,
+) -> Option<FillModel> {
+    let FillModel::Radial {
+        c, aspect, angle, ..
+    } = *geometry
+    else {
+        return None;
+    };
+    let n = s.len();
+    let rho: Vec<f64> = if aspect == 1.0 {
+        (0..n)
+            .map(|i| ((s.x[i] - c.0).powi(2) + (s.y[i] - c.1).powi(2)).sqrt())
+            .collect()
+    } else {
+        let (sn, cs) = angle.sin_cos();
+        (0..n)
+            .map(|i| {
+                let (dx, dy) = (s.x[i] - c.0, s.y[i] - c.1);
+                let u = dx * cs + dy * sn;
+                let v = (-dx * sn + dy * cs) * aspect;
+                (u * u + v * v).sqrt()
+            })
+            .collect()
+    };
+    let r = rho.iter().cloned().fold(f64::MIN, f64::max);
+    if r < 0.5 {
+        return None;
+    }
+    let (_, a, g) = fit_1d(cols, &rho);
+    Some(FillModel::Radial {
+        c,
+        r,
+        c0: from_space(a, space),
+        c1: from_space([a[0] + g[0] * r, a[1] + g[1] * r, a[2] + g[2] * r], space),
+        interp: space,
+        aspect,
+        angle,
+        mids: Vec::new(),
+    })
+}

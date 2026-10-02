@@ -760,10 +760,7 @@ fn ramp_models(s: &Samples, w: usize, space: Interp) -> (Interp, Vec<[f64; 3]>, 
             linear
         },
     );
-    let mut cands: Vec<FillModel> = [linear, radial, elliptic].into_iter().flatten().collect();
-    if gregions::parts().profile {
-        cands.extend(profile_scored_radials(s, &cols, space, w));
-    }
+    let cands = [linear, radial, elliptic].into_iter().flatten().collect();
     (space, cols, cands)
 }
 
@@ -772,13 +769,19 @@ fn ramp_models(s: &Samples, w: usize, space: Interp) -> (Interp, Vec<[f64; 3]>, 
 /// ([`fit::ProfileScore::Spline`]), the elliptical one seeded from the circular one, as
 /// [`ramp_models`] seeds its own pair.
 ///
-/// They are *extra* candidates, appended after the line-scored three: nothing is replaced,
-/// so a region whose profile is straight keeps the fit it had (the line-scored candidate
-/// comes first and wins ties), and model selection prices the newcomers like any other.
-/// Replacing the line search instead was measured worse in an earlier attempt (4304ba3).
-/// Each is a full centre search, so this roughly doubles the radial and elliptic fitting
-/// time of every region that reaches it (1.9x trace time on the gradient icons in the
-/// round-2 research, under load).
+/// They become *extra* candidates, appended after the line-scored three in each space by
+/// `fit_samples`:
+/// nothing is replaced, so a region whose profile is straight keeps the fit it had (the
+/// line-scored candidate comes first and wins ties), and model selection prices the
+/// newcomers like any other. Replacing the line search instead was measured worse in an
+/// earlier attempt (4304ba3).
+///
+/// The search runs once, in sRGB, and its geometry serves both interpolation spaces:
+/// a free piecewise-linear profile absorbs the per-channel transfer curve between the
+/// spaces, so the level sets it finds, and with them the geometry, do not depend on the
+/// space; only the stops do, and `fit_samples` refits those per space. That halves the
+/// cost of the part (the round-2 research ran it per space: 1.9x trace time on the
+/// gradient icons, under load). Not from the literature: a cost reduction.
 fn profile_scored_radials(
     s: &Samples,
     cols: &[[f64; 3]],
@@ -876,10 +879,33 @@ fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> 
     // them side by side, then take them in the order the one-at-a-time loop did, which is
     // the order `select` breaks ties in.
     use rayon::prelude::*;
-    let per_space: Vec<(Interp, Vec<[f64; 3]>, Vec<FillModel>)> = INTERPS
-        .par_iter()
-        .map(|&space| ramp_models(s, w, space))
-        .collect();
+    // Research prototype A10, part `profile`: radial geometries found under the
+    // piecewise-linear profile score, once for both spaces and beside the line-scored
+    // fits; each is appended to every space's candidates with its stops refitted there
+    // (`fit::restop_radial`). Off, there are none and the candidates are as they were.
+    let (geometry, mut per_space): (Vec<FillModel>, Vec<(Interp, Vec<[f64; 3]>, Vec<FillModel>)>) =
+        rayon::join(
+            || {
+                if gregions::parts().profile {
+                    profile_scored_radials(s, &s.colors(Interp::Srgb), Interp::Srgb, w)
+                } else {
+                    Vec::new()
+                }
+            },
+            || {
+                INTERPS
+                    .par_iter()
+                    .map(|&space| ramp_models(s, w, space))
+                    .collect()
+            },
+        );
+    for (space, cols, cands) in per_space.iter_mut() {
+        cands.extend(
+            geometry
+                .iter()
+                .filter_map(|g| restop_radial(s, cols, *space, g)),
+        );
+    }
     let jobs: Vec<(Interp, &[[f64; 3]], &FillModel)> = per_space
         .iter()
         .flat_map(|(space, cols, cands)| cands.iter().map(move |c| (*space, &cols[..], c)))

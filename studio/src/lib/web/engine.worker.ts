@@ -6,7 +6,8 @@
  * page (`engine.ts` decides the order: palette and export ahead of traces, traces ahead of
  * wizard previews, stale ones dropped) and answers it synchronously, streaming what a trace
  * is doing as it goes (`progress` messages; see the core's `trace::live`). The pipeline's own parallelism is rayon's, on a pool of nested workers
- * where the page is cross-origin isolated.
+ * where the page is cross-origin isolated; the pool starts in the background once the
+ * engine is ready, and only work that can reach rayon waits for it (`startPool`).
  *
  * Two builds sit side by side, as on the old Space: `pkg-threads/` (atomics, shared memory,
  * a rayon pool) where `crossOriginIsolated` is true, `pkg/` (one core) where it is not. Same
@@ -116,9 +117,47 @@ async function countBytes(copy: Response, known: number | undefined): Promise<vo
 }
 
 /**
+ * Operations that never reach rayon, by the engine's code: preferences, capabilities, the
+ * held confidence bands, palette matching against pasted text, and closing the image. They
+ * run while the thread pool is still starting. Everything else waits for the pool, because a
+ * rayon call made before `initThreadPool` has built it would make rayon build a one-thread
+ * global pool of its own, and the real one could then never be installed.
+ */
+const BEFORE_POOL = new Set(["capabilities", "default_prefs", "sanitise_prefs", "reset_prefs", "trace_bands", "match_palette", "close"]);
+
+/** Settles once rayon's pool has started, or failed to (then rayon runs on this thread). */
+let pool: Promise<void> = Promise.resolve();
+
+/**
+ * Start rayon's pool of `n` Web Workers in the background and tell the page when it is up.
+ *
+ * Starting it is a Web Worker per core, each instantiating the module on the shared memory:
+ * 0.7-2.9 s under load at 16 threads (r2-product, cold), which used to sit between the
+ * engine compiling and the app being shown. Now the page is told the engine is ready as soon
+ * as it is instantiated, the quick start-up commands run meanwhile (`BEFORE_POOL`), and the
+ * first image waits here only for what is left of the start. Not from the literature: the
+ * pool's own documentation (wasm-bindgen-rayon) starts it before anything else and is silent
+ * on its cost. See also: web.dev, "Using WebAssembly threads from C, C++ and Rust".
+ */
+function startPool(initThreadPool: (n: number) => Promise<void>, n: number): Promise<void> {
+  const began = performance.now();
+  return initThreadPool(n).then(
+    () => scope.postMessage({ type: "pool", threads: n + 1, poolError: null, ms: performance.now() - began }),
+    // If the pool will not start (nested workers refused, memory), rayon runs everything on
+    // this thread instead: slower, same bytes.
+    (e) => scope.postMessage({ type: "pool", threads: 1, poolError: String((e as Error)?.message ?? e), ms: performance.now() - began }),
+  );
+}
+
+/**
  * Load the engine: the threaded WebAssembly build when the page is cross-origin isolated
  * (shared memory is allowed), the single-threaded one otherwise. The module's bytes are
  * fetched alongside its JavaScript and counted as they arrive, for the loading screen.
+ *
+ * The order: fetch the module and import its JavaScript together; compile and instantiate
+ * from the fetch response itself (`countBytes` says why); create the session and tell the
+ * page it is `ready`; then start the thread pool in the background (`startPool`), which
+ * says `pool` when it is up.
  */
 async function init(m: Init): Promise<void> {
   const isolated = typeof crossOriginIsolated !== "undefined" && crossOriginIsolated;
@@ -137,25 +176,12 @@ async function init(m: Init): Promise<void> {
   const exports = await mod.default({ module_or_path: res });
   memory = exports.memory ?? null;
   // Compiled and instantiated: the page can start what waits on the engine's bytes being in
-  // (the denoiser's download) while the thread pool starts.
+  // (the denoiser's download).
   scope.postMessage({
     type: "instantiated",
     denoiserUrl: mod.denoiser_model_url(),
     denoiserSha256: mod.denoiser_model_sha256(),
   });
-  let threads = 1;
-  let poolError: string | null = null;
-  if (isolated && mod.initThreadPool) {
-    // One worker per core, less the one this thread already is. If the pool will not start
-    // (nested workers refused, memory), rayon runs everything here instead: slower, same bytes.
-    const n = Math.max(1, Math.min(navigator.hardwareConcurrency || 4, 16) - 1);
-    try {
-      await mod.initThreadPool(n);
-      threads = n + 1;
-    } catch (e) {
-      poolError = String((e as Error)?.message ?? e);
-    }
-  }
   generations = m.generations ? new Int32Array(m.generations) : null;
   denoiserPort = m.denoiserPort;
   if (denoiserPort && isolated) {
@@ -163,10 +189,17 @@ async function init(m: Init): Promise<void> {
     mod.enable_denoiser();
   }
   studio = new mod.Studio();
+  // One worker per core, less the one this thread already is.
+  const starting = isolated && Boolean(mod.initThreadPool);
+  if (starting && mod.initThreadPool) {
+    pool = startPool(mod.initThreadPool, Math.max(1, Math.min(navigator.hardwareConcurrency || 4, 16) - 1));
+  }
   scope.postMessage({
     type: "ready",
-    threads,
-    poolError,
+    // One until the pool says otherwise (`pool`).
+    threads: 1,
+    pool: starting ? "starting" : "none",
+    poolError: null,
     isolated,
     version: mod.version(),
     denoiserUrl: mod.denoiser_model_url(),
@@ -267,6 +300,8 @@ scope.onmessage = (e: MessageEvent<Init | Job>) => {
       }
       return;
     }
+    // Anything that may reach rayon waits for the pool; the start-up commands do not.
+    if (!BEFORE_POOL.has(m.op)) await pool;
     const started = performance.now();
     try {
       const value = run(m);

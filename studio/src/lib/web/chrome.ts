@@ -187,9 +187,12 @@ export function bootEngineBytes(got: number, total: number): void {
   bootStep("Downloading the engine", 0.04 + 0.8 * share, total > 0 ? `${mb(got)} of ${mb(total)} MB` : `${mb(got)} MB`);
 }
 
-/** The bytes are in; the module compiles and its thread pool starts. */
+/**
+ * The bytes are in; the module compiles. Its thread pool starts after the app is shown
+ * (`startPool` in `engine.worker.ts`), so this screen does not wait for it.
+ */
 export function bootEngineStarting(): void {
-  bootStep("Starting the engine", 0.88, "Compiling, and starting a thread per core");
+  bootStep("Starting the engine", 0.88, "Compiling");
 }
 
 /** The app's own start-up steps (`startup_progress`, 0 to 1), the last tenth of the bar. */

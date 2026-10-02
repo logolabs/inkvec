@@ -53,7 +53,8 @@ const RUNTIME_CACHE_PREFIX = "inkvec-ort-";
 const PREFETCH_RETRY_MS = 30_000;
 /**
  * What starting a fresh engine worker costs, until one has been timed: loading the module
- * from the HTTP cache, starting its thread pool and putting the image back. A superseded
+ * from the HTTP cache, starting its thread pool (the image waits for it) and putting the
+ * image back. A superseded
  * trace that has already run this long is stopped by replacing the worker, since it is
  * likely to run at least as long again; a younger one gets the rest of that time to finish.
  */
@@ -101,8 +102,18 @@ class WebBackend {
   /** The one automatic retry of a background download has been spent. */
   private retried = false;
 
-  /** The worker's thread count and isolation, once it has loaded; for About and the tests. */
-  info: { threads: number; isolated: boolean; version: string } | null = null;
+  /**
+   * The worker's thread count and isolation, once it has loaded; for About and the tests.
+   * `threads` is 1 until the pool is up (`pool`: starting, then running or failed; none on a
+   * page without isolation), and `poolMs` is how long the pool took to start.
+   */
+  info: {
+    threads: number;
+    isolated: boolean;
+    version: string;
+    pool: "none" | "starting" | "running" | "failed";
+    poolMs: number | null;
+  } | null = null;
   /** How long the last fresh worker took to be ready with the image back, in ms. */
   restartMs: number | null = null;
   /** Traces stopped by replacing the worker, and when each was asked to stop; for the tests. */
@@ -153,10 +164,14 @@ class WebBackend {
             this.prefetchDenoiser();
           }
         } else if (m.type === "ready") {
-          this.info = { threads: m.threads, isolated: m.isolated, version: m.version };
-          if (m.poolError) console.warn("inkvec: thread pool did not start:", m.poolError);
+          // Ready before its thread pool is: the pool starts in the background and says
+          // `pool` when it is up; the worker holds anything that needs it until then.
+          this.info = { threads: m.threads, isolated: m.isolated, version: m.version, pool: m.pool, poolMs: null };
           if (isolated) this.startDenoiser(m.denoiserUrl, m.denoiserSha256);
           resolve(m);
+        } else if (m.type === "pool") {
+          if (this.info) this.info = { ...this.info, threads: m.threads, pool: m.poolError ? "failed" : "running", poolMs: m.ms };
+          if (m.poolError) console.warn("inkvec: thread pool did not start:", m.poolError);
         } else if (m.type === "loadfail") {
           reject(new Error(`The engine could not load: ${m.error}`));
         } else if (m.type === "progress") {

@@ -182,9 +182,13 @@ def shapes(svg: str) -> list[Shape]:
 
 
 class Traced:
-    """One case, rasterised and traced, with every measurement cached."""
+    """One case, rasterised and traced, with every measurement cached.
 
-    def __init__(self, case: Case, exe: Path, work: Path):
+    `extra` are tracer flags for the whole run (`bench/cases.py -- --mode fast`). They go
+    after the case's own flags, so a case about a flag still gets it and the run's mode
+    applies on top."""
+
+    def __init__(self, case: Case, exe: Path, work: Path, extra: tuple[str, ...] = ()):
         self.case = case
         self.size = case.size
         self._cache: dict = {}
@@ -199,7 +203,7 @@ class Traced:
             self.png.write_bytes(rasterize(self.truth_svg, case.size))
 
         out = work / f"{case.name}.svg"
-        cmd = [str(exe), str(self.png), "-o", str(out), "--quiet", *case.args]
+        cmd = [str(exe), str(self.png), "-o", str(out), "--quiet", *case.args, *extra]
         proc = subprocess.run(cmd, capture_output=True)
         self.rc = proc.returncode
         self.stderr = proc.stderr.decode("utf-8", "replace")[-400:]

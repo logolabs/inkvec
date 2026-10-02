@@ -12,10 +12,13 @@
 //!    signature), and only when the bytes announce none, the one the file's extension names
 //!    ([`sniff`]).
 //! 2. **Decode** with the `image` crate into whatever layout the file holds (8-bit RGB for
-//!    most opaque PNGs and every JPEG, 8-bit RGBA for most transparent ones).
-//! 3. **Cap**: above `max_dim` on the longer side, box-average the 8-bit buffer down
+//!    most opaque PNGs and every JPEG, 8-bit RGBA for most transparent ones), with a larger
+//!    allocation allowance when the cap will apply ([`capped_decode_limits`]).
+//! 3. **Turn** the image upright by its EXIF orientation ([`decode_upright`]), so a phone
+//!    photo is traced as it is shown; the dimensions reported from here on are upright.
+//! 4. **Cap**: above `max_dim` on the longer side, box-average the 8-bit buffer down
 //!    (`coverage::box_downsample_rgba8`) before any float exists.
-//! 4. **Widen** to floats ([`from_dynamic`]): one table lookup per byte ([`UNIT`]), straight
+//! 5. **Widen** to floats ([`from_dynamic`]): one table lookup per byte ([`UNIT`]), straight
 //!    from the decoder's own buffer for 8-bit RGB and RGBA, in parallel chunks on a large
 //!    image. The result is the same float the old per-byte division gave.
 //!
@@ -142,12 +145,56 @@ fn decode_as(
     };
     let (w, h) = reader().into_dimensions().map_err(err)?;
     has_pixels(w, h)?;
-    let mut r = reader();
-    if target_dims(w, h, max_dim).is_some() {
-        r.limits(capped_decode_limits());
-    }
-    let img = r.decode().map_err(err)?;
+    let limits = if target_dims(w, h, max_dim).is_some() {
+        capped_decode_limits()
+    } else {
+        image::Limits::default()
+    };
+    let img = decode_upright(reader(), limits).map_err(err)?;
+    // Upright: a quarter turn swaps the sides, and the arrival size is the upright one.
+    let (w, h) = (img.width(), img.height());
     Ok((cap_decoded(img, w, h, max_dim), (w, h)))
+}
+
+/// `ImageReader::decode` under `limits`, then turned the way the file says it is to be
+/// shown: its EXIF orientation applied.
+///
+/// A camera stores the sensor's rows as they came and records how the picture is to be
+/// turned in the EXIF Orientation tag (274, values 1-8: identity, the two mirrors, the
+/// three rotations and the two transposes); every viewer applies it, so the image a person
+/// sees and drops on the tracer is the turned one. `decode` does not apply it, and six
+/// JPEGs stored with Orientation = 6 traced sideways (dE00 2.9 to 17.6 against 0.03 to 0.42
+/// for the same images without the tag, r2-inputs `formats_test.py`, 2026-10-02).
+///
+/// The decode is `ImageReader::decode` taken apart only to read the orientation in between:
+/// the same decoder, built with the same limits, whose output buffer is reserved from them
+/// before the pixels are read, exactly as `decode` does. The orientation comes from the
+/// decoder (`ImageDecoder::orientation`: the EXIF of a JPEG, WebP or PNG `eXIf` chunk, the
+/// TIFF tag), and an unreadable one counts as no orientation rather than failing a decode
+/// whose pixels are fine. An image without the tag, or with value 1, is returned as decoded.
+///
+/// Method from: the Orientation tag (274) of the Exif standard (CIPA DC-008), as the
+/// `image` crate implements it: `image::metadata::Orientation` (docs.rs, image 0.25.10:
+/// "Rotate90: rotate by 90 degrees clockwise", and so on for the eight values) and
+/// `DynamicImage::apply_orientation`. Applied to the decoded 8-bit image, before the cap, so
+/// the cap and everything after it see the image as it is shown.
+fn decode_upright(
+    reader: image::ImageReader<std::io::Cursor<&[u8]>>,
+    limits: image::Limits,
+) -> image::ImageResult<image::DynamicImage> {
+    use image::ImageDecoder;
+    let mut reader = reader;
+    reader.limits(limits.clone());
+    let mut decoder = reader.into_decoder()?;
+    let orientation = decoder
+        .orientation()
+        .unwrap_or(image::metadata::Orientation::NoTransforms);
+    let mut limits = limits;
+    limits.reserve(decoder.total_bytes())?;
+    decoder.set_limits(limits)?;
+    let mut img = image::DynamicImage::from_decoder(decoder)?;
+    img.apply_orientation(orientation);
+    Ok(img)
 }
 
 /// The `image` crate's default allocation limit, which every uncapped decode keeps.
@@ -334,7 +381,8 @@ fn target_dims(w: u32, h: u32, max_dim: usize) -> Option<(u32, u32)> {
 /// Load a raster from a file path into straight RGBA floats, capping the longer side at
 /// `max_dim` pixels (0 = no cap) before the pixels are read into floats, and returning the
 /// file's original dimensions alongside so a caller can present the result at the size that
-/// arrived.
+/// arrived. Both are upright: an image whose EXIF orientation turns it a quarter is
+/// returned turned, with its sides swapped ([`decode_upright`]).
 ///
 /// The size is decided from the file's header first, so the cap is known before the decode
 /// allocates. The full-resolution 8-bit buffer may still be decoded once, but the cap is an
@@ -760,6 +808,103 @@ mod decode_cap_tests {
         );
         assert_eq!(capped.data.len(), capped.width * capped.height * 4);
         assert!(capped.width < full.width);
+    }
+
+    /// CRC-32 (IEEE), for writing PNG chunks by hand.
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = 0xFFFF_FFFFu32;
+        for &b in bytes {
+            crc ^= u32::from(b);
+            for _ in 0..8 {
+                crc = (crc >> 1) ^ (0xEDB8_8320 & (crc & 1).wrapping_neg());
+            }
+        }
+        !crc
+    }
+
+    /// `png` (an encoded PNG) with an `eXIf` chunk holding the Orientation tag set to
+    /// `orientation`, inserted after `IHDR`. The chunk is a bare big-endian TIFF structure:
+    /// header, one IFD with one SHORT entry (tag 274), no next IFD.
+    fn with_orientation(png: &[u8], orientation: u16) -> Vec<u8> {
+        let mut tiff = b"MM\0\x2a\0\0\0\x08".to_vec();
+        tiff.extend_from_slice(&1u16.to_be_bytes());
+        tiff.extend_from_slice(&274u16.to_be_bytes());
+        tiff.extend_from_slice(&3u16.to_be_bytes());
+        tiff.extend_from_slice(&1u32.to_be_bytes());
+        tiff.extend_from_slice(&orientation.to_be_bytes());
+        tiff.extend_from_slice(&[0, 0]);
+        tiff.extend_from_slice(&0u32.to_be_bytes());
+        let mut chunk = (tiff.len() as u32).to_be_bytes().to_vec();
+        let mut body = b"eXIf".to_vec();
+        body.extend_from_slice(&tiff);
+        chunk.extend_from_slice(&body);
+        chunk.extend_from_slice(&crc32(&body).to_be_bytes());
+        // Signature (8) + IHDR (4 + 4 + 13 + 4).
+        let at = 8 + 25;
+        [&png[..at], &chunk[..], &png[at..]].concat()
+    }
+
+    /// A 3 x 2 image of six distinct opaque colours stored with each EXIF orientation comes
+    /// back turned as a viewer shows it -- a quarter turn swaps the sides, also in the
+    /// arrival dimensions -- and without the tag (or with value 1) exactly as before.
+    #[test]
+    fn the_exif_orientation_is_applied() {
+        let (w, h) = (3u32, 2u32);
+        let img = image::RgbaImage::from_fn(w, h, |x, y| {
+            image::Rgba([
+                (40 * x + 100 * y) as u8,
+                (10 + 70 * y) as u8,
+                (200 - 50 * x) as u8,
+                255,
+            ])
+        });
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(img.clone())
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let png = png.into_inner();
+        let px = |r: &Rgba, x: u32, y: u32| -> [u32; 4] {
+            let i = ((y as usize) * r.width + x as usize) * 4;
+            std::array::from_fn(|c| (r.data[i + c] * 255.0).round() as u32)
+        };
+        let src = |x: u32, y: u32| -> [u32; 4] { img.get_pixel(x, y).0.map(u32::from) };
+        let plain = decode_image_capped(&png, 0).unwrap();
+        for o in 1..=8u16 {
+            let (got, dims) = decode_image_capped(&with_orientation(&png, o), 0).unwrap();
+            let quarter = o >= 5;
+            let (gw, gh) = if quarter { (h, w) } else { (w, h) };
+            assert_eq!(dims, (gw, gh), "orientation {o}");
+            assert_eq!(
+                (got.width, got.height),
+                (gw as usize, gh as usize),
+                "orientation {o}"
+            );
+            for y in 0..gh {
+                for x in 0..gw {
+                    // Where each displayed pixel comes from in the stored image (Exif values:
+                    // 2 mirror, 3 half turn, 4 flip, 5 transpose, 6 quarter clockwise,
+                    // 7 transverse, 8 quarter anticlockwise).
+                    let (sx, sy) = match o {
+                        1 => (x, y),
+                        2 => (w - 1 - x, y),
+                        3 => (w - 1 - x, h - 1 - y),
+                        4 => (x, h - 1 - y),
+                        5 => (y, x),
+                        6 => (y, h - 1 - x),
+                        7 => (w - 1 - y, h - 1 - x),
+                        _ => (w - 1 - y, x),
+                    };
+                    assert_eq!(px(&got, x, y), src(sx, sy), "orientation {o} at ({x}, {y})");
+                }
+            }
+            if o == 1 {
+                assert_eq!(bits(&got.data), bits(&plain.0.data), "value 1 is no change");
+            }
+        }
+    }
+
+    fn bits(v: &[f32]) -> Vec<u32> {
+        v.iter().map(|f| f.to_bits()).collect()
     }
 
     /// The capped allowance is the library's default plus the extra, so the default this

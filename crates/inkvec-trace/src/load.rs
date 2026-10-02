@@ -142,8 +142,56 @@ fn decode_as(
     };
     let (w, h) = reader().into_dimensions().map_err(err)?;
     has_pixels(w, h)?;
-    let img = reader().decode().map_err(err)?;
+    let mut r = reader();
+    if target_dims(w, h, max_dim).is_some() {
+        r.limits(capped_decode_limits());
+    }
+    let img = r.decode().map_err(err)?;
     Ok((cap_decoded(img, w, h, max_dim), (w, h)))
+}
+
+/// The `image` crate's default allocation limit, which every uncapped decode keeps.
+const DEFAULT_MAX_ALLOC: u64 = 512 << 20;
+
+/// What a decode that is going to be capped may allocate beyond the default allowance
+/// (see [`capped_decode_limits`]): 768 MiB on a 64-bit target, for 1.25 GiB in all, which
+/// holds a 16384 x 16384 RGBA image at 8 bits (1 GiB) or 12000 x 12000 at 16 (1.15 GB) and
+/// still refuses a 20000 x 20000 RGBA claim (1.6 GB, the decompression bomb of the intake
+/// fuzz); nothing on a 32-bit target (WebAssembly), whose whole address space is 4 GiB.
+#[cfg(target_pointer_width = "64")]
+const CAPPED_EXTRA_ALLOC: u64 = 768 << 20;
+/// See the 64-bit definition.
+#[cfg(not(target_pointer_width = "64"))]
+const CAPPED_EXTRA_ALLOC: u64 = 0;
+
+/// Decoder limits for an image whose longer side is over the `--max-dim` cap.
+///
+/// The `image` crate refuses any decode whose output buffer would pass 512 MiB, which is
+/// its guard against decompression bombs (a few kilobytes of deflate claiming 20000 x 20000
+/// pixels), and that refused legitimate files too: a 12000 x 12000 RGBA PNG is 576 MB
+/// decoded, so it failed with "Memory limit exceeded" (intake fuzz, 2026-10-02), although
+/// the trace would be capped at 2048 px and the full-size buffer lives only until the box
+/// filter has read it. A 16-bit 8192 x 8192 RGBA PNG (exactly 512 MiB) failed the same way.
+///
+/// So when the cap applies, the decode may allocate [`CAPPED_EXTRA_ALLOC`] more than the
+/// default: `max_alloc = 512 MiB + 768 MiB`, from which `ImageReader::decode` reserves the
+/// full-size output buffer first and hands the rest to the decoder's working buffers. A
+/// claim beyond that (the 20000 x 20000 bomb is 1.6 GB, a 100000 x 100000 header 40 GB) is
+/// still refused before anything is allocated, and an image within the cap, or any decode
+/// with `max_dim = 0`, keeps the default limits exactly. Raising a limit changes no pixel of
+/// an image that decoded before.
+///
+/// Not from the literature: a resource limit. See also: the `image` crate's `Limits`
+/// documentation (docs.rs, `image::Limits::max_alloc`), whose default this keeps for every
+/// decode that is not capped; and, for the alternative of never holding the full-size
+/// buffer, the demand-driven, strip-at-a-time evaluation of J. Cupitt, K. Martinez (1996),
+/// *VIPS: an image processing system for large images*, Proc. SPIE 2663,
+/// <https://doi.org/10.1117/12.233043> -- not taken, because the `image` crate decodes
+/// whole frames and a streaming PNG path would duplicate its colour conversions.
+fn capped_decode_limits() -> image::Limits {
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(DEFAULT_MAX_ALLOC + CAPPED_EXTRA_ALLOC);
+    limits
 }
 
 /// Refuse a raster with no pixels: `Ok` when both sides are at least one pixel.
@@ -712,6 +760,23 @@ mod decode_cap_tests {
         );
         assert_eq!(capped.data.len(), capped.width * capped.height * 4);
         assert!(capped.width < full.width);
+    }
+
+    /// The capped allowance is the library's default plus the extra, so the default this
+    /// file assumes must be the library's; and an uncapped decode keeps the default.
+    #[test]
+    fn the_capped_limit_extends_the_library_default() {
+        assert_eq!(image::Limits::default().max_alloc, Some(DEFAULT_MAX_ALLOC));
+        assert_eq!(
+            capped_decode_limits().max_alloc,
+            Some(DEFAULT_MAX_ALLOC + CAPPED_EXTRA_ALLOC)
+        );
+        // 12000 x 12000 RGBA fits the capped allowance (on a 64-bit target); 20000 x 20000
+        // does not.
+        if cfg!(target_pointer_width = "64") {
+            assert!(12_000u64 * 12_000 * 4 <= DEFAULT_MAX_ALLOC + CAPPED_EXTRA_ALLOC);
+        }
+        assert!(20_000u64 * 20_000 * 4 > DEFAULT_MAX_ALLOC + CAPPED_EXTRA_ALLOC);
     }
 
     /// The fuzz case `m1_00557_s0.gif`, made small: a GIF whose logical screen is 0 pixels

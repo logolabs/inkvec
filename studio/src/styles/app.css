@@ -272,12 +272,18 @@ kbd {
   place-items: center;
   color: var(--accent-ink);
 }
-.checkbox[aria-checked="true"] {
+/* The tick box is drawn from its control's state: the control (a `role="checkbox"` button)
+   carries `aria-checked`, and the box inside it is decoration. ARIA allows `aria-checked`
+   only on the roles that have a checked state, so the box itself never carries it. */
+[aria-checked="true"] > .checkbox {
   background: var(--accent);
   border-color: var(--accent);
 }
-.checkbox:not([aria-checked="true"]) > svg {
+.checkbox > svg {
   visibility: hidden;
+}
+[aria-checked="true"] > .checkbox > svg {
+  visibility: visible;
 }
 
 /* --------------------------------------------------------- the app bar ---- */

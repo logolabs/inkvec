@@ -33,6 +33,25 @@ fn faces_match_the_flood_fill() {
     }
 }
 
+/// Past the face-id limit: a 300 x 300 checkerboard has 90,000 components. They used to be
+/// numbered up to `u16::MAX - 2` with the rest folded into face 0; now the smallest are
+/// merged into neighbours first, so every face is one connected component of one label.
+#[test]
+fn more_components_than_face_ids_are_merged_not_folded() {
+    let (w, h) = (300usize, 300usize);
+    let labels: Vec<u16> = (0..w * h).map(|p| ((p % w + p / w) % 2) as u16).collect();
+    let mut faces = labels.clone();
+    let inks = RunLabels::new(&labels, w, h).write_faces(&mut faces);
+    let cap = (u16::MAX - 1) as usize;
+    assert!(inks.len() <= cap, "{}", inks.len());
+    assert!(faces.iter().all(|&f| (f as usize) < inks.len()));
+    // One connected component per face id, each of one of the two inks.
+    let mut check = RunLabels::new(&faces, w, h);
+    check.components();
+    assert_eq!(check.size.len(), inks.len());
+    assert!(inks.iter().all(|&l| l < 2));
+}
+
 #[test]
 fn a_lone_pixel_takes_its_surroundings() {
     let labels = vec![0u16, 0, 0, 0, 1, 0, 0, 0, 2];

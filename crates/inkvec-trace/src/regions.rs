@@ -202,17 +202,48 @@ pub fn merge_saddle_faces(
     (labels, face_fill, face_color, n_faces)
 }
 
+/// Most faces a face map can number: ids are `u16`, and `u16::MAX` is reserved for the
+/// outside of the image in the planar map (and for "not yet visited" in
+/// [`split_components`]), so the ids are `0..=65534`.
+pub const MAX_FACES: usize = u16::MAX as usize;
+
 /// Relabel a palette-indexed image by 4-connected component.
 ///
 /// Returns `(faces, face_color)`: `faces[p]` is the component id of pixel `p`, numbered in
 /// raster order of each component's first pixel, and `face_color[f]` is the label (palette
-/// index) that component `f` was made of. Face ids are `u16` with `u16::MAX` as the
-/// "not yet visited" marker, so at most 65 535 faces are numbered; the pixels of any
-/// further component fall into face 0.
+/// index) that component `f` was made of.
 ///
 /// 4-connectivity (not 8) is what the planar map and the boundary tracer assume: two
 /// same-ink pixels that touch only at a corner are two faces, and the corner is a junction.
+///
+/// # More components than face ids
+///
+/// Face ids are `u16`, so at most [`MAX_FACES`] faces can be numbered. This used to number
+/// the first 65,535 components and drop the pixels of every later one into face 0, which
+/// then held pixels of many inks scattered over the bottom of the image under the first
+/// component's colour: a 1024 px RGB noise image (36 inks, 68,654 components) came back
+/// with exactly 65,535 faces, a 2.5 MB SVG and 15 minutes of work (r2-product, 2026-10-02).
+/// Now, when the image has more components than ids, the smallest components are first
+/// merged into their neighbours until the rest fit ([`cap_components`]), and the result is
+/// numbered as usual. A map with at most [`MAX_FACES`] components takes exactly the old
+/// path: the first loop below is the old loop, and it only gives up where the old one
+/// started folding.
 pub fn split_components(labels: &[u16], w: usize, h: usize) -> (Vec<u16>, Vec<usize>) {
+    if let Some(split) = split_within(labels, w, h) {
+        return split;
+    }
+    let mut capped = labels[..w * h].to_vec();
+    let absorbed = cap_components(&mut capped, w, h, MAX_FACES);
+    crate::diag!(
+        "split",
+        "components over the face-id limit: {absorbed} smallest merged into neighbours to fit {MAX_FACES}"
+    );
+    split_within(&capped, w, h).expect("cap_components leaves at most MAX_FACES components")
+}
+
+/// [`split_components`] when the map has at most [`MAX_FACES`] components; `None` (after
+/// numbering as many as fit) when it has more.
+fn split_within(labels: &[u16], w: usize, h: usize) -> Option<(Vec<u16>, Vec<usize>)> {
     let n = w * h;
     let mut out = vec![u16::MAX; n];
     let mut face_color: Vec<usize> = Vec::new();
@@ -222,8 +253,8 @@ pub fn split_components(labels: &[u16], w: usize, h: usize) -> (Vec<u16>, Vec<us
         if out[seed] != u16::MAX {
             continue;
         }
-        if face_color.len() >= u16::MAX as usize {
-            break;
+        if face_color.len() >= MAX_FACES {
+            return None;
         }
         let lab = labels[seed];
         let id = face_color.len() as u16;
@@ -253,13 +284,135 @@ pub fn split_components(labels: &[u16], w: usize, h: usize) -> (Vec<u16>, Vec<us
             }
         }
     }
+    // Every pixel was reached from some seed, so no "not yet visited" marker is left (the
+    // old loop rewrote leftover markers to face 0; with the early return above there are
+    // none to rewrite).
+    Some((out, face_color))
+}
 
-    for v in out.iter_mut() {
-        if *v == u16::MAX {
-            *v = 0;
+/// Merge the smallest 4-connected components of `labels` into their neighbours until at
+/// most `cap` components remain; returns how many components were relabelled.
+///
+/// # The method
+///
+/// Region merging on the region adjacency graph, smallest region first, each into the
+/// neighbouring label it shares the most pixel edges with (ties to the lower label) -- the
+/// rule [`despeckle`] already uses for speckles, applied until a count is met rather than
+/// below a size. In rounds:
+///
+/// 1. Find the components ([`Components`], runs and union-find). If there are at most
+///    `cap`, stop.
+/// 2. Take the `excess = count − cap` smallest, ordered by size and then by raster order
+///    of their first pixel, so the result does not depend on hashing or threads.
+/// 3. In that order, relabel each one with its commonest neighbouring label, unless a
+///    neighbour was already relabelled this round, or it was itself chosen as some other
+///    component's target. Every component next to it that carries the chosen label is
+///    marked a target, which keeps its label for the rest of the round.
+///
+/// *Why each relabelling removes a component.* A relabelled component takes the label of a
+/// neighbouring target, which keeps that label to the end of the round, so the two are one
+/// component afterwards; and no two relabelled components touch, so no merge is undone by a
+/// later one. Each round therefore ends with at most `count − relabelled` components, and
+/// the first component of every round can always be relabelled (nothing is marked yet, and
+/// with two or more components every component has a neighbour), so the rounds end.
+///
+/// *Cost.* One component pass per round, `O(w·h)`, plus the member pixels of the chosen
+/// components; a round relabels a large share of the excess (on random noise, where the
+/// smallest components are single pixels, most of them), so a handful of rounds suffice.
+///
+/// Only reached past [`MAX_FACES`] components, which no image in the benchmark sets comes
+/// near (the largest 2048 px input has a few thousand faces): it trades the smallest
+/// specks, the least visible part of an image that has more regions than an SVG can
+/// usefully hold, for a face map that is still a partition into connected faces.
+///
+/// Method from: region merging on a region adjacency graph, smallest and most similar
+/// first, as in K. Haris, S. N. Efstratiadis, N. Maglaveras, A. K. Katsaggelos (1998),
+/// *Hybrid image segmentation using watersheds and fast region merging*, IEEE TIP
+/// 7(12):1684–1699, <https://doi.org/10.1109/83.730380>. Adapted: the merge order is
+/// size alone and "most similar" is the longest shared border (the labels carry no colour
+/// here), and the stop is the face-id limit rather than a dissimilarity threshold.
+pub(crate) fn cap_components(labels: &mut [u16], w: usize, h: usize, cap: usize) -> usize {
+    let mut relabelled = 0usize;
+    loop {
+        let comps = Components::of(labels, w, h);
+        let n = comps.len();
+        if n <= cap.max(1) {
+            return relabelled;
+        }
+        let mut order: Vec<u32> = (0..n as u32).collect();
+        order.sort_unstable_by_key(|&c| (comps.size[c as usize], c));
+        order.truncate(n - cap.max(1));
+        let mut chosen = vec![false; n];
+        for &c in &order {
+            chosen[c as usize] = true;
+        }
+        let small = comps.members(|c| chosen[c]);
+        // Per component, this round: 0 untouched, 1 relabelled, 2 kept as a target.
+        let mut state = vec![0u8; n];
+        let mut progress = 0usize;
+        let neighbours = |p: usize| {
+            let (x, y) = (p % w, p / w);
+            [
+                (x > 0).then(|| p - 1),
+                (x + 1 < w).then(|| p + 1),
+                (y > 0).then(|| p - w),
+                (y + 1 < h).then(|| p + w),
+            ]
+            .into_iter()
+            .flatten()
+        };
+        for &c in &order {
+            let c = c as usize;
+            if state[c] != 0 {
+                continue;
+            }
+            let group = small.of(c);
+            let mut tally: Vec<(u16, usize)> = Vec::new();
+            let mut blocked = false;
+            'scan: for &p in group {
+                for q in neighbours(p) {
+                    let d = comps.comp[q] as usize;
+                    if d == c {
+                        continue;
+                    }
+                    if state[d] == 1 {
+                        blocked = true;
+                        break 'scan;
+                    }
+                    let l = labels[q];
+                    match tally.iter_mut().find(|e| e.0 == l) {
+                        Some(e) => e.1 += 1,
+                        None => tally.push((l, 1)),
+                    }
+                }
+            }
+            let best = tally
+                .iter()
+                .max_by_key(|&&(lab, k)| (k, std::cmp::Reverse(lab)))
+                .map(|&(lab, _)| lab);
+            let Some(best) = best.filter(|_| !blocked) else {
+                continue;
+            };
+            for &p in group {
+                labels[p] = best;
+            }
+            state[c] = 1;
+            for &p in group {
+                for q in neighbours(p) {
+                    let d = comps.comp[q] as usize;
+                    if d != c && labels[q] == best && state[d] == 0 {
+                        state[d] = 2;
+                    }
+                }
+            }
+            progress += 1;
+        }
+        relabelled += progress;
+        if progress == 0 {
+            // Unreachable by the argument above; a guard against looping forever.
+            return relabelled;
         }
     }
-    (out, face_color)
 }
 
 /// Colour of the backdrop the image was composited onto.
@@ -975,5 +1128,176 @@ mod tests {
         let mut labels = vec![0, 0, 0, 0, 1, 0, 0, 0, 0];
         despeckle(&mut labels, w, h, 2);
         assert_eq!(labels[4], 0);
+    }
+
+    /// A 64-bit LCG, for maps that do not depend on any other test helper.
+    fn lcg(s: &mut u64) -> u64 {
+        *s = s
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        *s >> 33
+    }
+
+    /// Random maps of 1 to 5 labels: noise, blocks and stripes, at odd sizes including one
+    /// row and one column.
+    fn random_maps() -> Vec<(Vec<u16>, usize, usize)> {
+        let mut s = 7u64;
+        let mut out = Vec::new();
+        for &(w, h) in &[(1usize, 1usize), (1, 9), (9, 1), (5, 4), (17, 11), (40, 33)] {
+            for k in 1..=5u64 {
+                let noise: Vec<u16> = (0..w * h).map(|_| (lcg(&mut s) % k) as u16).collect();
+                let blocks: Vec<u16> = (0..w * h)
+                    .map(|p| (((p % w) / 3 + (p / w) / 2) as u64 % k) as u16)
+                    .collect();
+                out.push((noise, w, h));
+                out.push((blocks, w, h));
+            }
+        }
+        out
+    }
+
+    /// The old `split_components`, verbatim, as the oracle below the face-id limit.
+    fn old_split_components(labels: &[u16], w: usize, h: usize) -> (Vec<u16>, Vec<usize>) {
+        let n = w * h;
+        let mut out = vec![u16::MAX; n];
+        let mut face_color: Vec<usize> = Vec::new();
+        let mut stack: Vec<usize> = Vec::new();
+        for seed in 0..n {
+            if out[seed] != u16::MAX {
+                continue;
+            }
+            if face_color.len() >= u16::MAX as usize {
+                break;
+            }
+            let lab = labels[seed];
+            let id = face_color.len() as u16;
+            face_color.push(lab as usize);
+            out[seed] = id;
+            stack.push(seed);
+            while let Some(p) = stack.pop() {
+                let (x, y) = (p % w, p / w);
+                let mut visit = |q: usize| {
+                    if out[q] == u16::MAX && labels[q] == lab {
+                        out[q] = id;
+                        stack.push(q);
+                    }
+                };
+                if x > 0 {
+                    visit(p - 1);
+                }
+                if x + 1 < w {
+                    visit(p + 1);
+                }
+                if y > 0 {
+                    visit(p - w);
+                }
+                if y + 1 < h {
+                    visit(p + w);
+                }
+            }
+        }
+        for v in out.iter_mut() {
+            if *v == u16::MAX {
+                *v = 0;
+            }
+        }
+        (out, face_color)
+    }
+
+    /// Below the face-id limit the split is the old split, id for id.
+    #[test]
+    fn the_split_below_the_limit_is_the_old_split() {
+        for (labels, w, h) in random_maps() {
+            assert_eq!(
+                split_components(&labels, w, h),
+                old_split_components(&labels, w, h),
+                "{w}x{h}"
+            );
+        }
+    }
+
+    /// `cap_components` leaves at most `cap` components; a component it changes is
+    /// relabelled whole, with the label of a component it touched; under the cap it changes
+    /// nothing.
+    #[test]
+    fn capping_components_merges_whole_components_into_neighbours() {
+        for (labels, w, h) in random_maps() {
+            let before = Components::of(&labels, w, h);
+            for cap in [
+                1usize,
+                2,
+                3,
+                7,
+                before.len().saturating_sub(1),
+                before.len(),
+            ] {
+                let mut capped = labels.clone();
+                let moved = cap_components(&mut capped, w, h, cap);
+                let after = Components::of(&capped, w, h);
+                assert!(
+                    after.len() <= cap.max(1),
+                    "{w}x{h} cap {cap}: {}",
+                    after.len()
+                );
+                if before.len() <= cap.max(1) {
+                    assert_eq!(capped, labels, "under the cap nothing changes");
+                    assert_eq!(moved, 0);
+                }
+                // Each original component: unchanged, or one new label throughout. With one
+                // component to remove (a single round, a single relabelling) that label is
+                // one an original 4-neighbouring component carried; over several rounds it
+                // can be a neighbour's neighbour's, relabelled in an earlier round.
+                let one_round = cap + 1 == before.len() && cap >= 1;
+                if one_round {
+                    assert_eq!(moved, 1, "{w}x{h}: one excess component, one relabelling");
+                }
+                for c in 0..before.len() {
+                    let px: Vec<usize> =
+                        (0..w * h).filter(|&p| before.comp[p] == c as u32).collect();
+                    let new = capped[px[0]];
+                    assert!(
+                        px.iter().all(|&p| capped[p] == new),
+                        "{w}x{h} component {c} split"
+                    );
+                    assert!(
+                        labels.contains(&new),
+                        "{w}x{h}: a label that was never there"
+                    );
+                    if one_round && new != labels[px[0]] {
+                        let touches = px.iter().any(|&p| {
+                            let (x, y) = (p % w, p / w);
+                            [
+                                (x > 0).then(|| p - 1),
+                                (x + 1 < w).then(|| p + 1),
+                                (y > 0).then(|| p - w),
+                                (y + 1 < h).then(|| p + w),
+                            ]
+                            .into_iter()
+                            .flatten()
+                            .any(|q| before.comp[q] != c as u32 && labels[q] == new)
+                        });
+                        assert!(touches, "{w}x{h} component {c} took a label from nowhere");
+                    }
+                }
+            }
+        }
+    }
+
+    /// The noise-image case at a testable size: a 300 x 300 checkerboard has 90,000
+    /// components, more than the face ids. The split now merges the smallest into their
+    /// neighbours and numbers the rest: at most `MAX_FACES` faces, each one connected
+    /// component of one label (nothing folded into face 0).
+    #[test]
+    fn a_map_with_more_components_than_face_ids_is_split_into_connected_faces() {
+        let (w, h) = (300usize, 300usize);
+        let labels: Vec<u16> = (0..w * h).map(|p| ((p % w + p / w) % 2) as u16).collect();
+        assert!(Components::of(&labels, w, h).len() > MAX_FACES);
+        let (faces, face_color) = split_components(&labels, w, h);
+        assert!(face_color.len() <= MAX_FACES, "{}", face_color.len());
+        assert!(faces.iter().all(|&f| (f as usize) < face_color.len()));
+        // Each face id is exactly one 4-connected component of the face map.
+        assert_eq!(Components::of(&faces, w, h).len(), face_color.len());
+        // And each face is all one label of the input's two.
+        assert!(face_color.iter().all(|&l| l < 2));
     }
 }

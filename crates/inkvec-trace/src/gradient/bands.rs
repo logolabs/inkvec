@@ -1235,11 +1235,19 @@ impl Agglomeration<'_> {
             // and keeps its palette label, coloured from every flat component of that entry —
             // the wide ones included, whose interiors say what the ink is under the
             // anti-aliasing that is all the thin one has.
+            // Label ids are `u16` and `u16::MAX` is the planar map's outside, so at most
+            // `crate::regions::MAX_FACES` labels exist. A gradient used to be minted an id
+            // without that check, so past 65,535 labels its id wrapped round onto a palette
+            // label (or onto the outside). Past the limit a component of either kind keeps
+            // its palette label and joins that label's pooled flat fill, as a thin flat
+            // component does; below it (every image in the benchmark sets) nothing changes.
+            let can_mint = out.len() < crate::regions::MAX_FACES;
             let own_colour = !fits[c].model.is_gradient()
-                && out.len() < u16::MAX as usize
+                && can_mint
                 && interior_count(&members[c], w, h, |p| group[p] == c as u32)
                     >= MIN_GRADIENT_PIXELS;
-            if fits[c].model.is_gradient() || own_colour {
+            let minted = can_mint && (fits[c].model.is_gradient() || own_colour);
+            if minted {
                 let id = out.len() as u16;
                 for &p in &members[c] {
                     labels[p] = id;
@@ -1249,7 +1257,7 @@ impl Agglomeration<'_> {
             } else {
                 pooled[comp_label[c] as usize] = true;
             }
-            if !fits[c].model.is_gradient() {
+            if !fits[c].model.is_gradient() || !minted {
                 let l = comp_label[c];
                 for &p in &members[c] {
                     flat_of[p] = l;

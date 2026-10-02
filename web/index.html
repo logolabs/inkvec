@@ -325,7 +325,7 @@ function holdForTab(name, bytes, url){
   card.append(el("div", "big", url ? `${esc(name)} is ready to open` : `${esc(name)} is ${mb} MB`));
   card.append(el("div", "small", url
     ? "It opens in a tab of its own, where the Studio runs on every core and can use the denoiser."
-    : `From inside Hugging Face's page a file goes to a tab of its own in the address, which holds ${(HANDOFF_MAX / 1e6).toFixed(1)} MB. Open the Studio in its own tab and drop the file there, or open it here, on one core.`));
+    : `From inside Hugging Face's page, a file can reach a tab of its own only inside the page address, which holds up to ${(HANDOFF_MAX / 1e6).toFixed(1)} MB. Open the Studio in its own tab and drop the file there, or open it here, on one core.`));
   const acts = el("div", "acts");
   const tab = el("button", "btn primary", url ? "Open in its own tab" : "Open the Studio in its own tab");
   tab.type = "button";

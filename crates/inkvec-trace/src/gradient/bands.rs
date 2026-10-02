@@ -22,6 +22,139 @@ use crate::color::Palette;
 /// Two regions must touch along at least this many pixel pairs to be merge candidates.
 const MIN_SHARED_BOUNDARY: u32 = 3;
 
+/// The work cap of the agglomeration: the union fits of one `merge_bands` may cost at most
+/// `max(MERGE_WORK_FLOOR, MERGE_WORK_PER_PIXEL · w · h)` units of [`union_work`] -- 2²⁸
+/// units up to about 2900 x 2900 px, 32 a pixel beyond.
+///
+/// # Why a cap
+///
+/// Nothing else bounds the loop. Each round fits the unions it has not seen (a wave), then
+/// accepts one merge, and an accepted merge makes every cached union of the absorbing
+/// region stale; on an image whose background is a smooth non-flat field (a photographed
+/// or scanned print, a textured or vignetted backdrop) the regions are many, large and all
+/// gradients, so the rounds, the waves and the stale refits never run out. Measured
+/// 2026-10-02 (r2-inputs stress set, v0.2.4, single thread, under load): a photographed
+/// `lucide/omega` and a textured `material-icons/12mp` were still in this stage after 900 s
+/// (337 and 525 CPU s), and 10 of 996 stress traces hit the 300 s timeout here.
+///
+/// # Why these numbers
+///
+/// Set from what images spend, with room, so that it never binds on the gate's. Measured
+/// 2026-10-02 (`INKVEC_DIAG`, `merge work=`): the most any image spent was 22.7 M units on
+/// the 246-icon screen set at 128 px (a Noto emoji whose many bands are small, so the
+/// spend is not proportional to area: 1,385 units a pixel), 21.8 M on the same icons at
+/// 512 px, 3.5 M on `held_a`, 18.0 M on the 51-image 512 px set and 24.4 M on the 2048 px
+/// inputs (the masthead, 15 units a pixel). Of the 772 non-pathological images of the
+/// r2-inputs stress set the most was 168 M (a wordmark on a diagonal gradient background,
+/// 34 s) and then 144 M (a scanned wordmark). The floor, 2²⁸ = 268 M, is 11 times the
+/// gate's largest spend and above every one of those 772; the per-pixel term keeps an
+/// uncapped large image (`--max-dim 0`) at twice the masthead's rate. The images it stops
+/// are the ones that never finished: photographed and texture-backed prints.
+///
+/// A stage that stops at the cap leaves every merge accepted so far standing and every
+/// other band a separate, correct fill, exactly as the time budget always did; the cap is
+/// in units of work, not of time, so where it stops does not depend on the machine.
+///
+/// Not from the literature: a resource bound on our own greedy loop. Inspired by: the
+/// budgeted (anytime) form of agglomerative region merging, where the merge sequence is
+/// cut off once a resource is spent and the partition reached so far is the answer -- the
+/// region adjacency graph merging of K. Haris, S. N. Efstratiadis, N. Maglaveras,
+/// A. K. Katsaggelos (1998), *Hybrid image segmentation using watersheds and fast region
+/// merging*, IEEE TIP 7(12):1684-1699, <https://doi.org/10.1109/83.730380>, whose merge
+/// order (cheapest first) this loop shares; there the stop is a region count, here it is
+/// the work spent, because a count says nothing about how expensive the fits were.
+const MERGE_WORK_PER_PIXEL: u64 = 32;
+
+/// The least work cap any image gets, so a small icon with many bands is not starved
+/// (see [`MERGE_WORK_PER_PIXEL`]).
+const MERGE_WORK_FLOOR: u64 = 1 << 28;
+
+/// What one union fit of `n` pixels is charged, in units of one gathered pixel.
+///
+/// A fit gathers [`strided_union`]'s pixels -- all `n` up to [`FIT_PIXELS_CAP`], else every
+/// `⌊n / FIT_PIXELS_CAP⌋`-th, so `⌈n / ⌊n / FIT_PIXELS_CAP⌋⌉` of them -- and then selects a
+/// model on at most [`MAX_FIT_SAMPLES`] samples, whose radial and elliptic centre searches
+/// dominate it. The charge is `g + MODEL_WORK_PER_SAMPLE · min(g, MAX_FIT_SAMPLES)` for `g`
+/// gathered pixels: the measured split of a union fit's time between gathering (0.25 µs a
+/// pixel) and model selection (13.4 ms for a full-sample fit, about 13 gathered pixels'
+/// worth per sample), from the `INKVEC_TIMING` counters of 2,243 union fits on a
+/// photographed wordmark (`brands/sangchaimeter`, 2026-10-02). Only the order of magnitude
+/// matters: the charge is deterministic, and the cap is set in the same units from the
+/// gate's own spending.
+fn union_work(n: usize) -> u64 {
+    let gathered = if n <= FIT_PIXELS_CAP {
+        n
+    } else {
+        n.div_ceil(n / FIT_PIXELS_CAP)
+    };
+    gathered as u64 + MODEL_WORK_PER_SAMPLE * gathered.min(MAX_FIT_SAMPLES) as u64
+}
+
+/// Gathered pixels one scored sample of a union fit is worth (see [`union_work`]).
+const MODEL_WORK_PER_SAMPLE: u64 = 13;
+
+/// Why the agglomeration stopped before running out of profitable merges.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MergeStop {
+    /// The next wave or refit would have passed the work cap.
+    Work,
+    /// The caller's deadline (`--time-budget`) passed.
+    Clock,
+}
+
+/// The two bounds on the agglomeration: the deterministic work cap, always on, and the
+/// caller's deadline, only with a time budget.
+struct MergeBudget {
+    /// Most [`union_work`] the union fits may spend in total.
+    cap: u64,
+    /// Spent so far.
+    spent: u64,
+    /// The instant past which no new fit starts; `None` without a time budget, and then the
+    /// clock is never read.
+    deadline: Option<inkvec_core::clock::Instant>,
+    /// Set once either bound has stopped the loop.
+    stop: Option<MergeStop>,
+}
+
+impl MergeBudget {
+    /// The budget of a `w x h` image (see [`MERGE_WORK_PER_PIXEL`]).
+    fn new(w: usize, h: usize, deadline: Option<inkvec_core::clock::Instant>) -> Self {
+        let area = (w as u64).saturating_mul(h as u64);
+        MergeBudget {
+            cap: MERGE_WORK_PER_PIXEL
+                .saturating_mul(area)
+                .max(MERGE_WORK_FLOOR),
+            spent: 0,
+            deadline,
+            stop: None,
+        }
+    }
+
+    /// Charge `work` if it fits under the cap; otherwise charge nothing, record the stop
+    /// and return false. Sums saturate, so no image can wrap the count.
+    fn charge(&mut self, work: u64) -> bool {
+        let after = self.spent.saturating_add(work);
+        if after > self.cap {
+            self.stop.get_or_insert(MergeStop::Work);
+            return false;
+        }
+        self.spent = after;
+        true
+    }
+
+    /// Whether the deadline has passed (recording the stop). Never reads the clock
+    /// without a deadline, so a trace without a time budget does not depend on time.
+    fn out_of_time(&mut self) -> bool {
+        let late = self
+            .deadline
+            .is_some_and(|d| inkvec_core::clock::Instant::now() >= d);
+        if late {
+            self.stop.get_or_insert(MergeStop::Clock);
+        }
+        late
+    }
+}
+
 /// Research comparison on common observations. Both alternatives explain the same
 /// union-interior pixels, including the former interface when evidence permits it.
 /// The split prediction uses the current discrete membership at that pixel; this is
@@ -207,6 +340,34 @@ pub(crate) fn merge_bands_with(
     same_class: Option<&(dyn Fn(u16, u16) -> bool + Sync)>,
     inner_blends: bool,
 ) -> (Vec<FillFit>, Vec<usize>) {
+    merge_bands_budgeted(
+        labels,
+        rgb,
+        w,
+        h,
+        pal,
+        sigma_noise,
+        lambda,
+        same_class,
+        inner_blends,
+        MergeBudget::new(w, h, deadline),
+    )
+}
+
+/// [`merge_bands_with`] under an explicit [`MergeBudget`], so the tests can set the cap.
+#[allow(clippy::too_many_arguments)]
+fn merge_bands_budgeted(
+    labels: &mut [u16],
+    rgb: &[[f32; 3]],
+    w: usize,
+    h: usize,
+    pal: &Palette,
+    sigma_noise: f64,
+    lambda: f64,
+    same_class: Option<&(dyn Fn(u16, u16) -> bool + Sync)>,
+    inner_blends: bool,
+    budget: MergeBudget,
+) -> (Vec<FillFit>, Vec<usize>) {
     let n_pal = pal
         .len()
         .max(labels.iter().map(|&l| l as usize + 1).max().unwrap_or(0));
@@ -274,8 +435,9 @@ pub(crate) fn merge_bands_with(
         // remains the default.
         common_pixels: cfg!(feature = "research")
             && inkvec_core::env::flag("INKVEC_MERGE_COMMON_PIXELS"),
+        budget,
     };
-    merge.run(deadline, &live);
+    merge.run(&live);
 
     if let Some(win) = debug::window() {
         merge.dump(win);
@@ -602,6 +764,8 @@ struct Agglomeration<'a> {
     mergedbg: bool,
     /// `INKVEC_MERGE_COMMON_PIXELS` (research builds): price every pair on common pixels.
     common_pixels: bool,
+    /// The work cap and the caller's deadline (see [`MergeBudget`]).
+    budget: MergeBudget,
 }
 
 impl Agglomeration<'_> {
@@ -644,18 +808,32 @@ impl Agglomeration<'_> {
     }
 
     /// The greedy loop: each round fits the unions it has not fitted yet, picks the pair
-    /// with the largest positive gain and merges it, until no pair gains or `deadline`
-    /// passes.
+    /// with the largest positive gain and merges it, until no pair gains or the budget
+    /// ([`MergeBudget`]: the work cap, and the deadline when there is one) stops it.
     ///
     /// Each round: fit every union the scan will want to look at but has not fitted yet —
     /// in parallel, since the fits are independent — then pick the best merge from the
     /// cache. The pair scan itself is cheap; the union fits are where the time goes, and
     /// computing them in waves puts every core on them without changing which merge wins.
-    fn run(
-        &mut self,
-        deadline: Option<inkvec_core::clock::Instant>,
-        live: &inkvec_core::progress::Handle,
-    ) {
+    ///
+    /// # The bounds
+    ///
+    /// * **Work**, deterministic: a wave is charged before it is fitted, the sum of
+    ///   [`union_work`] over its unions (the sizes are known from the member lists), and a
+    ///   wave that would pass the cap is not fitted at all; a stale refit is charged the
+    ///   same way. The charge is a function of the sizes alone, so where the loop stops is
+    ///   the same on every machine and every thread count.
+    /// * **Time**, only with a deadline: checked at the top of each round as before, and now
+    ///   also before each fit inside a wave and before each stale refit, because one wave
+    ///   could take most of a minute (a first wave of 1,485 unions on a textured backdrop
+    ///   took 52 s under `--time-budget 10`, 2026-10-02) and the old check only ran between
+    ///   rounds.
+    ///
+    /// Either way the loop just stops: every merge accepted so far stands and the other
+    /// bands stay the separate, correct fills they already are -- the graceful end the
+    /// time budget always had. With no deadline and the cap not reached, this is the loop
+    /// as it was, round for round.
+    fn run(&mut self, live: &inkvec_core::progress::Handle) {
         let n_comp = self.members.len();
         let timing = inkvec_core::env::flag("INKVEC_TIMING");
         let mut t = MergeTiming::default();
@@ -667,13 +845,8 @@ impl Agglomeration<'_> {
             // Out of time: leave the remaining bands as the separate fills they already
             // are. Every merge accepted so far stands, so the output is a correct trace
             // with more fills than the best one -- the graceful end of a time budget.
-            if let Some(d) = deadline {
-                if inkvec_core::clock::Instant::now() >= d {
-                    if self.mergedbg {
-                        eprintln!("  merge: stopped at the time budget");
-                    }
-                    break;
-                }
+            if self.budget.out_of_time() {
+                break;
             }
             let mut missing = self.missing_unions();
             if timing {
@@ -683,7 +856,15 @@ impl Agglomeration<'_> {
             if !missing.is_empty() {
                 t.waves += 1;
                 missing.sort_unstable();
-                self.fit_wave(&missing, live);
+                let work = missing
+                    .iter()
+                    .map(|&(a, b)| {
+                        union_work(self.members[a as usize].len() + self.members[b as usize].len())
+                    })
+                    .fold(0u64, u64::saturating_add);
+                if !self.budget.charge(work) || !self.fit_wave(&missing, live) {
+                    break;
+                }
             }
             if timing {
                 t.ns_wave += t_wave.elapsed().as_nanos() as u64;
@@ -706,6 +887,30 @@ impl Agglomeration<'_> {
         }
         if timing {
             t.report(n_comp);
+        }
+        let MergeBudget {
+            cap, spent, stop, ..
+        } = self.budget;
+        crate::diag!(
+            "merge",
+            "merge work={spent} cap={cap} rounds={} stop={stop:?}",
+            t.rounds
+        );
+        match stop {
+            Some(MergeStop::Work) => {
+                crate::diag!("merge", "merge stopped at the work cap");
+                crate::diag::saturated(
+                    "merge",
+                    "work",
+                    spent as f64,
+                    cap as f64,
+                    crate::diag::Stop::Budget,
+                );
+            }
+            Some(MergeStop::Clock) if self.mergedbg => {
+                eprintln!("  merge: stopped at the time budget");
+            }
+            _ => {}
         }
     }
 
@@ -736,34 +941,52 @@ impl Agglomeration<'_> {
 
     /// Fit the unions `missing` in parallel and cache them fresh, dropping any gain
     /// priced on an earlier fit of the same pair.
-    fn fit_wave(&mut self, missing: &[(u32, u32)], live: &inkvec_core::progress::Handle) {
+    ///
+    /// Returns false when the deadline passed during the wave: each fit checks it before it
+    /// starts and is skipped once it has passed, so a wave ends within one fit of the
+    /// deadline (per thread) instead of running to its end. The fits that did finish are
+    /// cached; the caller stops the loop. Without a deadline nothing is skipped and the
+    /// clock is never read.
+    fn fit_wave(&mut self, missing: &[(u32, u32)], live: &inkvec_core::progress::Handle) -> bool {
         use rayon::prelude::*;
         let this = &*self;
-        let computed: Vec<((u32, u32), (FillFit, bool))> = missing
+        let deadline = this.budget.deadline;
+        let computed: Vec<Option<((u32, u32), (FillFit, bool))>> = missing
             .par_iter()
             .map(|&(a, b)| {
                 live.check();
+                if deadline.is_some_and(|d| inkvec_core::clock::Instant::now() >= d) {
+                    return None;
+                }
                 let (ai, bi) = (a as usize, b as usize);
                 let px = this.union_parts(ai, bi);
                 // Every fit already sees at most FIT_PIXELS_CAP pixels, so a
                 // candidate union costs the same whatever its size and there is
                 // nothing to refit: the cached fit is the fit.
                 let inner = this.smooth_pair(ai, bi);
-                (
+                Some((
                     (a, b),
                     (this.fitter.fit(&this.group, px, a, b, inner), false),
-                )
+                ))
             })
             .collect();
+        let complete = computed.iter().all(Option::is_some);
+        let computed: Vec<_> = computed.into_iter().flatten().collect();
         for (k, _) in &computed {
             self.gains.remove(k);
         }
         self.cache.extend(computed);
+        if !complete {
+            self.budget.stop.get_or_insert(MergeStop::Clock);
+        }
+        complete
     }
 
     /// The merge of this round: the pair with the largest positive gain, judged on a
     /// fresh fit. A winner whose cached union is stale is refitted (counted in
-    /// `stale_refits`) and the choice made again. `None` when no pair gains.
+    /// `stale_refits`) and the choice made again. `None` when no pair gains, or when the
+    /// budget stops a refit (charged like a wave's fit, see [`Self::run`]); the caller
+    /// then ends the loop either way.
     fn pick_merge(&mut self, stale_refits: &mut u64) -> Option<(u32, u32)> {
         loop {
             let Some((_, a, b)) = self.best_gain() else {
@@ -773,6 +996,13 @@ impl Agglomeration<'_> {
                 // The winner was judged on a stale fit: refit it and choose again.
                 inkvec_core::progress::checkpoint();
                 let (ai, bi) = (a as usize, b as usize);
+                if self.budget.out_of_time()
+                    || !self
+                        .budget
+                        .charge(union_work(self.members[ai].len() + self.members[bi].len()))
+                {
+                    break None;
+                }
                 let px = self.union_parts(ai, bi);
                 let inner = self.smooth_pair(ai, bi);
                 let fit = self.fitter.fit(&self.group, px, a, b, inner);
@@ -1158,6 +1388,114 @@ mod tests {
             };
             assert_eq!(&strided_union([&a, &b])[..], &want[..], "{la} + {lb}");
         }
+    }
+
+    /// `union_work`'s gathered count is the length of what `strided_union` gathers, for
+    /// every size class (under, at and over the cap, and far over it).
+    #[test]
+    fn union_work_charges_what_a_fit_gathers() {
+        for n in [
+            0usize,
+            1,
+            4095,
+            4096,
+            4097,
+            FIT_PIXELS_CAP - 1,
+            FIT_PIXELS_CAP,
+            FIT_PIXELS_CAP + 1,
+            2 * FIT_PIXELS_CAP - 1,
+            2 * FIT_PIXELS_CAP,
+            1_260_000,
+            4_194_304,
+        ] {
+            let a: Vec<usize> = (0..n).collect();
+            let gathered = strided_union([&a, &[]]).len();
+            let want =
+                gathered as u64 + MODEL_WORK_PER_SAMPLE * gathered.min(MAX_FIT_SAMPLES) as u64;
+            assert_eq!(union_work(n), want, "{n}");
+        }
+    }
+
+    /// The cap is a strict upper bound, a refused charge spends nothing, and the clock is
+    /// not read without a deadline.
+    #[test]
+    fn the_merge_budget_charges_up_to_its_cap() {
+        let mut b = MergeBudget::new(10, 10, None);
+        b.cap = 100;
+        assert!(b.charge(60));
+        assert!(b.charge(40), "exactly the cap is allowed");
+        assert!(!b.charge(1), "one over is refused");
+        assert_eq!((b.spent, b.stop), (100, Some(MergeStop::Work)));
+        assert!(!b.out_of_time(), "no deadline, no clock");
+        let mut late = MergeBudget::new(10, 10, Some(inkvec_core::clock::Instant::now()));
+        assert!(late.out_of_time());
+        assert_eq!(late.stop, Some(MergeStop::Clock));
+        // Saturating, so an enormous image cannot wrap the cap round to a small number.
+        assert_eq!(MergeBudget::new(usize::MAX, usize::MAX, None).cap, u64::MAX);
+    }
+
+    /// A ramp in thin flat bands, which region recovery joins into one gradient: the
+    /// default cap does not bind (the result is the unbounded result), a cap of zero stops
+    /// the loop before its first wave (every band stays a separate flat fill, a correct
+    /// trace), and so does a deadline that has already passed.
+    #[test]
+    fn the_merge_stops_at_the_cap_and_otherwise_is_unchanged() {
+        let (w, h, band) = (40usize, 20usize, 2usize);
+        let q8 = |v: f32| (v * 255.0).round() / 255.0;
+        let ramp = |x: usize| 0.25 + 0.5 * x as f32 / (w - 1) as f32;
+        let rgb: Vec<[f32; 3]> = (0..w * h).map(|p| [q8(ramp(p % w)); 3]).collect();
+        let inks: Vec<[f32; 3]> = (0..w / band)
+            .map(|b| [q8(ramp(b * band) * 0.5 + ramp(b * band + 1) * 0.5); 3])
+            .collect();
+        let pal = Palette {
+            colors: inks
+                .iter()
+                .map(|&c| crate::color::rgb_to_oklab(c))
+                .collect(),
+            weight: vec![1.0; inks.len()],
+            alpha: vec![1.0; inks.len()],
+            rgb: inks,
+        };
+        let base: Vec<u16> = (0..w * h).map(|p| ((p % w) / band) as u16).collect();
+        let (sigma, lambda) = (0.5 / 255.0, bic_lambda(w * h));
+        let run = |budget: MergeBudget| {
+            let mut labels = base.clone();
+            let (fills, ink) = merge_bands_budgeted(
+                &mut labels,
+                &rgb,
+                w,
+                h,
+                &pal,
+                sigma,
+                lambda,
+                None,
+                true,
+                budget,
+            );
+            (labels, format!("{fills:?}"), ink)
+        };
+        let unbounded = run(MergeBudget {
+            cap: u64::MAX,
+            spent: 0,
+            deadline: None,
+            stop: None,
+        });
+        assert_eq!(run(MergeBudget::new(w, h, None)), unbounded);
+        let first = unbounded.0[0];
+        assert!(unbounded.0.iter().all(|&l| l == first), "one region");
+        let mut none = MergeBudget::new(w, h, None);
+        none.cap = 0;
+        let stopped = run(none);
+        let past = run(MergeBudget::new(
+            w,
+            h,
+            Some(inkvec_core::clock::Instant::now()),
+        ));
+        assert_eq!(stopped, past, "both stop before the first wave");
+        let mut kinds: Vec<u16> = stopped.0.clone();
+        kinds.sort_unstable();
+        kinds.dedup();
+        assert_eq!(kinds.len(), w / band, "every band stays its own region");
     }
 
     #[test]

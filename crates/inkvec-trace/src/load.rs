@@ -89,13 +89,34 @@ pub fn lossy_container(bytes: &[u8]) -> Option<bool> {
 /// Load a raster image from a file path into straight RGBA floats.
 pub fn load_image(path: &Path) -> Result<Rgba, TraceError> {
     let img = image::open(path).map_err(|e| TraceError::Decode(e.to_string()))?;
+    has_pixels(img.width(), img.height())?;
     Ok(from_dynamic(img))
 }
 
 /// Decode a raster image from in-memory bytes into straight RGBA floats.
 pub fn decode_image(bytes: &[u8]) -> Result<Rgba, TraceError> {
     let img = image::load_from_memory(bytes).map_err(|e| TraceError::Decode(e.to_string()))?;
+    has_pixels(img.width(), img.height())?;
     Ok(from_dynamic(img))
+}
+
+/// Refuse a raster with no pixels: `Ok` when both sides are at least one pixel.
+///
+/// A decoder can hand back an image with a zero side without an error: a GIF whose
+/// logical-screen width is 0 decodes to a 0 x 30000 image (found by the 2026-10-02 intake
+/// fuzz, 3 of 1,200 mutated files, all GIFs), while PNG refuses the same header itself. Every
+/// stage after the intake divides by a side or indexes row 0, and the first to do so was the
+/// unblock test (`w / min(64, w)`, a division by zero, in Quality and Fast alike). An image
+/// with no pixels has nothing to trace, so it is refused here, once, as a decode error.
+///
+/// Not from the literature: an input check.
+fn has_pixels(w: u32, h: u32) -> Result<(), TraceError> {
+    if w == 0 || h == 0 {
+        return Err(TraceError::Decode(format!(
+            "the image has no pixels ({w} x {h})"
+        )));
+    }
+    Ok(())
 }
 
 /// Below this many pixels (256 × 256) the byte-to-float conversion runs on the calling
@@ -260,6 +281,7 @@ fn load_file_bytes_capped(
             .map_err(|e| TraceError::Decode(e.to_string()))?
             .into_dimensions()
             .map_err(err)?;
+        has_pixels(w, h)?;
         let img = image::open(path).map_err(err)?;
         return Ok((cap_decoded(img, w, h, max_dim), (w, h)));
     };
@@ -269,6 +291,7 @@ fn load_file_bytes_capped(
         r
     };
     let (w, h) = reader().into_dimensions().map_err(err)?;
+    has_pixels(w, h)?;
     let img = reader().decode().map_err(err)?;
     Ok((cap_decoded(img, w, h, max_dim), (w, h)))
 }
@@ -296,6 +319,7 @@ pub fn decode_image_capped(bytes: &[u8], max_dim: usize) -> Result<(Rgba, (u32, 
         .map_err(|e| TraceError::Decode(e.to_string()))?
         .into_dimensions()
         .map_err(|e| TraceError::Decode(e.to_string()))?;
+    has_pixels(w, h)?;
     let img = image::load_from_memory(bytes).map_err(|e| TraceError::Decode(e.to_string()))?;
     Ok((cap_decoded(img, w, h, max_dim), (w, h)))
 }
@@ -640,6 +664,42 @@ mod decode_cap_tests {
         );
         assert_eq!(capped.data.len(), capped.width * capped.height * 4);
         assert!(capped.width < full.width);
+    }
+
+    /// The fuzz case `m1_00557_s0.gif`, made small: a GIF whose logical screen is 0 pixels
+    /// wide decodes without an error in the `image` crate, and must be refused at intake by
+    /// every entry point rather than reach the tracer with no pixels.
+    #[test]
+    fn a_gif_with_a_zero_wide_screen_is_refused() {
+        let img = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            5,
+            7,
+            image::Rgba([10, 200, 30, 255]),
+        ));
+        let mut gif = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut gif, image::ImageFormat::Gif).unwrap();
+        let mut gif = gif.into_inner();
+        // The logical screen descriptor follows the 6-byte signature: width, then height,
+        // as little-endian u16.
+        gif[6..8].copy_from_slice(&0u16.to_le_bytes());
+        for result in [
+            decode_image_capped(&gif, 0).map(|_| ()),
+            decode_image_capped(&gif, 2048).map(|_| ()),
+            decode_image(&gif).map(|_| ()),
+        ] {
+            let e = result.expect_err("an image with no pixels is refused");
+            assert!(e.to_string().contains("no pixels"), "{e}");
+        }
+        let path =
+            std::env::temp_dir().join(format!("inkvec-zero-wide-{}.gif", std::process::id()));
+        std::fs::write(&path, &gif).unwrap();
+        let capped = load_image_capped(&path, 2048).map(|_| ());
+        let plain = load_image(&path).map(|_| ());
+        std::fs::remove_file(&path).ok();
+        for result in [capped, plain] {
+            let e = result.expect_err("an image with no pixels is refused");
+            assert!(e.to_string().contains("no pixels"), "{e}");
+        }
     }
 
     #[test]

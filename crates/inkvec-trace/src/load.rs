@@ -446,6 +446,32 @@ fn cap_decoded(img: image::DynamicImage, w: u32, h: u32, max_dim: usize) -> Rgba
     }
 }
 
+/// The size an encoded image is shown at -- its header's width and height, swapped when its
+/// EXIF orientation turns it a quarter -- read from the header without decoding the pixels.
+///
+/// For a caller that reports a file's size before it traces it (a viewer listing the file,
+/// a cache keyed by size): the arrival dimensions [`decode_image_capped`] returns are
+/// upright, so a size read from the raw header would disagree with them on a turned photo.
+/// The format is chosen as the decode chooses it ([`sniff`]); an image with a zero side is
+/// refused as the decode refuses it.
+pub fn upright_dimensions(bytes: &[u8]) -> Result<(u32, u32), TraceError> {
+    use image::metadata::Orientation as O;
+    use image::ImageDecoder;
+    let err = |e: image::ImageError| TraceError::Decode(e.to_string());
+    let Some(format) = sniff(bytes, None) else {
+        return decode_image_capped(bytes, 0).map(|(_, d)| d);
+    };
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes));
+    reader.set_format(format);
+    let mut decoder = reader.into_decoder().map_err(err)?;
+    let (w, h) = decoder.dimensions();
+    has_pixels(w, h)?;
+    Ok(match decoder.orientation().unwrap_or(O::NoTransforms) {
+        O::Rotate90 | O::Rotate270 | O::Rotate90FlipH | O::Rotate270FlipH => (h, w),
+        _ => (w, h),
+    })
+}
+
 /// Decode in-memory bytes into straight RGBA floats, capping the longer side at `max_dim`
 /// pixels (0 = no cap) before the pixels are read into floats, and returning the original
 /// dimensions alongside. See [`load_image_capped`].
@@ -881,10 +907,16 @@ mod decode_cap_tests {
         let src = |x: u32, y: u32| -> [u32; 4] { img.get_pixel(x, y).0.map(u32::from) };
         let plain = decode_image_capped(&png, 0).unwrap();
         for o in 1..=8u16 {
-            let (got, dims) = decode_image_capped(&with_orientation(&png, o), 0).unwrap();
+            let tagged = with_orientation(&png, o);
+            let (got, dims) = decode_image_capped(&tagged, 0).unwrap();
             let quarter = o >= 5;
             let (gw, gh) = if quarter { (h, w) } else { (w, h) };
             assert_eq!(dims, (gw, gh), "orientation {o}");
+            assert_eq!(
+                upright_dimensions(&tagged).unwrap(),
+                dims,
+                "orientation {o}"
+            );
             assert_eq!(
                 (got.width, got.height),
                 (gw as usize, gh as usize),

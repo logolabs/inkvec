@@ -51,7 +51,7 @@ type Init = {
   /** The page's current trace generation, shared so a retired trace skips its measurement. */
   generations: SharedArrayBuffer | null;
   denoiserPort: MessagePort | null;
-  /** Each module's size in bytes (`pkg`, `pkg-threads`), known at build time; see `withProgress`. */
+  /** Each module's size in bytes (`pkg`, `pkg-threads`), known at build time; see `countBytes`. */
   wasmBytes: Record<string, number>;
 };
 
@@ -69,33 +69,50 @@ let generations: Int32Array | null = null;
 let denoiserPort: MessagePort | null = null;
 
 /**
- * The module's bytes, counted as they arrive, for the loading screen's bar. The response
- * is re-wrapped rather than read whole, so compilation still streams alongside the download.
+ * Count the module's bytes as they arrive, for the loading screen's bar, without touching
+ * the response the engine is compiled from.
+ *
+ * The count reads `copy`, a `Response.clone()` of the fetch response taken before the
+ * original went to `WebAssembly.instantiateStreaming`: cloning tees the body, so each branch
+ * sees every chunk as it comes, and compilation still streams alongside the download. The
+ * original stays the response `fetch` returned, with its URL, which is what lets the browser
+ * keep the compiled code. V8 caches a module's optimised code only for a streaming compile
+ * of a response it can key to a URL in the HTTP cache; a `Response` built in script has no
+ * URL and is never cached. That is what the old version did (it re-wrapped the body in a
+ * `TransformStream` and a `new Response`): measured by r2-product, Edge's `Code Cache/wasm`
+ * stayed empty after four visits, against 4.1 MB with the fetch response passed through, and
+ * repeat-visit boot went from 4.40 s to 1.82 s (medians of 6, under load).
+ *
+ * Method from: V8 team, "Code caching for WebAssembly developers" (2019),
+ * https://v8.dev/blog/wasm-code-caching: only `compileStreaming`/`instantiateStreaming` of a
+ * fetched response is cached, keyed by its URL, once TurboFan has finished, from the second
+ * visit on. Adapted: the progress bar, which the article does not have, reads a tee.
+ *
  * The total is the size the build recorded: a host that compresses the file sends a
- * Content-Length for the compressed bytes, not for what the stream yields.
+ * Content-Length for the compressed bytes, not for what the stream yields. A failure here
+ * only stops the bar; the compile reads its own branch.
  */
-function withProgress(res: Response, known: number | undefined): Response {
-  if (!res.ok || !res.body || typeof TransformStream === "undefined") return res;
-  const total = known || Number(res.headers.get("content-length")) || 0;
+async function countBytes(copy: Response, known: number | undefined): Promise<void> {
+  if (!copy.ok || !copy.body) return;
+  const total = known || Number(copy.headers.get("content-length")) || 0;
   let got = 0;
   let last = 0;
-  const counted = res.body.pipeThrough(
-    new TransformStream<Uint8Array, Uint8Array>({
-      transform(chunk, ctl) {
-        got += chunk.byteLength;
-        const now = performance.now();
-        if (now - last > 40) {
-          last = now;
-          scope.postMessage({ type: "loading", got, total });
-        }
-        ctl.enqueue(chunk);
-      },
-      flush() {
-        scope.postMessage({ type: "loading", got, total: Math.max(total, got), done: true });
-      },
-    }),
-  );
-  return new Response(counted, { status: res.status, headers: { "content-type": "application/wasm" } });
+  const reader = copy.body.getReader();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      got += value.byteLength;
+      const now = performance.now();
+      if (now - last > 40) {
+        last = now;
+        scope.postMessage({ type: "loading", got, total });
+      }
+    }
+    scope.postMessage({ type: "loading", got, total: Math.max(total, got), done: true });
+  } catch {
+    // The download itself failed: the compile reading the other branch reports it.
+  }
 }
 
 /**
@@ -114,7 +131,10 @@ async function init(m: Init): Promise<void> {
   // as unhandled while the JavaScript is still arriving.
   wasm.catch(() => undefined);
   mod = (await import(/* @vite-ignore */ js)) as WasmModule;
-  const exports = await mod.default({ module_or_path: withProgress(await wasm, m.wasmBytes?.[dir]) });
+  const res = await wasm;
+  // The clone is taken before the original's body is handed to the compiler, which locks it.
+  void countBytes(res.clone(), m.wasmBytes?.[dir]);
+  const exports = await mod.default({ module_or_path: res });
   memory = exports.memory ?? null;
   // Compiled and instantiated: the page can start what waits on the engine's bytes being in
   // (the denoiser's download) while the thread pool starts.

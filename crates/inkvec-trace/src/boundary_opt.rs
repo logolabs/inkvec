@@ -54,10 +54,9 @@
 //! touches them); anchoring each point by its measured uncertainty (does not remove them);
 //! stopping early (wins on thin strokes, loses on the rest). A ribbon two pixels wide has no
 //! interior, so its two sides are not two independent boundaries: that is LOG-44, fitting a
-//! thin face as a centreline and a width. Until then, pixels holding pieces of two or more
-//! boundaries at the start are left out of the data term (their weight is zero for the
-//! whole solve, so the energy stays continuous); including them measured worse, objective
-//! 0.3713 against 0.3908 on the screen set.
+//! thin face as a centreline and a width. Until then the pixels such a ribbon's two sides
+//! share are in the data term like any other (see `band` for why they no longer are left
+//! out); the kink prior and the fold guard are what hold its two sides apart.
 //!
 //! # Where this sits, and how it is solved
 //!

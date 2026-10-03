@@ -140,9 +140,10 @@
       <p>This project does not need that rule, because the confidence number already says it. A
         boundary point measured with a large uncertainty is, by definition, a place where extra
         precision would be pretending to know something nobody knows. So the curve-fitting stage
-        simply asks each point to stay within its own measured uncertainty, and the simplification
-        falls out for free: it is loose exactly where the measurement was loose, and tight exactly
-        where it was tight. Nothing downstream has to separately decide "this part doesn't
+        weighs every point's miss against that point's own measured uncertainty — missing a
+        tightly measured point costs a lot, missing a loosely measured one costs little — and the
+        simplification falls out for free: it is loose exactly where the measurement was loose,
+        and tight exactly where it was tight. Nothing downstream has to separately decide "this part doesn't
         matter" — the coverage stage already said so, honestly, as part of taking the
         measurement.</p>
       <div class="aside">A faint boundary is measured badly, and the number this stage produces
@@ -175,16 +176,24 @@
         of the checks this stage runs — how wide an edge is, and how much random noise sits in
         flat areas — are both blind to this particular kind of damage. The ripples do not make an
         edge wider, and because they cluster in a thin band beside the edge rather than spreading
-        across the whole image, the noise check's "typical" reading stays at its floor as if the
-        image were perfectly clean. Both checks report a clean bill of health on a file that is
-        not clean.</p>
+        across the whole image, the noise check — which deliberately reads the quietest part of
+        the picture — stays at its floor as if the image were perfectly clean. Both checks report
+        a clean bill of health on a file that is not clean.</p>
       <p>This was a real bug: a compressed logo passed both checks, and the tracer dutifully
-        traced the compression ripples as if they were shapes in the artwork. The fix was not to
-        make either check cleverer — it was to stop asking pixels a question they cannot answer,
-        and instead ask the file itself what format it was saved in. Some formats (JPEG, and one
-        of the two flavours of WebP) are known to damage flat regions this way; the honest fix was
-        to check that fact directly rather than trying to infer it from pixels that do not carry
-        the signal.</p>
+        traced the compression ripples as if they were shapes in the artwork. The first fix was
+        not to make either check cleverer — it was to stop asking them a question they cannot
+        answer, and instead ask the file itself what format it was saved in. Some formats (JPEG,
+        and one of the two flavours of WebP) are known to damage flat regions this way, and that
+        fact can be checked directly.</p>
+      <p>A file's format can hide the damage, though: a JPEG saved again as a PNG carries the
+        ripples inside a format that never makes them. So a third check reads the pixels after
+        all, asking a different question from the other two — not how much fine variation there
+        is, but where it sits. The soft edge of a clean drawing dies out within a pixel or two;
+        compression ripples sit in a band a few pixels further out, where clean artwork is
+        perfectly flat, and they flip between lighter and darker from one pixel to the next.
+        Comparing the variation in that band with the variation at the edge itself, and counting
+        how often it flips, tells the two apart: measured across the benchmark sets, it catches
+        82 to 91% of JPEG files and fires on 3.8% of clean brand logos.</p>
     </section>
 
   </main>

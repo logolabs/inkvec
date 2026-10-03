@@ -205,13 +205,16 @@
         shades appear, the artist probably meant two shades. A picture that has been resized,
         blurred, or run through a compressed image format cannot be trusted the same way — its
         soft edges and its compression ripples both invent colours nobody chose.</p>
-      <p>This stage does not try to guess that from the colours alone; instead it is told,
-        explicitly, by two upstream signals: how wide the picture's edges measure (a resized or
-        blurred image has wider edges than a native render), and what file format the picture was
-        saved in (some compressed formats are known to damage flat areas without widening edges
-        at all — a case documented in the previous stage). Only when one of those signals says
-        "this input is not clean" does the palette loosen its tolerance for near-duplicate
-        colours and the confidence it grants to small colour gaps.</p>
+      <p>This stage does not try to guess that from the colours it is sorting; instead it is
+        told, explicitly, by three measurements made before it starts: how wide the picture's
+        edges measure (a resized or blurred image has wider edges than a native render), what file
+        format the picture was saved in (some compressed formats are known to damage flat areas
+        without widening edges at all), and whether the pixels just beside the edges ripple the
+        way compression leaves them — which catches a compressed picture that was saved again in
+        a format that keeps every pixel exactly, where the file format alone would say "clean". All three
+        are described in the previous stage. Only when one of them says "this input is not clean"
+        does the palette loosen its tolerance for near-duplicate colours and the confidence it
+        grants to small colour gaps.</p>
       <div class="aside">This has to stay conditional rather than always-on. Running the looser,
         more forgiving settings on a genuinely clean image was measured to cost real quality —
         about an eleven percent drop on a standard set of test icons — because on clean input a

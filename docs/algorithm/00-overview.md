@@ -36,12 +36,15 @@ was destroyed before any tunable stage ran (`coverage.rs:6-8`).
 The corollary the whole codebase is built on: uncertainty comes out of the same equation.
 Pixel noise `sigma_pixel` gives coverage uncertainty `sigma_a = sigma_pixel / |F-B|`; the
 boundary is the level set `a = 0.5`, so positional uncertainty is `sigma_a / |grad a|`
-(`coverage.rs:20-33`, `CoverageField::position_sigma`, `coverage.rs:102-117`). A faint edge
-says, honestly, that it was measured badly, and that number is what later stages read to
-decide how hard to try — `tau * sigma` admissibility in the curve fitter
-(`crates/inkvec-fit/src/multimodel.rs:13-19`), fit tolerance in the boundary solve, node
-budget in `--simplify-faint`. Nothing downstream invents its own tolerance parameter; it
-reads this one.
+(`coverage.rs:20-33`, `CoverageField::position_sigma`, `coverage.rs:154-171`). A faint edge
+says, honestly, that it was measured badly, and that number is what the curve fitter reads to
+decide how hard to try: each point's squared miss is weighed by `1/sigma²` in the
+chi-squared term of the fit's cost (`crates/inkvec-fit/src/lib.rs:82-90`; "chi2 weights are
+`1/sigma²`", `coverage.rs:73-74`), and `--simplify-faint` inflates it further on faint
+boundaries. The `tau * sigma` admissibility cone the fitter's module header once described is
+no longer on the shipping path (`crates/inkvec-fit/src/lib.rs:92-98`), and the boundary
+solve does not read sigma at all (`08-boundary-solve.md`). Nothing downstream invents its
+own tolerance parameter; it reads this one.
 
 ## The objective the whole system serves
 
@@ -89,20 +92,20 @@ each timed by the `Stopwatch` (`crates/inkvec-trace/src/lib.rs:1203`, `mark` at 
 
 | mark | line | stage | what it decides |
 |---|---|---|---|
-| — | `crates/inkvec-cli/src/lib.rs:247` (`intake`) | **intake** | decode, unblock a nearest-neighbour upscale, optional SR clean-up, resolution normalisation, alpha matting — doc `01-intake.md` |
+| — | `crates/inkvec-cli/src/lib.rs:247` (`intake`) | **intake** | decode (format from the file's signature, EXIF orientation applied, an ICC profile converted to sRGB; `crates/inkvec-trace/src/load.rs`), unblock a nearest-neighbour upscale, optional SR clean-up, resolution normalisation, alpha matting — doc `01-intake.md` |
 | `palette` | `crates/inkvec-trace/src/lib.rs:409` (`color::extract_palette_mdl_ids` :395) | palette | how many inks, and which colours, by MDL against measured pixel noise |
 | `labels` | `crates/inkvec-trace/src/lib.rs:528` (`color::label_image_ids` :413) | labels | which ink each pixel is assigned to |
 | `despeckle` | `crates/inkvec-trace/src/lib.rs:532` | despeckle | absorb regions below `min_region` into their most common neighbour |
 | `blend_absorb` | `crates/inkvec-trace/src/lib.rs:570` (`absorb_blend_slivers` :548 / `reassign_blend_pixels` :557) | blend absorption | anti-aliased pixels between two inks are not a third ink; stop them minting sliver faces |
 | `merge_bands` | `crates/inkvec-trace/src/lib.rs:599` (`gradient::merge_gradient_bands_with_ink` :586) | gradient bands | whether adjacent palette bands are really one gradient |
 | `carve` | `crates/inkvec-trace/src/lib.rs:669` (`gradient::carve_residual_features_with_detail_noise` :652) | carve | cut out a feature the palette quantised into its surroundings before a gradient is asked to explain it |
-| `split` | `crates/inkvec-trace/src/lib.rs:683` (`split_components` :682) | split | a face is a *connected* region, not "everywhere this colour appears" |
+| `split` | `crates/inkvec-trace/src/lib.rs:683` (`split_components` :682) | split | a face is a *connected* region, not "everywhere this colour appears"; a map with more components than `u16` face ids can number (`MAX_FACES`, 65,535) first has its smallest merged into a neighbour (`regions::cap_components`) |
 | `saddles` | `crates/inkvec-trace/src/lib.rs:1073` (`merge_saddle_faces` :1062) | saddle join | resolve the one ambiguity labels cannot: four pixels meeting diagonally at one corner |
 | `build_map` | `crates/inkvec-trace/src/lib.rs:1077` (`planar::build` :1076) | planar map | shared edges between exactly two faces, from the exact integer label grid, read off its row runs (`planar/cracks.rs`, `planar/runs.rs`) |
 | `symmetry_detect` | `crates/inkvec-trace/src/lib.rs:1092` | refinement setup | since 2026-09-30 this mark times only the setup of the refinement's inputs (each face's fill model and opacity); `symmetry::detect` itself runs inside the next mark |
 | `refine_subpix` | `crates/inkvec-trace/src/lib.rs:1127` (`symmetry::detect` beside `planar::measure_subpixel`, `lib.rs:1121-1125`; `Refined::apply`, `:1126`) | symmetry detect + sub-pixel | find mirror pairs on the label lattice, where the comparison is exact, and, at the same time, measure where each boundary point sits along its local normal (the 0.5-coverage level); both only read the lattice map, so they run side by side under `rayon::join`, and the measured points are written back afterwards |
 | `refine_junc` | `crates/inkvec-trace/src/lib.rs:1130` (`planar::refine_junctions` :1129) | junctions | settle shared endpoints |
-| `boundary_opt` | `crates/inkvec-trace/src/lib.rs:1142` (`boundary_opt::optimise_alpha` :1138) | boundary solve | move every boundary point at once so the *rendered* partition matches the image |
+| `boundary_opt` | `crates/inkvec-trace/src/lib.rs:1142` (`boundary_opt::optimise_alpha` :1138) | boundary solve | move every boundary point at once so the *rendered* partition matches the image; not run when its band tables would pass a memory budget (`boundary_opt/band.rs`) |
 | `decode` | `crates/inkvec-trace/src/lib.rs:1164` (`decode::decode_faces` :1153) | decode | order-first colour/geometry fix for faces too thin to own a fully-covered pixel; off unless `INKVEC_DECODE` (*research build*) is set |
 | `symmetry` | `crates/inkvec-trace/src/lib.rs:1174` (`symmetry::enforce` :1172) | symmetry enforce | put back the exactness every upstream tie-break quietly broke |
 | — | `crates/inkvec-cli/src/pipeline.rs:246` (`trace_total`) | — | end of the `inkvec_trace` half |
@@ -184,20 +187,23 @@ disagreements are where the real design lives:
   separate crates. The tree that exists has none of them: rasterisation for the SR detector
   lives in `inkvec-sr::detect` (via `resvg`), SVG emission lives in `inkvec-cli::emit`, and
   there is no `inkvec-py` — Python involvement is limited to the packaged SR fallback in
-  `tools/` (`build_upscaler` and `sr_tools_dir`, `crates/inkvec-cli/src/lib.rs:733-760`). `inkvec-sr` itself is not in DESIGN.md's
+  `tools/` (`build_upscaler` and `sr_tools_dir`, `crates/inkvec-cli/src/lib.rs:756-797`). `inkvec-sr` itself is not in DESIGN.md's
   list at all; it was added afterwards as the super-resolution pre-pass.
 * **S0, image-formation-model estimation.** DESIGN.md §"S0" calls for estimating
   compositing gamma and the anti-aliasing kernel per image by fitting the edge-spread
   function. No such per-image gamma/AA-kernel estimator exists in this repository.
   What exists instead is narrower and more targeted — `coverage::intake_scale` measures
-  edge *width* (`coverage.rs:830`) and `lossy_container` reads the file's codec
-  (`trace/load.rs:68`) — which is a container-format and resampling detector, not a
+  edge *width* (`coverage.rs:832`) and `lossy_container` reads the file's codec
+  (`trace/load.rs:77`) — which is a container-format and resampling detector, not a
   general image-formation-model fit. Whether this is a deliberate narrowing or an unbuilt
-  piece of S0 is not stated anywhere in the code comments.
+  piece of S0 is not stated anywhere in the code comments. The intake also converts an
+  embedded ICC profile to sRGB (`trace/load/icc.rs`), which reads the colour space the file
+  declares; it estimates neither the compositing gamma nor the kernel.
 * **S2, joint analysis-by-synthesis boundary solve.** This part of DESIGN.md is built and
   matches closely: `boundary_opt::optimise` (`trace/boundary_opt.rs`) is exactly the
   "parametrize the boundary, forward-render, minimise residual against the observed image"
-  design DESIGN.md specifies, run by default (`trace/lib.rs:1137-1141`; skipped in Fast mode).
+  design DESIGN.md specifies, run by default (`trace/lib.rs:1137-1141`; skipped in Fast mode,
+  and when its band tables would pass a memory budget, `trace/boundary_opt.rs:619-623`).
 * **S4, primitives inside one global DP.** DESIGN.md insists primitives must be *members of*
   the segmentation alphabet, decided by the same dynamic program as lines and cubics,
   because "once cubics are fitted they have already absorbed the error a primitive would

@@ -37,6 +37,42 @@
     </section>
 
     <section>
+      <h2>Reading the file the way a viewer shows it</h2>
+      <p>The first job is simply to read the file, and to read it the way an image viewer
+        would, because the picture a person drops on the tool is the picture they saw.</p>
+      <ul>
+        <li><b>The file's own bytes decide what kind of file it is, not its name.</b> Every
+          image format starts with a short signature, and the tool reads that. A JPEG saved
+          with a <code>.png</code> name, or a PNG renamed to <code>.jpg</code> — common after a
+          browser's "save image as" — used to be refused; it is now read as what it is, pixel
+          for pixel the same as the correctly named file. Only when the bytes carry no
+          signature at all does the name choose how to read them.</li>
+        <li><b>A phone photo is turned upright.</b> Cameras store the picture as the sensor
+          saw it and add a small note saying which way up to show it. Every viewer follows the
+          note; the tracer used to ignore it and traced such photos on their side. It now turns
+          the picture the way the note says before anything is traced, and reports the size
+          the right way round too.</li>
+        <li><b>A colour profile is converted to ordinary screen colours.</b> Some files carry
+          a profile saying their numbers belong to a different colour space — a Mac screenshot
+          in Display P3, a photo in Adobe RGB, an old print file with a different brightness
+          curve. A viewer converts those to the colours the screen shows, and now the tracer
+          does the same, converting to sRGB. On six test images with such a profile the colour
+          error fell from 0.85 to 0.12 on average, measured before and after the change on
+          the same run. A profile that already describes sRGB
+          leaves the file exactly as it was.</li>
+        <li><b>An empty image is refused.</b> A damaged file can decode to a picture that is
+          zero pixels wide or zero pixels tall. There is nothing to trace in it, and it used to
+          crash a later step; it is now turned away at once with a plain error saying it has no
+          pixels.</li>
+        <li><b>A very large file that will be shrunk anyway is allowed more room while it is
+          read.</b> A file over the size limit is reduced as it is read, so the tool lets such
+          a decode use up to 1.25 GiB rather than refusing a large but genuine picture. A
+          file that only pretends to be enormous, a few kilobytes claiming billions of pixels,
+          is still refused before any memory is spent on it.</li>
+      </ul>
+    </section>
+
+    <section>
       <h2>Undoing an accidental zoom</h2>
       <p>Resize a small image with the simplest method a computer offers — "nearest
         neighbour" — and every pixel becomes a solid square block, four, eight, sixteen
@@ -223,17 +259,25 @@
         colour is in supposedly flat areas. It separated clean files from compressed ones
         cleanly — until it met a genuinely clean smooth gradient, which scored as more
         "damaged" than the compressed flat icon, because ordinary 8-bit colour ramps produce
-        the same kind of small jumps a lossy codec does. There is no separating the two from
-        pixel statistics alone. So the fix does not try to get cleverer about pixels — it
-        reads the file's own container format, which states the fact exactly rather than
-        estimating it. A JPEG is lossy. A PNG is not. A WebP says which of its two internal
-        codecs it used, right there in its header.</p>
+        the same kind of small jumps a lossy codec does. None of those three checks could
+        separate the two. So the fix did not try to get cleverer about pixels — it reads the
+        file's own container format, which states the fact exactly rather than estimating it.
+        A JPEG is lossy. A PNG is not. A WebP says which of its two internal codecs it used,
+        right there in its header.</p>
+      <p>The container has one blind spot: a JPEG re-saved as a PNG no longer admits what
+        was done to it. A later, more targeted pixel check covers that case. Instead of asking
+        how much ripple there is, it asks where the ripple sits — in a band a few pixels out
+        from each edge, where clean artwork is perfectly flat — and whether it flips up and
+        down from one pixel to the next, as compression ripple does and a smooth gradient
+        does not. It now switches on the same safeguard; the palette stage describes it in
+        full.</p>
       <p>This matters for a reason beyond one file type. Turning this safeguard on
         unconditionally, for every file whether it needs it or not, was tried and measured:
         it costs 10.9% on the tool's own quality benchmark, because on a genuinely clean
         file, two very similar colours really are two different inks the artist chose, and
         merging them throws real artwork away. The safeguard has to stay off until there is
-        real evidence — a wide edge, or a compressed file format — that it is needed.</p>
+        real evidence — a wide edge, a compressed file format, or that ripple pattern — that
+        it is needed.</p>
     </section>
 
     <section>
@@ -279,28 +323,40 @@
                      fill="none" class="fig-accent-stroke" stroke-width="2"/>
             <text x="30" y="80" text-anchor="middle" class="fig-label" fill="var(--copper)">back to a handful</text>
           </g>
-          <text x="320" y="200" text-anchor="middle" class="fig-label">The fix: widen the allowed tolerance in proportion to how much bigger the raster is,
-            so a curve is judged against the drawing's own scale rather than raw pixels.</text>
+          <text x="320" y="200" text-anchor="middle" class="fig-label">The fix: measure how many pixels the raster spends on each unit of detail, and price
+            every curve against the drawing's own scale rather than raw pixels.</text>
         </svg>
         <figcaption>Nothing about the artwork changed between the middle and right panels —
-          only how the tolerance for "close enough" was measured.</figcaption>
+          only how "close enough" and "worth another point" were priced.</figcaption>
       </figure>
       <p>The fix is to stop pricing everything in raw pixels and start pricing it per unit of
-        the drawing's own content: work out how many "reference units" bigger this raster is
-        than the 128-pixel size everything was tuned at, and widen the allowed tolerance by
-        that same factor before fitting a single curve. A boundary point's permitted wobble
-        room grows with the image, so a curve that would have been accepted at 128 pixels is
-        accepted again at 512, from the same relative position.</p>
-      <p>This is turned off by default, because it is a genuine trade rather than a free
-        correctness fix. Under it, a five-pixel square rotated slightly can get mistaken for
-        a circle, and a thin ring two pixels wide can come out broken, in exchange for
-        roughly a fifth fewer points overall. It is offered as an option, not switched on
-        everywhere, because sometimes exact pixel fidelity matters more than a tidy point
-        count.</p>
-      <div class="aside">Worth stating plainly: this correction, as shipped, widens how much
-        wobble a curve is allowed before it fails — but it does not fully rebalance the
-        cost side of the trade the way its own design notes say it should. That is flagged
-        as an open question in the technical reference rather than glossed over here.</div>
+        the drawing's own content. The question is not how big the raster is — a crisp
+        1024-pixel drawing can be full of genuine detail — but how many pixels it spends on
+        each unit of detail. The tool measures that two ways: how wide an edge is (a resize,
+        a blur or a photograph smears it over several pixels), and how far the picture can be
+        shrunk and blown back up without losing anything (a simple drawing exported larger
+        than it needs survives that round trip untouched, even with razor-sharp edges).</p>
+      <p>One correction is always on in the full-quality mode. When the round trip says the
+        raster carries the drawing on, say, four times the pixels it needs, and the raster is
+        larger than the 128-pixel size the tool was tuned at, the smallest speck worth keeping
+        is raised
+        sixteen-fold (it is an area) and every point and curve is made four times as
+        expensive to add. Positional precision is relaxed by the same factor only when the
+        edges are wide as well, because a smooth drawing can survive the round trip without
+        being oversized at all. At the 128-pixel size the tool was tuned at, and on any raster
+        whose every pixel carries detail, none of this changes anything. One case had to be fixed
+        along the way: a single small dot on an almost empty canvas used to pass the round
+        trip at every size, because the empty canvas made the loss look tiny on average —
+        the speck limit then rose high enough to erase the dot. The test now also asks that
+        at most half of the picture's detail is lost, and the dot is drawn.</p>
+      <p>The second correction is an option. It widens the wobble a boundary point is allowed
+        by the measured factor, so a curve that would have been accepted on a natively sized
+        drawing is accepted again at 512 pixels from the same relative position, and it
+        raises the price of each point to match, as its design says both halves must. It is
+        off by default. Its help text still warns that it can mistake a small rotated square
+        for a circle and break a thin ring, though the code's own notes trace those failures
+        to an older version that judged by image size instead of measuring; the technical
+        reference lists that as an open question.</p>
     </section>
 
     <section>
@@ -308,8 +364,15 @@
       <p>Stage 2's whole method for reading an edge depends on knowing the two colours a
         boundary sits between — a shape's own colour, and whatever is behind it. A
         transparent background is not a colour at all, so before tracing starts, every
-        see-through pixel is painted over with something solid.</p>
-      <p>The obvious choice is white, and white is exactly wrong for a lot of real artwork.
+        see-through pixel is written down over something solid.</p>
+      <p>By default the tool keeps the transparency itself. The picture is written down over
+        white, but how see-through each pixel was travels alongside it into every step that
+        reads an edge, and each ink the palette finds carries an opacity of its own. Holes
+        stay holes and soft shadows stay soft in the finished file, so no backing colour has
+        to be chosen at all.</p>
+      <p>That native handling can be switched off, and then the old approach applies: the
+        picture is painted onto one solid colour before tracing. The obvious choice is white,
+        and white is exactly wrong for a lot of real artwork.
         A white logo on a transparent background, painted onto white, disappears completely —
         there is nothing left to trace. A softly translucent panel painted onto white loses
         its identity and merges into the background it was meant to sit over.</p>
@@ -322,12 +385,15 @@
         content wins. A soft glow (opacity that fades gradually, like a light source) gets
         no vote either way, because no single flat colour can honestly stand in for
         something that was never one flat opacity to begin with.</p>
-      <p>By default this choice never actually changes anything visible in the output — the
-        image is still matted to plain white — because without an extra flag turned on,
+      <p>Even in that mode this choice usually changes nothing visible in the output — the
+        image is still painted onto plain white — because without an extra flag turned on,
         transparency has nowhere to go in the final file anyway: a see-through region gets
-        painted solid rather than cut out as a hole. The smarter colour choice only takes
-        effect once that flag is on, and it exists specifically so the file can be produced
-        for use on a background other than white.</p>
+        painted solid rather than cut out as a hole. The smarter colour choice takes effect
+        once that flag is on, so the file can be produced for use on a background other than
+        white. There is one exception: when white would make more than half of the shape's
+        outline vanish — a white logo on a transparent background — the tool turns that flag
+        on by itself for that image, because otherwise there would be nothing left to
+        trace.</p>
     </section>
 
     <section>
@@ -348,6 +414,11 @@
         and the file is traced again. On genuinely clean input, running this cleanup step
         anyway makes results roughly three times worse — which is exactly why the tool
         checks first rather than always cleaning up "just in case."</p>
+      <p>The cleanup itself is a separate program that ships beside the tool. If it is not
+        installed, the deciding mode no longer fails: it keeps the trace it already made,
+        exactly as it would for a clean file, and says in its report that no cleanup tool
+        was available. Only asking for the cleanup outright, every time, still stops with an
+        error when there is nothing to run it with.</p>
     </section>
 
   </main>

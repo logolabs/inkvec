@@ -18,11 +18,11 @@ example rather than derived or measured.
 | # | Stage | Source | Reference | Plain language |
 |---|---|---|---|---|
 | — | Overview | — | [00-overview.md](00-overview.md) | [00-overview.html](00-overview.html) |
-| 1 | Intake | `inkvec-cli`, `inkvec-sr` | [01-intake.md](01-intake.md) | [01-intake.html](01-intake.html) |
-| 2 | Coverage | `trace/coverage.rs` | [02-coverage.md](02-coverage.md) | [02-coverage.html](02-coverage.html) |
-| 3 | Palette | `trace/color.rs` | [03-palette.md](03-palette.md) | [03-palette.html](03-palette.html) |
-| 4 | Regions | `trace/lib.rs` | [04-regions.md](04-regions.md) | [04-regions.html](04-regions.html) |
-| 5 | Gradients | `trace/gradient.rs` | [05-gradients.md](05-gradients.md) | [05-gradients.html](05-gradients.html) |
+| 1 | Intake | `trace/load.rs`, `trace/load/icc.rs`, `inkvec-cli`, `inkvec-sr` | [01-intake.md](01-intake.md) | [01-intake.html](01-intake.html) |
+| 2 | Coverage | `trace/coverage.rs`, `trace/coverage/` | [02-coverage.md](02-coverage.md) | [02-coverage.html](02-coverage.html) |
+| 3 | Palette | `trace/color.rs`, `trace/color/`, `trace/native/palette.rs` | [03-palette.md](03-palette.md) | [03-palette.html](03-palette.html) |
+| 4 | Regions | `trace/regions.rs`, `trace/regions/components.rs` | [04-regions.md](04-regions.md) | [04-regions.html](04-regions.html) |
+| 5 | Gradients | `trace/gradient.rs`, `trace/gradient/` | [05-gradients.md](05-gradients.md) | [05-gradients.html](05-gradients.html) |
 | 6 | Planar map | `trace/planar.rs`, `trace/planar/cracks.rs`, `trace/planar/runs.rs` | [06-planar-map.md](06-planar-map.md) | [06-planar-map.html](06-planar-map.html) |
 | 7 | Sub-pixel | `trace/planar.rs`, `trace/planar/junctions.rs` | [07-subpixel.md](07-subpixel.md) | [07-subpixel.html](07-subpixel.html) |
 | 8 | Boundary solve | `trace/boundary_opt.rs` | [08-boundary-solve.md](08-boundary-solve.md) | [08-boundary-solve.html](08-boundary-solve.html) |

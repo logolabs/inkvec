@@ -332,7 +332,12 @@ def _init():
 
 
 def cache_file(exe: Path, kind: str, mode: str, set_name: str) -> Path:
-    return svgeval.CACHE / "resampled" / f"{svgeval.exe_key(exe)}-{kind}-{mode}-{set_name}-v1.json"
+    """Where one build's rows for one kind, mode and set are cached. `INKVEC_CACHE_SALT`
+    joins the key, as in `svgeval`, so two environment-switched runs of one binary do not
+    read each other's rows."""
+    salt = os.environ.get("INKVEC_CACHE_SALT", "")
+    salt = f"-{hashlib.sha1(salt.encode()).hexdigest()[:8]}" if salt else ""
+    return svgeval.CACHE / "resampled" / f"{svgeval.exe_key(exe)}-{kind}-{mode}-{set_name}{salt}-v1.json"
 
 
 def run(exe: Path, kind: str, mode: str, set_name: str, items: list, workers: int,

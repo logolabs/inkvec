@@ -56,6 +56,7 @@ use inkvec_core::{Point, Vec2};
 use inkvec_fit::curves::{arc_ellipse_center, Segment};
 use inkvec_fit::primitives::{PrimitiveFit, PrimitiveKind};
 use inkvec_fit::FittedPath;
+use rayon::prelude::*;
 
 use super::boundary::Boundary;
 use super::bvh::PieceTree;
@@ -159,6 +160,7 @@ enum Shape {
 }
 
 /// The variables and the structure that reads them.
+#[derive(Clone)]
 struct Model {
     /// All variables; the last is the half-width.
     theta: Vec<f64>,
@@ -638,7 +640,9 @@ struct Row {
 fn nearest_rows(model: &Model, pts: &[Point], reach: f64) -> Vec<Option<Row>> {
     let (segs, tags) = pieces(model);
     let tree = PieceTree::new(&segs);
-    pts.iter()
+    // Each point's row depends on the model and that point alone, so the points are
+    // measured in parallel; `collect` keeps their order, and nothing is summed here.
+    pts.par_iter()
         .map(|&p| {
             let n = tree.nearest(p, reach)?;
             let (shape, seg, t0, t1) = tags[n.seg];
@@ -1115,37 +1119,54 @@ fn normal_equations(
     let mut ata = Skyline::zeros(first.to_vec());
     let mut atr = vec![0.0; n];
     let eps = 1e-5;
-    for (i, row) in rws.iter().enumerate() {
-        let Some(row) = row else { continue };
-        let (r, s, active) = b.residual(i, row.d, model.h());
-        if !active {
-            continue;
-        }
-        let mut jac: Vec<(usize, f64)> = vec![(hi, -1.0 / s)];
-        if row.seg != usize::MAX {
-            // Under round joins every row reads one segment's plain distance; under miter
-            // joins a row whose foot is a vertex reads the gauge of two segments instead.
-            let with = match model.join {
-                Join::Round => None,
-                Join::Miter => local_eval(model, row.shape, row.seg, b.pts[i], row.t).1,
-            };
-            if with.is_none() && analytic_row(model, row.shape, row.seg, b.pts[i], row.t, &mut jac)
-            {
-                for e in jac.iter_mut().skip(1) {
-                    e.1 /= s;
+    let h = model.h();
+    // Each row's residual and Jacobian entries depend on the model and that row alone, so
+    // they are computed in parallel (each worker on its own copy of the model, which the
+    // central differences perturb and restore exactly); the products are then added into
+    // `JᵀJ` and `Jᵀr` in row order, as before, so every sum is the sequential one.
+    let jacs: Vec<Option<(f64, Vec<(usize, f64)>)>> = rws
+        .par_iter()
+        .enumerate()
+        .map_init(
+            || model.clone(),
+            |m, (i, row)| {
+                let row = row.as_ref()?;
+                let (r, s, active) = b.residual(i, row.d, h);
+                if !active {
+                    return None;
                 }
-            } else {
-                for v in locals(model, row.shape, row.seg, with) {
-                    let x = model.theta[v];
-                    model.theta[v] = x + eps;
-                    let dp = local_dist(model, row.shape, row.seg, b.pts[i], row.t);
-                    model.theta[v] = x - eps;
-                    let dm = local_dist(model, row.shape, row.seg, b.pts[i], row.t);
-                    model.theta[v] = x;
-                    jac.push((v, (dp - dm) / (2.0 * eps * s)));
+                let mut jac: Vec<(usize, f64)> = vec![(hi, -1.0 / s)];
+                if row.seg != usize::MAX {
+                    // Under round joins every row reads one segment's plain distance; under
+                    // miter joins a row whose foot is a vertex reads the gauge of two
+                    // segments instead.
+                    let with = match m.join {
+                        Join::Round => None,
+                        Join::Miter => local_eval(m, row.shape, row.seg, b.pts[i], row.t).1,
+                    };
+                    if with.is_none()
+                        && analytic_row(m, row.shape, row.seg, b.pts[i], row.t, &mut jac)
+                    {
+                        for e in jac.iter_mut().skip(1) {
+                            e.1 /= s;
+                        }
+                    } else {
+                        for v in locals(m, row.shape, row.seg, with) {
+                            let x = m.theta[v];
+                            m.theta[v] = x + eps;
+                            let dp = local_dist(m, row.shape, row.seg, b.pts[i], row.t);
+                            m.theta[v] = x - eps;
+                            let dm = local_dist(m, row.shape, row.seg, b.pts[i], row.t);
+                            m.theta[v] = x;
+                            jac.push((v, (dp - dm) / (2.0 * eps * s)));
+                        }
+                    }
                 }
-            }
-        }
+                Some((r, jac))
+            },
+        )
+        .collect();
+    for (r, jac) in jacs.into_iter().flatten() {
         for &(u, ju) in &jac {
             atr[u] += ju * r;
             for &(v, jv) in &jac {

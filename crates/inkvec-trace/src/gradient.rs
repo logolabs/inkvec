@@ -62,9 +62,9 @@
 //! * `eval`: the hoisted per-pixel evaluator every scoring loop uses;
 //! * `evidence`: which pixels testify about a fill and which are blends;
 //! * `bands`: the band-merging agglomeration; `regions`: its region-recovery switches;
-//! * `gregions`: research prototype A10 (`INKVEC_GREGIONS`, a `research` build only) --
-//!   profile-aware radial centres, a step-profile guard, common-pixel and seam tests in
-//!   the band merger;
+//! * `gregions`: the parts of research prototype A10 still behind `INKVEC_GREGIONS` (a
+//!   `research` build only) -- a step-profile guard and a common-pixel test in the band
+//!   merger;
 //! * `carve`: residual features carved out as their own regions;
 //! * `budget`: sampling caps and timing counters; `debug`: `INKVEC_GRADDBG` output;
 //! * `svg`: the SVG writer for fills and fades.
@@ -766,22 +766,19 @@ fn ramp_models(s: &Samples, w: usize, space: Interp) -> (Interp, Vec<[f64; 3]>, 
 
 /// The ramp candidates of every interpolation space ([`ramp_models`], one space per entry,
 /// in [`INTERPS`] order), each space's list followed by the profile-aware radial
-/// geometries when the research prototype A10's part `profile` is on: found once for both
-/// spaces by [`profile_geometries`] on the sRGB colours, run beside the line-scored
-/// fits, and appended to each space's list with the stops refitted there
-/// ([`restop_radial`]). With the part off there are none and the lists are as they were.
+/// geometries: found once for both spaces by [`profile_geometries`] on the sRGB colours,
+/// run beside the line-scored fits, and appended to each space's list with the stops
+/// refitted there ([`restop_radial`]). The line-scored candidates come first, so they win
+/// ties in `select`; the extra ones only change a region's fill where they describe it
+/// more cheaply.
 fn ramp_candidates(s: &Samples, w: usize) -> Vec<(Interp, Vec<[f64; 3]>, Vec<FillModel>)> {
     use rayon::prelude::*;
     let (geometry, mut per_space): (Vec<FillModel>, Vec<_>) = rayon::join(
         || {
-            if gregions::parts().profile {
-                let t = inkvec_core::clock::Instant::now();
-                let found = profile_geometries(s, &s.colors(Interp::Srgb), w);
-                tick(&FIT_NS_PROFILE, t);
-                found
-            } else {
-                Vec::new()
-            }
+            let t = inkvec_core::clock::Instant::now();
+            let found = profile_geometries(s, &s.colors(Interp::Srgb), w);
+            tick(&FIT_NS_PROFILE, t);
+            found
         },
         || {
             INTERPS

@@ -13,8 +13,8 @@
 //! The profile-aware radial search ([`profile`]) scores circular and elliptical geometries
 //! under a continuous piecewise-linear profile instead of a line ([`Resid1d::finish_spline`])
 //! and refines them by Levenberg–Marquardt; [`restop_radial`] puts the stops of each fitting
-//! space on the geometry it finds. Research prototype A10, part `profile`
-//! ([`super::gregions`]).
+//! space on the geometry it finds (research prototype A10's part `profile`, the default
+//! since Wave B).
 //!
 //! Positions are pixel centres, px. Moved out of `gradient.rs` unchanged, to keep that
 //! file under the workspace's line cap.

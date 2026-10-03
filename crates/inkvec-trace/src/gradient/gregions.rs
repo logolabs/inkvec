@@ -13,15 +13,10 @@
 //! is the rest. Four parts addressed them, each switched separately for ablation; the
 //! ones that passed the regression gate are the default now and say so below.
 //!
-//! 1. **`profile`: a centre search scored under the artist's kind of profile.** The radial
-//!    and elliptic fitters ([`super::fit`]) choose their geometry by the residual of a
-//!    *straight* colour line in the gradient coordinate `t`, but 73 % of the artist's
-//!    gradients are clamped (their stops do not span 0..1: a flat core and a ramp at the
-//!    rim, or a bump on a pad), and a straight-line score pulls the centre to wherever a
-//!    straight ramp fits best, not to the ramp's real centre. The search is run a second
-//!    time scored by a continuous piecewise-linear profile (variable projection with a
-//!    fixed hat basis), by Levenberg–Marquardt ([`super::fit::profile_geometries`]); the
-//!    results are *extra* candidates, so model selection still decides.
+//! 1. **`profile`: a centre search scored under the artist's kind of profile.** The
+//!    default since Wave B: the radial and elliptic geometries searched again under a
+//!    clamped-capable profile, as extra candidates (`super::fit::profile_geometries`, where
+//!    the method and its measurements are).
 //! 2. **`guard`: a step-like profile is an edge, not shading** ([`step_like`]). A flexible
 //!    profile can mimic a step, and the round-2 report read the princess emoji's +0.152
 //!    dE00 (held_a) as a spline-geometry gradient fusing face and hair that way. A
@@ -54,8 +49,8 @@
 //! # The switch
 //!
 //! `INKVEC_GREGIONS=1` (or `on`, `all`) turns on the parts still behind it; a
-//! comma-separated list of part names (`profile,guard,cover`) turns on those only; a
-//! graduated part's name (`seam`) is ignored, as any unknown word is; unset,
+//! comma-separated list of part names (`guard,cover`) turns on those only; a graduated
+//! part's name (`profile`, `seam`) is ignored, as any unknown word is; unset,
 //! empty or `0` is off. It is read once per process ([`inkvec_core::env`]) and only in a build with
 //! the `research` feature: the engine reads experiments' variables there only.
 //!
@@ -65,22 +60,14 @@
 //!   Reconstruction, Computer Graphics Forum 44(2), doi:10.1111/cgf.70055 -- §3.2, the
 //!   rule that segments facing each other across the discontinuity map are never one
 //!   region (part 4, now `regions::is_edge`); §3.3 (geometry from the gradient field,
-//!   independent of the profile) inspired part 1.
-//! * Method from: G. H. Golub, V. Pereyra (1973), The differentiation of pseudo-inverses
-//!   and nonlinear least squares problems whose variables separate, SIAM J. Numer. Anal.
-//!   10(2), doi:10.1137/0710036 -- variable projection: the profile is solved in closed
-//!   form for each candidate geometry and only the geometry is searched (part 1).
-//! * See also: M. Lukáč et al., US 12,340,441 B2 (2025), Reconstructing concentric radial
-//!   gradients -- a profile-agnostic centre from the orthogonality of the colour gradient
-//!   and the position vector, which is what [`super::fit`]'s gradient-line seed already is.
+//!   independent of the profile) inspired part 1 (now `fit/profile.rs`, which carries its
+//!   own literature).
 
 use super::FillModel;
 
 /// Which parts of the prototype are on; see the module docs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Parts {
-    /// Part 1: the extra spline-scored radial and elliptic candidates.
-    pub(crate) profile: bool,
     /// Part 2: refuse candidates whose profile is an edge ([`step_like`]).
     pub(crate) guard: bool,
     /// Part 3: a gradient union must also gain on common pixels in the band merger.
@@ -110,7 +97,6 @@ fn parse(v: Option<&str>) -> Parts {
     match v {
         "" | "0" => Parts::default(),
         "1" | "on" | "all" => Parts {
-            profile: true,
             guard: true,
             cover: true,
         },
@@ -118,7 +104,6 @@ fn parse(v: Option<&str>) -> Parts {
             let mut p = Parts::default();
             for word in list.split(',').map(str::trim) {
                 match word {
-                    "profile" => p.profile = true,
                     "guard" => p.guard = true,
                     "cover" => p.cover = true,
                     _ => {}
@@ -209,7 +194,6 @@ mod tests {
     #[test]
     fn the_switch_reads_all_none_or_a_list() {
         let all = Parts {
-            profile: true,
             guard: true,
             cover: true,
         };
@@ -219,12 +203,16 @@ mod tests {
         assert_eq!(parse(Some("1")), all);
         assert_eq!(parse(Some("all")), all);
         assert_eq!(
-            parse(Some("profile, guard")),
+            parse(Some("cover, guard")),
             Parts {
-                profile: true,
                 guard: true,
-                ..Parts::default()
+                cover: true,
             }
+        );
+        assert_eq!(
+            parse(Some("profile,seam")),
+            Parts::default(),
+            "a graduated part's name turns nothing on"
         );
         assert_eq!(
             parse(Some("segmnts")),

@@ -642,10 +642,17 @@ pub(crate) fn solve(
             for (x, d) in model.theta.iter_mut().zip(&delta) {
                 *x -= d;
             }
+            // A step that gives a cubic a cusp is refused whatever it does to `E`, so it is
+            // refused before the boundary is measured against it. A fit that starts with a
+            // cusp (the curve fitter's own) cannot be held to it.
+            if start_regular && !regular(&model) {
+                model.theta = saved;
+                mu *= 4.0;
+                continue;
+            }
             let (e2, r2) = rows(&model, b, reach);
             let en2 = e2 + anchor(&model.theta);
-            // A fit that starts with a cusp (the curve fitter's own) cannot be held to it.
-            if en2 < energy && (regular(&model) || !start_regular) {
+            if en2 < energy {
                 let rel = (energy - en2) / energy.max(1e-12);
                 energy = en2;
                 rws = r2;

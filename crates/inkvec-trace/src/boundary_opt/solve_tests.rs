@@ -113,13 +113,19 @@ fn a_mismeasured_edge_moves_onto_the_true_subpixel_position() {
         // away, and every interior point at least two thirds of the way. What is left is
         // by design: the kink prior keeps the chain straight and its two ends are nodes,
         // anchored four times harder (they still move a twentieth of the way or more, and
-        // pass the truth by at most a twentieth). Points slide along the edge only slightly.
+        // pass the truth by at most a twentieth).
         let xs: Vec<f64> = map.edges[0].points.iter().map(|p| p.x).collect();
         assert_converged(&xs, start, truth);
+        // Motion along a straight edge is invisible to the pixels, so the converged solve
+        // may spread the points along it (measured: up to 0.56 px at the 0.85 px case, the
+        // chain contracting evenly towards its middle under the kink prior); what must hold
+        // is that they stay in order along the edge, so its shape is the straight line.
+        let ys: Vec<f64> = map.edges[0].points.iter().map(|p| p.y).collect();
+        assert!(ys.windows(2).all(|w| w[1] > w[0]), "out of order: {ys:?}");
         for (p, q) in map.edges[0].points.iter().zip(&before) {
             assert!(
-                (p.y - q.y).abs() < 0.5,
-                "slid along the edge: {q:?} -> {p:?}"
+                p.dist(*q) <= MAX_TOTAL + 1e-9,
+                "left its disc: {q:?} -> {p:?}"
             );
         }
     }
@@ -185,8 +191,14 @@ fn an_edge_already_in_place_is_left_alone() {
         height: h,
         n_labels: 2,
     };
-    // Zero residual to start from: nothing to gain.
-    assert!(optimise(&mut map, &rgb, &WHITE_BLACK, None).is_none());
+    // Zero residual to start from (up to the f32 rounding of the image): nothing to gain.
+    // The Wolfe search can find the rounding-level minimum a backtracking search could not
+    // reach, so "left alone" means no point moves visibly, whether or not a report comes back.
+    let before = map.edges[0].points.clone();
+    let _ = optimise(&mut map, &rgb, &WHITE_BLACK, None);
+    for (p, q) in before.iter().zip(&map.edges[0].points) {
+        assert!(p.dist(*q) < 1e-6, "{p:?} moved to {q:?}");
+    }
     // Degenerate inputs.
     let mut empty = PlanarMap {
         edges: vec![],

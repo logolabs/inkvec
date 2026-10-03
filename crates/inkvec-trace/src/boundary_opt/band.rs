@@ -1424,9 +1424,7 @@ pub(super) fn components(prob: &Problem) -> Vec<super::lbfgs::Active> {
         if group[root] == u32::MAX {
             continue;
         }
-        let part = &mut parts[group[root] as usize];
-        part.runs.push(r as u32);
-        part.e_const += band.run_const[r];
+        parts[group[root] as usize].runs.push(r as u32);
     }
     let mut seen = vec![false; prob.vars.start.len()];
     for part in parts.iter_mut() {

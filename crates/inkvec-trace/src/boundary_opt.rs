@@ -68,15 +68,15 @@
 //! place. Coordinates are in px with pixel centres at integer coordinates, so pixel
 //! `(x, y)` is the square `[x−0.5, x+0.5] x [y−0.5, y+0.5]`.
 //!
-//! The energy is minimised by limited-memory BFGS with an Armijo line search, separately on
-//! each group of boundaries that share no pixel and no point (the `lbfgs` module has the
-//! method and its sources, and what it replaced). A step moves no point more than
-//! `MAX_STEP`, every point stays within `MAX_TOTAL` of where the measurement put it, and
-//! points on the image frame only slide along it. A group stops when a step moves no
-//! point more than 0.005 px (half the 0.01 px the SVG writes), when a step lowers its
-//! energy by less than 10⁻⁴ of what the geometry can still change, after 32 iterations,
-//! or when the caller's time budget runs out. Nothing is linearised: each trial
-//! re-renders the exact coverage.
+//! The energy is minimised by limited-memory BFGS with a Moré–Thuente (strong Wolfe) line
+//! search, separately on each group of boundaries that share no pixel and no point (the
+//! `lbfgs` and `linesearch` modules have the method, its sources, and what it replaced). A
+//! step moves no point more than `MAX_STEP`, every point stays within `MAX_TOTAL` of where
+//! the measurement put it, and points on the image frame only slide along it. A group stops
+//! on the projected gradient or the relative decrease of the energy, both measured against
+//! the whole problem at the start, after 64 iterations, when no step of sufficient decrease
+//! is found, or when the caller's time budget runs out; never on the length of a step.
+//! Nothing is linearised: each trial re-renders the exact coverage.
 //!
 //! Afterwards a fold guard (`fold_guard`) scales the whole displacement back towards the
 //! start until it introduces no new self-crossing; if even a sixteenth of it does, the stage
@@ -105,6 +105,7 @@ use crate::planar::PlanarMap;
 mod band;
 mod folds;
 mod lbfgs;
+mod linesearch;
 
 /// How far one point may move in a single step, in pixels.
 const MAX_STEP: f64 = 0.35;

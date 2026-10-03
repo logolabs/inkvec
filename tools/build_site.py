@@ -934,9 +934,9 @@ GUIDE_SHELL = """<!doctype html>
 </head>
 <body>
 <div class="shell">
-  <aside class="side">__NAV__</aside>
+  <aside class="side" aria-label="Guide">__NAV__</aside>
   <main><article>__CONTENT__</article></main>
-  <aside class="rail">__RAIL__</aside>
+  <aside class="rail" aria-label="On this page">__RAIL__</aside>
 </div>
 </body>
 </html>

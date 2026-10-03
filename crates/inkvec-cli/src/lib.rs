@@ -374,6 +374,11 @@ fn price_in_raster_units(img: &inkvec_trace::Rgba, args: &Args) -> Args {
         // exactly, but cannot be trusted to make the first decision -- smooth native
         // artwork survives halving too, and would be rewritten for no reason.
         let edge = inkvec_trace::coverage::intake_scale(&rgb, w, h);
+        // The round trip must keep the drawing in absolute terms (a mean error under 3
+        // levels) and in relative ones (at most half of the image's detail lost): a
+        // near-empty 144 px raster with one 38 px² disc passed the first test at every
+        // factor, because the empty canvas dilutes the mean, read as 8x, and its disc
+        // fell under the 64-fold speckle floor. See `coverage::oversample_factor`.
         let round_trip = inkvec_trace::coverage::oversample_factor(&rgb, w, h) as f64;
         let up = if edge > inkvec_trace::color::SOFT_INTAKE_EDGE {
             round_trip
@@ -465,7 +470,8 @@ pub fn trace_prepared(prepared: Intake) -> Result<Traced, Box<dyn std::error::Er
 ///
 /// In order: the restorer pre-pass ([`restore_prepass`]), soft intake forced on for a
 /// restored image, the SR pre-pass (with `auto` deciding from a probe trace, which is kept
-/// as the result when the input measures clean), the alpha matte ([`alpha_source`]), the
+/// as the result when the input measures clean or no upscaler is available), the alpha
+/// matte ([`alpha_source`]), the
 /// fit configuration, and then one pipeline -- strokes when asked for and the drawing is
 /// line art, else bilevel or colour. The SVG is retargeted to the presentation size
 /// whenever anything resampled the raster.
@@ -528,31 +534,50 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
     // when the input turns out to be undamaged -- the common case pays one trace
     // and never touches the upscaler.
     let mut sr_on = args.sr != inkvec_sr::Mode::Off;
+    // The upscaler `auto` built when it decided to clean, so it is not built twice.
+    let mut upscaler: Option<Box<dyn inkvec_sr::Upscaler>> = None;
     if args.sr == inkvec_sr::Mode::Auto {
         let probe = match probe.take() {
             Some(p) => p,
             None => trace_once(&img, args)?,
         };
-        match inkvec_sr::decide(&img, &probe, args.sr_threshold) {
-            // The probe is a colour trace; a monochrome one is traced below, uncleaned.
-            inkvec_sr::Decision::Keep { residual } if args.monochrome => {
-                sr_note = Some(match residual {
-                    Some(r) => format!(
-                        "sr            residual {r:.3} <= {:.3}, traced directly",
-                        args.sr_threshold
-                    ),
-                    None => "sr            could not measure the fit; traced directly".into(),
-                });
-                sr_on = false;
+        // `Some(stats line)` when `auto` traces the input as it is instead of cleaning it.
+        let direct = match inkvec_sr::decide(&img, &probe, args.sr_threshold) {
+            inkvec_sr::Decision::Keep { residual } => Some(match residual {
+                Some(r) => format!(
+                    "sr            residual {r:.3} <= {:.3}, traced directly",
+                    args.sr_threshold
+                ),
+                None => "sr            could not measure the fit; traced directly".into(),
+            }),
+            inkvec_sr::Decision::Clean { residual } => {
+                let measured =
+                    residual.map(|r| format!("residual {r:.3} > {:.3}", args.sr_threshold));
+                match build_upscaler(args) {
+                    Ok(up) => {
+                        upscaler = Some(up);
+                        sr_note = measured;
+                        None
+                    }
+                    // `auto` is a request to clean *if it helps*, so no upscaler to be had --
+                    // no `tools/inkvec_sr` beside the binary, an unusable `--sr-command` --
+                    // is not a reason to fail the trace: keep the probe, as a clean input
+                    // would, and say why in the stats. `on` asked for the clean-up outright
+                    // and still fails without one. This is `--restore auto`'s rule (see
+                    // `restore_prepass`), word for word in the stats line.
+                    Err(e) => Some(format!(
+                        "sr            {}but no upscaler is available ({e}); traced directly",
+                        measured.map(|n| format!("{n}, ")).unwrap_or_default()
+                    )),
+                }
             }
-            inkvec_sr::Decision::Keep { residual } => {
-                let note = match residual {
-                    Some(r) => format!(
-                        "sr            residual {r:.3} <= {:.3}, traced directly",
-                        args.sr_threshold
-                    ),
-                    None => "sr            could not measure the fit; traced directly".into(),
-                };
+        };
+        if let Some(note) = direct {
+            if args.monochrome {
+                // The probe is a colour trace; a monochrome one is traced below, uncleaned.
+                sr_note = Some(note);
+                sr_on = false;
+            } else {
                 let svg = if normalised || (img.width, img.height) != (display_w, display_h) {
                     retarget(&probe, display_w, display_h)
                 } else {
@@ -569,14 +594,14 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
                     lambda: None,
                 });
             }
-            inkvec_sr::Decision::Clean { residual } => {
-                sr_note = residual.map(|r| format!("residual {r:.3} > {:.3}", args.sr_threshold));
-            }
         }
     }
 
     if sr_on {
-        let up = build_upscaler(args)?;
+        let up = match upscaler {
+            Some(up) => up,
+            None => build_upscaler(args)?,
+        };
         let opt = inkvec_sr::Options {
             out_scale: args.sr_scale,
             recolour: !args.sr_no_recolour,

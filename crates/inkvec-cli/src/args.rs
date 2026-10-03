@@ -453,7 +453,9 @@ SUPER-RESOLUTION PRE-PASS:
                             on    always clean first
                             auto  trace, measure the fit, clean and retrace only
                                   if the trace disagrees with the input where it
-                                  claims to be flat
+                                  claims to be flat; with no upscaler to run (no
+                                  tools/inkvec_sr beside the binary) it traces
+                                  directly and says so, where `on` fails
         --sr-threshold <f>  Interior residual above which auto cleans [default: 0.5]
                             Clean input reads at most 0.376; JPEG q50 at least 0.650
         --sr-scale <n>      Output scale before tracing              [default: 2]

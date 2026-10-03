@@ -240,12 +240,43 @@ fn merge(run: &[Piece], tol: f64) -> Option<[Point; 4]> {
 /// Fewest cubics for one run of smooth pieces.
 ///
 /// Dynamic programming over piece boundaries: `best[j+1]` is the fewest cubics that draw
-/// pieces `0..=j`, `best[j+1] = min_i best[i] + 1` over every `i` for which pieces `i..=j`
-/// all turn the same way (pieces turning less than 1e-6 rad count as either), turn at most
-/// `MAX_TURN` in total, number at most `MAX_RUN`, and [`merge`] into one cubic within `tol`.
-/// A single piece is always its own cubic, so every prefix is reachable. On a tie the
-/// smallest `i` is kept. The chosen cubics are read back from the last piece.
-fn optimise_run(run: &[Piece], tol: f64) -> Vec<[Point; 4]> {
+/// pieces `0..=j`, `best[j+1] = min_i best[i] + 1` over every `i` for which `i == j` (a
+/// piece alone), or pieces `i..=j` all turn the same way (pieces turning less than 1e-6 rad
+/// count as either), turn at most `MAX_TURN` in total, number at most `MAX_RUN`, and
+/// [`merge`] into one cubic within `tol`. On a tie the smallest `i` is kept. The chosen
+/// cubics are read back from the last piece. `whole_ring` says the run is a whole closed
+/// ring (a ring with at most one corner is one run); then the one candidate that covers
+/// every piece, `i = 0, j = n − 1`, is not tried, so a ring is never one cubic.
+///
+/// **A single piece is always its own cubic, whatever it turns.** This invariant is what
+/// makes every prefix reachable, and it once failed: the piece alone was tried only after
+/// the turn test, so a piece turning more than `MAX_TURN` -- a U-turn at a vertex whose
+/// sides double back, |turn| ≈ π > 3.10 -- left `best[j+1]` unreachable, every later
+/// prefix with it, and the read-back then started from an unset `best[n] = (MAX, 0)`: it
+/// returned the run's last piece alone, as if it were the whole run. On a ring that is
+/// one cubic, which `super::fit_points` then closes on itself, and the face is not drawn
+/// (`synthetic/gradient_radial` at 512 px, Fast with the boundary solve on, research
+/// r2-fastq). Now the piece alone is admitted before the turn test, and only merges of two
+/// or more pieces are held to it. Where every piece turns at most `MAX_TURN` and no whole
+/// ring merges into one cubic -- every boundary the old code drew correctly -- the loop
+/// makes the same choices in the same order, so those fits are unchanged bit for bit.
+///
+/// The ring guard is the same defect's other door: a run that is the whole ring starts
+/// and ends at the same join, and one cubic with both ends there can only draw a loop or a
+/// sliver. A ring always turns a full turn, so with honest turns `MAX_TURN` already rules
+/// that merge out; the guard keeps it out when the measured turns do not add up (each is
+/// read in (−π, π], so a piece that turns further reads short).
+///
+/// Method from: Selinger, P. (2003), "Potrace: a polygon-based tracing algorithm",
+/// <https://potrace.sourceforge.net/potrace.pdf>, section 2.4 (`opticurve`), the fewest
+/// curves over runs of consistent convexity and less than a half turn. Adapted: Potrace's
+/// own program has no read-back failure because its polygon never doubles back; here the
+/// vertices are moved off the points by `smooth::adjust_vertices` with loosened boxes, and
+/// can.
+///
+/// Cost: O(n · MAX_RUN) candidate runs, each [`merge`] O(run length); n = pieces in the
+/// run (one per polygon vertex, two at a corner).
+fn optimise_run(run: &[Piece], tol: f64, whole_ring: bool) -> Vec<[Point; 4]> {
     let n = run.len();
     let turns: Vec<f64> = run.iter().map(|p| turn(&p.p)).collect();
     let mut best: Vec<(usize, usize)> = vec![(usize::MAX, 0); n + 1];
@@ -255,6 +286,12 @@ fn optimise_run(run: &[Piece], tol: f64) -> Vec<[Point; 4]> {
     for i in 0..n {
         if best[i].0 == usize::MAX {
             continue;
+        }
+        let cand = best[i].0 + 1;
+        // The piece alone, before any turn test: see the invariant above.
+        if cand < best[i + 1].0 {
+            best[i + 1] = (cand, i);
+            cache.insert((i, i), run[i].p);
         }
         let (mut total, mut sign) = (0.0f64, 0.0f64);
         for j in i..n.min(i + MAX_RUN) {
@@ -270,16 +307,14 @@ fn optimise_run(run: &[Piece], tol: f64) -> Vec<[Point; 4]> {
             if total > MAX_TURN {
                 break;
             }
-            let cand = best[i].0 + 1;
+            // `j == i` was admitted above; the whole ring is never one cubic.
+            if j == i || (whole_ring && i == 0 && j + 1 == n) {
+                continue;
+            }
             if cand >= best[j + 1].0 {
                 continue;
             }
-            let curve = if j == i {
-                Some(run[i].p)
-            } else {
-                merge(&run[i..=j], tol)
-            };
-            if let Some(c) = curve {
+            if let Some(c) = merge(&run[i..=j], tol) {
                 best[j + 1] = (cand, i);
                 cache.insert((i, j), c);
             }
@@ -301,7 +336,9 @@ fn optimise_run(run: &[Piece], tol: f64) -> Vec<[Point; 4]> {
 ///
 /// Runs are maximal stretches of pieces joined smoothly (`smooth_in`); each is optimised
 /// on its own by [`optimise_run`], so a corner is never smoothed over. A ring with no
-/// corner is one run starting at piece 0.
+/// corner is one run starting at piece 0, and so is a ring with one corner (from the
+/// corner round to it); such a run is the whole ring and is never merged into one cubic,
+/// so a closed boundary of two or more pieces comes back as two or more cubics.
 pub(crate) fn optimise(pieces: &[Piece], closed: bool, tol: f64) -> Vec<[Point; 4]> {
     let n = pieces.len();
     if n == 0 {
@@ -320,7 +357,8 @@ pub(crate) fn optimise(pieces: &[Piece], closed: bool, tol: f64) -> Vec<[Point; 
         while e < n && order[e].smooth_in {
             e += 1;
         }
-        out.extend(optimise_run(&order[s..e], tol));
+        let whole_ring = closed && s == 0 && e == n;
+        out.extend(optimise_run(&order[s..e], tol, whole_ring));
         s = e;
     }
     out
@@ -436,8 +474,90 @@ mod tests {
         }
         let turns: Vec<f64> = a.iter().map(|p| turn(&p.p)).collect();
         assert!(turns[0] * turns[3] < 0.0);
-        let out = optimise_run(&a, 10.0);
+        let out = optimise_run(&a, 10.0, false);
         assert!(out.len() >= 2);
+    }
+
+    /// A smooth piece that doubles back on itself: leaves `from` along +x and arrives at
+    /// `from + (0, 2)` along −x, a U-turn whose measured turn is π, more than `MAX_TURN`.
+    fn u_turn(from: Point) -> Piece {
+        Piece {
+            p: [
+                from,
+                Point::new(from.x + 6.0, from.y),
+                Point::new(from.x + 6.0, from.y + 2.0),
+                Point::new(from.x, from.y + 2.0),
+            ],
+            smooth_in: true,
+        }
+    }
+
+    /// The repro of the ring collapse: a piece turning more than `MAX_TURN` made every
+    /// later prefix unreachable, and the read-back returned the run's last piece alone. A
+    /// piece is always its own cubic: a quarter arc, a U-turn and another piece come back
+    /// as three cubics, in order, from the first piece's start to the last one's end.
+    #[test]
+    fn a_piece_turning_more_than_the_limit_is_still_its_own_cubic() {
+        let mut run = arc_pieces(2, std::f64::consts::FRAC_PI_2);
+        let end = run[1].p[3];
+        assert!(turn(&u_turn(end).p).abs() > MAX_TURN);
+        run.push(u_turn(end));
+        let back = run[2].p[3];
+        run.push(Piece {
+            p: [
+                back,
+                Point::new(back.x - 1.0, back.y),
+                Point::new(back.x - 2.0, back.y),
+                Point::new(back.x - 3.0, back.y),
+            ],
+            smooth_in: true,
+        });
+        let out = optimise_run(&run, 0.2, false);
+        assert!(out.len() >= 3, "{} cubics: {out:?}", out.len());
+        assert_eq!(out[0][0], run[0].p[0]);
+        assert_eq!(out[out.len() - 1][3], run[3].p[3]);
+        for k in 1..out.len() {
+            assert_eq!(
+                out[k][0],
+                out[k - 1][3],
+                "cubic {k} does not start where {} ends",
+                k - 1
+            );
+        }
+    }
+
+    /// The ring guard: two U-turns make a closed ring (each piece the other's way back),
+    /// which must come back as two cubics, never one. Before the fix it came back as one.
+    #[test]
+    fn a_closed_ring_is_never_one_cubic() {
+        let a = u_turn(Point::new(0.0, 0.0));
+        // The way back: from (0, 2) along −x round to (0, 0) arriving along +x.
+        let b = Piece {
+            p: [
+                Point::new(0.0, 2.0),
+                Point::new(-6.0, 2.0),
+                Point::new(-6.0, 0.0),
+                Point::new(0.0, 0.0),
+            ],
+            smooth_in: true,
+        };
+        let out = optimise(&[a, b], true, 0.2);
+        assert_eq!(out.len(), 2, "{out:?}");
+        assert_eq!(out[0][0], out[1][3]);
+        // Within the turn limit a ring's pieces can still be many: a full circle in
+        // twelve pieces is three or four cubics, as before (see the test above), and the
+        // whole-ring merge, if the turns ever allowed it, is not tried.
+        let mut circle = arc_pieces(12, std::f64::consts::TAU);
+        circle[0].smooth_in = true;
+        for (i, pc) in circle.iter().enumerate() {
+            assert!(turn(&pc.p).abs() <= MAX_TURN, "piece {i}");
+        }
+        assert!(optimise(&circle, true, 0.2).len() >= 2);
+        // The guard itself: a run that would merge into one cubic is kept to two when it
+        // is the whole ring.
+        let quarter = arc_pieces(2, std::f64::consts::FRAC_PI_2);
+        assert_eq!(optimise_run(&quarter, 0.2, false).len(), 1);
+        assert_eq!(optimise_run(&quarter, 0.2, true).len(), 2);
     }
 
     #[test]

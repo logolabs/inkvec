@@ -224,6 +224,42 @@ pub(crate) fn extract(
     }
 }
 
+/// Whether candidate `c` skips the rarity gate (`MIN_INK_WEIGHT`): it is the first ink
+/// the walk would accept, or the first one that draws anything.
+///
+/// The rarity gate rejects a candidate that claims less than `MIN_INK_WEIGHT` (0.4 %) of
+/// the image, because anti-aliased colours are individually rare and an ink is not. The
+/// classic walk exempts its first ink, so the palette is never empty. Here the first ink
+/// is nearly always the clear ground (on a transparent canvas it is the commonest
+/// colour), and the clear ground draws nothing. With only the classic exemption, an image
+/// whose only paint covers less than 0.4 % of the canvas got a palette of the clear ink
+/// alone: a lone 50 px² disc on a 128 px transparent canvas (0.31 %) was traced to an
+/// empty SVG. The carve stage still cut the disc out as a face, but it named the face by
+/// the nearest palette entry over white, which was the clear ink, so the face was emitted
+/// with opacity 0.
+///
+/// So the exemption goes to the first ink that draws something: `c` is exempt when it is
+/// not clear (opacity above `CLEAR_INK_ALPHA`) and no accepted ink is, or, as in the
+/// classic walk, when nothing is accepted yet. The clear ground is treated the same way
+/// by the colour cap, which it does not count against. Every other gate still applies to
+/// the exempt candidate, so a translucent anti-aliased rim without an interior is still
+/// rejected (`BlendEvidence::measure`).
+///
+/// It changes a palette only when a rare visible candidate comes up while no visible ink
+/// has been accepted, that is, when no more frequent visible candidate passed the gates:
+/// a transparent canvas whose paint is all rare. O(accepted inks).
+///
+/// Not from the literature: the rarity gate and its exemption are rules of this walk,
+/// because the published quantisers have no clear ink that draws nothing. See also:
+/// Heckbert, P. (1982), "Color image quantization for frame buffer display", *ACM
+/// SIGGRAPH Computer Graphics* 16(3):297-307, doi:10.1145/965145.801294, whose
+/// popularity algorithm keeps the most frequent colours and drops rare ones. Rare colours
+/// that matter, such as a small isolated shape, are the known weakness of that rule.
+fn rarity_exempt(accepted: &[Ink2], c: Ink2) -> bool {
+    let clear = |p: &Ink2| p.alpha() <= CLEAR_INK_ALPHA;
+    accepted.is_empty() || (!clear(&c) && accepted.iter().all(clear))
+}
+
 /// The walk's state between candidates.
 struct Walk<'v, 'a> {
     view: &'v NativeView<'a>,
@@ -262,7 +298,7 @@ impl Walk<'_, '_> {
         } else {
             view.img.spread(&self.claim, self.merge_distance)
         };
-        if (claim as f32 / self.total_px) < MIN_INK_WEIGHT && !self.colors.is_empty() {
+        if (claim as f32 / self.total_px) < MIN_INK_WEIGHT && !rarity_exempt(&self.colors, c) {
             return false;
         }
         let nearest = self

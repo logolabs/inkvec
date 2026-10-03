@@ -29,7 +29,7 @@
 //! | here | classic | what changes |
 //! |---|---|---|
 //! | [`trace_color`] | [`crate::trace_color_full_with_alpha`] | the stages below, plus `merge_fades` (in `native/fade.rs`) |
-//! | [`extract_palette`] | [`color::extract_palette_mdl`] | [`Ink2`] points; the clear ink is not counted against `max_colors`; a translucent candidate needs an interior |
+//! | [`extract_palette`] | [`color::extract_palette_mdl`] | [`Ink2`] points; the clear ink is not counted against `max_colors` and does not use up the rarity exemption; a translucent candidate needs an interior |
 //! | [`label_image`] | [`color::label_image`] | [`Ink2::dist`] |
 //! | `palette::frequency_modes` | `color::mdl::frequency_modes` | bins over both grounds, `u64` keys |
 //! | `palette::Walk` (claim, spread) | `color::mdl::Walk` | [`Ink2::dist`] |
@@ -294,6 +294,9 @@ fn blend_pairs(c: Ink2, accepted: &[Ink2], tol: f32, tmin: f32) -> Vec<(usize, u
 ///
 /// * the clear ink (opacity ≤ [`CLEAR_INK_ALPHA`]) does not count against `max_colors`;
 ///   once the cap is full the scan continues only to find it, and stops once it is found;
+/// * nor does it use up the rarity exemption: the first ink that draws something skips
+///   the `MIN_INK_WEIGHT` gate as the first ink does, so a lone small shape on a clear
+///   canvas is an ink (see `palette::rarity_exempt`);
 /// * a translucent candidate that is not a blend must have an interior (see
 ///   `palette::BlendEvidence::measure`);
 /// * there is no `INKVEC_MERGE_DE00` experiment and the same-ink floor does not print.
@@ -683,6 +686,107 @@ pub fn same_opacity(pal: &Palette) -> impl Fn(u16, u16) -> bool + Sync + '_ {
     }
 }
 
+/// Mean opacity at or above which a feature the carve stage cut out is paint
+/// ([`name_carved_paint`]): most of its coverage is drawn.
+///
+/// Measured 2026-10-02 on every feature the carve named by the clear ink in the screen
+/// and held_a icons at 128 px: anti-aliasing residue left in the clear ground's interior
+/// (light grey flecks in `simple-icons/mysql`, pale blue in `twemoji/1faa3`) reads 0.14 to
+/// 0.36, and painting those opaque cost dE00 on five of the eight icons; paint reads 1.00
+/// (white details in two openmoji icons) and the repro's pale disc, rim and all, 0.80 to
+/// 0.92. The half sits between the two groups.
+const CARVED_PAINT_ALPHA: f32 = 0.5;
+
+/// Name each feature the carve stage minted by an ink that draws something, when the carve
+/// named it by the clear ground although its own pixels are paint.
+///
+/// The carve (`gradient::carve_residual_features_with_detail_noise`) is shared with the
+/// classic path and names a minted feature by the palette entry nearest its median colour
+/// over white (squared sRGB distance). Over white the clear ground *is* white, so a light
+/// feature -- pale yellow, white paint -- is named by the clear ink whenever no light paint
+/// ink is nearer, and on this path a face's opacity is its ink's: the feature was cut out
+/// as a face and then drawn at opacity 0. The 2026-10-02 repro: a 30 px² pale-yellow disc
+/// beside a black disc on a clear 128 px canvas (too rare to be an ink itself, see
+/// `palette::rarity_exempt`) was traced to nothing.
+///
+/// For each minted label `l` (`from..label_ink.len()`) whose ink is clear (opacity ≤
+/// [`CLEAR_INK_ALPHA`]): take the feature's mean colour over white `W̄` and mean opacity `ā`
+/// over its pixels. When `ā ≥` [`CARVED_PAINT_ALPHA`] the feature is paint, and the label
+/// is renamed to the visible ink nearest the two-ground point of `(W̄, ā)` by
+/// [`Ink2::dist`], ties to the lower index. A feature the carve named by a visible ink, and
+/// a feature that is mostly see-through, keeps its name, so a trace with neither is
+/// unchanged in every byte. Its fill (the feature's own median colour) is not touched.
+///
+/// Cost: one O(w·h) pass summing the renamed features, and only when a minted label is
+/// named clear; nothing at all without a visible ink. Edge cases: `from` past the end (the
+/// carve minted nothing) and an out-of-range ink index (treated as clear) are no-ops.
+///
+/// Not from the literature: a naming rule for this pipeline's carve stage, because the
+/// carve's over-white comparison cannot tell white paint from the clear ground, which is
+/// the distinction this module exists to keep (two grounds, see the module docs). See also:
+/// the classic carve in `gradient/carve.rs`, which keeps its sRGB naming, since on an
+/// opaque image every ink is paint.
+fn name_carved_paint(
+    labels: &[u16],
+    rgb: &[[f32; 3]],
+    alpha: &[f32],
+    pal: &Palette,
+    label_ink: &mut [usize],
+    from: usize,
+) {
+    let clear = |i: usize| pal.alpha.get(i).is_none_or(|&a| a <= CLEAR_INK_ALPHA);
+    let renamed: Vec<usize> = (from..label_ink.len())
+        .filter(|&l| clear(label_ink[l]))
+        .collect();
+    let visible: Vec<usize> = (0..pal.len()).filter(|&i| !clear(i)).collect();
+    if renamed.is_empty() || visible.is_empty() {
+        return;
+    }
+    // Per renamed label: Σ colour over white, Σ opacity, pixel count. `slot[l - from]` is
+    // the label's row in `sums`, or `usize::MAX` when it is not being renamed.
+    let mut slot = vec![usize::MAX; label_ink.len() - from];
+    for (k, &l) in renamed.iter().enumerate() {
+        slot[l - from] = k;
+    }
+    let mut sums = vec![([0.0f64; 3], 0.0f64, 0usize); renamed.len()];
+    for (p, &l) in labels.iter().enumerate() {
+        let l = l as usize;
+        if l < from || l >= label_ink.len() || slot[l - from] == usize::MAX {
+            continue;
+        }
+        let s = &mut sums[slot[l - from]];
+        for c in 0..3 {
+            s.0[c] += rgb[p][c] as f64;
+        }
+        s.1 += alpha[p] as f64;
+        s.2 += 1;
+    }
+    let inks = ink_points(pal);
+    for (k, &l) in renamed.iter().enumerate() {
+        let (sum_w, sum_a, n) = sums[k];
+        if n == 0 {
+            continue;
+        }
+        let a_mean = (sum_a / n as f64) as f32;
+        if a_mean < CARVED_PAINT_ALPHA {
+            continue;
+        }
+        let w_mean = sum_w.map(|v| (v / n as f64) as f32);
+        let point = pixel_points(&[w_mean], &[a_mean])[0];
+        // `visible` is non-empty, so there is a nearest; ties keep the lower index.
+        let mut best = visible[0];
+        let mut best_d = point.dist(inks[best]);
+        for &i in &visible[1..] {
+            let d = point.dist(inks[i]);
+            if d < best_d {
+                best = i;
+                best_d = d;
+            }
+        }
+        label_ink[l] = best;
+    }
+}
+
 /// The colour path with transparency carried natively. Mirrors
 /// [`crate::trace_color_full_with_alpha`] stage for stage; see the module docs for what
 /// changes and why.
@@ -701,7 +805,8 @@ pub fn same_opacity(pal: &Palette) -> impl Fn(u16, u16) -> bool + Sync + '_ {
 /// 6. **merge_bands**: the classic gradient-band merge over white, gated by
 ///    [`same_opacity`] (only with `opts.gradients`);
 /// 7. **carve**: the classic residual-feature carve (with `opts.gradients`, unless
-///    `INKVEC_NO_CARVE`);
+///    `INKVEC_NO_CARVE`), then [`name_carved_paint`] so a feature of paint is never
+///    named by the clear ink;
 /// 8. **fades**: `merge_fades` joins translucent bands into opacity gradients (with
 ///    `opts.gradients`);
 /// 9. **split**: [`crate::split_components`], then each face's fill, ink, fade and rim
@@ -805,6 +910,7 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
     sw.mark("merge_bands");
     inkvec_core::progress::begin("carve");
     if opts.gradients && !inkvec_core::env::flag("INKVEC_NO_CARVE") {
+        let carved_from = fills_by_label.len();
         gradient::carve_residual_features_with_detail_noise(
             &mut labels,
             &rgb,
@@ -818,6 +924,7 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
             min_region.max(2),
             None,
         );
+        name_carved_paint(&labels, &rgb, alpha, &pal, &mut label_ink, carved_from);
     }
     sw.mark("carve");
     inkvec_core::progress::begin("fades");

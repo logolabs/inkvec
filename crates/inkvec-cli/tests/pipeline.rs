@@ -320,6 +320,49 @@ fn max_dim_cap_keeps_arrival_size_in_attributes() {
     assert!(svg0.contains("viewBox=\"-0.5 -0.5 128 96\""), "{svg0}");
 }
 
+/// A black disc of `area` px² centred on a transparent `n × n` canvas, its rim at the
+/// pixel's covered share.
+fn lone_disc(n: usize, area: f32) -> Rgba {
+    let r = (area / std::f32::consts::PI).sqrt();
+    let c = n as f32 / 2.0;
+    image(n, n, |x, y| {
+        let d = ((x as f32 - c).powi(2) + (y as f32 - c).powi(2)).sqrt();
+        [0.0, 0.0, 0.0, (r + 0.5 - d).clamp(0.0, 1.0)]
+    })
+}
+
+/// A lone 50 px² shape covers 0.3 % of a 128 px canvas, under the palette's rarity floor;
+/// it was traced to an empty SVG. It must be drawn, in its own colour.
+#[test]
+fn a_lone_small_shape_on_a_transparent_canvas_is_drawn() {
+    let svg = traced_svg(lone_disc(128, 50.0), &Args::default());
+    assert!(shapes(&svg) >= 1, "{svg}");
+    assert!(fills(&svg).contains("#000000"), "{svg}");
+}
+
+/// A near-empty 144 px raster, a 38 px² black disc on white, was read as eight times
+/// more pixels than detail (the round trip's mean error is diluted by the empty canvas),
+/// so the speckle floor rose 64-fold to 128 px² and the disc was removed. It must be drawn.
+#[test]
+fn a_lone_small_shape_on_a_near_empty_canvas_is_drawn() {
+    let r = (38.0f32 / std::f32::consts::PI).sqrt();
+    let img = image(144, 144, |x, y| {
+        let d = ((x as f32 - 72.0).powi(2) + (y as f32 - 72.0).powi(2)).sqrt();
+        let v = 1.0 - (r + 0.5 - d).clamp(0.0, 1.0);
+        [v, v, v, 1.0]
+    });
+    let svg = traced_svg(img, &Args::default());
+    // Drawn in (near) black: the opaque palette leaves a shape this rare to the carve
+    // stage, which paints it its pixels' median colour.
+    let dark = |f: &String| {
+        f.len() == 7
+            && (1..7)
+                .step_by(2)
+                .all(|i| u8::from_str_radix(&f[i..i + 2], 16).is_ok_and(|v| v < 0x20))
+    };
+    assert!(fills(&svg).iter().any(dark), "{svg}");
+}
+
 /// Weights that cannot be loaded: no restorer for a build without the network, and a failed
 /// load for one with it, so both builds take the same path.
 fn no_restorer(mode: inkvec_restore::Mode) -> Args {
@@ -347,6 +390,60 @@ fn restore_auto_without_a_restorer_traces_directly() {
     assert!(note.contains("traced directly"), "{note}");
     let direct = trace_image(square(), &Args::default()).expect("trace succeeds");
     assert_eq!(t.svg, direct.svg, "the fallback is the plain trace");
+}
+
+/// Upscaler flags that cannot give an upscaler: an empty `--sr-command`, the same failure a
+/// missing `tools/inkvec_sr` gives, without depending on what is installed beside the test.
+fn no_upscaler(mode: inkvec_sr::Mode) -> Args {
+    Args {
+        sr: mode,
+        // Below any residual, so `auto` always decides to clean.
+        sr_threshold: -1.0,
+        sr_command: Some(String::new()),
+        ..Args::default()
+    }
+}
+
+/// `--sr auto` asks for the clean-up only where it helps, so a machine without the
+/// upscaler traces the input as it is and says why, as `--restore auto` does. It used to
+/// fail the whole trace ("the packaged SR pre-pass ... was not found").
+#[test]
+fn sr_auto_without_an_upscaler_traces_directly() {
+    let args = no_upscaler(inkvec_sr::Mode::Auto);
+    let t = trace_image(square(), &args).expect("auto falls back to tracing directly");
+    let note = t
+        .stats
+        .iter()
+        .find(|l| l.starts_with("sr "))
+        .expect("an sr line");
+    assert!(note.contains("no upscaler is available"), "{note}");
+    assert!(note.contains("traced directly"), "{note}");
+    let direct = trace_image(square(), &Args::default()).expect("trace succeeds");
+    assert_eq!(t.svg, direct.svg, "the fallback is the plain trace");
+    // Monochrome: the probe is a colour trace, so the fallback traces again as asked.
+    let mono = Args {
+        monochrome: true,
+        ..no_upscaler(inkvec_sr::Mode::Auto)
+    };
+    let t = trace_image(square(), &mono).expect("auto falls back under monochrome too");
+    assert!(t
+        .stats
+        .iter()
+        .any(|l| l.contains("no upscaler is available")));
+    let plain_mono = Args {
+        monochrome: true,
+        ..Args::default()
+    };
+    assert_eq!(
+        t.svg,
+        trace_image(square(), &plain_mono).expect("trace").svg
+    );
+}
+
+/// `--sr on` asked for the clean-up outright: without an upscaler it is still an error.
+#[test]
+fn sr_on_without_an_upscaler_is_an_error() {
+    assert!(trace_image(square(), &no_upscaler(inkvec_sr::Mode::On)).is_err());
 }
 
 /// `--restore on` asked for the restorer outright: without one it is still an error.

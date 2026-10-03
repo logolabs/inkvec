@@ -55,7 +55,9 @@
 
 use inkvec_core::Point;
 
+mod oversample;
 mod resample;
+pub use oversample::oversample_factor;
 pub use resample::{box_downsample_rgba8, downsample_to};
 
 /// Systematic positional error of level-set extraction, in pixels. See
@@ -877,107 +879,6 @@ pub fn intake_scale(rgb: &[[f32; 3]], width: usize, height: usize) -> f64 {
     let mid = w_obs.len() / 2;
     w_obs.select_nth_unstable_by(mid, |a, b| a.total_cmp(b));
     w_obs[mid].max(1.0)
-}
-
-/// Mean absolute round-trip error, in 8-bit levels, above which a downsample has lost
-/// something.
-///
-/// This cannot separate native from oversampled on its own, and it was measured trying:
-/// across seventy corpus rasters the lowest native reading at /2 is 1.29 (a synthetic
-/// gradient, which really is band-limited and really does survive halving), while the 4x
-/// upscale this exists for reads 2.12 at /4. The distributions overlap, so a threshold
-/// permissive enough to catch the upscale would also rewrite smooth native artwork.
-///
-/// So this is not a gate and must not be used as one. The caller decides whether a raster
-/// is native -- `intake_scale` against `color::SOFT_INTAKE_EDGE` does that, and its
-/// margin is real (native maximum 1.50 against a 1.75 threshold) -- and only then asks
-/// this by how much. Inside that gate the value can be generous, because nothing native
-/// reaches it.
-const OVERSAMPLE_TOL: f64 = 3.0;
-
-/// By what factor this raster carries the same drawing on more pixels than it needs.
-///
-/// [`intake_scale`] answers a related question by measuring how wide an edge transition
-/// is, and it is the right measure for the palette's noise guard: a soft edge really does
-/// put intermediate colours on the ramp. It is the wrong measure for *tolerances*,
-/// because a super-resolution model defeats it -- it returns a sharp edge at high
-/// resolution, so the raster reads as barely oversampled when it carries four times the
-/// pixels the drawing needs. Measured on a real brand mark upscaled 4x: edge width 2.00,
-/// where the answer is 4.
-///
-/// This asks the question directly instead. An oversampled raster has a property that
-/// sharpening cannot fake: its pixels can be thrown away and put back. Halve it, restore
-/// it, and compare -- if nothing was lost, the halved version already carried the whole
-/// drawing. Repeated, that gives the factor, and it is indifferent to whether the surplus
-/// pixels are crisp or blurred, asking only whether they say anything.
-///
-/// For `k` in 2, 4, 8: box-average `k x k` blocks (the trailing `width mod k` columns and
-/// rows are dropped), resample back to full size bilinearly — pixel centre `x` maps to
-/// `(x + 0.5)/k − 0.5` in the small image, clamped to its edge — and take the mean absolute
-/// error over all pixels and channels, in 8-bit levels. The largest `k` whose error stays
-/// under `OVERSAMPLE_TOL`, with every smaller `k` also passing, is the answer. The search
-/// stops once the small image would be under 8 px on a side.
-///
-/// Returns 1 for a native render, which is every raster in the corpus, so a caller that
-/// scales by this leaves native intake exactly as it found it; also for anything under
-/// 16x16 or a buffer shorter than `width * height`.
-pub fn oversample_factor(rgb: &[[f32; 3]], width: usize, height: usize) -> usize {
-    if width < 16 || height < 16 || rgb.len() < width * height {
-        return 1;
-    }
-    let mut best = 1usize;
-    for k in [2usize, 4, 8] {
-        let (sw, sh) = (width / k, height / k);
-        if sw < 8 || sh < 8 {
-            break;
-        }
-        // Box down, bilinear back, and compare against what we started with.
-        let mut small = vec![[0.0f32; 3]; sw * sh];
-        for y in 0..sh {
-            for x in 0..sw {
-                let mut acc = [0.0f64; 3];
-                for dy in 0..k {
-                    for dx in 0..k {
-                        let p = rgb[(y * k + dy) * width + (x * k + dx)];
-                        for c in 0..3 {
-                            acc[c] += p[c] as f64;
-                        }
-                    }
-                }
-                let n = (k * k) as f64;
-                small[y * sw + x] = [
-                    (acc[0] / n) as f32,
-                    (acc[1] / n) as f32,
-                    (acc[2] / n) as f32,
-                ];
-            }
-        }
-        let mut err = 0.0f64;
-        for y in 0..height {
-            for x in 0..width {
-                // Bilinear sample of `small` at this pixel's centre.
-                let fx = ((x as f64 + 0.5) / k as f64 - 0.5).clamp(0.0, sw as f64 - 1.0);
-                let fy = ((y as f64 + 0.5) / k as f64 - 0.5).clamp(0.0, sh as f64 - 1.0);
-                let (x0, y0) = (fx.floor() as usize, fy.floor() as usize);
-                let (x1, y1) = ((x0 + 1).min(sw - 1), (y0 + 1).min(sh - 1));
-                let (tx, ty) = (fx - x0 as f64, fy - y0 as f64);
-                for c in 0..3 {
-                    let a = small[y0 * sw + x0][c] as f64 * (1.0 - tx)
-                        + small[y0 * sw + x1][c] as f64 * tx;
-                    let b = small[y1 * sw + x0][c] as f64 * (1.0 - tx)
-                        + small[y1 * sw + x1][c] as f64 * tx;
-                    err += (a * (1.0 - ty) + b * ty - rgb[y * width + x][c] as f64).abs();
-                }
-            }
-        }
-        err = err * 255.0 / (width * height * 3) as f64;
-        if err < OVERSAMPLE_TOL {
-            best = k;
-        } else {
-            break;
-        }
-    }
-    best
 }
 
 #[cfg(test)]

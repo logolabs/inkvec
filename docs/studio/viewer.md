@@ -100,6 +100,13 @@ The chip flashes when a draft is replaced by its full trace, so the swap is neve
 size, draft time limit and the wait before the full trace are in
 [Settings, Performance](settings.md#performance).
 
+**Studio Lite, opening a large image.** When an image larger than the draft size is opened in the
+browser, its first draft is drawn by the Fast engine, whatever the Mode control says, so a
+drawing appears in well under a second; the full trace, with your controls, starts the moment
+that draft lands. The status strip names the engine that drew what is on screen: **Fast draft**,
+then **Quality in** so many seconds. Moving a control, **Cancel** or opening another image in the
+meantime drops the queued full trace. The desktop app opens with the full trace alone.
+
 Only the full trace is ever exported: [Export](export.md) always runs one first.
 
 ## The engine log

@@ -9,7 +9,7 @@
 </head>
 <body>
 <div class="shell">
-  <aside class="side"><a class="guidebrand" href="index.html"><img src="logo-mono.svg" alt=""> <span>Inkvec Studio</span></a><div class="grp"><h4>User guide</h4><a href="index.html">Overview</a><a href="install.html">Install and first launch</a><a href="getting-started.html">Getting started</a><a href="viewer.html">The viewer</a><a href="result.html">Result</a><a href="tune.html">Tune</a><a href="palette.html">Palette and colour groups</a><a href="export.html">Export</a><a href="minify.html">Minify SVG</a><a href="fabricate.html">Fabricate</a><a href="batch.html">Batch</a><a href="settings.html">Settings</a><a href="shortcuts.html">Keyboard and mouse</a><a href="troubleshooting.html" aria-current="page">Troubleshooting</a></div><div class="grp"><h4>Tutorials</h4><a href="tutorials/jpeg-logo.html">Clean up a JPEG logo</a><a href="tutorials/favicon-asset-pack.html">A favicon and an asset pack</a><a href="tutorials/vinyl-htv.html">Layered vinyl and iron-on</a><a href="tutorials/laser.html">Laser: DXF and G-code</a></div><div class="grp"><h4>Online</h4><a href="https://logolabs.github.io/inkvec/">Inkvec documentation</a><a href="https://logolabs.github.io/inkvec/studio/troubleshooting.html">This page on the web</a></div><p class="guidenote">This copy of the guide is part of the app and works without a network.</p></aside>
+  <aside class="side" aria-label="Guide"><a class="guidebrand" href="index.html"><img src="logo-mono.svg" alt=""> <span>Inkvec Studio</span></a><div class="grp"><h4>User guide</h4><a href="index.html">Overview</a><a href="install.html">Install and first launch</a><a href="getting-started.html">Getting started</a><a href="viewer.html">The viewer</a><a href="result.html">Result</a><a href="tune.html">Tune</a><a href="palette.html">Palette and colour groups</a><a href="export.html">Export</a><a href="minify.html">Minify SVG</a><a href="fabricate.html">Fabricate</a><a href="batch.html">Batch</a><a href="settings.html">Settings</a><a href="shortcuts.html">Keyboard and mouse</a><a href="troubleshooting.html" aria-current="page">Troubleshooting</a></div><div class="grp"><h4>Tutorials</h4><a href="tutorials/jpeg-logo.html">Clean up a JPEG logo</a><a href="tutorials/favicon-asset-pack.html">A favicon and an asset pack</a><a href="tutorials/vinyl-htv.html">Layered vinyl and iron-on</a><a href="tutorials/laser.html">Laser: DXF and G-code</a></div><div class="grp"><h4>Online</h4><a href="https://logolabs.github.io/inkvec/">Inkvec documentation</a><a href="https://logolabs.github.io/inkvec/studio/troubleshooting.html">This page on the web</a></div><p class="guidenote">This copy of the guide is part of the app and works without a network.</p></aside>
   <main><article><h1 id="troubleshooting-and-questions">Troubleshooting and questions</h1>
 <h2 id="installing-and-starting">Installing and starting</h2>
 <p><strong>Windows says "Windows protected your PC".</strong> The installer is not code-signed. Choose <strong>More
@@ -82,8 +82,10 @@ original, smaller file instead.</p>
 says so. Re-set the words in a vector editor if they must stay editable.</p>
 <p><strong>Lines came back as thin filled shapes.</strong> Try the <em>Line art</em> preset. It only works for lines of one
 even width; brush and calligraphic strokes stay as outlines.</p>
-<p><strong>The draft and the final look different.</strong> A draft is traced small (512 px) for speed. Wait for
-the chip to say <strong>final</strong> before judging or copying.</p>
+<p><strong>The draft and the final look different.</strong> A draft is traced small (512 px) for speed. In Studio
+Lite, the first draft of a large image just opened is also drawn by the Fast engine, whatever the
+Mode control says, and the status strip says <strong>Fast draft</strong>. Wait for the chip to say <strong>final</strong>
+before judging or copying.</p>
 <p><strong>The favicon has space above and below the logo.</strong> Favicons are square; a wide drawing is
 centred in them on a transparent background rather than stretched. Trace a square crop of the mark
 for a favicon that fills its square.</p>
@@ -117,6 +119,9 @@ the status strip.</p>
 <p><strong>Nothing is downloaded in the background.</strong> Your browser asks sites to save data, so Studio
 Lite waits until you turn the denoiser on. Inside the Hugging Face frame the denoiser cannot run
 at all: use <strong>Open in its own tab</strong>.</p>
+<p><strong>Open in its own tab opened the Studio without my image.</strong> The image travels inside the page
+address, which holds up to 1.5 MB; for a larger file the app says so before it opens the tab.
+Open the file again in the new tab.</p>
 <p><strong>I opened a file and it says it did not open.</strong> The file is not an image the app reads: a
 text file renamed to <code>.png</code>, an empty file, a PDF, or a phone photo in HEIC or AVIF. The card
 says what the app found in it. Save the picture as PNG or JPEG (any image editor, or a
@@ -130,8 +135,8 @@ the page nowhere to keep them. The app still works, from the defaults each time.
 <h2 id="reporting-a-problem">Reporting a problem</h2>
 <p>Report bugs on <a href="https://github.com/logolabs/inkvec/issues">GitHub</a>. Include the app version (from
 About), your operating system, and, if you can share it, the image. Security problems go through
-the <a href="https://logolabs.github.io/inkvec/security.html">security policy</a> instead.</p><nav class="pagenav"><a class="prev" href="shortcuts.html"><span class="dir">Previous</span><span class="lbl">Keyboard and mouse</span></a><a class="next" href="tutorials/jpeg-logo.html"><span class="dir">Next</span><span class="lbl">Clean up a JPEG logo</span></a></nav></article></main>
-  <aside class="rail"><h5>On this page</h5><ul><ul><li class="l2"><a href="#installing-and-starting">Installing and starting</a></li><li class="l2"><a href="#transparency-and-backgrounds">Transparency and backgrounds</a></li><li class="l2"><a href="#colours">Colours</a></li><li class="l2"><a href="#the-denoiser">The denoiser</a></li><li class="l2"><a href="#speed-and-size">Speed and size</a></li><li class="l2"><a href="#the-result">The result</a></li><li class="l2"><a href="#integrations">Integrations</a></li><li class="l2"><a href="#help-and-settings">Help and settings</a></li><li class="l2"><a href="#studio-lite">Studio Lite</a></li><li class="l2"><a href="#reporting-a-problem">Reporting a problem</a></li></ul></ul></aside>
+the <a href="https://logolabs.github.io/inkvec/security.html">security policy</a> instead.</p><nav class="pagenav" aria-label="Previous and next page"><a class="prev" href="shortcuts.html"><span class="dir">Previous</span><span class="lbl">Keyboard and mouse</span></a><a class="next" href="tutorials/jpeg-logo.html"><span class="dir">Next</span><span class="lbl">Clean up a JPEG logo</span></a></nav></article></main>
+  <aside class="rail" aria-label="On this page"><h2 class="railh">On this page</h2><ul><li class="l2"><a href="#installing-and-starting">Installing and starting</a></li><li class="l2"><a href="#transparency-and-backgrounds">Transparency and backgrounds</a></li><li class="l2"><a href="#colours">Colours</a></li><li class="l2"><a href="#the-denoiser">The denoiser</a></li><li class="l2"><a href="#speed-and-size">Speed and size</a></li><li class="l2"><a href="#the-result">The result</a></li><li class="l2"><a href="#integrations">Integrations</a></li><li class="l2"><a href="#help-and-settings">Help and settings</a></li><li class="l2"><a href="#studio-lite">Studio Lite</a></li><li class="l2"><a href="#reporting-a-problem">Reporting a problem</a></li></ul></aside>
 </div>
 </body>
 </html>

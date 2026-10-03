@@ -1094,11 +1094,11 @@ Stage 11 transforms the subpixel polyline of each edge into the minimal-cost seq
 
 | Model | Emitted Command | Parameter Cost ($K$) | Rationale & Mathematical Derivation |
 |---|---|---|---|
-| **Axis Line** | `L x y` | **1** | Constrained horizontal/vertical line ($h16$ or $v16$). |
+| **Axis Line** (research builds only) | `L x y` | **1** | Constrained horizontal/vertical line ($h16$ or $v16$). |
 | **Line** | `L x y` | **2** | Endpoint $(x, y)$. Start point is shared with predecessor. |
 | **Circular Arc** | `A r r 0 f s x y` | **5** | Radius $r$ + two 1-bit flags + endpoint. $\mathcal{O}(1)$ Kåsa moment fit. |
-| **Smooth Cubic** | `S c2 x y` | **4** | Control point 1 is reflected from prior segment; saves 2 params. |
-| **G1 Cubic** | `C c1 c2 x y` | **6** | Two control arms + endpoint. Raph Levien quartic closed-form fit. |
+| **Smooth Cubic** (research builds only) | `S c2 x y` | **4** | Control point 1 is reflected from prior segment; saves 2 params. |
+| **G1 Cubic** | `C c1 c2 x y` | **6** (default; `--bezier-cost` reprices it) | Two control arms + endpoint. Raph Levien quartic closed-form fit. |
 | **Elliptical Arc** | `A rx ry φ f s x y` | **7** | Radii $(r_x, r_y)$, rotation $\phi$, flags, endpoint. |
 | **`<circle>`** | `<circle cx cy r/>` | **3** | Exact circle primitive. Saves 21 parameters over 4 cubics! |
 | **`<rect>` (plain)** | `<rect x y w h/>` | **4** | Axis-aligned box. Saves 12 parameters over 4 lines. |
@@ -1152,17 +1152,20 @@ $$\text{bow\_penalty} = (n - 1) \ln 2$$
 whenever a circular arc explains the points four times better than a chord, preventing shallow curves from being faceted into straight lines.
 
 #### 6. Scalable Point Decimation (`DP_MAX_POINTS = 768`)
-On high-resolution images, single boundary contours can span 1,500+ points. Because the dynamic program is $\mathcal{O}(N^2)$ per boundary, unconstrained execution would take dozens of seconds. Inkvec decimates points exceeding `DP_MAX_POINTS = 768` by sub-sampling every $\text{stride}$-th point, while rigorously scaling uncertainty by $1/\sqrt{\text{stride}}$:
+On high-resolution images, single boundary contours can span 1,500+ points. Because the dynamic program is $\mathcal{O}(N^2)$ per boundary, unconstrained execution would take dozens of seconds. Inkvec decimates points exceeding `DP_MAX_POINTS = 768` for the dynamic program only, keeping one point per cell of $\text{stride}$ points and every significant bend within a cell (`crates/inkvec-fit/src/decimate.rs`), while scaling uncertainty by $1/\sqrt{\text{stride}}$:
 
 $$\sigma_{\text{decimated}} = \frac{\sigma}{\sqrt{\text{stride}}}$$
 
-Each retained point carries the exact variance weight of the run it represents, preserving global optimality while reducing runtimes by up to $10\times$.
+Each retained point carries the variance weight of the run it represents, so $\chi^2$ keeps its meaning against $\lambda$; the chosen vertices are then mapped back to indices of the full contour (`solve_decimated`, `crates/inkvec-fit/src/multimodel.rs`).
 
 #### 7. Post-DP Geometric Refinement Passes (`merge.rs`)
-Following the global DP segmentation, Inkvec executes targeted geometric polish passes:
+Following the global DP segmentation, Inkvec runs two peephole passes on every uncapped fit (`crates/inkvec-fit/src/multimodel.rs`, `post_fit_passes`):
 * **Corner Sharpening (`sharpen_corners`):** Marching squares and level-set extraction round off sharp apex corners by ~1 pixel, causing the DP to insert chamfer cubics. Inkvec tests whether two consecutive lines turn by $\ge 30^\circ$ and computes their true Euclidean intersection point, restoring crisp corners.
-* **Free Cubic Merging (`merge_free_cubics`):** Replaces short `chord - cubic - chord` sequences with a single free-tangent cubic wherever it reduces MDL cost by $\ge 25\%$.
-* **Smooth $G^1$ Joins (`snap_smooth_joins`):** Symmetrizes tangents at smooth joins into equal-length handles, allowing emission of SVG `S` smooth shorthand.
+* **Free Cubic Merging (`merge_free_cubics`):** Replaces short `chord - cubic - chord` runs with a single free-tangent cubic wherever the same MDL objective prices it strictly cheaper, two parameters charged for the joins it no longer meets smoothly. On a traced rounded square a free cubic beat the split by about 25% and the G1 cubic by more than half. Its search (a 2,025-candidate grid, then a compass search) is the hottest code of the fit; since 2026-10 a lower-bound screen (`merge/residual.rs`, after Bei & Gray 1985 and Rakthanmanon et al. 2012) and cached Bernstein partial sums (`merge/grid.rs`) cut it by 46% in the prototype without changing a bit of output.
+* **Research builds only:** axis snapping (`snap_axis_aligned`) and smooth $G^1$ joins (`snap_smooth_joins`, which would let the emitter write SVG `S` more often) are compiled only with `--features research`; neither paid on the gate.
+
+#### 8. Curve or Primitive (`choice.rs`)
+Each boundary's DP path competes with a whole-boundary primitive (circle, ellipse, rounded rectangle, or a run of arcs) under the same MDL cost, and the cheaper is kept (`inkvec_fit::choice`). The image frame is tried as a rectangle first: when the rectangle costs less than a lower bound on any fitted path (`cost_floor`: every segment costs at least two parameters; a single line at least Pearson's smallest scatter eigenvalue), the DP is not run at all. Every other boundary runs the DP and the primitive search side by side (`rayon::join`). Both shortcuts are exact. On the 246-icon screen set the frame was the background of 166 icons and the rectangle won every time.
 
 ---
 
@@ -1172,7 +1175,7 @@ Following the global DP segmentation, Inkvec executes targeted geometric polish 
 * **Entry Point:** `rings::repair_ring_crossings`
 
 1. **The Thin Neck Hazard:** In Stage 11, each edge is fitted independently. When two boundaries pass within a fraction of a pixel of each other (such as in narrow glyph stems or decorative linework), two smoothly fitted cubics can bulge across one another.
-2. **Even-Odd Inversion Prevention:** All Inkvec paths emit with `fill-rule="evenodd"`. If a boundary crosses itself, the interior winding parity flips, causing solid shapes or font counters to invert into transparent holes.
+2. **Fill Inversion Prevention:** Inkvec writes every compound path with its rings wound by nesting depth, so SVG's default `nonzero` rule and `evenodd` paint the same regions (Stage 13). Both rules assume rings that do not cross: where a boundary crosses itself, the region between the crossing stretches is enclosed twice in one direction or once in the other, and whether a solid shape or a font counter shows as filled or as a hole then depends on which rule the reader applies.
 3. **Progressive Span-Capped Refit:** Stage 12 detects intersections across all assembled rings. For any edge participating in a self-crossing, it refits the edge under a decreasing span cap $M_{\text{span}} \to M_{\text{span}} / 2$. At $M_{\text{span}} = 1$, the fit reproduces the input polyline, which is proven simple by the planar map. **Termination and topological simplicity are guaranteed.**
 
 ---
@@ -1182,11 +1185,11 @@ Following the global DP segmentation, Inkvec executes targeted geometric polish 
 * **Source:** `crates/inkvec-cli/src/emit.rs`, `crates/inkvec-cli/src/post.rs`
 * **Entry Point:** `emit::emit_color`, `post::post_process`
 
-1. **Compound Path Merging:** Sibling faces sharing the identical fill (such as a letter and its interior counter) are unified into a single SVG `<path>` with subpath `M ... Z` commands, resolving fill holes cleanly via `fill-rule="evenodd"`.
+1. **Compound Path Merging:** Sibling faces sharing the identical flat fill (such as the letters of a word) are unified into a single SVG `<path>` with subpath `M ... Z` commands, the holes punched in them included. Each ring is wound by its nesting depth (`emit/winding.rs`: outermost one way, a hole the other, an island in the hole the first way again), so the default `nonzero` fill rule paints exactly the even-odd parity and no `fill-rule` attribute is written; font tools, cutters and older Android renderers, which ignore or lack `evenodd`, read the same shape a browser does. Until 2026-10 the paths carried `fill-rule="evenodd"`, and 30% of the screen set's files filled their holes back in under `nonzero`.
 2. **Exact Coordinate Budgeting:** Coordinates are emitted with fixed 2-decimal precision (`const EMIT_DECIMALS = 2`), preserving hundredths-of-a-pixel accuracy while omitting redundant trailing zeros.
 3. **Post-Processing Pipeline:**
    * `--no-background`: Knocks out the bounding canvas face.
-   * `--minify`: Strips IDs, whitespace, and metadata for minimum byte payload.
+   * `--minify`: Strips unreferenced IDs, empty groups and trailing zeros, then respells every path in the fewest bytes with `inkvec-svgmin`'s writer (relative commands, `H`/`V`/`S` shorthands, arcs kept as arcs), moving and rounding nothing: 478,421 bytes against the default's 710,367 on the 246-icon screen set, pixel-identical at 512 px.
    * `--margin`: Insets or offsets the document boundary.
    * Retargets the SVG `viewBox` back to the exact physical input dimensions.
 

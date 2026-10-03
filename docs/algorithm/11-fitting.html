@@ -193,14 +193,40 @@
         segments into one smooth curve when a corner's rigid geometry made it look artificially
         expensive, and replacing a curve that is really just the camera's rounding of a corner
         with the sharp corner it stands in for.</p>
-      <p>Two more exist in the code but do not run unless specifically switched on. One would
-        snap a line to be perfectly horizontal or vertical when the measurement genuinely
-        cannot tell it apart from one — real drawings do this constantly, and the evidence for
-        it is strong, but turning it on made almost no measurable difference to the finished
-        picture, so it ships off. The other would rewrite two neighbouring curves to share a
-        handle exactly, the shorthand professional design tools write automatically — again,
-        well-supported by how real artwork looks, and again, not switched on by default. Both
-        remain available, tested against real evidence, simply dormant.</p>
+      <p>The first of these is where most of the fitting time used to go. For each short run it
+        searches for the single curve that fits best: about two thousand rough candidates
+        first, then a fine search from the most promising one, each candidate measured against
+        every point of the run. Almost all of those candidates lose, so since October 2026 a
+        candidate is first checked with a cheaper quantity that is provably never larger than
+        its real misfit, and only a candidate that survives that check is measured exactly.
+        The rough candidates also share most of their arithmetic, which is now done once and
+        reused. Neither change alters a single number in the output; the drawing is the same
+        to the last bit, it just arrives sooner.</p>
+      <p>Two more exist in the code but are built only into research versions of the program,
+        never into a release. One would snap a line to be perfectly horizontal or vertical
+        when the measurement genuinely cannot tell it apart from one — real drawings do this
+        constantly, and the evidence for it is strong, but turning it on made almost no
+        measurable difference to the finished picture. The other would rewrite two
+        neighbouring curves to share a handle exactly, the shorthand professional design
+        tools write automatically — again, well-supported by how real artwork looks, and
+        again, not worth it on the measurements.</p>
+    </section>
+
+    <section>
+      <h2>A whole circle, or a run of curves?</h2>
+      <p>Every boundary is also offered as one whole shape: a circle, an ellipse, a rectangle
+        with or without rounded corners, or a run of circular arcs. Both descriptions are
+        priced by the same rule, and the cheaper one is written. A boundary that really is a
+        circle comes back as three numbers rather than four curves; one that only looks
+        roughly round keeps its curves. This choice is worth a lot: taking the whole-shape
+        option away makes the traced files carry about 30% more numbers.</p>
+      <p>The image's own border is the commonest whole shape of all — on most icons the
+        background touches every edge, and its boundary is the frame of the picture. The
+        rectangle won that contest every single time it was measured, so the frame is now
+        tried as a rectangle first, and when the rectangle is cheaper than any curve could
+        possibly be, the curve search is not run at all. On every other boundary the curve
+        search and the whole-shape search run at the same time on different processor cores.
+        Both shortcuts give exactly the answer the full comparison would have.</p>
     </section>
 
   </main>

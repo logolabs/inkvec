@@ -34,6 +34,14 @@ export const DESKTOP_URL = "https://github.com/logolabs/inkvec/releases";
 export const DESKTOP_WHY =
   "Inkvec Studio for Windows, macOS and Linux: the native engine is faster, it traces whole folders in one batch, has no browser memory limit (traces up to 16384 px), and works offline.";
 
+/**
+ * Inkvec Studio Lite at the Space's static host, in a tab of its own: cross-origin isolated,
+ * so it runs on every core. The Space's page (huggingface.co/spaces/...) frames the site, and
+ * inside that frame the browser gives the Studio one core. The same address as `STUDIO` in
+ * `tools/build_site.py` and the root README.
+ */
+export const LITE_URL = "https://logolabs-inkvec.static.hf.space/studio/index.html";
+
 /** A file the user chose or dropped: a path on the desktop, the file itself in a browser. */
 export interface Picked {
   name: string;

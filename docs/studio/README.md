@@ -63,9 +63,9 @@ in a few places:
   kept in the browser for later visits (see [the denoiser](settings.md#denoiser)).
 - Preferences and the choices you leave the app with are kept in the browser, not in a file.
 - In place of the window's own buttons, the app bar has **Full screen** (the page fills the
-  screen; <kbd>Esc</kbd> leaves it) and, inside the Hugging Face page, **Open in its own tab**.
-  In its own tab the engine uses every core and the denoiser can run; inside the Hugging Face
-  frame it runs on one core.
+  screen; <kbd>Esc</kbd> leaves it) and, inside the Hugging Face page, **Open in its own tab**,
+  which takes the open image along (up to 1.5 MB). In its own tab the engine uses every core and
+  the denoiser can run; inside the Hugging Face frame it runs on one core.
 - It works on a phone. Held upright, the app is one column that scrolls: the drawing first, then
   the rail, with **Export** kept at the bottom of the screen. On its side, the drawing and the
   rail stay side by side with the toolbars thinned to one row. Large images trace faster on a

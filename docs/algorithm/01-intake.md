@@ -441,9 +441,9 @@ get to claim more precision than the reference had. `s = extent / REF_EXTENT` is
 Two things then use `s`, and it is important to be precise about which one the code
 actually applies where:
 
-**`in_content_units`** (`lib.rs:139-148`) multiplies a fitted polyline's *positional sigma*
+**`in_content_units`** (`crates/inkvec-cli/src/units.rs:100-111`) multiplies a fitted polyline's *positional sigma*
 — the per-point uncertainty from stage 02 — by `s`. This is called on every boundary before
-fitting, in both `run_bilevel` (`lib.rs:748-750`) and `run_color` (`lib.rs:851-855`),
+fitting, in both `run_bilevel` (`crates/inkvec-cli/src/pipeline.rs:70-73`) and the colour path's `fit_boundaries` (`pipeline.rs:650-654`),
 whenever `--content-units` is on, regardless of which other path produced the image. Because
 the admissibility test in `inkvec-fit` accepts a candidate chord only while every point
 stays within `tau * sigma` of it (stage 02's central idea), inflating `sigma` by `s` lets
@@ -452,19 +452,23 @@ itself is `s` times bigger — pass the same test it would have passed at 128 px
 
 Fast mode's fitter reads neither these polylines nor their sigmas: it fits the map's edges
 directly, in pixels, with its own tolerances (see `14-fast-mode.md`). So in Fast mode
-`fit_boundaries` (`crates/inkvec-cli/src/pipeline.rs:619-671`) builds the content-unit
+`fit_boundaries` (`crates/inkvec-cli/src/pipeline.rs:639-753`) builds the content-unit
 polylines, the per-edge λ multipliers and the `content_scale` they need only when something
 reads them: `--editability`, whose passes read the polylines, or the research build's
 structural baseline (`INKVEC_STRUCTURAL`). The condition is
 `need_polys = !fast || args.editability || structural` (`pipeline.rs:647-648`); otherwise
 `Fits::polys` and `Fits::lambda_scales` are empty, and the fitted paths, which depend on
 neither, are unchanged (commit `9f290b6`, byte-identical; 0.47 ms of the fit stage at
-2048 px). Quality builds them as before. Fast mode does still call `content_scale` once,
-through `fit_config` (`crates/inkvec-cli/src/units.rs:92-98`, called from
-`crates/inkvec-cli/src/lib.rs:639` for every trace, whatever the mode): it returns 1.0 at
-once unless `--content-units` is set, and under that flag, which Fast lists among the
-options it ignores (`crates/inkvec-cli/src/fast.rs:68`), it still runs the scale's two
-raster passes there.
+2048 px). Quality builds them as before, and then fits each boundary on every core through
+`inkvec_fit::choice::describe` (`pipeline.rs:694-710`): the dynamic program on its
+content-unit polyline, beside the whole-boundary primitive search, the cheaper of the two
+kept; for the image frame the rectangle is tried first and the program skipped when the
+rectangle is provably cheaper (`11-fitting.md`, *Curve or primitive*). Fast mode does still
+call `content_scale` once, through `fit_config` (`crates/inkvec-cli/src/units.rs:92-98`,
+called from `crates/inkvec-cli/src/lib.rs:639` for every trace, whatever the mode): it
+returns 1.0 at once unless `--content-units` is set, and under that flag, which Fast lists
+among the options it ignores (`crates/inkvec-cli/src/fast.rs:68`), it still runs the scale's
+two raster passes there.
 
 **`fit_config`** (`lib.rs:122-136`) goes further: it also multiplies `--precision` by `s`
 before deriving `lambda`, and then multiplies the resulting `lambda` by `s` again:
@@ -630,9 +634,9 @@ Every stage of both modes then reads the image composited over white, and that c
 serial map (`the_parallel_composite_is_the_serial_one`).
 
 `crates/inkvec-trace/src/alpha.rs` is a related but distinct mechanism, run *after* the
-trace rather than during intake: `decompose` (`alpha.rs:345`) recovers a translucent layer
+trace rather than during intake: `decompose` (`alpha.rs:370`) recovers a translucent layer
 — one shape at one opacity, seen through several different backgrounds — from the flat face
-partition the trace already produced. The module doc comment (`alpha.rs:1-90`) states the
+partition the trace already produced. The module doc comment (`alpha.rs:1-134`) states the
 algebra plainly: a layer of colour `C` at opacity `a` over two *different* backgrounds `G1`
 and `G2` produces two observed faces whose difference `c_F1 − c_F2 = (1−a)·(c_G1 − c_G2)` is
 independent of the unknown `C` — a face seen against only one background can never be
@@ -640,12 +644,34 @@ distinguished from a flat region, so a layer with only one hypothesis is rejecte
 Recovering the layer needs at least two hypotheses over well-separated backgrounds, a
 quad-adjacency test that matches the actual geometry of a translucent edge crossing a
 background edge, and a battery of conservative gates (opacity in `(0.05, 0.98)`, standard
-error on the recovered opacity bounded, and more — `alpha.rs:68-90`), because a false layer
+error on the recovered opacity bounded, and more — `alpha.rs:70-89`), because a false layer
 is a visible error: it unions faces that are not one shape and paints them a colour that
-appears nowhere in the source. This is exposed as `--layers` (default off, opt-in via
-`INKVEC_LAYERS` (*removed*) too), and its own doc comment records it firing on "about one real icon in
-twenty" of the census used to tune it — two of forty (`args.rs:126-132`,
-`crates/inkvec-cli/src/alpha.rs:528-529`).
+appears nowhere in the source. This is exposed as `--layers` (default off;
+`INKVEC_LAYERS` is *removed*), and the CLI's help records it firing on "about one real icon
+in twenty" of the census used to tune it — two of forty (`crates/inkvec-cli/src/args.rs:337-343`,
+`crates/inkvec-cli/src/alpha/layers.rs:49-54`). The CLI side, `recover_layers`
+(`crates/inkvec-cli/src/alpha/layers.rs:100`, split out of `alpha.rs` on 2026-10-02), holds
+the decomposition to three rules, each closing a way the layered document used to draw
+something other than the image (`alpha/layers.rs:62-99`):
+
+1. **sRGB only.** The document composites `fill-opacity` in sRGB (SVG 1.1 §11.7.1,
+   `color-interpolation`), so only `inkvec_trace::alpha::Space::Srgb` is tried. It used to
+   try linear light too and keep whichever found more layers: on
+   `noto-emoji/emoji_u1f469_1f3fb_200d_1f52c` a black layer at 0.924 recovered in linear
+   light repainted the dark grey hair near black, dE00 0.609 -> 2.92.
+2. **Flat faces only.** A gradient face has no single ground colour to repaint, so it is
+   given no area and takes no part.
+3. **Reproduction.** The layered document is written only when the layer stack composited
+   over every covered face's recovered (gamut-clamped) ground comes back within
+   `LAYER_MAX_DE00 = 1.0` of the face's own colour (`layers_reproduce`).
+
+The emitter then paints the recovered layers back to front: the decomposition peels the
+frontmost layer first, and painting in peel order put the front layer underneath
+(`synthetic/stack_overlap`, dE00 0.019 -> 2.90 with `--layers`; `write_layers`,
+`crates/inkvec-cli/src/emit.rs:1270-1287`; see `13-emit.md`). Citations, as the code gives
+them: "Method from" Porter & Duff 1984 (doi:10.1145/800031.808606) and SVG 1.1 §11.7.1; the
+three rules "Not from the literature"; "See also" Richardt et al., EGSR 2014
+(doi:10.1111/cgf.12408).
 
 ## Constants and thresholds
 
@@ -732,8 +758,8 @@ Since the settings cleanup (CHANGELOG, *Unreleased*) the engine reads its enviro
 |---|---|---|---|
 | `INKVEC_CONTENT_SCALE=1` (*removed*) | equivalent to `--content-units` | unset (off) | `crates/inkvec-cli/src/lib.rs:114-115` |
 | `INKVEC_MATTE=white\|black\|magenta` (*removed*) | forces `choose_matte`'s answer, bypassing the swallowed-mass search | unset (`choose_matte` decides) | `crates/inkvec-cli/src/alpha.rs:309-316` |
-| `INKVEC_LAYERS` (*removed*) | forces `--layers` on | unset (off, same as `--layers` unset) | `crates/inkvec-cli/src/alpha.rs:538` |
-| `INKVEC_LAYER_SIGMA` (*removed*) | overrides the sRGB noise sigma used when fitting a translucent layer | `LAYER_SIGMA_SRGB` | `crates/inkvec-cli/src/alpha.rs:567-571` |
+| `INKVEC_LAYERS` (*removed*) | forced `--layers` on | unset (off, same as `--layers` unset) | removed; `--layers` only |
+| `INKVEC_LAYER_SIGMA` (*removed*) | overrode the sRGB noise sigma used when fitting a translucent layer | `LAYER_SIGMA_SRGB` (`crates/inkvec-cli/src/alpha/layers.rs:22`) | removed |
 | `INKVEC_ALPHADBG` | prints alpha/layer diagnostics to stderr | unset (silent) | `crates/inkvec-cli/src/alpha.rs:708`, `crates/inkvec-cli/src/emit.rs:569` |
 
 No `INKVEC_*` variable is read anywhere in `inkvec-trace/src/load.rs` — `load_image_capped`,

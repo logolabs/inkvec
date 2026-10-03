@@ -9,7 +9,7 @@
 </head>
 <body>
 <div class="shell">
-  <aside class="side"><a class="guidebrand" href="index.html"><img src="logo-mono.svg" alt=""> <span>Inkvec Studio</span></a><div class="grp"><h4>User guide</h4><a href="index.html">Overview</a><a href="install.html">Install and first launch</a><a href="getting-started.html" aria-current="page">Getting started</a><a href="viewer.html">The viewer</a><a href="result.html">Result</a><a href="tune.html">Tune</a><a href="palette.html">Palette and colour groups</a><a href="export.html">Export</a><a href="minify.html">Minify SVG</a><a href="fabricate.html">Fabricate</a><a href="batch.html">Batch</a><a href="settings.html">Settings</a><a href="shortcuts.html">Keyboard and mouse</a><a href="troubleshooting.html">Troubleshooting</a></div><div class="grp"><h4>Tutorials</h4><a href="tutorials/jpeg-logo.html">Clean up a JPEG logo</a><a href="tutorials/favicon-asset-pack.html">A favicon and an asset pack</a><a href="tutorials/vinyl-htv.html">Layered vinyl and iron-on</a><a href="tutorials/laser.html">Laser: DXF and G-code</a></div><div class="grp"><h4>Online</h4><a href="https://logolabs.github.io/inkvec/">Inkvec documentation</a><a href="https://logolabs.github.io/inkvec/studio/getting-started.html">This page on the web</a></div><p class="guidenote">This copy of the guide is part of the app and works without a network.</p></aside>
+  <aside class="side" aria-label="Guide"><a class="guidebrand" href="index.html"><img src="logo-mono.svg" alt=""> <span>Inkvec Studio</span></a><div class="grp"><h4>User guide</h4><a href="index.html">Overview</a><a href="install.html">Install and first launch</a><a href="getting-started.html" aria-current="page">Getting started</a><a href="viewer.html">The viewer</a><a href="result.html">Result</a><a href="tune.html">Tune</a><a href="palette.html">Palette and colour groups</a><a href="export.html">Export</a><a href="minify.html">Minify SVG</a><a href="fabricate.html">Fabricate</a><a href="batch.html">Batch</a><a href="settings.html">Settings</a><a href="shortcuts.html">Keyboard and mouse</a><a href="troubleshooting.html">Troubleshooting</a></div><div class="grp"><h4>Tutorials</h4><a href="tutorials/jpeg-logo.html">Clean up a JPEG logo</a><a href="tutorials/favicon-asset-pack.html">A favicon and an asset pack</a><a href="tutorials/vinyl-htv.html">Layered vinyl and iron-on</a><a href="tutorials/laser.html">Laser: DXF and G-code</a></div><div class="grp"><h4>Online</h4><a href="https://logolabs.github.io/inkvec/">Inkvec documentation</a><a href="https://logolabs.github.io/inkvec/studio/getting-started.html">This page on the web</a></div><p class="guidenote">This copy of the guide is part of the app and works without a network.</p></aside>
   <main><article><h1 id="getting-started">Getting started</h1>
 <p>This page opens an image, explains the choice the app offers when it does, and walks through the
 Custom wizard. The fastest way to follow along is with one of the samples on the empty stage.</p>
@@ -68,11 +68,20 @@ reads, and the samples stay there to carry on with.</p>
 </tbody>
 </table>
 <p>The app bar shows the open file's name, its size in pixels and its format.</p>
-<p><strong>Studio Lite:</strong> there is no right-click entry, and a dropped or chosen file is read by the browser.</p>
+<p><strong>Studio Lite:</strong> there is no right-click entry, and a dropped or chosen file is read by the browser;
+it never leaves your computer. On the Hugging Face Space, the front page opens the Studio in a tab
+of its own, where it runs on every core: a file you choose, paste or drop there goes with it,
+carried inside the page address, up to 1.5 MB. A larger file can be opened on the front page
+itself, on one core, or dropped again in the new tab. Inside the Space's frame, <strong>Open in its own
+tab</strong> in the app bar takes the open image along the same way.</p>
 <h2 id="auto-traces-at-once">Auto traces at once</h2>
 <p>The moment an image opens, <strong>Auto</strong> traces it. It uses the controls exactly as you left them the
 last time (the first time, the <strong>Logo</strong> preset, which is the default). Nothing has to be chosen
 first, and the trace is already on its way when the next thing appears.</p>
+<p><strong>Studio Lite:</strong> a full trace of a large image takes several seconds in a browser tab, so an image
+larger than the draft size is first drawn by the Fast engine at the draft size, in well under a
+second, and the full trace starts the moment that draft is on screen. The status strip says
+<strong>Fast draft</strong> until the full trace lands; see <a href="viewer.html#draft-and-full-traces">Draft and full traces</a>.</p>
 <h2 id="the-choice-card-keep-auto-or-customise">The choice card: Keep Auto or Customise</h2>
 <p>Over the stage, a small card appears while Auto traces.</p>
 <p><img alt="The card that appears when an image opens, with Auto's result and the Custom option" src="img/chooser.webp"></p>
@@ -178,8 +187,8 @@ tab, or <strong>Customise</strong> on the <em>Auto chose</em> note.</p>
 <li>Read the numbers: <a href="result.html">Result</a> explains the quality report.</li>
 <li>Change something: <a href="tune.html">Tune</a> lists every control.</li>
 <li>Save it: <a href="export.html">Export</a>.</li>
-</ul><nav class="pagenav"><a class="prev" href="install.html"><span class="dir">Previous</span><span class="lbl">Install and first launch</span></a><a class="next" href="viewer.html"><span class="dir">Next</span><span class="lbl">The viewer</span></a></nav></article></main>
-  <aside class="rail"><h5>On this page</h5><ul><ul><li class="l2"><a href="#opening-an-image">Opening an image</a></li><li class="l2"><a href="#auto-traces-at-once">Auto traces at once</a></li><li class="l2"><a href="#the-choice-card-keep-auto-or-customise">The choice card: Keep Auto or Customise</a></li><li class="l2"><a href="#the-custom-wizard">The Custom wizard</a></li><li class="l2"><a href="#what-to-do-next">What to do next</a></li></ul></ul></aside>
+</ul><nav class="pagenav" aria-label="Previous and next page"><a class="prev" href="install.html"><span class="dir">Previous</span><span class="lbl">Install and first launch</span></a><a class="next" href="viewer.html"><span class="dir">Next</span><span class="lbl">The viewer</span></a></nav></article></main>
+  <aside class="rail" aria-label="On this page"><h2 class="railh">On this page</h2><ul><li class="l2"><a href="#opening-an-image">Opening an image</a></li><li class="l2"><a href="#auto-traces-at-once">Auto traces at once</a></li><li class="l2"><a href="#the-choice-card-keep-auto-or-customise">The choice card: Keep Auto or Customise</a></li><li class="l2"><a href="#the-custom-wizard">The Custom wizard</a></li><li class="l2"><a href="#what-to-do-next">What to do next</a></li></ul></aside>
 </div>
 </body>
 </html>

@@ -178,6 +178,47 @@ build (a rayon pool of nested workers) where the page is cross-origin isolated, 
 single-threaded build where it is not. The Space asks for isolation in its README card
 (`web/README.md`), exactly as the old demo did.
 
+**The threaded build's allocator.** Rust's standard allocator on shared-memory WebAssembly is
+one `dlmalloc` heap behind one spinning lock, and the parallel stages that allocate a lot
+anti-scaled on it (a gradient band merge took 15.3 s threaded against 1.07 s natively).
+`studio/wasm/src/tcache.rs` puts a per-thread cache of free blocks in front of it: size
+classes up to 32 KiB, and a budget of 128 KiB per thread (`THREAD_CAP`), enforced on every
+free with a low-water scavenge, so the caches together hold at most 2 MiB at 16 threads. It is
+compiled into the threaded build only; the one-core build's `.wasm` is unchanged. Measured
+against v0.2.4 with identical SVGs on every image (Wave A, 2026-10-02): 0.52x the stage time on
+the 246-icon screen set, 0.75x on 51 images at 512 px and 0.74x on ten at 2048 px; memory
+high-water 45 -> 48 MB, 130 -> 154 MB and 462 -> 444 MB on the same sets. The module's doc
+has the budgets that were tried and dropped (`THREAD_CAP`).
+
+**Start-up.** The worker compiles the engine from the fetch `Response` itself
+(`instantiateStreaming`), which is what lets the browser keep a compiled-code cache: a later
+visit starts from it (4.1 MB in Edge, measured). This needs the host to send `.wasm` as
+`application/wasm`; without it the bindings fall back to a plain download, with a console
+warning and no cache. The worker says "ready" as soon as the module is instantiated, and the
+rayon pool starts in the background once the app is shown: commands that never reach rayon
+(capabilities, preferences, palette matching) run at once, everything else waits for the pool.
+An isolated cold start went from 2.6 s to 1.4 s.
+
+**Opening a large image.** In the browser a Quality trace of a 2048 px image takes seconds, so
+an image larger than the draft size is first drawn by the Fast engine at the draft size, and
+the Quality trace at the planned size is asked for the moment that draft lands (`TraceLoop.open`
+in `src/lib/traceflow.ts`, `fastDraftFirst` in `src/main.ts`). The status strip says "Fast
+draft" while it is shown. Moving a control, Cancel, or another image retires the waiting full
+trace, as a moved control's settle timer does. The desktop opens with the full trace alone.
+
+**The Space and its own tab.** Hugging Face shows the Space inside a frame on its own page,
+and a framed page is not cross-origin isolated, so it gets one core. The front page
+(`web/index.html`) therefore opens the Studio in a tab of its own — every link, sample and
+chosen or pasted file — where it runs on every core. Nothing but the address crosses from
+that frame to the new tab (the frame's storage is partitioned, and the Studio's isolation cuts
+the tab off from its opener), so a file rides in the URL fragment, base64url-encoded and never
+sent to a server, up to 1.5 MB; the Studio reads it and clears the address
+(`takeLaunch` / `carriedFile` in `src/lib/web/chrome.ts`). A file dropped without a click is
+held in the drop zone with the choices "Open in its own tab", "Open here, on one core" (the
+IndexedDB hand-off, as at the static host's own address) and "Another file"; a larger file can
+be opened here or dropped again in the tab. The Studio's own **Open in its own tab** button
+carries the open image the same way, and says so when it is over 1.5 MB.
+
 **The denoiser** is ONNX Runtime Web running the same `restorer.onnx`, loaded by the old
 demo's `web/denoise.js` in a worker of its own. The pipeline is synchronous and ONNX Runtime
 Web is not, so the engine worker posts the tensor to the denoiser worker and blocks on a
@@ -201,12 +242,13 @@ and the remembered preferences in headless Edge.
 **What differs from the desktop.** Files are chosen with the browser's picker, dropped or
 pasted, and every write is a download (several files arrive as one `.zip`). The trace size
 tops out at 2048 px and starts at 1024 (a tab has a 4 GiB address space); drafts are the
-desktop's. Hidden rather than faked: Batch, Recent, the output folder, the update check, the
-command-line install and the right-click menu, and "Show in folder". The engine's confidence
-bands (Certainty) reach the desktop through a file and are not available in the browser.
-The top bar has **Full screen** (the Fullscreen API) and, when the page is inside the
-Space's frame, **Open in its own tab**; on a phone a note says the app wants a larger
-screen, and can be dismissed.
+desktop's, plus the Fast draft of a large image just opened. Hidden rather than faked: Batch,
+Recent, the output folder, the update check, the command-line install and the right-click
+menu, and "Show in folder". The engine's confidence bands (Certainty) reach the desktop
+through a file and are not available in the browser. The top bar has **Full screen** (the
+Fullscreen API) and, when the page is inside the Space's frame, **Open in its own tab**. On a
+phone the interface takes its compact layout, and a one-line tip at the foot of the screen
+says a larger screen shows more side by side; it can be closed for the session.
 
 ## Decisions worth knowing before you change something
 

@@ -101,8 +101,10 @@ says so. Re-set the words in a vector editor if they must stay editable.
 **Lines came back as thin filled shapes.** Try the *Line art* preset. It only works for lines of one
 even width; brush and calligraphic strokes stay as outlines.
 
-**The draft and the final look different.** A draft is traced small (512 px) for speed. Wait for
-the chip to say **final** before judging or copying.
+**The draft and the final look different.** A draft is traced small (512 px) for speed. In Studio
+Lite, the first draft of a large image just opened is also drawn by the Fast engine, whatever the
+Mode control says, and the status strip says **Fast draft**. Wait for the chip to say **final**
+before judging or copying.
 
 **The favicon has space above and below the logo.** Favicons are square; a wide drawing is
 centred in them on a transparent background rather than stretched. Trace a square crop of the mark
@@ -150,6 +152,10 @@ the status strip.
 **Nothing is downloaded in the background.** Your browser asks sites to save data, so Studio
 Lite waits until you turn the denoiser on. Inside the Hugging Face frame the denoiser cannot run
 at all: use **Open in its own tab**.
+
+**Open in its own tab opened the Studio without my image.** The image travels inside the page
+address, which holds up to 1.5 MB; for a larger file the app says so before it opens the tab.
+Open the file again in the new tab.
 
 **I opened a file and it says it did not open.** The file is not an image the app reads: a
 text file renamed to `.png`, an empty file, a PDF, or a phone photo in HEIC or AVIF. The card

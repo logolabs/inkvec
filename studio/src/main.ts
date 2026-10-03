@@ -32,6 +32,7 @@ import {
   type Settings,
   type Snap,
   type Traced,
+  type TraceMode,
 } from "./lib/ipc";
 import { appliesTo, initial, plannedTracePx, Store, type State } from "./lib/state";
 import { applyRemembered, currentInterface, traceForKeeping, watchRemembered } from "./lib/remember";
@@ -94,6 +95,15 @@ function traceSettings(): Settings {
 }
 
 /**
+ * The engine each recent trace was started with, by generation. The Fast draft of an image
+ * just opened runs the Fast engine whatever the controls say, so the status strip reads the
+ * engine from here rather than from the controls. Kept as long as the loop keeps a trace's
+ * colour groups: an older result is never shown.
+ */
+const enginesSent = new Map<number, TraceMode>();
+const ENGINES_KEPT = 8;
+
+/**
  * The trace loop (`lib/traceflow.ts`), wired to this store and the backend: which trace the
  * interface is waiting for, what each backend event does, and the settle timer.
  */
@@ -101,7 +111,13 @@ const loop = new TraceLoop<TraceProgress, Outcome, ColourGroup[]>({
   hasSource: () => Boolean(store.state.source),
   groups: () => store.state.colourGroups,
   // `fast`: the Fast draft of an image just opened (`fastDraftFirst`); the controls keep theirs.
-  start: (tier, fast) => api.startTrace(fast ? { ...traceSettings(), mode: "fast" } : traceSettings(), tier),
+  start: async (tier, fast) => {
+    const settings: Settings = fast ? { ...traceSettings(), mode: "fast" } : traceSettings();
+    const generation = await api.startTrace(settings, tier);
+    enginesSent.set(generation, settings.mode);
+    for (const old of enginesSent.keys()) if (old < generation - ENGINES_KEPT) enginesSent.delete(old);
+    return generation;
+  },
   settleMs: () => store.state.prefs?.settleMs ?? 800,
   shown: () => ({ generation: store.state.generation, tracing: store.state.tracing }),
   began: (generation, tier, asked) =>
@@ -109,6 +125,7 @@ const loop = new TraceLoop<TraceProgress, Outcome, ColourGroup[]>({
       generation,
       tracing: true,
       tracingTier: tier,
+      tracingEngine: enginesSent.get(generation) ?? store.state.settings.mode,
       liveStages: [],
       liveNow: null,
       traceLog: [],
@@ -231,6 +248,7 @@ function showOutcome(
     store.set({
       result: outcome,
       resultGeneration: generation,
+      resultEngine: enginesSent.get(generation) ?? store.state.settings.mode,
       resultGroups: loop.groupsFor(generation) ?? store.state.resultGroups,
       bandsMissing: false,
       previous: outcome.tier === "final" ? before : store.state.previous,

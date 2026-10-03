@@ -53,17 +53,21 @@ unit the defect can be seen in at all.
 **Why a crossing is not cosmetic.** The code's own framing is narrower than "the fill
 inverts" — the strongest statement in the source is that a self-crossing ring is "invalid,
 resolved arbitrarily by whichever fill rule applies, and unpleasant to edit"
-(`simple.rs:24`, restated in `tests/self_intersection.rs:6-7` and
-`crates/inkvec-cli/src/lib.rs:976-986`). The geometric mechanism behind that arbitrariness —
-this follows from the fill rules the emitter actually uses, though it is not spelled out
-verbatim as a code comment: every emitted path is drawn `fill-rule="evenodd"` (Inkvec emits no
-`nonzero` paths; see `emit.rs:884,955,1015,1042` and the ring nesting discussion at
-`rings.rs:3,355`). Under even-odd, fill state alternates each time a ray crosses the boundary,
-so the lobe cut off by a self-crossing flips crossing parity relative to the rest of the
-ring's interior and renders with the *opposite* fill state from what was intended — a letter's
-counter, or any other hole, can flip from empty to solid or the reverse. This specific
-inversion is not spelled out anywhere in the repo; only the weaker "resolved arbitrarily"
-claim is. The related complication is that **not every crossing is
+(`simple.rs:24`, restated in `tests/self_intersection.rs:6-7` and in `repair_fits`'s doc,
+`crates/inkvec-cli/src/pipeline.rs:803-808`). The mechanism behind that arbitrariness is this
+document's reading of the fill rules (SVG 1.1 §11.3), not a code comment. Since 2026-10 the
+emitter winds every ring of a compound path by its nesting depth and writes no `fill-rule`, so
+the default `nonzero` rule paints exactly what `evenodd` would; `fill-rule="evenodd"` remains
+only on a path the winding pass cannot read (`crates/inkvec-cli/src/emit/winding.rs`; see
+`13-emit.md`). Both the agreement and the direction each ring is given assume rings that do
+not cross: the winding pass decides a ring's direction from its signed area and from which
+other rings contain it, and neither question has one answer for a ring that crosses itself.
+Where a ring does cross itself, the region between the two crossing stretches is enclosed
+twice in one direction or once in the other, and whether it is painted then depends on the
+rule the reader applies — `evenodd` leaves a doubly-enclosed region empty where `nonzero`
+paints it — so a letter's counter, or any other hole, can show as a hole in one program and as
+a solid patch in another. This specific inversion is not spelled out anywhere in the repo;
+only the weaker "resolved arbitrarily" claim is. The related complication is that **not every crossing is
 a defect**: about a fifth of the residual is pinch points at junctions, which are valid
 topology and must not be repaired.
 
@@ -258,29 +262,31 @@ changes."
 
 ### Where repair sits in the pipeline
 
-`crates/inkvec-cli/src/lib.rs:976-992`, the call site itself, verbatim:
+`repair_fits` (`crates/inkvec-cli/src/pipeline.rs:800-886`), the call site itself; its doc,
+verbatim (`pipeline.rs:803-808`):
 
-> "A self-crossing boundary is invisible to the objective — both curves pass through their
-> measured points and the render barely changes — but the ring it produces is invalid and
-> unpleasant to edit. Measured over 180 real emoji, 53 (29%) emitted at least one, against
-> VTracer's 10 (5.6%), and classifying 2126 rings showed *none* were a single cubic looping:
-> every one is two different edges of a face crossing after each was fitted within its own
-> tolerance."
+> "A self-crossing boundary is invisible to the objective — both curves pass through
+> their measured points and the render barely changes — but the ring it produces is
+> invalid and unpleasant to edit. Measured over 180 real emoji, 53 (29%) emitted at
+> least one, against VTracer's 10 (5.6%), and classifying 2126 rings showed *none*
+> were a single cubic looping: every one is two different edges of a face crossing
+> after each was fitted within its own tolerance."
 
 ```rust
-let repaired = if args.no_repair {
+let cfg_repair = scaled(cfg, args.lambda_scale);
+let mut repaired = if args.no_repair || fast {
     0
 } else {
-    repair_ring_crossings(&order, &mut fitted, &polys, cfg)
+    repair_ring_crossings(order, &mut fits.fitted, &fits.polys, &cfg_repair)
 };
-sw.mark("repair");
 ```
 
-Note: the surrounding comment block (`lib.rs:908`, `:983-986`) still discusses ordering
-against a "polish" stage that has since been deleted from the pipeline; the underlying
-ordering principle — repair runs on the geometry that is actually going to be emitted, after
-every other geometric transform — still holds, since repair is now the last geometric stage
-before mirror symmetrisation, fill assignment and emission.
+(`pipeline.rs:861-866`; `sw.mark("repair")` follows in `fit_and_repair`, `pipeline.rs:489`.)
+Fast mode skips the stage. The doc still discusses ordering against a "polish" stage that has
+since been deleted (`pipeline.rs:810-814`, "Polish itself has since been removed"); the
+underlying ordering principle — repair runs on the geometry that is actually going to be
+emitted, after every other geometric transform — still holds, since repair is now the last
+geometric stage before mirror symmetrisation, fill assignment and emission.
 
 `--no-repair` (`args.rs:34, 78, 238, 383, 422`) disables the stage entirely. It is parsed but
 **does not appear in the CLI's `usage()` help text** — an undocumented flag.
@@ -289,17 +295,20 @@ before mirror symmetrisation, fill assignment and emission.
 
 | name | file:line | value | controls | derivation |
 |---|---|---|---|---|
-| `ROUNDS` | `rings.rs:64` | 10 | max halving rounds of the outer loop | no stated derivation; one in-code comment refers to "15 rounds of halving" (`rings.rs:222`), inconsistent with this value — see Open questions |
-| `MERGE_BUDGET` | `rings.rs:164` | 96 segments | per-boundary merge affordability; `4x` this is the global ceiling | derived from measured cost (~8 ms/segment; `simple-icons/biome` case); the specific 96 not separately justified |
-| `RING_SAMPLES` | `rings.rs:456` | 4 | interior samples per curved segment for area/containment | no stated derivation |
-| crossing-pair limit | `rings.rs:96`, `:260` | 32 | max crossing pairs reported per ring per call | unnamed literal, no stated derivation |
-| explosion thresholds | `rings.rs:230` | `c > 32 && c > 4*f` | when a capped refit is discarded for the unconstrained fit | derived from the `bulma` case; the exact pair (32, 4) not separately justified |
-| cap initial value | `rings.rs:69` | `polys[k].len().max(2)` | starting span cap per edge | follows from "cap 1 reproduces the polyline" |
-| halving rule | `rings.rs:126, 131` | `(cap[k]/2).max(1)` | tightening schedule | keeps the repair logarithmic in the worst case (`simple.rs:35-36`) |
-| `FLATTEN` | `simple.rs:51` | 16 | points per curved segment when flattening for crossing detection | motivated (below render-visibility floor); value none |
-| `MAX_REPAIRS` | `simple.rs:55` | 8 | halvings in the (unused-in-production) `fit_simple` sibling | derived: `2^8` covers any contour produced |
-| `EPS` | `simple.rs:59` | 1e-6 px | endpoint-coincidence tolerance for adjacency exemption | derived |
-| `BLK` | `simple.rs:227` | 16 | bounding-box block size for the all-pairs prune | pure speed optimisation, stated as such |
+| `ROUNDS` | `rings.rs:247` | 10 | max halving rounds of the outer loop | no stated derivation |
+| `MERGE_BUDGET` | `rings.rs:362` | 96 segments | per-boundary merge affordability; `4x` this is the global ceiling | derived from measured cost (~8 ms/segment; `simple-icons/biome` case); the specific 96 not separately justified |
+| `RING_SAMPLES` | `rings.rs:700` | 4 | interior samples per curved segment for area/containment | no stated derivation |
+| crossing-pair limit | `rings.rs:282`, `:462` | 32 | max crossing pairs reported per ring per call | unnamed literal, no stated derivation |
+| explosion thresholds | `rings.rs:432` | `c > 32 && c > 4*f` | when a capped refit is discarded for the unconstrained fit | derived from the `bulma` case; the exact pair (32, 4) not separately justified |
+| cap initial value | `rings.rs:252` | `polys[k].len().max(2)` | starting span cap per edge | follows from "cap 1 reproduces the polyline" |
+| halving rule | `rings.rs:321`, `:329` | `(cap[k]/2).max(1)` | tightening schedule | keeps the repair logarithmic in the worst case (`simple.rs:35-36`) |
+| `FLATTEN` | `simple.rs:58` | 16 | points per curved segment when flattening for crossing detection | motivated (below render-visibility floor); value none |
+| `EPS` | `simple.rs:62` | 1e-6 px | endpoint-coincidence tolerance for adjacency exemption | derived |
+| `BLK` | `simple.rs:270` | 16 | bounding-box block size for the all-pairs prune | pure speed optimisation, stated as such |
+
+The sibling `fit_simple` (`simple.rs:309`, used only by tests) no longer has a round count:
+it halves until the cap reaches 1, because "a fixed round count never did [reach cap 1] for a
+ring longer than 512 points (eight halvings stop at a cap of two)" (`simple.rs:316-320`).
 
 ## Failure modes and edge cases
 
@@ -308,8 +317,8 @@ before mirror symmetrisation, fill assignment and emission.
   run until every edge reaches cap 1; in practice it is bounded at `ROUNDS = 10` halvings, and
   edges already at cap 1 are dropped from the guilty set (`cap[k] > 1` filter), so the loop
   can exit with crossings still present on a boundary long enough that ten halvings do not
-  reach cap 1. This is not stated in any comment; it follows from reading `rings.rs:64, 78,
-  110` together.
+  reach cap 1. This is not stated in any comment; it follows from reading `ROUNDS`
+  (`rings.rs:247`) and the `cap[k] > 1` filter (`rings.rs:296`) together.
 - **An exploded refit is restored to the unconstrained fit "whether or not that crosses"** —
   an explicit, deliberate abandonment of the simple-ring invariant when the alternative (a
   staircase) is worse on every measured axis (`rings.rs:225-227`).
@@ -354,8 +363,6 @@ has no effect on the repaired output, only on what is logged.
   doc's termination guarantee applies to unbounded halving; `ROUNDS = 10` bounds it in
   practice, and `guilty.retain(|&k| cap[k] > 1)` can remove an edge from further
   consideration before it reaches cap 1.
-- **`rings.rs:222`'s comment says "15 rounds of halving"; `ROUNDS` is 10.** Either the
-  constant or the comment changed without the other being updated.
 - **`crates/inkvec-fit/tests/self_intersection.rs` does not test `repair_ring_crossings` at
   all.** It tests the crossing detector (`self_crossing`, `cubic_self_intersects`) directly,
   and a sibling per-boundary repair, `simple::fit_simple`, which has **no caller anywhere in

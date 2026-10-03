@@ -80,6 +80,14 @@ const PHONE_TIP_KEY = "inkvec-phone-tip-dismissed";
  * nothing waits for it, and its close button (32 px, over the 24 px of WCAG 2.2 SC 2.5.8)
  * removes it for the rest of the session. It used to be a full-screen card saying the app
  * did not fit a phone, which stopped being true when the phone layout arrived.
+ *
+ * Two things keep it from getting in the way (measured with axe-core and Playwright on the
+ * phone sizes, 2026-10-03). It is an `<aside>`, a complementary landmark, because a note
+ * outside every landmark is content a screen reader's landmark navigation cannot reach
+ * (axe `region`, WCAG 2.2 SC 1.3.1). And while it is shown, its height is published as
+ * `--phonetip-h`, which the compact layout adds under the sticky Export foot and at the
+ * end of the scrolling page (`styles/app.css`): pinned to the same screen edge, the tip
+ * covered Export, and on a 360 x 740 phone a tap on Export landed on the tip.
  */
 export function mountWebChrome(app: HTMLElement): void {
   const small = window.matchMedia(`(max-width: ${PHONE_WIDTH}px)`).matches;
@@ -90,10 +98,17 @@ export function mountWebChrome(app: HTMLElement): void {
   } catch {
     // No session storage (blocked site data): the tip shows, and closes for this page only.
   }
+  const root = document.documentElement;
+  let watch: ResizeObserver | null = null;
+  const close = () => {
+    watch?.disconnect();
+    root.style.removeProperty("--phonetip-h");
+    tip.remove();
+  };
   const tip = h(
-    "div.phonetip",
+    "aside.phonetip",
     {
-      role: "note",
+      "aria-label": "Tip",
       style: {
         position: "fixed",
         left: "0",
@@ -118,7 +133,7 @@ export function mountWebChrome(app: HTMLElement): void {
         "aria-label": "Close this tip",
         style: { minWidth: "32px", minHeight: "32px", justifyContent: "center" },
         onclick: () => {
-          tip.remove();
+          close();
           try {
             sessionStorage.setItem(PHONE_TIP_KEY, "1");
           } catch {
@@ -130,6 +145,13 @@ export function mountWebChrome(app: HTMLElement): void {
     ),
   );
   app.append(tip);
+  // The tip wraps to two lines on a narrow phone and changes height when the phone turns.
+  const publish = () => root.style.setProperty("--phonetip-h", `${tip.offsetHeight}px`);
+  publish();
+  if (typeof ResizeObserver !== "undefined") {
+    watch = new ResizeObserver(publish);
+    watch.observe(tip);
+  }
 }
 
 /** What the presentation page asked the Studio to open: a bundled sample, or a file. */
@@ -201,6 +223,30 @@ export function carriedFile(hash: string): { name: string; bytes: Uint8Array } |
   } catch {
     return null;
   }
+}
+
+/**
+ * The largest file an address carries: base64 makes 1.5 MB into 2,000,000 characters, inside
+ * Chromium's 2 MiB limit on a URL (url::kMaxURLChars); a longer address opens as about:blank.
+ * The presentation page's `HANDOFF_MAX` (`web/index.html`) is the same number.
+ */
+export const HANDOFF_MAX = 1_500_000;
+
+/**
+ * The fragment that carries a file into a new tab of the Studio, `#open=<base64url
+ * bytes>&name=<URI-encoded name>`, which `carriedFile` reads back; null for an empty file or
+ * one larger than `HANDOFF_MAX`. The encoding is the presentation page's (`base64url` in
+ * `web/index.html`): RFC 4648 section 5 without padding, built in 32 KiB slices so a large
+ * file never becomes one huge argument list. "Open in its own tab" inside the Space's frame
+ * (`components/wincontrols.ts`) uses it, for the reason `takeLaunch` gives: from that frame
+ * only the address reaches an isolated tab.
+ */
+export function handOffHash(name: string, bytes: Uint8Array): string | null {
+  if (!bytes.length || bytes.length > HANDOFF_MAX) return null;
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  const data = btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return `#open=${data}&name=${encodeURIComponent(name)}`;
 }
 
 // ---------------------------------------------------------------- the loading screen ---

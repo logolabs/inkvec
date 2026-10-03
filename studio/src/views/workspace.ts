@@ -8,7 +8,7 @@
 
 import { fill, h, icon } from "../lib/dom";
 import type { SampleInfo, Settings } from "../lib/ipc";
-import { count, de00, modKey, plannedTracePx, seconds, type StageState, type Store } from "../lib/state";
+import { count, de00, modKey, plannedTracePx, seconds, type StageState, type State, type Store } from "../lib/state";
 import { createViewer, type Viewer } from "../components/viewer";
 import { DESKTOP_URL, WEB } from "../lib/platform";
 import { fetchBar, fetchPercent } from "../components/denoiserfetch";
@@ -233,30 +233,10 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
 
   const renderStrip = () => {
     const st = store.state;
-    const r = st.report;
-    let lead = "Ready";
-    let rest = "";
-    let colour = "var(--dim)";
-    let live: HTMLElement | null = null;
-
-    if (st.tracing) {
-      lead = runningLabel(st);
-      const engineTag = st.settings.mode === "fast" ? "fast" : "quality";
-      rest = `· ${engineTag} · ${plannedTracePx(st, st.tracingTier) ?? "—"} px ·`;
-      live = h("span", null, h("span.num", { "data-live": "elapsed" }, elapsedText(st)), " elapsed · Esc to cancel");
-      colour = "var(--state-stale)";
-    } else if (r && st.result) {
-      const draft = st.result.tier === "draft";
-      const engineTag = st.settings.mode === "fast" ? "Fast" : "Quality";
-      lead = draft ? `${engineTag} draft` : `${engineTag} in ${seconds(r.seconds)}`;
-      rest = draft
-        ? `· ${r.tracedPx} px · full trace queued`
-        : `· ${r.tracedPx} px · final · ${count(r.segments)} segments`;
-      colour = draft ? "var(--state-draft)" : "var(--state-final)";
-    } else if (st.source) {
-      lead = "Opened";
-      rest = `· ${st.source.width} × ${st.source.height} · ${st.source.container}`;
-    }
+    const { lead, rest, colour } = stripWords(st);
+    const live = st.tracing
+      ? h("span", null, h("span.num", { "data-live": "elapsed" }, elapsedText(st)), " elapsed · Esc to cancel")
+      : null;
 
     fill(
       strip,
@@ -280,7 +260,7 @@ export function createWorkspace(store: Store, act: WorkspaceActions, samples: ()
 
   store.on(["source", "view", "show", "zoom", "fitted", "detail", "svg", "bandsMissing", "settings"], renderTools);
   store.on(["source", "svg", "stageState", "result", "detail", "worstCorner", "prefs"], renderStage);
-  store.on(["tracing", "liveStages", "liveNow", "report", "result", "source", "update", "denoiserFetch", "settings"], renderStrip);
+  store.on(["tracing", "tracingEngine", "liveStages", "liveNow", "report", "result", "resultEngine", "source", "update", "denoiserFetch", "settings"], renderStrip);
 
   renderTools();
   renderStage();
@@ -472,6 +452,39 @@ function firstRunIntro(store: Store, act: WorkspaceActions): HTMLElement | null 
       h("button.btn.compact", { "data-ctl": "intro-seen", onclick: act.markSeen }, "Got it"),
     ),
   );
+}
+
+/**
+ * The status strip's words: its lead in `colour`, then the rest. The engine named is the one
+ * that runs the trace in flight, or drew the result shown (`tracingEngine`, `resultEngine`),
+ * not the controls' choice: in Inkvec Studio Lite an image just opened gets a Fast draft
+ * first whatever the controls say, and calling that draft "Quality" was wrong.
+ */
+export function stripWords(st: State): { lead: string; rest: string; colour: string } {
+  const r = st.report;
+  if (st.tracing) {
+    const engine = st.tracingEngine === "fast" ? "fast" : "quality";
+    return {
+      lead: runningLabel(st),
+      rest: `· ${engine} · ${plannedTracePx(st, st.tracingTier) ?? "—"} px ·`,
+      colour: "var(--state-stale)",
+    };
+  }
+  if (r && st.result) {
+    const draft = st.result.tier === "draft";
+    const engine = st.resultEngine === "fast" ? "Fast" : "Quality";
+    return draft
+      ? { lead: `${engine} draft`, rest: `· ${r.tracedPx} px · full trace queued`, colour: "var(--state-draft)" }
+      : {
+          lead: `${engine} in ${seconds(r.seconds)}`,
+          rest: `· ${r.tracedPx} px · final · ${count(r.segments)} segments`,
+          colour: "var(--state-final)",
+        };
+  }
+  if (st.source) {
+    return { lead: "Opened", rest: `· ${st.source.width} × ${st.source.height} · ${st.source.container}`, colour: "var(--dim)" };
+  }
+  return { lead: "Ready", rest: "", colour: "var(--dim)" };
 }
 
 /** A failure to say over the empty state; `formats` adds the line naming what opens. */

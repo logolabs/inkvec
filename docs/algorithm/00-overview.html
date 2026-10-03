@@ -203,10 +203,12 @@
       render actually matches the source pixel for pixel, not just point for point. A
       single point cannot tell that its neighbours moving would change what its own pixel
       should read; the joint solve can.</p>
-    <p>Second, once curves are fitted, primitive shapes (circles, ellipses, rounded
-      rectangles) are tried against the same measured points and kept only when they cost
-      fewer numbers than the general-purpose curve fit for the same accuracy — the
-      objective described above, applied one more time.</p>
+    <p>Second, every boundary is also offered as one whole primitive shape (a circle, an
+      ellipse, a rounded rectangle), tried against the same measured points beside the
+      general-purpose curve fit and kept only when it costs fewer numbers for the same
+      accuracy — the objective described above, applied one more time. The image's own
+      border is tried as a rectangle first, and when no curve could possibly beat it, the
+      curve fit is not run at all.</p>
 
     <h3>A second, faster route</h3>
     <p>Everything above describes the full engine, called Quality. inkvec also has a Fast

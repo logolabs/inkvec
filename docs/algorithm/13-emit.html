@@ -112,6 +112,18 @@
         change being the disappearance of faint seams that used to sit between neighbouring
         pieces of identical colour. Fewer shapes, and a slightly cleaner picture, from the same
         underlying geometry.</p>
+      <p>Which regions of a compound shape are holes used to be stated in the file as an
+        instruction, "fill by the even-odd rule". A program that ignores that instruction —
+        a font tool, many cutting machines, an older Android phone — falls back on the other
+        standard rule, which goes by the direction each outline is drawn in, and filled the
+        holes back in: almost a third of the benchmark icons changed under it. Since October
+        2026 every outline is drawn in the direction its depth calls for — the outermost one
+        way, a hole inside it the other, an island inside the hole the first way again — so
+        the default rule every program uses fills exactly the regions the even-odd rule
+        would, and the instruction is no longer written. Reversing an outline moves no point
+        of it. The one place the two rules can still disagree is where two same-colour
+        outlines overlap by a sliver; there the shape is now painted, which on the measured
+        cases was closer to the original artwork more often than not.</p>
       <div class="aside">This only ever merges shapes of the exact same flat colour and the
         exact same transparency. A shape with its own gradient, or a shape drawn as a plain
         circle or rectangle element, always keeps its own place in the file.</div>
@@ -121,8 +133,12 @@
       <h2>The last few knobs: minifying, dropping the background, resizing the canvas</h2>
       <p>A few finishing options are entirely optional and change only how the file is
         written, never the picture itself. One strips every internal label and every trailing
-        zero from the numbers, shrinking the file by roughly a tenth with no visual change at
-        all — useful once a file is finished and no longer being read by a person. Another can
+        zero from the numbers, then spells each outline in the fewest characters — moves
+        relative to the last point where that is shorter, shorthand letters where they say
+        the same thing, and the arcs of circles kept as arcs — without rounding or moving
+        anything. On the benchmark icons the files come out about a third smaller with no
+        visual change at all — useful once a file is finished and no longer being read by a
+        person. Another can
         drop the single shape that simply paints the whole canvas one flat colour underneath
         everything else, so the artwork sits on a transparent background instead — handy for
         placing a logo over something else. A third can grow the canvas by a margin on every

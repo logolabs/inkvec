@@ -29,7 +29,7 @@ own processor.
 It is the desktop app's interface and the desktop app's code, not a demo of them:
 
 - **Vectorize** with a live draft while you move a control and the full trace once you stop,
-  eight presets, the Custom wizard, the measured colour difference, the palette with colour
+  ten presets, the Custom wizard, the measured colour difference, the palette with colour
   groups, snapping to a brand palette, and export (SVG, minified SVG, PNG sizes, a favicon set,
   an asset pack) as a download.
 - **Minify SVG**: rewrite an SVG you already have in fewer bytes, with the difference measured.

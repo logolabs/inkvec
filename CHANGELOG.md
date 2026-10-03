@@ -7,6 +7,42 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+### Changed
+
+- **The regression gate measures where users are, and can fail again.** Its baseline had gone stale enough to pass a 13 % regression.
+  - **Conditions:** the gate scores the 246-icon screen set in six conditions: Quality and Fast, each at 128 px, 512 px with transparency, and 512 px opaque.
+  - **Baselines:** per-platform baselines from v0.2.4.
+  - **Verdict:** each change gets a paired bootstrap interval (Koehn 2004) and a non-inferiority test (Lakens 2017). Margins are dE00 1 %, turning 2 % and parameter ratio 3 %.
+  - **No "inconclusive":** where the set cannot resolve a margin, the margin is floored at the smallest change it can detect (Card et al. 2020), and such a pass is reported as "within-noise".
+  - **New floors in CI:** coverage and mutation floors, and the 42 hard cases as a ratchet.
+  - **Scoring fixes:** the reference-render cache now scores the same warm or cold. `gt_diff.py` no longer ignores inherited strokes.
+- **Quality mode fits curves faster, with the same output.**
+  - The curve-merge search screens candidates on a provable bound (Bei & Gray 1985) and samples from cached partial sums.
+  - The image frame's dynamic program is skipped when the rectangle provably wins.
+  - Each boundary's primitive search runs beside its dynamic program.
+  - Curve fitting takes 0.60× the time at 128 px and 0.80× at 512 px. Studio Lite's whole trace takes 0.79×.
+- **Studio Lite is faster and runs on every core.**
+  - A bounded thread-caching allocator (after TCMalloc and Hoard) removes the global lock that made the threaded build slower than one core on gradient icons. Traces take 0.52–0.75× the time, with identical output.
+  - The compiled WebAssembly is cached by the browser: a repeat visit's first trace goes from about 2 s to 1 s.
+  - The thread pool starts after the app is shown: cold boot 2.6 → 1.4 s.
+  - On the Space, the Studio opens in its own tab, where it can use every core; a dropped file follows in the URL fragment.
+  - A large image shows a Fast draft first: the first drawing at 2048 px takes 0.5–0.7 s instead of 3–22 s.
+- **Rings are wound by their nesting depth, and SVGs no longer need `fill-rule`.** Files render the same in tools that ignore the rule (85 rendered wrong before) and are 3.3 % smaller. Where two same-colour rings overlap by a sliver, 9 icons now paint that sliver, which matches the artist in 6 of the 9.
+- **`--minify` keeps arcs.** The screen set shrinks from 541 KB to 478 KB, pixel-identical; SVGO now finds 1.1 % more to remove, not 12.6 %.
+- **A gradient is drawn flat only when every stop is imperceptible**, not just the two ends. At 512 px, 7 icons are better and none worse.
+
+### Fixed
+
+- **`--layers`:**
+  - It turned some hair near-black.
+  - It painted layers front to back. On its own test case dE00 was 2.90; it is 0.05 now.
+- **Studio accessibility:**
+  - 0 axe violations in every checked state, light and dark (24–90 before);
+  - the export sheet and other panels are real modal dialogs;
+  - keyboard pan and a keyboard wipe slider;
+  - a usable phone layout;
+  - a bad first file shows an error instead of nothing.
+
 ## [0.2.4] - 2026-10-01
 
 ### Changed

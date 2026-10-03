@@ -764,6 +764,39 @@ fn ramp_models(s: &Samples, w: usize, space: Interp) -> (Interp, Vec<[f64; 3]>, 
     (space, cols, cands)
 }
 
+/// The ramp candidates of every interpolation space ([`ramp_models`], one space per entry,
+/// in [`INTERPS`] order), each space's list followed by the research prototype A10's extra
+/// radial geometries when its part `profile` is on: found once for both spaces under the
+/// piecewise-linear profile score ([`profile_scored_radials`], run beside the line-scored
+/// fits) and appended to each space's list with the stops refitted there
+/// ([`restop_radial`]). With the part off there are none and the lists are as they were.
+fn ramp_candidates(s: &Samples, w: usize) -> Vec<(Interp, Vec<[f64; 3]>, Vec<FillModel>)> {
+    use rayon::prelude::*;
+    let (geometry, mut per_space): (Vec<FillModel>, Vec<_>) = rayon::join(
+        || {
+            if gregions::parts().profile {
+                profile_scored_radials(s, &s.colors(Interp::Srgb), Interp::Srgb, w)
+            } else {
+                Vec::new()
+            }
+        },
+        || {
+            INTERPS
+                .par_iter()
+                .map(|&space| ramp_models(s, w, space))
+                .collect()
+        },
+    );
+    for (space, cols, cands) in per_space.iter_mut() {
+        cands.extend(
+            geometry
+                .iter()
+                .filter_map(|g| restop_radial(s, cols, *space, g)),
+        );
+    }
+    per_space
+}
+
 /// Research prototype A10, part `profile` ([`gregions`]): the circular and elliptical
 /// radial geometries searched again under the piecewise-linear profile score
 /// ([`fit::ProfileScore::Spline`]), the elliptical one seeded from the circular one, as
@@ -879,33 +912,7 @@ fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> 
     // them side by side, then take them in the order the one-at-a-time loop did, which is
     // the order `select` breaks ties in.
     use rayon::prelude::*;
-    // Research prototype A10, part `profile`: radial geometries found under the
-    // piecewise-linear profile score, once for both spaces and beside the line-scored
-    // fits; each is appended to every space's candidates with its stops refitted there
-    // (`fit::restop_radial`). Off, there are none and the candidates are as they were.
-    let (geometry, mut per_space): (Vec<FillModel>, Vec<(Interp, Vec<[f64; 3]>, Vec<FillModel>)>) =
-        rayon::join(
-            || {
-                if gregions::parts().profile {
-                    profile_scored_radials(s, &s.colors(Interp::Srgb), Interp::Srgb, w)
-                } else {
-                    Vec::new()
-                }
-            },
-            || {
-                INTERPS
-                    .par_iter()
-                    .map(|&space| ramp_models(s, w, space))
-                    .collect()
-            },
-        );
-    for (space, cols, cands) in per_space.iter_mut() {
-        cands.extend(
-            geometry
-                .iter()
-                .filter_map(|g| restop_radial(s, cols, *space, g)),
-        );
-    }
+    let per_space = ramp_candidates(s, w);
     let jobs: Vec<(Interp, &[[f64; 3]], &FillModel)> = per_space
         .iter()
         .flat_map(|(space, cols, cands)| cands.iter().map(move |c| (*space, &cols[..], c)))

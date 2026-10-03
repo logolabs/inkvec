@@ -1076,6 +1076,42 @@ fn a_rare_colour_beside_a_visible_ink_is_still_rare() {
     assert!(close(pal.rgb[find(&pal, 1.0)], RED, 0.005));
 }
 
+/// A small opaque pale-yellow disc (0.2 % of the canvas, so not an ink) beside a black
+/// disc on the clear ground. The carve stage cuts it out of the clear ground as a face and
+/// names it by the nearest ink over white, which was the clear one, so it was drawn at
+/// opacity 0. It must be named by an ink that draws something.
+#[test]
+fn a_rare_light_shape_carved_from_the_clear_ground_is_painted() {
+    let n = 128;
+    let disc = |x: usize, y: usize, cx: f32, cy: f32, area: f32| {
+        let r = (area / std::f32::consts::PI).sqrt();
+        let d = ((x as f32 - cx).powi(2) + (y as f32 - cy).powi(2)).sqrt();
+        (r + 0.5 - d).clamp(0.0, 1.0)
+    };
+    let pale = [1.0, 0.94, 0.47];
+    let (img, alpha) = rgba(n, |x, y| {
+        let big = disc(x, y, 45.0, 45.0, std::f32::consts::PI * 900.0);
+        let small = disc(x, y, 105.0, 105.0, 30.0);
+        if small > 0.0 {
+            (pale, small)
+        } else {
+            ([0.0; 3], big)
+        }
+    });
+    let tr = trace_color(&img, &ColorOptions::default(), &alpha);
+    let face = tr.labels[105 * n + 105] as usize;
+    let ink = tr.face_color[face];
+    assert!(
+        tr.palette.alpha[ink] > CLEAR_INK_ALPHA,
+        "the pale disc's face is named by ink {ink} at opacity {}",
+        tr.palette.alpha[ink]
+    );
+    // Its own colour, not white. The carved feature's median takes in the rim's lighter
+    // blend pixels over white (this disc is mostly rim), so only the hue is checked.
+    let fill = tr.face_fill[face].model.representative();
+    assert!(fill[0] > 0.95 && fill[2] < 0.9, "{fill:?}");
+}
+
 #[test]
 fn tracing_a_glow_hands_its_fade_to_the_face() {
     let (img, alpha) = rgba(16, |x, _| ([0.8, 0.3, 0.1], 0.1 + 0.05 * x as f32));

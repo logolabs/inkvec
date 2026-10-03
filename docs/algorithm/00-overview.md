@@ -37,11 +37,14 @@ The corollary the whole codebase is built on: uncertainty comes out of the same 
 Pixel noise `sigma_pixel` gives coverage uncertainty `sigma_a = sigma_pixel / |F-B|`; the
 boundary is the level set `a = 0.5`, so positional uncertainty is `sigma_a / |grad a|`
 (`coverage.rs:20-33`, `CoverageField::position_sigma`, `coverage.rs:154-171`). A faint edge
-says, honestly, that it was measured badly, and that number is what later stages read to
-decide how hard to try — `tau * sigma` admissibility in the curve fitter
-(`crates/inkvec-fit/src/lib.rs:74-80`), fit tolerance in the boundary solve, node
-budget in `--simplify-faint`. Nothing downstream invents its own tolerance parameter; it
-reads this one.
+says, honestly, that it was measured badly, and that number is what the curve fitter reads to
+decide how hard to try: each point's squared miss is weighed by `1/sigma²` in the
+chi-squared term of the fit's cost (`crates/inkvec-fit/src/lib.rs:82-90`; "chi2 weights are
+`1/sigma²`", `coverage.rs:73-74`), and `--simplify-faint` inflates it further on faint
+boundaries. The `tau * sigma` admissibility cone the fitter's module header once described is
+no longer on the shipping path (`crates/inkvec-fit/src/lib.rs:92-98`), and the boundary
+solve does not read sigma at all (`08-boundary-solve.md`). Nothing downstream invents its
+own tolerance parameter; it reads this one.
 
 ## The objective the whole system serves
 

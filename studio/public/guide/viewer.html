@@ -139,6 +139,12 @@ chip at the top right of the stage says which one you are looking at:</p>
 <p>The chip flashes when a draft is replaced by its full trace, so the swap is never silent. Draft
 size, draft time limit and the wait before the full trace are in
 <a href="settings.html#performance">Settings, Performance</a>.</p>
+<p><strong>Studio Lite, opening a large image.</strong> When an image larger than the draft size is opened in the
+browser, its first draft is drawn by the Fast engine, whatever the Mode control says, so a
+drawing appears in well under a second; the full trace, with your controls, starts the moment
+that draft lands. The status strip names the engine that drew what is on screen: <strong>Fast draft</strong>,
+then <strong>Quality in</strong> so many seconds. Moving a control, <strong>Cancel</strong> or opening another image in the
+meantime drops the queued full trace. The desktop app opens with the full trace alone.</p>
 <p>Only the full trace is ever exported: <a href="export.html">Export</a> always runs one first.</p>
 <h2 id="the-engine-log">The engine log</h2>
 <p>The small panel at the bottom right of the stage, <strong>Engine log</strong>, is what the engine is doing,

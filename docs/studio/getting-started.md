@@ -41,13 +41,23 @@ What a dropped file does depends on what it is:
 
 The app bar shows the open file's name, its size in pixels and its format.
 
-**Studio Lite:** there is no right-click entry, and a dropped or chosen file is read by the browser.
+**Studio Lite:** there is no right-click entry, and a dropped or chosen file is read by the browser;
+it never leaves your computer. On the Hugging Face Space, the front page opens the Studio in a tab
+of its own, where it runs on every core: a file you choose, paste or drop there goes with it,
+carried inside the page address, up to 1.5 MB. A larger file can be opened on the front page
+itself, on one core, or dropped again in the new tab. Inside the Space's frame, **Open in its own
+tab** in the app bar takes the open image along the same way.
 
 ## Auto traces at once
 
 The moment an image opens, **Auto** traces it. It uses the controls exactly as you left them the
 last time (the first time, the **Logo** preset, which is the default). Nothing has to be chosen
 first, and the trace is already on its way when the next thing appears.
+
+**Studio Lite:** a full trace of a large image takes several seconds in a browser tab, so an image
+larger than the draft size is first drawn by the Fast engine at the draft size, in well under a
+second, and the full trace starts the moment that draft is on screen. The status strip says
+**Fast draft** until the full trace lands; see [Draft and full traces](viewer.md#draft-and-full-traces).
 
 ## The choice card: Keep Auto or Customise
 

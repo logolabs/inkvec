@@ -69,8 +69,8 @@ impl std::error::Error for TraceError {}
 /// Two pixel-level detectors were tried first and both failed, for the same reason the
 /// 8x8 block signature failed before them: the Laplacian of a lossily-coded flat region and
 /// the Laplacian of a cleanly-rendered 8-bit colour ramp are the same size. A clean radial
-/// gradient measured a *higher* "damage" score than a q50 flat icon. There is no separating
-/// the two from the pixels alone, so this asks the file instead, where the answer is exact.
+/// gradient measured a *higher* "damage" score than a q50 flat icon. So this asks the file,
+/// where the answer is exact. (The guard now also reads the pixels: `coverage::ringing_score`.)
 ///
 /// Returns `None` when the format cannot be determined; the caller treats that as "not
 /// known to be lossy", because switching the guard on costs quality on a clean intake.

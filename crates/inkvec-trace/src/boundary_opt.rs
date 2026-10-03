@@ -40,7 +40,7 @@
 //! a long straight run, a boundary between two nearly equal colours) where the measurement
 //! put it.
 //!
-//! # The sawtooth, and three cures that do not work
+//! # The sawtooth, and four cures that do not work
 //!
 //! Area coverage does not determine a boundary. Any wiggle that preserves how much of each
 //! pixel falls on either side leaves the data term exactly unchanged, and on a stroke about
@@ -79,7 +79,7 @@
 //! re-renders the exact coverage.
 //!
 //! Afterwards a fold guard (`fold_guard`) scales the whole displacement back towards the
-//! start until it introduces no new self-crossing; if even a tenth of it does, the stage
+//! start until it introduces no new self-crossing; if even a sixteenth of it does, the stage
 //! gives up and leaves the map as it was.
 //!
 //! The data term is accumulated in f64, and the mixture `Σ cov_f·c_f` is formed in f64 too:
@@ -122,7 +122,7 @@ const K_KINK: f64 = 0.05;
 /// Anchor weight: `w_anchor = K_ANCHOR · D0 / n` for `n` unknowns, so a point one pixel from
 /// its start costs a tenth of the average point's share of the initial data term.
 const K_ANCHOR: f64 = 0.10;
-/// Junction points are anchored harder, for the reason given in the module comment.
+/// Junction points are anchored harder: `planar::refine_junctions` has already placed them.
 const JUNCTION_ANCHOR: f64 = 4.0;
 /// Colour difference across a boundary below which a pixel carries no usable evidence.
 const MIN_CONTRAST: f32 = 2.0 / 255.0;
@@ -646,8 +646,8 @@ pub fn optimise_alpha(
 /// is what the repair stage exists for), and refusing to improve a boundary because of a
 /// crossing that was already there would give up most of the gain.
 ///
-/// With `p⁰` the start and `p` the solution, tries `p⁰ + s(p − p⁰)` for
-/// `s = 1, ½, ¼, …` while `s > 0.1`, and keeps the first whose self-crossing count
+/// With `p⁰` the start and `p` the solution, tries `p⁰ + s(p − p⁰)` for `s` = 1, ½, ¼, ⅛
+/// and 1/16 (halving while `s > 0.1`), and keeps the first whose self-crossing count
 /// ([`folds::FoldCounter`], which says exactly which pairs count) is no higher than the
 /// start's. Returns those positions and `s`, or `None` when no tried scale is clean.
 fn fold_guard(map: &PlanarMap, vars: &Vars, pos: &[Point], dbg: bool) -> Option<(Vec<Point>, f64)> {

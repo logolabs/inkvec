@@ -123,9 +123,9 @@
 //! # Where this sits
 //!
 //! After the trace, on its result: `inkvec-cli`'s `alpha` module hands [`decompose_with`]
-//! one mean sRGB colour and one pixel count per traced face plus the face adjacency, once
-//! per [`Space`], and keeps the better fit. The recovered [`Layer`]s go to the emitter,
-//! which writes each as one shape with `fill-opacity`. Nothing here sees pixels or
+//! one mean sRGB colour and one pixel count per traced face plus the face adjacency, under
+//! [`Space::Srgb`] only: the document composites there. The recovered [`Layer`]s go to the
+//! emitter, which writes each as one shape with `fill-opacity`. Nothing here sees pixels or
 //! geometry; the input is the face graph and its colours only.
 //!
 //! The pipeline inside is: enumerate every quad of faces that could be one layer over two

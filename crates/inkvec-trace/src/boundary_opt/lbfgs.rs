@@ -6,8 +6,8 @@
 //!   limited memory BFGS method for large scale optimization*, Math. Programming 45,
 //!   <https://doi.org/10.1007/BF01589116>; as in J. Nocedal, S. J. Wright (2006),
 //!   *Numerical Optimization*, Springer, Algorithm 7.4 and §7.2,
-//!   <https://doi.org/10.1007/978-0-387-40065-5>. A pair with `yᵀs ≤ 0` is not stored,
-//!   which keeps the implied Hessian positive definite without a curvature condition.
+//!   <https://doi.org/10.1007/978-0-387-40065-5>. A pair with `yᵀs ≤ 10⁻¹²·‖y‖·‖s‖` is not
+//!   stored, which keeps the implied Hessian positive definite without a curvature condition.
 //! * **Line search.** Backtracking to the Armijo (sufficient decrease) condition from the
 //!   unit step (Nocedal & Wright, Algorithm 3.1). The energy is continuous but only
 //!   piecewise smooth (its slope jumps where a piece meets a gridline), the setting of

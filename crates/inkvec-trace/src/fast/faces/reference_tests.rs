@@ -437,9 +437,9 @@ pub(super) fn merge_same_inks(labels: &mut [u16], inks: &[[f32; 4]], w: usize, h
 }
 
 /// Faces: the components of `labels`, as a face id per pixel and each face's label. Past
-/// `u16::MAX - 1` faces the rest are folded into face 0, as `regions::split_components`
-/// does. Face ids are component ids ([`components`]), so they follow scan order; the
-/// second output is indexed by face id and holds the ink index of that face.
+/// `u16::MAX - 1` faces the rest are folded into face 0, as `regions::split_components` did
+/// at 55ee4e0 (it and `write_faces` now merge first, so they agree only below the cap). Face
+/// ids are component ids ([`components`]), in scan order; the second output is each face's ink.
 pub(super) fn faces(labels: &[u16], w: usize, h: usize) -> (Vec<u16>, Vec<usize>) {
     let c = components(labels, w, h);
     let cap = (u16::MAX - 1) as usize;

@@ -92,7 +92,7 @@ pub(crate) const MIN_GRADIENT_PIXELS: usize = 16;
 /// How much better two flat colours must fit than the best GRADIENT before a region is
 /// judged a step rather than a ramp and the gradient is declined. Comparing against the
 /// flat fit instead is wrong and was measured to be: two flats beat one flat on any
-/// varying region, ramps included. Overridable with `INKVEC_BIMODAL`.
+/// varying region, ramps included.
 const BIMODAL_MARGIN: f64 = 0.85;
 
 /// A gradient must change the fill by at least this much (sRGB, some channel) across the

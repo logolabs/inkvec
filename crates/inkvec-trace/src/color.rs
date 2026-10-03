@@ -204,7 +204,7 @@ pub const DEFAULT_MERGE_DISTANCE: f32 = 0.035;
 /// Anti-aliased pixels are individually rare: a 128px circle has a few hundred boundary
 /// pixels spread across the whole ramp, so no single blend colour accumulates much
 /// weight, while each flat region accumulates thousands. This alone removes most spurious
-/// entries; `is_blend` removes the rest.
+/// entries; the blend test (`mdl::BlendEvidence`) removes the rest.
 pub const MIN_INK_WEIGHT: f32 = 0.004;
 
 /// Below this share of its own pixels being *interior*, a colour that tests as a blend is
@@ -413,7 +413,7 @@ pub const SOFT_INTAKE_EDGE: f64 = 1.75;
 /// set -- objective 0.4005 -> 0.4442, measured 2026-09-08 -- because on a clean intake two
 /// colours a whisker apart really are two inks and merging them throws away artwork. So
 /// this is only ever switched on by positive evidence that the intake is not clean: a wide
-/// edge (`SOFT_INTAKE_EDGE`), or a lossy container (`crate::lossy_container`).
+/// edge (`SOFT_INTAKE_EDGE`), a lossy container (`lossy_container`) or ringing (`SOFT_RINGING`).
 pub const SOFT_NOISE_SIGMAS: f32 = 3.0;
 
 /// Ringing above this counts as positive evidence that the intake is compressed.
@@ -459,7 +459,7 @@ pub const RINGING_MIN_DIM: usize = 256;
 /// parameters at the cost of colour. Measured on 78 JPEG-re-encoded-as-PNG traces against the
 /// artist's clean render, the endpoints of that trade are: at 1.0 the parameter count falls
 /// 31.5% against what ships today and colour error 15.9%; the detector alone (sigma left at
-/// the floor) gives 22.0% and 22.2%. The value here is the swept optimum between them.
+/// the floor) gives 22.0% and 22.2%. The value here is the first: sigma taken at face value.
 pub const MEASURED_SIGMA_SCALE: f64 = 1.0;
 
 /// Ceiling on the measured noise, in display levels. See [`MEASURED_SIGMA_SCALE`].
@@ -675,8 +675,8 @@ pub const JND_FLOOR: f32 = 0.012;
 /// has been upscaled, compressed or resampled gets [`SOFT_NOISE_SIGMAS`] from the soft-intake
 /// gate, and an exact-coverage render keeps this. Making it free, by detecting the noise
 /// instead of being told about it, is the open problem: `coverage::estimate_noise` cannot
-/// see it, because an icon is mostly empty and its median Laplacian is zero however noisy
-/// the artwork is.
+/// see it, because an icon is mostly empty and the low Laplacian quantile it reads is zero
+/// however noisy the artwork is.
 pub const NOISE_SIGMAS: f32 = 0.0;
 
 /// Recover the palette with the fixed `merge_distance` threshold alone, with no noise
@@ -711,7 +711,7 @@ pub fn extract_palette(
 /// The cap sits above 128 x 128 = 16384 deliberately. Every constant in this
 /// module was tuned on a 128 px corpus, and at or below the cap the stride is one
 /// and the arithmetic is bit-identical to visiting every pixel. Only inputs
-/// larger than the corpus see any change at all, and today those do not finish.
+/// with more pixels than the cap (256 x 256) see any change at all.
 pub const STAT_PIXELS: usize = 1 << 16;
 
 /// Greatest common divisor by Euclid's algorithm; `gcd(a, 0) = a`.

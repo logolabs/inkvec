@@ -239,8 +239,8 @@ fn bin(c: Oklab) -> u64 {
     li * (BINS * BINS) as u64 + ai * BINS as u64 + bi
 }
 
-/// A two-ground point's six blend coordinates: the colour over white and over black, in
-/// linear light or in sRGB.
+/// A two-ground point's six blend coordinates: the colour over white and over the second
+/// ground ([`SECOND_GROUND`], mid-grey), in linear light or in sRGB.
 ///
 /// `[W_r, W_g, W_b, K_r, K_g, K_b]`. Both halves are affine in `(P, a)`, so a coverage
 /// blend of two inks is a straight segment in these six numbers, which is what the chord
@@ -269,8 +269,8 @@ fn from_six(q: [f32; 6], linear: bool) -> Ink2 {
 }
 
 /// [`color`]'s blend test in six dimensions: `c` lies on the chord between two accepted
-/// inks over white *and* over black. An anti-aliased rim between an ink and the clear ground
-/// is on such a chord (flat over white for a white ink, a ramp to black over black).
+/// inks over white *and* over grey. An anti-aliased rim between an ink and the clear ground
+/// is on such a chord (flat over white for a white ink, a ramp to grey over grey).
 ///
 /// Same formula as the classic `blend_pairs` with `p`, `A`, `B` the [`six`] coordinates:
 /// `t = ((p − A) · (B − A)) / |B − A|²` kept for `tmin ≤ t ≤ 1 − tmin`, and the residual
@@ -284,9 +284,9 @@ fn blend_pairs(c: Ink2, accepted: &[Ink2], tol: f32, tmin: f32) -> Vec<(usize, u
 
 /// [`color::extract_palette_mdl`], with every colour a two-ground point: the same
 /// frequency-ranked mode seeking, rarity floor, perceptual same-ink floor, merge radius,
-/// description-length escape and blend tests, asked over white and over black at once.
+/// description-length escape and blend tests, asked over white and over grey at once.
 ///
-/// The clear ground comes out as an ink of its own -- white over white, black over black,
+/// The clear ground comes out as an ink of its own -- white over white, grey over grey,
 /// opacity 0 -- and a translucent wash as one with its own opacity, with no alpha splitting
 /// after the fact. `Palette::colors`/`rgb` hold each ink over white; `alpha` its opacity.
 ///

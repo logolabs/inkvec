@@ -417,7 +417,7 @@ s512 58/58, flat 1/1; and on 60 screen icons `--no-background`, `--monochrome` a
 
 ### 4. Ramps
 
-**What it computes** (`fast/bands.rs:1-32`, `merge_ramps`, `:314-496`). A smooth gradient
+**What it computes** (`fast/bands.rs:1-32`, `merge_ramps`, `:318-500`). A smooth gradient
 has no flat colour, so the palette quantises it into bands, and each band is a face with a
 boundary of its own. This is the one-shot version of Quality's pairwise band merging:
 adjacent faces whose inks are within `RAMP_STEP = 0.09` OKLab and that share at least 3 pixel
@@ -431,18 +431,22 @@ within 1.5/255 are left flat. Opaque images with gradients on only.
 **Method, since 2026-09-30.** Passes 1 to 4 read the palette and the row runs instead of the
 pixels (`bands.rs:18-32`):
 
-1. **Palette precheck** (`inks_may_join`, `bands.rs:156-215`): when no two *different* inks
+1. **Palette precheck** (`inks_may_join`, `bands.rs:156-219`): when no two *different* inks
    lie within `RAMP_STEP`, the pass returns before reading a pixel. It is a proof, not a
    guess: the faces are the 4-connected components of the ink map, so two faces that touch
    always carry different inks, and if every pair of different inks is farther apart than
-   `RAMP_STEP` no join can happen and nothing would change. Guarded at the face-id limit:
-   with 65,534 faces or more (`CAPPED`, `bands.rs:196`), the count past which `write_faces`
-   merges components across inks (stage 3), it returns `true` and the full pass decides.
+   `RAMP_STEP` no join can happen and nothing would change. The proof holds past the face-id
+   limit too: there `write_faces` relabels the smallest components with a neighbouring ink
+   and reads the runs again (stage 3), so every face still has one ink. With 65,534 faces or
+   more (`CAPPED`, `bands.rs:200`) the precheck returns `true` all the same and the full pass
+   decides, as a conservative check only: it covers `write_faces`' fold of leftover ids into
+   face 0, reached only if `cap_components` stopped short of the cap, which its proof rules
+   out.
 2. **Row runs** of the face map (`planar::runs::RowRuns`, shared with the planar map).
 3. **Contacts** (`contacts`, `bands.rs:72-130`): the border length of every touching pair of
    faces, read off consecutive runs and the overlaps of adjacent rows' runs, keyed and
    summed after a sort; no join means return.
-4. **Samples** (`gather_samples`, `bands.rs:250-312`): each cluster's grid sample, read off the
+4. **Samples** (`gather_samples`, `bands.rs:254-316`): each cluster's grid sample, read off the
    runs in increasing pixel index, the order the fit sums in; divisibility is tested without
    `%` (wazero's arm64 miscompile).
 
@@ -895,7 +899,7 @@ composite and the intake passes; 512 vertices for the refinement; 2048 points fo
 polygon's parallel scan) chooses only the schedule, never the output. The polygon's
 `RUN_MAX_STEP` and `RUN_MIN_TOL` only decide where the closed form for lattice runs applies,
 which by its proof gives the same sides either way. Fast's face-id limit, 65,534 faces
-(`u16::MAX − 1`, `faces/runs.rs:513`, and the same count as `CAPPED` in `bands.rs:196`), is
+(`u16::MAX − 1`, `faces/runs.rs:513`, and the same count as `CAPPED` in `bands.rs:200`), is
 one below Quality's `MAX_FACES` (section 04); past it the smallest components are merged
 by the rule the two modes share (`regions::cap_components`, stage 3).
 

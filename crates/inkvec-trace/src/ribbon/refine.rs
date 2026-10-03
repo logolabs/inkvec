@@ -31,7 +31,9 @@
 //! distance (step 1e-5 px). By the envelope theorem the foot point's own movement adds
 //! nothing to first order, so the differences measure `-n·∂C/∂θ` at the foot, `n` the unit
 //! vector from the foot to the point. The normal equations `(JᵀJ + μ·diag(JᵀJ)) δ = -Jᵀr`
-//! are dense (a face has tens to a few hundred variables) and solved by Cholesky. A step
+//! couple each variable only to its own segment's neighbours and to `h`, so they are kept
+//! in profile storage and solved by an envelope Cholesky ([`super::skyline`], exactly the
+//! dense factorisation's result at a fraction of its cost; [`profile`] gives the shape). A step
 //! that lowers `E` and leaves every cubic free of cusps ([`regular`]) is taken and `μ`
 //! shrinks by 3; one that does not is retried with `μ` four times larger. Stops after [`MAX_ITERS`] iterations, or when `E` falls by under
 //! 1e-5 relatively, or when no step in [`MAX_RETRIES`] damping increases helps.
@@ -58,6 +60,7 @@ use super::boundary::Boundary;
 use super::grid::{point_segment, SegGrid};
 use super::join::{miter_gauge, tangents, Join};
 use super::score::flatten;
+use super::skyline::Skyline;
 use super::Centreline;
 
 /// Iterations of the solve.
@@ -85,8 +88,9 @@ const ANCHOR: f64 = 2.0;
 /// solved 4.6 px, dE00 0.1 -> 32).
 const ANCHOR_HALF: f64 = 0.05;
 
-/// Above this many variables the dense solve is skipped (cubic cost); the strokes keep
-/// their fitted geometry. A face of lucide at 128 px has 20-140.
+/// Above this many variables the solve is skipped; the strokes keep their fitted
+/// geometry. A face of lucide at 128 px has 20-140. (The cap dates from the dense
+/// factorisation, whose cost was cubic in it.)
 const MAX_VARS: usize = 400;
 
 /// One segment of a solved path: indices into `θ` for its variables.
@@ -761,16 +765,17 @@ pub(crate) fn solve(
     let (e0, mut rws) = rows(&model, b, reach);
     let mut energy = e0 + anchor(&model.theta);
     let start_regular = regular(&model);
+    let first = profile(&model);
     let mut mu = 1e-3;
     for _ in 0..max_iters {
-        let (ata, atr) = normal_equations(&mut model, b, &rws, &theta0, &sig);
+        let (ata, atr) = normal_equations(&mut model, b, &rws, &theta0, &sig, &first);
         let mut improved = false;
         for _ in 0..MAX_RETRIES {
             let mut a = ata.clone();
             for i in 0..n {
-                a[i * n + i] += mu * ata[i * n + i].max(1e-9);
+                a.add_diag(i, mu * ata.diag(i).max(1e-9));
             }
-            let Some(delta) = cholesky_solve(&mut a, &atr, n) else {
+            let Some(delta) = a.cholesky_solve(&atr) else {
                 mu *= 4.0;
                 continue;
             };
@@ -973,18 +978,65 @@ fn split(lines: &[Centreline], shape: usize, seg: usize, t: f64) -> Option<Vec<C
     Some(out)
 }
 
-/// `JᵀJ` (dense, row-major `n x n`) and `Jᵀr` for the data rows and the anchor, with
-/// `J` by central differences of each row's segment distance (see the module docs).
+/// The envelope of the normal matrix `JᵀJ` for `model` ([`Skyline`]): for each variable,
+/// the first (lowest-index) variable any residual couples it to.
+///
+/// A residual reads one segment's variables and its start point ([`locals`]), or under
+/// miter joins two neighbouring segments' (the gauge at a vertex, both neighbours of
+/// every segment, round a closed path's start too), or a circle's three; every set is
+/// listed here, so the envelope holds every nonzero `JᵀJ` can have whatever the rows'
+/// assignment to segments. The half-width (last variable) is in every residual: its row
+/// is full. Fixed shapes have no variables. Cost O(segments).
+fn profile(model: &Model) -> Vec<usize> {
+    let n = model.theta.len();
+    let mut first: Vec<usize> = (0..n).collect();
+    let mut note = |v: &[usize]| {
+        if let Some(&lo) = v.iter().min() {
+            for &u in v {
+                first[u] = first[u].min(lo);
+            }
+        }
+    };
+    for (si, s) in model.shapes.iter().enumerate() {
+        match s {
+            Shape::Path { segs, closed, .. } => {
+                let m = segs.len();
+                for k in 0..m {
+                    note(&locals(model, si, k, None));
+                    if model.join == Join::Miter {
+                        for foot in [Foot::Start, Foot::End] {
+                            if let Some(j) = neighbour(m, *closed, k, foot) {
+                                note(&locals(model, si, k, Some(j)));
+                            }
+                        }
+                    }
+                }
+            }
+            Shape::Circle { at, .. } => note(&[*at, at + 1, at + 2]),
+            Shape::Fixed(_) => {}
+        }
+    }
+    if let Some(f) = first.last_mut() {
+        *f = 0;
+    }
+    first
+}
+
+/// `JᵀJ` (lower triangle in the envelope `first`, [`profile`]) and `Jᵀr` for the data
+/// rows and the anchor, with `J` by central differences of each row's segment distance
+/// (see the module docs). Each entry receives the same products in the same order as the
+/// dense matrix it replaces did, so it holds the same value bit for bit.
 fn normal_equations(
     model: &mut Model,
     b: &Boundary,
     rws: &[Option<Row>],
     theta0: &[f64],
     sig: &[f64],
-) -> (Vec<f64>, Vec<f64>) {
+    first: &[usize],
+) -> (Skyline, Vec<f64>) {
     let n = model.theta.len();
     let hi = n - 1;
-    let mut ata = vec![0.0; n * n];
+    let mut ata = Skyline::zeros(first.to_vec());
     let mut atr = vec![0.0; n];
     let eps = 1e-5;
     for (i, row) in rws.iter().enumerate() {
@@ -1009,13 +1061,15 @@ fn normal_equations(
         for &(u, ju) in &jac {
             atr[u] += ju * r;
             for &(v, jv) in &jac {
-                ata[u * n + v] += ju * jv;
+                if v <= u {
+                    ata.add(u, v, ju * jv);
+                }
             }
         }
     }
     for j in 0..n {
         let w = 1.0 / (sig[j] * sig[j]);
-        ata[j * n + j] += w;
+        ata.add_diag(j, w);
         atr[j] += w * (model.theta[j] - theta0[j]);
     }
     (ata, atr)
@@ -1126,59 +1180,10 @@ fn anchor_sigmas(theta0: &[f64]) -> Vec<f64> {
     s
 }
 
-/// Solve `A x = y` for symmetric positive definite `A` (row-major `n x n`, overwritten by
-/// its Cholesky factor). `None` when a pivot is not positive.
-fn cholesky_solve(a: &mut [f64], y: &[f64], n: usize) -> Option<Vec<f64>> {
-    for j in 0..n {
-        let mut d = a[j * n + j];
-        for k in 0..j {
-            d -= a[j * n + k] * a[j * n + k];
-        }
-        if d <= 1e-300 {
-            return None;
-        }
-        let d = d.sqrt();
-        a[j * n + j] = d;
-        for i in j + 1..n {
-            let mut s = a[i * n + j];
-            for k in 0..j {
-                s -= a[i * n + k] * a[j * n + k];
-            }
-            a[i * n + j] = s / d;
-        }
-    }
-    let mut z = y.to_vec();
-    for i in 0..n {
-        let mut s = z[i];
-        for k in 0..i {
-            s -= a[i * n + k] * z[k];
-        }
-        z[i] = s / a[i * n + i];
-    }
-    for i in (0..n).rev() {
-        let mut s = z[i];
-        for k in i + 1..n {
-            s -= a[k * n + i] * z[k];
-        }
-        z[i] = s / a[i * n + i];
-    }
-    Some(z)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use inkvec_core::Polyline;
-
-    #[test]
-    fn cholesky_solves_a_small_system() {
-        let mut a = vec![4.0, 2.0, 2.0, 3.0];
-        let x = cholesky_solve(&mut a, &[2.0, 1.0], 2).expect("positive definite");
-        assert!((4.0 * x[0] + 2.0 * x[1] - 2.0).abs() < 1e-12);
-        assert!((2.0 * x[0] + 3.0 * x[1] - 1.0).abs() < 1e-12);
-        let mut bad = vec![0.0, 0.0, 0.0, 1.0];
-        assert!(cholesky_solve(&mut bad, &[1.0, 1.0], 2).is_none());
-    }
 
     #[test]
     fn arc_and_cubic_distances_are_exact() {

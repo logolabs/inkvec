@@ -366,3 +366,79 @@ fn element(r: &Ribbon, hex: &str, decimals: usize, id: &str) -> String {
     out.push_str(&prims);
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use inkvec_core::Point;
+    use inkvec_fit::curves::Segment;
+    use inkvec_trace::ribbon::{Centreline, Join, Score};
+
+    /// A one-line ribbon of width 4 with the given chi-squared.
+    fn ribbon(chi2: f64, join: Join) -> Ribbon {
+        Ribbon {
+            lines: vec![Centreline {
+                path: FittedPath {
+                    start: Point::new(1.0, 2.0),
+                    segments: vec![Segment::Line(Point::new(11.0, 2.0))],
+                    closed: false,
+                },
+                prim: None,
+            }],
+            width: 4.0,
+            join,
+            paired_width: 4.0,
+            paired_share: 0.9,
+            score: Score {
+                chi2,
+                half: 2.0,
+                rms: 0.01,
+                worst: 0.02,
+                outliers: 0,
+            },
+            pre_rms: 0.01,
+            uncovered: 0,
+            points: 100,
+            junctions: 0,
+            caps: 2,
+            dropped: 0,
+        }
+    }
+
+    fn outcome(fit: Result<Ribbon, ribbon::Decline>, chi2_outline: f64, k_vanish: f64) -> Outcome {
+        Outcome {
+            face: 1,
+            fit,
+            chi2_outline,
+            k_vanish,
+        }
+    }
+
+    #[test]
+    fn decide_weighs_fit_against_parameters() {
+        // k = 2 + 2 + 1 = 5 against 20 that vanish: 15 parameters at lambda 7 is 105 nats.
+        let r = ribbon(150.0, Join::Round);
+        assert_eq!(r.params(), 5.0);
+        // chi2 worse by 100, i.e. 50 nats: still a win.
+        assert!(decide(&outcome(Ok(r.clone()), 50.0, 20.0), 7.0).is_some());
+        // chi2 worse by 300, i.e. 150 nats: a loss.
+        assert!(decide(&outcome(Ok(r.clone()), -150.0, 20.0), 7.0).is_none());
+        // Not fewer parameters: never, however good the fit.
+        assert!(decide(&outcome(Ok(r.clone()), 1e6, 5.0), 7.0).is_none());
+        // An outline that could not be measured (infinite) keeps the outline.
+        assert!(decide(&outcome(Ok(r), f64::INFINITY, 20.0), 7.0).is_none());
+        // A declined face is never written as strokes.
+        assert!(decide(&outcome(Err(ribbon::Decline::NoCentreline), 0.0, 20.0), 7.0).is_none());
+    }
+
+    #[test]
+    fn element_writes_one_stroked_path_with_its_join() {
+        let el = element(&ribbon(1.0, Join::Miter), "#000000", 2, "stroke-3");
+        assert_eq!(
+            el,
+            "<path id=\"stroke-3\" d=\"M1.00,2.00L11.00,2.00\" fill=\"none\" stroke=\"#000000\" stroke-width=\"4.00\" stroke-linecap=\"round\" stroke-linejoin=\"miter\"/>"
+        );
+        assert!(element(&ribbon(1.0, Join::Round), "#123456", 2, "s")
+            .contains("stroke-linejoin=\"round\""));
+    }
+}

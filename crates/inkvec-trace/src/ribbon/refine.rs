@@ -763,8 +763,65 @@ pub(crate) fn solve(
     (model.centrelines(), model.h())
 }
 
+/// The decrease of the solve's energy `E` (data plus anchor, in the units of `χ²`) that one
+/// Gauss-Newton step from strokes `lines` at half-width `h` predicts, damped as the solve's
+/// first step is (`μ = 1e-3`): `δᵀg + μ·δᵀDδ` for the step `δ` of
+/// `(JᵀJ + μD)·δ = g`, `g = Jᵀr`. Infinite when it cannot be computed (too many variables,
+/// or a singular system), so that a caller screening on it lets the case through.
+///
+/// For a split ([`solve_adaptive`]) the strokes before the split are a converged fit, so
+/// the gradient left at the split's start is what the new variables can buy: this is the
+/// score (Lagrange multiplier) statistic for adding them, which prices new parameters
+/// from the restricted fit alone, without fitting the larger model.
+///
+/// Method from: Rao (1948), Large sample tests of statistical hypotheses concerning
+/// several parameters with applications to problems of estimation, Mathematical
+/// Proceedings of the Cambridge Philosophical Society 44(1), 50-57,
+/// doi:10.1017/S0305004100023987 -- the score test, here as the Gauss-Newton predicted
+/// reduction `gᵀH⁻¹g` of the least-squares objective; and Moré (1978), The
+/// Levenberg-Marquardt algorithm: implementation and theory, Numerical Analysis, Lecture
+/// Notes in Mathematics 630, 105-116, doi:10.1007/BFb0067700, for the predicted reduction
+/// of a damped step.
+fn predicted_gain(lines: &[Centreline], h: f64, b: &Boundary, join: Join) -> f64 {
+    let mut model = Model::new(lines, h, join);
+    let n = model.theta.len();
+    if n > MAX_VARS {
+        return f64::INFINITY;
+    }
+    let theta0 = model.theta.clone();
+    let sig = anchor_sigmas(&theta0);
+    let (_, rws) = rows(&model, b, 8.0 * h + 4.0);
+    let first = profile(&model);
+    let (ata, atr) = normal_equations(&mut model, b, &rws, &theta0, &sig, &first);
+    let mu = 1e-3;
+    let mut a = ata.clone();
+    for i in 0..n {
+        a.add_diag(i, mu * ata.diag(i).max(1e-9));
+    }
+    let Some(delta) = a.cholesky_solve(&atr) else {
+        return f64::INFINITY;
+    };
+    (0..n)
+        .map(|i| delta[i] * (atr[i] + mu * ata.diag(i).max(1e-9) * delta[i]))
+        .sum()
+}
+
 /// Most splits [`solve_adaptive`] tries per face.
 const MAX_SPLITS: usize = 12;
+
+/// The fraction of a split's price (`λ` times its added parameters) that the predicted
+/// gain of its first step ([`predicted_gain`], halved into nats) must reach for the split
+/// to be solved at all.
+///
+/// A split is kept when its solved description length falls, i.e. when half the drop of
+/// `χ²` beats `λ·Δk`. Measured on every split the search tried (switch on, 2026-10-03):
+/// on the screen set at 128 px, 1854 trials of which 438 were kept, a threshold of 0.25
+/// solves 945 (51%) and screens out 16 kept ones; on lucide and openmoji at 512 px, 945
+/// trials and 129 kept, it solves 376 (40%) and screens out 4. The kept splits' predicted
+/// gain had a median of 7.8 (128 px) and 14.8 (512 px) times the price, and their solved
+/// gain 12 and 22 times: those screened out are the marginal ones. (1.0, the bare price,
+/// screened out 71 and 14.)
+const SCREEN_KAPPA: f64 = 0.25;
 
 /// The stroke solve with structure added where the boundary asks for it.
 ///
@@ -775,8 +832,11 @@ const MAX_SPLITS: usize = 12;
 /// split -- a line becomes a cubic on the same chord (+4 parameters), a cubic is cut in
 /// two at the foot of its worst point by de Casteljau (+6), an arc is cut in two at that
 /// angle (+5) -- the strokes are solved again, and the split is kept only when the face's
-/// description length `χ²/2 + λ·k` falls (`λ` = `lambda`, nats per parameter). A refused
-/// split is not retried; at most [`MAX_SPLITS`] are tried (`INKVEC_RIBBONS_SPLITS`
+/// description length `χ²/2 + λ·k` falls (`λ` = `lambda`, nats per parameter). Before
+/// that solve, a split whose first Gauss-Newton step predicts less than
+/// [`SCREEN_KAPPA`] of its price is refused unsolved ([`predicted_gain`], the score
+/// test): the split's curve is the old one, so the gradient its new variables see is what
+/// they can buy. A refused split is not retried; at most [`MAX_SPLITS`] are tried (`INKVEC_RIBBONS_SPLITS`
 /// overrides, 0 to switch it off), and none that would take the strokes to `budget`
 /// parameters (what the outline costs, so the face could not win).
 ///
@@ -820,8 +880,16 @@ pub(crate) fn solve_adaptive(
             continue;
         };
         // A split that takes the strokes to the caller's budget cannot win; stop there.
-        if trial.iter().map(Centreline::params).sum::<f64>() + 1.0 >= budget {
+        let k_trial = trial.iter().map(Centreline::params).sum::<f64>();
+        if k_trial + 1.0 >= budget {
             break;
+        }
+        // The score test: a split whose first Gauss-Newton step predicts a gain of under
+        // a quarter of its price is not solved.
+        let price = lambda * (k_trial - cur.iter().map(Centreline::params).sum::<f64>());
+        if 0.5 * predicted_gain(&trial, h, b, join) < SCREEN_KAPPA * price {
+            refused.push((shape, seg));
+            continue;
         }
         let (tl, th) = solve(&trial, h, b, join, TRIAL_ITERS);
         let (c, trial_rows) = cost(&tl, th);

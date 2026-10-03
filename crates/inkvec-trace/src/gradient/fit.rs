@@ -10,11 +10,11 @@
 //! and a least-squares line `colour = a + g·t` per channel ([`fit_1d`]). The fitters
 //! differ in how they search for the geometry that makes that line fit best.
 //!
-//! The research prototype A10 ([`super::gregions`], part `profile`) adds a second score for
-//! the radial and elliptic searches, [`ProfileScore::Spline`]: the residual of a continuous
-//! piecewise-linear profile instead of a line, so a clamped artist profile places its
-//! centre where the ramp really is. It is reached only through [`fit_radial_scored`] and
-//! [`fit_radial_elliptic_scored`]; the two plain fitters are those with the line score.
+//! The profile-aware radial search ([`profile`]) scores circular and elliptical geometries
+//! under a continuous piecewise-linear profile instead of a line ([`Resid1d::finish_spline`])
+//! and refines them by Levenberg–Marquardt; [`restop_radial`] puts the stops of each fitting
+//! space on the geometry it finds. Research prototype A10, part `profile`
+//! ([`super::gregions`]).
 //!
 //! Positions are pixel centres, px. Moved out of `gradient.rs` unchanged, to keep that
 //! file under the workspace's line cap.
@@ -59,31 +59,15 @@ pub(super) fn fit_1d(cols: &[[f64; 3]], t: &[f64]) -> (f64, [f64; 3], [f64; 3]) 
     (resid, a, g)
 }
 
-/// The colour profile a centre search scores each candidate geometry under.
-///
-/// The geometry search is separable least squares: for a fixed geometry every sample has
-/// a gradient coordinate `t`, the colour profile is solved in closed form, and only the
-/// geometry is searched on what the solve leaves (the variable-projection functional of
-/// Golub & Pereyra 1973, doi:10.1137/0710036). The two variants differ in the profile
-/// family projected out.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ProfileScore {
-    /// A straight line `colour = a + g·t` per channel: the profile of a two-stop
-    /// gradient. What the fitters have always used.
-    Line,
-    /// A continuous piecewise-linear profile with [`SPLINE_KNOTS`] uniform knots over the
-    /// samples' range of `t` ([`Resid1d::finish_spline`]): a clamped, kinked or bumped
-    /// artist profile is scored as itself rather than as the line through it. Research
-    /// prototype A10, part `profile` ([`super::gregions`]).
-    Spline,
-}
-
-/// Knots of the [`ProfileScore::Spline`] score, uniform over the subsample's range of `t`:
-/// seven pieces, enough to bend at a clamp and at both ends of a bump (97 % of the corpus's
-/// artist gradients have at most four stops), few enough that a 1024-sample search does not
-/// fit noise. The round-2 research measured this value (`INKVEC_R2_SPLINE`, 2ca274f); it
-/// was not tuned.
+/// Knots of the spline profile score ([`Resid1d::finish_spline`]), uniform over the
+/// subsample's range of `t`: seven pieces, enough to bend at a clamp and at both ends of a
+/// bump (97 % of the corpus's artist gradients have at most four stops), few enough that a
+/// 1024-sample search does not fit noise. The round-2 research measured this value
+/// (`INKVEC_R2_SPLINE`, 2ca274f); it was not tuned.
 pub(super) const SPLINE_KNOTS: usize = 8;
+
+mod profile;
+pub(super) use profile::profile_geometries;
 
 /// The half of [`fit_1d`] a centre search recomputes for nothing.
 ///
@@ -112,27 +96,12 @@ pub(super) struct Resid1d<'a> {
     scc: [f64; 3],
     /// Scratch: the geometric coordinate `t_i` of each sample for the current candidate.
     t: Vec<f64>,
-    /// The profile each candidate is scored under.
-    score: ProfileScore,
 }
 
 impl<'a> Resid1d<'a> {
     /// Precompute the geometry-free sums over the samples `idx` of `s`, whose colours
     /// `cols` must be given in the same order (`cols[j]` belongs to sample `idx[j]`).
-    /// Candidates are scored under a straight profile ([`ProfileScore::Line`]). The fitters
-    /// call [`Resid1d::with_score`]; this form is the tests'.
-    #[cfg(test)]
     pub(super) fn new(s: &Samples, idx: &[usize], cols: &'a [[f64; 3]]) -> Self {
-        Self::with_score(s, idx, cols, ProfileScore::Line)
-    }
-
-    /// [`Resid1d::new`] with the profile family the candidates are scored under.
-    pub(super) fn with_score(
-        s: &Samples,
-        idx: &[usize],
-        cols: &'a [[f64; 3]],
-        score: ProfileScore,
-    ) -> Self {
         let cbar = mean3(cols);
         let mut scc = [0.0; 3];
         for c in cols {
@@ -148,7 +117,6 @@ impl<'a> Resid1d<'a> {
             cbar,
             scc,
             t: vec![0.0; idx.len()],
-            score,
         }
     }
 
@@ -167,22 +135,25 @@ impl<'a> Resid1d<'a> {
     /// cosine, and `k` is the aspect. This is [`super::eval::radial_t_rot`] before its
     /// division by the radius, which a line fit absorbs into its slope.
     pub(super) fn elliptic(&mut self, c: (f64, f64), sn: f64, cs: f64, k: f64) -> f64 {
+        self.elliptic_t(c, sn, cs, k);
+        self.finish()
+    }
+
+    /// Fill `self.t` with the elliptical distances of [`Resid1d::elliptic`], without
+    /// scoring them. The arithmetic of that method, moved here unchanged so the spline
+    /// score ([`profile`]) can share it.
+    fn elliptic_t(&mut self, c: (f64, f64), sn: f64, cs: f64, k: f64) {
         for j in 0..self.t.len() {
             let (dx, dy) = (self.xs[j] - c.0, self.ys[j] - c.1);
             let u = dx * cs + dy * sn;
             let v = (-dx * sn + dy * cs) * k;
             self.t[j] = (u * u + v * v).sqrt();
         }
-        self.finish()
     }
 
     /// The residual of the least-squares line through `(t, colour)`, the `.0` of `fit_1d`:
     /// `Σ_ch max(S_cc − S_tc²/S_tt, 0)` with `S_tc`, `S_tt` formed from the current `t`.
-    /// Under [`ProfileScore::Spline`], the residual of [`Resid1d::finish_spline`] instead.
     fn finish(&self) -> f64 {
-        if self.score == ProfileScore::Spline {
-            return self.finish_spline();
-        }
         let n = self.cols.len() as f64;
         let tbar = self.t.iter().sum::<f64>() / n;
         let mut stt = 0.0;
@@ -203,7 +174,7 @@ impl<'a> Resid1d<'a> {
     }
 
     /// The residual of the least-squares continuous piecewise-linear profile through
-    /// `(t, colour)`: [`ProfileScore::Spline`].
+    /// `(t, colour)`: the spline score of the profile-aware search ([`profile`]).
     ///
     /// Model: `K =` [`SPLINE_KNOTS`] knots `τ_j = lo + j·h`, `h = (hi − lo)/(K − 1)`, over
     /// the range `[lo, hi]` of the current `t`; a sample at `u = (t − lo)/h`, in piece
@@ -223,7 +194,7 @@ impl<'a> Resid1d<'a> {
     /// the true centre and worse elsewhere, where the straight line's residual is lowest
     /// wherever a straight ramp fits the region best. Inspired by Chakraborty et al. 2025
     /// (doi:10.1111/cgf.70055) §3.3, whose radial geometry does not depend on the profile
-    /// at all; ours keeps the compass search and changes only what it minimises. The stops
+    /// at all; ours searches the geometry by this residual ([`profile`]). The stops
     /// the model finally carries are still fitted afterwards (two by [`fit_1d`], interior
     /// ones by `fit_mid_stops`): the spline only chooses the geometry.
     ///
@@ -577,21 +548,6 @@ pub(super) fn fit_radial(
     space: Interp,
     w: usize,
 ) -> Option<FillModel> {
-    fit_radial_scored(s, cols, space, w, ProfileScore::Line)
-}
-
-/// [`fit_radial`] with the centre search scored under `score` ([`ProfileScore`]).
-///
-/// The seed (the gradient-line centre), the clamp, the compass search and the final
-/// two-stop line fit are the same for both scores; only the residual the search
-/// minimises differs. With [`ProfileScore::Line`] this is `fit_radial` exactly.
-pub(super) fn fit_radial_scored(
-    s: &Samples,
-    cols: &[[f64; 3]],
-    space: Interp,
-    w: usize,
-    score: ProfileScore,
-) -> Option<FillModel> {
     let n = s.len();
     if n < MIN_GRADIENT_PIXELS {
         return None;
@@ -628,7 +584,7 @@ pub(super) fn fit_radial_scored(
     let cstride = (n / CENTRE_SEARCH_SAMPLES).max(1);
     let idx: Vec<usize> = (0..n).step_by(cstride).collect();
     let cols_sub: Vec<[f64; 3]> = idx.iter().map(|&i| cols[i]).collect();
-    let mut rz = Resid1d::with_score(s, &idx, &cols_sub, score);
+    let mut rz = Resid1d::new(s, &idx, &cols_sub);
 
     let mut best = rz.radial(c);
     let mut step = 4.0;
@@ -710,19 +666,6 @@ pub(super) fn fit_radial_elliptic(
     space: Interp,
     circular: &FillModel,
 ) -> Option<FillModel> {
-    fit_radial_elliptic_scored(s, cols, space, circular, ProfileScore::Line)
-}
-
-/// [`fit_radial_elliptic`] with the search scored under `score` ([`ProfileScore`]); with
-/// [`ProfileScore::Line`] it is `fit_radial_elliptic` exactly. `circular` is normally the
-/// circular fit made under the same score, whose centre seeds this search.
-pub(super) fn fit_radial_elliptic_scored(
-    s: &Samples,
-    cols: &[[f64; 3]],
-    space: Interp,
-    circular: &FillModel,
-    score: ProfileScore,
-) -> Option<FillModel> {
     let FillModel::Radial { c: c_start, .. } = *circular else {
         return None;
     };
@@ -733,7 +676,7 @@ pub(super) fn fit_radial_elliptic_scored(
     let cstride = (n / CENTRE_SEARCH_SAMPLES).max(1);
     let idx: Vec<usize> = (0..n).step_by(cstride).collect();
     let cols_sub: Vec<[f64; 3]> = idx.iter().map(|&i| cols[i]).collect();
-    let mut rz = Resid1d::with_score(s, &idx, &cols_sub, score);
+    let mut rz = Resid1d::new(s, &idx, &cols_sub);
 
     let xmin = s.x.iter().cloned().fold(f64::MAX, f64::min);
     let xmax = s.x.iter().cloned().fold(f64::MIN, f64::max);
@@ -832,12 +775,14 @@ pub(super) fn fit_radial_elliptic_scored(
 /// A radial geometry found by a search (`geometry`, a [`FillModel::Radial`]) with its two
 /// stops refitted in another interpolation space: the samples' coordinate `ρ_i` under that
 /// geometry, `r = max ρ_i`, and the least-squares line `colour = a + g·ρ` in `space`
-/// ([`fit_1d`]), exactly as the tails of [`fit_radial_scored`] (aspect 1: the Euclidean
-/// distance) and [`fit_radial_elliptic_scored`] (the elliptical distance) compute them --
-/// so in the space the search ran in, the model is the search's own, bit for bit.
+/// ([`fit_1d`]), exactly as the tails of [`fit_radial`] (aspect 1: the Euclidean distance)
+/// and [`fit_radial_elliptic`] (the elliptical distance) compute them.
 ///
-/// Research prototype A10, part `profile`: one spline-scored search serves both spaces
-/// (see `profile_scored_radials`). `None` for a non-radial model, or when `r < 0.5` px.
+/// The profile-aware search ([`profile_geometries`]) runs once, on the sRGB colours, and
+/// its geometry serves both spaces through this: a free piecewise-linear profile absorbs
+/// the per-channel transfer curve between the spaces, so the level sets it finds, and with
+/// them the geometry, do not depend on the space; only the stops do. `None` for a
+/// non-radial model, or when `r < 0.5` px.
 pub(super) fn restop_radial(
     s: &Samples,
     cols: &[[f64; 3]],

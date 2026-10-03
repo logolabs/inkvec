@@ -19,8 +19,8 @@
 //!    rim, or a bump on a pad), and a straight-line score pulls the centre to wherever a
 //!    straight ramp fits best, not to the ramp's real centre. The search is run a second
 //!    time scored by a continuous piecewise-linear profile (variable projection with a
-//!    fixed hat basis, [`super::fit::ProfileScore::Spline`]); the results are *extra*
-//!    candidates, so model selection still decides.
+//!    fixed hat basis), by Levenberg–Marquardt ([`super::fit::profile_geometries`]); the
+//!    results are *extra* candidates, so model selection still decides.
 //! 2. **`guard`: a step-like profile is an edge, not shading** ([`step_like`]). A flexible
 //!    profile can mimic a step, and the round-2 report read the princess emoji's +0.152
 //!    dE00 (held_a) as a spline-geometry gradient fusing face and hair that way. A

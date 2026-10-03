@@ -765,17 +765,20 @@ fn ramp_models(s: &Samples, w: usize, space: Interp) -> (Interp, Vec<[f64; 3]>, 
 }
 
 /// The ramp candidates of every interpolation space ([`ramp_models`], one space per entry,
-/// in [`INTERPS`] order), each space's list followed by the research prototype A10's extra
-/// radial geometries when its part `profile` is on: found once for both spaces under the
-/// piecewise-linear profile score ([`profile_scored_radials`], run beside the line-scored
-/// fits) and appended to each space's list with the stops refitted there
+/// in [`INTERPS`] order), each space's list followed by the profile-aware radial
+/// geometries when the research prototype A10's part `profile` is on: found once for both
+/// spaces by [`profile_geometries`] on the sRGB colours, run beside the line-scored
+/// fits, and appended to each space's list with the stops refitted there
 /// ([`restop_radial`]). With the part off there are none and the lists are as they were.
 fn ramp_candidates(s: &Samples, w: usize) -> Vec<(Interp, Vec<[f64; 3]>, Vec<FillModel>)> {
     use rayon::prelude::*;
     let (geometry, mut per_space): (Vec<FillModel>, Vec<_>) = rayon::join(
         || {
             if gregions::parts().profile {
-                profile_scored_radials(s, &s.colors(Interp::Srgb), Interp::Srgb, w)
+                let t = inkvec_core::clock::Instant::now();
+                let found = profile_geometries(s, &s.colors(Interp::Srgb), w);
+                tick(&FIT_NS_PROFILE, t);
+                found
             } else {
                 Vec::new()
             }
@@ -795,41 +798,6 @@ fn ramp_candidates(s: &Samples, w: usize) -> Vec<(Interp, Vec<[f64; 3]>, Vec<Fil
         );
     }
     per_space
-}
-
-/// Research prototype A10, part `profile` ([`gregions`]): the circular and elliptical
-/// radial geometries searched again under the piecewise-linear profile score
-/// ([`fit::ProfileScore::Spline`]), the elliptical one seeded from the circular one, as
-/// [`ramp_models`] seeds its own pair.
-///
-/// They become *extra* candidates, appended after the line-scored three in each space by
-/// `fit_samples`:
-/// nothing is replaced, so a region whose profile is straight keeps the fit it had (the
-/// line-scored candidate comes first and wins ties), and model selection prices the
-/// newcomers like any other. Replacing the line search instead was measured worse in an
-/// earlier attempt (4304ba3).
-///
-/// The search runs once, in sRGB, and its geometry serves both interpolation spaces:
-/// a free piecewise-linear profile absorbs the per-channel transfer curve between the
-/// spaces, so the level sets it finds, and with them the geometry, do not depend on the
-/// space; only the stops do, and `fit_samples` refits those per space. That halves the
-/// cost of the part (the round-2 research ran it per space: 1.9x trace time on the
-/// gradient icons, under load). Not from the literature: a cost reduction.
-fn profile_scored_radials(
-    s: &Samples,
-    cols: &[[f64; 3]],
-    space: Interp,
-    w: usize,
-) -> Vec<FillModel> {
-    let t_r = inkvec_core::clock::Instant::now();
-    let radial = fit_radial_scored(s, cols, space, w, ProfileScore::Spline);
-    tick(&FIT_NS_RADIAL, t_r);
-    let t_e = inkvec_core::clock::Instant::now();
-    let elliptic = radial
-        .as_ref()
-        .and_then(|r| fit_radial_elliptic_scored(s, cols, space, r, ProfileScore::Spline));
-    tick(&FIT_NS_ELLIPTIC, t_e);
-    [radial, elliptic].into_iter().flatten().collect()
 }
 
 /// Every admissible candidate for the samples, flat first.

@@ -807,7 +807,7 @@ impl MergeTiming {
             ns_book / 1_000_000,
         );
         eprintln!(
-            "  [t] merge: {} components, {} union fits over {} pixels total; fit ms (summed over threads): collect {} flat {} linear {} radial {} elliptic {}",
+            "  [t] merge: {} components, {} union fits over {} pixels total; fit ms (summed over threads): collect {} flat {} linear {} radial {} elliptic {} profile {}",
             n_comp,
             FIT_CALLS.load(std::sync::atomic::Ordering::Relaxed),
             FIT_PIXELS.load(std::sync::atomic::Ordering::Relaxed),
@@ -816,6 +816,7 @@ impl MergeTiming {
             FIT_NS_LINEAR.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000,
             FIT_NS_RADIAL.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000,
             FIT_NS_ELLIPTIC.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000,
+            FIT_NS_PROFILE.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000,
         );
     }
 }

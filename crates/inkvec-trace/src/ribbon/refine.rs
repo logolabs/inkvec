@@ -62,6 +62,7 @@ use super::bvh::PieceTree;
 use super::dist::{
     circle_grad, circular_arc_grad, cubic_eval, cubic_grad, dist_to, ellipse_arc_grad, line_grad,
 };
+use super::grid::point_segment;
 use super::join::{miter_gauge, tangents, Join};
 use super::score::flatten;
 use super::skyline::Skyline;
@@ -492,11 +493,105 @@ pub(crate) fn distances(lines: &[Centreline], h: f64, b: &Boundary, join: Join) 
         .collect()
 }
 
-/// Every flattened piece of every shape, tagged `(shape, segment, t0, t1)`, for the
-/// nearest-segment search. Fixed shapes are tagged with segment `usize::MAX`.
+/// Largest distance, px, between a path segment and the chords that stand in for it in
+/// the nearest-segment search ([`flat_pieces`]).
+const FLAT_TOL: f64 = 0.02;
+
+/// Path segment `seg` starting at `a` as chords that stay within [`FLAT_TOL`] of it,
+/// appended to `out` with the parameter range each covers appended to `range`: the
+/// cubic's `t`, the arc's fraction of its sweep, the line's own position.
+///
+/// The pieces only choose which segment a boundary point belongs to and where its exact
+/// foot is polished from (Newton's method in [`super::dist`]); the distance itself is
+/// the exact one. So they need not be short, only close: a line is one chord; a cubic is
+/// halved by de Casteljau's construction until both inner control points lie within
+/// `4/3·FLAT_TOL` of the chord (the curve then lies within `FLAT_TOL` of it, because
+/// `B₁(t) + B₂(t) = 3t(1 - t) <= 3/4`); an arc is cut into equal angles whose sagitta
+/// `R·(1 - cos(Δθ/2))` at its larger radius `R` is at most `FLAT_TOL`.
+///
+/// This replaced chords of a quarter pixel along every segment: at 512 px, where a
+/// boundary point sits a half-width (~21 px) from its foot, the pieces nearly as close as
+/// the nearest ran some 13 px along the curve either way, and the search tested about 70
+/// of them per point (lucide `vegan`).
+///
+/// Inspired by: the flatness test of adaptive Bézier flattening by recursive subdivision
+/// (de Casteljau), as surveyed in Lane, Riesenfeld (1980), A theoretical development for
+/// the computer generation and display of piecewise polynomial surfaces, IEEE TPAMI 2(1),
+/// 35-46, doi:10.1109/TPAMI.1980.4766968; ours stops on the control points' distance to
+/// the chord segment.
+fn flat_pieces(
+    a: Point,
+    seg: &Segment,
+    out: &mut Vec<(Point, Point)>,
+    range: &mut Vec<(f64, f64)>,
+) {
+    let mut push = |p: Point, q: Point, t0: f64, t1: f64| {
+        if p.dist(q) > 1e-12 {
+            out.push((p, q));
+            range.push((t0, t1));
+        }
+    };
+    match *seg {
+        Segment::Line(b) => push(a, b, 0.0, 1.0),
+        Segment::Cubic(c1, c2, b) => {
+            // Depth-first, left half first, so the chords come out in order.
+            let mut stack = vec![([a, c1, c2, b], 0.0, 1.0, 0u32)];
+            while let Some((q, t0, t1, depth)) = stack.pop() {
+                let flat = point_segment(q[1], q[0], q[3])
+                    .0
+                    .max(point_segment(q[2], q[0], q[3]).0);
+                if depth >= 16 || 0.75 * flat <= FLAT_TOL {
+                    push(q[0], q[3], t0, t1);
+                    continue;
+                }
+                let mid = |p: Point, r: Point| Point::new(0.5 * (p.x + r.x), 0.5 * (p.y + r.y));
+                let (p01, p12, p23) = (mid(q[0], q[1]), mid(q[1], q[2]), mid(q[2], q[3]));
+                let (p012, p123) = (mid(p01, p12), mid(p12, p23));
+                let m = mid(p012, p123);
+                let tm = 0.5 * (t0 + t1);
+                stack.push(([m, p123, p23, q[3]], tm, t1, depth + 1));
+                stack.push(([q[0], p01, p012, m], t0, tm, depth + 1));
+            }
+        }
+        Segment::Arc {
+            rx,
+            ry,
+            phi,
+            large_arc,
+            sweep,
+            end,
+        } => {
+            let f = arc_ellipse_center(a, rx, ry, phi, large_arc, sweep, end);
+            let r = f.rx.abs().max(f.ry.abs());
+            let n = if f.delta == 0.0 || r <= FLAT_TOL {
+                1
+            } else {
+                let step = 2.0 * (1.0 - FLAT_TOL / r).clamp(-1.0, 1.0).acos();
+                ((f.delta.abs() / step).ceil() as usize).clamp(1, 4096)
+            };
+            let mut prev = a;
+            for i in 1..=n {
+                let u = i as f64 / n as f64;
+                let q = if i == n {
+                    end
+                } else {
+                    f.at(f.theta1 + f.delta * u)
+                };
+                push(prev, q, (i - 1) as f64 / n as f64, u);
+                prev = q;
+            }
+        }
+    }
+}
+
+/// Every piece of every shape, tagged `(shape, segment, t0, t1)`, for the nearest-segment
+/// search: path segments by [`flat_pieces`]; circles and fixed primitives flattened at a
+/// quarter pixel (a fixed shape's distance *is* its nearest piece's, so its pieces stay
+/// short), fixed shapes tagged with segment `usize::MAX`.
 #[allow(clippy::type_complexity)]
 fn pieces(model: &Model) -> (Vec<(Point, Point)>, Vec<(usize, usize, f64, f64)>) {
     let (mut segs, mut tags) = (Vec::new(), Vec::new());
+    let mut range = Vec::new();
     for (si, s) in model.shapes.iter().enumerate() {
         match s {
             Shape::Path {
@@ -504,17 +599,9 @@ fn pieces(model: &Model) -> (Vec<(Point, Point)>, Vec<(usize, usize, f64, f64)>)
             } => {
                 for k in 0..sv.len() {
                     let (a, seg) = model.segment(*start, sv, k);
-                    let one = FittedPath {
-                        start: a,
-                        segments: vec![seg],
-                        closed: false,
-                    };
-                    let before = segs.len();
-                    flatten(&one, 0.25, &mut segs);
-                    let m = segs.len() - before;
-                    for j in 0..m {
-                        tags.push((si, k, j as f64 / m as f64, (j + 1) as f64 / m as f64));
-                    }
+                    range.clear();
+                    flat_pieces(a, &seg, &mut segs, &mut range);
+                    tags.extend(range.iter().map(|&(t0, t1)| (si, k, t0, t1)));
                 }
             }
             _ => {
@@ -1238,6 +1325,50 @@ mod tests {
         // The first handle points backwards: the derivative reverses near t = 0.
         let cusp = cubic(Point::new(-3.0, 0.0), Point::new(25.0, 0.0));
         assert!(!regular(&Model::new(&[cusp], 2.0, Join::Round)));
+    }
+
+    #[test]
+    fn flat_pieces_stay_within_tolerance_and_cover_the_parameter() {
+        let a = Point::new(0.0, 0.0);
+        let segs = [
+            Segment::Cubic(
+                Point::new(40.0, 0.0),
+                Point::new(60.0, 50.0),
+                Point::new(10.0, 80.0),
+            ),
+            Segment::circular_arc(30.0, false, true, Point::new(30.0, 30.0)),
+            Segment::Arc {
+                rx: 500.0,
+                ry: 60.0,
+                phi: 0.4,
+                large_arc: false,
+                sweep: false,
+                end: Point::new(80.0, -20.0),
+            },
+            Segment::Line(Point::new(100.0, 3.0)),
+        ];
+        for seg in segs {
+            let (mut out, mut range) = (Vec::new(), Vec::new());
+            flat_pieces(a, &seg, &mut out, &mut range);
+            assert!(!out.is_empty());
+            assert_eq!(range[0].0, 0.0);
+            assert_eq!(range[range.len() - 1].1, 1.0);
+            for w in range.windows(2) {
+                assert_eq!(w[0].1, w[1].0, "contiguous");
+            }
+            let path = FittedPath {
+                start: a,
+                segments: vec![seg.clone()],
+                closed: false,
+            };
+            let mut fine = Vec::new();
+            flatten(&path, 0.01, &mut fine);
+            let tree = PieceTree::new(&out);
+            for &(p, _) in &fine {
+                let d = tree.nearest(p, 10.0).expect("near").d;
+                assert!(d <= FLAT_TOL + 1e-4, "{seg:?}: {d}");
+            }
+        }
     }
 
     #[test]

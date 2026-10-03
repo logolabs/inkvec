@@ -393,12 +393,15 @@ class GuideResolver(LinkResolver):
 
 CSS = """\
 /* LogoLabs design system: warm charcoal ramp, one copper accent, Playfair Display +
- * Inter + IBM Plex Mono. Tokens match web/index.html and the design-system zip. */
+ * Inter + IBM Plex Mono. Tokens match web/index.html and the design-system zip.
+ * Text contrast (WCAG 2.2 SC 1.4.3, 4.5:1 for text under 18 px): --muted is .5, not .4
+ * (5.0:1 on --paper, 4.9:1 on --card; .4 was 3.7:1), as in the Studio's own tokens, and
+ * copper text on the tinted --accent-soft uses --accent-text (5.5:1; --accent is 4.4:1). */
 :root{
   --paper:#1a1816;--card:#211f1c;--stage:#141210;--void:#0c0a09;--surface:#2a2724;--highlight:#35322e;
-  --ink:#faf8f5;--dim:rgba(250,248,245,.75);--faint:rgba(250,248,245,.55);--muted:rgba(250,248,245,.4);
+  --ink:#faf8f5;--dim:rgba(250,248,245,.75);--faint:rgba(250,248,245,.55);--muted:rgba(250,248,245,.5);
   --rule:rgba(250,248,245,.08);--rule2:#2a2724;
-  --accent:#c9754a;--accent-hover:#d4896a;--accent-ink:#1a1816;--accent-soft:rgba(201,117,74,.12);
+  --accent:#c9754a;--accent-text:#d4896a;--accent-hover:#d4896a;--accent-ink:#1a1816;--accent-soft:rgba(201,117,74,.12);
   --gold:#b8976c;--good:#34d399;--bad:#f87171;
   --font-display:"Playfair Display",Georgia,serif;--font-body:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
   --font-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Consolas,monospace;
@@ -430,9 +433,9 @@ a:hover{color:var(--accent-hover)}
   color:var(--muted)}
 .side a{display:block;padding:4px 8px;margin:1px -8px;border-radius:6px;font-size:13.5px;color:var(--faint)}
 .side a:hover{color:var(--ink);background:var(--card)}
-.side a[aria-current]{color:var(--accent);background:var(--accent-soft)}
+.side a[aria-current]{color:var(--accent-text);background:var(--accent-soft)}
 .side a .n{font:500 10.5px/1 var(--font-mono);color:var(--muted);margin-right:7px}
-.side a[aria-current] .n{color:var(--accent)}
+.side a[aria-current] .n{color:var(--accent-text)}
 
 main{padding:44px 48px 90px;min-width:0}
 article{max-width:46rem}
@@ -454,9 +457,19 @@ kbd{font-family:var(--font-mono);font-size:.8em;background:var(--surface);color:
   border:1px solid var(--highlight);border-bottom-width:2px;border-radius:5px;padding:.05em .4em;white-space:nowrap}
 code{font-family:var(--font-mono);font-size:.86em;background:var(--surface);
   border:1px solid var(--rule);border-radius:5px;padding:.1em .35em;color:var(--ink)}
+/* A long identifier, path, hash or URL in running text breaks where it must rather than
+   pushing the page wider than a phone (390 px: index 526, 14-fast-mode 478, pipeline
+   1,157, design 470). */
+article{overflow-wrap:break-word}
+article :not(pre)>code{overflow-wrap:anywhere}
+/* A fenced block the highlighter does not handle (the pipeline page's mermaid source,
+   1,157 px wide) scrolls inside itself like every other code block. */
+article pre{overflow-x:auto;max-width:100%}
 .codehilite{background:var(--stage)!important;border:1px solid var(--rule);border-radius:10px;
   padding:14px 16px;overflow-x:auto;margin:0 0 1.2em}
-.codehilite pre{margin:0;background:transparent!important}
+.codehilite pre{margin:0;background:transparent!important;overflow:visible}
+/* A region that scrolls sideways gets a tab stop (the script in PAGE_SHELL), and shows it. */
+[data-scroll-stop]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .codehilite code{background:transparent;border:0;padding:0;font-size:13px;line-height:1.6}
 
 table{border-collapse:collapse;width:100%;margin:0 0 1.2em;font-size:14px;display:block;overflow-x:auto}
@@ -468,6 +481,7 @@ table code{white-space:nowrap}
 blockquote{margin:0 0 1.2em;padding:10px 16px;border-left:3px solid var(--accent);
   background:var(--accent-soft);border-radius:0 8px 8px 0}
 blockquote p{margin:0 0 .5em;color:var(--ink)}
+blockquote a{color:var(--accent-text)}
 blockquote p:last-child{margin:0}
 
 .math{overflow-x:auto;overflow-y:hidden;padding:6px 2px;margin:0 0 1.2em}
@@ -476,7 +490,7 @@ blockquote p:last-child{margin:0}
 
 /* per-page toc rail */
 .rail{padding:52px 20px 60px 0;position:sticky;top:56px;height:calc(100vh - 56px);overflow-y:auto}
-.rail h5{margin:0 0 10px;font:500 10.5px/1 var(--font-mono);letter-spacing:.14em;text-transform:uppercase;
+.rail .railh{margin:0 0 10px;font:500 10.5px/1 var(--font-mono);letter-spacing:.14em;text-transform:uppercase;
   color:var(--muted)}
 .rail ul{list-style:none;margin:0;padding:0}
 .rail ul ul{padding-left:12px}
@@ -520,7 +534,8 @@ blockquote p:last-child{margin:0}
 
 footer{border-top:1px solid var(--rule);padding:26px 24px;display:flex;justify-content:space-between;
   gap:16px;flex-wrap:wrap;font-size:13px;color:var(--muted)}
-footer a{color:var(--dim)}
+footer a{color:var(--dim);text-decoration:underline;text-decoration-color:rgba(250,248,245,.35);
+  text-underline-offset:3px}
 footer a:hover{color:var(--accent)}
 
 @media (max-width:1150px){.rail{display:none}.shell{grid-template-columns:220px minmax(0,1fr)}}
@@ -544,20 +559,44 @@ PAGE_SHELL = """\
 <link rel="icon" type="image/svg+xml" href="__BASE__favicon.svg">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,500&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="__BASE__site.css">
+<script>
+/* A region that scrolls sideways (a wide table, a long code block, display maths) must be
+   reachable from the keyboard: WCAG 2.2 SC 2.1.1, axe "scrollable-region-focusable". Each
+   one gets a tab stop only while it actually overflows, so a narrow table is not an extra
+   stop. */
+(function () {
+  function stops() {
+    document.querySelectorAll("article pre, article table, .codehilite, .math").forEach(function (e) {
+      var x = getComputedStyle(e).overflowX;
+      var over = (x === "auto" || x === "scroll") && e.scrollWidth > e.clientWidth + 1;
+      if (over && !e.hasAttribute("tabindex")) {
+        e.setAttribute("tabindex", "0");
+        e.setAttribute("data-scroll-stop", "");
+      } else if (!over && e.hasAttribute("data-scroll-stop")) {
+        e.removeAttribute("tabindex");
+        e.removeAttribute("data-scroll-stop");
+      }
+    });
+  }
+  addEventListener("DOMContentLoaded", stops);
+  addEventListener("load", stops);
+  addEventListener("resize", stops);
+})();
+</script>
 __HEAD__
 </head>
 <body>
 <header class="top">
   <a class="brand" href="__BASE__"><img src="__BASE__logo-mono.svg" alt=""> <span>Inkvec</span></a>
-  <nav class="toplinks">
+  <nav class="toplinks" aria-label="Site">
     <a href="__STUDIO__">Try in the browser</a>
     <a href="__GITHUB__">GitHub</a>
   </nav>
 </header>
 <div class="shell">
-  <aside class="side">__NAV__</aside>
+  <aside class="side" aria-label="Documentation">__NAV__</aside>
   <main><article>__CONTENT__</article></main>
-  <aside class="rail">__RAIL__</aside>
+  <aside class="rail" aria-label="On this page">__RAIL__</aside>
 </div>
 <footer>
   <span>Inkvec &middot; LogoLabs</span>
@@ -589,19 +628,26 @@ def render_nav(base: str, active: str) -> str:
 
 
 def render_rail(toc_tokens: list) -> str:
-    def walk(tokens):
+    """The page's own contents, h2 and h3, as a nested list under an h2.
+
+    The items of a level-1 heading are lifted into the list it sits in: they used to be
+    spliced in as a whole `<ul>`, which put a list directly inside a list (axe `list`).
+    The rail's heading is an h2 rather than the h5 it was, so the page's heading levels
+    never skip (axe `heading-order`)."""
+    def items(tokens) -> list:
         rows = []
         for t in tokens:
             if t["level"] < 2:
-                rows.extend(walk(t["children"]))
+                rows.extend(items(t["children"]))
                 continue
-            kids = walk(t["children"])
+            sub = items(t["children"])
+            kids = f'<ul>{"".join(sub)}</ul>' if sub else ""
             cls = "l2" if t["level"] == 2 else "l3"
             rows.append(f'<li class="{cls}"><a href="#{t["id"]}">{t["name"]}</a>{kids}</li>')
-        return f'<ul>{"".join(rows)}</ul>' if rows else ""
+        return rows
 
-    inner = walk(toc_tokens)
-    return f"<h5>On this page</h5>{inner}" if inner else ""
+    rows = items(toc_tokens)
+    return f'<h2 class="railh">On this page</h2><ul>{"".join(rows)}</ul>' if rows else ""
 
 
 def rewrite_plain_hrefs(text: str, resolver: "LinkResolver") -> str:
@@ -724,7 +770,7 @@ def studio_pagenav(page: str, href) -> str:
                 f'<span class="dir">{"Previous" if direction == "prev" else "Next"}</span>'
                 f'<span class="lbl">{labels[pages[j]]}</span></a>')
 
-    return f'<nav class="pagenav">{cell("prev", i - 1)}{cell("next", i + 1)}</nav>'
+    return f'<nav class="pagenav" aria-label="Previous and next page">{cell("prev", i - 1)}{cell("next", i + 1)}</nav>'
 
 
 def build(base: str) -> int:
@@ -793,7 +839,8 @@ def build(base: str) -> int:
                 return (f'<a class="{direction}" href="{base}algorithm/{s}.html">'
                         f'<span class="dir">{"Previous" if direction == "prev" else "Next"}</span>'
                         f'<span class="lbl">{lbl}</span></a>')
-            pagenav = f'<nav class="pagenav">{cell("prev", prev_s)}{cell("next", next_s)}</nav>'
+            pagenav = (f'<nav class="pagenav" aria-label="Previous and next stage">'
+                       f'{cell("prev", prev_s)}{cell("next", next_s)}</nav>')
         if slug.startswith("studio/"):
             pagenav = studio_pagenav(slug[len("studio/"):-len(".html")],
                                      lambda p: f"{base}studio/{p}.html")
@@ -841,6 +888,7 @@ def build(base: str) -> int:
         .replace("__SPACE__", SPACE)
         .replace("__STUDIO__", STUDIO)
         .replace("__GITHUB__", GITHUB)
+        .replace("__LOGOLABS__", LOGOLABS)
         .replace("__HEAD__", "")
         .replace("__NAV__", render_nav(base, ""))
         .replace("__RAIL__", "")

@@ -33,7 +33,7 @@ The full documentation lives at **[logolabs.github.io/inkvec](https://logolabs.g
 Flat artwork — logos, icons, emoji, illustrations — and two readers of the result at once: whoever looks at the SVG, and whoever has to edit it later.
 
 - **A designer opening the file in Figma or Illustrator.** A circle comes back as a `<circle>` and a rounded rectangle as a `<rect>`. Neighbouring shapes of one flat colour are one compound path, the way an artist draws a word. Shapes are stacked rather than cut into a jigsaw, so moving one does not open a hole in the one behind it. A smooth ramp is a real gradient, and a transparent area is still transparent. On the 246-icon regression set the file carries 1.48× the parameters of the artist's own SVG. What tracing cannot give back: layer names (ids are colour names such as `dark-grey-6`), live text (lettering comes back as outlines), and stroke widths you can drag — unless the drawing uses uniform strokes and you pass `--strokes`.
-- **A developer shipping a smaller asset.** On the 21 comparison cases below, Inkvec writes 4.4× fewer coordinates than VTracer's defaults at a tenth of the colour error, and `--minify` takes about another 10% off the file. The price is time: about a second per graphic where VTracer takes 0.04 s, so trace at build time, not per request.
+- **A developer shipping a smaller asset.** On the 21 comparison cases below, Inkvec writes 4.4× fewer coordinates than VTracer's defaults at a tenth of the colour error, and `--minify` respells the paths in fewer bytes without moving anything (a third off the 246-icon screen set). The default Quality mode costs time — about a second per graphic where VTracer takes 0.04 s — so trace at build time, not per request; `--mode fast` is the quick path (see [Speed](#speed-quality-and-fast)).
 - **A brand team that needs the logo exact.** Boundaries land within ~0.05 px on analytic test shapes, and on the regression set the mean colour error is dE00 0.148 (median 0.110; around 1.0 is where a trained eye starts to see a difference). A trace is still a reconstruction from pixels, not a recovery of the source file: if the original vector exists, use it. The colours written are the ones measured in the image, so whatever a JPEG or a screenshot did to them comes along — check them against your brand values.
 
 Not for photographs, text you need to edit as text, or pencil and brush work; see [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md).
@@ -59,7 +59,33 @@ The two VTracer defaults (0.6.15 and 1.0.0-alpha.4) are the **same engine**: the
 
 One engine is deliberately absent from the table: `color-trace` ("potrace-color", [`migvel/color_trace`](https://github.com/migvel/color_trace) — pngquant quantisation + per-layer Potrace) is not apples-to-apples, because it reproduces the raster by drawing every pixel back rather than tracing artist-shaped geometry — on these same 21 cases its median dE00 is 0.229 at a median 25,018 coordinates, against Inkvec's 0.054 at 202 — roughly 124× the coordinates. Full detail in the non-apples-to-apples section of [`docs/results/2026-09-15.md`](docs/results/2026-09-15.md).
 
-VTracer is meaningfully faster — this is a quality/speed trade, not a free win. Source: [`docs/results/2026-09-15.md`](docs/results/2026-09-15.md).
+### Speed: Quality and Fast
+
+The table's Inkvec row is the default **Quality** mode, and against it VTracer is much faster
+(1.17 s against 0.04-0.06 s per case): Quality spends its time on the boundary solve and a
+global fit per boundary, and that is a quality/speed trade, not a free win. Source:
+[`docs/results/2026-09-15.md`](docs/results/2026-09-15.md).
+
+**`--mode fast`** shares the middle of the pipeline with Quality — the planar map, the
+sub-pixel placement of every boundary point, and the writer — and replaces the searches around
+it with single-pass stages and a Potrace-class curve fit, with flat fills
+([`docs/algorithm/14-fast-mode.md`](docs/algorithm/14-fast-mode.md)). At equal speed it is
+well ahead of VTracer. Measured on the same 21 cases, re-rendered with the current renderer
+(Fast-mode quality research, 2026-10-02; engine time single-threaded for both, colour error
+CIEDE2000 at 1024 px; these renders differ from the 2026-09-15 table's, so the VTracer figures
+differ slightly from it):
+
+| Input size | Fast: median time, mean / median dE00 | VTracer 0.6.15: median time, mean / median dE00 |
+|---|---|---|
+| 128 px | 15.7 ms, 0.587 / 0.448 | 4.2 ms (polygon mode), 2.48 / 2.08 |
+| 512 px | 44 ms, 0.168 / 0.074 | 66-70 ms, 1.20-1.28 / 0.56-0.60 |
+| 2048 px | 250 ms, 0.123 / 0.023 | 1.0-1.1 s, 0.96-1.03 / 0.26-0.29 |
+
+So at 512 and 2048 px Fast is faster *and* has 7-8× lower mean colour error; at 128 px
+VTracer's polygon mode is 3.7× faster, at about 4× Fast's error. On every core, Fast traces a
+2048 px opaque image in about 69 ms of wall time (v0.2.4, measured 2026-10-01). Quality is
+still the more faithful of the two (mean dE00 0.1425 against Fast's 0.3640 on the 246-icon
+screen set at 128 px), with fewer parameters.
 
 <p align="center">
   <img src="docs/assets/engine-distribution.png" width="100%" alt="Per-case colour error (dE00) across the 21 cases, one panel per engine">
@@ -159,6 +185,7 @@ inkvec <input> [-o <output.svg>] [OPTIONS]
 
 | Flag | Default | What it does |
 |---|---|---|
+| `--mode <quality\|fast>` | quality | `quality` is the full engine: best fidelity, fewest parameters. `fast` is a Potrace-class fit on the same planar map, with flat fills: several times faster, a little less faithful (see [Speed](#speed-quality-and-fast)). Options that only steer Quality stages are ignored in Fast, and the report names them. |
 | `--restore <auto\|on\|off>` | off | Trained-network cleanup for JPEG/WebP/AI-decoder damage. `auto` only restores if it looks damaged, and traces directly when no restorer is available (`on` is an error then). |
 | `--sr <auto\|on\|off>` | off | Super-resolution pre-pass (2-4× upscale), complementary to `--restore`. |
 | `--lossy <auto\|on\|off>` | auto | Whether to trust the file as clean or trace with noise-aware intake. |
@@ -334,7 +361,7 @@ Each stage is documented in depth in the [pipeline series](https://logolabs.gith
 4. **Planar Map (DCEL).** Boundaries are stored once between adjacent faces, so the model has no overdraw ($1.000\times$ internally); seams are unrepresentable.
 5. **Boundary Solve.** Analysis-by-synthesis moves all boundary points simultaneously under L-BFGS with a backtracking line search, against the exact box coverage of every pixel in a narrow band around the boundary, with an analytic gradient.
 6. **Curve Fitting.** Global dynamic programming over lines, arcs, Raph Levien quartic G1 Béziers, and primitives (`<circle>`, `<ellipse>`, `<rect>`).
-7. **Repair & Emit.** Capped span refitting eliminates self-crossing rings; output is emitted with shared geometry and clean even-odd paths.
+7. **Repair & Emit.** Capped span refitting eliminates self-crossing rings; output is emitted with shared geometry as compound paths whose rings are wound by nesting depth, so every renderer's default fill rule draws the holes (no `fill-rule` needed).
 
 📖 **Comprehensive Technical & Scientific Guide:** See [**`PIPELINE_EXPLANATION.md`**](PIPELINE_EXPLANATION.md) for full mathematical derivations, branded step-by-step diagrams, and an extensive review of all research and arXiv papers used (AnchorFlow, VectorArk, AdaVec, SuperSVG, MambaIR, Levien Bézier fits, Shewchuk exact predicates, and more).
 
@@ -363,7 +390,7 @@ Inkvec is engineered specifically for graphic artwork, logotypes, icons, and dia
 | **Variable-Width Art / Sketches** | Medial axis stroke recovery (`--strokes`) requires uniform width; rough sketches fall back to filled outlines. | Use manual vector pen tools or specialized sketch tracers. |
 | **Sub-Pixel Gaps (< 1px)** | Optical anti-aliasing ramps overlap, merging fine gaps into single faces. | Enable `--sr on` (MambaIR) to upsample before tracing. |
 | **Exotic Gradients & Blurs** | Linear and radial gradients are supported; mesh gradients, angular sweeps, and drop shadows are quantised into bands. | SVG 1.1 limitation; manual gradient mesh authoring. |
-| **Real-Time / 60 FPS Video** | Heavy global optimization (L-BFGS boundary solve + MDL DP) takes $\approx 1.2\text{s}$ per graphic. | Use Potrace (<0.01s) or VTracer (~0.04s) for interactive speed. |
+| **Real-Time / 60 FPS Video** | Quality mode's global optimization (L-BFGS boundary solve + MDL DP) takes $\approx 1.2\text{s}$ per graphic. | `--mode fast` (tens of milliseconds at 512 px; see [Speed](#speed-quality-and-fast)), or Potrace (<0.01s). |
 
 ---
 

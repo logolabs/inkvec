@@ -42,6 +42,16 @@ API in particular should be treated as unstable release to release).
   - keyboard pan and a keyboard wipe slider;
   - a usable phone layout;
   - a bad first file shows an error instead of nothing.
+- **Input the tracer used to refuse, crash on or draw wrong.** On the regression gate every output is byte-identical.
+  - **Photos taken sideways** are traced upright: the EXIF orientation is applied. A rotated phone JPEG's dE00 was 2.9–17.6; now 0.03–0.44, the same as the untagged file.
+  - **Embedded ICC profiles** are converted to sRGB. Gamma-1.8 PNGs average dE00 0.85 → 0.12. Files tagged with an ordinary sRGB profile are unchanged.
+  - **A file with the wrong extension** (a JPEG named `.png`) is decoded by its signature.
+  - **A zero-wide image** is refused with a decode error instead of a panic.
+  - **Large images:** with `--max-dim`, decodes may use up to 1.25 GiB, so a 12000 px RGBA image is traced instead of refused.
+- **Pathological images finish, in bounded memory.**
+  - The boundary solve is skipped when its tables would pass a memory budget. A 512 px pixel checker peaked at 557 MB; it now peaks at 35 MB. A 512 px stripe pattern crashed; it now traces.
+  - The gradient merge has a deterministic work cap and checks `--time-budget` inside each wave. Eight photographs that ran past 10 minutes now finish in 39–78 CPU seconds.
+  - Past 65,535 faces, the smallest regions are merged into a neighbour; before, they were all folded into one face.
 
 ## [0.2.4] - 2026-10-01
 

@@ -154,14 +154,6 @@ fn the_merge_budget_charges_up_to_its_cap() {
     assert_eq!(late.stop, Some(MergeStop::Clock));
     // Saturating, so an enormous image cannot wrap the cap round to a small number.
     assert_eq!(MergeBudget::new(usize::MAX, usize::MAX, None).cap, u64::MAX);
-    // Work a self-bounded step already did is added even past the cap, and the next
-    // charge, of any size, is refused and records the stop.
-    let mut over = MergeBudget::new(10, 10, None);
-    over.cap = 100;
-    over.charge_spent(150);
-    assert_eq!((over.spent, over.stop), (150, None));
-    assert!(!over.charge(0));
-    assert_eq!(over.stop, Some(MergeStop::Work));
 }
 
 /// A ramp in thin flat bands, which region recovery joins into one gradient: the

@@ -10,7 +10,7 @@
 //! gradients, v0.2.4 recovers 42 % of the artist's visible gradients as one of ours and
 //! paints 30 % flat. Handing our pipeline the artist's own regions lifts that to 73 %
 //! (the segmentation oracle), so the region question is the main lever; the fill question
-//! is the rest. Six parts address them, each switched separately for ablation:
+//! is the rest. Four parts address them, each switched separately for ablation:
 //!
 //! 1. **`profile`: a centre search scored under the artist's kind of profile.** The radial
 //!    and elliptic fitters ([`super::fit`]) choose their geometry by the residual of a
@@ -43,42 +43,33 @@
 //!    seam. Chakraborty et al. (§3.2) never put two segments that face each other across
 //!    the discontinuity map into one region; with `seam` the band merger does not fit a
 //!    union of two components of at least `MIN_GRADIENT_PIXELS` pixels each whose seam is
-//!    mostly discontinuity ([`sharp_seams`], the threshold `segments::TAU_D`). Bands of a
+//!    mostly discontinuity ([`sharp_seams`], the threshold [`TAU_D`]). Bands of a
 //!    quantised ramp are crossed in small steps and never meet it; a fleck under 16 px is
 //!    exempt, so anti-aliasing remnants are still absorbed as before.
-//! 5. **`segments`: region proposals from smooth segments** ([`super::segments`],
-//!    [`super::proposals`]). A discontinuity-aware segmentation of the image, found without
-//!    the palette, proposes groups of band components that one gradient may fill; each
-//!    accepted group is merged before the pairwise agglomeration starts.
-//! 6. **`mdl`: proposals accepted by MDL, not by a residual threshold.** The ported
-//!    acceptance (Chakraborty et al. §3.4: "the minimum L1 error, provided the error is
-//!    below a threshold") over-merged across weak edges: as-one rose to 56 % but dE00 rose
-//!    2.3 %. With `mdl` a proposal must lower the description length of the pixels it
-//!    covers against the fills it replaces, both priced on the same pixels
-//!    ([`super::proposals::group_gain`]), which is the band merger's own criterion.
+//!
+//! The prototype's parts 5 and 6, `segments` (smooth-segment region proposals,
+//! Chakraborty et al. §3.2, ported from acda7ac) and `mdl` (the proposals accepted by MDL
+//! gain), were removed in Wave B: on top of the four parts above they gave no demonstrable
+//! gain on the regression gate against v0.2.5 (quality-128ss dE00 −0.76 % against −1.08 %
+//! without them, 9 icons worse against 4; quality-512ss −2.85 % against −2.71 % and
+//! quality-512ssop −1.92 % against −1.43 %, both inside the gate's intervals), 34 of the 168
+//! gradient icons worse against 19, and their multicut never cut as ported (the A10 report,
+//! F2). They are in the history at e1bfcb5 (branch `impl2/gregions`).
 //!
 //! # The switch
 //!
-//! `INKVEC_GREGIONS=1` (or `on`, `all`) turns on all six parts; a comma-separated list
-//! of part names (`profile,guard,cover,seam,segments,mdl`) turns on those only; unset,
+//! `INKVEC_GREGIONS=1` (or `on`, `all`) turns on all four parts; a comma-separated list
+//! of part names (`profile,guard,cover,seam`) turns on those only; unset,
 //! empty or `0` is off. It is read once per process ([`inkvec_core::env`]) and only in a build with
 //! the `research` feature: the engine reads experiments' variables there only.
 //!
 //! # Literature
 //!
-//! * Method from: S. Chakraborty et al. (2025), Image Vectorization via Gradient
+//! * Inspired by: S. Chakraborty et al. (2025), Image Vectorization via Gradient
 //!   Reconstruction, Computer Graphics Forum 44(2), doi:10.1111/cgf.70055 -- §3.2, the
-//!   discontinuity-aware segmentation (part 5), whose rule that segments facing each other
-//!   across the discontinuity map are never one region also inspired part 4. Its §3.3
-//!   (geometry from the gradient field, independent of the profile) inspired part 1; its
-//!   §3.4 threshold acceptance is what part 6 replaces.
-//! * Inspired by: S. C. Zhu, A. Yuille (1996), Region Competition: Unifying Snakes, Region
-//!   Growing, and Bayes/MDL for Multiband Image Segmentation, IEEE TPAMI 18(9),
-//!   doi:10.1109/34.537343 -- step 6 of their algorithm merges two adjacent regions when
-//!   the merge lowers the Bayes/MDL energy and stops when none does; part 6 applies that
-//!   test to a k-way proposal.
-//! * Inspired by: G. Lecot, B. Lévy (2006), Ardeco: Automatic Region DEtection and
-//!   COnversion, EGSR -- region growing under a fit criterion (the growth step of part 5).
+//!   rule that segments facing each other across the discontinuity map are never one
+//!   region (part 4); §3.3 (geometry from the gradient field, independent of the profile)
+//!   inspired part 1.
 //! * Method from: G. H. Golub, V. Pereyra (1973), The differentiation of pseudo-inverses
 //!   and nonlinear least squares problems whose variables separate, SIAM J. Numer. Anal.
 //!   10(2), doi:10.1137/0710036 -- variable projection: the profile is solved in closed
@@ -100,11 +91,6 @@ pub(crate) struct Parts {
     pub(crate) cover: bool,
     /// Part 4: no union across a seam that is mostly discontinuity ([`sharp_seams`]).
     pub(crate) seam: bool,
-    /// Part 5: smooth-segment region proposals before the agglomeration.
-    pub(crate) segments: bool,
-    /// Part 6: proposals accepted by MDL gain on common pixels (else by the ported
-    /// residual threshold).
-    pub(crate) mdl: bool,
 }
 
 /// The parts switched on for this process: `INKVEC_GREGIONS`, read once, in a `research`
@@ -134,8 +120,6 @@ fn parse(v: Option<&str>) -> Parts {
             guard: true,
             cover: true,
             seam: true,
-            segments: true,
-            mdl: true,
         },
         list => {
             let mut p = Parts::default();
@@ -145,8 +129,6 @@ fn parse(v: Option<&str>) -> Parts {
                     "guard" => p.guard = true,
                     "cover" => p.cover = true,
                     "seam" => p.seam = true,
-                    "segments" => p.segments = true,
-                    "mdl" => p.mdl = true,
                     _ => {}
                 }
             }
@@ -154,6 +136,12 @@ fn parse(v: Option<&str>) -> Parts {
         }
     }
 }
+
+/// Colour step to a 4-neighbour, OKLab × 100 (about CIELAB units), above which a pixel
+/// pair is a discontinuity: Chakraborty et al.'s `τ_d` for the discontinuity map `D`, with
+/// acda7ac's value for 128 px icons (the paper's 10 is for 512–2048 px images; the round-2
+/// research found 4 no better). Not tuned.
+pub(crate) const TAU_D: f32 = 6.0;
 
 /// Narrowest stretch of a profile piece, px, that still reads as shading rather than as an
 /// edge.
@@ -228,12 +216,12 @@ pub(crate) fn step_like(model: &FillModel, min_contrast: f64) -> bool {
 }
 
 /// Per pair of touching components, how many of the 4-neighbour pixel pairs across their
-/// seam step by more than the discontinuity threshold `segments::TAU_D` (OKLab × 100):
+/// seam step by more than the discontinuity threshold [`TAU_D`] (OKLab × 100):
 /// `sharp[a][b]` counts the pairs `(p, q)`, `p` in `a` and `q` in `b`, with
 /// `|lab(p) − lab(q)| > τ_d` (symmetric; pairs that never step that much are absent).
 /// Compared with the seam's full length (`adj[a][b]`, every pair across it), it says
 /// whether the seam is an edge: a pixel pair stepping above `τ_d` is exactly what puts a
-/// pixel in Chakraborty et al.'s discontinuity map `D` (here, `segments::smooth_segments`).
+/// pixel in Chakraborty et al.'s discontinuity map `D`.
 ///
 /// `comp` is the component of each pixel, `n_comp` the number of components. One pass
 /// over the image, rows then columns (no `%` per pixel). Inspired by: Chakraborty et al.
@@ -250,7 +238,7 @@ pub(crate) fn sharp_seams(
         let o = crate::color::rgb_to_oklab(c);
         [o.l * 100.0, o.a * 100.0, o.b * 100.0]
     };
-    let tau2 = super::segments::TAU_D * super::segments::TAU_D;
+    let tau2 = TAU_D * TAU_D;
     let mut sharp = vec![std::collections::HashMap::new(); n_comp];
     let count = |p: usize, q: usize, sharp: &mut Vec<std::collections::HashMap<u32, u32>>| {
         let (a, b) = (comp[p], comp[q]);
@@ -290,8 +278,6 @@ mod tests {
             guard: true,
             cover: true,
             seam: true,
-            segments: true,
-            mdl: true,
         };
         assert_eq!(parse(None), Parts::default());
         assert_eq!(parse(Some("")), Parts::default());

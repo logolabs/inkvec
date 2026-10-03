@@ -62,9 +62,9 @@
 //! * `eval`: the hoisted per-pixel evaluator every scoring loop uses;
 //! * `evidence`: which pixels testify about a fill and which are blends;
 //! * `bands`: the band-merging agglomeration; `regions`: its region-recovery switches;
-//! * `gregions`, `segments`, `proposals`: research prototype A10 (`INKVEC_GREGIONS`, a
-//!   `research` build only) -- spline-scored radial centres, a step-profile guard, and
-//!   smooth-segment region proposals accepted by MDL;
+//! * `gregions`: research prototype A10 (`INKVEC_GREGIONS`, a `research` build only) --
+//!   profile-aware radial centres, a step-profile guard, common-pixel and seam tests in
+//!   the band merger;
 //! * `carve`: residual features carved out as their own regions;
 //! * `budget`: sampling caps and timing counters; `debug`: `INKVEC_GRADDBG` output;
 //! * `svg`: the SVG writer for fills and fades.
@@ -1149,10 +1149,8 @@ pub(crate) mod eval;
 mod evidence;
 mod fit;
 mod gregions;
-mod proposals;
 pub(crate) mod regions;
 mod score;
-mod segments;
 pub(crate) mod stops;
 pub mod svg;
 

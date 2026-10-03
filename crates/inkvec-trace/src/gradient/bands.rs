@@ -82,7 +82,7 @@ const MERGE_WORK_FLOOR: u64 = 1 << 28;
 /// photographed wordmark (`brands/sangchaimeter`, 2026-10-02). Only the order of magnitude
 /// matters: the charge is deterministic, and the cap is set in the same units from the
 /// gate's own spending.
-pub(super) fn union_work(n: usize) -> u64 {
+fn union_work(n: usize) -> u64 {
     let gathered = if n <= FIT_PIXELS_CAP {
         n
     } else {
@@ -105,7 +105,7 @@ const MODEL_WORK_PER_SAMPLE: u64 = 13;
 /// photographed `lucide/omega` that was 225 of the stage's 245 s (`INKVEC_TIMING`, "pick",
 /// 2026-10-03) against 20 s of union fits: the union fits alone were not the work to
 /// bound.
-pub(super) fn gain_work(n: usize) -> u64 {
+fn gain_work(n: usize) -> u64 {
     n as u64 + n.min(MAX_FIT_SAMPLES) as u64
 }
 
@@ -160,14 +160,6 @@ impl MergeBudget {
         }
         self.spent = after;
         true
-    }
-
-    /// Charge `work` already done by a step that bounds itself (the research proposals,
-    /// see `Agglomeration::propose_regions`): added even past the cap (saturating), so
-    /// whatever follows sees only what is left, and the stop is recorded by the first
-    /// [`Self::charge`] that no longer fits.
-    fn charge_spent(&mut self, work: u64) {
-        self.spent = self.spent.saturating_add(work);
     }
 
     /// Whether the deadline has passed (recording the stop). Never reads the clock
@@ -475,15 +467,6 @@ fn merge_bands_budgeted(
             && inkvec_core::env::flag("INKVEC_MERGE_COMMON_PIXELS"),
         budget,
     };
-    // Research prototype A10, part `segments` (`INKVEC_GREGIONS`, a `research` build
-    // only): groups of components that one gradient explains inside a smooth segment are
-    // merged before the pairwise rounds, and their work is charged to the same cap
-    // (`Agglomeration::propose_regions`). Off, this is never entered. The deadline is only
-    // read when there is one (no clock without a time budget).
-    let gr = gregions::parts();
-    if gr.segments && !merge.budget.out_of_time() {
-        merge.propose_regions(gr.mdl);
-    }
     merge.run(&live);
 
     if let Some(win) = debug::window() {
@@ -661,55 +644,6 @@ impl UnionFitter<'_> {
             fit.cost = params_term + 0.5 * fit.chi2;
         }
         fit
-    }
-
-    /// `model` priced on exactly the samples [`Self::fit`] would gather for component `a`
-    /// alone (pixels `pixels`, evidence: pure, or with `inner` a blend whose partners all
-    /// lie in `a`), with the same three tiers (strict evidence, any evidence, any pixel),
-    /// the same subsampling and the same `total/seen` scaling: `cost = 0.5·chi² +
-    /// λ·params`.
-    ///
-    /// For a fill fitted on *other* evidence -- a research proposal fitted on a smooth
-    /// segment's pixels, prototype A10 -- so that its cost reads on the population every
-    /// other component's cost was measured on, and the pairwise gains of the later rounds
-    /// (`cost(a) + cost(b) − cost(a ∪ b)`) compare like with like. Not from the
-    /// literature: bookkeeping for the MDL comparison.
-    fn rescore(
-        &self,
-        group: &[u32],
-        pixels: &[usize],
-        a: u32,
-        inner: bool,
-        model: FillModel,
-    ) -> FillFit {
-        let sigma = if self.sigma_noise > 0.0 {
-            self.sigma_noise
-        } else {
-            0.5 / 255.0
-        };
-        let total = pixels.len();
-        let seen = strided_union([pixels, &[]]);
-        let member = |p: usize| group[p] == a;
-        let evidence = |p: usize| self.pure[p] || (inner && self.inner_of(group, p, a, a));
-        let (rgb, w, h) = (self.rgb, self.w, self.h);
-        let mut s = collect_samples(rgb, w, h, &seen, member, evidence, true);
-        if s.len() == 0 {
-            s = collect_samples(rgb, w, h, &seen, member, evidence, false);
-        }
-        if s.len() == 0 {
-            s = collect_samples(rgb, w, h, &seen, member, |_| true, false);
-        }
-        let mut chi2 = Predictions::new(&model, &s).chi2(&s, sigma);
-        if !seen.is_empty() && seen.len() < total {
-            chi2 *= total as f64 / seen.len() as f64;
-        }
-        let params = model.params();
-        FillFit {
-            model,
-            chi2,
-            params,
-            cost: 0.5 * chi2 + self.lambda * params,
-        }
     }
 }
 
@@ -1184,102 +1118,6 @@ impl Agglomeration<'_> {
             }
         }
         work
-    }
-
-    /// Research prototype A10, part `segments`: find the smooth segments, ask
-    /// [`super::proposals::propose`] which groups of components one gradient explains in
-    /// each, and merge every accepted group into its lowest component
-    /// ([`Self::absorb_group`]). Runs before the first round, on the per-component fits.
-    /// With `mdl` the proposals are accepted by MDL gain, and each absorbed group's fit is
-    /// re-priced on the merger's own evidence ([`UnionFitter::rescore`]); without it, by
-    /// the ported residual threshold and with the proposal's own cost. Nothing happens
-    /// when the segmentation exceeds its work bound.
-    ///
-    /// The work is charged to the agglomeration's cap ([`MergeBudget`]) in its units: the
-    /// segmentation's passes as one unit a pixel, each proposal fit as a union fit of its
-    /// size ([`union_work`]), each MDL price as a common-pixel gain ([`gain_work`]). The
-    /// proposals bound themselves (`segments::MAX_CUT_VISITS`, `proposals::MAX_GROW_FITS`),
-    /// so the charge is made after they ran, and may pass the cap; the rounds that follow
-    /// then stop at their first charge, as after any spending that used the cap up.
-    fn propose_regions(&mut self, mdl: bool) {
-        let (rgb, w, h) = (self.fitter.rgb, self.fitter.w, self.fitter.h);
-        self.budget.charge_spent((w as u64).saturating_mul(h as u64));
-        let Some(seg) = segments::smooth_segments(rgb, w, h) else {
-            return;
-        };
-        let (found, work) = proposals::propose(&proposals::Inputs {
-            rgb,
-            w,
-            h,
-            seg: &seg,
-            members: &self.members,
-            alive: &self.alive,
-            adj: &self.adj,
-            group: &self.group,
-            fits: &self.fits,
-            sigma: self.fitter.sigma_noise,
-            lambda: self.fitter.lambda,
-            mdl,
-            debug: self.mergedbg,
-        });
-        self.budget.charge_spent(work);
-        for (ids, fit) in found {
-            self.absorb_group(&ids, fit, mdl);
-        }
-    }
-
-    /// Merge the components `ids[1..]` into `ids[0]` and give it `fit` (re-priced with
-    /// [`UnionFitter::rescore`] when `reprice`). `ids` must be sorted and live, and no
-    /// round may have run: every cached union and gain touching `ids` is dropped (before
-    /// the first round there are none), and the pixels, seams and smooth-seam counts move
-    /// exactly as [`Self::apply_merge`] moves them for a pair.
-    fn absorb_group(&mut self, ids: &[u32], fit: FillFit, reprice: bool) {
-        let a = ids[0];
-        let ai = a as usize;
-        for &b in &ids[1..] {
-            let bi = b as usize;
-            if !self.alive[bi] || bi == ai {
-                continue;
-            }
-            let taken = std::mem::take(&mut self.members[bi]);
-            for &p in &taken {
-                self.group[p] = a;
-            }
-            self.members[ai].extend(taken);
-            self.alive[bi] = false;
-            let b_adj = std::mem::take(&mut self.adj[bi]);
-            let mut b_adj: Vec<_> = b_adj.into_iter().collect();
-            b_adj.sort_by_key(|&(c, _)| c);
-            for (c, shared) in b_adj {
-                if c == a {
-                    continue;
-                }
-                *self.adj[ai].entry(c).or_insert(0) += shared;
-                let e = &mut self.adj[c as usize];
-                e.remove(&b);
-                *e.entry(a).or_insert(0) += shared;
-            }
-            self.adj[ai].remove(&b);
-            regions::absorb_counts(&mut self.smooth, ai, bi);
-            if !self.sharp.is_empty() {
-                regions::absorb_counts(&mut self.sharp, ai, bi);
-            }
-        }
-        self.cache
-            .retain(|&(x, y), _| !ids.contains(&x) && !ids.contains(&y));
-        self.gains
-            .retain(|&(x, y), _| !ids.contains(&x) && !ids.contains(&y));
-        self.fits[ai] = if reprice {
-            self.fitter.rescore(
-                &self.group,
-                &self.members[ai],
-                a,
-                self.inner_blends,
-                fit.model,
-            )
-        } else {
-            fit
-        };
     }
 
     /// The best `(gain, a, b)` over every cached candidate pair, fresh or stale.

@@ -855,10 +855,13 @@ impl Agglomeration<'_> {
     /// edge, absorbable as before.
     ///
     /// Why (research prototype A10, the princess emoji `u1f478_1f3fd`): the crown's lower
-    /// band, a 139 px component that is all blends, was absorbed into the hair across a
+    /// band, a 139 px component that is all blends (its flat fit priced on all of them,
+    /// cost 62672), was absorbed into the hair (cost 67 alone, union chi² 79251) across a
     /// seam stepping 20+ OKLab units per pixel along its whole length, once the
     /// profile-aware candidates gave the union a gradient that fitted it (+0.15 dE00 at
-    /// 128 px); this test stops it (0.700 -> 0.496).
+    /// 128 px); this test stops it (0.700 -> 0.496). Neither of the prototype's other two
+    /// guards did: pricing the union on common pixels (it wins there too, the band's own
+    /// flat misfitting the band worse) or refusing step-like profiles.
     fn across_edge(&self, a: usize, b: usize) -> bool {
         self.members[a].len() >= MIN_GRADIENT_PIXELS
             && self.members[b].len() >= MIN_GRADIENT_PIXELS
@@ -1089,12 +1092,10 @@ impl Agglomeration<'_> {
 
     /// The [`gain_work`] of every common-pixel gain the next [`Self::best_gain`] will
     /// compute: each candidate pair it visits whose union is cached and a gradient, priced on
-    /// common pixels ([`Self::pair_gain`]: a smooth pair, every pair under
-    /// `INKVEC_MERGE_COMMON_PIXELS`, and every pair under the research part `cover`) and not
-    /// yet in `gains`. The same filters as `best_gain`, in the same order; a sum, so the
-    /// order of the hash maps does not matter.
+    /// common pixels ([`Self::pair_gain`]: a smooth pair, or every pair under
+    /// `INKVEC_MERGE_COMMON_PIXELS`) and not yet in `gains`. The same filters as
+    /// `best_gain`, in the same order; a sum, so the order of the hash maps does not matter.
     fn pending_gain_work(&self) -> u64 {
-        let every_pair = self.common_pixels || gregions::parts().cover;
         let mut work = 0u64;
         for a in 0..self.members.len() {
             if !self.alive[a] {
@@ -1112,7 +1113,7 @@ impl Agglomeration<'_> {
                     .cache
                     .get(&(a as u32, b as u32))
                     .is_some_and(|(u, _)| u.model.is_gradient());
-                if gradient_union && (every_pair || self.smooth_pair(a, b)) {
+                if gradient_union && (self.common_pixels || self.smooth_pair(a, b)) {
                     work = work
                         .saturating_add(gain_work(self.members[a].len() + self.members[b].len()));
                 }
@@ -1185,17 +1186,7 @@ impl Agglomeration<'_> {
         }
         let legacy_gain = fits[a].cost + fits[b as usize].cost - union.cost;
         let inner = self.smooth_pair(a, b as usize);
-        // Research prototype A10, part `cover` (`gregions`): the legacy gain compares costs
-        // measured on three different pixel populations, so a member with no evidence of
-        // its own (a thin band: every pixel a blend, its flat fit priced on all of them)
-        // can pay for a union that wrecks its partner. On the princess emoji the crown's
-        // lower band (139 px, cost 62672) bought a union with the hair (cost 67 alone,
-        // union chi² 79251): +0.15 dE00. With the part on, a union must also win on common
-        // pixels; the legacy gain still ranks the pairs that pass. (That union passes this
-        // test too -- the band's own flat misfits the band worse -- and is stopped by
-        // `Self::across_edge`.)
-        let cover = gregions::parts().cover && !(self.common_pixels || inner);
-        let gain = if self.common_pixels || inner || cover {
+        let gain = if self.common_pixels || inner {
             let (fitter, group) = (&self.fitter, &self.group);
             // Priced once per union fit: it reads only the pair's members and
             // fits, and both are fixed until one of them merges, which drops it.
@@ -1221,20 +1212,6 @@ impl Agglomeration<'_> {
             })
         } else {
             legacy_gain
-        };
-        let gain = if cover {
-            if self.mergedbg && gain <= 0.0 && legacy_gain > 0.0 {
-                eprintln!(
-                    "gregions cover: a={a} b={b} legacy {legacy_gain:.0} common {gain:.0}: refused"
-                );
-            }
-            if gain > 0.0 {
-                legacy_gain
-            } else {
-                return None;
-            }
-        } else {
-            gain
         };
         if self.mergedbg && self.common_pixels {
             eprintln!("common: a={a} b={b} legacy={legacy_gain:.3} common={gain:.3}");

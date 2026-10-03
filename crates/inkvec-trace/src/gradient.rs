@@ -62,9 +62,6 @@
 //! * `eval`: the hoisted per-pixel evaluator every scoring loop uses;
 //! * `evidence`: which pixels testify about a fill and which are blends;
 //! * `bands`: the band-merging agglomeration; `regions`: its region-recovery switches;
-//! * `gregions`: the parts of research prototype A10 still behind `INKVEC_GREGIONS` (a
-//!   `research` build only) -- a step-profile guard and a common-pixel test in the band
-//!   merger;
 //! * `carve`: residual features carved out as their own regions;
 //! * `budget`: sampling caps and timing counters; `debug`: `INKVEC_GRADDBG` output;
 //! * `svg`: the SVG writer for fills and fades.
@@ -866,12 +863,6 @@ fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> 
     // the MDL below would accept them by a wide margin. (`INKVEC_MIN_CONTRAST` scaled the
     // floor so the full set could price it; the default never moved.)
     let min_contrast = (3.0 * sigma).max(MIN_VISIBLE_CONTRAST);
-    // Research prototype A10, part `guard`: a candidate whose profile changes visibly
-    // within the width of an anti-aliased edge is drawing that edge, not shading, and is
-    // refused like one below the contrast floor (see `gregions::step_like`). Off, the
-    // test is never made.
-    let guard = gregions::parts().guard;
-    let edge = |m: &FillModel| guard && gregions::step_like(m, min_contrast);
     // Every candidate and its multi-stop variants, per interpolation space and per model, are
     // independent of one another, and the stop search is serial within one candidate: fit
     // them side by side, then take them in the order the one-at-a-time loop did, which is
@@ -892,7 +883,7 @@ fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> 
             let preds = Predictions::new(&cand, s);
             let contrast = preds.contrast();
             let support = preds.support(flat_c, contrast);
-            if contrast < min_contrast || support < MIN_RAMP_SUPPORT || edge(&cand) {
+            if contrast < min_contrast || support < MIN_RAMP_SUPPORT {
                 // Which gate refused a candidate is otherwise invisible: a region that
                 // ends up "cands 1" looks identical whether no ramp was ever tried or
                 // every ramp was thrown away here. `INKVEC_EVDBG=1`.
@@ -919,7 +910,7 @@ fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> 
             for m in multi {
                 let pm = Predictions::new(&m, s);
                 let c = pm.contrast();
-                if c >= min_contrast && pm.support(flat_c, c) >= MIN_RAMP_SUPPORT && !edge(&m) {
+                if c >= min_contrast && pm.support(flat_c, c) >= MIN_RAMP_SUPPORT {
                     out.push(scored(m, &pm));
                 }
             }
@@ -1145,7 +1136,6 @@ mod debug;
 pub(crate) mod eval;
 mod evidence;
 mod fit;
-mod gregions;
 pub(crate) mod regions;
 mod score;
 pub(crate) mod stops;

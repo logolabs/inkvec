@@ -278,7 +278,7 @@ fn thomas(fit: &SplineFit, b: &[f64; SPLINE_KNOTS]) -> [f64; SPLINE_KNOTS] {
 /// pivoting. `None` when a pivot vanishes (relative to the largest diagonal).
 fn solve_small(mut a: [[f64; 4]; 4], mut b: [f64; 4], p: usize) -> Option<[f64; 4]> {
     let scale = (0..p).map(|i| a[i][i].abs()).fold(0.0, f64::max);
-    if !(scale > 0.0) || !scale.is_finite() {
+    if scale <= 0.0 || !scale.is_finite() {
         return None;
     }
     for col in 0..p {
@@ -627,7 +627,11 @@ mod tests {
         let err = (g[0] - centre.0).hypot(g[1] - centre.1);
         assert!(err < 0.2, "centre {g:?} off by {err}");
         assert!((g[2] - angle).abs().to_degrees() < 2.0, "angle {}", g[2]);
-        assert!((g[3].exp() / aspect - 1.0).abs() < 0.03, "aspect {}", g[3].exp());
+        assert!(
+            (g[3].exp() / aspect - 1.0).abs() < 0.03,
+            "aspect {}",
+            g[3].exp()
+        );
     }
 
     #[test]
@@ -767,7 +771,12 @@ mod tests {
         let x = solve_small(a, [1.0, 2.0, 0.0, 0.0], 2).expect("regular");
         assert!((4.0 * x[0] + x[1] - 1.0).abs() < 1e-12);
         assert!((x[0] + 3.0 * x[1] - 2.0).abs() < 1e-12);
-        let sing = [[1.0, 2.0, 0.0, 0.0], [2.0, 4.0, 0.0, 0.0], [0.0; 4], [0.0; 4]];
+        let sing = [
+            [1.0, 2.0, 0.0, 0.0],
+            [2.0, 4.0, 0.0, 0.0],
+            [0.0; 4],
+            [0.0; 4],
+        ];
         assert!(solve_small(sing, [1.0, 1.0, 0.0, 0.0], 2).is_none());
     }
 }

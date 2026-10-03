@@ -27,10 +27,11 @@
 //! non-singular.
 //!
 //! **The step.** Each point's residual depends on the few variables of the one segment
-//! nearest to it; its derivatives are central differences of that segment's exact point
-//! distance (step 1e-5 px). By the envelope theorem the foot point's own movement adds
-//! nothing to first order, so the differences measure `-n·∂C/∂θ` at the foot, `n` the unit
-//! vector from the foot to the point. The normal equations `(JᵀJ + μ·diag(JᵀJ)) δ = -Jᵀr`
+//! nearest to it. By the envelope theorem the foot point's own movement adds nothing to
+//! first order, so the derivative is `-n·∂C/∂θ` at the foot, `n` the unit vector from the
+//! foot to the point: written out per segment kind in [`super::dist`] and assembled by
+//! [`analytic_row`]; only the miter gauge at a vertex and elliptical arcs keep central
+//! differences of the exact distance (step 1e-5 px). The normal equations `(JᵀJ + μ·diag(JᵀJ)) δ = -Jᵀr`
 //! couple each variable only to its own segment's neighbours and to `h`, so they are kept
 //! in profile storage and solved by an envelope Cholesky ([`super::skyline`], exactly the
 //! dense factorisation's result at a fraction of its cost; [`profile`] gives the shape). A step
@@ -51,13 +52,13 @@
 //! IEEE TPAMI 20(2), doi:10.1109/34.659930, which recovers a line's centre and width
 //! jointly rather than from two independent edges, as `h` is solved jointly here.
 
-use inkvec_core::Point;
+use inkvec_core::{Point, Vec2};
 use inkvec_fit::curves::{arc_ellipse_center, Segment};
 use inkvec_fit::primitives::{PrimitiveFit, PrimitiveKind};
 use inkvec_fit::FittedPath;
 
 use super::boundary::Boundary;
-use super::dist::{cubic_eval, dist_to};
+use super::dist::{circle_grad, circular_arc_grad, cubic_eval, cubic_grad, dist_to, line_grad};
 use super::grid::SegGrid;
 use super::join::{miter_gauge, tangents, Join};
 use super::score::flatten;
@@ -887,10 +888,102 @@ fn profile(model: &Model) -> Vec<usize> {
     first
 }
 
+/// The derivatives of row (`shape`, `seg`)'s distance term at boundary point `p` with
+/// respect to the variables it reads, in closed form ([`super::dist`]'s gradients, by the
+/// envelope theorem), appended to `out` as `(variable, ∂d/∂θ)` with every variable once.
+/// `false` (and `out` untouched) where the closed form is not used: an elliptical arc,
+/// the degenerate cases the gradients decline, and -- decided by the caller -- a miter
+/// gauge at a vertex; the caller then takes central differences.
+///
+/// A segment's start point is the previous segment's end variable (the path's start for
+/// the first); a closed path's last end *is* its start, so a variable can receive two
+/// contributions (a one-segment loop), which are summed.
+fn analytic_row(
+    model: &Model,
+    shape: usize,
+    seg: usize,
+    p: Point,
+    t_hint: f64,
+    out: &mut Vec<(usize, f64)>,
+) -> bool {
+    let t = &model.theta;
+    let mut g: Vec<(usize, f64)> = Vec::with_capacity(9);
+    let put = |g: &mut Vec<(usize, f64)>, i: usize, v: Vec2| {
+        g.push((i, v.x));
+        g.push((i + 1, v.y));
+    };
+    match &model.shapes[shape] {
+        Shape::Path { start, segs, .. } => {
+            let a_i = if seg == 0 {
+                *start
+            } else {
+                seg_end(&segs[seg - 1])
+            };
+            let a = pt(t, a_i);
+            match segs[seg] {
+                SegVar::Line { end } => {
+                    let Some((_, d)) = line_grad(p, a, pt(t, end)) else {
+                        return false;
+                    };
+                    put(&mut g, a_i, d[0]);
+                    put(&mut g, end, d[1]);
+                }
+                SegVar::Cubic { c1, c2, end } => {
+                    let q = [a, pt(t, c1), pt(t, c2), pt(t, end)];
+                    let Some((_, d)) = cubic_grad(p, q, t_hint) else {
+                        return false;
+                    };
+                    for (i, v) in [a_i, c1, c2, end].into_iter().zip(d) {
+                        put(&mut g, i, v);
+                    }
+                }
+                SegVar::Arc {
+                    end,
+                    r: Some(ri),
+                    large,
+                    sweep,
+                    ..
+                } => {
+                    let Some((_, d, dr)) = circular_arc_grad(p, a, t[ri], large, sweep, pt(t, end))
+                    else {
+                        return false;
+                    };
+                    put(&mut g, a_i, d[0]);
+                    put(&mut g, end, d[1]);
+                    g.push((ri, dr));
+                }
+                SegVar::Arc { r: None, .. } => return false,
+            }
+        }
+        Shape::Circle { at, .. } => {
+            let Some((_, dc, dr)) = circle_grad(p, pt(t, *at), t[at + 2]) else {
+                return false;
+            };
+            put(&mut g, *at, dc);
+            g.push((at + 2, dr));
+        }
+        Shape::Fixed(_) => return false,
+    }
+    g.sort_by_key(|e| e.0);
+    for (i, v) in g {
+        match out.last_mut() {
+            Some(last) if last.0 == i => last.1 += v,
+            _ => out.push((i, v)),
+        }
+    }
+    true
+}
+
 /// `JᵀJ` (lower triangle in the envelope `first`, [`profile`]) and `Jᵀr` for the data
-/// rows and the anchor, with `J` by central differences of each row's segment distance
-/// (see the module docs). Each entry receives the same products in the same order as the
-/// dense matrix it replaces did, so it holds the same value bit for bit.
+/// rows and the anchor.
+///
+/// Each row's `J` is the closed form of [`analytic_row`] where it applies -- every row
+/// under round joins except on elliptical arcs and degenerate feet -- and otherwise central
+/// differences of the segment's exact distance (step 1e-5 px; see the module docs): the
+/// miter gauge at a vertex, whose tangent-dependent derivative is not written out. The
+/// closed form costs one foot per row where the differences cost two exact distances per
+/// variable (16 Newton solves for a cubic's row); on lucide at 512 px this pass took
+/// 10-25 ms per iteration.
 fn normal_equations(
     model: &mut Model,
     b: &Boundary,
@@ -912,15 +1005,27 @@ fn normal_equations(
         }
         let mut jac: Vec<(usize, f64)> = vec![(hi, -1.0 / s)];
         if row.seg != usize::MAX {
-            let with = local_eval(model, row.shape, row.seg, b.pts[i], row.t).1;
-            for v in locals(model, row.shape, row.seg, with) {
-                let x = model.theta[v];
-                model.theta[v] = x + eps;
-                let dp = local_dist(model, row.shape, row.seg, b.pts[i], row.t);
-                model.theta[v] = x - eps;
-                let dm = local_dist(model, row.shape, row.seg, b.pts[i], row.t);
-                model.theta[v] = x;
-                jac.push((v, (dp - dm) / (2.0 * eps * s)));
+            // Under round joins every row reads one segment's plain distance; under miter
+            // joins a row whose foot is a vertex reads the gauge of two segments instead.
+            let with = match model.join {
+                Join::Round => None,
+                Join::Miter => local_eval(model, row.shape, row.seg, b.pts[i], row.t).1,
+            };
+            if with.is_none() && analytic_row(model, row.shape, row.seg, b.pts[i], row.t, &mut jac)
+            {
+                for e in jac.iter_mut().skip(1) {
+                    e.1 /= s;
+                }
+            } else {
+                for v in locals(model, row.shape, row.seg, with) {
+                    let x = model.theta[v];
+                    model.theta[v] = x + eps;
+                    let dp = local_dist(model, row.shape, row.seg, b.pts[i], row.t);
+                    model.theta[v] = x - eps;
+                    let dm = local_dist(model, row.shape, row.seg, b.pts[i], row.t);
+                    model.theta[v] = x;
+                    jac.push((v, (dp - dm) / (2.0 * eps * s)));
+                }
             }
         }
         for &(u, ju) in &jac {

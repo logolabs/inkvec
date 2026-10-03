@@ -4225,9 +4225,10 @@ html.framed:not(.fullscreen) #app {
     flex: none;
     overflow: visible;
   }
+  /* Above the phone tip while it is shown (lib/web/chrome.ts sets --phonetip-h). */
   .railfoot {
     position: sticky;
-    bottom: 0;
+    bottom: var(--phonetip-h, 0px);
     z-index: 5;
   }
   /* The foot keeps Export, Copy SVG and, while a trace runs, its stage and Cancel; the
@@ -4272,6 +4273,8 @@ html.framed:not(.fullscreen) #app {
     height: auto;
     min-height: 100vh;
     min-height: 100svh;
+    /* The end of the page can scroll clear of the phone tip. */
+    padding-bottom: var(--phonetip-h, 0px);
   }
   .body {
     flex: none;
@@ -4304,10 +4307,10 @@ html.framed:not(.fullscreen) #app {
     flex: none;
     overflow: visible;
   }
-  /* Export stays on screen while the rail scrolls past under it. */
+  /* Export stays on screen while the rail scrolls past under it, above the phone tip. */
   .railfoot {
     position: sticky;
-    bottom: 0;
+    bottom: var(--phonetip-h, 0px);
     z-index: 5;
   }
   /* The export sheet leaves a strip of the screen above it, so it reads as a sheet. */

@@ -137,7 +137,7 @@ to the upstream saddle merge; the two sizes after it choose only speed, never th
 
 | name | value | file:line | controls | basis |
 |---|---|---|---|---|
-| `SADDLE_SIGMAS` | 3.0 | `inkvec-trace/src/regions.rs:13` | see 04-regions.md; reused unmodified here | motivated |
+| `SADDLE_SIGMAS` (research build) | 3.0 | `inkvec-trace/src/regions.rs:44` | see 04-regions.md; reused unmodified here | motivated |
 | `DIGIT` (`radix_sort_by_node`) | 11 bits (2,048 buckets) | `inkvec-trace/src/planar/cracks.rs:185` | digit width of the incidence radix sort; three passes at 2048 px | motivated (16 KiB of counters stay in L1 cache) |
 | `LANES` (`RowRuns::new`) | 16 labels | `inkvec-trace/src/planar/runs.rs:84` | how many labels a run is extended by at once | motivated (two 128-bit compares on x86-64) |
 
@@ -149,26 +149,26 @@ to the upstream saddle merge; the two sizes after it choose only speed, never th
 | `CORNER_COS` | 0.5 (60 deg) | `inkvec-trace/src/planar.rs:424` | turning angle above which the tangent window narrows to 1 point | motivated (geometric bound) |
 | `PAR_VERTICES` | 64 | `inkvec-trace/src/planar.rs:506` | fewest points before an edge's vertices are refined in parallel; smallest chunk one thread takes | motivated (a task of ~30 µs at 0.44 µs per vertex against rayon's few-µs split cost); schedule only, output identical |
 | `PAR_MAP_VERTICES` | 512 | `inkvec-trace/src/planar.rs:520` | fewest boundary vertices in the map for the refinement, and symmetry detection beside it, to use threads | measured (per-icon serial/parallel timings by vertex count, `planar.rs:512-519`); schedule only, output identical |
-| `INKVEC_SUBPX_WIN` (*removed*) (env) | default 1, range 1..=8 | `inkvec-trace/src/planar.rs:353-362` | width of the tangent-estimation window | measured (widening to 2 improved dE00 but cost DISTS and caused a face-order regression; left at 1) |
-| `DEFAULT_SIGMA_MODEL` | 0.05 px | `inkvec-trace/src/coverage.rs:39` | see 02-coverage.md | measured |
-| `CONTRAST_REF` | 0.25 | `inkvec-trace/src/planar.rs:688` | reference contrast for `simplify_faint`'s inflation | none |
-| `MAX_INFLATION` | 4.0 | `inkvec-trace/src/planar.rs:689` | cap on `simplify_faint`'s sigma multiplier | none |
-| `JUNCTION_MAX_MOVE` | 1.5 px | `inkvec-trace/src/planar.rs:753` | rejects an intersection solution beyond this move | measured (0.5px tried first, made results worse) |
-| `JUNCTION_MIN_CONDITION` | 0.02 | `inkvec-trace/src/planar.rs:757` | minimum eigenvalue ratio admitted for a junction intersection | derived (equivalent to rejecting crossings below ~16 degrees) |
-| `junction_fit_points()` | 6 | `inkvec-trace/src/planar.rs:733` | interior points for near-junction extrapolation | none |
-| `junction_skip()` | 1 | `inkvec-trace/src/planar.rs:738` | points nearest the junction excluded from the tangent fit | motivated |
-| `junction_curvature_points()` | 16 | `inkvec-trace/src/planar.rs:742` | points used to test for significant curvature | none |
-| `MIN_QUADRATIC_POINTS` | 5 | `inkvec-trace/src/planar.rs:885` | minimum points before a quadratic tangent model is tried | none |
-| `CURVATURE_SIGNIFICANCE` | 3.0 | `inkvec-trace/src/planar.rs:886` | sigma threshold for preferring a quadratic tangent | motivated ("3-sigma" convention) |
-| `TAPER_DEGREES` | 55.0 | `inkvec-trace/src/planar.rs:1203` | branch angle admitted for taper testing | motivated (deliberately loose; see 07-subpixel.md) |
-| `TAPER_MAX_MOVE` | 8.0 px | `inkvec-trace/src/planar.rs:1208` | largest move a taper estimate may make | motivated |
-| `TAPER_MAX_CONSUMED` | 0.35 | `inkvec-trace/src/planar/junctions.rs:387` | fraction of the shortest incident boundary a taper move may consume | none at the current declaration — an earlier revision's derivation comment was lost when this constant moved into `planar/junctions.rs` during the module split |
-| `TAPER_MAX_SIGMA` | 1.0 px | `inkvec-trace/src/planar.rs:1224` | largest standard error a taper estimate may carry | motivated |
-| `TRIM_MIN_POINTS` | 4 | `inkvec-trace/src/planar.rs:1112` | fewest points an edge keeps after trimming | motivated |
-| `TRIM_LOOK` | 3 | `inkvec-trace/src/planar.rs:1116` | how far ahead to look when deciding an edge's direction | motivated |
-| `MIN_WIDTH` / `MAX_WIDTH` | 0.05 / 6.0 px | `inkvec-trace/src/planar/taper.rs:98,102` | taper sample admission band | motivated |
-| `MIN_SAMPLES` | 4 | `inkvec-trace/src/planar/taper.rs:105` | fewest taper samples trusted | none |
-| `MAX_DEFECT` | 0.15 px | `inkvec-trace/src/planar/taper.rs:115` | largest tangent-circle residual admitted | measured (calibrated against three worked cases) |
+| `SUBPX_WIN` (was `INKVEC_SUBPX_WIN`, *removed*) | 1 (the variable allowed 1..=8) | `inkvec-trace/src/planar.rs:416-419` (measurement at `:854-864`) | width of the tangent-estimation window | measured (two points each side improved dE00 on a 620-icon subset but cost DISTS and caused a face-order regression on one icon; left at 1, LOG-43) |
+| `DEFAULT_SIGMA_MODEL` | 0.05 px | `inkvec-trace/src/coverage.rs:81` | see 02-coverage.md | measured |
+| `CONTRAST_REF` | 0.25 | `inkvec-trace/src/planar.rs:1246` | reference contrast for `simplify_faint`'s inflation | none |
+| `MAX_INFLATION` | 4.0 | `inkvec-trace/src/planar.rs:1247` | cap on `simplify_faint`'s sigma multiplier | none |
+| `JUNCTION_MAX_MOVE` | 1.5 px | `inkvec-trace/src/planar/junctions.rs:73` | rejects an intersection solution beyond this move | none (the doc comment says only what it bounds; the 0.5 px trial 07-subpixel.md cites is not in the code) |
+| `JUNCTION_MIN_CONDITION` | 0.02 | `inkvec-trace/src/planar/junctions.rs:78` | minimum eigenvalue ratio admitted for a junction intersection | derived (equivalent to rejecting crossings below ~16 degrees) |
+| `junction_fit_points()` | 6 | `inkvec-trace/src/planar/junctions.rs:36` | interior points for near-junction extrapolation | none |
+| `junction_skip()` | 1 | `inkvec-trace/src/planar/junctions.rs:43` | points nearest the junction excluded from the tangent fit | motivated |
+| `junction_curvature_points()` | 16 | `inkvec-trace/src/planar/junctions.rs:50` | points used to test for significant curvature | none |
+| `MIN_QUADRATIC_POINTS` | 5 | `inkvec-trace/src/planar/junctions.rs:215` | minimum points before a quadratic tangent model is tried | none |
+| `CURVATURE_SIGNIFICANCE` | 3.0 | `inkvec-trace/src/planar/junctions.rs:216` | sigma threshold for preferring a quadratic tangent | motivated ("3-sigma" convention) |
+| `TAPER_DEGREES` | 55.0 | `inkvec-trace/src/planar/junctions.rs:468` | branch angle admitted for taper testing | motivated (deliberately loose; see 07-subpixel.md) |
+| `TAPER_MAX_MOVE` | 8.0 px | `inkvec-trace/src/planar/junctions.rs:470` | largest move a taper estimate may make | motivated |
+| `TAPER_MAX_CONSUMED` | 0.35 | `inkvec-trace/src/planar/junctions.rs:472` | fraction of the shortest incident boundary a taper move may consume | none (the doc comment says what it bounds, not why 0.35) |
+| `TAPER_MAX_SIGMA` | 1.0 px | `inkvec-trace/src/planar/junctions.rs:474` | largest standard error a taper estimate may carry | motivated |
+| `TRIM_MIN_POINTS` | 4 | `inkvec-trace/src/planar/junctions.rs:402` | fewest points an edge keeps after trimming | motivated |
+| `TRIM_LOOK` | 3 | `inkvec-trace/src/planar/junctions.rs:405` | how far ahead to look when deciding an edge's direction | motivated |
+| `MIN_WIDTH` / `MAX_WIDTH` | 0.05 / 6.0 px | `inkvec-trace/src/taper.rs:104,108` | taper sample admission band | motivated |
+| `MIN_SAMPLES` | 4 | `inkvec-trace/src/taper.rs:111` | fewest taper samples trusted | none |
+| `MAX_DEFECT` | 0.15 px | `inkvec-trace/src/taper.rs:121` | largest tangent-circle residual admitted | measured (calibrated against three worked cases) |
 
 ## 08 — Boundary solve ([08-boundary-solve.md](08-boundary-solve.md))
 
@@ -195,35 +195,37 @@ to the upstream saddle merge; the two sizes after it choose only speed, never th
 
 ## 09 — Decode ([09-decode.md](09-decode.md))
 
+The `decode` module is compiled only in a research build (`inkvec-trace/src/lib.rs:80-81`).
+
 | name | value | file:line | controls | basis |
 |---|---|---|---|---|
-| `LEAK_GATE` | 0.05 | `inkvec-trace/src/decode.rs` | diagnostic threshold on `leak` (not gated on) | none |
-| `MIN_VERTS` / `MAX_VERTS` | 3 / 16 | `inkvec-trace/src/decode.rs` | vertex-count range a candidate order may propose | none |
-| `MAX_DEV` | 2.0 px | `inkvec-trace/src/decode.rs` | worst-case chord deviation before a face is "something else" | none |
-| `CURVE_BIAS_PX` | 0.35 px | `inkvec-trace/src/decode.rs` | mean-offset threshold in `is_polygonal`'s curve test | none |
-| `MIN_GAIN` | 0.5 | `inkvec-trace/src/decode.rs` | residual-cut fraction of `sse0` required for a decode | measured (screen set: 10 worse/7 better at 1.0, better on every axis at 0.5) |
-| `EVIDENCE_OVERRIDE` | 0.0 (off) | `inkvec-trace/src/decode.rs` | residual-ratio threshold to skip the post-solve shape recheck | measured trade-off (0.5 fixes one case, costs 0.6% objective; default declines the trade) |
-| `CURVE_MIN_SAMPLES` | 8 | `inkvec-trace/src/decode.rs` | fewest ring samples before the curve test applies | none |
-| `THIN_PX` | 2.5 px | `inkvec-trace/src/decode.rs` | width above which a face is not attempted | measured (conditioning cliff location) |
-| `PARAMS_PER_RIBBON` | 10.0 | `inkvec-trace/src/decode.rs` | parameter charge for one pooled ribbon | derived |
-| `SHARE_MAX_PX` | 1.75 px | `inkvec-trace/src/decode.rs` | widest ribbon `share_widths` will pool | motivated |
-| `MAX_RING_POINTS` | 512 | `inkvec-trace/src/decode.rs` | largest ring `ring_of` will accept | motivated |
-| `PIXELS_PER_UNKNOWN` | 4 | `inkvec-trace/src/decode.rs` | boundary-cut band pixels required per free coordinate | motivated |
-| `MAX_BBOX_PIXELS` | 20,000 | `inkvec-trace/src/decode.rs` | largest face bounding box attempted | none |
-| `GN_ITERS` | 14 | `inkvec-trace/src/decode.rs` | Gauss-Newton iteration cap | none |
-| `FD_STEP` | 0.01 px | `inkvec-trace/src/decode.rs` | finite-difference step for the coverage derivative | none |
-| `MAX_STEP` | 0.35 px | `inkvec-trace/src/decode.rs` | per-iteration vertex step clamp; shared value with `boundary_opt::MAX_STEP` | motivated |
-| `MAX_TOTAL` | 1.0 px | `inkvec-trace/src/decode.rs` | cumulative leash from a vertex's starting position | measured (uncapped: one emoji frame drifted to a 13-sided polygon) |
-| `DECODED_SIGMA` | 0.05 px | `inkvec-trace/src/decode.rs` | sigma given to written-back samples | motivated (matches `coverage::DEFAULT_SIGMA_MODEL`) |
-| `SAMPLE_PX` | 1.0 px | `inkvec-trace/src/decode.rs` | spacing of written-back samples along a decoded edge | motivated |
-| GN damping schedule | mu0 1e-3, x4/reject, /3/accept, floor 1e-7, cap 1e9 | `inkvec-trace/src/decode.rs` | Levenberg step damping | motivated (standard schedule shape) |
-| ridge in `varpro` | `1e-6 * trace / k` | `inkvec-trace/src/decode.rs` | regularises a fill column with no pixel support | motivated |
-| turning-corner angle floor | 0.4 rad | `inkvec-trace/src/decode.rs` | minimum turning angle counted as a corner | none |
+| `LEAK_GATE` | 0.05 | `inkvec-trace/src/decode.rs:62` | diagnostic threshold on `leak` (not gated on) | none |
+| `MIN_VERTS` / `MAX_VERTS` | 3 / 16 | `inkvec-trace/src/decode.rs:64-65` | vertex-count range a candidate order may propose | none |
+| `MAX_DEV` | 2.0 px | `inkvec-trace/src/decode.rs:67` | worst-case chord deviation before a face is "something else" | none |
+| `CURVE_BIAS_PX` | 0.35 px | `inkvec-trace/src/decode.rs:69` | mean-offset threshold in `is_polygonal`'s curve test | none |
+| `MIN_GAIN` | 0.5 | `inkvec-trace/src/decode.rs:76` | residual-cut fraction of `sse0` required for a decode | measured (screen set: 10 worse/7 better at 1.0, better on every axis at 0.5) |
+| `EVIDENCE_OVERRIDE` | 0.0 (off) | `inkvec-trace/src/decode.rs:87` | residual-ratio threshold to skip the post-solve shape recheck | measured trade-off (0.5 fixes one case, costs 0.6% objective; default declines the trade) |
+| `CURVE_MIN_SAMPLES` | 8 | `inkvec-trace/src/decode.rs:89` | fewest ring samples before the curve test applies | none |
+| `THIN_PX` | 2.5 px | `inkvec-trace/src/decode.rs:95` | width above which a face is not attempted | measured (conditioning cliff location) |
+| `PARAMS_PER_RIBBON` | 10.0 | `inkvec-trace/src/decode.rs:97` | parameter charge for one pooled ribbon | derived |
+| `SHARE_MAX_PX` | 1.75 px | `inkvec-trace/src/decode.rs:100` | widest ribbon `share_widths` will pool | motivated |
+| `MAX_RING_POINTS` | 512 | `inkvec-trace/src/decode.rs:102` | largest ring `ring_of` will accept | motivated |
+| `PIXELS_PER_UNKNOWN` | 4 | `inkvec-trace/src/decode.rs:112` | boundary-cut band pixels required per free coordinate | motivated |
+| `MAX_BBOX_PIXELS` | 20,000 | `inkvec-trace/src/decode.rs:113` | largest face bounding box attempted | none |
+| `GN_ITERS` | 14 | `inkvec-trace/src/decode.rs:118` | Gauss-Newton iteration cap | none |
+| `FD_STEP` | 0.01 px | `inkvec-trace/src/decode.rs:119` | finite-difference step for the coverage derivative | none |
+| `MAX_STEP` | 0.35 px | `inkvec-trace/src/decode.rs:120` | per-iteration vertex step clamp; shared value with `boundary_opt::MAX_STEP` | motivated |
+| `MAX_TOTAL` | 1.0 px | `inkvec-trace/src/decode.rs:129` | cumulative leash from a vertex's starting position | measured (uncapped: one emoji frame drifted to a 13-sided polygon) |
+| `DECODED_SIGMA` | 0.05 px | `inkvec-trace/src/decode.rs:1261` | sigma given to written-back samples | motivated (matches `coverage::DEFAULT_SIGMA_MODEL`) |
+| `SAMPLE_PX` | 1.0 px | `inkvec-trace/src/decode.rs:1262` | spacing of written-back samples along a decoded edge | motivated |
+| GN damping schedule | mu0 1e-3, x4/reject, /3/accept, floor 1e-7, cap 1e9 | `inkvec-trace/src/decode.rs:1066,1181,1185-1186` | Levenberg step damping | motivated (standard schedule shape) |
+| ridge in `varpro` | `1e-6 * trace / k` | `inkvec-trace/src/decode.rs:402` | regularises a fill column with no pixel support | motivated |
+| turning-corner angle floor | 0.4 rad | `inkvec-trace/src/decode.rs:251` | minimum turning angle counted as a corner | none |
 
 ## 10 — Symmetry ([10-symmetry.md](10-symmetry.md))
 
 No numeric thresholds. Every test is exact equality on integer pixel coordinates or exact
-half-integer lattice points (`inkvec-trace/src/symmetry.rs:19-21,156-163,243-245,250-252`)
+half-integer lattice points (`inkvec-trace/src/symmetry.rs:19-21,176-186,220,243,249,272`)
 — a deliberate design choice, not an omission.
 
 ## 11 — Curve fitting ([11-fitting.md](11-fitting.md))

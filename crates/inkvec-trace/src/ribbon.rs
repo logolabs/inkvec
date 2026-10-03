@@ -475,16 +475,13 @@ fn reading(
     }
     // Each chain is fitted on its own, so the chains are fitted in parallel; `collect`
     // keeps their order, so the result is the sequential one.
+    let stride = ((w0 / CHAIN_SAMPLES_PER_WIDTH).floor() as usize).max(1);
     let lines: Vec<Centreline> = topo
         .chains
         .par_iter()
-        .filter(|c| c.pts.len() >= 2)
-        .map(|c| {
-            fit_chain(
-                &Polyline::new(c.pts.clone(), c.sigma.clone(), c.closed && c.pts.len() >= 3),
-                cfg,
-            )
-        })
+        .map(|c| decimate(c, stride))
+        .filter(|c| c.points.len() >= 2)
+        .map(|c| fit_chain(&c, cfg))
         .filter(|c| !c.path.segments.is_empty())
         .collect();
     if lines.is_empty() {
@@ -530,6 +527,62 @@ fn reading(
         caps: topo.caps,
         dropped: topo.dropped,
     })
+}
+
+/// Centre samples kept per stroke width for the curve fitter ([`decimate`]).
+///
+/// The skeleton gives about one centre sample per pixel of centreline, so a chain carries
+/// `w0` samples per stroke width: 10.7 on lucide at 128 px, 42.7 at 512 px. The fitter's
+/// dynamic program grows faster than linearly in the samples and was the stage's largest
+/// cost at 512 px (lucide and openmoji, per icon summed over threads: 170 of 308 ms of
+/// face fitting), while the strokes it starts are re-solved against the full boundary
+/// anyway. Eight per width keeps every sample at 128 px (lucide: stride 1) and every
+/// fifth at 512 px.
+const CHAIN_SAMPLES_PER_WIDTH: f64 = 8.0;
+
+/// Chain `c` as the polyline the curve fitter reads, with its measured samples thinned to
+/// every `stride`-th.
+///
+/// Between consecutive anchors (cap centres, junction points, rebuilt corners: kept
+/// all), the measured samples are cut into runs of `stride`; each run is replaced by its
+/// middle sample with sigma `sqrt(Σσ²)/m` for a run of `m`, so that `(d/σ')²` is the run's
+/// summed `(d/σ_k)²` when its residuals agree -- the chi-squared, and so the description
+/// length the fitter trades against its parameters, keeps its scale. A middle sample
+/// rather than the run's mean: a mean of points along a curve sags towards its centre.
+///
+/// Not from the literature: decimation of correlated samples with the weight they stand
+/// for, because neighbouring centre samples share most of the boundary points they were
+/// read from and do not each carry independent evidence. See also: Kolesnikov (2012),
+/// Segmentation and multi-model approximation of digital curves, Pattern Recognition
+/// Letters 33(9), 1171-1179, doi:10.1016/j.patrec.2012.01.021, the multi-model dynamic
+/// program the fitter implements, whose cost is what the thinning saves.
+fn decimate(c: &graph::Chain, stride: usize) -> Polyline {
+    let closed = c.closed && c.pts.len() >= 3;
+    if stride <= 1 {
+        return Polyline::new(c.pts.clone(), c.sigma.clone(), closed);
+    }
+    let (mut pts, mut sig) = (Vec::new(), Vec::new());
+    let mut run: Vec<usize> = Vec::new();
+    let flush = |run: &mut Vec<usize>, pts: &mut Vec<Point>, sig: &mut Vec<f64>| {
+        for g in run.chunks(stride) {
+            pts.push(c.pts[g[g.len() / 2]]);
+            let ss: f64 = g.iter().map(|&k| c.sigma[k] * c.sigma[k]).sum();
+            sig.push(ss.sqrt() / g.len() as f64);
+        }
+        run.clear();
+    };
+    for k in 0..c.pts.len() {
+        if c.anchor[k] {
+            flush(&mut run, &mut pts, &mut sig);
+            pts.push(c.pts[k]);
+            sig.push(c.sigma[k]);
+        } else {
+            run.push(k);
+        }
+    }
+    flush(&mut run, &mut pts, &mut sig);
+    let closed = closed && pts.len() >= 3;
+    Polyline::new(pts, sig, closed)
 }
 
 /// The chi-squared of measured boundary points against a fitted path by exact nearest
@@ -684,6 +737,31 @@ mod tests {
         let mask = FaceMask::from_labels(&labels, n, 1, bb[1].expect("ink"));
         let cfg = FitConfig::from_precision(40.0, 0.1, 2.0);
         assert!(fit_face(&[ring], &mask, &cfg, f64::INFINITY).is_err());
+    }
+
+    #[test]
+    fn decimation_keeps_anchors_and_the_chi_squared_scale() {
+        // 1 anchor, 10 measured samples, 1 anchor, 3 measured, 1 anchor.
+        let n = 16;
+        let anchor: Vec<bool> = (0..n).map(|k| k == 0 || k == 11 || k == 15).collect();
+        let c = graph::Chain {
+            pts: (0..n).map(|k| Point::new(k as f64, 0.0)).collect(),
+            sigma: (0..n).map(|k| if anchor[k] { 0.25 } else { 0.1 }).collect(),
+            anchor: anchor.clone(),
+            closed: false,
+        };
+        let same = decimate(&c, 1);
+        assert_eq!(same.points, c.pts);
+        assert_eq!(same.sigma, c.sigma);
+        let d = decimate(&c, 4);
+        // Runs of 10 -> 4, 4, 2 and of 3 -> 3: middle samples 3, 7, 10 and 13.
+        let xs: Vec<f64> = d.points.iter().map(|p| p.x).collect();
+        assert_eq!(xs, vec![0.0, 3.0, 7.0, 10.0, 11.0, 13.0, 15.0]);
+        // A run of m samples of sigma 0.1 stands for them all: 0.1/sqrt(m).
+        assert!((d.sigma[1] - 0.1 / 2.0).abs() < 1e-12);
+        assert!((d.sigma[3] - 0.1 / 2f64.sqrt()).abs() < 1e-12);
+        assert!((d.sigma[5] - 0.1 / 3f64.sqrt()).abs() < 1e-12);
+        assert_eq!((d.sigma[0], d.sigma[4], d.sigma[6]), (0.25, 0.25, 0.25));
     }
 
     #[test]

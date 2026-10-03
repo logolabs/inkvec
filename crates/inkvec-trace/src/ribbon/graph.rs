@@ -79,6 +79,10 @@ pub(crate) struct Chain {
     pub(crate) pts: Vec<Point>,
     /// Each point's sigma, px.
     pub(crate) sigma: Vec<f64>,
+    /// Each point is rebuilt rather than measured: a cap centre, a junction point or a
+    /// rebuilt corner, which carry the chain's structure and must survive any thinning of
+    /// the measured samples between them.
+    pub(crate) anchor: Vec<bool>,
     /// The chain closes on its first point.
     pub(crate) closed: bool,
 }
@@ -804,12 +808,13 @@ fn assemble(
     let nb = kept.len();
     let mut used = vec![false; nb];
     let mut chains = Vec::new();
-    let push = |pts: &mut Vec<Point>, sig: &mut Vec<f64>, p: Point, s: f64| {
-        if pts.last().is_none_or(|l: &Point| l.dist(p) > 1e-9) {
-            pts.push(p);
-            sig.push(s);
-        }
-    };
+    let push =
+        |pts: &mut Vec<Point>, sig: &mut Vec<(f64, bool)>, p: Point, s: f64, anchor: bool| {
+            if pts.last().is_none_or(|l: &Point| l.dist(p) > 1e-9) {
+                pts.push(p);
+                sig.push((s, anchor));
+            }
+        };
     let walk = |start: usize, used: &mut Vec<bool>| -> Chain {
         let (mut pts, mut sig) = (Vec::new(), Vec::new());
         let mut port = start;
@@ -819,7 +824,7 @@ fn assemble(
             used[k] = true;
             let c = &kept[k];
             if !c.closed {
-                push(&mut pts, &mut sig, end_pt[port], end_sigma[port]);
+                push(&mut pts, &mut sig, end_pt[port], end_sigma[port], true);
             }
             let forward = port & 1 == 0;
             for i in 0..c.s.len() {
@@ -828,13 +833,14 @@ fn assemble(
                 } else {
                     c.s[c.s.len() - 1 - i]
                 };
-                push(&mut pts, &mut sig, x.c, x.sigma);
+                // A rebuilt corner has no feet on the boundary.
+                push(&mut pts, &mut sig, x.c, x.sigma, x.feet.0 == usize::MAX);
             }
             if c.closed {
                 break;
             }
             let exit = port ^ 1;
-            push(&mut pts, &mut sig, end_pt[exit], end_sigma[exit]);
+            push(&mut pts, &mut sig, end_pt[exit], end_sigma[exit], true);
             match link[exit] {
                 Some(q) if q == start => {
                     closed = true;
@@ -850,7 +856,8 @@ fn assemble(
         }
         Chain {
             pts,
-            sigma: sig,
+            sigma: sig.iter().map(|x| x.0).collect(),
+            anchor: sig.iter().map(|x| x.1).collect(),
             closed,
         }
     };

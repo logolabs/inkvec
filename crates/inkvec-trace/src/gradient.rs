@@ -62,6 +62,9 @@
 //! * `eval`: the hoisted per-pixel evaluator every scoring loop uses;
 //! * `evidence`: which pixels testify about a fill and which are blends;
 //! * `bands`: the band-merging agglomeration; `regions`: its region-recovery switches;
+//! * `gregions`, `segments`, `proposals`: research prototype A10 (`INKVEC_GREGIONS`, a
+//!   `research` build only) -- spline-scored radial centres, a step-profile guard, and
+//!   smooth-segment region proposals accepted by MDL;
 //! * `carve`: residual features carved out as their own regions;
 //! * `budget`: sampling caps and timing counters; `debug`: `INKVEC_GRADDBG` output;
 //! * `svg`: the SVG writer for fills and fades.
@@ -761,6 +764,74 @@ fn ramp_models(s: &Samples, w: usize, space: Interp) -> (Interp, Vec<[f64; 3]>, 
     (space, cols, cands)
 }
 
+/// The ramp candidates of every interpolation space ([`ramp_models`], one space per entry,
+/// in [`INTERPS`] order), each space's list followed by the research prototype A10's extra
+/// radial geometries when its part `profile` is on: found once for both spaces under the
+/// piecewise-linear profile score ([`profile_scored_radials`], run beside the line-scored
+/// fits) and appended to each space's list with the stops refitted there
+/// ([`restop_radial`]). With the part off there are none and the lists are as they were.
+fn ramp_candidates(s: &Samples, w: usize) -> Vec<(Interp, Vec<[f64; 3]>, Vec<FillModel>)> {
+    use rayon::prelude::*;
+    let (geometry, mut per_space): (Vec<FillModel>, Vec<_>) = rayon::join(
+        || {
+            if gregions::parts().profile {
+                profile_scored_radials(s, &s.colors(Interp::Srgb), Interp::Srgb, w)
+            } else {
+                Vec::new()
+            }
+        },
+        || {
+            INTERPS
+                .par_iter()
+                .map(|&space| ramp_models(s, w, space))
+                .collect()
+        },
+    );
+    for (space, cols, cands) in per_space.iter_mut() {
+        cands.extend(
+            geometry
+                .iter()
+                .filter_map(|g| restop_radial(s, cols, *space, g)),
+        );
+    }
+    per_space
+}
+
+/// Research prototype A10, part `profile` ([`gregions`]): the circular and elliptical
+/// radial geometries searched again under the piecewise-linear profile score
+/// ([`fit::ProfileScore::Spline`]), the elliptical one seeded from the circular one, as
+/// [`ramp_models`] seeds its own pair.
+///
+/// They become *extra* candidates, appended after the line-scored three in each space by
+/// `fit_samples`:
+/// nothing is replaced, so a region whose profile is straight keeps the fit it had (the
+/// line-scored candidate comes first and wins ties), and model selection prices the
+/// newcomers like any other. Replacing the line search instead was measured worse in an
+/// earlier attempt (4304ba3).
+///
+/// The search runs once, in sRGB, and its geometry serves both interpolation spaces:
+/// a free piecewise-linear profile absorbs the per-channel transfer curve between the
+/// spaces, so the level sets it finds, and with them the geometry, do not depend on the
+/// space; only the stops do, and `fit_samples` refits those per space. That halves the
+/// cost of the part (the round-2 research ran it per space: 1.9x trace time on the
+/// gradient icons, under load). Not from the literature: a cost reduction.
+fn profile_scored_radials(
+    s: &Samples,
+    cols: &[[f64; 3]],
+    space: Interp,
+    w: usize,
+) -> Vec<FillModel> {
+    let t_r = inkvec_core::clock::Instant::now();
+    let radial = fit_radial_scored(s, cols, space, w, ProfileScore::Spline);
+    tick(&FIT_NS_RADIAL, t_r);
+    let t_e = inkvec_core::clock::Instant::now();
+    let elliptic = radial
+        .as_ref()
+        .and_then(|r| fit_radial_elliptic_scored(s, cols, space, r, ProfileScore::Spline));
+    tick(&FIT_NS_ELLIPTIC, t_e);
+    [radial, elliptic].into_iter().flatten().collect()
+}
+
 /// Every admissible candidate for the samples, flat first.
 ///
 /// The model-selection core. Each candidate is scored `cost = 0.5·chi² + λ·params`
@@ -830,15 +901,18 @@ fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> 
     // the MDL below would accept them by a wide margin. (`INKVEC_MIN_CONTRAST` scaled the
     // floor so the full set could price it; the default never moved.)
     let min_contrast = (3.0 * sigma).max(MIN_VISIBLE_CONTRAST);
+    // Research prototype A10, part `guard`: a candidate whose profile changes visibly
+    // within the width of an anti-aliased edge is drawing that edge, not shading, and is
+    // refused like one below the contrast floor (see `gregions::step_like`). Off, the
+    // test is never made.
+    let guard = gregions::parts().guard;
+    let edge = |m: &FillModel| guard && gregions::step_like(m, min_contrast);
     // Every candidate and its multi-stop variants, per interpolation space and per model, are
     // independent of one another, and the stop search is serial within one candidate: fit
     // them side by side, then take them in the order the one-at-a-time loop did, which is
     // the order `select` breaks ties in.
     use rayon::prelude::*;
-    let per_space: Vec<(Interp, Vec<[f64; 3]>, Vec<FillModel>)> = INTERPS
-        .par_iter()
-        .map(|&space| ramp_models(s, w, space))
-        .collect();
+    let per_space = ramp_candidates(s, w);
     let jobs: Vec<(Interp, &[[f64; 3]], &FillModel)> = per_space
         .iter()
         .flat_map(|(space, cols, cands)| cands.iter().map(move |c| (*space, &cols[..], c)))
@@ -853,7 +927,7 @@ fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> 
             let preds = Predictions::new(&cand, s);
             let contrast = preds.contrast();
             let support = preds.support(flat_c, contrast);
-            if contrast < min_contrast || support < MIN_RAMP_SUPPORT {
+            if contrast < min_contrast || support < MIN_RAMP_SUPPORT || edge(&cand) {
                 // Which gate refused a candidate is otherwise invisible: a region that
                 // ends up "cands 1" looks identical whether no ramp was ever tried or
                 // every ramp was thrown away here. `INKVEC_EVDBG=1`.
@@ -880,7 +954,7 @@ fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> 
             for m in multi {
                 let pm = Predictions::new(&m, s);
                 let c = pm.contrast();
-                if c >= min_contrast && pm.support(flat_c, c) >= MIN_RAMP_SUPPORT {
+                if c >= min_contrast && pm.support(flat_c, c) >= MIN_RAMP_SUPPORT && !edge(&m) {
                     out.push(scored(m, &pm));
                 }
             }
@@ -1106,8 +1180,11 @@ mod debug;
 pub(crate) mod eval;
 mod evidence;
 mod fit;
+mod gregions;
+mod proposals;
 pub(crate) mod regions;
 mod score;
+mod segments;
 pub(crate) mod stops;
 pub mod svg;
 

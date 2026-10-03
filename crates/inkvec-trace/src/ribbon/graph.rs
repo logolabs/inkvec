@@ -54,6 +54,7 @@
 //! junction catalogue is richer than the two cases (continue / end) used here.
 
 use inkvec_core::{Point, Vec2};
+use rayon::prelude::*;
 
 use super::boundary::{along, unit, Boundary};
 use super::FaceMask;
@@ -198,8 +199,14 @@ struct Core {
 ///
 /// Cost: the thinning is O(iterations x mask area) with about `w/2` iterations; each
 /// skeleton pixel costs one nearest query and one ray walk in the boundary's grid.
-pub(crate) fn centrelines(b: &Boundary, mask: &FaceMask, w: f64, opts: TopoOptions) -> Topology {
-    let axis = skeleton(mask);
+pub(crate) fn centrelines(
+    m: &Medial,
+    b: &Boundary,
+    mask: &FaceMask,
+    w: f64,
+    opts: TopoOptions,
+) -> Topology {
+    let (axis, samples) = (&m.axis, &m.samples);
     let mut topo = Topology {
         chains: Vec::new(),
         junctions: 0,
@@ -209,12 +216,35 @@ pub(crate) fn centrelines(b: &Boundary, mask: &FaceMask, w: f64, opts: TopoOptio
     if axis.len() == 0 {
         return topo;
     }
-    let samples: Vec<Option<Sample>> = axis.pts.iter().map(|&p| cross_section(b, p, w)).collect();
-    let all = cores(&axis, &samples, mask, w, opts.corner_sigma);
-    let (kept, mut dsu) = classify(&axis, all, w, opts.spur_len, &mut topo);
-    let (end_pt, end_sigma, link) = ends(b, mask, &axis, &kept, &mut dsu, w, &mut topo);
+    let all = cores(axis, samples, mask, w, opts.corner_sigma);
+    let (kept, mut dsu) = classify(axis, all, w, opts.spur_len, &mut topo);
+    let (end_pt, end_sigma, link) = ends(b, mask, axis, &kept, &mut dsu, w, &mut topo);
     topo.chains = assemble(&kept, &end_pt, &end_sigma, &link);
     topo
+}
+
+/// What every topology reading of one face shares ([`centrelines`] under each
+/// [`TopoOptions`]): the medial graph and the centre sample read at each of its nodes.
+pub(crate) struct Medial {
+    /// The medial graph.
+    axis: Axis,
+    /// The centre sample at each node, or `None` where the cross-section is not a
+    /// stroke's ([`cross_section`]).
+    samples: Vec<Option<Sample>>,
+}
+
+/// The medial graph of the face with pixel `mask` and boundary `b`, and its centre
+/// samples at stroke width `w` px: computed once per face and read by every topology
+/// reading. The cross-sections are independent, so they are taken in parallel and
+/// collected in node order.
+pub(crate) fn medial(b: &Boundary, mask: &FaceMask, w: f64) -> Medial {
+    let axis = skeleton(mask);
+    let samples = axis
+        .pts
+        .par_iter()
+        .map(|&p| cross_section(b, p, w))
+        .collect();
+    Medial { axis, samples }
 }
 
 /// The face mask thinned (Zhang-Suen) and split into branches between nodes, each

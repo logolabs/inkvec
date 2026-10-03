@@ -329,7 +329,14 @@ pub fn fit_face(
     if w0 < MIN_WIDTH {
         return Err(Decline::TooThin { width: w0 });
     }
-    let round = hypothesis(&b, mask, w0, share, cfg, budget, Join::Round);
+    let face = Face {
+        medial: graph::medial(&b, mask, w0),
+        b: &b,
+        mask,
+        w0,
+        share,
+    };
+    let round = hypothesis(&face, cfg, budget, Join::Round);
     // A round fit that leaves a boundary point more than a quarter pixel out is also tried
     // with miter joins: sharp corners are what round joins cannot draw.
     let try_miter = round
@@ -338,7 +345,7 @@ pub fn fit_face(
     if !try_miter || !inkvec_core::env::switch("INKVEC_RIBBONS_MITER", true) {
         return round;
     }
-    let miter = hypothesis(&b, mask, w0, share, cfg, budget, Join::Miter);
+    let miter = hypothesis(&face, cfg, budget, Join::Miter);
     match (round, miter) {
         (Ok(r), Ok(m)) => Ok(if m.cost(cfg.lambda) < r.cost(cfg.lambda) {
             m
@@ -399,18 +406,25 @@ fn uncovered(
 /// a stroke starts at a quarter or more.
 const MAX_PRE_RMS: f64 = 0.15;
 
+/// One face as every hypothesis and reading of it sees it.
+struct Face<'a> {
+    /// Its measured boundary.
+    b: &'a boundary::Boundary,
+    /// Its pixels.
+    mask: &'a FaceMask,
+    /// Its medial graph and centre samples, read once and shared by every reading.
+    medial: graph::Medial,
+    /// The paired stroke width, px.
+    w0: f64,
+    /// The share of the boundary that paired at it.
+    share: f64,
+}
+
 /// One hypothesis of a face's strokes: topology read with `join`'s rules
 /// ([`graph::TopoOptions`]), every chain fitted ([`fit_chain`]), the stroke solve with
 /// splits ([`refine::solve_adaptive`]), and the score under that join.
-fn hypothesis(
-    b: &boundary::Boundary,
-    mask: &FaceMask,
-    w0: f64,
-    share: f64,
-    cfg: &FitConfig,
-    budget: f64,
-    join: Join,
-) -> Result<Ribbon, Decline> {
+fn hypothesis(face: &Face, cfg: &FitConfig, budget: f64, join: Join) -> Result<Ribbon, Decline> {
+    let w0 = face.w0;
     // Topology readings tried in turn: round joins first without rebuilt corners (most
     // tight turns in round line art are arcs of about the half-width), then with them,
     // for drawings whose sharp corners leave a gap of samples long against the arms
@@ -425,7 +439,7 @@ fn hypothesis(
     };
     let mut last = Err(Decline::NoCentreline);
     for (i, &opts) in readings.iter().enumerate() {
-        last = reading(b, mask, w0, share, cfg, budget, join, opts);
+        last = reading(face, cfg, budget, join, opts);
         let retry = matches!(last, Err(Decline::Misfit { .. })) && i + 1 < readings.len();
         if !retry {
             break;
@@ -436,18 +450,15 @@ fn hypothesis(
 
 /// One topology reading of a face under `join` (see [`hypothesis`]): the passes 3-6 of
 /// the module documentation.
-#[allow(clippy::too_many_arguments)]
 fn reading(
-    b: &boundary::Boundary,
-    mask: &FaceMask,
-    w0: f64,
-    share: f64,
+    face: &Face,
     cfg: &FitConfig,
     budget: f64,
     join: Join,
     opts: graph::TopoOptions,
 ) -> Result<Ribbon, Decline> {
-    let topo = graph::centrelines(b, mask, w0, opts);
+    let (b, mask, w0, share) = (face.b, face.mask, face.w0, face.share);
+    let topo = graph::centrelines(&face.medial, b, mask, w0, opts);
     if inkvec_core::env::flag("INKVEC_RIBBONS_CHAINS") {
         for c in &topo.chains {
             let (a, z) = (c.pts[0], c.pts[c.pts.len() - 1]);

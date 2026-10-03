@@ -973,6 +973,17 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
         .iter()
         .map(|&l| fade_of_label.get(l).cloned().flatten())
         .collect();
+    // One artist ink, one hex (`color::snap`): over white, as every fill here is fitted.
+    // A fade's fill is its colour profile and keeps it.
+    let mut face_fill = face_fill;
+    let snapped =
+        color::snap::snap_flat_fills(&labels, w, h, &mut face_fill, &face_color, &pal, |f| {
+            face_fade.get(f).is_some_and(Option::is_some)
+        });
+    crate::diag!(
+        "fills",
+        "native alpha: snapped to their ink's colour: {snapped}"
+    );
     // Where a face meets the ground the boundary is placed by its opacity there: a fade's
     // rim, a wash's one opacity.
     let face_alpha: Vec<f32> = face_fade

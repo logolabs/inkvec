@@ -344,6 +344,7 @@ pub const PARAMS_PER_INK: f64 = 3.0;
 pub const SAME_INK_DE00: f32 = 1.5;
 pub(crate) mod distinct;
 mod mdl;
+pub(crate) mod snap;
 #[cfg(test)]
 use mdl::{claim_spread, interior_fraction, straddle_fraction};
 

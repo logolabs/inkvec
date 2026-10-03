@@ -230,84 +230,97 @@ half-integer lattice points (`inkvec-trace/src/symmetry.rs:19-21,156-163,243-245
 
 | name | value | file:line | controls | basis |
 |---|---|---|---|---|
-| `PARAMS_LINE` | 2.0 | `inkvec-fit/src/lib.rs:41` | line parameter cost | derived |
-| `PRUNE_SLACK` | 4.0 | `inkvec-fit/src/lib.rs:45`, `multimodel.rs:150` | safety factor on scan cut-off | motivated |
-| `CORNER_CHAMFER` | 1.0 px | `inkvec-fit/src/lib.rs:457` | corner-adjustment chamfer allowance | derived (one level-set sampling step) |
-| `CORNER_TURN_MIN` | pi/6 (30 deg) | `inkvec-fit/src/lib.rs:460` | when a vertex meeting is treated as a corner | none |
-| `CORNER_DEGREES` | 45.0 | `inkvec-fit/src/lib.rs:722` | corner-vs-smooth-join threshold | none |
-| max-shift factor | 3.0x max(sigma), floor 0.25 | `inkvec-fit/src/lib.rs:800` | corner intersection displacement cap | motivated |
-| `PARAMS_CUBIC` | 6.0 | `inkvec-fit/src/multimodel.rs:102` | cubic parameter cost | derived |
-| `G1_BREAK_DEGREES` | 10.0 | `inkvec-fit/src/multimodel.rs:137` | tangent break below which a join is nearly free | none; swept empirically |
-| `MAX_ARM` | 1.0 | `inkvec-fit/src/multimodel.rs:142`, `merge.rs:117` | largest admissible control arm, as a fraction of chord | derived |
-| `MAX_RESIDUAL_SAMPLES` | 32 | `inkvec-fit/src/multimodel.rs:147` | cubic residual evaluation points (O(1) cap) | none |
-| `PRUNE_PATIENCE` | 8 | `inkvec-fit/src/multimodel.rs:158` | over-budget candidates before scan stops | measured, value not stated |
-| `DP_MAX_POINTS` | 768 | `inkvec-fit/src/multimodel.rs:163` | decimation threshold | none |
-| `TANGENT_WINDOW_MAX` | 16 | `inkvec-fit/src/multimodel.rs:166` | widest one-sided tangent window | none |
-| `NEWTON_STEPS` | 3 | `inkvec-fit/src/multimodel.rs:170` | Newton steps for arc-length projection | none |
-| `FREE_MAX_SWING` | 75.0 deg | `inkvec-fit/src/multimodel.rs:1103` | how far a free cubic's tangent may depart from the estimate | none |
-| `DIRECTION_SAMPLES` | 8 | `inkvec-fit/src/multimodel.rs:1491` | monotone-sweep samples for arc validity | none (asserted) |
-| `MAX_ASPECT` | 12.0 | `inkvec-fit/src/multimodel.rs:1666` | most elongated ellipse worth fitting | none |
-| `MIN_POINTS` (ellipse) | 24 | `inkvec-fit/src/multimodel.rs:1669` | minimum points to try an ellipse | none |
-| `LENGTH_STRIDE` | 16 | `inkvec-fit/src/multimodel.rs:1676` | ellipse candidate-length sampling | none; doc comment ("every fourth length") does not match the value |
-| bow-penalty factor | 4.0 | `inkvec-fit/src/multimodel.rs:1301` | arc-vs-line residual ratio that triggers the bow penalty | none |
-| `PARAMS_ARC` | 5.0 | `inkvec-fit/src/curves.rs:158` | circular arc cost | derived |
-| `PARAMS_ELLIPTICAL_ARC` | 7.0 | `inkvec-fit/src/curves.rs:165` | elliptical arc cost | derived |
-| `MAX_ARC_DEGREES` | 120.0 | `inkvec-fit/src/primitives.rs:50` | longest single-arc sweep | derived (conditioning argument) |
-| `MAX_REDUCED_CHI2` | 4.0 | `inkvec-fit/src/primitives.rs:1081` | primitive acceptance gate | derived (tau^2 at default tau=2) |
-| `PARAMS_CIRCLE` / `PARAMS_ELLIPSE` / `PARAMS_ROUND_RECT` / `PARAMS_RECT` | 3.0 / 5.0 / 6.0 / 4.0 | `inkvec-fit/src/primitives.rs:32-39` | primitive parameter costs | derived |
-| `BREAK_PARAMS` | 2.0 | `inkvec-fit/src/merge.rs:53` | join a free cubic no longer meets smoothly; overridable via `INKVEC_MERGE_BREAK` (*removed*) | derived |
-| `MAX_SPAN` | 96 | `inkvec-fit/src/merge.rs:57` | longest merge run attempted | none |
-| `MAX_RUN` | 4 | `inkvec-fit/src/merge.rs:65` | segments a merge run may absorb | none (was overridable, no longer swept) |
-| `MAX_ROUNDS` | 6 | `inkvec-fit/src/merge.rs:75` | merge sweep passes | motivated |
-| `SEARCH_DEGREES` | 100.0 | `inkvec-fit/src/merge.rs:111` | free-cubic angle search width | motivated (a 60-degree clamp put the optimum outside the search) |
-| `SHARPEN_MAX_CHORD` | 2.5 | `inkvec-fit/src/merge.rs:472` | chamfer-cubic chord ceiling | motivated (chamfer ~1px/side) |
-| `SHARPEN_MAX_EDGE` | 8.0 | `inkvec-fit/src/merge.rs:477` | short-edge-with-chamfers ceiling | none |
-| `SHARPEN_MIN_TURN` | pi/6 (30 deg) | `inkvec-fit/src/merge.rs:479` | corner-vs-smooth threshold | none; duplicates `CORNER_TURN_MIN` |
-| `PARAMS_AXIS_LINE` | 1.0 | `inkvec-fit/src/merge.rs:646` | axis-snapped line cost | derived |
-| `MAX_AXIS_DEV_SIGMA` | 3.0 | `inkvec-fit/src/merge.rs:651` | per-sample axis-snap deviation cap | none |
-| `PARAMS_SMOOTH_CUBIC` | 4.0 | `inkvec-fit/src/merge.rs:831` | `S`-shorthand cost | derived |
-| G1 pre-filter angle | 20 deg | `inkvec-fit/src/merge.rs:902` | when a smooth-join candidate is worth the exact refit | none |
-| `FLATTEN` | 16 | `inkvec-fit/src/simple.rs:51` | flattening resolution for the self-crossing test | motivated (below render-visibility floor) |
-| `MAX_REPAIRS` | 8 | `inkvec-fit/src/simple.rs:55` | span-cap halvings before falling back | derived (2^8 covers any contour produced) |
-| `EPS` (endpoint coincidence) | 1e-6 px | `inkvec-fit/src/simple.rs:59` | adjacency exemption tolerance | derived |
+| `PARAMS_LINE` | 2.0 | `inkvec-fit/src/lib.rs:119` | line parameter cost | derived |
+| `PRUNE_SLACK` | 4.0 | `inkvec-fit/src/lib.rs:127` (shared by `multimodel.rs:136`) | safety factor on the scan cut-off | motivated |
+| `CORNER_CHAMFER` | 1.0 px | `inkvec-fit/src/lib.rs:585` | corner-adjustment chamfer allowance | derived (one level-set sampling step) |
+| `CORNER_TURN_MIN` | pi/6 (30 deg) | `inkvec-fit/src/lib.rs:588` | when a vertex meeting is treated as a corner | none |
+| `CORNER_DEGREES` | 45.0 | `inkvec-fit/src/lib.rs:921` | corner-vs-smooth-join threshold of `fit_path` | none |
+| max-shift factor | 3.0x max(sigma), floor 0.25 | `inkvec-fit/src/multimodel.rs:961` | corner intersection displacement cap | motivated |
+| `PARAMS_CUBIC` | 6.0 | `inkvec-fit/src/multimodel.rs:128` | default cubic parameter cost (`--bezier-cost` reprices it per trace, `cost.rs`) | derived |
+| `PRUNE_PATIENCE` | 8 | `inkvec-fit/src/multimodel.rs:144` | consecutive over-budget spans before the scan stops | measured, value not stated |
+| `DP_MAX_POINTS` | 768 | `inkvec-fit/src/multimodel.rs:149` | decimation threshold | none |
+| `DP_PAR_MIN_POINTS` | 128 | `inkvec-fit/src/multimodel/scan.rs:73` | shortest polyline whose scan is shared between threads | motivated (speed only) |
+| `G1_BREAK_DEGREES` | 10.0 | `inkvec-fit/src/tangents.rs:23` | tangent break below which a join is nearly free (`--corner-angle` overrides) | none; swept empirically |
+| `TANGENT_WINDOW_MAX` | 16 | `inkvec-fit/src/tangents.rs:26` | widest one-sided tangent window | none |
+| `MAX_RESIDUAL_SAMPLES` | 32 | `inkvec-fit/src/candidates.rs:42` | cubic residual evaluation points (O(1) cap) | none |
+| `NEWTON_STEPS` | 3 | `inkvec-fit/src/candidates.rs:45` | Newton steps for point-to-cubic projection | none |
+| `MAX_ARM` | 1.0 | `inkvec-fit/src/candidates.rs:48` (used by `merge.rs:132`) | largest admissible control arm, as a fraction of chord | derived |
+| `FREE_MAX_SWING` | 75.0 deg | `inkvec-fit/src/candidates.rs:52` | how far a free cubic's tangent may depart from the estimate | none |
+| `DIRECTION_SAMPLES` | 8 | `inkvec-fit/src/candidates.rs:1137` | monotone-sweep samples for arc validity | none (asserted) |
+| `MAX_ASPECT` | 12.0 | `inkvec-fit/src/candidates.rs:1298` | most elongated ellipse worth fitting | none |
+| `MIN_POINTS` (ellipse) | 24 | `inkvec-fit/src/candidates.rs:1299` | minimum points to try an ellipse | none |
+| `LENGTH_STRIDE` | 16 | `inkvec-fit/src/candidates.rs:1300` | ellipse candidate-length sampling | motivated (keeps the O(n) fit to a sparse grid) |
+| bow-penalty factor | 4.0 | `inkvec-fit/src/candidates.rs:921` | arc-vs-line residual ratio that triggers the bow penalty | none |
+| `PARAMS_ARC` | 5.0 | `inkvec-fit/src/curves.rs:191` | circular arc cost | derived |
+| `PARAMS_ELLIPTICAL_ARC` | 7.0 | `inkvec-fit/src/curves.rs:198` | elliptical arc cost | derived |
+| `MAX_ARC_DEGREES` | 120.0 | `inkvec-fit/src/primitives.rs:60` | longest single-arc sweep | derived (conditioning argument) |
+| `MAX_REDUCED_CHI2` | 4.0 | `inkvec-fit/src/primitives.rs:416` | primitive acceptance gate | derived (tau^2 at default tau=2) |
+| `PARAMS_CIRCLE` / `PARAMS_ELLIPSE` / `PARAMS_ROUND_RECT` / `PARAMS_RECT` | 3.0 / 5.0 / 6.0 / 4.0 | `inkvec-fit/src/primitives.rs:42-49` | primitive parameter costs | derived |
+| cost-floor slack | `1e-9·(tr S + Σw·C²)` | `inkvec-fit/src/choice.rs:187` | absolute shrink of the single-line chi² floor that lets the image frame skip its dynamic program | derived (dwarfs the rounding of the scatter and of the sampled chi² below 2^20 points) |
+| `BREAK_PARAMS` | 2.0 | `inkvec-fit/src/merge.rs:88` | joins a free cubic no longer meets smoothly (`INKVEC_MERGE_BREAK` *removed*) | derived |
+| `MAX_SPAN` | 96 | `inkvec-fit/src/merge.rs:92` | longest merge run attempted, in measured points | motivated (bounds the pass at O(n · span)) |
+| `MAX_RUN` | 4 | `inkvec-fit/src/merge.rs:99` | segments a merge run may absorb | none (was overridable, never swept) |
+| `MAX_ROUNDS` | 6 | `inkvec-fit/src/merge.rs:109` | merge sweeps | motivated |
+| `SMOOTH_SLACK` | 0.0 | `inkvec-fit/src/merge.rs:115` | parameters a merged curve may lose by and still be taken | measured (the `INKVEC_SMOOTH` experiment never moved the default) |
+| `SAMPLES` | 96 | `inkvec-fit/src/merge.rs:118` | curve samples of the residual that decides a merge | none |
+| `SEARCH_DEGREES` | 100.0 | `inkvec-fit/src/merge.rs:126` | free-cubic rotation search width | motivated (a 60-degree clamp put the optimum outside the search) |
+| `COARSE_SAMPLES` | 24 | `inkvec-fit/src/merge.rs:129` | curve samples while ranking the coarse grid | none |
+| `ANGLES` | ±90, ±65, ±45, ±22, 0 deg | `inkvec-fit/src/merge/grid.rs:83` | the free-cubic grid's rotations of each end direction | none |
+| `ARMS` | 0.15, 0.3, 0.45, 0.6, 0.8 | `inkvec-fit/src/merge/grid.rs:86` | the grid's arm lengths, in chords | none |
+| `SCREEN_FLOOR` / `SCREEN_CEIL` | 1e-290 / 1e300 | `inkvec-fit/src/merge/residual.rs:204,208` | range where the residual's lower-bound screen is used (0 outside) | derived (normal-number range of the error bound) |
+| `SCREEN_SHRINK` | 1 − 1e-12 | `inkvec-fit/src/merge/residual.rs:213` | lower bound's margin below the exact residual term | derived (~4,500 ulp; covers a `hypot` error up to ~2,000 ulp) |
+| `REORDER_MARGIN` | 1 + 1e-12 | `inkvec-fit/src/merge/residual.rs:246` | middle-first partial sum against the bound | derived (Higham 1993, eq. 2.6) |
+| `SHARPEN_MAX_CHORD` | 2.5 | `inkvec-fit/src/merge.rs:539` | chamfer-cubic chord ceiling | motivated (chamfer ~1px/side) |
+| `SHARPEN_MAX_EDGE` | 8.0 | `inkvec-fit/src/merge.rs:544` | short-edge-with-chamfers ceiling | none |
+| `SHARPEN_MIN_TURN` | `CORNER_TURN_MIN` | `inkvec-fit/src/merge.rs:550` | corner-vs-smooth threshold | shared with `CORNER_TURN_MIN` by design since 2026-09-08 |
+| `PARAMS_AXIS_LINE` (research) | 1.0 | `inkvec-fit/src/merge/snap.rs:17` | axis-snapped line cost | derived |
+| `MAX_AXIS_DEV_SIGMA` (research) | 3.0 | `inkvec-fit/src/merge/snap.rs:22` | per-sample axis-snap deviation cap | none |
+| `PARAMS_SMOOTH_CUBIC` (research) | 4.0 | `inkvec-fit/src/merge/snap.rs:204` | `S`-shorthand cost | derived |
+| G1 pre-filter angle (research) | 20 deg | `inkvec-fit/src/merge/snap.rs:344` | when a smooth-join candidate is worth the refit | none |
+| `FLATTEN` | 16 | `inkvec-fit/src/simple.rs:58` | flattening resolution for the self-crossing test | motivated (below render-visibility floor) |
+| `EPS` (endpoint coincidence) | 1e-6 px | `inkvec-fit/src/simple.rs:62` | adjacency exemption tolerance | derived |
 
 ## 12 — Repair ([12-repair.md](12-repair.md))
 
 | name | value | file:line | controls | basis |
 |---|---|---|---|---|
-| `ROUNDS` | 10 | `inkvec-cli/src/rings.rs:64` | max halving rounds of the outer repair loop | none; one comment refers to "15 rounds" (`rings.rs:222`), inconsistent with this value |
-| `MERGE_BUDGET` | 96 segments | `inkvec-cli/src/rings.rs:164` | per-boundary merge affordability (4x this is the global ceiling) | measured (~8ms/segment) |
-| `RING_SAMPLES` | 4 | `inkvec-cli/src/rings.rs:456` | interior samples per curved segment for area/containment | none |
-| crossing-pair limit | 32 | `inkvec-cli/src/rings.rs:96,260` | max crossing pairs reported per ring per call | none |
-| explosion thresholds | `c > 32 && c > 4*f` | `inkvec-cli/src/rings.rs:230` | when a capped refit is discarded for the unconstrained fit | measured (`bulma` case); the pair (32, 4) not separately justified |
-| cap initial value | `polys[k].len().max(2)` | `inkvec-cli/src/rings.rs:69` | starting span cap per edge | derived |
-| halving rule | `(cap[k]/2).max(1)` | `inkvec-cli/src/rings.rs:126,131` | tightening schedule, keeps repair logarithmic | derived |
-| `BLK` | 16 | `inkvec-cli/src/rings.rs:227` | bounding-box block size for the all-pairs prune | motivated (speed only) |
+| `ROUNDS` | 10 | `inkvec-cli/src/rings.rs:247` | max halving rounds of the outer repair loop | none |
+| `MERGE_BUDGET` | 96 segments | `inkvec-cli/src/rings.rs:362` | per-boundary merge affordability (4x this is the global ceiling) | measured (~8ms/segment) |
+| `RING_SAMPLES` | 4 | `inkvec-cli/src/rings.rs:700` | interior samples per curved segment for area/containment | none |
+| crossing-pair limit | 32 | `inkvec-cli/src/rings.rs:282,462` | max crossing pairs reported per ring per call | none |
+| explosion thresholds | `c > 32 && c > 4*f` | `inkvec-cli/src/rings.rs:432` | when a capped refit is discarded for the unconstrained fit | measured (`bulma` case); the pair (32, 4) not separately justified |
+| cap initial value | `polys[k].len().max(2)` | `inkvec-cli/src/rings.rs:252` | starting span cap per edge | derived |
+| halving rule | `(cap[k]/2).max(1)` | `inkvec-cli/src/rings.rs:321,329` | tightening schedule, keeps repair logarithmic | derived |
+| `BLK` | 16 | `inkvec-fit/src/simple.rs:270` | bounding-box block size for the all-pairs prune | motivated (speed only) |
 
-`FLATTEN`, `MAX_REPAIRS` and `EPS` are shared with `inkvec-fit/src/simple.rs` — see 11-fitting.md.
+`FLATTEN` and `EPS` are shared with `inkvec-fit/src/simple.rs` — see 11-fitting.md.
 
 ## 13 — Emit ([13-emit.md](13-emit.md))
 
 | name | value | file:line | controls | basis |
 |---|---|---|---|---|
-| `EMIT_DECIMALS` | 2 | `inkvec-cli/src/emit.rs:54` | coordinate decimal places | derived — see 13-emit.md, "Coordinate precision" |
-| `MIN_RING_AREA` | 0.25 px² | `inkvec-cli/src/emit.rs:57` | smallest ring area worth emitting | motivated |
-| `S`-shorthand tolerance (`fmt_ring`) | 10^-decimals (0.01 px default) | `inkvec-cli/src/emit.rs:193` | rounded-space reflection test | derived |
-| `S`-shorthand tolerance (`fmt_fitted`) | 5e-4, raw-space | `inkvec-cli/src/emit.rs:77` | stroke-path reflection test | none |
-| ring segment minimum | 2 | `inkvec-cli/src/emit.rs:252` | a ring is discarded below this | none |
-| path point minimum | 3 | `inkvec-cli/src/emit.rs:133` | `fmt_path` early return | derived (degenerate-polygon guard) |
-| arc rotation precision | 3 decimals | `inkvec-cli/src/emit.rs:105,235,291` | arc `phi` formatting | none |
-| rounded-rect radius floor | 1e-4 | `inkvec-cli/src/emit.rs:305,367` | below this, written as a plain rect | none |
-| ellipse rotation floor | 1e-3 | `inkvec-cli/src/emit.rs:344` | below this, no `transform` written | none |
-| alpha-ramp endpoint precision | 2 decimals | `inkvec-cli/src/emit.rs:715` | independent of `EMIT_DECIMALS` | none |
-| `RAMP_MIN_INTERIOR` | 64 px | `inkvec-cli/src/alpha.rs:102` | fewest interior pixels before a plane is fitted to a face's alpha; `face_alpha` skips smaller faces without calling the fit | none (the fit's own first test, now named) |
-| `RAMP_MIN_FADE` | 0.15 (opacity) | `inkvec-cli/src/alpha.rs:96` | least opacity change across a face for it to count as a fade | none |
-| `RAMP_MAX_RESIDUAL` | 0.06 (opacity) | `inkvec-cli/src/alpha.rs:99` | largest RMS residual of the alpha plane | none |
-| opacity precision | 3 decimals | `inkvec-cli/src/emit.rs:626,660,905` | `fill-opacity`/`stop-opacity` | none |
-| `INKVEC_EMIT_DECIMALS` (env) | overrides `EMIT_DECIMALS` | `inkvec-cli/src/emit.rs:126` | the mechanism used to isolate rounding from segment price in the 7.2% measurement | measured |
-| background-match precision | 2 decimals (hard-coded) | `inkvec-cli/src/post.rs:42-52` | `--no-background` element matching | none; coupled to `EMIT_DECIMALS` but not derived from it — breaks silently if the two diverge |
-| margin viewBox precision | 2 decimals | `inkvec-cli/src/post.rs:147` | `--margin` growth | none |
-| `ci_gate.py` ratio margin | 3% relative at the one-sided 95% upper bound (dE00 1%, turning 2%) | `bench/ci_gate.py` `MARGINS` | regression gate on parameter count vs. artist | measured (project's compactness regression budget) |
+| `EMIT_DECIMALS` | 2 | `inkvec-cli/src/pathdata.rs:44` | coordinate decimal places | derived — see 13-emit.md, "Coordinate precision" |
+| `MIN_RING_AREA` | 0.25 px² | `inkvec-cli/src/rings.rs:33` | smallest ring area worth emitting | motivated |
+| `S`-shorthand tolerance (`fmt_ring_with`) | 10^-decimals (0.01 px default) | `inkvec-cli/src/pathdata.rs:216` | rounded-space reflection test | derived |
+| `S`-shorthand tolerance (`fmt_fitted`) | 5e-4 px, raw-space | `inkvec-cli/src/pathdata.rs:76` | stroke-path reflection test | none |
+| ring segment minimum | 2 | `inkvec-cli/src/pathdata.rs:275` | a ring is discarded below this | derived (it encloses nothing) |
+| path point minimum | 3 | `inkvec-cli/src/pathdata.rs:137` | `fmt_path` early return | derived (degenerate-polygon guard) |
+| arc rotation precision | 3 decimals | `inkvec-cli/src/pathdata.rs:114,258,338` | arc `phi` formatting | none |
+| rounded-rect radius floor | 1e-4 | `inkvec-cli/src/primitive.rs:76,281` | below this, written as a plain rect | none |
+| ellipse rotation floor | 1e-3 | `inkvec-cli/src/primitive.rs:258` | below this, no `transform` written | none |
+| alpha-ramp endpoint precision | 2 decimals | `inkvec-cli/src/emit.rs:724` | independent of `EMIT_DECIMALS` | none |
+| `RAMP_MIN_INTERIOR` | 64 px | `inkvec-cli/src/alpha.rs:93` | fewest interior pixels before a plane is fitted to a face's alpha; `face_alpha` skips smaller faces without calling the fit | none (the fit's own first test, now named) |
+| `RAMP_MIN_FADE` | 0.15 (opacity) | `inkvec-cli/src/alpha.rs:87` | least opacity change across a face for it to count as a fade | none |
+| `RAMP_MAX_RESIDUAL` | 0.06 (opacity) | `inkvec-cli/src/alpha.rs:90` | largest RMS residual of the alpha plane | none |
+| opacity precision | 3 decimals | `inkvec-cli/src/emit.rs:724,766,772` | `fill-opacity`/`stop-opacity` | none |
+| `INKVEC_EMIT_DECIMALS` (env) | overrides `EMIT_DECIMALS` | `inkvec-cli/src/pathdata.rs:50` | the mechanism used to isolate rounding from segment price in the 7.2% measurement | measured |
+| `EVENODD` | ` fill-rule="evenodd"` | `inkvec-cli/src/emit/winding.rs:102` | written only on a path the winding pass cannot read; every other path is wound by nesting depth and carries no `fill-rule` | derived (the old output as a safe fallback) |
+| `JND` (gradient demotion) | 0.02 (OKLab) | `inkvec-cli/src/pipeline/demote.rs:41` | a gradient whose every pair of stops is closer than this is painted flat | none ("a conservative multiple of a just-noticeable difference") |
+| `LAYER_SIGMA_SRGB` | 3/255 | `inkvec-cli/src/alpha/layers.rs:22` | colour uncertainty a `--layers` hypothesis is judged against | measured (smallest value that finds a known layer) |
+| `LAYER_MAX_DE00` | 1.0 dE00 | `inkvec-cli/src/alpha/layers.rs:32` | `--layers` reproduction guard: every covered face within this of its own colour | motivated (about one just-noticeable difference, the tolerance the merge after it already spends) |
+| `CANVAS_TOL` | 0.25 px | `inkvec-cli/src/post.rs:129` | `--no-background` match of a fitted canvas `<rect>` | measured (a fitted canvas rect lands 0.01-0.02 px off; the path match uses `EMIT_DECIMALS`) |
+| margin viewBox precision | 2 decimals | `inkvec-cli/src/post.rs:336` | `--margin` growth | none |
+| `ci_gate.py` ratio margin | 3% relative at the one-sided 95% upper bound (dE00 1%, turning 2%) | `bench/ci_gate.py:138` `MARGINS` | regression gate on parameter count vs. artist | measured (project's compactness regression budget) |
 
 ## 14 — Fast mode ([14-fast-mode.md](14-fast-mode.md))
 

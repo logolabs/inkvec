@@ -264,7 +264,8 @@ pub fn extract_palette(
         if same_ink_as_accepted(c, &colors, same_ink_de00) {
             continue;
         }
-        if nearest <= merge_distance.max(reach) {
+        let escaped = nearest <= merge_distance.max(reach);
+        if escaped {
             let worth_it = sigma_noise > 0.0
                 && nearest > JND_FLOOR
                 && nearest > reach
@@ -274,7 +275,8 @@ pub fn extract_palette(
                 continue;
             }
         }
-        let Some(shape) = BlendEvidence::measure(&view, c, &colors, &nearest_px, merge_distance)
+        let Some(shape) =
+            BlendEvidence::measure(&view, c, &colors, &nearest_px, merge_distance, escaped)
         else {
             continue;
         };
@@ -290,6 +292,10 @@ pub fn extract_palette(
             );
         }
         if shape.is_coverage() {
+            continue;
+        }
+        // The escape rule (`crate::color::escape_needs_interior`), as the shipped walk.
+        if color::escape_needs_interior(escaped, shape.blend, shape.interior) {
             continue;
         }
         nearest_px
@@ -422,6 +428,7 @@ impl BlendEvidence {
         colors: &[Ink2],
         nearest_px: &[f32],
         merge_distance: f32,
+        escaped: bool,
     ) -> Option<Self> {
         let pairs = blend_pairs(c, colors, merge_distance * 1.6, color::BLEND_TMIN);
         let blend = !pairs.is_empty();
@@ -448,7 +455,8 @@ impl BlendEvidence {
             let a = c.alpha();
             a > 0.0 && a < 1.0
         };
-        let interior = if blend || translucent {
+        // Measured for an escaped candidate too: the escape rule reads it.
+        let interior = if blend || translucent || escaped {
             interior_fraction(
                 &view.px,
                 view.width,

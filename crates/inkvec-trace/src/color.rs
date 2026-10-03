@@ -241,6 +241,82 @@ pub const BLEND_STRADDLE_FRACTION: f32 = 0.5;
 /// differ by more than a few levels.
 pub(crate) const STRADDLE_STEP: f32 = 0.12;
 
+/// The escape rule: a candidate admitted *inside* the merge radius by the
+/// description-length escape, and not a blend of two accepted inks, must have an interior.
+///
+/// `escaped` is true when the candidate lies within `max(merge_distance, reach)` of an
+/// accepted ink and passed the MDL escape (`0.5 · claim · (d / σ)² > λ · PARAMS_PER_INK`);
+/// `blend` when it lies on a chord between two accepted inks (`blend_pairs_cached`);
+/// `interior` is the share of its claimed pixels whose four neighbours it also claims
+/// (`DistinctImage::interior`, one step of 4-neighbour erosion). Returns true, meaning
+/// "reject", when `escaped && !blend && interior < BLEND_INTERIOR_FRACTION`. A candidate
+/// that did not escape is never affected, so the walk is unchanged for every candidate
+/// outside the merge radius of the inks before it. Both walks apply it, the opaque one
+/// (`mdl::Walk`) and the two-ground one (`native/palette.rs`). O(1); the interior it reads
+/// is one pass over the candidate's claimed pixels, which the walk already makes for blends.
+///
+/// # Why blends are exempt
+///
+/// A thin blend already has a shape test of its own, the straddle test
+/// ([`BLEND_STRADDLE_FRACTION`]): a thin band of a colour that is a mix of its neighbours is
+/// an ink when it does not straddle them (the Vulcan salute's shadow strips). The research
+/// proposal asked the interior of every escaped candidate, blend or not; measured on the
+/// gate (v0.2.5 baseline, 246 icons, 2026-10-03) that read **worse** at 128 px: dE00
+/// +1.10 % (upper bound +2.07 % against a 1.38 % margin), 16 icons changed and 11 of them
+/// worse, all skin-tone shading bands in noto-emoji (`emoji_u1f9dd_1f3fd_200d_2640`
+/// 0.478 -> 0.624). Those bands are blends inside the radius that the straddle test had
+/// rightly kept. With blends exempt, the rule reaches only what nothing else tested.
+///
+/// # The case: one gold traced as three inks
+///
+/// The Studio sample `crest-filigree.png` is one gold (176,138,74) on a clear ground, drawn
+/// at 256 px and upscaled 2x with a premultiplied Lanczos filter (Pillow resizes RGBA
+/// premultiplied). The filter's negative lobes overshoot at every edge, and with alpha
+/// clipped at 1 the overshoot becomes an *opaque* one-pixel rim of `k · gold`, `k = 1.067`
+/// on every channel (188,147,79): 3462 rim pixels of 12105 opaque ones.
+///
+/// * The two-ground walk cannot call the rim a blend: a blend with the clear ground moves
+///   the colour over grey towards grey, and the rim is opaque, so it sits on no chord.
+/// * Before this rule a non-blend was never measured for thinness (interior read 1.0).
+/// * The rim is 0.0294 from the gold in OKLab, inside the 0.035 merge radius, so the escape
+///   decided: `0.5 · 5725 · (0.0294 / 0.00196)² = 6.4e5 ≫ 3λ = 18.7`. Admitted.
+///
+/// The rim then became faces of its own along every edge, the gold split around them, and
+/// the dots came out notched (v0.2.5: fills #b08a4a, #b08b4b, #bd944f, 7 paths, no circles,
+/// dE00 0.1245 against the input). The r2-palette research bisected it to 772771b
+/// ("native transparency by default", v0.1.4); the opaque walk of v0.1.3 rejected the same
+/// pixels as coverage, because composited onto white they do lie on the gold-white chord.
+/// With the rule the rim has interior 0 and is rejected: one ink, 14 circles.
+///
+/// # Why an interior, and why only for the escape
+///
+/// The escape exists for a colour that is a whisker from an accepted ink but has so many
+/// pixels that folding it in would cost more residual than a new ink costs to state. That
+/// argument counts pixels, and an edge artefact has plenty of them: a rim one pixel wide
+/// around every shape. What the argument never asks is the question
+/// [`BLEND_INTERIOR_FRACTION`] asks of blends, "is this an area or a band?". A colour the
+/// artist chose a whisker away from another covers area; ringing, a resampling halo or a
+/// shading fringe does not. Outside the merge radius the candidate is far enough from every
+/// accepted ink that the existing tests decide, and nothing changes there.
+///
+/// Inspired by: J. Yang, N. Vining, S. Kheradmand, N. Carr, L. Sigal, A. Sheffer (2023),
+/// "Subpixel Deblurring of Anti-Aliased Raster Clip-Art", *Computer Graphics Forum* 42(2),
+/// doi:10.1111/cgf.14744, whose candidate palette takes PATCH seeds only from same-colour
+/// patches at least 2 px wide. Their colour-outlier seeds are found only after a network
+/// has removed ringing; on the raw raster an overshoot pixel is exactly such an outlier.
+/// Here the patch requirement is applied to the one admission path that had no shape test.
+/// See also: VTracer / visioncortex `color_clusters` (`patch_good`), which requires
+/// `perimeter < area` ("thread-like and thinner than 2px" otherwise) of every layer
+/// candidate; L. Yang, P. V. Sander, J. Lawrence, H. Hoppe (2011), "Antialiasing
+/// Recovery", *ACM TOG* 30(3), doi:10.1145/1966394.1966401, whose two-colour edge model
+/// is what the blend test approximates and which treats an overshoot pixel as one of the
+/// two extremes, so it cannot reject one by itself.
+///
+/// Measured: see `docs/algorithm/03-palette.md` (the crest, the gate and the resampled set).
+pub(crate) fn escape_needs_interior(escaped: bool, blend: bool, interior: f32) -> bool {
+    escaped && !blend && interior < BLEND_INTERIOR_FRACTION
+}
+
 /// Numbers needed to state one ink.
 pub const PARAMS_PER_INK: f64 = 3.0;
 

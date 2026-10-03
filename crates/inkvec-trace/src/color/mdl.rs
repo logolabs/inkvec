@@ -243,10 +243,11 @@ impl Walk<'_, '_> {
                 return false;
             }
         }
-        let shape = BlendEvidence::measure(self, c);
+        // From here on `merged` means "inside the merge radius and kept only by the escape".
+        let shape = BlendEvidence::measure(self, c, merged);
         if self.paldbg {
             eprintln!(
-                "  cand {:<9} bin={:<6} claim={:<6} w={:.4} sig={:.5} reach={:.4} near={:.4} blend={} chord={:.4} interior={:.3} straddle={:.3}",
+                "  cand {:<9} bin={:<6} claim={:<6} w={:.4} sig={:.5} reach={:.4} near={:.4} blend={} chord={:.4} interior={:.3} straddle={:.3} escaped={}",
                 to_hex(oklab_to_rgb(c)),
                 n,
                 claim,
@@ -257,10 +258,11 @@ impl Walk<'_, '_> {
                 shape.blend,
                 if shape.blend { shape.chord_off } else { f32::NAN },
                 shape.interior,
-                shape.straddle
+                shape.straddle,
+                merged
             );
         }
-        !shape.is_coverage()
+        !shape.is_thin_escape() && !shape.is_coverage()
     }
 
     /// Accept `c`: lower every colour's nearest-ink distance and record the ink.
@@ -283,19 +285,29 @@ impl Walk<'_, '_> {
 
 /// Whether a candidate is anti-aliasing rather than an ink: a blend of two accepted inks,
 /// thin (`interior < BLEND_INTERIOR_FRACTION`) and straddling
-/// (`straddle >= BLEND_STRADDLE_FRACTION`). Each measurement is taken only when the one
-/// before it leaves the verdict open.
+/// (`straddle >= BLEND_STRADDLE_FRACTION`); or a thin non-blend that only the
+/// description-length escape admitted ([`BlendEvidence::is_thin_escape`]). Each
+/// measurement is taken only when the one before it leaves the verdict open.
 struct BlendEvidence {
     blend: bool,
+    /// Inside the merge radius of an accepted ink, kept so far only by the MDL escape.
+    escaped: bool,
     /// OKLab distance to the nearest qualifying chord; infinite when there is none.
     chord_off: f32,
+    /// Share of the claimed pixels that are interior; 1.0 (not measured) unless the
+    /// candidate is a blend or escaped.
     interior: f32,
     straddle: f32,
 }
 
 impl BlendEvidence {
     /// Measure candidate `c` against the walk's accepted inks and its current claim.
-    fn measure(walk: &mut Walk, c: Oklab) -> Self {
+    /// `escaped`: `c` lies inside the merge radius of an accepted ink and passed the MDL
+    /// escape, so its interior is measured even when it is not a blend (the escape rule
+    /// reads it). A blend is measured exactly as before the rule: interior, then the
+    /// straddle when thin. A candidate that is neither a blend nor escaped is not
+    /// measured at all, as before.
+    fn measure(walk: &mut Walk, c: Oklab, escaped: bool) -> Self {
         let pairs = super::blend_pairs_cached(c, &walk.axes, walk.merge_distance * 1.6, BLEND_TMIN);
         let blend = !pairs.is_empty();
         let chord_off = pairs
@@ -303,7 +315,7 @@ impl BlendEvidence {
             .map(|&(_, _, _, off)| off)
             .fold(f32::INFINITY, f32::min);
         let img = &walk.view.img;
-        let interior = if blend {
+        let interior = if blend || escaped {
             img.interior(&walk.claim)
         } else {
             1.0
@@ -329,6 +341,7 @@ impl BlendEvidence {
         };
         BlendEvidence {
             blend,
+            escaped,
             chord_off,
             interior,
             straddle,
@@ -340,6 +353,13 @@ impl BlendEvidence {
         self.blend
             && self.interior < BLEND_INTERIOR_FRACTION
             && self.straddle >= BLEND_STRADDLE_FRACTION
+    }
+
+    /// Admitted inside the merge radius by the description-length escape, not a blend, and
+    /// thin: an edge artefact of an accepted ink, not an ink of its own. See
+    /// [`super::escape_needs_interior`] for the rule, the case and the literature.
+    fn is_thin_escape(&self) -> bool {
+        super::escape_needs_interior(self.escaped, self.blend, self.interior)
     }
 }
 

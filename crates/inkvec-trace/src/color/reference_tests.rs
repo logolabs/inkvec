@@ -458,7 +458,7 @@ pub fn extract_palette_mdl(
         }
         // Explained as a blend of inks already accepted *and* shaped like a boundary
         // band rather than a region: coverage evidence, not a new colour.
-        let shape = BlendEvidence::measure(&view, *c, &colors, &nearest_px, merge_distance);
+        let shape = BlendEvidence::measure(&view, *c, &colors, &nearest_px, merge_distance, merged);
         // Why every candidate was kept or dropped. A wrong palette does not look like a
         // palette bug downstream — the green-circle case surfaced as a spurious radial
         // gradient and twenty-seven junk paths — so the decision has to be readable
@@ -501,6 +501,10 @@ pub fn extract_palette_mdl(
         // asked what the chord rule would newly drop. Agreement on the accepted set says
         // nothing about the rejected set.
         if shape.is_coverage() {
+            continue;
+        }
+        // The escape rule (`crate::color::escape_needs_interior`), as the shipped walk.
+        if escape_needs_interior(merged, shape.blend, shape.interior) {
             continue;
         }
         nearest_px
@@ -665,6 +669,7 @@ impl BlendEvidence {
         colors: &[Oklab],
         nearest_px: &[f32],
         merge_distance: f32,
+        escaped: bool,
     ) -> Self {
         let pairs = blend_pairs(c, colors, merge_distance * 1.6, BLEND_TMIN);
         let blend = !pairs.is_empty();
@@ -675,7 +680,8 @@ impl BlendEvidence {
             .iter()
             .map(|&(_, _, _, off)| off)
             .fold(f32::INFINITY, f32::min);
-        let interior = if blend {
+        // Measured for an escaped candidate too: the escape rule reads it.
+        let interior = if blend || escaped {
             interior_fraction(
                 &view.lab,
                 view.width,

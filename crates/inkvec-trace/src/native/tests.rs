@@ -1057,6 +1057,45 @@ fn a_lone_small_shape_on_the_clear_ground_is_an_ink() {
     assert!(tr.face_color.contains(&paint), "{:?}", tr.face_color);
 }
 
+/// The crest disease in miniature (`color::escape_needs_interior`): a gold disc on the clear
+/// ground whose edge carries what a premultiplied Lanczos upscale leaves there, an opaque
+/// one-pixel rim 1.067x brighter than the gold (the crest's measured ratio), then the
+/// anti-aliased fade to clear. Over two grounds the rim is on no chord, so the blend test
+/// cannot reject it; it is 0.03 from the gold, inside the merge radius, and the
+/// description-length escape pays for it many times over. It has no interior, so it is not
+/// an ink: the palette is the gold and the clear ground.
+#[test]
+fn an_overshoot_rim_inside_the_merge_radius_is_not_an_ink() {
+    let n = 64;
+    let gold: [f32; 3] = [176.0 / 255.0, 138.0 / 255.0, 74.0 / 255.0];
+    let rim = gold.map(|v| (v * 1.067).min(1.0));
+    let r = 20.0f32;
+    let (rgb, alpha) = image(n, |x, y| {
+        let d = ((x as f32 - 31.5).powi(2) + (y as f32 - 31.5).powi(2)).sqrt();
+        if d < r - 1.0 {
+            (gold, 1.0)
+        } else if d < r {
+            (rim, 1.0)
+        } else {
+            (gold, (r + 1.0 - d).clamp(0.0, 1.0))
+        }
+    });
+    let lambda = 0.5 * ((n * n) as f64).ln();
+    let sigma = 0.5 / 255.0;
+    // Preconditions: a separate colour (above the same-ink floor), inside the radius.
+    let (g, k) = (
+        Ink2::opaque(rgb_to_oklab(gold)),
+        Ink2::opaque(rgb_to_oklab(rim)),
+    );
+    assert!(g.dist(k) < color::DEFAULT_MERGE_DISTANCE, "{}", g.dist(k));
+    assert!(g.de00(k) > color::SAME_INK_DE00, "{}", g.de00(k));
+    let pal = extract_palette(&rgb, &alpha, n, n, 0.035, 64, evidence(sigma, lambda, 1.5));
+    assert_eq!(pal.len(), 2, "{:?} {:?}", pal.rgb, pal.alpha);
+    let paint = find(&pal, 1.0);
+    assert!(close(pal.rgb[paint], gold, 0.01), "{:?}", pal.rgb[paint]);
+    find(&pal, 0.0);
+}
+
 /// The exemption goes to the first visible ink only: once one is accepted, a rare colour
 /// beside it is still rejected as rare.
 #[test]

@@ -718,6 +718,54 @@ fn the_mdl_escape_splits_where_half_the_residual_outprices_an_ink() {
     }
 }
 
+/// The escape rule (`escape_needs_interior`): a non-blend colour inside the merge radius
+/// that the description-length escape would admit must cover area. One-pixel lines of `g2` every
+/// eighth column of `g1` (a resampling rim, 12.5 % of the image, so not rare) have no
+/// interior and are part of `g1`; the same two greys as 20-px stripes stay two inks
+/// (`close_inks_split_only_when_the_noise_says_they_can_be_told_apart`).
+#[test]
+fn a_thin_colour_inside_the_merge_radius_is_not_an_ink() {
+    let g1 = oklab_to_rgb(Oklab {
+        l: 0.63,
+        a: 0.0,
+        b: 0.0,
+    });
+    let g2 = oklab_to_rgb(Oklab {
+        l: 0.655,
+        a: 0.0,
+        b: 0.0,
+    });
+    let (w, h) = (64, 24);
+    let rgb: Vec<[f32; 3]> = (0..w * h)
+        .map(|i| if i % w % 8 == 7 { g2 } else { g1 })
+        .collect();
+    let ev = PaletteEvidence {
+        sigma_noise: 0.5 / 255.0,
+        lambda: 0.5 * ((w * h) as f64).ln(),
+        noise_sigmas: 0.0,
+        same_ink_de00: 0.0,
+    };
+    // Preconditions: inside the radius, and the escape alone would pay for it.
+    let d = rgb_to_oklab(g1).dist(rgb_to_oklab(g2));
+    assert!(d < DEFAULT_MERGE_DISTANCE && d > JND_FLOOR, "{d}");
+    let claim = (w * h / 8) as f64;
+    assert!(0.5 * claim * (d as f64 / ev.sigma_noise).powi(2) > ev.lambda * PARAMS_PER_INK);
+    let pal = extract_palette_mdl(&rgb, w, h, DEFAULT_MERGE_DISTANCE, 8, ev);
+    assert_eq!(pal.len(), 1, "{:?}", pal.rgb);
+    // Refined to the mean of its members within the radius: 7 parts g1 to 1 part g2.
+    assert!(pal.nearest(lab(g1)).1 < d / 8.0 + 1e-4, "{:?}", pal.rgb);
+    // The rule itself, at the threshold.
+    assert!(escape_needs_interior(
+        true,
+        false,
+        BLEND_INTERIOR_FRACTION - 1e-3
+    ));
+    assert!(!escape_needs_interior(true, false, BLEND_INTERIOR_FRACTION));
+    assert!(!escape_needs_interior(false, false, 0.0));
+    // A blend is judged by the straddle test instead.
+    assert!(!escape_needs_interior(true, true, 0.0));
+}
+
 #[test]
 fn a_rare_colour_is_not_an_ink() {
     // One pixel of green in 40x40 red (0.06 % of the image, below MIN_INK_WEIGHT).

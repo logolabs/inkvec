@@ -310,7 +310,10 @@ impl Walk<'_, '_> {
         if same_ink_as_accepted(c, &self.colors, same_ink_de00) {
             return false;
         }
-        if nearest <= self.merge_distance.max(reach) {
+        // Inside the merge radius: kept only if the escape pays, and then (below) only with
+        // an interior (`color::escape_needs_interior`).
+        let escaped = nearest <= self.merge_distance.max(reach);
+        if escaped {
             let worth_it = sigma_noise > 0.0
                 && nearest > JND_FLOOR
                 && nearest > reach
@@ -320,12 +323,12 @@ impl Walk<'_, '_> {
                 return false;
             }
         }
-        let Some(shape) = BlendEvidence::measure(self, c) else {
+        let Some(shape) = BlendEvidence::measure(self, c, escaped) else {
             return false;
         };
         if self.paldbg {
             eprintln!(
-                "  native cand w={} k={} a={:.3} bin={n} claim={claim} near={nearest:.4} blend={} interior={:.3} straddle={:.3}",
+                "  native cand w={} k={} a={:.3} bin={n} claim={claim} near={nearest:.4} blend={} interior={:.3} straddle={:.3} escaped={escaped}",
                 color::to_hex(oklab_to_rgb(c.w)),
                 color::to_hex(oklab_to_rgb(c.k)),
                 c.alpha(),
@@ -334,7 +337,7 @@ impl Walk<'_, '_> {
                 shape.straddle
             );
         }
-        !shape.is_coverage()
+        !shape.is_thin_escape() && !shape.is_coverage()
     }
 
     /// Accept `c`: lower every point's nearest-ink distance and record the ink.
@@ -356,9 +359,14 @@ impl Walk<'_, '_> {
 }
 
 /// Whether a candidate is anti-aliasing rather than an ink, over both grounds: the classic
-/// blend, thin and straddling test, plus the translucent-interior rule.
+/// blend, thin and straddling test, the escape rule (`color::escape_needs_interior`), plus
+/// the translucent-interior rule.
 struct BlendEvidence {
     blend: bool,
+    /// Inside the merge radius of an accepted ink, kept so far only by the MDL escape.
+    escaped: bool,
+    /// Share of the claimed pixels that are interior; 1.0 (not measured) unless the
+    /// candidate is a blend, translucent or escaped.
     interior: f32,
     straddle: f32,
 }
@@ -375,7 +383,13 @@ impl BlendEvidence {
     /// opacity strictly between 0 and 1) that is not a blend is kept only with an interior.
     /// Blends keep the straddle test instead; asking them for an interior as well traded
     /// noto-emoji for twemoji and cost the translucent set.
-    fn measure(walk: &mut Walk, c: Ink2) -> Option<Self> {
+    ///
+    /// The escape rule (`color::escape_needs_interior`) extends the translucent rule to an
+    /// *opaque* non-blend, but only inside the merge radius, where the description-length
+    /// escape admitted it (`escaped`): its interior is measured for that. Blends are
+    /// measured exactly as before, and a candidate that is neither a blend, translucent nor
+    /// escaped is not measured at all.
+    fn measure(walk: &mut Walk, c: Ink2, escaped: bool) -> Option<Self> {
         let pairs = blend_pairs_cached(c, &walk.six, walk.merge_distance * 1.6, color::BLEND_TMIN);
         let blend = !pairs.is_empty();
         let translucent = {
@@ -383,7 +397,7 @@ impl BlendEvidence {
             a > 0.0 && a < 1.0
         };
         let img = &walk.view.img;
-        let interior = if blend || translucent {
+        let interior = if blend || translucent || escaped {
             img.interior(&walk.claim)
         } else {
             1.0
@@ -412,6 +426,7 @@ impl BlendEvidence {
         };
         Some(BlendEvidence {
             blend,
+            escaped,
             interior,
             straddle,
         })
@@ -422,6 +437,12 @@ impl BlendEvidence {
         self.blend
             && self.interior < BLEND_INTERIOR_FRACTION
             && self.straddle >= BLEND_STRADDLE_FRACTION
+    }
+
+    /// Admitted inside the merge radius by the description-length escape, not a blend, and
+    /// thin: the crest's overshoot rim. See `color::escape_needs_interior`.
+    fn is_thin_escape(&self) -> bool {
+        color::escape_needs_interior(self.escaped, self.blend, self.interior)
     }
 }
 

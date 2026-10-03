@@ -129,9 +129,9 @@
         two boundary lines geometrically cross, which is sturdier evidence than one
         blended pixel.</p>
       <p>This was tried the other way — letting those meeting-point pixels vote too — and
-        it made results measurably worse across a large test set of icons, not better.
-        Junctions in real artwork are rare enough, and the blended-pixel signal there weak
-        enough, that trusting them costs more than it buys.</p>
+        it made results measurably worse across a large test set of icons, not better. The
+        blended-pixel signal there is weak enough that letting it vote costs more than it
+        buys.</p>
     </section>
 
     <section>
@@ -177,11 +177,11 @@
         None of the four was shipped.</p>
       <div class="aside">The documented conclusion is blunt, and worth stating plainly: a
         thin ribbon's two edges are not really two independent boundaries — they are one
-        stroke with a centre and a width, and no amount of general-purpose smoothing
-        applied to "two independent edges" can substitute for modelling it that way. The
-        fix belongs in how a thin shape is represented, not in another dial on this
-        stage. The engineering note in the source code ends, deliberately: <b>do not add
-        a fifth knob here.</b></div>
+        stroke with a centre and a width, and none of the general-purpose fixes applied to
+        "two independent edges" could substitute for modelling it that way. The fix the
+        source code names is in how a thin shape is represented: as a centre line and a
+        width. Until that exists, the pixels where a ribbon's two edges compete are simply
+        left out of the comparison, like the pixels where boundaries meet.</div>
     </section>
 
     <section>
@@ -218,6 +218,33 @@
       <p>Measured on two sets of test icons, one of them held out from development,
         the shapes it hands on reproduce the images more closely than before, on
         average and on the hardest tenth, at about the same cost in time.</p>
+    </section>
+
+    <section>
+      <h2>When a picture is too busy to solve</h2>
+      <p>To score its strip of pixels quickly, the stage prepares some tables before it
+        starts: for each stretch of the strip, the colour every nearby shape would paint at
+        every pixel, and running totals of those colours. On ordinary artwork these tables
+        are small — a few megabytes for an icon, about 22 megabytes for the largest, most
+        detailed image in the test sets.</p>
+      <p>A few kinds of picture break that. Think of stripes one pixel wide, a checkerboard
+        of single pixels, the grey-and-white "transparency" checkerboard some images have
+        baked in behind the artwork, or a small picture blown up with hard square pixels.
+        There every pixel sits next to a boundary, so the strip covers whole rows, and a
+        row crosses hundreds of shapes. The tables grow with the square of that number: for
+        one-pixel stripes on a 512-pixel image they would have needed about 265 gigabytes,
+        and the trace crashed.</p>
+      <p>So the stage now adds up the size of those tables before it builds any of them.
+        If they would pass a fixed allowance — 256 MiB, or 32 bytes per pixel on images
+        larger than about 2,900 pixels square — it skips the solve altogether and keeps the
+        boundary the earlier stages measured, exactly as if the solve had found nothing to
+        improve. Little is lost: what the solve can buy on such pictures is small, and on the
+        stripes, where every pixel is a blend of two shapes whatever the boundary does, it
+        gains nothing at all. The skip covers
+        the whole picture, so an icon drawn on a baked checkerboard keeps its measured
+        edges too; on test images of that kind the result came out very slightly less
+        accurate, with half the memory. On the test sets the tracer is judged on, the
+        allowance is never reached.</p>
     </section>
 
   </main>

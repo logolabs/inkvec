@@ -101,7 +101,7 @@ pub(crate) fn flatten(path: &FittedPath, step: f64, out: &mut Vec<(Point, Point)
                 end,
             } => {
                 let f = arc_ellipse_center(cur, rx, ry, phi, large_arc, sweep, end);
-                let n = ((f.span() / step).ceil() as usize).clamp(1, 4096);
+                let n = ((arc_length(&f) / step).ceil() as usize).clamp(1, 4096);
                 let mut prev = cur;
                 for i in 1..n {
                     let q = f.at(f.theta1 + f.delta * i as f64 / n as f64);
@@ -116,6 +116,29 @@ pub(crate) fn flatten(path: &FittedPath, step: f64, out: &mut Vec<(Point, Point)
     if path.closed {
         push(cur, path.start);
     }
+}
+
+/// The length of the arc `f`, px, for choosing a step count: exactly `rx·|δ|` for a
+/// circle's, and for an ellipse's the length of the 32-chord polygon inscribed in it
+/// (short of the arc by about `κ·ℓ³/24` per chord of length `ℓ`, negligible here).
+///
+/// `ArcFrame::span`, `max(rx, ry)·|δ|`, bounds the length from above but by the ratio of the
+/// radii: the curve fitter's elliptical arcs on lucide `vegan` at 512 px (rx 5461 px, ry
+/// 704 px) flattened into ten thousand quarter-pixel pieces each, most of them a few
+/// hundredths of a pixel long, and every measurement of the boundary walked them.
+fn arc_length(f: &inkvec_fit::curves::ArcFrame) -> f64 {
+    if (f.rx - f.ry).abs() <= 1e-9 * f.rx.abs().max(1.0) {
+        return f.span();
+    }
+    let m = 32;
+    let mut prev = f.at(f.theta1);
+    let mut len = 0.0;
+    for i in 1..=m {
+        let q = f.at(f.theta1 + f.delta * i as f64 / m as f64);
+        len += prev.dist(q);
+        prev = q;
+    }
+    len
 }
 
 /// Score the centrelines `lines` (joined by `join`) against boundary `b`, starting from

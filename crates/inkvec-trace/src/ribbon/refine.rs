@@ -30,7 +30,7 @@
 //! nearest to it. By the envelope theorem the foot point's own movement adds nothing to
 //! first order, so the derivative is `-n·∂C/∂θ` at the foot, `n` the unit vector from the
 //! foot to the point: written out per segment kind in [`super::dist`] and assembled by
-//! [`analytic_row`]; only the miter gauge at a vertex and elliptical arcs keep central
+//! [`analytic_row`]; only the miter gauge at a vertex (and degenerate feet) keep central
 //! differences of the exact distance (step 1e-5 px). The normal equations `(JᵀJ + μ·diag(JᵀJ)) δ = -Jᵀr`
 //! couple each variable only to its own segment's neighbours and to `h`, so they are kept
 //! in profile storage and solved by an envelope Cholesky ([`super::skyline`], exactly the
@@ -58,7 +58,9 @@ use inkvec_fit::primitives::{PrimitiveFit, PrimitiveKind};
 use inkvec_fit::FittedPath;
 
 use super::boundary::Boundary;
-use super::dist::{circle_grad, circular_arc_grad, cubic_eval, cubic_grad, dist_to, line_grad};
+use super::dist::{
+    circle_grad, circular_arc_grad, cubic_eval, cubic_grad, dist_to, ellipse_arc_grad, line_grad,
+};
 use super::grid::SegGrid;
 use super::join::{miter_gauge, tangents, Join};
 use super::score::flatten;
@@ -898,9 +900,9 @@ fn profile(model: &Model) -> Vec<usize> {
 /// The derivatives of row (`shape`, `seg`)'s distance term at boundary point `p` with
 /// respect to the variables it reads, in closed form ([`super::dist`]'s gradients, by the
 /// envelope theorem), appended to `out` as `(variable, ∂d/∂θ)` with every variable once.
-/// `false` (and `out` untouched) where the closed form is not used: an elliptical arc,
-/// the degenerate cases the gradients decline, and -- decided by the caller -- a miter
-/// gauge at a vertex; the caller then takes central differences.
+/// `false` (and `out` untouched) where the closed form is not used: the degenerate cases
+/// the gradients decline and -- decided by the caller -- a miter gauge at a vertex; the
+/// caller then takes central differences.
 ///
 /// A segment's start point is the previous segment's end variable (the path's start for
 /// the first); a closed path's last end *is* its start, so a variable can receive two
@@ -959,7 +961,29 @@ fn analytic_row(
                     put(&mut g, end, d[1]);
                     g.push((ri, dr));
                 }
-                SegVar::Arc { r: None, .. } => return false,
+                SegVar::Arc {
+                    end,
+                    r: None,
+                    rx,
+                    ry,
+                    phi,
+                    large,
+                    sweep,
+                } => {
+                    let arc = Segment::Arc {
+                        rx,
+                        ry,
+                        phi,
+                        large_arc: large,
+                        sweep,
+                        end: pt(t, end),
+                    };
+                    let Some((_, d)) = ellipse_arc_grad(p, a, &arc, t_hint) else {
+                        return false;
+                    };
+                    put(&mut g, a_i, d[0]);
+                    put(&mut g, end, d[1]);
+                }
             }
         }
         Shape::Circle { at, .. } => {
@@ -985,7 +1009,7 @@ fn analytic_row(
 /// rows and the anchor.
 ///
 /// Each row's `J` is the closed form of [`analytic_row`] where it applies -- every row
-/// under round joins except on elliptical arcs and degenerate feet -- and otherwise central
+/// under round joins except at degenerate feet -- and otherwise central
 /// differences of the segment's exact distance (step 1e-5 px; see the module docs): the
 /// miter gauge at a vertex, whose tangent-dependent derivative is not written out. The
 /// closed form costs one foot per row where the differences cost two exact distances per

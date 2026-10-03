@@ -24,12 +24,14 @@ use inkvec_fit::curves::{arc_ellipse_center, Segment};
 use super::grid::point_segment;
 
 /// Distance from `p` to segment `s` starting at `a`, and the foot's parameter (for a
-/// cubic, the Newton-polished `t` started from `t_hint`; otherwise unused).
+/// cubic, the Newton-polished `t` started from `t_hint`; for an elliptical arc, its
+/// position along the sweep; otherwise unused).
 ///
 /// Lines and circular arcs are closed-form: an arc's nearest point is the radial
 /// projection when that lies within the sweep, else the nearer endpoint. A cubic's foot
 /// solves `(C(t) - p)·C'(t) = 0` by four Newton steps, clamped to `[0, 1]`, against both
-/// endpoints. An elliptical arc takes the best of 64 samples refined by golden section.
+/// endpoints; an elliptical arc's the same condition in its angle by six
+/// ([`ellipse_arc_dist`]).
 pub(super) fn dist_to(p: Point, a: Point, s: &Segment, t_hint: f64) -> (f64, f64) {
     match *s {
         Segment::Line(b) => {
@@ -38,7 +40,7 @@ pub(super) fn dist_to(p: Point, a: Point, s: &Segment, t_hint: f64) -> (f64, f64
         }
         Segment::Cubic(c1, c2, b) => cubic_dist(p, [a, c1, c2, b], t_hint),
         Segment::Arc { .. } if s.is_circular() => (arc_dist(p, a, s), 0.0),
-        Segment::Arc { .. } => (ellipse_arc_dist(p, a, s), 0.0),
+        Segment::Arc { .. } => ellipse_arc_dist(p, a, s, t_hint),
     }
 }
 
@@ -126,9 +128,30 @@ pub(super) fn arc_dist(p: Point, a: Point, s: &Segment) -> f64 {
     }
 }
 
-/// Distance from `p` to the elliptical arc `s` starting at `a`: best of 64 samples in the
-/// sweep, refined by 24 golden-section steps on the bracketing interval.
-pub(super) fn ellipse_arc_dist(p: Point, a: Point, s: &Segment) -> f64 {
+/// Distance from `p` to the elliptical arc `s` starting at `a`, and the foot's position
+/// `u` in `[0, 1]` along the sweep.
+///
+/// The arc in centre form (SVG F.6.5, [`arc_ellipse_center`]) is
+/// `C(θ) = c + R(φ)·(rx cos θ, ry sin θ)` for `θ = θ1 + δ·u`, whose second derivative in `θ`
+/// is `c - C`. Newton's method on the foot condition `g(θ) = (C - p)·C'(θ) = 0`, with
+/// `g' = |C'|² - (C - p)·(C - c)`, runs six steps from `u = t_hint` (the solve's nearest
+/// flattened piece, so already within a fraction of a pixel of the foot), clamped to the
+/// sweep, and the result is compared with both endpoints, as for a cubic.
+///
+/// This replaced a search of 64 samples refined by 24 golden-section steps (112 distance
+/// evaluations, each a sine and a cosine) that ignored the hint: on lucide `vegan` at 512
+/// px the fitter's elliptical arcs carried a third of the boundary, and with central
+/// differences on top that was ~900 evaluations per row.
+pub(super) fn ellipse_arc_dist(p: Point, a: Point, s: &Segment, t_hint: f64) -> (f64, f64) {
+    let Some((d, u, _)) = ellipse_arc_foot(p, a, s, t_hint) else {
+        return (f64::INFINITY, 0.0);
+    };
+    (d, u)
+}
+
+/// [`ellipse_arc_dist`] with the arc's centre form and the foot's angle: `(d, u, θ*)`;
+/// `None` for a segment that is not an arc.
+fn ellipse_arc_foot(p: Point, a: Point, s: &Segment, t_hint: f64) -> Option<(f64, f64, f64)> {
     let Segment::Arc {
         rx,
         ry,
@@ -138,32 +161,43 @@ pub(super) fn ellipse_arc_dist(p: Point, a: Point, s: &Segment) -> f64 {
         end,
     } = *s
     else {
-        return f64::INFINITY;
+        return None;
     };
     let f = arc_ellipse_center(a, rx, ry, phi, large_arc, sweep, end);
-    let d = |u: f64| f.at(f.theta1 + f.delta * u).dist(p);
-    let n = 64;
-    let mut best = (d(0.0), 0usize);
-    for i in 1..=n {
-        let v = d(i as f64 / n as f64);
-        if v < best.0 {
-            best = (v, i);
-        }
-    }
-    let (mut lo, mut hi) = (
-        best.1.saturating_sub(1) as f64 / n as f64,
-        ((best.1 + 1).min(n)) as f64 / n as f64,
-    );
-    let g = 0.618_033_988_749_895;
-    for _ in 0..24 {
-        let (m1, m2) = (hi - g * (hi - lo), lo + g * (hi - lo));
-        if d(m1) < d(m2) {
-            hi = m2;
+    let (da, de) = (a.dist(p), end.dist(p));
+    if f.delta == 0.0 {
+        return Some(if da <= de {
+            (da, 0.0, f.theta1)
         } else {
-            lo = m1;
-        }
+            (de, 1.0, f.theta1)
+        });
     }
-    d(0.5 * (lo + hi)).min(best.0)
+    let (sp, cp) = f.phi.sin_cos();
+    let mut u = t_hint.clamp(0.0, 1.0);
+    for _ in 0..6 {
+        let (st, ct) = (f.theta1 + f.delta * u).sin_cos();
+        let (lx, ly) = (f.rx * ct, f.ry * st);
+        let (tx, ty) = (-f.rx * st, f.ry * ct);
+        // C - p, C' (in θ), and C - c, all in image axes.
+        let (ox, oy) = (cp * lx - sp * ly, sp * lx + cp * ly);
+        let (ex, ey) = (f.c.x + ox - p.x, f.c.y + oy - p.y);
+        let (dx, dy) = (cp * tx - sp * ty, sp * tx + cp * ty);
+        let g = ex * dx + ey * dy;
+        let gp = dx * dx + dy * dy - (ex * ox + ey * oy);
+        if gp.abs() < 1e-12 {
+            break;
+        }
+        u = (u - g / (gp * f.delta)).clamp(0.0, 1.0);
+    }
+    let th = f.theta1 + f.delta * u;
+    let mut best = (f.at(th).dist(p), u, th);
+    if da < best.0 {
+        best = (da, 0.0, f.theta1);
+    }
+    if de < best.0 {
+        best = (de, 1.0, f.theta1 + f.delta);
+    }
+    Some(best)
 }
 
 // ---------------------------------------------------------------------------------------
@@ -346,6 +380,127 @@ pub(super) fn circular_arc_grad(
     Some(((rho - f.rx).abs(), [ga, ge], gr))
 }
 
+/// The distance from `p` to the elliptical arc `s` (radii and rotation fixed, as the solve
+/// holds them) starting at `a`, exactly [`ellipse_arc_dist`]'s from `t_hint`, and its
+/// gradients with respect to `a` and the arc's end `e`.
+///
+/// The map `T(x) = S⁻¹·R(-φ)·x`, `S = diag(rx, ry)`, takes the ellipse to a unit circle, and
+/// SVG's conversion (F.6.5) is the circle's in that frame: the half-chord there is
+/// `hv' = T(a - e)/2` of length `L'` and direction `ĥ'`, `n̂' = (hv'.y, -hv'.x)/L'`, and the
+/// centre is `c = m + R(φ)·S·c'` with `c' = s·k'·n̂'`, `k' = sqrt(1 - L'²)` -- the circular
+/// case of [`circular_arc_grad`] with unit radius. By the envelope theorem the foot's angle
+/// is held, so with `w = S·R(-φ)·n` (`n` from the foot to `p`):
+///
+/// `∂d/∂a = -n/2 - ½·R(φ)·S⁻¹·(∂c'/∂hv')ᵀ·w`, `∂d/∂e = -n/2 + ½·R(φ)·S⁻¹·(∂c'/∂hv')ᵀ·w`,
+/// `(∂c'/∂hv')ᵀ·w = s·(-(L'/k')(n̂'·w)·ĥ' - (k'/L')(ĥ'·w)·n̂')`.
+///
+/// When the chord is too long for the radii (`L' > 1`) SVG scales both radii by `L'` and the
+/// centre is the chord's midpoint: `C = m + L'·R(φ)·S·(cos θ*, sin θ*)`, so the bracket is
+/// `(u*·w)·ĥ'` with `u* = (cos θ*, sin θ*)` and the same signs. A foot at an endpoint is
+/// `-n` on that endpoint. `None` (finite differences) near the half-ellipse (`k' < 1e-6·L'`),
+/// for a degenerate chord or radius, and for a point on the arc.
+pub(super) fn ellipse_arc_grad(
+    p: Point,
+    a: Point,
+    s: &Segment,
+    t_hint: f64,
+) -> Option<(f64, [Vec2; 2])> {
+    let Segment::Arc {
+        rx,
+        ry,
+        phi,
+        large_arc,
+        sweep,
+        end: e,
+    } = *s
+    else {
+        return None;
+    };
+    let (d, u, th) = ellipse_arc_foot(p, a, s, t_hint)?;
+    let zero = Vec2 { x: 0.0, y: 0.0 };
+    // A foot clamped to an end of the sweep is that endpoint, which moves with its own
+    // variable only (the sweep's bounds move with the endpoints, so the interior formula
+    // does not apply there).
+    if u <= 0.0 {
+        return Some((d, [scaled(-1.0, away(p, a)?), zero]));
+    }
+    if u >= 1.0 {
+        return Some((d, [zero, scaled(-1.0, away(p, e)?)]));
+    }
+    let (rx, ry) = (rx.abs(), ry.abs());
+    if rx <= 1e-12 || ry <= 1e-12 {
+        return None;
+    }
+    let f = arc_ellipse_center(a, rx, ry, phi, large_arc, sweep, e);
+    let n = away(p, f.at(th))?;
+    let (sp, cp) = phi.sin_cos();
+    // R(-φ) and R(φ) applied to a vector.
+    let rot_back = |v: Vec2| Vec2 {
+        x: cp * v.x + sp * v.y,
+        y: -sp * v.x + cp * v.y,
+    };
+    let rot = |v: Vec2| Vec2 {
+        x: cp * v.x - sp * v.y,
+        y: sp * v.x + cp * v.y,
+    };
+    let hv = rot_back(Vec2 {
+        x: (a.x - e.x) * 0.5,
+        y: (a.y - e.y) * 0.5,
+    });
+    let hv = Vec2 {
+        x: hv.x / rx,
+        y: hv.y / ry,
+    };
+    let l = hv.norm();
+    if l < 1e-12 {
+        return None;
+    }
+    let h_hat = scaled(1.0 / l, hv);
+    let rn = rot_back(n);
+    let w = Vec2 {
+        x: rx * rn.x,
+        y: ry * rn.y,
+    };
+    // `(∂c'/∂hv')ᵀ·w` up to the sign s, or the scaled-up case's bracket.
+    let bracket = if l > 1.0 {
+        let us = Vec2 {
+            x: th.cos(),
+            y: th.sin(),
+        };
+        scaled(us.dot(w), h_hat)
+    } else {
+        let k = (1.0 - l * l).max(0.0).sqrt();
+        if k < 1e-6 * l {
+            return None;
+        }
+        let n_hat = Vec2 {
+            x: hv.y / l,
+            y: -hv.x / l,
+        };
+        // The side of the chord the centre is on, in the unit frame.
+        let mid = Point::new((a.x + e.x) * 0.5, (a.y + e.y) * 0.5);
+        let cl = rot_back(f.c - mid);
+        let cl = Vec2 {
+            x: cl.x / rx,
+            y: cl.y / ry,
+        };
+        let sgn = if cl.dot(n_hat) >= 0.0 { 1.0 } else { -1.0 };
+        lin(
+            -sgn * (l / k) * n_hat.dot(w),
+            h_hat,
+            -sgn * (k / l) * h_hat.dot(w),
+            n_hat,
+        )
+    };
+    let back = rot(Vec2 {
+        x: bracket.x / rx,
+        y: bracket.y / ry,
+    });
+    let ga = lin(-0.5, n, -0.5, back);
+    let ge = lin(-0.5, n, 0.5, back);
+    Some((d, [ga, ge]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -399,6 +554,74 @@ mod tests {
     /// `a` and `b` agree to 1e-5 relatively.
     fn close(a: &[f64], b: &[f64], what: &str) {
         close_to(a, b, 1e-5, what);
+    }
+
+    #[test]
+    fn elliptical_arc_feet_and_gradients() {
+        let pt = |x: &[f64], i: usize| Point::new(x[i], x[i + 1]);
+        let seg = |x: &[f64], rx: f64, ry: f64, phi: f64, large: bool, sweep: bool| Segment::Arc {
+            rx,
+            ry,
+            phi,
+            large_arc: large,
+            sweep,
+            end: pt(x, 2),
+        };
+        // The 64-sample search refined by golden section, as the reference foot.
+        let sampled = |p: Point, a: Point, s: &Segment| -> f64 {
+            let Segment::Arc {
+                rx,
+                ry,
+                phi,
+                large_arc,
+                sweep,
+                end,
+            } = *s
+            else {
+                unreachable!()
+            };
+            let f = arc_ellipse_center(a, rx, ry, phi, large_arc, sweep, end);
+            (0..=4096)
+                .map(|i| f.at(f.theta1 + f.delta * i as f64 / 4096.0).dist(p))
+                .fold(f64::INFINITY, f64::min)
+        };
+        for &p in &[
+            Point::new(3.0, 4.5),
+            Point::new(-2.0, 1.0),
+            Point::new(12.0, -3.0),
+            Point::new(5.5, 9.0),
+        ] {
+            for (large, sweep) in [(false, false), (false, true), (true, false), (true, true)] {
+                // Spanning radii, then radii SVG scales up to the chord.
+                for (rx, ry, phi, step, tol) in
+                    [(9.0, 5.0, 0.4, 1e-6, 1e-5), (3.0, 2.0, -0.3, 1e-3, 1e-3)]
+                {
+                    let x = [1.0, 2.0, 9.0, 4.0];
+                    let s = seg(&x, rx, ry, phi, large, sweep);
+                    // The hint the solve would give: the best of a coarse scan.
+                    let f = arc_ellipse_center(pt(&x, 0), rx, ry, phi, large, sweep, pt(&x, 2));
+                    let hint = (0..=64)
+                        .min_by(|&i, &j| {
+                            let d = |k: i32| f.at(f.theta1 + f.delta * k as f64 / 64.0).dist(p);
+                            d(i).total_cmp(&d(j))
+                        })
+                        .map_or(0.5, |i| i as f64 / 64.0);
+                    let (d, _) = ellipse_arc_dist(p, pt(&x, 0), &s, hint);
+                    let want = sampled(p, pt(&x, 0), &s);
+                    assert!(d <= want + 1e-9 && d > want - 1e-3, "{d} vs {want}");
+                    let fd = |x: &[f64]| {
+                        ellipse_arc_dist(p, pt(x, 0), &seg(x, rx, ry, phi, large, sweep), hint).0
+                    };
+                    let (_, g) = ellipse_arc_grad(p, pt(&x, 0), &s, hint).expect("a regular arc");
+                    close_to(
+                        &[g[0].x, g[0].y, g[1].x, g[1].y],
+                        &numeric_h(&fd, &x, step),
+                        tol,
+                        &format!("ellipse {rx} {ry} {large} {sweep} {p:?}"),
+                    );
+                }
+            }
+        }
     }
 
     #[test]

@@ -169,7 +169,7 @@ pub(crate) fn color_options(args: &Args) -> ColorOptions {
         // it erased real dots and thin details more often than it removed confetti.
         // Blend absorption and residual carving handle the stair-steps at the label
         // level instead. The default therefore stays at the --min-area value (2 px).
-        // Area, so the square of the content scale.
+        // An area: `price_in_raster_units` scales it by the round trip squared, not here.
         min_region: args.min_area.max(1.0) as usize,
         gradients: !args.no_gradients,
         fast: fast::on(args),

@@ -20,7 +20,7 @@ use inkvec_fit::FitConfig;
 /// were set against a 128 px corpus. Handed a 512 px raster of the *same* logo the
 /// tracer therefore saw four times the boundary points, each carrying four times
 /// the pixel residual for the same relative fit, against a lambda that had grown
-/// by 0.6 nats -- and bought segments accordingly. Measured on real brand logos:
+/// by ln 4, about 1.4 nats -- and bought segments accordingly. Measured on real brand logos:
 /// 3.54x the artist's parameters at 128, 6.02x at 256, 11.62x at 512, for content
 /// that had not changed. A brand mark has one complexity, and a vectoriser should
 /// return it whatever resolution the export happened to be.

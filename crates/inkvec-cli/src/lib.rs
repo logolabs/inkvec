@@ -337,8 +337,8 @@ pub fn intake(
 /// * min-area `× r²` when the longest side exceeds `R`, else unchanged;
 /// * lambda `× r` when the longest side exceeds `R` and `r > 1`, else unchanged.
 ///
-/// On a natively rendered raster `r = 1` and nothing changes. The reasons for each factor,
-/// and the measurements behind them, are in the comments below.
+/// A native render's `e` stays under the threshold; at 512 px its `r` is mostly 2 to 8. The
+/// reasons for each factor, and the measurements behind them, are in the comments below.
 fn price_in_raster_units(img: &inkvec_trace::Rgba, args: &Args) -> Args {
     // Two of the knobs below are denominated in pixels, and a raster that carries the
     // same drawing at more pixels per unit therefore gets read as if it were a more
@@ -355,8 +355,8 @@ fn price_in_raster_units(img: &inkvec_trace::Rgba, args: &Args) -> Args {
     // raster can be downsampled without losing anything, which is the factor by which it
     // carries the drawing on more pixels than the drawing needs -- and unlike edge width
     // it is not fooled by a super-resolution model that returns sharp edges at high
-    // resolution. It reads 1 for every native render, so this does nothing at all to a
-    // native intake and the benchmark is untouched by construction.
+    // resolution. A native intake at or below `REF_EXTENT` is left as it is (see below), so
+    // the 128 px benchmark is untouched; at 512 px most native renders read 2 to 8.
     // Fast mode reads neither: its fit has no lambda or precision, and its front end sets its
     // own speckle floor from the image's size (`inkvec_trace::fast::front`). The two
     // measurements are three full-image round trips, the largest cost in a fast trace at
@@ -411,8 +411,8 @@ fn price_in_raster_units(img: &inkvec_trace::Rgba, args: &Args) -> Args {
     // flat 9-px colour-mode floor was tried on 2026-09-03 and measured worse on the full
     // 980-icon set (objective 0.7885 against 0.7673, 508 icons worse), because it erased
     // real dots as readily as confetti. A floor that rises only when the raster is
-    // measurably carrying surplus pixels cannot make that trade: on a natively rendered
-    // intake the round trip reads 1 and nothing moves.
+    // measurably carrying surplus pixels cannot make that trade: where the round trip reads 1
+    // nothing moves, and at or below `REF_EXTENT` nothing moves at all (next paragraph).
     // Only above `REF_EXTENT`, and this guard is not tidiness -- without it the change
     // regresses the tier it was tuned on. `min_area` was fitted against 128 px rasters as
     // they are, so whatever redundancy a typical icon carries at that size is already
@@ -486,8 +486,8 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
     let args = &args;
     let mut sr_note: Option<String> = None;
 
-    // The restorer comes before SR and before anything that resamples: it was trained on
-    // damage at the size the damage happened, and it returns an image of the same size.
+    // The restorer comes after the intake (see `intake`) and before SR, which resamples: it
+    // was trained on damage at the size the damage happened, and returns an image that size.
     let pass = restore_prepass(img, args)?;
     img = pass.img;
     let restore_note = pass.note;
@@ -660,7 +660,7 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
     // scaling sigma (via `in_content_units`, below) while lambda stayed tied to raw pixel
     // extent -- exactly the half that `fit_config`'s doc comment says must not be applied
     // alone. `content_scale` returns 1.0 unless the flag is set, so this is the identity
-    // on the default path; `content_units_changes_the_fit_cost` pins that.
+    // on the default path: `FitConfig::from_precision` with nothing scaled.
     let cfg = fit_config(img, args);
 
     // Line art, emitted the way it was drawn. Tried before the ordinary paths and

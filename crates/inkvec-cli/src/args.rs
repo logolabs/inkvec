@@ -321,11 +321,11 @@ OPTIONS:
         --time-budget <s>   Advisory wall-clock budget. Gradient-band merging stops at
                             60% of it, checked between fits, and the boundary solve
                             gets 25%; the output is still a correct trace, with more
-                            fills or a less polished outline, but it now depends on
-                            the machine. The palette and the writer do not read it.
-                            0 means no budget: the merge is then bounded by a work
-                            cap set by the pixel count, and the output reproducible
-                                                                       [default: 0]
+                            fills or a less polished outline. The palette and the
+                            writer do not read it. A nonzero budget makes the output
+                            depend on the machine; 0 means no budget and a reproducible
+                            output. Either way the merge is also bounded by a work cap
+                            set by the pixel count                     [default: 0]
         --uncertainty <file>
                             Also write where each traced boundary could be: an SVG
                             that overlays the trace, every boundary a band k sigma
@@ -384,8 +384,8 @@ OPTIONS:
                             same fidelity tolerance; parameters move so structure can too
         --content-units     Scale the fit tolerances (sigma, precision, lambda) with the
                             raster so a 512-px logo gets the parameter count of a 128-px
-                            one. Off by default: it trades fidelity for parsimony
-                            (5-px squares fitted as circles, thin rings broken).
+                            one, by its measured pixels per unit of detail. Off by
+                            default: it trades fidelity for parsimony.
         --colors <n>        Maximum palette size                     [default: 64]
         --merge <f>         OKLab distance below which two colours are one ink [default: {merge_default}]
         --merge-colors <groups>

@@ -28,9 +28,9 @@
 //!    localizes to a fraction of a pixel; a soft or blurred edge does not.
 //!
 //! So `sigma = sigma_pixel / (|F - B| * |grad a|)`, in pixels. That single expression is
-//! what feeds the `tau * sigma` admissibility envelope in `inkvec-fit`, and it is why
-//! adaptive simplification needs no separate heuristic: the places we are allowed to
-//! simplify hard are exactly the places we measured badly.
+//! the per-point sigma of `inkvec-fit`'s chi-squared term, each miss weighed by `1/sigma^2`,
+//! and it is why adaptive simplification needs no separate heuristic: the places we are
+//! allowed to simplify hard are exactly the places we measured badly.
 //!
 //! # Where this sits
 //!

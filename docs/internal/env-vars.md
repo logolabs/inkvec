@@ -209,7 +209,7 @@ No name from an unmerged research branch is listed: only what the code in this t
 | `INKVEC_MAX_BODY_BYTES` | count | `DEFAULT_MAX_BODY_BYTES` | crates/inkvec-server/src/lib.rs:81 | CHANGELOG.md, crates/inkvec-server/README.md, services/docker/compose.yaml | inkvec-server (compose.yaml). |
 | `INKVEC_MAX_CONCURRENCY` | count | cores | crates/inkvec-server/src/lib.rs:80 | CHANGELOG.md, crates/inkvec-server/README.md, services/docker/compose.yaml | inkvec-server (compose.yaml). |
 | `INKVEC_PORT` | count | 8080 | crates/inkvec-server/src/lib.rs:118 | crates/inkvec-server/README.md | inkvec-server. |
-| `INKVEC_PYTHON` | path | `python` / `python3` | crates/inkvec-sr/src/external.rs:62 | packages/npm/build.mjs, packages/npm/test/api.test.mjs | interpreter for the SR tools (inkvec-sr); set by packages/npm. |
+| `INKVEC_PYTHON` | path | `python` / `python3` | crates/inkvec-sr/src/external.rs:63 | packages/npm/build.mjs, packages/npm/test/api.test.mjs | interpreter for the SR tools (inkvec-sr); set by packages/npm. Read through `inkvec_core::env` since 2026-10-03 (was `std::env::var`). |
 | `INKVEC_REQUEST_TIMEOUT_SECS` | count | 60 | crates/inkvec-server/src/lib.rs:86 | crates/inkvec-server/README.md | inkvec-server. |
 | `INKVEC_RESTORE_ONNX` | path | beside the binary | crates/inkvec-restore/build.rs:25, crates/inkvec-restore/src/lib.rs:408 | .github/workflows/release.yml, CHANGELOG.md, PIPELINE_EXPLANATION.md, crates/inkvec-cli/Cargo.toml, studio/src-tauri/src/denoiser.rs | restorer weights (inkvec-restore, build.rs too); Studio sets it; release.yml. |
 | `INKVEC_RESTORE_WEIGHTS` | path | cache dir | crates/inkvec-restore/src/lib.rs:239 | nothing | restorer weights for the Burn path. |

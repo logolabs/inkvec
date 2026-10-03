@@ -876,8 +876,8 @@ pub(super) const TABLE_BUDGET_PER_PIXEL: u64 = 32;
 ///
 /// What the solve buys on such an image is small (on the stripes it reports no gain at
 /// all: every pixel is a mixture of two faces whatever the boundary does), so when the
-/// tables would exceed the budget the solve is skipped and the map keeps the boundary
-/// `planar::refine_subpixel` measured, exactly as when the solve finds nothing to gain.
+/// tables would exceed the budget the solve is skipped and the map keeps the boundary the
+/// sub-pixel and junction refinements placed, exactly as when the solve finds nothing to gain.
 ///
 /// # Why these numbers
 ///

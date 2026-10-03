@@ -160,9 +160,11 @@ measured confidence, "the places we are allowed to simplify hard are exactly the
 measured badly" (`coverage.rs:32-33`) — adaptive simplification needs no separate heuristic
 layered on top.
 
-The module doc comment words this as feeding "the `tau * sigma` admissibility envelope in
-`inkvec-fit`" (`coverage.rs:30-31`). That per-point straightness test (`|d_k| <= tau * sigma_k`,
-described at `inkvec-fit/src/lib.rs:74-80`) is no longer how the shipping fitter works: the cone
+The module doc comment says the same: "the per-point sigma of `inkvec-fit`'s chi-squared term,
+each miss weighed by `1/sigma^2`" (`coverage.rs:30-31`). It used to word this as feeding "the
+`tau * sigma` admissibility envelope in `inkvec-fit`". That per-point straightness test
+(`|d_k| <= tau * sigma_k`, described at `inkvec-fit/src/lib.rs:74-80`) is no longer how the
+shipping fitter works: the cone
 that implemented it was removed as a correctness bug, and the test survives only as the reference
 `is_admissible` (`inkvec-fit/src/lib.rs:530-549`), which "nothing in the shipping path calls"
 (`inkvec-fit/src/lib.rs:92-98`). `tau` still scales tolerances elsewhere in the fitter, for

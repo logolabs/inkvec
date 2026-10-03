@@ -352,7 +352,7 @@ mode, commit `a192c46`).
 | `MAX_TOTAL` | 1.0 px | `boundary_opt.rs:114` | leash round each point's start; also why the band never moves | "a point a pixel away from its own level set has stopped describing the same piece of the image" |
 | `K_KINK` | 0.05 | `boundary_opt.rs:121` | kink weight, fraction of the starting data term | scaling rule derived, value not swept |
 | `K_ANCHOR` | 0.10 | `boundary_opt.rs:124` | anchor weight, fraction of a point's share of the starting data term | as above |
-| `JUNCTION_ANCHOR` | 4.0 | `boundary_opt.rs:126` | anchor multiplier at a shared end point | not derived (its doc comment points to a reason the module comment no longer gives) |
+| `JUNCTION_ANCHOR` | 4.0 | `boundary_opt.rs:126` | anchor multiplier at a shared end point | not derived (its doc comment gives the reason, `planar::refine_junctions` has already placed the point, but not why fourfold) |
 | `MIN_CONTRAST` | 2/255 | `boundary_opt.rs:128` | colour or opacity difference that counts as a boundary when choosing the pixels where alpha is a fourth channel | none |
 | `EPS` (kink) | 1e-4 | `boundary_opt.rs:440` | floor inside the kink term's square root | for differentiability |
 | `GRID_LIMIT` | 1e9 px | `boundary_opt.rs:222` | largest coordinate whose gridlines `crossings` walks; a segment past it contributes no crossings | "far inside the range where `m += 1.0` is exact, and far outside any image" |

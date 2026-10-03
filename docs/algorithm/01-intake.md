@@ -612,11 +612,11 @@ separate one", `crates/inkvec-trace/src/lib.rs:162-165`); 25%, and at least 50 m
 `boundary_ms`, the boundary solve's wall-clock budget (`crates/inkvec-trace/src/lib.rs:174-177`).
 The help text states the contract (`crates/inkvec-cli/src/args.rs:321-328`): "Gradient-band
 merging stops at 60% of it, checked between fits, and the boundary solve gets 25%; the
-output is still a correct trace, with more fills or a less polished outline, but it now
-depends on the machine. The palette and the writer do not read it. 0 means no budget: the
-merge is then bounded by a work cap set by the pixel count, and the output reproducible".
-Without a budget no clock is read: the merge stops at a deterministic work cap,
-`max(2²⁸, 32 per pixel)` units (`MERGE_WORK_FLOOR`, `MERGE_WORK_PER_PIXEL`,
+output is still a correct trace, with more fills or a less polished outline. The palette and
+the writer do not read it. A nonzero budget makes the output depend on the machine; 0 means
+no budget and a reproducible output. Either way the merge is also bounded by a work cap set
+by the pixel count". Without a budget no clock is read: the merge stops at a deterministic
+work cap, `max(2²⁸, 32 per pixel)` units, which is on with a budget too (`MERGE_WORK_FLOOR`, `MERGE_WORK_PER_PIXEL`,
 `crates/inkvec-trace/src/gradient/bands.rs:40-71`; [05-gradients.md](05-gradients.md)), and the
 boundary solve stops on its iteration count, and is skipped outright when its band tables
 would pass `max(256 MiB, 32 bytes per pixel)` (`TABLE_BUDGET_FLOOR`, `TABLE_BUDGET_PER_PIXEL`,
@@ -749,18 +749,18 @@ hands to `run_strokes`, `run_bilevel` and `run_color` through `fit_config`
 > scaling sigma (via `in_content_units`, below) while lambda stayed tied to raw pixel
 > extent -- exactly the half that `fit_config`'s doc comment says must not be applied
 > alone. `content_scale` returns 1.0 unless the flag is set, so this is the identity
-> on the default path; `content_units_changes_the_fit_cost` pins that.
+> on the default path: `FitConfig::from_precision` with nothing scaled.
 
-No test named `content_units_changes_the_fit_cost` exists in the workspace; see Open
-questions.
+No test checks that identity, or that the flag now scales lambda; see Open questions.
 
 `content_units` defaults to `false` (`crates/inkvec-cli/src/args.rs:222`); the
 `INKVEC_CONTENT_SCALE` environment equivalent was removed in 0.1.7 (CHANGELOG, *Removed*).
-The help text keeps it off as a trade, "it trades fidelity for parsimony (5-px squares
-fitted as circles, thin rings broken)" (`args.rs:385-388`); `content_scale`'s own doc comment
-traces those two failures to the old `extent / REF_EXTENT` scale — "that over-correction,
-described but never traced to its cause" (`units.rs:41-50`) — and no measurement of the
-measured scale against them is recorded. See Open questions.
+The help text keeps it off as a trade, "it trades fidelity for parsimony" (`args.rs:385-388`).
+It used to name two failures as the price (5-px squares fitted as circles, thin rings broken);
+`content_scale`'s own doc comment traces those to the old `extent / REF_EXTENT` scale — "that
+over-correction, described but never traced to its cause" (`units.rs:41-50`) — so the help no
+longer names them, and no measurement of the measured scale against them is recorded. See Open
+questions.
 
 ### The oversample block: pricing `--precision`, `--min-area` and lambda in the raster's own units
 
@@ -803,11 +803,11 @@ let up = if edge > inkvec_trace::color::SOFT_INTAKE_EDGE {
 
 The round trip is not 1 on every native render: it reads 1 for 212 of the 246 screen icons
 at 128 px, and "at 512 px nearly every native render reads 2 to 8, which is the speckle floor
-scaling that caller wants" (`crates/inkvec-trace/src/coverage/oversample.rs:113-117`). Two
-comments in `price_in_raster_units` still say otherwise — "On a natively rendered raster
-`r = 1` and nothing changes" and "It reads 1 for every native render"
-(`crates/inkvec-cli/src/lib.rs:340, 358-359`). What keeps the 128 px tier untouched is the
-`REF_EXTENT` guard below, with the edge-width gate for precision.
+scaling that caller wants" (`crates/inkvec-trace/src/coverage/oversample.rs:113-117`), and
+`price_in_raster_units`' comments say the same: "at 512 px its `r` is mostly 2 to 8"; "A
+native intake at or below `REF_EXTENT` is left as it is (see below), so the 128 px benchmark
+is untouched" (`crates/inkvec-cli/src/lib.rs:340, 358-359`). What keeps the 128 px tier
+untouched is the `REF_EXTENT` guard below, with the edge-width gate for precision.
 
 **Precision stays behind the edge-width gate.** `intake_scale` decides *whether* this is
 native content — every corpus raster reads at most 1.50 against the `SOFT_INTAKE_EDGE = 1.75`
@@ -1086,10 +1086,10 @@ three rules "Not from the literature"; "See also" Richardt et al., EGSR 2014
   nearest-neighbour upscale larger than the cap reaches the block test already box-averaged
   by the cap's factor; when that factor does not divide the replication, the blocks are no
   longer constant and the upscale is not undone. Read from the code; no case was measured.
-- **`--content-units` is offered as a trade, not a free fix**: its help text says 5-px
-  squares get fitted as circles and thin rings come out broken under it
-  (`crates/inkvec-cli/src/args.rs:385-388`), failures `content_scale`'s doc comment attributes
-  to the scale it replaced (`crates/inkvec-cli/src/units.rs:41-50`).
+- **`--content-units` is offered as a trade, not a free fix**: its help text says "it trades
+  fidelity for parsimony" (`crates/inkvec-cli/src/args.rs:385-388`). The two failures it used
+  to name (5-px squares fitted as circles, thin rings broken) are ones `content_scale`'s doc
+  comment attributes to the scale it replaced (`crates/inkvec-cli/src/units.rs:41-50`).
 - **`--intake-scale` costs structural accuracy for speed**, and says so in its own help
   text: 24× faster with a twelfth of the parameters and half the colour error on 8×-upsampled
   input at 1024 px, but DINO — the corpus's structural measure — falls from 0.954 to 0.916
@@ -1103,8 +1103,8 @@ three rules "Not from the literature"; "See also" Richardt et al., EGSR 2014
   running still fails the trace in either mode (`lib.rs:610`).
 - **With a `--time-budget`, the output depends on the machine**, and the palette and the
   writer read no budget at all (`crates/inkvec-cli/src/args.rs:321-328`); without one, the
-  merge and the boundary solve are bounded by work and memory caps instead, and the output
-  is reproducible.
+  merge and the boundary solve are bounded only by their work and memory caps, which apply
+  either way, and the output is reproducible.
 - **A soft glow is deliberately excluded from voting on the matte**, and the cost of getting
   that wrong is recorded directly: letting a candle's flame vote on `noto-emoji/emoji_u1f56f`
   chose a black matte that baked the flame dark, dE00 0.22 → 5.31
@@ -1126,7 +1126,7 @@ Since the settings cleanup (CHANGELOG, 0.2.0, *Changed*) the engine reads its en
 | `INKVEC_LAYER_SIGMA` (*removed*) | overrode the sRGB noise sigma used when fitting a translucent layer | `LAYER_SIGMA_SRGB` (`crates/inkvec-cli/src/alpha/layers.rs:14-22`) | removed |
 | `INKVEC_NATIVE_ALPHA=0` | turns native alpha off, as `--no-native-alpha` does: the image is matted first | unset (native alpha on) | `crates/inkvec-cli/src/args.rs:231-232` |
 | `INKVEC_TOOLS_DIR=<dir>` | the folder holding the packaged SR pre-pass (`inkvec_sr`); when set, the only folder looked in | unset (`tools/` beside the binary or up to three folders above it, then the source checkout) | `crates/inkvec-cli/src/lib.rs:776-786` |
-| `INKVEC_PYTHON=<program>` | the interpreter the packaged SR pre-pass runs with | unset (`python` on Windows, `python3` elsewhere) | `crates/inkvec-sr/src/external.rs:59-69` |
+| `INKVEC_PYTHON=<program>` | the interpreter the packaged SR pre-pass runs with | unset (`python` on Windows, `python3` elsewhere) | `crates/inkvec-sr/src/external.rs:59-68` |
 | `INKVEC_DIAG=1\|json` | structured diagnostic lines on stderr; the intake's are the ICC outcome (`load/icc.rs`) and the soft-intake gate (edge width, ringing, lossy flag) | unset (silent) | `crates/inkvec-trace/src/diag.rs:47-60`; intake lines at `crates/inkvec-trace/src/load/icc.rs:79-147`, `crates/inkvec-trace/src/lib.rs:369-375` |
 | `INKVEC_ALPHADBG` | prints per-face alpha diagnostics and the emitter's face dump to stderr | unset (silent) | `crates/inkvec-cli/src/alpha.rs:1029`, `crates/inkvec-cli/src/emit.rs:604-607` |
 
@@ -1134,8 +1134,8 @@ No `INKVEC_*` variable is read in `inkvec-trace/src/load.rs` or `inkvec-trace/sr
 sniffing, the zero-side check, the decode limits, the ICC conversion, the orientation,
 `from_dynamic` and `lossy_container` have no environment knob. `icc.rs` only emits
 `INKVEC_DIAG` lines through the crate's `diag!` macro, which reads the variable in `diag.rs`.
-The `inkvec-sr` crate reads one variable, `INKVEC_PYTHON`, and reads it with
-`std::env::var` directly rather than through `inkvec_core::env`; the CLI reads
+The `inkvec-sr` crate reads one variable, `INKVEC_PYTHON`, through `inkvec_core::env`
+like every other engine read; the CLI reads
 `INKVEC_TOOLS_DIR` to find the packaged tool. Every knob of the SR pre-pass's decision and
 clean-up is a CLI flag. Other files of the trace crate (`lib.rs` above all) do read many
 `INKVEC_*` variables for palette, boundary-solve and other downstream stages, but none of
@@ -1143,17 +1143,19 @@ those reads happen in the loader.
 
 ## Open questions
 
-- **The test named as pinning `fit_config`'s wiring does not exist.** The comment at the call
-  (`crates/inkvec-cli/src/lib.rs:656-663`) says `content_units_changes_the_fit_cost` pins that
-  the configuration is the identity on the default path; no test of that name is in the
-  workspace, so nothing visible checks either that `--content-units` now scales lambda in
-  the emitted trace or that the default path is unchanged by building through `fit_config`.
-- **`--content-units`' stated trade may describe the scale it replaced.** The help text still
-  warns of "5-px squares fitted as circles, thin rings broken" (`args.rs:385-388`), while
+- **Nothing tests `fit_config`'s wiring.** The comment at the call
+  (`crates/inkvec-cli/src/lib.rs:656-663`) says the configuration is the identity on the
+  default path. It used to name a test, `content_units_changes_the_fit_cost`, as pinning
+  that; no test of that name was ever in the workspace, so nothing visible checks either that
+  `--content-units` now scales lambda in the emitted trace or that the default path is
+  unchanged by building through `fit_config`.
+- **`--content-units`' trade is unmeasured since the scale changed.** The help text used to
+  warn of "5-px squares fitted as circles, thin rings broken" (`args.rs:385-388`), while
   `content_scale`'s doc comment says those failures were the over-correction of the old
-  `extent / REF_EXTENT` scale (`units.rs:41-50`). No measurement of the measured scale against
-  those cases, or of the flag's parameter ratio since the change, was found; whether the flag
-  could now be on by default is unsettled.
+  `extent / REF_EXTENT` scale (`units.rs:41-50`); the help now says only that the flag
+  "trades fidelity for parsimony". No measurement of the measured scale against those cases,
+  or of the flag's parameter ratio since the change, was found; whether the flag could now be
+  on by default is unsettled.
 - **`price_in_raster_units`' lambda factor carries no measurement in the comments its doc
   comment points to.** The doc says "the reasons for each factor, and the measurements behind
   them, are in the comments below" (`lib.rs:340-341`); the comments measure the precision

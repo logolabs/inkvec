@@ -174,10 +174,14 @@ fn contacts_scan(labels: &[u16], w: usize, h: usize) -> HashMap<(u16, u16), u32>
 /// members, and `merge_ramps` returns 0 with the labels and fills untouched — the value
 /// this early return gives.
 ///
-/// One exception is guarded: past `u16::MAX − 1` components, `faces::RunLabels::write_faces`
-/// merges the smallest into a neighbour (`regions::cap_components`), whose face then holds
-/// pixels of two inks under one colour, and the argument fails. With that many faces this
-/// returns `true` and the full pass decides.
+/// Past `u16::MAX − 1` components the argument still holds: `faces::RunLabels::write_faces`
+/// relabels the smallest with a neighbouring ink (`regions::cap_components`) and reads the
+/// runs again, so every face is still one 4-connected component of one ink, and `face_color`
+/// names it (the `faces` test `more_components_than_face_ids_are_merged_not_folded`). With
+/// that many faces this returns `true` all the same, as a conservative check only:
+/// `write_faces` still folds any id at or past the cap into face 0, which would then hold
+/// several inks, if `cap_components` ever stopped short of the cap. Its proof says it cannot;
+/// the check costs a full pass on an image with 65,534 faces.
 ///
 /// # Cost
 ///
@@ -192,7 +196,7 @@ fn contacts_scan(labels: &[u16], w: usize, h: usize) -> HashMap<(u16, u16), u32>
 /// Computing", IEEE TIP 24(9) 2725–2735, <https://doi.org/10.1109/TIP.2015.2425540>, on
 /// deciding region facts without a second pass over the pixels.
 fn inks_may_join(face_color: &[usize], pal: &Palette) -> bool {
-    /// Past this count `faces::RunLabels::write_faces` merges faces across inks; see above.
+    /// The face-id cap of `faces::RunLabels::write_faces`; see above for why it is checked.
     const CAPPED: usize = (u16::MAX - 1) as usize;
     if face_color.len() >= CAPPED {
         return true;

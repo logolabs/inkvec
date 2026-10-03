@@ -72,7 +72,7 @@
   "coverage:inkvec-trace": 90,
   "coverage:inkvec-wasm": 73,
   "debt_markers": 0,
-  "env_reads": 13,
+  "env_reads": 12,
   "lint:clippy::too_many_arguments": 1,
   "lint:clippy::too_many_lines": 8,
   "lint:clippy::unnecessary_sort_by": 0,

@@ -175,10 +175,10 @@ impl MergeBudget {
     }
 }
 
-/// Research comparison on common observations. Both alternatives explain the same
-/// union-interior pixels, including the former interface when evidence permits it.
-/// The split prediction uses the current discrete membership at that pixel; this is
-/// not an antialiased render, so promotion also requires rendered-image validation.
+/// The merge gain on common observations: for a smooth pair under region recovery (the
+/// default), and for every pair in a research build (`INKVEC_MERGE_COMMON_PIXELS`), which
+/// would need rendered-image validation to be the default (the split is not a render).
+/// Both explain the same union-interior pixels, the former interface too if evidence permits.
 ///
 /// Over a strided subsample of `m` of the `n` interior evidence pixels of `a ∪ b`
 /// (membership by `group`), with `e(q) = max(|o − q| − ½LSB, 0)` per sRGB channel:
@@ -1187,9 +1187,9 @@ impl Agglomeration<'_> {
     /// Merge component `b` into `a`: carry the union's fit forward, move `b`'s pixels and
     /// seams onto `a`, and update the caches.
     ///
-    /// Cached unions that involved `b` are dropped; those that involved `a` are marked
-    /// stale (gradient) or dropped (flat, or any under common-pixel pricing), and every
-    /// gain touching either is dropped.
+    /// Cached unions that involved `b` are dropped; those that involved `a` are marked stale
+    /// (gradient) or dropped (flat; and all of them with region recovery on, the default, or
+    /// under common-pixel pricing), and every gain touching either is dropped.
     fn apply_merge(&mut self, a: u32, b: u32) {
         let (ai, bi) = (a as usize, b as usize);
         self.fits[ai] = self.cache.remove(&(a, b)).expect("cached union").0;

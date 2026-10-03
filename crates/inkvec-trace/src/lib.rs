@@ -185,8 +185,8 @@ pub struct ColorOptions {
     /// Fast mode's front end: a histogram palette and labels, then the same planar map
     /// with every boundary point refined to its sub-pixel position, but no MDL palette,
     /// blend absorption, global boundary solve or order-first decoding (see [`fast`], whose
-    /// fitter follows). A transparent image traced natively keeps the native palette and
-    /// skips the rest. False is quality mode, exactly as before the flag existed.
+    /// fitter follows). A transparent image traced natively goes the same way, with opacity in
+    /// its inks and no ramp pass. False is quality mode, exactly as before the flag existed.
     pub fast: bool,
 }
 
@@ -429,8 +429,8 @@ pub fn trace_color_full_with_alpha(
     // MEASURE the noise now that there are labels to measure it against, and only when the
     // intake has already given positive evidence of damage.
     //
-    // `coverage::estimate_noise` cannot do this. It runs before the palette exists, takes a
-    // median over every pixel, and vector art is 90% exactly flat, so it returns NOISE_FLOOR
+    // `coverage::estimate_noise` cannot do this. It runs before the palette exists, reads a
+    // low quantile over every pixel; vector art is 90% exactly flat, so it returns NOISE_FLOOR
     // for a clean render and a quality-35 JPEG alike (measured: the identical 0.00196 in both
     // cases, while the true deviation rises to 0.0115). Everything downstream that divides by
     // sigma was therefore dividing by a constant on exactly the input that needed it most.

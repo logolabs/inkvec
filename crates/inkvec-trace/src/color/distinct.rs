@@ -349,7 +349,7 @@ impl<'a> DistinctImage<'a> {
     /// not the mean: an anti-aliased edge puts a ramp of blend pixels inside `tol` on a clean
     /// image, and a mean is pulled up by them (2 % on the screen set). This is the scale at
     /// which the image itself says "these pixels are the same colour"; a global noise estimate
-    /// cannot supply it, because an icon is mostly empty and its median Laplacian is zero.
+    /// cannot supply it: an icon is mostly empty, and its low Laplacian quantile is zero.
     pub(crate) fn spread(&self, claim: &Claim, tol: f32) -> f32 {
         let mut items: Vec<(f32, u32)> = (0..self.colours())
             .filter(|&d| claim.claimed[d] && claim.dist[d] < tol && self.spread_count[d] > 0)

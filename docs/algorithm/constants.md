@@ -75,7 +75,7 @@ stage's own reference document — this table only summarizes. Paths are relativ
 | `confidence_penalty` floor | `saturation.max(0.05)` | `inkvec-trace/src/coverage.rs:536` | prevents unbounded penalty near-zero saturation | none |
 | `confidence_penalty` cap | 8.0 | `inkvec-trace/src/coverage.rs:536` | ceiling on sigma inflation from low saturation | none |
 | `EDGE_FLOOR` (`ringing_score`) | 24/255 | `inkvec-trace/src/coverage.rs:628-629` | gradient above which a pixel is an edge the ring is measured around | motivated |
-| `CORE_D` / `RING_IN` / `RING_OUT` | 1 / 3 / 7 px (chamfer units 3 / 9 / 21) | `inkvec-trace/src/coverage.rs:630-634` | the core band (anti-aliasing) and the ring band (ringing) of `ringing_score` | motivated (ringing comes from an 8x8 DCT block and does not scale, `color.rs:436-440`) |
+| `CORE_D` / `RING_IN` / `RING_OUT` | 1 / 3 / 7 px (chamfer units 3 / 9 / 21) | `inkvec-trace/src/coverage.rs:630-634` | the core band (anti-aliasing) and the ring band (ringing) of `ringing_score` | motivated (ringing comes from an 8x8 DCT block and does not scale, `inkvec-trace/src/color.rs:436-440`) |
 | `MIN_SAMPLES` (`ringing_score`) | 64 | `inkvec-trace/src/coverage.rs:635-636` | fewest core, ring or hot-pair samples for a non-zero score | motivated |
 | `EDGE_FLOOR` (`intake_scale`) | 2/255 | `inkvec-trace/src/coverage.rs:833-834` | minimum first difference counted as a real edge | motivated |
 | `MAX_W` | 64.0 | `inkvec-trace/src/coverage.rs:835-837` | clamp on a single edge-width observation | motivated |
@@ -92,7 +92,7 @@ stage's own reference document — this table only summarizes. Paths are relativ
 | `SAME_INK_DE00` | 1.5 (CIEDE2000) | `inkvec-trace/src/color.rs:251-268` | perceptual floor: colours this close are one ink | measured (swept 1.0 -> 0.4140, 1.5 -> 0.4124 on the screen set) |
 | `SOFT_SAME_INK_DE00` | 5.0 | `inkvec-trace/src/color.rs:493-505` | same-ink floor on soft/oversampled intake | measured (a real brand mark upscaled 4x: 76 fills where the drawing has five) |
 | `SOFT_NOISE_SIGMAS` | 3.0 | `inkvec-trace/src/color.rs:409-417` | noise-merge threshold, gated on soft-intake evidence only | measured (costs 10.9% objective if run unconditionally) |
-| `NOISE_SIGMAS` | 0.0 | `inkvec-trace/src/color.rs:663-680` | clean-intake noise-merge threshold, deliberately off; read at `inkvec-trace/src/lib.rs:357-361` and `native.rs:837-841` | measured (costs 0.4328 -> 0.4451 on the screen set if always on) |
+| `NOISE_SIGMAS` | 0.0 | `inkvec-trace/src/color.rs:663-680` | clean-intake noise-merge threshold, deliberately off; read at `inkvec-trace/src/lib.rs:357-361` and `inkvec-trace/src/native.rs:837-841` | measured (costs 0.4328 -> 0.4451 on the screen set if always on) |
 | `SOFT_INTAKE_EDGE` | 1.75 px | `inkvec-trace/src/color.rs:398-407` | edge width above which the intake is soft | measured (980-raster corpus edge-width survey: native max 1.50) |
 | `SOFT_RINGING` | 0.12 | `inkvec-trace/src/color.rs:419-434` | ringing score above which the intake is soft (images under `RINGING_MIN_DIM`) | measured (240 clean rasters at 128ss: max 0.1023, highest real artwork 0.0370) |
 | `SOFT_RINGING_LARGE` | 0.05 | `inkvec-trace/src/color.rs:436-449` | the same gate when both sides are at least `RINGING_MIN_DIM` | measured (at 512 px: zero false positives, 88-89% of JPEG caught at q85/60/40) |
@@ -273,7 +273,7 @@ half-integer lattice points (`inkvec-trace/src/symmetry.rs:19-21,176-186,220,243
 | name | value | file:line | controls | basis |
 |---|---|---|---|---|
 | `PARAMS_LINE` | 2.0 | `inkvec-fit/src/lib.rs:119` | line parameter cost | derived |
-| `PRUNE_SLACK` | 4.0 | `inkvec-fit/src/lib.rs:127` (shared by `multimodel.rs:136`) | safety factor on the scan cut-off | motivated |
+| `PRUNE_SLACK` | 4.0 | `inkvec-fit/src/lib.rs:127` (shared by `inkvec-fit/src/multimodel.rs:136`) | safety factor on the scan cut-off | motivated |
 | `CORNER_CHAMFER` | 1.0 px | `inkvec-fit/src/lib.rs:585` | corner-adjustment chamfer allowance | derived (one level-set sampling step) |
 | `CORNER_TURN_MIN` | pi/6 (30 deg) | `inkvec-fit/src/lib.rs:588` | when a vertex meeting is treated as a corner | none |
 | `CORNER_DEGREES` | 45.0 | `inkvec-fit/src/lib.rs:921` | corner-vs-smooth-join threshold of `fit_path` | none |
@@ -286,7 +286,7 @@ half-integer lattice points (`inkvec-trace/src/symmetry.rs:19-21,176-186,220,243
 | `TANGENT_WINDOW_MAX` | 16 | `inkvec-fit/src/tangents.rs:26` | widest one-sided tangent window | none |
 | `MAX_RESIDUAL_SAMPLES` | 32 | `inkvec-fit/src/candidates.rs:42` | cubic residual evaluation points (O(1) cap) | none |
 | `NEWTON_STEPS` | 3 | `inkvec-fit/src/candidates.rs:45` | Newton steps for point-to-cubic projection | none |
-| `MAX_ARM` | 1.0 | `inkvec-fit/src/candidates.rs:48` (used by `merge.rs:132`) | largest admissible control arm, as a fraction of chord | derived |
+| `MAX_ARM` | 1.0 | `inkvec-fit/src/candidates.rs:48` (used by `inkvec-fit/src/merge.rs:132`) | largest admissible control arm, as a fraction of chord | derived |
 | `FREE_MAX_SWING` | 75.0 deg | `inkvec-fit/src/candidates.rs:52` | how far a free cubic's tangent may depart from the estimate | none |
 | `DIRECTION_SAMPLES` | 8 | `inkvec-fit/src/candidates.rs:1137` | monotone-sweep samples for arc validity | none (asserted) |
 | `MAX_ASPECT` | 12.0 | `inkvec-fit/src/candidates.rs:1298` | most elongated ellipse worth fitting | none |

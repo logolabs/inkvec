@@ -393,7 +393,7 @@ fn target_dims(w: u32, h: u32, max_dim: usize) -> Option<(u32, u32)> {
 /// `max_dim` pixels (0 = no cap) before the pixels are read into floats, and returning the
 /// file's original dimensions alongside so a caller can present the result at the size that
 /// arrived. Both are upright: an image whose EXIF orientation turns it a quarter is
-/// returned turned, with its sides swapped ([`decode_upright`]).
+/// returned turned, with its sides swapped (`decode_upright`).
 ///
 /// The size is decided from the file's header first, so the cap is known before the decode
 /// allocates. The full-resolution 8-bit buffer may still be decoded once, but the cap is an
@@ -452,7 +452,7 @@ fn cap_decoded(img: image::DynamicImage, w: u32, h: u32, max_dim: usize) -> Rgba
 /// For a caller that reports a file's size before it traces it (a viewer listing the file,
 /// a cache keyed by size): the arrival dimensions [`decode_image_capped`] returns are
 /// upright, so a size read from the raw header would disagree with them on a turned photo.
-/// The format is chosen as the decode chooses it ([`sniff`]); an image with a zero side is
+/// The format is chosen as the decode chooses it (`sniff`); an image with a zero side is
 /// refused as the decode refuses it.
 pub fn upright_dimensions(bytes: &[u8]) -> Result<(u32, u32), TraceError> {
     use image::metadata::Orientation as O;

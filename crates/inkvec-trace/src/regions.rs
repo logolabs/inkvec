@@ -224,7 +224,7 @@ pub const MAX_FACES: usize = u16::MAX as usize;
 /// component's colour: a 1024 px RGB noise image (36 inks, 68,654 components) came back
 /// with exactly 65,535 faces, a 2.5 MB SVG and 15 minutes of work (r2-product, 2026-10-02).
 /// Now, when the image has more components than ids, the smallest components are first
-/// merged into their neighbours until the rest fit ([`cap_components`]), and the result is
+/// merged into their neighbours until the rest fit (`cap_components`), and the result is
 /// numbered as usual. A map with at most [`MAX_FACES`] components takes exactly the old
 /// path: the first loop below is the old loop, and it only gives up where the old one
 /// started folding.

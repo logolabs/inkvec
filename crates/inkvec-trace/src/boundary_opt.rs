@@ -78,9 +78,9 @@
 //! is found, or when the caller's time budget runs out; never on the length of a step.
 //! Nothing is linearised: each trial re-renders the exact coverage.
 //!
-//! Afterwards a fold guard (`fold_guard`) scales the whole displacement back towards the
-//! start until it introduces no new self-crossing; if even a sixteenth of it does, the stage
-//! gives up and leaves the map as it was.
+//! Afterwards the fold guard ([`fold_guard_local`]) backs off, by halves and at most to
+//! where they started, only the boundaries that take part in a self-crossing the solve
+//! made, and keeps every other boundary's solution.
 //!
 //! The data term is accumulated in f64, and the mixture `Σ cov_f·c_f` is formed in f64 too:
 //! in f32 the energy is a staircase the line search cannot descend.
@@ -554,7 +554,9 @@ pub struct Report {
     pub iters: usize,
     /// Number of vertices moved.
     pub moved: usize,
-    /// How much of the solved displacement survived the self-crossing guard.
+    /// How much of the solved displacement survived the self-crossing guard: the share
+    /// `Σ σ_v·|p_v − p⁰_v| / Σ |p_v − p⁰_v|` it kept (1 when it backed nothing off; see
+    /// `fold_guard_local`).
     pub scale: f64,
 }
 
@@ -574,9 +576,9 @@ pub fn optimise(
 /// `rgb` is the source image (sRGB `0..1`, row-major, the map's size) and `face[f]` face
 /// `f`'s fill model. `budget_ms` is the caller's wall-clock budget for the descent; with
 /// `None` the result depends only on the input. Returns `None`, leaving the map as it
-/// was, when the input is degenerate, the energy did not fall, or the fold guard could
-/// not keep enough of the displacement. On success every edge's points are overwritten
-/// (sigmas are not touched) and the report says how much moved.
+/// was, when the input is degenerate or the energy did not fall. On success every edge's
+/// points are overwritten (sigmas are not touched; the boundaries the fold guard backed off
+/// keep part or none of their displacement) and the report says how much moved.
 pub fn optimise_alpha(
     map: &mut PlanarMap,
     rgb: &[[f32; 3]],
@@ -625,7 +627,7 @@ pub fn optimise_alpha(
         let deadline = budget_ms.map(|ms| (Instant::now(), u128::from(ms)));
         lbfgs::descend(&mut prob, &vars, deadline, dbg)?
     };
-    let (scaled, scale) = fold_guard(map, &vars, &pos, dbg)?;
+    let (scaled, scale) = fold_guard_local(map, &vars, &pos, dbg);
     let moved = write_back(map, &vars, &scaled);
     Some(Report {
         moved,
@@ -634,49 +636,109 @@ pub fn optimise_alpha(
     })
 }
 
-/// Scale the whole displacement back until it adds no fold of its own.
+/// Back off only the boundaries that take part in a fold the solve made.
 ///
 /// The solve can fold the boundary: on a ribbon two pixels wide the two sides are both
 /// pulled towards the ink between them and can pass through each other. Downstream that
 /// costs far more than the boundary error it bought — the repair stage refits the offending
 /// rings round after round (2.5 s on one logo) and the emitter paints a face over its own
-/// interior. So the displacement is scaled back until no *new* crossing remains.
+/// interior. So no *new* crossing may survive the stage.
 ///
-/// The count is compared with the count before the solve rather than against zero: the
-/// sub-pixel refinement and the junction solve can already have left a fold behind (which
-/// is what the repair stage exists for), and refusing to improve a boundary because of a
-/// crossing that was already there would give up most of the gain.
+/// But a fold is a property of one pair of segments. The guard this replaces scaled the
+/// *whole* displacement back by halves (to 1/16, else it discarded the solve) until the
+/// crossing count was back to the start's, giving up the solve's gain on every boundary of
+/// the image for one crossing somewhere. Measured on the 128 px screen set and `held_a`
+/// (r2-fidelity research, 2026-10-02): it scaled 46 of 362 icons back and discarded one
+/// solve outright (`looker`), and 23 of the 64 icons the v0.2.4 solve made worse were
+/// scaled back where the solve before it had been kept in full; reverting only the
+/// boundaries in a new crossing was worth −2.9 % dE00 on the screen set and −2.3 % on
+/// `held_a` by itself. With the Wolfe-search solver (2026-10-03, the 246-icon screen set
+/// against v0.2.5, every band pixel kept, 128 iterations): −4.35 % with this guard against
+/// −3.88 % with the global one at 512 px, −7.58 % against −7.51 % at 128 px.
 ///
-/// With `p⁰` the start and `p` the solution, tries `p⁰ + s(p − p⁰)` for `s` = 1, ½, ¼, ⅛
-/// and 1/16 (halving while `s > 0.1`), and keeps the first whose self-crossing count
-/// ([`folds::FoldCounter`], which says exactly which pairs count) is no higher than the
-/// start's. Returns those positions and `s`, or `None` when no tried scale is clean.
-fn fold_guard(map: &PlanarMap, vars: &Vars, pos: &[Point], dbg: bool) -> Option<(Vec<Point>, f64)> {
+/// The rule. Each edge `k` carries a scale `s_k`, starting at 1; an unknown `v` sits at
+/// `p⁰_v + σ_v·(p_v − p⁰_v)` with `σ_v = min s_k` over the edges it belongs to (so a
+/// junction follows the most cautious of its edges, and an edge at scale 0 is exactly where
+/// it started, ends included). While some pair of segments crosses that did not cross at
+/// the start ([`folds::FoldCounter::new_crossings`]), halve the scale of every edge with a
+/// segment in such a pair, from ½ down to 1/16 and then to 0. Every round lowers at least
+/// one scale, and a pair whose two edges are both at 0 is the start's own pair, so it cannot
+/// be new: the loop ends, after at most six rounds per edge, with no new crossing. Crossings
+/// that were there at the start (left by `refine_subpixel` or `refine_junctions` for the
+/// repair stage) are allowed to stay: refusing to improve a boundary because of a crossing
+/// that was already there would give up most of the gain. Every position tried lies, point
+/// by point, on the segment from its start to its solution, so one candidate list
+/// ([`folds::FoldCounter::new`]) serves every round.
+///
+/// Returns the positions and the share of the solved displacement kept,
+/// `Σ_v σ_v·|p_v − p⁰_v| / Σ_v |p_v − p⁰_v|` (1 when nothing was backed off).
+///
+/// Inspired by: J. Smith, S. Schaefer (2015), *Bijective parameterization with free
+/// boundaries*, ACM TOG 34(4), <https://doi.org/10.1145/2766947>, and M. Li, Z.
+/// Ferguson, T. Schneider, T. Langlois, D. Zorin, D. Panozzo, C. Jiang, D. M. Kaufman
+/// (2020), *Incremental potential contact*, ACM TOG 39(4),
+/// <https://doi.org/10.1145/3386569.3392425>, which never take a step that makes two
+/// boundary elements pass through each other, deciding it per pair of elements (the largest
+/// step before the pair collides) rather than for the mesh as a whole. Adapted: they limit
+/// the step inside the line search and add a barrier energy that keeps a colliding pair
+/// apart, so the descent can continue; this energy has no barrier (two sides of a thin
+/// ribbon are *meant* to approach each other), and a step bound without one stops the
+/// whole part's descent at the first contact. So the per-pair decision is taken once, after
+/// the solve, and backs off only the boundaries the colliding pairs belong to.
+fn fold_guard_local(map: &PlanarMap, vars: &Vars, pos: &[Point], dbg: bool) -> (Vec<Point>, f64) {
     let n = vars.start.len();
-    // Every position tried lies on the path from the start to `pos`, so one candidate
-    // list serves them all.
     let folds = folds::FoldCounter::new(map, vars, &vars.start, pos);
-    let base = folds.count(&vars.start);
-    let mut scaled = pos.to_vec();
-    let mut scale = 1.0;
-    let mut ok = folds.count(&scaled) <= base;
-    while !ok && scale > 0.1 {
-        scale *= 0.5;
+    let seg_edge = folds::segment_edges(map, vars);
+    let mut scale = vec![1.0f64; map.edges.len()];
+    let mut cur = pos.to_vec();
+    let mut rounds = 0usize;
+    loop {
+        let bad = folds.new_crossings(&vars.start, &cur);
+        if bad.is_empty() {
+            break;
+        }
+        rounds += 1;
+        // The edges with a segment in a new crossing, each once.
+        let mut hit = vec![false; map.edges.len()];
+        for &(i, j) in &bad {
+            hit[seg_edge[i as usize] as usize] = true;
+            hit[seg_edge[j as usize] as usize] = true;
+        }
+        for (k, s) in scale.iter_mut().enumerate() {
+            if hit[k] {
+                *s = if *s > 1.0 / 16.0 { *s * 0.5 } else { 0.0 };
+            }
+        }
+        // σ_v = the smallest scale of the edges v belongs to.
+        let mut sigma = vec![1.0f64; n];
+        for (k, ids) in vars.var.iter().enumerate() {
+            for &v in ids {
+                sigma[v as usize] = sigma[v as usize].min(scale[k]);
+            }
+        }
         for v in 0..n {
-            scaled[v] = Point::new(
-                vars.start[v].x + (pos[v].x - vars.start[v].x) * scale,
-                vars.start[v].y + (pos[v].y - vars.start[v].y) * scale,
+            let (s0, p) = (vars.start[v], pos[v]);
+            cur[v] = Point::new(
+                s0.x + (p.x - s0.x) * sigma[v],
+                s0.y + (p.y - s0.y) * sigma[v],
             );
         }
-        ok = folds.count(&scaled) <= base;
     }
+    let (mut kept, mut total) = (0.0f64, 0.0f64);
+    for v in 0..n {
+        total += vars.start[v].dist(pos[v]);
+        kept += vars.start[v].dist(cur[v]);
+    }
+    let share = if total > 0.0 { kept / total } else { 1.0 };
     if dbg {
-        eprintln!("  [bopt] folds before {base}, scale kept {scale:.3}, accepted {ok}");
+        let backed = scale.iter().filter(|&&s| s < 1.0).count();
+        eprintln!(
+            "  [bopt] local fold guard: {rounds} round(s), {backed} of {} edge(s) backed off, {:.1}% of the displacement kept",
+            map.edges.len(),
+            share * 100.0
+        );
     }
-    if !ok {
-        return None;
-    }
-    Some((scaled, scale))
+    (cur, share)
 }
 
 /// Copy the solved unknowns back onto every edge's points (shared ends get the same

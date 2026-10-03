@@ -1,10 +1,13 @@
-//! Counting the boundary's self-crossings for the fold guard, as a spatial join.
+//! Finding the boundary's self-crossings for the fold guard, as a spatial join.
 //!
-//! The fold guard asks one question several times: how many pairs of boundary segments
-//! cross at the start, at the solution, and at a few points on the straight path between
-//! the two (the displacement scaled by ½, ¼, …). The pairs worth testing hardly change
-//! along that path, since no point moves more than `MAX_TOTAL`. So the candidate pairs are
-//! found once and tested at each position, instead of rebuilding a hash grid per count.
+//! The fold guard asks one question several times: which pairs of boundary segments cross
+//! now that did not cross at the start, at the solution and then at a few positions where
+//! some boundaries have been backed off towards the start (every point somewhere on the
+//! segment from its start to its solution). The pairs worth testing hardly change across
+//! those positions, since no point moves more than `MAX_TOTAL`. So the candidate pairs are
+//! found once and tested at each position ([`FoldCounter::new_crossings`]), instead of
+//! rebuilding a hash grid per question. [`FoldCounter::count`], the number of crossing pairs
+//! at one position, is the reference the tests check the join against.
 //!
 //! **The definition counted.** A segment is *bucketed* at a position when its cell range
 //! (below) spans `(x1 − x0)·(y1 − y0) ≤ 64`. Two segments are counted when both are
@@ -77,9 +80,9 @@ pub(super) fn segments(map: &PlanarMap, vars: &Vars) -> Vec<(u32, u32)> {
     segs
 }
 
-/// The pairs of segments that can cross anywhere on the path between two sets of
-/// positions, found once; [`FoldCounter::count`] then counts the crossings at any position
-/// on that path.
+/// The pairs of segments that can cross anywhere between two sets of positions, found
+/// once; [`FoldCounter::new_crossings`] then finds the new crossings at any position in
+/// between.
 pub(super) struct FoldCounter {
     segs: Vec<(u32, u32)>,
     /// Candidate pairs `(i, j)`, `i < j`, sharing no unknown and with overlapping swept
@@ -88,7 +91,9 @@ pub(super) struct FoldCounter {
 }
 
 impl FoldCounter {
-    /// Candidates for every position `a + s·(b − a)`, `s ∈ [0, 1]`.
+    /// Candidates for every position whose point `v` is `a_v + s_v·(b_v − a_v)` for any
+    /// `s_v ∈ [0, 1]` (one scale per point, so a set of boundaries backed off by the fold
+    /// guard is covered too).
     ///
     /// Such a point lies in the box spanned by its two ends (up to rounding, which the
     /// one-cell growth covers many times over), so a segment's cell range there lies inside
@@ -114,35 +119,73 @@ impl FoldCounter {
     }
 
     /// The number of crossing pairs at `pos` (see the module docs for the exact rule).
+    #[cfg(test)]
     pub(super) fn count(&self, pos: &[Point]) -> usize {
-        let ranges: Vec<Option<[i64; 4]>> = self
-            .segs
+        let ranges = self.ranges(pos);
+        self.cand
+            .iter()
+            .filter(|&&(i, j)| self.counted(&ranges, pos, i, j))
+            .count()
+    }
+
+    /// Each segment's cell range at `pos`, or `None` for a segment too large to be
+    /// bucketed (and so never counted).
+    fn ranges(&self, pos: &[Point]) -> Vec<Option<[i64; 4]>> {
+        self.segs
             .iter()
             .map(|&(u, v)| {
                 let r = cell_range(pos[u as usize], pos[v as usize]);
                 ((r[1] - r[0]) * (r[3] - r[2]) <= MAX_RANGE_AREA).then_some(r)
             })
-            .collect();
-        let mut n = 0usize;
-        for &(i, j) in &self.cand {
-            let (Some(ri), Some(rj)) = (&ranges[i as usize], &ranges[j as usize]) else {
-                continue;
-            };
-            if !overlap(ri, rj) {
-                continue;
-            }
-            let (s, t) = (self.segs[i as usize], self.segs[j as usize]);
-            if segments_cross(
-                pos[s.0 as usize],
-                pos[s.1 as usize],
-                pos[t.0 as usize],
-                pos[t.1 as usize],
-            ) {
-                n += 1;
-            }
-        }
-        n
+            .collect()
     }
+
+    /// Whether the candidate pair `(i, j)` counts as a crossing at `pos` (the module docs'
+    /// rule), given the segments' ranges there.
+    fn counted(&self, ranges: &[Option<[i64; 4]>], pos: &[Point], i: u32, j: u32) -> bool {
+        let (Some(ri), Some(rj)) = (&ranges[i as usize], &ranges[j as usize]) else {
+            return false;
+        };
+        if !overlap(ri, rj) {
+            return false;
+        }
+        let (s, t) = (self.segs[i as usize], self.segs[j as usize]);
+        segments_cross(
+            pos[s.0 as usize],
+            pos[s.1 as usize],
+            pos[t.0 as usize],
+            pos[t.1 as usize],
+        )
+    }
+
+    /// The pairs that count as a crossing at `pos` but did not at `start`: the folds the
+    /// solve made. Each pair once, as segment indices into [`segments`]' order.
+    ///
+    /// `pos` must lie on the path the counter was built for (every point between its start
+    /// and its end position, each point anywhere on its own segment), which is what makes
+    /// the candidate list complete for it (see [`FoldCounter::new`]).
+    pub(super) fn new_crossings(&self, start: &[Point], pos: &[Point]) -> Vec<(u32, u32)> {
+        let (r0, r1) = (self.ranges(start), self.ranges(pos));
+        self.cand
+            .iter()
+            .copied()
+            .filter(|&(i, j)| self.counted(&r1, pos, i, j) && !self.counted(&r0, start, i, j))
+            .collect()
+    }
+}
+
+/// The edge each segment of [`segments`] belongs to, in the same order.
+pub(super) fn segment_edges(map: &PlanarMap, vars: &Vars) -> Vec<u32> {
+    let mut out = Vec::new();
+    for (k, e) in map.edges.iter().enumerate() {
+        let n = vars.var[k].len();
+        if n < 2 {
+            continue;
+        }
+        let last = if e.closed { n } else { n - 1 };
+        out.extend(std::iter::repeat_n(k as u32, last));
+    }
+    out
 }
 
 /// Pairs `(i, j)`, `i < j`, whose ranges overlap and whose segments share no unknown,

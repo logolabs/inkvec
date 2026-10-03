@@ -625,3 +625,68 @@ fn crossing_count_finds_folds_between_and_within_boundaries() {
     let f2 = edge(vec![p(2.6, 0.3), p(1.4, 1.2)], 0, 1, (2, 1), false);
     assert_eq!(count(vec![f1, f2], 4, 4), 0);
 }
+
+#[test]
+fn the_local_fold_guard_backs_off_only_the_folding_boundaries() {
+    // A and B are a pixel apart; the solve pulled one end of B through A, and moved C,
+    // far away, as well.
+    let map = PlanarMap {
+        edges: vec![
+            edge(vec![p(0.0, 0.0), p(4.0, 0.0)], 0, 1, (0, 1), false),
+            edge(vec![p(0.0, 1.0), p(4.0, 1.0)], 0, 1, (2, 3), false),
+            edge(vec![p(0.0, 10.0), p(4.0, 10.0)], 0, 1, (4, 5), false),
+        ],
+        width: 12,
+        height: 12,
+        n_labels: 2,
+    };
+    let vars = build_vars(&map);
+    let mut pos = vars.start.clone();
+    let (b0, c0, c1) = (
+        vars.var[1][0] as usize,
+        vars.var[2][0] as usize,
+        vars.var[2][1] as usize,
+    );
+    pos[b0] = p(0.0, -0.5);
+    pos[c0] = p(0.0, 10.3);
+    pos[c1] = p(4.0, 10.3);
+    let (cur, share) = fold_guard_local(&map, &vars, &pos, false);
+    // B's end is halved back once, from y = -0.5 to y = 0.25, where B no longer crosses A
+    // (at a half it would still: 1 − 1.5·s < 0 for s > 2/3).
+    assert_eq!(cur[b0], p(0.0, 0.25));
+    // C keeps all of its displacement; A never moved.
+    assert_eq!(cur[c0], pos[c0]);
+    assert_eq!(cur[c1], pos[c1]);
+    assert_eq!(
+        cur[vars.var[0][0] as usize],
+        vars.start[vars.var[0][0] as usize]
+    );
+    // The kept share: (0.3 + 0.3 + 0.75) of (0.3 + 0.3 + 1.5).
+    assert!((share - 1.35 / 2.1).abs() < 1e-12, "{share}");
+    // Nothing folds any more.
+    let f = folds::FoldCounter::new(&map, &vars, &vars.start, &pos);
+    assert!(f.new_crossings(&vars.start, &cur).is_empty());
+    assert_eq!(f.new_crossings(&vars.start, &pos).len(), 1);
+}
+
+#[test]
+fn the_local_fold_guard_reverts_a_boundary_that_folds_at_every_scale() {
+    // B's end pushed all the way across A and beyond: halving it to a sixteenth still
+    // crosses, so B goes back to where it started, and A with it (A never moved).
+    let map = PlanarMap {
+        edges: vec![
+            edge(vec![p(0.0, 0.0), p(4.0, 0.0)], 0, 1, (0, 1), false),
+            edge(vec![p(0.0, 0.01), p(4.0, 1.0)], 0, 1, (2, 3), false),
+        ],
+        width: 8,
+        height: 8,
+        n_labels: 2,
+    };
+    let vars = build_vars(&map);
+    let mut pos = vars.start.clone();
+    let b0 = vars.var[1][0] as usize;
+    pos[b0] = p(0.0, -0.99);
+    let (cur, share) = fold_guard_local(&map, &vars, &pos, false);
+    assert_eq!(cur, vars.start);
+    assert_eq!(share, 0.0);
+}

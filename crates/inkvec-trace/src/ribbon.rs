@@ -77,6 +77,7 @@ use inkvec_core::{Point, Polyline};
 use inkvec_fit::curves::Segment;
 use inkvec_fit::primitives::{fit_primitive_or_arcs, PrimitiveFit};
 use inkvec_fit::{multimodel, FitConfig, FittedPath};
+use rayon::prelude::*;
 
 /// Narrowest stroke considered, px. Below about two pixels a stroke has no interior
 /// pixel of its own, the boundary solve drops its pixels as touched by both sides, and
@@ -461,9 +462,11 @@ fn reading(
             );
         }
     }
+    // Each chain is fitted on its own, so the chains are fitted in parallel; `collect`
+    // keeps their order, so the result is the sequential one.
     let lines: Vec<Centreline> = topo
         .chains
-        .iter()
+        .par_iter()
         .filter(|c| c.pts.len() >= 2)
         .map(|c| {
             fit_chain(

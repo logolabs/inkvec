@@ -12,6 +12,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+inkvec-core = { workspace = true }
 inkvec-trace = { workspace = true }
 resvg = { version = "0.48", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png"] }

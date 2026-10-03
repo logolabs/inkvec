@@ -3910,6 +3910,7 @@ name = "inkvec-sr"
 version = "0.2.4"
 dependencies = [
  "image",
+ "inkvec-core",
  "inkvec-trace",
  "resvg",
 ]

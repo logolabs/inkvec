@@ -1126,7 +1126,7 @@ Since the settings cleanup (CHANGELOG, 0.2.0, *Changed*) the engine reads its en
 | `INKVEC_LAYER_SIGMA` (*removed*) | overrode the sRGB noise sigma used when fitting a translucent layer | `LAYER_SIGMA_SRGB` (`crates/inkvec-cli/src/alpha/layers.rs:14-22`) | removed |
 | `INKVEC_NATIVE_ALPHA=0` | turns native alpha off, as `--no-native-alpha` does: the image is matted first | unset (native alpha on) | `crates/inkvec-cli/src/args.rs:231-232` |
 | `INKVEC_TOOLS_DIR=<dir>` | the folder holding the packaged SR pre-pass (`inkvec_sr`); when set, the only folder looked in | unset (`tools/` beside the binary or up to three folders above it, then the source checkout) | `crates/inkvec-cli/src/lib.rs:776-786` |
-| `INKVEC_PYTHON=<program>` | the interpreter the packaged SR pre-pass runs with | unset (`python` on Windows, `python3` elsewhere) | `crates/inkvec-sr/src/external.rs:59-69` |
+| `INKVEC_PYTHON=<program>` | the interpreter the packaged SR pre-pass runs with | unset (`python` on Windows, `python3` elsewhere) | `crates/inkvec-sr/src/external.rs:59-68` |
 | `INKVEC_DIAG=1\|json` | structured diagnostic lines on stderr; the intake's are the ICC outcome (`load/icc.rs`) and the soft-intake gate (edge width, ringing, lossy flag) | unset (silent) | `crates/inkvec-trace/src/diag.rs:47-60`; intake lines at `crates/inkvec-trace/src/load/icc.rs:79-147`, `crates/inkvec-trace/src/lib.rs:369-375` |
 | `INKVEC_ALPHADBG` | prints per-face alpha diagnostics and the emitter's face dump to stderr | unset (silent) | `crates/inkvec-cli/src/alpha.rs:1029`, `crates/inkvec-cli/src/emit.rs:604-607` |
 
@@ -1134,8 +1134,8 @@ No `INKVEC_*` variable is read in `inkvec-trace/src/load.rs` or `inkvec-trace/sr
 sniffing, the zero-side check, the decode limits, the ICC conversion, the orientation,
 `from_dynamic` and `lossy_container` have no environment knob. `icc.rs` only emits
 `INKVEC_DIAG` lines through the crate's `diag!` macro, which reads the variable in `diag.rs`.
-The `inkvec-sr` crate reads one variable, `INKVEC_PYTHON`, and reads it with
-`std::env::var` directly rather than through `inkvec_core::env`; the CLI reads
+The `inkvec-sr` crate reads one variable, `INKVEC_PYTHON`, through `inkvec_core::env`
+like every other engine read; the CLI reads
 `INKVEC_TOOLS_DIR` to find the packaged tool. Every knob of the SR pre-pass's decision and
 clean-up is a CLI flag. Other files of the trace crate (`lib.rs` above all) do read many
 `INKVEC_*` variables for palette, boundary-solve and other downstream stages, but none of

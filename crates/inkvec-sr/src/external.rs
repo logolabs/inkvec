@@ -56,16 +56,15 @@ impl External {
     }
 }
 
-/// The Python interpreter packaged tools run with: `INKVEC_PYTHON` when set, else `python` on
-/// Windows and `python3` elsewhere, where many systems install no bare `python`.
+/// The Python interpreter packaged tools run with: `INKVEC_PYTHON` when set (read once per
+/// process, through `inkvec_core::env`), else `python` on Windows and `python3` elsewhere,
+/// where many systems install no bare `python`.
 pub fn python_program() -> String {
-    std::env::var("INKVEC_PYTHON").unwrap_or_else(|_| {
-        if cfg!(windows) {
-            "python".to_string()
-        } else {
-            "python3".to_string()
-        }
-    })
+    match inkvec_core::env::text("INKVEC_PYTHON") {
+        Some(program) => program.to_string(),
+        None if cfg!(windows) => "python".to_string(),
+        None => "python3".to_string(),
+    }
 }
 
 /// A working directory for one external run, removed when dropped.

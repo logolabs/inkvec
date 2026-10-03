@@ -9,8 +9,9 @@
 **Source:** `crates/inkvec-trace/src/fast/` — `front.rs` (the front end), `palette.rs`,
 `faces.rs` and `faces/runs.rs` (the clean-up), `bands.rs` (ramps), `mod.rs`, `polygon.rs`,
 `smooth.rs`, `curve.rs` and `prims.rs` (the fitter), `replay.rs` (a test-only replay of
-dumped fitter inputs); `crates/inkvec-fit/src/primitives/ellipse.rs` (`taubin_ellipse`,
-`fit_ellipse_seeded`, which the fitter's primitive test calls);
+dumped fitter inputs); `crates/inkvec-trace/src/regions.rs` (`cap_components`, which the
+clean-up calls past the face-id limit); `crates/inkvec-fit/src/primitives/ellipse.rs`
+(`taubin_ellipse`, `fit_ellipse_seeded`, which the fitter's primitive test calls);
 `crates/inkvec-cli/src/fast.rs` (the command line's side). The stages it shares are
 documented in `01-intake.md`,
 `06-planar-map.md`, `07-subpixel.md`, `10-symmetry.md` and `13-emit.md`.
@@ -18,13 +19,13 @@ documented in `01-intake.md`,
 default `quality`). The trace crate dispatches to `fast::trace_color` or, for an image
 traced with its transparency, `fast::trace_color_native` (`fast/front.rs:17-29`) when
 `ColorOptions::fast` is set (`crates/inkvec-trace/src/lib.rs:290-302`); the command line
-fits the result with `fast::fit` (`crates/inkvec-cli/src/fast.rs`), which calls
+fits the result with `fast::fit` (`crates/inkvec-cli/src/fast.rs:28-45`), which calls
 `inkvec_trace::fast::fit_edges` (`fast/mod.rs:318-365`) with the map's width and height.
 **Pipeline position:** it replaces stages 03–05 (palette, regions, gradients) with its own
 front end; shares stages 01, 06, 07, 10 and 13; skips 08 (the boundary solve,
-`lib.rs:1137`) and 09 (decode, `lib.rs:1152`); and replaces 11 (curve fitting) with its own fitter,
-without 12 (repair) or shape harmonization (`repair_fits` and `emit_options` in
-`crates/inkvec-cli/src/pipeline.rs`).
+`lib.rs:1137`) and 09 (decode, `lib.rs:1152`); and replaces 11 (curve fitting) with its own
+fitter, without 12 (repair) or shape harmonization (`repair_fits`,
+`crates/inkvec-cli/src/pipeline.rs:862`; `emit_options`, `pipeline.rs:511-522`).
 
 ## What problem this solves
 
@@ -38,7 +39,7 @@ its seam underlap, compound paths and minify" — and replaces the rest with one
 (the module overview of `fast/mod.rs`). Each stage is linear or near-linear in the number of pixels or
 boundary points, and nothing reads a clock, so the output is the same on every machine. The
 command line describes the trade as "several times faster, a little less faithful"
-(`args.rs:304-307`).
+(`args.rs:305-308`).
 
 The round of 2026-09-30 rewrote Fast's own stages and the stages it shares for speed,
 **with the output held fixed**: every rewrite is exact, keeps the code it replaced as a test
@@ -49,7 +50,12 @@ ellipse starts from the algebraic conic alone, which changed no file on the gate
 provably identical. This page describes the pipeline as it
 stands after that round, stage by stage, with what each stage computes in the field's
 standard terms, the method, its citations as the code's doc comments label them, and the
-measured costs before and after.
+measured costs before and after. It also covers two fixes merged on 2026-10-03 that came
+after the round: a run of curve pieces that U-turns is no longer collapsed to its last
+piece, and a ring of pieces is never one cubic (§6, step 6; `3513beb`, judged by the
+gate); and an image with more components than face ids has its smallest components merged
+into their neighbours instead of folded into face 0 (§3; `be5abad`, byte-identical on the
+gate's sets).
 
 **How the numbers were measured.** Stage timings come from the implementing branches' merge
 notes and the research reports of 2026-09-30, on the development machine (an 8-core Ryzen 7
@@ -75,9 +81,16 @@ fitter; one SVG document out of the emitter. Two differences in what comes out:
   posterised bands is one gradient — on opaque images, with gradients on. The native-alpha
   path has no ramps: "a gradient across opacity is a fade, which is quality mode's"
   (`fast/front.rs:14-16`);
-* **the report** opens with a line saying Fast mode ran and naming what it skipped, followed
-  by every option the caller changed that only steers a skipped stage (`fast_ignored`,
-  `crates/inkvec-cli/src/fast.rs`), so a tuned setting that did nothing is not silent.
+* **the report** opens with a line saying Fast mode ran and naming what it skipped — "fast
+  mode     Potrace-class fit, flat fills; not run: boundary solve, curve DP, gradients,
+  ring repair, harmonization" (`report`, `crates/inkvec-cli/src/fast.rs:93-105`) — followed
+  by every option the caller moved off its default that only steers a skipped stage
+  (`fast_ignored`, `fast.rs:47-91`): `--tau`, `--content-units`, `--bezier-cost`,
+  `--corner-angle`, `--time-budget`, `--simplify-faint`, `--harmonize-threshold`,
+  `--use-symbols`, `--no-repair` and `--harmonize` / `--no-harmonize`, in that order. Not
+  `--no-gradients`, because Fast still merges ramps, and not `--precision` or
+  `--lambda-scale`, which the intake rescales on an oversampled raster, so a changed value
+  is no evidence the caller set them. So a tuned setting that did nothing is not silent.
 
 ## The pipeline, in order
 
@@ -85,7 +98,7 @@ fitter; one SVG document out of the emitter. Two differences in what comes out:
 |---|---|---|---|---|---|
 | 1 | intake | — | `load.rs`, `cli/alpha.rs`, `coverage.rs` | shared (01) | see below; with the palette, wall 282 → 203 ms at 2048 px opaque |
 | 2 | histogram palette and labels | `palette` | `fast/palette.rs` | 03 (MDL palette) | 47.7 → 7.1 ms at 2048 px opaque; 1.85 → 0.40 ms at 128 px |
-| 3 | region clean-up and faces | `slivers`, `despeckle`, `split` | `fast/faces.rs`, `fast/faces/runs.rs` | 04 (regions) | 76.2 → 3.86 ms at 2048 px; 0.50 → 0.09 ms at 128 px |
+| 3 | region clean-up and faces | `slivers`, `despeckle`, `split` | `fast/faces.rs`, `fast/faces/runs.rs` (and `regions.rs` past the face-id limit) | 04 (regions) | 76.2 → 3.86 ms at 2048 px; 0.50 → 0.09 ms at 128 px |
 | 4 | ramps | `ramps` | `fast/bands.rs` | 05 (gradients) | in the shared totals below |
 | 5 | planar map and refinement | `build_map`, `symmetry_detect`, `refine_subpix`, `refine_junc`, `symmetry` | `planar.rs`, `planar/*.rs`, `symmetry.rs` | shared (06, 07, 10) | ramps + map + refinement: 42 → 13 ms at 2048 px opaque |
 | 6 | Potrace-class fitter | `fit_dp` | `fast/mod.rs`, `polygon.rs`, `smooth.rs`, `curve.rs`, `prims.rs` | 11, 12 | combined: 26.27 → 5.42 ms at 2048 px opaque; 1.00 → 0.46 ms at 128 px (§6) |
@@ -99,8 +112,8 @@ figures below are not additive: the clean-up round took
 
 Measured together, `main` `55ee4e0` against the merged tip, per image, mean ms.
 `trace_total` is the stopwatch mark after the trace crate returns (stages 2–5; set in
-`run_color_impl`, `crates/inkvec-cli/src/pipeline.rs`); `fit_dp` is the fit (stage 6) plus
-what `finish_color` does before it:
+`run_color_impl`, `crates/inkvec-cli/src/pipeline.rs:246`); `fit_dp` is the fit (stage 6)
+plus what `finish_color` does before it (`pipeline.rs:359-362`, the mark at `:480`):
 
 | set | `fit_dp` | `trace_total` |
 |---|---|---|
@@ -116,23 +129,30 @@ what `finish_color` does before it:
 **What it computes.** Decode the file to straight RGBA floats, undo an exact
 nearest-neighbour upscale, and matte transparency onto an opaque ground; then every stage
 reads the image composited over white. Shared with Quality mode and documented in full in
-`01-intake.md`; this section lists what the round changed.
+`01-intake.md`; this section lists what the round changed. Since the robustness merge of
+2026-10-03 (`d8a3650`) the shared intake also picks the decoder by the file's signature,
+converts an embedded ICC profile to sRGB, turns the image upright by its EXIF orientation,
+lets a decode that will be capped allocate more (`load.rs:8-26`), and refuses an image with
+a zero side (`has_pixels`, `load.rs:255-272`); those steps are documented in
+`01-intake.md`, and Fast takes them as Quality does.
 
 **Method.**
 
 * **One read of the file, one widening pass.** `load_image_capped` reads the file into
-  memory once and decodes header and pixels from those bytes (`load.rs:229-274`). The bytes
-  become floats through a 256-entry table, `UNIT[k] = k / 255` (`load.rs:115`), straight from
-  the decoder's own buffer for 8-bit RGB and RGBA, in parallel chunks from 256 × 256 pixels on
-  (`from_dynamic`, `widen`, `load.rs:153-200`).
+  memory once and decodes header and pixels from those bytes (`load_image_capped`,
+  `load_file_bytes_capped`, `load.rs:392-433`). The bytes become floats through a 256-entry
+  table, `UNIT[k] = k / 255` (`load.rs:282-296`), straight from the decoder's own buffer for
+  8-bit RGB and RGBA, in parallel chunks from 256 × 256 pixels on (`from_dynamic`, `widen`,
+  `load.rs:298-373`).
 * **Unblock by the gcd of the change positions.** Only the factors that divide
   `gcd(w, h, every column and row where neighbours differ by more than 1/256)` get the block
   test; on ordinary art the gcd reaches 1 a few rows into the content and no block test runs
-  (`pixel_grid`, `change_gcd`, `crates/inkvec-cli/src/alpha.rs:388-474`).
+  (`pixel_grid`, `change_gcd`, `crates/inkvec-cli/src/alpha/unblock.rs:8-161`).
 * **Matte in place, in parallel.** The transparency scan and the flatten are parallel maps
   from 256 × 256 pixels on, and the flatten writes over the input's own buffer
-  (`alpha_source_owned`, `flatten_in_place`, `alpha.rs:797-1036`).
-* **Composite over white in parallel** (`Rgba::composited`, `coverage.rs:213-230`).
+  (`alpha_source_owned`, `crates/inkvec-cli/src/alpha.rs:598-624`; `flatten_in_place`,
+  `has_transparency`, `alpha.rs:792-852`).
+* **Composite over white in parallel** (`Rgba::composited`, `coverage.rs:198-232`).
 
 Each is exact: every output of the parallel maps depends on one input value, the
 transparency scan is a pure predicate, and the gcd filter only skips factors that provably
@@ -185,34 +205,37 @@ the clear ground are as far apart as white and black; on an opaque image that is
 
 1. **Keys and histogram** (`keys_and_histogram`, `palette.rs:683-781`). The image is cut into
    bands of whole rows, processed in parallel. Each band keys its rows once per *colour run*
-   (`key_rows`, `:501-521`: the key is a pure function of the pixel's four floats, and 99.56%
-   of pixels repeat their left neighbour's colour at 2048 px), then walks *key runs*
-   counting pixels, paired and flat pixels and their f64 colour sums (`histogram_rows`,
-   `:568-633`): inside a run the horizontal half of the erosion comes from the run's ends, and
-   only the rows above and below are read per pixel. A run's sums are held in registers and
-   stored once, because adding each pixel into the bin's memory made every addition wait on
-   the store before it. Row `r + 1` is keyed just before row `r` is counted, so the count reads
-   pixels the keying has just brought into cache. The bands' histograms are merged at the end
-   (`Bins::absorb`), which is exact by the lemma below. Rounding to a level is
-   `trunc(x + (0.5 − 2⁻²⁵))`, identical to `f32::round` on every one of the 1,065,353,217
-   floats in `[0, 1]` for both grids and about twice as fast, because `f32::round` compiles to
-   a libm call on the default x86-64 target (`level`, `:174-209`).
-2. **Inks** (`found_inks`, `:857-893`; `thin_inks`, `:915-973`) from the table of occupied
-   bins, then opacity snapping. Microscopic: at most 36 candidates and 36 inks measured.
+   (`key_rows`, `palette.rs:501-521`: the key is a pure function of the pixel's four floats,
+   and 99.56% of pixels repeat their left neighbour's colour at 2048 px), then walks *key
+   runs* counting pixels, paired and flat pixels and their f64 colour sums (`histogram_rows`,
+   `palette.rs:568-633`): inside a run the horizontal half of the erosion comes from the
+   run's ends, and only the rows above and below are read per pixel. A run's sums are held
+   in registers and stored once, because adding each pixel into the bin's memory made every
+   addition wait on the store before it. Row `r + 1` is keyed just before row `r` is
+   counted, so the count reads pixels the keying has just brought into cache. The bands'
+   histograms are merged at the end (`Bins::absorb`), which is exact by the lemma below.
+   Rounding to a level is `trunc(x + (0.5 − 2⁻²⁵))`, identical to `f32::round` on every one
+   of the 1,065,353,217 floats in `[0, 1]` for both grids and about twice as fast, because
+   `f32::round` compiles to a libm call on the default x86-64 target (`level`,
+   `palette.rs:174-209`).
+2. **Inks** (`found_inks`, `palette.rs:857-893`; `thin_inks`, `:915-973`) from the table of
+   occupied bins, then opacity snapping. Microscopic: at most 36 candidates and 36 inks
+   measured.
 3. **Lookup table:** each occupied bin's nearest ink, once, and whether the bin *is* that ink
    (`palette.rs:1213-1228`).
-4. **Labels** (`label_rows`, `:1318-1332`): a sure pixel's label is written inline from the
-   table; only the others — 0.29% of pixels at 2048 px, 4.4% at 128 px — go to the
-   neighbourhood rule (`Blends::blend_label`, `:1037-1081`). Each ink's share is counted per
-   run of equal labels, in integers, and converted to the f32 value the old per-pixel float
-   count produced (`ink_shares`, `:1377-1384`).
+4. **Labels** (`label_rows`, `palette.rs:1318-1332`): a sure pixel's label is written inline
+   from the table; only the others — 0.29% of pixels at 2048 px, 4.4% at 128 px — go to the
+   neighbourhood rule (`Blends::blend_label`, `palette.rs:1037-1081`). Each ink's share is
+   counted per run of equal labels, in integers, and converted to the f32 value the old
+   per-pixel float count produced (`ink_shares`, `palette.rs:1377-1384`).
 
 Per-bin state is kept for the *occupied* bins only (`Bins`, `palette.rs:211-307`): a median of
 16 on the 128 px screen set and at most 610 on the 2048 px set, out of 65,536 keys. A key
-reaches its bin through a small open-addressing hash table (`Slots`, `:309-409`) that starts
-at 64 entries and doubles as bins open, so each band's table is as large as the bins it met.
-Below 256 × 256 pixels, and whenever rayon has a single worker (the single-threaded
-WebAssembly build), every pass runs on the calling thread (`PARALLEL_MIN_PIXELS`, `:1119-1135`).
+reaches its bin through a small open-addressing hash table (`Slots`, `palette.rs:309-409`)
+that starts at 64 entries and doubles as bins open, so each band's table is as large as the
+bins it met. Below 256 × 256 pixels, and whenever rayon has a single worker (the
+single-threaded WebAssembly build), every pass runs on the calling thread
+(`PARALLEL_MIN_PIXELS`, `palette.rs:1119-1135`).
 
 **The exactness lemma for parallel sums** (`in_exact_set`, `palette.rs:443-483`). Merging band
 histograms adds f64 sums in an order the serial pass would not use, and floating-point
@@ -297,8 +320,25 @@ passes, in the order the front end calls them (`fast/front.rs:97-129`):
    floor take the label they share the longest border with — an area filter on flat zones.
    The floor is `min_region`, or 4 px per 512 × 512 of image up to 16 px, VTracer's default
    4 × 4 patch (`speckle_floor`, `fast/front.rs:31-46`).
-5. **Faces** (`write_faces`, `faces/runs.rs:502`, mark `split`): the components of the result
-   are the faces; their ids are written over the label buffer.
+5. **Faces** (`write_faces`, `faces/runs.rs:493-534`, mark `split`): the components of the
+   result are the faces; their ids are written over the label buffer. Ids are `u16`, and
+   Fast numbers at most 65,534 faces (`cap = u16::MAX − 1`, `runs.rs:513`). Past that,
+   since `be5abad` (merged at `d8a3650`, 2026-10-03), the label image is written out, its
+   smallest components are merged into their neighbours until 65,534 remain, and the runs
+   are read again before the ids are written. The merge is `regions::cap_components`
+   (`regions.rs:293-416`), the same function Quality's `split_components` calls past its
+   own limit of 65,535 (`MAX_FACES`, see `04-regions.md`). In rounds: take the
+   `count − cap` smallest components (by size, then by the raster order of their first
+   pixel), and in that order give each the neighbouring label it shares the most pixel
+   edges with (the lower label on a tie), unless a neighbour of it was already relabelled
+   this round or it was itself chosen as another's target. Each relabelling removes a
+   component, so the rounds end; every face is then still one 4-connected component of one
+   ink, the smallest specks drawn in their neighbour's ink. Before, every component past the
+   limit was folded into face 0, which then held pixels of many inks under one colour. An
+   image with fewer components takes exactly the old path. Tested on a 300 × 300
+   checkerboard, 90,000 components (`faces/tests.rs:36-53`); the implementing branch
+   (impl2/robust) found no real image that reaches the limit in Fast, whose palette and
+   despeckle keep two-ink noise at 18,000 to 35,000 faces.
 
 **Method: everything on row runs** (`fast/faces/runs.rs`). The label image is held as its
 maximal row runs (`RunLabels`); a run is scanned 8 labels at a time while they all equal the
@@ -321,9 +361,9 @@ run's label, a compare the compiler turns into one vector instruction (`push_row
   pass, merging neighbours that end up with one label, so the runs stay maximal
   (`relabel_components`, `apply_pixel_edits`, `runs.rs:408-491`).
 
-The labels are read once, when the runs are built, and written once, with the face ids;
-pixel colours are read only at strip pixels, in place, never copied (`Pixels`,
-`faces.rs:119-153`).
+The labels are read once, when the runs are built, and written once, with the face ids
+(past the face-id limit, once more: written out for the merge and read back); pixel colours
+are read only at strip pixels, in place, never copied (`Pixels`, `faces.rs:119-153`).
 
 **Why the output is the per-pixel code's** (`faces.rs:53-77`): maximal runs are a canonical
 form of a label image, and every edit keeps them maximal, so the runs after each pass are
@@ -350,10 +390,16 @@ VTracer's `filter_speckle`, which delete a small region where this gives it to a
 merging, "See also" Felzenszwalb & Huttenlocher, "Efficient graph-based image segmentation",
 IJCV 2004, and Najman & Cousty, "A graph-based mathematical morphology reader", 2014;
 unmixing, "See also" Bioucas-Dias et al., "Hyperspectral unmixing overview", 2012; reading
-pixels on demand, "Inspired by" Halide (PLDI 2013), store versus recompute. "Not from the
-literature": the interior test and the border lengths on runs, the observation that the
-component table plus the adjacency graph with border lengths are sufficient statistics for
-every pass (colours are needed only at strip pixels), and the strip criterion itself.
+pixels on demand, "Inspired by" Halide (PLDI 2013), store versus recompute; the merge past
+the face-id limit (on `regions::cap_components`), "Method from" Haris, Efstratiadis,
+Maglaveras & Katsaggelos, "Hybrid image segmentation using watersheds and fast region
+merging", IEEE TIP 1998 (region merging on the region adjacency graph, smallest and most
+similar first; adapted: the order is size alone, "most similar" is the longest shared
+border, since the labels carry no colour there, and the stop is the face-id limit rather
+than a dissimilarity threshold). "Not from the literature": the interior test and the
+border lengths on runs, the observation that the component table plus the adjacency graph
+with border lengths are sufficient statistics for every pass (colours are needed only at
+strip pixels), and the strip criterion itself.
 Rejected, with the numbers that decided it (`faces.rs:105-112`, `runs.rs:65-72`): caching
 sliver decisions (about one distinct key per strip pixel), pixel-scan decision-tree
 labellers such as BBDT and Spaghetti (they speed up the union-find, 1.05 ms of the 65.6 ms
@@ -371,7 +417,7 @@ s512 58/58, flat 1/1; and on 60 screen icons `--no-background`, `--monochrome` a
 
 ### 4. Ramps
 
-**What it computes** (`fast/bands.rs:1-30`, `merge_ramps`, `:313-495`). A smooth gradient
+**What it computes** (`fast/bands.rs:1-32`, `merge_ramps`, `:314-496`). A smooth gradient
 has no flat colour, so the palette quantises it into bands, and each band is a face with a
 boundary of its own. This is the one-shot version of Quality's pairwise band merging:
 adjacent faces whose inks are within `RAMP_STEP = 0.09` OKLab and that share at least 3 pixel
@@ -385,17 +431,18 @@ within 1.5/255 are left flat. Opaque images with gradients on only.
 **Method, since 2026-09-30.** Passes 1 to 4 read the palette and the row runs instead of the
 pixels (`bands.rs:18-32`):
 
-1. **Palette precheck** (`inks_may_join`, `bands.rs:156-214`): when no two *different* inks lie
-   within `RAMP_STEP`, the pass returns before reading a pixel. It is a proof, not a guess:
-   the faces are the 4-connected components of the ink map, so two faces that touch always
-   carry different inks, and if every pair of different inks is farther apart than
-   `RAMP_STEP` no join can happen and nothing would change. Guarded for the one exception:
-   past `u16::MAX − 1` components the rest fold into face 0, and the full pass decides.
+1. **Palette precheck** (`inks_may_join`, `bands.rs:156-215`): when no two *different* inks
+   lie within `RAMP_STEP`, the pass returns before reading a pixel. It is a proof, not a
+   guess: the faces are the 4-connected components of the ink map, so two faces that touch
+   always carry different inks, and if every pair of different inks is farther apart than
+   `RAMP_STEP` no join can happen and nothing would change. Guarded at the face-id limit:
+   with 65,534 faces or more (`CAPPED`, `bands.rs:196`), the count past which `write_faces`
+   merges components across inks (stage 3), it returns `true` and the full pass decides.
 2. **Row runs** of the face map (`planar::runs::RowRuns`, shared with the planar map).
 3. **Contacts** (`contacts`, `bands.rs:72-130`): the border length of every touching pair of
    faces, read off consecutive runs and the overlaps of adjacent rows' runs, keyed and
    summed after a sort; no join means return.
-4. **Samples** (`gather_samples`, `bands.rs:249-311`): each cluster's grid sample, read off the
+4. **Samples** (`gather_samples`, `bands.rs:250-312`): each cluster's grid sample, read off the
    runs in increasing pixel index, the order the fit sums in; divisibility is tested without
    `%` (wazero's arm64 miscompile).
 
@@ -541,53 +588,55 @@ off the border, an inner rectangle — goes on to the fit.
    over two steps each way (more than 50°) is kept as a corner, and the ends of an open
    boundary, which are junctions, stay put. A ring is denoised once: `fit_edge` hands the
    points it denoised for the primitive test straight on to `fit_denoised`
-   (`mod.rs:150-193`, `221-257`), because `denoise` is a pure function of the points and the
-   closed flag and a second call could only return the same vector.
+   (`mod.rs:150-193`, `:221-257`), because `denoise` is a pure function of the points and
+   the closed flag and a second call could only return the same vector.
 
 3. **Optimal polygon** (`polygon::open`, `polygon.rs:250-392`; `polygon::closed`,
-   `:638-652`; Selinger §2.2) — in the field's terms the *min-#* problem of polygonal
-   approximation: the fewest straight sides that stay within `poly_tol` of every point, and
-   among those the one closest to the points. A side `i → j` is admissible when the
-   direction `p_j − p_i` lies in the *cone* of directions from `p_i` that pass within `tol`
-   of every point between them (each point narrows the cone by `asin(tol / r)`; `Cone`,
-   `:135-199`), no point has fallen back towards `p_i` by more than `tol`, and it spans at
-   most `MAX_SPAN = 160` points. A dynamic program over vertices minimises
+   `polygon.rs:638-652`; Selinger §2.2) — in the field's terms the *min-#* problem of
+   polygonal approximation: the fewest straight sides that stay within `poly_tol` of every
+   point, and among those the one closest to the points. A side `i → j` is admissible when
+   the direction `p_j − p_i` lies in the *cone* of directions from `p_i` that pass within
+   `tol` of every point between them (each point narrows the cone by `asin(tol / r)`;
+   `Cone`, `polygon.rs:135-199`), no point has fallen back towards `p_i` by more than `tol`,
+   and it spans at most `MAX_SPAN = 160` points. A dynamic program over vertices minimises
    `(sides, Σ squared distances)` lexicographically, the distances read in `O(1)` from
    prefix sums taken relative to the first point, so that the squares of large coordinates
-   do not swamp the differences (`Sums`, `:69-133`). A closed ring is cut at its sharpest
-   point and solved as an open run back to it. Three exact speed-ups, all keeping the vertex
-   lists bit for bit those of the plain program, which the tests keep as `tests::open_ref`:
-    * **Fathoming** (`:272-298`): branch and bound inside the dynamic program, with the side
-      count as an exact integer bound. A side whose count `best[i].sides + 1` already exceeds
-      `best[j].sides` cannot win at `j` whatever its penalty, so the penalty is not computed
-      (89% of the admitted sides on the screen set, 55% at 2048 px, replay); an anchor with
-      `best[i].sides ≥ best[n−1].sides` is not scanned, since every path through it ends
-      with more sides than one the end already has (18.9% of the scan steps on the screen
-      set start at such an anchor). The doc comment proves by induction over the index that
-      every entry with fewer sides than the final count is decided by the same anchors
-      through the same IEEE expressions in the same order, so the path is unchanged.
-    * **Lattice runs in closed form** (`lattice_runs`, `:215-240`; `scan_anchor`,
-      `:552-636`): 62–72% of the scan steps, and 98% of the image frame's, lie on a run of
-      exactly equal steps, counted for every step in one backwards pass. Once the scan is
-      under way on one — cone open, the last point more than `2 tol` from the anchor, the
-      step at most `RUN_MAX_STEP = 4` px, `tol ≥ RUN_MIN_TOL = 1/16` px — every point to the
-      run's end is admitted, and the cone and reach after it are the last point's alone, so
-      the per-point cone work (a `hypot`, three divisions, a square root and four cross
-      products on a loop-carried dependency) is skipped. The sides are still offered one by
-      one, in order, because their penalties break ties by rounding. The proof (`:313-333`):
-      rounding moves each run point's computed direction and cone bounds by less than
-      10⁻¹⁴ rad; the distances grow by `|s|` per point, so the reach test never fires; each
-      point's cone is strictly tighter than the last's by at least 6·10⁻⁷ rad; every
-      direction lies inside the previous point's cone by at least 9·10⁻⁵, far beyond the
-      admission slack of 10⁻⁹; and `r > 2 tol` keeps the cone within 60°, so it never
-      empties.
-    * **Parallel admissibility** (`admitted_sides`, `:507-550`): which sides an anchor
-      admits depends only on the points and the tolerance, never on the table. A boundary of
-      `PARALLEL_MIN = 2048` points or more scans every anchor on all cores first, into a
-      160-bit set per anchor (`SideSet`, `:448-470`), then relaxes the table sequentially in
-      anchor order, offering the same sides in the same order; the sequential scan's skipped
-      cone tests are exactly the sides whose offer is a no-op, so the polygon is the same on
-      any thread count. The price: anchors the table would have fathomed are scanned too,
+   do not swamp the differences (`Sums`, `polygon.rs:69-133`). A closed ring is cut at its
+   sharpest point and solved as an open run back to it. Three exact speed-ups, all keeping
+   the vertex lists bit for bit those of the plain program, which the tests keep as
+   `tests::open_ref`:
+    * **Fathoming** (`polygon.rs:272-298`): branch and bound inside the dynamic program,
+      with the side count as an exact integer bound. A side whose count `best[i].sides + 1`
+      already exceeds `best[j].sides` cannot win at `j` whatever its penalty, so the penalty
+      is not computed (89% of the admitted sides on the screen set, 55% at 2048 px, replay);
+      an anchor with `best[i].sides ≥ best[n−1].sides` is not scanned, since every path
+      through it ends with more sides than one the end already has (18.9% of the scan steps
+      on the screen set start at such an anchor). The doc comment proves by induction over
+      the index that every entry with fewer sides than the final count is decided by the
+      same anchors through the same IEEE expressions in the same order, so the path is
+      unchanged.
+    * **Lattice runs in closed form** (`lattice_runs`, `polygon.rs:215-240`;
+      `scan_anchor`, `polygon.rs:552-636`): 62–72% of the scan steps, and 98% of the image
+      frame's, lie on a run of exactly equal steps, counted for every step in one backwards
+      pass. Once the scan is under way on one — cone open, the last point more than `2 tol`
+      from the anchor, the step at most `RUN_MAX_STEP = 4` px, `tol ≥ RUN_MIN_TOL = 1/16`
+      px — every point to the run's end is admitted, and the cone and reach after it are the
+      last point's alone, so the per-point cone work (a `hypot`, three divisions, a square
+      root and four cross products on a loop-carried dependency) is skipped. The sides are
+      still offered one by one, in order, because their penalties break ties by rounding.
+      The proof (`polygon.rs:313-333`): rounding moves each run point's computed direction
+      and cone bounds by less than 10⁻¹⁴ rad; the distances grow by `|s|` per point, so the
+      reach test never fires; each point's cone is strictly tighter than the last's by at
+      least 6·10⁻⁷ rad; every direction lies inside the previous point's cone by at least
+      9·10⁻⁵, far beyond the admission slack of 10⁻⁹; and `r > 2 tol` keeps the cone within
+      60°, so it never empties.
+    * **Parallel admissibility** (`admitted_sides`, `polygon.rs:507-550`): which sides an
+      anchor admits depends only on the points and the tolerance, never on the table. A
+      boundary of `PARALLEL_MIN = 2048` points or more scans every anchor on all cores
+      first, into a 160-bit set per anchor (`SideSet`, `polygon.rs:448-470`), then relaxes
+      the table sequentially in anchor order, offering the same sides in the same order;
+      the sequential scan's skipped cone tests are exactly the sides whose offer is a
+      no-op, so the polygon is the same on any thread count. The price: anchors the table would have fathomed are scanned too,
       and 24 bytes per point. Such boundaries are rare — none of the 6,645 edges of the
       screen set, 16 of the 564 at 2048 px, which include the image frame and set the fit's
       wall time (replay). The set's bits are written by shift and mask, not `/ 64` and
@@ -611,14 +660,59 @@ off the border, an inner rectangle — goes on to the fit.
    line pieces — when that cubic misses the points by more than `corner_tol` and by more
    than twice what the polyline through the vertex misses them by, or when the fit fails.
 
-6. **Curve-run optimisation** (`curve::optimise`, `curve.rs:299-327`; Selinger §2.4,
-   Potrace's `opticurve`): runs of smooth pieces between corners are merged where one cubic
-   says the same thing — a run that turns one way, by less than `MAX_TURN = 3.10` rad in
-   total, of at most `MAX_RUN = 24` pieces, whose merged cubic (same end points and
-   tangents, arms fitted to samples of the pieces) stays within `opt_tol` of every sample.
-   A dynamic program takes the fewest cubics per run.
+6. **Curve-run optimisation** (`curve::optimise`, `curve.rs:334-365`; `optimise_run`,
+   `curve.rs:240-332`; Selinger §2.4, Potrace's `opticurve`): runs of smooth pieces between
+   corners are merged where one cubic says the same thing. A closed boundary is first
+   rotated to start at a corner, when it has one, so no run is cut in two where the ring
+   happens to start; each maximal run of smoothly joined pieces is then optimised on its
+   own, so a corner is never smoothed over. Within a run a dynamic program over piece
+   boundaries takes the fewest cubics: `best[j+1] = min_i best[i] + 1`, over `i = j` (the
+   piece alone) and every `i` for which pieces `i..=j` turn one way (a piece turning less
+   than 10⁻⁶ rad counts as either), by at most `MAX_TURN = 3.10` rad in total, number at
+   most `MAX_RUN = 24`, and merge into one cubic within `opt_tol` of every sample. The
+   merged cubic keeps the run's end points and end tangents, and its two arm lengths are
+   fitted (`curve::fit`) to samples of the pieces at `t = ¼, ½, ¾` and at every join
+   between them. On a tie the smallest `i` is kept, and the cubics are read back from the
+   last piece. `O(n · MAX_RUN)` candidate runs for `n` pieces, each merge linear in its run.
 
-7. **Segments** (`curve::to_segments`, `curve.rs:344-378`): a cubic whose control points lie
+   Two rules, since `3513beb` (merged at `46e92e4`, 2026-10-03), keep every run drawn
+   (`curve.rs:251-268`):
+    * **A single piece is always its own cubic, whatever it turns.** The piece alone is
+      admitted before the turn test, and only merges of two or more pieces are held to it.
+      It used to be admitted only after the turn test, so a piece turning more than
+      `MAX_TURN` — a U-turn at a vertex whose sides double back, |turn| ≈ π — left
+      `best[j+1]` unreachable, and every later prefix with it; the read-back then started
+      from an unset `best[n]` and returned the run's last piece alone as if it were the
+      whole run. On a ring that is one cubic, which the fit then closes on itself, and the
+      face is not drawn. The doc comment says why Potrace has no such failure and this
+      program can: Potrace's polygon never doubles back, while here
+      `smooth::adjust_vertices` moves the vertices off the points within loosened boxes.
+    * **A run that is the whole ring is never one cubic.** A ring with no corner, or with
+      one, is a single run that starts and ends at the same join, and one cubic with both
+      ends there can only draw a loop or a sliver; the one candidate that covers every
+      piece (`i = 0`, `j = n − 1`) is not tried, so a closed boundary of two or more pieces
+      comes back as two or more cubics. A ring turns a full turn, so with honest turns
+      `MAX_TURN` already rules that merge out; the guard holds where the measured turns do
+      not add up (each is read in (−π, π], so a piece that turns further reads short).
+
+   Where every piece turns at most `MAX_TURN` and no whole ring merges into one cubic —
+   every boundary the old code drew correctly — the loop makes the same choices in the same
+   order, so those fits are unchanged bit for bit. Measured by the implementing branch
+   (impl2/bugs report: SVG hashes, and the gate's A/B of `3513beb` against the commit
+   before it at the gate's 128ss and 512ss tiers): the fix changes the output of 9 of the
+   402 gate icons at 128ss, 3 at 512ss, and the 1672 × 941 masthead. Gate dE00 at 128ss:
+   screen 0.3640 → 0.3639 (3 better, 1 worse), held_a 0.3632 → 0.3630 (2 better, none
+   worse); at 512ss: screen 0.1106, unchanged (1 better). Parameter ratio 2.120 → 2.121
+   (128ss screen) and 3.192 → 3.193 (512ss screen). The largest changes:
+   simple-icons/visa at 512 px, dE00 0.0479 → 0.0381, and openmoji 1F9D1-200D-1F393,
+   −0.026. Off the gate, the masthead goes from 0.9051 to 0.9044 with 8441 → 8491
+   parameters (thin rings that had collapsed are drawn again, by the commit message). The
+   case that found it was `synthetic/gradient_radial` at 512 px traced in Fast with the
+   research boundary solve switched on (research build r2-fastq): piece 37 of 38 turned
+   −3.109 rad, the ring collapsed to one cubic, and dE00 was 10.62; with the fix built on
+   that research commit it traces at 0.0587 (plain Fast 0.0586).
+
+7. **Segments** (`curve::to_segments`, `curve.rs:382-416`): a cubic whose control points lie
    within 0.05 px of its chord, and project inside it, is written as a line; consecutive
    collinear lines are joined; the ends are pinned to the junctions exactly
    (`fit_denoised`, `mod.rs:177-187`).
@@ -633,8 +727,8 @@ leaves nothing, are drawn as straight lines through their points (`too_short`, `
 and with its seeds reused (`37a4e40`), the ring denoised once (`d3ea154`), and the side
 bits by shift and mask (`e183cac`). Outside the fitter's files, and inside the `fit_dp`
 mark: `finish_color` moves the traced labels instead of cloning them, and Fast builds no
-content-unit polylines or λ multipliers unless `--editability` asks for them (`9f290b6`,
-`crates/inkvec-cli/src/pipeline.rs`; see `01-intake.md`). Each rewrite keeps the code it
+content-unit polylines or λ multipliers unless `--editability` asks for them (`9f290b6`;
+`crates/inkvec-cli/src/pipeline.rs:360-362`, `:631-648`; see `01-intake.md`). Each rewrite keeps the code it
 replaced as a test reference (`polygon::tests::open_ref` and `closed_ref`,
 `prims::tests::primitive_ref`, `tests::fit_edge_ref`). Identity of the exact tip against
 `main` `55ee4e0`: Fast 464/464 files, Quality 256/256, `--no-background` and `--monochrome`
@@ -661,6 +755,9 @@ Two changes alter the output, and the gate (`--mode fast`) judged them:
   algebraic start (`fit_ellipse_screened`). Kept as a speed-up.
 
 The final tip was checked again on Quality: 256/256 identical.
+
+After the round, one more fitter change alters the output, on purpose: the curve-run fix of
+`3513beb` (step 6 above), judged by the gate on its own.
 
 **Citations** (labels as in the doc comments):
 
@@ -712,10 +809,16 @@ The final tip was checked again on Quality: 256/256 identical.
   so there is nothing to estimate), "See also" Selinger 2003, which traces a bitmap's border
   like any other boundary; the ring denoised once, "Not from the literature" (it only
   removes a repeated computation);
-* the smoothing and curve stages (`smooth.rs`, `curve.rs`), which the round did not change,
-  name their sources in the text without the labels: Selinger 2003 §2.3.1, §2.3.2 and §2.4,
-  and Schneider's Bézier fit with fixed end tangents (the research report cites Schneider's
-  1990 Graphics Gems code, `FitCurves.c`).
+* the curve-run optimisation (`curve::optimise_run`, since `3513beb`), "Method from"
+  Selinger, "Potrace: a polygon-based tracing algorithm", 2003, §2.4 (`opticurve`: the
+  fewest curves over runs of consistent convexity and less than a half turn); adapted:
+  Potrace's own program has no read-back failure because its polygon never doubles back,
+  while here the vertices are moved off the points by `smooth::adjust_vertices` with
+  loosened boxes, and can;
+* the smoothing stages (`smooth.rs`) and the tangent-constrained Bézier fit (`curve::fit`),
+  which the round did not change, name their sources in the text without the labels:
+  Selinger 2003 §2.3.1 and §2.3.2, and Schneider's Bézier fit with fixed end tangents (the
+  research report cites Schneider's 1990 Graphics Gems code, `FitCurves.c`).
 
 **Where the time went.** Before the round (fitter research, 2026-09-30, on `main`):
 `fit_dp` took 1.01 ms per 128 px icon (16% of the engine's stages) and 26.75 ms at 2048 px
@@ -747,8 +850,8 @@ sets. By stage, on the replay, one thread:
   takes 52 ms on one thread and 11 ms on all cores, the sequential relaxation, which prices
   the 5.8 M live sides of the 12 M admitted, stays at 40 ms, and the polygon of those edges
   goes from 91 to 53–58 ms (`polygon.rs:521-524`). That doc comment counts 16 such edges in
-  the set; the one on `PARALLEL_MIN` counts 34 of 564 (`polygon.rs:497-502`); the source
-  does not reconcile the two;
+  the set, and so does the one on `PARALLEL_MIN`, 16 of 564 (`polygon.rs:497-502`; it said
+  34 until `542a0da` recounted them from the replay dumps);
 * **the primitive test**: 59 → 15 ms on the screen set and 54 → 13 ms on the 2048 px set
   for the single ellipse start, and the whole `fit_edge` 202 → 158 ms and 227 → 175 ms at
   that commit (`d403d3b`);
@@ -763,10 +866,10 @@ the parallel pass would take it off the critical path, but needs 8 bytes per adm
 ### 7. Emit
 
 **What it computes.** The SVG document, from the fitted paths, the faces' fills and the
-palette: shared with Quality and documented in `13-emit.md`. Fast turns shape harmonization off
-(`emit_options`, `crates/inkvec-cli/src/pipeline.rs`). An image traced with its transparency
-keeps the native-alpha model: inks carry an opacity and the clear ground is an ink of its own
-(`fast/front.rs:14-16`).
+palette: shared with Quality and documented in `13-emit.md`. Fast turns shape harmonization
+off (`emit_options`, `crates/inkvec-cli/src/pipeline.rs:511-522`). An image traced with its
+transparency keeps the native-alpha model: inks carry an opacity and the clear ground is an
+ink of its own (`fast/front.rs:14-16`).
 
 **Method, since 2026-09-30.** The face-alpha pass that runs inside the `emit` mark
 (`alpha::face_alpha`) gathers every face's alpha statistics in one pass over row runs, and fits
@@ -791,7 +894,10 @@ serial-versus-parallel threshold added in this round (256 × 256 pixels for the 
 composite and the intake passes; 512 vertices for the refinement; 2048 points for the
 polygon's parallel scan) chooses only the schedule, never the output. The polygon's
 `RUN_MAX_STEP` and `RUN_MIN_TOL` only decide where the closed form for lattice runs applies,
-which by its proof gives the same sides either way.
+which by its proof gives the same sides either way. Fast's face-id limit, 65,534 faces
+(`u16::MAX − 1`, `faces/runs.rs:513`, and the same count as `CAPPED` in `bands.rs:196`), is
+one below Quality's `MAX_FACES` (section 04); past it the smallest components are merged
+by the rule the two modes share (`regions::cap_components`, stage 3).
 
 ## Failure modes and edge cases
 
@@ -799,9 +905,20 @@ which by its proof gives the same sides either way.
   leaves box averages outside the exact set, so the palette's bands stop counting and the
   histogram is recounted serially in raster order. The result is still identical; only the
   speed is lost.
-- **More than 65,534 faces** fold into face 0 (`write_faces`, as `regions::split_components`
-  does), which then holds several inks under one colour; the ramp precheck's proof fails there,
-  so it defers to the full pass.
+- **More than 65,534 components** are merged, smallest first, into the neighbouring ink each
+  shares the most border with, until 65,534 remain (`write_faces` calling
+  `regions::cap_components`, the rule Quality's `split_components` uses past its own limit;
+  stage 3). Every face stays one connected component of one ink; the merged specks are
+  drawn in their neighbour's ink. The ramp precheck steps aside at that count and the full
+  pass decides. Before `be5abad` the extra components were folded into face 0, which then
+  held pixels of many inks under one colour. The implementing branch found no real image
+  that reaches the limit in Fast; a 300 × 300 checkerboard (90,000 components) does, and is
+  the unit test.
+- **A run that U-turns, or a whole ring of smooth pieces, is never collapsed.** Since
+  `3513beb` a piece turning more than `MAX_TURN` is always its own cubic, and a closed
+  boundary of two or more pieces always comes back as two cubics or more (step 6 of §6).
+  Before, a run with such a piece was read back as its last piece alone; on a ring that is
+  one cubic closed on itself, and the face was not drawn.
 - **The rayon pool start moves, it does not vanish.** In the command-line tool the first
   parallel call spawns the global pool (0.37 ms median). With the palette serial at 128 px,
   `fit_dp` pays it instead (+0.35 ms at 128 px); the Studio and the WebAssembly Space keep a warm
@@ -825,9 +942,12 @@ which by its proof gives the same sides either way.
 
 ## Environment overrides
 
-Fast mode's own stages read no environment variable. The shared stages keep theirs (see
-`07-subpixel.md`: `INKVEC_SUBPXDBG` and `INKVEC_DUMP_CONTOUR` make the refinement run
-serially, in order), and `INKVEC_TIMING` prints the stage marks listed above.
+Fast mode's own stages read no environment variable that changes what they compute. One
+writes a diagnostic: with `INKVEC_DIAG` set, `write_faces` reports under the stage name
+`split` how many components it merged past the face-id limit (`faces/runs.rs:517-520`).
+The shared stages keep theirs (see `07-subpixel.md`: `INKVEC_SUBPXDBG` and
+`INKVEC_DUMP_CONTOUR` make the refinement run serially, in order), and `INKVEC_TIMING`
+prints the stage marks listed above.
 
 Two test-only harnesses read variables, through `inkvec_core::env`. Both are compiled only
 under `cargo test` (`replay` and `faces::tests` are declared `#[cfg(test)]`,
@@ -839,8 +959,8 @@ only when asked for:
 | `INKVEC_FFD_DIR` | `fast/replay.rs:65-85` (`dump_files`); also `replay_timing`, `:326` | directory searched recursively for `*.ffd` edge dumps. Unset, the three replay tests print a note and return. The dump sets for `replay_timing` are its first-level subdirectories |
 | `INKVEC_FFD_REPS` | `fast/replay.rs:168-172` (`reps`) | how many timed runs a replay keeps the smallest of: default 30 in `replay_long_edges`, 5 in `replay_timing` |
 | `INKVEC_FFD_MIN` | `fast/replay.rs:187-199` (`replay_long_edges`) | fewest points an edge needs to be timed there; default 2048, the parallel scan's threshold |
-| `INKVEC_FACES_DUMPS` | `fast/faces/tests.rs:457-498`, `:500-510` | directory of the clean-up's research label dumps (`*.bin`) for its differential test and its per-pass timing |
-| `INKVEC_FACES_BENCH_MIN` | `fast/faces/tests.rs:510` | smallest dump, in pixels, the per-pass timing measures; default 1 (all) |
+| `INKVEC_FACES_DUMPS` | `fast/faces/tests.rs:476-517`, `:519-529` | directory of the clean-up's research label dumps (`*.bin`) for its differential test and its per-pass timing |
+| `INKVEC_FACES_BENCH_MIN` | `fast/faces/tests.rs:529` | smallest dump, in pixels, the per-pass timing measures; default 1 (all) |
 
 The replay tests are run as `INKVEC_FFD_DIR=<dir> cargo test --release -p inkvec-trace
 replay -- --ignored --nocapture` (`replay.rs:5-7`). They compare the polygon with its kept

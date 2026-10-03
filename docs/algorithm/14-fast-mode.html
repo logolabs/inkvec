@@ -15,9 +15,11 @@
       engine takes. It keeps the parts that make the drawing correct — shapes that share
       their borders exactly, and edges placed to a fraction of a pixel — and swaps every
       slow search for a quick, single-pass version. This page follows that route from the
-      file to the finished SVG, and explains how the latest round made it faster again
+      file to the finished SVG, and explains how the speed-up round made it faster again
       while changing what it draws in one place only: the picture's outer frame, now
-      written as the exact rectangle it is.</p>
+      written as the exact rectangle it is. A later fix to the curve step changed a few
+      more drawings: a curve that turns sharply back on itself no longer swallows the
+      outline it belongs to.</p>
     <p class="pairlink">Technical reference: <a href="14-fast-mode.md">14-fast-mode.md</a></p>
   </header>
   <main>
@@ -227,7 +229,13 @@
           larger neighbour's joins it.</li>
         <li><b>Speckles</b> — regions below a size that grows with the picture are given to
           the neighbour they share the longest border with, so no hole is left.</li>
-        <li><b>Faces</b> — what remains is numbered, one number per connected region.</li>
+        <li><b>Faces</b> — what remains is numbered, one number per connected region. Fast
+          mode keeps those numbers in 16 bits, which leaves room for 65,534 regions. A
+          picture with more than that first has its smallest regions merged, each into the
+          neighbour it shares the most border with, until the rest fit, so every region is
+          still one connected patch of one ink. It used to lump every region past the limit
+          into the first one, whatever its colour. No real picture tried so far reaches the
+          limit in Fast mode; a fine checkerboard does, and is the test.</li>
       </ul>
       <p>All five now work on the runs. The pixel labels are read once, when the runs are
         made, and written once, at the end. In between, everything the passes need — a
@@ -246,7 +254,8 @@
         touch always have different inks, so if no two different inks in the whole picture
         are close enough to be steps of one fade, nothing could ever be grouped — and the
         pass stops before looking at a single pixel. That settled 5 of the 7 large test
-        images outright.</p>
+        images outright. On a picture with so many regions that the smallest had to be merged
+        (above), the shortcut stands aside and the full pass decides.</p>
     </section>
 
     <section>
@@ -303,6 +312,15 @@
           smooth curves bending one way are merged wherever a single curve says the same
           thing.</figcaption>
       </figure>
+      <p>Two rules keep that last merge safe. A piece of curve that turns sharply back on
+        itself — a U-turn — is always kept as its own curve, never merged with its
+        neighbours. And a closed outline is never collapsed into a single curve: it always
+        comes back as two curves or more. Before a fix in October 2026, one U-turn piece
+        could make the merge lose track of the whole stretch, which then came back as its
+        last piece alone; on a closed outline that left one curve closed on itself, and the
+        shape was not drawn. In everyday Fast mode the fix changed 9 of the 402 icons of
+        the quality check at its smaller size and 3 at its larger one, and the Visa logo of the
+        Simple Icons set, traced at 512 pixels, came out closer to the original.</p>
       <p>Before those steps, a closed outline that is really a circle or an ellipse is
         recognised as one and written with three or five numbers instead of a chain of curves;
         and a border between two nearly identical colours is fitted more loosely, because a
@@ -332,10 +350,11 @@
 
     <section>
       <h2>Faster, with the drawing held fixed</h2>
-      <p>Every change to the steps described above was made with the output held fixed (the
-        outer-frame change in the curve step, described just above, is the one deliberate
-        exception, and the ellipse starting guess was judged rather than proven). Each
-        rewritten step
+      <p>Every change the speed-up round made to the steps described above was made with the
+        output held fixed (the outer-frame change in the curve step, described just above,
+        is the one deliberate exception, and the ellipse starting guess was judged rather
+        than proven; the later U-turn fix was a correction, not a speed-up, and the quality
+        check judged it too). Each rewritten step
         keeps the code it replaced as a reference, the tests compare the two on random and
         awkward inputs, and the finished SVG files were compared byte for byte across
         hundreds of test images in both modes. Measured per image on a busy development

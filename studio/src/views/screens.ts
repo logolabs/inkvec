@@ -7,7 +7,7 @@
  */
 
 import { appMark, fill, h } from "../lib/dom";
-import { APP_NAME, openExternal, pickFolder, WEB } from "../lib/platform";
+import { APP_NAME, LITE_URL, openExternal, pickFolder, WEB } from "../lib/platform";
 import {
   api,
   events,
@@ -553,7 +553,7 @@ function about(store: Store, act: ScreenActions): HTMLElement {
             link("Benchmark results", "https://github.com/logolabs/inkvec#benchmark"),
             WEB
               ? link("Inkvec Studio for the desktop", "https://github.com/logolabs/inkvec/releases")
-              : link("Inkvec Studio Lite, in the browser", "https://huggingface.co/spaces/Logolabs/inkvec"),
+              : link("Inkvec Studio Lite, in the browser", LITE_URL),
             link("logolabs.org", "https://logolabs.org"),
           ),
         ),

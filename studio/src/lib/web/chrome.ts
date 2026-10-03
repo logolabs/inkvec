@@ -203,6 +203,30 @@ export function carriedFile(hash: string): { name: string; bytes: Uint8Array } |
   }
 }
 
+/**
+ * The largest file an address carries: base64 makes 1.5 MB into 2,000,000 characters, inside
+ * Chromium's 2 MiB limit on a URL (url::kMaxURLChars); a longer address opens as about:blank.
+ * The presentation page's `HANDOFF_MAX` (`web/index.html`) is the same number.
+ */
+export const HANDOFF_MAX = 1_500_000;
+
+/**
+ * The fragment that carries a file into a new tab of the Studio, `#open=<base64url
+ * bytes>&name=<URI-encoded name>`, which `carriedFile` reads back; null for an empty file or
+ * one larger than `HANDOFF_MAX`. The encoding is the presentation page's (`base64url` in
+ * `web/index.html`): RFC 4648 section 5 without padding, built in 32 KiB slices so a large
+ * file never becomes one huge argument list. "Open in its own tab" inside the Space's frame
+ * (`components/wincontrols.ts`) uses it, for the reason `takeLaunch` gives: from that frame
+ * only the address reaches an isolated tab.
+ */
+export function handOffHash(name: string, bytes: Uint8Array): string | null {
+  if (!bytes.length || bytes.length > HANDOFF_MAX) return null;
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  const data = btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return `#open=${data}&name=${encodeURIComponent(name)}`;
+}
+
 // ---------------------------------------------------------------- the loading screen ---
 //
 // The browser build's own loading screen (`#boot`, from web/boot/, inlined into the page so it

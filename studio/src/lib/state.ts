@@ -30,6 +30,7 @@ import type {
   SourceInfo,
   Stage,
   Traced,
+  TraceMode,
   UpdateInfo,
   WorstCorner,
 } from "./ipc";
@@ -103,6 +104,12 @@ export interface State {
   tracing: boolean;
   /** Which tier the trace in flight is, so the size shown for it is the size it runs at. */
   tracingTier: "draft" | "final";
+  /**
+   * Which engine the trace in flight runs. Usually the controls' `settings.mode`, but the
+   * Fast draft of an image just opened (`TraceLoop.open`) is the Fast engine's whatever the
+   * controls say, and the status strip names the engine that is actually running.
+   */
+  tracingEngine: TraceMode;
   /** Stages of the trace in flight, in the order they finished. */
   liveStages: Stage[];
   /** When the trace in flight was asked for (`performance.now()`): the live counters count from here. */
@@ -119,6 +126,8 @@ export interface State {
   result: Traced | null;
   /** The trace that produced `result`: what the backend keeps its confidence bands under. */
   resultGeneration: number;
+  /** The engine that drew `result`; see `tracingEngine`. */
+  resultEngine: TraceMode;
   /** The backend had no confidence bands for `result`, so Certainty has nothing to show. */
   bandsMissing: boolean;
   /**
@@ -263,6 +272,7 @@ export function initial(settings: Settings, minify: MinifySettings): State {
     generation: 0,
     tracing: false,
     tracingTier: "final",
+    tracingEngine: settings.mode,
     liveStages: [],
     traceStarted: 0,
     traceEnded: 0,
@@ -271,6 +281,7 @@ export function initial(settings: Settings, minify: MinifySettings): State {
     logOpen: true,
     result: null,
     resultGeneration: 0,
+    resultEngine: settings.mode,
     bandsMissing: false,
     previous: null,
     svg: null,

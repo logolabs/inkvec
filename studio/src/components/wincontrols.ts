@@ -10,13 +10,16 @@
  * In a browser tab (Inkvec Studio Lite) there is no window to work, but there is a screen to
  * fill: Full screen, through the Fullscreen API, and — when the page is embedded, as it is on
  * the Hugging Face Space, whose frame may not be allowed to go full screen — "Open in its own
- * tab", which is the same page at its own address.
+ * tab", which is the same page at its own address, with the image that is open (`ownTab`).
  */
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { h, icon } from "../lib/dom";
 import { DESKTOP_URL, DESKTOP_WHY, WEB } from "../lib/platform";
+import { HANDOFF_MAX, handOffHash } from "../lib/web/chrome";
+import { webBackend } from "../lib/web/engine";
+import { toast } from "./overlays";
 
 /**
  * The window's controls for this build: minimise, maximise and close on the desktop; in a
@@ -31,6 +34,35 @@ export function windowControls(): HTMLElement {
     h("button.min", { "aria-label": "Minimise", onclick: () => void win.minimize() }, h("i")),
     h("button.max", { "aria-label": "Maximise", onclick: () => void win.toggleMaximize() }, h("i")),
     h("button.close", { "aria-label": "Close", onclick: () => void win.close() }, icon("x", 13)),
+  );
+}
+
+/**
+ * "Open in its own tab": this page at its own address, carrying the image that is open. From
+ * inside the Space's frame nothing but the address reaches the new tab: the frame's storage is
+ * partitioned under the embedding site, and the Studio's isolation (COOP) cuts the tab off
+ * from its opener, so a message is dropped. The file therefore rides in the URL fragment, the
+ * way the presentation page hands a dropped file over (`handOffHash`; `takeLaunch` reads it
+ * and clears the address). A file over `HANDOFF_MAX` cannot fit in an address: the user is
+ * told so before the tab opens without it, and the toast's button opens it.
+ */
+function ownTab(): void {
+  const page = window.location.href.split("#")[0];
+  const open = webBackend().openImage();
+  if (!open) {
+    window.open(page, "_blank", "noopener");
+    return;
+  }
+  const name = open.name ?? "image";
+  const hash = handOffHash(name, open.bytes);
+  if (hash) {
+    window.open(page + hash, "_blank", "noopener");
+    return;
+  }
+  const mb = (open.bytes.length / 1e6).toFixed(1);
+  toast(
+    `${name} is ${mb} MB. A page address carries a file of up to ${(HANDOFF_MAX / 1e6).toFixed(1)} MB, so the new tab opens without it: open the file again there.`,
+    { action: { label: "Open the tab", run: () => window.open(page, "_blank", "noopener") } },
   );
 }
 
@@ -64,11 +96,14 @@ function webControls(): HTMLElement {
   };
   document.addEventListener("fullscreenchange", sync);
 
-  const ownTab = () => window.open(window.location.href, "_blank", "noopener");
   const tab = embedded()
     ? h(
         "button.btn.ghost.compact",
-        { "data-ctl": "own-tab", title: "The same app at its own address, with the whole window", onclick: ownTab },
+        {
+          "data-ctl": "own-tab",
+          title: `The same app at its own address, with the whole window and every core. The open image comes along, up to ${(HANDOFF_MAX / 1e6).toFixed(1)} MB.`,
+          onclick: ownTab,
+        },
         icon("external", 14),
         h("span", null, "Open in its own tab"),
       )

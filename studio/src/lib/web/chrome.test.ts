@@ -1,6 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { carriedFile, pastedImages } from "./chrome";
+import { carriedFile, HANDOFF_MAX, handOffHash, pastedImages } from "./chrome";
 
 /** What the paste listener handed over, per paste. */
 const taken: File[][] = [];
@@ -95,5 +95,27 @@ describe("carriedFile", () => {
     expect(carriedFile("#open=")).toBeNull();
     expect(carriedFile("#open=%%%")).toBeNull();
     expect(carriedFile("open=AAAA")).toBeNull();
+  });
+});
+
+describe("handOffHash", () => {
+  it("writes what carriedFile reads back, byte for byte, with the name", () => {
+    const all = Uint8Array.from({ length: 70_000 }, (_, i) => (i * 131 + 7) & 255);
+    for (const n of [1, 2, 3, 4, 0x8000, 0x8000 + 1, all.length]) {
+      const bytes = all.subarray(0, n);
+      const hash = handOffHash("Café & co.png", bytes);
+      // The presentation page writes the same fragment for the same file.
+      expect(hash).toBe(`#open=${base64url(bytes)}&name=${encodeURIComponent("Café & co.png")}`);
+      const got = carriedFile(hash ?? "");
+      expect(got?.name).toBe("Café & co.png");
+      expect([...(got?.bytes ?? [])]).toEqual([...bytes]);
+    }
+  });
+
+  it("carries a file of exactly HANDOFF_MAX bytes and refuses one byte more, or an empty one", () => {
+    expect(HANDOFF_MAX).toBe(1_500_000);
+    expect(handOffHash("a.png", new Uint8Array(HANDOFF_MAX))).not.toBeNull();
+    expect(handOffHash("a.png", new Uint8Array(HANDOFF_MAX + 1))).toBeNull();
+    expect(handOffHash("a.png", new Uint8Array(0))).toBeNull();
   });
 });

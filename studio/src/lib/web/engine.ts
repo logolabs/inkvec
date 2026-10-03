@@ -116,6 +116,15 @@ class WebBackend {
   } | null = null;
   /** How long the last fresh worker took to be ready with the image back, in ms. */
   restartMs: number | null = null;
+
+  /**
+   * The image open now, as its file's bytes and name, or null. "Open in its own tab"
+   * (`components/wincontrols.ts`) carries it into the new tab's address. The bytes are this
+   * backend's own copy; a caller only reads them.
+   */
+  openImage(): { bytes: Uint8Array; name: string | null } | null {
+    return this.source;
+  }
   /** Traces stopped by replacing the worker, and when each was asked to stop; for the tests. */
   stopped: { generation: number; asked: number; killed: number }[] = [];
   /** A stale trace's scheduled stop, while it is given the chance to finish first. */

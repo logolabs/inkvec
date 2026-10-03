@@ -65,7 +65,13 @@ pub(crate) struct Boundary {
     pub(crate) pt_n: Vec<Vec2>,
     /// Segment `i` of the grid is segment `i` above.
     pub(crate) grid: SegGrid,
+    /// Point `i` lies on the canvas frame ([`Boundary::mark_frame`]).
+    pub(crate) frame: Vec<bool>,
 }
+
+/// Sigma of a frame point's one-sided residual, px. The frame is where the canvas cuts
+/// the face, known exactly, unlike the 0.5 px the planar map gives these unmeasured points.
+pub(crate) const SIGMA_FRAME: f64 = 0.05;
 
 /// `v / |v|`, or `None` when `|v| <= 1e-12`.
 pub(crate) fn unit(v: Vec2) -> Option<Vec2> {
@@ -172,6 +178,7 @@ impl Boundary {
         let segs: Vec<(Point, Point)> = (0..pts.len()).map(|i| (pts[i], pts[next[i]])).collect();
         Some(Boundary {
             grid: SegGrid::new(&segs, cell),
+            frame: vec![false; pts.len()],
             pts,
             sigma,
             next,
@@ -184,6 +191,44 @@ impl Boundary {
     /// Number of measured points (and of segments).
     pub(crate) fn len(&self) -> usize {
         self.pts.len()
+    }
+
+    /// Mark the points on the frame of a `w` x `h` canvas (within 1e-3 px of
+    /// `x = -0.5`, `x = w - 0.5`, `y = -0.5` or `y = h - 0.5`).
+    ///
+    /// A face that runs off the canvas has boundary points along the frame that are where
+    /// the canvas cut it, not where it ends, and a stroke may paint past them (the canvas
+    /// clips it). Their residual is one-sided ([`Boundary::residual`]).
+    pub(crate) fn mark_frame(&mut self, w: usize, h: usize) {
+        let (x1, y1) = (w as f64 - 0.5, h as f64 - 0.5);
+        for (i, p) in self.pts.iter().enumerate() {
+            self.frame[i] = (p.x + 0.5).abs() < 1e-3
+                || (p.x - x1).abs() < 1e-3
+                || (p.y + 0.5).abs() < 1e-3
+                || (p.y - y1).abs() < 1e-3;
+        }
+    }
+
+    /// Point `i`'s weighted residual against strokes of half-width `h` whose distance
+    /// term to it is `d`: `(r, σ, active)` with `r = (d - h)/σ`.
+    ///
+    /// For a measured point `σ` is its own sigma (floored at 1e-3 px, as the curve
+    /// fitter's chi-squared floors it). For a frame point the residual is one-sided --
+    /// zero, and inactive (no gradient), once the point is painted (`d <= h`), and
+    /// `(d - h)/`[`SIGMA_FRAME`] while it is not -- because the face reaches the frame and
+    /// beyond it nothing is drawn. Found on simple-icons `wxt`: a stroke stopping short of
+    /// the canvas edge left a grey line along it, dE00 0.037 -> 0.062, with the two-sided
+    /// residual reading the frame points at their unmeasured 0.5 px.
+    pub(crate) fn residual(&self, i: usize, d: f64, h: f64) -> (f64, f64, bool) {
+        if self.frame[i] {
+            return if d <= h {
+                (0.0, SIGMA_FRAME, false)
+            } else {
+                ((d - h) / SIGMA_FRAME, SIGMA_FRAME, true)
+            };
+        }
+        let s = self.sigma[i].max(1e-3);
+        ((d - h) / s, s, true)
     }
 
     /// The sigma at position `u` along segment `seg`, interpolated linearly between its
@@ -315,5 +360,33 @@ mod tests {
         assert!(Boundary::new(&[ring], &|_| true, 1.0).is_none());
         assert!(stroke_width(&[]).is_none());
         assert!(stroke_width(&[None, None, None]).is_none());
+    }
+
+    #[test]
+    fn frame_points_are_one_sided() {
+        // A bar touching the left frame of a 50 x 50 canvas at x = -0.5.
+        let ring = bar(20.0, 6.0, 0.5);
+        let shifted: Vec<Point> = ring
+            .points
+            .iter()
+            .map(|p| Point::new(p.x - 0.5, p.y + 10.0))
+            .collect();
+        let ring = Polyline::with_uniform_sigma(shifted, 0.5, true);
+        let mut b = Boundary::new(
+            &[ring],
+            &|p| p.x > -0.5 && p.x < 19.5 && p.y > 10.0 && p.y < 16.0,
+            2.0,
+        )
+        .expect("a ring");
+        b.mark_frame(50, 50);
+        let i = (0..b.len()).find(|&i| b.frame[i]).expect("a frame point");
+        let j = (0..b.len()).find(|&i| !b.frame[i]).expect("an inner point");
+        // Painted frame point: no residual, no gradient; unpainted: tight sigma.
+        assert_eq!(b.residual(i, 2.0, 3.0), (0.0, SIGMA_FRAME, false));
+        let (r, s, on) = b.residual(i, 3.1, 3.0);
+        assert!(on && s == SIGMA_FRAME && (r - 0.1 / SIGMA_FRAME).abs() < 1e-9);
+        // Other points are two-sided at their own sigma.
+        let (r, s, on) = b.residual(j, 2.9, 3.0);
+        assert!(on && s == 0.5 && (r + 0.2).abs() < 1e-9);
     }
 }

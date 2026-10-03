@@ -102,6 +102,8 @@ pub struct FaceMask {
     pub h: usize,
     /// Per crop pixel, row-major: in the face.
     pub on: Vec<bool>,
+    /// The whole canvas's width and height, px: its frame cuts faces that run off it.
+    pub canvas: (usize, usize),
 }
 
 impl FaceMask {
@@ -129,6 +131,7 @@ impl FaceMask {
             w,
             h,
             on,
+            canvas: (img_w, labels.len() / img_w.max(1)),
         }
     }
 
@@ -310,8 +313,9 @@ pub fn fit_face(
     cfg: &FitConfig,
     budget: f64,
 ) -> Result<Ribbon, Decline> {
-    let b =
+    let mut b =
         boundary::Boundary::new(rings, &|p| mask.contains(p), 2.0).ok_or(Decline::NoBoundary)?;
+    b.mark_frame(mask.canvas.0, mask.canvas.1);
     let reach = mask.w.max(mask.h) as f64;
     let (w0, share) =
         boundary::stroke_width(&b.pair(reach)).ok_or(Decline::Unpaired { share: 0.0 })?;

@@ -136,24 +136,24 @@ pub(crate) fn score(
     join: Join,
 ) -> Score {
     let d = distances(lines, half.unwrap_or(0.5 * w0), b, join);
-    let sig = |i: usize| b.sigma[i].max(1e-3);
     let band = (0.25 * w0).max(1.0);
     let (mut num, mut den) = (0.0, 0.0);
     for (i, &di) in d.iter().enumerate() {
-        if (di - 0.5 * w0).abs() <= band {
-            let wgt = 1.0 / (sig(i) * sig(i));
-            num += di * wgt;
-            den += wgt;
+        if !b.frame[i] && (di - 0.5 * w0).abs() <= band {
+            let s = b.sigma[i].max(1e-3);
+            num += di / (s * s);
+            den += 1.0 / (s * s);
         }
     }
     let half = half.unwrap_or(if den > 0.0 { num / den } else { 0.5 * w0 });
     let (mut chi2, mut ss, mut worst, mut outliers) = (0.0, 0.0, 0.0f64, 0usize);
     for (i, &di) in d.iter().enumerate() {
-        let r = di - half;
-        chi2 += (r / sig(i)) * (r / sig(i));
-        ss += r * r;
-        worst = worst.max(r.abs());
-        if r.abs() > 0.5 {
+        let (r, s, _) = b.residual(i, di, half);
+        chi2 += r * r;
+        let dist = r * s;
+        ss += dist * dist;
+        worst = worst.max(dist.abs());
+        if dist.abs() > 0.5 {
             outliers += 1;
         }
     }

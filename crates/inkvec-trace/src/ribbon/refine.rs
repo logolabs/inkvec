@@ -18,7 +18,8 @@
 //!
 //! `E(θ) = Σ_p ((d(p, C(θ)) - h)/σ_p)² + Σ_j ((θ_j - θ_j⁰)/σ_a)²`,
 //!
-//! the first sum over every measured boundary point (`d` the distance to the nearest
+//! the first sum over every boundary point (one-sided on the canvas frame:
+//! [`Boundary::residual`]; `d` the distance to the nearest
 //! centreline -- under miter joins, the miter gauge where the nearest point is a vertex,
 //! see [`super::join`] -- and `σ_p` its sigma floored at 1e-3 px), the second a weak anchor
 //! (`σ_a` = [`ANCHOR`] px) that only matters for a variable no boundary point sees -- a
@@ -703,8 +704,9 @@ fn rows(model: &Model, b: &Boundary, reach: f64) -> (f64, Vec<Option<Row>>) {
         .iter()
         .enumerate()
         .map(|(i, r)| {
-            let d = r.as_ref().map_or(reach, |r| r.d);
-            ((d - h) / b.sigma[i].max(1e-3)).powi(2)
+            b.residual(i, r.as_ref().map_or(reach, |r| r.d), h)
+                .0
+                .powi(2)
         })
         .sum();
     (e, out)
@@ -877,7 +879,7 @@ fn worst_segment(
         if row.seg == usize::MAX || !matches!(model.shapes[row.shape], Shape::Path { .. }) {
             continue;
         }
-        let r = ((row.d - h) / b.sigma[i].max(1e-3)).powi(2);
+        let r = b.residual(i, row.d, h).0.powi(2);
         let e = acc.entry((row.shape, row.seg)).or_insert((0.0, 0.0, 0.5));
         e.0 += r;
         if r > e.1 {
@@ -972,8 +974,10 @@ fn normal_equations(
     let eps = 1e-5;
     for (i, row) in rws.iter().enumerate() {
         let Some(row) = row else { continue };
-        let s = b.sigma[i].max(1e-3);
-        let r = (row.d - model.h()) / s;
+        let (r, s, active) = b.residual(i, row.d, model.h());
+        if !active {
+            continue;
+        }
         let mut jac: Vec<(usize, f64)> = vec![(hi, -1.0 / s)];
         if row.seg != usize::MAX {
             let with = local_eval(model, row.shape, row.seg, b.pts[i], row.t).1;

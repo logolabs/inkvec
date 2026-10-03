@@ -7,6 +7,8 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-10-03
+
 ### Changed
 
 - **The regression gate measures where users are, and can fail again.** Its baseline had gone stale enough to pass a 13 % regression.
@@ -42,6 +44,11 @@ API in particular should be treated as unstable release to release).
   - keyboard pan and a keyboard wipe slider;
   - a usable phone layout;
   - a bad first file shows an error instead of nothing.
+- **Studio:**
+  - The status line names the engine that drew the result; a Fast draft was labelled Quality.
+  - "Open in its own tab" brings the open image along.
+  - The phone tip no longer covers Export.
+  - A photo shot sideways is shown at its upright size, and previewed as the tracer reads it.
 - **A lone small shape on a clear canvas is drawn.** A 50 px² disc on a transparent 128 px canvas came out as an empty SVG; two guards each discarded it. The palette's rarity floor now lets the first visible ink through. The intake no longer reads a near-empty image as 8× oversampled: the round trip must also keep the image's detail.
 - **Fast mode no longer collapses a run that turns back on itself.** A piece that U-turned left the curve optimiser with no valid path, and the whole run became one cubic: a radial gradient at 512 px scored dE00 10.6, and now scores 0.06. A ring is never merged into a single cubic.
 - **Light paint features are not drawn invisible.** The carve stage could name a light feature after the clear ground's ink and draw it at opacity 0; it now takes the nearest visible ink.

@@ -20,7 +20,7 @@
   -->
   <groupId>com.logolabs</groupId>
   <artifactId>inkvec</artifactId>
-  <version>0.2.4</version>
+  <version>0.2.5</version>
   <packaging>jar</packaging>
 
   <name>inkvec</name>

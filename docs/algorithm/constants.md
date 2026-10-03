@@ -26,31 +26,36 @@ stage's own reference document — this table only summarizes. Paths are relativ
 
 | name | value | file:line | controls | basis |
 |---|---|---|---|---|
-| `REF_EXTENT` | 128.0 px | `inkvec-cli/src/lib.rs:90-99` | intake size every pixel-denominated constant was tuned at | measured |
-| `INTAKE_SCALE_FLOOR` | 1.5 | `inkvec-cli/src/lib.rs:150-151` | below this, `--intake-scale` leaves the input alone | measured |
-| `INTAKE_SCALE_CAP` | 8.0 | `inkvec-cli/src/lib.rs:153-154` | ceiling on how much `--intake-scale` discards | motivated |
-| `--max-dim` default | 2048 px | `inkvec-cli/src/args.rs:113-116` | ceiling on traced (not emitted) size | motivated |
-| `--time-budget` split | 0.6 merge / 0.25 boundary-solve | `inkvec-cli/src/args.rs:117-120` | advisory wall-clock split between the two most expensive stages | none |
-| `MAX_FACTOR` (`pixel_grid`) | 32 | `inkvec-cli/src/alpha.rs:389` | largest replication factor the unblock pre-pass tries | motivated |
-| `smallest` (`pixel_grid`) | 64 px | `inkvec-cli/src/alpha.rs:393` | floor below which unblocking is not attempted | motivated |
-| block-constant tolerance | 1/512 per channel | `inkvec-cli/src/alpha.rs:343-345, 505` | how exactly a block must match to count as replication | motivated |
-| `SHARP` (`change_gcd`) | 1/256 per channel | `inkvec-cli/src/alpha.rs:445` | neighbour difference that counts as a change position for the unblock gcd filter | derived (twice the block tolerance, `alpha.rs:363-371`) |
-| `INTAKE_PARALLEL_MIN` | 65,536 px (256 x 256) | `inkvec-cli/src/alpha.rs:1011` | below this the transparency scan and the flatten run on the calling thread | motivated |
-| `FLATTEN_CHUNK` | 16,384 px | `inkvec-cli/src/alpha.rs:1013` | pixels per parallel job of the flatten, smallest job of the transparency scan | none |
-| `PARALLEL_MIN_PIXELS` (load) | 65,536 px (256 x 256) | `inkvec-trace/src/load.rs:103` | below this the byte-to-float conversion runs on the calling thread | motivated |
-| `CONVERT_CHUNK_PIXELS` | 65,536 px | `inkvec-trace/src/load.rs:107` | pixels per parallel job of the byte-to-float conversion (64 jobs at 2048 x 2048) | motivated |
-| `UNIT` | `k / 255`, k = 0..=255 | `inkvec-trace/src/load.rs:115` | the float each 8-bit sample becomes | derived (the old division's quotients, checked bit for bit) |
-| `COMPOSITE_PARALLEL_MIN` | 65,536 px (256 x 256) | `inkvec-trace/src/coverage.rs:234` | below this the composite over white runs on the calling thread | motivated |
-| `MARGIN` (`choose_matte`) | 10.0 (CIEDE2000) | `inkvec-cli/src/alpha.rs` | closeness to a matte candidate to count as "swallowed" | none |
-| `SWALLOWED` | 0.33 | `inkvec-cli/src/alpha.rs:271-306` | share of drawn-and-translucent mass a matte may swallow | motivated |
-| `DRAWN` | 0.5 | `inkvec-cli/src/alpha.rs:297-307` | alpha above which a pixel counts as silhouette, not glow | motivated |
-| `DRAWN_FLOOR` | 0.05 | `inkvec-cli/src/alpha.rs` | alpha below which a pixel is ignored entirely | none |
-| `SOFT_SHARE` | 0.05 | `inkvec-cli/src/alpha.rs` | glow share that keeps white without the candidate ladder | none |
-| `FLAT_ALPHA` | 0.02 | `inkvec-cli/src/alpha.rs` | neighbour-alpha spread counted as "flat" translucency | none |
-| CI-gate literal | 0.33 | `inkvec-cli/src/alpha.rs:457` | warns when white would swallow more than this, without `--cutout` | duplicates `SWALLOWED` as a separate literal — see 01-intake.md Open questions |
-| `DEGRADED_RESIDUAL` / `--sr-threshold` | 0.5 | `inkvec-sr/src/detect.rs:1-36` | interior-residual threshold above which `--sr auto` cleans | measured (30 icons, 5 conditions) |
-| `--sr-scale` default | 2 | `inkvec-sr/src/detect.rs` | output scale of the SR pre-pass | none |
-| interior-residual normalisation | `sum / 9n` | `inkvec-sr/src/detect.rs:97-104` | matches the reference Python implementation | derived (deliberate match, not a bug) |
+| `REF_EXTENT` | 128.0 px | `inkvec-cli/src/units.rs:17-31` | intake size every pixel-denominated constant was tuned at; above it `price_in_raster_units` scales `--min-area` and lambda | measured (3.54x/6.02x/11.62x the artist's parameters at 128/256/512 px, `units.rs:17-26`; the guard: 128ss objective 0.4005 -> 0.4112 without it, `inkvec-cli/src/lib.rs:416-422`) |
+| `INTAKE_SCALE_FLOOR` | 1.5 | `inkvec-cli/src/lib.rs:116-118` | below this, `--intake-scale` leaves the input alone | measured (every corpus image reads 1.00) |
+| `INTAKE_SCALE_CAP` | 8.0 | `inkvec-cli/src/lib.rs:119-121` | ceiling on how much `--intake-scale` discards | motivated |
+| `--max-dim` default | 2048 px | `inkvec-cli/src/args.rs:223, 316-320` | ceiling on traced (not emitted) size, applied at decode and again in `intake` | motivated |
+| `--time-budget` split | 0.6 merge / 0.25 boundary-solve | `inkvec-cli/src/pipeline.rs:139-149` | advisory wall-clock split between the two stages that read a clock | none |
+| boundary-solve budget floor | 50 ms | `inkvec-cli/src/pipeline.rs:145` | least wall-clock budget the boundary solve gets under any `--time-budget` | none |
+| `MAX_FACTOR` (`pixel_grid`) | 32 | `inkvec-cli/src/alpha/unblock.rs:69` | largest replication factor the unblock pre-pass tries | motivated |
+| `smallest` (`pixel_grid`) | 64 px | `inkvec-cli/src/alpha/unblock.rs:78-81` | least side a factor must leave; under 128 px a raster is never unblocked | motivated |
+| block-constant tolerance | 1/512 per channel | `inkvec-cli/src/alpha/unblock.rs:23-25, 188` | how exactly a block must match to count as replication | motivated |
+| `SHARP` (`change_gcd`) | 1/256 per channel | `inkvec-cli/src/alpha/unblock.rs:131-132` | neighbour difference that counts as a change position for the unblock gcd filter | derived (twice the block tolerance, `unblock.rs:43-51`) |
+| `INTAKE_PARALLEL_MIN` | 65,536 px (256 x 256) | `inkvec-cli/src/alpha.rs:825-827` | below this the transparency scan and the flatten run on the calling thread | motivated |
+| `FLATTEN_CHUNK` | 16,384 px | `inkvec-cli/src/alpha.rs:828-829` | pixels per parallel job of the flatten, smallest job of the transparency scan | none |
+| `PARALLEL_MIN_PIXELS` (load) | 65,536 px (256 x 256) | `inkvec-trace/src/load.rs:274-276` | below this the byte-to-float conversion runs on the calling thread | motivated |
+| `CONVERT_CHUNK_PIXELS` | 65,536 px | `inkvec-trace/src/load.rs:278-280` | pixels per parallel job of the byte-to-float conversion (64 jobs at 2048 x 2048) | motivated |
+| `UNIT` | `k / 255`, k = 0..=255 | `inkvec-trace/src/load.rs:282-296` | the float each 8-bit sample becomes | derived (the old division's quotients, checked bit for bit) |
+| `DEFAULT_MAX_ALLOC` | 512 MiB | `inkvec-trace/src/load.rs:211-212` | decode allocation limit every uncapped decode keeps | derived (the `image` crate's own default, checked by `the_capped_limit_extends_the_library_default`, `load.rs:953-969`) |
+| `CAPPED_EXTRA_ALLOC` | 768 MiB (64-bit), 0 (32-bit) | `inkvec-trace/src/load.rs:214-223` | extra allocation a decode that will be capped may make, 1.25 GiB in all | motivated (holds 16384 x 16384 RGBA 8-bit or 12000 x 12000 16-bit, still refuses the 20000 x 20000 fuzz bomb; nothing on wasm's 4 GiB) |
+| `SRGB_TOLERANCE` | 1 level | `inkvec-trace/src/load/icc.rs:66-67` | largest probe-colour move for an embedded profile to count as sRGB (image left untouched) | motivated (`icc.rs:30-34`: converting would only add a level of rounding noise) |
+| `ROWS_PER_JOB` | 64 rows | `inkvec-trace/src/load/icc.rs:69-70` | rows per parallel job of the ICC-to-sRGB conversion | none |
+| `COMPOSITE_PARALLEL_MIN` | 65,536 px (256 x 256) | `inkvec-trace/src/coverage.rs:235-236` | below this the composite over white runs on the calling thread | motivated |
+| `MARGIN` (`choose_matte`) | 10.0 (CIEDE2000) | `inkvec-cli/src/alpha.rs:416` | closeness to a matte candidate to count as "swallowed" | none |
+| `SWALLOWED` | 0.33 | `inkvec-cli/src/alpha.rs:324-329` | share of drawn-and-translucent mass a matte may swallow | motivated |
+| `LOST_TO_WHITE` | 0.5 | `inkvec-cli/src/alpha.rs:331-341` | share of the silhouette lost to a white matte above which the cutout is turned on (without native alpha) | measured (white marks on transparent read 1.00, no screen-set icon above 0.32; the dE00-10 margin cost `emoji_u1f5a8` 0.53 -> 0.76) |
+| `DRAWN` | 0.5 | `inkvec-cli/src/alpha.rs:409-417` | alpha above which a pixel counts as silhouette, not glow | motivated |
+| `DRAWN_FLOOR` | 0.05 | `inkvec-cli/src/alpha.rs:418` | alpha below which a pixel is ignored entirely | none |
+| `SOFT_SHARE` | 0.05 | `inkvec-cli/src/alpha.rs:438` | glow share that keeps white without the candidate ladder | none |
+| `FLAT_ALPHA` | 0.02 | `inkvec-cli/src/alpha.rs:439` | neighbour-alpha spread counted as "flat" translucency | none |
+| `DEGRADED_RESIDUAL` / `--sr-threshold` | 0.5 | `inkvec-sr/src/detect.rs:13-36` | interior-residual threshold above which `--sr auto` cleans | measured (30 icons, 5 conditions) |
+| `--sr-scale` default | 2 | `inkvec-cli/src/args.rs:246` | output scale of the SR pre-pass | none |
+| interior-residual normalisation | `sum / 9n` | `inkvec-sr/src/detect.rs:103-110` | matches the reference Python implementation | derived (deliberate match, not a bug) |
 
 ## 02 — Coverage ([02-coverage.md](02-coverage.md))
 

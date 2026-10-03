@@ -3,7 +3,7 @@
 Inkvec is configured through `inkvec::Options` (and the command line built on it), never
 through the environment. This page lists every `INKVEC_*` variable any crate reads, why each
 one that is left is still there, and what happened to the rest. It was written for the settings
-cleanup of 2026-09-26 (CHANGELOG, *Unreleased*), which started from the quality audit's finding
+cleanup of 2026-09-26 (CHANGELOG, 0.2.0, *Changed*), which started from the quality audit's finding
 that the engine read 91 distinct variables at 104 sites through four copy-pasted helpers.
 
 ## Rules

@@ -545,7 +545,7 @@ reads neither measurement (`inkvec-cli/src/lib.rs:360-366`).
 
 ## Environment overrides
 
-Since the settings cleanup (CHANGELOG, *Unreleased*) the engine reads its environment through one helper (`inkvec_core::env`): a switch is off when unset, empty or `0`, and every variable is read once per process. Variables marked *removed* below are gone (their defaults are constants now); those marked *research build* are read only by a binary built with `--features research`. The full list, with what is left and why, is [`docs/internal/env-vars.md`](../internal/env-vars.md).
+Since the settings cleanup (CHANGELOG, 0.2.0, *Changed*) the engine reads its environment through one helper (`inkvec_core::env`): a switch is off when unset, empty or `0`, and every variable is read once per process. Variables marked *removed* below are gone (their defaults are constants now); those marked *research build* are read only by a binary built with `--features research`. The full list, with what is left and why, is [`docs/internal/env-vars.md`](../internal/env-vars.md).
 
 No `INKVEC_*` environment variable is read anywhere in the module (`coverage.rs`,
 `coverage/oversample.rs`, `coverage/resample.rs`). `INKVEC_NOISE_MEDIAN` (*removed*) once switched

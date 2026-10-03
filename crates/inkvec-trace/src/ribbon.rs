@@ -407,10 +407,42 @@ fn hypothesis(
     budget: f64,
     join: Join,
 ) -> Result<Ribbon, Decline> {
-    let opts = match join {
-        Join::Round => graph::TopoOptions::round(),
-        Join::Miter => graph::TopoOptions::miter(w0),
+    // Topology readings tried in turn: round joins first without rebuilt corners (most
+    // tight turns in round line art are arcs of about the half-width), then with them,
+    // for drawings whose sharp corners leave a gap of samples long against the arms
+    // (lucide `circle-arrow-right` at 512 px: w 42.7 px, a chevron of 85 px arms, read
+    // tip to tip without its apex at rms 39 px).
+    let readings = match join {
+        Join::Round => vec![
+            graph::TopoOptions::round(),
+            graph::TopoOptions::round_cornered(),
+        ],
+        Join::Miter => vec![graph::TopoOptions::miter(w0)],
     };
+    let mut last = Err(Decline::NoCentreline);
+    for (i, &opts) in readings.iter().enumerate() {
+        last = reading(b, mask, w0, share, cfg, budget, join, opts);
+        let retry = matches!(last, Err(Decline::Misfit { .. })) && i + 1 < readings.len();
+        if !retry {
+            break;
+        }
+    }
+    last
+}
+
+/// One topology reading of a face under `join` (see [`hypothesis`]): the passes 3-6 of
+/// the module documentation.
+#[allow(clippy::too_many_arguments)]
+fn reading(
+    b: &boundary::Boundary,
+    mask: &FaceMask,
+    w0: f64,
+    share: f64,
+    cfg: &FitConfig,
+    budget: f64,
+    join: Join,
+    opts: graph::TopoOptions,
+) -> Result<Ribbon, Decline> {
     let topo = graph::centrelines(b, mask, w0, opts);
     if inkvec_core::env::flag("INKVEC_RIBBONS_CHAINS") {
         for c in &topo.chains {

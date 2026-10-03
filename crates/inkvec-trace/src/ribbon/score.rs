@@ -175,11 +175,15 @@ pub(crate) fn score(
 /// the points and the path run the same way (its nearest-sample search walks a window
 /// forward along the path): after the mirror stage a fit can be its partner's reflection
 /// run backwards, and the windowed search then reads distances of whole pixels.
+///
+/// A path with nothing to flatten (no segments, or only zero-length ones: the fitter's
+/// answer for an edge of a point or two) is measured against its start point, so one
+/// degenerate edge does not make a whole face's outline cost infinite (openmoji `E056`).
 pub(crate) fn path_chi2(pts: &[Point], sigma: &[f64], path: &FittedPath) -> f64 {
     let mut segs = Vec::new();
     flatten(path, 0.1, &mut segs);
     if segs.is_empty() {
-        return f64::INFINITY;
+        segs.push((path.start, path.start));
     }
     let grid = SegGrid::new(&segs, 2.0);
     pts.iter()

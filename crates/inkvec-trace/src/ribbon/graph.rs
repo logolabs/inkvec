@@ -105,6 +105,16 @@ impl TopoOptions {
         }
     }
 
+    /// Round joins with rebuilt corners: the fallback reading when the cornerless one
+    /// leaves the centrelines far from the boundary ([`super::fit_face`]); corners at
+    /// the miter reading's sigma, every branch with a core kept.
+    pub(crate) fn round_cornered() -> TopoOptions {
+        TopoOptions {
+            corner_sigma: 0.1,
+            spur_len: 0.0,
+        }
+    }
+
     /// Miter joins: a sharp corner *is* a vertex, at the meeting point of the sleeves
     /// either side, and thinning puts a spur into every convex corner (up to about half
     /// a width long, carrying samples of the arms it sits between), which must go.
@@ -135,6 +145,9 @@ struct Sample {
     c: Point,
     /// Its sigma: half the root-sum-square of the two sides' sigmas, px.
     sigma: f64,
+    /// The sleeve's direction there (unit, sign arbitrary): the side's tangent, which a
+    /// stroke's sides share with its centreline.
+    t: Vec2,
 }
 
 /// A skeleton branch reduced to its reliable core.
@@ -220,6 +233,7 @@ fn cross_section(b: &Boundary, s: Point, w: f64) -> Option<Sample> {
     Some(Sample {
         c,
         sigma: 0.5 * (sa * sa + sb * sb).sqrt(),
+        t: Vec2 { x: n.y, y: -n.x },
     })
 }
 
@@ -251,13 +265,30 @@ fn cores(
                 x: -chain_dir.x,
                 y: -chain_dir.y,
             };
-            let dir = if s.len() >= 2 {
+            // Under three samples the core is too short to give a direction of its own
+            // (a thick stroke's short arm: lucide `circle-arrow-right` at 512 px keeps
+            // one sample per chevron arm, and the skeleton chain there points 30° off the
+            // arm). The sleeve's side tangent at the end sample is used instead, signed
+            // to agree with the skeleton chain.
+            let along = |x: &Sample, want: Vec2| {
+                if x.t.dot(want) >= 0.0 {
+                    x.t
+                } else {
+                    Vec2 {
+                        x: -x.t.x,
+                        y: -x.t.y,
+                    }
+                }
+            };
+            let dir = if s.len() >= 3 {
                 let back = (s.len() - 1).min(4);
                 let m = s.len() - 1;
                 [
                     unit(s[0].c - s[back].c).unwrap_or(chain_dir),
                     unit(s[m].c - s[m - back].c).unwrap_or(back_dir),
                 ]
+            } else if let (Some(first), Some(last)) = (s.first(), s.last()) {
+                [along(first, chain_dir), along(last, back_dir)]
             } else {
                 [chain_dir, back_dir]
             };
@@ -321,6 +352,7 @@ fn core_samples(
                 out.push(Sample {
                     c,
                     sigma: corner_sigma,
+                    t: unit(run[0].c - c).unwrap_or(run[0].t),
                 });
             }
         }
@@ -565,7 +597,8 @@ fn meeting_point(lines: &[(Point, Vec2)]) -> Option<Point> {
 ///
 /// A round cap of half-width `h = w/2` around end point `E` reaches farthest along `d` at
 /// `E + h·d`. So `E = p + d·max(0, s_max - h)`, where `s_max` is the largest `(q - p)·d`
-/// over the boundary points `q` of the cap: ahead of `p` (`0 < s <= 1.5·w + 2`), within
+/// over the boundary points `q` of the cap: ahead of `p` (`0 < s <= 3·w + 2`; a thick
+/// stroke's short arm can keep its only reliable sample far from its tip), within
 /// `h + 0.75` px of the sleeve's axis, and facing back along the sleeve (inward normal
 /// with `n·d < 0.2`), which keeps a neighbouring stroke's facing side out.
 fn cap_centre(b: &Boundary, p: Point, d: Vec2, w: f64) -> Point {
@@ -574,7 +607,7 @@ fn cap_centre(b: &Boundary, p: Point, d: Vec2, w: f64) -> Point {
     for (i, &q) in b.pts.iter().enumerate() {
         let v = q - p;
         let s = v.dot(d);
-        if s <= 0.0 || s > 1.5 * w + 2.0 || v.cross(d).abs() > h + 0.75 || b.pt_n[i].dot(d) >= 0.2 {
+        if s <= 0.0 || s > 3.0 * w + 2.0 || v.cross(d).abs() > h + 0.75 || b.pt_n[i].dot(d) >= 0.2 {
             continue;
         }
         s_max = s_max.max(s);

@@ -168,26 +168,35 @@ impl SegGrid {
         let qx = ((q.x - self.ox) / self.cs).floor() as isize;
         let qy = ((q.y - self.oy) / self.cs).floor() as isize;
         let r_max = (max_d / self.cs).ceil() as isize + 1;
+        let (nx, ny) = (self.nx as isize, self.ny as isize);
         let mut best: Option<Near> = None;
-        for r in 0..=r_max {
-            for cy in qy - r..=qy + r {
-                if cy < 0 || cy >= self.ny as isize {
-                    continue;
+        let visit = |cx: isize, cy: isize, best: &mut Option<Near>| {
+            for &k in &self.cells[cy as usize * self.nx + cx as usize] {
+                let k = k as usize;
+                let (d, u, p) = point_segment(q, self.a[k], self.b[k]);
+                if best.is_none_or(|b| d < b.d) {
+                    *best = Some(Near { d, seg: k, u, p });
                 }
-                for cx in qx - r..=qx + r {
-                    // Only the cells exactly `r` rings out; the inner ones were done.
-                    if cx < 0
-                        || cx >= self.nx as isize
-                        || ((cx - qx).abs().max((cy - qy).abs()) != r)
-                    {
-                        continue;
+            }
+        };
+        for r in 0..=r_max {
+            // The cells exactly `r` rings out, row by row from the top, each row left to
+            // right: the whole top and bottom rows, and the two end cells of every row
+            // between. That is the order a scan of the full (2r+1)² square visits them in
+            // when it skips the inner cells, so ties fall to the same segment; only the
+            // O(r²) skipped cells per ring are no longer stepped over, which at 512 px
+            // (half-width ~21 px, 11 rings of 2 px cells) was most of the query.
+            for cy in (qy - r).max(0)..=(qy + r).min(ny - 1) {
+                if cy == qy - r || cy == qy + r {
+                    for cx in (qx - r).max(0)..=(qx + r).min(nx - 1) {
+                        visit(cx, cy, &mut best);
                     }
-                    for &k in &self.cells[cy as usize * self.nx + cx as usize] {
-                        let k = k as usize;
-                        let (d, u, p) = point_segment(q, self.a[k], self.b[k]);
-                        if best.is_none_or(|b| d < b.d) {
-                            best = Some(Near { d, seg: k, u, p });
-                        }
+                } else {
+                    if qx - r >= 0 && qx - r < nx {
+                        visit(qx - r, cy, &mut best);
+                    }
+                    if qx + r >= 0 && qx + r < nx {
+                        visit(qx + r, cy, &mut best);
                     }
                 }
             }
@@ -302,6 +311,88 @@ mod tests {
             assert!((got.d - brute).abs() < 1e-12, "{q:?}: {} vs {brute}", got.d);
         }
         assert!(g.nearest(Point::new(5.0, 5.0), 1.0).is_none());
+    }
+
+    /// The ring search as it was first written -- every cell of the (2r+1)² square
+    /// visited, those not exactly `r` rings out skipped -- kept as the reference the
+    /// ring-only walk must reproduce exactly, ties included.
+    fn nearest_full_square(g: &SegGrid, q: Point, max_d: f64) -> Option<Near> {
+        let qx = ((q.x - g.ox) / g.cs).floor() as isize;
+        let qy = ((q.y - g.oy) / g.cs).floor() as isize;
+        let r_max = (max_d / g.cs).ceil() as isize + 1;
+        let mut best: Option<Near> = None;
+        for r in 0..=r_max {
+            for cy in qy - r..=qy + r {
+                if cy < 0 || cy >= g.ny as isize {
+                    continue;
+                }
+                for cx in qx - r..=qx + r {
+                    if cx < 0 || cx >= g.nx as isize || ((cx - qx).abs().max((cy - qy).abs()) != r)
+                    {
+                        continue;
+                    }
+                    for &k in &g.cells[cy as usize * g.nx + cx as usize] {
+                        let k = k as usize;
+                        let (d, u, p) = point_segment(q, g.a[k], g.b[k]);
+                        if best.is_none_or(|b| d < b.d) {
+                            best = Some(Near { d, seg: k, u, p });
+                        }
+                    }
+                }
+            }
+            if best.is_some_and(|b| b.d <= r as f64 * g.cs) {
+                break;
+            }
+        }
+        best.filter(|b| b.d <= max_d)
+    }
+
+    #[test]
+    fn the_ring_walk_finds_what_the_full_square_scan_found() {
+        // A polyline of short pieces sharing endpoints (ties at every vertex), a circle
+        // of them, and queries inside, outside and beyond the grid.
+        let mut segs = Vec::new();
+        let mut prev = Point::new(0.0, 0.0);
+        for i in 1..200 {
+            let t = i as f64 * 0.1;
+            let p = Point::new(t * 3.0, 10.0 * (t * 0.7).sin());
+            segs.push((prev, p));
+            prev = p;
+        }
+        for i in 0..64 {
+            let (a, b) = (
+                std::f64::consts::TAU * i as f64 / 64.0,
+                std::f64::consts::TAU * (i + 1) as f64 / 64.0,
+            );
+            segs.push((
+                Point::new(30.0 + 8.0 * a.cos(), 20.0 + 8.0 * a.sin()),
+                Point::new(30.0 + 8.0 * b.cos(), 20.0 + 8.0 * b.sin()),
+            ));
+        }
+        for cs in [0.5, 2.0, 3.7] {
+            let g = SegGrid::new(&segs, cs);
+            for i in 0..400 {
+                let q = Point::new(
+                    -15.0 + 0.23 * i as f64,
+                    -25.0 + (i as f64 * 0.37).sin() * 50.0,
+                );
+                for max_d in [1.0, 6.0, 80.0] {
+                    let (a, b) = (g.nearest(q, max_d), nearest_full_square(&g, q, max_d));
+                    match (a, b) {
+                        (None, None) => {}
+                        (Some(a), Some(b)) => {
+                            assert_eq!((a.seg, a.d.to_bits()), (b.seg, b.d.to_bits()), "{q:?}")
+                        }
+                        _ => panic!("{q:?} {max_d}: {a:?} vs {b:?}"),
+                    }
+                }
+            }
+        }
+        // The rings of a query exactly on a vertex: the tie is broken the same way.
+        let g = SegGrid::new(&segs, 1.0);
+        let v = segs[50].1;
+        let (a, b) = (g.nearest(v, 5.0), nearest_full_square(&g, v, 5.0));
+        assert_eq!(a.map(|n| n.seg), b.map(|n| n.seg));
     }
 
     #[test]

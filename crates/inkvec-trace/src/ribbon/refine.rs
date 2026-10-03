@@ -837,15 +837,23 @@ pub(crate) fn solve_adaptive(
     let (mut cur, mut h) = solve(lines, h, b, join, MAX_ITERS);
     let max_splits = inkvec_core::env::count("INKVEC_RIBBONS_SPLITS").unwrap_or(MAX_SPLITS);
     let reach = 8.0 * h + 4.0;
-    let cost = |ls: &[Centreline], h: f64| -> f64 {
-        let (e, _) = rows(&Model::new(ls, h, join), b, reach);
-        0.5 * e + lambda * ls.iter().map(Centreline::params).sum::<f64>()
+    // The description length of strokes `ls` at half-width `h`, and the rows it was
+    // measured with: the rows of the strokes kept so far are what the next worst-segment
+    // search reads, so they are kept rather than measured again (same model, same reach,
+    // same rows).
+    let cost = |ls: &[Centreline], h: f64| -> (f64, Vec<Option<Row>>) {
+        let (e, rws) = rows(&Model::new(ls, h, join), b, reach);
+        (
+            0.5 * e + lambda * ls.iter().map(Centreline::params).sum::<f64>(),
+            rws,
+        )
     };
-    let mut best = cost(&cur, h);
+    let (mut best, mut cur_rows) = cost(&cur, h);
     let mut refused: Vec<(usize, usize)> = Vec::new();
     let mut accepted_any = false;
     for _ in 0..max_splits {
-        let Some((shape, seg, t)) = worst_segment(&cur, h, b, reach, &refused, join) else {
+        let model = Model::new(&cur, h, join);
+        let Some((shape, seg, t)) = worst_segment(&model, &cur_rows, h, b, &refused) else {
             break;
         };
         let Some(trial) = split(&cur, shape, seg, t) else {
@@ -857,11 +865,12 @@ pub(crate) fn solve_adaptive(
             break;
         }
         let (tl, th) = solve(&trial, h, b, join, TRIAL_ITERS);
-        let c = cost(&tl, th);
+        let (c, trial_rows) = cost(&tl, th);
         if c < best && drawable(&tl, join) {
             accepted_any = true;
             best = c;
             cur = tl;
+            cur_rows = trial_rows;
             h = th;
             // Segment indices after the split moved; earlier refusals no longer name the
             // same segments.
@@ -872,26 +881,24 @@ pub(crate) fn solve_adaptive(
     }
     if accepted_any {
         let (polished, ph) = solve(&cur, h, b, join, MAX_ITERS);
-        if drawable(&polished, join) && cost(&polished, ph) <= best {
+        if drawable(&polished, join) && cost(&polished, ph).0 <= best {
             return (polished, ph);
         }
     }
     (cur, h)
 }
 
-/// The path segment carrying the most `Σ ((d - h)/σ)²`, with the foot parameter of its
-/// worst point (clamped to `[0.15, 0.85]` so neither half is a sliver), skipping the
-/// `refused` ones and anything that is not a path segment. `None` when nothing is left.
+/// The path segment of `model` carrying the most `Σ ((d - h)/σ)²` over its rows `rws`
+/// (measured on `model`), with the foot parameter of its worst point (clamped to
+/// `[0.15, 0.85]` so neither half is a sliver), skipping the `refused` ones and anything
+/// that is not a path segment. `None` when nothing is left.
 fn worst_segment(
-    lines: &[Centreline],
+    model: &Model,
+    rws: &[Option<Row>],
     h: f64,
     b: &Boundary,
-    reach: f64,
     refused: &[(usize, usize)],
-    join: Join,
 ) -> Option<(usize, usize, f64)> {
-    let model = Model::new(lines, h, join);
-    let (_, rws) = rows(&model, b, reach);
     let mut acc: std::collections::BTreeMap<(usize, usize), (f64, f64, f64)> =
         std::collections::BTreeMap::new();
     for (i, row) in rws.iter().enumerate() {

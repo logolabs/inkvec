@@ -6,6 +6,11 @@
 //! smooth region when most of its pixel pairs step by less than [`SMOOTH_STEP`] in Lab;
 //! across such a seam blends are evidence for the union's fit, and two flat bands whose
 //! inks differ by less than [`RAMP_STEP_DE00`] are tried as one ramp.
+//!
+//! The opposite test, used whether or not region recovery is on: a seam is an *edge*
+//! between two regions when more than half of its pixel pairs step by more than
+//! [`EDGE_STEP`] ([`edge_step`], [`is_edge`]), and the band merger never fits a union across
+//! one (see `Agglomeration::across_edge` in `bands.rs`).
 
 use std::collections::HashMap;
 
@@ -39,6 +44,47 @@ pub(crate) fn smooth_step(p: [f32; 3], q: [f32; 3]) -> bool {
     let (a, b) = (crate::color::srgb_to_lab(p), crate::color::srgb_to_lab(q));
     let d2 = (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2);
     d2 < SMOOTH_STEP.powi(2)
+}
+
+/// Colour step between two 4-neighbouring pixels, OKLab × 100 (about CIELAB units), above
+/// which the pair is a discontinuity: the threshold `τ_d` of the discontinuity map `D` in
+/// S. Chakraborty et al. (2025), Image Vectorization via Gradient Reconstruction, Computer
+/// Graphics Forum 44(2), doi:10.1111/cgf.70055, §3.2. The paper's value, 10, is for 512 to
+/// 2048 px illustrations; 6 is acda7ac's for 128 px icons, and the round-2 gradient research
+/// found 4 no better. Not tuned. A seam between two bands of one quantised ramp is crossed
+/// in steps of the ramp's slope and never meets it.
+pub(crate) const EDGE_STEP: f32 = 6.0;
+
+/// Whether the step from pixel colour `p` to `q` (sRGB) is a discontinuity: the OKLab
+/// distance, scaled by 100, above [`EDGE_STEP`] (compared squared, in `f32`).
+pub(crate) fn edge_step(p: [f32; 3], q: [f32; 3]) -> bool {
+    let lab = |c: [f32; 3]| {
+        let o = crate::color::rgb_to_oklab(c);
+        [o.l * 100.0, o.a * 100.0, o.b * 100.0]
+    };
+    let (a, b) = (lab(p), lab(q));
+    let d2 = (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2);
+    d2 > EDGE_STEP * EDGE_STEP
+}
+
+/// Whether the seam between regions `a` and `b` is an edge: more than half of its pixel
+/// pairs are discontinuities, `2·sharp[a][b] > adj[a][b]`, where `adj` counts every
+/// 4-neighbour pixel pair across the seam and `sharp` those that pass [`edge_step`]. An
+/// empty seam is not an edge. Inspired by Chakraborty et al. (2025, §3.2, see
+/// [`EDGE_STEP`]): segments that face each other across the discontinuity map are never one
+/// region. Theirs is a relation between whole segments found by a multicut; ours is read off
+/// the seam the two components already share, which is what the band merger can ask
+/// cheaply, and a weak stretch of an edge does not join two regions here as long as most
+/// of the seam steps.
+pub(crate) fn is_edge(
+    adj: &[HashMap<u32, u32>],
+    sharp: &[HashMap<u32, u32>],
+    a: usize,
+    b: usize,
+) -> bool {
+    let shared = adj[a].get(&(b as u32)).copied().unwrap_or(0);
+    let edge = sharp[a].get(&(b as u32)).copied().unwrap_or(0);
+    2 * edge > shared
 }
 
 /// Whether the seam between regions `a` and `b` is mostly smooth steps:
@@ -205,6 +251,26 @@ mod tests {
         calm[0].insert(1, 4);
         assert!(!is_smooth(&adj, &calm, 0, 1));
         assert!(!is_smooth(&adj, &calm, 0, 2));
+    }
+
+    #[test]
+    fn edge_steps_and_edges() {
+        // A hard step is a discontinuity; one 8-bit level, or a ramp's slope, is not.
+        assert!(edge_step([0.1, 0.1, 0.1], [0.8, 0.6, 0.2]));
+        assert!(!edge_step([0.8, 0.6, 0.2], [0.81, 0.6, 0.2]));
+        assert!(!edge_step([0.5; 3], [0.5 + 1.0 / 255.0; 3]));
+        // A seam is an edge when more than half its pairs step; exactly half is not.
+        let mut adj = vec![HashMap::new(); 2];
+        let mut sharp = vec![HashMap::new(); 2];
+        adj[0].insert(1, 4);
+        adj[1].insert(0, 4);
+        sharp[0].insert(1, 2);
+        sharp[1].insert(0, 2);
+        assert!(!is_edge(&adj, &sharp, 0, 1));
+        sharp[0].insert(1, 3);
+        assert!(is_edge(&adj, &sharp, 0, 1));
+        // No seam at all.
+        assert!(!is_edge(&adj, &sharp, 1, 1));
     }
 
     #[test]

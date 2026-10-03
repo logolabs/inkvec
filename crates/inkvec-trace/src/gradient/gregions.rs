@@ -10,7 +10,8 @@
 //! gradients, v0.2.4 recovers 42 % of the artist's visible gradients as one of ours and
 //! paints 30 % flat. Handing our pipeline the artist's own regions lifts that to 73 %
 //! (the segmentation oracle), so the region question is the main lever; the fill question
-//! is the rest. Four parts address them, each switched separately for ablation:
+//! is the rest. Four parts addressed them, each switched separately for ablation; the
+//! ones that passed the regression gate are the default now and say so below.
 //!
 //! 1. **`profile`: a centre search scored under the artist's kind of profile.** The radial
 //!    and elliptic fitters ([`super::fit`]) choose their geometry by the residual of a
@@ -37,15 +38,9 @@
 //!    gain still ranks the pairs that pass. Measured on the princess, neither this nor the
 //!    step-profile test changes the result (the union wins on common pixels too, because
 //!    the band's own flat fit misfits its pixels worse); part 4 is what fixes it.
-//! 4. **`seam`: no union across a discontinuity.** What did not merge the band into the
-//!    hair before the spline candidates was only that no gradient fitted the union; the
-//!    two are separated by an edge, steps of 20+ OKLab units per pixel along their whole
-//!    seam. Chakraborty et al. (§3.2) never put two segments that face each other across
-//!    the discontinuity map into one region; with `seam` the band merger does not fit a
-//!    union of two components of at least `MIN_GRADIENT_PIXELS` pixels each whose seam is
-//!    mostly discontinuity ([`sharp_seams`], the threshold [`TAU_D`]). Bands of a
-//!    quantised ramp are crossed in small steps and never meet it; a fleck under 16 px is
-//!    exempt, so anti-aliasing remnants are still absorbed as before.
+//! 4. **`seam`: no union across a discontinuity.** The default since Wave B: the band
+//!    merger never fits a union across a seam that is an edge (`regions::is_edge`,
+//!    `Agglomeration::across_edge` in `bands.rs`, where its measurements are).
 //!
 //! The prototype's parts 5 and 6, `segments` (smooth-segment region proposals,
 //! Chakraborty et al. §3.2, ported from acda7ac) and `mdl` (the proposals accepted by MDL
@@ -58,8 +53,9 @@
 //!
 //! # The switch
 //!
-//! `INKVEC_GREGIONS=1` (or `on`, `all`) turns on all four parts; a comma-separated list
-//! of part names (`profile,guard,cover,seam`) turns on those only; unset,
+//! `INKVEC_GREGIONS=1` (or `on`, `all`) turns on the parts still behind it; a
+//! comma-separated list of part names (`profile,guard,cover`) turns on those only; a
+//! graduated part's name (`seam`) is ignored, as any unknown word is; unset,
 //! empty or `0` is off. It is read once per process ([`inkvec_core::env`]) and only in a build with
 //! the `research` feature: the engine reads experiments' variables there only.
 //!
@@ -68,8 +64,8 @@
 //! * Inspired by: S. Chakraborty et al. (2025), Image Vectorization via Gradient
 //!   Reconstruction, Computer Graphics Forum 44(2), doi:10.1111/cgf.70055 -- §3.2, the
 //!   rule that segments facing each other across the discontinuity map are never one
-//!   region (part 4); §3.3 (geometry from the gradient field, independent of the profile)
-//!   inspired part 1.
+//!   region (part 4, now `regions::is_edge`); §3.3 (geometry from the gradient field,
+//!   independent of the profile) inspired part 1.
 //! * Method from: G. H. Golub, V. Pereyra (1973), The differentiation of pseudo-inverses
 //!   and nonlinear least squares problems whose variables separate, SIAM J. Numer. Anal.
 //!   10(2), doi:10.1137/0710036 -- variable projection: the profile is solved in closed
@@ -89,8 +85,6 @@ pub(crate) struct Parts {
     pub(crate) guard: bool,
     /// Part 3: a gradient union must also gain on common pixels in the band merger.
     pub(crate) cover: bool,
-    /// Part 4: no union across a seam that is mostly discontinuity ([`sharp_seams`]).
-    pub(crate) seam: bool,
 }
 
 /// The parts switched on for this process: `INKVEC_GREGIONS`, read once, in a `research`
@@ -119,7 +113,6 @@ fn parse(v: Option<&str>) -> Parts {
             profile: true,
             guard: true,
             cover: true,
-            seam: true,
         },
         list => {
             let mut p = Parts::default();
@@ -128,7 +121,6 @@ fn parse(v: Option<&str>) -> Parts {
                     "profile" => p.profile = true,
                     "guard" => p.guard = true,
                     "cover" => p.cover = true,
-                    "seam" => p.seam = true,
                     _ => {}
                 }
             }
@@ -136,12 +128,6 @@ fn parse(v: Option<&str>) -> Parts {
         }
     }
 }
-
-/// Colour step to a 4-neighbour, OKLab × 100 (about CIELAB units), above which a pixel
-/// pair is a discontinuity: Chakraborty et al.'s `τ_d` for the discontinuity map `D`, with
-/// acda7ac's value for 128 px icons (the paper's 10 is for 512–2048 px images; the round-2
-/// research found 4 no better). Not tuned.
-pub(crate) const TAU_D: f32 = 6.0;
 
 /// Narrowest stretch of a profile piece, px, that still reads as shading rather than as an
 /// edge.
@@ -215,57 +201,6 @@ pub(crate) fn step_like(model: &FillModel, min_contrast: f64) -> bool {
     false
 }
 
-/// Per pair of touching components, how many of the 4-neighbour pixel pairs across their
-/// seam step by more than the discontinuity threshold [`TAU_D`] (OKLab × 100):
-/// `sharp[a][b]` counts the pairs `(p, q)`, `p` in `a` and `q` in `b`, with
-/// `|lab(p) − lab(q)| > τ_d` (symmetric; pairs that never step that much are absent).
-/// Compared with the seam's full length (`adj[a][b]`, every pair across it), it says
-/// whether the seam is an edge: a pixel pair stepping above `τ_d` is exactly what puts a
-/// pixel in Chakraborty et al.'s discontinuity map `D`.
-///
-/// `comp` is the component of each pixel, `n_comp` the number of components. One pass
-/// over the image, rows then columns (no `%` per pixel). Inspired by: Chakraborty et al.
-/// 2025, doi:10.1111/cgf.70055, §3.2; the band merger already counts the *smooth* pairs of
-/// each seam the same way (`regions::smooth_step`).
-pub(crate) fn sharp_seams(
-    comp: &[u32],
-    rgb: &[[f32; 3]],
-    w: usize,
-    h: usize,
-    n_comp: usize,
-) -> Vec<std::collections::HashMap<u32, u32>> {
-    let lab = |c: [f32; 3]| {
-        let o = crate::color::rgb_to_oklab(c);
-        [o.l * 100.0, o.a * 100.0, o.b * 100.0]
-    };
-    let tau2 = TAU_D * TAU_D;
-    let mut sharp = vec![std::collections::HashMap::new(); n_comp];
-    let count = |p: usize, q: usize, sharp: &mut Vec<std::collections::HashMap<u32, u32>>| {
-        let (a, b) = (comp[p], comp[q]);
-        if a == b {
-            return;
-        }
-        let (lp, lq) = (lab(rgb[p]), lab(rgb[q]));
-        let d2 = (lp[0] - lq[0]).powi(2) + (lp[1] - lq[1]).powi(2) + (lp[2] - lq[2]).powi(2);
-        if d2 > tau2 {
-            *sharp[a as usize].entry(b).or_insert(0) += 1;
-            *sharp[b as usize].entry(a).or_insert(0) += 1;
-        }
-    };
-    for y in 0..h {
-        for x in 0..w {
-            let p = y * w + x;
-            if x + 1 < w {
-                count(p, p + 1, &mut sharp);
-            }
-            if y + 1 < h {
-                count(p, p + w, &mut sharp);
-            }
-        }
-    }
-    sharp
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::Interp;
@@ -277,7 +212,6 @@ mod tests {
             profile: true,
             guard: true,
             cover: true,
-            seam: true,
         };
         assert_eq!(parse(None), Parts::default());
         assert_eq!(parse(Some("")), Parts::default());
@@ -297,26 +231,6 @@ mod tests {
             Parts::default(),
             "a typo turns nothing on"
         );
-    }
-
-    #[test]
-    fn a_seam_counts_only_its_sharp_pixel_pairs() {
-        // Three columns of components 0 | 1 | 2 on a 6x2 image: 0 and 1 differ by a hard
-        // step, 1 and 2 by a step far below the threshold.
-        let (w, h) = (6, 2);
-        let comp: Vec<u32> = (0..w * h).map(|p| ((p % w) / 2) as u32).collect();
-        let rgb: Vec<[f32; 3]> = comp
-            .iter()
-            .map(|&c| match c {
-                0 => [0.1, 0.1, 0.1],
-                1 => [0.8, 0.6, 0.2],
-                _ => [0.81, 0.6, 0.2],
-            })
-            .collect();
-        let sharp = sharp_seams(&comp, &rgb, w, h, 3);
-        assert_eq!(sharp[0].get(&1), Some(&2), "both rows of the 0|1 seam");
-        assert_eq!(sharp[1].get(&0), Some(&2), "symmetric");
-        assert_eq!(sharp[1].get(&2), None, "a gentle seam is not an edge");
     }
 
     fn radial(r: f64, aspect: f64, mids: Vec<(f64, [f32; 3])>) -> FillModel {

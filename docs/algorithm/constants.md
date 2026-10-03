@@ -96,38 +96,50 @@ stage's own reference document — this table only summarizes. Paths are relativ
 
 | name | value | file:line | controls | basis |
 |---|---|---|---|---|
-| `min_region` shipped default | 2 px | `inkvec-cli/src/args.rs:64`, `inkvec-trace/src/lib.rs:210` | smallest component kept before despeckle/carve | measured (a 9px colour-mode floor was tried and measured worse) |
-| `SADDLE_SIGMAS` | 3.0 | `inkvec-trace/src/regions.rs:13` | sigma a corner's coverage must clear 0.5 by before a saddle resolves | motivated (a standard "three sigma" bar, not swept) |
-| absorption thinness gate | interior < area/5 | `inkvec-trace/src/regions.rs` | candidate slivers for blend absorption | motivated |
-| absorption dominant-neighbour gate | top neighbours >= 4/5 of foreign contacts | `inkvec-trace/src/regions.rs` | which components are candidate slivers | motivated |
-| absorption pass threshold | >= 4/5 pixels within tolerance | `inkvec-trace/src/regions.rs` | whether a qualifying component is absorbed | motivated |
-| `tol` (both blend passes) | `max(3*sigma_noise, 0.025)` sRGB | `inkvec-trace/src/regions.rs:278,449` | how close a pixel must be to a mixture hypothesis | measured floor (~6.4/255), no stated reason for that specific floor |
-| `reassign_blend_pixels::ROUNDS` | 4 | `inkvec-trace/src/regions.rs` | erosion-like rounds in per-pixel reassignment | none |
-| reassign "beats own label" margin | residual < 0.5 * own residual | `inkvec-trace/src/regions.rs` | how much better a blend hypothesis must be to move a pixel | motivated |
+| `min_region` shipped default | 2 px | `inkvec-cli/src/args.rs:220`, `inkvec-cli/src/pipeline.rs:173`, `inkvec-trace/src/lib.rs:205` | smallest component kept by despeckle; `min_region.max(2)` is the carve's minimum feature size (`inkvec-trace/src/lib.rs:662`); scaled by the oversampling factor squared above `REF_EXTENT` (`inkvec-cli/src/lib.rs:328-342`) | measured (a 9 px colour-mode floor was tried and measured worse, `inkvec-cli/src/pipeline.rs:166-171`) |
+| `SADDLE_SIGMAS` | 3.0 | `inkvec-trace/src/regions.rs:40-44` | sigma a corner's coverage must clear 0.5 by before a saddle resolves (research build only) | motivated (a standard "three sigma" bar, not swept) |
+| `MAX_FACES` | 65,535 (`u16::MAX`) | `inkvec-trace/src/regions.rs:205-208` | most faces a face map can number; past it `cap_components` merges the smallest components into their neighbours (`inkvec-trace/src/regions.rs:293-416`) | derived (`u16` face ids, `u16::MAX` reserved for the outside of the image) |
+| absorption rounds | 2 | `inkvec-trace/src/regions.rs:768-769, 792` | rounds of whole-sliver absorption | motivated (one dissolved sliver can leave a neighbour thinner) |
+| absorption thinness gate | interior < area/5 | `inkvec-trace/src/regions.rs:678-679, 704` | candidate slivers for blend absorption | motivated |
+| absorption dominant-neighbour gate | top 3 neighbours >= 4/5 of foreign contacts | `inkvec-trace/src/regions.rs:680-683, 717-719` | which components are candidate slivers | motivated |
+| absorption pass threshold | >= 4/5 pixels within tolerance | `inkvec-trace/src/regions.rs:684-685, 742` | whether a qualifying component is absorbed | motivated |
+| translucency gate | alpha < 0.99 | `inkvec-trace/src/regions.rs:736, 1002` | when the white backdrop joins the candidate inks | none |
+| `tol` (both blend passes) | `max(3*sigma_noise, 0.025)` sRGB | `inkvec-trace/src/regions.rs:764-766, 787, 959` | how close a pixel must be to a mixture hypothesis | motivated (the floor keeps near-zero sigma on clean synthetic input from rejecting blends over float rounding; 0.025 itself not derived) |
+| `reassign_blend_pixels::ROUNDS` | 4 | `inkvec-trace/src/regions.rs:958` | rounds of per-pixel reassignment | none |
+| reassign "beats own label" margin | residual < 0.5 * distance to own ink | `inkvec-trace/src/regions.rs:940-941, 1018` | how much better a blend hypothesis must be to move a pixel | motivated |
 
 ## 05 — Gradients ([05-gradients.md](05-gradients.md))
 
 | name | value | file:line | controls | basis |
 |---|---|---|---|---|
-| `PARAMS_FLAT` | 3.0 | `inkvec-trace/src/gradient.rs` | flat-fill description length | derived |
-| `PARAMS_LINEAR` | 10.0 | `inkvec-trace/src/gradient.rs:50-51` | linear-gradient description length | derived |
-| `PARAMS_RADIAL` | 9.0 | `inkvec-trace/src/gradient.rs:52-53` | circular-radial description length | derived |
-| `PARAMS_RADIAL_ELLIPTIC` | 11.0 | `inkvec-trace/src/gradient.rs:54-55` | elliptical-radial description length | derived |
-| `PARAMS_STOP` | 4.0 | `inkvec-trace/src/gradient.rs:56-57` | cost of each interior stop | derived |
-| `MAX_MID_STOPS` | 2 | `inkvec-trace/src/gradient.rs:58-59` | most interior stops fitted | measured (corpus stop-count survey) |
-| `MIN_GRADIENT_PIXELS` | 16 | `inkvec-trace/src/gradient.rs:62` | fewest interior pixels before a gradient is attempted | motivated |
-| `BIMODAL_MARGIN` | 0.85 | `inkvec-trace/src/gradient.rs:64-68` | ramp-vs-step decision threshold; overridable via `INKVEC_BIMODAL` (*removed*) | motivated |
-| `MIN_VISIBLE_CONTRAST` | 1.5/255 | `inkvec-trace/src/gradient.rs:70-72` | floor on visible contrast for any gradient candidate | motivated |
-| `MIN_RAMP_SUPPORT` | 0.10 | `inkvec-trace/src/gradient.rs:73-79` | least fraction of samples a gradient must visibly shade | motivated (concrete regressions, value not derived) |
-| `QUANT_HALF_STEP` | 0.5/255 | `inkvec-trace/src/gradient.rs:81-82` | residual dead zone from 8-bit quantisation | derived |
-| `MIN_SHARED_BOUNDARY` | 3 | `inkvec-trace/src/gradient.rs:2054` | shortest shared border before a union is considered | none |
-| `MAX_FIT_SAMPLES` | 4096 | `inkvec-trace/src/gradient.rs:2056-2063` | cap on samples one fill evaluation walks | measured (runtime: 5ms vs 46s on a 512px image) |
-| `FIT_PIXELS_CAP` | 65536 | `inkvec-trace/src/gradient.rs:2067` | pixels any fill fit sees, uniformly subsampled | motivated (cross-referenced to `MAX_FIT_SAMPLES`) |
-| `CENTRE_SEARCH_SAMPLES` | 1024 | `inkvec-trace/src/gradient.rs:2080-2084` | radial-centre hill-climb sample count | measured (same output as 4096, 4x cheaper) |
-| `CARVE_RESIDUAL` | 0.06 | `inkvec-trace/src/gradient.rs:2515-2519` | floor on the carve candidate threshold | motivated |
-| `CARVE_MAX` | 64 | `inkvec-trace/src/gradient.rs:2520-2521` | most features carved from one image | motivated |
-| `bic_lambda(n)` | 0.5 * ln(n) | `inkvec-trace/src/gradient.rs:292-298` | fill-selection lambda | derived (Bayesian information criterion) |
-| `MAX_SLIVER_MISFIT` | 4.0 | `inkvec-trace/src/gradient/stops.rs:276` (doc at `:13-15`) | rejects a candidate interior stop when the smaller sample-count side of its split holds under 1/10 of the fitted samples *and* its median residual exceeds 4x the larger side's (floored at 1/255) | motivated; reachable from both `merge_gradient_bands_with_ink` and `fit_fill` via the shared `fit_pixels` -> `fit_samples` -> `fit_mid_stops` path; no stated derivation for 4.0 itself |
+| `PARAMS_FLAT` | 3.0 | `inkvec-trace/src/gradient.rs:76-77` | flat-fill description length | derived |
+| `PARAMS_LINEAR` | 10.0 | `inkvec-trace/src/gradient.rs:78-79` | linear-gradient description length | derived |
+| `PARAMS_RADIAL` | 9.0 | `inkvec-trace/src/gradient.rs:80-81` | circular-radial description length | derived |
+| `PARAMS_RADIAL_ELLIPTIC` | 11.0 | `inkvec-trace/src/gradient.rs:82-83` | elliptical-radial description length | derived |
+| `PARAMS_STOP` | 4.0 | `inkvec-trace/src/gradient.rs:84-85` | cost of each interior stop | derived |
+| `MAX_MID_STOPS` | 2 | `inkvec-trace/src/gradient.rs:86-88` | most interior stops fitted | measured (corpus stop-count survey) |
+| `MIN_GRADIENT_PIXELS` | 16 | `inkvec-trace/src/gradient.rs:90-91` | fewest interior samples before a gradient is attempted; interior a flat component needs to keep its own colour in the merge write-back | motivated |
+| `BIMODAL_MARGIN` | 0.85 | `inkvec-trace/src/gradient.rs:92-96` | ramp-vs-step decision threshold; the doc comment still says "Overridable with `INKVEC_BIMODAL`" but the variable is removed (`inkvec-trace/src/gradient.rs:916`) | motivated |
+| `MIN_VISIBLE_CONTRAST` | 1.5/255 | `inkvec-trace/src/gradient.rs:98-100` | floor on visible contrast for any gradient candidate | motivated |
+| `MIN_RAMP_SUPPORT` | 0.10 | `inkvec-trace/src/gradient.rs:101-107` | least fraction of samples a gradient must visibly shade | motivated (concrete regressions, value not derived) |
+| `QUANT_HALF_STEP` | 0.5/255 | `inkvec-trace/src/gradient.rs:109-110` | residual dead zone from 8-bit quantisation | derived |
+| `MIN_SHARED_BOUNDARY` | 3 | `inkvec-trace/src/gradient/bands.rs:22-23` | fewest seam pixel pairs before a union is considered | none |
+| `MERGE_WORK_FLOOR` | 2^28 (268,435,456) units | `inkvec-trace/src/gradient/bands.rs:69-71` | least work cap any image's band merge gets | measured (11x the gate's largest spend, 23.2 M; above all 772 non-pathological stress images, largest 191 M; `inkvec-trace/src/gradient/bands.rs:40-53`) |
+| `MERGE_WORK_PER_PIXEL` | 32 units/px | `inkvec-trace/src/gradient/bands.rs:25-67` | band-merge work cap past about 2900 x 2900 px: `max(MERGE_WORK_FLOOR, 32 * w * h)` | measured (twice the masthead's 16 units/px) |
+| `MODEL_WORK_PER_SAMPLE` | 13 | `inkvec-trace/src/gradient/bands.rs:73-95` | gathered pixels one scored sample of a union fit is charged as (`union_work`) | measured (0.25 us/pixel gather vs 13.4 ms full-sample model selection, 2,243 union fits on `brands/sangchaimeter`) |
+| `MAX_FIT_SAMPLES` | 4096 | `inkvec-trace/src/gradient/budget.rs:29-31` | most samples one fit scores | none |
+| `FIT_PIXELS_CAP` | 65536 | `inkvec-trace/src/gradient/budget.rs:32-42` | pixels one fit gathers before it is sampled down | measured (identical output to fitting every pixel on two profiling logos at 1024 and 2048 px, `inkvec-trace/src/gradient/bands.rs:610-616`) |
+| `CENTRE_SEARCH_SAMPLES` | 1024 | `inkvec-trace/src/gradient/budget.rs:43-45` | samples a radial or elliptical centre search evaluates per candidate centre | none |
+| `MAX_ASPECT` | 8.0 | `inkvec-trace/src/gradient/fit.rs:521-523` | largest aspect of an elliptical gradient | motivated |
+| `RAMP_STEP_DE00` | 15.0 (CIEDE2000) | `inkvec-trace/src/gradient/regions.rs:19-21` | largest ink difference for two flat bands to be tried as one ramp (region recovery) | none |
+| `SMOOTH_STEP` | 3.0 (CIE76, Lab) | `inkvec-trace/src/gradient/regions.rs:23-29` | largest pixel-pair step inside one smooth region | motivated |
+| `SMOOTH_FRACTION` | 0.5 | `inkvec-trace/src/gradient/regions.rs:31-33` | fraction of a seam's pixel pairs that must be smooth steps | none |
+| `CARVE_RESIDUAL` | 0.06 | `inkvec-trace/src/gradient/carve.rs:16-20` | floor on the carve candidate threshold `max(8*sigma_noise, 0.06)` | motivated |
+| `CARVE_MAX` | 64 | `inkvec-trace/src/gradient/carve.rs:21-22` | most features carved from one image | motivated |
+| `CARVED_PAINT_ALPHA` | 0.5 | `inkvec-trace/src/native.rs:689-698` | mean opacity at or above which a carved feature named by the clear ink is renamed to the nearest visible ink (native-alpha path, `name_carved_paint`) | measured (residue 0.14-0.36, painting it cost dE00 on 5 of 8 icons; paint 0.80-1.00) |
+| `bic_lambda(n)` | 0.5 * ln(n) | `inkvec-trace/src/gradient.rs:320-327` | fill-selection lambda | derived (Bayesian information criterion) |
+| `IRLS_ROUNDS` | 2 | `inkvec-trace/src/gradient/stops.rs:68-69` | Huber reweighting rounds when a stop profile is fitted | none |
+| `MAX_SLIVER_MISFIT` | 4.0 | `inkvec-trace/src/gradient/stops.rs:71-73` (test at `inkvec-trace/src/gradient/stops.rs:432-482`) | rejects a new interior stop when the smaller side of its segment holds under 1/10 of the subsamples *and* its median residual exceeds 4x the other side's (floored at 1/255) | motivated; reachable from both the band merger and `fit_fill` via `fit_pixels` -> `fit_samples` -> `fit_mid_stops`; no stated derivation for 4.0 itself |
 
 ## 06 — Planar map ([06-planar-map.md](06-planar-map.md))
 

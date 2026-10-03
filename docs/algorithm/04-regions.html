@@ -46,9 +46,9 @@
         faces.</p>
       <p>The fix is not to erase the ribbon, but to ask what mixture of real inks would
         explain its colour, and give each sliver pixel back to the ink that mixture says it
-        mostly is. A pixel that reads as seventy percent dark outline and thirty percent
-        mid-brown is, physically, an outline pixel — even though, measured by plain colour
-        distance, it might sit nearer the brown.</p>
+        mostly is — not to whichever palette colour it happens to sit nearest. A ribbon
+        between two inks is split down the middle, each pixel going to its own side, rather
+        than handed whole to one of them.</p>
       <figure>
         <svg viewBox="0 0 640 260" role="img" aria-label="A thin ribbon of blend pixels along a boundary shown as its own fragile region before absorption, and folded back into the ink it belongs to afterwards">
           <text x="20" y="24" class="fig-label-strong">A sliver, before and after absorption</text>
@@ -79,13 +79,13 @@
           which single palette colour it happens to sit nearest.</figcaption>
       </figure>
       <p>Each candidate sliver is tested against up to three neighbouring inks at once,
-        because a ribbon sitting at a three-way junction, or under a shape that pokes out
-        slightly from beneath another, is a mixture of three colours, not two. A component
-        is only absorbed once at least four fifths of its pixels fit that mixture within a
+        because where boundaries meet, an edge pixel is a mixture of three colours, not two.
+        A component is only absorbed if it is thin, if almost all of its border touches
+        those few inks, and if at least four fifths of its pixels fit that mixture within a
         tolerance set from the picture's own measured noise. A second, pixel-by-pixel pass
-        catches the slivers that slip past even this — the case where anti-aliasing between
-        two cells happens to land on a third cell's own colour and fuses into a large
-        region with it, too big to look like a thin ribbon at all.</p>
+        then deals with the single blend pixels left along boundaries: each moves to a
+        neighbouring ink only when a blend of its neighbours explains its colour at least
+        twice as well as its own ink does.</p>
       <div class="aside">A genuinely thin real feature — a hairline stroke a single pixel
         wide — is protected by the same test, not caught by it: its colour does not sit on
         the line between its neighbours' colours, so it fails the mixture test outright and
@@ -102,10 +102,16 @@
         left-over difference between its pieces, the fitting stage further downstream will
         happily invent a gradient to cover a difference that was never a gradient at all —
         it was simply two unrelated objects sharing a palette entry.</p>
-      <p>This stage separates every region into its actually-connected pieces before
-        anything else is decided about its fill. Two same-coloured shapes that do not touch
-        become two independent regions, each free to be measured, edited, and filled on its
-        own terms.</p>
+      <p>This stage separates every region into its actually-connected pieces and numbers
+        them. Two same-coloured shapes that do not touch become two independent regions,
+        each free to be measured, edited, and filled on its own terms.</p>
+      <p>The numbers have a ceiling: the format the rest of the tracer works in can hold
+        65,535 regions, and an image of pure noise can have more. Past that limit the
+        smallest regions are merged, each into the neighbour it shares the longest border
+        with, until the rest fit. The tracer used to lump every region past the limit
+        together into one, which then held scattered pixels of many colours all painted
+        the same; now every region is still one connected, single-colour shape. No icon or
+        logo in the test sets comes anywhere near the limit.</p>
     </section>
 
     <section>
@@ -170,27 +176,27 @@
         the corner actually merged one way or the other; below that margin, the two
         readings are indistinguishable and the corner is left exactly as found, neither
         welded nor split.</p>
-      <p>That caution matters concretely on a real chequerboard pattern — a QR code, a
-        chequered flag — whose corners genuinely sit exactly on the boundary between the
-        two readings, because the two squares really do meet at a single point and neither
-        reading is truer than the other. Forcing a decision there on nothing more than
-        rounding noise was measured to cost real accuracy on one icon on its own.</p>
-      <div class="aside">This corner-merging pass exists in the code but ships switched
-        <b>off</b> by default. Measured on a 246-icon screen set it left the great majority
-        of icons untouched, moved the overall accuracy score very slightly the wrong way,
-        and the handful of icons it made worse trace back to a separate, unresolved
-        interaction with how the final file stacks overlapping shapes — not to the corner
-        reading itself being wrong.</div>
+      <p>That caution matters on a real chequerboard pattern — a QR code, a chequered flag —
+        whose corners sit exactly on the boundary between the two readings, because the two
+        squares really do meet at a single point and neither reading is truer than the
+        other. There the estimate lands on the half-way mark, and the corner keeps the
+        junction it had rather than being forced one way on rounding noise.</p>
+      <div class="aside">This corner-merging pass is an experiment. It is built only into a
+        research version of the tracer, and is switched <b>off</b> even there unless asked
+        for; the released tracer does not run it. No measurement of what it does to the
+        test sets is recorded in the current code.</div>
     </section>
 
     <section>
       <h2>What this stage hands forward</h2>
       <p>The output is a face per connected, single-ink shape: speckle gone, anti-aliasing
         folded into whichever ink it actually belongs to, disconnected same-coloured shapes
-        told apart, and every four-way corner either resolved with real statistical
-        confidence or left honestly undecided. Everything from here on — fitting a gradient
-        to a region, tracing its boundary, deciding where curves bend — works on this set of
-        faces, not on the raw colour labels underneath it.</p>
+        told apart, and — in the research version — four-way corners either resolved with
+        real statistical confidence or left honestly undecided. The gradient stage runs in
+        the middle of this one, after the clean-up and before the split into connected
+        pieces, so each face inherits the fill fitted to the colour region it came from.
+        Everything after — tracing each boundary, deciding where curves bend — works on
+        this set of faces, not on the raw colour labels underneath it.</p>
     </section>
 
   </main>

@@ -63,18 +63,30 @@
           worth putting back together — because a single fade genuinely describes the
           picture better than five flat pieces of it.</figcaption>
       </figure>
-      <p>The merging is done carefully rather than greedily: neighbouring bands are only
+      <p>The merging is done carefully, one weld at a time, and the actual saving in file
+        size is checked before any two pieces are welded. Neighbouring pieces are only
         candidates for joining when at least one side is already recognised as part of a
-        ramp, and the actual saving in file size is checked before any two pieces are
-        welded. Two flat regions are never joined just because a gradient happens to sit
-        between them — bands only exist in the first place because a real ramp was
-        quantised, and the check for that runs before any expensive fitting is attempted.</p>
+        ramp, or when two flat bands are a small colour step apart across a boundary that
+        changes gradually, pixel by pixel, the way the inside of a fade does — not in one
+        sharp step, the way the edge between two separate inks does. Those checks run before
+        any expensive fitting is attempted, so two unrelated flat regions are never fitted
+        together just because a gradient could be drawn between them.</p>
+      <p>The welding has a fixed allowance of work, set by the size of the picture: a
+        generous minimum for small images, and a fixed amount per pixel for very large ones.
+        Every batch of trial fits is costed before it runs, and once the allowance would be
+        overdrawn the merging simply stops. Every weld already made stands, and the
+        remaining bands stay separate, correct flat or gradient fills — a slightly larger
+        file, never a wrong one. The allowance is counted in work, not seconds, so the
+        result is the same on every machine. No icon or logo in the test sets comes near it;
+        what it stops is the photograph or textured print whose every region is a slight
+        gradient, which used to keep this stage busy for many minutes. A time budget, when
+        one is asked for, is now also checked between individual fits, not only between
+        welds.</p>
     </section>
 
     <section>
       <h2>Choosing the cheapest honest description</h2>
-      <p>Once a region's boundary is settled, this stage still has to decide what to fill
-        it with. A flat colour, a straight-line fade and a circular or elliptical fade are
+      <p>Once a region is settled, this stage still has to decide what to fill it with. A flat colour, a straight-line fade and a circular or elliptical fade are
         all tried, and the cheapest one that actually explains the pixels wins. "Cheapest"
         is not vague: a flat fill costs the file three numbers, a straight fade costs ten,
         and a circular fade costs nine (eleven if it needs to be an ellipse rather than a
@@ -136,13 +148,20 @@
       <p>Before fill fitting runs, this stage looks specifically for small clusters of
         pixels whose colour sits well outside what the region's chosen fill predicts there,
         excluding anything that looks like ordinary anti-aliasing rather than a genuine
-        feature. Each surviving cluster is carved out as its own small flat region, named by
-        its own measured colour, and the parent region is refitted without those pixels
+        feature. Each surviving cluster is carved out as its own small flat region, filled
+        with its own measured colour, and the parent region is refitted without those pixels
         dragging its gradient search around. The threshold for "well outside" scales with
         the picture's own measured noise, with a floor so that genuine anti-aliasing fringes
         are never mistaken for a feature, and the number of features carved from a single
         image is capped, as a guard against a heavily textured region shattering into
         hundreds of tiny pieces.</p>
+      <p>On a transparent canvas there is one more step. A carved feature is named after the
+        palette ink nearest its colour, judged over white — and over white, the empty
+        background looks exactly like white paint. A small pale shape cut out of the empty
+        background could therefore be named after the background itself, and drawn fully
+        see-through. Now a carved shape that is mostly opaque is named after the nearest ink
+        that actually draws something, so it is painted, not left clear. Faint anti-aliasing
+        left inside the empty background stays clear.</p>
     </section>
 
     <section>
@@ -154,9 +173,9 @@
         candidate in both spaces and lets the same cost comparison decide which one the
         picture's own pixels actually support — the winning choice is written into the file
         alongside the gradient itself, not left to the renderer's default.</p>
-      <p>This also matters for elliptical fades specifically: in a large corpus of tested
-        icons, most of the radial gradients found were not circles but ellipses, tilted at
-        an angle. Fitting a plain circle to one of those is visibly wrong in a way no colour
+      <p>This also matters for elliptical fades specifically: in one large emoji set, most of
+        the radial gradients found were not circles but stretched ellipses. Fitting a plain
+        circle to one of those is visibly wrong in a way no colour
         tolerance can paper over, so an elliptical radial model — with its own angle and
         aspect ratio — is tried alongside the circular one whenever a region calls for it.</p>
     </section>

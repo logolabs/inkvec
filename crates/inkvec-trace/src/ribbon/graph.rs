@@ -148,6 +148,8 @@ struct Sample {
     /// The sleeve's direction there (unit, sign arbitrary): the side's tangent, which a
     /// stroke's sides share with its centreline.
     t: Vec2,
+    /// The boundary segments of its two sides (`usize::MAX` for a rebuilt corner).
+    feet: (usize, usize),
 }
 
 /// A skeleton branch reduced to its reliable core.
@@ -234,6 +236,7 @@ fn cross_section(b: &Boundary, s: Point, w: f64) -> Option<Sample> {
         c,
         sigma: 0.5 * (sa * sa + sb * sb).sqrt(),
         t: Vec2 { x: n.y, y: -n.x },
+        feet: (k, k2),
     })
 }
 
@@ -265,22 +268,32 @@ fn cores(
                 x: -chain_dir.x,
                 y: -chain_dir.y,
             };
-            // Under three samples the core is too short to give a direction of its own
-            // (a thick stroke's short arm: lucide `circle-arrow-right` at 512 px keeps
-            // one sample per chevron arm, and the skeleton chain there points 30° off the
-            // arm). The sleeve's side tangent at the end sample is used instead, signed
-            // to agree with the skeleton chain.
+            // A core of one sample has no direction of its own (a thick stroke's short
+            // arm: lucide `circle-arrow-right` at 512 px keeps one sample per chevron arm,
+            // and the skeleton chain there points 30° off the arm). The sleeve's side
+            // tangent at that sample is used instead, signed to agree with the skeleton
+            // chain and only within 45° of it. Not for two samples: a junction stub's
+            // (lucide `bath`'s legs) foot point can lie on the stroke it hangs from, whose
+            // tangent is across the stub (bath dE00 0.008 -> 0.087 when tried).
             let along = |x: &Sample, want: Vec2| {
-                if x.t.dot(want) >= 0.0 {
+                let t = if x.t.dot(want) >= 0.0 {
                     x.t
                 } else {
                     Vec2 {
                         x: -x.t.x,
                         y: -x.t.y,
                     }
+                };
+                // Only a tangent within 45° of the chain: a stub's foot point can lie on
+                // the stroke it hangs from (lucide `bath`'s legs read the tub's edge, 90°
+                // off), and the chain is then the better guess.
+                if t.dot(want) >= std::f64::consts::FRAC_1_SQRT_2 {
+                    t
+                } else {
+                    want
                 }
             };
-            let dir = if s.len() >= 3 {
+            let dir = if s.len() >= 2 {
                 let back = (s.len() - 1).min(4);
                 let m = s.len() - 1;
                 [
@@ -353,6 +366,7 @@ fn core_samples(
                     c,
                     sigma: corner_sigma,
                     t: unit(run[0].c - c).unwrap_or(run[0].t),
+                    feet: (usize::MAX, usize::MAX),
                 });
             }
         }
@@ -510,7 +524,7 @@ fn ends(
             if g.degree(node) >= 3 {
                 clusters.entry(dsu.find(node)).or_default().push(port);
             } else {
-                end_pt[port] = cap_centre(b, port_point(kept, port), port_dir(kept, port), w);
+                end_pt[port] = port_cap(b, kept, port, w);
                 topo.caps += 1;
             }
         }
@@ -518,7 +532,7 @@ fn ends(
     for (root, ports) in clusters {
         if ports.len() == 1 {
             let p = ports[0];
-            end_pt[p] = cap_centre(b, port_point(kept, p), port_dir(kept, p), w);
+            end_pt[p] = port_cap(b, kept, p, w);
             topo.caps += 1;
             continue;
         }
@@ -597,22 +611,87 @@ fn meeting_point(lines: &[(Point, Vec2)]) -> Option<Point> {
 ///
 /// A round cap of half-width `h = w/2` around end point `E` reaches farthest along `d` at
 /// `E + h·d`. So `E = p + d·max(0, s_max - h)`, where `s_max` is the largest `(q - p)·d`
-/// over the boundary points `q` of the cap: ahead of `p` (`0 < s <= 3·w + 2`; a thick
-/// stroke's short arm can keep its only reliable sample far from its tip), within
-/// `h + 0.75` px of the sleeve's axis, and facing back along the sleeve (inward normal
-/// with `n·d < 0.2`), which keeps a neighbouring stroke's facing side out.
-fn cap_centre(b: &Boundary, p: Point, d: Vec2, w: f64) -> Point {
+/// over the boundary points `q` of the cap: ahead of `p` (`0 < s <= reach`; the caller
+/// passes `1.5·w + 2`), within `h + 0.75` px of the sleeve's axis, and facing back along
+/// the sleeve (inward normal with `n·d < 0.2`), which keeps a neighbouring stroke's facing
+/// side out. The fallback of [`cap_walk`].
+fn cap_centre(b: &Boundary, p: Point, d: Vec2, w: f64, reach: f64) -> Point {
     let h = 0.5 * w;
     let mut s_max = 0.0f64;
     for (i, &q) in b.pts.iter().enumerate() {
         let v = q - p;
         let s = v.dot(d);
-        if s <= 0.0 || s > 3.0 * w + 2.0 || v.cross(d).abs() > h + 0.75 || b.pt_n[i].dot(d) >= 0.2 {
+        if s <= 0.0 || s > reach || v.cross(d).abs() > h + 0.75 || b.pt_n[i].dot(d) >= 0.2 {
             continue;
         }
         s_max = s_max.max(s);
     }
     along(p, d, (s_max - h).max(0.0))
+}
+
+/// The cap centre at `port`'s free end: from the boundary walk between the end sample's
+/// two feet ([`cap_walk`]) when there is one, else from the scan ahead ([`cap_centre`]).
+fn port_cap(b: &Boundary, kept: &[Core], port: usize, w: f64) -> Point {
+    let c = &kept[port / 2];
+    let x = if port & 1 == 0 {
+        c.s[0]
+    } else {
+        c.s[c.s.len() - 1]
+    };
+    let d = port_dir(kept, port);
+    cap_walk(b, x.feet, x.c, d, w).unwrap_or_else(|| cap_centre(b, x.c, d, w, 1.5 * w + 2.0))
+}
+
+/// The cap centre found by walking the boundary round the cap.
+///
+/// The cap of a sleeve's free end is the boundary run joining the end sample's two sides:
+/// from foot segment `feet.0` along the ring to `feet.1`, the shorter way round (the other
+/// way runs round the rest of the face). Every point on that run is part of the cap or of
+/// the sleeve before it, so `s_max = max (q - p)·d` over the run, and the cap centre is
+/// `p + d·max(0, s_max - w/2)` as in [`cap_centre`] -- but with no distance limit and no
+/// risk of reading another stroke. `None` when the feet are on different rings, either is
+/// a rebuilt corner's, or neither walk arrives within `4·π·w + 8·w` px of boundary.
+///
+/// Not from the literature: a one-line consequence of the sleeve/terminal decomposition
+/// (Prasad 2005, cited in the module documentation: a terminal is bounded by one chord and
+/// one run of the outline); found necessary on lucide `circle-arrow-right` at 512 px, whose
+/// chevron arms keep one reliable sample each, far from their tips, where a distance-limited
+/// scan either stops short (1.5·w) or reads a neighbouring stroke (3·w, lucide `bath`).
+fn cap_walk(b: &Boundary, feet: (usize, usize), p: Point, d: Vec2, w: f64) -> Option<Point> {
+    let (fa, fb) = feet;
+    if fa == usize::MAX || fb == usize::MAX {
+        return None;
+    }
+    let limit = (4.0 * std::f64::consts::PI + 8.0) * w;
+    // Walk one way: (arc length, farthest projection) on arriving at `fb`.
+    let walk = |forward: bool| -> Option<(f64, f64)> {
+        let (mut k, mut len, mut s_max) = (fa, 0.0, f64::NEG_INFINITY);
+        loop {
+            let q = b.pts[k];
+            s_max = s_max.max((q - p).dot(d));
+            if k == fb {
+                return Some((len, s_max));
+            }
+            let nk = if forward { b.next[k] } else { b.prev[k] };
+            len += q.dist(b.pts[nk]);
+            if len > limit || nk == fa {
+                return None;
+            }
+            k = nk;
+        }
+    };
+    let best = match (walk(true), walk(false)) {
+        (Some(x), Some(y)) => {
+            if x.0 <= y.0 {
+                x
+            } else {
+                y
+            }
+        }
+        (Some(x), None) | (None, Some(x)) => x,
+        (None, None) => return None,
+    };
+    Some(along(p, d, (best.1 - 0.5 * w).max(0.0)))
 }
 
 /// Which sleeve ends at one junction continue each other: pairs of ports.

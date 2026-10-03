@@ -63,6 +63,12 @@ use super::Centreline;
 /// Iterations of the solve.
 const MAX_ITERS: usize = 30;
 
+/// Iterations of the solve run on each split trial ([`solve_adaptive`]); the strokes
+/// kept are solved to [`MAX_ITERS`] once at the end. A trial only has to show whether the
+/// split pays, and the full solves on every trial were most of the stage's time (lucide at
+/// 128 px: stage mean 299 ms, worst face 3.5 s, under load).
+const TRIAL_ITERS: usize = 8;
+
 /// Damping increases tried before an iteration gives up.
 const MAX_RETRIES: usize = 8;
 
@@ -734,6 +740,7 @@ pub(crate) fn solve(
     h: f64,
     b: &Boundary,
     join: Join,
+    max_iters: usize,
 ) -> (Vec<Centreline>, f64) {
     let mut model = Model::new(lines, h, join);
     let n = model.theta.len();
@@ -755,7 +762,7 @@ pub(crate) fn solve(
     let mut energy = e0 + anchor(&model.theta);
     let start_regular = regular(&model);
     let mut mu = 1e-3;
-    for _ in 0..MAX_ITERS {
+    for _ in 0..max_iters {
         let (ata, atr) = normal_equations(&mut model, b, &rws, &theta0, &sig);
         let mut improved = false;
         for _ in 0..MAX_RETRIES {
@@ -822,7 +829,7 @@ pub(crate) fn solve_adaptive(
     join: Join,
     budget: f64,
 ) -> (Vec<Centreline>, f64) {
-    let (mut cur, mut h) = solve(lines, h, b, join);
+    let (mut cur, mut h) = solve(lines, h, b, join, MAX_ITERS);
     let max_splits = inkvec_core::env::count("INKVEC_RIBBONS_SPLITS").unwrap_or(MAX_SPLITS);
     let reach = 8.0 * h + 4.0;
     let cost = |ls: &[Centreline], h: f64| -> f64 {
@@ -831,6 +838,7 @@ pub(crate) fn solve_adaptive(
     };
     let mut best = cost(&cur, h);
     let mut refused: Vec<(usize, usize)> = Vec::new();
+    let mut accepted_any = false;
     for _ in 0..max_splits {
         let Some((shape, seg, t)) = worst_segment(&cur, h, b, reach, &refused, join) else {
             break;
@@ -843,9 +851,10 @@ pub(crate) fn solve_adaptive(
         if trial.iter().map(Centreline::params).sum::<f64>() + 1.0 >= budget {
             break;
         }
-        let (tl, th) = solve(&trial, h, b, join);
+        let (tl, th) = solve(&trial, h, b, join, TRIAL_ITERS);
         let c = cost(&tl, th);
         if c < best && drawable(&tl, join) {
+            accepted_any = true;
             best = c;
             cur = tl;
             h = th;
@@ -854,6 +863,12 @@ pub(crate) fn solve_adaptive(
             refused.clear();
         } else {
             refused.push((shape, seg));
+        }
+    }
+    if accepted_any {
+        let (polished, ph) = solve(&cur, h, b, join, MAX_ITERS);
+        if drawable(&polished, join) && cost(&polished, ph) <= best {
+            return (polished, ph);
         }
     }
     (cur, h)
@@ -1214,7 +1229,7 @@ mod tests {
             },
             prim: None,
         };
-        let (out, h) = solve(&[line], 2.8, &b, Join::Round);
+        let (out, h) = solve(&[line], 2.8, &b, Join::Round, MAX_ITERS);
         let p = &out[0].path;
         assert!((h - 3.0).abs() < 1e-3, "h {h}");
         assert!(p.start.dist(Point::new(0.0, 0.0)) < 0.01, "{:?}", p.start);

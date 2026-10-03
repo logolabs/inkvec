@@ -616,7 +616,11 @@ pub fn optimise_alpha(
             band_norm: (0.0, 0.0),
             active: None,
         };
-        band::setup(&mut prob);
+        // A band whose tables would pass `band::table_budget` is not solved at all: the map
+        // keeps the measured boundary, as when the solve gains nothing.
+        if !band::setup(&mut prob) {
+            return None;
+        }
         let deadline = budget_ms.map(|ms| (Instant::now(), u128::from(ms)));
         lbfgs::descend(&mut prob, &vars, deadline, dbg)?
     };

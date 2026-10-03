@@ -77,6 +77,24 @@ fn a_png_claiming_ten_billion_pixels_is_refused_without_allocating() {
     assert!(!err.to_string().is_empty());
 }
 
+/// A decode that will be capped may allocate more than the default 512 MiB (so a
+/// legitimate 12000 x 12000 RGBA PNG decodes), but not without bound: the intake fuzz's
+/// 20000 x 20000 bomb (1.6 GB of RGBA) and a 100000 x 100000 header are still refused
+/// before their buffer exists, capped or not.
+#[test]
+fn a_capped_decode_still_refuses_a_bomb() {
+    for (w, h) in [(20_000u32, 20_000u32), (100_000, 100_000)] {
+        for max_dim in [0usize, 2048] {
+            let err = inkvec_trace::decode_image_capped(&png(w, h, &[]), max_dim)
+                .expect_err("a bomb is refused");
+            assert!(
+                err.to_string().contains("Memory limit"),
+                "{w}x{h} at {max_dim}: {err}"
+            );
+        }
+    }
+}
+
 #[test]
 fn empty_and_garbage_bytes_are_errors() {
     assert!(decode_image(&[]).is_err());

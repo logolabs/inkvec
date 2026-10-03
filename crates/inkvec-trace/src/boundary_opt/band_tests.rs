@@ -34,8 +34,149 @@ fn band_problem<'a>(
         band_norm: (0.0, 0.0),
         active: None,
     };
-    super::setup(&mut p);
+    assert!(
+        super::setup(&mut p),
+        "a small map is within the table budget"
+    );
     p
+}
+
+/// A problem over `map` with nothing set up yet, so a test can call `setup_within`.
+fn bare_problem<'a>(
+    map: &'a PlanarMap,
+    vars: &'a Vars,
+    rgb: &'a [[f32; 3]],
+    face: &'a [FillModel],
+    alpha: Option<(&'a [f32], &'a [f32])>,
+) -> Problem<'a> {
+    let (w, h) = (map.width, map.height);
+    Problem {
+        map,
+        vars,
+        rgb,
+        face,
+        w,
+        h,
+        pieces: Vec::new(),
+        head: vec![-1; w * h],
+        vhead: vec![-1; h],
+        touched: Vec::new(),
+        spare: Vec::new(),
+        scratch: Scratch::default(),
+        alpha,
+        w_kink: 0.0,
+        w_anchor: 0.0,
+        band: None,
+        bscratch: Default::default(),
+        band_norm: (0.0, 0.0),
+        active: None,
+    }
+}
+
+/// One-pixel vertical stripes of `k` alternating faces: the shape whose band covers whole
+/// rows and whose runs hold a face per column, the class `table_budget` exists for.
+fn stripes(w: usize, h: usize, k: usize) -> (PlanarMap, Vars, Vec<[f32; 3]>, Vec<FillModel>) {
+    let labels: Vec<u16> = (0..w * h).map(|i| ((i % w) % k) as u16).collect();
+    let (map, vars) = labelled(&labels, w, h, k);
+    let rgb: Vec<[f32; 3]> = (0..w * h)
+        .map(|i| [((i % w) % k) as f32 / k as f32; 3])
+        .collect();
+    let face = (0..k)
+        .map(|f| FillModel::Flat([f as f32 / k as f32; 3]))
+        .collect();
+    (map, vars, rgb, face)
+}
+
+/// `table_bytes`, summed over the runs, is exactly what `fill_colours` and `fill_prefix`
+/// then allocate, with and without alpha as a channel: the budget measures the real thing.
+#[test]
+fn the_table_budget_counts_exactly_what_is_allocated() {
+    let mut rng = Lcg(17);
+    let mut cases = vec![three_faces(&mut rng), stripes(23, 7, 2), stripes(16, 5, 16)];
+    cases.push(three_faces(&mut rng));
+    for (map, vars, rgb, face) in &cases {
+        let opacity: Vec<f32> = (0..face.len()).map(|f| 0.5 + 0.1 * f as f32).collect();
+        let img_a: Vec<f32> = (0..rgb.len()).map(|i| (i % 3) as f32 / 2.0).collect();
+        for alpha in [None, Some((&img_a[..], &opacity[..]))] {
+            let mut p = bare_problem(map, vars, rgb, face, alpha);
+            assert!(super::setup_within(&mut p, u64::MAX));
+            let band = p.band.as_ref().unwrap();
+            let counted: u64 = band
+                .runs
+                .iter()
+                .map(|r| super::table_bytes((r.x1 - r.x0 + 1) as u64, r.nf as u64, alpha.is_some()))
+                .sum();
+            let allocated =
+                24 * band.colour.len() as u64 + 8 * (band.opacity.len() + band.prefix.len()) as u64;
+            assert_eq!(counted, allocated, "alpha {}", alpha.is_some());
+        }
+    }
+}
+
+/// The budget is a strict upper bound: a band of exactly the budget is solved, one byte
+/// over is not, and a refused band leaves nothing set up.
+#[test]
+fn a_band_over_the_table_budget_is_not_set_up() {
+    let (map, vars, rgb, face) = stripes(40, 12, 40);
+    let mut p = bare_problem(&map, &vars, &rgb, &face, None);
+    assert!(super::setup_within(&mut p, u64::MAX));
+    let band = p.band.as_ref().unwrap();
+    let total: u64 = band
+        .runs
+        .iter()
+        .map(|r| super::table_bytes((r.x1 - r.x0 + 1) as u64, r.nf as u64, false))
+        .sum();
+    // Whole rows, a face per column: the quadratic growth the budget is for.
+    assert!(
+        band.runs.iter().all(|r| r.nf as usize >= 38),
+        "{:?}",
+        band.runs[0]
+    );
+    let mut at = bare_problem(&map, &vars, &rgb, &face, None);
+    assert!(
+        super::setup_within(&mut at, total),
+        "exactly the budget is allowed"
+    );
+    let mut over = bare_problem(&map, &vars, &rgb, &face, None);
+    assert!(
+        !super::setup_within(&mut over, total - 1),
+        "one byte over is refused"
+    );
+    assert!(over.band.is_none());
+}
+
+/// The budget is its floor up to about 2900 x 2900 px, then 32 bytes a pixel, and the
+/// product saturates rather than wrapping.
+#[test]
+fn the_table_budget_has_a_floor_and_grows_with_the_image() {
+    assert_eq!(super::table_budget(128, 128), super::TABLE_BUDGET_FLOOR);
+    assert_eq!(super::table_budget(2048, 2048), super::TABLE_BUDGET_FLOOR);
+    assert_eq!(super::table_budget(8192, 8192), 32 * 8192 * 8192);
+    assert_eq!(super::table_budget(usize::MAX, usize::MAX), u64::MAX);
+}
+
+/// The production budget does not bind on a large ordinary map: a 600 x 400 image of a
+/// few dozen discs, the kind of art the gate holds, is far inside it.
+#[test]
+fn an_ordinary_large_map_is_far_inside_the_production_budget() {
+    let (w, h) = (600usize, 400usize);
+    let labels: Vec<u16> = (0..w * h)
+        .map(|i| {
+            let (x, y) = ((i % w) as f64, (i / w) as f64);
+            let (cx, cy) = (
+                (x / 50.0).floor() * 50.0 + 25.0,
+                (y / 50.0).floor() * 50.0 + 25.0,
+            );
+            u16::from((x - cx).powi(2) + (y - cy).powi(2) < 18.0f64.powi(2)) + u16::from(x > 300.0)
+        })
+        .collect();
+    let (map, vars) = labelled(&labels, w, h, 3);
+    let rgb: Vec<[f32; 3]> = labels.iter().map(|&l| [l as f32 / 2.0; 3]).collect();
+    let face: Vec<FillModel> = (0..3)
+        .map(|f| FillModel::Flat([f as f32 / 2.0; 3]))
+        .collect();
+    let mut p = bare_problem(&map, &vars, &rgb, &face, None);
+    assert!(super::setup_within(&mut p, super::TABLE_BUDGET_FLOOR / 16));
 }
 
 /// The planar map of a label image, its unknowns (frame pinned), and the image.

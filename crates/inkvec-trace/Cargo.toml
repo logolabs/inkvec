@@ -16,6 +16,9 @@ inkvec-core = { workspace = true }
 inkvec-fit = { workspace = true }
 rayon = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "tiff"] }
+# ICC profiles to sRGB at intake (`load/icc.rs`). Already in the tree as the `image` crate's
+# own colour engine, with the same features, so it adds no crate and no licence.
+moxcms = "0.8"
 
 [features]
 default = []

@@ -490,18 +490,37 @@ impl RunLabels {
         self.fresh = false;
     }
 
-    /// Write every pixel's face id -- its component id, with ids from `u16::MAX - 1` on
-    /// folded into face 0 as `regions::split_components` does -- into `out` (`w × h`,
-    /// row-major), and return each face's label, indexed by face id.
+    /// Write every pixel's face id -- its component id -- into `out` (`w × h`, row-major),
+    /// and return each face's label, indexed by face id.
     ///
     /// This is the one per-pixel write of the clean-up: each run is one `fill` of its
     /// component id. It gives the same ids as the per-pixel `u32` component image the code
     /// used to fill and then narrow, since every pixel of a run gets its run's id either
     /// way. Every pixel is written (the runs tile each row), so `out` needs no clearing and
     /// may still hold the palette's labels. An empty image writes nothing and has no faces.
+    ///
+    /// # More components than face ids
+    ///
+    /// Ids are `u16` and Fast keeps them below `u16::MAX - 1`. Past that this used to fold
+    /// every further component into face 0 (as `regions::split_components` did), which
+    /// left face 0 holding pixels of many inks under one colour. Now the label image is
+    /// written out, its smallest components are merged into their neighbours until the rest
+    /// fit (`regions::cap_components`, the region-merging rule and its proof are there), and
+    /// the runs are read again before the ids are written. An image with fewer components
+    /// takes exactly the old path.
     pub(crate) fn write_faces(&mut self, out: &mut [u16]) -> Vec<usize> {
         self.components();
         let cap = (u16::MAX - 1) as usize;
+        if self.size.len() > cap {
+            self.write_labels(out);
+            let absorbed = crate::regions::cap_components(out, self.w, self.h, cap);
+            crate::diag!(
+                "split",
+                "fast components over the face-id limit: {absorbed} smallest merged into neighbours to fit {cap}"
+            );
+            *self = RunLabels::new(out, self.w, self.h);
+            self.components();
+        }
         let w = self.w;
         for y in 0..self.h {
             for r in self.row_start[y]..self.row_start[y + 1] {
@@ -518,13 +537,19 @@ impl RunLabels {
     #[cfg(test)]
     pub(super) fn to_labels(&self) -> Vec<u16> {
         let mut out = vec![0u16; self.w * self.h];
+        self.write_labels(&mut out);
+        out
+    }
+
+    /// Write the label image the runs describe into `out` (`w × h`, row-major): each run is
+    /// one `fill` of its label, and the runs tile every row, so every pixel is written.
+    fn write_labels(&self, out: &mut [u16]) {
         for y in 0..self.h {
             for r in self.row_start[y]..self.row_start[y + 1] {
                 let Run { x0, x1, label } = self.runs[r];
                 out[y * self.w + x0 as usize..y * self.w + x1 as usize].fill(label);
             }
         }
-        out
     }
 
     /// The layout invariants (tests only): `h + 1` row starts, each row's runs tiling

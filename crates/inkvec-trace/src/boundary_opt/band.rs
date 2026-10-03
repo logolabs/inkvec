@@ -848,12 +848,84 @@ fn row_seed(prob: &Problem, y: usize) -> Option<u16> {
     best.map(|b| b.1)
 }
 
+/// The floor of the band-table budget, in bytes (see [`table_budget`]).
+pub(super) const TABLE_BUDGET_FLOOR: u64 = 256 << 20;
+
+/// Bytes per image pixel the band-table budget grows by above its floor (see
+/// [`table_budget`]).
+pub(super) const TABLE_BUDGET_PER_PIXEL: u64 = 32;
+
+/// Most bytes the band's per-run tables may take for a `w x h` image:
+/// `max(TABLE_BUDGET_FLOOR, TABLE_BUDGET_PER_PIXEL · w · h)`, i.e. 256 MiB up to about
+/// 2900 x 2900 px and 32 bytes a pixel beyond. The tables are the colours (and opacities)
+/// of every face of a run at every pixel of it, and the run's prefix sums (see
+/// [`table_bytes`]).
+///
+/// # Why a budget
+///
+/// The tables grow as `Σ_runs len · nf²` for a run of `len` pixels holding pieces of `nf`
+/// faces, and `nf` is bounded by nothing but the image. On art whose boundaries are dense
+/// enough that the band covers whole rows, a run is a whole row and `nf` is every face the
+/// row crosses: 1-px vertical stripes at 512 px made `nf = 513` and asked for a 265 GB
+/// prefix table (the process aborted on a 34.7 GB allocation after 19.7 GB of working set),
+/// a 512 px pixel checkerboard took 398 MB (`nf = 259`), a baked grey-and-white
+/// "transparency" checkerboard behind an icon 116–711 MB, a 3.5x nearest-neighbour
+/// upscale of a wordmark 497 MB (all measured 2026-10-02 by the r2-inputs research,
+/// `bandstats.py`). Halftone screens, hatched or engraved logos and dense labyrinth
+/// textures build bands of the same shape.
+///
+/// What the solve buys on such an image is small (on the stripes it reports no gain at
+/// all: every pixel is a mixture of two faces whatever the boundary does), so when the
+/// tables would exceed the budget the solve is skipped and the map keeps the boundary
+/// `planar::refine_subpixel` measured, exactly as when the solve finds nothing to gain.
+///
+/// # Why these numbers
+///
+/// It never binds on the art the tracer is judged on. Measured 2026-10-02 (`INKVEC_DIAG`,
+/// `band ... table_bytes`, the largest solve per image): 2.8 MB on the 246-icon screen set
+/// at 128 px, 5.7 MB on the same icons at 512 px, 2.0 MB on `held_a`, 5.9 MB on the
+/// 51-image 512 px set, 22.2 MB on the seven opaque 2048 px inputs (the masthead, 14 bytes a
+/// pixel) and 16.3 MB on the three transparent ones. On the 772 non-pathological images of
+/// the r2-inputs stress set (clean, compressed, resampled, palette, glow, shadow, 4k and
+/// 8k, tiny) the largest was 106 MB, a 4x bicubic upscale of a dense wordmark at 512 x 313
+/// px, 2.4 times under the floor. The pathological class above starts at 116 MB and runs to
+/// hundreds of gigabytes. The floor is 256 MiB, 11 times the gate's largest table, about
+/// what a 2048 px trace already holds; the per-pixel term lets an uncapped 8192 px trace
+/// (`--max-dim 0`) keep twice the masthead's 14 bytes a pixel.
+///
+/// Not from the literature: a resource bound on our own data structure. See also: the
+/// narrow-band level set of D. Adalsteinsson, J. A. Sethian (1995), *A fast level set method
+/// for propagating interfaces*, J. Comput. Phys. 118,
+/// <https://doi.org/10.1006/jcph.1995.1098>, whose band is what grows here; the paper bounds
+/// the band's width, not the number of regions meeting inside it.
+pub(super) fn table_budget(w: usize, h: usize) -> u64 {
+    TABLE_BUDGET_PER_PIXEL
+        .saturating_mul((w as u64).saturating_mul(h as u64))
+        .max(TABLE_BUDGET_FLOOR)
+}
+
+/// The bytes [`fill_colours`] and [`fill_prefix`] allocate for one run of `len` pixels and
+/// `nf` faces: `24·nf·len` for the colours (three f64 per face per pixel), `8·nf·len` more for
+/// the opacities when alpha is a channel (`alpha`), and `8·(len + 1)·kk` for the prefix sums,
+/// with `kk = nf(nf + 1)/2 + nf + 1` sums per pixel (one per unordered face pair, one per
+/// face against the target, one for the target against itself) and one leading row of
+/// zeros. In u64, so the count itself cannot overflow on any image (`nf`, `len` < 2³²).
+pub(super) fn table_bytes(len: u64, nf: u64, alpha: bool) -> u64 {
+    let colour = (24 + if alpha { 8 } else { 0 }) * nf * len;
+    let kk = nf * (nf + 1) / 2 + nf + 1;
+    colour.saturating_add((len + 1).saturating_mul(kk).saturating_mul(8))
+}
+
 /// Build the band around the boundary at the start. `bucket_band` must have run on the
 /// start. Finds the runs, each run's seed (by carrying along its row from the far left),
 /// the faces that can appear in it (every face of a piece within reach of it), and those
 /// faces' colours; weights start at 1 except for runs whose seed is not one clean face,
 /// which are left out.
-pub(super) fn build(prob: &Problem) -> Band {
+///
+/// `None` when the band's tables would take more than `budget` bytes ([`table_bytes`],
+/// summed over the runs as they are found, so building stops at the run that crosses the
+/// budget and nothing of the size of the tables is ever allocated).
+pub(super) fn build(prob: &Problem, budget: u64) -> Option<Band> {
     let (w, h) = (prob.w, prob.h);
     let mut band = Band {
         runs: Vec::new(),
@@ -869,6 +941,9 @@ pub(super) fn build(prob: &Problem) -> Band {
     };
     let mut valid: Vec<bool> = Vec::new();
     let mut cstart = 0u32;
+    let alpha = prob.alpha.is_some();
+    // Running total of `table_bytes` over the runs found so far, and the largest run.
+    let (mut bytes, mut max_nf) = (0u64, 0usize);
     for y in 0..h {
         let seed0 = row_seed(prob, y);
         let mut carry: Vec<(u16, f64)> = vec![(seed0.unwrap_or(OUT), 1.0)];
@@ -902,6 +977,22 @@ pub(super) fn build(prob: &Problem) -> Band {
             band.faces.push(seed);
             run_faces(prob, y, x0, x1, &mut band.faces, fstart);
             let nf = band.faces.len() - fstart;
+            max_nf = max_nf.max(nf);
+            bytes = bytes.saturating_add(table_bytes((x1 - x0 + 1) as u64, nf as u64, alpha));
+            if bytes > budget {
+                crate::diag::saturated(
+                    "bopt",
+                    "band_table_bytes",
+                    bytes as f64,
+                    budget as f64,
+                    crate::diag::Stop::Cap,
+                );
+                crate::diag!(
+                    "bopt",
+                    "band over budget at row={y} of {h} max_nf={max_nf}: solve skipped"
+                );
+                return None;
+            }
             // Carry across the run for the next seed.
             if x0 != 0 {
                 carry = vec![(seed, 1.0)];
@@ -927,7 +1018,13 @@ pub(super) fn build(prob: &Problem) -> Band {
     }
     band.weight = valid.iter().map(|&v| if v { 1.0 } else { 0.0 }).collect();
     band.alpha = vec![false; band.total_cells];
-    band
+    crate::diag!(
+        "bopt",
+        "band runs={} cells={} max_nf={max_nf} table_bytes={bytes}",
+        band.runs.len(),
+        band.total_cells
+    );
+    Some(band)
 }
 
 /// Every pixel within `REACH` of a pixel holding a piece at the start (a piece left of the
@@ -1208,10 +1305,21 @@ fn alpha_channels(prob: &Problem, band: &mut Band, index: &[u32]) {
 /// Build the band at the start positions and fix everything about it for the solve: the
 /// weights (junction pixels left out), where alpha is a channel, and the normalisation
 /// (`band_norm`: the starting residual of the pixels the boundary cuts, and of the rest).
-pub(super) fn setup(prob: &mut Problem) {
+///
+/// Returns false, with nothing set up, when the band's tables would exceed
+/// [`table_budget`]; the caller then skips the solve.
+pub(super) fn setup(prob: &mut Problem) -> bool {
+    let budget = table_budget(prob.w, prob.h);
+    setup_within(prob, budget)
+}
+
+/// [`setup`] with the table budget given, so the tests can make it bind on a small map.
+pub(super) fn setup_within(prob: &mut Problem, budget: u64) -> bool {
     let start = prob.vars.start.clone();
     prob.bucket_band(&start);
-    let mut band = build(prob);
+    let Some(mut band) = build(prob, budget) else {
+        return false;
+    };
     fill_colours(prob, &mut band);
     let w = prob.w;
     let mut index = vec![u32::MAX; prob.w * prob.h];
@@ -1238,6 +1346,7 @@ pub(super) fn setup(prob: &mut Problem) {
     prob.bscratch = bs;
     prob.band_norm = (cut, rest);
     prob.band = Some(band);
+    true
 }
 
 /// The problem's independent parts, at the start (`bucket_band` must have run there).

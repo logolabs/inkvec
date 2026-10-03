@@ -8,13 +8,20 @@
 //! # The passes, for a file
 //!
 //! 1. **Read** the file into memory once ([`load_image_capped`]); the header and the pixels
-//!    are both decoded from those bytes, with the format named by the file's extension, as
-//!    `image::open` names it.
+//!    are both decoded from those bytes, in the format the bytes themselves announce (their
+//!    signature), and only when the bytes announce none, the one the file's extension names
+//!    ([`sniff`]).
 //! 2. **Decode** with the `image` crate into whatever layout the file holds (8-bit RGB for
-//!    most opaque PNGs and every JPEG, 8-bit RGBA for most transparent ones).
-//! 3. **Cap**: above `max_dim` on the longer side, box-average the 8-bit buffer down
+//!    most opaque PNGs and every JPEG, 8-bit RGBA for most transparent ones), with a larger
+//!    allocation allowance when the cap will apply ([`capped_decode_limits`]).
+//! 3. **Colour-manage**: an embedded ICC profile that is not sRGB converts the 8-bit image
+//!    to sRGB (`icc::to_srgb`), so a Display P3 or Adobe RGB file is traced in the colours
+//!    a viewer shows.
+//! 4. **Turn** the image upright by its EXIF orientation ([`decode_upright`]), so a phone
+//!    photo is traced as it is shown; the dimensions reported from here on are upright.
+//! 5. **Cap**: above `max_dim` on the longer side, box-average the 8-bit buffer down
 //!    (`coverage::box_downsample_rgba8`) before any float exists.
-//! 4. **Widen** to floats ([`from_dynamic`]): one table lookup per byte ([`UNIT`]), straight
+//! 6. **Widen** to floats ([`from_dynamic`]): one table lookup per byte ([`UNIT`]), straight
 //!    from the decoder's own buffer for 8-bit RGB and RGBA, in parallel chunks on a large
 //!    image. The result is the same float the old per-byte division gave.
 //!
@@ -25,6 +32,8 @@
 use std::path::Path;
 
 use crate::coverage::{self, Rgba};
+
+mod icc;
 
 /// Error loading or decoding a raster image.
 #[derive(Debug)]
@@ -86,16 +95,180 @@ pub fn lossy_container(bytes: &[u8]) -> Option<bool> {
     }
 }
 
-/// Load a raster image from a file path into straight RGBA floats.
+/// Load a raster image from a file path into straight RGBA floats: [`load_image_capped`]
+/// without a cap.
 pub fn load_image(path: &Path) -> Result<Rgba, TraceError> {
-    let img = image::open(path).map_err(|e| TraceError::Decode(e.to_string()))?;
-    Ok(from_dynamic(img))
+    load_image_capped(path, 0).map(|(img, _)| img)
 }
 
-/// Decode a raster image from in-memory bytes into straight RGBA floats.
+/// Decode a raster image from in-memory bytes into straight RGBA floats:
+/// [`decode_image_capped`] without a cap.
 pub fn decode_image(bytes: &[u8]) -> Result<Rgba, TraceError> {
-    let img = image::load_from_memory(bytes).map_err(|e| TraceError::Decode(e.to_string()))?;
-    Ok(from_dynamic(img))
+    decode_image_capped(bytes, 0).map(|(img, _)| img)
+}
+
+/// The format to decode `bytes` as: the one their signature announces, when it is a
+/// format the tracer reads; otherwise the one `path`'s extension names; `None` when
+/// neither says.
+///
+/// The extension used to decide alone (as `image::open` decides), so a JPEG saved as
+/// `.png` failed with "Invalid PNG signature" and a PNG saved as `.jpg` with "Illegal start
+/// bytes" (intake fuzz, 2026-10-02) -- a mislabelled file is common (a browser's "save
+/// image as", a rename) and the bytes say plainly what it is. A signature names a format
+/// unambiguously (`\x89PNG`, `\xFF\xD8\xFF`, `GIF8`, `RIFF....WEBP`, `BM`, `II*\0` /
+/// `MM\0*`), so where it is present it wins; where it is absent (a truncated or damaged
+/// file) the extension still chooses the decoder, whose error then describes the damage.
+/// A file whose extension is right decodes with the same decoder as before, so its pixels
+/// are unchanged.
+///
+/// Method from: magic-number content sniffing, the rule of the WHATWG MIME Sniffing
+/// Standard (§ 6.1, "Matching an image type pattern",
+/// <https://mimesniff.spec.whatwg.org/#matching-an-image-type-pattern>), by which
+/// browsers decide an image's type from its first bytes, not its name; the patterns are
+/// the `image` crate's `guess_format`.
+fn sniff(bytes: &[u8], path: Option<&Path>) -> Option<image::ImageFormat> {
+    use image::ImageFormat as F;
+    let read = |f: &F| matches!(f, F::Png | F::Jpeg | F::Gif | F::WebP | F::Bmp | F::Tiff);
+    image::guess_format(bytes).ok().filter(read).or_else(|| {
+        path.and_then(Path::extension)
+            .and_then(image::ImageFormat::from_extension)
+    })
+}
+
+/// Decode `bytes` as `format`, capped at `max_dim` (see [`load_image_capped`]), with the
+/// arrival dimensions.
+fn decode_as(
+    bytes: &[u8],
+    format: image::ImageFormat,
+    max_dim: usize,
+) -> Result<(Rgba, (u32, u32)), TraceError> {
+    let err = |e: image::ImageError| TraceError::Decode(e.to_string());
+    let reader = || {
+        let mut r = image::ImageReader::new(std::io::Cursor::new(bytes));
+        r.set_format(format);
+        r
+    };
+    let (w, h) = reader().into_dimensions().map_err(err)?;
+    has_pixels(w, h)?;
+    let limits = if target_dims(w, h, max_dim).is_some() {
+        capped_decode_limits()
+    } else {
+        image::Limits::default()
+    };
+    let img = decode_upright(reader(), limits).map_err(err)?;
+    // Upright: a quarter turn swaps the sides, and the arrival size is the upright one.
+    let (w, h) = (img.width(), img.height());
+    Ok((cap_decoded(img, w, h, max_dim), (w, h)))
+}
+
+/// `ImageReader::decode` under `limits`, then shown the way the file says it is to be
+/// shown: its embedded ICC profile converted to sRGB (`icc::to_srgb`, which leaves an image
+/// without a profile, or with an sRGB one, untouched) and its EXIF orientation applied.
+///
+/// A camera stores the sensor's rows as they came and records how the picture is to be
+/// turned in the EXIF Orientation tag (274, values 1-8: identity, the two mirrors, the
+/// three rotations and the two transposes); every viewer applies it, so the image a person
+/// sees and drops on the tracer is the turned one. `decode` does not apply it, and six
+/// JPEGs stored with Orientation = 6 traced sideways (dE00 2.9 to 17.6 against 0.03 to 0.42
+/// for the same images without the tag, r2-inputs `formats_test.py`, 2026-10-02).
+///
+/// The decode is `ImageReader::decode` taken apart only to read the orientation in between:
+/// the same decoder, built with the same limits, whose output buffer is reserved from them
+/// before the pixels are read, exactly as `decode` does. The orientation comes from the
+/// decoder (`ImageDecoder::orientation`: the EXIF of a JPEG, WebP or PNG `eXIf` chunk, the
+/// TIFF tag), and an unreadable one counts as no orientation rather than failing a decode
+/// whose pixels are fine. An image without the tag, or with value 1, is returned as decoded.
+///
+/// Method from: the Orientation tag (274) of the Exif standard (CIPA DC-008), as the
+/// `image` crate implements it: `image::metadata::Orientation` (docs.rs, image 0.25.10:
+/// "Rotate90: rotate by 90 degrees clockwise", and so on for the eight values) and
+/// `DynamicImage::apply_orientation`. Applied to the decoded 8-bit image, before the cap, so
+/// the cap and everything after it see the image as it is shown.
+fn decode_upright(
+    reader: image::ImageReader<std::io::Cursor<&[u8]>>,
+    limits: image::Limits,
+) -> image::ImageResult<image::DynamicImage> {
+    use image::ImageDecoder;
+    let mut reader = reader;
+    reader.limits(limits.clone());
+    let mut decoder = reader.into_decoder()?;
+    let orientation = decoder
+        .orientation()
+        .unwrap_or(image::metadata::Orientation::NoTransforms);
+    // An unreadable profile is no profile: the pixels are still read as sRGB.
+    let icc = decoder.icc_profile().ok().flatten();
+    let mut limits = limits;
+    limits.reserve(decoder.total_bytes())?;
+    decoder.set_limits(limits)?;
+    let mut img = image::DynamicImage::from_decoder(decoder)?;
+    if let Some(icc) = icc {
+        img = icc::to_srgb(img, &icc);
+    }
+    img.apply_orientation(orientation);
+    Ok(img)
+}
+
+/// The `image` crate's default allocation limit, which every uncapped decode keeps.
+const DEFAULT_MAX_ALLOC: u64 = 512 << 20;
+
+/// What a decode that is going to be capped may allocate beyond the default allowance
+/// (see [`capped_decode_limits`]): 768 MiB on a 64-bit target, for 1.25 GiB in all, which
+/// holds a 16384 x 16384 RGBA image at 8 bits (1 GiB) or 12000 x 12000 at 16 (1.15 GB) and
+/// still refuses a 20000 x 20000 RGBA claim (1.6 GB, the decompression bomb of the intake
+/// fuzz); nothing on a 32-bit target (WebAssembly), whose whole address space is 4 GiB.
+#[cfg(target_pointer_width = "64")]
+const CAPPED_EXTRA_ALLOC: u64 = 768 << 20;
+/// See the 64-bit definition.
+#[cfg(not(target_pointer_width = "64"))]
+const CAPPED_EXTRA_ALLOC: u64 = 0;
+
+/// Decoder limits for an image whose longer side is over the `--max-dim` cap.
+///
+/// The `image` crate refuses any decode whose output buffer would pass 512 MiB, which is
+/// its guard against decompression bombs (a few kilobytes of deflate claiming 20000 x 20000
+/// pixels), and that refused legitimate files too: a 12000 x 12000 RGBA PNG is 576 MB
+/// decoded, so it failed with "Memory limit exceeded" (intake fuzz, 2026-10-02), although
+/// the trace would be capped at 2048 px and the full-size buffer lives only until the box
+/// filter has read it. A 16-bit 8192 x 8192 RGBA PNG (exactly 512 MiB) failed the same way.
+///
+/// So when the cap applies, the decode may allocate [`CAPPED_EXTRA_ALLOC`] more than the
+/// default: `max_alloc = 512 MiB + 768 MiB`, from which `ImageReader::decode` reserves the
+/// full-size output buffer first and hands the rest to the decoder's working buffers. A
+/// claim beyond that (the 20000 x 20000 bomb is 1.6 GB, a 100000 x 100000 header 40 GB) is
+/// still refused before anything is allocated, and an image within the cap, or any decode
+/// with `max_dim = 0`, keeps the default limits exactly. Raising a limit changes no pixel of
+/// an image that decoded before.
+///
+/// Not from the literature: a resource limit. See also: the `image` crate's `Limits`
+/// documentation (docs.rs, `image::Limits::max_alloc`), whose default this keeps for every
+/// decode that is not capped; and, for the alternative of never holding the full-size
+/// buffer, the demand-driven, strip-at-a-time evaluation of J. Cupitt, K. Martinez (1996),
+/// *VIPS: an image processing system for large images*, Proc. SPIE 2663,
+/// <https://doi.org/10.1117/12.233043> -- not taken, because the `image` crate decodes
+/// whole frames and a streaming PNG path would duplicate its colour conversions.
+fn capped_decode_limits() -> image::Limits {
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(DEFAULT_MAX_ALLOC + CAPPED_EXTRA_ALLOC);
+    limits
+}
+
+/// Refuse a raster with no pixels: `Ok` when both sides are at least one pixel.
+///
+/// A decoder can hand back an image with a zero side without an error: a GIF whose
+/// logical-screen width is 0 decodes to a 0 x 30000 image (found by the 2026-10-02 intake
+/// fuzz, 3 of 1,200 mutated files, all GIFs), while PNG refuses the same header itself. Every
+/// stage after the intake divides by a side or indexes row 0, and the first to do so was the
+/// unblock test (`w / min(64, w)`, a division by zero, in Quality and Fast alike). An image
+/// with no pixels has nothing to trace, so it is refused here, once, as a decode error.
+///
+/// Not from the literature: an input check.
+fn has_pixels(w: u32, h: u32) -> Result<(), TraceError> {
+    if w == 0 || h == 0 {
+        return Err(TraceError::Decode(format!(
+            "the image has no pixels ({w} x {h})"
+        )));
+    }
+    Ok(())
 }
 
 /// Below this many pixels (256 × 256) the byte-to-float conversion runs on the calling
@@ -219,7 +392,8 @@ fn target_dims(w: u32, h: u32, max_dim: usize) -> Option<(u32, u32)> {
 /// Load a raster from a file path into straight RGBA floats, capping the longer side at
 /// `max_dim` pixels (0 = no cap) before the pixels are read into floats, and returning the
 /// file's original dimensions alongside so a caller can present the result at the size that
-/// arrived.
+/// arrived. Both are upright: an image whose EXIF orientation turns it a quarter is
+/// returned turned, with its sides swapped (`decode_upright`).
 ///
 /// The size is decided from the file's header first, so the cap is known before the decode
 /// allocates. The full-resolution 8-bit buffer may still be decoded once, but the cap is an
@@ -237,12 +411,10 @@ pub fn load_image_capped(path: &Path, max_dim: usize) -> Result<(Rgba, (u32, u32
 /// `load_image_capped` used to open the file twice -- once for the header, once to decode
 /// through `image::open` -- and the command line opened it a third time for the first bytes
 /// `--lossy auto` inspects. Reading it once and decoding from memory gives the same pixels:
-/// the decoders are deterministic functions of the bytes, and the reader here is set up as
-/// `image::open` sets up its own, with the format taken from the *file extension* (not
-/// guessed from the content, which `decode_image_capped` does), default limits, and no
-/// decoding hooks registered anywhere in this workspace. A path whose extension names no
-/// format (or has none) is handed to `image::open` itself, so even its error message is the
-/// one it always was.
+/// the decoders are deterministic functions of the bytes, the reader here is set up with
+/// default limits, and no decoding hooks are registered anywhere in this workspace. The
+/// format is the one the bytes announce, else the extension's ([`sniff`]); a file that
+/// names neither is handed to `image::open` itself, for its own error message.
 ///
 /// Not from the literature: plumbing.
 fn load_file_bytes_capped(
@@ -250,27 +422,14 @@ fn load_file_bytes_capped(
     bytes: &[u8],
     max_dim: usize,
 ) -> Result<(Rgba, (u32, u32)), TraceError> {
-    let err = |e: image::ImageError| TraceError::Decode(e.to_string());
-    let Some(format) = path
-        .extension()
-        .and_then(image::ImageFormat::from_extension)
-    else {
-        // `image::open`'s own path: an unknown or missing extension, and its own error.
-        let (w, h) = image::ImageReader::open(path)
-            .map_err(|e| TraceError::Decode(e.to_string()))?
-            .into_dimensions()
-            .map_err(err)?;
-        let img = image::open(path).map_err(err)?;
-        return Ok((cap_decoded(img, w, h, max_dim), (w, h)));
-    };
-    let reader = || {
-        let mut r = image::ImageReader::new(std::io::Cursor::new(bytes));
-        r.set_format(format);
-        r
-    };
-    let (w, h) = reader().into_dimensions().map_err(err)?;
-    let img = reader().decode().map_err(err)?;
-    Ok((cap_decoded(img, w, h, max_dim), (w, h)))
+    match sniff(bytes, Some(path)) {
+        Some(format) => decode_as(bytes, format, max_dim),
+        // Neither the content nor the extension names a format: `image::open`'s error.
+        None => Err(TraceError::Decode(image::open(path).err().map_or_else(
+            || "unrecognised image format".into(),
+            |e| e.to_string(),
+        ))),
+    }
 }
 
 /// A decoded `w × h` image as straight RGBA floats, box-averaged to the `max_dim` cap when
@@ -287,17 +446,45 @@ fn cap_decoded(img: image::DynamicImage, w: u32, h: u32, max_dim: usize) -> Rgba
     }
 }
 
+/// The size an encoded image is shown at -- its header's width and height, swapped when its
+/// EXIF orientation turns it a quarter -- read from the header without decoding the pixels.
+///
+/// For a caller that reports a file's size before it traces it (a viewer listing the file,
+/// a cache keyed by size): the arrival dimensions [`decode_image_capped`] returns are
+/// upright, so a size read from the raw header would disagree with them on a turned photo.
+/// The format is chosen as the decode chooses it (`sniff`); an image with a zero side is
+/// refused as the decode refuses it.
+pub fn upright_dimensions(bytes: &[u8]) -> Result<(u32, u32), TraceError> {
+    use image::metadata::Orientation as O;
+    use image::ImageDecoder;
+    let err = |e: image::ImageError| TraceError::Decode(e.to_string());
+    let Some(format) = sniff(bytes, None) else {
+        return decode_image_capped(bytes, 0).map(|(_, d)| d);
+    };
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes));
+    reader.set_format(format);
+    let mut decoder = reader.into_decoder().map_err(err)?;
+    let (w, h) = decoder.dimensions();
+    has_pixels(w, h)?;
+    Ok(match decoder.orientation().unwrap_or(O::NoTransforms) {
+        O::Rotate90 | O::Rotate270 | O::Rotate90FlipH | O::Rotate270FlipH => (h, w),
+        _ => (w, h),
+    })
+}
+
 /// Decode in-memory bytes into straight RGBA floats, capping the longer side at `max_dim`
 /// pixels (0 = no cap) before the pixels are read into floats, and returning the original
 /// dimensions alongside. See [`load_image_capped`].
 pub fn decode_image_capped(bytes: &[u8], max_dim: usize) -> Result<(Rgba, (u32, u32)), TraceError> {
-    let (w, h) = image::ImageReader::new(std::io::Cursor::new(bytes))
-        .with_guessed_format()
-        .map_err(|e| TraceError::Decode(e.to_string()))?
-        .into_dimensions()
-        .map_err(|e| TraceError::Decode(e.to_string()))?;
-    let img = image::load_from_memory(bytes).map_err(|e| TraceError::Decode(e.to_string()))?;
-    Ok((cap_decoded(img, w, h, max_dim), (w, h)))
+    match sniff(bytes, None) {
+        Some(format) => decode_as(bytes, format, max_dim),
+        // No signature the tracer reads: the library's own error for such bytes.
+        None => Err(TraceError::Decode(
+            image::load_from_memory(bytes)
+                .err()
+                .map_or_else(|| "unrecognised image format".into(), |e| e.to_string()),
+        )),
+    }
 }
 
 /// Raw straight RGBA8 pixels (row-major, tightly packed, `w * h * 4` bytes) into straight
@@ -474,8 +661,10 @@ mod intake_equivalence_tests {
     }
 
     /// The one-read loader against the old two-open loader, on real files of several
-    /// containers, capped and uncapped, and on files whose extension lies about or omits
-    /// the format (same pixels, or the same error text).
+    /// containers, capped and uncapped (same pixels, or the same error text); and on files
+    /// whose extension lies about or omits the format, which the old loader refused and the
+    /// content-sniffing one decodes as what they are, pixel for pixel the correctly named
+    /// file.
     #[test]
     fn one_read_equals_image_open() {
         let dir = std::env::temp_dir().join(format!("inkvec-load-once-{}", std::process::id()));
@@ -494,12 +683,28 @@ mod intake_equivalence_tests {
             img.save(&p).unwrap();
             files.push(p);
         }
-        // A PNG named as a JPEG, and one with no extension at all.
-        for name in ["f.jpg", "g"] {
+        // A PNG named as a JPEG, one with no extension at all, and a JPEG named as a PNG:
+        // each must read exactly as the file it is a copy of.
+        let mut lying = Vec::new();
+        for (name, real) in [("f.jpg", "a.png"), ("g", "a.png"), ("h.png", "d.jpg")] {
             let p = dir.join(name);
-            std::fs::copy(dir.join("a.png"), &p).unwrap();
-            files.push(p);
+            std::fs::copy(dir.join(real), &p).unwrap();
+            lying.push((p, dir.join(real)));
         }
+        for (p, real) in &lying {
+            for max_dim in [0usize, 64, 2048] {
+                let (a, da) = load_image_capped(p, max_dim).unwrap();
+                let (b, db) = load_image_capped(real, max_dim).unwrap();
+                assert_eq!((da, a.width, a.height), (db, b.width, b.height), "{p:?}");
+                assert_eq!(bits(&a.data), bits(&b.data), "{p:?} at {max_dim}");
+                let (c, _) = decode_image_capped(&std::fs::read(p).unwrap(), max_dim).unwrap();
+                assert_eq!(bits(&a.data), bits(&c.data), "{p:?}: file and bytes agree");
+            }
+        }
+        // A file that is no image, under a name that promises one, keeps its decoder's error.
+        let text = dir.join("text.png");
+        std::fs::write(&text, b"this is not an image\n").unwrap();
+        files.push(text);
         files.push(dir.join("missing.png"));
         for p in &files {
             for max_dim in [0usize, 64, 2048] {
@@ -640,6 +845,163 @@ mod decode_cap_tests {
         );
         assert_eq!(capped.data.len(), capped.width * capped.height * 4);
         assert!(capped.width < full.width);
+    }
+
+    /// CRC-32 (IEEE), for writing PNG chunks by hand.
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = 0xFFFF_FFFFu32;
+        for &b in bytes {
+            crc ^= u32::from(b);
+            for _ in 0..8 {
+                crc = (crc >> 1) ^ (0xEDB8_8320 & (crc & 1).wrapping_neg());
+            }
+        }
+        !crc
+    }
+
+    /// `png` (an encoded PNG) with an `eXIf` chunk holding the Orientation tag set to
+    /// `orientation`, inserted after `IHDR`. The chunk is a bare big-endian TIFF structure:
+    /// header, one IFD with one SHORT entry (tag 274), no next IFD.
+    fn with_orientation(png: &[u8], orientation: u16) -> Vec<u8> {
+        let mut tiff = b"MM\0\x2a\0\0\0\x08".to_vec();
+        tiff.extend_from_slice(&1u16.to_be_bytes());
+        tiff.extend_from_slice(&274u16.to_be_bytes());
+        tiff.extend_from_slice(&3u16.to_be_bytes());
+        tiff.extend_from_slice(&1u32.to_be_bytes());
+        tiff.extend_from_slice(&orientation.to_be_bytes());
+        tiff.extend_from_slice(&[0, 0]);
+        tiff.extend_from_slice(&0u32.to_be_bytes());
+        let mut chunk = (tiff.len() as u32).to_be_bytes().to_vec();
+        let mut body = b"eXIf".to_vec();
+        body.extend_from_slice(&tiff);
+        chunk.extend_from_slice(&body);
+        chunk.extend_from_slice(&crc32(&body).to_be_bytes());
+        // Signature (8) + IHDR (4 + 4 + 13 + 4).
+        let at = 8 + 25;
+        [&png[..at], &chunk[..], &png[at..]].concat()
+    }
+
+    /// A 3 x 2 image of six distinct opaque colours stored with each EXIF orientation comes
+    /// back turned as a viewer shows it -- a quarter turn swaps the sides, also in the
+    /// arrival dimensions -- and without the tag (or with value 1) exactly as before.
+    #[test]
+    fn the_exif_orientation_is_applied() {
+        let (w, h) = (3u32, 2u32);
+        let img = image::RgbaImage::from_fn(w, h, |x, y| {
+            image::Rgba([
+                (40 * x + 100 * y) as u8,
+                (10 + 70 * y) as u8,
+                (200 - 50 * x) as u8,
+                255,
+            ])
+        });
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(img.clone())
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let png = png.into_inner();
+        let px = |r: &Rgba, x: u32, y: u32| -> [u32; 4] {
+            let i = ((y as usize) * r.width + x as usize) * 4;
+            std::array::from_fn(|c| (r.data[i + c] * 255.0).round() as u32)
+        };
+        let src = |x: u32, y: u32| -> [u32; 4] { img.get_pixel(x, y).0.map(u32::from) };
+        let plain = decode_image_capped(&png, 0).unwrap();
+        for o in 1..=8u16 {
+            let tagged = with_orientation(&png, o);
+            let (got, dims) = decode_image_capped(&tagged, 0).unwrap();
+            let quarter = o >= 5;
+            let (gw, gh) = if quarter { (h, w) } else { (w, h) };
+            assert_eq!(dims, (gw, gh), "orientation {o}");
+            assert_eq!(
+                upright_dimensions(&tagged).unwrap(),
+                dims,
+                "orientation {o}"
+            );
+            assert_eq!(
+                (got.width, got.height),
+                (gw as usize, gh as usize),
+                "orientation {o}"
+            );
+            for y in 0..gh {
+                for x in 0..gw {
+                    // Where each displayed pixel comes from in the stored image (Exif values:
+                    // 2 mirror, 3 half turn, 4 flip, 5 transpose, 6 quarter clockwise,
+                    // 7 transverse, 8 quarter anticlockwise).
+                    let (sx, sy) = match o {
+                        1 => (x, y),
+                        2 => (w - 1 - x, y),
+                        3 => (w - 1 - x, h - 1 - y),
+                        4 => (x, h - 1 - y),
+                        5 => (y, x),
+                        6 => (y, h - 1 - x),
+                        7 => (w - 1 - y, h - 1 - x),
+                        _ => (w - 1 - y, x),
+                    };
+                    assert_eq!(px(&got, x, y), src(sx, sy), "orientation {o} at ({x}, {y})");
+                }
+            }
+            if o == 1 {
+                assert_eq!(bits(&got.data), bits(&plain.0.data), "value 1 is no change");
+            }
+        }
+    }
+
+    fn bits(v: &[f32]) -> Vec<u32> {
+        v.iter().map(|f| f.to_bits()).collect()
+    }
+
+    /// The capped allowance is the library's default plus the extra, so the default this
+    /// file assumes must be the library's; and an uncapped decode keeps the default.
+    #[test]
+    fn the_capped_limit_extends_the_library_default() {
+        assert_eq!(image::Limits::default().max_alloc, Some(DEFAULT_MAX_ALLOC));
+        assert_eq!(
+            capped_decode_limits().max_alloc,
+            Some(DEFAULT_MAX_ALLOC + CAPPED_EXTRA_ALLOC)
+        );
+        // 12000 x 12000 RGBA fits the capped allowance (on a 64-bit target); 20000 x 20000
+        // does not.
+        #[cfg(target_pointer_width = "64")]
+        const {
+            assert!(12_000u64 * 12_000 * 4 <= DEFAULT_MAX_ALLOC + CAPPED_EXTRA_ALLOC)
+        };
+        const { assert!(20_000u64 * 20_000 * 4 > DEFAULT_MAX_ALLOC + CAPPED_EXTRA_ALLOC) };
+    }
+
+    /// The fuzz case `m1_00557_s0.gif`, made small: a GIF whose logical screen is 0 pixels
+    /// wide decodes without an error in the `image` crate, and must be refused at intake by
+    /// every entry point rather than reach the tracer with no pixels.
+    #[test]
+    fn a_gif_with_a_zero_wide_screen_is_refused() {
+        let img = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            5,
+            7,
+            image::Rgba([10, 200, 30, 255]),
+        ));
+        let mut gif = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut gif, image::ImageFormat::Gif).unwrap();
+        let mut gif = gif.into_inner();
+        // The logical screen descriptor follows the 6-byte signature: width, then height,
+        // as little-endian u16.
+        gif[6..8].copy_from_slice(&0u16.to_le_bytes());
+        for result in [
+            decode_image_capped(&gif, 0).map(|_| ()),
+            decode_image_capped(&gif, 2048).map(|_| ()),
+            decode_image(&gif).map(|_| ()),
+        ] {
+            let e = result.expect_err("an image with no pixels is refused");
+            assert!(e.to_string().contains("no pixels"), "{e}");
+        }
+        let path =
+            std::env::temp_dir().join(format!("inkvec-zero-wide-{}.gif", std::process::id()));
+        std::fs::write(&path, &gif).unwrap();
+        let capped = load_image_capped(&path, 2048).map(|_| ());
+        let plain = load_image(&path).map(|_| ());
+        std::fs::remove_file(&path).ok();
+        for result in [capped, plain] {
+            let e = result.expect_err("an image with no pixels is refused");
+            assert!(e.to_string().contains("no pixels"), "{e}");
+        }
     }
 
     #[test]

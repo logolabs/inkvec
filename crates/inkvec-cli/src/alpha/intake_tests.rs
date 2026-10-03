@@ -288,3 +288,17 @@ fn the_gcd_filter_finds_what_the_full_search_found() {
     // And the factors really are recovered.
     assert_eq!(pixel_grid(&upscale(&art(160, 128, 1, 0), 4)), Some(4));
 }
+
+/// An image with a zero side is no upscale of anything. It used to divide by zero here
+/// (`w / min(64, w)`): the 0 x 30000 GIF of the 2026-10-02 intake fuzz, in both modes.
+#[test]
+fn a_zero_side_is_not_an_upscale() {
+    for (w, h) in [(0usize, 30_000usize), (30_000, 0), (0, 0)] {
+        let img = Rgba {
+            width: w,
+            height: h,
+            data: Vec::new(),
+        };
+        assert_eq!(pixel_grid(&img), None, "{w}x{h}");
+    }
+}

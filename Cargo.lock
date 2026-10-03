@@ -3932,6 +3932,7 @@ dependencies = [
  "image",
  "inkvec-core",
  "inkvec-fit",
+ "moxcms",
  "rayon",
 ]
 

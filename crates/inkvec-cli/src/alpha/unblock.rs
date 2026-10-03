@@ -68,6 +68,13 @@
 pub(crate) fn pixel_grid(img: &inkvec_trace::Rgba) -> Option<usize> {
     const MAX_FACTOR: usize = 32;
     let (w, h) = (img.width, img.height);
+    // An image with a zero side has no blocks, and `smallest.min(w)` below would be a
+    // division by zero: a GIF with a zero-wide logical screen reached here as 0 x 30000
+    // (intake fuzz, 2026-10-02). The decoder now refuses such files; this guard keeps the
+    // function total for any caller that builds an `Rgba` itself.
+    if w == 0 || h == 0 {
+        return None;
+    }
     // Below this there is nothing to gain and something to lose: a 2x undo of a small icon
     // leaves too few pixels for the boundary solve to work with.
     let smallest = 64;

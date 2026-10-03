@@ -101,7 +101,7 @@ pub use color::{Oklab, Palette};
 pub use coverage::{CoverageField, Rgba};
 pub use load::{
     decode_image, decode_image_capped, load_image, load_image_capped, lossy_container,
-    rgba8_capped, TraceError,
+    rgba8_capped, upright_dimensions, TraceError,
 };
 pub use planar::PlanarMap;
 pub use regions::{

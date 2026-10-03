@@ -58,6 +58,7 @@ mod pathdata;
 pub mod pipeline;
 mod post;
 mod primitive;
+mod ribbons;
 mod rings;
 mod seams;
 mod strokes;

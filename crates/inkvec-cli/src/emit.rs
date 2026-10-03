@@ -41,7 +41,7 @@
 //!   along the shared edge. `fill-rule="evenodd"` says the same thing in fewer marks, and
 //!   the parity rules in [`crate::rings`] are what make it correct.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use inkvec_core::Point;
 use inkvec_fit::{
@@ -95,6 +95,10 @@ pub(crate) struct ColorDoc<'a> {
     pub layers: Option<Layers<'a>>,
     /// The colour transparent pixels were composited onto before tracing, sRGB 0..1.
     pub matte: [f32; 3],
+    /// Research (`INKVEC_RIBBONS`): faces written as strokes instead of fills, face ->
+    /// finished element text ([`crate::ribbons`]). Empty unless the switch is on, and an
+    /// empty map changes nothing below.
+    pub ribbons: &'a BTreeMap<usize, String>,
     /// Width of the traced raster, px.
     pub w: usize,
     /// Height of the traced raster, px.
@@ -153,7 +157,14 @@ pub(crate) fn emit_color(doc: &ColorDoc, opts: &EmitOptions) -> String {
     // So a face draws its outline (`nest.outer`) and nothing else of its own.
     let drawn = &nest.outer;
 
-    let stack = stack_faces(doc, opts, &nest);
+    let mut stack = stack_faces(doc, opts, &nest);
+    // Faces written as strokes are not painted as fills: their children paint at the
+    // nearest painted ancestor's level, and the strokes go on top ([`write_ribbons`]).
+    for &f in doc.ribbons.keys() {
+        if let Some(d) = stack.dropped.get_mut(f) {
+            *d = true;
+        }
+    }
     debug_dump(doc, &nest, &stack);
 
     // Repeated shapes redrawn from one consensus, where their own evidence agrees; see
@@ -205,12 +216,14 @@ pub(crate) fn emit_color(doc: &ColorDoc, opts: &EmitOptions) -> String {
     };
     let mut painted = Vec::new();
     let mut body = writer.body(&roots, &seams::Overrides::new(), &mut painted);
+    write_ribbons(doc, &mut body, &mut painted);
 
     // Side-by-side faces: the lower reaches under the upper so no ground shows through
     // their shared edge (see `crate::seams`). The first pass settled the paint order; the
     // second writes the moved outlines, and is skipped when nothing moves.
     if let Some(moved) = seam_overrides(doc, &nest, &stack, &paint, &writer, &painted) {
         body = writer.body(&roots, &moved, &mut Vec::new());
+        write_ribbons(doc, &mut body, &mut Vec::new());
     }
 
     write_layers(doc, decimals, &mut body);
@@ -1162,6 +1175,7 @@ fn seam_overrides(
                 && !writer.harmonized_d.contains_key(&i)
                 && !writer.symbol_use.contains_key(&i)
                 && !writer.strokes.contains_key(&i)
+                && !doc.ribbons.contains_key(&i)
         })
         .collect();
     let upper_ok: Vec<bool> = (0..n)
@@ -1226,6 +1240,21 @@ fn seam_overrides(
         reach,
     );
     (!moved.is_empty()).then_some(moved)
+}
+
+/// Research (`INKVEC_RIBBONS`): the faces written as strokes, appended after every
+/// painted face in face order, each one paint rank above the last, so the underlap sees
+/// them as the upper face against every neighbour and those neighbours reach under them.
+///
+/// Painting them last is safe because a stroke covers its own face's area and nothing
+/// else (the stage accepts a face only when the strokes' outline matches the face's
+/// boundary), and faces of a planar map do not overlap.
+fn write_ribbons(doc: &ColorDoc, body: &mut String, painted: &mut Vec<(usize, usize)>) {
+    for (&f, el) in doc.ribbons {
+        body.push_str(el);
+        let rank = painted.last().map_or(0, |&(_, r)| r + 1);
+        painted.push((f, rank));
+    }
 }
 
 /// Stage 9: the recovered translucent layers, over everything, each as one compound path

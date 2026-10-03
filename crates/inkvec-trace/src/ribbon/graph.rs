@@ -138,6 +138,31 @@ pub(crate) struct Topology {
     pub(crate) dropped: usize,
 }
 
+/// A face's medial graph for topology: nodes with positions and adjacency, and its
+/// branches between nodes of degree other than 2. Built from a raster skeleton
+/// ([`skeleton`]); the passes below read only positions and degrees.
+pub(crate) struct Axis {
+    /// The graph; its `pix` are node indices `0..n` for a graph built from points, raster
+    /// pixel indices for a raster skeleton (unused below).
+    g: SkelGraph,
+    /// Each node's position, image px.
+    pts: Vec<Point>,
+    /// The branches, node to node ([`trace_branches`]).
+    branches: Vec<Branch>,
+}
+
+impl Axis {
+    /// Number of neighbours of node `k`.
+    fn degree(&self, k: usize) -> usize {
+        self.g.degree(k)
+    }
+
+    /// Number of nodes.
+    fn len(&self) -> usize {
+        self.pts.len()
+    }
+}
+
 /// One reliable centre sample.
 #[derive(Clone, Copy)]
 struct Sample {
@@ -154,7 +179,7 @@ struct Sample {
 
 /// A skeleton branch reduced to its reliable core.
 struct Core {
-    /// Skeleton node at the branch's start (a `SkelGraph::pix` index).
+    /// Axis node at the branch's start (an [`Axis`] node index).
     a: usize,
     /// Skeleton node at its end; equal to `a` for a cycle.
     b: usize,
@@ -174,34 +199,32 @@ struct Core {
 /// Cost: the thinning is O(iterations x mask area) with about `w/2` iterations; each
 /// skeleton pixel costs one nearest query and one ray walk in the boundary's grid.
 pub(crate) fn centrelines(b: &Boundary, mask: &FaceMask, w: f64, opts: TopoOptions) -> Topology {
-    let (g, branches) = skeleton(mask);
+    let axis = skeleton(mask);
     let mut topo = Topology {
         chains: Vec::new(),
         junctions: 0,
         caps: 0,
         dropped: 0,
     };
-    if g.pix.is_empty() {
+    if axis.len() == 0 {
         return topo;
     }
-    let samples: Vec<Option<Sample>> = g
-        .pix
-        .iter()
-        .map(|&p| cross_section(b, mask.point_of(p), w))
-        .collect();
-    let all = cores(&g, &branches, &samples, mask, w, opts.corner_sigma);
-    let (kept, mut dsu) = classify(&g, all, w, mask, opts.spur_len, &mut topo);
-    let (end_pt, end_sigma, link) = ends(b, mask, &g, &kept, &mut dsu, w, &mut topo);
+    let samples: Vec<Option<Sample>> = axis.pts.iter().map(|&p| cross_section(b, p, w)).collect();
+    let all = cores(&axis, &samples, mask, w, opts.corner_sigma);
+    let (kept, mut dsu) = classify(&axis, all, w, opts.spur_len, &mut topo);
+    let (end_pt, end_sigma, link) = ends(b, mask, &axis, &kept, &mut dsu, w, &mut topo);
     topo.chains = assemble(&kept, &end_pt, &end_sigma, &link);
     topo
 }
 
-/// The face mask thinned (Zhang-Suen) and split into branches between nodes.
-fn skeleton(mask: &FaceMask) -> (SkelGraph, Vec<Branch>) {
+/// The face mask thinned (Zhang-Suen) and split into branches between nodes, each
+/// skeleton pixel a node at its centre.
+fn skeleton(mask: &FaceMask) -> Axis {
     let skel = zhang_suen(&mask.on, mask.w, mask.h);
     let g = SkelGraph::build(&skel, mask.w, mask.h);
     let branches = trace_branches(&g);
-    (g, branches)
+    let pts = g.pix.iter().map(|&p| mask.point_of(p)).collect();
+    Axis { g, pts, branches }
 }
 
 /// The centre sample under skeleton point `s`, or `None` when the cross-section there is
@@ -247,23 +270,19 @@ fn cross_section(b: &Boundary, s: Point, w: f64) -> Option<Sample> {
 /// the skeleton's spacing) so pixel jitter in one sample does not swing it; a core of one
 /// sample takes the skeleton chain's own direction.
 fn cores(
-    g: &SkelGraph,
-    branches: &[Branch],
+    axis: &Axis,
     samples: &[Option<Sample>],
     mask: &FaceMask,
     w: f64,
     corner_sigma: f64,
 ) -> Vec<Core> {
-    branches
+    axis.branches
         .iter()
         .map(|br| {
             let s = core_samples(&br.chain, samples, mask, w, corner_sigma);
             let len: f64 = s.windows(2).map(|p| p[0].c.dist(p[1].c)).sum();
-            let chain_dir = unit(
-                mask.point_of(g.pix[br.chain[0]])
-                    - mask.point_of(g.pix[br.chain[br.chain.len() - 1]]),
-            )
-            .unwrap_or(Vec2 { x: 1.0, y: 0.0 });
+            let chain_dir = unit(axis.pts[br.chain[0]] - axis.pts[br.chain[br.chain.len() - 1]])
+                .unwrap_or(Vec2 { x: 1.0, y: 0.0 });
             let back_dir = Vec2 {
                 x: -chain_dir.x,
                 y: -chain_dir.y,
@@ -443,14 +462,13 @@ impl Dsu {
 /// stubs and folded what was left into one chain; a kept spur, should one have a core,
 /// costs five parameters and is judged with everything else by the chi-squared.
 fn classify(
-    g: &SkelGraph,
+    g: &Axis,
     all: Vec<Core>,
     w: f64,
-    mask: &FaceMask,
     spur_len: f64,
     topo: &mut Topology,
 ) -> (Vec<Core>, Dsu) {
-    let mut dsu = Dsu((0..g.pix.len()).collect());
+    let mut dsu = Dsu((0..g.len()).collect());
     let mut kept = Vec::new();
     for c in all {
         let (da, db) = (g.degree(c.a), g.degree(c.b));
@@ -468,7 +486,7 @@ fn classify(
             !((da == 1) != (db == 1) && c.len < spur_len)
         };
         if inkvec_core::env::flag("INKVEC_RIBBONS_BRANCHES") {
-            let (pa, pb) = (mask.point_of(g.pix[c.a]), mask.point_of(g.pix[c.b]));
+            let (pa, pb) = (g.pts[c.a], g.pts[c.b]);
             eprintln!(
                 "    branch ({:.0},{:.0}) deg {da} - ({:.0},{:.0}) deg {db} closed {} samples {} core {:.1} px: {}",
                 pa.x,
@@ -502,7 +520,7 @@ fn classify(
 fn ends(
     b: &Boundary,
     mask: &FaceMask,
-    g: &SkelGraph,
+    g: &Axis,
     kept: &[Core],
     dsu: &mut Dsu,
     w: f64,
@@ -540,7 +558,7 @@ fn ends(
             .iter()
             .map(|&p| (port_point(kept, p), port_dir(kept, p)))
             .collect();
-        let fallback = mask.point_of(g.pix[root]);
+        let fallback = g.pts[root];
         let j = meeting_point(&lines)
             .filter(|&j| mask.near(j) && lines.iter().all(|(p, _)| p.dist(j) <= 3.0 * w + 2.0))
             .unwrap_or(fallback);

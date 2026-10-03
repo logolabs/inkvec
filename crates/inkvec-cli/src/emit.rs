@@ -105,6 +105,14 @@ pub(crate) struct ColorDoc<'a> {
     pub h: usize,
 }
 
+impl<'a> ColorDoc<'a> {
+    /// The same document with `ribbons` as the faces written as strokes
+    /// ([`crate::ribbons`]).
+    pub(crate) fn with_ribbons(self, ribbons: &'a BTreeMap<usize, String>) -> ColorDoc<'a> {
+        ColorDoc { ribbons, ..self }
+    }
+}
+
 /// How the colour document is written: the output flags that change it.
 #[derive(Clone, Copy)]
 pub(crate) struct EmitOptions {

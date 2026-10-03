@@ -405,15 +405,6 @@ fn finish_color(
         let stats = editable::edit_all(&polys, &mut fitted, &prims);
         diag::stage(args.quiet, || stats.summary());
     }
-    let ribbons = ribbon_stage(
-        args,
-        cfg,
-        fast,
-        (&map, &order, &fitted, &prims),
-        &fills,
-        &alpha,
-        &traced_labels,
-    );
     let doc = ColorDoc {
         order: &order,
         fitted: &fitted,
@@ -427,10 +418,13 @@ fn finish_color(
         fades: &alpha.fades,
         layers: None,
         matte: alpha.matte,
-        ribbons: &ribbons.elements,
+        ribbons: &Default::default(),
         w,
         h,
     };
+    // Research (`INKVEC_RIBBONS`, off by default): stroke-drawn faces written as strokes.
+    let ribbons = crate::ribbons::stage(args, cfg, fast, &doc, &map, &traced_labels);
+    let doc = doc.with_ribbons(&ribbons.elements);
     // Monochrome: the ink faces as one black shape, from the same fitted edges. It replaces
     // the colour document, and with it the layer form, which only ever repaints colours.
     let (svg, mono_line) = if args.monochrome {
@@ -443,7 +437,7 @@ fn finish_color(
     sw.mark("emit");
     write_uncertainty(args, &svg, &map);
 
-    let mut report = report_lines(
+    let report = report_lines(
         args,
         fast,
         mono_line,
@@ -463,50 +457,7 @@ fn finish_color(
             measured,
         },
     );
-    if !ribbons.line.is_empty() {
-        report.push(ribbons.line);
-    }
     Ok((svg, report))
-}
-
-/// Research (`INKVEC_RIBBONS`): stroke-drawn faces written as strokes
-/// ([`crate::ribbons`]). Off by default, and then nothing is computed and the map stays
-/// empty. Quality mode and colour output only (fast mode and `--monochrome` never call it).
-/// `geo` is the planar map, the face rings, the fitted edges and their primitives.
-#[allow(clippy::type_complexity)]
-fn ribbon_stage(
-    args: &Args,
-    cfg: &FitConfig,
-    fast: bool,
-    geo: (
-        &planar::PlanarMap,
-        &[FaceRings],
-        &[FittedPath],
-        &[Option<PrimitiveFit>],
-    ),
-    fills: &[gradient::FillFit],
-    alpha: &Transparency,
-    labels: &[u16],
-) -> crate::ribbons::Ribbons {
-    if !crate::ribbons::on() || fast || args.monochrome {
-        return crate::ribbons::Ribbons::default();
-    }
-    let (map, order, fitted, prims) = geo;
-    let cfg_r = scaled(cfg, args.lambda_scale);
-    crate::ribbons::choose(&crate::ribbons::Inputs {
-        map,
-        order,
-        fitted,
-        prims,
-        fills,
-        clear: &alpha.clear,
-        opacity: &alpha.opacity,
-        labels,
-        w: map.width,
-        h: map.height,
-        cfg: &cfg_r,
-        decimals: crate::pathdata::emit_decimals(args.precision),
-    })
 }
 
 /// How many faces are filled with a gradient rather than a flat colour.

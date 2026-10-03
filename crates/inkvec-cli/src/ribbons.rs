@@ -63,6 +63,47 @@ pub(crate) fn on() -> bool {
     inkvec_core::env::flag("INKVEC_RIBBONS")
 }
 
+/// The stage as the colour pipeline calls it, on the colour document `doc` before its
+/// strokes are added (its rings, fits, primitives, fills and transparency), the planar map
+/// and the label map. Nothing (an empty map) unless the switch is on, the trace is Quality
+/// and the output is in colour (fast mode and `--monochrome` never run it). `cfg`'s lambda
+/// is scaled by `--lambda-scale` here, as the pipeline scales it for the repair. The report
+/// line goes to stderr (unless `--quiet`).
+pub(crate) fn stage(
+    args: &crate::args::Args,
+    cfg: &FitConfig,
+    fast: bool,
+    doc: &crate::emit::ColorDoc,
+    map: &planar::PlanarMap,
+    labels: &[u16],
+) -> Ribbons {
+    if !on() || fast || args.monochrome {
+        return Ribbons::default();
+    }
+    let cfg_r = FitConfig {
+        lambda: cfg.lambda * args.lambda_scale,
+        ..*cfg
+    };
+    let out = choose(&Inputs {
+        map,
+        order: doc.order,
+        fitted: doc.fitted,
+        prims: doc.prims,
+        fills: doc.fill_fits,
+        clear: doc.clear,
+        opacity: doc.opacity,
+        labels,
+        w: map.width,
+        h: map.height,
+        cfg: &cfg_r,
+        decimals: crate::pathdata::emit_decimals(args.precision),
+    });
+    if let Some(line) = &out.line {
+        crate::diag::stage(args.quiet, || line.clone());
+    }
+    out
+}
+
 /// Whether to print one line per candidate face to stderr (`INKVEC_RIBBONS_DEBUG=1`).
 fn debug() -> bool {
     inkvec_core::env::flag("INKVEC_RIBBONS_DEBUG")
@@ -102,8 +143,8 @@ pub(crate) struct Inputs<'a> {
 pub(crate) struct Ribbons {
     /// Face -> the stroke element(s) that replace it, in face order.
     pub(crate) elements: BTreeMap<usize, String>,
-    /// One report line.
-    pub(crate) line: String,
+    /// One report line (`None` when the stage did not run).
+    pub(crate) line: Option<String>,
 }
 
 /// One candidate's outcome, for the decision and the debug line.
@@ -180,10 +221,10 @@ pub(crate) fn choose(inp: &Inputs) -> Ribbons {
             saved += o.k_vanish - r.params();
         }
     }
-    out.line = format!(
+    out.line = Some(format!(
         "ribbons       {} of {n_tried} face(s) written as strokes, {saved:.0} parameter(s) saved",
         out.elements.len()
-    );
+    ));
     if inkvec_core::env::flag("INKVEC_TIMING") {
         eprintln!(
             "  [t] ribbons            {:.1} ms",

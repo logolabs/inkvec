@@ -21,7 +21,7 @@
 //!
 //! Method from: the SVG 1.1 specification, section 11.4 (stroke properties:
 //! `stroke-linejoin` miter, round and bevel, and `stroke-miterlimit`, default 4),
-//! https://www.w3.org/TR/SVG11/painting.html#StrokeProperties -- the geometry the renderer
+//! <https://www.w3.org/TR/SVG11/painting.html#StrokeProperties> -- the geometry the renderer
 //! paints, written as a distance-like gauge so the stroke solve can fit it.
 //! See also: Berio, Leymarie, Asente, Echevarria (2022), StrokeStyles, ACM TOG 41(3),
 //! doi:10.1145/3505246, which classifies glyph corners and junctions before choosing

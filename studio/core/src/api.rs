@@ -177,9 +177,10 @@ pub fn source_info(source: &trace::Source) -> Result<SourceInfo, String> {
 ///
 /// A file the webview can show as it is, and small enough, goes across as it is: decoding
 /// a JPEG only to encode it again as a larger PNG costs a noticeable moment on every open.
-/// Only PNG, JPEG, WebP, GIF and BMP qualify, and those other than PNG only when they carry
-/// no EXIF rotation, because the webview honours one and the tracer does not; shown
-/// rotated, the source would not line up with its own trace.
+/// Only PNG, JPEG, WebP, GIF and BMP qualify, and only when they carry no EXIF rotation.
+/// The tracer turns such a file upright; webviews turn a JPEG but not every engine reads
+/// a PNG's `eXIf` chunk, so the preview of a turned file is the tracer's own upright
+/// pixels, and the source always lines up with its trace.
 pub fn preview_of(source: &trace::Source) -> Result<String, String> {
     use lost::Container;
     const CAP: u32 = 2048;
@@ -193,7 +194,7 @@ pub fn preview_of(source: &trace::Source) -> Result<String, String> {
             Container::Tiff | Container::Unknown => None,
         };
         if let Some(mime) = mime {
-            if source.container == Container::Png || !is_reoriented(&source.bytes) {
+            if !is_reoriented(&source.bytes) {
                 return Ok(data_url(&source.bytes, mime));
             }
         }
@@ -942,8 +943,8 @@ mod tests {
         assert_eq!(url, data_url(&bytes, "image/jpeg"));
     }
 
-    /// The webview would turn a rotated JPEG upright and the tracer would not, so its
-    /// preview is the pixels as the tracer reads them.
+    /// The tracer turns a rotated JPEG upright, so its size is the upright one and its
+    /// preview is the pixels as the tracer reads them, not left to the webview.
     #[test]
     fn a_rotated_jpeg_is_previewed_as_the_tracer_reads_it() {
         let upright = jpeg(120, 80, Some(1));
@@ -953,10 +954,12 @@ mod tests {
         let source = trace::Source::open(rotated, None).unwrap();
         assert_eq!(
             (source.width, source.height),
-            (120, 80),
-            "stored size, not rotated"
+            (80, 120),
+            "the upright size, as the tracer decodes it"
         );
         let url = preview_of(&source).unwrap();
         assert!(url.starts_with("data:image/png;base64,"), "{}", &url[..30]);
+        let raster = source.raster(0).unwrap();
+        assert_eq!((raster.width, raster.height), (80, 120));
     }
 }

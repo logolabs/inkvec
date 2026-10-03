@@ -61,6 +61,7 @@
 //! The literature each pass stands on is cited in that pass's module.
 
 mod boundary;
+mod bvh;
 mod dist;
 mod graph;
 mod grid;

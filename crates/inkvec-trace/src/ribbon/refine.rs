@@ -58,10 +58,10 @@ use inkvec_fit::primitives::{PrimitiveFit, PrimitiveKind};
 use inkvec_fit::FittedPath;
 
 use super::boundary::Boundary;
+use super::bvh::PieceTree;
 use super::dist::{
     circle_grad, circular_arc_grad, cubic_eval, cubic_grad, dist_to, ellipse_arc_grad, line_grad,
 };
-use super::grid::SegGrid;
 use super::join::{miter_gauge, tangents, Join};
 use super::score::flatten;
 use super::skyline::Skyline;
@@ -550,10 +550,10 @@ struct Row {
 /// and the distance term to it ([`local_dist`]), or `None` beyond `reach`.
 fn nearest_rows(model: &Model, pts: &[Point], reach: f64) -> Vec<Option<Row>> {
     let (segs, tags) = pieces(model);
-    let grid = SegGrid::new(&segs, 2.0);
+    let tree = PieceTree::new(&segs);
     pts.iter()
         .map(|&p| {
-            let n = grid.nearest(p, reach)?;
+            let n = tree.nearest(p, reach)?;
             let (shape, seg, t0, t1) = tags[n.seg];
             let t = t0 + n.u * (t1 - t0);
             let d = if seg == usize::MAX {
@@ -1263,7 +1263,7 @@ mod tests {
             assert_eq!(out[0].path.segments.len(), if seg == 0 { 2 } else { 3 });
             let mut after = Vec::new();
             flatten(&out[0].path, 0.05, &mut after);
-            let g = SegGrid::new(&before, 1.0);
+            let g = crate::ribbon::grid::SegGrid::new(&before, 1.0);
             for &(p, _) in &after {
                 let d = g.nearest(p, 5.0).expect("near the original").d;
                 assert!(d < 1e-3, "split {seg} moved the curve by {d}");

@@ -1,9 +1,10 @@
 /**
  * What the browser build adds around the shared interface: files arriving by drag, drop or
- * paste (the desktop's webview reports dropped paths instead), and a plain word for phones.
+ * paste (the desktop's webview reports dropped paths instead), a one-line tip on phones,
+ * what the presentation page hands over, the loading screen, and the Hugging Face frame.
  */
 
-import { h } from "../dom";
+import { h, icon } from "../dom";
 import type { Store } from "../state";
 
 /**
@@ -66,33 +67,69 @@ export function pastedImages(take: (files: File[]) => void): void {
   });
 }
 
-/** Narrower than this, with a touch screen, the three-column interface does not fit. */
+/** Narrower than this, with a touch screen, is a phone (the interface's compact layout). */
 const PHONE_WIDTH = 760;
 
+/** Where a dismissed phone tip is remembered, for this tab's session only. */
+const PHONE_TIP_KEY = "inkvec-phone-tip-dismissed";
+
 /**
- * On a phone, say so rather than squeeze: the viewer, the rail and the palette need a
- * laptop's width. The note can be dismissed, and the app underneath works as it is.
+ * On a phone, one line at the foot of the screen: the app works here (it has a phone
+ * layout, one scrolling column upright and thin chrome on its side), and a larger screen
+ * shows the viewer, the controls and the palette side by side. It is a note, not a dialog:
+ * nothing waits for it, and its close button (32 px, over the 24 px of WCAG 2.2 SC 2.5.8)
+ * removes it for the rest of the session. It used to be a full-screen card saying the app
+ * did not fit a phone, which stopped being true when the phone layout arrived.
  */
 export function mountWebChrome(app: HTMLElement): void {
   const small = window.matchMedia(`(max-width: ${PHONE_WIDTH}px)`).matches;
   const touch = window.matchMedia("(pointer: coarse)").matches;
   if (!(small && touch)) return;
-  const note = h(
-    "div.phonenote",
-    { role: "dialog", "aria-label": "Best on a larger screen" },
+  try {
+    if (sessionStorage.getItem(PHONE_TIP_KEY)) return;
+  } catch {
+    // No session storage (blocked site data): the tip shows, and closes for this page only.
+  }
+  const tip = h(
+    "div.phonetip",
+    {
+      role: "note",
+      style: {
+        position: "fixed",
+        left: "0",
+        right: "0",
+        bottom: "0",
+        zIndex: "40",
+        display: "flex",
+        alignItems: "center",
+        gap: "8px",
+        padding: "6px 6px 6px 14px",
+        background: "var(--card)",
+        borderTop: "1px solid var(--rule)",
+        color: "var(--dim)",
+        fontSize: "13px",
+        lineHeight: "1.4",
+      },
+    },
+    h("span", { style: { flex: "1" } }, "Works on a phone; a larger screen shows the drawing, the controls and the palette side by side."),
     h(
-      "div.phonecard",
-      null,
-      h("span.serif", { style: { fontSize: "22px" } }, "Best on a larger screen"),
-      h(
-        "p",
-        null,
-        "Inkvec Studio Lite is a full editor: a viewer, a rail of controls and a palette side by side. On a phone they do not fit. Open this page on a laptop or desktop to use it; everything runs in your browser and nothing is uploaded.",
-      ),
-      h("button.btn", { onclick: () => note.remove() }, "Continue anyway"),
+      "button.btn.ghost.compact",
+      {
+        "aria-label": "Close this tip",
+        style: { minWidth: "32px", minHeight: "32px", justifyContent: "center" },
+        onclick: () => {
+          tip.remove();
+          try {
+            sessionStorage.setItem(PHONE_TIP_KEY, "1");
+          } catch {
+            // Not remembered: the next page load shows it once more.
+          }
+        },
+      },
+      icon("x", 14),
     ),
   );
-  app.append(note);
+  app.append(tip);
 }
 
 /** What the presentation page asked the Studio to open: a bundled sample, or a file. */
@@ -100,16 +137,27 @@ export type Launch = { sample: string } | { name: string; bytes: Uint8Array } | 
 
 /**
  * The presentation page (the Space's root) opens the Studio with `?sample=<file>` for one of
- * the bundled samples, or `?open=handoff` for a file dropped on it, which it left in this
- * origin's IndexedDB (`inkvec-handoff`) rather than sending anywhere. The file is taken
- * once and deleted, and the query string is cleared so a reload does not open it again.
+ * the bundled samples, and hands over a file dropped on it in one of two ways:
+ *
+ * - `?open=handoff`: the page shares this tab's storage (the Space's own address, or "open
+ *   here" inside Hugging Face's frame), so it left the file in this origin's IndexedDB
+ *   (`inkvec-handoff`). Taken once and deleted.
+ * - `#open=<base64url>&name=<name>`: the page is inside Hugging Face's frame and opened this
+ *   tab of its own. Neither storage (partitioned under huggingface.co) nor messages (this
+ *   page's COOP cuts the tab off from its opener) cross from that frame, so the bytes come in
+ *   the URL fragment, which is never sent to a server; see `handOff` in `web/index.html`.
+ *
+ * Either way the address is cleared at once, so a reload does not open the file again and
+ * the bytes do not stay in this tab's history entry.
  */
 export async function takeLaunch(): Promise<Launch> {
   const q = new URLSearchParams(window.location.search);
   const sample = q.get("sample");
   const handoff = q.get("open") === "handoff";
-  if (!sample && !handoff) return null;
+  const carried = carriedFile(window.location.hash);
+  if (!sample && !handoff && !carried) return null;
   window.history.replaceState(null, "", window.location.pathname);
+  if (carried) return carried;
   if (sample) return { sample };
   return new Promise((resolve) => {
     let req: IDBOpenDBRequest;
@@ -132,6 +180,27 @@ export async function takeLaunch(): Promise<Launch> {
       get.onerror = () => resolve(null);
     };
   });
+}
+
+/**
+ * The file a URL fragment carries, `#open=<base64url bytes>&name=<URI-encoded name>`, or null
+ * when there is none or it does not decode. base64url is RFC 4648 section 5 (`-` and `_` for
+ * `+` and `/`, no padding), which needs no escaping in a fragment. Exported for the tests.
+ */
+export function carriedFile(hash: string): { name: string; bytes: Uint8Array } | null {
+  if (!hash.startsWith("#")) return null;
+  const f = new URLSearchParams(hash.slice(1));
+  const data = f.get("open");
+  if (!data) return null;
+  try {
+    const b64 = data.replace(/-/g, "+").replace(/_/g, "/");
+    const bin = atob(b64 + "=".repeat((4 - (b64.length & 3)) & 3));
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes.length ? { name: f.get("name") || "image", bytes } : null;
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------- the loading screen ---
@@ -187,9 +256,12 @@ export function bootEngineBytes(got: number, total: number): void {
   bootStep("Downloading the engine", 0.04 + 0.8 * share, total > 0 ? `${mb(got)} of ${mb(total)} MB` : `${mb(got)} MB`);
 }
 
-/** The bytes are in; the module compiles and its thread pool starts. */
+/**
+ * The bytes are in; the module compiles. Its thread pool starts after the app is shown
+ * (`startPool` in `engine.worker.ts`), so this screen does not wait for it.
+ */
 export function bootEngineStarting(): void {
-  bootStep("Starting the engine", 0.88, "Compiling, and starting a thread per core");
+  bootStep("Starting the engine", 0.88, "Compiling");
 }
 
 /** The app's own start-up steps (`startup_progress`, 0 to 1), the last tenth of the bar. */

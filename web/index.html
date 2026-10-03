@@ -17,6 +17,11 @@
   --ink:#faf8f5;--dim:rgba(250,248,245,.75);--faint:rgba(250,248,245,.55);--muted:rgba(250,248,245,.4);
   --rule:rgba(250,248,245,.08);--rule2:#2a2724;
   --accent:#c9754a;--accent-hover:#d4896a;--accent-ink:#1a1816;--accent-soft:rgba(201,117,74,.12);--accent-subtle:rgba(201,117,74,.08);
+  /* Copper as text on a copper-tinted ground (a pressed toggle, the chosen gallery case):
+     --accent-soft over --card composites to #352922, where --accent is 4.1:1 and fails WCAG 2.2
+     SC 1.4.3 (4.5:1 below 24 px; r2-product's axe run). The lighter copper is 5.1:1 there and
+     5.9:1 on --card. */
+  --accent-text:#d4896a;
   --gold:#b8976c;
   --good:#34d399;--goodbg:rgba(52,211,153,.15);--bad:#f87171;--check:#2a2724;
   --anchor:#f87171;--handle:#b8976c;--wire:#faf8f5;
@@ -28,13 +33,16 @@
 *{box-sizing:border-box}
 body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 var(--font-body);-webkit-font-smoothing:antialiased}
 a{color:var(--accent);text-decoration:none}a:hover{color:var(--accent-hover);text-decoration:underline}
+/* A link inside a sentence is underlined, not told apart by its colour alone (WCAG 2.2 SC
+   1.4.1); navigation, buttons and tiles keep their own shapes. */
+.note a,.lede a,.cta-note a,.caption a,.how a,footer a{text-decoration:underline;text-underline-offset:2px}
 button,.btn{font:600 13.5px/1 var(--font-body);color:var(--ink);background:var(--card);border:1px solid var(--rule);border-radius:var(--radius-sm);padding:10px 14px;cursor:pointer;transition:border-color .15s,background .15s,transform .1s,box-shadow .15s;display:inline-flex;align-items:center;gap:8px;text-decoration:none}
 button:hover,.btn:hover{border-color:rgba(250,248,245,.18);text-decoration:none;color:var(--ink)}button:active,.btn:active{transform:translateY(1px) scale(.98)}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);padding:15px 28px;font-size:16px;border-radius:var(--radius-full)}
 .btn.primary:hover{background:var(--accent-hover);border-color:var(--accent-hover);box-shadow:var(--glow);transform:translateY(-1px);color:var(--accent-ink)}
 .btn.big{padding:15px 24px;font-size:15px;border-radius:var(--radius-full)}
 .btn svg{width:18px;height:18px}
-button[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+button[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-text)}
 .mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
 code{font-family:var(--font-mono);font-size:.92em}
 h1,h2,h3{font-family:var(--font-display)}
@@ -70,6 +78,11 @@ h1{font-size:clamp(32px,4.6vw,52px);line-height:1.06;letter-spacing:-.025em;font
 .samples a{display:inline-flex;align-items:center;gap:7px;padding:5px 10px 5px 5px;border:1px solid var(--rule);border-radius:999px;color:var(--dim);font-size:12.5px;font-weight:600;background:var(--stage)}
 .samples a:hover{border-color:var(--accent);color:var(--ink);text-decoration:none}
 .samples img{width:22px;height:22px;border-radius:50%;background:#fff;object-fit:contain}
+.drop.holding{cursor:default}
+.drop.holding > :not(.handoff):not(input){display:none}
+.handoff{display:flex;flex-direction:column;align-items:center;gap:8px}
+.handoff .acts{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:6px}
+.handoff .btn.primary{padding:12px 22px;font-size:15px}
 /* what's new */
 .newgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px;margin-top:18px}
 .new{background:var(--card);border:1px solid var(--rule);border-radius:var(--radius);padding:16px 18px;box-shadow:var(--shadow)}
@@ -108,7 +121,7 @@ h1{font-size:clamp(32px,4.6vw,52px);line-height:1.06;letter-spacing:-.025em;font
 .tools .legend i{display:inline-block;width:10px;height:10px;border-radius:50%;vertical-align:-1px;margin-right:5px}
 .seg{display:inline-flex;background:var(--card);border:1px solid var(--rule);border-radius:var(--radius-full);padding:3px;gap:2px;flex-wrap:wrap}
 .seg button{border:0;background:transparent;border-radius:var(--radius-full);padding:7px 10px;font-size:12.5px;color:var(--dim)}
-.seg button[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent)}
+.seg button[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent-text)}
 /* gallery */
 .gal{display:grid;grid-template-columns:300px 1fr;gap:16px;margin-top:18px;align-items:start}
 @media (max-width:820px){.gal{grid-template-columns:1fr}}
@@ -123,7 +136,7 @@ h1{font-size:clamp(32px,4.6vw,52px);line-height:1.06;letter-spacing:-.025em;font
 .case .th img{width:100%;height:100%;object-fit:contain}
 .case .nm{width:100%;font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dim)}
 .case[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft)}
-.case[aria-pressed="true"] .nm{color:var(--accent)}
+.case[aria-pressed="true"] .nm{color:var(--accent-text)}
 .caption{margin:8px 0 0;font-size:13px;color:var(--dim)}
 .caption b{color:var(--ink)}
 @media (max-width:820px){
@@ -248,36 +261,115 @@ const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls)
 const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
 // ---------------------------------------------------------------- the way into the Studio
-// Inside the Space's frame the page may not be cross-origin isolated, and then the Studio
-// runs on one core without the denoiser; its own tab always is. Say so where it matters.
+// Hugging Face shows this page inside an iframe on huggingface.co, which sends no isolation
+// headers, and a frame is cross-origin isolated only if every page above it is (web.dev,
+// "Making your website cross-origin isolated using COOP and COEP"; MDN, crossOriginIsolated).
+// A Studio opened inside the frame therefore runs on one core and without the denoiser,
+// while the same address in a tab of its own is isolated, since the static host sends the
+// headers itself: 2048 px Quality traces 1.7-3.5x faster there (r2-product, measured). So
+// inside the frame every way into the Studio opens it in a tab of its own. At the static
+// host's own address the page is isolated and the Studio opens in this tab, as before.
 const framed = (() => { try { return window.self !== window.top; } catch { return true; } })() ||
   [...(location.ancestorOrigins || [])].some(o => /(^|\.)huggingface\.co(:\d+)?$/.test(o.replace(/^[a-z]+:\/\//, '')));
+const ownTab = framed && !self.crossOriginIsolated;
 document.documentElement.classList.toggle('framed', framed);
-if (framed) {
-  $("ctanote").innerHTML = `Best on a laptop or desktop screen. For the whole window and every core, <a href="studio/index.html" target="_blank" rel="noopener">open the Studio in its own tab</a>.`;
+if (ownTab) {
+  $("ctanote").innerHTML = `Best on a laptop or desktop screen. The Studio opens in a tab of its own, where it runs on every core and can use the denoiser.`;
+  for (const a of document.querySelectorAll('a[href^="studio/index.html"]')) a.target = "_blank";
 }
-// A dropped or chosen file is handed to the Studio through this browser's own storage (the
-// Studio is served from this origin, under studio/) and never leaves the machine.
+
+// A dropped, chosen or pasted file never leaves the machine. At the static host's own
+// address it is handed over through this origin's IndexedDB and the Studio opens in this
+// tab. Inside Hugging Face's frame neither storage nor messages reach the Studio's own tab:
+// the frame's storage is partitioned under huggingface.co (the tab cannot read it), and the
+// Studio's isolation (COOP same-origin) puts its tab in another browsing context group, which
+// cuts it off from this frame. Measured in a framed stand-in: the window.open handle reads
+// closed once the Studio loads, a postMessage to it is dropped, the tab's window.opener is
+// null, and BroadcastChannel is partitioned too. What does cross is the address, so the file
+// rides in the URL fragment, which is never sent to any server (RFC 3986, section 3.5).
+// Not from the literature: the fragment as a hand-off between a partitioned frame and an
+// isolated tab; see also: WHATWG HTML, "Cross-origin opener policies" (browsing context
+// group switches), and Chromium's storage partitioning (third-party storage keyed by the
+// top-level site).
 const HANDOFF_DB = "inkvec-handoff";
-function handOff(file){
+// The largest file that fits: base64 makes 1.5 MB into 2,000,000 characters, inside
+// Chromium's 2 MiB limit on a URL (url::kMaxURLChars); a longer one opens as about:blank.
+const HANDOFF_MAX = 1_500_000;
+function handOffHere(name, bytes){
   const req = indexedDB.open(HANDOFF_DB, 1);
   req.onupgradeneeded = () => req.result.createObjectStore("files");
-  req.onsuccess = async () => {
-    const bytes = new Uint8Array(await file.arrayBuffer());
+  req.onsuccess = () => {
     const tx = req.result.transaction("files", "readwrite");
-    tx.objectStore("files").put({ name: file.name || "pasted image", bytes }, "open");
+    tx.objectStore("files").put({ name, bytes }, "open");
     tx.oncomplete = () => { location.href = "studio/index.html?open=handoff"; };
   };
   req.onerror = () => { location.href = "studio/index.html"; };
 }
-$("file").addEventListener("change", e => { const f = e.target.files[0]; if (f) handOff(f); });
+// base64url (RFC 4648, section 5), in slices so a large file never builds one huge argument list.
+function base64url(bytes){
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function handOffUrl(name, bytes){
+  return bytes.length <= HANDOFF_MAX ? `studio/index.html#open=${base64url(bytes)}&name=${encodeURIComponent(name)}` : null;
+}
 const drop = $("drop");
+function release(){
+  drop.classList.remove("holding");
+  $("handoff")?.remove();
+}
+// Inside the frame: the file goes to a tab of its own. A browser lets a page open a tab only
+// just after a click or a key press (transient user activation); choosing a file or pressing
+// Ctrl+V leaves one, a file dropped from another application does not. Without one, the
+// drop zone holds the file and offers the tab as a button, whose click is the activation.
+function holdForTab(name, bytes, url){
+  release();
+  const mb = (bytes.length / 1e6).toFixed(1);
+  const card = el("div", "handoff");
+  card.id = "handoff";
+  card.setAttribute("role", "group");
+  card.setAttribute("aria-label", "Open the file in the Studio");
+  card.append(el("div", "big", url ? `${esc(name)} is ready to open` : `${esc(name)} is ${mb} MB`));
+  card.append(el("div", "small", url
+    ? "It opens in a tab of its own, where the Studio runs on every core and can use the denoiser."
+    : `From inside Hugging Face's page, a file can reach a tab of its own only inside the page address, which holds up to ${(HANDOFF_MAX / 1e6).toFixed(1)} MB. Open the Studio in its own tab and drop the file there, or open it here, on one core.`));
+  const acts = el("div", "acts");
+  const tab = el("button", "btn primary", url ? "Open in its own tab" : "Open the Studio in its own tab");
+  tab.type = "button";
+  tab.dataset.act = "tab";
+  tab.addEventListener("click", e => { e.preventDefault(); e.stopPropagation(); window.open(url || "studio/index.html", "_blank"); release(); });
+  const here = el("button", "btn", "Open here, on one core");
+  here.type = "button";
+  here.dataset.act = "here";
+  here.addEventListener("click", e => { e.preventDefault(); e.stopPropagation(); handOffHere(name, bytes); });
+  const other = el("button", "btn", "Another file");
+  other.type = "button";
+  other.dataset.act = "cancel";
+  other.addEventListener("click", e => { e.preventDefault(); e.stopPropagation(); release(); });
+  acts.append(tab, here, other);
+  card.append(acts);
+  drop.classList.add("holding");
+  drop.append(card);
+  tab.focus();
+}
+async function handOff(file){
+  const name = file.name || "pasted image";
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (!ownTab) return handOffHere(name, bytes);
+  const url = handOffUrl(name, bytes);
+  if (url && navigator.userActivation?.isActive && window.open(url, "_blank")) return;
+  holdForTab(name, bytes, url);
+}
+$("file").addEventListener("change", e => { const f = e.target.files[0]; e.target.value = ""; if (f) handOff(f); });
+drop.addEventListener("click", e => { if (drop.classList.contains("holding")) e.preventDefault(); });
 drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
 drop.addEventListener("dragleave", () => drop.classList.remove("over"));
 drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); const f = e.dataTransfer.files[0]; if (f) handOff(f); });
 document.addEventListener("paste", e => { const f = [...(e.clipboardData?.files || [])][0]; if (f) handOff(f); });
 for (const [file, label] of [["flat-logo.png", "Flat logo"], ["crest-filigree.png", "Crest"], ["signature-bw.png", "Signature"]]){
   const a = el("a"); a.href = `studio/index.html?sample=${file}`; a.innerHTML = `<img src="studio/samples/${file}" alt="">${label}`;
+  if (ownTab) a.target = "_blank";
   a.addEventListener("click", e => e.stopPropagation());
   $("samples").appendChild(a);
 }

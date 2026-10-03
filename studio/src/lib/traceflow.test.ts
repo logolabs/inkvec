@@ -31,15 +31,15 @@ async function flush(): Promise<void> {
  */
 function harness() {
   const log: string[] = [];
-  const starts: { tier: Tier; groups: string[]; reply: ReturnType<typeof deferred<number>> }[] = [];
+  const starts: { tier: Tier; fast: boolean; groups: string[]; reply: ReturnType<typeof deferred<number>> }[] = [];
   const shown = { generation: 0, tracing: false };
   const world = { source: true, groups: [] as string[] };
   const host: TraceHost<P, string, string[]> = {
     hasSource: () => world.source,
     groups: () => world.groups,
-    start: (tier) => {
+    start: (tier, fast) => {
       const reply = deferred<number>();
-      starts.push({ tier, groups: world.groups, reply });
+      starts.push({ tier, fast, groups: world.groups, reply });
       return reply.promise;
     },
     settleMs: () => 800,
@@ -274,6 +274,127 @@ describe("TraceLoop: the settle timer and Cancel", () => {
     loop.onDone(1, "draft drawing");
     loop.onDone(2, "full drawing");
     expect(log).toEqual(["began 1 draft", "began 2 final", "finished 2 full drawing"]);
+  });
+});
+
+describe("TraceLoop: a Fast draft first for an opened image", () => {
+  /** `open`'s promise, with whether it has settled yet. */
+  function opened(loop: TraceLoop<P, string, string[]>, fastFirst: boolean) {
+    const state = { settled: false };
+    const promise = loop.open(fastFirst).then(() => {
+      state.settled = true;
+    });
+    return { state, promise };
+  }
+
+  it("draws the Fast draft, then asks for the full trace the moment the draft lands", async () => {
+    const { loop, log, starts } = harness();
+    const o = opened(loop, true);
+    expect(starts.map((s) => [s.tier, s.fast])).toEqual([["draft", true]]);
+    starts[0].reply.resolve(1);
+    await flush();
+    expect(loop.waitingForDraft).toBe(true);
+    expect(o.state.settled).toBe(false);
+    loop.onDone(1, "fast drawing");
+    expect(starts.map((s) => [s.tier, s.fast])).toEqual([["draft", true], ["final", false]]);
+    starts[1].reply.resolve(2);
+    await o.promise;
+    expect(log).toEqual(["began 1 draft", "finished 1 fast drawing", "began 2 final"]);
+    expect(loop.waitingForDraft).toBe(false);
+    loop.onDone(2, "full drawing");
+    expect(log[log.length - 1]).toBe("finished 2 full drawing");
+  });
+
+  it("is the full trace alone without a draft", async () => {
+    const { loop, log, starts } = harness();
+    const o = opened(loop, false);
+    expect(starts.map((s) => [s.tier, s.fast])).toEqual([["final", false]]);
+    starts[0].reply.resolve(1);
+    await o.promise;
+    expect(log).toEqual(["began 1 final"]);
+  });
+
+  it("asks for the full trace whatever the draft found, a failure or a flat image included", async () => {
+    const { loop, log, starts } = harness();
+    const o = opened(loop, true);
+    starts[0].reply.resolve(1);
+    await flush();
+    loop.onDone(1, "failed");
+    expect(starts.map((s) => s.tier)).toEqual(["draft", "final"]);
+    starts[1].reply.resolve(2);
+    await o.promise;
+    expect(log).toEqual(["began 1 draft", "finished 1 failed", "began 2 final"]);
+  });
+
+  it("takes a draft that lands before its start reply, and still follows it with the full trace", async () => {
+    const { loop, log, starts } = harness();
+    const o = opened(loop, true);
+    loop.onDone(1, "cached fast drawing");
+    starts[0].reply.resolve(1);
+    await flush();
+    expect(starts.map((s) => s.tier)).toEqual(["draft", "final"]);
+    starts[1].reply.resolve(2);
+    await o.promise;
+    expect(log).toEqual(["began 1 draft", "finished 1 cached fast drawing", "began 2 final"]);
+  });
+
+  it("does not follow a cancelled draft with the full trace", async () => {
+    const { loop, log, starts } = harness();
+    const o = opened(loop, true);
+    starts[0].reply.resolve(1);
+    await flush();
+    loop.cancel();
+    await o.promise;
+    loop.onDone(1, "late fast drawing");
+    expect(starts).toHaveLength(1);
+    expect(log).toEqual(["began 1 draft", "cancel"]);
+  });
+
+  it("gives way to a control moved during the draft: its own draft and full trace, no other", async () => {
+    vi.useFakeTimers();
+    const { loop, log, starts } = harness();
+    const o = opened(loop, true);
+    starts[0].reply.resolve(1);
+    await flush();
+    loop.controlChanged();
+    await o.promise;
+    starts[1].reply.resolve(2);
+    await flush();
+    loop.onDone(1, "fast drawing, too late");
+    vi.advanceTimersByTime(800);
+    expect(starts.map((s) => [s.tier, s.fast])).toEqual([["draft", true], ["draft", false], ["final", false]]);
+    expect(log).toEqual(["began 1 draft", "began 2 draft"]);
+  });
+
+  it("gives way to a full trace asked for meanwhile, and to another image", async () => {
+    const { loop, starts } = harness();
+    const a = opened(loop, true);
+    starts[0].reply.resolve(1);
+    await flush();
+    void loop.trace("final");
+    await a.promise;
+    starts[1].reply.resolve(2);
+    await flush();
+    loop.onDone(1, "fast drawing, too late");
+    expect(starts.map((s) => s.tier)).toEqual(["draft", "final"]);
+
+    const b = opened(loop, true);
+    starts[2].reply.resolve(3);
+    await flush();
+    loop.detach();
+    await b.promise;
+    loop.onDone(3, "the old image's draft");
+    expect(starts).toHaveLength(3);
+  });
+
+  it("releases its caller when the draft cannot start", async () => {
+    const { loop, log, starts } = harness();
+    const o = opened(loop, true);
+    starts[0].reply.reject(new Error("engine gone"));
+    await o.promise;
+    expect(log).toEqual(["failed engine gone"]);
+    expect(loop.waitingForDraft).toBe(false);
+    expect(starts).toHaveLength(1);
   });
 });
 

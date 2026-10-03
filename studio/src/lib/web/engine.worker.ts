@@ -6,7 +6,8 @@
  * page (`engine.ts` decides the order: palette and export ahead of traces, traces ahead of
  * wizard previews, stale ones dropped) and answers it synchronously, streaming what a trace
  * is doing as it goes (`progress` messages; see the core's `trace::live`). The pipeline's own parallelism is rayon's, on a pool of nested workers
- * where the page is cross-origin isolated.
+ * where the page is cross-origin isolated; the pool starts in the background once the
+ * engine is ready, and only work that can reach rayon waits for it (`startPool`).
  *
  * Two builds sit side by side, as on the old Space: `pkg-threads/` (atomics, shared memory,
  * a rayon pool) where `crossOriginIsolated` is true, `pkg/` (one core) where it is not. Same
@@ -51,7 +52,7 @@ type Init = {
   /** The page's current trace generation, shared so a retired trace skips its measurement. */
   generations: SharedArrayBuffer | null;
   denoiserPort: MessagePort | null;
-  /** Each module's size in bytes (`pkg`, `pkg-threads`), known at build time; see `withProgress`. */
+  /** Each module's size in bytes (`pkg`, `pkg-threads`), known at build time; see `countBytes`. */
   wasmBytes: Record<string, number>;
 };
 
@@ -69,39 +70,94 @@ let generations: Int32Array | null = null;
 let denoiserPort: MessagePort | null = null;
 
 /**
- * The module's bytes, counted as they arrive, for the loading screen's bar. The response
- * is re-wrapped rather than read whole, so compilation still streams alongside the download.
+ * Count the module's bytes as they arrive, for the loading screen's bar, without touching
+ * the response the engine is compiled from.
+ *
+ * The count reads `copy`, a `Response.clone()` of the fetch response taken before the
+ * original went to `WebAssembly.instantiateStreaming`: cloning tees the body, so each branch
+ * sees every chunk as it comes, and compilation still streams alongside the download. The
+ * original stays the response `fetch` returned, with its URL, which is what lets the browser
+ * keep the compiled code. V8 caches a module's optimised code only for a streaming compile
+ * of a response it can key to a URL in the HTTP cache; a `Response` built in script has no
+ * URL and is never cached. That is what the old version did (it re-wrapped the body in a
+ * `TransformStream` and a `new Response`): measured by r2-product, Edge's `Code Cache/wasm`
+ * stayed empty after four visits, against 4.1 MB with the fetch response passed through, and
+ * repeat-visit boot went from 4.40 s to 1.82 s (medians of 6, under load).
+ *
+ * Method from: V8 team, "Code caching for WebAssembly developers" (2019),
+ * https://v8.dev/blog/wasm-code-caching: only `compileStreaming`/`instantiateStreaming` of a
+ * fetched response is cached, keyed by its URL, once TurboFan has finished, from the second
+ * visit on. Adapted: the progress bar, which the article does not have, reads a tee.
+ *
  * The total is the size the build recorded: a host that compresses the file sends a
- * Content-Length for the compressed bytes, not for what the stream yields.
+ * Content-Length for the compressed bytes, not for what the stream yields. A failure here
+ * only stops the bar; the compile reads its own branch.
  */
-function withProgress(res: Response, known: number | undefined): Response {
-  if (!res.ok || !res.body || typeof TransformStream === "undefined") return res;
-  const total = known || Number(res.headers.get("content-length")) || 0;
+async function countBytes(copy: Response, known: number | undefined): Promise<void> {
+  if (!copy.ok || !copy.body) return;
+  const total = known || Number(copy.headers.get("content-length")) || 0;
   let got = 0;
   let last = 0;
-  const counted = res.body.pipeThrough(
-    new TransformStream<Uint8Array, Uint8Array>({
-      transform(chunk, ctl) {
-        got += chunk.byteLength;
-        const now = performance.now();
-        if (now - last > 40) {
-          last = now;
-          scope.postMessage({ type: "loading", got, total });
-        }
-        ctl.enqueue(chunk);
-      },
-      flush() {
-        scope.postMessage({ type: "loading", got, total: Math.max(total, got), done: true });
-      },
-    }),
+  const reader = copy.body.getReader();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      got += value.byteLength;
+      const now = performance.now();
+      if (now - last > 40) {
+        last = now;
+        scope.postMessage({ type: "loading", got, total });
+      }
+    }
+    scope.postMessage({ type: "loading", got, total: Math.max(total, got), done: true });
+  } catch {
+    // The download itself failed: the compile reading the other branch reports it.
+  }
+}
+
+/**
+ * Operations that never reach rayon, by the engine's code: preferences, capabilities, the
+ * held confidence bands, palette matching against pasted text, and closing the image. They
+ * run while the thread pool is still starting. Everything else waits for the pool, because a
+ * rayon call made before `initThreadPool` has built it would make rayon build a one-thread
+ * global pool of its own, and the real one could then never be installed.
+ */
+const BEFORE_POOL = new Set(["capabilities", "default_prefs", "sanitise_prefs", "reset_prefs", "trace_bands", "match_palette", "close"]);
+
+/** Settles once rayon's pool has started, or failed to (then rayon runs on this thread). */
+let pool: Promise<void> = Promise.resolve();
+
+/**
+ * Start rayon's pool of `n` Web Workers in the background and tell the page when it is up.
+ *
+ * Starting it is a Web Worker per core, each instantiating the module on the shared memory:
+ * 0.7-2.9 s under load at 16 threads (r2-product, cold), which used to sit between the
+ * engine compiling and the app being shown. Now the page is told the engine is ready as soon
+ * as it is instantiated, the quick start-up commands run meanwhile (`BEFORE_POOL`), and the
+ * first image waits here only for what is left of the start. Not from the literature: the
+ * pool's own documentation (wasm-bindgen-rayon) starts it before anything else and is silent
+ * on its cost. See also: web.dev, "Using WebAssembly threads from C, C++ and Rust".
+ */
+function startPool(initThreadPool: (n: number) => Promise<void>, n: number): Promise<void> {
+  const began = performance.now();
+  return initThreadPool(n).then(
+    () => scope.postMessage({ type: "pool", threads: n + 1, poolError: null, ms: performance.now() - began }),
+    // If the pool will not start (nested workers refused, memory), rayon runs everything on
+    // this thread instead: slower, same bytes.
+    (e) => scope.postMessage({ type: "pool", threads: 1, poolError: String((e as Error)?.message ?? e), ms: performance.now() - began }),
   );
-  return new Response(counted, { status: res.status, headers: { "content-type": "application/wasm" } });
 }
 
 /**
  * Load the engine: the threaded WebAssembly build when the page is cross-origin isolated
  * (shared memory is allowed), the single-threaded one otherwise. The module's bytes are
  * fetched alongside its JavaScript and counted as they arrive, for the loading screen.
+ *
+ * The order: fetch the module and import its JavaScript together; compile and instantiate
+ * from the fetch response itself (`countBytes` says why); create the session and tell the
+ * page it is `ready`; then start the thread pool in the background (`startPool`), which
+ * says `pool` when it is up.
  */
 async function init(m: Init): Promise<void> {
   const isolated = typeof crossOriginIsolated !== "undefined" && crossOriginIsolated;
@@ -114,28 +170,18 @@ async function init(m: Init): Promise<void> {
   // as unhandled while the JavaScript is still arriving.
   wasm.catch(() => undefined);
   mod = (await import(/* @vite-ignore */ js)) as WasmModule;
-  const exports = await mod.default({ module_or_path: withProgress(await wasm, m.wasmBytes?.[dir]) });
+  const res = await wasm;
+  // The clone is taken before the original's body is handed to the compiler, which locks it.
+  void countBytes(res.clone(), m.wasmBytes?.[dir]);
+  const exports = await mod.default({ module_or_path: res });
   memory = exports.memory ?? null;
   // Compiled and instantiated: the page can start what waits on the engine's bytes being in
-  // (the denoiser's download) while the thread pool starts.
+  // (the denoiser's download).
   scope.postMessage({
     type: "instantiated",
     denoiserUrl: mod.denoiser_model_url(),
     denoiserSha256: mod.denoiser_model_sha256(),
   });
-  let threads = 1;
-  let poolError: string | null = null;
-  if (isolated && mod.initThreadPool) {
-    // One worker per core, less the one this thread already is. If the pool will not start
-    // (nested workers refused, memory), rayon runs everything here instead: slower, same bytes.
-    const n = Math.max(1, Math.min(navigator.hardwareConcurrency || 4, 16) - 1);
-    try {
-      await mod.initThreadPool(n);
-      threads = n + 1;
-    } catch (e) {
-      poolError = String((e as Error)?.message ?? e);
-    }
-  }
   generations = m.generations ? new Int32Array(m.generations) : null;
   denoiserPort = m.denoiserPort;
   if (denoiserPort && isolated) {
@@ -143,10 +189,17 @@ async function init(m: Init): Promise<void> {
     mod.enable_denoiser();
   }
   studio = new mod.Studio();
+  // One worker per core, less the one this thread already is.
+  const starting = isolated && Boolean(mod.initThreadPool);
+  if (starting && mod.initThreadPool) {
+    pool = startPool(mod.initThreadPool, Math.max(1, Math.min(navigator.hardwareConcurrency || 4, 16) - 1));
+  }
   scope.postMessage({
     type: "ready",
-    threads,
-    poolError,
+    // One until the pool says otherwise (`pool`).
+    threads: 1,
+    pool: starting ? "starting" : "none",
+    poolError: null,
     isolated,
     version: mod.version(),
     denoiserUrl: mod.denoiser_model_url(),
@@ -247,6 +300,8 @@ scope.onmessage = (e: MessageEvent<Init | Job>) => {
       }
       return;
     }
+    // Anything that may reach rayon waits for the pool; the start-up commands do not.
+    if (!BEFORE_POOL.has(m.op)) await pool;
     const started = performance.now();
     try {
       const value = run(m);

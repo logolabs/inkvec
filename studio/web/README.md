@@ -38,10 +38,13 @@ It is the desktop app's interface and the desktop app's code, not a demo of them
   into your browser, in the background as the Studio opens (not when your browser asks to save
   data), and run on your GPU where there is one (ONNX Runtime Web).
 
-Use **Full screen** in the top bar, or **Open in its own tab** when the Space's frame will not
-go full screen; its own tab also gives it every core. It is built for a laptop or desktop
-screen. A logo dropped on the front page opens straight in the Studio, handed over inside
-your browser.
+Hugging Face shows this Space inside a frame on its own page, and a browser will not give a
+framed page the threads the engine needs (cross-origin isolation needs every page above it to
+ask for it). So the front page opens the Studio in **a tab of its own**, where it runs on every
+core and can use the denoiser; a logo dropped on the front page goes with it, handed over
+inside your browser. Its own address:
+<https://logolabs-inkvec.static.hf.space/studio/index.html>. It is built for a laptop or
+desktop screen; **Full screen** is in its top bar.
 
 The desktop app, **Inkvec Studio** (Windows, macOS, Linux), is the same interface plus what a
 browser cannot do: folders of images in one batch, the `inkvec` command line, the right-click

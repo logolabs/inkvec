@@ -1,6 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { pastedImages } from "./chrome";
+import { carriedFile, pastedImages } from "./chrome";
 
 /** What the paste listener handed over, per paste. */
 const taken: File[][] = [];
@@ -61,5 +61,39 @@ describe("pastedImages", () => {
   it("takes a paste aimed at the page itself", () => {
     paste(window, [png()]);
     expect(taken).toHaveLength(1);
+  });
+});
+
+/** The presentation page's encoder (`base64url` in web/index.html), as it writes the fragment. */
+function base64url(bytes: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+describe("carriedFile", () => {
+  it("gives back every byte the presentation page put in the fragment, whatever the padding", () => {
+    const all = Uint8Array.from({ length: 256 * 3 + 2 }, (_, i) => (i * 37 + 11) & 255);
+    for (const n of [1, 2, 3, 4, 255, 256, all.length]) {
+      const bytes = all.subarray(0, n);
+      const got = carriedFile(`#open=${base64url(bytes)}&name=${encodeURIComponent("logo.png")}`);
+      expect(got?.name).toBe("logo.png");
+      expect([...(got?.bytes ?? [])]).toEqual([...bytes]);
+    }
+  });
+
+  it("keeps a name with spaces, ampersands and accents", () => {
+    const name = "Café & co — final v2.png";
+    const got = carriedFile(`#open=${base64url(new Uint8Array([137, 80, 78, 71]))}&name=${encodeURIComponent(name)}`);
+    expect(got?.name).toBe(name);
+  });
+
+  it("is null without a file, or with one that does not decode", () => {
+    expect(carriedFile("")).toBeNull();
+    expect(carriedFile("#")).toBeNull();
+    expect(carriedFile("#section")).toBeNull();
+    expect(carriedFile("#open=")).toBeNull();
+    expect(carriedFile("#open=%%%")).toBeNull();
+    expect(carriedFile("open=AAAA")).toBeNull();
   });
 });

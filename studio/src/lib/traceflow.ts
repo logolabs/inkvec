@@ -24,6 +24,19 @@
  * - *Cancel undone by a queued trace.* Moving a control starts a draft at once and arms a
  *   timer for the full trace. A Cancel that the timer then undoes 800 ms later is not a
  *   cancel, so Cancel disarms the timer too; so does opening another image.
+ *
+ * **A Fast draft first, for a large image** (`open`). A freshly opened image larger than the
+ * draft size is traced by the Fast engine at the draft size first, and the full trace is
+ * asked for the moment that draft lands. Inkvec Studio Lite's full trace of a 2048 px image
+ * takes 4-33 s in a browser tab (r2-product, measured: 4.0-9.4 s on 16 threads, 8.3-33.2 s on
+ * one), and until now nothing was drawn meanwhile; the Fast engine draws the same image in
+ * well under a second. The full trace is unchanged, and starts later only by the draft's own
+ * time, because the tab has one engine and runs one trace at a time. A moved control, Cancel,
+ * another trace or another image retires the waiting full trace like the settle timer.
+ * Inspired by: J. Nielsen, "Response Times: The 3 Important Limits" (1993), nngroup.com: a
+ * result inside about a second keeps the user's flow, and past ten seconds attention goes.
+ * See also: progressive rendering (a coarse result first, refined in place), which is what
+ * the draft/final pair already is for a moving control.
  */
 
 /** Which kind of trace: a small, quick one that keeps up with a moving control, or the full one. */
@@ -48,8 +61,12 @@ export interface TraceHost<P extends { generation: number }, O, G> {
   hasSource(): boolean;
   /** The colour groups the next trace is sent with, read before it is started. */
   groups(): G;
-  /** Ask the backend for a trace; resolves to its generation, rejects if it cannot start. */
-  start(tier: Tier): Promise<number>;
+  /**
+   * Ask the backend for a trace; resolves to its generation, rejects if it cannot start.
+   * `fast` asks for the Fast engine whatever the controls say (a draft of an image just
+   * opened, `TraceLoop.open`); the controls themselves do not change.
+   */
+  start(tier: Tier, fast: boolean): Promise<number>;
   /** How long the controls must be still before the full trace, in milliseconds. */
   settleMs(): number;
   /** The generation the store shows and whether it is tracing, for filtering a result. */
@@ -96,6 +113,11 @@ export class TraceLoop<P extends { generation: number }, O, G> {
   private readonly groupsSent = new Map<number, G>();
   /** The pending full trace a moved control armed, if any. */
   private settleTimer: ReturnType<typeof setTimeout> | undefined = undefined;
+  /**
+   * The full trace of a newly opened image, waiting for its Fast draft to land (`open`):
+   * the draft's generation (0 until the backend has said it) and the promise `open` returned.
+   */
+  private afterDraft: { draft: number; resolve: () => void } | null = null;
 
   constructor(private readonly host: TraceHost<P, O, G>) {}
 
@@ -103,18 +125,51 @@ export class TraceLoop<P extends { generation: number }, O, G> {
    * Start a trace and, once the backend has said which generation it is, make it the one
    * the interface waits for, unless a newer one has already taken over. Events that beat
    * the reply are applied then, in the order they came. Never rejects: a failure to start
-   * goes to `host.failed`.
+   * goes to `host.failed`. A newly opened image's full trace still waiting for its draft is
+   * not wanted any more: this one replaces it.
    */
   async trace(tier: Tier): Promise<void> {
-    if (!this.host.hasSource()) return;
+    this.dropAfterDraft();
+    await this.begin(tier, false);
+  }
+
+  /**
+   * The first trace of an image that has just been opened. With `fastFirst` (the image is
+   * larger than the draft size; the caller decides), a Fast draft goes first and the full
+   * trace is asked for the moment the draft lands (see the module comment); otherwise this
+   * is `trace("final")`. Resolves once the full trace has been asked for, or once something
+   * else has taken over (a moved control, Cancel, another trace or image, a draft that could
+   * not start). Never rejects.
+   */
+  open(fastFirst: boolean): Promise<void> {
+    this.dropAfterDraft();
+    if (!fastFirst) return this.begin("final", false).then(() => undefined);
+    return new Promise((resolve) => {
+      const waiting = { draft: 0, resolve };
+      this.afterDraft = waiting;
+      void this.begin("draft", true).then((generation) => {
+        // The draft did not become the trace being watched: nothing will land to wait for.
+        if (generation === null && this.afterDraft === waiting) this.dropAfterDraft();
+      });
+    });
+  }
+
+  /**
+   * `trace`'s work: start, adopt the generation unless a newer one took over, apply what
+   * arrived early. Resolves to the generation now watched, or null if this one is not.
+   */
+  private async begin(tier: Tier, fast: boolean): Promise<number | null> {
+    if (!this.host.hasSource()) return null;
     // Counted from the moment it was asked for: that is the wait the user sees.
     const asked = performance.now();
     try {
       const groups = this.host.groups();
-      const generation = await this.host.start(tier);
+      const generation = await this.host.start(tier, fast);
       // A newer trace was started meanwhile and has already taken over.
-      if (generation < this.newest) return;
+      if (generation < this.newest) return null;
       this.newest = generation;
+      // An opened image's Fast draft: its full trace follows when this generation lands.
+      if (fast && this.afterDraft?.draft === 0) this.afterDraft.draft = generation;
       this.groupsSent.set(generation, groups);
       for (const old of this.groupsSent.keys()) if (old < generation - GROUPS_KEPT) this.groupsSent.delete(old);
       this.watching = generation;
@@ -124,10 +179,34 @@ export class TraceLoop<P extends { generation: number }, O, G> {
       const held = this.early.get(generation);
       for (const g of this.early.keys()) if (g <= generation) this.early.delete(g);
       for (const p of held?.progress ?? []) this.progressed(p);
-      if (held?.done) this.host.finished(held.done, generation);
+      if (held?.done) this.landed(held.done, generation);
+      return generation;
     } catch (e) {
       this.host.failed(e);
+      return null;
     }
+  }
+
+  /**
+   * The watched trace's outcome reached the interface. If it is the Fast draft an opened
+   * image is waiting on, the full trace is asked for now, whatever the draft's outcome: a
+   * draft that failed or found the image flat says so on screen, and the full trace has the
+   * last word.
+   */
+  private landed(outcome: O, generation: number): void {
+    this.host.finished(outcome, generation);
+    const waiting = this.afterDraft;
+    if (waiting && waiting.draft === generation) {
+      this.afterDraft = null;
+      void this.begin("final", false).then(() => waiting.resolve());
+    }
+  }
+
+  /** Retire the full trace an opened image's draft was holding, and release `open`'s caller. */
+  private dropAfterDraft(): void {
+    const waiting = this.afterDraft;
+    this.afterDraft = null;
+    waiting?.resolve();
   }
 
   /** A `trace:progress` event from the backend. */
@@ -150,7 +229,7 @@ export class TraceLoop<P extends { generation: number }, O, G> {
     }
     const shown = this.host.shown();
     if (generation !== shown.generation || !shown.tracing) return;
-    this.host.finished(outcome, generation);
+    this.landed(outcome, generation);
   }
 
   /** A control moved: a draft now, and the full trace once the controls have been still. */
@@ -159,6 +238,11 @@ export class TraceLoop<P extends { generation: number }, O, G> {
     if (!this.host.hasSource()) return;
     void this.trace("draft");
     this.settleTimer = setTimeout(() => void this.trace("final"), this.host.settleMs());
+  }
+
+  /** Whether an opened image's full trace is waiting for its Fast draft; for the tests. */
+  get waitingForDraft(): boolean {
+    return this.afterDraft !== null;
   }
 
   /**
@@ -170,10 +254,14 @@ export class TraceLoop<P extends { generation: number }, O, G> {
     this.host.cancel();
   }
 
-  /** Drop the full trace a moved control armed, for a caller about to start one itself. */
+  /**
+   * Drop the full trace a moved control armed, or an opened image's draft is holding, for a
+   * caller about to start one itself (or cancelling).
+   */
   clearSettle(): void {
     clearTimeout(this.settleTimer);
     this.settleTimer = undefined;
+    this.dropAfterDraft();
   }
 
   /**

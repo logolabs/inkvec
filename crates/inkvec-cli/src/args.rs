@@ -319,9 +319,13 @@ OPTIONS:
                             typical logo under a few seconds. 0 means no cap
                                                                    [default: 2048]
         --time-budget <s>   Advisory wall-clock budget. Gradient-band merging stops at
-                            60% of it and the boundary solve gets 25%; the output is
-                            still a correct trace, with more fills or a less polished
-                            outline. 0 means no budget                 [default: 0]
+                            60% of it, checked between fits, and the boundary solve
+                            gets 25%; the output is still a correct trace, with more
+                            fills or a less polished outline, but it now depends on
+                            the machine. The palette and the writer do not read it.
+                            0 means no budget: the merge is then bounded by a work
+                            cap set by the pixel count, and the output reproducible
+                                                                       [default: 0]
         --uncertainty <file>
                             Also write where each traced boundary could be: an SVG
                             that overlays the trace, every boundary a band k sigma

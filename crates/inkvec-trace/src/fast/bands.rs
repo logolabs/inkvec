@@ -174,9 +174,10 @@ fn contacts_scan(labels: &[u16], w: usize, h: usize) -> HashMap<(u16, u16), u32>
 /// members, and `merge_ramps` returns 0 with the labels and fills untouched — the value
 /// this early return gives.
 ///
-/// One exception is guarded: past `u16::MAX − 1` components, `faces::RunLabels::write_faces` folds the rest
-/// into face 0, which then holds pixels of several inks under one colour, and the argument
-/// fails. With that many faces this returns `true` and the full pass decides.
+/// One exception is guarded: past `u16::MAX − 1` components, `faces::RunLabels::write_faces`
+/// merges the smallest into a neighbour (`regions::cap_components`), whose face then holds
+/// pixels of two inks under one colour, and the argument fails. With that many faces this
+/// returns `true` and the full pass decides.
 ///
 /// # Cost
 ///
@@ -191,9 +192,9 @@ fn contacts_scan(labels: &[u16], w: usize, h: usize) -> HashMap<(u16, u16), u32>
 /// Computing", IEEE TIP 24(9) 2725–2735, <https://doi.org/10.1109/TIP.2015.2425540>, on
 /// deciding region facts without a second pass over the pixels.
 fn inks_may_join(face_color: &[usize], pal: &Palette) -> bool {
-    /// Faces past this count are folded into face 0 by `faces::RunLabels::write_faces`; see above.
-    const FOLDED: usize = (u16::MAX - 1) as usize;
-    if face_color.len() >= FOLDED {
+    /// Past this count `faces::RunLabels::write_faces` merges faces across inks; see above.
+    const CAPPED: usize = (u16::MAX - 1) as usize;
+    if face_color.len() >= CAPPED {
         return true;
     }
     let mut inks: Vec<usize> = face_color.to_vec();

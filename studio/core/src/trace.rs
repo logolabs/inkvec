@@ -406,14 +406,14 @@ impl Source {
             bytes
         };
         let container = Container::sniff(&bytes);
-        // The same header read `inkvec_trace::decode_image_capped` reports its size from,
-        // so the size here is the one every trace of this file will see. Neither applies
-        // an EXIF orientation, so nothing is swapped.
-        let (width, height) = image::ImageReader::new(std::io::Cursor::new(&bytes))
-            .with_guessed_format()
-            .map_err(|e| describe_decode_failure(container, &e.to_string()))?
-            .into_dimensions()
-            .map_err(|e| describe_decode_failure(container, &e.to_string()))?;
+        // The size `inkvec_trace::decode_image_capped` decodes to, from the header alone:
+        // the decode applies the EXIF orientation (a photo shot sideways is traced
+        // upright, its sides swapped), so the size here must too, or the shown size and
+        // every trace of the file would disagree.
+        let (width, height) = inkvec_trace::upright_dimensions(&bytes).map_err(|e| {
+            let (inkvec_trace::TraceError::Decode(raw) | inkvec_trace::TraceError::Io(raw)) = e;
+            describe_decode_failure(container, &raw)
+        })?;
         Ok(Self::from_parts(bytes, path, container, width, height))
     }
 
@@ -1460,6 +1460,50 @@ mod tests {
         assert_eq!((s.width, s.height), (96, 96));
         assert_eq!(s.container, Container::Png);
         assert_eq!(s.name(), "pasted image");
+    }
+
+    /// `png` with an `eXIf` chunk after `IHDR` holding the EXIF Orientation tag (274): a
+    /// bare big-endian TIFF structure with one IFD of one SHORT entry.
+    fn with_orientation(png: &[u8], orientation: u16) -> Vec<u8> {
+        let crc32 = |bytes: &[u8]| {
+            let mut crc = !0u32;
+            for &b in bytes {
+                crc ^= u32::from(b);
+                for _ in 0..8 {
+                    crc = (crc >> 1) ^ (0xEDB8_8320 & (crc & 1).wrapping_neg());
+                }
+            }
+            !crc
+        };
+        let mut body = b"eXIfMM\0\x2a\0\0\0\x08\0\x01\x01\x12\0\x03\0\0\0\x01".to_vec();
+        body.extend_from_slice(&orientation.to_be_bytes());
+        body.extend_from_slice(&[0, 0, 0, 0, 0, 0]);
+        let mut chunk = ((body.len() - 4) as u32).to_be_bytes().to_vec();
+        chunk.extend_from_slice(&body);
+        chunk.extend_from_slice(&crc32(&body).to_be_bytes());
+        // Signature (8) + IHDR (4 + 4 + 13 + 4).
+        let at = 8 + 25;
+        [&png[..at], &chunk[..], &png[at..]].concat()
+    }
+
+    #[test]
+    fn opening_a_photo_shot_sideways_reports_its_upright_size() {
+        let png = {
+            let img = image::RgbaImage::from_pixel(6, 4, image::Rgba([10, 20, 30, 255]));
+            let mut out = std::io::Cursor::new(Vec::new());
+            img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+            out.into_inner()
+        };
+        for (orientation, size) in [(1, (6, 4)), (3, (6, 4)), (6, (4, 6)), (8, (4, 6))] {
+            let s = Source::open(with_orientation(&png, orientation), None).unwrap();
+            assert_eq!((s.width, s.height), size, "orientation {orientation}");
+            let r = s.raster(0).unwrap();
+            assert_eq!(
+                (r.width as u32, r.height as u32),
+                size,
+                "orientation {orientation}"
+            );
+        }
     }
 
     #[test]

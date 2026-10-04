@@ -6,7 +6,7 @@
 > of its own stages computed on row runs, in parallel where it pays, to the same bytes, but
 > for the image frame, which is now written as the image rectangle. Since 2026-10-04 its
 > corner threshold is 0.1 px (§6), and an opt-in third mode, `--mode balanced`, runs it with
-> four iterations of Quality's boundary solve and a fit a quarter finer (§8).
+> eight iterations of Quality's boundary solve and a fit a quarter finer (§8).
 
 **Source:** `crates/inkvec-trace/src/fast/` — `front.rs` (the front end), `palette.rs`,
 `faces.rs` and `faces/runs.rs` (the clean-up), `bands.rs` (ramps), `mod.rs`, `polygon.rs`,
@@ -25,7 +25,7 @@ fits the result with `fast::fit` (`crates/inkvec-cli/src/fast.rs:98-117`), which
 `inkvec_trace::fast::fit_edges` (`fast/mod.rs:380-427`) with the map's width and height.
 **Pipeline position:** it replaces stages 03–05 (palette, regions, gradients) with its own
 front end; shares stages 01, 06, 07, 10 and 13; skips 08 (the boundary solve,
-`lib.rs:1144`, `solve_boundary` at `:1195-1211`; balanced runs it, capped at four iterations, §8) and 09 (decode,
+`lib.rs:1144`, `solve_boundary` at `:1195-1211`; balanced runs it, capped at eight iterations, §8) and 09 (decode,
 `lib.rs:1155`); and replaces 11 (curve fitting) with its own
 fitter, without 12 (repair) or shape harmonization (`repair_fits`,
 `crates/inkvec-cli/src/pipeline.rs:869`; `emit_options`, `pipeline.rs:518-529`).
@@ -918,12 +918,12 @@ pass instead of one whole-image scan per face. Details, proof and citations in `
 **What it computes.** `--mode balanced` (opt-in; `TraceMode::Balanced`,
 `crates/inkvec-cli/src/args.rs:29-33`) is Fast with two of Quality's ideas added back at a
 fraction of their price, on rasters up to `BALANCED_MAX_SIDE` = 1024 px on their longer side
-(`crates/inkvec-cli/src/fast.rs:62-64`):
+(`crates/inkvec-cli/src/fast.rs:64-66`):
 
 1. **the global boundary solve** (stage 08, `08-boundary-solve.md`), stopped after
-   `BALANCED_SOLVE_ITERS` = 4 L-BFGS iterations per independent part of the boundary
-   (`fast.rs:66-71`), between the sub-pixel refinement and the fit, exactly where Quality runs
-   it; and
+   `BALANCED_SOLVE_ITERS` = 8 L-BFGS iterations (steps accepted by its Moré–Thuente line
+   search) per independent part of the boundary (`fast.rs:68-88`), between the sub-pixel
+   refinement and the fit, exactly where Quality runs it; and
 2. **the Fast fitter with tolerances a quarter finer** (`FastFit::balanced`,
    `crates/inkvec-trace/src/fast/mod.rs:142-163`): polygon tolerance and vertex box 0.375 px,
    merge tolerance 0.15 px (`BALANCED_TOL_SCALE` = 0.75, `mod.rs:128-140`), the corner threshold
@@ -935,9 +935,9 @@ lists the same ones, `--time-budget` included: the solve's budget is a count of 
 never a clock, so the output is the same on every machine (`color_options` hands the solve a
 wall-clock budget in Quality only, `crates/inkvec-cli/src/pipeline.rs:142-155`). Above the size
 threshold balanced is Fast, byte for byte. Its report line says which it ran:
-"balanced mode Potrace-class fit at 0.75x tolerances, flat fills, boundary solve capped at 4
+"balanced mode Potrace-class fit at 0.75x tolerances, flat fills, boundary solve capped at 8
 iterations; not run: curve DP, gradients, ring repair, harmonization", or "balanced mode over
-1024 px, so fast mode's path: ..." (`report`, `fast.rs:167-194`).
+1024 px, so fast mode's path: ..." (`report`, `fast.rs:184-211`).
 
 **Why these two stages.** The r2-fastq study (2026-10-02, research build `research2/fastq`)
 priced every Quality stage by the dE00 it buys per millisecond added to Fast. At 128 px the
@@ -950,94 +950,132 @@ concave profile: on the screen set 2 iterations buy 50 % of the 32-iteration sol
 first energy evaluations). The fitter's tolerances cost no time at all: the sweep x0.5 / x0.75 /
 x1 read 0.2824 / 0.3154 / 0.3640 dE00 at 3.022 / 2.458 / 2.120 parameters per artist's
 parameter, and together with the solve x0.75 moved the 4-iteration point from 0.2872 / 1.920 to
-0.2401 / 2.234. So balanced takes the solve's first four iterations and the finer tolerances,
-and leaves the DP to Quality.
+0.2401 / 2.234. So balanced takes the solve's first iterations and the finer tolerances,
+and leaves the DP to Quality. (Those profiles are the solver of v0.2.5; the cap was swept again
+on the rewritten one, below.)
+
+**The cap, re-measured on the rewritten solve** (2026-10-04). The solve was rewritten after
+balanced was built (Moré–Thuente line search, stopping on the projected gradient and the
+relative decrease, 64 iterations at most, a local fold guard; `08-boundary-solve.md`), and an
+iteration of it is not an iteration of the old backtracking one, so the cap was swept again on
+the gate (balanced against v0.2.5's Fast; 128ss / 512ss; engine time a paired median ratio to
+Fast at 128 / 512 px, interleaved, under load):
+
+| cap | dE00 | turning | ratio | engine time |
+|---|---|---|---|---|
+| 2 | −29.4 / −15.8 % | +17.6 / +15.9 % | +6.6 / +3.8 % | 1.93 / 2.43× |
+| 4 | −36.3 / −18.8 % | +17.6 / +14.7 % | +3.0 / +2.9 % | 2.08 / 2.83× |
+| **8** | **−37.9 / −19.0 %** | **+14.0 / +12.3 %** | **−0.2 / +1.3 %** | **2.40 / 3.32×** |
+| 16 | −39.7 / −19.6 % | +10.8 / +10.5 % | −2.0 / −0.8 % | 2.97 / 4.35× |
+| 64 (no cap) | | | | 6.62 / 9.53× |
+
+The colour error still levels off after 4, but on this solver more iterations also leave a
+smoother boundary for the fitter, so turning and the parameter count keep falling. 8 brings the
+parameter count back to Fast's (ratio within noise at 128ss, +1.3 % at 512ss, +0.3 % at 512ssop)
+for 15 % more engine time than 4; 16 buys another 2 points of dE00 and 3 of turning for another
+24 %. The cap is 8 (`48b0d05`).
 
 **Plumbing.** The cap is a parameter at the solve's call boundary, so the solve itself is
-untouched: `boundary_opt::optimise_alpha_capped` (`crates/inkvec-trace/src/boundary_opt.rs:590-610`)
+untouched: `boundary_opt::optimise_alpha_capped` (`crates/inkvec-trace/src/boundary_opt.rs:593-614`)
 is `optimise_alpha` with `max_iters`, which `lbfgs::descend` clamps to its own ceiling and hands
-to the per-part loop (`boundary_opt/lbfgs.rs:71-86`, `:164`); `None` is `optimise_alpha` bit for
+to the per-part loop (`boundary_opt/lbfgs.rs:156-171`, `:238`); `None` is `optimise_alpha` bit for
 bit (`boundary_opt/cap_tests.rs`). `ColorOptions::boundary_iters`
-(`crates/inkvec-trace/src/lib.rs:192-195`) carries it: `None` leaves Quality uncapped and Fast
-without a solve, `Some(n)` runs the solve in either mode (`solve_boundary`, `lib.rs:1195-1211`, called at `:1144`). The command line
+(`crates/inkvec-trace/src/lib.rs:200-203`) carries it: `None` leaves Quality uncapped and Fast
+without a solve, `Some(n)` runs the solve in either mode (`solve_boundary`, `lib.rs:1218-1234`, called at `:1167`). The command line
 sets it from `fast::solve_iters` and picks the fitter's tolerances with `fit_config`, both from
-the one test `fast::balanced` on the traced raster's size (`fast.rs:73-96`).
+the one test `fast::balanced` on the traced raster's size (`fast.rs:90-113`).
 
 **Robustness.** The research build found one defect with the solve on in Fast:
 `synthetic/gradient_radial` at 512 px with an 8- or 16-iteration cap wrote the disc's ring as
 one closed cubic and the face vanished (dE00 10.6). Wave A's curve-run fix (`3513beb`, §6 step
-6) closed it before this mode existed. Checked again on this build with the cap at 2, 4, 8, 16
-and 32 iterations on all 21 cross-compare cases at 512 and 2048 px and on the radial case at
-128, 512 and 1024 px: no ring collapsed, and the radial case reads 0.053 at 512 px under every
-cap (Fast 0.059).
+6) closed it before this mode existed. Checked on the old solve with the cap at 2, 4, 8, 16
+and 32 iterations on all 21 cross-compare cases at 512 and 2048 px, and on the rewritten solve
+with 2, 4, 8, 16, 32 and 64 on the 21 cases at 128, 512 and 2048 px (441 traces): no ring
+collapsed, no case read more than 1.5× Fast's dE00, and the radial case reads 0.053 at 512 px
+under every cap (Fast 0.058).
 
-**Measured** (2026-10-04, this branch against v0.2.5, Windows, under load):
+**Measured** (2026-10-04, the branch merged onto main `134939e`, cap 8, against v0.2.5,
+Windows, under load):
 
-| set (246 icons each; dE00 / turning / ratio) | Fast v0.2.5 | Fast (this branch) | Balanced | Quality v0.2.5 |
+| set (246 icons each; dE00 / turning / ratio) | Fast v0.2.5 | Fast (merged) | Balanced | Quality v0.2.5 |
 |---|---|---|---|---|
-| gate 128ss | 0.3272 / 0.0748 / 2.206 | 0.3222 / 0.0758 / 2.112 | 0.2123 / 0.0879 / 2.272 | 0.1283 / 0.0414 / 1.511 |
-| gate 512ss | 0.0995 / 0.0202 / 3.323 | 0.0993 / 0.0204 / 3.271 | 0.0817 / 0.0233 / 3.419 | 0.0484 / 0.0094 / 1.783 |
-| gate 512ssop | 0.0908 / 0.0167 / 3.620 | 0.0906 / 0.0167 / 3.563 | 0.0729 / 0.0192 / 3.708 | 0.0490 / 0.0092 / 1.986 |
-| held_a, 156 icons at 128 px (dE00 / worst tenth / ratio) | 0.3402 / 0.924 / 2.137 | 0.3346 / 0.919 / 2.044 | 0.2216 / 0.727 / 2.210 | 0.1310 / 0.420 / 1.471 |
+| gate 128ss | 0.3272 / 0.0748 / 2.206 | 0.3222 / 0.0758 / 2.112 | 0.2032 / 0.0852 / 2.202 | 0.1283 / 0.0414 / 1.511 |
+| gate 512ss | 0.0995 / 0.0202 / 3.323 | 0.0993 / 0.0204 / 3.271 | 0.0806 / 0.0227 / 3.367 | 0.0484 / 0.0094 / 1.783 |
+| gate 512ssop | 0.0908 / 0.0167 / 3.620 | 0.0906 / 0.0167 / 3.563 | 0.0703 / 0.0187 / 3.630 | 0.0490 / 0.0092 / 1.986 |
+| held_a, 156 icons at 128 px (dE00 / worst tenth / ratio) | 0.3402 / 0.924 / 2.137 | 0.3346 / 0.919 / 2.044 | 0.2091 / 0.705 / 2.156 | 0.1310 / 0.420 / 1.471 |
 
 The gate's columns are its own aggregates (dE00 and ratio family-macro, turning a plain mean,
-judged at 1024 px against the artist's file). Balanced closes 58 % of the dE00 gap between
-v0.2.5's Fast and Quality at 128 px, 35 % at 512 px and 43 % at 512 px opaque, and 57 % on
-held_a; it is better than Fast on every one of the 246 icons at 128 px and on 242 at 512 px.
-Judged as a change to Fast by the gate's rule it reads dE00 "better" everywhere (−35.1 %,
-−17.9 %, −19.7 %) and turning and ratio "worse": turning +17.5 / +15.2 / +15.1 %, ratio +3.0 /
-+2.9 / +2.4 % (upper bounds 6.3 / 4.9 / 4.3 % against effective margins 5.0 / 3.2 / 3.0 %).
-That is why it is a mode of its own and not Fast's default. Two variants measured on the same
-build say where each cost comes from (gate, 128ss / 512ss, change against v0.2.5's Fast):
+judged at 1024 px against the artist's file). Balanced closes 62 % of the dE00 gap between
+v0.2.5's Fast and Quality at 128 px, 37 % at 512 px and 49 % at 512 px opaque, and 63 % on
+held_a (main's Quality, after the solve rewrite, reads 0.1071 on held_a). It is better than
+Fast on 245 of the 246 icons at 128 px and on 242 at 512 px; every family gains at every
+condition (at 512ss: simple-icons −37 %, material −35 %, lucide −34 %, openmoji −32 %, twemoji
+−26 %, synthetic −13 %, noto −6 %). Judged as a change to Fast by the gate's rule it reads dE00
+"better" everywhere (−37.9 %, −19.0 %, −22.6 %), turning "worse" (+14.0 / +12.3 / +12.3 %), and
+ratio within noise at 128ss, non-inferior at 512ssop and worse at 512ss (+1.3 %, upper bound
+3.16 % against an effective margin of 3 %). That is why it is a mode of its own and not Fast's
+default; its time (2.4–3.3× Fast's engine) would rule that out anyway. The largest single rises
+are twemoji/1f4e6 at 128 px (0.102 → 0.136: the box's long diagonal edges shift a fraction of a
+pixel where two close browns meet) and openmoji/25FC at 512 px (0.005 → 0.014, the square's
+bottom edge).
+
+Where the turning comes from, on the same build (gate, 128ss / 512ss / 512ssop, change against
+v0.2.5's Fast):
 
 | variant | dE00 | turning | ratio |
 |---|---|---|---|
-| balanced (solve 4 iterations, tolerances x0.75) | −35.1 / −17.9 % | +17.5 / +15.2 % | +3.0 / +2.9 % |
-| solve 4 iterations, tolerances x1 | −22.2 / −10.5 % | +3.6 / +0.2 % | −9.8 / −5.5 % |
-| tolerances x0.75, no solve | −14.6 / −7.3 % | +12.9 / +15.3 % | +8.6 / +6.1 % |
+| balanced (solve 8 iterations, tolerances x0.75) | −37.9 / −19.0 / −22.6 % | +14.0 / +12.3 / +12.3 % | −0.2 / +1.3 / +0.3 % |
+| solve 8 iterations, tolerances x1 | −24.3 / −12.4 / −15.4 % | +2.0 / −1.8 / −1.4 % | −11.9 / −6.5 / −6.9 % |
 
 The turning rise is the finer tolerances' (more, shorter pieces following more of the measured
-wobble), not the solve's; the solve alone is better than Fast on dE00 and on parameters. The
-owner's plan fixed the operating point at x0.75; the x1 variant is the alternative where
-structure and compactness matter more than colour error.
+wobble), as it was on the old solve (where x0.75 without the solve read +12.9 / +15.3 % and the
+solve with x1 +3.6 / +0.2 %). With Fast's own tolerances, the 8-iteration solve keeps about two
+thirds of balanced's dE00 gain, uses 7–12 % fewer parameters than Fast and reads turning
+"better" at 512 px (+2.0 % at 128 px, just over its margin). The owner's plan fixed the
+operating point at x0.75; the x1 variant is the alternative where structure and compactness
+matter more than colour error.
 
 The 21 cross-compare cases (the artist's SVG rendered at each size with the current renderer;
 dE00 mean / median / mean without the two fluent emoji, judged at 1024 px; parameters per
 artist's parameter, mean; engine time as a paired median ratio against v0.2.5 Fast, default
-threading):
+threading; the merged build's Fast, balanced and Quality):
 
-| size | Fast v0.2.5 | Balanced | Quality v0.2.5 |
-|---|---|---|---|
-| 128 px | 0.583 / 0.448 / 0.462, 1.51 | 0.468 / 0.333 / 0.340, 1.66, 1.5× | 0.335 / 0.238 / 0.268, 1.21, 17× |
-| 512 px | 0.168 / 0.074 / 0.078, 2.93 | 0.151 / 0.055 / 0.061, 3.60, 2.8× | 0.107 / 0.055 / 0.061, 1.50, 29× |
-| 1024 px | 0.117 / 0.029 / 0.039, 4.27 | 0.111 / 0.021 / 0.033, 5.75, 2.9× | 0.082 / 0.026 / 0.036, 1.73, 31× |
-| 2048 px, gate off | 0.123 / 0.023 / 0.040, 7.68 | 0.121 / 0.020 / 0.038, 10.19, 2.7× | 0.068 / 0.022 / 0.028, 2.31, 33× |
+| size | Fast v0.2.5 | Fast (merged) | Balanced | Quality (main) |
+|---|---|---|---|---|
+| 128 px | 0.583 / 0.448 / 0.462, 1.51 | 0.574 / 0.448 / 0.457, 1.39 | 0.459 / 0.331 / 0.337, 1.48, 2.2× | 0.317 / 0.229 / 0.256, 1.17, 17× |
+| 512 px | 0.168 / 0.074 / 0.078, 2.93 | 0.169 / 0.074 / 0.077, 2.75 | 0.151 / 0.053 / 0.058, 3.28, 3.2× | 0.100 / 0.048 / 0.053, 1.44, 34× |
+| 1024 px | 0.117 / 0.029 / 0.039, 4.27 | 0.115 / 0.029 / 0.038, 4.22 | 0.109 / 0.022 / 0.032, 5.63, 3.6× | 0.073 / 0.026 / 0.032, 1.66, 36× |
+| 2048 px, gate off | 0.123 / 0.023 / 0.040, 7.68 | 0.121 / 0.023 / 0.040, 7.59 | 0.119 / 0.020 / 0.038, 10.27, 3.3× | (v0.2.5: 0.068 / 0.022 / 0.028, 2.31, 33×) |
+
+Without the two fluent emoji, whose radial gradients balloon the parameter mean, balanced's
+parameters per artist's parameter read 1.51 / 2.57 / 2.71 against the merged Fast's 1.44 / 2.35 /
+2.45 at 128 / 512 / 1024 px (+5 / +9 / +11 %).
 
 **The size gate.** The table's last row is balanced with the threshold lifted (a temporary
 build). At 512 and 1024 px balanced reaches Quality's median and its mean without the fluent
 emoji at a tenth of Quality's time; the remaining mean gap is the two fluent emoji full of
 radial gradients, a fill-model gap no geometry stage closes. At 2048 px the gain shrinks to
-−1.6 % mean and −5 % without fluent (15 of 21 cases better), for 34 % more parameters (the two
-fluent emoji go from 61× and 38× the artist's count to 79× and 71×) and 2.7× the engine time:
-judged at 1024 px, a 2048 px raster's boundaries are already finer than the judge can see,
-and what is left is the fill model. So above 1024 px balanced runs Fast's path; 1024 is the
-largest size measured worth it. The research's 2048 px run agrees (−5 % without fluent at 2.3×
-the work, parameters +35 %).
+−1.5 % mean and −5 % without fluent (15 of 21 cases better), for 35 % more parameters and 3.3×
+the engine time: judged at 1024 px, a 2048 px raster's boundaries are already finer than the
+judge can see, and what is left is the fill model. So above 1024 px balanced runs Fast's path;
+1024 is the largest size measured worth it. The research's 2048 px run, and this branch's on the
+old solve (−1.6 % mean, +34 % parameters, 2.7×), agree.
 
 **Time** (interleaved per image, default threading, the smaller of two runs, on the shared
 development machine under load; engine = the stopwatch marks `trace_total` + `fit_dp` +
-`repair` + `fills` + `emit`, median ms, with the paired median ratio against v0.2.5's Fast and,
-in brackets, the process wall ratio):
+`repair` + `fills` + `emit`, median ms, with the paired median ratio against the merged Fast
+and, in brackets, the process wall ratio):
 
-| set | Fast v0.2.5 | Fast (this branch) | Balanced | Quality v0.2.5 |
-|---|---|---|---|---|
-| screen, 246 icons at 128 px | 3.9 | 4.0, 1.02× (0.99×) | 7.5, 1.96× (1.17×) | 60.4, 15.9× (3.4×) |
-| s512, 51 images at 512 px | 8.7 | 8.7, 0.98× (0.98×) | 22.9, 2.60× (1.49×) | 191.5, 23.4× (8.2×) |
-| big, 7 opaque at 2048 px (one 1672 px) | 42.0 | 36.6, 0.92× (0.94×) | Fast's path, same bytes | 1744, 38× (20×) |
-| bigalpha, 3 transparent at 2048 px | 57.7 | 61.4, 0.94× (1.02×) | Fast's path, same bytes | 1076, 20× (14×) |
+| set | Fast (merged) | Balanced (cap 8) | Quality (main) |
+|---|---|---|---|
+| screen, 246 icons at 128 px | 4.2 | 10.1, 2.40× (1.20×) | 80.7, 20.4× (4.2×) |
+| s512, 51 images at 512 px | 9.1 | 30.3, 3.32× (1.72×) | 278.6, 28.0× (9.3×) |
+| big (7) and bigalpha (3), 2048 px | | Fast's path, same bytes | |
 
-The solve itself (`boundary_opt` mark) takes 3.5 ms median at 128 px and 13.2 ms at 512 px in
-balanced, against 10.3 and 33.6 ms for Quality's uncapped solve on the same sets.
+The solve itself (`boundary_opt` mark) takes 5.5 ms median at 128 px and 20.4 ms at 512 px in
+balanced, against 23.2 and 81.7 ms for Quality's uncapped solve on the same sets. On the old
+solve, with cap 4, balanced read 1.96× / 2.60× Fast's engine time; the rewritten solve costs
+more per iteration (2.08× / 2.83× at cap 4).
 
 **Citations** (labels as in the doc comments):
 
@@ -1046,7 +1084,7 @@ balanced, against 10.3 and 33.6 ms for Quality's uncapped solve on the same sets
   <https://ojs.aaai.org/aimagazine/index.php/aimagazine/article/view/1232>: anytime modules
   composed under a budget chosen from their measured performance profiles; here the budget is
   fixed per mode and counted in iterations, so the output does not depend on the machine
-  (`fast.rs:1-50`, `boundary_opt.rs:590-602`); "See also" M. Yang, H. Chao, C. Zhang, J. Guo,
+  (`fast.rs:1-53`, `boundary_opt.rs:593-606`); "See also" M. Yang, H. Chao, C. Zhang, J. Guo,
   L. Yuan, J. Sun (2016), "Effective clipart image vectorization through direct optimization
   of bezigons", IEEE TVCG 22(2), <https://arxiv.org/abs/1602.01913>, a crude partition refined
   by optimisation against the image, which is this mode's shape;
@@ -1079,10 +1117,10 @@ by the rule the two modes share (`regions::cap_components`, stage 3).
 - **Balanced above 1024 px is Fast.** A raster longer than `BALANCED_MAX_SIDE` on its longer
   side, after `--max-dim` and any resampling, traces exactly as `--mode fast` (byte-identical
   on the 2048 px sets, the 1672 px masthead included), and the report line says so (§8).
-- **Balanced spends more parameters and more turning than Fast.** Its finer tolerances follow
-  more of the measured wobble: on the gate, turning +15–17 % and the parameter ratio +2.4–3.0 %
-  against v0.2.5's Fast, for 18–35 % less dE00 (§8). It is a mode for colour fidelity, not for
-  the smallest file.
+- **Balanced turns more than Fast.** Its finer tolerances follow more of the measured
+  wobble: on the gate, turning +12–14 % against v0.2.5's Fast, with the parameter ratio within
+  −0.2 to +1.3 %, for 19–38 % less dE00 (§8). It is a mode for colour fidelity, not for the
+  tidiest outline.
 
 - **A resampled input takes the slow histogram.** A `--max-dim` reduction or `--intake-scale`
   leaves box averages outside the exact set, so the palette's bands stop counting and the
@@ -1157,11 +1195,10 @@ the phase-1 research build's `INKVEC_FFDUMP`, which is not in this tree.
 
 ## Open questions
 
-- Balanced's four iterations were chosen on the solve as it stood in v0.2.5 (backtracking
-  Armijo L-BFGS, 32 iterations at most). A rewrite of the solve that changes what one
-  iteration does (another line search, other stopping tests) moves the knee; the cap should be
-  re-measured on the gate after such a rewrite.
-- The x1-tolerance variant (solve only) keeps about three fifths of balanced's dE00 gain with fewer
+- Balanced's cap was chosen on the solve's profile (4 on the solve of v0.2.5, 8 on the
+  rewritten one, §8). Any further change to what one iteration does moves it; re-measure on the
+  gate after such a change.
+- The x1-tolerance variant (solve only) keeps about two thirds of balanced's dE00 gain with fewer
   parameters than Fast and nearly flat turning (§8). Which point the product wants is the
   owner's call.
 

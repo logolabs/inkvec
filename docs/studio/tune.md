@@ -38,11 +38,11 @@ come for. Each is one control, shown once.
 and fits the fewest curves that match the image; it is the default and the closest trace. Fast
 traces each shape in a single pass, many times quicker, for previews, batches and very large
 images. Balanced sits between them: it is Fast, plus a few steps of Quality's edge placement and a
-finer curve fit. On 128 px icons it closes more than half of the distance from Fast to Quality,
-and about two fifths at 512 px, for about twice Fast's tracing time (a tenth of Quality's or
-less). It keeps Fast's flat fills, and its files are a few percent larger than Fast's. On images
-over 1024 px on their longer side it traces exactly as Fast does: there the extra steps gained
-little and cost a third more numbers in the file.
+finer curve fit. On 128 px icons it closes about three fifths of the distance from Fast to
+Quality, and two fifths at 512 px, for two to three times Fast's tracing time (a tenth of
+Quality's or less). It keeps Fast's flat fills, and its files are about as large as Fast's. On
+images over 1024 px on their longer side it traces exactly as Fast does: there the extra steps
+gained little and cost a third more numbers in the file.
 
 **Denoiser**: **Off**, **Auto** or **On**. The denoiser is a trained model that repairs JPEG, WebP
 and screenshot damage at the image's own size before tracing, so the colours are the ones the

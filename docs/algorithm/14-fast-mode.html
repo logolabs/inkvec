@@ -409,19 +409,25 @@
         about colour. Two of Quality's stages fix that. One fits every outline by trying many
         ways of drawing it, and costs twenty to thirty times Fast's whole trace. The other moves
         every border point at once until a redrawing matches the pixels, and it is cheap at
-        the start: its first four rounds buy four fifths of what its full thirty-two buy.</p>
-      <p><b>Balanced</b> is Fast with those first four rounds of edge placement added, and a
-        curve fit that follows the points a quarter more closely. It keeps Fast's flat fills
+        the start: most of what it buys comes in its first few rounds.</p>
+      <p><b>Balanced</b> is Fast with the first eight rounds of that edge placement added, and
+        a curve fit that follows the points a quarter more closely. It keeps Fast's flat fills
         and leaves the expensive outline search to Quality. On the quality check's small icons
-        it closes 58 % of the distance from Fast to Quality, and at 512 pixels 35 to 43 %; on
-        a set of 21 logos and emoji at 512 and 1024 pixels its median error matches Quality's.
-        It costs about one and a half times Fast's work on small icons and about three times
-        on large ones, a tenth of Quality's or less.</p>
-      <p>It has a price besides time: the finer fit spends a few percent more numbers than
-        Fast, and its outlines turn more along their length, because they follow more of
-        the small wobble in the measured edge. Fitting with Fast's own looseness after the
-        same four rounds avoids most of that and still gains about three fifths as much; the measurements are
-        on the technical page.</p>
+        it closes about three fifths of the distance from Fast to Quality, and at 512 pixels
+        two fifths to a half; on a set of 21 logos and emoji at 512 and 1024 pixels its median
+        error is close to Quality's. It costs two to three times Fast's work, a tenth of
+        Quality's or less.</p>
+      <p>Why eight rounds. When Balanced was first built, on the edge placement of version
+        0.2.5, four rounds were the sweet spot. The edge placement was then rewritten to take
+        better-judged steps, and the count was measured again: the colour error still levels
+        off after four, but on the new version more rounds also leave a smoother edge for the
+        curve fit, so the drawing uses fewer numbers and turns less. Eight rounds bring the
+        number count back to Fast's for about a seventh more time than four.</p>
+      <p>It has a price besides time: its outlines turn more along their length than Fast's,
+        because the finer fit follows more of the small wobble in the measured edge. Fitting
+        with Fast's own looseness after the same eight rounds avoids that, with fewer numbers
+        than Fast, and still gains about two thirds as much; the measurements are on the
+        technical page.</p>
       <p>On pictures larger than 1024 pixels on their longer side, Balanced simply runs
         Fast. At 2048 pixels the extra steps still helped a little — about 5 % on typical
         logos — but they cost a third more numbers and nearly three times the work, and the

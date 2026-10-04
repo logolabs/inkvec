@@ -353,11 +353,13 @@ OPTIONS:
                             high-contrast art, it saves 0.3% of the parameters and costs
                             0.2% of the colour error
         --no-unblock        Trace a nearest-neighbour upscale as it arrived. By default
-                            an input whose pixels are exact k x k blocks is averaged back
-                            down to the original grid first -- the inverse is exact -- and
-                            the SVG is still written at the size that came in. Without it a
-                            96-px logo blown up to 768 traces its pixel boundaries: 13 inks
-                            instead of 3, and 1568 straight lines walking round the corners
+                            an input that repeats each pixel of a smaller raster over a
+                            cell -- any factor of 2 or more, whole or not -- is taken back
+                            to that raster first (the inverse is exact, checked bit for
+                            bit), and the SVG is still written at the size that came in.
+                            Without it a 96-px logo blown up to 768 traces its pixel
+                            boundaries: 13 inks instead of 3, and 1568 straight lines
+                            walking round the corners
         --cutout            Carry the input's transparency into the output. A face the
                             source drew transparent becomes a hole in the faces above it
                             rather than a patch of white; one drawn at a single opacity

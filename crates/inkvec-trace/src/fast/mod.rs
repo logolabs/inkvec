@@ -125,6 +125,43 @@ impl Default for FastFit {
     }
 }
 
+/// How far `balanced` mode tightens Fast's polygon, vertex-box and curve-merge
+/// tolerances: by a quarter ([`FastFit::balanced`]).
+///
+/// On its own the factor buys fidelity with parameters, nothing else: Fast's tolerance
+/// sweep on the 128 px screen set (r2-fastq, 2026-10-02; dE00 / parameters per artist's
+/// parameter) reads x1 0.3640 / 2.120, x0.75 0.3154 / 2.458, x0.5 0.2824 / 3.022, at no
+/// measurable time, and the fitter's error is set mostly by the curve-merge tolerance.
+/// Combined with the boundary solve, which puts the points the fitter reads closer to the
+/// edge, x0.75 took the solve's 4-iteration point (corner threshold 0.1 px) from 0.2872 /
+/// 1.920 to 0.2401 / 2.234, 5.4 % more parameters than plain Fast. With the full solve,
+/// x0.5 reached 0.1867 but at 2.565, past what the compactness goal allows (Quality reads
+/// 0.1425 / 1.503).
+pub const BALANCED_TOL_SCALE: f64 = 0.75;
+
+impl FastFit {
+    /// The tolerances of `balanced` mode: Fast's polygon, vertex-box and curve-merge
+    /// tolerances times [`BALANCED_TOL_SCALE`] (0.375, 0.375 and 0.15 px), the corner
+    /// threshold at [`CORNER_TOL`] as in Fast, and the cubic-to-line test unchanged. The
+    /// fitter that reads them is Fast's own; only the distances it accepts are finer.
+    ///
+    /// Not from the literature: the operating point was chosen from the measured Pareto
+    /// front of Fast's tolerances with and without the boundary solve (r2-fastq). See also:
+    /// P. Selinger (2003), "Potrace: a polygon-based tracing algorithm",
+    /// <https://potrace.sourceforge.net/potrace.pdf>, whose `opttolerance` (our `opt_tol`)
+    /// is likewise a user knob trading curve count for fidelity.
+    pub fn balanced() -> FastFit {
+        let d = FastFit::default();
+        FastFit {
+            poly_tol: d.poly_tol * BALANCED_TOL_SCALE,
+            vertex_box: d.vertex_box * BALANCED_TOL_SCALE,
+            corner_tol: CORNER_TOL,
+            opt_tol: d.opt_tol * BALANCED_TOL_SCALE,
+            flat: d.flat,
+        }
+    }
+}
+
 /// Fit one measured boundary. The ends of an open boundary are kept exactly: they are
 /// junctions every boundary meeting there shares.
 ///
@@ -550,6 +587,26 @@ mod tests {
         assert!(frame_rectangle(&off, true, 40, 25).is_none());
         let inner: Vec<Point> = f.iter().map(|p| Point::new(p.x + 3.0, p.y + 2.0)).collect();
         assert!(frame_rectangle(&inner, true, 46, 30).is_none());
+    }
+
+    /// `balanced` tightens the polygon, vertex-box and merge tolerances by a quarter and
+    /// keeps Fast's corner threshold and cubic-to-line test.
+    #[test]
+    fn balanced_tolerances_are_a_quarter_finer() {
+        let (d, b) = (FastFit::default(), FastFit::balanced());
+        assert!((b.poly_tol - 0.375).abs() < 1e-12);
+        assert!((b.vertex_box - 0.375).abs() < 1e-12);
+        assert!((b.opt_tol - 0.15).abs() < 1e-12);
+        assert_eq!(b.corner_tol, d.corner_tol);
+        assert_eq!(b.flat, d.flat);
+        // Still the same fitter: a square ring is four lines under either.
+        let pts = polygon::tests::frame(12, 9);
+        let inner: Vec<Point> = pts
+            .iter()
+            .map(|p| Point::new(p.x + 3.0, p.y + 2.0))
+            .collect();
+        let f = fit_points(&inner, true, &b);
+        assert_eq!(f.segments.len(), 4, "{:?}", f.segments);
     }
 
     #[test]

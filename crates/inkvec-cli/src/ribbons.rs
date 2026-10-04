@@ -404,14 +404,26 @@ fn vanishing_params(inp: &Inputs, nest: &rings::Nesting, drawers: &[Vec<usize>],
     total
 }
 
-/// The SVG for a face written as strokes: one `<path>` with every non-primitive
-/// centreline as a subpath, stroked `hex` at the ribbon's width with round caps and the
-/// ribbon's joins (round or miter, SVG's default miter limit), then one stroked primitive
-/// element per centreline that is a whole primitive.
-/// Ids are `id` and `id-k`.
+/// The SVG for a face written as strokes: each centreline its own element, as stroke icon
+/// sets draw them (lucide writes one `<path>` per stroke), stroked `hex` at the ribbon's
+/// width with its caps and joins (SVG's default miter limit) -- a path per centreline that
+/// is a path, a stroked `<circle>`/`<ellipse>`/`<rect>` per centreline that is a whole
+/// primitive. One element is written alone with the style on it; several go in one `<g>`
+/// that carries the style (the primitives keep their own). Ids are `id` and `id-k`.
+///
+/// One path per centreline rather than one compound path: the numbers are the same (a
+/// subpath's move-to is a path's), and a reader that walks a path's points as one line --
+/// the gate's `turning` signal does -- does not read the pen lifts between strokes as
+/// turns (lucide at 128 px: 0.0303 -> 0.0389 with one compound path per face, 0.0303 ->
+/// 0.0306 with the move-tos taken as breaks).
 fn element(r: &Ribbon, hex: &str, decimals: usize, id: &str) -> String {
-    let mut d = String::new();
-    let mut prims = String::new();
+    let style = format!(
+        "fill=\"none\" stroke=\"{hex}\" stroke-width=\"{w:.decimals$}\" stroke-linecap=\"{c}\" stroke-linejoin=\"{j}\"",
+        w = r.width,
+        c = r.cap.svg(),
+        j = r.join.svg()
+    );
+    let mut parts: Vec<String> = Vec::new();
     for (k, line) in r.lines.iter().enumerate() {
         match line
             .prim
@@ -422,22 +434,24 @@ fn element(r: &Ribbon, hex: &str, decimals: usize, id: &str) -> String {
                 if let Some(sp) = el.find(' ') {
                     el.insert_str(sp, &format!(" id=\"{id}-{k}\""));
                 }
-                prims.push_str(&el);
+                parts.push(el);
             }
-            None => fmt_fitted(&line.path, line.path.closed, decimals, &mut d),
+            None => {
+                let mut d = String::new();
+                fmt_fitted(&line.path, line.path.closed, decimals, &mut d);
+                parts.push(format!("<path id=\"{id}-{k}\" d=\"{d}\"/>"));
+            }
         }
     }
-    let mut out = String::new();
-    if !d.is_empty() {
-        out.push_str(&format!(
-            "<path id=\"{id}\" d=\"{d}\" fill=\"none\" stroke=\"{hex}\" stroke-width=\"{w:.decimals$}\" stroke-linecap=\"{c}\" stroke-linejoin=\"{j}\"/>",
-            w = r.width,
-            c = r.cap.svg(),
-            j = r.join.svg()
-        ));
+    match parts.as_slice() {
+        [one] if one.starts_with("<path ") => {
+            // A lone path: the style on it, and the face's own id.
+            let d_at = one.find(" d=").unwrap_or(0);
+            format!("<path id=\"{id}\"{} {style}/>", &one[d_at..one.len() - 2])
+        }
+        [one] => one.clone(),
+        _ => format!("<g id=\"{id}\" {style}>{}</g>", parts.concat()),
     }
-    out.push_str(&prims);
-    out
 }
 
 #[cfg(test)]
@@ -517,5 +531,13 @@ mod tests {
         );
         assert!(element(&ribbon(1.0, Join::Round), "#123456", 2, "s")
             .contains("stroke-linejoin=\"round\""));
+        // Two centrelines: one path each, under a group that carries the style.
+        let mut two = ribbon(1.0, Join::Round);
+        two.lines.push(two.lines[0].clone());
+        let el = element(&two, "#000000", 2, "s");
+        assert_eq!(
+            el,
+            "<g id=\"s\" fill=\"none\" stroke=\"#000000\" stroke-width=\"4.00\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path id=\"s-0\" d=\"M1.00,2.00L11.00,2.00\"/><path id=\"s-1\" d=\"M1.00,2.00L11.00,2.00\"/></g>"
+        );
     }
 }

@@ -883,7 +883,12 @@ fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> 
             let preds = Predictions::new(&cand, s);
             let contrast = preds.contrast();
             let support = preds.support(flat_c, contrast);
-            if contrast < min_contrast || support < MIN_RAMP_SUPPORT {
+            // A gradient the emitter would paint flat is refused like one below the
+            // contrast floor: its residual is not what is drawn (`score::imperceptible`).
+            // Like a parent below the floor, it is refused before its interior stops are
+            // fitted (measured that way on the gate; it also saves their fit), so a
+            // light-dark-light profile whose two-stop line is flat is not tried here.
+            if contrast < min_contrast || support < MIN_RAMP_SUPPORT || imperceptible(&cand) {
                 // Which gate refused a candidate is otherwise invisible: a region that
                 // ends up "cands 1" looks identical whether no ramp was ever tried or
                 // every ramp was thrown away here. `INKVEC_EVDBG=1`.
@@ -910,7 +915,10 @@ fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> 
             for m in multi {
                 let pm = Predictions::new(&m, s);
                 let c = pm.contrast();
-                if c >= min_contrast && pm.support(flat_c, c) >= MIN_RAMP_SUPPORT {
+                if c >= min_contrast
+                    && pm.support(flat_c, c) >= MIN_RAMP_SUPPORT
+                    && !imperceptible(&m)
+                {
                     out.push(scored(m, &pm));
                 }
             }
@@ -1138,6 +1146,7 @@ mod evidence;
 mod fit;
 pub(crate) mod regions;
 mod score;
+pub use score::{imperceptible, IMPERCEPTIBLE_STOP_OKLAB};
 pub(crate) mod stops;
 pub mod svg;
 

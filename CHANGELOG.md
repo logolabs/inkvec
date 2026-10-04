@@ -7,9 +7,11 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-10-05
+
 ### Changed
 
-- **Quality mode traces much closer to the artist's file.** With the three changes below together, the regression gate measures dE00 −16.0 % at 128 px, −11.7 % at 512 px and −7.2 % at 512 px opaque against v0.2.5. Parameters fall 1–3.5 % at the same time. Fast mode is unchanged, except −1.6 % at 512 px opaque from the gradient work.
+- **Quality mode traces much closer to the artist's file.** Against v0.2.4 on the regression gate, Quality dE00 is −16.3 % at 128 px, −13.3 % at 512 px and −7.8 % at 512 px opaque. Parameters fall 1.9–4.2 % at the same time, and curves turn no more. Fast is −1.6 % / −0.2 % / −1.8 % with 1.6–4.3 % fewer parameters. Quality takes 1.17× v0.2.4's time at 512 px and 1.06× at 128 px; Fast's time is unchanged.
 - **The boundary solve converges.** It used to stop on the size of a backtracked step, often long before the optimum. It now uses a Moré–Thuente line search and stops on the projected gradient and the relative decrease (Byrd et al. 1995), within 64 iterations.
   - When a step folds two boundaries across each other, only the boundaries in the new crossing are backed off, not the whole solve.
   - Pixels that two boundaries share now count in the fit.

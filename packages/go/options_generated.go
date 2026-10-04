@@ -139,7 +139,7 @@ type Options struct {
 	// gradient check in place of gradient recovery: several times faster (tens of milliseconds
 	// at 512 px), a little less faithful, with somewhat more parameters. Options that only
 	// steer quality stages (precision, content_units, harmonize, harmonize_threshold,
-	// time_budget) are ignored in fast mode. "balanced" (opt-in) is fast plus four iterations
+	// time_budget) are ignored in fast mode. "balanced" (opt-in) is fast plus eight iterations
 	// of quality's boundary solve and a fit with tolerances a quarter finer: in between the
 	// two in fidelity and time, on rasters up to 1024 px on the longer side; a larger raster
 	// is traced exactly as in fast mode. It ignores the same options as fast.

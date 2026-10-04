@@ -336,11 +336,11 @@ OPTIONS:
                                      planar map, with flat fills: several times
                                      faster, a little less faithful. Options that only
                                      steer quality stages are ignored and listed
-                            balanced fast, plus 4 iterations of the boundary
-                                     solve and a fit a quarter finer: about 35%
+                            balanced fast, plus 8 iterations of the boundary
+                                     solve and a fit a quarter finer: about 38%
                                      closer to the artist's file than fast at
-                                     128 px and 18% at 512 px, for 2-2.6x fast's
-                                     engine time and a few % more parameters.
+                                     128 px and 19% at 512 px, for 2.4-3.3x fast's
+                                     engine time, with as many parameters.
                                      Inputs over 1024 px on the longer side trace
                                      as fast, where the extra steps buy little.
                                      Ignores the same options as fast

@@ -21,10 +21,12 @@
 //! millisecond added to Fast. At 128 px the gap to Quality is geometry, not colour: 94 % of
 //! Fast's error lies within one source pixel of a contour, and its Shapley split is the
 //! curve fit 49 %, the boundary solve 42 %, the front end 9 %. The curve dynamic program is
-//! 17-30x Fast's work; the solve is cheap, and an anytime one: 4 of its 32 iterations buy
-//! 81 % of its gain. The fitter's tolerances cost no time at all. So balanced takes the
-//! solve's first iterations and the finer tolerances, and leaves the dynamic program,
-//! gradient recovery, ring repair and harmonization to Quality.
+//! 17-30x Fast's work; the solve is cheap, and an anytime one: on the solver of v0.2.5, 4
+//! of its 32 iterations bought 81 % of its gain. The fitter's tolerances cost no time at
+//! all. So balanced takes the solve's first iterations and the finer tolerances, and leaves
+//! the dynamic program, gradient recovery, ring repair and harmonization to Quality. The
+//! cap was re-measured on the rewritten solver (Moré–Thuente line search, 64 iterations;
+//! see [`BALANCED_SOLVE_ITERS`]) and is now 8.
 //!
 //! The size gate: on 2048 px renders of the 21 cross-compare cases the same arm bought
 //! -5 % dE00 on the 19 flat ones for 2.3x the work, raised parameters by a third and
@@ -64,11 +66,26 @@ pub(crate) fn on(args: &Args) -> bool {
 pub(crate) const BALANCED_MAX_SIDE: usize = 1024;
 
 /// The boundary solve's iteration cap in `balanced` mode, per independent part of the
-/// boundary. r2-fastq's profile on the 128 px screen set: 2 iterations buy 50 % of the
-/// 32-iteration solve's dE00 gain, 4 buy 81 %, 8 buy 89 %, 16 buy 93 %, while the stage's
-/// cost is mostly fixed setup (2 iterations already cost 1.2-1.4x Fast at 128 px, 4 cost
-/// 1.3-1.4x). Four is the knee.
-pub(crate) const BALANCED_SOLVE_ITERS: usize = 4;
+/// boundary: one iteration is one L-BFGS step accepted by the solve's Moré–Thuente line
+/// search.
+///
+/// Swept on the gate (2026-10-04, against v0.2.5's Fast; 128ss / 512ss changes, engine
+/// time as a paired median ratio to Fast at 128 / 512 px):
+///
+/// | cap | dE00 | turning | parameters | time |
+/// |---|---|---|---|---|
+/// | 2 | −29.4 / −15.8 % | +17.6 / +15.9 % | +6.6 / +3.8 % | 1.93 / 2.43x |
+/// | 4 | −36.3 / −18.8 % | +17.6 / +14.7 % | +3.0 / +2.9 % | 2.08 / 2.83x |
+/// | 8 | −37.9 / −19.0 % | +14.0 / +12.3 % | −0.2 / +1.3 % | 2.40 / 3.32x |
+/// | 16 | −39.7 / −19.6 % | +10.8 / +10.5 % | −2.0 / −0.8 % | 2.97 / 4.35x |
+/// | 64 (no cap) | | | | 6.62 / 9.53x |
+///
+/// The colour error's knee is at 4, but on this solver more iterations also smooth the
+/// boundary the fitter reads, so turning and the parameter count keep falling; 8 takes the
+/// parameter rise to noise for 15 % more engine time than 4. On the solver of v0.2.5
+/// (backtracking Armijo, 32 iterations) the cap was 4: 2 / 4 / 8 / 16 iterations bought
+/// 50 / 81 / 89 / 93 % of its dE00 gain on the 128 px screen set (r2-fastq).
+pub(crate) const BALANCED_SOLVE_ITERS: usize = 8;
 
 /// Whether `args` ask for balanced mode and a `width` x `height` raster is small enough
 /// for it ([`BALANCED_MAX_SIDE`]): the one test behind both of balanced's additions, so

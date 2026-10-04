@@ -48,7 +48,7 @@ pub enum TraceMode {
     Quality,
     /// Single-pass Potrace-class planar tracer on shared edges (~30x faster).
     Fast,
-    /// Fast, plus four iterations of Quality's boundary solve and fitter tolerances a
+    /// Fast, plus eight iterations of Quality's boundary solve and fitter tolerances a
     /// quarter finer, up to 1024 px on the longer side (above it, Fast's path); see
     /// `inkvec_cli`'s `fast` module. Reads the same controls as Fast.
     Balanced,

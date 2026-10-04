@@ -595,9 +595,10 @@ pub fn optimise_alpha(
 /// [`optimise_alpha`]). Everything else -- the band, the stopping tests, the fold guard --
 /// is the same, so a cap only ever ends the descent earlier.
 ///
-/// Fast's `balanced` mode runs the solve this way, as an anytime stage stopped at the knee
-/// of its measured profile (r2-fastq, 2026-10-02: on the 128 px screen set 2 iterations
-/// buy 50 % of the full solve's dE00 gain, 4 buy 81 %, 8 buy 89 %, 16 buy 93 %).
+/// Fast's `balanced` mode runs the solve this way, as an anytime stage stopped where its
+/// measured profile flattens: 8 iterations on this solver (the sweep is on
+/// `inkvec_cli`'s `BALANCED_SOLVE_ITERS`); on the backtracking solver of v0.2.5, 2 / 4 / 8
+/// / 16 iterations bought 50 / 81 / 89 / 93 % of its dE00 gain at 128 px (r2-fastq).
 /// Inspired by: S. Zilberstein (1996), "Using anytime algorithms in intelligent systems",
 /// AI Magazine 17(3):73, <https://ojs.aaai.org/aimagazine/index.php/aimagazine/article/view/1232>:
 /// a contract algorithm given a fixed budget chosen from its performance profile. Here

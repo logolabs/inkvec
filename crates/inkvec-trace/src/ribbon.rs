@@ -476,6 +476,21 @@ fn reading(
     // Each chain is fitted on its own, so the chains are fitted in parallel; `collect`
     // keeps their order, so the result is the sequential one.
     let stride = ((w0 / CHAIN_SAMPLES_PER_WIDTH).floor() as usize).max(1);
+    // A coarse fit first: a reading whose centrelines cost well over the budget even at
+    // an eighth of the samples is declined without the full fit ([`COARSE_DECLINE`]).
+    let coarse: f64 = topo
+        .chains
+        .par_iter()
+        .map(|c| decimate(c, COARSE_STRIDE * stride))
+        .filter(|c| c.points.len() >= 2)
+        .map(|c| fit_chain(&c, cfg))
+        .filter(|c| !c.path.segments.is_empty())
+        .map(|c| c.params())
+        .sum::<f64>()
+        + 1.0;
+    if coarse >= COARSE_DECLINE * budget {
+        return Err(Decline::NoGain { params: coarse });
+    }
     let lines: Vec<Centreline> = topo
         .chains
         .par_iter()
@@ -539,6 +554,29 @@ fn reading(
 /// anyway. Eight per width keeps every sample at 128 px (lucide: stride 1) and every
 /// fifth at 512 px.
 const CHAIN_SAMPLES_PER_WIDTH: f64 = 8.0;
+
+/// How much coarser than the full fit the screening fit is ([`COARSE_DECLINE`]).
+const COARSE_STRIDE: usize = 8;
+
+/// A reading whose centrelines, fitted to every [`COARSE_STRIDE`]-th of the samples the
+/// full fit reads, already cost this many times the caller's budget is declined as
+/// [`Decline::NoGain`] without the full fit.
+///
+/// Most declines for cost are a stroke that encloses a fill (openmoji's black outlines:
+/// the fill writes the inner side either way, so only the outer one can vanish) and they
+/// are clear by a wide margin; their full fits were 40% of openmoji's stage time at 512
+/// px (125 of 332 ms per icon, summed over threads). Measured on every reading of the
+/// screen set at 128 px (1481, of which 391 declined for cost by the full fit): the
+/// coarse fit at 1.25x the budget catches 245 of the 391 and declines none of the
+/// others; on lucide and openmoji at 512 px (400, 112 declined), it catches 79 and
+/// declines 2 of the 288 others. The coarse fit costs about an eighth of the full one.
+///
+/// Not from the literature: a coarse-to-fine early rejection, because no lower bound on
+/// the fitter's parameter count is cheaper than fitting. See also: Viola, Jones (2001),
+/// Rapid object detection using a boosted cascade of simple features, CVPR,
+/// doi:10.1109/CVPR.2001.990517, whose cascade rejects most candidates with its cheapest
+/// stage -- the same economy, with an empirical margin standing in for a trained one.
+const COARSE_DECLINE: f64 = 1.25;
 
 /// Chain `c` as the polyline the curve fitter reads, with its measured samples thinned to
 /// every `stride`-th.

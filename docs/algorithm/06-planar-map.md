@@ -274,7 +274,7 @@ A face id that is `u16::MAX`, or otherwise `>= map.n_labels`, is silently skippe
 edges are filed (`planar.rs:1274, 1277`) — this is how `inkvec-cli`'s layer-merging code
 removes an edge from every ring without touching its geometry: setting both `left` and
 `right` to `u16::MAX` makes the edge "interior" and it drops out of `face_edge_order`'s
-output entirely (`inkvec-cli/src/lib.rs:928-931`).
+output entirely (`inkvec-cli/src/lib.rs:978-981`).
 
 ## Constants and thresholds
 
@@ -296,7 +296,7 @@ saddle-merge decision:
 
 | name | value | controls | derivation |
 |---|---|---|---|
-| `SADDLE_SIGMAS` (`lib.rs:515`) | `3.0` | how far a four-pixel corner's coverage reading must sit from 0.5 before `merge_saddle_faces` (upstream of `build`) trusts it enough to merge two faces | stated: "Below that the two readings are indistinguishable, and the corner keeps the junction it has always had" (`lib.rs:512-514`) — a standard statistical significance threshold on propagated coverage noise, not a fitted constant |
+| `SADDLE_SIGMAS` (`lib.rs:566`) | `3.0` | how far a four-pixel corner's coverage reading must sit from 0.5 before `merge_saddle_faces` (upstream of `build`) trusts it enough to merge two faces | stated: "Below that the two readings are indistinguishable, and the corner keeps the junction it has always had" (`lib.rs:563-565`) — a standard statistical significance threshold on propagated coverage noise, not a fitted constant |
 
 ## Failure modes and edge cases
 
@@ -309,7 +309,7 @@ saddle-merge decision:
 - **`merge_saddle_faces` is off by default.** The stage that decides, from the *image*,
   whether two diagonally-touching-but-currently-separate faces should be read as one
   continuous shape is gated by `INKVEC_SADDLE` (*research build*) and does not run unless that variable is
-  set (`lib.rs:561`). Its own doc comment records why: "231 of the 246 screen icons are
+  set (`lib.rs:612`). Its own doc comment records why: "231 of the 246 screen icons are
   untouched — but it does not yet pay for itself on the set: objective 0.4005 -> 0.4010,
   six icons better and nine worse. The nine are the emitter's containment tree being
   rewritten by a merge into the background..., not the reading being wrong" (`lib.rs:
@@ -335,14 +335,14 @@ Since the settings cleanup (CHANGELOG, 0.2.0, *Changed*) the engine reads its en
 
 None inside `planar::build` itself. The upstream decision that feeds it —
 `merge_saddle_faces` — is controlled by `INKVEC_SADDLE` (*research build*) (must be set and not `"0"`,
-`lib.rs:561`) and its diagnostic output by `INKVEC_SADDLEDBG` (*research build*) (`lib.rs:564`).
+`lib.rs:612`) and its diagnostic output by `INKVEC_SADDLEDBG` (*research build*) (`lib.rs:615`).
 
 ## Open questions
 
 - `merge_saddle_faces` is implemented, tested against real corpus evidence (the coverage
   read at a four-way corner), and shown in its own doc comment to be net-positive on 231
   of 246 icons — yet it ships **off**, because of a downstream interaction with the
-  emitter's containment tree on the other 9 (`lib.rs:557-560`). That interaction is not
+  emitter's containment tree on the other 9 (`lib.rs:608-611`). That interaction is not
   analysed further in this file; fixing it would let this stage's corner-splitting logic
   fire on genuinely separate, same-coloured touching shapes rather than only self-touching
   ones.

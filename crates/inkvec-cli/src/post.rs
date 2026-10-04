@@ -91,6 +91,63 @@ pub(crate) fn retarget(svg: &str, w: usize, h: usize) -> String {
     svg.to_string()
 }
 
+/// A retargeted document whose two axes were reduced by different factors, presented axis
+/// by axis: `preserveAspectRatio="none"` added to the root when its viewBox and its
+/// `width` x `height` differ in aspect by more than one part in 10⁹.
+///
+/// An intake reduction that keeps whole source pixels cannot keep the aspect exactly: a
+/// nearest-neighbour upscale of 128 x 43 to 448 x 150 has pitches 3.5 and 3.488, and the
+/// unblock hands back the 128 x 43 source. Retargeted to 448 x 150 under the default
+/// `xMidYMid meet`, the drawing would be scaled by the smaller pitch and centred, which
+/// letterboxes it by 0.75 px on each side; `none` maps the viewBox onto the canvas with each
+/// axis's own scale, which is exactly how the reduction mapped the pixels. (SVG 1.1 Second
+/// Edition, section 7.8, "The 'preserveAspectRatio' attribute": `none` -- "Do not force
+/// uniform scaling", <https://www.w3.org/TR/SVG11/coords.html#PreserveAspectRatioAttribute>.)
+///
+/// Only the root element is read and written, and a document whose root already carries the
+/// attribute, has no four-number viewBox or no parsable size is returned unchanged; so is
+/// one whose aspect agrees, which is every document no reduction produced. Called by
+/// `lib.rs` only when the intake reduced the raster to its source pixels (`Intake::stretch`),
+/// never for `--max-dim`, whose box filter is free to choose the size it lands on.
+pub(crate) fn stretch_axes(svg: &str) -> String {
+    let Some(root_end) = svg
+        .find("<svg")
+        .and_then(|i| svg[i..].find('>').map(|j| i + j))
+    else {
+        return svg.to_string();
+    };
+    let root = &svg[..root_end];
+    if root.contains("preserveAspectRatio") {
+        return svg.to_string();
+    }
+    // The value of `name="…"` in the root, as text.
+    let attr = |name: &str| {
+        let key = format!(" {name}=\"");
+        let rest = &root[root.find(&key)? + key.len()..];
+        Some(&rest[..rest.find('"')?])
+    };
+    let view: Vec<f64> = attr("viewBox")
+        .map(|v| {
+            v.split([' ', ','])
+                .filter(|t| !t.is_empty())
+                .filter_map(|t| t.parse().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    let size = |name: &str| attr(name).and_then(|v| v.parse::<f64>().ok());
+    match (view.as_slice(), size("width"), size("height")) {
+        (&[_, _, vw, vh], Some(w), Some(h)) if vw > 0.0 && vh > 0.0 && w > 0.0 && h > 0.0 => {
+            let (a, b) = (vw / vh, w / h);
+            if ((a - b) / b).abs() > 1e-9 {
+                format!("{root} preserveAspectRatio=\"none\"{}", &svg[root_end..])
+            } else {
+                svg.to_string()
+            }
+        }
+        _ => svg.to_string(),
+    }
+}
+
 /// Remove the element that paints the whole canvas, so the artwork sits on
 /// transparency. The emitter writes that face either as a `<rect>` spanning the
 /// canvas or, when it has holes, as a path whose outer ring visits all four canvas
@@ -546,5 +603,55 @@ mod hygiene_tests {
         let referenced =
             "<svg><g id=\"repeat\"><path d=\"M0,0L1,1\"/></g><use href=\"#repeat\"/></svg>";
         assert_eq!(minify_svg(referenced), referenced);
+    }
+}
+
+#[cfg(test)]
+mod stretch_tests {
+    use super::{retarget, stretch_axes, with_margin};
+
+    fn doc(vw: u32, vh: u32) -> String {
+        format!("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"-0.5 -0.5 {vw} {vh}\" width=\"{vw}\" height=\"{vh}\"><path d=\"M1,1L2,2Z\" stroke-width=\"3\"/></svg>")
+    }
+
+    /// An exact multiple keeps the aspect, and the document gains nothing but the size.
+    #[test]
+    fn an_exact_multiple_only_changes_the_size() {
+        let out = stretch_axes(&retarget(&doc(128, 64), 512, 256));
+        assert!(out.contains("width=\"512\" height=\"256\""), "{out}");
+        assert!(!out.contains("preserveAspectRatio"), "{out}");
+        assert_eq!(stretch_axes(&doc(128, 64)), doc(128, 64));
+    }
+
+    /// Two pitches (3.5 and 3.488) are presented axis by axis, once, and only on the root.
+    #[test]
+    fn a_reduction_with_two_pitches_is_stretched_not_letterboxed() {
+        let out = stretch_axes(&retarget(&doc(128, 43), 448, 150));
+        assert!(
+            out.starts_with("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"-0.5 -0.5 128 43\" width=\"448\" height=\"150\" preserveAspectRatio=\"none\"><path"),
+            "{out}"
+        );
+        assert_eq!(out.matches("preserveAspectRatio").count(), 1);
+        assert_eq!(stretch_axes(&out), out);
+        // `--margin` still finds the emitter's header and grows both axes by the same
+        // number of traced pixels.
+        let m = with_margin(out, 128, 43, 0.25);
+        assert!(m.contains("viewBox=\"-32.50 -32.50 192.00 107.00\""), "{m}");
+        assert!(m.contains("preserveAspectRatio=\"none\""), "{m}");
+    }
+
+    /// A root the function cannot read is left alone.
+    #[test]
+    fn an_unreadable_root_is_left_alone() {
+        for svg in [
+            "",
+            "<svg",
+            "<svg width=\"10\" height=\"5\"></svg>",
+            "<svg viewBox=\"0 0 10\" width=\"10\" height=\"5\"></svg>",
+            "<svg viewBox=\"0 0 10 10\" width=\"x\" height=\"5\"></svg>",
+            "<svg viewBox=\"0 0 0 10\" width=\"10\" height=\"5\"></svg>",
+        ] {
+            assert_eq!(stretch_axes(svg), svg);
+        }
     }
 }

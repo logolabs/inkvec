@@ -117,7 +117,7 @@ precision, `tau = 2.0`.
 
 In the shipping CLI, `extent` is the intake raster's `max(width, height)` in pixels, and
 `precision`/`tau` come from `--precision` (default `0.1`) and `--tau` (default `2.0`)
-(`crates/inkvec-cli/src/args.rs:218-219`), combined in `fit_config`
+(`crates/inkvec-cli/src/args.rs:221-222`), combined in `fit_config`
 (`crates/inkvec-cli/src/units.rs:92-98`). Under `--content-units`, `fit_config` multiplies
 `precision` by the content scale `s` before deriving `lambda` and then multiplies `lambda`
 by `s` again; see `01-intake.md`.

@@ -8,10 +8,10 @@
 `primitive.rs` (circle, ellipse and rectangle elements), `rings.rs` (nesting),
 `crates/inkvec-cli/src/post.rs` (output options), and `inkvec_svgmin::compact` for `--minify`.
 **Entry points:** `emit_color()` (`crates/inkvec-cli/src/emit.rs:151`); post-processing via
-`post_process()` (`crates/inkvec-cli/src/post.rs:394`).
+`post_process()` (`crates/inkvec-cli/src/post.rs:451`).
 **Pipeline position:** after fill assignment (stage mark `"fills"`,
-`crates/inkvec-cli/src/pipeline.rs:389`), through the stage mark `"emit"`
-(`crates/inkvec-cli/src/pipeline.rs:435`); `post_process` then runs separately, outside the
+`crates/inkvec-cli/src/pipeline.rs:387`), through the stage mark `"emit"`
+(`crates/inkvec-cli/src/pipeline.rs:433`); `post_process` then runs separately, outside the
 timed pipeline, just before the file is written.
 
 Crate header, `crates/inkvec-cli/src/lib.rs:6-21`, gives the whole pipeline shape:
@@ -319,26 +319,26 @@ Which gradients reach this point is decided in the `fills` mark (below): a gradi
 stops a viewer could not tell apart is painted flat first.
 
 **Where the alpha ramps come from, and which faces are fitted.** The ramps are measured just
-before writing, inside the `emit` mark: `face_transparency` (`pipeline.rs:1031`) calls
-`alpha::face_alpha` (`crates/inkvec-cli/src/alpha.rs:941`), which under `--cutout` tries, for
+before writing, inside the `emit` mark: `face_transparency` (`pipeline.rs:1008`) calls
+`alpha::face_alpha` (`crates/inkvec-cli/src/alpha.rs:942`), which under `--cutout` tries, for
 each face that is neither clear nor already one flat opacity, to fit a plane to its interior
-alpha (`fit_alpha_ramp`, `alpha.rs:170`) and keeps it only when it fades by at least
+alpha (`fit_alpha_ramp`, `alpha.rs:171`) and keeps it only when it fades by at least
 `RAMP_MIN_FADE = 0.15`, with an RMS residual of at most `RAMP_MAX_RESIDUAL = 0.06`, over at
-least `RAMP_MIN_INTERIOR = 64` interior pixels (`alpha.rs:87-93`). Since 2026-09-30 the pass is
-linear in the pixel count (`face_alpha`'s "Passes", `alpha.rs:912-923`):
+least `RAMP_MIN_INTERIOR = 64` interior pixels (`alpha.rs:88-94`). Since 2026-09-30 the pass is
+linear in the pixel count (`face_alpha`'s "Passes", `alpha.rs:913-924`):
 
 1. one pass over each row's runs gathers every face's alpha statistics (`face_stats`,
-   `alpha.rs:1112`); each f64 sum receives the same terms in the same order as the per-pixel
+   `alpha.rs:1113`); each f64 sum receives the same terms in the same order as the per-pixel
    loop it replaced;
 2. the clear and opacity verdicts come from those sums alone;
-3. a face goes to the fit only when `ramp_candidate` (`alpha.rs:1273`) says the fit can return
+3. a face goes to the fit only when `ramp_candidate` (`alpha.rs:1274`) says the fit can return
    anything, and the candidates' interior pixels are gathered in one more pass
-   (`interior_pixels`, `alpha.rs:1297`).
+   (`interior_pixels`, `alpha.rs:1298`).
 
-The skip is a proof, not a heuristic (`alpha.rs:1231-1258`): a face with fewer than 64 interior
+The skip is a proof, not a heuristic (`alpha.rs:1232-1259`): a face with fewer than 64 interior
 pixels fails the fit's own first test, and a face whose interior alphas are all exactly `1.0`
 gets an exactly flat plane — the right-hand side of the normal equations is bit for bit the
-matrix's first column, so Cramer's rule (`solve3x3`, `alpha.rs:298`) evaluates `det(M_1)` and
+matrix's first column, so Cramer's rule (`solve3x3`, `alpha.rs:299`) evaluates `det(M_1)` and
 `det(M_2)` to exactly `0`, and the fit returns `None`. On the research sets 96% of the 3,125
 calls were such provable `None`s, and none ever returned a ramp. The old whole-image fit is kept
 as `fit_alpha_ramp_scan` (`alpha/ramp_tests.rs:13`). Citations, as the doc comments give them:
@@ -365,27 +365,27 @@ and only when the stack reproduces every covered face within dE00 1.0) is
 
 ### `--minify` and `--no-background`
 
-`post_process` (`post.rs:378-406`) composes the output options in a fixed order: background
+`post_process` (`post.rs:435-463`) composes the output options in a fixed order: background
 knock-out, then either `--minify` (`minify_svg`, then `compact_paths`) or, without it, the
 generator comment and metadata (`annotate`), then the margin.
 
-`knock_out_background` (`post.rs:94-185`, for `--no-background`) removes the element that
+`knock_out_background` (`post.rs:151-242`, for `--no-background`) removes the element that
 paints the whole canvas. A `<rect>` is matched by its numbers: all four of its edges within
 `CANVAS_TOL = 0.25` px of the canvas's, because a fitted rectangle lands a hundredth of a pixel
 or two off them. A `<path>` is matched by text: its outer ring must contain all four canvas
 corners, written at the emitter's own decimal count (`emit_decimals`) — until 2026-09-08 those
 digits were hard-coded and an `INKVEC_EMIT_DECIMALS` override made the match fail silently
-(`post.rs:104-110`). Only the first matching element is removed; children of that face remain;
+(`post.rs:161-167`). Only the first matching element is removed; children of that face remain;
 nothing is removed when nothing matches. It runs before minify, which changes how the numbers
 are written. Under `--monochrome` it stands aside, since each emitter then leaves the ground
 out itself.
 
-`minify_svg` (`post.rs:187-202`) strips every `id="..."` that nothing references (a substring
+`minify_svg` (`post.rs:244-259`) strips every `id="..."` that nothing references (a substring
 test for `#id`, so a false positive costs bytes, never a broken reference), removes `<g>`
 wrappers left with no attributes, and strips trailing zeros from decimal numbers (`12.50` ->
 `12.5`, `3.00` -> `3`), guarding hex colours and URLs.
 
-`compact_paths` (`post.rs:408-434`) then hands every `d` to `inkvec_svgmin::compact`
+`compact_paths` (`post.rs:465-491`) then hands every `d` to `inkvec_svgmin::compact`
 (`crates/inkvec-svgmin/src/lib.rs:117-131`): the same numbers, written in the fewest bytes —
 relative where that is shorter, repeated letters and needless separators dropped, `H`/`V`/`S`
 where they say the same thing — with nothing rounded and nothing moved. **Arcs stay arcs**
@@ -396,7 +396,7 @@ where the fitter's reading turned each arc into the cubics that approximate it a
 path holding an arc too long to replace. Measured on the 246-icon screen set (2026-10-02):
 `--minify` writes 478,421 bytes where the default writes 710,367, every file pixel-identical
 to the default at 512 px; before the arcs were kept it stopped at 541,427; SVGO 4.1's default
-preset, which rounds, takes a further 1.1% off (`post.rs:410-420`). Rounding is deliberately
+preset, which rounds, takes a further 1.1% off (`post.rs:467-477`). Rounding is deliberately
 left out ("ten points left on the table on purpose": two decimals would take 18% instead of
 8.5% but move pixels on gradient-heavy traces); `inkvec-svgmin --decimals` is where precision
 is spent for bytes. If the writer fails to parse the document, or its result is not strictly
@@ -410,7 +410,7 @@ at `0,0`, so the canvas spans `-0.5` to `w-0.5`.
 
 `post::retarget` (`post.rs:63-90`) rewrites only the root `width`/`height` (leaving `viewBox`
 untouched) to make a document traced at one size render at another — used whenever the raster
-was resampled or capped (`--max-dim`). `post::with_margin` (`post.rs:287-349`) grows the
+was resampled or capped (`--max-dim`). `post::with_margin` (`post.rs:344-406`) grows the
 viewBox by `margin · max(w, h)` on every edge and scales the presented size in proportion,
 writing all six numbers at two decimals; a document whose root is not the emitter's header is
 left as it was.
@@ -424,12 +424,12 @@ out wrong (2026-09-05)."
 
 ### The `fills` and `emit` stage marks
 
-Both stage marks are inside `finish_color` (`pipeline.rs:342`), timed by a `Stopwatch`
-(`crates/inkvec-trace/src/lib.rs:1203`) that prints only under `INKVEC_TIMING`.
+Both stage marks are inside `finish_color` (`pipeline.rs:341`), timed by a `Stopwatch`
+(`crates/inkvec-trace/src/lib.rs:1204`) that prints only under `INKVEC_TIMING`.
 
-**`fills`** (`pipeline.rs:387-389`) times the mirror-symmetry reconciliation after repair
-(`apply_mirrors`, `pipeline.rs:936`: one boundary's fit reflected onto its mirror) and
-`final_fills` (`pipeline.rs:974-1008`): `--no-gradients` paints every face its palette ink, and
+**`fills`** (`pipeline.rs:385-387`) times the mirror-symmetry reconciliation after repair
+(`apply_mirrors`, `pipeline.rs:913`: one boundary's fit reflected onto its mirror) and
+`final_fills` (`pipeline.rs:951-985`): `--no-gradients` paints every face its palette ink, and
 otherwise `demote_imperceptible_gradient` (`crates/inkvec-cli/src/pipeline/demote.rs:38`)
 paints flat a gradient no viewer could see. The test is the profile's colour range, the
 largest OKLab distance between *any two of its stops*, ends and interior stops alike, against
@@ -442,9 +442,9 @@ test is the old end-to-end one exactly. The gradient *fitting* itself happens ea
 `inkvec_trace`, and is charged to `trace_total`. The demotion is "Not from the literature: a
 fix to the guard's own definition", with "See also" Ottosson 2020 (OKLab).
 
-**`emit`** (`pipeline.rs:390-435`) covers alpha-layer recovery (`alpha::recover_layers`), the
+**`emit`** (`pipeline.rs:388-433`) covers alpha-layer recovery (`alpha::recover_layers`), the
 per-face transparency above, and **two competing documents, priced against each other**
-(`write_colour`, `pipeline.rs:1118-1127`):
+(`write_colour`, `pipeline.rs:1095-1104`):
 
 > "Both forms of the document, costed against each other.
 >
@@ -455,14 +455,14 @@ per-face transparency above, and **two competing documents, priced against each 
 > the flat form is what is written."
 
 The flat document is always emitted; if layers were recovered, a second document is emitted
-with the covered faces merged into their ground (`merge_map`, `pipeline.rs:1100`), and the two
+with the covered faces merged into their ground (`merge_map`, `pipeline.rs:1077`), and the two
 are priced by counting shape elements and bytes in each:
 
 ```rust
 let pays = pl < pf && bl <= bf;  // fewer shapes AND not more bytes
 ```
 
-(`pipeline.rs:1211`). Whichever wins becomes the output.
+(`pipeline.rs:1188`). Whichever wins becomes the output.
 
 ## Constants and thresholds
 
@@ -481,8 +481,8 @@ let pays = pl < pf && bl <= bf;  // fewer shapes AND not more bytes
 | opacity precision | `emit.rs:724`, `:766`, `:772` | 3 decimals | `fill-opacity`/`stop-opacity` | no stated derivation |
 | `INKVEC_EMIT_DECIMALS` | `pathdata.rs:50` | env override | overrides `EMIT_DECIMALS` | the mechanism used to isolate rounding from the segment price in the 7.2% measurement |
 | `EVENODD` | `emit/winding.rs:102` | ` fill-rule="evenodd"` | written only on a `d` the winding pass cannot read | the old output as a fallback |
-| `CANVAS_TOL` | `post.rs:129` | 0.25 px | `--no-background` rect match | motivated (a fitted canvas rect lands 0.01-0.02 px off) |
-| margin viewBox precision | `post.rs:336` | 2 decimals | `--margin` growth | no stated derivation |
+| `CANVAS_TOL` | `post.rs:186` | 0.25 px | `--no-background` rect match | motivated (a fitted canvas rect lands 0.01-0.02 px off) |
+| margin viewBox precision | `post.rs:393` | 2 decimals | `--margin` growth | no stated derivation |
 | `JND` | `pipeline/demote.rs:41` | 0.02 (OKLab) | gradient demotion | "a conservative multiple of a just-noticeable difference" |
 | `LAYER_MAX_DE00` | `alpha/layers.rs:32` | 1.0 dE00 | `--layers` reproduction guard | about one just-noticeable difference, the tolerance the merge after it already spends |
 | `ci_gate.py` ratio margin | `bench/ci_gate.py:138` | 3% relative, at the one-sided 95% upper bound | regression gate on parameter count vs artist | change detection, not the 1.5x absolute rule cited in commit history |

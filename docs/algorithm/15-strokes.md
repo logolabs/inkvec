@@ -14,7 +14,7 @@ SVG elements: `crates/inkvec-cli/src/ribbons.rs`.
 **Entry points:** `ribbon::fit_face()` (`crates/inkvec-trace/src/ribbon.rs:324`), called per
 candidate face by `ribbons::choose()` (`crates/inkvec-cli/src/ribbons.rs:168`), which
 `ribbons::stage()` (`crates/inkvec-cli/src/ribbons.rs:77`) runs when
-`--detect-strokes` / `Options::detect_strokes` is set (`crates/inkvec-cli/src/args.rs:181`,
+`--detect-strokes` / `Options::detect_strokes` is set (`crates/inkvec-cli/src/args.rs:184`,
 `crates/inkvec/src/options.rs:110`) or, for the benchmarks, `INKVEC_RIBBONS=1`
 (`crates/inkvec-cli/src/ribbons.rs:67`).
 **Pipeline position:** Quality mode, colour output only (not `--mode fast`, not

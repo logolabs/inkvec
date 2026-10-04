@@ -94,6 +94,7 @@ pub mod regularize;
 // Stroke-drawn faces as centrelines plus one width, behind `--detect-strokes`
 // (`Options::detect_strokes`) in the CLI's colour pipeline.
 pub mod ribbon;
+pub mod softness;
 pub mod symmetry;
 pub mod taper;
 

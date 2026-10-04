@@ -4,8 +4,8 @@
 > model-selection problem under one description-length objective.
 
 **Source:** the whole tree; this page indexes it.
-**Entry points:** `inkvec_trace::trace_color_full_with_alpha` (`crates/inkvec-trace/src/lib.rs:285`,
-called via `trace_color_full` at `lib.rs:249`) for the raster-to-planar-map half;
+**Entry points:** `inkvec_trace::trace_color_full_with_alpha` (`crates/inkvec-trace/src/lib.rs:286`,
+called via `trace_color_full` at `lib.rs:250`) for the raster-to-planar-map half;
 `inkvec_cli::trace_image` (`crates/inkvec-cli/src/lib.rs:194`) for the whole command, intake
 through SVG text.
 **Pipeline position:** none — this is the front door. Every numbered stage document assumes
@@ -87,39 +87,39 @@ image -> intake -> trace -> fit -> repair -> emit -> post -> SVG
 ```
 
 The colour path proper — `trace_color_full_with_alpha` — runs the marks below, in order,
-each timed by the `Stopwatch` (`crates/inkvec-trace/src/lib.rs:1203`, `mark` at `:1280`, printed under
+each timed by the `Stopwatch` (`crates/inkvec-trace/src/lib.rs:1204`, `mark` at `:1281`, printed under
 `INKVEC_TIMING`):
 
 | mark | line | stage | what it decides |
 |---|---|---|---|
-| — | `crates/inkvec-cli/src/lib.rs:248` (`intake`) | **intake** | decode (format from the file's signature, EXIF orientation applied, an ICC profile converted to sRGB; `crates/inkvec-trace/src/load.rs`), unblock a nearest-neighbour upscale, optional SR clean-up, resolution normalisation, alpha matting — doc `01-intake.md` |
-| `palette` | `crates/inkvec-trace/src/lib.rs:409` (`color::extract_palette_mdl_ids` :395) | palette | how many inks, and which colours, by MDL against measured pixel noise |
-| `labels` | `crates/inkvec-trace/src/lib.rs:528` (`color::label_image_ids` :413) | labels | which ink each pixel is assigned to |
-| `despeckle` | `crates/inkvec-trace/src/lib.rs:532` | despeckle | absorb regions below `min_region` into their most common neighbour |
-| `blend_absorb` | `crates/inkvec-trace/src/lib.rs:570` (`absorb_blend_slivers` :548 / `reassign_blend_pixels` :557) | blend absorption | anti-aliased pixels between two inks are not a third ink; stop them minting sliver faces |
-| `merge_bands` | `crates/inkvec-trace/src/lib.rs:599` (`gradient::merge_gradient_bands_with_ink` :586) | gradient bands | whether adjacent palette bands are really one gradient |
-| `carve` | `crates/inkvec-trace/src/lib.rs:669` (`gradient::carve_residual_features_with_detail_noise` :652) | carve | cut out a feature the palette quantised into its surroundings before a gradient is asked to explain it |
-| `split` | `crates/inkvec-trace/src/lib.rs:683` (`split_components` :682) | split | a face is a *connected* region, not "everywhere this colour appears"; a map with more components than `u16` face ids can number (`MAX_FACES`, 65,535) first has its smallest merged into a neighbour (`regions::cap_components`) |
-| `saddles` | `crates/inkvec-trace/src/lib.rs:1073` (`merge_saddle_faces` :1062) | saddle join | resolve the one ambiguity labels cannot: four pixels meeting diagonally at one corner |
-| `build_map` | `crates/inkvec-trace/src/lib.rs:1077` (`planar::build` :1076) | planar map | shared edges between exactly two faces, from the exact integer label grid, read off its row runs (`planar/cracks.rs`, `planar/runs.rs`) |
-| `symmetry_detect` | `crates/inkvec-trace/src/lib.rs:1092` | refinement setup | since 2026-09-30 this mark times only the setup of the refinement's inputs (each face's fill model and opacity); `symmetry::detect` itself runs inside the next mark |
-| `refine_subpix` | `crates/inkvec-trace/src/lib.rs:1127` (`symmetry::detect` beside `planar::measure_subpixel`, `lib.rs:1121-1125`; `Refined::apply`, `:1126`) | symmetry detect + sub-pixel | find mirror pairs on the label lattice, where the comparison is exact, and, at the same time, measure where each boundary point sits along its local normal (the 0.5-coverage level); both only read the lattice map, so they run side by side under `rayon::join`, and the measured points are written back afterwards |
-| `refine_junc` | `crates/inkvec-trace/src/lib.rs:1130` (`planar::refine_junctions` :1129) | junctions | settle shared endpoints |
-| `boundary_opt` | `crates/inkvec-trace/src/lib.rs:1142` (`boundary_opt::optimise_alpha` :1138) | boundary solve | move every boundary point at once so the *rendered* partition matches the image; not run when its band tables would pass a memory budget (`boundary_opt/band.rs`) |
-| `decode` | `crates/inkvec-trace/src/lib.rs:1164` (`decode::decode_faces` :1153) | decode | order-first colour/geometry fix for faces too thin to own a fully-covered pixel; off unless `INKVEC_DECODE` (*research build*) is set |
-| `symmetry` | `crates/inkvec-trace/src/lib.rs:1174` (`symmetry::enforce` :1172) | symmetry enforce | put back the exactness every upstream tie-break quietly broke |
-| — | `crates/inkvec-cli/src/pipeline.rs:247` (`trace_total`) | — | end of the `inkvec_trace` half |
-| — | `crates/inkvec-cli/src/pipeline.rs:484` (`fit_dp`) | curve fit | one global DP per boundary over lines, cubics and arcs, MDL cost; a whole-boundary primitive is offered beside it and taken when it costs less (`inkvec_fit::choice`) |
-| — | `crates/inkvec-cli/src/pipeline.rs:493` (`repair`) | repair | close self-crossing rings the independent per-edge fits can produce |
-| — | `crates/inkvec-cli/src/pipeline.rs:389` (`fills`) | fills | per-face fill model already chosen upstream; a gradient whose every stop lies within a just-noticeable difference of every other is painted flat (`pipeline/demote.rs`) |
-| — | `crates/inkvec-cli/src/pipeline.rs:435` (`emit`) | emit | fitted geometry to SVG text, each ring wound by nesting depth so no `fill-rule` is needed; layers vs. flat form costed against each other |
+| — | `crates/inkvec-cli/src/lib.rs:295` (`intake`) | **intake** | decode (format from the file's signature, EXIF orientation applied, an ICC profile converted to sRGB; `crates/inkvec-trace/src/load.rs`), undo a nearest-neighbour upscale by any factor of 2 or more (exact), reduce a resampled or blurred raster to its detail (soft intake, Quality), optional SR clean-up, resolution normalisation, alpha matting — doc `01-intake.md` |
+| `palette` | `crates/inkvec-trace/src/lib.rs:410` (`color::extract_palette_mdl_ids` :395) | palette | how many inks, and which colours, by MDL against measured pixel noise |
+| `labels` | `crates/inkvec-trace/src/lib.rs:529` (`color::label_image_ids` :413) | labels | which ink each pixel is assigned to |
+| `despeckle` | `crates/inkvec-trace/src/lib.rs:533` | despeckle | absorb regions below `min_region` into their most common neighbour |
+| `blend_absorb` | `crates/inkvec-trace/src/lib.rs:571` (`absorb_blend_slivers` :548 / `reassign_blend_pixels` :557) | blend absorption | anti-aliased pixels between two inks are not a third ink; stop them minting sliver faces |
+| `merge_bands` | `crates/inkvec-trace/src/lib.rs:600` (`gradient::merge_gradient_bands_with_ink` :586) | gradient bands | whether adjacent palette bands are really one gradient |
+| `carve` | `crates/inkvec-trace/src/lib.rs:670` (`gradient::carve_residual_features_with_detail_noise` :652) | carve | cut out a feature the palette quantised into its surroundings before a gradient is asked to explain it |
+| `split` | `crates/inkvec-trace/src/lib.rs:684` (`split_components` :682) | split | a face is a *connected* region, not "everywhere this colour appears"; a map with more components than `u16` face ids can number (`MAX_FACES`, 65,535) first has its smallest merged into a neighbour (`regions::cap_components`) |
+| `saddles` | `crates/inkvec-trace/src/lib.rs:1074` (`merge_saddle_faces` :1062) | saddle join | resolve the one ambiguity labels cannot: four pixels meeting diagonally at one corner |
+| `build_map` | `crates/inkvec-trace/src/lib.rs:1078` (`planar::build` :1076) | planar map | shared edges between exactly two faces, from the exact integer label grid, read off its row runs (`planar/cracks.rs`, `planar/runs.rs`) |
+| `symmetry_detect` | `crates/inkvec-trace/src/lib.rs:1093` | refinement setup | since 2026-09-30 this mark times only the setup of the refinement's inputs (each face's fill model and opacity); `symmetry::detect` itself runs inside the next mark |
+| `refine_subpix` | `crates/inkvec-trace/src/lib.rs:1128` (`symmetry::detect` beside `planar::measure_subpixel`, `lib.rs:1122-1126`; `Refined::apply`, `:1127`) | symmetry detect + sub-pixel | find mirror pairs on the label lattice, where the comparison is exact, and, at the same time, measure where each boundary point sits along its local normal (the 0.5-coverage level); both only read the lattice map, so they run side by side under `rayon::join`, and the measured points are written back afterwards |
+| `refine_junc` | `crates/inkvec-trace/src/lib.rs:1131` (`planar::refine_junctions` :1129) | junctions | settle shared endpoints |
+| `boundary_opt` | `crates/inkvec-trace/src/lib.rs:1143` (`boundary_opt::optimise_alpha` :1138) | boundary solve | move every boundary point at once so the *rendered* partition matches the image; not run when its band tables would pass a memory budget (`boundary_opt/band.rs`) |
+| `decode` | `crates/inkvec-trace/src/lib.rs:1165` (`decode::decode_faces` :1153) | decode | order-first colour/geometry fix for faces too thin to own a fully-covered pixel; off unless `INKVEC_DECODE` (*research build*) is set |
+| `symmetry` | `crates/inkvec-trace/src/lib.rs:1175` (`symmetry::enforce` :1172) | symmetry enforce | put back the exactness every upstream tie-break quietly broke |
+| — | `crates/inkvec-cli/src/pipeline.rs:246` (`trace_total`) | — | end of the `inkvec_trace` half |
+| — | `crates/inkvec-cli/src/pipeline.rs:480` (`fit_dp`) | curve fit | one global DP per boundary over lines, cubics and arcs, MDL cost; a whole-boundary primitive is offered beside it and taken when it costs less (`inkvec_fit::choice`) |
+| — | `crates/inkvec-cli/src/pipeline.rs:489` (`repair`) | repair | close self-crossing rings the independent per-edge fits can produce |
+| — | `crates/inkvec-cli/src/pipeline.rs:387` (`fills`) | fills | per-face fill model already chosen upstream; a gradient whose every stop lies within a just-noticeable difference of every other is painted flat (`pipeline/demote.rs`) |
+| — | `crates/inkvec-cli/src/pipeline.rs:433` (`emit`) | emit | fitted geometry to SVG text, each ring wound by nesting depth so no `fill-rule` is needed; layers vs. flat form costed against each other |
 | — | `crates/inkvec-cli/src/post.rs` | post | viewBox retarget, background knock-out, margin, minify |
 
 Fast mode (`--mode fast`) takes another route through the same table. Its front end
 (`crates/inkvec-trace/src/fast/front.rs`) replaces the marks from `palette` to `split` with
 its own `palette`, `slivers`, `despeckle`, `split` and `ramps`; it shares `build_map`,
 `refine_subpix`, `refine_junc` and `symmetry`, and skips `boundary_opt` and `decode`
-(`lib.rs:1137`, `:1152`). Under `fit_dp` it runs a Potrace-class fitter instead of the DP,
+(`lib.rs:1138`, `:1153`). Under `fit_dp` it runs a Potrace-class fitter instead of the DP,
 and it skips `repair` and shape harmonization (`repair_fits` and `emit_options` in
 `crates/inkvec-cli/src/pipeline.rs`). [`14-fast-mode.md`](14-fast-mode.md) follows that
 route end to end.
@@ -163,7 +163,7 @@ edge to move.
 `Edge.sigma` is the per-point positional uncertainty from the coverage inversion, carried
 all the way to the curve fitter; `Edge.left` / `Edge.right` are face ids, `u16::MAX` when an
 edge has been merged into the interior of a layer and no longer belongs to any ring
-(`merge_map`, `crates/inkvec-cli/src/pipeline.rs:1100-1115`).
+(`merge_map`, `crates/inkvec-cli/src/pipeline.rs:1077-1092`).
 
 ## Reading order
 
@@ -187,7 +187,7 @@ disagreements are where the real design lives:
   separate crates. The tree that exists has none of them: rasterisation for the SR detector
   lives in `inkvec-sr::detect` (via `resvg`), SVG emission lives in `inkvec-cli::emit`, and
   there is no `inkvec-py` — Python involvement is limited to the packaged SR fallback in
-  `tools/` (`build_upscaler` and `sr_tools_dir`, `crates/inkvec-cli/src/lib.rs:757-798`). `inkvec-sr` itself is not in DESIGN.md's
+  `tools/` (`build_upscaler` and `sr_tools_dir`, `crates/inkvec-cli/src/lib.rs:807-848`). `inkvec-sr` itself is not in DESIGN.md's
   list at all; it was added afterwards as the super-resolution pre-pass.
 * **S0, image-formation-model estimation.** DESIGN.md §"S0" calls for estimating
   compositing gamma and the anti-aliasing kernel per image by fitting the edge-spread
@@ -215,7 +215,7 @@ disagreements are where the real design lives:
   descriptions costs less under the shared MDL cost (`choice::choose`,
   `crates/inkvec-fit/src/choice.rs:211-226`). That is model *selection between* two fits,
   not primitives as states inside one DP. `choice::describe` (called per boundary from
-  `fit_boundaries`, `crates/inkvec-cli/src/pipeline.rs:705-733`) also orders the work: for
+  `fit_boundaries`, `crates/inkvec-cli/src/pipeline.rs:694-710`) also orders the work: for
   the image frame it tries the rectangle first and skips the dynamic program when the
   rectangle is below a lower bound on any fitted path (`choice::cost_floor`); for every
   other boundary it runs the program and the primitive search side by side under
@@ -228,7 +228,7 @@ disagreements are where the real design lives:
 * **S5, structured refinement with topology not frozen.** DESIGN.md §S5 explicitly reverses
   an earlier decision to freeze topology during polish, arguing for a structured move set
   searched to convergence. The code has gone the other way again: `repair_fits`
-  (`crates/inkvec-cli/src/pipeline.rs:848-868`) records that both `polish` (per-cubic control-point refinement against the coverage
+  (`crates/inkvec-cli/src/pipeline.rs:825-845`) records that both `polish` (per-cubic control-point refinement against the coverage
   field) and the "adjudication" re-scoring stage were *removed*, with a measured result —
   "removing them takes the objective from 0.5477 to 0.4960 and dE00 from 0.2503 to 0.2146...
   Polish alone made 197 of 246 better by not running." The stated reason is that
@@ -242,7 +242,7 @@ disagreements are where the real design lives:
   geometry moves: it runs beside the sub-pixel refinement's measuring phase, which writes
   nothing to the map until detection has returned), and enforces it twice more downstream —
   once on the map (`symmetry::enforce`, `trace/lib.rs:1172`) and once on the fitted curves, by reflecting one boundary's fit onto
-  its mirror rather than re-solving both (`apply_mirrors`, `crates/inkvec-cli/src/pipeline.rs:936`). That is "detect once,
+  its mirror rather than re-solving both (`apply_mirrors`, `crates/inkvec-cli/src/pipeline.rs:913`). That is "detect once,
   then copy," which is cheaper and exact by construction, but it is a different design from
   "enforced as a constraint during re-optimisation."
 * **§0 governing directive ("best algorithm at every stage, even substantially slower").**
@@ -270,6 +270,6 @@ disagreements are where the real design lives:
   `crates/inkvec-fit/examples/primitives_demo.rs`, `crates/inkvec-fit/tests/multimodel.rs`,
   `crates/inkvec-fit/tests/primitives.rs` — that exercise the line-then-cubic fit directly.
   The CLI pipeline instead calls `multimodel::optimal_multimodel`
-  (`crates/inkvec-cli/src/pipeline.rs:713`, and `optimal_multimodel_without_structural` at
+  (`crates/inkvec-cli/src/pipeline.rs:702`, and `optimal_multimodel_without_structural` at
   `:732` for the research baseline) directly. `fit_path` exists for
   examples and tests, not as part of the shipped trace.

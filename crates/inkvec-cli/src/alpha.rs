@@ -21,10 +21,11 @@
 //!   input's own buffer; the probe trace uses the copying [`alpha_source`]) and
 //!   [`cutout_args`]; everything after traces [`AlphaSource::flat`];
 //!
-//! The intake functions here are exact rewrites of their earlier serial versions, kept as
-//! test oracles in `intake_tests`: [`pixel_grid`] finds its candidate factors from the gcd
-//! of the image's change positions before running the unchanged block test, and the alpha
-//! scan and the flatten are parallel maps whose every output depends on one input pixel.
+//! [`pixel_grid`] (in `alpha/unblock.rs`) is the exact inverse of a nearest-neighbour
+//! upscale by any factor of 2 or more; `intake_tests` holds the integer-only test it
+//! replaced, as an oracle for the factors both find. The alpha scan and the flatten are
+//! exact rewrites of their earlier serial versions, kept as test oracles there too: parallel
+//! maps whose every output depends on one input pixel.
 //! * emit time, in `pipeline.rs`: [`recover_layers`] (`--layers`) and [`face_alpha`], whose
 //!   [`FaceAlpha`] tells the emitter which faces are holes, which are translucent and which
 //!   fade;
@@ -319,7 +320,7 @@ fn solve3x3(m: [[f64; 3]; 3], r: [f64; 3]) -> Option<[f64; 3]> {
 mod unblock;
 pub(crate) use unblock::pixel_grid;
 #[cfg(test)]
-use unblock::{blocks_constant, divides, gcd};
+use unblock::PixelGrid;
 
 /// Share of the artwork a candidate matte may hide before it is rejected.
 ///

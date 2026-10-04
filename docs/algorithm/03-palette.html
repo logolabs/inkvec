@@ -199,6 +199,48 @@
     </section>
 
     <section>
+      <h2>A halo is not a colour</h2>
+      <p>When a picture has been enlarged by an image editor, its edges ring: the resizing filter
+        overshoots, and a thin halo slightly brighter (or darker) than the shape runs along every
+        edge. The Studio's own sample, a gold crest, has one: a one-pixel rim about 7 % brighter
+        than the gold all around every shape. That rim is close enough to the gold that the "is it
+        worth its keep" question above, which counts pixels, said yes — there are thousands of rim
+        pixels. So the crest came out as three golds, and its round dots came out notched where the
+        rim had been cut away as a shape of its own.</p>
+      <p>The fix asks of such a near-duplicate what the blend test already asks of a blend: does it
+        cover area, or is it only a band? A rim has no pixel surrounded by its own colour, so it is
+        not an ink. The crest now comes out as one gold with round dots, in a third of the file
+        size. A thin colour that is a mix of its neighbours keeps its own, stricter test — the
+        shadow-stroke case above — because asking it the same question cost skin-tone shading in a
+        family of emoji.</p>
+    </section>
+
+    <section>
+      <h2>Small but real</h2>
+      <p>The oldest rule in this stage was a size floor: a colour covering less than about half a
+        percent of the picture was never an ink, because a blend colour on an edge is always rare.
+        It also threw away small colours that were nothing like a blend — a pupil, a red mouth, a
+        yellow star — which then got painted in a neighbour's colour.</p>
+      <p>A small candidate now has to show something instead: enough of its pixels (8 on a
+        128-pixel picture, proportionally more on a larger one) must be colours that no mix of the
+        inks around them explains, and that are not an edge halo of those inks either. A pupil
+        passes: nothing around it mixes to its colour. A sliver of anti-aliasing fails: every pixel
+        of it is a mix of the two colours it sits between. On the standard test icons this made the
+        colour error 2 % smaller at 128 pixels and 1.4 % smaller at 512.</p>
+    </section>
+
+    <section>
+      <h2>One ink, one colour code</h2>
+      <p>After the palette is decided, each shape gets its colour from its own pixels, and two
+        shapes of one ink can come out a shade or two apart — the crest's gold was written as two
+        slightly different codes. Shapes of one ink whose colours differ by less than anyone could
+        see now all take the colour of that ink's biggest, best-measured shape. The rule is kept that
+        tight on purpose: when it was looser, a white page and a very slightly grey white arrow —
+        which the artist really did draw as two whites — were made one colour, and the whole page
+        took the arrow's tint.</p>
+    </section>
+
+    <section>
       <h2>Telling clean input from damaged input</h2>
       <p>How strict the palette should be depends on where the picture came from. An exact,
         cleanly rendered image can be trusted down to fine colour differences — if two nearby

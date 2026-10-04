@@ -1057,23 +1057,75 @@ fn a_lone_small_shape_on_the_clear_ground_is_an_ink() {
     assert!(tr.face_color.contains(&paint), "{:?}", tr.face_color);
 }
 
-/// The exemption goes to the first visible ink only: once one is accepted, a rare colour
-/// beside it is still rejected as rare.
+/// The crest disease in miniature (`color::escape_needs_interior`): a gold disc on the clear
+/// ground whose edge carries what a premultiplied Lanczos upscale leaves there, an opaque
+/// one-pixel rim 1.067x brighter than the gold (the crest's measured ratio), then the
+/// anti-aliased fade to clear. Over two grounds the rim is on no chord, so the blend test
+/// cannot reject it; it is 0.03 from the gold, inside the merge radius, and the
+/// description-length escape pays for it many times over. It has no interior, so it is not
+/// an ink: the palette is the gold and the clear ground.
 #[test]
-fn a_rare_colour_beside_a_visible_ink_is_still_rare() {
-    let n = 128;
+fn an_overshoot_rim_inside_the_merge_radius_is_not_an_ink() {
+    let n = 64;
+    let gold: [f32; 3] = [176.0 / 255.0, 138.0 / 255.0, 74.0 / 255.0];
+    let rim = gold.map(|v| (v * 1.067).min(1.0));
+    let r = 20.0f32;
     let (rgb, alpha) = image(n, |x, y| {
-        if (20..80).contains(&x) && (20..80).contains(&y) {
-            (RED, 1.0)
-        } else if (100..103).contains(&x) && (100..103).contains(&y) {
-            (BLUE, 1.0)
+        let d = ((x as f32 - 31.5).powi(2) + (y as f32 - 31.5).powi(2)).sqrt();
+        if d < r - 1.0 {
+            (gold, 1.0)
+        } else if d < r {
+            (rim, 1.0)
         } else {
-            ([0.0; 3], 0.0)
+            (gold, (r + 1.0 - d).clamp(0.0, 1.0))
         }
     });
-    let pal = extract_palette(&rgb, &alpha, n, n, 0.035, 64, evidence(0.0, 1.0, 1.5));
+    let lambda = 0.5 * ((n * n) as f64).ln();
+    let sigma = 0.5 / 255.0;
+    // Preconditions: a separate colour (above the same-ink floor), inside the radius.
+    let (g, k) = (
+        Ink2::opaque(rgb_to_oklab(gold)),
+        Ink2::opaque(rgb_to_oklab(rim)),
+    );
+    assert!(g.dist(k) < color::DEFAULT_MERGE_DISTANCE, "{}", g.dist(k));
+    assert!(g.de00(k) > color::SAME_INK_DE00, "{}", g.de00(k));
+    let pal = extract_palette(&rgb, &alpha, n, n, 0.035, 64, evidence(sigma, lambda, 1.5));
+    assert_eq!(pal.len(), 2, "{:?} {:?}", pal.rgb, pal.alpha);
+    let paint = find(&pal, 1.0);
+    assert!(close(pal.rgb[paint], gold, 0.01), "{:?}", pal.rgb[paint]);
+    find(&pal, 0.0);
+}
+
+/// The exemption goes to the first visible ink only: once one is accepted, a rare colour
+/// beside it has to be represented (`color::represent`). A 2 x 2 blue speck (4 px) is
+/// under the eight-pixel vote floor and is not an ink; a 3 x 3 blue square (9 px, 0.05 %
+/// of the canvas, far under the 0.4 % share) whose every pixel no mixture of red and the
+/// clear ground explains is one.
+#[test]
+fn a_rare_colour_beside_a_visible_ink_is_an_ink_only_when_represented() {
+    let n = 128;
+    let inks = |side: usize| {
+        let (rgb, alpha) = image(n, |x, y| {
+            if (20..80).contains(&x) && (20..80).contains(&y) {
+                (RED, 1.0)
+            } else if (100..100 + side).contains(&x) && (100..100 + side).contains(&y) {
+                (BLUE, 1.0)
+            } else {
+                ([0.0; 3], 0.0)
+            }
+        });
+        extract_palette(&rgb, &alpha, n, n, 0.035, 64, evidence(0.0, 1.0, 1.5))
+    };
+    let pal = inks(2);
     assert_eq!(pal.alpha.len(), 2, "{:?}", pal.rgb);
     assert!(close(pal.rgb[find(&pal, 1.0)], RED, 0.005));
+    let pal = inks(3);
+    assert_eq!(pal.alpha.len(), 3, "{:?}", pal.rgb);
+    assert!(
+        pal.rgb.iter().any(|&c| close(c, BLUE, 0.005)),
+        "{:?}",
+        pal.rgb
+    );
 }
 
 /// A small opaque pale-yellow disc (0.2 % of the canvas, so not an ink) beside a black

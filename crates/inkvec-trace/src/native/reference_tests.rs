@@ -253,9 +253,8 @@ pub fn extract_palette(
         // draws something is exempt, not only the first ink), applied here as well, so this
         // oracle still tests the per-point rewrite and nothing else.
         let exempt = colors.is_empty() || (!clear(&c) && colors.iter().all(|p: &Ink2| clear(p)));
-        if (claim as f32 / total_px) < MIN_INK_WEIGHT && !exempt {
-            continue;
-        }
+        // Rare candidates must be represented (`color::represent`), checked below.
+        let rare = (claim as f32 / total_px) < MIN_INK_WEIGHT && !exempt;
         let nearest = colors
             .iter()
             .map(|&p| p.dist(c))
@@ -264,7 +263,8 @@ pub fn extract_palette(
         if same_ink_as_accepted(c, &colors, same_ink_de00) {
             continue;
         }
-        if nearest <= merge_distance.max(reach) {
+        let escaped = nearest <= merge_distance.max(reach);
+        if escaped {
             let worth_it = sigma_noise > 0.0
                 && nearest > JND_FLOOR
                 && nearest > reach
@@ -274,7 +274,11 @@ pub fn extract_palette(
                 continue;
             }
         }
-        let Some(shape) = BlendEvidence::measure(&view, c, &colors, &nearest_px, merge_distance)
+        if rare && !represented_per_pixel(&view, c, &colors, &nearest_px, sigma_noise) {
+            continue;
+        }
+        let Some(shape) =
+            BlendEvidence::measure(&view, c, &colors, &nearest_px, merge_distance, escaped)
         else {
             continue;
         };
@@ -290,6 +294,10 @@ pub fn extract_palette(
             );
         }
         if shape.is_coverage() {
+            continue;
+        }
+        // The escape rule (`crate::color::escape_needs_interior`), as the shipped walk.
+        if color::escape_needs_interior(escaped, shape.blend, shape.interior) {
             continue;
         }
         nearest_px
@@ -322,6 +330,40 @@ pub fn extract_palette(
         weight,
         alpha,
     }
+}
+
+/// Whether rare candidate `c` is represented (`color::represent`), per pixel, in six sRGB
+/// coordinates with the clear ground always among the inks; each neighbour's ink is the
+/// accepted ink nearest it by [`Ink2::dist`] (ties to the earlier one).
+fn represented_per_pixel(
+    view: &PixelViews,
+    c: Ink2,
+    colors: &[Ink2],
+    nearest_px: &[f32],
+    sigma_noise: f64,
+) -> bool {
+    let six_inks: Vec<[f32; 6]> = colors.iter().map(|&k| six(k, false)).collect();
+    let ink_of = |q: usize| {
+        let mut best: Option<(usize, f32)> = None;
+        for (k, &ink) in colors.iter().enumerate() {
+            let d = view.px[q].dist(ink);
+            if best.is_none_or(|b| d < b.1) {
+                best = Some((k, d));
+            }
+        }
+        best.map(|b| b.0)
+    };
+    let g = SECOND_GROUND;
+    let votes = color::reference_tests::unexplained_per_pixel(
+        (view.width, view.height, view.px.len(), view.stride_px),
+        |q| view.px[q].dist(c) < nearest_px[q],
+        ink_of,
+        |q| view.px6_srgb[q],
+        &six_inks,
+        Some([1.0, 1.0, 1.0, g, g, g]),
+        color::represent::mixture_tolerance(sigma_noise),
+    );
+    color::represent::represented(votes, view.px.len().max(1) as f32)
 }
 
 /// The image as two-ground points and as [`six`] coordinates in both spaces, converted
@@ -422,6 +464,7 @@ impl BlendEvidence {
         colors: &[Ink2],
         nearest_px: &[f32],
         merge_distance: f32,
+        escaped: bool,
     ) -> Option<Self> {
         let pairs = blend_pairs(c, colors, merge_distance * 1.6, color::BLEND_TMIN);
         let blend = !pairs.is_empty();
@@ -448,7 +491,8 @@ impl BlendEvidence {
             let a = c.alpha();
             a > 0.0 && a < 1.0
         };
-        let interior = if blend || translucent {
+        // Measured for an escaped candidate too: the escape rule reads it.
+        let interior = if blend || translucent || escaped {
             interior_fraction(
                 &view.px,
                 view.width,

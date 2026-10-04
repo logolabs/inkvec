@@ -394,6 +394,18 @@ impl<'a> DistinctImage<'a> {
         interior as f32 / total as f32
     }
 
+    /// The claimed visited pixels on the `width x height` grid, colour by colour (ascending
+    /// id), each colour's pixels in raster order. Empty without a full grid.
+    pub(crate) fn claimed_pixels<'s>(
+        &'s self,
+        claim: &'s Claim,
+    ) -> impl Iterator<Item = usize> + 's {
+        let geometry = self.has_geometry();
+        (0..self.colours())
+            .filter(move |&d| geometry && claim.claimed[d])
+            .flat_map(move |d| self.visited(d))
+    }
+
     /// Every claimed visited pixel's 3x3 neighbourhood as colour ids, gathered once per
     /// candidate for all its blend pairs.
     pub(crate) fn neighbourhoods(&self, claim: &Claim) -> Neighbourhoods {

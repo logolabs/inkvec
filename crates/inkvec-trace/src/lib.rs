@@ -708,6 +708,20 @@ pub fn trace_color_full_with_alpha(
         .iter()
         .map(|&l| label_ink.get(l).copied().unwrap_or(l))
         .collect();
+    // One artist ink, one hex: flat faces of one ink whose fills differ by less than a
+    // viewer could see take the colour of the ink's best-evidenced face, before the
+    // boundary stages place the edges against it. See `color::snap`.
+    let mut face_fill = face_fill;
+    let snapped = color::snap::snap_flat_fills(
+        &labels,
+        img.width,
+        img.height,
+        &mut face_fill,
+        &face_color,
+        &pal,
+        |_| false,
+    );
+    crate::diag!("fills", "snapped to their ink's colour: {snapped}");
 
     finish_color_trace(
         img,

@@ -15,9 +15,9 @@ use rayon::prelude::*;
 
 use super::distinct::{side_of, Claim, ColourIds, DistinctImage, Neighbourhoods};
 use super::{
-    de00, oklab_to_rgb, rgb_to_oklab, same_ink_as_accepted, srgb_to_linear, to_hex, Oklab, Palette,
-    PaletteEvidence, BLEND_INTERIOR_FRACTION, BLEND_STRADDLE_FRACTION, BLEND_TMIN, JND_FLOOR,
-    MIN_INK_WEIGHT, PARAMS_PER_INK, STRADDLE_STEP,
+    de00, oklab_to_rgb, represent, rgb_to_oklab, same_ink_as_accepted, srgb_to_linear, to_hex,
+    Oklab, Palette, PaletteEvidence, BLEND_INTERIOR_FRACTION, BLEND_STRADDLE_FRACTION, BLEND_TMIN,
+    JND_FLOOR, MIN_INK_WEIGHT, PARAMS_PER_INK, STRADDLE_STEP,
 };
 
 /// Distinct colours per parallel task in the per-colour conversions.
@@ -132,6 +132,7 @@ pub(crate) fn extract(
         colors: Vec::new(),
         axes: InkAxes::default(),
         nearest: vec![f32::INFINITY; colours],
+        nearest_ink: vec![u32::MAX; colours],
         claim: Claim::new(colours),
         scratch: vec![0u8; colours + 1],
         paldbg: inkvec_core::env::flag("INKVEC_PALDBG"),
@@ -183,6 +184,8 @@ struct Walk<'v, 'a> {
     axes: InkAxes,
     /// Per colour, the OKLab distance to the nearest accepted ink.
     nearest: Vec<f32>,
+    /// Per colour, the index of that ink (`u32::MAX` before any is accepted).
+    nearest_ink: Vec<u32>,
     /// The current candidate's claimed colours.
     claim: Claim,
     /// One byte per colour for the straddle test.
@@ -211,9 +214,9 @@ impl Walk<'_, '_> {
         } else {
             view.img.spread(&self.claim, self.merge_distance)
         };
-        if (claim as f32 / self.total_px) < MIN_INK_WEIGHT && !self.colors.is_empty() {
-            return false;
-        }
+        // Rare: under the share an ink usually claims. It is no longer dropped here; it has
+        // to be represented instead (below, `super::represent`), after the cheaper gates.
+        let rare = (claim as f32 / self.total_px) < MIN_INK_WEIGHT && !self.colors.is_empty();
         let nearest = self
             .colors
             .iter()
@@ -243,10 +246,31 @@ impl Walk<'_, '_> {
                 return false;
             }
         }
-        let shape = BlendEvidence::measure(self, c);
+        if rare {
+            let votes = represent::unexplained(
+                &view.img,
+                &self.claim,
+                &self.nearest_ink,
+                |d| view.srgb[d],
+                &self.axes.srgb,
+                None,
+                represent::mixture_tolerance(sigma_noise),
+            );
+            if self.paldbg {
+                eprintln!(
+                    "  cand {:<9} rare: claim={claim} unexplained={votes}",
+                    to_hex(oklab_to_rgb(c))
+                );
+            }
+            if !represent::represented(votes, self.total_px) {
+                return false;
+            }
+        }
+        // From here on `merged` means "inside the merge radius and kept only by the escape".
+        let shape = BlendEvidence::measure(self, c, merged);
         if self.paldbg {
             eprintln!(
-                "  cand {:<9} bin={:<6} claim={:<6} w={:.4} sig={:.5} reach={:.4} near={:.4} blend={} chord={:.4} interior={:.3} straddle={:.3}",
+                "  cand {:<9} bin={:<6} claim={:<6} w={:.4} sig={:.5} reach={:.4} near={:.4} blend={} chord={:.4} interior={:.3} straddle={:.3} escaped={}",
                 to_hex(oklab_to_rgb(c)),
                 n,
                 claim,
@@ -257,23 +281,44 @@ impl Walk<'_, '_> {
                 shape.blend,
                 if shape.blend { shape.chord_off } else { f32::NAN },
                 shape.interior,
-                shape.straddle
+                shape.straddle,
+                merged
             );
         }
-        !shape.is_coverage()
+        !shape.is_thin_escape() && !shape.is_coverage()
     }
 
-    /// Accept `c`: lower every colour's nearest-ink distance and record the ink.
+    /// Accept `c`: lower every colour's nearest-ink distance, note which ink it now is, and
+    /// record the ink.
+    ///
+    /// `nearest[d]` moves to `dist(d, c)` only when that is strictly smaller, which is
+    /// `f32::min` exactly (a NaN distance keeps the old value either way), so the
+    /// distances are what they were before `nearest_ink` existed; a tie keeps the earlier
+    /// ink, as labelling does.
     fn accept(&mut self, c: Oklab) {
         let lab = &self.view.lab;
+        let k = self.colors.len() as u32;
+        let step = |(d, ni): (&mut f32, &mut u32), q: Oklab| {
+            let dd = q.dist(c);
+            if dd < *d {
+                *d = dd;
+                *ni = k;
+            }
+        };
         if lab.len() >= super::distinct::PAR_COLOURS {
             self.nearest
                 .par_iter_mut()
+                .zip(self.nearest_ink.par_iter_mut())
                 .zip(lab.par_iter())
-                .for_each(|(d, &q)| *d = d.min(q.dist(c)));
+                .for_each(|(dn, &q)| step(dn, q));
         } else {
-            for (d, &q) in self.nearest.iter_mut().zip(lab) {
-                *d = d.min(q.dist(c));
+            for (dn, &q) in self
+                .nearest
+                .iter_mut()
+                .zip(self.nearest_ink.iter_mut())
+                .zip(lab)
+            {
+                step(dn, q);
             }
         }
         self.axes.push(c);
@@ -283,19 +328,29 @@ impl Walk<'_, '_> {
 
 /// Whether a candidate is anti-aliasing rather than an ink: a blend of two accepted inks,
 /// thin (`interior < BLEND_INTERIOR_FRACTION`) and straddling
-/// (`straddle >= BLEND_STRADDLE_FRACTION`). Each measurement is taken only when the one
-/// before it leaves the verdict open.
+/// (`straddle >= BLEND_STRADDLE_FRACTION`); or a thin non-blend that only the
+/// description-length escape admitted ([`BlendEvidence::is_thin_escape`]). Each
+/// measurement is taken only when the one before it leaves the verdict open.
 struct BlendEvidence {
     blend: bool,
+    /// Inside the merge radius of an accepted ink, kept so far only by the MDL escape.
+    escaped: bool,
     /// OKLab distance to the nearest qualifying chord; infinite when there is none.
     chord_off: f32,
+    /// Share of the claimed pixels that are interior; 1.0 (not measured) unless the
+    /// candidate is a blend or escaped.
     interior: f32,
     straddle: f32,
 }
 
 impl BlendEvidence {
     /// Measure candidate `c` against the walk's accepted inks and its current claim.
-    fn measure(walk: &mut Walk, c: Oklab) -> Self {
+    /// `escaped`: `c` lies inside the merge radius of an accepted ink and passed the MDL
+    /// escape, so its interior is measured even when it is not a blend (the escape rule
+    /// reads it). A blend is measured exactly as before the rule: interior, then the
+    /// straddle when thin. A candidate that is neither a blend nor escaped is not
+    /// measured at all, as before.
+    fn measure(walk: &mut Walk, c: Oklab, escaped: bool) -> Self {
         let pairs = super::blend_pairs_cached(c, &walk.axes, walk.merge_distance * 1.6, BLEND_TMIN);
         let blend = !pairs.is_empty();
         let chord_off = pairs
@@ -303,7 +358,7 @@ impl BlendEvidence {
             .map(|&(_, _, _, off)| off)
             .fold(f32::INFINITY, f32::min);
         let img = &walk.view.img;
-        let interior = if blend {
+        let interior = if blend || escaped {
             img.interior(&walk.claim)
         } else {
             1.0
@@ -329,6 +384,7 @@ impl BlendEvidence {
         };
         BlendEvidence {
             blend,
+            escaped,
             chord_off,
             interior,
             straddle,
@@ -340,6 +396,13 @@ impl BlendEvidence {
         self.blend
             && self.interior < BLEND_INTERIOR_FRACTION
             && self.straddle >= BLEND_STRADDLE_FRACTION
+    }
+
+    /// Admitted inside the merge radius by the description-length escape, not a blend, and
+    /// thin: an edge artefact of an accepted ink, not an ink of its own. See
+    /// [`super::escape_needs_interior`] for the rule, the case and the literature.
+    fn is_thin_escape(&self) -> bool {
+        super::escape_needs_interior(self.escaped, self.blend, self.interior)
     }
 }
 

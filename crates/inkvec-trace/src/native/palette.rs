@@ -19,8 +19,8 @@ use crate::color::distinct::{
     side_of, BitsMap, Claim, ColourIds, DistinctImage, Neighbourhoods, PAR_COLOURS,
 };
 use crate::color::{
-    self, oklab_to_rgb, rgb_to_oklab, Oklab, Palette, PaletteEvidence, BLEND_INTERIOR_FRACTION,
-    BLEND_STRADDLE_FRACTION, JND_FLOOR, MIN_INK_WEIGHT, PARAMS_PER_INK,
+    self, oklab_to_rgb, represent, rgb_to_oklab, Oklab, Palette, PaletteEvidence,
+    BLEND_INTERIOR_FRACTION, BLEND_STRADDLE_FRACTION, JND_FLOOR, MIN_INK_WEIGHT, PARAMS_PER_INK,
 };
 
 /// Distinct points per parallel task in the per-point conversions.
@@ -178,6 +178,7 @@ pub(crate) fn extract(
         colors: Vec::new(),
         six: InkSix::default(),
         nearest: vec![f32::INFINITY; points],
+        nearest_ink: vec![u32::MAX; points],
         claim: Claim::new(points),
         scratch: vec![0u8; points + 1],
         paldbg: inkvec_core::env::flag("INKVEC_PALDBG"),
@@ -227,9 +228,13 @@ pub(crate) fn extract(
 /// Whether candidate `c` skips the rarity gate (`MIN_INK_WEIGHT`): it is the first ink
 /// the walk would accept, or the first one that draws anything.
 ///
-/// The rarity gate rejects a candidate that claims less than `MIN_INK_WEIGHT` (0.4 %) of
-/// the image, because anti-aliased colours are individually rare and an ink is not. The
-/// classic walk exempts its first ink, so the palette is never empty. Here the first ink
+/// A candidate that claims less than `MIN_INK_WEIGHT` (0.4 %) of the image is rare,
+/// because anti-aliased colours are individually rare and an ink is not, and a rare
+/// candidate must be represented (`color::represent`: enough of its pixels unexplained by
+/// the inks around them) to be an ink. Until 2026-10-03 it was simply rejected; this
+/// exemption was written then and is unchanged: an exempt candidate is not asked to be
+/// represented either. The classic walk exempts its first ink, so the palette is never
+/// empty. Here the first ink
 /// is nearly always the clear ground (on a transparent canvas it is the commonest
 /// colour), and the clear ground draws nothing. With only the classic exemption, an image
 /// whose only paint covers less than 0.4 % of the canvas got a palette of the clear ink
@@ -272,6 +277,8 @@ struct Walk<'v, 'a> {
     six: InkSix,
     /// Per point, the [`Ink2::dist`] to the nearest accepted ink.
     nearest: Vec<f32>,
+    /// Per point, the index of that ink (`u32::MAX` before any is accepted).
+    nearest_ink: Vec<u32>,
     /// The current candidate's claimed points.
     claim: Claim,
     /// One byte per point for the straddle test.
@@ -298,9 +305,10 @@ impl Walk<'_, '_> {
         } else {
             view.img.spread(&self.claim, self.merge_distance)
         };
-        if (claim as f32 / self.total_px) < MIN_INK_WEIGHT && !rarity_exempt(&self.colors, c) {
-            return false;
-        }
+        // Rare, and not the first (visible) ink: it has to be represented instead of being
+        // dropped here (below, `color::represent`), after the cheaper gates.
+        let rare =
+            (claim as f32 / self.total_px) < MIN_INK_WEIGHT && !rarity_exempt(&self.colors, c);
         let nearest = self
             .colors
             .iter()
@@ -310,7 +318,10 @@ impl Walk<'_, '_> {
         if same_ink_as_accepted(c, &self.colors, same_ink_de00) {
             return false;
         }
-        if nearest <= self.merge_distance.max(reach) {
+        // Inside the merge radius: kept only if the escape pays, and then (below) only with
+        // an interior (`color::escape_needs_interior`).
+        let escaped = nearest <= self.merge_distance.max(reach);
+        if escaped {
             let worth_it = sigma_noise > 0.0
                 && nearest > JND_FLOOR
                 && nearest > reach
@@ -320,12 +331,34 @@ impl Walk<'_, '_> {
                 return false;
             }
         }
-        let Some(shape) = BlendEvidence::measure(self, c) else {
+        if rare {
+            // Over both grounds: six coordinates in sRGB, the clear ground always around.
+            let g = super::SECOND_GROUND;
+            let votes = represent::unexplained(
+                &view.img,
+                &self.claim,
+                &self.nearest_ink,
+                |d| view.six_srgb[d],
+                &self.six.srgb,
+                Some([1.0, 1.0, 1.0, g, g, g]),
+                represent::mixture_tolerance(sigma_noise),
+            );
+            if self.paldbg {
+                eprintln!(
+                    "  native cand w={} rare: claim={claim} unexplained={votes}",
+                    color::to_hex(oklab_to_rgb(c.w))
+                );
+            }
+            if !represent::represented(votes, self.total_px) {
+                return false;
+            }
+        }
+        let Some(shape) = BlendEvidence::measure(self, c, escaped) else {
             return false;
         };
         if self.paldbg {
             eprintln!(
-                "  native cand w={} k={} a={:.3} bin={n} claim={claim} near={nearest:.4} blend={} interior={:.3} straddle={:.3}",
+                "  native cand w={} k={} a={:.3} bin={n} claim={claim} near={nearest:.4} blend={} interior={:.3} straddle={:.3} escaped={escaped}",
                 color::to_hex(oklab_to_rgb(c.w)),
                 color::to_hex(oklab_to_rgb(c.k)),
                 c.alpha(),
@@ -334,20 +367,37 @@ impl Walk<'_, '_> {
                 shape.straddle
             );
         }
-        !shape.is_coverage()
+        !shape.is_thin_escape() && !shape.is_coverage()
     }
 
-    /// Accept `c`: lower every point's nearest-ink distance and record the ink.
+    /// Accept `c`: lower every point's nearest-ink distance, note which ink it now is, and
+    /// record the ink. A distance moves only when strictly smaller, which is `f32::min`
+    /// exactly, so `nearest` is unchanged by the index kept beside it; ties keep the
+    /// earlier ink.
     fn accept(&mut self, c: Ink2) {
         let pts = &self.view.pts;
+        let k = self.colors.len() as u32;
+        let step = |(d, ni): (&mut f32, &mut u32), q: Ink2| {
+            let dd = q.dist(c);
+            if dd < *d {
+                *d = dd;
+                *ni = k;
+            }
+        };
         if pts.len() >= PAR_COLOURS {
             self.nearest
                 .par_iter_mut()
+                .zip(self.nearest_ink.par_iter_mut())
                 .zip(pts.par_iter())
-                .for_each(|(d, &q)| *d = d.min(q.dist(c)));
+                .for_each(|(dn, &q)| step(dn, q));
         } else {
-            for (d, &q) in self.nearest.iter_mut().zip(pts) {
-                *d = d.min(q.dist(c));
+            for (dn, &q) in self
+                .nearest
+                .iter_mut()
+                .zip(self.nearest_ink.iter_mut())
+                .zip(pts)
+            {
+                step(dn, q);
             }
         }
         self.six.push(c);
@@ -356,9 +406,14 @@ impl Walk<'_, '_> {
 }
 
 /// Whether a candidate is anti-aliasing rather than an ink, over both grounds: the classic
-/// blend, thin and straddling test, plus the translucent-interior rule.
+/// blend, thin and straddling test, the escape rule (`color::escape_needs_interior`), plus
+/// the translucent-interior rule.
 struct BlendEvidence {
     blend: bool,
+    /// Inside the merge radius of an accepted ink, kept so far only by the MDL escape.
+    escaped: bool,
+    /// Share of the claimed pixels that are interior; 1.0 (not measured) unless the
+    /// candidate is a blend, translucent or escaped.
     interior: f32,
     straddle: f32,
 }
@@ -375,7 +430,13 @@ impl BlendEvidence {
     /// opacity strictly between 0 and 1) that is not a blend is kept only with an interior.
     /// Blends keep the straddle test instead; asking them for an interior as well traded
     /// noto-emoji for twemoji and cost the translucent set.
-    fn measure(walk: &mut Walk, c: Ink2) -> Option<Self> {
+    ///
+    /// The escape rule (`color::escape_needs_interior`) extends the translucent rule to an
+    /// *opaque* non-blend, but only inside the merge radius, where the description-length
+    /// escape admitted it (`escaped`): its interior is measured for that. Blends are
+    /// measured exactly as before, and a candidate that is neither a blend, translucent nor
+    /// escaped is not measured at all.
+    fn measure(walk: &mut Walk, c: Ink2, escaped: bool) -> Option<Self> {
         let pairs = blend_pairs_cached(c, &walk.six, walk.merge_distance * 1.6, color::BLEND_TMIN);
         let blend = !pairs.is_empty();
         let translucent = {
@@ -383,7 +444,7 @@ impl BlendEvidence {
             a > 0.0 && a < 1.0
         };
         let img = &walk.view.img;
-        let interior = if blend || translucent {
+        let interior = if blend || translucent || escaped {
             img.interior(&walk.claim)
         } else {
             1.0
@@ -412,6 +473,7 @@ impl BlendEvidence {
         };
         Some(BlendEvidence {
             blend,
+            escaped,
             interior,
             straddle,
         })
@@ -422,6 +484,12 @@ impl BlendEvidence {
         self.blend
             && self.interior < BLEND_INTERIOR_FRACTION
             && self.straddle >= BLEND_STRADDLE_FRACTION
+    }
+
+    /// Admitted inside the merge radius by the description-length escape, not a blend, and
+    /// thin: the crest's overshoot rim. See `color::escape_needs_interior`.
+    fn is_thin_escape(&self) -> bool {
+        color::escape_needs_interior(self.escaped, self.blend, self.interior)
     }
 }
 

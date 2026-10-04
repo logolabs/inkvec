@@ -7,7 +7,7 @@
 **Source:** `crates/inkvec-trace/src/ribbon.rs` (the per-face driver, `fit_face`) and
 `crates/inkvec-trace/src/ribbon/`: `boundary.rs` (rings, inward normals, pairing),
 `graph.rs` (topology), `chordal.rs` (constrained Delaunay chordal axis), `refine.rs` (the
-stroke solve), `dist.rs` (exact distances and their gradients), `skyline.rs` (the envelope
+stroke solve) and `refine/normal.rs` (its Jacobian rows and normal equations), `dist.rs` (exact distances and their gradients), `skyline.rs` (the envelope
 Cholesky), `bvh.rs` (nearest-piece search), `grid.rs` (bucket grid and ray walks),
 `join.rs` (joins and caps as residual models), `score.rs` (the score). The decision and the
 SVG elements: `crates/inkvec-cli/src/ribbons.rs`.
@@ -79,7 +79,7 @@ the same currency the fitter uses — with a fidelity bound on top.
    (`refine.rs:857`) splits of the segment carrying the most residual, each kept only when
    the description length falls.
 7. **Score and checks** (`score::score`, `score.rs:154`; `uncovered`, `ribbon.rs:427`;
-   `refine::drawable`, `refine.rs:1451`): the chi-squared of the strokes' painted outline
+   `refine::drawable`, `refine.rs:1151`): the chi-squared of the strokes' painted outline
    against every boundary point, the face's interior pixels checked as painted
    (`MAX_UNCOVERED` = 0.2% of its pixels, `ribbon.rs:420`), and no cusp (no
    micro-segment or hairpin under miter joins).
@@ -113,16 +113,16 @@ and radius, and the half-width. Energy
   names its segment and a parameter; the exact distance is then polished on that segment
   (`dist.rs`: closed form for lines and circular arcs, Newton on the foot condition for
   cubics and elliptical arcs). Points are measured in parallel and summed in order.
-- **Jacobian** (`analytic_row`, `refine.rs:1153`). By the envelope theorem
+- **Jacobian** (`analytic_row`, `refine/normal.rs:133`). By the envelope theorem
   `∂d/∂θ = -n·∂C(t*)/∂θ`: `-B_i(t*)·n` for a cubic's control points, `-(1 - u, u)·n` for a
   line's, and for arcs the chain rule through SVG's endpoint-to-centre conversion
   (`circular_arc_grad`, `dist.rs:306`; `ellipse_arc_grad`, `dist.rs:402`, through the map
   that takes the ellipse to a unit circle). Gauge rows (a miter vertex, a butt end) keep
   central differences. Rows are fixed arrays of at most `ROW_CAP` = 20 entries
-  (`refine.rs:1108`).
-- **Normal equations** (`normal_equations`, `refine.rs:1274`). Each unknown couples only to
+  (`refine/normal.rs:88`).
+- **Normal equations** (`normal_equations`, `refine/normal.rs:254`). Each unknown couples only to
   its own segment's neighbours and to `h`, so `JᵀJ` is kept as the envelope of its lower
-  triangle (`profile`, `refine.rs:1070`) and solved by an envelope Cholesky
+  triangle (`profile`, `refine/normal.rs:50`) and solved by an envelope Cholesky
   (`Skyline::cholesky_solve`, `skyline.rs:130`), which gives the dense factorisation's
   result bit for bit.
 - **Steps.** A step that lowers `E` and leaves every cubic free of cusps is taken (the cusp
@@ -179,8 +179,8 @@ lifts between strokes as turns.
 | `MAX_VARS` | 400 | `refine.rs:100` | |
 | `FLAT_TOL` | 0.02 px | `refine.rs:546` | chords stand in for segments only in the search |
 | `MAX_SPLITS`, `SCREEN_KAPPA` | 12, 0.25 | `refine.rs:857`, `refine.rs:871` | see `SCREEN_KAPPA`'s measurement |
-| `ROW_CAP` | 20 | `refine.rs:1108` | half-width plus two segments' variables |
-| `MITER_MIN_SEG`, `MITER_MAX_TURN_COS` | 0.5 px, -0.866 | `refine.rs:1362`, `refine.rs:1365` | renderers draw short or hairpin miters otherwise |
+| `ROW_CAP` | 20 | `refine/normal.rs:88` | half-width plus two segments' variables |
+| `MITER_MIN_SEG`, `MITER_MAX_TURN_COS` | 0.5 px, -0.866 | `refine.rs:1062`, `refine.rs:1065` | renderers draw short or hairpin miters otherwise |
 | `MITER_LIMIT` | 4 | `join.rs:39` | SVG's default `stroke-miterlimit` |
 | `FIT_MARGIN_SD` | 2 | `ribbons.rs:278` | the gear and `wxt` (see the code) |
 

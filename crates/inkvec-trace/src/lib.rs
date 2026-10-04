@@ -46,7 +46,8 @@
 //!
 //! The result, a [`ColorTrace`], goes to the curve fitter (`inkvec-fit`, stage `fit_dp`)
 //! and the SVG emitter in `inkvec-cli`. Fast mode ([`fast`]) and the native-alpha path
-//! ([`native`]) replace stages 1–9 and share 10–17 (Fast skips 15); [`trace_color_from_labels`] replaces
+//! ([`native`]) replace stages 1–9 and share 10–17 (Fast skips 15 unless `--mode balanced`
+//! caps it); [`trace_color_from_labels`] replaces
 //! 2–5 with a caller's label map.
 //!
 //! Two things run beside that path rather than in it: [`alpha`] recovers a translucent

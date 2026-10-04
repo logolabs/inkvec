@@ -361,8 +361,8 @@ OPTIONS:
                             typical logo under a few seconds. 0 means no cap
                                                                    [default: 2048]
         --time-budget <s>   Advisory wall-clock budget. Gradient-band merging stops at
-                            60% of it, checked between fits, and the boundary solve
-                            gets 25%; the output is still a correct trace, with more
+                            60% of it, checked between fits, and Quality's boundary
+                            solve gets 25%; the output is still a correct trace, with more
                             fills or a less polished outline. The palette and the
                             writer do not read it. A nonzero budget makes the output
                             depend on the machine; 0 means no budget and a reproducible

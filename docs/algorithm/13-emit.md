@@ -10,8 +10,8 @@
 **Entry points:** `emit_color()` (`crates/inkvec-cli/src/emit.rs:151`); post-processing via
 `post_process()` (`crates/inkvec-cli/src/post.rs:394`).
 **Pipeline position:** after fill assignment (stage mark `"fills"`,
-`crates/inkvec-cli/src/pipeline.rs:387`), through the stage mark `"emit"`
-(`crates/inkvec-cli/src/pipeline.rs:433`); `post_process` then runs separately, outside the
+`crates/inkvec-cli/src/pipeline.rs:389`), through the stage mark `"emit"`
+(`crates/inkvec-cli/src/pipeline.rs:435`); `post_process` then runs separately, outside the
 timed pipeline, just before the file is written.
 
 Crate header, `crates/inkvec-cli/src/lib.rs:6-21`, gives the whole pipeline shape:
@@ -319,7 +319,7 @@ Which gradients reach this point is decided in the `fills` mark (below): a gradi
 stops a viewer could not tell apart is painted flat first.
 
 **Where the alpha ramps come from, and which faces are fitted.** The ramps are measured just
-before writing, inside the `emit` mark: `face_transparency` (`pipeline.rs:1008`) calls
+before writing, inside the `emit` mark: `face_transparency` (`pipeline.rs:1031`) calls
 `alpha::face_alpha` (`crates/inkvec-cli/src/alpha.rs:941`), which under `--cutout` tries, for
 each face that is neither clear nor already one flat opacity, to fit a plane to its interior
 alpha (`fit_alpha_ramp`, `alpha.rs:170`) and keeps it only when it fades by at least
@@ -424,12 +424,12 @@ out wrong (2026-09-05)."
 
 ### The `fills` and `emit` stage marks
 
-Both stage marks are inside `finish_color` (`pipeline.rs:341`), timed by a `Stopwatch`
+Both stage marks are inside `finish_color` (`pipeline.rs:342`), timed by a `Stopwatch`
 (`crates/inkvec-trace/src/lib.rs:1203`) that prints only under `INKVEC_TIMING`.
 
-**`fills`** (`pipeline.rs:385-387`) times the mirror-symmetry reconciliation after repair
-(`apply_mirrors`, `pipeline.rs:913`: one boundary's fit reflected onto its mirror) and
-`final_fills` (`pipeline.rs:951-985`): `--no-gradients` paints every face its palette ink, and
+**`fills`** (`pipeline.rs:387-389`) times the mirror-symmetry reconciliation after repair
+(`apply_mirrors`, `pipeline.rs:936`: one boundary's fit reflected onto its mirror) and
+`final_fills` (`pipeline.rs:974-1008`): `--no-gradients` paints every face its palette ink, and
 otherwise `demote_imperceptible_gradient` (`crates/inkvec-cli/src/pipeline/demote.rs:38`)
 paints flat a gradient no viewer could see. The test is the profile's colour range, the
 largest OKLab distance between *any two of its stops*, ends and interior stops alike, against
@@ -442,9 +442,9 @@ test is the old end-to-end one exactly. The gradient *fitting* itself happens ea
 `inkvec_trace`, and is charged to `trace_total`. The demotion is "Not from the literature: a
 fix to the guard's own definition", with "See also" Ottosson 2020 (OKLab).
 
-**`emit`** (`pipeline.rs:388-433`) covers alpha-layer recovery (`alpha::recover_layers`), the
+**`emit`** (`pipeline.rs:390-435`) covers alpha-layer recovery (`alpha::recover_layers`), the
 per-face transparency above, and **two competing documents, priced against each other**
-(`write_colour`, `pipeline.rs:1095-1104`):
+(`write_colour`, `pipeline.rs:1118-1127`):
 
 > "Both forms of the document, costed against each other.
 >
@@ -455,14 +455,14 @@ per-face transparency above, and **two competing documents, priced against each 
 > the flat form is what is written."
 
 The flat document is always emitted; if layers were recovered, a second document is emitted
-with the covered faces merged into their ground (`merge_map`, `pipeline.rs:1077`), and the two
+with the covered faces merged into their ground (`merge_map`, `pipeline.rs:1100`), and the two
 are priced by counting shape elements and bytes in each:
 
 ```rust
 let pays = pl < pf && bl <= bf;  // fewer shapes AND not more bytes
 ```
 
-(`pipeline.rs:1188`). Whichever wins becomes the output.
+(`pipeline.rs:1211`). Whichever wins becomes the output.
 
 ## Constants and thresholds
 

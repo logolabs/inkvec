@@ -105,7 +105,7 @@ Pixels within $\le 6/255$ display levels on all 3 channels snap exactly to 0.0 o
 Running a deep restorer over clean vector graphics introduces subtle tint shifts and boundary blurs. To prevent this, `--restore auto` traces a fast probe (`trace_once`), rasterizes it via `tiny_skia`/`resvg`, and evaluates `interior_residual` via `inkvec_restore::decide` (`crates/inkvec-restore/src/lib.rs:471-479`):
 * Vector graphics are piecewise-flat by construction.
 * Within any region where the vector model is constant, raster divergence reflects compression noise or blur.
-* If the measured residual $r \le \text{threshold}$ (default 0.5), the image is deemed clean, and the probe trace is retained directly with zero neural latency overhead (`crates/inkvec-cli/src/lib.rs:421-438`, `739-764`).
+* If the measured residual $r \le \text{threshold}$ (default 0.5), the image is deemed clean, and the probe trace is retained directly with zero neural latency overhead (`crates/inkvec-cli/src/lib.rs:422-439`, `739-764`).
 
 ---
 
@@ -764,7 +764,7 @@ Exact, Clean SVG Output
 
 ### Stage 01: Intake & Super-Resolution Pre-Pass
 
-* **Source:** `crates/inkvec-cli/src/lib.rs:242-525`, `crates/inkvec-restore`, `crates/inkvec-sr`, `tools/inkvec_sr`, `crates/inkvec-trace/src/lib.rs`
+* **Source:** `crates/inkvec-cli/src/lib.rs:243-526`, `crates/inkvec-restore`, `crates/inkvec-sr`, `tools/inkvec_sr`, `crates/inkvec-trace/src/lib.rs`
 * **Entry Point:** `inkvec_cli::trace_image`
 
 #### 1. Dual-Tier Neural Pre-Processing: In-Engine Restorer vs. External Super-Resolution
@@ -777,7 +777,7 @@ Before geometric contour extraction, degraded raster inputs undergo neural pre-p
   * **$1\times$ In-Place Restoration:** Preserves exact input spatial dimensions $(W \times H \to W \times H)$ with replicate padding to multiples of 16 (`MULTIPLE = 16`, `crates/inkvec-restore/src/planar.rs:9`). Suppresses severe JPEG DCT blocks ($Q \le 60$), lossy WebP compression ringing, and generative VAE latent diffusion decoder blur.
   * **Extreme Level Snapping (`SNAP_LEVELS = 6`):** The convolutional direct-output head saturates several quantization steps short of true limits (settling at `#040101` or `#fdffff`). `snap_extremes` (`crates/inkvec-restore/src/lib.rs:86, 101-111`) snaps pixels within $\le 6/255$ display levels of black or white to exactly 0.0 or 1.0, preventing flat backgrounds from splintering the downstream palette into extraneous inks.
   * **Damage Gating (`inkvec_restore::decide`):** Fast probe trace (`trace_once`) evaluates piecewise-flat interior residual divergence (`crates/inkvec-restore/src/lib.rs:471`). If residual $r \le 0.5$, the input is verified clean and the probe trace is retained directly with zero neural latency overhead.
-  * **Tracer Conditioning:** Restored rasters set `restored = true`, which automatically forces downstream tracer mode `--lossy on` (`lossy_args`, `crates/inkvec-cli/src/lib.rs:444-450`) to condition subsequent edge-width and ringing estimators.
+  * **Tracer Conditioning:** Restored rasters set `restored = true`, which automatically forces downstream tracer mode `--lossy on` (`lossy_args`, `crates/inkvec-cli/src/lib.rs:445-451`) to condition subsequent edge-width and ringing estimators.
 
 * **External Super-Resolution (`--sr`, MambaIRv2):**
   * **Architecture & Origin:** Foundation Attentive State-Space Model (ASSM) published by Guo et al. at CVPR 2025 (*MambaIRv2: Attentive State Space Restoration*, arXiv:2411.15269), building on MambaIR (Guo et al., ECCV 2024, *MambaIR: A Simple Baseline for Image Restoration with State-Space Model*, arXiv:2402.15648).
@@ -789,7 +789,7 @@ Before geometric contour extraction, degraded raster inputs undergo neural pre-p
 
 #### 2. Intake Pipeline Orchestration in `inkvec_cli::trace_image`
 
-The complete raster intake in `crates/inkvec-cli/src/lib.rs:242-525` executes along an ordered sequence that coordinates unblocking, continuous downsampling, parameter scaling, and dual-tier neural restoration prior to Stage 02 physical coverage inversion:
+The complete raster intake in `crates/inkvec-cli/src/lib.rs:243-526` executes along an ordered sequence that coordinates unblocking, continuous downsampling, parameter scaling, and dual-tier neural restoration prior to Stage 02 physical coverage inversion:
 
 1. **Nearest-Neighbor GCD Unblocking (`pixel_grid`, lines 261–277):** Detects whether small pixel art or icons were scaled up via nearest-neighbor replication ($K \in \{2, 3, 4, 8\}$). If detected, continuous area-weighted downsampling recovers the native resolution *before* neural pre-passes run; feeding blocky upscale edges to neural upscalers causes them to treat pixel staircases as intentional artwork.
 2. **Intake Normalization & Max-Dim Downsampling (lines 279–312):** Downsamples rasters exceeding `--max-dim` (default 2048) using continuous box downsampling (`downsample_to`, `crates/inkvec-trace/src/coverage.rs:644`). **Crucial Invariant:** Normalization and dimensional capping execute *before* `--restore` and `--sr` pre-passes. This guarantees that probe traces evaluated by `inkvec_restore::decide` and `inkvec_sr::decide` are bounded at the true tracing resolution, preventing early-return bypasses from ignoring `--max-dim`.

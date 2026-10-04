@@ -53,6 +53,7 @@ mod emit;
 mod faces;
 mod fast;
 mod harmonize;
+mod mirror_fit;
 mod mono;
 mod naming;
 mod pathdata;

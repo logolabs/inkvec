@@ -11,10 +11,10 @@ program), `multimodel.rs` and `multimodel/scan.rs` (the dynamic program), `candi
 post-fit passes), `choice.rs` (curve or primitive), `simple.rs` (self-crossing test).
 **Entry point:** `optimal_multimodel()` (`crates/inkvec-fit/src/multimodel.rs:202`), called
 for every boundary of the colour path from `fit_boundaries`
-(`crates/inkvec-cli/src/pipeline.rs:639`) through `inkvec_fit::choice::describe`
-(`pipeline.rs:698-710`), and for strokes from `crates/inkvec-cli/src/strokes.rs:263`.
+(`crates/inkvec-cli/src/pipeline.rs:648`) through `inkvec_fit::choice::describe`
+(`pipeline.rs:709-733`), and for strokes from `crates/inkvec-cli/src/strokes.rs:263`.
 **Pipeline position:** after decode and symmetry enforcement (stages 9–10), before repair
-(stage 12). Stage mark `"fit_dp"` (`crates/inkvec-cli/src/pipeline.rs:480`, in
+(stage 12). Stage mark `"fit_dp"` (`crates/inkvec-cli/src/pipeline.rs:484`, in
 `fit_and_repair`).
 
 The crate's own overview (`crates/inkvec-fit/src/lib.rs:1-58`) lists the seven steps of the
@@ -593,7 +593,7 @@ cheapest whole-ring circle, ellipse or (rounded) rectangle, or a run of arcs
 (`fit_primitive_or_arcs`, `primitives.rs:720`), which prices itself. The primitive wins when
 its cost is strictly below the curve's (`choose`, `choice.rs:211-226`); a tie or a NaN keeps
 the curve. The CLI reaches the choice through `describe` (`choice.rs:243-272`), called from
-`fit_boundaries` (`crates/inkvec-cli/src/pipeline.rs:694-710`), which avoids work the choice
+`fit_boundaries` (`crates/inkvec-cli/src/pipeline.rs:705-733`), which avoids work the choice
 discards:
 
 1. **The image frame.** When one face touches every border pixel (the background of 166 of

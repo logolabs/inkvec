@@ -43,7 +43,7 @@ wall-clock budget `budget_ms`, and optionally the source alpha and each face's o
 
 `budget_ms` is `ColorOptions::boundary_ms` (`lib.rs:174-177`): `None` by default, and then
 the result depends only on the input. The CLI sets it in `color_options`
-(`inkvec-cli/src/pipeline.rs:138-149`) to a quarter of `--time-budget`, at least 50 ms,
+(`inkvec-cli/src/pipeline.rs:139-150`) to a quarter of `--time-budget`, at least 50 ms,
 when `--time-budget` is above zero. The clock starts once the band is set up
 (`boundary_opt.rs:626`) and is read before each iteration of each part (`lbfgs.rs:228`):
 an iteration under way finishes, and once the budget is spent the parts not yet solved
@@ -454,7 +454,7 @@ reference the tests compare the join with (`folds.rs:121-131`).
 | `COARSE` | 4 px | `folds.rs:36` | side of the fold guard's coarse join grid | about the length of a swept segment's range |
 | `MAX_COARSE_CELLS` | 64 | `folds.rs:41` | a swept range over more coarse cells is paired with every segment directly instead of entering the grid | the map never has one; keeps a degenerate segment from filling the grid |
 | `MAX_RANGE_AREA` | cell range `(x1−x0)(y1−y0) ≤ 64` | `folds.rs:45` | segments counted by the fold guard (larger ones are never counted) | kept exactly from the grid it replaced |
-| boundary share of `--time-budget` | a quarter, at least 50 ms | `inkvec-cli/src/pipeline.rs:145` | `budget_ms` when `--time-budget` is above zero | none |
+| boundary share of `--time-budget` | a quarter, at least 50 ms | `inkvec-cli/src/pipeline.rs:146` | `budget_ms` when `--time-budget` is above zero | none |
 
 ## Measurements
 

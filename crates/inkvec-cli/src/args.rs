@@ -194,8 +194,9 @@ pub struct Args {
     pub bezier_cost: Option<f64>,
     /// Price a circular arc at the seven numbers SVG writes for it instead of five, charge one
     /// cubic that turns more than 90 degrees as two, and scale the parameter price by
-    /// [`crate::WRITTEN_ARCS_LAMBDA_SCALE`] (`inkvec_fit::cost::CostModel::with_written_arcs`). Fewer
-    /// arcs and parameters at the same colour error; off by default.
+    /// [`crate::WRITTEN_ARCS_LAMBDA_SCALE`] (`inkvec_fit::cost::CostModel::with_written_arcs`).
+    /// Experimental: fewer arcs and parameters, at some colour cost on held-out art (see
+    /// `docs/algorithm/11-fitting.md`); off by default.
     pub arcs_as_written: bool,
     /// The turn at a join, in degrees, that is charged as a full corner. `None` leaves the
     /// fit's own angle (10, or `INKVEC_G1_BREAK`) exactly as it is.
@@ -435,10 +436,10 @@ OPTIONS:
         --bezier-cost <f>   What one Bézier segment costs the MDL objective, in parameters
                             (a line costs 2). Lower draws more curves and fewer straight
                             segments, at some cost in file size. 2 to 12  [default: 6]
-        --arcs-as-written   Price a circular arc at the 7 numbers SVG writes (not 5),
-                            keep one curve from standing in for more than 90 degrees
-                            of a circle, and scale the parameter price by 0.8: fewer
-                            arcs and parameters at the same colour error   [off]
+        --arcs-as-written   Experimental: price a circular arc at the 7 numbers SVG
+                            writes (not 5), keep one curve from standing in for more
+                            than 90 degrees of a circle, scale the parameter price by
+                            0.8. Fewer arcs and parameters, some colour cost   [off]
         --corner-angle <f>  The turn at a join, in degrees, charged as a full corner.
                             Higher keeps gentler bends smooth. 1 to 60    [default: 10]
         --no-harmonize      Disable repeating shape harmonization (on by default)

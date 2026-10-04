@@ -108,7 +108,7 @@ pub(crate) fn repair_ring_crossings(
 ## How it works
 
 Each guilty edge is refitted under one of two constraints a round, both handed to the same
-dynamic program as stage 11 (its `Limits`, `crates/inkvec-fit/src/multimodel.rs:221`): a
+dynamic program as stage 11 (its `Limits`, `crates/inkvec-fit/src/multimodel/limits.rs:23`): a
 **pin** — a vertex every solution must keep, beside the crossing — or a **halved span cap**.
 The program's own objective chooses between them.
 
@@ -125,7 +125,7 @@ The runs are recovered from the geometry by `segment_ranges` (`rings.rs:656`): t
 no record of which points each segment came from once the merge and the corner sharpening
 have run, so each join is matched to the nearest measured point ahead of the previous one.
 
-The pinned refit is `optimal_multimodel_forced` (`multimodel.rs:262-316`): the same program
+The pinned refit is `optimal_multimodel_forced` (`multimodel/limits.rs:64-119`): the same program
 with no span allowed to pass over a pin, so it is the optimum among segmentations that keep
 the pins; a closed edge is cut at a pin, exactly; no decimation (a pin is an index of the full
 contour); and, uncapped, the usual merge and sharpening afterwards with the pins kept
@@ -171,7 +171,7 @@ crossing on 12 icons).
 
 The cap is not a count of spans, and not a single global number — it is a **per-edge,
 adaptive limit on how many measured polyline points one *segment* may span**, implemented by
-`optimal_multimodel_capped` (`crates/inkvec-fit/src/multimodel.rs:318-328`):
+`optimal_multimodel_capped` (`crates/inkvec-fit/src/multimodel.rs:215-225`):
 
 > "As `optimal_multimodel`, but forbidding any single segment from spanning more than
 > `max_span` measured points. This exists for the self-intersection repair in
@@ -181,7 +181,7 @@ adaptive limit on how many measured polyline points one *segment* may span**, im
 > every segment is a single polyline edge, which reproduces the measured contour — and the
 > measured contour is a simple closed curve by construction, so the loop always terminates."
 
-The capped path is exempt from the DP's point decimation (`multimodel.rs:393-396`), because
+The capped path is exempt from the DP's point decimation (`multimodel.rs:290-293`), because
 "the self-intersection repair relies on the measured contour being reproducible at
 `max_span = 1`, a decimated contour is not simple by construction, and a forced vertex is an
 index of the full contour."
@@ -277,7 +277,7 @@ the merge pass":
 > now run only on uncapped fits. Family emoji 11.46 s -> 0.65 s at unchanged quality (dE00
 > 0.342 -> 0.344)."
 
-The surviving comment in the DP itself (`multimodel.rs:500-507`) makes the same point: under
+The surviving comment in the DP itself (`multimodel.rs:397-404`) makes the same point: under
 a span cap, `merge_free_cubics`/`sharpen_corners` are skipped, "since the merge re-joins short
 runs into free cubics that can cross again."
 
@@ -435,7 +435,7 @@ Since the settings cleanup (CHANGELOG, 0.2.0, *Changed*) the engine reads its en
 
 No `INKVEC_*` environment variable is specific to this module. The one module-specific
 override is `--no-repair`, a CLI flag (not an environment variable) that skips the call to
-`repair_ring_crossings` entirely (`args.rs:121`, `:243`, `:624`, checked at
+`repair_ring_crossings` entirely (`args.rs:121`, `:244`, `:625`, checked at
 `pipeline.rs:862`). `repair_ring_crossings` itself does read environment, though only for
 diagnostics: the generic timing switch `INKVEC_TIMING` — shared with other pipeline stages,
 e.g. `pipeline.rs:478` — gates six debug lines inside the function

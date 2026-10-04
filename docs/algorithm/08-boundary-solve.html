@@ -180,8 +180,12 @@
         stroke with a centre and a width, and none of the general-purpose fixes applied to
         "two independent edges" could substitute for modelling it that way. The fix the
         source code names is in how a thin shape is represented: as a centre line and a
-        width. Until that exists, the pixels where a ribbon's two edges compete are simply
-        left out of the comparison, like the pixels where boundaries meet.</div>
+        width. For a while, the pixels where a ribbon's two edges compete were simply left
+        out of the comparison, like the pixels where boundaries meet. Once the solver was
+        made to finish its work properly (below), leaving them out turned from a help into
+        a harm: on a stroke two pixels wide those are nearly all the pixels it has. They are
+        counted again now; the smoothness preference and the knot check below are what keep
+        the two edges apart.</div>
     </section>
 
     <section>
@@ -194,11 +198,12 @@
         expensive repair work later.</p>
       <p>So after solving, the stage checks whether it introduced any <em>new</em>
         crossing that was not already there before it started (an existing tangle from
-        earlier stages is a separate problem, not this stage's to fix). If it did, it does
-        not throw the whole improvement away — it scales the entire proposed motion back
-        toward zero, a little at a time, until the new crossing disappears. Only if it
-        cannot back off far enough to avoid it does it give up and leave the boundary
-        exactly as it found it.</p>
+        earlier stages is a separate problem, not this stage's to fix). A crossing involves
+        two particular boundaries, so only those two are pulled back toward where they
+        started, halfway at a time, until the crossing is gone; every other boundary in the
+        picture keeps its improvement. In the worst case the two boundaries go back exactly
+        where they were. The check used to pull the <em>whole picture</em> back for a single
+        crossing anywhere, and on some icons that threw away nearly all of the work.</p>
     </section>
 
     <section>
@@ -207,17 +212,28 @@
         one picture usually fall into a handful of separate groups that share no pixel
         (the letters of a word, the pieces of an emoji), and each group is solved on its
         own, so a simple shape can finish while a complicated one keeps going.</p>
-      <p>A group stops when a step moves no point by more than half of the
-        smallest distance the finished SVG file can even record, since nothing smaller
-        could change the output; or when a step stops paying for itself; or after 32
-        steps at most. The earlier solver used a fixed number of passes for the whole
-        picture, and on the smooth score described above it no longer settled: it kept
-        taking full-sized steps while the score barely moved. The method now used
-        remembers its last few steps to judge how curved the score is, a standard
-        technique from numerical optimisation, and settles instead of wandering.</p>
-      <p>Measured on two sets of test icons, one of them held out from development,
-        the shapes it hands on reproduce the images more closely than before, on
-        average and on the hardest tenth, at about the same cost in time.</p>
+      <p>The method remembers its last few steps to judge how curved the score is, a
+        standard technique from numerical optimisation. How far to go along each step is
+        decided by a second standard technique: it tries the natural step length, and if
+        the score is still falling steeply there it goes further; if it overshot, it fits a
+        smooth curve through what it has seen and aims for the bottom. The version before
+        could only shorten a step, never lengthen it, and it stopped as soon as its steps
+        got short — which they did because it had shortened them, not because the work was
+        done. On one icon it stopped after two steps with both bars of an equals sign a
+        twentieth of a pixel too thin.</p>
+      <p>A group now stops when another step would not change the score of the whole
+        picture by more than a ten-millionth of what is left to gain, or when the score is
+        flat in every direction it is allowed to move, or after 64 steps at most.
+        Measuring "worth continuing" against the whole picture, not against the group,
+        lets a group with almost nothing to gain stop at once and a large one keep going.
+        The 64-step limit was chosen by measurement: doubling it bought a fifth of a
+        percent more accuracy on 512-pixel icons for a trace about 15 % slower.</p>
+      <p>Measured on the 246 test icons against the previous release, the finished
+        traces match the artist's originals more closely at every size the tests use —
+        about 6 % closer on 512-pixel icons on a transparent background, 3 % on a white
+        one, and 12 % on 128-pixel icons, this stage together with the border fix of the
+        intake stage — with fewer numbers in the file, for about a fifth more trace
+        time.</p>
     </section>
 
     <section>

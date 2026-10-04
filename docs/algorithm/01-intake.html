@@ -397,6 +397,25 @@
     </section>
 
     <section>
+      <h2>Artwork that runs off the edge of the picture</h2>
+      <p>Tightly cropped logos and stickers often touch the very edge of their canvas. The
+        tracer used to draw those badly: where a shape met the edge it was cut into pieces
+        that ended on the border, and those pieces were fitted one by one instead of as the
+        closed outline the artist drew. A rounded square filling its whole canvas came back
+        with one corner replaced by a curve stretching halfway along a side.</p>
+      <p>So when a picture with a transparent background has artwork on its outermost row or
+        column of pixels, the tool now traces it on a canvas two pixels larger on every side,
+        the extra pixels left transparent. The artwork then ends inside the canvas, on a
+        closed outline, and the rounded square comes back as one rounded rectangle. Every
+        coordinate of the finished file is then moved back by those two pixels, exactly, so
+        the file has the size and the coordinates of the picture that arrived. The settings
+        that depend on the picture's size are still worked out from the original size, so a
+        picture that does not touch its edge traces exactly as before. On the test icons
+        that touch the edge, the traces came out a fifth closer to the artist's originals at
+        128 pixels and a tenth closer at 512, with fewer numbers in the file.</p>
+    </section>
+
+    <section>
       <h2>Cleaning up genuine damage</h2>
       <p>Some input is not merely resized or slightly compressed — it is a screenshot, a
         heavily compressed export, or a genuine photograph of a printed logo. For that kind

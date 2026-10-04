@@ -18,7 +18,8 @@
 //!    the constraints block removed, [`projected_gradient_norm`]) is below `PG_TOL` of the
 //!    whole problem's largest gradient at the start, when the last step lowered the energy
 //!    by less than `FUNC_TOL` of the whole problem's changeable energy at the start
-//!    ([`Scales`]), after `MAX_ITERS` iterations, when the line search finds no step of
+//!    ([`Scales`]), after `MAX_ITERS` iterations (or the caller's lower cap, `max_iters`), when
+//!    the line search finds no step of
 //!    sufficient decrease, or when the caller's time budget has run out.
 //! 2. **Direction.** Limited-memory BFGS, the two-loop recursion over the last `MEMORY`
 //!    steps with the initial scaling `γ = sᵀy / yᵀy`, with the component of a point's
@@ -156,13 +157,18 @@ fn dot(a: &[Point], b: &[Point]) -> f64 {
 /// independent part at a time. Returns the report and the solved positions, or `None`
 /// when the energy did not fall.
 /// `deadline` is the caller's wall-clock budget (its start and length in ms); with `None`
-/// the result depends only on the input.
+/// the result depends only on the input. `max_iters` caps the iterations of every part
+/// below [`MAX_ITERS`] (`None`: [`MAX_ITERS`] itself); the solve stops at whichever of
+/// the cap and its own convergence tests comes first, so a cap at or above the iterations
+/// a part takes changes nothing.
 pub(super) fn descend(
     prob: &mut Problem,
     vars: &Vars,
     deadline: Option<(Instant, u128)>,
+    max_iters: Option<usize>,
     dbg: bool,
 ) -> Option<(Report, Vec<Point>)> {
+    let max_iters = max_iters.map_or(MAX_ITERS, |k| k.min(MAX_ITERS));
     let n = vars.start.len();
     let (data0, _) = prob.band_norm;
     let kink0 = prob.priors(&vars.start, None);
@@ -183,7 +189,9 @@ pub(super) fn descend(
     let (mut before, mut after, mut iters) = (0.0, 0.0, 0usize);
     for comp in comps {
         prob.active = Some(comp);
-        let (e0, e1, it) = solve(prob, vars, &mut pos, &mut gfull, deadline, scales, dbg);
+        let (e0, e1, it) = solve(
+            prob, vars, &mut pos, &mut gfull, deadline, scales, max_iters, dbg,
+        );
         prob.active = None;
         before += e0;
         after += e1;
@@ -204,12 +212,14 @@ pub(super) fn descend(
     ))
 }
 
-/// L-BFGS on the active component, updating its unknowns in `pos`. Returns its energy
-/// before and after, and the iterations taken (steps accepted).
+/// L-BFGS on the active component, updating its unknowns in `pos`, for at most `max_iters`
+/// iterations. Returns its energy before and after, and the iterations taken (steps
+/// accepted).
 ///
 /// The loop is the module docs' steps 1-4. Each iteration renders the band once per
 /// line-search trial (usually one); nothing is allocated per trial except when a trial
 /// becomes the search's best, whose points and gradient are copied.
+#[allow(clippy::too_many_arguments)]
 fn solve(
     prob: &mut Problem,
     vars: &Vars,
@@ -217,6 +227,7 @@ fn solve(
     gfull: &mut [Point],
     deadline: Option<(Instant, u128)>,
     scales: Scales,
+    max_iters: usize,
     dbg: bool,
 ) -> (f64, f64, usize) {
     let mut part = Part::new(prob, vars, pos);
@@ -224,7 +235,7 @@ fn solve(
     let e0 = e;
     let mut mem: Vec<(Vec<Point>, Vec<Point>, f64)> = Vec::new();
     let mut done = 0usize;
-    for it in 0..MAX_ITERS {
+    for it in 0..max_iters {
         if deadline.is_some_and(|(t0, ms)| t0.elapsed().as_millis() > ms) {
             break;
         }

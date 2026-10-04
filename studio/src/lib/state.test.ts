@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { control, freshStore, settings, source } from "../testing/fixtures";
-import { appliesTo, bytes, count, de00, duration, modKey, percent, plannedTracePx, seconds } from "./state";
+import { appliesTo, bytes, count, de00, duration, engineName, fastEngine, modKey, percent, plannedTracePx, seconds } from "./state";
 
 describe("appliesTo", () => {
   const both = control("speckleFloor", "both");
@@ -23,6 +23,13 @@ describe("appliesTo", () => {
       const s = settings({ mode: "fast", ...route });
       expect([both, qualityOnly, fastOnly].map((c) => appliesTo(c, s))).toEqual([true, true, false]);
     }
+  });
+
+  it("shows Balanced what Fast shows: it runs the Fast engine", () => {
+    const balanced = settings({ mode: "balanced" });
+    expect([both, qualityOnly, fastOnly].map((c) => appliesTo(c, balanced))).toEqual([true, false, true]);
+    expect([fastEngine("balanced"), fastEngine("fast"), fastEngine("quality")]).toEqual([true, true, false]);
+    expect(["quality", "balanced", "fast"].map((m) => engineName(m as "quality"))).toEqual(["Quality", "Balanced", "Fast"]);
   });
 
   it("does not treat monochrome as its own route", () => {

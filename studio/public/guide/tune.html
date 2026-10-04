@@ -38,9 +38,15 @@ plain-language names. The table at the end of this page maps them.</p>
 <h2 id="the-engine-the-denoiser-and-editable">The engine, the denoiser and Editable</h2>
 <p>Three settings sit above both halves of the rail, big, because they are the ones people most often
 come for. Each is one control, shown once.</p>
-<p><strong>Engine</strong>: <strong>Quality</strong> or <strong>Fast</strong>. Quality places every edge to a fraction of a pixel and fits
-the fewest curves that match the image; it is the default and the closest trace. Fast traces each
-shape in a single pass, many times quicker, for previews, batches and very large images.</p>
+<p><strong>Engine</strong>: <strong>Quality</strong>, <strong>Balanced</strong> or <strong>Fast</strong>. Quality places every edge to a fraction of a pixel
+and fits the fewest curves that match the image; it is the default and the closest trace. Fast
+traces each shape in a single pass, many times quicker, for previews, batches and very large
+images. Balanced sits between them: it is Fast, plus a few steps of Quality's edge placement and a
+finer curve fit. On 128 px icons it closes more than half of the distance from Fast to Quality,
+and about two fifths at 512 px, for about twice Fast's tracing time (a tenth of Quality's or
+less). It keeps Fast's flat fills, and its files are a few percent larger than Fast's. On images
+over 1024 px on their longer side it traces exactly as Fast does: there the extra steps gained
+little and cost a third more numbers in the file.</p>
 <p><strong>Denoiser</strong>: <strong>Off</strong>, <strong>Auto</strong> or <strong>On</strong>. The denoiser is a trained model that repairs JPEG, WebP
 and screenshot damage at the image's own size before tracing, so the colours are the ones the
 artwork was drawn with rather than the ones the compression left.</p>
@@ -62,7 +68,9 @@ within the same tolerance; the <a href="result.html#editability">Editability car
 the quality report shows its price (about 0.04 dE00 on icons).</p>
 <h3 id="which-controls-each-engine-reads">Which controls each engine reads</h3>
 <p>Fast skips the stages several controls steer, so with Fast selected the Tune tab lists only the
-controls that change a Fast trace, and a line at the top says how many more are for Quality. The
+controls that change a Fast trace, and a line at the top says how many more are for Quality.
+Balanced runs the Fast engine and reads exactly the controls Fast reads: its edge placement stops
+after a fixed number of steps, so <strong>Time limit</strong> does not apply to it either. The
 hidden ones keep their values: switch back to Quality and they are where you left them. The
 <em>changed</em> counts and each group's <strong>Reset</strong> count and reset only the controls on show; choosing a
 preset still sets every control. The <a href="getting-started.html#the-custom-wizard">Custom wizard</a> leaves

@@ -39,8 +39,8 @@ function listen<T>(event: string, fn: EventCallback<T>): Promise<UnlistenFn> {
 
 /** The denoiser: never, only on an image that reads as damaged, or always. Mirrors `options::Cleanup`. */
 export type Cleanup = "off" | "auto" | "on";
-/** Which tracing engine. Mirrors `options::TraceMode`. */
-export type TraceMode = "quality" | "fast";
+/** Which tracing engine. Mirrors `options::TraceMode`. Balanced runs the Fast engine. */
+export type TraceMode = "quality" | "balanced" | "fast";
 
 /** Every trace control, as the engine reads them. Mirrors `options::Settings`. */
 export interface Settings {

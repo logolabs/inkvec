@@ -102,8 +102,8 @@ pub struct Options {
     #[schemars(range(min = 0, max = 1))]
     pub harmonize_threshold: f64,
 
-    /// Which engine traces the image. "quality" (the default) is the full engine: the best fidelity and the fewest parameters, at about half a second for a 512 px logo. "fast" is a Potrace-class fit on the same palette, planar map and emitter, with a one-pass gradient check in place of gradient recovery: several times faster (tens of milliseconds at 512 px), a little less faithful, with somewhat more parameters. Options that only steer quality stages (precision, content_units, harmonize, harmonize_threshold, time_budget) are ignored in fast mode.
-    #[schemars(extend("enum" = ["quality", "fast"]))]
+    /// Which engine traces the image. "quality" (the default) is the full engine: the best fidelity and the fewest parameters, at about half a second for a 512 px logo. "fast" is a Potrace-class fit on the same palette, planar map and emitter, with a one-pass gradient check in place of gradient recovery: several times faster (tens of milliseconds at 512 px), a little less faithful, with somewhat more parameters. Options that only steer quality stages (precision, content_units, harmonize, harmonize_threshold, time_budget) are ignored in fast mode. "balanced" (opt-in) is fast plus four iterations of quality's boundary solve and a fit with tolerances a quarter finer: in between the two in fidelity and time, on rasters up to 1024 px on the longer side; a larger raster is traced exactly as in fast mode. It ignores the same options as fast.
+    #[schemars(extend("enum" = ["quality", "fast", "balanced"]))]
     pub mode: String,
 
     /// Also trace three structural alternatives -- blend absorption off, a matte instead of native alpha, and a merge distance of 0.020 -- and keep the trace whose render explains the input in the fewest nats (its squared error at the input's resolution against the best one's, plus a price per parameter). Quality colour mode only; up to four traces, about 3.6 times the trace time at 512 px. Measured on the 246-icon screen set: 6 % closer to the artist's file at 128 px, 1 % at 512 px (9 % on the hardest tenth). Off by default.
@@ -432,6 +432,13 @@ mod tests {
             Options::from_json(r#"{"mode": "fast"}"#).unwrap().mode,
             "fast"
         );
+        assert_eq!(
+            Options::from_json(r#"{"mode": "balanced"}"#)
+                .unwrap()
+                .to_args()
+                .mode,
+            inkvec_cli::TraceMode::Balanced
+        );
         assert!(err("[1, 2]").contains("JSON object"));
         assert!(err("null").contains("JSON object"));
         assert!(err("{nope").contains("key"));
@@ -454,7 +461,10 @@ mod tests {
         assert_eq!(p["precision"]["exclusiveMinimum"], 0);
         assert_eq!(p["harmonize"]["default"], true);
         assert_eq!(p["mode"]["default"], "quality");
-        assert_eq!(p["mode"]["enum"], serde_json::json!(["quality", "fast"]));
+        assert_eq!(
+            p["mode"]["enum"],
+            serde_json::json!(["quality", "fast", "balanced"])
+        );
         assert_eq!(
             p["native_alpha"]["default"],
             inkvec_cli::Args::default().native_alpha

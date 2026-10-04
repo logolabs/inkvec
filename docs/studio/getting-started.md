@@ -132,8 +132,8 @@ From step 4 on, a small table compares Auto's figures with yours: colour differe
 and file size, with the change in each.
 
 What each control does is on the [Tune](tune.md) page; the wizard shows the same controls, only
-fewer at a time. With the **Fast** engine it leaves out, as Tune does, the controls only Quality
-reads (see [which controls each engine reads](tune.md#which-controls-each-engine-reads)).
+fewer at a time. With the **Fast** or **Balanced** engine it leaves out, as Tune does, the controls
+only Quality reads (see [which controls each engine reads](tune.md#which-controls-each-engine-reads)).
 
 Along the bottom: **Back**, **Skip to finish** (jump to the last step, keeping everything chosen),
 and **Next**. On the last step, **Finish** closes the wizard and **Export now** closes it and opens

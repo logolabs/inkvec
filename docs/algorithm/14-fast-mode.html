@@ -321,6 +321,14 @@
         shape was not drawn. In everyday Fast mode the fix changed 9 of the 402 icons of
         the quality check at its smaller size and 3 at its larger one, and the Visa logo of the
         Simple Icons set, traced at 512 pixels, came out closer to the original.</p>
+      <p>Whether a corner stays sharp is decided by distance: if the rounded curve would miss
+        the border points by more than a tenth of a pixel, and by more than twice what the two
+        straight sides miss them by, the corner is kept. Until October 2026 the limit was a
+        quarter of a pixel. Lowering it made Fast both closer and smaller at once: a sharp
+        corner takes four numbers where the curve that rounded it took six, and on drawn icons
+        the sharp corner is usually what the artist drew. On the quality check's small icons
+        the colour error fell by 1.5 % and the number count by 4.3 %; on the larger ones the
+        count fell by 1.6 % with the error unchanged.</p>
       <p>Before those steps, a closed outline that is really a circle or an ellipse is
         recognised as one and written with three or five numbers instead of a chain of curves;
         and a border between two nearly identical colours is fitted more loosely, because a
@@ -391,6 +399,34 @@
         mathematically impossible — too small, or completely solid inside — instead of
         testing every shape against the whole picture. The <a href="13-emit.html">writer's
         page</a> has the details.</p>
+    </section>
+
+    <section>
+      <h2>A third route: Balanced</h2>
+      <p>Between Fast and Quality there is a large gap in time and a large gap in closeness,
+        and the two are not spread evenly over Quality's stages. On small icons, almost all of
+        Fast's error sits within one pixel of an edge: it is about where the borders are, not
+        about colour. Two of Quality's stages fix that. One fits every outline by trying many
+        ways of drawing it, and costs twenty to thirty times Fast's whole trace. The other moves
+        every border point at once until a redrawing matches the pixels, and it is cheap at
+        the start: its first four rounds buy four fifths of what its full thirty-two buy.</p>
+      <p><b>Balanced</b> is Fast with those first four rounds of edge placement added, and a
+        curve fit that follows the points a quarter more closely. It keeps Fast's flat fills
+        and leaves the expensive outline search to Quality. On the quality check's small icons
+        it closes 58 % of the distance from Fast to Quality, and at 512 pixels 35 to 43 %; on
+        a set of 21 logos and emoji at 512 and 1024 pixels its median error matches Quality's.
+        It costs about one and a half times Fast's work on small icons and about three times
+        on large ones, a tenth of Quality's or less.</p>
+      <p>It has a price besides time: the finer fit spends a few percent more numbers than
+        Fast, and its outlines turn more along their length, because they follow more of
+        the small wobble in the measured edge. Fitting with Fast's own looseness after the
+        same four rounds avoids most of that and still gains about three fifths as much; the measurements are
+        on the technical page.</p>
+      <p>On pictures larger than 1024 pixels on their longer side, Balanced simply runs
+        Fast. At 2048 pixels the extra steps still helped a little — about 5 % on typical
+        logos — but they cost a third more numbers and nearly three times the work, and the
+        rest of what separates Fast from Quality there is the way gradients are filled, which
+        no edge placement can fix.</p>
     </section>
 
   </main>

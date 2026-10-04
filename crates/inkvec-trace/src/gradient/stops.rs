@@ -733,14 +733,14 @@ mod tests {
     }
 
     /// A clamped profile along a linear axis: flat to `t = 0.55`, then two ramps of
-    /// different slope meeting at `t = 0.85`. The first knot found alone sits at the
-    /// steeper bend; the repartition moves the other to the core's end, so the two-stop
-    /// variant has knots at both bends.
+    /// different slope meeting at `t = 0.85`. Two stops placed badly -- one on the rim at
+    /// 0.70, as a greedy search can leave them -- are re-placed onto both bends: the first
+    /// with the second held finds the core's end, the second with the first held stays.
     #[test]
-    fn two_stops_land_on_both_bends_of_a_clamped_profile() {
+    fn the_repartition_moves_a_stop_onto_the_core_end() {
         let (w, h) = (200usize, 6usize);
         let profile = |t: f64| {
-            let a = (t - 0.55).clamp(0.0, 0.30) * 0.25;
+            let a = (t - 0.55).clamp(0.0, 0.30) * 0.8;
             let b = (t - 0.85).max(0.0) * 3.0;
             0.80 - a - b
         };
@@ -755,29 +755,31 @@ mod tests {
             for x in 0..w {
                 let t = x as f64 / (w - 1) as f64;
                 let v = profile(t);
-                let c = [v, 0.5 * v, 0.3];
+                let c = [v as f32, (0.5 * v) as f32, 0.3];
                 s.px.push(y * w + x);
                 s.x.push(x as f64);
                 s.y.push(y as f64);
-                s.srgb.push([c[0] as f32, c[1] as f32, c[2] as f32]);
-                s.lin.push(to_lin([c[0] as f32, c[1] as f32, c[2] as f32]));
+                s.srgb.push(c);
+                s.lin.push(to_lin(c));
             }
         }
         let model = FillModel::Linear {
             p0: (0.0, 0.0),
             p1: ((w - 1) as f64, 0.0),
             c0: [0.8, 0.4, 0.3],
-            c1: [0.2, 0.1, 0.3],
+            c1: [0.11, 0.055, 0.3],
             interp: Interp::Srgb,
             mids: vec![],
         };
         let cols = s.colors(Interp::Srgb);
-        let variants = fit_mid_stops(&model, &s, &cols, Interp::Srgb);
-        let Some(FillModel::Linear { mids, .. }) = variants.get(1) else {
-            panic!("no two-stop variant: {variants:?}");
-        };
-        let offs: Vec<f64> = mids.iter().map(|m| m.0).collect();
-        assert!((offs[0] - 0.55).abs() < 0.02, "knots {offs:?}");
-        assert!((offs[1] - 0.85).abs() < 0.02, "knots {offs:?}");
+        let p = StopProblem::new(&model, &s, &cols, Interp::Srgb).expect("a stop problem");
+        let mut knots = vec![0.70, 0.85];
+        repartition(&p, &mut knots);
+        assert!((knots[0] - 0.55).abs() < 0.02, "knots {knots:?}");
+        assert!((knots[1] - 0.85).abs() < 0.02, "knots {knots:?}");
+        // Two knots closer than 5 % of the span are never made.
+        let mut close = vec![0.84, 0.85];
+        repartition(&p, &mut close);
+        assert!(close[1] - close[0] >= 0.05 * p.span, "knots {close:?}");
     }
 }

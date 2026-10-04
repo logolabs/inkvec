@@ -552,9 +552,7 @@ fn parse_args_from(mut it: impl Iterator<Item = String>) -> Result<Args, String>
                 std::process::exit(0);
             }
             "-q" | "--quiet" => a.quiet = true,
-            "-o" | "--output" => {
-                a.output = Some(PathBuf::from(it.next().ok_or("--output needs a path")?))
-            }
+            "-o" | "--output" => a.output = Some(it.next().ok_or("--output needs a path")?.into()),
             "--tau" => a.tau = parse_value(&mut it, "--tau")?,
             "--precision" => a.precision = parse_value(&mut it, "--precision")?,
             "--min-area" => a.min_area = parse_value(&mut it, "--min-area")?,

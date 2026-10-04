@@ -34,7 +34,10 @@
 //!
 //! The face becomes strokes when `ΔL < 0` and `k_stroke < k_vanish`: cheaper overall and
 //! strictly fewer parameters, because a representation change that spends more
-//! parameters to buy fidelity is not what this stage is for.
+//! parameters to buy fidelity is not what this stage is for; and when the strokes fit
+//! the boundary as well as the outline does, to within the noise of the chi-squared
+//! statistic ([`FIT_MARGIN_SD`]), because parameters saved do not buy back a visibly
+//! worse edge.
 //!
 //! Method from: Rissanen (1978), Modeling by shortest data description, Automatica 14(5),
 //! doi:10.1016/0005-1098(78)90005-5 -- the two-part code the whole fitter uses, here
@@ -242,8 +245,37 @@ fn decide(o: &Outcome, lambda: f64) -> Option<f64> {
     let r = o.fit.as_ref().ok()?;
     let k = r.params();
     let dl = 0.5 * (r.score.chi2 - o.chi2_outline) + lambda * (k - o.k_vanish);
-    (dl < 0.0 && k < o.k_vanish && dl.is_finite()).then_some(dl)
+    let as_good = r.score.chi2 - o.chi2_outline <= FIT_MARGIN_SD * (2.0 * r.points as f64).sqrt();
+    (dl < 0.0 && as_good && k < o.k_vanish && dl.is_finite()).then_some(dl)
 }
+
+/// How much worse than the outline the strokes may fit the face's `N` boundary points,
+/// in standard deviations `sqrt(2N)` of a chi-squared statistic on them ([`decide`]).
+///
+/// The description length trades fit for parameters at the fitter's own price (`λ`
+/// nats per parameter), and a stroke saves tens of parameters, so it accepted strokes
+/// whose fit was plainly worse: material-icons `settings` (a filled gear with rounded
+/// corners, read as a miter stroke: chi-squared 2010 against the outline's 1013, 75
+/// parameters saved, dE00 0.106 -> 0.199) and simple-icons `wxt` (a puzzle piece whose
+/// arcs are 1.3% wider than its straights: 414 against 315, 88 saved, 0.037 -> 0.058).
+/// Neither shape is a constant-width stroke, and the gate's perceptual axis notices what
+/// the price forgives. So a stroke must also fit about as well as the outline: within
+/// the chi-squared statistic's own noise, two standard deviations of a `χ²_N`. Measured
+/// with the stage on at 128 px against the decision alone: held_a macro dE00 0.1192 ->
+/// 0.1186 (`settings` back to 0.106), the screen set 0.1162 -> 0.1163 (`wxt` back to
+/// 0.037 and four emoji back to their fills; simple-icons `changedetection` +0.061, its
+/// one remaining stroke face interacting with a neighbour turned back to a fill).
+///
+/// Not from the literature as a rule: a non-inferiority margin on the fit, because the
+/// gate judges a representation change by fidelity first. See also: Wilks (1938), The
+/// large-sample distribution of the likelihood ratio for testing composite hypotheses,
+/// Annals of Mathematical Statistics 9(1), 60-62, doi:10.1214/aoms/1177732360 -- the
+/// likelihood-ratio test of a simpler nested model, which lets the saved parameters buy
+/// fit (`Δχ² <= χ²_Δk` at the 1% level, its quantile by Wilson, Hilferty (1931), The
+/// distribution of chi-square, PNAS 17(12), 684-688, doi:10.1073/pnas.17.12.684); tried
+/// with the same data, it turned the gear back but let `wxt` through (99 against 122 for
+/// 88 parameters).
+const FIT_MARGIN_SD: f64 = 2.0;
 
 /// `INKVEC_RIBBONS_DEBUG`: one line per candidate on stderr.
 fn debug_line(o: &Outcome, verdict: Option<f64>) {
@@ -461,9 +493,12 @@ mod tests {
         // k = 2 + 2 + 1 = 5 against 20 that vanish: 15 parameters at lambda 7 is 105 nats.
         let r = ribbon(150.0, Join::Round);
         assert_eq!(r.params(), 5.0);
-        // chi2 worse by 100, i.e. 50 nats: still a win.
-        assert!(decide(&outcome(Ok(r.clone()), 50.0, 20.0), 7.0).is_some());
-        // chi2 worse by 300, i.e. 150 nats: a loss.
+        // chi2 worse by 20 on 100 points (within 2 sqrt(200) = 28.3), 10 nats: a win.
+        assert!(decide(&outcome(Ok(r.clone()), 130.0, 20.0), 7.0).is_some());
+        // chi2 worse by 100, 50 nats: still cheaper, but the fit is worse than the
+        // outline's beyond the noise, so the outline stays.
+        assert!(decide(&outcome(Ok(r.clone()), 50.0, 20.0), 7.0).is_none());
+        // chi2 worse by 300, i.e. 150 nats: a loss either way.
         assert!(decide(&outcome(Ok(r.clone()), -150.0, 20.0), 7.0).is_none());
         // Not fewer parameters: never, however good the fit.
         assert!(decide(&outcome(Ok(r.clone()), 1e6, 5.0), 7.0).is_none());

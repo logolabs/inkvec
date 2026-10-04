@@ -172,6 +172,18 @@ export interface Options {
    */
   mode?: string;
   /**
+   * Also trace three structural alternatives -- blend absorption off, a matte instead of
+   * native alpha, and a merge distance of 0.020 -- and keep the trace whose render
+   * explains the input in the fewest nats (its squared error at the input's resolution
+   * against the best one's, plus a price per parameter). Quality colour mode only; up to
+   * four traces, about 3.6 times the trace time at 512 px. Measured on the 246-icon screen
+   * set: 6 % closer to the artist's file at 128 px, 1 % at 512 px (9 % on the hardest
+   * tenth). Off by default.
+   *
+   * @default false
+   */
+  hypotheses?: boolean;
+  /**
    * Colour groups: fills to draw as one, so the shapes between them join rather than being
    * recoloured. Empty (the default) changes nothing. Groups are separated by ';' and
    * members by ','; a member is a colour '#rrggbb' as it appears in a trace of the same

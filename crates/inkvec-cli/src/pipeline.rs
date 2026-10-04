@@ -173,6 +173,7 @@ pub(crate) fn color_options(args: &Args) -> ColorOptions {
         min_region: args.min_area.max(1.0) as usize,
         gradients: !args.no_gradients,
         fast: fast::on(args),
+        absorb_blends: args.absorb_blends,
     }
 }
 

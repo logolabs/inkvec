@@ -72,6 +72,7 @@ def trace(
     harmonize: bool = True,
     harmonize_threshold: float = 0.92,
     mode: str = "quality",
+    hypotheses: bool = False,
     merge_colors: str = "",
 ) -> Traced:
     """Trace an image to SVG.
@@ -168,6 +169,14 @@ def trace(
             faithful, with somewhat more parameters. Options that only steer quality
             stages (precision, content_units, harmonize, harmonize_threshold,
             time_budget) are ignored in fast mode.
+        hypotheses:
+            Also trace three structural alternatives -- blend absorption off, a matte
+            instead of native alpha, and a merge distance of 0.020 -- and keep the trace
+            whose render explains the input in the fewest nats (its squared error at the
+            input's resolution against the best one's, plus a price per parameter).
+            Quality colour mode only; up to four traces, about 3.6 times the trace time
+            at 512 px. Measured on the 246-icon screen set: 6 % closer to the artist's
+            file at 128 px, 1 % at 512 px (9 % on the hardest tenth). Off by default.
         merge_colors:
             Colour groups: fills to draw as one, so the shapes between them join rather
             than being recoloured. Empty (the default) changes nothing. Groups are
@@ -207,6 +216,7 @@ def trace_rgba(
     harmonize: bool = True,
     harmonize_threshold: float = 0.92,
     mode: str = "quality",
+    hypotheses: bool = False,
     merge_colors: str = "",
 ) -> Traced:
     """Trace raw straight-RGBA8 pixels (row-major, tightly packed) to SVG.
@@ -304,6 +314,14 @@ def trace_rgba(
             faithful, with somewhat more parameters. Options that only steer quality
             stages (precision, content_units, harmonize, harmonize_threshold,
             time_budget) are ignored in fast mode.
+        hypotheses:
+            Also trace three structural alternatives -- blend absorption off, a matte
+            instead of native alpha, and a merge distance of 0.020 -- and keep the trace
+            whose render explains the input in the fewest nats (its squared error at the
+            input's resolution against the best one's, plus a price per parameter).
+            Quality colour mode only; up to four traces, about 3.6 times the trace time
+            at 512 px. Measured on the 246-icon screen set: 6 % closer to the artist's
+            file at 128 px, 1 % at 512 px (9 % on the hardest tenth). Off by default.
         merge_colors:
             Colour groups: fills to draw as one, so the shapes between them join rather
             than being recoloured. Empty (the default) changes nothing. Groups are

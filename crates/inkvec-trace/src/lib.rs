@@ -188,6 +188,11 @@ pub struct ColorOptions {
     /// fitter follows). A transparent image traced natively goes the same way, with opacity in
     /// its inks and no ramp pass. False is quality mode, exactly as before the flag existed.
     pub fast: bool,
+    /// Blend absorption: give the anti-aliased pixels between two inks to one of them
+    /// (`absorb_blend_slivers`, `reassign_blend_pixels`). On by default; off is one of the
+    /// structural hypotheses the command line's `--hypotheses` traces as well, because on
+    /// a sub-pixel gap between two shapes the grey pixel is the gap, not a blend.
+    pub absorb_blends: bool,
 }
 
 impl Default for ColorOptions {
@@ -204,6 +209,7 @@ impl Default for ColorOptions {
             lossy_intake: false,
             min_region: 4,
             fast: false,
+            absorb_blends: true,
         }
     }
 }
@@ -538,7 +544,7 @@ pub fn trace_color_full_with_alpha(
     // mints two junctions per couple of pixels: the boundary the fitter finally sees is
     // confetti before any curve model gets a say. Measured on `mosaic_grid6` (36 flat
     // cells): 128 faces and 368 edges, where the truth has 37 regions.
-    if !inkvec_core::env::flag("INKVEC_NO_ABSORB") {
+    if opts.absorb_blends && !inkvec_core::env::flag("INKVEC_NO_ABSORB") {
         let alpha: Vec<f32> = match source_alpha {
             Some(a) if a.len() == img.width * img.height => a.to_vec(),
             _ => (0..img.width * img.height)

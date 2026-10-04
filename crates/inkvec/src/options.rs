@@ -106,6 +106,9 @@ pub struct Options {
     #[schemars(extend("enum" = ["quality", "fast"]))]
     pub mode: String,
 
+    /// Also trace three structural alternatives -- blend absorption off, a matte instead of native alpha, and a merge distance of 0.020 -- and keep the trace whose render explains the input in the fewest nats (its squared error at the input's resolution against the best one's, plus a price per parameter). Quality colour mode only; up to four traces, about 3.6 times the trace time at 512 px. Measured on the 246-icon screen set: 6 % closer to the artist's file at 128 px, 1 % at 512 px (9 % on the hardest tenth). Off by default.
+    pub hypotheses: bool,
+
     /// Colour groups: fills to draw as one, so the shapes between them join rather than being recoloured. Empty (the default) changes nothing. Groups are separated by ';' and members by ','; a member is a colour '#rrggbb' as it appears in a trace of the same image, or a gradient written as its stop colours joined by '>'. An optional '=' says what the group becomes: '=#rrggbb' a flat colour, '=@n' its n-th member (1-based; a gradient there is refitted over the whole group); without it, the member covering the most of the image. Example: '#c0392b,#e74c3c;#f00>#00f,#0a0=@1'. A group costs one extra trace.
     pub merge_colors: String,
 }
@@ -132,6 +135,7 @@ impl Default for Options {
             content_units: a.content_units,
             harmonize: a.harmonize,
             harmonize_threshold: a.harmonize_threshold,
+            hypotheses: a.hypotheses,
             // The command line has no groups by default; a spec that parses to none.
             merge_colors: String::new(),
             mode: a.mode.name().to_string(),
@@ -223,6 +227,7 @@ impl Options {
             content_units,
             harmonize,
             harmonize_threshold,
+            hypotheses,
             ref merge_colors,
             ref mode,
         } = *self;
@@ -245,6 +250,7 @@ impl Options {
             content_units,
             harmonize,
             harmonize_threshold,
+            hypotheses,
             // Validated before any trace against the schema's `enum`.
             mode: mode.parse().unwrap_or_default(),
             // A library never writes to the terminal.

@@ -201,6 +201,15 @@ pub struct Args {
     pub harmonize_threshold: f64,
     /// Emit harmonized shapes as SVG `<defs>` and `<use>` instances.
     pub use_symbols: bool,
+    /// Also trace the structural alternatives (blend absorption off, a matte instead of
+    /// native alpha, a tighter merge distance) and keep the trace with the shortest
+    /// description length against the input (see `crate::select`). Off by default: up to
+    /// four traces.
+    pub hypotheses: bool,
+    /// Give anti-aliased pixels between two inks to one of them (the colour tracer's blend
+    /// absorption). Always on from the command line; `crate::select` turns it off for one
+    /// of its hypotheses.
+    pub absorb_blends: bool,
     /// Quality (the default) or fast. Fast mode ignores the options that only steer quality
     /// stages, and says so in the report.
     pub mode: TraceMode,
@@ -268,6 +277,8 @@ impl Default for Args {
             harmonize: true,
             harmonize_threshold: 0.92,
             use_symbols: false,
+            hypotheses: false,
+            absorb_blends: true,
             mode: TraceMode::Quality,
         }
     }
@@ -435,6 +446,11 @@ OPTIONS:
         --harmonize         Explicitly enable repeating shape harmonization
         --harmonize-threshold <f> Shape equivalence IoU threshold     [default: 0.92]
         --use-symbols       Emit harmonized shapes as SVG <defs> and <use> instances
+        --hypotheses        Also trace with blend absorption off, with a matte instead
+                            of native alpha and with merge 0.020, and keep the trace that
+                            explains the input in the fewest nats (description length).
+                            -6% colour error at 128 px, -1% at 512 px (-9% on the
+                            hardest tenth), for about 3.6x the time; off by default
     -q, --quiet             Only write the file
     -V, --version           Print the version
     -h, --help
@@ -590,6 +606,7 @@ fn parse_args_from(mut it: impl Iterator<Item = String>) -> Result<Args, String>
                 a.harmonize_threshold = parse_value(&mut it, "--harmonize-threshold")?
             }
             "--use-symbols" => a.use_symbols = true,
+            "--hypotheses" => a.hypotheses = true,
             "--mode" => a.mode = it.next().ok_or("--mode needs quality or fast")?.parse()?,
             "--sr-command" => {
                 a.sr_command = Some(it.next().ok_or("--sr-command needs a command line")?)

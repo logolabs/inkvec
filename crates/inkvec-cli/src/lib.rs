@@ -61,6 +61,7 @@ mod post;
 mod primitive;
 mod rings;
 mod seams;
+mod select;
 mod strokes;
 mod uncertainty;
 mod units;
@@ -635,27 +636,15 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
         (display_w, display_h)
     };
 
-    // Art that reaches the border of a transparent raster is traced on a canvas `PAD` px
-    // larger on every side and moved back afterwards (see `border`): the colour tracer fits
-    // a boundary that ends on the image frame worse than the closed outline it becomes with
-    // room round it. Quality colour mode only; when the traced document holds anything
-    // `border::crop` cannot translate, the raster is traced again as it is.
+    // With `--hypotheses`, the structural alternatives are traced as well and the trace with
+    // the shortest description length against this raster is kept (see `select`). The
+    // raster is cloned only then; the default path moves it into the one trace.
     let (w, h) = (img.width, img.height);
-    let (svg, mut stats, lambda) = if border_pad_applies(args) && border::touches_border(&img) {
-        let padded = border::pad(&img);
-        diag::stage(args.quiet, || {
-            format!(
-                "  border        art touches the canvas edge; traced with a {} px transparent margin",
-                border::PAD
-            )
-        });
-        let (svg, stats, lambda) = trace_matted(padded, args, Some(w.max(h)))?;
-        match border::crop(&svg, w, h) {
-            Some(svg) => (svg, stats, lambda),
-            None => trace_matted(img, args, None)?,
-        }
+    let (svg, mut stats, lambda) = if args.hypotheses && hypotheses_apply(args) {
+        let base = trace_bordered(img.clone(), args)?;
+        select::choose(&img, args, base, |a| trace_bordered(img.clone(), a))?
     } else {
-        trace_matted(img, args, None)?
+        trace_bordered(img, args)?
     };
     if let Some(n) = sr_note {
         stats.insert(0, n);
@@ -675,6 +664,48 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
         height: h,
         lambda: Some(lambda),
     })
+}
+
+/// One trace of `img` under `args`, through the border pad when it applies.
+///
+/// Art that reaches the border of a transparent raster is traced on a canvas `PAD` px
+/// larger on every side and moved back afterwards (see `border`): the colour tracer fits a
+/// boundary that ends on the image frame worse than the closed outline it becomes with
+/// room round it. Quality colour mode only; when the traced document holds anything
+/// `border::crop` cannot translate, the raster is traced again as it is.
+fn trace_bordered(
+    img: inkvec_trace::Rgba,
+    args: &Args,
+) -> Result<select::Trace, Box<dyn std::error::Error>> {
+    let (w, h) = (img.width, img.height);
+    if border_pad_applies(args) && border::touches_border(&img) {
+        let padded = border::pad(&img);
+        diag::stage(args.quiet, || {
+            format!(
+                "  border        art touches the canvas edge; traced with a {} px transparent margin",
+                border::PAD
+            )
+        });
+        let (svg, stats, lambda) = trace_matted(padded, args, Some(w.max(h)))?;
+        match border::crop(&svg, w, h) {
+            Some(svg) => Ok((svg, stats, lambda)),
+            None => trace_matted(img, args, None),
+        }
+    } else {
+        trace_matted(img, args, None)
+    }
+}
+
+/// Whether `--hypotheses` can do anything under these settings: the Quality colour
+/// pipeline, whose document is compared with the colour input (not the monochrome,
+/// bilevel or stroke writers, nor Fast mode), and no `--uncertainty` bands, which every
+/// traced hypothesis would write over the last one's.
+fn hypotheses_apply(args: &Args) -> bool {
+    args.mode == TraceMode::Quality
+        && !args.bilevel
+        && !args.strokes
+        && !args.monochrome
+        && args.uncertainty.is_none()
 }
 
 /// Whether the border pad (`border`) may be used under these settings: the Quality colour

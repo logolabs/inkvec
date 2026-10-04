@@ -123,6 +123,15 @@ final class Options
      *     harmonize_threshold, time_budget) are ignored in fast mode. The tracer's default is
      *     "quality"; leave it null to use that.
      *
+     * @param bool|null $hypotheses Also trace three structural alternatives -- blend
+     *     absorption off, a matte instead of native alpha, and a merge distance of 0.020 -- and
+     *     keep the trace whose render explains the input in the fewest nats (its squared error at
+     *     the input's resolution against the best one's, plus a price per parameter). Quality
+     *     colour mode only; up to four traces, about 3.6 times the trace time at 512 px. Measured
+     *     on the 246-icon screen set: 6 % closer to the artist's file at 128 px, 1 % at 512 px (9
+     *     % on the hardest tenth). Off by default. The tracer's default is false; leave it null to
+     *     use that.
+     *
      * @param string|null $mergeColors Colour groups: fills to draw as one, so the shapes
      *     between them join rather than being recoloured. Empty (the default) changes nothing.
      *     Groups are separated by ';' and members by ','; a member is a colour '#rrggbb' as it
@@ -150,6 +159,7 @@ final class Options
         public readonly ?bool $harmonize = null,
         public readonly ?float $harmonizeThreshold = null,
         public readonly ?string $mode = null,
+        public readonly ?bool $hypotheses = null,
         public readonly ?string $mergeColors = null,
     ) {
     }
@@ -213,6 +223,9 @@ final class Options
         }
         if ($this->mode !== null) {
             $set['mode'] = $this->mode;
+        }
+        if ($this->hypotheses !== null) {
+            $set['hypotheses'] = $this->hypotheses;
         }
         if ($this->mergeColors !== null) {
             $set['merge_colors'] = $this->mergeColors;

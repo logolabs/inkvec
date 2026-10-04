@@ -53,6 +53,14 @@ describe("the status strip names the engine that drew what is shown", () => {
     expect(stripWords(st.state).rest).toMatch(/^· quality · /);
   });
 
+  it("names Balanced, the third engine, in flight and when it drew the result", () => {
+    const st = freshStore();
+    st.set({ source: source(), report: report({ seconds: 0.2 }), result: traced("final"), resultEngine: "balanced" });
+    expect(stripWords(st.state).lead).toMatch(/^Balanced in /);
+    st.set({ tracing: true, tracingEngine: "balanced", tracingTier: "final" });
+    expect(stripWords(st.state).rest).toMatch(/^· balanced · /);
+  });
+
   it("says Ready with nothing open, and Opened with an image but no trace", () => {
     const st = freshStore();
     expect(stripWords(st.state).lead).toBe("Ready");

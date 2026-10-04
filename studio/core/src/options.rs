@@ -38,7 +38,8 @@ impl Cleanup {
     }
 }
 
-/// Tracing engine mode: Quality (deep MDL analysis-by-synthesis) vs Fast (single-pass Potrace-class).
+/// Tracing engine mode: Quality (deep MDL analysis-by-synthesis), Fast (single-pass
+/// Potrace-class) or Balanced (Fast plus a capped boundary solve and a finer fit).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum TraceMode {
@@ -47,6 +48,10 @@ pub enum TraceMode {
     Quality,
     /// Single-pass Potrace-class planar tracer on shared edges (~30x faster).
     Fast,
+    /// Fast, plus four iterations of Quality's boundary solve and fitter tolerances a
+    /// quarter finer, up to 1024 px on the longer side (above it, Fast's path); see
+    /// `inkvec_cli`'s `fast` module. Reads the same controls as Fast.
+    Balanced,
 }
 
 /// The twenty-four controls, exactly as the Tune tab shows them.
@@ -194,6 +199,7 @@ impl Default for Settings {
             mode: match a.mode {
                 inkvec_cli::TraceMode::Quality => TraceMode::Quality,
                 inkvec_cli::TraceMode::Fast => TraceMode::Fast,
+                inkvec_cli::TraceMode::Balanced => TraceMode::Balanced,
             },
             precision: a.precision,
             speckle_floor: a.min_area,
@@ -284,6 +290,7 @@ impl Settings {
             mode: match mode {
                 TraceMode::Quality => inkvec_cli::TraceMode::Quality,
                 TraceMode::Fast => inkvec_cli::TraceMode::Fast,
+                TraceMode::Balanced => inkvec_cli::TraceMode::Balanced,
             },
             precision,
             min_area: speckle_floor,
@@ -505,20 +512,23 @@ pub enum Modes {
     /// Changes the drawing in either engine.
     Both,
     /// Steers a stage only Quality runs (the boundary solve, the curve fit, gradient
-    /// recovery, ring repair, shape matching); Fast reads it nowhere.
+    /// recovery, ring repair, shape matching); Fast reads it nowhere, and neither does
+    /// Balanced, which runs the Fast engine (its boundary solve is capped by iterations,
+    /// never by the time limit).
     QualityOnly,
-    /// Only Fast reads it. No control is this today; the value exists so the table can say
-    /// so when one is.
+    /// Only the Fast engine (Fast and Balanced) reads it. No control is this today; the
+    /// value exists so the table can say so when one is.
     FastOnly,
 }
 
 impl Modes {
-    /// Whether a control with these modes changes the drawing in `mode`.
+    /// Whether a control with these modes changes the drawing in `mode`. Balanced runs the
+    /// Fast engine and reads exactly the controls Fast reads.
     pub fn includes(self, mode: TraceMode) -> bool {
         match self {
             Modes::Both => true,
             Modes::QualityOnly => mode == TraceMode::Quality,
-            Modes::FastOnly => mode == TraceMode::Fast,
+            Modes::FastOnly => mode != TraceMode::Quality,
         }
     }
 }
@@ -579,11 +589,14 @@ pub const CONTROLS: &[Control] = &[
         max: 1.0,
         curve: 1.0,
         decimals: 0,
+        // In the order of the trade, closest first; Fast stays last (the tests' `moved`
+        // takes a choice's last option as its move off the default).
         stops: &[
             Stop { at: 0.0, label: "quality" },
+            Stop { at: 0.5, label: "balanced" },
             Stop { at: 1.0, label: "fast" },
         ],
-        help: "Quality places every edge to a fraction of a pixel and fits the fewest curves that match the image: the closest trace, and the default. Fast traces each shape in a single pass, many times quicker, for previews, batches and very large images.",
+        help: "Quality places every edge to a fraction of a pixel and fits the fewest curves that match the image: the closest trace, and the default. Balanced is Fast with a few steps of Quality's edge placement and a finer fit: closer than Fast on small images, for about twice its time; above 1024 px it is Fast. Fast traces each shape in a single pass, many times quicker, for previews, batches and very large images.",
         modes: Modes::Both,
     },
     Control {
@@ -988,6 +1001,9 @@ mod tests {
             ..Settings::default()
         };
         assert_eq!(fast.to_args().mode, inkvec_cli::TraceMode::Fast);
+        let balanced: Settings = serde_json::from_str(r#"{"mode": "balanced"}"#).unwrap();
+        assert_eq!(balanced.mode, TraceMode::Balanced);
+        assert_eq!(balanced.to_args().mode, inkvec_cli::TraceMode::Balanced);
     }
 
     #[test]
@@ -1241,6 +1257,12 @@ mod tests {
                 ..moved(c)
             };
             let ignored = inkvec_cli::fast_ignored(&s.to_args());
+            // Balanced reads what Fast reads, so the engine's list is the same for it.
+            let b = Settings {
+                mode: TraceMode::Balanced,
+                ..moved(c)
+            };
+            assert_eq!(inkvec_cli::fast_ignored(&b.to_args()), ignored, "{}", c.key);
             if c.key == "precision" {
                 // The one the report leaves out on purpose: the intake rescales `--precision`
                 // on an oversampled raster, so a changed value is not evidence the caller set
@@ -1273,6 +1295,10 @@ mod tests {
         assert!(Modes::QualityOnly.includes(TraceMode::Quality));
         assert!(Modes::FastOnly.includes(TraceMode::Fast));
         assert!(!Modes::FastOnly.includes(TraceMode::Quality));
+        // Balanced runs the Fast engine: it shows what Fast shows.
+        assert!(!Modes::QualityOnly.includes(TraceMode::Balanced));
+        assert!(Modes::FastOnly.includes(TraceMode::Balanced));
+        assert!(Modes::Both.includes(TraceMode::Balanced));
         // Serialised the way the frontend reads it.
         let json = serde_json::to_value(CONTROLS).unwrap();
         let spelt: Vec<&str> = json

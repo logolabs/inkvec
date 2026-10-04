@@ -170,9 +170,9 @@
             <text x="40" y="100" text-anchor="middle" class="fig-label">identical to the original</text>
           </g>
         </svg>
-        <figcaption>The blow-up is exactly reversible: average every constant block and the
-          original pixels come back unchanged. Once that pattern is recognised, the tracer
-          works on the small original — and still writes the SVG at the size the file
+        <figcaption>The blow-up is exactly reversible: keep one pixel from every constant block
+          and the original pixels come back unchanged. Once that pattern is recognised, the
+          tracer works on the small original — and still writes the SVG at the size the file
           claimed.</figcaption>
       </figure>
       <p>This check is deliberately strict — every pixel in every block has to match
@@ -182,16 +182,44 @@
         the staircase directly: thirteen colours instead of three, and over fifteen hundred
         straight little lines walking around pixel corners instead of the handful of smooth
         curves the artist actually drew.</p>
-      <p>Testing every possible block size used to be slow on a large picture, most of it
-        spent confirming, block size after block size, that the empty margin above the
-        artwork was indeed empty. The check now starts with a cheaper question. In a genuine
-        blow-up by some factor, the colour can only change at positions that are multiples of
-        that factor, so the tool first notes where the colour changes sharply between
-        neighbouring pixels and keeps only the block sizes that divide every such position.
-        On ordinary artwork two changes at positions with no common factor turn up within a
-        few rows of the drawing, no block size survives, and the check ends there. When a
-        block size does survive, the same strict test as before decides, so the answer is
-        always the one the slow search gave.</p>
+      <p>The zoom need not be a whole number. A browser at 350 % turns each pixel into a
+        block three or four pixels wide, alternating, and until October 2026 the tool only
+        recognised whole-number blow-ups, so such a picture was traced block by block: on 28
+        test images, thirteen times the artist's number of points and a colour error three
+        times what the original pixels give. The check now looks at where the colour changes
+        from one column (and one row) of pixels to the next. In a blow-up, every change sits
+        at the start of a block, and the block starts follow the zoom factor to within one
+        pixel; the tool finds the one factor, whole or not, whose block starts include every
+        change, keeps one pixel per block, and checks that repeating those pixels rebuilds
+        the picture exactly before it trusts the answer. On ordinary artwork two neighbouring
+        columns both change somewhere within the first few rows of the drawing, which no
+        blow-up of two or more can do, and the check ends there. All 28 of the 3.5× images
+        came back as their originals, and on all the benchmark's ordinary images the check
+        never fired.</p>
+      <p>It also stopped giving up early on wide, short logos. A wordmark 128 pixels wide and
+        50 tall, blown up four times, used to be undone only halfway, because the original
+        rule refused to leave fewer than 64 pixels on either side; now only the long side
+        keeps that floor.</p>
+    </section>
+
+    <section>
+      <h2>Images that were enlarged smoothly</h2>
+      <p>Most image editors enlarge with a smooth filter instead, and then there are no
+        blocks to find: every edge of the drawing is simply spread over several pixels.
+        That is just as misleading to a tracer built for crisp one-pixel edges — the
+        in-between colours of each smeared edge look like extra inks, and the extra pixels
+        look like extra detail to describe. When every strong edge in the picture is wider
+        than a crisp drawing can make one, and the spread says it was enlarged three times or
+        more, the tool shrinks the picture back by that factor first (keeping the thinnest
+        strokes at least three pixels wide), traces the smaller version, and writes the SVG at
+        the original size. On images enlarged four times this way, the colour error fell by
+        about 30 % and the number of points by two thirds.</p>
+      <p>Two kinds of picture look soft but are left alone. A crisp logo with a soft glow or
+        drop shadow has smeared edges too — the glow's — but its own edges are still sharp,
+        and the tool checks for that before it shrinks anything; an earlier version did not,
+        and blurred such logos down to a fraction of their size. And an image enlarged only
+        twice is traced as it is, because shrinking it measured slightly worse than leaving
+        it.</p>
     </section>
 
     <section>

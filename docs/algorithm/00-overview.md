@@ -92,7 +92,7 @@ each timed by the `Stopwatch` (`crates/inkvec-trace/src/lib.rs:1203`, `mark` at 
 
 | mark | line | stage | what it decides |
 |---|---|---|---|
-| — | `crates/inkvec-cli/src/lib.rs:247` (`intake`) | **intake** | decode (format from the file's signature, EXIF orientation applied, an ICC profile converted to sRGB; `crates/inkvec-trace/src/load.rs`), unblock a nearest-neighbour upscale, optional SR clean-up, resolution normalisation, alpha matting — doc `01-intake.md` |
+| — | `crates/inkvec-cli/src/lib.rs:292` (`intake`) | **intake** | decode (format from the file's signature, EXIF orientation applied, an ICC profile converted to sRGB; `crates/inkvec-trace/src/load.rs`), undo a nearest-neighbour upscale by any factor of 2 or more (exact), reduce a resampled or blurred raster to its detail (soft intake, Quality), optional SR clean-up, resolution normalisation, alpha matting — doc `01-intake.md` |
 | `palette` | `crates/inkvec-trace/src/lib.rs:409` (`color::extract_palette_mdl_ids` :395) | palette | how many inks, and which colours, by MDL against measured pixel noise |
 | `labels` | `crates/inkvec-trace/src/lib.rs:528` (`color::label_image_ids` :413) | labels | which ink each pixel is assigned to |
 | `despeckle` | `crates/inkvec-trace/src/lib.rs:532` | despeckle | absorb regions below `min_region` into their most common neighbour |

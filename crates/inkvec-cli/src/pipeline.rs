@@ -365,7 +365,6 @@ fn finish_color(
     let boundary_report = traced.boundary_opt;
     let symmetry = traced.symmetry;
     let symmetrised = traced.symmetrised;
-    let face_fade = traced.face_fade;
     let (map, pal, face_color, face_fill) = (
         traced.map,
         traced.palette,
@@ -398,7 +397,7 @@ fn finish_color(
         &face_color,
         &pal,
         &traced_labels,
-        &face_fade,
+        &traced.face_fade,
     );
 
     // Editability mode: post-fit structure passes, every one guarded to the ring's

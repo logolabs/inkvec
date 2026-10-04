@@ -163,7 +163,11 @@ pub(crate) fn unexplained<const N: usize>(
     let mut votes = 0usize;
     let mut cols: Vec<[f32; N]> = Vec::with_capacity(MIX_INKS + 1);
     for i in img.claimed_pixels(claim) {
-        let (x, y) = (i % w, i / w);
+        // `x = i - y·w` rather than `i % w`: the same number for unsigned `i`, without a
+        // remainder in a hot loop (wazero's arm64 compiler once miscompiled `i32.rem_u` in
+        // one, which the Go binding runs this through).
+        let y = i / w;
+        let x = i - y * w;
         // (ink, count) of the accepted inks nearest to the unclaimed neighbours; at most 8.
         let mut around: [(u32, u8); 8] = [(u32::MAX, 0); 8];
         let mut k = 0usize;

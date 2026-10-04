@@ -20,13 +20,13 @@ documented in `01-intake.md`,
 **Entry points:** `--mode fast` and `--mode balanced` (`TraceMode::Fast` and
 `TraceMode::Balanced`, `crates/inkvec-cli/src/args.rs:21-34`, default `quality`). The trace crate dispatches to `fast::trace_color` or, for an image
 traced with its transparency, `fast::trace_color_native` (`fast/front.rs:17-29`) when
-`ColorOptions::fast` is set (`crates/inkvec-trace/src/lib.rs:298-310`); the command line
+`ColorOptions::fast` is set (`crates/inkvec-trace/src/lib.rs:296-308`); the command line
 fits the result with `fast::fit` (`crates/inkvec-cli/src/fast.rs:98-117`), which calls
 `inkvec_trace::fast::fit_edges` (`fast/mod.rs:380-427`) with the map's width and height.
 **Pipeline position:** it replaces stages 03–05 (palette, regions, gradients) with its own
 front end; shares stages 01, 06, 07, 10 and 13; skips 08 (the boundary solve,
-`lib.rs:1145-1159`; balanced runs it, capped at four iterations, §8) and 09 (decode,
-`lib.rs:1170`); and replaces 11 (curve fitting) with its own
+`lib.rs:1144`, `solve_boundary` at `:1195-1211`; balanced runs it, capped at four iterations, §8) and 09 (decode,
+`lib.rs:1155`); and replaces 11 (curve fitting) with its own
 fitter, without 12 (repair) or shape harmonization (`repair_fits`,
 `crates/inkvec-cli/src/pipeline.rs:869`; `emit_options`, `pipeline.rs:518-529`).
 
@@ -490,7 +490,7 @@ solve and decode.
   vertices or while a debug printout or contour dump is on (`measure_subpixel`,
   `planar.rs:502-603`).
 * **Symmetry detection beside the measuring phase**, under `rayon::join`; both only read the
-  lattice map (`lib.rs:1102-1135`).
+  lattice map (`lib.rs:1100-1133`).
 * **Junction debug flags read once** into a `OnceLock` (`planar/junctions.rs:54-70`).
 
 **Citations** (labels as in the doc comments): cracks, "Method from" He, Chao & Suzuki 2008 and
@@ -958,8 +958,8 @@ untouched: `boundary_opt::optimise_alpha_capped` (`crates/inkvec-trace/src/bound
 is `optimise_alpha` with `max_iters`, which `lbfgs::descend` clamps to its own ceiling and hands
 to the per-part loop (`boundary_opt/lbfgs.rs:71-86`, `:164`); `None` is `optimise_alpha` bit for
 bit (`boundary_opt/cap_tests.rs`). `ColorOptions::boundary_iters`
-(`crates/inkvec-trace/src/lib.rs:192-197`) carries it: `None` leaves Quality uncapped and Fast
-without a solve, `Some(n)` runs the solve in either mode (`lib.rs:1145-1159`). The command line
+(`crates/inkvec-trace/src/lib.rs:192-195`) carries it: `None` leaves Quality uncapped and Fast
+without a solve, `Some(n)` runs the solve in either mode (`solve_boundary`, `lib.rs:1195-1211`, called at `:1144`). The command line
 sets it from `fast::solve_iters` and picks the fitter's tolerances with `fit_config`, both from
 the one test `fast::balanced` on the traced raster's size (`fast.rs:73-96`).
 

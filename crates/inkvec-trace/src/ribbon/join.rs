@@ -16,8 +16,9 @@
 //! two offset points, at distance `h·cos(γ/2)` from `V` along the bisector `b`, and the
 //! gauge is `b·(p-V)/cos(γ/2)`, which reaches `h` on that chord.
 //!
-//! Caps stay round in both models (`stroke-linecap="round"`): a cap's residual is the
-//! distance to the end point, as for a round join.
+//! **Caps** ([`Cap`]): a round cap paints a half disc round each open end, so its residual
+//! is the distance to the end point, as for a round join; a butt cap stops the stroke
+//! square at the end point, measured by [`butt_gauge`].
 //!
 //! Method from: the SVG 1.1 specification, section 11.4 (stroke properties:
 //! `stroke-linejoin` miter, round and bevel, and `stroke-miterlimit`, default 4),
@@ -143,6 +144,31 @@ pub(crate) fn tangents(a: Point, s: &Segment) -> Option<(Vec2, Vec2)> {
     }
 }
 
+/// The butt-cap gauge of point `p` beyond the open end `e` of a centreline leaving along
+/// the unit tangent `t_out` (pointing out of the stroke), for half-width `h`, and whether
+/// the end face (rather than a side) decides it.
+///
+/// A butt cap stops the stroke on the line through `e` across `t_out`: near `e` the
+/// painted region is `{q : (q - e)·t_out <= 0, |(q - e)×t_out| <= h}`. The gauge
+/// `g = max((p - e)·t_out + h, |(p - e)×t_out|)` equals `h` exactly on that region's edge
+/// -- on the end face the residual `g - h` is the signed distance to the face, and beyond
+/// the sides it is the distance to the side's line -- so the same residual `g - h` as for
+/// a round stroke applies. On the end face `g - h` does not depend on `h` (the face does
+/// not move with the width), which the caller's Jacobian needs to know.
+///
+/// Method from: the SVG 1.1 specification, section 11.4 (`stroke-linecap="butt"`: the
+/// stroke ends flush with the path's end point), written as a gauge like the miter's.
+pub(crate) fn butt_gauge(p: Point, e: Point, t_out: Vec2, h: f64) -> (f64, bool) {
+    let q = p - e;
+    let along = q.dot(t_out) + h;
+    let side = q.cross(t_out).abs();
+    if along >= side {
+        (along, true)
+    } else {
+        (side, false)
+    }
+}
+
 /// The miter-join gauge of point `p` at vertex `v`, where a centreline arriving along
 /// `t_in` leaves along `t_out` (unit tangents): see the module documentation. Comparable
 /// with a distance: the painted outline is where it equals the half-width.
@@ -191,6 +217,20 @@ mod tests {
         assert!((miter_gauge(Point::new(0.5, -1.0), v, t_in, t_out) - 1.0).abs() < 1e-12);
         // A round join would put (1, -1) at sqrt 2.
         assert!((Point::new(1.0, -1.0).dist(v) - 2f64.sqrt()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_butt_end_is_a_square_face() {
+        // End at the origin, leaving along +x, half-width 1.
+        let (e, t) = (Point::new(0.0, 0.0), Vec2 { x: 1.0, y: 0.0 });
+        // Half a pixel beyond the face: residual +0.5, decided by the face (h-free).
+        let (g, f) = butt_gauge(Point::new(0.5, 0.2), e, t, 1.0);
+        assert!((g - 1.5).abs() < 1e-12 && f);
+        // On the face itself: exactly h.
+        assert!((butt_gauge(Point::new(0.0, 0.7), e, t, 1.0).0 - 1.0).abs() < 1e-12);
+        // Behind the face beside the stroke: the side's distance.
+        let (g, f) = butt_gauge(Point::new(-2.0, 1.3), e, t, 1.0);
+        assert!((g - 1.3).abs() < 1e-12 && !f);
     }
 
     #[test]

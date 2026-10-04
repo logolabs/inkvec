@@ -64,7 +64,7 @@ use super::dist::{
     circle_grad, circular_arc_grad, cubic_eval, cubic_grad, dist_to, ellipse_arc_grad, line_grad,
 };
 use super::grid::point_segment;
-use super::join::{miter_gauge, tangents, Join, Style};
+use super::join::{butt_gauge, miter_gauge, tangents, Cap, Join, Style};
 use super::score::flatten;
 use super::skyline::Skyline;
 use super::Centreline;
@@ -422,21 +422,36 @@ fn neighbour(n: usize, closed: bool, seg: usize, foot: Foot) -> Option<usize> {
     }
 }
 
+/// What [`local_eval`] measured for one point.
+#[derive(Clone, Copy)]
+struct Eval {
+    /// The distance term, px.
+    d: f64,
+    /// The neighbouring segment a miter gauge read, if any.
+    with: Option<usize>,
+    /// A gauge (miter at a vertex, butt at an open end) rather than the plain distance:
+    /// its Jacobian row is taken by central differences.
+    gauge: bool,
+    /// The residual `d - h` does not depend on `h` (a butt cap's end face).
+    h_free: bool,
+}
+
 /// The residual's distance term for point `p` on segment `seg` of shape `shape` under
 /// the current `θ`, and the neighbouring segment it read, if any.
 ///
 /// Round joins: the exact distance to the segment ([`dist_to`]). Miter joins: the same,
 /// unless the nearest point is a vertex where the path turns into another segment; there
-/// the [`miter_gauge`] of the two tangents is used. A foot is at an endpoint when the
+/// the [`miter_gauge`] of the two tangents is used. Butt caps: at an open path's end the
+/// [`butt_gauge`] of its outward tangent. A foot is at an endpoint when the
 /// distance equals that endpoint's to 1e-9 px (each distance routine returns the
 /// endpoint's own distance when it clamps there).
-fn local_eval(
-    model: &Model,
-    shape: usize,
-    seg: usize,
-    p: Point,
-    t_hint: f64,
-) -> (f64, Option<usize>) {
+fn local_eval(model: &Model, shape: usize, seg: usize, p: Point, t_hint: f64) -> Eval {
+    let plain = |d: f64| Eval {
+        d,
+        with: None,
+        gauge: false,
+        h_free: false,
+    };
     match &model.shapes[shape] {
         Shape::Path {
             start,
@@ -445,8 +460,9 @@ fn local_eval(
         } => {
             let (a, s) = model.segment(*start, segs, seg);
             let d = dist_to(p, a, &s, t_hint).0;
-            if model.style.join == Join::Round {
-                return (d, None);
+            let butt = model.style.cap == Cap::Butt && !*closed;
+            if model.style.join == Join::Round && !butt {
+                return plain(d);
             }
             let e = s.end();
             let foot = if (d - p.dist(a)).abs() < 1e-9 {
@@ -457,30 +473,60 @@ fn local_eval(
                 Foot::Inside
             };
             let Some(k) = neighbour(segs.len(), *closed, seg, foot) else {
-                return (d, None);
+                // An open end: a butt cap's face, or a round cap's half disc.
+                if butt && foot != Foot::Inside {
+                    if let Some(this) = tangents(a, &s) {
+                        let (v, t_out) = if foot == Foot::Start {
+                            (
+                                a,
+                                Vec2 {
+                                    x: -this.0.x,
+                                    y: -this.0.y,
+                                },
+                            )
+                        } else {
+                            (e, this.1)
+                        };
+                        let (g, h_free) = butt_gauge(p, v, t_out, model.h());
+                        return Eval {
+                            d: g,
+                            with: None,
+                            gauge: true,
+                            h_free,
+                        };
+                    }
+                }
+                return plain(d);
             };
+            if model.style.join == Join::Round {
+                return plain(d);
+            }
             let (a2, s2) = model.segment(*start, segs, k);
             let (Some(this), Some(other)) = (tangents(a, &s), tangents(a2, &s2)) else {
-                return (d, None);
+                return plain(d);
             };
             let (v, t_in, t_out) = if foot == Foot::Start {
                 (a, other.1, this.0)
             } else {
                 (e, this.1, other.0)
             };
-            (miter_gauge(p, v, t_in, t_out), Some(k))
+            Eval {
+                d: miter_gauge(p, v, t_in, t_out),
+                with: Some(k),
+                gauge: true,
+                h_free: false,
+            }
         }
-        Shape::Circle { at, .. } => (
-            (pt(&model.theta, *at).dist(p) - model.theta[at + 2]).abs(),
-            None,
-        ),
-        Shape::Fixed(_) => (f64::NAN, None),
+        Shape::Circle { at, .. } => {
+            plain((pt(&model.theta, *at).dist(p) - model.theta[at + 2]).abs())
+        }
+        Shape::Fixed(_) => plain(f64::NAN),
     }
 }
 
 /// [`local_eval`]'s distance term alone.
 fn local_dist(model: &Model, shape: usize, seg: usize, p: Point, t_hint: f64) -> f64 {
-    local_eval(model, shape, seg, p, t_hint).0
+    local_eval(model, shape, seg, p, t_hint).d
 }
 
 /// Every boundary point's distance term to the centrelines `lines` (half-width `h`,
@@ -679,10 +725,11 @@ fn rows(model: &Model, b: &Boundary, reach: f64) -> (f64, Vec<Option<Row>>) {
 pub(crate) fn point_distances(
     lines: &[Centreline],
     pts: &[Point],
+    h: f64,
     reach: f64,
     style: Style,
 ) -> Vec<f64> {
-    nearest_rows(&Model::new(lines, 0.0, style), pts, reach)
+    nearest_rows(&Model::new(lines, h, style), pts, reach)
         .into_iter()
         .map(|r| r.map_or(f64::INFINITY, |r| r.d))
         .collect()
@@ -1256,14 +1303,22 @@ fn normal_equations(
                 }
                 let mut jac = JacRow::with(hi, -1.0 / s);
                 if row.seg != usize::MAX {
-                    // Under round joins every row reads one segment's plain distance; under
-                    // miter joins a row whose foot is a vertex reads the gauge of two
-                    // segments instead.
-                    let with = match m.style.join {
-                        Join::Round => None,
-                        Join::Miter => local_eval(m, row.shape, row.seg, b.pts[i], row.t).1,
+                    // Under round joins and caps every row reads one segment's plain
+                    // distance; a row whose foot is a miter vertex reads the gauge of two
+                    // segments, and one beyond a butt end the end's gauge, instead.
+                    let ev = match m.style {
+                        Style {
+                            join: Join::Round,
+                            cap: Cap::Round,
+                        } => None,
+                        _ => Some(local_eval(m, row.shape, row.seg, b.pts[i], row.t)),
                     };
-                    if with.is_none()
+                    let with = ev.and_then(|e| e.with);
+                    if ev.is_some_and(|e| e.h_free) {
+                        // A butt end's face does not move with the width.
+                        jac.e[0].1 = 0.0;
+                    }
+                    if !ev.is_some_and(|e| e.gauge)
                         && analytic_row(m, row.shape, row.seg, b.pts[i], row.t, &mut jac)
                     {
                         for e in jac.e[1..jac.n].iter_mut() {

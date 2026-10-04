@@ -102,6 +102,9 @@ pub(crate) struct TopoOptions {
     /// Read the topology from the chordal axis ([`super::chordal`]) instead of the
     /// raster skeleton.
     pub(crate) chordal: bool,
+    /// Free ends are butt caps: the end point sits on the boundary's farthest point
+    /// along the sleeve, not half a width behind it ([`port_cap`]).
+    pub(crate) butt: bool,
 }
 
 impl TopoOptions {
@@ -113,6 +116,7 @@ impl TopoOptions {
             corner_sigma: 0.0,
             spur_len: 0.0,
             chordal: false,
+            butt: false,
         }
     }
 
@@ -124,6 +128,7 @@ impl TopoOptions {
             corner_sigma: 0.1,
             spur_len: 0.0,
             chordal: false,
+            butt: false,
         }
     }
 
@@ -142,6 +147,7 @@ impl TopoOptions {
             corner_sigma: 0.1,
             spur_len: 0.5 * w,
             chordal: true,
+            butt: false,
         }
     }
 
@@ -153,6 +159,7 @@ impl TopoOptions {
             corner_sigma: 0.1,
             spur_len: 0.5 * w,
             chordal: false,
+            butt: false,
         }
     }
 }
@@ -255,7 +262,8 @@ pub(crate) fn centrelines(
     }
     let all = cores(axis, samples, mask, w, opts.corner_sigma);
     let (kept, mut dsu) = classify(axis, all, w, opts.spur_len, &mut topo);
-    let (end_pt, end_sigma, link) = ends(b, mask, axis, &kept, &mut dsu, w, &mut topo);
+    let back = if opts.butt { 0.0 } else { 0.5 * w };
+    let (end_pt, end_sigma, link) = ends(b, mask, axis, &kept, &mut dsu, w, back, &mut topo);
     topo.chains = assemble(&kept, &end_pt, &end_sigma, &link);
     topo
 }
@@ -612,6 +620,7 @@ fn classify(
 /// get the cluster's meeting point ([`meeting_point`]) and are paired by
 /// [`continuation`].
 #[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments)]
 fn ends(
     b: &Boundary,
     mask: &FaceMask,
@@ -619,6 +628,7 @@ fn ends(
     kept: &[Core],
     dsu: &mut Dsu,
     w: f64,
+    back: f64,
     topo: &mut Topology,
 ) -> (Vec<Point>, Vec<f64>, Vec<Option<usize>>) {
     let n_ports = 2 * kept.len();
@@ -637,7 +647,7 @@ fn ends(
             if g.degree(node) >= 3 {
                 clusters.entry(dsu.find(node)).or_default().push(port);
             } else {
-                end_pt[port] = port_cap(b, kept, port, w);
+                end_pt[port] = port_cap(b, kept, port, w, back);
                 topo.caps += 1;
             }
         }
@@ -645,7 +655,7 @@ fn ends(
     for (root, ports) in clusters {
         if ports.len() == 1 {
             let p = ports[0];
-            end_pt[p] = port_cap(b, kept, p, w);
+            end_pt[p] = port_cap(b, kept, p, w, back);
             topo.caps += 1;
             continue;
         }
@@ -723,12 +733,13 @@ fn meeting_point(lines: &[(Point, Vec2)]) -> Option<Point> {
 /// heading along `d`.
 ///
 /// A round cap of half-width `h = w/2` around end point `E` reaches farthest along `d` at
-/// `E + h·d`. So `E = p + d·max(0, s_max - h)`, where `s_max` is the largest `(q - p)·d`
+/// `E + h·d`. So `E = p + d·max(0, s_max - back)` with `back = h`, where `s_max` is the
+/// largest `(q - p)·d`
 /// over the boundary points `q` of the cap: ahead of `p` (`0 < s <= reach`; the caller
 /// passes `1.5·w + 2`), within `h + 0.75` px of the sleeve's axis, and facing back along
 /// the sleeve (inward normal with `n·d < 0.2`), which keeps a neighbouring stroke's facing
 /// side out. The fallback of [`cap_walk`].
-fn cap_centre(b: &Boundary, p: Point, d: Vec2, w: f64, reach: f64) -> Point {
+fn cap_centre(b: &Boundary, p: Point, d: Vec2, w: f64, reach: f64, back: f64) -> Point {
     let h = 0.5 * w;
     let mut s_max = 0.0f64;
     for (i, &q) in b.pts.iter().enumerate() {
@@ -739,12 +750,14 @@ fn cap_centre(b: &Boundary, p: Point, d: Vec2, w: f64, reach: f64) -> Point {
         }
         s_max = s_max.max(s);
     }
-    along(p, d, (s_max - h).max(0.0))
+    along(p, d, (s_max - back).max(0.0))
 }
 
-/// The cap centre at `port`'s free end: from the boundary walk between the end sample's
+/// The end point at `port`'s free end: from the boundary walk between the end sample's
 /// two feet ([`cap_walk`]) when there is one, else from the scan ahead ([`cap_centre`]).
-fn port_cap(b: &Boundary, kept: &[Core], port: usize, w: f64) -> Point {
+/// `back` is how far the end point sits behind the boundary's farthest point along the
+/// sleeve: the half-width for a round cap (its centre), 0 for a butt cap (its face).
+fn port_cap(b: &Boundary, kept: &[Core], port: usize, w: f64, back: f64) -> Point {
     let c = &kept[port / 2];
     let x = if port & 1 == 0 {
         c.s[0]
@@ -752,7 +765,8 @@ fn port_cap(b: &Boundary, kept: &[Core], port: usize, w: f64) -> Point {
         c.s[c.s.len() - 1]
     };
     let d = port_dir(kept, port);
-    cap_walk(b, x.feet, x.c, d, w).unwrap_or_else(|| cap_centre(b, x.c, d, w, 1.5 * w + 2.0))
+    cap_walk(b, x.feet, x.c, d, w, back)
+        .unwrap_or_else(|| cap_centre(b, x.c, d, w, 1.5 * w + 2.0, back))
 }
 
 /// The cap centre found by walking the boundary round the cap.
@@ -761,7 +775,7 @@ fn port_cap(b: &Boundary, kept: &[Core], port: usize, w: f64) -> Point {
 /// from foot segment `feet.0` along the ring to `feet.1`, the shorter way round (the other
 /// way runs round the rest of the face). Every point on that run is part of the cap or of
 /// the sleeve before it, so `s_max = max (q - p)·d` over the run, and the cap centre is
-/// `p + d·max(0, s_max - w/2)` as in [`cap_centre`] -- but with no distance limit and no
+/// `p + d·max(0, s_max - back)` as in [`cap_centre`] -- but with no distance limit and no
 /// risk of reading another stroke. `None` when the feet are on different rings, either is
 /// a rebuilt corner's, or neither walk arrives within `4·π·w + 8·w` px of boundary.
 ///
@@ -770,7 +784,14 @@ fn port_cap(b: &Boundary, kept: &[Core], port: usize, w: f64) -> Point {
 /// one run of the outline); found necessary on lucide `circle-arrow-right` at 512 px, whose
 /// chevron arms keep one reliable sample each, far from their tips, where a distance-limited
 /// scan either stops short (1.5·w) or reads a neighbouring stroke (3·w, lucide `bath`).
-fn cap_walk(b: &Boundary, feet: (usize, usize), p: Point, d: Vec2, w: f64) -> Option<Point> {
+fn cap_walk(
+    b: &Boundary,
+    feet: (usize, usize),
+    p: Point,
+    d: Vec2,
+    w: f64,
+    back: f64,
+) -> Option<Point> {
     let (fa, fb) = feet;
     if fa == usize::MAX || fb == usize::MAX {
         return None;
@@ -804,7 +825,7 @@ fn cap_walk(b: &Boundary, feet: (usize, usize), p: Point, d: Vec2, w: f64) -> Op
         (Some(x), None) | (None, Some(x)) => x,
         (None, None) => return None,
     };
-    Some(along(p, d, (best.1 - 0.5 * w).max(0.0)))
+    Some(along(p, d, (best.1 - back).max(0.0)))
 }
 
 /// Which sleeve ends at one junction continue each other: pairs of ports.

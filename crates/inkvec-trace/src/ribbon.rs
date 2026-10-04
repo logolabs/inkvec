@@ -349,16 +349,54 @@ pub fn fit_face(
         return round;
     }
     let miter = hypothesis(&face, cfg, budget, Join::Miter.into());
-    match (round, miter) {
-        (Ok(r), Ok(m)) => Ok(if m.cost(cfg.lambda) < r.cost(cfg.lambda) {
-            m
+    let best = cheaper(round, miter, cfg.lambda);
+    // A reading with free ends that leaves a boundary point more than a tenth of the width
+    // out is also tried with butt caps: a stroke that stops square, fitted with round
+    // caps, misses each end's two corners by up to (sqrt 2 - 1)/2 of its width.
+    let try_butt = best
+        .as_ref()
+        .is_ok_and(|r| r.caps > 0 && r.score.worst > BUTT_TRIGGER * w0);
+    if !try_butt {
+        return best;
+    }
+    let join = best.as_ref().map_or(Join::Round, |r| r.join);
+    let butt = hypothesis(
+        &face,
+        cfg,
+        budget,
+        Style {
+            join,
+            cap: Cap::Butt,
+        },
+    );
+    cheaper(best, butt, cfg.lambda)
+}
+
+/// The cheaper of two hypotheses by description length `χ²/2 + λ·k` (`lambda` nats per
+/// parameter); `a` on a tie; whichever exists when one was declined, `b`'s decline when
+/// both were.
+fn cheaper(
+    a: Result<Ribbon, Decline>,
+    b: Result<Ribbon, Decline>,
+    lambda: f64,
+) -> Result<Ribbon, Decline> {
+    match (a, b) {
+        (Ok(x), Ok(y)) => Ok(if y.cost(lambda) < x.cost(lambda) {
+            y
         } else {
-            r
+            x
         }),
-        (Ok(r), Err(_)) => Ok(r),
-        (Err(_), m) => m,
+        (Ok(x), Err(_)) => Ok(x),
+        (Err(_), y) => y,
     }
 }
+
+/// Worst boundary residual of the best reading, as a fraction of the paired width, above
+/// which a face with free ends is also tried with butt caps ([`fit_face`]). A stroke drawn
+/// with round caps and fitted with them leaves a few hundredths of the width (lucide at
+/// 512 px: 0.05-0.6 px of 42.7); one drawn butt and fitted round misses its end corners
+/// by up to `(sqrt 2 - 1)·w/2`, a fifth of the width.
+const BUTT_TRIGGER: f64 = 0.1;
 
 /// Worst boundary residual of the round fit, px, above which the miter hypothesis is
 /// tried as well. Accepted lucide faces (all round) sit at 0.05-0.3 px after the solve.
@@ -399,7 +437,7 @@ fn uncovered(
             }
         }
     }
-    let d = refine::point_distances(lines, &pts, h + 0.5, style);
+    let d = refine::point_distances(lines, &pts, h, h + 0.5, style);
     d.iter().filter(|&&x| x > h + 0.5).count() as f64 * (stride * stride) as f64
 }
 
@@ -434,7 +472,7 @@ fn hypothesis(face: &Face, cfg: &FitConfig, budget: f64, style: Style) -> Result
     // (lucide `circle-arrow-right` at 512 px: w 42.7 px, a chevron of 85 px arms, read
     // tip to tip without its apex at rms 39 px), then on the chordal axis, for strokes
     // whose raster skeleton has the wrong topology altogether.
-    let readings = match style.join {
+    let mut readings = match style.join {
         Join::Round => vec![
             graph::TopoOptions::round(),
             graph::TopoOptions::round_cornered(),
@@ -442,6 +480,9 @@ fn hypothesis(face: &Face, cfg: &FitConfig, budget: f64, style: Style) -> Result
         ],
         Join::Miter => vec![graph::TopoOptions::miter(w0)],
     };
+    for r in &mut readings {
+        r.butt = style.cap == Cap::Butt;
+    }
     let mut last = Err(Decline::NoCentreline);
     for (i, &opts) in readings.iter().enumerate() {
         last = reading(face, cfg, budget, style, opts);
@@ -756,6 +797,47 @@ mod tests {
             "{s:?} {e:?}"
         );
         assert!(r.score.worst < 0.3, "{:?}", r.score);
+    }
+
+    #[test]
+    fn a_square_ended_stroke_comes_back_with_butt_caps() {
+        // A bar x in [12, 48], y in [26, 34]: a stroke from (12, 30) to (48, 30), width 8,
+        // with butt caps. Its outline as one dense ring.
+        let n = 64;
+        let labels: Vec<u16> = (0..n * n)
+            .map(|i| {
+                let (x, y) = ((i % n) as f64, (i / n) as f64);
+                u16::from((12.0..=48.0).contains(&x) && (26.0..=34.0).contains(&y))
+            })
+            .collect();
+        let (x0, x1, y0, y1) = (11.5, 48.5, 25.5, 34.5);
+        let mut pts = Vec::new();
+        let mut run = |a: Point, b: Point| {
+            let k = (a.dist(b) / 0.25).ceil() as usize;
+            for i in 0..k {
+                let t = i as f64 / k as f64;
+                pts.push(Point::new(a.x + t * (b.x - a.x), a.y + t * (b.y - a.y)));
+            }
+        };
+        run(Point::new(x0, y0), Point::new(x1, y0));
+        run(Point::new(x1, y0), Point::new(x1, y1));
+        run(Point::new(x1, y1), Point::new(x0, y1));
+        run(Point::new(x0, y1), Point::new(x0, y0));
+        let ring = Polyline::with_uniform_sigma(pts, 0.05, true);
+        let bb = FaceMask::bounding_boxes(&labels, n, n, 2);
+        let mask = FaceMask::from_labels(&labels, n, 1, bb[1].expect("ink"));
+        let cfg = FitConfig::from_precision(64.0, 0.1, 2.0);
+        let r = fit_face(&[ring], &mask, &cfg, f64::INFINITY).expect("a stroke");
+        assert_eq!(r.cap, Cap::Butt, "{r:?}");
+        assert!((r.width - 9.0).abs() < 0.1, "width {}", r.width);
+        let p = &r.lines[0].path;
+        let (s, e) = (p.start, p.end());
+        let (l, rr) = if s.x < e.x { (s, e) } else { (e, s) };
+        assert!(
+            (l.x - x0).abs() < 0.2 && (rr.x - x1).abs() < 0.2,
+            "{s:?} {e:?}"
+        );
+        assert!(r.score.worst < 0.2, "{:?}", r.score);
     }
 
     #[test]

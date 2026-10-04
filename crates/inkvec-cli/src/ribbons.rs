@@ -252,9 +252,10 @@ fn debug_line(o: &Outcome, verdict: Option<f64>) {
     let msg = match &o.fit {
         Err(e) => format!("  ribbon face {:>4}: declined {e:?}", o.face),
         Ok(r) => format!(
-            "  ribbon face {:>4}: {:?} w {:.3} (paired {:.3}, share {:.2}) lines {} junctions {} caps {} | k {:.0} vs vanish {:.0} | chi2 {:.0} vs outline {:.0} | rms {:.3} (pre {:.3}) worst {:.2} out {} uncov {} | {}",
+            "  ribbon face {:>4}: {:?}/{:?} w {:.3} (paired {:.3}, share {:.2}) lines {} junctions {} caps {} | k {:.0} vs vanish {:.0} | chi2 {:.0} vs outline {:.0} | rms {:.3} (pre {:.3}) worst {:.2} out {} uncov {} | {}",
             o.face,
             r.join,
+            r.cap,
             r.width,
             r.paired_width,
             r.paired_share,

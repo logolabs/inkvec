@@ -360,8 +360,8 @@ fn price_in_raster_units(img: &inkvec_trace::Rgba, args: &Args) -> Args {
     // Fast mode reads neither: its fit has no lambda or precision, and its front end sets its
     // own speckle floor from the image's size (`inkvec_trace::fast::front`). The two
     // measurements are three full-image round trips, the largest cost in a fast trace at
-    // 2048 px.
-    let (oversample, redundancy) = if args.mode == TraceMode::Fast {
+    // 2048 px. Balanced runs the same fitter and front end, so it reads neither either.
+    let (oversample, redundancy) = if args.mode.fast_engine() {
         (1.0, 1.0)
     } else {
         let (w, h) = (img.width, img.height);

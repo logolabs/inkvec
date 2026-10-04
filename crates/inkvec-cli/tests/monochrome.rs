@@ -109,7 +109,7 @@ fn assert_black_letters_on_clear(r: &Rgba, what: &str) {
     assert_eq!(px(r, 52, 60)[3], 0.0, "{what}: the ground is gone");
 }
 
-const ENGINES: [TraceMode; 2] = [TraceMode::Quality, TraceMode::Fast];
+const ENGINES: [TraceMode; 3] = [TraceMode::Quality, TraceMode::Fast, TraceMode::Balanced];
 
 #[test]
 fn black_lettering_on_white_keeps_the_letters_and_loses_the_ground() {

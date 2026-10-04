@@ -360,7 +360,7 @@ pub(crate) fn fit_mid_stops(
 ///
 /// Complexity: two more knot searches per two-stop variant, each `O(n + G)` per Huber
 /// round.
-fn repartition(p: &StopProblem, knots: &mut Vec<f64>) {
+fn repartition(p: &StopProblem, knots: &mut [f64]) {
     debug_assert_eq!(knots.len(), 2);
     for _ in 0..REPARTITION_PASSES {
         for i in 0..2 {

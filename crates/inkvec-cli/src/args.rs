@@ -612,12 +612,7 @@ fn parse_args_from(mut it: impl Iterator<Item = String>) -> Result<Args, String>
                 a.harmonize_threshold = parse_value(&mut it, "--harmonize-threshold")?
             }
             "--use-symbols" => a.use_symbols = true,
-            "--mode" => {
-                a.mode = it
-                    .next()
-                    .ok_or("--mode needs quality, fast or balanced")?
-                    .parse()?
-            }
+            "--mode" => a.mode = it.next().ok_or("--mode needs a value")?.parse()?,
             "--sr-command" => {
                 a.sr_command = Some(it.next().ok_or("--sr-command needs a command line")?)
             }

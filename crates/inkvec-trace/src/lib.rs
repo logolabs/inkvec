@@ -189,11 +189,9 @@ pub struct ColorOptions {
     /// fitter follows). A transparent image traced natively goes the same way, with opacity in
     /// its inks and no ramp pass. False is quality mode, exactly as before the flag existed.
     pub fast: bool,
-    /// An iteration cap for the global boundary solve ([`boundary_opt::optimise_alpha_capped`]),
-    /// per independent part of the boundary. `None`, the default, leaves each mode as it
-    /// was: Quality runs the solve to the solver's own ceiling and Fast does not run it.
-    /// `Some(n)` runs it in either mode, stopped after at most `n` iterations; the command
-    /// line's `balanced` mode sets it on Fast's front end.
+    /// The global boundary solve's iteration cap per independent part of the boundary. `None`
+    /// (the default): Quality runs it to the solver's own ceiling, Fast does not run it.
+    /// `Some(n)`: it runs in either mode, for at most `n` iterations (the CLI's `balanced`).
     pub boundary_iters: Option<usize>,
 }
 
@@ -1142,21 +1140,8 @@ pub(crate) fn finish_color_trace_alpha(
     // Then solve the whole boundary against the image at once: every point above was
     // placed by a one-dimensional argument of its own, and a pixel's value is the area
     // each face covers in it, so neighbouring points share evidence and have to be moved
-    // together. See `boundary_opt`. Fast mode skips it unless the caller capped its
-    // iterations (`ColorOptions::boundary_iters`, the command line's `balanced` mode).
-    let solve = !opts.fast || opts.boundary_iters.is_some();
-    let boundary_opt = if solve && inkvec_core::env::switch("INKVEC_BOPT", true) {
-        boundary_opt::optimise_alpha_capped(
-            &mut map,
-            rgb,
-            &face_model,
-            opts.boundary_ms,
-            alpha_pair,
-            opts.boundary_iters,
-        )
-    } else {
-        None
-    };
+    // together. See `boundary_opt` and [`solve_boundary`].
+    let boundary_opt = solve_boundary(&mut map, rgb, &face_model, opts, alpha_pair);
     sw.mark("boundary_opt");
     if let Some(r) = boundary_opt.as_ref() {
         let (from, to, n) = (r.before, r.after, r.iters);
@@ -1205,6 +1190,24 @@ pub(crate) fn finish_color_trace_alpha(
         sigma_noise,
         face_fade: Vec::new(),
     }
+}
+
+/// The boundary solve of [`finish_color_trace_alpha`] ([`boundary_opt::optimise_alpha_capped`]
+/// on `map`, in place): always in Quality, in Fast only when `opts.boundary_iters` caps it
+/// (`balanced`), never with `INKVEC_BOPT=0`. `None` when it did not run or gained nothing.
+fn solve_boundary(
+    map: &mut PlanarMap,
+    rgb: &[[f32; 3]],
+    face: &[gradient::FillModel],
+    opts: &ColorOptions,
+    alpha: Option<(&[f32], &[f32])>,
+) -> Option<boundary_opt::Report> {
+    let wanted = !opts.fast || opts.boundary_iters.is_some();
+    if !wanted || !inkvec_core::env::switch("INKVEC_BOPT", true) {
+        return None;
+    }
+    let (budget, cap) = (opts.boundary_ms, opts.boundary_iters);
+    boundary_opt::optimise_alpha_capped(map, rgb, face, budget, alpha, cap)
 }
 
 /// `INKVEC_LOSSY_REGULARIZE`: re-label a lossy intake with `regularize::labels`, an

@@ -354,6 +354,21 @@ pub fn merge_free_cubics(
     vertices: &[usize],
     cfg: &FitConfig,
 ) -> usize {
+    merge_free_cubics_keeping(path, poly, vertices, cfg, &[])
+}
+
+/// [`merge_free_cubics`], never absorbing any of the measured-point indices in `keep`
+/// (ascending): a run with one of them strictly inside it is not tried. The crossing repair's
+/// pinned refit (`crate::multimodel::optimal_multimodel_forced`) keeps its pins this way, so
+/// it gets the same merged, compact curves as the fit it replaces everywhere else. With
+/// `keep` empty this is [`merge_free_cubics`].
+pub fn merge_free_cubics_keeping(
+    path: &mut FittedPath,
+    poly: &Polyline,
+    vertices: &[usize],
+    cfg: &FitConfig,
+    keep: &[usize],
+) -> usize {
     if path.segments.len() < 2 || vertices.len() != path.segments.len() + 1 {
         return 0;
     }
@@ -366,7 +381,7 @@ pub fn merge_free_cubics(
     let mut rejected = RejectedRuns::default();
     for _ in 0..MAX_ROUNDS {
         let before = merged;
-        merged += merge_round(path, poly, &mut verts, cfg, &mut rejected);
+        merged += merge_round(path, poly, &mut verts, cfg, &mut rejected, keep);
         if merged == before {
             break;
         }
@@ -414,14 +429,16 @@ impl RejectedRuns {
 ///     ½·χ²_new + λ·(params_cubic + BREAK_PARAMS)  <  ½·Σχ²_old + λ·Σparams_old (+ SMOOTH_SLACK·λ)
 /// ```
 ///
-/// is spliced in and `verts` loses the absorbed interior vertices. Returns the number of
-/// merges.
+/// is spliced in and `verts` loses the absorbed interior vertices. A run with a vertex of
+/// `keep` (ascending measured-point indices) strictly inside it is not tried. Returns the
+/// number of merges.
 fn merge_round(
     path: &mut FittedPath,
     poly: &Polyline,
     verts: &mut Vec<usize>,
     cfg: &FitConfig,
     rejected: &mut RejectedRuns,
+    keep: &[usize],
 ) -> usize {
     let mut merged = 0usize;
     let mut m = 0usize;
@@ -435,6 +452,14 @@ fn merge_round(
             }
             let (a, b) = (verts[m], verts[m + run]);
             if b <= a + 3 || b - a > MAX_SPAN {
+                continue;
+            }
+            // A pinned vertex stays a vertex.
+            if !keep.is_empty()
+                && verts[m + 1..m + run]
+                    .iter()
+                    .any(|v| keep.binary_search(v).is_ok())
+            {
                 continue;
             }
             // An arc carries its own parametrisation; leave those runs alone.
@@ -462,6 +487,9 @@ fn merge_round(
                 let (sa, sb) = (verts[q], verts[q + 1]);
                 let seg = &path.segments[q];
                 old_params += params_of(seg);
+                if let Segment::Cubic(c1, c2, e) = *seg {
+                    old_params += crate::candidates::turn::over_turn_params_of(cur, c1, c2, e);
+                }
                 let quad = match *seg {
                     Segment::Cubic(c1, c2, e) => [cur, c1, c2, e],
                     Segment::Line(e) => [cur, cur, e, e],
@@ -507,7 +535,9 @@ fn merge_round(
                 rejected.0.insert(key);
                 continue;
             }
-            let new_cost = 0.5 * new_chi2 + floor;
+            let new_cost = 0.5 * new_chi2
+                + floor
+                + cfg.lambda * crate::candidates::turn::over_turn_params_of(c[0], c[1], c[2], c[3]);
             if new_cost < limit {
                 best = Some((run, c, new_cost));
                 break;

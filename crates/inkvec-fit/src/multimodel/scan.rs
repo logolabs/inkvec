@@ -11,11 +11,16 @@
 //!
 //! ```text
 //!     base(i) = best[i] + (i > 0 ? vertex_cost(i) : 0)
-//!     best[j] = min over i < j, j − i ≤ max_span, of  base(i) + min_model cost_model(i, j)
+//!     best[j] = min over admissible i < j of  base(i) + min_model cost_model(i, j)
 //! ```
 //!
 //! where `cost_model` is the line, G1 cubic, free cubic, circular arc or elliptical arc
-//! price of `crate::candidates` (nats), ties going to the smallest `i`. `from[j]`,
+//! price of `crate::candidates` (nats), ties going to the smallest `i`, and a span is
+//! admissible when [`Limits::allows`] it: at most `max_span` points and no forced vertex
+//! strictly inside (both unconstrained in normal fitting; the crossing repair sets them).
+//! A forced vertex `f` therefore splits the table: every entry after `f` is reached through
+//! `f`, and nothing before `f` can see past it (for the first forced vertex, `best[f]` is the
+//! unconstrained optimum of `0..=f`). `from[j]`,
 //! `kind[j]` and the fitted parameters record the winner. The scan from a start `i` stops
 //! after [`PRUNE_PATIENCE`] consecutive spans whose line and cubic fidelity terms both
 //! exceed `PRUNE_SLACK·λ·PARAMS_LINE·(j − i)`. A curved model is fitted only when the line
@@ -259,6 +264,10 @@ struct G1Terms {
     chi2: f64,
     /// [`Cubic::wobble_penalty`], nats.
     wobble: f64,
+    /// [`crate::candidates::turn::over_turn_params`] of its end tangents times `λ`, nats: 0 at the
+    /// default prices. Added like the wobble, after the bounds, which use the bare
+    /// `cubic_floor` and so stay floors.
+    turn: f64,
     /// Arm lengths as fractions of the chord.
     arms: (f64, f64),
 }
@@ -395,7 +404,7 @@ impl<'a> SpanScorer<'a> {
             joins_at_ends,
             circles: Some(CirclePrefix::new(pts, sigma)),
             cubic_floor: cfg.lambda * params_cubic(),
-            arc_floor: cfg.lambda * crate::curves::PARAMS_ARC,
+            arc_floor: cfg.lambda * crate::cost::arc_params(),
             ellipse_floor: cfg.lambda * crate::curves::PARAMS_ELLIPTICAL_ARC,
             debug,
             bounds: !debug && !free_cubic_enabled(),
@@ -468,7 +477,8 @@ impl<'a> SpanScorer<'a> {
         // line: see `bow_penalty`. It is O(1) from the moment sums, so asking costs
         // nothing but the guards.
         // The price floor is a proof, not a heuristic: an arc costs at least its own
-        // 5 lambda, so a span the line already covers for less can never take one.
+        // price (`arc_floor`: 5 lambda, 7 under the written-arcs prices), so a span the line
+        // already covers for less can never take one.
         // Its two uses are the arc itself and the line's bow penalty; when the arc's floor
         // and the line without its penalty both reach `best[j]` neither can be offered,
         // and the ellipse, dearer still, cannot either.
@@ -568,6 +578,7 @@ impl<'a> SpanScorer<'a> {
                 out.g1 = Some(G1Terms {
                     chi2,
                     wobble: cb.wobble_penalty(cfg.lambda),
+                    turn: cfg.lambda * crate::candidates::turn::over_turn_params(t0, tj),
                     arms: (d0, d1),
                 });
             }
@@ -632,7 +643,7 @@ impl<'a> SpanScorer<'a> {
         let mut arc: Option<(f64, f64, f64, bool, bool)> = None;
 
         if let Some(g) = &t.g1 {
-            let cc = base + 0.5 * g.chi2 + cubic_floor + g.wobble;
+            let cc = base + 0.5 * g.chi2 + cubic_floor + g.wobble + g.turn;
             if cc < c {
                 c = cc;
                 k = SegKind::Cubic;
@@ -640,7 +651,11 @@ impl<'a> SpanScorer<'a> {
             }
         }
         if let Some(f) = &t.free {
-            let cc = base + 0.5 * f.chi2 + cubic_floor + f.brk;
+            let cc = base
+                + 0.5 * f.chi2
+                + cubic_floor
+                + f.brk
+                + self.cfg.lambda * crate::candidates::turn::over_turn_params(f.tans.0, f.tans.1);
             if cc < c {
                 c = cc;
                 k = SegKind::Cubic;
@@ -761,7 +776,8 @@ impl Winner {
 }
 
 impl SpanScorer<'_> {
-    /// The program's table for spans of at most `max_span` points.
+    /// The program's table for the spans `lim` allows: at most `lim.max_span` points, and
+    /// none passing over a forced vertex ([`Limits::allows`]).
     ///
     /// Filled endpoint by endpoint ("pull"): every `F(i)` a span from `i` to `j` needs is
     /// final before `j` is scored, and the candidates for `j` are scored against the best
@@ -785,9 +801,13 @@ impl SpanScorer<'_> {
     /// ([`Self::block`]): one task per start runs through the block against the first
     /// start's spans, and the winners are reduced endpoint by endpoint, so the table does
     /// not depend on the widths either.
-    pub(super) fn fill(&self, max_span: usize, mut width: impl FnMut(usize) -> usize) -> Table {
+    ///
+    /// A start refused by `lim` at `j` is refused at every later endpoint too (both of its
+    /// conditions are monotone in `j`), so it is dropped from `live` for good, exactly as the
+    /// push fill's scan from it ends there.
+    pub(super) fn fill(&self, lim: &Limits, mut width: impl FnMut(usize) -> usize) -> Table {
         if !self.bounds {
-            return self.fill_push(max_span);
+            return self.fill_push(lim);
         }
         let n = self.pts.len();
         let mut tab = Table::new(n);
@@ -802,7 +822,7 @@ impl SpanScorer<'_> {
                 inkvec_core::progress::checkpoint();
             }
             self.admit(&tab, &mut live, j);
-            live.retain(|st| j - st.i <= max_span);
+            live.retain(|st| lim.allows(st.i, j));
             if live.is_empty() {
                 j += 1;
                 continue;
@@ -818,7 +838,7 @@ impl SpanScorer<'_> {
                 j += 1;
             } else {
                 let b = DP_BLOCK_ENDPOINTS.min(n - j);
-                self.block(&mut tab, &mut live, j, b, w, max_span);
+                self.block(&mut tab, &mut live, j, b, w, lim);
                 j += b;
             }
         }
@@ -893,9 +913,9 @@ impl SpanScorer<'_> {
         j0: usize,
         b: usize,
         w: usize,
-        max_span: usize,
+        lim: &Limits,
     ) {
-        let reaches = |st: &Start, j: usize| !st.stopped && j - st.i <= max_span;
+        let reaches = |st: &Start, j: usize| !st.stopped && lim.allows(st.i, j);
         let guess = Self::guess(tab, live, j0);
         let mut first: Vec<Option<Winner>> = (0..b).map(|_| None).collect();
         {
@@ -984,8 +1004,9 @@ impl SpanScorer<'_> {
 
     /// The program's table filled start by start, every span scored in full: the program
     /// as it was before the bounds, kept for the debug dump (which prints every span in
-    /// this order), for the research free cubic, and as the tests' reference.
-    fn fill_push(&self, max_span: usize) -> Table {
+    /// this order), for the research free cubic, and as the tests' reference. The scan from
+    /// `i` ends at the span cap or at the first forced vertex after `i`, whichever is first.
+    fn fill_push(&self, lim: &Limits) -> Table {
         let n = self.pts.len();
         let mut tab = Table::new(n);
         for i in 0..n - 1 {
@@ -1000,7 +1021,9 @@ impl SpanScorer<'_> {
                     0.0
                 };
             let mut cut = CutOff::new(i);
-            let end = (i.saturating_add(max_span).saturating_add(1)).min(n);
+            let end = (i.saturating_add(lim.max_span).saturating_add(1))
+                .min(lim.wall_after(i).saturating_add(1))
+                .min(n);
             for j in i + 1..end {
                 let t = self.terms(i, j, Bound::NONE);
                 let over = t.over;
@@ -1153,31 +1176,93 @@ mod tests {
         let mut forked = false;
         for joins_at_ends in [false, true] {
             let sc = SpanScorer::new(&poly.points, &poly.sigma, &tan, &pre, &cfg, joins_at_ends);
-            for max_span in [usize::MAX, 45] {
-                let push = bits(&sc.fill_push(max_span));
-                let seq = bits(&sc.fill(max_span, |_| 1));
+            for lim in limits(poly.len()) {
+                let push = bits(&sc.fill_push(&lim));
+                let seq = bits(&sc.fill(&lim, |_| 1));
                 assert!(seq.iter().all(|r| f64::from_bits(r.0).is_finite()));
-                assert!(seq == push, "sequential pull, max_span {max_span}");
+                assert!(seq == push, "sequential pull, {lim:?}");
                 for w in [2, 16] {
-                    let par = bits(&sc.fill(max_span, |live| {
+                    let par = bits(&sc.fill(&lim, |live| {
                         forked |= live >= DP_PAR_MIN_LIVE;
                         w
                     }));
-                    assert!(
-                        par == seq,
-                        "width {w}, max_span {max_span}, joins {joins_at_ends}"
-                    );
+                    assert!(par == seq, "width {w}, {lim:?}, joins {joins_at_ends}");
                 }
                 // Widths that change from endpoint to endpoint, as a busy pool's do.
                 let mut k = 0usize;
-                let mixed = bits(&sc.fill(max_span, |_| {
+                let mixed = bits(&sc.fill(&lim, |_| {
                     k += 1;
                     [1, 5, 2, 1, 9][k % 5]
                 }));
-                assert!(mixed == seq, "mixed widths, max_span {max_span}");
+                assert!(mixed == seq, "mixed widths, {lim:?}");
             }
         }
         assert!(forked, "no endpoint had enough candidates to share");
+    }
+
+    /// The constraints the tables are compared under, for a polyline of `n` points: none,
+    /// two span caps, and forced vertices with and without a cap — one early, two adjacent
+    /// (an empty run between them), one in the middle, one just before the end.
+    fn limits(n: usize) -> Vec<Limits> {
+        let forced = vec![n / 7, n / 3, n / 3 + 1, n / 2, n - 2];
+        vec![
+            Limits::capped(usize::MAX),
+            Limits::capped(45),
+            Limits::capped(7),
+            Limits {
+                max_span: usize::MAX,
+                forced: forced.clone(),
+            },
+            Limits {
+                max_span: 7,
+                forced,
+            },
+        ]
+    }
+
+    /// Every solution of a program with forced vertices has them all as vertices, and is
+    /// the optimum over such segmentations: its cost equals the sum of the unconstrained
+    /// programs' optima on the pieces between consecutive forced vertices, where each piece
+    /// is solved as a run of the same table (same tangents, same vertex costs).
+    #[test]
+    fn forced_vertices_are_vertices_and_split_the_program() {
+        let mut polys = vec![boundary()];
+        polys.extend(tracer_like());
+        for poly in &polys {
+            let cfg = FitConfig {
+                tau: 2.0,
+                lambda: 2.5,
+            };
+            let tan = estimate_tangents(poly, &cfg);
+            let pre = Prefix::new(&poly.points, &poly.sigma);
+            let n = poly.len();
+            let lim = Limits {
+                max_span: usize::MAX,
+                forced: vec![n / 4, n / 2, (3 * n) / 4],
+            };
+            for joins_at_ends in [false, true] {
+                let sc =
+                    SpanScorer::new(&poly.points, &poly.sigma, &tan, &pre, &cfg, joins_at_ends);
+                let tab = sc.fill(&lim, |_| 1);
+                // Walk the chosen segmentation back from the end: it passes every forced
+                // vertex, and no segment straddles one.
+                let mut verts = vec![n - 1];
+                let mut cur = n - 1;
+                while cur != 0 {
+                    cur = tab.from[cur];
+                    verts.push(cur);
+                }
+                for &f in &lim.forced {
+                    assert!(verts.contains(&f), "forced {f} missing from {verts:?}");
+                }
+                // Up to the first forced vertex the table is the unconstrained one: nothing
+                // ahead of a forced vertex can see past it.
+                let free = sc.fill(&Limits::capped(usize::MAX), |_| 1);
+                for j in 0..=lim.forced[0] {
+                    assert_eq!(tab.best[j].to_bits(), free.best[j].to_bits(), "at {j}");
+                }
+            }
+        }
     }
 
     /// The bounds skip work, never a decision: with them on, at any width, the table is
@@ -1201,19 +1286,19 @@ mod tests {
                     let sc =
                         SpanScorer::new(&poly.points, &poly.sigma, &tan, &pre, &cfg, joins_at_ends);
                     assert!(sc.bounds, "the bounds are on by default");
-                    for max_span in [usize::MAX, 45, 7] {
-                        let seq = bits(&reference.fill(max_span, |_| 1));
+                    for lim in limits(poly.len()) {
+                        let seq = bits(&reference.fill(&lim, |_| 1));
                         for w in [1, 2, 16] {
-                            let got = bits(&sc.fill(max_span, |_| w));
+                            let got = bits(&sc.fill(&lim, |_| w));
                             assert!(
                                 got == seq,
-                                "n {}, lambda {lambda}, joins {joins_at_ends}, max_span {max_span}, width {w}",
+                                "n {}, lambda {lambda}, joins {joins_at_ends}, {lim:?}, width {w}",
                                 poly.len()
                             );
                             compared += 1;
                         }
                         let mut k = 0usize;
-                        let mixed = bits(&sc.fill(max_span, |_| {
+                        let mixed = bits(&sc.fill(&lim, |_| {
                             k += 1;
                             [1, 5, 2, 1, 9][k % 5]
                         }));
@@ -1235,7 +1320,7 @@ mod tests {
         let pre = Prefix::new(&poly.points, &poly.sigma);
         let count = |sc: &SpanScorer<'_>| {
             let before = crate::candidates::PROJECTIONS.with(|c| c.get());
-            sc.fill(usize::MAX, |_| 1);
+            sc.fill(&Limits::capped(usize::MAX), |_| 1);
             crate::candidates::PROJECTIONS.with(|c| c.get()) - before
         };
         let plain = SpanScorer::new(&poly.points, &poly.sigma, &tan, &pre, &cfg, true).unbounded();
@@ -1275,7 +1360,7 @@ mod tests {
                 SpanScorer::new(&poly.points, &poly.sigma, &tan, &pre, &cfg, true).unbounded();
             let sc = SpanScorer::new(&poly.points, &poly.sigma, &tan, &pre, &cfg, true);
             let n = poly.len();
-            let table = reference.fill(usize::MAX, |_| 1);
+            let table = reference.fill(&Limits::capped(usize::MAX), |_| 1);
             for i in 0..n - 1 {
                 if !table.best[i].is_finite() {
                     continue;

@@ -23,32 +23,39 @@
 //!    core gives `w0` and the share of the outline that is sleeve. Faces where under
 //!    [`MIN_PAIRED_SHARE`] of the outline pairs at one width, or narrower than
 //!    [`MIN_WIDTH`], are declined here.
-//! 3. **Topology** ([`graph`]): skeleton for topology, centre samples from the boundary
-//!    for geometry, junctions and caps rebuilt from the sleeves, loops closed and
-//!    sleeves continued through junctions; out come polylines of centre samples with
-//!    sigmas.
-//! 4. **Fit** ([`fit_chain`]): each polyline goes through the same MDL curve fitter the
+//! 3. **Topology** ([`graph`]): a medial graph for topology -- the raster skeleton, or,
+//!    when the skeleton's readings misfit, the chordal axis of the boundary ([`chordal`])
+//!    -- read once per face with a centre sample from the boundary at each node; junctions
+//!    and caps rebuilt from the sleeves, loops closed and sleeves continued through
+//!    junctions; out come polylines of centre samples with sigmas.
+//! 4. **Fit** ([`fit_chain`]): each polyline, thinned to [`CHAIN_SAMPLES_PER_WIDTH`]
+//!    samples per width ([`decimate`]), goes through the same MDL curve fitter the
 //!    outlines use (`inkvec_fit::multimodel`), and a closed one may become a whole
 //!    primitive (circle, ellipse, rounded rectangle) when that is cheaper, exactly as a
-//!    closed outline may. Two exact prunings follow: fitted centrelines that already cost
-//!    the caller's parameter budget cannot win (the next pass never removes parameters),
-//!    and a residual above [`MAX_PRE_RMS`] of the width is a blob, not a stroke.
+//!    closed outline may. A coarse fit first declines readings that cannot meet the
+//!    caller's budget ([`COARSE_DECLINE`]); fitted centrelines that already cost the
+//!    budget cannot win (the next pass never removes parameters), and a residual above
+//!    [`MAX_PRE_RMS`] of the width is a blob, not a stroke.
 //! 5. **Stroke solve** ([`refine`]): every centreline control point and the width moved
-//!    together, by Levenberg-Marquardt, to explain the measured boundary, with segments
-//!    split where the boundary disagrees and the split pays for itself, and no step that
-//!    gives a cubic a cusp.
+//!    together, by Levenberg-Marquardt with closed-form Jacobian rows and an envelope
+//!    Cholesky, to explain the measured boundary, with segments split where the boundary
+//!    disagrees and the split pays for itself (screened by the score test before it is
+//!    solved), and no step that gives a cubic a cusp.
 //! 6. **Score** ([`score`]): the strokes' painted outline against every measured boundary
 //!    point, and the face's own interior pixels checked as painted ([`MAX_UNCOVERED`]),
 //!    because a boundary residual cannot see an unpainted inside.
 //!
-//! Passes 3-6 run once with round joins and, when that leaves a boundary point more than
-//! [`MITER_TRIGGER`] px out, once more with miter joins ([`join`]: corners rebuilt as
-//! vertices, corner spurs dropped); the cheaper description by `χ²/2 + λ·k` is returned.
+//! Passes 3-6 run once with round joins and round caps; when that leaves a boundary point
+//! more than [`MITER_TRIGGER`] px out, once more with miter joins ([`join`]: corners
+//! rebuilt as vertices, corner spurs dropped); and when the better of those has free ends
+//! and leaves a point more than [`BUTT_TRIGGER`] of the width out, once more with butt
+//! caps. The cheapest description by `χ²/2 + λ·k` is returned.
 //!
-//! **Measured** (screen set, 128 px, against v0.2.4, 2026-10-03, with the caller's
-//! decision): on the 40 lucide icons dE00 0.076 -> 0.027 and the parameter ratio 4.19 ->
-//! 1.26; the 35 openmoji 0.150 -> 0.128 and 1.40 -> 1.15. The tracer's report and
-//! `INKVEC_RIBBONS_DEBUG` give the per-face numbers.
+//! **Measured** (2026-10-04, against v0.2.5 at 128 px, with the caller's decision, judged
+//! as the gate judges): the screen set's macro dE00 0.1283 -> 0.1163 and parameter ratio
+//! 1.503 -> 0.958 (lucide 0.076 -> 0.022 and 4.19 -> 1.23); held_a 0.1310 -> 0.1186 and
+//! 1.471 -> 1.022. The tracer's report and `INKVEC_RIBBONS_DEBUG` give the per-face
+//! numbers.
 //!
 //! **Data layout.** All coordinates are the traced raster's pixels with pixel centres at
 //! integers. The face mask is a crop of the label map ([`FaceMask`]) with a one-pixel

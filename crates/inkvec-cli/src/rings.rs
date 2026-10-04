@@ -16,8 +16,9 @@
 //!   that come each face's outline rings and the smallest face containing it
 //!   ([`containment`]). Called from [`crate::emit`] and [`crate::mono`].
 //! * **Repair** ([`repair_ring_crossings`]), for the colour pipeline after the fit: find
-//!   rings whose assembled curves cross themselves, and refit the guilty edges under a
-//!   tightening cap on the span of each segment until none do. Called from
+//!   rings whose assembled curves cross themselves, and refit the guilty edges -- pinned at
+//!   a measured point beside each crossing, or under a tightening cap on the span of each
+//!   segment, whichever the objective prices lower -- until none do. Called from
 //!   [`crate::pipeline`].
 
 use crate::diag;
@@ -210,27 +211,58 @@ pub(crate) fn ring_infos(pts: &[Vec<Vec<Point>>]) -> Vec<Vec<RingInfo>> {
         .collect()
 }
 
-/// Refit whichever edges take part in a self-crossing, under a tightening span cap, until
-/// the assembled rings stop crossing themselves. Returns the number of refits made.
+/// Refit whichever edges take part in a self-crossing, each either pinned where it crosses
+/// or under a tightening span cap, whichever the objective prices lower, until the assembled
+/// rings stop crossing themselves. Returns the number of refits made.
 ///
 /// An edge is shared by the two faces either side of it, and it is refitted *once* — so
 /// both faces continue to reference the same curve and the property the planar map exists
-/// to guarantee is preserved. Tightening cannot fail to terminate: at a cap of one, an
+/// to guarantee is preserved. The repair cannot fail to terminate: an edge gets at most
+/// [`LOCAL_ROUNDS`] pinned refits, every other refit halves its cap, and at a cap of one an
 /// edge's fit reproduces its measured polyline, and the measured boundary of a face on a
 /// partition is simple.
 ///
 /// The algorithm runs in rounds, at most ten:
 ///
 /// 1. Every ring (after the first round, only rings touching an edge refitted in the last
-///    round) is assembled into one path ([`ring_as_path`]) and tested for pairs of
-///    crossing segments (`inkvec_fit::simple::self_crossings`, 32 samples per segment);
-///    both segments' edges are guilty.
-/// 2. Each guilty edge's cap -- the most measured points one segment may span -- is
-///    halved (it starts at the edge's point count) and the edge refitted by the capped
-///    dynamic program. Halving reaches a cap of one in about `log2(n)` rounds.
+///    round) is assembled into one path ([`ring_as_located_path`]) and tested for pairs of
+///    crossing segments with where they cross (`inkvec_fit::simple::self_crossing_points`,
+///    32 samples per segment); both segments' edges are guilty.
+/// 2. Each guilty edge gets two candidate refits, both by the same dynamic program:
+///    * **pinned** ([`pin_crossings`]): each of its crossing segments must break at the
+///      measured point nearest where it crosses (the first crossing found on it), on top
+///      of the pins it already has, with no cap of its own
+///      (`inkvec_fit::multimodel::optimal_multimodel_forced`), and the usual merge of
+///      free cubics afterwards with the pins kept;
+///    * **halved**: its cap -- the most measured points one segment may span, starting at
+///      the edge's point count -- halved, its existing pins kept, no merge.
 ///
-/// A capped refit is correct but faceted, so afterwards each refitted edge is offered,
-/// in turn, its original unconstrained fit and then a smoothed version of its capped fit
+///    The one with the lower objective (`MultimodelFit::cost`, the program's own
+///    `½χ² + λ·params + breaks` before refinement) is kept, and only its constraint is
+///    remembered. An edge with nothing to pin (each crossing segment spans adjacent measured
+///    points) or already pinned `LOCAL_ROUNDS` times is only halved.
+///
+/// Pinning adds just the breakpoints that separate the two curves where they cross, which
+/// is what the topology-preserving simplification literature does — vertices restored only
+/// where a simplified chain would cross another (de Berg, van Kreveld & Schirra 1998;
+/// Saalfeld 1999; cited in full at `optimal_multimodel_forced`) — instead of tightening
+/// every segment of the edge. Halving is what this repair did alone before 2026-10. Neither
+/// dominates: a pin near the end of a long curve can cost more segments than a halved cap
+/// (openmoji/1F9B3: 175 numbers pinned against 154 halved), and a halved cap re-segments
+/// the whole edge where one pin would do (openmoji/1F517 at 512 px: 2.87x the artist's
+/// parameters halved, 2.09x with the choice). Letting the objective choose between two
+/// valid constraints is the program's own rule applied one level up. Not from the
+/// literature: the choice by cost, because the papers above add vertices by a fixed rule.
+///
+/// Measured on the 246-icon gate set (2026-10-04, against halving alone): parameter
+/// ratio -0.77 % at 128 px, -0.35 % at 512 px, -0.20 % at 512 px opaque; dE00 within
+/// ±0.22 %; rings still crossing after repair 11 on 6 icons, against 14 on 9 (128 px).
+/// Trying only the pin (no halving candidate) gained -0.50 / -0.29 / -0.19 %; pinning at
+/// every crossing rather than one per segment, -0.09 / -0.33 / -0.12 %; requiring a break
+/// anywhere inside the crossing segment instead of at a point left 19 rings crossing.
+///
+/// A refit is correct but can be faceted, so afterwards each refitted edge is offered,
+/// in turn, its original unconstrained fit and then a smoothed version of its refit
 /// (free cubics merged, corners sharpened, under a segment budget), and keeps the first
 /// that crosses nothing in the rings it belongs to. A capped refit that exploded to many
 /// times the segments of the original fit is replaced by the original outright; see the
@@ -250,6 +282,11 @@ pub(crate) fn repair_ring_crossings(
     // can often put this compact path back without bringing the crossing with it.
     let full_fit = fitted.to_vec();
     let mut cap: Vec<usize> = polys.iter().map(|p| p.len().max(2)).collect();
+    // Each edge's pins so far (measured-point indices every later refit keeps), and how
+    // many of its refits were pinned ones.
+    let mut pins: Vec<Vec<usize>> = vec![Vec::new(); polys.len()];
+    let mut pinned_rounds: Vec<usize> = vec![0; polys.len()];
+    let (mut n_pinned, mut n_halved) = (0usize, 0usize);
     let mut repaired = 0usize;
     // Vertices of every boundary the loop refitted, for the merge pass afterwards.
     let mut refit_vertices: std::collections::HashMap<usize, Vec<usize>> =
@@ -266,7 +303,8 @@ pub(crate) fn repair_ring_crossings(
         // Detection per ring and refits per edge are both independent; run each wave on
         // every core. The refits are the expensive half — a capped refit re-runs the
         // whole dynamic program on that boundary.
-        let mut guilty: Vec<usize> = rings
+        // Each crossing as (edge, segment of that edge's own path, where it crosses).
+        let mut hits: Vec<(usize, usize, Point)> = rings
             .par_iter()
             .filter(|ring| {
                 // After the first round only rings touching a refitted edge can have
@@ -276,26 +314,47 @@ pub(crate) fn repair_ring_crossings(
                     .is_none_or(|c| ring.iter().any(|&(k, _)| c.contains(&k)))
             })
             .flat_map_iter(|ring| {
-                let mut g: Vec<usize> = Vec::new();
+                let mut g: Vec<(usize, usize, Point)> = Vec::new();
                 if ring.len() >= 2 {
-                    let (path, owner) = ring_as_path(ring, fitted);
-                    for (i, j) in simple::self_crossings(&path, 32) {
-                        if let Some(&a) = owner.get(i) {
-                            g.push(a);
-                        }
-                        if let Some(&b) = owner.get(j) {
-                            g.push(b);
+                    let (path, owner) = ring_as_located_path(ring, fitted);
+                    for (i, j, at) in simple::self_crossing_points(&path, 32) {
+                        for s in [i, j] {
+                            if let Some(&(k, q)) = owner.get(s) {
+                                g.push((k, q, at));
+                            }
                         }
                     }
                 }
                 g
             })
             .collect();
+        hits.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)).then(a.2.x.total_cmp(&b.2.x)));
+        let mut guilty: Vec<usize> = hits.iter().map(|h| h.0).collect();
         guilty.sort_unstable();
         guilty.dedup();
         guilty.retain(|&k| cap[k] > 1);
         if guilty.is_empty() {
             break;
+        }
+        // The pinned candidate's pins, per guilty edge that has something new to pin: its
+        // pins so far plus one per crossing segment, at the first crossing found on it
+        // (`hits` is sorted by edge, then segment).
+        let mut proposed: std::collections::HashMap<usize, Vec<usize>> =
+            std::collections::HashMap::new();
+        for &k in &guilty {
+            if pinned_rounds[k] >= LOCAL_ROUNDS {
+                continue;
+            }
+            let mut mine: Vec<(usize, Point)> = hits
+                .iter()
+                .filter(|h| h.0 == k)
+                .map(|h| (h.1, h.2))
+                .collect();
+            mine.dedup_by_key(|h| h.0);
+            let mut trial = pins[k].clone();
+            if pin_crossings(&fitted[k], &polys[k], &mine, &mut trial) > 0 {
+                proposed.insert(k, trial);
+            }
         }
         inkvec_core::progress::note(|| {
             format!(
@@ -314,26 +373,54 @@ pub(crate) fn repair_ring_crossings(
                 round_t.elapsed().as_secs_f64() * 1e3
             )
         });
-        let refits: Vec<(usize, multimodel::MultimodelFit)> = guilty
+        // Each refit, and whether it is the pinned candidate (else the halved cap's). The
+        // refits of different edges are independent, so they run on every core.
+        let refits: Vec<(usize, multimodel::MultimodelFit, bool)> = guilty
             .par_iter()
             .map(|&k| {
                 live.check();
-                let c = (cap[k] / 2).max(1);
-                (
-                    k,
-                    live.scoped(|| multimodel::optimal_multimodel_capped_full(&polys[k], cfg, c)),
-                )
+                // The program under a cap of `c` with the pins `p`; with no pins, the capped
+                // program this repair always used.
+                let fit = |c: usize, p: &[usize]| {
+                    live.scoped(|| {
+                        if p.is_empty() {
+                            multimodel::optimal_multimodel_capped_full(&polys[k], cfg, c)
+                        } else {
+                            multimodel::optimal_multimodel_forced(&polys[k], cfg, c, p)
+                        }
+                    })
+                };
+                let halved = fit((cap[k] / 2).max(1), &pins[k]);
+                match proposed.get(&k) {
+                    Some(p) => {
+                        let pinned = fit(cap[k], p);
+                        // Ties go to the pin: it is the local change.
+                        if halved.cost < pinned.cost {
+                            (k, halved, false)
+                        } else {
+                            (k, pinned, true)
+                        }
+                    }
+                    None => (k, halved, false),
+                }
             })
             .collect();
-        for (k, f) in refits {
-            cap[k] = (cap[k] / 2).max(1);
+        for (k, f, by_pin) in refits {
+            if by_pin {
+                pins[k] = proposed.remove(&k).unwrap_or_default();
+                pinned_rounds[k] += 1;
+                n_pinned += 1;
+            } else {
+                cap[k] = (cap[k] / 2).max(1);
+                n_halved += 1;
+            }
             fitted[k] = f.path;
             refit_vertices.insert(k, f.vertices);
             repaired += 1;
         }
         diag::debug(timing, || {
             format!(
-                "  [t] repair round total {:.1} ms",
+                "  [t] repair round total {:.1} ms ({n_pinned} pinned, {n_halved} halved so far)",
                 round_t.elapsed().as_secs_f64() * 1e3
             )
         });
@@ -475,6 +562,99 @@ pub(crate) fn repair_ring_crossings(
         });
     }
     repaired
+}
+
+/// Pinned refits one edge may have before the repair only halves its cap.
+///
+/// A bound on how many vertices pinning can add, so the repair keeps its guarantee: after
+/// these, every refit halves the cap, which reaches the measured polyline. Not derived and
+/// not swept: on the 246-icon gate set an edge almost never needs more than two pinned
+/// refits, and the cost choice usually prefers halving before this bound matters.
+const LOCAL_ROUNDS: usize = 4;
+
+/// Pin an edge's fit where it crosses: for each `(segment, point)` in `hits` (segments of
+/// `path`, the edge's current fit, in its own direction; one point per segment), the
+/// measured point of `poly` nearest the crossing among those strictly inside the segment's
+/// measured run ([`segment_ranges`]), added to `pins` (ascending, no duplicates). A segment
+/// whose run has no interior point (it joins adjacent measured points) cannot be pinned.
+/// Returns how many new pins were added; none when the path's joins cannot be placed on
+/// the polyline.
+///
+/// O(Σ run lengths + n·segments) for the run search. The pin is a vertex of every later
+/// refit, so the refitted curve passes through a measured point beside the crossing; the
+/// measured boundaries of a planar partition do not cross, so pinned there the two curves
+/// are held apart at the place they crossed.
+fn pin_crossings(
+    path: &FittedPath,
+    poly: &inkvec_core::Polyline,
+    hits: &[(usize, Point)],
+    pins: &mut Vec<usize>,
+) -> usize {
+    let Some(ranges) = segment_ranges(path, poly) else {
+        return 0;
+    };
+    let n = poly.len();
+    let mut added = 0;
+    for &(q, at) in hits {
+        let Some(&(a, b)) = ranges.get(q) else {
+            continue;
+        };
+        // Offsets strictly inside the run; `a`, `b` are unwrapped (`b` may pass `n` on a
+        // closed boundary), so each is reduced to an index. On ties the first wins.
+        let best = (a + 1..b)
+            .map(|o| o % n)
+            .min_by(|&x, &y| poly.points[x].dist(at).total_cmp(&poly.points[y].dist(at)));
+        if let Some(v) = best {
+            if let Err(pos) = pins.binary_search(&v) {
+                pins.insert(pos, v);
+                added += 1;
+            }
+        }
+    }
+    added
+}
+
+/// The measured run of each segment of `path` on `poly`: `(a, b)` per segment, in unwrapped
+/// indices (a closed boundary's runs may pass its seam, so `b` can exceed `n`; reduce mod
+/// `n`), or `None` when the path's joins cannot be placed on the polyline in order.
+///
+/// The fit keeps no record of which measured points each segment came from (the post-fit
+/// merge and the corner sharpening change the segmentation after the program), so it is
+/// recovered from the geometry: the path's start is matched to its nearest measured point,
+/// then each segment's end to the nearest measured point *ahead* of the previous match (the
+/// first of any within 1e-6 px of that distance), up to one lap of a closed boundary, whose
+/// last segment ends where it began. A join the program chose is a measured point, or one
+/// moved by at most a few sigma (a corner between two lines meets at their intersection), so
+/// the walk lands on it or beside it. O(n·segments).
+fn segment_ranges(path: &FittedPath, poly: &inkvec_core::Polyline) -> Option<Vec<(usize, usize)>> {
+    let n = poly.len();
+    if n < 2 || path.segments.is_empty() {
+        return None;
+    }
+    // The first offset in `lo..=hi` (reduced mod `n`) at the least distance from `p`.
+    let nearest_from = |p: Point, lo: usize, hi: usize| -> usize {
+        let d: Vec<f64> = (lo..=hi).map(|o| poly.points[o % n].dist(p)).collect();
+        let m = d.iter().copied().fold(f64::INFINITY, f64::min);
+        lo + d.iter().position(|&x| x <= m + 1e-6).unwrap_or(0)
+    };
+    let start = nearest_from(path.start, 0, n - 1);
+    // How far the walk may go: one lap on a closed boundary, to the end on an open one.
+    let last = if poly.closed { start + n } else { n - 1 };
+    let mut at = start;
+    let mut out = Vec::with_capacity(path.segments.len());
+    for (q, s) in path.segments.iter().enumerate() {
+        let next = if poly.closed && q + 1 == path.segments.len() {
+            last
+        } else {
+            if at + 1 > last {
+                return None;
+            }
+            nearest_from(s.end(), at + 1, last)
+        };
+        out.push((at, next));
+        at = next;
+    }
+    Some(out)
 }
 
 /// A ring as a polygon that follows its curves, not only its joins.
@@ -699,14 +879,20 @@ pub(crate) fn ring_inside(inner: &RingInfo, outer: &[Point], outer_info: &RingIn
 /// area and containment tests.
 const RING_SAMPLES: usize = 4;
 
-/// Assemble a face ring into one path, remembering which edge each segment came from.
+/// Assemble a face ring into one path, remembering where each segment came from: `(edge,
+/// index of the segment in that edge's own fit)`, the index counted in the edge's own
+/// direction even where the ring walks it reversed (segment `r` of a reversed fit of `m`
+/// segments is the fit's segment `m − 1 − r`).
 ///
 /// Needed because a self-crossing on a real boundary is almost never inside one edge's
 /// fit. Repairing per edge — refitting any edge whose own curve crossed itself — changed
 /// 5 images out of 180 and left the count at 76. The crossings are between *different*
 /// edges of the same face, so the ring is the smallest unit at which the defect is even
-/// visible.
-pub(crate) fn ring_as_path(ring: &Ring, fitted: &[FittedPath]) -> (FittedPath, Vec<usize>) {
+/// visible. The segment index is what the local repair pins ([`pin_crossings`]).
+pub(crate) fn ring_as_located_path(
+    ring: &Ring,
+    fitted: &[FittedPath],
+) -> (FittedPath, Vec<(usize, usize)>) {
     let mut segments = Vec::new();
     let mut owner = Vec::new();
     let mut start = None;
@@ -719,9 +905,10 @@ pub(crate) fn ring_as_path(ring: &Ring, fitted: &[FittedPath]) -> (FittedPath, V
         if start.is_none() {
             start = Some(path.start);
         }
-        for s in path.segments {
+        let m = path.segments.len();
+        for (r, s) in path.segments.into_iter().enumerate() {
             segments.push(s);
-            owner.push(k);
+            owner.push((k, if rev { m - 1 - r } else { r }));
         }
     }
     (
@@ -732,4 +919,150 @@ pub(crate) fn ring_as_path(ring: &Ring, fitted: &[FittedPath]) -> (FittedPath, V
         },
         owner,
     )
+}
+
+/// [`ring_as_located_path`] with only the edge of each segment: what the repair's safety
+/// check reads.
+pub(crate) fn ring_as_path(ring: &Ring, fitted: &[FittedPath]) -> (FittedPath, Vec<usize>) {
+    let (path, owner) = ring_as_located_path(ring, fitted);
+    (path, owner.into_iter().map(|(k, _)| k).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    //! The local repair's bookkeeping: where each segment of a fit lies on its measured
+    //! boundary, where a crossing is pinned, and which segment of which edge a ring's
+    //! segment is.
+    use super::*;
+
+    fn p(x: f64, y: f64) -> Point {
+        Point::new(x, y)
+    }
+
+    /// An open run of 11 points along the x axis, and a closed 2x2 square of 8.
+    fn open_run() -> inkvec_core::Polyline {
+        let pts: Vec<Point> = (0..=10).map(|k| p(k as f64, 0.0)).collect();
+        inkvec_core::Polyline::with_uniform_sigma(pts, 0.05, false)
+    }
+
+    fn square() -> inkvec_core::Polyline {
+        let pts = vec![
+            p(0.0, 0.0),
+            p(1.0, 0.0),
+            p(2.0, 0.0),
+            p(2.0, 1.0),
+            p(2.0, 2.0),
+            p(1.0, 2.0),
+            p(0.0, 2.0),
+            p(0.0, 1.0),
+        ];
+        inkvec_core::Polyline::with_uniform_sigma(pts, 0.05, true)
+    }
+
+    #[test]
+    fn segment_runs_follow_the_measured_boundary() {
+        let path = FittedPath {
+            start: p(0.0, 0.0),
+            segments: vec![
+                Segment::Line(p(4.0, 0.0)),
+                Segment::Cubic(p(6.0, 0.1), p(8.0, 0.1), p(10.0, 0.0)),
+            ],
+            closed: false,
+        };
+        assert_eq!(
+            segment_ranges(&path, &open_run()),
+            Some(vec![(0, 4), (4, 10)])
+        );
+        // A loop fitted from index 2: its runs pass the seam, unwrapped (8 is index 0 again,
+        // 10 the start once more).
+        let ring = FittedPath {
+            start: p(2.0, 0.0),
+            segments: vec![
+                Segment::Line(p(2.0, 2.0)),
+                Segment::Line(p(0.0, 2.0)),
+                Segment::Line(p(0.0, 0.0)),
+                Segment::Line(p(2.0, 0.0)),
+            ],
+            closed: true,
+        };
+        assert_eq!(
+            segment_ranges(&ring, &square()),
+            Some(vec![(2, 4), (4, 6), (6, 8), (8, 10)])
+        );
+        // A join behind the previous one cannot be placed.
+        let back = FittedPath {
+            start: p(0.0, 0.0),
+            segments: vec![Segment::Line(p(10.0, 0.0)), Segment::Line(p(3.0, 0.0))],
+            closed: false,
+        };
+        assert_eq!(segment_ranges(&back, &open_run()), None);
+    }
+
+    #[test]
+    fn a_crossing_is_pinned_inside_its_segment_at_the_nearest_point() {
+        let ring = FittedPath {
+            start: p(2.0, 0.0),
+            segments: vec![
+                Segment::Line(p(2.0, 2.0)),
+                Segment::Line(p(0.0, 2.0)),
+                Segment::Line(p(0.0, 0.0)),
+                Segment::Line(p(2.0, 0.0)),
+            ],
+            closed: true,
+        };
+        let sq = square();
+        let mut pins = vec![6];
+        // Segment 1 runs over indices 4..6, so 5 is the only point inside it; segment 3
+        // runs 8..10 across the seam, so its inside point is index 1. A repeat adds nothing.
+        let added = pin_crossings(
+            &ring,
+            &sq,
+            &[(1, p(1.2, 2.3)), (3, p(0.9, -0.2)), (1, p(1.0, 2.0))],
+            &mut pins,
+        );
+        assert_eq!(added, 2);
+        assert_eq!(pins, vec![1, 5, 6]);
+        // A segment between adjacent measured points has nothing inside it to pin.
+        let tight = FittedPath {
+            start: p(0.0, 0.0),
+            segments: vec![Segment::Line(p(1.0, 0.0)), Segment::Line(p(10.0, 0.0))],
+            closed: false,
+        };
+        let mut none = Vec::new();
+        assert_eq!(
+            pin_crossings(&tight, &open_run(), &[(0, p(0.5, 0.1))], &mut none),
+            0
+        );
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn a_reversed_edge_names_its_segments_in_its_own_direction() {
+        let a = FittedPath {
+            start: p(0.0, 0.0),
+            segments: vec![Segment::Line(p(1.0, 0.0)), Segment::Line(p(2.0, 0.0))],
+            closed: false,
+        };
+        let b = FittedPath {
+            start: p(0.0, 0.0),
+            segments: vec![
+                Segment::Line(p(0.0, 1.0)),
+                Segment::Line(p(1.0, 1.0)),
+                Segment::Line(p(2.0, 0.0)),
+            ],
+            closed: false,
+        };
+        // Along `a`, then back along `b` reversed.
+        let ring: Ring = vec![(0, false), (1, true)];
+        let (path, owner) = ring_as_located_path(&ring, &[a.clone(), b.clone()]);
+        assert_eq!(owner, vec![(0, 0), (0, 1), (1, 2), (1, 1), (1, 0)]);
+        assert_eq!(path.segments.len(), 5);
+        assert_eq!(
+            path.segments[2].end(),
+            p(1.0, 1.0),
+            "b's last segment, walked back"
+        );
+        let (_, edges) = ring_as_path(&ring, &[a, b]);
+        assert_eq!(edges, vec![0, 0, 1, 1, 1]);
+    }
 }

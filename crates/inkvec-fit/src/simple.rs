@@ -38,10 +38,15 @@
 //!
 //! # Where this sits
 //!
-//! The crossing test ([`self_crossings`], [`self_crossings_touching`]) is what
-//! `inkvec-cli`'s ring assembly calls on every assembled ring, and it drives its own
-//! repair there with [`crate::multimodel::optimal_multimodel_capped`]. [`fit_simple`] is
-//! the self-contained version of that loop for one boundary. Paths are in px.
+//! The crossing test ([`self_crossings`], [`self_crossings_touching`], and
+//! [`self_crossing_points`], which also says where) is what `inkvec-cli`'s ring assembly
+//! calls on every assembled ring, and it drives its own repair there: each crossing curve
+//! pinned at a measured point beside the crossing
+//! ([`crate::multimodel::optimal_multimodel_forced`]) or refitted under the halved cap
+//! ([`crate::multimodel::optimal_multimodel_capped`]), whichever the objective prices lower.
+//! The cap is what guarantees termination, as above; pinning is what keeps the repair
+//! local. [`fit_simple`] is the self-contained, cap-only version of that loop for one
+//! boundary. Paths are in px.
 
 use inkvec_core::predicates::segments_intersect;
 use inkvec_core::{Point, Polyline};

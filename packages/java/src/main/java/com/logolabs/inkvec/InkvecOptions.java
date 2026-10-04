@@ -30,6 +30,7 @@ public final class InkvecOptions {
     private final boolean harmonize;
     private final double harmonizeThreshold;
     private final String mode;
+    private final boolean hypotheses;
     private final String mergeColors;
 
     private InkvecOptions(Builder b) {
@@ -50,6 +51,7 @@ public final class InkvecOptions {
         this.harmonize = b.harmonize;
         this.harmonizeThreshold = b.harmonizeThreshold;
         this.mode = b.mode;
+        this.hypotheses = b.hypotheses;
         this.mergeColors = b.mergeColors;
     }
 
@@ -274,6 +276,20 @@ public final class InkvecOptions {
     }
 
     /**
+     * Also trace three structural alternatives -- blend absorption off, a matte instead of native
+     * alpha, and a merge distance of 0.020 -- and keep the trace whose render explains the input
+     * in the fewest nats (its squared error at the input's resolution against the best one's, plus
+     * a price per parameter). Quality colour mode only; up to four traces, about 3.6 times the
+     * trace time at 512 px. Measured on the 246-icon screen set: 6 % closer to the artist's file
+     * at 128 px, 1 % at 512 px (9 % on the hardest tenth). Off by default.
+     *
+     * @default false
+     */
+    public boolean hypotheses() {
+        return hypotheses;
+    }
+
+    /**
      * Colour groups: fills to draw as one, so the shapes between them join rather than being
      * recoloured. Empty (the default) changes nothing. Groups are separated by ';' and members by
      * ','; a member is a colour '#rrggbb' as it appears in a trace of the same image, or a
@@ -313,6 +329,7 @@ public final class InkvecOptions {
         sb.append(",\"harmonize\":").append(harmonize);
         sb.append(",\"harmonize_threshold\":").append(harmonizeThreshold);
         sb.append(",\"mode\":").append(jsonString(mode));
+        sb.append(",\"hypotheses\":").append(hypotheses);
         sb.append(",\"merge_colors\":").append(jsonString(mergeColors));
         sb.append('}');
         return sb.toString();
@@ -384,6 +401,7 @@ public final class InkvecOptions {
         private boolean harmonize = true;
         private double harmonizeThreshold = 0.92;
         private String mode = "quality";
+        private boolean hypotheses = false;
         private String mergeColors = "";
 
         private Builder() {
@@ -613,6 +631,21 @@ public final class InkvecOptions {
          */
         public Builder mode(String mode) {
             this.mode = mode;
+            return this;
+        }
+
+        /**
+         * Also trace three structural alternatives -- blend absorption off, a matte instead of native
+         * alpha, and a merge distance of 0.020 -- and keep the trace whose render explains the input
+         * in the fewest nats (its squared error at the input's resolution against the best one's, plus
+         * a price per parameter). Quality colour mode only; up to four traces, about 3.6 times the
+         * trace time at 512 px. Measured on the 246-icon screen set: 6 % closer to the artist's file
+         * at 128 px, 1 % at 512 px (9 % on the hardest tenth). Off by default.
+         *
+         * @default false
+         */
+        public Builder hypotheses(boolean hypotheses) {
+            this.hypotheses = hypotheses;
             return this;
         }
 

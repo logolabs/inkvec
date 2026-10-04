@@ -1221,36 +1221,6 @@ fn modelled(prob: &Problem, e: &crate::planar::Edge) -> bool {
     (e.left as usize) < prob.face.len() && (e.right as usize) < prob.face.len()
 }
 
-/// Leave out of the data term (weight zero, for the whole solve) every band pixel that
-/// holds pieces of two or more boundaries between modelled faces at the start: a junction,
-/// or both sides of a stroke too thin to have an interior. Their colour is a three-way
-/// mixture the fills are least reliable at, and on a thin stroke the two sides compete for
-/// one pixel's evidence (the sawtooth of the module docs). Fixing the set at the start keeps
-/// the energy continuous. Measured on the screen set, with the solver of the time:
-/// objective 0.3713 leaving them out against 0.3908 with them in; leaving out only the
-/// pixels round the junction nodes read 0.3908 as well.
-fn exclude_junctions(prob: &Problem, band: &mut Band, index: &[u32]) {
-    for &cell in &prob.touched {
-        let mut first: Option<u32> = None;
-        let mut multi = false;
-        let mut id = prob.head[cell];
-        while id >= 0 {
-            let pc = &prob.pieces[id as usize];
-            if modelled(prob, &prob.map.edges[pc.edge as usize]) {
-                match first {
-                    None => first = Some(pc.edge),
-                    Some(f) if f != pc.edge => multi = true,
-                    _ => {}
-                }
-            }
-            id = pc.next;
-        }
-        if multi && index[cell] != u32::MAX {
-            band.weight[index[cell] as usize] = 0.0;
-        }
-    }
-}
-
 /// Where alpha is a fourth channel: every boundary that can reach the pixel separates
 /// faces the colour over white cannot tell apart but their opacities can (the rule of the
 /// per-pixel term: white paint on the clear ground, the bands of one fade).
@@ -1303,7 +1273,7 @@ fn alpha_channels(prob: &Problem, band: &mut Band, index: &[u32]) {
 }
 
 /// Build the band at the start positions and fix everything about it for the solve: the
-/// weights (junction pixels left out), where alpha is a channel, and the normalisation
+/// weights (zero only for runs whose seed is uncertain), where alpha is a channel, and the normalisation
 /// (`band_norm`: the starting residual of the pixels the boundary cuts, and of the rest).
 ///
 /// Returns false, with nothing set up, when the band's tables would exceed
@@ -1328,7 +1298,19 @@ pub(super) fn setup_within(prob: &mut Problem, budget: u64) -> bool {
             index[run.y as usize * w + x as usize] = run.first + (x - run.x0);
         }
     }
-    exclude_junctions(prob, &mut band, &index);
+    // Every band pixel counts, including the ones holding pieces of two or more boundaries
+    // at the start (a junction, or both sides of a stroke too thin to have an interior).
+    // Those used to be left out (weight zero for the whole solve): their colour is a
+    // three-way mixture the fills are least reliable at, and on a thin stroke the two sides
+    // compete for one pixel's evidence (the sawtooth of the module docs of
+    // `boundary_opt`). With the solver of the time that measured better, objective 0.3713
+    // against 0.3908 on the screen set. Under the converged solve it no longer does: it took
+    // the only evidence a two-pixel stroke has away from both of its sides (simple-icons
+    // `luanti`'s strokes are about two pixels wide, so nearly every stroke pixel had weight
+    // zero). Re-measured 2026-10-03 on the 246-icon screen set against v0.2.5 (128
+    // iterations, local fold guard): dE00 −4.37 % keeping them against −4.35 % leaving them
+    // out at 512 px, −8.40 % against −7.58 % at 128 px; the r2-fidelity research measured
+    // −1.6 % on the screen set and −3.4 % on `held_a` at 128 px for keeping them alone.
     alpha_channels(prob, &mut band, &index);
     fill_prefix(prob, &mut band);
     // The starting residual, split into the pixels the boundary cuts (what the prior
@@ -1424,9 +1406,7 @@ pub(super) fn components(prob: &Problem) -> Vec<super::lbfgs::Active> {
         if group[root] == u32::MAX {
             continue;
         }
-        let part = &mut parts[group[root] as usize];
-        part.runs.push(r as u32);
-        part.e_const += band.run_const[r];
+        parts[group[root] as usize].runs.push(r as u32);
     }
     let mut seen = vec![false; prob.vars.start.len()];
     for part in parts.iter_mut() {

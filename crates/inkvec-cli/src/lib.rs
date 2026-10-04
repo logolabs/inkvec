@@ -46,6 +46,7 @@
 
 mod alpha;
 mod args;
+mod border;
 mod diag;
 mod editable;
 mod emit;
@@ -60,6 +61,7 @@ mod post;
 mod primitive;
 mod rings;
 mod seams;
+mod select;
 mod strokes;
 mod uncertainty;
 mod units;
@@ -77,7 +79,7 @@ pub use post::post_process;
 use post::retarget;
 pub use std::process::ExitCode;
 use strokes::run_strokes;
-use units::{fit_config, REF_EXTENT};
+use units::{fit_config, fit_config_sized, REF_EXTENT};
 
 use inkvec_trace::load_image_capped;
 use std::path::Path;
@@ -634,49 +636,15 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
         (display_w, display_h)
     };
 
-    // Transparency, once, after every resampling step: put the image against a matte the
-    // artwork is not made of and keep the alphas for the emitter. Everything from here
-    // traces the matted image, which is written over the input's own buffer: nothing reads
-    // the unmatted one again (see `alpha::alpha_source_owned`).
-    let (alpha_src, opaque) =
-        match alpha::alpha_source_owned(img, args.quiet, args.cutout, args.native_alpha) {
-            Ok(src) => (Some(src), None),
-            Err(img) => (None, Some(img)),
-        };
-    let img = match (&alpha_src, &opaque) {
-        (Some(src), _) => &src.flat,
-        (None, Some(img)) => img,
-        (None, None) => unreachable!("alpha_source_owned returns the image or its source"),
-    };
-    let cut_args = alpha::cutout_args(args, alpha_src.as_ref());
-    let args = &*cut_args;
-
+    // With `--hypotheses`, the structural alternatives are traced as well and the trace with
+    // the shortest description length against this raster is kept (see `select`). The
+    // raster is cloned only then; the default path moves it into the one trace.
     let (w, h) = (img.width, img.height);
-
-    // Through `fit_config`, not `FitConfig::from_precision` directly, so that
-    // `--content-units` applies the whole of its mechanism here and not half of it.
-    //
-    // It used to build its own configuration and skip the scaling, which left the flag
-    // scaling sigma (via `in_content_units`, below) while lambda stayed tied to raw pixel
-    // extent -- exactly the half that `fit_config`'s doc comment says must not be applied
-    // alone. `content_scale` returns 1.0 unless the flag is set, so this is the identity
-    // on the default path: `FitConfig::from_precision` with nothing scaled.
-    let cfg = fit_config(img, args);
-
-    // Line art, emitted the way it was drawn. Tried before the ordinary paths and
-    // declines by returning None, so anything that is not a stroked drawing is
-    // untouched.
-    let stroked = if args.strokes {
-        run_strokes(img, args, &cfg)
+    let (svg, mut stats, lambda) = if args.hypotheses && hypotheses_apply(args) {
+        let base = trace_bordered(img.clone(), args)?;
+        select::choose(&img, args, base, |a| trace_bordered(img.clone(), a))?
     } else {
-        None
-    };
-    let (svg, mut stats) = if let Some(r) = stroked {
-        r
-    } else if args.bilevel {
-        run_bilevel(img, args, &cfg)
-    } else {
-        run_color(img, args, &cfg, alpha_src.as_ref())?
+        trace_bordered(img, args)?
     };
     if let Some(n) = sr_note {
         stats.insert(0, n);
@@ -694,8 +662,123 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
         stats,
         width: w,
         height: h,
-        lambda: Some(cfg.lambda),
+        lambda: Some(lambda),
     })
+}
+
+/// One trace of `img` under `args`, through the border pad when it applies.
+///
+/// Art that reaches the border of a transparent raster is traced on a canvas `PAD` px
+/// larger on every side and moved back afterwards (see `border`): the colour tracer fits a
+/// boundary that ends on the image frame worse than the closed outline it becomes with
+/// room round it. Quality colour mode only; when the traced document holds anything
+/// `border::crop` cannot translate, the raster is traced again as it is.
+fn trace_bordered(
+    img: inkvec_trace::Rgba,
+    args: &Args,
+) -> Result<select::Trace, Box<dyn std::error::Error>> {
+    let (w, h) = (img.width, img.height);
+    if border_pad_applies(args) && border::touches_border(&img) {
+        let padded = border::pad(&img);
+        diag::stage(args.quiet, || {
+            format!(
+                "  border        art touches the canvas edge; traced with a {} px transparent margin",
+                border::PAD
+            )
+        });
+        let (svg, stats, lambda) = trace_matted(padded, args, Some(w.max(h)))?;
+        match border::crop(&svg, w, h) {
+            Some(svg) => Ok((svg, stats, lambda)),
+            None => trace_matted(img, args, None),
+        }
+    } else {
+        trace_matted(img, args, None)
+    }
+}
+
+/// Whether `--hypotheses` can do anything under these settings: the Quality colour
+/// pipeline, whose document is compared with the colour input (not the monochrome,
+/// bilevel or stroke writers, nor Fast mode), and no `--uncertainty` bands, which every
+/// traced hypothesis would write over the last one's.
+fn hypotheses_apply(args: &Args) -> bool {
+    args.mode == TraceMode::Quality
+        && !args.bilevel
+        && !args.strokes
+        && !args.monochrome
+        && args.uncertainty.is_none()
+}
+
+/// Whether the border pad (`border`) may be used under these settings: the Quality colour
+/// pipeline with none of the outputs that carry coordinates outside the document
+/// (`--uncertainty`'s bands) or in a symbol's own frame (`--use-symbols`). Fast mode, the
+/// bilevel, stroke and monochrome writers trace as they always did.
+fn border_pad_applies(args: &Args) -> bool {
+    args.mode == TraceMode::Quality
+        && !args.bilevel
+        && !args.strokes
+        && !args.monochrome
+        && !args.use_symbols
+        && args.uncertainty.is_none()
+}
+
+/// The tail of [`trace_prepared_priced`] on one raster: the alpha matte, the fit
+/// configuration and one pipeline. Returns the document, its report lines and the fit's
+/// lambda.
+///
+/// `extent`, when given, is the longest side the fit configuration is priced for instead of
+/// the raster's own: the original raster's, when `img` is that raster on a padded canvas
+/// (`border`), so the price of a coordinate (`ln(extent / precision)`) does not move.
+fn trace_matted(
+    img: inkvec_trace::Rgba,
+    args: &Args,
+    extent: Option<usize>,
+) -> Result<(String, Vec<String>, f64), Box<dyn std::error::Error>> {
+    // Transparency, once, after every resampling step: put the image against a matte the
+    // artwork is not made of and keep the alphas for the emitter. Everything from here
+    // traces the matted image, which is written over the input's own buffer: nothing reads
+    // the unmatted one again (see `alpha::alpha_source_owned`).
+    let (alpha_src, opaque) =
+        match alpha::alpha_source_owned(img, args.quiet, args.cutout, args.native_alpha) {
+            Ok(src) => (Some(src), None),
+            Err(img) => (None, Some(img)),
+        };
+    let img = match (&alpha_src, &opaque) {
+        (Some(src), _) => &src.flat,
+        (None, Some(img)) => img,
+        (None, None) => unreachable!("alpha_source_owned returns the image or its source"),
+    };
+    let cut_args = alpha::cutout_args(args, alpha_src.as_ref());
+    let args = &*cut_args;
+
+    // Through `fit_config`, not `FitConfig::from_precision` directly, so that
+    // `--content-units` applies the whole of its mechanism here and not half of it.
+    //
+    // It used to build its own configuration and skip the scaling, which left the flag
+    // scaling sigma (via `in_content_units`, below) while lambda stayed tied to raw pixel
+    // extent -- exactly the half that `fit_config`'s doc comment says must not be applied
+    // alone. `content_scale` returns 1.0 unless the flag is set, so this is the identity
+    // on the default path: `FitConfig::from_precision` with nothing scaled.
+    let cfg = match extent {
+        Some(e) => fit_config_sized(img, args, e),
+        None => fit_config(img, args),
+    };
+
+    // Line art, emitted the way it was drawn. Tried before the ordinary paths and
+    // declines by returning None, so anything that is not a stroked drawing is
+    // untouched.
+    let stroked = if args.strokes {
+        run_strokes(img, args, &cfg)
+    } else {
+        None
+    };
+    let (svg, stats) = if let Some(r) = stroked {
+        r
+    } else if args.bilevel {
+        run_bilevel(img, args, &cfg)
+    } else {
+        run_color(img, args, &cfg, alpha_src.as_ref())?
+    };
+    Ok((svg, stats, cfg.lambda))
 }
 
 /// The command line's whole job for one file: check the input and output paths, decode

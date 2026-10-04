@@ -885,7 +885,7 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
     crate::despeckle(&mut labels, w, h, min_region);
     sw.mark("despeckle");
     inkvec_core::progress::begin("blend_absorb");
-    if !inkvec_core::env::flag("INKVEC_NO_ABSORB") {
+    if opts.absorb_blends && !inkvec_core::env::flag("INKVEC_NO_ABSORB") {
         let px4 = rgba_w(&rgb, alpha);
         let inks4 = ink_rgba_w(&pal);
         let absorbed = absorb_blend_slivers(&mut labels, &px4, w, h, &inks4, sigma_noise);

@@ -26,10 +26,10 @@ stage's own reference document — this table only summarizes. Paths are relativ
 
 | name | value | file:line | controls | basis |
 |---|---|---|---|---|
-| `REF_EXTENT` | 128.0 px | `inkvec-cli/src/units.rs:17-31` | intake size every pixel-denominated constant was tuned at; above it `price_in_raster_units` scales `--min-area` and lambda | measured (3.54x/6.02x/11.62x the artist's parameters at 128/256/512 px, `units.rs:17-26`; the guard: 128ss objective 0.4005 -> 0.4112 without it, `inkvec-cli/src/lib.rs:416-422`) |
-| `INTAKE_SCALE_FLOOR` | 1.5 | `inkvec-cli/src/lib.rs:116-118` | below this, `--intake-scale` leaves the input alone | measured (every corpus image reads 1.00) |
-| `INTAKE_SCALE_CAP` | 8.0 | `inkvec-cli/src/lib.rs:119-121` | ceiling on how much `--intake-scale` discards | motivated |
-| `--max-dim` default | 2048 px | `inkvec-cli/src/args.rs:223, 316-320` | ceiling on traced (not emitted) size, applied at decode and again in `intake` | motivated |
+| `REF_EXTENT` | 128.0 px | `inkvec-cli/src/units.rs:17-31` | intake size every pixel-denominated constant was tuned at; above it `price_in_raster_units` scales `--min-area` and lambda | measured (3.54x/6.02x/11.62x the artist's parameters at 128/256/512 px, `units.rs:17-26`; the guard: 128ss objective 0.4005 -> 0.4112 without it, `inkvec-cli/src/lib.rs:418-424`) |
+| `INTAKE_SCALE_FLOOR` | 1.5 | `inkvec-cli/src/lib.rs:118-120` | below this, `--intake-scale` leaves the input alone | measured (every corpus image reads 1.00) |
+| `INTAKE_SCALE_CAP` | 8.0 | `inkvec-cli/src/lib.rs:121-123` | ceiling on how much `--intake-scale` discards | motivated |
+| `--max-dim` default | 2048 px | `inkvec-cli/src/args.rs:232, 316-320` | ceiling on traced (not emitted) size, applied at decode and again in `intake` | motivated |
 | `--time-budget` split | 0.6 merge / 0.25 boundary-solve | `inkvec-cli/src/pipeline.rs:139-149` | advisory wall-clock split between the two stages that read a clock | none |
 | boundary-solve budget floor | 50 ms | `inkvec-cli/src/pipeline.rs:145` | least wall-clock budget the boundary solve gets under any `--time-budget` | none |
 | `MAX_FACTOR` (`pixel_grid`) | 32 | `inkvec-cli/src/alpha/unblock.rs:69` | largest replication factor the unblock pre-pass tries | motivated |
@@ -54,7 +54,7 @@ stage's own reference document — this table only summarizes. Paths are relativ
 | `SOFT_SHARE` | 0.05 | `inkvec-cli/src/alpha.rs:438` | glow share that keeps white without the candidate ladder | none |
 | `FLAT_ALPHA` | 0.02 | `inkvec-cli/src/alpha.rs:439` | neighbour-alpha spread counted as "flat" translucency | none |
 | `DEGRADED_RESIDUAL` / `--sr-threshold` | 0.5 | `inkvec-sr/src/detect.rs:13-36` | interior-residual threshold above which `--sr auto` cleans | measured (30 icons, 5 conditions) |
-| `--sr-scale` default | 2 | `inkvec-cli/src/args.rs:246` | output scale of the SR pre-pass | none |
+| `--sr-scale` default | 2 | `inkvec-cli/src/args.rs:255` | output scale of the SR pre-pass | none |
 | interior-residual normalisation | `sum / 9n` | `inkvec-sr/src/detect.rs:103-110` | matches the reference Python implementation | derived (deliberate match, not a bug) |
 
 ## 02 — Coverage ([02-coverage.md](02-coverage.md))
@@ -92,7 +92,7 @@ stage's own reference document — this table only summarizes. Paths are relativ
 | `SAME_INK_DE00` | 1.5 (CIEDE2000) | `inkvec-trace/src/color.rs:330-347` | perceptual floor: colours this close are one ink | measured (swept 1.0 -> 0.4140, 1.5 -> 0.4124 on the screen set) |
 | `SOFT_SAME_INK_DE00` | 5.0 | `inkvec-trace/src/color.rs:574-586` | same-ink floor on soft/oversampled intake | measured (a real brand mark upscaled 4x: 76 fills where the drawing has five) |
 | `SOFT_NOISE_SIGMAS` | 3.0 | `inkvec-trace/src/color.rs:490-498` | noise-merge threshold, gated on soft-intake evidence only | measured (costs 10.9% objective if run unconditionally) |
-| `NOISE_SIGMAS` | 0.0 | `inkvec-trace/src/color.rs:744-761` | clean-intake noise-merge threshold, deliberately off; read at `inkvec-trace/src/lib.rs:357-361` and `inkvec-trace/src/native.rs:841-845` | measured (costs 0.4328 -> 0.4451 on the screen set if always on) |
+| `NOISE_SIGMAS` | 0.0 | `inkvec-trace/src/color.rs:744-761` | clean-intake noise-merge threshold, deliberately off; read at `inkvec-trace/src/lib.rs:363-367` and `inkvec-trace/src/native.rs:841-845` | measured (costs 0.4328 -> 0.4451 on the screen set if always on) |
 | `SOFT_INTAKE_EDGE` | 1.75 px | `inkvec-trace/src/color.rs:479-488` | edge width above which the intake is soft | measured (980-raster corpus edge-width survey: native max 1.50) |
 | `SOFT_RINGING` | 0.12 | `inkvec-trace/src/color.rs:500-515` | ringing score above which the intake is soft (images under `RINGING_MIN_DIM`) | measured (240 clean rasters at 128ss: max 0.1023, highest real artwork 0.0370) |
 | `SOFT_RINGING_LARGE` | 0.05 | `inkvec-trace/src/color.rs:517-530` | the same gate when both sides are at least `RINGING_MIN_DIM` | measured (at 512 px: zero false positives, 88-89% of JPEG caught at q85/60/40) |
@@ -124,7 +124,7 @@ stage's own reference document — this table only summarizes. Paths are relativ
 
 | name | value | file:line | controls | basis |
 |---|---|---|---|---|
-| `min_region` shipped default | 2 px | `inkvec-cli/src/args.rs:220`, `inkvec-cli/src/pipeline.rs:173`, `inkvec-trace/src/lib.rs:205` | smallest component kept by despeckle; `min_region.max(2)` is the carve's minimum feature size (`inkvec-trace/src/lib.rs:662`); scaled by the oversampling factor squared above `REF_EXTENT` (`inkvec-cli/src/lib.rs:328-342`) | measured (a 9 px colour-mode floor was tried and measured worse, `inkvec-cli/src/pipeline.rs:166-171`) |
+| `min_region` shipped default | 2 px | `inkvec-cli/src/args.rs:229`, `inkvec-cli/src/pipeline.rs:173`, `inkvec-trace/src/lib.rs:210` | smallest component kept by despeckle; `min_region.max(2)` is the carve's minimum feature size (`inkvec-trace/src/lib.rs:668`); scaled by the oversampling factor squared above `REF_EXTENT` (`inkvec-cli/src/lib.rs:330-344`) | measured (a 9 px colour-mode floor was tried and measured worse, `inkvec-cli/src/pipeline.rs:166-171`) |
 | `SADDLE_SIGMAS` | 3.0 | `inkvec-trace/src/regions.rs:40-44` | sigma a corner's coverage must clear 0.5 by before a saddle resolves (research build only) | motivated (a standard "three sigma" bar, not swept) |
 | `MAX_FACES` | 65,535 (`u16::MAX`) | `inkvec-trace/src/regions.rs:205-208` | most faces a face map can number; past it `cap_components` merges the smallest components into their neighbours (`inkvec-trace/src/regions.rs:293-416`) | derived (`u16` face ids, `u16::MAX` reserved for the outside of the image) |
 | absorption rounds | 2 | `inkvec-trace/src/regions.rs:768-769, 792` | rounds of whole-sliver absorption | motivated (one dissolved sliver can leave a neighbour thinner) |
@@ -223,21 +223,25 @@ to the upstream saddle merge; the two sizes after it choose only speed, never th
 | `GRID_LIMIT` | 1e9 px | `inkvec-trace/src/boundary_opt.rs:222` | largest coordinate whose gridlines `crossings` walks; a segment beyond it contributes no crossings | motivated (far inside the range where `m += 1.0` is exact, far outside any image) |
 | `GRID_MAX_SPAN` | 2^20 gridlines | `inkvec-trace/src/boundary_opt.rs:226` | most gridlines `crossings` walks along one axis of one segment | motivated (a segment inside the image crosses at most its width or height) |
 | `EPS` (in `priors`) | 1e-4 | `inkvec-trace/src/boundary_opt.rs:440` | floor inside the kink term's square root | motivated |
-| fold-guard floor | `s > 0.1` | `inkvec-trace/src/boundary_opt.rs:662` | how far the guard halves the displacement before giving up (scales 1, 1/2, 1/4, 1/8, 1/16) | none |
+| fold-guard halving | ½ per round to 1/16, then 0 | `inkvec-trace/src/boundary_opt.rs:706-710` | how a boundary in a new self-crossing is backed off (only the boundaries in one) | none |
 | `REACH` | 1 px | `inkvec-trace/src/boundary_opt/band.rs:71` | band width (Chebyshev) round the pixels the starting boundary crosses | derived (follows from `MAX_TOTAL`) |
 | `PARALLEL_CELLS` | 16384 band pixels | `inkvec-trace/src/boundary_opt/band.rs:151` | below it the band runs are evaluated on one thread (the result is the same either way) | none |
 | `TABLE_BUDGET_FLOOR` | 256 MiB | `inkvec-trace/src/boundary_opt/band.rs:852` | floor of the band-table budget `max(TABLE_BUDGET_FLOOR, TABLE_BUDGET_PER_PIXEL · w · h)`; past the budget the boundary solve is skipped and the measured boundary kept | measured (11x the gate's largest band table, 22.2 MB on the 2048 px masthead; 2.4x the largest of 772 stress images, 106 MB; `INKVEC_DIAG`, 2026-10-02) |
 | `TABLE_BUDGET_PER_PIXEL` | 32 bytes a pixel | `inkvec-trace/src/boundary_opt/band.rs:856` | growth of the band-table budget above its floor (binds above about 2900 x 2900 px) | motivated (lets an uncapped 8192 px trace keep twice the masthead's 14 bytes a pixel) |
 | frame snap | 1e-3 px | `inkvec-trace/src/boundary_opt/band.rs:1196` | how close to a frame line a point of a frame edge is snapped onto it and pinned | none |
-| `MEMORY` | 3 | `inkvec-trace/src/boundary_opt/lbfgs.rs:41` | L-BFGS pairs kept | measured (3 did as well as 7, 15 or 30) |
-| `C1` | 1e-4 | `inkvec-trace/src/boundary_opt/lbfgs.rs:43` | Armijo sufficient-decrease constant | motivated (the textbook value, Nocedal & Wright 2006) |
-| `MAX_TRIALS` | 8 | `inkvec-trace/src/boundary_opt/lbfgs.rs:45` | step halvings per line search | none |
-| `MAX_ITERS` | 32 | `inkvec-trace/src/boundary_opt/lbfgs.rs:49` | iterations per independent part (the former `INKVEC_BOPT_ITERS`, *removed*) | measured (24 read 0.3666, 32 read 0.3585, 48 read 0.3558 on the screen set; 48 up to 1.9x slower) |
-| `PARAM_TOL` | 0.005 px | `inkvec-trace/src/boundary_opt/lbfgs.rs:52` | stop once no point moves more in a step | derived (half the SVG's 0.01 px) |
-| `FUNC_TOL` | 1e-4 | `inkvec-trace/src/boundary_opt/lbfgs.rs:55` | stop once a step lowers the changeable energy by less than this fraction | none |
-| `COARSE` | 4 px | `inkvec-trace/src/boundary_opt/folds.rs:33` | side of the fold guard's coarse join grid | motivated (about the length of a swept segment's range) |
-| `MAX_COARSE_CELLS` | 64 | `inkvec-trace/src/boundary_opt/folds.rs:38` | a swept range over more coarse cells is paired with every segment directly instead of entering the grid | motivated (the planar map never has one; keeps a degenerate segment from filling the grid) |
-| `MAX_RANGE_AREA` (segment bucket limit) | cell range `(x1-x0)*(y1-y0) <= 64` | `inkvec-trace/src/boundary_opt/folds.rs:42` | segments the fold guard counts (larger ones are never counted) | motivated (kept exactly from the hash grid it replaced) |
+| `MEMORY` | 3 | `inkvec-trace/src/boundary_opt/lbfgs.rs:101` | L-BFGS pairs kept | measured (3 did as well as 7, 15 or 30 with the Armijo search; 7 read -4.26 % against -4.37 % for 3 at 512 px with the Wolfe search) |
+| `MAX_ITERS` | 64 | `inkvec-trace/src/boundary_opt/lbfgs.rs:109` | iterations per independent part (the former `INKVEC_BOPT_ITERS`, *removed*) | measured (-4.15 % dE00 at 512 px against -4.37 % at 128 iterations, 1.13x against 1.28-1.30x v0.2.5's trace time, 2026-10-03) |
+| `FUNC_TOL` | 1e-7 | `inkvec-trace/src/boundary_opt/lbfgs.rs:115` | stop a part once a step lowers the energy by less than this fraction of the whole problem's changeable energy at the start | measured (a quarter as many parts at the cap as a part-relative 1e-6, -4.35 % against -4.13 % at 512 px) |
+| `PG_TOL` | 1e-6 | `inkvec-trace/src/boundary_opt/lbfgs.rs:121` | stop a part once its projected gradient is below this fraction of the whole problem's largest gradient at the start | none (rarely fires: 0 of 13,285 steps) |
+| `FTOL` | 1e-4 | `inkvec-trace/src/boundary_opt/linesearch.rs:82` | Moré–Thuente sufficient-decrease constant | motivated (the textbook value, Nocedal & Wright 2006) |
+| `GTOL` | 0.9 | `inkvec-trace/src/boundary_opt/linesearch.rs:86` | Moré–Thuente curvature constant | motivated (the textbook value for quasi-Newton directions) |
+| `XTOL` | 0.1 | `inkvec-trace/src/boundary_opt/linesearch.rs:89` | relative width of the interval of uncertainty below which a search stops | motivated (MINPACK-2's) |
+| `MAX_EVALS` | 10 | `inkvec-trace/src/boundary_opt/linesearch.rs:94` | trials per line search | measured (96.3 % of 13,285 steps take one trial, none more than four) |
+| `XTRAPL`, `XTRAPU` | 1.1, 4.0 | `inkvec-trace/src/boundary_opt/linesearch.rs:98-99` | extrapolation window before a bracket exists | motivated (MINPACK-2's) |
+| `SHRINK` | 0.66 | `inkvec-trace/src/boundary_opt/linesearch.rs:102` | required shrink of a bracket over two trials, else bisect | motivated (Moré & Thuente 1994, §4) |
+| `COARSE` | 4 px | `inkvec-trace/src/boundary_opt/folds.rs:36` | side of the fold guard's coarse join grid | motivated (about the length of a swept segment's range) |
+| `MAX_COARSE_CELLS` | 64 | `inkvec-trace/src/boundary_opt/folds.rs:41` | a swept range over more coarse cells is paired with every segment directly instead of entering the grid | motivated (the planar map never has one; keeps a degenerate segment from filling the grid) |
+| `MAX_RANGE_AREA` (segment bucket limit) | cell range `(x1-x0)*(y1-y0) <= 64` | `inkvec-trace/src/boundary_opt/folds.rs:45` | segments the fold guard counts (larger ones are never counted) | motivated (kept exactly from the hash grid it replaced) |
 
 ## 09 — Decode ([09-decode.md](09-decode.md))
 

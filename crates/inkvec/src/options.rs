@@ -102,8 +102,8 @@ pub struct Options {
     #[schemars(range(min = 0, max = 1))]
     pub harmonize_threshold: f64,
 
-    /// Which engine traces the image. "quality" (the default) is the full engine: the best fidelity and the fewest parameters, at about half a second for a 512 px logo. "fast" is a Potrace-class fit on the same palette, planar map and emitter, with a one-pass gradient check in place of gradient recovery: several times faster (tens of milliseconds at 512 px), a little less faithful, with somewhat more parameters. Options that only steer quality stages (precision, content_units, harmonize, harmonize_threshold, time_budget) are ignored in fast mode.
-    #[schemars(extend("enum" = ["quality", "fast"]))]
+    /// Which engine traces the image. "quality" (the default) is the full engine: the best fidelity and the fewest parameters, at about half a second for a 512 px logo. "fast" is a Potrace-class fit on the same palette, planar map and emitter, with a one-pass gradient check in place of gradient recovery: several times faster (tens of milliseconds at 512 px), a little less faithful, with somewhat more parameters. Options that only steer quality stages (precision, content_units, harmonize, harmonize_threshold, time_budget) are ignored in fast mode. "balanced" (opt-in) is fast plus four iterations of quality's boundary solve and a fit with tolerances a quarter finer: in between the two in fidelity and time, on rasters up to 1024 px on the longer side; a larger raster is traced exactly as in fast mode. It ignores the same options as fast.
+    #[schemars(extend("enum" = ["quality", "fast", "balanced"]))]
     pub mode: String,
 
     /// Colour groups: fills to draw as one, so the shapes between them join rather than being recoloured. Empty (the default) changes nothing. Groups are separated by ';' and members by ','; a member is a colour '#rrggbb' as it appears in a trace of the same image, or a gradient written as its stop colours joined by '>'. An optional '=' says what the group becomes: '=#rrggbb' a flat colour, '=@n' its n-th member (1-based; a gradient there is refitted over the whole group); without it, the member covering the most of the image. Example: '#c0392b,#e74c3c;#f00>#00f,#0a0=@1'. A group costs one extra trace.
@@ -421,6 +421,13 @@ mod tests {
             Options::from_json(r#"{"mode": "fast"}"#).unwrap().mode,
             "fast"
         );
+        assert_eq!(
+            Options::from_json(r#"{"mode": "balanced"}"#)
+                .unwrap()
+                .to_args()
+                .mode,
+            inkvec_cli::TraceMode::Balanced
+        );
         assert!(err("[1, 2]").contains("JSON object"));
         assert!(err("null").contains("JSON object"));
         assert!(err("{nope").contains("key"));
@@ -443,7 +450,10 @@ mod tests {
         assert_eq!(p["precision"]["exclusiveMinimum"], 0);
         assert_eq!(p["harmonize"]["default"], true);
         assert_eq!(p["mode"]["default"], "quality");
-        assert_eq!(p["mode"]["enum"], serde_json::json!(["quality", "fast"]));
+        assert_eq!(
+            p["mode"]["enum"],
+            serde_json::json!(["quality", "fast", "balanced"])
+        );
         assert_eq!(
             p["native_alpha"]["default"],
             inkvec_cli::Args::default().native_alpha

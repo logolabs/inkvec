@@ -74,8 +74,9 @@
 //! `MAX_STEP`, every point stays within `MAX_TOTAL` of where the measurement put it, and
 //! points on the image frame only slide along it. A group stops when a step moves no
 //! point more than 0.005 px (half the 0.01 px the SVG writes), when a step lowers its
-//! energy by less than 10⁻⁴ of what the geometry can still change, after 32 iterations,
-//! or when the caller's time budget runs out. Nothing is linearised: each trial
+//! energy by less than 10⁻⁴ of what the geometry can still change, after 32 iterations
+//! (or the caller's lower cap, [`optimise_alpha_capped`]), or when the caller's time
+//! budget runs out. Nothing is linearised: each trial
 //! re-renders the exact coverage.
 //!
 //! Afterwards a fold guard (`fold_guard`) scales the whole displacement back towards the
@@ -583,6 +584,30 @@ pub fn optimise_alpha(
     budget_ms: Option<u64>,
     alpha: Option<(&[f32], &[f32])>,
 ) -> Option<Report> {
+    optimise_alpha_capped(map, rgb, face, budget_ms, alpha, None)
+}
+
+/// [`optimise_alpha`] with the descent stopped after at most `max_iters` iterations per
+/// independent part of the boundary (`None`: the solver's own ceiling, which is exactly
+/// [`optimise_alpha`]). Everything else -- the band, the stopping tests, the fold guard --
+/// is the same, so a cap only ever ends the descent earlier.
+///
+/// Fast's `balanced` mode runs the solve this way, as an anytime stage stopped at the knee
+/// of its measured profile (r2-fastq, 2026-10-02: on the 128 px screen set 2 iterations
+/// buy 50 % of the full solve's dE00 gain, 4 buy 81 %, 8 buy 89 %, 16 buy 93 %).
+/// Inspired by: S. Zilberstein (1996), "Using anytime algorithms in intelligent systems",
+/// AI Magazine 17(3):73, <https://ojs.aaai.org/aimagazine/index.php/aimagazine/article/view/1232>:
+/// a contract algorithm given a fixed budget chosen from its performance profile. Here
+/// the budget is an iteration count, not a time, so the output is the same on every
+/// machine.
+pub fn optimise_alpha_capped(
+    map: &mut PlanarMap,
+    rgb: &[[f32; 3]],
+    face: &[FillModel],
+    budget_ms: Option<u64>,
+    alpha: Option<(&[f32], &[f32])>,
+    max_iters: Option<usize>,
+) -> Option<Report> {
     let (w, h) = (map.width, map.height);
     if w == 0 || h == 0 || map.edges.is_empty() || rgb.len() < w * h {
         return None;
@@ -622,7 +647,7 @@ pub fn optimise_alpha(
             return None;
         }
         let deadline = budget_ms.map(|ms| (Instant::now(), u128::from(ms)));
-        lbfgs::descend(&mut prob, &vars, deadline, dbg)?
+        lbfgs::descend(&mut prob, &vars, deadline, max_iters, dbg)?
     };
     let (scaled, scale) = fold_guard(map, &vars, &pos, dbg)?;
     let moved = write_back(map, &vars, &scaled);
@@ -699,3 +724,6 @@ mod tests;
 
 #[cfg(test)]
 mod solve_tests;
+
+#[cfg(test)]
+mod cap_tests;

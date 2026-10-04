@@ -72,13 +72,18 @@ fn dot(a: &[Point], b: &[Point]) -> f64 {
 /// independent part at a time. Returns the report and the solved positions, or `None`
 /// when the energy did not fall.
 /// `deadline` is the caller's wall-clock budget (its start and length in ms); with `None`
-/// the result depends only on the input.
+/// the result depends only on the input. `max_iters` caps the iterations of every part
+/// below [`MAX_ITERS`] (`None`: [`MAX_ITERS`] itself); the solve stops at whichever of
+/// the cap and its own convergence tests comes first, so a cap at or above the iterations
+/// a part takes changes nothing.
 pub(super) fn descend(
     prob: &mut Problem,
     vars: &Vars,
     deadline: Option<(Instant, u128)>,
+    max_iters: Option<usize>,
     dbg: bool,
 ) -> Option<(Report, Vec<Point>)> {
+    let max_iters = max_iters.map_or(MAX_ITERS, |k| k.min(MAX_ITERS));
     let n = vars.start.len();
     let (data0, _) = prob.band_norm;
     let kink0 = prob.priors(&vars.start, None);
@@ -93,7 +98,7 @@ pub(super) fn descend(
     let (mut before, mut after, mut iters) = (0.0, 0.0, 0usize);
     for comp in comps {
         prob.active = Some(comp);
-        let (e0, e1, it) = solve(prob, vars, &mut pos, &mut gfull, deadline, dbg);
+        let (e0, e1, it) = solve(prob, vars, &mut pos, &mut gfull, deadline, max_iters, dbg);
         prob.active = None;
         before += e0;
         after += e1;
@@ -114,14 +119,16 @@ pub(super) fn descend(
     ))
 }
 
-/// L-BFGS on the active component, updating its unknowns in `pos`. Returns its energy
-/// before and after, and the iterations taken.
+/// L-BFGS on the active component, updating its unknowns in `pos`, for at most
+/// `max_iters` iterations. Returns its energy before and after, and the iterations taken.
+#[allow(clippy::too_many_arguments)]
 fn solve(
     prob: &mut Problem,
     vars: &Vars,
     pos: &mut [Point],
     gfull: &mut [Point],
     deadline: Option<(Instant, u128)>,
+    max_iters: usize,
     dbg: bool,
 ) -> (f64, f64, usize) {
     let ids: Vec<u32> = prob.active.as_ref().map_or(Vec::new(), |a| a.vars.clone());
@@ -154,7 +161,7 @@ fn solve(
     let mut tg = vec![Point::new(0.0, 0.0); m];
     let mut mem: Vec<(Vec<Point>, Vec<Point>, f64)> = Vec::new();
     let mut done = 0usize;
-    for it in 0..MAX_ITERS {
+    for it in 0..max_iters {
         if deadline.is_some_and(|(t0, ms)| t0.elapsed().as_millis() > ms) {
             break;
         }

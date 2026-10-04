@@ -534,7 +534,13 @@ def _init_worker():
 #: hit (`gt_render`). Version 1 scored a cold cache against the float render, which moved
 #: the screen set's macro dE00 by +0.111 % and single icons by up to 0.037 between a fresh
 #: checkout (CI) and a warm one (every local run); see `gt_render`.
-SCORER_VERSION = 2
+#:
+#: 3 (2026-10-04): `turning` reads each path command by command (`inkvec_bench/turning.py`).
+#: Version 2 took every "x,y" pair as a point, so an arc's radii and flags counted as
+#: points (215 of 246 screen-set traces carry arcs) and one polyline ran through every
+#: subpath; primitives (`<rect>`, `<circle>`, ...) were not read at all. dE00, ratio and
+#: self_res are unchanged.
+SCORER_VERSION = 3
 
 
 def _rgb8(img: np.ndarray) -> np.ndarray:
@@ -668,7 +674,8 @@ def structure_signals(svg: str, src_png: Path) -> dict:
       against the artist at 0.907 (Spearman 0.899); ranking by it, the worst twenty catch
       seventeen of the genuinely worst twenty. That makes it a defect detector for assets
       we have no source for.
-    * **turning** - total absolute turning of the emitted anchors, per unit length. This is
+    * **turning** - total absolute turning of each subpath's control polygon, per unit
+      length (`inkvec_bench/turning.py`, which says exactly what is read). This is
       the one that sees a sawtooth: on `openmoji/1F3A1` the teeth *lower* self_res from
       0.0146 to 0.0122 while turning goes 277 to 828 and the parameter count doubles. A
       boundary that turns three times as far to describe the same shape is wrong however
@@ -696,21 +703,8 @@ def structure_signals(svg: str, src_png: Path) -> dict:
     except BaseException:
         pass
     try:
-        total_turn = 0.0
-        total_len = 0.0
-        for d in re.findall(r'\sd="([^"]+)"', svg):
-            pts = [(float(x), float(y))
-                   for x, y in re.findall(r"(-?\d+\.?\d*),(-?\d+\.?\d*)", d)]
-            for i in range(1, len(pts) - 1):
-                ax, ay = pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]
-                bx, by = pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]
-                na = (ax * ax + ay * ay) ** 0.5
-                nb = (bx * bx + by * by) ** 0.5
-                if na > 1e-9 and nb > 1e-9:
-                    c = max(-1.0, min(1.0, (ax * bx + ay * by) / (na * nb)))
-                    total_turn += abs(np.arccos(c))
-                    total_len += na
-        out["turning"] = float(total_turn / total_len) if total_len > 1e-9 else 0.0
+        from inkvec_bench.turning import turning
+        out["turning"] = float(turning(svg))
     except BaseException:
         pass
     return out

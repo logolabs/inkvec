@@ -30,7 +30,7 @@ Axes and the decision
 Per condition, three axes are gated against the per-icon baseline of the same condition:
 
 * **dE00**    colour error against the artist's render, family-macro mean, margin `MARGINS`
-* **turning** anchor turning per unit length, plain mean
+* **turning** control-polygon turning per unit length, plain mean (`inkvec_bench/turning.py`)
 * **ratio**   parameters against the artist's file, family-macro mean
 
 and `self_res` is reported. For each axis, `bench/gate_stats.py` computes the relative

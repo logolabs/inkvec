@@ -34,7 +34,7 @@ three axes are compared icon by icon with the per-platform baseline
 | axis | aggregate | margin at the one-sided 95 % upper bound |
 |---|---|---|
 | dE00 (colour error vs. the artist's file) | family-macro mean | 1 % |
-| turning (anchor turning per unit length) | mean | 2 % |
+| turning (control-polygon turning per unit length; `inkvec_bench/turning.py`) | mean | 2 % |
 | parameter ratio vs. the artist's file | family-macro mean | 3 % |
 
 The change of each aggregate gets a paired, family-stratified bootstrap interval

@@ -65,7 +65,7 @@ Each condition is compared icon by icon with the per-platform baseline
 `bench/gate/baselines/<os>-<arch>.json`, on three axes:
 
 - **dE00** (colour error against the artist's file), margin 1%
-- **turning** (anchor turning per unit length), margin 2%
+- **turning** (control-polygon turning per unit length, read command by command), margin 2%
 - **ratio** (parameter count versus the artist's), margin 3%
 
 The verdict is statistical: a paired bootstrap interval for the change of each axis, and a

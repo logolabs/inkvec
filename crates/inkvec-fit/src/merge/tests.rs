@@ -311,6 +311,7 @@ fn remembered_rejections_change_no_merge() {
                         &mut verts,
                         &cfg,
                         &mut RejectedRuns::default(),
+                        &[],
                     );
                     merged_without += got;
                     if got == 0 {

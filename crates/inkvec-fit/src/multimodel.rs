@@ -206,7 +206,113 @@ pub fn optimal_multimodel(poly: &Polyline, cfg: &FitConfig) -> FittedPath {
 /// Baseline for transactional structural trials, without changing process-wide
 /// environment variables (boundary fitting is parallel).
 pub fn optimal_multimodel_without_structural(poly: &Polyline, cfg: &FitConfig) -> FittedPath {
-    optimal_multimodel_impl(poly, cfg, usize::MAX, false).path
+    optimal_multimodel_impl(poly, cfg, &Limits::capped(usize::MAX), false).path
+}
+
+/// Which spans `i..j` the dynamic program may use: the constraints the crossing repair puts
+/// on a refit, and nothing at all in normal fitting ([`Limits::is_free`]).
+///
+/// A span is admissible when it covers at most `max_span` measured points and no forced
+/// vertex lies strictly inside it, so every solution has each forced vertex as one of its
+/// vertices. Both conditions are monotone in `j` for a fixed start `i` (once a span from
+/// `i` is refused, every longer one from `i` is refused too), which is what lets the scan
+/// drop a start for good the first time it is refused (`scan::SpanScorer::fill`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Limits {
+    /// The most measured points one segment may span; `usize::MAX` for no cap.
+    pub(crate) max_span: usize,
+    /// Indices of the polyline being solved, ascending, that every solution must take as
+    /// vertices. Empty in normal fitting.
+    pub(crate) forced: Vec<usize>,
+}
+
+impl Limits {
+    /// Spans of at most `max_span` points and no forced vertex.
+    pub(crate) fn capped(max_span: usize) -> Self {
+        Limits {
+            max_span,
+            forced: Vec::new(),
+        }
+    }
+
+    /// No constraint at all: the normal fit, which may decimate and runs the post-fit passes.
+    pub(crate) fn is_free(&self) -> bool {
+        self.max_span == usize::MAX && self.forced.is_empty()
+    }
+
+    /// Whether the span `i..j` (`i < j`) is admissible: at most `max_span` points, and no
+    /// forced vertex `f` with `i < f < j`. O(number of forced vertices), which is a handful.
+    #[inline]
+    pub(crate) fn allows(&self, i: usize, j: usize) -> bool {
+        j - i <= self.max_span && self.forced.iter().all(|&f| f <= i || f >= j)
+    }
+
+    /// The last index a span from `i` may reach under the forced vertices: the first one
+    /// after `i`, or `usize::MAX` when there is none.
+    #[inline]
+    pub(crate) fn wall_after(&self, i: usize) -> usize {
+        self.forced
+            .iter()
+            .copied()
+            .find(|&f| f > i)
+            .unwrap_or(usize::MAX)
+    }
+}
+
+/// As [`optimal_multimodel_capped_full`], with the vertices in `forced` (indices into
+/// `poly`, any order, duplicates ignored) imposed on every solution: the local crossing
+/// repair's refit.
+///
+/// The program is the same one, restricted to the segmentations that break at every forced
+/// vertex: no span may pass over one ([`Limits::allows`]). Breaking there costs what any
+/// vertex costs (its [`vertex_cost`]), so among the segmentations that keep the forced
+/// vertices this is still the optimum of `½χ² + λ·params + breaks`. Like the capped fit it
+/// runs on every measured point (no decimation, so the forced indices mean what the caller
+/// meant). Uncapped (`max_span` at least the point count), it then runs the usual post-fit
+/// passes with the forced vertices kept (`crate::merge::merge_free_cubics_keeping`): a merge
+/// that absorbed one would reopen the crossing it was placed to close, and without the
+/// merge the refit is the raw program's answer, more segments than the merged fit it
+/// replaces. Under a cap, like the capped fit, it skips them.
+///
+/// On a closed boundary the loop is cut at a forced vertex, which is exact rather than the
+/// two-cut heuristic of [`solve_closed`]: a vertex every admissible solution has is a cut
+/// that loses nothing. With `forced` empty it is [`optimal_multimodel_capped_full`] under a
+/// cap below the point count, and [`optimal_multimodel_full`] (decimation, merge and all)
+/// without one; the repair calls the capped program itself when it has nothing to pin.
+///
+/// Inspired by: the topology-preserving subdivision simplification literature, which adds
+/// vertices back only where a simplified chain would cross another, rather than tightening
+/// the tolerance of the whole chain — de Berg, van Kreveld & Schirra (1998), "Topologically
+/// correct subdivision simplification using the bandwidth criterion", *Cartography and
+/// Geographic Information Systems* 25(4):243-257, doi:10.1559/152304098782383007; Saalfeld
+/// (1999), "Topologically consistent line simplification with the Douglas-Peucker
+/// algorithm", *CaGIS* 26(1):7-18, doi:10.1559/152304099782424901. Ours keeps the
+/// description-length program and only constrains where it may break.
+pub fn optimal_multimodel_forced(
+    poly: &Polyline,
+    cfg: &FitConfig,
+    max_span: usize,
+    forced: &[usize],
+) -> MultimodelFit {
+    let n = poly.len();
+    let mut f: Vec<usize> = forced.iter().copied().filter(|&k| k < n).collect();
+    f.sort_unstable();
+    f.dedup();
+    if !poly.closed {
+        // The ends of an open boundary are vertices of every solution already.
+        f.retain(|&k| k > 0 && k + 1 < n);
+    }
+    // No span can cover more than `n` points (an opened loop has `n + 1`), so a cap of `n` or
+    // more is no cap: say so, which is what lets the pinned fit run the post-fit passes.
+    let lim = Limits {
+        max_span: if max_span >= n {
+            usize::MAX
+        } else {
+            max_span.max(1)
+        },
+        forced: f,
+    };
+    optimal_multimodel_impl(poly, cfg, &lim, research::structural())
 }
 
 /// As [`optimal_multimodel`], but forbidding any single segment from spanning more than
@@ -234,7 +340,7 @@ pub fn optimal_multimodel_capped_full(
     cfg: &FitConfig,
     max_span: usize,
 ) -> MultimodelFit {
-    optimal_multimodel_impl(poly, cfg, max_span, research::structural())
+    optimal_multimodel_impl(poly, cfg, &Limits::capped(max_span), research::structural())
 }
 
 /// The experimental post-fit passes, each off unless its variable is set in a `research`
@@ -259,14 +365,15 @@ mod research {
 
 /// The body of every `optimal_multimodel*` entry point.
 ///
-/// `max_span` caps how many measured points one segment may cover (`usize::MAX` for no
-/// cap; see [`optimal_multimodel_capped`]), and `structural` switches on the research
-/// simplifier. Coordinates in and out are in the caller's px; the work is done on a
-/// centred copy. Fewer than two points give an empty path.
+/// `lim` says which spans may be used: a cap on how many measured points one segment may
+/// cover (`usize::MAX` for no cap; see [`optimal_multimodel_capped`]) and the vertices every
+/// solution must have (see [`optimal_multimodel_forced`]); `structural` switches on the
+/// research simplifier. Coordinates in and out are in the caller's px; the work is done on
+/// a centred copy. Fewer than two points give an empty path.
 fn optimal_multimodel_impl(
     poly: &Polyline,
     cfg: &FitConfig,
-    max_span: usize,
+    lim: &Limits,
     structural: bool,
 ) -> MultimodelFit {
     let n = poly.len();
@@ -283,24 +390,25 @@ fn optimal_multimodel_impl(
         };
     }
 
-    // The capped variant is exempt from decimation: the self-intersection repair relies
-    // on the measured contour being reproducible at `max_span = 1`, and a decimated
-    // contour is not simple by construction.
-    let stride = if max_span == usize::MAX {
+    // The capped and forced variants are exempt from decimation: the self-intersection
+    // repair relies on the measured contour being reproducible at `max_span = 1`, a
+    // decimated contour is not simple by construction, and a forced vertex is an index of
+    // the full contour.
+    let stride = if lim.is_free() {
         n.div_ceil(dp_max_points())
     } else {
         1
     };
     if stride > 1 {
-        return solve_decimated(poly, cfg, max_span, structural, stride);
+        return solve_decimated(poly, cfg, lim, structural, stride);
     }
 
     let (centre, shifted) = centred(poly);
     let mut fit = if poly.closed && n >= 3 {
-        solve_closed(&shifted, cfg, max_span)
+        solve_closed(&shifted, cfg, lim)
     } else {
         let tan = estimate_tangents(&shifted, cfg);
-        let (sol, path) = solve_and_refine(&shifted, &tan, cfg, false, max_span);
+        let (sol, path) = solve_and_refine(&shifted, &tan, cfg, false, lim);
         MultimodelFit {
             path,
             vertices: sol.vertices,
@@ -308,7 +416,7 @@ fn optimal_multimodel_impl(
             cost: sol.cost,
         }
     };
-    post_fit_passes(&mut fit, &shifted, cfg, max_span, structural);
+    post_fit_passes(&mut fit, &shifted, cfg, lim, structural);
     translate_path(&mut fit.path, centre);
     fit
 }
@@ -330,7 +438,7 @@ fn optimal_multimodel_impl(
 fn solve_decimated(
     poly: &Polyline,
     cfg: &FitConfig,
-    max_span: usize,
+    lim: &Limits,
     structural: bool,
     stride: usize,
 ) -> MultimodelFit {
@@ -341,7 +449,7 @@ fn solve_decimated(
         sigma: keep.iter().map(|&i| poly.sigma[i] / w).collect(),
         closed: poly.closed,
     };
-    let mut fit = optimal_multimodel_impl(&dec, cfg, max_span, structural);
+    let mut fit = optimal_multimodel_impl(&dec, cfg, lim, structural);
     for v in &mut fit.vertices {
         *v = keep[*v];
     }
@@ -389,19 +497,34 @@ fn centred(poly: &Polyline) -> (Vec2, Polyline) {
 /// through the anti-aliasing chamfer where two lines meet. Research builds may add axis
 /// snapping, G1 snapping and the structural simplifier, each behind its own variable.
 ///
-/// Not under a span cap. The cap exists for the self-intersection repair, which needs
-/// the constrained program's own answer: the merge re-joins short runs into free
-/// cubics that can cross again, so the repair never converged, and its cost grows
-/// with the segment count the cap produces - 1-2 s per round on a 250-point ring at
-/// span 7, against 0.2 ms for the program itself (family emoji: 11.8 s in repair).
+/// Not under a span cap ([`Limits`]). The cap exists for the self-intersection repair,
+/// which needs the constrained program's own answer: the merge re-joins short runs into
+/// free cubics that can cross again, so the repair never converged, and its cost grows with
+/// the segment count the cap produces - 1-2 s per round on a 250-point ring at span 7,
+/// against 0.2 ms for the program itself (family emoji: 11.8 s in repair). A fit with
+/// forced vertices and no cap (the repair's pinned refit) gets the merge and the sharpening,
+/// with the forced vertices kept: it has about as many segments as the original fit, not
+/// the hundreds a small cap produces, and keeping the pins keeps the crossing closed.
 fn post_fit_passes(
     fit: &mut MultimodelFit,
     shifted: &Polyline,
     cfg: &FitConfig,
-    max_span: usize,
+    lim: &Limits,
     structural: bool,
 ) {
-    if max_span == usize::MAX {
+    if !lim.is_free() && lim.max_span == usize::MAX {
+        // Pinned but not capped (the local crossing repair): the same passes, with the pins
+        // kept, so the refit is as compact as the fit it replaces everywhere else.
+        crate::merge::merge_free_cubics_keeping(
+            &mut fit.path,
+            shifted,
+            &fit.vertices,
+            cfg,
+            &lim.forced,
+        );
+        crate::merge::sharpen_corners(&mut fit.path);
+    }
+    if lim.is_free() {
         crate::merge::merge_free_cubics(&mut fit.path, shifted, &fit.vertices, cfg);
         crate::merge::sharpen_corners(&mut fit.path);
         #[cfg(feature = "research")]
@@ -655,7 +778,7 @@ fn solve_open(
     pre: &Prefix,
     cfg: &FitConfig,
     joins_at_ends: bool,
-    max_span: usize,
+    lim: &Limits,
 ) -> Solution {
     let n = pts.len();
     // On long polylines an endpoint's candidates are shared out onto whatever threads the
@@ -663,7 +786,7 @@ fn solve_open(
     let threads = rayon::current_num_threads();
     let parallel = n >= scan::DP_PAR_MIN_POINTS && threads > 1;
     let _running = scan::BusyThreads::claim(1);
-    let tab = SpanScorer::new(pts, sigma, tan, pre, cfg, joins_at_ends).fill(max_span, |live| {
+    let tab = SpanScorer::new(pts, sigma, tan, pre, cfg, joins_at_ends).fill(lim, |live| {
         if parallel {
             scan::fork_width(live, threads)
         } else {
@@ -1219,14 +1342,14 @@ fn assemble(
 }
 
 /// Run the dynamic program on an opened polyline and refine its answer: the solution and
-/// the emitted path. With `INKVEC_TIMING` set, a capped fit (the self-intersection
+/// the emitted path. With `INKVEC_TIMING` set, a constrained fit (the self-intersection
 /// repair) reports its two timings on stderr.
 fn solve_and_refine(
     poly: &Polyline,
     tan: &Tangents,
     cfg: &FitConfig,
     joins_at_ends: bool,
-    max_span: usize,
+    lim: &Limits,
 ) -> (Solution, FittedPath) {
     let t0 = inkvec_core::clock::Instant::now();
     let pre = Prefix::new(&poly.points, &poly.sigma);
@@ -1237,15 +1360,16 @@ fn solve_and_refine(
         &pre,
         cfg,
         joins_at_ends,
-        max_span,
+        lim,
     );
     let t1 = t0.elapsed();
     let path = refine(poly, tan, &pre, &sol, cfg);
-    if max_span != usize::MAX && inkvec_core::env::flag("INKVEC_TIMING") {
+    if !lim.is_free() && inkvec_core::env::flag("INKVEC_TIMING") {
         eprintln!(
-            "  [t]   capped fit n={} span={} segs={}: solve {:.1} ms, refine {:.1} ms",
+            "  [t]   capped fit n={} span={} forced={} segs={}: solve {:.1} ms, refine {:.1} ms",
             poly.len(),
-            max_span,
+            lim.max_span,
+            lim.forced.len(),
             sol.vertices.len().saturating_sub(1),
             t1.as_secs_f64() * 1e3,
             (t0.elapsed() - t1).as_secs_f64() * 1e3
@@ -1293,9 +1417,40 @@ fn open_at(poly: &Polyline, tan: &Tangents, cut: usize) -> (Polyline, Tangents) 
 ///
 /// The cut vertex itself is charged its [`vertex_cost`], which the opened program cannot
 /// see. Returned vertex indices refer to `poly` (the cut appears at both ends).
-fn solve_closed(poly: &Polyline, cfg: &FitConfig, max_span: usize) -> MultimodelFit {
+///
+/// With forced vertices in `lim` there is no heuristic: the loop is cut at the first forced
+/// vertex, which every admissible solution has, so the opened program's optimum is the
+/// cycle's, and it is solved once ([`optimal_multimodel_forced`]). The other forced
+/// vertices become indices of the opened polyline, `(f − cut) mod n`.
+fn solve_closed(poly: &Polyline, cfg: &FitConfig, lim: &Limits) -> MultimodelFit {
     let n = poly.len();
     let tan = estimate_tangents(poly, cfg);
+
+    let run_limited = |cut: usize, lim: &Limits| -> MultimodelFit {
+        let (opened, otan) = open_at(poly, &tan, cut);
+        let (sol, path) = solve_and_refine(&opened, &otan, cfg, true, lim);
+        MultimodelFit {
+            path,
+            vertices: sol.vertices.iter().map(|&i| (cut + i) % n).collect(),
+            kinds: sol.kinds,
+            cost: sol.cost + vertex_cost(&tan, cut, cfg),
+        }
+    };
+    if let Some(&cut) = lim.forced.first() {
+        // Opened index of original `f` is `(f + n − cut) mod n`; the cut itself is 0 (and n).
+        let mut forced: Vec<usize> = lim
+            .forced
+            .iter()
+            .map(|&f| (f + n - cut) % n)
+            .filter(|&f| f > 0)
+            .collect();
+        forced.sort_unstable();
+        let opened = Limits {
+            max_span: lim.max_span,
+            forced,
+        };
+        return run_limited(cut, &opened);
+    }
 
     // `total_cmp` orders these angles (in [0, π], never negative zero) and distances
     // exactly as `partial_cmp` does, and gives NaN an order instead of a panic.
@@ -1316,16 +1471,7 @@ fn solve_closed(poly: &Polyline, cfg: &FitConfig, max_span: usize) -> Multimodel
             .unwrap_or(0)
     };
 
-    let run = |cut: usize| -> MultimodelFit {
-        let (opened, otan) = open_at(poly, &tan, cut);
-        let (sol, path) = solve_and_refine(&opened, &otan, cfg, true, max_span);
-        MultimodelFit {
-            path,
-            vertices: sol.vertices.iter().map(|&i| (cut + i) % n).collect(),
-            kinds: sol.kinds,
-            cost: sol.cost + vertex_cost(&tan, cut, cfg),
-        }
-    };
+    let run = |cut: usize| -> MultimodelFit { run_limited(cut, lim) };
 
     let first = run(cut1);
     let circ = |a: usize, b: usize| -> usize {

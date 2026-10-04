@@ -162,6 +162,32 @@ fn self_crossings_inner(
     limit: usize,
     mask: Option<&[bool]>,
 ) -> Vec<(usize, usize)> {
+    crossings_located(path, limit, mask)
+        .into_iter()
+        .map(|(i, j, _)| (i, j))
+        .collect()
+}
+
+/// Every pair of segments found to cross, up to `limit` pairs, as [`self_crossings`] finds
+/// them, each with a point where the two cross (px).
+///
+/// The point is where the first pair of flattened sub-segments found to intersect meet:
+/// the intersection of the two lines through them, `a + t·(b − a)` with
+/// `t = ((c − a) × (d − c)) / ((b − a) × (d − c))`, or the midpoint of the shared stretch
+/// when they are collinear. A cubic that loops on itself reports its own midpoint
+/// (`B(½)`), the one place the loop is sure to be near. The local crossing repair reads
+/// this to choose where to pin each curve (`inkvec-cli`'s `rings::repair_ring_crossings`).
+pub fn self_crossing_points(path: &FittedPath, limit: usize) -> Vec<(usize, usize, Point)> {
+    crossings_located(path, limit, None)
+}
+
+/// The body of [`self_crossings_inner`] and [`self_crossing_points`]: the pairs and where
+/// each crosses.
+fn crossings_located(
+    path: &FittedPath,
+    limit: usize,
+    mask: Option<&[bool]>,
+) -> Vec<(usize, usize, Point)> {
     let touched = |i: usize, j: usize| -> bool {
         match mask {
             None => true,
@@ -193,7 +219,7 @@ fn self_crossings_inner(
             // Only this boundary's own segments are suspect: the ring was simple
             // before the swap, so nothing else can have started crossing.
             if touched(i, i) && cubic_self_intersects(starts[i], c1, c2, p) {
-                found.push((i, i));
+                found.push((i, i, eval_cubic([starts[i], c1, c2, p], 0.5)));
                 if found.len() >= limit {
                     break 'outer;
                 }
@@ -209,8 +235,9 @@ fn self_crossings_inner(
                 flat[i].len(),
                 flat[j].len(),
             );
-            if outlines_cross(&flat[i], &flat[j], exempt) {
-                found.push((i, j));
+            if let Some((a, b)) = outlines_cross(&flat[i], &flat[j], exempt) {
+                let at = meet(flat[i][a], flat[i][a + 1], flat[j][b], flat[j][b + 1]);
+                found.push((i, j, at));
                 if found.len() >= limit {
                     break 'outer;
                 }
@@ -258,15 +285,19 @@ fn exempt_join(
     }
 }
 
-/// Whether any sub-segment of the flattened outline `fi` intersects any of `fj`, other
-/// than the `exempt` pair.
+/// The first sub-segment of the flattened outline `fi` found to intersect one of `fj`, other
+/// than the `exempt` pair, as `(index into fi, index into fj)`; `None` when none does.
 ///
 /// The all-pairs walk over two flattened outlines is quadratic in their sub-segments, and
 /// two long arcs flattened to hundreds of points made this the dominant cost on large
 /// inputs. Blocks of sixteen sub-segments carry a bounding box each, so the quadratic
 /// work only happens where the outlines actually come near each other; the answer is
 /// identical.
-fn outlines_cross(fi: &[Point], fj: &[Point], exempt: Option<(usize, usize)>) -> bool {
+fn outlines_cross(
+    fi: &[Point],
+    fj: &[Point],
+    exempt: Option<(usize, usize)>,
+) -> Option<(usize, usize)> {
     const BLK: usize = 16;
     let (nbi, nbj) = (fi.len() - 1, fj.len() - 1);
     /// A block of consecutive segments: `(first, last, bounding box)`.
@@ -291,13 +322,31 @@ fn outlines_cross(fi: &[Point], fj: &[Point], exempt: Option<(usize, usize)>) ->
                         continue;
                     }
                     if segments_intersect(fi[a], fi[a + 1], fj[b], fj[b + 1]) {
-                        return true;
+                        return Some((a, b));
                     }
                 }
             }
         }
     }
-    false
+    None
+}
+
+/// Where the segments `a–b` and `c–d` (px), already known to intersect, meet: the
+/// intersection of their lines, `a + t·(b − a)` with
+/// `t = ((c − a) × (d − c)) / ((b − a) × (d − c))` clamped to `[0, 1]`, or, when they are
+/// parallel (the cross product below 1e-18 px²), the midpoint of the middle two of the four
+/// end points along `b − a`, which lies on the stretch they share.
+fn meet(a: Point, b: Point, c: Point, d: Point) -> Point {
+    let (r, s) = (b - a, d - c);
+    let cross = |u: inkvec_core::Vec2, v: inkvec_core::Vec2| u.x * v.y - u.y * v.x;
+    let den = cross(r, s);
+    if den.abs() > 1e-18 {
+        let t = (cross(c - a, s) / den).clamp(0.0, 1.0);
+        return Point::new(a.x + t * r.x, a.y + t * r.y);
+    }
+    let mut ends = [a, b, c, d];
+    ends.sort_by(|p, q| (p.x * r.x + p.y * r.y).total_cmp(&(q.x * r.x + q.y * r.y)));
+    Point::new(0.5 * (ends[1].x + ends[2].x), 0.5 * (ends[1].y + ends[2].y))
 }
 
 /// Fit a boundary, and if the result crosses itself, fit it again under a tightening span

@@ -14,7 +14,7 @@
 
 use inkvec_core::{Point, Polyline};
 use inkvec_fit::curves::{cubic_self_intersects, Segment};
-use inkvec_fit::simple::{fit_simple, self_crossing};
+use inkvec_fit::simple::{fit_simple, self_crossing, self_crossing_points, self_crossings};
 use inkvec_fit::{FitConfig, FittedPath};
 
 fn p(x: f64, y: f64) -> Point {
@@ -178,6 +178,56 @@ fn two_segments_crossing_is_found() {
         closed: false,
     };
     assert!(self_crossing(&path).is_some());
+    // Where: the legs (0,0)-(10,10) and (0,10)-(10,0) meet at (5,5).
+    let located = self_crossing_points(&path, 8);
+    assert_eq!(located.len(), 1);
+    let (i, j, at) = located[0];
+    assert_eq!((i, j), (0, 2));
+    assert!(at.dist(p(5.0, 5.0)) < 1e-12, "{at:?}");
+}
+
+/// The located test finds the same pairs as the plain one, each with a point on both curves:
+/// two curves bulging across each other at a thin neck, and a collinear overlap.
+#[test]
+fn crossing_points_lie_on_both_curves() {
+    let path = FittedPath {
+        start: p(0.0, 0.0),
+        segments: vec![
+            Segment::Cubic(p(10.0, 3.0), p(20.0, 3.0), p(30.0, 0.0)),
+            Segment::Line(p(30.0, 1.0)),
+            Segment::Cubic(p(20.0, -2.0), p(10.0, -2.0), p(0.0, 1.0)),
+        ],
+        closed: true,
+    };
+    let pairs = self_crossings(&path, 32);
+    let located = self_crossing_points(&path, 32);
+    assert!(!pairs.is_empty());
+    assert_eq!(
+        pairs,
+        located.iter().map(|&(i, j, _)| (i, j)).collect::<Vec<_>>()
+    );
+    // The two cubics are mirror images about y = 0.5, so they cross on that line; the point
+    // is where two flattened pieces meet, so it is on it to within a piece's rise (0.35 px).
+    for &(_, _, at) in &located {
+        assert!((at.y - 0.5).abs() < 0.35, "{at:?}");
+    }
+    // Collinear: a line doubling back over itself reports a point on the shared stretch.
+    let back = FittedPath {
+        start: p(0.0, 0.0),
+        segments: vec![
+            Segment::Line(p(10.0, 0.0)),
+            Segment::Line(p(10.0, 2.0)),
+            Segment::Line(p(4.0, 0.0)),
+            Segment::Line(p(2.0, 0.0)),
+        ],
+        closed: false,
+    };
+    let at = self_crossing_points(&back, 8)
+        .into_iter()
+        .find(|&(i, j, _)| (i, j) == (0, 3))
+        .map(|(_, _, at)| at)
+        .expect("the doubled-back stretch is a crossing");
+    assert!(at.y.abs() < 1e-12 && (2.0..=4.0).contains(&at.x), "{at:?}");
 }
 
 /// The repair has to terminate on any input, because at a span cap of one the fit

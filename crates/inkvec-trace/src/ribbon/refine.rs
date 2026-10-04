@@ -64,7 +64,7 @@ use super::dist::{
     circle_grad, circular_arc_grad, cubic_eval, cubic_grad, dist_to, ellipse_arc_grad, line_grad,
 };
 use super::grid::point_segment;
-use super::join::{miter_gauge, tangents, Join};
+use super::join::{miter_gauge, tangents, Join, Style};
 use super::score::flatten;
 use super::skyline::Skyline;
 use super::Centreline;
@@ -166,8 +166,8 @@ struct Model {
     theta: Vec<f64>,
     /// The centrelines.
     shapes: Vec<Shape>,
-    /// How their segments meet.
-    join: Join,
+    /// How their segments meet and their ends are drawn.
+    style: Style,
 }
 
 /// `(θ[i], θ[i+1])` as a point.
@@ -177,7 +177,7 @@ fn pt(theta: &[f64], i: usize) -> Point {
 
 impl Model {
     /// The variables of `lines` and half-width `h`, in reading order, joined by `join`.
-    fn new(lines: &[Centreline], h: f64, join: Join) -> Model {
+    fn new(lines: &[Centreline], h: f64, style: Style) -> Model {
         let mut theta: Vec<f64> = Vec::new();
         let push = |theta: &mut Vec<f64>, p: Point| -> usize {
             theta.push(p.x);
@@ -257,7 +257,7 @@ impl Model {
         Model {
             theta,
             shapes,
-            join,
+            style,
         }
     }
 
@@ -445,7 +445,7 @@ fn local_eval(
         } => {
             let (a, s) = model.segment(*start, segs, seg);
             let d = dist_to(p, a, &s, t_hint).0;
-            if model.join == Join::Round {
+            if model.style.join == Join::Round {
                 return (d, None);
             }
             let e = s.end();
@@ -487,9 +487,9 @@ fn local_dist(model: &Model, shape: usize, seg: usize, p: Point, t_hint: f64) ->
 /// joined by `join`), as the solve measures it; a point with no centreline within
 /// `8·h + 4` px gets that reach. The stroke score ([`super::score`]) is computed from
 /// these, so the chi-squared that decides the face is the one the solve minimised.
-pub(crate) fn distances(lines: &[Centreline], h: f64, b: &Boundary, join: Join) -> Vec<f64> {
+pub(crate) fn distances(lines: &[Centreline], h: f64, b: &Boundary, style: Style) -> Vec<f64> {
     let reach = 8.0 * h + 4.0;
-    let (_, rws) = rows(&Model::new(lines, h, join), b, reach);
+    let (_, rws) = rows(&Model::new(lines, h, style), b, reach);
     rws.iter()
         .map(|r| r.as_ref().map_or(reach, |r| r.d))
         .collect()
@@ -680,9 +680,9 @@ pub(crate) fn point_distances(
     lines: &[Centreline],
     pts: &[Point],
     reach: f64,
-    join: Join,
+    style: Style,
 ) -> Vec<f64> {
-    nearest_rows(&Model::new(lines, 0.0, join), pts, reach)
+    nearest_rows(&Model::new(lines, 0.0, style), pts, reach)
         .into_iter()
         .map(|r| r.map_or(f64::INFINITY, |r| r.d))
         .collect()
@@ -695,10 +695,10 @@ pub(crate) fn solve(
     lines: &[Centreline],
     h: f64,
     b: &Boundary,
-    join: Join,
+    style: Style,
     max_iters: usize,
 ) -> (Vec<Centreline>, f64) {
-    let mut model = Model::new(lines, h, join);
+    let mut model = Model::new(lines, h, style);
     let n = model.theta.len();
     if n > MAX_VARS {
         return (lines.to_vec(), h);
@@ -782,8 +782,8 @@ pub(crate) fn solve(
 /// Levenberg-Marquardt algorithm: implementation and theory, Numerical Analysis, Lecture
 /// Notes in Mathematics 630, 105-116, doi:10.1007/BFb0067700, for the predicted reduction
 /// of a damped step.
-fn predicted_gain(lines: &[Centreline], h: f64, b: &Boundary, join: Join) -> f64 {
-    let mut model = Model::new(lines, h, join);
+fn predicted_gain(lines: &[Centreline], h: f64, b: &Boundary, style: Style) -> f64 {
+    let mut model = Model::new(lines, h, style);
     let n = model.theta.len();
     if n > MAX_VARS {
         return f64::INFINITY;
@@ -850,10 +850,10 @@ pub(crate) fn solve_adaptive(
     h: f64,
     b: &Boundary,
     lambda: f64,
-    join: Join,
+    style: Style,
     budget: f64,
 ) -> (Vec<Centreline>, f64) {
-    let (mut cur, mut h) = solve(lines, h, b, join, MAX_ITERS);
+    let (mut cur, mut h) = solve(lines, h, b, style, MAX_ITERS);
     let max_splits = inkvec_core::env::count("INKVEC_RIBBONS_SPLITS").unwrap_or(MAX_SPLITS);
     let reach = 8.0 * h + 4.0;
     // The description length of strokes `ls` at half-width `h`, and the rows it was
@@ -861,7 +861,7 @@ pub(crate) fn solve_adaptive(
     // search reads, so they are kept rather than measured again (same model, same reach,
     // same rows).
     let cost = |ls: &[Centreline], h: f64| -> (f64, Vec<Option<Row>>) {
-        let (e, rws) = rows(&Model::new(ls, h, join), b, reach);
+        let (e, rws) = rows(&Model::new(ls, h, style), b, reach);
         (
             0.5 * e + lambda * ls.iter().map(Centreline::params).sum::<f64>(),
             rws,
@@ -871,7 +871,7 @@ pub(crate) fn solve_adaptive(
     let mut refused: Vec<(usize, usize)> = Vec::new();
     let mut accepted_any = false;
     for _ in 0..max_splits {
-        let model = Model::new(&cur, h, join);
+        let model = Model::new(&cur, h, style);
         let Some((shape, seg, t)) = worst_segment(&model, &cur_rows, h, b, &refused) else {
             break;
         };
@@ -887,13 +887,13 @@ pub(crate) fn solve_adaptive(
         // The score test: a split whose first Gauss-Newton step predicts a gain of under
         // a quarter of its price is not solved.
         let price = lambda * (k_trial - cur.iter().map(Centreline::params).sum::<f64>());
-        if 0.5 * predicted_gain(&trial, h, b, join) < SCREEN_KAPPA * price {
+        if 0.5 * predicted_gain(&trial, h, b, style) < SCREEN_KAPPA * price {
             refused.push((shape, seg));
             continue;
         }
-        let (tl, th) = solve(&trial, h, b, join, TRIAL_ITERS);
+        let (tl, th) = solve(&trial, h, b, style, TRIAL_ITERS);
         let (c, trial_rows) = cost(&tl, th);
-        if c < best && drawable(&tl, join) {
+        if c < best && drawable(&tl, style) {
             accepted_any = true;
             best = c;
             cur = tl;
@@ -907,8 +907,8 @@ pub(crate) fn solve_adaptive(
         }
     }
     if accepted_any {
-        let (polished, ph) = solve(&cur, h, b, join, MAX_ITERS);
-        if drawable(&polished, join) && cost(&polished, ph).0 <= best {
+        let (polished, ph) = solve(&cur, h, b, style, MAX_ITERS);
+        if drawable(&polished, style) && cost(&polished, ph).0 <= best {
             return (polished, ph);
         }
     }
@@ -1037,7 +1037,7 @@ fn profile(model: &Model) -> Vec<usize> {
                 let m = segs.len();
                 for k in 0..m {
                     note(&locals(model, si, k, None));
-                    if model.join == Join::Miter {
+                    if model.style.join == Join::Miter {
                         for foot in [Foot::Start, Foot::End] {
                             if let Some(j) = neighbour(m, *closed, k, foot) {
                                 note(&locals(model, si, k, Some(j)));
@@ -1259,7 +1259,7 @@ fn normal_equations(
                     // Under round joins every row reads one segment's plain distance; under
                     // miter joins a row whose foot is a vertex reads the gauge of two
                     // segments instead.
-                    let with = match m.join {
+                    let with = match m.style.join {
                         Join::Round => None,
                         Join::Miter => local_eval(m, row.shape, row.seg, b.pts[i], row.t).1,
                     };
@@ -1340,7 +1340,7 @@ fn regular(model: &Model) -> bool {
         else {
             continue;
         };
-        if model.join == Join::Miter && !miter_drawable(model, *start, segs, *closed) {
+        if model.style.join == Join::Miter && !miter_drawable(model, *start, segs, *closed) {
             return false;
         }
         for k in 0..segs.len() {
@@ -1394,8 +1394,8 @@ fn miter_drawable(model: &Model, start: usize, segs: &[SegVar], closed: bool) ->
 /// Whether the centrelines `lines`, joined by `join`, are drawn by a renderer as the
 /// residual model assumes ([`regular`]). A hypothesis whose solved strokes are not is
 /// refused ([`super::fit_face`]).
-pub(crate) fn drawable(lines: &[Centreline], join: Join) -> bool {
-    regular(&Model::new(lines, 0.0, join))
+pub(crate) fn drawable(lines: &[Centreline], style: Style) -> bool {
+    regular(&Model::new(lines, 0.0, style))
 }
 
 /// Each variable's anchor sigma: [`ANCHOR`] px, and for the half-width (the last
@@ -1444,7 +1444,7 @@ mod tests {
             },
             prim: None,
         };
-        let (out, h) = solve(&[line], 2.8, &b, Join::Round, MAX_ITERS);
+        let (out, h) = solve(&[line], 2.8, &b, Join::Round.into(), MAX_ITERS);
         let p = &out[0].path;
         assert!((h - 3.0).abs() < 1e-3, "h {h}");
         assert!(p.start.dist(Point::new(0.0, 0.0)) < 0.01, "{:?}", p.start);
@@ -1462,10 +1462,10 @@ mod tests {
             prim: None,
         };
         let plain = cubic(Point::new(10.0, 5.0), Point::new(20.0, 5.0));
-        assert!(regular(&Model::new(&[plain], 2.0, Join::Round)));
+        assert!(regular(&Model::new(&[plain], 2.0, Join::Round.into())));
         // The first handle points backwards: the derivative reverses near t = 0.
         let cusp = cubic(Point::new(-3.0, 0.0), Point::new(25.0, 0.0));
-        assert!(!regular(&Model::new(&[cusp], 2.0, Join::Round)));
+        assert!(!regular(&Model::new(&[cusp], 2.0, Join::Round.into())));
     }
 
     #[test]

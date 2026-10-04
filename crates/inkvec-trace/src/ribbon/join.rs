@@ -56,6 +56,44 @@ impl Join {
     }
 }
 
+/// How a stroke's open ends are drawn: SVG's `stroke-linecap`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cap {
+    /// `stroke-linecap="round"`: a half disc of the half-width round each end.
+    Round,
+    /// `stroke-linecap="butt"` (SVG's default): the stroke stops square at the end point.
+    Butt,
+}
+
+impl Cap {
+    /// The SVG attribute value.
+    pub fn svg(self) -> &'static str {
+        match self {
+            Cap::Round => "round",
+            Cap::Butt => "butt",
+        }
+    }
+}
+
+/// A face's stroke style: how its segments meet and how its open ends are drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Style {
+    /// `stroke-linejoin`.
+    pub join: Join,
+    /// `stroke-linecap`.
+    pub cap: Cap,
+}
+
+impl From<Join> for Style {
+    /// `join` with round caps.
+    fn from(join: Join) -> Style {
+        Style {
+            join,
+            cap: Cap::Round,
+        }
+    }
+}
+
 /// Unit tangents of segment `s` (starting at `a`) at its start and its end, in the
 /// direction of travel; `None` for a degenerate segment.
 ///

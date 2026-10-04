@@ -34,7 +34,7 @@ use inkvec_fit::FittedPath;
 
 use super::boundary::Boundary;
 use super::grid::SegGrid;
-use super::join::Join;
+use super::join::Style;
 use super::refine::distances;
 use super::Centreline;
 
@@ -156,9 +156,9 @@ pub(crate) fn score(
     lines: &[Centreline],
     w0: f64,
     half: Option<f64>,
-    join: Join,
+    style: Style,
 ) -> Score {
-    let d = distances(lines, half.unwrap_or(0.5 * w0), b, join);
+    let d = distances(lines, half.unwrap_or(0.5 * w0), b, style);
     let band = (0.25 * w0).max(1.0);
     let (mut num, mut den) = (0.0, 0.0);
     for (i, &di) in d.iter().enumerate() {
@@ -225,6 +225,7 @@ pub(crate) fn path_chi2(pts: &[Point], sigma: &[f64], path: &FittedPath) -> f64 
 mod tests {
     use super::*;
     use crate::ribbon::boundary::Boundary;
+    use crate::ribbon::join::Join;
     use inkvec_core::Polyline;
 
     /// The outline of a straight round-capped stroke from (0,0) to (`len`,0), half-width
@@ -267,7 +268,7 @@ mod tests {
             path: p.clone(),
             prim: None,
         };
-        let s = score(&b, &[line(&path)], 6.0, None, Join::Round);
+        let s = score(&b, &[line(&path)], 6.0, None, Join::Round.into());
         assert!((s.half - 3.0).abs() < 1e-6, "half {}", s.half);
         assert!(s.worst < 1e-6 && s.outliers == 0, "{s:?}");
         // A centreline 0.2 px short at one end leaves that cap's points about 0.2 px
@@ -277,7 +278,7 @@ mod tests {
             segments: vec![Segment::Line(Point::new(29.8, 0.0))],
             ..path
         };
-        let s2 = score(&b, &[line(&short)], 6.0, None, Join::Round);
+        let s2 = score(&b, &[line(&short)], 6.0, None, Join::Round.into());
         assert!(
             s2.chi2 > s.chi2 + 100.0 && (0.15..0.21).contains(&s2.worst),
             "{s2:?}"
@@ -360,10 +361,16 @@ mod tests {
             },
             prim: None,
         };
-        let m = score(&b, std::slice::from_ref(&line), 4.0, Some(2.0), Join::Miter);
+        let m = score(
+            &b,
+            std::slice::from_ref(&line),
+            4.0,
+            Some(2.0),
+            Join::Miter.into(),
+        );
         assert!(m.worst < 1e-6, "miter {m:?}");
         // A round join leaves the outer corner (22, -2) at sqrt(8) - 2 = 0.83 px.
-        let r = score(&b, &[line], 4.0, Some(2.0), Join::Round);
+        let r = score(&b, &[line], 4.0, Some(2.0), Join::Round.into());
         assert!((r.worst - (8f64.sqrt() - 2.0)).abs() < 1e-6, "round {r:?}");
     }
 }

@@ -399,8 +399,9 @@ fn element(r: &Ribbon, hex: &str, decimals: usize, id: &str) -> String {
     let mut out = String::new();
     if !d.is_empty() {
         out.push_str(&format!(
-            "<path id=\"{id}\" d=\"{d}\" fill=\"none\" stroke=\"{hex}\" stroke-width=\"{w:.decimals$}\" stroke-linecap=\"round\" stroke-linejoin=\"{j}\"/>",
+            "<path id=\"{id}\" d=\"{d}\" fill=\"none\" stroke=\"{hex}\" stroke-width=\"{w:.decimals$}\" stroke-linecap=\"{c}\" stroke-linejoin=\"{j}\"/>",
             w = r.width,
+            c = r.cap.svg(),
             j = r.join.svg()
         ));
     }
@@ -413,7 +414,7 @@ mod tests {
     use super::*;
     use inkvec_core::Point;
     use inkvec_fit::curves::Segment;
-    use inkvec_trace::ribbon::{Centreline, Join, Score};
+    use inkvec_trace::ribbon::{Cap, Centreline, Join, Score};
 
     /// A one-line ribbon of width 4 with the given chi-squared.
     fn ribbon(chi2: f64, join: Join) -> Ribbon {
@@ -428,6 +429,7 @@ mod tests {
             }],
             width: 4.0,
             join,
+            cap: Cap::Round,
             paired_width: 4.0,
             paired_share: 0.9,
             score: Score {

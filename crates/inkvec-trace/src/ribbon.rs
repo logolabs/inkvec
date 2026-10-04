@@ -71,7 +71,7 @@ mod refine;
 mod score;
 mod skyline;
 
-pub use join::Join;
+pub use join::{Cap, Join, Style};
 pub use score::Score;
 
 use inkvec_core::{Point, Polyline};
@@ -234,6 +234,8 @@ pub struct Ribbon {
     pub width: f64,
     /// How the strokes' segments meet (`stroke-linejoin`).
     pub join: Join,
+    /// How the strokes' open ends are drawn (`stroke-linecap`).
+    pub cap: Cap,
     /// The width the pairing read, px.
     pub paired_width: f64,
     /// Share of the boundary points whose pair agreed with it.
@@ -337,7 +339,7 @@ pub fn fit_face(
         w0,
         share,
     };
-    let round = hypothesis(&face, cfg, budget, Join::Round);
+    let round = hypothesis(&face, cfg, budget, Join::Round.into());
     // A round fit that leaves a boundary point more than a quarter pixel out is also tried
     // with miter joins: sharp corners are what round joins cannot draw.
     let try_miter = round
@@ -346,7 +348,7 @@ pub fn fit_face(
     if !try_miter || !inkvec_core::env::switch("INKVEC_RIBBONS_MITER", true) {
         return round;
     }
-    let miter = hypothesis(&face, cfg, budget, Join::Miter);
+    let miter = hypothesis(&face, cfg, budget, Join::Miter.into());
     match (round, miter) {
         (Ok(r), Ok(m)) => Ok(if m.cost(cfg.lambda) < r.cost(cfg.lambda) {
             m
@@ -382,7 +384,7 @@ fn uncovered(
     mask: &FaceMask,
     lines: &[Centreline],
     h: f64,
-    join: Join,
+    style: Style,
 ) -> f64 {
     let stride = if mask.area() > 20_000 { 2 } else { 1 };
     let mut pts = Vec::new();
@@ -397,7 +399,7 @@ fn uncovered(
             }
         }
     }
-    let d = refine::point_distances(lines, &pts, h + 0.5, join);
+    let d = refine::point_distances(lines, &pts, h + 0.5, style);
     d.iter().filter(|&&x| x > h + 0.5).count() as f64 * (stride * stride) as f64
 }
 
@@ -424,7 +426,7 @@ struct Face<'a> {
 /// One hypothesis of a face's strokes: topology read with `join`'s rules
 /// ([`graph::TopoOptions`]), every chain fitted ([`fit_chain`]), the stroke solve with
 /// splits ([`refine::solve_adaptive`]), and the score under that join.
-fn hypothesis(face: &Face, cfg: &FitConfig, budget: f64, join: Join) -> Result<Ribbon, Decline> {
+fn hypothesis(face: &Face, cfg: &FitConfig, budget: f64, style: Style) -> Result<Ribbon, Decline> {
     let w0 = face.w0;
     // Topology readings tried in turn: round joins first without rebuilt corners (most
     // tight turns in round line art are arcs of about the half-width), then with them,
@@ -432,7 +434,7 @@ fn hypothesis(face: &Face, cfg: &FitConfig, budget: f64, join: Join) -> Result<R
     // (lucide `circle-arrow-right` at 512 px: w 42.7 px, a chevron of 85 px arms, read
     // tip to tip without its apex at rms 39 px), then on the chordal axis, for strokes
     // whose raster skeleton has the wrong topology altogether.
-    let readings = match join {
+    let readings = match style.join {
         Join::Round => vec![
             graph::TopoOptions::round(),
             graph::TopoOptions::round_cornered(),
@@ -442,7 +444,7 @@ fn hypothesis(face: &Face, cfg: &FitConfig, budget: f64, join: Join) -> Result<R
     };
     let mut last = Err(Decline::NoCentreline);
     for (i, &opts) in readings.iter().enumerate() {
-        last = reading(face, cfg, budget, join, opts);
+        last = reading(face, cfg, budget, style, opts);
         let retry = matches!(last, Err(Decline::Misfit { .. })) && i + 1 < readings.len();
         if !retry {
             break;
@@ -457,7 +459,7 @@ fn reading(
     face: &Face,
     cfg: &FitConfig,
     budget: f64,
-    join: Join,
+    style: Style,
     opts: graph::TopoOptions,
 ) -> Result<Ribbon, Decline> {
     let (b, mask, w0, share) = (face.b, face.mask, face.w0, face.share);
@@ -466,7 +468,8 @@ fn reading(
         for c in &topo.chains {
             let (a, z) = (c.pts[0], c.pts[c.pts.len() - 1]);
             eprintln!(
-                "    {join:?} chain {} pts closed {} from ({:.1},{:.1}) to ({:.1},{:.1})",
+                "    {:?} chain {} pts closed {} from ({:.1},{:.1}) to ({:.1},{:.1})",
+                style.join,
                 c.pts.len(),
                 c.closed,
                 a.x,
@@ -511,21 +514,21 @@ fn reading(
     }
     // A stroke reading of a blob is off by a sizeable fraction of its width almost
     // everywhere, before any solve; the solve polishes tenths of a pixel, not that.
-    let pre = score::score(b, &lines, w0, None, join);
+    let pre = score::score(b, &lines, w0, None, style);
     if pre.rms > MAX_PRE_RMS * w0 {
         return Err(Decline::Misfit { rms: pre.rms });
     }
     let (lines, half) = if inkvec_core::env::switch("INKVEC_RIBBONS_SOLVE", true) {
-        let (l, h) = refine::solve_adaptive(&lines, 0.5 * w0, b, cfg.lambda, join, budget);
+        let (l, h) = refine::solve_adaptive(&lines, 0.5 * w0, b, cfg.lambda, style, budget);
         (l, Some(h))
     } else {
         (lines, None)
     };
-    if !refine::drawable(&lines, join) {
+    if !refine::drawable(&lines, style) {
         return Err(Decline::Undrawable);
     }
-    let score = score::score(b, &lines, w0, half, join);
-    let uncovered = uncovered(b, mask, &lines, score.half, join);
+    let score = score::score(b, &lines, w0, half, style);
+    let uncovered = uncovered(b, mask, &lines, score.half, style);
     if uncovered > MAX_UNCOVERED * mask.area() as f64 + 2.0 {
         return Err(Decline::Uncovered {
             pixels: uncovered as usize,
@@ -534,7 +537,8 @@ fn reading(
     Ok(Ribbon {
         lines,
         width: 2.0 * score.half,
-        join,
+        join: style.join,
+        cap: style.cap,
         paired_width: w0,
         paired_share: share,
         score,
@@ -852,7 +856,7 @@ mod tests {
             path: sq(3.0),
             prim: None,
         }];
-        let gap = uncovered(&b, &mask, &ring_stroke, 3.0, Join::Miter);
+        let gap = uncovered(&b, &mask, &ring_stroke, 3.0, Join::Miter.into());
         assert!(gap > 100.0, "{gap} pixels unpainted");
         // One horizontal stroke as wide as the square paints all of it.
         let fat = [Centreline {
@@ -863,6 +867,6 @@ mod tests {
             },
             prim: None,
         }];
-        assert_eq!(uncovered(&b, &mask, &fat, 15.5, Join::Miter), 0.0);
+        assert_eq!(uncovered(&b, &mask, &fat, 15.5, Join::Miter.into()), 0.0);
     }
 }

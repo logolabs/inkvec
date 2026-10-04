@@ -11,7 +11,7 @@ stroke solve), `dist.rs` (exact distances and their gradients), `skyline.rs` (th
 Cholesky), `bvh.rs` (nearest-piece search), `grid.rs` (bucket grid and ray walks),
 `join.rs` (joins and caps as residual models), `score.rs` (the score). The decision and the
 SVG elements: `crates/inkvec-cli/src/ribbons.rs`.
-**Entry points:** `ribbon::fit_face()` (`crates/inkvec-trace/src/ribbon.rs:317`), called per
+**Entry points:** `ribbon::fit_face()` (`crates/inkvec-trace/src/ribbon.rs:324`), called per
 candidate face by `ribbons::choose()` (`crates/inkvec-cli/src/ribbons.rs:168`), which
 `ribbons::stage()` (`crates/inkvec-cli/src/ribbons.rs:77`) runs when
 `--detect-strokes` / `Options::detect_strokes` is set (`crates/inkvec-cli/src/args.rs:181`,
@@ -34,7 +34,7 @@ research, 2026-10-02). No fitting change reaches it; only a change of representa
 This stage is that change, face by face, and it decides each face by description length —
 the same currency the fitter uses — with a fidelity bound on top.
 
-## The passes, for one face (`fit_face`, `ribbon.rs:317`)
+## The passes, for one face (`fit_face`, `ribbon.rs:324`)
 
 1. **Boundary and width by pairing** (`boundary.rs`). The face's rings after the boundary
    solve, with inward normals voted against the face mask. Every boundary point walks
@@ -42,14 +42,14 @@ the same currency the fitter uses — with a fidelity bound on top.
    walk in `grid.rs`); an anti-parallel hit (within `COS_PAIR` = cos 25°,
    `boundary.rs:50`) is a width sample. The median's core gives the width `w0` and the
    share of the outline that is sleeve (`stroke_width`, `boundary.rs:279`). Faces with a
-   share under `MIN_PAIRED_SHARE` = 0.35 (`ribbon.rs:95`) or narrower than `MIN_WIDTH` =
-   2 px (`ribbon.rs:87`) are declined.
+   share under `MIN_PAIRED_SHARE` = 0.35 (`ribbon.rs:102`) or narrower than `MIN_WIDTH` =
+   2 px (`ribbon.rs:94`) are declined.
 2. **Medial graph and centre samples** (`graph::medial`, `graph.rs:309`), read once per
    face: Zhang-Suen thinning of the face mask as a graph (`skeleton`, `graph.rs:325`), and
    at every node a cross-section from the nearest boundary point across to the other side
    (`cross_section`, `graph.rs:342`); a sample is reliable when the far side is
    anti-parallel and the width agrees with `w0`.
-3. **Topology readings** (`hypothesis`, `ribbon.rs:467`; `TopoOptions`). Under round joins
+3. **Topology readings** (`hypothesis`, `ribbon.rs:474`; `TopoOptions`). Under round joins
    the readings are tried in turn while the previous one is a misfit: no rebuilt corners;
    rebuilt corners; and the **chordal axis** with rebuilt corners. Each reading keeps the
    branches' reliable cores (`cores`, `graph.rs:375`), drops spurs and merges junction
@@ -66,29 +66,29 @@ the same currency the fitter uses — with a fidelity bound on top.
    sleeve triangles link their two chords, junction triangles link their three to the
    centroid (`axis`, `chordal.rs:458`). Branches with a free end and under half a width of
    core are dropped there (the axis sends a spur into every ear of the outline).
-5. **Centreline fit** (`fit_chain`, `ribbon.rs:688`). Chains are thinned to
-   `CHAIN_SAMPLES_PER_WIDTH` = 8 samples per stroke width (`ribbon.rs:602`; `decimate`,
-   `ribbon.rs:643`: runs of measured samples between anchors replaced by their middle
+5. **Centreline fit** (`fit_chain`, `ribbon.rs:695`). Chains are thinned to
+   `CHAIN_SAMPLES_PER_WIDTH` = 8 samples per stroke width (`ribbon.rs:609`; `decimate`,
+   `ribbon.rs:650`: runs of measured samples between anchors replaced by their middle
    sample with sigma `sqrt(Σσ²)/m`), then fitted by the outline fitter's MDL dynamic
    program (`inkvec_fit::multimodel`) or a whole primitive when that is cheaper, in
    parallel. A coarse fit at an eighth of the samples first declines readings whose
-   centrelines already cost `COARSE_DECLINE` = 1.25× the budget (`ribbon.rs:625`).
+   centrelines already cost `COARSE_DECLINE` = 1.25× the budget (`ribbon.rs:632`).
 6. **Stroke solve** (`refine::solve_adaptive`, `refine.rs:894`). Levenberg-Marquardt over
    every control point and the half-width against the boundary residual
    `r_p = (d(p, C) - h)/σ_p` (see the solve below), then up to `MAX_SPLITS` = 12
    (`refine.rs:857`) splits of the segment carrying the most residual, each kept only when
    the description length falls.
-7. **Score and checks** (`score::score`, `score.rs:154`; `uncovered`, `ribbon.rs:420`;
+7. **Score and checks** (`score::score`, `score.rs:154`; `uncovered`, `ribbon.rs:427`;
    `refine::drawable`, `refine.rs:1451`): the chi-squared of the strokes' painted outline
    against every boundary point, the face's interior pixels checked as painted
-   (`MAX_UNCOVERED` = 0.2% of its pixels, `ribbon.rs:413`), and no cusp (no
+   (`MAX_UNCOVERED` = 0.2% of its pixels, `ribbon.rs:420`), and no cusp (no
    micro-segment or hairpin under miter joins).
 
 Passes 3-7 run with round joins and round caps first; when the round fit leaves a point
-more than `MITER_TRIGGER` = 0.25 px out (`ribbon.rs:403`) the face is also read under miter
+more than `MITER_TRIGGER` = 0.25 px out (`ribbon.rs:410`) the face is also read under miter
 joins, and when the better reading has free ends and leaves a point more than
-`BUTT_TRIGGER` = 0.1 of the width out (`ribbon.rs:399`), under butt caps. The cheaper by
-`χ²/2 + λ·k` wins (`cheaper`, `ribbon.rs:378`).
+`BUTT_TRIGGER` = 0.1 of the width out (`ribbon.rs:406`), under butt caps. The cheaper by
+`χ²/2 + λ·k` wins (`cheaper`, `ribbon.rs:385`).
 
 ## The stroke model (`join.rs`, `score.rs`)
 
@@ -150,26 +150,30 @@ For each opaque, flat-filled, not transparent face of 16 px² to half the image:
 `k_stroke < k_vanish`, and `χ²_stroke - χ²_outline <= FIT_MARGIN_SD·sqrt(2N)` on its `N`
 boundary points, `FIT_MARGIN_SD` = 2 (`ribbons.rs:278`; `decide`, `ribbons.rs:244`): the
 strokes must fit as well as the outline within two standard deviations of a chi-squared
-statistic. The element is `<path fill="none" stroke=… stroke-width=… stroke-linecap=…
-stroke-linejoin=…>`, plus stroked `<circle>`/`<ellipse>`/`<rect>` for centrelines that are
-whole primitives (`element`, `ribbons.rs:412`).
+statistic. Each centreline is its own element, as stroke icon sets draw them: a `<path>`, or
+a stroked `<circle>`/`<ellipse>`/`<rect>` for a centreline that is a whole primitive. One
+element carries `fill="none" stroke=… stroke-width=… stroke-linecap=… stroke-linejoin=…`
+itself; several go in one `<g>` that carries them (`element`, `ribbons.rs:419`). One path
+per centreline rather than one compound path costs no numbers (a subpath's move-to is a
+path's) and keeps a reader that walks a path's points as one line from reading the pen
+lifts between strokes as turns.
 
 ## Constants
 
 | Constant | Value | Where | Why |
 |---|---|---|---|
-| `MIN_WIDTH` | 2 px | `ribbon.rs:87` | below it a stroke has no interior pixel of its own |
-| `MIN_PAIRED_SHARE` | 0.35 | `ribbon.rs:95` | lucide pairs at 81.5%; 0.5 refused `navigation-2-off` |
+| `MIN_WIDTH` | 2 px | `ribbon.rs:94` | below it a stroke has no interior pixel of its own |
+| `MIN_PAIRED_SHARE` | 0.35 | `ribbon.rs:102` | lucide pairs at 81.5%; 0.5 refused `navigation-2-off` |
 | `COS_PAIR` | 0.906 (25°) | `boundary.rs:50` | refuses caps beyond their first eighth and concave corners |
 | `SIGMA_FRAME` | 0.05 px | `boundary.rs:74` | the canvas frame is known exactly |
 | `SIGMA_JUNCTION`, `SIGMA_CAP` | 0.25, 0.15 px | `graph.rs:68`, `graph.rs:72` | rebuilt points, extrapolated |
 | `COS_CONTINUE` | 0.766 (40°) | `graph.rs:76` | sleeves continue through a junction |
-| `MITER_TRIGGER` | 0.25 px | `ribbon.rs:403` | round fits of round art sit at 0.05-0.3 px |
-| `BUTT_TRIGGER` | 0.1 w | `ribbon.rs:399` | a butt end fitted round misses by up to 0.2 w |
-| `MAX_UNCOVERED` | 0.002 | `ribbon.rs:413` | a blob read as a ring of stroke paints a hole |
-| `MAX_PRE_RMS` | 0.15 w | `ribbon.rs:448` | a blob read as a stroke starts a quarter of a width out |
-| `CHAIN_SAMPLES_PER_WIDTH` | 8 | `ribbon.rs:602` | 4 cost 5% more parameters at 512 px |
-| `COARSE_STRIDE`, `COARSE_DECLINE` | 8, 1.25 | `ribbon.rs:605`, `ribbon.rs:625` | calibrated on every reading (see the code) |
+| `MITER_TRIGGER` | 0.25 px | `ribbon.rs:410` | round fits of round art sit at 0.05-0.3 px |
+| `BUTT_TRIGGER` | 0.1 w | `ribbon.rs:406` | a butt end fitted round misses by up to 0.2 w |
+| `MAX_UNCOVERED` | 0.002 | `ribbon.rs:420` | a blob read as a ring of stroke paints a hole |
+| `MAX_PRE_RMS` | 0.15 w | `ribbon.rs:455` | a blob read as a stroke starts a quarter of a width out |
+| `CHAIN_SAMPLES_PER_WIDTH` | 8 | `ribbon.rs:609` | 4 cost 5% more parameters at 512 px |
+| `COARSE_STRIDE`, `COARSE_DECLINE` | 8, 1.25 | `ribbon.rs:612`, `ribbon.rs:632` | calibrated on every reading (see the code) |
 | `MAX_ITERS`, `TRIAL_ITERS`, `MAX_RETRIES` | 30, 8, 8 | `refine.rs:73`, `refine.rs:79`, `refine.rs:82` | |
 | `ANCHOR`, `ANCHOR_HALF` | 2 px, 0.05 | `refine.rs:87`, `refine.rs:95` | holds unseen variables; keeps a blob from shrinking to a ring |
 | `MAX_VARS` | 400 | `refine.rs:100` | |
@@ -182,10 +186,14 @@ whole primitives (`element`, `ribbons.rs:412`).
 
 ## Measured (2026-10-04, switch on, judged as the gate judges)
 
-Against v0.2.5 at 128 px: the screen set's macro dE00 0.1283 → 0.1163 and parameter ratio
-1.503 → 0.958; held_a 0.1310 → 0.1186 and 1.471 → 1.022. On lucide and openmoji at 512 px the
-stage's per-icon cost is described in the stage's commit messages and the wave report; the
-gate verdicts are in that report.
+Against v0.2.5 on the gate's screen set (246 icons), Quality: dE00 0.1283 → 0.1163 at
+128 px, 0.0482 → 0.0449 at 512 px, 0.0490 → 0.0461 at 512 px with margin; parameter ratio
+1.511 → 1.032, 1.783 → 1.248, 1.986 → 1.570. The gate's `turning` signal reads +1.3% and
++2.1% at 128 and 512 px: it reads every number in a path's data as a point, so an arc's
+radii and flags count as points; with arcs read as arcs and every subpath its own line the
+same quantity falls 4.9% and 3.5%. held_a at 128 px: dE00 0.1310 → 0.1186, parameter ratio
+1.471 → 1.022. Fast mode is unchanged (the stage does not run there). Whole trace at 512 px
+on lucide and openmoji: 1.5-1.7× v0.2.5's wall time, the stage's worst icon 2.4 s.
 
 ## Literature
 

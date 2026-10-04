@@ -1097,22 +1097,35 @@ fn an_overshoot_rim_inside_the_merge_radius_is_not_an_ink() {
 }
 
 /// The exemption goes to the first visible ink only: once one is accepted, a rare colour
-/// beside it is still rejected as rare.
+/// beside it has to be represented (`color::represent`). A 2 x 2 blue speck (4 px) is
+/// under the eight-pixel vote floor and is not an ink; a 3 x 3 blue square (9 px, 0.05 %
+/// of the canvas, far under the 0.4 % share) whose every pixel no mixture of red and the
+/// clear ground explains is one.
 #[test]
-fn a_rare_colour_beside_a_visible_ink_is_still_rare() {
+fn a_rare_colour_beside_a_visible_ink_is_an_ink_only_when_represented() {
     let n = 128;
-    let (rgb, alpha) = image(n, |x, y| {
-        if (20..80).contains(&x) && (20..80).contains(&y) {
-            (RED, 1.0)
-        } else if (100..103).contains(&x) && (100..103).contains(&y) {
-            (BLUE, 1.0)
-        } else {
-            ([0.0; 3], 0.0)
-        }
-    });
-    let pal = extract_palette(&rgb, &alpha, n, n, 0.035, 64, evidence(0.0, 1.0, 1.5));
+    let inks = |side: usize| {
+        let (rgb, alpha) = image(n, |x, y| {
+            if (20..80).contains(&x) && (20..80).contains(&y) {
+                (RED, 1.0)
+            } else if (100..100 + side).contains(&x) && (100..100 + side).contains(&y) {
+                (BLUE, 1.0)
+            } else {
+                ([0.0; 3], 0.0)
+            }
+        });
+        extract_palette(&rgb, &alpha, n, n, 0.035, 64, evidence(0.0, 1.0, 1.5))
+    };
+    let pal = inks(2);
     assert_eq!(pal.alpha.len(), 2, "{:?}", pal.rgb);
     assert!(close(pal.rgb[find(&pal, 1.0)], RED, 0.005));
+    let pal = inks(3);
+    assert_eq!(pal.alpha.len(), 3, "{:?}", pal.rgb);
+    assert!(
+        pal.rgb.iter().any(|&c| close(c, BLUE, 0.005)),
+        "{:?}",
+        pal.rgb
+    );
 }
 
 /// A small opaque pale-yellow disc (0.2 % of the canvas, so not an ink) beside a black

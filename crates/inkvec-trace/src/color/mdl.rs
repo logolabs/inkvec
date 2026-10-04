@@ -15,9 +15,9 @@ use rayon::prelude::*;
 
 use super::distinct::{side_of, Claim, ColourIds, DistinctImage, Neighbourhoods};
 use super::{
-    de00, oklab_to_rgb, rgb_to_oklab, same_ink_as_accepted, srgb_to_linear, to_hex, Oklab, Palette,
-    PaletteEvidence, BLEND_INTERIOR_FRACTION, BLEND_STRADDLE_FRACTION, BLEND_TMIN, JND_FLOOR,
-    MIN_INK_WEIGHT, PARAMS_PER_INK, STRADDLE_STEP,
+    de00, oklab_to_rgb, represent, rgb_to_oklab, same_ink_as_accepted, srgb_to_linear, to_hex,
+    Oklab, Palette, PaletteEvidence, BLEND_INTERIOR_FRACTION, BLEND_STRADDLE_FRACTION, BLEND_TMIN,
+    JND_FLOOR, MIN_INK_WEIGHT, PARAMS_PER_INK, STRADDLE_STEP,
 };
 
 /// Distinct colours per parallel task in the per-colour conversions.
@@ -132,6 +132,7 @@ pub(crate) fn extract(
         colors: Vec::new(),
         axes: InkAxes::default(),
         nearest: vec![f32::INFINITY; colours],
+        nearest_ink: vec![u32::MAX; colours],
         claim: Claim::new(colours),
         scratch: vec![0u8; colours + 1],
         paldbg: inkvec_core::env::flag("INKVEC_PALDBG"),
@@ -183,6 +184,8 @@ struct Walk<'v, 'a> {
     axes: InkAxes,
     /// Per colour, the OKLab distance to the nearest accepted ink.
     nearest: Vec<f32>,
+    /// Per colour, the index of that ink (`u32::MAX` before any is accepted).
+    nearest_ink: Vec<u32>,
     /// The current candidate's claimed colours.
     claim: Claim,
     /// One byte per colour for the straddle test.
@@ -211,9 +214,9 @@ impl Walk<'_, '_> {
         } else {
             view.img.spread(&self.claim, self.merge_distance)
         };
-        if (claim as f32 / self.total_px) < MIN_INK_WEIGHT && !self.colors.is_empty() {
-            return false;
-        }
+        // Rare: under the share an ink usually claims. It is no longer dropped here; it has
+        // to be represented instead (below, `super::represent`), after the cheaper gates.
+        let rare = (claim as f32 / self.total_px) < MIN_INK_WEIGHT && !self.colors.is_empty();
         let nearest = self
             .colors
             .iter()
@@ -243,6 +246,26 @@ impl Walk<'_, '_> {
                 return false;
             }
         }
+        if rare {
+            let votes = represent::unexplained(
+                &view.img,
+                &self.claim,
+                &self.nearest_ink,
+                |d| view.srgb[d],
+                &self.axes.srgb,
+                None,
+                represent::mixture_tolerance(sigma_noise),
+            );
+            if self.paldbg {
+                eprintln!(
+                    "  cand {:<9} rare: claim={claim} unexplained={votes}",
+                    to_hex(oklab_to_rgb(c))
+                );
+            }
+            if !represent::represented(votes, self.total_px) {
+                return false;
+            }
+        }
         // From here on `merged` means "inside the merge radius and kept only by the escape".
         let shape = BlendEvidence::measure(self, c, merged);
         if self.paldbg {
@@ -265,17 +288,37 @@ impl Walk<'_, '_> {
         !shape.is_thin_escape() && !shape.is_coverage()
     }
 
-    /// Accept `c`: lower every colour's nearest-ink distance and record the ink.
+    /// Accept `c`: lower every colour's nearest-ink distance, note which ink it now is, and
+    /// record the ink.
+    ///
+    /// `nearest[d]` moves to `dist(d, c)` only when that is strictly smaller, which is
+    /// `f32::min` exactly (a NaN distance keeps the old value either way), so the
+    /// distances are what they were before `nearest_ink` existed; a tie keeps the earlier
+    /// ink, as labelling does.
     fn accept(&mut self, c: Oklab) {
         let lab = &self.view.lab;
+        let k = self.colors.len() as u32;
+        let step = |(d, ni): (&mut f32, &mut u32), q: Oklab| {
+            let dd = q.dist(c);
+            if dd < *d {
+                *d = dd;
+                *ni = k;
+            }
+        };
         if lab.len() >= super::distinct::PAR_COLOURS {
             self.nearest
                 .par_iter_mut()
+                .zip(self.nearest_ink.par_iter_mut())
                 .zip(lab.par_iter())
-                .for_each(|(d, &q)| *d = d.min(q.dist(c)));
+                .for_each(|(dn, &q)| step(dn, q));
         } else {
-            for (d, &q) in self.nearest.iter_mut().zip(lab) {
-                *d = d.min(q.dist(c));
+            for (dn, &q) in self
+                .nearest
+                .iter_mut()
+                .zip(self.nearest_ink.iter_mut())
+                .zip(lab)
+            {
+                step(dn, q);
             }
         }
         self.axes.push(c);

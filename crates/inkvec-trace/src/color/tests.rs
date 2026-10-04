@@ -766,6 +766,60 @@ fn a_thin_colour_inside_the_merge_radius_is_not_an_ink() {
     assert!(!escape_needs_interior(true, true, 0.0));
 }
 
+/// `color::represent`: a small ink under the 0.4 % share is an ink when its pixels are not
+/// mixtures of the inks around them (a 3 x 3 green pupil in 64 x 64 red, 0.2 %), and a rare
+/// colour that *is* such a mixture is not (a one-pixel seam of the red-blue mid colour
+/// between a red and a blue half, 0.39 %).
+#[test]
+fn a_small_ink_is_kept_when_no_mixture_explains_it() {
+    let (w, h) = (64, 64);
+    let pupil: Vec<[f32; 3]> = (0..w * h)
+        .map(|p| {
+            let (x, y) = (p % w, p / w);
+            if (30..33).contains(&x) && (30..33).contains(&y) {
+                GREEN
+            } else {
+                RED
+            }
+        })
+        .collect();
+    let pal = extract_palette(&pupil, w, h, DEFAULT_MERGE_DISTANCE, 8);
+    assert_palette_is(&pal, &[RED, GREEN]);
+    // Two pixels of it are under the eight-pixel floor.
+    let speck: Vec<[f32; 3]> = (0..w * h)
+        .map(|p| {
+            if p == 30 * w + 30 || p == 30 * w + 31 {
+                GREEN
+            } else {
+                RED
+            }
+        })
+        .collect();
+    let pal = extract_palette(&speck, w, h, DEFAULT_MERGE_DISTANCE, 8);
+    assert_palette_is(&pal, &[RED]);
+    // A seam column of the red-blue mixture (in sRGB, as renderers blend), under the share:
+    // explained by its neighbours, so it is not represented.
+    let mid = [
+        (RED[0] + BLUE[0]) / 2.0,
+        (RED[1] + BLUE[1]) / 2.0,
+        (RED[2] + BLUE[2]) / 2.0,
+    ];
+    let seam: Vec<[f32; 3]> = (0..w * h)
+        .map(|p| {
+            let x = p % w;
+            if x == 32 && p / w < 16 {
+                mid
+            } else if x < 32 {
+                RED
+            } else {
+                BLUE
+            }
+        })
+        .collect();
+    let pal = extract_palette(&seam, w, h, DEFAULT_MERGE_DISTANCE, 8);
+    assert_palette_is(&pal, &[RED, BLUE]);
+}
+
 #[test]
 fn a_rare_colour_is_not_an_ink() {
     // One pixel of green in 40x40 red (0.06 % of the image, below MIN_INK_WEIGHT).

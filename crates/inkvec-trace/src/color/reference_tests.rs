@@ -11,6 +11,75 @@ use super::*;
 /// The shipped per-candidate rayon grain.
 const PAR_MIN_LEN: usize = 8192;
 
+/// [`super::represent::unexplained`], per pixel: written independently of it over the
+/// visited pixels `0, s, 2s, ...` (`s = stride_px`) of an `n`-pixel image, for both oracles.
+///
+/// A visited pixel `p` on the `w × h` grid that the candidate claims (`claimed(p)`) votes
+/// when its value is farther than `tol` from the nearest mixture of the inks around it: the
+/// ink `ink_of(q)` of each in-image 8-neighbour `q` it does not claim, the [`MIX_INKS`] most
+/// frequent first (ties to the lower ink), then `ground`. Returns votes times `s`; 0
+/// without a full grid.
+pub(crate) fn unexplained_per_pixel<const N: usize>(
+    (w, h, n, stride_px): (usize, usize, usize, usize),
+    claimed: impl Fn(usize) -> bool,
+    ink_of: impl Fn(usize) -> Option<usize>,
+    value: impl Fn(usize) -> [f32; N],
+    inks: &[[f32; N]],
+    ground: Option<[f32; N]>,
+    tol: f32,
+) -> usize {
+    use super::represent::MIX_INKS;
+    if w == 0 || h == 0 || n < w * h {
+        return 0;
+    }
+    let mut votes = 0;
+    for p in (0..w * h).step_by(stride_px.max(1)) {
+        if !claimed(p) {
+            continue;
+        }
+        let (x, y) = ((p % w) as i64, (p / w) as i64);
+        let mut tally: Vec<(usize, u32)> = Vec::new();
+        for dy in -1..=1i64 {
+            for dx in -1..=1i64 {
+                let (nx, ny) = (x + dx, y + dy);
+                if (dx == 0 && dy == 0) || nx < 0 || ny < 0 || nx >= w as i64 || ny >= h as i64 {
+                    continue;
+                }
+                let q = ny as usize * w + nx as usize;
+                if claimed(q) {
+                    continue;
+                }
+                if let Some(k) = ink_of(q) {
+                    match tally.iter_mut().find(|e| e.0 == k) {
+                        Some(e) => e.1 += 1,
+                        None => tally.push((k, 1)),
+                    }
+                }
+            }
+        }
+        tally.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        let mut cols: Vec<[f32; N]> = tally.iter().take(MIX_INKS).map(|e| inks[e.0]).collect();
+        cols.extend(ground);
+        let v = value(p);
+        let r = if cols.is_empty() {
+            f32::INFINITY
+        } else if cols.len() == 1 {
+            (0..N)
+                .map(|c| (v[c] - cols[0][c]).powi(2))
+                .sum::<f32>()
+                .sqrt()
+        } else {
+            crate::native::mixture(v, &cols).map_or(f32::INFINITY, |m| m.0)
+        };
+        // The overshoot exception is the shipped function itself, as `mixture` is: this
+        // oracle checks which pixels and which inks are asked, not the geometry.
+        if r > tol && represent::overshoot_residual(v, &cols, ground.is_some()) > tol {
+            votes += 1;
+        }
+    }
+    votes * stride_px.max(1)
+}
+
 /// What fraction of the pixels `c` would claim sit between a pixel nearer ink `a` and a
 /// pixel nearer ink `b`? See [`BLEND_STRADDLE_FRACTION`].
 ///
@@ -397,9 +466,8 @@ pub fn extract_palette_mdl(
         // answers the question asked.
         let (claim, spread) =
             claim_spread(&view.lab, &nearest_px, *c, merge_distance, view.stride_px);
-        if (claim as f32 / total_px) < MIN_INK_WEIGHT && !colors.is_empty() {
-            continue;
-        }
+        // Rare candidates must be represented (`super::represent`), checked below.
+        let rare = (claim as f32 / total_px) < MIN_INK_WEIGHT && !colors.is_empty();
         let nearest = colors
             .iter()
             .map(|&p| p.dist(*c))
@@ -455,6 +523,9 @@ pub fn extract_palette_mdl(
             if !worth_it {
                 continue;
             }
+        }
+        if rare && !represented_per_pixel(&view, *c, &colors, &nearest_px, sigma_noise) {
+            continue;
         }
         // Explained as a blend of inks already accepted *and* shaped like a boundary
         // band rather than a region: coverage evidence, not a new colour.
@@ -530,6 +601,39 @@ pub fn extract_palette_mdl(
         weight,
         alpha,
     }
+}
+
+/// Whether rare candidate `c` is represented (`super::represent`), per pixel: its
+/// unexplained claimed pixels, with each neighbour's ink the accepted ink nearest it in
+/// OKLab (ties to the earlier one), against the share floor.
+fn represented_per_pixel(
+    view: &PixelViews,
+    c: Oklab,
+    colors: &[Oklab],
+    nearest_px: &[f32],
+    sigma_noise: f64,
+) -> bool {
+    let srgb: Vec<[f32; 3]> = colors.iter().map(|&k| oklab_to_rgb(k)).collect();
+    let ink_of = |q: usize| {
+        let mut best: Option<(usize, f32)> = None;
+        for (k, &ink) in colors.iter().enumerate() {
+            let d = view.lab[q].dist(ink);
+            if best.is_none_or(|b| d < b.1) {
+                best = Some((k, d));
+            }
+        }
+        best.map(|b| b.0)
+    };
+    let votes = unexplained_per_pixel(
+        (view.width, view.height, view.lab.len(), view.stride_px),
+        |q| view.lab[q].dist(c) < nearest_px[q],
+        ink_of,
+        |q| view.px_srgb[q],
+        &srgb,
+        None,
+        represent::mixture_tolerance(sigma_noise),
+    );
+    represent::represented(votes, view.lab.len().max(1) as f32)
 }
 
 /// The image in the three colour spaces the palette's tests read, converted once.

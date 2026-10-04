@@ -254,7 +254,7 @@ mod tests {
         // but above the snap: the page and the arrow of noto-emoji/emoji_u2b05.
         let (page, arrow) = (WHITE, [0.98, 0.98, 0.98]);
         let d = de00(page, arrow);
-        assert!(d >= SNAP_DE00 && d < REP_DE00, "{d}");
+        assert!((SNAP_DE00..REP_DE00).contains(&d), "{d}");
         let pal = palette(&[WHITE, BLACK]);
         let mut fills = vec![flat(page), flat(BLACK), flat(BLACK), flat(arrow)];
         assert_eq!(

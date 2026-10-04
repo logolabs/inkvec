@@ -199,12 +199,15 @@ pub fn to_hex(rgb: [f32; 3]) -> String {
 /// them.
 pub const DEFAULT_MERGE_DISTANCE: f32 = 0.035;
 
-/// Minimum share of the image a colour must occupy to count as ink.
+/// Share of the image under which a candidate is *rare*, and has to show that it is an ink
+/// ([`represent`]) rather than being taken for one on its count.
 ///
 /// Anti-aliased pixels are individually rare: a 128px circle has a few hundred boundary
 /// pixels spread across the whole ramp, so no single blend colour accumulates much
-/// weight, while each flat region accumulates thousands. This alone removes most spurious
-/// entries; the blend test (`mdl::BlendEvidence`) removes the rest.
+/// weight, while each flat region accumulates thousands. This share alone used to decide:
+/// a rare candidate was dropped. It also dropped small inks that are nothing like a blend
+/// (pupils, a red mouth; see [`represent`]), so a rare candidate is now an ink when enough
+/// of its pixels are not explained by the inks around them.
 pub const MIN_INK_WEIGHT: f32 = 0.004;
 
 /// Below this share of its own pixels being *interior*, a colour that tests as a blend is
@@ -344,6 +347,7 @@ pub const PARAMS_PER_INK: f64 = 3.0;
 pub const SAME_INK_DE00: f32 = 1.5;
 pub(crate) mod distinct;
 mod mdl;
+pub(crate) mod represent;
 pub(crate) mod snap;
 #[cfg(test)]
 use mdl::{claim_spread, interior_fraction, straddle_fraction};
@@ -873,16 +877,20 @@ pub struct PaletteEvidence {
 /// 2. Bin in OKLab and rank the bins by pixel count (`mdl::frequency_modes`).
 /// 3. Walk the candidates in that order and accept one only if it passes every gate, in
 ///    this order (stopping once `max_colors` are accepted):
-///    * **rarity**: it would claim at least [`MIN_INK_WEIGHT`] of the image (the first
-///      ink is exempt);
 ///    * **perceptual floor**: CIEDE2000 to its nearest accepted ink is at least
 ///      `same_ink_de00` ([`same_ink_as_accepted`]);
 ///    * **separation**: its OKLab distance `d` to the nearest accepted ink exceeds
 ///      `max(merge_distance, reach)`, `reach = noise_sigmas · spread`; or, failing that,
 ///      the MDL escape `0.5 · claim · (d / σ)² > λ · PARAMS_PER_INK` with `d` above both
 ///      [`JND_FLOOR`] and `reach`;
+///    * **representation**, only for a *rare* candidate, one claiming less than
+///      [`MIN_INK_WEIGHT`] of the image (the first ink is never rare): enough of its pixels
+///      are colours no mixture or overshoot of the inks around them explains
+///      ([`represent`]);
 ///    * **not coverage**: it is not a blend of two accepted inks that is also thin and
-///      straddling (`mdl::BlendEvidence`, over the candidate's claimed set computed once).
+///      straddling (`mdl::BlendEvidence`, over the candidate's claimed set computed once);
+///    * **escape interior**: if the separation gate let it through only by the MDL escape
+///      and it is not a blend, it has an interior ([`escape_needs_interior`]).
 /// 4. Move each accepted ink to the mean of the pixels that chose it and record its share
 ///    (`mdl::refine_to_members`).
 ///

@@ -29,7 +29,7 @@
 //! | here | classic | what changes |
 //! |---|---|---|
 //! | [`trace_color`] | [`crate::trace_color_full_with_alpha`] | the stages below, plus `merge_fades` (in `native/fade.rs`) |
-//! | [`extract_palette`] | [`color::extract_palette_mdl`] | [`Ink2`] points; the clear ink is not counted against `max_colors` and does not use up the rarity exemption; a translucent candidate needs an interior |
+//! | [`extract_palette`] | [`color::extract_palette_mdl`] | [`Ink2`] points; the clear ink is not counted against `max_colors` and does not use up the rarity exemption; a translucent candidate needs an interior; the representation test measures in six coordinates with the clear ground always among the inks |
 //! | [`label_image`] | [`color::label_image`] | [`Ink2::dist`] |
 //! | `palette::frequency_modes` | `color::mdl::frequency_modes` | bins over both grounds, `u64` keys |
 //! | `palette::Walk` (claim, spread) | `color::mdl::Walk` | [`Ink2::dist`] |
@@ -283,8 +283,10 @@ fn blend_pairs(c: Ink2, accepted: &[Ink2], tol: f32, tmin: f32) -> Vec<(usize, u
 }
 
 /// [`color::extract_palette_mdl`], with every colour a two-ground point: the same
-/// frequency-ranked mode seeking, rarity floor, perceptual same-ink floor, merge radius,
-/// description-length escape and blend tests, asked over white and over grey at once.
+/// frequency-ranked mode seeking, perceptual same-ink floor, merge radius,
+/// description-length escape and its interior rule, representation test for rare
+/// candidates (`color::represent`, with the clear ground always among the inks a pixel may
+/// be a mixture of) and blend tests, asked over white and over grey at once.
 ///
 /// The clear ground comes out as an ink of its own -- white over white, grey over grey,
 /// opacity 0 -- and a translucent wash as one with its own opacity, with no alpha splitting
@@ -294,9 +296,9 @@ fn blend_pairs(c: Ink2, accepted: &[Ink2], tol: f32, tmin: f32) -> Vec<(usize, u
 ///
 /// * the clear ink (opacity ≤ [`CLEAR_INK_ALPHA`]) does not count against `max_colors`;
 ///   once the cap is full the scan continues only to find it, and stops once it is found;
-/// * nor does it use up the rarity exemption: the first ink that draws something skips
-///   the `MIN_INK_WEIGHT` gate as the first ink does, so a lone small shape on a clear
-///   canvas is an ink (see `palette::rarity_exempt`);
+/// * nor does it use up the rarity exemption: the first ink that draws something is never
+///   rare, as the first ink is not, so a lone small shape on a clear canvas is an ink
+///   without having to be represented (see `palette::rarity_exempt`);
 /// * a translucent candidate that is not a blend must have an interior (see
 ///   `palette::BlendEvidence::measure`);
 /// * there is no `INKVEC_MERGE_DE00` experiment and the same-ink floor does not print.
@@ -706,8 +708,10 @@ const CARVED_PAINT_ALPHA: f32 = 0.5;
 /// feature -- pale yellow, white paint -- is named by the clear ink whenever no light paint
 /// ink is nearer, and on this path a face's opacity is its ink's: the feature was cut out
 /// as a face and then drawn at opacity 0. The 2026-10-02 repro: a 30 px² pale-yellow disc
-/// beside a black disc on a clear 128 px canvas (too rare to be an ink itself, see
-/// `palette::rarity_exempt`) was traced to nothing.
+/// beside a black disc on a clear 128 px canvas (too rare to be an ink itself then, see
+/// `palette::rarity_exempt`; since `color::represent` a rare shape that clears the
+/// representation floor is an ink, and this naming covers what stays under it) was traced
+/// to nothing.
 ///
 /// For each minted label `l` (`from..label_ink.len()`) whose ink is clear (opacity ≤
 /// [`CLEAR_INK_ALPHA`]): take the feature's mean colour over white `W̄` and mean opacity `ā`

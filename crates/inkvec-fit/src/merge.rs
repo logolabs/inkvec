@@ -488,7 +488,7 @@ fn merge_round(
                 let seg = &path.segments[q];
                 old_params += params_of(seg);
                 if let Segment::Cubic(c1, c2, e) = *seg {
-                    old_params += crate::candidates::over_turn_params_of(cur, c1, c2, e);
+                    old_params += crate::candidates::turn::over_turn_params_of(cur, c1, c2, e);
                 }
                 let quad = match *seg {
                     Segment::Cubic(c1, c2, e) => [cur, c1, c2, e],
@@ -537,7 +537,7 @@ fn merge_round(
             }
             let new_cost = 0.5 * new_chi2
                 + floor
-                + cfg.lambda * crate::candidates::over_turn_params_of(c[0], c[1], c[2], c[3]);
+                + cfg.lambda * crate::candidates::turn::over_turn_params_of(c[0], c[1], c[2], c[3]);
             if new_cost < limit {
                 best = Some((run, c, new_cost));
                 break;

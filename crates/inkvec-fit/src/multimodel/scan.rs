@@ -264,7 +264,7 @@ struct G1Terms {
     chi2: f64,
     /// [`Cubic::wobble_penalty`], nats.
     wobble: f64,
-    /// [`crate::candidates::over_turn_params`] of its end tangents times `λ`, nats: 0 at the
+    /// [`crate::candidates::turn::over_turn_params`] of its end tangents times `λ`, nats: 0 at the
     /// default prices. Added like the wobble, after the bounds, which use the bare
     /// `cubic_floor` and so stay floors.
     turn: f64,
@@ -578,7 +578,7 @@ impl<'a> SpanScorer<'a> {
                 out.g1 = Some(G1Terms {
                     chi2,
                     wobble: cb.wobble_penalty(cfg.lambda),
-                    turn: cfg.lambda * crate::candidates::over_turn_params(t0, tj),
+                    turn: cfg.lambda * crate::candidates::turn::over_turn_params(t0, tj),
                     arms: (d0, d1),
                 });
             }
@@ -655,7 +655,7 @@ impl<'a> SpanScorer<'a> {
                 + 0.5 * f.chi2
                 + cubic_floor
                 + f.brk
-                + self.cfg.lambda * crate::candidates::over_turn_params(f.tans.0, f.tans.1);
+                + self.cfg.lambda * crate::candidates::turn::over_turn_params(f.tans.0, f.tans.1);
             if cc < c {
                 c = cc;
                 k = SegKind::Cubic;

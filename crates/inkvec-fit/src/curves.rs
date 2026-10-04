@@ -205,7 +205,7 @@ pub const PARAMS_ARC: f64 = 5.0;
 /// *ICIP 2012* 1869-1872, doi:10.1109/icip.2012.6467248, whose arc-spline description
 /// length counts what an arc's encoding needs rather than its geometric degrees of freedom.
 ///
-/// Measured on the 246-icon gate set (2026-10-04, with [`crate::candidates::CAP_TURN_DEGREES`]
+/// Measured on the 246-icon gate set (2026-10-04, with `crate::candidates::turn::CAP_TURN_DEGREES`
 /// and the parameter price `λ` scaled 0.8, against the default prices): parameter ratio
 /// -4.1 % at 128 px, -1.4 % at 512 px and 512 px opaque; dE00 -1.5 %, -0.5 %, +0.8 %, none
 /// of them resolvable; arcs written per icon 15 -> 7.4. At `λ` unscaled the ratio gain is

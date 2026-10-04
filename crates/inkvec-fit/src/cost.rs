@@ -67,7 +67,7 @@ pub struct CostModel {
     /// [`crate::curves::PARAMS_ARC_WRITTEN`] (7) under [`CostModel::with_written_arcs`].
     pub arc_params: f64,
     /// The turn, degrees, beyond which one cubic is charged as two
-    /// ([`crate::candidates::over_turn_params`]); infinite, never, unless
+    /// (`crate::candidates::turn::over_turn_params`); infinite, never, unless
     /// [`CostModel::with_written_arcs`].
     pub cubic_max_turn_degrees: f64,
 }
@@ -95,7 +95,7 @@ impl CostModel {
 
     /// These prices with a circular arc charged the seven numbers SVG writes for it
     /// ([`crate::curves::PARAMS_ARC_WRITTEN`]) and one cubic charged as two beyond
-    /// [`crate::candidates::CAP_TURN_DEGREES`] of turn (`--arcs-as-written`).
+    /// `crate::candidates::turn::CAP_TURN_DEGREES` of turn (`--arcs-as-written`).
     ///
     /// The two go together. At five numbers an arc undercuts a six-number cubic on every
     /// span where both fit, where the document and the benchmark both count it at seven, so
@@ -104,11 +104,11 @@ impl CostModel {
     /// that was two arcs becomes one cubic over 180 degrees, which the curvature-inflated
     /// sigma at the cap lets pass with a 0.1 px error at 128 px: lucide caps lost +12 % dE00
     /// in the r2-compact measurement. The second price is what stops that; see
-    /// [`crate::candidates::over_turn_params`].
+    /// `crate::candidates::turn::over_turn_params`.
     pub fn with_written_arcs(self) -> Self {
         CostModel {
             arc_params: crate::curves::PARAMS_ARC_WRITTEN,
-            cubic_max_turn_degrees: crate::candidates::CAP_TURN_DEGREES,
+            cubic_max_turn_degrees: crate::candidates::turn::CAP_TURN_DEGREES,
             ..self
         }
     }

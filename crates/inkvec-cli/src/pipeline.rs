@@ -24,6 +24,7 @@ use crate::editable;
 use crate::emit::{emit_bilevel, emit_color, ColorDoc, EmitOptions};
 use crate::faces::FaceRings;
 use crate::fast;
+use crate::mirror_fit;
 use crate::mono;
 use crate::rings::repair_ring_crossings;
 use crate::uncertainty;
@@ -374,7 +375,8 @@ fn finish_color(
 
     let measured: usize = map.edges.iter().map(|e| e.points.len()).sum();
     let fast = fast::on(args);
-    let (order, fits, repaired) = fit_and_repair(img, args, cfg, &map, &face_fill, fast, &mut sw);
+    let (order, fits, repaired) =
+        fit_and_repair(img, args, cfg, &map, &face_fill, &symmetry, fast, &mut sw);
     let Fits {
         polys,
         mut fitted,
@@ -468,16 +470,18 @@ fn gradient_count(fills: &[gradient::FillFit]) -> usize {
 /// Stages 2 and 3 with their progress and timing marks: fit every boundary, then repair
 /// crossing rings. Returns the rings of each face, the fits, and how many boundaries the
 /// repair refitted.
+#[allow(clippy::too_many_arguments)]
 fn fit_and_repair(
     img: &inkvec_trace::Rgba,
     args: &Args,
     cfg: &FitConfig,
     map: &planar::PlanarMap,
     face_fill: &[gradient::FillFit],
+    symmetry: &inkvec_trace::symmetry::Symmetry,
     fast: bool,
     sw: &mut inkvec_trace::Stopwatch,
 ) -> (Vec<FaceRings>, Fits, usize) {
-    let mut fits = fit_boundaries(img, args, cfg, map, face_fill, fast);
+    let mut fits = fit_boundaries(img, args, cfg, map, face_fill, symmetry, fast);
     sw.mark("fit_dp");
     inkvec_core::progress::begin("repair");
     report_ring_times(fits.ring_times.as_deref());
@@ -629,6 +633,11 @@ fn scaled(cfg: &FitConfig, scale: f64) -> FitConfig {
 /// where this reaches 0.09px. Each fit then competes with a whole-boundary primitive
 /// ([`prefer_primitive`]).
 ///
+/// A boundary that is its own mirror image (`symmetry.self_mirrors`) is fitted by
+/// [`mirror_fit::choose`]: its ordinary fit when that is already symmetric, else the fit of
+/// one side of the axis and its reflection, when that is no dearer. Mirror-paired
+/// boundaries are made to agree afterwards, by [`apply_mirrors`].
+///
 /// Fast mode fits nothing here: `fast::fit` turns the map's edges into paths directly.
 /// It reads neither the content-unit polylines nor the per-edge λ multipliers, so it does
 /// not build them unless `--editability` (which reads the polylines) or the research
@@ -643,6 +652,7 @@ fn fit_boundaries(
     cfg: &FitConfig,
     map: &planar::PlanarMap,
     face_fill: &[gradient::FillFit],
+    symmetry: &inkvec_trace::symmetry::Symmetry,
     fast: bool,
 ) -> Fits {
     let structural = cfg!(feature = "research") && inkvec_core::env::flag("INKVEC_STRUCTURAL");
@@ -684,7 +694,8 @@ fn fit_boundaries(
         polys
             .par_iter()
             .zip(lambda_scales.par_iter())
-            .map(|(poly, &scale)| {
+            .enumerate()
+            .map(|(k, (poly, &scale))| {
                 // A cancelled trace stops at the next boundary; the count moves as each
                 // one is finished.
                 live.check();
@@ -700,7 +711,19 @@ fn fit_boundaries(
                     let t_ring = inkvec_core::clock::Instant::now();
                     // Scoped, so the dynamic program itself can stop a trace nobody wants in
                     // the middle of a boundary of thousands of points.
-                    let curve = live.scoped(|| multimodel::optimal_multimodel(&poly, &cfg_k));
+                    // A boundary that is its own mirror image keeps its ordinary fit when
+                    // that is symmetric, else is fitted on one side of the axis and
+                    // reflected when that is no dearer (`mirror_fit::choose`); the rest as
+                    // before.
+                    let plain = |p: &inkvec_core::Polyline| {
+                        live.scoped(|| multimodel::optimal_multimodel(p, &cfg_k))
+                    };
+                    let mirrors = symmetry.self_mirrors(k);
+                    let curve = if mirrors.is_empty() {
+                        plain(&poly)
+                    } else {
+                        mirror_fit::choose(&poly, &mirrors, &cfg_k, &plain)
+                    };
                     if ring_timing {
                         ring_times
                             .lock()

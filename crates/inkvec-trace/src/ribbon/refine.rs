@@ -1056,6 +1056,44 @@ fn profile(model: &Model) -> Vec<usize> {
     first
 }
 
+/// Most entries a Jacobian row can hold: the half-width, and two segments' variables
+/// (a miter gauge reads a vertex's two segments: two start points, two cubics' handles
+/// and ends, two radii) -- at most 1 + 2·(2 + 6 + 1) = 19.
+const ROW_CAP: usize = 20;
+
+/// One residual's Jacobian entries, `(variable, ∂r/∂θ)`, in a fixed array so the
+/// thousands of rows of a measurement allocate nothing.
+#[derive(Clone, Copy)]
+struct JacRow {
+    /// Entries in use.
+    n: usize,
+    /// The entries; the first `n` are meaningful.
+    e: [(usize, f64); ROW_CAP],
+}
+
+impl JacRow {
+    /// A row holding `(i, v)` alone.
+    fn with(i: usize, v: f64) -> JacRow {
+        let mut r = JacRow {
+            n: 0,
+            e: [(0, 0.0); ROW_CAP],
+        };
+        r.push(i, v);
+        r
+    }
+
+    /// Append `(i, v)`.
+    fn push(&mut self, i: usize, v: f64) {
+        self.e[self.n] = (i, v);
+        self.n += 1;
+    }
+
+    /// The entries in use.
+    fn entries(&self) -> &[(usize, f64)] {
+        &self.e[..self.n]
+    }
+}
+
 /// The derivatives of row (`shape`, `seg`)'s distance term at boundary point `p` with
 /// respect to the variables it reads, in closed form ([`super::dist`]'s gradients, by the
 /// envelope theorem), appended to `out` as `(variable, ∂d/∂θ)` with every variable once.
@@ -1072,13 +1110,17 @@ fn analytic_row(
     seg: usize,
     p: Point,
     t_hint: f64,
-    out: &mut Vec<(usize, f64)>,
+    out: &mut JacRow,
 ) -> bool {
     let t = &model.theta;
-    let mut g: Vec<(usize, f64)> = Vec::with_capacity(9);
-    let put = |g: &mut Vec<(usize, f64)>, i: usize, v: Vec2| {
-        g.push((i, v.x));
-        g.push((i + 1, v.y));
+    // At most four points' two coordinates and a radius.
+    let mut g = JacRow {
+        n: 0,
+        e: [(0, 0.0); ROW_CAP],
+    };
+    let put = |g: &mut JacRow, i: usize, v: Vec2| {
+        g.push(i, v.x);
+        g.push(i + 1, v.y);
     };
     match &model.shapes[shape] {
         Shape::Path { start, segs, .. } => {
@@ -1118,7 +1160,7 @@ fn analytic_row(
                     };
                     put(&mut g, a_i, d[0]);
                     put(&mut g, end, d[1]);
-                    g.push((ri, dr));
+                    g.push(ri, dr);
                 }
                 SegVar::Arc {
                     end,
@@ -1150,15 +1192,24 @@ fn analytic_row(
                 return false;
             };
             put(&mut g, *at, dc);
-            g.push((at + 2, dr));
+            g.push(at + 2, dr);
         }
         Shape::Fixed(_) => return false,
     }
-    g.sort_by_key(|e| e.0);
-    for (i, v) in g {
-        match out.last_mut() {
+    // A stable insertion sort by variable (as `sort_by_key` was): a variable entered
+    // twice -- a one-segment loop's start and end -- keeps its two terms in entry order.
+    let e = &mut g.e[..g.n];
+    for k in 1..e.len() {
+        let mut j = k;
+        while j > 0 && e[j - 1].0 > e[j].0 {
+            e.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    for &(i, v) in g.entries() {
+        match out.n.checked_sub(1).map(|l| &mut out.e[l]) {
             Some(last) if last.0 == i => last.1 += v,
-            _ => out.push((i, v)),
+            _ => out.push(i, v),
         }
     }
     true
@@ -1192,7 +1243,7 @@ fn normal_equations(
     // they are computed in parallel (each worker on its own copy of the model, which the
     // central differences perturb and restore exactly); the products are then added into
     // `JᵀJ` and `Jᵀr` in row order, as before, so every sum is the sequential one.
-    let jacs: Vec<Option<(f64, Vec<(usize, f64)>)>> = rws
+    let jacs: Vec<Option<(f64, JacRow)>> = rws
         .par_iter()
         .enumerate()
         .map_init(
@@ -1203,7 +1254,7 @@ fn normal_equations(
                 if !active {
                     return None;
                 }
-                let mut jac: Vec<(usize, f64)> = vec![(hi, -1.0 / s)];
+                let mut jac = JacRow::with(hi, -1.0 / s);
                 if row.seg != usize::MAX {
                     // Under round joins every row reads one segment's plain distance; under
                     // miter joins a row whose foot is a vertex reads the gauge of two
@@ -1215,7 +1266,7 @@ fn normal_equations(
                     if with.is_none()
                         && analytic_row(m, row.shape, row.seg, b.pts[i], row.t, &mut jac)
                     {
-                        for e in jac.iter_mut().skip(1) {
+                        for e in jac.e[1..jac.n].iter_mut() {
                             e.1 /= s;
                         }
                     } else {
@@ -1226,7 +1277,7 @@ fn normal_equations(
                             m.theta[v] = x - eps;
                             let dm = local_dist(m, row.shape, row.seg, b.pts[i], row.t);
                             m.theta[v] = x;
-                            jac.push((v, (dp - dm) / (2.0 * eps * s)));
+                            jac.push(v, (dp - dm) / (2.0 * eps * s));
                         }
                     }
                 }
@@ -1235,9 +1286,10 @@ fn normal_equations(
         )
         .collect();
     for (r, jac) in jacs.into_iter().flatten() {
-        for &(u, ju) in &jac {
+        let jac = jac.entries();
+        for &(u, ju) in jac {
             atr[u] += ju * r;
-            for &(v, jv) in &jac {
+            for &(v, jv) in jac {
                 if v <= u {
                     ata.add(u, v, ju * jv);
                 }

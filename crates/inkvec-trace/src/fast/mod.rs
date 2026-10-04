@@ -79,7 +79,7 @@ pub struct FastFit {
     pub vertex_box: f64,
     /// A vertex is a corner when the smoothed curve misses the points around it by more
     /// than this, and the two sides through the vertex miss them by much less: Potrace's
-    /// `alphamax`, as a distance.
+    /// `alphamax`, as a distance. See [`CORNER_TOL`] for the default.
     pub corner_tol: f64,
     /// How far a merged cubic may stray from the pieces it replaces (Potrace's
     /// `opttolerance`).
@@ -88,12 +88,37 @@ pub struct FastFit {
     pub flat: f64,
 }
 
+/// The default corner threshold, in px: a vertex whose smoothing cubic misses the points
+/// around it by more than this (and by more than twice what the two sides through the
+/// vertex miss them by) is drawn as a corner, two lines, instead of a cubic.
+///
+/// Was 0.25 px. Lowered after the r2-fastq study (2026-10-02), which swept it with
+/// everything else in Fast fixed and found slack on both axes: at 0.1 px the 246-icon
+/// screen set at 128 px read dE00 0.3640 → 0.3586 (−1.5 %) and parameters per artist's
+/// parameter 2.120 → 2.032 (−4.2 %), share within 1.5× the artist's count 58.5 → 60.2 %;
+/// held_a (156 icons) −1.7 % and −4.4 %. The curve saturates by 0.05 px. A corner is two
+/// lines, 4 parameters, where the smoothing cubic it replaces is 6; on drawn icons the
+/// corner is what the artist drew, so the shorter description is also the closer one. No
+/// measurable time: the test reads the same two errors either way.
+///
+/// Inspired by: P. Selinger (2003), "Potrace: a polygon-based tracing algorithm",
+/// <https://potrace.sourceforge.net/potrace.pdf>, section 2.3.2: a vertex is a corner
+/// when the smoothing curve would need `alpha > alphamax` (default 1.0). Our test is the
+/// same decision restated as a distance between the smoothing cubic and the measured
+/// points (Potrace has no sub-pixel points to compare with), so its threshold is set by
+/// measurement on our sets, not taken from the paper. See also: S. Hoshyari, E. A.
+/// Dominici, A. Sheffer, N. Carr, D. Ceylan, Z. Wang, I-C. Shen (2018), "Perception-driven
+/// semi-structured boundary vectorization", ACM Transactions on Graphics (SIGGRAPH 2018),
+/// <https://doi.org/10.1145/3197517.3201312>, where corners are found jointly with the
+/// spline fit by a learned perceptual metric; not used, because Fast must stay one pass.
+pub const CORNER_TOL: f64 = 0.1;
+
 impl Default for FastFit {
     fn default() -> Self {
         Self {
             poly_tol: 0.5,
             vertex_box: 0.5,
-            corner_tol: 0.25,
+            corner_tol: CORNER_TOL,
             opt_tol: 0.2,
             flat: 0.05,
         }

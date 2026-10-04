@@ -590,6 +590,26 @@ pub fn optimise_alpha(
     optimise_alpha_capped(map, rgb, face, budget_ms, alpha, None)
 }
 
+/// The solve as the colour trace runs it (`crate::finish_color_trace_alpha`): always in
+/// Quality, in Fast only when `opts.boundary_iters` caps it (the command line's `balanced`
+/// mode), never with `INKVEC_BOPT=0`; then [`optimise_alpha_capped`] with the wall-clock
+/// budget `opts.boundary_ms` and the cap `opts.boundary_iters`. `None` when it did not run or
+/// gained nothing. Lives here, not in the crate root, to keep that file's length in budget.
+pub(crate) fn optimise_for(
+    map: &mut PlanarMap,
+    rgb: &[[f32; 3]],
+    face: &[FillModel],
+    opts: &crate::ColorOptions,
+    alpha: Option<(&[f32], &[f32])>,
+) -> Option<Report> {
+    let wanted = !opts.fast || opts.boundary_iters.is_some();
+    if !wanted || !inkvec_core::env::switch("INKVEC_BOPT", true) {
+        return None;
+    }
+    let (budget, cap) = (opts.boundary_ms, opts.boundary_iters);
+    optimise_alpha_capped(map, rgb, face, budget, alpha, cap)
+}
+
 /// [`optimise_alpha`] with the descent stopped after at most `max_iters` iterations per
 /// independent part of the boundary (`None`: the solver's own ceiling, which is exactly
 /// [`optimise_alpha`]). Everything else -- the band, the stopping tests, the fold guard --

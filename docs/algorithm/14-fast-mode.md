@@ -25,8 +25,8 @@ fits the result with `fast::fit` (`crates/inkvec-cli/src/fast.rs:98-117`), which
 `inkvec_trace::fast::fit_edges` (`fast/mod.rs:380-427`) with the map's width and height.
 **Pipeline position:** it replaces stages 03–05 (palette, regions, gradients) with its own
 front end; shares stages 01, 06, 07, 10 and 13; skips 08 (the boundary solve,
-`lib.rs:1144`, `solve_boundary` at `:1195-1211`; balanced runs it, capped at eight iterations, §8) and 09 (decode,
-`lib.rs:1155`); and replaces 11 (curve fitting) with its own
+`lib.rs:1165`, `boundary_opt::optimise_for` at `boundary_opt.rs:593-611`; balanced runs it,
+capped at eight iterations, §8) and 09 (decode, `lib.rs:1176`); and replaces 11 (curve fitting) with its own
 fitter, without 12 (repair) or shape harmonization (`repair_fits`,
 `crates/inkvec-cli/src/pipeline.rs:869`; `emit_options`, `pipeline.rs:518-529`).
 
@@ -976,12 +976,13 @@ for 15 % more engine time than 4; 16 buys another 2 points of dE00 and 3 of turn
 24 %. The cap is 8 (`48b0d05`).
 
 **Plumbing.** The cap is a parameter at the solve's call boundary, so the solve itself is
-untouched: `boundary_opt::optimise_alpha_capped` (`crates/inkvec-trace/src/boundary_opt.rs:593-614`)
+untouched: `boundary_opt::optimise_alpha_capped` (`crates/inkvec-trace/src/boundary_opt.rs:613-634`)
 is `optimise_alpha` with `max_iters`, which `lbfgs::descend` clamps to its own ceiling and hands
 to the per-part loop (`boundary_opt/lbfgs.rs:156-171`, `:238`); `None` is `optimise_alpha` bit for
 bit (`boundary_opt/cap_tests.rs`). `ColorOptions::boundary_iters`
-(`crates/inkvec-trace/src/lib.rs:200-203`) carries it: `None` leaves Quality uncapped and Fast
-without a solve, `Some(n)` runs the solve in either mode (`solve_boundary`, `lib.rs:1218-1234`, called at `:1167`). The command line
+(`crates/inkvec-trace/src/lib.rs:199-201`) carries it: `None` leaves Quality uncapped and Fast
+without a solve, `Some(n)` runs the solve in either mode (`boundary_opt::optimise_for`, `boundary_opt.rs:593-611`, called at
+`crates/inkvec-trace/src/lib.rs:1165`). The command line
 sets it from `fast::solve_iters` and picks the fitter's tolerances with `fit_config`, both from
 the one test `fast::balanced` on the traced raster's size (`fast.rs:90-113`).
 
@@ -1084,7 +1085,7 @@ more per iteration (2.08× / 2.83× at cap 4).
   <https://ojs.aaai.org/aimagazine/index.php/aimagazine/article/view/1232>: anytime modules
   composed under a budget chosen from their measured performance profiles; here the budget is
   fixed per mode and counted in iterations, so the output does not depend on the machine
-  (`fast.rs:1-53`, `boundary_opt.rs:593-606`); "See also" M. Yang, H. Chao, C. Zhang, J. Guo,
+  (`fast.rs:1-53`, `boundary_opt.rs:613-626`); "See also" M. Yang, H. Chao, C. Zhang, J. Guo,
   L. Yuan, J. Sun (2016), "Effective clipart image vectorization through direct optimization
   of bezigons", IEEE TVCG 22(2), <https://arxiv.org/abs/1602.01913>, a crude partition refined
   by optimisation against the image, which is this mode's shape;

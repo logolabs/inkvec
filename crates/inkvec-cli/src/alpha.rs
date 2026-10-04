@@ -320,7 +320,7 @@ fn solve3x3(m: [[f64; 3]; 3], r: [f64; 3]) -> Option<[f64; 3]> {
 mod unblock;
 pub(crate) use unblock::pixel_grid;
 #[cfg(test)]
-use unblock::{PixelGrid, MIN_SOURCE, MIN_SOURCE_LONG};
+use unblock::PixelGrid;
 
 /// Share of the artwork a candidate matte may hide before it is rejected.
 ///

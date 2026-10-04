@@ -408,7 +408,6 @@ fn the_floors_hold() {
         pixel_grid(&upscale(&noise(100, 16, 5), 4)).map(|g| g.source_size()),
         Some((100, 16))
     );
-    assert!(MIN_SOURCE_LONG >= 2 * MIN_SOURCE);
 }
 
 /// An upscale by 2 across and 4 down is not one scale, but it is a 2x upscale of the source

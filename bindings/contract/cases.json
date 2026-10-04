@@ -13,12 +13,12 @@
       },
       "svg": {
         "x86_64-windows-msvc": {
-          "bytes": 8865,
-          "sha256": "a999e7c727b011d4a45ebfd77add68d2520fa713078654e7da79cfaae15444a9"
+          "bytes": 8712,
+          "sha256": "34c515237c38c41b59257c87dbee986f8a9f4bcd165829fccdec6abad5721580"
         },
         "x86_64-linux-gnu": {
-          "bytes": 8865,
-          "sha256": "13bb9ec59914f17fd7d6f2542c97240b4e33c68f5d400416929a54903eb479d7"
+          "bytes": 8712,
+          "sha256": "5ef6562b8918f560422b532aeb3e32c0fb043b61893e40cfa3e7b1e831fb4e93"
         }
       }
     },
@@ -36,12 +36,12 @@
       },
       "svg": {
         "x86_64-windows-msvc": {
-          "bytes": 8865,
-          "sha256": "a999e7c727b011d4a45ebfd77add68d2520fa713078654e7da79cfaae15444a9"
+          "bytes": 8712,
+          "sha256": "34c515237c38c41b59257c87dbee986f8a9f4bcd165829fccdec6abad5721580"
         },
         "x86_64-linux-gnu": {
-          "bytes": 8865,
-          "sha256": "13bb9ec59914f17fd7d6f2542c97240b4e33c68f5d400416929a54903eb479d7"
+          "bytes": 8712,
+          "sha256": "5ef6562b8918f560422b532aeb3e32c0fb043b61893e40cfa3e7b1e831fb4e93"
         }
       }
     },
@@ -61,12 +61,12 @@
       },
       "svg": {
         "x86_64-windows-msvc": {
-          "bytes": 5599,
-          "sha256": "f904f322f96ae166ccc26357369f7acb4b116bc325a6fb9f48953337b8e187b5"
+          "bytes": 5646,
+          "sha256": "1cb663fd37f02d671c25789b18c2d5e901729a921269d6336b4b5ab53f2d98f6"
         },
         "x86_64-linux-gnu": {
-          "bytes": 5609,
-          "sha256": "6b1391e133a895354e96808145a6e5da136b70c1cf5014d58f39b1b4ab3f87db"
+          "bytes": 5645,
+          "sha256": "0fd3e5def7c7d09aa38a94288fb0f3a9d00b6f84682f24e8b63a481ac9ca5eab"
         }
       }
     },
@@ -83,12 +83,12 @@
       },
       "svg": {
         "x86_64-windows-msvc": {
-          "bytes": 8885,
-          "sha256": "21a44848a668bcdb6588ceb5fb68df54ad2a77e30536faf415fde82ab6571bec"
+          "bytes": 8732,
+          "sha256": "e168449eecc399fc32e1f087aac591c6351bdd30f0794f106315c5eea1dce0d8"
         },
         "x86_64-linux-gnu": {
-          "bytes": 8885,
-          "sha256": "e51e342de073f7f566844dce38476a1e46eb3eafa70827fdec3f6eb7344dcfe3"
+          "bytes": 8732,
+          "sha256": "731f8fab67e80543afdc55a3803533b0caee5a491788c9a56d19549ca057c6de"
         }
       }
     },
@@ -105,12 +105,12 @@
       },
       "svg": {
         "x86_64-windows-msvc": {
-          "bytes": 2992,
-          "sha256": "13b96f99f10cbbe27267fad37b9704a49edd3d56d57b95f04951520ce3b74dd2"
+          "bytes": 3209,
+          "sha256": "359db619539fcd91975912ecc45e4fd6ecdeff3f9eb3853754c21df2e52a9f34"
         },
         "x86_64-linux-gnu": {
-          "bytes": 2992,
-          "sha256": "41f2d644aad9a6f9d3c52c590f6578179f2f5687454d5b92bbd411ea5d786c32"
+          "bytes": 3209,
+          "sha256": "f61cdaefb7ca8e5f83d3a4c1a664d76856865175d62ba36a142ffa69bac89df2"
         }
       }
     },
@@ -130,12 +130,12 @@
       },
       "svg": {
         "x86_64-windows-msvc": {
-          "bytes": 2992,
-          "sha256": "13b96f99f10cbbe27267fad37b9704a49edd3d56d57b95f04951520ce3b74dd2"
+          "bytes": 3209,
+          "sha256": "359db619539fcd91975912ecc45e4fd6ecdeff3f9eb3853754c21df2e52a9f34"
         },
         "x86_64-linux-gnu": {
-          "bytes": 2992,
-          "sha256": "41f2d644aad9a6f9d3c52c590f6578179f2f5687454d5b92bbd411ea5d786c32"
+          "bytes": 3209,
+          "sha256": "f61cdaefb7ca8e5f83d3a4c1a664d76856865175d62ba36a142ffa69bac89df2"
         }
       }
     },
@@ -153,12 +153,12 @@
       },
       "svg": {
         "x86_64-windows-msvc": {
-          "bytes": 3008,
-          "sha256": "22a1ae6330222fc3a8fdc2fbbe3ca557bd603e7485378ef266e9101e5c0fd915"
+          "bytes": 3225,
+          "sha256": "816bb0d02055b53249d548ae37f9ad8223ba7b3066be8340af3847bc0a1dcbb3"
         },
         "x86_64-linux-gnu": {
-          "bytes": 3008,
-          "sha256": "5f9b3e53b42a64097c47b83df1849423e483e81571002ecff2df676093a7a707"
+          "bytes": 3225,
+          "sha256": "2a89c4c430749fae6401f276871cf376e9ead1699a3d38ca110431f41fdd7cad"
         }
       }
     },

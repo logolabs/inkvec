@@ -7,6 +7,13 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+### Changed
+
+- **Quality mode's palette matches the artist's more often.** On the regression gate, dE00 is −2.0 % at 128 px and −1.4 % at 512 px. The 512 px opaque condition and Fast mode are unchanged.
+  - **One ink stays one colour on upscaled input.** A resampling filter's overshoot rim around a shape was admitted as a second, slightly brighter ink. Such an ink now needs an interior of its own. On the gold crest sample, three golds and notched dots become one gold and 14 clean circles, and the file is 64 % smaller.
+  - **Flat fills of one ink are written as one colour.** A flat face within 0.5 dE00 of its ink's best-evidenced face takes that face's colour. On upscaled input, duplicate fills fall by half.
+  - **A rare colour is kept when the image needs it.** A rare candidate becomes an ink when enough of its pixels cannot be explained as a mix of the inks around it, after Aksoy et al. 2017. Before, admission depended on the colour's share of the whole image.
+
 ## [0.2.5] - 2026-10-03
 
 ### Changed

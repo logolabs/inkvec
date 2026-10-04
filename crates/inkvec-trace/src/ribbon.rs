@@ -62,6 +62,7 @@
 
 mod boundary;
 mod bvh;
+mod chordal;
 mod dist;
 mod graph;
 mod grid;
@@ -429,11 +430,13 @@ fn hypothesis(face: &Face, cfg: &FitConfig, budget: f64, join: Join) -> Result<R
     // tight turns in round line art are arcs of about the half-width), then with them,
     // for drawings whose sharp corners leave a gap of samples long against the arms
     // (lucide `circle-arrow-right` at 512 px: w 42.7 px, a chevron of 85 px arms, read
-    // tip to tip without its apex at rms 39 px).
+    // tip to tip without its apex at rms 39 px), then on the chordal axis, for strokes
+    // whose raster skeleton has the wrong topology altogether.
     let readings = match join {
         Join::Round => vec![
             graph::TopoOptions::round(),
             graph::TopoOptions::round_cornered(),
+            graph::TopoOptions::chordal_cornered(w0),
         ],
         Join::Miter => vec![graph::TopoOptions::miter(w0)],
     };

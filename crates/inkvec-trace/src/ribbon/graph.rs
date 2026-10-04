@@ -6,7 +6,9 @@
 //! 1. **Skeleton** ([`skeleton`]). Zhang-Suen thinning of the face's pixel mask, reduced to
 //!    a graph of branches between nodes (degree 1: a free end; degree 3 or more: a
 //!    junction), with the existing [`crate::centerline`] machinery. The skeleton is only
-//!    trusted for *topology*: which pixels are joined to which.
+//!    trusted for *topology*: which pixels are joined to which. One reading takes the
+//!    chordal axis of the measured boundary instead ([`super::chordal`],
+//!    [`TopoOptions::chordal_cornered`]), for strokes too thick for thinning.
 //! 2. **Cross-sections** ([`cross_section`]). Every skeleton pixel is replaced by a centre
 //!    sample read off the solved boundary: the nearest boundary point, then a walk along
 //!    its inward normal to the other side ([`Boundary::across`]). The midpoint is the
@@ -97,6 +99,9 @@ pub(crate) struct TopoOptions {
     /// A branch with one free end and less core than this, px, is a spur and dropped
     /// ([`classify`]); 0 drops only branches with no core at all.
     pub(crate) spur_len: f64,
+    /// Read the topology from the chordal axis ([`super::chordal`]) instead of the
+    /// raster skeleton.
+    pub(crate) chordal: bool,
 }
 
 impl TopoOptions {
@@ -107,6 +112,7 @@ impl TopoOptions {
         TopoOptions {
             corner_sigma: 0.0,
             spur_len: 0.0,
+            chordal: false,
         }
     }
 
@@ -117,6 +123,25 @@ impl TopoOptions {
         TopoOptions {
             corner_sigma: 0.1,
             spur_len: 0.0,
+            chordal: false,
+        }
+    }
+
+    /// Round joins with rebuilt corners, on the chordal axis: the last reading, for faces
+    /// whose raster skeleton has the wrong topology -- strokes thick against their own
+    /// length, whose short arms thinning erodes (lucide `list-checks` at 512 px: a 42.7 px
+    /// stroke on arms of 60 and 121 px reads as a stub on a short line, and the check
+    /// mark's V is lost). Branches with a free end and under half a width of core are
+    /// dropped, as under miter joins: the chordal axis sends a short branch into every
+    /// ear of the outline (a triangle with two boundary sides at a convex corner or on a
+    /// round join's outer arc), and the cross-sections there read as sleeve, so these
+    /// spurs carry a pixel or two of core where the raster skeleton's had none.
+    /// Prasad (2005, cited in [`super::chordal`]) rectifies the same spurs.
+    pub(crate) fn chordal_cornered(w: f64) -> TopoOptions {
+        TopoOptions {
+            corner_sigma: 0.1,
+            spur_len: 0.5 * w,
+            chordal: true,
         }
     }
 
@@ -127,6 +152,7 @@ impl TopoOptions {
         TopoOptions {
             corner_sigma: 0.1,
             spur_len: 0.5 * w,
+            chordal: false,
         }
     }
 }
@@ -210,12 +236,19 @@ pub(crate) fn centrelines(
     w: f64,
     opts: TopoOptions,
 ) -> Topology {
-    let (axis, samples) = (&m.axis, &m.samples);
     let mut topo = Topology {
         chains: Vec::new(),
         junctions: 0,
         caps: 0,
         dropped: 0,
+    };
+    let (axis, samples) = if opts.chordal {
+        match m.chordal(b, w) {
+            Some(x) => x,
+            None => return topo,
+        }
+    } else {
+        (&m.axis, m.samples.as_slice())
     };
     if axis.len() == 0 {
         return topo;
@@ -235,6 +268,30 @@ pub(crate) struct Medial {
     /// The centre sample at each node, or `None` where the cross-section is not a
     /// stroke's ([`cross_section`]).
     samples: Vec<Option<Sample>>,
+    /// The chordal axis and its samples, built the first time a reading asks for them
+    /// ([`Medial::chordal`]); `None` inside when the triangulation failed.
+    chordal: std::cell::OnceCell<Option<(Axis, Vec<Option<Sample>>)>>,
+}
+
+impl Medial {
+    /// The chordal axis of the face with boundary `b` ([`super::chordal::axis`]) and its
+    /// centre samples at stroke width `w` px, built once; `None` when the constrained
+    /// triangulation could not be built (the raster skeleton's readings stand).
+    fn chordal(&self, b: &Boundary, w: f64) -> Option<(&Axis, &[Option<Sample>])> {
+        self.chordal
+            .get_or_init(|| {
+                let (pts, g, branches) = super::chordal::axis(b)?;
+                let axis = Axis { g, pts, branches };
+                let samples = axis
+                    .pts
+                    .par_iter()
+                    .map(|&p| cross_section(b, p, w))
+                    .collect();
+                Some((axis, samples))
+            })
+            .as_ref()
+            .map(|(a, s)| (a, s.as_slice()))
+    }
 }
 
 /// The medial graph of the face with pixel `mask` and boundary `b`, and its centre
@@ -248,7 +305,11 @@ pub(crate) fn medial(b: &Boundary, mask: &FaceMask, w: f64) -> Medial {
         .par_iter()
         .map(|&p| cross_section(b, p, w))
         .collect();
-    Medial { axis, samples }
+    Medial {
+        axis,
+        samples,
+        chordal: std::cell::OnceCell::new(),
+    }
 }
 
 /// The face mask thinned (Zhang-Suen) and split into branches between nodes, each

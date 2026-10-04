@@ -46,6 +46,7 @@
 
 mod alpha;
 mod args;
+mod border;
 mod diag;
 mod editable;
 mod emit;
@@ -634,8 +635,28 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
         (display_w, display_h)
     };
 
+    // Art that reaches the border of a transparent raster is traced on a canvas `PAD` px
+    // larger on every side and moved back afterwards (see `border`): the colour tracer fits
+    // a boundary that ends on the image frame worse than the closed outline it becomes with
+    // room round it. Quality colour mode only; when the traced document holds anything
+    // `border::crop` cannot translate, the raster is traced again as it is.
     let (w, h) = (img.width, img.height);
-    let (svg, mut stats, lambda) = trace_matted(img, args, None)?;
+    let (svg, mut stats, lambda) = if border_pad_applies(args) && border::touches_border(&img) {
+        let padded = border::pad(&img);
+        diag::stage(args.quiet, || {
+            format!(
+                "  border        art touches the canvas edge; traced with a {} px transparent margin",
+                border::PAD
+            )
+        });
+        let (svg, stats, lambda) = trace_matted(padded, args, Some(w.max(h)))?;
+        match border::crop(&svg, w, h) {
+            Some(svg) => (svg, stats, lambda),
+            None => trace_matted(img, args, None)?,
+        }
+    } else {
+        trace_matted(img, args, None)?
+    };
     if let Some(n) = sr_note {
         stats.insert(0, n);
     }
@@ -656,13 +677,26 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
     })
 }
 
+/// Whether the border pad (`border`) may be used under these settings: the Quality colour
+/// pipeline with none of the outputs that carry coordinates outside the document
+/// (`--uncertainty`'s bands) or in a symbol's own frame (`--use-symbols`). Fast mode, the
+/// bilevel, stroke and monochrome writers trace as they always did.
+fn border_pad_applies(args: &Args) -> bool {
+    args.mode == TraceMode::Quality
+        && !args.bilevel
+        && !args.strokes
+        && !args.monochrome
+        && !args.use_symbols
+        && args.uncertainty.is_none()
+}
+
 /// The tail of [`trace_prepared_priced`] on one raster: the alpha matte, the fit
 /// configuration and one pipeline. Returns the document, its report lines and the fit's
 /// lambda.
 ///
 /// `extent`, when given, is the longest side the fit configuration is priced for instead of
-/// the raster's own: the original raster's, when `img` is that raster embedded in a larger
-/// canvas, so the price of a coordinate (`ln(extent / precision)`) does not move.
+/// the raster's own: the original raster's, when `img` is that raster on a padded canvas
+/// (`border`), so the price of a coordinate (`ln(extent / precision)`) does not move.
 fn trace_matted(
     img: inkvec_trace::Rgba,
     args: &Args,

@@ -60,7 +60,8 @@
 //!
 //! # Where this sits, and how it is solved
 //!
-//! Quality mode only: the crate root's trace calls [`optimise_alpha`] after
+//! Quality mode, and Fast's `balanced` mode capped by iterations ([`optimise_alpha_capped`]):
+//! the crate root's trace calls it after
 //! `planar::refine_subpixel_alpha` and `planar::refine_junctions`, and before symmetry is
 //! re-imposed and the edges go to the fitter. It takes the [`PlanarMap`], the source image
 //! (sRGB `0..1`, row-major) and each face's fill model, and moves the map's points in
@@ -73,7 +74,8 @@
 //! step moves no point more than `MAX_STEP`, every point stays within `MAX_TOTAL` of where
 //! the measurement put it, and points on the image frame only slide along it. A group stops
 //! on the projected gradient or the relative decrease of the energy, both measured against
-//! the whole problem at the start, after 64 iterations, when no step of sufficient decrease
+//! the whole problem at the start, after 64 iterations (or the caller's lower cap,
+//! [`optimise_alpha_capped`]), when no step of sufficient decrease
 //! is found, or when the caller's time budget runs out; never on the length of a step.
 //! Nothing is linearised: each trial re-renders the exact coverage.
 //!
@@ -585,6 +587,51 @@ pub fn optimise_alpha(
     budget_ms: Option<u64>,
     alpha: Option<(&[f32], &[f32])>,
 ) -> Option<Report> {
+    optimise_alpha_capped(map, rgb, face, budget_ms, alpha, None)
+}
+
+/// The solve as the colour trace runs it (`crate::finish_color_trace_alpha`): always in
+/// Quality, in Fast only when `opts.boundary_iters` caps it (the command line's `balanced`
+/// mode), never with `INKVEC_BOPT=0`; then [`optimise_alpha_capped`] with the wall-clock
+/// budget `opts.boundary_ms` and the cap `opts.boundary_iters`. `None` when it did not run or
+/// gained nothing. Lives here, not in the crate root, to keep that file's length in budget.
+pub(crate) fn optimise_for(
+    map: &mut PlanarMap,
+    rgb: &[[f32; 3]],
+    face: &[FillModel],
+    opts: &crate::ColorOptions,
+    alpha: Option<(&[f32], &[f32])>,
+) -> Option<Report> {
+    let wanted = !opts.fast || opts.boundary_iters.is_some();
+    if !wanted || !inkvec_core::env::switch("INKVEC_BOPT", true) {
+        return None;
+    }
+    let (budget, cap) = (opts.boundary_ms, opts.boundary_iters);
+    optimise_alpha_capped(map, rgb, face, budget, alpha, cap)
+}
+
+/// [`optimise_alpha`] with the descent stopped after at most `max_iters` iterations per
+/// independent part of the boundary (`None`: the solver's own ceiling, which is exactly
+/// [`optimise_alpha`]). Everything else -- the band, the stopping tests, the fold guard --
+/// is the same, so a cap only ever ends the descent earlier.
+///
+/// Fast's `balanced` mode runs the solve this way, as an anytime stage stopped where its
+/// measured profile flattens: 8 iterations on this solver (the sweep is on
+/// `inkvec_cli`'s `BALANCED_SOLVE_ITERS`); on the backtracking solver of v0.2.5, 2 / 4 / 8
+/// / 16 iterations bought 50 / 81 / 89 / 93 % of its dE00 gain at 128 px (r2-fastq).
+/// Inspired by: S. Zilberstein (1996), "Using anytime algorithms in intelligent systems",
+/// AI Magazine 17(3):73, <https://ojs.aaai.org/aimagazine/index.php/aimagazine/article/view/1232>:
+/// a contract algorithm given a fixed budget chosen from its performance profile. Here
+/// the budget is an iteration count, not a time, so the output is the same on every
+/// machine.
+pub fn optimise_alpha_capped(
+    map: &mut PlanarMap,
+    rgb: &[[f32; 3]],
+    face: &[FillModel],
+    budget_ms: Option<u64>,
+    alpha: Option<(&[f32], &[f32])>,
+    max_iters: Option<usize>,
+) -> Option<Report> {
     let (w, h) = (map.width, map.height);
     if w == 0 || h == 0 || map.edges.is_empty() || rgb.len() < w * h {
         return None;
@@ -624,7 +671,7 @@ pub fn optimise_alpha(
             return None;
         }
         let deadline = budget_ms.map(|ms| (Instant::now(), u128::from(ms)));
-        lbfgs::descend(&mut prob, &vars, deadline, dbg)?
+        lbfgs::descend(&mut prob, &vars, deadline, max_iters, dbg)?
     };
     let (scaled, scale) = fold_guard_local(map, &vars, &pos, dbg);
     let moved = write_back(map, &vars, &scaled);
@@ -761,3 +808,6 @@ mod tests;
 
 #[cfg(test)]
 mod solve_tests;
+
+#[cfg(test)]
+mod cap_tests;

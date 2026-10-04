@@ -131,19 +131,25 @@ pub fn trace_color_guided(
     run_color_impl(img, args, &crate::units::fit_config(img, args), None, guide)
 }
 
-/// The tracer options the colour path runs with, as the command line asks for them.
+/// The tracer options the colour path runs with, as the command line asks for them, for a
+/// `width` x `height` raster (the size decides whether `balanced` adds its boundary solve,
+/// [`fast::solve_iters`]).
 ///
 /// Extracted so that every entry into the colour tracer -- the shipped one and the
 /// research ones below -- hands it the same options, rather than a hand-copied
-/// approximation that drifts the first time a flag is added.
-pub(crate) fn color_options(args: &Args) -> ColorOptions {
+/// approximation that drifts the first time a flag is added. The solve's wall-clock budget
+/// is Quality's alone: balanced caps its solve by iterations, so its output does not depend
+/// on the machine.
+pub(crate) fn color_options(args: &Args, width: usize, height: usize) -> ColorOptions {
     let (deadline, boundary_ms) = if args.time_budget > 0.0 {
         (
             Some(
                 inkvec_core::clock::Instant::now()
                     + std::time::Duration::from_secs_f64(args.time_budget * 0.6),
             ),
-            Some((args.time_budget * 0.25 * 1000.0).max(50.0) as u64),
+            // Only Quality's solve reads a clock; Fast runs none and balanced caps its own by
+            // iterations. (Fast reads neither value, so this changes nothing there.)
+            (!fast::on(args)).then(|| (args.time_budget * 0.25 * 1000.0).max(50.0) as u64),
         )
     } else {
         (None, None)
@@ -175,6 +181,7 @@ pub(crate) fn color_options(args: &Args) -> ColorOptions {
         gradients: !args.no_gradients,
         fast: fast::on(args),
         absorb_blends: args.absorb_blends,
+        boundary_iters: fast::solve_iters(args, width, height),
     }
 }
 
@@ -191,7 +198,7 @@ pub fn trace_color_from_labels_guided(
     n_labels: usize,
     guide: impl FnOnce(&mut inkvec_trace::ColorTrace),
 ) -> Result<(String, Vec<String>), Stop> {
-    let opts = color_options(args);
+    let opts = color_options(args, img.width, img.height);
     let mut sw = inkvec_trace::Stopwatch::start();
     let mut traced = inkvec_trace::trace_color_from_labels(img, &opts, labels, n_labels);
     guide(&mut traced);
@@ -219,7 +226,7 @@ pub(crate) fn run_color_impl(
     alpha_src: Option<&AlphaSource>,
     guide: impl FnOnce(&mut inkvec_trace::ColorTrace),
 ) -> Result<(String, Vec<String>), Stop> {
-    let opts = color_options(args);
+    let opts = color_options(args, img.width, img.height);
     let mut sw = inkvec_trace::Stopwatch::start();
     // Colour groups recolour the image, and everything after -- the trace and the fit that
     // checks itself against the pixels -- sees the recoloured one. See `regroup`.
@@ -441,7 +448,7 @@ fn finish_color(
 
     let report = report_lines(
         args,
-        fast,
+        fast.then_some((w, h)),
         mono_line,
         ColourReport {
             palette: pal.len(),
@@ -498,18 +505,18 @@ fn fit_and_repair(
     (order, fits, repaired)
 }
 
-/// The colour pipeline's report: fast mode's line first when it ran, then the monochrome
-/// line when there is one, then the stage lines of `r`.
+/// The colour pipeline's report: fast or balanced mode's line first when the Fast engine
+/// ran (`fast` is then the traced raster's size), then the monochrome line when there is
+/// one, then the stage lines of `r`.
 fn report_lines(
     args: &Args,
-    fast: bool,
+    fast: Option<(usize, usize)>,
     mono_line: Option<String>,
     r: ColourReport,
 ) -> Vec<String> {
-    let mut report = if fast {
-        vec![fast::report(args)]
-    } else {
-        Vec::new()
+    let mut report = match fast {
+        Some((w, h)) => vec![fast::report(args, w, h)],
+        None => Vec::new(),
     };
     report.extend(mono_line);
     report.extend(r.lines());
@@ -692,7 +699,7 @@ fn fit_boundaries(
     inkvec_core::progress::step("boundaries fitted", 0, map.edges.len() as u64);
     let live = inkvec_core::progress::handle();
     let results: Vec<(FittedPath, Option<PrimitiveFit>)> = if fast {
-        fast::fit(map, face_fill)
+        fast::fit(args, map, face_fill)
     } else {
         polys
             .par_iter()

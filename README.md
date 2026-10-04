@@ -87,6 +87,14 @@ VTracer's polygon mode is 3.7× faster, at about 4× Fast's error. On every core
 still the more faithful of the two (mean dE00 0.1425 against Fast's 0.3640 on the 246-icon
 screen set at 128 px), with fewer parameters.
 
+**`--mode balanced`** (opt-in) sits between them: Fast plus eight iterations of Quality's
+boundary solve and a curve fit a quarter finer, on inputs up to 1024 px on the longer side
+(larger ones trace exactly as Fast). On the regression gate's 246 icons it takes v0.2.5 Fast's
+dE00 from 0.327 to 0.203 at 128 px (v0.2.5 Quality 0.128) and from 0.100 to 0.081 at 512 px
+(Quality 0.048), for 2.4x Fast's engine time at 128 px and 3.3x at 512 px (Quality 20x and
+28x), with about Fast's parameter count and 12-14 % more anchor turning
+([`docs/algorithm/14-fast-mode.md`](docs/algorithm/14-fast-mode.md), section 8).
+
 <p align="center">
   <img src="docs/assets/engine-distribution.png" width="100%" alt="Per-case colour error (dE00) across the 21 cases, one panel per engine">
 </p>
@@ -185,7 +193,7 @@ inkvec <input> [-o <output.svg>] [OPTIONS]
 
 | Flag | Default | What it does |
 |---|---|---|
-| `--mode <quality\|fast>` | quality | `quality` is the full engine: best fidelity, fewest parameters. `fast` is a Potrace-class fit on the same planar map, with flat fills: several times faster, a little less faithful (see [Speed](#speed-quality-and-fast)). Options that only steer Quality stages are ignored in Fast, and the report names them. |
+| `--mode <quality\|fast\|balanced>` | quality | `quality` is the full engine: best fidelity, fewest parameters. `fast` is a Potrace-class fit on the same planar map, with flat fills: several times faster, a little less faithful (see [Speed](#speed-quality-and-fast)). `balanced` is `fast` plus eight iterations of Quality's boundary solve and a fit a quarter finer, on inputs up to 1024 px on the longer side (larger ones trace as `fast`). Options that only steer Quality stages are ignored in Fast and Balanced, and the report names them. |
 | `--restore <auto\|on\|off>` | off | Trained-network cleanup for JPEG/WebP/AI-decoder damage. `auto` only restores if it looks damaged, and traces directly when no restorer is available (`on` is an error then). |
 | `--sr <auto\|on\|off>` | off | Super-resolution pre-pass (2-4× upscale), complementary to `--restore`. |
 | `--lossy <auto\|on\|off>` | auto | Whether to trust the file as clean or trace with noise-aware intake. |

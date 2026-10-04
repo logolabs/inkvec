@@ -40,7 +40,7 @@
 //!     read the lattice map, so they run side by side and are timed together as this one;
 //! 14. **refine_junc** ([`planar::refine_junctions`]): where three or more faces meet;
 //! 15. **boundary_opt** ([`boundary_opt`]): all boundary points solved at once against an
-//!     exact coverage render of the image (Quality only);
+//!     exact coverage render of the image (Quality; Fast when `boundary_iters` caps it);
 //! 16. **decode** (research only);
 //! 17. **symmetry** ([`symmetry::enforce`]): mirrored boundaries made exactly symmetric.
 //!
@@ -197,6 +197,9 @@ pub struct ColorOptions {
     /// structural hypotheses the command line's `--hypotheses` traces as well, because on
     /// a sub-pixel gap between two shapes the grey pixel is the gap, not a blend.
     pub absorb_blends: bool,
+    /// The boundary solve's iteration cap: `None` (default) Quality uncapped, Fast no solve;
+    /// `Some(n)` either mode, at most `n` iterations per part (`boundary_opt::optimise_for`).
+    pub boundary_iters: Option<usize>,
 }
 
 impl Default for ColorOptions {
@@ -214,6 +217,7 @@ impl Default for ColorOptions {
             min_region: 4,
             fast: false,
             absorb_blends: true,
+            boundary_iters: None,
         }
     }
 }
@@ -1045,7 +1049,8 @@ fn finish_color_trace(
 ///
 /// saddles (research only) → `build_map` ([`planar::build`]) → `symmetry_detect` →
 /// `refine_subpix` ([`planar::refine_subpixel_alpha`]) → `refine_junc` → `boundary_opt`
-/// (skipped in Fast mode or with `INKVEC_BOPT=0`) → decode (research only) → `symmetry`
+/// (skipped in Fast mode unless `opts.boundary_iters` caps it, and with `INKVEC_BOPT=0`)
+/// → decode (research only) → `symmetry`
 /// ([`symmetry::enforce`]). Stages 10–17 of the crate overview.
 ///
 /// # Arguments
@@ -1157,12 +1162,8 @@ pub(crate) fn finish_color_trace_alpha(
     // Then solve the whole boundary against the image at once: every point above was
     // placed by a one-dimensional argument of its own, and a pixel's value is the area
     // each face covers in it, so neighbouring points share evidence and have to be moved
-    // together. See `boundary_opt`.
-    let boundary_opt = if !opts.fast && inkvec_core::env::switch("INKVEC_BOPT", true) {
-        boundary_opt::optimise_alpha(&mut map, rgb, &face_model, opts.boundary_ms, alpha_pair)
-    } else {
-        None
-    };
+    // together. See `boundary_opt` (and `boundary_opt::optimise_for` for when it runs).
+    let boundary_opt = boundary_opt::optimise_for(&mut map, rgb, &face_model, opts, alpha_pair);
     sw.mark("boundary_opt");
     if let Some(r) = boundary_opt.as_ref() {
         let (from, to, n) = (r.before, r.after, r.iters);

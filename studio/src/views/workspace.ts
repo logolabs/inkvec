@@ -8,7 +8,7 @@
 
 import { fill, h, icon } from "../lib/dom";
 import type { SampleInfo, Settings } from "../lib/ipc";
-import { count, de00, modKey, plannedTracePx, seconds, type StageState, type State, type Store } from "../lib/state";
+import { count, de00, engineName, modKey, plannedTracePx, seconds, type StageState, type State, type Store } from "../lib/state";
 import { createViewer, type Viewer } from "../components/viewer";
 import { DESKTOP_URL, WEB } from "../lib/platform";
 import { fetchBar, fetchPercent } from "../components/denoiserfetch";
@@ -463,7 +463,7 @@ function firstRunIntro(store: Store, act: WorkspaceActions): HTMLElement | null 
 export function stripWords(st: State): { lead: string; rest: string; colour: string } {
   const r = st.report;
   if (st.tracing) {
-    const engine = st.tracingEngine === "fast" ? "fast" : "quality";
+    const engine = engineName(st.tracingEngine).toLowerCase();
     return {
       lead: runningLabel(st),
       rest: `· ${engine} · ${plannedTracePx(st, st.tracingTier) ?? "—"} px ·`,
@@ -472,7 +472,7 @@ export function stripWords(st: State): { lead: string; rest: string; colour: str
   }
   if (r && st.result) {
     const draft = st.result.tier === "draft";
-    const engine = st.resultEngine === "fast" ? "Fast" : "Quality";
+    const engine = engineName(st.resultEngine);
     return draft
       ? { lead: `${engine} draft`, rest: `· ${r.tracedPx} px · full trace queued`, colour: "var(--state-draft)" }
       : {

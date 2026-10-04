@@ -120,8 +120,11 @@ final class Options
      *     with a one-pass gradient check in place of gradient recovery: several times faster (tens
      *     of milliseconds at 512 px), a little less faithful, with somewhat more parameters.
      *     Options that only steer quality stages (precision, content_units, harmonize,
-     *     harmonize_threshold, time_budget) are ignored in fast mode. The tracer's default is
-     *     "quality"; leave it null to use that.
+     *     harmonize_threshold, time_budget) are ignored in fast mode. "balanced" (opt-in) is fast
+     *     plus eight iterations of quality's boundary solve and a fit with tolerances a quarter
+     *     finer: in between the two in fidelity and time, on rasters up to 1024 px on the longer
+     *     side; a larger raster is traced exactly as in fast mode. It ignores the same options as
+     *     fast. The tracer's default is "quality"; leave it null to use that.
      *
      * @param bool|null $hypotheses Also trace three structural alternatives -- blend
      *     absorption off, a matte instead of native alpha, and a merge distance of 0.020 -- and

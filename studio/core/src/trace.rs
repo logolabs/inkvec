@@ -1858,6 +1858,7 @@ mod tests {
         for mode in [
             crate::options::TraceMode::Quality,
             crate::options::TraceMode::Fast,
+            crate::options::TraceMode::Balanced,
         ] {
             let settings = Settings {
                 mode,

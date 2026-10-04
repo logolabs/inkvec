@@ -34,9 +34,15 @@ plain-language names. The table at the end of this page maps them.
 Three settings sit above both halves of the rail, big, because they are the ones people most often
 come for. Each is one control, shown once.
 
-**Engine**: **Quality** or **Fast**. Quality places every edge to a fraction of a pixel and fits
-the fewest curves that match the image; it is the default and the closest trace. Fast traces each
-shape in a single pass, many times quicker, for previews, batches and very large images.
+**Engine**: **Quality**, **Balanced** or **Fast**. Quality places every edge to a fraction of a pixel
+and fits the fewest curves that match the image; it is the default and the closest trace. Fast
+traces each shape in a single pass, many times quicker, for previews, batches and very large
+images. Balanced sits between them: it is Fast, plus a few steps of Quality's edge placement and a
+finer curve fit. On 128 px icons it closes about three fifths of the distance from Fast to
+Quality, and two fifths at 512 px, for two to three times Fast's tracing time (a tenth of
+Quality's or less). It keeps Fast's flat fills, and its files are about as large as Fast's. On
+images over 1024 px on their longer side it traces exactly as Fast does: there the extra steps
+gained little and cost a third more numbers in the file.
 
 **Denoiser**: **Off**, **Auto** or **On**. The denoiser is a trained model that repairs JPEG, WebP
 and screenshot damage at the image's own size before tracing, so the colours are the ones the
@@ -62,7 +68,9 @@ the quality report shows its price (about 0.04 dE00 on icons).
 ### Which controls each engine reads
 
 Fast skips the stages several controls steer, so with Fast selected the Tune tab lists only the
-controls that change a Fast trace, and a line at the top says how many more are for Quality. The
+controls that change a Fast trace, and a line at the top says how many more are for Quality.
+Balanced runs the Fast engine and reads exactly the controls Fast reads: its edge placement stops
+after a fixed number of steps, so **Time limit** does not apply to it either. The
 hidden ones keep their values: switch back to Quality and they are where you left them. The
 *changed* counts and each group's **Reset** count and reset only the controls on show; choosing a
 preset still sets every control. The [Custom wizard](getting-started.md#the-custom-wizard) leaves

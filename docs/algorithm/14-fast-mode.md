@@ -4,7 +4,9 @@
 > emitter as Quality mode, with every expensive search replaced by a one-pass version and
 > the curve fitter replaced by a Potrace-class one — and, since the 2026-09-30 round, each
 > of its own stages computed on row runs, in parallel where it pays, to the same bytes, but
-> for the image frame, which is now written as the image rectangle.
+> for the image frame, which is now written as the image rectangle. Since 2026-10-04 its
+> corner threshold is 0.1 px (§6), and an opt-in third mode, `--mode balanced`, runs it with
+> eight iterations of Quality's boundary solve and a fit a quarter finer (§8).
 
 **Source:** `crates/inkvec-trace/src/fast/` — `front.rs` (the front end), `palette.rs`,
 `faces.rs` and `faces/runs.rs` (the clean-up), `bands.rs` (ramps), `mod.rs`, `polygon.rs`,
@@ -12,20 +14,21 @@
 dumped fitter inputs); `crates/inkvec-trace/src/regions.rs` (`cap_components`, which the
 clean-up calls past the face-id limit); `crates/inkvec-fit/src/primitives/ellipse.rs`
 (`taubin_ellipse`, `fit_ellipse_seeded`, which the fitter's primitive test calls);
-`crates/inkvec-cli/src/fast.rs` (the command line's side). The stages it shares are
+`crates/inkvec-cli/src/fast.rs` (the command line's side, balanced mode included). The stages it shares are
 documented in `01-intake.md`,
 `06-planar-map.md`, `07-subpixel.md`, `10-symmetry.md` and `13-emit.md`.
-**Entry points:** `--mode fast` (`TraceMode::Fast`, `crates/inkvec-cli/src/args.rs:21-29`,
-default `quality`). The trace crate dispatches to `fast::trace_color` or, for an image
+**Entry points:** `--mode fast` and `--mode balanced` (`TraceMode::Fast` and
+`TraceMode::Balanced`, `crates/inkvec-cli/src/args.rs:21-34`, default `quality`). The trace crate dispatches to `fast::trace_color` or, for an image
 traced with its transparency, `fast::trace_color_native` (`fast/front.rs:17-29`) when
-`ColorOptions::fast` is set (`crates/inkvec-trace/src/lib.rs:291-303`); the command line
-fits the result with `fast::fit` (`crates/inkvec-cli/src/fast.rs:28-45`), which calls
-`inkvec_trace::fast::fit_edges` (`fast/mod.rs:318-365`) with the map's width and height.
+`ColorOptions::fast` is set (`crates/inkvec-trace/src/lib.rs:296-308`); the command line
+fits the result with `fast::fit` (`crates/inkvec-cli/src/fast.rs:98-117`), which calls
+`inkvec_trace::fast::fit_edges` (`fast/mod.rs:380-427`) with the map's width and height.
 **Pipeline position:** it replaces stages 03–05 (palette, regions, gradients) with its own
 front end; shares stages 01, 06, 07, 10 and 13; skips 08 (the boundary solve,
-`lib.rs:1138`) and 09 (decode, `lib.rs:1153`); and replaces 11 (curve fitting) with its own
+`lib.rs:1165`, `boundary_opt::optimise_for` at `boundary_opt.rs:593-611`; balanced runs it,
+capped at eight iterations, §8) and 09 (decode, `lib.rs:1176`); and replaces 11 (curve fitting) with its own
 fitter, without 12 (repair) or shape harmonization (`repair_fits`,
-`crates/inkvec-cli/src/pipeline.rs:885`; `emit_options`, `pipeline.rs:515-526`).
+`crates/inkvec-cli/src/pipeline.rs:869`; `emit_options`, `pipeline.rs:518-529`).
 
 ## What problem this solves
 
@@ -39,7 +42,7 @@ its seam underlap, compound paths and minify" — and replaces the rest with one
 (the module overview of `fast/mod.rs`). Each stage is linear or near-linear in the number of pixels or
 boundary points, and nothing reads a clock, so the output is the same on every machine. The
 command line describes the trade as "several times faster, a little less faithful"
-(`args.rs:309-312`).
+(`args.rs:319-322`).
 
 The round of 2026-09-30 rewrote Fast's own stages and the stages it shares for speed,
 **with the output held fixed**: every rewrite is exact, keeps the code it replaced as a test
@@ -50,7 +53,8 @@ ellipse starts from the algebraic conic alone, which changed no file on the gate
 provably identical. This page describes the pipeline as it
 stands after that round, stage by stage, with what each stage computes in the field's
 standard terms, the method, its citations as the code's doc comments label them, and the
-measured costs before and after. It also covers two fixes merged on 2026-10-03 that came
+measured costs before and after. §6 and §8 cover the changes of 2026-10-04 (the corner
+threshold, and balanced mode). It also covers two fixes merged on 2026-10-03 that came
 after the round: a run of curve pieces that U-turns is no longer collapsed to its last
 piece, and a ring of pieces is never one cubic (§6, step 6; `3513beb`, judged by the
 gate); and an image with more components than face ids has its smallest components merged
@@ -83,14 +87,15 @@ fitter; one SVG document out of the emitter. Two differences in what comes out:
   (`fast/front.rs:14-16`);
 * **the report** opens with a line saying Fast mode ran and naming what it skipped — "fast
   mode     Potrace-class fit, flat fills; not run: boundary solve, curve DP, gradients,
-  ring repair, harmonization" (`report`, `crates/inkvec-cli/src/fast.rs:93-105`) — followed
+  ring repair, harmonization" (`report`, `crates/inkvec-cli/src/fast.rs:167-194`) — followed
   by every option the caller moved off its default that only steers a skipped stage
-  (`fast_ignored`, `fast.rs:47-91`): `--tau`, `--content-units`, `--bezier-cost`,
+  (`fast_ignored`, `fast.rs:119-165`): `--tau`, `--content-units`, `--bezier-cost`,
   `--corner-angle`, `--time-budget`, `--simplify-faint`, `--harmonize-threshold`,
   `--use-symbols`, `--no-repair` and `--harmonize` / `--no-harmonize`, in that order. Not
   `--no-gradients`, because Fast still merges ramps, and not `--precision` or
   `--lambda-scale`, which the intake rescales on an oversampled raster, so a changed value
   is no evidence the caller set them. So a tuned setting that did nothing is not silent.
+  Balanced mode writes its own first line instead (§8) and lists the same ignored options.
 
 ## The pipeline, in order
 
@@ -112,8 +117,8 @@ figures below are not additive: the clean-up round took
 
 Measured together, `main` `55ee4e0` against the merged tip, per image, mean ms.
 `trace_total` is the stopwatch mark after the trace crate returns (stages 2–5; set in
-`run_color_impl`, `crates/inkvec-cli/src/pipeline.rs:247`); `fit_dp` is the fit (stage 6)
-plus what `finish_color` does before it (`pipeline.rs:360-363`, the mark at `:484`):
+`run_color_impl`, `crates/inkvec-cli/src/pipeline.rs:253`); `fit_dp` is the fit (stage 6)
+plus what `finish_color` does before it (`pipeline.rs:366-369`, the mark at `:487`):
 
 | set | `fit_dp` | `trace_total` |
 |---|---|---|
@@ -144,15 +149,14 @@ a zero side (`has_pixels`, `load.rs:255-272`); those steps are documented in
   table, `UNIT[k] = k / 255` (`load.rs:282-296`), straight from the decoder's own buffer for
   8-bit RGB and RGBA, in parallel chunks from 256 × 256 pixels on (`from_dynamic`, `widen`,
   `load.rs:298-373`).
-* **Unblock stops at the first anti-aliased curve.** The nearest-neighbour inverse (any factor
-  of 2 or more, [01-intake.md](01-intake.md)) walks the change positions row by row and gives
-  up at the first two adjacent ones, which no upscale of 2 or more makes; on ordinary art that
-  is a few rows into the content (`pixel_grid`, `line_changes`,
-  `crates/inkvec-cli/src/alpha/unblock.rs:237-319`).
+* **Unblock by the gcd of the change positions.** Only the factors that divide
+  `gcd(w, h, every column and row where neighbours differ by more than 1/256)` get the block
+  test; on ordinary art the gcd reaches 1 a few rows into the content and no block test runs
+  (`pixel_grid`, `change_gcd`, `crates/inkvec-cli/src/alpha/unblock.rs:8-161`).
 * **Matte in place, in parallel.** The transparency scan and the flatten are parallel maps
   from 256 × 256 pixels on, and the flatten writes over the input's own buffer
-  (`alpha_source_owned`, `crates/inkvec-cli/src/alpha.rs:599-625`; `flatten_in_place`,
-  `has_transparency`, `alpha.rs:793-853`).
+  (`alpha_source_owned`, `crates/inkvec-cli/src/alpha.rs:598-624`; `flatten_in_place`,
+  `has_transparency`, `alpha.rs:792-852`).
 * **Composite over white in parallel** (`Rgba::composited`, `coverage.rs:198-232`).
 
 Each is exact: every output of the parallel maps depends on one input value, the
@@ -486,7 +490,7 @@ solve and decode.
   vertices or while a debug printout or contour dump is on (`measure_subpixel`,
   `planar.rs:502-603`).
 * **Symmetry detection beside the measuring phase**, under `rayon::join`; both only read the
-  lattice map (`lib.rs:1094-1127`).
+  lattice map (`lib.rs:1100-1133`).
 * **Junction debug flags read once** into a `OnceLock` (`planar/junctions.rs:54-70`).
 
 **Citations** (labels as in the doc comments): cracks, "Method from" He, Chao & Suzuki 2008 and
@@ -523,7 +527,7 @@ changed how the polygon and the primitive test are computed and writes the image
 the image rectangle; "The fitter round of 2026-09-30", at the end of the section, lists each
 change and how it was checked.
 
-**Per edge, in parallel** (`fit_edges`, `fast/mod.rs:318-365`): the edges are fitted as a
+**Per edge, in parallel** (`fit_edges`, `fast/mod.rs:380-427`): the edges are fitted as a
 rayon parallel map, output in edge order whatever the thread count. The image frame is
 recognised first and written without fitting (below). Every other edge's tolerances
 depend on the OKLab contrast between its two faces' representative colours (1 when either
@@ -533,16 +537,35 @@ given; below, every distance tolerance but `flat` grows as `FAINT / contrast`, u
 little; a boundary of a gradient face is fitted as if its contrast were at most
 `FAINT / GRADIENT_LOOSEN = FAINT / 1.6`, because a fitted gradient is a coarser model of its
 pixels than a flat ink and its boundary comes back rougher (`FastFit::for_contrast`,
-`mod.rs:195-219`). The defaults (`FastFit::default`, `mod.rs:91-101`): polygon tolerance
-0.5 px, vertex box 0.5 px, corner tolerance 0.25 px (Potrace's `alphamax` as a distance),
-merge tolerance 0.2 px (Potrace's `opttolerance`), and 0.05 px for a cubic to count as a
-line. A closed edge of 8 points or more drops its first point, the lattice node the
-refinement leaves up to 0.6 px off the edge (`fit_edge`, `mod.rs:230-237`).
+`mod.rs:257-281`). The defaults (`FastFit::default`, `mod.rs:116-126`): polygon tolerance
+0.5 px, vertex box 0.5 px, corner tolerance `CORNER_TOL` = 0.1 px (Potrace's `alphamax` as a
+distance; `mod.rs:91-114`), merge tolerance 0.2 px (Potrace's `opttolerance`), and 0.05 px
+for a cubic to count as a line. `--mode balanced` runs the same fitter with
+`FastFit::balanced` (§8). A closed edge of 8 points or more drops its first point, the
+lattice node the refinement leaves up to 0.6 px off the edge (`fit_edge`, `mod.rs:292-299`).
+
+**The corner tolerance, 0.25 → 0.1 px (2026-10-04).** The r2-fastq study (2026-10-02) swept
+it with everything else in Fast fixed and found slack on both axes: a corner is two lines, 4
+parameters, where the smoothing cubic it replaces is 6, and on drawn icons the corner is what
+the artist drew. Its sweep on the 128 px screen set read dE00 0.3640 → 0.3586 and parameters
+per artist's parameter 2.120 → 2.032 at 0.1 px, saturating by 0.05 px. The gate (v2, against
+v0.2.5 on Windows, 246 icons each) judged the change on its own:
+
+| condition | dE00 | turning | ratio | verdict |
+|---|---|---|---|---|
+| fast-128ss | 0.32722 → 0.32224 (−1.52 %, upper −1.30 %) | +1.30 % (upper +1.83 %) | 2.206 → 2.112 (−4.29 %) | better, non-inferior, better |
+| fast-512ss | 0.09950 → 0.09934 (−0.16 %) | +0.71 % | 3.323 → 3.271 (−1.59 %) | non-inferior, non-inferior, better |
+| fast-512ssop | 0.09078 → 0.09058 (−0.22 %) | +0.12 % | 3.620 → 3.563 (−1.57 %) | non-inferior, non-inferior, better |
+
+Quality is byte-identical (the threshold is Fast's alone). By family at 128 px every family's
+dE00 fell (material-icons −3.7 %, lucide −2.4 %, noto −0.4 %); at 512 px lucide rose 0.5 %
+(7 icons better, 14 worse) and the rest fell or held. The largest single rise is
+simple-icons/alchemy at 512 px, 0.0249 → 0.0339, one rounded corner of the base drawn sharp.
 
 The steps follow the order of the module overview (`fast/mod.rs:43-50`): `fit_edges` →
 `frame_rectangle`, then `fit_edge` → `prims::primitive`, then `fit_denoised`.
 
-**First, the image frame** (`frame_rectangle`, `mod.rs:259-316`). When one face runs round
+**First, the image frame** (`frame_rectangle`, `mod.rs:321-378`). When one face runs round
 the whole image border — a transparent icon's clear ground, or a background colour — the
 planar map traces the border as one closed ring on the lattice's outer nodes, which the
 sub-pixel refinement leaves in place, so the ring *is* the rectangle
@@ -593,7 +616,7 @@ off the border, an inner rectangle — goes on to the fit.
    over two steps each way (more than 50°) is kept as a corner, and the ends of an open
    boundary, which are junctions, stay put. A ring is denoised once: `fit_edge` hands the
    points it denoised for the primitive test straight on to `fit_denoised`
-   (`mod.rs:150-193`, `:221-257`), because `denoise` is a pure function of the points and
+   (`mod.rs:212-255`, `:283-319`), because `denoise` is a pure function of the points and
    the closed flag and a second call could only return the same vector.
 
 3. **Optimal polygon** (`polygon::open`, `polygon.rs:250-392`; `polygon::closed`,
@@ -720,11 +743,11 @@ off the border, an inner rectangle — goes on to the fit.
 7. **Segments** (`curve::to_segments`, `curve.rs:382-416`): a cubic whose control points lie
    within 0.05 px of its chord, and project inside it, is written as a line; consecutive
    collinear lines are joined; the ends are pinned to the junctions exactly
-   (`fit_denoised`, `mod.rs:177-187`).
+   (`fit_denoised`, `mod.rs:239-249`).
 
 Boundaries too short for a polygon (fewer than 3 points, or 4 for a ring), and any stage that
 leaves nothing, are drawn as straight lines through their points (`too_short`, `lines`,
-`mod.rs:120-148`).
+`mod.rs:182-210`).
 
 **The fitter round of 2026-09-30** (branch `impl/fast-fit`, merged into `integ/fast` at
 `e30fa8e`). Byte-identical changes: fathoming (`ebf9ecb`), lattice runs in closed form
@@ -733,7 +756,7 @@ and with its seeds reused (`37a4e40`), the ring denoised once (`d3ea154`), and t
 bits by shift and mask (`e183cac`). Outside the fitter's files, and inside the `fit_dp`
 mark: `finish_color` moves the traced labels instead of cloning them, and Fast builds no
 content-unit polylines or λ multipliers unless `--editability` asks for them (`9f290b6`;
-`crates/inkvec-cli/src/pipeline.rs:361-363`, `:635-658`; see `01-intake.md`). Each rewrite keeps the code it
+`crates/inkvec-cli/src/pipeline.rs:367-369`, `:638-655`; see `01-intake.md`). Each rewrite keeps the code it
 replaced as a test reference (`polygon::tests::open_ref` and `closed_ref`,
 `prims::tests::primitive_ref`, `tests::fit_edge_ref`). Identity of the exact tip against
 `main` `55ee4e0`: Fast 464/464 files, Quality 256/256, `--no-background` and `--monochrome`
@@ -872,7 +895,7 @@ the parallel pass would take it off the critical path, but needs 8 bytes per adm
 
 **What it computes.** The SVG document, from the fitted paths, the faces' fills and the
 palette: shared with Quality and documented in `13-emit.md`. Fast turns shape harmonization
-off (`emit_options`, `crates/inkvec-cli/src/pipeline.rs:515-526`). An image traced with its
+off (`emit_options`, `crates/inkvec-cli/src/pipeline.rs:518-529`). An image traced with its
 transparency keeps the native-alpha model: inks carry an opacity and the clear ground is an
 ink of its own (`fast/front.rs:14-16`).
 
@@ -890,6 +913,192 @@ pass instead of one whole-image scan per face. Details, proof and citations in `
 `None`, and none of 3,125 ever returned a ramp. After: inside the transparent total of stage 5,
 130 → 21 ms.
 
+### 8. Balanced mode
+
+**What it computes.** `--mode balanced` (opt-in; `TraceMode::Balanced`,
+`crates/inkvec-cli/src/args.rs:29-33`) is Fast with two of Quality's ideas added back at a
+fraction of their price, on rasters up to `BALANCED_MAX_SIDE` = 1024 px on their longer side
+(`crates/inkvec-cli/src/fast.rs:64-66`):
+
+1. **the global boundary solve** (stage 08, `08-boundary-solve.md`), stopped after
+   `BALANCED_SOLVE_ITERS` = 8 L-BFGS iterations (steps accepted by its Moré–Thuente line
+   search) per independent part of the boundary (`fast.rs:68-88`), between the sub-pixel
+   refinement and the fit, exactly where Quality runs it; and
+2. **the Fast fitter with tolerances a quarter finer** (`FastFit::balanced`,
+   `crates/inkvec-trace/src/fast/mod.rs:142-163`): polygon tolerance and vertex box 0.375 px,
+   merge tolerance 0.15 px (`BALANCED_TOL_SCALE` = 0.75, `mod.rs:128-140`), the corner threshold
+   `CORNER_TOL` = 0.1 px as in Fast, and the cubic-to-line test unchanged.
+
+Everything else is Fast's: the front end, flat fills (ramps only on opaque images), no curve
+DP, no ring repair, no harmonization. It reads the same options as Fast, and `fast_ignored`
+lists the same ones, `--time-budget` included: the solve's budget is a count of iterations,
+never a clock, so the output is the same on every machine (`color_options` hands the solve a
+wall-clock budget in Quality only, `crates/inkvec-cli/src/pipeline.rs:142-155`). Above the size
+threshold balanced is Fast, byte for byte. Its report line says which it ran:
+"balanced mode Potrace-class fit at 0.75x tolerances, flat fills, boundary solve capped at 8
+iterations; not run: curve DP, gradients, ring repair, harmonization", or "balanced mode over
+1024 px, so fast mode's path: ..." (`report`, `fast.rs:184-211`).
+
+**Why these two stages.** The r2-fastq study (2026-10-02, research build `research2/fastq`)
+priced every Quality stage by the dE00 it buys per millisecond added to Fast. At 128 px the
+gap to Quality is geometry, not colour: 94 % of Fast's error lies within one source pixel of a
+contour (`bench/gt_diff.py` on 48 screen icons), and a Shapley split of the gap over a 2³
+factorial of {front end, boundary solve, curve DP} gives the curve DP 49 %, the solve 42 % and
+the front end 9 %. The DP costs 17–30× Fast's work. The solve is an anytime algorithm with a
+concave profile: on the screen set 2 iterations buy 50 % of the 32-iteration solve's dE00 gain,
+4 buy 81 %, 8 buy 89 %, 16 buy 93 %, while most of its cost is fixed setup (band tables and the
+first energy evaluations). The fitter's tolerances cost no time at all: the sweep x0.5 / x0.75 /
+x1 read 0.2824 / 0.3154 / 0.3640 dE00 at 3.022 / 2.458 / 2.120 parameters per artist's
+parameter, and together with the solve x0.75 moved the 4-iteration point from 0.2872 / 1.920 to
+0.2401 / 2.234. So balanced takes the solve's first iterations and the finer tolerances,
+and leaves the DP to Quality. (Those profiles are the solver of v0.2.5; the cap was swept again
+on the rewritten one, below.)
+
+**The cap, re-measured on the rewritten solve** (2026-10-04). The solve was rewritten after
+balanced was built (Moré–Thuente line search, stopping on the projected gradient and the
+relative decrease, 64 iterations at most, a local fold guard; `08-boundary-solve.md`), and an
+iteration of it is not an iteration of the old backtracking one, so the cap was swept again on
+the gate (balanced against v0.2.5's Fast; 128ss / 512ss; engine time a paired median ratio to
+Fast at 128 / 512 px, interleaved, under load):
+
+| cap | dE00 | turning | ratio | engine time |
+|---|---|---|---|---|
+| 2 | −29.4 / −15.8 % | +17.6 / +15.9 % | +6.6 / +3.8 % | 1.93 / 2.43× |
+| 4 | −36.3 / −18.8 % | +17.6 / +14.7 % | +3.0 / +2.9 % | 2.08 / 2.83× |
+| **8** | **−37.9 / −19.0 %** | **+14.0 / +12.3 %** | **−0.2 / +1.3 %** | **2.40 / 3.32×** |
+| 16 | −39.7 / −19.6 % | +10.8 / +10.5 % | −2.0 / −0.8 % | 2.97 / 4.35× |
+| 64 (no cap) | | | | 6.62 / 9.53× |
+
+The colour error still levels off after 4, but on this solver more iterations also leave a
+smoother boundary for the fitter, so turning and the parameter count keep falling. 8 brings the
+parameter count back to Fast's (ratio within noise at 128ss, +1.3 % at 512ss, +0.3 % at 512ssop)
+for 15 % more engine time than 4; 16 buys another 2 points of dE00 and 3 of turning for another
+24 %. The cap is 8 (`48b0d05`).
+
+**Plumbing.** The cap is a parameter at the solve's call boundary, so the solve itself is
+untouched: `boundary_opt::optimise_alpha_capped` (`crates/inkvec-trace/src/boundary_opt.rs:613-634`)
+is `optimise_alpha` with `max_iters`, which `lbfgs::descend` clamps to its own ceiling and hands
+to the per-part loop (`boundary_opt/lbfgs.rs:156-171`, `:238`); `None` is `optimise_alpha` bit for
+bit (`boundary_opt/cap_tests.rs`). `ColorOptions::boundary_iters`
+(`crates/inkvec-trace/src/lib.rs:199-201`) carries it: `None` leaves Quality uncapped and Fast
+without a solve, `Some(n)` runs the solve in either mode (`boundary_opt::optimise_for`, `boundary_opt.rs:593-611`, called at
+`crates/inkvec-trace/src/lib.rs:1165`). The command line
+sets it from `fast::solve_iters` and picks the fitter's tolerances with `fit_config`, both from
+the one test `fast::balanced` on the traced raster's size (`fast.rs:90-113`).
+
+**Robustness.** The research build found one defect with the solve on in Fast:
+`synthetic/gradient_radial` at 512 px with an 8- or 16-iteration cap wrote the disc's ring as
+one closed cubic and the face vanished (dE00 10.6). Wave A's curve-run fix (`3513beb`, §6 step
+6) closed it before this mode existed. Checked on the old solve with the cap at 2, 4, 8, 16
+and 32 iterations on all 21 cross-compare cases at 512 and 2048 px, and on the rewritten solve
+with 2, 4, 8, 16, 32 and 64 on the 21 cases at 128, 512 and 2048 px (441 traces): no ring
+collapsed, no case read more than 1.5× Fast's dE00, and the radial case reads 0.053 at 512 px
+under every cap (Fast 0.058).
+
+**Measured** (2026-10-04, the branch merged onto main `134939e`, cap 8, against v0.2.5,
+Windows, under load):
+
+| set (246 icons each; dE00 / turning / ratio) | Fast v0.2.5 | Fast (merged) | Balanced | Quality v0.2.5 |
+|---|---|---|---|---|
+| gate 128ss | 0.3272 / 0.0748 / 2.206 | 0.3222 / 0.0758 / 2.112 | 0.2032 / 0.0852 / 2.202 | 0.1283 / 0.0414 / 1.511 |
+| gate 512ss | 0.0995 / 0.0202 / 3.323 | 0.0993 / 0.0204 / 3.271 | 0.0806 / 0.0227 / 3.367 | 0.0484 / 0.0094 / 1.783 |
+| gate 512ssop | 0.0908 / 0.0167 / 3.620 | 0.0906 / 0.0167 / 3.563 | 0.0703 / 0.0187 / 3.630 | 0.0490 / 0.0092 / 1.986 |
+| held_a, 156 icons at 128 px (dE00 / worst tenth / ratio) | 0.3402 / 0.924 / 2.137 | 0.3346 / 0.919 / 2.044 | 0.2091 / 0.705 / 2.156 | 0.1310 / 0.420 / 1.471 |
+
+The gate's columns are its own aggregates (dE00 and ratio family-macro, turning a plain mean,
+judged at 1024 px against the artist's file). Balanced closes 62 % of the dE00 gap between
+v0.2.5's Fast and Quality at 128 px, 37 % at 512 px and 49 % at 512 px opaque, and 63 % on
+held_a (main's Quality, after the solve rewrite, reads 0.1071 on held_a). It is better than
+Fast on 245 of the 246 icons at 128 px and on 242 at 512 px; every family gains at every
+condition (at 512ss: simple-icons −37 %, material −35 %, lucide −34 %, openmoji −32 %, twemoji
+−26 %, synthetic −13 %, noto −6 %). Judged as a change to Fast by the gate's rule it reads dE00
+"better" everywhere (−37.9 %, −19.0 %, −22.6 %), turning "worse" (+14.0 / +12.3 / +12.3 %), and
+ratio within noise at 128ss, non-inferior at 512ssop and worse at 512ss (+1.3 %, upper bound
+3.16 % against an effective margin of 3 %). That is why it is a mode of its own and not Fast's
+default; its time (2.4–3.3× Fast's engine) would rule that out anyway. The largest single rises
+are twemoji/1f4e6 at 128 px (0.102 → 0.136: the box's long diagonal edges shift a fraction of a
+pixel where two close browns meet) and openmoji/25FC at 512 px (0.005 → 0.014, the square's
+bottom edge).
+
+Where the turning comes from, on the same build (gate, 128ss / 512ss / 512ssop, change against
+v0.2.5's Fast):
+
+| variant | dE00 | turning | ratio |
+|---|---|---|---|
+| balanced (solve 8 iterations, tolerances x0.75) | −37.9 / −19.0 / −22.6 % | +14.0 / +12.3 / +12.3 % | −0.2 / +1.3 / +0.3 % |
+| solve 8 iterations, tolerances x1 | −24.3 / −12.4 / −15.4 % | +2.0 / −1.8 / −1.4 % | −11.9 / −6.5 / −6.9 % |
+
+The turning rise is the finer tolerances' (more, shorter pieces following more of the measured
+wobble), as it was on the old solve (where x0.75 without the solve read +12.9 / +15.3 % and the
+solve with x1 +3.6 / +0.2 %). With Fast's own tolerances, the 8-iteration solve keeps about two
+thirds of balanced's dE00 gain, uses 7–12 % fewer parameters than Fast and reads turning
+"better" at 512 px (+2.0 % at 128 px, just over its margin). The owner's plan fixed the
+operating point at x0.75; the x1 variant is the alternative where structure and compactness
+matter more than colour error.
+
+The 21 cross-compare cases (the artist's SVG rendered at each size with the current renderer;
+dE00 mean / median / mean without the two fluent emoji, judged at 1024 px; parameters per
+artist's parameter, mean; engine time as a paired median ratio against v0.2.5 Fast, default
+threading; the merged build's Fast, balanced and Quality):
+
+| size | Fast v0.2.5 | Fast (merged) | Balanced | Quality (main) |
+|---|---|---|---|---|
+| 128 px | 0.583 / 0.448 / 0.462, 1.51 | 0.574 / 0.448 / 0.457, 1.39 | 0.459 / 0.331 / 0.337, 1.48, 2.2× | 0.317 / 0.229 / 0.256, 1.17, 17× |
+| 512 px | 0.168 / 0.074 / 0.078, 2.93 | 0.169 / 0.074 / 0.077, 2.75 | 0.151 / 0.053 / 0.058, 3.28, 3.2× | 0.100 / 0.048 / 0.053, 1.44, 34× |
+| 1024 px | 0.117 / 0.029 / 0.039, 4.27 | 0.115 / 0.029 / 0.038, 4.22 | 0.109 / 0.022 / 0.032, 5.63, 3.6× | 0.073 / 0.026 / 0.032, 1.66, 36× |
+| 2048 px, gate off | 0.123 / 0.023 / 0.040, 7.68 | 0.121 / 0.023 / 0.040, 7.59 | 0.119 / 0.020 / 0.038, 10.27, 3.3× | (v0.2.5: 0.068 / 0.022 / 0.028, 2.31, 33×) |
+
+Without the two fluent emoji, whose radial gradients balloon the parameter mean, balanced's
+parameters per artist's parameter read 1.51 / 2.57 / 2.71 against the merged Fast's 1.44 / 2.35 /
+2.45 at 128 / 512 / 1024 px (+5 / +9 / +11 %).
+
+**The size gate.** The table's last row is balanced with the threshold lifted (a temporary
+build). At 512 and 1024 px balanced reaches Quality's median and its mean without the fluent
+emoji at a tenth of Quality's time; the remaining mean gap is the two fluent emoji full of
+radial gradients, a fill-model gap no geometry stage closes. At 2048 px the gain shrinks to
+−1.5 % mean and −5 % without fluent (15 of 21 cases better), for 35 % more parameters and 3.3×
+the engine time: judged at 1024 px, a 2048 px raster's boundaries are already finer than the
+judge can see, and what is left is the fill model. So above 1024 px balanced runs Fast's path;
+1024 is the largest size measured worth it. The research's 2048 px run, and this branch's on the
+old solve (−1.6 % mean, +34 % parameters, 2.7×), agree.
+
+**Time** (interleaved per image, default threading, the smaller of two runs, on the shared
+development machine under load; engine = the stopwatch marks `trace_total` + `fit_dp` +
+`repair` + `fills` + `emit`, median ms, with the paired median ratio against the merged Fast
+and, in brackets, the process wall ratio):
+
+| set | Fast (merged) | Balanced (cap 8) | Quality (main) |
+|---|---|---|---|
+| screen, 246 icons at 128 px | 4.2 | 10.1, 2.40× (1.20×) | 80.7, 20.4× (4.2×) |
+| s512, 51 images at 512 px | 9.1 | 30.3, 3.32× (1.72×) | 278.6, 28.0× (9.3×) |
+| big (7) and bigalpha (3), 2048 px | | Fast's path, same bytes | |
+
+The solve itself (`boundary_opt` mark) takes 5.5 ms median at 128 px and 20.4 ms at 512 px in
+balanced, against 23.2 and 81.7 ms for Quality's uncapped solve on the same sets. On the old
+solve, with cap 4, balanced read 1.96× / 2.60× Fast's engine time; the rewritten solve costs
+more per iteration (2.08× / 2.83× at cap 4).
+
+**Citations** (labels as in the doc comments):
+
+* the mode, "Inspired by" S. Zilberstein (1996), "Using anytime algorithms in intelligent
+  systems", AI Magazine 17(3):73,
+  <https://ojs.aaai.org/aimagazine/index.php/aimagazine/article/view/1232>: anytime modules
+  composed under a budget chosen from their measured performance profiles; here the budget is
+  fixed per mode and counted in iterations, so the output does not depend on the machine
+  (`fast.rs:1-53`, `boundary_opt.rs:613-626`); "See also" M. Yang, H. Chao, C. Zhang, J. Guo,
+  L. Yuan, J. Sun (2016), "Effective clipart image vectorization through direct optimization
+  of bezigons", IEEE TVCG 22(2), <https://arxiv.org/abs/1602.01913>, a crude partition refined
+  by optimisation against the image, which is this mode's shape;
+* the finer tolerances, "Not from the literature" (an operating point read off the measured
+  Pareto front), "See also" Selinger 2003, whose `opttolerance` is the same knob;
+* the corner threshold, "Inspired by" Selinger 2003 §2.3.2 (`alphamax`, restated as a distance
+  and set by measurement), "See also" S. Hoshyari, E. A. Dominici, A. Sheffer, N. Carr,
+  D. Ceylan, Z. Wang, I-C. Shen (2018), "Perception-driven semi-structured boundary
+  vectorization", ACM TOG (SIGGRAPH 2018), <https://doi.org/10.1145/3197517.3201312>
+  (corners found jointly with the fit by a learned metric; not used, because Fast must stay
+  one pass);
+* the solve itself keeps its own sources (`08-boundary-solve.md`).
+
 ## Constants and thresholds
 
 Fast mode's own constants are listed, with their basis, in [`constants.md`](constants.md),
@@ -905,6 +1114,14 @@ one below Quality's `MAX_FACES` (section 04); past it the smallest components ar
 by the rule the two modes share (`regions::cap_components`, stage 3).
 
 ## Failure modes and edge cases
+
+- **Balanced above 1024 px is Fast.** A raster longer than `BALANCED_MAX_SIDE` on its longer
+  side, after `--max-dim` and any resampling, traces exactly as `--mode fast` (byte-identical
+  on the 2048 px sets, the 1672 px masthead included), and the report line says so (§8).
+- **Balanced turns more than Fast.** Its finer tolerances follow more of the measured
+  wobble: on the gate, turning +12–14 % against v0.2.5's Fast, with the parameter ratio within
+  −0.2 to +1.3 %, for 19–38 % less dE00 (§8). It is a mode for colour fidelity, not for the
+  tidiest outline.
 
 - **A resampled input takes the slow histogram.** A `--max-dim` reduction or `--intake-scale`
   leaves box averages outside the exact set, so the palette's bands stop counting and the
@@ -930,7 +1147,7 @@ by the rule the two modes share (`regions::cap_components`, stage 3).
   pool.
 - **The image frame is written, not fitted, and the chamfer is gone.** Since `5520e6b` the
   ring that runs round the whole image border is written as the image rectangle, four lines
-  and 8 parameters (`frame_rectangle`, `fast/mod.rs:259-316`), so the spurious cubic that
+  and 8 parameters (`frame_rectangle`, `fast/mod.rs:321-378`), so the spurious cubic that
   chamfered its start corner (6 parameters too many, on 166 of 246 screen icons) no longer
   appears. The test compares coordinates exactly, which holds because the refinement never
   moves the lattice's outer nodes; a frame ring with any point off the border, or that does
@@ -978,6 +1195,13 @@ count, then per edge a closed flag, the contrast and the points as f64 pairs) is
 the phase-1 research build's `INKVEC_FFDUMP`, which is not in this tree.
 
 ## Open questions
+
+- Balanced's cap was chosen on the solve's profile (4 on the solve of v0.2.5, 8 on the
+  rewritten one, §8). Any further change to what one iteration does moves it; re-measure on the
+  gate after such a change.
+- The x1-tolerance variant (solve only) keeps about two thirds of balanced's dE00 gain with fewer
+  parameters than Fast and nearly flat turning (§8). Which point the product wants is the
+  owner's call.
 
 - The per-stage cost of intake after the round was not measured separately from the palette.
 - Fast's front end composites the image over white again (`fast/front.rs:82`); for an image

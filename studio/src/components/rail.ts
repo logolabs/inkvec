@@ -11,7 +11,7 @@
  */
 
 import { fill, h, icon } from "../lib/dom";
-import { appliesTo, bytes, count, de00, modKey, seconds, type Store } from "../lib/state";
+import { appliesTo, bytes, count, de00, engineName, fastEngine, modKey, seconds, type Store } from "../lib/state";
 import type { Report, Settings } from "../lib/ipc";
 import { WEB } from "../lib/platform";
 import { closeOverlay, modal, openModal, tip } from "./overlays";
@@ -180,6 +180,13 @@ export function createRail(store: Store, act: RailActions): HTMLElement {
  * groups, which is a fine place for a precision slider and a poor one for these. They are
  * here whichever half of the rail is showing, and set the same settings the groups did.
  */
+/** The engine's caption beside its title: one line on what the selected engine does. */
+const ENGINE_STATE: Record<string, string> = {
+  quality: "closest fit",
+  balanced: "fast, then refined",
+  fast: "one pass",
+};
+
 function modesBlock(store: Store, act: RailActions): HTMLElement[] {
   const st = store.state;
   const help = (key: string) => st.caps?.controls.find((c) => c.key === key)?.help ?? "";
@@ -194,9 +201,9 @@ function modesBlock(store: Store, act: RailActions): HTMLElement[] {
       tip(
         h("span.modetitle", { tabindex: "0" }, "Engine"),
         help("mode") ||
-          "Quality places every edge to a fraction of a pixel and fits the fewest curves that match the image: the closest trace, and the default. Fast traces each shape in a single pass, many times quicker, for previews, batches and very large images.",
+          "Quality places every edge to a fraction of a pixel and fits the fewest curves that match the image: the closest trace, and the default. Balanced is Fast with a few steps of Quality's edge placement and a finer fit: closer than Fast on small images, for about twice its time; above 1024 px it is Fast. Fast traces each shape in a single pass, many times quicker, for previews, batches and very large images.",
       ),
-      h("span.modestate", null, engineMode === "fast" ? "one pass" : "closest fit"),
+      h("span.modestate", null, ENGINE_STATE[engineMode] ?? ENGINE_STATE.quality),
     ),
     h(
       "div.seg.big",
@@ -210,6 +217,16 @@ function modesBlock(store: Store, act: RailActions): HTMLElement[] {
           onclick: () => act.changeSetting("mode", "quality"),
         },
         "Quality",
+      ),
+      h(
+        "button",
+        {
+          "aria-pressed": String(engineMode === "balanced"),
+          "data-ctl": "mode:balanced",
+          title: "Balanced: Fast with a few steps of Quality's edge placement and a finer fit; closer than Fast on small images, about twice its time",
+          onclick: () => act.changeSetting("mode", "balanced"),
+        },
+        "Balanced",
       ),
       h(
         "button",
@@ -368,13 +385,14 @@ function railTabs(store: Store, act: RailActions): HTMLElement[] {
 // ------------------------------------------------------------------------- tune ---
 
 /**
- * In Fast, the controls that only Quality reads are not shown (they steer stages Fast skips).
+ * In Fast or Balanced, the controls that only Quality reads are not shown (they steer stages the
+ * Fast engine skips).
  * One quiet line says how many there are and where they went, so a control that vanished is
  * not a control that was lost; their values are kept for when Quality is back on.
  */
 function qualityOnlyLine(store: Store, act: RailActions): HTMLElement | null {
   const st = store.state;
-  if (st.settings.mode !== "fast") return null;
+  if (!fastEngine(st.settings.mode)) return null;
   const hidden = (st.caps?.controls ?? []).filter((c) => !PROMOTED.has(c.key) && !appliesTo(c, st.settings)).length;
   if (!hidden) return null;
   return h(
@@ -681,7 +699,12 @@ function readout(store: Store, act: RailActions): HTMLElement {
   const cell = (value: string, label: string, change: HTMLElement | null) =>
     h("div.cell", null, h("span.v.num", null, value), h("span.k", null, label), change);
 
-  const isFast = (st.settings.mode ?? "quality") === "fast";
+  // The pill names the engine and switches between Quality and the Fast engine: from
+  // Quality to Fast, and from Fast or Balanced back to Quality. Balanced is chosen in the
+  // engine selector above.
+  const mode = st.settings.mode ?? "quality";
+  const isFast = fastEngine(mode);
+  const name = engineName(mode);
   const badgeRow = h(
     "div.readout-badge-row",
     null,
@@ -689,10 +712,10 @@ function readout(store: Store, act: RailActions): HTMLElement {
       "button.engine-pill" + (isFast ? ".fast" : ".quality"),
       {
         type: "button",
-        title: isFast ? "Fast vectorizer active. Click to switch to Quality mode." : "Quality vectorizer active. Click to switch to Fast mode.",
+        title: isFast ? `${name} vectorizer active. Click to switch to Quality mode.` : "Quality vectorizer active. Click to switch to Fast mode.",
         onclick: () => act.changeSetting("mode", isFast ? "quality" : "fast"),
       },
-      h("span.engine-name", null, isFast ? "Fast" : "Quality"),
+      h("span.engine-name", null, name),
     ),
     r.seconds != null
       ? h(

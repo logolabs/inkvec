@@ -459,6 +459,16 @@ export function plannedTracePx(st: State, tier: "draft" | "final"): number | nul
   return Math.min(cap, longer);
 }
 
+/** Whether `mode` runs the Fast engine: Fast, or Balanced (Fast plus a capped boundary solve). */
+export function fastEngine(mode: TraceMode | undefined): boolean {
+  return mode === "fast" || mode === "balanced";
+}
+
+/** An engine's name as the interface writes it. */
+export function engineName(mode: TraceMode | undefined): string {
+  return mode === "fast" ? "Fast" : mode === "balanced" ? "Balanced" : "Quality";
+}
+
 /**
  * Whether a control changes the drawing in the engine `settings` select. The Tune tab, its
  * counts and its group resets, and the wizard all ask this, so a control that does nothing
@@ -470,7 +480,9 @@ export function appliesTo(c: Control, settings: Settings): boolean {
   // routes fit with Quality's fitter: with either on, Fast reads what Quality reads. Line art
   // declines on a drawing that is not line art, and the extra controls then do nothing; that
   // is the lesser mistake than hiding the ones that shape the strokes when it does not.
-  const fast = settings.mode === "fast" && !settings.blackAndWhite && !settings.lineArt;
+  // Balanced runs the Fast engine (its boundary solve is capped by iterations, not by the
+  // time limit), so it reads exactly what Fast reads.
+  const fast = fastEngine(settings.mode) && !settings.blackAndWhite && !settings.lineArt;
   if (c.modes === "qualityOnly") return !fast;
   if (c.modes === "fastOnly") return fast;
   return true;

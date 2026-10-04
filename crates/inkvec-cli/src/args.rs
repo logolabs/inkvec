@@ -26,6 +26,11 @@ pub enum TraceMode {
     /// A Potrace-class fit on the same palette, planar map and emitter: flat fills, several
     /// times faster. See `inkvec_trace::fast`.
     Fast,
+    /// Fast, plus the global boundary solve stopped after a few iterations and the fitter's
+    /// tolerances a quarter finer: between the two in time and fidelity, on rasters up to
+    /// `fast::BALANCED_MAX_SIDE` on their longer side; larger ones take Fast's path, where
+    /// the extra stages measured no gain. Opt-in. See `crate::fast`.
+    Balanced,
 }
 
 impl TraceMode {
@@ -34,20 +39,29 @@ impl TraceMode {
         match self {
             TraceMode::Quality => "quality",
             TraceMode::Fast => "fast",
+            TraceMode::Balanced => "balanced",
         }
+    }
+
+    /// Whether this mode runs the Fast engine's front end and fitter: `fast` and `balanced`.
+    pub fn fast_engine(self) -> bool {
+        matches!(self, TraceMode::Fast | TraceMode::Balanced)
     }
 }
 
 impl std::str::FromStr for TraceMode {
     type Err = String;
 
-    /// `quality` or `fast`, ignoring case and surrounding spaces; anything else is an error
-    /// that names the two accepted values.
+    /// `quality`, `fast` or `balanced`, ignoring case and surrounding spaces; anything else
+    /// is an error that names the three accepted values.
     fn from_str(s: &str) -> Result<Self, String> {
         match s.trim().to_ascii_lowercase().as_str() {
             "quality" => Ok(TraceMode::Quality),
             "fast" => Ok(TraceMode::Fast),
-            _ => Err(format!("unknown mode {s:?}; want quality or fast")),
+            "balanced" => Ok(TraceMode::Balanced),
+            _ => Err(format!(
+                "unknown mode {s:?}; want quality, fast or balanced"
+            )),
         }
     }
 }
@@ -217,8 +231,8 @@ pub struct Args {
     /// absorption). Always on from the command line; `crate::select` turns it off for one
     /// of its hypotheses.
     pub absorb_blends: bool,
-    /// Quality (the default) or fast. Fast mode ignores the options that only steer quality
-    /// stages, and says so in the report.
+    /// Quality (the default), fast or balanced. Fast and balanced ignore the options that only
+    /// steer quality stages, and say so in the report.
     pub mode: TraceMode,
 }
 
@@ -326,6 +340,14 @@ OPTIONS:
                                      planar map, with flat fills: several times
                                      faster, a little less faithful. Options that only
                                      steer quality stages are ignored and listed
+                            balanced fast, plus 8 iterations of the boundary
+                                     solve and a fit a quarter finer: about 38%
+                                     closer to the artist's file than fast at
+                                     128 px and 19% at 512 px, for 2.4-3.3x fast's
+                                     engine time, with as many parameters.
+                                     Inputs over 1024 px on the longer side trace
+                                     as fast, where the extra steps buy little.
+                                     Ignores the same options as fast
         --tau <f>           Chord tolerance in standard deviations   [default: 2.0]
         --precision <f>     Sets the MDL cost of a coordinate: lambda = ln(extent/precision).
                             It does not set the digits the emitter writes; output
@@ -627,7 +649,7 @@ fn parse_args_from(mut it: impl Iterator<Item = String>) -> Result<Args, String>
             }
             "--use-symbols" => a.use_symbols = true,
             "--hypotheses" => a.hypotheses = true,
-            "--mode" => a.mode = it.next().ok_or("--mode needs quality or fast")?.parse()?,
+            "--mode" => a.mode = it.next().ok_or("--mode needs a value")?.parse()?,
             "--sr-command" => {
                 a.sr_command = Some(it.next().ok_or("--sr-command needs a command line")?)
             }
@@ -797,9 +819,14 @@ mod tests {
         assert_eq!(a.mode, super::TraceMode::Quality);
         let fast = parse("logo.png --mode fast").expect("parses");
         assert_eq!(fast.mode, super::TraceMode::Fast);
+        let balanced = parse("logo.png --mode Balanced").expect("parses");
+        assert_eq!(balanced.mode, super::TraceMode::Balanced);
+        assert_eq!(balanced.mode.name(), "balanced");
+        assert!(balanced.mode.fast_engine() && fast.mode.fast_engine());
+        assert!(!a.mode.fast_engine());
         assert!(parse("logo.png --mode slow")
             .unwrap_err()
-            .contains("quality or fast"));
+            .contains("quality, fast or balanced"));
 
         let a_opt_out = parse("logo.png --no-harmonize").expect("parses");
         assert!(!a_opt_out.harmonize);

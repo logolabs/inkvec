@@ -18,11 +18,23 @@ API in particular should be treated as unstable release to release).
 - **Gradients are recovered as the artist drew them more often.** Radial gradient centres are searched under a free profile (after Chakraborty et al. 2025), not a straight ramp, with a Levenberg–Marquardt fit. Two regions are not merged across an edge. A gradient the writer would paint flat is refused, and its interior stops are placed together.
   - Of 168 gradient icons, 50 % are now recovered as one gradient (42 % before) and 24 % are painted flat (30 % before).
   - On its own, this change measures dE00 −3.9 % at 512 px.
+- **A shape that is its own mirror image comes back symmetric.** An outline that crosses its own symmetry axis is fitted on one side and reflected, when that describes it as cheaply. lucide/beaker's mirror residual goes from 2.1e-4 to 3.3e-5.
+- **Upscaled input is undone before tracing.**
+  - A nearest-neighbour upscale by any factor of 2 or more, including non-integer factors like 3.5×, is inverted exactly, verified pixel for pixel. Before, only integer factors were. At 3.5×, dE00 falls from 1.21 to 0.35 and parameters from 14× to 1.3× the artist's.
+  - Quality mode reduces smoothly resampled input (bicubic or Lanczos, 3× or more) back toward its source size, unless the image has native-sharp edges such as a glow. Bicubic 4× improves 33 %.
+  - Clean input is byte-identical. `--no-unblock` and `--no-soft-intake` turn these off.
+- **`--detect-strokes` (opt-in) writes stroke-drawn shapes as a centreline and one stroke width.** Line icons come back near the artist's own parameter count. On the gate: dE00 −9.4 % at 128 px and −6.8 % at 512 px, parameters −20 % to −32 %, for about 1.5× the trace time. It stays opt-in until that time comes down.
 - **`--hypotheses` (opt-in) traces three structural alternatives on hard icons and keeps the one with the shortest description** (Rissanen 1978): blend absorption off, a matte instead of native alpha, a tighter merge distance. dE00 is −6.0 % at 128 px for 3.6× the time.
 - **Quality mode's palette matches the artist's more often.** On the regression gate, dE00 is −2.0 % at 128 px and −1.4 % at 512 px. The 512 px opaque condition and Fast mode are unchanged.
   - **One ink stays one colour on upscaled input.** A resampling filter's overshoot rim around a shape was admitted as a second, slightly brighter ink. Such an ink now needs an interior of its own. On the gold crest sample, three golds and notched dots become one gold and 14 clean circles, and the file is 64 % smaller.
   - **Flat fills of one ink are written as one colour.** A flat face within 0.5 dE00 of its ink's best-evidenced face takes that face's colour. On upscaled input, duplicate fills fall by half.
   - **A rare colour is kept when the image needs it.** A rare candidate becomes an ink when enough of its pixels cannot be explained as a mix of the inks around it, after Aksoy et al. 2017. Before, admission depended on the colour's share of the whole image.
+
+### Fixed
+
+- **The regression gate's turning axis measures what it says.** It read every `x,y` pair in a path as a point. An arc's radii and flags became points, and most traces write arcs: 215 of the 246 screen-set traces. One polyline also ran through every subpath, and `<rect>` and `<circle>` were not read at all.
+  - Paths are now read command by command, arcs as the cubics they stand for, each subpath on its own, primitives included (scorer version 3).
+  - The v0.2.4 baselines were re-recorded with it on both platforms. dE00 and ratio are unchanged.
 
 ## [0.2.5] - 2026-10-03
 

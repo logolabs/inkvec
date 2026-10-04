@@ -75,6 +75,11 @@ const MAX_SLIVER_MISFIT: f64 = 4.0;
 /// Most profile nodes a fit has: the two end stops and [`MAX_MID_STOPS`] interior ones.
 const MAX_NODES: usize = MAX_MID_STOPS + 2;
 
+/// Passes of the repartition of two interior stops ([`repartition`]): each pass moves each
+/// stop to its best offset with the other held. One pass; see `repartition` for what it
+/// was measured on.
+const REPARTITION_PASSES: usize = 1;
+
 /// A normal-equations matrix on the stack: the leading `n×n` block is used.
 type Mat = [[f64; MAX_NODES]; MAX_NODES];
 /// Its right-hand sides, one per colour channel.
@@ -304,6 +309,9 @@ pub(crate) fn fit_mid_stops(
         }
         knots.push(k);
         knots.sort_by(f64::total_cmp);
+        if knots.len() == 2 {
+            repartition(&p, &mut knots);
+        }
         let Some((_, x)) = fit_piecewise(&p.c, &p.t, &knots, &p.weight, p.delta, IRLS_ROUNDS)
         else {
             break;
@@ -315,12 +323,58 @@ pub(crate) fn fit_mid_stops(
             .map(|(&off, &col)| (off, from_space(col, space)))
             .collect();
         let cand = model.with_stops(from_space(x[0], space), mids, from_space(x[m - 1], space));
-        if p.cuts_a_misfit_sliver(&cand, &knots, k) {
+        // The knot just added -- or, after a repartition, both knots, since both moved.
+        let moved: &[f64] = if knots.len() == 2 { &knots } else { &[k] };
+        if moved
+            .iter()
+            .any(|&q| p.cuts_a_misfit_sliver(&cand, &knots, q))
+        {
             break;
         }
         out.push(cand);
     }
     out
+}
+
+/// Re-place two greedily found interior stops: each in turn is moved to the offset the
+/// exact scan ([`StopProblem::best_knot`]) picks with the other one held, for
+/// [`REPARTITION_PASSES`] passes. `knots` holds two offsets, ascending, and still does
+/// afterwards; a move that would land within 5 % of the `t` span of the other stop (the
+/// distance [`fit_mid_stops`] refuses) is not made.
+///
+/// Why: the stops are found one at a time, and the first is placed as if it were the only
+/// one. On a clamped artist profile -- a flat core and a ramp with two bends -- the lone best
+/// knot sits at the steeper bend, and the second then splits the rim, leaving the core
+/// fitted by a slope: on `noto-emoji/emoji_u1f36a` at 512 px the body's knots landed at 0.804
+/// and 0.923 of a profile that is flat to 0.56, and the core read 0.2 dE00 off over 40 % of
+/// the icon. Re-placing the first with the second held finds the core's end.
+///
+/// Method from: J. Bai (1997), Estimating Multiple Breaks One at a Time, Econometric Theory
+/// 13(3):315–352, doi:10.1017/S0266466600005831 -- breaks estimated one at a time, then each
+/// re-estimated with the others held (the paper's refinement, which brings the sequential
+/// estimates to the limiting distribution of the simultaneous ones). Adapted: one pass, on
+/// the exact binned scan and its Huber reweighting, which already prices every offset of a
+/// knot given the others. See also: J. Bai, P. Perron (2003), doi:10.1002/jae.659, for the
+/// global dynamic-programming search over all breaks at once, which costs `O(G²)` scans of
+/// the `G = 1000` offsets here and is not used for that reason.
+///
+/// Complexity: two more knot searches per two-stop variant, each `O(n + G)` per Huber
+/// round.
+fn repartition(p: &StopProblem, knots: &mut Vec<f64>) {
+    debug_assert_eq!(knots.len(), 2);
+    for _ in 0..REPARTITION_PASSES {
+        for i in 0..2 {
+            let other = knots[1 - i];
+            let Some(k) = p.best_knot(&[other]) else {
+                continue;
+            };
+            if (k - other).abs() < 0.05 * p.span {
+                continue;
+            }
+            knots[i] = k;
+            knots.sort_by(f64::total_cmp);
+        }
+    }
 }
 
 /// The fixed data of one [`fit_mid_stops`] search: the strided subsample, each sample's
@@ -676,5 +730,54 @@ mod tests {
             assert_eq!(bits(&ata[i]), bits(&a2[i]));
             assert_eq!(bits(&atb[i]), bits(&b2[i]));
         }
+    }
+
+    /// A clamped profile along a linear axis: flat to `t = 0.55`, then two ramps of
+    /// different slope meeting at `t = 0.85`. The first knot found alone sits at the
+    /// steeper bend; the repartition moves the other to the core's end, so the two-stop
+    /// variant has knots at both bends.
+    #[test]
+    fn two_stops_land_on_both_bends_of_a_clamped_profile() {
+        let (w, h) = (200usize, 6usize);
+        let profile = |t: f64| {
+            let a = (t - 0.55).clamp(0.0, 0.30) * 0.25;
+            let b = (t - 0.85).max(0.0) * 3.0;
+            0.80 - a - b
+        };
+        let mut s = Samples {
+            px: vec![],
+            x: vec![],
+            y: vec![],
+            srgb: vec![],
+            lin: vec![],
+        };
+        for y in 0..h {
+            for x in 0..w {
+                let t = x as f64 / (w - 1) as f64;
+                let v = profile(t);
+                let c = [v, 0.5 * v, 0.3];
+                s.px.push(y * w + x);
+                s.x.push(x as f64);
+                s.y.push(y as f64);
+                s.srgb.push([c[0] as f32, c[1] as f32, c[2] as f32]);
+                s.lin.push(to_lin([c[0] as f32, c[1] as f32, c[2] as f32]));
+            }
+        }
+        let model = FillModel::Linear {
+            p0: (0.0, 0.0),
+            p1: ((w - 1) as f64, 0.0),
+            c0: [0.8, 0.4, 0.3],
+            c1: [0.2, 0.1, 0.3],
+            interp: Interp::Srgb,
+            mids: vec![],
+        };
+        let cols = s.colors(Interp::Srgb);
+        let variants = fit_mid_stops(&model, &s, &cols, Interp::Srgb);
+        let Some(FillModel::Linear { mids, .. }) = variants.get(1) else {
+            panic!("no two-stop variant: {variants:?}");
+        };
+        let offs: Vec<f64> = mids.iter().map(|m| m.0).collect();
+        assert!((offs[0] - 0.55).abs() < 0.02, "knots {offs:?}");
+        assert!((offs[1] - 0.85).abs() < 0.02, "knots {offs:?}");
     }
 }

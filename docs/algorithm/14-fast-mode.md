@@ -83,7 +83,7 @@ fitter; one SVG document out of the emitter. Two differences in what comes out:
   (`fast/front.rs:14-16`);
 * **the report** opens with a line saying Fast mode ran and naming what it skipped — "fast
   mode     Potrace-class fit, flat fills; not run: boundary solve, curve DP, gradients,
-  ring repair, harmonization" (`report`, `crates/inkvec-cli/src/fast.rs:93-105`) — followed
+  ring repair, harmonization" (`report`, `crates/inkvec-cli/src/fast.rs:94-106`) — followed
   by every option the caller moved off its default that only steers a skipped stage
   (`fast_ignored`, `fast.rs:47-91`): `--tau`, `--content-units`, `--bezier-cost`,
   `--corner-angle`, `--time-budget`, `--simplify-faint`, `--harmonize-threshold`,

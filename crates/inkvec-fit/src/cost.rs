@@ -31,7 +31,7 @@
 //!   distinguishable values carries that many nats of information (about 7.85 for a
 //!   256 px canvas at 0.1 px);
 //! - `P` counts the numbers a segment writes: a line 2 ([`crate::PARAMS_LINE`]), a cubic
-//!   [`cubic_params`] (6 by default), a circular arc 5 ([`crate::curves::PARAMS_ARC`]),
+//!   [`cubic_params`] (6 by default), a circular arc [`arc_params`] (5, or 7 as written),
 //!   an elliptical arc 7 ([`crate::curves::PARAMS_ELLIPTICAL_ARC`]). The start point
 //!   of a segment is the previous one's end and is not charged again;
 //! - a join where the tangent turns costs up to one more parameter, `λ`, because the
@@ -40,7 +40,7 @@
 //!   [`g1_break_radians`]).
 //!
 //! So a segment is kept exactly when the misfit it removes is worth more than the numbers
-//! it adds. The two prices in [`CostModel`] are the ones exposed to users.
+//! it adds. Users set the two above, and `--arcs-as-written` the arc's and a cubic's turn.
 //!
 //! # How the scope works
 //!

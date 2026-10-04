@@ -209,10 +209,12 @@ pub const PARAMS_ARC: f64 = 5.0;
 /// and the parameter price `λ` scaled 0.8, against the default prices): parameter ratio
 /// -4.1 % at 128 px, -1.4 % at 512 px and 512 px opaque; dE00 -1.5 %, -0.5 %, +0.8 %, none
 /// of them resolvable; arcs written per icon 15 -> 7.4. At `λ` unscaled the ratio gain is
-/// -5.9 / -3.0 / -2.9 % but dE00 rises 4.1 / 1.7 / 1.7 %. Opt-in, because the gate's
-/// turning axis reads an arc's radii and flags as anchors and scores every arc swapped for a
-/// cubic as +20-37 % turning, where the drawn curves' own turning moves -0.04 % (see
-/// `docs/algorithm/11-fitting.md`).
+/// -5.9 / -3.0 / -2.9 % but dE00 rises 4.1 / 1.7 / 1.7 %. Opt-in, for two reasons: single
+/// drawings lose where art touches the frame (the points along the image edge carry little
+/// weight, so one long cubic over a corner and its side wins: twemoji/1f7eb at 512 px
+/// opaque, dE00 0.003 -> 0.197), and the gate's turning axis reads an arc's radii and flags
+/// as anchors and scores every arc swapped for a cubic as +20-37 % turning, where the drawn
+/// curves' own turning moves -0.04 % (see `docs/algorithm/11-fitting.md`).
 pub const PARAMS_ARC_WRITTEN: f64 = 7.0;
 
 /// Parameters charged for an elliptical arc.

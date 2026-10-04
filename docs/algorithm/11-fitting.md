@@ -73,8 +73,9 @@ pub struct MultimodelFit {
 
 `SegKind` (`multimodel.rs:175-184`) is `Line`, `Cubic`, or `Arc` (circular and elliptical
 arcs share the tag; only the stored parameters differ). `optimal_multimodel_capped` /
-`_capped_full` (`multimodel.rs:221`, `:232`) add a `max_span` argument — the point-span cap
-stage 12's repair uses; see `12-repair.md`.
+`_capped_full` (`multimodel.rs:327`, `:338`) add a `max_span` argument — the point-span cap
+stage 12's repair uses — and `optimal_multimodel_forced` (`multimodel.rs:291`) adds vertices
+every solution must keep, the repair's pins; see `12-repair.md`.
 
 Each boundary's fitted path then competes with a whole-boundary primitive (circle,
 ellipse, rounded rectangle, or a run of arcs); `inkvec_fit::choice` makes that choice — see
@@ -117,7 +118,7 @@ precision, `tau = 2.0`.
 
 In the shipping CLI, `extent` is the intake raster's `max(width, height)` in pixels, and
 `precision`/`tau` come from `--precision` (default `0.1`) and `--tau` (default `2.0`)
-(`crates/inkvec-cli/src/args.rs:218-219`), combined in `fit_config`
+(`crates/inkvec-cli/src/args.rs:223-224`), combined in `fit_config`
 (`crates/inkvec-cli/src/units.rs:92-98`). Under `--content-units`, `fit_config` multiplies
 `precision` by the content scale `s` before deriving `lambda` and then multiplies `lambda`
 by `s` again; see `01-intake.md`.
@@ -130,7 +131,7 @@ What a cubic costs is no longer a fixed 6 for every caller: `cost.rs` holds a `C
 that a caller sets for one trace (`--bezier-cost`, `--corner-angle` on the command line);
 the defaults are 6 parameters per cubic and a 10-degree corner, and a trace that asks for
 nothing is unchanged (`cost.rs:1-21`). The code reads the price through
-`params_cubic()` (`candidates.rs:54-58`).
+`params_cubic()` (`candidates.rs:56-60`).
 
 ### The effective geometric tolerance — and why the square root matters
 
@@ -138,7 +139,7 @@ No line in the repo writes `d = sigma * sqrt(2*lambda*k/n)` as a formula — thi
 derivation, not a quotation — but every quantity in it is pinned to code: the cost function
 is `E = ½·χ² + λ·P` (`lib.rs:11-20`), applied identically to every candidate the dynamic
 program prices (the cost column of `candidates.rs:16-27`), at the merge pass's accept test
-(`merge.rs:410-416`, code at `:473-512`) and at the curve-or-primitive choice
+(`merge.rs:425-431`, code at `:501-542`) and at the curve-or-primitive choice
 (`choice.rs:106-118`); and `chi2` is the sum of squared residuals each weighted by
 `1/sigma^2` (`lib.rs:178-190`, `chi2_line` at `lib.rs:254`). Given those two facts, the
 algebra below is exact, not speculative.
@@ -226,28 +227,36 @@ candidate models of `candidates.rs:16-27` are priced:
 | model | fitter | cost |
 |---|---|---|
 | line | total least squares (`scatter_min_eigen`) | `½χ² + 2λ + breaks` (`line_cost_terms`) |
-| G1 cubic | area and moment matching, Levien's quartic (`best_cubic`) | `½χ² + 6λ + wobble` |
-| free cubic (research) | linear least squares, ends pinned (`try_free_cubic`) | `½χ² + 6λ + wobble + breaks` |
-| circular arc | Kåsa algebraic circle (`CirclePrefix`, `try_arc`) | `½χ² + 5λ + breaks` |
+| G1 cubic | area and moment matching, Levien's quartic (`best_cubic`) | `½χ² + 6λ + wobble + over-turn` |
+| free cubic (research) | linear least squares, ends pinned (`try_free_cubic`) | `½χ² + 6λ + wobble + breaks + over-turn` |
+| circular arc | Kåsa algebraic circle (`CirclePrefix`, `try_arc`) | `½χ² + 5λ + breaks` (7λ under `--arcs-as-written`) |
 | elliptical arc | algebraic ellipse, Sampson distance (`try_ellipse`) | `½χ² + 7λ + breaks` |
 
-"6" is the cubic price in force (`params_cubic`). A curved model is fitted only when the line
+"6" is the cubic price in force (`params_cubic`), "5" the arc price in force
+(`cost::arc_params`, `cost.rs:176`). "over-turn" is 0 at the default prices and `6λ` under
+`--arcs-as-written` for a cubic whose end directions turn more than 90°
+(`over_turn_params`, `candidates.rs:618`; see "Arcs as written" below). A curved model is fitted only when the line
 (for the ellipse, the best candidate so far) already costs more than the curved model's
 parameter floor `λ·P` — "a proof, not a heuristic, that it could not otherwise win"
-(`multimodel/scan.rs:21-25`).
+(`multimodel/scan.rs:26-30`).
 
 **Recurrence** (`multimodel/scan.rs:8-18`):
 
 ```
 best[0] = 0
 base(i) = best[i] + (i > 0 ? vertex_cost(i) : 0)
-best[j] = min over i < j, j − i ≤ max_span, of  base(i) + min_model cost_model(i, j)
+best[j] = min over admissible i < j of  base(i) + min_model cost_model(i, j)
 ```
 
-ties going to the smallest `i`; `from[j]`, `kind[j]` and the fitted parameters record the
+where a span is admissible when `Limits::allows` it (`multimodel.rs:221`): at most
+`max_span` points, and no forced vertex strictly inside. Both are unconstrained in normal
+fitting; stage 12's repair sets them. Both conditions are monotone in `j`, so a start refused
+once is dropped for good (`multimodel/scan.rs:825`), and the pull and push fills stay
+identical bit for bit (the tests in `multimodel/scan.rs` compare them under caps and forced
+vertices). Ties go to the smallest `i`; `from[j]`, `kind[j]` and the fitted parameters record the
 winner, and the answer is read back from `from[n − 1]` to 0. The per-vertex turn cost
 (`vertex_cost`, `tangents.rs:313-318`) is charged once, on leaving `i`: leaving a point
-"makes it a vertex, which pays its turn" (`multimodel/scan.rs:828-829`).
+"makes it a vertex, which pays its turn" (`multimodel/scan.rs:848-849`).
 
 **Why the DP is a global optimum over segmentations for a fixed alphabet.** The total cost is
 additive over spans and vertices: `sum(segcost(kind, v_q, v_{q+1})) + sum(vertex_cost(v))`.
@@ -260,9 +269,9 @@ prefix would produce a strictly cheaper whole. This is *verified*, not merely ar
 (`...on_random_inputs`) compare the DP's cost against exhaustive enumeration of every
 segmentation and every per-segment type choice.
 
-**Closed loops.** `solve_closed` (`multimodel.rs:1296`) fixes a cut point, solves the open
+**Closed loops.** `solve_closed` (`multimodel.rs:1427`) fixes a cut point, solves the open
 problem, and tries once more from a better cut; its doc says plainly
-(`multimodel.rs:1283-1292`): "The true optimum is a minimum-cost *cycle*; fixing a cut vertex
+(`multimodel.rs:1414-1423`): "The true optimum is a minimum-cost *cycle*; fixing a cut vertex
 is an approximation that can cost one segment when the cut lands mid-curve [...] Potrace
 solves the cyclic problem exactly; that remains future work." On the small loops of
 `closed_program_matches_brute_force_over_cyclic_segmentations`
@@ -276,14 +285,14 @@ These bounds keep it tractable:
 
 1. **The scan cut-off.** The scan from a start `i` stops after `PRUNE_PATIENCE`
    consecutive spans whose line and cubic fidelity terms both exceed
-   `PRUNE_SLACK·λ·PARAMS_LINE·(j − i)` (`multimodel/scan.rs:19-21`). `PRUNE_SLACK = 4.0`
+   `PRUNE_SLACK·λ·PARAMS_LINE·(j − i)` (`multimodel/scan.rs:24-26`). `PRUNE_SLACK = 4.0`
    (`lib.rs:127`) and `PRUNE_PATIENCE = 8` (`multimodel.rs:138-144`), whose doc records why
    one exceedance is not enough: "the cubic residual is not [monotone] — the end tangent
    changes with `j`, and a span that fits badly can be followed by a longer one that fits
    well. That was measured, not supposed: with a single-exceedance cut-off the program
    returned a non-optimal S-curve segmentation that exhaustive enumeration caught." The
    value 8 itself is not derived.
-2. **Bounds inside the table** (`multimodel/scan.rs:27-63`): a candidate whose price floor
+2. **Bounds inside the table** (`multimodel/scan.rs:32-68`): a candidate whose price floor
    already reaches the best value at its end needs no residual, and a residual being summed
    stops once the partial sum settles the three questions the program asks of it. The
    module cites Morin & Marsten 1976 (branch and bound in a DP), Killick, Fearnhead & Eckley
@@ -294,26 +303,32 @@ These bounds keep it tractable:
 3. **Point decimation**, `DP_MAX_POINTS = 768` (`multimodel.rs:146-149`): longer boundaries
    are decimated for the program only, "one point per sampling cell of `stride` points, with
    sigma divided by `√stride`", keeping significant bends (`crate::decimate`); "A ring of a
-   512px image is 1,500 points; eleven of them took eleven seconds" (`multimodel.rs:316-330`).
-   The capped variant used by repair is exempt: "the self-intersection repair relies on the
-   measured contour being reproducible at `max_span = 1`, and a decimated contour is not
-   simple by construction" (`multimodel.rs:286-288`).
-4. **`max_span`** — `usize::MAX` in normal fitting; a finite cap under stage 12's repair.
+   512px image is 1,500 points; eleven of them took eleven seconds" (`multimodel.rs:424-438`).
+   The capped and forced variants used by repair are exempt: "the self-intersection repair
+   relies on the measured contour being reproducible at `max_span = 1`, a decimated contour is
+   not simple by construction, and a forced vertex is an index of the full contour"
+   (`multimodel.rs:393-396`).
+4. **`max_span` and forced vertices** (`Limits`, `multimodel.rs:221`) — none in normal
+   fitting; a finite cap, pins, or both under stage 12's repair. A closed boundary with a
+   forced vertex is cut there, which is exact (every admissible solution has that vertex),
+   instead of the two-cut heuristic (`multimodel.rs:1446`). An uncapped forced fit runs the
+   post-fit passes with the forced vertices kept (`merge_free_cubics_keeping`,
+   `merge.rs:365`; `multimodel.rs:515`).
 
-Per-candidate O(1) pricing comes from prefix sums (`Prefix`, `multimodel.rs:466`;
-`CirclePrefix`, `candidates.rs:990`) and a residual-sample cap `MAX_RESIDUAL_SAMPLES = 32`
-for cubics (`candidates.rs:42`). The elliptical arc is the one candidate that is not O(1):
+Per-candidate O(1) pricing comes from prefix sums (`Prefix`, `multimodel.rs:589`;
+`CirclePrefix`, `candidates.rs:1058`) and a residual-sample cap `MAX_RESIDUAL_SAMPLES = 32`
+for cubics (`candidates.rs:44`). The elliptical arc is the one candidate that is not O(1):
 "Only spans of at least 24 points whose length is a multiple of 16 are tried: the algebraic
 fit is O(j − i), so this keeps the ellipse to a sparse grid of candidate ends rather than
-making the dynamic program cubic" (`candidates.rs:1271-1273`; constants `MIN_POINTS = 24`,
-`LENGTH_STRIDE = 16` at `candidates.rs:1299-1300`). Long polylines (from
-`DP_PAR_MIN_POINTS = 128`, `multimodel/scan.rs:73`) share an endpoint's candidates between
+making the dynamic program cubic" (`candidates.rs:1340-1342`; constants `MIN_POINTS = 24`,
+`LENGTH_STRIDE = 16` at `candidates.rs:1368-1369`). Long polylines (from
+`DP_PAR_MIN_POINTS = 128`, `multimodel/scan.rs:78`) share an endpoint's candidates between
 idle threads; this "decides only where spans are evaluated, never what is chosen"
-(`multimodel/scan.rs:81-87`).
+(`multimodel/scan.rs:86-92`).
 
 ### Why the DP scans every endpoint, and what four cheaper alternatives cost
 
-`multimodel.rs:588-650` records four attempts to make the O(n²) scan cheaper, three refuted:
+`multimodel.rs:711-773` records four attempts to make the O(n²) scan cheaper, three refuted:
 
 > "The scan is the tracer's largest single cost — 978,236 spans evaluated on a 768-px
 > wordmark to keep 448 segments, a ratio of two thousand to one [...] Four ways of being
@@ -336,7 +351,7 @@ noise model that knows boundary error is correlated — and records that it was 
 wrong: "An AR(1)-whitened cubic residual [...] *raises* turning monotonically (+1.42% at
 rho=0.25, +3.98% at rho=0.50, +10.02% with the free cubic) where it was predicted to lower
 it", the damage concentrated at corners, and a single constant (`INKVEC_WOBBLE_PENALTY=0.8`,
-see `candidates::wobble_penalty_factor`) beats it on every axis (`multimodel.rs:623-650`).
+see `candidates::wobble_penalty_factor`) beats it on every axis (`multimodel.rs:746-773`).
 
 ### The alphabet
 
@@ -344,16 +359,17 @@ see `candidates::wobble_penalty_factor`) beats it on every axis (`multimodel.rs:
 |---|---|---|---|
 | Line | 2 | `PARAMS_LINE` (`lib.rs:119`) | "its endpoint (x, y). The start point is shared with the previous segment, so it is not charged twice." |
 | Axis-constrained line (research) | 1 | `PARAMS_AXIS_LINE` (`merge/snap.rs:17`) | "A line the drawing constrains to an axis costs one number, not two: the artist writes `h16`, not `L 16,0`." |
-| G1 / free cubic | 6 by default | `PARAMS_CUBIC` (`multimodel.rs:128`); the price in force is `params_cubic()` (`candidates.rs:54-58`, `cost.rs`) | "two control points and an endpoint" |
+| G1 / free cubic | 6 by default | `PARAMS_CUBIC` (`multimodel.rs:128`); the price in force is `params_cubic()` (`candidates.rs:56-60`, `cost.rs`) | "two control points and an endpoint" |
 | Smooth (`S`) cubic (research) | 4 | `PARAMS_SMOOTH_CUBIC` (`merge/snap.rs:204`) | the reflection is implied |
-| Circular arc | 5 | `PARAMS_ARC` (`curves.rs:191`) | one radius + two flags charged as full parameters + endpoint; see below |
-| Elliptical arc | 7 | `PARAMS_ELLIPTICAL_ARC` (`curves.rs:198`) | "One more than a cubic, so an ellipse has to be a materially better description of its span, not merely an equal one." |
+| Circular arc | 5 | `PARAMS_ARC` (`curves.rs:194`) | one radius + two flags charged as full parameters + endpoint; see below |
+| Circular arc, `--arcs-as-written` | 7 | `PARAMS_ARC_WRITTEN` (`curves.rs:218`) | the seven numbers the emitter writes and the benchmark counts; see "Arcs as written" |
+| Elliptical arc | 7 | `PARAMS_ELLIPTICAL_ARC` (`curves.rs:225`) | "One more than a cubic, so an ellipse has to be a materially better description of its span, not merely an equal one." |
 | `<circle>` | 3 | `PARAMS_CIRCLE` (`primitives.rs:42`) | `cx cy r` |
 | `<ellipse>` | 5 | `PARAMS_ELLIPSE` (`primitives.rs:44`) | `cx cy rx ry` plus rotation |
 | `<rect>` rounded | 6 | `PARAMS_ROUND_RECT` (`primitives.rs:47`) | "charged as six even though we force `ry = rx`, because the emitted element carries both" |
 | `<rect>` plain | 4 | `PARAMS_RECT` (`primitives.rs:49`) | corner radius collapsed to zero |
 
-`PARAMS_ARC`'s derivation (`curves.rs:182-191`) explains a deliberate over-charge:
+`PARAMS_ARC`'s derivation (`curves.rs:182-194`) explains a deliberate over-charge:
 
 > "SVG writes seven numbers (`rx ry rotation large-arc sweep x y`), but for a *circular* arc
 > `rx == ry` and the rotation is meaningless, so the document carries one radius, two one-bit
@@ -364,18 +380,18 @@ see `candidates::wobble_penalty_factor`) beats it on every axis (`multimodel.rs:
 > compactness the objective is meant to reward."
 
 `FittedPath::params()` (`lib.rs:859`) adds a further `2.0` for the path's own start point;
-`multimodel::path_cost` (`multimodel.rs:1440-1445`) does not, since the start point is
+`multimodel::path_cost` (`multimodel.rs:1593-1598`) does not, since the start point is
 shared with whatever precedes it. `choice::boundary_cost` (`choice.rs:106-118`) uses
 `path.params()`, start point included.
 
 **Free-tangent cubics are in the alphabet but compiled only into research builds**
-(`INKVEC_FREE_CUBIC`, `candidates.rs:60-85`). Their doc records the measured reason: on the
+(`INKVEC_FREE_CUBIC`, `candidates.rs:62-87`). Their doc records the measured reason: on the
 246-icon gate set the free cubic is better on dE00 (-0.21%) and parameter ratio (-1.08%) but
 worse on turning (+5.44%), the sawtooth detector; swept against the wobble penalty there is
 "no setting that keeps the parameter win and the wobble both", and "by the time turning is
 inside the gate the ratio is worse than baseline".
 
-**Per-span arcs.** `try_arc` (`candidates.rs:1113-1125`) Kåsa-fits a circle to the span
+**Per-span arcs.** `try_arc` (`candidates.rs:1182-1194`) Kåsa-fits a circle to the span
 (`CirclePrefix`), refuses a radius over a thousand times the span's own size, requires the
 points to go round the centre one way only (about eight strides checked), a turn between
 1e-3 rad and `MAX_ARC_DEGREES`, and then scores "the arc a renderer would draw: SVG
@@ -391,9 +407,74 @@ rebuilds from it."
 > half-circle by 0.05px — one sigma of extraction noise on an endpoint — moves its centre by
 > 2px. At 120° the same derivative is 0.58, so the arc shape is as stable as its endpoints."
 
+### Arcs as written (`--arcs-as-written`, opt-in)
+
+At five numbers an arc undercuts a six-number cubic on every span where both fit, but the
+document writes it as seven (`A rx,ry rot large,sweep x,y`) and the benchmark counts seven
+(`bench/inkvec_bench/svgmodel.py`). On the 246-icon screen set arcs are 35 % of the segments
+the tracer writes and 5.6 % of the artists' (r2-compact). `--arcs-as-written`
+(`Options::arcs_as_written`; `CostModel::with_written_arcs`, `cost.rs:108`) charges what the
+document carries, with two companions measured as necessary:
+
+1. **The arc at seven** (`PARAMS_ARC_WRITTEN`, `curves.rs:196-218`), read wherever the arc
+   price is read (`cost::arc_params`): `Segment::params`, `try_arc`, the scan's arc floor and
+   `segment_cost_direct`, so the branch-and-bound floors stay floors. *Not from the
+   literature: a price-consistency fix. See also* Maier, Janda & Schindler (2012), "Minimum
+   description length arc spline approximation of digital curves", ICIP 2012,
+   doi:10.1109/icip.2012.6467248.
+2. **One cubic charged as two past 90° of turn** (`CAP_TURN_DEGREES`,
+   `candidates.rs:578-607`; `over_turn_params`, `candidates.rs:618`). Two arcs at seven cost
+   `8λ` more than one cubic, about 57 nats at 128 px, against about 15 nats of `½χ²` for the
+   0.1 px a single cubic misses a 5.3 px round cap by, so the cap went to one cubic and
+   lucide's dE00 rose 12 % (r2-compact). A cubic's radial error on a circular arc grows as
+   the sixth power of the sweep: 2.7e-4 of the radius at 90°, 1.5e-3 at 120°, 1.8e-2 at 180°
+   (evaluated for the `(4/3)·tan(θ/4)` arms). *Inspired by* Goldapp (1991), "Approximation
+   of circular arcs by cubic polynomials", CAGD 8(3):227-238,
+   doi:10.1016/0167-8396(91)90007-X; the charge on the cubic's own end tangents, where the
+   circle is not known, is not from the literature. Charged in the scan (G1 and free
+   cubics), in `segment_cost_direct` and on both sides of the free-cubic merge
+   (`merge.rs:491`, `:540`). `tests/cost_scope.rs` reproduces the collapse on two caps and
+   its repair.
+3. **The parameter price scaled 0.8** (`WRITTEN_ARCS_LAMBDA_SCALE`,
+   `crates/inkvec-cli/src/lib.rs:474-494`, applied in `trace_prepared`, `:469`). Without it
+   the arc change trades colour for parameters.
+
+Measured on gate v2 (Quality, 246 icons, against the v0.2.5 Windows baseline; turning on
+the drawn curves, below):
+
+| arc / λ scale / 90° limit | dE00 128 / 512 / 512 opaque | ratio 128 / 512 / 512 opaque | drawn turning, 128 px |
+|---|---|---|---|
+| 7 / 1.0 / on | +4.1 / +1.7 / +1.7 % (worse) | -5.9 / -3.0 / -2.9 % | -0.9 % |
+| 7 / 0.8 / on (shipped) | -1.5 / -0.5 / +0.8 % (n.s.) | -4.1 / -1.4 / -1.4 % (better) | -0.04 % |
+| 7 / 0.7 / on | -4.1 / -0.9 / -0.6 % | -2.4 / -0.6 / -0.6 % | +0.6 % |
+| 7 / 0.6 / on (the proposal) | -7.3 / -2.3 / -1.9 % | -1.4 / +0.3 / +0.2 % | +1.2 % |
+| 6 / 1.0 / on | +2.0 / -0.1 / +0.0 % | -4.4 / -1.2 / -1.1 % | — |
+| 5 / 1.0 / on (limit alone) | -0.8 / -0.2 / -0.1 % | +1.0 / +0.9 / +0.9 % | -0.1 % |
+
+On top of stage 12's pinned repair (the branch tip, `d0f3343` plus the option) the shipped
+row reads dE00 -1.9 / -0.4 / +0.8 % and ratio -4.3 / -1.6 / -1.5 %. The mean hides real
+losses on single drawings, mostly where art touches the frame: the boundary points along
+the image edge carry little weight, so once an arc costs seven one long cubic over a corner
+and the side beside it wins (twemoji/1f7eb at 512 px opaque, dE00 0.003 -> 0.197, the
+rounded square's right side bowed; simple-icons/notion at 128 px, 0.50 -> 0.80). lucide reads
++7 % dE00 at 512 px. Those, and the turning artefact below, keep the option opt-in; the
+frame cases should be re-measured after the 2 px border pad (stage 1) lands.
+
+It is opt-in also because the gate's turning axis reads every arm with arcs at six or seven
+as **worse** by 8-26 %, and that reading is an artefact. `svgeval.structure_signals`
+(`bench/svgeval.py:699-713`) takes every `x,y` pair in a path's data as an anchor, so an arc
+contributes its radii `rx,ry` and its flags `large,sweep` as two fictitious anchors, with
+the turns and lengths between them. The same circle reads 0.157 as two arcs and 0.098 as
+four cubics. Arc 7 alone moves the gate's turning +37.4 % at 128 px; read without the
+radii and flags +2.1 %; read as the total absolute turning of the drawn, flattened curves
+(the same circle 0.1002 and 0.1001, `1/r`) -0.7 %. The table's last column is that last
+reading. A fix to the axis (skipping an arc's radii and flags, or flattening) would change
+the baseline, so it is the gate owner's to make; the scripts are in the branch report
+(`tmp/w3-arcs/turncheck.py`).
+
 ### The bow term
 
-`bow_penalty` (`candidates.rs:914-926`) charges the *line* candidate when a circular arc fits
+`bow_penalty` (`candidates.rs:982-994`) charges the *line* candidate when a circular arc fits
 the same span far better:
 
 > "When a circular arc through the same span fits at least four times better
@@ -414,11 +495,11 @@ pub(crate) fn bow_penalty(chi2_line: f64, chi2_arc: f64, span: usize) -> f64 {
 The `4.0` threshold has no stated derivation; the `ln 2` per point does (one bit per
 independently-agreeing sign). The circle is fitted wherever the line's residual exceeds one
 per point, even below the arc's price floor, "because it is the evidence for the line's bow
-penalty" (`multimodel/scan.rs:24-25`).
+penalty" (`multimodel/scan.rs:29-30`).
 
 ### The post-fit passes: `merge.rs`, and their gating
 
-They run from one place, `post_fit_passes` (`multimodel.rs:382-425`), on the centred
+They run from one place, `post_fit_passes` (`multimodel.rs:490-548`), on the centred
 polyline the fit was computed against:
 
 ```rust
@@ -438,15 +519,15 @@ if max_span == usize::MAX {
 |---|---|---|
 | `merge_free_cubics` | **on** | every uncapped fit (`max_span == usize::MAX`) |
 | `sharpen_corners` | **on** | same |
-| `snap_axis_aligned` | **off** | compiled only with `--features research` (`merge.rs:781-786`), and then only with `INKVEC_AXIS` set |
+| `snap_axis_aligned` | **off** | compiled only with `--features research` (`merge.rs:811-816`), and then only with `INKVEC_AXIS` set |
 | `snap_smooth_joins` | **off** | research builds only, with `INKVEC_G1` set |
 | structural simplifier | **off** | research builds only, with `INKVEC_STRUCTURAL` set |
 
 Not under a span cap, because the merge re-joins short runs into free cubics that can cross
 again and the repair never converged: "1-2 s per round on a 250-point ring at span 7, against
-0.2 ms for the program itself (family emoji: 11.8 s in repair)" (`multimodel.rs:392-396`).
+0.2 ms for the program itself (family emoji: 11.8 s in repair)" (`multimodel.rs:500-504`).
 `merge_free_cubics` and `sharpen_corners` run a second time inside stage 12's ring-level
-repair (`crates/inkvec-cli/src/rings.rs:393-394`), under a segment budget — see `12-repair.md`.
+repair (`crates/inkvec-cli/src/rings.rs:487-488`), under a segment budget — see `12-repair.md`.
 
 **`merge_free_cubics`** (`merge.rs:351`) replaces short runs of chord/cubic/chord with one
 free-tangent cubic, because the DP's own cubic is G1 — its tangent *directions* are inherited
@@ -462,7 +543,7 @@ rounded square:
 ```
 
 "So a free cubic beats the split by about 25% and beats the constrained cubic by more than
-half." Each sweep (`merge_round`, doc at `merge.rs:405-416`) tries, at every segment, runs of
+half." Each sweep (`merge_round`, doc at `merge.rs:420-431`) tries, at every segment, runs of
 `MAX_RUN` (4) down to 2 segments, longest first; a run qualifies if it covers more than three
 and at most `MAX_SPAN` (96) measured points and holds no arc. The first run whose free cubic,
 fitted through the run's actual start and end on the path, satisfies
@@ -477,10 +558,10 @@ cubic no longer meets smoothly; `SMOOTH_SLACK = 0.0` leaves the objective in cha
 doc of `MAX_ROUNDS` records why one sweep was not enough: "Traced output was 21% curved where
 the ground truth is 78%" (`merge.rs:101-109`). Two pieces of bookkeeping skip work without
 changing a merge: a run that already costs no more than the free cubic's parameter floor
-`λ·(params_cubic + BREAK_PARAMS)` is never searched (`merge.rs:484-497`, "the dynamic
+`λ·(params_cubic + BREAK_PARAMS)` is never searched (`merge.rs:512-525`, "the dynamic
 program's own price-floor argument [...] applied to the merge. Not from the literature"),
 and a run turned down once is not tried again with the same vertices (`RejectedRuns`,
-`merge.rs:377-394`, local invalidation after Garland & Heckbert 1997; 2,467 of 12,248
+`merge.rs:392-409`, local invalidation after Garland & Heckbert 1997; 2,467 of 12,248
 attempts on the screen set were such repeats).
 
 ### How the free-cubic search stays fast, exactly
@@ -546,9 +627,9 @@ costs). Unit tests hold the 0.2.4 implementations as references
 (`lower_term_never_exceeds_the_exact_term`, `merge/residual.rs:347`;
 `cached_samples_are_the_evaluated_ones`, `merge/grid.rs:236`; and `merge/tests.rs`).
 
-**`sharpen_corners`** (`merge.rs:569`) — takes only the path, no polyline or config — replaces
+**`sharpen_corners`** (`merge.rs:599`) — takes only the path, no polyline or config — replaces
 a short cubic bridging two lines with the lines' actual intersection. Its doc
-(`merge.rs:552-568`) explains why the DP produces these chamfer cubics:
+(`merge.rs:582-598`) explains why the DP produces these chamfer cubics:
 
 > "The contour samples around a corner lie on the coverage level set, which rounds the corner
 > off by about a pixel. To the residual those samples *are* a small fillet, so a cubic through
@@ -562,7 +643,7 @@ Guarded geometrically, not by residual: the two lines must turn by at least
 second, and it must sit within a chamfer allowance of the cubic's endpoints. Two shapes are
 recognised: a cubic that *is* the chamfer (chord ≤ `SHARPEN_MAX_CHORD = 2.5`), or a short
 straight edge with a chamfer cubic at each end (chord ≤ `SHARPEN_MAX_EDGE = 8.0`)
-(`merge.rs:535-544`). `SHARPEN_MIN_TURN` *is* `crate::CORNER_TURN_MIN` (`merge.rs:545-550`):
+(`merge.rs:565-574`). `SHARPEN_MIN_TURN` *is* `crate::CORNER_TURN_MIN` (`merge.rs:575-580`):
 "They were independent copies of `PI / 6.0` until 2026-09-08."
 
 **The research snaps** (`merge/snap.rs`, compiled only with `--features research`):
@@ -655,9 +736,9 @@ nearly-parallel fitted lines is ill-conditioned (`lib.rs:611-621`):
 > parameters. Curve fitting looked broken; the actual fault was here."
 
 In the multimodel fit only a vertex between two `Line` segments moves (`adjust_line_corners`,
-`multimodel.rs:937-963`): "A vertex touching a cubic or an arc stays where it was measured,
+`multimodel.rs:1067-1093`): "A vertex touching a cubic or an arc stays where it was measured,
 because the curve was fitted to pass through it." The cap there is
-`max_shift = 3·max(σ_max, 0.25)` px (`multimodel.rs:961`), plus, where the two lines turn by at
+`max_shift = 3·max(σ_max, 0.25)` px (`multimodel.rs:1091`), plus, where the two lines turn by at
 least `CORNER_TURN_MIN` (30 degrees), a chamfer allowance
 `min(3, CORNER_CHAMFER / max(0.2, sin(½(π − turn))))` (`lib.rs:634-637`, code at `:703-709`).
 Its comment (`lib.rs:694-701`) gives the measurement behind the allowance:
@@ -680,8 +761,8 @@ corner adjustment and smooth-join treatment:
 
 ### `solve_open` and `refine`
 
-`solve_open` (`multimodel.rs:651`) is the DP body described above, filled by
-`multimodel/scan.rs`. `refine` (`multimodel.rs:914`, doc at `:900-913`) is the post-DP
+`solve_open` (`multimodel.rs:774`) is the DP body described above, filled by
+`multimodel/scan.rs`. `refine` (`multimodel.rs:1044`, doc at `:1030-1043`) is the post-DP
 continuous-parameter pass, run once the discrete decisions are fixed:
 
 > "1. line–line corners move to the intersection of their fitted lines
@@ -705,24 +786,27 @@ are marked **none**. Paths are under `crates/inkvec-fit/src/`.
 | `CORNER_CHAMFER` | `lib.rs:585` | 1.0 px | corner-adjustment chamfer allowance | derived (one pixel = level-set sampling step) |
 | `CORNER_TURN_MIN` | `lib.rs:588` | π/6 (30°) | when a vertex meeting is treated as a corner | none |
 | `CORNER_DEGREES` | `lib.rs:921` | 45.0 | corner-vs-smooth-join threshold of `fit_path` | none |
-| max-shift factor | `multimodel.rs:961` (inline) | 3 × max(σ), floor 0.25 | corner intersection displacement cap | motivated; 3 and 0.25 none |
+| max-shift factor | `multimodel.rs:1091` (inline) | 3 × max(σ), floor 0.25 | corner intersection displacement cap | motivated; 3 and 0.25 none |
 | `PARAMS_CUBIC` | `multimodel.rs:128` | 6.0 | default cubic parameter cost (`--bezier-cost` overrides per trace) | derived |
 | `PRUNE_PATIENCE` | `multimodel.rs:144` | 8 | consecutive over-budget spans before the scan stops | empirical; value none |
 | `DP_MAX_POINTS` | `multimodel.rs:149` | 768 | decimation threshold | none |
-| `DP_PAR_MIN_POINTS` | `multimodel/scan.rs:73` | 128 | shortest polyline whose scan is shared between threads | motivated |
+| `DP_PAR_MIN_POINTS` | `multimodel/scan.rs:78` | 128 | shortest polyline whose scan is shared between threads | motivated |
 | `G1_BREAK_DEGREES` | `tangents.rs:23` | 10.0 | tangent break below which a join is nearly free (`--corner-angle` overrides) | none; swept empirically |
 | `TANGENT_WINDOW_MAX` | `tangents.rs:26` | 16 | widest one-sided tangent window | none |
-| `MAX_RESIDUAL_SAMPLES` | `candidates.rs:42` | 32 | cubic residual evaluation points (O(1) cap) | none |
-| `NEWTON_STEPS` | `candidates.rs:45` | 3 | Newton steps for point-to-cubic projection | none |
-| `MAX_ARM` | `candidates.rs:48` (used by `merge.rs:132`) | 1.0 | largest control arm as a fraction of chord | derived ("more than a half turn") |
-| `FREE_MAX_SWING` | `candidates.rs:52` | 75.0° | how far a free cubic's tangent may depart from the estimate | none |
-| `DIRECTION_SAMPLES` | `candidates.rs:1137` | 8 | monotone-sweep samples for arc validity | asserted, not derived |
-| `MAX_ASPECT` | `candidates.rs:1298` | 12.0 | most elongated ellipse worth fitting | none |
-| `MIN_POINTS` (ellipse) | `candidates.rs:1299` | 24 | minimum points to try an ellipse | none |
-| `LENGTH_STRIDE` | `candidates.rs:1300` | 16 | ellipse candidate-length sampling | motivated (keeps the O(n) fit to a sparse grid) |
-| bow-penalty factor | `candidates.rs:921` (inline) | 4.0 | arc-vs-line residual ratio that triggers the bow penalty | none |
-| `PARAMS_ARC` | `curves.rs:191` | 5.0 | circular arc cost | derived |
-| `PARAMS_ELLIPTICAL_ARC` | `curves.rs:198` | 7.0 | elliptical arc cost | derived |
+| `MAX_RESIDUAL_SAMPLES` | `candidates.rs:44` | 32 | cubic residual evaluation points (O(1) cap) | none |
+| `NEWTON_STEPS` | `candidates.rs:47` | 3 | Newton steps for point-to-cubic projection | none |
+| `MAX_ARM` | `candidates.rs:50` (used by `merge.rs:132`) | 1.0 | largest control arm as a fraction of chord | derived ("more than a half turn") |
+| `FREE_MAX_SWING` | `candidates.rs:54` | 75.0° | how far a free cubic's tangent may depart from the estimate | none |
+| `DIRECTION_SAMPLES` | `candidates.rs:1206` | 8 | monotone-sweep samples for arc validity | asserted, not derived |
+| `MAX_ASPECT` | `candidates.rs:1367` | 12.0 | most elongated ellipse worth fitting | none |
+| `MIN_POINTS` (ellipse) | `candidates.rs:1368` | 24 | minimum points to try an ellipse | none |
+| `LENGTH_STRIDE` | `candidates.rs:1369` | 16 | ellipse candidate-length sampling | motivated (keeps the O(n) fit to a sparse grid) |
+| bow-penalty factor | `candidates.rs:989` (inline) | 4.0 | arc-vs-line residual ratio that triggers the bow penalty | none |
+| `PARAMS_ARC` | `curves.rs:194` | 5.0 | circular arc cost (default prices) | derived |
+| `PARAMS_ARC_WRITTEN` | `curves.rs:218` | 7.0 | circular arc cost under `--arcs-as-written` | the numbers SVG writes |
+| `CAP_TURN_DEGREES` | `candidates.rs:607` | 90.0 | turn past which one cubic is charged as two, under `--arcs-as-written` | derived (cubic circle error ∝ sweep⁶, Goldapp 1991); the 90 not swept |
+| `WRITTEN_ARCS_LAMBDA_SCALE` | `crates/inkvec-cli/src/lib.rs:494` | 0.8 | λ multiplier under `--arcs-as-written` | swept 0.6/0.7/0.8/1.0 on the gate |
+| `PARAMS_ELLIPTICAL_ARC` | `curves.rs:225` | 7.0 | elliptical arc cost | derived |
 | `PARAMS_CIRCLE` | `primitives.rs:42` | 3.0 | `<circle>` cost | derived |
 | `PARAMS_ELLIPSE` | `primitives.rs:44` | 5.0 | `<ellipse>` cost | derived |
 | `PARAMS_ROUND_RECT` | `primitives.rs:47` | 6.0 | rounded `<rect>` cost | derived |
@@ -742,16 +826,16 @@ are marked **none**. Paths are under `crates/inkvec-fit/src/`.
 | `SCREEN_FLOOR`, `SCREEN_CEIL` | `merge/residual.rs:204`, `:208` | 1e-290, 1e300 | range where the lower-bound screen is used (0 outside) | derived (normal-number range of the error bound) |
 | `SCREEN_SHRINK` | `merge/residual.rs:213` | 1 − 1e-12 | lower-bound margin below the exact term | derived (~4,500 ulp, covers `hypot` errors up to ~2,000 ulp) |
 | `REORDER_MARGIN` | `merge/residual.rs:246` | 1 + 1e-12 | reordered partial sum against the bound | derived (Higham 1993, eq. 2.6) |
-| `SHARPEN_MAX_CHORD` | `merge.rs:539` | 2.5 | chamfer-cubic chord ceiling | semi-derived (chamfer ~1 px per side) |
-| `SHARPEN_MAX_EDGE` | `merge.rs:544` | 8.0 | short-edge-with-chamfers ceiling | none |
-| `SHARPEN_MIN_TURN` | `merge.rs:550` | `CORNER_TURN_MIN` | corner-vs-smooth threshold | shared with `CORNER_TURN_MIN` by design |
+| `SHARPEN_MAX_CHORD` | `merge.rs:569` | 2.5 | chamfer-cubic chord ceiling | semi-derived (chamfer ~1 px per side) |
+| `SHARPEN_MAX_EDGE` | `merge.rs:574` | 8.0 | short-edge-with-chamfers ceiling | none |
+| `SHARPEN_MIN_TURN` | `merge.rs:580` | `CORNER_TURN_MIN` | corner-vs-smooth threshold | shared with `CORNER_TURN_MIN` by design |
 | `PARAMS_AXIS_LINE` (research) | `merge/snap.rs:17` | 1.0 | axis-snapped line cost | derived |
 | `MAX_AXIS_DEV_SIGMA` (research) | `merge/snap.rs:22` | 3.0 | per-sample axis-snap deviation cap | none |
 | `PARAMS_SMOOTH_CUBIC` (research) | `merge/snap.rs:204` | 4.0 | `S`-shorthand cost | derived |
 | G1 pre-filter angle (research) | `merge/snap.rs:344` (inline) | 20° | when a smooth-join candidate is worth the refit | none |
 | cost-floor slack | `choice.rs:187` (inline) | `1e-9·(tr S + Σw·C²)` | absolute shrink of the single-line χ² floor | derived (dwarfs the rounding of the scatter and the sampled χ² below 2^20 points) |
-| `FLATTEN` | `simple.rs:58` | 16 | flattening resolution for the self-crossing test | motivated (below render-visibility floor); value none |
-| `EPS` (endpoint coincidence) | `simple.rs:62` | 1e-6 px | adjacency exemption tolerance | derived |
+| `FLATTEN` | `simple.rs:63` | 16 | flattening resolution for the self-crossing test | motivated (below render-visibility floor); value none |
+| `EPS` (endpoint coincidence) | `simple.rs:67` | 1e-6 px | adjacency exemption tolerance | derived |
 
 ## Failure modes and edge cases
 
@@ -759,10 +843,10 @@ are marked **none**. Paths are under `crates/inkvec-fit/src/`.
   function doubled a hexagon's segment count (12 instead of 6) before being replaced by the
   cost-derived cut-off — `lib.rs:460-466`, quoted above.
 - **Free-tangent cubics** buy colour and parameters but fail the turning axis at every wobble
-  setting (`candidates.rs:60-83`), and a correlated-noise model for the cubic residual made
-  turning worse, not better (`multimodel.rs:623-650`).
+  setting (`candidates.rs:62-85`), and a correlated-noise model for the cubic residual made
+  turning worse, not better (`multimodel.rs:746-773`).
 - **A merge pass misaligned with its vertices** raised parameters 34 % "on a pass whose whole
-  purpose is to remove segments" before the vertex list was kept in step (`merge.rs:360-363`).
+  purpose is to remove segments" before the vertex list was kept in step (`merge.rs:375-378`).
 - **Fitting a free cubic through the raw contour point** instead of the refined vertex scored
   a curve that is not the one emitted: "DISTS worse on 125 of 180 real emoji, with the
   parameter count going *up*" (`merge.rs:137-142`).
@@ -799,7 +883,7 @@ Since the settings cleanup (CHANGELOG, 0.2.0, *Changed*) the engine reads its en
   (`0.5*delta_chi2 < lambda*delta_params`), and should be read as this document's own
   derivation, not a quoted fact.
 - **Closed loops**: `solve_closed` is a two-cut heuristic; the cyclic problem Potrace solves
-  exactly "remains future work" (`multimodel.rs:1292`).
+  exactly "remains future work" (`multimodel.rs:1423`).
 - **`snap_axis_aligned`, `snap_smooth_joins`, the free cubic and the structural simplifier
   are research-only.** Each was measured on the corpus and does not ship; a release build
   does not compile the snaps.

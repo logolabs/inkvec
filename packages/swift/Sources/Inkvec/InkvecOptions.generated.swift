@@ -95,8 +95,9 @@ public struct InkvecOptions: Codable, Hashable, Sendable {
     /// Charge a circular arc the seven numbers SVG writes for it (rx ry rotation large-arc
     /// sweep x y) instead of five, keep one curve from standing in for more than 90 degrees of
     /// a circle, and spend parameters slightly more freely (0.8x) to hold the colour error.
-    /// Measured on 246 icons: about half the arcs, 1.4% fewer parameters at 512 px and 4.1% at
-    /// 128 px, colour error unchanged within noise. Off by default. Ignored in fast mode.
+    /// Measured on 246 icons: about half the arcs, 1.5% fewer parameters at 512 px and 4.3% at
+    /// 128 px, mean colour error unchanged within noise, though a drawing that touches the
+    /// image edge can lose a rounded corner. Off by default. Ignored in fast mode.
     ///
     /// Default: `false`.
     public var arcsAsWritten: Bool?

@@ -15,9 +15,9 @@ detection), `crates/inkvec-trace/src/load/icc.rs` (colour management),
 `crates/inkvec-cli/src/alpha.rs` (matting), `crates/inkvec-cli/src/pipeline.rs`
 (`color_options`: the lossy flag and the time budget handed to the trace),
 `crates/inkvec-sr` (the super-resolution pre-pass, as a crate of its own)
-**Entry points:** `run()` (`crates/inkvec-cli/src/lib.rs:704`), which calls
+**Entry points:** `run()` (`crates/inkvec-cli/src/lib.rs:731`), which calls
 `load_image_capped()` (`crates/inkvec-trace/src/load.rs:403`) then `resolve_lossy()`
-(`crates/inkvec-cli/src/lib.rs:741`), then `trace_image_sized()` (`crates/inkvec-cli/src/lib.rs:207`),
+(`crates/inkvec-cli/src/lib.rs:768`), then `trace_image_sized()` (`crates/inkvec-cli/src/lib.rs:207`),
 which is `trace_prepared(intake(...))`. `intake()` (`lib.rs:247`) undoes an exact upscale,
 applies `--intake-scale` and `--max-dim` and prices the pixel-denominated knobs in the
 raster's own units; `trace_prepared()` (`lib.rs:458`) installs the curve cost model and hands
@@ -72,7 +72,7 @@ slice (`decode_image` / `decode_image_capped`, `load.rs:104-108`, `:475-488`), o
 pixels (`rgba8_capped`, `load.rs:490-519`, which has no format, profile or orientation to
 read and only applies the cap). The decoders compiled in are PNG, JPEG, WebP, GIF, BMP and
 TIFF (`crates/inkvec-trace/Cargo.toml:18`); the command line's usage line names the same six
-(`crates/inkvec-cli/src/args.rs:299`). Every decoded image funnels through `from_dynamic` (`load.rs:298-342`), which produces straight
+(`crates/inkvec-cli/src/args.rs:305`). Every decoded image funnels through `from_dynamic` (`load.rs:298-342`), which produces straight
 (unpremultiplied) floats in `[0, 1]`, alpha 1 where the image has none — the same `Rgba`
 type stage 02 consumes. How it gets there depends on the layout the decoder handed over:
 
@@ -107,7 +107,7 @@ undone (`replicated`) or anything resampled the raster (`normalised`), and the
 `(display_w, display_h)` the emitted SVG is retargeted to at the end whenever anything
 resampled — so the file the user gets back claims the size the input file claimed
 (upright), whatever size it was actually traced at; when the SR pre-pass ran on an image
-that was not unblocked, it claims the size SR produced (`crates/inkvec-cli/src/lib.rs:627-635`). `intake` is public, and separate from `trace_prepared`, for one
+that was not unblocked, it claims the size SR produced (`crates/inkvec-cli/src/lib.rs:654-662`). `intake` is public, and separate from `trace_prepared`, for one
 caller: a browser that runs the restorer network itself between the two (`lib.rs:235-246`).
 
 ## How it works
@@ -238,7 +238,7 @@ documentation lists, in its order (`load.rs:8-30`):
    widens it as described above.
 
 The `--lossy auto` check below still opens the file separately for its first 32 bytes, and
-only when `--lossy` is `auto` (`crates/inkvec-cli/src/lib.rs:721-730`).
+only when `--lossy` is `auto` (`crates/inkvec-cli/src/lib.rs:748-757`).
 
 The interesting function next to the loaders is `lossy_container` (`load.rs:58-96`):
 
@@ -280,7 +280,7 @@ a guess (`nonsense_is_unknown_not_clean`).
 
 ### `resolve_lossy` and `--lossy auto|on|off`
 
-`resolve_lossy` (`crates/inkvec-cli/src/lib.rs:735-754`) turns the CLI's three-way `--lossy`
+`resolve_lossy` (`crates/inkvec-cli/src/lib.rs:762-781`) turns the CLI's three-way `--lossy`
 flag (itself `inkvec_sr::Mode`, reused rather than a separate enum) into a definite yes or
 no, once, before the trace crate ever sees a pixel:
 
@@ -307,7 +307,7 @@ file. An unreadable or unrecognised container resolves to `Off` — "not known t
 because, as the doc comment states, the guard this feeds costs **10.9%** on the 246-icon
 screen set when it runs on a clean intake (0.4005 → 0.4442, measured 2026-09-08) and must
 not fire on a guess (`lib.rs:735-740`). `--lossy` defaults to `Auto`
-(`crates/inkvec-cli/src/args.rs:243`), so container-format detection runs on every trace
+(`crates/inkvec-cli/src/args.rs:248`), so container-format detection runs on every trace
 unless a user overrides it; `On` is there for a file that no longer admits what was done to
 it — "a PNG that was once a JPEG -- a re-saved screenshot, an export from a chat app"
 (`args.rs:133-138`).
@@ -402,7 +402,7 @@ Detecting Traces of Resampling", IEEE Trans. Signal Processing 53(2):758–767, 
 measured cost of a naive tracer that skips it: a 96-px logo blown up to 768 traces its
 pixel boundaries directly, the palette shattering from 3 inks to 13 and the boundary coming
 back as 1568 straight lines walking round pixel corners (`unblock.rs:10-15`).
-`--no-unblock` disables it (`crates/inkvec-cli/src/args.rs:355-360`). Detection is
+`--no-unblock` disables it (`crates/inkvec-cli/src/args.rs:361-366`). Detection is
 exact-match only; a resampled or anti-aliased upscale — where block boundaries are not
 perfectly constant — fails this test by design and is `--sr`'s problem instead
 (`unblock.rs:29-30`).
@@ -431,7 +431,7 @@ probe traced at full resolution (`lib.rs:282-286`).
 
 ### The SR pre-pass itself: `Mode::Auto | On | Off`
 
-`--sr` (default `Off`, `crates/inkvec-cli/src/args.rs:244`) controls a network-based
+`--sr` (default `Off`, `crates/inkvec-cli/src/args.rs:249`) controls a network-based
 upscale-then-halve cleanup, implemented in the `inkvec-sr` crate.
 `inkvec_sr::Mode` (`crates/inkvec-sr/src/lib.rs:35-45`):
 
@@ -455,7 +455,7 @@ upscaler's factor, box-averages back down (`clean::box_downsample`) to the reque
 channel of the result onto a bicubic upsample of the zeroed source over its flat pixels
 (`clean::match_flats`) rather than trusting the network's colour reconstruction. The
 upscaler always runs out of process: the network is not compiled in
-(`crates/inkvec-sr/Cargo.toml:19-21`). `build_upscaler` (`crates/inkvec-cli/src/lib.rs:756-774`)
+(`crates/inkvec-sr/Cargo.toml:19-21`). `build_upscaler` (`crates/inkvec-cli/src/lib.rs:783-801`)
 runs `--sr-command` when one is given, at a fixed scale of 4, and otherwise the packaged
 Python pre-pass `tools/inkvec_sr` through `external::External::python`, found by
 `sr_tools_dir` (`lib.rs:776-797`): `INKVEC_TOOLS_DIR` when it is set (and then only that
@@ -471,7 +471,7 @@ clean, and "handed on so the two pre-passes never trace the same image twice"
 a restored image is traced with lossy intake forced on (`lib.rs:519-531`). The restorer
 itself is outside this page.
 
-`Mode::Auto` (`crates/inkvec-cli/src/lib.rs:533-598`) is the more interesting path: it takes
+`Mode::Auto` (`crates/inkvec-cli/src/lib.rs:560-625`) is the more interesting path: it takes
 the restorer's probe when there is one, and otherwise traces the image once as it arrived
 (`trace_once`, `lib.rs:971-1000`), a stripped version of the ordinary pipeline — the same
 `fit_config`, bilevel or colour, matte included (through the copying `alpha_source`), and
@@ -498,7 +498,7 @@ pub fn decide(img: &Rgba, svg: &str, threshold: f64) -> Decision {
 
 `Keep` returns the probe as the trace, with the stats line "sr  residual R <= T, traced
 directly" (or "could not measure the fit; traced directly"). `Clean` builds the upscaler,
-once, and keeps it for the clean-up and the retrace (`crates/inkvec-cli/src/lib.rs:536-561`). **Without an
+once, and keeps it for the clean-up and the retrace (`crates/inkvec-cli/src/lib.rs:563-588`). **Without an
 upscaler, `auto` traces directly** (impl2/bugs, merged 2026-10-03): "`auto` is a request to
 clean *if it helps*, so no upscaler to be had -- no `tools/inkvec_sr` beside the binary, an
 unusable `--sr-command` -- is not a reason to fail the trace: keep the probe, as a clean
@@ -510,7 +510,7 @@ residual R > T, but no upscaler is available (<the error>); traced directly", an
 (`crates/inkvec-cli/tests/pipeline.rs:407-447`) check that the fallback SVG equals the plain
 trace, in colour and in monochrome, and that `on` still errors. The fallback covers an
 upscaler that cannot be built; a packaged tool that is found but fails while running still
-fails the trace, under `auto` as under `on` (`prepass(...)?`, `crates/inkvec-cli/src/lib.rs:610`).
+fails the trace, under `auto` as under `on` (`prepass(...)?`, `crates/inkvec-cli/src/lib.rs:637`).
 
 `interior_residual` (`inkvec-sr/src/detect.rs:97-155`) is the signal: both images are
 composited onto white, a mask marks pixels where the *traced model* is flat (using the
@@ -535,7 +535,7 @@ mistake — three times worse than doing nothing, dE00 0.605 against 0.195, per 
 doc (`detect.rs:3-7`).
 
 `DEGRADED_RESIDUAL = 0.5` (`detect.rs:35-36`, also the default for `--sr-threshold`,
-`crates/inkvec-cli/src/args.rs:245`) is calibrated over 30 icons in five conditions
+`crates/inkvec-cli/src/args.rs:250`) is calibrated over 30 icons in five conditions
 (`detect.rs:13-25`):
 
 | condition | min | median | p95 | max |
@@ -592,7 +592,7 @@ not to make an already-tractable trace faster.
 
 `--max-dim` (default `2048`, `args.rs:223`) is a hard ceiling on the size that is traced,
 applied in two places. The command line hands it to the decoder (`run`,
-`crates/inkvec-cli/src/lib.rs:720`), which box-averages the 8-bit buffer down before the
+`crates/inkvec-cli/src/lib.rs:747`), which box-averages the 8-bit buffer down before the
 floats exist (pass 5 above, with the larger allocation allowance of pass 3); and `intake`
 applies the same ceiling again after unblock and `--intake-scale` (`lib.rs:297-315`), which is
 where it acts for a caller that hands over a raster rather than a file (`trace_image`, the
@@ -610,7 +610,7 @@ there and each probe trace gets a clock of its own: 60% of the budget becomes
 grows with the square of the region count — "an unmerged band is a correct fill, just a
 separate one", `crates/inkvec-trace/src/lib.rs:162-165`); 25%, and at least 50 ms, becomes
 `boundary_ms`, the boundary solve's wall-clock budget (`crates/inkvec-trace/src/lib.rs:174-177`).
-The help text states the contract (`crates/inkvec-cli/src/args.rs:321-328`): "Gradient-band
+The help text states the contract (`crates/inkvec-cli/src/args.rs:327-334`): "Gradient-band
 merging stops at 60% of it, checked between fits, and the boundary solve gets 25%; the
 output is still a correct trace, with more fills or a less polished outline. The palette and
 the writer do not read it. A nonzero budget makes the output depend on the machine; 0 means
@@ -623,7 +623,7 @@ would pass `max(256 MiB, 32 bytes per pixel)` (`TABLE_BUDGET_FLOOR`, `TABLE_BUDG
 `crates/inkvec-trace/src/boundary_opt/band.rs:851-856`;
 [08-boundary-solve.md](08-boundary-solve.md)). Both caps were set from what images spend,
 "with room, so that it never binds on the gate's" (`bands.rs:42`). Fast mode lists
-`--time-budget` among the options it ignores (`crates/inkvec-cli/src/fast.rs:71`). The two
+`--time-budget` among the options it ignores (`crates/inkvec-cli/src/fast.rs:72`). The two
 fractions (`0.6`, `0.25`) and the 50 ms floor are not derived from a sweep in anything read
 for this stage; see Open questions.
 
@@ -739,7 +739,7 @@ precision, tau)` unchanged.
 
 **Both halves reach the emitted SVG.** `trace_prepared_priced` builds the configuration it
 hands to `run_strokes`, `run_bilevel` and `run_color` through `fit_config`
-(`crates/inkvec-cli/src/lib.rs:656-664`), and so does the probe trace (`trace_once`,
+(`crates/inkvec-cli/src/lib.rs:683-691`), and so does the probe trace (`trace_once`,
 `lib.rs:987`). The comment at the call says why:
 
 > Through `fit_config`, not `FitConfig::from_precision` directly, so that
@@ -753,7 +753,7 @@ hands to `run_strokes`, `run_bilevel` and `run_color` through `fit_config`
 
 No test checks that identity, or that the flag now scales lambda; see Open questions.
 
-`content_units` defaults to `false` (`crates/inkvec-cli/src/args.rs:222`); the
+`content_units` defaults to `false` (`crates/inkvec-cli/src/args.rs:227`); the
 `INKVEC_CONTENT_SCALE` environment equivalent was removed in 0.1.7 (CHANGELOG, *Removed*).
 The help text keeps it off as a trade, "it trades fidelity for parsimony" (`args.rs:385-388`).
 It used to name two failures as the price (5-px squares fitted as circles, thin rings broken);
@@ -854,7 +854,7 @@ and before, the `--content-units` machinery above; both can be active on the sam
 Everything from `coverage::bilevel_coverage` (stage 02) onward reads an opaque image: the
 coverage projection needs definite opaque colours to unmix a pixel against. So intake's last
 step, after every resampling decision above and after the pre-passes, is to write the image
-down opaque (`alpha_source_owned`, called at `crates/inkvec-cli/src/lib.rs:637-652`; see
+down opaque (`alpha_source_owned`, called at `crates/inkvec-cli/src/lib.rs:664-679`; see
 "Applying the matte" below).
 
 What "opaque" means depends on native alpha, on by default (`--no-native-alpha` or
@@ -905,7 +905,7 @@ removed in 0.1.7 (CHANGELOG, *Removed*).
 
 **Applying the matte: once, in place, in parallel.** The intake calls `alpha_source_owned`
 (`alpha.rs:598-624`) rather than the copying `alpha_source` (`alpha.rs:560-596`), which only
-the probe trace of `--sr auto` / `--restore auto` still uses (`crates/inkvec-cli/src/lib.rs:992`).
+the probe trace of `--sr auto` / `--restore auto` still uses (`crates/inkvec-cli/src/lib.rs:1019`).
 The steps:
 
 1. **Any transparency at all?** `has_transparency` (`crates/inkvec-cli/src/alpha.rs:831-852`)
@@ -965,7 +965,7 @@ because a false layer is a visible error: it unions faces that are not one shape
 them a colour that appears nowhere in the source. This is exposed as `--layers` (default
 off; `INKVEC_LAYERS` is *removed*), and the CLI's help records it firing on "about one real
 icon in twenty" of the census used to tune it — two of forty
-(`crates/inkvec-cli/src/args.rs:341-347`, `crates/inkvec-cli/src/alpha/layers.rs:49-54`). The CLI
+(`crates/inkvec-cli/src/args.rs:347-353`, `crates/inkvec-cli/src/alpha/layers.rs:49-54`). The CLI
 side, `recover_layers` (`layers.rs:100`, split out of the CLI's `alpha.rs` on 2026-10-02),
 holds the decomposition to three rules, each closing a way the layered document used to draw
 something other than the image (`layers.rs:62-99`):
@@ -996,7 +996,7 @@ three rules "Not from the literature"; "See also" Richardt et al., EGSR 2014
 | `REF_EXTENT` | `128.0` px | the intake size every pixel-denominated tracer constant was tuned at; above it `price_in_raster_units` scales `--min-area` and lambda | measured: 3.54×/6.02×/11.62× the artist's parameter count at 128/256/512 px for unchanged content (`crates/inkvec-cli/src/units.rs:17-31`); the guard measured: without it 128ss objective 0.4005 → 0.4112 (`crates/inkvec-cli/src/lib.rs:416-423`) |
 | `INTAKE_SCALE_FLOOR` | `1.5` | below this, `--intake-scale` leaves the input alone | "Every image in the corpus reads exactly 1.00" (`lib.rs:116-118`) |
 | `INTAKE_SCALE_CAP` | `8.0` | ceiling on how much `--intake-scale` will discard from one estimate | "A wrong estimate should cost detail slowly, not all at once" (`lib.rs:119-121`) |
-| `--max-dim` default | `2048` px | ceiling on traced (not emitted) size | qualitative: "keeps a typical logo under a few seconds" (`crates/inkvec-cli/src/args.rs:223, 316-320`); no sweep cited |
+| `--max-dim` default | `2048` px | ceiling on traced (not emitted) size | qualitative: "keeps a typical logo under a few seconds" (`crates/inkvec-cli/src/args.rs:228, 316-320`); no sweep cited |
 | `--time-budget` split | `0.6` merge / `0.25` boundary-solve | how an advisory wall-clock budget is allotted between the two stages that read a clock | stated as a fixed split, no numeric derivation given (`args.rs:321-328`, `crates/inkvec-cli/src/pipeline.rs:139-149`) |
 | boundary-solve budget floor | `50` ms | least wall-clock budget the boundary solve gets under any `--time-budget` | none (`pipeline.rs:145`) |
 | `MAX_FACTOR` (`pixel_grid`) | `32` | largest replication factor the unblock pre-pass will try | tried downwards so an 8× upscale is undone as 8×, not 2×; no numeric derivation for the cap itself (`crates/inkvec-cli/src/alpha/unblock.rs:20-27, 69`) |
@@ -1021,7 +1021,7 @@ three rules "Not from the literature"; "See also" Richardt et al., EGSR 2014
 | `SOFT_SHARE` | `0.05` | share of drawn+soft pixels that must be "glow" before white is kept outright without running the candidate ladder | no stated numeric derivation (`alpha.rs:438`) |
 | `FLAT_ALPHA` | `0.02` | spread in a pixel's neighbour alphas below which its translucency counts as "flat" rather than a glow | no stated numeric derivation (`alpha.rs:439`) |
 | `DEGRADED_RESIDUAL` / `--sr-threshold` default | `0.5` | interior-residual threshold above which `--sr auto` cleans | measured over 30 icons, five conditions: sits above the worst clean reading (`0.376`) and below the weakest damaged one (`0.454`, jpeg-q80); "4.2% of damaged ones are missed" at this value (`crates/inkvec-sr/src/detect.rs:13-36`) |
-| `--sr-scale` default | `2` | output scale of the pre-pass relative to the input | not derived in what was read; stated as the default only (`crates/inkvec-cli/src/args.rs:246`) |
+| `--sr-scale` default | `2` | output scale of the pre-pass relative to the input | not derived in what was read; stated as the default only (`crates/inkvec-cli/src/args.rs:251`) |
 | interior-residual normalisation | `sum / 9n`, not `sum / 3n` | scales every residual reading (and therefore `DEGRADED_RESIDUAL`) to `1/sqrt(3)` of a true RMS | deliberate, matched to the reference Python implementation; explicitly "not a bug to fix" (`inkvec-sr/src/detect.rs:103-110`) |
 | `SOFT_INTAKE_EDGE` | `1.75` px | gates whether the round trip scales `--precision` | fully documented in `03-palette.md`; reused here unmodified (`crates/inkvec-trace/src/color.rs:398-407`) |
 | `OVERSAMPLE_TOL` | `3.0` | absolute round-trip error tolerance inside `oversample_factor` | fully documented in `02-coverage.md`; reused here unmodified (`crates/inkvec-trace/src/coverage/oversample.rs:10-24`) |
@@ -1087,22 +1087,22 @@ three rules "Not from the literature"; "See also" Richardt et al., EGSR 2014
   by the cap's factor; when that factor does not divide the replication, the blocks are no
   longer constant and the upscale is not undone. Read from the code; no case was measured.
 - **`--content-units` is offered as a trade, not a free fix**: its help text says "it trades
-  fidelity for parsimony" (`crates/inkvec-cli/src/args.rs:385-388`). The two failures it used
+  fidelity for parsimony" (`crates/inkvec-cli/src/args.rs:391-394`). The two failures it used
   to name (5-px squares fitted as circles, thin rings broken) are ones `content_scale`'s doc
   comment attributes to the scale it replaced (`crates/inkvec-cli/src/units.rs:41-50`).
 - **`--intake-scale` costs structural accuracy for speed**, and says so in its own help
   text: 24× faster with a twelfth of the parameters and half the colour error on 8×-upsampled
   input at 1024 px, but DINO — the corpus's structural measure — falls from 0.954 to 0.916
-  (`crates/inkvec-cli/src/args.rs:499-503`).
+  (`crates/inkvec-cli/src/args.rs:509-513`).
 - **The SR pre-pass is three times worse than doing nothing on clean input** (dE00 0.605
   against 0.195, `crates/inkvec-sr/src/detect.rs:3-7`), which is why `Mode::Auto` pays for a
   full probe trace before deciding, rather than guessing from pixel statistics.
 - **`--sr auto` without an upscaler failed the whole trace**; it now keeps the probe and says
   so in the stats, as `--restore auto` does, while `--sr on` still fails
-  (`crates/inkvec-cli/src/lib.rs:562-571`). A packaged tool that is found but fails while
+  (`crates/inkvec-cli/src/lib.rs:589-598`). A packaged tool that is found but fails while
   running still fails the trace in either mode (`lib.rs:610`).
 - **With a `--time-budget`, the output depends on the machine**, and the palette and the
-  writer read no budget at all (`crates/inkvec-cli/src/args.rs:321-328`); without one, the
+  writer read no budget at all (`crates/inkvec-cli/src/args.rs:327-334`); without one, the
   merge and the boundary solve are bounded only by their work and memory caps, which apply
   either way, and the output is reproducible.
 - **A soft glow is deliberately excluded from voting on the matte**, and the cost of getting
@@ -1124,8 +1124,8 @@ Since the settings cleanup (CHANGELOG, 0.2.0, *Changed*) the engine reads its en
 | `INKVEC_MATTE` (*removed*) | forced `choose_matte`'s answer, bypassing the swallowed-mass search | unset (`choose_matte` decides) | removed in 0.1.7 (CHANGELOG, *Removed*) |
 | `INKVEC_LAYERS` (*removed*) | forced `--layers` on | unset (off, same as `--layers` unset) | removed; `--layers` only |
 | `INKVEC_LAYER_SIGMA` (*removed*) | overrode the sRGB noise sigma used when fitting a translucent layer | `LAYER_SIGMA_SRGB` (`crates/inkvec-cli/src/alpha/layers.rs:14-22`) | removed |
-| `INKVEC_NATIVE_ALPHA=0` | turns native alpha off, as `--no-native-alpha` does: the image is matted first | unset (native alpha on) | `crates/inkvec-cli/src/args.rs:231-232` |
-| `INKVEC_TOOLS_DIR=<dir>` | the folder holding the packaged SR pre-pass (`inkvec_sr`); when set, the only folder looked in | unset (`tools/` beside the binary or up to three folders above it, then the source checkout) | `crates/inkvec-cli/src/lib.rs:776-786` |
+| `INKVEC_NATIVE_ALPHA=0` | turns native alpha off, as `--no-native-alpha` does: the image is matted first | unset (native alpha on) | `crates/inkvec-cli/src/args.rs:236-237` |
+| `INKVEC_TOOLS_DIR=<dir>` | the folder holding the packaged SR pre-pass (`inkvec_sr`); when set, the only folder looked in | unset (`tools/` beside the binary or up to three folders above it, then the source checkout) | `crates/inkvec-cli/src/lib.rs:803-813` |
 | `INKVEC_PYTHON=<program>` | the interpreter the packaged SR pre-pass runs with | unset (`python` on Windows, `python3` elsewhere) | `crates/inkvec-sr/src/external.rs:59-68` |
 | `INKVEC_DIAG=1\|json` | structured diagnostic lines on stderr; the intake's are the ICC outcome (`load/icc.rs`) and the soft-intake gate (edge width, ringing, lossy flag) | unset (silent) | `crates/inkvec-trace/src/diag.rs:47-60`; intake lines at `crates/inkvec-trace/src/load/icc.rs:79-147`, `crates/inkvec-trace/src/lib.rs:369-375` |
 | `INKVEC_ALPHADBG` | prints per-face alpha diagnostics and the emitter's face dump to stderr | unset (silent) | `crates/inkvec-cli/src/alpha.rs:1029`, `crates/inkvec-cli/src/emit.rs:604-607` |
@@ -1144,7 +1144,7 @@ those reads happen in the loader.
 ## Open questions
 
 - **Nothing tests `fit_config`'s wiring.** The comment at the call
-  (`crates/inkvec-cli/src/lib.rs:656-663`) says the configuration is the identity on the
+  (`crates/inkvec-cli/src/lib.rs:683-690`) says the configuration is the identity on the
   default path. It used to name a test, `content_units_changes_the_fit_cost`, as pinning
   that; no test of that name was ever in the workspace, so nothing visible checks either that
   `--content-units` now scales lambda in the emitted trace or that the default path is

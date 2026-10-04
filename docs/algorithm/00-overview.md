@@ -187,7 +187,7 @@ disagreements are where the real design lives:
   separate crates. The tree that exists has none of them: rasterisation for the SR detector
   lives in `inkvec-sr::detect` (via `resvg`), SVG emission lives in `inkvec-cli::emit`, and
   there is no `inkvec-py` — Python involvement is limited to the packaged SR fallback in
-  `tools/` (`build_upscaler` and `sr_tools_dir`, `crates/inkvec-cli/src/lib.rs:756-797`). `inkvec-sr` itself is not in DESIGN.md's
+  `tools/` (`build_upscaler` and `sr_tools_dir`, `crates/inkvec-cli/src/lib.rs:783-824`). `inkvec-sr` itself is not in DESIGN.md's
   list at all; it was added afterwards as the super-resolution pre-pass.
 * **S0, image-formation-model estimation.** DESIGN.md §"S0" calls for estimating
   compositing gamma and the anti-aliasing kernel per image by fitting the edge-spread

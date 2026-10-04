@@ -150,11 +150,11 @@ lambda = ln(extent / precision)
 
 ### The `--no-gradients` fast path
 
-Quoted in full, from `ColorOptions::gradients`'s doc comment (`crates/inkvec-trace/src/lib.rs:155-160`):
+Quoted in full, from `ColorOptions::gradients`'s doc comment (`crates/inkvec-trace/src/lib.rs:156-161`):
 
 > Turning this off is a genuine fast path, not a cosmetic one. Gradient fitting is the dominant cost in the tracer: with every optional stage disabled a slow emoji still took 10.9s, and capping the palette — which is what feeds the per-region gradient search — took it to 6.3s. The CLI's `--no-gradients` used to replace the fitted model with a flat one *after* paying for the fit, so it changed the output and saved nothing.
 
-Concretely: when `opts.gradients` is `false`, `merge_gradient_bands_with_ink` is never called at all (`(Vec::new(), Vec::new())` is substituted, `lib.rs:585-598`) and the carve is skipped too (`lib.rs:651`); each face then takes a flat fill of its palette colour (`lib.rs:689-704`). The search itself is what is expensive (the radial centre alone is "six hundred residual evaluations over every sample", `gradient.rs:852-854`), not merely the choice of which model to keep. The CLI help text repeats the same framing: `--no-gradients      Skip gradient fitting entirely and fill flat. A genuine fast path: gradient fitting dominates runtime` (`crates/inkvec-cli/src/args.rs:411-412`).
+Concretely: when `opts.gradients` is `false`, `merge_gradient_bands_with_ink` is never called at all (`(Vec::new(), Vec::new())` is substituted, `lib.rs:586-599`) and the carve is skipped too (`lib.rs:652`); each face then takes a flat fill of its palette colour (`lib.rs:690-705`). The search itself is what is expensive (the radial centre alone is "six hundred residual evaluations over every sample", `gradient.rs:852-854`), not merely the choice of which model to keep. The CLI help text repeats the same framing: `--no-gradients      Skip gradient fitting entirely and fill flat. A genuine fast path: gradient fitting dominates runtime` (`crates/inkvec-cli/src/args.rs:425-426`).
 
 ## Constants and thresholds
 
@@ -216,7 +216,7 @@ Since the settings cleanup (CHANGELOG, 0.2.0, *Changed*) the engine reads its en
 
 | variable | effect |
 |---|---|
-| `INKVEC_NO_CARVE` | if set, skips the carve entirely (checked alongside `opts.gradients`: `lib.rs:651`, the label-map entry at `lib.rs:914`, the native-alpha path at `native.rs:912`) |
+| `INKVEC_NO_CARVE` | if set, skips the carve entirely (checked alongside `opts.gradients`: `lib.rs:652`, the label-map entry at `lib.rs:915`, the native-alpha path at `native.rs:912`) |
 | `INKVEC_GRAD_REGIONS` | region recovery, on by default; `0` switches it off (`gradient/regions.rs:17-22`) |
 | `INKVEC_MERGE_COMMON_PIXELS` (*research build*) | prices every candidate pair on common pixels, not only smooth pairs (`gradient/bands.rs:457-460`) |
 | `INKVEC_MIN_CONTRAST` (*removed*) | scaled the visible-contrast floor in `fit_samples`; the default (scale 1) never moved (`gradient.rs:863-864`) |
@@ -226,10 +226,10 @@ Since the settings cleanup (CHANGELOG, 0.2.0, *Changed*) the engine reads its en
 | `INKVEC_EVDBG` | verbose per-region fit diagnostics: sample counts, chosen model, contrast/support (`gradient.rs:1024-1069`), refused-candidate reasons (`gradient.rs:892-910`), per-label pixel/blend tallies from `blend_partners` (`gradient/evidence.rs:133-152`) and each carved feature (`gradient/carve.rs:390-408`) |
 | `INKVEC_MERGEDBG` | verbose band-merge diagnostics: per-pair costs and gains for unions over 200 pixels (`gradient/bands.rs:1174-1184`, `gradient/bands.rs:1219-1226`), legacy and common-pixel gains side by side with `INKVEC_MERGE_COMMON_PIXELS` (`gradient/bands.rs:1216-1218`), and a stop at the time budget (`gradient/bands.rs:978-980`) |
 | `INKVEC_GRADDBG` | `x0,y0,x1,y1`: after band merging, prints every surviving component in the window and a fresh union fit with each neighbour, flat-flat pairs included (`gradient/debug.rs:1-8`, called at `gradient/bands.rs:465-467`) |
-| `INKVEC_TIMING` | prints per-stage timing, the merge's rounds, waves, stale refits and per-model fit time, the profile-aware search included (`profile`; `MergeTiming::report`, `gradient/bands.rs:711-758`; counters in `gradient/budget.rs:12-29`), and the number of carved features (`lib.rs:665-667`) |
+| `INKVEC_TIMING` | prints per-stage timing, the merge's rounds, waves, stale refits and per-model fit time, the profile-aware search included (`profile`; `MergeTiming::report`, `gradient/bands.rs:711-758`; counters in `gradient/budget.rs:12-29`), and the number of carved features (`lib.rs:666-668`) |
 | `INKVEC_DIAG` | reports the merge's work spent, its cap, its rounds and why it stopped, and a stop at the work cap as a saturated budget (`gradient/bands.rs:959-977`) |
 | `--no-gradients` (CLI) | sets `opts.gradients = false`; see "The `--no-gradients` fast path" above |
-| `--time-budget` (CLI) | sets the merge's deadline at 60 % of the budget (`crates/inkvec-cli/src/pipeline.rs:139-148`; help at `crates/inkvec-cli/src/args.rs:321-327`); `0`, the default, means no deadline, and the merge is bounded by the work cap alone |
+| `--time-budget` (CLI) | sets the merge's deadline at 60 % of the budget (`crates/inkvec-cli/src/pipeline.rs:139-148`; help at `crates/inkvec-cli/src/args.rs:325-331`); `0`, the default, means no deadline, and the merge is bounded by the work cap alone |
 
 ## Open questions
 

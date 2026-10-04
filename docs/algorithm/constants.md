@@ -26,18 +26,24 @@ stage's own reference document — this table only summarizes. Paths are relativ
 
 | name | value | file:line | controls | basis |
 |---|---|---|---|---|
-| `REF_EXTENT` | 128.0 px | `inkvec-cli/src/units.rs:17-31` | intake size every pixel-denominated constant was tuned at; above it `price_in_raster_units` scales `--min-area` and lambda | measured (3.54x/6.02x/11.62x the artist's parameters at 128/256/512 px, `units.rs:17-26`; the guard: 128ss objective 0.4005 -> 0.4112 without it, `inkvec-cli/src/lib.rs:418-424`) |
-| `INTAKE_SCALE_FLOOR` | 1.5 | `inkvec-cli/src/lib.rs:118-120` | below this, `--intake-scale` leaves the input alone | measured (every corpus image reads 1.00) |
-| `INTAKE_SCALE_CAP` | 8.0 | `inkvec-cli/src/lib.rs:121-123` | ceiling on how much `--intake-scale` discards | motivated |
-| `--max-dim` default | 2048 px | `inkvec-cli/src/args.rs:232, 316-320` | ceiling on traced (not emitted) size, applied at decode and again in `intake` | motivated |
+| `REF_EXTENT` | 128.0 px | `inkvec-cli/src/units.rs:17-31` | intake size every pixel-denominated constant was tuned at; above it `price_in_raster_units` scales `--min-area` and lambda | measured (3.54x/6.02x/11.62x the artist's parameters at 128/256/512 px, `units.rs:17-26`; the guard: 128ss objective 0.4005 -> 0.4112 without it, `inkvec-cli/src/lib.rs:469-475`) |
+| `INTAKE_SCALE_FLOOR` | 1.5 | `inkvec-cli/src/lib.rs:120-122` | below this, `--intake-scale` leaves the input alone | measured (every corpus image reads 1.00) |
+| `INTAKE_SCALE_CAP` | 8.0 | `inkvec-cli/src/lib.rs:123-125` | ceiling on how much `--intake-scale` discards | motivated |
+| `--max-dim` default | 2048 px | `inkvec-cli/src/args.rs:239, 336-340` | ceiling on traced (not emitted) size, applied at decode and again in `intake` | motivated |
 | `--time-budget` split | 0.6 merge / 0.25 boundary-solve | `inkvec-cli/src/pipeline.rs:139-149` | advisory wall-clock split between the two stages that read a clock | none |
 | boundary-solve budget floor | 50 ms | `inkvec-cli/src/pipeline.rs:145` | least wall-clock budget the boundary solve gets under any `--time-budget` | none |
-| `MAX_FACTOR` (`pixel_grid`) | 32 | `inkvec-cli/src/alpha/unblock.rs:69` | largest replication factor the unblock pre-pass tries | motivated |
-| `smallest` (`pixel_grid`) | 64 px | `inkvec-cli/src/alpha/unblock.rs:78-81` | least side a factor must leave; under 128 px a raster is never unblocked | motivated |
-| block-constant tolerance | 1/512 per channel | `inkvec-cli/src/alpha/unblock.rs:23-25, 188` | how exactly a block must match to count as replication | motivated |
-| `SHARP` (`change_gcd`) | 1/256 per channel | `inkvec-cli/src/alpha/unblock.rs:131-132` | neighbour difference that counts as a change position for the unblock gcd filter | derived (twice the block tolerance, `unblock.rs:43-51`) |
-| `INTAKE_PARALLEL_MIN` | 65,536 px (256 x 256) | `inkvec-cli/src/alpha.rs:825-827` | below this the transparency scan and the flatten run on the calling thread | motivated |
-| `FLATTEN_CHUNK` | 16,384 px | `inkvec-cli/src/alpha.rs:828-829` | pixels per parallel job of the flatten, smallest job of the transparency scan | none |
+| `MIN_SOURCE` (`pixel_grid`) | 16 px | `inkvec-cli/src/alpha/unblock.rs:102-110` | least source size the unblock keeps on the short axis | measured motive (the old 64 px floor on both sides undid 4x wordmarks only 2x) |
+| `MIN_SOURCE_LONG` (`pixel_grid`) | 64 px | `inkvec-cli/src/alpha/unblock.rs:112-118` | least source size on the long axis; a smaller source comes back as a finer lattice | motivated (the old floor) |
+| `MIN_CHANGES` (`pixel_grid`) | 48 | `inkvec-cli/src/alpha/unblock.rs:120-136` | least change positions, both axes, for a lattice to be believed | derived (accidental fit below `3·n·(p+1)²·0.6^r`) |
+| unblock pitch floor | 2 (`m <= n/2`) | `inkvec-cli/src/alpha/unblock.rs:69-72, 376-400` | least factor undone; adjacent changes end the scan | measured (pitches 1.2-2 fitted a native 24 px icon) |
+| `SOFT_FRACTION_GATE` | 0.9 | `inkvec-trace/src/softness.rs:89-95` | least share of edges wider than native for soft intake | measured (native at most 0.18, resampled 1.00) |
+| `SOFT_EDGE_VAR` / `NATIVE_EDGE_VAR` | 0.3 / 0.25 | `inkvec-trace/src/softness.rs:78-82` | an edge's spread above which it is soft / a core at or below which it is native | derived (one partial pixel: `c(1-c) <= 1/4`) |
+| `CORE_SHARE` | 0.25 | `inkvec-trace/src/softness.rs:83-86` | share of its largest difference a difference needs to be in an edge's core | derived |
+| `SHARP_VETO` | 0.5 | `inkvec-cli/src/soft_intake.rs:59-65` | share of native-sharp cores at which soft intake stands aside (a glow or shadow) | measured (glow/shadow >= 0.80, upscales <= 0.20) |
+| `MIN_UPSCALE` | 3 | `inkvec-cli/src/soft_intake.rs:85-99` | least measured upscale soft intake reduces | measured (`down2up` 0.248 -> 0.295 when reduced) |
+| `MIN_FEATURE_PX` | 3.0 px | `inkvec-cli/src/soft_intake.rs:101-108` | least width the thinnest features keep after a reduction | measured |
+| `INTAKE_PARALLEL_MIN` | 65,536 px (256 x 256) | `inkvec-cli/src/alpha.rs:826-828` | below this the transparency scan and the flatten run on the calling thread | motivated |
+| `FLATTEN_CHUNK` | 16,384 px | `inkvec-cli/src/alpha.rs:829-830` | pixels per parallel job of the flatten, smallest job of the transparency scan | none |
 | `PARALLEL_MIN_PIXELS` (load) | 65,536 px (256 x 256) | `inkvec-trace/src/load.rs:274-276` | below this the byte-to-float conversion runs on the calling thread | motivated |
 | `CONVERT_CHUNK_PIXELS` | 65,536 px | `inkvec-trace/src/load.rs:278-280` | pixels per parallel job of the byte-to-float conversion (64 jobs at 2048 x 2048) | motivated |
 | `UNIT` | `k / 255`, k = 0..=255 | `inkvec-trace/src/load.rs:282-296` | the float each 8-bit sample becomes | derived (the old division's quotients, checked bit for bit) |
@@ -46,15 +52,15 @@ stage's own reference document — this table only summarizes. Paths are relativ
 | `SRGB_TOLERANCE` | 1 level | `inkvec-trace/src/load/icc.rs:66-67` | largest probe-colour move for an embedded profile to count as sRGB (image left untouched) | motivated (`icc.rs:30-34`: converting would only add a level of rounding noise) |
 | `ROWS_PER_JOB` | 64 rows | `inkvec-trace/src/load/icc.rs:69-70` | rows per parallel job of the ICC-to-sRGB conversion | none |
 | `COMPOSITE_PARALLEL_MIN` | 65,536 px (256 x 256) | `inkvec-trace/src/coverage.rs:235-236` | below this the composite over white runs on the calling thread | motivated |
-| `MARGIN` (`choose_matte`) | 10.0 (CIEDE2000) | `inkvec-cli/src/alpha.rs:416` | closeness to a matte candidate to count as "swallowed" | none |
-| `SWALLOWED` | 0.33 | `inkvec-cli/src/alpha.rs:324-329` | share of drawn-and-translucent mass a matte may swallow | motivated |
-| `LOST_TO_WHITE` | 0.5 | `inkvec-cli/src/alpha.rs:331-341` | share of the silhouette lost to a white matte above which the cutout is turned on (without native alpha) | measured (white marks on transparent read 1.00, no screen-set icon above 0.32; the dE00-10 margin cost `emoji_u1f5a8` 0.53 -> 0.76) |
-| `DRAWN` | 0.5 | `inkvec-cli/src/alpha.rs:409-417` | alpha above which a pixel counts as silhouette, not glow | motivated |
-| `DRAWN_FLOOR` | 0.05 | `inkvec-cli/src/alpha.rs:418` | alpha below which a pixel is ignored entirely | none |
-| `SOFT_SHARE` | 0.05 | `inkvec-cli/src/alpha.rs:438` | glow share that keeps white without the candidate ladder | none |
-| `FLAT_ALPHA` | 0.02 | `inkvec-cli/src/alpha.rs:439` | neighbour-alpha spread counted as "flat" translucency | none |
+| `MARGIN` (`choose_matte`) | 10.0 (CIEDE2000) | `inkvec-cli/src/alpha.rs:417` | closeness to a matte candidate to count as "swallowed" | none |
+| `SWALLOWED` | 0.33 | `inkvec-cli/src/alpha.rs:325-330` | share of drawn-and-translucent mass a matte may swallow | motivated |
+| `LOST_TO_WHITE` | 0.5 | `inkvec-cli/src/alpha.rs:332-342` | share of the silhouette lost to a white matte above which the cutout is turned on (without native alpha) | measured (white marks on transparent read 1.00, no screen-set icon above 0.32; the dE00-10 margin cost `emoji_u1f5a8` 0.53 -> 0.76) |
+| `DRAWN` | 0.5 | `inkvec-cli/src/alpha.rs:410-418` | alpha above which a pixel counts as silhouette, not glow | motivated |
+| `DRAWN_FLOOR` | 0.05 | `inkvec-cli/src/alpha.rs:419` | alpha below which a pixel is ignored entirely | none |
+| `SOFT_SHARE` | 0.05 | `inkvec-cli/src/alpha.rs:439` | glow share that keeps white without the candidate ladder | none |
+| `FLAT_ALPHA` | 0.02 | `inkvec-cli/src/alpha.rs:440` | neighbour-alpha spread counted as "flat" translucency | none |
 | `DEGRADED_RESIDUAL` / `--sr-threshold` | 0.5 | `inkvec-sr/src/detect.rs:13-36` | interior-residual threshold above which `--sr auto` cleans | measured (30 icons, 5 conditions) |
-| `--sr-scale` default | 2 | `inkvec-cli/src/args.rs:255` | output scale of the SR pre-pass | none |
+| `--sr-scale` default | 2 | `inkvec-cli/src/args.rs:263` | output scale of the SR pre-pass | none |
 | interior-residual normalisation | `sum / 9n` | `inkvec-sr/src/detect.rs:103-110` | matches the reference Python implementation | derived (deliberate match, not a bug) |
 
 ## 02 — Coverage ([02-coverage.md](02-coverage.md))
@@ -92,7 +98,7 @@ stage's own reference document — this table only summarizes. Paths are relativ
 | `SAME_INK_DE00` | 1.5 (CIEDE2000) | `inkvec-trace/src/color.rs:330-347` | perceptual floor: colours this close are one ink | measured (swept 1.0 -> 0.4140, 1.5 -> 0.4124 on the screen set) |
 | `SOFT_SAME_INK_DE00` | 5.0 | `inkvec-trace/src/color.rs:574-586` | same-ink floor on soft/oversampled intake | measured (a real brand mark upscaled 4x: 76 fills where the drawing has five) |
 | `SOFT_NOISE_SIGMAS` | 3.0 | `inkvec-trace/src/color.rs:490-498` | noise-merge threshold, gated on soft-intake evidence only | measured (costs 10.9% objective if run unconditionally) |
-| `NOISE_SIGMAS` | 0.0 | `inkvec-trace/src/color.rs:744-761` | clean-intake noise-merge threshold, deliberately off; read at `inkvec-trace/src/lib.rs:363-367` and `inkvec-trace/src/native.rs:841-845` | measured (costs 0.4328 -> 0.4451 on the screen set if always on) |
+| `NOISE_SIGMAS` | 0.0 | `inkvec-trace/src/color.rs:744-761` | clean-intake noise-merge threshold, deliberately off; read at `inkvec-trace/src/lib.rs:364-368` and `inkvec-trace/src/native.rs:841-845` | measured (costs 0.4328 -> 0.4451 on the screen set if always on) |
 | `SOFT_INTAKE_EDGE` | 1.75 px | `inkvec-trace/src/color.rs:479-488` | edge width above which the intake is soft | measured (980-raster corpus edge-width survey: native max 1.50) |
 | `SOFT_RINGING` | 0.12 | `inkvec-trace/src/color.rs:500-515` | ringing score above which the intake is soft (images under `RINGING_MIN_DIM`) | measured (240 clean rasters at 128ss: max 0.1023, highest real artwork 0.0370) |
 | `SOFT_RINGING_LARGE` | 0.05 | `inkvec-trace/src/color.rs:517-530` | the same gate when both sides are at least `RINGING_MIN_DIM` | measured (at 512 px: zero false positives, 88-89% of JPEG caught at q85/60/40) |
@@ -124,7 +130,7 @@ stage's own reference document — this table only summarizes. Paths are relativ
 
 | name | value | file:line | controls | basis |
 |---|---|---|---|---|
-| `min_region` shipped default | 2 px | `inkvec-cli/src/args.rs:229`, `inkvec-cli/src/pipeline.rs:173`, `inkvec-trace/src/lib.rs:210` | smallest component kept by despeckle; `min_region.max(2)` is the carve's minimum feature size (`inkvec-trace/src/lib.rs:668`); scaled by the oversampling factor squared above `REF_EXTENT` (`inkvec-cli/src/lib.rs:330-344`) | measured (a 9 px colour-mode floor was tried and measured worse, `inkvec-cli/src/pipeline.rs:166-171`) |
+| `min_region` shipped default | 2 px | `inkvec-cli/src/args.rs:232`, `inkvec-cli/src/pipeline.rs:173`, `inkvec-trace/src/lib.rs:211` | smallest component kept by despeckle; `min_region.max(2)` is the carve's minimum feature size (`inkvec-trace/src/lib.rs:669`); scaled by the oversampling factor squared above `REF_EXTENT` (`inkvec-cli/src/lib.rs:380-394`) | measured (a 9 px colour-mode floor was tried and measured worse, `inkvec-cli/src/pipeline.rs:166-171`) |
 | `SADDLE_SIGMAS` | 3.0 | `inkvec-trace/src/regions.rs:40-44` | sigma a corner's coverage must clear 0.5 by before a saddle resolves (research build only) | motivated (a standard "three sigma" bar, not swept) |
 | `MAX_FACES` | 65,535 (`u16::MAX`) | `inkvec-trace/src/regions.rs:205-208` | most faces a face map can number; past it `cap_components` merges the smallest components into their neighbours (`inkvec-trace/src/regions.rs:293-416`) | derived (`u16` face ids, `u16::MAX` reserved for the outside of the image) |
 | absorption rounds | 2 | `inkvec-trace/src/regions.rs:768-769, 792` | rounds of whole-sliver absorption | motivated (one dissolved sliver can leave a neighbour thinner) |
@@ -369,17 +375,17 @@ half-integer lattice points (`inkvec-trace/src/symmetry.rs:19-21,176-186,220,243
 | rounded-rect radius floor | 1e-4 | `inkvec-cli/src/primitive.rs:76,281` | below this, written as a plain rect | none |
 | ellipse rotation floor | 1e-3 | `inkvec-cli/src/primitive.rs:258` | below this, no `transform` written | none |
 | alpha-ramp endpoint precision | 2 decimals | `inkvec-cli/src/emit.rs:724` | independent of `EMIT_DECIMALS` | none |
-| `RAMP_MIN_INTERIOR` | 64 px | `inkvec-cli/src/alpha.rs:93` | fewest interior pixels before a plane is fitted to a face's alpha; `face_alpha` skips smaller faces without calling the fit | none (the fit's own first test, now named) |
-| `RAMP_MIN_FADE` | 0.15 (opacity) | `inkvec-cli/src/alpha.rs:87` | least opacity change across a face for it to count as a fade | none |
-| `RAMP_MAX_RESIDUAL` | 0.06 (opacity) | `inkvec-cli/src/alpha.rs:90` | largest RMS residual of the alpha plane | none |
+| `RAMP_MIN_INTERIOR` | 64 px | `inkvec-cli/src/alpha.rs:94` | fewest interior pixels before a plane is fitted to a face's alpha; `face_alpha` skips smaller faces without calling the fit | none (the fit's own first test, now named) |
+| `RAMP_MIN_FADE` | 0.15 (opacity) | `inkvec-cli/src/alpha.rs:88` | least opacity change across a face for it to count as a fade | none |
+| `RAMP_MAX_RESIDUAL` | 0.06 (opacity) | `inkvec-cli/src/alpha.rs:91` | largest RMS residual of the alpha plane | none |
 | opacity precision | 3 decimals | `inkvec-cli/src/emit.rs:724,766,772` | `fill-opacity`/`stop-opacity` | none |
 | `INKVEC_EMIT_DECIMALS` (env) | overrides `EMIT_DECIMALS` | `inkvec-cli/src/pathdata.rs:50` | the mechanism used to isolate rounding from segment price in the 7.2% measurement | measured |
 | `EVENODD` | ` fill-rule="evenodd"` | `inkvec-cli/src/emit/winding.rs:102` | written only on a path the winding pass cannot read; every other path is wound by nesting depth and carries no `fill-rule` | derived (the old output as a safe fallback) |
 | `JND` (gradient demotion) | 0.02 (OKLab) | `inkvec-cli/src/pipeline/demote.rs:41` | a gradient whose every pair of stops is closer than this is painted flat | none ("a conservative multiple of a just-noticeable difference") |
 | `LAYER_SIGMA_SRGB` | 3/255 | `inkvec-cli/src/alpha/layers.rs:22` | colour uncertainty a `--layers` hypothesis is judged against | measured (smallest value that finds a known layer) |
 | `LAYER_MAX_DE00` | 1.0 dE00 | `inkvec-cli/src/alpha/layers.rs:32` | `--layers` reproduction guard: every covered face within this of its own colour | motivated (about one just-noticeable difference, the tolerance the merge after it already spends) |
-| `CANVAS_TOL` | 0.25 px | `inkvec-cli/src/post.rs:129` | `--no-background` match of a fitted canvas `<rect>` | measured (a fitted canvas rect lands 0.01-0.02 px off; the path match uses `EMIT_DECIMALS`) |
-| margin viewBox precision | 2 decimals | `inkvec-cli/src/post.rs:336` | `--margin` growth | none |
+| `CANVAS_TOL` | 0.25 px | `inkvec-cli/src/post.rs:186` | `--no-background` match of a fitted canvas `<rect>` | measured (a fitted canvas rect lands 0.01-0.02 px off; the path match uses `EMIT_DECIMALS`) |
+| margin viewBox precision | 2 decimals | `inkvec-cli/src/post.rs:393` | `--margin` growth | none |
 | `ci_gate.py` ratio margin | 3% relative at the one-sided 95% upper bound (dE00 1%, turning 2%) | `bench/ci_gate.py:138` `MARGINS` | regression gate on parameter count vs. artist | measured (project's compactness regression budget) |
 
 ## 14 — Fast mode ([14-fast-mode.md](14-fast-mode.md))

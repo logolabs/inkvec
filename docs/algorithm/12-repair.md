@@ -8,7 +8,7 @@
 `crates/inkvec-fit/src/multimodel.rs` (`optimal_multimodel_capped`, the constrained DP)
 **Entry point:** `repair_ring_crossings()` (`crates/inkvec-cli/src/rings.rs:58-63`)
 **Pipeline position:** after curve fitting (stage 11), before fill assignment (stage mark
-`"fills"`). Stage mark `"repair"` (`crates/inkvec-cli/src/lib.rs:992`).
+`"fills"`). Stage mark `"repair"` (`crates/inkvec-cli/src/lib.rs:1043`).
 
 ## What problem this solves
 

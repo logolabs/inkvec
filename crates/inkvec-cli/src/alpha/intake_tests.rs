@@ -12,15 +12,34 @@ fn lcg(s: &mut u64) -> u64 {
     *s >> 33
 }
 
-/// `pixel_grid` as it was: every divisor of both sides from the largest down, each with
-/// the block test.
+/// The integer-only `pixel_grid` that the lattice inverse replaced: every divisor of both
+/// sides from the largest down (at most 32, and leaving at least 64 px on each side), each
+/// with the block test -- every channel of every pixel of every `k x k` block within `1/512`
+/// of the block's first pixel. Kept as an oracle for the factors both find.
 fn old_pixel_grid(img: &Rgba) -> Option<usize> {
     const MAX_FACTOR: usize = 32;
     let (w, h) = (img.width, img.height);
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let blocks_constant = |k: usize| {
+        let px = |x: usize, y: usize| &img.data[(y * w + x) * 4..(y * w + x) * 4 + 4];
+        (0..h / k).all(|by| {
+            (0..w / k).all(|bx| {
+                let first = px(bx * k, by * k);
+                (0..k).all(|dy| {
+                    (0..k).all(|dx| {
+                        let p = px(bx * k + dx, by * k + dy);
+                        (0..4).all(|c| (p[c] - first[c]).abs() < 1.0 / 512.0)
+                    })
+                })
+            })
+        })
+    };
     let smallest = 64;
     let mut k = MAX_FACTOR.min(w / smallest.min(w)).min(h / smallest.min(h));
     while k >= 2 {
-        if w % k == 0 && h % k == 0 && blocks_constant(img, k) {
+        if w % k == 0 && h % k == 0 && blocks_constant(k) {
             return Some(k);
         }
         k -= 1;
@@ -212,93 +231,261 @@ fn flattening_in_place_is_flattening_a_copy() {
     }
 }
 
-#[test]
-fn gcd_is_euclid() {
-    let euclid = |mut a: usize, mut b: usize| {
-        while b != 0 {
-            (a, b) = (b, a % b);
-        }
-        a
-    };
-    for a in 0..200 {
-        for b in 0..200 {
-            assert_eq!(gcd(a, b), euclid(a, b), "{a} {b}");
-        }
+/// A `w × h` 8-bit image whose every pixel is drawn at random (all four channels, alpha
+/// between 1 and 255 levels), so neighbouring pixels differ almost surely: every cell of an
+/// upscale of it is pinned by a change, and its lattice is unique.
+fn noise(w: usize, h: usize, seed: u64) -> Rgba {
+    let mut s = seed;
+    Rgba {
+        width: w,
+        height: h,
+        data: (0..w * h * 4)
+            .map(|i| {
+                let v = lcg(&mut s) % 256;
+                let v = if i % 4 == 3 { v.max(1) } else { v };
+                v as f32 / 255.0
+            })
+            .collect(),
     }
-    assert!(divides(4, 2048) && !divides(3, 2048) && divides(7, 0));
 }
 
-/// The gcd filter against the old full search: plain art, upscales by 2 to 8 (the
-/// factor must come back the same), upscales with one pixel broken early or late,
-/// odd sizes, a flat image, blocks that vary inside the 1/512 tolerance (not 8-bit, so
-/// the block test has to decide), and a NaN.
+/// How a nearest-neighbour resize picks the source pixel of output pixel `x` along an axis
+/// of `n` outputs from `m` sources.
+#[derive(Clone, Copy, Debug)]
+enum Sampling {
+    /// At the pixel centre, in exact rationals: `⌊(x + ½)·m/n⌋` (Pillow, scikit-image,
+    /// OpenCV `INTER_NEAREST_EXACT`).
+    Centre,
+    /// At the pixel's left edge: `⌊x·m/n⌋` (OpenCV `INTER_NEAREST`).
+    Corner,
+    /// At the centre through an f32 scale, so exact half-pixel ties fall either way.
+    CentreF32,
+}
+
+fn source_index(x: usize, m: usize, n: usize, how: Sampling) -> usize {
+    let i = match how {
+        Sampling::Centre => (2 * x + 1) * m / (2 * n),
+        Sampling::Corner => x * m / n,
+        Sampling::CentreF32 => ((x as f32 + 0.5) * (m as f32 / n as f32)).floor() as usize,
+    };
+    i.min(m - 1)
+}
+
+/// A nearest-neighbour resize of `src` to `nw × nh`.
+fn resize_nearest(src: &Rgba, nw: usize, nh: usize, how: Sampling) -> Rgba {
+    let mut data = Vec::with_capacity(nw * nh * 4);
+    for y in 0..nh {
+        let sy = source_index(y, src.height, nh, how);
+        for x in 0..nw {
+            let sx = source_index(x, src.width, nw, how);
+            let p = (sy * src.width + sx) * 4;
+            data.extend_from_slice(&src.data[p..p + 4]);
+        }
+    }
+    Rgba {
+        width: nw,
+        height: nh,
+        data,
+    }
+}
+
+/// Every whole factor the old test found, the lattice finds too, and its reduction is the
+/// area average the old intake made of it, bit for bit (alpha-0 pixels included, whose
+/// colour the average writes as 0 and the noise source does not). Noise sources, so the
+/// lattice is pinned; a sparse drawing may come back coarser (see the module docs).
 #[test]
-fn the_gcd_filter_finds_what_the_full_search_found() {
-    let mut cases: Vec<(String, Rgba)> = Vec::new();
+fn whole_factors_come_back_as_the_old_test_found_them() {
     for (seed, (w, h)) in [(1u64, (160usize, 128usize)), (2, (96, 80)), (3, (64, 64))] {
-        let a = art(w, h, seed, 0);
-        cases.push((format!("art {w}x{h}"), a.clone()));
-        for k in [2, 3, 4, 5, 8] {
-            let up = upscale(&a, k);
-            cases.push((format!("art {w}x{h} x{k}"), up.clone()));
-            for at in [7usize, up.width * up.height - 3] {
-                let mut b = up.clone();
-                b.data[at * 4 + 1] = if b.data[at * 4 + 1] > 0.5 { 0.0 } else { 1.0 };
-                cases.push((format!("art {w}x{h} x{k} broken at {at}"), b));
+        // One pixel in 17 fully transparent, over a colour the average does not keep.
+        let mut clear = noise(w, h, seed + 10);
+        for p in clear.data.chunks_mut(4).step_by(17) {
+            p[3] = 0.0;
+        }
+        for src in [noise(w, h, seed), clear] {
+            for k in [2, 3, 4, 5, 8] {
+                let up = upscale(&src, k);
+                let old = old_pixel_grid(&up);
+                let grid = pixel_grid(&up);
+                assert_eq!(
+                    grid.as_ref().map(|g| up.width / g.source_size().0),
+                    old,
+                    "{w}x{h} x{k}"
+                );
+                if let Some(g) = grid {
+                    let reduced = g.reduce(&up);
+                    let averaged =
+                        inkvec_trace::coverage::downsample_to(&up, up.width / k, up.height / k);
+                    assert_eq!(
+                        (reduced.width, reduced.height),
+                        (averaged.width, averaged.height)
+                    );
+                    assert_eq!(bits(&reduced.data), bits(&averaged.data), "{w}x{h} x{k}");
+                }
             }
         }
-        cases.push((format!("noisy {w}x{h}"), upscale(&art(w, h, seed, 40), 2)));
     }
-    let flat = Rgba {
-        width: 256,
-        height: 192,
-        data: vec![0.25; 256 * 192 * 4],
-    };
-    cases.push(("flat".into(), flat));
-    let mut odd = upscale(&art(97, 64, 9, 0), 2);
-    odd.width -= 1;
-    odd.data.truncate(odd.width * odd.height * 4);
-    cases.push(("odd width".into(), odd));
-    // Within-block wobble below the tolerance: the old test passes, and the new one must
-    // not be fooled by neighbours that differ by up to 2/512.
-    let mut wobble = upscale(&art(80, 64, 4, 0), 4);
-    let mut s = 99u64;
-    for v in wobble.data.iter_mut() {
-        *v += ((lcg(&mut s) % 7) as f32 - 3.0) * (0.45 / 512.0) / 3.0;
-    }
-    assert_eq!(
-        old_pixel_grid(&wobble),
-        Some(4),
-        "the old test forgives the wobble"
-    );
-    cases.push(("wobble".into(), wobble.clone()));
-    let mut drift = wobble;
-    for (i, v) in drift.data.iter_mut().enumerate() {
-        if (i / 4) % drift.width % 4 == 3 {
-            *v += 1.5 / 512.0;
-        }
-    }
-    cases.push(("drift".into(), drift));
-    let mut nan = upscale(&art(64, 64, 5, 0), 2);
-    nan.data[1000] = f32::NAN;
-    cases.push(("nan".into(), nan));
-    for (name, img) in &cases {
-        assert_eq!(pixel_grid(img), old_pixel_grid(img), "{name}");
-    }
-    // And the factors really are recovered.
-    assert_eq!(pixel_grid(&upscale(&art(160, 128, 1, 0), 4)), Some(4));
 }
 
-/// An image with a zero side is no upscale of anything. It used to divide by zero here
-/// (`w / min(64, w)`): the 0 x 30000 GIF of the 2026-10-02 intake fuzz, in both modes.
+/// Any factor of 2 or more, whole or fractional, in each sampling convention and with each
+/// side rounded down or up, comes back as the source bit for bit (the noise source pins
+/// every cell), with a pitch per axis.
 #[test]
-fn a_zero_side_is_not_an_upscale() {
-    for (w, h) in [(0usize, 30_000usize), (30_000, 0), (0, 0)] {
-        let img = Rgba {
-            width: w,
-            height: h,
-            data: Vec::new(),
-        };
-        assert_eq!(pixel_grid(&img), None, "{w}x{h}");
+fn fractional_factors_come_back_bit_for_bit() {
+    let src = noise(128, 50, 7);
+    for how in [Sampling::Centre, Sampling::Corner, Sampling::CentreF32] {
+        for s in [2.0f64, 2.25, 2.5, 2.9, 3.0, 3.5, 4.0, 5.75] {
+            let (fw, fh) = (128.0 * s, 50.0 * s);
+            for (nw, nh) in [
+                (fw.floor(), fh.floor()),
+                (fw.ceil(), fh.ceil()),
+                (fw.floor(), fh.ceil()),
+                (fw.ceil(), fh.floor()),
+            ] {
+                let (nw, nh) = (nw as usize, nh as usize);
+                let up = resize_nearest(&src, nw, nh, how);
+                let grid =
+                    pixel_grid(&up).unwrap_or_else(|| panic!("{how:?} x{s} {nw}x{nh}: not found"));
+                assert_eq!(grid.source_size(), (128, 50), "{how:?} x{s} {nw}x{nh}");
+                assert_eq!(
+                    bits(&grid.reduce(&up).data),
+                    bits(&src.data),
+                    "{how:?} x{s}"
+                );
+                let (px, py) = grid.pitch(nw, nh);
+                assert!(
+                    (px - nw as f64 / 128.0).abs() < 1e-12 && (py - nh as f64 / 50.0).abs() < 1e-12
+                );
+            }
+        }
     }
+}
+
+/// The wordmark the old 64 px floor stopped half way: 128 x 50 blown up 4x came back as
+/// 256 x 100 (still 2x blocky). The short side may now drop to 16 px.
+#[test]
+fn a_wordmark_is_undone_all_the_way() {
+    let up = upscale(&noise(128, 50, 11), 4);
+    assert_eq!(old_pixel_grid(&up), Some(2));
+    assert_eq!(pixel_grid(&up).map(|g| g.source_size()), Some((128, 50)));
+}
+
+/// A drawing whose edges sit on pixel boundaries (flat rectangles, no anti-aliasing, so no
+/// adjacent changes) fits a pitch-2 lattice of closed windows by accident; with whole
+/// pitches half-open and the evidence floor it is left alone, while its true upscale (with
+/// enough edges) is found.
+#[test]
+fn a_pixel_aligned_drawing_is_not_taken_for_an_upscale() {
+    for seed in 0..20u64 {
+        let native = art(300, 200, seed, 0);
+        assert_eq!(pixel_grid(&native), None, "seed {seed}");
+    }
+    let busy = art(160, 128, 3, 60);
+    let up = upscale(&busy, 3);
+    let g = pixel_grid(&up).expect("60 noisy pixels give enough edges");
+    assert_eq!(g.source_size(), (160, 128));
+    assert_eq!(bits(&g.reduce(&up).data), bits(&busy.data));
+}
+
+/// The floors: the long side keeps at least 64 px (a 32 px sprite at 8x comes back at 64, a
+/// finer lattice of the same image), the short side at least 16 (a 100 x 12 strip at 4x
+/// comes back at 2x, 200 x 24), and an image too small to keep them at pitch 2 is not
+/// looked at.
+#[test]
+fn the_floors_hold() {
+    let sprite = upscale(&noise(32, 32, 5), 8);
+    let g = pixel_grid(&sprite).expect("a finer lattice keeps the long side at 64");
+    assert_eq!(g.source_size(), (64, 64));
+    assert_eq!(
+        bits(&upscale(&g.reduce(&sprite), 4).data),
+        bits(&sprite.data)
+    );
+    assert!(pixel_grid(&upscale(&noise(30, 30, 5), 4)).is_none());
+    assert_eq!(
+        pixel_grid(&upscale(&noise(100, 12, 5), 4)).map(|g| g.source_size()),
+        Some((200, 24))
+    );
+    assert_eq!(
+        pixel_grid(&upscale(&noise(100, 16, 5), 4)).map(|g| g.source_size()),
+        Some((100, 16))
+    );
+}
+
+/// An upscale by 2 across and 4 down is not one scale, but it is a 2x upscale of the source
+/// stretched 2x down, which is one: that is what comes back, still exact.
+#[test]
+fn two_scales_come_back_as_the_finer_common_one() {
+    let src = noise(100, 100, 4);
+    let up = resize_nearest(&src, 200, 400, Sampling::Centre);
+    let g = pixel_grid(&up).expect("a 2x lattice on both axes");
+    assert_eq!(g.source_size(), (100, 200));
+    assert_eq!(
+        bits(&g.reduce(&up).data),
+        bits(&resize_nearest(&src, 100, 200, Sampling::Centre).data)
+    );
+}
+
+/// Not upscales: native-looking art, noise, a flat image, an upscale with one pixel broken
+/// (early, late, by one level), a 1.5x upscale (pitch under 2), one with a NaN in one pixel
+/// of a cell, and zero or tiny sides.
+#[test]
+fn what_is_not_an_upscale_is_left_alone() {
+    let mut cases: Vec<(String, Rgba)> = vec![
+        ("art".into(), art(300, 200, 1, 0)),
+        ("noise".into(), noise(200, 200, 2)),
+        (
+            "flat".into(),
+            Rgba {
+                width: 256,
+                height: 192,
+                data: vec![0.25; 256 * 192 * 4],
+            },
+        ),
+        (
+            "1.5x".into(),
+            resize_nearest(&noise(128, 128, 3), 192, 192, Sampling::Centre),
+        ),
+    ];
+    let up = upscale(&noise(100, 80, 5), 3);
+    for at in [
+        7usize,
+        up.width * up.height / 2 + 1,
+        up.width * up.height - 3,
+    ] {
+        for delta in [1.0f32 / 255.0, 0.5] {
+            let mut b = up.clone();
+            let v = &mut b.data[at * 4 + 1];
+            *v = if *v > 0.5 { *v - delta } else { *v + delta };
+            cases.push((format!("broken at {at} by {delta}"), b));
+        }
+    }
+    let mut nan = up.clone();
+    nan.data[(up.width + 1) * 4] = f32::NAN;
+    cases.push(("nan".into(), nan));
+    for (w, h) in [
+        (0usize, 30_000usize),
+        (30_000, 0),
+        (0, 0),
+        (1, 1),
+        (127, 300),
+    ] {
+        cases.push((
+            format!("{w}x{h}"),
+            Rgba {
+                width: w,
+                height: h,
+                data: vec![0.5; w * h * 4],
+            },
+        ));
+    }
+    for (name, img) in &cases {
+        assert_eq!(pixel_grid(img), None::<PixelGrid>, "{name}");
+    }
+}
+
+/// A buffer shorter than its stated size is not read past its end.
+#[test]
+fn a_short_buffer_is_refused() {
+    let mut up = upscale(&noise(100, 80, 6), 2);
+    up.data.truncate(up.data.len() - 4);
+    assert!(pixel_grid(&up).is_none());
 }

@@ -63,6 +63,7 @@ mod ribbons;
 mod rings;
 mod seams;
 mod select;
+mod soft_intake;
 mod strokes;
 mod uncertainty;
 mod units;
@@ -231,8 +232,52 @@ pub struct Intake {
     /// Whether anything resampled the raster, which is what decides if the SVG must be
     /// retargeted to the presentation size.
     pub normalised: bool,
+    /// Whether the raster was reduced to whole source pixels, whose two axes need not keep
+    /// the aspect exactly: the SVG is then presented axis by axis (`post::stretch_axes`).
+    pub stretch: bool,
     /// The size the SVG is presented at.
     pub display: (usize, usize),
+}
+
+/// `svg`, traced at the raster's own size, presented at `w` x `h` (`post::retarget`), and
+/// axis by axis when `stretch` says the raster's two axes were reduced by different factors.
+fn present(svg: &str, w: usize, h: usize, stretch: bool) -> String {
+    let svg = retarget(svg, w, h);
+    if stretch {
+        post::stretch_axes(&svg)
+    } else {
+        svg
+    }
+}
+
+/// The reductions that run after an unblock and ahead of the pre-passes: a resampled or
+/// blurred raster is reduced to the detail it carries (`soft_intake`), unless asked not to
+/// (`--no-soft-intake`); `--intake-scale` keeps its own older measurement in its place.
+/// Neither runs after an unblock (the raster is already the source) nor ahead of SR, which
+/// wants the soft raster to put detail back into. Returns the raster, whether anything
+/// resampled it (an unblock counts), and whether `soft_intake` reduced it.
+///
+/// Quality mode only. Fast mode traces a soft raster as it arrived: reduced, its parameters
+/// fell 92 % on 4x bicubic input but its colour error did not follow -- dE00 −2.4 % with 12
+/// of 28 worse, and +6.6 % on Lanczos 3x (9 of 28 worse, r2-inputs stress set, 2026-10-04)
+/// -- because its palette has none of the soft-input noise guards the reduced raster's
+/// remaining ramps need (the r2-inputs report's 5.9).
+fn reduce_intake(
+    img: inkvec_trace::Rgba,
+    args: &Args,
+    replicated: bool,
+) -> (inkvec_trace::Rgba, bool, bool) {
+    if replicated || args.sr != inkvec_sr::Mode::Off {
+        (img, replicated, false)
+    } else if args.intake_scale {
+        let (out, did) = normalise_intake(img, args.quiet);
+        (out, did, false)
+    } else if args.no_soft_intake || args.mode == TraceMode::Fast {
+        (img, false, false)
+    } else {
+        let (out, did) = soft_intake::reduce(img, args.quiet);
+        (out, did, did)
+    }
 }
 
 /// Everything [`trace_image_sized`] does before the restorer pre-pass: undo an exact
@@ -264,20 +309,31 @@ pub fn intake(
     // measured on a 96-px logo blown up to 768, `--sr on` came back with 14 inks and 1846
     // segments, worse than doing nothing. On the recovered original it has something real
     // to put detail back into.
+    //
+    // Any factor of 2 or more, whole or not (a 3.5x browser zoom is cells of 3 and 4 pixels):
+    // `pixel_grid` finds the lattice and has checked that one pixel per cell rebuilds the
+    // input bit for bit, so `reduce` hands back the source pixels themselves. Its two axes
+    // can have slightly different pitches (a rounded output size), so the SVG is presented
+    // axis by axis (`stretch`).
     let mut replicated = false;
     if !args.no_unblock {
-        if let Some(k) = pixel_grid(&img) {
+        if let Some(grid) = pixel_grid(&img) {
+            let (sw, sh) = grid.source_size();
+            let (px, py) = grid.pitch(img.width, img.height);
             diag::stage(args.quiet, || {
+                let factor = if (px - py).abs() < 5e-4 {
+                    format!("{px:.3}")
+                } else {
+                    format!("{px:.3}x{py:.3}")
+                };
                 format!(
-                    "  unblock       {}x{} is a {k}x pixel upscale of {}x{}; tracing the original",
+                    "  unblock       {}x{} is a {}x pixel upscale of {sw}x{sh}; tracing the original",
                     img.width,
                     img.height,
-                    img.width / k,
-                    img.height / k
+                    factor.trim_end_matches('0').trim_end_matches('.')
                 )
             });
-            let (nw, nh) = (img.width / k, img.height / k);
-            img = inkvec_trace::coverage::downsample_to(&img, nw, nh);
+            img = grid.reduce(&img);
             replicated = true;
         }
     }
@@ -287,15 +343,8 @@ pub fn intake(
     // bounded exactly like the real trace. They used to run after the pre-passes' early
     // returns, so `--restore auto` / `--sr auto` kept a probe traced at full resolution and
     // `--max-dim` (and `--intake-scale`) were silently ignored.
-    let mut normalised = if replicated {
-        true
-    } else if !args.intake_scale || args.sr != inkvec_sr::Mode::Off {
-        false
-    } else {
-        let (out, did) = normalise_intake(img, args.quiet);
-        img = out;
-        did
-    };
+    let (reduced, mut normalised, soft_reduced) = reduce_intake(img, args, replicated);
+    img = reduced;
 
     // Larger than the product wants to spend time on: trace a box-filtered
     // reduction and write the SVG at the original size. The reduction is the same
@@ -324,6 +373,7 @@ pub fn intake(
         args,
         replicated,
         normalised,
+        stretch: replicated || soft_reduced,
         display: (display_w, display_h),
     }
 }
@@ -484,6 +534,7 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
         args,
         replicated,
         normalised,
+        stretch,
         display: (display_w, display_h),
     } = prepared;
     let args = &args;
@@ -505,7 +556,7 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
         // `auto` kept the input, and nothing else is going to look at it: the probe is the trace.
         if let Some(svg) = probe.take() {
             let svg = if normalised || (img.width, img.height) != (display_w, display_h) {
-                retarget(&svg, display_w, display_h)
+                present(&svg, display_w, display_h, stretch)
             } else {
                 svg
             };
@@ -582,7 +633,7 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
                 sr_on = false;
             } else {
                 let svg = if normalised || (img.width, img.height) != (display_w, display_h) {
-                    retarget(&probe, display_w, display_h)
+                    present(&probe, display_w, display_h, stretch)
                 } else {
                     probe
                 };
@@ -654,7 +705,7 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
         stats.insert(0, n);
     }
     let svg = if normalised || (w, h) != (display_w, display_h) {
-        retarget(&svg, display_w, display_h)
+        present(&svg, display_w, display_h, stretch)
     } else {
         svg
     };

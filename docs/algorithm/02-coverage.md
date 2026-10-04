@@ -9,22 +9,22 @@
 `intake_scale()` (`coverage.rs:832`), `ringing_score()` (`coverage.rs:627`),
 `oversample_factor()` (`coverage/oversample.rs:118`), `downsample_to()` (`coverage/resample.rs:31`)
 **Pipeline position:** the intake measurements every later stage is tuned by (the module's own
-list, `coverage.rs:35-51`). The bilevel front end (`trace_bilevel`, `inkvec-trace/src/lib.rs:136-142`)
+list, `coverage.rs:35-51`). The bilevel front end (`trace_bilevel`, `inkvec-trace/src/lib.rs:137-143`)
 calls `bilevel_coverage` directly and traces its field. The Quality colour front end
-(`trace_color_full_with_alpha`, `inkvec-trace/src/lib.rs:285`) does not build a `CoverageField` — it
-takes the noise estimate (`estimate_noise`, `inkvec-trace/src/lib.rs:311`), the edge width
-(`intake_scale`, `inkvec-trace/src/lib.rs:344`) and the ringing score (`ringing_score`,
-`inkvec-trace/src/lib.rs:349`) and feeds them into palette extraction (stage 03); the native-alpha
+(`trace_color_full_with_alpha`, `inkvec-trace/src/lib.rs:286`) does not build a `CoverageField` — it
+takes the noise estimate (`estimate_noise`, `inkvec-trace/src/lib.rs:312`), the edge width
+(`intake_scale`, `inkvec-trace/src/lib.rs:345`) and the ringing score (`ringing_score`,
+`inkvec-trace/src/lib.rs:350`) and feeds them into palette extraction (stage 03); the native-alpha
 path makes the same three measurements (`native.rs:824-829`). Later, `planar::refine_subpixel`
 (`planar.rs:445`) computes each boundary point's uncertainty in `vertex_sigma`
 (`planar.rs:1198-1256`), which re-derives the coverage-gradient formula this module documents
 rather than sharing a `CoverageField` object. Fast mode measures none of the three: its front end
 hands the shared stages `NOISE_FLOOR` as the noise (`fast/front.rs:152-163`). `inkvec-cli`'s intake
 reads `intake_scale` and `oversample_factor` to price its options in the raster's own units
-(`price_in_raster_units`, `inkvec-cli/src/lib.rs:328-453`) and resamples with `downsample_to`.
+(`price_in_raster_units`, `inkvec-cli/src/lib.rs:378-503`) and resamples with `downsample_to`.
 There is no stopwatch mark named `coverage`. In the Quality path the stopwatch starts after the
-noise estimate (`inkvec-trace/src/lib.rs:333`), so that estimate falls under no mark, while the
-edge-width and ringing measurements fall inside the `palette` mark (`inkvec-trace/src/lib.rs:409`).
+noise estimate (`inkvec-trace/src/lib.rs:334`), so that estimate falls under no mark, while the
+edge-width and ringing measurements fall inside the `palette` mark (`inkvec-trace/src/lib.rs:410`).
 
 ## What problem this solves
 
@@ -300,9 +300,9 @@ The `0.5/255` floor is stated on the constant itself (`coverage.rs:312-317`): "c
 it: `color::extract_palette_mdl` tests `(nearest / sigma_noise)^2`. Half a quantisation step is
 the smallest deviation an 8-bit file could even represent." The test
 `noise_estimate_floors_at_half_a_level` (`coverage.rs:1242-1249`) pins it. The Quality colour path
-reports a floored estimate as a saturated measurement (`inkvec-trace/src/lib.rs:313-330`), and on a
+reports a floored estimate as a saturated measurement (`inkvec-trace/src/lib.rs:314-331`), and on a
 soft intake later raises the noise to the residual measured against the labels
-(`regularize::residual_sigma`, `inkvec-trace/src/lib.rs:429-491`; see stage 03).
+(`regularize::residual_sigma`, `inkvec-trace/src/lib.rs:430-492`; see stage 03).
 
 ### `ringing_score` — compression ringing, read from the pixels
 
@@ -367,8 +367,8 @@ and the answer is at least `1.0` (`coverage.rs:881`). Measured behaviour (`cover
 exactly 1.00 for native renders at 128, 512 and 1024; 2.39 and 4.00 for 4x and 8x Lanczos
 upsamples; 1.70 and 3.00 for Gaussian blur of 1.0 and 2.0; JPEG reads 1.00. Its consumers are the
 palette's soft-intake gate (`SOFT_INTAKE_EDGE = 1.75`, stage 03), `--intake-scale`
-(`normalise_intake`, `inkvec-cli/src/lib.rs:123-175`) and the edge-width gate in
-`price_in_raster_units` (`inkvec-cli/src/lib.rs:369-388`).
+(`normalise_intake`, `inkvec-cli/src/lib.rs:124-176`) and the edge-width gate in
+`price_in_raster_units` (`inkvec-cli/src/lib.rs:419-438`).
 
 ### `downsample_to` and `box_downsample_rgba8`
 
@@ -378,8 +378,8 @@ with fractional weights on the boundary pixels (`box_resample`, `coverage/resamp
 lives in the `resample` submodule with its 8-bit twin `box_downsample_rgba8`
 (`coverage/resample.rs:43-77`), which reads the decoder's buffer directly for the decode-time
 `--max-dim` cap (`load.rs:443`, `load.rs:500`, `load.rs:552`). Its other callers are `inkvec-cli`'s intake: the unblock pre-pass
-(`inkvec-cli/src/lib.rs:277`), `--intake-scale` (`inkvec-cli/src/lib.rs:169`) and `--max-dim`
-(`inkvec-cli/src/lib.rs:313`). `oversample_factor` does not use it; it box-averages its own `k x k`
+(`inkvec-cli/src/lib.rs:334`), `--intake-scale` (`inkvec-cli/src/lib.rs:170`) and `--max-dim`
+(`inkvec-cli/src/lib.rs:362`). `oversample_factor` does not use it; it box-averages its own `k x k`
 blocks (`coverage/oversample.rs:129-149`).
 
 Its doc comment (`coverage/resample.rs:23-25`) states why it averages in **premultiplied** colour
@@ -465,13 +465,13 @@ disc upscaled 4x still reads at least 4, and a flat 64x64 image reads 8;
 It returns 1 for most native renders at the corpus's 128 px (212 of the 246 screen icons); at
 512 px nearly every native render reads 2 to 8, "which is the speckle floor scaling that caller
 wants" (`coverage/oversample.rs:113-117`). Its callers (`coverage/oversample.rs:4-5`) are
-`inkvec-cli`'s `price_in_raster_units` (`inkvec-cli/src/lib.rs:328-453`, the call at
-`inkvec-cli/src/lib.rs:382`) and `--content-units` (`content_scale`,
+`inkvec-cli`'s `price_in_raster_units` (`inkvec-cli/src/lib.rs:378-503`, the call at
+`inkvec-cli/src/lib.rs:432`) and `--content-units` (`content_scale`,
 `inkvec-cli/src/units.rs:33-78`, the call at `inkvec-cli/src/units.rs:76`). In
 `price_in_raster_units`, with `r` the factor and `R = 128` px the reference extent, precision is
 scaled by `r` only when the edge width exceeds the soft-intake threshold, min-area by `r²` and
-lambda by `r` only when the longest side exceeds `R` (`inkvec-cli/src/lib.rs:328-341`); Fast mode
-reads neither measurement (`inkvec-cli/src/lib.rs:360-366`).
+lambda by `r` only when the longest side exceeds `R` (`inkvec-cli/src/lib.rs:378-391`); Fast mode
+reads neither measurement (`inkvec-cli/src/lib.rs:410-416`).
 
 ## Constants and thresholds
 
@@ -554,7 +554,7 @@ No `INKVEC_*` environment variable is read anywhere in the module (`coverage.rs`
 `estimate_noise` back to the median; its doc comment names it, and the regression test now reads
 the median directly (`coverage.rs:360-363`). Callers downstream read variables that consume this
 module's outputs: `INKVEC_PALDBG` prints the edge width, ringing score and the noise guard it
-opened (`inkvec-trace/src/lib.rs:387-392`), and `INKVEC_NOISE_SIGMAS` (*removed*) and
+opened (`inkvec-trace/src/lib.rs:388-393`), and `INKVEC_NOISE_SIGMAS` (*removed*) and
 `INKVEC_SAME_INK_DE00` (*removed*) used to override the palette's use of them — see
 `03-palette.md`.
 
@@ -575,8 +575,8 @@ opened (`inkvec-trace/src/lib.rs:387-392`), and `INKVEC_NOISE_SIGMAS` (*removed*
   `OVERSAMPLE_TOL` or `OVERSAMPLE_KEEP` do. These read as reasonable engineering guesses rather
   than swept constants.
 - **The colour path never constructs a `CoverageField`, and its sigma is a separate copy.**
-  It calls `estimate_noise` (`inkvec-trace/src/lib.rs:311`) and `intake_scale`
-  (`inkvec-trace/src/lib.rs:344`) itself, and `vertex_sigma` (`planar.rs:1198-1256`) re-derives the
+  It calls `estimate_noise` (`inkvec-trace/src/lib.rs:312`) and `intake_scale`
+  (`inkvec-trace/src/lib.rs:345`) itself, and `vertex_sigma` (`planar.rs:1198-1256`) re-derives the
   `sigma_noise / contrast / |grad a|` formula and adds `DEFAULT_SIGMA_MODEL` in quadrature by hand
   rather than calling `CoverageField::position_sigma`. The two already differ in detail:
   `vertex_sigma` reads the coverage change across one pixel along the boundary normal on the

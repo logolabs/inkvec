@@ -10,14 +10,14 @@ candidates in `color/represent.rs`; the transparent-image mirror is `native.rs` 
 **Entry point:** `extract_palette_mdl()` (`color.rs:847-918`), which runs `mdl::extract`
 (`color/mdl.rs:117-173`)
 **Pipeline position:** first stage of the Quality colour front end. Called from
-`trace_color_full_with_alpha` (`inkvec-trace/src/lib.rs:393-408`) through `extract_palette_mdl_ids`,
+`trace_color_full_with_alpha` (`inkvec-trace/src/lib.rs:394-409`) through `extract_palette_mdl_ids`,
 which shares the image's colour ids with the labelling; stopwatch mark `palette`
-(`inkvec-trace/src/lib.rs:409`). It runs after noise estimation (`coverage::estimate_noise`,
-`inkvec-trace/src/lib.rs:311`, stage 02) and the three intake measurements that switch it between
-its clean and soft settings: edge width (`coverage::intake_scale`, `inkvec-trace/src/lib.rs:344`),
-ringing (`coverage::ringing_score`, `inkvec-trace/src/lib.rs:349`) and the container format
+(`inkvec-trace/src/lib.rs:410`). It runs after noise estimation (`coverage::estimate_noise`,
+`inkvec-trace/src/lib.rs:312`, stage 02) and the three intake measurements that switch it between
+its clean and soft settings: edge width (`coverage::intake_scale`, `inkvec-trace/src/lib.rs:345`),
+ringing (`coverage::ringing_score`, `inkvec-trace/src/lib.rs:350`) and the container format
 (`ColorOptions::lossy_intake`). Followed by `label_image` (mark `labels`,
-`inkvec-trace/src/lib.rs:528`) and despeckling (mark `despeckle`, `inkvec-trace/src/lib.rs:532`). An
+`inkvec-trace/src/lib.rs:529`) and despeckling (mark `despeckle`, `inkvec-trace/src/lib.rs:533`). An
 image with transparency traced natively runs the two-ground mirror, `native::extract_palette`
 (`native.rs:285-346`, called at `native.rs:856-871`). Fast mode does not run this stage; it has its
 own histogram palette (`fast/front.rs:7-10`, stage 14).
@@ -54,7 +54,7 @@ implicit one.
 - `width`, `height`.
 - `merge_distance: f32` — the fixed OKLab-distance threshold two colours must clear before either
   is even considered separate (`DEFAULT_MERGE_DISTANCE`, see below).
-- `max_colors: usize` — hard cap on palette size (64 by default, `inkvec-trace/src/lib.rs:197`).
+- `max_colors: usize` — hard cap on palette size (64 by default, `inkvec-trace/src/lib.rs:198`).
 - `ev: PaletteEvidence` (`color.rs:826-845`) — see below.
 
 **Output:** `Palette` (`color.rs:695-710`):
@@ -95,11 +95,11 @@ trailing arguments: "These three arrived as trailing numbers and were easy to tr
 `f64` and an `f32`, all plausible in any order, and a swap would have quietly changed how many
 inks the image was found to have. Naming them makes that impossible" (`color.rs:828-830`).
 
-Where each field comes from, concretely, at the call site (`inkvec-trace/src/lib.rs:402-407`):
+Where each field comes from, concretely, at the call site (`inkvec-trace/src/lib.rs:403-408`):
 
 - `sigma_noise` — `coverage::estimate_noise` on the whole image's luminance (stage 02). On a soft
   intake it is raised *after* the palette, once there are labels to measure the residual against
-  (`regularize::residual_sigma`, `inkvec-trace/src/lib.rs:429-491`); the palette sees the
+  (`regularize::residual_sigma`, `inkvec-trace/src/lib.rs:430-492`); the palette sees the
   pre-label estimate.
 - `lambda` — `gradient::bic_lambda(img.width * img.height)` = `0.5 * ln(n)` (`gradient.rs:320-327`),
   the Bayesian information criterion choice: "it grows slowly with region size, so a large region
@@ -107,7 +107,7 @@ Where each field comes from, concretely, at the call site (`inkvec-trace/src/lib
   (`gradient.rs:322-324`). This is the same `lambda` used throughout the pipeline's cost function,
   `cost = 0.5*chi2 + lambda*params`.
 - `noise_sigmas` and `same_ink_de00` — switched between a clean-intake value and a soft-intake
-  value (`inkvec-trace/src/lib.rs:336-368`) by three upstream signals, any one of which is enough:
+  value (`inkvec-trace/src/lib.rs:337-369`) by three upstream signals, any one of which is enough:
   the edge width (`intake_scale > SOFT_INTAKE_EDGE`), the container format
   (`ColorOptions::lossy_intake`, from `lossy_container`, `load.rs:58-96`), and the ringing score
   (`ringing_score > SOFT_RINGING`, or `SOFT_RINGING_LARGE` when both sides are at least
@@ -185,7 +185,7 @@ chose it, where a pixel chooses its nearest ink only if that ink is within `merg
 anti-aliased pixels far from every entry do not pull the means (`refine_to_members`,
 `color/mdl.rs:500-557`). All entries leave the walk with `alpha = 1.0` (`color/mdl.rs:166`) —
 extraction always runs on an opaque-matted image, because unmixing a boundary needs two opaque
-colours (`inkvec-trace/src/lib.rs:255-256`).
+colours (`inkvec-trace/src/lib.rs:256-257`).
 
 ### The MDL escape — `worth_it`
 
@@ -463,7 +463,7 @@ which is what `crate::regions::absorb_blend_slivers` later repairs" (`color.rs:1
 
 `split_alpha_inks(labels, pal, alpha)` (`color.rs:964-1098`) runs after labelling, as a separate
 pass, only when the caller asked for alpha inks and passed the source alpha
-(`inkvec-trace/src/lib.rs:523-527`); it does not change how the palette itself was found, and the
+(`inkvec-trace/src/lib.rs:524-528`); it does not change how the palette itself was found, and the
 native path does not use it (its palette carries opacity directly, `native.rs:291-293`).
 Extraction always works on an opaque matte, which loses the distinction between "25% white over
 nothing" and "the transparent ground itself" — both composite to the same colour and label as one
@@ -488,7 +488,7 @@ is right for a real plateau and leaves two faces of one ink a level or two apart
 gold came out as `#b08a4a` and `#b18b4b`, and the r2-palette research counted 26 duplicate fills
 under 1 dE00 in 21 of 362 clean icons and 683 in 147 icons of their 2x Lanczos resample.
 `snap::snap_flat_fills` runs on both paths after the faces exist and before the boundary stages
-(`inkvec-trace/src/lib.rs:711-724`, `native.rs:980-993`), so sub-pixel refinement and the boundary
+(`inkvec-trace/src/lib.rs:712-725`, `native.rs:980-993`), so sub-pixel refinement and the boundary
 solve place the edges against the colour that is written:
 
 1. each ink's colour is the fill of its *representative face*: the flat face of that ink with the
@@ -549,11 +549,11 @@ The branch, measured with it (Quality, screen set, 246 icons each):
 | `SAME_INK_DE00` | `1.5` (CIEDE2000) | `color.rs:330-347`. OKLab's lightness is cube-root-shaped, so a fixed OKLab radius is far too generous near black: "on a clean render of a one-ink black logo the palette accepted #020202, #040404 and #070707 as three more inks ... In CIEDE2000, which is what the bench scores with, those three sit at 0.31, 0.63 and 1.11 from black: differences no viewer can see." Swept on the screen set: `1.0` gave 0.4145→0.4140 (6 better, 5 worse) and still let `#070707` stand; `1.5` gave 0.4140→0.4124 (10 better, 6 worse, noto-emoji −0.005 dE00) and correctly split `abra_agency` back into two inks. "Mid-grey pairs 4 levels apart read 1.5, and a pair that close is not something the artwork is saying." |
 | `SOFT_SAME_INK_DE00` | `5.0` | `color.rs:574-586`. Same judgement as `SOFT_NOISE_SIGMAS`, keyed to the same soft-intake trigger: on a resampled or oversampled intake, the ramp between two inks supplies "a whole family of intermediate colours that are not inks at all." Measured on a real brand mark upscaled 4x: 76 distinct fills where the drawing has five, `#030303` alone as 82 separate paths against one `#000000` at 1x. |
 | `SOFT_NOISE_SIGMAS` | `3.0` | `color.rs:490-498`. Must stay gated: "Run unconditionally it costs **10.9 %** on the 246-icon screen set -- objective 0.4005 -> 0.4442, measured 2026-09-08 -- because on a clean intake two colours a whisker apart really are two inks and merging them throws away artwork." Switched on only by positive evidence the intake is not clean: wide edges (`SOFT_INTAKE_EDGE`), a lossy container, or measured ringing (`SOFT_RINGING`). |
-| `NOISE_SIGMAS` | `0.0` | `color.rs:744-761`. The clean-intake value, deliberately zero, and read by name at both call sites (`inkvec-trace/src/lib.rs:357-361`, `native.rs:841-845`). The doc comment records that the guard *works* — on a logo upscaled with the packaged SR model's own 1.87-level error, it takes output "from 5 fills, 77 paths and 12.4 KB back to 1 fill, 3 paths and 1.0 KB" — but "it is not free on a clean intake -- the screen set goes from 0.4328 to 0.4451 -- because a region with a real gradient has a real spread, and the guard cannot tell that from noise without knowing which it is looking at." So "the caller decides, because the caller knows where its raster came from": upscaled, compressed or resampled input gets `SOFT_NOISE_SIGMAS` from the soft-intake gate. |
+| `NOISE_SIGMAS` | `0.0` | `color.rs:744-761`. The clean-intake value, deliberately zero, and read by name at both call sites (`inkvec-trace/src/lib.rs:358-362`, `native.rs:841-845`). The doc comment records that the guard *works* — on a logo upscaled with the packaged SR model's own 1.87-level error, it takes output "from 5 fills, 77 paths and 12.4 KB back to 1 fill, 3 paths and 1.0 KB" — but "it is not free on a clean intake -- the screen set goes from 0.4328 to 0.4451 -- because a region with a real gradient has a real spread, and the guard cannot tell that from noise without knowing which it is looking at." So "the caller decides, because the caller knows where its raster came from": upscaled, compressed or resampled input gets `SOFT_NOISE_SIGMAS` from the soft-intake gate. |
 | `SOFT_INTAKE_EDGE` | `1.75` px | `color.rs:479-488`. Measured over all 980 corpus rasters (native, 8x-supersampled): median edge width 1.00, widest native 1.50 (a noto-emoji face with soft shading), then 1.43 and 1.26. A 2x Lanczos round trip reads 1.36–1.40, 4x reads 2.80, 8x reads 4.00. The threshold sits above everything native, catching "upscales of about 3x and more"; a 2x resample is indistinguishable from soft artwork by edge width alone and is what the SR pre-pass (`--sr auto`) exists for. |
 | `SOFT_RINGING` | `0.12` | `color.rs:500-515`. Set from the false-positive side, because the guard it opens costs 2.8% on the screen set. Measured over 240 clean corpus rasters at tier 128ss: median 0.0000, p90 0.0062, p99 0.0333, max 0.1023 (`synthetic/rings_concentric`, a test pattern that genuinely oscillates); the highest real artwork is a noto-emoji at 0.0370. |
 | `SOFT_RINGING_LARGE` | `0.05` | `color.rs:517-530`. The ring band is fixed in pixels, and at 128 px the ring of one glyph edge lands on the next, so clean art scores up to 0.1023. At 512 px the same artwork scores at most 0.0430 over 64 images, the compressed versions 0.086 median; a 0.05 gate has zero false positives and catches 88-89% of JPEG at qualities 85, 60 and 40, where the conservative gate catches 19-33%. |
-| `RINGING_MIN_DIM` | `256` px | `color.rs:532-533`, used at `inkvec-trace/src/lib.rs:350-354`. The smallest side at which `SOFT_RINGING_LARGE` applies; below it the conservative number stands "and the screen set is bit-identical" (`color.rs:528-529`). No sweep cited for 256 itself. |
+| `RINGING_MIN_DIM` | `256` px | `color.rs:532-533`, used at `inkvec-trace/src/lib.rs:351-355`. The smallest side at which `SOFT_RINGING_LARGE` applies; below it the conservative number stands "and the screen set is bit-identical" (`color.rs:528-529`). No sweep cited for 256 itself. |
 | `MEASURED_SIGMA_SCALE` | `1.0` | `color.rs:535-544`. How much of `regularize::residual_sigma` to believe when the noise is raised after labelling on a soft intake. Measured on 78 JPEG-re-encoded-as-PNG traces: at 1.0 the parameter count falls 31.5% and colour error 15.9%; the detector alone gives 22.0% and 22.2%; "The value here is the first: sigma taken at face value." (The comment used to call 1.0 "the swept optimum between them", though it is one of the two endpoints; no sweep between them is recorded.) |
 | `MEASURED_SIGMA_CAP` | `8.0` levels | `color.rs:546-572`. A second ceiling on the measured noise, now non-binding (`residual_sigma` clamps itself to 8). On 791 traces across all classes a ceiling of 8 gives colour −16.9% and parameters −33.7%, diagrams +6% colour for −52% parameters. Smaller samples had pointed the wrong way (22 diagrams read +114% colour at the high ceiling, 106 diagrams +0.7%): "Nothing about this trade should be decided on fewer than several hundred paired traces". |
 | `DEFAULT_MERGE_DISTANCE` | `0.035` (OKLab) | `color.rs:175-200`. Was `0.055`; an error-budget analysis on the 980-icon devset found that value merging inks the artwork keeps apart — "1.6 % of noto-emoji's interior pixels carrying half its interior error" turned out to be two flat colours (66% error reduction when fit as two flats) rather than a gradient (only 13% reduction as a ramp). Swept on the full set: `0.055→0.4960`, `0.040→0.4931`, `0.035→0.4922` (best), `0.030→0.4941`. At `0.035` all three axes improve together (dE00 0.2005→0.1991, DISTS 0.0296→0.0293, params-vs-artist 1.46→1.44). The doc comment explicitly warns not to tune this on the screen split alone — it prefers `0.030` there, and held-out set A prefers the old `0.055` outright; "Only the full set separates them." |
@@ -643,7 +643,7 @@ Since the settings cleanup (CHANGELOG, 0.2.0, *Changed*) the engine reads its en
 
 | variable | effect | default | source |
 |---|---|---|---|
-| `INKVEC_PALDBG` | prints per-candidate accept/reject diagnostics, the same-ink verdicts, the representation votes and the intake measurements to stderr | unset (silent) | `color/mdl.rs:138`, `color/mdl.rs:271-287`, `color.rs:950-958`, `native/palette.rs:184`, `native/palette.rs:359-369`, `inkvec-trace/src/lib.rs:387-392` |
+| `INKVEC_PALDBG` | prints per-candidate accept/reject diagnostics, the same-ink verdicts, the representation votes and the intake measurements to stderr | unset (silent) | `color/mdl.rs:138`, `color/mdl.rs:271-287`, `color.rs:950-958`, `native/palette.rs:184`, `native/palette.rs:359-369`, `inkvec-trace/src/lib.rs:388-393` |
 | `INKVEC_MERGE_DE00` (*research build*) | replaces the OKLab merge radius with a CIEDE2000 radius | unset | `color/mdl.rs:139-144`, `color/mdl.rs:229-236` |
 | `INKVEC_PALETTE_RGB` (*research build*) | clusters in plain sRGB instead of OKLab | off | `color.rs:91-105` |
 | `INKVEC_NOISE_SIGMAS` (*removed*) | overrode `ev.noise_sigmas` | — | the soft-intake gate chooses `NOISE_SIGMAS` / `SOFT_NOISE_SIGMAS` |
@@ -658,7 +658,7 @@ Since the settings cleanup (CHANGELOG, 0.2.0, *Changed*) the engine reads its en
   the sweep on 2026-09-08 because nothing read it; every sweep entry is now proved live by
   `assert_live` before it is swept.
 - **`NOISE_SIGMAS` as a named constant — resolved.** Both call sites now read
-  `color::NOISE_SIGMAS` by name for the clean intake (`inkvec-trace/src/lib.rs:357-361`,
+  `color::NOISE_SIGMAS` by name for the clean intake (`inkvec-trace/src/lib.rs:358-362`,
   `native.rs:841-845`).
 - **Several shape-test constants have no numeric derivation**, only qualitative motivation:
   `BLEND_STRADDLE_FRACTION = 0.5`, `STRADDLE_STEP = 0.12`, `MIN_INK_WEIGHT = 0.004`,
@@ -671,9 +671,9 @@ Since the settings cleanup (CHANGELOG, 0.2.0, *Changed*) the engine reads its en
   calls it "the open problem": "Making it free, by detecting the noise instead of being told about
   it" (`color.rs:757-760`). Part of it has since been answered from the pixels: the ringing score
   opens the gate on a JPEG re-saved as PNG, and on a soft intake the noise is then measured against
-  the labels (`inkvec-trace/src/lib.rs:429-491`). Neither runs on an intake that shows no edge,
+  the labels (`inkvec-trace/src/lib.rs:430-492`). Neither runs on an intake that shows no edge,
   container or ringing evidence, and the ringing score is built around a JPEG artefact: it "fires
-  on only 21% of VAE output against 88% of JPEG" (`inkvec-trace/src/lib.rs:449-451`).
+  on only 21% of VAE output against 88% of JPEG" (`inkvec-trace/src/lib.rs:450-452`).
 - **The opaque walk has no counterpart of the transparent walk's rarity exemption.** By design:
   on an opaque image every ink is paint, and a rare shape is an ink when it is represented or is
   drawn in its own colour by the carve stage, so the rule was not mirrored. The fork table in

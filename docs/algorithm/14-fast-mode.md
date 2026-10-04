@@ -18,12 +18,12 @@ documented in `01-intake.md`,
 **Entry points:** `--mode fast` (`TraceMode::Fast`, `crates/inkvec-cli/src/args.rs:21-29`,
 default `quality`). The trace crate dispatches to `fast::trace_color` or, for an image
 traced with its transparency, `fast::trace_color_native` (`fast/front.rs:17-29`) when
-`ColorOptions::fast` is set (`crates/inkvec-trace/src/lib.rs:290-302`); the command line
+`ColorOptions::fast` is set (`crates/inkvec-trace/src/lib.rs:291-303`); the command line
 fits the result with `fast::fit` (`crates/inkvec-cli/src/fast.rs:28-45`), which calls
 `inkvec_trace::fast::fit_edges` (`fast/mod.rs:318-365`) with the map's width and height.
 **Pipeline position:** it replaces stages 03–05 (palette, regions, gradients) with its own
 front end; shares stages 01, 06, 07, 10 and 13; skips 08 (the boundary solve,
-`lib.rs:1137`) and 09 (decode, `lib.rs:1152`); and replaces 11 (curve fitting) with its own
+`lib.rs:1138`) and 09 (decode, `lib.rs:1153`); and replaces 11 (curve fitting) with its own
 fitter, without 12 (repair) or shape harmonization (`repair_fits`,
 `crates/inkvec-cli/src/pipeline.rs:862`; `emit_options`, `pipeline.rs:511-522`).
 
@@ -39,7 +39,7 @@ its seam underlap, compound paths and minify" — and replaces the rest with one
 (the module overview of `fast/mod.rs`). Each stage is linear or near-linear in the number of pixels or
 boundary points, and nothing reads a clock, so the output is the same on every machine. The
 command line describes the trade as "several times faster, a little less faithful"
-(`args.rs:305-308`).
+(`args.rs:309-312`).
 
 The round of 2026-09-30 rewrote Fast's own stages and the stages it shares for speed,
 **with the output held fixed**: every rewrite is exact, keeps the code it replaced as a test
@@ -144,14 +144,15 @@ a zero side (`has_pixels`, `load.rs:255-272`); those steps are documented in
   table, `UNIT[k] = k / 255` (`load.rs:282-296`), straight from the decoder's own buffer for
   8-bit RGB and RGBA, in parallel chunks from 256 × 256 pixels on (`from_dynamic`, `widen`,
   `load.rs:298-373`).
-* **Unblock by the gcd of the change positions.** Only the factors that divide
-  `gcd(w, h, every column and row where neighbours differ by more than 1/256)` get the block
-  test; on ordinary art the gcd reaches 1 a few rows into the content and no block test runs
-  (`pixel_grid`, `change_gcd`, `crates/inkvec-cli/src/alpha/unblock.rs:8-161`).
+* **Unblock stops at the first anti-aliased curve.** The nearest-neighbour inverse (any factor
+  of 2 or more, [01-intake.md](01-intake.md)) walks the change positions row by row and gives
+  up at the first two adjacent ones, which no upscale of 2 or more makes; on ordinary art that
+  is a few rows into the content (`pixel_grid`, `line_changes`,
+  `crates/inkvec-cli/src/alpha/unblock.rs:237-319`).
 * **Matte in place, in parallel.** The transparency scan and the flatten are parallel maps
   from 256 × 256 pixels on, and the flatten writes over the input's own buffer
-  (`alpha_source_owned`, `crates/inkvec-cli/src/alpha.rs:598-624`; `flatten_in_place`,
-  `has_transparency`, `alpha.rs:792-852`).
+  (`alpha_source_owned`, `crates/inkvec-cli/src/alpha.rs:599-625`; `flatten_in_place`,
+  `has_transparency`, `alpha.rs:793-853`).
 * **Composite over white in parallel** (`Rgba::composited`, `coverage.rs:198-232`).
 
 Each is exact: every output of the parallel maps depends on one input value, the
@@ -485,7 +486,7 @@ solve and decode.
   vertices or while a debug printout or contour dump is on (`measure_subpixel`,
   `planar.rs:502-603`).
 * **Symmetry detection beside the measuring phase**, under `rayon::join`; both only read the
-  lattice map (`lib.rs:1093-1126`).
+  lattice map (`lib.rs:1094-1127`).
 * **Junction debug flags read once** into a `OnceLock` (`planar/junctions.rs:54-70`).
 
 **Citations** (labels as in the doc comments): cracks, "Method from" He, Chao & Suzuki 2008 and

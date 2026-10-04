@@ -20,15 +20,15 @@ documented in `01-intake.md`,
 **Entry points:** `--mode fast` and `--mode balanced` (`TraceMode::Fast` and
 `TraceMode::Balanced`, `crates/inkvec-cli/src/args.rs:21-34`, default `quality`). The trace crate dispatches to `fast::trace_color` or, for an image
 traced with its transparency, `fast::trace_color_native` (`fast/front.rs:17-29`) when
-`ColorOptions::fast` is set (`crates/inkvec-trace/src/lib.rs:296-308`); the command line
-fits the result with `fast::fit` (`crates/inkvec-cli/src/fast.rs:98-117`), which calls
+`ColorOptions::fast` is set (`crates/inkvec-trace/src/lib.rs:304-316`); the command line
+fits the result with `fast::fit` (`crates/inkvec-cli/src/fast.rs:115-134`), which calls
 `inkvec_trace::fast::fit_edges` (`fast/mod.rs:380-427`) with the map's width and height.
 **Pipeline position:** it replaces stages 03–05 (palette, regions, gradients) with its own
 front end; shares stages 01, 06, 07, 10 and 13; skips 08 (the boundary solve,
-`lib.rs:1165`, `boundary_opt::optimise_for` at `boundary_opt.rs:593-611`; balanced runs it,
-capped at eight iterations, §8) and 09 (decode, `lib.rs:1176`); and replaces 11 (curve fitting) with its own
+`lib.rs:1166`, `boundary_opt::optimise_for` at `boundary_opt.rs:593-611`; balanced runs it,
+capped at eight iterations, §8) and 09 (decode, `lib.rs:1177`); and replaces 11 (curve fitting) with its own
 fitter, without 12 (repair) or shape harmonization (`repair_fits`,
-`crates/inkvec-cli/src/pipeline.rs:869`; `emit_options`, `pipeline.rs:518-529`).
+`crates/inkvec-cli/src/pipeline.rs:852`; `emit_options`, `pipeline.rs:526-537`).
 
 ## What problem this solves
 
@@ -42,7 +42,7 @@ its seam underlap, compound paths and minify" — and replaces the rest with one
 (the module overview of `fast/mod.rs`). Each stage is linear or near-linear in the number of pixels or
 boundary points, and nothing reads a clock, so the output is the same on every machine. The
 command line describes the trade as "several times faster, a little less faithful"
-(`args.rs:319-322`).
+(`args.rs:339-342`).
 
 The round of 2026-09-30 rewrote Fast's own stages and the stages it shares for speed,
 **with the output held fixed**: every rewrite is exact, keeps the code it replaced as a test
@@ -87,9 +87,9 @@ fitter; one SVG document out of the emitter. Two differences in what comes out:
   (`fast/front.rs:14-16`);
 * **the report** opens with a line saying Fast mode ran and naming what it skipped — "fast
   mode     Potrace-class fit, flat fills; not run: boundary solve, curve DP, gradients,
-  ring repair, harmonization" (`report`, `crates/inkvec-cli/src/fast.rs:167-194`) — followed
+  ring repair, harmonization" (`report`, `crates/inkvec-cli/src/fast.rs:184-211`) — followed
   by every option the caller moved off its default that only steers a skipped stage
-  (`fast_ignored`, `fast.rs:119-165`): `--tau`, `--content-units`, `--bezier-cost`,
+  (`fast_ignored`, `fast.rs:136-182`): `--tau`, `--content-units`, `--bezier-cost`,
   `--corner-angle`, `--time-budget`, `--simplify-faint`, `--harmonize-threshold`,
   `--use-symbols`, `--no-repair` and `--harmonize` / `--no-harmonize`, in that order. Not
   `--no-gradients`, because Fast still merges ramps, and not `--precision` or
@@ -117,8 +117,8 @@ figures below are not additive: the clean-up round took
 
 Measured together, `main` `55ee4e0` against the merged tip, per image, mean ms.
 `trace_total` is the stopwatch mark after the trace crate returns (stages 2–5; set in
-`run_color_impl`, `crates/inkvec-cli/src/pipeline.rs:253`); `fit_dp` is the fit (stage 6)
-plus what `finish_color` does before it (`pipeline.rs:366-369`, the mark at `:487`):
+`run_color_impl`, `crates/inkvec-cli/src/pipeline.rs:255`); `fit_dp` is the fit (stage 6)
+plus what `finish_color` does before it (`pipeline.rs:367-371`, the mark at `:495`):
 
 | set | `fit_dp` | `trace_total` |
 |---|---|---|
@@ -149,27 +149,32 @@ a zero side (`has_pixels`, `load.rs:255-272`); those steps are documented in
   table, `UNIT[k] = k / 255` (`load.rs:282-296`), straight from the decoder's own buffer for
   8-bit RGB and RGBA, in parallel chunks from 256 × 256 pixels on (`from_dynamic`, `widen`,
   `load.rs:298-373`).
-* **Unblock by the gcd of the change positions.** Only the factors that divide
-  `gcd(w, h, every column and row where neighbours differ by more than 1/256)` get the block
-  test; on ordinary art the gcd reaches 1 a few rows into the content and no block test runs
-  (`pixel_grid`, `change_gcd`, `crates/inkvec-cli/src/alpha/unblock.rs:8-161`).
+* **Unblock by the exact lattice inverse.** The columns and rows where a pixel differs from
+  its neighbour bit for bit are the change positions, and the scan stops at the first two
+  adjacent ones, which no pitch of 2 or more makes: on ordinary art that is the first
+  anti-aliased curve, a few rows into the content, and no lattice is tested. Otherwise each
+  axis keeps the source sizes whose change positions fit one cell per source pixel (an
+  integer residue test, no tolerance), one scale is chosen for both axes, and the grid is
+  returned only if one pixel per cell rebuilds the input bit for bit (`pixel_grid`,
+  `line_changes`, `crates/inkvec-cli/src/alpha/unblock.rs:33-63, 237-276`).
 * **Matte in place, in parallel.** The transparency scan and the flatten are parallel maps
   from 256 × 256 pixels on, and the flatten writes over the input's own buffer
-  (`alpha_source_owned`, `crates/inkvec-cli/src/alpha.rs:598-624`; `flatten_in_place`,
-  `has_transparency`, `alpha.rs:792-852`).
+  (`alpha_source_owned`, `crates/inkvec-cli/src/alpha.rs:599-625`; `flatten_in_place`,
+  `has_transparency`, `alpha.rs:793-853`).
 * **Composite over white in parallel** (`Rgba::composited`, `coverage.rs:198-232`).
 
 Each is exact: every output of the parallel maps depends on one input value, the
-transparency scan is a pure predicate, and the gcd filter only skips factors that provably
-cannot pass the block test; each rewrite keeps the old code as an oracle and is compared bit
+transparency scan is a pure predicate, and the unblock returns a grid only after the
+bit-for-bit re-expansion test; each rewrite keeps the old code as an oracle and is compared bit
 for bit.
 
 **Citations** (labels as in the doc comments): the composite and the flatten, "Method from"
 Porter & Duff, "Compositing Digital Images", SIGGRAPH '84 (the "over" operator with an opaque
 ground, adapted to straight colour); the widening, "Not from the literature", "See also"
-Ragan-Kelley et al., "Halide", PLDI 2013; the gcd filter, "Not from the literature", "See
-also" Popescu & Farid, "Exposing Digital Forgeries by Detecting Traces of Resampling", IEEE
-Trans. Signal Processing 2005; flattening in place, "Not from the literature: buffer reuse",
+Ragan-Kelley et al., "Halide", PLDI 2013; the lattice inverse, "Not from the literature",
+"See also" Popescu & Farid, "Exposing Digital Forgeries by Detecting Traces of Resampling",
+IEEE Trans. Signal Processing 2005, and Lothaire, "Algebraic Combinatorics on Words",
+Cambridge University Press 2002, chapter 2 "Sturmian Words"; flattening in place, "Not from the literature: buffer reuse",
 "See also" Leijen, Zorn & de Moura, "Mimalloc", APLAS 2019; the single file read, "Not from
 the literature: plumbing".
 
@@ -490,7 +495,7 @@ solve and decode.
   vertices or while a debug printout or contour dump is on (`measure_subpixel`,
   `planar.rs:502-603`).
 * **Symmetry detection beside the measuring phase**, under `rayon::join`; both only read the
-  lattice map (`lib.rs:1100-1133`).
+  lattice map (`lib.rs:1122-1155`).
 * **Junction debug flags read once** into a `OnceLock` (`planar/junctions.rs:54-70`).
 
 **Citations** (labels as in the doc comments): cracks, "Method from" He, Chao & Suzuki 2008 and
@@ -756,7 +761,7 @@ and with its seeds reused (`37a4e40`), the ring denoised once (`d3ea154`), and t
 bits by shift and mask (`e183cac`). Outside the fitter's files, and inside the `fit_dp`
 mark: `finish_color` moves the traced labels instead of cloning them, and Fast builds no
 content-unit polylines or λ multipliers unless `--editability` asks for them (`9f290b6`;
-`crates/inkvec-cli/src/pipeline.rs:367-369`, `:638-655`; see `01-intake.md`). Each rewrite keeps the code it
+`crates/inkvec-cli/src/pipeline.rs:369-371`, `:651-669`; see `01-intake.md`). Each rewrite keeps the code it
 replaced as a test reference (`polygon::tests::open_ref` and `closed_ref`,
 `prims::tests::primitive_ref`, `tests::fit_edge_ref`). Identity of the exact tip against
 `main` `55ee4e0`: Fast 464/464 files, Quality 256/256, `--no-background` and `--monochrome`
@@ -895,7 +900,7 @@ the parallel pass would take it off the critical path, but needs 8 bytes per adm
 
 **What it computes.** The SVG document, from the fitted paths, the faces' fills and the
 palette: shared with Quality and documented in `13-emit.md`. Fast turns shape harmonization
-off (`emit_options`, `crates/inkvec-cli/src/pipeline.rs:518-529`). An image traced with its
+off (`emit_options`, `crates/inkvec-cli/src/pipeline.rs:526-537`). An image traced with its
 transparency keeps the native-alpha model: inks carry an opacity and the clear ground is an
 ink of its own (`fast/front.rs:14-16`).
 
@@ -933,7 +938,7 @@ Everything else is Fast's: the front end, flat fills (ramps only on opaque image
 DP, no ring repair, no harmonization. It reads the same options as Fast, and `fast_ignored`
 lists the same ones, `--time-budget` included: the solve's budget is a count of iterations,
 never a clock, so the output is the same on every machine (`color_options` hands the solve a
-wall-clock budget in Quality only, `crates/inkvec-cli/src/pipeline.rs:142-155`). Above the size
+wall-clock budget in Quality only, `crates/inkvec-cli/src/pipeline.rs:143-156`). Above the size
 threshold balanced is Fast, byte for byte. Its report line says which it ran:
 "balanced mode Potrace-class fit at 0.75x tolerances, flat fills, boundary solve capped at 8
 iterations; not run: curve DP, gradients, ring repair, harmonization", or "balanced mode over
@@ -980,9 +985,9 @@ untouched: `boundary_opt::optimise_alpha_capped` (`crates/inkvec-trace/src/bound
 is `optimise_alpha` with `max_iters`, which `lbfgs::descend` clamps to its own ceiling and hands
 to the per-part loop (`boundary_opt/lbfgs.rs:156-171`, `:238`); `None` is `optimise_alpha` bit for
 bit (`boundary_opt/cap_tests.rs`). `ColorOptions::boundary_iters`
-(`crates/inkvec-trace/src/lib.rs:199-201`) carries it: `None` leaves Quality uncapped and Fast
+(`crates/inkvec-trace/src/lib.rs:200-202`) carries it: `None` leaves Quality uncapped and Fast
 without a solve, `Some(n)` runs the solve in either mode (`boundary_opt::optimise_for`, `boundary_opt.rs:593-611`, called at
-`crates/inkvec-trace/src/lib.rs:1165`). The command line
+`crates/inkvec-trace/src/lib.rs:1166`). The command line
 sets it from `fast::solve_iters` and picks the fitter's tolerances with `fit_config`, both from
 the one test `fast::balanced` on the traced raster's size (`fast.rs:90-113`).
 

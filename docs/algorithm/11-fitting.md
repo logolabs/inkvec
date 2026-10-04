@@ -11,10 +11,10 @@ program), `multimodel.rs` and `multimodel/scan.rs` (the dynamic program), `candi
 post-fit passes), `choice.rs` (curve or primitive), `simple.rs` (self-crossing test).
 **Entry point:** `optimal_multimodel()` (`crates/inkvec-fit/src/multimodel.rs:205`), called
 for every boundary of the colour path from `fit_boundaries`
-(`crates/inkvec-cli/src/pipeline.rs:653`) through `inkvec_fit::choice::describe`
-(`pipeline.rs:714-738`), and for strokes from `crates/inkvec-cli/src/strokes.rs:263`.
+(`crates/inkvec-cli/src/pipeline.rs:659`) through `inkvec_fit::choice::describe`
+(`pipeline.rs:720-744`), and for strokes from `crates/inkvec-cli/src/strokes.rs:263`.
 **Pipeline position:** after decode and symmetry enforcement (stages 9–10), before repair
-(stage 12). Stage mark `"fit_dp"` (`crates/inkvec-cli/src/pipeline.rs:489`, in
+(stage 12). Stage mark `"fit_dp"` (`crates/inkvec-cli/src/pipeline.rs:495`, in
 `fit_and_repair`).
 
 The crate's own overview (`crates/inkvec-fit/src/lib.rs:1-58`) lists the seven steps of the
@@ -55,7 +55,7 @@ other.
 
 **Output:** `FittedPath` (a start point and a sequence of `curves::Segment`: `Line`,
 `Cubic`, `Arc`) from `optimal_multimodel`, or the richer `MultimodelFit` from
-`optimal_multimodel_full` (`multimodel.rs:189-202`):
+`optimal_multimodel_full` (`multimodel.rs:205-218`):
 
 ```rust
 pub struct MultimodelFit {
@@ -118,7 +118,7 @@ precision, `tau = 2.0`.
 
 In the shipping CLI, `extent` is the intake raster's `max(width, height)` in pixels, and
 `precision`/`tau` come from `--precision` (default `0.1`) and `--tau` (default `2.0`)
-(`crates/inkvec-cli/src/args.rs:234-235`), combined in `fit_config`
+(`crates/inkvec-cli/src/args.rs:248-249`), combined in `fit_config`
 (`crates/inkvec-cli/src/units.rs:92-105`). Under `--content-units`, `fit_config` multiplies
 `precision` by the content scale `s` before deriving `lambda` and then multiplies `lambda`
 by `s` again; see `01-intake.md`.
@@ -183,7 +183,7 @@ The crate header describes admissibility as a statistical test on the chord (`li
 The shipping dynamic program does not test that with an angular cone. The header says so
 itself (`lib.rs:92-98`): it described the cut-off as "straightness by incremental cone
 intersection" until 2026-09-08; the cone was removed as a correctness bug, and
-`DirectionCone` (`lib.rs:300-375`) with `is_admissible` (`lib.rs:535`) survive "as a
+`DirectionCone` (`lib.rs:297-373`) with `is_admissible` (`lib.rs:535`) survive "as a
 reference implementation used by the tests and by `examples/lambda_sweep.rs`" — whose loop
 at `examples/lambda_sweep.rs:59` is the only non-test caller. The regression that removed it,
 `lib.rs:460-466`:
@@ -248,7 +248,7 @@ base(i) = best[i] + (i > 0 ? vertex_cost(i) : 0)
 best[j] = min over admissible i < j of  base(i) + min_model cost_model(i, j)
 ```
 
-where a span is admissible when `Limits::allows` it (`multimodel/limits.rs:23`): at most
+where a span is admissible when `Limits::allows` it (`multimodel/limits.rs:48`): at most
 `max_span` points, and no forced vertex strictly inside. Both are unconstrained in normal
 fitting; stage 12's repair sets them. Both conditions are monotone in `j`, so a start refused
 once is dropped for good (`multimodel/scan.rs:825`), and the pull and push fills stay
@@ -269,7 +269,7 @@ prefix would produce a strictly cheaper whole. This is *verified*, not merely ar
 (`...on_random_inputs`) compare the DP's cost against exhaustive enumeration of every
 segmentation and every per-segment type choice.
 
-**Closed loops.** `solve_closed` (`multimodel.rs:1327`) fixes a cut point, solves the open
+**Closed loops.** `solve_closed` (`multimodel.rs:1332`) fixes a cut point, solves the open
 problem, and tries once more from a better cut; its doc says plainly
 (`multimodel.rs:1314-1323`): "The true optimum is a minimum-cost *cycle*; fixing a cut vertex
 is an approximation that can cost one segment when the cut lands mid-curve [...] Potrace
@@ -391,7 +391,7 @@ worse on turning (+5.44%), the sawtooth detector; swept against the wobble penal
 "no setting that keeps the parameter win and the wobble both", and "by the time turning is
 inside the gate the ratio is worse than baseline".
 
-**Per-span arcs.** `try_arc` (`candidates.rs:1113-1125`) Kåsa-fits a circle to the span
+**Per-span arcs.** `try_arc` (`candidates.rs:1113-1128`) Kåsa-fits a circle to the span
 (`CirclePrefix`), refuses a radius over a thousand times the span's own size, requires the
 points to go round the centre one way only (about eight strides checked), a turn between
 1e-3 rad and `MAX_ARC_DEGREES`, and then scores "the arc a renderer would draw: SVG
@@ -468,17 +468,19 @@ Gating the turn charge on the circle's size (Goldapp's error at the half circle 
 0.05 px sigma) left them unchanged and was dropped. Those losses withdrew the option;
 the frame cases should be re-measured after the 2 px border pad (stage 1).
 
-Independently, the gate's turning axis reads every arm with arcs at six or seven
-as **worse** by 8-26 %, and that reading is an artefact. `svgeval.structure_signals`
-(`bench/svgeval.py:699-713`) takes every `x,y` pair in a path's data as an anchor, so an arc
-contributes its radii `rx,ry` and its flags `large,sweep` as two fictitious anchors, with
-the turns and lengths between them. The same circle reads 0.157 as two arcs and 0.098 as
+Independently, the gate's turning axis read every arm with arcs at six or seven
+as **worse** by 8-26 %, and that reading was an artefact. Before scorer version 3
+(2026-10-04) `svgeval.structure_signals` took every `x,y` pair in a path's data as an
+anchor, so an arc contributed its radii `rx,ry` and its flags `large,sweep` as two
+fictitious anchors, with the turns and lengths between them. The same circle reads 0.157 as two arcs and 0.098 as
 four cubics. Arc 7 alone moves the gate's turning +37.4 % at 128 px; read without the
 radii and flags +2.1 %; read as the total absolute turning of the drawn, flattened curves
 (the same circle 0.1002 and 0.1001, `1/r`) -0.7 %. The table's last column is that last
-reading. A fix to the axis (skipping an arc's radii and flags, or flattening) would change
-the baseline, so it is the gate owner's to make; the scripts are in the branch report
-(`tmp/w3-arcs/turncheck.py`).
+reading. The axis has since been fixed in the scorer: it reads each subpath's control
+polygon, an arc through the controls of its cubic approximation, so a circle reads the
+same written as two arcs or as four cubics (`bench/inkvec_bench/turning.py:1-40`, called
+from `structure_signals`, `bench/svgeval.py:669-710`); baselines recorded with the old
+reading are not comparable.
 
 ### The bow term
 
@@ -551,7 +553,7 @@ rounded square:
 ```
 
 "So a free cubic beats the split by about 25% and beats the constrained cubic by more than
-half." Each sweep (`merge_round`, doc at `merge.rs:420-431`) tries, at every segment, runs of
+half." Each sweep (`merge_round`, doc at `merge.rs:419-434`) tries, at every segment, runs of
 `MAX_RUN` (4) down to 2 segments, longest first; a run qualifies if it covers more than three
 and at most `MAX_SPAN` (96) measured points and holds no arc. The first run whose free cubic,
 fitted through the run's actual start and end on the path, satisfies
@@ -682,7 +684,7 @@ cheapest whole-ring circle, ellipse or (rounded) rectangle, or a run of arcs
 (`fit_primitive_or_arcs`, `primitives.rs:720`), which prices itself. The primitive wins when
 its cost is strictly below the curve's (`choose`, `choice.rs:211-226`); a tie or a NaN keeps
 the curve. The CLI reaches the choice through `describe` (`choice.rs:243-272`), called from
-`fit_boundaries` (`crates/inkvec-cli/src/pipeline.rs:710-738`), which avoids work the choice
+`fit_boundaries` (`crates/inkvec-cli/src/pipeline.rs:720`), which avoids work the choice
 discards:
 
 1. **The image frame.** When one face touches every border pixel (the background of 166 of

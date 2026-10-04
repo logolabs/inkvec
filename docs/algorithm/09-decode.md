@@ -5,11 +5,12 @@
 > showed.
 
 **Source:** `crates/inkvec-trace/src/decode.rs`
-**Entry point:** `decode_faces()` (`decode.rs:687`)
-**Pipeline position:** after `boundary_opt` (stage mark `"boundary_opt"`, `lib.rs:473`),
-before `symmetry` enforcement (stage mark `"decode"`, `lib.rs:489`). Called only from
-`trace_color_full_with_alpha`, and only when `INKVEC_DECODE` (*research build*) is set to something other than
-`"0"` (`lib.rs:478`) — **off by default**.
+**Entry point:** `decode_faces()` (`decode.rs:559`)
+**Pipeline position:** after `boundary_opt` (stage mark `"boundary_opt"`, `lib.rs:1167`),
+before `symmetry` enforcement (stage mark `"decode"`, `lib.rs:1189`). Called only from
+`finish_color_trace_alpha`, the geometry tail every colour entry point shares, outside Fast
+mode, and only when `INKVEC_DECODE` (*research build*) is set to something other than
+`"0"` (`lib.rs:1177`) — **off by default**.
 
 ## What problem this solves
 
@@ -50,10 +51,10 @@ second, and decides arc count last, by dynamic programming, in `inkvec-fit`.
 ## Inputs and outputs
 
 **Input:** the `PlanarMap` (mutated in place), the rendered image `rgb: &[[f32; 3]]`, the
-integer `labels: &[u16]` map, `face_fill: &mut [FillFit]` (`gradient.rs:282-290`), and
+integer `labels: &[u16]` map, `face_fill: &mut [FillFit]` (`gradient.rs:308-318`), and
 `lambda: f64` — supplied by the caller as `gradient::bic_lambda(width * height)`
-(`lib.rs:484`), the Bayesian-information-criterion choice `0.5 * ln(n)`
-(`gradient.rs:292-299`). This is a *different* lambda from the one `candidate_orders` and
+(`lib.rs:1183`), the Bayesian-information-criterion choice `0.5 * ln(n)`
+(`gradient.rs:325-327`). This is a *different* lambda from the one `candidate_orders` and
 `fitted_params` use internally (`FitConfig::from_precision`, described below) — the two
 serve different comparisons and are not interchangeable.
 
@@ -80,15 +81,15 @@ pub struct Report {
 
 `decode_faces` first computes each face's pixel area from the label map, keeps faces with
 `0 < area <= MAX_BBOX_PIXELS` (`20_000`), and orders them worst-first by area (smallest
-first — "the budget should buy the faces that are most wrong," `decode.rs:721`).
+first — "the budget should buy the faces that are most wrong," `decode.rs:600`).
 
-For each candidate, `ring_of` (`decode.rs:326-360`) assembles the face's boundary as a
+For each candidate, `ring_of` (`decode.rs:170-204`) assembles the face's boundary as a
 single ring of points, bailing out if the face's boundary is not exactly one ring, or has
 fewer than four or more than `MAX_RING_POINTS = 512` points ("guards against decoding an
 entire background," `decode.rs:101-102`).
 
 Two tests decide whether the face is actually a candidate for this stage
-(`decode.rs:771-802`):
+(`decode.rs:662-701`):
 
 - **Thin.** `thin = 2.0 * area / perimeter`, the width of a long thin face measured as
   twice its area over its perimeter. Compared against `THIN_PX` (`INKVEC_DECODE_THIN` (*research build*),
@@ -103,7 +104,7 @@ Two tests decide whether the face is actually a candidate for this stage
   tried as a second trigger and withdrawn: "it fires on ordinary faces whose fills are
   merely a little off, and decoding one of those as a polygon damaged three case-suite
   shapes that a width test leaves alone (`corner_right`, `edge_axis`, `junction_quad`)"
-  (`decode.rs:791-796`). It is retained only as a diagnostic printed under
+  (`decode.rs:691-693`). It is retained only as a diagnostic printed under
   `INKVEC_DECODEDBG` (*research build*).
 
 The leak census (H5) puts this in context: over 112
@@ -113,21 +114,21 @@ report gives as the main reason the stage came out corpus-neutral (H6, below).
 
 ### 2. Model order: `candidate_orders`
 
-`candidate_orders` (`decode.rs:436-511`) proposes several vertex counts for the ring
+`candidate_orders` (`decode.rs:280-366`) proposes several vertex counts for the ring
 rather than committing to one, because a single line-segmentation DP run on a long thin
 ribbon "happily describes the whole ring as two long lines — geometrically true, and
-useless, because the polygon those two lines bound has no area" (`decode.rs:428-430`).
+useless, because the polygon those two lines bound has no area" (`decode.rs:272-273`).
 Two independent proposers feed the same candidate list:
 
 - **Price-ladder.** `optimal_polygon` (the fitter's DP) run at five different price
   multipliers (`4.0, 1.0, 0.25, 0.0625, 0.015`) on `FitConfig::from_precision`'s `lambda`,
   producing a ladder of vertex counts from coarse to fine.
-- **Turning-based.** `turning_corners` (`decode.rs:383-423`): a corner is where the ring
+- **Turning-based.** `turning_corners` (`decode.rs:227-267`): a corner is where the ring
   changes direction by more than `0.4` radians, measured over a window of `k` points
   (tried at `k = 2` then `k = 1` if fewer than four peaks are found) with non-maximum
   suppression so one corner yields one vertex, then combined with the ring's own junction
   points up to `m` vertices for `m` in `{3, 4, 5, 6, 8, 10}`. The doc comment
-  (`decode.rs:375-382`) explains why this second proposer exists at all: "Asked for four
+  (`decode.rs:219-226`) explains why this second proposer exists at all: "Asked for four
   vertices on a shape whose long sides are 2 px apart, [the line-fitting DP] puts them
   where four straight pieces fit best; one resulting 'segment' then cuts across the ribbon
   and sits 1.3 px off the boundary for 167 consecutive points. Turning has no such failure
@@ -143,41 +144,41 @@ spend describing the *current* (undecoded) ring, per edge, using each edge's own
 `sigma` — "not a made-up constant. The fitter prices a segment against how well the points
 are known, so inventing sigma = 0.5 made the shipped fit look four times cheaper than it
 is and the comparison below meaningless — it rejected a decode that cut eighteen
-parameters to ten" (`decode.rs:445-448`).
+parameters to ten" (`decode.rs:289-292`).
 
 ### 3. Solving one candidate: variable projection plus damped Gauss–Newton
 
-For each candidate order, `is_polygonal` (`decode.rs:945-1006`) first checks whether the
+For each candidate order, `is_polygonal` (`decode.rs:858-919`) first checks whether the
 ring is a polygon the pipeline drew badly, or a genuine curve. The distinguishing test is
 the *sign* of how the ring strays from the chord of each proposed segment, not its
 magnitude: "A curve leaves its chord on one side all the way along, so the signed offsets
 have a large mean. A sawtooth crosses back and forth, so they have a mean near zero and a
 large spread. Test the mean against the spread, not the spread against a constant"
-(`decode.rs:941-944`). Concretely, a segment with at least `CURVE_MIN_SAMPLES = 8` ring
+(`decode.rs:854-857`). Concretely, a segment with at least `CURVE_MIN_SAMPLES = 8` ring
 points along it is rejected as a genuine curve only if `mean.abs() > CURVE_BIAS_PX (0.35)`
 **and** `mean.abs() > 0.5 * rms`; segments with fewer samples (an end cap's staircase) are
 not tested, since "calling that a curve rejected every proposal on the shape this stage
-exists for" (`decode.rs:981-983`). A worst-case deviation past `MAX_DEV = 2.0` px is
+exists for" (`decode.rs:895-896`). A worst-case deviation past `MAX_DEV = 2.0` px is
 rejected regardless of sign pattern.
 
 Free vertices — those not at a junction — are then solved by `gauss_newton`
-(`decode.rs:1154-1290`), a Levenberg-damped Gauss–Newton iteration where the fills are
+(`decode.rs:1051-1195`), a Levenberg-damped Gauss–Newton iteration where the fills are
 eliminated by least squares (variable projection) at every trial step:
 
-- `Problem::eval` (`decode.rs:658-680`) computes exact fractional pixel coverage of the
-  candidate polygon over its bounding band (`coverage`, `decode.rs:266-311`, using exact
-  Sutherland–Hodgman clipping — `clip_axis`/`clip_area`, `decode.rs:164-209` — on pixels
+- `Problem::eval` (`decode.rs:524-550`) computes exact fractional pixel coverage of the
+  candidate polygon over its bounding band (`coverage`, `clip.rs:169-216`, using exact
+  Sutherland–Hodgman clipping — `clip_axis`/`clip_area`, `clip.rs:41-101` — on pixels
   the boundary actually crosses, and a point-in-polygon test for the rest), assembles one
   coverage column per fill (the face itself, plus each edge-neighbour it borders), and
-  solves the small linear least-squares system `varpro` (`decode.rs:518-572`) for all
+  solves the small linear least-squares system `varpro` (`decode.rs:372-430`) for all
   fills at once, ridge-regularised toward each fill's prior colour so "a column with no
   support keeps the colour it had, and the solve cannot answer a question the pixels did
-  not ask" (`decode.rs:541-542`).
+  not ask" (`decode.rs:399-400`).
 - With the fills held at their least-squares values, the residual has a closed-form
   derivative with respect to vertex position: `d(residual)/d(u) = (d(coverage)/d(u)) *
   (c_face - c_other)`. Only the coverage derivative needs finite differences
   (`FD_STEP = 0.01`, central difference); no Jacobian of the fills is ever formed
-  (`decode.rs:1146-1153`).
+  (`decode.rs:1067-1087`).
 - The normal equations are assembled directly from those coverage derivatives, damped by
   a Levenberg parameter `mu` (starting `1e-3`, multiplied by 4 on a rejected step down to
   `1e-7` divided by 3 on an accepted one, capped at `1e9`), run for `GN_ITERS = 14`
@@ -187,7 +188,7 @@ eliminated by least squares (variable projection) at every trial step:
   point that walks far from its lattice evidence is no longer describing the feature it
   was extracted from. Without this cap the solver drifted vertices up to five pixels,
   turning the rounded frame of one emoji into a thirteen-sided polygon whose local
-  residual had improved and whose rendered colour error had quadrupled" (`decode.rs:119-125`).
+  residual had improved and whose rendered colour error had quadrupled" (`decode.rs:122-128`).
 - **Only pixels the boundary actually cuts carry information about where it is** — a
   consequence of the Hadamard structure theorem the same doc comment cites, and the reason
   `PIXELS_PER_UNKNOWN = 4` band pixels are required per free coordinate before a candidate
@@ -201,7 +202,7 @@ held fixed at its current geometry and colour. Without them "the fit is biased. 
 the palette shattered into three faces has its two ends painted by faces this one shares
 no edge with; a model that pretends they are absent explains their ink by shrinking the
 middle face, which is exactly what happened: a 2 px stroke came back 1.71 px wide"
-(`decode.rs:629-633`).
+(`decode.rs:487-490`).
 
 ### 4. Acceptance: a Pareto improvement, judged by exact ΔJ
 
@@ -212,12 +213,12 @@ A solved candidate is accepted only if all of the following hold:
    as `sse1 < EVIDENCE_OVERRIDE * sse0` (default `EVIDENCE_OVERRIDE = 0.0`, so this branch
    never fires by default) — or it passes `is_polygonal` against the *original* ring a
    second time. The comment explains why the recheck must not be absolute
-   (`decode.rs:840-846`): "The solver moves vertices away from the extracted ring on
+   (`decode.rs:742-746`): "The solver moves vertices away from the extracted ring on
    purpose — that ring is the thing being corrected — so measuring the answer against it
    rejects every successful decode ... on a sawtoothed ribbon the corrected boundary is
    *supposed* to sit a pixel off the ring it came from. Strong evidence overrides the
    prior."
-3. `fitted_params` (`decode.rs:1404-1420`) — what the shipped fitter would actually spend
+3. `fitted_params` (`decode.rs:739-745`) — what the shipped fitter would actually spend
    describing the decoded, *written-back* polygon (sampled and re-fitted, not counted as
    two parameters per line by hand) — must not exceed `params_before`.
 4. The residual must fall to less than `MIN_GAIN * sse0` (default `0.5`). The doc comment
@@ -227,7 +228,7 @@ A solved candidate is accepted only if all of the following hold:
    better on every axis."
 
 Both 3 and 4 together are the Pareto rule stated in the module doc comment and reiterated
-in-line (`decode.rs:860-865`): "A falling J alone lets the stage buy a cheaper description
+in-line (`decode.rs:767-772`): "A falling J alone lets the stage buy a cheaper description
 with a worse picture, and that is what it did: it polygonised curved thin faces, spending
 FEWER parameters and quadrupling the colour error ... Require both — a strictly better fit
 and no more parameters."
@@ -237,25 +238,25 @@ Among all accepted candidate orders for one face, the winner is whichever has th
 
 ### 5. Write-back: never replace a ring
 
-`write_back` (`decode.rs:1422-1437`) is deliberately delicate, because **edges are shared
+`write_back` (`decode.rs:1339-1359`) is deliberately delicate, because **edges are shared
 between faces** — replacing a ring outright would silently move a boundary that a
 neighbouring face also depends on. Two properties make this safe:
 
 - **Junction nodes are frozen.** They are required to be vertices of every candidate order
-  (enforced in `candidate_orders`, `decode.rs:475-477`) and keep their exact positions in
+  (enforced in `candidate_orders`, `decode.rs:322-327`) and keep their exact positions in
   `decoded_edge_points`. A neighbouring face across a shared edge sees the same boundary
   endpoints it always did.
 - **Only interior points move, and each interior point belongs to exactly one edge.** The
   map's own structure — one `Edge` per boundary curve, referenced by exactly the two faces
-  either side of it (`planar.rs:24-27`) — means an edge's interior points are never shared
+  either side of it (`planar.rs:11-13`) — means an edge's interior points are never shared
   with any other edge. So rewriting one edge's `points` and `sigma` in place changes
   exactly the geometry that edge owns, and the partition of the image into faces survives
   by construction, without any repair step needing to reconcile two copies of a boundary.
 
 The decoded polygon is **not** written back as bare corner points. `decoded_edge_points`
-(`decode.rs:1361-1395`) samples each segment roughly one point per pixel
+(`decode.rs:1266-1308`) samples each segment roughly one point per pixel
 (`SAMPLE_PX = 1.0`), all carrying a tight `DECODED_SIGMA = 0.05` px. The doc comment
-explains why this matters (`decode.rs:1334-1355`): storing only the vertices let a
+explains why this matters (`decode.rs:1239-1260`): storing only the vertices let a
 downstream curve fitter, "judged on boundary error and segment count, not on the image,"
 run one cubic through five corners that bulged 20 px off the true boundary at no cost to
 its own objective; and separately, a thin ribbon's two long sides fit a pair of lines so
@@ -267,7 +268,7 @@ are the cheapest description and the caps cannot be deleted.
 
 ### `share_widths` — pooling thin ribbons under one shared width
 
-`share_widths` (`decode.rs:1503-1845`, called only when `INKVEC_DECODE_SHARE` (*research build*) is set to
+`share_widths` (`decode/ribbon.rs:80-321`, called only when `INKVEC_DECODE_SHARE` (*research build*) is set to
 something other than `"0"`; **off** by default) is a second pass over the same map, run
 after the per-face loop. It targets a specific identifiability gap the per-face decoder
 cannot close on its own: H3b/H3c measured that an
@@ -280,20 +281,20 @@ single width then has to explain two different phases at once (H8).
 The function:
 
 1. Collects four-sided ribbon faces below `SHARE_MAX_PX = 1.75` px wide (`ribbon_width`,
-   `decode.rs:1455-1487`, the longest side's normal direction and the polygon's extent
+   `decode/ribbon.rs:30-62`, the longest side's normal direction and the polygon's extent
    along it), none of whose corners is a junction (a junction is shared with a face this
    pass is not solving and cannot be moved unilaterally).
 2. Searches one shared width by a coarse sweep (`0.4 * median` to `2.0 * median`, 40 steps)
    then a local refinement, scoring each candidate width by `joint` — a single least
    squares over **every pooled ribbon's pixels at once**, with one shared-ink column and
-   one surround column per ribbon (`decode.rs:1701-1738`).
+   one surround column per ribbon (`decode/ribbon.rs:190-227`).
 3. Requires the shared solution to beat the baseline — the same polygons, each keeping its
    own width *and* its own ink, scored through the identical least squares — on **both**
    the residual and the full objective `J`, charging one width and one ink for the whole
    pool against `PARAMS_PER_RIBBON = 10.0` (a move plus four line segments) times the pool
    size individually.
 4. On acceptance, writes every pooled ribbon back at the shared width (`set_width`,
-   `decode.rs:1489-1501`, moving both sides symmetrically about the ribbon's own
+   `decode/ribbon.rs:66-76`, moving both sides symmetrically about the ribbon's own
    centreline) and gives every ribbon the one shared ink.
 
 Two earlier, wrong implementations are recorded because "both were the theorem being got
@@ -375,7 +376,7 @@ explicitly upstream of this stage rather than inside it.
 
 ## Tests
 
-Four tests in `#[cfg(test)] mod tests` (`decode.rs:1847-1937`):
+Four tests in `#[cfg(test)] mod tests` (`decode.rs:1362-1469`):
 
 - `half_pixel_is_exactly_half` — a rectangle spanning exactly half a pixel's width reads
   coverage `0.5` in that pixel and sums to `0.5` overall, pinning `coverage`'s exact-area
@@ -424,7 +425,7 @@ There is no unit test in this file for `share_widths`, `varpro`'s ridge regulari
 - **A face too narrow for any pixel to read its colour cleanly** is exactly what `THIN_PX`
   is measuring; the label map cannot answer this question on its own, because "a 2 px
   stroke has interior labels all along its length and yet its best pixel is only ~85%
-  covered, so its colour was never read off the image" (`decode.rs:704-707`).
+  covered, so its colour was never read off the image" (`decode.rs:583-586`).
 - **Axis-aligned sub-pixel strokes are provably unidentifiable from the raster alone.**
   H3b/H3c in `REPORT.md`: at `0`, `0.75`, and `1.0` px width, a stroke exactly aligned with
   the pixel lattice has zero phase spread across the pixels it touches, and the raster
@@ -451,7 +452,7 @@ Since the settings cleanup (CHANGELOG, 0.2.0, *Changed*) the engine reads its en
 
 | variable | default | effect |
 |---|---|---|
-| `INKVEC_DECODE` (*research build*) | off (`"0"` or unset) | master switch — the whole stage is skipped unless set to something other than `"0"` (read in `lib.rs:478`, not in this file) |
+| `INKVEC_DECODE` (*research build*) | off (`"0"` or unset) | master switch — the whole stage is skipped unless set to something other than `"0"` (read in `lib.rs:1177`, not in this file) |
 | `INKVEC_DECODE_MS` (*research build*) | `600.0` ms | time budget for the per-face loop |
 | `INKVEC_DECODE_LEAK` (*research build*) | `LEAK_GATE = 0.05` | overrides the (diagnostic-only) leak threshold |
 | `INKVEC_DECODE_THIN` (*research build*) | `THIN_PX = 2.5` | overrides the width threshold that gates whether a face is attempted |

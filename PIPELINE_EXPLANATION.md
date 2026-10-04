@@ -56,9 +56,9 @@ Inkvec implements a dual-tier neural pre-processing architecture. These two neur
 | **Implementation / Runtime** | In-engine: **ONNX Runtime** (`ort 2.0.0-rc.13`) or pure-Rust **Burn** (`burn 0.21`, generated via `burn-onnx`) | Out-of-process Python package (`tools/inkvec_sr`, invoked via `inkvec_sr::external::External`) |
 | **Spatial Scaling** | **$1\times$ In-Place Restoration**: exact same spatial dimensions $(W, H)$ | **$4\times$ Spatial Upscaling** (`scale: 4`), downsampled to $2\times$ via continuous box downsampling |
 | **Target Degradations** | Severe JPEG block artifacts ($Q \le 60$), WebP compression, VAE decoder ringing | Severe resolution deficits, pixelated low-res marks, chat app thumbnails |
-| **Extreme Clamping / Snapping** | **`SNAP_LEVELS = 6`** (`crates/inkvec-restore/src/lib.rs:86`) | Channel-wise affine **`clean::match_flats`** (`crates/inkvec-sr/src/clean.rs:155`) |
-| **Stochastic Routing Fix** | N/A (deterministic feed-forward CNN) | **Pinned Seed `ROUTING_SEED = 0x5641_4331`** ("VAC1", `tools/inkvec_sr/model.py:35`) |
-| **Damage Gating** | `inkvec_restore::decide` (`crates/inkvec-restore/src/lib.rs:471`) | `inkvec_sr::decide` (`crates/inkvec-sr/src/lib.rs:143`) |
+| **Extreme Clamping / Snapping** | **`SNAP_LEVELS = 6`** (`crates/inkvec-restore/src/lib.rs:101`) | Channel-wise affine **`clean::match_flats`** (`crates/inkvec-sr/src/clean.rs:206`) |
+| **Stochastic Routing Fix** | N/A (deterministic feed-forward CNN) | **Pinned Seed `ROUTING_SEED = 0x5641_4331`** ("VAC1", `tools/inkvec_sr/model.py:40`) |
+| **Damage Gating** | `inkvec_restore::decide` (`crates/inkvec-restore/src/lib.rs:568`) | `inkvec_sr::decide` (`crates/inkvec-sr/src/lib.rs:171`) |
 | **CLI Flag** | `inkvec --restore <auto\|on\|off>` (default: `off`) | `inkvec --sr <auto\|on\|off>` (default: `off`) |
 | **Tracer Intake Interaction** | Forces tracer **`--lossy on`** (soft intake) when restoration triggers | Runs before intake normalization; downsampled to target scale |
 
@@ -72,7 +72,7 @@ Inkvec implements a dual-tier neural pre-processing architecture. These two neur
 #### 1. Architecture & Execution Engine
 The restorer executes entirely in-process without requiring an external Python runtime. Supported execution backends (`crates/inkvec-restore/Cargo.toml:19-61`):
 1. **ONNX Runtime (`onnxruntime`)**: Enabled via `ort = "=2.0.0-rc.13"`. Multithreaded CPU inference with fused operator kernels. Measured latency: 3.6–3.9 s at $512\text{ px}$, 17.4 s at $1024\text{ px}$. Bit-identical to reference outputs.
-2. **Burn Framework (`model`)**: Pure-Rust execution framework (`burn = "0.21"`). The complete network struct is compiled at build time by `burn-onnx` directly from `restorer.onnx` (`crates/inkvec-restore/build.rs:48-51` and `src/model.rs:24-26`). Supports backends:
+2. **Burn Framework (`model`)**: Pure-Rust execution framework (`burn = "0.21"`). The complete network struct is compiled at build time by `burn-onnx` directly from `restorer.onnx` (`crates/inkvec-restore/build.rs:53-56` and `src/model.rs:24-26`). Supports backends:
    - `flex`: Portable CPU execution (im2col + GEMM, SIMD, Rayon parallelization).
    - `ndarray`: Lightweight CPU fallback.
    - `wgpu`: Portable GPU execution across Vulkan, DirectX 12, and Metal without requiring the CUDA SDK.
@@ -80,32 +80,32 @@ The restorer executes entirely in-process without requiring an external Python r
 3. **External Fallback (`crates/inkvec-restore/src/external.rs:18-42`)**: Allows shelling out to local Python training scripts via `--restore-command <cmd>`.
 *(Note: Candle was evaluated but dropped due to sequential depthwise convolution overhead, which took over 20 seconds at $512\text{ px}$.)*
 
-Because the U-Net features four $2\times$ downsampling stages, the network requires spatial dimensions to be exact multiples of 16 (`MULTIPLE = 16`, `crates/inkvec-restore/src/planar.rs:9`). Replicate padding is applied to the bottom and right borders (`to_planar_padded`), inverted by exact top-left cropping upon output (`from_planar_cropped`).
+Because the U-Net features four $2\times$ downsampling stages, the network requires spatial dimensions to be exact multiples of 16 (`MULTIPLE = 16`, `crates/inkvec-restore/src/planar.rs:14`). Replicate padding is applied to the bottom and right borders (`to_planar_padded`), inverted by exact top-left cropping upon output (`from_planar_cropped`).
 
 #### 2. Weights Resolution & Auto-Pull Mechanics
 * **Hugging Face Model Repository**: [`Logolabs/inkvec-denoiser-001`](https://huggingface.co/Logolabs/inkvec-denoiser-001).
 * **Weights Checksum**: `restorer.onnx`, 79.9 MB, SHA256: `bdc2762157632f6f74dd91474f0598e591d49ded47e0a87642c89416b0809d6d`.
-* **Resolution Cascade (`crates/inkvec-restore/src/lib.rs:316-349`)**:
+* **Resolution Cascade (`crates/inkvec-restore/src/lib.rs:407-440`)**:
   1. `INKVEC_RESTORE_ONNX` environment variable.
   2. Executable sibling directory (`restorer.onnx` or `models/restorer.onnx`).
   3. Crate build directory (`crates/inkvec-restore/models/restorer.onnx`).
   4. Local platform cache (`%LOCALAPPDATA%/inkvec/models/restorer.onnx` on Windows; `~/.cache/inkvec/models/restorer.onnx` on Linux/macOS).
-  5. Auto-pull via `pull_onnx_weights` (`crates/inkvec-restore/src/lib.rs:218-306`) using `curl`, Python `urllib`, or PowerShell `Net.WebClient`.
+  5. Auto-pull via `pull_onnx_weights` (`crates/inkvec-restore/src/lib.rs:355-397`) using `curl`, Python `urllib`, or PowerShell `Net.WebClient`.
 
 #### 3. Extreme Level Snapping (`SNAP_LEVELS = 6`)
 The restorer network features a direct-output convolutional head with internal clamping. Once the clamp is saturated, gradient propagation ceases during training, causing activations to plateau several quantization steps away from true black (`#000000`) or white (`#ffffff`) — typically settling at `#040101` or `#fdffff`.
 
-In `crates/inkvec-restore/src/lib.rs:86`:
+In `crates/inkvec-restore/src/lib.rs:101`:
 ```rust
 pub const SNAP_LEVELS: u8 = 6;
 ```
-Pixels within $\le 6/255$ display levels on all 3 channels snap exactly to 0.0 or 1.0 (`src/lib.rs:101-111`). This prevents flat graphic backgrounds from retaining faint residual tints that would splinter the downstream palette into extraneous inks.
+Pixels within $\le 6/255$ display levels on all 3 channels snap exactly to 0.0 or 1.0 (`src/lib.rs:118-132`). This prevents flat graphic backgrounds from retaining faint residual tints that would splinter the downstream palette into extraneous inks.
 
 #### 4. Interior Flat Residual Detection (`inkvec_restore::decide`)
-Running a deep restorer over clean vector graphics introduces subtle tint shifts and boundary blurs. To prevent this, `--restore auto` traces a fast probe (`trace_once`), rasterizes it via `tiny_skia`/`resvg`, and evaluates `interior_residual` via `inkvec_restore::decide` (`crates/inkvec-restore/src/lib.rs:471-479`):
+Running a deep restorer over clean vector graphics introduces subtle tint shifts and boundary blurs. To prevent this, `--restore auto` traces a fast probe (`trace_once`), rasterizes it via `tiny_skia`/`resvg`, and evaluates `interior_residual` via `inkvec_restore::decide` (`crates/inkvec-restore/src/lib.rs:568-576`):
 * Vector graphics are piecewise-flat by construction.
 * Within any region where the vector model is constant, raster divergence reflects compression noise or blur.
-* If the measured residual $r \le \text{threshold}$ (default 0.5), the image is deemed clean, and the probe trace is retained directly with zero neural latency overhead (`crates/inkvec-cli/src/lib.rs:422-439`, `739-764`).
+* If the measured residual $r \le \text{threshold}$ (default 0.5), the image is deemed clean, and the probe trace is retained directly with zero neural latency overhead (`crates/inkvec-cli/src/lib.rs:473-490`, `739-764`).
 
 ---
 
@@ -116,7 +116,7 @@ When vectorizing severely degraded, heavily downscaled, or tiny icons, Inkvec in
 ```bash
 python -m inkvec_sr {in} -o {out} --png-only --mode on --scale 4
 ```
-Isolated temporary workspaces are managed via `RunDir` (`external.rs:76-100`) using PID and atomic counters.
+Isolated temporary workspaces are managed via `RunDir` (`external.rs:75-99`) using PID and atomic counters.
 
 #### 2. Pure-PyTorch Associative Scan (`tools/inkvec_sr/scan.py`)
 Standard Mamba implementations require custom CUDA C++ extensions (`mamba-ssm`) that frequently fail to compile on client workstations. Inkvec’s runner replaces this with a pure-PyTorch parallel scan implementing Hillis-Steele doubling over the first-order linear recurrence in $\mathcal{O}(\log_2 L)$ steps, reproducing official Mamba selective scans to $10^{-7}$ relative precision across CPU and CUDA backends alike.
@@ -126,7 +126,7 @@ In MambaIRv2’s Attentive State-Space Model (ASSM), each pixel is assigned to o
 
 The naive deterministic fix — taking the zero-temperature argmax — catastrophically degraded visual quality (mean $\Delta E_{00}$ worsened from 0.5364 to 0.5492 across 7 of 8 test images) because the model weights were trained exclusively on noisy Gumbel distributions.
 
-Inkvec resolves this crisis via `_seeded()` (`tools/inkvec_sr/model.py:35`):
+Inkvec resolves this crisis via `_seeded()` (`tools/inkvec_sr/model.py:101`):
 ```python
 ROUTING_SEED = 0x5641_4331  # ASCII: 0x56='V', 0x41='A', 0x43='C', 0x31='1' -> "VAC1"
 ```
@@ -134,8 +134,8 @@ The routine snapshots RNG state, forces `torch.manual_seed(ROUTING_SEED)`, evalu
 
 #### 4. $4\times$ Upscaling & Affine Flat Recoloring (`clean::match_flats`)
 * The neural network always upscales by $4\times$ (`scale = 4`).
-* Inkvec downsamples the result by $2\times$ (`factor = 2`, `crates/inkvec-sr/src/lib.rs:110-114`) using continuous box downsampling, which collapses high-frequency reconstruction ripples while preserving sharp edge profiles.
-* To eliminate subtle color drift ($\sim 0.6\, \Delta E_{00}$) on flat brand colors, `clean::match_flats` (`crates/inkvec-sr/src/clean.rs:155-197`) masks flat regions and fits a channel-wise 1D affine map ($y = ax + b$) projecting neural pixel colors back to source palette values.
+* Inkvec downsamples the result by $2\times$ (`factor = 2`, `crates/inkvec-sr/src/lib.rs:134-138`) using continuous box downsampling, which collapses high-frequency reconstruction ripples while preserving sharp edge profiles.
+* To eliminate subtle color drift ($\sim 0.6\, \Delta E_{00}$) on flat brand colors, `clean::match_flats` (`crates/inkvec-sr/src/clean.rs:206-248`) masks flat regions and fits a channel-wise 1D affine map ($y = ax + b$) projecting neural pixel colors back to source palette values.
 
 ---
 
@@ -353,7 +353,7 @@ flowchart TD
   - Embedded in `crates/inkvec-fit/src/multimodel.rs` and `candidates.rs`.
   - Integrates circular arcs (`candidates::try_arc`, parameter cost $K=5$) alongside lines ($K=1, 2$) and cubics ($K=4, 6$) in the global recurrence:
     $$\text{seg\_cost}(\text{kind}, i, j) = \frac{1}{2} \sum_{k=i}^{j} \frac{d_k^2}{\sigma_k^2} + \lambda \cdot K_{\text{params}}(\text{kind}) + \text{bow\_penalty}$$
-  - Enforces `MAX_ARC_DEGREES = 120.0` (`crates/inkvec-fit/src/primitives.rs:50`) to avoid the endpoint-parameter Jacobian singularity at $180^\circ$.
+  - Enforces `MAX_ARC_DEGREES = 120.0` (`crates/inkvec-fit/src/primitives.rs:60`) to avoid the endpoint-parameter Jacobian singularity at $180^\circ$.
 
 *(Comparative Baseline: VTracer 1.0 drops Potrace's global dynamic program in favor of local greedy polygon filtering to run in 0.05 s, but its parameter count balloons by **+106.7%** under noise — the figure AnchorFlow reports, not re-measured here — producing $3.3\times$ more coordinates than Inkvec with $\Delta E_{00} = 1.303$.)*
 
@@ -438,7 +438,7 @@ flowchart TD
   - *Resolution Limits*: Fixed neural heatmap grids struggle to resolve subpixel features on fine hairline strokes (< 1 px).
 * **Inkvec's Synthesis & Implementation:**
   - Inkvec adopts AnchorFlow's design philosophy: **priors identify structural feature locations; deterministic geometry computes exact subpixel coordinates**.
-  - Instead of AFNet, Inkvec identifies structural features via **one-sided quadratic tangent windows** (`crates/inkvec-fit/src/multimodel.rs:55-62`) and turn-consistency analysis (`crates/inkvec-trace/src/contour.rs:327`).
+  - Instead of AFNet, Inkvec identifies structural features via **one-sided quadratic tangent windows** (`crates/inkvec-fit/src/multimodel.rs:55-62`) and turn-consistency analysis (`crates/inkvec-trace/src/contour.rs:382`).
   - Achieves **+0.0% median parameter growth under boundary noise** (outperforming AnchorFlow's +2.9%) while executing on standard CPU in 1.17 s. This is the project's own claim under the reproduced protocol (parameter growth tracked by the `bench/` harness), not an independently reproduced measurement; the robustness table under *Benchmark Comparisons* below records it as such.
 
 ##### 8. VectorArk: Enhancing Vector Graphic Generation via Structural Priors
@@ -514,9 +514,9 @@ flowchart TD
 * **Critical Failure Mode on Production Vector Art:**
   - If polyline tangents are computed locally between adjacent discrete vertices, vertex discretization creates artificial tangent jumps at every point, causing the fitter to see "corners everywhere" (producing 92 cubics for a 4-cubic circle).
 * **Inkvec's Synthesis & Implementation:**
-  - Embedded in `crates/inkvec-fit/src/multimodel.rs`, `candidates.rs:173-262`, and `crates/inkvec-fit/src/curves.rs`.
+  - Embedded in `crates/inkvec-fit/src/multimodel.rs`, `crates/inkvec-fit/src/tangents.rs:99-285`, and `crates/inkvec-fit/src/curves.rs`.
   - Solves the tangent problem via **one-sided quadratic window estimation** (`t^-_k`, `t^+_k`, `multimodel.rs:55-62`).
-  - Pre-computes polyline area and moment prefix sums (`candidates.rs:75-82`): candidate cubic evaluation inside the DP becomes strictly $\mathcal{O}(1)$!
+  - Pre-computes polyline area and moment prefix sums (`crates/inkvec-fit/src/candidates.rs:104-124`): candidate cubic evaluation inside the DP becomes strictly $\mathcal{O}(1)$!
 
 ##### 13. Levien Bézier Path Simplification (2023)
 * **Citation:** Levien, R. (2023). *Simplifying Bézier paths*. Online publication, [raphlinus.github.io](https://raphlinus.github.io/curves/2023/04/18/bezpath-simplify.html).
@@ -657,7 +657,7 @@ flowchart TD
   - *Failure of Argmax*: Replacing Gumbel sampling with deterministic argmax degraded quality ($\Delta E_{00}$ 0.5492 vs 0.5364), because the network weights were trained specifically on the sampled distribution.
 * **Inkvec's Synthesis & Implementation:**
   - Implemented as the **External Super-Resolution pre-pass (`--sr`)** in `tools/inkvec_sr` and `crates/inkvec-sr`.
-  - Discovered and solved the non-determinism crisis via **Seeded Gumbel Routing (`tools/inkvec_sr/model.py:35`)**:
+  - Discovered and solved the non-determinism crisis via **Seeded Gumbel Routing (`tools/inkvec_sr/model.py:40`)**:
     ```python
     ROUTING_SEED = 0x5641_4331
     ```
@@ -764,7 +764,7 @@ Exact, Clean SVG Output
 
 ### Stage 01: Intake & Super-Resolution Pre-Pass
 
-* **Source:** `crates/inkvec-cli/src/lib.rs:243-526`, `crates/inkvec-restore`, `crates/inkvec-sr`, `tools/inkvec_sr`, `crates/inkvec-trace/src/lib.rs`
+* **Source:** `crates/inkvec-cli/src/lib.rs:296-380`, `crates/inkvec-restore`, `crates/inkvec-sr`, `tools/inkvec_sr`, `crates/inkvec-trace/src/lib.rs`
 * **Entry Point:** `inkvec_cli::trace_image`
 
 #### 1. Dual-Tier Neural Pre-Processing: In-Engine Restorer vs. External Super-Resolution
@@ -774,46 +774,46 @@ Before geometric contour extraction, degraded raster inputs undergo neural pre-p
 * **In-Engine Restorer (`--restore`, LogoLabs Custom U-Net `inkvec-denoiser-001`):**
   * **Architecture & Training:** A proprietary convolutional U-Net architecture (`Logolabs/inkvec-denoiser-001` on Hugging Face Hub; 79.9 MB `restorer.onnx`), trained exclusively on the **Arrhenius GPU cluster at NAISS, Sweden**, under EuroHPC Project **EHPC-AIF-2026PG01-907**.
   * **In-Process Execution:** Executes strictly in-process via `crates/inkvec-restore` using either ONNX Runtime (`ort = "=2.0.0-rc.13"`) or pure-Rust Burn (`burn = "0.21"`, code-generated at build-time from ONNX via `burn-onnx`), eliminating external Python or CUDA runtime dependencies.
-  * **$1\times$ In-Place Restoration:** Preserves exact input spatial dimensions $(W \times H \to W \times H)$ with replicate padding to multiples of 16 (`MULTIPLE = 16`, `crates/inkvec-restore/src/planar.rs:9`). Suppresses severe JPEG DCT blocks ($Q \le 60$), lossy WebP compression ringing, and generative VAE latent diffusion decoder blur.
-  * **Extreme Level Snapping (`SNAP_LEVELS = 6`):** The convolutional direct-output head saturates several quantization steps short of true limits (settling at `#040101` or `#fdffff`). `snap_extremes` (`crates/inkvec-restore/src/lib.rs:86, 101-111`) snaps pixels within $\le 6/255$ display levels of black or white to exactly 0.0 or 1.0, preventing flat backgrounds from splintering the downstream palette into extraneous inks.
-  * **Damage Gating (`inkvec_restore::decide`):** Fast probe trace (`trace_once`) evaluates piecewise-flat interior residual divergence (`crates/inkvec-restore/src/lib.rs:471`). If residual $r \le 0.5$, the input is verified clean and the probe trace is retained directly with zero neural latency overhead.
-  * **Tracer Conditioning:** Restored rasters set `restored = true`, which automatically forces downstream tracer mode `--lossy on` (`lossy_args`, `crates/inkvec-cli/src/lib.rs:445-451`) to condition subsequent edge-width and ringing estimators.
+  * **$1\times$ In-Place Restoration:** Preserves exact input spatial dimensions $(W \times H \to W \times H)$ with replicate padding to multiples of 16 (`MULTIPLE = 16`, `crates/inkvec-restore/src/planar.rs:14`). Suppresses severe JPEG DCT blocks ($Q \le 60$), lossy WebP compression ringing, and generative VAE latent diffusion decoder blur.
+  * **Extreme Level Snapping (`SNAP_LEVELS = 6`):** The convolutional direct-output head saturates several quantization steps short of true limits (settling at `#040101` or `#fdffff`). `snap_extremes` (`crates/inkvec-restore/src/lib.rs:101, 118-132`) snaps pixels within $\le 6/255$ display levels of black or white to exactly 0.0 or 1.0, preventing flat backgrounds from splintering the downstream palette into extraneous inks.
+  * **Damage Gating (`inkvec_restore::decide`):** Fast probe trace (`trace_once`) evaluates piecewise-flat interior residual divergence (`crates/inkvec-restore/src/lib.rs:568`). If residual $r \le 0.5$, the input is verified clean and the probe trace is retained directly with zero neural latency overhead.
+  * **Tracer Conditioning:** Restored rasters set `restored = true`, which automatically forces downstream tracer mode `--lossy on` (`lossy_args`, `crates/inkvec-cli/src/lib.rs:579-585`) to condition subsequent edge-width and ringing estimators.
 
 * **External Super-Resolution (`--sr`, MambaIRv2):**
   * **Architecture & Origin:** Foundation Attentive State-Space Model (ASSM) published by Guo et al. at CVPR 2025 (*MambaIRv2: Attentive State Space Restoration*, arXiv:2411.15269), building on MambaIR (Guo et al., ECCV 2024, *MambaIR: A Simple Baseline for Image Restoration with State-Space Model*, arXiv:2402.15648).
   * **Out-of-Process Execution:** Packaged in `tools/inkvec_sr/` and invoked out-of-process via Python (`crates/inkvec-sr/src/external.rs:34-57`) in an isolated temporary `RunDir`. Implements a pure-PyTorch Hillis-Steele associative scan (`tools/inkvec_sr/scan.py`) in $\mathcal{O}(\log_2 L)$ steps, bypassing fragile custom CUDA C++ extensions.
-  * **$4\times$ Spatial Upscaling & $2\times$ Downsampling:** Neural upscaling by $4\times$ (`scale = 4`) followed by $2\times$ continuous area-weighted downsampling (`factor = 2`, `crates/inkvec-sr/src/lib.rs:110-114`) via `clean::box_downsample`, collapsing high-frequency neural reconstruction ripples while preserving sharp edge profiles.
-  * **Pinned Gumbel Routing (`ROUTING_SEED = 0x5641_4331`):** In MambaIRv2, `F.gumbel_softmax` samples stochastic Gumbel noise on every forward pass, even under `eval` and `no_grad`, creating non-deterministic pixel discrepancies of up to 12.45 levels/pixel. Replacing this with argmax degraded fidelity ($\Delta E_{00}$ worsened from 0.5364 to 0.5492). Inkvec fixes this via `_seeded()` (`tools/inkvec_sr/model.py:35`) using pinned seed `0x5641_4331` ("VAC1"), guaranteeing 100% bit-exact SVG reproducibility.
-  * **Affine Flat Recoloring (`clean::match_flats`):** Masks flat interior regions and fits a channel-wise 1D affine map ($y = ax + b$, `crates/inkvec-sr/src/clean.rs:155`) projecting neural pixel colors back to original source values, eliminating $\sim 0.6\,\Delta E_{00}$ color drift.
-  * **Gating (`inkvec_sr::decide`):** Evaluates vector-to-raster divergence (`crates/inkvec-sr/src/lib.rs:143`), reusing the probe trace from the restorer pre-pass to prevent redundant tracing passes.
+  * **$4\times$ Spatial Upscaling & $2\times$ Downsampling:** Neural upscaling by $4\times$ (`scale = 4`) followed by $2\times$ continuous area-weighted downsampling (`factor = 2`, `crates/inkvec-sr/src/lib.rs:134-138`) via `clean::box_downsample`, collapsing high-frequency neural reconstruction ripples while preserving sharp edge profiles.
+  * **Pinned Gumbel Routing (`ROUTING_SEED = 0x5641_4331`):** In MambaIRv2, `F.gumbel_softmax` samples stochastic Gumbel noise on every forward pass, even under `eval` and `no_grad`, creating non-deterministic pixel discrepancies of up to 12.45 levels/pixel. Replacing this with argmax degraded fidelity ($\Delta E_{00}$ worsened from 0.5364 to 0.5492). Inkvec fixes this via `_seeded()` (`tools/inkvec_sr/model.py:101`) using pinned seed `0x5641_4331` ("VAC1"), guaranteeing 100% bit-exact SVG reproducibility.
+  * **Affine Flat Recoloring (`clean::match_flats`):** Masks flat interior regions and fits a channel-wise 1D affine map ($y = ax + b$, `crates/inkvec-sr/src/clean.rs:206`) projecting neural pixel colors back to original source values, eliminating $\sim 0.6\,\Delta E_{00}$ color drift.
+  * **Gating (`inkvec_sr::decide`):** Evaluates vector-to-raster divergence (`crates/inkvec-sr/src/lib.rs:171`), reusing the probe trace from the restorer pre-pass to prevent redundant tracing passes.
 
 #### 2. Intake Pipeline Orchestration in `inkvec_cli::trace_image`
 
-The complete raster intake in `crates/inkvec-cli/src/lib.rs:243-526` executes along an ordered sequence that coordinates unblocking, continuous downsampling, parameter scaling, and dual-tier neural restoration prior to Stage 02 physical coverage inversion:
+The complete raster intake in `crates/inkvec-cli/src/lib.rs:296-380` (`intake`) and `:532-728` (`trace_prepared_priced`) executes along an ordered sequence that coordinates unblocking, continuous downsampling, parameter scaling, and dual-tier neural restoration prior to Stage 02 physical coverage inversion:
 
-1. **Nearest-Neighbor GCD Unblocking (`pixel_grid`, lines 261–277):** Detects whether small pixel art or icons were scaled up via nearest-neighbor replication ($K \in \{2, 3, 4, 8\}$). If detected, continuous area-weighted downsampling recovers the native resolution *before* neural pre-passes run; feeding blocky upscale edges to neural upscalers causes them to treat pixel staircases as intentional artwork.
-2. **Intake Normalization & Max-Dim Downsampling (lines 279–312):** Downsamples rasters exceeding `--max-dim` (default 2048) using continuous box downsampling (`downsample_to`, `crates/inkvec-trace/src/coverage.rs:644`). **Crucial Invariant:** Normalization and dimensional capping execute *before* `--restore` and `--sr` pre-passes. This guarantees that probe traces evaluated by `inkvec_restore::decide` and `inkvec_sr::decide` are bounded at the true tracing resolution, preventing early-return bypasses from ignoring `--max-dim`.
-3. **Scale-Dependent Parameter Adaptation (lines 331–413):** Measures `intake_scale` (edge transition width) and `oversample_factor` (downsampling round-trip preservation). Dynamically scales fitter `--precision`, speckle floor `--min-area` (scaled by $\text{redundancy}^2$ above `REF_EXTENT = 256.0`), and MDL rate $\lambda_{\text{scale}}$, preventing high-resolution rasters from over-segmenting identical artwork.
-4. **In-Engine Restorer Pre-Pass (`restore_prepass`, lines 417–438 & 726–783):**
+1. **Nearest-Neighbor Unblocking, an exact lattice inverse (`pixel_grid`, lines 304–345):** Detects whether the raster is a nearest-neighbor upscale of a smaller one by any factor of 2 or more on each axis, whole or fractional (a 3.5x browser zoom is cells of 3 and 4 pixels; `crates/inkvec-cli/src/alpha/unblock.rs`). A lattice is returned only after repeating one pixel per cell rebuilds the input bit for bit, and `PixelGrid::reduce` then keeps one source pixel per cell, recovering the native raster exactly *before* neural pre-passes run; feeding blocky upscale edges to neural upscalers causes them to treat pixel staircases as intentional artwork.
+2. **Intake Normalization & Max-Dim Downsampling (lines 347–369):** Downsamples rasters exceeding `--max-dim` (default 2048) using continuous box downsampling (`downsample_to`, `crates/inkvec-trace/src/coverage/resample.rs:31`). **Crucial Invariant:** Normalization and dimensional capping execute *before* `--restore` and `--sr` pre-passes. This guarantees that probe traces evaluated by `inkvec_restore::decide` and `inkvec_sr::decide` are bounded at the true tracing resolution, preventing early-return bypasses from ignoring `--max-dim`.
+3. **Scale-Dependent Parameter Adaptation (`price_in_raster_units`, lines 396–508):** Measures `intake_scale` (edge transition width) and `oversample_factor` (downsampling round-trip preservation). Dynamically scales fitter `--precision`, speckle floor `--min-area` (scaled by $\text{redundancy}^2$ above `REF_EXTENT = 128.0`), and MDL rate $\lambda_{\text{scale}}$, preventing high-resolution rasters from over-segmenting identical artwork.
+4. **In-Engine Restorer Pre-Pass (`restore_prepass`, lines 546–566 & 986–1072):**
    - If `--restore auto`: generates probe trace via `trace_once` and evaluates `inkvec_restore::decide`. If clean ($r \le 0.5$) and `--sr off`, returns the probe SVG immediately.
    - If degraded: executes in-process U-Net restoration ($1\times$), applies `SNAP_LEVELS = 6`, and records `restored = true`.
-5. **Lossy Intake Conditioning (lines 443–452):** If `restored == true`, tracer arguments are forced to `lossy: Mode::On`. Because restored rasters can appear visually smooth, forced lossy intake ensures downstream edge-width and ringing estimators remain active.
-6. **External Super-Resolution Pre-Pass (`sr_prepass`, lines 457–515):**
+5. **Lossy Intake Conditioning (lines 577–584):** If `restored == true`, tracer arguments are forced to `lossy: Mode::On`. Because restored rasters can appear visually smooth, forced lossy intake ensures downstream edge-width and ringing estimators remain active.
+6. **External Super-Resolution Pre-Pass (in `trace_prepared_priced`, lines 591–696):**
    - If `--sr auto`: evaluates probe trace (reusing probe from restorer if available). If clean, early-returns probe SVG.
    - If degraded: invokes out-of-process MambaIRv2 ($4\times$ spatial upscale, `ROUTING_SEED = 0x5641_4331`), downsamples $2\times$ via `clean::box_downsample`, and applies `clean::match_flats`.
-7. **Alpha Matting & Downstream Hand-Off (lines 526–559):** Matting against an unrepresented background color isolates transparency (`alpha_source`), and the resulting raster is passed directly to **Stage 02: Physical Coverage Inversion & Noise Estimation**.
+7. **Alpha Matting & Downstream Hand-Off (`trace_matted`, lines 784–838):** Matting against an unrepresented background color isolates transparency (`alpha_source_owned`), and the resulting raster is passed directly to **Stage 02: Physical Coverage Inversion & Noise Estimation**.
 
 #### 3. Container Inspection & Lossy Detection
-Real-world images frequently conceal their true degradation. A JPEG re-saved as a lossless PNG still carries high-frequency $8 \times 8$ DCT ringing artifacts. Inkvec inspects the container header (`lossy_container`, `crates/inkvec-trace/src/lib.rs:94`):
+Real-world images frequently conceal their true degradation. A JPEG re-saved as a lossless PNG still carries high-frequency $8 \times 8$ DCT ringing artifacts. Inkvec inspects the container header (`lossy_container`, `crates/inkvec-trace/src/load.rs:77`):
 * **JPEG:** Flagged lossy (`Some(true)`).
 * **WebP:** Reads the RIFF four-character code at byte 12. `VP8 ` (lossy) $\to$ `Some(true)`; `VP8L` (lossless) $\to$ `Some(false)`.
 * **PNG / TIFF / BMP / GIF:** Marked clean (`Some(false)`).
 
 #### 4. Unblocking Nearest-Neighbor Upscales
-Users frequently scale small pixel art or icons using nearest-neighbor interpolation before feeding them to a vectorizer. To prevent tracing giant pixel staircases, `unblock_scale` calculates the greatest common divisor (GCD) of consecutive identical pixel runs. If integer scale $K \in \{2, 3, 4, 8\}$ is detected across the canvas, the image is cleanly downsampled back to its native resolution.
+Users frequently scale small pixel art or icons using nearest-neighbor interpolation before feeding them to a vectorizer. To prevent tracing giant pixel staircases, `pixel_grid` (`crates/inkvec-cli/src/alpha/unblock.rs:237-276`) inverts the upscale exactly. It finds the columns and rows where neighbouring pixels differ bit for bit, keeps per axis the source sizes whose lattice contains every such change (an integer residue test, no tolerance), picks one scale for both axes, and returns the grid only if repeating one pixel per cell rebuilds the input bit for bit; `PixelGrid::reduce` then keeps one source pixel per cell. Any factor of 2 or more is undone, whole or fractional (`unblock.rs:1-99`).
 
 #### 5. Exact Area-Weighted Continuous Downsampling
-When resizing down to `--max-dim` (default 2048), standard step-box downsampling creates spatial aliasing ripples and Moiré patterns. Inkvec replaces step-box sampling with continuous 2D area integration (`crates/inkvec-trace/src/coverage.rs:644-730`, `downsample_to`):
+When resizing down to `--max-dim` (default 2048), standard step-box downsampling creates spatial aliasing ripples and Moiré patterns. Inkvec replaces step-box sampling with continuous 2D area integration (`crates/inkvec-trace/src/coverage/resample.rs:97-183`, `downsample_to`):
 
 For non-integer downsampling ratios $s_x = \frac{W_{\text{src}}}{W_{\text{tgt}}}$ and $s_y = \frac{H_{\text{src}}}{H_{\text{tgt}}}$, target pixel $(u, v)$ spans source rectangle $[u s_x, (u+1) s_x] \times [v s_y, (v+1) s_y]$. The overlap with integer source pixel $(x, y) \in [x, x+1] \times [y, y+1]$ factors into continuous 1D interval intersections:
 
@@ -829,21 +829,21 @@ $$\sum_{x, y} w(x, y; u, v) = s_x \cdot s_y, \quad \sum_{u, v} w(x, y; u, v) = 1
 Colors are integrated premultiplied ($C \cdot \alpha \cdot w$) and un-premultiplied by total alpha, preventing dark boundary halos and eliminating periodic spatial aliasing ripples.
 
 #### 6. Gibbs Ringing Detection on Degraded Inputs
-The standard noise estimator (`coverage::estimate_noise`, `crates/inkvec-trace/src/coverage.rs:211`) evaluates median Laplacian across the image with a $\sqrt{20}$ filter gain:
+The standard noise estimator (`coverage::estimate_noise`, `crates/inkvec-trace/src/coverage.rs:356`) evaluates median Laplacian across the image with a $\sqrt{20}$ filter gain:
 $$\sigma_{\text{pixel}} = \max\left(\frac{\text{MAD}}{0.6745 \cdot \sqrt{20}}, \text{NOISE\_FLOOR}\right)$$
-Where $\text{NOISE\_FLOOR} = 0.5 / 255.0$. On clean vector graphics, 90% of pixels are flat, so the median Laplacian is zero, blinding the estimator to high-frequency ringing. Inkvec implements `coverage::ringing_score` (`crates/inkvec-trace/src/coverage.rs:415-460`):
+Where $\text{NOISE\_FLOOR} = 0.5 / 255.0$. On clean vector graphics, 90% of pixels are flat, so the median Laplacian is zero, blinding the estimator to high-frequency ringing. Inkvec implements `coverage::ringing_score` (`crates/inkvec-trace/src/coverage.rs:579-713`):
 * Computes a chamfer 3-4 distance transform from all high-contrast edges ($\|\nabla Y\| > 24/255$).
 * Evaluates the 90th percentile $|\text{Laplacian}|$ within an annular ring 3–7 pixels away from the edge.
 * Multiplies by the **sign alternation rate** along the ring: Gibbs ringing from DCT quantization oscillates rapidly pixel-to-pixel, whereas true continuous gradients do not.
 * When `ringing_score > SOFT_RINGING` (0.12, or 0.05 at $\ge 256\text{ px}$), Inkvec automatically engages `soft_intake` to prevent tracing ringing ripples as geometry.
 
 #### 7. Codec-Agnostic Residual Incoherence & Potts Regularization
-To detect non-JPEG compression (such as VAE latent diffusion decoder blur and Lanczos resampling artifacts), Inkvec computes **residual incoherence** (`crates/inkvec-trace/src/regularize.rs:37`):
+To detect non-JPEG compression (such as VAE latent diffusion decoder blur and Lanczos resampling artifacts), Inkvec computes **residual incoherence** (`crates/inkvec-trace/src/regularize.rs:58`):
 * Calculates the Laplacian of the ink-subtracted residual field $(P - \text{Ink}(P))$. Slow gradient changes vanish under the Laplacian, isolating incoherent pixel jitter.
-* For lossy inputs, Inkvec runs a deterministic 4-neighbor **Potts model energy descent** using red-black checkerboard parity (`regularize::labels`, `crates/inkvec-trace/src/regularize.rs:158`):
+* For lossy inputs, Inkvec runs a deterministic 4-neighbor **Potts model energy descent** using red-black checkerboard parity (`regularize::labels`, `crates/inkvec-trace/src/regularize.rs:221`):
   $$E(\mathbf{l}) = \sum_{i \in \Omega} \|I_i - \text{pal}(l_i)\|^2 + \beta \sum_{\langle i, j \rangle \in \mathcal{E}_4} [l_i \ne l_j]$$
   Where $\beta = 2 \sigma^2 \ln(\max(W \times H, 3))$. Red-black checkerboard parity sweeps update independent sets in parallel, guaranteeing strict energy descent.
-* **Joint Connected Component Moves (`regularize.rs:226-260`):** Dissolves multi-pixel noise islands by charging a component creation threshold of $9\beta$ (representing the 9 parameters of a minimal 3-point closed SVG polygon plus RGB fill).
+* **Joint Connected Component Moves (`regularize.rs:321-395`):** Dissolves multi-pixel noise islands by charging a component creation threshold of $9\beta$ (representing the 9 parameters of a minimal 3-point closed SVG polygon plus RGB fill).
 
 #### 8. Resolution Invariance
 To ensure that a logo rendered at $128\text{ px}$ yields the identical vector topology when rendered at $512\text{ px}$, all pixel-denominated thresholds scale with canvas scale factor $s = \frac{\max(W, H)}{\text{REF\_EXTENT}}$:
@@ -866,7 +866,7 @@ A sensor pixel $P$ intersecting a boundary between foreground color $F$ and back
 
 $$P = \alpha F + (1 - \alpha) B$$
 
-Where $\alpha \in [0, 1]$ is the scalar area fraction covered by $F$. To invert this without discarding color data, Inkvec projects $P$ onto the 3D color difference vector $(F - B)$ using least-squares across all three RGB channels (`crates/inkvec-trace/src/coverage.rs:238-270`):
+Where $\alpha \in [0, 1]$ is the scalar area fraction covered by $F$. To invert this without discarding color data, Inkvec projects $P$ onto the 3D color difference vector $(F - B)$ using least-squares across all three RGB channels (`crates/inkvec-trace/src/coverage.rs:433-465`):
 
 $$\alpha = \frac{(P - B) \cdot (F - B)}{\|F - B\|^2} = \frac{\sum_{c \in \{R, G, B\}} (P_c - B_c)(F_c - B_c)}{\sum_{c \in \{R, G, B\}} (F_c - B_c)^2}$$
 
@@ -885,7 +885,7 @@ Crucially, Inkvec derives the **honest posterior covariance** of every measureme
    $$\sigma_{\text{pos}} = \frac{\sigma_\alpha}{\|\nabla \alpha\|} = \frac{\sigma_{\text{pixel}}}{\|F - B\| \cdot \|\nabla \alpha\|}$$
 
 #### 3. Quantization Noise Floor (`sigma_floor`)
-On inputs with discretized alpha channels (e.g. 16-level alpha), uniform quantization noise creates artificial gradient steps. Inkvec enforces a principled theoretical variance floor corresponding to uniform quantization over a unit interval (`crates/inkvec-trace/src/contour.rs:306`, `crates/inkvec-trace/src/planar.rs:740`):
+On inputs with discretized alpha channels (e.g. 16-level alpha), uniform quantization noise creates artificial gradient steps. The floor that uniform quantization over a unit interval would suggest is shown below; Inkvec does not apply it: `SIGMA_FLOOR` is zero, because coverage-derived positions can be more precise than whole pixel coordinates and a universal $1/\sqrt{12}$ px floor oversmooths clean small artwork (`crates/inkvec-trace/src/contour.rs:318-327`, applied on the planar path at `crates/inkvec-trace/src/planar.rs:1253-1255`):
 
 $$\sigma_{\text{floor}} \ge \frac{1}{\sqrt{12}} \approx 0.2887\text{ px}$$
 
@@ -898,7 +898,7 @@ Contour extraction along a pixel grid naturally introduces staircase residual er
 * **Staircase noise:** Alternates turning directions (left, right, left), causing adjacent cross-product turns to cancel out.
 * **Authentic curve/arc:** Turns consistently in the identical direction at every vertex step.
 
-Inkvec evaluates the **turn consistency ratio** over a local window (`crates/inkvec-trace/src/contour.rs:327`):
+Inkvec evaluates the **turn consistency ratio** over a local window (`crates/inkvec-trace/src/contour.rs:382`):
 
 $$\text{consistency} = \frac{\left| \sum_{d} \mathbf{v}_d \times \mathbf{v}_{d+1} \right|}{\sum_{d} \left| \mathbf{v}_d \times \mathbf{v}_{d+1} \right|} \in [0, 1]$$
 
@@ -1018,7 +1018,7 @@ Stage 08 treats every boundary coordinate as an unknown in a global non-linear o
 $$\min_{\mathbf{p}} E(\mathbf{p}) = \sum_{\text{pixels } k} \left\| \alpha_k(\mathbf{p}) \cdot c_{\text{left}} + (1 - \alpha_k(\mathbf{p})) \cdot c_{\text{right}} - I_k \right\|^2 + w_{\text{kink}} \sum_i \|\Delta^2 \mathbf{p}_i\|^2 + w_{\text{anchor}} \sum_i \|\mathbf{p}_i - \mathbf{p}_i^0\|^2$$
 
 #### Exact Shoelace Polygon Integration & Analytic Gradient
-Inside each boundary pixel, the boundary polylines clip the pixel square into a closed polygon. Inkvec computes coverage $\alpha_k$ via the exact Shoelace formula (`crates/inkvec-trace/src/boundary_opt.rs:328-337`):
+Inside each boundary pixel, the boundary polylines clip the pixel square into a closed polygon whose area is the coverage $\alpha_k$ the Shoelace formula gives; the code computes that exact box coverage by signed-area accumulation along each row, each boundary piece depositing the area between itself and the pixel's right side and carrying its height onward (`crates/inkvec-trace/src/boundary_opt/band.rs:38-50`):
 
 $$A = \frac{1}{2} \sum_{i=1}^{M} (x_i y_{i+1} - x_{i+1} y_i)$$
 
@@ -1043,7 +1043,7 @@ Inkvec's empirical research tested four conventional fixes (all refuted):
 **The Architectural Solution (LOG-44):** A ribbon 2 pixels wide has no interior, meaning its two sides are not independent boundaries. The solver projects opposing boundary points into a coupled centerline-and-width constraint, and anchors junction nodes harder (`JUNCTION_ANCHOR = 4.0`), permanently eliminating the sawtooth null-space without sacrificing sharp corners.
 
 #### Obsolescence of Post-Hoc Image Polish (`commit 4cfe4b7`)
-Early iterations of Inkvec included a post-DP continuous gradient polish step (S5) that nudged fitted Bézier control points against the raster image. Empirical headroom measurement documented in `docs/DESIGN.md:529` (historically benchmarked in `crates/inkvec-trace/tests/polish_headroom.rs`, excised in `commit 4cfe4b7` when post-hoc continuous polish was permanently removed from the engine) revealed:
+Early iterations of Inkvec included a post-DP continuous gradient polish step (S5) that nudged fitted Bézier control points against the raster image. Empirical headroom measurement documented in `docs/DESIGN.md:530` (historically benchmarked in `crates/inkvec-trace/tests/polish_headroom.rs`, excised in `commit 4cfe4b7` when post-hoc continuous polish was permanently removed from the engine) revealed:
 * Mean boundary offset bias: $+0.0169\text{ px}$.
 * Random extraction noise: $0.3897\text{ px}$.
 * Bias-to-noise ratio: $0.043$.
@@ -1130,7 +1130,7 @@ $$a_4 d_0^4 + a_3 d_0^3 + a_2 d_0^2 + a_1 d_0 + a_0 = 0$$
 With $d_1$ given in closed form:
 $$d_1(d_0) = \frac{d_0 \sin\theta_0 - \frac{10}{3}A}{\frac{1}{2} d_0 \sin(\theta_0 + \theta_1) - \sin\theta_1}$$
 
-Along each discrete segment $\mathbf{a} \to \mathbf{b}$ with $\Delta x = b_x - a_x, \Delta y = b_y - a_y$, the line integrals evaluate to exact polynomial formulas (`crates/inkvec-fit/src/candidates.rs:75-82`):
+Along each discrete segment $\mathbf{a} \to \mathbf{b}$ with $\Delta x = b_x - a_x, \Delta y = b_y - a_y$, the line integrals evaluate to exact polynomial formulas (`crates/inkvec-fit/src/candidates.rs:117-124`):
 $$\int_{\mathbf{a}}^{\mathbf{b}} y\,dx = \Delta x \left( a_y + \frac{1}{2} \Delta y \right)$$
 $$\int_{\mathbf{a}}^{\mathbf{b}} x y\,dx = \Delta x \left( a_x a_y + \frac{1}{2}(a_x \Delta y + a_y \Delta x) + \frac{1}{3} \Delta x \Delta y \right)$$
 $$\int_{\mathbf{a}}^{\mathbf{b}} y^2\,dx = \Delta x \left( a_y^2 + a_y \Delta y + \frac{1}{3} \Delta y^2 \right)$$

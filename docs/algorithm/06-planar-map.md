@@ -11,7 +11,7 @@
 (`planar.rs:360`)
 **Pipeline position:** after `saddles` (`merge_saddle_faces`, research build only), before
 symmetry detection and the sub-pixel refinement, which run side by side on the map it
-builds (stage mark `"build_map"`, `lib.rs:1077`). Shared by Quality and Fast mode.
+builds (stage mark `"build_map"`, `lib.rs:1106`). Shared by Quality and Fast mode.
 
 ## What problem this solves
 
@@ -46,8 +46,8 @@ pub fn build(labels: &[u16], w: usize, h: usize, n_labels: usize) -> PlanarMap
 ```
 
 - `labels`: one face id per pixel, row-major, already split into connected components
-  upstream (`split_components`, `lib.rs:706`) and, optionally, coalesced across
-  diagonal-only touches by `merge_saddle_faces` (`lib.rs:544`, off by default — see
+  upstream (`split_components`, `lib.rs:696`) and, optionally, coalesced across
+  diagonal-only touches by `merge_saddle_faces` (`lib.rs:1091`, off by default — see
   Failure modes).
 - `n_labels`: number of distinct face ids in `labels`.
 
@@ -71,10 +71,10 @@ pub struct Edge {
 ```
 
 `left`/`right` are face ids — `u16::MAX` denotes the virtual background outside the image
-(`planar.rs:70-76`), so a shape touching the image border still closes.
+(`planar.rs:140-149`), so a shape touching the image border still closes.
 
 Every `Edge.points` value at the end of `build` sits exactly on a pixel corner (a
-half-integer coordinate, `node_point`, `planar.rs:62-65`). `sigma` is a uniform
+half-integer coordinate, `node_point`, `planar.rs:134-138`). `sigma` is a uniform
 placeholder of `0.5`, replaced point-by-point by stage 07 (`refine_subpixel`).
 
 ## How it works
@@ -183,7 +183,7 @@ for the purposes of adjacency — able to move independently once stage 07 and 0
 them.
 
 Which diagonal is "one face" is decided upstream of `build`, by `merge_saddle_faces`
-(`lib.rs:517-...`) when it runs, or simply by whatever `split_components`'s 4-connected
+(`lib.rs:1091`) when it runs, or simply by whatever `split_components`'s 4-connected
 flood fill already produced. `build` itself makes no image-based judgement here — it only
 reads face ids.
 
@@ -271,10 +271,10 @@ points, so the shared junction is implicit at the seam between the last edge and
 first rather than appearing twice in the point list.
 
 A face id that is `u16::MAX`, or otherwise `>= map.n_labels`, is silently skipped when
-edges are filed (`planar.rs:1274, 1277`) — this is how `inkvec-cli`'s layer-merging code
+edges are filed (`planar.rs:1275, 1278`) — this is how `inkvec-cli`'s layer-merging code
 removes an edge from every ring without touching its geometry: setting both `left` and
 `right` to `u16::MAX` makes the edge "interior" and it drops out of `face_edge_order`'s
-output entirely (`inkvec-cli/src/lib.rs:978-981`).
+output entirely (`inkvec-cli/src/pipeline.rs:1116-1120`).
 
 ## Constants and thresholds
 
@@ -288,7 +288,7 @@ Two sizes in the rewritten crack and incidence code choose only speed, never the
 
 | name | value | controls | derivation |
 |---|---|---|---|
-| `DIGIT` (`radix_sort_by_node`, `planar/cracks.rs:185`) | 11 bits (2,048 buckets) | digit width of the incidence radix sort | motivated: 16 KiB of counters "stay in L1 cache"; three passes at 2048 px (`planar/cracks.rs:87-89, 169-170`) |
+| `DIGIT` (`radix_sort_by_node`, `planar/cracks.rs:185`) | 11 bits (2,048 buckets) | digit width of the incidence radix sort | motivated: 16 KiB of counters "stay in L1 cache"; three passes at 2048 px (`planar/cracks.rs:84-90, 169-170`) |
 | `LANES` (`RowRuns::new`, `planar/runs.rs:84`) | 16 labels | how many labels a run is extended by at once before the last few are compared singly | motivated: "compiles to two 128-bit compares on x86-64" (`planar/runs.rs:75-78`) |
 
 The one constant nearby that this stage's tests exercise indirectly is in the *upstream*
@@ -296,7 +296,7 @@ saddle-merge decision:
 
 | name | value | controls | derivation |
 |---|---|---|---|
-| `SADDLE_SIGMAS` (`lib.rs:566`) | `3.0` | how far a four-pixel corner's coverage reading must sit from 0.5 before `merge_saddle_faces` (upstream of `build`) trusts it enough to merge two faces | stated: "Below that the two readings are indistinguishable, and the corner keeps the junction it has always had" (`lib.rs:563-565`) — a standard statistical significance threshold on propagated coverage noise, not a fitted constant |
+| `SADDLE_SIGMAS` (`regions.rs:44`) | `3.0` | how far a four-pixel corner's coverage reading must sit from 0.5 before `merge_saddle_faces` (upstream of `build`) trusts it enough to merge two faces | stated: "Below that the two readings are indistinguishable, and the corner keeps the junction it has always had" (`regions.rs:40-42`) — a standard statistical significance threshold on propagated coverage noise, not a fitted constant |
 
 ## Failure modes and edge cases
 
@@ -309,11 +309,11 @@ saddle-merge decision:
 - **`merge_saddle_faces` is off by default.** The stage that decides, from the *image*,
   whether two diagonally-touching-but-currently-separate faces should be read as one
   continuous shape is gated by `INKVEC_SADDLE` (*research build*) and does not run unless that variable is
-  set (`lib.rs:612`). Its own doc comment records why: "231 of the 246 screen icons are
-  untouched — but it does not yet pay for itself on the set: objective 0.4005 -> 0.4010,
-  six icons better and nine worse. The nine are the emitter's containment tree being
-  rewritten by a merge into the background..., not the reading being wrong" (`lib.rs:
-  555-560`). Practically, this means `build`'s degree-4 split logic mostly protects
+  set (`regions.rs:91`); its doc comment calls it an experiment (`regions.rs:45-48`).
+  Earlier revisions recorded why: 231 of the 246 screen icons untouched, objective
+  0.4005 -> 0.4010, six icons better and nine worse, the nine being the emitter's
+  containment tree rewritten by a merge into the background rather than a wrong reading;
+  the current source no longer carries that measurement. Practically, this means `build`'s degree-4 split logic mostly protects
   *self-touching* shapes that are already one face by ordinary 4-connectivity (the
   `touching_corner` test case, `planar.rs:1365`) rather than two visually-touching shapes
   of matching colour that never got unioned upstream. A four-way corner where no diagonal
@@ -322,7 +322,7 @@ saddle-merge decision:
   missed merge when `INKVEC_SADDLE` (*research build*) would have said otherwise.
 - **Chain walking can stall.** If the list at the next node (`inc.end`) holds no unused
   candidate segment before a junction is reached, the walk simply stops there
-  (`planar.rs:329-332, 387-389`) rather than panicking; this silently produces a shorter
+  (`planar.rs:324-331, 386-388`) rather than panicking; this silently produces a shorter
   edge than the true boundary would warrant. No test in this module exercises that path
   directly.
 - **Loops under 3 points are dropped.** A junction-less closed walk with fewer than three
@@ -335,17 +335,18 @@ Since the settings cleanup (CHANGELOG, 0.2.0, *Changed*) the engine reads its en
 
 None inside `planar::build` itself. The upstream decision that feeds it —
 `merge_saddle_faces` — is controlled by `INKVEC_SADDLE` (*research build*) (must be set and not `"0"`,
-`lib.rs:612`) and its diagnostic output by `INKVEC_SADDLEDBG` (*research build*) (`lib.rs:615`).
+`regions.rs:91`) and its diagnostic output by `INKVEC_SADDLEDBG` (*research build*) (`regions.rs:94`).
 
 ## Open questions
 
-- `merge_saddle_faces` is implemented, tested against real corpus evidence (the coverage
-  read at a four-way corner), and shown in its own doc comment to be net-positive on 231
-  of 246 icons — yet it ships **off**, because of a downstream interaction with the
-  emitter's containment tree on the other 9 (`lib.rs:608-611`). That interaction is not
-  analysed further in this file; fixing it would let this stage's corner-splitting logic
-  fire on genuinely separate, same-coloured touching shapes rather than only self-touching
-  ones.
+- `merge_saddle_faces` is implemented and tested against real corpus evidence (the
+  coverage read at a four-way corner), yet it is an experiment: compiled only in a
+  research build, and a no-op there unless `INKVEC_SADDLE` is set (`regions.rs:45-48`).
+  Earlier revisions recorded it net-positive on 231 of 246 icons and held off by a
+  downstream interaction with the emitter's containment tree on the other 9; the current
+  source no longer carries that record. Fixing that interaction would let this stage's
+  corner-splitting logic fire on genuinely separate, same-coloured touching shapes rather
+  than only self-touching ones.
 - `face_edge_order`'s ring assembly is exercised by the saddle-split test
   (`splitting_gives_each_shape_its_own_copy_of_the_corner`, `planar.rs:1411`), which
   checks that both affected faces keep a non-empty ring, but there is no test in this file

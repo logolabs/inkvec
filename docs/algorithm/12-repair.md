@@ -10,7 +10,7 @@ per-boundary sibling), `crates/inkvec-fit/src/multimodel.rs` (`optimal_multimode
 and `optimal_multimodel_forced`, the constrained DP)
 **Entry point:** `repair_ring_crossings()` (`crates/inkvec-cli/src/rings.rs:276`)
 **Pipeline position:** after curve fitting (stage 11), before fill assignment (stage mark
-`"fills"`). Stage mark `"repair"` (`crates/inkvec-cli/src/pipeline.rs:498`).
+`"fills"`). Stage mark `"repair"` (`crates/inkvec-cli/src/pipeline.rs:504`).
 
 ## What problem this solves
 
@@ -55,8 +55,8 @@ unit the defect can be seen in at all.
 **Why a crossing is not cosmetic.** The code's own framing is narrower than "the fill
 inverts" — the strongest statement in the source is that a self-crossing ring is "invalid,
 resolved arbitrarily by whichever fill rule applies, and unpleasant to edit"
-(`simple.rs:24`, restated in `tests/self_intersection.rs:6-7` and in `repair_fits`'s doc,
-`crates/inkvec-cli/src/pipeline.rs:831-836`). The mechanism behind that arbitrariness is this
+(`simple.rs:24`, restated in `crates/inkvec-fit/tests/self_intersection.rs:5-7` and in `repair_fits`'s doc,
+`crates/inkvec-cli/src/pipeline.rs:837-842`). The mechanism behind that arbitrariness is this
 document's reading of the fill rules (SVG 1.1 §11.3), not a code comment. Since 2026-10 the
 emitter winds every ring of a compound path by its nesting depth and writes no `fill-rule`, so
 the default `nonzero` rule paints exactly what `evenodd` would; `fill-rule="evenodd"` remains
@@ -202,11 +202,11 @@ index of the full contour."
      on round 1). Each ring is assembled into one `FittedPath` with an owner `(edge,
      segment)` per segment (`ring_as_located_path`), and `simple::self_crossing_points(&path,
      32)` returns up to 32 crossing pairs with where they cross; both owning edges of each
-     pair are marked guilty (`rings.rs:293-296`; `located_crossings`, `:353-379`).
+     pair are marked guilty (`rings.rs:793-796`; `located_crossings`, `:353-379`).
    - **Drop edges already at cap 1** from the guilty set (`rings.rs:297`).
    - **Exit the round loop if no edges remain guilty.**
    - **Propose pins** for every guilty edge pinned fewer than `LOCAL_ROUNDS = 4` times
-     (`rings.rs:301`; `propose_pins`, `:424-448`): one per crossing segment, as above.
+     (`rings.rs:687`; `propose_pins`, `:424-448`): one per crossing segment, as above.
    - **Refit every guilty edge in parallel**: the halved cap with its existing pins, and,
      where pins were proposed, the pinned refit too; keep the cheaper (`rings.rs:317-330`; `refit`, `:455-492`).
    - Commit the refits, record which edges changed (for next round's detection filter), and
@@ -335,8 +335,8 @@ changes."
 
 ### Where repair sits in the pipeline
 
-`repair_fits` (`crates/inkvec-cli/src/pipeline.rs:828-914`), the call site itself; its doc,
-verbatim (`pipeline.rs:831-836`):
+`repair_fits` (`crates/inkvec-cli/src/pipeline.rs:834-920`), the call site itself; its doc,
+verbatim (`pipeline.rs:837-842`):
 
 > "A self-crossing boundary is invisible to the objective — both curves pass through
 > their measured points and the render barely changes — but the ring it produces is
@@ -354,14 +354,14 @@ let mut repaired = if args.no_repair || fast {
 };
 ```
 
-(`pipeline.rs:889-894`; `sw.mark("repair")` follows in `fit_and_repair`, `pipeline.rs:498`.)
+(`pipeline.rs:895-900`; `sw.mark("repair")` follows in `fit_and_repair`, `pipeline.rs:504`.)
 Fast mode skips the stage. The doc still discusses ordering against a "polish" stage that has
-since been deleted (`pipeline.rs:838-842`, "Polish itself has since been removed"); the
+since been deleted (`pipeline.rs:844-848`, "Polish itself has since been removed"); the
 underlying ordering principle — repair runs on the geometry that is actually going to be
 emitted, after every other geometric transform — still holds, since repair is now the last
 geometric stage before mirror symmetrisation, fill assignment and emission.
 
-`--no-repair` (`args.rs:124`, `:255`, `:650`; help text `:443`) disables the stage entirely.
+`--no-repair` (`args.rs:138`, `:269`, `:672`; help text `:465`) disables the stage entirely.
 
 ## Constants and thresholds
 
@@ -434,10 +434,10 @@ Since the settings cleanup (CHANGELOG, 0.2.0, *Changed*) the engine reads its en
 
 No `INKVEC_*` environment variable is specific to this module. The one module-specific
 override is `--no-repair`, a CLI flag (not an environment variable) that skips the call to
-`repair_ring_crossings` entirely (`args.rs:124`, `:255`, `:650`, checked at
-`pipeline.rs:890`). `repair_ring_crossings` itself does read environment, though only for
+`repair_ring_crossings` entirely (`args.rs:138`, `:269`, `:672`, checked at
+`pipeline.rs:896`). `repair_ring_crossings` itself does read environment, though only for
 diagnostics: the generic timing switch `INKVEC_TIMING` — shared with other pipeline stages,
-e.g. `pipeline.rs:487` — gates six debug lines inside the function
+e.g. `pipeline.rs:493` — gates six debug lines inside the function
 (`rings.rs:310,332,542,562,634,672`) that print per-round and per-phase timings, and how many
 refits were pinned and how many halved, to stderr. It has no effect on the repaired output,
 only on what is logged.

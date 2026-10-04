@@ -7,11 +7,11 @@
 `emit/winding.rs` (ring direction), `crates/inkvec-cli/src/pathdata.rs` (path data),
 `primitive.rs` (circle, ellipse and rectangle elements), `rings.rs` (nesting),
 `crates/inkvec-cli/src/post.rs` (output options), and `inkvec_svgmin::compact` for `--minify`.
-**Entry points:** `emit_color()` (`crates/inkvec-cli/src/emit.rs:151`); post-processing via
+**Entry points:** `emit_color()` (`crates/inkvec-cli/src/emit.rs:163`); post-processing via
 `post_process()` (`crates/inkvec-cli/src/post.rs:451`).
 **Pipeline position:** after fill assignment (stage mark `"fills"`,
-`crates/inkvec-cli/src/pipeline.rs:387`), through the stage mark `"emit"`
-(`crates/inkvec-cli/src/pipeline.rs:433`); `post_process` then runs separately, outside the
+`crates/inkvec-cli/src/pipeline.rs:396`), through the stage mark `"emit"`
+(`crates/inkvec-cli/src/pipeline.rs:446`); `post_process` then runs separately, outside the
 timed pipeline, just before the file is written.
 
 Crate header, `crates/inkvec-cli/src/lib.rs:6-21`, gives the whole pipeline shape:
@@ -47,15 +47,15 @@ header (`emit.rs:30-47`) names the two things that make that more than a neutral
 
 ## Inputs and outputs
 
-`emit_color` takes a `ColorDoc` (`emit.rs:72-112`): the rings of each face as walks over
+`emit_color` takes a `ColorDoc` (`emit.rs:76-115`): the rings of each face as walks over
 shared edges, every fitted edge and whole-edge primitive, every face's fill model, the
 palette and per-face colour index, per-face clear/opacity, alpha ramps and native fades,
 optional recovered layers, the matte, and the raster size; and an `EmitOptions`
-(`emit.rs:114-131`): `--cutout`, native transparency, `--no-background`, `--precision`, and
+(`emit.rs:126-143`): `--cutout`, native transparency, `--no-background`, `--precision`, and
 the harmonize settings. Output is a `String` — the complete `<svg>...</svg>` document, viewBox
 `-0.5 -0.5 w h`, before `post_process`. The colour pipeline calls it once per candidate
 document (flat, and with translucent layers when there are any); the bilevel pipeline calls
-`emit_bilevel` (`emit.rs:1317`).
+`emit_bilevel` (`emit.rs:1354`).
 
 ## How it works
 
@@ -214,7 +214,7 @@ that happens to come out smooth for any reason gets the short form.
 
 ### Compound paths, wound by nesting depth
 
-`Writer::emit_level` (`emit.rs:1055-1066`) writes the faces of one nesting level:
+`Writer::emit_level` (`emit.rs:1076-1087`) writes the faces of one nesting level:
 
 > "Siblings are disjoint by construction -- every pixel belongs to one face -- so all the
 > siblings of one flat colour can be one compound path under even-odd, which is how an artist
@@ -239,7 +239,7 @@ drawables before API 24 — such a hole fills back in; on the 246-icon screen se
 (30%) rendered differently under `nonzero` (`emit/winding.rs:6-13`).
 
 Now every path is passed through `winding::for_nonzero` (`emit/winding.rs:104-119`) when it is
-written (`Writer::path_element`, `emit.rs:1040-1052`). The method (`emit/winding.rs:15-34`):
+written (`Writer::path_element`, `emit.rs:1061-1073`). The method (`emit/winding.rs:15-34`):
 for rings that do not cross each other, a point inside `k` nested rings is crossed once by
 each, so if the ring at depth `d` runs the way `(−1)^d` says, the winding number is
 `1 − 1 + 1 − …` over `k` terms — 1 for odd `k`, 0 for even, the even-odd answer at every
@@ -265,7 +265,7 @@ where the opposite would reverse 2,152. Per compound path (`emit/winding.rs:36-5
 The same pass winds the recovered `--layers` paths (`write_layers`), the harmonized symbols
 (`harmonize.rs:133`) and the `--monochrome` and bilevel documents (`mono.rs:540`); a `<use>`
 of a harmonized symbol carries no `fill-rule`, since the symbol itself was wound
-(`emit.rs:998-999`).
+(`emit.rs:1019-1020`).
 
 Measured (`emit/winding.rs:66-80`; the 246-icon screen set at 512 px, against v0.2.4 rendered
 under `evenodd`): with `evenodd` forced back on, the wound files render identically in resvg,
@@ -302,24 +302,24 @@ bound of a paired bootstrap, which is a change-detection gate, not an absolute c
 
 ### Gradient and fill emission
 
-Each face's fill attribute comes from `face_fill` (`emit.rs:690-754`), in order of precedence:
+Each face's fill attribute comes from `face_fill` (`emit.rs:711-775`), in order of precedence:
 under a recovered layer, the ground colour; a fade traced natively, written by
 `gradient::fade_to_svg` (id `f{i}`); an alpha ramp, written as the gradient an editor would
 use — one colour, two `stop-opacity` values, along the axis the fade was measured to run (id
-`a{i}`, endpoints at two decimals and opacities at three, `emit.rs:724`); its fill model,
+`a{i}`, endpoints at two decimals and opacities at three, `emit.rs:745`); its fill model,
 delegated to `gradient::fill_to_svg` (`crates/inkvec-trace/src/gradient/svg.rs:74`); and with
 no fill model, its palette ink, else black. A translucent face's flat colour is "un-matted"
 before writing, since it was measured over the compositing matte. `fill_to_svg` returns a
 `(defs fragment, fill attribute)` pair: `FillModel::Flat` needs no defs;
 `FillModel::Linear`/`Radial` write a `<linearGradient>`/`<radialGradient>` with
 `gradientUnits="userSpaceOnUse"`. No empty `<defs>` block is written when there is nothing to
-put in it (`emit.rs:227-231`).
+put in it (`emit.rs:248-252`).
 
 Which gradients reach this point is decided in the `fills` mark (below): a gradient whose
 stops a viewer could not tell apart is painted flat first.
 
 **Where the alpha ramps come from, and which faces are fitted.** The ramps are measured just
-before writing, inside the `emit` mark: `face_transparency` (`pipeline.rs:1008`) calls
+before writing, inside the `emit` mark: `face_transparency` (`pipeline.rs:1042`) calls
 `alpha::face_alpha` (`crates/inkvec-cli/src/alpha.rs:942`), which under `--cutout` tries, for
 each face that is neither clear nor already one flat opacity, to fit a plane to its interior
 alpha (`fit_alpha_ramp`, `alpha.rs:171`) and keeps it only when it fades by at least
@@ -348,12 +348,12 @@ is degenerate", with "See also" He & Chao 2015.
 
 ### Stage 9: the recovered layers, back to front
 
-With `--layers`, `write_layers` (`emit.rs:1270-1312`) paints each recovered translucent layer
+With `--layers`, `write_layers` (`emit.rs:1307-1349`) paints each recovered translucent layer
 over everything as one compound path: the union of its faces, from the rings they had before
 the ground under them was merged, wound by depth so the default rule paints exactly the union,
 and one path rather than one per face so the translucent paint is composited once and no seam
 appears where two pieces met. The layers are written **back to front**
-(`emit.rs:1279-1286`): the decomposition's list is in peel order, frontmost first, because a
+(`emit.rs:1316-1323`): the decomposition's list is in peel order, frontmost first, because a
 layer can only be taken off once nothing lies over it. Written in that order the frontmost
 layer went down first and every layer behind it was composited over it: on
 `synthetic/stack_overlap` the blue disc came out on top of the green one that covers it, dE00
@@ -424,12 +424,12 @@ out wrong (2026-09-05)."
 
 ### The `fills` and `emit` stage marks
 
-Both stage marks are inside `finish_color` (`pipeline.rs:341`), timed by a `Stopwatch`
-(`crates/inkvec-trace/src/lib.rs:1204`) that prints only under `INKVEC_TIMING`.
+Both stage marks are inside `finish_color` (`pipeline.rs:350`), timed by a `Stopwatch`
+(`crates/inkvec-trace/src/lib.rs:1228`) that prints only under `INKVEC_TIMING`.
 
-**`fills`** (`pipeline.rs:385-387`) times the mirror-symmetry reconciliation after repair
-(`apply_mirrors`, `pipeline.rs:913`: one boundary's fit reflected onto its mirror) and
-`final_fills` (`pipeline.rs:951-985`): `--no-gradients` paints every face its palette ink, and
+**`fills`** (`pipeline.rs:394-396`) times the mirror-symmetry reconciliation after repair
+(`apply_mirrors`, `pipeline.rs:947`: one boundary's fit reflected onto its mirror) and
+`final_fills` (`pipeline.rs:985-1019`): `--no-gradients` paints every face its palette ink, and
 otherwise `demote_imperceptible_gradient` (`crates/inkvec-cli/src/pipeline/demote.rs:38`)
 paints flat a gradient no viewer could see. The test is the profile's colour range, the
 largest OKLab distance between *any two of its stops*, ends and interior stops alike, against
@@ -442,9 +442,9 @@ test is the old end-to-end one exactly. The gradient *fitting* itself happens ea
 `inkvec_trace`, and is charged to `trace_total`. The demotion is "Not from the literature: a
 fix to the guard's own definition", with "See also" Ottosson 2020 (OKLab).
 
-**`emit`** (`pipeline.rs:388-433`) covers alpha-layer recovery (`alpha::recover_layers`), the
+**`emit`** (`pipeline.rs:397-446`) covers alpha-layer recovery (`alpha::recover_layers`), the
 per-face transparency above, and **two competing documents, priced against each other**
-(`write_colour`, `pipeline.rs:1095-1104`):
+(`write_colour`, `pipeline.rs:1132-1141`):
 
 > "Both forms of the document, costed against each other.
 >
@@ -455,21 +455,21 @@ per-face transparency above, and **two competing documents, priced against each 
 > the flat form is what is written."
 
 The flat document is always emitted; if layers were recovered, a second document is emitted
-with the covered faces merged into their ground (`merge_map`, `pipeline.rs:1077`), and the two
+with the covered faces merged into their ground (`merge_map`, `pipeline.rs:1111`), and the two
 are priced by counting shape elements and bytes in each:
 
 ```rust
 let pays = pl < pf && bl <= bf;  // fewer shapes AND not more bytes
 ```
 
-(`pipeline.rs:1188`). Whichever wins becomes the output.
+(`pipeline.rs:1222`). Whichever wins becomes the output.
 
 ## Constants and thresholds
 
 | name | file:line | value | controls | derivation |
 |---|---|---|---|---|
 | `EMIT_DECIMALS` | `pathdata.rs:44` | 2 | coordinate decimal places | fully derived — see Coordinate precision above |
-| `MIN_RING_AREA` | `rings.rs:33` | 0.25 px² | smallest ring area worth emitting | motivated (far below a pixel so thin features survive); the 0.25 not swept |
+| `MIN_RING_AREA` | `rings.rs:34` | 0.25 px² | smallest ring area worth emitting | motivated (far below a pixel so thin features survive); the 0.25 not swept |
 | `S`-shorthand tolerance (`fmt_ring_with`) | `pathdata.rs:216` | `10^-decimals` (0.01 px default) | rounded-space reflection test | derived from the emitted grid itself |
 | `S`-shorthand tolerance (`fmt_fitted`) | `pathdata.rs:76` | `5e-4` px, raw-space Euclidean | stroke-path reflection test | no stated derivation |
 | ring segment minimum | `pathdata.rs:275` | 2 | a ring is discarded below this | it encloses nothing |
@@ -477,8 +477,8 @@ let pays = pl < pf && bl <= bf;  // fewer shapes AND not more bytes
 | arc rotation precision | `pathdata.rs:114`, `:258`, `:338` | 3 decimals (fixed) | arc `phi` formatting | no stated derivation |
 | rounded-rect radius floor | `primitive.rs:76`, `:281` | `1e-4` | below this, written as a plain rect | no stated derivation |
 | ellipse rotation floor | `primitive.rs:258` | `1e-3` | below this, no `transform` written | no stated derivation |
-| alpha-ramp endpoint precision | `emit.rs:724` | 2 decimals (fixed) | independent of `EMIT_DECIMALS` | no stated derivation |
-| opacity precision | `emit.rs:724`, `:766`, `:772` | 3 decimals | `fill-opacity`/`stop-opacity` | no stated derivation |
+| alpha-ramp endpoint precision | `emit.rs:745` | 2 decimals (fixed) | independent of `EMIT_DECIMALS` | no stated derivation |
+| opacity precision | `emit.rs:745`, `:787`, `:793` | 3 decimals | `fill-opacity`/`stop-opacity` | no stated derivation |
 | `INKVEC_EMIT_DECIMALS` | `pathdata.rs:50` | env override | overrides `EMIT_DECIMALS` | the mechanism used to isolate rounding from the segment price in the 7.2% measurement |
 | `EVENODD` | `emit/winding.rs:102` | ` fill-rule="evenodd"` | written only on a `d` the winding pass cannot read | the old output as a fallback |
 | `CANVAS_TOL` | `post.rs:186` | 0.25 px | `--no-background` rect match | motivated (a fitted canvas rect lands 0.01-0.02 px off) |
@@ -492,7 +492,7 @@ let pays = pl < pf && bl <= bf;  // fewer shapes AND not more bytes
 - **Zero-area rings are dropped outright.** The planar map can produce faces one pixel wide
   whose boundary walks out along a chain and straight back; these were emitted as paths that
   "paint nothing at any resolution and cost coordinates, an id, and a line in the document a
-  person has to read past" (`rings.rs:106-115`) — "twenty-seven of them on a plain green
+  person has to read past" (`rings.rs:107-116`) — "twenty-seven of them on a plain green
   circle."
 - **Rounding a rectangle's origin and size independently moves the far edge more than the
   near one.** The fix rounds the two *edges* and derives width as their difference
@@ -503,20 +503,20 @@ let pays = pl < pf && bl <= bf;  // fewer shapes AND not more bytes
 - **Parity means punching a transparent face out of its painted ancestors only up to the first
   transparent one.** A second ring inside an already-punched hole flips it back solid — the
   counter of a heart inside a page inside a book cover came out solid black, dE00 0.19 -> 3.33
-  on `lucide/book-heart` (`emit.rs:262-269`).
+  on `lucide/book-heart` (`emit.rs:283-290`).
 - **Containment for cutting must be certain, not merely likely.** `ring_inside`'s majority vote
   is right for paint-order stacking and wrong for deciding what to punch — a black wedge beside
-  the head on `noto-emoji/emoji_u1f3cb_200d_2642`, dE00 0.58 -> 1.78 (`emit.rs:312-320`). A
+  the head on `noto-emoji/emoji_u1f3cb_200d_2642`, dE00 0.58 -> 1.78 (`emit.rs:333-341`). A
   punch needs every probe inside (`strictly_inside`).
 - **`fill-opacity` in a stacked document blends against whatever painted underneath it, not
   the page** — the film frames on `noto-emoji/emoji_u1f39e`, dE00 0.46 -> 1.43
-  (`emit.rs:482-493`).
+  (`emit.rs:503-514`).
 - **A primitive element cannot carry a hole.** A face that must show a hole through it is
-  written as a path even when its outline would otherwise fit a circle (`emit.rs:1019-1020`).
+  written as a path even when its outline would otherwise fit a circle (`emit.rs:1040-1041`).
 - **Drawing every face's own holes (making paths self-contained so any face could drop
   freely) was tried and reverted** — parameters rose (the arrow 166 to 248) and DISTS regressed
   on three of six probes, "because a ring contained inside another of the same face is not
-  reliably a hole, and punching it makes one anyway" (`emit.rs:157-162`).
+  reliably a hole, and punching it makes one anyway" (`emit.rs:169-174`).
 - **Two rings of one path that overlap by a sliver** paint the overlap under `nonzero` where
   `evenodd` cut it out; no ring direction can make the two rules agree there (9 of 246 screen
   icons at 512 px, 170 px in all; see the winding section).
@@ -532,7 +532,7 @@ Since the settings cleanup (CHANGELOG, 0.2.0, *Changed*) the engine reads its en
 | variable | effect |
 |---|---|
 | `INKVEC_EMIT_DECIMALS` | overrides `EMIT_DECIMALS` (coordinate decimal places); `--no-background`'s path match follows it |
-| `INKVEC_ALPHADBG` | per-face emit debug dump (rings, areas, outer/clear/parent/drop, holes; `emit.rs:604`) |
+| `INKVEC_ALPHADBG` | per-face emit debug dump (rings, areas, outer/clear/parent/drop, holes; `emit.rs:625`) |
 | `INKVEC_TIMING` | enables the `Stopwatch` printout that surfaces the `fills`/`emit` marks |
 
 ## Open questions

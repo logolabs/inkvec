@@ -14,13 +14,13 @@ SVG elements: `crates/inkvec-cli/src/ribbons.rs`.
 **Entry points:** `ribbon::fit_face()` (`crates/inkvec-trace/src/ribbon.rs:324`), called per
 candidate face by `ribbons::choose()` (`crates/inkvec-cli/src/ribbons.rs:168`), which
 `ribbons::stage()` (`crates/inkvec-cli/src/ribbons.rs:77`) runs when
-`--detect-strokes` / `Options::detect_strokes` is set (`crates/inkvec-cli/src/args.rs:184`,
-`crates/inkvec/src/options.rs:110`) or, for the benchmarks, `INKVEC_RIBBONS=1`
-(`crates/inkvec-cli/src/ribbons.rs:67`).
+`--detect-strokes` / `Options::detect_strokes` is set (`crates/inkvec-cli/src/args.rs:198`,
+`crates/inkvec/src/options.rs:112`) or, for the benchmarks, `INKVEC_RIBBONS=1`
+(`crates/inkvec-cli/src/ribbons.rs:68`).
 **Pipeline position:** Quality mode, colour output only (not `--mode fast`, not
 `--monochrome`): after every boundary is fitted, repaired and mirrored and every face's
 fill and transparency are settled, before the document is written
-(`crates/inkvec-cli/src/pipeline.rs:426`). The emitter drops the faces written as strokes
+(`crates/inkvec-cli/src/pipeline.rs:439`). The emitter drops the faces written as strokes
 from the fill tree and paints the strokes on top (`crates/inkvec-cli/src/emit.rs:180`,
 `write_ribbons`, `crates/inkvec-cli/src/emit.rs:1299`).
 
@@ -174,7 +174,7 @@ lifts between strokes as turns.
 | `MAX_PRE_RMS` | 0.15 w | `ribbon.rs:455` | a blob read as a stroke starts a quarter of a width out |
 | `CHAIN_SAMPLES_PER_WIDTH` | 8 | `ribbon.rs:609` | 4 cost 5% more parameters at 512 px |
 | `COARSE_STRIDE`, `COARSE_DECLINE` | 8, 1.25 | `ribbon.rs:612`, `ribbon.rs:632` | calibrated on every reading (see the code) |
-| `MAX_ITERS`, `TRIAL_ITERS`, `MAX_RETRIES` | 30, 8, 8 | `refine.rs:73`, `refine.rs:79`, `refine.rs:82` | |
+| `MAX_ITERS`, `TRIAL_ITERS`, `MAX_RETRIES` | 30, 8, 8 | `refine.rs:82`, `refine.rs:79`, `refine.rs:82` | |
 | `ANCHOR`, `ANCHOR_HALF` | 2 px, 0.05 | `refine.rs:87`, `refine.rs:95` | holds unseen variables; keeps a blob from shrinking to a ring |
 | `MAX_VARS` | 400 | `refine.rs:100` | |
 | `FLAT_TOL` | 0.02 px | `refine.rs:546` | chords stand in for segments only in the search |

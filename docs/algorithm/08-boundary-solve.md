@@ -8,16 +8,21 @@
 guard), `boundary_opt/band.rs` (the data term, and the memory budget of its tables),
 `boundary_opt/lbfgs.rs` (the solver and its stopping rules), `boundary_opt/linesearch.rs`
 (the Moré–Thuente line search), `boundary_opt/folds.rs` (finding self-crossings)
-**Entry point:** `optimise_alpha()` (`boundary_opt.rs:581-636`); `optimise()`
-(`boundary_opt.rs:563-570`) is the same without alpha
-**Pipeline position:** after `refine_junc` (`planar::refine_junctions`, `lib.rs:1135`),
-before `decode` (stage mark `"boundary_opt"`, `lib.rs:1148`). Called once, in
-`finish_color_trace_alpha` (`lib.rs:1143-1147`), the geometry tail every colour entry point
+**Entry point:** `optimise_alpha_capped()` (`boundary_opt.rs:627-683`), reached from the
+pipeline through `optimise_for()` (`boundary_opt.rs:598-611`); `optimise_alpha()`
+(`boundary_opt.rs:583-591`) is it without an iteration cap and `optimise()`
+(`boundary_opt.rs:565-572`) the same without alpha
+**Pipeline position:** after `refine_junc` (`planar::refine_junctions`, `lib.rs:1158`),
+before `decode` (stage mark `"boundary_opt"`, `lib.rs:1167`). Called once, in
+`finish_color_trace_alpha` (`optimise_for`, `lib.rs:1166`), the geometry tail every colour entry point
 shares: the opaque Quality path (`trace_color_full_with_alpha` through `finish_color_trace`,
-`lib.rs:718`), the native-alpha path (`native::trace_color`, `native.rs:986`, the only
-caller that passes the source alpha) and `trace_color_from_labels` (`lib.rs:972`). Skipped
-when `opts.fast` is set (Fast mode reaches the same function from `fast/front.rs:154`) or
-when `INKVEC_BOPT=0`. The bilevel front end (`trace_bilevel`) never calls it.
+`lib.rs:740`), the native-alpha path (`native::trace_color`, `native.rs:1001`, the only
+caller that passes the source alpha) and `trace_color_from_labels` (`lib.rs:994`). Skipped
+when `opts.fast` is set without an iteration cap (Fast mode reaches the same function from
+`fast/front.rs:154`) or when `INKVEC_BOPT=0` (`boundary_opt.rs:605-608`); `--mode balanced`
+sets `ColorOptions::boundary_iters` to 8 and runs it capped at 8 iterations per part
+(`boundary_opt.rs:612-626`, see [14-fast-mode.md](14-fast-mode.md)). The bilevel front end
+(`trace_bilevel`) never calls it.
 
 ## What problem this solves
 
@@ -41,16 +46,17 @@ coverage the geometry would paint, compared against the image.
 wall-clock budget `budget_ms`, and optionally the source alpha and each face's opacity
 (passed only by the native-alpha path).
 
-`budget_ms` is `ColorOptions::boundary_ms` (`lib.rs:174-177`): `None` by default, and then
+`budget_ms` is `ColorOptions::boundary_ms` (`lib.rs:178-181`): `None` by default, and then
 the result depends only on the input. The CLI sets it in `color_options`
-(`inkvec-cli/src/pipeline.rs:139-150`) to a quarter of `--time-budget`, at least 50 ms,
-when `--time-budget` is above zero. The clock starts once the band is set up
-(`boundary_opt.rs:626`) and is read before each iteration of each part (`lbfgs.rs:228`):
+(`inkvec-cli/src/pipeline.rs:145-153`) to a quarter of `--time-budget`, at least 50 ms,
+when `--time-budget` is above zero, in Quality only: balanced caps its solve by iterations
+instead, so its output does not depend on the machine. The clock starts once the band is set up
+(`boundary_opt.rs:673`) and is read before each iteration of each part (`lbfgs.rs:239`):
 an iteration under way finishes, and once the budget is spent the parts not yet solved
 take no step.
 
 **Output:** the map is edited in place and `optimise_alpha` returns `Option<Report>`
-(`boundary_opt.rs:547-561`):
+(`boundary_opt.rs:549-563`):
 
 ```rust
 pub struct Report {
@@ -63,11 +69,11 @@ pub struct Report {
 ```
 
 `None` means nothing changed. It is returned when the map has no edges or a zero side, or
-the image is smaller than the map (`boundary_opt.rs:589-591`); when there are fewer than
-three unknowns (`boundary_opt.rs:595-597`); when the band's tables would pass the memory
-budget (below, `boundary_opt.rs:621-625`); when the starting residual of the pixels the
-boundary cuts, or the starting kink sum, is zero (`lbfgs.rs:169-171`); and when the energy
-did not fall or no part took a step (`lbfgs.rs:192-194`). The fold guard never discards the
+the image is smaller than the map (`boundary_opt.rs:636-638`); when there are fewer than
+three unknowns (`boundary_opt.rs:642-644`); when the band's tables would pass the memory
+budget (below, `boundary_opt.rs:668-672`); when the starting residual of the pixels the
+boundary cuts, or the starting kink sum, is zero (`lbfgs.rs:175-177`); and when the energy
+did not fall or no part took a step (`lbfgs.rs:200-202`). The fold guard never discards the
 solve: at worst it puts the boundaries in a new crossing back where they started
 (*The fold guard*, below). The working positions live in a local vector until the whole
 solve and guard are done.
@@ -76,7 +82,7 @@ solve and guard are done.
 
 ### The unknowns
 
-`build_vars` (`boundary_opt.rs:177`) gives every point of every edge its own unknown,
+`build_vars` (`boundary_opt.rs:179`) gives every point of every edge its own unknown,
 except that the end points of open edges are keyed by their node id, so all the edges
 meeting at a junction share one unknown and move it together. That is what keeps the map a
 partition however far the points move. Unknowns are numbered in edge order, then point
@@ -202,7 +208,7 @@ budget = max(TABLE_BUDGET_FLOOR, TABLE_BUDGET_PER_PIXEL · w · h) = max(256 MiB
 which is 256 MiB up to about 2900 x 2900 px and 32 bytes a pixel beyond. When the running
 total passes it (`band.rs:981-995`), `build` stops at that run, before any table is
 allocated, and returns `None`; `setup` then returns false (`band.rs:1275-1290`) and
-`optimise_alpha` returns `None` (`boundary_opt.rs:621-625`). The solve is skipped and the
+`optimise_alpha_capped` returns `None` (`boundary_opt.rs:668-672`). The solve is skipped and the
 map keeps the boundary `refine_subpixel` and `refine_junctions` measured, as when the solve
 finds nothing to gain. A band of exactly the budget is solved; one byte over is not. The
 count covers the per-run tables, the part that grows with `nf`; the solve's per-pixel
@@ -272,7 +278,7 @@ decreases against; `band.rs:1316-1329`).
 
 ### Priors: kink and anchor
 
-`Problem::priors` (`boundary_opt.rs:426-505`) adds two terms. **Kink** is the *absolute*
+`Problem::priors` (`boundary_opt.rs:428-507`) adds two terms. **Kink** is the *absolute*
 value of the discrete second difference at each interior point of an open edge and at every
 point of a closed one (an edge of fewer than three points has none), smoothed by `10⁻⁴`
 inside the square root: a corner then costs in proportion to how sharply it turns, so one
@@ -281,7 +287,7 @@ sharp corner is cheaper than the many small kinks a squared term would spread it
 junction (`JUNCTION_ANCHOR`); it removes the tangential freedom and holds points the image
 cannot see where the measurement put them.
 
-Both weights are relative to the data term (`lbfgs::descend`, `lbfgs.rs:172-173`):
+Both weights are relative to the data term (`lbfgs::descend`, `lbfgs.rs:178-179`):
 
 ```rust
 prob.w_kink   = K_KINK   * data0 / kink0;   // kink starts at 5% of the data term
@@ -308,17 +314,17 @@ The problem: minimise the band energy over the boundary points, each held in the
 radius `MAX_TOTAL` round its start and, where it is pinned, on the image frame. The energy
 is continuous but only piecewise smooth (its slope jumps where a piece meets a gridline).
 
-`descend` (`lbfgs.rs:160-212`) first evaluates the whole problem's energy and gradient at the
-start once, for the stopping tests' denominators (`Scales`, `lbfgs.rs:131-149`), then solves
-the parts one after another. `solve` (`lbfgs.rs:213-287`) runs, per part:
+`descend` (`lbfgs.rs:164-213`) first evaluates the whole problem's energy and gradient at the
+start once, for the stopping tests' denominators (`Scales`, `lbfgs.rs:132-150`), then solves
+the parts one after another. `solve` (`lbfgs.rs:223-298`) runs, per part:
 
 1. **Stop test.** Stop when the projected gradient's largest point
-   (`projected_gradient_norm`, `lbfgs.rs:481-502`: the gradient with the outward normal
+   (`projected_gradient_norm`, `lbfgs.rs:492-513`: the gradient with the outward normal
    component removed at a point on the edge of its disc) is below `PG_TOL` = 10⁻⁶ of the
-   whole problem's largest gradient at the start (`lbfgs.rs:234`); when the last step
+   whole problem's largest gradient at the start (`lbfgs.rs:245`); when the last step
    lowered the energy by less than `FUNC_TOL` = 10⁻⁷ of the whole problem's changeable
    energy at the start, its energy less the residual of the band pixels no boundary touches
-   (`lbfgs.rs:273`); after `MAX_ITERS` = 64 iterations; when the line search finds no step of
+   (`lbfgs.rs:284`); after `MAX_ITERS` = 64 iterations; when the line search finds no step of
    sufficient decrease; or when the caller's budget has run out. Never on the length of a
    step. Inspired by R. H. Byrd, P. Lu, J. Nocedal, C. Zhu (1995), *A limited memory
    algorithm for bound constrained optimization*, SIAM J. Sci. Comput. 16(5):1190–1208,
@@ -333,29 +339,29 @@ the parts one after another. `solve` (`lbfgs.rs:213-287`) runs, per part:
    whole-problem 10⁻⁷ only 25, median 68 iterations, and read −4.35 % dE00 against −4.13 %
    on the full set). The projected-gradient test rarely fires on this energy, whose gradient
    does not vanish at a minimum on a kink: none of 13,285 steps on 41 icons of the 128 px
-   screen set stopped on it (`lbfgs.rs:116-121`).
+   screen set stopped on it (`lbfgs.rs:117-122`).
 2. **Direction.** Limited-memory BFGS, the two-loop recursion over the last `MEMORY` = 3
    steps with initial scaling `γ = sᵀy / yᵀy` (method from D. C. Liu, J. Nocedal (1989),
    *On the limited memory BFGS method for large scale optimization*, Math. Programming 45,
    <https://doi.org/10.1007/BF01589116>; J. Nocedal, S. J. Wright (2006), *Numerical
    Optimization*, Algorithm 7.4, <https://doi.org/10.1007/978-0-387-40065-5>), projected onto
    the tangent cone of the active discs: the outward normal component of a point already on
-   the edge of its disc is removed (`tangent_cone`, `lbfgs.rs:459-479`). A direction that is
+   the edge of its disc is removed (`tangent_cone`, `lbfgs.rs:470-490`). A direction that is
    not downhill clears the memory and falls back to the projected steepest descent
-   (`descent_direction`, `lbfgs.rs:405-427`). A pair is stored only when its curvature `yᵀs`
-   exceeds `10⁻¹²·‖y‖·‖s‖` (`curvature_pair`, `lbfgs.rs:429-447`).
+   (`descent_direction`, `lbfgs.rs:416-438`). A pair is stored only when its curvature `yᵀs`
+   exceeds `10⁻¹²·‖y‖·‖s‖` (`curvature_pair`, `lbfgs.rs:440-458`).
 3. **Step length.** The Moré–Thuente line search (`linesearch.rs`; method from J. J. Moré,
    D. J. Thuente (1994), *Line search algorithms with guaranteed sufficient decrease*, ACM
    TOMS 20(3):286–307, <https://doi.org/10.1145/192115.192132>), from the unit quasi-Newton
    step (on the first iteration, a move of `MAX_STEP` for the furthest point), never beyond a
    move of `MAX_STEP` = 0.35 px, along the projected path `a ↦ P(x + a·d)` (`Part::search`,
-   `lbfgs.rs:350-402`). It looks for a step satisfying the strong Wolfe conditions,
+   `lbfgs.rs:361-413`). It looks for a step satisfying the strong Wolfe conditions,
    `φ(a) ≤ φ(0) + μ·a·φ'(0)` and `|φ'(a)| ≤ η·|φ'(0)|` with `μ = FTOL` = 10⁻⁴ and
    `η = GTOL` = 0.9, by safeguarded cubic and quadratic interpolation (`step`,
    `next_trial`, `linesearch.rs:352-505`), extrapolating up to four times the last step while
    the slope is still steep; the slope `φ'(a)` is the gradient at the trial dotted with the
    path's exact derivative, including where the projection onto a disc is active
-   (`path_slope`, `lbfgs.rs:504-531`). Up to `MAX_EVALS` = 10 trials; when the curvature
+   (`path_slope`, `lbfgs.rs:515-542`). Up to `MAX_EVALS` = 10 trials; when the curvature
    condition cannot be met (the minimum sits on a kink, the setting of A. S. Lewis,
    M. L. Overton (2013), *Nonsmooth optimization via quasi-Newton methods*, Math. Program.
    141:135–163, <https://doi.org/10.1007/s10107-012-0514-2>) the best trial of sufficient
@@ -377,7 +383,7 @@ than the boundary error it bought (the repair stage refits the offending rings r
 round, 2.5 s on one logo, and the emitter paints a face over its own interior).
 
 A fold is a property of one pair of segments, so the guard backs off only the boundaries
-that take part in one (`fold_guard_local`, `boundary_opt.rs:638-743`). Each edge `k` carries
+that take part in one (`fold_guard_local`, `boundary_opt.rs:685-790`). Each edge `k` carries
 a scale `s_k`, starting at 1; an unknown `v` sits at `p⁰_v + σ_v·(p_v − p⁰_v)` with
 `σ_v = min s_k` over the edges it belongs to, so a junction follows the most cautious of its
 edges and an edge at scale 0 is exactly where it started, ends included. While some pair of
@@ -409,7 +415,7 @@ it per pair of elements. Adapted: they bound the step inside the line search and
 barrier energy that keeps a colliding pair apart so the descent can go on; this energy has
 no barrier (two sides of a thin ribbon are *meant* to approach), and a step bound without
 one stops the whole part's descent at the first contact, so the per-pair decision is taken
-once, after the solve (`boundary_opt.rs:675-686`).
+once, after the solve (`boundary_opt.rs:722-733`).
 
 The crossings (`folds::FoldCounter`) are found by a spatial join after J. Dittrich,
 B. Seeger (2000), *Data redundancy and duplicate detection in spatial join processing*,
@@ -426,35 +432,35 @@ reference the tests compare the join with (`folds.rs:121-131`).
 
 | name | value | where | controls | basis |
 |---|---|---|---|---|
-| `MAX_STEP` | 0.35 px | `boundary_opt.rs:110` | largest displacement of any point in one L-BFGS step | none |
-| `MAX_TOTAL` | 1.0 px | `boundary_opt.rs:114` | leash round each point's start; also why the band never moves | "a point a pixel away from its own level set has stopped describing the same piece of the image" |
-| `K_KINK` | 0.05 | `boundary_opt.rs:121` | kink weight, fraction of the starting data term | scaling rule derived, value not swept |
-| `K_ANCHOR` | 0.10 | `boundary_opt.rs:124` | anchor weight, fraction of a point's share of the starting data term | as above |
-| `JUNCTION_ANCHOR` | 4.0 | `boundary_opt.rs:126` | anchor multiplier at a shared end point | not derived (its doc comment gives the reason, `planar::refine_junctions` has already placed the point, but not why fourfold) |
-| `MIN_CONTRAST` | 2/255 | `boundary_opt.rs:128` | colour or opacity difference that counts as a boundary when choosing the pixels where alpha is a fourth channel | none |
-| `EPS` (kink) | 1e-4 | `boundary_opt.rs:440` | floor inside the kink term's square root | for differentiability |
-| `GRID_LIMIT` | 1e9 px | `boundary_opt.rs:222` | largest coordinate whose gridlines `crossings` walks; a segment past it contributes no crossings | "far inside the range where `m += 1.0` is exact, and far outside any image" |
-| `GRID_MAX_SPAN` | 2²⁰ gridlines | `boundary_opt.rs:226` | most gridlines `crossings` walks along one axis of one segment | a segment inside the image crosses at most its width or height |
+| `MAX_STEP` | 0.35 px | `boundary_opt.rs:112` | largest displacement of any point in one L-BFGS step | none |
+| `MAX_TOTAL` | 1.0 px | `boundary_opt.rs:116` | leash round each point's start; also why the band never moves | "a point a pixel away from its own level set has stopped describing the same piece of the image" |
+| `K_KINK` | 0.05 | `boundary_opt.rs:123` | kink weight, fraction of the starting data term | scaling rule derived, value not swept |
+| `K_ANCHOR` | 0.10 | `boundary_opt.rs:126` | anchor weight, fraction of a point's share of the starting data term | as above |
+| `JUNCTION_ANCHOR` | 4.0 | `boundary_opt.rs:128` | anchor multiplier at a shared end point | not derived (its doc comment gives the reason, `planar::refine_junctions` has already placed the point, but not why fourfold) |
+| `MIN_CONTRAST` | 2/255 | `boundary_opt.rs:130` | colour or opacity difference that counts as a boundary when choosing the pixels where alpha is a fourth channel | none |
+| `EPS` (kink) | 1e-4 | `boundary_opt.rs:442` | floor inside the kink term's square root | for differentiability |
+| `GRID_LIMIT` | 1e9 px | `boundary_opt.rs:224` | largest coordinate whose gridlines `crossings` walks; a segment past it contributes no crossings | "far inside the range where `m += 1.0` is exact, and far outside any image" |
+| `GRID_MAX_SPAN` | 2²⁰ gridlines | `boundary_opt.rs:228` | most gridlines `crossings` walks along one axis of one segment | a segment inside the image crosses at most its width or height |
 | `REACH` | 1 px | `band.rs:71` | band width round the pixels the start crosses | follows from `MAX_TOTAL` |
 | `PARALLEL_CELLS` | 16384 band pixels | `band.rs:151` | below it the runs are evaluated on one thread (the result is the same either way) | none |
 | `TABLE_BUDGET_FLOOR` | 256 MiB | `band.rs:852` | floor of the band-table budget `max(TABLE_BUDGET_FLOOR, TABLE_BUDGET_PER_PIXEL · w · h)`; past the budget the solve is skipped | measured: 11 times the gate's largest table (22.2 MB), 2.4 times the largest of 772 stress images (106 MB); the pathological class starts at 116 MB |
 | `TABLE_BUDGET_PER_PIXEL` | 32 bytes a pixel | `band.rs:856` | growth of the budget above its floor (binds above about 2900 x 2900 px) | lets an uncapped 8192 px trace keep twice the masthead's 14 bytes a pixel |
 | frame snap | 1e-3 px | `band.rs:1196` | how close to a frame line a point of a frame edge is snapped onto it and pinned | none |
-| `MEMORY` | 3 | `lbfgs.rs:101` | L-BFGS pairs kept | measured: 3 did as well as 7, 15 or 30 with the Armijo search; with the Wolfe search 7 read −4.26 % against −4.37 % for 3 at 512 px |
-| `MAX_ITERS` | 64 | `lbfgs.rs:109` | iterations per independent part | measured: −4.15 % dE00 at 512 px and −6.35 % at 128 px against −4.37 % and −8.40 % at 128 iterations; whole trace 1.13× v0.2.5 at 512 px against 1.28–1.30× |
-| `FUNC_TOL` | 1e-7 | `lbfgs.rs:115` | stop a part on a relative decrease, of the whole problem's changeable energy at the start | measured: against a part-relative 1e-6, a quarter as many parts run to the cap, −4.35 % against −4.13 % at 512 px |
-| `PG_TOL` | 1e-6 | `lbfgs.rs:121` | stop a part on its projected gradient, relative to the whole problem's largest gradient at the start | none (rarely fires: 0 of 13,285 steps) |
+| `MEMORY` | 3 | `lbfgs.rs:102` | L-BFGS pairs kept | measured: 3 did as well as 7, 15 or 30 with the Armijo search; with the Wolfe search 7 read −4.26 % against −4.37 % for 3 at 512 px |
+| `MAX_ITERS` | 64 | `lbfgs.rs:110` | iterations per independent part | measured: −4.15 % dE00 at 512 px and −6.35 % at 128 px against −4.37 % and −8.40 % at 128 iterations; whole trace 1.13× v0.2.5 at 512 px against 1.28–1.30× |
+| `FUNC_TOL` | 1e-7 | `lbfgs.rs:116` | stop a part on a relative decrease, of the whole problem's changeable energy at the start | measured: against a part-relative 1e-6, a quarter as many parts run to the cap, −4.35 % against −4.13 % at 512 px |
+| `PG_TOL` | 1e-6 | `lbfgs.rs:122` | stop a part on its projected gradient, relative to the whole problem's largest gradient at the start | none (rarely fires: 0 of 13,285 steps) |
 | `FTOL` | 1e-4 | `linesearch.rs:82` | sufficient-decrease constant `μ` | textbook (Nocedal & Wright's `c1`), the value of the Armijo search it replaced |
 | `GTOL` | 0.9 | `linesearch.rs:86` | curvature constant `η` | textbook value for quasi-Newton directions (Nocedal & Wright §3.1; Moré & Thuente §1) |
 | `XTOL` | 0.1 | `linesearch.rs:89` | relative width of the interval of uncertainty below which a search stops | MINPACK-2's |
 | `MAX_EVALS` | 10 | `linesearch.rs:94` | trials per line search | measured: 96.3 % of steps take one trial, none more than four |
 | `XTRAPL`, `XTRAPU` | 1.1, 4.0 | `linesearch.rs:98-99` | extrapolation window before a bracket exists | MINPACK-2's |
 | `SHRINK` | 0.66 | `linesearch.rs:102` | required shrink of a bracket over two trials, else bisect | Moré & Thuente §4 |
-| fold-guard halving | ½ per round to 1/16, then 0 | `boundary_opt.rs:706-710` | how a boundary in a new crossing is backed off | none |
+| fold-guard halving | ½ per round to 1/16, then 0 | `boundary_opt.rs:753-757` | how a boundary in a new crossing is backed off | none |
 | `COARSE` | 4 px | `folds.rs:36` | side of the fold guard's coarse join grid | about the length of a swept segment's range |
 | `MAX_COARSE_CELLS` | 64 | `folds.rs:41` | a swept range over more coarse cells is paired with every segment directly instead of entering the grid | the map never has one; keeps a degenerate segment from filling the grid |
 | `MAX_RANGE_AREA` | cell range `(x1−x0)(y1−y0) ≤ 64` | `folds.rs:45` | segments counted by the fold guard (larger ones are never counted) | kept exactly from the grid it replaced |
-| boundary share of `--time-budget` | a quarter, at least 50 ms | `inkvec-cli/src/pipeline.rs:146` | `budget_ms` when `--time-budget` is above zero | none |
+| boundary share of `--time-budget` | a quarter, at least 50 ms | `inkvec-cli/src/pipeline.rs:152` | `budget_ms` when `--time-budget` is above zero | none |
 
 ## Measurements
 
@@ -618,8 +624,8 @@ removed and why, is [`docs/internal/env-vars.md`](../internal/env-vars.md).
 
 | variable | default | effect |
 |---|---|---|
-| `INKVEC_BOPT` | on | read in `lib.rs:1143` (`env::switch`): `0` disables the whole stage |
-| `INKVEC_BOPTDBG` | off | read in `boundary_opt.rs:598` (`env::flag`): per-iteration `eprintln!` of step, line-search trials, energy, relative decrease, largest move and projected gradient (`lbfgs.rs:262-264`), a line when a part stops on its projected gradient (`lbfgs.rs:236-239`), plus the fold guard's rounds, the edges it backed off and the share of the displacement kept (`boundary_opt.rs:734-739`) |
+| `INKVEC_BOPT` | on | read in `boundary_opt.rs:606` (`env::switch`): `0` disables the whole stage |
+| `INKVEC_BOPTDBG` | off | read in `boundary_opt.rs:645` (`env::flag`): per-iteration `eprintln!` of step, line-search trials, energy, relative decrease, largest move and projected gradient (`lbfgs.rs:273-275`), a line when a part stops on its projected gradient (`lbfgs.rs:247-250`), plus the fold guard's rounds, the edges it backed off and the share of the displacement kept (`boundary_opt.rs:781-786`) |
 | `INKVEC_DIAG` | off | the crate's diagnostics (`diag.rs`); this stage writes the band's size (`bopt` `band runs=… cells=… max_nf=… table_bytes=…`) and, past the table budget, a `band_table_bytes` line marked `AT CAP` and `band over budget … solve skipped` (`band.rs:983-993`, `band.rs:1021-1026`) |
 
 The former `INKVEC_BOPT_ITERS`, `INKVEC_BOPT_MS`, `INKVEC_BOPT_KINK`,

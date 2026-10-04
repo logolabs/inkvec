@@ -106,6 +106,9 @@ pub struct Options {
     #[schemars(extend("enum" = ["quality", "fast"]))]
     pub mode: String,
 
+    /// Detect the faces of the colour trace that were drawn as strokes -- a centreline and one width, with round or butt caps and round or miter joins -- and write each as a stroked path (fill none, one stroke-width) where that describes the face's measured boundary in fewer numbers than its filled outline, at a fit as good within the measurement noise. Line icons come back at about the artist's own parameter count. Quality mode only; off by default.
+    pub detect_strokes: bool,
+
     /// Colour groups: fills to draw as one, so the shapes between them join rather than being recoloured. Empty (the default) changes nothing. Groups are separated by ';' and members by ','; a member is a colour '#rrggbb' as it appears in a trace of the same image, or a gradient written as its stop colours joined by '>'. An optional '=' says what the group becomes: '=#rrggbb' a flat colour, '=@n' its n-th member (1-based; a gradient there is refitted over the whole group); without it, the member covering the most of the image. Example: '#c0392b,#e74c3c;#f00>#00f,#0a0=@1'. A group costs one extra trace.
     pub merge_colors: String,
 }
@@ -132,6 +135,7 @@ impl Default for Options {
             content_units: a.content_units,
             harmonize: a.harmonize,
             harmonize_threshold: a.harmonize_threshold,
+            detect_strokes: a.detect_strokes,
             // The command line has no groups by default; a spec that parses to none.
             merge_colors: String::new(),
             mode: a.mode.name().to_string(),
@@ -223,6 +227,7 @@ impl Options {
             content_units,
             harmonize,
             harmonize_threshold,
+            detect_strokes,
             ref merge_colors,
             ref mode,
         } = *self;
@@ -245,6 +250,7 @@ impl Options {
             content_units,
             harmonize,
             harmonize_threshold,
+            detect_strokes,
             // Validated before any trace against the schema's `enum`.
             mode: mode.parse().unwrap_or_default(),
             // A library never writes to the terminal.

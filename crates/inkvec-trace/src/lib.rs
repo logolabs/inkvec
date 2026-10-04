@@ -91,8 +91,8 @@ pub mod planar;
 pub mod regions;
 pub mod regroup;
 pub mod regularize;
-// Research prototype: stroke-drawn faces as centrelines plus one width, behind
-// `INKVEC_RIBBONS` in the CLI's colour pipeline.
+// Stroke-drawn faces as centrelines plus one width, behind `--detect-strokes`
+// (`Options::detect_strokes`) in the CLI's colour pipeline.
 pub mod ribbon;
 pub mod symmetry;
 pub mod taper;

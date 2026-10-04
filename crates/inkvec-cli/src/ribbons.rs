@@ -1,7 +1,7 @@
-//! Research prototype (`INKVEC_RIBBONS=1`): faces that were drawn as strokes, written as
-//! strokes -- centrelines with one `stroke-width`, round caps and joins -- instead of as
-//! filled outlines. Off by default; with the variable unset nothing here runs and the
-//! output is byte-identical to the shipped pipeline.
+//! `--detect-strokes` (`Options::detect_strokes`; off by default): faces that were drawn
+//! as strokes, written as strokes -- centrelines with one `stroke-width`, round or butt
+//! caps, round or miter joins -- instead of as filled outlines. Off, nothing here runs and
+//! the output is byte-identical to the pipeline without the stage.
 //!
 //! **Where it runs.** In the colour pipeline after every boundary is fitted, repaired and
 //! mirrored and every face's fill and transparency are settled, before the document is
@@ -58,9 +58,11 @@ use crate::pathdata::fmt_fitted;
 use crate::primitive::stroke_element;
 use crate::rings;
 
-/// Whether the stage is switched on (`INKVEC_RIBBONS=1`).
-pub(crate) fn on() -> bool {
-    inkvec_core::env::flag("INKVEC_RIBBONS")
+/// Whether the stage runs: `--detect-strokes` (`Options::detect_strokes`), or the
+/// variable `INKVEC_RIBBONS=1`, which the benchmark scripts use to switch the opt-in stage
+/// on for a build they cannot pass flags to (the gate's fixed conditions).
+pub(crate) fn on(args: &crate::args::Args) -> bool {
+    args.detect_strokes || inkvec_core::env::flag("INKVEC_RIBBONS")
 }
 
 /// The stage as the colour pipeline calls it, on the colour document `doc` before its
@@ -77,7 +79,7 @@ pub(crate) fn stage(
     map: &planar::PlanarMap,
     labels: &[u16],
 ) -> Ribbons {
-    if !on() || fast || args.monochrome {
+    if !on(args) || fast || args.monochrome {
         return Ribbons::default();
     }
     let cfg_r = FitConfig {

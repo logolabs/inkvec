@@ -72,6 +72,7 @@ def trace(
     harmonize: bool = True,
     harmonize_threshold: float = 0.92,
     mode: str = "quality",
+    detect_strokes: bool = False,
     merge_colors: str = "",
 ) -> Traced:
     """Trace an image to SVG.
@@ -168,6 +169,14 @@ def trace(
             faithful, with somewhat more parameters. Options that only steer quality
             stages (precision, content_units, harmonize, harmonize_threshold,
             time_budget) are ignored in fast mode.
+        detect_strokes:
+            Detect the faces of the colour trace that were drawn as strokes -- a
+            centreline and one width, with round or butt caps and round or miter joins
+            -- and write each as a stroked path (fill none, one stroke-width) where that
+            describes the face's measured boundary in fewer numbers than its filled
+            outline, at a fit as good within the measurement noise. Line icons come back
+            at about the artist's own parameter count. Quality mode only; off by
+            default.
         merge_colors:
             Colour groups: fills to draw as one, so the shapes between them join rather
             than being recoloured. Empty (the default) changes nothing. Groups are
@@ -207,6 +216,7 @@ def trace_rgba(
     harmonize: bool = True,
     harmonize_threshold: float = 0.92,
     mode: str = "quality",
+    detect_strokes: bool = False,
     merge_colors: str = "",
 ) -> Traced:
     """Trace raw straight-RGBA8 pixels (row-major, tightly packed) to SVG.
@@ -304,6 +314,14 @@ def trace_rgba(
             faithful, with somewhat more parameters. Options that only steer quality
             stages (precision, content_units, harmonize, harmonize_threshold,
             time_budget) are ignored in fast mode.
+        detect_strokes:
+            Detect the faces of the colour trace that were drawn as strokes -- a
+            centreline and one width, with round or butt caps and round or miter joins
+            -- and write each as a stroked path (fill none, one stroke-width) where that
+            describes the face's measured boundary in fewer numbers than its filled
+            outline, at a fit as good within the measurement noise. Line icons come back
+            at about the artist's own parameter count. Quality mode only; off by
+            default.
         merge_colors:
             Colour groups: fills to draw as one, so the shapes between them join rather
             than being recoloured. Empty (the default) changes nothing. Groups are

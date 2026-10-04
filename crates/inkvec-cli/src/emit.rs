@@ -104,7 +104,7 @@ pub(crate) struct ColorDoc<'a> {
     pub layers: Option<Layers<'a>>,
     /// The colour transparent pixels were composited onto before tracing, sRGB 0..1.
     pub matte: [f32; 3],
-    /// Research (`INKVEC_RIBBONS`): faces written as strokes instead of fills, face ->
+    /// `--detect-strokes`: faces written as strokes instead of fills, face ->
     /// finished element text ([`crate::ribbons`]). Empty unless the switch is on, and an
     /// empty map changes nothing below.
     pub ribbons: &'a BTreeMap<usize, String>,
@@ -1289,7 +1289,7 @@ fn seam_overrides(
     (!moved.is_empty()).then_some(moved)
 }
 
-/// Research (`INKVEC_RIBBONS`): the faces written as strokes, appended after every
+/// `--detect-strokes`: the faces written as strokes, appended after every
 /// painted face in face order, each one paint rank above the last, so the underlap sees
 /// them as the upper face against every neighbour and those neighbours reach under them.
 ///

@@ -1,4 +1,4 @@
-//! Stroke-drawn faces as centrelines plus one width (research prototype, `INKVEC_RIBBONS`).
+//! Stroke-drawn faces as centrelines plus one width (`--detect-strokes`, off by default).
 //!
 //! **The problem.** Line art (lucide entirely, openmoji's black outlines, much of every
 //! icon set) is drawn as centrelines `C` with one stroke width `w` and round caps and
@@ -55,8 +55,8 @@
 //! empty margin, row-major.
 //!
 //! **Where it sits.** Quality mode only, after the boundary fits, the crossing repair and
-//! the mirrors, before the emitter; off unless `INKVEC_RIBBONS=1`, so the shipped
-//! pipeline never calls it.
+//! the mirrors, before the emitter; off unless `--detect-strokes`
+//! (`Options::detect_strokes`) asks for it.
 //!
 //! The literature each pass stands on is cited in that pass's module.
 

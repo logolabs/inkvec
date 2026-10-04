@@ -25,7 +25,7 @@ fits the result with `fast::fit` (`crates/inkvec-cli/src/fast.rs:28-45`), which 
 front end; shares stages 01, 06, 07, 10 and 13; skips 08 (the boundary solve,
 `lib.rs:1137`) and 09 (decode, `lib.rs:1152`); and replaces 11 (curve fitting) with its own
 fitter, without 12 (repair) or shape harmonization (`repair_fits`,
-`crates/inkvec-cli/src/pipeline.rs:862`; `emit_options`, `pipeline.rs:511-522`).
+`crates/inkvec-cli/src/pipeline.rs:885`; `emit_options`, `pipeline.rs:515-526`).
 
 ## What problem this solves
 
@@ -112,8 +112,8 @@ figures below are not additive: the clean-up round took
 
 Measured together, `main` `55ee4e0` against the merged tip, per image, mean ms.
 `trace_total` is the stopwatch mark after the trace crate returns (stages 2–5; set in
-`run_color_impl`, `crates/inkvec-cli/src/pipeline.rs:246`); `fit_dp` is the fit (stage 6)
-plus what `finish_color` does before it (`pipeline.rs:359-362`, the mark at `:480`):
+`run_color_impl`, `crates/inkvec-cli/src/pipeline.rs:247`); `fit_dp` is the fit (stage 6)
+plus what `finish_color` does before it (`pipeline.rs:360-363`, the mark at `:484`):
 
 | set | `fit_dp` | `trace_total` |
 |---|---|---|
@@ -732,7 +732,7 @@ and with its seeds reused (`37a4e40`), the ring denoised once (`d3ea154`), and t
 bits by shift and mask (`e183cac`). Outside the fitter's files, and inside the `fit_dp`
 mark: `finish_color` moves the traced labels instead of cloning them, and Fast builds no
 content-unit polylines or λ multipliers unless `--editability` asks for them (`9f290b6`;
-`crates/inkvec-cli/src/pipeline.rs:360-362`, `:631-648`; see `01-intake.md`). Each rewrite keeps the code it
+`crates/inkvec-cli/src/pipeline.rs:361-363`, `:635-658`; see `01-intake.md`). Each rewrite keeps the code it
 replaced as a test reference (`polygon::tests::open_ref` and `closed_ref`,
 `prims::tests::primitive_ref`, `tests::fit_edge_ref`). Identity of the exact tip against
 `main` `55ee4e0`: Fast 464/464 files, Quality 256/256, `--no-background` and `--monochrome`
@@ -871,7 +871,7 @@ the parallel pass would take it off the critical path, but needs 8 bytes per adm
 
 **What it computes.** The SVG document, from the fitted paths, the faces' fills and the
 palette: shared with Quality and documented in `13-emit.md`. Fast turns shape harmonization
-off (`emit_options`, `crates/inkvec-cli/src/pipeline.rs:511-522`). An image traced with its
+off (`emit_options`, `crates/inkvec-cli/src/pipeline.rs:515-526`). An image traced with its
 transparency keeps the native-alpha model: inks carry an opacity and the clear ground is an
 ink of its own (`fast/front.rs:14-16`).
 

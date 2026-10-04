@@ -274,7 +274,7 @@ A face id that is `u16::MAX`, or otherwise `>= map.n_labels`, is silently skippe
 edges are filed (`planar.rs:1274, 1277`) — this is how `inkvec-cli`'s layer-merging code
 removes an edge from every ring without touching its geometry: setting both `left` and
 `right` to `u16::MAX` makes the edge "interior" and it drops out of `face_edge_order`'s
-output entirely (`inkvec-cli/src/lib.rs:927-930`).
+output entirely (`inkvec-cli/src/lib.rs:928-931`).
 
 ## Constants and thresholds
 

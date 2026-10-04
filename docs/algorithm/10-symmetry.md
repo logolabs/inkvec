@@ -225,6 +225,61 @@ Three further functions support the fitting-side half of the symmetry story:
   glyph come back 21.3, 21.4 and 21.3 pixels wide because each was fitted alone, and the
   middle one straddles the axis." (`symmetry.rs:372-374`)
 
+### A boundary that is its own mirror image: `mirror_fit`
+
+`mirror_of` and `centre_primitive` leave one case open: a boundary paired with *itself*
+that is fitted as a path, not a primitive — a closed outline lying across the axis, or an
+open boundary running from a junction on one side to its mirror junction on the other. Its
+points are exactly symmetric after `enforce`, but the dynamic program places its vertices
+where the objective's ties fall, which is not symmetrically. On `lucide/beaker` (the
+`real_symmetry` case of `bench/cases.py`) both outlines straddle the axis and the left top
+corner came back at x = 21.66 against 22.51 for the reflection of the right one; the
+render's mirror residual rose from 7.5e-5 to 2.1e-4 (over the case's 1e-4) when the
+converged boundary solve of 0.2.6 moved the points slightly and the program broke its ties
+differently.
+
+`crates/inkvec-cli/src/mirror_fit.rs` fits such a boundary on one side of the axis and
+reflects the result. `pipeline::fit_boundaries` calls `mirror_fit::choose`
+(`crates/inkvec-cli/src/pipeline.rs:718-726`) for every edge `self_mirrors` names:
+
+1. **The ordinary fit, when it is already symmetric** (every anchor's reflection is an
+   anchor, to 1e-6 px; `choose`, `mirror_fit.rs:217-236`). The program finds the
+   symmetric optimum by itself on most such boundaries.
+2. **Otherwise the fundamental domain** (`half`, `mirror_fit.rs:334-388`): a closed
+   boundary's reflection reverses its direction of travel, so its points pair as
+   `π(i) = s − i mod n` and the involution has exactly two fixed sites, the axis crossings,
+   each a point (`π(i) = i`) or the middle of a piece (`π(i) = i + 1`); an open one pairs as
+   `π(i) = n − 1 − i` and crosses once. The points from one crossing to the next (or from
+   the start to the crossing) are taken, the crossings snapped exactly onto the axis.
+3. **Fitted by the ordinary fitter and reflected** (`fit_side` and `assemble`,
+   `mirror_fit.rs:144-174`, `:398-412`): the half's fit, then its reflection run
+   backwards (`reflect_path`). A half that is itself symmetric under the second mirror is
+   fitted as a quarter, recursively. Both halves are tried (`fit`, `mirror_fit.rs:109-140`;
+   a closed boundary is rotated to start at its other crossing, an open one is reversed),
+   and the one with the lower description length is kept, so neither side is favoured by
+   the order the points happen to be stored in.
+4. **The joins at the axis** (`polish_joins`, `mirror_fit.rs:483-556`): two mirrored lines
+   are tried as one line square to the axis, two circular arcs as one arc of twice the angle
+   with its centre on the axis, and a cubic arriving within `SNAP_DEGREES` = 10° of the axis
+   normal is given exactly that end tangent, so the halves join smoothly. A merge is kept
+   when the description length `½χ² + λ·k` of the whole boundary (`multimodel::path_cost`)
+   does not rise, a tangent snap when it rises by at most λ.
+5. **Kept only when it is no dearer** than the ordinary fit by that same description length
+   (a tie goes to the symmetric fit). Measured on the gate (2026-10-04, the screen set
+   judged at 1024 px, dE00 against v0.2.5): always taking the symmetric fit read −15.41 % /
+   −11.77 % / −7.23 % at 128 / 512 / 512 px opaque, discounting its reflected half's
+   parameters −15.72 % / −11.84 % / −7.23 %, this rule −16.11 % / −11.85 % / −7.24 % on the
+   first half alone and −16.37 % / −11.82 % / −7.24 % with both halves tried, against
+   −15.95 % / −11.68 % / −7.15 % without any of it.
+
+Citations, as the code gives them: the selection is "Method from" J. Rissanen (1978),
+*Modeling by shortest data description*, Automatica 14(5),
+<https://doi.org/10.1016/0005-1098(78)90005-5>; fitting the fundamental domain is "Not from
+the literature" (the rule this module already applies to mirror-paired boundaries, extended
+to a boundary that is its own pair), with "See also" N. J. Mitra, L. J. Guibas, M. Pauly
+(2007), *Symmetrization*, ACM TOG 26(3), <https://doi.org/10.1145/1276377.1276456>, which
+makes approximate symmetries exact by deforming the shape, as `enforce` does to the points.
+
 ## Constants and thresholds
 
 There are none in the numeric-threshold sense. Every test in this module is exact
@@ -236,6 +291,14 @@ deliberate design choice recorded in the module doc, not an omission — see "Wh
 this solves" above.
 
 ## Failure modes and edge cases
+
+- **A self-symmetric boundary whose symmetric fit is dearer keeps its asymmetric ordinary
+  fit** (`mirror_fit::choose`): typically a smooth crossing the ordinary fit spans with one
+  segment that the halves cannot merge back. And the repair stage may refit a boundary
+  whose ring crosses another without regard to its mirror. Fast mode fits nothing through
+  `mirror_fit` (`real_symmetry` fails there, and is not on its ratchet).
+- **Point symmetry (a half turn) is not a mirror** and is neither detected nor kept: the
+  synthetic case `mirror_r` of `bench/cases.py` fails in both modes.
 
 - **A symmetric-looking icon with even one pixel of genuine hand-drawn asymmetry finds no
   mirror at all**, by design — `mirrors_of`'s per-pixel test has no tolerance

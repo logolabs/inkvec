@@ -26,12 +26,12 @@ stage's own reference document — this table only summarizes. Paths are relativ
 
 | name | value | file:line | controls | basis |
 |---|---|---|---|---|
-| `REF_EXTENT` | 128.0 px | `inkvec-cli/src/units.rs:17-31` | intake size every pixel-denominated constant was tuned at; above it `price_in_raster_units` scales `--min-area` and lambda | measured (3.54x/6.02x/11.62x the artist's parameters at 128/256/512 px, `units.rs:17-26`; the guard: 128ss objective 0.4005 -> 0.4112 without it, `inkvec-cli/src/lib.rs:418-424`) |
-| `INTAKE_SCALE_FLOOR` | 1.5 | `inkvec-cli/src/lib.rs:118-120` | below this, `--intake-scale` leaves the input alone | measured (every corpus image reads 1.00) |
-| `INTAKE_SCALE_CAP` | 8.0 | `inkvec-cli/src/lib.rs:121-123` | ceiling on how much `--intake-scale` discards | motivated |
+| `REF_EXTENT` | 128.0 px | `inkvec-cli/src/units.rs:17-31` | intake size every pixel-denominated constant was tuned at; above it `price_in_raster_units` scales `--min-area` and lambda | measured (3.54x/6.02x/11.62x the artist's parameters at 128/256/512 px, `units.rs:17-26`; the guard: 128ss objective 0.4005 -> 0.4112 without it, `inkvec-cli/src/lib.rs:419-425`) |
+| `INTAKE_SCALE_FLOOR` | 1.5 | `inkvec-cli/src/lib.rs:119-121` | below this, `--intake-scale` leaves the input alone | measured (every corpus image reads 1.00) |
+| `INTAKE_SCALE_CAP` | 8.0 | `inkvec-cli/src/lib.rs:122-124` | ceiling on how much `--intake-scale` discards | motivated |
 | `--max-dim` default | 2048 px | `inkvec-cli/src/args.rs:232, 316-320` | ceiling on traced (not emitted) size, applied at decode and again in `intake` | motivated |
-| `--time-budget` split | 0.6 merge / 0.25 boundary-solve | `inkvec-cli/src/pipeline.rs:139-149` | advisory wall-clock split between the two stages that read a clock | none |
-| boundary-solve budget floor | 50 ms | `inkvec-cli/src/pipeline.rs:145` | least wall-clock budget the boundary solve gets under any `--time-budget` | none |
+| `--time-budget` split | 0.6 merge / 0.25 boundary-solve | `inkvec-cli/src/pipeline.rs:140-150` | advisory wall-clock split between the two stages that read a clock | none |
+| boundary-solve budget floor | 50 ms | `inkvec-cli/src/pipeline.rs:146` | least wall-clock budget the boundary solve gets under any `--time-budget` | none |
 | `MAX_FACTOR` (`pixel_grid`) | 32 | `inkvec-cli/src/alpha/unblock.rs:69` | largest replication factor the unblock pre-pass tries | motivated |
 | `smallest` (`pixel_grid`) | 64 px | `inkvec-cli/src/alpha/unblock.rs:78-81` | least side a factor must leave; under 128 px a raster is never unblocked | motivated |
 | block-constant tolerance | 1/512 per channel | `inkvec-cli/src/alpha/unblock.rs:23-25, 188` | how exactly a block must match to count as replication | motivated |
@@ -124,7 +124,7 @@ stage's own reference document — this table only summarizes. Paths are relativ
 
 | name | value | file:line | controls | basis |
 |---|---|---|---|---|
-| `min_region` shipped default | 2 px | `inkvec-cli/src/args.rs:229`, `inkvec-cli/src/pipeline.rs:173`, `inkvec-trace/src/lib.rs:210` | smallest component kept by despeckle; `min_region.max(2)` is the carve's minimum feature size (`inkvec-trace/src/lib.rs:668`); scaled by the oversampling factor squared above `REF_EXTENT` (`inkvec-cli/src/lib.rs:330-344`) | measured (a 9 px colour-mode floor was tried and measured worse, `inkvec-cli/src/pipeline.rs:166-171`) |
+| `min_region` shipped default | 2 px | `inkvec-cli/src/args.rs:229`, `inkvec-cli/src/pipeline.rs:174`, `inkvec-trace/src/lib.rs:210` | smallest component kept by despeckle; `min_region.max(2)` is the carve's minimum feature size (`inkvec-trace/src/lib.rs:668`); scaled by the oversampling factor squared above `REF_EXTENT` (`inkvec-cli/src/lib.rs:331-345`) | measured (a 9 px colour-mode floor was tried and measured worse, `inkvec-cli/src/pipeline.rs:167-172`) |
 | `SADDLE_SIGMAS` | 3.0 | `inkvec-trace/src/regions.rs:40-44` | sigma a corner's coverage must clear 0.5 by before a saddle resolves (research build only) | motivated (a standard "three sigma" bar, not swept) |
 | `MAX_FACES` | 65,535 (`u16::MAX`) | `inkvec-trace/src/regions.rs:205-208` | most faces a face map can number; past it `cap_components` merges the smallest components into their neighbours (`inkvec-trace/src/regions.rs:293-416`) | derived (`u16` face ids, `u16::MAX` reserved for the outside of the image) |
 | absorption rounds | 2 | `inkvec-trace/src/regions.rs:768-769, 792` | rounds of whole-sliver absorption | motivated (one dissolved sliver can leave a neighbour thinner) |

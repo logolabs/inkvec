@@ -21,7 +21,7 @@ path makes the same three measurements (`native.rs:824-829`). Later, `planar::re
 rather than sharing a `CoverageField` object. Fast mode measures none of the three: its front end
 hands the shared stages `NOISE_FLOOR` as the noise (`fast/front.rs:152-163`). `inkvec-cli`'s intake
 reads `intake_scale` and `oversample_factor` to price its options in the raster's own units
-(`price_in_raster_units`, `inkvec-cli/src/lib.rs:328-453`) and resamples with `downsample_to`.
+(`price_in_raster_units`, `inkvec-cli/src/lib.rs:329-454`) and resamples with `downsample_to`.
 There is no stopwatch mark named `coverage`. In the Quality path the stopwatch starts after the
 noise estimate (`inkvec-trace/src/lib.rs:333`), so that estimate falls under no mark, while the
 edge-width and ringing measurements fall inside the `palette` mark (`inkvec-trace/src/lib.rs:409`).
@@ -367,8 +367,8 @@ and the answer is at least `1.0` (`coverage.rs:881`). Measured behaviour (`cover
 exactly 1.00 for native renders at 128, 512 and 1024; 2.39 and 4.00 for 4x and 8x Lanczos
 upsamples; 1.70 and 3.00 for Gaussian blur of 1.0 and 2.0; JPEG reads 1.00. Its consumers are the
 palette's soft-intake gate (`SOFT_INTAKE_EDGE = 1.75`, stage 03), `--intake-scale`
-(`normalise_intake`, `inkvec-cli/src/lib.rs:123-175`) and the edge-width gate in
-`price_in_raster_units` (`inkvec-cli/src/lib.rs:369-388`).
+(`normalise_intake`, `inkvec-cli/src/lib.rs:124-176`) and the edge-width gate in
+`price_in_raster_units` (`inkvec-cli/src/lib.rs:370-389`).
 
 ### `downsample_to` and `box_downsample_rgba8`
 
@@ -378,8 +378,8 @@ with fractional weights on the boundary pixels (`box_resample`, `coverage/resamp
 lives in the `resample` submodule with its 8-bit twin `box_downsample_rgba8`
 (`coverage/resample.rs:43-77`), which reads the decoder's buffer directly for the decode-time
 `--max-dim` cap (`load.rs:443`, `load.rs:500`, `load.rs:552`). Its other callers are `inkvec-cli`'s intake: the unblock pre-pass
-(`inkvec-cli/src/lib.rs:277`), `--intake-scale` (`inkvec-cli/src/lib.rs:169`) and `--max-dim`
-(`inkvec-cli/src/lib.rs:313`). `oversample_factor` does not use it; it box-averages its own `k x k`
+(`inkvec-cli/src/lib.rs:278`), `--intake-scale` (`inkvec-cli/src/lib.rs:170`) and `--max-dim`
+(`inkvec-cli/src/lib.rs:314`). `oversample_factor` does not use it; it box-averages its own `k x k`
 blocks (`coverage/oversample.rs:129-149`).
 
 Its doc comment (`coverage/resample.rs:23-25`) states why it averages in **premultiplied** colour
@@ -465,13 +465,13 @@ disc upscaled 4x still reads at least 4, and a flat 64x64 image reads 8;
 It returns 1 for most native renders at the corpus's 128 px (212 of the 246 screen icons); at
 512 px nearly every native render reads 2 to 8, "which is the speckle floor scaling that caller
 wants" (`coverage/oversample.rs:113-117`). Its callers (`coverage/oversample.rs:4-5`) are
-`inkvec-cli`'s `price_in_raster_units` (`inkvec-cli/src/lib.rs:328-453`, the call at
-`inkvec-cli/src/lib.rs:382`) and `--content-units` (`content_scale`,
+`inkvec-cli`'s `price_in_raster_units` (`inkvec-cli/src/lib.rs:329-454`, the call at
+`inkvec-cli/src/lib.rs:383`) and `--content-units` (`content_scale`,
 `inkvec-cli/src/units.rs:33-78`, the call at `inkvec-cli/src/units.rs:76`). In
 `price_in_raster_units`, with `r` the factor and `R = 128` px the reference extent, precision is
 scaled by `r` only when the edge width exceeds the soft-intake threshold, min-area by `r²` and
-lambda by `r` only when the longest side exceeds `R` (`inkvec-cli/src/lib.rs:328-341`); Fast mode
-reads neither measurement (`inkvec-cli/src/lib.rs:360-366`).
+lambda by `r` only when the longest side exceeds `R` (`inkvec-cli/src/lib.rs:329-342`); Fast mode
+reads neither measurement (`inkvec-cli/src/lib.rs:361-367`).
 
 ## Constants and thresholds
 

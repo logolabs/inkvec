@@ -9,6 +9,16 @@ API in particular should be treated as unstable release to release).
 
 ### Changed
 
+- **Quality mode traces much closer to the artist's file.** With the three changes below together, the regression gate measures dE00 −16.0 % at 128 px, −11.7 % at 512 px and −7.2 % at 512 px opaque against v0.2.5. Parameters fall 1–3.5 % at the same time. Fast mode is unchanged, except −1.6 % at 512 px opaque from the gradient work.
+- **The boundary solve converges.** It used to stop on the size of a backtracked step, often long before the optimum. It now uses a Moré–Thuente line search and stops on the projected gradient and the relative decrease (Byrd et al. 1995), within 64 iterations.
+  - When a step folds two boundaries across each other, only the boundaries in the new crossing are backed off, not the whole solve.
+  - Pixels that two boundaries share now count in the fit.
+  - Art that touches the image border is padded by 2 px while it is fitted, then cropped. Edges at the border are now fitted like any other; before, they scored up to 20 % worse.
+  - On its own, this change measures dE00 −12.2 % at 128 px and −6.2 % at 512 px, and −15.6 % on the held-out icons. Material icons, which regressed at 512 px in 0.2.4, are 4.9 % better. A trace takes about 1.2× as long at 512 px.
+- **Gradients are recovered as the artist drew them more often.** Radial gradient centres are searched under a free profile (after Chakraborty et al. 2025), not a straight ramp, with a Levenberg–Marquardt fit. Two regions are not merged across an edge. A gradient the writer would paint flat is refused, and its interior stops are placed together.
+  - Of 168 gradient icons, 50 % are now recovered as one gradient (42 % before) and 24 % are painted flat (30 % before).
+  - On its own, this change measures dE00 −3.9 % at 512 px.
+- **`--hypotheses` (opt-in) traces three structural alternatives on hard icons and keeps the one with the shortest description** (Rissanen 1978): blend absorption off, a matte instead of native alpha, a tighter merge distance. dE00 is −6.0 % at 128 px for 3.6× the time.
 - **Quality mode's palette matches the artist's more often.** On the regression gate, dE00 is −2.0 % at 128 px and −1.4 % at 512 px. The 512 px opaque condition and Fast mode are unchanged.
   - **One ink stays one colour on upscaled input.** A resampling filter's overshoot rim around a shape was admitted as a second, slightly brighter ink. Such an ink now needs an interior of its own. On the gold crest sample, three golds and notched dots become one gold and 14 clean circles, and the file is 64 % smaller.
   - **Flat fills of one ink are written as one colour.** A flat face within 0.5 dE00 of its ink's best-evidenced face takes that face's colour. On upscaled input, duplicate fills fall by half.

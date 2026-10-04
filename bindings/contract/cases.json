@@ -13,12 +13,12 @@
       },
       "svg": {
         "x86_64-windows-msvc": {
-          "bytes": 9050,
-          "sha256": "6654394b6b4f215d074e519cb9f476a0fed6c32bb8dfc30e4d31735b81477371"
+          "bytes": 8930,
+          "sha256": "61d21e85eb7243faa863d8203ed3effc00dfcdc5651983f8fb6f65d231839327"
         },
         "x86_64-linux-gnu": {
-          "bytes": 9062,
-          "sha256": "2c87ec289eb671516f8efad913e3e5ef55bff37441404a7115713e668b327dad"
+          "bytes": 8942,
+          "sha256": "29616e966673e2c029037a872df8d74bae22c4d6c8a9b1578d5e7377309abe2b"
         }
       }
     },
@@ -36,12 +36,12 @@
       },
       "svg": {
         "x86_64-windows-msvc": {
-          "bytes": 9050,
-          "sha256": "6654394b6b4f215d074e519cb9f476a0fed6c32bb8dfc30e4d31735b81477371"
+          "bytes": 8930,
+          "sha256": "61d21e85eb7243faa863d8203ed3effc00dfcdc5651983f8fb6f65d231839327"
         },
         "x86_64-linux-gnu": {
-          "bytes": 9062,
-          "sha256": "2c87ec289eb671516f8efad913e3e5ef55bff37441404a7115713e668b327dad"
+          "bytes": 8942,
+          "sha256": "29616e966673e2c029037a872df8d74bae22c4d6c8a9b1578d5e7377309abe2b"
         }
       }
     },
@@ -61,12 +61,12 @@
       },
       "svg": {
         "x86_64-windows-msvc": {
-          "bytes": 5916,
-          "sha256": "9f5f1c0aa5c3d9fa0b3a1ee72f87e34e74f6d50f78050c6318a40ca3e4e4b079"
+          "bytes": 5866,
+          "sha256": "34b0959c6bb45accc217e0cc1572c499b23c26db303026464a2acd657f23eabb"
         },
         "x86_64-linux-gnu": {
-          "bytes": 5919,
-          "sha256": "dc8827200a7612c72a97af129abe6958cd2185f71384b7730df2500309818475"
+          "bytes": 5870,
+          "sha256": "1f97c22656c57bb6dca084184ea2eb63fea8e69945b3acead58aa88aae8385df"
         }
       }
     },
@@ -83,12 +83,12 @@
       },
       "svg": {
         "x86_64-windows-msvc": {
-          "bytes": 9070,
-          "sha256": "5d6fbc2e05f77aeedacdb887d48399991764472e924aee53ad0c4313b0eae46f"
+          "bytes": 8950,
+          "sha256": "d6cad56a7fc9eebcba5ade0124afbf89f08fd59edda98cc233d0359e76a58887"
         },
         "x86_64-linux-gnu": {
-          "bytes": 9082,
-          "sha256": "b10731bf692474d4c3357fea98a63145d2e2479a49476f83ab6dffe927a3b639"
+          "bytes": 8962,
+          "sha256": "4277f433de48b8f09703601c9d115ec5dbf5ab5560576fd5e2986ec4c11b07b9"
         }
       }
     },

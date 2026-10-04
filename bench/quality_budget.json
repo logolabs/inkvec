@@ -74,7 +74,7 @@
   "debt_markers": 0,
   "env_reads": 12,
   "lint:clippy::too_many_arguments": 1,
-  "lint:clippy::too_many_lines": 8,
+  "lint:clippy::too_many_lines": 7,
   "lint:clippy::unnecessary_sort_by": 0,
   "lint:missing_docs": 0,
   "lint:unused_qualifications": 0,
@@ -88,7 +88,7 @@
   "mutation:inkvec-trace/gradient": 67,
   "mutation:inkvec-trace/native": 68,
   "rustfmt_hunks": 0,
-  "test_functions": 921,
+  "test_functions": 930,
   "untested_modules": [
     "crates/inkvec-cli/src/alpha.rs",
     "crates/inkvec-cli/src/rings.rs",

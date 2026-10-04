@@ -90,7 +90,14 @@ pub(crate) fn content_scale(img: &inkvec_trace::Rgba, args: &Args) -> f64 {
 /// would reach -- from better points. With `--content-units` off, `s = 1` and this is
 /// `FitConfig::from_precision(extent, precision, tau)` unchanged.
 pub(crate) fn fit_config(img: &inkvec_trace::Rgba, args: &Args) -> FitConfig {
-    let extent = img.width.max(img.height) as f64;
+    fit_config_sized(img, args, img.width.max(img.height))
+}
+
+/// [`fit_config`] with the extent given instead of read off `img`: what a raster traced on a
+/// canvas larger than the one it arrived on uses, so the price of a coordinate is the one
+/// the original raster's size sets, not the larger canvas's.
+pub(crate) fn fit_config_sized(img: &inkvec_trace::Rgba, args: &Args, extent: usize) -> FitConfig {
+    let extent = extent as f64;
     let s = content_scale(img, args);
     let mut cfg = FitConfig::from_precision(extent, args.precision * s, args.tau);
     cfg.lambda *= s;

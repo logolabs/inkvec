@@ -77,7 +77,7 @@ pub use post::post_process;
 use post::retarget;
 pub use std::process::ExitCode;
 use strokes::run_strokes;
-use units::{fit_config, REF_EXTENT};
+use units::{fit_config, fit_config_sized, REF_EXTENT};
 
 use inkvec_trace::load_image_capped;
 use std::path::Path;
@@ -634,6 +634,40 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
         (display_w, display_h)
     };
 
+    let (w, h) = (img.width, img.height);
+    let (svg, mut stats, lambda) = trace_matted(img, args, None)?;
+    if let Some(n) = sr_note {
+        stats.insert(0, n);
+    }
+    if let Some(n) = restore_note {
+        stats.insert(0, n);
+    }
+    let svg = if normalised || (w, h) != (display_w, display_h) {
+        retarget(&svg, display_w, display_h)
+    } else {
+        svg
+    };
+    Ok(Traced {
+        svg,
+        stats,
+        width: w,
+        height: h,
+        lambda: Some(lambda),
+    })
+}
+
+/// The tail of [`trace_prepared_priced`] on one raster: the alpha matte, the fit
+/// configuration and one pipeline. Returns the document, its report lines and the fit's
+/// lambda.
+///
+/// `extent`, when given, is the longest side the fit configuration is priced for instead of
+/// the raster's own: the original raster's, when `img` is that raster embedded in a larger
+/// canvas, so the price of a coordinate (`ln(extent / precision)`) does not move.
+fn trace_matted(
+    img: inkvec_trace::Rgba,
+    args: &Args,
+    extent: Option<usize>,
+) -> Result<(String, Vec<String>, f64), Box<dyn std::error::Error>> {
     // Transparency, once, after every resampling step: put the image against a matte the
     // artwork is not made of and keep the alphas for the emitter. Everything from here
     // traces the matted image, which is written over the input's own buffer: nothing reads
@@ -651,8 +685,6 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
     let cut_args = alpha::cutout_args(args, alpha_src.as_ref());
     let args = &*cut_args;
 
-    let (w, h) = (img.width, img.height);
-
     // Through `fit_config`, not `FitConfig::from_precision` directly, so that
     // `--content-units` applies the whole of its mechanism here and not half of it.
     //
@@ -661,7 +693,10 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
     // extent -- exactly the half that `fit_config`'s doc comment says must not be applied
     // alone. `content_scale` returns 1.0 unless the flag is set, so this is the identity
     // on the default path: `FitConfig::from_precision` with nothing scaled.
-    let cfg = fit_config(img, args);
+    let cfg = match extent {
+        Some(e) => fit_config_sized(img, args, e),
+        None => fit_config(img, args),
+    };
 
     // Line art, emitted the way it was drawn. Tried before the ordinary paths and
     // declines by returning None, so anything that is not a stroked drawing is
@@ -671,31 +706,14 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
     } else {
         None
     };
-    let (svg, mut stats) = if let Some(r) = stroked {
+    let (svg, stats) = if let Some(r) = stroked {
         r
     } else if args.bilevel {
         run_bilevel(img, args, &cfg)
     } else {
         run_color(img, args, &cfg, alpha_src.as_ref())?
     };
-    if let Some(n) = sr_note {
-        stats.insert(0, n);
-    }
-    if let Some(n) = restore_note {
-        stats.insert(0, n);
-    }
-    let svg = if normalised || (w, h) != (display_w, display_h) {
-        retarget(&svg, display_w, display_h)
-    } else {
-        svg
-    };
-    Ok(Traced {
-        svg,
-        stats,
-        width: w,
-        height: h,
-        lambda: Some(cfg.lambda),
-    })
+    Ok((svg, stats, cfg.lambda))
 }
 
 /// The command line's whole job for one file: check the input and output paths, decode

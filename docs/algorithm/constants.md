@@ -89,30 +89,36 @@ stage's own reference document — this table only summarizes. Paths are relativ
 
 | name | value | file:line | controls | basis |
 |---|---|---|---|---|
-| `SAME_INK_DE00` | 1.5 (CIEDE2000) | `inkvec-trace/src/color.rs:251-268` | perceptual floor: colours this close are one ink | measured (swept 1.0 -> 0.4140, 1.5 -> 0.4124 on the screen set) |
-| `SOFT_SAME_INK_DE00` | 5.0 | `inkvec-trace/src/color.rs:493-505` | same-ink floor on soft/oversampled intake | measured (a real brand mark upscaled 4x: 76 fills where the drawing has five) |
-| `SOFT_NOISE_SIGMAS` | 3.0 | `inkvec-trace/src/color.rs:409-417` | noise-merge threshold, gated on soft-intake evidence only | measured (costs 10.9% objective if run unconditionally) |
-| `NOISE_SIGMAS` | 0.0 | `inkvec-trace/src/color.rs:663-680` | clean-intake noise-merge threshold, deliberately off; read at `inkvec-trace/src/lib.rs:357-361` and `inkvec-trace/src/native.rs:837-841` | measured (costs 0.4328 -> 0.4451 on the screen set if always on) |
-| `SOFT_INTAKE_EDGE` | 1.75 px | `inkvec-trace/src/color.rs:398-407` | edge width above which the intake is soft | measured (980-raster corpus edge-width survey: native max 1.50) |
-| `SOFT_RINGING` | 0.12 | `inkvec-trace/src/color.rs:419-434` | ringing score above which the intake is soft (images under `RINGING_MIN_DIM`) | measured (240 clean rasters at 128ss: max 0.1023, highest real artwork 0.0370) |
-| `SOFT_RINGING_LARGE` | 0.05 | `inkvec-trace/src/color.rs:436-449` | the same gate when both sides are at least `RINGING_MIN_DIM` | measured (at 512 px: zero false positives, 88-89% of JPEG caught at q85/60/40) |
-| `RINGING_MIN_DIM` | 256 px | `inkvec-trace/src/color.rs:451-452` | smallest side at which `SOFT_RINGING_LARGE` applies | motivated (the fixed 3-7 px ring isolates one boundary only on larger images; screen set bit-identical below it) |
-| `MEASURED_SIGMA_SCALE` | 1.0 | `inkvec-trace/src/color.rs:454-463` | share of `regularize::residual_sigma` believed when the noise is raised after labelling on a soft intake | measured (78 JPEG-re-encoded-as-PNG traces) |
-| `MEASURED_SIGMA_CAP` | 8.0 levels | `inkvec-trace/src/color.rs:465-491` | ceiling on that measured noise (non-binding: `residual_sigma` clamps itself to 8) | measured (791 traces across all classes) |
+| `SAME_INK_DE00` | 1.5 (CIEDE2000) | `inkvec-trace/src/color.rs:330-347` | perceptual floor: colours this close are one ink | measured (swept 1.0 -> 0.4140, 1.5 -> 0.4124 on the screen set) |
+| `SOFT_SAME_INK_DE00` | 5.0 | `inkvec-trace/src/color.rs:574-586` | same-ink floor on soft/oversampled intake | measured (a real brand mark upscaled 4x: 76 fills where the drawing has five) |
+| `SOFT_NOISE_SIGMAS` | 3.0 | `inkvec-trace/src/color.rs:490-498` | noise-merge threshold, gated on soft-intake evidence only | measured (costs 10.9% objective if run unconditionally) |
+| `NOISE_SIGMAS` | 0.0 | `inkvec-trace/src/color.rs:744-761` | clean-intake noise-merge threshold, deliberately off; read at `inkvec-trace/src/lib.rs:357-361` and `inkvec-trace/src/native.rs:841-845` | measured (costs 0.4328 -> 0.4451 on the screen set if always on) |
+| `SOFT_INTAKE_EDGE` | 1.75 px | `inkvec-trace/src/color.rs:479-488` | edge width above which the intake is soft | measured (980-raster corpus edge-width survey: native max 1.50) |
+| `SOFT_RINGING` | 0.12 | `inkvec-trace/src/color.rs:500-515` | ringing score above which the intake is soft (images under `RINGING_MIN_DIM`) | measured (240 clean rasters at 128ss: max 0.1023, highest real artwork 0.0370) |
+| `SOFT_RINGING_LARGE` | 0.05 | `inkvec-trace/src/color.rs:517-530` | the same gate when both sides are at least `RINGING_MIN_DIM` | measured (at 512 px: zero false positives, 88-89% of JPEG caught at q85/60/40) |
+| `RINGING_MIN_DIM` | 256 px | `inkvec-trace/src/color.rs:532-533` | smallest side at which `SOFT_RINGING_LARGE` applies | motivated (the fixed 3-7 px ring isolates one boundary only on larger images; screen set bit-identical below it) |
+| `MEASURED_SIGMA_SCALE` | 1.0 | `inkvec-trace/src/color.rs:535-544` | share of `regularize::residual_sigma` believed when the noise is raised after labelling on a soft intake | measured (78 JPEG-re-encoded-as-PNG traces) |
+| `MEASURED_SIGMA_CAP` | 8.0 levels | `inkvec-trace/src/color.rs:546-572` | ceiling on that measured noise (non-binding: `residual_sigma` clamps itself to 8) | measured (791 traces across all classes) |
 | `DEFAULT_MERGE_DISTANCE` | 0.035 (OKLab) | `inkvec-trace/src/color.rs:175-200` | palette merge radius | measured (swept 0.055/0.040/0.035/0.030 on the full set; 0.035 best) |
-| `MIN_INK_WEIGHT` | 0.004 | `inkvec-trace/src/color.rs:202-208` | minimum claimed share of the image to count as ink; the first ink is exempt (`color/mdl.rs:214`), and on the transparent-image walk also the first ink that draws something (`native/palette.rs:227-261`) | motivated |
-| `BLEND_INTERIOR_FRACTION` | 0.25 | `inkvec-trace/src/color.rs:210-225` | interior-fraction threshold, anti-aliasing vs. ink | measured (swept against conflicting optima on two corpora) |
-| `BLEND_STRADDLE_FRACTION` | 0.5 | `inkvec-trace/src/color.rs:227-238` | straddle-fraction threshold | motivated |
-| `STRADDLE_STEP` | 0.12 | `inkvec-trace/src/color.rs:239-242` | how far along the A-B axis a neighbour must sit to count as the far side (clipped to half the room left, floor 0.02, `color/mdl.rs:380-383`) | motivated |
-| `BLEND_TMIN` | 0.04 | `inkvec-trace/src/color.rs:507-509` | interior-mixture band on the A-B colour axis (was the env variable `INKVEC_BLEND_TMIN`) | none |
-| blend chord tolerance | 1.6 x `merge_distance` | `inkvec-trace/src/color/mdl.rs:299` | how far (OKLab) a candidate may sit from the chord between two inks and still be a blend of them (same in `native/palette.rs:379`) | none |
-| `JND_FLOOR` | 0.012 (OKLab) | `inkvec-trace/src/color.rs:657-661` | below this, two colours are never treated as separate inks (gates the MDL escape, `color/mdl.rs:238`) | none |
-| `PARAMS_PER_INK` | 3.0 | `inkvec-trace/src/color.rs:244-245` | one parameter per OKLab channel | derived |
-| `BINS` | 24 per OKLab axis | `inkvec-trace/src/color/mdl.rs:394-395` | the candidate grid of `frequency_modes` | none |
-| `STAT_PIXELS` | 65536 | `inkvec-trace/src/color.rs:702-715` | cap on per-candidate statistical pass cost (stride `color.rs:726-743`) | derived (matches the 128px tuning point) |
+| `MIN_INK_WEIGHT` | 0.004 | `inkvec-trace/src/color.rs:202-211` | claimed share under which a candidate is rare and must be represented (`color/represent.rs`); the first ink is never rare (`color/mdl.rs:219`), and on the transparent-image walk neither is the first ink that draws something (`native/palette.rs:228-266`) | motivated |
+| `MIN_VOTES` / `VOTE_SHARE` (`color/represent.rs`) | 8 px / 8 / 16384 | `inkvec-trace/src/color/represent.rs` | unexplained pixels a rare candidate needs: `max(MIN_VOTES, VOTE_SHARE · n)`, 8 px at 128², 128 px at 512² | measured (the research's share sweep: 0.001 and 0.0005 gave the same result; with the mixture test, gate quality-128ss -1.99 %, 512ss -1.37 %) |
+| `MIX_INKS` (`color/represent.rs`) | 4 | `inkvec-trace/src/color/represent.rs` | most inks around a pixel (by neighbour count) its mixture is drawn from, plus the clear ground on the two-ground walk | none |
+| mixture tolerance (`represent::mixture_tolerance`) | `max(3σ, 0.025)` sRGB | `inkvec-trace/src/color/represent.rs` | residual above which a pixel is not explained by the inks around it; the absorption stages' tolerance | derived (same as `regions::absorb_blend_slivers`) |
+| `OVERSHOOT` (`color/represent.rs`) | 0.15 | `inkvec-trace/src/color/represent.rs` | resampling overshoot a pixel may be explained as: 15 % of a chord beyond an end, or an ink scaled by up to 1.15 | measured (Pillow `LANCZOS` 2x: hard step 10.0-10.5 %, anti-aliased 3.7-4.0 %, premultiplied rim 1.108x) |
+| `SNAP_DE00` (`color/snap.rs`) | 0.5 (CIEDE2000) | `inkvec-trace/src/color/snap.rs` | a flat face this close to its ink's colour is painted it | measured (1.5 and 1.0 worse on quality-512ssop, +1.31 % / +1.30 %; 0.5 within noise) |
+| `REP_DE00` (`color/snap.rs`) | 1.5 (= `SAME_INK_DE00`) | `inkvec-trace/src/color/snap.rs` | a face counts as its palette entry's, when the ink's colour is chosen, within this | derived |
+| `BLEND_INTERIOR_FRACTION` | 0.25 | `inkvec-trace/src/color.rs:213-228` | interior-fraction threshold, anti-aliasing vs. ink; also the escape rule's (`escape_needs_interior`, `color.rs:247-321`) | measured (swept against conflicting optima on two corpora; the escape rule: crest 3 inks -> 1, ring2x dE00 -2.4 %) |
+| `BLEND_STRADDLE_FRACTION` | 0.5 | `inkvec-trace/src/color.rs:230-241` | straddle-fraction threshold | motivated |
+| `STRADDLE_STEP` | 0.12 | `inkvec-trace/src/color.rs:242-245` | how far along the A-B axis a neighbour must sit to count as the far side (clipped to half the room left, floor 0.02, `color/mdl.rs:443-446`) | motivated |
+| `BLEND_TMIN` | 0.04 | `inkvec-trace/src/color.rs:588-590` | interior-mixture band on the A-B colour axis (was the env variable `INKVEC_BLEND_TMIN`) | none |
+| blend chord tolerance | 1.6 x `merge_distance` | `inkvec-trace/src/color/mdl.rs:354` | how far (OKLab) a candidate may sit from the chord between two inks and still be a blend of them (same in `native/palette.rs:440`) | none |
+| `JND_FLOOR` | 0.012 (OKLab) | `inkvec-trace/src/color.rs:738-742` | below this, two colours are never treated as separate inks (gates the MDL escape, `color/mdl.rs:241`) | none |
+| `PARAMS_PER_INK` | 3.0 | `inkvec-trace/src/color.rs:323-324` | one parameter per OKLab channel | derived |
+| `BINS` | 24 per OKLab axis | `inkvec-trace/src/color/mdl.rs:457-458` | the candidate grid of `frequency_modes` | none |
+| `STAT_PIXELS` | 65536 | `inkvec-trace/src/color.rs:783-796` | cap on per-candidate statistical pass cost (stride `color.rs:807-824`) | derived (matches the 128px tuning point) |
 | `SPREAD_SAMPLES` | 8192 | `inkvec-trace/src/color/distinct.rs:196-198` | most pixels the spread's median is taken over | motivated |
-| `CLEAR_INK_ALPHA` | 0.02 | `inkvec-trace/src/native.rs:374-375` | opacity at or below which a native ink is the clear ground: not counted against `max_colors`, does not use up the rarity exemption | none |
-| `LEVEL_GAP` / `LEVEL_SPREAD` / `MIN_SHARE` / `CLEAR` (`split_alpha_inks`) | 0.15 / 0.06 / 0.02 / 0.05 | `inkvec-trace/src/color.rs:908-914` | how opacity levels of one ink are cut, kept and snapped to clear (inks with at least 16 pixels, `color.rs:930`) | motivated |
+| `CLEAR_INK_ALPHA` | 0.02 | `inkvec-trace/src/native.rs:376-377` | opacity at or below which a native ink is the clear ground: not counted against `max_colors`, does not use up the rarity exemption | none |
+| `LEVEL_GAP` / `LEVEL_SPREAD` / `MIN_SHARE` / `CLEAR` (`split_alpha_inks`) | 0.15 / 0.06 / 0.02 / 0.05 | `inkvec-trace/src/color.rs:993-999` | how opacity levels of one ink are cut, kept and snapped to clear (inks with at least 16 pixels, `color.rs:1015`) | motivated |
 
 ## 04 — Regions ([04-regions.md](04-regions.md))
 

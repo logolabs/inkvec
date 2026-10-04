@@ -64,6 +64,15 @@
 //!   image like the share it replaces, so a 512 px trace of the same drawing asks the same
 //!   evidence of a pupil as a 128 px one.
 //!
+//! # Measured (gate v2 against v0.2.5, 2026-10-03, with the escape rule and the fill snap)
+//!
+//! quality-128ss dE00 -1.99 % (95 % interval -3.29 % .. -0.85 %, 24 icons better, 8 worse),
+//! quality-512ss -1.37 % (-2.41 % .. -0.35 %), quality-512ssop -0.39 % (non-inferior);
+//! turning and parameters non-inferior everywhere; Fast identical. held_a at 128 px
+//! 0.1365 -> 0.1335 (13 better, 4 worse). Resampled screen set: soft2x -0.32 %, ring2x
+//! +0.38 % (not significant). Trace time, interleaved against the build without it: 0.97x
+//! at 512 px.
+//!
 //! # The frame: the greedy walk with its perceptual floor, not the two-level palette
 //!
 //! Two other admission rules exist. [`super::SAME_INK_DE00`] (shipped) is a perceptual
@@ -138,9 +147,9 @@ pub(crate) fn represented(votes: usize, total_px: f32) -> bool {
 /// Cost: per claimed visited pixel, eight neighbour reads, one mixture over at most five
 /// inks (ten pairs, ten triples) and, for a pixel the mixture leaves unexplained, the
 /// overshoot residual (ten extended pairs, five scalings). A rare candidate claims under
-/// 0.4 % of the visited pixels,
-/// so this is bounded by `0.004 · min(n, STAT_PIXELS)` pixels per candidate. A pixel on the
-/// picture edge simply has fewer neighbours; the outside is not an ink.
+/// 0.4 % of the visited pixels, so this is bounded by `0.004 · min(n, STAT_PIXELS)` pixels
+/// per candidate. A pixel on the picture edge simply has fewer neighbours; the outside is
+/// not an ink.
 pub(crate) fn unexplained<const N: usize>(
     img: &DistinctImage,
     claim: &Claim,

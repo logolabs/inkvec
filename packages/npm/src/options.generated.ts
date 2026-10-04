@@ -111,6 +111,17 @@ export interface Options {
    */
   editability?: boolean;
   /**
+   * Charge a circular arc the seven numbers SVG writes for it (rx ry rotation large-arc
+   * sweep x y) instead of five, keep one curve from standing in for more than 90 degrees
+   * of a circle, and spend parameters slightly more freely (0.8x) to hold the colour
+   * error. Measured on 246 icons: about half the arcs, 1.4% fewer parameters at 512 px and
+   * 4.1% at 128 px, colour error unchanged within noise. Off by default. Ignored in fast
+   * mode.
+   *
+   * @default false
+   */
+  arcs_as_written?: boolean;
+  /**
    * Trace transparency natively: each ink is a colour and an opacity, and the transparent
    * ground is an ink of its own, instead of the image being composited onto a matte first.
    * Holes stay holes, white artwork on a transparent ground traces, glows and shadows stay
@@ -165,8 +176,8 @@ export interface Options {
    * is a Potrace-class fit on the same palette, planar map and emitter, with a one-pass
    * gradient check in place of gradient recovery: several times faster (tens of
    * milliseconds at 512 px), a little less faithful, with somewhat more parameters.
-   * Options that only steer quality stages (precision, content_units, harmonize,
-   * harmonize_threshold, time_budget) are ignored in fast mode.
+   * Options that only steer quality stages (precision, content_units, arcs_as_written,
+   * harmonize, harmonize_threshold, time_budget) are ignored in fast mode.
    *
    * @default "quality"
    */

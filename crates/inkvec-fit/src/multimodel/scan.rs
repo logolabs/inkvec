@@ -264,6 +264,10 @@ struct G1Terms {
     chi2: f64,
     /// [`Cubic::wobble_penalty`], nats.
     wobble: f64,
+    /// [`crate::candidates::over_turn_params`] of its end tangents times `λ`, nats: 0 at the
+    /// default prices. Added like the wobble, after the bounds, which use the bare
+    /// `cubic_floor` and so stay floors.
+    turn: f64,
     /// Arm lengths as fractions of the chord.
     arms: (f64, f64),
 }
@@ -400,7 +404,7 @@ impl<'a> SpanScorer<'a> {
             joins_at_ends,
             circles: Some(CirclePrefix::new(pts, sigma)),
             cubic_floor: cfg.lambda * params_cubic(),
-            arc_floor: cfg.lambda * crate::curves::PARAMS_ARC,
+            arc_floor: cfg.lambda * crate::cost::arc_params(),
             ellipse_floor: cfg.lambda * crate::curves::PARAMS_ELLIPTICAL_ARC,
             debug,
             bounds: !debug && !free_cubic_enabled(),
@@ -473,7 +477,8 @@ impl<'a> SpanScorer<'a> {
         // line: see `bow_penalty`. It is O(1) from the moment sums, so asking costs
         // nothing but the guards.
         // The price floor is a proof, not a heuristic: an arc costs at least its own
-        // 5 lambda, so a span the line already covers for less can never take one.
+        // price (`arc_floor`: 5 lambda, 7 under --arcs-as-written), so a span the line
+        // already covers for less can never take one.
         // Its two uses are the arc itself and the line's bow penalty; when the arc's floor
         // and the line without its penalty both reach `best[j]` neither can be offered,
         // and the ellipse, dearer still, cannot either.
@@ -573,6 +578,7 @@ impl<'a> SpanScorer<'a> {
                 out.g1 = Some(G1Terms {
                     chi2,
                     wobble: cb.wobble_penalty(cfg.lambda),
+                    turn: cfg.lambda * crate::candidates::over_turn_params(t0, tj),
                     arms: (d0, d1),
                 });
             }
@@ -637,7 +643,7 @@ impl<'a> SpanScorer<'a> {
         let mut arc: Option<(f64, f64, f64, bool, bool)> = None;
 
         if let Some(g) = &t.g1 {
-            let cc = base + 0.5 * g.chi2 + cubic_floor + g.wobble;
+            let cc = base + 0.5 * g.chi2 + cubic_floor + g.wobble + g.turn;
             if cc < c {
                 c = cc;
                 k = SegKind::Cubic;
@@ -645,7 +651,11 @@ impl<'a> SpanScorer<'a> {
             }
         }
         if let Some(f) = &t.free {
-            let cc = base + 0.5 * f.chi2 + cubic_floor + f.brk;
+            let cc = base
+                + 0.5 * f.chi2
+                + cubic_floor
+                + f.brk
+                + self.cfg.lambda * crate::candidates::over_turn_params(f.tans.0, f.tans.1);
             if cc < c {
                 c = cc;
                 k = SegKind::Cubic;

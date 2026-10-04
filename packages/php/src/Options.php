@@ -81,6 +81,13 @@ final class Options
      *     default trace; the price measured on 25 icons is about 0.04 dE00. Off by default. The
      *     tracer's default is false; leave it null to use that.
      *
+     * @param bool|null $arcsAsWritten Charge a circular arc the seven numbers SVG writes for
+     *     it (rx ry rotation large-arc sweep x y) instead of five, keep one curve from standing in
+     *     for more than 90 degrees of a circle, and spend parameters slightly more freely (0.8x)
+     *     to hold the colour error. Measured on 246 icons: about half the arcs, 1.4% fewer
+     *     parameters at 512 px and 4.1% at 128 px, colour error unchanged within noise. Off by
+     *     default. Ignored in fast mode. The tracer's default is false; leave it null to use that.
+     *
      * @param bool|null $nativeAlpha Trace transparency natively: each ink is a colour and an
      *     opacity, and the transparent ground is an ink of its own, instead of the image being
      *     composited onto a matte first. Holes stay holes, white artwork on a transparent ground
@@ -119,9 +126,9 @@ final class Options
      *     512 px logo. "fast" is a Potrace-class fit on the same palette, planar map and emitter,
      *     with a one-pass gradient check in place of gradient recovery: several times faster (tens
      *     of milliseconds at 512 px), a little less faithful, with somewhat more parameters.
-     *     Options that only steer quality stages (precision, content_units, harmonize,
-     *     harmonize_threshold, time_budget) are ignored in fast mode. The tracer's default is
-     *     "quality"; leave it null to use that.
+     *     Options that only steer quality stages (precision, content_units, arcs_as_written,
+     *     harmonize, harmonize_threshold, time_budget) are ignored in fast mode. The tracer's
+     *     default is "quality"; leave it null to use that.
      *
      * @param string|null $mergeColors Colour groups: fills to draw as one, so the shapes
      *     between them join rather than being recoloured. Empty (the default) changes nothing.
@@ -144,6 +151,7 @@ final class Options
         public readonly ?bool $monochrome = null,
         public readonly ?bool $minify = null,
         public readonly ?bool $editability = null,
+        public readonly ?bool $arcsAsWritten = null,
         public readonly ?bool $nativeAlpha = null,
         public readonly ?bool $cutout = null,
         public readonly ?bool $contentUnits = null,
@@ -195,6 +203,9 @@ final class Options
         }
         if ($this->editability !== null) {
             $set['editability'] = $this->editability;
+        }
+        if ($this->arcsAsWritten !== null) {
+            $set['arcs_as_written'] = $this->arcsAsWritten;
         }
         if ($this->nativeAlpha !== null) {
             $set['native_alpha'] = $this->nativeAlpha;

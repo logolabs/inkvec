@@ -63,6 +63,13 @@ pub struct CostModel {
     pub cubic_params: f64,
     /// Degrees of turn, at a join, charged as a full corner.
     pub g1_break_degrees: f64,
+    /// Parameters charged for one circular arc: [`crate::curves::PARAMS_ARC`] (5), or
+    /// [`crate::curves::PARAMS_ARC_WRITTEN`] (7) under [`CostModel::with_written_arcs`].
+    pub arc_params: f64,
+    /// The turn, degrees, beyond which one cubic is charged as two
+    /// ([`crate::candidates::over_turn_params`]); infinite, never, unless
+    /// [`CostModel::with_written_arcs`].
+    pub cubic_max_turn_degrees: f64,
 }
 
 impl CostModel {
@@ -77,11 +84,33 @@ impl CostModel {
     pub const STANDARD: CostModel = CostModel {
         cubic_params: 6.0,
         g1_break_degrees: crate::tangents::G1_BREAK_DEGREES,
+        arc_params: crate::curves::PARAMS_ARC,
+        cubic_max_turn_degrees: f64::INFINITY,
     };
 
     /// The process default, [`CostModel::STANDARD`].
     pub fn standard() -> Self {
         Self::STANDARD
+    }
+
+    /// These prices with a circular arc charged the seven numbers SVG writes for it
+    /// ([`crate::curves::PARAMS_ARC_WRITTEN`]) and one cubic charged as two beyond
+    /// [`crate::candidates::CAP_TURN_DEGREES`] of turn (`--arcs-as-written`).
+    ///
+    /// The two go together. At five numbers an arc undercuts a six-number cubic on every
+    /// span where both fit, where the document and the benchmark both count it at seven, so
+    /// the fit writes arcs it believes cheaper and are not (35 % of the segments written on
+    /// the 246-icon screen set against 5.6 % of the artists'). Priced at seven, a round cap
+    /// that was two arcs becomes one cubic over 180 degrees, which the curvature-inflated
+    /// sigma at the cap lets pass with a 0.1 px error at 128 px: lucide caps lost +12 % dE00
+    /// in the r2-compact measurement. The second price is what stops that; see
+    /// [`crate::candidates::over_turn_params`].
+    pub fn with_written_arcs(self) -> Self {
+        CostModel {
+            arc_params: crate::curves::PARAMS_ARC_WRITTEN,
+            cubic_max_turn_degrees: crate::candidates::CAP_TURN_DEGREES,
+            ..self
+        }
     }
 
     /// The standard prices with any that were asked for replaced, and held to their range.
@@ -96,6 +125,7 @@ impl CostModel {
         CostModel {
             cubic_params: pick(cubic_params, std.cubic_params, Self::CUBIC_RANGE),
             g1_break_degrees: pick(g1_break_degrees, std.g1_break_degrees, Self::G1_RANGE),
+            ..std
         }
     }
 }
@@ -108,6 +138,10 @@ const UNSET: u64 = f64::NAN.to_bits();
 static CUBIC: AtomicU64 = AtomicU64::new(UNSET);
 /// The full-corner turn in force, degrees as `f64` bits, or [`UNSET`].
 static G1_DEGREES: AtomicU64 = AtomicU64::new(UNSET);
+/// The circular-arc price in force, as `f64` bits, or [`UNSET`].
+static ARC: AtomicU64 = AtomicU64::new(UNSET);
+/// The cubic's turn limit in force, degrees as `f64` bits, or [`UNSET`].
+static CUBIC_TURN: AtomicU64 = AtomicU64::new(UNSET);
 
 /// Serialises traces that change the prices against every other trace.
 static GATE: RwLock<()> = RwLock::new(());
@@ -132,6 +166,28 @@ pub fn g1_break_radians() -> f64 {
     let bits = G1_DEGREES.load(Ordering::Relaxed);
     let degrees = if bits == UNSET {
         CostModel::standard().g1_break_degrees
+    } else {
+        f64::from_bits(bits)
+    };
+    degrees.to_radians()
+}
+
+/// Parameters charged for a circular arc in the trace that is running.
+pub fn arc_params() -> f64 {
+    let bits = ARC.load(Ordering::Relaxed);
+    if bits == UNSET {
+        CostModel::standard().arc_params
+    } else {
+        f64::from_bits(bits)
+    }
+}
+
+/// The turn, radians, beyond which one cubic is charged as two in the trace that is
+/// running; infinite in the standard model.
+pub fn cubic_max_turn_radians() -> f64 {
+    let bits = CUBIC_TURN.load(Ordering::Relaxed);
+    let degrees = if bits == UNSET {
+        CostModel::standard().cubic_max_turn_degrees
     } else {
         f64::from_bits(bits)
     };
@@ -168,11 +224,15 @@ pub fn with_cost_model<R>(model: CostModel, f: impl FnOnce() -> R) -> R {
         fn drop(&mut self) {
             CUBIC.store(UNSET, Ordering::Relaxed);
             G1_DEGREES.store(UNSET, Ordering::Relaxed);
+            ARC.store(UNSET, Ordering::Relaxed);
+            CUBIC_TURN.store(UNSET, Ordering::Relaxed);
         }
     }
     let _exclusive = GATE.write().unwrap_or_else(|e| e.into_inner());
     CUBIC.store(model.cubic_params.to_bits(), Ordering::Relaxed);
     G1_DEGREES.store(model.g1_break_degrees.to_bits(), Ordering::Relaxed);
+    ARC.store(model.arc_params.to_bits(), Ordering::Relaxed);
+    CUBIC_TURN.store(model.cubic_max_turn_degrees.to_bits(), Ordering::Relaxed);
     let _restore = Restore;
     f()
 }

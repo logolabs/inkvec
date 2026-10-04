@@ -876,7 +876,7 @@ pub fn segment_cost_direct(
             // The same evidence the program charges: a line whose residuals all bow one
             // way is not a line. Computed here from scratch, like everything else in this
             // function.
-            let arc_floor = cfg.lambda * crate::curves::PARAMS_ARC;
+            let arc_floor = cfg.lambda * crate::cost::arc_params();
             let bow = if j >= i + 2 && (plain > arc_floor || chi2 > (j - i) as f64) {
                 let pre = CirclePrefix::new(pts, &poly.sigma);
                 try_arc(pts, tan, &pre, i, j, cfg, joins_at_ends)
@@ -902,7 +902,12 @@ pub fn segment_cost_direct(
                 cfg.lambda,
                 true,
             )
-            .map(|f| 0.5 * f.chi2 + cfg.lambda * params_cubic() + f.brk)
+            .map(|f| {
+                0.5 * f.chi2
+                    + cfg.lambda * params_cubic()
+                    + f.brk
+                    + cfg.lambda * crate::candidates::over_turn_params(f.tans.0, f.tans.1)
+            })
             .unwrap_or(f64::INFINITY);
             match best_cubic(
                 pts,
@@ -927,7 +932,9 @@ pub fn segment_cost_direct(
                         d1,
                     );
                     let wobble = cb.wobble_penalty(cfg.lambda);
-                    (0.5 * chi2 + cfg.lambda * params_cubic() + wobble).min(free)
+                    let turn = cfg.lambda
+                        * crate::candidates::over_turn_params(tan.outgoing[i], tan.incoming[j]);
+                    (0.5 * chi2 + cfg.lambda * params_cubic() + wobble + turn).min(free)
                 }
                 // No admissible G1 arms does not mean no admissible cubic.
                 None => free,

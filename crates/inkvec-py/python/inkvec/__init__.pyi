@@ -66,6 +66,7 @@ def trace(
     monochrome: bool = False,
     minify: bool = False,
     editability: bool = False,
+    arcs_as_written: bool = False,
     native_alpha: bool = True,
     cutout: bool = False,
     content_units: bool = False,
@@ -129,6 +130,13 @@ def trace(
             the source point plus half a pixel, or 1.5 px for a mirror lock -- so the
             picture stays within a fraction of a pixel of the default trace; the price
             measured on 25 icons is about 0.04 dE00. Off by default.
+        arcs_as_written:
+            Charge a circular arc the seven numbers SVG writes for it (rx ry rotation
+            large-arc sweep x y) instead of five, keep one curve from standing in for
+            more than 90 degrees of a circle, and spend parameters slightly more freely
+            (0.8x) to hold the colour error. Measured on 246 icons: about half the arcs,
+            1.4% fewer parameters at 512 px and 4.1% at 128 px, colour error unchanged
+            within noise. Off by default. Ignored in fast mode.
         native_alpha:
             Trace transparency natively: each ink is a colour and an opacity, and the
             transparent ground is an ink of its own, instead of the image being
@@ -166,8 +174,8 @@ def trace(
             and emitter, with a one-pass gradient check in place of gradient recovery:
             several times faster (tens of milliseconds at 512 px), a little less
             faithful, with somewhat more parameters. Options that only steer quality
-            stages (precision, content_units, harmonize, harmonize_threshold,
-            time_budget) are ignored in fast mode.
+            stages (precision, content_units, arcs_as_written, harmonize,
+            harmonize_threshold, time_budget) are ignored in fast mode.
         merge_colors:
             Colour groups: fills to draw as one, so the shapes between them join rather
             than being recoloured. Empty (the default) changes nothing. Groups are
@@ -201,6 +209,7 @@ def trace_rgba(
     monochrome: bool = False,
     minify: bool = False,
     editability: bool = False,
+    arcs_as_written: bool = False,
     native_alpha: bool = True,
     cutout: bool = False,
     content_units: bool = False,
@@ -265,6 +274,13 @@ def trace_rgba(
             the source point plus half a pixel, or 1.5 px for a mirror lock -- so the
             picture stays within a fraction of a pixel of the default trace; the price
             measured on 25 icons is about 0.04 dE00. Off by default.
+        arcs_as_written:
+            Charge a circular arc the seven numbers SVG writes for it (rx ry rotation
+            large-arc sweep x y) instead of five, keep one curve from standing in for
+            more than 90 degrees of a circle, and spend parameters slightly more freely
+            (0.8x) to hold the colour error. Measured on 246 icons: about half the arcs,
+            1.4% fewer parameters at 512 px and 4.1% at 128 px, colour error unchanged
+            within noise. Off by default. Ignored in fast mode.
         native_alpha:
             Trace transparency natively: each ink is a colour and an opacity, and the
             transparent ground is an ink of its own, instead of the image being
@@ -302,8 +318,8 @@ def trace_rgba(
             and emitter, with a one-pass gradient check in place of gradient recovery:
             several times faster (tens of milliseconds at 512 px), a little less
             faithful, with somewhat more parameters. Options that only steer quality
-            stages (precision, content_units, harmonize, harmonize_threshold,
-            time_budget) are ignored in fast mode.
+            stages (precision, content_units, arcs_as_written, harmonize,
+            harmonize_threshold, time_budget) are ignored in fast mode.
         merge_colors:
             Colour groups: fills to draw as one, so the shapes between them join rather
             than being recoloured. Empty (the default) changes nothing. Groups are

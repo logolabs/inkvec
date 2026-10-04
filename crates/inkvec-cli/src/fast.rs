@@ -68,6 +68,7 @@ pub fn fast_ignored(args: &Args) -> Vec<&'static str> {
     check(args.content_units, "--content-units");
     check(args.bezier_cost.is_some(), "--bezier-cost");
     check(args.corner_angle.is_some(), "--corner-angle");
+    check(args.arcs_as_written, "--arcs-as-written");
     check(args.time_budget > 0.0, "--time-budget");
     check(args.simplify_faint, "--simplify-faint");
     check(

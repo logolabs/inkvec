@@ -116,6 +116,16 @@ namespace LogoLabs.Inkvec
         public bool? Editability { get; set; }
 
         /// <summary>
+        /// Charge a circular arc the seven numbers SVG writes for it (rx ry rotation large-arc sweep x
+        /// y) instead of five, keep one curve from standing in for more than 90 degrees of a circle,
+        /// and spend parameters slightly more freely (0.8x) to hold the colour error. Measured on 246
+        /// icons: about half the arcs, 1.4% fewer parameters at 512 px and 4.1% at 128 px, colour error
+        /// unchanged within noise. Off by default. Ignored in fast mode.
+        /// The tracer's default is false; leave this null to use it.
+        /// </summary>
+        public bool? ArcsAsWritten { get; set; }
+
+        /// <summary>
         /// Trace transparency natively: each ink is a colour and an opacity, and the transparent ground
         /// is an ink of its own, instead of the image being composited onto a matte first. Holes stay
         /// holes, white artwork on a transparent ground traces, glows and shadows stay translucent, and
@@ -167,8 +177,8 @@ namespace LogoLabs.Inkvec
         /// class fit on the same palette, planar map and emitter, with a one-pass gradient check in
         /// place of gradient recovery: several times faster (tens of milliseconds at 512 px), a little
         /// less faithful, with somewhat more parameters. Options that only steer quality stages
-        /// (precision, content_units, harmonize, harmonize_threshold, time_budget) are ignored in fast
-        /// mode.
+        /// (precision, content_units, arcs_as_written, harmonize, harmonize_threshold, time_budget) are
+        /// ignored in fast mode.
         /// The tracer's default is "quality"; leave this null to use it.
         /// </summary>
         public string? Mode { get; set; }
@@ -260,6 +270,12 @@ namespace LogoLabs.Inkvec
                 if (!first) sb.Append(',');
                 first = false;
                 sb.Append("\"editability\":").Append(Editability.Value ? "true" : "false");
+            }
+            if (ArcsAsWritten.HasValue)
+            {
+                if (!first) sb.Append(',');
+                first = false;
+                sb.Append("\"arcs_as_written\":").Append(ArcsAsWritten.Value ? "true" : "false");
             }
             if (NativeAlpha.HasValue)
             {

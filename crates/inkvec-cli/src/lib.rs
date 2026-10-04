@@ -459,12 +459,39 @@ pub fn trace_prepared(prepared: Intake) -> Result<Traced, Box<dyn std::error::Er
     // The curve prices are asked for in the settings and held for the whole trace, restorer
     // retrace and all, so every stage that compares a line with a curve compares at the
     // same price. A trace that asks for nothing is not affected.
-    let model = inkvec_fit::cost::CostModel::with_overrides(
+    let mut prepared = prepared;
+    let mut model = inkvec_fit::cost::CostModel::with_overrides(
         prepared.args.bezier_cost,
         prepared.args.corner_angle,
     );
+    if prepared.args.arcs_as_written {
+        model = model.with_written_arcs();
+        prepared.args.lambda_scale *= WRITTEN_ARCS_LAMBDA_SCALE;
+    }
     inkvec_fit::cost::with_cost_model(model, || trace_prepared_priced(prepared))
 }
+
+/// What `--arcs-as-written` multiplies the parameter price `λ` by, on top of any other scale.
+///
+/// Pricing an arc at seven numbers removes about half the arcs a trace writes, and the cubics
+/// and lines that replace them fit a little worse: at `λ` unchanged, dE00 rises 4.1 % at
+/// 128 px and 1.7 % at 512 px on the 246-icon gate set while the parameter ratio falls
+/// 5.9 % and 3.0 %. Spending parameters a little more freely buys the colour back. Swept at
+/// 0.6, 0.7 and 0.8 (2026-10-04, with the arc at seven and the 90° cubic limit):
+///
+/// | scale | dE00 128 / 512 / 512 opaque | ratio 128 / 512 / 512 opaque | drawn turning, 128 px |
+/// |---|---|---|---|
+/// | 0.6 | -7.3 / -2.3 / -1.9 % | -1.4 / +0.3 / +0.2 % | +1.2 % |
+/// | 0.7 | -4.1 / -0.9 / -0.6 % | -2.4 / -0.6 / -0.6 % | +0.6 % |
+/// | 0.8 | -1.5 / -0.5 / +0.8 % | -4.1 / -1.4 / -1.4 % | -0.04 % |
+/// | 1.0 | +4.1 / +1.7 / +1.7 % | -5.9 / -3.0 / -2.9 % | -0.9 % |
+///
+/// 0.8 is the one point where colour is unchanged within the gate's noise and the parameter
+/// ratio is better on all three conditions. Lower scales also make a tangent break cheaper
+/// (a break is charged `λ`), which is where the extra turning comes from. The research
+/// proposal's 0.6 was chosen on the 128 px mean ratio alone. Not from the literature: a
+/// measured re-centring of this project's own exchange rate.
+pub const WRITTEN_ARCS_LAMBDA_SCALE: f64 = 0.8;
 
 /// [`trace_prepared`] under the cost model it installed.
 ///

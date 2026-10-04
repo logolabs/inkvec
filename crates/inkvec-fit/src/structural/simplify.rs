@@ -44,7 +44,7 @@
 //! `INKVEC_STRUCTURAL_MAX_DIST`), and [`simplify_with_poly`] caps it further by the
 //! run's own sigma.
 
-use crate::curves::{arc_ellipse_center, cubic_self_intersects, Segment, PARAMS_ARC};
+use crate::curves::{arc_ellipse_center, cubic_self_intersects, Segment};
 use crate::{FitConfig, FittedPath, PARAMS_LINE};
 use inkvec_core::{Point, Polyline, Vec2};
 
@@ -79,7 +79,7 @@ impl Default for StructuralConfig {
             max_dist: 0.6,
             min_kink_rad: 0.03,
             lambda: 1.0,
-            arc_params: PARAMS_ARC,
+            arc_params: crate::cost::arc_params(),
             max_rounds: 6,
             run_lengths: DEFAULT_RUN_LENGTHS.to_vec(),
         }

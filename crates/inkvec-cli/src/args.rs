@@ -192,6 +192,11 @@ pub struct Args {
     /// lower price buys more curves and fewer straight segments, at some cost in file size.
     /// `None` leaves the fit's own price (6, or `INKVEC_PARAMS_CUBIC`) exactly as it is.
     pub bezier_cost: Option<f64>,
+    /// Price a circular arc at the seven numbers SVG writes for it instead of five, charge one
+    /// cubic that turns more than 90 degrees as two, and scale the parameter price by
+    /// [`crate::WRITTEN_ARCS_LAMBDA_SCALE`] (`inkvec_fit::cost::CostModel::with_written_arcs`). Fewer
+    /// arcs and parameters at the same colour error; off by default.
+    pub arcs_as_written: bool,
     /// The turn at a join, in degrees, that is charged as a full corner. `None` leaves the
     /// fit's own angle (10, or `INKVEC_G1_BREAK`) exactly as it is.
     pub corner_angle: Option<f64>,
@@ -264,6 +269,7 @@ impl Default for Args {
             stroke_residual: 0.06,
             lambda_scale: 1.0,
             bezier_cost: None,
+            arcs_as_written: false,
             corner_angle: None,
             harmonize: true,
             harmonize_threshold: 0.92,
@@ -429,6 +435,10 @@ OPTIONS:
         --bezier-cost <f>   What one Bézier segment costs the MDL objective, in parameters
                             (a line costs 2). Lower draws more curves and fewer straight
                             segments, at some cost in file size. 2 to 12  [default: 6]
+        --arcs-as-written   Price a circular arc at the 7 numbers SVG writes (not 5),
+                            keep one curve from standing in for more than 90 degrees
+                            of a circle, and scale the parameter price by 0.8: fewer
+                            arcs and parameters at the same colour error   [off]
         --corner-angle <f>  The turn at a join, in degrees, charged as a full corner.
                             Higher keeps gentler bends smooth. 1 to 60    [default: 10]
         --no-harmonize      Disable repeating shape harmonization (on by default)
@@ -560,8 +570,7 @@ fn parse_args_from(mut it: impl Iterator<Item = String>) -> Result<Args, String>
             "--simplify-faint" => a.simplify_faint = true,
             "--layers" => a.layers = true,
             "--cutout" => a.cutout = true,
-            "--native-alpha" => a.native_alpha = true,
-            "--no-native-alpha" => a.native_alpha = false,
+            "--native-alpha" | "--no-native-alpha" => a.native_alpha = flag == "--native-alpha",
             "--minify" => a.minify = true,
             "--editability" => a.editability = true,
             "--bilevel" => a.bilevel = true,
@@ -582,10 +591,10 @@ fn parse_args_from(mut it: impl Iterator<Item = String>) -> Result<Args, String>
             "--stroke-refine" => a.stroke_refine = parse_value(&mut it, "--stroke-refine")?,
             "--lambda-scale" => a.lambda_scale = parse_value(&mut it, "--lambda-scale")?,
             "--bezier-cost" => a.bezier_cost = Some(parse_value(&mut it, "--bezier-cost")?),
+            "--arcs-as-written" => a.arcs_as_written = true,
             "--corner-angle" => a.corner_angle = Some(parse_value(&mut it, "--corner-angle")?),
             "--stroke-balance" => a.stroke_balance = parse_value(&mut it, "--stroke-balance")?,
-            "--harmonize" => a.harmonize = true,
-            "--no-harmonize" => a.harmonize = false,
+            "--harmonize" | "--no-harmonize" => a.harmonize = flag == "--harmonize",
             "--harmonize-threshold" => {
                 a.harmonize_threshold = parse_value(&mut it, "--harmonize-threshold")?
             }

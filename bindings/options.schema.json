@@ -74,6 +74,11 @@
       "type": "boolean",
       "default": false
     },
+    "arcs_as_written": {
+      "description": "Charge a circular arc the seven numbers SVG writes for it (rx ry rotation large-arc sweep x y) instead of five, keep one curve from standing in for more than 90 degrees of a circle, and spend parameters slightly more freely (0.8x) to hold the colour error. Measured on 246 icons: about half the arcs, 1.4% fewer parameters at 512 px and 4.1% at 128 px, colour error unchanged within noise. Off by default. Ignored in fast mode.",
+      "type": "boolean",
+      "default": false
+    },
     "native_alpha": {
       "description": "Trace transparency natively: each ink is a colour and an opacity, and the transparent ground is an ink of its own, instead of the image being composited onto a matte first. Holes stay holes, white artwork on a transparent ground traces, glows and shadows stay translucent, and a fade is one gradient of colour and opacity. An opaque input traces the same either way. On by default, as on the command line (where the environment variable INKVEC_NATIVE_ALPHA=0 turns the default off); false composites onto a matte first, as releases up to 0.1.3 did.",
       "type": "boolean",
@@ -103,7 +108,7 @@
       "default": 0.92
     },
     "mode": {
-      "description": "Which engine traces the image. \"quality\" (the default) is the full engine: the best fidelity and the fewest parameters, at about half a second for a 512 px logo. \"fast\" is a Potrace-class fit on the same palette, planar map and emitter, with a one-pass gradient check in place of gradient recovery: several times faster (tens of milliseconds at 512 px), a little less faithful, with somewhat more parameters. Options that only steer quality stages (precision, content_units, harmonize, harmonize_threshold, time_budget) are ignored in fast mode.",
+      "description": "Which engine traces the image. \"quality\" (the default) is the full engine: the best fidelity and the fewest parameters, at about half a second for a 512 px logo. \"fast\" is a Potrace-class fit on the same palette, planar map and emitter, with a one-pass gradient check in place of gradient recovery: several times faster (tens of milliseconds at 512 px), a little less faithful, with somewhat more parameters. Options that only steer quality stages (precision, content_units, arcs_as_written, harmonize, harmonize_threshold, time_budget) are ignored in fast mode.",
       "type": "string",
       "default": "quality",
       "enum": [

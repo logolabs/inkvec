@@ -32,6 +32,7 @@ example rather than derived or measured.
 | 12 | Repair | `cli/rings.rs` | [12-repair.md](12-repair.md) | [12-repair.html](12-repair.html) |
 | 13 | Emit | `cli/emit.rs` | [13-emit.md](13-emit.md) | [13-emit.html](13-emit.html) |
 | 14 | Fast mode | `trace/fast/`, `cli/fast.rs` | [14-fast-mode.md](14-fast-mode.md) | [14-fast-mode.html](14-fast-mode.html) |
+| 15 | Stroke detection (optional) | `trace/ribbon.rs`, `trace/ribbon/`, `cli/ribbons.rs` | [15-strokes.md](15-strokes.md) | [15-strokes.html](15-strokes.html) |
 
 Stages 1–13 follow the default route, Quality mode. Fast mode (`--mode fast`) shares
 stages 1, 6, 7, 10 and 13 with it (and stage 2's coverage reading, which the shared sub-pixel

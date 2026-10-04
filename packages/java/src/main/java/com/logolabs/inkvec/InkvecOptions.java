@@ -31,6 +31,7 @@ public final class InkvecOptions {
     private final double harmonizeThreshold;
     private final String mode;
     private final boolean hypotheses;
+    private final boolean detectStrokes;
     private final String mergeColors;
 
     private InkvecOptions(Builder b) {
@@ -52,6 +53,7 @@ public final class InkvecOptions {
         this.harmonizeThreshold = b.harmonizeThreshold;
         this.mode = b.mode;
         this.hypotheses = b.hypotheses;
+        this.detectStrokes = b.detectStrokes;
         this.mergeColors = b.mergeColors;
     }
 
@@ -290,6 +292,19 @@ public final class InkvecOptions {
     }
 
     /**
+     * Detect the faces of the colour trace that were drawn as strokes -- a centreline and one
+     * width, with round or butt caps and round or miter joins -- and write each as a stroked path
+     * (fill none, one stroke-width) where that describes the face's measured boundary in fewer
+     * numbers than its filled outline, at a fit as good within the measurement noise. Line icons
+     * come back at about the artist's own parameter count. Quality mode only; off by default.
+     *
+     * @default false
+     */
+    public boolean detectStrokes() {
+        return detectStrokes;
+    }
+
+    /**
      * Colour groups: fills to draw as one, so the shapes between them join rather than being
      * recoloured. Empty (the default) changes nothing. Groups are separated by ';' and members by
      * ','; a member is a colour '#rrggbb' as it appears in a trace of the same image, or a
@@ -330,6 +345,7 @@ public final class InkvecOptions {
         sb.append(",\"harmonize_threshold\":").append(harmonizeThreshold);
         sb.append(",\"mode\":").append(jsonString(mode));
         sb.append(",\"hypotheses\":").append(hypotheses);
+        sb.append(",\"detect_strokes\":").append(detectStrokes);
         sb.append(",\"merge_colors\":").append(jsonString(mergeColors));
         sb.append('}');
         return sb.toString();
@@ -402,6 +418,7 @@ public final class InkvecOptions {
         private double harmonizeThreshold = 0.92;
         private String mode = "quality";
         private boolean hypotheses = false;
+        private boolean detectStrokes = false;
         private String mergeColors = "";
 
         private Builder() {
@@ -646,6 +663,20 @@ public final class InkvecOptions {
          */
         public Builder hypotheses(boolean hypotheses) {
             this.hypotheses = hypotheses;
+            return this;
+        }
+
+        /**
+         * Detect the faces of the colour trace that were drawn as strokes -- a centreline and one
+         * width, with round or butt caps and round or miter joins -- and write each as a stroked path
+         * (fill none, one stroke-width) where that describes the face's measured boundary in fewer
+         * numbers than its filled outline, at a fit as good within the measurement noise. Line icons
+         * come back at about the artist's own parameter count. Quality mode only; off by default.
+         *
+         * @default false
+         */
+        public Builder detectStrokes(boolean detectStrokes) {
+            this.detectStrokes = detectStrokes;
             return this;
         }
 

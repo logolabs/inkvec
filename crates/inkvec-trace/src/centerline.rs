@@ -139,7 +139,8 @@ use crate::contour::inflate_for_curvature;
 use crate::coverage::{CoverageField, DEFAULT_SIGMA_MODEL};
 
 mod outline;
-mod skeleton;
+// `pub(crate)` so the stroke stage (`crate::ribbon`) reuses the thinning and branch tracing.
+pub(crate) mod skeleton;
 
 use outline::{
     cross, ms_pairs, offset_outline, others_cover, outline_cover, point_seg, stroke_cost, Window,

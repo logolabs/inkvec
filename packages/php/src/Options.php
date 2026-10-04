@@ -132,6 +132,14 @@ final class Options
      *     % on the hardest tenth). Off by default. The tracer's default is false; leave it null to
      *     use that.
      *
+     * @param bool|null $detectStrokes Detect the faces of the colour trace that were drawn as
+     *     strokes -- a centreline and one width, with round or butt caps and round or miter joins
+     *     -- and write each as a stroked path (fill none, one stroke-width) where that describes
+     *     the face's measured boundary in fewer numbers than its filled outline, at a fit as good
+     *     within the measurement noise. Line icons come back at about the artist's own parameter
+     *     count. Quality mode only; off by default. The tracer's default is false; leave it null
+     *     to use that.
+     *
      * @param string|null $mergeColors Colour groups: fills to draw as one, so the shapes
      *     between them join rather than being recoloured. Empty (the default) changes nothing.
      *     Groups are separated by ';' and members by ','; a member is a colour '#rrggbb' as it
@@ -160,6 +168,7 @@ final class Options
         public readonly ?float $harmonizeThreshold = null,
         public readonly ?string $mode = null,
         public readonly ?bool $hypotheses = null,
+        public readonly ?bool $detectStrokes = null,
         public readonly ?string $mergeColors = null,
     ) {
     }
@@ -226,6 +235,9 @@ final class Options
         }
         if ($this->hypotheses !== null) {
             $set['hypotheses'] = $this->hypotheses;
+        }
+        if ($this->detectStrokes !== null) {
+            $set['detect_strokes'] = $this->detectStrokes;
         }
         if ($this->mergeColors !== null) {
             $set['merge_colors'] = $this->mergeColors;

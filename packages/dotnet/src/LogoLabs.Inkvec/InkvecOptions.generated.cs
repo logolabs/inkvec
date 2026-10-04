@@ -185,6 +185,16 @@ namespace LogoLabs.Inkvec
         public bool? Hypotheses { get; set; }
 
         /// <summary>
+        /// Detect the faces of the colour trace that were drawn as strokes -- a centreline and one
+        /// width, with round or butt caps and round or miter joins -- and write each as a stroked path
+        /// (fill none, one stroke-width) where that describes the face's measured boundary in fewer
+        /// numbers than its filled outline, at a fit as good within the measurement noise. Line icons
+        /// come back at about the artist's own parameter count. Quality mode only; off by default.
+        /// The tracer's default is false; leave this null to use it.
+        /// </summary>
+        public bool? DetectStrokes { get; set; }
+
+        /// <summary>
         /// Colour groups: fills to draw as one, so the shapes between them join rather than being
         /// recoloured. Empty (the default) changes nothing. Groups are separated by ';' and members by
         /// ','; a member is a colour '#rrggbb' as it appears in a trace of the same image, or a
@@ -313,6 +323,12 @@ namespace LogoLabs.Inkvec
                 if (!first) sb.Append(',');
                 first = false;
                 sb.Append("\"hypotheses\":").Append(Hypotheses.Value ? "true" : "false");
+            }
+            if (DetectStrokes.HasValue)
+            {
+                if (!first) sb.Append(',');
+                first = false;
+                sb.Append("\"detect_strokes\":").Append(DetectStrokes.Value ? "true" : "false");
             }
             if (MergeColors != null)
             {

@@ -206,6 +206,15 @@
             }
           },
           {
+            "name": "detect_strokes",
+            "in": "query",
+            "required": false,
+            "description": "Detect the faces of the colour trace that were drawn as strokes -- a centreline and one width, with round or butt caps and round or miter joins -- and write each as a stroked path (fill none, one stroke-width) where that describes the face's measured boundary in fewer numbers than its filled outline, at a fit as good within the measurement noise. Line icons come back at about the artist's own parameter count. Quality mode only; off by default.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
             "name": "merge_colors",
             "in": "query",
             "required": false,
@@ -523,6 +532,11 @@
           },
           "hypotheses": {
             "description": "Also trace three structural alternatives -- blend absorption off, a matte instead of native alpha, and a merge distance of 0.020 -- and keep the trace whose render explains the input in the fewest nats (its squared error at the input's resolution against the best one's, plus a price per parameter). Quality colour mode only; up to four traces, about 3.6 times the trace time at 512 px. Measured on the 246-icon screen set: 6 % closer to the artist's file at 128 px, 1 % at 512 px (9 % on the hardest tenth). Off by default.",
+            "type": "boolean",
+            "default": false
+          },
+          "detect_strokes": {
+            "description": "Detect the faces of the colour trace that were drawn as strokes -- a centreline and one width, with round or butt caps and round or miter joins -- and write each as a stroked path (fill none, one stroke-width) where that describes the face's measured boundary in fewer numbers than its filled outline, at a fit as good within the measurement noise. Line icons come back at about the artist's own parameter count. Quality mode only; off by default.",
             "type": "boolean",
             "default": false
           },

@@ -1,0 +1,959 @@
+//! Stroke-drawn faces as centrelines plus one width (`--detect-strokes`, off by default).
+//!
+//! **The problem.** Line art (lucide entirely, openmoji's black outlines, much of every
+//! icon set) is drawn as centrelines `C` with one stroke width `w` and round caps and
+//! joins. Traced as filled outlines, every stroke costs both of its sides plus its caps:
+//! on lucide the artist's own geometry written as outlines needs 3.87x the artist's
+//! parameters, and the fitter already sits within 6% of that floor (r2-compact research,
+//! 2026-10-02). Lucide is 63.5% of all parameters above 1.5x the artist on the gate's
+//! screen set. No fitting change reaches it; only a change of representation does.
+//!
+//! **The decision this module serves.** For one face of the planar map, find the stroke
+//! description -- centrelines and one width -- that best explains the face's measured
+//! boundary, and report its fit (chi-squared) and its size (parameters). The caller
+//! (`inkvec-cli`'s `ribbons`) compares that against the face's fitted outline by
+//! description length and writes `<path fill="none" stroke=…>` where the stroke is cheaper.
+//!
+//! **The passes**, for one face ([`fit_face`]):
+//!
+//! 1. **Boundary** ([`boundary`]): the face's rings after the boundary solve, with inward
+//!    normals and a segment grid ([`grid`]).
+//! 2. **Width by pairing** ([`boundary`]): every boundary point walks along its inward
+//!    normal to the other side; anti-parallel hits are width samples, and the median's
+//!    core gives `w0` and the share of the outline that is sleeve. Faces where under
+//!    [`MIN_PAIRED_SHARE`] of the outline pairs at one width, or narrower than
+//!    [`MIN_WIDTH`], are declined here.
+//! 3. **Topology** ([`graph`]): a medial graph for topology -- the raster skeleton, or,
+//!    when the skeleton's readings misfit, the chordal axis of the boundary ([`chordal`])
+//!    -- read once per face with a centre sample from the boundary at each node; junctions
+//!    and caps rebuilt from the sleeves, loops closed and sleeves continued through
+//!    junctions; out come polylines of centre samples with sigmas.
+//! 4. **Fit** ([`fit_chain`]): each polyline, thinned to [`CHAIN_SAMPLES_PER_WIDTH`]
+//!    samples per width ([`decimate`]), goes through the same MDL curve fitter the
+//!    outlines use (`inkvec_fit::multimodel`), and a closed one may become a whole
+//!    primitive (circle, ellipse, rounded rectangle) when that is cheaper, exactly as a
+//!    closed outline may. A coarse fit first declines readings that cannot meet the
+//!    caller's budget ([`COARSE_DECLINE`]); fitted centrelines that already cost the
+//!    budget cannot win (the next pass never removes parameters), and a residual above
+//!    [`MAX_PRE_RMS`] of the width is a blob, not a stroke.
+//! 5. **Stroke solve** ([`refine`]): every centreline control point and the width moved
+//!    together, by Levenberg-Marquardt with closed-form Jacobian rows and an envelope
+//!    Cholesky, to explain the measured boundary, with segments split where the boundary
+//!    disagrees and the split pays for itself (screened by the score test before it is
+//!    solved), and no step that gives a cubic a cusp.
+//! 6. **Score** ([`score`]): the strokes' painted outline against every measured boundary
+//!    point, and the face's own interior pixels checked as painted ([`MAX_UNCOVERED`]),
+//!    because a boundary residual cannot see an unpainted inside.
+//!
+//! Passes 3-6 run once with round joins and round caps; when that leaves a boundary point
+//! more than [`MITER_TRIGGER`] px out, once more with miter joins ([`join`]: corners
+//! rebuilt as vertices, corner spurs dropped); and when the better of those has free ends
+//! and leaves a point more than [`BUTT_TRIGGER`] of the width out, once more with butt
+//! caps. The cheapest description by `χ²/2 + λ·k` is returned.
+//!
+//! **Measured** (2026-10-04, against v0.2.5 at 128 px, with the caller's decision, judged
+//! as the gate judges): the screen set's macro dE00 0.1283 -> 0.1163 and parameter ratio
+//! 1.503 -> 0.958 (lucide 0.076 -> 0.022 and 4.19 -> 1.23); held_a 0.1310 -> 0.1186 and
+//! 1.471 -> 1.022. The tracer's report and `INKVEC_RIBBONS_DEBUG` give the per-face
+//! numbers.
+//!
+//! **Data layout.** All coordinates are the traced raster's pixels with pixel centres at
+//! integers. The face mask is a crop of the label map ([`FaceMask`]) with a one-pixel
+//! empty margin, row-major.
+//!
+//! **Where it sits.** Quality mode only, after the boundary fits, the crossing repair and
+//! the mirrors, before the emitter; off unless `--detect-strokes`
+//! (`Options::detect_strokes`) asks for it.
+//!
+//! The literature each pass stands on is cited in that pass's module.
+
+mod boundary;
+mod bvh;
+mod chordal;
+mod dist;
+mod graph;
+mod grid;
+mod join;
+mod refine;
+mod score;
+mod skyline;
+
+pub use join::{Cap, Join, Style};
+pub use score::Score;
+
+use inkvec_core::{Point, Polyline};
+use inkvec_fit::curves::Segment;
+use inkvec_fit::primitives::{fit_primitive_or_arcs, PrimitiveFit};
+use inkvec_fit::{multimodel, FitConfig, FittedPath};
+use rayon::prelude::*;
+
+/// Narrowest stroke considered, px. Below about two pixels a stroke has no interior
+/// pixel of its own, the boundary solve drops its pixels as touched by both sides, and
+/// its two sides are not separately measured; that case is the boundary solve's ribbon
+/// parametrisation (r2-fidelity P2), not this.
+pub const MIN_WIDTH: f64 = 2.0;
+
+/// Share of a face's boundary points that must pair at one width before the face is
+/// treated as stroke-drawn. Lucide outlines pair at 81.5% in the r2 research (caps and
+/// junctions make up the rest); a filled blob pairs only at its own size, and a disc not
+/// at all. It only saves work: everything it lets through is judged by its chi-squared.
+/// At 0.5 it refused lucide's `navigation-2-off` arrow (0.45: sharp tips and a crossing
+/// line), so it sits lower.
+pub const MIN_PAIRED_SHARE: f64 = 0.35;
+
+/// One face's pixels, cropped to its bounding box plus a one-pixel empty margin.
+#[derive(Debug, Clone)]
+pub struct FaceMask {
+    /// Image column of the crop's first column.
+    pub x0: isize,
+    /// Image row of the crop's first row.
+    pub y0: isize,
+    /// Crop width, px.
+    pub w: usize,
+    /// Crop height, px.
+    pub h: usize,
+    /// Per crop pixel, row-major: in the face.
+    pub on: Vec<bool>,
+    /// The whole canvas's width and height, px: its frame cuts faces that run off it.
+    pub canvas: (usize, usize),
+}
+
+impl FaceMask {
+    /// The mask of label `face` in `labels` (row-major, `img_w` wide), cropped to the
+    /// inclusive pixel box `(x0, y0, x1, y1)` plus a one-pixel margin.
+    pub fn from_labels(
+        labels: &[u16],
+        img_w: usize,
+        face: u16,
+        bbox: (usize, usize, usize, usize),
+    ) -> FaceMask {
+        let (x0, y0, x1, y1) = bbox;
+        let (w, h) = (x1 - x0 + 3, y1 - y0 + 3);
+        let mut on = vec![false; w * h];
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                if labels[y * img_w + x] == face {
+                    on[(y - y0 + 1) * w + (x - x0 + 1)] = true;
+                }
+            }
+        }
+        FaceMask {
+            x0: x0 as isize - 1,
+            y0: y0 as isize - 1,
+            w,
+            h,
+            on,
+            canvas: (img_w, labels.len() / img_w.max(1)),
+        }
+    }
+
+    /// Every label's inclusive pixel bounding box, in one pass over `labels`
+    /// (`img_w` x `img_h`); `None` for a label with no pixels or outside `0..n_labels`.
+    #[allow(clippy::type_complexity)]
+    pub fn bounding_boxes(
+        labels: &[u16],
+        img_w: usize,
+        img_h: usize,
+        n_labels: usize,
+    ) -> Vec<Option<(usize, usize, usize, usize)>> {
+        let mut bb: Vec<Option<(usize, usize, usize, usize)>> = vec![None; n_labels];
+        for y in 0..img_h {
+            for x in 0..img_w {
+                let l = labels[y * img_w + x] as usize;
+                if l >= n_labels {
+                    continue;
+                }
+                bb[l] = Some(match bb[l] {
+                    None => (x, y, x, y),
+                    Some((a, b, c, d)) => (a.min(x), b.min(y), c.max(x), d.max(y)),
+                });
+            }
+        }
+        bb
+    }
+
+    /// Pixels in the face.
+    pub fn area(&self) -> usize {
+        self.on.iter().filter(|&&v| v).count()
+    }
+
+    /// Image position of crop pixel index `p` (its centre).
+    fn point_of(&self, p: usize) -> Point {
+        Point::new(
+            (self.x0 + (p % self.w) as isize) as f64,
+            (self.y0 + (p / self.w) as isize) as f64,
+        )
+    }
+
+    /// Whether crop pixel `(cx, cy)` (crop coordinates, may be out of range) is in the face.
+    fn at(&self, cx: isize, cy: isize) -> bool {
+        cx >= 0
+            && cy >= 0
+            && (cx as usize) < self.w
+            && (cy as usize) < self.h
+            && self.on[cy as usize * self.w + cx as usize]
+    }
+
+    /// Whether image point `q` falls in a face pixel (the pixel whose centre is nearest).
+    fn contains(&self, q: Point) -> bool {
+        self.at(
+            q.x.round() as isize - self.x0,
+            q.y.round() as isize - self.y0,
+        )
+    }
+
+    /// Whether image point `q` is in a face pixel or one of its eight neighbours.
+    fn near(&self, q: Point) -> bool {
+        let (cx, cy) = (
+            q.x.round() as isize - self.x0,
+            q.y.round() as isize - self.y0,
+        );
+        (-1..=1).any(|dy| (-1..=1).any(|dx| self.at(cx + dx, cy + dy)))
+    }
+}
+
+/// One fitted centreline: a path, or a whole primitive when that described it more
+/// cheaply (the path then holds the primitive's own segments).
+#[derive(Debug, Clone)]
+pub struct Centreline {
+    /// The centreline's geometry, px.
+    pub path: FittedPath,
+    /// The primitive it is, when one won.
+    pub prim: Option<PrimitiveFit>,
+}
+
+impl Centreline {
+    /// Parameters it costs in the fitter's own currency: the primitive's when it is one,
+    /// else the path's (start point plus each segment).
+    pub fn params(&self) -> f64 {
+        self.prim
+            .as_ref()
+            .map_or_else(|| self.path.params(), |p| p.params)
+    }
+}
+
+/// A face described as strokes.
+#[derive(Debug, Clone)]
+pub struct Ribbon {
+    /// The centrelines.
+    pub lines: Vec<Centreline>,
+    /// The stroke width to write: twice [`Score::half`], px.
+    pub width: f64,
+    /// How the strokes' segments meet (`stroke-linejoin`).
+    pub join: Join,
+    /// How the strokes' open ends are drawn (`stroke-linecap`).
+    pub cap: Cap,
+    /// The width the pairing read, px.
+    pub paired_width: f64,
+    /// Share of the boundary points whose pair agreed with it.
+    pub paired_share: f64,
+    /// How well the strokes explain the face's boundary.
+    pub score: Score,
+    /// Root-mean-square boundary residual before the stroke solve, px (diagnostic).
+    pub pre_rms: f64,
+    /// Interior pixels of the face the strokes leave unpainted ([`MAX_UNCOVERED`]).
+    pub uncovered: usize,
+    /// Boundary points scored.
+    pub points: usize,
+    /// Junctions rebuilt.
+    pub junctions: usize,
+    /// Round caps rebuilt.
+    pub caps: usize,
+    /// Skeleton branches dropped.
+    pub dropped: usize,
+}
+
+impl Ribbon {
+    /// Parameters of the stroke description: every centreline's, plus one for the width.
+    pub fn params(&self) -> f64 {
+        self.lines.iter().map(Centreline::params).sum::<f64>() + 1.0
+    }
+
+    /// Its description length in nats, `χ²/2 + λ·k`, at `lambda` nats per parameter.
+    pub fn cost(&self, lambda: f64) -> f64 {
+        0.5 * self.score.chi2 + lambda * self.params()
+    }
+}
+
+/// Why a face was not described as strokes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Decline {
+    /// No ring with three distinct points.
+    NoBoundary,
+    /// Under [`MIN_PAIRED_SHARE`] of the boundary paired at one width.
+    Unpaired {
+        /// The share that did.
+        share: f64,
+    },
+    /// The paired width is under [`MIN_WIDTH`] px.
+    TooThin {
+        /// The paired width, px.
+        width: f64,
+    },
+    /// The skeleton gave no centreline with a reliable core.
+    NoCentreline,
+    /// The fitted centrelines already cost the caller's budget before any solve.
+    NoGain {
+        /// Their parameters.
+        params: f64,
+    },
+    /// The fitted centrelines are far from the boundary before any solve.
+    Misfit {
+        /// Root-mean-square residual, px.
+        rms: f64,
+    },
+    /// The strokes leave interior pixels of the face unpainted.
+    Uncovered {
+        /// How many.
+        pixels: usize,
+    },
+    /// The solved strokes have a cusp, or (miter joins) a micro-segment or a hairpin a
+    /// renderer would not draw as modelled.
+    Undrawable,
+}
+
+/// Describe the face with boundary `rings` and pixel `mask` as strokes, fitting each
+/// centreline under `cfg`. See the module documentation for the passes.
+///
+/// `rings` are the face's closed boundary walks (any orientation), points with per-point
+/// sigma, px. `budget` is the parameter count the strokes must stay under to be worth
+/// anything (the caller's: what the outline costs); a hypothesis whose fitted
+/// centrelines already reach it before the solve is abandoned, since the solve never
+/// removes parameters and its splits only add them. Returns the stroke description with
+/// its score; whether it is *better* than the outline is the caller's decision.
+pub fn fit_face(
+    rings: &[Polyline],
+    mask: &FaceMask,
+    cfg: &FitConfig,
+    budget: f64,
+) -> Result<Ribbon, Decline> {
+    let mut b =
+        boundary::Boundary::new(rings, &|p| mask.contains(p), 2.0).ok_or(Decline::NoBoundary)?;
+    b.mark_frame(mask.canvas.0, mask.canvas.1);
+    let reach = mask.w.max(mask.h) as f64;
+    let (w0, share) =
+        boundary::stroke_width(&b.pair(reach)).ok_or(Decline::Unpaired { share: 0.0 })?;
+    if share < MIN_PAIRED_SHARE {
+        return Err(Decline::Unpaired { share });
+    }
+    if w0 < MIN_WIDTH {
+        return Err(Decline::TooThin { width: w0 });
+    }
+    let face = Face {
+        medial: graph::medial(&b, mask, w0),
+        b: &b,
+        mask,
+        w0,
+        share,
+    };
+    let round = hypothesis(&face, cfg, budget, Join::Round.into());
+    // A round fit that leaves a boundary point more than a quarter pixel out is also tried
+    // with miter joins: sharp corners are what round joins cannot draw.
+    let try_miter = round
+        .as_ref()
+        .map_or(true, |r| r.score.worst > MITER_TRIGGER);
+    if !try_miter {
+        return round;
+    }
+    let miter = hypothesis(&face, cfg, budget, Join::Miter.into());
+    let best = cheaper(round, miter, cfg.lambda);
+    // A reading with free ends that leaves a boundary point more than a tenth of the width
+    // out is also tried with butt caps: a stroke that stops square, fitted with round
+    // caps, misses each end's two corners by up to (sqrt 2 - 1)/2 of its width.
+    let try_butt = best
+        .as_ref()
+        .is_ok_and(|r| r.caps > 0 && r.score.worst > BUTT_TRIGGER * w0);
+    if !try_butt {
+        return best;
+    }
+    let join = best.as_ref().map_or(Join::Round, |r| r.join);
+    let butt = hypothesis(
+        &face,
+        cfg,
+        budget,
+        Style {
+            join,
+            cap: Cap::Butt,
+        },
+    );
+    cheaper(best, butt, cfg.lambda)
+}
+
+/// The cheaper of two hypotheses by description length `χ²/2 + λ·k` (`lambda` nats per
+/// parameter); `a` on a tie; whichever exists when one was declined, `b`'s decline when
+/// both were.
+fn cheaper(
+    a: Result<Ribbon, Decline>,
+    b: Result<Ribbon, Decline>,
+    lambda: f64,
+) -> Result<Ribbon, Decline> {
+    match (a, b) {
+        (Ok(x), Ok(y)) => Ok(if y.cost(lambda) < x.cost(lambda) {
+            y
+        } else {
+            x
+        }),
+        (Ok(x), Err(_)) => Ok(x),
+        (Err(_), y) => y,
+    }
+}
+
+/// Worst boundary residual of the best reading, as a fraction of the paired width, above
+/// which a face with free ends is also tried with butt caps ([`fit_face`]). A stroke drawn
+/// with round caps and fitted with them leaves a few hundredths of the width (lucide at
+/// 512 px: 0.05-0.6 px of 42.7); one drawn butt and fitted round misses its end corners
+/// by up to `(sqrt 2 - 1)·w/2`, a fifth of the width.
+const BUTT_TRIGGER: f64 = 0.1;
+
+/// Worst boundary residual of the round fit, px, above which the miter hypothesis is
+/// tried as well. Accepted lucide faces (all round) sit at 0.05-0.3 px after the solve.
+const MITER_TRIGGER: f64 = 0.25;
+
+/// Share of a face's pixels (plus two) its strokes may leave unpainted.
+///
+/// The boundary residual sees paint where the face is not (boundary points inside the
+/// strokes) and face beyond the paint *at the boundary*, but not an unpainted interior: a
+/// stroke run along the inside of a blob's outline puts every boundary point at the right
+/// distance and paints a ring. So the face's own pixels are checked as well -- every pixel
+/// centre at least a pixel inside the boundary (clear of the anti-aliased rim the label map
+/// draws either way) must lie within the half-width plus half a pixel of a centreline.
+const MAX_UNCOVERED: f64 = 0.002;
+
+/// Interior pixels of the face (centres at least 1 px inside its measured boundary) that
+/// the strokes leave unpainted: farther than `h + 0.5` px from every centreline under
+/// `join`. At most every second pixel in each direction is tested on faces of over 20000
+/// pixels (the count is scaled back up), which keeps a 512 px face's test to a few
+/// thousand nearest-segment queries.
+fn uncovered(
+    b: &boundary::Boundary,
+    mask: &FaceMask,
+    lines: &[Centreline],
+    h: f64,
+    style: Style,
+) -> f64 {
+    let stride = if mask.area() > 20_000 { 2 } else { 1 };
+    let mut pts = Vec::new();
+    for y in (0..mask.h).step_by(stride) {
+        for x in (0..mask.w).step_by(stride) {
+            if !mask.on[y * mask.w + x] {
+                continue;
+            }
+            let p = mask.point_of(y * mask.w + x);
+            if b.grid.nearest(p, 1.0).is_none() {
+                pts.push(p);
+            }
+        }
+    }
+    let d = refine::point_distances(lines, &pts, h, h + 0.5, style);
+    d.iter().filter(|&&x| x > h + 0.5).count() as f64 * (stride * stride) as f64
+}
+
+/// Largest root-mean-square residual, as a fraction of the paired width, a hypothesis
+/// may have *before* the stroke solve and still be solved. Lucide faces whose topology
+/// is right start at 0.01-0.02 of the width (rms 0.1-0.2 px at 10.7 px); a blob read as
+/// a stroke starts at a quarter or more.
+const MAX_PRE_RMS: f64 = 0.15;
+
+/// One face as every hypothesis and reading of it sees it.
+struct Face<'a> {
+    /// Its measured boundary.
+    b: &'a boundary::Boundary,
+    /// Its pixels.
+    mask: &'a FaceMask,
+    /// Its medial graph and centre samples, read once and shared by every reading.
+    medial: graph::Medial,
+    /// The paired stroke width, px.
+    w0: f64,
+    /// The share of the boundary that paired at it.
+    share: f64,
+}
+
+/// One hypothesis of a face's strokes: topology read with `join`'s rules
+/// ([`graph::TopoOptions`]), every chain fitted ([`fit_chain`]), the stroke solve with
+/// splits ([`refine::solve_adaptive`]), and the score under that join.
+fn hypothesis(face: &Face, cfg: &FitConfig, budget: f64, style: Style) -> Result<Ribbon, Decline> {
+    let w0 = face.w0;
+    // Topology readings tried in turn: round joins first without rebuilt corners (most
+    // tight turns in round line art are arcs of about the half-width), then with them,
+    // for drawings whose sharp corners leave a gap of samples long against the arms
+    // (lucide `circle-arrow-right` at 512 px: w 42.7 px, a chevron of 85 px arms, read
+    // tip to tip without its apex at rms 39 px), then on the chordal axis, for strokes
+    // whose raster skeleton has the wrong topology altogether.
+    let mut readings = match style.join {
+        Join::Round => vec![
+            graph::TopoOptions::round(),
+            graph::TopoOptions::round_cornered(),
+            graph::TopoOptions::chordal_cornered(w0),
+        ],
+        Join::Miter => vec![graph::TopoOptions::miter(w0)],
+    };
+    for r in &mut readings {
+        r.butt = style.cap == Cap::Butt;
+    }
+    let mut last = Err(Decline::NoCentreline);
+    for (i, &opts) in readings.iter().enumerate() {
+        last = reading(face, cfg, budget, style, opts);
+        let retry = matches!(last, Err(Decline::Misfit { .. })) && i + 1 < readings.len();
+        if !retry {
+            break;
+        }
+    }
+    last
+}
+
+/// One topology reading of a face under `join` (see [`hypothesis`]): the passes 3-6 of
+/// the module documentation.
+fn reading(
+    face: &Face,
+    cfg: &FitConfig,
+    budget: f64,
+    style: Style,
+    opts: graph::TopoOptions,
+) -> Result<Ribbon, Decline> {
+    let (b, mask, w0, share) = (face.b, face.mask, face.w0, face.share);
+    let topo = graph::centrelines(&face.medial, b, mask, w0, opts);
+    if inkvec_core::env::flag("INKVEC_RIBBONS_CHAINS") {
+        for c in &topo.chains {
+            let (a, z) = (c.pts[0], c.pts[c.pts.len() - 1]);
+            eprintln!(
+                "    {:?} chain {} pts closed {} from ({:.1},{:.1}) to ({:.1},{:.1})",
+                style.join,
+                c.pts.len(),
+                c.closed,
+                a.x,
+                a.y,
+                z.x,
+                z.y
+            );
+        }
+    }
+    // Each chain is fitted on its own, so the chains are fitted in parallel; `collect`
+    // keeps their order, so the result is the sequential one.
+    let stride = ((w0 / CHAIN_SAMPLES_PER_WIDTH).floor() as usize).max(1);
+    // A coarse fit first: a reading whose centrelines cost well over the budget even at
+    // an eighth of the samples is declined without the full fit ([`COARSE_DECLINE`]).
+    let coarse: f64 = topo
+        .chains
+        .par_iter()
+        .map(|c| decimate(c, COARSE_STRIDE * stride))
+        .filter(|c| c.points.len() >= 2)
+        .map(|c| fit_chain(&c, cfg))
+        .filter(|c| !c.path.segments.is_empty())
+        .map(|c| c.params())
+        .sum::<f64>()
+        + 1.0;
+    if coarse >= COARSE_DECLINE * budget {
+        return Err(Decline::NoGain { params: coarse });
+    }
+    let lines: Vec<Centreline> = topo
+        .chains
+        .par_iter()
+        .map(|c| decimate(c, stride))
+        .filter(|c| c.points.len() >= 2)
+        .map(|c| fit_chain(&c, cfg))
+        .filter(|c| !c.path.segments.is_empty())
+        .collect();
+    if lines.is_empty() {
+        return Err(Decline::NoCentreline);
+    }
+    let k = lines.iter().map(Centreline::params).sum::<f64>() + 1.0;
+    if k >= budget {
+        return Err(Decline::NoGain { params: k });
+    }
+    // A stroke reading of a blob is off by a sizeable fraction of its width almost
+    // everywhere, before any solve; the solve polishes tenths of a pixel, not that.
+    let pre = score::score(b, &lines, w0, None, style);
+    if pre.rms > MAX_PRE_RMS * w0 {
+        return Err(Decline::Misfit { rms: pre.rms });
+    }
+    let (lines, half) = {
+        let (l, h) = refine::solve_adaptive(&lines, 0.5 * w0, b, cfg.lambda, style, budget);
+        (l, Some(h))
+    };
+    if !refine::drawable(&lines, style) {
+        return Err(Decline::Undrawable);
+    }
+    let score = score::score(b, &lines, w0, half, style);
+    let uncovered = uncovered(b, mask, &lines, score.half, style);
+    if uncovered > MAX_UNCOVERED * mask.area() as f64 + 2.0 {
+        return Err(Decline::Uncovered {
+            pixels: uncovered as usize,
+        });
+    }
+    Ok(Ribbon {
+        lines,
+        width: 2.0 * score.half,
+        join: style.join,
+        cap: style.cap,
+        paired_width: w0,
+        paired_share: share,
+        score,
+        pre_rms: pre.rms,
+        uncovered: uncovered as usize,
+        points: b.len(),
+        junctions: topo.junctions,
+        caps: topo.caps,
+        dropped: topo.dropped,
+    })
+}
+
+/// Centre samples kept per stroke width for the curve fitter ([`decimate`]).
+///
+/// The skeleton gives about one centre sample per pixel of centreline, so a chain carries
+/// `w0` samples per stroke width: 10.7 on lucide at 128 px, 42.7 at 512 px. The fitter's
+/// dynamic program grows faster than linearly in the samples and was the stage's largest
+/// cost at 512 px (lucide and openmoji, per icon summed over threads: 170 of 308 ms of
+/// face fitting), while the strokes it starts are re-solved against the full boundary
+/// anyway. Eight per width keeps every sample at 128 px (lucide: stride 1) and every
+/// fifth at 512 px.
+const CHAIN_SAMPLES_PER_WIDTH: f64 = 8.0;
+
+/// How much coarser than the full fit the screening fit is ([`COARSE_DECLINE`]).
+const COARSE_STRIDE: usize = 8;
+
+/// A reading whose centrelines, fitted to every [`COARSE_STRIDE`]-th of the samples the
+/// full fit reads, already cost this many times the caller's budget is declined as
+/// [`Decline::NoGain`] without the full fit.
+///
+/// Most declines for cost are a stroke that encloses a fill (openmoji's black outlines:
+/// the fill writes the inner side either way, so only the outer one can vanish) and they
+/// are clear by a wide margin; their full fits were 40% of openmoji's stage time at 512
+/// px (125 of 332 ms per icon, summed over threads). Measured on every reading of the
+/// screen set at 128 px (1481, of which 391 declined for cost by the full fit): the
+/// coarse fit at 1.25x the budget catches 245 of the 391 and declines none of the
+/// others; on lucide and openmoji at 512 px (400, 112 declined), it catches 79 and
+/// declines 2 of the 288 others. The coarse fit costs about an eighth of the full one.
+///
+/// Not from the literature: a coarse-to-fine early rejection, because no lower bound on
+/// the fitter's parameter count is cheaper than fitting. See also: Viola, Jones (2001),
+/// Rapid object detection using a boosted cascade of simple features, CVPR,
+/// doi:10.1109/CVPR.2001.990517, whose cascade rejects most candidates with its cheapest
+/// stage -- the same economy, with an empirical margin standing in for a trained one.
+const COARSE_DECLINE: f64 = 1.25;
+
+/// Chain `c` as the polyline the curve fitter reads, with its measured samples thinned to
+/// every `stride`-th.
+///
+/// Between consecutive anchors (cap centres, junction points, rebuilt corners: kept
+/// all), the measured samples are cut into runs of `stride`; each run is replaced by its
+/// middle sample with sigma `sqrt(Σσ²)/m` for a run of `m`, so that `(d/σ')²` is the run's
+/// summed `(d/σ_k)²` when its residuals agree -- the chi-squared, and so the description
+/// length the fitter trades against its parameters, keeps its scale. A middle sample
+/// rather than the run's mean: a mean of points along a curve sags towards its centre.
+///
+/// Not from the literature: decimation of correlated samples with the weight they stand
+/// for, because neighbouring centre samples share most of the boundary points they were
+/// read from and do not each carry independent evidence. See also: Kolesnikov (2012),
+/// Segmentation and multi-model approximation of digital curves, Pattern Recognition
+/// Letters 33(9), 1171-1179, doi:10.1016/j.patrec.2012.01.021, the multi-model dynamic
+/// program the fitter implements, whose cost is what the thinning saves.
+fn decimate(c: &graph::Chain, stride: usize) -> Polyline {
+    let closed = c.closed && c.pts.len() >= 3;
+    if stride <= 1 {
+        return Polyline::new(c.pts.clone(), c.sigma.clone(), closed);
+    }
+    let (mut pts, mut sig) = (Vec::new(), Vec::new());
+    let mut run: Vec<usize> = Vec::new();
+    let flush = |run: &mut Vec<usize>, pts: &mut Vec<Point>, sig: &mut Vec<f64>| {
+        for g in run.chunks(stride) {
+            pts.push(c.pts[g[g.len() / 2]]);
+            let ss: f64 = g.iter().map(|&k| c.sigma[k] * c.sigma[k]).sum();
+            sig.push(ss.sqrt() / g.len() as f64);
+        }
+        run.clear();
+    };
+    for k in 0..c.pts.len() {
+        if c.anchor[k] {
+            flush(&mut run, &mut pts, &mut sig);
+            pts.push(c.pts[k]);
+            sig.push(c.sigma[k]);
+        } else {
+            run.push(k);
+        }
+    }
+    flush(&mut run, &mut pts, &mut sig);
+    let closed = closed && pts.len() >= 3;
+    Polyline::new(pts, sig, closed)
+}
+
+/// The chi-squared of measured boundary points against a fitted path by exact nearest
+/// distance (see `score::path_chi2`): the outline's side of the comparison the caller
+/// makes, measured the same way as the strokes' [`Score::chi2`].
+pub fn path_chi2(points: &[Point], sigma: &[f64], path: &FittedPath) -> f64 {
+    score::path_chi2(points, sigma, path)
+}
+
+/// One centre polyline fitted by the outline fitter's MDL dynamic program, or, when it is
+/// closed, by a whole primitive when that costs less: `χ²/2 + λ·k` for both, the same
+/// comparison the pipeline makes for a closed outline (`prefer_primitive`).
+///
+/// A closed chain's curve is closed exactly: the dynamic program opens a loop at a cut
+/// vertex and can return its two copies of that vertex apart (1.8 px on lucide's
+/// `pen-line`), which the outline writer hides behind a `Z` but a stroke would show as two
+/// caps with a notch between them. The last segment's end is moved onto the start; the
+/// stroke solve then refits the geometry round it.
+fn fit_chain(poly: &Polyline, cfg: &FitConfig) -> Centreline {
+    let mut curve = multimodel::optimal_multimodel(poly, cfg);
+    if poly.closed {
+        curve.closed = true;
+        let start = curve.start;
+        if let Some(last) = curve.segments.last_mut() {
+            match last {
+                Segment::Line(p) | Segment::Cubic(_, _, p) | Segment::Arc { end: p, .. } => {
+                    *p = start
+                }
+            }
+        }
+        let path_cost = 0.5
+            * inkvec_fit::curves::chi2(&poly.points, &poly.sigma, curve.start, &curve.segments)
+            + cfg.lambda * curve.params();
+        if let Some((segs, prim, cost)) =
+            fit_primitive_or_arcs(&poly.points, &poly.sigma, true, cfg)
+        {
+            if cost < path_cost {
+                return Centreline {
+                    path: FittedPath {
+                        start: poly.points[0],
+                        segments: segs,
+                        closed: true,
+                    },
+                    prim,
+                };
+            }
+        }
+    }
+    Centreline {
+        path: curve,
+        prim: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A rasterised round-capped straight stroke along `centre` (its first and last
+    /// points), half-width `h`, on an `n` x `n` image: its label map (1 = ink, by pixel
+    /// centre) and its exact outline as one dense ring.
+    fn stroke_face(centre: &[Point], h: f64, n: usize) -> (Vec<u16>, Vec<Polyline>) {
+        let dist = |p: Point| -> f64 {
+            centre
+                .windows(2)
+                .map(|s| grid::point_segment(p, s[0], s[1]).0)
+                .fold(f64::INFINITY, f64::min)
+        };
+        let labels: Vec<u16> = (0..n * n)
+            .map(|i| u16::from(dist(Point::new((i % n) as f64, (i / n) as f64)) <= h))
+            .collect();
+        // The outline of a straight stroke from `a` to `b`: one side, the cap round `b`,
+        // the other side, the cap round `a`, every ~0.25 px.
+        let (a, b) = (centre[0], centre[centre.len() - 1]);
+        let len = a.dist(b);
+        let (ux, uy) = ((b.x - a.x) / len, (b.y - a.y) / len);
+        let at = |o: Point, c: f64, s: f64| {
+            Point::new(o.x + h * (c * ux - s * uy), o.y + h * (c * uy + s * ux))
+        };
+        let mut pts: Vec<Point> = Vec::new();
+        let ns = (len / 0.25) as usize;
+        let nc = 60;
+        for i in 0..ns {
+            let f = i as f64 / ns as f64;
+            pts.push(at(
+                Point::new(a.x + f * (b.x - a.x), a.y + f * (b.y - a.y)),
+                0.0,
+                -1.0,
+            ));
+        }
+        for j in 0..nc {
+            let t = -std::f64::consts::FRAC_PI_2 + std::f64::consts::PI * j as f64 / nc as f64;
+            pts.push(at(b, t.cos(), t.sin()));
+        }
+        for i in 0..ns {
+            let f = i as f64 / ns as f64;
+            pts.push(at(
+                Point::new(b.x + f * (a.x - b.x), b.y + f * (a.y - b.y)),
+                0.0,
+                1.0,
+            ));
+        }
+        for j in 0..nc {
+            let t = std::f64::consts::FRAC_PI_2 + std::f64::consts::PI * j as f64 / nc as f64;
+            pts.push(at(a, t.cos(), t.sin()));
+        }
+        let ring = Polyline::with_uniform_sigma(pts, 0.05, true);
+        (labels, vec![ring])
+    }
+
+    #[test]
+    fn a_straight_stroke_comes_back_as_one_line_and_its_width() {
+        let centre = [Point::new(12.0, 30.0), Point::new(48.0, 30.0)];
+        let (labels, rings) = stroke_face(&centre, 4.0, 64);
+        let bb = FaceMask::bounding_boxes(&labels, 64, 64, 2);
+        let mask = FaceMask::from_labels(&labels, 64, 1, bb[1].expect("ink"));
+        let cfg = FitConfig::from_precision(64.0, 0.1, 2.0);
+        let r = fit_face(&rings, &mask, &cfg, f64::INFINITY).expect("a stroke");
+        assert!((r.width - 8.0).abs() < 0.05, "width {}", r.width);
+        assert_eq!(r.lines.len(), 1);
+        let p = &r.lines[0].path;
+        let (s, e) = (p.start, p.end());
+        let (l, rr) = if s.x < e.x { (s, e) } else { (e, s) };
+        assert!(
+            l.dist(centre[0]) < 0.3 && rr.dist(centre[1]) < 0.3,
+            "{s:?} {e:?}"
+        );
+        assert!(r.score.worst < 0.3, "{:?}", r.score);
+    }
+
+    #[test]
+    fn a_square_ended_stroke_comes_back_with_butt_caps() {
+        // A bar x in [12, 48], y in [26, 34]: a stroke from (12, 30) to (48, 30), width 8,
+        // with butt caps. Its outline as one dense ring.
+        let n = 64;
+        let labels: Vec<u16> = (0..n * n)
+            .map(|i| {
+                let (x, y) = ((i % n) as f64, (i / n) as f64);
+                u16::from((12.0..=48.0).contains(&x) && (26.0..=34.0).contains(&y))
+            })
+            .collect();
+        let (x0, x1, y0, y1) = (11.5, 48.5, 25.5, 34.5);
+        let mut pts = Vec::new();
+        let mut run = |a: Point, b: Point| {
+            let k = (a.dist(b) / 0.25).ceil() as usize;
+            for i in 0..k {
+                let t = i as f64 / k as f64;
+                pts.push(Point::new(a.x + t * (b.x - a.x), a.y + t * (b.y - a.y)));
+            }
+        };
+        run(Point::new(x0, y0), Point::new(x1, y0));
+        run(Point::new(x1, y0), Point::new(x1, y1));
+        run(Point::new(x1, y1), Point::new(x0, y1));
+        run(Point::new(x0, y1), Point::new(x0, y0));
+        let ring = Polyline::with_uniform_sigma(pts, 0.05, true);
+        let bb = FaceMask::bounding_boxes(&labels, n, n, 2);
+        let mask = FaceMask::from_labels(&labels, n, 1, bb[1].expect("ink"));
+        let cfg = FitConfig::from_precision(64.0, 0.1, 2.0);
+        let r = fit_face(&[ring], &mask, &cfg, f64::INFINITY).expect("a stroke");
+        assert_eq!(r.cap, Cap::Butt, "{r:?}");
+        assert!((r.width - 9.0).abs() < 0.1, "width {}", r.width);
+        let p = &r.lines[0].path;
+        let (s, e) = (p.start, p.end());
+        let (l, rr) = if s.x < e.x { (s, e) } else { (e, s) };
+        assert!(
+            (l.x - x0).abs() < 0.2 && (rr.x - x1).abs() < 0.2,
+            "{s:?} {e:?}"
+        );
+        assert!(r.score.worst < 0.2, "{:?}", r.score);
+    }
+
+    #[test]
+    fn a_disc_is_declined() {
+        let n = 40;
+        let labels: Vec<u16> = (0..n * n)
+            .map(|i| {
+                u16::from(
+                    Point::new((i % n) as f64, (i / n) as f64).dist(Point::new(20.0, 20.0)) <= 12.0,
+                )
+            })
+            .collect();
+        let ring = Polyline::with_uniform_sigma(
+            (0..400)
+                .map(|k| {
+                    let t = std::f64::consts::TAU * k as f64 / 400.0;
+                    Point::new(20.0 + 12.0 * t.cos(), 20.0 + 12.0 * t.sin())
+                })
+                .collect(),
+            0.05,
+            true,
+        );
+        let bb = FaceMask::bounding_boxes(&labels, n, n, 2);
+        let mask = FaceMask::from_labels(&labels, n, 1, bb[1].expect("ink"));
+        let cfg = FitConfig::from_precision(40.0, 0.1, 2.0);
+        assert!(fit_face(&[ring], &mask, &cfg, f64::INFINITY).is_err());
+    }
+
+    #[test]
+    fn decimation_keeps_anchors_and_the_chi_squared_scale() {
+        // 1 anchor, 10 measured samples, 1 anchor, 3 measured, 1 anchor.
+        let n = 16;
+        let anchor: Vec<bool> = (0..n).map(|k| k == 0 || k == 11 || k == 15).collect();
+        let c = graph::Chain {
+            pts: (0..n).map(|k| Point::new(k as f64, 0.0)).collect(),
+            sigma: (0..n).map(|k| if anchor[k] { 0.25 } else { 0.1 }).collect(),
+            anchor: anchor.clone(),
+            closed: false,
+        };
+        let same = decimate(&c, 1);
+        assert_eq!(same.points, c.pts);
+        assert_eq!(same.sigma, c.sigma);
+        let d = decimate(&c, 4);
+        // Runs of 10 -> 4, 4, 2 and of 3 -> 3: middle samples 3, 7, 10 and 13.
+        let xs: Vec<f64> = d.points.iter().map(|p| p.x).collect();
+        assert_eq!(xs, vec![0.0, 3.0, 7.0, 10.0, 11.0, 13.0, 15.0]);
+        // A run of m samples of sigma 0.1 stands for them all: 0.1/sqrt(m).
+        assert!((d.sigma[1] - 0.1 / 2.0).abs() < 1e-12);
+        assert!((d.sigma[3] - 0.1 / 2f64.sqrt()).abs() < 1e-12);
+        assert!((d.sigma[5] - 0.1 / 3f64.sqrt()).abs() < 1e-12);
+        assert_eq!((d.sigma[0], d.sigma[4], d.sigma[6]), (0.25, 0.25, 0.25));
+    }
+
+    #[test]
+    fn mask_crops_with_a_margin() {
+        let labels = vec![0u16, 0, 0, 0, 1, 1, 0, 0, 0];
+        let bb = FaceMask::bounding_boxes(&labels, 3, 3, 2);
+        assert_eq!(bb[1], Some((1, 1, 2, 1)));
+        let m = FaceMask::from_labels(&labels, 3, 1, bb[1].expect("box"));
+        assert_eq!((m.w, m.h, m.x0, m.y0), (4, 3, 0, 0));
+        assert_eq!(m.area(), 2);
+        assert!(m.contains(Point::new(1.2, 0.9)) && !m.contains(Point::new(0.0, 0.0)));
+        assert!(m.near(Point::new(0.0, 0.0)));
+    }
+
+    #[test]
+    fn a_blob_painted_as_a_ring_is_uncovered() {
+        // A 30 x 30 square face, and a closed square centreline 3 px inside its edge with
+        // half-width 3: the boundary is explained exactly, the middle is not painted.
+        let n = 40;
+        let labels: Vec<u16> = (0..n * n)
+            .map(|i| u16::from((5..35).contains(&(i % n)) && (5..35).contains(&(i / n))))
+            .collect();
+        let bb = FaceMask::bounding_boxes(&labels, n, n, 2);
+        let mask = FaceMask::from_labels(&labels, n, 1, bb[1].expect("ink"));
+        let c = [(4.5, 4.5), (34.5, 4.5), (34.5, 34.5), (4.5, 34.5)];
+        let mut pts = Vec::new();
+        for k in 0..4 {
+            let (a, b) = (c[k], c[(k + 1) & 3]);
+            for i in 0..120 {
+                let t = i as f64 / 120.0;
+                pts.push(Point::new(a.0 + t * (b.0 - a.0), a.1 + t * (b.1 - a.1)));
+            }
+        }
+        let ring = Polyline::with_uniform_sigma(pts, 0.05, true);
+        let b = boundary::Boundary::new(&[ring], &|p| mask.contains(p), 2.0).expect("a ring");
+        let sq = |o: f64| FittedPath {
+            start: Point::new(4.5 + o, 4.5 + o),
+            segments: vec![
+                Segment::Line(Point::new(34.5 - o, 4.5 + o)),
+                Segment::Line(Point::new(34.5 - o, 34.5 - o)),
+                Segment::Line(Point::new(4.5 + o, 34.5 - o)),
+                Segment::Line(Point::new(4.5 + o, 4.5 + o)),
+            ],
+            closed: true,
+        };
+        let ring_stroke = [Centreline {
+            path: sq(3.0),
+            prim: None,
+        }];
+        let gap = uncovered(&b, &mask, &ring_stroke, 3.0, Join::Miter.into());
+        assert!(gap > 100.0, "{gap} pixels unpainted");
+        // One horizontal stroke as wide as the square paints all of it.
+        let fat = [Centreline {
+            path: FittedPath {
+                start: Point::new(5.0, 19.5),
+                segments: vec![Segment::Line(Point::new(34.0, 19.5))],
+                closed: false,
+            },
+            prim: None,
+        }];
+        assert_eq!(uncovered(&b, &mask, &fat, 15.5, Join::Miter.into()), 0.0);
+    }
+}

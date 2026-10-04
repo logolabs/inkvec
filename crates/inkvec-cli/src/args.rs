@@ -175,6 +175,10 @@ pub struct Args {
     /// Emit line art as strokes -- one path and one width -- instead of as filled
     /// outlines. Declines silently on anything else.
     pub strokes: bool,
+    /// Detect faces of the colour trace that were drawn as strokes -- a centreline and
+    /// one width, round or butt caps, round or miter joins -- and write each as a stroked
+    /// path where that is the shorter description of its boundary. Quality mode only.
+    pub detect_strokes: bool,
     /// Least share of the input's ink the strokes must actually draw, in [0, 1],
     /// or the drawing falls back to outlines.
     pub stroke_balance: f64,
@@ -263,6 +267,7 @@ impl Default for Args {
             restore_command: None,
             intake_scale: false,
             strokes: false,
+            detect_strokes: false,
             stroke_balance: 0.90,
             stroke_refine: 0,
             // Per stroke against its own region, which is where it discriminates. Pooled
@@ -427,6 +432,10 @@ OPTIONS:
                             instead of as filled outlines. 28% of the corpus is
                             drawn this way and costs 3.3x the artist's parameters
                             as outlines. Declines silently on anything else.
+        --detect-strokes    Write the faces of the colour trace that were drawn as
+                            strokes (a centreline and one width) as stroked paths,
+                            wherever that describes their boundary in fewer numbers
+                            at no worse a fit. Quality mode only
         --stroke-balance <f>   Least share of the input's ink the strokes must
                             actually draw, or the drawing falls back to outlines
                             [default: 0.90]
@@ -574,8 +583,7 @@ fn parse_args_from(mut it: impl Iterator<Item = String>) -> Result<Args, String>
             "--simplify-faint" => a.simplify_faint = true,
             "--layers" => a.layers = true,
             "--cutout" => a.cutout = true,
-            "--native-alpha" => a.native_alpha = true,
-            "--no-native-alpha" => a.native_alpha = false,
+            "--native-alpha" | "--no-native-alpha" => a.native_alpha = flag == "--native-alpha",
             "--minify" => a.minify = true,
             "--editability" => a.editability = true,
             "--bilevel" => a.bilevel = true,
@@ -592,6 +600,7 @@ fn parse_args_from(mut it: impl Iterator<Item = String>) -> Result<Args, String>
             "--sr-no-recolour" => a.sr_no_recolour = true,
             "--intake-scale" => a.intake_scale = true,
             "--strokes" => a.strokes = true,
+            "--detect-strokes" => a.detect_strokes = true,
             "--stroke-residual" => a.stroke_residual = parse_value(&mut it, "--stroke-residual")?,
             "--stroke-refine" => a.stroke_refine = parse_value(&mut it, "--stroke-refine")?,
             "--lambda-scale" => a.lambda_scale = parse_value(&mut it, "--lambda-scale")?,

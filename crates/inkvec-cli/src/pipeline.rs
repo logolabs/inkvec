@@ -419,9 +419,13 @@ fn finish_color(
         fades: &alpha.fades,
         layers: None,
         matte: alpha.matte,
+        ribbons: &Default::default(),
         w,
         h,
     };
+    // `--detect-strokes` (off by default): stroke-drawn faces written as strokes.
+    let ribbons = crate::ribbons::stage(args, cfg, fast, &doc, &map, &traced_labels);
+    let doc = doc.with_ribbons(&ribbons.elements);
     // Monochrome: the ink faces as one black shape, from the same fitted edges. It replaces
     // the colour document, and with it the layer form, which only ever repaints colours.
     let (svg, mono_line) = if args.monochrome {

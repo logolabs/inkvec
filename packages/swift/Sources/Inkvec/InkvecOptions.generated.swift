@@ -156,6 +156,16 @@ public struct InkvecOptions: Codable, Hashable, Sendable {
     /// Default: `false`.
     public var hypotheses: Bool?
 
+    /// Detect the faces of the colour trace that were drawn as strokes -- a centreline and one
+    /// width, with round or butt caps and round or miter joins -- and write each as a stroked
+    /// path (fill none, one stroke-width) where that describes the face's measured boundary in
+    /// fewer numbers than its filled outline, at a fit as good within the measurement noise.
+    /// Line icons come back at about the artist's own parameter count. Quality mode only; off
+    /// by default.
+    ///
+    /// Default: `false`.
+    public var detectStrokes: Bool?
+
     /// Colour groups: fills to draw as one, so the shapes between them join rather than being
     /// recoloured. Empty (the default) changes nothing. Groups are separated by ';' and members
     /// by ','; a member is a colour '#rrggbb' as it appears in a trace of the same image, or a
@@ -187,6 +197,7 @@ public struct InkvecOptions: Codable, Hashable, Sendable {
         harmonizeThreshold: Double? = nil,
         mode: String? = nil,
         hypotheses: Bool? = nil,
+        detectStrokes: Bool? = nil,
         mergeColors: String? = nil
     ) {
         self.precision = precision
@@ -207,6 +218,7 @@ public struct InkvecOptions: Codable, Hashable, Sendable {
         self.harmonizeThreshold = harmonizeThreshold
         self.mode = mode
         self.hypotheses = hypotheses
+        self.detectStrokes = detectStrokes
         self.mergeColors = mergeColors
     }
 
@@ -229,6 +241,7 @@ public struct InkvecOptions: Codable, Hashable, Sendable {
         case harmonizeThreshold = "harmonize_threshold"
         case mode
         case hypotheses
+        case detectStrokes = "detect_strokes"
         case mergeColors = "merge_colors"
     }
 }

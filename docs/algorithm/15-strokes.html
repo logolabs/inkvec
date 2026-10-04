@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stroke detection — inkvec</title>
+<link rel="stylesheet" href="assets/doc.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="masthead">
+    <p class="eyebrow">Stage 15 (optional, off by default)</p>
+    <h1>Lines drawn as lines: one centreline and one width</h1>
+    <p class="standfirst">A line icon is drawn with a pen: a path down the middle of each
+      line and one line width for all of them. Traced as filled shapes, every line costs
+      both of its edges and its rounded ends, about four times the numbers the artist wrote.
+      With <code>--detect-strokes</code> (or <code>detect_strokes</code> in the options),
+      the tracer looks for shapes that were drawn this way and writes them back as lines —
+      but only where that is both shorter and as faithful as the filled outline.</p>
+    <p class="pairlink">Technical reference: <a href="15-strokes.md">15-strokes.md</a></p>
+  </header>
+  <main>
+
+    <section>
+      <h2>The same shape, two ways to write it</h2>
+      <p>A finished trace stores every coloured area as its outline. For a line of the
+        drawing, the outline is two long edges side by side plus a cap at each end. A line
+        written the way the artist drew it is a single path down its middle and one number
+        for its width; the SVG renderer paints the edges and the round ends itself.</p>
+      <figure>
+        <svg viewBox="0 0 640 200" role="img" aria-label="Left: a curved line drawn as a filled outline, its two edges and two rounded ends marked as separate curves. Right: the same line as one centreline with a width, three curves fewer per side.">
+          <g transform="translate(30,30)">
+            <path d="M20,120 C80,20 180,20 240,110" fill="none" stroke="var(--ink)" stroke-opacity="0.18" stroke-width="34" stroke-linecap="round"/>
+            <path d="M5,110 C66,7 194,7 255,100" fill="none" stroke="var(--ink)" stroke-width="2"/>
+            <path d="M35,130 C94,33 166,33 225,120" fill="none" stroke="var(--ink)" stroke-width="2"/>
+            <path d="M5,110 A17,17 0 0,0 35,130" class="fig-accent-stroke" stroke-width="2.5"/>
+            <path d="M255,100 A17,17 0 0,1 225,120" class="fig-accent-stroke" stroke-width="2.5"/>
+            <text x="130" y="168" class="fig-label" text-anchor="middle">filled outline: two edges, two caps</text>
+          </g>
+          <g transform="translate(350,30)">
+            <path d="M20,120 C80,20 180,20 240,110" fill="none" stroke="var(--ink)" stroke-opacity="0.18" stroke-width="34" stroke-linecap="round"/>
+            <path d="M20,120 C80,20 180,20 240,110" class="fig-accent-stroke" stroke-width="2.5"/>
+            <text x="130" y="168" class="fig-label" text-anchor="middle">stroke: one centreline, one width</text>
+          </g>
+        </svg>
+        <figcaption><b>Half the edges, none of the caps.</b> On lucide's icons the stroke
+          form brings the number count from about four times the artist's to about the
+          artist's own.</figcaption>
+      </figure>
+    </section>
+
+    <section>
+      <h2>Finding the two edges of a line</h2>
+      <p>The tracer already knows every edge of every shape to a few hundredths of a pixel.
+        From each point of an edge it walks straight inward until it meets the opposite
+        edge. If that edge faces back the other way, the two are the two sides of a line, and
+        the distance walked is the line's width. When most of a shape's edge pairs up at the
+        same width, the shape is a candidate stroke; a blob or a disc pairs at all sorts of
+        widths, or not at all, and is left alone.</p>
+      <p>The middle of each pair is a point on the centreline. Where lines meet, turn sharply
+        or end, the pairs break down; there the tracer rebuilds the junction from where the
+        lines leading into it would meet, and each end from the farthest edge point of its
+        rounded cap.</p>
+    </section>
+
+    <section>
+      <h2>When the shape is too thick to thin</h2>
+      <p>Which centrelines a shape has — where its lines branch and end — is read first from
+        a "skeleton": the shape's pixels peeled away from the outside until one-pixel-wide
+        lines remain. That works for thin lines but fails for lines that are thick compared
+        with their length. A check mark drawn with a 43-pixel pen on arms of 60 and 121
+        pixels peels down to a short stub, and the V is lost.</p>
+      <p>For such shapes the tracer reads the structure from the outline itself instead. It
+        joins the outline's points into triangles (a constrained Delaunay triangulation, in
+        which every edge of the outline is a side of some triangle). A triangle with one
+        outline side lies along a line; one with two is the tip of a line; one with none is
+        where lines meet. The path through the middles of the triangles' inner sides is the
+        "chordal axis", and its branches are the lines. The check mark comes back as one path
+        with a corner — 14 numbers, the artist's own count, where the filled outline took
+        92.</p>
+    </section>
+
+    <section>
+      <h2>Fitting the lines to the edges</h2>
+      <p>Each centreline is first drawn through its middle points by the same curve fitter
+        that draws outlines. Then all the centrelines and the width are moved together until
+        the edges the lines would paint sit on the measured edges — a least-squares fit,
+        solved by the Levenberg-Marquardt method. Where a stretch of edge still disagrees, a
+        curve is split in two and the fit run again; the split is kept only if it pays for
+        the numbers it adds.</p>
+      <p>The ends and corners of a line can be drawn several ways, and the tracer tries the
+        ones SVG offers: round or mitred corners, round or flat ("butt") ends, keeping
+        whichever describes the shape more cheaply.</p>
+      <p>This fitting is the stage's main cost, and most of the work on it went into making
+        it fast without changing what it finds: the solver now uses exact derivatives
+        instead of numerical ones, solves its equations in a form that skips the zeros,
+        finds the nearest piece of line for each edge point with a search tree instead of a
+        grid, measures the edge points in parallel, and checks whether a split can pay before
+        fitting it. On lucide and openmoji icons at 512 pixels these steps took the stage
+        from about ten times the rest of the trace to well under one.</p>
+    </section>
+
+    <section>
+      <h2>The decision</h2>
+      <p>A shape becomes a stroke when the stroke form is the shorter description — fewer
+        numbers, weighed against how well each form matches the measured edge in the same
+        currency the curve fitter uses — and when it matches the edge about as well as the
+        outline does. The second test was added after two shapes came back wrong: a gear
+        outlined with rounded corners, read as a line with sharp corners, and a puzzle piece
+        whose curved parts are slightly wider than its straight ones. Neither is really drawn
+        with one pen, and both now stay filled shapes.</p>
+      <p>The stage is off by default while it is measured on more drawings.</p>
+    </section>
+
+  </main>
+  <nav class="stages">
+    <a href="00-overview.html">Overview</a>
+    <a href="01-intake.html">1 Intake</a>
+    <a href="02-coverage.html">2 Coverage</a>
+    <a href="03-palette.html">3 Palette</a>
+    <a href="04-regions.html">4 Regions</a>
+    <a href="05-gradients.html">5 Gradients</a>
+    <a href="06-planar-map.html">6 Planar map</a>
+    <a href="07-subpixel.html">7 Sub-pixel</a>
+    <a href="08-boundary-solve.html">8 Boundary solve</a>
+    <a href="09-decode.html">9 Decode</a>
+    <a href="10-symmetry.html">10 Symmetry</a>
+    <a href="11-fitting.html">11 Curve fitting</a>
+    <a href="12-repair.html">12 Repair</a>
+    <a href="13-emit.html">13 Emit</a>
+    <a href="14-fast-mode.html">14 Fast mode</a>
+    <a href="15-strokes.html" aria-current="page">15 Strokes</a>
+    <a href="constants.md">Constants</a>
+  </nav>
+</div>
+</body>
+</html>

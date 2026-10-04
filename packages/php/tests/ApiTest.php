@@ -69,6 +69,7 @@ final class ApiTest extends TestCase
             harmonizeThreshold: 0.92,
             mode: 'quality',
             hypotheses: false,
+            detectStrokes: false,
             mergeColors: '',
         ))->toArray());
         self::assertSame(array_keys($schema['properties']), $typed);

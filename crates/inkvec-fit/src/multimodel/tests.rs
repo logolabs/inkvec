@@ -82,7 +82,7 @@ fn open_l_is_two_lines_costing_exactly_five_lambda() {
     .concat();
     for lambda in [1.0, 3.5] {
         let poly = Polyline::with_uniform_sigma(pts.clone(), 0.05, false);
-        let fit = optimal_multimodel_impl(&poly, &cfg(lambda), usize::MAX, false);
+        let fit = optimal_multimodel_impl(&poly, &cfg(lambda), &Limits::capped(usize::MAX), false);
         assert_eq!(fit.vertices, vec![0, 10, 20]);
         assert_eq!(fit.kinds, vec![SegKind::Line, SegKind::Line]);
         assert!(
@@ -110,7 +110,7 @@ fn closed_square_is_four_lines_costing_exactly_twelve_lambda() {
         pts.extend_from_slice(&side[..12]);
     }
     let poly = Polyline::with_uniform_sigma(pts, 0.05, true);
-    let fit = optimal_multimodel_impl(&poly, &cfg(2.0), usize::MAX, false);
+    let fit = optimal_multimodel_impl(&poly, &cfg(2.0), &Limits::capped(usize::MAX), false);
     let mut corners: Vec<usize> = fit.vertices.clone();
     corners.sort_unstable();
     corners.dedup();
@@ -128,7 +128,7 @@ fn open_quarter_circle_is_one_arc_costing_five_lambda() {
     pts.extend(arc_after(Point::new(0.0, 0.0), 0.0, 10.0, 90.0, 12));
     let poly = Polyline::with_uniform_sigma(pts, 0.02, false);
     let lambda = 2.0;
-    let fit = optimal_multimodel_impl(&poly, &cfg(lambda), usize::MAX, false);
+    let fit = optimal_multimodel_impl(&poly, &cfg(lambda), &Limits::capped(usize::MAX), false);
     assert_eq!(fit.vertices, vec![0, 12]);
     assert_eq!(fit.kinds, vec![SegKind::Arc]);
     assert!(close(fit.cost, 5.0 * lambda, 1e-6), "cost {}", fit.cost);
@@ -161,7 +161,7 @@ fn line_into_tangent_arc_breaks_at_the_tangent_point() {
     pts.extend(arc_after(Point::new(0.0, 0.0), 0.0, 10.0, 90.0, 16));
     let poly = Polyline::with_uniform_sigma(pts, 0.005, false);
     let lambda = 2.0;
-    let fit = optimal_multimodel_impl(&poly, &cfg(lambda), usize::MAX, false);
+    let fit = optimal_multimodel_impl(&poly, &cfg(lambda), &Limits::capped(usize::MAX), false);
     assert_eq!(fit.vertices, vec![0, 10, 26]);
     assert_eq!(fit.kinds, vec![SegKind::Line, SegKind::Arc]);
     // 2λ + 5λ plus whatever the tangent estimator's small disagreement at a curvature
@@ -243,7 +243,7 @@ fn closed_costs(pts: &[Point], sigma: f64, lambda: f64) -> (f64, f64) {
     let want = brute_force_closed(&poly, &c);
     assert!(want.is_finite(), "no finite segmentation");
     (
-        optimal_multimodel_impl(&poly, &c, usize::MAX, false).cost,
+        optimal_multimodel_impl(&poly, &c, &Limits::capped(usize::MAX), false).cost,
         want,
     )
 }
@@ -324,13 +324,13 @@ fn above_the_point_cap_the_program_runs_on_the_decimated_grid() {
     let poly = Polyline::with_uniform_sigma(pts, 0.02, false);
     let lambda = 1.5;
     let fit = with_dp_max_points(16, || {
-        optimal_multimodel_impl(&poly, &cfg(lambda), usize::MAX, false)
+        optimal_multimodel_impl(&poly, &cfg(lambda), &Limits::capped(usize::MAX), false)
     });
     assert_eq!(fit.vertices, vec![0, 39]);
     assert_eq!(fit.kinds, vec![SegKind::Line]);
     assert!(close(fit.cost, 2.0 * lambda, 1e-9), "cost {}", fit.cost);
     // Without the cap the same input is not one free line: the off-axis points cost.
-    let full = optimal_multimodel_impl(&poly, &cfg(lambda), usize::MAX, false);
+    let full = optimal_multimodel_impl(&poly, &cfg(lambda), &Limits::capped(usize::MAX), false);
     assert!(full.cost > 2.0 * lambda + 0.1, "full cost {}", full.cost);
 }
 
@@ -342,11 +342,92 @@ fn a_span_cap_is_never_decimated() {
         .map(|k| Point::new(k as f64, 2.0 * ((k as f64) * 0.7).sin()))
         .collect();
     let poly = Polyline::with_uniform_sigma(pts.clone(), 0.1, false);
-    let fit = with_dp_max_points(16, || optimal_multimodel_impl(&poly, &cfg(1.0), 1, false));
+    let fit = with_dp_max_points(16, || {
+        optimal_multimodel_impl(&poly, &cfg(1.0), &Limits::capped(1), false)
+    });
     assert_eq!(fit.vertices, (0..40).collect::<Vec<_>>());
     assert_eq!(fit.path.segments.len(), 39);
     for (s, p) in fit.path.segments.iter().zip(&pts[1..]) {
         assert!(end_of(s).dist(*p) < 1e-9);
+    }
+}
+
+// --- forced vertices -----------------------------------------------------------------
+
+/// A wobbly open run and a lobed closed ring, the shapes the crossing repair refits.
+fn pinned_shapes() -> Vec<Polyline> {
+    let open: Vec<Point> = (0..90)
+        .map(|k| Point::new(k as f64, 6.0 * ((k as f64) * 0.11).sin()))
+        .collect();
+    let n = 120;
+    let ring: Vec<Point> = (0..n)
+        .map(|k| {
+            let t = k as f64 / n as f64 * std::f64::consts::TAU;
+            let r = 30.0 + 4.0 * (3.0 * t).sin();
+            Point::new(r * t.cos(), r * t.sin())
+        })
+        .collect();
+    vec![
+        Polyline::with_uniform_sigma(open, 0.06, false),
+        Polyline::with_uniform_sigma(ring, 0.06, true),
+    ]
+}
+
+/// Every forced vertex is a vertex of the solution and the emitted path passes through its
+/// measured point (both neighbours are curves here, so `refine` does not move it), uncapped
+/// (merged afterwards, pins kept) and capped; and on the open run the solution costs no less
+/// than the free one, which it is a restriction of. (On a loop the free program is the
+/// two-cut heuristic, which a forced cut can beat.)
+#[test]
+fn forced_vertices_are_kept_through_the_merge() {
+    for poly in pinned_shapes() {
+        let n = poly.len();
+        let forced = [n / 5, n / 2 + 3, (4 * n) / 5];
+        let free = optimal_multimodel_capped_full(&poly, &cfg(2.5), n);
+        for max_span in [usize::MAX, n, 25] {
+            let fit = optimal_multimodel_forced(&poly, &cfg(2.5), max_span, &forced);
+            for &f in &forced {
+                assert!(fit.vertices.contains(&f), "{f} not in {:?}", fit.vertices);
+                let mut at = fit.path.start;
+                let mut hit = at.dist(poly.points[f]) < 1e-9;
+                for s in &fit.path.segments {
+                    at = end_of(s);
+                    hit |= at.dist(poly.points[f]) < 1e-9;
+                }
+                assert!(
+                    hit,
+                    "the path misses forced point {f} (closed {})",
+                    poly.closed
+                );
+            }
+            if !poly.closed {
+                assert!(fit.cost >= free.cost - 1e-9, "{} < {}", fit.cost, free.cost);
+            }
+        }
+    }
+}
+
+/// With nothing forced the program is the one the repair used before: the capped program
+/// under a cap below the point count, and the free one without a cap. The ends of an open
+/// boundary, out-of-range indices and duplicates force nothing.
+#[test]
+fn forcing_nothing_is_the_capped_or_free_program() {
+    for poly in pinned_shapes() {
+        let n = poly.len();
+        let bits = |f: &MultimodelFit| (f.vertices.clone(), f.kinds.clone(), f.cost.to_bits());
+        let capped = optimal_multimodel_capped_full(&poly, &cfg(2.0), 9);
+        assert_eq!(
+            bits(&optimal_multimodel_forced(&poly, &cfg(2.0), 9, &[])),
+            bits(&capped)
+        );
+        let free = optimal_multimodel_full(&poly, &cfg(2.0));
+        let none = optimal_multimodel_forced(&poly, &cfg(2.0), usize::MAX, &[]);
+        assert_eq!(bits(&none), bits(&free));
+        assert_eq!(none.path.segments.len(), free.path.segments.len());
+        if !poly.closed {
+            let ends = optimal_multimodel_forced(&poly, &cfg(2.0), 9, &[0, n - 1, n + 4, 0]);
+            assert_eq!(bits(&ends), bits(&capped));
+        }
     }
 }
 

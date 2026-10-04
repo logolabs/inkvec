@@ -1,14 +1,16 @@
 # Stage 12 — Repair
 
 > Finds every ring a face's fitted boundary makes that crosses itself, and refits only the
-> guilty edges — under a shrinking span cap — until none do.
+> guilty edges — each pinned at a measured point beside its crossing, or under a shrinking
+> span cap, whichever the fit's own objective prices lower — until none do.
 
-**Source:** `crates/inkvec-cli/src/rings.rs` (detection and orchestration),
-`crates/inkvec-fit/src/simple.rs` (the crossing test and its per-boundary sibling),
-`crates/inkvec-fit/src/multimodel.rs` (`optimal_multimodel_capped`, the constrained DP)
-**Entry point:** `repair_ring_crossings()` (`crates/inkvec-cli/src/rings.rs:58-63`)
+**Source:** `crates/inkvec-cli/src/rings.rs` (detection, pinning and orchestration),
+`crates/inkvec-fit/src/simple.rs` (the crossing test, where each crossing is, and the
+per-boundary sibling), `crates/inkvec-fit/src/multimodel.rs` (`optimal_multimodel_capped`
+and `optimal_multimodel_forced`, the constrained DP)
+**Entry point:** `repair_ring_crossings()` (`crates/inkvec-cli/src/rings.rs:276`)
 **Pipeline position:** after curve fitting (stage 11), before fill assignment (stage mark
-`"fills"`). Stage mark `"repair"` (`crates/inkvec-cli/src/lib.rs:1043`).
+`"fills"`). Stage mark `"repair"` (`crates/inkvec-cli/src/pipeline.rs:498`).
 
 ## What problem this solves
 
@@ -40,7 +42,7 @@ scale of the defect:
 > change."
 
 The crossing is almost never contained inside one edge's own fit — it is between two
-*different edges* of the same face ring. `ring_as_path`'s doc (`rings.rs:458-464`):
+*different edges* of the same face ring. `ring_as_path`'s doc (`rings.rs:660-666`):
 
 > "Needed because a self-crossing on a real boundary is almost never inside one edge's fit.
 > Repairing per edge — refitting any edge whose own curve crossed itself — changed 5 images
@@ -54,7 +56,7 @@ unit the defect can be seen in at all.
 inverts" — the strongest statement in the source is that a self-crossing ring is "invalid,
 resolved arbitrarily by whichever fill rule applies, and unpleasant to edit"
 (`simple.rs:24`, restated in `tests/self_intersection.rs:6-7` and in `repair_fits`'s doc,
-`crates/inkvec-cli/src/pipeline.rs:803-808`). The mechanism behind that arbitrariness is this
+`crates/inkvec-cli/src/pipeline.rs:831-836`). The mechanism behind that arbitrariness is this
 document's reading of the fill rules (SVG 1.1 §11.3), not a code comment. Since 2026-10 the
 emitter winds every ring of a compound path by its nesting depth and writes no `fill-rule`, so
 the default `nonzero` rule paints exactly what `evenodd` would; `fill-rule="evenodd"` remains
@@ -83,31 +85,93 @@ pub(crate) fn repair_ring_crossings(
 ```
 
 - `order: &[FaceRings]` — every face's rings, each ring a sequence of `(edge_index,
-  reversed)` pairs (`Ring = Vec<(usize, bool)>`, `crates/inkvec-cli/src/lib.rs:43-51`); edges
+  reversed)` pairs (`Ring = Vec<(usize, bool)>`, `crates/inkvec-cli/src/faces.rs:18`); edges
   are shared between the two faces on either side of them.
 - `fitted: &mut [FittedPath]` — one fitted curve per edge, mutated in place.
 - `polys: &[Polyline]` — each edge's *measured* polyline, in content units — the ground
   truth every refit is checked against.
 - `cfg: &FitConfig` — the same fitting configuration stage 11 used.
-- **Return:** the number of capped refits performed (a count of refit operations, not of
-  distinct edges).
+- **Return:** the number of refits performed, pinned or capped (a count of refit operations,
+  not of distinct edges).
 
-`repair_ring_crossings`'s own doc (`rings.rs:50-57`):
+`repair_ring_crossings`'s own doc (`rings.rs:214-275`), opening:
 
-> "Refit whichever edges take part in a self-crossing, under a tightening span cap, until the
-> assembled rings stop crossing themselves. An edge is shared by the two faces either side of
-> it, and it is refitted *once* — so both faces continue to reference the same curve and the
-> property the planar map exists to guarantee is preserved. Tightening cannot fail to
-> terminate: at a cap of one, an edge's fit reproduces its measured polyline, and the
-> measured boundary of a face on a partition is simple."
+> "Refit whichever edges take part in a self-crossing, each either pinned where it crosses
+> or under a tightening span cap, whichever the objective prices lower, until the assembled
+> rings stop crossing themselves. [...] An edge is shared by the two faces either side of it,
+> and it is refitted *once* — so both faces continue to reference the same curve and the
+> property the planar map exists to guarantee is preserved. The repair cannot fail to
+> terminate: an edge gets at most `LOCAL_ROUNDS` pinned refits, every other refit halves its
+> cap, and at a cap of one an edge's fit reproduces its measured polyline, and the measured
+> boundary of a face on a partition is simple."
 
 ## How it works
+
+Each guilty edge is refitted under one of two constraints a round, both handed to the same
+dynamic program as stage 11 (its `Limits`, `crates/inkvec-fit/src/multimodel/limits.rs:23`): a
+**pin** — a vertex every solution must keep, beside the crossing — or a **halved span cap**.
+The program's own objective chooses between them.
+
+### Pinning where the curves cross
+
+The local move (r2-compact #3). For each crossing, `simple::self_crossing_points`
+(`crates/inkvec-fit/src/simple.rs:185`) reports the two segments and where they meet (the
+intersection of the two flattened pieces, `meet`, `simple.rs:344`). `ring_as_located_path`
+(`rings.rs:1006`) names each ring segment's edge *and* its index in that edge's own fit,
+counted in the edge's direction even where the ring walks it reversed. For each guilty edge,
+`pin_crossings` (`rings.rs:701`) takes the first crossing on each of its crossing segments and
+pins the measured point nearest it among those strictly inside the segment's measured run.
+The runs are recovered from the geometry by `segment_ranges` (`rings.rs:743`): the fit keeps
+no record of which points each segment came from once the merge and the corner sharpening
+have run, so each join is matched to the nearest measured point ahead of the previous one.
+
+The pinned refit is `optimal_multimodel_forced` (`multimodel/limits.rs:64-119`): the same program
+with no span allowed to pass over a pin, so it is the optimum among segmentations that keep
+the pins; a closed edge is cut at a pin, exactly; no decimation (a pin is an index of the full
+contour); and, uncapped, the usual merge and sharpening afterwards with the pins kept
+(`merge_free_cubics_keeping`, `crates/inkvec-fit/src/merge.rs:365`). Since the measured
+boundaries of a partition do not cross, two curves each pinned to a measured point beside
+their crossing are held apart there.
+
+*Inspired by* the topology-preserving simplification literature, which restores vertices
+only where a simplified chain would cross another instead of tightening the whole chain:
+de Berg, van Kreveld & Schirra (1998), "Topologically correct subdivision simplification
+using the bandwidth criterion", *Cartography and Geographic Information Systems*
+25(4):243-257, doi:10.1559/152304098782383007; Saalfeld (1999), "Topologically consistent line
+simplification with the Douglas-Peucker algorithm", *Cartography and Geographic Information
+Science* 26(1):7-18, doi:10.1559/152304099782424901. Ours keeps the description-length
+program and constrains only where it may break.
+
+### Choosing between the pin and the cap
+
+Neither move dominates. A pin near the end of a long curve can cost more segments than a
+halved cap (openmoji/1F9B3: 175 numbers pinned against 154 halved), and a halved cap
+re-segments the whole edge where one pin would do (openmoji/1F517 at 512 px: 2.87x the
+artist's parameters halved, 2.09x with the choice). So each guilty edge with something new
+to pin gets both refits, and keeps the one whose `MultimodelFit::cost` — the program's
+`½χ² + λ·params + breaks` before refinement — is lower, ties to the pin (`rings.rs:479-489`).
+Only the winner's constraint is remembered: its pins, or its halved cap. *Not from the
+literature:* the choice by cost, because the papers above add vertices by a fixed rule.
+
+Measured on the 246-icon gate set (gate v2 against v0.2.5, Quality): parameter ratio
+-0.77 % at 128 px ("better"), -0.35 % at 512 px, -0.20 % at 512 px opaque; dE00 +0.09,
++0.22 and +0.05 %, turning +0.13, +0.15 and +0.07 % (all non-inferior). With the pins-only
+offer of the restoration pass (step 6 below) the tip reads ratio -0.73 / -0.36 / -0.22 % and
+dE00 -0.11 / +0.07 / -0.06 %; Fast is byte-identical. The changes sit in openmoji (ratio
+-4.5 % at 128 px, -2.3 % at 512 px); the largest single loss is openmoji/1F3C3 runner at
+128 px (+0.05 dE00), a junction pinch only a small cap resolves, where the cheaper of two
+resolving refits draws a foot's narrow U as a spike. Rings still crossing
+after repair (128 px screen set): 11 on 6 icons, against 14 on 9 with halving alone. Tried
+and dropped: pinning every crossing found, not one per segment (-0.09 / -0.33 / -0.12 %); the
+pin alone without the halving candidate (-0.50 / -0.29 / -0.19 %); requiring a break
+anywhere inside the crossing segment instead of at a point (the same ratio, 19 rings left
+crossing on 12 icons).
 
 ### The span cap
 
 The cap is not a count of spans, and not a single global number — it is a **per-edge,
 adaptive limit on how many measured polyline points one *segment* may span**, implemented by
-`optimal_multimodel_capped` (`crates/inkvec-fit/src/multimodel.rs:206-221`):
+`optimal_multimodel_capped` (`crates/inkvec-fit/src/multimodel.rs:215-225`):
 
 > "As `optimal_multimodel`, but forbidding any single segment from spanning more than
 > `max_span` measured points. This exists for the self-intersection repair in
@@ -117,48 +181,57 @@ adaptive limit on how many measured polyline points one *segment* may span**, im
 > every segment is a single polyline edge, which reproduces the measured contour — and the
 > measured contour is a simple closed curve by construction, so the loop always terminates."
 
-The capped path is exempt from the DP's point decimation (`multimodel.rs:257-264`), because
+The capped path is exempt from the DP's point decimation (`multimodel.rs:290-293`), because
 "the self-intersection repair relies on the measured contour being reproducible at
-`max_span = 1`, and a decimated contour is not simple by construction."
+`max_span = 1`, a decimated contour is not simple by construction, and a forced vertex is an
+index of the full contour."
 
 ### Algorithm
 
-`repair_ring_crossings`, `rings.rs:58-273`, in order:
+`repair_ring_crossings`, `rings.rs:276-346`, in order:
 
 1. **Snapshot the unconstrained fit.** `full_fit = fitted.to_vec()`. "A cap is a topology
    emergency brake, not a better description of the boundary; after the offending neighbours
    have been repaired we can often put this compact path back without bringing the crossing
-   with it" (`rings.rs:66-68`).
-2. **Initialise a per-edge cap** at `polys[k].len().max(2)` — effectively unconstrained.
+   with it" (`rings.rs:383-385`).
+2. **Initialise a per-edge cap** at `polys[k].len().max(2)` — effectively unconstrained — and
+   no pins (`RepairState::new`, `rings.rs:406-418`).
 3. **Flatten every face's rings** into one list, `rings: Vec<&Ring>`.
-4. **Round loop, up to `ROUNDS = 10` iterations** (`rings.rs:64`). Each round:
+4. **Round loop, up to `ROUNDS = 10` iterations** (`rings.rs:282`, `:287`). Each round:
    - **Detect**, in parallel, over every ring touching an edge changed last round (all rings
-     on round 1). Each ring is assembled into one `FittedPath` with an `owner: Vec<usize>`
-     recording which edge each segment came from, and `simple::self_crossings(&path, 32)`
-     returns up to 32 crossing pairs; both owning edges of each pair are marked guilty.
-   - **Drop edges already at cap 1** from the guilty set (further halving is impossible).
+     on round 1). Each ring is assembled into one `FittedPath` with an owner `(edge,
+     segment)` per segment (`ring_as_located_path`), and `simple::self_crossing_points(&path,
+     32)` returns up to 32 crossing pairs with where they cross; both owning edges of each
+     pair are marked guilty (`rings.rs:293-296`; `located_crossings`, `:353-379`).
+   - **Drop edges already at cap 1** from the guilty set (`rings.rs:297`).
    - **Exit the round loop if no edges remain guilty.**
-   - **Refit every guilty edge in parallel, at half its current cap**:
-     `cap[k] = (cap[k] / 2).max(1)`, `multimodel::optimal_multimodel_capped_full(&polys[k],
-     cfg, cap[k])`.
+   - **Propose pins** for every guilty edge pinned fewer than `LOCAL_ROUNDS = 4` times
+     (`rings.rs:301`; `propose_pins`, `:424-448`): one per crossing segment, as above.
+   - **Refit every guilty edge in parallel**: the halved cap with its existing pins, and,
+     where pins were proposed, the pinned refit too; keep the cheaper (`rings.rs:317-330`; `refit`, `:455-492`).
    - Commit the refits, record which edges changed (for next round's detection filter), and
      count each refit toward the returned total.
-5. **Post-convergence merge, under a budget** (`rings.rs:145-209`) — see below.
-6. **Restoration pass, over every refitted edge, in sorted key order** (`rings.rs:210-267`):
+5. **Post-convergence merge, under a budget** (`rings.rs:507-569`) — see below.
+6. **Restoration pass, over every refitted edge, in sorted key order** (`rings.rs:575-678`):
    - **Explosion check** first: if the capped fit has more than 32 segments *and* more than 4x
      the unconstrained fit's segment count, the unconstrained (`full_fit`) path is restored
      unconditionally — crossing or not (see "the exploded case" below).
-   - Otherwise, candidates are tried in order — the unconstrained fit first, then the merged
-     ("smoothed") capped fit if the budget could afford it — and the first candidate that
-     leaves every ring containing this edge free of crossings *involving this edge's own
-     segments* is kept; otherwise the capped fit from the round loop stands.
+   - Otherwise, candidates are tried in order — the unconstrained fit first, then the pins
+     alone with no cap (for an edge whose cap was halved: its latest proposed pins, fitted
+     uncapped and merged with the pins kept, all such edges at once, `rings.rs:600-615`),
+     then the merged ("smoothed") capped fit if the budget could afford it — and the first
+     candidate that leaves every ring containing this edge free of crossings *involving this
+     edge's own segments* is kept; otherwise the refit from the round loop stands. The
+     pins-only offer measured dE00 -0.20 / -0.15 / -0.11 % at 128 / 512 / 512 px opaque
+     against the repair without it, parameter ratio within ±0.04 %.
 7. **Return the refit count.**
 
 ### Detecting a crossing
 
-`self_crossings_inner` (`simple.rs:147-273`) is the shared machinery behind both
-`self_crossings` (all pairs, up to a limit) and `self_crossings_touching` (only pairs
-touching a given mask of segments). The exact criterion, `simple.rs:193-203`:
+`crossings_located` (`simple.rs:191`, through `self_crossings_inner`, `:165`) is the shared
+machinery behind `self_crossings` (all pairs, up to a limit), `self_crossings_touching`
+(only pairs touching a given mask of segments) and `self_crossing_points` (all pairs, each
+with where it crosses: what the pinning reads). The exact criterion, `simple.rs:259-271`:
 
 > "The criterion is the renderer's, not a per-segment one: a ring is invalid exactly when two
 > *non-consecutive* sub-segments of its flattened outline intersect. Consecutive
@@ -173,19 +246,19 @@ Adjacency is decided **geometrically** — by comparing endpoints — rather tha
 `closed` flag, because a closed contour is solved by cutting it open and the returned fit is
 marked `closed = false` even though it geometrically closes: "Trusting the flag made a plain
 circle report its first and last segments as crossing where they merely meet, and the
-'repair' turned a 3-segment circle into 61 line segments" (`simple.rs:103-116`). A segment is
+'repair' turned a 3-segment circle into 61 line segments" (`simple.rs:112-125`). A segment is
 also checked against itself (a looping cubic), though "that case does not occur in
 practice — zero instances in 2126 rings."
 
 Reporting *every* crossing pair rather than only the first exists because a first-crossing-
 only repair needs as many passes as there are crossings to see them all: "measured that way
 the repair removed 17% of invalid rings while spending 4.3% more parameters, which is a poor
-trade for the axis we are strongest on" (`simple.rs:121-127`). The masked variant,
+trade for the axis we are strongest on" (`simple.rs:130-135`). The masked variant,
 `self_crossings_touching`, exists purely for performance in the restoration pass: "on a logo
 whose two rings carry seven hundred points each, the all-pairs re-check cost five seconds of
-a six-second trace" (`simple.rs:132-138`). Arcs are tested by their chord for this purpose,
+a six-second trace" (`simple.rs:141-147`). Arcs are tested by their chord for this purpose,
 since "an arc is convex and cannot cross itself; its chord is enough to place it against its
-neighbours for this test" (`simple.rs:79-83`).
+neighbours for this test" (`simple.rs:86-87`).
 
 ### Recorded history: the merge pass, removed and then re-added
 
@@ -204,12 +277,12 @@ the merge pass":
 > now run only on uncapped fits. Family emoji 11.46 s -> 0.65 s at unchanged quality (dE00
 > 0.342 -> 0.344)."
 
-The surviving comment in the DP itself (`multimodel.rs:327-337`) makes the same point: under
+The surviving comment in the DP itself (`multimodel.rs:397-404`) makes the same point: under
 a span cap, `merge_free_cubics`/`sharpen_corners` are skipped, "since the merge re-joins short
 runs into free cubics that can cross again."
 
 **Re-introduced at the ring level, post-convergence** — commit `91c8497`, roughly 2.5 hours
-later. Its reasoning lives in the surviving comment (`rings.rs:145-151`), not in the commit
+later. Its reasoning lives in the surviving comment (`rings.rs:507-513`), not in the commit
 message:
 
 > "A capped refit is the constrained program's raw answer: chords and G1 cubics with the
@@ -225,7 +298,7 @@ converged and every ring is simple does the ring-level repair run `merge_free_cu
 `sharpen_corners` once more on each refitted edge, and keep the merged result only if it does
 not reopen a crossing.
 
-**The merge budget** (`rings.rs:152-167`) exists for the same performance reason as the
+**The merge budget** (`rings.rs:515-528`) exists for the same performance reason as the
 original removal:
 
 > "The merge searches a grid of tangent directions and arm lengths per candidate run, which
@@ -253,7 +326,7 @@ point by point — a staircase along every diagonal:
 > discarded 15-segment fit scores dE00 0.0880 against the staircase's 0.0934, at 44 parameters
 > against 1,920. The crossing it refused to ship renders better than the cure."
 
-The in-code counterpart (`rings.rs:218-231`) states the same conclusion and the guard
+The in-code counterpart (`rings.rs:618-627`) states the same conclusion and the guard
 literally: `c > 32 && c > 4 * f` where `c` is the capped segment count and `f` the
 unconstrained one. Measured effect on the 246-icon screen set: "objective 0.4142 -> 0.4140,
 parameters 1.39x -> 1.29x, simple-icons 1.13x -> 0.73x, dE00 unchanged. The repair still
@@ -262,8 +335,8 @@ changes."
 
 ### Where repair sits in the pipeline
 
-`repair_fits` (`crates/inkvec-cli/src/pipeline.rs:800-886`), the call site itself; its doc,
-verbatim (`pipeline.rs:803-808`):
+`repair_fits` (`crates/inkvec-cli/src/pipeline.rs:828-914`), the call site itself; its doc,
+verbatim (`pipeline.rs:831-836`):
 
 > "A self-crossing boundary is invisible to the objective — both curves pass through
 > their measured points and the render barely changes — but the ring it produces is
@@ -281,34 +354,35 @@ let mut repaired = if args.no_repair || fast {
 };
 ```
 
-(`pipeline.rs:861-866`; `sw.mark("repair")` follows in `fit_and_repair`, `pipeline.rs:489`.)
+(`pipeline.rs:889-894`; `sw.mark("repair")` follows in `fit_and_repair`, `pipeline.rs:498`.)
 Fast mode skips the stage. The doc still discusses ordering against a "polish" stage that has
-since been deleted (`pipeline.rs:810-814`, "Polish itself has since been removed"); the
+since been deleted (`pipeline.rs:838-842`, "Polish itself has since been removed"); the
 underlying ordering principle — repair runs on the geometry that is actually going to be
 emitted, after every other geometric transform — still holds, since repair is now the last
 geometric stage before mirror symmetrisation, fill assignment and emission.
 
-`--no-repair` (`args.rs:34, 78, 238, 383, 422`) disables the stage entirely. It is parsed but
-**does not appear in the CLI's `usage()` help text** — an undocumented flag.
+`--no-repair` (`args.rs:124`, `:255`, `:650`; help text `:443`) disables the stage entirely.
 
 ## Constants and thresholds
 
 | name | file:line | value | controls | derivation |
 |---|---|---|---|---|
-| `ROUNDS` | `rings.rs:247` | 10 | max halving rounds of the outer loop | no stated derivation |
-| `MERGE_BUDGET` | `rings.rs:362` | 96 segments | per-boundary merge affordability; `4x` this is the global ceiling | derived from measured cost (~8 ms/segment; `simple-icons/biome` case); the specific 96 not separately justified |
-| `RING_SAMPLES` | `rings.rs:700` | 4 | interior samples per curved segment for area/containment | no stated derivation |
-| crossing-pair limit | `rings.rs:282`, `:462` | 32 | max crossing pairs reported per ring per call | unnamed literal, no stated derivation |
-| explosion thresholds | `rings.rs:432` | `c > 32 && c > 4*f` | when a capped refit is discarded for the unconstrained fit | derived from the `bulma` case; the exact pair (32, 4) not separately justified |
-| cap initial value | `rings.rs:252` | `polys[k].len().max(2)` | starting span cap per edge | follows from "cap 1 reproduces the polyline" |
-| halving rule | `rings.rs:321`, `:329` | `(cap[k]/2).max(1)` | tightening schedule | keeps the repair logarithmic in the worst case (`simple.rs:35-36`) |
-| `FLATTEN` | `simple.rs:58` | 16 | points per curved segment when flattening for crossing detection | motivated (below render-visibility floor); value none |
-| `EPS` | `simple.rs:62` | 1e-6 px | endpoint-coincidence tolerance for adjacency exemption | derived |
-| `BLK` | `simple.rs:270` | 16 | bounding-box block size for the all-pairs prune | pure speed optimisation, stated as such |
+| `ROUNDS` | `rings.rs:282` | 10 | max halving rounds of the outer loop | no stated derivation |
+| `MERGE_BUDGET` | `rings.rs:525` | 96 segments | per-boundary merge affordability; `4x` this is the global ceiling | derived from measured cost (~8 ms/segment; `simple-icons/biome` case); the specific 96 not separately justified |
+| `RING_SAMPLES` | `rings.rs:994` | 4 | interior samples per curved segment for area/containment | no stated derivation |
+| crossing-pair limit | `rings.rs:366`, `:664` | 32 | max crossing pairs reported per ring per call | unnamed literal, no stated derivation |
+| explosion thresholds | `rings.rs:630` | `c > 32 && c > 4*f` | when a capped refit is discarded for the unconstrained fit | derived from the `bulma` case; the exact pair (32, 4) not separately justified |
+| cap initial value | `rings.rs:409` | `polys[k].len().max(2)` | starting span cap per edge | follows from "cap 1 reproduces the polyline" |
+| halving rule | `rings.rs:479`, `:325` | `(cap[k]/2).max(1)` | tightening schedule | keeps the repair logarithmic in the worst case (`simple.rs:35-36`) |
+| `LOCAL_ROUNDS` | `rings.rs:687` | 4 | pinned refits per edge before it is only halved | bounds what pinning can add, so the cap still guarantees termination; not derived or swept |
+| pin or cap | `rings.rs:483` | lower `MultimodelFit::cost`, ties to the pin | which refit a guilty edge keeps | the program's own objective (see "Choosing between the pin and the cap") |
+| `FLATTEN` | `simple.rs:63` | 16 | points per curved segment when flattening for crossing detection | motivated (below render-visibility floor); value none |
+| `EPS` | `simple.rs:67` | 1e-6 px | endpoint-coincidence tolerance for adjacency exemption | derived |
+| `BLK` | `simple.rs:306` | 16 | bounding-box block size for the all-pairs prune | pure speed optimisation, stated as such |
 
-The sibling `fit_simple` (`simple.rs:309`, used only by tests) no longer has a round count:
+The sibling `fit_simple` (`simple.rs:363`, used only by tests) no longer has a round count:
 it halves until the cap reaches 1, because "a fixed round count never did [reach cap 1] for a
-ring longer than 512 points (eight halvings stop at a cap of two)" (`simple.rs:316-320`).
+ring longer than 512 points (eight halvings stop at a cap of two)" (`simple.rs:370-375`).
 
 ## Failure modes and edge cases
 
@@ -318,17 +392,27 @@ ring longer than 512 points (eight halvings stop at a cap of two)" (`simple.rs:3
   edges already at cap 1 are dropped from the guilty set (`cap[k] > 1` filter), so the loop
   can exit with crossings still present on a boundary long enough that ten halvings do not
   reach cap 1. This is not stated in any comment; it follows from reading `ROUNDS`
-  (`rings.rs:247`) and the `cap[k] > 1` filter (`rings.rs:296`) together.
+  (`rings.rs:282`) and the `cap[k] > 1` filter (`rings.rs:297`) together. A pinned refit
+  uses a round without halving, so an edge that is pinned and still crosses reaches a small
+  cap later; on the 128 px screen set the pinned-or-halved repair leaves 11 rings crossing on
+  6 icons where halving alone left 14 on 9.
 - **An exploded refit is restored to the unconstrained fit "whether or not that crosses"** —
   an explicit, deliberate abandonment of the simple-ring invariant when the alternative (a
-  staircase) is worse on every measured axis (`rings.rs:225-227`).
+  staircase) is worse on every measured axis (`rings.rs:618-627`).
 - **A boundary the merge budget cannot afford keeps a more faceted, but still safe, result**:
   "A boundary it cannot afford keeps its capped refit: chords and G1 cubics with the corner
-  chamfers in, which is safe and merely more faceted than it could be" (`rings.rs:161-163`).
+  chamfers in, which is safe and merely more faceted than it could be" (`rings.rs:522-524`).
 - **Pinch points at valid junctions must not be repaired**, and the code has no explicit test
   distinguishing them from a genuine defect — only the span cap running out stops a pointless
-  refit from being attempted on one.
-- **The restoration pass's safety re-check is deliberately partial.** `rings.rs:249-253`
+  refit from being attempted on one. A pin cannot help there either: the crossing is at a
+  junction, a segment's end, so the nearest point inside the segment pins nothing useful,
+  and after `LOCAL_ROUNDS` pinned refits the edge is only halved.
+- **A pin is placed by geometry, not bookkeeping.** `segment_ranges` matches each join of the
+  current fit to the nearest measured point ahead of the last; a corner the refinement moved
+  to the intersection of two lines (by at most `3·max(σ_max, 0.25)` px) can match its
+  neighbour instead, which moves the pin by a point. A path whose joins cannot be placed in
+  order gives no pins, and the edge is halved.
+- **The restoration pass's safety re-check is deliberately partial.** `rings.rs:653-656`
   reasons that "every ring is simple at this point... so a crossing this candidate introduces
   has to involve one of edge `k`'s own segments, and only those pairs are worth testing" — an
   assumption that does not hold in the two cases above (round-loop exhaustion, or an
@@ -350,12 +434,13 @@ Since the settings cleanup (CHANGELOG, 0.2.0, *Changed*) the engine reads its en
 
 No `INKVEC_*` environment variable is specific to this module. The one module-specific
 override is `--no-repair`, a CLI flag (not an environment variable) that skips the call to
-`repair_ring_crossings` entirely (`args.rs:58,138,340,509,548`, checked at `pipeline.rs:620`).
-`repair_ring_crossings` itself does read environment, though only for diagnostics: the
-generic timing switch `INKVEC_TIMING` — shared with other pipeline stages, e.g.
-`pipeline.rs:478` — gates six `eprintln!` calls inside the function
-(`rings.rs:114,139,184,206,237,271`) that print per-round and per-phase timings to stderr. It
-has no effect on the repaired output, only on what is logged.
+`repair_ring_crossings` entirely (`args.rs:124`, `:255`, `:650`, checked at
+`pipeline.rs:890`). `repair_ring_crossings` itself does read environment, though only for
+diagnostics: the generic timing switch `INKVEC_TIMING` — shared with other pipeline stages,
+e.g. `pipeline.rs:487` — gates six debug lines inside the function
+(`rings.rs:310,332,542,562,634,672`) that print per-round and per-phase timings, and how many
+refits were pinned and how many halved, to stderr. It has no effect on the repaired output,
+only on what is logged.
 
 ## Open questions
 
@@ -367,12 +452,14 @@ has no effect on the repaired output, only on what is logged.
   all.** It tests the crossing detector (`self_crossing`, `cubic_self_intersects`) directly,
   and a sibling per-boundary repair, `simple::fit_simple`, which has **no caller anywhere in
   the shipping pipeline** outside this test file — the production code path is
-  `repair_ring_crossings` in `rings.rs`, at the ring level, which is untested. Both
-  `crates/inkvec-cli/src/rings.rs` and `crates/inkvec-fit/src/simple.rs` are listed in
-  `bench/quality_budget.json`'s grandfathered `untested_modules`.
-- **No test exercises the ring-level (multi-edge) crossing case, `MERGE_BUDGET`, the
-  `exploded` restoration path, or `self_crossings_touching`** — only the single-edge detector
-  and the unused `fit_simple` sibling are covered.
+  `repair_ring_crossings` in `rings.rs`, at the ring level, which is untested end to end.
+  Since 2026-10 `rings.rs` has unit tests for the pinning's bookkeeping (`segment_ranges`,
+  `pin_crossings`, `ring_as_located_path`'s reversed indices), `self_intersection.rs` tests
+  where `self_crossing_points` says a crossing is, and `multimodel/tests.rs` that forced
+  vertices survive the program and the merge.
+- **No test exercises the ring-level (multi-edge) crossing case, the choice between the pin
+  and the cap, `MERGE_BUDGET`, the `exploded` restoration path, or `self_crossings_touching`.**
+- **`LOCAL_ROUNDS = 4` and pinning at the *first* crossing on a segment are not swept.**
 - **The specific numeric derivations for `ROUNDS`, `MERGE_BUDGET`, `RING_SAMPLES`, the
   crossing-pair limit of 32, and the exploded-refit thresholds (32, 4x) are not given beyond
   the case study that motivated each.**

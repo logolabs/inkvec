@@ -179,7 +179,7 @@ pub enum Segment {
     },
 }
 
-/// Parameters charged for a circular arc.
+/// Parameters charged for a circular arc by default.
 ///
 /// SVG writes seven numbers (`rx ry rotation large-arc sweep x y`), but for a *circular*
 /// arc `rx == ry` and the rotation is meaningless, so the document carries one radius,
@@ -188,7 +188,36 @@ pub enum Segment {
 /// deliberately not 3 (radius + endpoint): a description length that ignored the flags
 /// would let an arc undercut a cubic on every short run where the two are
 /// indistinguishable, which is not the compactness the objective is meant to reward.
+///
+/// The price in force is [`crate::cost::arc_params`]: this one, or [`PARAMS_ARC_WRITTEN`]
+/// under the experimental written-arcs prices.
 pub const PARAMS_ARC: f64 = 5.0;
+
+/// Parameters charged for a circular arc under the experimental written-arcs prices
+/// ([`crate::cost::CostModel::with_written_arcs`], which no product setting selects): the seven numbers the emitter writes
+/// for it (`A rx,ry rot large,sweep x,y`) and the benchmark counts
+/// (`bench/inkvec_bench/svgmodel.py`), so the fit and the document agree on what an arc
+/// costs. At [`PARAMS_ARC`]'s five an arc undercuts a six-number cubic on every span both
+/// fit, where the document charges it one more.
+///
+/// Not from the literature: a price-consistency fix. See also Maier, Janda & Schindler
+/// (2012), "Minimum description length arc spline approximation of digital curves",
+/// *ICIP 2012* 1869-1872, doi:10.1109/icip.2012.6467248, whose arc-spline description
+/// length counts what an arc's encoding needs rather than its geometric degrees of freedom.
+///
+/// Measured on the 246-icon gate set (2026-10-04, with `crate::candidates::turn::CAP_TURN_DEGREES`
+/// and the parameter price `λ` scaled 0.8, against the default prices): parameter ratio
+/// -4.1 % at 128 px, -1.4 % at 512 px and 512 px opaque; dE00 -1.5 %, -0.5 %, +0.8 %, none
+/// of them resolvable; arcs written per icon 15 -> 7.4. At `λ` unscaled the ratio gain is
+/// -5.9 / -3.0 / -2.9 % but dE00 rises 4.1 / 1.7 / 1.7 %. Not adopted, for three reasons: single
+/// drawings lose where art touches the frame (the points along the image edge carry little
+/// weight, so one long cubic over a corner and its side wins: twemoji/1f7eb at 512 px
+/// opaque, dE00 0.003 -> 0.197), and the gate's turning axis reads an arc's radii and flags
+/// as anchors and scores every arc swapped for a cubic as +20-37 % turning, where the drawn
+/// curves' own turning moves -0.04 % (see `docs/algorithm/11-fitting.md`). On the held-out
+/// set (held_a, 128 px) it cost dE00 +2.2 % for -4.6 % ratio, so it was withdrawn as an
+/// option and is kept only as this cost model.
+pub const PARAMS_ARC_WRITTEN: f64 = 7.0;
 
 /// Parameters charged for an elliptical arc.
 ///
@@ -243,7 +272,7 @@ impl Segment {
             Segment::Cubic(..) => crate::multimodel::params_cubic(),
             Segment::Arc { .. } => {
                 if self.is_circular() {
-                    PARAMS_ARC
+                    crate::cost::arc_params()
                 } else {
                     PARAMS_ELLIPTICAL_ARC
                 }

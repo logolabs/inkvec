@@ -158,6 +158,15 @@
         place honestly: many real logos and icons are drawn from actual circles, and an arc
         describes that shape exactly, at less cost than the curve that would otherwise be
         needed to approximate it.</p>
+      <p>Five is a judgement, not a count: the file itself spells an arc out in seven numbers
+        (two radii, a rotation, two yes-or-no flags and an endpoint), and the benchmark counts
+        seven. Charging the seven was tried. About half the arcs then become curves or lines,
+        and the test icons needed about 1.4 % fewer numbers at 512 px with the colour unchanged
+        on average, provided a single curve is not allowed to stand in for more than a quarter
+        of a circle (past that it visibly misses it) and each number is spent a little more
+        freely. But on a second, held-back set of icons the colour got worse, and a few corners
+        came back as spikes, so the tracer still charges five; the experiment is kept in the
+        code, switched off.</p>
       <p>Lines alone hit a wall no amount of clever placement can fix. Approximating a circle
         with straight chords needs dozens of short segments to stay accurate; four well-placed
         curves do the same job to a fraction of a percent of error. So the alphabet has to

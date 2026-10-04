@@ -16,15 +16,14 @@
 //! | model | fitter | cost |
 //! |---|---|---|
 //! | line | total least squares ([`scatter_min_eigen`]) | `½χ² + 2λ + breaks` ([`line_cost_terms`]) |
-//! | G1 cubic | area and moment matching, Levien's quartic ([`best_cubic`]) | `½χ² + 6λ + wobble` |
-//! | free cubic (research) | linear least squares, ends pinned ([`try_free_cubic`]) | `½χ² + 6λ + wobble + breaks` |
+//! | G1 cubic | area and moment matching, Levien's quartic ([`best_cubic`]) | `½χ² + 6λ + wobble + over-turn` |
+//! | free cubic (research) | linear least squares, ends pinned ([`try_free_cubic`]) | `½χ² + 6λ + wobble + breaks + over-turn` |
 //! | circular arc | Kåsa algebraic circle ([`CirclePrefix`], [`try_arc`]) | `½χ² + 5λ + breaks` |
 //! | elliptical arc | algebraic ellipse, Sampson distance ([`try_ellipse`]) | `½χ² + 7λ + breaks` |
 //!
 //! "breaks" is the [`break_cost`] between the model's own end directions and the
 //! estimated tangents at whichever ends are joins; the G1 cubic takes the estimated
-//! tangents as its end directions and so pays none. "6" is [`params_cubic`], which a
-//! trace may reprice (see `crate::cost`).
+//! tangents as its end directions and so pays none. `crate::cost` reprices 6, 5 and [`turn`].
 //!
 //! Every fitter here is closed form or a fixed small number of steps, so a candidate
 //! costs O(1) in the span length (or O([`MAX_RESIDUAL_SAMPLES`]) for a cubic's
@@ -37,6 +36,7 @@ use kurbo::common::{factor_quartic_inner, solve_cubic, solve_quadratic};
 
 mod bounded;
 pub(crate) use bounded::{best_cubic_bounded, Abandon, G1Fit};
+pub(crate) mod turn;
 
 /// Maximum points a cubic's residual is evaluated on.
 pub const MAX_RESIDUAL_SAMPLES: usize = 32;
@@ -1096,7 +1096,7 @@ impl CirclePrefix {
 
 /// A circular arc fitted to one span, with what it costs to use it there.
 pub(crate) struct ArcSpan {
-    /// `½·chi2 + λ·PARAMS_ARC + end breaks`, nats.
+    /// `½·chi2 + λ·`[`crate::cost::arc_params`]` + end breaks`, nats.
     pub(crate) cost: f64,
     /// Residual about the arc as it will be drawn.
     pub(crate) chi2: f64,
@@ -1204,7 +1204,7 @@ pub(crate) fn try_arc(
     let (drawn_c, drawn_r, _, _) = crate::curves::arc_center(start, radius, large_arc, ccw, end);
     let chi2 = pre.residual_about(i, j, drawn_c, drawn_r);
     Some(ArcSpan {
-        cost: 0.5 * chi2 + cfg.lambda * crate::curves::PARAMS_ARC + dev,
+        cost: 0.5 * chi2 + cfg.lambda * crate::cost::arc_params() + dev,
         chi2,
         radius,
         large_arc,

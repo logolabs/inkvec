@@ -93,6 +93,16 @@
         original measurement. The repair only tightens the limit as far as it needs to on the
         parts that are actually guilty; everything else in the drawing is left exactly as the
         previous stage produced it.</p>
+      <p>There is a gentler move too, and the repair tries it alongside. Rather than shortening
+        every curve of a guilty stretch, it can pin each crossing curve to the measured point
+        right beside the spot where it crossed, and redraw the stretch through that pin. Two
+        measured outlines never cross, so two curves pinned to them there are held apart
+        where it mattered, and the rest of the stretch keeps its long, smooth curves. Each
+        time, the repair redraws a guilty stretch both ways and keeps whichever the fitter's
+        own price (numbers spent against fit to the measurement) says is cheaper; the
+        shrinking limit is always the fallback that guarantees the repair finishes. On the
+        test icons this spends a little fewer numbers than shrinking alone, and leaves fewer
+        crossings behind.</p>
       <figure>
         <svg viewBox="0 0 640 220" role="img" aria-label="Before and after the repair: the crossing on the left is gone on the right, with the rest of the shape unchanged">
           <text x="20" y="22" class="fig-label-strong">Before and after, on just the guilty stretch</text>

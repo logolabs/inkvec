@@ -228,8 +228,22 @@ pub struct Intake {
     /// Whether anything resampled the raster, which is what decides if the SVG must be
     /// retargeted to the presentation size.
     pub normalised: bool,
+    /// Whether the raster was reduced to whole source pixels, whose two axes need not keep
+    /// the aspect exactly: the SVG is then presented axis by axis (`post::stretch_axes`).
+    pub stretch: bool,
     /// The size the SVG is presented at.
     pub display: (usize, usize),
+}
+
+/// `svg`, traced at the raster's own size, presented at `w` x `h` (`post::retarget`), and
+/// axis by axis when `stretch` says the raster's two axes were reduced by different factors.
+fn present(svg: &str, w: usize, h: usize, stretch: bool) -> String {
+    let svg = retarget(svg, w, h);
+    if stretch {
+        post::stretch_axes(&svg)
+    } else {
+        svg
+    }
 }
 
 /// Everything [`trace_image_sized`] does before the restorer pre-pass: undo an exact
@@ -321,6 +335,7 @@ pub fn intake(
         args,
         replicated,
         normalised,
+        stretch: false,
         display: (display_w, display_h),
     }
 }
@@ -481,6 +496,7 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
         args,
         replicated,
         normalised,
+        stretch,
         display: (display_w, display_h),
     } = prepared;
     let args = &args;
@@ -502,7 +518,7 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
         // `auto` kept the input, and nothing else is going to look at it: the probe is the trace.
         if let Some(svg) = probe.take() {
             let svg = if normalised || (img.width, img.height) != (display_w, display_h) {
-                retarget(&svg, display_w, display_h)
+                present(&svg, display_w, display_h, stretch)
             } else {
                 svg
             };
@@ -579,7 +595,7 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
                 sr_on = false;
             } else {
                 let svg = if normalised || (img.width, img.height) != (display_w, display_h) {
-                    retarget(&probe, display_w, display_h)
+                    present(&probe, display_w, display_h, stretch)
                 } else {
                     probe
                 };
@@ -685,7 +701,7 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
         stats.insert(0, n);
     }
     let svg = if normalised || (w, h) != (display_w, display_h) {
-        retarget(&svg, display_w, display_h)
+        present(&svg, display_w, display_h, stretch)
     } else {
         svg
     };

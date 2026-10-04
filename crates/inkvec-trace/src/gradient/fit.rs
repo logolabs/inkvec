@@ -10,6 +10,12 @@
 //! and a least-squares line `colour = a + g·t` per channel ([`fit_1d`]). The fitters
 //! differ in how they search for the geometry that makes that line fit best.
 //!
+//! The profile-aware radial search ([`profile`]) scores circular and elliptical geometries
+//! under a continuous piecewise-linear profile instead of a line ([`Resid1d::finish_spline`])
+//! and refines them by Levenberg–Marquardt; [`restop_radial`] puts the stops of each fitting
+//! space on the geometry it finds (research prototype A10's part `profile`, the default
+//! since Wave B).
+//!
 //! Positions are pixel centres, px. Moved out of `gradient.rs` unchanged, to keep that
 //! file under the workspace's line cap.
 
@@ -52,6 +58,16 @@ pub(super) fn fit_1d(cols: &[[f64; 3]], t: &[f64]) -> (f64, [f64; 3], [f64; 3]) 
     }
     (resid, a, g)
 }
+
+/// Knots of the spline profile score ([`Resid1d::finish_spline`]), uniform over the
+/// subsample's range of `t`: seven pieces, enough to bend at a clamp and at both ends of a
+/// bump (97 % of the corpus's artist gradients have at most four stops), few enough that a
+/// 1024-sample search does not fit noise. The round-2 research measured this value
+/// (`INKVEC_R2_SPLINE`, 2ca274f); it was not tuned.
+pub(super) const SPLINE_KNOTS: usize = 8;
+
+mod profile;
+pub(super) use profile::profile_geometries;
 
 /// The half of [`fit_1d`] a centre search recomputes for nothing.
 ///
@@ -119,13 +135,20 @@ impl<'a> Resid1d<'a> {
     /// cosine, and `k` is the aspect. This is [`super::eval::radial_t_rot`] before its
     /// division by the radius, which a line fit absorbs into its slope.
     pub(super) fn elliptic(&mut self, c: (f64, f64), sn: f64, cs: f64, k: f64) -> f64 {
+        self.elliptic_t(c, sn, cs, k);
+        self.finish()
+    }
+
+    /// Fill `self.t` with the elliptical distances of [`Resid1d::elliptic`], without
+    /// scoring them. The arithmetic of that method, moved here unchanged so the spline
+    /// score ([`profile`]) can share it.
+    fn elliptic_t(&mut self, c: (f64, f64), sn: f64, cs: f64, k: f64) {
         for j in 0..self.t.len() {
             let (dx, dy) = (self.xs[j] - c.0, self.ys[j] - c.1);
             let u = dx * cs + dy * sn;
             let v = (-dx * sn + dy * cs) * k;
             self.t[j] = (u * u + v * v).sqrt();
         }
-        self.finish()
     }
 
     /// The residual of the least-squares line through `(t, colour)`, the `.0` of `fit_1d`:
@@ -148,6 +171,100 @@ impl<'a> Resid1d<'a> {
             resid += (self.scc[k] - g * g * stt).max(0.0);
         }
         resid
+    }
+
+    /// The residual of the least-squares continuous piecewise-linear profile through
+    /// `(t, colour)`: the spline score of the profile-aware search ([`profile`]).
+    ///
+    /// Model: `K =` [`SPLINE_KNOTS`] knots `τ_j = lo + j·h`, `h = (hi − lo)/(K − 1)`, over
+    /// the range `[lo, hi]` of the current `t`; a sample at `u = (t − lo)/h`, in piece
+    /// `j = ⌊u⌋` at fraction `f = u − j`, is predicted `(1 − f)·x_j + f·x_{j+1}` per
+    /// channel (the hat basis, which spans the constants, so the colours can be centred on
+    /// `c̄` without changing the residual). The normal equations `AᵀA x = Aᵀc` are
+    /// tridiagonal -- diagonal `d_j = Σ w_j²`, off-diagonal `e_j = Σ (1−f)·f` coupling `j`
+    /// and `j+1`, right-hand side `b_j = Σ w_j·(c − c̄)` -- and are solved per channel by
+    /// the Thomas algorithm with a 1e-9 ridge on the diagonal (a knot no sample reaches
+    /// gets 0 instead of a singular pivot). The residual is then `Σ_ch (S_cc − xᵀb)`,
+    /// clamped at 0 against rounding, with `S_cc` the centred colour variance already held
+    /// in `self`.
+    ///
+    /// Why: this is the variable-projection functional (Golub & Pereyra 1973,
+    /// doi:10.1137/0710036) for a richer, still linear, profile family. A clamped artist
+    /// profile -- a flat core and a ramp at the rim -- is fitted by it nearly exactly at
+    /// the true centre and worse elsewhere, where the straight line's residual is lowest
+    /// wherever a straight ramp fits the region best. Inspired by Chakraborty et al. 2025
+    /// (doi:10.1111/cgf.70055) §3.3, whose radial geometry does not depend on the profile
+    /// at all; ours searches the geometry by this residual ([`profile`]). The stops
+    /// the model finally carries are still fitted afterwards (two by [`fit_1d`], interior
+    /// ones by `fit_mid_stops`): the spline only chooses the geometry.
+    ///
+    /// Edge cases: all `t` equal (a single point or a ring of zero width) gives the total
+    /// variance, as a line through one abscissa would. Cost O(n + K) per call, on the
+    /// stack; `n` is at most [`CENTRE_SEARCH_SAMPLES`].
+    fn finish_spline(&self) -> f64 {
+        const K: usize = SPLINE_KNOTS;
+        let total: f64 = self.scc.iter().sum();
+        let (mut lo, mut hi) = (f64::MAX, f64::MIN);
+        for &t in &self.t {
+            lo = lo.min(t);
+            hi = hi.max(t);
+        }
+        // No spread in `t` (also no samples: then `hi − lo` is −∞).
+        if hi - lo <= 1e-9 {
+            return total;
+        }
+        let h = (hi - lo) / (K - 1) as f64;
+        // The last knot's index, minus a whisker, so `t = hi` falls in the last piece
+        // with f = 1 rather than one past it.
+        let u_max = (K - 1) as f64 - 1e-12;
+        let mut d = [0.0f64; K];
+        let mut e = [0.0f64; K];
+        let mut b = [[0.0f64; 3]; K];
+        for (c, &t) in self.cols.iter().zip(&self.t) {
+            let u = ((t - lo) / h).min(u_max);
+            let j = u as usize; // u ≥ 0, so this is ⌊u⌋, and j ≤ K − 2
+            let f = u - j as f64;
+            let (w0, w1) = (1.0 - f, f);
+            d[j] += w0 * w0;
+            d[j + 1] += w1 * w1;
+            e[j] += w0 * w1;
+            for ch in 0..3 {
+                let dc = c[ch] - self.cbar[ch];
+                b[j][ch] += w0 * dc;
+                b[j + 1][ch] += w1 * dc;
+            }
+        }
+        for v in d.iter_mut() {
+            *v += 1e-9;
+        }
+        // Thomas algorithm: forward sweep (cp, dp), back substitution, per channel. The
+        // modified pivots `m` depend only on the matrix, so they are shared by the three
+        // channels.
+        let mut cp = [0.0f64; K];
+        let mut m = [0.0f64; K];
+        m[0] = d[0];
+        cp[0] = e[0] / m[0];
+        for i in 1..K {
+            m[i] = d[i] - e[i - 1] * cp[i - 1];
+            cp[i] = if i + 1 < K { e[i] / m[i] } else { 0.0 };
+        }
+        let mut explained = 0.0;
+        for ch in 0..3 {
+            let mut dp = [0.0f64; K];
+            dp[0] = b[0][ch] / m[0];
+            for i in 1..K {
+                dp[i] = (b[i][ch] - e[i - 1] * dp[i - 1]) / m[i];
+            }
+            let mut x = [0.0f64; K];
+            x[K - 1] = dp[K - 1];
+            for i in (0..K - 1).rev() {
+                x[i] = dp[i] - cp[i] * x[i + 1];
+            }
+            for i in 0..K {
+                explained += x[i] * b[i][ch];
+            }
+        }
+        (total - explained).max(0.0)
     }
 }
 
@@ -651,6 +768,62 @@ pub(super) fn fit_radial_elliptic(
         interp: space,
         aspect,
         angle: st[2],
+        mids: Vec::new(),
+    })
+}
+
+/// A radial geometry found by a search (`geometry`, a [`FillModel::Radial`]) with its two
+/// stops refitted in another interpolation space: the samples' coordinate `ρ_i` under that
+/// geometry, `r = max ρ_i`, and the least-squares line `colour = a + g·ρ` in `space`
+/// ([`fit_1d`]), exactly as the tails of [`fit_radial`] (aspect 1: the Euclidean distance)
+/// and [`fit_radial_elliptic`] (the elliptical distance) compute them.
+///
+/// The profile-aware search ([`profile_geometries`]) runs once, on the sRGB colours, and
+/// its geometry serves both spaces through this: a free piecewise-linear profile absorbs
+/// the per-channel transfer curve between the spaces, so the level sets it finds, and with
+/// them the geometry, do not depend on the space; only the stops do. `None` for a
+/// non-radial model, or when `r < 0.5` px.
+pub(super) fn restop_radial(
+    s: &Samples,
+    cols: &[[f64; 3]],
+    space: Interp,
+    geometry: &FillModel,
+) -> Option<FillModel> {
+    let FillModel::Radial {
+        c, aspect, angle, ..
+    } = *geometry
+    else {
+        return None;
+    };
+    let n = s.len();
+    let rho: Vec<f64> = if aspect == 1.0 {
+        (0..n)
+            .map(|i| ((s.x[i] - c.0).powi(2) + (s.y[i] - c.1).powi(2)).sqrt())
+            .collect()
+    } else {
+        let (sn, cs) = angle.sin_cos();
+        (0..n)
+            .map(|i| {
+                let (dx, dy) = (s.x[i] - c.0, s.y[i] - c.1);
+                let u = dx * cs + dy * sn;
+                let v = (-dx * sn + dy * cs) * aspect;
+                (u * u + v * v).sqrt()
+            })
+            .collect()
+    };
+    let r = rho.iter().cloned().fold(f64::MIN, f64::max);
+    if r < 0.5 {
+        return None;
+    }
+    let (_, a, g) = fit_1d(cols, &rho);
+    Some(FillModel::Radial {
+        c,
+        r,
+        c0: from_space(a, space),
+        c1: from_space([a[0] + g[0] * r, a[1] + g[1] * r, a[2] + g[2] * r], space),
+        interp: space,
+        aspect,
+        angle,
         mids: Vec::new(),
     })
 }

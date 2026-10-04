@@ -397,7 +397,7 @@ fn merge_bands_budgeted(
     // 1. Connected components, and adjacency with shared-boundary lengths.
     let (comp, members, comp_label) = label_components(labels, w, h);
     let n_comp = members.len();
-    let (adj, smooth) =
+    let (adj, smooth, sharp) =
         component_adjacency(&comp, &comp_label, rgb, w, h, same_class, inner_blends);
 
     // Which pixels may testify about a fill at all (see `fill_evidence`). Computed on
@@ -447,6 +447,7 @@ fn merge_bands_budgeted(
         group,
         adj,
         smooth,
+        sharp,
         fits,
         alive: vec![true; n_comp],
         cache: HashMap::new(),
@@ -534,7 +535,11 @@ type SeamCounts = Vec<HashMap<u32, u32>>;
 /// (symmetric). Pairs whose labels `same_class` rejects are left out, so those
 /// components are never adjacent for merging. With `inner_blends`, `smooth[a][b]`
 /// counts the pairs across which the colour steps less than a ramp step (see
-/// [`regions::smooth_step`]); without it `smooth` stays empty.
+/// [`regions::smooth_step`]); without it `smooth` stays empty. `sharp[a][b]` counts the
+/// pairs that step more than a discontinuity ([`regions::edge_step`]), always: the seams
+/// that are edges ([`regions::is_edge`]). All three count the same admitted pairs, so
+/// `smooth[a][b] + sharp[a][b] ≤ adj[a][b]`, and absorbing a component moves all three the
+/// same way. One pass over the image; colours are compared only across seams.
 fn component_adjacency(
     comp: &[u32],
     comp_label: &[u16],
@@ -543,13 +548,15 @@ fn component_adjacency(
     h: usize,
     same_class: Option<&(dyn Fn(u16, u16) -> bool + Sync)>,
     inner_blends: bool,
-) -> (SeamCounts, SeamCounts) {
+) -> (SeamCounts, SeamCounts, SeamCounts) {
     let n = w * h;
     let n_comp = comp_label.len();
     let mut adj: Vec<HashMap<u32, u32>> = vec![HashMap::new(); n_comp];
     // Of those, the pixel pairs across which the colour changes by less than a ramp
     // step: see `regions::smooth_step`. Only kept when region recovery is on.
     let mut smooth: Vec<HashMap<u32, u32>> = vec![HashMap::new(); n_comp];
+    // And the pixel pairs that step more than a discontinuity: see `regions::edge_step`.
+    let mut sharp: Vec<HashMap<u32, u32>> = vec![HashMap::new(); n_comp];
     for p in 0..n {
         let (x, y) = (p % w, p / w);
         for q in [
@@ -569,10 +576,14 @@ fn component_adjacency(
                     *smooth[a as usize].entry(b).or_insert(0) += 1;
                     *smooth[b as usize].entry(a).or_insert(0) += 1;
                 }
+                if regions::edge_step(rgb[p], rgb[q]) {
+                    *sharp[a as usize].entry(b).or_insert(0) += 1;
+                    *sharp[b as usize].entry(a).or_insert(0) += 1;
+                }
             }
         }
     }
-    (adj, smooth)
+    (adj, smooth, sharp)
 }
 
 /// Step 2: the fixed inputs of every component and union fit — the image, the noise and
@@ -733,7 +744,7 @@ impl MergeTiming {
             ns_book / 1_000_000,
         );
         eprintln!(
-            "  [t] merge: {} components, {} union fits over {} pixels total; fit ms (summed over threads): collect {} flat {} linear {} radial {} elliptic {}",
+            "  [t] merge: {} components, {} union fits over {} pixels total; fit ms (summed over threads): collect {} flat {} linear {} radial {} elliptic {} profile {}",
             n_comp,
             FIT_CALLS.load(std::sync::atomic::Ordering::Relaxed),
             FIT_PIXELS.load(std::sync::atomic::Ordering::Relaxed),
@@ -742,6 +753,7 @@ impl MergeTiming {
             FIT_NS_LINEAR.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000,
             FIT_NS_RADIAL.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000,
             FIT_NS_ELLIPTIC.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000,
+            FIT_NS_PROFILE.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000,
         );
     }
 }
@@ -766,6 +778,9 @@ struct Agglomeration<'a> {
     adj: Vec<HashMap<u32, u32>>,
     /// Of those pairs, the smooth ones (region recovery only).
     smooth: Vec<HashMap<u32, u32>>,
+    /// Of those pairs, the ones that step above the discontinuity threshold
+    /// ([`regions::edge_step`]).
+    sharp: Vec<HashMap<u32, u32>>,
     /// Current fit of each component.
     fits: Vec<FillFit>,
     /// Whether each component still exists.
@@ -821,8 +836,36 @@ impl Agglomeration<'_> {
     /// fitting their union just to discard it was the single largest cost in the tracer.
     /// If one of the pair later absorbs a band and becomes a gradient, the union is
     /// fitted at that point instead. The exception is [`Self::ramp_step`].
+    ///
+    /// A pair of components of at least [`MIN_GRADIENT_PIXELS`] pixels each whose seam is
+    /// mostly discontinuity ([`Self::across_edge`]) is never worth one.
     fn worth_a_union(&self, a: usize, b: usize) -> bool {
-        self.fits[a].model.is_gradient() || self.fits[b].model.is_gradient() || self.ramp_step(a, b)
+        (self.fits[a].model.is_gradient()
+            || self.fits[b].model.is_gradient()
+            || self.ramp_step(a, b))
+            && !self.across_edge(a, b)
+    }
+
+    /// Whether the seam between `a` and `b` is an edge two regions meet at, not a band
+    /// boundary inside one: both components hold at least [`MIN_GRADIENT_PIXELS`] pixels
+    /// and the seam is an edge ([`regions::is_edge`]: more than half of its pixel pairs step
+    /// above the discontinuity threshold). Inspired by Chakraborty et al. 2025,
+    /// doi:10.1111/cgf.70055, §3.2: segments facing each other across the discontinuity
+    /// map are never one region. The size floor keeps anti-aliasing flecks, which are all
+    /// edge, absorbable as before.
+    ///
+    /// Why (research prototype A10, the princess emoji `u1f478_1f3fd`): the crown's lower
+    /// band, a 139 px component that is all blends (its flat fit priced on all of them,
+    /// cost 62672), was absorbed into the hair (cost 67 alone, union chi² 79251) across a
+    /// seam stepping 20+ OKLab units per pixel along its whole length, once the
+    /// profile-aware candidates gave the union a gradient that fitted it (+0.15 dE00 at
+    /// 128 px); this test stops it (0.700 -> 0.496). Neither of the prototype's other two
+    /// guards did: pricing the union on common pixels (it wins there too, the band's own
+    /// flat misfitting the band worse) or refusing step-like profiles.
+    fn across_edge(&self, a: usize, b: usize) -> bool {
+        self.members[a].len() >= MIN_GRADIENT_PIXELS
+            && self.members[b].len() >= MIN_GRADIENT_PIXELS
+            && regions::is_edge(&self.adj, &self.sharp, a, b)
     }
 
     /// The pixels of components `a` and `b`, `a`'s first, as the two parts a fit reads.
@@ -1213,6 +1256,7 @@ impl Agglomeration<'_> {
         }
         self.adj[ai].remove(&b);
         regions::absorb_counts(&mut self.smooth, ai, bi);
+        regions::absorb_counts(&mut self.sharp, ai, bi);
         // A stale flat union is dropped rather than kept: it is never a candidate, so it
         // would never be refitted, and a union that came out flat before the region grew
         // can come out a gradient after (two noto icons moved 0.005 dE00 when these were

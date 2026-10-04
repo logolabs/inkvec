@@ -1,4 +1,5 @@
-//! Scoring a fill model against a region's samples: chi², visible contrast and ramp support.
+//! Scoring a fill model against a region's samples: chi², visible contrast and ramp support,
+//! and the test ([`imperceptible`]) that refuses a gradient the emitter would paint flat.
 //!
 //! [`super::fit_samples`] scores every candidate three ways -- the contrast it draws, the
 //! share of the region it shades, and its chi² -- and all three read the model's
@@ -120,6 +121,56 @@ pub(super) fn ramp_support(model: &FillModel, s: &Samples, mean: [f32; 3], contr
 /// an empty sample set, whose sentinel range is negative and loses to the fold's 0.
 pub(super) fn visible_contrast(model: &FillModel, s: &Samples) -> f64 {
     Predictions::new(model, s).contrast()
+}
+
+// ---------------------------------------------------------------------------------------
+// What the emitter will draw
+// ---------------------------------------------------------------------------------------
+
+/// Largest OKLab distance between any two stops of a gradient that the emitter still
+/// paints flat (`demote_imperceptible_gradient` in `inkvec-cli/src/pipeline/demote.rs`,
+/// whose `JND` this is: "a conservative multiple of a just-noticeable difference in
+/// OKLab"). The two must stay equal; the emitter can call [`imperceptible`] instead of
+/// keeping its own copy.
+pub const IMPERCEPTIBLE_STOP_OKLAB: f32 = 0.02;
+
+/// Whether the emitter would paint `model` flat: it is a gradient and every pair of its
+/// stops (the two ends and every interior one) lies closer than
+/// [`IMPERCEPTIBLE_STOP_OKLAB`] in OKLab. A flat fill is not.
+///
+/// `fit_samples` refuses such a candidate, as it refuses one below the contrast floor,
+/// because model selection must price what is drawn: an imperceptible gradient is emitted
+/// as the flat midpoint of its end stops, not as the gradient whose residual won the
+/// selection, and not as the region's own best flat colour (the per-channel median the flat
+/// candidate carries). Measured on `noto-emoji/emoji_u1f36a` at 512 px (2026-10-03): the
+/// profile-aware candidates (`fit::profile_geometries`) fitted the cookie's body, a flat
+/// core with a two-level ramp, by a radial whose stops all lie within 0.02 of each other
+/// (chi² 252 over 48,313 px); the emitter painted it #f09c56, and the icon went from
+/// dE00 0.087 to 0.216. Refusing the candidate leaves the body flat in the merger, which
+/// then joins it to the ring around it into one gradient the emitter keeps (0.126). On
+/// the regression gate, with the profile-aware candidates, quality-512ssop dE00 against
+/// v0.2.5 went from −1.62 % to −2.85 % and quality-512ss from −2.45 % (inside its interval)
+/// to −1.99 % ("better").
+///
+/// Not from the literature: a consistency rule between this crate's model selection and
+/// its emitter. Complexity O(stops²), at most four stops.
+pub fn imperceptible(model: &FillModel) -> bool {
+    let (c0, c1, mids) = match model {
+        FillModel::Flat(_) => return false,
+        FillModel::Linear { c0, c1, mids, .. } | FillModel::Radial { c0, c1, mids, .. } => {
+            (*c0, *c1, mids)
+        }
+    };
+    let stops: Vec<_> = [c0, c1]
+        .into_iter()
+        .chain(mids.iter().map(|&(_, c)| c))
+        .map(crate::color::rgb_to_oklab)
+        .collect();
+    !stops.iter().enumerate().any(|(i, a)| {
+        stops[i + 1..]
+            .iter()
+            .any(|b| a.dist(*b) >= IMPERCEPTIBLE_STOP_OKLAB)
+    })
 }
 
 #[cfg(test)]
@@ -280,5 +331,30 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_gradient_the_emitter_paints_flat_is_imperceptible() {
+        let lin = |c0: [f32; 3], c1: [f32; 3], mids: Vec<(f64, [f32; 3])>| FillModel::Linear {
+            p0: (0.0, 0.0),
+            p1: (10.0, 0.0),
+            c0,
+            c1,
+            interp: Interp::Srgb,
+            mids,
+        };
+        // Two levels apart: within the JND.
+        let near = [0.94, 0.62, 0.34];
+        let next = [0.95, 0.63, 0.35];
+        assert!(imperceptible(&lin(near, next, vec![])));
+        // Equal ends but a visible interior stop: the emitter keeps it.
+        assert!(!imperceptible(&lin(
+            near,
+            near,
+            vec![(0.5, [0.5, 0.3, 0.2])]
+        )));
+        // A visible ramp.
+        assert!(!imperceptible(&lin([0.1; 3], [0.9; 3], vec![])));
+        assert!(!imperceptible(&FillModel::Flat([0.5; 3])));
     }
 }

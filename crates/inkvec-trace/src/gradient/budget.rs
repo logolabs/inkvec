@@ -20,6 +20,8 @@ pub(crate) static FIT_NS_LINEAR: AtomicU64 = AtomicU64::new(0);
 pub(crate) static FIT_NS_RADIAL: AtomicU64 = AtomicU64::new(0);
 /// Time in the elliptical radial fit.
 pub(crate) static FIT_NS_ELLIPTIC: AtomicU64 = AtomicU64::new(0);
+/// Time in the profile-aware radial search (`fit::profile_geometries`).
+pub(crate) static FIT_NS_PROFILE: AtomicU64 = AtomicU64::new(0);
 
 /// Add the time elapsed since `t` to `slot`.
 pub(crate) fn tick(slot: &AtomicU64, t: inkvec_core::clock::Instant) {

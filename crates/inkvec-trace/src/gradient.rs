@@ -761,6 +761,39 @@ fn ramp_models(s: &Samples, w: usize, space: Interp) -> (Interp, Vec<[f64; 3]>, 
     (space, cols, cands)
 }
 
+/// The ramp candidates of every interpolation space ([`ramp_models`], one space per entry,
+/// in [`INTERPS`] order), each space's list followed by the profile-aware radial
+/// geometries: found once for both spaces by [`profile_geometries`] on the sRGB colours,
+/// run beside the line-scored fits, and appended to each space's list with the stops
+/// refitted there ([`restop_radial`]). The line-scored candidates come first, so they win
+/// ties in `select`; the extra ones only change a region's fill where they describe it
+/// more cheaply.
+fn ramp_candidates(s: &Samples, w: usize) -> Vec<(Interp, Vec<[f64; 3]>, Vec<FillModel>)> {
+    use rayon::prelude::*;
+    let (geometry, mut per_space): (Vec<FillModel>, Vec<_>) = rayon::join(
+        || {
+            let t = inkvec_core::clock::Instant::now();
+            let found = profile_geometries(s, &s.colors(Interp::Srgb), w);
+            tick(&FIT_NS_PROFILE, t);
+            found
+        },
+        || {
+            INTERPS
+                .par_iter()
+                .map(|&space| ramp_models(s, w, space))
+                .collect()
+        },
+    );
+    for (space, cols, cands) in per_space.iter_mut() {
+        cands.extend(
+            geometry
+                .iter()
+                .filter_map(|g| restop_radial(s, cols, *space, g)),
+        );
+    }
+    per_space
+}
+
 /// Every admissible candidate for the samples, flat first.
 ///
 /// The model-selection core. Each candidate is scored `cost = 0.5·chi² + λ·params`
@@ -835,10 +868,7 @@ fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> 
     // them side by side, then take them in the order the one-at-a-time loop did, which is
     // the order `select` breaks ties in.
     use rayon::prelude::*;
-    let per_space: Vec<(Interp, Vec<[f64; 3]>, Vec<FillModel>)> = INTERPS
-        .par_iter()
-        .map(|&space| ramp_models(s, w, space))
-        .collect();
+    let per_space = ramp_candidates(s, w);
     let jobs: Vec<(Interp, &[[f64; 3]], &FillModel)> = per_space
         .iter()
         .flat_map(|(space, cols, cands)| cands.iter().map(move |c| (*space, &cols[..], c)))
@@ -853,7 +883,12 @@ fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> 
             let preds = Predictions::new(&cand, s);
             let contrast = preds.contrast();
             let support = preds.support(flat_c, contrast);
-            if contrast < min_contrast || support < MIN_RAMP_SUPPORT {
+            // A gradient the emitter would paint flat is refused like one below the
+            // contrast floor: its residual is not what is drawn (`score::imperceptible`).
+            // Like a parent below the floor, it is refused before its interior stops are
+            // fitted (measured that way on the gate; it also saves their fit), so a
+            // light-dark-light profile whose two-stop line is flat is not tried here.
+            if contrast < min_contrast || support < MIN_RAMP_SUPPORT || imperceptible(&cand) {
                 // Which gate refused a candidate is otherwise invisible: a region that
                 // ends up "cands 1" looks identical whether no ramp was ever tried or
                 // every ramp was thrown away here. `INKVEC_EVDBG=1`.
@@ -880,7 +915,10 @@ fn fit_samples(s: &Samples, w: usize, strict: bool, sigma: f64, lambda: f64) -> 
             for m in multi {
                 let pm = Predictions::new(&m, s);
                 let c = pm.contrast();
-                if c >= min_contrast && pm.support(flat_c, c) >= MIN_RAMP_SUPPORT {
+                if c >= min_contrast
+                    && pm.support(flat_c, c) >= MIN_RAMP_SUPPORT
+                    && !imperceptible(&m)
+                {
                     out.push(scored(m, &pm));
                 }
             }
@@ -1108,6 +1146,7 @@ mod evidence;
 mod fit;
 pub(crate) mod regions;
 mod score;
+pub use score::{imperceptible, IMPERCEPTIBLE_STOP_OKLAB};
 pub(crate) mod stops;
 pub mod svg;
 

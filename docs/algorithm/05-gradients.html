@@ -181,6 +181,46 @@
     </section>
 
     <section>
+      <h2>Finding the centre of a fade that does not fade everywhere</h2>
+      <p>Most radial fades an artist draws do not change colour all the way from the centre
+        to the rim. Nearly three in four of the visible gradients in the emoji set hold one
+        colour across a core and only start to darken near the edge, or rise and fall in a
+        bump. The radial fitter used to place a fade's centre wherever a single straight
+        ramp of colour fitted the region best — which, for a fade with a flat core, is not
+        where the artist put the centre at all — and such fades came out painted flat four
+        times as often as fades that change all the way across.</p>
+      <p>Since October 2026 every region that could take a radial fade is also searched with
+        a fade allowed to bend: flat in the middle, steep at the rim, or anything between.
+        The centre (and, for an ellipse, its angle and stretch) is found by a standard
+        numerical method for exactly this kind of problem, in which the colours along the
+        fade are solved for directly and only the shape of the fade is searched; it reaches
+        the answer in about fifteen tries where the old search took hundreds. The fade it
+        finds is offered alongside the old one, never instead of it, and the same cost
+        comparison picks between them.</p>
+      <p>A guard comes with it: two regions are never joined into one fade across a seam where
+        most neighbouring pixels jump in colour. Before this rule, the band between a
+        princess's crown and her hair could be absorbed into the hair once a bending fade
+        fitted both.</p>
+      <p>Finally, the cost comparison now prices what will actually be drawn. The file writer
+        paints a fade whose colours are all within a just-noticeable difference of each other
+        as one flat colour, halfway between its ends. A fade like that used to win the
+        comparison on its own accuracy and then be drawn as something else; on a cookie emoji
+        that turned an almost perfect fit of the biscuit into a visibly wrong flat colour. A
+        fade the writer would flatten is now refused at the start, and the region is
+        described by what will really be drawn.</p>
+      <p>A bending fade needs its bends in the right places. The colour stops inside a fade
+        used to be placed one at a time, the first as if it were the only one; on a fade with
+        a flat core, the first landed on the sharpest bend near the rim and the second split
+        the rim again, so the core was drawn as a gentle slope it does not have. Now, once
+        two stops are found, each is moved to its best place with the other held where it
+        is — a standard refinement for exactly this kind of one-at-a-time search — and the
+        core gets its stop. Together these changes lifted the share of the artist's fades
+        recovered as one fade, on the 168 emoji whose original files contain gradients, from
+        42 to 50 percent, and cut the share painted flat from 30 to 24 percent; on the 512
+        pixel emoji of the regression set the colour error fell by about an eighth.</p>
+    </section>
+
+    <section>
       <h2>Why this stage costs the most time in the tracer</h2>
       <p>Searching for the best gradient — trying candidate axes, candidate centres,
         candidate interpolation spaces, and scoring each against the actual pixels — is the

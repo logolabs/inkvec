@@ -91,6 +91,7 @@ pub mod planar;
 pub mod regions;
 pub mod regroup;
 pub mod regularize;
+pub mod softness;
 pub mod symmetry;
 pub mod taper;
 

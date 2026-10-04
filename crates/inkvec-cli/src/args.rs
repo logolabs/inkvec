@@ -88,6 +88,9 @@ pub struct Args {
     pub no_background: bool,
     /// Keep a nearest-neighbour upscale as it is instead of undoing it.
     pub no_unblock: bool,
+    /// Trace a resampled or blurred input as it arrived, instead of reducing it to the
+    /// detail it carries first (the intake's `soft_intake`).
+    pub no_soft_intake: bool,
     /// Spend fewer coordinates on boundaries that are barely visible.
     pub simplify_faint: bool,
     /// Recover translucent layers: one shape at one opacity seen against several grounds.
@@ -225,6 +228,7 @@ impl Default for Args {
             strict: false,
             no_background: false,
             no_unblock: false,
+            no_soft_intake: false,
             simplify_faint: false,
             layers: false,
             cutout: false,
@@ -360,6 +364,14 @@ OPTIONS:
                             Without it a 96-px logo blown up to 768 traces its pixel
                             boundaries: 13 inks instead of 3, and 1568 straight lines
                             walking round the corners
+        --no-soft-intake    Trace a resampled or blurred input as it arrived. By default
+                            (in quality mode) an input whose every strong edge is wider
+                            than a native render makes one (a bicubic or Lanczos upscale of
+                            3x or more, a blur) is area-reduced to the detail it carries --
+                            by the upscale factor the edges imply, never so far that its
+                            thinnest strokes drop under 3 px -- and the SVG is still
+                            written at the size that came in. Native renders, 2x upscales
+                            and sharp art with a soft glow or shadow are never reduced
         --cutout            Carry the input's transparency into the output. A face the
                             source drew transparent becomes a hole in the faces above it
                             rather than a patch of white; one drawn at a single opacity
@@ -559,6 +571,7 @@ fn parse_args_from(mut it: impl Iterator<Item = String>) -> Result<Args, String>
             "--uncertainty-k" => a.uncertainty_k = parse_value(&mut it, "--uncertainty-k")?,
             "--no-background" => a.no_background = true,
             "--no-unblock" => a.no_unblock = true,
+            "--no-soft-intake" => a.no_soft_intake = true,
             "--simplify-faint" => a.simplify_faint = true,
             "--layers" => a.layers = true,
             "--cutout" => a.cutout = true,

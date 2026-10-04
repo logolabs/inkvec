@@ -60,6 +60,7 @@ mod post;
 mod primitive;
 mod rings;
 mod seams;
+mod soft_intake;
 mod strokes;
 mod uncertainty;
 mod units;
@@ -246,6 +247,36 @@ fn present(svg: &str, w: usize, h: usize, stretch: bool) -> String {
     }
 }
 
+/// The reductions that run after an unblock and ahead of the pre-passes: a resampled or
+/// blurred raster is reduced to the detail it carries (`soft_intake`), unless asked not to
+/// (`--no-soft-intake`); `--intake-scale` keeps its own older measurement in its place.
+/// Neither runs after an unblock (the raster is already the source) nor ahead of SR, which
+/// wants the soft raster to put detail back into. Returns the raster, whether anything
+/// resampled it (an unblock counts), and whether `soft_intake` reduced it.
+///
+/// Quality mode only. Fast mode traces a soft raster as it arrived: reduced, its parameters
+/// fell 92 % on 4x bicubic input but its colour error did not follow -- dE00 −2.4 % with 12
+/// of 28 worse, and +6.6 % on Lanczos 3x (9 of 28 worse, r2-inputs stress set, 2026-10-04)
+/// -- because its palette has none of the soft-input noise guards the reduced raster's
+/// remaining ramps need (the r2-inputs report's 5.9).
+fn reduce_intake(
+    img: inkvec_trace::Rgba,
+    args: &Args,
+    replicated: bool,
+) -> (inkvec_trace::Rgba, bool, bool) {
+    if replicated || args.sr != inkvec_sr::Mode::Off {
+        (img, replicated, false)
+    } else if args.intake_scale {
+        let (out, did) = normalise_intake(img, args.quiet);
+        (out, did, false)
+    } else if args.no_soft_intake || args.mode == TraceMode::Fast {
+        (img, false, false)
+    } else {
+        let (out, did) = soft_intake::reduce(img, args.quiet);
+        (out, did, did)
+    }
+}
+
 /// Everything [`trace_image_sized`] does before the restorer pre-pass: undo an exact
 /// pixel-grid upscale, normalise the intake, apply `--max-dim`, and price `--precision`,
 /// `--min-area` and lambda in the raster's own units.
@@ -309,15 +340,8 @@ pub fn intake(
     // bounded exactly like the real trace. They used to run after the pre-passes' early
     // returns, so `--restore auto` / `--sr auto` kept a probe traced at full resolution and
     // `--max-dim` (and `--intake-scale`) were silently ignored.
-    let mut normalised = if replicated {
-        true
-    } else if !args.intake_scale || args.sr != inkvec_sr::Mode::Off {
-        false
-    } else {
-        let (out, did) = normalise_intake(img, args.quiet);
-        img = out;
-        did
-    };
+    let (reduced, mut normalised, soft_reduced) = reduce_intake(img, args, replicated);
+    img = reduced;
 
     // Larger than the product wants to spend time on: trace a box-filtered
     // reduction and write the SVG at the original size. The reduction is the same
@@ -346,7 +370,7 @@ pub fn intake(
         args,
         replicated,
         normalised,
-        stretch: replicated,
+        stretch: replicated || soft_reduced,
         display: (display_w, display_h),
     }
 }

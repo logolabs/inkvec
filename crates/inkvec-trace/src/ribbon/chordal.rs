@@ -629,68 +629,84 @@ mod tests {
         check(&t, false);
     }
 
-    /// The outline of a V-shaped stroke (two capsules meeting at `v`), sampled every
-    /// ~`step` px, as one ring, and its inside test.
-    fn v_stroke(h: f64, step: f64) -> (Polyline, impl Fn(Point) -> bool) {
-        let (a, v, c) = (
-            Point::new(0.0, 40.0),
-            Point::new(40.0, 80.0),
-            Point::new(120.0, 0.0),
-        );
-        let seg_d = |p: Point, s: Point, e: Point| crate::ribbon::grid::point_segment(p, s, e).0;
-        let inside = move |p: Point| seg_d(p, a, v).min(seg_d(p, v, c)) <= h;
-        // March round the outline: points where the distance field crosses h, by a scan
-        // of rays from inside points... simpler: sample the boundary of the union by
-        // walking a fine circle of directions from a dense set of axis points and keeping
-        // the boundary crossings in angular order round the shape's centre is fragile; use
-        // a polygon offset instead: the outline of each capsule, clipped by the other.
-        let mut ring = Vec::new();
-        let n = 2000;
-        // Polar scan round a point inside both arms near the corner, radius by bisection.
-        let o = Point::new(40.0, 72.0);
-        for k in 0..n {
-            let ang = std::f64::consts::TAU * k as f64 / n as f64;
-            let dir = (ang.cos(), ang.sin());
-            let (mut lo, mut hi) = (0.0, 200.0);
-            for _ in 0..60 {
-                let mid = 0.5 * (lo + hi);
-                if inside(Point::new(o.x + mid * dir.0, o.y + mid * dir.1)) {
-                    lo = mid;
-                } else {
-                    hi = mid;
-                }
-            }
-            ring.push(Point::new(o.x + lo * dir.0, o.y + lo * dir.1));
-        }
-        let _ = step;
-        (Polyline::with_uniform_sigma(ring, 0.05, true), inside)
+    /// The V's centreline `A -> V -> C`: arms of 56.6 and 113.1 px meeting at 90°.
+    const V_A: Point = Point { x: 0.0, y: 40.0 };
+    const V_V: Point = Point { x: 40.0, y: 80.0 };
+    const V_C: Point = Point { x: 120.0, y: 0.0 };
+
+    /// Squared distance from `p` to segment `s -> e`, in `+ - * /` only.
+    fn seg_d2(p: Point, s: Point, e: Point) -> f64 {
+        let (ex, ey) = (e.x - s.x, e.y - s.y);
+        let u = (((p.x - s.x) * ex + (p.y - s.y) * ey) / (ex * ex + ey * ey)).clamp(0.0, 1.0);
+        let (dx, dy) = (p.x - (s.x + u * ex), p.y - (s.y + u * ey));
+        dx * dx + dy * dy
     }
 
-    #[test]
-    fn a_thick_v_has_one_branch_from_tip_to_tip() {
-        let (ring, inside) = v_stroke(21.0, 1.0);
-        let b = Boundary::new(&[ring], &inside, 2.0).expect("a ring");
+    /// Squared distance from `p` to the V's centreline.
+    fn v_d2(p: Point) -> f64 {
+        seg_d2(p, V_A, V_V).min(seg_d2(p, V_V, V_C))
+    }
+
+    /// The outline of a V-shaped stroke of half-width `h` (two capsules meeting at `V`) as
+    /// one ring of 2000 points, and its inside test.
+    ///
+    /// Built with IEEE `+ - * /` only, no libm (`sin`, `cos`, `hypot` are not correctly
+    /// rounded and differ in the last bits between platforms): the ray directions are the
+    /// rational points `((1 - u²)/(1 + u²), 2u/(1 + u²))` of the unit circle, `u = k/500`,
+    /// turned into each quadrant, and the radius along each ray is bisected on the
+    /// squared-distance inside test. The same bits on every platform, so the same
+    /// triangulation (its predicates are exact).
+    fn v_stroke(h: f64) -> (Vec<Point>, impl Fn(Point) -> bool) {
+        let inside = move |p: Point| v_d2(p) <= h * h;
+        let o = Point::new(40.0, 72.0);
+        let m = 500;
+        let mut ring = Vec::with_capacity(4 * m);
+        for q in 0..4 {
+            for k in 0..m {
+                let u = k as f64 / m as f64;
+                let (c, s) = ((1.0 - u * u) / (1.0 + u * u), 2.0 * u / (1.0 + u * u));
+                let dir = match q {
+                    0 => (c, s),
+                    1 => (-s, c),
+                    2 => (-c, -s),
+                    _ => (s, -c),
+                };
+                let (mut lo, mut hi) = (0.0, 200.0);
+                for _ in 0..60 {
+                    let mid = 0.5 * (lo + hi);
+                    if inside(Point::new(o.x + mid * dir.0, o.y + mid * dir.1)) {
+                        lo = mid;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                ring.push(Point::new(o.x + lo * dir.0, o.y + lo * dir.1));
+            }
+        }
+        (ring, inside)
+    }
+
+    /// What the V test reads from the chordal axis of `ring`: the distance from each tip to
+    /// the nearest free end; the length of the axis path between the nodes nearest the two
+    /// tips; and the largest distance of that path from the centreline.
+    fn v_reading(ring: Vec<Point>, inside: &dyn Fn(Point) -> bool) -> (f64, f64, f64, f64) {
+        let ring = Polyline::with_uniform_sigma(ring, 0.05, true);
+        let b = Boundary::new(&[ring], inside, 2.0).expect("a ring");
         let (pts, g, branches) = axis(&b).expect("an axis");
-        assert!(!pts.is_empty());
         assert!(!branches.is_empty());
-        // A free end near each cap, and a path between them along the axis about as long
-        // as the centreline (56.6 + 113.1 px, less the caps' reach into the tips): the V
-        // is one stroke through its corner. Spurs into the convex outer corner are allowed
-        // (the topology passes drop branches with no sleeve under them).
-        let end_near = |q: Point| -> usize {
+        let d2 = |p: Point, q: Point| (p.x - q.x) * (p.x - q.x) + (p.y - q.y) * (p.y - q.y);
+        let nearest = |q: Point, free: bool| -> usize {
             (0..pts.len())
-                .filter(|&k| g.degree(k) == 1)
-                .min_by(|&i, &j| pts[i].dist(q).total_cmp(&pts[j].dist(q)))
-                .expect("free ends")
+                .filter(|&k| !free || g.degree(k) == 1)
+                .min_by(|&i, &j| d2(pts[i], q).total_cmp(&d2(pts[j], q)))
+                .expect("nodes")
         };
-        let (s, t) = (
-            end_near(Point::new(0.0, 40.0)),
-            end_near(Point::new(120.0, 0.0)),
-        );
-        assert!(pts[s].dist(Point::new(0.0, 40.0)) < 25.0, "{:?}", pts[s]);
-        assert!(pts[t].dist(Point::new(120.0, 0.0)) < 25.0, "{:?}", pts[t]);
-        // Dijkstra by Euclidean length.
+        let end_a = d2(pts[nearest(V_A, true)], V_A).sqrt();
+        let end_c = d2(pts[nearest(V_C, true)], V_C).sqrt();
+        let (s, t) = (nearest(V_A, false), nearest(V_C, false));
+        // Dijkstra by Euclidean length, keeping predecessors.
         let mut dist = vec![f64::INFINITY; pts.len()];
+        let mut from = vec![usize::MAX; pts.len()];
         let mut done = vec![false; pts.len()];
         dist[s] = 0.0;
         for _ in 0..pts.len() {
@@ -702,12 +718,75 @@ mod tests {
             };
             done[u] = true;
             for &v in &g.adj[u] {
-                let d = dist[u] + pts[u].dist(pts[v]);
+                let d = dist[u] + d2(pts[u], pts[v]).sqrt();
                 if d < dist[v] {
                     dist[v] = d;
+                    from[v] = u;
                 }
             }
         }
-        assert!((120.0..230.0).contains(&dist[t]), "path {}", dist[t]);
+        let mut dev: f64 = 0.0;
+        let mut k = t;
+        while k != usize::MAX {
+            dev = dev.max(v_d2(pts[k]).sqrt());
+            k = if k == s { usize::MAX } else { from[k] };
+        }
+        (end_a, end_c, dist[t], dev)
+    }
+
+    /// The V's axis is one stroke from cap to cap through its corner: a free end in each
+    /// cap, and the axis path between the nodes nearest the two tips as long as the
+    /// centreline (56.6 + 113.1 px; 167.4 measured) and within a quarter width of it (1.2 px
+    /// measured, at the corner).
+    ///
+    /// The path runs between the nodes *nearest the tips*, not between free ends: a round
+    /// cap's points are cocircular, so its triangulation (a fan, a strip) is decided by the
+    /// coordinates' last bits, and so are the spurs it sends to the cap's rim and the
+    /// length of a path that starts on one. The macOS build failed here at 248 px against
+    /// a bound of 230, its libm's `sin`/`cos` having moved the input's last bits; with every
+    /// coordinate perturbed by up to two ulps that path ranged over 211-317 px while the one
+    /// asserted here stayed at 167.38 px in all 40 trials.
+    #[test]
+    fn a_thick_v_has_one_branch_from_tip_to_tip() {
+        let h = 21.0;
+        let (ring, inside) = v_stroke(h);
+        let (end_a, end_c, len, dev) = v_reading(ring, &inside);
+        assert!(
+            end_a < h + 4.0 && end_c < h + 4.0,
+            "free ends {end_a} {end_c} px from the tips"
+        );
+        assert!((160.0..180.0).contains(&len), "path {len}");
+        assert!(dev < 0.25 * h, "path {dev} px off the centreline");
+    }
+
+    /// The same reading with every coordinate moved by up to two ulps (a fixed
+    /// pseudo-random pattern): what a different libm or a different upstream rounding does
+    /// to the input. The asserted quantities must not move.
+    #[test]
+    fn the_v_reading_survives_last_bit_changes() {
+        let h = 21.0;
+        let (base, inside) = v_stroke(h);
+        let (_, _, len0, dev0) = v_reading(base.clone(), &inside);
+        let mut s: u64 = 12345;
+        let mut lcg = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((s >> 33) % 5) as f64 - 2.0
+        };
+        for _ in 0..8 {
+            let r: Vec<Point> = base
+                .iter()
+                .map(|p| {
+                    let fx = 1.0 + lcg() * f64::EPSILON;
+                    let fy = 1.0 + lcg() * f64::EPSILON;
+                    Point::new(p.x * fx, p.y * fy)
+                })
+                .collect();
+            let (end_a, end_c, len, dev) = v_reading(r, &inside);
+            assert!(end_a < h + 4.0 && end_c < h + 4.0);
+            assert!((len - len0).abs() < 1e-6, "path {len} vs {len0}");
+            assert!((dev - dev0).abs() < 1e-6, "deviation {dev} vs {dev0}");
+        }
     }
 }

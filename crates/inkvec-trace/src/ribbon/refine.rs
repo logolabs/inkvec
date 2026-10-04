@@ -883,8 +883,7 @@ const SCREEN_KAPPA: f64 = 0.25;
 /// that solve, a split whose first Gauss-Newton step predicts less than
 /// [`SCREEN_KAPPA`] of its price is refused unsolved ([`predicted_gain`], the score
 /// test): the split's curve is the old one, so the gradient its new variables see is what
-/// they can buy. A refused split is not retried; at most [`MAX_SPLITS`] are tried (`INKVEC_RIBBONS_SPLITS`
-/// overrides, 0 to switch it off), and none that would take the strokes to `budget`
+/// they can buy. A refused split is not retried; at most [`MAX_SPLITS`] are tried, and none that would take the strokes to `budget`
 /// parameters (what the outline costs, so the face could not win).
 ///
 /// Inspired by: Schneider (1990), An algorithm for automatically fitting digitized curves,
@@ -901,7 +900,7 @@ pub(crate) fn solve_adaptive(
     budget: f64,
 ) -> (Vec<Centreline>, f64) {
     let (mut cur, mut h) = solve(lines, h, b, style, MAX_ITERS);
-    let max_splits = inkvec_core::env::count("INKVEC_RIBBONS_SPLITS").unwrap_or(MAX_SPLITS);
+    let max_splits = MAX_SPLITS;
     let reach = 8.0 * h + 4.0;
     // The description length of strokes `ls` at half-width `h`, and the rows it was
     // measured with: the rows of the strokes kept so far are what the next worst-segment

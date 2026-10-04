@@ -36,7 +36,7 @@
 //! 5. **Stroke solve** ([`refine`]): every centreline control point and the width moved
 //!    together, by Levenberg-Marquardt, to explain the measured boundary, with segments
 //!    split where the boundary disagrees and the split pays for itself, and no step that
-//!    gives a cubic a cusp (`INKVEC_RIBBONS_SOLVE=0` skips the pass, for A/B).
+//!    gives a cubic a cusp.
 //! 6. **Score** ([`score`]): the strokes' painted outline against every measured boundary
 //!    point, and the face's own interior pixels checked as painted ([`MAX_UNCOVERED`]),
 //!    because a boundary residual cannot see an unpainted inside.
@@ -345,7 +345,7 @@ pub fn fit_face(
     let try_miter = round
         .as_ref()
         .map_or(true, |r| r.score.worst > MITER_TRIGGER);
-    if !try_miter || !inkvec_core::env::switch("INKVEC_RIBBONS_MITER", true) {
+    if !try_miter {
         return round;
     }
     let miter = hypothesis(&face, cfg, budget, Join::Miter.into());
@@ -559,11 +559,9 @@ fn reading(
     if pre.rms > MAX_PRE_RMS * w0 {
         return Err(Decline::Misfit { rms: pre.rms });
     }
-    let (lines, half) = if inkvec_core::env::switch("INKVEC_RIBBONS_SOLVE", true) {
+    let (lines, half) = {
         let (l, h) = refine::solve_adaptive(&lines, 0.5 * w0, b, cfg.lambda, style, budget);
         (l, Some(h))
-    } else {
-        (lines, None)
     };
     if !refine::drawable(&lines, style) {
         return Err(Decline::Undrawable);

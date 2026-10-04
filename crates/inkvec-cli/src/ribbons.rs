@@ -236,15 +236,11 @@ pub(crate) fn choose(inp: &Inputs) -> Ribbons {
 
 /// The verdict for one outcome: `Some(ΔL)` when the face should become strokes (see the
 /// module documentation for `ΔL`), `None` otherwise.
-///
-/// `INKVEC_RIBBONS_FORCE=1` (inspection only) accepts every fitted face that saves
-/// parameters, whatever its fit, so the failures can be looked at.
 fn decide(o: &Outcome, lambda: f64) -> Option<f64> {
     let r = o.fit.as_ref().ok()?;
     let k = r.params();
     let dl = 0.5 * (r.score.chi2 - o.chi2_outline) + lambda * (k - o.k_vanish);
-    let force = inkvec_core::env::flag("INKVEC_RIBBONS_FORCE");
-    ((dl < 0.0 || force) && k < o.k_vanish && dl.is_finite()).then_some(dl)
+    (dl < 0.0 && k < o.k_vanish && dl.is_finite()).then_some(dl)
 }
 
 /// `INKVEC_RIBBONS_DEBUG`: one line per candidate on stderr.

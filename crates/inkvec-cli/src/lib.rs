@@ -275,20 +275,31 @@ pub fn intake(
     // measured on a 96-px logo blown up to 768, `--sr on` came back with 14 inks and 1846
     // segments, worse than doing nothing. On the recovered original it has something real
     // to put detail back into.
+    //
+    // Any factor of 2 or more, whole or not (a 3.5x browser zoom is cells of 3 and 4 pixels):
+    // `pixel_grid` finds the lattice and has checked that one pixel per cell rebuilds the
+    // input bit for bit, so `reduce` hands back the source pixels themselves. Its two axes
+    // can have slightly different pitches (a rounded output size), so the SVG is presented
+    // axis by axis (`stretch`).
     let mut replicated = false;
     if !args.no_unblock {
-        if let Some(k) = pixel_grid(&img) {
+        if let Some(grid) = pixel_grid(&img) {
+            let (sw, sh) = grid.source_size();
+            let (px, py) = grid.pitch(img.width, img.height);
             diag::stage(args.quiet, || {
+                let factor = if (px - py).abs() < 5e-4 {
+                    format!("{px:.3}")
+                } else {
+                    format!("{px:.3}x{py:.3}")
+                };
                 format!(
-                    "  unblock       {}x{} is a {k}x pixel upscale of {}x{}; tracing the original",
+                    "  unblock       {}x{} is a {}x pixel upscale of {sw}x{sh}; tracing the original",
                     img.width,
                     img.height,
-                    img.width / k,
-                    img.height / k
+                    factor.trim_end_matches('0').trim_end_matches('.')
                 )
             });
-            let (nw, nh) = (img.width / k, img.height / k);
-            img = inkvec_trace::coverage::downsample_to(&img, nw, nh);
+            img = grid.reduce(&img);
             replicated = true;
         }
     }
@@ -335,7 +346,7 @@ pub fn intake(
         args,
         replicated,
         normalised,
-        stretch: false,
+        stretch: replicated,
         display: (display_w, display_h),
     }
 }

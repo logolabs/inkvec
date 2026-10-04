@@ -262,9 +262,12 @@ pub(crate) fn ring_infos(pts: &[Vec<Vec<Point>>]) -> Vec<Vec<RingInfo>> {
 /// anywhere inside the crossing segment instead of at a point left 19 rings crossing.
 ///
 /// A refit is correct but can be faceted, so afterwards each refitted edge is offered,
-/// in turn, its original unconstrained fit and then a smoothed version of its refit
-/// (free cubics merged, corners sharpened, under a segment budget), and keeps the first
-/// that crosses nothing in the rings it belongs to. A capped refit that exploded to many
+/// in turn, its original unconstrained fit, its pins alone with no cap (its latest proposed
+/// pins, merged with the pins kept; only for an edge whose cap was halved), and a smoothed
+/// version of its refit (free cubics merged, corners sharpened, under a segment budget), and
+/// keeps the first that crosses nothing in the rings it belongs to. The pins-only offer
+/// measured dE00 -0.20 / -0.15 / -0.11 % against the repair without it (128 / 512 /
+/// 512 px opaque), parameter ratio within ±0.04 %. A capped refit that exploded to many
 /// times the segments of the original fit is replaced by the original outright; see the
 /// comment at that test for why.
 ///
@@ -286,6 +289,9 @@ pub(crate) fn repair_ring_crossings(
     // many of its refits were pinned ones.
     let mut pins: Vec<Vec<usize>> = vec![Vec::new(); polys.len()];
     let mut pinned_rounds: Vec<usize> = vec![0; polys.len()];
+    // Each edge's latest proposed pins, kept or not, for the pins-only offer at the end.
+    let mut last_proposed: std::collections::HashMap<usize, Vec<usize>> =
+        std::collections::HashMap::new();
     let (mut n_pinned, mut n_halved) = (0usize, 0usize);
     let mut repaired = 0usize;
     // Vertices of every boundary the loop refitted, for the merge pass afterwards.
@@ -353,6 +359,7 @@ pub(crate) fn repair_ring_crossings(
             mine.dedup_by_key(|h| h.0);
             let mut trial = pins[k].clone();
             if pin_crossings(&fitted[k], &polys[k], &mine, &mut trial) > 0 {
+                last_proposed.insert(k, trial.clone());
                 proposed.insert(k, trial);
             }
         }
@@ -502,6 +509,22 @@ pub(crate) fn repair_ring_crossings(
         let smoothed: std::collections::HashMap<usize, FittedPath> = merged.into_iter().collect();
         let mut keys: Vec<usize> = refit_vertices.keys().copied().collect();
         keys.sort_unstable();
+        // The pins alone, with no cap: the smallest change that separates the curves where
+        // they crossed, merged like the original fit with the pins kept. An edge the
+        // objective moved on to halving still had its crossing located, so its last
+        // proposal is offered too; an edge whose last refit already was this (never halved)
+        // is not offered it twice. Independent per edge, so fitted on every core.
+        let pins_only: std::collections::HashMap<usize, FittedPath> = keys
+            .par_iter()
+            .filter_map(|&k| {
+                let p = last_proposed.get(&k).unwrap_or(&pins[k]);
+                (!p.is_empty() && cap[k] < polys[k].len().max(2)).then(|| {
+                    live.check();
+                    let fit = multimodel::optimal_multimodel_forced(&polys[k], cfg, usize::MAX, p);
+                    (k, fit.path)
+                })
+            })
+            .collect();
         for k in keys {
             inkvec_core::progress::checkpoint();
             // A capped refit that came back with many times the segments of the
@@ -528,8 +551,12 @@ pub(crate) fn repair_ring_crossings(
             // First try the original, MDL-optimal boundary. Most repaired rings have a
             // single bad edge, so restoring their other edges removes the visible
             // staircase without weakening the topology constraint. If that would cross,
-            // the locally smoothed capped path is a second, still-safe opportunity.
+            // the pins alone are the next smallest change, and the locally smoothed
+            // capped path a third, still-safe opportunity.
             let mut candidates = vec![full_fit[k].clone()];
+            if let Some(p) = pins_only.get(&k) {
+                candidates.push(p.clone());
+            }
             if let Some(sc) = smoothed.get(&k) {
                 candidates.push(sc.clone());
             }

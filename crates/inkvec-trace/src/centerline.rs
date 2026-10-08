@@ -161,6 +161,10 @@ use skeleton::{geometric_chains, prune_spurs, zhang_suen, RawChain};
 /// threshold sits, and nothing real is in it.
 pub const MIN_ASPECT: f64 = 3.0;
 
+/// Default maximum relative width spread (`MAD / width`) allowed along a drawn stroke.
+/// Accommodates discretization noise and natural artist line variations.
+pub const DEFAULT_MAX_WIDTH_REL_SPREAD: f64 = 0.20;
+
 /// How [`analyse_with`] decides that a region is drawn line.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Criteria {
@@ -177,6 +181,11 @@ pub struct Criteria {
     /// proxy for the cap test beside it and it is wrong for short drawn stubs: an antenna
     /// one width long off a junction ends in a round cap and is pruned by length alone.
     pub spur_factor: f64,
+    /// Maximum relative spread of stroke width (`MAD / width`) tolerated along a stroke.
+    /// Real-world line art strokes have discretization and drawn pen width variations;
+    /// this prevents rejecting uniform-looking strokes whose sub-pixel width fluctuates
+    /// within normal artistic and rasterization limits.
+    pub max_width_rel_spread: f64,
 }
 
 impl Default for Criteria {
@@ -184,6 +193,7 @@ impl Default for Criteria {
         Criteria {
             min_edge_aspect: MIN_ASPECT,
             spur_factor: SPUR_FACTOR,
+            max_width_rel_spread: DEFAULT_MAX_WIDTH_REL_SPREAD,
         }
     }
 }
@@ -195,6 +205,7 @@ impl Default for Criteria {
 pub const GRAPH_CRITERIA: Criteria = Criteria {
     min_edge_aspect: 0.5,
     spur_factor: 0.25,
+    max_width_rel_spread: DEFAULT_MAX_WIDTH_REL_SPREAD,
 };
 
 /// Confidence multiplier on the width-measurement sigma, above which a width variation
@@ -1117,7 +1128,7 @@ fn analyse_region(
     let mut strokes = Vec::new();
     let mut explained = 0.0f64;
     for c in &chains {
-        if let Some(s) = measure_stroke(cov, &ls, c, label, min_aspect) {
+        if let Some(s) = measure_stroke(cov, &ls, c, label, min_aspect, criteria.max_width_rel_spread) {
             let l = s.length();
             explained += l * s.width;
             if !s.closed {
@@ -1162,14 +1173,15 @@ fn analyse_region(
 /// centreline point's `½ sqrt(s1² + s2²)`. The width is the median over interior samples
 /// ([`interior_samples`]) and its spread their scaled MAD ([`robust_spread`]). Rejected
 /// when `length / width < min_aspect` or the spread exceeds `TAU_WIDTH` times the
-/// median width sigma (floored at `WIDTH_SIGMA_FLOOR`). The reported `width_sigma` is
-/// `hypot(spread / sqrt(n), WIDTH_SIGMA_FLOOR)`.
+/// median width sigma (floored at `WIDTH_SIGMA_FLOOR`) or `max_width_rel_spread * width`.
+/// The reported `width_sigma` is `hypot(spread / sqrt(n), WIDTH_SIGMA_FLOOR)`.
 fn measure_stroke(
     cov: &CoverageField,
     ls: &LevelSet,
     chain: &RawChain,
     label: u16,
     min_aspect: f64,
+    max_width_rel_spread: f64,
 ) -> Option<Stroke> {
     let n = chain.pts.len();
     if n < 3 {
@@ -1222,8 +1234,9 @@ fn measure_stroke(
     if width <= 0.0 || length / width < min_aspect {
         return None;
     }
-    // Is the variation more than the measurement can explain?
-    if spread > TAU_WIDTH * sigma_meas {
+    // Is the variation more than the measurement can explain or drawing tolerance?
+    let tol = (TAU_WIDTH * sigma_meas).max(width * max_width_rel_spread);
+    if spread > tol {
         return None;
     }
 
@@ -1411,4 +1424,47 @@ fn robust_spread(v: &[f64], centre: f64) -> f64 {
     }
     let mut dev: Vec<f64> = v.iter().map(|x| (x - centre).abs()).collect();
     1.4826 * median(&mut dev)
+}
+
+#[cfg(test)]
+mod tests_tolerance {
+    use super::*;
+
+    #[test]
+    fn modest_width_variation_is_accepted_as_stroke() {
+        let (w, h) = (64, 32);
+        let mut cov_data = vec![0.0f32; w * h];
+        let cy = 16.0;
+        let x0 = 8.0;
+        let x1 = 56.0;
+        for y in 0..h {
+            for x in 0..w {
+                let xf = x as f64;
+                let yf = y as f64;
+                if xf >= x0 && xf <= x1 {
+                    let t = (xf - x0) / (x1 - x0);
+                    let nominal_w = 4.5 + 0.45 * (t * std::f64::consts::PI * 4.0).sin();
+                    let d = (yf - cy).abs();
+                    if d <= nominal_w * 0.5 {
+                        cov_data[y * w + x] = 1.0;
+                    }
+                }
+            }
+        }
+        let cov = CoverageField {
+            width: w,
+            height: h,
+            data: cov_data,
+            sigma_alpha: 0.05,
+            sigma_model: DEFAULT_SIGMA_MODEL,
+            fg: [0.0, 0.0, 0.0],
+            bg: [1.0, 1.0, 1.0],
+            saturation: 1.0,
+        };
+        let labels = bilevel_labels(&cov);
+        let analysis = analyse(&cov, &labels, w, h);
+        assert_eq!(analysis.strokes.len(), 1, "expected 1 stroke recovered");
+        let w_meas = analysis.strokes[0].width;
+        assert!((w_meas - 4.5).abs() < 1.0, "measured width was {w_meas}");
+    }
 }

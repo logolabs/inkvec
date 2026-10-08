@@ -42,7 +42,13 @@ pub(crate) fn run_strokes(
     inkvec_core::progress::begin("strokes");
     let cov = inkvec_trace::coverage::bilevel_coverage(img);
     let labels = centerline::bilevel_labels(&cov);
-    let mut an = centerline::analyse(&cov, &labels, img.width, img.height);
+    let mut an = centerline::analyse_with(
+        &cov,
+        &labels,
+        img.width,
+        img.height,
+        centerline::GRAPH_CRITERIA,
+    );
     // No icon-level coverage gate: a drawing that is two fifths strokes should
     // get those two fifths as strokes and the rest as fills.
     if an.strokes.is_empty() {
@@ -128,8 +134,19 @@ pub(crate) fn run_strokes(
     // this should never fire, and it is kept as the assertion of that rather than as a
     // policy. Outside `[stroke_balance, 2 - stroke_balance]` the drawing is declined.
     let ink_have: f64 = (0..w * h).map(|i| cov.data[i] as f64).sum();
-    let ink_draw: f64 =
-        an.strokes.iter().map(|s| s.length() * s.width).sum::<f64>() + residual_ink as f64;
+    let ink_draw: f64 = an
+        .strokes
+        .iter()
+        .map(|s| {
+            let cap = if s.closed {
+                0.0
+            } else {
+                std::f64::consts::FRAC_PI_4 * s.width * s.width
+            };
+            s.length() * s.width + cap
+        })
+        .sum::<f64>()
+        + residual_ink as f64;
     if ink_have > 1.0 {
         let bal = ink_draw / ink_have;
         if !(args.stroke_balance..=(2.0 - args.stroke_balance)).contains(&bal) {

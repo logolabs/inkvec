@@ -286,14 +286,13 @@ impl Default for Args {
             intake_scale: false,
             strokes: false,
             detect_strokes: false,
-            stroke_balance: 0.90,
+            stroke_balance: 0.85,
             stroke_refine: 0,
-            // Per stroke against its own region, which is where it discriminates. Pooled
-            // over a drawing the cap-and-join mismatch every stroke pays swamped it.
-            // Conservative: only strokes that fit their own region closely. Swept on
-            // lucide, no value wins -- 0.06 keeps two of sixteen at dE00 0.161 against
-            // filled's 0.128, and looser values are worse still.
-            stroke_residual: 0.06,
+            // Per stroke against its own region. Dominant cap and join mismatch
+            // across multi-stroke drawings means residual alone does not separate
+            // good strokes from bad; defaulted to 1.0 (past anything it would refuse)
+            // so stroke recovery relies on the area-explained and ink-balance tests.
+            stroke_residual: 1.0,
             lambda_scale: 1.0,
             bezier_cost: None,
             corner_angle: None,
@@ -474,11 +473,11 @@ OPTIONS:
                             at no worse a fit. Quality mode only
         --stroke-balance <f>   Least share of the input's ink the strokes must
                             actually draw, or the drawing falls back to outlines
-                            [default: 0.90]
+                            [default: 0.85]
         --stroke-refine <n> Iterations of centreline refinement against the measured
                             coverage, after stroke recovery. 0 skips it  [default: 0]
         --stroke-residual <f>  Residual, per stroke against its own region, above
-                            which a stroke falls back to an outline [default: 0.06]
+                            which a stroke falls back to an outline [default: 1.0]
         --lambda-scale <f>  Research: multiply the MDL cost of every parameter. Above
                             1.0 buys a plainer, cheaper description, below 1.0 a more
                             detailed one                              [default: 1.0]

@@ -452,3 +452,30 @@ fn restore_on_without_a_restorer_is_an_error() {
     let args = no_restorer(inkvec_restore::Mode::On);
     assert!(trace_image(square(), &args).is_err());
 }
+
+#[test]
+fn strokes_mode_traces_line_art_as_stroked_paths() {
+    let img = image(64, 64, |x, y| {
+        let on_h = (16..48).contains(&x) && (30..34).contains(&y);
+        let on_v = (30..34).contains(&x) && (16..48).contains(&y);
+        if on_h || on_v {
+            [0.0, 0.0, 0.0, 1.0]
+        } else {
+            [1.0, 1.0, 1.0, 1.0]
+        }
+    });
+    let args = Args {
+        strokes: true,
+        ..Args::default()
+    };
+    let t = trace_image(img, &args).expect("trace succeeds");
+    assert!(
+        t.svg.contains("stroke-width") || t.svg.contains("stroke="),
+        "should emit strokes: {}",
+        t.svg
+    );
+}
+
+
+
+

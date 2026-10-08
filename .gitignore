@@ -61,6 +61,8 @@ out/
 # Local working areas and tool state
 scratch/
 scratchpad/
+worktrees/
+integrations/
 .agents/
 .claude/
 wandb/

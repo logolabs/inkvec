@@ -241,7 +241,7 @@ mod tests {
         let h = n - 1;
         let mut sets: Vec<Vec<usize>> = Vec::new();
         for r in 0..rows {
-            let lo = ((rng.next() + 0.5) * (h - 1) as f64) as usize;
+            let lo = ((rng.next() + 0.5) * h.saturating_sub(1) as f64) as usize;
             let w = 1 + ((rng.next() + 0.5) * b as f64) as usize;
             let mut v: Vec<usize> = (lo..(lo + w).min(h)).collect();
             if r % 7 == 0 {

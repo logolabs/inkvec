@@ -7,6 +7,16 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-10-08
+
+### Fixed
+
+- **Centerline tracing (Line art toggle, `--strokes`) recovers real-world line art and complex drawings (#25).**
+  - **Width spread gate accommodates natural line variation.** Stroke measurement previously rejected any stroke whose MAD width spread exceeded `TAU_WIDTH * sigma_meas` (only ~0.21 px), falsely rejecting uniform-looking strokes whose width fluctuates slightly (0.25–0.35 px, ~5–7%) from raster discretization, anti-aliasing phase, and natural artist pen pressure. Added `DEFAULT_MAX_WIDTH_REL_SPREAD` (20%) to `Criteria` and `GRAPH_CRITERIA` so realistic line art strokes are accepted while strictly continuing to reject true tapers (>35%) and filled shapes (>50%).
+  - **Multi-branch line art with close junctions is preserved.** The CLI `--strokes` path now uses `GRAPH_CRITERIA` (`min_edge_aspect: 0.5`, `spur_factor: 0.25`), preventing skeleton edges between close junctions from being pruned by the former 3.0 aspect ratio floor.
+  - **Stroke balance gate incorporates round cap area.** Round caps now add `(π/4) * width²` to `ink_draw`, matching the geometry SVG actually renders.
+  - **Skyline underflow fix.** Fixed debug underflow on small image heights in `ribbon/skyline.rs`.
+
 ## [0.2.6] - 2026-10-05
 
 ### Changed

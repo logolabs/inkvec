@@ -6,10 +6,14 @@ use inkvec_server::{app, init_logging, AppState};
 use std::net::SocketAddr;
 
 fn main() -> std::process::ExitCode {
+    run_main(std::env::args())
+}
+
+fn run_main<I: IntoIterator<Item = String>>(args: I) -> std::process::ExitCode {
     // `--healthcheck`: Docker's HEALTHCHECK for the distroless image, which has no shell,
     // curl or wget. A short-lived process that makes one request to its own /healthz and
     // exits 0 or 1; it never starts the server.
-    if std::env::args().skip(1).any(|a| a == "--healthcheck") {
+    if args.into_iter().skip(1).any(|a| a == "--healthcheck") {
         return match inkvec_server::healthcheck() {
             Ok(()) => std::process::ExitCode::SUCCESS,
             Err(reason) => {
@@ -36,7 +40,6 @@ fn main() -> std::process::ExitCode {
 /// Bind `0.0.0.0:<INKVEC_PORT>`, serve the router until a shutdown signal, and turn a bind or
 /// serve failure into a logged error and exit code 1.
 async fn serve() -> std::process::ExitCode {
-    let state = AppState::from_env();
     let port = AppState::port();
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
@@ -47,15 +50,23 @@ async fn serve() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
+    serve_with(listener, shutdown_signal()).await
+}
+
+async fn serve_with<F>(listener: tokio::net::TcpListener, shutdown: F) -> std::process::ExitCode
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    let state = AppState::from_env();
     tracing::info!(
-        %addr,
+        addr = %listener.local_addr().unwrap_or_else(|_| SocketAddr::from(([0, 0, 0, 0], 0))),
         version = inkvec::version(),
         build_target = inkvec::build_target(),
         "inkvec-server listening"
     );
 
     let result = axum::serve(listener, app(state))
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(shutdown)
         .await;
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
@@ -88,5 +99,53 @@ async fn shutdown_signal() {
     tokio::select! {
         () = ctrl_c => tracing::info!("received Ctrl-C, shutting down"),
         () = terminate => tracing::info!("received SIGTERM, shutting down"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_main_healthcheck_flag() {
+        let code = run_main(vec![
+            "inkvec-server".to_string(),
+            "--healthcheck".to_string(),
+        ]);
+        assert_eq!(code, std::process::ExitCode::FAILURE);
+    }
+
+    #[test]
+    fn test_main_healthcheck_success() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a free port");
+        let port = listener.local_addr().expect("bound").port();
+        std::thread::spawn(move || {
+            if let Ok((mut s, _)) = listener.accept() {
+                let mut buf = [0u8; 512];
+                let _ = s.read(&mut buf);
+                let _ = s.write_all(b"HTTP/1.1 200 OK\r\n\r\nok");
+            }
+        });
+        std::env::set_var("INKVEC_PORT", port.to_string());
+        let code = run_main(vec![
+            "inkvec-server".to_string(),
+            "--healthcheck".to_string(),
+        ]);
+        std::env::remove_var("INKVEC_PORT");
+        assert_eq!(code, std::process::ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn test_serve_with_shutdown() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let code = serve_with(listener, std::future::ready(())).await;
+            assert_eq!(code, std::process::ExitCode::SUCCESS);
+        });
     }
 }

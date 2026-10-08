@@ -412,4 +412,98 @@ mod tests {
         fmt_path(&[Point::new(0.0, 0.0), Point::new(1.0, 1.0)], 2, &mut d);
         assert!(d.is_empty());
     }
+
+    #[test]
+    fn fmt_fitted_emits_smooth_cubics_and_arcs() {
+        let p0 = Point::new(0.0, 0.0);
+        let c1 = Point::new(1.0, 2.0);
+        let c2 = Point::new(3.0, 4.0);
+        let p1 = Point::new(5.0, 5.0);
+        let s_c1 = Point::new(7.0, 6.0);
+        let s_c2 = Point::new(8.0, 9.0);
+        let p2 = Point::new(10.0, 10.0);
+
+        let path = FittedPath {
+            start: p0,
+            segments: vec![
+                Segment::Cubic(c1, c2, p1),
+                Segment::Cubic(s_c1, s_c2, p2),
+                Segment::Arc {
+                    rx: 5.0,
+                    ry: 5.0,
+                    phi: 0.0,
+                    large_arc: false,
+                    sweep: true,
+                    end: Point::new(15.0, 15.0),
+                },
+            ],
+            closed: true,
+        };
+        let mut d = String::new();
+        fmt_fitted(&path, true, 2, &mut d);
+        assert!(d.contains("M0.00,0.00"));
+        assert!(d.contains("C1.00,2.00"));
+        assert!(d.contains("S8.00,9.00"));
+        assert!(d.contains("A5.00,5.00"));
+        assert!(d.ends_with('Z'));
+
+        assert_eq!(emit_decimals(0.1), EMIT_DECIMALS);
+    }
+
+    #[test]
+    fn test_fmt_ring_with_cubic_and_arc() {
+        let p0 = Point::new(0.0, 0.0);
+        let c1 = Point::new(1.0, 2.0);
+        let c2 = Point::new(3.0, 4.0);
+        let p1 = Point::new(5.0, 5.0);
+        let s_c1 = Point::new(7.0, 6.0);
+        let s_c2 = Point::new(8.0, 9.0);
+        let p2 = Point::new(10.0, 10.0);
+
+        let path = FittedPath {
+            start: p0,
+            segments: vec![
+                Segment::Cubic(c1, c2, p1),
+                Segment::Cubic(s_c1, s_c2, p2),
+                Segment::Arc {
+                    rx: 5.0,
+                    ry: 5.0,
+                    phi: 0.0,
+                    large_arc: false,
+                    sweep: true,
+                    end: Point::new(15.0, 15.0),
+                },
+            ],
+            closed: true,
+        };
+        let empty_path = FittedPath {
+            start: p0,
+            segments: vec![],
+            closed: false,
+        };
+        let fitted = vec![path, empty_path];
+        let ring = vec![(0, false), (1, false)];
+        let mut d = String::new();
+        fmt_ring_with(&ring, &fitted, &|_| None, 2, &mut d);
+        assert!(d.contains("M0.00,0.00"));
+        assert!(d.contains("C1.00,2.00"));
+        assert!(d.contains("S8.00,9.00"));
+        assert!(d.contains("A5.00,5.00"));
+        assert!(d.ends_with('Z'));
+
+        let single_line = FittedPath {
+            start: p0,
+            segments: vec![Segment::Line(p1)],
+            closed: false,
+        };
+        let mut d_short = String::new();
+        fmt_ring_with(
+            &vec![(0, false)],
+            &[single_line],
+            &|_| None,
+            2,
+            &mut d_short,
+        );
+        assert!(d_short.is_empty());
+    }
 }

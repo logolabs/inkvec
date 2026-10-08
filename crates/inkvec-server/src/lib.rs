@@ -809,6 +809,21 @@ mod tests {
         assert_eq!(internal.code(), "internal");
     }
 
+    #[test]
+    fn api_error_coverage() {
+        for err in [
+            ApiError::InvalidImage("bad image".into()),
+            ApiError::InvalidOptions("bad options".into()),
+            ApiError::Internal("internal error".into()),
+            ApiError::TooLarge("too large".into()),
+            ApiError::Busy,
+        ] {
+            assert!(!err.code().is_empty());
+            assert!(err.status().as_u16() >= 400);
+            assert!(!err.message().is_empty());
+        }
+    }
+
     /// A one-shot local server that answers the first connection with `reply`, and its port.
     fn answer_once(reply: &'static str) -> u16 {
         use std::io::{Read, Write};
@@ -849,5 +864,24 @@ mod tests {
     fn app_state_new_clamps_max_concurrency_to_at_least_one() {
         let state = AppState::new(0, 1024, None, None);
         assert_eq!(state.concurrency_semaphore().available_permits(), 1);
+    }
+
+    #[test]
+    fn app_state_from_env_and_logging() {
+        init_logging();
+        let port = AppState::port();
+        assert!(port > 0);
+        let state = AppState::from_env();
+        assert!(state.concurrency_semaphore().available_permits() > 0);
+        assert_eq!(env_usize("NONEXISTENT_ENV_VAR_TEST", 42), 42);
+        assert_eq!(env_u64("NONEXISTENT_ENV_VAR_TEST", 99), 99);
+    }
+
+    #[test]
+    fn healthcheck_function() {
+        let port = answer_once("HTTP/1.1 200 OK\r\n\r\n");
+        std::env::set_var("INKVEC_PORT", port.to_string());
+        assert_eq!(healthcheck(), Ok(()));
+        std::env::remove_var("INKVEC_PORT");
     }
 }

@@ -321,3 +321,41 @@ async fn openapi_json_embeds_the_generated_document() {
         "InkvecOptions"
     );
 }
+
+#[tokio::test]
+async fn default_time_budget_applies() {
+    let state = AppState::new(8, 20 * 1024 * 1024, Some(5.0), None);
+    let app = inkvec_server::app(state);
+    let (status, _headers, _body) = post_raw(&app, "/trace", Some("image/png"), tiny_png()).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn request_timeout_exceeded() {
+    use std::time::Duration;
+    let state = AppState::new(8, 20 * 1024 * 1024, None, Some(Duration::from_nanos(1)));
+    let app = inkvec_server::app(state);
+    let (status, _headers, body) = post_raw(&app, "/trace", Some("image/png"), tiny_png()).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    let json = json_body(&body);
+    assert_eq!(json["error"]["code"], "internal");
+    assert!(json["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("request timeout"));
+}
+
+#[tokio::test]
+async fn bad_multipart_boundary() {
+    let app = app();
+    let (status, _headers, body) = post_raw(
+        &app,
+        "/trace",
+        Some("multipart/form-data; boundary="),
+        vec![],
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let json = json_body(&body);
+    assert_eq!(json["error"]["code"], "invalid_image");
+}

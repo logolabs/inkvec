@@ -397,4 +397,67 @@ mod tests {
         };
         assert!(annulus_stroke(&e(30.0, 20.0), &e(20.0, 10.0)).is_none());
     }
+
+    #[test]
+    fn test_primitive_element_and_stroke_variants() {
+        let el_flat = PrimitiveKind::Ellipse {
+            c: Point::new(10.0, 10.0),
+            rx: 6.0,
+            ry: 3.0,
+            angle: 0.0,
+        };
+        let s1 = primitive_element(&el_flat, "#000", "", 2).unwrap();
+        assert!(s1.contains("<ellipse") && !s1.contains("rotate"));
+
+        let el_rot = PrimitiveKind::Ellipse {
+            c: Point::new(10.0, 10.0),
+            rx: 6.0,
+            ry: 3.0,
+            angle: 0.5,
+        };
+        let s2 = primitive_element(&el_rot, "#000", "", 2).unwrap();
+        assert!(s2.contains("<ellipse") && s2.contains("rotate"));
+
+        let rr_sq = PrimitiveKind::RoundRect {
+            x: 5.0,
+            y: 5.0,
+            w: 20.0,
+            h: 10.0,
+            rx: 0.0,
+        };
+        let s3 = primitive_element(&rr_sq, "#000", "", 2).unwrap();
+        assert!(s3.contains("<rect") && !s3.contains("rx="));
+
+        let rr_round = PrimitiveKind::RoundRect {
+            x: 5.0,
+            y: 5.0,
+            w: 20.0,
+            h: 10.0,
+            rx: 2.0,
+        };
+        let s4 = primitive_element(&rr_round, "#000", "", 2).unwrap();
+        assert!(s4.contains("<rect") && s4.contains("rx="));
+
+        let d_rr = primitive_d(&rr_round, 2).unwrap();
+        assert!(d_rr.starts_with('M'));
+
+        let outer_sq = PrimitiveKind::RoundRect {
+            x: 10.0,
+            y: 10.0,
+            w: 100.0,
+            h: 100.0,
+            rx: 0.0,
+        };
+        let inner_sq = PrimitiveKind::RoundRect {
+            x: 20.0,
+            y: 20.0,
+            w: 80.0,
+            h: 80.0,
+            rx: 0.0,
+        };
+        let (mid, t) = annulus_stroke(&outer_sq, &inner_sq).expect("square frame");
+        assert_eq!(t, 10.0);
+        let strk = stroke_element(&mid, t, "#ff0000", 2).unwrap();
+        assert!(strk.contains("stroke-width=\"10.00\""));
+    }
 }

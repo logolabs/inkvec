@@ -828,4 +828,11 @@ mod tests {
         );
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    #[test]
+    fn test_downloaders_and_notice() {
+        notice(format_args!("testing notice"));
+        let dl = downloaders(std::path::Path::new("dummy.onnx"));
+        assert!(!dl.is_empty());
+    }
 }

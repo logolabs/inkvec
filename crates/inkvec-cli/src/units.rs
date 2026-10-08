@@ -116,3 +116,33 @@ pub(crate) fn in_content_units(poly: &inkvec_core::Polyline, s: f64) -> inkvec_c
     }
     p
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_units_content_scale_and_polyline() {
+        let img = inkvec_trace::Rgba {
+            width: 16,
+            height: 16,
+            data: vec![1.0; 16 * 16 * 4],
+        };
+        let mut args = Args::default();
+        assert_eq!(content_scale(&img, &args), 1.0);
+        args.content_units = true;
+        let s = content_scale(&img, &args);
+        assert!(s >= 1.0);
+
+        let cfg = fit_config(&img, &args);
+        assert!(cfg.lambda > 0.0);
+
+        let poly = inkvec_core::Polyline {
+            points: vec![inkvec_core::Point::new(0.0, 0.0)],
+            sigma: vec![0.5],
+            closed: false,
+        };
+        let scaled_poly = in_content_units(&poly, 2.0);
+        assert_eq!(scaled_poly.sigma[0], 1.0);
+    }
+}

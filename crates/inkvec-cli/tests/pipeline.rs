@@ -475,3 +475,331 @@ fn strokes_mode_traces_line_art_as_stroked_paths() {
         t.svg
     );
 }
+
+#[test]
+fn pipeline_with_detect_strokes_and_use_symbols() {
+    let img = image(64, 64, |x, y| {
+        let in_box1 = (8..24).contains(&x) && (8..24).contains(&y);
+        let in_box2 = (40..56).contains(&x) && (40..56).contains(&y);
+        if in_box1 || in_box2 {
+            [0.2, 0.4, 0.8, 1.0]
+        } else {
+            [1.0, 1.0, 1.0, 1.0]
+        }
+    });
+    let args = Args {
+        detect_strokes: true,
+        use_symbols: true,
+        ..Args::default()
+    };
+    let t = trace_image(img, &args).expect("trace succeeds");
+    assert!(!t.svg.is_empty());
+}
+
+#[test]
+fn pipeline_with_layers() {
+    let img = image(64, 64, |x, y| {
+        if (16..48).contains(&x) && (16..48).contains(&y) {
+            [0.8, 0.2, 0.2, 0.5]
+        } else {
+            [1.0, 1.0, 1.0, 1.0]
+        }
+    });
+    let args = Args {
+        layers: true,
+        ..Args::default()
+    };
+    let t = trace_image(img, &args).expect("trace succeeds");
+    assert!(!t.svg.is_empty());
+}
+
+#[test]
+fn pipeline_with_select_hypotheses() {
+    let img = image(32, 32, |x, y| {
+        if (8..24).contains(&x) && (8..24).contains(&y) {
+            [0.0, 0.0, 0.0, 1.0]
+        } else {
+            [1.0, 1.0, 1.0, 1.0]
+        }
+    });
+    let args = Args {
+        hypotheses: true,
+        ..Args::default()
+    };
+    let t = trace_image(img, &args).expect("trace succeeds");
+    assert!(!t.svg.is_empty());
+}
+
+#[test]
+fn pipeline_with_restore_auto() {
+    let args = Args {
+        restore: inkvec_restore::Mode::Auto,
+        ..Args::default()
+    };
+    let t = trace_image(square(), &args).expect("trace succeeds");
+    assert!(!t.svg.is_empty());
+}
+
+#[test]
+fn pipeline_with_editability() {
+    let args = Args {
+        editability: true,
+        ..Args::default()
+    };
+    let t = trace_image(pie3(), &args).expect("trace succeeds");
+    assert!(!t.svg.is_empty());
+}
+
+#[test]
+fn pipeline_with_monochrome() {
+    let args = Args {
+        monochrome: true,
+        ..Args::default()
+    };
+    let t = trace_image(pie3(), &args).expect("trace succeeds");
+    assert!(!t.svg.is_empty());
+}
+
+#[test]
+fn pipeline_with_bilevel() {
+    let args = Args {
+        bilevel: true,
+        ..Args::default()
+    };
+    let t = trace_image(pie3(), &args).expect("trace succeeds");
+    assert!(!t.svg.is_empty());
+}
+
+#[test]
+fn pipeline_with_clean_damage() {
+    let args_auto = Args {
+        no_gradients: true,
+        no_repair: true,
+        ..Args::default()
+    };
+    assert!(trace_image(pie3(), &args_auto).is_ok());
+
+    let args_on = Args {
+        intake_scale: true,
+        content_units: true,
+        simplify_faint: true,
+        ..Args::default()
+    };
+    assert!(trace_image(pie3(), &args_on).is_ok());
+}
+
+#[test]
+fn pipeline_with_margin_and_strip_alpha() {
+    let args = Args {
+        margin: 0.1,
+        no_background: true,
+        cutout: true,
+        minify: true,
+        ..Args::default()
+    };
+    let t = trace_image(pie3(), &args).expect("trace succeeds");
+    assert!(!t.svg.is_empty());
+}
+
+#[test]
+fn pipeline_with_uncertainty() {
+    let unc_path = std::env::temp_dir().join("test_pipe_unc.svg");
+    let args = Args {
+        uncertainty: Some(unc_path.clone()),
+        uncertainty_k: 2.0,
+        ..Args::default()
+    };
+    let t = trace_image(pie3(), &args).expect("trace succeeds");
+    assert!(!t.svg.is_empty());
+    assert!(unc_path.exists());
+    let _ = std::fs::remove_file(unc_path);
+}
+
+#[test]
+fn pipeline_with_touches_border() {
+    let img = image(32, 32, |x, y| {
+        if x < 16 && y < 16 {
+            [0.8, 0.2, 0.2, 1.0]
+        } else {
+            [0.0, 0.0, 0.0, 0.0]
+        }
+    });
+    let args = Args::default();
+    let t = trace_image(img, &args).expect("trace succeeds");
+    assert!(!t.svg.is_empty());
+}
+
+#[test]
+fn pipeline_with_lossy_and_quantise() {
+    let args = Args {
+        lossy: inkvec_sr::Mode::On,
+        max_colors: 4,
+        ..Args::default()
+    };
+    let t = trace_image(pie3(), &args).expect("trace succeeds");
+    assert!(!t.svg.is_empty());
+}
+
+#[test]
+fn cli_main_round_trip() {
+    let tmp_out = std::env::temp_dir().join("test_cli_main_out.svg");
+    let in_path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bindings/contract/tiny.png");
+    let code = inkvec_cli::cli_main_from(
+        [
+            "inkvec".to_string(),
+            in_path.to_str().unwrap().to_string(),
+            "-o".to_string(),
+            tmp_out.to_str().unwrap().to_string(),
+        ]
+        .into_iter(),
+    );
+    assert_eq!(code, inkvec_cli::ExitCode::SUCCESS);
+    let _ = std::fs::remove_file(tmp_out);
+}
+
+#[test]
+fn strokes_mode_with_monochrome_and_refine() {
+    let img = image(64, 64, |x, y| {
+        let on_h = (16..48).contains(&x) && (30..34).contains(&y);
+        let on_v = (30..34).contains(&x) && (16..48).contains(&y);
+        if on_h || on_v {
+            [0.0, 0.0, 0.0, 1.0]
+        } else {
+            [1.0, 1.0, 1.0, 1.0]
+        }
+    });
+    let args = Args {
+        strokes: true,
+        monochrome: true,
+        no_background: true,
+        stroke_refine: 2,
+        ..Args::default()
+    };
+    let t = trace_image(img, &args).expect("trace succeeds");
+    assert!(!t.svg.is_empty());
+}
+
+#[test]
+fn pipeline_with_no_soft_intake_and_no_unblock() {
+    let args = Args {
+        no_soft_intake: true,
+        no_unblock: true,
+        ..Args::default()
+    };
+    let t = trace_image(pie3(), &args).expect("trace succeeds");
+    assert!(!t.svg.is_empty());
+}
+
+#[test]
+fn pipeline_with_balanced_mode() {
+    let args = Args {
+        mode: inkvec_cli::TraceMode::Balanced,
+        ..Args::default()
+    };
+    let t = trace_image(pie3(), &args).expect("trace succeeds");
+    assert!(!t.svg.is_empty());
+}
+
+#[test]
+fn pipeline_with_fast_mode() {
+    let args = Args {
+        mode: inkvec_cli::TraceMode::Fast,
+        ..Args::default()
+    };
+    let t = trace_image(pie3(), &args).expect("trace succeeds");
+    assert!(!t.svg.is_empty());
+}
+
+#[test]
+fn pipeline_with_non_native_alpha() {
+    let img = image(48, 48, |x, y| {
+        if (12..36).contains(&x) && (12..36).contains(&y) {
+            [0.8, 0.2, 0.2, 0.5]
+        } else {
+            [0.0, 0.0, 0.0, 0.0]
+        }
+    });
+    let args = Args {
+        native_alpha: false,
+        ..Args::default()
+    };
+    let t = trace_image(img, &args).expect("trace succeeds");
+    assert!(!t.svg.is_empty());
+}
+
+#[test]
+fn pipeline_with_non_native_alpha_and_cutout() {
+    let img = image(48, 48, |x, y| {
+        let inside = (12..36).contains(&x) && (12..36).contains(&y);
+        let hole = (20..28).contains(&x) && (20..28).contains(&y);
+        if inside && !hole {
+            [0.2, 0.8, 0.2, 1.0]
+        } else {
+            [0.0, 0.0, 0.0, 0.0]
+        }
+    });
+    let args = Args {
+        native_alpha: false,
+        cutout: true,
+        ..Args::default()
+    };
+    let t = trace_image(img, &args).expect("trace succeeds");
+    assert!(!t.svg.is_empty());
+}
+
+#[test]
+fn white_on_clear_with_non_native_alpha() {
+    let bytes = std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../bindings/contract/white_on_clear.png"),
+    )
+    .expect("fixture");
+    let (img, _) = inkvec_trace::decode_image_capped(&bytes, 0).expect("decode");
+    let args = Args {
+        native_alpha: false,
+        ..Args::default()
+    };
+    let t = trace_image(img, &args).expect("trace succeeds");
+    assert!(!t.svg.is_empty());
+}
+
+#[test]
+fn non_flat_under_strict_succeeds() {
+    let args = Args {
+        strict: true,
+        ..Args::default()
+    };
+    let t = trace_image(pie3(), &args).expect("trace succeeds");
+    assert!(!t.svg.is_empty());
+}
+
+#[test]
+fn pipeline_with_time_budget() {
+    let args = Args {
+        time_budget: 10.0,
+        ..Args::default()
+    };
+    let t = trace_image(pie3(), &args).expect("trace succeeds");
+    assert!(!t.svg.is_empty());
+}
+
+#[test]
+fn pipeline_with_simplify_faint() {
+    let args = Args {
+        simplify_faint: true,
+        ..Args::default()
+    };
+    let t = trace_image(pie3(), &args).expect("trace succeeds");
+    assert!(!t.svg.is_empty());
+}
+
+#[test]
+fn pipeline_without_harmonize() {
+    let args = Args {
+        harmonize: false,
+        ..Args::default()
+    };
+    let t = trace_image(pie3(), &args).expect("trace succeeds");
+    assert!(!t.svg.is_empty());
+}

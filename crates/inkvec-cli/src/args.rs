@@ -581,7 +581,7 @@ pub(crate) fn parse_args() -> Result<Args, String> {
 /// several are given the last wins, and none at all is the error `no input file`. An
 /// unknown flag, a missing value or a value that does not parse is an error naming the
 /// flag. Values are only parsed here, not range-checked.
-fn parse_args_from(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
+pub(crate) fn parse_args_from(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut a = Args {
         quiet: false,
         ..Args::default()
@@ -884,5 +884,82 @@ mod tests {
             .is_empty());
         let a = parse("logo.png --merge-colors #f00,#e00").expect("parses");
         assert_eq!(a.merge_colors.len(), 1);
+    }
+
+    #[test]
+    fn parse_all_remaining_flags() {
+        let cmd = "logo.png \
+            --margin 0.1 \
+            --content-units \
+            --max-dim 128 \
+            --time-budget 2.5 \
+            --strict \
+            --uncertainty unc.svg \
+            --uncertainty-k 2.5 \
+            --no-background \
+            --no-unblock \
+            --no-soft-intake \
+            --simplify-faint \
+            --layers \
+            --minify \
+            --editability \
+            --bilevel \
+            --lossy auto \
+            --sr auto \
+            --sr-threshold 0.05 \
+            --sr-scale 2 \
+            --sr-no-recolour \
+            --sr-command my_sr \
+            --intake-scale \
+            --strokes \
+            --detect-strokes \
+            --stroke-residual 0.1 \
+            --stroke-refine 3 \
+            --lambda-scale 1.2 \
+            --bezier-cost 1.5 \
+            --corner-angle 60.0 \
+            --stroke-balance 0.8 \
+            --harmonize \
+            --harmonize-threshold 0.04 \
+            --use-symbols \
+            --hypotheses \
+            --restore auto \
+            --restore-threshold 0.03 \
+            --restore-weights w.onnx \
+            --restore-command my_restore \
+            --no-gradients \
+            --no-repair \
+            --merge 0.02";
+        let a = parse(cmd).expect("parses all flags");
+        assert_eq!(a.margin, 0.1);
+        assert!(a.content_units);
+        assert_eq!(a.max_dim, 128);
+        assert_eq!(a.time_budget, 2.5);
+        assert!(a.strict);
+        assert_eq!(a.uncertainty, Some(PathBuf::from("unc.svg")));
+        assert_eq!(a.uncertainty_k, 2.5);
+        assert!(a.no_background && a.no_unblock && a.no_soft_intake && a.simplify_faint);
+        assert!(a.layers && a.minify && a.editability && a.bilevel);
+        assert!(matches!(a.lossy, inkvec_sr::Mode::Auto));
+        assert!(matches!(a.sr, inkvec_sr::Mode::Auto));
+        assert_eq!(a.sr_threshold, 0.05);
+        assert_eq!(a.sr_scale, 2);
+        assert!(a.sr_no_recolour);
+        assert_eq!(a.sr_command.as_deref(), Some("my_sr"));
+        assert!(a.intake_scale && a.strokes && a.detect_strokes);
+        assert_eq!(a.stroke_residual, 0.1);
+        assert_eq!(a.stroke_refine, 3);
+        assert_eq!(a.lambda_scale, 1.2);
+        assert_eq!(a.bezier_cost, Some(1.5));
+        assert_eq!(a.corner_angle, Some(60.0));
+        assert_eq!(a.stroke_balance, 0.8);
+        assert!(a.harmonize && a.use_symbols && a.hypotheses);
+        assert_eq!(a.harmonize_threshold, 0.04);
+        assert!(matches!(a.restore, inkvec_restore::Mode::Auto));
+        assert_eq!(a.restore_threshold, 0.03);
+        assert_eq!(a.restore_weights, Some(PathBuf::from("w.onnx")));
+        assert_eq!(a.restore_command.as_deref(), Some("my_restore"));
+        assert!(a.no_gradients && a.no_repair);
+        assert_eq!(a.merge_distance, 0.02);
     }
 }

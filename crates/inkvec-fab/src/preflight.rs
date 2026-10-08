@@ -160,3 +160,59 @@ pub fn node_checks(name: &str, paths: usize, nodes: usize) -> Vec<Check> {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_colour_checks() {
+        let unsupported = vec!["clipPath".to_string()];
+        let checks = colour_checks(&[], &unsupported);
+        assert_eq!(checks.len(), 2);
+        assert_eq!(checks[0].code, "unsupported");
+        assert_eq!(checks[1].code, "empty");
+
+        let cr1 = ColourRegion {
+            rgb: [255, 0, 0],
+            region: Region::new(),
+            area_mm2: 100.0,
+            gradient: true,
+            translucent: true,
+            background: false,
+            strokes: vec![],
+        };
+        let checks2 = colour_checks(&[&cr1], &[]);
+        assert_eq!(checks2.len(), 2);
+        assert_eq!(checks2[0].code, "gradient");
+        assert_eq!(checks2[1].code, "translucent");
+    }
+
+    #[test]
+    fn test_node_checks() {
+        let checks = node_checks("test", DESIGN_SPACE_MAX_PATHS + 10, COMFORTABLE_NODES + 10);
+        assert_eq!(checks.len(), 2);
+        assert_eq!(checks[0].code, "paths");
+        assert_eq!(checks[1].code, "nodes");
+
+        let ok_checks = node_checks("test", 10, 100);
+        assert!(ok_checks.is_empty());
+    }
+
+    #[test]
+    fn test_layer_checks() {
+        let empty_reg = Region::new();
+        assert!(layer_checks("test", &empty_reg, &empty_reg, 1.0, false).is_empty());
+
+        let poly = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
+        let shape = vec![poly];
+        let r = vec![shape];
+        let checks = layer_checks("layer1", &r, &r, 0.5, false);
+        assert!(checks.is_empty());
+
+        let tiny_poly = vec![[0.0, 0.0], [0.1, 0.0], [0.1, 0.1], [0.0, 0.1]];
+        let tiny_r = vec![vec![tiny_poly]];
+        let speck_checks = layer_checks("specks", &tiny_r, &tiny_r, 2.0, false);
+        assert!(speck_checks.iter().any(|c| c.code == "specks"));
+    }
+}

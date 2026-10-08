@@ -149,4 +149,21 @@ mod tests {
         assert_eq!(bytes, [0, 128, 255, 255, 0, 255, 64, 255]);
         assert!(write_png(&[0.0; 5], 2, 1, &path).is_err(), "short buffer");
     }
+
+    #[test]
+    fn external_restore_copies_file_and_succeeds() {
+        let e = External {
+            program: "python".into(),
+            args: vec![
+                "-c".into(),
+                "import shutil, sys; shutil.copy(sys.argv[1], sys.argv[2])".into(),
+                "{in}".into(),
+                "{out}".into(),
+            ],
+            work_dir: None,
+        };
+        let rgb_in = vec![0.5f32; 12];
+        let res = e.restore(&rgb_in, 2, 2).expect("restore succeeds");
+        assert_eq!(res.len(), 12);
+    }
 }

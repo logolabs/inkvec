@@ -42,13 +42,17 @@ fn main() -> ExitCode {
 /// Parse the arguments, rewrite each input, and write each result to `-o`, into `--out-dir`,
 /// or to stdout. The first error stops the run.
 fn run() -> Result<(), String> {
+    run_iter(std::env::args().skip(1))
+}
+
+fn run_iter<I: IntoIterator<Item = String>>(args: I) -> Result<(), String> {
     let mut inputs: Vec<PathBuf> = Vec::new();
     let mut output: Option<PathBuf> = None;
     let mut out_dir: Option<PathBuf> = None;
     let mut opts = Options::default();
     let mut stats = false;
     let mut bytes_only = false;
-    let mut it = std::env::args().skip(1);
+    let mut it = args.into_iter();
     let value = |it: &mut dyn Iterator<Item = String>, flag: &str| -> Result<String, String> {
         it.next().ok_or_else(|| format!("{flag} needs a value"))
     };
@@ -166,4 +170,91 @@ fn add(t: &mut Report, r: &Report) {
     t.params_after += r.params_after;
     t.guarded += r.guarded;
     t.tolerance_units = r.tolerance_units;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cli_flags_and_errors() {
+        assert!(run_iter(vec!["--help".to_string()]).is_ok());
+        assert!(run_iter(vec!["-h".to_string()]).is_ok());
+        assert!(run_iter(Vec::<String>::new()).is_err());
+        assert!(run_iter(vec!["--unknown".to_string()]).is_err());
+        assert!(run_iter(vec!["-o".to_string()]).is_err());
+        assert!(run_iter(vec!["--tolerance".to_string(), "abc".to_string()]).is_err());
+        assert!(run_iter(vec!["file1.svg".to_string(), "file2.svg".to_string()]).is_err());
+    }
+
+    #[test]
+    fn test_cli_run_files_and_modes() {
+        let dir = std::env::temp_dir().join(format!("svgmin_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let in_file = dir.join("input.svg");
+        let out_file = dir.join("output.svg");
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M 0 0 L 100 0 L 100 100 Z"/></svg>"#;
+        std::fs::write(&in_file, svg).unwrap();
+
+        let res = run_iter(vec![
+            in_file.to_str().unwrap().to_string(),
+            "-o".to_string(),
+            out_file.to_str().unwrap().to_string(),
+            "--tolerance".to_string(),
+            "0.2".to_string(),
+            "--judge".to_string(),
+            "512".to_string(),
+            "--corner-degrees".to_string(),
+            "45".to_string(),
+            "--decimals".to_string(),
+            "2".to_string(),
+            "--no-document".to_string(),
+            "--stats".to_string(),
+        ]);
+        assert!(res.is_ok());
+        assert!(out_file.exists());
+
+        // Multi-file with --out-dir and --bytes-only
+        let out_dir = dir.join("out_dir");
+        let in_file2 = dir.join("input2.svg");
+        std::fs::write(&in_file2, svg).unwrap();
+        let res2 = run_iter(vec![
+            in_file.to_str().unwrap().to_string(),
+            in_file2.to_str().unwrap().to_string(),
+            "--out-dir".to_string(),
+            out_dir.to_str().unwrap().to_string(),
+            "--bytes-only".to_string(),
+            "--stats".to_string(),
+        ]);
+        assert!(res2.is_ok());
+
+        // Also test stdout mode
+        let res3 = run_iter(vec![in_file.to_str().unwrap().to_string()]);
+        assert!(res3.is_ok());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_helpers() {
+        let mut t = Report::default();
+        let r = Report {
+            paths: 1,
+            rewritten: 1,
+            primitives: 0,
+            subpaths: 1,
+            segments_before: 4,
+            segments_after: 3,
+            params_before: 8.0,
+            params_after: 6.0,
+            guarded: 0,
+            tolerance_units: 0.1,
+        };
+        add(&mut t, &r);
+        assert_eq!(t.paths, 1);
+        let s = line(&r);
+        assert!(s.contains("25.0% smaller"));
+        let p = Path::new("test.svg");
+        assert_eq!(name(p), "test.svg");
+    }
 }

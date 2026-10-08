@@ -123,6 +123,7 @@ pub fn build_target() -> String {
 /// camelCase, plus `bytesBefore` and `bytesAfter` so the caller need not measure the
 /// strings itself -- and so the two agree on what a byte is, which `String::len` settles
 /// and a JS `.length` (UTF-16 code units) would not.
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub fn svgmin(
     svg: &str,
@@ -179,6 +180,7 @@ pub fn svgmin(
 
 /// An `inkvec_svgmin` failure as a JS `Error`, shaped like [`js_error`]. The crate reports a
 /// plain `String`, and everything it refuses is a property of the SVG it was handed.
+#[cfg(target_arch = "wasm32")]
 fn svgmin_error(message: &str) -> JsValue {
     let err = js_sys::Error::new(message);
     let _ = js_sys::Reflect::set(
@@ -190,6 +192,7 @@ fn svgmin_error(message: &str) -> JsValue {
 }
 
 /// A facade error as a JS `Error` carrying the error kind as `code`.
+#[cfg(target_arch = "wasm32")]
 fn js_error(e: inkvec::Error) -> JsValue {
     let err = js_sys::Error::new(e.message());
     // Setting a plain data property on a fresh `Error` cannot fail.
@@ -199,6 +202,11 @@ fn js_error(e: inkvec::Error) -> JsValue {
         &JsValue::from_str(e.code()),
     );
     err.into()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn js_error(_: inkvec::Error) -> JsValue {
+    panic!("error paths cannot construct JsValue on non-wasm32 targets")
 }
 
 /// Trace image bytes to an SVG string, with the options as a JSON object --
@@ -214,7 +222,10 @@ pub fn trace(bytes: &[u8], options: &str) -> Result<String, JsValue> {
     match result {
         Ok(Ok(svg)) => Ok(svg),
         Ok(Err(e)) => Err(e),
+        #[cfg(target_arch = "wasm32")]
         Err(payload) => Err(panic_message(&payload)),
+        #[cfg(not(target_arch = "wasm32"))]
+        Err(_) => panic!("trace panicked"),
     }
 }
 
@@ -408,6 +419,7 @@ pub fn denoiser_model_sha256() -> String {
 }
 
 /// A panic payload turned into a JS error message.
+#[cfg(target_arch = "wasm32")]
 fn panic_message(payload: &(dyn std::any::Any + Send)) -> JsValue {
     let msg = if let Some(s) = payload.downcast_ref::<&str>() {
         (*s).to_string()
@@ -609,5 +621,11 @@ mod tests {
         assert_eq!(default_options_json(), inkvec::Options::default().to_json());
         assert_eq!(options_schema_json(), inkvec::options_schema_json());
         assert_eq!(build_target(), inkvec::build_target());
+    }
+
+    #[test]
+    fn test_prepare_valid() {
+        let png = contract_input("tiny.png");
+        assert!(prepare(&png, "{}").is_ok());
     }
 }

@@ -96,8 +96,23 @@ pub fn cli_main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    run_cli(&args)
+}
 
-    match run(&args) {
+/// The command-line entry point with explicit argument iterator.
+pub fn cli_main_from(it: impl Iterator<Item = String>) -> ExitCode {
+    let args = match args::parse_args_from(it) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("error: {e}\n\n{}", usage());
+            return ExitCode::FAILURE;
+        }
+    };
+    run_cli(&args)
+}
+
+fn run_cli(args: &Args) -> ExitCode {
+    match run(args) {
         Ok(()) => ExitCode::SUCCESS,
         // The one place a stop becomes an exit code; the library below only ever returns it.
         Err(e) => match e.downcast_ref::<Stop>() {
@@ -1228,5 +1243,81 @@ mod command_tests {
     fn empty_quotes_are_an_empty_argument_and_blank_is_nothing() {
         assert_eq!(split_command(r#"tool "" end"#), ["tool", "", "end"]);
         assert!(split_command("   ").is_empty());
+    }
+
+    #[test]
+    fn test_resolve_lossy_variants() {
+        use super::resolve_lossy;
+        use crate::args::Args;
+        let args = Args {
+            lossy: inkvec_sr::Mode::Auto,
+            ..Args::default()
+        };
+        let jpeg_bytes =
+            b"\xFF\xD8\xFF\xE0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00".to_vec();
+        let jpeg_res = resolve_lossy(&args, || Some(jpeg_bytes));
+        assert_eq!(jpeg_res.lossy, inkvec_sr::Mode::On);
+
+        let png_res = resolve_lossy(&args, || Some(vec![0x89, 0x50, 0x4E, 0x47]));
+        assert_eq!(png_res.lossy, inkvec_sr::Mode::Off);
+
+        let none_res = resolve_lossy(&args, || None);
+        assert_eq!(none_res.lossy, inkvec_sr::Mode::Off);
+    }
+
+    #[test]
+    fn test_border_and_hypotheses_gates() {
+        use super::{border_pad_applies, hypotheses_apply};
+        use crate::args::Args;
+        let mut args = Args::default();
+        assert!(border_pad_applies(&args));
+        args.bilevel = true;
+        assert!(!border_pad_applies(&args));
+        assert!(!hypotheses_apply(&args));
+
+        args.bilevel = false;
+        args.hypotheses = true;
+        assert!(hypotheses_apply(&args));
+        args.strokes = true;
+        assert!(!hypotheses_apply(&args));
+    }
+
+    #[test]
+    fn test_run_errors_and_exit_codes() {
+        use super::{run, run_cli};
+        use crate::args::Args;
+        use std::path::PathBuf;
+        use std::process::ExitCode;
+        let bad_args = Args {
+            input: PathBuf::from("nonexistent_file_12345.png"),
+            ..Args::default()
+        };
+        assert!(run(&bad_args).is_err());
+        assert_eq!(run_cli(&bad_args), ExitCode::FAILURE);
+
+        let bad_dir_args = Args {
+            input: std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../bindings/contract/tiny.png"),
+            output: Some(PathBuf::from("nonexistent_dir_99999/out.svg")),
+            ..Args::default()
+        };
+        assert!(run(&bad_dir_args).is_err());
+    }
+
+    #[test]
+    fn test_run_success_with_output_and_stats() {
+        use super::run;
+        use crate::args::Args;
+        let tmp = std::env::temp_dir().join("test_run_success.svg");
+        let args = Args {
+            input: std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../bindings/contract/tiny.png"),
+            output: Some(tmp.clone()),
+            quiet: false,
+            ..Args::default()
+        };
+        assert!(run(&args).is_ok());
+        assert!(tmp.exists());
+        let _ = std::fs::remove_file(tmp);
     }
 }

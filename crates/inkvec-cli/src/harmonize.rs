@@ -349,4 +349,65 @@ mod tests {
         let with_hole = vec![square(10.0, 10.0, 20.0), square(18.0, 18.0, 4.0)];
         assert!((shape_deviation(&with_hole, &own, 10.0) - 8.0).abs() < 1e-9);
     }
+
+    #[test]
+    fn harmonize_runs_on_empty_and_matching_faces() {
+        let faces = Faces {
+            order: &[],
+            fitted: &[],
+            prims: &[],
+            pts: &[],
+            drawn: &[],
+            holes: &[],
+            dropped: &[],
+        };
+        let h = harmonize(&faces, 0.9, false, 2);
+        assert!(h.d.is_empty());
+        let h_sym = harmonize(&faces, 0.9, true, 2);
+        assert!(h_sym.symbols.is_empty());
+
+        let square_path = |x: f64, y: f64| FittedPath {
+            start: Point::new(x, y),
+            segments: vec![
+                Segment::Line(Point::new(x + 10.0, y)),
+                Segment::Line(Point::new(x + 10.0, y + 10.0)),
+                Segment::Line(Point::new(x, y + 10.0)),
+                Segment::Line(Point::new(x, y)),
+            ],
+            closed: true,
+        };
+        let p1 = square_path(0.0, 0.0);
+        let p2 = square_path(20.0, 0.0);
+        let fitted = vec![p1, p2];
+        let prims = vec![None, None];
+        let rings_data: Vec<FaceRings> = vec![vec![vec![(0, false)]], vec![vec![(1, false)]]];
+        let drawn = vec![vec![0], vec![0]];
+        let holes = vec![vec![], vec![]];
+        let dropped = vec![false, false];
+        let pts = vec![
+            vec![vec![
+                Point::new(0.0, 0.0),
+                Point::new(10.0, 0.0),
+                Point::new(10.0, 10.0),
+                Point::new(0.0, 10.0),
+            ]],
+            vec![vec![
+                Point::new(20.0, 0.0),
+                Point::new(30.0, 0.0),
+                Point::new(30.0, 10.0),
+                Point::new(20.0, 10.0),
+            ]],
+        ];
+        let faces = Faces {
+            order: &rings_data,
+            fitted: &fitted,
+            prims: &prims,
+            pts: &pts,
+            drawn: &drawn,
+            holes: &holes,
+            dropped: &dropped,
+        };
+        let _ = harmonize(&faces, 0.9, true, 2);
+        let _ = harmonize(&faces, 0.9, false, 2);
+    }
 }

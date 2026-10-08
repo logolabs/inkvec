@@ -540,4 +540,13 @@ mod tests {
             "<g id=\"s\" fill=\"none\" stroke=\"#000000\" stroke-width=\"4.00\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path id=\"s-0\" d=\"M1.00,2.00L11.00,2.00\"/><path id=\"s-1\" d=\"M1.00,2.00L11.00,2.00\"/></g>"
         );
     }
+
+    #[test]
+    fn test_ribbon_debug_line() {
+        let r = ribbon(150.0, Join::Round);
+        let o_ok = outcome(Ok(r), 130.0, 20.0);
+        let o_err = outcome(Err(ribbon::Decline::NoCentreline), 0.0, 20.0);
+        debug_line(&o_ok, Some(-10.0));
+        debug_line(&o_err, None);
+    }
 }

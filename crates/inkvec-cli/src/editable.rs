@@ -1178,4 +1178,63 @@ mod tests {
         assert!(!guarded(&moved, &starts, &pts, &sigma));
         assert!(guarded(&fp.segments, &starts, &pts, &sigma));
     }
+
+    #[test]
+    fn test_edit_all_on_diamond() {
+        let fp = diamond();
+        let poly = poly_of(&fp, 48);
+        let mut fps = vec![fp];
+        let polys = vec![poly];
+        let prims = vec![None];
+        let st = edit_all(&polys, &mut fps, &prims);
+        assert!(st.rings > 0);
+        let summary = st.summary();
+        assert!(summary.contains("editability"));
+    }
+
+    #[test]
+    fn test_pass_g1() {
+        let p0 = pt(10.0, 50.0);
+        let p_mid = pt(50.0, 50.0);
+        let p_end = pt(90.0, 50.0);
+        let seg1 = Segment::Cubic(pt(30.0, 50.0), pt(40.0, 50.0), p_mid);
+        let seg2 = Segment::Cubic(pt(60.0, 50.3), pt(70.0, 50.0), p_end);
+        let mut fp = FittedPath {
+            start: p0,
+            segments: vec![seg1, seg2],
+            closed: false,
+        };
+        let poly = poly_of(&fp, 48);
+        let mut st = EditStats::default();
+        let starts = chain_starts(&fp);
+        pass_g1(&mut fp, &starts, &poly.points, &poly.sigma, &mut st);
+        assert_eq!(st.g1_joins, 1);
+    }
+
+    #[test]
+    fn test_pass_equalize() {
+        let p0 = pt(0.0, 0.0);
+        let p_end = pt(100.0, 0.0);
+        let seg = Segment::Cubic(pt(10.0, 0.0), pt(90.5, 0.0), p_end);
+        let mut fp = FittedPath {
+            start: p0,
+            segments: vec![seg],
+            closed: false,
+        };
+        let poly = poly_of(&fp, 48);
+        let mut st = EditStats::default();
+        let starts = chain_starts(&fp);
+        pass_equalize(&mut fp, &starts, &poly.points, &poly.sigma, &mut st);
+        assert_eq!(st.len_sym, 1);
+    }
+
+    #[test]
+    fn test_pass_mirror_on_diamond() {
+        let mut fp = diamond();
+        let poly = poly_of(&fp, 48);
+        let mut st = EditStats::default();
+        let starts = chain_starts(&fp);
+        pass_mirror(&mut fp, &starts, &poly.points, &poly.sigma, &mut st);
+        assert!(st.mirror_rings >= 1);
+    }
 }

@@ -1374,3 +1374,7 @@ pub(crate) fn emit_bilevel(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"-0.5 -0.5 {w} {h}\" width=\"{w}\" height=\"{h}\">{rect}<path d=\"{d}\" fill=\"#000000\"{rule}/></svg>"
     )
 }
+
+#[cfg(test)]
+#[path = "emit_tests.rs"]
+mod tests;

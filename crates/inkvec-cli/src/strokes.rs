@@ -334,3 +334,54 @@ fn stroke_paths(
     }
     (body, params)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use inkvec_core::Point;
+
+    #[test]
+    fn test_strokes_shared_width_and_balance() {
+        let s1 = inkvec_trace::centerline::Stroke {
+            path: vec![Point::new(0.0, 0.0), Point::new(10.0, 0.0)],
+            sigma: vec![0.1, 0.1],
+            width: 2.0,
+            width_sigma: 0.1,
+            closed: false,
+            label: 1,
+        };
+        let s2 = inkvec_trace::centerline::Stroke {
+            path: vec![Point::new(0.0, 0.0), Point::new(10.0, 0.0)],
+            sigma: vec![0.1, 0.1],
+            width: 2.05,
+            width_sigma: 0.1,
+            closed: false,
+            label: 1,
+        };
+        let (med, shared) = shared_width(&[s1.clone(), s2]);
+        assert_eq!(med, 2.05);
+        assert!(shared);
+
+        let cov = inkvec_trace::coverage::CoverageField {
+            width: 10,
+            height: 10,
+            data: vec![1.0; 100],
+            sigma_alpha: 0.05,
+            sigma_model: 0.05,
+            fg: [0.0, 0.0, 0.0],
+            bg: [1.0, 1.0, 1.0],
+            saturation: 1.0,
+        };
+        let args = Args::default();
+        let ok = check_ink_balance(&[s1.clone()], &cov, 77, &args, 10, 10);
+        assert!(ok);
+        // Also test when out of balance (declined)
+        let rejected = check_ink_balance(&[s1.clone()], &cov, 0, &args, 10, 10);
+        assert!(!rejected);
+
+        let cfg = FitConfig::default();
+        let (body, params) = stroke_paths(&[s1], &cfg, true, 2, 0.0);
+        assert!(body.contains("<path d=\""));
+        assert!(params > 0.0);
+    }
+}

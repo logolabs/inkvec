@@ -475,7 +475,3 @@ fn strokes_mode_traces_line_art_as_stroked_paths() {
         t.svg
     );
 }
-
-
-
-

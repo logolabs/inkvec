@@ -1128,7 +1128,14 @@ fn analyse_region(
     let mut strokes = Vec::new();
     let mut explained = 0.0f64;
     for c in &chains {
-        if let Some(s) = measure_stroke(cov, &ls, c, label, min_aspect, criteria.max_width_rel_spread) {
+        if let Some(s) = measure_stroke(
+            cov,
+            &ls,
+            c,
+            label,
+            min_aspect,
+            criteria.max_width_rel_spread,
+        ) {
             let l = s.length();
             explained += l * s.width;
             if !s.closed {

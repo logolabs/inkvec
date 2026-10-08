@@ -128,36 +128,8 @@ pub(crate) fn run_strokes(
         return None;
     }
 
-    // A last check that the drawing is whole: the kept strokes' ink (length times width,
-    // px²) plus the residual ink pixels, against the input's total coverage. Per-region
-    // selection means nothing can be dropped -- what the strokes refuse is filled -- so
-    // this should never fire, and it is kept as the assertion of that rather than as a
-    // policy. Outside `[stroke_balance, 2 - stroke_balance]` the drawing is declined.
-    let ink_have: f64 = (0..w * h).map(|i| cov.data[i] as f64).sum();
-    let ink_draw: f64 = an
-        .strokes
-        .iter()
-        .map(|s| {
-            let cap = if s.closed {
-                0.0
-            } else {
-                std::f64::consts::FRAC_PI_4 * s.width * s.width
-            };
-            s.length() * s.width + cap
-        })
-        .sum::<f64>()
-        + residual_ink as f64;
-    if ink_have > 1.0 {
-        let bal = ink_draw / ink_have;
-        if !(args.stroke_balance..=(2.0 - args.stroke_balance)).contains(&bal) {
-            diag::stage(args.quiet, || {
-                format!(
-                    "  strokes       declined: would draw {:.0}% of the ink present",
-                    bal * 100.0
-                )
-            });
-            return None;
-        }
+    if !check_ink_balance(&an.strokes, &cov, residual_ink, args, w, h) {
+        return None;
     }
     if shared {
         params += 1.0;
@@ -192,6 +164,44 @@ pub(crate) fn run_strokes(
             format!("params        {params:.0}"),
         ],
     ))
+}
+
+/// A last check that the drawing is whole: the kept strokes' ink (length times width,
+/// px²) plus the residual ink pixels, against the input's total coverage.
+fn check_ink_balance(
+    strokes: &[inkvec_trace::centerline::Stroke],
+    cov: &inkvec_trace::coverage::CoverageField,
+    residual_ink: usize,
+    args: &Args,
+    w: usize,
+    h: usize,
+) -> bool {
+    let ink_have: f64 = (0..w * h).map(|i| cov.data[i] as f64).sum();
+    let ink_draw: f64 = strokes
+        .iter()
+        .map(|s| {
+            let cap = if s.closed {
+                0.0
+            } else {
+                std::f64::consts::FRAC_PI_4 * s.width * s.width
+            };
+            s.length() * s.width + cap
+        })
+        .sum::<f64>()
+        + residual_ink as f64;
+    if ink_have > 1.0 {
+        let bal = ink_draw / ink_have;
+        if !(args.stroke_balance..=(2.0 - args.stroke_balance)).contains(&bal) {
+            diag::stage(args.quiet, || {
+                format!(
+                    "  strokes       declined: would draw {:.0}% of the ink present",
+                    bal * 100.0
+                )
+            });
+            return false;
+        }
+    }
+    true
 }
 
 /// The width to write for every stroke at once, and whether one width will do: the

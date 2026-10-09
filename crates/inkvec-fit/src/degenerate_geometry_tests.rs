@@ -1,4 +1,4 @@
-//! Integration tests for degenerate geometry and numerical singularity hardening.
+//! Tests for degenerate geometry and numerical singularity hardening.
 //!
 //! Verifies zero panics, zero unhandled zero divisions, and zero NaN propagation across:
 //! - Coincident Bézier control points (p0=p1=p2=p3, p0=p1, cusps, retrograde segments)
@@ -7,15 +7,15 @@
 //! - Empty and single-point arc length cumulative sums (`arc_lengths`)
 //! - Collinear and degenerate solves (`scatter_min_eigen`, `arms_from_moments`, `arc_ellipse_center`)
 
-use inkvec_core::{Point, Polyline, Vec2};
-use inkvec_fit::candidates::{arms_from_moments, scatter_min_eigen};
-use inkvec_fit::curves::{
+use crate::candidates::{arms_from_moments, scatter_min_eigen};
+use crate::curves::{
     arc_ellipse_center, cubic_self_intersects, cubic_tangent, eval_cubic, Segment,
 };
-use inkvec_fit::decimate;
-use inkvec_fit::structural::vector_angle;
-use inkvec_fit::tangents::{arc_lengths, turn_angle};
-use inkvec_fit::FitConfig;
+use crate::decimate;
+use crate::structural::vector_angle;
+use crate::tangents::{arc_lengths, turn_angle};
+use crate::FitConfig;
+use inkvec_core::{Point, Polyline, Vec2};
 
 #[test]
 fn test_coincident_bezier_control_points() {

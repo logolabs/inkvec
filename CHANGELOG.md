@@ -16,6 +16,9 @@ API in particular should be treated as unstable release to release).
   - **Multi-branch line art with close junctions is preserved.** The CLI `--strokes` path now uses `GRAPH_CRITERIA` (`min_edge_aspect: 0.5`, `spur_factor: 0.25`), preventing skeleton edges between close junctions from being pruned by the former 3.0 aspect ratio floor.
   - **Stroke balance gate incorporates round cap area.** Round caps now add `(π/4) * width²` to `ink_draw`, matching the geometry SVG actually renders.
   - **Skyline underflow fix.** Fixed debug underflow on small image heights in `ribbon/skyline.rs`.
+- **A stroke too thin to reach full opacity keeps its ink on a transparent ground (Quality).** Box filtering leaves a 1.2 px stroke at 0.990 alpha, and the palette asked every ink below 1.0 for an interior it cannot have, so it traced the glyph from its anti-aliased fringe and lost both counters (`bench/cases` `glyph_ring_bar`). From 0.98 up an ink now counts as opaque. On all 1386 icons of `bench/alpha_eval.py`, 18 traces change (11 better, 7 worse) and the means are unchanged.
+- **New tests pin what already held:** the fitters and primitive fits are equivariant under quarter turns and mirrors, the boundary solve's gradients match finite differences, and degenerate input (empty, coincident, collinear, non-finite) is handled.
+- **The test suites run anywhere.** No test shells out to Python or reads the wall clock, the server's healthcheck tests no longer race on `INKVEC_PORT`, and `cargo doc` builds again (`inkvec-fit`'s internal stages stay internal; their tests moved into the crate).
 
 ## [0.2.6] - 2026-10-05
 

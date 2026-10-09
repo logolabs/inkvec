@@ -73,6 +73,19 @@ use palette::{claim_spread, interior_fraction, straddle_fraction};
 /// Alpha at or above which a pixel or an ink is opaque.
 pub const OPAQUE: f32 = 0.999;
 
+/// Opacity below which a palette candidate that is not a blend has to show an interior to
+/// be kept as an ink (the translucent-interior rule of `palette::BlendEvidence::measure`).
+///
+/// The rule asks every opacity it does not round to 1, so that the 0.95-0.99 rim just
+/// inside an opaque silhouette is questioned (see the reference copy in
+/// `reference_tests.rs`). A stroke narrower than about 1.5 px never reaches 1 either: box
+/// filtering peaks at 0.990 on the 1.2 px bar of `bench/cases` `glyph_ring_bar`, and with
+/// no interior to show, the ink was rejected and the glyph traced from its 0.28 fringe with
+/// both counters lost. From 0.98 up a candidate is treated as opaque. On all 1386 icons of
+/// `bench/alpha_eval.py` (128ss), 18 traces change, 11 better and 7 worse, and the three
+/// means are unchanged to six places.
+pub(crate) const TRANSLUCENT_BELOW: f32 = 0.98;
+
 /// A colour seen over both grounds: `w` over white, `k` over the second ground
 /// ([`SECOND_GROUND`]), in OKLab. For an opaque colour the two are the same point.
 #[derive(Clone, Copy, Debug, PartialEq)]

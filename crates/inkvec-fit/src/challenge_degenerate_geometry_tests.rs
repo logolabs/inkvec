@@ -10,22 +10,19 @@
 //! 7. Singular elliptical arc center parameterizations (`arc_ellipse_center`).
 //! 8. End-to-end fitting pipelines (`fit_path`, `optimal_multimodel`) on degenerate polylines.
 
-use inkvec_core::{Point, Polyline, Vec2};
-use inkvec_fit::candidates::{arms_from_moments, scatter_min_eigen};
-use inkvec_fit::curves::{
+use crate::candidates::{arms_from_moments, scatter_min_eigen};
+use crate::curves::{
     arc_ellipse_center, cubic_self_intersects, cubic_tangent, eval_cubic, Segment,
 };
-use inkvec_fit::decimate;
-use inkvec_fit::multimodel::optimal_multimodel;
-use inkvec_fit::structural::vector_angle;
-use inkvec_fit::tangents::{arc_lengths, turn_angle};
-use inkvec_fit::{fit_path, FitConfig};
-use std::time::Instant;
+use crate::decimate;
+use crate::multimodel::optimal_multimodel;
+use crate::structural::vector_angle;
+use crate::tangents::{arc_lengths, turn_angle};
+use crate::{fit_path, FitConfig};
+use inkvec_core::{Point, Polyline, Vec2};
 
 #[test]
 fn challenge_bezier_eval_and_intersections_stress() {
-    let t0 = Instant::now();
-
     // 1. All identical control points
     let p_zero = Point::new(0.0, 0.0);
     assert!(!cubic_self_intersects(p_zero, p_zero, p_zero, p_zero));
@@ -66,14 +63,10 @@ fn challenge_bezier_eval_and_intersections_stress() {
     assert!(pt_huge.x.is_finite() && pt_huge.y.is_finite());
     let tan_huge = cubic_tangent([huge_p, huge_p, huge_p, huge_p], 0.5);
     assert!(tan_huge.x.is_finite() && tan_huge.y.is_finite());
-
-    assert!(t0.elapsed().as_millis() < 50, "Test exceeded 50ms limit");
 }
 
 #[test]
 fn challenge_extreme_vector_angle_singularities() {
-    let t0 = Instant::now();
-
     // 1. Extreme magnitude vectors: overflowing hypot
     let huge1 = Vec2 { x: 1e200, y: 1e200 };
     let huge2 = Vec2 {
@@ -165,13 +158,10 @@ fn challenge_extreme_vector_angle_singularities() {
         assert_eq!(vector_angle(right, bad), 0.0);
         assert_eq!(vector_angle(bad, bad), 0.0);
     }
-
-    assert!(t0.elapsed().as_millis() < 50, "Test exceeded 50ms limit");
 }
 
 #[test]
 fn challenge_decimate_and_arc_lengths_stress() {
-    let t0 = Instant::now();
     let cfg = FitConfig::default();
 
     // 1. Single point polyline
@@ -217,14 +207,10 @@ fn challenge_decimate_and_arc_lengths_stress() {
     assert_eq!(s_huge[0], 0.0);
     assert!(s_huge[1].is_finite());
     assert!(s_huge[1] > 1e100);
-
-    assert!(t0.elapsed().as_millis() < 50, "Test exceeded 50ms limit");
 }
 
 #[test]
 fn challenge_scatter_min_eigen_adversarial_stability() {
-    let t0 = Instant::now();
-
     // 1. Coordinates at huge offset (tests catastrophic cancellation: sxx - sx*sx/w)
     let offset_x = 1e8;
     let offset_y = 1e8;
@@ -274,14 +260,10 @@ fn challenge_scatter_min_eigen_adversarial_stability() {
     let chi2_tiny_w = scatter_min_eigen(1e-15, 0.0, 0.0, 0.0, 0.0, 0.0);
     assert!(chi2_tiny_w.is_finite());
     assert!(chi2_tiny_w >= 0.0);
-
-    assert!(t0.elapsed().as_millis() < 50, "Test exceeded 50ms limit");
 }
 
 #[test]
 fn challenge_arms_from_moments_and_ellipse_center() {
-    let t0 = Instant::now();
-
     // 1. arms_from_moments under extreme angle configurations
     let test_cases = [
         (0.0, 0.0, 0.0, 0.0),
@@ -337,13 +319,10 @@ fn challenge_arms_from_moments_and_ellipse_center() {
     assert!(frame_rot.c.x.is_finite());
     assert!(frame_rot.c.y.is_finite());
     assert!(frame_rot.delta.is_finite());
-
-    assert!(t0.elapsed().as_millis() < 50, "Test exceeded 50ms limit");
 }
 
 #[test]
 fn challenge_end_to_end_fit_pipelines_on_degenerate_geometry() {
-    let t0 = Instant::now();
     let cfg = FitConfig::default();
 
     // 1. Empty polyline
@@ -395,6 +374,4 @@ fn challenge_end_to_end_fit_pipelines_on_degenerate_geometry() {
     for seg in &multi_line.segments {
         assert!(seg.end().x.is_finite() && seg.end().y.is_finite());
     }
-
-    assert!(t0.elapsed().as_millis() < 50, "Test exceeded 50ms limit");
 }

@@ -14,6 +14,59 @@ const TINY_PNG: &[u8] = &[
     0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82, // IEND
 ];
 
+/// The `--sr-command` that `build_upscaler` answers with [`Nearest`], in process.
+pub(crate) const NEAREST_UPSCALER: &str = "<test: nearest x4>";
+
+/// A stand-in for the SR network: nearest-neighbour replication by 4, the factor
+/// `build_upscaler` gives an external command.
+pub(crate) struct Nearest;
+
+impl inkvec_sr::Upscaler for Nearest {
+    fn scale(&self) -> usize {
+        4
+    }
+
+    fn upscale(
+        &self,
+        img: &inkvec_trace::Rgba,
+    ) -> Result<inkvec_trace::Rgba, Box<dyn std::error::Error>> {
+        let (w, h) = (img.width * 4, img.height * 4);
+        let data = (0..w * h)
+            .flat_map(|i| img.pixel((i % w) / 4, (i / w) / 4))
+            .collect();
+        Ok(inkvec_trace::Rgba {
+            width: w,
+            height: h,
+            data,
+        })
+    }
+
+    fn describe(&self) -> String {
+        "nearest x4 (test)".into()
+    }
+}
+
+/// The `--restore-command` that `build_restorer` answers with [`Identity`], in process.
+pub(crate) const IDENTITY_RESTORER: &str = "<test: identity>";
+
+/// A stand-in for the restorer that hands the image back unchanged.
+pub(crate) struct Identity;
+
+impl inkvec_restore::Restore for Identity {
+    fn restore(
+        &self,
+        rgb: &[f32],
+        _width: usize,
+        _height: usize,
+    ) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+        Ok(rgb.to_vec())
+    }
+
+    fn describe(&self) -> String {
+        "identity (test)".into()
+    }
+}
+
 fn make_square() -> inkvec_trace::Rgba {
     let mut data = vec![1.0f32; 64 * 64 * 4];
     for y in 16..48 {
@@ -233,19 +286,9 @@ fn test_run_cli_exit_codes() {
     assert_eq!(run_cli(&args_flat), ExitCode::from(2));
     let _ = std::fs::remove_file(tmp);
 
-    let test_img_path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bindings/contract/tiny.png");
-
-    // 2. MapDumped stop under INKVEC_DUMP_MAP yields ExitCode::SUCCESS
-    let tmp_map = std::env::temp_dir().join("test_dump_map.bin");
-    std::env::set_var("INKVEC_DUMP_MAP", &tmp_map);
-    let args_dump = Args {
-        input: test_img_path,
-        ..Args::default()
-    };
-    assert_eq!(run_cli(&args_dump), ExitCode::SUCCESS);
-    let _ = std::fs::remove_file(&tmp_map);
-    std::env::remove_var("INKVEC_DUMP_MAP");
+    // `INKVEC_DUMP_MAP`'s stop is not exercised here: `inkvec_core::env` caches each
+    // variable for the whole process the first time it is read, so setting it in one test
+    // either does nothing or turns every later trace in this binary into a map dump.
 
     // 4. cli_main_from invalid args returns FAILURE
     let code = cli_main_from(["inkvec".into(), "--unknown-arg-12345".into()].into_iter());
@@ -336,10 +379,7 @@ fn test_sr_prepass_execution() {
     let img = make_square();
     let args_sr = Args {
         sr: inkvec_sr::Mode::On,
-        sr_command: Some(
-            "python -c \"from PIL import Image; import sys; im = Image.open(sys.argv[1]); im.resize((im.width * 4, im.height * 4), Image.NEAREST).save(sys.argv[2])\" {in} {out}"
-                .into(),
-        ),
+        sr_command: Some(NEAREST_UPSCALER.into()),
         sr_no_recolour: true,
         quiet: false,
         ..Args::default()
@@ -357,10 +397,7 @@ fn test_restore_prepass_execution() {
     let img = make_square();
     let args_res = Args {
         restore: inkvec_restore::Mode::On,
-        restore_command: Some(
-            "python -c \"import shutil, sys; shutil.copy(sys.argv[1], sys.argv[2])\" {in} {out}"
-                .into(),
-        ),
+        restore_command: Some(IDENTITY_RESTORER.into()),
         quiet: false,
         ..Args::default()
     };
@@ -406,15 +443,21 @@ fn test_trace_bordered_canvas_edge() {
 fn test_cli_main_from_valid_args() {
     let test_img_path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bindings/contract/tiny.png");
+    // Without `-o` the SVG would be written beside the input, into the source tree.
+    let out = std::env::temp_dir().join(format!("cli_main_from_{}.svg", std::process::id()));
     let code = cli_main_from(
         [
             "inkvec".into(),
             test_img_path.to_str().unwrap().into(),
+            "-o".into(),
+            out.to_str().unwrap().into(),
             "--quiet".into(),
         ]
         .into_iter(),
     );
     assert_eq!(code, ExitCode::SUCCESS);
+    assert!(out.exists());
+    let _ = std::fs::remove_file(out);
 }
 
 #[test]

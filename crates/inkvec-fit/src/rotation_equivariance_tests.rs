@@ -1,17 +1,18 @@
-//! Integration tests for rotation and reflection equivariance in curve fitting and primitives.
+//! Rotation and reflection equivariance of curve fitting and primitives.
 //!
 //! Verifies that rigid geometric transformations (90°, 180°, 270° and axis reflections)
 //! produce equivariant outputs across:
 //! - Tangent estimation (`estimate_tangents`)
 //! - Primitive circle, ellipse, and rounded rectangle recovery
-//! - Multi-model dynamic programming curve fitting (`fit_path`)
+//! - The polygon and multi-model programs (`optimal_polygon`, `optimal_multimodel`); the
+//!   two-pass reference `fit_path` is checked unrotated only
 //! - Strict bounds on Hausdorff deviation (< 0.05 px) and segment counts
 
+use crate::curves;
+use crate::primitives::{fit_circle, fit_ellipse, fit_round_rect};
+use crate::tangents::estimate_tangents;
+use crate::{fit_path, FitConfig};
 use inkvec_core::{Point, Polyline, Vec2};
-use inkvec_fit::curves;
-use inkvec_fit::primitives::{fit_circle, fit_ellipse, fit_round_rect};
-use inkvec_fit::tangents::estimate_tangents;
-use inkvec_fit::{fit_path, FitConfig};
 use std::f64::consts::{PI, TAU};
 
 /// Deterministic LCG pseudo-random generator
@@ -240,8 +241,8 @@ fn test_path_fit_rotation_and_reflection_equivariance() {
     let dev0 = curves::max_deviation(&poly0.points, fit0.start, &fit0.segments);
     assert!(dev0 < 0.25, "dev0 = {dev0}");
 
-    let seg0 = inkvec_fit::optimal_polygon(&poly0, &cfg);
-    let mm0 = inkvec_fit::multimodel::optimal_multimodel(&poly0, &cfg);
+    let seg0 = crate::optimal_polygon(&poly0, &cfg);
+    let mm0 = crate::multimodel::optimal_multimodel(&poly0, &cfg);
 
     for &tf in &[
         Transform::Rot90,
@@ -250,7 +251,7 @@ fn test_path_fit_rotation_and_reflection_equivariance() {
         Transform::ReflectX,
     ] {
         let poly_tf = transform_polyline(&poly0, tf);
-        let seg_tf = inkvec_fit::optimal_polygon(&poly_tf, &cfg);
+        let seg_tf = crate::optimal_polygon(&poly_tf, &cfg);
 
         // 1. optimal_polygon must be strictly equivariant on vertex indices
         assert_eq!(
@@ -268,7 +269,7 @@ fn test_path_fit_rotation_and_reflection_equivariance() {
         );
 
         // 2. multimodel segment count and cost equivariance
-        let mm_tf = inkvec_fit::multimodel::optimal_multimodel(&poly_tf, &cfg);
+        let mm_tf = crate::multimodel::optimal_multimodel(&poly_tf, &cfg);
         assert_eq!(
             mm_tf.segments.len(),
             mm0.segments.len(),

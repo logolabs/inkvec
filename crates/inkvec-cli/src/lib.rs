@@ -910,6 +910,12 @@ pub fn resolve_lossy(args: &Args, head: impl FnOnce() -> Option<Vec<u8>>) -> Arg
 /// The upscaler the flags ask for. An explicit `--sr-command` always wins; otherwise the
 /// packaged Python pre-pass under `tools/`.
 fn build_upscaler(args: &Args) -> Result<Box<dyn inkvec_sr::Upscaler>, Box<dyn std::error::Error>> {
+    // The tests run the SR pre-pass with an upscaler in this process: an external command
+    // would make them depend on what the test machine has installed.
+    #[cfg(test)]
+    if args.sr_command.as_deref() == Some(lib_tests::NEAREST_UPSCALER) {
+        return Ok(Box::new(lib_tests::Nearest));
+    }
     if let Some(cmd) = &args.sr_command {
         let mut parts = split_command(cmd).into_iter();
         let program = parts.next().ok_or("--sr-command is empty")?;
@@ -1091,6 +1097,11 @@ fn restore_prepass(
 fn build_restorer(
     args: &Args,
 ) -> Result<Box<dyn inkvec_restore::Restore>, Box<dyn std::error::Error>> {
+    // As in `build_upscaler`: the tests restore in this process, not through a command.
+    #[cfg(test)]
+    if args.restore_command.as_deref() == Some(lib_tests::IDENTITY_RESTORER) {
+        return Ok(Box::new(lib_tests::Identity));
+    }
     if let Some(cmd) = &args.restore_command {
         let mut parts = split_command(cmd).into_iter();
         let program = parts.next().ok_or("--restore-command is empty")?;

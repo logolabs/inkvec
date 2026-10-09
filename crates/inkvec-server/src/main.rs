@@ -106,18 +106,32 @@ async fn shutdown_signal() {
 mod tests {
     use super::*;
 
+    /// `--healthcheck` reads `INKVEC_PORT`, and the environment is shared by every test in
+    /// this binary, which run in parallel: the tests that set it hold this lock.
+    static PORT_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn test_main_healthcheck_flag() {
+        let _env = PORT_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        // A port that was free a moment ago and has nothing listening on it now, rather than
+        // the default 8080, where a server running on the test machine would answer.
+        let closed = std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|l| l.local_addr())
+            .expect("bind a free port")
+            .port();
+        std::env::set_var("INKVEC_PORT", closed.to_string());
         let code = run_main(vec![
             "inkvec-server".to_string(),
             "--healthcheck".to_string(),
         ]);
+        std::env::remove_var("INKVEC_PORT");
         assert_eq!(code, std::process::ExitCode::FAILURE);
     }
 
     #[test]
     fn test_main_healthcheck_success() {
         use std::io::{Read, Write};
+        let _env = PORT_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a free port");
         let port = listener.local_addr().expect("bound").port();
         std::thread::spawn(move || {

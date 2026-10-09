@@ -97,11 +97,9 @@
 //! `DirectionCone` and [`is_admissible`] survive as a reference implementation used by
 //! the tests and by `examples/lambda_sweep.rs`; nothing in the shipping path calls them.
 
-/// Grid decimation for fit dynamic program.
-pub mod decimate;
+mod decimate;
 
-#[doc(hidden)]
-pub mod candidates;
+pub(crate) mod candidates;
 pub mod choice;
 pub mod cost;
 pub mod curves;
@@ -112,8 +110,17 @@ pub mod pareto;
 pub mod primitives;
 pub mod simple;
 pub mod structural;
-/// Tangent estimation and turning cost.
-pub mod tangents;
+pub(crate) mod tangents;
+
+// Invariants of the fitters as a whole (equivariance, degenerate input). Unit tests rather
+// than `tests/`, because they reach crate-private stages (`candidates`, `decimate`,
+// `tangents`) that are not part of the public API.
+#[cfg(test)]
+mod challenge_degenerate_geometry_tests;
+#[cfg(test)]
+mod degenerate_geometry_tests;
+#[cfg(test)]
+mod rotation_equivariance_tests;
 
 use inkvec_core::{Point, Polyline, Vec2};
 

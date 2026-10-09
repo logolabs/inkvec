@@ -42,7 +42,7 @@ pub struct Tangents {
 }
 
 /// Cumulative arc length at each vertex, in px: `s[0] = 0`, `s[k] = s[k−1] + |p_k − p_{k−1}|`.
-pub fn arc_lengths(pts: &[Point]) -> Vec<f64> {
+pub(crate) fn arc_lengths(pts: &[Point]) -> Vec<f64> {
     if pts.is_empty() {
         return Vec::new();
     }
@@ -304,7 +304,7 @@ pub fn estimate_tangents(poly: &Polyline, cfg: &FitConfig) -> Tangents {
 
 /// Unsigned angle between two directions, in radians, in `[0, π]`: `acos(a·b / (|a||b|))`.
 /// A zero vector has no direction and gives 0.
-pub fn turn_angle(a: Vec2, b: Vec2) -> f64 {
+pub(crate) fn turn_angle(a: Vec2, b: Vec2) -> f64 {
     let (na, nb) = (a.norm(), b.norm());
     if !na.is_finite() || !nb.is_finite() || na < 1e-12 || nb < 1e-12 {
         return 0.0;

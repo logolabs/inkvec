@@ -5,7 +5,23 @@
 //! uses calibrated image evidence"), so a release build does not compile it.
 
 use crate::curves::{arc_ellipse_center, eval_cubic, Segment};
-use inkvec_core::Point;
+use inkvec_core::{Point, Vec2};
+
+/// Unsigned angle between two 2D vectors in radians [0, pi].
+///
+/// Returns 0.0 for zero-length, subnormal, or non-finite (NaN, inf) vectors.
+pub fn vector_angle(a: Vec2, b: Vec2) -> f64 {
+    let na = a.norm();
+    let nb = b.norm();
+    if !na.is_finite() || !nb.is_finite() || na <= 1e-12 || nb <= 1e-12 {
+        return 0.0;
+    }
+    let dot = (a.dot(b) / (na * nb)).clamp(-1.0, 1.0);
+    if !dot.is_finite() {
+        return 0.0;
+    }
+    dot.acos()
+}
 
 /// Sample a single segment at parameter `t` in [0, 1].
 ///

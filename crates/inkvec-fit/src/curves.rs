@@ -680,12 +680,7 @@ pub fn fit_cubics_with(pts: &[Point], accuracy: f64, optimal: bool) -> Option<Ve
             PathEl::QuadTo(a, b) => {
                 // Elevate to cubic so the output alphabet stays uniform.
                 let p0 = out.last().map(|s: &Segment| s.end()).unwrap_or(pts[0]);
-                let c1 = Point::new(
-                    p0.x + 2.0 / 3.0 * (a.x - p0.x),
-                    p0.y + 2.0 / 3.0 * (a.y - p0.y),
-                );
-                let c2 = Point::new(b.x + 2.0 / 3.0 * (a.x - b.x), b.y + 2.0 / 3.0 * (a.y - b.y));
-                out.push(Segment::Cubic(c1, c2, Point::new(b.x, b.y)));
+                out.push(elevate_quad(p0, Point::new(a.x, a.y), Point::new(b.x, b.y)));
             }
             PathEl::ClosePath => {}
         }
@@ -695,6 +690,17 @@ pub fn fit_cubics_with(pts: &[Point], accuracy: f64, optimal: bool) -> Option<Ve
     } else {
         Some(out)
     }
+}
+
+/// Elevate a quadratic Bezier `(p0, a, b)` to a cubic Bezier segment.
+#[inline]
+pub(crate) fn elevate_quad(p0: Point, a: Point, b: Point) -> Segment {
+    let c1 = Point::new(
+        p0.x + 2.0 / 3.0 * (a.x - p0.x),
+        p0.y + 2.0 / 3.0 * (a.y - p0.y),
+    );
+    let c2 = Point::new(b.x + 2.0 / 3.0 * (a.x - b.x), b.y + 2.0 / 3.0 * (a.y - b.y));
+    Segment::Cubic(c1, c2, b)
 }
 
 /// Densely sample a fitted run, at roughly uniform spacing in *space*.
@@ -866,12 +872,306 @@ pub fn chi2(pts: &[Point], sigma: &[f64], start: Point, segs: &[Segment]) -> f64
         return f64::INFINITY;
     }
     let samples = sample_run(start, segs, 0.25);
-    distances(pts, &samples)
+    let res: f64 = distances(pts, &samples)
         .into_iter()
         .enumerate()
         .map(|(k, d)| {
             let s = sigma.get(k).copied().unwrap_or(0.5).max(1e-3);
             (d / s) * (d / s)
         })
-        .sum()
+        .sum();
+    #[cfg(debug_assertions)]
+    debug_assert!(res >= 0.0, "chi2 must be non-negative: {res}");
+    res
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Suite C1: PolylineCurve arc-length parametrization and derivative bounds
+    #[test]
+    fn test_polyline_curve_arclength_and_derivative_bounds() {
+        let pts = vec![
+            Point::new(0.0, 0.0),
+            Point::new(30.0, 40.0),
+            Point::new(30.0, 90.0),
+        ];
+        let curve = PolylineCurve::new(&pts).expect("valid polyline curve");
+        assert!((curve.total() - 100.0).abs() < 1e-12);
+
+        let (p_start, tan_start) = curve.at(0.0);
+        assert!(p_start.distance(KPoint::new(0.0, 0.0)) < 1e-9);
+        assert!((tan_start.hypot() - 1.0).abs() < 1e-9);
+
+        let (p_mid, tan_mid) = curve.at(0.25);
+        assert!(p_mid.distance(KPoint::new(15.0, 20.0)) < 1e-9);
+        assert!((tan_mid.hypot() - 1.0).abs() < 1e-9);
+
+        let (_, deriv) = curve.sample_pt_deriv(0.25);
+        assert!((deriv.hypot() - 100.0).abs() < 1e-9);
+
+        let (p_end, tan_end) = curve.at(1.0);
+        assert!(p_end.distance(KPoint::new(30.0, 90.0)) < 1e-9);
+        assert!((tan_end.hypot() - 1.0).abs() < 1e-9);
+
+        // Degenerate polylines
+        assert!(PolylineCurve::new(&[]).is_none());
+        assert!(PolylineCurve::new(&[Point::new(1.0, 1.0)]).is_none());
+        assert!(PolylineCurve::new(&[Point::new(1.0, 1.0), Point::new(1.0, 1.0)]).is_none());
+    }
+
+    // Suite C2: Segment::is_circular and parameter valuation
+    #[test]
+    fn test_segment_circular_and_params() {
+        let c_arc = Segment::circular_arc(10.0, false, true, Point::new(10.0, 10.0));
+        assert!(c_arc.is_circular());
+        assert_eq!(c_arc.params(), 5.0);
+
+        let e_arc = Segment::Arc {
+            rx: 10.0,
+            ry: 10.5,
+            phi: 0.0,
+            large_arc: false,
+            sweep: true,
+            end: Point::new(10.0, 10.0),
+        };
+        assert!(!e_arc.is_circular());
+        assert_eq!(e_arc.params(), 7.0);
+
+        let rot_arc = Segment::Arc {
+            rx: 10.0,
+            ry: 10.0,
+            phi: 0.1,
+            large_arc: false,
+            sweep: true,
+            end: Point::new(10.0, 10.0),
+        };
+        assert!(!rot_arc.is_circular());
+        assert_eq!(rot_arc.params(), 7.0);
+
+        let line = Segment::Line(Point::new(5.0, 5.0));
+        assert!(line.is_circular());
+        assert_eq!(line.params(), crate::PARAMS_LINE);
+
+        let cubic = Segment::Cubic(
+            Point::new(1.0, 1.0),
+            Point::new(2.0, 2.0),
+            Point::new(3.0, 3.0),
+        );
+        assert!(cubic.is_circular());
+        assert_eq!(cubic.params(), crate::multimodel::params_cubic());
+    }
+
+    // Suite C3: cubic_tangent exact analytical derivative
+    #[test]
+    fn test_cubic_tangent_analytical_derivative() {
+        let p = [
+            Point::new(0.0, 0.0),
+            Point::new(10.0, 20.0),
+            Point::new(30.0, 40.0),
+            Point::new(60.0, 50.0),
+        ];
+        let t0 = cubic_tangent(p, 0.0);
+        assert!((t0.x - 30.0).abs() < 1e-12 && (t0.y - 60.0).abs() < 1e-12);
+
+        let t1 = cubic_tangent(p, 1.0);
+        assert!((t1.x - 90.0).abs() < 1e-12 && (t1.y - 30.0).abs() < 1e-12);
+
+        let t_mid = cubic_tangent(p, 0.5);
+        assert!((t_mid.x - 60.0).abs() < 1e-12 && (t_mid.y - 52.5).abs() < 1e-12);
+    }
+
+    // Suite C4: cubic_self_intersects exact power-basis root bounds
+    #[test]
+    fn test_cubic_self_intersects_power_basis_roots() {
+        // Asymmetric loop with self-intersection
+        let p_loop = (
+            Point::new(0.0, 0.0),
+            Point::new(100.0, 50.0),
+            Point::new(-50.0, 50.0),
+            Point::new(50.0, 0.0),
+        );
+        assert!(cubic_self_intersects(
+            p_loop.0, p_loop.1, p_loop.2, p_loop.3
+        ));
+
+        // Another loop with smaller parameter product v
+        let p_loop2 = (
+            Point::new(0.0, 0.0),
+            Point::new(80.0, 40.0),
+            Point::new(-60.0, 40.0),
+            Point::new(20.0, 0.0),
+        );
+        assert!(cubic_self_intersects(
+            p_loop2.0, p_loop2.1, p_loop2.2, p_loop2.3
+        ));
+
+        // Plain inflection curve (S-curve) does not self-intersect
+        let p_s = (
+            Point::new(0.0, 0.0),
+            Point::new(30.0, 0.0),
+            Point::new(70.0, 100.0),
+            Point::new(100.0, 100.0),
+        );
+        assert!(!cubic_self_intersects(p_s.0, p_s.1, p_s.2, p_s.3));
+
+        // Straight cubic line does not self-intersect
+        let p_line = (
+            Point::new(0.0, 0.0),
+            Point::new(10.0, 10.0),
+            Point::new(20.0, 20.0),
+            Point::new(30.0, 30.0),
+        );
+        assert!(!cubic_self_intersects(
+            p_line.0, p_line.1, p_line.2, p_line.3
+        ));
+
+        // Cusp curve does not self-intersect
+        let p_cusp = (
+            Point::new(0.0, 0.0),
+            Point::new(100.0, 0.0),
+            Point::new(0.0, 100.0),
+            Point::new(100.0, 100.0),
+        );
+        assert!(!cubic_self_intersects(
+            p_cusp.0, p_cusp.1, p_cusp.2, p_cusp.3
+        ));
+    }
+
+    // Suite C5: Savitzky–Golay quadratic polynomial reproduction and denoising invariance
+    #[test]
+    fn test_savitzky_golay_quadratic_reproduction() {
+        // Quadratic polynomial: y = 2*x^2 - 3*x + 5
+        let pts: Vec<Point> = (-10..=10)
+            .map(|x| {
+                let xf = x as f64;
+                Point::new(xf, 2.0 * xf * xf - 3.0 * xf + 5.0)
+            })
+            .collect();
+        let smoothed = smooth(&pts, 3, false);
+        for k in 3..(pts.len() - 3) {
+            assert!(
+                pts[k].dist(smoothed[k]) < 1e-10,
+                "quadratic reproduction error at point {k}"
+            );
+        }
+
+        // Linear polynomial: y = 4*x - 7
+        let pts_lin: Vec<Point> = (0..20)
+            .map(|x| {
+                let xf = x as f64;
+                Point::new(xf, 4.0 * xf - 7.0)
+            })
+            .collect();
+        let sm_lin = smooth(&pts_lin, 2, false);
+        for k in 2..(pts_lin.len() - 2) {
+            assert!(
+                pts_lin[k].dist(sm_lin[k]) < 1e-10,
+                "linear reproduction error at point {k}"
+            );
+        }
+
+        // Short runs (< 2h + 3) and h = 0 are returned untouched
+        let short = vec![Point::new(1.0, 2.0), Point::new(3.0, 4.0)];
+        assert_eq!(smooth(&short, 2, false).len(), 2);
+        assert_eq!(smooth(&pts, 0, false).len(), pts.len());
+    }
+
+    // Suite C6: Quadratic to cubic degree elevation identity
+    #[test]
+    fn test_quadratic_to_cubic_degree_elevation() {
+        let (p0, a, b) = (
+            Point::new(0.0, 0.0),
+            Point::new(60.0, 90.0),
+            Point::new(120.0, 0.0),
+        );
+        let seg = elevate_quad(p0, a, b);
+        let Segment::Cubic(c1, c2, end) = seg else {
+            panic!("elevate_quad must return Segment::Cubic");
+        };
+        assert_eq!(end, b);
+
+        for i in 0..=20 {
+            let t = i as f64 / 20.0;
+            let mt = 1.0 - t;
+            let q_pt = Point::new(
+                mt * mt * p0.x + 2.0 * mt * t * a.x + t * t * b.x,
+                mt * mt * p0.y + 2.0 * mt * t * a.y + t * t * b.y,
+            );
+            let c_pt = eval_cubic([p0, c1, c2, b], t);
+            assert!(
+                q_pt.dist(c_pt) < 1e-12,
+                "degree elevation mismatch at t={t}: {q_pt:?} vs {c_pt:?}"
+            );
+        }
+    }
+
+    // Suite C7: segment_distance projection and monotonic distances
+    #[test]
+    fn test_segment_distance_and_distances() {
+        let seg_a = Point::new(0.0, 0.0);
+        let seg_b = Point::new(10.0, 0.0);
+
+        // Orthogonal projection inside
+        assert!((segment_distance(Point::new(5.0, 12.0), seg_a, seg_b) - 12.0).abs() < 1e-12);
+        // Clamped to endpoints
+        assert!((segment_distance(Point::new(15.0, 0.0), seg_a, seg_b) - 5.0).abs() < 1e-12);
+        assert!((segment_distance(Point::new(-5.0, 0.0), seg_a, seg_b) - 5.0).abs() < 1e-12);
+        // Zero length segment
+        assert!((segment_distance(Point::new(3.0, 4.0), seg_a, seg_a) - 5.0).abs() < 1e-12);
+
+        // distances evaluation
+        let pts = vec![
+            Point::new(0.0, 0.0),
+            Point::new(5.0, 1.0),
+            Point::new(10.0, 0.0),
+        ];
+        let samples = vec![
+            Point::new(0.0, 0.0),
+            Point::new(5.0, 0.0),
+            Point::new(10.0, 0.0),
+        ];
+        let d = distances(&pts, &samples);
+        assert_eq!(d.len(), 3);
+        assert!(d[0].abs() < 1e-12);
+        assert!((d[1] - 1.0).abs() < 1e-12);
+        assert!(d[2].abs() < 1e-12);
+
+        // Empty samples
+        let d_empty = distances(&pts, &[]);
+        assert!(d_empty.iter().all(|&v| v == f64::INFINITY));
+    }
+
+    // Suite C8: max_deviation and chi2 singular/degenerate boundaries
+    #[test]
+    fn test_max_deviation_and_chi2_degenerate_boundaries() {
+        let pts = vec![
+            Point::new(0.0, 0.0),
+            Point::new(10.0, 0.0),
+            Point::new(20.0, 0.0),
+        ];
+        let start = Point::new(0.0, 0.0);
+        let line = Segment::Line(Point::new(20.0, 0.0));
+
+        // Empty segs returns INFINITY
+        assert_eq!(max_deviation(&pts, start, &[]), f64::INFINITY);
+        assert_eq!(chi2(&pts, &[0.5, 0.5, 0.5], start, &[]), f64::INFINITY);
+
+        // pts len < 2 returns INFINITY
+        assert_eq!(
+            max_deviation(&pts[..1], start, std::slice::from_ref(&line)),
+            f64::INFINITY
+        );
+        assert_eq!(
+            max_deviation(&[], start, std::slice::from_ref(&line)),
+            f64::INFINITY
+        );
+
+        // Normal straight line fit has near-zero deviation and chi2
+        let dev = max_deviation(&pts, start, std::slice::from_ref(&line));
+        assert!(dev < 1e-6, "deviation {dev} expected near zero");
+        let c2 = chi2(&pts, &[0.5, 0.5, 0.5], start, &[line]);
+        assert!(c2 < 1e-6, "chi2 {c2} expected near zero");
+    }
 }

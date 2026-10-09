@@ -747,4 +747,85 @@ mod tests {
         }
         assert!(skipped > 0, "no case exercised the precheck");
     }
+
+    /// Suite F2: merge_ramps threshold strictness (RATIO * f + SLACK)
+    #[test]
+    fn test_merge_ramps_threshold_strictness() {
+        let (w, h) = (48, 24);
+        let c0 = [0.40f32, 0.40, 0.40];
+        let c1 = [0.45f32, 0.45, 0.45];
+        let c2 = [0.50f32, 0.50, 0.50];
+        let p_linear = pal(&[c0, c1, c2]);
+
+        // Case 1: Monotone smooth gradient is merged
+        let rgb_clean: Vec<[f32; 3]> = (0..w * h)
+            .map(|p| {
+                let v = 0.40 + 0.10 * (p % w) as f32 / w as f32;
+                [v, v, v]
+            })
+            .collect();
+        let mut labels: Vec<u16> = (0..w * h)
+            .map(|p| {
+                let x = p % w;
+                if x < 16 {
+                    0
+                } else if x < 32 {
+                    1
+                } else {
+                    2
+                }
+            })
+            .collect();
+        let mut fills = vec![flat(c0), flat(c1), flat(c2)];
+        let mut colors = vec![0, 1, 2];
+        let merged = merge_ramps(
+            &rgb_clean,
+            w,
+            h,
+            &p_linear,
+            &mut labels,
+            &mut fills,
+            &mut colors,
+        );
+        assert_eq!(merged, 1, "clean gradient should merge into 1 cluster");
+        assert!(fills[0].model.is_gradient());
+
+        // Case 2: V-shaped / incompatible colors cannot be explained by gradient,
+        // so g > RATIO * f + SLACK and merge is refused (returns 0).
+        let c_mid = [0.45f32, 0.45, 0.45];
+        let c_edge = [0.40f32, 0.40, 0.40];
+        let p_v = pal(&[c_edge, c_mid]);
+        let mut labels_v: Vec<u16> = (0..w * h)
+            .map(|p| {
+                let x = p % w;
+                if (16..32).contains(&x) {
+                    1
+                } else if x < 16 {
+                    0
+                } else {
+                    2
+                }
+            })
+            .collect();
+        let rgb_v: Vec<[f32; 3]> = (0..w * h)
+            .map(|p| {
+                let x = p % w;
+                let base = if (16..32).contains(&x) { 0.45 } else { 0.40 };
+                let noise = 0.006 * ((x % 2) as f32 - 0.5);
+                [base + noise, base + noise, base + noise]
+            })
+            .collect();
+        let mut fills_v = vec![flat(c_edge), flat(c_mid), flat(c_edge)];
+        let mut colors_v = vec![0, 1, 0];
+        let merged_v = merge_ramps(
+            &rgb_v,
+            w,
+            h,
+            &p_v,
+            &mut labels_v,
+            &mut fills_v,
+            &mut colors_v,
+        );
+        assert_eq!(merged_v, 0, "incompatible V-shaped pattern must not merge");
+    }
 }

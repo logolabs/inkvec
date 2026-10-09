@@ -42,7 +42,10 @@ pub struct Tangents {
 }
 
 /// Cumulative arc length at each vertex, in px: `s[0] = 0`, `s[k] = s[k−1] + |p_k − p_{k−1}|`.
-pub(crate) fn arc_lengths(pts: &[Point]) -> Vec<f64> {
+pub fn arc_lengths(pts: &[Point]) -> Vec<f64> {
+    if pts.is_empty() {
+        return Vec::new();
+    }
     let mut s = Vec::with_capacity(pts.len());
     let mut acc = 0.0;
     s.push(0.0);
@@ -50,6 +53,11 @@ pub(crate) fn arc_lengths(pts: &[Point]) -> Vec<f64> {
         acc += pts[k].dist(pts[k - 1]);
         s.push(acc);
     }
+    #[cfg(debug_assertions)]
+    debug_assert!(
+        s.windows(2).all(|w| w[1] >= w[0]),
+        "arc lengths must be non-decreasing"
+    );
     s
 }
 
@@ -125,6 +133,11 @@ fn quadratic_tangent(samples: &[(f64, Point, f64)]) -> Option<(Vec2, f64)> {
     if n < 1e-12 || !n.is_finite() {
         return None;
     }
+    #[cfg(debug_assertions)]
+    debug_assert!(
+        resid >= 0.0 && resid.is_finite(),
+        "chi-squared residual must be non-negative and finite: {resid}"
+    );
     Some((
         Vec2 {
             x: d.x / n,
@@ -279,17 +292,28 @@ pub fn estimate_tangents(poly: &Polyline, cfg: &FitConfig) -> Tangents {
         outgoing[k] = o;
         incoming[k] = i;
     }
+    #[cfg(debug_assertions)]
+    for t in incoming.iter().chain(outgoing.iter()) {
+        debug_assert!(
+            t.x.is_finite() && t.y.is_finite() && (t.norm() - 1.0).abs() < 1e-6,
+            "tangent must be finite unit vector, got {t:?}"
+        );
+    }
     Tangents { incoming, outgoing }
 }
 
 /// Unsigned angle between two directions, in radians, in `[0, π]`: `acos(a·b / (|a||b|))`.
 /// A zero vector has no direction and gives 0.
-pub(crate) fn turn_angle(a: Vec2, b: Vec2) -> f64 {
+pub fn turn_angle(a: Vec2, b: Vec2) -> f64 {
     let (na, nb) = (a.norm(), b.norm());
-    if na < 1e-12 || nb < 1e-12 {
+    if !na.is_finite() || !nb.is_finite() || na < 1e-12 || nb < 1e-12 {
         return 0.0;
     }
-    (a.dot(b) / (na * nb)).clamp(-1.0, 1.0).acos()
+    let cos_theta = (a.dot(b) / (na * nb)).clamp(-1.0, 1.0);
+    if !cos_theta.is_finite() {
+        return 0.0;
+    }
+    cos_theta.acos()
 }
 
 /// Cost of a tangent break between directions `a` and `b`, in nats.
@@ -328,5 +352,60 @@ mod tests {
         assert!((angle - std::f64::consts::FRAC_PI_2).abs() < 1e-6);
         let cost = break_cost(a, b, 1.0);
         assert_eq!(cost, 1.0);
+    }
+
+    #[test]
+    fn test_arc_lengths_monotonicity_and_invariants() {
+        let pts = vec![
+            Point::new(0.0, 0.0),
+            Point::new(3.0, 4.0),
+            Point::new(3.0, 4.0), // zero step
+            Point::new(6.0, 8.0),
+            Point::new(10.0, 8.0),
+        ];
+        let lens = arc_lengths(&pts);
+        assert_eq!(lens.len(), 5);
+        assert_eq!(lens[0], 0.0);
+        assert_eq!(lens[1], 5.0);
+        assert_eq!(lens[2], 5.0);
+        assert_eq!(lens[3], 10.0);
+        assert_eq!(lens[4], 14.0);
+        assert!(lens.windows(2).all(|w| w[1] >= w[0]));
+        assert!(arc_lengths(&[]).is_empty());
+    }
+
+    #[test]
+    fn test_quadratic_tangent_invariants() {
+        // Samples along a parabola y = 0.5 * u^2, x = u
+        let samples = vec![
+            (-1.0, Point::new(-1.0, 0.5), 1.0),
+            (0.0, Point::new(0.0, 0.0), 1.0),
+            (1.0, Point::new(1.0, 0.5), 1.0),
+        ];
+        let (tan, resid) = quadratic_tangent(&samples).expect("quadratic fit");
+        assert!(resid >= 0.0 && resid.is_finite());
+        assert!(resid < 1e-12); // exact quadratic fit
+        assert!((tan.norm() - 1.0).abs() < 1e-6);
+        assert!((tan.x - 1.0).abs() < 1e-6 && tan.y.abs() < 1e-6); // tangent at u=0 is (1, 0)
+    }
+
+    #[test]
+    fn test_estimate_tangents_all_unit_norm() {
+        let poly = Polyline::with_uniform_sigma(
+            vec![
+                Point::new(0.0, 0.0),
+                Point::new(1.0, 2.0),
+                Point::new(4.0, 5.0),
+                Point::new(10.0, 2.0),
+            ],
+            0.05,
+            false,
+        );
+        let cfg = FitConfig::default();
+        let tans = estimate_tangents(&poly, &cfg);
+        for i in 0..poly.len() {
+            assert!((tans.incoming[i].norm() - 1.0).abs() < 1e-6);
+            assert!((tans.outgoing[i].norm() - 1.0).abs() < 1e-6);
+        }
     }
 }

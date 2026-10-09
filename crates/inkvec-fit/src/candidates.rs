@@ -153,7 +153,7 @@ pub(crate) fn raw_moments_direct(pts: &[Point], i: usize, j: usize) -> (f64, f64
 ///
 /// is the weighted sum of squared perpendicular distances to the total-least-squares
 /// line: the line's χ². Clamped at 0 against cancellation; `w` must be positive.
-pub(crate) fn scatter_min_eigen(w: f64, sx: f64, sy: f64, sxx: f64, syy: f64, sxy: f64) -> f64 {
+pub fn scatter_min_eigen(w: f64, sx: f64, sy: f64, sxx: f64, syy: f64, sxy: f64) -> f64 {
     let cxx = sxx - sx * sx / w;
     let cyy = syy - sy * sy / w;
     let cxy = sxy - sx * sy / w;
@@ -235,9 +235,9 @@ fn g1_frame(p0: Point, p1: Point, t0: Vec2, t1: Vec2, raw: (f64, f64, f64)) -> O
 
 /// Up to four `(d0, d1)` arm pairs, the real solutions of Levien's quartic. A fixed
 /// array rather than a `Vec`, because one is built per candidate span.
-struct Arms {
-    items: [(f64, f64); 4],
-    len: usize,
+pub struct Arms {
+    pub items: [(f64, f64); 4],
+    pub len: usize,
 }
 
 impl Arms {
@@ -249,7 +249,7 @@ impl Arms {
         }
     }
     /// The pairs pushed so far, in order.
-    fn iter(&self) -> impl Iterator<Item = (f64, f64)> + '_ {
+    pub fn iter(&self) -> impl Iterator<Item = (f64, f64)> + '_ {
         self.items[..self.len].iter().copied()
     }
 }
@@ -277,7 +277,7 @@ impl Arms {
 /// collapsed. Pairs that are negative or non-finite after that are dropped, so the result
 /// may be empty. The caller scores every pair and keeps the best, which is why all are
 /// returned rather than one.
-fn arms_from_moments(th0: f64, th1: f64, area: f64, mx: f64) -> Arms {
+pub fn arms_from_moments(th0: f64, th1: f64, area: f64, mx: f64) -> Arms {
     let mut out = Arms {
         items: [(0.0, 0.0); 4],
         len: 0,

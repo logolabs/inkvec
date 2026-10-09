@@ -96,3 +96,168 @@ fn no_layers_reproduce_trivially() {
     };
     assert_eq!(layers_reproduce(&an, &[[0.5, 0.5, 0.5]]), 0.0);
 }
+
+fn empty_palette() -> inkvec_trace::color::Palette {
+    inkvec_trace::color::Palette {
+        colors: Vec::new(),
+        rgb: Vec::new(),
+        weight: Vec::new(),
+        alpha: Vec::new(),
+    }
+}
+
+#[test]
+fn test_recover_layers_disabled() {
+    let args = Args {
+        layers: false,
+        ..Args::default()
+    };
+    let map = planar::PlanarMap::default();
+    let res = recover_layers(&args, &map, &[], &[], &empty_palette(), &[]);
+    assert!(res.is_none());
+}
+
+#[test]
+fn test_recover_layers_empty_and_gradient_exclusion() {
+    let args = Args {
+        layers: true,
+        quiet: false,
+        ..Args::default()
+    };
+    let mut map = planar::PlanarMap::default();
+    map.edges.push(planar::Edge {
+        points: vec![],
+        sigma: vec![],
+        left: 0,
+        right: 1,
+        start_node: 0,
+        end_node: 1,
+        closed: false,
+        lambda_scale: 1.0,
+    });
+    // Face 0: flat fill; Face 1: non-flat gradient fill (Rule 2); Face 2: no fill, palette fallback
+    let fills = vec![
+        gradient::FillFit {
+            model: gradient::FillModel::Flat([1.0, 1.0, 1.0]),
+            chi2: 0.0,
+            params: 0.0,
+            cost: 0.0,
+        },
+        gradient::FillFit {
+            model: gradient::FillModel::Linear {
+                p0: (0.0, 0.0),
+                p1: (1.0, 1.0),
+                c0: [0.0, 0.0, 0.0],
+                c1: [1.0, 1.0, 1.0],
+                interp: gradient::Interp::Srgb,
+                mids: vec![],
+            },
+            chi2: 0.0,
+            params: 0.0,
+            cost: 0.0,
+        },
+    ];
+    let pal = inkvec_trace::color::Palette {
+        colors: Vec::new(),
+        rgb: vec![[0.2, 0.4, 0.6]],
+        weight: vec![1.0],
+        alpha: vec![1.0],
+    };
+    let face_color = vec![0, 0, 0];
+    let labels = vec![0u16, 1, 2, 0];
+    let res = recover_layers(&args, &map, &face_color, &fills, &pal, &labels);
+    // Decompose on these simple faces yields no valid layer stack
+    assert!(res.is_none());
+}
+
+#[test]
+fn test_layers_reproduce_missing_face_in_base_rgb() {
+    let an_missing = AlphaAnalysis {
+        layers: vec![Layer {
+            color: [1.0, 0.0, 0.0],
+            alpha: 0.5,
+            faces: vec![999],
+            residual: 0.0,
+        }],
+        opaque_faces: vec![],
+        base_rgb: vec![[1.0, 1.0, 1.0]],
+    };
+    assert_eq!(layers_reproduce(&an_missing, &[[1.0, 1.0, 1.0]]), 0.0);
+}
+
+#[test]
+fn test_recover_layers_successful_stack() {
+    let white = [1.0f32, 1.0, 1.0];
+    let red = [0.9f32, 0.1, 0.1];
+    let blue = [0.1f32, 0.1, 0.9];
+    let green = [0.1f32, 0.9, 0.1];
+    let bw = over(blue, 0.85, white);
+    let br = over(blue, 0.85, red);
+    let rgb = [
+        white,
+        red,
+        bw,
+        over(green, 0.85, white),
+        br,
+        over(green, 0.85, red),
+        over(green, 0.85, bw),
+        over(green, 0.85, br),
+    ];
+    let area = [37834usize, 5846, 5846, 5902, 2318, 2262, 2262, 3266];
+    let adj = [
+        (0, 1),
+        (0, 2),
+        (0, 3),
+        (1, 4),
+        (1, 5),
+        (2, 4),
+        (2, 6),
+        (3, 5),
+        (3, 6),
+        (4, 7),
+        (5, 7),
+        (6, 7),
+        (0, 4),
+        (0, 5),
+        (0, 6),
+        (1, 7),
+        (3, 7),
+    ];
+    let mut map = planar::PlanarMap::default();
+    for &(l, r) in &adj {
+        map.edges.push(planar::Edge {
+            points: vec![],
+            sigma: vec![],
+            left: l as u16,
+            right: r as u16,
+            start_node: 0,
+            end_node: 1,
+            closed: false,
+            lambda_scale: 1.0,
+        });
+    }
+    let fills: Vec<_> = rgb
+        .iter()
+        .map(|&c| gradient::FillFit {
+            model: gradient::FillModel::Flat(c),
+            chi2: 0.0,
+            params: 0.0,
+            cost: 0.0,
+        })
+        .collect();
+    let mut labels = Vec::new();
+    for (f, &count) in area.iter().enumerate() {
+        labels.extend(std::iter::repeat_n(f as u16, count / 10));
+    }
+    let args = Args {
+        layers: true,
+        quiet: false,
+        ..Args::default()
+    };
+    let pal = empty_palette();
+    let face_color = vec![0; 8];
+    let res = recover_layers(&args, &map, &face_color, &fills, &pal, &labels);
+    assert!(res.is_some());
+    let an = res.unwrap();
+    assert_eq!(an.layers.len(), 2);
+}

@@ -27,9 +27,12 @@ use inkvec_core::Polyline;
 ///
 /// replaces sample `k` if `r_j > τ²`. Neighbours are always the original grid positions,
 /// so moves do not interact, and the count never changes. Returned ascending. `stride`
-/// must be at least 1 and the polyline non-empty.
-pub(crate) fn indices(poly: &Polyline, stride: usize, cfg: &FitConfig) -> Vec<usize> {
+/// must be at least 1.
+pub fn indices(poly: &Polyline, stride: usize, cfg: &FitConfig) -> Vec<usize> {
     let n = poly.len();
+    if n == 0 {
+        return Vec::new();
+    }
     let mut grid: Vec<usize> = (0..n).step_by(stride).collect();
     let last = *grid
         .last()

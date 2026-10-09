@@ -97,9 +97,11 @@
 //! `DirectionCone` and [`is_admissible`] survive as a reference implementation used by
 //! the tests and by `examples/lambda_sweep.rs`; nothing in the shipping path calls them.
 
-mod decimate;
+/// Grid decimation for fit dynamic program.
+pub mod decimate;
 
-pub(crate) mod candidates;
+#[doc(hidden)]
+pub mod candidates;
 pub mod choice;
 pub mod cost;
 pub mod curves;
@@ -110,7 +112,8 @@ pub mod pareto;
 pub mod primitives;
 pub mod simple;
 pub mod structural;
-pub(crate) mod tangents;
+/// Tangent estimation and turning cost.
+pub mod tangents;
 
 use inkvec_core::{Point, Polyline, Vec2};
 

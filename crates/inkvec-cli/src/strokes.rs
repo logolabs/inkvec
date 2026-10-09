@@ -373,10 +373,10 @@ mod tests {
             saturation: 1.0,
         };
         let args = Args::default();
-        let ok = check_ink_balance(&[s1.clone()], &cov, 77, &args, 10, 10);
+        let ok = check_ink_balance(std::slice::from_ref(&s1), &cov, 77, &args, 10, 10);
         assert!(ok);
         // Also test when out of balance (declined)
-        let rejected = check_ink_balance(&[s1.clone()], &cov, 0, &args, 10, 10);
+        let rejected = check_ink_balance(std::slice::from_ref(&s1), &cov, 0, &args, 10, 10);
         assert!(!rejected);
 
         let cfg = FitConfig::default();
@@ -385,3 +385,7 @@ mod tests {
         assert!(params > 0.0);
     }
 }
+
+#[cfg(test)]
+#[path = "strokes_tests.rs"]
+mod strokes_tests;

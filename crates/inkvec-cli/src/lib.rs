@@ -69,6 +69,9 @@ mod strokes;
 mod uncertainty;
 mod units;
 
+#[cfg(test)]
+mod lib_tests;
+
 use alpha::{alpha_source, pixel_grid};
 use args::{parse_args, usage};
 pub use args::{parse_color_groups, Args, TraceMode};

@@ -128,7 +128,21 @@ impl Polyline {
     /// `sigma` value to [`MIN_SIGMA`].
     pub fn new(points: Vec<Point>, sigma: Vec<f64>, closed: bool) -> Self {
         assert_eq!(points.len(), sigma.len(), "sigma must be per-point");
-        let sigma = sigma.into_iter().map(|s| s.max(MIN_SIGMA)).collect();
+        let sigma: Vec<f64> = sigma
+            .into_iter()
+            .map(|s| {
+                if s.is_finite() {
+                    s.max(MIN_SIGMA)
+                } else {
+                    MIN_SIGMA
+                }
+            })
+            .collect();
+        #[cfg(debug_assertions)]
+        debug_assert!(
+            sigma.iter().all(|s| s.is_finite() && *s >= MIN_SIGMA),
+            "sigma values must be finite and >= MIN_SIGMA"
+        );
         Self {
             points,
             sigma,

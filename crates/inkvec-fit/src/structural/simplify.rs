@@ -126,16 +126,7 @@ pub fn unit_vec(v: Vec2) -> Option<Vec2> {
     }
 }
 
-/// Unsigned angle between two 2D vectors in radians [0, pi].
-pub fn vector_angle(a: Vec2, b: Vec2) -> f64 {
-    let na = a.norm();
-    let nb = b.norm();
-    if na <= 1e-12 || nb <= 1e-12 {
-        return 0.0;
-    }
-    let dot = (a.dot(b) / (na * nb)).clamp(-1.0, 1.0);
-    dot.acos()
-}
+pub use super::vector_angle;
 
 /// Outgoing tangent unit vector of a segment at its end (t = 1).
 ///

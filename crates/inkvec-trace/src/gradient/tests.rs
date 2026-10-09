@@ -792,3 +792,179 @@ fn a_lost_feature_at_one_end_leaves_the_region_flat() {
     );
     assert!(matches!(cands[0].model, FillModel::Flat(c) if close3(c, [0.02; 3], 1e-6)));
 }
+
+/// Suite G1: Mathematical derivative invariants for linear_t and segment monotonicity
+#[test]
+fn test_gradient_linear_t_and_segment_monotonicity() {
+    let eps = 1e-6;
+
+    // 1. linear_t spatial derivatives vs central finite differences
+    let p0 = (2.0, 1.5);
+    let p1 = (8.0, 9.5);
+    let (dx, dy) = (p1.0 - p0.0, p1.1 - p0.1);
+    let dd = dx * dx + dy * dy;
+    let true_dt_dx = dx / dd;
+    let true_dt_dy = dy / dd;
+
+    for &(x, y) in &[(4.0, 4.0), (3.0, 5.0), (5.0, 3.0), (6.0, 7.0)] {
+        let t_xp = linear_t(x + eps, y, p0, p1);
+        let t_xm = linear_t(x - eps, y, p0, p1);
+        let num_dt_dx = (t_xp - t_xm) / (2.0 * eps);
+
+        let t_yp = linear_t(x, y + eps, p0, p1);
+        let t_ym = linear_t(x, y - eps, p0, p1);
+        let num_dt_dy = (t_yp - t_ym) / (2.0 * eps);
+
+        assert!(
+            (num_dt_dx - true_dt_dx).abs() < 1e-6,
+            "num {num_dt_dx} vs true {true_dt_dx}"
+        );
+        assert!(
+            (num_dt_dy - true_dt_dy).abs() < 1e-6,
+            "num {num_dt_dy} vs true {true_dt_dy}"
+        );
+
+        // Normal direction (-dy, dx) must have zero directional derivative
+        let t_norm_p = linear_t(x - dy * eps, y + dx * eps, p0, p1);
+        let t_norm_m = linear_t(x + dy * eps, y - dx * eps, p0, p1);
+        let num_dt_norm = (t_norm_p - t_norm_m) / (2.0 * eps);
+        assert!(
+            num_dt_norm.abs() < 1e-6,
+            "normal directional derivative {num_dt_norm}"
+        );
+    }
+
+    // 2. Monotonicity of piecewise segment()
+    let mids = vec![(0.25, [0.2; 3]), (0.65, [0.8; 3])];
+    let mut prev_global_t = -1e-12;
+    for step in 0..=100 {
+        let t = step as f64 / 100.0;
+        let (seg_idx, u) = eval::segment(&mids, t);
+        let lo = match seg_idx {
+            0 => 0.0,
+            1 => mids[0].0,
+            2 => mids[1].0,
+            _ => unreachable!(),
+        };
+        let hi = match seg_idx {
+            0 => mids[0].0,
+            1 => mids[1].0,
+            2 => 1.0,
+            _ => unreachable!(),
+        };
+        let global_t = lo + u * (hi - lo);
+        assert!((global_t - t).abs() < 1e-12, "t {t} vs global {global_t}");
+        assert!(
+            global_t >= prev_global_t,
+            "monotonicity failed at step {step}"
+        );
+        prev_global_t = global_t;
+    }
+}
+
+/// Suite G2: Mathematical derivative invariants for radial_t and FillModel rotational equivariance
+#[test]
+fn test_gradient_radial_t_derivatives_and_rotational_equivariance() {
+    let eps = 1e-6;
+    let centre = (5.0, 4.0);
+    let radius = 10.0;
+    for &(aspect, angle_deg) in &[(1.0f64, 0.0f64), (0.6, 30.0), (1.8, 45.0), (2.5, 90.0)] {
+        let angle = angle_deg.to_radians();
+        let (sn, cs) = angle.sin_cos();
+
+        for &(x, y) in &[(6.0, 5.0), (3.0, 6.0), (7.0, 2.0), (4.0, 3.0)] {
+            let (pdx, pdy) = (x - centre.0, y - centre.1);
+            let (u, v) = if aspect == 1.0 {
+                (pdx, pdy)
+            } else {
+                (pdx * cs + pdy * sn, (-pdx * sn + pdy * cs) * aspect)
+            };
+            let rho = (u * u + v * v).sqrt();
+            assert!(rho > 0.1 && rho / radius < 0.95); // interior unclamped
+
+            let (drho_dx, drho_dy) = if aspect == 1.0 {
+                (pdx / rho, pdy / rho)
+            } else {
+                (
+                    (u * cs - v * aspect * sn) / rho,
+                    (u * sn + v * aspect * cs) / rho,
+                )
+            };
+            let true_dt_dx = drho_dx / radius;
+            let true_dt_dy = drho_dy / radius;
+
+            let num_dt_dx = (radial_t(x + eps, y, centre, radius, aspect, angle)
+                - radial_t(x - eps, y, centre, radius, aspect, angle))
+                / (2.0 * eps);
+            let num_dt_dy = (radial_t(x, y + eps, centre, radius, aspect, angle)
+                - radial_t(x, y - eps, centre, radius, aspect, angle))
+                / (2.0 * eps);
+
+            assert!(
+                (num_dt_dx - true_dt_dx).abs() < 1e-5,
+                "num {num_dt_dx} vs true {true_dt_dx} aspect {aspect}"
+            );
+            assert!(
+                (num_dt_dy - true_dt_dy).abs() < 1e-5,
+                "num {num_dt_dy} vs true {true_dt_dy} aspect {aspect}"
+            );
+        }
+    }
+
+    // 4. Rotational equivariance of FillModel::Linear and FillModel::Radial (90, 180, 270 deg)
+    let lin_m = FillModel::Linear {
+        p0: (2.0, 3.0),
+        p1: (10.0, 7.0),
+        c0: [0.1, 0.2, 0.3],
+        c1: [0.8, 0.9, 0.7],
+        interp: Interp::LinearRgb,
+        mids: vec![(0.5, [0.4, 0.5, 0.6])],
+    };
+    // 90 deg counter-clockwise rotation: (x, y) -> (-y, x)
+    let lin_m_rot90 = FillModel::Linear {
+        p0: (-3.0, 2.0),
+        p1: (-7.0, 10.0),
+        c0: [0.1, 0.2, 0.3],
+        c1: [0.8, 0.9, 0.7],
+        interp: Interp::LinearRgb,
+        mids: vec![(0.5, [0.4, 0.5, 0.6])],
+    };
+    let rad_m = FillModel::Radial {
+        c: (4.0, 5.0),
+        r: 8.0,
+        aspect: 1.5,
+        angle: 30.0f64.to_radians(),
+        c0: [0.0, 0.5, 1.0],
+        c1: [1.0, 0.2, 0.4],
+        interp: Interp::Srgb,
+        mids: vec![],
+    };
+    // 90 deg counter-clockwise rotation: c -> (-5.0, 4.0), angle -> 30 + 90 = 120 deg
+    let rad_m_rot90 = FillModel::Radial {
+        c: (-5.0, 4.0),
+        r: 8.0,
+        aspect: 1.5,
+        angle: 120.0f64.to_radians(),
+        c0: [0.0, 0.5, 1.0],
+        c1: [1.0, 0.2, 0.4],
+        interp: Interp::Srgb,
+        mids: vec![],
+    };
+
+    for &(x, y) in &[(3.0, 4.0), (6.0, 6.0), (1.0, 2.0), (8.0, 1.0)] {
+        let (rx, ry) = (-y, x);
+        let c_lin = lin_m.color_at(x, y);
+        let c_lin_rot = lin_m_rot90.color_at(rx, ry);
+        assert!(
+            close3(c_lin, c_lin_rot, 1e-6),
+            "lin rot mismatch at ({x}, {y}): {c_lin:?} vs {c_lin_rot:?}"
+        );
+
+        let c_rad = rad_m.color_at(x, y);
+        let c_rad_rot = rad_m_rot90.color_at(rx, ry);
+        assert!(
+            close3(c_rad, c_rad_rot, 1e-6),
+            "rad rot mismatch at ({x}, {y}): {c_rad:?} vs {c_rad_rot:?}"
+        );
+    }
+}

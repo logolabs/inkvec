@@ -441,4 +441,70 @@ mod tests {
         }
         assert!(primitive(&pts).is_none());
     }
+
+    /// Suite F1: ellipse_cubics radial error (< 0.04%) and C1 derivative continuity
+    #[test]
+    fn test_ellipse_cubics_radial_error_and_c1_continuity() {
+        let (c, rx, ry, angle) = (
+            Point::new(100.0, 100.0),
+            50.0,
+            20.0,
+            std::f64::consts::FRAC_PI_4,
+        );
+        let (start, cubics) = ellipse_cubics(c, rx, ry, angle, Point::new(150.0, 100.0), true);
+        assert_eq!(cubics.len(), 4);
+
+        let (s, co) = angle.sin_cos();
+        let mut prev_end = start;
+        let mut outgoing_tangents = Vec::new();
+        let mut incoming_tangents = Vec::new();
+
+        for seg in &cubics {
+            let Segment::Cubic(c1, c2, end) = *seg else {
+                panic!("expected cubic segment");
+            };
+            outgoing_tangents.push(Vec2 {
+                x: c1.x - prev_end.x,
+                y: c1.y - prev_end.y,
+            });
+            incoming_tangents.push(Vec2 {
+                x: end.x - c2.x,
+                y: end.y - c2.y,
+            });
+
+            // Radial error test at dense evaluation points
+            for step in 1..10 {
+                let t = step as f64 / 10.0;
+                let pt = inkvec_fit::curves::eval_cubic([prev_end, c1, c2, end], t);
+                let d = Point::new(pt.x - c.x, pt.y - c.y);
+                let qx = co * d.x + s * d.y;
+                let qy = -s * d.x + co * d.y;
+                let val = (qx * qx) / (rx * rx) + (qy * qy) / (ry * ry);
+                let radial_err = (val.sqrt() - 1.0).abs();
+                assert!(
+                    radial_err < 0.0004,
+                    "radial error {radial_err} exceeds 0.04%"
+                );
+            }
+            prev_end = end;
+        }
+
+        // Closed loop: last end is start
+        assert_eq!(prev_end, start);
+
+        // C1 derivative continuity at all 4 internal subdivision joins
+        for i in 0..4 {
+            let in_tan = incoming_tangents[i];
+            let out_tan = outgoing_tangents[(i + 1) % 4];
+            let in_norm = in_tan.norm();
+            let out_norm = out_tan.norm();
+            assert!(in_norm > 1e-6 && out_norm > 1e-6);
+            let in_u = (in_tan.x / in_norm, in_tan.y / in_norm);
+            let out_u = (out_tan.x / out_norm, out_tan.y / out_norm);
+            assert!(
+                (in_u.0 - out_u.0).abs() < 1e-9 && (in_u.1 - out_u.1).abs() < 1e-9,
+                "C1 continuity failure at join {i}"
+            );
+        }
+    }
 }

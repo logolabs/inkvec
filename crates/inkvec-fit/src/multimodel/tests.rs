@@ -1000,3 +1000,182 @@ fn path_chi2_cost_and_deviation_have_exact_values() {
     assert_eq!(path_chi2(&poly, &empty), f64::INFINITY);
     assert_eq!(path_max_deviation(&poly, &empty), f64::INFINITY);
 }
+
+// --- suites M1 through M4 -----------------------------------------------------------
+
+// Suite M1: Thread allocation math (fork_width)
+#[test]
+fn test_fork_width_thread_allocation() {
+    let probe = scan::fork_width(10000, 1000);
+    let busy = 1001usize.saturating_sub(probe);
+    assert_eq!(scan::fork_width(10, busy + 4), 5); // 4 idle + 1 = 5
+    assert_eq!(scan::fork_width(10, busy + 2), 3); // 2 idle + 1 = 3
+    assert_eq!(scan::fork_width(2, busy + 8), 2); // capped at units
+    assert_eq!(scan::fork_width(10, busy), 1); // 0 idle + 1 = 1
+    assert_eq!(scan::fork_width(1, busy + 4), 1); // 1 unit -> 1
+    assert_eq!(scan::fork_width(0, busy + 4), 1); // 0 units -> max(1) = 1
+
+    let _guard = scan::BusyThreads::claim(100);
+    assert_eq!(scan::fork_width(10, 4), 1);
+}
+
+// Suite M2: Mixed join classification in join_target
+#[test]
+fn test_join_target_mixed_classification() {
+    let pts = vec![
+        Point::new(0.0, 0.0),
+        Point::new(5.0, 0.0),
+        Point::new(10.0, 0.0),
+        Point::new(15.0, 0.0),
+    ];
+    let poly = Polyline::with_uniform_sigma(pts, 0.1, false);
+    let c = cfg(1.5);
+    let out_a = Vec2 { x: 1.0, y: 0.0 };
+    let in_b = Vec2 { x: 1.0, y: 0.0 };
+
+    // (Arc, Cubic) -> None
+    let sol_arc_cubic = solution(
+        vec![0, 1, 3],
+        vec![SegKind::Arc, SegKind::Cubic],
+        vec![None, None],
+    );
+    assert_eq!(
+        join_target(&poly, &sol_arc_cubic, (0, 1), 1, out_a, in_b, &c),
+        None
+    );
+
+    // (Cubic, Arc) -> None
+    let sol_cubic_arc = solution(
+        vec![0, 2, 3],
+        vec![SegKind::Cubic, SegKind::Arc],
+        vec![None, None],
+    );
+    assert_eq!(
+        join_target(&poly, &sol_cubic_arc, (0, 1), 1, out_a, in_b, &c),
+        None
+    );
+
+    // (Arc, Line) -> None
+    let sol_arc_line = solution(
+        vec![0, 1, 3],
+        vec![SegKind::Arc, SegKind::Line],
+        vec![None, None],
+    );
+    assert_eq!(
+        join_target(&poly, &sol_arc_line, (0, 1), 1, out_a, in_b, &c),
+        None
+    );
+
+    // (Line, Arc) -> None
+    let sol_line_arc = solution(
+        vec![0, 1, 3],
+        vec![SegKind::Line, SegKind::Arc],
+        vec![None, None],
+    );
+    assert_eq!(
+        join_target(&poly, &sol_line_arc, (0, 1), 1, out_a, in_b, &c),
+        None
+    );
+
+    // (Line, Line) -> None
+    let sol_line_line = solution(
+        vec![0, 1, 3],
+        vec![SegKind::Line, SegKind::Line],
+        vec![None, None],
+    );
+    assert_eq!(
+        join_target(&poly, &sol_line_line, (0, 1), 1, out_a, in_b, &c),
+        None
+    );
+
+    // (Line, Cubic) -> Some(out_a)
+    let sol_line_cubic = solution(
+        vec![0, 1, 3],
+        vec![SegKind::Line, SegKind::Cubic],
+        vec![None, None],
+    );
+    assert_eq!(
+        join_target(&poly, &sol_line_cubic, (0, 1), 1, out_a, in_b, &c),
+        Some(out_a)
+    );
+
+    // (Cubic, Line) -> Some(in_b)
+    let sol_cubic_line = solution(
+        vec![0, 2, 3],
+        vec![SegKind::Cubic, SegKind::Line],
+        vec![None, None],
+    );
+    assert_eq!(
+        join_target(&poly, &sol_cubic_line, (0, 1), 1, out_a, in_b, &c),
+        Some(in_b)
+    );
+
+    // Sharp turn >= g1_break_radians() -> None
+    let sharp_in_b = Vec2 { x: 0.0, y: 1.0 }; // 90 degree turn
+    assert_eq!(
+        join_target(&poly, &sol_line_cubic, (0, 1), 1, out_a, sharp_in_b, &c),
+        None
+    );
+}
+
+// Suite M3: Ellipse asking guard (SpanScorer::ellipse_asked)
+#[test]
+fn test_ellipse_asked_guard() {
+    let pts_ellipse: Vec<Point> = (0..=32)
+        .map(|k| {
+            let t = 0.5 * std::f64::consts::PI * (k as f64 / 32.0);
+            Point::new(60.0 * t.cos(), 30.0 * t.sin())
+        })
+        .collect();
+    let poly_ellipse = Polyline::with_uniform_sigma(pts_ellipse, 0.05, false);
+    let fit_ellipse = optimal_multimodel_full(&poly_ellipse, &cfg(1.0));
+    assert!(
+        fit_ellipse.kinds.contains(&SegKind::Arc),
+        "ellipse must produce Arc"
+    );
+    let has_non_circular_arc = fit_ellipse.path.segments.iter().any(|s| match s {
+        Segment::Arc { rx, ry, .. } => (rx - ry).abs() > 1.0,
+        _ => false,
+    });
+    assert!(
+        has_non_circular_arc,
+        "strongly elliptical run must be fitted with an elliptical arc"
+    );
+
+    // On a circle, chi2 <= 4.0 * len, so circle suffices and rx == ry
+    let pts_circle: Vec<Point> = (0..=16)
+        .map(|k| {
+            let t = 0.5 * std::f64::consts::PI * (k as f64 / 16.0);
+            Point::new(30.0 * t.cos(), 30.0 * t.sin())
+        })
+        .collect();
+    let poly_circle = Polyline::with_uniform_sigma(pts_circle, 0.05, false);
+    let fit_circle = optimal_multimodel_full(&poly_circle, &cfg(1.0));
+    assert!(
+        fit_circle.kinds.iter().all(|&k| k == SegKind::Arc),
+        "circular run must produce Arc"
+    );
+    let is_circular = fit_circle.path.segments.iter().all(|s| match s {
+        Segment::Arc { rx, ry, .. } => (rx - ry).abs() < 1e-3,
+        _ => false,
+    });
+    assert!(is_circular, "circular run must have rx == ry");
+}
+
+// Suite M4: Tie-breaking contract in candidate resolution (resolve)
+#[test]
+fn test_candidate_resolution_tie_breaking() {
+    let pts = vec![
+        Point::new(0.0, 0.0),
+        Point::new(10.0, 0.0),
+        Point::new(20.0, 0.0),
+    ];
+    let poly = Polyline::with_uniform_sigma(pts, 0.1, false);
+    let fit = optimal_multimodel_full(&poly, &cfg(2.0));
+    assert_eq!(fit.kinds, vec![SegKind::Line]);
+    assert_eq!(fit.path.segments.len(), 1);
+    match &fit.path.segments[0] {
+        Segment::Line(end) => assert_eq!(*end, Point::new(20.0, 0.0)),
+        _ => panic!("expected Segment::Line"),
+    }
+}

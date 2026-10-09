@@ -141,12 +141,15 @@ always byte-identical to a native build or to the browser build (`@logolabs/inkv
 rounding can tip a near-tie. The cross-language contract (`bindings/contract/cases.json`)
 records the hashes per target.
 
-The embedded module has its floating-point `select` instructions rewritten as integer ones
-(`tools/wasm_float_select.py` in the Inkvec repository): wazero's amd64 compiler, v1.8.0
-through at least v1.12.0, can return the wrong operand from a floating-point `select`, and
-without the rewrite traces came out different from what the WebAssembly semantics give (and
-from wazero's own interpreter). The test `TestWazeroFloatSelect` reports whether the bug is
-still there.
+The embedded module is rewritten around two wazero compiler bugs (`tools/wasm_wazero_fixes.py`
+in the Inkvec repository), keeping its semantics exactly. Its floating-point `select`
+instructions become integer ones: wazero's amd64 compiler, v1.8.0 through at least v1.12.0,
+can return the wrong operand from a floating-point `select`, and without the rewrite traces
+came out different from what the WebAssembly semantics give (and from wazero's own
+interpreter). Its integer remainders become divisions: wazero's arm64 compiler (v1.12.0) can
+compute a remainder from a quotient it never stored, which made traces on Apple silicon stop
+with an index out of bounds. The tests `TestWazeroFloatSelect` and `TestWazeroRemainder`
+report whether the bugs are still there.
 
 ## Building from the Inkvec repository
 

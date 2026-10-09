@@ -1,16 +1,20 @@
-"""Rewrite every floating-point `select` in a WebAssembly module as an integer `select`.
+"""Rewrite a WebAssembly module around two wazero compiler bugs, keeping its semantics.
 
-    python tools/wasm_float_select.py in.wasm out.wasm
+    python tools/wasm_wazero_fixes.py in.wasm out.wasm
 
-Works around a wazero compiler bug on amd64 (seen in v1.8.0 through v1.12.0, the latest
-release). wazero lowers an f32/f64/v128 `select` to a pseudo-instruction, xmmCMov, that it
-tells its register allocator *defines* the destination register -- but a conditional move
-leaves the destination unchanged when the condition is false, so it also reads it. Under
-register pressure (a value live across a call is enough) the allocator gives the destination
-a register that never received the false operand, and `select` returns the true operand, or
-whatever else sat there, when the condition is false. The integer `select` (cmove) is
-modelled correctly. A minimal case, which wazero's interpreter and every other engine run
-correctly:
+Every floating-point `select` becomes an integer `select`, and every integer remainder
+(`rem_u`, `rem_s`) becomes a division, a multiplication and a subtraction. Both bugs are in
+wazero's compiler (v1.12.0, the latest release, has both); its interpreter, and every other
+engine, run the original module correctly.
+
+1. Floating-point `select`, on amd64 (seen in v1.8.0 through v1.12.0). wazero lowers an
+f32/f64/v128 `select` to a pseudo-instruction, xmmCMov, that it tells its register allocator
+*defines* the destination register -- but a conditional move leaves the destination
+unchanged when the condition is false, so it also reads it. Under register pressure (a value
+live across a call is enough) the allocator gives the destination a register that never
+received the false operand, and `select` returns the true operand, or whatever else sat
+there, when the condition is false. The integer `select` (cmove) is modelled correctly. A
+minimal case, which wazero's interpreter and every other engine run correctly:
 
     t = x - y;  c = f(t) < b;  return select(t, x, c)     -- returns t when c is false
 
@@ -22,7 +26,26 @@ The rewrite keeps the semantics bit for bit (reinterpret moves bits, NaN payload
     select<f64>(a, b, c)  ->  f64.reinterpret_i64(select<i64>(i64.reinterpret_f64(a),
                                                               i64.reinterpret_f64(b), c))
 
-done in place with two scratch locals per function (the condition and the second operand).
+done in place with scratch locals (the condition and the second operand).
+
+2. Integer remainder, on arm64. wazero lowers `rem` to `udiv rd, rn, rm` (or `sdiv`), a
+branch to the division-by-zero exit, and `msub rd, rd, rm, rn` -- two definitions of the
+result register. Its register allocator keeps one defining instruction per value and stores
+a spilled value after it, which for `rd` is the `msub`. When the exit path's temporary
+register forces `rd` out between the two (the allocator evicts the value used furthest
+ahead, which a remainder used later is), `msub` reloads the quotient from a stack slot
+nothing has written yet, and the remainder comes out as `rn - garbage * rm`. A minimal
+case: forty values live across one `i32.rem_u`, and `1000 rem_u 256` returns 1000. In
+Inkvec it gave the symmetry pass an index of 4294337216 into a 256-point boundary (macOS,
+the Go package's tests). The rewrite, with scratch locals for `a` and `b`:
+
+    rem_u(a, b)  ->  a - div_u(a, b) * b
+    rem_s(a, b)  ->  a - div_s(a, b') * b'   with b' = (b == -1 ? 1 : b)
+
+is exact: division by zero traps either way, and `b'` keeps `rem_s(MIN, -1) = 0` (which
+`div_s` would trap on) -- any `a` remainder 1 is 0, as remainder -1 is. A division is
+lowered with one definition of its result, so it is not affected.
+
 Finding which `select`s are floating-point needs the operand types, so every function body
 is decoded and its operand stack typed. The decoder covers what rustc emits for wasm32
 without SIMD (MVP, sign extension, saturating truncation, bulk memory, reference types,
@@ -134,6 +157,28 @@ SAT_TRUNC = {0: (F32, I32), 1: (F32, I32), 2: (F64, I32), 3: (F64, I32),
 # (float type) -> (to-integer reinterpret, back-to-float reinterpret)
 REINTERPRET = {F64: (0xBD, 0xBF), F32: (0xBC, 0xBE)}
 
+# integer remainder opcode -> (operand type, signed)
+REMAINDER = {0x6F: (I32, True), 0x70: (I32, False), 0x81: (I64, True), 0x82: (I64, False)}
+# integer type -> (const, eq, div_s, div_u, mul, sub)
+INT_OPS = {I32: (0x41, 0x46, 0x6D, 0x6E, 0x6C, 0x6B), I64: (0x42, 0x51, 0x7F, 0x80, 0x7E, 0x7D)}
+
+
+def remainder(t: int, signed: bool, a: int, b: int) -> bytes:
+    """`rem(a, b)`, its operands on the stack, as `a - div(a, b') * b'` in scratch locals `a`
+    and `b`; `b'` is `b`, or 1 where a signed remainder's `b` is -1 (see the docstring)."""
+    const, eq, div_s, div_u, mul, sub = INT_OPS[t]
+    code = bytearray(b"\x21" + uleb(b) + b"\x22" + uleb(a) + b"\x20" + uleb(a))
+    if signed:
+        # b = select(1, b, b == -1)
+        code += bytes([const, 0x01]) + b"\x20" + uleb(b) + b"\x20" + uleb(b)
+        code += bytes([const, 0x7F, eq, 0x1B]) + b"\x22" + uleb(b)
+        code.append(div_s)
+    else:
+        code += b"\x20" + uleb(b)
+        code.append(div_u)
+    code += b"\x20" + uleb(b) + bytes([mul, sub])
+    return bytes(code)
+
 
 class Module:
     def __init__(self, data: bytes):
@@ -228,8 +273,9 @@ class Module:
         return self.types[r.s()]
 
 
-def rewrite_body(m: Module, body: bytes, func_type: tuple) -> tuple[bytes, int]:
-    """One function body with its float selects rewritten, and how many there were."""
+def rewrite_body(m: Module, body: bytes, func_type: tuple) -> tuple[bytes, int, int]:
+    """One function body with its float selects and integer remainders rewritten, and how
+    many of each there were."""
     params, results = func_type
     r = Reader(body)
     local_groups = []
@@ -241,11 +287,14 @@ def rewrite_body(m: Module, body: bytes, func_type: tuple) -> tuple[bytes, int]:
         locals_.extend([t] * n)
     code_start = r.p
     base = len(locals_)
-    cond_local, f64_local, f32_local = base, base + 1, base + 2
+    # Scratch locals, appended to the function's own: two i32 (a select's condition, or a
+    # remainder's operands), an f64, an f32 and two i64.
+    cond_local, f64_local, f32_local = base, base + 2, base + 3
+    int_scratch = {I32: (base, base + 1), I64: (base + 4, base + 5)}
 
     out = bytearray()
     copied = code_start  # body[copied:r.p] is still to be copied verbatim
-    rewrites = 0
+    selects = remainders = 0
     stack: list = []
     # control frames: [height, params, results, unreachable]
     frames = [[0, (), results, False]]
@@ -272,7 +321,18 @@ def rewrite_body(m: Module, body: bytes, func_type: tuple) -> tuple[bytes, int]:
         at = r.p
         op = d[r.p]
         r.p += 1
-        if op in NUMERIC:
+        if op in REMAINDER:
+            # Rewritten in unreachable code too: the opcode gives the types, and the
+            # replacement is as valid on a polymorphic stack as the original.
+            t, signed = REMAINDER[op]
+            pop(t)
+            pop(t)
+            stack.append(t)
+            out += d[copied:at]
+            out += remainder(t, signed, *int_scratch[t])
+            copied = r.p
+            remainders += 1
+        elif op in NUMERIC:
             pops, pushes = NUMERIC[op]
             for t in reversed(pops):
                 pop(t)
@@ -334,7 +394,7 @@ def rewrite_body(m: Module, body: bytes, func_type: tuple) -> tuple[bytes, int]:
                 out.append(0x1B)
                 out.append(to_float)
                 copied = r.p
-                rewrites += 1
+                selects += 1
         elif op == 0x10:
             p, res = m.types[m.funcs[r.u32()]]
             for t in reversed(p):
@@ -462,14 +522,14 @@ def rewrite_body(m: Module, body: bytes, func_type: tuple) -> tuple[bytes, int]:
                              f"calls are not handled; see the module docstring)")
     if frames:
         raise SystemExit("function body ends inside a block")
-    if not rewrites:
-        return body, 0
+    if not selects and not remainders:
+        return body, 0, 0
     out += d[copied:]
-    header = bytearray(uleb(len(local_groups) + 3))
+    header = bytearray(uleb(len(local_groups) + 4))
     for count, t in local_groups:
         header += uleb(count) + bytes([t])
-    header += b"\x01\x7f\x01\x7c\x01\x7d"  # the condition, an f64 and an f32 scratch local
-    return bytes(header) + bytes(out), rewrites
+    header += b"\x02\x7f\x01\x7c\x01\x7d\x02\x7e"  # the scratch locals, as above
+    return bytes(header) + bytes(out), selects, remainders
 
 
 def main() -> int:
@@ -479,7 +539,7 @@ def main() -> int:
     data = open(sys.argv[1], "rb").read()
     m = Module(data)
     out = bytearray(data[:8])
-    total = 0
+    selects = remainders = 0
     n_imported = len(m.funcs) - sum(
         Reader(data, s).u32() for sid, s, _ in m.sections if sid == 10
     )
@@ -496,14 +556,16 @@ def main() -> int:
             size = r.u32()
             body = data[r.p : r.p + size]
             r.p += size
-            new, k = rewrite_body(m, body, m.types[m.funcs[n_imported + i]])
-            total += k
+            new, k, j = rewrite_body(m, body, m.types[m.funcs[n_imported + i]])
+            selects += k
+            remainders += j
             bodies += uleb(len(new)) + new
         out.append(10)
         out += uleb(len(bodies))
         out += bodies
     open(sys.argv[2], "wb").write(out)
-    print(f"rewrote {total} floating-point select(s) as integer selects")
+    print(f"rewrote {selects} floating-point select(s) as integer selects and {remainders} "
+          f"integer remainder(s) as divisions")
     return 0
 
 

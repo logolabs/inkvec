@@ -37,7 +37,7 @@ Why the half-turn was reverted rather than fixed:
 * With it, the Go package's test on macOS (wazero, arm64) panicked in `symmetry::enforce`
   with an index of 2147484096 into a 256-point edge. The same input traces identically before
   and after natively, so this is the runtime miscompiling the new code shape, like the float
-  `select` bug `tools/wasm_float_select.py` works around on amd64. The revert restores the
+  `select` bug `tools/wasm_wazero_fixes.py` works around on amd64. The revert restores the
   code that passed there.
 
 ## Tests
@@ -86,5 +86,11 @@ gains `mirror_r` (27/42):
 * `mirror_r`: the half turn is a symmetry, and every symmetry is enforced only when the
   refined boundary confirms it (`symmetry::AGREEMENT_Z`) -- which is what had made the
   first half-turn attempt pull `junction_quad`'s junction onto the centre.
+* The Go package's macOS crash (above) came back with this code, and is now understood: wazero's
+  arm64 compiler can compute an integer remainder from a quotient it never stored, which any
+  remainder in the module could hit, not only this code shape. The build rewrites every
+  remainder as a division (`tools/wasm_wazero_fixes.py` has the mechanism), and
+  `TestWazeroRemainder` reports when wazero fixes it. Reproduced and checked on linux/arm64
+  under QEMU, which runs the same wazero backend as macOS.
 
 See `CHANGELOG.md` `[Unreleased]` for the measurements.

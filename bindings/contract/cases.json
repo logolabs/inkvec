@@ -15,6 +15,10 @@
         "x86_64-linux-gnu": {
           "bytes": 8826,
           "sha256": "b605367c0ca15ff23f0be08e4ecc5598b8c5e176429c32e597c65fd2428d5c6f"
+        },
+        "x86_64-windows-msvc": {
+          "bytes": 8826,
+          "sha256": "aaac3e48856448edc19c682a6b5c3544ecc5f704fa3c0c7b331a7f959ae1c749"
         }
       }
     },
@@ -34,6 +38,10 @@
         "x86_64-linux-gnu": {
           "bytes": 8826,
           "sha256": "b605367c0ca15ff23f0be08e4ecc5598b8c5e176429c32e597c65fd2428d5c6f"
+        },
+        "x86_64-windows-msvc": {
+          "bytes": 8826,
+          "sha256": "aaac3e48856448edc19c682a6b5c3544ecc5f704fa3c0c7b331a7f959ae1c749"
         }
       }
     },
@@ -55,6 +63,10 @@
         "x86_64-linux-gnu": {
           "bytes": 5790,
           "sha256": "b6d5c649cee3b9f0d781bc508e457a560bcf55a2b4706656806f21acb5d760e0"
+        },
+        "x86_64-windows-msvc": {
+          "bytes": 5782,
+          "sha256": "ea544ec4bda9f2c0ff71c6711164c9b88e1dcd3617838f79a58872c157ddd9cd"
         }
       }
     },
@@ -73,6 +85,10 @@
         "x86_64-linux-gnu": {
           "bytes": 8846,
           "sha256": "6677a9b3711698a52f2cd8d9a892505c595f3f1da32f7a6abb533f6b9470c48b"
+        },
+        "x86_64-windows-msvc": {
+          "bytes": 8846,
+          "sha256": "e558048b2aac2f534e296f307b8bc2c8cf48093f40da9f38a04a5eccabd786b6"
         }
       }
     },
@@ -91,6 +107,10 @@
         "x86_64-linux-gnu": {
           "bytes": 3303,
           "sha256": "61f4dd2b28791294991b26464f896af1ec5a8df0db13adb790833af3b364757f"
+        },
+        "x86_64-windows-msvc": {
+          "bytes": 3303,
+          "sha256": "1206b5a7806c272325cdf86d6c7de9c2ba1f7d4a14dac9a5d6dee21fc782943d"
         }
       }
     },
@@ -112,6 +132,10 @@
         "x86_64-linux-gnu": {
           "bytes": 3303,
           "sha256": "61f4dd2b28791294991b26464f896af1ec5a8df0db13adb790833af3b364757f"
+        },
+        "x86_64-windows-msvc": {
+          "bytes": 3303,
+          "sha256": "1206b5a7806c272325cdf86d6c7de9c2ba1f7d4a14dac9a5d6dee21fc782943d"
         }
       }
     },
@@ -131,6 +155,10 @@
         "x86_64-linux-gnu": {
           "bytes": 3319,
           "sha256": "1fd4806b93c420c56098142da56f9f8a01fc694964bc30237742ef5b0c330e9c"
+        },
+        "x86_64-windows-msvc": {
+          "bytes": 3319,
+          "sha256": "62952a5875fb97291e617fa027dc2ac8f5b37ef8669f8aff3af89244fcfbc222"
         }
       }
     },
@@ -145,6 +173,10 @@
       },
       "svg": {
         "x86_64-linux-gnu": {
+          "bytes": 679,
+          "sha256": "cbaf89d8dea3b3715e88d954dac5f99b8d52006cbffc236758a7a91a65f9112b"
+        },
+        "x86_64-windows-msvc": {
           "bytes": 679,
           "sha256": "cbaf89d8dea3b3715e88d954dac5f99b8d52006cbffc236758a7a91a65f9112b"
         }
@@ -166,6 +198,10 @@
         "x86_64-linux-gnu": {
           "bytes": 679,
           "sha256": "cbaf89d8dea3b3715e88d954dac5f99b8d52006cbffc236758a7a91a65f9112b"
+        },
+        "x86_64-windows-msvc": {
+          "bytes": 679,
+          "sha256": "cbaf89d8dea3b3715e88d954dac5f99b8d52006cbffc236758a7a91a65f9112b"
         }
       }
     },
@@ -182,6 +218,10 @@
       },
       "svg": {
         "x86_64-linux-gnu": {
+          "bytes": 760,
+          "sha256": "79f85e2ec9adb8b2ea9ba1ab39d108c8872d76e49bf7e7c8c3416fe493dfeb76"
+        },
+        "x86_64-windows-msvc": {
           "bytes": 760,
           "sha256": "79f85e2ec9adb8b2ea9ba1ab39d108c8872d76e49bf7e7c8c3416fe493dfeb76"
         }
@@ -201,6 +241,10 @@
       },
       "svg": {
         "x86_64-linux-gnu": {
+          "bytes": 760,
+          "sha256": "79f85e2ec9adb8b2ea9ba1ab39d108c8872d76e49bf7e7c8c3416fe493dfeb76"
+        },
+        "x86_64-windows-msvc": {
           "bytes": 760,
           "sha256": "79f85e2ec9adb8b2ea9ba1ab39d108c8872d76e49bf7e7c8c3416fe493dfeb76"
         }
@@ -223,6 +267,10 @@
       },
       "svg": {
         "x86_64-linux-gnu": {
+          "bytes": 760,
+          "sha256": "79f85e2ec9adb8b2ea9ba1ab39d108c8872d76e49bf7e7c8c3416fe493dfeb76"
+        },
+        "x86_64-windows-msvc": {
           "bytes": 760,
           "sha256": "79f85e2ec9adb8b2ea9ba1ab39d108c8872d76e49bf7e7c8c3416fe493dfeb76"
         }

@@ -173,3 +173,55 @@ fn parallel_refinement_equals_the_serial_loop() {
         assert_eq!(refine_in_parallel(&base), w >= 96, "{w}x{h}");
     }
 }
+
+/// A 1 px line split between two rows at 0.62 / 0.38 coverage (`bench/cases` `ribbon_w1`):
+/// no pixel is fully covered, and both edges come back where the line is, not on its
+/// centre line ([`ridge_offset`]).
+#[test]
+fn a_line_too_thin_to_cover_a_pixel_keeps_both_of_its_edges() {
+    let (w, h) = (24usize, 12usize);
+    let (top, bottom) = (4.88f64, 5.88f64); // pixel row r spans [r - 0.5, r + 0.5]
+    let (ground, ink) = ([1.0f32, 1.0, 1.0], [0.1f32, 0.2, 0.5]);
+    let cover = |y: usize| -> f64 {
+        let (lo, hi) = (y as f64 - 0.5, y as f64 + 0.5);
+        (hi.min(bottom) - lo.max(top)).max(0.0)
+    };
+    let on_line = |x: usize| (2..22).contains(&x);
+    let rgb: Vec<[f32; 3]> = (0..w * h)
+        .map(|p| {
+            let a = if on_line(p % w) {
+                cover(p / w) as f32
+            } else {
+                0.0
+            };
+            std::array::from_fn(|i| a * ink[i] + (1.0 - a) * ground[i])
+        })
+        .collect();
+    // The labels give the line the row it covers more of.
+    let labels: Vec<u16> = (0..w * h)
+        .map(|p| u16::from(on_line(p % w) && p / w == 5))
+        .collect();
+    let mut map = build(&labels, w, h, 2);
+    let fills = [FillModel::Flat(ground), FillModel::Flat(ink)];
+    refine_subpixel(&mut map, &rgb, &fills, 0.004, false);
+    // Away from the line's ends, every boundary point sits on one of the two edges.
+    let (mut tops, mut bottoms) = (0, 0);
+    for e in map.edges.iter().filter(|e| e.left == 1 || e.right == 1) {
+        for p in e.points.iter().filter(|p| (6.0..=18.0).contains(&p.x)) {
+            let (target, n) = if p.y < 5.38 {
+                (top, &mut tops)
+            } else {
+                (bottom, &mut bottoms)
+            };
+            assert!(
+                (p.y - target).abs() < 0.02,
+                "{p:?} is not on the edge at {target}"
+            );
+            *n += 1;
+        }
+    }
+    assert!(
+        tops > 0 && bottoms > 0,
+        "{tops} top and {bottoms} bottom points"
+    );
+}

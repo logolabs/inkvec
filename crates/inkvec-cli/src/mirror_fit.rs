@@ -250,6 +250,7 @@ fn anchors_mirror(path: &FittedPath, m: Mirror) -> bool {
 fn axis(m: Mirror) -> f64 {
     match m {
         Mirror::V(k) | Mirror::H(k) => k as f64 * 0.5,
+        Mirror::Rot180(_, _) => 0.0,
     }
 }
 
@@ -258,12 +259,16 @@ fn onto_axis(p: Point, m: Mirror) -> Point {
     match m {
         Mirror::V(_) => Point::new(axis(m), p.y),
         Mirror::H(_) => Point::new(p.x, axis(m)),
+        Mirror::Rot180(_, _) => p,
     }
 }
 
 /// Whether the open polyline `p` reflects onto itself reversed under `m`:
 /// `M(p_i) = p_{n−1−i}` to within `SAME` for every `i`.
 fn open_self_mirror(p: &Polyline, m: Mirror) -> bool {
+    if matches!(m, Mirror::Rot180(_, _)) {
+        return false;
+    }
     let n = p.points.len();
     n >= 2 && (0..n).all(|i| m.point(p.points[i]).dist(p.points[n - 1 - i]) <= SAME)
 }
@@ -273,6 +278,9 @@ fn open_self_mirror(p: &Polyline, m: Mirror) -> bool {
 /// travel). Found by the index of `M(p_0)` and checked at every point; `None` when no shift
 /// works.
 fn closed_shift(p: &Polyline, m: Mirror) -> Option<usize> {
+    if matches!(m, Mirror::Rot180(_, _)) {
+        return None;
+    }
     let n = p.points.len();
     let target = m.point(p.points[0]);
     (0..n)
@@ -297,6 +305,9 @@ enum Crossing {
 /// The axis crossings of `poly` under `m`, in order along it: two for a closed boundary,
 /// one for an open one. `None` when `poly` is not its own reflection under `m`.
 fn crossings(poly: &Polyline, m: Mirror) -> Option<Vec<Crossing>> {
+    if matches!(m, Mirror::Rot180(_, _)) {
+        return None;
+    }
     let n = poly.points.len();
     Some(if poly.closed {
         let s = closed_shift(poly, m)?;
@@ -574,6 +585,7 @@ fn snap_cubic(part: &FittedPath, m: Mirror, at_end: bool) -> Option<FittedPath> 
         // The normal to a vertical axis is horizontal: the offset across is in x, along in y.
         Mirror::V(_) => (ctrl.x - cross.x, ctrl.y - cross.y),
         Mirror::H(_) => (ctrl.y - cross.y, ctrl.x - cross.x),
+        Mirror::Rot180(_, _) => return None,
     };
     if dn.abs() <= 1e-12 || da.atan2(dn.abs()).abs().to_degrees() > SNAP_DEGREES {
         return None;
@@ -581,6 +593,7 @@ fn snap_cubic(part: &FittedPath, m: Mirror, at_end: bool) -> Option<FittedPath> 
     let on = match m {
         Mirror::V(_) => Point::new(ctrl.x, cross.y),
         Mirror::H(_) => Point::new(cross.x, ctrl.y),
+        Mirror::Rot180(_, _) => return None,
     };
     let mut out = part.clone();
     out.segments[idx] = if at_end {

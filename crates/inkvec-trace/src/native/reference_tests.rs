@@ -443,7 +443,24 @@ fn frequency_modes(px: &[Ink2]) -> Vec<(u32, u64, Ink2)> {
             )
         })
         .collect();
-    modes.sort_by_key(|&(n, key, _)| (std::cmp::Reverse(n), key));
+    let majority_n = (px.len() / 2) as u32;
+    modes.sort_by_key(|&(n, key, c)| {
+        let is_majority = n >= majority_n;
+        let alpha_bucket = ((c.alpha() * 20.0).round() as i32).clamp(0, 20);
+        let rank = if is_majority {
+            0
+        } else if c.alpha() <= CLEAR_INK_ALPHA {
+            2
+        } else {
+            1
+        };
+        (
+            rank,
+            std::cmp::Reverse(alpha_bucket),
+            std::cmp::Reverse(n),
+            key,
+        )
+    });
     modes
 }
 
@@ -489,7 +506,7 @@ impl BlendEvidence {
         // (dark 0.0077 -> 0.0079).
         let translucent = {
             let a = c.alpha();
-            a > 0.0 && a < 1.0
+            a > 0.0 && a < 0.98
         };
         // Measured for an escaped candidate too: the escape rule reads it.
         let interior = if blend || translucent || escaped {

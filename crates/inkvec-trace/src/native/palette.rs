@@ -441,7 +441,7 @@ impl BlendEvidence {
         let blend = !pairs.is_empty();
         let translucent = {
             let a = c.alpha();
-            a > 0.0 && a < 1.0
+            a > 0.0 && a < 0.98
         };
         let img = &walk.view.img;
         let interior = if blend || translucent || escaped {
@@ -575,7 +575,24 @@ fn frequency_modes(view: &NativeView) -> Vec<(u32, u64, Ink2)> {
         .zip(keys)
         .map(|((n, s), key)| (n, key, mean_of(&s, n)))
         .collect();
-    modes.sort_by_key(|&(n, key, _)| (std::cmp::Reverse(n), key));
+    let majority_n = (view.img.pixels() / 2) as u32;
+    modes.sort_by_key(|&(n, key, c)| {
+        let is_majority = n >= majority_n;
+        let alpha_bucket = ((c.alpha() * 20.0).round() as i32).clamp(0, 20);
+        let rank = if is_majority {
+            0
+        } else if c.alpha() <= CLEAR_INK_ALPHA {
+            2
+        } else {
+            1
+        };
+        (
+            rank,
+            std::cmp::Reverse(alpha_bucket),
+            std::cmp::Reverse(n),
+            key,
+        )
+    });
     modes
 }
 

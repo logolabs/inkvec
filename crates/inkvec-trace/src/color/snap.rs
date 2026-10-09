@@ -87,7 +87,7 @@ pub(crate) const REP_DE00: f32 = super::SAME_INK_DE00;
 ///
 /// `faces` is the face map, one id per pixel, row-major `w × h`; ids at or above `n_faces`
 /// are ignored. One pass, O(w·h). An image narrower or shorter than 3 px has no interior.
-fn interior_counts(faces: &[u16], w: usize, h: usize, n_faces: usize) -> Vec<u32> {
+pub(crate) fn interior_counts(faces: &[u16], w: usize, h: usize, n_faces: usize) -> Vec<u32> {
     let mut count = vec![0u32; n_faces];
     if w < 3 || h < 3 || faces.len() < w * h {
         return count;

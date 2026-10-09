@@ -908,9 +908,12 @@ fn a_translucent_wash_is_one_ink_with_its_own_opacity() {
 }
 
 #[test]
-fn a_hairline_needs_to_be_opaque_to_be_an_ink_and_a_clear_gap_is_always_one() {
-    // One pixel wide: opaque paint is an ink, a translucent wash of it is not (it has no
-    // interior), and a transparent gap through paint is the clear ground.
+fn a_hairline_is_an_opaque_ink_however_little_of_a_pixel_it_covers_and_a_clear_gap_is_one() {
+    // One pixel wide: opaque paint is an ink. A column at 0.6 has no interior, so it is no
+    // translucent ink; it is read as a hairline of the opaque paint covering 0.6 of each
+    // pixel (`palette::Walk::consider`). A faint one, below `HAIRLINE_MIN_ALPHA`, is the
+    // fringe of something else and stays out. A transparent gap through paint is the clear
+    // ground.
     let line = |a: f32| {
         image(
             12,
@@ -920,12 +923,86 @@ fn a_hairline_needs_to_be_opaque_to_be_an_ink_and_a_clear_gap_is_always_one() {
     let (rgb, alpha) = line(1.0);
     let pal = extract_palette(&rgb, &alpha, 12, 12, 0.035, 64, evidence(0.0, 1.0, 1.5));
     assert_eq!(pal.alpha, vec![0.0, 1.0]);
-    let (rgb, alpha) = line(0.5);
+    let (rgb, alpha) = line(0.6);
+    let pal = extract_palette(&rgb, &alpha, 12, 12, 0.035, 64, evidence(0.0, 1.0, 1.5));
+    assert_eq!(pal.alpha, vec![0.0, 1.0]);
+    assert!(close(pal.rgb[1], GREEN, 0.01), "{:?}", pal.rgb[1]);
+    let (rgb, alpha) = line(0.3);
     let pal = extract_palette(&rgb, &alpha, 12, 12, 0.035, 64, evidence(0.0, 1.0, 1.5));
     assert_eq!(pal.alpha, vec![0.0]);
     let (rgb, alpha) = image(12, |x, _| if x == 5 { ([0.0; 3], 0.0) } else { (RED, 1.0) });
     let pal = extract_palette(&rgb, &alpha, 12, 12, 0.035, 64, evidence(0.0, 1.0, 1.5));
     assert_eq!(pal.alpha, vec![1.0, 0.0]);
+}
+
+#[test]
+fn opaque_version_is_the_straight_colour_at_full_opacity() {
+    let o = palette::opaque_version(ink(BLUE, 0.4)).expect("translucent");
+    assert!(
+        close(oklab_to_rgb(o.w), BLUE, 0.002),
+        "{:?}",
+        oklab_to_rgb(o.w)
+    );
+    assert_eq!(o.w, o.k);
+    assert!(palette::opaque_version(ink(BLUE, 1.0)).is_none());
+    assert!(palette::opaque_version(ink(BLUE, 0.0)).is_none());
+    // At or above `TRANSLUCENT_BELOW` a colour already counts as opaque.
+    assert!(palette::opaque_version(ink(BLUE, 0.99)).is_none());
+}
+
+#[test]
+fn a_line_split_between_two_rows_is_one_opaque_ink() {
+    // A 1 px line straddling two rows at 0.62 and 0.38 (`bench/cases` `ribbon_w1`): no
+    // pixel shows the paint at full opacity, and the palette still has it, opaque.
+    let (rgb, alpha) = image(16, |_, y| match y {
+        7 => (BLUE, 0.62),
+        8 => (BLUE, 0.38),
+        _ => ([0.0; 3], 0.0),
+    });
+    let pal = extract_palette(&rgb, &alpha, 16, 16, 0.035, 64, evidence(0.0, 1.0, 1.5));
+    assert_eq!(pal.alpha, vec![0.0, 1.0], "{:?}", pal.rgb);
+    assert!(close(pal.rgb[1], BLUE, 0.01), "{:?}", pal.rgb[1]);
+}
+
+#[test]
+fn a_stroke_whose_coverage_outnumbers_its_core_is_one_opaque_ink() {
+    // Two columns: a solid core one pixel wide, and on each side a column at 0.8 coverage
+    // of the same paint. The 0.8 pixels outnumber the core two to one, so the walk meets
+    // them first and, claiming the core, they show an interior; once the core is an ink
+    // they are its anti-aliasing (`palette::Walk::drop_twin_coverage`).
+    let (rgb, alpha) = image(16, |x, y| {
+        if !(2..14).contains(&y) {
+            return ([0.0; 3], 0.0);
+        }
+        match x {
+            7 => (BLUE, 1.0),
+            6 | 8 => (BLUE, 0.8),
+            _ => ([0.0; 3], 0.0),
+        }
+    });
+    let pal = extract_palette(&rgb, &alpha, 16, 16, 0.035, 64, evidence(0.0, 1.0, 1.5));
+    assert_eq!(pal.alpha, vec![0.0, 1.0], "{:?}", pal.rgb);
+}
+
+#[test]
+fn a_wash_beside_a_solid_of_its_colour_keeps_its_own_opacity() {
+    // The twin rule drops only coverage: a half-opacity wash with an interior next to a
+    // solid of the same paint is an ink of its own.
+    let (rgb, alpha) = image(16, |x, y| {
+        if !(2..14).contains(&y) {
+            ([0.0; 3], 0.0)
+        } else if (2..6).contains(&x) {
+            (BLUE, 1.0)
+        } else if (6..14).contains(&x) {
+            (BLUE, 0.5)
+        } else {
+            ([0.0; 3], 0.0)
+        }
+    });
+    let pal = extract_palette(&rgb, &alpha, 16, 16, 0.035, 64, evidence(0.0, 1.0, 1.5));
+    find(&pal, 1.0);
+    find(&pal, 0.5);
+    find(&pal, 0.0);
 }
 
 /// Two opaque halves `d` apart in OKLab lightness.
@@ -1174,4 +1251,61 @@ fn tracing_a_glow_hands_its_fade_to_the_face() {
         let a = fade.alpha.color_at(x as f64, 7.5)[0];
         assert!((a - alpha[x]).abs() < 0.02, "x={x}: {a} vs {}", alpha[x]);
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// Thin faces
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn a_thin_face_of_coverage_is_painted_its_ink_and_a_tint_or_a_solid_face_is_not() {
+    // 8 x 8, faces by row band: 0 the clear ground; 1 a one-row line of BLUE at 0.6
+    // coverage; 2 a one-row line of an opaque tint of BLUE, the colour 0.6 of BLUE shows
+    // over white but at full opacity; 3 a solid three-row block, filled at the same tint.
+    let (w, h) = (8, 8);
+    let face = |y: usize| -> u16 {
+        match y {
+            1 => 1,
+            3 => 2,
+            5..=7 => 3,
+            _ => 0,
+        }
+    };
+    let tint = on_white(BLUE, 0.6);
+    let faces: Vec<u16> = (0..w * h).map(|i| face(i / w)).collect();
+    let (rgb, alpha): (Vec<[f32; 3]>, Vec<f32>) = (0..w * h)
+        .map(|i| match face(i / w) {
+            0 => ([1.0; 3], 0.0),
+            1 => (tint, 0.6),
+            _ => (tint, 1.0),
+        })
+        .unzip();
+    let pal = Palette {
+        colors: vec![rgb_to_oklab([1.0; 3]), rgb_to_oklab(BLUE)],
+        rgb: vec![[1.0; 3], BLUE],
+        weight: vec![0.5, 0.5],
+        alpha: vec![0.0, 1.0],
+    };
+    let flat = |c: [f32; 3]| gradient::FillFit {
+        model: FillModel::Flat(c),
+        chi2: 0.0,
+        params: gradient::PARAMS_FLAT,
+        cost: 0.0,
+    };
+    let mut fills = vec![flat([1.0; 3]), flat(tint), flat(tint), flat(tint)];
+    let colour = [0, 1, 1, 1];
+    let changed =
+        paint_thin_faces_their_ink(&faces, (w, h), (&rgb, &alpha), &mut fills, &colour, &pal);
+    assert_eq!(changed, 1);
+    assert_eq!(fills[1].model, FillModel::Flat(BLUE));
+    assert_eq!(
+        fills[2].model,
+        FillModel::Flat(tint),
+        "an opaque tint keeps its fill"
+    );
+    assert_eq!(
+        fills[3].model,
+        FillModel::Flat(tint),
+        "a face with an interior keeps its fill"
+    );
 }

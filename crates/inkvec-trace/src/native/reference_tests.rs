@@ -239,16 +239,10 @@ pub fn extract_palette(
     // The clear ground draws nothing, so it is found but not counted against the cap; once
     // the cap is full the scan goes on only to look for it.
     let clear = |c: &Ink2| c.alpha() <= CLEAR_INK_ALPHA;
-    for &(n, _key, c) in &modes {
-        let full = colors.iter().filter(|p| !clear(p)).count() >= max_colors;
-        if full && colors.iter().any(clear) {
-            break;
-        }
-        if full && !clear(&c) {
-            continue;
-        }
-        let (claim, spread) =
-            claim_spread(&view.px, &nearest_px, c, merge_distance, view.stride_px);
+    // Every gate of the shipped walk on one candidate: `Some(true)` accepts, `Some(false)`
+    // refuses, `None` refuses a translucent candidate for having no interior.
+    let gate = |c: Ink2, n: u32, colors: &[Ink2], nearest_px: &[f32]| -> Option<bool> {
+        let (claim, spread) = claim_spread(&view.px, nearest_px, c, merge_distance, view.stride_px);
         // The rarity exemption of 2026-10-02 (`palette::rarity_exempt`: the first ink that
         // draws something is exempt, not only the first ink), applied here as well, so this
         // oracle still tests the per-point rewrite and nothing else.
@@ -260,8 +254,8 @@ pub fn extract_palette(
             .map(|&p| p.dist(c))
             .fold(f32::INFINITY, f32::min);
         let reach = noise_sigmas * spread;
-        if same_ink_as_accepted(c, &colors, same_ink_de00) {
-            continue;
+        if same_ink_as_accepted(c, colors, same_ink_de00) {
+            return Some(false);
         }
         let escaped = nearest <= merge_distance.max(reach);
         if escaped {
@@ -271,17 +265,13 @@ pub fn extract_palette(
                 && 0.5 * (claim as f64) * ((nearest as f64 / sigma_noise).powi(2))
                     > lambda * PARAMS_PER_INK;
             if !worth_it {
-                continue;
+                return Some(false);
             }
         }
-        if rare && !represented_per_pixel(&view, c, &colors, &nearest_px, sigma_noise) {
-            continue;
+        if rare && !represented_per_pixel(&view, c, colors, nearest_px, sigma_noise) {
+            return Some(false);
         }
-        let Some(shape) =
-            BlendEvidence::measure(&view, c, &colors, &nearest_px, merge_distance, escaped)
-        else {
-            continue;
-        };
+        let shape = BlendEvidence::measure(&view, c, colors, nearest_px, merge_distance, escaped)?;
         if paldbg {
             eprintln!(
                 "  native cand w={} k={} a={:.3} bin={n} claim={claim} near={nearest:.4} blend={} interior={:.3} straddle={:.3}",
@@ -293,18 +283,74 @@ pub fn extract_palette(
                 shape.straddle
             );
         }
-        if shape.is_coverage() {
-            continue;
-        }
         // The escape rule (`crate::color::escape_needs_interior`), as the shipped walk.
-        if color::escape_needs_interior(escaped, shape.blend, shape.interior) {
-            continue;
-        }
+        Some(
+            !shape.is_coverage()
+                && !color::escape_needs_interior(escaped, shape.blend, shape.interior),
+        )
+    };
+    let lower = |nearest_px: &mut [f32], c: Ink2| {
         nearest_px
             .par_iter_mut()
             .zip(view.px.par_iter())
             .for_each(|(d, &q)| *d = d.min(q.dist(c)));
-        colors.push(c);
+    };
+    for &(n, _key, c) in &modes {
+        let full = colors.iter().filter(|p| !clear(p)).count() >= max_colors;
+        if full && colors.iter().any(clear) {
+            break;
+        }
+        if full && !clear(&c) {
+            continue;
+        }
+        let ink = match gate(c, n, &colors, &nearest_px) {
+            Some(true) => Some(c),
+            Some(false) => None,
+            // The hairline rule (`palette::Walk::consider`): a translucent candidate with no
+            // interior, at least half opaque, is weighed again as its opaque version.
+            None if c.alpha() >= palette::HAIRLINE_MIN_ALPHA => {
+                palette::opaque_version(c).filter(|&o| {
+                    !same_ink_as_accepted(o, &colors, same_ink_de00)
+                        && colors.iter().all(|&p| p.dist(o) > merge_distance)
+                        && gate(o, n, &colors, &nearest_px) == Some(true)
+                })
+            }
+            None => None,
+        };
+        if let Some(ink) = ink {
+            lower(&mut nearest_px, ink);
+            colors.push(ink);
+        }
+    }
+    // The twin rule (`palette::Walk::drop_twin_coverage`): a translucent ink whose opaque
+    // version is an accepted opaque ink is weighed again with every other ink in place.
+    let mut i = 0;
+    while i < colors.len() {
+        let c = colors[i];
+        let twin = palette::opaque_version(c).is_some_and(|o| {
+            colors
+                .iter()
+                .any(|&p| p.alpha() >= OPAQUE && p.dist(o) <= merge_distance)
+        });
+        if !twin {
+            i += 1;
+            continue;
+        }
+        let others: Vec<Ink2> = colors
+            .iter()
+            .enumerate()
+            .filter(|&(j, _)| j != i)
+            .map(|(_, &p)| p)
+            .collect();
+        let mut near = vec![f32::INFINITY; view.px.len()];
+        for &p in &others {
+            lower(&mut near, p);
+        }
+        if gate(c, 0, &others, &near) == Some(true) {
+            i += 1;
+        } else {
+            colors = others;
+        }
     }
     if colors.is_empty() {
         colors.push(modes.first().map(|m| m.2).unwrap_or(Ink2::opaque(Oklab {
@@ -490,7 +536,7 @@ impl BlendEvidence {
         // (dark 0.0077 -> 0.0079).
         let translucent = {
             let a = c.alpha();
-            a > 0.0 && a < super::TRANSLUCENT_BELOW
+            a > 0.0 && a < TRANSLUCENT_BELOW
         };
         // Measured for an escaped candidate too: the escape rule reads it.
         let interior = if blend || translucent || escaped {

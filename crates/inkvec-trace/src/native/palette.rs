@@ -182,6 +182,7 @@ pub(crate) fn extract(
         claim: Claim::new(points),
         scratch: vec![0u8; points + 1],
         paldbg: inkvec_core::env::flag("INKVEC_PALDBG"),
+        no_interior: false,
     };
     // The clear ground draws nothing, so it is found but not counted against the cap; once
     // the cap is full the scan goes on only to look for it.
@@ -194,10 +195,9 @@ pub(crate) fn extract(
         if full && !clear(&c) {
             continue;
         }
-        if walk.accepts(n, c) {
-            walk.accept(c);
-        }
+        walk.consider(n, c);
     }
+    walk.drop_twin_coverage();
     let paldbg = walk.paldbg;
     let mut colors = walk.colors;
     if colors.is_empty() {
@@ -284,11 +284,151 @@ struct Walk<'v, 'a> {
     /// One byte per point for the straddle test.
     scratch: Vec<u8>,
     paldbg: bool,
+    /// Whether the last [`Walk::accepts`] refused a translucent candidate for having no
+    /// interior (`BlendEvidence::measure` returning `None`).
+    no_interior: bool,
+}
+
+/// Opacity a translucent candidate with no interior needs before its opaque version is
+/// tried in its place (see [`Walk::consider`]).
+///
+/// A hairline narrower than two pixels leaves every pixel it touches partly covered, and
+/// the pixels across it share its coverage: a 1 px line between two rows reads 0.62 and
+/// 0.38, a 1.5 px one 0.88 and 0.62 (`bench/cases` `ribbon_w1`, `ribbon_w1.5`). The more
+/// covered side of any line at least 1 px wide is at least half covered, while the faint
+/// fringe of a glow or an anti-aliased rim is not, so only a candidate at least half
+/// opaque is read as part of a line.
+pub(super) const HAIRLINE_MIN_ALPHA: f32 = 0.5;
+
+/// The opaque ink a translucent colour would be partial coverage of: the same straight
+/// colour at full opacity, `s = (W − (1 − a)) / a` per sRGB channel (the image is
+/// composited over white in sRGB, `W = s·a + (1 − a)`). `None` for the clear ground and
+/// for a colour [`TRANSLUCENT_BELOW`] treats as opaque, and when `s` leaves sRGB by more
+/// than four 8-bit levels of `W` (then the colour is no coverage of one straight colour).
+pub(super) fn opaque_version(c: Ink2) -> Option<Ink2> {
+    let a = c.alpha();
+    if a <= CLEAR_INK_ALPHA || a >= TRANSLUCENT_BELOW {
+        return None;
+    }
+    let w = oklab_to_rgb(c.w);
+    let s = w.map(|v| (v - (1.0 - a)) / a);
+    let slack = 4.0 / 255.0 / a;
+    if s.iter().any(|&v| v < -slack || v > 1.0 + slack) {
+        return None;
+    }
+    Some(Ink2::opaque(rgb_to_oklab(s.map(|v| v.clamp(0.0, 1.0)))))
 }
 
 impl Walk<'_, '_> {
+    /// Decide candidate `c` (from a bin of `n` pixels): accept it, or, for a hairline, its
+    /// opaque version.
+    ///
+    /// A line narrower than about a pixel and a half covers no pixel completely, so its ink
+    /// never shows at full opacity: every pixel it touches is a translucent mix of the ink
+    /// and the clear ground. Each such colour is refused for having no interior
+    /// (`BlendEvidence::measure`), and before this the line vanished (`bench/cases`
+    /// `ribbon_w1`, `ribbon_w1.5`). So when `c` is refused for that reason and is at least
+    /// [`HAIRLINE_MIN_ALPHA`] opaque, its opaque version ([`opaque_version`]) is weighed in
+    /// its place, through every gate a candidate passes. The partly covered pixels are then
+    /// blends of that ink and the ground, which the labels and the sub-pixel stage read as
+    /// coverage. A version within the merge radius of an accepted ink is not tried: `c` is
+    /// that ink's anti-aliasing, and the blend tests have already said so.
+    fn consider(&mut self, n: u32, c: Ink2) {
+        if self.accepts(n, c) {
+            self.accept(c);
+            return;
+        }
+        if !self.no_interior || c.alpha() < HAIRLINE_MIN_ALPHA {
+            return;
+        }
+        let Some(o) = opaque_version(c) else {
+            return;
+        };
+        if same_ink_as_accepted(o, &self.colors, self.ev.same_ink_de00)
+            || self
+                .colors
+                .iter()
+                .any(|&p| p.dist(o) <= self.merge_distance)
+        {
+            return;
+        }
+        if self.accepts(n, o) {
+            if self.paldbg {
+                eprintln!(
+                    "  native hairline: {} a={:.3} read as opaque {}",
+                    color::to_hex(oklab_to_rgb(c.w)),
+                    c.alpha(),
+                    color::to_hex(oklab_to_rgb(o.w))
+                );
+            }
+            self.accept(o);
+        }
+    }
+
+    /// After the walk, drop every translucent ink that is the anti-aliasing of an opaque
+    /// ink of its own colour (its [`opaque_version`] within the merge radius of an accepted
+    /// opaque ink). Returns how many were dropped.
+    ///
+    /// The walk visits colours by pixel count, and a stroke about two pixels wide has more
+    /// partly covered pixels than covered ones. Its partial coverage then comes up first,
+    /// as a colour that is no blend of anything yet accepted, and can pass with an interior
+    /// borrowed from the solid core it claims while that core is not yet an ink: a 2 px
+    /// diagonal (`bench/cases` `sawtooth_diag`) was accepted at 0.83 opacity, then its
+    /// core at 1.0, and came out as a translucent band around opaque specks. With both
+    /// accepted, the translucent one is weighed again as what it is -- with every other
+    /// ink in place, a blend of its opaque twin and the clear ground -- and dropped when the
+    /// blend tests call it coverage. A translucent wash beside a solid of its colour keeps
+    /// its interior and stays. Only a palette holding both versions of one colour is
+    /// touched; each re-weighing rebuilds the nearest-ink table, O(inks · points).
+    fn drop_twin_coverage(&mut self) -> usize {
+        let mut dropped = 0;
+        let mut i = 0;
+        while i < self.colors.len() {
+            let c = self.colors[i];
+            let twin = opaque_version(c).is_some_and(|o| {
+                self.colors
+                    .iter()
+                    .any(|&p| p.alpha() >= OPAQUE && p.dist(o) <= self.merge_distance)
+            });
+            if !twin {
+                i += 1;
+                continue;
+            }
+            let mut others = self.colors.clone();
+            others.remove(i);
+            self.rebuild(&others);
+            if self.accepts(0, c) {
+                others.insert(i, c);
+                self.rebuild(&others);
+                i += 1;
+            } else {
+                if self.paldbg {
+                    eprintln!(
+                        "  native drop: {} a={:.3} is the coverage of its opaque twin",
+                        color::to_hex(oklab_to_rgb(c.w)),
+                        c.alpha()
+                    );
+                }
+                dropped += 1;
+            }
+        }
+        dropped
+    }
+
+    /// Reset the walk to the inks `inks`, accepted in that order.
+    fn rebuild(&mut self, inks: &[Ink2]) {
+        self.colors.clear();
+        self.six = InkSix::default();
+        self.nearest.fill(f32::INFINITY);
+        self.nearest_ink.fill(u32::MAX);
+        for &p in inks {
+            self.accept(p);
+        }
+    }
+
     /// Whether candidate `c` (from a bin of `n` pixels) passes every gate.
     fn accepts(&mut self, n: u32, c: Ink2) -> bool {
+        self.no_interior = false;
         let PaletteEvidence {
             sigma_noise,
             lambda,
@@ -354,6 +494,7 @@ impl Walk<'_, '_> {
             }
         }
         let Some(shape) = BlendEvidence::measure(self, c, escaped) else {
+            self.no_interior = true;
             return false;
         };
         if self.paldbg {

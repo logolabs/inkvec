@@ -7,6 +7,14 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Thin strokes on a transparent ground keep their ink (Quality).** A stroke narrower than about two pixels covers few or no pixels completely, so the palette met its anti-aliasing before its ink, or never met the ink at all:
+  - A 1-1.5 px line split across two rows (every pixel translucent) was dropped entirely. Such a colour, at least half opaque and refused only for having no interior, is now read as a hairline of its opaque version.
+  - A 2 px diagonal came out as a translucent band around opaque specks, because its 0.83-covered pixels outnumbered its core and were accepted first. After the walk, a translucent ink whose opaque version is also an ink is weighed again as a blend of the two and dropped when it is coverage; a translucent wash with an interior of its own stays.
+  - A thin face of an opaque ink whose pixels are all partial coverage of the ground is painted its ink, not the ink diluted towards white, so the boundary solve places its edges by coverage instead of widening it.
+  - `bench/cases` `sawtooth_diag` and `ribbon_w1.5` pass. On all 1386 icons of `bench/alpha_eval.py` 90 traces change and every family's mean error is level or lower (dark ground −0.45 % overall; simple-icons −0.79 %, openmoji −0.45 %, noto-emoji −0.23 %, twemoji −0.20 %). Fast output and the speed of both modes are unchanged.
+
 ## [0.2.7] - 2026-10-08
 
 ### Fixed

@@ -17,10 +17,19 @@
 //!
 //! So the symmetry is enforced structurally rather than defended stage by stage. The label
 //! map says exactly which mirrors hold, and it says so with no tolerance and no threshold:
-//! a mirror is admitted only when *every* pixel maps to a pixel of the same ink. That test
-//! cannot be fooled into snapping a logo the artist drew asymmetric, which is the failure
-//! that would matter. Given a mirror, the boundaries pair off, and each pair is replaced by
-//! the average of the two and its exact reflection.
+//! a mirror is admitted only when *every* pixel maps to a pixel of the same ink. Besides the
+//! two mirrors through the centre, the half turn about it is a candidate too, when neither
+//! mirror holds (with both, it holds already). Given a mirror, the boundaries pair off.
+//!
+//! The pixel test sees whole pixels, and a drawing can be symmetric at that resolution and
+//! not below it: four colours meeting 0.27 px off the centre leave a label map that is its
+//! own half turn. So before a pair is averaged, the refined boundary is asked as well: the
+//! paired points of a symmetric drawing differ by the ties the stages broke, a few hundredths
+//! of a pixel and within their measured uncertainty, while those of an asymmetric one differ
+//! along whole edges ([`AGREEMENT_Z`]). A symmetry the boundary confirms is enforced -- each
+//! pair replaced by the average of the two and its exact image -- and one it does not is
+//! dropped, which is the failure that would matter: snapping a logo the artist drew
+//! asymmetric.
 //!
 //! What this does not do is make the *fit* symmetric. Two mirror-paired boundaries with
 //! exactly mirrored points can still be fitted differently, because the dynamic program
@@ -64,15 +73,24 @@ pub enum Mirror {
     V(i64),
     /// Horizontal mirror axis: reflects `y` to `k - y`, leaves `x` unchanged.
     H(i64),
+    /// Half turn about `(kx/2, ky/2)`: carries `(x, y)` to `(kx − x, ky − y)`. Not a mirror,
+    /// a rotation, but it pairs pixels and boundaries the same way, so it is handled as one.
+    Rot180(i64, i64),
 }
 
 impl Mirror {
+    /// Whether this is a reflection about an axis (`V` or `H`), as opposed to the half turn.
+    pub fn is_axis(self) -> bool {
+        matches!(self, Mirror::V(_) | Mirror::H(_))
+    }
+
     /// The pixel that pixel `(x, y)` reflects to (possibly outside the image).
     #[inline]
     fn pixel(self, x: i64, y: i64) -> (i64, i64) {
         match self {
             Mirror::V(k) => (k - x, y),
             Mirror::H(k) => (x, k - y),
+            Mirror::Rot180(kx, ky) => (kx - x, ky - y),
         }
     }
 
@@ -82,6 +100,7 @@ impl Mirror {
         match self {
             Mirror::V(k) => Point::new(k as f64 - p.x, p.y),
             Mirror::H(k) => Point::new(p.x, k as f64 - p.y),
+            Mirror::Rot180(kx, ky) => Point::new(kx as f64 - p.x, ky as f64 - p.y),
         }
     }
 }
@@ -191,11 +210,19 @@ fn mirrors_of(labels: &[u16], ink: &[usize], w: usize, h: usize) -> Vec<Mirror> 
     // horizontal axis. The loop that used to try every k was pure cost: each off-centre
     // horizontal candidate matched white margin rows against white margin rows before it
     // could fail, O(h^2 w) in all -- 1.1 s of a 4 s trace at 2048 px, for nothing.
-    if holds(Mirror::V(w as i64 - 1)) {
-        out.push(Mirror::V(w as i64 - 1));
+    let (v, hz) = (Mirror::V(w as i64 - 1), Mirror::H(h as i64 - 1));
+    let (v_holds, h_holds) = (holds(v), holds(hz));
+    if v_holds {
+        out.push(v);
     }
-    if holds(Mirror::H(h as i64 - 1)) {
-        out.push(Mirror::H(h as i64 - 1));
+    if h_holds {
+        out.push(hz);
+    }
+    // The half turn is the two mirrors composed: with both, enforcing them already makes
+    // every boundary its own half-turn image. With one, it cannot hold (it would make the
+    // other hold too). So it is tested only when neither mirror holds, at the same centre.
+    if !v_holds && !h_holds && holds(Mirror::Rot180(w as i64 - 1, h as i64 - 1)) {
+        out.push(Mirror::Rot180(w as i64 - 1, h as i64 - 1));
     }
     out
 }
@@ -328,21 +355,72 @@ pub fn detect(map: &PlanarMap, labels: &[u16], ink: &[usize]) -> Symmetry {
     Symmetry { mirrors, partner }
 }
 
-/// Replace each boundary by the average of itself and its partner's reflection.
+/// The 90th percentile of the paired points' disagreement, in standard deviations, above
+/// which a symmetry the label map shows is not enforced ([`enforce`]).
+///
+/// The label map is symmetric at pixel resolution, and so it can be while the drawing is
+/// not: a junction 0.27 px off the image centre (`bench/cases` `junction_quad`) leaves a
+/// label map that is exactly its own half turn, and averaging the boundary with its image
+/// pulled the junction onto the centre. The refined boundary says which it is. Paired
+/// points of a drawing that is symmetric differ only by the ties the stages broke; measured
+/// on `bench/cases` (`mirror_v`, `mirror_h`, `mirror_r`, both modes) the 90th percentile is
+/// 0.4-1.2 standard deviations, 0.03-0.09 px. On `junction_quad` it is 7.6-8.2, 0.54-0.58
+/// px: whole edges a half pixel from their images. Three standard deviations is what
+/// measurement noise reaches and a misplaced edge does not.
+pub const AGREEMENT_Z: f64 = 3.0;
+
+/// How well the refined boundaries agree with `m`: the 90th percentile, over every paired
+/// point with a measured uncertainty, of `|p − M(q)| / hypot(σ_p, σ_q)`, with `q` the
+/// point `p` pairs with. 0 when no point is paired.
+fn disagreement(map: &PlanarMap, m: Mirror, partner: &[Option<Pairing>]) -> f64 {
+    let mut z: Vec<f64> = Vec::new();
+    for (k, e) in map.edges.iter().enumerate() {
+        let Some(pr) = partner.get(k).copied().flatten() else {
+            continue;
+        };
+        let other = &map.edges[pr.edge];
+        let n = e.points.len();
+        if other.points.len() != n || e.sigma.len() != n || other.sigma.len() != n {
+            continue;
+        }
+        for i in 0..n {
+            let j = pr.index(i, n);
+            let d = e.points[i].dist(m.point(other.points[j]));
+            z.push(d / e.sigma[i].hypot(other.sigma[j]).max(1e-6));
+        }
+    }
+    if z.is_empty() {
+        return 0.0;
+    }
+    z.sort_by(f64::total_cmp);
+    z[((z.len() - 1) as f64 * 0.9).round() as usize]
+}
+
+/// Replace each boundary by the average of itself and its partner's reflection, for every
+/// symmetry the refined boundaries confirm; drop the others from `sym`.
 ///
 /// Averaging rather than copying one onto the other keeps the result unbiased: the two
 /// sides carry the same evidence and disagree only by whatever tie was broken between
 /// them, so the midpoint is the estimate both of them support.
 ///
-/// For each mirror in turn, every paired point becomes `½(p_i + M(q_{π(i)}))`, where `q`
-/// is the partner edge as it was before this mirror's pass, `π` the [`Pairing`]'s index
-/// map and `M` the reflection; both members of a pair then come out as exact reflections
-/// of each other, and a boundary paired with itself becomes symmetric on its own. Returns
+/// A symmetry is confirmed when its [`disagreement`] is at most [`AGREEMENT_Z`]; one that
+/// is not is left out of `sym`, so the fitter does not reflect its fits either. For each
+/// confirmed symmetry in turn, every paired point becomes `½(p_i + M(q_{π(i)}))`, where `q`
+/// is the partner edge as it was before this symmetry's pass, `π` the [`Pairing`]'s index
+/// map and `M` the reflection; both members of a pair then come out as exact images of
+/// each other, and a boundary paired with itself becomes symmetric on its own. Returns
 /// how many points moved by more than `1e-12` px.
-pub fn enforce(map: &mut PlanarMap, sym: &Symmetry) -> usize {
+pub fn enforce(map: &mut PlanarMap, sym: &mut Symmetry) -> usize {
     let mut moved = 0usize;
+    let mut confirmed = vec![false; sym.mirrors.len()];
     for (mi, &m) in sym.mirrors.iter().enumerate() {
         let partner = &sym.partner[mi];
+        let z = disagreement(map, m, partner);
+        crate::diag!("symmetry", "mirror={m:?} disagreement_p90={z:.3}");
+        if z > AGREEMENT_Z {
+            continue;
+        }
+        confirmed[mi] = true;
         let before: Vec<Vec<Point>> = map.edges.iter().map(|e| e.points.clone()).collect();
         for (k, e) in map.edges.iter_mut().enumerate() {
             let Some(pr) = partner[k] else { continue };
@@ -363,6 +441,10 @@ pub fn enforce(map: &mut PlanarMap, sym: &Symmetry) -> usize {
             }
         }
     }
+    let mut keep = confirmed.iter();
+    sym.partner.retain(|_| *keep.next().unwrap_or(&false));
+    let mut keep = confirmed.iter();
+    sym.mirrors.retain(|_| *keep.next().unwrap_or(&false));
     moved
 }
 
@@ -389,13 +471,25 @@ pub fn reflect_path(path: &FittedPath, m: Mirror) -> FittedPath {
                     large_arc,
                     sweep,
                     end,
-                } => Segment::Arc {
-                    rx,
-                    ry,
-                    phi: -phi,
-                    large_arc,
-                    sweep: !sweep,
-                    end: m.point(end),
+                } => match m {
+                    Mirror::V(_) | Mirror::H(_) => Segment::Arc {
+                        rx,
+                        ry,
+                        phi: -phi,
+                        large_arc,
+                        sweep: !sweep,
+                        end: m.point(end),
+                    },
+                    // A rotation keeps handedness: same tilt (an ellipse turned by π is
+                    // itself), same sweep.
+                    Mirror::Rot180(..) => Segment::Arc {
+                        rx,
+                        ry,
+                        phi,
+                        large_arc,
+                        sweep,
+                        end: m.point(end),
+                    },
                 },
             })
             .collect(),
@@ -417,6 +511,8 @@ pub fn reflect_primitive(pf: &PrimitiveFit, m: Mirror) -> PrimitiveFit {
             angle: match m {
                 Mirror::V(_) => PI - angle,
                 Mirror::H(_) => -angle,
+                // A half turn leaves every axis direction where it was.
+                Mirror::Rot180(..) => angle,
             },
         },
         PrimitiveKind::RoundRect { x, y, w, h, rx } => match m {
@@ -430,6 +526,13 @@ pub fn reflect_primitive(pf: &PrimitiveFit, m: Mirror) -> PrimitiveFit {
             Mirror::H(k) => PrimitiveKind::RoundRect {
                 x,
                 y: k as f64 - (y + h),
+                w,
+                h,
+                rx,
+            },
+            Mirror::Rot180(kx, ky) => PrimitiveKind::RoundRect {
+                x: kx as f64 - (x + w),
+                y: ky as f64 - (y + h),
                 w,
                 h,
                 rx,
@@ -452,44 +555,37 @@ pub fn reflect_primitive(pf: &PrimitiveFit, m: Mirror) -> PrimitiveFit {
 /// because each was fitted alone, and the middle one straddles the axis.
 pub fn centre_primitive(pf: &PrimitiveFit, m: Mirror) -> PrimitiveFit {
     use std::f64::consts::PI;
+    // The centre a self-symmetric primitive is moved to: onto the axis, or onto the centre
+    // of a half turn.
+    let centre = |c: Point| match m {
+        Mirror::V(k) => Point::new(k as f64 * 0.5, c.y),
+        Mirror::H(k) => Point::new(c.x, k as f64 * 0.5),
+        Mirror::Rot180(kx, ky) => Point::new(kx as f64 * 0.5, ky as f64 * 0.5),
+    };
     let kind = match pf.kind {
-        PrimitiveKind::Circle { c, r } => PrimitiveKind::Circle {
-            c: match m {
-                Mirror::V(k) => Point::new(k as f64 * 0.5, c.y),
-                Mirror::H(k) => Point::new(c.x, k as f64 * 0.5),
-            },
-            r,
-        },
+        PrimitiveKind::Circle { c, r } => PrimitiveKind::Circle { c: centre(c), r },
         // An ellipse across a mirror has one axis along it, so the angle is a right angle
         // away from the mirror's own or along it; snap to whichever it is already nearer.
-        PrimitiveKind::Ellipse { c, rx, ry, angle } => {
-            let snapped = (angle / (PI * 0.5)).round() * PI * 0.5;
-            PrimitiveKind::Ellipse {
-                c: match m {
-                    Mirror::V(k) => Point::new(k as f64 * 0.5, c.y),
-                    Mirror::H(k) => Point::new(c.x, k as f64 * 0.5),
-                },
-                rx,
-                ry,
-                angle: snapped,
-            }
-        }
-        PrimitiveKind::RoundRect { x, y, w, h, rx } => match m {
-            Mirror::V(k) => PrimitiveKind::RoundRect {
-                x: (k as f64 - w) * 0.5,
-                y,
-                w,
-                h,
-                rx,
-            },
-            Mirror::H(k) => PrimitiveKind::RoundRect {
-                x,
-                y: (k as f64 - h) * 0.5,
-                w,
-                h,
-                rx,
+        // Every ellipse centred on a half turn's centre is its own image, at any angle.
+        PrimitiveKind::Ellipse { c, rx, ry, angle } => PrimitiveKind::Ellipse {
+            c: centre(c),
+            rx,
+            ry,
+            angle: match m {
+                Mirror::V(_) | Mirror::H(_) => (angle / (PI * 0.5)).round() * PI * 0.5,
+                Mirror::Rot180(..) => angle,
             },
         },
+        PrimitiveKind::RoundRect { x, y, w, h, rx } => {
+            let c = centre(Point::new(x + 0.5 * w, y + 0.5 * h));
+            PrimitiveKind::RoundRect {
+                x: c.x - 0.5 * w,
+                y: c.y - 0.5 * h,
+                w,
+                h,
+                rx,
+            }
+        }
     };
     PrimitiveFit {
         kind,
@@ -534,14 +630,14 @@ mod tests {
     fn averages_a_nudge_back_out() {
         let (labels, w, h) = bars();
         let mut map = planar::build(&labels, w, h, 2);
-        let sym = detect(&map, &labels, &[0, 1]);
+        let mut sym = detect(&map, &labels, &[0, 1]);
         assert!(!sym.is_empty());
         let before: Vec<Vec<Point>> = map.edges.iter().map(|e| e.points.clone()).collect();
         // Push every point of one boundary a tenth of a pixel to the right.
         for p in map.edges[0].points.iter_mut() {
             p.x += 0.1;
         }
-        enforce(&mut map, &sym);
+        enforce(&mut map, &mut sym);
         // Each side now carries half the nudge, and the pair is an exact reflection.
         let m = sym.mirrors[0];
         for (k, e) in map.edges.iter().enumerate() {
@@ -561,5 +657,114 @@ mod tests {
         }
         // And the untouched boundaries did not move.
         assert!(map.edges.len() == before.len());
+    }
+
+    /// Two blocks of one ink, each the other's half turn about the centre of a 12 x 12
+    /// image, and neither mirror image of the other.
+    fn pinwheel() -> (Vec<u16>, usize, usize) {
+        let (w, h) = (12usize, 12usize);
+        let mut labels = vec![0u16; w * h];
+        for y in 2..5 {
+            for x in 1..7 {
+                labels[y * w + x] = 1;
+                // The half turn of (x, y) is (11 - x, 11 - y).
+                labels[(11 - y) * w + (11 - x)] = 1;
+            }
+        }
+        (labels, w, h)
+    }
+
+    #[test]
+    fn a_half_turn_is_found_when_neither_mirror_holds() {
+        let (labels, w, h) = pinwheel();
+        let map = planar::build(&labels, w, h, 3);
+        let sym = detect(&map, &labels, &[0, 1, 1]);
+        assert_eq!(sym.mirrors, vec![Mirror::Rot180(11, 11)]);
+        // Each block's boundary pairs with the other's.
+        let paired = (0..map.edges.len())
+            .filter(|&e| sym.mirror_of(e).is_some())
+            .count();
+        assert!(paired > 0);
+        // With both mirrors (the bars), the half turn is not listed: it holds already.
+        let (labels, w, h) = bars();
+        let map = planar::build(&labels, w, h, 2);
+        assert!(!detect(&map, &labels, &[0, 1])
+            .mirrors
+            .iter()
+            .any(|m| matches!(m, Mirror::Rot180(..))));
+    }
+
+    #[test]
+    fn a_symmetry_the_refined_boundary_contradicts_is_dropped_unenforced() {
+        let (labels, w, h) = pinwheel();
+        let mut map = planar::build(&labels, w, h, 3);
+        let mut sym = detect(&map, &labels, &[0, 1, 1]);
+        assert!(!sym.is_empty());
+        // Measured to 0.05 px, one block's boundary half a pixel off its image: no tie
+        // explains that, so the half turn is not enforced and leaves `sym`.
+        for e in map.edges.iter_mut() {
+            e.sigma.iter_mut().for_each(|s| *s = 0.05);
+        }
+        let e0 = sym.mirror_of(1).map(|(_, pr)| pr.edge).unwrap_or(0);
+        for p in map.edges[e0].points.iter_mut() {
+            p.x += 0.5;
+        }
+        let before: Vec<Vec<Point>> = map.edges.iter().map(|e| e.points.clone()).collect();
+        assert_eq!(enforce(&mut map, &mut sym), 0);
+        assert!(sym.is_empty());
+        let after: Vec<Vec<Point>> = map.edges.iter().map(|e| e.points.clone()).collect();
+        assert_eq!(after, before);
+    }
+
+    #[test]
+    fn a_half_turn_carries_paths_and_primitives_onto_their_images() {
+        use inkvec_fit::primitives::{PrimitiveFit, PrimitiveKind};
+        let m = Mirror::Rot180(10, 6);
+        assert_eq!(m.point(Point::new(1.0, 2.0)), Point::new(9.0, 4.0));
+        assert!(!m.is_axis() && Mirror::V(3).is_axis());
+        let arc = FittedPath {
+            start: Point::new(1.0, 1.0),
+            segments: vec![Segment::Arc {
+                rx: 2.0,
+                ry: 1.0,
+                phi: 0.3,
+                large_arc: false,
+                sweep: true,
+                end: Point::new(3.0, 1.0),
+            }],
+            closed: false,
+        };
+        // A rotation keeps handedness: the arc keeps its tilt and its sweep.
+        match reflect_path(&arc, m).segments[0] {
+            Segment::Arc {
+                phi, sweep, end, ..
+            } => {
+                assert_eq!((phi, sweep), (0.3, true));
+                assert_eq!(end, Point::new(7.0, 5.0));
+            }
+            _ => panic!("an arc stays an arc"),
+        }
+        let rect = PrimitiveFit {
+            kind: PrimitiveKind::RoundRect {
+                x: 1.0,
+                y: 1.0,
+                w: 2.0,
+                h: 1.0,
+                rx: 0.5,
+            },
+            chi2: 0.0,
+            params: 5.0,
+        };
+        match reflect_primitive(&rect, m).kind {
+            PrimitiveKind::RoundRect { x, y, .. } => assert_eq!((x, y), (7.0, 4.0)),
+            _ => panic!("a rectangle stays a rectangle"),
+        }
+        // Centred on the half turn's centre (5, 3), whatever its size.
+        match centre_primitive(&rect, m).kind {
+            PrimitiveKind::RoundRect { x, y, w, h, .. } => {
+                assert_eq!((x + 0.5 * w, y + 0.5 * h), (5.0, 3.0))
+            }
+            _ => panic!("a rectangle stays a rectangle"),
+        }
     }
 }

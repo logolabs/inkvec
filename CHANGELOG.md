@@ -14,6 +14,12 @@ API in particular should be treated as unstable release to release).
   - A 2 px diagonal came out as a translucent band around opaque specks, because its 0.83-covered pixels outnumbered its core and were accepted first. After the walk, a translucent ink whose opaque version is also an ink is weighed again as a blend of the two and dropped when it is coverage; a translucent wash with an interior of its own stays.
   - A thin face of an opaque ink whose pixels are all partial coverage of the ground is painted its ink, not the ink diluted towards white, so the boundary solve places its edges by coverage instead of widening it.
   - `bench/cases` `sawtooth_diag` and `ribbon_w1.5` pass. On all 1386 icons of `bench/alpha_eval.py` 90 traces change and every family's mean error is level or lower (dark ground −0.45 % overall; simple-icons −0.79 %, openmoji −0.45 %, noto-emoji −0.23 %, twemoji −0.20 %). Fast output and the speed of both modes are unchanged.
+- **A line too thin to cover a pixel keeps both of its edges (all modes).** Where coverage across a boundary rises from the ground and falls back without reaching 1, the edge was read at the profile's 0.5 crossing, which for such a line is its centre line: a 1 px line between two rows came out half as wide. The edges are now the line's centre (the coverage centroid) plus or minus half its width (the coverage integrated along the normal). Regression gate: dE00 −1.6 % (Quality) and −0.6 % (Fast) at 128 px, level at 512 px. `ribbon_w1` passes.
+- **Symmetry the drawing does not have is no longer imposed (all modes).** The label map can be symmetric at pixel resolution while the drawing is not, such as four colours meeting 0.27 px off the image centre. Each symmetry is now enforced only when the refined boundary confirms it: the 90th percentile of the paired points' disagreement must be within 3 standard deviations of their measured positions. Genuine mirrors measure 0.3-1.2 and contradicted ones 7.6-20. In Fast this drops four misleading symmetries out of 84 on a 500-trace sample, improving twemoji 1f7eb 4x and a flag 1.8x.
+
+### Added
+
+- **Half-turn symmetry.** A drawing that is its own 180° rotation about the image centre, and no mirror image, now comes back exactly so (`bench/cases` `mirror_r`, Quality and Fast), through the same pairing, confirmation and averaging as the mirrors.
 
 ## [0.2.7] - 2026-10-08
 

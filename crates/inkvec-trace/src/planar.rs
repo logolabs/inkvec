@@ -824,7 +824,11 @@ fn refine_vertex(
     // applied at gradient boundaries, no loss without.
     let both_flat = !fa.is_gradient() && !fb.is_gradient();
     if !is_step_like(&probes, corner, both_flat, axis.contrast, ctx.min_contrast) {
-        hit = root_find_half(ctx, &axis, p, nx, ny);
+        hit = if both_flat && !corner {
+            ridge_offset(ctx, &axis, p, nx, ny).or_else(|| root_find_half(ctx, &axis, p, nx, ny))
+        } else {
+            root_find_half(ctx, &axis, p, nx, ny)
+        };
     }
     if ctx.debug {
         eprintln!(
@@ -1172,6 +1176,76 @@ fn is_step_like(
         && probes.iter().map(|q| q.1).fold(1.0f64, f64::min) < 0.12
         && probes.iter().map(|q| q.1).fold(0.0f64, f64::max) > 0.88
         && contrast >= 2.0 * min_contrast
+}
+
+/// The offset of this vertex's edge when the coverage across it is a ridge: a stroke too
+/// thin to cover any pixel completely, with the same face on both sides. `None` otherwise.
+///
+/// A pixel cut by one straight edge reads that edge's offset, which is what
+/// [`invert_step`] and [`root_find_half`] read. A stroke narrower than about a pixel and a
+/// half cuts every pixel it touches with *both* of its edges, and the coverage across it
+/// never reaches 1: a 1 px line between two rows reads 0.62 / 0.38. Its 0.5 crossing then
+/// falls between those two pixels, on the stroke's centre line, and the edge was put there
+/// (`bench/cases` `ribbon_w1`, drawn half as wide as it is). What such a profile does give
+/// exactly is the stroke's width and centre: box-filtered coverage integrates to the width
+/// along the normal (the pixel's footprint has unit area), `W = ∫ a ds`, and its centroid
+/// is the stroke's centre. The edges are the centre ± `W/2`; this vertex takes the one on
+/// its own side of the centre.
+///
+/// Pixel centres are read along the normal over ±2.5 px. The reading applies when the
+/// profile starts and ends on the ground (coverage ≤ 0.03 at both ends), has one peak
+/// between, and no pixel reaches 0.97 (a covered pixel means [`invert_step`]'s single edge
+/// reading holds on that side). The integral is the trapezoid rule over the pixel centres'
+/// projections, exact on an axis and close on a slant.
+fn ridge_offset(ctx: &RefineCtx, axis: &UnmixAxis, p: Point, nx: f64, ny: f64) -> Option<f64> {
+    const GROUND: f64 = 0.03;
+    const COVERED: f64 = 0.97;
+    let (w, h) = (ctx.src.w as f64, ctx.src.h as f64);
+    let mut probes: Vec<(f64, f64)> = Vec::with_capacity(11);
+    for i in -5..=5 {
+        let u = 0.5 * i as f64;
+        let (cx, cy) = ((p.x + nx * u).round(), (p.y + ny * u).round());
+        if cx < 0.0 || cy < 0.0 || cx >= w || cy >= h {
+            continue;
+        }
+        let s = (cx - p.x) * nx + (cy - p.y) * ny;
+        if probes.iter().any(|q| (q.0 - s).abs() < 1e-9) {
+            continue;
+        }
+        probes.push((s, axis.coverage(&ctx.src, cx, cy)?));
+    }
+    probes.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let (first, last) = (probes.first()?, probes.last()?);
+    if first.1 > GROUND || last.1 > GROUND {
+        return None;
+    }
+    let peak = probes.iter().map(|q| q.1).fold(0.0f64, f64::max);
+    if peak <= GROUND || peak >= COVERED {
+        return None;
+    }
+    // One peak: coverage rises to it and falls after it (to within 0.05).
+    let top = probes.iter().position(|q| q.1 == peak)?;
+    let rises = probes[..=top].windows(2).all(|q| q[1].1 >= q[0].1 - 0.05);
+    let falls = probes[top..].windows(2).all(|q| q[1].1 <= q[0].1 + 0.05);
+    if !rises || !falls {
+        return None;
+    }
+    let (mut width, mut moment) = (0.0, 0.0);
+    for q in probes.windows(2) {
+        let ds = q[1].0 - q[0].0;
+        width += 0.5 * (q[0].1 + q[1].1) * ds;
+        moment += 0.5 * (q[0].0 * q[0].1 + q[1].0 * q[1].1) * ds;
+    }
+    if width <= 1e-6 {
+        return None;
+    }
+    let centre = moment / width;
+    let half = 0.5 * width;
+    Some(if centre < 0.0 {
+        centre + half
+    } else {
+        centre - half
+    })
 }
 
 /// The first crossing of coverage 0.5 along the normal, by linear interpolation between

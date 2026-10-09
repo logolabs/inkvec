@@ -7,6 +7,21 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Thin strokes on a transparent ground keep their ink (Quality).** A stroke narrower than about two pixels covers few or no pixels completely, so the palette met its anti-aliasing before its ink, or never met the ink at all:
+  - A 1-1.5 px line split across two rows (every pixel translucent) was dropped entirely. Such a colour, at least half opaque and refused only for having no interior, is now read as a hairline of its opaque version.
+  - A 2 px diagonal came out as a translucent band around opaque specks, because its 0.83-covered pixels outnumbered its core and were accepted first. After the walk, a translucent ink whose opaque version is also an ink is weighed again as a blend of the two and dropped when it is coverage; a translucent wash with an interior of its own stays.
+  - A thin face of an opaque ink whose pixels are all partial coverage of the ground is painted its ink, not the ink diluted towards white, so the boundary solve places its edges by coverage instead of widening it.
+  - `bench/cases` `sawtooth_diag` and `ribbon_w1.5` pass. On all 1386 icons of `bench/alpha_eval.py` 90 traces change and every family's mean error is level or lower (dark ground −0.45 % overall; simple-icons −0.79 %, openmoji −0.45 %, noto-emoji −0.23 %, twemoji −0.20 %). Fast output and the speed of both modes are unchanged.
+- **A line too thin to cover a pixel keeps both of its edges (all modes).** Where coverage across a boundary rises from the ground and falls back without reaching 1, the edge was read at the profile's 0.5 crossing, which for such a line is its centre line: a 1 px line between two rows came out half as wide. The edges are now the line's centre (the coverage centroid) plus or minus half its width (the coverage integrated along the normal). Regression gate: dE00 −1.6 % (Quality) and −0.6 % (Fast) at 128 px, level at 512 px. `ribbon_w1` passes.
+- **Symmetry the drawing does not have is no longer imposed (all modes).** The label map can be symmetric at pixel resolution while the drawing is not, such as four colours meeting 0.27 px off the image centre. Each symmetry is now enforced only when the refined boundary confirms it: the 90th percentile of the paired points' disagreement must be within 3 standard deviations of their measured positions. Genuine mirrors measure 0.3-1.2 and contradicted ones 7.6-20. In Fast this drops four misleading symmetries out of 84 on a 500-trace sample, improving twemoji 1f7eb 4x and a flag 1.8x.
+- **Go: integer remainders are right on arm64 (Apple silicon, Linux arm64).** wazero's arm64 compiler (v1.12.0, the latest) defines a remainder's register twice, a division and then a multiply-subtract, and when register pressure spills it in between, the multiply-subtract reads a quotient that was never stored. Any of the module's 346 remainders could come out wrong; in this release's symmetry pass one became an index of 4294337216 into a 256-point boundary and the trace stopped (the 0.2.7 crash the first half-turn attempt hit was the same bug). The build now rewrites every remainder as `a - div(a, b) * b` (`tools/wasm_wazero_fixes.py`, formerly `wasm_float_select.py`), exactly: same results and same traps on 1323 edge cases, both architectures. `TestWazeroRemainder` reports whether wazero still has the bug (a 40-value module where `1000 rem_u 256` returns 1000).
+
+### Added
+
+- **Half-turn symmetry.** A drawing that is its own 180° rotation about the image centre, and no mirror image, now comes back exactly so (`bench/cases` `mirror_r`, Quality and Fast), through the same pairing, confirmation and averaging as the mirrors.
+
 ## [0.2.7] - 2026-10-08
 
 ### Fixed

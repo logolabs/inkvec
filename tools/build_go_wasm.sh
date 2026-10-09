@@ -18,11 +18,12 @@
 #   cargo      the module, without SIMD (see step 3)
 #   wasm-opt   -O3, optional: INKVEC_WASM_OPT, else `wasm-opt` on PATH, else the copy
 #              wasm-pack keeps in its cache; without one the module stays unoptimised
-#   python     tools/wasm_float_select.py rewrites every floating-point `select` as an
-#              integer one, around a wazero compiler bug on amd64 that makes a float
-#              `select` return the wrong operand (details in that file). It decodes every
-#              instruction and does not handle SIMD, which measured neither faster nor
-#              slower under wazero, so the module is built without it.
+#   python     tools/wasm_wazero_fixes.py rewrites every floating-point `select` as an
+#              integer one and every integer remainder as a division, around two wazero
+#              compiler bugs: a float `select` can return the wrong operand on amd64, and
+#              a remainder can come out as garbage on arm64 (details in that file). It
+#              decodes every instruction and does not handle SIMD, which measured neither
+#              faster nor slower under wazero, so the module is built without it.
 #
 # Prerequisites: rustup target add wasm32-wasip1; Python 3 (PYTHON, else python3 / python).
 #
@@ -83,7 +84,7 @@ else
 fi
 
 PY="${PYTHON:-$(command -v python3 || command -v python)}"
-echo "==> $PY tools/wasm_float_select.py"
-"$PY" "$ROOT/tools/wasm_float_select.py" "$OPTIMISED" "$OUT"
+echo "==> $PY tools/wasm_wazero_fixes.py"
+"$PY" "$ROOT/tools/wasm_wazero_fixes.py" "$OPTIMISED" "$OUT"
 
 ls -l "$BUILT" "$OUT"

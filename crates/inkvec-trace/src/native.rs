@@ -804,6 +804,74 @@ fn name_carved_paint(
     }
 }
 
+/// Share of a thin face's pixels that must read as coverage of its ink for the face to be
+/// painted that ink ([`paint_thin_faces_their_ink`]).
+const THIN_COVERAGE_SHARE: f32 = 0.9;
+
+/// Paint each flat face of an opaque ink that owns no interior pixel its ink's colour, when
+/// its pixels are that ink partly covering the clear ground. Returns how many changed.
+///
+/// A face with no interior pixel is all boundary: every pixel it owns is partly covered. Its
+/// fill, fitted over white from those pixels, is then the ink mixed with whatever shares
+/// them, and against the clear ground that is white: a 1 px line of `#204080` between two
+/// rows fitted as `#7488b0`, and the boundary solve, honest about that colour, widened the
+/// line to 1.6 px to darken the image enough. The palette ink is the better estimate of
+/// such a face's colour, and with it the solve places the edges by coverage.
+///
+/// The evidence is per pixel: over white a pixel of ink `k` at coverage `a` reads
+/// `1 + a·(k − 1)` (the image is composited over white in sRGB), and its alpha is `a`. When
+/// at least [`THIN_COVERAGE_SHARE`] of the face's pixels read so, within four 8-bit levels
+/// per channel, the face is the ink's coverage. An opaque tint of the ink lies on the same
+/// line from the ink to white but at full opacity, and a thin face between two opaque
+/// colours is a blend of those, not of the ground; both are left as fitted. Faces of a
+/// translucent ink keep their fill too, their opacity already accounting for the ground.
+fn paint_thin_faces_their_ink(
+    faces: &[u16],
+    (w, h): (usize, usize),
+    (rgb, alpha): (&[[f32; 3]], &[f32]),
+    face_fill: &mut [gradient::FillFit],
+    face_color: &[usize],
+    pal: &Palette,
+) -> usize {
+    const TOL: f32 = 4.0 / 255.0;
+    let n = face_fill.len().min(face_color.len());
+    let interior = color::snap::interior_counts(faces, w, h, n);
+    // The opaque ink of each candidate face: flat, no interior pixel, an opaque ink.
+    let ink_of = |f: usize| -> Option<[f32; 3]> {
+        let ink = face_color[f];
+        let flat = matches!(face_fill[f].model, gradient::FillModel::Flat(_));
+        let opaque = pal.alpha.get(ink).is_none_or(|&a| a >= OPAQUE);
+        (flat && interior[f] == 0 && ink < pal.len() && opaque).then(|| pal.rgb[ink])
+    };
+    let inks: Vec<Option<[f32; 3]>> = (0..n).map(ink_of).collect();
+    if inks.iter().all(Option::is_none) {
+        return 0;
+    }
+    // Per candidate face: (pixels that read as coverage of its ink, pixels).
+    let mut tally = vec![(0u32, 0u32); n];
+    for ((&f, &c), &a) in faces.iter().zip(rgb).zip(alpha).take(w * h) {
+        let Some(k) = inks.get(f as usize).copied().flatten() else {
+            continue;
+        };
+        let fits = (0..3).all(|i| (c[i] - (1.0 + a * (k[i] - 1.0))).abs() <= TOL);
+        let t = &mut tally[f as usize];
+        t.0 += u32::from(fits);
+        t.1 += 1;
+    }
+    let mut changed = 0;
+    for f in 0..n {
+        let (Some(k), (fits, count)) = (inks[f], tally[f]) else {
+            continue;
+        };
+        let covered = count > 0 && fits as f32 >= THIN_COVERAGE_SHARE * count as f32;
+        if covered && face_fill[f].model != gradient::FillModel::Flat(k) {
+            face_fill[f].model = gradient::FillModel::Flat(k);
+            changed += 1;
+        }
+    }
+    changed
+}
+
 /// The colour path with transparency carried natively. Mirrors
 /// [`crate::trace_color_full_with_alpha`] stage for stage; see the module docs for what
 /// changes and why.
@@ -997,9 +1065,17 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
         color::snap::snap_flat_fills(&labels, w, h, &mut face_fill, &face_color, &pal, |f| {
             face_fade.get(f).is_some_and(Option::is_some)
         });
+    let thin = paint_thin_faces_their_ink(
+        &labels,
+        (w, h),
+        (&rgb, alpha),
+        &mut face_fill,
+        &face_color,
+        &pal,
+    );
     crate::diag!(
         "fills",
-        "native alpha: snapped to their ink's colour: {snapped}"
+        "native alpha: snapped to their ink's colour: {snapped}; thin faces given their ink: {thin}"
     );
     // Where a face meets the ground the boundary is placed by its opacity there: a fade's
     // rim, a wash's one opacity.

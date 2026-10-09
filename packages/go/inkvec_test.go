@@ -430,7 +430,7 @@ func TestRetainMemory(t *testing.T) {
 }
 
 // wazero's compiler and its interpreter give the same SVG. The compiler mis-lowers a
-// floating-point select on amd64 (tools/wasm_float_select.py rewrites them away at build
+// floating-point select on amd64 (tools/wasm_wazero_fixes.py rewrites them away at build
 // time); without the rewrite this input comes out differently (1296 bytes either way,
 // different hashes). Both run on wazero's deterministic clocks: the interpreter is slow
 // enough to reach the tracer's wall-clock caps, which would make its output depend on speed.

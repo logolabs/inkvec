@@ -37,7 +37,7 @@ Why the half-turn was reverted rather than fixed:
 * With it, the Go package's test on macOS (wazero, arm64) panicked in `symmetry::enforce`
   with an index of 2147484096 into a 256-point edge. The same input traces identically before
   and after natively, so this is the runtime miscompiling the new code shape, like the float
-  `select` bug `tools/wasm_float_select.py` works around on amd64. The revert restores the
+  `select` bug `tools/wasm_wazero_fixes.py` works around on amd64. The revert restores the
   code that passed there.
 
 ## Tests
@@ -73,10 +73,24 @@ Made to run on every CI platform:
 `bench/quality_budget.json`: `cases:quality` 38 (37 + `glyph_ring_bar`), `cases:fast` 26
 (unchanged). The coverage floors raised in `b267edf` and `test_functions` 1088 stand.
 
-## Open
+## Since: the open cases closed
 
-* `mirror_r`: half-turn symmetry, validated for every mirror against the boundary
-  uncertainty rather than with a fixed cut-off, and checked under wazero on arm64.
-* `sawtooth_diag`: a fix local to thin diagonal strokes, not a global palette reordering.
-* `ribbon_w1`, `ribbon_w1.5`: off-grid hairlines on a transparent ground (Quality), which
-  have no interior at all; Fast keeps them through its paired-pixel scan.
+On `main` after this handoff, every `bench/cases` case passes in Quality (42/42) and Fast
+gains `mirror_r` (27/42):
+
+* `sawtooth_diag`, `ribbon_w1.5`: the native palette reads a hairline as its opaque ink and
+  drops a translucent ink that is only the coverage of its opaque twin
+  (`native/palette.rs`), and a thin face of coverage is painted its ink (`native.rs`).
+* `ribbon_w1`: the sub-pixel refinement reads a stroke too thin to cover a pixel from its
+  coverage centroid and width (`planar::ridge_offset`).
+* `mirror_r`: the half turn is a symmetry, and every symmetry is enforced only when the
+  refined boundary confirms it (`symmetry::AGREEMENT_Z`) -- which is what had made the
+  first half-turn attempt pull `junction_quad`'s junction onto the centre.
+* The Go package's macOS crash (above) came back with this code, and is now understood: wazero's
+  arm64 compiler can compute an integer remainder from a quotient it never stored, which any
+  remainder in the module could hit, not only this code shape. The build rewrites every
+  remainder as a division (`tools/wasm_wazero_fixes.py` has the mechanism), and
+  `TestWazeroRemainder` reports when wazero fixes it. Reproduced and checked on linux/arm64
+  under QEMU, which runs the same wazero backend as macOS.
+
+See `CHANGELOG.md` `[Unreleased]` for the measurements.

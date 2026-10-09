@@ -112,6 +112,9 @@ pub(crate) fn fit(
     cfg: &FitConfig,
     fit_plain: &dyn Fn(&Polyline) -> FittedPath,
 ) -> Option<FittedPath> {
+    // A half turn has no axis to fit one side of; it reaches the fit through the pairing.
+    let mirrors: Vec<Mirror> = mirrors.iter().copied().filter(|m| m.is_axis()).collect();
+    let mirrors = mirrors.as_slice();
     let &m = mirrors.first()?;
     if poly.points.len() < MIN_POINTS {
         return None;
@@ -220,6 +223,8 @@ pub(crate) fn choose(
     cfg: &FitConfig,
     fit_plain: &dyn Fn(&Polyline) -> FittedPath,
 ) -> FittedPath {
+    let mirrors: Vec<Mirror> = mirrors.iter().copied().filter(|m| m.is_axis()).collect();
+    let mirrors = mirrors.as_slice();
     let plain = fit_plain(poly);
     if mirrors.is_empty() || mirrors.iter().all(|&m| anchors_mirror(&plain, m)) {
         return plain;
@@ -250,6 +255,7 @@ fn anchors_mirror(path: &FittedPath, m: Mirror) -> bool {
 fn axis(m: Mirror) -> f64 {
     match m {
         Mirror::V(k) | Mirror::H(k) => k as f64 * 0.5,
+        Mirror::Rot180(..) => unreachable!("`fit` and `choose` keep the axis mirrors only"),
     }
 }
 
@@ -258,6 +264,7 @@ fn onto_axis(p: Point, m: Mirror) -> Point {
     match m {
         Mirror::V(_) => Point::new(axis(m), p.y),
         Mirror::H(_) => Point::new(p.x, axis(m)),
+        Mirror::Rot180(..) => unreachable!("`fit` and `choose` keep the axis mirrors only"),
     }
 }
 
@@ -574,6 +581,7 @@ fn snap_cubic(part: &FittedPath, m: Mirror, at_end: bool) -> Option<FittedPath> 
         // The normal to a vertical axis is horizontal: the offset across is in x, along in y.
         Mirror::V(_) => (ctrl.x - cross.x, ctrl.y - cross.y),
         Mirror::H(_) => (ctrl.y - cross.y, ctrl.x - cross.x),
+        Mirror::Rot180(..) => return None,
     };
     if dn.abs() <= 1e-12 || da.atan2(dn.abs()).abs().to_degrees() > SNAP_DEGREES {
         return None;
@@ -581,6 +589,7 @@ fn snap_cubic(part: &FittedPath, m: Mirror, at_end: bool) -> Option<FittedPath> 
     let on = match m {
         Mirror::V(_) => Point::new(ctrl.x, cross.y),
         Mirror::H(_) => Point::new(cross.x, ctrl.y),
+        Mirror::Rot180(..) => return None,
     };
     let mut out = part.clone();
     out.segments[idx] = if at_end {

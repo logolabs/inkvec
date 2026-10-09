@@ -1148,7 +1148,7 @@ pub(crate) fn finish_color_trace_alpha(
     };
     // A small map is refined on this thread, after detection, as before: handing it to the
     // pool costs more than it saves (see `planar::refine_in_parallel`).
-    let (mut sym, refined) = if planar::refine_in_parallel(&map) {
+    let (sym, refined) = if planar::refine_in_parallel(&map) {
         rayon::join(|| symmetry::detect(&map, &labels, &face_color), measure)
     } else {
         (symmetry::detect(&map, &labels, &face_color), measure())
@@ -1195,7 +1195,7 @@ pub(crate) fn finish_color_trace_alpha(
     let symmetrised = if sym.is_empty() {
         0
     } else {
-        symmetry::enforce(&mut map, &mut sym)
+        symmetry::enforce(&mut map, &sym)
     };
     sw.mark("symmetry");
     ColorTrace {

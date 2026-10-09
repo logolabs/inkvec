@@ -64,8 +64,6 @@ pub enum Mirror {
     V(i64),
     /// Horizontal mirror axis: reflects `y` to `k - y`, leaves `x` unchanged.
     H(i64),
-    /// Half-turn (180° rotation) about `(kx/2, ky/2)`: reflects `x` to `kx - x`, `y` to `ky - y`.
-    Rot180(i64, i64),
 }
 
 impl Mirror {
@@ -75,7 +73,6 @@ impl Mirror {
         match self {
             Mirror::V(k) => (k - x, y),
             Mirror::H(k) => (x, k - y),
-            Mirror::Rot180(kx, ky) => (kx - x, ky - y),
         }
     }
 
@@ -85,7 +82,6 @@ impl Mirror {
         match self {
             Mirror::V(k) => Point::new(k as f64 - p.x, p.y),
             Mirror::H(k) => Point::new(p.x, k as f64 - p.y),
-            Mirror::Rot180(kx, ky) => Point::new(kx as f64 - p.x, ky as f64 - p.y),
         }
     }
 }
@@ -195,18 +191,11 @@ fn mirrors_of(labels: &[u16], ink: &[usize], w: usize, h: usize) -> Vec<Mirror> 
     // horizontal axis. The loop that used to try every k was pure cost: each off-centre
     // horizontal candidate matched white margin rows against white margin rows before it
     // could fail, O(h^2 w) in all -- 1.1 s of a 4 s trace at 2048 px, for nothing.
-    let cx = w as i64 - 1;
-    let cy = h as i64 - 1;
-    let v_holds = holds(Mirror::V(cx));
-    let h_holds = holds(Mirror::H(cy));
-    if v_holds {
-        out.push(Mirror::V(cx));
+    if holds(Mirror::V(w as i64 - 1)) {
+        out.push(Mirror::V(w as i64 - 1));
     }
-    if h_holds {
-        out.push(Mirror::H(cy));
-    }
-    if !(v_holds && h_holds) && holds(Mirror::Rot180(cx, cy)) {
-        out.push(Mirror::Rot180(cx, cy));
+    if holds(Mirror::H(h as i64 - 1)) {
+        out.push(Mirror::H(h as i64 - 1));
     }
     out
 }
@@ -350,39 +339,11 @@ pub fn detect(map: &PlanarMap, labels: &[u16], ink: &[usize]) -> Symmetry {
 /// map and `M` the reflection; both members of a pair then come out as exact reflections
 /// of each other, and a boundary paired with itself becomes symmetric on its own. Returns
 /// how many points moved by more than `1e-12` px.
-pub fn enforce(map: &mut PlanarMap, sym: &mut Symmetry) -> usize {
+pub fn enforce(map: &mut PlanarMap, sym: &Symmetry) -> usize {
     let mut moved = 0usize;
-    let mut keep_mirrors = Vec::new();
-    let mut keep_partner = Vec::new();
     for (mi, &m) in sym.mirrors.iter().enumerate() {
         let partner = &sym.partner[mi];
         let before: Vec<Vec<Point>> = map.edges.iter().map(|e| e.points.clone()).collect();
-        if matches!(m, Mirror::Rot180(_, _)) {
-            let (mut sum_dev, mut count) = (0.0f64, 0usize);
-            for (k, e) in map.edges.iter().enumerate() {
-                let Some(pr) = partner[k] else { continue };
-                let other = &before[pr.edge];
-                let n = e.points.len();
-                if other.len() != n {
-                    continue;
-                }
-                for i in 0..n {
-                    let q = m.point(other[pr.index(i, n)]);
-                    sum_dev += e.points[i].dist(q);
-                    count += 1;
-                }
-            }
-            let mean_dev = if count > 0 {
-                sum_dev / count as f64
-            } else {
-                0.0
-            };
-            if mean_dev > 0.08 {
-                continue;
-            }
-        }
-        keep_mirrors.push(m);
-        keep_partner.push(partner.clone());
         for (k, e) in map.edges.iter_mut().enumerate() {
             let Some(pr) = partner[k] else { continue };
             let other = &before[pr.edge];
@@ -402,8 +363,6 @@ pub fn enforce(map: &mut PlanarMap, sym: &mut Symmetry) -> usize {
             }
         }
     }
-    sym.mirrors = keep_mirrors;
-    sym.partner = keep_partner;
     moved
 }
 
@@ -430,23 +389,13 @@ pub fn reflect_path(path: &FittedPath, m: Mirror) -> FittedPath {
                     large_arc,
                     sweep,
                     end,
-                } => match m {
-                    Mirror::V(_) | Mirror::H(_) => Segment::Arc {
-                        rx,
-                        ry,
-                        phi: -phi,
-                        large_arc,
-                        sweep: !sweep,
-                        end: m.point(end),
-                    },
-                    Mirror::Rot180(_, _) => Segment::Arc {
-                        rx,
-                        ry,
-                        phi,
-                        large_arc,
-                        sweep,
-                        end: m.point(end),
-                    },
+                } => Segment::Arc {
+                    rx,
+                    ry,
+                    phi: -phi,
+                    large_arc,
+                    sweep: !sweep,
+                    end: m.point(end),
                 },
             })
             .collect(),
@@ -468,7 +417,6 @@ pub fn reflect_primitive(pf: &PrimitiveFit, m: Mirror) -> PrimitiveFit {
             angle: match m {
                 Mirror::V(_) => PI - angle,
                 Mirror::H(_) => -angle,
-                Mirror::Rot180(_, _) => angle,
             },
         },
         PrimitiveKind::RoundRect { x, y, w, h, rx } => match m {
@@ -482,13 +430,6 @@ pub fn reflect_primitive(pf: &PrimitiveFit, m: Mirror) -> PrimitiveFit {
             Mirror::H(k) => PrimitiveKind::RoundRect {
                 x,
                 y: k as f64 - (y + h),
-                w,
-                h,
-                rx,
-            },
-            Mirror::Rot180(kx, ky) => PrimitiveKind::RoundRect {
-                x: kx as f64 - (x + w),
-                y: ky as f64 - (y + h),
                 w,
                 h,
                 rx,
@@ -516,22 +457,17 @@ pub fn centre_primitive(pf: &PrimitiveFit, m: Mirror) -> PrimitiveFit {
             c: match m {
                 Mirror::V(k) => Point::new(k as f64 * 0.5, c.y),
                 Mirror::H(k) => Point::new(c.x, k as f64 * 0.5),
-                Mirror::Rot180(kx, ky) => Point::new(kx as f64 * 0.5, ky as f64 * 0.5),
             },
             r,
         },
         // An ellipse across a mirror has one axis along it, so the angle is a right angle
         // away from the mirror's own or along it; snap to whichever it is already nearer.
         PrimitiveKind::Ellipse { c, rx, ry, angle } => {
-            let snapped = match m {
-                Mirror::V(_) | Mirror::H(_) => (angle / (PI * 0.5)).round() * PI * 0.5,
-                Mirror::Rot180(_, _) => angle,
-            };
+            let snapped = (angle / (PI * 0.5)).round() * PI * 0.5;
             PrimitiveKind::Ellipse {
                 c: match m {
                     Mirror::V(k) => Point::new(k as f64 * 0.5, c.y),
                     Mirror::H(k) => Point::new(c.x, k as f64 * 0.5),
-                    Mirror::Rot180(kx, ky) => Point::new(kx as f64 * 0.5, ky as f64 * 0.5),
                 },
                 rx,
                 ry,
@@ -549,13 +485,6 @@ pub fn centre_primitive(pf: &PrimitiveFit, m: Mirror) -> PrimitiveFit {
             Mirror::H(k) => PrimitiveKind::RoundRect {
                 x,
                 y: (k as f64 - h) * 0.5,
-                w,
-                h,
-                rx,
-            },
-            Mirror::Rot180(kx, ky) => PrimitiveKind::RoundRect {
-                x: (kx as f64 - w) * 0.5,
-                y: (ky as f64 - h) * 0.5,
                 w,
                 h,
                 rx,
@@ -605,14 +534,14 @@ mod tests {
     fn averages_a_nudge_back_out() {
         let (labels, w, h) = bars();
         let mut map = planar::build(&labels, w, h, 2);
-        let mut sym = detect(&map, &labels, &[0, 1]);
+        let sym = detect(&map, &labels, &[0, 1]);
         assert!(!sym.is_empty());
         let before: Vec<Vec<Point>> = map.edges.iter().map(|e| e.points.clone()).collect();
         // Push every point of one boundary a tenth of a pixel to the right.
         for p in map.edges[0].points.iter_mut() {
             p.x += 0.1;
         }
-        enforce(&mut map, &mut sym);
+        enforce(&mut map, &sym);
         // Each side now carries half the nudge, and the pair is an exact reflection.
         let m = sym.mirrors[0];
         for (k, e) in map.edges.iter().enumerate() {

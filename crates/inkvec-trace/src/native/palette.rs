@@ -13,7 +13,7 @@ use rayon::prelude::*;
 
 use super::{
     bin, from_six, ink_points, over_black, same_ink_as_accepted, six, Ink2, BINS, CLEAR_INK_ALPHA,
-    OPAQUE,
+    OPAQUE, TRANSLUCENT_BELOW,
 };
 use crate::color::distinct::{
     side_of, BitsMap, Claim, ColourIds, DistinctImage, Neighbourhoods, PAR_COLOURS,
@@ -426,8 +426,9 @@ impl BlendEvidence {
     /// test cannot always say so: a rim where shading meets the ground mixes the clear ink
     /// with a shade the palette rejected as a blend itself, so no pair of accepted inks
     /// explains it (`noto-emoji/emoji_u1f932` minted two inks at 0.77 from 136 scattered rim
-    /// pixels). An ink covers area, anti-aliasing is a band: a translucent candidate (any
-    /// opacity strictly between 0 and 1) that is not a blend is kept only with an interior.
+    /// pixels). An ink covers area, anti-aliasing is a band: a translucent candidate (an
+    /// opacity above 0 and below `TRANSLUCENT_BELOW`) that is not a blend is kept only with
+    /// an interior.
     /// Blends keep the straddle test instead; asking them for an interior as well traded
     /// noto-emoji for twemoji and cost the translucent set.
     ///
@@ -441,7 +442,7 @@ impl BlendEvidence {
         let blend = !pairs.is_empty();
         let translucent = {
             let a = c.alpha();
-            a > 0.0 && a < 0.98
+            a > 0.0 && a < TRANSLUCENT_BELOW
         };
         let img = &walk.view.img;
         let interior = if blend || translucent || escaped {
@@ -575,24 +576,7 @@ fn frequency_modes(view: &NativeView) -> Vec<(u32, u64, Ink2)> {
         .zip(keys)
         .map(|((n, s), key)| (n, key, mean_of(&s, n)))
         .collect();
-    let majority_n = (view.img.pixels() / 2) as u32;
-    modes.sort_by_key(|&(n, key, c)| {
-        let is_majority = n >= majority_n;
-        let alpha_bucket = ((c.alpha() * 20.0).round() as i32).clamp(0, 20);
-        let rank = if is_majority {
-            0
-        } else if c.alpha() <= CLEAR_INK_ALPHA {
-            2
-        } else {
-            1
-        };
-        (
-            rank,
-            std::cmp::Reverse(alpha_bucket),
-            std::cmp::Reverse(n),
-            key,
-        )
-    });
+    modes.sort_by_key(|&(n, key, _)| (std::cmp::Reverse(n), key));
     modes
 }
 

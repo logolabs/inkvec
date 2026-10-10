@@ -26,8 +26,12 @@ python tools/prepush.py --gate                                       # build, ha
 ```
 
 Scores the committed 246-icon screen set (under `bench/data`, so this runs from a bare
-checkout) under six conditions: Quality and Fast, each at 128 px (`128ss`), 512 px
-(`512ss`) and 512 px flattened onto white (`512ssop`, an opaque logo). Each condition's
+checkout) under eight conditions: Quality and Fast, each at 128 px (`128ss`), 512 px
+(`512ss`), 512 px flattened onto white (`512ssop`, an opaque logo) and `web`, the logo as it
+usually reaches a tracer: on white, resized to 400 px (bicubic) and saved as a JPEG at
+quality 80 with 4:2:0 chroma (`bench/build_web_tier.py`; the JPEG files are committed, so
+every machine reads the same bytes). The first three are exact renders; `web` carries the
+blur, ringing, block artefacts and half-resolution colour of real inputs. Each condition's
 four gated axes are compared icon by icon with the per-platform baseline
 `bench/gate/baselines/<os>-<arch>.json`:
 

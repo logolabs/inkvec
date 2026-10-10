@@ -59,8 +59,10 @@ the installer refuses to replace a pre-push hook it did not write (unless `--for
 ## The regression gate
 
 `bench/ci_gate.py` scores the committed 246-icon screen set (`bench/data`, kept in the
-repository so the gate runs from a bare checkout) under six conditions: Quality and Fast mode,
-each at 128 px, 512 px with transparency and 512 px flattened onto white (an opaque logo).
+repository so the gate runs from a bare checkout) under eight conditions: Quality and Fast
+mode, each at 128 px, 512 px with transparency, 512 px flattened onto white (an opaque logo)
+and `web` (the same logo resized to 400 px and saved as a quality-80 JPEG: the noise real
+inputs carry; `bench/build_web_tier.py`).
 Each condition is compared icon by icon with the per-platform baseline
 `bench/gate/baselines/<os>-<arch>.json`, on four axes:
 
@@ -77,7 +79,7 @@ the margin is floored at the smallest effect the set can detect, and such a pass
 reported as "within-noise"; there is no "inconclusive" verdict. Details and the
 literature are in `bench/README.md`.
 
-Run it against a release build (about 30 min for all six conditions on a desktop; pass
+Run it against a release build (about 40 min for all eight conditions on a desktop; pass
 `--conditions` for a subset while iterating):
 
 ```

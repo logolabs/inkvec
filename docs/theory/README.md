@@ -9,6 +9,8 @@
 **Experiments:** [`bench/theory`](../../bench/theory/README.md).
 **Next:** [the optimal vectorizer, informally](optimal.md): what the best possible tracer
 computes, how far inkvec is from it, and which approximations to make.
+**Noisy inputs:** [what resampling and JPEG do to the evidence](noise.md): where the noise
+sits, why area windows stay unbiased under it, and what the engine must change.
 **Code it changed:** `crates/inkvec-trace/src/planar/strip.rs` (new) and `probe_chord`
 (moved to `crates/inkvec-trace/src/planar/chord.rs`).
 

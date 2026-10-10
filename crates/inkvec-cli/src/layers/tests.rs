@@ -47,6 +47,7 @@ fn run(
         candidate,
         cost_now: &cost,
         strokes,
+        stroke_faces: &[],
         decimals,
         psf: 0.0,
     };

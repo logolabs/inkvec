@@ -354,6 +354,100 @@ existing comparison in the code (`ribbons.rs`'s decision, `mirror_fit.rs`'s choi
 merges) keeps its form; what changes is the price of each coordinate and the presence of
 the prior.
 
+### R0.8 Claim: within the Laplace regime, more noise never un-accepts a constraint
+
+Real inputs are resized and compressed ([`noise.md`](noise.md)). On damaged input the target
+is still the artist's clean file. Noise should therefore make the description lean more on
+the prior, never less. This claim states exactly how far that holds.
+
+**Setting.** `M₀ ⊂ M₁` are nested descriptions. `M₁` has `k` more free coordinates (one
+dropped tie, one unsnapped number: `k = 1`). `Δ ≥ 0` is the drop in the residual sum of
+squares that `M₁` buys, in px². It is a property of the geometry and is held fixed while
+the noise scale `σ` varies (each window's sd is `σ·g_w`). By R0.2 the log posterior odds of
+`M₀` are
+
+```text
+B(σ) = c − Δ/(2σ²) + k·ln(a/σ),        a = W/(√(2π)·g),
+```
+
+where `c` is the log prior odds of the constraint (R3) and `k·ln(a/σ)` is the Occam factor of
+the `k` coordinates.
+
+**Claim.** If `B(σ₁) ≥ 0`, `σ₂ ≥ σ₁`, and at `σ₂` the coordinates still cost at least half a
+nat each beyond the prior odds (`k/2 ≤ c + k·ln(a/σ₂)`), then `B(σ₂) ≥ 0`.
+
+**Proof.** Put `t = σ₂/σ₁ ≥ 1`.
+
+1. If `Δ ≥ kσ₂²`, the misfit is still significant at `σ₂`. Then
+   `B(σ₂) − B(σ₁) = Δ(σ₂² − σ₁²)/(2σ₁²σ₂²) − k·ln t ≥ k(t² − 1)/2 − k·ln t ≥ 0`, using
+   `ln t² ≤ t² − 1`.
+2. If `Δ < kσ₂²`, then `B(σ₂) > c − k/2 + k·ln(a/σ₂) ≥ 0` by the regime.
+
+∎ Lean: `Inkvec.Design.accept_monotone` (`Design/Noise.lean`).
+
+The claim is about the acceptance set in `σ`, not about `B`'s slope:
+
+* **`B` is not monotone.** `dB/dσ = (Δ/σ² − k)/σ`, so `B` rises while the misfit is
+  significant and falls once it is within noise. Where it falls, the Occam factor is
+  shrinking. Past the regime, the `k` coordinates' posterior is as wide as their prior and
+  Laplace's approximation fails; the exact evidence ratio there tends to the prior odds `c`,
+  not to `−∞`.
+* **The literal reading is false.** "The Bayes factor for `M₀` rises with `σ` when the extra
+  fit is within noise" does not hold. What holds is that the constraint, once accepted, stays
+  accepted.
+* **What noise does to a true constraint.** The standardised gain `Δ/σ²` has the `χ²_k`
+  distribution at every `σ`, and the threshold `2k·ln(a/σ) + 2c` falls only logarithmically.
+  So a true tie is refused a little more often on noisier input. At `k = 1` and 7 nats,
+  `P(χ²₁ > 14) ≈ 2·10⁻⁴`.
+* **What noise does to a slightly false constraint.** It is accepted while its violation `δ`
+  stays under `σ_post·√(2k·ln(a/σ) + 2c)`. That acceptance radius grows with `σ`. This is the
+  sense in which a noisy input snaps more.
+
+**Heavy tails.** JPEG block steps and ringing lobes are outliers. Under a Gaussian, a
+0.05 px wobble at a block edge counts as many-σ evidence against a tie, so the likelihood
+needs heavy tails.
+
+* **Huber with threshold `κ` keeps the claim on inliers, exactly.** On residuals within `κ`
+  standard units the Huber loss equals the Gaussian `u²/2` (`huber_eq_sq`). An inlier at `σ₁`
+  is still an inlier at every `σ₂ ≥ σ₁` (`inlier_of_le`). So whenever both fits' residuals are
+  inliers at `σ₁`, the proof above applies verbatim at every larger `σ`. Outliers always cost
+  less than under the Gaussian (`huber_le_sq`).
+* **Huber keeps clean inputs unchanged.** The boundary chain's `huber_kappa(ν) = min(3, √ν)`
+  is 3 on a clean intake (`ν = ∞`), where every residual is an inlier, so clean traces are
+  untouched. `√ν` is where the Student-t influence function `(ν+1)u/(ν+u²)` peaks.
+* **Student-t loses the claim.** `σ²·ρ_ν(r/σ)` with `ρ_ν(u) = ((ν+1)/2)·ln(1 + u²/ν)` increases
+  with `σ`, towards the Gaussian's `(ν+1)r²/(2ν)`. The fit gain is a difference of two such
+  terms, so it can grow with `σ`. This happens when `M₁`'s extra coordinate explains an
+  outlier.
+* **A counterexample for the t.** Take `ν = 4`, `k = 1`, `c = 0`, `a = 20`. `M₀` leaves one
+  residual of 5 px; `M₁` removes it at the price of two residuals of 1 px. The t-evidence
+  accepts the constraint at `σ = 0.10` (`B = +5.5`) and refuses it at `σ = 0.38`
+  (`B = −0.5`). The Gaussian and Huber refuse it at both.
+* **Huber shares the failure, but only on outliers.** For an outlier,
+  `d/dσ[σ²ρ_H(r/σ)] = κ(|r| − κσ) > 0`, so Huber can fail the same way. Both failures need
+  `M₁` to fit an outlier, and that is the case the heavy tail exists to refuse.
+* **The choice.** Chain R uses Huber, with `κ` from the boundary chain's noise model.
+
+**Consequence: a `web` trace should need no more parameters than the clean one.** Five
+steps give it, with their limits:
+
+1. Each constraint is decided by its own evidence.
+2. On the same geometry, `accept_monotone` makes the accepted set at the clean noise level a
+   subset of the accepted set on `web`.
+3. The free-coordinate count is `n − rank` of the accepted constraints (R1.1), so it can only
+   fall.
+4. Blur changes the geometry itself: detail below the PSF (a corner's tip, a hairline) is
+   lost. The honest description drops it, which lowers the count further. Restoring what
+   blur removed is the prior's job: corners under a cover (milestone 1 below) and the
+   design grid.
+5. The argument is per constraint. It does not cover a greedy or joint search, it holds only
+   inside the regime, and it **needs an honest `σ`**.
+
+The last condition is the one that fails today. The engine reads one noise level per image,
+while the codec's error at an edge is twenty times the interior's ([`noise.md`](noise.md)).
+So the `χ²` term on `web` is inflated about 170×, constraints are refused for the wrong
+reason, and the count rises. The measured web ratios below show exactly that.
+
 ## R1. Constraints and free coordinates
 
 **Problem.** *In:* B4's map and a candidate structure (element kinds, segment kinds). *Out:*
@@ -1180,6 +1274,44 @@ parameters than windows), so the two chains agree on the cut.
    counted twice or not at all; B's partition rule (one boundary piece per window, single
    pixels elsewhere) suggests neither, and R relies on it.
 
+### Agreed in phase 2 (with the boundary chain)
+
+1. **Item 1 above is settled by arbitration.** The engine does not replicate any renderer.
+   It uses exact geometry plus a floor calibrated per image (straight, curved and stroke
+   components, with a correlated part along each edge), so `χ²/M ≈ 1` whatever made the
+   input. Grid and position tests use that floor.
+2. **`EdgeScorer`** (in `inkvec-core`, so `inkvec-fit` needs no `inkvec-trace`):
+   * It is built per edge from a `BoundaryLikelihood`.
+   * `windows_between_points(i, j)` takes point indices of `map.edges[e].points` and wraps
+     on a closed edge. Chain R maps its decimated and rotated indices back to these before
+     calling, and passes pieces in pixel coordinates (the fitter works in content units).
+   * The windows form a **partition**. Each window belongs to the span holding its centre and
+     is scored with that span's piece extended past the span's end. Windows given to corners
+     and junctions are a fixed set per edge. So the dynamic program's
+     `Σ chi2(span) + Σ chi2_local(corner)` covers a constant number of windows.
+   * `best_graph(r, degree)` is O(1) and feeds the inner loop. `chi2(r, pieces)` is
+     O(len r), used only to re-score each span's best few candidates.
+   * `weight_moments(r)` gives `Σ w·s^p` for `p ≤ 6`: the Fisher matrix of a graph of degree
+     at most 3, for the Occam term (A6).
+   * `Piece::from_svg_arc` converts an arc.
+3. **`NoiseModel`** (`inkvec_core::noise`, on `ColorTrace::noise`): `sigma_flat`,
+   `sigma_edge` by distance band, `psf_radius`, `psf_mu2`, `nu`, `lossy`, `window_scale`.
+   * `NoiseModel::clean()` is today's behaviour bit for bit, and on a clean intake the
+     estimator does not run.
+   * The boundary chain folds `sigma_edge` and `window_scale` into each edge's point sigmas,
+     only when the model is not clean. The fitter divides by those sigmas and scales nothing
+     itself.
+   * `huber_kappa(nu) = min(3, √nu)`, one definition for both chains.
+   * `explained_by_psf(width, colour, ink_a, ink_b)` is the ringing null.
+   * `psf_mu2` belongs to the forward model (`left_area`), not to the noise.
+   * The PSF's first moment, a global shift, is not identifiable from one image and is not
+     carried.
+4. **Where chain R reads the noise model.**
+   * The completion stage's junction zone uses `psf_radius`. It is 0 on a clean intake, so
+     nothing changes there.
+   * The fitter's robust loss uses `huber_kappa(nu)`.
+   * Extra prior weight comes only from measured noise, never from a flag (user directive).
+
 ## Phase 2: formal, code, measurement
 
 ### Lean (`formal/InkvecTheory`, a new `Design/` directory)
@@ -1261,6 +1393,94 @@ program and merges (R0.2, R2.1), with the style prior on segment kinds, on the b
 chain's window evaluator once it lands (the program over windows, answer 2 of the
 interface); (4) the encoder (R4.6): design unit, `H`/`V`/`S`, primitives after snapping,
 `<use>`; (5) the style variable (R3.5d).
+
+## Phase 2, milestone 1: layers and completion
+
+**What runs.** `crates/inkvec-cli/src/layers.rs`, in Quality mode between stacking and the
+seams; `INKVEC_COMPLETION=0` is the A/B switch. Faces are visited from the top down. For
+each opaque face with something painted over it, the stage proposes candidate shapes and
+keeps the cheapest one the checker certifies. The candidates are:
+
+* a circle, ellipse or rectangle through the boundary the face owns, or round its lower
+  bound;
+* the face's own rings with each covered run replaced: the corner of the owned lines either
+  side, a chord a margin under the cover, the run offset under the cover, a bulge, or a
+  **corner cut**.
+
+A corner cut drops a chamfer and extends its neighbouring lines to meet under the cover. A
+blur removes the tip of an acute corner, the fit writes what is left as one more segment,
+and under a cover the tip can be restored for free.
+
+**The bounds.**
+
+* **Upper bound:** `H = V ∪ U` exactly (no margin).
+* **Lower bound:** `L = V`, plus the half pixel under the cover that the underlap reached,
+  tapered over 12 px towards a third paint.
+* **`V` includes the seam.** A stroke can be drawn narrower than the face above's region in
+  the map. The gap between them is painted today by the lower face's underlap, so `V`
+  counts it as shown.
+* **Blurred inputs.** `L \ N ⊆ E ⊆ H ∪ N`, where `N` is the junction zone: discs of four PSF
+  radii round each junction, and only within one radius of the bounds. Its `psf_radius`
+  comes from the noise model and is 0 on a clean intake. A wedge of angle `θ` loses its tip
+  to a blur of radius `r` over `r/sin(θ/2)`, which is four radii at 29°.
+
+**What is certified, and what is trusted.**
+
+* **Checked.** The painter's interval is proved in Lean (`painter_interval_iff`,
+  `replace_in_interval`; the seam algebra in `seam_of_exact_outline` and
+  `junction_residue`). On every scan line the solver proposes, for each span of `L`, the
+  chain of spans of `E` that covers it, and for each span of `E` a chain of spans of `H`.
+  Each pair is accepted only by the generated interval kernels `span_within` and
+  `span_link` (`inkvec_verified::generated::design`), which are outward rounded and follow
+  `chain_cover` and `line_cover`. The slack is 0.1 px at each crossing. Neighbouring spans
+  may be bridged across a crack narrower than 0.2 px, which two regions computed from
+  different polygons leave where they meet. A refusal keeps the face as it was.
+* **Trusted.** The scan conversion of shapes into spans (flattened within 0.02 px, lines
+  0.25 px apart) and the region algebra that builds `V`, `U`, `L` and `H`.
+* **Known limit.** A horizontal edge that moves less than a line spacing is not seen by the
+  check. That is why the rectangle candidate puts each side on the face's own vertices when
+  one lies that close, and falls back to the sampled box only when that fails.
+
+**Canary** (`openmoji/1F3F4-E0069-E0074-E0062-E0061-E007F`, artist 20 parameters):
+
+| tier | completion off | completion on |
+|---|---|---|
+| 512ss | 54 | 20 |
+| 512ssop | — | 26 (20, plus the white page as a `rect`) |
+| web | 112 | 68 |
+| web, sigma ×2 | 60 | 38 |
+
+On `web` the two triangles keep a chamfer at each acute corner. Under the honest `σ` the
+fit writes each as a pentagon, two vertices more per corner. The corner cut would remove
+them, but at those tips the blurred junction gave a sliver of the cyan face below to the
+planar map. Completing the tip would paint over that sliver, so the exact interval refuses
+it. The junction zone `N` is what allows it once `psf_radius` arrives.
+
+**Design statistics** (`bench/theory/design_stats.py`, 246 screen icons, quality mode):
+
+| | gate/icon | line | cubic | arc | axis exact | axis ≤ 0.5° | 45° | other angle | on design grid | half px | ties |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| artist | 367 | 0.290 | 0.669 | 0.040 | 0.504 | 0.019 | 0.039 | 0.423 | 0.184 | 0.140 | 0.533 |
+| trace 512ssop | 373 | 0.608 | 0.198 | 0.194 | 0.100 | 0.084 | 0.005 | 0.795 | 0.100 | 0.169 | 0.456 |
+| trace web | 415 | 0.717 | 0.211 | 0.072 | 0.045 | 0.077 | 0.001 | 0.863 | 0.059 | 0.121 | 0.508 |
+
+The angle shares are of lines. Primitive elements are 10 % of the artist's elements and 25 %
+of a trace's. The traces are not yet written the way the artists draw:
+
+* **Angles.** The artists put half of their lines on an axis; a trace puts 10 %, and 4.5 % on
+  `web`. Another 8 % of a trace's lines lie within half a degree of an axis: these are the
+  axis constraints of milestone 2.
+* **Grid.** A trace puts half as many numbers on the design grid as the artist, and a third
+  as many on `web`.
+* **`web` against clean.** The gap widens on every count. The trace moves toward lines in
+  general directions, which is the noise-chasing of an under-estimated `σ` (R0.8).
+* **Counts by family.**
+  * noto-emoji falls to 850 per icon on `web` from 1059 clean (artist 1066): the blur hides
+    detail.
+  * openmoji rises to 856 from 347 (artist 323). Its inks multiply on `web` (one icon has
+    49 elements against 7 clean), which is the front end's palette under noise and belongs
+    to that agent.
+  * lucide rises to 72 from 54 (artist 40).
 
 ## Where the present code stands
 

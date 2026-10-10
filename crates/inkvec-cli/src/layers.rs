@@ -23,7 +23,7 @@
 //! three (R4.1b of the chain page). The inputs are renders of the artists' own layered
 //! files, which have exactly that mix wherever the artist layered (a face's disc under a
 //! shading crescent that reaches its rim), so the upper bound is the exact interval `V ∪ U`
-//! ([`allowed_region`]; `INKVEC_LAYERS_MARGIN` shrinks the cover for an experiment), and
+//! ([`allowed_region`], with a margin [`MARGIN`] of zero), and
 //! the candidates try first to reach [`REACH`] under the cover, which keeps their edge out
 //! of the cover's own anti-aliasing where there is room.
 //!
@@ -45,7 +45,7 @@
 //! lies under what covers it. Everything else is as before.
 //!
 //! **Where it sits.** Inside [`crate::emit::emit_color`], after the first writing pass (which
-//! fixes the paint ranks) and before the seams: Quality mode, unless `INKVEC_LAYERS=0`.
+//! fixes the paint ranks) and before the seams: Quality mode, unless `INKVEC_COMPLETION=0`.
 //!
 //! Not from the literature in this form; the closest are layered vectorisers that recover
 //! occluded shapes by generative inpainting (LayerPeeler, AmodalSVG; `docs/DESIGN.md` §2.4),
@@ -72,13 +72,9 @@ pub(crate) use shape::{EndCap, JoinKind};
 /// cover's anti-aliased pixels have the completed face under them and not the ground.
 pub(crate) const REACH: f64 = 1.0;
 
-/// The cover shrunk by this much, px, before it bounds a completion (`INKVEC_LAYERS_MARGIN`,
-/// default 0: the exact interval).
-fn margin() -> f64 {
-    inkvec_core::env::number("INKVEC_LAYERS_MARGIN")
-        .filter(|v| *v >= 0.0)
-        .unwrap_or(0.0)
-}
+/// The cover shrunk by this much, px, before it bounds a completion: none, the exact
+/// interval (measured against 0.5 px in phase 2 of chain R: no gain at any condition).
+const MARGIN: f64 = 0.0;
 
 /// How far around a face the cover is read, px.
 const PAD: f64 = 8.0;
@@ -87,14 +83,15 @@ const PAD: f64 = 8.0;
 /// the junction taper of the lower bound.
 const WINDOW: f64 = 3.0;
 
-/// Whether every candidate's verdict is printed (`INKVEC_LAYERS_DEBUG=2`).
+/// Whether every candidate's verdict is printed (`INKVEC_COMPLETION_DEBUG=2`; `1` prints
+/// one summary line per trace).
 fn trace() -> bool {
-    inkvec_core::env::number("INKVEC_LAYERS_DEBUG").is_some_and(|v| v >= 2.0)
+    inkvec_core::env::number("INKVEC_COMPLETION_DEBUG").is_some_and(|v| v >= 2.0)
 }
 
-/// Whether the stage runs: on, unless `INKVEC_LAYERS=0`.
+/// Whether the stage runs: on, unless `INKVEC_COMPLETION=0` (the A/B switch).
 pub(crate) fn enabled() -> bool {
-    inkvec_core::env::number("INKVEC_LAYERS").is_none_or(|v| v != 0.0)
+    inkvec_core::env::number("INKVEC_COMPLETION").is_none_or(|v| v != 0.0)
 }
 
 /// A stroke painted over every face ([`crate::ribbons`]): its centrelines, width and ends.
@@ -135,6 +132,9 @@ pub(crate) struct Input<'a> {
     pub(crate) cost_now: &'a dyn Fn(usize) -> f64,
     /// Strokes painted over every face.
     pub(crate) strokes: &'a [StrokeShape],
+    /// The faces those strokes are written for: their regions in the map lie above every
+    /// face, though the stroke drawn for one may be narrower than its region.
+    pub(crate) stroke_faces: &'a [usize],
     /// Decimals per written coordinate.
     pub(crate) decimals: usize,
     /// The input's blur beyond a clean render's, px: the noise model's `psf_radius` (0 on a
@@ -324,6 +324,12 @@ pub(crate) fn complete(inp: &Input) -> HashMap<usize, Completion> {
     painted.sort_by_key(|&f| std::cmp::Reverse(inp.rank[f]));
     let regions: HashMap<usize, Region> = painted.iter().map(|&f| (f, face_region(inp, f))).collect();
     let mut above = stroke_cover(inp.strokes);
+    // What the faces above cover in the map, as against what they paint (`above`): where
+    // the two differ next to a face, its underlap painted the gap, and so must its completion.
+    let mut map_above = inp
+        .stroke_faces
+        .iter()
+        .fold(Region::empty(), |acc, &s| acc.union(&face_region(inp, s)));
     let junctions = if inp.psf > 0.0 { junction_points(inp.fitted) } else { Vec::new() };
     let mut i = 0;
     while i < painted.len() {
@@ -334,7 +340,7 @@ pub(crate) fn complete(inp: &Input) -> HashMap<usize, Completion> {
         }
         for &f in &painted[i..j] {
             if inp.candidate.get(f).copied().unwrap_or(false) {
-                if let Some(c) = complete_face(inp, f, &regions[&f], &above, &junctions) {
+                if let Some(c) = complete_face(inp, f, &regions[&f], &above, &map_above, &junctions) {
                     out.insert(f, c);
                 }
             }
@@ -342,6 +348,7 @@ pub(crate) fn complete(inp: &Input) -> HashMap<usize, Completion> {
         for &f in &painted[i..j] {
             if inp.covers.get(f).copied().unwrap_or(false) {
                 above = above.union(&regions[&f]);
+                map_above = map_above.union(&regions[&f]);
             }
         }
         i = j;
@@ -355,6 +362,7 @@ fn complete_face(
     f: usize,
     e_now: &Region,
     above: &Region,
+    map_above: &Region,
     junctions: &[Point],
 ) -> Option<Completion> {
     let (x0, y0, x1, y1) = e_now.bbox()?;
@@ -362,11 +370,19 @@ fn complete_face(
     if u.is_empty() || e_now.dilate(0.75).intersect(&u).area() < 0.5 {
         return None;
     }
-    let v = e_now.minus(&u);
+    // What the face shows: its own region outside the cover, and the seam between its region
+    // and a cover drawn narrower than the face above's region in the map, which the face's
+    // underlap paints today.
+    let gap = e_now
+        .dilate(UNDER)
+        .intersect(&map_above.crop(x0 - PAD, y0 - PAD, x1 + PAD, y1 + PAD))
+        .minus(&u)
+        .minus(e_now);
+    let v = e_now.minus(&u).union(&gap);
     if v.area() < 1.0 {
         return None;
     }
-    let mut h = allowed_region(e_now, &v, &u, margin());
+    let mut h = allowed_region(e_now, &v, &u, MARGIN);
     let mut l = required_region(&v, &u);
     // Near a junction of a blurred input the interval holds off a zone `N` the blur leaves
     // unidentified, and only within one blur radius of the interval's own ends:
@@ -399,7 +415,7 @@ fn complete_face(
             eprintln!(
                 "layers face {f}: {} -> {after}: lost {:.3} spilled {:.3} certified {certified}",
                 match &shape {
-                    Shape::Prim(k) => format!("{k:?}").chars().take(40).collect::<String>(),
+                    Shape::Prim(k) => format!("{k:?}").chars().take(140).collect::<String>(),
                     Shape::Path(_) => "path".to_string(),
                 },
                 m.lost,
@@ -437,30 +453,36 @@ fn complete_face(
             }
         }
     }
-    // The rectangle round what the face shows. The region's box is exact across a scan line
-    // but known along it only to a line's spacing, so each side is put on the face's own
-    // geometry when a vertex lies that close.
-    if let Some((vx0, vy0, vx1, vy1)) = v.bbox() {
-        let pts: Vec<Point> = face_rings(inp, f).into_iter().flatten().collect();
-        let snap = |t: f64, of: fn(&Point) -> f64| -> f64 {
-            pts.iter()
-                .map(of)
-                .filter(|q| (q - t).abs() <= region::DY)
-                .min_by(|a, b| (a - t).abs().total_cmp(&(b - t).abs()))
-                .unwrap_or(t)
+    // The rectangle round what the face shows. A region's box is exact across a scan line
+    // but known along it only to a line's spacing, so first each side is put on the face's
+    // own geometry when a vertex lies that close, then on the box as sampled.
+    // The box of the lower bound comes first: what the face shows with its reach under the
+    // cover, and nothing round the sides that meet no cover.
+    let pts: Vec<Point> = face_rings(inp, f).into_iter().flatten().collect();
+    let snap = |t: f64, of: fn(&Point) -> f64| -> f64 {
+        pts.iter()
+            .map(of)
+            .filter(|q| (q - t).abs() <= region::DY)
+            .min_by(|a, b| (a - t).abs().total_cmp(&(b - t).abs()))
+            .unwrap_or(t)
+    };
+    for (b, grow) in [(l.bbox(), &[0.0][..]), (v.bbox(), &[REACH, 0.5, 0.0][..])] {
+        let Some((bx0, by0, bx1, by1)) = b else {
+            continue;
         };
-        let (vx0, vx1) = (snap(vx0, |q| q.x), snap(vx1, |q| q.x));
-        let (vy0, vy1) = (snap(vy0, |q| q.y), snap(vy1, |q| q.y));
-        for e in [REACH, 0.5, 0.0] {
-            let kind = PrimitiveKind::RoundRect {
-                x: vx0 - e,
-                y: vy0 - e,
-                w: vx1 - vx0 + 2.0 * e,
-                h: vy1 - vy0 + 2.0 * e,
-                rx: 0.0,
-            };
-            if let Some(reg) = bounded_region(&[shape::flatten_primitive(&kind)], hb) {
-                consider(Shape::Prim(kind), 6.0, 0.0, &reg);
+        let snapped = (snap(bx0, |q| q.x), snap(by0, |q| q.y), snap(bx1, |q| q.x), snap(by1, |q| q.y));
+        for (vx0, vy0, vx1, vy1) in [snapped, (bx0, by0, bx1, by1)] {
+            for &e in grow {
+                let kind = PrimitiveKind::RoundRect {
+                    x: vx0 - e,
+                    y: vy0 - e,
+                    w: vx1 - vx0 + 2.0 * e,
+                    h: vy1 - vy0 + 2.0 * e,
+                    rx: 0.0,
+                };
+                if let Some(reg) = bounded_region(&[shape::flatten_primitive(&kind)], hb) {
+                    consider(Shape::Prim(kind), 6.0, 0.0, &reg);
+                }
             }
         }
     }
@@ -469,14 +491,14 @@ fn complete_face(
     if let Some((d, reg, allow)) = &simplified {
         consider(Shape::Path(d.clone()), gate_count(d), *allow, reg);
     }
-    if inkvec_core::env::number("INKVEC_LAYERS_DUMP").is_some_and(|x| x as usize == f) {
+    if inkvec_core::env::number("INKVEC_COMPLETION_DUMP").is_some_and(|x| x as usize == f) {
         dump(f, &[(&u, [90, 90, 200]), (&v, [200, 200, 90]), (&l.minus(&v), [90, 200, 90])],
              simplified.as_ref().map(|s| &s.1), (x0 - PAD, y0 - PAD, x1 + PAD, y1 + PAD));
     }
     best
 }
 
-/// Debugging (`INKVEC_LAYERS_DUMP=<face>`): the regions as colours, the candidate's edge in
+/// Debugging (`INKVEC_COMPLETION_DUMP=<face>`): the regions as colours, the candidate's edge in
 /// red, eight pixels per pixel, written to `layers-<face>.ppm` in the working directory.
 fn dump(f: usize, layers: &[(&Region, [u8; 3])], cand: Option<&Region>, b: (f64, f64, f64, f64)) {
     const S: f64 = 8.0;

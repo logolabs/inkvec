@@ -1329,6 +1329,7 @@ fn complete_layers(
         }
     };
     let strokes: Vec<crate::layers::StrokeShape> = doc.ribbons.shapes.values().cloned().collect();
+    let stroke_faces: Vec<usize> = doc.ribbons.shapes.keys().copied().collect();
     let done = crate::layers::complete(&crate::layers::Input {
         order: doc.order,
         fitted: doc.fitted,
@@ -1340,10 +1341,11 @@ fn complete_layers(
         candidate: &candidate,
         cost_now: &cost_now,
         strokes: &strokes,
+        stroke_faces: &stroke_faces,
         decimals,
         psf: 0.0,
     });
-    if inkvec_core::env::number("INKVEC_LAYERS_DEBUG").is_some_and(|v| v != 0.0) {
+    if inkvec_core::env::number("INKVEC_COMPLETION_DEBUG").is_some_and(|v| v != 0.0) {
         let (b, a): (f64, f64) = done.values().map(|c| (c.before, c.after)).fold((0.0, 0.0), |s, c| (s.0 + c.0, s.1 + c.1));
         eprintln!("layers: {} face(s) completed, {b:.0} -> {a:.0} parameters", done.len());
     }

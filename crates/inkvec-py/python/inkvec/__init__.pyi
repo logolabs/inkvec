@@ -73,7 +73,7 @@ def trace(
     harmonize_threshold: float = 0.92,
     mode: str = "quality",
     hypotheses: bool = False,
-    detect_strokes: bool = False,
+    detect_strokes: bool = True,
     merge_colors: str = "",
 ) -> Traced:
     """Trace an image to SVG.
@@ -188,7 +188,8 @@ def trace(
             -- and write each as a stroked path (fill none, one stroke-width) where that
             describes the face's measured boundary in fewer numbers than its filled
             outline, at a fit as good within the measurement noise. Line icons come back
-            at about the artist's own parameter count. Quality mode only; off by
+            at about the artist's own parameter count, and a ring on a plain page as one
+            stroke over the page rather than two discs. Quality mode only; on by
             default.
         merge_colors:
             Colour groups: fills to draw as one, so the shapes between them join rather
@@ -230,7 +231,7 @@ def trace_rgba(
     harmonize_threshold: float = 0.92,
     mode: str = "quality",
     hypotheses: bool = False,
-    detect_strokes: bool = False,
+    detect_strokes: bool = True,
     merge_colors: str = "",
 ) -> Traced:
     """Trace raw straight-RGBA8 pixels (row-major, tightly packed) to SVG.
@@ -346,7 +347,8 @@ def trace_rgba(
             -- and write each as a stroked path (fill none, one stroke-width) where that
             describes the face's measured boundary in fewer numbers than its filled
             outline, at a fit as good within the measurement noise. Line icons come back
-            at about the artist's own parameter count. Quality mode only; off by
+            at about the artist's own parameter count, and a ring on a plain page as one
+            stroke over the page rather than two discs. Quality mode only; on by
             default.
         merge_colors:
             Colour groups: fills to draw as one, so the shapes between them join rather

@@ -240,7 +240,7 @@ differently.
 
 `crates/inkvec-cli/src/mirror_fit.rs` fits such a boundary on one side of the axis and
 reflects the result. `pipeline::fit_boundaries` calls `mirror_fit::choose`
-(`crates/inkvec-cli/src/pipeline.rs:726-735`) for every edge `self_mirrors` names:
+(`crates/inkvec-cli/src/pipeline.rs:725-734`) for every edge `self_mirrors` names:
 
 1. **The ordinary fit, when it is already symmetric** (every anchor's reflection is an
    anchor, to 1e-6 px; `choose`, `mirror_fit.rs:217-236`). The program finds the

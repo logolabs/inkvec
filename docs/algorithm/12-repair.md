@@ -10,7 +10,7 @@ per-boundary sibling), `crates/inkvec-fit/src/multimodel.rs` (`optimal_multimode
 and `optimal_multimodel_forced`, the constrained DP)
 **Entry point:** `repair_ring_crossings()` (`crates/inkvec-cli/src/rings.rs:276`)
 **Pipeline position:** after curve fitting (stage 11), before fill assignment (stage mark
-`"fills"`). Stage mark `"repair"` (`crates/inkvec-cli/src/pipeline.rs:504`).
+`"fills"`). Stage mark `"repair"` (`crates/inkvec-cli/src/pipeline.rs:503`).
 
 ## What problem this solves
 
@@ -56,7 +56,7 @@ unit the defect can be seen in at all.
 inverts" — the strongest statement in the source is that a self-crossing ring is "invalid,
 resolved arbitrarily by whichever fill rule applies, and unpleasant to edit"
 (`simple.rs:24`, restated in `crates/inkvec-fit/tests/self_intersection.rs:5-7` and in `repair_fits`'s doc,
-`crates/inkvec-cli/src/pipeline.rs:837-842`). The mechanism behind that arbitrariness is this
+`crates/inkvec-cli/src/pipeline.rs:836-841`). The mechanism behind that arbitrariness is this
 document's reading of the fill rules (SVG 1.1 §11.3), not a code comment. Since 2026-10 the
 emitter winds every ring of a compound path by its nesting depth and writes no `fill-rule`, so
 the default `nonzero` rule paints exactly what `evenodd` would; `fill-rule="evenodd"` remains
@@ -335,7 +335,7 @@ changes."
 
 ### Where repair sits in the pipeline
 
-`repair_fits` (`crates/inkvec-cli/src/pipeline.rs:834-920`), the call site itself; its doc,
+`repair_fits` (`crates/inkvec-cli/src/pipeline.rs:833-919`), the call site itself; its doc,
 verbatim (`pipeline.rs:837-842`):
 
 > "A self-crossing boundary is invisible to the objective — both curves pass through

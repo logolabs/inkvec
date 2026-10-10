@@ -496,6 +496,45 @@ fn pipeline_with_detect_strokes_and_use_symbols() {
     assert!(!t.svg.is_empty());
 }
 
+/// A black ring of width 10 round a white middle, on a white page: anti-aliased by 4x4
+/// supersampling.
+fn ring_on_white() -> Rgba {
+    image(128, 128, |x, y| {
+        let mut ink = 0.0;
+        for sy in 0..4 {
+            for sx in 0..4 {
+                let (px, py) = (
+                    x as f32 + (sx as f32 + 0.5) / 4.0,
+                    y as f32 + (sy as f32 + 0.5) / 4.0,
+                );
+                let r = ((px - 64.0).powi(2) + (py - 64.0).powi(2)).sqrt();
+                if (r - 36.0).abs() <= 5.0 {
+                    ink += 1.0 / 16.0;
+                }
+            }
+        }
+        let v = 1.0 - ink;
+        [v, v, v, 1.0]
+    })
+}
+
+#[test]
+fn a_ring_on_white_becomes_one_stroke_and_its_middle_leaves_with_it() {
+    let args = Args {
+        detect_strokes: true,
+        ..Args::default()
+    };
+    let svg = traced_svg(ring_on_white(), &args);
+    assert!(
+        svg.contains("stroke=\"#000000\"") || svg.contains("stroke=\"#000\""),
+        "{svg}"
+    );
+    // The page and the stroke: the white middle is the page showing through, not a white
+    // disc painted over a black one.
+    assert_eq!(svg.matches("fill=\"#fff").count(), 1, "{svg}");
+    assert_eq!(shapes(&svg), 2, "{svg}");
+}
+
 #[test]
 fn pipeline_with_layers() {
     let img = image(64, 64, |x, y| {

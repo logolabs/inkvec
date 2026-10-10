@@ -1,4 +1,4 @@
-//! Stroke-drawn faces as centrelines plus one width (`--detect-strokes`, off by default).
+//! Stroke-drawn faces as centrelines plus one width (`Options::detect_strokes`, on by default in Quality mode).
 //!
 //! **The problem.** Line art (lucide entirely, openmoji's black outlines, much of every
 //! icon set) is drawn as centrelines `C` with one stroke width `w` and round caps and
@@ -62,8 +62,8 @@
 //! empty margin, row-major.
 //!
 //! **Where it sits.** Quality mode only, after the boundary fits, the crossing repair and
-//! the mirrors, before the emitter; off unless `--detect-strokes`
-//! (`Options::detect_strokes`) asks for it.
+//! the mirrors, before the emitter; on by default (`Options::detect_strokes`,
+//! `--no-detect-strokes` to switch it off).
 //!
 //! The literature each pass stands on is cited in that pass's module.
 
@@ -319,13 +319,17 @@ pub enum Decline {
 /// sigma, px. `budget` is the parameter count the strokes must stay under to be worth
 /// anything (the caller's: what the outline costs); a hypothesis whose fitted
 /// centrelines already reach it before the solve is abandoned, since the solve never
-/// removes parameters and its splits only add them. Returns the stroke description with
-/// its score; whether it is *better* than the outline is the caller's decision.
+/// removes parameters and its splits only add them. `chi2_cap` gives, for the face's
+/// number of boundary points, the chi-squared the strokes may reach and still be worth
+/// anything (the caller's fidelity bound): the solve's merges stay under it. Returns the
+/// stroke description with its score; whether it is *better* than the outline is the
+/// caller's decision.
 pub fn fit_face(
     rings: &[Polyline],
     mask: &FaceMask,
     cfg: &FitConfig,
     budget: f64,
+    chi2_cap: &dyn Fn(usize) -> f64,
 ) -> Result<Ribbon, Decline> {
     let mut b =
         boundary::Boundary::new(rings, &|p| mask.contains(p), 2.0).ok_or(Decline::NoBoundary)?;
@@ -345,6 +349,7 @@ pub fn fit_face(
         mask,
         w0,
         share,
+        chi2_cap: chi2_cap(b.len()),
     };
     let round = hypothesis(&face, cfg, budget, Join::Round.into());
     // A round fit that leaves a boundary point more than a quarter pixel out is also tried
@@ -466,6 +471,8 @@ struct Face<'a> {
     w0: f64,
     /// The share of the boundary that paired at it.
     share: f64,
+    /// The chi-squared the strokes may reach ([`fit_face`]).
+    chi2_cap: f64,
 }
 
 /// One hypothesis of a face's strokes: topology read with `join`'s rules
@@ -567,7 +574,15 @@ fn reading(
         return Err(Decline::Misfit { rms: pre.rms });
     }
     let (lines, half) = {
-        let (l, h) = refine::solve_adaptive(&lines, 0.5 * w0, b, cfg.lambda, style, budget);
+        let (l, h) = refine::solve_adaptive(
+            &lines,
+            0.5 * w0,
+            b,
+            cfg.lambda,
+            style,
+            budget,
+            face.chi2_cap,
+        );
         (l, Some(h))
     };
     if !refine::drawable(&lines, style) {
@@ -791,7 +806,7 @@ mod tests {
         let bb = FaceMask::bounding_boxes(&labels, 64, 64, 2);
         let mask = FaceMask::from_labels(&labels, 64, 1, bb[1].expect("ink"));
         let cfg = FitConfig::from_precision(64.0, 0.1, 2.0);
-        let r = fit_face(&rings, &mask, &cfg, f64::INFINITY).expect("a stroke");
+        let r = fit_face(&rings, &mask, &cfg, f64::INFINITY, &|_| f64::INFINITY).expect("a stroke");
         assert!((r.width - 8.0).abs() < 0.05, "width {}", r.width);
         assert_eq!(r.lines.len(), 1);
         let p = &r.lines[0].path;
@@ -832,7 +847,8 @@ mod tests {
         let bb = FaceMask::bounding_boxes(&labels, n, n, 2);
         let mask = FaceMask::from_labels(&labels, n, 1, bb[1].expect("ink"));
         let cfg = FitConfig::from_precision(64.0, 0.1, 2.0);
-        let r = fit_face(&[ring], &mask, &cfg, f64::INFINITY).expect("a stroke");
+        let r =
+            fit_face(&[ring], &mask, &cfg, f64::INFINITY, &|_| f64::INFINITY).expect("a stroke");
         assert_eq!(r.cap, Cap::Butt, "{r:?}");
         assert!((r.width - 9.0).abs() < 0.1, "width {}", r.width);
         let p = &r.lines[0].path;
@@ -868,7 +884,7 @@ mod tests {
         let bb = FaceMask::bounding_boxes(&labels, n, n, 2);
         let mask = FaceMask::from_labels(&labels, n, 1, bb[1].expect("ink"));
         let cfg = FitConfig::from_precision(40.0, 0.1, 2.0);
-        assert!(fit_face(&[ring], &mask, &cfg, f64::INFINITY).is_err());
+        assert!(fit_face(&[ring], &mask, &cfg, f64::INFINITY, &|_| f64::INFINITY).is_err());
     }
 
     #[test]

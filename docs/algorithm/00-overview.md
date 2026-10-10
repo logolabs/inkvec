@@ -109,10 +109,10 @@ each timed by the `Stopwatch` (`crates/inkvec-trace/src/lib.rs:1228`, `mark` at 
 | `decode` | `crates/inkvec-trace/src/lib.rs:1189` (`decode::decode_faces` :1178) | decode | order-first colour/geometry fix for faces too thin to own a fully-covered pixel; off unless `INKVEC_DECODE` (*research build*) is set |
 | `symmetry` | `crates/inkvec-trace/src/lib.rs:1199` (`symmetry::enforce` :1197) | symmetry enforce | put back the exactness every upstream tie-break quietly broke |
 | — | `crates/inkvec-cli/src/pipeline.rs:255` (`trace_total`) | — | end of the `inkvec_trace` half |
-| — | `crates/inkvec-cli/src/pipeline.rs:495` (`fit_dp`) | curve fit | one global DP per boundary over lines, cubics and arcs, MDL cost; a whole-boundary primitive is offered beside it and taken when it costs less (`inkvec_fit::choice`) |
-| — | `crates/inkvec-cli/src/pipeline.rs:504` (`repair`) | repair | close self-crossing rings the independent per-edge fits can produce |
+| — | `crates/inkvec-cli/src/pipeline.rs:494` (`fit_dp`) | curve fit | one global DP per boundary over lines, cubics and arcs, MDL cost; a whole-boundary primitive is offered beside it and taken when it costs less (`inkvec_fit::choice`) |
+| — | `crates/inkvec-cli/src/pipeline.rs:503` (`repair`) | repair | close self-crossing rings the independent per-edge fits can produce |
 | — | `crates/inkvec-cli/src/pipeline.rs:396` (`fills`) | fills | per-face fill model already chosen upstream; a gradient whose every stop lies within a just-noticeable difference of every other is painted flat (`pipeline/demote.rs`) |
-| — | `crates/inkvec-cli/src/pipeline.rs:446` (`emit`) | emit | fitted geometry to SVG text, each ring wound by nesting depth so no `fill-rule` is needed; layers vs. flat form costed against each other |
+| — | `crates/inkvec-cli/src/pipeline.rs:445` (`emit`) | emit | fitted geometry to SVG text, each ring wound by nesting depth so no `fill-rule` is needed; layers vs. flat form costed against each other |
 | — | `crates/inkvec-cli/src/post.rs` | post | viewBox retarget, background knock-out, margin, minify |
 
 Fast mode (`--mode fast`) takes another route through the same table. Its front end
@@ -164,7 +164,7 @@ edge to move.
 `Edge.sigma` is the per-point positional uncertainty from the coverage inversion, carried
 all the way to the curve fitter; `Edge.left` / `Edge.right` are face ids, `u16::MAX` when an
 edge has been merged into the interior of a layer and no longer belongs to any ring
-(`merge_map`, `crates/inkvec-cli/src/pipeline.rs:1111-1126`).
+(`merge_map`, `crates/inkvec-cli/src/pipeline.rs:1110-1125`).
 
 ## Reading order
 
@@ -173,7 +173,8 @@ the SR pre-pass, resolution-invariant tolerances, alpha matting. Stages 02 onwar
 per the pipeline table above) go module by module through `inkvec-trace` and `inkvec-fit`.
 `14-fast-mode.md` then covers Fast mode: which of those stages it replaces, which it shares,
 and how each of its own stages works. `15-strokes.md` covers the optional stroke stage
-(`--detect-strokes`, off by default), which writes faces drawn as strokes as stroked paths.
+(on by default in Quality mode, `--no-detect-strokes` to switch it off), which writes faces
+drawn as strokes as stroked paths.
 `constants.md` collects every named constant across the tree in one table.
 
 ## `docs/DESIGN.md` against the code as it stands
@@ -217,7 +218,7 @@ disagreements are where the real design lives:
   descriptions costs less under the shared MDL cost (`choice::choose`,
   `crates/inkvec-fit/src/choice.rs:211-226`). That is model *selection between* two fits,
   not primitives as states inside one DP. `choice::describe` (called per boundary from
-  `fit_boundaries`, `crates/inkvec-cli/src/pipeline.rs:720`) also orders the work: for
+  `fit_boundaries`, `crates/inkvec-cli/src/pipeline.rs:719`) also orders the work: for
   the image frame it tries the rectangle first and skips the dynamic program when the
   rectangle is below a lower bound on any fitted path (`choice::cost_floor`); for every
   other boundary it runs the program and the primitive search side by side under
@@ -230,7 +231,7 @@ disagreements are where the real design lives:
 * **S5, structured refinement with topology not frozen.** DESIGN.md §S5 explicitly reverses
   an earlier decision to freeze topology during polish, arguing for a structured move set
   searched to convergence. The code has gone the other way again: `repair_fits`
-  (`crates/inkvec-cli/src/pipeline.rs:852-920`) records that both `polish` (per-cubic control-point refinement against the coverage
+  (`crates/inkvec-cli/src/pipeline.rs:851-919`) records that both `polish` (per-cubic control-point refinement against the coverage
   field) and the "adjudication" re-scoring stage were *removed*, with a measured result —
   "removing them takes the objective from 0.5477 to 0.4960 and dE00 from 0.2503 to 0.2146...
   Polish alone made 197 of 246 better by not running." The stated reason is that
@@ -244,7 +245,7 @@ disagreements are where the real design lives:
   geometry moves: it runs beside the sub-pixel refinement's measuring phase, which writes
   nothing to the map until detection has returned), and enforces it twice more downstream —
   once on the map (`symmetry::enforce`, `trace/lib.rs:1197`) and once on the fitted curves, by reflecting one boundary's fit onto
-  its mirror rather than re-solving both (`apply_mirrors`, `crates/inkvec-cli/src/pipeline.rs:947`). That is "detect once,
+  its mirror rather than re-solving both (`apply_mirrors`, `crates/inkvec-cli/src/pipeline.rs:946`). That is "detect once,
   then copy," which is cheaper and exact by construction, but it is a different design from
   "enforced as a constraint during re-optimisation."
 * **§0 governing directive ("best algorithm at every stage, even substantially slower").**
@@ -272,6 +273,6 @@ disagreements are where the real design lives:
   `crates/inkvec-fit/examples/primitives_demo.rs`, `crates/inkvec-fit/tests/multimodel.rs`,
   `crates/inkvec-fit/tests/primitives.rs` — that exercise the line-then-cubic fit directly.
   The CLI pipeline instead calls `multimodel::optimal_multimodel`
-  (`crates/inkvec-cli/src/pipeline.rs:729`, and `optimal_multimodel_without_structural` at
+  (`crates/inkvec-cli/src/pipeline.rs:728`, and `optimal_multimodel_without_structural` at
   `:766` for the research baseline) directly. `fit_path` exists for
   examples and tests, not as part of the shipped trace.

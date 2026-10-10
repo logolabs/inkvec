@@ -92,8 +92,8 @@ pub mod planar;
 pub mod regions;
 pub mod regroup;
 pub mod regularize;
-// Stroke-drawn faces as centrelines plus one width, behind `--detect-strokes`
-// (`Options::detect_strokes`) in the CLI's colour pipeline.
+// Stroke-drawn faces as centrelines plus one width, in the CLI's colour pipeline
+// (`Options::detect_strokes`, on by default).
 pub mod ribbon;
 pub mod softness;
 pub mod symmetry;

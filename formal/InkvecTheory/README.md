@@ -68,6 +68,8 @@ Toolchain and Mathlib are pinned in `lean-toolchain` and `lake-manifest.json`
 | `Noise` | `strip_unbiased`, `strip_variance` | zero-mean pixel noise leaves the column sum unbiased, variance `k·σ²` | `strip.rs` |
 | `Noise` | `face_value_noise`, `point_from_means_noise` | the face value has noise gain `25/36`, the point correction `113/96` | `strip.rs` |
 | `Supersampling` | `subCount_close`, `ss_column_sum_close` | under `n × n` point supersampling the column sum is the `n`-point midpoint rule of the boundary to within `1/(2n)` px | the 8x8 corpus of `bench/ci_gate.py` |
+| `Naturality` | `natural_model_closer`, `natural_model_gain` | **a merge that keeps the truth drawable never costs fidelity**: least squares onto `K ≤ L` with the truth in `K` is at least as close to it for every noise, by exactly the noise in the removed directions | `ribbon/refine/merge.rs` |
+| `Naturality` | `merge_chi2_increase`, `noise_absorbed` | the merge raises the residual by that noise and nothing else; each model dimension keeps one unit of noise variance (`Σᵢ ‖P bᵢ‖² = dim K`), so every surplus parameter costs `σ²` of squared error | the description-length price `λ` per parameter |
 
 ## What is new, and what is not
 

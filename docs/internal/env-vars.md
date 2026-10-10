@@ -69,7 +69,7 @@ No name from an unmerged research branch is listed: only what the code in this t
 | variable | type | default | read at | set by (outside the source) | what / why |
 |---|---|---|---|---|---|
 | `INKVEC_ABSDBG` | flag | off | crates/inkvec-trace/src/regions.rs:788 | docs/algorithm/04-regions.md | sliver-absorption rejections. |
-| `INKVEC_ALPHADBG` | flag | off | crates/inkvec-cli/src/alpha.rs:1030, crates/inkvec-cli/src/emit.rs:628 | docs/algorithm/01-intake.md, docs/algorithm/13-emit.md | alpha / layer / emit face dump. |
+| `INKVEC_ALPHADBG` | flag | off | crates/inkvec-cli/src/alpha.rs:1030, crates/inkvec-cli/src/emit.rs:639 | docs/algorithm/01-intake.md, docs/algorithm/13-emit.md | alpha / layer / emit face dump. |
 | `INKVEC_BOPT` | switch | on | crates/inkvec-cli/examples/neural_trace.rs:246, crates/inkvec-trace/src/boundary_opt.rs:606 | CHANGELOG.md, bench/ablate.py, bench/spikes.py, docs/BINDINGS.md, docs/algorithm/08-boundary-solve.md, tools/quality_audit/REPORT-2026-09-26.md | `0` skips the global boundary solve. bench/ablate.py and bench/spikes.py price the stage with it. |
 | `INKVEC_BOPTDBG` | flag | off | crates/inkvec-trace/src/boundary_opt.rs:645 | docs/algorithm/08-boundary-solve.md, tools/quality_audit/REPORT-2026-09-26.md | boundary-solve iteration trace. |
 | `INKVEC_DEBUG_FIT` | flag | off | crates/inkvec-fit/src/lib.rs:1109 | nothing | line-vs-cubic run decisions in the fitter. |
@@ -77,7 +77,7 @@ No name from an unmerged research branch is listed: only what the code in this t
 | `INKVEC_DPDBG` | flag | off | crates/inkvec-fit/src/multimodel.rs:135 | docs/algorithm/11-fitting.md | multimodel dynamic-program decisions. |
 | `INKVEC_DUMP_CONTOUR` | path | unset | crates/inkvec-trace/src/planar.rs:582 | docs/algorithm/07-subpixel.md, docs/algorithm/14-fast-mode.md | appends refined boundary points and sigmas. |
 | `INKVEC_DUMP_LABELS` | path | unset | crates/inkvec-trace/src/lib.rs:586 | docs/algorithm/04-regions.md | writes the label image as PPM. |
-| `INKVEC_DUMP_MAP` | path | unset | crates/inkvec-cli/src/pipeline.rs:581 | nothing | writes the planar map (neural label generation). |
+| `INKVEC_DUMP_MAP` | path | unset | crates/inkvec-cli/src/pipeline.rs:580 | nothing | writes the planar map (neural label generation). |
 | `INKVEC_EDIT_DEBUG` | flag | off | crates/inkvec-cli/src/editable.rs:677 | nothing | editability mirror pass. |
 | `INKVEC_EMIT_DECIMALS` | count | `EMIT_DECIMALS` (2) | crates/inkvec-cli/src/pathdata.rs:50 | CHANGELOG.md, bench/perceptual_probe.py, docs/algorithm/13-emit.md, docs/algorithm/constants.md | coordinate decimals; bench/perceptual_probe.py isolates rounding with it. |
 | `INKVEC_EVDBG` | flag | off | crates/inkvec-trace/src/gradient.rs:895, crates/inkvec-trace/src/gradient.rs:1024, crates/inkvec-trace/src/gradient/carve.rs:390 (+1) | docs/algorithm/05-gradients.md | fill-evidence and gradient-refusal trace. |
@@ -88,20 +88,20 @@ No name from an unmerged research branch is listed: only what the code in this t
 | `INKVEC_HARMONIZE_TOL` | number | `HARMONIZE_TOL` | crates/inkvec-cli/src/harmonize.rs:97 | CHANGELOG.md, bench/perceptual_probe.py | shape-harmonize tolerance; bench/perceptual_probe.py sets 1000 to disable it. |
 | `INKVEC_JDBG` | flag | off | crates/inkvec-trace/src/planar/junctions.rs:63 | CHANGELOG.md, docs/algorithm/07-subpixel.md | junction end-tangent fits (was `JDBG`, renamed to the prefix). |
 | `INKVEC_MERGEDBG` | flag | off | crates/inkvec-trace/src/gradient/bands.rs:456 | docs/algorithm/05-gradients.md | band-merge trace. |
-| `INKVEC_NATIVE_ALPHA` | switch | on | crates/inkvec-cli/src/args.rs:263, crates/inkvec-cli/src/args.rs:834, crates/inkvec/tests/api.rs:211 | CHANGELOG.md, bindings/openapi.json, bindings/options.schema.json, crates/inkvec-py/README.md, crates/inkvec-py/python/inkvec/__init__.pyi, crates/inkvec-py/tests/test_inkvec.py, crates/inkvec-server/README.md, crates/inkvec/README.md, docs/BINDINGS.md, docs/algorithm/01-intake.md, packages/dotnet/README.md, packages/dotnet/src/LogoLabs.Inkvec/InkvecOptions.generated.cs, packages/go/README.md, packages/go/options_generated.go, packages/java/README.md, packages/java/src/main/java/com/logolabs/inkvec/InkvecOptions.java, packages/npm/README.md, packages/npm/src/options.generated.ts, packages/php/README.md, packages/swift/README.md, packages/swift/Sources/Inkvec/InkvecOptions.generated.swift, studio/core/src/options.rs | `0` makes the CLI default `--no-native-alpha` (CHANGELOG 0.1.4; docs/BINDINGS.md). |
+| `INKVEC_NATIVE_ALPHA` | switch | on | crates/inkvec-cli/src/args.rs:264, crates/inkvec-cli/src/args.rs:839, crates/inkvec/tests/api.rs:211 | CHANGELOG.md, bindings/openapi.json, bindings/options.schema.json, crates/inkvec-py/README.md, crates/inkvec-py/python/inkvec/__init__.pyi, crates/inkvec-py/tests/test_inkvec.py, crates/inkvec-server/README.md, crates/inkvec/README.md, docs/BINDINGS.md, docs/algorithm/01-intake.md, packages/dotnet/README.md, packages/dotnet/src/LogoLabs.Inkvec/InkvecOptions.generated.cs, packages/go/README.md, packages/go/options_generated.go, packages/java/README.md, packages/java/src/main/java/com/logolabs/inkvec/InkvecOptions.java, packages/npm/README.md, packages/npm/src/options.generated.ts, packages/php/README.md, packages/swift/README.md, packages/swift/Sources/Inkvec/InkvecOptions.generated.swift, studio/core/src/options.rs | `0` makes the CLI default `--no-native-alpha` (CHANGELOG 0.1.4; docs/BINDINGS.md). |
 | `INKVEC_NO_ABSORB` | flag | off | crates/inkvec-trace/src/lib.rs:555, crates/inkvec-trace/src/native.rs:888 | CHANGELOG.md, bench/ablate.py, docs/algorithm/04-regions.md, tools/quality_audit/REPORT-2026-09-26.md | skips blend-sliver absorption. bench/ablate.py. |
 | `INKVEC_NO_CARVE` | flag | off | crates/inkvec-trace/src/lib.rs:665, crates/inkvec-trace/src/lib.rs:942, crates/inkvec-trace/src/native.rs:916 | CHANGELOG.md, bench/ablate.py, docs/BINDINGS.md, docs/algorithm/05-gradients.md, tools/quality_audit/REPORT-2026-09-26.md | skips residual carving. bench/ablate.py. |
 | `INKVEC_NO_TAPER` | flag | off | crates/inkvec-trace/src/planar/junctions.rs:491 | CHANGELOG.md, bench/ablate.py, docs/algorithm/07-subpixel.md, tools/quality_audit/REPORT-2026-09-26.md | skips taper junction placement. bench/ablate.py. |
 | `INKVEC_PALDBG` | flag | off | crates/inkvec-trace/src/color/mdl.rs:138, crates/inkvec-trace/src/color/reference_tests.rs:442, crates/inkvec-trace/src/lib.rs:401 (+2) | docs/algorithm/02-coverage.md, docs/algorithm/03-palette.md, tools/quality_audit/REPORT-2026-09-26.md | palette accept/reject trace. |
-| `INKVEC_RIBBONS` | flag | off | crates/inkvec-cli/src/ribbons.rs:68 | docs/algorithm/15-strokes.md | runs the opt-in stroke stage, as `--detect-strokes` does, for a build the benchmark scripts cannot pass flags to. |
+| `INKVEC_RIBBONS` | switch | `detect_strokes` (on) | crates/inkvec-cli/src/ribbons.rs:70 | docs/algorithm/15-strokes.md | `0` switches the stroke stage off and any other value on, overriding `--detect-strokes` / `--no-detect-strokes`, for a build the benchmark scripts cannot pass flags to. |
 | `INKVEC_RIBBONS_BRANCHES` | flag | off | crates/inkvec-trace/src/ribbon/graph.rs:591 | nothing | stroke stage: one stderr line per centreline branch and whether it is kept. |
-| `INKVEC_RIBBONS_CHAINS` | flag | off | crates/inkvec-trace/src/ribbon.rs:515 | nothing | stroke stage: one stderr line per centreline chain of a candidate face. |
-| `INKVEC_RIBBONS_DEBUG` | flag | off | crates/inkvec-cli/src/ribbons.rs:114 | nothing | stroke stage: one stderr line per candidate face. |
+| `INKVEC_RIBBONS_CHAINS` | flag | off | crates/inkvec-trace/src/ribbon.rs:522 | nothing | stroke stage: one stderr line per centreline chain of a candidate face. |
+| `INKVEC_RIBBONS_DEBUG` | flag | off | crates/inkvec-cli/src/ribbons.rs:116 | nothing | stroke stage: one stderr line per candidate face. |
 | `INKVEC_REFINEDBG` | flag | off | crates/inkvec-trace/src/centerline.rs:959 | nothing | centerline stroke refinement. |
 | `INKVEC_SUBPXDBG` | flag | off | crates/inkvec-trace/src/planar.rs:581 | docs/algorithm/07-subpixel.md, docs/algorithm/14-fast-mode.md | sub-pixel search per point. |
 | `INKVEC_SVGMIN_DEBUG` | flag | off | crates/inkvec-svgmin/src/fit.rs:414, crates/inkvec-svgmin/src/fit.rs:592 | nothing | minifier merge decisions. |
 | `INKVEC_TAPERDBG` | flag | off | crates/inkvec-trace/src/planar/junctions.rs:69 | CHANGELOG.md, docs/algorithm/07-subpixel.md | taper fits (was `TAPERDBG`, renamed to the prefix). |
-| `INKVEC_TIMING` | flag | off | crates/inkvec-cli/src/pipeline.rs:697, crates/inkvec-cli/src/ribbons.rs:233, crates/inkvec-cli/src/rings.rs:286 (+6) | docs/algorithm/00-overview.md, docs/algorithm/04-regions.md, docs/algorithm/05-gradients.md, docs/algorithm/10-symmetry.md, docs/algorithm/12-repair.md, docs/algorithm/13-emit.md, docs/algorithm/14-fast-mode.md | stage timings on stderr (Stopwatch and per-stage logs). |
+| `INKVEC_TIMING` | flag | off | crates/inkvec-cli/src/pipeline.rs:696, crates/inkvec-cli/src/ribbons.rs:246, crates/inkvec-cli/src/rings.rs:286 (+6) | docs/algorithm/00-overview.md, docs/algorithm/04-regions.md, docs/algorithm/05-gradients.md, docs/algorithm/10-symmetry.md, docs/algorithm/12-repair.md, docs/algorithm/13-emit.md, docs/algorithm/14-fast-mode.md | stage timings on stderr (Stopwatch and per-stage logs). |
 | `INKVEC_UNDERLAP` | number (px) | `UNDERLAP` | crates/inkvec-cli/src/seams.rs:71 | CHANGELOG.md | seam underlap reach, `0` off (CHANGELOG 0.2.0). |
 
 ## (b) RESEARCH: `--features research` only
@@ -137,7 +137,7 @@ No name from an unmerged research branch is listed: only what the code in this t
 | `INKVEC_POTTS_SCALE` | number | 1.0 | crates/inkvec-trace/src/ink_ideas.rs:635 | nothing | ink_ideas rule 3 price. |
 | `INKVEC_SADDLE` | flag | off | crates/inkvec-trace/src/regions.rs:91 | crates/inkvec-trace/Cargo.toml, docs/algorithm/04-regions.md, docs/algorithm/06-planar-map.md, tools/quality_audit/REPORT-2026-09-26.md | saddle-corner face merging (`merge_saddle_faces`). |
 | `INKVEC_SADDLEDBG` | flag | off | crates/inkvec-trace/src/regions.rs:94 | docs/algorithm/04-regions.md, docs/algorithm/06-planar-map.md | saddle trace. |
-| `INKVEC_STRUCTURAL` | flag | off | crates/inkvec-cli/src/pipeline.rs:668, crates/inkvec-fit/src/multimodel.rs:249 | crates/inkvec-fit/Cargo.toml, docs/algorithm/01-intake.md, docs/algorithm/11-fitting.md, tools/quality_audit/REPORT-2026-09-26.md | structural MDL simplifier (fit) and its transactional baseline (CLI). |
+| `INKVEC_STRUCTURAL` | flag | off | crates/inkvec-cli/src/pipeline.rs:667, crates/inkvec-fit/src/multimodel.rs:249 | crates/inkvec-fit/Cargo.toml, docs/algorithm/01-intake.md, docs/algorithm/11-fitting.md, tools/quality_audit/REPORT-2026-09-26.md | structural MDL simplifier (fit) and its transactional baseline (CLI). |
 | `INKVEC_STRUCTURAL_MAX_DIST` | number (px) | 0.85 | crates/inkvec-fit/src/structural/simplify.rs:92 | nothing | structural simplifier deviation bound. |
 | `INKVEC_STRUCTURAL_SIGMA_CAP` | number | 2.0 | crates/inkvec-fit/src/structural/simplify.rs:110 | nothing | structural simplifier sigma cap. |
 | `INKVEC_WITNESS_TAU` | number | 0.2 | crates/inkvec-trace/src/ink_ideas.rs:797 | nothing | ink_ideas rule 4. |
@@ -175,7 +175,7 @@ No name from an unmerged research branch is listed: only what the code in this t
 | `INKVEC_NO_FADES` | flag | off | was crates/inkvec-trace/src/native.rs:1649 | nothing | native fade-merge ablation, undocumented. |
 | `INKVEC_NO_INK_ESCAPE` | flag | off | was crates/inkvec-trace/src/color.rs:1046 | docs/algorithm/03-palette.md | palette MDL-escape ablation. |
 | `INKVEC_NO_MEASURED_SIGMA` | flag | off | was crates/inkvec-trace/src/lib.rs:542, crates/inkvec-trace/src/native.rs:1592 | nothing | ablation, undocumented. |
-| `INKVEC_NO_PRIMITIVE` | flag | off | was crates/inkvec-cli/src/pipeline.rs:602 | nothing | primitive-path ablation (30.5 % of the ratio; the number is kept in the comment). |
+| `INKVEC_NO_PRIMITIVE` | flag | off | was crates/inkvec-cli/src/pipeline.rs:601 | nothing | primitive-path ablation (30.5 % of the ratio; the number is kept in the comment). |
 | `INKVEC_PARAMS_CUBIC` | number | 6.0 | was crates/inkvec-fit/src/cost.rs:56 | CHANGELOG.md | superseded by `--bezier-cost` (CHANGELOG 0.2.0 said the variable still worked). |
 | `INKVEC_RAMP_STEP` | number | 15.0 | was crates/inkvec-trace/src/gradient/regions.rs:16 | nothing | now `gradient::regions::RAMP_STEP_DE00`. |
 | `INKVEC_RINGING` | number | `SOFT_RINGING(_LARGE)` | was crates/inkvec-trace/src/lib.rs:435 | nothing | soft-intake ringing gate; constant. |
@@ -187,7 +187,7 @@ No name from an unmerged research branch is listed: only what the code in this t
 | `INKVEC_SMOOTH` | number | 0.0 | was crates/inkvec-fit/src/merge.rs:82 | nothing | now `merge::SMOOTH_SLACK`. |
 | `INKVEC_SMOOTH_FRACTION` | number | 0.5 | was crates/inkvec-trace/src/gradient/regions.rs:38 | nothing | now `SMOOTH_FRACTION`. |
 | `INKVEC_SMOOTH_STEP` | number | 3.0 | was crates/inkvec-trace/src/gradient/regions.rs:29 | nothing | now `SMOOTH_STEP`. |
-| `INKVEC_STROKE_TOL` | number | `STROKE_TOL` | was crates/inkvec-cli/src/emit.rs:266 | nothing | annulus-to-stroke tolerance. |
+| `INKVEC_STROKE_TOL` | number | `STROKE_TOL` | was crates/inkvec-cli/src/emit.rs:277 | nothing | annulus-to-stroke tolerance. |
 | `INKVEC_SUBPX_WIN` | count | 1 | was crates/inkvec-trace/src/planar.rs:393 | docs/algorithm/07-subpixel.md, docs/algorithm/constants.md | now `planar::chord::SUBPX_WIN`; LOG-43 measurement kept in the comment. |
 | `INKVEC_SVGMIN_COARSE_CAP` | count | 128 | was crates/inkvec-svgmin/src/fit.rs:461 | nothing | minifier constant. |
 | `INKVEC_SVGMIN_MERGE` | number | 1 (on) | was crates/inkvec-svgmin/src/fit.rs:474 | nothing | minifier merge pass switch. |

@@ -28,7 +28,7 @@ front end; shares stages 01, 06, 07, 10 and 13; skips 08 (the boundary solve,
 `lib.rs:1166`, `boundary_opt::optimise_for` at `boundary_opt.rs:593-611`; balanced runs it,
 capped at eight iterations, §8) and 09 (decode, `lib.rs:1177`); and replaces 11 (curve fitting) with its own
 fitter, without 12 (repair) or shape harmonization (`repair_fits`,
-`crates/inkvec-cli/src/pipeline.rs:852`; `emit_options`, `pipeline.rs:526-537`).
+`crates/inkvec-cli/src/pipeline.rs:851`; `emit_options`, `pipeline.rs:526-537`).
 
 ## What problem this solves
 
@@ -42,7 +42,7 @@ its seam underlap, compound paths and minify" — and replaces the rest with one
 (the module overview of `fast/mod.rs`). Each stage is linear or near-linear in the number of pixels or
 boundary points, and nothing reads a clock, so the output is the same on every machine. The
 command line describes the trade as "several times faster, a little less faithful"
-(`args.rs:339-342`).
+(`args.rs:340-343`).
 
 The round of 2026-09-30 rewrote Fast's own stages and the stages it shares for speed,
 **with the output held fixed**: every rewrite is exact, keeps the code it replaced as a test
@@ -900,7 +900,7 @@ the parallel pass would take it off the critical path, but needs 8 bytes per adm
 
 **What it computes.** The SVG document, from the fitted paths, the faces' fills and the
 palette: shared with Quality and documented in `13-emit.md`. Fast turns shape harmonization
-off (`emit_options`, `crates/inkvec-cli/src/pipeline.rs:526-537`). An image traced with its
+off (`emit_options`, `crates/inkvec-cli/src/pipeline.rs:525-536`). An image traced with its
 transparency keeps the native-alpha model: inks carry an opacity and the clear ground is an
 ink of its own (`fast/front.rs:14-16`).
 

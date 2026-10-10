@@ -145,8 +145,8 @@
       },
       "svg": {
         "x86_64-linux-gnu": {
-          "bytes": 679,
-          "sha256": "cbaf89d8dea3b3715e88d954dac5f99b8d52006cbffc236758a7a91a65f9112b"
+          "bytes": 682,
+          "sha256": "76fe770f9a7610175a9ecf953c02f918e8d22e75617d8b77674efcefe85d0f58"
         }
       }
     },
@@ -164,8 +164,8 @@
       },
       "svg": {
         "x86_64-linux-gnu": {
-          "bytes": 679,
-          "sha256": "cbaf89d8dea3b3715e88d954dac5f99b8d52006cbffc236758a7a91a65f9112b"
+          "bytes": 682,
+          "sha256": "76fe770f9a7610175a9ecf953c02f918e8d22e75617d8b77674efcefe85d0f58"
         }
       }
     },
@@ -182,8 +182,8 @@
       },
       "svg": {
         "x86_64-linux-gnu": {
-          "bytes": 760,
-          "sha256": "f092dfc5dd840c6cc6ed7bebbfb3fc91b43228abce023d1cfa6cfdcce041e655"
+          "bytes": 682,
+          "sha256": "9fee7810aadc6f32ede16fc0f5c32ceeb1b6ef63cda375d40d9e34673eec713e"
         }
       }
     },
@@ -201,8 +201,8 @@
       },
       "svg": {
         "x86_64-linux-gnu": {
-          "bytes": 760,
-          "sha256": "f092dfc5dd840c6cc6ed7bebbfb3fc91b43228abce023d1cfa6cfdcce041e655"
+          "bytes": 682,
+          "sha256": "9fee7810aadc6f32ede16fc0f5c32ceeb1b6ef63cda375d40d9e34673eec713e"
         }
       }
     },
@@ -223,8 +223,8 @@
       },
       "svg": {
         "x86_64-linux-gnu": {
-          "bytes": 760,
-          "sha256": "f092dfc5dd840c6cc6ed7bebbfb3fc91b43228abce023d1cfa6cfdcce041e655"
+          "bytes": 682,
+          "sha256": "9fee7810aadc6f32ede16fc0f5c32ceeb1b6ef63cda375d40d9e34673eec713e"
         }
       }
     },

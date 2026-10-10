@@ -47,7 +47,7 @@
 //!   instead, and 30% of the screen set's files filled their holes back in for any
 //!   consumer that ignored it.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use inkvec_core::Point;
 use inkvec_fit::{
@@ -104,10 +104,11 @@ pub(crate) struct ColorDoc<'a> {
     pub layers: Option<Layers<'a>>,
     /// The colour transparent pixels were composited onto before tracing, sRGB 0..1.
     pub matte: [f32; 3],
-    /// `--detect-strokes`: faces written as strokes instead of fills, face ->
-    /// finished element text ([`crate::ribbons`]). Empty unless the switch is on, and an
-    /// empty map changes nothing below.
-    pub ribbons: &'a BTreeMap<usize, String>,
+    /// Stroke detection ([`crate::ribbons`]): the faces written as strokes instead of
+    /// fills (face -> finished element text), and the faces that leave with them where the
+    /// face beneath is still painted their colour ([`crate::ribbons::absorbed_by`]). Empty
+    /// when the stage does not run, and empty changes nothing below.
+    pub ribbons: &'a crate::ribbons::Ribbons,
     /// Width of the traced raster, px.
     pub w: usize,
     /// Height of the traced raster, px.
@@ -117,7 +118,7 @@ pub(crate) struct ColorDoc<'a> {
 impl<'a> ColorDoc<'a> {
     /// The same document with `ribbons` as the faces written as strokes
     /// ([`crate::ribbons`]).
-    pub(crate) fn with_ribbons(self, ribbons: &'a BTreeMap<usize, String>) -> ColorDoc<'a> {
+    pub(crate) fn with_ribbons(self, ribbons: &'a crate::ribbons::Ribbons) -> ColorDoc<'a> {
         ColorDoc { ribbons, ..self }
     }
 }
@@ -177,9 +178,19 @@ pub(crate) fn emit_color(doc: &ColorDoc, opts: &EmitOptions) -> String {
     let mut stack = stack_faces(doc, opts, &nest);
     // Faces written as strokes are not painted as fills: their children paint at the
     // nearest painted ancestor's level, and the strokes go on top ([`write_ribbons`]).
-    for &f in doc.ribbons.keys() {
+    for &f in doc.ribbons.elements.keys() {
         if let Some(d) = stack.dropped.get_mut(f) {
             *d = true;
+        }
+    }
+    // And the faces that leave with them, where what now paints beneath is their colour
+    // and nothing is punched out of them.
+    for &g in &doc.ribbons.absorbed {
+        let under = surviving_parent(&nest.parent, &stack.dropped, g);
+        let hex = |i: usize| flat_colour(doc, i).map(inkvec_trace::color::to_hex);
+        let same = under.is_some_and(|a| hex(a).is_some() && hex(a) == hex(g));
+        if same && stack.holes.get(g).is_some_and(Vec::is_empty) {
+            stack.dropped[g] = true;
         }
     }
     debug_dump(doc, &nest, &stack);
@@ -1222,7 +1233,7 @@ fn seam_overrides(
                 && !writer.harmonized_d.contains_key(&i)
                 && !writer.symbol_use.contains_key(&i)
                 && !writer.strokes.contains_key(&i)
-                && !doc.ribbons.contains_key(&i)
+                && !doc.ribbons.elements.contains_key(&i)
         })
         .collect();
     let upper_ok: Vec<bool> = (0..n)
@@ -1297,7 +1308,7 @@ fn seam_overrides(
 /// else (the stage accepts a face only when the strokes' outline matches the face's
 /// boundary), and faces of a planar map do not overlap.
 fn write_ribbons(doc: &ColorDoc, body: &mut String, painted: &mut Vec<(usize, usize)>) {
-    for (&f, el) in doc.ribbons {
+    for (&f, el) in &doc.ribbons.elements {
         body.push_str(el);
         let rank = painted.last().map_or(0, |&(_, r)| r + 1);
         painted.push((f, rank));

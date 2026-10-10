@@ -66,6 +66,7 @@ use super::join::{butt_gauge, miter_gauge, tangents, Cap, Join, Style};
 use super::score::flatten;
 use super::Centreline;
 
+mod merge;
 mod normal;
 use normal::{normal_equations, profile};
 
@@ -898,6 +899,7 @@ pub(crate) fn solve_adaptive(
     lambda: f64,
     style: Style,
     budget: f64,
+    chi2_cap: f64,
 ) -> (Vec<Centreline>, f64) {
     let (mut cur, mut h) = solve(lines, h, b, style, MAX_ITERS);
     let max_splits = MAX_SPLITS;
@@ -952,7 +954,10 @@ pub(crate) fn solve_adaptive(
             refused.push((shape, seg));
         }
     }
-    if accepted_any {
+    // Then the joints the description length would rather not pay for.
+    let merged;
+    (cur, h, best, _, merged) = merge::merges(cur, h, cur_rows, best, b, lambda, style, chi2_cap);
+    if accepted_any || merged {
         let (polished, ph) = solve(&cur, h, b, style, MAX_ITERS);
         if drawable(&polished, style) && cost(&polished, ph).0 <= best {
             return (polished, ph);
@@ -1081,6 +1086,11 @@ const MITER_MAX_TURN_COS: f64 = -0.866;
 ///   every segment's chord must be at least [`MITER_MIN_SEG`] px and no vertex may turn
 ///   by more than 150° ([`MITER_MAX_TURN_COS`]). Round joins draw a disc at every vertex
 ///   whatever the tangents, and need neither.
+/// * **No circular arc within [`merge::HALF_TURN_BAND_DEGREES`] of a half turn** unless it
+///   is the half circle on its chord (radius at most the half-chord): there SVG's
+///   rebuilt centre moves by `R/k` times any rounding of the radius (see the constant),
+///   so the arc written is not the arc solved. The fitter's arcs stop at 120° and a
+///   split halves them; only a merge makes one this wide.
 ///
 /// Not from the literature: a sampled hodograph test and two drawing rules, because the
 /// solve needs a cheap yes/no on every candidate step rather than an exact cusp locus.
@@ -1099,6 +1109,9 @@ fn regular(model: &Model) -> bool {
         }
         for k in 0..segs.len() {
             let (a, seg) = model.segment(*start, segs, k);
+            if !conditioned(a, &seg) {
+                return false;
+            }
             let Segment::Cubic(c1, c2, b) = seg else {
                 continue;
             };
@@ -1121,6 +1134,24 @@ fn regular(model: &Model) -> bool {
         }
     }
     true
+}
+
+/// The arc rule of [`regular`]: false for a circular arc from `a` whose radius exceeds its
+/// half-chord `L` and whose centre sits closer to the chord than `R·sin(band/2)`, i.e.
+/// within [`merge::HALF_TURN_BAND_DEGREES`] of a half turn; true for anything else.
+fn conditioned(a: Point, seg: &Segment) -> bool {
+    let Segment::Arc { rx, end, .. } = *seg else {
+        return true;
+    };
+    if !seg.is_circular() {
+        return true;
+    }
+    let l = 0.5 * a.dist(end);
+    if rx <= l * (1.0 + 1e-9) {
+        return true;
+    }
+    let k = (rx * rx - l * l).sqrt();
+    k >= rx * (0.5 * merge::HALF_TURN_BAND_DEGREES.to_radians()).sin()
 }
 
 /// The miter rules of [`regular`] for one path: every chord at least [`MITER_MIN_SEG`]

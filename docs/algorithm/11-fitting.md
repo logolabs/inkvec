@@ -11,10 +11,10 @@ program), `multimodel.rs` and `multimodel/scan.rs` (the dynamic program), `candi
 post-fit passes), `choice.rs` (curve or primitive), `simple.rs` (self-crossing test).
 **Entry point:** `optimal_multimodel()` (`crates/inkvec-fit/src/multimodel.rs:205`), called
 for every boundary of the colour path from `fit_boundaries`
-(`crates/inkvec-cli/src/pipeline.rs:659`) through `inkvec_fit::choice::describe`
+(`crates/inkvec-cli/src/pipeline.rs:658`) through `inkvec_fit::choice::describe`
 (`pipeline.rs:720-744`), and for strokes from `crates/inkvec-cli/src/strokes.rs:263`.
 **Pipeline position:** after decode and symmetry enforcement (stages 9–10), before repair
-(stage 12). Stage mark `"fit_dp"` (`crates/inkvec-cli/src/pipeline.rs:495`, in
+(stage 12). Stage mark `"fit_dp"` (`crates/inkvec-cli/src/pipeline.rs:494`, in
 `fit_and_repair`).
 
 The crate's own overview (`crates/inkvec-fit/src/lib.rs:1-58`) lists the seven steps of the
@@ -118,7 +118,7 @@ precision, `tau = 2.0`.
 
 In the shipping CLI, `extent` is the intake raster's `max(width, height)` in pixels, and
 `precision`/`tau` come from `--precision` (default `0.1`) and `--tau` (default `2.0`)
-(`crates/inkvec-cli/src/args.rs:248-249`), combined in `fit_config`
+(`crates/inkvec-cli/src/args.rs:249-250`), combined in `fit_config`
 (`crates/inkvec-cli/src/units.rs:92-105`). Under `--content-units`, `fit_config` multiplies
 `precision` by the content scale `s` before deriving `lambda` and then multiplies `lambda`
 by `s` again; see `01-intake.md`.
@@ -684,7 +684,7 @@ cheapest whole-ring circle, ellipse or (rounded) rectangle, or a run of arcs
 (`fit_primitive_or_arcs`, `primitives.rs:720`), which prices itself. The primitive wins when
 its cost is strictly below the curve's (`choose`, `choice.rs:211-226`); a tie or a NaN keeps
 the curve. The CLI reaches the choice through `describe` (`choice.rs:243-272`), called from
-`fit_boundaries` (`crates/inkvec-cli/src/pipeline.rs:720`), which avoids work the choice
+`fit_boundaries` (`crates/inkvec-cli/src/pipeline.rs:719`), which avoids work the choice
 discards:
 
 1. **The image frame.** When one face touches every border pixel (the background of 166 of

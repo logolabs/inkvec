@@ -194,7 +194,8 @@ pub struct Args {
     pub strokes: bool,
     /// Detect faces of the colour trace that were drawn as strokes -- a centreline and
     /// one width, round or butt caps, round or miter joins -- and write each as a stroked
-    /// path where that is the shorter description of its boundary. Quality mode only.
+    /// path where that is the shorter description of its boundary. Quality mode only; on
+    /// by default (`--no-detect-strokes` turns it off).
     pub detect_strokes: bool,
     /// Least share of the input's ink the strokes must actually draw, in [0, 1],
     /// or the drawing falls back to outlines.
@@ -285,7 +286,7 @@ impl Default for Args {
             restore_command: None,
             intake_scale: false,
             strokes: false,
-            detect_strokes: false,
+            detect_strokes: true,
             stroke_balance: 0.85,
             stroke_refine: 0,
             // Per stroke against its own region. Dominant cap and join mismatch
@@ -467,10 +468,12 @@ OPTIONS:
                             instead of as filled outlines. 28% of the corpus is
                             drawn this way and costs 3.3x the artist's parameters
                             as outlines. Declines silently on anything else.
-        --detect-strokes    Write the faces of the colour trace that were drawn as
-                            strokes (a centreline and one width) as stroked paths,
+        --no-detect-strokes Write every face as a filled outline. By default, faces
+                            of the colour trace that were drawn as strokes (a
+                            centreline and one width) are written as stroked paths,
                             wherever that describes their boundary in fewer numbers
-                            at no worse a fit. Quality mode only
+                            at no worse a fit (Quality mode; --detect-strokes asks
+                            for it explicitly)
         --stroke-balance <f>   Least share of the input's ink the strokes must
                             actually draw, or the drawing falls back to outlines
                             [default: 0.85]
@@ -634,7 +637,9 @@ pub(crate) fn parse_args_from(mut it: impl Iterator<Item = String>) -> Result<Ar
             "--sr-no-recolour" => a.sr_no_recolour = true,
             "--intake-scale" => a.intake_scale = true,
             "--strokes" => a.strokes = true,
-            "--detect-strokes" => a.detect_strokes = true,
+            "--detect-strokes" | "--no-detect-strokes" => {
+                a.detect_strokes = flag == "--detect-strokes"
+            }
             "--stroke-residual" => a.stroke_residual = parse_value(&mut it, "--stroke-residual")?,
             "--stroke-refine" => a.stroke_refine = parse_value(&mut it, "--stroke-refine")?,
             "--lambda-scale" => a.lambda_scale = parse_value(&mut it, "--lambda-scale")?,
@@ -837,6 +842,19 @@ mod tests {
             !parse("logo.png --no-native-alpha")
                 .expect("parses")
                 .native_alpha
+        );
+
+        // Stroke detection is on unless switched off.
+        assert!(parse("logo.png").expect("parses").detect_strokes);
+        assert!(
+            !parse("logo.png --no-detect-strokes")
+                .expect("parses")
+                .detect_strokes
+        );
+        assert!(
+            parse("logo.png --no-detect-strokes --detect-strokes")
+                .expect("parses")
+                .detect_strokes
         );
     }
 

@@ -407,9 +407,8 @@ fn finish_color(
         &traced.face_fade,
     );
 
-    // Editability mode: post-fit structure passes, every one guarded to the ring's
-    // own tolerance. Runs after repair and harmonization so nothing downstream
-    // re-breaks what was locked.
+    // Editability mode: post-fit structure passes, every one guarded to the ring's own
+    // tolerance. Runs after repair and harmonization so nothing re-breaks what was locked.
     if args.editability {
         let stats = editable::edit_all(&polys, &mut fitted, &prims);
         diag::stage(args.quiet, || stats.summary());
@@ -431,9 +430,9 @@ fn finish_color(
         w,
         h,
     };
-    // `--detect-strokes` (off by default): stroke-drawn faces written as strokes.
+    // Stroke detection (on by default, `--no-detect-strokes` off): stroke-drawn faces written as strokes.
     let ribbons = crate::ribbons::stage(args, cfg, fast, &doc, &map, &traced_labels);
-    let doc = doc.with_ribbons(&ribbons.elements);
+    let doc = doc.with_ribbons(&ribbons);
     // Monochrome: the ink faces as one black shape, from the same fitted edges. It replaces
     // the colour document, and with it the layer form, which only ever repaints colours.
     let (svg, mono_line) = if args.monochrome {

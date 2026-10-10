@@ -163,10 +163,11 @@ public struct InkvecOptions: Codable, Hashable, Sendable {
     /// width, with round or butt caps and round or miter joins -- and write each as a stroked
     /// path (fill none, one stroke-width) where that describes the face's measured boundary in
     /// fewer numbers than its filled outline, at a fit as good within the measurement noise.
-    /// Line icons come back at about the artist's own parameter count. Quality mode only; off
-    /// by default.
+    /// Line icons come back at about the artist's own parameter count, and a ring on a plain
+    /// page as one stroke over the page rather than two discs. Quality mode only; on by
+    /// default.
     ///
-    /// Default: `false`.
+    /// Default: `true`.
     public var detectStrokes: Bool?
 
     /// Colour groups: fills to draw as one, so the shapes between them join rather than being

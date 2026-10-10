@@ -12,6 +12,7 @@ import InkvecTheory.ThinStroke
 import InkvecTheory.Rank
 import InkvecTheory.Noise
 import InkvecTheory.Supersampling
+import InkvecTheory.Naturality
 
 /-!
 # Inkvec theory: inverting box-filter rasterisation

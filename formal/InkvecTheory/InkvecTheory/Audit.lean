@@ -50,3 +50,7 @@ open Inkvec
 #print axioms point_from_means_noise
 #print axioms subCount_close
 #print axioms ss_column_sum_close
+#print axioms natural_model_closer
+#print axioms natural_model_gain
+#print axioms merge_chi2_increase
+#print axioms noise_absorbed

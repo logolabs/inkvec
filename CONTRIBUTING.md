@@ -67,8 +67,13 @@ Each condition is compared icon by icon with the per-platform baseline
 `bench/gate/baselines/<os>-<arch>.json`, on four axes:
 
 - **dE00** (colour error against the artist's file), margin 1%
-- **turning** (control-polygon turning per unit length, read command by command), margin 2%
-- **ratio** (parameter count versus the artist's), margin 3%
+- **turning_gap** (distance from the artist's control-polygon turning, per canvas side),
+  margin 2%
+- **ratio_gap** (distance from the artist's parameter count, `|ln(ratio)|`), margin 3%
+
+Turning and parameters are judged as distances from the artist's file, not as raw values:
+a trace that turns more, or writes more numbers, toward what the artist drew is not a
+regression. The raw values are still reported.
 - **geom** (geometric match to the artist's file: the mean distance between the trace's
   edges and the artist's, in input pixels, read as the area between them), margin 2%
 

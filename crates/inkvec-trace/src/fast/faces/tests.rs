@@ -167,7 +167,7 @@ fn two_inks_one_eye_cannot_tell_apart_become_one_and_a_step_stays() {
         .map(|p| if p / w >= 7 { 2 } else { u16::from(p % w >= 5) })
         .collect();
     let mut runs = RunLabels::new(&labels, w, h);
-    runs.merge_same_inks(&inks);
+    runs.merge_same_inks(&inks, None);
     let labels = runs.to_labels();
     // The larger of the two near-blacks (ink 1, 7 columns) takes the other.
     assert!(labels[..7 * w].iter().all(|&l| l == 1));
@@ -351,7 +351,7 @@ fn check_case(c: &Case, min_size: usize, what: &str) {
     runs.assert_canonical();
     assert_eq!(runs.to_labels(), want, "{what}: rims");
     reference::merge_same_inks(&mut want, &c.inks, w, h);
-    runs.merge_same_inks(&c.inks);
+    runs.merge_same_inks(&c.inks, None);
     runs.assert_canonical();
     assert_eq!(runs.to_labels(), want, "{what}: same-ink merge");
     reference::despeckle(&mut want, w, h, min_size);
@@ -403,7 +403,7 @@ fn empty_images_have_no_runs_no_components_and_no_faces() {
         runs.assert_canonical();
         runs.absorb_slivers(px, &inks);
         runs.absorb_rims(px, &inks);
-        runs.merge_same_inks(&inks);
+        runs.merge_same_inks(&inks, None);
         runs.despeckle(4);
         assert!(runs.write_faces(&mut []).is_empty(), "{w}x{h}");
     }
@@ -561,7 +561,7 @@ fn time_the_passes_on_the_research_dumps() {
             lap[1] = s.elapsed().as_secs_f64();
             runs.absorb_rims(px, &c.inks);
             lap[2] = s.elapsed().as_secs_f64();
-            runs.merge_same_inks(&c.inks);
+            runs.merge_same_inks(&c.inks, None);
             lap[3] = s.elapsed().as_secs_f64();
             runs.despeckle(floor);
             lap[4] = s.elapsed().as_secs_f64();
@@ -595,4 +595,40 @@ fn time_the_passes_on_the_research_dumps() {
             ms(reference_s)
         );
     }
+}
+
+/// On a lossy intake a thin fragment of an ink a few dE00 from its neighbour's is a variant
+/// the codec made and takes the neighbour's ink; a block of the same ink with an interior is
+/// an ink of its own and stays, as it does without the lossy threshold.
+#[test]
+fn thin_variants_of_an_ink_merge_on_a_lossy_intake_and_thick_ones_stay() {
+    let black = [0.0f32, 0.0, 0.0, 1.0];
+    let variant = [0.004f32, 0.004, 0.035, 1.0];
+    let white = [1.0f32, 1.0, 1.0, 1.0];
+    let de00 = crate::color::de00([0.0, 0.0, 0.0], [0.004, 0.004, 0.035]);
+    assert!(de00 > crate::color::SAME_INK_DE00 && de00 < crate::color::SOFT_SAME_INK_DE00);
+    let inks = [black, variant, white];
+    let (w, h) = (24, 12);
+    // A black block on white with a two-pixel sliver of the variant inside it, and a
+    // separate 6 x 6 block of the variant on the white.
+    let labels: Vec<u16> = (0..w * h)
+        .map(|p| {
+            let (x, y) = (p % w, p / w);
+            match (x, y) {
+                (1..=10, 1..=10) if x == 5 && (3..=8).contains(&y) => 1,
+                (1..=10, 1..=10) => 0,
+                (14..=19, 3..=8) => 1,
+                _ => 2,
+            }
+        })
+        .collect();
+    let mut clean = RunLabels::new(&labels, w, h);
+    clean.merge_same_inks(&inks, None);
+    assert_eq!(clean.to_labels(), labels, "the clean threshold keeps both");
+    let mut lossy = RunLabels::new(&labels, w, h);
+    lossy.merge_same_inks(&inks, Some(crate::color::SOFT_SAME_INK_DE00));
+    let out = lossy.to_labels();
+    assert_eq!(out[5 * w + 5], 0, "the sliver joins the black around it");
+    assert_eq!(out[5 * w + 16], 1, "the block with an interior stays");
+    lossy.assert_canonical();
 }

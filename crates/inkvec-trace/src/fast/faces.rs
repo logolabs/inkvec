@@ -17,12 +17,17 @@
 //! 2. [`RunLabels::absorb_rims`] (`slivers`): strips whose own ink is a blend of two inks
 //!    they border are anti-aliased rims; each of their pixels goes to the side it covers
 //!    more of.
-//! 3. [`RunLabels::merge_same_inks`] (`slivers`): a component takes the ink of a larger
-//!    neighbour whose ink the eye cannot tell from its own (region merging on the graph).
-//! 4. [`RunLabels::despeckle`] (`despeckle`): components under the speckle floor take the
+//! 3. [`RunLabels::absorb_halos`] (`slivers`), on a lossy intake only: thin components
+//!    whose colour lies between two inks around them in JPEG's colour space are the
+//!    codec's halos, and each of their pixels goes to the ink it covers more of
+//!    ([`halos`]).
+//! 4. [`RunLabels::merge_same_inks`] (`slivers`): a component takes the ink of a larger
+//!    neighbour whose ink the eye cannot tell from its own (region merging on the graph);
+//!    on a lossy intake a thin one takes one up to the soft floor.
+//! 5. [`RunLabels::despeckle`] (`despeckle`): components under the speckle floor take the
 //!    label they share the longest border with (an area filter on flat zones, a
 //!    connected operator).
-//! 5. [`RunLabels::write_faces`] (`split`): the components of the result are the faces;
+//! 6. [`RunLabels::write_faces`] (`split`): the components of the result are the faces;
 //!    their ids are written over the label buffer.
 //!
 //! In: one ink label per pixel, each pixel's colour ([`Pixels`], sRGB 0..1 plus opacity)
@@ -111,6 +116,7 @@
 //!   milliseconds, about half of it the one read of the labels and the one write of the
 //!   faces, which are bound by memory bandwidth rather than by one core.
 
+mod halos;
 mod runs;
 
 use runs::Run;
@@ -277,15 +283,14 @@ fn dedup_sorted(v: &mut [u16]) -> usize {
 /// indices, opacities within [`SAME_ALPHA`], and CIEDE2000 (on sRGB, ignoring opacity)
 /// below [`crate::color::SAME_INK_DE00`]. `n²` colour differences; the palette has tens
 /// of inks. Computed for both orders, as CIEDE2000 is evaluated with `a` first.
-fn same_ink_table(inks: &[[f32; 4]]) -> Vec<bool> {
+fn same_ink_table(inks: &[[f32; 4]], de00: f32) -> Vec<bool> {
     let n_inks = inks.len();
     (0..n_inks * n_inks)
         .map(|k| {
             let (ia, ib) = (inks[k / n_inks], inks[k % n_inks]);
             k / n_inks != k % n_inks
                 && (ia[3] - ib[3]).abs() < SAME_ALPHA
-                && crate::color::de00([ia[0], ia[1], ia[2]], [ib[0], ib[1], ib[2]])
-                    < crate::color::SAME_INK_DE00
+                && crate::color::de00([ia[0], ia[1], ia[2]], [ib[0], ib[1], ib[2]]) < de00
         })
         .collect()
 }
@@ -517,6 +522,17 @@ impl RunLabels {
     /// higher rank on a tie). Returns early, unchanged, when no two inks are the same or
     /// no such pair of components touches.
     ///
+    /// **Thin components on a lossy intake** (`thin_de00`, `None` otherwise). A JPEG splits
+    /// one ink into several a few dE00 apart wherever its blocks and its half-resolution
+    /// chroma shift the colour (a black outline came back as #010101, #010009 and #080000
+    /// on `openmoji/1F9D1`, `web` tier), and the variants tile the ink into fragments, none
+    /// of which has an interior. A component with no pixel whose window of radius
+    /// [`halos::HALO_REACH`] is all its own ([`RunLabels::deep_components`]) then counts an
+    /// ink within `thin_de00` (CIEDE2000; [`crate::color::SOFT_SAME_INK_DE00`], the soft
+    /// floor Quality's palette uses on such an intake) as its own; a component with an
+    /// interior keeps the clean threshold, so two flat inks a few dE00 apart stay two.
+    /// With `None` the decisions are exactly the clean ones.
+    ///
     /// **On runs.** The border lengths are summed over run contacts
     /// ([`RunLabels::for_each_contact`], equal to the per-pixel count), oriented as the
     /// per-pixel code met them (left or upper component first, which decides the order
@@ -527,13 +543,22 @@ impl RunLabels {
     ///
     /// Method from: Salembier & Serra (1995), <https://doi.org/10.1109/83.403422> -- a
     /// connected operator: flat zones are merged whole, never split.
-    pub(crate) fn merge_same_inks(&mut self, inks: &[[f32; 4]]) {
+    pub(crate) fn merge_same_inks(&mut self, inks: &[[f32; 4]], thin_de00: Option<f32>) {
         let n_inks = inks.len();
-        let same = same_ink_table(inks);
-        if !same.contains(&true) {
+        let same = same_ink_table(inks, crate::color::SAME_INK_DE00);
+        let thin_same = thin_de00.map(|de00| same_ink_table(inks, de00));
+        if !same.contains(&true) && !thin_same.as_ref().is_some_and(|t| t.contains(&true)) {
             return;
         }
         self.components();
+        let deep = thin_de00.map(|_| self.deep_components(halos::HALO_REACH));
+        // Whether component `k`, of ink `a`, may take ink `b`.
+        let same_for = |k: usize, a: usize, b: usize| -> bool {
+            match (&thin_same, &deep) {
+                (Some(t), Some(d)) if !d[k] => t[a * n_inks + b],
+                _ => same[a * n_inks + b],
+            }
+        };
         let n = self.size.len();
         // Border shared by each pair of components whose inks are one ink to the eye.
         let mut touching: Vec<(u32, u32, u32)> = Vec::new();
@@ -543,7 +568,13 @@ impl RunLabels {
                 self.label[a as usize] as usize,
                 self.label[b as usize] as usize,
             );
-            if a != b && la < n_inks && lb < n_inks && same[la * n_inks + lb] {
+            if a != b
+                && la < n_inks
+                && lb < n_inks
+                && (same[la * n_inks + lb]
+                    || (thin_de00.is_some()
+                        && (same_for(a as usize, la, lb) || same_for(b as usize, lb, la))))
+            {
                 touching.push((a.min(b), a.max(b), len));
             }
         });
@@ -577,7 +608,7 @@ impl RunLabels {
                 .filter(|&&(o, _)| rank[o as usize] < rank[k as usize])
                 .filter(|&&(o, _)| {
                     let t = to[o as usize] as usize;
-                    t != own && t < n_inks && same[own * n_inks + t]
+                    t != own && t < n_inks && same_for(k as usize, own, t)
                 })
                 .max_by_key(|&&(o, len)| (len, std::cmp::Reverse(rank[o as usize])));
             if let Some(&(o, _)) = best {

@@ -54,3 +54,9 @@ open Inkvec
 #print axioms natural_model_gain
 #print axioms merge_chi2_increase
 #print axioms noise_absorbed
+#print axioms Inkvec.Gen.Expr.evalQ_sound
+#print axioms Inkvec.Gen.Expr.evalI_sound
+#print axioms Inkvec.Gen.Expr.nonneg_of_evalI
+#print axioms Inkvec.Gen.histopolateK_eq
+#print axioms Inkvec.Gen.stripResidualK_eq
+#print axioms Inkvec.Gen.stripResidual_on_cubic

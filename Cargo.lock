@@ -3933,9 +3933,14 @@ dependencies = [
  "image",
  "inkvec-core",
  "inkvec-fit",
+ "inkvec-verified",
  "moxcms",
  "rayon",
 ]
+
+[[package]]
+name = "inkvec-verified"
+version = "0.2.7"
 
 [[package]]
 name = "inkvec-wasm"

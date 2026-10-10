@@ -1,15 +1,17 @@
 name: formal
 
 # Machine-checks formal/InkvecTheory (Lean 4 + Mathlib): every proof, then the axiom audit,
-# which must report only Lean's three standard axioms. Runs only when the formal development
-# changes; the Mathlib build comes from its prebuilt cache (`lake exe cache get`).
+# which must report only Lean's three standard axioms, then that the checkers generated from
+# the Lean definitions (crates/inkvec-verified/src/generated) are exactly what those
+# definitions print, so the Rust cannot drift from the proofs. Runs when either changes; the
+# Mathlib build comes from its prebuilt cache (`lake exe cache get`).
 
 on:
   push:
     branches: [main, master]
-    paths: ["formal/**", ".github/workflows/formal.yml"]
+    paths: ["formal/**", "crates/inkvec-verified/**", ".github/workflows/formal.yml"]
   pull_request:
-    paths: ["formal/**", ".github/workflows/formal.yml"]
+    paths: ["formal/**", "crates/inkvec-verified/**", ".github/workflows/formal.yml"]
 
 permissions:
   contents: read
@@ -50,5 +52,14 @@ jobs:
           fi
           if grep -rnE "\bsorry\b|^axiom |\badmit\b" InkvecTheory --include=*.lean | grep -v "Audit.lean"; then
             echo "sorry, admit or a new axiom in the development" >&2
+            exit 1
+          fi
+      - name: Generated checkers match the Lean definitions
+        run: |
+          lake env lean InkvecTheory/Gen/Emit.lean
+          git diff --exit-code -- ../../crates/inkvec-verified/src/generated
+          untracked=$(git ls-files --others --exclude-standard -- ../../crates/inkvec-verified/src/generated)
+          if [ -n "$untracked" ]; then
+            echo "generated files not committed: $untracked" >&2
             exit 1
           fi

@@ -74,3 +74,18 @@ point.
 
 Option D can be added later for hand-written Rust kernels, where a proof about the code
 itself is worth its toolchain.
+
+## In place (2026-10-10)
+
+* `formal/InkvecTheory/InkvecTheory/Gen/`: the expression language `Expr` with its real,
+  rational and interval semantics and their soundness theorems (`evalQ_sound`,
+  `evalI_sound`, `nonneg_of_evalI`); the Rust printer; `Emit.lean`, which writes the
+  generated files.
+* `crates/inkvec-verified`: no dependencies; the runtime (`iv.rs`, outward-rounded
+  intervals; `q.rs`, checked `i128` rationals with an overflow-free exact comparison) and
+  the generated kernels. The `formal` CI job regenerates them and fails on any difference.
+* The first kernels (`Gen/Strip.lean`): `strip.rs`'s cubic stencil is now the generated one,
+  bit for bit the formula it replaced (output unchanged on 120 traces in both modes), and
+  every vertex the strip reading moves is accepted only if the generated interval checker
+  proves it lies on the cubic the column sums determine to 1e-9 px
+  (`stripResidual_on_cubic`); a refusal sends the vertex to the probes.

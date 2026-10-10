@@ -98,6 +98,7 @@ DOCS = {
     "code-of-conduct.html": ("CODE_OF_CONDUCT.md", "Code of conduct"),
     "algorithm/index.html": ("docs/algorithm/README.md", "How inkvec works"),
     "algorithm/constants.html": ("docs/algorithm/constants.md", "Constants"),
+    "theory.html": ("docs/theory/README.md", "Theory"),
 }
 
 # The Studio user guide: (page, sidebar label), in reading order. Page "x" is
@@ -144,7 +145,8 @@ NAV = [
     ("Studio tutorials", [(f"studio/{p}.html", label) for p, label in STUDIO_TUTORIALS]),
     ("How it works", [("algorithm/index.html", "The series")]
      + [(f"algorithm/{slug}.html", label) for slug, label in STAGES]
-     + [("algorithm/constants.html", "Constants and thresholds")]),
+     + [("algorithm/constants.html", "Constants and thresholds")]
+     + [("theory.html", "Theory: inverting the box filter")]),
     ("Reference", [("design.html", "Design"), ("bindings.html", "Bindings"),
                    ("limitations.html", "Limitations"), ("ai-usage.html", "AI usage"),
                    ("licences.html", "Licences")]),

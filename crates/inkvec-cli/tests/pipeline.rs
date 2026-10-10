@@ -371,8 +371,19 @@ fn no_restorer(mode: inkvec_restore::Mode) -> Args {
         // Below any residual, so `auto` always decides to restore.
         restore_threshold: -1.0,
         restore_weights: Some("no-such-dir/restorer.onnx".into()),
+        // A lossy container: the sign of compression `auto` needs besides the residual.
+        lossy: inkvec_sr::Mode::On,
         ..Args::default()
     }
+}
+
+/// The plain trace of `square()` from a lossy container, which `auto`'s fallbacks match.
+fn lossy_direct() -> String {
+    let args = Args {
+        lossy: inkvec_sr::Mode::On,
+        ..Args::default()
+    };
+    trace_image(square(), &args).expect("trace succeeds").svg
 }
 
 /// `--restore auto` asks for the restorer only where it helps, so a binary that cannot
@@ -388,8 +399,48 @@ fn restore_auto_without_a_restorer_traces_directly() {
         .expect("a restore line");
     assert!(note.contains("no restorer is available"), "{note}");
     assert!(note.contains("traced directly"), "{note}");
+    assert_eq!(t.svg, lossy_direct(), "the fallback is the plain trace");
+}
+
+/// `--restore auto` restores only an input the file or the pixels say was compressed: the
+/// residual alone reads smooth shading in clean art as damage. A clean input whose residual
+/// fires (the threshold below any residual) is traced as it is, and the stats say why.
+#[test]
+fn restore_auto_needs_a_sign_of_compression() {
+    let args = Args {
+        lossy: inkvec_sr::Mode::Off,
+        ..no_restorer(inkvec_restore::Mode::Auto)
+    };
+    let t = trace_image(square(), &args).expect("auto traces directly");
+    let note = t
+        .stats
+        .iter()
+        .find(|l| l.starts_with("restore"))
+        .expect("a restore line");
+    assert!(note.contains("no sign of compression"), "{note}");
     let direct = trace_image(square(), &Args::default()).expect("trace succeeds");
-    assert_eq!(t.svg, direct.svg, "the fallback is the plain trace");
+    assert_eq!(t.svg, direct.svg, "the plain trace");
+}
+
+/// `--sr auto` likewise cleans only an input that shows resampling or compression.
+#[test]
+fn sr_auto_needs_a_sign_of_resampling_or_compression() {
+    let args = Args {
+        lossy: inkvec_sr::Mode::Off,
+        ..no_upscaler(inkvec_sr::Mode::Auto)
+    };
+    let t = trace_image(square(), &args).expect("auto traces directly");
+    let note = t
+        .stats
+        .iter()
+        .find(|l| l.starts_with("sr "))
+        .expect("an sr line");
+    assert!(
+        note.contains("no sign of resampling or compression"),
+        "{note}"
+    );
+    let direct = trace_image(square(), &Args::default()).expect("trace succeeds");
+    assert_eq!(t.svg, direct.svg, "the plain trace");
 }
 
 /// Upscaler flags that cannot give an upscaler: an empty `--sr-command`, the same failure a
@@ -400,6 +451,8 @@ fn no_upscaler(mode: inkvec_sr::Mode) -> Args {
         // Below any residual, so `auto` always decides to clean.
         sr_threshold: -1.0,
         sr_command: Some(String::new()),
+        // A lossy container: the sign of damage `auto` needs besides the residual.
+        lossy: inkvec_sr::Mode::On,
         ..Args::default()
     }
 }
@@ -418,8 +471,7 @@ fn sr_auto_without_an_upscaler_traces_directly() {
         .expect("an sr line");
     assert!(note.contains("no upscaler is available"), "{note}");
     assert!(note.contains("traced directly"), "{note}");
-    let direct = trace_image(square(), &Args::default()).expect("trace succeeds");
-    assert_eq!(t.svg, direct.svg, "the fallback is the plain trace");
+    assert_eq!(t.svg, lossy_direct(), "the fallback is the plain trace");
     // Monochrome: the probe is a colour trace, so the fallback traces again as asked.
     let mono = Args {
         monochrome: true,
@@ -432,6 +484,7 @@ fn sr_auto_without_an_upscaler_traces_directly() {
         .any(|l| l.contains("no upscaler is available")));
     let plain_mono = Args {
         monochrome: true,
+        lossy: inkvec_sr::Mode::On,
         ..Args::default()
     };
     assert_eq!(

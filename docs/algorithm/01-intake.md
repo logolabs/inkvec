@@ -599,7 +599,7 @@ itself is outside this page.
 `Mode::Auto` (`crates/inkvec-cli/src/lib.rs:588-653`) is the more interesting path: it takes
 the restorer's probe when there is one, and otherwise traces the image once as it arrived
 (`trace_once`, `lib.rs:1107-1136`), a stripped version of the ordinary pipeline — the same
-`fit_config`, bilevel or colour, matte included (through the copying `alpha_source`), and
+`fit_config`, bilevel or colour, matte and border pad included (through `trace_bordered`, the plain path's own, since 2026-10-10, so a kept probe is byte for byte the plain trace), and
 always in colour, because "a monochrome drawing disagrees with a colour input everywhere it
 is not black or white, which would read as damage on every image"; under `--monochrome` the
 probe decides and the trace is then made again as asked (`lib.rs:551-555`). It renders that
@@ -636,6 +636,26 @@ residual R > T, but no upscaler is available (<the error>); traced directly", an
 trace, in colour and in monochrome, and that `on` still errors. The fallback covers an
 upscaler that cannot be built; a packaged tool that is found but fails while running still
 fails the trace, under `auto` as under `on` (`prepass(...)?`, `crates/inkvec-cli/src/lib.rs:665`).
+
+**`auto` also needs a sign of damage of the input's own** (`crates/inkvec-cli/src/damage.rs`,
+2026-10-10). The residual reads smooth shading in clean, gradient-heavy art as damage: with
+`--restore auto` on the gate's opaque 512 px tier (PNG renders), the restorer ran on 7 of 246
+clean icons, all Noto emoji with shading, and the condition read dE00 +4.49 % and geom +13.9 %
+(`emoji_u1f5a8` geom 0.19 → 3.05). So a `Restore` decision stands only when the file or the
+pixels say the input was compressed (`damage::compressed`): a lossy container (`--lossy`,
+resolved from the file's first bytes), or JPEG ringing around the edges
+(`coverage::ringing_score` above the gate the palette's noise guard uses, `SOFT_RINGING_LARGE`
+from 256 px on, `SOFT_RINGING` below), which is how a JPEG re-saved as PNG is told. SR's `Clean`
+also accepts edges wider than a native render's (`damage::soft`: `intake_scale` above
+`SOFT_INTAKE_EDGE`), since the upscaler undoes resampling too. These are the three signals that
+open the palette's soft intake, and the corpus's clean renders pass none of them. Without one,
+`auto` keeps its probe and says so ("restore  residual R > T but no sign of compression; traced
+directly"; SR: "no sign of resampling or compression"). The ringing and the edge width are
+measured only when the residual has already fired, so an input it keeps pays nothing more
+(`ringing_score` is about 100 ms at 2048 px). On the `web` tier (JPEG files) every input has a
+lossy container and `auto` decides exactly as before. Tests:
+`restore_auto_needs_a_sign_of_compression`, `sr_auto_needs_a_sign_of_resampling_or_compression`
+(`crates/inkvec-cli/tests/pipeline.rs`).
 
 `interior_residual` (`inkvec-sr/src/detect.rs:97-155`) is the signal: both images are
 composited onto white, a mask marks pixels where the *traced model* is flat (using the
@@ -1153,8 +1173,9 @@ on a transparent ground read 1.00 and no icon of the screen set reads above 0.32
 removed in 0.1.7 (CHANGELOG, *Removed*).
 
 **Applying the matte: once, in place, in parallel.** The intake calls `alpha_source_owned`
-(`alpha.rs:599-625`) rather than the copying `alpha_source` (`alpha.rs:561-597`), which only
-the probe trace of `--sr auto` / `--restore auto` still uses (`crates/inkvec-cli/src/lib.rs:1128`).
+(`alpha.rs:599-625`) rather than the copying `alpha_source` (`alpha.rs:561-597`), which is
+now compiled for the tests only, as the oracle of the in-place version; the probe trace of
+`--sr auto` / `--restore auto` goes through the plain path since 2026-10-10.
 The steps:
 
 1. **Any transparency at all?** `has_transparency` (`crates/inkvec-cli/src/alpha.rs:832-853`)

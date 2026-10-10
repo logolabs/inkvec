@@ -516,7 +516,9 @@ SUPER-RESOLUTION PRE-PASS:
                             on    always clean first
                             auto  trace, measure the fit, clean and retrace only
                                   if the trace disagrees with the input where it
-                                  claims to be flat; with no upscaler to run (no
+                                  claims to be flat and the input shows resampling
+                                  or compression (a lossy file, JPEG ringing, wide
+                                  edges); with no upscaler to run (no
                                   tools/inkvec_sr beside the binary) it traces
                                   directly and says so, where `on` fails
         --sr-threshold <f>  Interior residual above which auto cleans [default: 0.5]
@@ -539,7 +541,9 @@ RESTORER PRE-PASS:
                             on    always restore first
                             auto  trace, measure the fit, restore and retrace only
                                   if the trace disagrees with the input where it
-                                  claims to be flat; with no restorer to run (a
+                                  claims to be flat and the input shows compression
+                                  (a lossy file, or JPEG ringing); with no restorer
+                                  to run (a
                                   build without the network, no weights) it
                                   traces directly and says so, where `on` fails
         --restore-threshold <f>   Interior residual above which auto restores

@@ -1,4 +1,4 @@
-"""The regression gate: score the 246-icon screen set under six conditions, and fail when a
+"""The regression gate: score the 246-icon screen set under eight conditions, and fail when a
 change cannot show it is not worse than the recorded baseline.
 
     python bench/ci_gate.py --exe target/release/inkvec [--workers N]
@@ -11,19 +11,26 @@ Conditions
 ----------
 Each condition is a tracer mode and an intake tier of the same 246 icons (`CONDITIONS`):
 
-    quality-128ss   quality-512ss   quality-512ssop
-    fast-128ss      fast-512ss      fast-512ssop
+    quality-128ss   quality-512ss   quality-512ssop   quality-web
+    fast-128ss      fast-512ss      fast-512ssop      fast-web
 
 `128ss` / `512ss` are the committed 8x-supersampled rasters at 128 and 512 px; `512ssop` is
 the 512 px raster flattened onto white, an opaque logo on a white page (`svgeval.item_paths`
-derives it). Every condition is judged at 1024 px against the artist's file.
+derives it). `web` is a logo as it usually reaches a tracer: the 512 px raster on white,
+resized to 400 px (bicubic) and saved as a JPEG at quality 80 with 4:2:0 chroma, so blur,
+ringing, block artefacts and half-resolution colour (`build_web_tier.py`; the JPEG files are
+committed). Every condition is judged at 1024 px against the artist's file.
 
-Why six and not one. The gate used to score Quality at 128 px only, 98 % transparent; users
+Why eight and not one. The gate used to score Quality at 128 px only, 98 % transparent; users
 send 512-2048 px, mostly opaque. On the 0.2.4 boundary-solve rewrite the 128 px gate read
 -8.5 % dE00 where 512 px read -0.9 % (indistinguishable from zero), per-icon deltas at 128
 and 512 px were uncorrelated (Spearman +0.14), and material-icons went from -47 % at 128 px
 to +14 % at 512 px: a regression the old gate could not see (r2-eval, 2026-10-02). 128 px
-stays as the continuity row; Fast mode had no fidelity gate at all.
+stays as the continuity row; Fast mode had no fidelity gate at all. The rasters above are
+exact renders, noiseless but for 8-bit rounding; the files users send have been resampled
+and compressed on the way, and a tracer tuned on exact renders alone can fit that noise
+(a ringing edge read as a thin band of its own colour, a JPEG block read as a corner). The
+`web` rows gate that case.
 
 Axes and the decision
 ---------------------
@@ -120,9 +127,11 @@ CONDITIONS = (
     Condition("quality-128ss", "128ss"),
     Condition("quality-512ss", "512ss"),
     Condition("quality-512ssop", "512ssop"),
+    Condition("quality-web", "web"),
     Condition("fast-128ss", "128ss", ("--mode", "fast")),
     Condition("fast-512ss", "512ss", ("--mode", "fast")),
     Condition("fast-512ssop", "512ssop", ("--mode", "fast")),
+    Condition("fast-web", "web", ("--mode", "fast")),
 )
 BY_NAME = {c.name: c for c in CONDITIONS}
 

@@ -140,6 +140,8 @@ pub(crate) struct EmitOptions {
     pub harmonize_threshold: f64,
     /// Write harmonized shapes as `<use>` of one shared definition.
     pub use_symbols: bool,
+    /// Complete each face behind what is painted over it ([`crate::layers`]).
+    pub layers: bool,
 }
 
 /// Emit the map as a **stacked** document: faces painted back to front, each drawing only
@@ -221,6 +223,7 @@ pub(crate) fn emit_color(doc: &ColorDoc, opts: &EmitOptions) -> String {
     let paint = face_paint(doc, &stack, &mut defs);
     let (roots, children) = paint_tree(doc, &nest, &stack, paint.fills.len());
     let ids = face_ids(doc);
+    let no_completions = HashMap::new();
     let strokes = if opts.native {
         annulus_strokes(doc, drawn, &stack, &paint, &harmonized, decimals)
     } else {
@@ -241,16 +244,34 @@ pub(crate) fn emit_color(doc: &ColorDoc, opts: &EmitOptions) -> String {
         harmonized_d: &harmonized.d,
         symbol_use: &harmonized.symbols,
         strokes: &strokes,
+        completed: &no_completions,
     };
     let mut painted = Vec::new();
     let mut body = writer.body(&roots, &seams::Overrides::new(), &mut painted);
     write_ribbons(doc, &mut body, &mut painted);
 
+    // Each face completed behind what is painted over it (see `crate::layers`), in the paint
+    // ranks the first pass settled. The second pass writes completed faces in the same
+    // places, so every rank a completion relied on still holds.
+    let completed = if opts.layers {
+        complete_layers(doc, &nest, &stack, &paint, &writer, &painted, decimals)
+    } else {
+        HashMap::new()
+    };
+    let writer = Writer {
+        completed: &completed,
+        ..writer
+    };
+
     // Side-by-side faces: the lower reaches under the upper so no ground shows through
-    // their shared edge (see `crate::seams`). The first pass settled the paint order; the
-    // second writes the moved outlines, and is skipped when nothing moves.
+    // their shared edge (see `crate::seams`); a completed face already does. The first pass
+    // settled the paint order; the second writes the moved and completed outlines, and is
+    // skipped when nothing changes.
     if let Some(moved) = seam_overrides(doc, &nest, &stack, &paint, &writer, &painted) {
         body = writer.body(&roots, &moved, &mut Vec::new());
+        write_ribbons(doc, &mut body, &mut Vec::new());
+    } else if !completed.is_empty() {
+        body = writer.body(&roots, &seams::Overrides::new(), &mut Vec::new());
         write_ribbons(doc, &mut body, &mut Vec::new());
     }
 
@@ -933,6 +954,7 @@ enum Element {
 
 /// Stage 7: the element writer. Holds every per-face decision made so far and writes the
 /// paint tree as SVG elements.
+#[derive(Clone, Copy)]
 struct Writer<'a> {
     /// The rings of each face.
     order: &'a [FaceRings],
@@ -960,6 +982,8 @@ struct Writer<'a> {
     symbol_use: &'a HashMap<usize, (String, String)>,
     /// Faces written as one stroked primitive ([`annulus_strokes`]).
     strokes: &'a HashMap<usize, String>,
+    /// Faces completed behind what is painted over them ([`crate::layers`]).
+    completed: &'a HashMap<usize, crate::layers::Completion>,
 }
 
 impl Writer<'_> {
@@ -983,6 +1007,13 @@ impl Writer<'_> {
     fn face_d(&self, i: usize, under: &seams::Overrides) -> String {
         if let Some(h_d) = self.harmonized_d.get(&i) {
             return h_d.clone();
+        }
+        if let Some(crate::layers::Completion {
+            shape: crate::layers::Shape::Path(d),
+            ..
+        }) = self.completed.get(&i)
+        {
+            return d.clone();
         }
         let (order, fitted, decimals) = (self.order, self.fitted, self.decimals);
         let mut d = String::new();
@@ -1048,6 +1079,20 @@ impl Writer<'_> {
             }
             return Some((Element::Ready(el), true));
         }
+        // A face completed behind its cover: its primitive, or its path.
+        if let Some(c) = self.completed.get(&i) {
+            match &c.shape {
+                crate::layers::Shape::Prim(kind) => {
+                    if let Some(mut el) = primitive_element(kind, fill, alpha, self.decimals) {
+                        if let Some(sp) = el.find(' ') {
+                            el.insert_str(sp, &format!(" id=\"{id}\""));
+                        }
+                        return Some((Element::Ready(el), true));
+                    }
+                }
+                crate::layers::Shape::Path(d) => return Some((Element::Path(d.clone()), false)),
+            }
+        }
         // A primitive element cannot carry a hole, so a face that has to show one through
         // is written as a path even when its outline would have fitted a circle.
         let drawn = &self.drawn[i];
@@ -1067,6 +1112,33 @@ impl Writer<'_> {
             return None;
         }
         Some((Element::Path(d), false))
+    }
+
+    /// Whether face `i` is written as an element of its own, not merged into a compound path
+    /// with its same-coloured siblings, *before* any completion: a symbol's `<use>`, a
+    /// stroke, or a primitive outline with nothing punched out of it. Grouping is decided
+    /// on this, so a completion never moves a face to another place in the paint order.
+    fn stands_alone(&self, i: usize) -> bool {
+        if self.symbol_use.contains_key(&i) || self.strokes.contains_key(&i) {
+            return true;
+        }
+        let drawn = &self.drawn[i];
+        drawn.len() == 1
+            && self.order[i][drawn[0]].len() == 1
+            && self.holes[i].is_empty()
+            && self
+                .prims
+                .get(self.order[i][drawn[0]][0].0)
+                .and_then(|p| p.as_ref())
+                .is_some_and(|pf| primitive_element(&pf.kind, "", "", self.decimals).is_some())
+    }
+
+    /// Whether face `i` is completed as a primitive element.
+    fn completed_prim(&self, i: usize) -> bool {
+        matches!(
+            self.completed.get(&i).map(|c| &c.shape),
+            Some(crate::layers::Shape::Prim(_))
+        )
     }
 
     /// The `<path>` of face `i` -- its id, fill and opacity -- drawing `d`, a compound path
@@ -1110,11 +1182,11 @@ impl Writer<'_> {
             }
             done[a] = true;
             let i = members[a];
-            let Some((element, is_prim)) = self.face_element(i, under) else {
+            if self.face_element(i, under).is_none() {
                 continue;
-            };
+            }
             let mut group = vec![i];
-            if !is_prim && fills[i].starts_with('#') && !self.symbol_use.contains_key(&i) {
+            if !self.stands_alone(i) && fills[i].starts_with('#') {
                 for b in a + 1..members.len() {
                     if done[b]
                         || fills[members[b]] != fills[i]
@@ -1124,30 +1196,43 @@ impl Writer<'_> {
                         continue;
                     }
                     let j = members[b];
-                    let Some((_, prim_b)) = self.face_element(j, under) else {
+                    if self.face_element(j, under).is_none() {
                         done[b] = true;
                         continue;
-                    };
-                    if prim_b {
+                    }
+                    if self.stands_alone(j) {
                         continue;
                     }
                     done[b] = true;
                     group.push(j);
                 }
             }
-            let element = match element {
-                Element::Ready(el) => el,
-                Element::Path(d) if group.len() == 1 => self.path_element(i, &d),
-                Element::Path(_) => {
-                    let mut d = String::new();
-                    for &j in &group {
-                        d.push_str(&self.face_d(j, under));
+            // Members completed as primitives are written as elements of their own, in the
+            // group's place; the rest as one path, wound as a whole: a member's depth is
+            // counted among every ring of the merged element, not only its own.
+            let (alone, merged): (Vec<usize>, Vec<usize>) =
+                group.iter().partition(|&&j| self.completed_prim(j));
+            let mut element = String::new();
+            if let Some(&lead) = merged.first() {
+                match self.face_element(lead, under) {
+                    Some((Element::Ready(el), _)) => element.push_str(&el),
+                    Some((Element::Path(d), _)) if merged.len() == 1 => {
+                        element.push_str(&self.path_element(lead, &d))
                     }
-                    // Wound as one path: a member's depth is counted among every ring of
-                    // the merged element, not only its own.
-                    self.path_element(i, &d)
+                    _ => {
+                        let mut d = String::new();
+                        for &j in &merged {
+                            d.push_str(&self.face_d(j, under));
+                        }
+                        element.push_str(&self.path_element(lead, &d));
+                    }
                 }
-            };
+            }
+            for &j in &alone {
+                if let Some((Element::Ready(el), _)) = self.face_element(j, under) {
+                    element.push_str(&el);
+                }
+            }
             // One element is one paint: its members share a rank, so none of them reaches
             // under another -- inside one compound path an overlap would cancel to a hole
             // (or, wound for nonzero, count twice), and a shared edge inside one path cannot
@@ -1193,6 +1278,95 @@ fn mean_ink(doc: &ColorDoc, base_of: &[Option<[f32; 3]>], i: usize) -> Option<[f
     }
 }
 
+/// Stage 7b: each face completed behind what is painted over it, in the paint ranks the
+/// first writing pass recorded in `painted` ([`crate::layers`]).
+///
+/// What covers: every painted face that paints opaque everywhere (no opacity attribute, no
+/// fade, no alpha ramp), and the strokes of [`crate::ribbons`], which go on top of
+/// everything; a face written as strokes is not a face here. What may be completed: such a
+/// face written from its own rings (not a harmonized consensus, a symbol or an annulus
+/// stroke) with nothing punched out of it. Its cost now is the gate's count of the element
+/// it is written as.
+fn complete_layers(
+    doc: &ColorDoc,
+    nest: &Nesting,
+    stack: &Stacking,
+    paint: &Paint,
+    writer: &Writer,
+    painted: &[(usize, usize)],
+    decimals: usize,
+) -> HashMap<usize, crate::layers::Completion> {
+    let n = doc.order.len();
+    let mut rank = vec![None; n];
+    for &(f, r) in painted {
+        if f < n && !doc.ribbons.elements.contains_key(&f) {
+            rank[f] = Some(r);
+        }
+    }
+    let covers: Vec<bool> = (0..n)
+        .map(|i| {
+            rank[i].is_some()
+                && paint.opac[i].is_empty()
+                && doc.fades.get(i).is_none_or(|f| f.is_none())
+                && doc.alpha_ramps.get(i).is_none_or(|r| r.is_none())
+        })
+        .collect();
+    let candidate: Vec<bool> = (0..n)
+        .map(|i| {
+            covers[i]
+                && stack.holes[i].is_empty()
+                && !writer.harmonized_d.contains_key(&i)
+                && !writer.symbol_use.contains_key(&i)
+                && !writer.strokes.contains_key(&i)
+        })
+        .collect();
+    let empty = seams::Overrides::new();
+    let cost_now = |i: usize| -> f64 {
+        match writer.face_element(i, &empty) {
+            Some((Element::Path(d), _)) => crate::layers::gate_count(&d),
+            Some((Element::Ready(el), _)) => element_count(&el),
+            None => 0.0,
+        }
+    };
+    let strokes: Vec<crate::layers::StrokeShape> = doc.ribbons.shapes.values().cloned().collect();
+    let done = crate::layers::complete(&crate::layers::Input {
+        order: doc.order,
+        fitted: doc.fitted,
+        prims: doc.prims,
+        outer: &nest.outer,
+        holes: &stack.holes,
+        rank: &rank,
+        covers: &covers,
+        candidate: &candidate,
+        cost_now: &cost_now,
+        strokes: &strokes,
+        decimals,
+    });
+    if inkvec_core::env::number("INKVEC_LAYERS_DEBUG").is_some_and(|v| v != 0.0) {
+        let (b, a): (f64, f64) = done.values().map(|c| (c.before, c.after)).fold((0.0, 0.0), |s, c| (s.0 + c.0, s.1 + c.1));
+        eprintln!("layers: {} face(s) completed, {b:.0} -> {a:.0} parameters", done.len());
+    }
+    done
+}
+
+/// The gate's count of one finished element: a primitive's own (circle 3, ellipse 4,
+/// rectangle 6), else the path data's.
+fn element_count(el: &str) -> f64 {
+    let t = el.trim_start();
+    if t.starts_with("<circle") {
+        3.0
+    } else if t.starts_with("<ellipse") {
+        4.0
+    } else if t.starts_with("<rect") {
+        6.0
+    } else if let Some(s) = t.find(" d=\"") {
+        let rest = &t[s + 4..];
+        crate::layers::gate_count(&rest[..rest.find('"').unwrap_or(rest.len())])
+    } else {
+        0.0
+    }
+}
+
 /// Stage 8: the edges to move so side-by-side faces reach under each other, or `None`
 /// when the underlap is switched off or nothing moves.
 ///
@@ -1233,6 +1407,7 @@ fn seam_overrides(
                 && !writer.harmonized_d.contains_key(&i)
                 && !writer.symbol_use.contains_key(&i)
                 && !writer.strokes.contains_key(&i)
+                && !writer.completed.contains_key(&i)
                 && !doc.ribbons.elements.contains_key(&i)
         })
         .collect();

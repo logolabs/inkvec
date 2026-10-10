@@ -156,6 +156,7 @@ fn test_emit_color_single_face() {
         harmonize: true,
         harmonize_threshold: 0.05,
         use_symbols: false,
+        layers: false,
         cutout: false,
         no_background: false,
     };
@@ -285,6 +286,7 @@ fn test_emit_color_with_layers() {
         harmonize: true,
         harmonize_threshold: 0.05,
         use_symbols: false,
+        layers: false,
         cutout: false,
         no_background: false,
     };

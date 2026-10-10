@@ -104,7 +104,7 @@
   "mutation:inkvec-trace/gradient": 67,
   "mutation:inkvec-trace/native": 68,
   "rustfmt_hunks": 0,
-  "test_functions": 1141,
+  "test_functions": 1166,
   "untested_modules": [
     "crates/inkvec-cli/src/alpha.rs",
     "crates/inkvec-cli/src/rings.rs",

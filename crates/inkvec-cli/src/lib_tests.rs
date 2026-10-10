@@ -239,6 +239,8 @@ fn test_sr_and_restore_error_recovery_paths() {
     let args_restore = Args {
         restore: inkvec_restore::Mode::Auto,
         restore_threshold: -1.0,
+        // A lossy container, the sign of compression `auto` needs besides the residual.
+        lossy: inkvec_sr::Mode::On,
         ..Args::default()
     };
     let res_rest = trace_image(sq, &args_restore);

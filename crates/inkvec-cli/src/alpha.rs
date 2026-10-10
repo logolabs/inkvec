@@ -18,7 +18,7 @@
 //!
 //! * intake, in `lib.rs`: [`pixel_grid`] (undoing a nearest-neighbour upscale), then, once
 //!   every resampling step is done, [`alpha_source_owned`] (the matte written over the
-//!   input's own buffer; the probe trace uses the copying [`alpha_source`]) and
+//!   input's own buffer; the copying [`alpha_source`] is the tests' oracle for it) and
 //!   [`cutout_args`]; everything after traces [`AlphaSource::flat`];
 //!
 //! [`pixel_grid`] (in `alpha/unblock.rs`) is the exact inverse of a nearest-neighbour
@@ -585,6 +585,7 @@ pub(crate) struct AlphaSource {
 /// "Any transparency" means at least one pixel with alpha under 0.999. Unless `quiet`, the
 /// matte and the share of clear pixels (alpha under 0.05) go to stderr, and so does a note
 /// when the cutout was turned on here.
+#[cfg(test)]
 pub(crate) fn alpha_source(
     img: &inkvec_trace::Rgba,
     quiet: bool,
@@ -737,6 +738,7 @@ pub(crate) fn cutout_args<'a>(
 /// Method from: T. Porter, T. Duff, "Compositing Digital Images", SIGGRAPH '84,
 /// pp. 253–259, DOI 10.1145/800031.808606 -- "over" with an opaque background. Adapted to
 /// straight (unpremultiplied) colour, as `inkvec_trace::Rgba` stores it.
+#[cfg(test)]
 pub(crate) fn flatten_over(
     img: &inkvec_trace::Rgba,
     matte: [f32; 3],

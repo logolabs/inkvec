@@ -689,3 +689,22 @@ Since the settings cleanup (CHANGELOG, 0.2.0, *Changed*) the engine reads its en
   and on two of the 12 dots the gradient stage explains them with a radial gradient ending in the
   rim colour (`#bc934e`). The input really is brighter there; whether a flat dot would be the better
   description is a question for the fill fit, not the palette.
+- **Real inks inside the soft floor (measured, not shipped).** On a soft intake
+  `SOFT_SAME_INK_DE00` folds every candidate within 5 dE00 of an accepted ink, and so folds real
+  neighbouring inks too: on `synthetic/mosaic_grid6` (`web` tier) eleven of 37 fills lie 3.2-4.9
+  dE00 from a neighbour. A rule that held such a candidate to the clean floor (`SAME_INK_DE00`)
+  when its claim has an interior (>= 64 pixels whose 5x5 window is all claimed), it is >= 12
+  levels from the ink it would join (beyond the codec's p99 error two pixels from an edge), and
+  its claim's border steps by >= half that distance (edge-bounded, not a gradient band) was
+  measured on `quality-web` (246 icons, against the recorded baseline, 2026-10-10):
+
+  | version | dE00 | geom | ratio | turning |
+  |---|---|---|---|---|
+  | interior only | −6.01 % | −15.42 % | +17.63 % | +6.43 % |
+  | interior and step | −6.16 % | −16.66 % | +15.18 % | +1.44 % |
+  | interior, step and border (42 changed icons rescored) | −6.93 % | −16.82 % | +0.21 % | +1.18 % |
+
+  The mosaic gets its fills back (dE00 0.787 → 0.524, geom 2.47 → 1.04, ratio 2.05 → 2.35), but
+  noto-emoji's shading inks come back as faces too (27 icons: family dE00 −0.045, geom −0.12,
+  ratio +0.07), and parameters and turning may not rise at all, so it is not shipped. The rule,
+  its tests and its constants are kept on the branch `quality-soft-support-measured`.

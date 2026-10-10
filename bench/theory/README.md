@@ -11,6 +11,7 @@ readings scored against exactly known geometry.
 | `attribution.py` | each icon's dE00 against the artist's render at 1024 px, split by where it lies: within a source pixel of an edge (smooth, corner, junction), 1-3 px from one, flat or shaded interior, and blobs of missing or extra features |
 | `params_diag.py` | the gate's parameter count of the trace and the artist's file, by element and segment kind, per family and for stroked against filled artwork |
 | `naturality_diag.py` | parameters an artist would not write: collinear vertices, straight cubics, co-circular arcs, open strokes that continue each other |
+| `oracle_cost.py` | the trace against the artist's own file on the input's pixels and the tracer's price per parameter: which icons the objective would rather have the artist's description for (a search error) and which it prefers the trace for (a question for the prior), `docs/theory/optimal.md` §6 |
 
 ```bash
 cargo build --release -p inkvec-cli
@@ -20,6 +21,7 @@ python3 bench/theory/inkvec_compare.py --exe target/release/inkvec [--mode fast]
 python3 bench/theory/attribution.py --exe target/release/inkvec --tier 512ss
 python3 bench/theory/params_diag.py --exe target/release/inkvec --tier 512ss
 python3 bench/theory/naturality_diag.py --exe target/release/inkvec --tier 512ss
+python3 bench/theory/oracle_cost.py --exe target/release/inkvec --tier 512ss
 ```
 
 Coordinates: these scripts put pixel `(i, j)` on `[i, i+1] × [j, j+1]`; inkvec puts pixel

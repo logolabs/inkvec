@@ -5,8 +5,10 @@
 > inkvec's sub-pixel stage.
 
 **Formal development:** [`formal/InkvecTheory`](../../formal/InkvecTheory/README.md)
-(Lean 4.34.1, Mathlib; no `sorry`, no axiom of its own, 38 headline theorems audited).
+(Lean 4.34.1, Mathlib; no `sorry`, no axiom of its own, 42 headline theorems audited).
 **Experiments:** [`bench/theory`](../../bench/theory/README.md).
+**Next:** [the optimal vectorizer, informally](optimal.md): what the best possible tracer
+computes, how far inkvec is from it, and which approximations to make.
 **Code it changed:** `crates/inkvec-trace/src/planar/strip.rs` (new) and `probe_chord`
 (moved to `crates/inkvec-trace/src/planar/chord.rs`).
 

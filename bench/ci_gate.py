@@ -34,19 +34,30 @@ and compressed on the way, and a tracer tuned on exact renders alone can fit tha
 
 Axes and the decision
 ---------------------
-Per condition, three axes are gated against the per-icon baseline of the same condition:
+Per condition, four axes are gated against the per-icon baseline of the same condition:
 
 * **dE00**    colour error against the artist's render, family-macro mean, margin `MARGINS`
-* **turning** control-polygon turning per unit length, plain mean (`inkvec_bench/turning.py`)
-* **ratio**   parameters against the artist's file, family-macro mean
+* **turning_gap** distance from the artist's control-polygon turning: |the trace's turning
+              per unit length × the raster's side − the artist's turning per unit length
+              × the longer side of its canvas|, family-macro mean (`with_gaps`,
+              `inkvec_bench/turning.py`). Scale-free, and zero where the trace turns exactly
+              as much as the artist's file
+* **ratio_gap** distance from the artist's parameter count, |ln(parameters / the
+              artist's)|, family-macro mean: twice and half the artist's count are equally far
 * **geom**    geometric match to the artist's file, family-macro mean: the mean distance,
               in input pixels, between the trace's edges and the artist's, read as the area
               where the two files, drawn flat in the artist's colours, disagree, over the
               length of the artist's edges (`inkvec_bench/geomatch.py`). An edge moved by
               `δ` reads `δ`; the artist's own file reads 0
 
-and `self_res` and `geom_far` (the part of `geom` more than an input pixel from any artist
-edge: missing or extra features) are reported. For each axis, `bench/gate_stats.py` computes the relative
+and the raw `turning` (plain mean) and `ratio` (family-macro mean), `self_res` and
+`geom_far` (the part of `geom` more than an input pixel from any artist edge: missing or
+extra features) are reported. Turning and parameters were gated raw until 2026-10-10, lower
+counting as better; but the artists' files turn more than the traces of lucide, material-icons
+and simple-icons (per canvas side 3.35, 6.71 and 8.73 against 2.65, 4.70 and 6.89 at
+512ssop), and noto-emoji on `web` writes fewer numbers than its artists, so a trace moving
+toward the artist read as a regression. The gaps are computed from the stored rows, so the
+baselines needed no re-trace. For each axis, `bench/gate_stats.py` computes the relative
 change of the aggregate with a paired, family-stratified bootstrap interval (Koehn 2004)
 and takes a non-inferiority verdict (Lakens 2017) against the effective margin
 max(`MARGINS`, minimum detectable effect): the change passes when the one-sided 95 % upper
@@ -90,10 +101,13 @@ checkout; only generated output (the `_gate` work folder, the cache) is ignored.
 from __future__ import annotations
 
 import argparse
+import functools
 import hashlib
 import json
+import math
 import os
 import platform
+import re
 import subprocess
 import sys
 import time
@@ -137,7 +151,7 @@ BY_NAME = {c.name: c for c in CONDITIONS}
 
 #: How each axis is aggregated over the set (see gate_stats.compare).
 AGGREGATE = {"de00": "macro", "turning": "micro", "ratio": "macro", "self_res": "micro",
-             "geom": "macro", "geom_far": "macro"}
+             "geom": "macro", "geom_far": "macro", "turning_gap": "macro", "ratio_gap": "macro"}
 #: The relative rise each gated axis may show at its one-sided 95 % upper bound. Chosen on
 #: the replay of the 0.2.4 decisions through this rule (REPORT of agent w2-gate,
 #: 2026-10-02): at 2 % every recorded 0.2.4 change passes at every condition, while at 1 %
@@ -151,14 +165,72 @@ AGGREGATE = {"de00": "macro", "turning": "micro", "ratio": "macro", "self_res": 
 #: stays at 2 %), and asked that the gate never answer "inconclusive": gate_stats.decide
 #: floors each margin at the comparison's minimum detectable effect (about 4 % for a broad
 #: edit at 512 px), so the strict margin holds wherever the set can test it.
-MARGINS = {"de00": 0.01, "turning": 0.02, "ratio": 0.03, "geom": 0.02}
+#:
+#: Turning and parameters are gated as distances from the artist's file (`turning_gap`,
+#: `ratio_gap`, see `with_gaps`), not as raw values, since 2026-10-10: lower is not better
+#: where the artist's own file turns more or holds more numbers than the trace (lucide,
+#: material-icons and simple-icons traces turn less than their artists do; noto-emoji on
+#: `web` writes fewer numbers), and a trace moving toward the artist must not read as a
+#: regression. The raw values stay reported. Same margins as the raw axes had.
+MARGINS = {"de00": 0.01, "turning_gap": 0.02, "ratio_gap": 0.03, "geom": 0.02}
 GATED_AXES = tuple(MARGINS)
 #: The Ladder's step (gate_stats.decide): a "better" verdict, the only one that moves a
 #: baseline, needs its one-sided upper bound below -0.1 %. Comparing the Linux and Windows
 #: builds of v0.2.4 read "better" on fast-512ss dE00 at -0.00 % (two icons, both a hair
 #: lower) without it.
 LADDER_STEP = 0.001
-REPORTED_AXES = GATED_AXES + ("self_res", "geom_far")
+REPORTED_AXES = GATED_AXES + ("turning", "ratio", "self_res", "geom_far")
+
+#: Side of each committed raster tier, in px (every screen raster is square:
+#: `tests/test_ci_gate.py` checks it). An opaque tier `<base>op` has its base tier's side.
+TIER_PX = {"128ss": 128, "512ss": 512, "web": 400}
+
+
+def canvas_side(svg: str) -> float | None:
+    """The longer side of an SVG's canvas, in its own user units: the viewBox's, else the
+    root's width and height. The harness fits the longer side to the raster
+    (`inkvec_bench.render.fit_viewbox`), so a turning per user unit times this side is a
+    turning per raster side, the same in the artist's units and in the trace's px."""
+    head = svg[:svg.find(">", svg.find("<svg")) + 1] if "<svg" in svg else ""
+    m = re.search(r'viewBox\s*=\s*"\s*[-\d.eE+]+[\s,]+[-\d.eE+]+[\s,]+([\d.eE+]+)[\s,]+([\d.eE+]+)', head)
+    if m:
+        return max(float(m.group(1)), float(m.group(2))) or None
+    dims = [re.search(rf'\s{a}\s*=\s*"\s*([\d.]+)', head) for a in ("width", "height")]
+    vals = [float(d.group(1)) for d in dims if d]
+    return max(vals) if vals and max(vals) > 0 else None
+
+
+@functools.cache
+def artist_turning(key: str) -> float | None:
+    """The artist's file's turning per canvas side (`inkvec_bench/turning.py` times
+    `canvas_side`) for icon `family/stem`, or None when its file is missing or has no canvas
+    size. Read as written: a scale in a `transform` is not applied (none of the screen set's
+    files scales a group)."""
+    from inkvec_bench.turning import turning
+    corpus, stem = key.split("/", 1)
+    path = ROOT / "bench" / "data" / "corpus_svg" / corpus / f"{stem}.svg"
+    if not path.exists():
+        return None
+    svg = path.read_text(encoding="utf-8")
+    side = canvas_side(svg)
+    return turning(svg) * side if side else None
+
+
+def with_gaps(rows: dict, cond: Condition) -> dict:
+    """Add the two distances from the artist's file to each row, in place, and return rows:
+
+    * `turning_gap` = |turning × raster side − the artist's turning per canvas side|, in
+      radians of control-polygon turning per canvas side (scale-free; an icon without an
+      artist reading measures from 0);
+    * `ratio_gap` = |ln(parameters / the artist's)|, so twice and half the artist's count
+      are equally far.
+    """
+    px = TIER_PX[svgeval.base_tier(cond.tier)]
+    for k, r in rows.items():
+        a = artist_turning(k)
+        r["turning_gap"] = abs(r["turning"] * px - (a if a is not None else 0.0))
+        r["ratio_gap"] = abs(math.log(max(r["ratio"], 1e-9)))
+    return rows
 
 
 # --------------------------------------------------------------------------- provenance
@@ -359,7 +431,7 @@ def fmt_row(cond: str, ax: str, c: gate_stats.Comparison, v: gate_stats.Verdict)
     margin = f"{v.margin * 100:.0f}%" if gated else "-"
     if gated and v.effective == v.effective and v.effective > v.margin:
         margin = f"{v.effective * 100:.1f}%*"  # floored at the MDE: the set cannot resolve the margin
-    return (f"  {cond:16s} {ax:9s} {c.base:9.5f} -> {c.cur:9.5f}  {c.rel * 100:+7.2f}%  "
+    return (f"  {cond:16s} {ax:11s} {c.base:9.5f} -> {c.cur:9.5f}  {c.rel * 100:+7.2f}%  "
             f"95% CI [{c.p025 * 100:+6.2f}, {c.p975 * 100:+6.2f}]  upper {c.p95 * 100:+6.2f}% "
             f"vs {margin:>3s}  MDE {c.mde * 100:5.2f}%  "
             f"changed {c.changed:3d} (better {c.better}, worse {c.worse})  "
@@ -486,7 +558,7 @@ def main() -> int:
     results, failures = {}, []
     for name in names:
         rows, fails = score_condition(exe, BY_NAME[name], items, a.workers)
-        results[name] = rows
+        results[name] = with_gaps(rows, BY_NAME[name])
         if len(rows) < len(items) - 2:
             failures.append(f"{name}: only {len(rows)} of {len(items)} icons scored "
                             f"({'; '.join(fails[:3])})")
@@ -536,7 +608,7 @@ def main() -> int:
             if cond_base is None:
                 print(f"  {name}: not in the baseline, informational only")
                 continue
-            base_rows = unpack_rows(cond_base["icons"])
+            base_rows = with_gaps(unpack_rows(cond_base["icons"]), BY_NAME[name])
             missing = sorted(set(base_rows) - set(rows))
             if len(missing) > 2 and a.sample is None:
                 gate_fail.append(f"{name}: {len(missing)} baseline icons were not scored")

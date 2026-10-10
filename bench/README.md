@@ -38,8 +38,8 @@ four gated axes are compared icon by icon with the per-platform baseline
 | axis | aggregate | margin at the one-sided 95 % upper bound |
 |---|---|---|
 | dE00 (colour error vs. the artist's file) | family-macro mean | 1 % |
-| turning (control-polygon turning per unit length; `inkvec_bench/turning.py`) | mean | 2 % |
-| parameter ratio vs. the artist's file | family-macro mean | 3 % |
+| turning gap (distance from the artist's control-polygon turning, per canvas side; `ci_gate.with_gaps`, `inkvec_bench/turning.py`) | family-macro mean | 2 % |
+| parameter gap (absolute log of parameters over the artist's: twice and half the artist's count are equally far) | family-macro mean | 3 % |
 | geom (mean edge displacement from the artist's file, input px; `inkvec_bench/geomatch.py`) | family-macro mean | 2 % |
 
 `geom` compares the trace with the artist's file as geometry: both drawn flat (no

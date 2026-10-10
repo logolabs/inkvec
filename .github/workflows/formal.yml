@@ -1,0 +1,54 @@
+name: formal
+
+# Machine-checks formal/InkvecTheory (Lean 4 + Mathlib): every proof, then the axiom audit,
+# which must report only Lean's three standard axioms. Runs only when the formal development
+# changes; the Mathlib build comes from its prebuilt cache (`lake exe cache get`).
+
+on:
+  push:
+    branches: [main, master]
+    paths: ["formal/**", ".github/workflows/formal.yml"]
+  pull_request:
+    paths: ["formal/**", ".github/workflows/formal.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: formal-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lean:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: formal/InkvecTheory
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install elan
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+            | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Fetch prebuilt Mathlib
+        run: lake exe cache get
+      - name: Build every proof
+        run: lake build
+      - name: Axiom audit
+        run: |
+          lake build InkvecTheory.Audit 2>&1 | tee audit.log
+          n=$(grep -c "depends on axioms" audit.log || true)
+          expected=$(grep -c "^#print axioms" InkvecTheory/Audit.lean)
+          if [ "$n" -ne "$expected" ]; then
+            echo "the audit printed $n axiom reports, expected $expected" >&2
+            exit 1
+          fi
+          if grep "depends on axioms" audit.log | grep -v "\[propext, Classical.choice, Quot.sound\]"; then
+            echo "a theorem depends on an axiom beyond Lean's standard three" >&2
+            exit 1
+          fi
+          if grep -rnE "\bsorry\b|^axiom |\badmit\b" InkvecTheory --include=*.lean | grep -v "Audit.lean"; then
+            echo "sorry, admit or a new axiom in the development" >&2
+            exit 1
+          fi

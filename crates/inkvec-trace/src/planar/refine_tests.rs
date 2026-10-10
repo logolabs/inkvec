@@ -40,7 +40,7 @@ fn refine_serial(
             continue;
         };
         let (moved, sigmas): (Vec<Point>, Vec<f64>) = (0..e.points.len())
-            .map(|k| refine_vertex(&ctx, fa, fb, e.left, e.right, &e.points, k))
+            .map(|k| refine_vertex(&ctx, fa, fb, e, k))
             .unzip();
         let closed = e.closed;
         let sigmas: Vec<f64> = (0..moved.len())

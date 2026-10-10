@@ -16,8 +16,8 @@ takes the noise estimate (`estimate_noise`, `inkvec-trace/src/lib.rs:325`), the 
 (`intake_scale`, `inkvec-trace/src/lib.rs:358`) and the ringing score (`ringing_score`,
 `inkvec-trace/src/lib.rs:363`) and feeds them into palette extraction (stage 03); the native-alpha
 path makes the same three measurements (`native.rs:828-833`). Later, `planar::refine_subpixel`
-(`planar.rs:445`) computes each boundary point's uncertainty in `vertex_sigma`
-(`planar.rs:1198-1256`), which re-derives the coverage-gradient formula this module documents
+(`planar.rs:438`) computes each boundary point's uncertainty in `vertex_sigma`
+(`planar.rs:1159-1217`), which re-derives the coverage-gradient formula this module documents
 rather than sharing a `CoverageField` object. Fast mode measures none of the three: its front end
 hands the shared stages `NOISE_FLOOR` as the noise (`fast/front.rs:152-163`). `inkvec-cli`'s intake
 reads `intake_scale` and `oversample_factor` to price its options in the raster's own units
@@ -577,7 +577,7 @@ opened (`inkvec-trace/src/lib.rs:396-401`), and `INKVEC_NOISE_SIGMAS` (*removed*
   than swept constants.
 - **The colour path never constructs a `CoverageField`, and its sigma is a separate copy.**
   It calls `estimate_noise` (`inkvec-trace/src/lib.rs:325`) and `intake_scale`
-  (`inkvec-trace/src/lib.rs:358`) itself, and `vertex_sigma` (`planar.rs:1198-1256`) re-derives the
+  (`inkvec-trace/src/lib.rs:358`) itself, and `vertex_sigma` (`planar.rs:1159-1217`) re-derives the
   `sigma_noise / contrast / |grad a|` formula and adds `DEFAULT_SIGMA_MODEL` in quadrature by hand
   rather than calling `CoverageField::position_sigma`. The two already differ in detail:
   `vertex_sigma` reads the coverage change across one pixel along the boundary normal on the

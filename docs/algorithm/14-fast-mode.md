@@ -493,7 +493,7 @@ solve and decode.
 * **Refinement measured in parallel, then applied**: a pure map over edges and, on edges of
   64 points or more, over vertices, with no parallel reduction; serial under 512 boundary
   vertices or while a debug printout or contour dump is on (`measure_subpixel`,
-  `planar.rs:502-603`).
+  `planar.rs:495-596`).
 * **Symmetry detection beside the measuring phase**, under `rayon::join`; both only read the
   lattice map (`lib.rs:1122-1155`).
 * **Junction debug flags read once** into a `OnceLock` (`planar/junctions.rs:54-70`).

@@ -4,9 +4,9 @@
 > the image actually supports, and attaches an honest uncertainty to each one.
 
 **Source:** `crates/inkvec-trace/src/planar.rs`, `crates/inkvec-trace/src/planar/junctions.rs`
-**Entry points:** `fn refine_subpixel_alpha()` (`planar.rs:468-477`; `refine_subpixel`,
-`planar.rs:445`, is its opaque form), which is `measure_subpixel` (`planar.rs:528-603`)
-followed by `Refined::apply` (`planar.rs:487-500`), stage mark `"refine_subpix"`; and
+**Entry points:** `fn refine_subpixel_alpha()` (`planar.rs:461-470`; `refine_subpixel`,
+`planar.rs:438`, is its opaque form), which is `measure_subpixel` (`planar.rs:521-596`)
+followed by `Refined::apply` (`planar.rs:480-493`), stage mark `"refine_subpix"`; and
 `fn refine_junctions()` (`planar/junctions.rs:340`, stage mark `"refine_junc"`)
 **Pipeline position:** after `build_map`, before `boundary_opt`. The measuring phase runs
 side by side with symmetry detection under `rayon::join` (`lib.rs:1122-1156`); both read the
@@ -44,7 +44,7 @@ pub fn refine_subpixel(
 Replaces every open and closed edge's `points` and `sigma`. `face_fill[f]` is the
 fill model for face `f` (`Flat` or a gradient) — not the palette entry, because several
 faces can share one ink and a gradient face has no single palette colour at all
-(`planar.rs:718-720`). `refine_subpixel_alpha` takes the same arguments plus the source
+(`planar.rs:711-713`). `refine_subpixel_alpha` takes the same arguments plus the source
 alpha and each face's opacity, for unmixing in four channels on a transparent image.
 
 Since 2026-09-30 the work is split in two phases:
@@ -69,28 +69,28 @@ edge sharing a node keeps bit-identical coordinates afterwards (`planar/junction
 
 ### `refine_subpixel`: per-point normal search
 
-For each edge point `p` (`planar.rs:793-839`):
+For each edge point `p` (`planar.rs:788-839`):
 
 1. **Local tangent.** Estimated from neighbours `window` points to either side
    (`INKVEC_SUBPX_WIN` (*removed*), default 1 — see Environment overrides), unless the turning angle
-   between the two chords exceeds `CORNER_COS` (60°, `planar.rs:424`), in which case the
+   between the two chords exceeds `CORNER_COS` (60°, `planar/chord.rs:15`), in which case the
    narrow one-point window is used instead so a wide window does not smear a real corner.
    The normal is perpendicular to the tangent.
 2. **Unmix colours.** `gradient::unmix_pair(fa, fb, p.x, p.y)` (`gradient.rs:574`)
    returns the two colours to project against and their separation `contrast`. If
    `contrast` is below `min_contrast = max(3*sigma_noise, MIN_UNMIX_CONTRAST)`
-   (`planar.rs:414, 586`), the point is left on the grid at placeholder sigma `0.5` — there
+   (`planar.rs:417, 586`), the point is left on the grid at placeholder sigma `0.5` — there
    is nothing to unmix across.
 3. **Sample coverage along the normal.** `UnmixAxis::coverage(x, y)` bilinearly samples the
-   source image and projects onto the unmixed colour axis (`planar.rs:620-647, 961-969`),
+   source image and projects onto the unmixed colour axis (`planar.rs:613-640, 961-969`),
    giving a 1-D coverage profile along the normal.
 4. **Classify the profile and invert it.** Two inversion strategies:
-   - **Step inversion** (`edge_offset`, `planar.rs:1021-1031`): closed-form inversion of the
+   - **Step inversion** (`edge_offset`, `planar.rs:982-992`): closed-form inversion of the
      *exact* half-plane coverage of a unit square, used when the profile is `step_like` —
      both flat fills, monotone (not a one-pixel-wide ridge), saturating on both sides
      within the probe span, and contrast at least `2 * min_contrast`
-     (`planar.rs:1138-1175`).
-   - **Root-find** (`planar.rs:1180-1196`): a 9-step scan for the `0.5` crossing along the
+     (`planar.rs:1099-1136`).
+   - **Root-find** (`planar.rs:1141-1157`): a 9-step scan for the `0.5` crossing along the
      normal, `[-1, 1]` pixels either side of `p`, used otherwise — including at any
      corner, at any gradient boundary, or wherever the profile is not step-like.
 5. **Positional uncertainty.** Combines statistical uncertainty
@@ -99,7 +99,7 @@ For each edge point `p` (`planar.rs:793-839`):
    in quadrature, floors it at `crate::contour::SIGMA_FLOOR` (zero, so no floor), applies curvature
    inflation (`crate::contour::inflate_for_curvature`, shared with the bilevel front end —
    see stage 08/09 docs for that mechanism), and clamps to `[0.02, 2.0]`
-   (`planar.rs:1213-1256`).
+   (`planar.rs:1174-1217`).
 
 ### Measure, then apply: the parallel schedule
 
@@ -107,11 +107,11 @@ The per-point search above reads only the image, the two faces' fills and its ow
 *original* points (its lattice neighbours, for the normal), and writes only its own
 result: it is a pure map over vertices. The curvature correction of a vertex's sigma then
 reads the edge's *moved* points, all of which are known by then: a pure map again. So since
-2026-09-30 both run as parallel maps (`measure_subpixel`, `planar.rs:528-603`;
-`refine_edge`, `planar.rs:697-759`):
+2026-09-30 both run as parallel maps (`measure_subpixel`, `planar.rs:521-596`;
+`refine_edge`, `planar.rs:690-752`):
 
 - **edges in parallel**, and, inside an edge of at least `PAR_VERTICES = 64` points
-  (`planar.rs:502-506`), **vertices in parallel too**, in chunks of at least 64, so a task
+  (`planar.rs:495-499`), **vertices in parallel too**, in chunks of at least 64, so a task
   is at least about 30 µs of work (0.44 µs per vertex measured at 2048 px) against rayon's
   few-µs cost per split. The second level matters because one edge can hold most of an
   image's vertices: longest edge 8,192 points, median edge 450, on the opaque `big` set;
@@ -131,7 +131,7 @@ indexed outputs computes the serial result on every schedule; adapted to two nes
 with a minimum task size. The doc comment names Demmel & Nguyen, "Fast Reproducible
 Floating-Point Summation", ARITH 2013, as the related work behind the no-reductions rule;
 nothing here sums across vertices, so no reproducible summation is needed
-(`planar.rs:537-567`). The serial loop is kept as `refine_serial` in
+(`planar.rs:530-560`). The serial loop is kept as `refine_serial` in
 `planar/refine_tests.rs`, and `parallel_refinement_equals_the_serial_loop` compares points
 and sigmas bit for bit on anti-aliased scenes with flat and gradient fills, with and without
 the alpha channel, down to one pixel and one row.
@@ -140,7 +140,7 @@ the alpha channel, down to one pixel and one row.
 vertex order, as before:
 
 - a small map: fewer than `PAR_MAP_VERTICES = 512` boundary vertices in all
-  (`refine_in_parallel`, `planar.rs:508-526`). Waking rayon's sleeping workers only pays
+  (`refine_in_parallel`, `planar.rs:501-519`). Waking rayon's sleeping workers only pays
   when there is enough to share; measured per icon (refinement and symmetry detection, the
   minimum of 3 interleaved runs, serial / parallel, ms): 512–1,024 vertices 0.263 / 0.206
   (16 screen icons), 1,024–2,048 0.506 / 0.253 (187), 2,048–4,096 0.998 / 0.351 (43),
@@ -160,6 +160,62 @@ and this refinement, plus the face-alpha pass on transparent images) went from 4
 per 2048 px opaque image and from 130 to 21 ms per transparent one, output byte-identical
 in Fast and Quality; Quality gains the planar-map and refinement part too.
 
+### The strip reading: exact column sums, before the probes
+
+Since 2026-10-10, a vertex between two flat fills with contrast of at least
+`2 * min_contrast` (and not on an alpha axis) is first read by `planar/strip.rs`
+(`strip_offset`, tried in `refine_vertex` before `probe_pixel_centres`). The per-point probes
+below decide only where it declines.
+
+It rests on three theorems proved in Lean in `formal/InkvecTheory` (see
+[`docs/theory`](../theory/README.md)):
+
+* **A column's coverages sum to the boundary's mean height over the column**
+  (`column_sum_eq_average`), for any boundary that is a graph over the column, whatever its
+  slope or curvature. No normal, threshold or interpolation enters. This is the identity of
+  volume-of-fluid reconstruction (Puckett 2010) and of the partial-area edge detector
+  (Trujillo-Pino et al. 2013).
+* **Four adjacent column means determine a unique cubic** (`poly_eq_of_averages`), and
+  `histopolate`'s rational constants return it exactly (`histopolate_cubic`).
+* **The ½-crossing of interpolated coverage is biased by up to `3/2 − √2 ≈ 0.086 px`** on a
+  straight edge (`levelSetBias_max`), the reading the root-find and the two-probe bracket use.
+
+The procedure (`strip_along`):
+
+1. Columns are read when the lattice normal is nearer vertical (the boundary is then a graph
+   over x), rows otherwise; when one axis declines the other is tried.
+2. In each of the six columns whose centres lie within 2.5 px of the vertex's pixel border,
+   `line_mean` finds the window from a pixel saturated in one face (unmixed coverage within
+   `SATURATED` = 0.06 of 0 or 1) to the nearest pixel saturated in the other, with only
+   partial pixels between, and sums the window's coverages *unclamped*, flanks included
+   (`UnmixAxis::coverage_unclamped`). Summing the flanks' own values keeps the sum unbiased
+   under noise (`strip_unbiased`). A pixel whose colour lies more than
+   `max(4σ, 0.06·contrast, 2/255)` off the line between the two faces' colours (a third
+   colour, a junction) voids its window. Columns are read from the vertex outwards, each
+   searched within `REACH` = 3 px of its inner neighbour's mean, so a 45° boundary is followed.
+3. The orientation (which face is on the low side) must agree across the six, and adjacent
+   means may differ by at most `MAX_STEP` = 1.5 px.
+4. The cubic through the four central means is histopolated. The cubics through the left
+   four and the right four must agree with it at the vertex's border to within
+   `SIDE_TOL` = 0.05 px: every cubic passes (`side_stencil_cubic`), a corner within reach
+   does not.
+5. The vertex slides along its lattice normal onto the cubic (Newton, at most 8 steps,
+   declining if the normal runs within about 17° of the cubic's tangent or the shift exceeds
+   1 px). The edge keeps one point per vertex; the vertex's sigma is computed as before.
+
+Measured, stage-07 points against exactly known geometry (`bench/theory/inkvec_compare.py`:
+circles, ellipses, straight edges at random angles, rotated squares and regular polygons,
+64 px, 8-bit), distance to the true boundary in px:
+
+| renderer | before: mean / p99 / max | after: mean / p99 / max |
+|---|---|---|
+| exact area coverage | 0.0734 / 0.319 / 0.516 | 0.0106 / 0.180 / 0.368 |
+| 8x8 point supersampling | 0.0732 / 0.318 / 0.443 | 0.0159 / 0.194 / 0.351 |
+
+The tail that remains is vertices the strip reading declines (corners, junctions, windows a
+third colour enters). The regression gate's verdict is under *Measurements* in
+[`docs/theory`](../theory/README.md#5-what-changed).
+
 ### The exact inversion, and why it replaced a biased root-find
 
 The step-inversion path (`edge_offset`) is the more heavily documented piece of this
@@ -170,29 +226,29 @@ measurements that justified each change:
   systematically pulled every edge towards the `.0`/`.5` grid: "interpolating from a pure
   neighbour (alpha 0) to the partial pixel (alpha 0.67) puts the 0.5 crossing at 0.25 of
   the way, not 0.33" — measured 0.19px off on straight runs, 2.5% of ink missing on a
-  Material icon whose edges fall at multiples of 5.33px (`planar.rs:1047-1053`).
+  Material icon whose edges fall at multiples of 5.33px (`planar.rs:1008-1014`).
 - **The chord-length fix.** Coverage changes with the chord length the normal cuts through
   a pixel per unit of edge movement (`1` on an axis, `sqrt(2)` on a diagonal), so the edge
   sits at `(alpha - 0.5) / chord` from the centre, with `chord = 1 / max(|nx|, |ny|)`
-  (`planar.rs:1054-1056`). Dividing by `max` rather than the alternative was itself measured:
+  (`planar.rs:1015-1017`). Dividing by `max` rather than the alternative was itself measured:
   the wrong denominator "pushed every diagonal and curved edge out by up to 2x: rounded
-  outlines came back uniformly fat" (`planar.rs:1057-1058`).
+  outlines came back uniformly fat" (`planar.rs:1018-1019`).
 - **The quadratic correction.** That linear rule is exact only for an axis-aligned edge.
   At 45°, a pixel's coverage curve is quadratic throughout, and the linear rule put a
   90%-covered pixel's edge at 0.57px from centre where the truth is 0.39 — "slanted
-  strokes came out fat by 0.1-0.2px" (`planar.rs:1062-1063`). `edge_offset` therefore
+  strokes came out fat by 0.1-0.2px" (`planar.rs:1023-1024`). `edge_offset` therefore
   inverts the *exact* half-plane coverage of a unit square rather than a linear
-  approximation (`planar.rs:1021-1031`).
+  approximation (`planar.rs:982-992`).
 - **Bracketing, not averaging.** Only the two probes that straddle the `0.5` crossing are
   used; averaging in a third, already-saturated probe was measured to pull a point half a
   pixel into a stroke under two pixels wide, because the far probe's partial coverage came
-  from the stroke's *other* edge (`planar.rs:1088-1092`).
+  from the stroke's *other* edge (`planar.rs:1049-1053`).
 - **Why the root-find survives at all.** A soft boundary (two gradient bands, a shadow
   edge) is a ramp, not a step, and reading it as a step "throws the point up to a pixel
   off" (synthetic gradients 0.15 → 0.35 dE00 when the step inversion was applied there,
-  `planar.rs:1145-1151`). A one-pixel stroke is a ridge with background on both sides, and
+  `planar.rs:1106-1112`). A one-pixel stroke is a ridge with background on both sides, and
   reading a ridge as a step likewise throws the point out (synthetic `thin_features` 0.91
-  → 3.00 dE00, `planar.rs:1152-1155`). The `monotone` test excludes both (`planar.rs:
+  → 3.00 dE00, `planar.rs:1113-1116`). The `monotone` test excludes both (`planar.rs:
   1156-1161`), and `both_flat` additionally excludes gradient boundaries, where the
   unmixing colours are only the model's local *prediction* and a small model error
   misplaces an inverted edge (colour families +0.015 dE00 when the inversion was applied
@@ -201,7 +257,7 @@ measurements that justified each change:
 Two switches this history left behind are recorded as no longer switchable:
 `INKVEC_SUBPX_MODE=inv` (*removed*) (force step-inversion everywhere) and `=root` (force root-find
 everywhere) were both measured worse than the classifier and are dead code paths in
-intent even though the comments describing them remain (`planar.rs:1084-1086, 1166-1167`).
+intent even though the comments describing them remain (`planar.rs:1045-1047, 1166-1167`).
 
 ### Corpus intake and 8x supersampling
 
@@ -225,7 +281,7 @@ itself. `refine_subpixel` runs identically regardless of `intake_scale`.
 ### `simplify_faint`: spending coordinates where they can be seen
 
 Positional uncertainty at each point is inflated below a reference contrast when
-`--simplify-faint` is set (`planar.rs:1225-1252`):
+`--simplify-faint` is set (`planar.rs:1186-1213`):
 
 ```rust
 const CONTRAST_REF: f64 = 0.25;
@@ -240,7 +296,7 @@ let visibility = if simplify_faint {
 This follows directly from the `sigma = sigma_pixel / (|F-B| * |grad a|)` relation in
 `coverage.rs:30` — contrast (`|F-B|`) already appears in the denominator of the
 *statistical* uncertainty term computed a few lines above (`s = (sigma_noise / contrast) /
-g`, `planar.rs:1224`), so a faint boundary is already measured with wider uncertainty than
+g`, `planar.rs:1185`), so a faint boundary is already measured with wider uncertainty than
 a crisp one. `simplify_faint`'s inflation is a second, independent adjustment layered on
 top, and the doc comment is explicit about why it is a separate knob rather than folded
 into the physical sigma:
@@ -250,7 +306,7 @@ into the physical sigma:
 > 7%, the tracer spent 100 and 103 segments. That is the right answer to 'where is the
 > boundary' and the wrong answer to 'how much description is this boundary worth': the
 > error a viewer sees is the position error times the contrast across it, so at a tenth of
-> the contrast a coordinate buys a tenth of the visible accuracy." (`planar.rs:1228-1234`)
+> the contrast a coordinate buys a tenth of the visible accuracy." (`planar.rs:1189-1195`)
 
 In other words: the physical sigma answers *how precisely is this point located*;
 `simplify_faint`'s visibility multiplier answers *how much does mislocating it matter*,
@@ -266,7 +322,7 @@ It ships **off by default**, and the doc comment is candid about why:
 > "the corpus disagrees with the argument: on the 246-icon screen set it saves 0.3% of the
 > parameters and costs 0.2% of the colour error, objective 0.3992 -> 0.4023. Those icons
 > are high-contrast art where the faint case barely arises, and the metric sees the loss
-> and not the gain — the same blindness that keeps `--cutout` off." (`planar.rs:1240-1244`)
+> and not the gain — the same blindness that keeps `--cutout` off." (`planar.rs:1201-1205`)
 
 ### `refine_junctions`: why a junction cannot be refined like an edge point
 
@@ -321,14 +377,18 @@ them, so the edge does not double back through itself (`planar/junctions.rs:407-
 
 | name | value | controls | derivation |
 |---|---|---|---|
-| `MIN_UNMIX_CONTRAST` (`planar.rs:414`) | `0.02` | floor on unmixing contrast below which a point is not moved at all | no stated derivation |
-| `CORNER_COS` (`planar.rs:424`) | `0.5` (60°) | turning angle above which the tangent window narrows to 1 point | stated: "A staircase at any slope turns by at most 45 degrees between chords two points long, so slanted edges stay smooth" (`planar.rs:421-423`) — a geometric bound, not a sweep |
-| `PAR_VERTICES` (`planar.rs:506`) | `64` | fewest points an edge needs before its vertices are refined in parallel, and the smallest chunk of a long edge one thread takes | motivated by a measured cost: a task of at least ~30 µs (0.44 µs per vertex at 2048 px) against rayon's few-µs cost per split (`planar.rs:502-505`); chooses only the schedule, never the result |
-| `PAR_MAP_VERTICES` (`planar.rs:520`) | `512` | fewest boundary vertices in the whole map for the refinement (and symmetry detection beside it) to use threads at all | measured: per-icon serial / parallel timings by vertex count, parallel already ahead in the smallest bucket (512–1,024: 0.263 / 0.206 ms), so the cutoff sits at its lower end (`planar.rs:508-519`); chooses only the schedule, never the result |
-| `INKVEC_SUBPX_WIN` (*removed*) (`planar.rs:416-419`) | default `1`, range `1..=8` | width of the tangent-estimation window | measured trade-off: widening to 2 improved dE00 0.2663→0.2534 on a 620-icon subset but cost DISTS 0.0418→0.0435 and caused a face-order regression on one icon (0.23→3.20 dE00); default left at 1 "until that is understood (LOG-43)" (`planar.rs:854-864`) |
+| `MIN_UNMIX_CONTRAST` (`planar.rs:417`) | `0.02` | floor on unmixing contrast below which a point is not moved at all | no stated derivation |
+| `CORNER_COS` (`planar/chord.rs:15`) | `0.5` (60°) | turning angle above which the tangent window narrows to 1 point | stated: "A staircase at any slope turns by at most 45 degrees between chords two points long, so slanted edges stay smooth" (`planar/chord.rs:12-14`) — a geometric bound, not a sweep |
+| `PAR_VERTICES` (`planar.rs:499`) | `64` | fewest points an edge needs before its vertices are refined in parallel, and the smallest chunk of a long edge one thread takes | motivated by a measured cost: a task of at least ~30 µs (0.44 µs per vertex at 2048 px) against rayon's few-µs cost per split (`planar.rs:495-498`); chooses only the schedule, never the result |
+| `PAR_MAP_VERTICES` (`planar.rs:513`) | `512` | fewest boundary vertices in the whole map for the refinement (and symmetry detection beside it) to use threads at all | measured: per-icon serial / parallel timings by vertex count, parallel already ahead in the smallest bucket (512–1,024: 0.263 / 0.206 ms), so the cutoff sits at its lower end (`planar.rs:501-512`); chooses only the schedule, never the result |
+| `INKVEC_SUBPX_WIN` (*removed*) (`planar/chord.rs:7-10`) | default `1`, range `1..=8` | width of the tangent-estimation window | measured trade-off: widening to 2 improved dE00 0.2663→0.2534 on a 620-icon subset but cost DISTS 0.0418→0.0435 and caused a face-order regression on one icon (0.23→3.20 dE00); default left at 1 "until that is understood (LOG-43)" (`planar/chord.rs:47-58`) |
+| `REACH` (`planar/strip.rs`) | `3` px | how far along a column the strip reading searches for a window's flanks, from the inner neighbour's mean | geometric: a boundary within 45° of the column's normal crosses at most two pixels of it |
+| `SATURATED` (`planar/strip.rs`) | `0.06` | unmixed coverage within this of 0 or 1 makes a pixel a window flank | not swept; the flanks' own values are summed, so a near-saturated pixel classed as a flank costs nothing in bias (`strip_unbiased`) |
+| `SIDE_TOL` (`planar/strip.rs`) | `0.05` px | largest disagreement at the vertex's border between the central and the one-sided cubics before the strip reading declines (the corner test) | each one-sided difference carries 0.7× the noise of one column mean; every cubic passes exactly (`side_stencil_cubic`); a 45° turn at the border moves it by 0.04 px, so gentler corners are rounded, by up to about 0.1 px |
+| `MAX_STEP` (`planar/strip.rs`) | `1.5` px | largest difference between adjacent column means: the steepest boundary the strip reading follows, about 56° | not swept |
 | `DEFAULT_SIGMA_MODEL` (`coverage.rs:81`) | `0.05` px | irreducible resolution limit of level-set extraction, added in quadrature to statistical noise | stated: "Measured on analytic circles..., level-set extraction lands within roughly 0.05px" (`coverage.rs:104-105`) |
-| `CONTRAST_REF` (`planar.rs:1246`) | `0.25` | reference contrast for `simplify_faint`'s inflation | no stated derivation |
-| `MAX_INFLATION` (`planar.rs:1247`) | `4.0` | cap on `simplify_faint`'s sigma multiplier | no stated derivation |
+| `CONTRAST_REF` (`planar.rs:1207`) | `0.25` | reference contrast for `simplify_faint`'s inflation | no stated derivation |
+| `MAX_INFLATION` (`planar.rs:1208`) | `4.0` | cap on `simplify_faint`'s sigma multiplier | no stated derivation |
 | `JUNCTION_MAX_MOVE` (`planar/junctions.rs:73`) | `1.5` px | reject an intersection solution beyond this move | no stated derivation: the doc comment says only "Farthest a junction may move from its grid node before the solution is distrusted" (`planar/junctions.rs:72`). Earlier revisions recorded a rejected 0.5 px limit (one test phase 0.178px → 1.006px residual); the current source no longer does |
 | `JUNCTION_MIN_CONDITION` (`planar/junctions.rs:78`) | `0.02` | minimum eigenvalue ratio admitted for a junction intersection | stated as equivalent to rejecting crossings below about 16°, from `tan^2(theta/2)` (`planar/junctions.rs:75-77`) |
 | `junction_fit_points()` (`planar/junctions.rs:36`) | `6` | interior points used for the near-junction extrapolation | no stated derivation |
@@ -348,8 +408,17 @@ them, so the edge does not double back through itself (`planar/junctions.rs:407-
 
 ## Failure modes and edge cases
 
+- **The seam of a closed ring was never refined** (fixed 2026-10-10). `probe_chord` clamped
+  its neighbour indices at the ends of an edge, and a closed edge stores its first point
+  once, so the first and last vertices of every closed ring took their chord from one
+  neighbour. On a ring whose seam lies on a horizontal run that is a horizontal normal on a
+  horizontal boundary: the probe ran along the boundary and the vertex stayed on the
+  lattice, 0.30 px off on an exactly rendered disc. Quality's boundary solve repaired it;
+  Fast mode kept it. The chord now wraps round the seam of a closed edge. On the gate the
+  fix alone is within noise everywhere (the corpus's closed rings mostly start at a
+  junction or a corner); on exact discs it removes the worst stage-07 point.
 - **`refine_subpixel`'s misclassification cost is asymmetric and recorded exactly once
-  each way.** Every branch of the `step_like` classifier (`planar.rs:1168-1174`) exists
+  each way.** Every branch of the `step_like` classifier (`planar.rs:1129-1135`) exists
   because the *other* choice was tried and measured worse on a named case (gradients,
   thin features, script wordmarks — see How it works above). There is no held-out ablation
   covering all combinations at once.
@@ -372,11 +441,11 @@ Since the settings cleanup (CHANGELOG, 0.2.0, *Changed*) the engine reads its en
 
 | variable | effect |
 |---|---|
-| `INKVEC_SUBPX_WIN` (*removed*) | tangent-window width for `refine_subpixel`, `1..=8`, default `1` (`planar.rs:416-418`) |
-| `INKVEC_SUBPXDBG` | per-point debug trace of the subpixel search; read once per map into the refinement context (`planar.rs:588`), and while set the whole refinement runs serially, in edge and vertex order, so the lines come out as before (`planar.rs:591`) |
+| `INKVEC_SUBPX_WIN` (*removed*) | tangent-window width for `refine_subpixel`, `1..=8`, default `1` (`planar/chord.rs:7-10`) |
+| `INKVEC_SUBPXDBG` | per-point debug trace of the subpixel search; read once per map into the refinement context (`planar.rs:581`), and while set the whole refinement runs serially, in edge and vertex order, so the lines come out as before (`planar.rs:584`) |
 | `INKVEC_SIGMA_FLOOR` (*removed*) | overrode the sigma floor shared with the bilevel front end; now the constant `contour::SIGMA_FLOOR`, zero (`contour.rs:325-327`) |
 | `INKVEC_CURV_GAIN` (*removed*) | overrode the curvature gain `inflate_for_curvature` uses; now the constant `NONLINEARITY_GAIN = 0.35`, chosen by sweep (`contour.rs:248-261`) |
-| `INKVEC_DUMP_CONTOUR` | appends every refined edge's points and sigmas to a file, for offline study of extraction error structure (`dump_contour`, `planar.rs:769-781`); the path is read once per map (`planar.rs:589`; it used to be read per edge), and while it is set the refinement runs serially so the file keeps edge order |
+| `INKVEC_DUMP_CONTOUR` | appends every refined edge's points and sigmas to a file, for offline study of extraction error structure (`dump_contour`, `planar.rs:762-774`); the path is read once per map (`planar.rs:582`; it used to be read per edge), and while it is set the refinement runs serially so the file keeps edge order |
 | `INKVEC_NO_TAPER` | disables `taper_junction` (`planar/junctions.rs:490-491`); read once per process into a `OnceLock` through `inkvec_core::env::flag`, so an empty value counts as unset |
 | `INKVEC_TAPERDBG` | per-node taper fit debug trace; read once per process into a `OnceLock` (`taperdbg`, `planar/junctions.rs:66-70`) |
 | `INKVEC_TAPER_SKIP=<n>` (*removed*) | skipped the n-th accepted taper relocation, to attribute a corpus-level change to one junction; nothing reads it now |

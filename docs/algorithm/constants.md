@@ -199,14 +199,18 @@ to the upstream saddle merge; the two sizes after it choose only speed, never th
 
 | name | value | file:line | controls | basis |
 |---|---|---|---|---|
-| `MIN_UNMIX_CONTRAST` | 0.02 | `inkvec-trace/src/planar.rs:414` | floor on unmixing contrast below which a point does not move | none |
-| `CORNER_COS` | 0.5 (60 deg) | `inkvec-trace/src/planar.rs:424` | turning angle above which the tangent window narrows to 1 point | motivated (geometric bound) |
-| `PAR_VERTICES` | 64 | `inkvec-trace/src/planar.rs:506` | fewest points before an edge's vertices are refined in parallel; smallest chunk one thread takes | motivated (a task of ~30 µs at 0.44 µs per vertex against rayon's few-µs split cost); schedule only, output identical |
-| `PAR_MAP_VERTICES` | 512 | `inkvec-trace/src/planar.rs:520` | fewest boundary vertices in the map for the refinement, and symmetry detection beside it, to use threads | measured (per-icon serial/parallel timings by vertex count, `planar.rs:512-519`); schedule only, output identical |
-| `SUBPX_WIN` (was `INKVEC_SUBPX_WIN`, *removed*) | 1 (the variable allowed 1..=8) | `inkvec-trace/src/planar.rs:416-419` (measurement at `:854-864`) | width of the tangent-estimation window | measured (two points each side improved dE00 on a 620-icon subset but cost DISTS and caused a face-order regression on one icon; left at 1, LOG-43) |
+| `MIN_UNMIX_CONTRAST` | 0.02 | `inkvec-trace/src/planar.rs:417` | floor on unmixing contrast below which a point does not move | none |
+| `CORNER_COS` | 0.5 (60 deg) | `inkvec-trace/src/planar/chord.rs:15` | turning angle above which the tangent window narrows to 1 point | motivated (geometric bound) |
+| `PAR_VERTICES` | 64 | `inkvec-trace/src/planar.rs:499` | fewest points before an edge's vertices are refined in parallel; smallest chunk one thread takes | motivated (a task of ~30 µs at 0.44 µs per vertex against rayon's few-µs split cost); schedule only, output identical |
+| `PAR_MAP_VERTICES` | 512 | `inkvec-trace/src/planar.rs:513` | fewest boundary vertices in the map for the refinement, and symmetry detection beside it, to use threads | measured (per-icon serial/parallel timings by vertex count, `planar.rs:505-512`); schedule only, output identical |
+| `SUBPX_WIN` (was `INKVEC_SUBPX_WIN`, *removed*) | 1 (the variable allowed 1..=8) | `inkvec-trace/src/planar/chord.rs:7-10` (measurement at `:47-58`) | width of the tangent-estimation window | measured (two points each side improved dE00 on a 620-icon subset but cost DISTS and caused a face-order regression on one icon; left at 1, LOG-43) |
+| `REACH` (strip reading) | 3 px | `inkvec-trace/src/planar/strip.rs:39` | how far along a column the window's flanks are searched, from the inner neighbour's mean | motivated (geometric: a boundary within 45 deg of the column's normal crosses at most two of its pixels) |
+| `SATURATED` (strip reading) | 0.06 | `inkvec-trace/src/planar/strip.rs:42` | unmixed coverage within this of 0 or 1 makes a pixel a window's flank | none (the flanks' own values are summed, so the sum stays unbiased: `strip_unbiased`) |
+| `SIDE_TOL` (strip reading) | 0.05 px | `inkvec-trace/src/planar/strip.rs:50` | the corner test: largest disagreement at the vertex's border between the central and the one-sided cubics | derived (every cubic passes exactly, `side_stencil_cubic`; noise gain 0.7 per difference) |
+| `MAX_STEP` (strip reading) | 1.5 px | `inkvec-trace/src/planar/strip.rs:54` | largest difference between adjacent column means, about 56 deg | none |
 | `DEFAULT_SIGMA_MODEL` | 0.05 px | `inkvec-trace/src/coverage.rs:81` | see 02-coverage.md | measured |
-| `CONTRAST_REF` | 0.25 | `inkvec-trace/src/planar.rs:1246` | reference contrast for `simplify_faint`'s inflation | none |
-| `MAX_INFLATION` | 4.0 | `inkvec-trace/src/planar.rs:1247` | cap on `simplify_faint`'s sigma multiplier | none |
+| `CONTRAST_REF` | 0.25 | `inkvec-trace/src/planar.rs:1207` | reference contrast for `simplify_faint`'s inflation | none |
+| `MAX_INFLATION` | 4.0 | `inkvec-trace/src/planar.rs:1208` | cap on `simplify_faint`'s sigma multiplier | none |
 | `JUNCTION_MAX_MOVE` | 1.5 px | `inkvec-trace/src/planar/junctions.rs:73` | rejects an intersection solution beyond this move | none (the doc comment says only what it bounds; the 0.5 px trial 07-subpixel.md cites is not in the code) |
 | `JUNCTION_MIN_CONDITION` | 0.02 | `inkvec-trace/src/planar/junctions.rs:78` | minimum eigenvalue ratio admitted for a junction intersection | derived (equivalent to rejecting crossings below ~16 degrees) |
 | `junction_fit_points()` | 6 | `inkvec-trace/src/planar/junctions.rs:36` | interior points for near-junction extrapolation | none |

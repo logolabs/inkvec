@@ -885,7 +885,7 @@ Crucially, Inkvec derives the **honest posterior covariance** of every measureme
    $$\sigma_{\text{pos}} = \frac{\sigma_\alpha}{\|\nabla \alpha\|} = \frac{\sigma_{\text{pixel}}}{\|F - B\| \cdot \|\nabla \alpha\|}$$
 
 #### 3. Quantization Noise Floor (`sigma_floor`)
-On inputs with discretized alpha channels (e.g. 16-level alpha), uniform quantization noise creates artificial gradient steps. The floor that uniform quantization over a unit interval would suggest is shown below; Inkvec does not apply it: `SIGMA_FLOOR` is zero, because coverage-derived positions can be more precise than whole pixel coordinates and a universal $1/\sqrt{12}$ px floor oversmooths clean small artwork (`crates/inkvec-trace/src/contour.rs:318-327`, applied on the planar path at `crates/inkvec-trace/src/planar.rs:1253-1255`):
+On inputs with discretized alpha channels (e.g. 16-level alpha), uniform quantization noise creates artificial gradient steps. The floor that uniform quantization over a unit interval would suggest is shown below; Inkvec does not apply it: `SIGMA_FLOOR` is zero, because coverage-derived positions can be more precise than whole pixel coordinates and a universal $1/\sqrt{12}$ px floor oversmooths clean small artwork (`crates/inkvec-trace/src/contour.rs:318-327`, applied on the planar path at `crates/inkvec-trace/src/planar.rs:1214-1216`):
 
 $$\sigma_{\text{floor}} \ge \frac{1}{\sqrt{12}} \approx 0.2887\text{ px}$$
 

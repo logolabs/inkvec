@@ -5,10 +5,10 @@
 
 **Source:** `crates/inkvec-trace/src/planar.rs`, with the cracks and their incidence in
 `planar/cracks.rs` and the row-run coding in `planar/runs.rs`
-**Entry point:** `fn build()` (`planar.rs:163-180`), which calls `dual_segments`
-(`planar/cracks.rs:273`), `split_saddle_corners` (`planar.rs:211`), `Incidence::new`
-(`planar/cracks.rs:96`), `walk_open_chains` (`planar.rs:286`) and `walk_closed_loops`
-(`planar.rs:360`)
+**Entry point:** `fn build()` (`planar.rs:166-183`), which calls `dual_segments`
+(`planar/cracks.rs:273`), `split_saddle_corners` (`planar.rs:214`), `Incidence::new`
+(`planar/cracks.rs:96`), `walk_open_chains` (`planar.rs:289`) and `walk_closed_loops`
+(`planar.rs:363`)
 **Pipeline position:** after `saddles` (`merge_saddle_faces`, research build only), before
 symmetry detection and the sub-pixel refinement, which run side by side on the map it
 builds (stage mark `"build_map"`, `lib.rs:1106`). Shared by Quality and Fast mode.
@@ -71,10 +71,10 @@ pub struct Edge {
 ```
 
 `left`/`right` are face ids — `u16::MAX` denotes the virtual background outside the image
-(`planar.rs:140-149`), so a shape touching the image border still closes.
+(`planar.rs:143-152`), so a shape touching the image border still closes.
 
 Every `Edge.points` value at the end of `build` sits exactly on a pixel corner (a
-half-integer coordinate, `node_point`, `planar.rs:134-138`). `sigma` is a uniform
+half-integer coordinate, `node_point`, `planar.rs:137-141`). `sigma` is a uniform
 placeholder of `0.5`, replaced point-by-point by stage 07 (`refine_subpixel`).
 
 ## How it works
@@ -94,7 +94,7 @@ on each side (`left`/`right`, oriented so `left` is on the left walking from `a`
 down), read directly off the two labels straddling it. Because a label difference is
 required to emit a segment at all, a flat interior produces nothing — the segment set
 already *is* the full set of pixel-grid boundary cracks, before any topology is built from
-it. Node ids are `node_id(i, j, w) = j*(w+1) + i` (`planar.rs:129-131`), so real node ids
+it. Node ids are `node_id(i, j, w) = j*(w+1) + i` (`planar.rs:132-134`), so real node ids
 span `0 .. (w+1)*(h+1)`. This is the bilevel case of marching squares specialised to an
 arbitrary number of labels: instead of one 0/1 boundary there is one boundary crack per
 differing label pair.
@@ -144,20 +144,20 @@ Four pixels can meet at one grid corner. If the two pixels on one diagonal are t
 face and the two on the other diagonal are *different* faces, the naive dual-grid segment
 set gives that face two boundary arms that meet only at a single point — a **bowtie**: the
 fill pinches to nothing and reopens, and "no later stage can undo it, because one node has
-one refined position however many curves end there" (`planar.rs:185-189`).
+one refined position however many curves end there" (`planar.rs:188-192`).
 
 `build` resolves this before any chain-walking happens, in a dedicated pass over every
-degree-4 node (`split_saddle_corners`, `planar.rs:211-267`, which finds each node's
+degree-4 node (`split_saddle_corners`, `planar.rs:214-270`, which finds each node's
 segments through its own `Incidence`, the structure of step 3):
 
 1. For each node with exactly four incident segments, read the four surrounding labels
    `nw, ne, sw, se`.
 2. If both diagonals are a single face, or neither is (`(nw == se) == (ne == sw)`), there
    is nothing to read off the labels — the node is left as an ordinary junction
-   (`planar.rs:232-234`).
+   (`planar.rs:235-237`).
 3. Otherwise, exactly one diagonal is a single face. The **other** face's two incident
    segments (`{right, below}` if `ne == sw`, `{left, below}` if `nw == se`) are given a
-   second copy of the node id, offset by `plane = (w+1)*(h+1)` (`planar.rs:214-215,
+   second copy of the node id, offset by `plane = (w+1)*(h+1)` (`planar.rs:217-218,
    249-265`).
 
 The comment records the invariant this rests on precisely: `NE and SW being *one face*
@@ -222,25 +222,25 @@ fn is_junction(segs_here: Option<&[usize]>) -> bool {
 }
 ```
 
-(`planar.rs:276-278`). Degree 4 is always treated as a junction rather than guessed at —
+(`planar.rs:279-281`). Degree 4 is always treated as a junction rather than guessed at —
 "splitting there is always topologically safe, whereas picking a diagonal pairing can
-weld two regions that should be separate" (`planar.rs:271-275`); what the split in step 2
+weld two regions that should be separate" (`planar.rs:274-278`); what the split in step 2
 resolved no longer arrives here as degree 4.
 
 From every junction node, `build` walks each unused incident segment forward, following
 the unique unused segment at each intermediate degree-2 node, until it reaches another
-junction (or runs out) (`walk_open_chains`, `planar.rs:286-354`). The resulting point
+junction (or runs out) (`walk_open_chains`, `planar.rs:289-357`). The resulting point
 sequence becomes one open `Edge`, with `left`/`right` taken from the first segment's
 orientation at the starting junction.
 
 Any segment left unused after every junction has been walked belongs to a boundary loop
 with no junction anywhere on it at all — an isolated region such as a disc on a flat
 background. Those are walked separately and stored with `closed: true`
-(`walk_closed_loops`, `planar.rs:360-411`); the walk is dropped if it has fewer than 3
+(`walk_closed_loops`, `planar.rs:363-414`); the walk is dropped if it has fewer than 3
 points.
 
 Walk order is deterministic: junctions are visited in increasing node id, the order
-`Incidence` holds them in (`planar.rs:294-296`), so a given label image always produces the
+`Incidence` holds them in (`planar.rs:297-299`), so a given label image always produces the
 same edge list.
 
 ### 4. `face_edge_order` — per-face ring assembly
@@ -249,7 +249,7 @@ same edge list.
 pub fn face_edge_order(map: &PlanarMap) -> Vec<Vec<Vec<(usize, bool)>>>
 ```
 
-(`planar.rs:1272-1349`). For each face id, this returns
+(`planar.rs:1233-1310`). For each face id, this returns
 one or more **rings** — a shape's outer boundary and any holes are separate rings — each a
 sequence of `(edge index, reversed)` pairs.
 
@@ -258,20 +258,20 @@ It deliberately returns *references into the map*, not copied geometry:
 > "the same traversal works whatever alphabet the fitter used — polylines, cubics, or
 > later arcs and primitives — and, more importantly, every face that touches a boundary
 > names the same edge index. Nothing is copied, so the two sides of a boundary cannot
-> drift apart." (`planar.rs:1261-1264`)
+> drift apart." (`planar.rs:1222-1225`)
 
 Mechanically: every edge is filed under each face it touches, as `(edge index, reversed)`
 — `reversed = false` when the face is `left`, `true` when it is `right`
-(`planar.rs:1273-1280`). Within one face, rings are assembled by chaining edges whose
+(`planar.rs:1234-1241`). Within one face, rings are assembled by chaining edges whose
 start node (in the direction implied by `reversed`) matches the previous edge's end node,
-via a `by_start: HashMap<node, Vec<slot>>` lookup (`planar.rs:1286-1348`). A ring closes
+via a `by_start: HashMap<node, Vec<slot>>` lookup (`planar.rs:1247-1309`). A ring closes
 when the walk returns to its own starting node, at which point that repeated junction
 node is *not* re-emitted as a separate point — the ring is a cycle of edges, not of
 points, so the shared junction is implicit at the seam between the last edge and the
 first rather than appearing twice in the point list.
 
 A face id that is `u16::MAX`, or otherwise `>= map.n_labels`, is silently skipped when
-edges are filed (`planar.rs:1275, 1278`) — this is how `inkvec-cli`'s layer-merging code
+edges are filed (`planar.rs:1236, 1278`) — this is how `inkvec-cli`'s layer-merging code
 removes an edge from every ring without touching its geometry: setting both `left` and
 `right` to `u16::MAX` makes the edge "interior" and it drops out of `face_edge_order`'s
 output entirely (`inkvec-cli/src/pipeline.rs:1116-1120`).
@@ -304,7 +304,7 @@ saddle-merge decision:
   same face id) at exactly one pixel corner produces a single junction where two
   unrelated boundary arms are welded — "a fill pinched to nothing and reopened" — and this
   cannot be repaired downstream, because by the time curve fitting runs the topology is
-  fixed (`planar.rs:182-199`). The degree-4 split (step 2 above) exists specifically to
+  fixed (`planar.rs:185-202`). The degree-4 split (step 2 above) exists specifically to
   prevent it, but only fires when the two faces on one diagonal already share a face id.
 - **`merge_saddle_faces` is off by default.** The stage that decides, from the *image*,
   whether two diagonally-touching-but-currently-separate faces should be read as one
@@ -315,18 +315,18 @@ saddle-merge decision:
   containment tree rewritten by a merge into the background rather than a wrong reading;
   the current source no longer carries that measurement. Practically, this means `build`'s degree-4 split logic mostly protects
   *self-touching* shapes that are already one face by ordinary 4-connectivity (the
-  `touching_corner` test case, `planar.rs:1365`) rather than two visually-touching shapes
+  `touching_corner` test case, `planar.rs:1326`) rather than two visually-touching shapes
   of matching colour that never got unioned upstream. A four-way corner where no diagonal
   shares a face id is left as an ordinary junction (`four_inks_meeting_at_a_corner_stay_a_junction`,
-  `planar.rs:1389`) — correct when the four regions really are four regions, and a
+  `planar.rs:1350`) — correct when the four regions really are four regions, and a
   missed merge when `INKVEC_SADDLE` (*research build*) would have said otherwise.
 - **Chain walking can stall.** If the list at the next node (`inc.end`) holds no unused
   candidate segment before a junction is reached, the walk simply stops there
-  (`planar.rs:324-331, 386-388`) rather than panicking; this silently produces a shorter
+  (`planar.rs:327-334, 386-388`) rather than panicking; this silently produces a shorter
   edge than the true boundary would warrant. No test in this module exercises that path
   directly.
 - **Loops under 3 points are dropped.** A junction-less closed walk with fewer than three
-  points is discarded (`planar.rs:393`) — degenerate single- or two-pixel islands that
+  points is discarded (`planar.rs:396`) — degenerate single- or two-pixel islands that
   cannot bound any area.
 
 ## Environment overrides
@@ -348,7 +348,7 @@ None inside `planar::build` itself. The upstream decision that feeds it —
   corner-splitting logic fire on genuinely separate, same-coloured touching shapes rather
   than only self-touching ones.
 - `face_edge_order`'s ring assembly is exercised by the saddle-split test
-  (`splitting_gives_each_shape_its_own_copy_of_the_corner`, `planar.rs:1411`), which
+  (`splitting_gives_each_shape_its_own_copy_of_the_corner`, `planar.rs:1372`), which
   checks that both affected faces keep a non-empty ring, but there is no test in this file
   specifically constructing a face with a hole (an outer ring plus an inner ring) to check
   that the two rings are correctly separated rather than merged or lost.
@@ -357,4 +357,4 @@ None inside `planar::build` itself. The upstream decision that feeds it —
   from both ends of every segment before either walk begins and `next_node` is always an
   end of an existing segment. The walks now read that node's list through `Incidence::end`,
   which returns it directly, so the dead branch is gone; the comment at the call site
-  records that `get` found every such node (`planar.rs:321-324`).
+  records that `get` found every such node (`planar.rs:324-327`).

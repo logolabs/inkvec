@@ -75,7 +75,7 @@ No name from an unmerged research branch is listed: only what the code in this t
 | `INKVEC_DEBUG_FIT` | flag | off | crates/inkvec-fit/src/lib.rs:1109 | nothing | line-vs-cubic run decisions in the fitter. |
 | `INKVEC_DIAG` | text | off | crates/inkvec-trace/src/diag.rs:55 | bench/degraded_eval.py, docs/TRAZOR_REVIEW.md, docs/algorithm/01-intake.md, docs/algorithm/04-regions.md, docs/algorithm/05-gradients.md, docs/algorithm/08-boundary-solve.md, docs/algorithm/14-fast-mode.md, docs/algorithm/constants.md | `1`/any: diagnostics as text on stderr, `json`: as JSON lines. |
 | `INKVEC_DPDBG` | flag | off | crates/inkvec-fit/src/multimodel.rs:135 | docs/algorithm/11-fitting.md | multimodel dynamic-program decisions. |
-| `INKVEC_DUMP_CONTOUR` | path | unset | crates/inkvec-trace/src/planar.rs:589 | docs/algorithm/07-subpixel.md, docs/algorithm/14-fast-mode.md | appends refined boundary points and sigmas. |
+| `INKVEC_DUMP_CONTOUR` | path | unset | crates/inkvec-trace/src/planar.rs:582 | docs/algorithm/07-subpixel.md, docs/algorithm/14-fast-mode.md | appends refined boundary points and sigmas. |
 | `INKVEC_DUMP_LABELS` | path | unset | crates/inkvec-trace/src/lib.rs:586 | docs/algorithm/04-regions.md | writes the label image as PPM. |
 | `INKVEC_DUMP_MAP` | path | unset | crates/inkvec-cli/src/pipeline.rs:581 | nothing | writes the planar map (neural label generation). |
 | `INKVEC_EDIT_DEBUG` | flag | off | crates/inkvec-cli/src/editable.rs:677 | nothing | editability mirror pass. |
@@ -98,7 +98,7 @@ No name from an unmerged research branch is listed: only what the code in this t
 | `INKVEC_RIBBONS_CHAINS` | flag | off | crates/inkvec-trace/src/ribbon.rs:515 | nothing | stroke stage: one stderr line per centreline chain of a candidate face. |
 | `INKVEC_RIBBONS_DEBUG` | flag | off | crates/inkvec-cli/src/ribbons.rs:114 | nothing | stroke stage: one stderr line per candidate face. |
 | `INKVEC_REFINEDBG` | flag | off | crates/inkvec-trace/src/centerline.rs:959 | nothing | centerline stroke refinement. |
-| `INKVEC_SUBPXDBG` | flag | off | crates/inkvec-trace/src/planar.rs:588 | docs/algorithm/07-subpixel.md, docs/algorithm/14-fast-mode.md | sub-pixel search per point. |
+| `INKVEC_SUBPXDBG` | flag | off | crates/inkvec-trace/src/planar.rs:581 | docs/algorithm/07-subpixel.md, docs/algorithm/14-fast-mode.md | sub-pixel search per point. |
 | `INKVEC_SVGMIN_DEBUG` | flag | off | crates/inkvec-svgmin/src/fit.rs:414, crates/inkvec-svgmin/src/fit.rs:592 | nothing | minifier merge decisions. |
 | `INKVEC_TAPERDBG` | flag | off | crates/inkvec-trace/src/planar/junctions.rs:69 | CHANGELOG.md, docs/algorithm/07-subpixel.md | taper fits (was `TAPERDBG`, renamed to the prefix). |
 | `INKVEC_TIMING` | flag | off | crates/inkvec-cli/src/pipeline.rs:697, crates/inkvec-cli/src/ribbons.rs:233, crates/inkvec-cli/src/rings.rs:286 (+6) | docs/algorithm/00-overview.md, docs/algorithm/04-regions.md, docs/algorithm/05-gradients.md, docs/algorithm/10-symmetry.md, docs/algorithm/12-repair.md, docs/algorithm/13-emit.md, docs/algorithm/14-fast-mode.md | stage timings on stderr (Stopwatch and per-stage logs). |
@@ -188,7 +188,7 @@ No name from an unmerged research branch is listed: only what the code in this t
 | `INKVEC_SMOOTH_FRACTION` | number | 0.5 | was crates/inkvec-trace/src/gradient/regions.rs:38 | nothing | now `SMOOTH_FRACTION`. |
 | `INKVEC_SMOOTH_STEP` | number | 3.0 | was crates/inkvec-trace/src/gradient/regions.rs:29 | nothing | now `SMOOTH_STEP`. |
 | `INKVEC_STROKE_TOL` | number | `STROKE_TOL` | was crates/inkvec-cli/src/emit.rs:266 | nothing | annulus-to-stroke tolerance. |
-| `INKVEC_SUBPX_WIN` | count | 1 | was crates/inkvec-trace/src/planar.rs:390 | docs/algorithm/07-subpixel.md, docs/algorithm/constants.md | now `planar::SUBPX_WIN`; LOG-43 measurement kept in the comment. |
+| `INKVEC_SUBPX_WIN` | count | 1 | was crates/inkvec-trace/src/planar.rs:393 | docs/algorithm/07-subpixel.md, docs/algorithm/constants.md | now `planar::chord::SUBPX_WIN`; LOG-43 measurement kept in the comment. |
 | `INKVEC_SVGMIN_COARSE_CAP` | count | 128 | was crates/inkvec-svgmin/src/fit.rs:461 | nothing | minifier constant. |
 | `INKVEC_SVGMIN_MERGE` | number | 1 (on) | was crates/inkvec-svgmin/src/fit.rs:474 | nothing | minifier merge pass switch. |
 | `INKVEC_SVGMIN_PER_SEG` | count | 24 | was crates/inkvec-svgmin/src/path.rs:212 | nothing | minifier constant. |

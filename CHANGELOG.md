@@ -7,8 +7,19 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+### Changed
+
+- **Sub-pixel boundaries are read from exact column sums (all modes).** A pixel's coverage is the area of the shape inside it, so a column's coverages, summed from a pixel wholly in one face to a pixel wholly in the other, are exactly the boundary's mean height over the column, whatever its slope or curvature; four adjacent column means fix a unique cubic, which is the boundary wherever the boundary is a cubic. Stage 07 now slides each vertex between two flat fills onto that cubic (`planar/strip.rs`) before trying the per-vertex probes, which needed a normal they could only estimate from the lattice and read two-probe brackets at the ½-crossing, a reading biased by up to 3/2 − √2 ≈ 0.086 px even on a straight edge. A corner, a junction or a third colour in a column makes the strip reading decline, and the probes decide as before.
+  - Stage-07 points on exactly known shapes (`bench/theory`): 0.073 → 0.011 px mean error on exact-area renders, 0.073 → 0.016 px on 8x8 supersampled ones; p99 0.32 → 0.18–0.19 px.
+  - Regression gate (246 icons, against `main`): dE00 −10.96 % fast-128ss, −8.70 % fast-512ss, −9.83 % fast-512ssop, −4.51 % quality-128ss, −1.89 % quality-512ss, −1.36 % quality-512ssop (non-inferior); turning better in Fast and level in Quality; parameters −2.7 % fast-128ss, +1.9 % quality-128ss, within margin elsewhere. `bench/cases` Fast passes `edge_axis` too (28/42); Quality stays 42/42.
+  - Time unchanged: whole-process median on 40 corpus icons at 512 px, Fast 22.3 → 22.7 ms, Quality 538 → 529 ms.
+  - The theorems behind it are machine-checked (see *Added*); the reading's rational constants are proved exact (`histopolate_cubic`, `strip_reading_exact`).
+  - `probe_chord` moved to `planar/chord.rs`, unchanged but for the seam fix below.
+  - `crates/inkvec/tests/api.rs` `restored_pixels_are_traced_with_soft_intake` ripples at 12 levels instead of 9: at 9 the plain and the forced trace differed only by a 0.01 px centre error on the forced one, which the column sums no longer make; at 12 forcing soft intake changes the palette, which is what the test is for.
+
 ### Fixed
 
+- **The seam vertex of every closed ring is refined (all modes).** A closed edge stores its first point once, and the lattice normal clamped its neighbours at the ends of the edge, so the seam took a one-sided chord: on a ring whose seam lies on a horizontal run, a horizontal normal on a horizontal boundary, and the vertex stayed on the lattice, 0.30 px off on an exact disc. Quality's boundary solve repaired it; Fast kept it. The chord now wraps round the seam. Within noise on the gate (the corpus's rings mostly start at a junction or a corner).
 - **Thin strokes on a transparent ground keep their ink (Quality).** A stroke narrower than about two pixels covers few or no pixels completely, so the palette met its anti-aliasing before its ink, or never met the ink at all:
   - A 1-1.5 px line split across two rows (every pixel translucent) was dropped entirely. Such a colour, at least half opaque and refused only for having no interior, is now read as a hairline of its opaque version.
   - A 2 px diagonal came out as a translucent band around opaque specks, because its 0.83-covered pixels outnumbered its core and were accepted first. After the walk, a translucent ink whose opaque version is also an ink is weighed again as a blend of the two and dropped when it is coverage; a translucent wash with an interior of its own stays.
@@ -20,6 +31,8 @@ API in particular should be treated as unstable release to release).
 
 ### Added
 
+- **A machine-checked theory of inverting box-filter rasterisation** (`formal/InkvecTheory`, Lean 4 + Mathlib, `docs/theory/README.md`): coverage defined as Lebesgue area; the column-sum theorem; the exact null space of the box filter (the layer-cake fibre of a column, and the zigzag as the one invisible deformation of a border-vertex polyline: the boundary solve's "sawtooth"); identifiability of polynomial boundaries from as many columns as coefficients; the cell-mean-to-point correction exact for cubics; the sharp 3/2 − √2 bias of the ½-crossing; minimax lower bounds for tracers that threshold or quantise first (½ px for thresholding); exact inversion of sub-pixel strokes that straddle a border and the bias of the coverage centroid; noise and supersampling versions. No `sorry` and no axiom beyond Lean's three standard ones (`lake build InkvecTheory.Audit`); a `formal` CI workflow checks both. A literature survey of the mathematics behind reversing rasterisation, and what of it had been formalised (nothing), is in the theory page.
+- **`bench/theory`**: an exact-area rasteriser (font-rs's accumulation in float64) and the scripts that score boundary readings, and inkvec's stage 07, against exactly known geometry.
 - **Half-turn symmetry.** A drawing that is its own 180° rotation about the image centre, and no mirror image, now comes back exactly so (`bench/cases` `mirror_r`, Quality and Fast), through the same pairing, confirmation and averaging as the mirrors.
 
 ## [0.2.7] - 2026-10-08

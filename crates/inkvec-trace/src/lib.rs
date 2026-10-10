@@ -751,6 +751,7 @@ pub fn trace_color_full_with_alpha(
         face_color,
         n_faces,
         sigma_noise,
+        soft_intake,
         &mut sw,
         None,
         None,
@@ -1008,6 +1009,7 @@ pub fn trace_color_from_labels(
         face_color,
         n_faces,
         sigma_noise,
+        opts.lossy_intake,
         &mut sw,
         None,
         None,
@@ -1039,6 +1041,7 @@ pub fn trace_color_from_labels(
 /// * `face_fill`, `face_color`: per face, its fitted fill and its palette index;
 /// * `sigma_noise`: per-channel noise in sRGB units, which sets how far the sub-pixel
 ///   refinement trusts each pixel;
+/// * `soft_intake`: the intake is soft or lossy (`planar::measure_subpixel`);
 /// * `sw`: the caller's stopwatch, so stage timings continue in one sequence;
 /// * `source_alpha`: the source's alpha per pixel, or `None` on the opaque path;
 /// * `face_alpha_override`: per face, the opacity at which it meets the ground (the
@@ -1057,6 +1060,7 @@ pub(crate) fn finish_color_trace_alpha(
     face_color: Vec<usize>,
     n_faces: usize,
     sigma_noise: f64,
+    soft_intake: bool,
     sw: &mut Stopwatch,
     source_alpha: Option<&[f32]>,
     face_alpha_override: Option<Vec<f32>>,
@@ -1119,6 +1123,7 @@ pub(crate) fn finish_color_trace_alpha(
             &face_model,
             sigma_noise,
             opts.simplify_faint,
+            soft_intake,
             alpha_pair,
         )
     };

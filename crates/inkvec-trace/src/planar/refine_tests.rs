@@ -26,6 +26,7 @@ fn refine_serial(
         sigma_noise,
         min_contrast: (3.0 * sigma_noise).max(MIN_UNMIX_CONTRAST),
         simplify_faint: false,
+        soft: false,
         debug: false,
         dump: None,
     };

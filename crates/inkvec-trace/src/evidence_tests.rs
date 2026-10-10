@@ -587,3 +587,383 @@ fn thin_features_third_inks_and_refusals() {
     assert!(!ev.corners().is_empty());
     assert_eq!(ev.chi2_local(Owner::Corner(0), &[]), none);
 }
+
+/// A deterministic standard normal stream (an LCG through Box–Muller).
+struct Normal(u64);
+
+impl Normal {
+    fn uniform(&mut self) -> f64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        ((self.0 >> 11) as f64 + 0.5) / (1u64 << 53) as f64
+    }
+    fn next(&mut self) -> f64 {
+        let (u, v) = (self.uniform(), self.uniform());
+        (-2.0 * u.ln()).sqrt() * (2.0 * PI * v).cos()
+    }
+}
+
+/// The truth's score on every edge: each window's sum against the exact area the truth
+/// image gives it, through the evaluator's own `score`.
+fn truth_score(ev: &Evidence, truth: &[[f32; 3]]) -> Chi2 {
+    let mut total = Chi2::default();
+    for e in 0..ev.edge_count() {
+        let obs = ev.runs(e);
+        if obs.is_empty() {
+            continue;
+        }
+        let t = ev.window_sums_of(e, truth);
+        let r: Vec<f64> = obs.iter().zip(&t).map(|(o, t)| o.sum - t).collect();
+        let v: Vec<f64> = obs.iter().map(|o| o.var).collect();
+        let sh: Vec<f64> = obs.iter().map(|o| o.share).collect();
+        total = total
+            + inkvec_core::likelihood::score(
+                &r,
+                &v,
+                &sh,
+                ev.edge_offset_var(e),
+                inkvec_core::noise::huber_kappa(ev.tail_nu()),
+            );
+    }
+    total
+}
+
+/// Noise added within a few pixels of the edges is found from the windows alone: the noise
+/// model is no longer clean, the windows' variance grows to match, and the truth scores
+/// near one per independent measurement again. Without it, the truth reads many times that.
+#[test]
+fn noise_at_the_edges_is_read_from_the_windows() {
+    let shapes = [
+        disc(31.4, 30.2, 17.3, 720),
+        square(31.7, 32.2, 13.0, 0.3),
+        disc(32.6, 31.1, 21.9, 720),
+    ];
+    let (mut chi, mut plain) = (Chi2::default(), Chi2::default());
+    let mut scales = Vec::new();
+    for (k, poly) in shapes.into_iter().enumerate() {
+        let s = render(64, 64, WHITE, &[(poly, B)], true);
+        let mut noisy = s.rgb.clone();
+        let mut g = Normal(17 + k as u64);
+        for (i, p) in noisy.iter_mut().enumerate() {
+            let c = s.cov[0][i];
+            // Noise where the image changes: within the edge's pixels and their neighbours.
+            let near = (1..=2).any(|d| {
+                let (x, y) = ((i % 64) as i64, (i / 64) as i64);
+                [(d, 0), (-d, 0), (0, d), (0, -d)].iter().any(|&(dx, dy)| {
+                    let (u, v) = (x + dx, y + dy);
+                    (0..64).contains(&u) && (0..64).contains(&v) && {
+                        let c2 = s.cov[0][(v * 64 + u) as usize];
+                        (c2 - c).abs() > 1e-6
+                    }
+                })
+            });
+            if near {
+                let n = (6.0 / 255.0) * g.next();
+                for ch in p.iter_mut() {
+                    *ch = (*ch as f64 + n).clamp(0.0, 1.0) as f32;
+                }
+            }
+        }
+        let map = map_of(&s);
+        let opts = EvidenceOptions {
+            floor: Some(Floor {
+                lattice: 1_000_000,
+                window_var: 0.0,
+                edge_var: 0.0,
+            }),
+            ..EvidenceOptions::default()
+        };
+        let ev = build(&map, &noisy, &s.faces, 0.5 / 255.0, &opts);
+        assert!(!ev.noise().is_clean(), "{:?}", ev.noise());
+        scales.push(ev.noise().window_scale);
+        chi = chi + truth_score(&ev, &s.rgb);
+        let off = build(
+            &map,
+            &noisy,
+            &s.faces,
+            0.5 / 255.0,
+            &EvidenceOptions {
+                self_calibrate: false,
+                ..opts
+            },
+        );
+        plain = plain + truth_score(&off, &s.rgb);
+    }
+    let r = chi.chi2_floor / chi.dof;
+    let r0 = plain.chi2_floor / plain.dof;
+    assert!(
+        (0.5..2.0).contains(&r),
+        "calibrated chi2/dof {r:.2} ({chi:?})"
+    );
+    assert!(r0 > 4.0 * r, "uncalibrated {r0:.2} vs {r:.2}");
+    assert!(scales.iter().all(|&w| w > 2.0), "{scales:?}");
+}
+
+/// A clean render measures clean, and its planar map leaves the measurement untouched.
+#[test]
+fn a_clean_render_is_left_alone() {
+    let s = render(64, 64, WHITE, &[(square(31.7, 32.2, 13.0, 0.3), B)], true);
+    let mut map = map_of(&s);
+    let before: Vec<Vec<f64>> = map.edges.iter().map(|e| e.sigma.clone()).collect();
+    // Even asked to fold, a clean render's measurement folds nothing.
+    let n = measure_noise_with(&mut map, &s.rgb, &s.faces, 0.5 / 255.0, false, true);
+    assert!(n.is_clean(), "{n:?}");
+    let after: Vec<Vec<f64>> = map.edges.iter().map(|e| e.sigma.clone()).collect();
+    assert_eq!(before, after);
+}
+
+/// A noisy intake's measurement is reported; folded, every point's uncertainty grows by the
+/// windows' measured error, and unfolded the map is untouched.
+#[test]
+fn a_noisy_render_folds_when_asked() {
+    let s = render(64, 64, WHITE, &[(disc(31.4, 30.2, 17.3, 720), B)], true);
+    let mut g = Normal(5);
+    let noisy: Vec<[f32; 3]> = s
+        .rgb
+        .iter()
+        .map(|p| {
+            let n = (12.0 / 255.0) * g.next();
+            p.map(|c| (c as f64 + n).clamp(0.0, 1.0) as f32)
+        })
+        .collect();
+    let mut map = map_of(&s);
+    let before: Vec<Vec<f64>> = map.edges.iter().map(|e| e.sigma.clone()).collect();
+    let kept = measure_noise_with(&mut map, &noisy, &s.faces, 12.0 / 255.0, false, false);
+    assert!(
+        !kept.is_clean() && kept.sigma_edge_at(0.0) > FOLD_LEVEL,
+        "{kept:?}"
+    );
+    let unfolded: Vec<Vec<f64>> = map.edges.iter().map(|e| e.sigma.clone()).collect();
+    assert_eq!(before, unfolded);
+    let folded = measure_noise_with(&mut map, &noisy, &s.faces, 12.0 / 255.0, false, true);
+    assert_eq!(folded, kept);
+    for (b, e) in before.iter().zip(&map.edges) {
+        assert!(
+            b.iter().zip(&e.sigma).all(|(b, a)| a > b),
+            "{b:?} vs {:?}",
+            e.sigma
+        );
+    }
+}
+
+/// On an axis-aligned square every window of a side repeats one measurement: the stretch
+/// counts once.
+#[test]
+fn replicas_count_once() {
+    // Off the 8-bit rounding's ties (a coverage of 0.7 over white reads 76.5 levels, which
+    // float error rounds either way).
+    let sq = vec![
+        Point::new(12.31, 14.63),
+        Point::new(50.27, 14.63),
+        Point::new(50.27, 49.23),
+        Point::new(12.31, 49.23),
+    ];
+    let s = render(64, 64, WHITE, &[(sq, B)], true);
+    let ev = build(&map_of(&s), &s.rgb, &s.faces, 0.5 / 255.0, &exact_floor());
+    let (mut m, mut dof) = (0usize, 0.0);
+    for e in 0..ev.edge_count() {
+        for o in ev.runs(e) {
+            m += 1;
+            dof += o.share;
+        }
+    }
+    assert!(m > 100, "{m}");
+    // Four sides, each a few stretches between its corners.
+    assert!(dof < 0.2 * m as f64, "{dof} of {m}");
+}
+
+/// A point-sampling lattice is read from the coverages of axis-aligned edges; half pixels and
+/// arbitrary coverages say nothing.
+#[test]
+fn a_sampling_lattice_is_read_from_the_image() {
+    let half = 0.5 / 255.0;
+    let round = |c: f64| (c * 255.0).round() / 255.0;
+    let on32: Vec<(f64, f64)> = (1..32)
+        .filter(|&k| k != 16)
+        .map(|k| (round(k as f64 / 32.0), half))
+        .collect();
+    assert_eq!(noise::detect_lattice(&on32), Some(32));
+    let on8: Vec<(f64, f64)> = [1, 2, 3, 5, 6, 7, 1, 3, 5, 7]
+        .iter()
+        .map(|&k| (round(k as f64 / 8.0), half))
+        .collect();
+    assert_eq!(noise::detect_lattice(&on8), Some(8));
+    let halves = vec![(0.5, half); 20];
+    assert_eq!(noise::detect_lattice(&halves), None);
+    let thirds: Vec<(f64, f64)> = (0..20)
+        .map(|k| (round([1.0 / 3.0, 2.0 / 3.0][k % 2]), half))
+        .collect();
+    assert_eq!(noise::detect_lattice(&thirds), None);
+}
+
+/// On a lossy intake the weight comes from luma, which 4:2:0 keeps at full resolution: a
+/// pixel whose chroma has bled still reads its coverage. An isoluminant pair has no luma
+/// axis.
+#[test]
+fn luma_reads_through_chroma_bleed() {
+    let (blue, yellow) = ([0.1f32, 0.2, 0.9], [0.95f32, 0.9, 0.1]);
+    let axis = Axis2::new(blue, yellow, 0.5 / 255.0);
+    let luma = axis.luma_of(0.1, 26.0 / 255.0).expect("lumas differ");
+    // 30 % blue, then the chroma pulled a tenth of the way to grey while luma stays (about
+    // ten levels, the bleed measured within a pixel of a web-tier edge).
+    let mix: [f32; 3] = std::array::from_fn(|c| 0.3 * blue[c] + 0.7 * yellow[c]);
+    let y = windows::jpeg_luma(mix.map(|v| v as f64)) as f32;
+    let bled: [f32; 3] = std::array::from_fn(|c| 0.9 * mix[c] + 0.1 * y);
+    let m = luma.unmix(bled, None);
+    assert!((m.a - 0.3).abs() < 1e-3, "{}", m.a);
+    assert!(!m.third);
+    let grey = [0.5f32, 0.5, 0.5];
+    let iso = [0.5 + 0.1 / 0.299 * 0.587 * 0.5, 0.5 - 0.1, 0.5];
+    let iso = iso.map(|v| v as f32);
+    let flat = Axis2::new(grey, iso, 0.5 / 255.0);
+    assert!(flat.luma_of(0.1, 26.0 / 255.0).is_none());
+}
+
+/// A2: a thin stroke's strip pixels, which no run window takes, are scored against a stroke
+/// band: its true centreline and width are calibrated there, and the band moved by 0.3 px or
+/// drawn 0.3 px too wide is many standard deviations worse.
+#[test]
+fn a_stroke_band_scores_its_strip() {
+    // A 1.4 px dark band at 20 degrees across the image, between two white sides.
+    let (a, b, wdt) = (Point::new(4.0, 18.3), Point::new(60.0, 38.68), 1.4);
+    let (dx, dy) = (b.x - a.x, b.y - a.y);
+    let l = dx.hypot(dy);
+    let (nx, ny) = (dy / l * wdt / 2.0, -dx / l * wdt / 2.0);
+    let band_poly = vec![
+        Point::new(a.x + nx, a.y + ny),
+        Point::new(b.x + nx, b.y + ny),
+        Point::new(b.x - nx, b.y - ny),
+        Point::new(a.x - nx, a.y - ny),
+    ];
+    // Two blocks the band runs between, so that its two long sides are separate edges.
+    let left_block = vec![
+        Point::new(0.0, 10.0),
+        Point::new(4.0, 10.0),
+        Point::new(4.0, 30.0),
+        Point::new(0.0, 30.0),
+    ];
+    let right_block = vec![
+        Point::new(60.0, 30.0),
+        Point::new(64.0, 30.0),
+        Point::new(64.0, 50.0),
+        Point::new(60.0, 50.0),
+    ];
+    let ink = [0.1f32, 0.2, 0.6];
+    let s = render(
+        64,
+        64,
+        WHITE,
+        &[
+            (band_poly, ink),
+            (left_block, [0.9, 0.3, 0.1]),
+            (right_block, [0.9, 0.3, 0.1]),
+        ],
+        true,
+    );
+    let ev = build(&map_of(&s), &s.rgb, &s.faces, 0.5 / 255.0, &exact_floor());
+    // The pair of edges with the most strip pixels is the band's.
+    let mut counts: std::collections::BTreeMap<(u32, u32), usize> = Default::default();
+    for p in &ev.strips {
+        *counts.entry(p.pair).or_default() += 1;
+    }
+    let (&pair, &n) = counts.iter().max_by_key(|(_, &c)| c).expect("strip pixels");
+    assert!(n > 40, "{counts:?}");
+    let pair = (pair.0 as usize, pair.1 as usize);
+    let band = |off: f64, w: f64| StrokeBand {
+        centre: vec![Piece::Line([
+            Point::new(
+                a.x - 2.0 + off * dy / l,
+                a.y - 2.0 * dy / dx + off * -dx / l,
+            ),
+            Point::new(
+                b.x + 2.0 + off * dy / l,
+                b.y + 2.0 * dy / dx + off * -dx / l,
+            ),
+        ])],
+        width: w,
+    };
+    let sides = [WHITE, ink, WHITE];
+    let truth = ev.chi2_band(pair, &band(0.0, wdt), sides);
+    assert!(truth.m > 60, "{truth:?}");
+    let ratio = truth.chi2 / truth.m as f64;
+    assert!(ratio < 2.0, "band chi2/M {ratio:.2} ({truth:?})");
+    let moved = ev.chi2_band(pair, &band(0.3, wdt), sides);
+    let wide = ev.chi2_band(pair, &band(0.0, wdt + 0.3), sides);
+    assert!(moved.chi2 > truth.chi2 + 100.0, "{moved:?} vs {truth:?}");
+    assert!(wide.chi2 > truth.chi2 + 100.0, "{wide:?} vs {truth:?}");
+}
+
+/// Exact per-layer "over" compositing, as a renderer draws overlapping shapes, rounded to 8
+/// bits; each pixel labelled by its largest contribution. Faces: `bg`, then the layers.
+fn render_over(w: usize, h: usize, bg: [f32; 3], layers: &[(Vec<Point>, [f32; 3])]) -> Scene {
+    let n = layers.len();
+    let mut cov = vec![vec![0.0; w * h]; n];
+    let mut rgb = vec![[0f32; 3]; w * h];
+    let mut labels = vec![0u16; w * h];
+    for i in 0..w * h {
+        let (x, y) = ((i % w) as i32, (i / w) as i32);
+        let mut c = [bg[0] as f64, bg[1] as f64, bg[2] as f64];
+        for (k, (poly, col)) in layers.iter().enumerate() {
+            let a = local::area_in_pixel(poly, x, y).clamp(0.0, 1.0);
+            cov[k][i] = a;
+            for ch in 0..3 {
+                c[ch] = a * col[ch] as f64 + (1.0 - a) * c[ch];
+            }
+        }
+        // Each layer's share is its own area times what the layers above it leave.
+        let left_by = |from: usize| (from..n).map(|j| 1.0 - cov[j][i]).product::<f64>();
+        let mut best = (0usize, left_by(0));
+        for k in 1..=n {
+            let share = cov[k - 1][i] * left_by(k);
+            if share > best.1 {
+                best = (k, share);
+            }
+        }
+        labels[i] = best.0 as u16;
+        rgb[i] = c.map(|v| ((v * 255.0).round() / 255.0) as f32);
+    }
+    let mut faces = vec![FillModel::Flat(bg)];
+    faces.extend(layers.iter().map(|(_, c)| FillModel::Flat(*c)));
+    Scene {
+        w,
+        h,
+        rgb,
+        cov,
+        labels,
+        faces,
+    }
+}
+
+/// A2: where one shape overlaps another, a renderer composites each over what lies beneath,
+/// which the visible partition does not reproduce at the junctions. Scored by per-layer
+/// compositing, the true shapes are calibrated there; moved by half a pixel they are not.
+#[test]
+fn junctions_composite_per_layer() {
+    let bottom = square(26.3, 27.1, 12.0, 0.2);
+    let top = square(37.6, 38.2, 11.0, -0.3);
+    let (red, blue) = ([0.85f32, 0.2, 0.15], [0.1f32, 0.35, 0.85]);
+    let s = render_over(64, 64, WHITE, &[(bottom.clone(), red), (top.clone(), blue)]);
+    let ev = build(&map_of(&s), &s.rgb, &s.faces, 0.5 / 255.0, &exact_floor());
+    let closed = |p: &[Point]| pieces(p, false);
+    let (b, t) = (closed(&bottom), closed(&top));
+    let mut chi = Chi2::default();
+    let mut moved = Chi2::default();
+    let shifted: Vec<Point> = top.iter().map(|p| Point::new(p.x + 0.5, p.y)).collect();
+    let ts = closed(&shifted);
+    let mut n_junctions = 0;
+    for j in ev.junctions() {
+        let c = ev.chi2_local_layers(j.node, &[(&b, red), (&t, blue)], WHITE);
+        if c.m == 0 {
+            continue;
+        }
+        n_junctions += 1;
+        chi = chi + c;
+        moved = moved + ev.chi2_local_layers(j.node, &[(&b, red), (&ts, blue)], WHITE);
+    }
+    assert!(n_junctions >= 2, "{n_junctions}");
+    let ratio = chi.chi2 / chi.m as f64;
+    assert!(ratio < 2.0, "layers chi2/M {ratio:.2} ({chi:?})");
+    assert!(moved.chi2 > chi.chi2 + 100.0, "{moved:?} vs {chi:?}");
+}

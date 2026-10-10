@@ -964,30 +964,249 @@ of each kernel. Two results are accepted only through them:
 `checks::certify_run_chi2_polyline` certifies a solver's `χ²` of a polyline candidate on any
 set of windows.
 
-### Next
+### Next (as decided after milestone 1)
 
-1. **A1 for curves and strokes.** Draw candidates with tiny-skia 0.12 itself: the crate is
-   already in the lockfile, through resvg in `inkvec-sr`. Render each window's bounding box
-   at 8× and box-filter, so flattening, stroker and lattice are exactly the gate's. Use it
-   for final scoring and calibration, with the analytic `left_area` (plus `Floor`) for
-   search.
-2. **A2.** Strokes and per-layer compositing in `Piece` descriptions, then in the junction
-   terms.
-3. **A5.** Local topological alternatives where a junction's continuations are ambiguous.
-4. **`strip.rs`.** A calibrated `SIDE_TOL` (`z√(70V̂)/12`), with declined vertices becoming
-   corner proposals.
-5. **Lean.** `Information`, `Unmixing`, `AffineInk`, `Vertex`, and `Corner`'s kink
-   response.
-6. **Calibration on the corpus.** `χ²/M` of the artists' own SVGs against the intake, in
-   Rust, per family and tier.
+The engine's forward model stays renderer-agnostic: exact geometry and a floor calibrated per
+image (`RenderModel::default()` draws arcs exactly; `RenderModel::usvg()` keeps usvg's cubics
+for measuring a known renderer). tiny-skia is replicated only in bench tooling. The 512ss
+tier stays as committed: its renderer offsets are realistic variation too.
 
-## Reproduce
+## Phase 2, milestone 2: noise from the edges
+
+The engine's intake model was 8-bit rounding and one noise level per image, read from flat
+regions. On a resized JPEG (the gate's `web` tier, `docs/theory/noise.md`) the error sits at
+the edges, 5 to 9 times the interiors', and has heavy tails. The truth (each icon's exact
+geometry at 400 px) scored on the engine's own windows read `χ²/M` = 150 there. This
+milestone measures the noise per image from the edges, gives the windows a forward model with
+the blur in it, and hands the result to the representation chain as one object
+(`inkvec_core::noise::NoiseModel`).
+
+### What a window's error is made of (measured)
+
+`bench/theory/floor_selfcal.py` runs the engine on five renders of 21 icons (3 per family)
+and on the `web` tier: an exact render, 8 × 8 point samples (`ss8`), tiny-skia's 32-sample
+lattice with exact flattening (`lat32`), resvg 0.48.1 now and the committed tier (identical
+at 128 px), and `web`. Each run window is scored against the truth's sum on the same pixels
+(`crates/inkvec-trace/examples/evidence_calibrate.rs`). A window's error is a function of the
+edge's local sub-pixel phase and of what lies near it, and splits three ways:
+
+* **Replicas.** Neighbouring windows whose mean positions differ by a whole pixel see the
+  edge at the same phase and repeat one measurement with its error. The correlation between
+  such neighbours is 0.84 to 0.95 on every input. On an axis-aligned edge every window is a
+  replica: on `web` 81 % of the fourth differences of one material icon are exactly zero.
+  Every source is replicated, including the JPEG's: a block holding a horizontal edge has
+  only vertical frequencies.
+* **The rough part.** Errors at different phases are independent on exact, lat32 and ss8
+  renders. They anticorrelate at phase steps under 0.05 px (rounding's sawtooth).
+* **The smooth part.** On resvg and `web` renders a correlation of about 0.6 remains between
+  neighbours at every phase step. A smooth error along the run (curve flattening, arc
+  conversion, a resampler's phase ripple) is indistinguishable from moving the edge.
+
+### The estimator (`evidence/noise.rs`)
+
+* **Rounding alone as the base variance.** It is exact for clean renders (`χ²/M` 0.97 at the
+  truth). It is alpha-aware: where the source drew an ink over the clear ground, the intake
+  rounds the alpha, and the weight's variance is `Q²/12` whatever the ink's contrast.
+* **Replica stretches count once.** A stretch of `k` replicas gets `k` times the variance and
+  a share `1/k` (`RunObs::share`; `Chi2::dof = Σ share`).
+* **The rough part from the windows themselves.** It is solved per class (straight, curved)
+  from the fourth differences of replica-free stencils. A winsorised second moment
+  (`E min(z², 6.25)` = 0.9776 for a normal) is exact for normal errors and within 2 % for
+  rounding's bounded ones. A median is 1.65 times off there: that is what first put exact
+  renders at 0.55.
+* **Geometry kept out of the estimate.** A stencil counts only if its local bend (its largest
+  second difference of positions) is under the larger of 0.08 px and six noise standard
+  deviations, iterated from all stencils. Below 0.08 the `D`s of the measured positions and
+  of the truth's errors agree on every input; above it a tight curve's own fourth
+  difference leaks in (6 times the noise on "straight" and 60 on curved windows of exact
+  renders at 128 px).
+* **A significance gate.** A class's extra is kept only when it beats a normal's moment by
+  three standard errors.
+* **The smooth part as one offset per edge.** It has the variance of one of the edge's
+  windows (`edge_offset_var`, read by `chi2_floor`). An axis-aligned edge's constant error
+  *is* one window's error, replicated. A fitted candidate absorbs it in its own position.
+* **The tail.** It is read from the `q90/q50` ratio of the standardised `D`s and matched to
+  Student-t's. It is then diluted back to one window's: a `D` keeps 0.37 of its windows'
+  excess kurtosis.
+* **The robust cost.** Huber's at `κ(ν) = min(3, √ν)` (agreed with the representation chain:
+  where Student-t's influence peaks), on the Kalman-standardised innovations (`Chi2::cost`).
+  It equals `χ²` while every innovation is within `κ`: always on a clean intake's truth.
+* **A point-sampling renderer's lattice.** It is read from the image. On an axis-aligned edge
+  such a renderer's coverage is a multiple of `1/n`, so the smallest `n` that 90 % of the
+  replica stretches' partial pixels sit on (and a random value would not) is the lattice.
+  Its sawtooth `1/(12n²)` is added to replica windows. Coverages of one half are left out:
+  drawings put edges on half pixels by design.
+
+### Lossy and soft intakes: windows on the observed ramp
+
+* **Luma unmixing.** With 4:2:0 chroma, weights are read from luma
+  (`α = (Y − Y_b)/(Y_a − Y_b)`, BT.601), the channel kept at full resolution. This applies
+  where the inks' lumas differ by at least 0.1 (three times the edge noise); a nearly
+  isoluminant pair falls back to full colour. The third-ink test allows 26 levels of chroma
+  bleed.
+* **Plateau-median inks.** Each edge's inks are the per-channel medians of the pixels just
+  beyond its reach on either side, not the palette's means. On a clean render these are the
+  exact inks.
+* **The reach.** It widens to cover the observed ramp: `0.5·w + 1.1` px for the
+  box-equivalent edge width `w` of `softness::ramp_evidence`.
+* **Band windows.** A window takes every pixel of the edge's band on its line, not only
+  those reading as mixtures: noise splits a blurred ramp's run of partial pixels, and each
+  fragment would lose mass to the next.
+* **Column or row is decided along the edge.** The choice uses the direction smoothed over
+  ±2 px of arclength with a hysteresis of 0.15 rad about 45°. Decided per pixel from a noisy
+  polyline's local tangent, diagonals were cut into alternating one- and two-pixel windows
+  that erred in opposite directions (+0.085 and −0.12 px side by side).
+
+### Blur: the forward model
+
+For a blur or resampling `w(y, s)` from input pixels `s` to output pixels `y`, a column
+window `W` over the blurred transition sums to
+
+    Σ_{y∈W} (f ∗ k)(x, y) = (A ∗ k_x)(x) + Δ · m_y,
+
+with three conditions and limits:
+
+* **Hypothesis: `Σ_{y∈W} w(y, s) = 1` for every input `s` it draws on.** `A` is the column-area
+  profile, `k_x` the horizontal marginal, `Δ` the plateau step and `m_y` the vertical first
+  moment (`docs/theory/noise.md`). The mass-preservation step is `window_sum_resampled`
+  (`Windows.lean`).
+* **Box filters and general resamplers.** An integer-ratio box filter satisfies the
+  hypothesis. A general resampler (Pillow normalises per output pixel) satisfies it only on
+  average over phase, and its phase ripple, 0.04 px at a factor of 0.78, is the measured
+  residual. On `web` that ripple is part of the windows' variance.
+* **A centred kernel (`m_y = 0`).** It leaves a straight edge's profile alone
+  (`blur_affine_profile`) and moves a curved one by exactly `½ μ₂ A''`
+  (`blur_quadratic_profile`). That is the forward model, not noise.
+* **The translation.** The first moment, a global sub-pixel translation, cannot be identified
+  from one image: translating the drawing reproduces it exactly. The coordinator measured it
+  at 0.004 px, so it is left out.
+
+`μ₂` comes from `ramp_evidence`'s width: its spread is `(3w² − 1)/12` with a native mean of
+1/6, so `μ₂ = (w² − 1)/4`, not `/12`. `RenderModel::window_area` adds `½ μ₂ A''`, with `A''`
+the second difference of the window's area profile (the candidate moved a pixel either way
+across the strip), only when `μ₂ > 0`.
+
+On damaged input the target is the artist's clean original: the boundary reported is the
+sharp one before the blur, and a corner lost to blur comes back when its arms support it.
+This model makes that possible. The per-pixel corner and junction terms still compare
+unblurred candidates. Blurring them is the next step, and the soft-intake reduce step could
+then be replaced by this forward model (to be gated before acting).
+
+### In the engine
+
+The colour path already decides whether an intake is soft: its edges wider than a native
+render's, ringing (`coverage::ringing_score`), or a lossy container. That is evidence from
+the pixels, not the flag alone. Only then does `evidence::measure_noise` run, which costs 13
+to 49 ms at 400 px, after the crossing test was indexed by arclength.
+
+Its measurement goes to `ColorTrace::noise` (through `evidence::with_noise`, the colour
+path's last step) whenever the edge noise exceeds `FOLD_LEVEL` (3 levels). Clean renders read
+at most about 1.3 levels and `web` 4 to 27. Under it, and on every clean intake, the model is
+`NoiseModel::clean()`.
+
+Nothing in the pipeline reads it yet. Against the previous build, every traced file is
+byte-identical on all eight gate conditions (246 icons each).
+
+The two builds were timed interleaved on a shared machine, and their clean run times match:
+Quality +0.0 to +1.3 %, Fast −5.6 to +0.4 % (Fast totals are a few seconds). No clean intake
+takes the measurement: 0 of 246 at 128 px and 0 of a 62-icon sample at 512 px opaque. Fast
+mode never takes it. On a `web` icon in Quality it costs about 60 ms of a 2 s trace.
+
+`NoiseModel` (agreed with the representation chain) holds:
+`{sigma_flat, sigma_edge[4 bands], psf_radius, psf_mu2, nu, lossy, window_scale}`. It also
+provides `huber_kappa` and `explained_by_psf` (a band narrower than the blur, coloured on the
+line through its two inks or overshooting them).
+
+Folding the noise into the planar map's per-point `σ` is opt-in (`INKVEC_NOISE_FOLD=1`). Each
+point's `σ` then grows by the windows' measured error in quadrature, which is what the fitter
+divides by. With today's fitter, honest uncertainties buy simpler fits at a cost in fidelity
+(`quality-web`, a 62-icon sample: turning −5.0 %, parameters −1.4 %, dE00 +2.8 %, geom
++1.7 %). So the fold waits for the representation chain's fitter to read it with its robust
+loss.
+
+### `strip.rs`: a statistical side test, measured and withheld
+
+The one-sided corner test is the fourth difference of six column means over 12
+(`fourthDiff_side`), so its noise is `√(70 V)/12` for column means of variance `V`. Declining
+a vertex only beyond `max(SIDE_TOL, 3·√(70 V)/12)` lets the noise set the threshold on a noisy
+intake. The certificate (`CERT_TOL`, the shift lands on the cubic) would be unchanged.
+
+With `V` from the trace's per-channel `σ` (`widest · σ² / |d|²`) the term is about 0.007 px on
+a typical clean edge, below `SIDE_TOL` (0.05). On a low-contrast edge, though, `|d|²` is small
+and the term passes `SIDE_TOL`. On the gate's inputs that changed 4 of 246 icons at
+`quality-128ss` and 14 at `fast-128ss`, mostly noto-emoji's shading. A clean intake must keep
+its bytes. The planar refinement does not yet know whether the intake is soft, because the
+noise is measured after it. So the change is withheld until the soft-intake decision reaches
+the planar context and can gate it.
+
+### The adapter (`EdgeScorer`, agreed with the representation chain)
+
+* **The partition.** `windows_between_points(i, j)` gives the run windows whose centres lie
+  in the span `[i, j)` of the edge's point indices, as two ranges through the seam of a
+  closed edge. Every window belongs to exactly one span whatever the segmentation, so the
+  number scored is constant. Corner and junction terms are fixed per edge.
+* **Scoring.** `chi2(r, pieces)` scores a span's piece, extended past its ends, on all of its
+  windows.
+* **The O(1) queries.** `best_graph(r, degree)` and `weight_moments(r)` run in `O(1)` from
+  prefix sums, for the dynamic program's inner loop and the Fisher matrix of a graph of
+  degree at most 3.
+* **Arcs.** `Piece::from_svg_arc` converts the fitter's endpoint arcs to centre form.
+
+### A2: stroke bands and per-layer compositing
+
+* **`chi2_band(pair, band, inks)`.** It scores a `StrokeBand`, a centreline and a width, on
+  the thin-feature pixels its two edges both reach. These pixels were only listed until now.
+  Each pixel is a mix of the ink left of the band, the band's and the ink right of it, by
+  their exact areas. On a 1.4 px band at 20° the true band is calibrated, while a 0.3 px
+  shift or a band 0.3 px too wide costs more than 100.
+* **`chi2_local_layers(node, layers, ground)`.** It scores a junction's pixels by compositing
+  each layer's whole shape over what lies beneath, in paint order, as a renderer does. That
+  is the term the visible partition misses at junctions (mean 0.004 to 0.006, p99 up to
+  0.04, `renderer_floor.py`). On two overlapping squares drawn that way the true shapes are
+  calibrated, and the top one moved by half a pixel costs more than 100.
+* **Arcs in local terms.** The local terms' flattening follows arcs through fine cubics. With
+  the default render model drawing arcs exactly, it had been dropping them.
+
+### Validation
+
+The engine's windows, scored against the truth with the evaluator's own `score` (replicas,
+the per-edge offset, Huber at `κ(ν)`): `χ²_floor` per independent measurement (Huber in
+brackets). 21 icons, 3 per family.
+
+| input | rounding alone | per-image noise model |
+|---|---|---|
+| exact, 128 px | 0.97 | 0.72 (0.72) |
+| 8 × 8 point samples, 128 px | 334 | 3.02 (2.07) |
+| tiny-skia lattice, 128 px | 14 | 1.79 (1.57) |
+| resvg (fresh = committed), 128 px | 32 | 4.33 (3.34) |
+| resvg fresh, 512 px | 119 | 13.9 (7.4) |
+| committed 512ss | 206 | 9.9 (6.5) |
+| `web` (400 px JPEG) | 150 | 3.12 (1.79) |
+
+On `web` the median standardised residual is 1.02. Against a local cubic fitted over 9
+windows (what a fitter sees) it is 1.37, and 1.05 under Huber. Most families sit at 1.2 to
+1.7 under Huber; openmoji is the outlier at 3.4.
+
+What remains:
+
+* **resvg's smooth curve error.** Flattening chords and usvg's arc cubics leave about 0.01 px
+  along curves, smooth enough that no difference sees it (simple-icons, all arcs, is the
+  worst). It is the price of an exact-geometry model that does not replicate a renderer, and
+  a fitted candidate absorbs it in its own geometry.
+* **A point-sampled render's sawtooth.** On near-axis edges that are not exact replicas it is
+  only partly modelled.
+* **Exact renders are slightly over-calibrated** (0.72): the extra variance is accepted on
+  significance, and a small geometry leak gets through.
+
 
 ```bash
 python3 bench/theory/evidence_eval.py all       # B1.2, B2.2, B2.3, B3.1, B3.3 (about 10 s)
 python3 bench/theory/exact_raster.py            # the renderer's self-check
 python3 bench/theory/renderer_floor.py --fresh  # the intake's floor (about 25 min)
-cargo test -p inkvec-core likelihood
+cargo build --release -p inkvec-trace --example evidence_calibrate
+python3 bench/theory/floor_selfcal.py --sizes 128 --per-family 3              # five renders
+python3 bench/theory/floor_selfcal.py --sizes 400 --conditions web --per-family 3
+cargo test -p inkvec-core likelihood noise
 cargo test -p inkvec-trace --lib evidence
 ```
 

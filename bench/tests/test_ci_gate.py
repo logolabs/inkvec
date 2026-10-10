@@ -82,8 +82,49 @@ class GateFlowTests(unittest.TestCase):
         for k in r:
             self.assertEqual(back[k]["corpus"], r[k]["corpus"])
             self.assertEqual(back[k]["sha256"], r[k]["sha256"][:ci_gate.SHA_CHARS])
-            for ax in ci_gate.REPORTED_AXES:
+            for ax in ci_gate.ROW_AXES:
                 self.assertAlmostEqual(back[k][ax], r[k][ax], delta=abs(r[k][ax]) * 1e-8)
+
+    def test_gaps_measure_distance_from_the_artist(self):
+        cond = ci_gate.BY_NAME["quality-512ssop"]
+        with patch.object(ci_gate, "artist_turning", return_value=10.0):
+            near = ci_gate.with_gaps({"f/a": {"turning": 9.0 / 512, "ratio": 0.5}}, cond)["f/a"]
+            far = ci_gate.with_gaps({"f/a": {"turning": 4.0 / 512, "ratio": 2.0}}, cond)["f/a"]
+        self.assertAlmostEqual(near["turning_gap"], 1.0)
+        self.assertAlmostEqual(far["turning_gap"], 6.0)
+        # Half and twice the artist's parameters are equally far.
+        self.assertAlmostEqual(near["ratio_gap"], far["ratio_gap"])
+
+    def test_turning_toward_the_artist_is_not_a_regression(self):
+        # A build whose traces turn MORE, but toward an artist who turns more still, passes;
+        # the raw `turning` axis would have failed it.
+        base = rows()
+        cur = rows(1.0)
+        for r in cur.values():
+            r["turning"] *= 1.3
+            r["sha256"] = "f" * 64
+        with patch.object(ci_gate, "artist_turning", return_value=0.08 * 512):
+            v = ci_gate.compare_condition(
+                ci_gate.with_gaps(base, ci_gate.BY_NAME["quality-512ss"]),
+                ci_gate.with_gaps(cur, ci_gate.BY_NAME["quality-512ss"]), ci_gate.MARGINS)
+        self.assertTrue(v["turning_gap"][1].passed)
+        self.assertGreater(v["turning"][0].rel, 0.25)  # raw turning rose 30 %
+        self.assertNotIn("turning", ci_gate.GATED_AXES)
+
+    def test_tier_sides_match_the_committed_rasters(self):
+        from PIL import Image
+        data = ci_gate.ROOT / "bench" / "data" / "corpus_raster"
+        for tier, side in ci_gate.TIER_PX.items():
+            ext = "jpg" if tier == "web" else "png"
+            some = next(data.glob(f"lucide/{tier}/*.{ext}"), None)
+            if some is None:
+                self.skipTest("screen rasters not present")
+            self.assertEqual(Image.open(some).size, (side, side), tier)
+
+    def test_canvas_side_reads_the_longer_viewbox_side(self):
+        self.assertEqual(ci_gate.canvas_side('<svg viewBox="0 0 24 36" width="10">'), 36.0)
+        self.assertEqual(ci_gate.canvas_side('<svg width="128" height="64">'), 128.0)
+        self.assertIsNone(ci_gate.canvas_side("<svg>"))
 
     def test_write_then_identical_build_passes(self):
         run = Run(self.tmp, {c.name: rows() for c in ci_gate.CONDITIONS})

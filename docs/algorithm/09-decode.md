@@ -6,11 +6,11 @@
 
 **Source:** `crates/inkvec-trace/src/decode.rs`
 **Entry point:** `decode_faces()` (`decode.rs:559`)
-**Pipeline position:** after `boundary_opt` (stage mark `"boundary_opt"`, `lib.rs:1167`),
-before `symmetry` enforcement (stage mark `"decode"`, `lib.rs:1189`). Called only from
+**Pipeline position:** after `boundary_opt` (stage mark `"boundary_opt"`, `lib.rs:1142`),
+before `symmetry` enforcement (stage mark `"decode"`, `lib.rs:1164`). Called only from
 `finish_color_trace_alpha`, the geometry tail every colour entry point shares, outside Fast
 mode, and only when `INKVEC_DECODE` (*research build*) is set to something other than
-`"0"` (`lib.rs:1177`) — **off by default**.
+`"0"` (`lib.rs:1152`) — **off by default**.
 
 ## What problem this solves
 
@@ -53,7 +53,7 @@ second, and decides arc count last, by dynamic programming, in `inkvec-fit`.
 **Input:** the `PlanarMap` (mutated in place), the rendered image `rgb: &[[f32; 3]]`, the
 integer `labels: &[u16]` map, `face_fill: &mut [FillFit]` (`gradient.rs:308-318`), and
 `lambda: f64` — supplied by the caller as `gradient::bic_lambda(width * height)`
-(`lib.rs:1183`), the Bayesian-information-criterion choice `0.5 * ln(n)`
+(`lib.rs:1158`), the Bayesian-information-criterion choice `0.5 * ln(n)`
 (`gradient.rs:325-327`). This is a *different* lambda from the one `candidate_orders` and
 `fitted_params` use internally (`FitConfig::from_precision`, described below) — the two
 serve different comparisons and are not interchangeable.
@@ -452,7 +452,7 @@ Since the settings cleanup (CHANGELOG, 0.2.0, *Changed*) the engine reads its en
 
 | variable | default | effect |
 |---|---|---|
-| `INKVEC_DECODE` (*research build*) | off (`"0"` or unset) | master switch — the whole stage is skipped unless set to something other than `"0"` (read in `lib.rs:1177`, not in this file) |
+| `INKVEC_DECODE` (*research build*) | off (`"0"` or unset) | master switch — the whole stage is skipped unless set to something other than `"0"` (read in `lib.rs:1152`, not in this file) |
 | `INKVEC_DECODE_MS` (*research build*) | `600.0` ms | time budget for the per-face loop |
 | `INKVEC_DECODE_LEAK` (*research build*) | `LEAK_GATE = 0.05` | overrides the (diagnostic-only) leak threshold |
 | `INKVEC_DECODE_THIN` (*research build*) | `THIN_PX = 2.5` | overrides the width threshold that gates whether a face is attempted |

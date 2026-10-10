@@ -28,7 +28,15 @@ pub(super) struct Local {
 
 /// Points along a curve, flattened finely (the local term is a few pixels; `1e-3` px).
 fn flatten(rm: &RenderModel, pieces: &[Piece]) -> Vec<Point> {
-    let drawn = rm.as_rendered(pieces);
+    // Arcs the model draws exactly are followed through fine cubics.
+    let drawn: Vec<Piece> = rm
+        .as_rendered(pieces)
+        .into_iter()
+        .flat_map(|p| match p {
+            Piece::Arc(a) => a.to_cubics(1e-4),
+            other => vec![other],
+        })
+        .collect();
     let mut out: Vec<Point> = Vec::new();
     for p in &drawn {
         let (pts, n): (Vec<Point>, usize) = match p {
@@ -293,6 +301,8 @@ pub(super) fn chi2_corner(pixels: &[CornerPixel], rm: &RenderModel, curve: &[Pie
         out.m += 1;
     }
     out.chi2_floor = out.chi2;
+    out.dof = out.m as f64;
+    out.cost = out.chi2;
     out
 }
 
@@ -396,14 +406,93 @@ pub(super) fn chi2(
             }
         }
     }
+    Some(colour_score(
+        term.pixels
+            .iter()
+            .zip(&model)
+            .map(|(px, m)| (px.rgb, *m, px.var)),
+    ))
+}
+
+/// A pixel two edges both reach away from a junction (a thin feature), in colour.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct StripPixel {
+    pub(super) x: i32,
+    pub(super) y: i32,
+    pub(super) rgb: [f64; 3],
+    /// Per-channel variance.
+    pub(super) var: f64,
+    /// The two edges, the lower index first.
+    pub(super) pair: (u32, u32),
+}
+
+/// Sum per-pixel colour residuals into a score.
+fn colour_score(pixels: impl Iterator<Item = ([f64; 3], [f64; 3], f64)>) -> Chi2 {
     let mut out = Chi2::default();
-    for (pi, px) in term.pixels.iter().enumerate() {
+    for (obs, model, var) in pixels {
         for ch in 0..3 {
-            let r = px.rgb[ch] - model[pi][ch];
-            out.chi2 += r * r / px.var.max(1e-300);
+            let r = obs[ch] - model[ch];
+            out.chi2 += r * r / var.max(1e-300);
         }
         out.m += 3;
     }
     out.chi2_floor = out.chi2;
-    Some(out)
+    out.dof = out.m as f64;
+    out.cost = out.chi2;
+    out
+}
+
+/// A2: a stroke band against the strip pixels of its two edges: each pixel is the left
+/// side's ink where it is left of the band's left side, the band's within the band, and the
+/// right side's elsewhere.
+pub(super) fn chi2_band(
+    pixels: &[StripPixel],
+    pair: (u32, u32),
+    band: &inkvec_core::likelihood::StrokeBand,
+    inks: [[f32; 3]; 3],
+) -> Chi2 {
+    let (left, right) = band.sides(0.05);
+    if left.len() < 2 {
+        return Chi2::default();
+    }
+    let mut poly = left.clone();
+    poly.extend(right.iter().rev());
+    let ink = |k: usize| [inks[k][0] as f64, inks[k][1] as f64, inks[k][2] as f64];
+    let (il, ib, ir) = (ink(0), ink(1), ink(2));
+    colour_score(pixels.iter().filter(|p| p.pair == pair).filter_map(|p| {
+        let b = area_in_pixel(&poly, p.x, p.y).clamp(0.0, 1.0);
+        let l = left_area_pixel(&left, p.x, p.y, 4.0)?.clamp(0.0, 1.0 - b);
+        let r = (1.0 - b - l).max(0.0);
+        let model: [f64; 3] = std::array::from_fn(|c| l * il[c] + b * ib[c] + r * ir[c]);
+        Some((p.rgb, model, p.var))
+    }))
+}
+
+/// A2: a junction's pixels under per-layer compositing: each layer's whole shape covers its
+/// area of a pixel and is painted over what lies beneath, in order, over `ground`.
+pub(super) fn chi2_layers(
+    term: &Local,
+    rm: &RenderModel,
+    layers: &[(&[Piece], [f32; 3])],
+    ground: [f32; 3],
+) -> Chi2 {
+    let shapes: Vec<(Vec<Point>, [f64; 3])> = layers
+        .iter()
+        .map(|(b, c)| (flatten(rm, b), [c[0] as f64, c[1] as f64, c[2] as f64]))
+        .collect();
+    let g = [ground[0] as f64, ground[1] as f64, ground[2] as f64];
+    colour_score(term.pixels.iter().map(|p| {
+        let mut c = g;
+        for (poly, col) in &shapes {
+            let a = if poly.len() >= 3 {
+                area_in_pixel(poly, p.x, p.y).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            for ch in 0..3 {
+                c[ch] = a * col[ch] + (1.0 - a) * c[ch];
+            }
+        }
+        (p.rgb, c, p.var)
+    }))
 }

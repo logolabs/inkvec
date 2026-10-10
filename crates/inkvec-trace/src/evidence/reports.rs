@@ -18,7 +18,13 @@ use super::windows::crossing;
 /// whose `|D|` is at least `z_min` standard deviations and a local maximum along the run is
 /// proposed; a constant or linear bias shared by the windows (the renderer floor's per-edge
 /// offset) cancels in `D`.
-pub(super) fn corners(edge: u32, obs: &[RunObs], closed: bool, z_min: f64) -> Vec<CornerProposal> {
+pub(super) fn corners(
+    edge: u32,
+    obs: &[RunObs],
+    closed: bool,
+    z_min: f64,
+    lossy: bool,
+) -> Vec<CornerProposal> {
     const W: [f64; 5] = [1.0, -4.0, 6.0, -4.0, 1.0];
     let n = obs.len();
     let mut z = vec![0.0f64; n];
@@ -71,7 +77,12 @@ pub(super) fn corners(edge: u32, obs: &[RunObs], closed: bool, z_min: f64) -> Ve
         let five: Vec<&RunObs> = (0..5).map(|k| &obs[(i + n + k - 2) % n]).collect();
         let h = [0, 1, 2, 3, 4].map(|k| five[k].mean_position());
         let v = [0, 1, 2, 3, 4].map(|k| five[k].var);
-        if z[i] >= left && z[i] > right && super::checks::certify_corner(h, v, z_min) {
+        // On a JPEG an 8 × 8 block boundary steps the error between blocks: a proposal centred
+        // on a window by such a boundary must clear twice the threshold.
+        let block = lossy && matches!(obs[i].window.line.rem_euclid(8), 0 | 7);
+        let need = if block { 2.0 * z_min } else { z_min };
+        if z[i] >= need && z[i] >= left && z[i] > right && super::checks::certify_corner(h, v, need)
+        {
             out.push(CornerProposal {
                 edge,
                 index: i,

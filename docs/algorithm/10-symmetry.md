@@ -5,15 +5,15 @@
 > boundary point back into exact agreement.
 
 **Source:** `crates/inkvec-trace/src/symmetry.rs` (565 lines)
-**Entry points:** `fn detect()` (`symmetry.rs:293`, called at `lib.rs:1150-1154` and timed
-under the stage mark `"refine_subpix"`, `lib.rs:1156`) and `fn enforce()` (`symmetry.rs:342`,
-stage mark `"symmetry"`, `lib.rs:1194-1199`)
+**Entry points:** `fn detect()` (`symmetry.rs:293`, called at `lib.rs:1125-1129` and timed
+under the stage mark `"refine_subpix"`, `lib.rs:1131`) and `fn enforce()` (`symmetry.rs:342`,
+stage mark `"symmetry"`, `lib.rs:1169-1174`)
 **Pipeline position:** `detect` runs right after `build_map`, *beside* the measuring phase of
 the sub-pixel refinement: on a map of at least 512 boundary vertices the two run side by side
 under `rayon::join`, on a smaller one `detect` runs first and the refinement after it, on
-the same thread (`lib.rs:1122-1154`). The measured points are written back only once both
-have returned (`lib.rs:1155`). `enforce` runs last of all, after `decode`
-(`lib.rs:1189-1199`). Since 2026-09-30 the `"symmetry_detect"` mark (`lib.rs:1121`) times
+the same thread (`lib.rs:1097-1129`). The measured points are written back only once both
+have returned (`lib.rs:1130`). `enforce` runs last of all, after `decode`
+(`lib.rs:1164-1174`). Since 2026-09-30 the `"symmetry_detect"` mark (`lib.rs:1096`) times
 only the setup of the refinement's inputs; detection's time is reported with the
 refinement's. Shared by Quality and Fast mode.
 
@@ -50,7 +50,7 @@ pub fn detect(map: &PlanarMap, labels: &[u16], ink: &[usize]) -> Symmetry
 per-connected-component, and a symmetric shape's two mirrored halves are never the same
 component; comparing face ids directly would reject every real symmetry there is
 (`symmetry.rs:160-162`). In the pipeline this is `face_color` — the palette entry each
-face was cut from (`lib.rs:1151`, `:1153`).
+face was cut from (`lib.rs:1126`, `:1153`).
 
 ```rust
 pub struct Symmetry {
@@ -144,7 +144,7 @@ support." (`symmetry.rs:333-335`)
 ### Why detection happens early and enforcement happens last
 
 `detect` is run once, immediately after `build_map`, "on the lattice the extractor
-produced, where the comparison is exact" (`lib.rs:1123-1124`) — it has to see the map
+produced, where the comparison is exact" (`lib.rs:1098-1099`) — it has to see the map
 before any sub-pixel refinement moves points off that exact lattice, or the point-identity
 matching in `pair_edges` would need a tolerance instead of exact equality.
 
@@ -153,7 +153,7 @@ starts. The refinement was split into a measuring phase, which reads the lattice
 writes nothing (`planar::measure_subpixel`), and a write-back (`Refined::apply`). Detection
 and the measuring phase both only read the map, so they run side by side under
 `rayon::join`, and the moved points are applied after both have returned
-(`lib.rs:1122-1155`):
+(`lib.rs:1097-1130`):
 
 ```rust
 let (sym, refined) = if planar::refine_in_parallel(&map) {
@@ -315,7 +315,7 @@ this solves" above.
   wordmark rather than across the whole canvas) is out of scope for this stage entirely.
 - **The ordering hazard** described above (a stage between `detect` and `enforce`
   overwritten by `enforce`) is a live property of the current pipeline (`boundary_opt`,
-  `decode` both run in that window, `lib.rs:1158-1189`) and is not defended against by any
+  `decode` both run in that window, `lib.rs:1133-1164`) and is not defended against by any
   assertion; it is simply accepted as the intended behaviour, per the "Put it back"
   comment at the `enforce` call site.
 

@@ -32,6 +32,8 @@ pub(super) struct Claim {
     pub(super) edge2: u32,
     /// Its distance, px.
     pub(super) dist2: f64,
+    /// Whether the pixel lies on the nearest edge's left (`(t.y, −t.x)` of its direction).
+    pub(super) left: bool,
 }
 
 impl Default for Claim {
@@ -43,6 +45,7 @@ impl Default for Claim {
             t: (1.0, 0.0),
             edge2: u32::MAX,
             dist2: f64::INFINITY,
+            left: false,
         }
     }
 }
@@ -84,12 +87,14 @@ pub(super) fn claims(map: &PlanarMap, reach: f64) -> Vec<Claim> {
                     if d > reach {
                         continue;
                     }
+                    let left = (px - qx) * t.1 - (py - qy) * t.0 > 0.0;
                     let c = &mut out[(y * w + x) as usize];
                     if c.edge == k {
                         if d < c.dist {
                             c.dist = d;
                             c.s = s_acc + u * len;
                             c.t = t;
+                            c.left = left;
                         }
                     } else if d < c.dist {
                         if c.edge != u32::MAX {
@@ -100,6 +105,7 @@ pub(super) fn claims(map: &PlanarMap, reach: f64) -> Vec<Claim> {
                         c.dist = d;
                         c.s = s_acc + u * len;
                         c.t = t;
+                        c.left = left;
                     } else if c.edge2 == k {
                         c.dist2 = c.dist2.min(d);
                     } else if d < c.dist2 {
@@ -140,10 +146,23 @@ pub(super) struct Axis2 {
     pub(super) var_partial: f64,
     /// Variance of a pure pixel's (measured noise beyond quantisation, usually 0).
     pub(super) var_pure: f64,
+    /// Variance of the weight of a pixel the source drew partly over the clear ground: there
+    /// the intake rounds the alpha, not the colour, so the weight is the alpha to within
+    /// `Q²/12` whatever the contrast.
+    pub(super) var_alpha: f64,
     /// Half a quantisation level, in weight units: a pixel this close to 0 or 1 is pure.
     pub(super) pure_tol: f64,
     /// Squared distance off the colour line beyond which a pixel holds a third ink.
     pub(super) third_tol2: f64,
+    /// Unmix on luma alone (a lossy intake with subsampled chroma): `None` for full colour,
+    /// else the right face's luma and `luma(left) − luma(right)`.
+    pub(super) luma: Option<(f64, f64)>,
+}
+
+/// JPEG's luma (ITU-R BT.601 weights on the encoded sRGB values): the one channel a 4:2:0
+/// file keeps at full resolution.
+pub(super) fn jpeg_luma(c: [f64; 3]) -> f64 {
+    0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]
 }
 
 /// 8-bit quantisation step.
@@ -184,27 +203,69 @@ impl Axis2 {
             dd,
             var_partial: var_q + extra,
             var_pure: extra,
+            var_alpha: Q * Q / 12.0 + extra,
             pure_tol: 0.5 * Q / dd.sqrt(),
             third_tol2: (4.0 * sigma_noise.max(Q)).powi(2),
+            luma: None,
         }
     }
 
-    pub(super) fn unmix(&self, p: [f32; 3]) -> Unmixed {
+    /// The axis for a lossy intake whose chroma is subsampled (4:2:0): the weight is read from
+    /// luma, the channel kept at full resolution, as `(Y − Y_right)/(Y_left − Y_right)`, when
+    /// the two inks' lumas differ by at least `min_contrast`; otherwise `None` (a nearly
+    /// isoluminant pair, unmixed in full colour). Chroma bleeds a pixel or more across every
+    /// edge there, so the third-ink test allows `chroma_tol` off the colour line.
+    pub(super) fn luma_of(self, min_contrast: f64, chroma_tol: f64) -> Option<Self> {
+        let yr = jpeg_luma(self.cr);
+        let cl = [
+            self.cr[0] + self.d[0],
+            self.cr[1] + self.d[1],
+            self.cr[2] + self.d[2],
+        ];
+        let dy = jpeg_luma(cl) - yr;
+        if dy.abs() < min_contrast {
+            return None;
+        }
+        // Rounding of the three channels, through the luma weights.
+        let wq = 0.299f64.powi(2) + 0.587f64.powi(2) + 0.114f64.powi(2);
+        let var_q = wq * Q * Q / 12.0 / (dy * dy);
+        let extra = self.var_pure * self.dd / (dy * dy);
+        Some(Axis2 {
+            var_partial: var_q + extra,
+            var_pure: extra,
+            pure_tol: 0.5 * Q / dy.abs(),
+            third_tol2: chroma_tol * chroma_tol,
+            luma: Some((yr, dy)),
+            ..self
+        })
+    }
+
+    /// Unmix colour `p` (composited onto white); `alpha` is the source's alpha there when the
+    /// intake had one. A pixel the source drew partly over the clear ground (alpha strictly
+    /// between 0 and 1 by half a level) is partial whatever its contrast, with the alpha's
+    /// rounding as its variance.
+    pub(super) fn unmix(&self, p: [f32; 3], alpha: Option<f32>) -> Unmixed {
         let q = [
             p[0] as f64 - self.cr[0],
             p[1] as f64 - self.cr[1],
             p[2] as f64 - self.cr[2],
         ];
-        let a = (q[0] * self.d[0] + q[1] * self.d[1] + q[2] * self.d[2]) / self.dd;
+        let a = match self.luma {
+            Some((yr, dy)) => (jpeg_luma([p[0] as f64, p[1] as f64, p[2] as f64]) - yr) / dy,
+            None => (q[0] * self.d[0] + q[1] * self.d[1] + q[2] * self.d[2]) / self.dd,
+        };
         let r2: f64 = (0..3).map(|c| (q[c] - a * self.d[c]).powi(2)).sum();
-        let partial = a > self.pure_tol && a < 1.0 - self.pure_tol;
+        let clear = alpha
+            .map(|v| v as f64)
+            .filter(|&v| v > 0.5 * Q && v < 1.0 - 0.5 * Q);
+        let (partial, var) = match clear {
+            Some(_) => (true, self.var_alpha),
+            None if a > self.pure_tol && a < 1.0 - self.pure_tol => (true, self.var_partial),
+            None => (false, self.var_pure),
+        };
         Unmixed {
             a,
-            var: if partial {
-                self.var_partial
-            } else {
-                self.var_pure
-            },
+            var,
             partial,
             third: r2 > self.third_tol2,
         }
@@ -219,21 +280,78 @@ pub(super) struct RunPixel {
     pub(super) m: Unmixed,
     pub(super) s: f64,
     pub(super) t: (f64, f64),
+    /// Whether the pixel goes to a column window (else a row window).
+    pub(super) column: bool,
+}
+
+/// Along an edge, which stretches are read by column windows and which by row windows on a
+/// soft intake: the direction smoothed over `±SMOOTH` px of arclength, with a hysteresis of
+/// `HYSTERESIS` either side of 45°, so that a noisy polyline near a diagonal does not cut the
+/// blurred ramp into alternating fragments (each of which would lose mass to the next).
+/// Returns breakpoints `(s, column)`: from `s` on, until the next, the class is `column`.
+pub(super) fn class_profile(points: &[Point], closed: bool) -> Vec<(f64, bool)> {
+    const SMOOTH: f64 = 2.0;
+    const HYSTERESIS: f64 = 0.15; // radians, about 8.6 degrees
+    let n = points.len();
+    if n < 2 {
+        return vec![(0.0, true)];
+    }
+    let m = if closed { n + 1 } else { n };
+    let at = |k: usize| points[k % n];
+    let mut s = vec![0.0; m];
+    for k in 1..m {
+        s[k] = s[k - 1] + at(k).dist(at(k - 1));
+    }
+    let total = s[m - 1];
+    // The point at arclength `u` (clamped on an open edge, wrapped on a closed one).
+    let point_at = |u: f64| -> Point {
+        let u = if closed && total > 0.0 {
+            u.rem_euclid(total)
+        } else {
+            u.clamp(0.0, total)
+        };
+        let k = s.partition_point(|&v| v <= u).clamp(1, m - 1);
+        let (a, b) = (at(k - 1), at(k));
+        let l = s[k] - s[k - 1];
+        let f = if l > 0.0 { (u - s[k - 1]) / l } else { 0.0 };
+        Point::new(a.x + f * (b.x - a.x), a.y + f * (b.y - a.y))
+    };
+    let mut out: Vec<(f64, bool)> = Vec::new();
+    let mut cur: Option<bool> = None;
+    for &u in s.iter().take(n) {
+        let (a, b) = (point_at(u - SMOOTH), point_at(u + SMOOTH));
+        let ang = (b.y - a.y).abs().atan2((b.x - a.x).abs()); // 0: horizontal, π/2: vertical
+        let want = match cur {
+            None => ang <= std::f64::consts::FRAC_PI_4,
+            Some(true) => ang <= std::f64::consts::FRAC_PI_4 + HYSTERESIS,
+            Some(false) => ang < std::f64::consts::FRAC_PI_4 - HYSTERESIS,
+        };
+        if cur != Some(want) {
+            out.push((u, want));
+            cur = Some(want);
+        }
+    }
+    out
+}
+
+/// The class `profile` gives arclength `s`.
+pub(super) fn class_at(profile: &[(f64, bool)], s: f64) -> bool {
+    let k = profile.partition_point(|&(u, _)| u <= s);
+    profile[k.saturating_sub(1)].1
 }
 
 /// Group an edge's partial pixels into windows; `free(x, y)` says whether a pixel may be taken
-/// as a pure flank (and marks it taken). Returns the run observations in order of `s`, and for
-/// each the pixels it holds.
+/// as a pure flank (and marks it taken). Returns the run observations in order of `s`, each
+/// with the variance of its sum from quantisation alone, and for each the pixels it holds.
 pub(super) fn group(
     px: &[RunPixel],
     flank: &mut dyn FnMut(i32, i32) -> Option<Unmixed>,
-    window_var: f64,
 ) -> Vec<(RunObs, Vec<(i32, i32)>)> {
     let mut out: Vec<(RunObs, Vec<(i32, i32)>)> = Vec::new();
     for axis in [Axis::Column, Axis::Row] {
         let mut mine: Vec<&RunPixel> = px
             .iter()
-            .filter(|p| p.m.partial && ((p.t.0.abs() >= p.t.1.abs()) == (axis == Axis::Column)))
+            .filter(|p| p.m.partial && p.column == (axis == Axis::Column))
             .collect();
         // Sort by line, then position along it.
         mine.sort_by_key(|p| match axis {
@@ -288,8 +406,9 @@ pub(super) fn group(
                     window: Window { axis, line, lo, hi },
                     s,
                     sum,
-                    var: var + window_var,
+                    var,
                     left_low,
+                    share: 1.0,
                 },
                 pix,
             ));

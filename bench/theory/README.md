@@ -17,6 +17,7 @@ readings scored against exactly known geometry.
 | `geom_calibration.py` | the gate's geometric match (`geom`) against dE00 on a disc grown by known amounts in two colour contrasts: `geom` reads the displacement in either colour, dE00 reads the contrast |
 | `noise_profile.py` | where a real input's noise sits: the gate's `web` tier (resized, quality-80 JPEG) against the exact raster it stands for, split into the resampling's deterministic blur and the codec's error, by distance to the nearest edge, on luma and chroma, next to the engine's own noise estimate; and the window identity under that blur and noise (the sums stay unbiased, their variance grows) |
 | `design_prior.py` | the human prior of `docs/theory/chain-representation.md` (R3), counted from the artists' own files with exact rational arithmetic: segment kinds, axis-aligned and 45° lines, smooth and sharp joins, numbers on the design grid by the role of their point, ties, repeated radii, stroke widths, layers, symmetry and repetition; and two simulations of the chain's decisions on the artists' numbers with added noise (empirical-Bayes grid inference with snapping, `--part grid_sim`; coordinate ties by exact one-dimensional clustering, `--part ties_sim`). Needs no binary |
+| `human_gap.py` | a change read as distance to the artist's file rather than as raw values: per icon the turning gap (the gate's `turning` times the canvas width, trace against artist) and the parameter gap (`|ln ratio|`), before and after, per family, with how many icons moved closer or further; with `--faces`, whether the fills a change adds are the artist's (nearest artist fill within 2 dE00, IoU of the two colour regions). `--before`/`--after` take a binary or a directory of SVGs (`--save` keeps both sides) |
 
 ```bash
 cargo build --release -p inkvec-cli
@@ -29,6 +30,7 @@ python3 bench/theory/params_diag.py --exe target/release/inkvec --tier 512ss
 python3 bench/theory/naturality_diag.py --exe target/release/inkvec --tier 512ss
 python3 bench/theory/oracle_cost.py --exe target/release/inkvec --tier 512ss
 python3 bench/theory/design_prior.py [--set screen] [--part counts|geometry|grid_sim|ties_sim|all]
+python3 bench/theory/human_gap.py --before old/inkvec --after target/release/inkvec --tier web [--faces]
 python3 bench/theory/geom_calibration.py
 python3 bench/theory/renderer_floor.py --fresh [--per-family 6] [--tiers 128ss,512ss]
 python3 bench/theory/noise_profile.py [--per-family 6]
@@ -43,4 +45,5 @@ the frame is not a boundary of the drawing.
 Needs numpy and Pillow only, except `design_prior.py`, which also needs svgelements and,
 for `--part geometry`, shapely and resvg-py (the harness's renderer);
 `renderer_floor.py`, which needs svgelements, shapely, scipy and resvg-py; and
-`noise_profile.py`, which needs scipy and resvg-py.
+`noise_profile.py`, which needs scipy and resvg-py; and `human_gap.py`, which needs
+svgelements, scikit-image and resvg-py.

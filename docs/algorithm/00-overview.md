@@ -5,7 +5,7 @@
 
 **Source:** the whole tree; this page indexes it.
 **Entry points:** `inkvec_trace::trace_color_full_with_alpha` (`crates/inkvec-trace/src/lib.rs:299`,
-called via `trace_color_full` at `lib.rs:263`) for the raster-to-planar-map half;
+called via `trace_color_full` at `lib.rs:265`) for the raster-to-planar-map half;
 `inkvec_cli::trace_image` (`crates/inkvec-cli/src/lib.rs:198`) for the whole command, intake
 through SVG text.
 **Pipeline position:** none — this is the front door. Every numbered stage document assumes
@@ -103,7 +103,7 @@ each timed by the `Stopwatch` (`crates/inkvec-trace/src/lib.rs:1228`, `mark` at 
 | `saddles` | `crates/inkvec-trace/src/lib.rs:1102` (`merge_saddle_faces` :1091) | saddle join | resolve the one ambiguity labels cannot: four pixels meeting diagonally at one corner |
 | `build_map` | `crates/inkvec-trace/src/lib.rs:1106` (`planar::build` :1105) | planar map | shared edges between exactly two faces, from the exact integer label grid, read off its row runs (`planar/cracks.rs`, `planar/runs.rs`) |
 | `symmetry_detect` | `crates/inkvec-trace/src/lib.rs:1121` | refinement setup | since 2026-09-30 this mark times only the setup of the refinement's inputs (each face's fill model and opacity); `symmetry::detect` itself runs inside the next mark |
-| `refine_subpix` | `crates/inkvec-trace/src/lib.rs:1156` (`symmetry::detect` beside `planar::measure_subpixel`, `lib.rs:1150-1154`; `Refined::apply`, `:1155`) | symmetry detect + sub-pixel | find mirror pairs on the label lattice, where the comparison is exact, and, at the same time, measure where each boundary point sits along its local normal (the 0.5-coverage level); both only read the lattice map, so they run side by side under `rayon::join`, and the measured points are written back afterwards |
+| `refine_subpix` | `crates/inkvec-trace/src/lib.rs:1156` (`symmetry::detect` beside `planar::measure_subpixel`, `lib.rs:1125-1129`; `Refined::apply`, `:1155`) | symmetry detect + sub-pixel | find mirror pairs on the label lattice, where the comparison is exact, and, at the same time, measure where each boundary point sits along its local normal (the 0.5-coverage level); both only read the lattice map, so they run side by side under `rayon::join`, and the measured points are written back afterwards |
 | `refine_junc` | `crates/inkvec-trace/src/lib.rs:1159` (`planar::refine_junctions` :1158) | junctions | settle shared endpoints |
 | `boundary_opt` | `crates/inkvec-trace/src/lib.rs:1167` (`boundary_opt::optimise_for` :1166) | boundary solve | move every boundary point at once so the *rendered* partition matches the image; not run when its band tables would pass a memory budget (`boundary_opt/band.rs`) |
 | `decode` | `crates/inkvec-trace/src/lib.rs:1189` (`decode::decode_faces` :1178) | decode | order-first colour/geometry fix for faces too thin to own a fully-covered pixel; off unless `INKVEC_DECODE` (*research build*) is set |
@@ -118,7 +118,7 @@ each timed by the `Stopwatch` (`crates/inkvec-trace/src/lib.rs:1228`, `mark` at 
 Fast mode (`--mode fast`) takes another route through the same table. Its front end
 (`crates/inkvec-trace/src/fast/front.rs`) replaces the marks from `palette` to `split` with
 its own `palette`, `slivers`, `despeckle`, `split` and `ramps`; it shares `build_map`,
-`refine_subpix`, `refine_junc` and `symmetry`, and skips `decode` (`lib.rs:1177`) and
+`refine_subpix`, `refine_junc` and `symmetry`, and skips `decode` (`lib.rs:1152`) and
 `boundary_opt`, which runs in Fast only when `--mode balanced` caps it by iterations
 (`boundary_opt.rs:605`). Under `fit_dp` it runs a Potrace-class fitter instead of the DP,
 and it skips `repair` and shape harmonization (`repair_fits` and `emit_options` in

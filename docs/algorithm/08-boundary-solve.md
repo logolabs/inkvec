@@ -12,12 +12,12 @@ guard), `boundary_opt/band.rs` (the data term, and the memory budget of its tabl
 pipeline through `optimise_for()` (`boundary_opt.rs:598-611`); `optimise_alpha()`
 (`boundary_opt.rs:583-591`) is it without an iteration cap and `optimise()`
 (`boundary_opt.rs:565-572`) the same without alpha
-**Pipeline position:** after `refine_junc` (`planar::refine_junctions`, `lib.rs:1158`),
-before `decode` (stage mark `"boundary_opt"`, `lib.rs:1167`). Called once, in
-`finish_color_trace_alpha` (`optimise_for`, `lib.rs:1166`), the geometry tail every colour entry point
-shares: the opaque Quality path (`trace_color_full_with_alpha` through `finish_color_trace`,
-`lib.rs:740`), the native-alpha path (`native::trace_color`, `native.rs:1001`, the only
-caller that passes the source alpha) and `trace_color_from_labels` (`lib.rs:994`). Skipped
+**Pipeline position:** after `refine_junc` (`planar::refine_junctions`, `lib.rs:1133`),
+before `decode` (stage mark `"boundary_opt"`, `lib.rs:1142`). Called once, in
+`finish_color_trace_alpha` (`optimise_for`, `lib.rs:1141`), the geometry tail every colour entry point
+shares: the opaque Quality path (`trace_color_full_with_alpha`,
+`lib.rs:742`), the native-alpha path (`native::trace_color`, `native.rs:1001`, the only
+caller that passes the source alpha) and `trace_color_from_labels` (`lib.rs:999`). Skipped
 when `opts.fast` is set without an iteration cap (Fast mode reaches the same function from
 `fast/front.rs:154`) or when `INKVEC_BOPT=0` (`boundary_opt.rs:605-608`); `--mode balanced`
 sets `ColorOptions::boundary_iters` to 8 and runs it capped at 8 iterations per part

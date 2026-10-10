@@ -11,7 +11,7 @@
 (`planar.rs:363`)
 **Pipeline position:** after `saddles` (`merge_saddle_faces`, research build only), before
 symmetry detection and the sub-pixel refinement, which run side by side on the map it
-builds (stage mark `"build_map"`, `lib.rs:1106`). Shared by Quality and Fast mode.
+builds (stage mark `"build_map"`, `lib.rs:1081`). Shared by Quality and Fast mode.
 
 ## What problem this solves
 
@@ -46,8 +46,8 @@ pub fn build(labels: &[u16], w: usize, h: usize, n_labels: usize) -> PlanarMap
 ```
 
 - `labels`: one face id per pixel, row-major, already split into connected components
-  upstream (`split_components`, `lib.rs:696`) and, optionally, coalesced across
-  diagonal-only touches by `merge_saddle_faces` (`lib.rs:1091`, off by default — see
+  upstream (`split_components`, `lib.rs:698`) and, optionally, coalesced across
+  diagonal-only touches by `merge_saddle_faces` (`lib.rs:1066`, off by default — see
   Failure modes).
 - `n_labels`: number of distinct face ids in `labels`.
 
@@ -183,7 +183,7 @@ for the purposes of adjacency — able to move independently once stage 07 and 0
 them.
 
 Which diagonal is "one face" is decided upstream of `build`, by `merge_saddle_faces`
-(`lib.rs:1091`) when it runs, or simply by whatever `split_components`'s 4-connected
+(`lib.rs:1066`) when it runs, or simply by whatever `split_components`'s 4-connected
 flood fill already produced. `build` itself makes no image-based judgement here — it only
 reads face ids.
 

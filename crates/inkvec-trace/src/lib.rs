@@ -283,7 +283,7 @@ pub fn trace_color_full(img: &Rgba, opts: &ColorOptions) -> ColorTrace {
 ///   counterpart when `opts.fast`);
 /// * otherwise `opts.fast`: the Fast engine's front end ([`fast`]);
 /// * otherwise the Quality pipeline below, stages 1–9 of the crate overview, then
-///   `finish_color_trace` for the geometry.
+///   `finish_color_trace_alpha` for the geometry.
 ///
 /// # Inputs and outputs
 ///
@@ -741,7 +741,7 @@ pub fn trace_color_full_with_alpha(
     );
     crate::diag!("fills", "snapped to their ink's colour: {snapped}");
 
-    let ct = finish_color_trace(
+    let ct = finish_color_trace_alpha(
         img,
         opts,
         &rgb,
@@ -752,6 +752,8 @@ pub fn trace_color_full_with_alpha(
         n_faces,
         sigma_noise,
         &mut sw,
+        None,
+        None,
     );
     evidence::with_noise(ct, &rgb, soft_intake, opts.lossy_intake, &mut sw)
 }
@@ -780,7 +782,7 @@ pub fn trace_color_full_with_alpha(
 ///    per-face fit would re-shatter a gradient the merge stage had just reassembled;
 /// 5. `split_components`, then `face_fill` / `face_color` read off `fills_by_label` /
 ///    `label_ink` exactly as above;
-/// 6. `finish_color_trace`: saddles, planar map, sub-pixel and junction refinement, the
+/// 6. `finish_color_trace_alpha`: saddles, planar map, sub-pixel and junction refinement, the
 ///    global boundary solve, decoding and symmetry.
 ///
 /// What is *not* run: palette extraction (`extract_palette_mdl`), `label_image`, alpha-ink
@@ -996,7 +998,7 @@ pub fn trace_color_from_labels(
         .map(|&l| label_ink.get(l).copied().unwrap_or(l))
         .collect();
 
-    finish_color_trace(
+    finish_color_trace_alpha(
         img,
         opts,
         &rgb,
@@ -1007,48 +1009,18 @@ pub fn trace_color_from_labels(
         n_faces,
         sigma_noise,
         &mut sw,
+        None,
+        None,
     )
 }
 
 /// Everything from saddle disambiguation onwards: the geometry stages, which do not care
-/// how the labels were arrived at.
-///
-/// Shared by [`trace_color_full_with_alpha`] and [`trace_color_from_labels`] so the
-/// research entry cannot drift away from the shipped one. The opaque form of
-/// [`finish_color_trace_alpha`], which documents the arguments.
-#[allow(clippy::too_many_arguments)]
-fn finish_color_trace(
-    img: &Rgba,
-    opts: &ColorOptions,
-    rgb: &[[f32; 3]],
-    pal: Palette,
-    labels: Vec<u16>,
-    face_fill: Vec<gradient::FillFit>,
-    face_color: Vec<usize>,
-    n_faces: usize,
-    sigma_noise: f64,
-    sw: &mut Stopwatch,
-) -> ColorTrace {
-    finish_color_trace_alpha(
-        img,
-        opts,
-        rgb,
-        pal,
-        labels,
-        face_fill,
-        face_color,
-        n_faces,
-        sigma_noise,
-        sw,
-        None,
-        None,
-    )
-}
-
-/// [`finish_color_trace`], told the source's alpha. The sub-pixel refinement and the
-/// boundary solve then unmix in four channels, each face at its palette entry's opacity, so
-/// an edge between white paint and the clear ground is found although over white it has no
-/// contrast at all. With `None` this is exactly the classic function.
+/// how the labels were arrived at. Shared by [`trace_color_full_with_alpha`],
+/// [`trace_color_from_labels`] and [`native::trace_color`], so no entry can drift from
+/// another. Told the source's alpha, the sub-pixel refinement and the boundary solve unmix in
+/// four channels, each face at its palette entry's opacity, so an edge between white paint
+/// and the clear ground is found although over white it has no contrast at all; the opaque
+/// entries pass `None` twice.
 ///
 /// # Stages
 ///

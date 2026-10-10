@@ -834,11 +834,161 @@ sums of a known polygon equal its exact areas to `1e-12` (the first row of B2.3'
   they hold about 5 % of the colour error (`attribution.py`) but most of the visible
   geometric disagreement, and they are where today's point readings decline.
 
+## Phase 2, milestone 1: the floor measured, the evaluator built
+
+What landed, against the amendments of `chain-representation.md` (A1–A5) and the
+measurements the coordinator asked for. Engine output is unchanged: nothing in the
+pipeline calls the evaluator yet.
+
+### The renderer floor of the corpus intake (measured)
+
+`bench/theory/renderer_floor.py` scores the intake against the artists' own geometry,
+drawn exactly, on six flat-paint icons per family (24 to 30 k windows per tier). The unit is
+a window's error in area, which is the error of the boundary's mean position across the
+window, px. Every partial pixel lies in exactly one window, including at 45°.
+
+| tier | family | quantisation | as drawn (`as8`) | per-edge share | straight fills, tiny-skia's lattice | curves, lattice | strokes, lattice | stale levels |
+|---|---|---|---|---|---|---|---|---|
+| 128 | lucide | 0.0011 | 0.0107 | 0.58 | 0.0017 | – | 0.0106 | 0 |
+| 128 | material | 0.0008 | 0.0099 | 0.85 | 0.0016 | 0.0042 | – | 0 |
+| 128 | noto | 0.0070 | 0.0083 | 0.23 | 0.0044 | 0.0076 | 0.0073 | 0 |
+| 128 | openmoji | 0.0020 | 0.0077 | 0.46 | 0.0025 | 0.0094 | 0.0093 | 0 |
+| 128 | simple-icons | 0.0014 | 0.0045 | 0.53 | 0.0015 | 0.0048 | – | 0 |
+| 128 | twemoji | 0.0025 | 0.0053 | 0.48 | 0.0026 | 0.0048 | – | 0 |
+| 512 | lucide | 0.0011 | 0.0240 (fresh 0.0170) | 0.44 | 0.0019 | – | 0.0207 | 24 |
+| 512 | material | 0.0008 | 0.0188 (0.0109) | 0.86 | 0.0018 | 0.0094 | – | 11 |
+| 512 | noto | 0.0063 | 0.0140 (0.0081) | 0.53 | 0.0048 | 0.0080 | 0.0076 | 16 |
+| 512 | openmoji | 0.0022 | 0.0167 (0.0087) | 0.47 | 0.0050 | 0.0073 | 0.0099 | 22 |
+| 512 | simple-icons | 0.0013 | 0.0122 (0.0092) | 0.58 | 0.0017 | 0.0113 | – | 9 |
+| 512 | twemoji | 0.0024 | 0.0113 (0.0067) | 0.56 | 0.0024 | 0.0059 | – | 18 |
+
+The columns:
+
+* **quantisation:** the 8-bit rounding alone.
+* **as drawn:** the intake against usvg's geometry composited per element at 8× with exact
+  coverage, in brackets against a render made now.
+* **per-edge share:** the part of the floor's variance that is a constant per edge.
+* **lattice:** a fresh render against the same geometry sampled on tiny-skia's 4 × 4
+  lattice.
+* **stale levels:** the largest difference between the committed intake and a fresh
+  resvg 0.48.1 render.
+
+What this says:
+
+1. **A1, arcs.** Drawing arcs as usvg does (kurbo cubics at 0.1 user units, ported to
+   `EllipticalArc::to_cubics`) matters where icons are arcs: on simple-icons the window error
+   falls from 0.0204 to 0.0122 at 512 (0.0062 to 0.0045 at 128). Elsewhere it is below the
+   floor.
+2. **A1, the lattice.** With tiny-skia's sample lattice replicated, straight fill edges reach
+   the quantisation level (0.0015 to 0.0026 px at 128, 0.0017 to 0.0050 at 512; material 12mp
+   per pixel 0.0106 to 0.0014). The rest is tiny-skia's own curve flattening (0.004 to 0.011
+   px) and its stroker (0.008 to 0.021 px; round caps up to 0.06 per pixel). These are
+   deterministic: a forward model that calls tiny-skia removes them, while a floor can only
+   absorb them.
+3. **A3, the correlation.** Most of the floor is a constant per edge (0.44 to 0.86 of its
+   variance). The fourth-difference self-calibration sees 0 to 22 % of it, as it should,
+   since a per-edge offset cancels in `D`. On material at 128 the per-edge sd is
+   0.009 ≈ 1/(32√12), which is `Floor::lattice(32)`'s `edge_var`. The default floor is
+   therefore right for straight edges and too small for curves and strokes until (2) is done.
+4. **The 512ss tier is stale.** The committed 512ss PNGs differ from a fresh render by up to
+   24 levels: an older resvg, or older SVGs. The 128ss tier reproduces byte for byte.
+   Calibrating at 512 needs that tier re-rendered (the coordinator's call: it moves every
+   512 baseline).
+5. **A2, conflation.** Compositing each element at 8× and then box-filtering is not the
+   visible partition. At junction pixels the difference is mean 0.004 to 0.006, p99 0.017 to
+   0.040 (colour units), which is many times the quantisation, so junction terms need
+   per-layer compositing. At two-ink pixels it is negligible, except where shapes abut
+   (twemoji: 1.3 % of boundary pixels over one level; the synthetic set: 60 %, window error
+   0.067 px along such seams).
+
+### What the evaluator is (`inkvec_core::likelihood`, `inkvec_trace::evidence`)
+
+* **The trait `BoundaryLikelihood`** (in `inkvec-core`, so `inkvec-fit` needs no
+  `inkvec-trace`), with these methods:
+  * `runs(e)` gives the `RunObs {window, s, sum, var, left_low}` of edge `e` in order.
+  * `chi2_run(e, range, pieces)` gives `Chi2 {chi2, m, chi2_floor}`. Its `chi2_floor` is the
+    Sherman–Morrison form with the per-edge offset, on edges `edge_on_lattice` says share it.
+  * `residuals_run`.
+  * `run_moments(e, degree)` gives prefix sums for least-squares polynomial graphs over any
+    range in `O(p³)`.
+  * `chi2_local(Owner::Junction | Owner::Corner, curves)` is the per-pixel term.
+  * `junctions()` gives arms in angular order with direction sd, and continuations (A4).
+  * `corners()` and `density(e)`.
+
+  Candidates are `Piece::{Line, Quad, Cubic, Arc}`. The `RenderModel` converts arcs exactly
+  as usvg does. `left_area` integrates each piece exactly over the strip, clamped, and counts
+  every pass of the curve through the strip, so a curve that folds or crosses a window twice
+  is scored correctly (B2.1's identity for any curve, not only graphs).
+* **`Evidence::build(map, rgb, faces, σ, opts)`.** For each edge between two flat inks with
+  enough contrast, it unmixes the pixels onto the two-ink axis. Quantisation variance is
+  grouped by the channels that round together. Pixels holding a third ink are set aside.
+  The partial pixels are then grouped into windows. A window the starting geometry does not
+  cross exactly once becomes a **corner term** (per-pixel areas against the candidate,
+  closed along a box on its left), with a proposal there. Corners along runs come from the
+  fourth difference at `z ≥ 3`. Junction neighbourhoods (2.5 px) are kept per pixel, in
+  colour. Pixels two edges reach away from a junction are listed, not yet scored (B3.4).
+
+Decisions taken while building it:
+
+* **No pure flanks.** A pixel that reads as one ink's pure colour can hold up to half a
+  level of the other's area and reads none of it. That error has one sign, so flanks put
+  `χ²/M` at 1.85. A window is its partial pixels only; the clamp in `left_area` makes that
+  exact.
+* **Inks on the 8-bit lattice.** The face colours unmixing uses must be the pure pixels'
+  8-bit values. Inks a fraction of a level off bias every window by up to 3σ.
+* **Calibration.** At the truth, on exact renders rounded to 8 bits, `χ²/M` is 0.97 over 442
+  windows (discs and squares at several angles, 45° included). Junction and corner terms
+  stay below 2. A vertex moved by 1 px, or a 1 px chamfer, costs more than 100.
+
+### Verified by checkers generated from Lean
+
+`formal/InkvecTheory/InkvecTheory/Windows.lean` proves the window identity for any finite
+set of pixels and any measurable region (`window_sum_eq_area`), and the area of a straight
+piece (`trapezoid_integral`). `Gen/Evidence.lean` defines four kernels, each with its
+theorem; `#print axioms` gives `propext, Classical.choice, Quot.sound` only:
+
+* `trapezoidK`: `trapezoidK_eq`, `trapezoidK_integral`.
+* `windowTermK`: `(S − A)²/V` and `S − A`.
+* `fourthDiffK`: `fourthDiff_cubic` says it vanishes on cubics; `fourthDiff_side` relates
+  it to `strip.rs`'s one-sided test.
+* `cornerExcessK`: `D² − z² Σ wᵢ² Vᵢ`.
+
+The generated `inkvec_verified::generated::evidence` supplies `_f64`, `_iv` and `_q` forms
+of each kernel. Two results are accepted only through them:
+
+* **Runs.** Every run window must be certified crossed by the starting geometry, with its
+  area enclosed (`checks::certified_left_area`, outward-rounded intervals). A window the
+  checker refuses becomes a corner term.
+* **Corner proposals.** Each must have `corner_excess_iv ≥ 0`.
+
+`checks::certify_run_chi2_polyline` certifies a solver's `χ²` of a polyline candidate on any
+set of windows.
+
+### Next
+
+1. **A1 for curves and strokes.** Draw candidates with tiny-skia 0.12 itself: the crate is
+   already in the lockfile, through resvg in `inkvec-sr`. Render each window's bounding box
+   at 8× and box-filter, so flattening, stroker and lattice are exactly the gate's. Use it
+   for final scoring and calibration, with the analytic `left_area` (plus `Floor`) for
+   search.
+2. **A2.** Strokes and per-layer compositing in `Piece` descriptions, then in the junction
+   terms.
+3. **A5.** Local topological alternatives where a junction's continuations are ambiguous.
+4. **`strip.rs`.** A calibrated `SIDE_TOL` (`z√(70V̂)/12`), with declined vertices becoming
+   corner proposals.
+5. **Lean.** `Information`, `Unmixing`, `AffineInk`, `Vertex`, and `Corner`'s kink
+   response.
+6. **Calibration on the corpus.** `χ²/M` of the artists' own SVGs against the intake, in
+   Rust, per family and tier.
+
 ## Reproduce
 
 ```bash
 python3 bench/theory/evidence_eval.py all       # B1.2, B2.2, B2.3, B3.1, B3.3 (about 10 s)
 python3 bench/theory/exact_raster.py            # the renderer's self-check
+python3 bench/theory/renderer_floor.py --fresh  # the intake's floor (about 25 min)
+cargo test -p inkvec-core likelihood
+cargo test -p inkvec-trace --lib evidence
 ```
 
 ## References

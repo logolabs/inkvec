@@ -13,6 +13,7 @@ readings scored against exactly known geometry.
 | `naturality_diag.py` | parameters an artist would not write: collinear vertices, straight cubics, co-circular arcs, open strokes that continue each other |
 | `oracle_cost.py` | the trace against the artist's own file on the input's pixels and the tracer's price per parameter: which icons the objective would rather have the artist's description for (a search error) and which it prefers the trace for (a question for the prior), `docs/theory/optimal.md` §6 |
 | `geom_calibration.py` | the gate's geometric match (`geom`) against dE00 on a disc grown by known amounts in two colour contrasts: `geom` reads the displacement in either colour, dE00 reads the contrast |
+| `design_prior.py` | the human prior of `docs/theory/chain-representation.md` (R3), counted from the artists' own files with exact rational arithmetic: segment kinds, axis-aligned and 45° lines, smooth and sharp joins, numbers on the design grid by the role of their point, ties, repeated radii, stroke widths, layers, symmetry and repetition; and two simulations of the chain's decisions on the artists' numbers with added noise (empirical-Bayes grid inference with snapping, `--part grid_sim`; coordinate ties by exact one-dimensional clustering, `--part ties_sim`). Needs no binary |
 
 ```bash
 cargo build --release -p inkvec-cli
@@ -23,6 +24,7 @@ python3 bench/theory/attribution.py --exe target/release/inkvec --tier 512ss
 python3 bench/theory/params_diag.py --exe target/release/inkvec --tier 512ss
 python3 bench/theory/naturality_diag.py --exe target/release/inkvec --tier 512ss
 python3 bench/theory/oracle_cost.py --exe target/release/inkvec --tier 512ss
+python3 bench/theory/design_prior.py [--set screen] [--part counts|geometry|grid_sim|ties_sim|all]
 python3 bench/theory/geom_calibration.py
 ```
 
@@ -32,4 +34,5 @@ Distances are to the true polygon (circles and ellipses are 8192-gons whose radi
 area-matched to the curve, within 1e-7 px). Points within 2 px of the frame are not scored:
 the frame is not a boundary of the drawing.
 
-Needs numpy and Pillow only.
+Needs numpy and Pillow only, except `design_prior.py`, which also needs svgelements and,
+for `--part geometry`, shapely and resvg-py (the harness's renderer).

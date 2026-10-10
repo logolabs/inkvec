@@ -60,3 +60,12 @@ open Inkvec
 #print axioms Inkvec.Gen.histopolateK_eq
 #print axioms Inkvec.Gen.stripResidualK_eq
 #print axioms Inkvec.Gen.stripResidual_on_cubic
+#print axioms Inkvec.Design.above_eq_of_interval
+#print axioms Inkvec.Design.painter_interval_iff
+#print axioms Inkvec.Design.replace_in_interval
+#print axioms Inkvec.Design.seam_of_exact_outline
+#print axioms Inkvec.Design.no_seam_of_completion
+#print axioms Inkvec.Design.junction_residue
+#print axioms Inkvec.Gen.spanWithinK_eq
+#print axioms Inkvec.Gen.spanWithin_meaning
+#print axioms Inkvec.Gen.line_cover

@@ -3823,6 +3823,7 @@ dependencies = [
  "inkvec-sr",
  "inkvec-svgmin",
  "inkvec-trace",
+ "inkvec-verified",
  "rayon",
 ]
 

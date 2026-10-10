@@ -317,19 +317,20 @@ fn complete_face(inp: &Input, f: usize, e_now: &Region, above: &Region) -> Optio
         if after > before + allow || best.as_ref().is_some_and(|b| b.after <= after) {
             return;
         }
-        let verdict = check::certify_completion(&l, region, &h);
+        let certified = check::certify_completion(&l, region, &h);
         if trace() {
+            let m = check::measure(&l, region, &h);
             eprintln!(
-                "layers face {f}: {} -> {after}: lost {:.3} spilled {:.3}",
+                "layers face {f}: {} -> {after}: lost {:.3} spilled {:.3} certified {certified}",
                 match &shape {
                     Shape::Prim(k) => format!("{k:?}").chars().take(40).collect::<String>(),
                     Shape::Path(_) => "path".to_string(),
                 },
-                verdict.lost,
-                verdict.spilled
+                m.lost,
+                m.spilled
             );
         }
-        if verdict.holds() {
+        if certified {
             best = Some(Completion { shape, before, after });
         }
     };

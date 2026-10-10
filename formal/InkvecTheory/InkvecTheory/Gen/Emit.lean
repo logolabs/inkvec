@@ -2,6 +2,7 @@
 Copyright (c) 2026 LogoLabs. Released under the Apache 2.0 licence (see LICENSE).
 -/
 import InkvecTheory.Gen.Strip
+import InkvecTheory.Gen.Design
 
 /-!
 # Writing the generated Rust
@@ -20,7 +21,8 @@ namespace Inkvec.Gen
 
 /-- Each generated module: file stem, the Lean declarations it comes from, its kernels. -/
 def generatedModules : List (String × String × List Kernel) :=
-  [("strip", "InkvecTheory.Gen.Strip (stripKernels)", stripKernels)]
+  [("strip", "InkvecTheory.Gen.Strip (stripKernels)", stripKernels),
+   ("design", "InkvecTheory.Gen.Design (designKernels)", designKernels)]
 
 /-- The generated directory's `mod.rs`. Each module is `#[rustfmt::skip]`: it is compared
 byte for byte with what this file prints, so no formatter may touch it. -/

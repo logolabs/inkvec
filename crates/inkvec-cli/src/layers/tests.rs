@@ -131,7 +131,7 @@ fn the_check_refuses_a_shape_that_loses_what_the_face_shows() {
     let v = Region::from_polygons(&[vec![p(0.0, 0.0), p(10.0, 0.0), p(10.0, 10.0), p(0.0, 10.0)]], Rule::EvenOdd);
     let small = Region::from_polygons(&[vec![p(0.0, 0.0), p(9.0, 0.0), p(9.0, 10.0), p(0.0, 10.0)]], Rule::EvenOdd);
     let big = Region::from_polygons(&[vec![p(-1.0, -1.0), p(11.0, -1.0), p(11.0, 11.0), p(-1.0, 11.0)]], Rule::EvenOdd);
-    assert!(!check::certify_completion(&v, &small, &big).holds());
-    assert!(check::certify_completion(&v, &v, &big).holds());
-    assert!(!check::certify_completion(&v, &big, &v).holds());
+    assert!(!check::certify_completion(&v, &small, &big));
+    assert!(check::certify_completion(&v, &v, &big));
+    assert!(!check::certify_completion(&v, &big, &v));
 }

@@ -708,3 +708,25 @@ Since the settings cleanup (CHANGELOG, 0.2.0, *Changed*) the engine reads its en
   noto-emoji's shading inks come back as faces too (27 icons: family dE00 −0.045, geom −0.12,
   ratio +0.07), and parameters and turning may not rise at all, so it is not shipped. The rule,
   its tests and its constants are kept on the branch `quality-soft-support-measured`.
+
+  Judged by the gate's distances from the artist's file (`turning_gap`, `ratio_gap`) the last
+  version reads dE00 −6.93 %, geom −16.82 %, `ratio_gap` +0.02 % and `turning_gap` +2.53 %, a
+  failure (upper bound 6.53 % against the 5.71 % the set can resolve). Of the 152 fills it adds,
+  the mosaic's 9 are the artist's (each within 2 dE00 of an artist fill, region IoU 0.92-0.99);
+  of noto-emoji's 100, 24 are within 2 dE00 of an artist fill and those overlap its region at a
+  mean IoU of 0.31 (`bench/theory/human_gap.py --faces`): codec variants that split one artist
+  fill into several (`#44322b`, `#45342c`, `#48362d` around `#49362e`). Two narrowings separate
+  nothing. The share of a candidate's border on the JPEG's 8 px block lines is 0.14 (median)
+  for noto-emoji's candidates, 0.11-0.21 for the mosaic's, against 0.125 by chance: the
+  variants' claims are scattered pixel sets, not unions of blocks. And requiring the 12-level
+  step from every accepted ink, not only the nearest, rejects no candidate the nearest-ink step
+  admits.
+
+  The turning failure is partly the boundary fit's, not the palette's. The mosaic's recovered
+  quads come back as polylines of 11-14 commands where the artist drew four sides, and the
+  faces already there read 8-12. The fit prices every boundary point with one image-wide noise,
+  4.88 levels on this icon, while the codec's error at the edge pixel is 4.5 levels of luma and
+  6.5 of chroma (`docs/theory/noise.md`), about 9-12 levels in RGB across a hue edge of about 23:
+  the fitter is chasing the chroma's bleed. **Retry this rule unchanged** once the boundary
+  chain's per-edge noise and its noise fold (which wait on the representation chain's robust
+  fitter) are in: the measurement above is the one to repeat.

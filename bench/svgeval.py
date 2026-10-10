@@ -262,11 +262,14 @@ def flatten_onto_white(src: Path, dst: Path) -> None:
 def item_paths(it: dict) -> tuple[Path, Path]:
     """The input raster at the current tier and the artist's SVG for one icon.
 
-    A committed raster wins. For an opaque tier (`<base>op`) with no committed raster, the
-    base tier's raster is flattened onto white into the cache (`CACHE/raster/<tier>/`) once,
-    and that file is the input."""
+    A committed raster wins, PNG or (a tier stored as JPEG files: `web`) JPEG. For an opaque
+    tier (`<base>op`) with no committed raster, the base tier's raster is flattened onto white
+    into the cache (`CACHE/raster/<tier>/`) once, and that file is the input."""
     t = tier()
     png = ROOT / "bench" / "data" / "corpus_raster" / it["corpus"] / t / f"{it['stem']}.png"
+    jpg = png.with_suffix(".jpg")
+    if not png.exists() and jpg.exists():
+        png = jpg  # a tier committed as JPEG files (`web`), traced as the tracer reads them
     gt = ROOT / "bench" / "data" / "corpus_svg" / it["corpus"] / f"{it['stem']}.svg"
     if not png.exists() and base_tier(t) != t:
         src = ROOT / "bench" / "data" / "corpus_raster" / it["corpus"] / base_tier(t) / f"{it['stem']}.png"
@@ -720,11 +723,15 @@ def structure_signals(svg: str, src_png: Path) -> dict:
 
 def geometric_match(svg: str, gt: Path, src_png: Path) -> dict:
     """`geom` and `geom_far` of our SVG against the artist's file (`inkvec_bench/geomatch.py`),
-    at the input raster's size; over white on an opaque tier."""
+    at the input raster's size; over white when the input is opaque."""
     from PIL import Image
     from inkvec_bench.geomatch import geomatch
-    w = Image.open(src_png).size[0]
-    opaque = base_tier(tier()) != tier()
+    im = Image.open(src_png)
+    w = im.size[0]
+    # An opaque tier (flattened onto white) or a file with no alpha at all (a JPEG): compared
+    # over white, as it was made. A transparent tier's icon stays transparent even where its
+    # pixels happen to be all opaque, so its numbers stay comparable with its baseline.
+    opaque = base_tier(tier()) != tier() or "A" not in im.getbands()
     return geomatch(svg, gt.read_text(encoding="utf-8"), w, opaque)
 
 

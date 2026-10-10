@@ -228,7 +228,8 @@ impl RunLabels {
         let (runs, rs, w, h) = (&self.runs, &self.row_start, self.w as u32, self.h);
         let span = |r: &Run| deep_span(r, w, reach);
         let mut deep = vec![false; self.size.len()];
-        let (mut cur, mut next): (Vec<(u32, u32)>, Vec<(u32, u32)>) = (Vec::new(), Vec::new());
+        let mut cur: Vec<(u32, u32)> = Vec::new();
+        let mut next: Vec<(u32, u32)> = Vec::new();
         for y in 0..h {
             for r in rs[y]..rs[y + 1] {
                 let run = runs[r];

@@ -55,7 +55,7 @@ fn deep_components_match_the_pixel_windows() {
             .map(|p| {
                 let (x, y) = (p % w, p / w);
                 let v = xorshift(&mut seed);
-                if v % 4 == 0 {
+                if v.is_multiple_of(4) {
                     (v % k) as u16
                 } else {
                     (((x / 3) + (y / 4) * 2) as u64 % k) as u16

@@ -1307,10 +1307,11 @@ parameters than windows), so the two chains agree on the cut.
    * The PSF's first moment, a global shift, is not identifiable from one image and is not
      carried.
 4. **Where chain R reads the noise model.**
-   * The completion stage's junction zone uses `psf_radius`. It is 0 on a clean intake, so
-     nothing changes there.
-   * The fitter's robust loss uses `huber_kappa(nu)`.
+   * The fitter's robust loss uses `huber_kappa(nu)`, together with the fold of the noise
+     into the edge sigmas (milestone 2, gated as one change).
    * Extra prior weight comes only from measured noise, never from a flag (user directive).
+   * The completion stage reads none of it, for now. A junction zone was tried and
+     withdrawn; see milestone 1.
 
 ## Phase 2: formal, code, measurement
 
@@ -1404,12 +1405,21 @@ keeps the cheapest one the checker certifies. The candidates are:
 * a circle, ellipse or rectangle through the boundary the face owns, or round its lower
   bound;
 * the face's own rings with each covered run replaced: the corner of the owned lines either
-  side, a chord a margin under the cover, the run offset under the cover, a bulge, or a
-  **corner cut**.
+  side, a chord a margin under the cover, the run offset under the cover, a bulge, a
+  **corner cut**, or a **bridge**.
 
-A corner cut drops a chamfer and extends its neighbouring lines to meet under the cover. A
-blur removes the tip of an acute corner, the fit writes what is left as one more segment,
-and under a cover the tip can be restored for free.
+The two newer replacements:
+
+* **Corner cut.** It drops a chamfer and extends the neighbouring lines to meet under the
+  cover. A blur removes the tip of an acute corner, the fit writes what is left as one more
+  segment, and under a cover the tip can be restored for free.
+* **Bridge.** One G1 cubic from where the boundary goes under the cover to where it comes
+  out, tangent to the visible boundary at both ends. Its arms are set as the circular arc
+  between the two tangents would set them (also 0.8, 1.25 and 1.5 times that), or as the
+  cubics whose area and first moment match the run (`fit_cubic_moments`).
+
+Every candidate goes through the same check, and the description length picks among those
+that pass.
 
 **The bounds.**
 
@@ -1417,12 +1427,16 @@ and under a cover the tip can be restored for free.
 * **Lower bound:** `L = V`, plus the half pixel under the cover that the underlap reached,
   tapered over 12 px towards a third paint.
 * **`V` includes the seam.** A stroke can be drawn narrower than the face above's region in
-  the map. The gap between them is painted today by the lower face's underlap, so `V`
-  counts it as shown.
-* **Blurred inputs.** `L \ N ⊆ E ⊆ H ∪ N`, where `N` is the junction zone: discs of four PSF
-  radii round each junction, and only within one radius of the bounds. Its `psf_radius`
-  comes from the noise model and is 0 on a clean intake. A wedge of angle `θ` loses its tip
-  to a blur of radius `r` over `r/sin(θ/2)`, which is four radii at 29°.
+  the map, and the lower face's underlap paints the gap between them today. So `V` counts
+  that gap as shown, but only where the underlap reached: the reach into the gap tapers
+  off towards any other face over 12 px, as the underlap's does, and at a junction of
+  three paints it is zero.
+* **No junction zone.** A zone near junctions of a blurred input was tried, relaxing the
+  bounds within the blur (`psf_radius`, plus half a pixel of chroma on a lossy intake).
+  On `web` it let the cyan rectangle of the canary drop a visible wedge of cyan 1-2 px
+  wide, and `geom` rose 4 % on that icon. It was withdrawn. Deciding what the blur leaves
+  unidentified is the likelihood's job (the boundary chain's `EdgeScorer`), not a
+  geometric zone's.
 
 **What is certified, and what is trusted.**
 
@@ -1454,7 +1468,11 @@ On `web` the two triangles keep a chamfer at each acute corner. Under the honest
 fit writes each as a pentagon, two vertices more per corner. The corner cut would remove
 them, but at those tips the blurred junction gave a sliver of the cyan face below to the
 planar map. Completing the tip would paint over that sliver, so the exact interval refuses
-it. The junction zone `N` is what allows it once `psf_radius` arrives.
+it. Whether that sliver is the blur or a real wedge of cyan is for the likelihood to say
+(above).
+
+**Canonical z-order: skipped.** Making paint order free between shapes that do not overlap
+and fixed where they do would move elements, and so change bytes on every clean condition.
 
 **Design statistics** (`bench/theory/design_stats.py`, 246 screen icons, quality mode):
 

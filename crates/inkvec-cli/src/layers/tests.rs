@@ -49,7 +49,6 @@ fn run(
         strokes,
         stroke_faces: &[],
         decimals,
-        psf: 0.0,
     };
     complete(&inp)
 }

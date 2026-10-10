@@ -1330,7 +1330,7 @@ fn complete_layers(
     };
     let strokes: Vec<crate::layers::StrokeShape> = doc.ribbons.shapes.values().cloned().collect();
     let stroke_faces: Vec<usize> = doc.ribbons.shapes.keys().copied().collect();
-    let done = crate::layers::complete(&crate::layers::Input {
+    let (done, tried) = crate::layers::complete_report(&crate::layers::Input {
         order: doc.order,
         fitted: doc.fitted,
         prims: doc.prims,
@@ -1343,11 +1343,42 @@ fn complete_layers(
         strokes: &strokes,
         stroke_faces: &stroke_faces,
         decimals,
-        psf: 0.0,
     });
-    if inkvec_core::env::number("INKVEC_COMPLETION_DEBUG").is_some_and(|v| v != 0.0) {
+    let debug = inkvec_core::env::number("INKVEC_COMPLETION_DEBUG").unwrap_or(0.0);
+    if debug != 0.0 {
         let (b, a): (f64, f64) = done.values().map(|c| (c.before, c.after)).fold((0.0, 0.0), |s, c| (s.0 + c.0, s.1 + c.1));
-        eprintln!("layers: {} face(s) completed, {b:.0} -> {a:.0} parameters", done.len());
+        eprintln!(
+            "layers: {} face(s) completed of {} tried, {b:.0} -> {a:.0} parameters",
+            done.len(),
+            tried.len()
+        );
+    }
+    // `3`: one tab-separated line per tried face, for `bench/theory/amodal_eval.py`: the face,
+    // completed or refused, the winning candidate, the ink, and the element before and after.
+    if debug >= 3.0 {
+        let element = |el: Option<(Element, bool)>| -> String {
+            match el {
+                Some((Element::Path(d), _)) => format!("<path d=\"{d}\"/>"),
+                Some((Element::Ready(el), _)) => el,
+                None => String::new(),
+            }
+        };
+        for &f in &tried {
+            let before = element(writer.face_element(f, &empty));
+            let (status, kind, after) = match done.get(&f) {
+                Some(c) => {
+                    let after = match &c.shape {
+                        crate::layers::Shape::Prim(k) => {
+                            primitive_element(k, "#000000", "", decimals).unwrap_or_default()
+                        }
+                        crate::layers::Shape::Path(d) => format!("<path d=\"{d}\"/>"),
+                    };
+                    ("completed", c.kind.as_str(), after)
+                }
+                None => ("refused", "-", String::new()),
+            };
+            eprintln!("completion\t{f}\t{status}\t{kind}\t{}\t{before}\t{after}", writer.fills[f]);
+        }
     }
     done
 }

@@ -137,46 +137,6 @@ pub(crate) struct Input<'a> {
     pub(crate) stroke_faces: &'a [usize],
     /// Decimals per written coordinate.
     pub(crate) decimals: usize,
-    /// The input's blur beyond a clean render's, px: the noise model's `psf_radius` (0 on a
-    /// clean intake). Where three paints meet, the picture inside the blur is not
-    /// identifiable, and the interval is relaxed there ([`junction_zone`]).
-    pub(crate) psf: f64,
-}
-
-/// How far from a junction, in blur radii, the picture is not identifiable: a wedge of
-/// angle `θ` loses its tip to a blur of radius `r` over `r / sin(θ/2)`, which is four radii
-/// at 29°, about the most acute corner the corpus's artists draw.
-const JUNCTION_REACH: f64 = 4.0;
-
-/// The zone round the junctions near `bbox` where a blur of radius `psf` hides which paint
-/// shows: discs of [`JUNCTION_REACH`] radii. Empty when `psf` is 0 (a clean intake).
-fn junction_zone(junctions: &[Point], psf: f64, bbox: (f64, f64, f64, f64)) -> Region {
-    if psf <= 0.0 {
-        return Region::empty();
-    }
-    let r = JUNCTION_REACH * psf;
-    let discs: Vec<Vec<Point>> = junctions
-        .iter()
-        .filter(|j| j.x >= bbox.0 - r && j.x <= bbox.2 + r && j.y >= bbox.1 - r && j.y <= bbox.3 + r)
-        .map(|j| shape::flatten_primitive(&PrimitiveKind::Circle { c: *j, r }))
-        .collect();
-    if discs.is_empty() {
-        return Region::empty();
-    }
-    Region::from_polygons(&discs, Rule::NonZero)
-}
-
-/// Where the edges of the map meet: the ends of every open fitted edge.
-fn junction_points(fitted: &[FittedPath]) -> Vec<Point> {
-    let mut out: Vec<Point> = Vec::new();
-    for f in fitted.iter().filter(|f| !f.closed) {
-        for q in [f.start, f.segments.last().map(Segment::end).unwrap_or(f.start)] {
-            if !out.iter().any(|o| o.dist(q) < 1e-6) {
-                out.push(q);
-            }
-        }
-    }
-    out
 }
 
 /// Whether every ring face `f` draws is one edge fitted by a primitive.
@@ -207,6 +167,9 @@ pub(crate) struct Completion {
     pub(crate) shape: Shape,
     pub(crate) before: f64,
     pub(crate) after: f64,
+    /// Which candidate won: `circle`, `ellipse`, `rect`, or for a path the replacements its
+    /// runs took (`corner`, `corner-cut`, `chord`, `offset`, `bulge`, `bridge`), joined by `+`.
+    pub(crate) kind: String,
 }
 
 /// The region a face is written as now: its outline rings, its punched holes cut out.
@@ -218,14 +181,25 @@ fn face_region(inp: &Input, f: usize) -> Region {
     Region::from_polygons(&polys, Rule::EvenOdd)
 }
 
+/// The region a face holds in the map: every ring of it by parity, so the faces nested in it
+/// are not part of it (as against [`face_region`], what it is drawn as).
+fn map_region(inp: &Input, f: usize) -> Region {
+    let n = inp.order.get(f).map_or(0, Vec::len);
+    Region::from_polygons(&rings_of(inp, f, 0..n), Rule::EvenOdd)
+}
+
 /// The closed polygons of a face's outline rings.
 fn face_rings(inp: &Input, f: usize) -> Vec<Vec<Point>> {
+    rings_of(inp, f, inp.outer[f].iter().copied())
+}
+
+/// The closed polygons of rings `ks` of face `f`.
+fn rings_of(inp: &Input, f: usize, ks: impl Iterator<Item = usize>) -> Vec<Vec<Point>> {
     let Some(rings) = inp.order.get(f) else {
         return Vec::new();
     };
-    inp.outer[f]
-        .iter()
-        .filter_map(|&k| {
+    ks.filter(|&k| k < rings.len())
+        .filter_map(|k| {
             let ring = &rings[k];
             if ring.len() == 1 {
                 if let Some(pf) = inp.prims.get(ring[0].0).and_then(|p| p.as_ref()) {
@@ -313,12 +287,21 @@ pub(crate) fn allowed_region(e_now: &Region, v: &Region, u: &Region, m: f64) -> 
 }
 
 /// Completes every face it can; returns the completed faces.
+#[cfg(test)]
 pub(crate) fn complete(inp: &Input) -> HashMap<usize, Completion> {
+    complete_report(inp).0
+}
+
+/// [`complete`], and the faces it tried: those with something painted over them that were
+/// candidates. A tried face missing from the completions was refused (no candidate was
+/// cheaper and certified).
+pub(crate) fn complete_report(inp: &Input) -> (HashMap<usize, Completion>, Vec<usize>) {
     let n = inp.order.len();
     let mut out = HashMap::new();
+    let mut tried = Vec::new();
     let mut painted: Vec<usize> = (0..n).filter(|&f| inp.rank.get(f).copied().flatten().is_some()).collect();
     if painted.is_empty() {
-        return out;
+        return (out, tried);
     }
     // From the top down, with the running union of everything above.
     painted.sort_by_key(|&f| std::cmp::Reverse(inp.rank[f]));
@@ -329,8 +312,11 @@ pub(crate) fn complete(inp: &Input) -> HashMap<usize, Completion> {
     let mut map_above = inp
         .stroke_faces
         .iter()
-        .fold(Region::empty(), |acc, &s| acc.union(&face_region(inp, s)));
-    let junctions = if inp.psf > 0.0 { junction_points(inp.fitted) } else { Vec::new() };
+        .fold(Region::empty(), |acc, &s| acc.union(&map_region(inp, s)));
+    // Every painted face's region in the map, to tell a seam only one face borders from one
+    // at a junction.
+    let maps: HashMap<usize, Region> = painted.iter().map(|&f| (f, map_region(inp, f))).collect();
+    let all_faces = maps.values().fold(Region::empty(), |acc, r| acc.union(r));
     let mut i = 0;
     while i < painted.len() {
         let r = inp.rank[painted[i]];
@@ -340,20 +326,25 @@ pub(crate) fn complete(inp: &Input) -> HashMap<usize, Completion> {
         }
         for &f in &painted[i..j] {
             if inp.candidate.get(f).copied().unwrap_or(false) {
-                if let Some(c) = complete_face(inp, f, &regions[&f], &above, &map_above, &junctions) {
-                    out.insert(f, c);
+                if let Some(attempt) =
+                    complete_face(inp, f, &regions[&f], &above, &map_above, &all_faces)
+                {
+                    tried.push(f);
+                    if let Some(c) = attempt {
+                        out.insert(f, c);
+                    }
                 }
             }
         }
         for &f in &painted[i..j] {
             if inp.covers.get(f).copied().unwrap_or(false) {
                 above = above.union(&regions[&f]);
-                map_above = map_above.union(&regions[&f]);
+                map_above = map_above.union(&maps[&f]);
             }
         }
         i = j;
     }
-    out
+    (out, tried)
 }
 
 /// The cheapest certified completion of face `f`, written now as `e_now`, under `above`.
@@ -363,43 +354,47 @@ fn complete_face(
     e_now: &Region,
     above: &Region,
     map_above: &Region,
-    junctions: &[Point],
-) -> Option<Completion> {
+    all_faces: &Region,
+) -> Option<Option<Completion>> {
     let (x0, y0, x1, y1) = e_now.bbox()?;
     let u = above.crop(x0 - PAD, y0 - PAD, x1 + PAD, y1 + PAD);
     if u.is_empty() || e_now.dilate(0.75).intersect(&u).area() < 0.5 {
         return None;
     }
     // What the face shows: its own region outside the cover, and the seam between its region
-    // and a cover drawn narrower than the face above's region in the map, which the face's
-    // underlap paints today.
-    let gap = e_now
-        .dilate(UNDER)
-        .intersect(&map_above.crop(x0 - PAD, y0 - PAD, x1 + PAD, y1 + PAD))
-        .minus(&u)
-        .minus(e_now);
-    let v = e_now.minus(&u).union(&gap);
+    // and a cover drawn narrower than the face above's region in the map, where the face's
+    // underlap paints it today. As the underlap does, the reach into the seam tapers off
+    // towards any other face over [`TAPER`]: at a junction of three paints, nothing.
+    let crop = (x0 - PAD, y0 - PAD, x1 + PAD, y1 + PAD);
+    let seam = map_above.crop(crop.0, crop.1, crop.2, crop.3).minus(&u).minus(e_now);
+    let others = all_faces
+        .crop(crop.0 - TAPER, crop.1 - TAPER, crop.2 + TAPER, crop.3 + TAPER)
+        .minus(e_now)
+        .minus(map_above);
+    let v0 = e_now.minus(&u);
+    let mut gap = Region::empty();
+    if !seam.is_empty() {
+        for k in 1..=RAMP {
+            let s = k as f64 / RAMP as f64;
+            let reach = e_now.dilate(UNDER * s).intersect(&seam);
+            gap = gap.union(&reach.minus(&others.dilate(TAPER * s)));
+        }
+    }
+    if trace() && !gap.is_empty() {
+        eprintln!("layers face {f}: seam gap area {:.3} box {:?}; others empty {}", gap.area(), gap.bbox(), others.is_empty());
+    }
+    let v = v0.union(&gap);
     if v.area() < 1.0 {
         return None;
     }
-    let mut h = allowed_region(e_now, &v, &u, MARGIN);
-    let mut l = required_region(&v, &u);
-    // Near a junction of a blurred input the interval holds off a zone `N` the blur leaves
-    // unidentified, and only within one blur radius of the interval's own ends:
-    // `L \ N ⊆ E ⊆ H ∪ N` (`Inkvec.Design.painter_interval_off`).
-    let zone = junction_zone(junctions, inp.psf, (x0, y0, x1, y1));
-    if !zone.is_empty() {
-        let spill = zone.intersect(&h.dilate(inp.psf)).minus(&h);
-        let loss = zone.minus(&l.erode(inp.psf));
-        h = h.union(&spill);
-        l = l.minus(&loss);
-    }
+    let h = allowed_region(e_now, &v, &u, MARGIN);
+    let l = required_region(&v, &u);
     let hb = h.bbox()?;
     let before = (inp.cost_now)(f);
     let mut best: Option<Completion> = None;
     // A face written as a primitive gets no underlap, so a tie buys it nothing.
     let prim_now = is_primitive_face(inp, f);
-    let mut consider = |shape: Shape, after: f64, allow: f64, region: &Region| {
+    let mut consider = |shape: Shape, kind: &str, after: f64, allow: f64, region: &Region| {
         // Never more than the face writes now. A tie is kept: the completed face reaches under
         // its cover and is spared the underlap, which only adds numbers.
         if after > before + allow
@@ -423,7 +418,12 @@ fn complete_face(
             );
         }
         if certified {
-            best = Some(Completion { shape, before, after });
+            best = Some(Completion {
+                shape,
+                before,
+                after,
+                kind: kind.to_string(),
+            });
         }
     };
 
@@ -435,7 +435,7 @@ fn complete_face(
             for e in [REACH, 0.5, 0.0] {
                 let kind = PrimitiveKind::Circle { c: c.c, r: c.r + e };
                 if let Some(reg) = bounded_region(&[shape::flatten_primitive(&kind)], hb) {
-                    consider(Shape::Prim(kind), 3.0, 0.0, &reg);
+                    consider(Shape::Prim(kind), "circle", 3.0, 0.0, &reg);
                 }
             }
         }
@@ -448,7 +448,7 @@ fn complete_face(
                     angle: el.angle,
                 };
                 if let Some(reg) = bounded_region(&[shape::flatten_primitive(&kind)], hb) {
-                    consider(Shape::Prim(kind), 4.0, 0.0, &reg);
+                    consider(Shape::Prim(kind), "ellipse", 4.0, 0.0, &reg);
                 }
             }
         }
@@ -481,21 +481,21 @@ fn complete_face(
                     rx: 0.0,
                 };
                 if let Some(reg) = bounded_region(&[shape::flatten_primitive(&kind)], hb) {
-                    consider(Shape::Prim(kind), 6.0, 0.0, &reg);
+                    consider(Shape::Prim(kind), "rect", 6.0, 0.0, &reg);
                 }
             }
         }
     }
     // The face's own rings with the covered runs replaced.
     let simplified = simplified_rings(inp, f, e_now, &u, &l, &h, hb);
-    if let Some((d, reg, allow)) = &simplified {
-        consider(Shape::Path(d.clone()), gate_count(d), *allow, reg);
+    if let Some((d, reg, allow, kinds)) = &simplified {
+        consider(Shape::Path(d.clone()), kinds, gate_count(d), *allow, reg);
     }
     if inkvec_core::env::number("INKVEC_COMPLETION_DUMP").is_some_and(|x| x as usize == f) {
         dump(f, &[(&u, [90, 90, 200]), (&v, [200, 200, 90]), (&l.minus(&v), [90, 200, 90])],
              simplified.as_ref().map(|s| &s.1), (x0 - PAD, y0 - PAD, x1 + PAD, y1 + PAD));
     }
-    best
+    Some(best)
 }
 
 /// Debugging (`INKVEC_COMPLETION_DUMP=<face>`): the regions as colours, the candidate's edge in
@@ -563,6 +563,10 @@ fn owned_points(inp: &Input, f: usize, u: &Region) -> Vec<Point> {
     }
     pts
 }
+
+/// One replacement of a run: the ring with it, the allowance it spends (numbers the
+/// underlap would have added), and what kind of replacement it is.
+type Option3 = (CycRing, f64, &'static str);
 
 /// A ring as cyclic vertices and the segment leaving each one.
 #[derive(Clone)]
@@ -639,7 +643,7 @@ fn simplified_rings(
     v: &Region,
     h: &Region,
     hb: (f64, f64, f64, f64),
-) -> Option<(String, Region, f64)> {
+) -> Option<(String, Region, f64, String)> {
     let rings = inp.order.get(f)?;
     let mut cyc: Vec<CycRing> = Vec::new();
     for &k in &inp.outer[f] {
@@ -672,6 +676,7 @@ fn simplified_rings(
     // bound anywhere. The whole face is certified once at the end, by the caller.
     let mut changed = false;
     let mut allowance = 0.0;
+    let mut kinds: Vec<&'static str> = Vec::new();
     let mut current = region_of(&cyc)?;
     for r in 0..cyc.len() {
         loop {
@@ -683,12 +688,13 @@ fn simplified_rings(
             mark_tried(&mut cyc[r], a, b);
             let mut options = corner_cuts(&cyc[r], a, b);
             options.extend(replacements(&cyc[r], a, b, e_now));
-            options.extend(offset_run(&cyc[r], a, b, e_now).map(|o| (o, 0.0)));
+            options.extend(bridges(&cyc[r], a, b));
+            options.extend(offset_run(&cyc[r], a, b, e_now).map(|o| (o, 0.0, "offset")));
             // The lower bound along this run: the band round its own geometry. The face's
             // other runs keep their own reach to meet, in their own turn.
             let band = run_band(&cyc[r], a, b);
             let need = v.intersect(&band);
-            for (opt, extra) in options {
+            for (opt, extra, what) in options {
                 let mut trial = cyc.clone();
                 trial[r] = opt;
                 let Some(reg) = region_of(&trial) else {
@@ -714,6 +720,9 @@ fn simplified_rings(
                     current = reg;
                     allowance += extra;
                     changed = true;
+                    if !kinds.iter().any(|k| *k == what) {
+                        kinds.push(what);
+                    }
                     break;
                 }
             }
@@ -726,7 +735,7 @@ fn simplified_rings(
     for c in &cyc {
         c.d(inp.decimals, &mut d);
     }
-    Some((d, region_of(&cyc)?, allowance))
+    Some((d, region_of(&cyc)?, allowance, kinds.join("+")))
 }
 
 /// The band round run `a ..= b` of a ring: its own geometry widened by the reach and a scan
@@ -883,7 +892,7 @@ fn mark_tried(c: &mut CycRing, a: usize, b: usize) {
 /// The rings with run `a ..= b` replaced, best first: the corner of the owned lines on
 /// either side, then a chord reaching [`REACH`] and half that under the cover, then a
 /// plain chord. Only replacements that write fewer numbers than the run.
-fn replacements(c: &CycRing, a: usize, b: usize, e_now: &Region) -> Vec<(CycRing, f64)> {
+fn replacements(c: &CycRing, a: usize, b: usize, e_now: &Region) -> Vec<Option3> {
     let n = c.len();
     let run_len = if b >= a { b - a + 1 } else { b + n - a + 1 };
     if run_len >= n {
@@ -948,7 +957,7 @@ fn replacements(c: &CycRing, a: usize, b: usize, e_now: &Region) -> Vec<(CycRing
                 r.segs.pop();
                 r.covered.pop();
                 if run_cost > 0.0 {
-                    out.push((r, 0.0));
+                    out.push((r, 0.0, "corner"));
                 }
             }
         }
@@ -987,7 +996,7 @@ fn replacements(c: &CycRing, a: usize, b: usize, e_now: &Region) -> Vec<(CycRing
         // face then reaches under its cover and needs no underlap ([`crate::seams`]), which
         // adds vertices.
         if new_cost <= run_cost {
-            out.push((r, 0.0));
+            out.push((r, 0.0, "chord"));
         }
     }
     // 4. A straight run that continues its owned neighbours cannot be reached under by a
@@ -998,10 +1007,10 @@ fn replacements(c: &CycRing, a: usize, b: usize, e_now: &Region) -> Vec<(CycRing
         let len = va.dist(vb);
         if let (Some(dir), Some(nrm)) = (unit(Point::new(vb.x - va.x, vb.y - va.y)), outward_normal(va, vb, e_now)) {
             let at = |t: f64| Point::new(va.x + t * dir.x + UNDER * nrm.x, va.y + t * dir.y + UNDER * nrm.y);
-            out.push((splice(va, &[at(0.5 * len)], vb), 2.0));
+            out.push((splice(va, &[at(0.5 * len)], vb), 2.0, "bulge"));
             let t = TAPER.min(len / 3.0);
             if len > 2.0 * t {
-                out.push((splice(va, &[at(t), at(len - t)], vb), 4.0));
+                out.push((splice(va, &[at(t), at(len - t)], vb), 4.0, "bulge"));
             }
         }
     }
@@ -1015,7 +1024,7 @@ fn replacements(c: &CycRing, a: usize, b: usize, e_now: &Region) -> Vec<(CycRing
 /// writes the chamfer it leaves as one more segment; under a cover nobody can see the tip,
 /// so the face takes the artist's corner back for free. First every such cut at once, then
 /// each alone; each writes the numbers of the segments it drops fewer.
-fn corner_cuts(c: &CycRing, a: usize, b: usize) -> Vec<(CycRing, f64)> {
+fn corner_cuts(c: &CycRing, a: usize, b: usize) -> Vec<Option3> {
     let n = c.len();
     let run_len = if b >= a { b - a + 1 } else { b + n - a + 1 };
     // The run's segments, by the vertex each starts at (indices shift as cuts are made).
@@ -1033,12 +1042,90 @@ fn corner_cuts(c: &CycRing, a: usize, b: usize) -> Vec<(CycRing, f64)> {
         }
     }
     if cuts > 1 {
-        out.push((all, 0.0));
+        out.push((all, 0.0, "corner-cut"));
     }
     for o in 0..run_len {
         if let Some(cut) = cut_corner(c, (a + o) % n) {
-            out.push((cut, 0.0));
+            out.push((cut, 0.0, "corner-cut"));
         }
+    }
+    out
+}
+
+/// One G1 cubic across run `a ..= b`, leaving its start along the incoming segment and
+/// arriving at its end along the outgoing one: the boundary continued smoothly under the
+/// cover between the two points where it goes under. The arms are tried as the circular
+/// arc between the two tangents would set them, longer and shorter, and as the cubics whose
+/// area and first moment match the run as it is now (`fit_cubic_moments`, the cubic that
+/// hugs the cover's edge). Only when it writes no more numbers than the run.
+fn bridges(c: &CycRing, a: usize, b: usize) -> Vec<Option3> {
+    let n = c.len();
+    let run_len = if b >= a { b - a + 1 } else { b + n - a + 1 };
+    if run_len >= n {
+        return Vec::new();
+    }
+    let run_cost: f64 = (0..run_len).map(|o| c.seg((a + o) % n).params()).sum();
+    if run_cost < 6.0 {
+        return Vec::new();
+    }
+    let prev = (a + n - 1) % n;
+    let next = (b + 1) % n;
+    let (Some(ta), Some(tb)) = (tangent_at_end(c, prev), tangent_at_start(c, next)) else {
+        return Vec::new();
+    };
+    let va = c.verts[a];
+    let vb = c.verts[next];
+    let chord = va.dist(vb);
+    if chord < 1e-6 {
+        return Vec::new();
+    }
+    // The turn between the two tangents, and the circular arc's arm for it.
+    let turn = (ta.x * tb.y - ta.y * tb.x).atan2(ta.x * tb.x + ta.y * tb.y).abs();
+    let arm = if turn < 1e-6 {
+        chord / 3.0
+    } else {
+        chord * (2.0 / 3.0) * (turn / 4.0).tan() / (turn / 2.0).sin()
+    };
+    let mut arms: Vec<(f64, f64)> = [1.0, 1.25, 0.8, 1.5].iter().map(|k| (k * arm, k * arm)).collect();
+    // The cubics with the run's own area and first moment.
+    let mut pts = vec![va];
+    let mut i = a;
+    loop {
+        shape::flatten_segment(c.verts[i], &c.seg(i), &mut pts);
+        if i == b {
+            break;
+        }
+        i = (i + 1) % n;
+    }
+    let to_vec = |p: Point| inkvec_core::Vec2 { x: p.x, y: p.y };
+    for (c1, c2) in inkvec_fit::multimodel::fit_cubic_moments(&pts, to_vec(ta), to_vec(tb)) {
+        arms.push((c1.dist(va), c2.dist(vb)));
+    }
+    let mut out = Vec::new();
+    for (d0, d1) in arms {
+        if !(d0.is_finite() && d1.is_finite()) || d0 <= 0.0 || d1 <= 0.0 || d0 > 2.0 * chord || d1 > 2.0 * chord {
+            continue;
+        }
+        let c1 = Point::new(va.x + d0 * ta.x, va.y + d0 * ta.y);
+        let c2 = Point::new(vb.x - d1 * tb.x, vb.y - d1 * tb.y);
+        // The run's segments go; vertex a is joined to vertex b + 1 by the cubic.
+        let mut verts = Vec::new();
+        let mut segs = Vec::new();
+        let mut covered = Vec::new();
+        let mut j = next;
+        loop {
+            verts.push(c.verts[j]);
+            segs.push(c.segs[j].clone());
+            covered.push(c.covered[j]);
+            if j == prev {
+                break;
+            }
+            j = (j + 1) % n;
+        }
+        verts.push(va);
+        segs.push(Segment::Cubic(c1, c2, vb));
+        covered.push(false);
+        out.push((CycRing { verts, segs, covered }, 0.0, "bridge"));
     }
     out
 }

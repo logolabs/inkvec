@@ -115,10 +115,46 @@ precision of each coordinate. Two things may move:
 The owners negotiate these, and anything else that shortens a chain without hiding a
 problem in an assumption.
 
+## As negotiated (phase 1)
+
+The owners' write-ups are [`chain-boundary.md`](chain-boundary.md) and
+[`chain-representation.md`](chain-representation.md). What they agreed:
+
+* **The interface is areas, not points.** Summed over any window of pixels, a face's mixture
+  weights equal its exact area there, so any description (curves, primitives, strokes,
+  layers) is scored against the pixels by areas, and at the truth `χ²/M` is 1.00 (exact
+  area) and 1.01 (8×8 supersampling). Chain B delivers an `Evidence` object and a
+  `BoundaryLikelihood` evaluator (`chain-boundary.md`, "Interface proposal"); the fitter's
+  per-point residual becomes a per-window one, and points, `DEFAULT_SIGMA_MODEL`, the kink
+  and anchor priors and the curvature inflation stop being the interface.
+* **Chain B, re-cut.** B1 inks and mixtures; B2 the likelihood of any description (the window
+  identity and the exact decomposition into edge, vertex and thin-stroke terms); B3 vertex
+  proposals and thin features (high-recall proposals, per-pixel terms, flat-bottomed
+  likelihoods where the data are flat); B4 what the pixels can confirm (precision, and the
+  distributions of the tests).
+* **Chain R gains a link and four decisions.** R0, the objective: the negative log posterior
+  of the discrete design with its free coordinates integrated out (the Laplace /
+  Wallace-Freeman evidence), which prices each coordinate by its own precision and each
+  constraint by its prior odds; today's `½χ² + λ·k` is its special case with one precision
+  and a flat prior. R2 now decides corners, fillets, smooth joins, tangency and continuation
+  through junctions (B proposes, R's arms place the vertex); R4 now decides gradient or
+  flat, a stroke or two edges, and the layers (each shape completed behind what covers it,
+  exactly within the interval the painted picture allows).
+* **Amendments chain B accepted to deliver:** an evaluator that draws exactly as the gate's
+  renderer does (A1, checked on the artists' own files); elliptical arcs, strokes and
+  per-layer compositing (A2); the renderer floor as its own correlated term (A3); junction
+  arms in cyclic order with candidate continuations (A4); local topological alternatives
+  (A5). Precision and `log det F` are computed on R's side from Jacobians (A6).
+* **Open measurements for chain B:** the renderer floor on the corpus's own intake per
+  family and tier; the size of the per-layer compositing term; that windows at 45° neither
+  count a pixel twice nor drop one.
+
 ## Formal, then code
 
 Each link: an informal statement and proof first (`chain-boundary.md`,
 `chain-representation.md`); the load-bearing lemmas then in Lean
-(`formal/InkvecTheory`); then code that the mathematics constrains: rational constants and
-decision rules generated from, or checked against, the Lean development by a test
-(`cargo test`), and runtime checks (debug assertions) of the inequalities a proof relies on.
+(`formal/InkvecTheory`); then code bound to them by the rule of
+[`verification.md`](verification.md): solvers are free (floats, heuristics, any algorithm),
+and every result a theorem speaks about is accepted only by a checker generated from the
+Lean definition the theorem is about, on a certificate the solver emits, in exact
+arithmetic or rigorous intervals.

@@ -9,7 +9,7 @@
 followed by `Refined::apply` (`planar.rs:480-493`), stage mark `"refine_subpix"`; and
 `fn refine_junctions()` (`planar/junctions.rs:340`, stage mark `"refine_junc"`)
 **Pipeline position:** after `build_map`, before `boundary_opt`. The measuring phase runs
-side by side with symmetry detection under `rayon::join` (`lib.rs:1122-1156`); both read the
+side by side with symmetry detection under `rayon::join` (`lib.rs:1097-1131`); both read the
 lattice map and neither writes it, and the measured points are written back afterwards.
 Shared by Quality and Fast mode.
 
@@ -152,7 +152,7 @@ vertex order, as before:
   order. The path is now read once per map (it was read per edge).
 
 The same `refine_in_parallel` test decides whether symmetry detection runs beside the
-measuring phase under `rayon::join` or before it (`lib.rs:1148-1154`); on a single-thread
+measuring phase under `rayon::join` or before it (`lib.rs:1123-1129`); on a single-thread
 build (WebAssembly) `join` runs the two in turn with no work added. Measured at 2048 px
 before the change, the refinement took 10.6 ms, serial, at 0.44 µs per vertex (shared-stage
 research, 2026-09-30). The shared stages that round rewrote (the ramp pass, the planar map
@@ -280,7 +280,7 @@ grid was produced.
 The one *runtime* mechanism that reasons about raster resolution is
 `coverage::intake_scale` (`coverage.rs:832-882`), which measures how many raster pixels
 one unit of genuine edge detail occupies and is used upstream (in
-`trace_color_full_with_alpha`, `lib.rs:358`) to decide whether the *palette's* noise
+`trace_color_full_with_alpha`, `lib.rs:360`) to decide whether the *palette's* noise
 guard should widen its same-ink tolerance — not to change anything in `refine_subpixel`
 itself. `refine_subpixel` runs identically regardless of `intake_scale`.
 

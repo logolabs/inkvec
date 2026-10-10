@@ -25,8 +25,8 @@ fits the result with `fast::fit` (`crates/inkvec-cli/src/fast.rs:115-134`), whic
 `inkvec_trace::fast::fit_edges` (`fast/mod.rs:380-427`) with the map's width and height.
 **Pipeline position:** it replaces stages 03–05 (palette, regions, gradients) with its own
 front end; shares stages 01, 06, 07, 10 and 13; skips 08 (the boundary solve,
-`lib.rs:1166`, `boundary_opt::optimise_for` at `boundary_opt.rs:593-611`; balanced runs it,
-capped at eight iterations, §8) and 09 (decode, `lib.rs:1177`); and replaces 11 (curve fitting) with its own
+`lib.rs:1141`, `boundary_opt::optimise_for` at `boundary_opt.rs:593-611`; balanced runs it,
+capped at eight iterations, §8) and 09 (decode, `lib.rs:1152`); and replaces 11 (curve fitting) with its own
 fitter, without 12 (repair) or shape harmonization (`repair_fits`,
 `crates/inkvec-cli/src/pipeline.rs:851`; `emit_options`, `pipeline.rs:526-537`).
 
@@ -495,7 +495,7 @@ solve and decode.
   vertices or while a debug printout or contour dump is on (`measure_subpixel`,
   `planar.rs:495-596`).
 * **Symmetry detection beside the measuring phase**, under `rayon::join`; both only read the
-  lattice map (`lib.rs:1122-1155`).
+  lattice map (`lib.rs:1097-1130`).
 * **Junction debug flags read once** into a `OnceLock` (`planar/junctions.rs:54-70`).
 
 **Citations** (labels as in the doc comments): cracks, "Method from" He, Chao & Suzuki 2008 and

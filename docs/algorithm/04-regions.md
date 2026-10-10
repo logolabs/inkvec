@@ -3,35 +3,35 @@
 > Turns a per-pixel palette label into a set of connected, single-ink faces: speckle gone, anti-aliasing folded into its neighbours, disconnected same-colour shapes told apart, and pixel-corner ambiguities resolved by the image.
 
 **Source:** `crates/inkvec-trace/src/regions.rs` (connected components in `crates/inkvec-trace/src/regions/components.rs`), called from `crates/inkvec-trace/src/lib.rs`
-**Entry point:** `trace_color_full_with_alpha()` (`lib.rs:299`), stages within it; the saddle pass runs at the head of `finish_color_trace_alpha()` (`lib.rs:1073`)
-**Pipeline position:** after `color::label_image` (mark `"labels"`, `lib.rs:542`), before `gradient::merge_gradient_bands_with_ink` (mark `"merge_bands"`, `lib.rs:613`). The `split` sub-stage runs later, after stage 05's `carve` (`lib.rs:683`), and the saddle pass after it, just before `planar::build` (mark `"build_map"`, `lib.rs:1106`)
+**Entry point:** `trace_color_full_with_alpha()` (`lib.rs:301`), stages within it; the saddle pass runs at the head of `finish_color_trace_alpha()` (`lib.rs:1048`)
+**Pipeline position:** after `color::label_image` (mark `"labels"`, `lib.rs:544`), before `gradient::merge_gradient_bands_with_ink` (mark `"merge_bands"`, `lib.rs:615`). The `split` sub-stage runs later, after stage 05's `carve` (`lib.rs:685`), and the saddle pass after it, just before `planar::build` (mark `"build_map"`, `lib.rs:1106`)
 
 This stage is four sub-stages, with stopwatch marks; the first two run before stage 05 and the last two after it:
 
 | mark | line | function(s) |
 |---|---|---|
-| `despeckle` | `lib.rs:546` | `despeckle` (`regions.rs:1027-1053`) |
-| `blend_absorb` | `lib.rs:584` | `absorb_blend_slivers` (`regions.rs:754-820`), `reassign_blend_pixels` (`regions.rs:929-1025`) |
-| `split` | `lib.rs:697` | `split_components` (`regions.rs:210-242`) |
-| `saddles` | `lib.rs:1102` | `merge_saddle_faces` (`regions.rs:46-203`), compiled only in a `research` build; `planar::build`'s own corner logic acts on its result downstream |
+| `despeckle` | `lib.rs:548` | `despeckle` (`regions.rs:1027-1053`) |
+| `blend_absorb` | `lib.rs:586` | `absorb_blend_slivers` (`regions.rs:754-820`), `reassign_blend_pixels` (`regions.rs:929-1025`) |
+| `split` | `lib.rs:699` | `split_components` (`regions.rs:210-242`) |
+| `saddles` | `lib.rs:1077` | `merge_saddle_faces` (`regions.rs:46-203`), compiled only in a `research` build; `planar::build`'s own corner logic acts on its result downstream |
 
-The module overview (`regions.rs:1-31`) lists the same order. The native-alpha path (`native.rs:885-896`, `native.rs:953`) runs `despeckle` and `split_components` unchanged and four-channel counterparts of the two blend passes; `trace_color_from_labels` runs `despeckle` (`lib.rs:869`) and `split_components` (`lib.rs:966`). Fast mode has its own face writer (see [14-fast-mode.md](14-fast-mode.md)).
+The module overview (`regions.rs:1-31`) lists the same order. The native-alpha path (`native.rs:885-896`, `native.rs:953`) runs `despeckle` and `split_components` unchanged and four-channel counterparts of the two blend passes; `trace_color_from_labels` runs `despeckle` (`lib.rs:874`) and `split_components` (`lib.rs:971`). Fast mode has its own face writer (see [14-fast-mode.md](14-fast-mode.md)).
 
 ## What problem this solves
 
 `color::label_image` assigns every pixel the palette entry nearest its measured colour. That is a per-pixel decision with no notion of shape: it does not know that a pixel is noise, that a run of pixels is only anti-aliasing between two real inks, that two blobs of the same colour on opposite sides of the canvas are different objects, or that four pixels meeting at one corner might belong to a single connected mark. Each of those is a distinct failure mode, and each gets its own pass:
 
 - **Speckle** — an isolated pixel or tiny cluster that landed on the wrong palette entry (JPEG ringing, a stray anti-aliased pixel) becomes its own face with its own boundary unless removed first.
-- **Blend slivers** — anti-aliased pixels between two real inks are frequently nearest a *third* palette entry, not either of the two they are blending. Left alone they form thin sliver faces along every boundary in the image, each minting junctions the boundary fitter has to honour (`regions.rs:756-760`). Measured on `mosaic_grid6` (36 flat cells): 128 faces and 368 edges, where the truth has 37 regions (`lib.rs:549-554`).
+- **Blend slivers** — anti-aliased pixels between two real inks are frequently nearest a *third* palette entry, not either of the two they are blending. Left alone they form thin sliver faces along every boundary in the image, each minting junctions the boundary fitter has to honour (`regions.rs:756-760`). Measured on `mosaic_grid6` (36 flat cells): 128 faces and 368 edges, where the truth has 37 regions (`lib.rs:551-556`).
 - **Disconnected same colour** — palette labelling only records colour, not connectivity. Two separate shapes of one ink must become two faces, not one, or every per-face measurement downstream (including gradient fitting) is corrupted.
 - **Bowtie corners** — where two arms of one shape (or two separate shapes) meet at exactly one pixel corner, the labels alone cannot say whether that corner is one connected mark or two shapes touching at a point.
 
 ## Inputs and outputs
 
-Working state through this stage is `labels: Vec<u16>`, one palette index per pixel (`w * h` long), plus the palette `pal: color::Palette`, the composited sRGB image `rgb: &[[f32; 3]]` (composited onto white), the true alpha channel (`source_alpha` when its length matches, else `img.data[..][3]`, `lib.rs:556-561`), and `sigma_noise: f64` (from `coverage::estimate_noise`). All colour distances in this stage are plain Euclidean distances in sRGB `[0, 1]`, on purpose: anti-aliasing mixes encoded values linearly, so a blend pixel lies on the straight sRGB segment between its two inks (`regions.rs:23-28`).
+Working state through this stage is `labels: Vec<u16>`, one palette index per pixel (`w * h` long), plus the palette `pal: color::Palette`, the composited sRGB image `rgb: &[[f32; 3]]` (composited onto white), the true alpha channel (`source_alpha` when its length matches, else `img.data[..][3]`, `lib.rs:558-563`), and `sigma_noise: f64` (from `coverage::estimate_noise`). All colour distances in this stage are plain Euclidean distances in sRGB `[0, 1]`, on purpose: anti-aliasing mixes encoded values linearly, so a blend pixel lies on the straight sRGB segment between its two inks (`regions.rs:23-28`).
 
 - `despeckle` and `absorb_blend_slivers`/`reassign_blend_pixels` **relabel pixels in place** — the array stays `w * h` long, only the label at each pixel changes.
-- `split_components` **changes the indexing scheme**: it turns the label map (one id per ink, or per label stage 05 minted) into a face map (a `u16` per pixel that is now a connected-component id), plus `face_color: Vec<usize>` mapping each face id back to the label it came from (`regions.rs:210-214`). `lib.rs:700-724` then gives each face its label's fill and maps a minted label back to its palette entry.
+- `split_components` **changes the indexing scheme**: it turns the label map (one id per ink, or per label stage 05 minted) into a face map (a `u16` per pixel that is now a connected-component id), plus `face_color: Vec<usize>` mapping each face id back to the label it came from (`regions.rs:210-214`). `lib.rs:702-726` then gives each face its label's fill and maps a minted label back to its palette entry.
 - `merge_saddle_faces` **may reduce the number of faces in use** by unioning face ids at resolved corners. Only `labels` is rewritten; `face_fill`, `face_color` and `n_faces` are returned unchanged, so absorbed faces keep their (now unused) entries (`regions.rs:75-77`).
 
 ## How it works
@@ -42,9 +42,9 @@ Working state through this stage is `labels: Vec<u16>`, one palette index per pi
 
 `min_size` is `opts.min_region`, described below.
 
-### Blend absorption (`blend_absorb`, `lib.rs:547-584`)
+### Blend absorption (`blend_absorb`, `lib.rs:549-586`)
 
-Two passes, both skipped when `INKVEC_NO_ABSORB` is set (`lib.rs:555`):
+Two passes, both skipped when `INKVEC_NO_ABSORB` is set (`lib.rs:557`):
 
 **`absorb_blend_slivers` (`regions.rs:754-820`).** Runs at most two rounds, because dissolving one sliver can leave a neighbouring one thinner or bounded by fewer inks (`regions.rs:768-771`). Each round finds the components once (`SliverRound`, `regions.rs:822-859`), visits them in raster order, and lets each edit be seen by later components in the same round. The three tests, each on counts rather than colours so that one noisy pixel cannot swing them, are listed on `absorb_sliver` (`regions.rs:673-752`):
 1. **Thin**: fewer than 20 % of its pixels are interior (`5 · interior < area`; a pixel is interior when all its in-image 4-neighbours are in the component), and it has at least one neighbour. "A blob with a real interior is a shape, not a seam."
@@ -60,7 +60,7 @@ On success each pixel moves to its own dominant ink (`sliver_destinations`, `reg
 - The pixel moves to the dominant ink of its nearest convex `mixture()` of those inks (pairs and triples) only when all three hold: that ink differs from its current one; the residual `r <= tol` with the same `tol`; and `r < 0.5 · |c − own|`, "the blend explains the pixel at least twice as well as the ink it has, so a pixel that is a plausible match for its own ink is left alone" (`regions.rs:938-941`, test at `regions.rs:1018`).
 - Each round decides pixels from the labels as the round found them, in parallel with `rayon`, and then applies the moves, so the result does not depend on scan order. A decision reads only the pixel's 3x3 neighbourhood, so after the first round only the neighbourhoods of the pixels that just moved are decided again (`relabel_rounds`, `regions.rs:861-927`); every other pixel would decide "stay" as it did before. "Not from the literature: a plain worklist, because the moves after the first round are few (on the screen set 94 % of them happen in round one)".
 
-If either pass changed anything, `despeckle` is run again (`lib.rs:580-582`) to clean up whatever the reassignment left behind.
+If either pass changed anything, `despeckle` is run again (`lib.rs:582-584`) to clean up whatever the reassignment left behind.
 
 ### Split into connected faces (`split`, `split_components`, `regions.rs:210-242`)
 
@@ -79,7 +79,7 @@ Measured (w2-robust report, section 4, 2026-10-03): on the r2-product `noise_102
 
 ### Saddle resolution (`saddles`, `merge_saddle_faces`, `regions.rs:46-203`)
 
-**An experiment**: compiled only with the `research` feature (`regions.rs:78`, call site `lib.rs:1087-1101`), and even then a no-op unless `INKVEC_SADDLE` is set, or when the image is narrower or shorter than 2 px (`regions.rs:91-93`). See Environment overrides.
+**An experiment**: compiled only with the `research` feature (`regions.rs:78`, call site `lib.rs:1062-1076`), and even then a no-op unless `INKVEC_SADDLE` is set, or when the image is narrower or shorter than 2 px (`regions.rs:91-93`). See Environment overrides.
 
 For every interior pixel corner `(i, j)` where `1 <= i < w`, `1 <= j < h`, look at the four pixels meeting there: `nw = (i-1,j-1)`, `ne = (i,j-1)`, `sw = (i-1,j)`, `se = (i,j)`.
 
@@ -99,7 +99,7 @@ For every interior pixel corner `(i, j)` where `1 <= i < w`, `1 <= j < h`, look 
 
 After the scan, every pixel's label is rewritten to its union-find root (`regions.rs:193-195`). Absorbed face ids are left in `face_fill`, `face_color` and `n_faces`, unused, rather than renumbered (`regions.rs:75-77`).
 
-`planar::build`, called immediately afterward (`lib.rs:1105`), is what turns a merged corner into two boundary points instead of one junction: `split_saddle_corners` (`planar.rs:185-270`) gives the two faces on the cut diagonal their own copy of a degree-4 corner when exactly one diagonal is a single face, and leaves a corner whose diagonals are both one face, or neither, as a junction (`planar.rs:235-237`). "Which diagonal is one face is settled upstream, in `merge_saddle_faces`, where the image can be consulted" (`planar.rs:207-210`). The rule is covered by `planar.rs`'s `saddle_tests` module (`planar.rs:1312-1391`): `four_inks_meeting_at_a_corner_stay_a_junction` confirms an unreadable four-way corner keeps its junction, and `a_corner_two_shapes_share_becomes_two_points` / `splitting_gives_each_shape_its_own_copy_of_the_corner` confirm that once one diagonal is a single face, the corner becomes two independent points, one per touching shape, and every edge still separates exactly the two faces it did before.
+`planar::build`, called immediately afterward (`lib.rs:1080`), is what turns a merged corner into two boundary points instead of one junction: `split_saddle_corners` (`planar.rs:185-270`) gives the two faces on the cut diagonal their own copy of a degree-4 corner when exactly one diagonal is a single face, and leaves a corner whose diagonals are both one face, or neither, as a junction (`planar.rs:235-237`). "Which diagonal is one face is settled upstream, in `merge_saddle_faces`, where the image can be consulted" (`planar.rs:207-210`). The rule is covered by `planar.rs`'s `saddle_tests` module (`planar.rs:1312-1391`): `four_inks_meeting_at_a_corner_stay_a_junction` confirms an unreadable four-way corner keeps its junction, and `a_corner_two_shapes_share_becomes_two_points` / `splitting_gives_each_shape_its_own_copy_of_the_corner` confirm that once one diagonal is a single face, the corner becomes two independent points, one per touching shape, and every edge still separates exactly the two faces it did before.
 
 ## Constants and thresholds
 

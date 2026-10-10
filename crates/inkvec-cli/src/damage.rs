@@ -24,8 +24,17 @@
 //!
 //! These are the three signals that open the palette's soft intake, and a clean render
 //! passes none of them (`color::SOFT_RINGING`'s and `SOFT_INTAKE_EDGE`'s measurements over
-//! the corpus). The ringing and the edge width are measured only once the residual has
-//! fired, so an input the residual already keeps pays nothing more.
+//! the corpus).
+//!
+//! # Order
+//!
+//! The evidence is asked first and the residual only when there is some. The residual is
+//! the costly half: it renders the probe trace at full size. Measured on the gate's
+//! transparent 512 px tier in Fast mode (246 icons, 2026-10-10), `auto` asking the residual
+//! first cost 16.5 ms of CPU per icon on a 31 ms trace (the render and the residual), and the
+//! ringing score 5.5 ms more where the residual fired. Both conditions are needed, so the
+//! order changes no decision, only what a clean input pays: a lossy container is a flag, and
+//! a lossless one costs the ringing score alone.
 
 use inkvec_trace::{color, coverage, Rgba};
 

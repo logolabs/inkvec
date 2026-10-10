@@ -68,6 +68,8 @@ Toolchain and Mathlib are pinned in `lean-toolchain` and `lake-manifest.json`
 | `Noise` | `strip_unbiased`, `strip_variance` | zero-mean pixel noise leaves the column sum unbiased, variance `k·σ²` | `strip.rs` |
 | `Noise` | `face_value_noise`, `point_from_means_noise` | the face value has noise gain `25/36`, the point correction `113/96` | `strip.rs` |
 | `Supersampling` | `subCount_close`, `ss_column_sum_close` | under `n × n` point supersampling the column sum is the `n`-point midpoint rule of the boundary to within `1/(2n)` px | the 8x8 corpus of `bench/ci_gate.py` |
+| `Gen.Expr` | `evalQ_sound`, `evalI_sound`, `nonneg_of_evalI` | a generated checker's exact rational value is the real value; its outward-rounded interval contains the real value; an interval with a non-negative lower end certifies a condition `e ≥ 0` | `crates/inkvec-verified` (`q.rs`, `iv.rs`) |
+| `Gen.Strip` | `histopolateK_eq`, `stripResidualK_eq`, `stripResidual_on_cubic` | the generated stencil is `histopolate`; the generated residual vanishes exactly where the vertex, moved along its normal, lies on the cubic the column sums determine | `strip.rs` `histopolate`, `certified` |
 | `Naturality` | `natural_model_closer`, `natural_model_gain` | **a merge that keeps the truth drawable never costs fidelity**: least squares onto `K ≤ L` with the truth in `K` is at least as close to it for every noise, by exactly the noise in the removed directions | `ribbon/refine/merge.rs` |
 | `Naturality` | `merge_chi2_increase`, `noise_absorbed` | the merge raises the residual by that noise and nothing else; each model dimension keeps one unit of noise variance (`Σᵢ ‖P bᵢ‖² = dim K`), so every surplus parameter costs `σ²` of squared error | the description-length price `λ` per parameter |
 
@@ -95,3 +97,22 @@ empirical claim about real inputs and a chosen metric. What it does establish is
 and checkable: within the box-filter model, which readings are exact, which are biased and
 by how much, what no estimator can recover, and that the parts of inkvec built on these
 theorems compute what the theorems say.
+
+## Generated checkers
+
+The engine's solvers are free; a result a theorem speaks about is used only if a checker
+generated from the definition the theorem is about accepts it
+([`docs/theory/verification.md`](../../docs/theory/verification.md)). `InkvecTheory/Gen/` holds
+the bridge: `Expr`, a straight-line expression language with a real semantics (what theorems
+are about), an exact rational one and an interval one, with their soundness theorems; a
+printer to Rust; and the kernels (`Gen/Strip.lean`). To regenerate:
+
+```bash
+lake build InkvecTheory && lake env lean InkvecTheory/Gen/Emit.lean
+```
+
+which writes `crates/inkvec-verified/src/generated/`. CI runs it and fails on any difference
+from the committed files, so the Rust cannot drift from the definitions. The trusted base is
+stated in `Gen/Expr.lean`: the Rust runtime (`iv.rs`, `q.rs`) implements the operations
+`Enclosing` and ℚ model (IEEE 754's correctly rounded `+ − × ÷ √`, widened one float outward),
+and the printer maps each constructor to one runtime call.

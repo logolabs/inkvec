@@ -202,6 +202,12 @@ The procedure (`strip_along`):
 5. The vertex slides along its lattice normal onto the cubic (Newton, at most 8 steps,
    declining if the normal runs within about 17° of the cubic's tangent or the shift exceeds
    1 px). The edge keeps one point per vertex; the vertex's sigma is computed as before.
+6. The shift is certified: a checker generated from the Lean definition its theorem is
+   about (`stripResidual_on_cubic`; `crates/inkvec-verified`) evaluates the residual
+   `q(s₀ + t·n_u) − t·n_v` in outward-rounded intervals and accepts the shift only if it is
+   provably within `CERT_TOL` = 1e-9 px of zero for the exact real numbers. The cubic
+   stencil `histopolate` is the generated one too, bit for bit the formula it replaced
+   (`docs/theory/verification.md`).
 
 Measured, stage-07 points against exactly known geometry (`bench/theory/inkvec_compare.py`:
 circles, ellipses, straight edges at random angles, rotated squares and regular polygons,

@@ -30,6 +30,8 @@
 //! keeps its points.
 
 use inkvec_core::Point;
+use inkvec_verified::generated::strip as generated;
+use inkvec_verified::iv::Iv;
 
 use super::{RefineCtx, Source, UnmixAxis};
 use crate::gradient::FillModel;
@@ -159,13 +161,35 @@ fn line_mean(
 /// `[0,1]`, `[1,2]` are `m`: the inverse of the histopolation matrix, exact rationals.
 /// Its constant term is the classical fourth-order face value
 /// `(7(m₁ + m₂) - (m₀ + m₃))/12`.
+///
+/// Generated from the Lean definition its exactness theorem is about (`histopolateK`, with
+/// `histopolate_cubic` and `strip_reading_exact`), in the operation order it was written in
+/// here, so the reading is unchanged bit for bit.
 fn histopolate(m: &[f64; 4]) -> [f64; 4] {
-    [
-        (-m[0] + 7.0 * m[1] + 7.0 * m[2] - m[3]) / 12.0,
-        (m[0] - 15.0 * m[1] + 15.0 * m[2] - m[3]) / 12.0,
-        (m[0] - m[1] - m[2] + m[3]) / 4.0,
-        (-m[0] + 3.0 * m[1] - 3.0 * m[2] + m[3]) / 6.0,
-    ]
+    generated::histopolate_f64(m)
+}
+
+/// Largest residual, px, the shift's certificate may leave: `q(s₀ + t·n_u) − t·n_v` for the
+/// cubic `q` the column sums determine ([`certified`]). Newton stops at steps of 1e-12, so a
+/// converged shift is ten thousand times inside it.
+const CERT_TOL: f64 = 1e-9;
+
+/// Whether the shift `t` along `(nu, nv)` from `s0` provably puts the vertex on the cubic
+/// histopolated from the four central means `m[1..5]`, to [`CERT_TOL`]: the generated
+/// interval checker (`stripResidualK`; `stripResidual_on_cubic` says the residual is zero
+/// exactly on that cubic), evaluated in outward-rounded intervals, so a `true` holds for the
+/// exact real numbers and not only for their floating-point rounding. A refusal sends the
+/// vertex to the probes.
+fn certified(m: &[f64; 6], s0: f64, nu: f64, nv: f64, t: f64) -> bool {
+    let x = [m[1], m[2], m[3], m[4], s0, nu, nv, t];
+    let mut ivs = [Iv { lo: 0.0, hi: 0.0 }; 8];
+    for (slot, v) in ivs.iter_mut().zip(x) {
+        match Iv::point(v) {
+            Some(p) => *slot = p,
+            None => return false,
+        }
+    }
+    generated::strip_residual_iv(&ivs).is_some_and(|r| r[0].within(CERT_TOL))
 }
 
 /// Mean of the cubic `c` over the cell `[k, k+1]`.
@@ -304,6 +328,10 @@ fn strip_along(
     }
     if !(t.is_finite() && t.abs() <= 1.0) {
         why(format_args!("shift {t:.3}"));
+        return None;
+    }
+    if !certified(&means, s0, nu, nv, t) {
+        why(format_args!("certificate {t:.4}"));
         return None;
     }
     if ctx.debug {

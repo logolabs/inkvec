@@ -1,5 +1,4 @@
 use super::*;
-use std::collections::BTreeMap;
 
 #[test]
 fn test_emit_bilevel() {

@@ -137,6 +137,9 @@ pub(crate) struct Input<'a> {
     pub(crate) stroke_faces: &'a [usize],
     /// Decimals per written coordinate.
     pub(crate) decimals: usize,
+    /// The image's frame, `(x0, y0, x1, y1)` in the faces' coordinates, when known: no
+    /// completion may fill it ([`CANVAS_NEAR`]).
+    pub(crate) canvas: Option<(f64, f64, f64, f64)>,
 }
 
 /// How close to the canvas's edge, as a share of its side, a completed shape counts as
@@ -403,7 +406,7 @@ fn complete_face(
     // is the page (and whether the artist drew one at all) is the emitter's decision, not a
     // completion's. On an opaque intake a logo touching the frame was otherwise completed to
     // a black canvas with the white page painted over it in pieces.
-    let canvas = all_faces.bbox();
+    let canvas = inp.canvas;
     let fills_canvas = |region: &Region| -> bool {
         match (canvas, region.bbox()) {
             (Some(c), Some(r)) => {

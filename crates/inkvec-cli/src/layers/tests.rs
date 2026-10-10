@@ -48,6 +48,11 @@ fn run(
         cost_now: &cost,
         strokes,
         stroke_faces: &[],
+        // The faces' own box stands for the image's frame.
+        canvas: faces.iter().flatten().fold(None, |b, &(x, y)| {
+            let (x0, y0, x1, y1) = b.unwrap_or((x, y, x, y));
+            Some((x0.min(x), y0.min(y), x1.max(x), y1.max(y)))
+        }),
         decimals,
     };
     complete(&inp)

@@ -1342,6 +1342,7 @@ fn complete_layers(
         cost_now: &cost_now,
         strokes: &strokes,
         stroke_faces: &stroke_faces,
+        canvas: Some((-0.5, -0.5, doc.w as f64 - 0.5, doc.h as f64 - 0.5)),
         decimals,
     });
     let debug = inkvec_core::env::number("INKVEC_COMPLETION_DEBUG").unwrap_or(0.0);

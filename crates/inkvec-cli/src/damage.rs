@@ -28,8 +28,9 @@
 //!
 //! # Order
 //!
-//! The evidence is asked first and the residual only when there is some. The residual is
-//! the costly half: it renders the probe trace at full size. Measured on the gate's
+//! The evidence is asked first and the residual only when there is some; without evidence
+//! `--restore auto` makes no probe at all and the input takes the plain path. The residual
+//! is the costly half: it needs the probe trace, rendered at full size. Measured on the gate's
 //! transparent 512 px tier in Fast mode (246 icons, 2026-10-10), `auto` asking the residual
 //! first cost 16.5 ms of CPU per icon on a 31 ms trace (the render and the residual), and the
 //! ringing score 5.5 ms more where the residual fired. Both conditions are needed, so the
@@ -40,10 +41,20 @@ use inkvec_trace::{color, coverage, Rgba};
 
 /// Why the input looks compressed, or `None` when nothing says so: `lossy` is the resolved
 /// `--lossy` (`On` for a lossy container; `Auto` when the caller never resolved it, which
-/// reads as "not known"), and the ringing is measured on the image over white.
-pub(crate) fn compressed(img: &Rgba, lossy: inkvec_sr::Mode) -> Option<&'static str> {
+/// reads as "not known"), and the ringing is measured on the image over white when `pixels`
+/// asks for it.
+///
+/// Fast mode does not: its whole trace of a 512 px icon costs about 31 ms of CPU, and the
+/// ringing score 2.5 ms of it (2.7 ms on the opaque tier, 0.17 ms at 128 px; best of three,
+/// 2026-10-10), which `auto` would add to every clean PNG. The container is a flag. What
+/// Fast gives up is a JPEG re-saved as PNG: on the `web` tier's own pixels the score passes
+/// the gate on 186 of 246 icons, and on the gate's clean tiers on none (128ss, 512ss, 512ssop).
+pub(crate) fn compressed(img: &Rgba, lossy: inkvec_sr::Mode, pixels: bool) -> Option<&'static str> {
     if lossy == inkvec_sr::Mode::On {
         return Some("lossy container");
+    }
+    if !pixels {
+        return None;
     }
     let rgb = img.composited([1.0, 1.0, 1.0]);
     let gate = if img.width.min(img.height) >= color::RINGING_MIN_DIM {
@@ -57,7 +68,7 @@ pub(crate) fn compressed(img: &Rgba, lossy: inkvec_sr::Mode) -> Option<&'static 
 /// Why the input looks compressed or resampled, or `None`: [`compressed`], or edges wider
 /// than a native render's.
 pub(crate) fn soft(img: &Rgba, lossy: inkvec_sr::Mode) -> Option<&'static str> {
-    compressed(img, lossy).or_else(|| {
+    compressed(img, lossy, true).or_else(|| {
         let rgb = img.composited([1.0, 1.0, 1.0]);
         (coverage::intake_scale(&rgb, img.width, img.height) > color::SOFT_INTAKE_EDGE)
             .then_some("wide edges")
@@ -85,13 +96,15 @@ mod tests {
     #[test]
     fn a_clean_render_shows_no_damage_and_a_lossy_container_does() {
         let img = clean(64, 64);
-        assert_eq!(compressed(&img, inkvec_sr::Mode::Off), None);
-        assert_eq!(compressed(&img, inkvec_sr::Mode::Auto), None);
+        assert_eq!(compressed(&img, inkvec_sr::Mode::Off, true), None);
+        assert_eq!(compressed(&img, inkvec_sr::Mode::Auto, true), None);
         assert_eq!(soft(&img, inkvec_sr::Mode::Off), None);
-        assert_eq!(
-            compressed(&img, inkvec_sr::Mode::On),
-            Some("lossy container")
-        );
+        for pixels in [true, false] {
+            assert_eq!(
+                compressed(&img, inkvec_sr::Mode::On, pixels),
+                Some("lossy container")
+            );
+        }
         assert_eq!(soft(&img, inkvec_sr::Mode::On), Some("lossy container"));
     }
 }

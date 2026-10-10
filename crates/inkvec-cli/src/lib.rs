@@ -1034,20 +1034,22 @@ fn restore_prepass(
     }
     let mut auto_probe = None;
     if args.restore == inkvec_restore::Mode::Auto {
-        inkvec_core::progress::note(|| {
-            "a first trace, to see whether the denoiser is needed".into()
-        });
         // The residual alone reads smooth shading in clean art as damage, so `auto` also
         // needs the file or the pixels to say the input was compressed (see `damage`). That
         // evidence is asked first: it is the cheap half (a flag, or the ringing score), while
-        // the residual renders the probe at full size, so a clean input never pays for it.
-        let evidence = damage::compressed(&pass.img, args.lossy);
-        let probe = trace_once(&pass.img, args)?;
-        let Some(why) = evidence else {
+        // the residual needs a probe trace rendered at full size. Without it there is nothing
+        // to decide, so no probe is made and the input takes the plain path: a clean input
+        // pays the evidence alone, and its trace is the plain one by construction. Fast mode
+        // reads the container only (`damage::compressed`).
+        let pixels = args.mode != TraceMode::Fast;
+        let Some(why) = damage::compressed(&pass.img, args.lossy, pixels) else {
             pass.note = Some("restore       no sign of compression; traced directly".into());
-            pass.probe = Some(probe);
             return Ok(pass);
         };
+        inkvec_core::progress::note(|| {
+            "a first trace, to see whether the denoiser is needed".into()
+        });
+        let probe = trace_once(&pass.img, args)?;
         let decision = inkvec_restore::decide(
             &pass.img,
             &probe.0,

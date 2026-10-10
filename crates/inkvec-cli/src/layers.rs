@@ -139,6 +139,11 @@ pub(crate) struct Input<'a> {
     pub(crate) decimals: usize,
 }
 
+/// How close to the canvas's edge, as a share of its side, a completed shape counts as
+/// filling it ([`complete_face`] refuses those): 2 %, so a logo that touches the frame on one
+/// side and comes within a few pixels of it on the others is not made the page.
+const CANVAS_NEAR: f64 = 0.02;
+
 /// Whether every ring face `f` draws is one edge fitted by a primitive.
 fn is_primitive_face(inp: &Input, f: usize) -> bool {
     let Some(rings) = inp.order.get(f) else {
@@ -394,12 +399,27 @@ fn complete_face(
     let mut best: Option<Completion> = None;
     // A face written as a primitive gets no underlap, so a tie buys it nothing.
     let prim_now = is_primitive_face(inp, f);
+    // Never the whole canvas: a face completed to the frame becomes the page, and which face
+    // is the page (and whether the artist drew one at all) is the emitter's decision, not a
+    // completion's. On an opaque intake a logo touching the frame was otherwise completed to
+    // a black canvas with the white page painted over it in pieces.
+    let canvas = all_faces.bbox();
+    let fills_canvas = |region: &Region| -> bool {
+        match (canvas, region.bbox()) {
+            (Some(c), Some(r)) => {
+                let near = CANVAS_NEAR * (c.2 - c.0).max(c.3 - c.1);
+                r.0 <= c.0 + near && r.1 <= c.1 + near && r.2 >= c.2 - near && r.3 >= c.3 - near
+            }
+            _ => false,
+        }
+    };
     let mut consider = |shape: Shape, kind: &str, after: f64, allow: f64, region: &Region| {
         // Never more than the face writes now. A tie is kept: the completed face reaches under
         // its cover and is spared the underlap, which only adds numbers.
         if after > before + allow
             || (prim_now && after >= before)
             || best.as_ref().is_some_and(|b| b.after <= after)
+            || fills_canvas(region)
         {
             return;
         }

@@ -955,6 +955,25 @@ pub fn measure_noise(
     measure_noise_with(map, rgb, faces, sigma_noise, lossy, fold)
 }
 
+/// The colour path's last step: a soft or lossy intake's noise sits at its edges, where
+/// flat-region estimates cannot see it, so it is measured there ([`measure_noise`]) into
+/// [`ColorTrace::noise`](crate::ColorTrace::noise). A clean intake (`soft` false) is
+/// returned as it came, without measuring anything.
+pub(crate) fn with_noise(
+    mut ct: crate::ColorTrace,
+    rgb: &[[f32; 3]],
+    soft: bool,
+    lossy: bool,
+    sw: &mut crate::Stopwatch,
+) -> crate::ColorTrace {
+    if soft {
+        let faces: Vec<FillModel> = ct.face_fill.iter().map(|f| f.model.clone()).collect();
+        ct.noise = measure_noise(&mut ct.map, rgb, &faces, ct.sigma_noise, lossy);
+        sw.mark("noise");
+    }
+    ct
+}
+
 /// [`measure_noise`], with the fold into the per-point uncertainties chosen by the caller.
 pub fn measure_noise_with(
     map: &mut PlanarMap,

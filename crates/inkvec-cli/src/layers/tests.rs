@@ -65,10 +65,20 @@ fn an_l_under_the_square_in_its_corner_completes_to_the_whole_square() {
         (0.0, 20.0),
     ];
     let corner = vec![(10.0, 0.0), (20.0, 0.0), (20.0, 10.0), (10.0, 10.0)];
-    let got = run(&[l, corner], &[Some(0), Some(1)], &[true, false], &[]);
+    // Both on a page larger than they are, painted first.
+    let page = vec![(-20.0, -20.0), (40.0, -20.0), (40.0, 40.0), (-20.0, 40.0)];
+    let got = run(
+        &[l.clone(), corner.clone(), page],
+        &[Some(1), Some(2), Some(0)],
+        &[true, false, false],
+        &[],
+    );
     let c = got.get(&0).expect("the L is completed");
     assert!(c.after < c.before, "{c:?}");
     assert!(c.after <= 6.0, "a square writes six numbers: {c:?}");
+    // Alone, the two fill the canvas: completed to the square, the L would become the page.
+    let alone = run(&[l, corner], &[Some(0), Some(1)], &[true, false], &[]);
+    assert!(alone.is_empty(), "{alone:?}");
 }
 
 #[test]

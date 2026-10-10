@@ -18,6 +18,8 @@ import InkvecTheory.Gen.Rust
 import InkvecTheory.Gen.Strip
 import InkvecTheory.Design.Layers
 import InkvecTheory.Gen.Design
+import InkvecTheory.Windows
+import InkvecTheory.Gen.Evidence
 
 /-!
 # Inkvec theory: inverting box-filter rasterisation

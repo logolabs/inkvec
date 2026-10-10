@@ -81,6 +81,7 @@ pub mod coverage;
 #[cfg(feature = "research")]
 pub mod decode;
 pub mod diag;
+pub mod evidence;
 pub mod fast;
 pub mod gradient;
 #[cfg(feature = "research")]

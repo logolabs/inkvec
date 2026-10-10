@@ -68,4 +68,13 @@ open Inkvec
 #print axioms Inkvec.Design.junction_residue
 #print axioms Inkvec.Gen.spanWithinK_eq
 #print axioms Inkvec.Gen.spanWithin_meaning
+#print axioms Inkvec.Gen.spanLinkK_eq
+#print axioms Inkvec.Gen.chain_cover
 #print axioms Inkvec.Gen.line_cover
+#print axioms Inkvec.window_sum_eq_area
+#print axioms Inkvec.trapezoid_integral
+#print axioms Inkvec.Gen.trapezoidK_integral
+#print axioms Inkvec.Gen.windowTermK_eq
+#print axioms Inkvec.Gen.fourthDiff_cubic
+#print axioms Inkvec.Gen.fourthDiff_side
+#print axioms Inkvec.Gen.cornerExcessK_eq

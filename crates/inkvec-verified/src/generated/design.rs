@@ -29,3 +29,25 @@ pub fn span_within_q(x: &[Q; 5]) -> Option<[Q; 2]> {
         q::add(q::sub(x[3], x[1])?, x[4])?,
     ])
 }
+
+/// For `x = [p₁, q₀, s]`: `p₁ − q₀ + 2s`, non-negative exactly when a span ending at `p₁` and the next one starting at `q₀`, each widened by `s`, touch (`chain_cover`).
+#[inline]
+pub fn span_link_f64(x: &[f64; 3]) -> [f64; 1] {
+    [
+        ((x[0] - x[1]) + (x[2] + x[2])),
+    ]
+}
+
+/// [`span_link_f64`] as an enclosure: contains the exact value, or `None` (a refusal).
+pub fn span_link_iv(x: &[Iv; 3]) -> Option<[Iv; 1]> {
+    Some([
+        iv::add(iv::sub(x[0], x[1])?, iv::add(x[2], x[2])?)?,
+    ])
+}
+
+/// [`span_link_f64`] exactly, or `None` (an overflow, a division by zero, a square root).
+pub fn span_link_q(x: &[Q; 3]) -> Option<[Q; 1]> {
+    Some([
+        q::add(q::sub(x[0], x[1])?, q::add(x[2], x[2])?)?,
+    ])
+}

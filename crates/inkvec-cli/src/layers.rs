@@ -317,9 +317,10 @@ fn complete_face(inp: &Input, f: usize, e_now: &Region, above: &Region) -> Optio
         if after > before + allow || best.as_ref().is_some_and(|b| b.after <= after) {
             return;
         }
-        let certified = check::certify_completion(&l, region, &h);
+        // The solver proposes only what its own measure passes; the checker decides.
+        let m = check::measure(&l, region, &h);
+        let certified = m.holds() && check::certify_completion(&l, region, &h);
         if trace() {
-            let m = check::measure(&l, region, &h);
             eprintln!(
                 "layers face {f}: {} -> {after}: lost {:.3} spilled {:.3} certified {certified}",
                 match &shape {

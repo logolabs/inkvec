@@ -8,34 +8,39 @@
 //! visible point of the picture unchanged exactly when `V ⊆ E ⊆ V ∪ U`.
 //!
 //! The check runs on the scan lines of [`super::region`]. On each line, each span of the
-//! inner region must lie in one span of the outer region, widened by [`SPAN_SLACK`] at each
-//! end. The solver ([`propose_cover`]) names, for every inner span, the outer span it claims
-//! contains it: the certificate. The checker ([`check_cover`]) walks every inner span
-//! itself, takes the claimed outer span, and accepts the pair only when both outputs of the
-//! generated kernel `inkvec_verified::generated::design::span_within_iv` are non-negative
-//! (Lean: `Inkvec.Gen.spanWithinK`, its meaning `spanWithin_meaning`; the fold over a line
-//! is `line_cover`). The enclosure is outward rounded, so an accepted pair holds in exact
-//! arithmetic; a refusal (`None`) rejects the completion and the face keeps its shape.
+//! inner region must lie in a chain of consecutive spans of the outer region, each widened
+//! by [`SPAN_SLACK`] at both ends, neighbours touching once widened (regions computed from
+//! different polygons leave cracks of a thousandth of a pixel where they meet). The solver
+//! ([`propose_cover`]) names, for every inner span, the first and last outer span of its
+//! chain: the certificate. The checker ([`check_cover`]) walks every inner span itself and
+//! accepts it only when the generated kernels say so: `span_within_iv` against the chain's
+//! first start and last end, `span_link_iv` between neighbours, every output non-negative
+//! (`inkvec_verified::generated::design`; Lean: `Inkvec.Gen.spanWithinK`, `spanLinkK`, their
+//! meaning `chain_cover` and the fold over a line `line_cover`). The enclosures are outward
+//! rounded, so what is accepted holds in exact arithmetic; a refusal (`None`) rejects the
+//! completion and the face keeps its shape.
 //!
 //! What is trusted rather than checked: the scan conversion of the shapes into spans
 //! ([`super::region::Region::from_polygons`], flattened within [`super::shape::FLAT_TOL`]) and
 //! the region algebra that builds `V` and `U`. The containment of the spans is checked.
 
-use inkvec_verified::generated::design::span_within_iv;
+use inkvec_verified::generated::design::{span_link_iv, span_within_iv};
 use inkvec_verified::iv::Iv;
 
 use super::region::Region;
 
 /// The most a scan line may show of `V` outside the completed shape, or of the shape
 /// outside the allowed region, px (summed over the line's crossings): the solver's own
-/// test while it searches ([`Interval::holds`]). A tenth of a pixel: below what a
-/// renderer's anti-aliasing can show at an edge, and above the flattening error of
-/// [`super::shape::FLAT_TOL`] at both ends of a line.
+/// test while it searches ([`Interval::holds`]); it proposes only shapes that pass it. A
+/// tenth of a pixel: below what a renderer's anti-aliasing can show at an edge, and above
+/// the flattening error of [`super::shape::FLAT_TOL`] at both ends of a line.
 pub(crate) const LINE_SLACK: f64 = 0.1;
 
-/// The checker's slack at each end of a span, px: half of [`LINE_SLACK`], so a span
-/// accepted at both ends is out by at most [`LINE_SLACK`] on its line.
-pub(crate) const SPAN_SLACK: f64 = 0.5 * LINE_SLACK;
+/// The checker's slack at each crossing of a scan line, px: what the certificate states is
+/// that no boundary of the shape sits more than this far, along the line, outside where the
+/// interval puts it. The solver's per-line test ([`LINE_SLACK`], summed over a line's
+/// crossings) implies it, so the checker refuses nothing the solver's search meant.
+pub(crate) const SPAN_SLACK: f64 = LINE_SLACK;
 
 /// The solver's measure of how far a shape is from the interval. Not a verdict: it steers
 /// the search and the diagnostics; [`certify_completion`] decides.
@@ -63,23 +68,26 @@ pub(crate) fn measure(lower: &Region, e: &Region, upper: &Region) -> Interval {
 }
 
 /// A certificate that `inner ⊆ outer` on every scan line: for line `k0 + i`, `rows[i][n]`
-/// is the index of the span of `outer` claimed to contain the `n`-th span of `inner`.
+/// is the first and last index of the chain of `outer`'s spans claimed to contain the `n`-th
+/// span of `inner`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Cover {
     k0: i32,
-    rows: Vec<Vec<usize>>,
+    rows: Vec<Vec<(usize, usize)>>,
 }
 
 impl Cover {
-    fn row(&self, k: i32) -> Option<&[usize]> {
+    fn row(&self, k: i32) -> Option<&[(usize, usize)]> {
         let i = usize::try_from(k - self.k0).ok()?;
         self.rows.get(i).map(Vec::as_slice)
     }
 }
 
-/// **The solver's certificate**: for each span of `inner`, the span of `outer` on the same
-/// line that overlaps it most (the first, when none does; the checker then refuses).
-pub(crate) fn propose_cover(inner: &Region, outer: &Region) -> Cover {
+/// **The solver's certificate**: for each span `[a₀, a₁]` of `inner`, the outer spans on
+/// the same line from the last one starting at or before `a₀ + slack` to the first one
+/// ending at or after `a₁ − slack` (the first span, when there is none; the checker then
+/// refuses).
+pub(crate) fn propose_cover(inner: &Region, outer: &Region, slack: f64) -> Cover {
     let lines = inner.lines();
     let rows = lines
         .clone()
@@ -89,14 +97,11 @@ pub(crate) fn propose_cover(inner: &Region, outer: &Region) -> Cover {
                 .line(k)
                 .iter()
                 .map(|&(a0, a1)| {
-                    let mut best = (0usize, f64::NEG_INFINITY);
-                    for (j, &(b0, b1)) in outs.iter().enumerate() {
-                        let overlap = a1.min(b1) - a0.max(b0);
-                        if overlap > best.1 {
-                            best = (j, overlap);
-                        }
-                    }
-                    best.0
+                    let first = outs.iter().rposition(|&(b0, _)| b0 <= a0 + slack).unwrap_or(0);
+                    let last = (first..outs.len())
+                        .find(|&j| outs[j].1 >= a1 - slack)
+                        .unwrap_or(first);
+                    (first, last)
                 })
                 .collect()
         })
@@ -107,10 +112,11 @@ pub(crate) fn propose_cover(inner: &Region, outer: &Region) -> Cover {
     }
 }
 
-/// **The checker**: every span of `inner`, on every line, lies in the span of `outer` the
-/// certificate names, widened by `slack` at each end, as decided by the generated kernel
-/// `span_within_iv` on outward-rounded intervals. Any refusal, missing entry or index out of
-/// range is a rejection.
+/// **The checker**: every span of `inner`, on every line, lies in the chain of `outer`'s
+/// spans the certificate names, each widened by `slack` at both ends, as decided by the
+/// generated kernels on outward-rounded intervals: `span_within_iv` against the chain's
+/// first start and last end, `span_link_iv` between neighbours. Any refusal, missing entry or
+/// index out of range is a rejection.
 pub(crate) fn check_cover(inner: &Region, outer: &Region, slack: f64, cert: &Cover) -> bool {
     let Some(s) = Iv::point(slack) else {
         return false;
@@ -127,18 +133,30 @@ pub(crate) fn check_cover(inner: &Region, outer: &Region, slack: f64, cert: &Cov
             return false;
         }
         let outs = outer.line(k);
-        for (&(a0, a1), &j) in spans.iter().zip(row) {
-            let Some(&(b0, b1)) = outs.get(j) else {
+        for (&(a0, a1), &(first, last)) in spans.iter().zip(row) {
+            if first > last || last >= outs.len() {
                 return false;
-            };
-            let (Some(a0), Some(a1), Some(b0), Some(b1)) =
-                (Iv::point(a0), Iv::point(a1), Iv::point(b0), Iv::point(b1))
-            else {
+            }
+            let (Some(a0), Some(a1), Some(b0), Some(b1)) = (
+                Iv::point(a0),
+                Iv::point(a1),
+                Iv::point(outs[first].0),
+                Iv::point(outs[last].1),
+            ) else {
                 return false;
             };
             match span_within_iv(&[a0, a1, b0, b1, s]) {
                 Some([lo, hi]) if lo.is_nonneg() && hi.is_nonneg() => {}
                 _ => return false,
+            }
+            for j in first..last {
+                let (Some(p1), Some(q0)) = (Iv::point(outs[j].1), Iv::point(outs[j + 1].0)) else {
+                    return false;
+                };
+                match span_link_iv(&[p1, q0, s]) {
+                    Some([g]) if g.is_nonneg() => {}
+                    _ => return false,
+                }
             }
         }
     }
@@ -151,8 +169,8 @@ pub(crate) fn check_cover(inner: &Region, outer: &Region, slack: f64, cert: &Cov
 /// [`super::required_region`]) and stays within the upper end (what the face shows and what
 /// is painted over it; [`super::allowed_region`]).
 pub(crate) fn certify_completion(lower: &Region, e: &Region, upper: &Region) -> bool {
-    check_cover(lower, e, SPAN_SLACK, &propose_cover(lower, e))
-        && check_cover(e, upper, SPAN_SLACK, &propose_cover(e, upper))
+    check_cover(lower, e, SPAN_SLACK, &propose_cover(lower, e, SPAN_SLACK))
+        && check_cover(e, upper, SPAN_SLACK, &propose_cover(e, upper, SPAN_SLACK))
 }
 
 /// The gate's parameter count of path data, as `bench/inkvec_bench/svgmodel.py` counts it:
@@ -271,23 +289,31 @@ mod tests {
     #[test]
     fn cover_accepts_containment_and_refuses_a_forged_certificate() {
         let inner = spans(&[(0, 1.0, 2.0), (0, 5.0, 6.0), (1, 1.0, 6.0)]);
-        let outer = spans(&[(0, 0.0, 3.0), (0, 4.98, 7.0), (1, 0.0, 7.0)]);
-        let cert = propose_cover(&inner, &outer);
+        let outer = spans(&[(0, 0.0, 3.0), (0, 4.93, 7.0), (1, 0.0, 7.0)]);
+        let cert = propose_cover(&inner, &outer, SPAN_SLACK);
         assert!(check_cover(&inner, &outer, SPAN_SLACK, &cert));
         // Naming the wrong span is refused, as is a missing line.
         let mut forged = cert.clone();
-        forged.rows[0][1] = 0;
+        forged.rows[0][1] = (0, 0);
         assert!(!check_cover(&inner, &outer, SPAN_SLACK, &forged));
         let mut short = cert.clone();
         short.rows.pop();
         assert!(!check_cover(&inner, &outer, SPAN_SLACK, &short));
         // Out by more than the slack at one end.
-        let wide = spans(&[(0, 1.0, 3.06)]);
-        assert!(!check_cover(&wide, &outer, SPAN_SLACK, &propose_cover(&wide, &outer)));
-        let near = spans(&[(0, 1.0, 3.04)]);
-        assert!(check_cover(&near, &outer, SPAN_SLACK, &propose_cover(&near, &outer)));
-        // A span bridging a gap of the outer region is refused: no one span contains it.
+        let wide = spans(&[(0, 1.0, 3.12)]);
+        assert!(!check_cover(&wide, &outer, SPAN_SLACK, &propose_cover(&wide, &outer, SPAN_SLACK)));
+        let near = spans(&[(0, 1.0, 3.08)]);
+        assert!(check_cover(&near, &outer, SPAN_SLACK, &propose_cover(&near, &outer, SPAN_SLACK)));
+        // A span bridging a gap of the outer region is refused, even when the certificate
+        // claims the chain across it ...
         let bridge = spans(&[(0, 2.0, 5.5)]);
-        assert!(!check_cover(&bridge, &outer, SPAN_SLACK, &propose_cover(&bridge, &outer)));
+        assert!(!check_cover(&bridge, &outer, SPAN_SLACK, &propose_cover(&bridge, &outer, SPAN_SLACK)));
+        let mut claim = propose_cover(&bridge, &outer, SPAN_SLACK);
+        claim.rows[0][0] = (0, 1);
+        assert!(!check_cover(&bridge, &outer, SPAN_SLACK, &claim));
+        // ... and accepted across a crack narrower than twice the slack.
+        let cracked = spans(&[(0, 0.0, 3.0), (0, 3.15, 7.0)]);
+        let across = spans(&[(0, 2.0, 5.5)]);
+        assert!(check_cover(&across, &cracked, SPAN_SLACK, &propose_cover(&across, &cracked, SPAN_SLACK)));
     }
 }

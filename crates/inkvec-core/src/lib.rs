@@ -27,6 +27,7 @@
 
 pub mod env;
 pub mod likelihood;
+pub mod noise;
 pub mod predicates;
 pub mod progress;
 

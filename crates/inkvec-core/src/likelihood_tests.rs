@@ -224,10 +224,9 @@ fn rendered_circle_differs_from_the_true_one() {
         sweep_angle: PI,
     };
     let truth = [Piece::Arc(a)];
-    let drawn = RenderModel {
-        arc_tolerance_px: 0.1,
-    }
-    .as_rendered(&truth);
+    let drawn = RenderModel::usvg().as_rendered(&truth);
+    // The default model draws arcs exactly.
+    assert_eq!(RenderModel::default().as_rendered(&truth), truth.to_vec());
     // The cubic is exact at the ends and the middle of each quarter, and furthest out (by
     // 2.7e-4 r) about 19° from either end: the column at x = -33 meets the circle at
     // y = -94.4, 19.3° from the top.
@@ -256,6 +255,7 @@ fn run_moments_fit_a_quadratic() {
                 sum: m - (lo as f64 - 0.5),
                 var: 1e-6,
                 left_low: true,
+                share: 1.0,
             }
         })
         .collect();
@@ -370,6 +370,143 @@ struct Fixed {
     lattice: bool,
 }
 
+/// The same, saying where each window sits along the edge's points.
+struct Placed {
+    inner: Fixed,
+    at: Vec<f64>,
+}
+
+impl BoundaryLikelihood for Placed {
+    fn edge_count(&self) -> usize {
+        1
+    }
+    fn runs(&self, e: usize) -> &[RunObs] {
+        self.inner.runs(e)
+    }
+    fn render_model(&self) -> RenderModel {
+        RenderModel::default()
+    }
+    fn floor(&self) -> Floor {
+        self.inner.floor
+    }
+    fn edge_on_lattice(&self, _: usize) -> bool {
+        false
+    }
+    fn chi2_local(&self, _: Owner, _: &[(usize, &[Piece])]) -> Chi2 {
+        Chi2::default()
+    }
+    fn junctions(&self) -> &[JunctionReport] {
+        &[]
+    }
+    fn corners(&self) -> &[CornerProposal] {
+        &[]
+    }
+    fn density(&self, _: usize) -> Vec<(f64, f64)> {
+        Vec::new()
+    }
+    fn window_point_index(&self, _: usize) -> Vec<f64> {
+        self.at.clone()
+    }
+}
+
+/// The scorer partitions the windows among any segmentation of the points (each window in
+/// exactly one span, wrapping on a closed edge), and its O(1) moments and fits are the direct
+/// sums.
+#[test]
+fn the_scorer_partitions_and_sums() {
+    let runs: Vec<RunObs> = (0..12)
+        .map(|i| RunObs {
+            window: col(i, 1, 4),
+            s: i as f64,
+            sum: 1.8 + 0.01 * ((i * 7) % 5) as f64,
+            var: 1e-4 * (1 + i % 3) as f64,
+            left_low: true,
+            share: 1.0,
+        })
+        .collect();
+    let at: Vec<f64> = (0..12).map(|i| 0.5 + 1.7 * i as f64).collect(); // in [0, 20)
+    let lik = Placed {
+        inner: Fixed {
+            runs: runs.clone(),
+            floor: Floor::lattice(32),
+            lattice: false,
+        },
+        at,
+    };
+    let sc = EdgeScorer::new(&lik, 0, 20);
+    for cuts in [vec![0, 5, 11, 20], vec![0, 1, 2, 3, 19, 20], vec![0, 20]] {
+        let mut seen = vec![0; 12];
+        for w in cuts.windows(2) {
+            let (a, b) = sc.windows_between_points(w[0], w[1]);
+            for k in a.chain(b) {
+                seen[k] += 1;
+            }
+        }
+        assert!(seen.iter().all(|&c| c == 1), "{cuts:?}: {seen:?}");
+    }
+    // A closed edge cut at points 7 and 15: the second span runs through the seam.
+    let (a1, b1) = sc.windows_between_points(7, 15);
+    let (a2, b2) = sc.windows_between_points(15, 7);
+    let mut seen = vec![0; 12];
+    for k in a1.chain(b1).chain(a2).chain(b2) {
+        seen[k] += 1;
+    }
+    assert!(seen.iter().all(|&c| c == 1), "{seen:?}");
+    // Moments against the direct sums.
+    let m = sc.weight_moments(3..9);
+    for (p, mp) in m.iter().enumerate() {
+        let want: f64 = runs[3..9]
+            .iter()
+            .map(|o| (o.window.line as f64).powi(p as i32) / o.var)
+            .sum();
+        assert!(
+            (mp - want).abs() < 1e-9 * want.abs().max(1.0),
+            "p {p}: {mp} vs {want}"
+        );
+    }
+    let (theta, chi) = sc.best_graph(0..12, 1).expect("line");
+    let (t2, c2) = RunMoments::new(&runs, 1).fit(0..12).expect("line");
+    assert_eq!(theta, t2);
+    assert_eq!(chi, c2);
+    assert!(sc.best_graph(0..12, 3).is_some());
+    let line = [Piece::Line([p(-1.0, 2.3), p(13.0, 2.3)])];
+    assert_eq!(sc.chi2(2..6, &line).m, 4);
+}
+
+/// SVG's endpoint arcs become centre arcs through the same endpoints, with the flags' sense.
+#[test]
+fn svg_arcs_in_centre_form() {
+    let (a, b) = (p(10.0, 0.0), p(0.0, 10.0));
+    for (large, sweep) in [(false, false), (false, true), (true, false), (true, true)] {
+        let Piece::Arc(arc) = Piece::from_svg_arc(a, 10.0, 10.0, 0.0, large, sweep, b) else {
+            panic!("an arc")
+        };
+        let (s, e) = (
+            arc.at(arc.start_angle),
+            arc.at(arc.start_angle + arc.sweep_angle),
+        );
+        assert!(
+            s.dist(a) < 1e-9 && e.dist(b) < 1e-9,
+            "{large} {sweep}: {s:?} {e:?}"
+        );
+        assert_eq!(arc.sweep_angle > 0.0, sweep, "{large} {sweep}");
+        let quarter = (arc.sweep_angle.abs() - PI / 2.0).abs() < 1e-9;
+        assert_eq!(quarter, !large, "{large} {sweep}: {}", arc.sweep_angle);
+    }
+    // Radii too small for the chord are scaled up to a half circle on it.
+    let Piece::Arc(half) =
+        Piece::from_svg_arc(p(0.0, 0.0), 1.0, 1.0, 0.0, false, true, p(4.0, 0.0))
+    else {
+        panic!("an arc")
+    };
+    assert!((half.radii.0 - 2.0).abs() < 1e-9 && (half.sweep_angle.abs() - PI).abs() < 1e-9);
+    // Coincident ends or a zero radius: a line.
+    assert!(matches!(
+        Piece::from_svg_arc(a, 0.0, 3.0, 0.0, false, true, b),
+        Piece::Line(_)
+    ));
+}
+
 impl BoundaryLikelihood for Fixed {
     fn edge_count(&self) -> usize {
         1
@@ -412,6 +549,7 @@ fn a_shared_offset_is_the_floors() {
             sum: 1.8 + 0.01,
             var: 1e-4,
             left_low: true,
+            share: 1.0,
         })
         .collect();
     let line = [Piece::Line([p(-1.0, 2.3), p(11.0, 2.3)])];
@@ -447,6 +585,60 @@ fn a_shared_offset_is_the_floors() {
     assert_eq!((c + c).m, 20);
 }
 
+/// The Kalman filter's χ² and log det are those of the dense covariance
+/// `diag(v) + τ² ρ^|i−j|`, and reduce to the independent and the shared-offset cases.
+#[test]
+fn correlated_chi2_is_the_dense_one() {
+    let r = [0.013, -0.004, 0.021, 0.009, -0.011, 0.017];
+    let v = [1e-4, 2e-4, 1.5e-4, 1e-4, 3e-4, 1e-4];
+    for (tau2, rho) in [
+        (0.0f64, 0.5f64),
+        (4e-4, 0.0),
+        (4e-4, 0.6),
+        (4e-4, 1.0),
+        (1e-2, 1.0),
+    ] {
+        let n = r.len();
+        let sigma: Vec<Vec<f64>> = (0..n)
+            .map(|i| {
+                (0..n)
+                    .map(|j| {
+                        let d = (i as i32 - j as i32).unsigned_abs() as i32;
+                        tau2 * rho.powi(d) + if i == j { v[i] } else { 0.0 }
+                    })
+                    .collect()
+            })
+            .collect();
+        let x = solve_spd(&sigma, &r).expect("positive definite");
+        let want: f64 = x.iter().zip(&r).map(|(a, b)| a * b).sum();
+        // log det from the Cholesky factor's diagonal, by the same elimination.
+        let mut l = vec![vec![0.0; n]; n];
+        let mut logdet = 0.0;
+        for i in 0..n {
+            for j in 0..=i {
+                let s: f64 = (0..j).map(|k| l[i][k] * l[j][k]).sum();
+                if i == j {
+                    l[i][i] = (sigma[i][i] - s).sqrt();
+                    logdet += 2.0 * l[i][i].ln();
+                } else {
+                    l[i][j] = (sigma[i][j] - s) / l[j][j];
+                }
+            }
+        }
+        let c = vec![Correlated { tau2, rho }; n];
+        let (chi2, ld) = chi2_correlated(&r, &v, &c);
+        assert!(
+            (chi2 - want).abs() < 1e-9 * want.max(1.0),
+            "tau2 {tau2} rho {rho}: {chi2} vs {want}"
+        );
+        assert!((ld - logdet).abs() < 1e-9, "{ld} vs {logdet}");
+    }
+    // No correlated part: the independent sum.
+    let plain: f64 = r.iter().zip(&v).map(|(a, b)| a * a / b).sum();
+    let (chi2, _) = chi2_correlated(&r, &v, &[]);
+    assert!((chi2 - plain).abs() < 1e-12 * plain);
+}
+
 /// A singular system (the same column three times cannot fix a slope) is refused.
 #[test]
 fn a_singular_fit_is_refused() {
@@ -456,6 +648,7 @@ fn a_singular_fit_is_refused() {
         sum: 1.8,
         var: 1e-4,
         left_low: true,
+        share: 1.0,
     };
     assert!(RunMoments::new(&[o, o, o], 1).fit(0..3).is_none());
     assert!(RunMoments::new(&[o, o, o], 0).fit(0..3).is_some());

@@ -77,6 +77,9 @@ open Inkvec
 #print axioms Inkvec.Gen.line_cover
 #print axioms Inkvec.window_sum_eq_area
 #print axioms Inkvec.trapezoid_integral
+#print axioms Inkvec.window_sum_resampled
+#print axioms Inkvec.blur_affine_profile
+#print axioms Inkvec.blur_quadratic_profile
 #print axioms Inkvec.Gen.trapezoidK_integral
 #print axioms Inkvec.Gen.windowTermK_eq
 #print axioms Inkvec.Gen.fourthDiff_cubic

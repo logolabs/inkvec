@@ -32,8 +32,14 @@ Per condition, three axes are gated against the per-icon baseline of the same co
 * **dE00**    colour error against the artist's render, family-macro mean, margin `MARGINS`
 * **turning** control-polygon turning per unit length, plain mean (`inkvec_bench/turning.py`)
 * **ratio**   parameters against the artist's file, family-macro mean
+* **geom**    geometric match to the artist's file, family-macro mean: the mean distance,
+              in input pixels, between the trace's edges and the artist's, read as the area
+              where the two files, drawn flat in the artist's colours, disagree, over the
+              length of the artist's edges (`inkvec_bench/geomatch.py`). An edge moved by
+              `δ` reads `δ`; the artist's own file reads 0
 
-and `self_res` is reported. For each axis, `bench/gate_stats.py` computes the relative
+and `self_res` and `geom_far` (the part of `geom` more than an input pixel from any artist
+edge: missing or extra features) are reported. For each axis, `bench/gate_stats.py` computes the relative
 change of the aggregate with a paired, family-stratified bootstrap interval (Koehn 2004)
 and takes a non-inferiority verdict (Lakens 2017) against the effective margin
 max(`MARGINS`, minimum detectable effect): the change passes when the one-sided 95 % upper
@@ -98,7 +104,7 @@ BASELINE_DIR = ROOT / "bench" / "gate" / "baselines"      # per-platform, per-ic
 LEGACY_LIMITS = {"de00": 0.01, "turning": 0.01, "ratio": 0.05}
 LEGACY_CONDITION = "quality-128ss"
 #: Layout of the per-platform baseline files; bumped on an incompatible change.
-BASELINE_FORMAT = 1
+BASELINE_FORMAT = 2
 
 
 @dataclass(frozen=True)
@@ -121,7 +127,8 @@ CONDITIONS = (
 BY_NAME = {c.name: c for c in CONDITIONS}
 
 #: How each axis is aggregated over the set (see gate_stats.compare).
-AGGREGATE = {"de00": "macro", "turning": "micro", "ratio": "macro", "self_res": "micro"}
+AGGREGATE = {"de00": "macro", "turning": "micro", "ratio": "macro", "self_res": "micro",
+             "geom": "macro", "geom_far": "macro"}
 #: The relative rise each gated axis may show at its one-sided 95 % upper bound. Chosen on
 #: the replay of the 0.2.4 decisions through this rule (REPORT of agent w2-gate,
 #: 2026-10-02): at 2 % every recorded 0.2.4 change passes at every condition, while at 1 %
@@ -135,14 +142,14 @@ AGGREGATE = {"de00": "macro", "turning": "micro", "ratio": "macro", "self_res": 
 #: stays at 2 %), and asked that the gate never answer "inconclusive": gate_stats.decide
 #: floors each margin at the comparison's minimum detectable effect (about 4 % for a broad
 #: edit at 512 px), so the strict margin holds wherever the set can test it.
-MARGINS = {"de00": 0.01, "turning": 0.02, "ratio": 0.03}
+MARGINS = {"de00": 0.01, "turning": 0.02, "ratio": 0.03, "geom": 0.02}
 GATED_AXES = tuple(MARGINS)
 #: The Ladder's step (gate_stats.decide): a "better" verdict, the only one that moves a
 #: baseline, needs its one-sided upper bound below -0.1 %. Comparing the Linux and Windows
 #: builds of v0.2.4 read "better" on fast-512ss dE00 at -0.00 % (two icons, both a hair
 #: lower) without it.
 LADDER_STEP = 0.001
-REPORTED_AXES = GATED_AXES + ("self_res",)
+REPORTED_AXES = GATED_AXES + ("self_res", "geom_far")
 
 
 # --------------------------------------------------------------------------- provenance
@@ -199,6 +206,7 @@ def score_condition(exe: Path, cond: Condition, items: list[dict], workers: int)
                            workers=workers, use_cache=False)
     rows = {f"{i.corpus}/{i.stem}": {"corpus": i.corpus, "de00": i.de00, "turning": i.turning,
                                      "ratio": i.ratio, "self_res": i.self_res,
+                                     "geom": i.geom, "geom_far": i.geom_far,
                                      "sha256": i.sha256[:SHA_CHARS]}
             for i in ss.images}
     print(f"  {cond.name}: {len(rows)} icons in {time.time() - t0:.0f} s"
@@ -227,17 +235,21 @@ SHA_CHARS = 16
 DIGITS = 9
 
 
+#: The scores of a per-icon row in the baseline file, in order; the row ends with the SVG's
+#: hash.
+ROW_AXES = ("de00", "turning", "ratio", "self_res", "geom", "geom_far")
+
+
 def pack_rows(rows: dict) -> dict:
-    """Per-icon rows as compact lists, [de00, turning, ratio, self_res, sha256], for the file."""
+    """Per-icon rows as compact lists, [*ROW_AXES, sha256], for the file."""
     rnd = lambda x: float(f"{x:.{DIGITS}g}")  # noqa: E731
-    return {k: [rnd(r["de00"]), rnd(r["turning"]), rnd(r["ratio"]), rnd(r["self_res"]),
-                r["sha256"][:SHA_CHARS]]
+    return {k: [rnd(r[ax]) for ax in ROW_AXES] + [r["sha256"][:SHA_CHARS]]
             for k, r in sorted(rows.items())}
 
 
 def unpack_rows(packed: dict) -> dict:
-    return {k: {"corpus": k.split("/", 1)[0], "de00": v[0], "turning": v[1], "ratio": v[2],
-                "self_res": v[3], "sha256": v[4]} for k, v in packed.items()}
+    return {k: {"corpus": k.split("/", 1)[0], **dict(zip(ROW_AXES, v[:-1])), "sha256": v[-1]}
+            for k, v in packed.items()}
 
 
 def baseline_document(exe: Path, results: dict) -> dict:

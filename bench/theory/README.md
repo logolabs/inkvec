@@ -12,6 +12,7 @@ readings scored against exactly known geometry.
 | `params_diag.py` | the gate's parameter count of the trace and the artist's file, by element and segment kind, per family and for stroked against filled artwork |
 | `naturality_diag.py` | parameters an artist would not write: collinear vertices, straight cubics, co-circular arcs, open strokes that continue each other |
 | `oracle_cost.py` | the trace against the artist's own file on the input's pixels and the tracer's price per parameter: which icons the objective would rather have the artist's description for (a search error) and which it prefers the trace for (a question for the prior), `docs/theory/optimal.md` §6 |
+| `geom_calibration.py` | the gate's geometric match (`geom`) against dE00 on a disc grown by known amounts in two colour contrasts: `geom` reads the displacement in either colour, dE00 reads the contrast |
 
 ```bash
 cargo build --release -p inkvec-cli
@@ -22,6 +23,7 @@ python3 bench/theory/attribution.py --exe target/release/inkvec --tier 512ss
 python3 bench/theory/params_diag.py --exe target/release/inkvec --tier 512ss
 python3 bench/theory/naturality_diag.py --exe target/release/inkvec --tier 512ss
 python3 bench/theory/oracle_cost.py --exe target/release/inkvec --tier 512ss
+python3 bench/theory/geom_calibration.py
 ```
 
 Coordinates: these scripts put pixel `(i, j)` on `[i, i+1] × [j, j+1]`; inkvec puts pixel

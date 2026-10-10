@@ -31,7 +31,8 @@ def rows(scale: float = 1.0, changed: tuple[str, ...] | None = None) -> dict:
         s = scale if hit else 1.0
         digest = hashlib.sha256(f"{k}-{s if hit else 1.0}".encode()).hexdigest()
         out[k] = {"corpus": it["corpus"], "de00": 0.1 * (1 + n % 5) * s, "turning": 0.04 * s,
-                  "ratio": 1.2 * s, "self_res": 0.003, "sha256": digest}
+                  "ratio": 1.2 * s, "self_res": 0.003, "geom": 0.02 * s, "geom_far": 0.001 * s,
+                  "sha256": digest}
     return out
 
 
@@ -93,8 +94,9 @@ class GateFlowTests(unittest.TestCase):
         self.assertEqual(doc["scorer_version"], ci_gate.svgeval.SCORER_VERSION)
         code, out = run()
         self.assertEqual(code, 0, out)
-        # Three gated axes per condition read "identical"; self_res reads "reported".
-        self.assertEqual(len(re.findall(r"\bidentical\b", out)), 3 * len(ci_gate.CONDITIONS))
+        # Every gated axis of every condition reads "identical"; the others "reported".
+        self.assertEqual(len(re.findall(r"\bidentical\b", out)),
+                         len(ci_gate.GATED_AXES) * len(ci_gate.CONDITIONS))
 
     def test_regression_fails_and_bypass_needs_a_reason(self):
         run = Run(self.tmp, {c.name: rows() for c in ci_gate.CONDITIONS})

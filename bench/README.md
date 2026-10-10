@@ -28,7 +28,7 @@ python tools/prepush.py --gate                                       # build, ha
 Scores the committed 246-icon screen set (under `bench/data`, so this runs from a bare
 checkout) under six conditions: Quality and Fast, each at 128 px (`128ss`), 512 px
 (`512ss`) and 512 px flattened onto white (`512ssop`, an opaque logo). Each condition's
-three axes are compared icon by icon with the per-platform baseline
+four gated axes are compared icon by icon with the per-platform baseline
 `bench/gate/baselines/<os>-<arch>.json`:
 
 | axis | aggregate | margin at the one-sided 95 % upper bound |
@@ -36,6 +36,16 @@ three axes are compared icon by icon with the per-platform baseline
 | dE00 (colour error vs. the artist's file) | family-macro mean | 1 % |
 | turning (control-polygon turning per unit length; `inkvec_bench/turning.py`) | mean | 2 % |
 | parameter ratio vs. the artist's file | family-macro mean | 3 % |
+| geom (mean edge displacement from the artist's file, input px; `inkvec_bench/geomatch.py`) | family-macro mean | 2 % |
+
+`geom` compares the trace with the artist's file as geometry: both drawn flat (no
+anti-aliasing) at four times the input's size, every pixel given the nearest of the
+artist's colours, and the area where they disagree divided by the length of the artist's
+edges. That is the mean distance between the two files' edges: an edge moved by `δ` reads
+`δ` in any colour, where dE00 reads the colour contrast as much as the displacement
+(`bench/theory/geom_calibration.py`: a disc grown by 0.1 px reads geom 0.097 in dark red
+and in pale grey, dE00 0.021 and 0.0018). `geom_far`, the part of it more than an input
+pixel from any artist edge (missing or extra features), and `self_res` are reported.
 
 The change of each aggregate gets a paired, family-stratified bootstrap interval
 (`bench/gate_stats.py`). The gate passes an axis when the interval's one-sided upper bound

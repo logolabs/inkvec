@@ -62,11 +62,13 @@ the installer refuses to replace a pre-push hook it did not write (unless `--for
 repository so the gate runs from a bare checkout) under six conditions: Quality and Fast mode,
 each at 128 px, 512 px with transparency and 512 px flattened onto white (an opaque logo).
 Each condition is compared icon by icon with the per-platform baseline
-`bench/gate/baselines/<os>-<arch>.json`, on three axes:
+`bench/gate/baselines/<os>-<arch>.json`, on four axes:
 
 - **dE00** (colour error against the artist's file), margin 1%
 - **turning** (control-polygon turning per unit length, read command by command), margin 2%
 - **ratio** (parameter count versus the artist's), margin 3%
+- **geom** (geometric match to the artist's file: the mean distance between the trace's
+  edges and the artist's, in input pixels, read as the area between them), margin 2%
 
 The verdict is statistical: a paired bootstrap interval for the change of each axis, and a
 non-inferiority test that passes when the one-sided 95% upper bound stays below the margin.

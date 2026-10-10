@@ -422,6 +422,11 @@ class ImageScore:
     self_res: float = 0.0
     turning: float = 0.0
     mirror: float = 0.0
+    # Geometric match to the artist's file (`inkvec_bench/geomatch.py`): the mean distance,
+    # in input pixels, between the trace's edges and the artist's, by the area between
+    # them; and the part of it more than a pixel from any artist edge.
+    geom: float = 0.0
+    geom_far: float = 0.0
     svg: str = ""
     # SHA-256 of the emitted SVG's bytes. Two builds that emit the same bytes for an icon
     # score it identically, so the gate can tell "unchanged" from "changed by a tie".
@@ -540,7 +545,10 @@ def _init_worker():
 #: points (215 of 246 screen-set traces carry arcs) and one polyline ran through every
 #: subpath; primitives (`<rect>`, `<circle>`, ...) were not read at all. dE00, ratio and
 #: self_res are unchanged.
-SCORER_VERSION = 3
+#:
+#: 4 (2026-10-10): `geom` and `geom_far`, the geometric match to the artist's file
+#: (`inkvec_bench/geomatch.py`), are scored. Every earlier signal is unchanged.
+SCORER_VERSION = 4
 
 
 def _rgb8(img: np.ndarray) -> np.ndarray:
@@ -663,7 +671,7 @@ def cache_save(exe: Path, extra_args, entries: dict) -> None:
 
 
 CACHE_FIELDS = ("de00", "dists", "ratio", "seconds", "corpus", "stem",
-                "self_res", "turning", "mirror", "sha256")
+                "self_res", "turning", "mirror", "geom", "geom_far", "sha256")
 
 
 def structure_signals(svg: str, src_png: Path) -> dict:
@@ -710,6 +718,16 @@ def structure_signals(svg: str, src_png: Path) -> dict:
     return out
 
 
+def geometric_match(svg: str, gt: Path, src_png: Path) -> dict:
+    """`geom` and `geom_far` of our SVG against the artist's file (`inkvec_bench/geomatch.py`),
+    at the input raster's size; over white on an opaque tier."""
+    from PIL import Image
+    from inkvec_bench.geomatch import geomatch
+    w = Image.open(src_png).size[0]
+    opaque = base_tier(tier()) != tier()
+    return geomatch(svg, gt.read_text(encoding="utf-8"), w, opaque)
+
+
 def score_one(args: tuple) -> dict:
     """Trace + render + colour error for one icon. Top-level so a process pool can
     pickle it. DISTS is *not* computed here: it needs torch and a VGG, which would put
@@ -743,6 +761,10 @@ def score_one(args: tuple) -> dict:
     rp = Path(out_dir) / f"{it['corpus']}__{it['stem']}.render.png"
     Image.fromarray((np.clip(b, 0, 1) * 255 + 0.5).astype(np.uint8)).save(rp, optimize=False)
     sig = structure_signals(svg, png)
+    try:
+        sig.update(geometric_match(svg, gt, png))
+    except BaseException as e:  # resvg raises odd things on malformed output
+        return {"fail": f"{it['stem']}: geometric match {type(e).__name__}"}
     res = dict(stem=it["stem"], corpus=it["corpus"], **sig,
                de00=float(mcolor.delta_e00(ref, b)["de00_mean"]),
                dists=0.0,

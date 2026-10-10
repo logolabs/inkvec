@@ -48,6 +48,7 @@ fn run(
         cost_now: &cost,
         strokes,
         decimals,
+        psf: 0.0,
     };
     complete(&inp)
 }
@@ -134,4 +135,26 @@ fn the_check_refuses_a_shape_that_loses_what_the_face_shows() {
     assert!(!check::certify_completion(&v, &small, &big));
     assert!(check::certify_completion(&v, &v, &big));
     assert!(!check::certify_completion(&v, &big, &v));
+}
+
+#[test]
+fn a_corner_a_blur_cut_off_under_the_cover_is_restored() {
+    // Face 1, a frame's left bar and arms, is painted over face 0, a triangle whose acute
+    // corners sit in the frame's inner corners. A blur took the tips: the fit wrote each as a
+    // chamfer along the frame's inner edge. Under the frame nobody sees the tips, so the
+    // completion extends the triangle's sides to meet again.
+    let tri = vec![(31.0, 11.0), (1.6, 1.2), (0.5, 0.9), (0.5, 21.1), (1.6, 20.8)];
+    let frame = vec![
+        (-4.0, -4.0),
+        (40.0, -4.0),
+        (40.0, 1.0),
+        (1.0, 1.0),
+        (1.0, 21.0),
+        (40.0, 21.0),
+        (40.0, 25.0),
+        (-4.0, 25.0),
+    ];
+    let got = run(&[tri, frame], &[Some(0), Some(1)], &[true, false], &[]);
+    let c = got.get(&0).expect("the triangle is completed");
+    assert!(c.after <= 4.0, "a triangle writes four numbers: {c:?}");
 }

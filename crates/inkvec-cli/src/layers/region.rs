@@ -38,7 +38,6 @@ pub(crate) struct Region {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Rule {
     EvenOdd,
-    #[cfg_attr(not(test), allow(dead_code))]
     NonZero,
 }
 

@@ -137,6 +137,59 @@ pub(crate) struct Input<'a> {
     pub(crate) strokes: &'a [StrokeShape],
     /// Decimals per written coordinate.
     pub(crate) decimals: usize,
+    /// The input's blur beyond a clean render's, px: the noise model's `psf_radius` (0 on a
+    /// clean intake). Where three paints meet, the picture inside the blur is not
+    /// identifiable, and the interval is relaxed there ([`junction_zone`]).
+    pub(crate) psf: f64,
+}
+
+/// How far from a junction, in blur radii, the picture is not identifiable: a wedge of
+/// angle `θ` loses its tip to a blur of radius `r` over `r / sin(θ/2)`, which is four radii
+/// at 29°, about the most acute corner the corpus's artists draw.
+const JUNCTION_REACH: f64 = 4.0;
+
+/// The zone round the junctions near `bbox` where a blur of radius `psf` hides which paint
+/// shows: discs of [`JUNCTION_REACH`] radii. Empty when `psf` is 0 (a clean intake).
+fn junction_zone(junctions: &[Point], psf: f64, bbox: (f64, f64, f64, f64)) -> Region {
+    if psf <= 0.0 {
+        return Region::empty();
+    }
+    let r = JUNCTION_REACH * psf;
+    let discs: Vec<Vec<Point>> = junctions
+        .iter()
+        .filter(|j| j.x >= bbox.0 - r && j.x <= bbox.2 + r && j.y >= bbox.1 - r && j.y <= bbox.3 + r)
+        .map(|j| shape::flatten_primitive(&PrimitiveKind::Circle { c: *j, r }))
+        .collect();
+    if discs.is_empty() {
+        return Region::empty();
+    }
+    Region::from_polygons(&discs, Rule::NonZero)
+}
+
+/// Where the edges of the map meet: the ends of every open fitted edge.
+fn junction_points(fitted: &[FittedPath]) -> Vec<Point> {
+    let mut out: Vec<Point> = Vec::new();
+    for f in fitted.iter().filter(|f| !f.closed) {
+        for q in [f.start, f.segments.last().map(Segment::end).unwrap_or(f.start)] {
+            if !out.iter().any(|o| o.dist(q) < 1e-6) {
+                out.push(q);
+            }
+        }
+    }
+    out
+}
+
+/// Whether every ring face `f` draws is one edge fitted by a primitive.
+fn is_primitive_face(inp: &Input, f: usize) -> bool {
+    let Some(rings) = inp.order.get(f) else {
+        return false;
+    };
+    let outer = &inp.outer[f];
+    !outer.is_empty()
+        && outer.iter().all(|&k| {
+            let ring = &rings[k];
+            ring.len() == 1 && inp.prims.get(ring[0].0).and_then(|p| p.as_ref()).is_some()
+        })
 }
 
 /// A completed face's new shape.
@@ -271,6 +324,7 @@ pub(crate) fn complete(inp: &Input) -> HashMap<usize, Completion> {
     painted.sort_by_key(|&f| std::cmp::Reverse(inp.rank[f]));
     let regions: HashMap<usize, Region> = painted.iter().map(|&f| (f, face_region(inp, f))).collect();
     let mut above = stroke_cover(inp.strokes);
+    let junctions = if inp.psf > 0.0 { junction_points(inp.fitted) } else { Vec::new() };
     let mut i = 0;
     while i < painted.len() {
         let r = inp.rank[painted[i]];
@@ -280,7 +334,7 @@ pub(crate) fn complete(inp: &Input) -> HashMap<usize, Completion> {
         }
         for &f in &painted[i..j] {
             if inp.candidate.get(f).copied().unwrap_or(false) {
-                if let Some(c) = complete_face(inp, f, &regions[&f], &above) {
+                if let Some(c) = complete_face(inp, f, &regions[&f], &above, &junctions) {
                     out.insert(f, c);
                 }
             }
@@ -296,7 +350,13 @@ pub(crate) fn complete(inp: &Input) -> HashMap<usize, Completion> {
 }
 
 /// The cheapest certified completion of face `f`, written now as `e_now`, under `above`.
-fn complete_face(inp: &Input, f: usize, e_now: &Region, above: &Region) -> Option<Completion> {
+fn complete_face(
+    inp: &Input,
+    f: usize,
+    e_now: &Region,
+    above: &Region,
+    junctions: &[Point],
+) -> Option<Completion> {
     let (x0, y0, x1, y1) = e_now.bbox()?;
     let u = above.crop(x0 - PAD, y0 - PAD, x1 + PAD, y1 + PAD);
     if u.is_empty() || e_now.dilate(0.75).intersect(&u).area() < 0.5 {
@@ -306,15 +366,30 @@ fn complete_face(inp: &Input, f: usize, e_now: &Region, above: &Region) -> Optio
     if v.area() < 1.0 {
         return None;
     }
-    let h = allowed_region(e_now, &v, &u, margin());
-    let l = required_region(&v, &u);
+    let mut h = allowed_region(e_now, &v, &u, margin());
+    let mut l = required_region(&v, &u);
+    // Near a junction of a blurred input the interval holds off a zone `N` the blur leaves
+    // unidentified, and only within one blur radius of the interval's own ends:
+    // `L \ N ⊆ E ⊆ H ∪ N` (`Inkvec.Design.painter_interval_off`).
+    let zone = junction_zone(junctions, inp.psf, (x0, y0, x1, y1));
+    if !zone.is_empty() {
+        let spill = zone.intersect(&h.dilate(inp.psf)).minus(&h);
+        let loss = zone.minus(&l.erode(inp.psf));
+        h = h.union(&spill);
+        l = l.minus(&loss);
+    }
     let hb = h.bbox()?;
     let before = (inp.cost_now)(f);
     let mut best: Option<Completion> = None;
+    // A face written as a primitive gets no underlap, so a tie buys it nothing.
+    let prim_now = is_primitive_face(inp, f);
     let mut consider = |shape: Shape, after: f64, allow: f64, region: &Region| {
         // Never more than the face writes now. A tie is kept: the completed face reaches under
         // its cover and is spared the underlap, which only adds numbers.
-        if after > before + allow || best.as_ref().is_some_and(|b| b.after <= after) {
+        if after > before + allow
+            || (prim_now && after >= before)
+            || best.as_ref().is_some_and(|b| b.after <= after)
+        {
             return;
         }
         // The solver proposes only what its own measure passes; the checker decides.
@@ -362,8 +437,20 @@ fn complete_face(inp: &Input, f: usize, e_now: &Region, above: &Region) -> Optio
             }
         }
     }
-    // The rectangle round what the face shows.
+    // The rectangle round what the face shows. The region's box is exact across a scan line
+    // but known along it only to a line's spacing, so each side is put on the face's own
+    // geometry when a vertex lies that close.
     if let Some((vx0, vy0, vx1, vy1)) = v.bbox() {
+        let pts: Vec<Point> = face_rings(inp, f).into_iter().flatten().collect();
+        let snap = |t: f64, of: fn(&Point) -> f64| -> f64 {
+            pts.iter()
+                .map(of)
+                .filter(|q| (q - t).abs() <= region::DY)
+                .min_by(|a, b| (a - t).abs().total_cmp(&(b - t).abs()))
+                .unwrap_or(t)
+        };
+        let (vx0, vx1) = (snap(vx0, |q| q.x), snap(vx1, |q| q.x));
+        let (vy0, vy1) = (snap(vy0, |q| q.y), snap(vy1, |q| q.y));
         for e in [REACH, 0.5, 0.0] {
             let kind = PrimitiveKind::RoundRect {
                 x: vx0 - e,
@@ -569,14 +656,16 @@ fn simplified_rings(
             let Some((a, b)) = next_run(&cyc[r]) else {
                 break;
             };
-            let mut options = replacements(&cyc[r], a, b, e_now);
+            // Whatever happens, this run has been tried; the options inherit that, so one
+            // that keeps some of the run's segments does not hand them back untried.
+            mark_tried(&mut cyc[r], a, b);
+            let mut options = corner_cuts(&cyc[r], a, b);
+            options.extend(replacements(&cyc[r], a, b, e_now));
             options.extend(offset_run(&cyc[r], a, b, e_now).map(|o| (o, 0.0)));
             // The lower bound along this run: the band round its own geometry. The face's
             // other runs keep their own reach to meet, in their own turn.
             let band = run_band(&cyc[r], a, b);
             let need = v.intersect(&band);
-            // Whatever happens, this run has been tried.
-            mark_tried(&mut cyc[r], a, b);
             for (opt, extra) in options {
                 let mut trial = cyc.clone();
                 trial[r] = opt;
@@ -895,6 +984,72 @@ fn replacements(c: &CycRing, a: usize, b: usize, e_now: &Region) -> Vec<(CycRing
         }
     }
     out
+}
+
+/// Corners a blur cut off, restored under the cover: each segment `k` of run `a ..= b`
+/// between two lines is dropped, and the lines extended to meet, when they meet beyond the
+/// end of the incoming one and before the start of the outgoing one. At an acute corner a
+/// blur (anti-aliasing, a resampling filter, a lossy codec's) removes the tip, and the fit
+/// writes the chamfer it leaves as one more segment; under a cover nobody can see the tip,
+/// so the face takes the artist's corner back for free. First every such cut at once, then
+/// each alone; each writes the numbers of the segments it drops fewer.
+fn corner_cuts(c: &CycRing, a: usize, b: usize) -> Vec<(CycRing, f64)> {
+    let n = c.len();
+    let run_len = if b >= a { b - a + 1 } else { b + n - a + 1 };
+    // The run's segments, by the vertex each starts at (indices shift as cuts are made).
+    let starts: Vec<Point> = (0..run_len).map(|o| c.verts[(a + o) % n]).collect();
+    let mut out = Vec::new();
+    let mut all = c.clone();
+    let mut cuts = 0;
+    for &p in &starts {
+        let Some(k) = all.verts.iter().position(|&q| q == p) else {
+            continue;
+        };
+        if let Some(cut) = cut_corner(&all, k) {
+            all = cut;
+            cuts += 1;
+        }
+    }
+    if cuts > 1 {
+        out.push((all, 0.0));
+    }
+    for o in 0..run_len {
+        if let Some(cut) = cut_corner(c, (a + o) % n) {
+            out.push((cut, 0.0));
+        }
+    }
+    out
+}
+
+/// Ring `c` with segment `k` dropped and the lines either side extended to their meeting
+/// point, or `None` when either neighbour is not a line, the ring would fall below three
+/// segments, or the lines do not meet ahead of the incoming one and behind the outgoing one.
+fn cut_corner(c: &CycRing, k: usize) -> Option<CycRing> {
+    let n = c.len();
+    if n < 4 {
+        return None;
+    }
+    let prev = (k + n - 1) % n;
+    let next = (k + 1) % n;
+    if !matches!(c.segs[prev], Segment::Line(_)) || !matches!(c.segs[next], Segment::Line(_)) {
+        return None;
+    }
+    let (p0, p1) = (c.verts[prev], c.verts[k]);
+    let (q0, q1) = (c.verts[next], c.verts[(next + 1) % n]);
+    let (x, s, t) = intersect(p0, p1, q0, q1)?;
+    if !(s > 1.0 && t < 0.0) {
+        return None;
+    }
+    let mut out = c.clone();
+    // Vertex k becomes the corner; vertex k + 1 and segment k go. The segment now leaving
+    // vertex k is the old segment k + 1, a line re-targeted to its own end by `seg`.
+    out.verts[k] = x;
+    out.segs[k] = c.segs[next].clone();
+    out.covered[k] = c.covered[next];
+    out.verts.remove(next);
+    out.segs.remove(next);
+    out.covered.remove(next);
+    Some(out)
 }
 
 /// The unit normal of the chord `p → q` pointing away from the face (`e_now`).

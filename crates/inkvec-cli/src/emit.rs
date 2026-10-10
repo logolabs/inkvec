@@ -1341,6 +1341,7 @@ fn complete_layers(
         cost_now: &cost_now,
         strokes: &strokes,
         decimals,
+        psf: 0.0,
     });
     if inkvec_core::env::number("INKVEC_LAYERS_DEBUG").is_some_and(|v| v != 0.0) {
         let (b, a): (f64, f64) = done.values().map(|c| (c.before, c.after)).fold((0.0, 0.0), |s, c| (s.0 + c.0, s.1 + c.1));

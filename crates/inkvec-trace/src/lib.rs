@@ -259,6 +259,8 @@ pub struct ColorTrace {
     /// Per face, when transparency was traced natively and the face is a fade: one colour
     /// at an opacity that varies across it. Empty on the classic path.
     pub face_fade: Vec<Option<native::Fade>>,
+    /// The intake's noise at its edges, on a soft colour-path intake (`evidence::with_noise`).
+    pub noise: inkvec_core::noise::NoiseModel,
 }
 
 /// Full colour front end, with alpha assumed opaque. See [`trace_color_full_with_alpha`].
@@ -739,7 +741,7 @@ pub fn trace_color_full_with_alpha(
     );
     crate::diag!("fills", "snapped to their ink's colour: {snapped}");
 
-    finish_color_trace(
+    let ct = finish_color_trace(
         img,
         opts,
         &rgb,
@@ -750,7 +752,8 @@ pub fn trace_color_full_with_alpha(
         n_faces,
         sigma_noise,
         &mut sw,
-    )
+    );
+    evidence::with_noise(ct, &rgb, soft_intake, opts.lossy_intake, &mut sw)
 }
 
 /// Research entry: run the colour tracer from a caller-supplied label map.
@@ -1213,6 +1216,7 @@ pub(crate) fn finish_color_trace_alpha(
         face_rgb,
         sigma_noise,
         face_fade: Vec::new(),
+        noise: inkvec_core::noise::NoiseModel::clean(),
     }
 }
 

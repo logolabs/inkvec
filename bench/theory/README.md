@@ -16,6 +16,7 @@ readings scored against exactly known geometry.
 | `oracle_cost.py` | the trace against the artist's own file on the input's pixels and the tracer's price per parameter: which icons the objective would rather have the artist's description for (a search error) and which it prefers the trace for (a question for the prior), `docs/theory/optimal.md` §6 |
 | `geom_calibration.py` | the gate's geometric match (`geom`) against dE00 on a disc grown by known amounts in two colour contrasts: `geom` reads the displacement in either colour, dE00 reads the contrast |
 | `noise_profile.py` | where a real input's noise sits: the gate's `web` tier (resized, quality-80 JPEG) against the exact raster it stands for, split into the resampling's deterministic blur and the codec's error, by distance to the nearest edge, on luma and chroma, next to the engine's own noise estimate; and the window identity under that blur and noise (the sums stay unbiased, their variance grows) |
+| `floor_selfcal.py` | the engine's own windows against the truth, per input: an exact render, 8 × 8 point samples, tiny-skia's lattice, resvg now, the committed tier and the `web` JPEG, each traced by the Quality front end and its evidence built (`examples/evidence_calibrate.rs`); `χ²` per independent measurement under rounding alone and under the image's self-calibrated noise model, scored with the evaluator's own `score` (replicas, per-edge offset, Huber), by class and family, with each image's measured noise, tail and window scale |
 | `design_prior.py` | the human prior of `docs/theory/chain-representation.md` (R3), counted from the artists' own files with exact rational arithmetic: segment kinds, axis-aligned and 45° lines, smooth and sharp joins, numbers on the design grid by the role of their point, ties, repeated radii, stroke widths, layers, symmetry and repetition; and two simulations of the chain's decisions on the artists' numbers with added noise (empirical-Bayes grid inference with snapping, `--part grid_sim`; coordinate ties by exact one-dimensional clustering, `--part ties_sim`). Needs no binary |
 
 ```bash
@@ -32,6 +33,9 @@ python3 bench/theory/design_prior.py [--set screen] [--part counts|geometry|grid
 python3 bench/theory/geom_calibration.py
 python3 bench/theory/renderer_floor.py --fresh [--per-family 6] [--tiers 128ss,512ss]
 python3 bench/theory/noise_profile.py [--per-family 6]
+cargo build --release -p inkvec-trace --example evidence_calibrate
+python3 bench/theory/floor_selfcal.py [--sizes 128,512] [--conditions exact,ss8,lat32,fresh,committed]
+python3 bench/theory/floor_selfcal.py --sizes 400 --conditions web
 ```
 
 Coordinates: these scripts put pixel `(i, j)` on `[i, i+1] × [j, j+1]`; inkvec puts pixel

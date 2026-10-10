@@ -74,4 +74,48 @@ theorem trapezoid_integral (ua va ub vb vlo : ℝ) (h : ua ≠ ub) :
   field_simp
   ring
 
+/-! ## Window sums under a blur or a resampling
+
+A resized or blurred intake's pixel `y` reads `Σ_s w(y, s) c(s)` of the exact image's pixels
+`c` (`docs/theory/noise.md`, `chain-boundary.md` "Blur"). Summed over a window, the window
+identity survives whenever every input pixel the window draws on gives the window its whole
+weight (`window_sum_resampled`): an integer-ratio box filter does, a general resampler only
+on average over phase, and what it leaves is its phase ripple. Along the strip a centred
+kernel leaves a straight edge's area profile alone (`blur_affine_profile`) and moves a
+curved one by exactly half its second moment times the profile's second derivative
+(`blur_quadratic_profile`): the forward model's correction, not noise. -/
+
+/-- **Mass preservation over a window.** If every input pixel `s ∈ S` gives the window `Y`
+its whole weight (`Σ_{y∈Y} w y s = 1`), the window's resampled sum is the inputs' sum. -/
+theorem window_sum_resampled (Y S : Finset ℤ) (w : ℤ → ℤ → ℝ) (c : ℤ → ℝ)
+    (hw : ∀ s ∈ S, ∑ y ∈ Y, w y s = 1) :
+    ∑ y ∈ Y, ∑ s ∈ S, w y s * c s = ∑ s ∈ S, c s := by
+  rw [Finset.sum_comm]
+  refine Finset.sum_congr rfl fun s hs => ?_
+  rw [← Finset.sum_mul, hw s hs, one_mul]
+
+/-- **A centred kernel leaves an affine profile alone.** For weights `k` on a finite set of
+offsets with `Σ k = 1` and `Σ k i · i = 0`, the blurred profile of `A x = α + β x` is `A`. -/
+theorem blur_affine_profile (I : Finset ℤ) (k : ℤ → ℝ) (hk : ∑ i ∈ I, k i = 1)
+    (hm : ∑ i ∈ I, k i * i = 0) (α β x : ℝ) :
+    ∑ i ∈ I, k i * (α + β * (x - i)) = α + β * x := by
+  have e : ∀ i ∈ I, k i * (α + β * (x - i)) = (α + β * x) * k i - β * (k i * i) := by
+    intro i _; ring
+  rw [Finset.sum_congr rfl e, Finset.sum_sub_distrib, ← Finset.mul_sum, ← Finset.mul_sum, hk,
+    hm]
+  ring
+
+/-- **A centred kernel moves a curved profile by `½ μ₂ A''`.** With `μ₂ = Σ k i · i²`, the
+blurred profile of `A x = α + β x + γ x²` is `A x + γ μ₂`, and `A'' = 2γ`. -/
+theorem blur_quadratic_profile (I : Finset ℤ) (k : ℤ → ℝ) (hk : ∑ i ∈ I, k i = 1)
+    (hm : ∑ i ∈ I, k i * i = 0) (α β γ x : ℝ) :
+    ∑ i ∈ I, k i * (α + β * (x - i) + γ * (x - i) ^ 2) =
+      α + β * x + γ * x ^ 2 + (1 / 2) * (∑ i ∈ I, k i * (i : ℝ) ^ 2) * (2 * γ) := by
+  have e : ∀ i ∈ I, k i * (α + β * (x - i) + γ * (x - i) ^ 2) =
+      (α + β * x + γ * x ^ 2) * k i - (β + 2 * γ * x) * (k i * i) + γ * (k i * (i : ℝ) ^ 2) := by
+    intro i _; ring
+  rw [Finset.sum_congr rfl e, Finset.sum_add_distrib, Finset.sum_sub_distrib, ← Finset.mul_sum,
+    ← Finset.mul_sum, ← Finset.mul_sum, hk, hm]
+  ring
+
 end Inkvec

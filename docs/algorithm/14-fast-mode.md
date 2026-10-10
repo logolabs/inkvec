@@ -312,7 +312,7 @@ as the test oracle `fast/palette/reference.rs`.
 **What it computes, in the field's terms** (`fast/faces.rs:1-30`): *connected-component
 analysis of the flat zones* of the label image (a flat zone is a maximal 4-connected set of
 pixels of one label), followed by *region merging on the region adjacency graph*. Five
-passes, in the order the front end calls them (`fast/front.rs:97-129`):
+passes, six on a lossy intake, in the order the front end calls them (`fast/front.rs`):
 
 1. **Slivers** (`absorb_slivers`, `faces.rs:325`, mark `slivers`): pixels of *strips* —
    components with no interior pixel — that are blends of the inks of the thick components
@@ -322,10 +322,14 @@ passes, in the order the front end calls them (`fast/front.rs:97-129`):
 2. **Rims** (`absorb_rims`, `faces.rs:431`, mark `slivers`): a strip whose own ink is a blend
    of two inks it borders is an anti-aliased rim; each of its pixels goes to the side it
    covers more of.
-3. **Same-ink merge** (`merge_same_inks`, `faces.rs:530`, mark `slivers`): a component takes
+2b. **Codec halos, lossy intake only** (`absorb_halos`, `faces/halos.rs`, mark `slivers`;
+   see "Noisy input" below): thin components whose colour lies between two inks around
+   them in JPEG's colour space go back to those inks, pixel by pixel by luma.
+3. **Same-ink merge** (`merge_same_inks`, `faces.rs`, mark `slivers`): a component takes
    the ink of a larger neighbour the eye cannot tell from its own (CIEDE2000 below
    `SAME_INK_DE00`, opacities within 0.02), largest components first, longest shared border
-   winning.
+   winning. On a lossy intake a component with no interior of radius 2 takes a neighbour's
+   ink up to `SOFT_SAME_INK_DE00` (5.0) instead (see "Noisy input" below).
 4. **Despeckle** (`despeckle`, `faces.rs:614`, mark `despeckle`): components under the speckle
    floor take the label they share the longest border with — an area filter on flat zones.
    The floor is `min_region`, or 4 px per 512 × 512 of image up to 16 px, VTracer's default
@@ -349,6 +353,68 @@ passes, in the order the front end calls them (`fast/front.rs:97-129`):
    checkerboard, 90,000 components (`faces/tests.rs:36-53`); the implementing branch
    (impl2/robust) found no real image that reaches the limit in Fast, whose palette and
    despeckle keep two-ink noise at 18,000 to 35,000 faces.
+
+**Noisy input: codec halos and ink variants** (`fast/faces/halos.rs`, 2026-10-10). Both
+passes run only on a lossy intake (`ColorOptions::lossy_intake`, from the container) of an
+opaque image; a clean intake takes neither, and the six clean gate conditions are
+byte-identical. They read the evidence of the pixels, not the flag alone: a raster with no
+halos keeps its components.
+
+*The problem.* On the `web` tier (512 → 400 px bicubic, JPEG quality 80, 4:2:0) Fast's
+palette founds the codec's halos as inks: a band two or three pixels wide on each side of
+an edge whose luma overshoots and whose chroma has bled, independently of the luma, so its
+colour lies 0.08-0.09 sRGB off the line between the two inks, twice `BLEND_TOL`. Neither
+`absorb_slivers` nor `absorb_rims` recognises it: `twemoji/1f1fa`, a blue flag with a
+white letter, came back with four inks and 215 faces (the clean raster: two inks, three
+paths). And the codec tints an ink with its neighbours' chroma block by block, so one
+black outline comes back as #010101, #010009 and #080000 (`openmoji/1F9D1`), which tile it
+into fragments with no interior; Fast's parameter ratio on `web` was 7.2 against 3.5 on the
+opaque 512 px tier (openmoji 13x, twemoji 8.9x).
+
+*The halo test* (`RunLabels::absorb_halos`). In BT.601 full-range YCbCr, JPEG's own space,
+a component is a halo of inks `a` and `b` when (1) it is thin: no pixel of it has a 5 × 5
+window of its own label (`HALO_REACH` = 2; a JPEG halo reaches about three pixels, which
+the radius-one interior rule of the other passes misses; `deep_components`, on runs);
+(2) `a` and `b` are inks of thick components bordering it, or bordering a thin component
+that borders it (the band between blue and white is a dark halo beside the blue and a
+light one beside the white); (3) its mean colour lies channel by channel in
+`[min − τ|Δ| − ε, max + τ|Δ| + ε]` of the two inks' values (`HALO_OVERSHOOT` τ = 0.2,
+`HALO_SLACK` ε = 0.02), the channels independently. A thin component of an ink that has a
+thick component somewhere else is held to more: it must be a strip at radius one
+(`STRIP_REACH`) and lie within `HALO_LINE_TOL` = 0.04 of the segment between the inks (a
+chroma-weighted YCbCr distance). The box alone takes real ink: `twemoji/1faa3`'s #55ACEE
+rim, four pixels wide between a navy and a white, sits in it and 0.054 from the segment,
+where the codec's halos sit 0.009-0.035 from theirs. Of the passing pairs the nearest
+segment wins; each pixel goes to `b` when its coverage of `b`, read with chroma at a
+quarter of luma's weight on squared differences, is at least ½, which keeps each ink's
+area. Then an ink some of whose components were halos and that has no thick component left
+is a halo ink, and each remaining component of it that borders exactly one other ink takes
+that ink (a fleck of halo inside one ink; a ring of it around an eye, which borders two,
+stays as it is).
+
+*The thin-variant merge.* `merge_same_inks` gets a second threshold for components with no
+5 × 5 interior: `SOFT_SAME_INK_DE00`, the soft floor Quality's palette applies on the same
+intakes. A component with an interior keeps `SAME_INK_DE00`, so two flat inks a few dE00
+apart (the mosaic's neighbours) stay two.
+
+*Measured* (regression gate, 246 icons, `fast-web` against the recorded baseline): dE00
+−11.83 % (95 % CI −13.90 to −9.64), turning −50.53 %, parameter ratio −42.79 % (7.22 →
+4.13), geom −6.84 % (−11.27 to −2.80), all "better"; 113 icons change, 104 better and 9
+worse in dE00. By family (dE00, ratio, geom): openmoji 0.297 → 0.204, 13.19 → 3.88,
+0.152 → 0.121; twemoji 0.312 → 0.275, 8.92 → 3.71, 0.232 → 0.164; noto-emoji 0.496 →
+0.460, 4.12 → 2.38, 1.493 → 1.514; synthetic 0.148 → 0.138, 11.35 → 5.99, 0.315 →
+0.225; lucide, material-icons and simple-icons byte-identical (one ink on white: no chroma
+to bleed, and the luma's ringing stays on the grey line the existing passes already take). `twemoji/1f1fa`: 4 inks and 215 faces →
+2 inks and 3 paths, dE00 0.242 → 0.144, geom 0.245 → 0.091, ratio 36.5 → 2.7. The
+halo pass alone, before the thin-variant merge: dE00 −9.67 %, ratio −39.0 %, geom −6.35 %.
+The first version, which held every ink to the box test and let a speck bordering several
+inks take the one it shared most border with, read dE00 −11.34 %, ratio −43.5 %, but took
+`twemoji/1faa3`'s rim (dE00 0.212 → 0.344) and filled `openmoji/1F9D1`'s eye with yellow
+(0.326 → 0.446).
+
+*Considered and not used.* `coverage::ringing_score` as a second signal, for a JPEG
+re-saved as PNG: about 100 ms on a 2048 px image under load, a third of Fast's trace, on
+every image clean or not; the container flag costs nothing on a clean intake.
 
 **Method: everything on row runs** (`fast/faces/runs.rs`). The label image is held as its
 maximal row runs (`RunLabels`); a run is scanned 8 labels at a time while they all equal the

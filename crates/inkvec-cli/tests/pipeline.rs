@@ -420,6 +420,14 @@ fn restore_auto_needs_a_sign_of_compression() {
     assert!(note.contains("no sign of compression"), "{note}");
     let direct = trace_image(square(), &Args::default()).expect("trace succeeds");
     assert_eq!(t.svg, direct.svg, "the plain trace");
+    // The kept probe reports what the plain trace reports, apart from the restore line.
+    let rest: Vec<&String> = t
+        .stats
+        .iter()
+        .filter(|l| !l.starts_with("restore"))
+        .collect();
+    assert_eq!(rest, direct.stats.iter().collect::<Vec<_>>());
+    assert_eq!(t.lambda, direct.lambda);
 }
 
 /// `--sr auto` likewise cleans only an input that shows resampling or compression.
@@ -441,6 +449,9 @@ fn sr_auto_needs_a_sign_of_resampling_or_compression() {
     );
     let direct = trace_image(square(), &Args::default()).expect("trace succeeds");
     assert_eq!(t.svg, direct.svg, "the plain trace");
+    let rest: Vec<&String> = t.stats.iter().filter(|l| !l.starts_with("sr ")).collect();
+    assert_eq!(rest, direct.stats.iter().collect::<Vec<_>>());
+    assert_eq!(t.lambda, direct.lambda);
 }
 
 /// Upscaler flags that cannot give an upscaler: an empty `--sr-command`, the same failure a

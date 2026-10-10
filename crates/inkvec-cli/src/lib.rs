@@ -573,8 +573,9 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
         probe = None;
     }
     if args.sr == inkvec_sr::Mode::Off {
-        // `auto` kept the input, and nothing else is going to look at it: the probe is the trace.
-        if let Some(svg) = probe.take() {
+        // `auto` kept the input, and nothing else is going to look at it: the probe is the
+        // trace, stage log and lambda included, as the plain path reports them.
+        if let Some((svg, stats, lambda)) = probe.take() {
             let svg = if normalised || (img.width, img.height) != (display_w, display_h) {
                 present(&svg, display_w, display_h, stretch)
             } else {
@@ -582,10 +583,10 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
             };
             return Ok(Traced {
                 svg,
-                stats: restore_note.into_iter().collect(),
+                stats: restore_note.into_iter().chain(stats).collect(),
                 width: img.width,
                 height: img.height,
-                lambda: None,
+                lambda: Some(lambda),
             });
         }
     }
@@ -616,7 +617,7 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
             None => trace_once(&img, args)?,
         };
         // `Some(stats line)` when `auto` traces the input as it is instead of cleaning it.
-        let direct = match inkvec_sr::decide(&img, &probe, args.sr_threshold) {
+        let direct = match inkvec_sr::decide(&img, &probe.0, args.sr_threshold) {
             inkvec_sr::Decision::Keep { residual } => Some(match residual {
                 Some(r) => format!(
                     "sr            residual {r:.3} <= {:.3}, traced directly",
@@ -662,20 +663,22 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
                 sr_note = Some(note);
                 sr_on = false;
             } else {
+                let (svg, stats, lambda) = probe;
                 let svg = if normalised || (img.width, img.height) != (display_w, display_h) {
-                    present(&probe, display_w, display_h, stretch)
+                    present(&svg, display_w, display_h, stretch)
                 } else {
-                    probe
+                    svg
                 };
                 return Ok(Traced {
                     svg,
                     stats: restore_note
                         .into_iter()
                         .chain(std::iter::once(note))
+                        .chain(stats)
                         .collect(),
                     width: img.width,
                     height: img.height,
-                    lambda: None,
+                    lambda: Some(lambda),
                 });
             }
         }
@@ -1009,9 +1012,9 @@ struct RestorePass {
     img: inkvec_trace::Rgba,
     /// One line for the stats, when the pass ran or measured anything.
     note: Option<String>,
-    /// The probe trace `--restore auto` made of an input it kept, for SR's `auto` to reuse or,
-    /// with SR off, to return as the trace.
-    probe: Option<String>,
+    /// The probe trace `--restore auto` made of an input it kept (SVG, stage log, lambda), for
+    /// SR's `auto` to reuse or, with SR off, to return as the trace.
+    probe: Option<select::Trace>,
     /// Whether the image was restored, which forces soft intake for the trace that follows.
     restored: bool,
 }
@@ -1039,7 +1042,7 @@ fn restore_prepass(
         let probe = trace_once(&pass.img, args)?;
         let decision = inkvec_restore::decide(
             &pass.img,
-            &probe,
+            &probe.0,
             inkvec_restore::Options {
                 residual_threshold: args.restore_threshold,
             },
@@ -1170,8 +1173,13 @@ fn build_restorer(
 /// border pad, and through `--hypotheses` when it applies), so a probe `auto` keeps is byte
 /// for byte what `--restore off` / `--sr off` returns. It used to skip the border pad, and
 /// on the gate's transparent 128 px tier a third of the probes `--restore auto` kept differed
-/// from the plain trace (81 of 246).
-fn trace_once(img: &inkvec_trace::Rgba, args: &Args) -> Result<String, Box<dyn std::error::Error>> {
+/// from the plain trace (81 of 246). The stage log and lambda come with it, so a kept probe
+/// reports what the plain trace reports; they used to be dropped, leaving only the `restore`
+/// or `sr` line.
+fn trace_once(
+    img: &inkvec_trace::Rgba,
+    args: &Args,
+) -> Result<select::Trace, Box<dyn std::error::Error>> {
     let colour_args;
     let args = if args.monochrome {
         colour_args = Args {
@@ -1188,7 +1196,7 @@ fn trace_once(img: &inkvec_trace::Rgba, args: &Args) -> Result<String, Box<dyn s
     } else {
         trace_bordered(img.clone(), args)?
     };
-    Ok(traced.0)
+    Ok(traced)
 }
 
 /// Apply the output options ([`post_process`]), write the SVG to `--output` (default: the

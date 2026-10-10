@@ -112,5 +112,122 @@ class OpaqueTierTests(unittest.TestCase):
                 svgeval.os.environ["INKVEC_TIER"] = saved[2]
 
 
+class FastPathTests(unittest.TestCase):
+    """The scorer's shortcuts give the numbers of the plain computations they replace."""
+
+    def test_codes_match_the_arithmetic(self):
+        from inkvec_bench import geomatch as gm
+        rng = np.random.default_rng(3)
+        rgba = rng.integers(0, 256, (37, 41, 4), dtype=np.uint8)
+        rgba[::3, :, 3] = 255
+        rgba[1::3, :, 3] = 0
+        for opaque in (False, True):
+            u = rgba.astype(np.uint32)
+            if opaque:
+                a = u[..., 3:4]
+                u[..., :3] = (u[..., :3] * a + 255 * (255 - a) + 127) // 255
+                u[..., 3] = 255
+            want = (u[..., 0] << 24) | (u[..., 1] << 16) | (u[..., 2] << 8) | u[..., 3]
+            got = gm._codes(rgba, opaque)
+            self.assertEqual(got.dtype, want.dtype)
+            self.assertTrue(np.array_equal(got, want), opaque)
+
+    def test_labels_by_runs_match_unique(self):
+        from inkvec_bench import geomatch as gm
+        rng = np.random.default_rng(4)
+        codes = rng.choice(np.array([0xFF0000FF, 0x00FF00FF, 0x123456FF, 0xFFFFFF00], np.uint32),
+                           size=(64, 50)).astype(np.uint32)
+        codes[10:30, :] = 0x00FF00FF                    # long runs, as a flat render has
+        uniq, counts = np.unique(codes.reshape(-1), return_counts=True)
+        pal = gm._palette(gm._features(uniq), counts)[:3]
+        _, inv = np.unique(codes.reshape(-1), return_inverse=True)
+        d = ((gm._features(uniq)[:, None, :] - pal[None, :, :]) ** 2).sum(-1)
+        want = d.argmin(1)[inv.reshape(-1)].reshape(codes.shape)
+        self.assertTrue(np.array_equal(gm._labels(codes, pal), want))
+
+    def test_artist_side_cache_hit_equals_miss(self):
+        from inkvec_bench import geomatch as gm
+        art = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">'
+               '<circle cx="12" cy="12" r="7" fill="#d22f27" fill-opacity="0.6"/>'
+               '<rect x="3" y="3" width="6" height="4" fill="#123456"/></svg>')
+        ours = art.replace('r="7"', 'r="7.3"')
+        saved = gm.CACHE_DIR
+        try:
+            gm.CACHE_DIR = None
+            plain = gm.geomatch(ours, art, 64, True)
+            with tempfile.TemporaryDirectory() as d:
+                gm.CACHE_DIR = Path(d)
+                miss = gm.geomatch(ours, art, 64, True)
+                self.assertEqual(len(list(Path(d).glob("*.npz"))), 1)
+                hit = gm.geomatch(ours, art, 64, True)
+                other = gm.geomatch(ours, art, 64, False)     # another page: another entry
+                self.assertEqual(len(list(Path(d).glob("*.npz"))), 2)
+        finally:
+            gm.CACHE_DIR = saved
+        self.assertEqual(plain, miss)
+        self.assertEqual(plain, hit)
+        self.assertGreater(plain["geom"], 0.0)
+        self.assertNotEqual(other, {})
+
+    def test_delta_e00_matches_the_whole_sample(self):
+        from inkvec_bench.metrics import color
+        from skimage.color import deltaE_ciede2000, rgb2lab
+        rng = np.random.default_rng(5)
+        a = (rng.integers(0, 256, (600, 700, 3)) / 255).astype(np.float32)
+        b = a.copy()
+        b[:40] = (rng.integers(0, 256, (40, 700, 3)) / 255).astype(np.float32)
+        for x, y in ((a, b), (a, a), (a.astype(np.float64), b.astype(np.float64))):
+            xs, ys = np.clip(x, 0, 1).reshape(-1, 3), np.clip(y, 0, 1).reshape(-1, 3)
+            idx = np.random.default_rng(0).choice(xs.shape[0], color.MAX_DELTA_E_SAMPLES, replace=False)
+            de = deltaE_ciede2000(rgb2lab(xs[idx].reshape(-1, 1, 3)),
+                                  rgb2lab(ys[idx].reshape(-1, 1, 3))).reshape(-1)
+            got = color.delta_e00(x, y)
+            self.assertEqual(got["de00_mean"], float(de.mean()))
+            self.assertEqual(got["de00_p95"], float(np.percentile(de, 95)))
+            self.assertEqual(got["de00_max"], float(de.max()))
+
+
+@unittest.skipIf(sys.platform == "win32", "the stand-in tracer is a shell script")
+class ReuseTests(unittest.TestCase):
+    """An icon whose SVG bytes match the baseline's is traced but not scored again."""
+
+    def test_byte_identical_svg_takes_the_known_numbers(self):
+        import hashlib
+        import os
+        it = svgeval.load_sets()["screen"][0]
+        saved = (svgeval.TIER, svgeval._TIER_RESOLVED, os.environ.get("INKVEC_TIER"))
+        self.addCleanup(self._restore_tier, saved)
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out.svg"
+            out.write_text(GT_SVG, encoding="utf-8")
+            exe = Path(d) / "tracer.sh"
+            # A stand-in tracer: copies the fixed SVG to the `-o` path.
+            exe.write_text(f'#!/bin/sh\ncp "{out}" "$3"\n', encoding="utf-8")
+            os.chmod(exe, 0o755)
+            sha = hashlib.sha256(out.read_bytes()).hexdigest()
+            known = {ax: 0.5 for ax in ("de00", "turning", "ratio", "self_res", "geom", "geom_far")}
+            job = svgeval.Job(exe, it, Path(d), (), False, "128ss", (sha[:16], known), True)
+            res = svgeval.score_one(job)
+            self.assertTrue(res.get("reused"), res)
+            self.assertEqual(res["de00"], 0.5)
+            self.assertEqual(res["sha256"], sha)
+            self.assertIn("div", res["human"])            # the battery still runs
+            self.assertEqual(res["cpu"]["score"] < 0.5, True)
+            stale = svgeval.Job(exe, it, Path(d), (), False, "128ss", ("0" * 16, known), False)
+            with patch.dict(os.environ, {"INKVEC_SKIP_DISTS": "1"}):
+                fresh = svgeval.score_one(stale)
+            self.assertFalse(fresh.get("reused", False))
+            self.assertNotEqual(fresh["de00"], 0.5)
+
+    @staticmethod
+    def _restore_tier(saved):
+        import os
+        svgeval.TIER, svgeval._TIER_RESOLVED = saved[0], saved[1]
+        if saved[2] is None:
+            os.environ.pop("INKVEC_TIER", None)
+        else:
+            os.environ["INKVEC_TIER"] = saved[2]
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -92,7 +92,17 @@ cargo build --release -p inkvec-cli
 python bench/ci_gate.py --exe target/release/inkvec --workers 4
 ```
 
-(needs `numpy`, `pillow`, `scikit-image`, `resvg_py`). `python tools/prepush.py --gate`
+(needs `numpy`, `scipy`, `pillow`, `scikit-image`, `resvg_py`). Icons whose SVG is
+byte-identical to the baseline's are traced but not scored again, so a change that moves few
+icons costs little more than the traces. The gate also reports, without gating them, how far
+each trace is from the artist's file in how it is *drawn* (segment kinds, smooth joins, nodes
+at the extrema, the design grid, ...); to tune a build or a flag against those statistics:
+
+```
+python bench/human_stats.py --exe target/release/inkvec --extra-args "--editability" --base-args ""
+```
+
+`python tools/prepush.py --gate`
 runs it with the hard cases. Only a demonstrable gain moves a baseline. If a change
 regresses an axis, the gate fails; it can only be bypassed with
 `--exe ... --bypass-gate "<justification>"`, and only with a strong, explicit

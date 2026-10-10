@@ -52,14 +52,6 @@ const SATURATED: f64 = 0.06;
 /// passes a smooth boundary.
 const SIDE_TOL: f64 = 0.05;
 
-/// The one-sided test in standard deviations of its own noise: `|D|/12` exceeds
-/// `SIDE_Z·√(70 V)/12` (`fourthDiff_side`: the one-sided difference is the fourth difference
-/// of the six column means over 12, whose variance is `70 V` for column means of variance
-/// `V`). It replaces [`SIDE_TOL`] only where the intake's noise makes it the larger, so a clean
-/// render is read exactly as before and a noisy one does not have every smooth vertex
-/// declined as a corner; the evidence threshold moves, the certificate does not.
-const SIDE_Z: f64 = 3.0;
-
 /// Largest difference, in px, between adjacent column means: the boundary may be at most
 /// this steep across the scan, about 56 degrees.
 const MAX_STEP: f64 = 1.5;
@@ -84,9 +76,8 @@ fn unmix(axis: &UnmixAxis, src: &Source, x: usize, y: usize) -> (f64, f64) {
     (a, r2)
 }
 
-/// The column mean of the boundary's height across one column (or row, `transpose`), whether
-/// the vertex's left face (coverage 1) lies on the low-index side, and how many pixels the
-/// window summed.
+/// The column mean of the boundary's height across one column (or row, `transpose`), and
+/// whether the vertex's left face (coverage 1) lies on the low-index side.
 ///
 /// `line` is the column's pixel index, `v0` the vertex's height. Pixels within [`REACH`]
 /// of `v0` are read through the unmixing axis; the window is the run from a saturated
@@ -102,7 +93,7 @@ fn line_mean(
     line: isize,
     v0: f64,
     transpose: bool,
-) -> Option<(f64, bool, usize)> {
+) -> Option<(f64, bool)> {
     let (w, h) = (ctx.src.w as isize, ctx.src.h as isize);
     let (n_line, n_along) = if transpose { (h, w) } else { (w, h) };
     if line < 0 || line >= n_line {
@@ -136,7 +127,7 @@ fn line_mean(
             -1
         };
     }
-    let mut best: Option<(f64, bool, usize)> = None;
+    let mut best: Option<(f64, bool)> = None;
     let mut j = 0usize;
     while j < len {
         if kind[j] < 0 {
@@ -157,13 +148,13 @@ fn line_mean(
                 .map(|&c| if top_is_left { c } else { 1.0 - c })
                 .sum();
             let mean = (r0 + j as isize) as f64 - 0.5 + sum;
-            if best.is_none_or(|(b, _, _)| (mean - v0).abs() < (b - v0).abs()) {
-                best = Some((mean, top_is_left, k - j + 1));
+            if best.is_none_or(|(b, _)| (mean - v0).abs() < (b - v0).abs()) {
+                best = Some((mean, top_is_left));
             }
         }
         j = k;
     }
-    best.filter(|(m, _, _)| (m - v0).abs() <= MAX_STEP)
+    best.filter(|(m, _)| (m - v0).abs() <= MAX_STEP)
 }
 
 /// The cubic `c₀ + c₁s + c₂s² + c₃s³` whose means over the cells `[-2,-1]`, `[-1,0]`,
@@ -272,7 +263,6 @@ fn strip_along(
     // s = u - border are the columns whose centres are at border + k + 1/2.
     let border = (pu - 0.5).round() + 0.5;
     let mut means = [0.0f64; 6];
-    let mut widest = 0usize;
     let mut orient: Option<bool> = None;
     let why = |r: std::fmt::Arguments| {
         if ctx.debug {
@@ -293,11 +283,10 @@ fn strip_along(
             _ => pv + means[slot - 1],
         };
         let line = (border + k as f64 + 0.5).round() as isize;
-        let Some((m, o, n)) = line_mean(ctx, axis, line, near, transpose) else {
+        let Some((m, o)) = line_mean(ctx, axis, line, near, transpose) else {
             why(format_args!("no window in line {k}"));
             return None;
         };
-        widest = widest.max(n);
         if *orient.get_or_insert(o) != o {
             why(format_args!("orientation"));
             return None;
@@ -316,11 +305,7 @@ fn strip_along(
         &histopolate(&[means[2], means[3], means[4], means[5]]),
         -1.0,
     );
-    // A column mean's variance under the intake's per-channel noise: each of its pixels'
-    // weights carries `σ²/|d|²`.
-    let col_var = widest as f64 * ctx.sigma_noise * ctx.sigma_noise / axis.dd.max(1e-300);
-    let side_tol = SIDE_TOL.max(SIDE_Z * (70.0 * col_var).sqrt() / 12.0);
-    if (left - c[0]).abs() > side_tol || (right - c[0]).abs() > side_tol {
+    if (left - c[0]).abs() > SIDE_TOL || (right - c[0]).abs() > SIDE_TOL {
         why(format_args!("sides {:.3} {:.3}", left - c[0], right - c[0]));
         return None;
     }

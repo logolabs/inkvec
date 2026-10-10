@@ -1099,10 +1099,18 @@ render's, ringing (`coverage::ringing_score`), or a lossy container. That is evi
 the pixels, not the flag alone. Only then does `evidence::measure_noise` run, which costs 13
 to 49 ms at 400 px, after the crossing test was indexed by arclength.
 
-Its measurement goes to `ColorTrace::noise` whenever the edge noise exceeds `FOLD_LEVEL`
-(3 levels). Clean renders read at most about 1.3 levels and `web` 4 to 27. Under it, and on
-every clean intake, the model is `NoiseModel::clean()` and nothing changes: `quality-128ss`
-is identical on the gate.
+Its measurement goes to `ColorTrace::noise` (through `evidence::with_noise`, the colour
+path's last step) whenever the edge noise exceeds `FOLD_LEVEL` (3 levels). Clean renders read
+at most about 1.3 levels and `web` 4 to 27. Under it, and on every clean intake, the model is
+`NoiseModel::clean()`.
+
+Nothing in the pipeline reads it yet. Against the previous build, every traced file is
+byte-identical on all eight gate conditions (246 icons each).
+
+The two builds were timed interleaved on a shared machine, and their clean run times match:
+Quality +0.0 to +1.3 %, Fast −5.6 to +0.4 % (Fast totals are a few seconds). No clean intake
+takes the measurement: 0 of 246 at 128 px and 0 of a 62-icon sample at 512 px opaque. Fast
+mode never takes it. On a `web` icon in Quality it costs about 60 ms of a 2 s trace.
 
 `NoiseModel` (agreed with the representation chain) holds:
 `{sigma_flat, sigma_edge[4 bands], psf_radius, psf_mu2, nu, lossy, window_scale}`. It also
@@ -1116,14 +1124,20 @@ divides by. With today's fitter, honest uncertainties buy simpler fits at a cost
 +1.7 %). So the fold waits for the representation chain's fitter to read it with its robust
 loss.
 
-### `strip.rs`: a statistical side test
+### `strip.rs`: a statistical side test, measured and withheld
 
 The one-sided corner test is the fourth difference of six column means over 12
-(`fourthDiff_side`), so its noise is `√(70 V)/12`. A vertex is declined only beyond
-`max(SIDE_TOL, 3·√(70 V)/12)`, with `V` from the trace's own per-channel noise and the widest
-window. On a clean render that term is about 0.007 px, below `SIDE_TOL` (0.05), and the
-reading is unchanged bit for bit. On a noisy intake the noise sets the threshold. The
-certificate (`CERT_TOL`, the shift lands on the cubic) is unchanged.
+(`fourthDiff_side`), so its noise is `√(70 V)/12` for column means of variance `V`. Declining
+a vertex only beyond `max(SIDE_TOL, 3·√(70 V)/12)` lets the noise set the threshold on a noisy
+intake. The certificate (`CERT_TOL`, the shift lands on the cubic) would be unchanged.
+
+With `V` from the trace's per-channel `σ` (`widest · σ² / |d|²`) the term is about 0.007 px on
+a typical clean edge, below `SIDE_TOL` (0.05). On a low-contrast edge, though, `|d|²` is small
+and the term passes `SIDE_TOL`. On the gate's inputs that changed 4 of 246 icons at
+`quality-128ss` and 14 at `fast-128ss`, mostly noto-emoji's shading. A clean intake must keep
+its bytes. The planar refinement does not yet know whether the intake is soft, because the
+noise is measured after it. So the change is withheld until the soft-intake decision reaches
+the planar context and can gate it.
 
 ### The adapter (`EdgeScorer`, agreed with the representation chain)
 

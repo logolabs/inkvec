@@ -259,9 +259,7 @@ pub struct ColorTrace {
     /// Per face, when transparency was traced natively and the face is a fade: one colour
     /// at an opacity that varies across it. Empty on the classic path.
     pub face_fade: Vec<Option<native::Fade>>,
-    /// The intake's noise, measured from its edges when the colour path found it soft or
-    /// lossy ([`evidence::measure_noise`]); [`inkvec_core::noise::NoiseModel::clean`]
-    /// otherwise, and on the native and Fast paths.
+    /// The intake's noise at its edges, on a soft colour-path intake (`evidence::with_noise`).
     pub noise: inkvec_core::noise::NoiseModel,
 }
 
@@ -743,7 +741,7 @@ pub fn trace_color_full_with_alpha(
     );
     crate::diag!("fills", "snapped to their ink's colour: {snapped}");
 
-    let mut ct = finish_color_trace(
+    let ct = finish_color_trace(
         img,
         opts,
         &rgb,
@@ -755,16 +753,7 @@ pub fn trace_color_full_with_alpha(
         sigma_noise,
         &mut sw,
     );
-    // A soft or lossy intake's noise sits at its edges, where flat-region estimates cannot
-    // see it: measure it there and let the fitter weigh the boundary by it.
-    if soft_intake {
-        let faces: Vec<gradient::FillModel> =
-            ct.face_fill.iter().map(|f| f.model.clone()).collect();
-        ct.noise =
-            evidence::measure_noise(&mut ct.map, &rgb, &faces, ct.sigma_noise, opts.lossy_intake);
-        sw.mark("noise");
-    }
-    ct
+    evidence::with_noise(ct, &rgb, soft_intake, opts.lossy_intake, &mut sw)
 }
 
 /// Research entry: run the colour tracer from a caller-supplied label map.

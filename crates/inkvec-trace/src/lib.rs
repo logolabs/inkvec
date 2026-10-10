@@ -679,6 +679,7 @@ pub fn trace_color_full_with_alpha(
             gradient::bic_lambda(img.width * img.height),
             min_region.max(2),
             (opts.lossy_intake && research_lossy_regularize()).then_some(detail_sigma),
+            codec_band(opts),
         );
         if carved > 0 && inkvec_core::env::flag("INKVEC_TIMING") {
             eprintln!("  [t] carved {carved} residual feature(s) into regions");
@@ -959,6 +960,7 @@ pub fn trace_color_from_labels(
             lambda,
             opts.min_region.max(2),
             None,
+            codec_band(opts),
         );
         if carved > 0 && inkvec_core::env::flag("INKVEC_TIMING") {
             eprintln!("  [t] carved {carved} residual feature(s) into regions");
@@ -1189,6 +1191,16 @@ pub(crate) fn finish_color_trace_alpha(
         sigma_noise,
         face_fade: Vec::new(),
         noise: inkvec_core::noise::NoiseModel::clean(),
+    }
+}
+
+/// How far from a region's edge the carve stage ignores residual: the codec's band on a
+/// lossy intake (`gradient::carve::CODEC_BAND`), nothing on a clean one.
+pub(crate) fn codec_band(opts: &ColorOptions) -> usize {
+    if opts.lossy_intake {
+        gradient::carve::CODEC_BAND
+    } else {
+        0
     }
 }
 

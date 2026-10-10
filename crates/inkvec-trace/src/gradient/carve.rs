@@ -21,6 +21,31 @@ const CARVE_RESIDUAL: f64 = 0.06;
 /// Most features carved from one image, a guard against a textured region shattering.
 const CARVE_MAX: usize = 64;
 
+/// On a lossy intake, how far from its region's edge a pixel must lie, in px, to be carved
+/// ([`residual_mask`]): the codec's band, whose residual is the edge's damage, not a feature.
+///
+/// A codec's error is not stationary: on the gate's `web` tier (resized, quality-80 JPEG) its
+/// RMS is 4.5 levels of luma and 6.5 of chroma on the edge pixel, 3.1 and 2.7 one to two
+/// pixels out, 2.3 and 1.6 at two to three, and 0.2 and 0.35 in the interiors
+/// (`docs/theory/noise.md`), and its ringing is a pattern, not noise: a rim of residual just
+/// inside every region, brighter or darker by turns. Carved, that rim became extra regions
+/// along the edges, and where a gradient had explained it, a declined gradient's rim did too.
+/// Measured on `quality-web` against the recorded baseline (246 icons, 2026-10-10, the gate's
+/// distance axes; dE00, `turning_gap`, `ratio_gap`, geom):
+///
+/// | band | icons changed | dE00 | `turning_gap` | `ratio_gap` | geom |
+/// |---|---|---|---|---|---|
+/// | 1 px | 17 | +0.21 % | −4.89 % | −0.58 % | −0.01 % |
+/// | 2 px | 18 | −0.01 % | −5.38 % | −0.80 % | −0.10 % |
+/// | 3 px | 20 | −0.03 % | −5.47 % | −0.82 % | +0.08 % |
+///
+/// Two pixels is the one reach no axis reads worse at.
+///
+/// Only on a lossy intake (`ColorOptions::lossy_intake`, a lossy container or a restored
+/// image): a clean render has no codec band, and a seam two pixels from a clean edge is a
+/// feature, so a clean trace is byte-identical.
+pub const CODEC_BAND: usize = 2;
+
 /// Give clustered residual pixels their own region.
 ///
 /// The palette sees colours, not features: a two-pixel white seam through a black shape,
@@ -66,6 +91,7 @@ pub fn carve_residual_features(
         lambda,
         min_size,
         None,
+        0,
     )
 }
 
@@ -76,6 +102,10 @@ pub fn carve_residual_features(
 /// pixel whose whole 7x7 neighbourhood carries its own label: lossy input is noisiest at
 /// edges, and a threshold set by edge noise would hide a faint stroke in the middle of a
 /// region. `None` is exactly [`carve_residual_features`].
+///
+/// `codec_band`, when not 0, keeps every pixel within that many px of its region's edge out
+/// of the carving: [`CODEC_BAND`] on a lossy intake, where that band's residual is the codec's
+/// damage to the edge. 0 is exactly [`carve_residual_features`].
 ///
 /// The work runs in three stages: [`residual_mask`] marks the candidate pixels,
 /// [`mint_features`] turns their clusters into new flat regions, and [`refit_parents`]
@@ -96,6 +126,7 @@ pub fn carve_residual_features_with_detail_noise(
     lambda: f64,
     min_size: usize,
     detail_sigma: Option<f64>,
+    codec_band: usize,
 ) -> usize {
     let n = w * h;
     if fills.is_empty() || n == 0 {
@@ -108,6 +139,7 @@ pub fn carve_residual_features_with_detail_noise(
         pal,
         sigma_noise,
         lambda,
+        codec_band,
     };
     let mask = residual_mask(&img, labels, fills, detail_sigma);
     let (minted, parents) = mint_features(&img, labels, fills, ink, &mask, min_size);
@@ -134,6 +166,9 @@ struct CarveImage<'a> {
     sigma_noise: f64,
     /// Price of one editable number in the MDL cost.
     lambda: f64,
+    /// Residual within this many px of a region's edge is not carved: [`CODEC_BAND`] on a
+    /// lossy intake, 0 otherwise.
+    codec_band: usize,
 }
 
 impl CarveImage<'_> {
@@ -150,6 +185,22 @@ impl CarveImage<'_> {
             })
             .collect()
     }
+}
+
+/// Whether every pixel within `r` px of `p` (its `(2r+1)²` window) lies in the picture and
+/// carries `p`'s label: `p` is deeper inside its region than a codec band of `r` px.
+fn beyond_band(labels: &[u16], w: usize, h: usize, p: usize, r: usize) -> bool {
+    let (x, y) = (p % w, p / w);
+    let l = labels[p];
+    x >= r
+        && y >= r
+        && x + r < w
+        && y + r < h
+        && (y - r..=y + r).all(|yy| {
+            labels[yy * w + x - r..=yy * w + x + r]
+                .iter()
+                .all(|&m| m == l)
+        })
 }
 
 /// Whether pixel `p` is strictly inside its label: not on the picture edge, and all four
@@ -169,8 +220,9 @@ fn interior4(labels: &[u16], w: usize, h: usize, p: usize) -> bool {
 
 /// Stage 1: the pixels the chosen fill does not explain.
 ///
-/// A pixel is marked when it is strictly interior to its label ([`interior4`]), pure
-/// (not a blend of nearby inks, [`fill_evidence`]), its label has a reliable flat colour
+/// A pixel is marked when it is strictly interior to its label ([`interior4`]), beyond the
+/// codec's band on a lossy intake ([`beyond_band`] at [`CODEC_BAND`]), pure (not a blend of
+/// nearby inks, [`fill_evidence`]), its label has a reliable flat colour
 /// ([`region_flat_colours`]), and its residual against the label's fill,
 /// `r = max_ch |c_ch − f_ch(x, y)|` in sRGB, exceeds `max(8σ, CARVE_RESIDUAL)`. Where
 /// `detail_sigma` is given and the pixel's 7x7 neighbourhood is all one label, `σ` is
@@ -214,6 +266,9 @@ fn residual_mask(
         };
         let Some(f) = fills.get(l) else { continue };
         if !interior4(labels, w, h, p) || !pure0[p] {
+            continue;
+        }
+        if img.codec_band > 0 && !beyond_band(labels, w, h, p, img.codec_band) {
             continue;
         }
         let c = rgb[p];
@@ -489,6 +544,7 @@ mod lossy_detail_tests {
                 1.0,
                 2,
                 detail,
+                0,
             );
             labels
         };
@@ -496,5 +552,67 @@ mod lossy_detail_tests {
         let detailed = run(Some(0.5 / 255.0));
         assert_ne!(detailed[16 * w + 12], 0);
         assert_eq!(detailed[16 * w + 1], 0);
+    }
+
+    /// On a lossy intake the codec's band along a region's edge is not carved: a tinted
+    /// column one pixel inside the white ground, beside a black square, is carved without the
+    /// band and left to the ground with it, while a tinted dot deep in the ground is carved
+    /// either way.
+    #[test]
+    fn the_codec_band_along_an_edge_is_not_carved() {
+        let (w, h) = (32, 32);
+        let tint = [0.75, 1.0, 1.0];
+        let mut rgb = vec![[1.0; 3]; w * h];
+        let mut labels = vec![0u16; w * h];
+        for y in 10..22 {
+            for x in 10..22 {
+                rgb[y * w + x] = [0.0; 3];
+                labels[y * w + x] = 1;
+            }
+        }
+        for y in 12..20 {
+            rgb[y * w + 8] = tint;
+            rgb[y * w + 9] = tint;
+        }
+        for y in 25..27 {
+            for x in 25..27 {
+                rgb[y * w + x] = tint;
+            }
+        }
+        let pal = Palette {
+            rgb: vec![[1.0; 3], [0.0; 3]],
+            colors: vec![
+                crate::color::rgb_to_oklab([1.0; 3]),
+                crate::color::rgb_to_oklab([0.0; 3]),
+            ],
+            weight: vec![1.0, 1.0],
+            alpha: vec![1.0, 1.0],
+        };
+        let run = |band| {
+            let mut labels = labels.clone();
+            let mut fills = vec![flat_only([1.0; 3], 1.0), flat_only([0.0; 3], 1.0)];
+            let mut ink = vec![0, 1];
+            carve_residual_features_with_detail_noise(
+                &mut labels,
+                &rgb,
+                w,
+                h,
+                &pal,
+                &mut fills,
+                &mut ink,
+                0.5 / 255.0,
+                1.0,
+                2,
+                None,
+                band,
+            );
+            labels
+        };
+        let plain = run(0);
+        assert!(plain[16 * w + 8] > 1, "carved without the band");
+        assert!(plain[25 * w + 25] > 1, "the dot is carved");
+        let banded = run(CODEC_BAND);
+        assert_eq!(banded[16 * w + 8], 0, "the band is left to the ground");
+        assert!(banded[25 * w + 25] > 1, "the dot is still carved");
     }
 }

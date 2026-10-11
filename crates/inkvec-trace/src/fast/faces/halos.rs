@@ -290,9 +290,23 @@ impl RunLabels {
     /// opaque (no opacity channel) and `inks` sRGB 0..1; every label must index into them.
     /// Returns the number of components given back in each of the two passes.
     pub(crate) fn absorb_halos(&mut self, px: Pixels<'_>, inks: &[[f32; 4]]) -> (usize, usize) {
+        self.absorb_halos_held(px, inks, false)
+    }
+
+    /// [`RunLabels::absorb_halos`], with `strict` holding every thin component to the strip
+    /// rule ([`STRIP_REACH`]) and the segment test ([`HALO_LINE_TOL`]), not only one of an ink
+    /// that owns an area elsewhere. Quality mode's use (`super::super::codec`): its palette
+    /// admits a thin ink on evidence, and a real strip can lie on the segment between its
+    /// neighbours. Fast passes `false`.
+    pub(crate) fn absorb_halos_held(
+        &mut self,
+        px: Pixels<'_>,
+        inks: &[[f32; 4]],
+        strict: bool,
+    ) -> (usize, usize) {
         self.components();
         let inks_ycc: Vec<[f32; 3]> = inks.iter().map(|&c| ycc(c)).collect();
-        let pair = self.halo_pairs(px, &inks_ycc);
+        let pair = self.halo_pairs(px, &inks_ycc, strict);
         let first = pair.iter().filter(|p| p.is_some()).count();
         if first == 0 {
             return (0, 0);
@@ -331,7 +345,12 @@ impl RunLabels {
     /// The pair of inks each component is a halo of ([`RunLabels::absorb_halos`]'s first
     /// pass), `None` for one that is not a halo; one entry per component. Needs fresh
     /// components. `inks` are YCbCr ([`ycc`]); labels outside them are never halos.
-    fn halo_pairs(&self, px: Pixels<'_>, inks: &[[f32; 3]]) -> Vec<Option<(u16, u16)>> {
+    fn halo_pairs(
+        &self,
+        px: Pixels<'_>,
+        inks: &[[f32; 3]],
+        strict: bool,
+    ) -> Vec<Option<(u16, u16)>> {
         let n_inks = inks.len();
         let n = self.size.len();
         let deep = self.deep_components(HALO_REACH);
@@ -345,7 +364,9 @@ impl RunLabels {
             has_area[self.label[c] as usize] = true;
         }
         let candidate = |c: usize| {
-            !deep[c] && in_palette(c) && !(has_area[self.label[c] as usize] && strip_deep[c])
+            !deep[c]
+                && in_palette(c)
+                && !((has_area[self.label[c] as usize] || strict) && strip_deep[c])
         };
         // The inks of each component's thick neighbours.
         let thick_sides = Lists::of(
@@ -390,7 +411,7 @@ impl RunLabels {
             }
             let mean = sum[c].map(|v| (v / self.size[c] as f64) as f32);
             pair[c] = halo_pair(mean, &sides, inks).filter(|&(a, b)| {
-                !has_area[self.label[c] as usize]
+                (!has_area[self.label[c] as usize] && !strict)
                     || coverage(mean, inks[a as usize], inks[b as usize])
                         .is_some_and(|(_, d)| d <= HALO_LINE_TOL * HALO_LINE_TOL)
             });

@@ -53,6 +53,7 @@
 //! mode.
 
 mod bands;
+mod codec;
 mod curve;
 mod faces;
 mod front;
@@ -63,6 +64,7 @@ mod prims;
 mod replay;
 mod smooth;
 
+pub(crate) use codec::clean_labels as clean_lossy_labels;
 pub(crate) use front::{trace_color, trace_color_native};
 
 use crate::planar::Edge;

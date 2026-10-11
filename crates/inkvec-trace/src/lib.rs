@@ -547,6 +547,16 @@ pub fn trace_color_full_with_alpha(
     progress::begin("despeckle");
 
     despeckle(&mut labels, img.width, img.height, min_region);
+    // A lossy intake: the codec's variants of an ink, its halos and its thin variants go back
+    // to their inks (`fast::codec`). Opaque only, as the test reads JPEG's colour space.
+    if opts.lossy_intake && source_alpha.is_none_or(|a| a.iter().all(|&v| v >= native::OPAQUE)) {
+        let c = fast::clean_lossy_labels(&mut labels, img.width, img.height, &rgb, &pal);
+        let (v, (hl, sp)) = (c.variants, c.halos);
+        crate::diag!(
+            "slivers",
+            "lossy intake: {v} ink variants, {hl} halos, {sp} halo specks"
+        );
+    }
     sw.mark("despeckle");
     progress::begin("blend_absorb");
 

@@ -354,7 +354,7 @@ passes, six on a lossy intake, in the order the front end calls them (`fast/fron
    (impl2/robust) found no real image that reaches the limit in Fast, whose palette and
    despeckle keep two-ink noise at 18,000 to 35,000 faces.
 
-**Noisy input: codec halos and ink variants** (`fast/faces/halos.rs`, 2026-10-10). Both
+**Noisy input: codec halos and ink variants** (`fast/faces/halos.rs`, 2026-10-10; Quality runs the same passes on a lossy intake, with the halo test in a stricter form and a variant merge of its own, `fast/codec.rs`, stage 04). Both
 passes run only on a lossy intake (`ColorOptions::lossy_intake`, from the container) of an
 opaque image; a clean intake takes neither, and the six clean gate conditions are
 byte-identical. They read the evidence of the pixels, not the flag alone: a raster with no

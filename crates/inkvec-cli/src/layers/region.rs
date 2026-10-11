@@ -9,6 +9,8 @@
 //! happens between two lines is not seen, which is why the checks that use these regions
 //! add a margin of a pixel and more (see [`super::check`]).
 
+use std::cmp::Ordering;
+
 use inkvec_core::Point;
 
 /// Scan-line spacing, px: four lines per pixel row.
@@ -78,7 +80,8 @@ impl Region {
                 ymax = ymax.max(p.y);
             }
         }
-        if !(ymin <= ymax) {
+        // Empty, or NaN on either side.
+        if ymin.partial_cmp(&ymax).is_none_or(Ordering::is_gt) {
             return Self::empty();
         }
         let k0 = first_line_at_or_after(ymin);
@@ -120,7 +123,7 @@ impl Region {
                 let mut spans = Vec::new();
                 match rule {
                     Rule::EvenOdd => {
-                        for pair in c.chunks_exact(2) {
+                        for pair in c.as_chunks::<2>().0 {
                             push_span(&mut spans, pair[0].0, pair[1].0);
                         }
                     }

@@ -128,3 +128,20 @@ fn a_window_term_is_the_squared_standardised_residual() {
     assert_eq!(res, r(1, 2));
     assert_eq!(t, Q::int(4));
 }
+
+#[test]
+fn the_float_forms_are_the_formulas_they_print() {
+    let v = values(11 * 50, -3.0, 3.0);
+    for c in v.as_chunks::<11>().0 {
+        let h = [c[0], c[1], c[2], c[3], c[4]];
+        let d = h[0] - 4.0 * h[1] + 6.0 * h[2] - 4.0 * h[3] + h[4];
+        assert_eq!(fourth_difference_f64(&h)[0].to_bits(), d.to_bits(), "{h:?}");
+        let mut x = *c;
+        for v in &mut x[5..] {
+            *v = v.abs();
+        }
+        let var = x[5] + 16.0 * x[6] + 36.0 * x[7] + 16.0 * x[8] + x[9];
+        let e = d * d - x[10] * var;
+        assert_eq!(corner_excess_f64(&x)[0].to_bits(), e.to_bits(), "{x:?}");
+    }
+}

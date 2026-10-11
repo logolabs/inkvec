@@ -198,7 +198,7 @@ pub(crate) fn gate_count(d: &str) -> f64 {
                 'H' | 'V' => (1, 2.0),
                 'Q' | 'S' => (
                     4,
-                    if c.to_ascii_uppercase() == 'Q' {
+                    if c.eq_ignore_ascii_case(&'Q') {
                         4.0
                     } else {
                         6.0
@@ -209,9 +209,8 @@ pub(crate) fn gate_count(d: &str) -> f64 {
                 'M' => (2, 2.0),
                 _ => (0, 0.0),
             };
-            if per > 0 {
-                let n = args / per;
-                total += if c.to_ascii_uppercase() == 'M' {
+            if let Some(n) = args.checked_div(per) {
+                total += if c.eq_ignore_ascii_case(&'M') {
                     each * n.saturating_sub(1) as f64
                 } else {
                     each * n as f64

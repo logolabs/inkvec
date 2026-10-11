@@ -653,3 +653,83 @@ fn a_singular_fit_is_refused() {
     assert!(RunMoments::new(&[o, o, o], 1).fit(0..3).is_none());
     assert!(RunMoments::new(&[o, o, o], 0).fit(0..3).is_some());
 }
+
+fn near(a: Point, b: Point) -> bool {
+    (a.x - b.x).abs() < 1e-12 && (a.y - b.y).abs() < 1e-12
+}
+
+fn quarter_arc() -> EllipticalArc {
+    EllipticalArc {
+        centre: p(1.0, 1.0),
+        radii: (2.0, 1.0),
+        x_rotation: 0.0,
+        start_angle: 0.0,
+        sweep_angle: std::f64::consts::FRAC_PI_2,
+    }
+}
+
+/// Each kind of piece is walked along its own parameter: the Bézier forms through their
+/// control points, an arc through its parameter angle.
+#[test]
+fn pieces_are_walked_along_their_parameter() {
+    let q = Piece::Quad([p(0.0, 0.0), p(1.0, 2.0), p(2.0, 0.0)]);
+    assert!(near(q.point(0.0), p(0.0, 0.0)) && near(q.point(1.0), p(2.0, 0.0)));
+    assert!(near(q.point(0.5), p(1.0, 1.0)));
+    let c = Piece::Cubic([p(0.0, 0.0), p(0.0, 3.0), p(3.0, 3.0), p(3.0, 0.0)]);
+    assert!(near(c.point(0.0), p(0.0, 0.0)) && near(c.point(1.0), p(3.0, 0.0)));
+    assert!(near(c.point(0.5), p(1.5, 2.25)));
+    let a = Piece::Arc(quarter_arc());
+    assert!(near(a.point(0.0), p(3.0, 1.0)) && near(a.point(1.0), p(1.0, 2.0)));
+}
+
+/// Translation moves every point of every kind of piece by the same offset.
+#[test]
+fn translation_moves_every_kind_of_piece() {
+    let pieces = [
+        Piece::Line([p(0.0, 0.0), p(1.0, 1.0)]),
+        Piece::Quad([p(0.0, 0.0), p(1.0, 2.0), p(2.0, 0.0)]),
+        Piece::Cubic([p(0.0, 0.0), p(0.0, 3.0), p(3.0, 3.0), p(3.0, 0.0)]),
+        Piece::Arc(quarter_arc()),
+    ];
+    let moved = translated(&pieces, 0.5, -2.0);
+    for (a, b) in pieces.iter().zip(&moved) {
+        for t in [0.0, 0.3, 1.0] {
+            let (pa, pb) = (a.point(t), b.point(t));
+            assert!(near(pb, p(pa.x + 0.5, pa.y - 2.0)), "{a:?} at {t}");
+        }
+    }
+}
+
+/// usvg's model draws an arc as cubics and leaves every other piece alone; the exact model
+/// leaves the arc alone too.
+#[test]
+fn the_renderer_replaces_only_arcs() {
+    let line = Piece::Line([p(3.0, 1.0), p(3.0, 0.0)]);
+    let pieces = [line, Piece::Arc(quarter_arc())];
+    let drawn = RenderModel::usvg().as_rendered(&pieces);
+    assert_eq!(drawn[0], line);
+    assert!(drawn.len() >= 2 && drawn[1..].iter().all(|q| matches!(q, Piece::Cubic(_))));
+    assert_eq!(RenderModel::default().as_rendered(&pieces), pieces.to_vec());
+}
+
+/// Under a blur a window's area moves by `½ μ₂ A''`: nothing on a straight edge, whose area
+/// profile across the strip is linear, and the second difference itself on a curved one.
+#[test]
+fn a_blur_moves_a_window_only_where_the_edge_curves() {
+    let w = col(3, 1, 4); // strip x in [2.5, 3.5], y in [0.5, 4.5]
+    let blur = RenderModel {
+        psf_mu2: 0.25,
+        ..RenderModel::default()
+    };
+    let straight = [Piece::Line([p(0.0, 1.9), p(10.0, 2.9)])];
+    let exact = left_area(&straight, &w);
+    assert!((blur.window_area(&straight, &w) - exact).abs() < 1e-12);
+    assert_eq!(RenderModel::default().window_area(&straight, &w), exact);
+    let curved = [Piece::Quad([p(0.0, 3.5), p(3.0, 0.5), p(6.0, 3.5)])];
+    let a = left_area(&curved, &w);
+    let plus = left_area(&translated(&curved, -1.0, 0.0), &w);
+    let minus = left_area(&translated(&curved, 1.0, 0.0), &w);
+    let d2 = plus - 2.0 * a + minus;
+    assert!(d2.abs() > 0.05, "{d2}");
+    assert!((blur.window_area(&curved, &w) - (a + 0.125 * d2)).abs() < 1e-12);
+}

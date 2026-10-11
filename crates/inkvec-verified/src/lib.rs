@@ -27,3 +27,40 @@
 pub mod generated;
 pub mod iv;
 pub mod q;
+
+#[cfg(test)]
+mod tests {
+    use crate::generated::design::{span_link_f64, span_within_f64};
+    use crate::generated::evidence::{
+        corner_excess_f64, fourth_difference_f64, trapezoid_f64, window_term_f64,
+    };
+    use crate::generated::strip::{histopolate_f64, strip_residual_f64};
+
+    /// Every float kernel once, from its own crate: coverage counts an `#[inline]` function's
+    /// runs only where it is instrumented, and its calls from the integration tests and from
+    /// the tracer may read as none. The values are exact in `f64`; the kernels' properties are
+    /// tested in `tests/`.
+    #[test]
+    fn every_float_kernel_on_an_exact_case() {
+        // [a0, a1] = [1, 2] inside [0, 3] widened by 1/2; spans ending at 2 and starting at
+        // 3, each widened by 1/2, just touch.
+        assert_eq!(span_within_f64(&[1.0, 2.0, 0.0, 3.0, 0.5]), [1.5, 1.5]);
+        assert_eq!(span_link_f64(&[2.0, 3.0, 0.5]), [0.0]);
+        // From (0, 1/2) to (1, 3/4) above 0: 5/8. S − A = 1/2 over V = 1/16: χ² 4.
+        assert_eq!(trapezoid_f64(&[0.0, 0.5, 1.0, 0.75, 0.0]), [0.625]);
+        assert_eq!(window_term_f64(&[1.75, 1.25, 0.0625]), [4.0, 0.5]);
+        // h = (0, 0, 0, 1, 2): D = −2; unit variances weigh 1 + 16 + 36 + 16 + 1 = 70.
+        let h = [0.0, 0.0, 0.0, 1.0, 2.0];
+        assert_eq!(fourth_difference_f64(&h), [-2.0]);
+        let mut x = [1.0; 11];
+        x[..5].copy_from_slice(&h);
+        x[10] = 1.0 / 16.0;
+        assert_eq!(corner_excess_f64(&x), [4.0 - 70.0 / 16.0]);
+        // Equal means are the constant cubic, which the line t = 1 meets wherever n_v = 1.
+        assert_eq!(histopolate_f64(&[1.0; 4]), [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(
+            strip_residual_f64(&[1.0, 1.0, 1.0, 1.0, 0.3, 0.0, 1.0, 1.0]),
+            [0.0]
+        );
+    }
+}

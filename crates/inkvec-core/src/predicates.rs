@@ -100,6 +100,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn left_and_collinear_are_the_exact_sign() {
+        let (a, b) = (Point::new(0.5, 0.5), Point::new(12.0, 12.0));
+        assert!(is_left(a, b, Point::new(0.0, 1.0)));
+        assert!(!is_left(a, b, Point::new(1.0, 0.0)));
+        // Collinear in exact arithmetic, where the naive determinant is not zero.
+        assert!(is_collinear(a, b, Point::new(24.0, 24.0)));
+        assert!(!is_left(a, b, Point::new(24.0, 24.0)));
+        assert!(!is_collinear(a, b, Point::new(24.0, 24.000001)));
+    }
+
+    #[test]
     fn orientation_signs() {
         let a = Point::new(0.0, 0.0);
         let b = Point::new(1.0, 0.0);

@@ -2,6 +2,7 @@
 
 use inkvec_verified::generated::strip::{
     histopolate_f64, histopolate_iv, histopolate_q, strip_residual_f64, strip_residual_iv,
+    strip_residual_q,
 };
 use inkvec_verified::iv::Iv;
 use inkvec_verified::q::{self, Q};
@@ -86,4 +87,32 @@ fn a_cubic_is_rebuilt_exactly_and_its_crossing_certified() {
     off[7] += 0.01;
     let res = strip_residual_iv(&off.map(|v| Iv::point(v).unwrap())).unwrap();
     assert!(!res[0].within(1e-9));
+}
+
+#[test]
+fn the_exact_residual_holds_the_float_one() {
+    // Means on a 1/64 grid, a crossing on a 1/8 one: the enclosure holds the exact
+    // residual and the float one, and the float cubic is the formula it replaced.
+    let grid = |k: usize| ((k * 37 % 97) as f64 - 48.0) / 64.0;
+    for i in 0..60 {
+        let x: [f64; 8] = std::array::from_fn(|k| grid(i * 8 + k));
+        let x = [
+            x[0],
+            x[1],
+            x[2],
+            x[3],
+            (i % 9) as f64 / 8.0 - 0.5,
+            0.0,
+            1.0,
+            x[7],
+        ];
+        let f = strip_residual_f64(&x)[0];
+        let e = strip_residual_q(&x.map(|v| Q::from_f64(v).unwrap())).unwrap()[0];
+        let iv = strip_residual_iv(&x.map(|v| Iv::point(v).unwrap())).unwrap()[0];
+        assert!(e.ge_f64(iv.lo) && e.le_f64(iv.hi), "{x:?}");
+        assert!(iv.contains(f), "{x:?}");
+        let m = [x[0], x[1], x[2], x[3]];
+        let h = histopolate_f64(&m);
+        assert_eq!(h.map(f64::to_bits), by_hand(&m).map(f64::to_bits), "{m:?}");
+    }
 }

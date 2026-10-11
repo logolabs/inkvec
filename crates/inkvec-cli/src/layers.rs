@@ -377,42 +377,8 @@ fn complete_face(
     if u.is_empty() || e_now.dilate(0.75).intersect(&u).area() < 0.5 {
         return None;
     }
-    // What the face shows: its own region outside the cover, and the seam between its region
-    // and a cover drawn narrower than the face above's region in the map, where the face's
-    // underlap paints it today. As the underlap does, the reach into the seam tapers off
-    // towards any other face over [`TAPER`]: at a junction of three paints, nothing.
     let crop = (x0 - PAD, y0 - PAD, x1 + PAD, y1 + PAD);
-    let seam = map_above
-        .crop(crop.0, crop.1, crop.2, crop.3)
-        .minus(&u)
-        .minus(e_now);
-    let others = all_faces
-        .crop(
-            crop.0 - TAPER,
-            crop.1 - TAPER,
-            crop.2 + TAPER,
-            crop.3 + TAPER,
-        )
-        .minus(e_now)
-        .minus(map_above);
-    let v0 = e_now.minus(&u);
-    let mut gap = Region::empty();
-    if !seam.is_empty() {
-        for k in 1..=RAMP {
-            let s = k as f64 / RAMP as f64;
-            let reach = e_now.dilate(UNDER * s).intersect(&seam);
-            gap = gap.union(&reach.minus(&others.dilate(TAPER * s)));
-        }
-    }
-    if trace() && !gap.is_empty() {
-        eprintln!(
-            "layers face {f}: seam gap area {:.3} box {:?}; others empty {}",
-            gap.area(),
-            gap.bbox(),
-            others.is_empty()
-        );
-    }
-    let v = v0.union(&gap);
+    let v = shown(f, e_now, &u, map_above, all_faces, crop);
     if v.area() < 1.0 {
         return None;
     }
@@ -472,37 +438,128 @@ fn complete_face(
     };
 
     // Primitives through the boundary the face owns.
-    let owned = owned_points(inp, f, &u);
-    if owned.len() >= 8 {
-        let sigma = vec![0.05; owned.len()];
-        if let Some(c) = inkvec_fit::primitives::fit_circle(&owned, &sigma) {
-            for e in [REACH, 0.5, 0.0] {
-                let kind = PrimitiveKind::Circle { c: c.c, r: c.r + e };
-                if let Some(reg) = bounded_region(&[shape::flatten_primitive(&kind)], hb) {
-                    consider(Shape::Prim(kind), "circle", 3.0, 0.0, &reg);
-                }
-            }
-        }
-        if let Some(el) = inkvec_fit::primitives::fit_ellipse(&owned, &sigma) {
-            for e in [REACH, 0.5, 0.0] {
-                let kind = PrimitiveKind::Ellipse {
-                    c: el.c,
-                    rx: el.rx + e,
-                    ry: el.ry + e,
-                    angle: el.angle,
-                };
-                if let Some(reg) = bounded_region(&[shape::flatten_primitive(&kind)], hb) {
-                    consider(Shape::Prim(kind), "ellipse", 4.0, 0.0, &reg);
-                }
-            }
+    for (kind, name, cost, reg) in round_shapes(&owned_points(inp, f, &u), hb) {
+        consider(Shape::Prim(kind), name, cost, 0.0, &reg);
+    }
+    for (kind, reg) in rects(&face_rings(inp, f), &l, &v, hb) {
+        consider(Shape::Prim(kind), "rect", 6.0, 0.0, &reg);
+    }
+    // The face's own rings with the covered runs replaced.
+    let simplified = simplified_rings(inp, f, e_now, &u, &l, &h, hb);
+    if let Some((d, reg, allow, kinds)) = &simplified {
+        consider(Shape::Path(d.clone()), kinds, gate_count(d), *allow, reg);
+    }
+    if inkvec_core::env::number("INKVEC_COMPLETION_DUMP").is_some_and(|x| x as usize == f) {
+        dump(
+            f,
+            &[
+                (&u, [90, 90, 200]),
+                (&v, [200, 200, 90]),
+                (&l.minus(&v), [90, 200, 90]),
+            ],
+            simplified.as_ref().map(|s| &s.1),
+            (x0 - PAD, y0 - PAD, x1 + PAD, y1 + PAD),
+        );
+    }
+    Some(best)
+}
+
+/// What face `f` shows, written now as `e_now` under its cover `u`: its own region outside
+/// the cover, and the seam between its region and a cover drawn narrower than the face
+/// above's region in the map, where the face's underlap paints it today. As the underlap
+/// does, the reach into the seam tapers off towards any other face over [`TAPER`]: at a
+/// junction of three paints, nothing.
+fn shown(
+    f: usize,
+    e_now: &Region,
+    u: &Region,
+    map_above: &Region,
+    all_faces: &Region,
+    crop: (f64, f64, f64, f64),
+) -> Region {
+    let seam = map_above
+        .crop(crop.0, crop.1, crop.2, crop.3)
+        .minus(u)
+        .minus(e_now);
+    let others = all_faces
+        .crop(
+            crop.0 - TAPER,
+            crop.1 - TAPER,
+            crop.2 + TAPER,
+            crop.3 + TAPER,
+        )
+        .minus(e_now)
+        .minus(map_above);
+    let v0 = e_now.minus(u);
+    let mut gap = Region::empty();
+    if !seam.is_empty() {
+        for k in 1..=RAMP {
+            let s = k as f64 / RAMP as f64;
+            let reach = e_now.dilate(UNDER * s).intersect(&seam);
+            gap = gap.union(&reach.minus(&others.dilate(TAPER * s)));
         }
     }
+    if trace() && !gap.is_empty() {
+        eprintln!(
+            "layers face {f}: seam gap area {:.3} box {:?}; others empty {}",
+            gap.area(),
+            gap.bbox(),
+            others.is_empty()
+        );
+    }
+    v0.union(&gap)
+}
+
+/// The circles, then the ellipses, through the boundary a face owns, each at its fit and
+/// grown by [`REACH`] and half a pixel, with the numbers each writes: (shape, kind, cost,
+/// its region within `hb`).
+fn round_shapes(
+    owned: &[Point],
+    hb: (f64, f64, f64, f64),
+) -> Vec<(PrimitiveKind, &'static str, f64, Region)> {
+    let mut out = Vec::new();
+    if owned.len() < 8 {
+        return out;
+    }
+    let sigma = vec![0.05; owned.len()];
+    let mut add = |kind: PrimitiveKind, name: &'static str, cost: f64| {
+        if let Some(reg) = bounded_region(&[shape::flatten_primitive(&kind)], hb) {
+            out.push((kind, name, cost, reg));
+        }
+    };
+    if let Some(c) = inkvec_fit::primitives::fit_circle(owned, &sigma) {
+        for e in [REACH, 0.5, 0.0] {
+            add(PrimitiveKind::Circle { c: c.c, r: c.r + e }, "circle", 3.0);
+        }
+    }
+    if let Some(el) = inkvec_fit::primitives::fit_ellipse(owned, &sigma) {
+        for e in [REACH, 0.5, 0.0] {
+            let kind = PrimitiveKind::Ellipse {
+                c: el.c,
+                rx: el.rx + e,
+                ry: el.ry + e,
+                angle: el.angle,
+            };
+            add(kind, "ellipse", 4.0);
+        }
+    }
+    out
+}
+
+/// The rectangles round what a face shows, with their regions within `hb`.
+fn rects(
+    rings: &[Vec<Point>],
+    l: &Region,
+    v: &Region,
+    hb: (f64, f64, f64, f64),
+) -> Vec<(PrimitiveKind, Region)> {
+    let mut out = Vec::new();
     // The rectangle round what the face shows. A region's box is exact across a scan line
     // but known along it only to a line's spacing, so first each side is put on the face's
     // own geometry when a vertex lies that close, then on the box as sampled.
     // The box of the lower bound comes first: what the face shows with its reach under the
     // cover, and nothing round the sides that meet no cover.
-    let pts: Vec<Point> = face_rings(inp, f).into_iter().flatten().collect();
+    let pts: Vec<Point> = rings.iter().flatten().copied().collect();
     let snap = |t: f64, of: fn(&Point) -> f64| -> f64 {
         pts.iter()
             .map(of)
@@ -530,29 +587,12 @@ fn complete_face(
                     rx: 0.0,
                 };
                 if let Some(reg) = bounded_region(&[shape::flatten_primitive(&kind)], hb) {
-                    consider(Shape::Prim(kind), "rect", 6.0, 0.0, &reg);
+                    out.push((kind, reg));
                 }
             }
         }
     }
-    // The face's own rings with the covered runs replaced.
-    let simplified = simplified_rings(inp, f, e_now, &u, &l, &h, hb);
-    if let Some((d, reg, allow, kinds)) = &simplified {
-        consider(Shape::Path(d.clone()), kinds, gate_count(d), *allow, reg);
-    }
-    if inkvec_core::env::number("INKVEC_COMPLETION_DUMP").is_some_and(|x| x as usize == f) {
-        dump(
-            f,
-            &[
-                (&u, [90, 90, 200]),
-                (&v, [200, 200, 90]),
-                (&l.minus(&v), [90, 200, 90]),
-            ],
-            simplified.as_ref().map(|s| &s.1),
-            (x0 - PAD, y0 - PAD, x1 + PAD, y1 + PAD),
-        );
-    }
-    Some(best)
+    out
 }
 
 /// Debugging (`INKVEC_COMPLETION_DUMP=<face>`): the regions as colours, the candidate's edge in
@@ -743,10 +783,7 @@ fn simplified_rings(
     let mut kinds: Vec<&'static str> = Vec::new();
     let mut current = region_of(&cyc)?;
     for r in 0..cyc.len() {
-        loop {
-            let Some((a, b)) = next_run(&cyc[r]) else {
-                break;
-            };
+        while let Some((a, b)) = next_run(&cyc[r]) {
             // Whatever happens, this run has been tried; the options inherit that, so one
             // that keeps some of the run's segments does not hand them back untried.
             mark_tried(&mut cyc[r], a, b);
@@ -786,7 +823,7 @@ fn simplified_rings(
                     current = reg;
                     allowance += extra;
                     changed = true;
-                    if !kinds.iter().any(|k| *k == what) {
+                    if !kinds.contains(&what) {
                         kinds.push(what);
                     }
                     break;
@@ -963,6 +1000,49 @@ fn mark_tried(c: &mut CycRing, a: usize, b: usize) {
     }
 }
 
+/// `c` without the run between segment `prev` and segment `next` (its interior vertices and
+/// segments), with `mid` (vertices, each followed by a line) spliced in after the run's
+/// first vertex, which becomes `new_a`; `new_b` takes the place of the vertex after it.
+fn splice_run(
+    c: &CycRing,
+    prev: usize,
+    next: usize,
+    new_a: Point,
+    mid: &[Point],
+    new_b: Point,
+) -> CycRing {
+    let n = c.len();
+    let mut verts = Vec::new();
+    let mut segs = Vec::new();
+    let mut covered = Vec::new();
+    // Walk from `next` round to `prev`, then the replacement.
+    let mut i = next;
+    loop {
+        verts.push(if i == next { new_b } else { c.verts[i] });
+        segs.push(c.segs[i].clone());
+        covered.push(c.covered[i]);
+        if i == prev {
+            break;
+        }
+        i = (i + 1) % n;
+    }
+    // Vertex a (moved) and the replacement's own vertices, joined by lines.
+    verts.push(new_a);
+    segs.push(Segment::Line(Point::new(0.0, 0.0)));
+    covered.push(false);
+    for &m in mid {
+        verts.push(m);
+        segs.push(Segment::Line(Point::new(0.0, 0.0)));
+        covered.push(false);
+    }
+    // The last pushed line runs to `new_b`, the first vertex.
+    CycRing {
+        verts,
+        segs,
+        covered,
+    }
+}
+
 /// The rings with run `a ..= b` replaced, best first: the corner of the owned lines on
 /// either side, then a chord reaching [`REACH`] and half that under the cover, then a
 /// plain chord. Only replacements that write fewer numbers than the run.
@@ -979,39 +1059,8 @@ fn replacements(c: &CycRing, a: usize, b: usize, e_now: &Region) -> Vec<Option3>
     let vb = c.verts[next];
     let mut out = Vec::new();
 
-    // Removes the run's interior vertices a+1 ..= b and its segments, splicing `insert`
-    // (vertices, each followed by a line) after vertex a, which becomes `new_a`.
-    let splice = |new_a: Point, mid: &[Point], new_b: Point| -> CycRing {
-        let mut verts = Vec::new();
-        let mut segs = Vec::new();
-        let mut covered = Vec::new();
-        // Walk from `next` round to `prev`, then the replacement.
-        let mut i = next;
-        loop {
-            verts.push(if i == next { new_b } else { c.verts[i] });
-            segs.push(c.segs[i].clone());
-            covered.push(c.covered[i]);
-            if i == prev {
-                break;
-            }
-            i = (i + 1) % n;
-        }
-        // Vertex a (moved) and the replacement's own vertices, joined by lines.
-        verts.push(new_a);
-        segs.push(Segment::Line(Point::new(0.0, 0.0)));
-        covered.push(false);
-        for &m in mid {
-            verts.push(m);
-            segs.push(Segment::Line(Point::new(0.0, 0.0)));
-            covered.push(false);
-        }
-        // The last pushed line runs to `new_b`, the first vertex.
-        CycRing {
-            verts,
-            segs,
-            covered,
-        }
-    };
+    let splice =
+        |new_a: Point, mid: &[Point], new_b: Point| splice_run(c, prev, next, new_a, mid, new_b);
 
     let is_line = |i: usize| matches!(c.segs[i], Segment::Line(_));
     // 1. The corner where the owned lines on either side meet.

@@ -13,8 +13,8 @@
       },
       "svg": {
         "x86_64-linux-gnu": {
-          "bytes": 8517,
-          "sha256": "b62dc476aefdcb262dc5cf5538b547f8aec5dbed9ae7e605135f3d85f48d904b"
+          "bytes": 8349,
+          "sha256": "ef4e226361037eac0a1763f8610774ff0658d30b58d207473c291ce5470e5c46"
         }
       }
     },
@@ -32,8 +32,8 @@
       },
       "svg": {
         "x86_64-linux-gnu": {
-          "bytes": 8517,
-          "sha256": "b62dc476aefdcb262dc5cf5538b547f8aec5dbed9ae7e605135f3d85f48d904b"
+          "bytes": 8349,
+          "sha256": "ef4e226361037eac0a1763f8610774ff0658d30b58d207473c291ce5470e5c46"
         }
       }
     },
@@ -53,8 +53,8 @@
       },
       "svg": {
         "x86_64-linux-gnu": {
-          "bytes": 5766,
-          "sha256": "34d146392c6d1b8f531745c41e100c1851b443ae54c81993bec2af0c3178efa3"
+          "bytes": 5647,
+          "sha256": "972e2f0a364778e775e62c4c87da0669cfecdbabfd227334a92ace53f0bc8800"
         }
       }
     },
@@ -71,8 +71,8 @@
       },
       "svg": {
         "x86_64-linux-gnu": {
-          "bytes": 8537,
-          "sha256": "d8157860a4c3b9105ab84aa620603781d1e6e8b8f4cc22b845c1b0b3b203a1a2"
+          "bytes": 8369,
+          "sha256": "89d5100eb55c47c07c134d19ef241a4bec81a0bdfd6478a15029606388b11032"
         }
       }
     },
@@ -89,8 +89,8 @@
       },
       "svg": {
         "x86_64-linux-gnu": {
-          "bytes": 3029,
-          "sha256": "c802c52e4ac32b7b59fec79e6452472bb209a6d61f5d0b1205536799e56947ff"
+          "bytes": 2964,
+          "sha256": "beb7db2b1ddcd9a068a51715056f526fa31cf4bf7c1d1a621975c4c8779feec2"
         }
       }
     },
@@ -110,8 +110,8 @@
       },
       "svg": {
         "x86_64-linux-gnu": {
-          "bytes": 3029,
-          "sha256": "c802c52e4ac32b7b59fec79e6452472bb209a6d61f5d0b1205536799e56947ff"
+          "bytes": 2964,
+          "sha256": "beb7db2b1ddcd9a068a51715056f526fa31cf4bf7c1d1a621975c4c8779feec2"
         }
       }
     },
@@ -129,8 +129,8 @@
       },
       "svg": {
         "x86_64-linux-gnu": {
-          "bytes": 3045,
-          "sha256": "691f58e0626a73f6fb3288a36ff9e4e0dbe3e0d104ddc37426f13cb171dde903"
+          "bytes": 2980,
+          "sha256": "f72515edc7f187930b6d3cc95f03657ed4270959fc32cbcb09cfafbc667d1c06"
         }
       }
     },

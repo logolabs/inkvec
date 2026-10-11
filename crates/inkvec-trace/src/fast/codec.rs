@@ -1,7 +1,10 @@
 //! A lossy intake's codec damage taken out of a palette label image: Quality mode's use of
 //! Fast's halo pass ([`super::faces`]), with one test of its own. Called from
 //! [`crate::trace_color_full_with_alpha`] after the labels are despeckled and before blend
-//! absorption, on an opaque lossy intake only.
+//! absorption, on an opaque lossy intake only, and not on an image that came out of the
+//! restorer (`ColorOptions::restored`): the restorer took the codec's damage out, and on the
+//! restored path (`quality-web`, `--restore on`, the gate's 0.3 sample) the clean-up read dE00
+//! +0.24 %, `openmoji/E30B`'s brown border strip, a real ink, going to the black outline.
 //!
 //! # The problem
 //!
@@ -51,24 +54,16 @@ use crate::Palette;
 /// `turning_gap` −36.57 %, `ratio_gap` −11.89 %, geom −3.73 %. No sweep of this value.
 pub(crate) const CODEC_VARIANT_LEVELS: f32 = 8.0;
 
-/// What [`clean_labels`] did.
-pub(crate) struct Cleanup {
-    /// Inks taken for the codec's variant of a heavier one.
-    pub(crate) variants: usize,
-    /// Halo components and halo specks given back.
-    pub(crate) halos: (usize, usize),
-}
-
 /// Take the codec's variants, halos and thin variants out of the palette labels `labels`
 /// (`w × h`, opaque), `rgb` being the image over white and `pal` the palette they index. See
-/// the module documentation.
+/// the module documentation. Says what it did under `INKVEC_DIAG`.
 pub(crate) fn clean_labels(
     labels: &mut [u16],
     w: usize,
     h: usize,
     rgb: &[[f32; 3]],
     pal: &Palette,
-) -> Cleanup {
+) {
     let to = variant_map(pal);
     let variants = to
         .iter()
@@ -91,7 +86,12 @@ pub(crate) fn clean_labels(
     for l in labels.iter_mut() {
         *l = face_color[*l as usize] as u16;
     }
-    Cleanup { variants, halos }
+    crate::diag!(
+        "slivers",
+        "lossy intake: {variants} codec variants, {} halos and {} halo specks given back",
+        halos.0,
+        halos.1
+    );
 }
 
 /// For each ink of `pal`, the ink it is ([`CODEC_VARIANT_LEVELS`], module docs, step 1):

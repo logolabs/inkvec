@@ -153,6 +153,10 @@ pub struct Args {
     /// a re-saved screenshot, an export from a chat app -- where the file no longer
     /// admits what was done to it.
     pub lossy: inkvec_sr::Mode,
+    /// Set by the restorer pre-pass, never on the command line: the raster being traced came
+    /// out of the restorer, so the codec damage `lossy` stands for is gone (see
+    /// `inkvec_trace::ColorOptions::restored`).
+    pub restored: bool,
     /// Whether to run the super-resolution pre-pass before tracing: never, always,
     /// or `Auto` to trace, measure the fit, and clean and retrace only if the trace
     /// disagrees with the input where it claims to be flat.
@@ -273,6 +277,7 @@ impl Default for Args {
             merge_colors: Vec::new(),
             quiet: true,
             lossy: inkvec_sr::Mode::Auto,
+            restored: false,
             sr: inkvec_sr::Mode::Off,
             sr_threshold: inkvec_sr::detect::DEGRADED_RESIDUAL,
             sr_scale: 2,

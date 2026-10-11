@@ -184,6 +184,9 @@ pub struct ColorOptions {
     /// The intake came out of a lossy codec, so the palette's noise guard must run even
     /// though the edges are sharp. See [`lossy_container`].
     pub lossy_intake: bool,
+    /// The image came out of the restorer, which took the codec's damage out: Quality's codec
+    /// clean-up (`fast::codec`) does not run, though the intake stays lossy for the palette.
+    pub restored: bool,
     /// Carry transparency natively: inks with opacity, the clear ground as an ink, and
     /// alpha as a fourth channel wherever the tracer unmixes. See [`native`]. Only an image
     /// with transparency takes this path; an opaque one traces as it always has.
@@ -216,6 +219,7 @@ impl Default for ColorOptions {
             deadline: None,
             boundary_ms: None,
             lossy_intake: false,
+            restored: false,
             min_region: 4,
             fast: false,
             absorb_blends: true,
@@ -547,15 +551,10 @@ pub fn trace_color_full_with_alpha(
     progress::begin("despeckle");
 
     despeckle(&mut labels, img.width, img.height, min_region);
-    // A lossy intake: the codec's variants of an ink, its halos and its thin variants go back
-    // to their inks (`fast::codec`). Opaque only, as the test reads JPEG's colour space.
-    if opts.lossy_intake && source_alpha.is_none_or(|a| a.iter().all(|&v| v >= native::OPAQUE)) {
-        let c = fast::clean_lossy_labels(&mut labels, img.width, img.height, &rgb, &pal);
-        let (v, (hl, sp)) = (c.variants, c.halos);
-        crate::diag!(
-            "slivers",
-            "lossy intake: {v} ink variants, {hl} halos, {sp} halo specks"
-        );
+    // A lossy intake's codec variants and halos go back to their inks (`fast::codec`).
+    let opaque = source_alpha.is_none_or(|a| a.iter().all(|&v| v >= native::OPAQUE));
+    if opts.lossy_intake && !opts.restored && opaque {
+        fast::clean_lossy_labels(&mut labels, img.width, img.height, &rgb, &pal);
     }
     sw.mark("despeckle");
     progress::begin("blend_absorb");

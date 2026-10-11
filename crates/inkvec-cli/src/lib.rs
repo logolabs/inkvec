@@ -595,9 +595,10 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
     // validated in. It has to be forced: a restored image can look clean enough that the
     // edge-width and ringing detectors no longer open soft intake by themselves.
     let lossy_args;
-    let args = if restored && args.lossy != inkvec_sr::Mode::On {
+    let args = if restored {
         lossy_args = Args {
             lossy: inkvec_sr::Mode::On,
+            restored: true,
             ..args.clone()
         };
         &lossy_args

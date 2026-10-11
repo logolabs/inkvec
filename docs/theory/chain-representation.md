@@ -1474,6 +1474,70 @@ it. Whether that sliver is the blur or a real wedge of cyan is for the likelihoo
 **Canonical z-order: skipped.** Making paint order free between shapes that do not overlap
 and fixed where they do would move elements, and so change bytes on every clean condition.
 
+**Never the page.** No completion may fill the canvas (the image's frame), to within 2 %
+of its side on every edge. Which face is the page, and whether the artist drew one at all, is the emitter's
+decision. Before this rule, an opaque intake of a logo that touches the frame
+(`simple-icons/sagemath`, `premierleague`) was completed to a black canvas, with the white
+page painted over it in pieces. That description is further from the artist's file, and on
+`quality-512ssop` it was the one gated distance that rose (`turning_gap` +0.5 %, within
+noise; simple-icons +34 %).
+
+**Against the artists' hidden geometry** (`bench/theory/amodal_eval.py`: the 121 emoji
+icons of the screen set, noto, twemoji and openmoji, at 512ss). Each artist element is
+rendered alone, so its full shape includes what later elements hide. Each face the stage
+tried is matched to the element of its colour whose visible part it overlaps most, and its
+shape before and after completion is scored by IoU against that element's full shape.
+
+* 673 faces were tried; 236 were completed and 437 refused (65 %).
+* For a refused face, the artist hides a median 26 % of the element (quartiles 12 % and
+  43 %), and the crescent's own IoU has median 0.67.
+
+| candidate | completed faces | IoU better | IoU worse | mean ΔIoU | IoU off (q1 / median / q3) | IoU on (q1 / median / q3) |
+|---|---|---|---|---|---|---|
+| bridge | 31 | 64.5 % | 32.3 % | +0.040 | 0.22 / 0.59 / 0.88 | 0.26 / 0.75 / 0.88 |
+| chord | 135 | 71.1 % | 14.8 % | +0.026 | 0.12 / 0.49 / 0.80 | 0.13 / 0.50 / 0.87 |
+| offset | 12 | 75.0 % | 0 % | +0.024 | 0.02 / 0.23 / 0.31 | 0.02 / 0.24 / 0.35 |
+| primitive | 13 | 53.8 % | 46.2 % | +0.026 | 0.46 / 0.71 / 1.00 | 0.66 / 0.77 / 0.92 |
+| bulge | 48 | 39.6 % | 14.6 % | +0.006 | 0.16 / 0.48 / 0.91 | 0.16 / 0.48 / 0.93 |
+| corner cut | 13 | 30.8 % | 30.8 % | −0.003 | 0.15 / 0.77 / 0.98 | 0.15 / 0.77 / 0.97 |
+| corner | 7 | 42.9 % | 57.1 % | −0.058 | 0.62 / 0.68 / 0.91 | 0.50 / 0.60 / 0.87 |
+| all | 219 | 60.3 % | 19.2 % | +0.016 | 0.13 / 0.49 / 0.85 | 0.14 / 0.52 / 0.87 |
+
+A face completed with several kinds of replacement counts once under each. The table says
+four things:
+
+* **Completion moves toward the hidden geometry three times as often as away.** It moves
+  little, because most completions are chords and offsets that reach a pixel under the
+  cover.
+* **The bridge recovers the most.** It is the one candidate that continues the visible
+  boundary into the hidden part; its median IoU rises from 0.59 to 0.75.
+* **The corner overshoots.** The intersection of the owned lines lies beyond the artist's
+  rounded or bevelled corner.
+* **The refusals are the opportunity.** Two thirds of the tried faces have a quarter of
+  their element hidden, and nothing proposed for them passed the interval. Better
+  candidates (bridges across longer runs, the style prior's choice of continuation) are
+  where milestone 2's prior meets this stage.
+
+**The gate.** 246 icons, all 8 conditions, `--no-tighten`, against the baseline. Turning
+and parameters are gated as distances from the artist's file. Changes are relative.
+
+| condition | dE00 | turning_gap | ratio_gap | geom |
+|---|---|---|---|---|
+| quality-128ss | −0.18 % | −8.61 % | −0.12 % | −0.07 % |
+| quality-512ss | −0.94 % | −10.77 % | −3.64 % | −0.02 % |
+| quality-512ssop | −1.51 % | −4.34 % | −8.66 % | −0.01 % |
+| quality-web | −0.31 % | −3.84 % | −5.08 % | −0.00 % |
+| fast, 4 conditions | identical | identical | identical | identical |
+
+Every point estimate is level or better. By family, these moved the wrong way:
+
+* **ratio_gap.** noto-emoji and twemoji at 128 px (+7.1 %, +9.3 %), whose traces already
+  write fewer numbers than their artists; noto-emoji +4.6 % at 512ssop and +7.2 % on `web`.
+* **turning_gap at 512ssop.** simple-icons +6.2 %, openmoji +2.4 %, material-icons +1.6 %.
+  A completed shape's long straight edges dilute the turning per length.
+* **dE00.** The 5 synthetic icons, +0.3 to +0.5 %.
+* **geom at 128 px.** twemoji +0.06 %.
+
 **Design statistics** (`bench/theory/design_stats.py`, 246 screen icons, quality mode):
 
 | | gate/icon | line | cubic | arc | axis exact | axis ≤ 0.5° | 45° | other angle | on design grid | half px | ties |

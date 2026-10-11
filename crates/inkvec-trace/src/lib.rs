@@ -551,10 +551,8 @@ pub fn trace_color_full_with_alpha(
     progress::begin("despeckle");
 
     despeckle(&mut labels, img.width, img.height, min_region);
-    // A lossy intake's codec variants and halos go back to their inks (`fast::codec`).
-    let opaque = source_alpha.is_none_or(|a| a.iter().all(|&v| v >= native::OPAQUE));
-    if opts.lossy_intake && !opts.restored && opaque {
-        fast::clean_lossy_labels(&mut labels, img.width, img.height, &rgb, &pal);
+    if opts.lossy_intake && !opts.restored {
+        fast::clean_lossy_labels(&mut labels, img, &rgb, &pal, source_alpha);
     }
     sw.mark("despeckle");
     progress::begin("blend_absorb");

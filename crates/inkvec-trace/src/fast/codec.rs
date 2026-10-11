@@ -54,16 +54,22 @@ use crate::Palette;
 /// `turning_gap` −36.57 %, `ratio_gap` −11.89 %, geom −3.73 %. No sweep of this value.
 pub(crate) const CODEC_VARIANT_LEVELS: f32 = 8.0;
 
-/// Take the codec's variants, halos and thin variants out of the palette labels `labels`
-/// (`w × h`, opaque), `rgb` being the image over white and `pal` the palette they index. See
-/// the module documentation. Says what it did under `INKVEC_DIAG`.
+/// Take the codec's variants, halos and thin variants out of the palette labels `labels` of
+/// `img` (only its size is read), `rgb` being the image over white and `pal` the palette they index; nothing when
+/// `alpha` (the source's, when known) holds a pixel below [`crate::native::OPAQUE`], as the
+/// tests read JPEG's colour space, which has no opacity. See the module documentation. Says
+/// what it did under `INKVEC_DIAG`.
 pub(crate) fn clean_labels(
     labels: &mut [u16],
-    w: usize,
-    h: usize,
+    img: &crate::Rgba,
     rgb: &[[f32; 3]],
     pal: &Palette,
+    alpha: Option<&[f32]>,
 ) {
+    if alpha.is_some_and(|a| a.iter().any(|&v| v < crate::native::OPAQUE)) {
+        return;
+    }
+    let (w, h) = (img.width, img.height);
     let to = variant_map(pal);
     let variants = to
         .iter()

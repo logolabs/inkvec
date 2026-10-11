@@ -77,7 +77,12 @@ fn a_halo_goes_and_a_strip_of_ink_between_the_same_two_inks_stays() {
     for (width, kept) in [(2, false), (4, true)] {
         let (mut labels, w, h) = strip_image(width, 2);
         let rgb: Vec<[f32; 3]> = labels.iter().map(|&l| inks[l as usize]).collect();
-        clean_labels(&mut labels, w, h, &rgb, &pal);
+        let img = crate::Rgba {
+            width: w,
+            height: h,
+            data: vec![1.0; 4 * w * h],
+        };
+        clean_labels(&mut labels, &img, &rgb, &pal, None);
         let band = labels.iter().filter(|&&l| l == 2).count();
         assert_eq!(band > 0, kept, "width {width}");
     }

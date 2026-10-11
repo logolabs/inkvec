@@ -49,9 +49,9 @@ fn generate() {
              crates/inkvec-restore/models/restorer.onnx (not found: {onnx_str})"
         );
     }
-    println!("cargo:rerun-if-changed={onnx}");
+    println!("cargo:rerun-if-changed={}", onnx.display());
     burn_onnx::ModelGen::new()
-        .input(&onnx)
+        .input(&onnx_str)
         .out_dir("model/")
         .run_from_script();
 }

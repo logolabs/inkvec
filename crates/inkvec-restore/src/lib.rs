@@ -480,23 +480,23 @@ pub fn load_builtin(
 fn load_burn(path: &std::path::Path) -> Result<Box<dyn Restore>, Box<dyn std::error::Error>> {
     #[cfg(feature = "cuda")]
     {
-        Ok(Box::new(model::Restorer::<burn::backend::Cuda>::load(
+        Ok(Box::new(model::Restorer::load(
             path,
-            Default::default(),
+            burn::tensor::Device::cuda(0),
         )?))
     }
     #[cfg(all(feature = "wgpu", not(feature = "cuda")))]
     {
-        Ok(Box::new(model::Restorer::<burn::backend::Wgpu>::load(
+        Ok(Box::new(model::Restorer::load(
             path,
-            Default::default(),
+            burn::tensor::Device::wgpu(Default::default()),
         )?))
     }
     #[cfg(all(feature = "flex", not(any(feature = "cuda", feature = "wgpu"))))]
     {
-        Ok(Box::new(model::Restorer::<burn::backend::Flex>::load(
+        Ok(Box::new(model::Restorer::load(
             path,
-            Default::default(),
+            burn::tensor::Device::flex(),
         )?))
     }
     #[cfg(all(
@@ -504,9 +504,9 @@ fn load_burn(path: &std::path::Path) -> Result<Box<dyn Restore>, Box<dyn std::er
         not(any(feature = "cuda", feature = "wgpu", feature = "flex"))
     ))]
     {
-        Ok(Box::new(model::Restorer::<burn::backend::NdArray>::load(
+        Ok(Box::new(model::Restorer::load(
             path,
-            Default::default(),
+            burn::tensor::Device::default(),
         )?))
     }
     #[cfg(not(any(

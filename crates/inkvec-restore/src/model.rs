@@ -1,4 +1,5 @@
-//! The restorer network, in-process, on any Burn backend.
+//! The restorer network, in-process, on any Burn backend (Burn 0.22: the backend is part of the
+//! [`Device`] the weights are loaded onto, not a type parameter).
 //!
 //! The network code is generated at build time by burn-onnx from the ONNX export (`build.rs`),
 //! which `export_restorer_onnx.py` checks against the PyTorch model before writing. Nothing here
@@ -11,16 +12,22 @@
 //! nothing here needs the Burn model to be `Send` or `Sync`.
 
 use std::error::Error;
-use std::marker::PhantomData;
 use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
 
-use burn::prelude::{Backend, Tensor, TensorData};
+use burn::prelude::{Tensor, TensorData};
+use burn::tensor::Device;
 
 use crate::planar::{check_input, from_planar_cropped, padded, to_planar_padded};
 
-#[allow(missing_docs, unreachable_pub, unused_qualifications, clippy::all)]
+#[allow(
+    missing_docs,
+    unreachable_pub,
+    unused_qualifications,
+    dead_code,
+    clippy::all
+)]
 mod generated {
     include!(concat!(env!("OUT_DIR"), "/model/restorer.rs"));
 }
@@ -37,17 +44,17 @@ type Reply = mpsc::Sender<Result<Vec<f32>, String>>;
 /// One inference request: interleaved RGB, its width and height, and where to answer.
 type Job = (Vec<f32>, usize, usize, Reply);
 
-/// The restorer network on backend `B`, running on a dedicated worker thread.
+/// The restorer network on one Burn device, running on a dedicated worker thread.
 #[derive(Debug)]
-pub struct Restorer<B: Backend> {
+pub struct Restorer {
     jobs: Option<mpsc::Sender<Job>>,
     worker: Option<thread::JoinHandle<()>>,
-    backend: PhantomData<fn() -> B>,
+    device: String,
 }
 
-impl<B: Backend> Restorer<B> {
+impl Restorer {
     /// Load the weights (a `.bpk` file written by the build) onto `device`.
-    pub fn load(weights: &Path, device: B::Device) -> Result<Self, Box<dyn Error>> {
+    pub fn load(weights: &Path, device: Device) -> Result<Self, Box<dyn Error>> {
         // The generated loader panics on a missing file; check first so a wrong path is an
         // error the caller can report. A corrupt file still panics, on the worker, and comes
         // back as an error below.
@@ -55,13 +62,14 @@ impl<B: Backend> Restorer<B> {
             return Err(format!("restorer weights not found: {}", weights.display()).into());
         }
         let path = weights.to_path_buf();
+        let label = format!("{device:?}");
         let (ready_tx, ready_rx) = mpsc::channel::<()>();
         let (jobs_tx, jobs_rx) = mpsc::channel::<Job>();
         let worker = thread::Builder::new()
             .name("inkvec-restore".into())
             .stack_size(WORKER_STACK)
             .spawn(move || {
-                let net = generated::Model::<B>::from_file(&path, &device);
+                let net = generated::Model::from_file(&path, &device);
                 if ready_tx.send(()).is_err() {
                     return;
                 }
@@ -79,7 +87,7 @@ impl<B: Backend> Restorer<B> {
         Ok(Self {
             jobs: Some(jobs_tx),
             worker: Some(worker),
-            backend: PhantomData,
+            device: label,
         })
     }
 
@@ -102,7 +110,7 @@ impl<B: Backend> Restorer<B> {
     }
 }
 
-impl<B: Backend> Drop for Restorer<B> {
+impl Drop for Restorer {
     fn drop(&mut self) {
         // Closing the job channel ends the worker's loop.
         self.jobs.take();
@@ -112,7 +120,7 @@ impl<B: Backend> Drop for Restorer<B> {
     }
 }
 
-impl<B: Backend> crate::Restore for Restorer<B> {
+impl crate::Restore for Restorer {
     fn restore(
         &self,
         rgb: &[f32],
@@ -123,12 +131,12 @@ impl<B: Backend> crate::Restore for Restorer<B> {
     }
 
     fn describe(&self) -> String {
-        let backend = std::any::type_name::<B>();
-        let short = backend.split('<').next().unwrap_or(backend);
-        format!(
-            "restorer network (Burn {})",
-            short.rsplit("::").next().unwrap_or(short)
-        )
+        let name = self
+            .device
+            .split(['(', '{', ' '])
+            .next()
+            .unwrap_or(&self.device);
+        format!("restorer network (Burn {name})")
     }
 }
 
@@ -136,20 +144,20 @@ impl<B: Backend> crate::Restore for Restorer<B> {
 /// as a single `1 x 3 x ph x pw` tensor, check the output has the same shape, and crop back to
 /// interleaved RGB at the input size. The values are returned as the network produced them;
 /// quantisation and snapping happen in the crate root, the same for every backend.
-fn forward<B: Backend>(
-    net: &generated::Model<B>,
-    device: &B::Device,
+fn forward(
+    net: &generated::Model,
+    device: &Device,
     rgb: &[f32],
     width: usize,
     height: usize,
 ) -> Result<Vec<f32>, String> {
     let (pw, ph) = padded(width, height);
     let planar = to_planar_padded(rgb, width, height, pw, ph);
-    let x = Tensor::<B, 4>::from_data(TensorData::new(planar, [1, 3, ph, pw]), device);
+    let x = Tensor::<4>::from_data(TensorData::new(planar, [1, 3, ph, pw]), device);
     let y = net
         .forward(x)
         .into_data()
-        .into_vec::<f32>()
+        .try_into_vec::<f32>()
         .map_err(|e| format!("reading restorer output: {e:?}"))?;
     if y.len() != 3 * ph * pw {
         return Err(format!(

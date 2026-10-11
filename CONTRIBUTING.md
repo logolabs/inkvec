@@ -5,7 +5,7 @@ checks before a merge, and what a pull request should look like.
 
 ## Building and testing
 
-Rust 1.88 or newer (the workspace `rust-version`). From a checkout:
+Rust 1.89 or newer (the workspace `rust-version`). From a checkout:
 
 ```
 cargo build --release --workspace

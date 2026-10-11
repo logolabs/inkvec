@@ -616,26 +616,24 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
             Some(p) => p,
             None => trace_once(&img, args)?,
         };
-        // `Some(stats line)` when `auto` traces the input as it is instead of cleaning it.
-        let direct = match inkvec_sr::decide(&img, &probe.0, args.sr_threshold) {
-            inkvec_sr::Decision::Keep { residual } => Some(match residual {
+        // `Some(stats line)` when `auto` traces the input as it is instead of cleaning it. As
+        // for `--restore auto`: the residual alone reads clean shading as damage, so cleaning
+        // also needs a sign of resampling or compression (see `damage`), and that cheaper
+        // half is asked first.
+        let decision = damage::soft(&img, args.lossy)
+            .map(|_| inkvec_sr::decide(&img, &probe.0, args.sr_threshold));
+        let direct = match decision {
+            None => {
+                Some("sr            no sign of resampling or compression; traced directly".into())
+            }
+            Some(inkvec_sr::Decision::Keep { residual }) => Some(match residual {
                 Some(r) => format!(
                     "sr            residual {r:.3} <= {:.3}, traced directly",
                     args.sr_threshold
                 ),
                 None => "sr            could not measure the fit; traced directly".into(),
             }),
-            // As for `--restore auto`: the residual alone reads clean shading as damage, so
-            // cleaning also needs a sign of resampling or compression (see `damage`).
-            inkvec_sr::Decision::Clean { residual } if damage::soft(&img, args.lossy).is_none() => {
-                Some(format!(
-                    "sr            {}no sign of resampling or compression; traced directly",
-                    residual
-                        .map(|r| format!("residual {r:.3} > {:.3} but ", args.sr_threshold))
-                        .unwrap_or_default()
-                ))
-            }
-            inkvec_sr::Decision::Clean { residual } => {
+            Some(inkvec_sr::Decision::Clean { residual }) => {
                 let measured =
                     residual.map(|r| format!("residual {r:.3} > {:.3}", args.sr_threshold));
                 match build_upscaler(args) {
@@ -1036,6 +1034,18 @@ fn restore_prepass(
     }
     let mut auto_probe = None;
     if args.restore == inkvec_restore::Mode::Auto {
+        // The residual alone reads smooth shading in clean art as damage, so `auto` also
+        // needs the file or the pixels to say the input was compressed (see `damage`). That
+        // evidence is asked first: it is the cheap half (a flag, or the ringing score), while
+        // the residual needs a probe trace rendered at full size. Without it there is nothing
+        // to decide, so no probe is made and the input takes the plain path: a clean input
+        // pays the evidence alone, and its trace is the plain one by construction. Fast mode
+        // reads the container only (`damage::compressed`).
+        let pixels = args.mode != TraceMode::Fast;
+        let Some(why) = damage::compressed(&pass.img, args.lossy, pixels) else {
+            pass.note = Some("restore       no sign of compression; traced directly".into());
+            return Ok(pass);
+        };
         inkvec_core::progress::note(|| {
             "a first trace, to see whether the denoiser is needed".into()
         });
@@ -1047,29 +1057,13 @@ fn restore_prepass(
                 residual_threshold: args.restore_threshold,
             },
         );
-        // The residual alone reads smooth shading in clean art as damage, so `auto` also
-        // needs the file or the pixels to say the input was compressed (see `damage`).
-        let evidence = match decision {
-            inkvec_restore::Decision::Restore { .. } => damage::compressed(&pass.img, args.lossy),
-            inkvec_restore::Decision::Keep { .. } => None,
-        };
-        match (decision, evidence) {
-            (inkvec_restore::Decision::Restore { residual }, Some(why)) => {
+        match decision {
+            inkvec_restore::Decision::Restore { residual } => {
                 pass.note = residual
                     .map(|r| format!("residual {r:.3} > {:.3}, {why}", args.restore_threshold));
                 auto_probe = Some(probe);
             }
-            (inkvec_restore::Decision::Restore { residual }, None) => {
-                let measured = residual
-                    .map(|r| format!("residual {r:.3} > {:.3} but ", args.restore_threshold))
-                    .unwrap_or_default();
-                pass.note = Some(format!(
-                    "restore       {measured}no sign of compression; traced directly"
-                ));
-                pass.probe = Some(probe);
-                return Ok(pass);
-            }
-            (inkvec_restore::Decision::Keep { residual }, _) => {
+            inkvec_restore::Decision::Keep { residual } => {
                 pass.note = Some(match residual {
                     Some(r) => format!(
                         "restore       residual {r:.3} <= {:.3}, traced directly",

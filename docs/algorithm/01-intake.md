@@ -649,10 +649,17 @@ from 256 px on, `SOFT_RINGING` below), which is how a JPEG re-saved as PNG is to
 also accepts edges wider than a native render's (`damage::soft`: `intake_scale` above
 `SOFT_INTAKE_EDGE`), since the upscaler undoes resampling too. These are the three signals that
 open the palette's soft intake, and the corpus's clean renders pass none of them. Without one,
-`auto` keeps its probe and says so ("restore  residual R > T but no sign of compression; traced
-directly"; SR: "no sign of resampling or compression"). The ringing and the edge width are
-measured only when the residual has already fired, so an input it keeps pays nothing more
-(`ringing_score` is about 100 ms at 2048 px). On the `web` tier (JPEG files) every input has a
+`auto` keeps its probe and says so ("restore  no sign of compression; traced directly"; SR: "no
+sign of resampling or compression"). The evidence is asked first and the residual only after
+it: the residual renders the probe at full size, the costly half. Asked the other way round,
+`auto` cost a clean Fast trace at 512 px 16.5 ms of CPU on 31 (the render and the residual)
+and the ringing 5.5 ms more where the residual fired; both are needed, so the order changes no
+decision. Without evidence `--restore auto` makes no probe at all, and the input takes the
+plain path, so its trace is the plain one by construction and a clean input pays the evidence
+alone. In Fast mode the evidence is the container only: its trace of a 512 px icon costs about
+31 ms of CPU and the ringing score 2.5 ms of it, which every clean PNG would pay; what Fast
+gives up is a JPEG re-saved as PNG (on the `web` tier's own pixels the score passes the gate on
+186 of 246 icons, on the clean tiers on none). On the `web` tier (JPEG files) every input has a
 lossy container and `auto` decides exactly as before. Tests:
 `restore_auto_needs_a_sign_of_compression`, `sr_auto_needs_a_sign_of_resampling_or_compression`
 (`crates/inkvec-cli/tests/pipeline.rs`).

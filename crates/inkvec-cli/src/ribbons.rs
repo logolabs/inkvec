@@ -155,6 +155,35 @@ pub(crate) struct Ribbons {
     pub(crate) absorbed: BTreeSet<usize>,
     /// One report line (`None` when the stage did not run).
     pub(crate) line: Option<String>,
+    /// Face -> the geometry its strokes paint, for the faces beneath them to be completed
+    /// under ([`crate::layers`]).
+    pub(crate) shapes: BTreeMap<usize, crate::layers::StrokeShape>,
+}
+
+/// The geometry a ribbon's strokes paint: centrelines (a primitive centreline as its
+/// primitive), width, cap and join.
+fn stroke_shape(r: &Ribbon) -> crate::layers::StrokeShape {
+    use crate::layers::{EndCap, JoinKind};
+    let (mut lines, mut prims) = (Vec::new(), Vec::new());
+    for c in &r.lines {
+        match c.prim {
+            Some(p) => prims.push(p.kind),
+            None => lines.push(c.path.clone()),
+        }
+    }
+    crate::layers::StrokeShape {
+        lines,
+        prims,
+        width: r.width,
+        cap: match r.cap {
+            ribbon::Cap::Round => EndCap::Round,
+            ribbon::Cap::Butt => EndCap::Butt,
+        },
+        join: match r.join {
+            ribbon::Join::Round => JoinKind::Round,
+            ribbon::Join::Miter => JoinKind::Other,
+        },
+    }
 }
 
 /// One candidate's outcome, for the decision and the debug line.
@@ -235,6 +264,7 @@ pub(crate) fn choose(inp: &Inputs) -> Ribbons {
                 o.face,
                 element(r, &hex, inp.decimals, &format!("stroke-{}", o.face)),
             );
+            out.shapes.insert(o.face, stroke_shape(r));
             out.absorbed.extend(absorbed_by(inp, &nest, o.face));
             saved += o.k_vanish - r.params();
         }

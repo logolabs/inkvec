@@ -532,6 +532,7 @@ fn emit_options(args: &Args, fast: bool) -> EmitOptions {
         harmonize: args.harmonize && !fast,
         harmonize_threshold: args.harmonize_threshold,
         use_symbols: args.use_symbols,
+        layers: !fast && crate::layers::enabled(),
     }
 }
 

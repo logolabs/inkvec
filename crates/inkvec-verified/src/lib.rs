@@ -27,3 +27,22 @@
 pub mod generated;
 pub mod iv;
 pub mod q;
+
+#[cfg(test)]
+mod tests {
+    use crate::generated::evidence::{corner_excess_f64, fourth_difference_f64};
+
+    /// The float forms of two evidence kernels, called from their own crate: coverage counts
+    /// an `#[inline]` function's runs only where it is instrumented, and the calls from the
+    /// integration tests and the tracer read as none.
+    #[test]
+    fn the_float_fourth_difference_and_corner_excess() {
+        // h = (0, 0, 0, 1, 2): D = −2; unit variances weigh 1 + 16 + 36 + 16 + 1 = 70.
+        let h = [0.0, 0.0, 0.0, 1.0, 2.0];
+        assert_eq!(fourth_difference_f64(&h), [-2.0]);
+        let mut x = [1.0; 11];
+        x[..5].copy_from_slice(&h);
+        x[10] = 1.0 / 16.0;
+        assert_eq!(corner_excess_f64(&x), [4.0 - 70.0 / 16.0]);
+    }
+}

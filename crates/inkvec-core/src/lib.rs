@@ -176,3 +176,23 @@ pub mod clock {
     #[cfg(target_arch = "wasm32")]
     pub use web_time::Instant;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_polyline_measures_its_open_length() {
+        let pts = vec![
+            Point::new(0.0, 0.0),
+            Point::new(3.0, 4.0),
+            Point::new(3.0, 0.0),
+        ];
+        let line = Polyline::with_uniform_sigma(pts, 0.5, true);
+        assert!(!line.is_empty() && line.len() == 3);
+        // The closing segment back to the start is not counted.
+        assert_eq!(line.length(), 9.0);
+        let empty = Polyline::with_uniform_sigma(Vec::new(), 0.5, false);
+        assert!(empty.is_empty() && empty.length() == 0.0);
+    }
+}

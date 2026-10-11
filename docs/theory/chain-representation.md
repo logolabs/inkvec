@@ -1082,7 +1082,7 @@ gate-counted numbers among SVG's encodings of exactly that geometry is:
 | design element | write | gate's count | the alternative |
 |---|---|---|---|
 | line | a path segment (`H`/`V` when axis-aligned) | 2 | `<line>`: 4 |
-| axis-aligned rectangle | `<rect>` | 6 | path: 6 (tie, the primitive preferred) |
+| axis-aligned rectangle | `<rect>`; among siblings of its paint, a subpath of their compound path | 6 | path: 6 (a tie, broken toward fewer elements) |
 | rounded rectangle | `<rect rx>` | 6 | path: 36 |
 | circle | `<circle>` | 3 | two arcs: 14 |
 | axis-aligned ellipse | `<ellipse>` | 4 | two arcs: 14 |
@@ -1308,7 +1308,8 @@ parameters than windows), so the two chains agree on the cut.
      carried.
 4. **Where chain R reads the noise model.**
    * The fitter's robust loss uses `huber_kappa(nu)`, together with the fold of the noise
-     into the edge sigmas (milestone 2, gated as one change).
+     into the edge sigmas (milestone 2, gated as one change). Tried and withdrawn: it
+     turned curves into polylines on the emoji families. See milestone 2.
    * Extra prior weight comes only from measured noise, never from a flag (user directive).
    * The completion stage reads none of it, for now. A junction zone was tried and
      withdrawn; see milestone 1.
@@ -1582,6 +1583,176 @@ of a trace's. The traces are not yet written the way the artists draw:
     49 elements against 7 clean), which is the front end's palette under noise and belongs
     to that agent.
   * lucide rises to 72 from 54 (artist 40).
+
+## Phase 2, milestone 2: the noise fold, and the encoder
+
+### The fold and the Huber fit: a negative result
+
+Item 4 of "Agreed in phase 2" was built as one gated change:
+
+* **The fold.** The measured noise was added into each edge's point sigmas
+  (`σ² + extra`, `evidence.rs`, on when the model is not clean).
+* **The Huber fit.** Two IRLS rounds were added to the boundary fit, at
+  `κ = huber_kappa(ν)`. Each residual beyond `κ` standard units was down-weighted to
+  `σ·√(u/κ)`.
+
+Clean intakes were unchanged by construction. On a quarter of `quality-web` (61 icons, the
+gate's scorer), family-macro change against the build without either:
+
+| variant | dE00 | turning_gap | ratio_gap | geom |
+|---|---|---|---|---|
+| fold and Huber, `κ(ν)` | −5.0 % | −7.7 % | −6.5 % | −23 % |
+| fold only | −6.9 % | −4.3 % | −3.1 % | −25 % |
+| Huber only | −0.6 % | −6.8 % | −4.6 % | −6.3 % |
+| fold at a quarter, `κ = 3` | +0.6 % | −5.0 % | −4.7 % | −2.2 % |
+| Huber only, `κ = 3` | +1.3 % | −4.5 % | −3.7 % | +1.25 % |
+| Huber on spikes only | +1.0 % | −1.4 % | −1.5 % | +0.8 % |
+
+The first row looks like a win, and it is not one:
+
+* **One icon.** `synthetic/prim_star5` alone carries the macro gain (geom 0.62 → 0.05).
+* **The emoji families get worse.** Per family, fold and Huber read:
+  * openmoji: dE00 +11.4 %, geom +20 %;
+  * twemoji: +4.9 %, +16 %;
+  * noto-emoji: +5.7 %, +1.3 %.
+* **The variants that spare the emoji give up the gain.** They lose dE00 and keep little else.
+
+What goes wrong is the same in every family:
+
+* **Curves become polylines.** A larger `σ` buys a cheaper description, so the fit takes it.
+  On `openmoji/1F38A` the cubics fell from 49 to 29 and the lines rose from 478 to 495.
+* **Real features count as outliers.** A down-weighted residual is one the fit no longer
+  has to explain: a real corner of a small feature costs as little as a JPEG block step.
+
+R0.8 proves that a constraint accepted at `σ₁` stays accepted at `σ₂ ≥ σ₁`. It says
+nothing about which description is cheapest once every price falls, and here the cheapest
+is a polyline.
+
+Honest noise needs what this lacked:
+
+* the style prior, so that a larger `σ` buys the artist's segment kinds rather than lines;
+* the windowed evidence objective, so that a residual is judged against the window it
+  sits in rather than as a point.
+
+So the change was reverted, and the fold waits on both. The front end's parked soft
+same-ink exemption, which waited on it, waits too. The patch touched `multimodel.rs`
+(`optimal_multimodel_robust`, `huber_reweight`), `pipeline.rs` and `evidence.rs`. It is
+not in the tree; it went with the milestone's report.
+
+### The encoder: holes cut, one path per paint
+
+Two encoder oddities set the artists' files apart from the traces on the opaque tiers:
+
+* **No holes.** No trace had a nested subpath (a hole or island of a compound path). The
+  artists of material-icons have 42 % of theirs nested, and of simple-icons 25 %.
+* **Too many elements.** A trace's counter was a page-coloured element painted over the
+  glyph: 47 % of material-icons' elements were painted over another, against the artists'
+  0 %. And every rectangle was an element of its own: `material-icons/border_left` came
+  out as seventeen `<rect>` against the artist's one path.
+
+What runs now (`crates/inkvec-cli/src/emit/holes.rs`):
+
+* **Holes are cut** (stage 2b, `cut_ground_holes`). The page is the opaque face that
+  covers the frame. A face in exactly the page's colour that fills a hole of a glyph on
+  the page is dropped, and its outline is written into the glyph as a hole.
+  * The picture is unchanged by construction: the hole is the counter's own outline and
+    the page paints under it. Lean, `Design/Layers.lean`:
+    * `cut_hole`: painting `P` and then `C` in colour `k`, over a picture that is already
+      `k` across `C`, is `P \ C`;
+    * `cut_hole_pixel`: the same at an edge pixel.
+  * As under `--no-background`, only a glyph whose children are all page-coloured is
+    cut. A figure keeps its stacked eyes and buttons, as the emoji artists draw them.
+  * Nothing is cut where the counter's or the glyph's outline is written as a `<circle>`,
+    an ellipse or a rounded rectangle: in a path that outline costs 14 or 36 numbers,
+    against 3 to 6.
+* **Square rectangles join their siblings' compound path** (`plain_rect`). Three lines are
+  the six numbers of a `<rect>`, so the tie in R4.6 is broken toward fewer elements. A
+  rectangle the completion stage produced joins the path as well.
+
+Tried and withdrawn:
+
+* **Faces of the page's colour sitting on the page, dropped.** The page paints there too,
+  but the neighbours' outlines are not the face's own, and without it they showed:
+  `openmoji/1F517` on `web` read dE00 +1.2 % in Fast mode. Dropping them also changed
+  which completions certify. On the bottle cap of `noto-emoji/emoji_u1f9d1_1f3fc_200d_1f37c`,
+  `#fdfefa` taken for a `#ffffff` page went white (geom 0.065 → 0.346); hence the exact
+  colour match.
+* **A ring of two circles cut and written as one stroke.** A stroke's outline is the
+  renderer's offset of the centre line, not the two fitted circles:
+  * `material-icons/group_remove`: dE00 +20 % at 512 px;
+  * `lucide/app-window-mac` on `web`: dE00 +3 %, turning gap +37 %.
+* **A same-paint island in a hole, joined to the ring around it.** It is the artist's
+  structure, but one path's anti-aliasing is not two elements', and it moved dE00 by a
+  sixteenth of coverage on a few pixels (`simple-icons/notion`, `cocos` at 128 px).
+  That is a renderer effect and no geometry, but it is a worse point estimate.
+* **Holes cut over any painted ground.** The emoji artists stack there: the letters of
+  `openmoji/1F195` are strokes over a white tile, and cut out of it they moved its dE00
+  by the renderer's rounding (+0.26 % at 512 px in Fast mode).
+
+**Regression gate** (246 icons, all 8 conditions, against this milestone's base, `--no-tighten`):
+
+| condition | dE00 | turning_gap | ratio_gap | geom | icons changed |
+|---|---|---|---|---|---|
+| quality-128ss | −0.0001 % | −0.00003 % | −0.049 % | 0 | 23 |
+| quality-512ss | −0.0002 % | +0.00002 % | −0.060 % | 0 | 16 |
+| quality-512ssop | −0.146 % | −0.063 % | −0.145 % | −0.0001 % | 50 |
+| quality-web | −0.0008 % | −0.053 % | −0.096 % | 0 | 65 |
+| fast-128ss | identical | identical | identical | identical | 0 |
+| fast-512ss | identical | identical | identical | identical | 0 |
+| fast-512ssop | −0.0087 % | 0 | 0 | +0.0003 % | 65 |
+| fast-web | −0.0035 % | 0 | 0 | −0.0027 % | 67 |
+
+"Icons changed" counts the SVGs whose bytes changed. Every verdict is identical or
+non-inferior. Two point estimates are worse, each from one icon:
+
+* **quality-512ss turning_gap (+3·10⁻⁷).** `material-icons/qr_code`: its bars joined one
+  path, so their paint ranks and with them one completion changed; a corner moved by
+  0.01 px.
+* **fast-512ssop geom (+7.8·10⁻⁷).** `material-icons/admin_panel_settings` (geom
+  +3.8 %): the shield's hole is the white face's own outline, but the renderer covers an
+  edge pixel of one path differently from the same edge in another. The pixels moved are
+  better in 618 places and worse in 355. Two lucide icons moved the other way
+  (−3.8·10⁻⁶).
+
+Per family, the axes that rose:
+
+* quality-512ssop, noto-emoji: dE00 +0.002 %, turning_gap +0.14 %, ratio_gap +0.05 %.
+  One icon, `emoji_u1f469_1f3fb_200d_1f52c`: a gradient test tube with its white stripes
+  cut out is no longer a completion candidate (faces with holes are not), and its
+  completed outline went back to the traced one.
+* quality-512ss, material-icons: turning_gap +0.001 % (`qr_code`, above).
+* fast-512ssop, material-icons: geom +0.14 % (`admin_panel_settings`, above).
+* fast-web, simple-icons: dE00 +0.002 %.
+
+Completing a face with holes, its holes carried into the completed path, is the next
+step for the first of these.
+
+**Human statistics** (`bench/human_stats.py`, all 246 icons, divergence from the artist's
+file, family-macro, against the base):
+
+| statistic | quality-512ssop | quality-web |
+|---|---|---|
+| composite (28 statistics) | −3.1 % | −1.9 % |
+| primitives | −24.7 % | −18.5 % |
+| elements | −14.5 % | −11.1 % |
+| colours | −16.9 % | −5.8 % |
+| nested | −12.7 % | −11.2 % |
+| stacked | −10.3 % | −10.4 % |
+| subpaths | −3.3 % | −0.8 % (not significant) |
+
+* **Primitives.** The fall undoes the +24 % that milestone 1's completed rectangles added.
+* **Further from the artist.** A few statistics moved the other way:
+  * on 512ssop, collinear +1.7 %;
+  * on `web`, stroked +4.5 %, line_axis +1.0 %, ties +0.8 % and extremum +0.4 %.
+
+  These are shares, and their denominators fell with the elements and primitives taken
+  away. For example, the stroked share is strokes over elements, and the strokes are as
+  they were.
+* **material-icons, 512ssop.** The nested share went 0 → 0.13 (artist 0.42), and the
+  stacked share 0.47 → 0.28 (artist 0).
+* **What is left.** On material-icons at 512ssop, 21 elements in the page's colour are still
+  painted over another: 9 circles, 6 rectangles and 6 paths. A round counter stays painted
+  over by the cost rule above (a cut circle is 14 numbers against 3).
 
 ## Where the present code stands
 

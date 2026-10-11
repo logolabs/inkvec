@@ -31,6 +31,12 @@ The compositing identities of R4.1b, for one pixel with exact area coverages:
 * `no_seam_of_completion`: completed across the pixel, the lower face shows exactly its
   share; and `junction_residue`: where the pixel also holds ground area `b` (a junction of
   three paints) the residue is `a·b·(c_i − c_bg)`.
+
+Holes cut, not painted over (R4.6b; `crates/inkvec-cli/src/emit/holes.rs`):
+
+* `cut_hole`: a face painted over its parent in the colour already under the parent paints
+  what the parent with the face cut out of it paints; `cut_hole_pixel`: so does an edge
+  pixel, with area coverages.
 -/
 
 namespace Inkvec.Design
@@ -146,6 +152,34 @@ covers `1 − b` and the residue is `a · b · (c_i − c_bg)`. -/
 theorem junction_residue (a b ci cj cbg : ℝ) :
     (a * cj + (1 - a) * ((1 - b) * ci + b * cbg)) - (a * cj + (1 - a - b) * ci + b * cbg) =
       a * b * (ci - cbg) := by
+  ring
+
+/-! ### Holes cut, not painted over (R4.6b)
+
+The code is `crates/inkvec-cli/src/emit/holes.rs`. A picture is a colour per point;
+`paintOver b R c` paints region `R` in colour `c` over the picture `b`. -/
+
+open Classical in
+/-- Region `R` painted in colour `c` over the picture `b`. -/
+noncomputable def paintOver {κ : Type*} (b : α → κ) (R : Set α) (c : κ) : α → κ :=
+  fun x => if x ∈ R then c else b x
+
+/-- **A hole cut.** Painting `P` and then `C` in colour `k` over it paints the same picture as
+`P` with `C` cut out, wherever the picture under `P` is already `k` across `C`: the
+counter of a glyph in the colour of the page it sits on. -/
+theorem cut_hole {κ : Type*} (b : α → κ) (P C : Set α) (cp k : κ)
+    (hb : ∀ x ∈ C, b x = k) :
+    paintOver (paintOver b P cp) C k = paintOver b (P \ C) cp := by
+  funext x
+  by_cases hx : x ∈ C
+  · simp [paintOver, hx, hb x hx]
+  · by_cases hp : x ∈ P <;> simp [paintOver, hx, hp]
+
+/-- The same at an edge pixel with area coverages: `P` covering the pixel and `C` a share
+`a` of it, over ground `k`, composite as `P` covering `1 − a` with the ground showing in
+the rest. -/
+theorem cut_hole_pixel (a cp k : ℝ) :
+    a * k + (1 - a) * (1 * cp + 0 * k) = (1 - a) * cp + (1 - (1 - a)) * k := by
   ring
 
 end Inkvec.Design

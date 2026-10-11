@@ -66,6 +66,7 @@ use crate::rings::{self, point_in_ring, ring_area, Nesting};
 use crate::seams;
 
 mod completion;
+mod holes;
 mod winding;
 pub(crate) use winding::for_nonzero;
 
@@ -324,8 +325,8 @@ struct Stacking {
 ///
 /// In order: the canvas background under `--no-background` ([`canvas_background`]) and
 /// the faces of its colour that are holes in a glyph ([`punch_background_coloured`]);
-/// clear and translucent faces ([`punch_transparent`]); then the hole lists are made
-/// parity-safe ([`dedupe_holes`]).
+/// clear and translucent faces ([`punch_transparent`]); counters cut out of their glyph
+/// ([`holes::cut_ground_holes`]); then the hole lists are made parity-safe ([`dedupe_holes`]).
 fn stack_faces(doc: &ColorDoc, opts: &EmitOptions, nest: &Nesting) -> Stacking {
     let n = doc.order.len();
     let mut stack = Stacking {
@@ -352,6 +353,7 @@ fn stack_faces(doc: &ColorDoc, opts: &EmitOptions, nest: &Nesting) -> Stacking {
         }
     }
     punch_transparent(doc, opts, nest, &mut stack);
+    holes::cut_ground_holes(doc, nest, &mut stack);
     dedupe_holes(&nest.parent, &mut stack.holes);
     stack
 }
@@ -1009,12 +1011,14 @@ impl Writer<'_> {
         if let Some(h_d) = self.harmonized_d.get(&i) {
             return h_d.clone();
         }
-        if let Some(crate::layers::Completion {
-            shape: crate::layers::Shape::Path(d),
-            ..
-        }) = self.completed.get(&i)
-        {
-            return d.clone();
+        match self.completed.get(&i).map(|c| &c.shape) {
+            Some(crate::layers::Shape::Path(d)) => return d.clone(),
+            Some(crate::layers::Shape::Prim(k)) => {
+                if let Some(d) = primitive_d(k, self.decimals) {
+                    return d;
+                }
+            }
+            None => {}
         }
         let (order, fitted, decimals) = (self.order, self.fitted, self.decimals);
         let mut d = String::new();
@@ -1117,8 +1121,10 @@ impl Writer<'_> {
 
     /// Whether face `i` is written as an element of its own, not merged into a compound path
     /// with its same-coloured siblings, *before* any completion: a symbol's `<use>`, a
-    /// stroke, or a primitive outline with nothing punched out of it. Grouping is decided
-    /// on this, so a completion never moves a face to another place in the paint order.
+    /// stroke, or a primitive outline with nothing punched out of it -- but a square-cornered
+    /// rectangle, which a path writes in the same six numbers, joins its siblings' compound
+    /// path ([`holes::plain_rect`]). Grouping is decided on this, so a completion never moves
+    /// a face to another place in the paint order.
     fn stands_alone(&self, i: usize) -> bool {
         if self.symbol_use.contains_key(&i) || self.strokes.contains_key(&i) {
             return true;
@@ -1131,14 +1137,18 @@ impl Writer<'_> {
                 .prims
                 .get(self.order[i][drawn[0]][0].0)
                 .and_then(|p| p.as_ref())
-                .is_some_and(|pf| primitive_element(&pf.kind, "", "", self.decimals).is_some())
+                .is_some_and(|pf| {
+                    !holes::plain_rect(&pf.kind)
+                        && primitive_element(&pf.kind, "", "", self.decimals).is_some()
+                })
     }
 
-    /// Whether face `i` is completed as a primitive element.
+    /// Whether face `i` is completed as a primitive element of its own: any but a
+    /// square-cornered rectangle, which a path writes as cheaply ([`holes::plain_rect`]).
     fn completed_prim(&self, i: usize) -> bool {
         matches!(
             self.completed.get(&i).map(|c| &c.shape),
-            Some(crate::layers::Shape::Prim(_))
+            Some(crate::layers::Shape::Prim(k)) if !holes::plain_rect(k)
         )
     }
 
@@ -1164,10 +1174,10 @@ impl Writer<'_> {
     /// which is how an artist draws them: a whole word is one `<path>`, not one per
     /// letter. Before this the tracer wrote one element per connected face and came
     /// back with 3.5x the artist's path count on a detailed wordmark at the same
-    /// colour error. Primitives stay their own element and gradient faces each own a
-    /// gradient, so neither merges; nor does a harmonized `<use>`. The merged path takes
-    /// the first member's place in the paint order and its id; every member's children
-    /// follow it.
+    /// colour error. Primitives other than a square-cornered rectangle stay their own
+    /// element and gradient faces each own a gradient, so neither merges; nor does a
+    /// harmonized `<use>`. The merged path takes the first member's place in the paint
+    /// order and its id; every member's children follow it.
     fn emit_level(
         &self,
         members: &[usize],
@@ -1216,7 +1226,7 @@ impl Writer<'_> {
             let mut element = String::new();
             if let Some(&lead) = merged.first() {
                 match self.face_element(lead, under) {
-                    Some((Element::Ready(el), _)) => element.push_str(&el),
+                    Some((Element::Ready(el), _)) if merged.len() == 1 => element.push_str(&el),
                     Some((Element::Path(d), _)) if merged.len() == 1 => {
                         element.push_str(&self.path_element(lead, &d))
                     }

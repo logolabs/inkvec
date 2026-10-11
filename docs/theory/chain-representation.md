@@ -1538,7 +1538,26 @@ Every point estimate is level or better. By family, these moved the wrong way:
 * **dE00.** The 5 synthetic icons, +0.3 to +0.5 %.
 * **geom at 128 px.** twemoji +0.06 %.
 
-**Design statistics** (`bench/theory/design_stats.py`, 246 screen icons, quality mode):
+**Human statistics with completion on against off** (`bench/human_stats.py`, the benchmark
+battery, all 246 screen icons). The figure is the divergence from the artist's file per
+statistic, family-macro mean, change on minus off:
+
+* **quality-512ssop.** The composite (geometric mean of after/before over 28 statistics) is
+  +0.2 %.
+  * Closer to the artist: stacking −11.1 %, nodes per subpath −8.7 %, axis lines −7.2 %,
+    segment lengths −4.7 %, smoothness −3.9 %.
+  * Further: primitives +24 %, collinear +5.9 %, half-pixel numbers +4.3 %, subpaths
+    +3.3 %, colours +3.0 %.
+* **quality-web.** The composite is −0.2 %, with the same pattern: primitives +12.7 %,
+  stacking −7.5 %, nodes per subpath −8.7 %.
+
+So the completion's rectangles, circles and ellipses are written where the artists drew
+paths. That agrees with the amodal evaluation, where primitives improve the IoU barely more
+often than they worsen it (54 % against 46 %). They are the first candidate to put under the
+style prior.
+
+**Design statistics before the battery** (246 screen icons, quality mode; the script that
+counted them was absorbed into `bench/human_stats.py`):
 
 | | gate/icon | line | cubic | arc | axis exact | axis ≤ 0.5° | 45° | other angle | on design grid | half px | ties |
 |---|---|---|---|---|---|---|---|---|---|---|---|

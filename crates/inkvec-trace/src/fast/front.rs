@@ -65,7 +65,8 @@ fn flat_fill(pal: &Palette, ink: usize) -> gradient::FillFit {
 /// stopwatch under its progress name: `palette` ([`super::palette::palette_and_labels`],
 /// then `color::split_alpha_inks` for `--cutout`); `slivers` (the labels read into row runs,
 /// [`super::faces::RunLabels::new`], then [`super::faces::RunLabels::absorb_slivers`],
-/// [`super::faces::RunLabels::absorb_rims`] and [`super::faces::RunLabels::merge_same_inks`]);
+/// [`super::faces::RunLabels::absorb_rims`], on a lossy intake
+/// [`super::faces::RunLabels::absorb_halos`], and [`super::faces::RunLabels::merge_same_inks`]);
 /// `despeckle` ([`super::faces::RunLabels::despeckle`]); `split`
 /// ([`super::faces::RunLabels::write_faces`], the face ids written over the label buffer,
 /// the only per-pixel write of the clean-up); and `ramps` ([`super::bands::merge_ramps`],
@@ -116,7 +117,19 @@ fn trace(
         // of large type were most of both on a textured masthead: 4,068 faces and 47,548
         // coordinates, where these two passes leave 8,798 at a lower dE00.
         runs.absorb_rims(px, &inks);
-        runs.merge_same_inks(&inks);
+        // A lossy intake's edges carry the codec's halos, and its inks come back split
+        // into variants a few dE00 apart; both are handled only on a lossy intake, and only
+        // on an opaque one (the halo test reads JPEG's colour space, which has no
+        // opacity). A clean intake takes neither, and its output is unchanged.
+        let lossy = opts.lossy_intake && native.is_none();
+        if lossy {
+            let (halos, specks) = runs.absorb_halos(px, &inks);
+            crate::diag!(
+                "slivers",
+                "lossy intake: {halos} halo components and {specks} halo specks given back"
+            );
+        }
+        runs.merge_same_inks(&inks, lossy.then_some(crate::color::SOFT_SAME_INK_DE00));
     }
     sw.mark("slivers");
     inkvec_core::progress::begin("despeckle");
@@ -150,7 +163,10 @@ fn trace(
             .collect()
     });
     // No noise measurement: the fast fitter reads no per-point uncertainty, and the
-    // refinement only needs a floor under its contrast test.
+    // refinement only needs a floor under its contrast test. For the same reason the strip
+    // reading's side test is not scaled with noise here (`soft_intake` false): with only the
+    // floor to scale by, it would move the threshold on faint edges by a constant rather than
+    // by anything measured (on `fast-web` it changed 12 icons, dE00 and geom no better).
     crate::finish_color_trace_alpha(
         img,
         opts,
@@ -161,6 +177,7 @@ fn trace(
         face_color,
         n_faces,
         coverage::NOISE_FLOOR,
+        false,
         &mut sw,
         native,
         face_alpha,

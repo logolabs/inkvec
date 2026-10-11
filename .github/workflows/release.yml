@@ -226,7 +226,8 @@ jobs:
                Logolabs/inkvec-denoiser-001 (https://huggingface.co/Logolabs/inkvec-denoiser-001).
             2. Place it next to this binary, or in a `models/` directory next to this
                binary, or point INKVEC_RESTORE_ONNX at its path.
-            3. Run inkvec with --restore auto (or on).
+            3. Quality mode (the default) then runs it as --restore auto by itself; in
+               fast or balanced mode, pass --restore auto (or on).
 
           See the project README for the other restorer backends (restore-burn,
           restore-wgpu), which are not part of this pre-built archive.

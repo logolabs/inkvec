@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/inkvec-core",
+    "crates/inkvec-verified",
     "crates/inkvec-fit",
     "crates/inkvec-trace",
     "crates/inkvec-cli",
@@ -43,6 +44,7 @@ too_many_lines = "warn"
 # Internal crates carry a version as well as a path: crates.io refuses a published crate
 # whose dependency is a bare path.
 inkvec-core = { path = "crates/inkvec-core", version = "0.2.7" }
+inkvec-verified = { path = "crates/inkvec-verified", version = "0.2.7" }
 inkvec-fit = { path = "crates/inkvec-fit", version = "0.2.7" }
 inkvec-trace = { path = "crates/inkvec-trace", version = "0.2.7" }
 inkvec-sr = { path = "crates/inkvec-sr", version = "0.2.7" }

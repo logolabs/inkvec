@@ -38,7 +38,9 @@
 //! 6. corner runs of chord + cubic + chord are merged into one free cubic where cheaper,
 //!    and cubics cut through a corner's anti-aliasing chamfer are sharpened back into two
 //!    lines (`merge`);
-//! 7. research builds only: axis snapping, G1 snapping (`merge::snap`) and the structural
+//! 7. each smooth run is re-segmented with its nodes at its x and y extrema and its joins
+//!    smooth, where the same objective prefers that ([`extrema`]);
+//! 8. research builds only: axis snapping, G1 snapping (`merge::snap`) and the structural
 //!    simplifier (`structural`).
 //!
 //! Around that entry point: [`simple`] repairs rings whose fit crosses itself by
@@ -103,6 +105,7 @@ pub(crate) mod candidates;
 pub mod choice;
 pub mod cost;
 pub mod curves;
+pub mod extrema;
 pub mod harmonize;
 pub mod merge;
 pub mod multimodel;

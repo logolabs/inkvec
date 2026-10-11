@@ -9,14 +9,15 @@
 <body>
 <div class="wrap">
   <header class="masthead">
-    <p class="eyebrow">Stage 15 (optional, off by default)</p>
+    <p class="eyebrow">Stage 15 (on by default in Quality mode)</p>
     <h1>Lines drawn as lines: one centreline and one width</h1>
     <p class="standfirst">A line icon is drawn with a pen: a path down the middle of each
       line and one line width for all of them. Traced as filled shapes, every line costs
       both of its edges and its rounded ends, about four times the numbers the artist wrote.
-      With <code>--detect-strokes</code> (or <code>detect_strokes</code> in the options),
-      the tracer looks for shapes that were drawn this way and writes them back as lines —
-      but only where that is both shorter and as faithful as the filled outline.</p>
+      In Quality mode the tracer looks for shapes that were drawn this way and writes them
+      back as lines — but only where that is both shorter and as faithful as the filled
+      outline. Each line is then simplified the way an artist would draw it: two arcs on one
+      circle become one arc, two lines in line become one.</p>
     <p class="pairlink">Technical reference: <a href="15-strokes.md">15-strokes.md</a></p>
   </header>
   <main>
@@ -109,7 +110,7 @@
         outlined with rounded corners, read as a line with sharp corners, and a puzzle piece
         whose curved parts are slightly wider than its straight ones. Neither is really drawn
         with one pen, and both now stay filled shapes.</p>
-      <p>The stage is off by default while it is measured on more drawings.</p>
+      <p>The stage is on by default in Quality mode; <code>--no-detect-strokes</code> turns it off. It adds about a sixth to the trace time at 512 px.</p>
     </section>
 
   </main>

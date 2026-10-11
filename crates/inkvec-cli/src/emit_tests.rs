@@ -1,5 +1,4 @@
 use super::*;
-use std::collections::BTreeMap;
 
 #[test]
 fn test_emit_bilevel() {
@@ -74,8 +73,10 @@ fn test_face_fill_and_opacity() {
 
 #[test]
 fn test_write_ribbons_and_color_doc() {
-    let mut ribbons = BTreeMap::new();
-    ribbons.insert(0, "<path id=\"ribbon-0\" d=\"M0,0L1,1\"/>".to_string());
+    let mut ribbons = crate::ribbons::Ribbons::default();
+    ribbons
+        .elements
+        .insert(0, "<path id=\"ribbon-0\" d=\"M0,0L1,1\"/>".to_string());
     let pal = inkvec_trace::Palette {
         colors: vec![],
         rgb: vec![],
@@ -154,6 +155,7 @@ fn test_emit_color_single_face() {
         harmonize: true,
         harmonize_threshold: 0.05,
         use_symbols: false,
+        layers: false,
         cutout: false,
         no_background: false,
     };
@@ -283,6 +285,7 @@ fn test_emit_color_with_layers() {
         harmonize: true,
         harmonize_threshold: 0.05,
         use_symbols: false,
+        layers: false,
         cutout: false,
         no_background: false,
     };

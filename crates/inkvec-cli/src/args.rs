@@ -153,6 +153,10 @@ pub struct Args {
     /// a re-saved screenshot, an export from a chat app -- where the file no longer
     /// admits what was done to it.
     pub lossy: inkvec_sr::Mode,
+    /// Set by the restorer pre-pass, never on the command line: the raster being traced came
+    /// out of the restorer, so the codec damage `lossy` stands for is gone (see
+    /// `inkvec_trace::ColorOptions::restored`).
+    pub restored: bool,
     /// Whether to run the super-resolution pre-pass before tracing: never, always,
     /// or `Auto` to trace, measure the fit, and clean and retrace only if the trace
     /// disagrees with the input where it claims to be flat.
@@ -169,10 +173,11 @@ pub struct Args {
     /// a fixed scale of 4, whatever `sr_scale` is.
     pub sr_command: Option<String>,
     /// The trained restorer: removes JPEG, WebP and decoder damage at the input's own size
-    /// before tracing. Off by default for the same reason SR is: on clean input it costs a
-    /// little colour accuracy. `Auto` with no restorer to run traces directly and says so
-    /// in the stats; `On` is an error then.
-    pub restore: inkvec_restore::Mode,
+    /// before tracing. `None` is the mode's default ([`Args::restore_mode`]): `Auto` in
+    /// Quality mode when this build can restore (the network compiled in, or
+    /// `restore_command`), `Off` otherwise. `Auto` with no restorer to run traces directly
+    /// and says so in the stats; `On` is an error then.
+    pub restore: Option<inkvec_restore::Mode>,
     /// Interior residual above which `Auto` restores.
     pub restore_threshold: f64,
     /// The built-in restorer's network: an `.onnx` export (ONNX Runtime) or Burn `.bpk`
@@ -194,7 +199,8 @@ pub struct Args {
     pub strokes: bool,
     /// Detect faces of the colour trace that were drawn as strokes -- a centreline and
     /// one width, round or butt caps, round or miter joins -- and write each as a stroked
-    /// path where that is the shorter description of its boundary. Quality mode only.
+    /// path where that is the shorter description of its boundary. Quality mode only; on
+    /// by default (`--no-detect-strokes` turns it off).
     pub detect_strokes: bool,
     /// Least share of the input's ink the strokes must actually draw, in [0, 1],
     /// or the drawing falls back to outlines.
@@ -236,6 +242,27 @@ pub struct Args {
     pub mode: TraceMode,
 }
 
+impl Args {
+    /// The restorer pre-pass's mode: `restore` when it was given, else the mode's default,
+    /// `Auto` in Quality mode when this build can restore (a network compiled in, or a
+    /// `restore_command`) and `Off` otherwise. Fast and balanced keep `Off` unless asked: a
+    /// restore costs seconds, and their point is speed. A build that cannot restore resolves
+    /// to `Off` rather than to an `Auto` with nothing to run, so it traces exactly as
+    /// `--restore off` does, stats included.
+    pub fn restore_mode(&self) -> inkvec_restore::Mode {
+        let can_restore = cfg!(any(
+            feature = "restore-model",
+            feature = "restore-burn",
+            feature = "restore-wgpu"
+        )) || self.restore_command.is_some();
+        match self.restore {
+            Some(m) => m,
+            None if self.mode == TraceMode::Quality && can_restore => inkvec_restore::Mode::Auto,
+            None => inkvec_restore::Mode::Off,
+        }
+    }
+}
+
 impl Default for Args {
     /// Every default in one place, as the library and every front end see them. `quiet`
     /// is on (the parser turns it off for a terminal), and `native_alpha` is the one value
@@ -272,12 +299,13 @@ impl Default for Args {
             merge_colors: Vec::new(),
             quiet: true,
             lossy: inkvec_sr::Mode::Auto,
+            restored: false,
             sr: inkvec_sr::Mode::Off,
             sr_threshold: inkvec_sr::detect::DEGRADED_RESIDUAL,
             sr_scale: 2,
             sr_no_recolour: false,
             sr_command: None,
-            restore: inkvec_restore::Mode::Off,
+            restore: None,
             restore_threshold: inkvec_sr::detect::DEGRADED_RESIDUAL,
             restore_weights: None,
             uncertainty: None,
@@ -285,7 +313,7 @@ impl Default for Args {
             restore_command: None,
             intake_scale: false,
             strokes: false,
-            detect_strokes: false,
+            detect_strokes: true,
             stroke_balance: 0.85,
             stroke_refine: 0,
             // Per stroke against its own region. Dominant cap and join mismatch
@@ -467,10 +495,12 @@ OPTIONS:
                             instead of as filled outlines. 28% of the corpus is
                             drawn this way and costs 3.3x the artist's parameters
                             as outlines. Declines silently on anything else.
-        --detect-strokes    Write the faces of the colour trace that were drawn as
-                            strokes (a centreline and one width) as stroked paths,
+        --no-detect-strokes Write every face as a filled outline. By default, faces
+                            of the colour trace that were drawn as strokes (a
+                            centreline and one width) are written as stroked paths,
                             wherever that describes their boundary in fewer numbers
-                            at no worse a fit. Quality mode only
+                            at no worse a fit (Quality mode; --detect-strokes asks
+                            for it explicitly)
         --stroke-balance <f>   Least share of the input's ink the strokes must
                             actually draw, or the drawing falls back to outlines
                             [default: 0.85]
@@ -513,7 +543,9 @@ SUPER-RESOLUTION PRE-PASS:
                             on    always clean first
                             auto  trace, measure the fit, clean and retrace only
                                   if the trace disagrees with the input where it
-                                  claims to be flat; with no upscaler to run (no
+                                  claims to be flat and the input shows resampling
+                                  or compression (a lossy file, JPEG ringing, wide
+                                  edges); with no upscaler to run (no
                                   tools/inkvec_sr beside the binary) it traces
                                   directly and says so, where `on` fails
         --sr-threshold <f>  Interior residual above which auto cleans [default: 0.5]
@@ -529,16 +561,19 @@ RESTORER PRE-PASS:
     A trained network that removes JPEG, WebP and AI-decoder damage at the input's
     own size. On damaged input it cuts colour error by 28-45% and parameters by
     about 30%; on clean input it costs a few percent of colour accuracy, which is
-    why it is off by default and `auto` measures first. Restored input is traced
-    with lossy intake on.
+    why `auto` measures first. Restored input is traced with lossy intake on.
 
-        --restore <mode>    off   never (default)
+        --restore <mode>    off   never
                             on    always restore first
                             auto  trace, measure the fit, restore and retrace only
                                   if the trace disagrees with the input where it
-                                  claims to be flat; with no restorer to run (a
+                                  claims to be flat and the input shows compression
+                                  (a lossy file, or JPEG ringing); with no restorer
+                                  to run (a
                                   build without the network, no weights) it
                                   traces directly and says so, where `on` fails
+                            [default: auto in quality mode when this build
+                            can restore, off in fast and balanced]
         --restore-threshold <f>   Interior residual above which auto restores
                             [default: 0.5]
         --restore-weights <file>  The built-in restorer's network: an .onnx export,
@@ -634,7 +669,9 @@ pub(crate) fn parse_args_from(mut it: impl Iterator<Item = String>) -> Result<Ar
             "--sr-no-recolour" => a.sr_no_recolour = true,
             "--intake-scale" => a.intake_scale = true,
             "--strokes" => a.strokes = true,
-            "--detect-strokes" => a.detect_strokes = true,
+            "--detect-strokes" | "--no-detect-strokes" => {
+                a.detect_strokes = flag == "--detect-strokes"
+            }
             "--stroke-residual" => a.stroke_residual = parse_value(&mut it, "--stroke-residual")?,
             "--stroke-refine" => a.stroke_refine = parse_value(&mut it, "--stroke-refine")?,
             "--lambda-scale" => a.lambda_scale = parse_value(&mut it, "--lambda-scale")?,
@@ -653,10 +690,11 @@ pub(crate) fn parse_args_from(mut it: impl Iterator<Item = String>) -> Result<Ar
                 a.sr_command = Some(it.next().ok_or("--sr-command needs a command line")?)
             }
             "--restore" => {
-                a.restore = it
-                    .next()
-                    .ok_or("--restore needs auto, on or off")?
-                    .parse()?
+                a.restore = Some(
+                    it.next()
+                        .ok_or("--restore needs auto, on or off")?
+                        .parse()?,
+                )
             }
             "--restore-threshold" => {
                 a.restore_threshold = parse_value(&mut it, "--restore-threshold")?
@@ -802,6 +840,36 @@ mod tests {
         assert_eq!(format!("{parsed:?}"), format!("{expected:?}"));
     }
 
+    /// `--restore`'s default is the mode's: `auto` in Quality mode when the build can restore,
+    /// `off` in Fast and balanced and wherever there is nothing to restore with; a given
+    /// value always wins.
+    #[test]
+    fn the_restorer_defaults_to_auto_in_quality_mode_only() {
+        use inkvec_restore::Mode;
+        let built_in = cfg!(any(
+            feature = "restore-model",
+            feature = "restore-burn",
+            feature = "restore-wgpu"
+        ));
+        let quality = parse("logo.png").expect("parses");
+        let expect = if built_in { Mode::Auto } else { Mode::Off };
+        assert_eq!(quality.restore_mode(), expect);
+        let command = parse("logo.png --restore-command my_restore").expect("parses");
+        assert_eq!(command.restore_mode(), Mode::Auto);
+        for mode in ["fast", "balanced"] {
+            let a = parse(&format!(
+                "logo.png --mode {mode} --restore-command my_restore"
+            ))
+            .expect("parses");
+            assert_eq!(a.restore_mode(), Mode::Off, "{mode}");
+        }
+        let fast_auto = parse("logo.png --mode fast --restore auto").expect("parses");
+        assert_eq!(fast_auto.restore_mode(), Mode::Auto);
+        let quality_off =
+            parse("logo.png --restore off --restore-command my_restore").expect("parses");
+        assert_eq!(quality_off.restore_mode(), Mode::Off);
+    }
+
     #[test]
     fn flags_set_their_fields() {
         let a = parse("logo.png --tau 3 --cutout -o out.svg --restore on --colors 8 -q")
@@ -812,7 +880,7 @@ mod tests {
         assert!(a.cutout && a.quiet);
         assert!(a.harmonize);
         assert_eq!(a.output, Some(PathBuf::from("out.svg")));
-        assert!(matches!(a.restore, inkvec_restore::Mode::On));
+        assert!(matches!(a.restore, Some(inkvec_restore::Mode::On)));
         assert_eq!(a.max_colors, 8);
 
         assert_eq!(a.mode, super::TraceMode::Quality);
@@ -837,6 +905,19 @@ mod tests {
             !parse("logo.png --no-native-alpha")
                 .expect("parses")
                 .native_alpha
+        );
+
+        // Stroke detection is on unless switched off.
+        assert!(parse("logo.png").expect("parses").detect_strokes);
+        assert!(
+            !parse("logo.png --no-detect-strokes")
+                .expect("parses")
+                .detect_strokes
+        );
+        assert!(
+            parse("logo.png --no-detect-strokes --detect-strokes")
+                .expect("parses")
+                .detect_strokes
         );
     }
 
@@ -955,7 +1036,7 @@ mod tests {
         assert_eq!(a.stroke_balance, 0.8);
         assert!(a.harmonize && a.use_symbols && a.hypotheses);
         assert_eq!(a.harmonize_threshold, 0.04);
-        assert!(matches!(a.restore, inkvec_restore::Mode::Auto));
+        assert!(matches!(a.restore, Some(inkvec_restore::Mode::Auto)));
         assert_eq!(a.restore_threshold, 0.03);
         assert_eq!(a.restore_weights, Some(PathBuf::from("w.onnx")));
         assert_eq!(a.restore_command.as_deref(), Some("my_restore"));

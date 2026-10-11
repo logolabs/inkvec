@@ -1,4 +1,4 @@
-"""The regression gate: score the 246-icon screen set under six conditions, and fail when a
+"""The regression gate: score the 246-icon screen set under eight conditions, and fail when a
 change cannot show it is not worse than the recorded baseline.
 
     python bench/ci_gate.py --exe target/release/inkvec [--workers N]
@@ -11,29 +11,53 @@ Conditions
 ----------
 Each condition is a tracer mode and an intake tier of the same 246 icons (`CONDITIONS`):
 
-    quality-128ss   quality-512ss   quality-512ssop
-    fast-128ss      fast-512ss      fast-512ssop
+    quality-128ss   quality-512ss   quality-512ssop   quality-web
+    fast-128ss      fast-512ss      fast-512ssop      fast-web
 
 `128ss` / `512ss` are the committed 8x-supersampled rasters at 128 and 512 px; `512ssop` is
 the 512 px raster flattened onto white, an opaque logo on a white page (`svgeval.item_paths`
-derives it). Every condition is judged at 1024 px against the artist's file.
+derives it). `web` is a logo as it usually reaches a tracer: the 512 px raster on white,
+resized to 400 px (bicubic) and saved as a JPEG at quality 80 with 4:2:0 chroma, so blur,
+ringing, block artefacts and half-resolution colour (`build_web_tier.py`; the JPEG files are
+committed). Every condition is judged at 1024 px against the artist's file.
 
-Why six and not one. The gate used to score Quality at 128 px only, 98 % transparent; users
+Why eight and not one. The gate used to score Quality at 128 px only, 98 % transparent; users
 send 512-2048 px, mostly opaque. On the 0.2.4 boundary-solve rewrite the 128 px gate read
 -8.5 % dE00 where 512 px read -0.9 % (indistinguishable from zero), per-icon deltas at 128
 and 512 px were uncorrelated (Spearman +0.14), and material-icons went from -47 % at 128 px
 to +14 % at 512 px: a regression the old gate could not see (r2-eval, 2026-10-02). 128 px
-stays as the continuity row; Fast mode had no fidelity gate at all.
+stays as the continuity row; Fast mode had no fidelity gate at all. The rasters above are
+exact renders, noiseless but for 8-bit rounding; the files users send have been resampled
+and compressed on the way, and a tracer tuned on exact renders alone can fit that noise
+(a ringing edge read as a thin band of its own colour, a JPEG block read as a corner). The
+`web` rows gate that case.
 
 Axes and the decision
 ---------------------
-Per condition, three axes are gated against the per-icon baseline of the same condition:
+Per condition, four axes are gated against the per-icon baseline of the same condition:
 
 * **dE00**    colour error against the artist's render, family-macro mean, margin `MARGINS`
-* **turning** control-polygon turning per unit length, plain mean (`inkvec_bench/turning.py`)
-* **ratio**   parameters against the artist's file, family-macro mean
+* **turning_gap** distance from the artist's control-polygon turning: |the trace's turning
+              per unit length × the raster's side − the artist's turning per unit length
+              × the longer side of its canvas|, family-macro mean (`with_gaps`,
+              `inkvec_bench/turning.py`). Scale-free, and zero where the trace turns exactly
+              as much as the artist's file
+* **ratio_gap** distance from the artist's parameter count, |ln(parameters / the
+              artist's)|, family-macro mean: twice and half the artist's count are equally far
+* **geom**    geometric match to the artist's file, family-macro mean: the mean distance,
+              in input pixels, between the trace's edges and the artist's, read as the area
+              where the two files, drawn flat in the artist's colours, disagree, over the
+              length of the artist's edges (`inkvec_bench/geomatch.py`). An edge moved by
+              `δ` reads `δ`; the artist's own file reads 0
 
-and `self_res` is reported. For each axis, `bench/gate_stats.py` computes the relative
+and the raw `turning` (plain mean) and `ratio` (family-macro mean), `self_res` and
+`geom_far` (the part of `geom` more than an input pixel from any artist edge: missing or
+extra features) are reported. Turning and parameters were gated raw until 2026-10-10, lower
+counting as better; but the artists' files turn more than the traces of lucide, material-icons
+and simple-icons (per canvas side 3.35, 6.71 and 8.73 against 2.65, 4.70 and 6.89 at
+512ssop), and noto-emoji on `web` writes fewer numbers than its artists, so a trace moving
+toward the artist read as a regression. The gaps are computed from the stored rows, so the
+baselines needed no re-trace. For each axis, `bench/gate_stats.py` computes the relative
 change of the aggregate with a paired, family-stratified bootstrap interval (Koehn 2004)
 and takes a non-inferiority verdict (Lakens 2017) against the effective margin
 max(`MARGINS`, minimum detectable effect): the change passes when the one-sided 95 % upper
@@ -43,7 +67,21 @@ edit at 512 px), a change passes as "within-noise" unless its upper bound reache
 smallest rise the set would detect (Card et al. 2020), and the report marks those passes.
 
 Icons whose SVG bytes match the baseline's (SHA-256) take the baseline's numbers exactly,
-so a byte-identical build is "identical" on every axis whatever platform scores it.
+so a byte-identical build is "identical" on every axis whatever platform scores it. They are
+not even scored: each SVG is hashed as soon as it is traced, and a match skips the renders
+(`svgeval.score_one`; `--rescore` scores every icon, to check the scorer). What the artist's
+file contributes (its reference render, its side of `geom`, its design profile) is cached in
+`bench/data/_cache` by the file's hash; each condition's line says where the CPU went.
+
+Human statistics
+----------------
+Every traced icon also gets the design battery (`inkvec_bench/design.py`): statistics of how
+the file is drawn (segment kinds, lines and handles on the axes, smooth joins at the extrema,
+corner angles, the design grid, repeated values, primitives, layers, ...), each as a
+divergence from the artist's file. They are reported, not gated: a table of family-macro
+means per condition on the console, every icon's values in `--report-json` (`human`) and in
+`--artifact-dir` (`human-<platform>.json`); `bench/human_stats.py` reads them per family,
+lists the oddities and compares two builds or flag sets.
 
 Baselines
 ---------
@@ -77,10 +115,14 @@ checkout; only generated output (the `_gate` work folder, the cache) is ignored.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import functools
 import hashlib
 import json
+import math
 import os
 import platform
+import re
 import subprocess
 import sys
 import time
@@ -91,6 +133,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "bench"))
 
 import gate_stats  # noqa: E402
+import human_stats
 import svgeval  # noqa: E402
 
 BASELINE = ROOT / "bench" / "gate" / "baseline.json"      # legacy scalar baseline (09-19)
@@ -98,7 +141,7 @@ BASELINE_DIR = ROOT / "bench" / "gate" / "baselines"      # per-platform, per-ic
 LEGACY_LIMITS = {"de00": 0.01, "turning": 0.01, "ratio": 0.05}
 LEGACY_CONDITION = "quality-128ss"
 #: Layout of the per-platform baseline files; bumped on an incompatible change.
-BASELINE_FORMAT = 1
+BASELINE_FORMAT = 2
 
 
 @dataclass(frozen=True)
@@ -114,14 +157,17 @@ CONDITIONS = (
     Condition("quality-128ss", "128ss"),
     Condition("quality-512ss", "512ss"),
     Condition("quality-512ssop", "512ssop"),
+    Condition("quality-web", "web"),
     Condition("fast-128ss", "128ss", ("--mode", "fast")),
     Condition("fast-512ss", "512ss", ("--mode", "fast")),
     Condition("fast-512ssop", "512ssop", ("--mode", "fast")),
+    Condition("fast-web", "web", ("--mode", "fast")),
 )
 BY_NAME = {c.name: c for c in CONDITIONS}
 
 #: How each axis is aggregated over the set (see gate_stats.compare).
-AGGREGATE = {"de00": "macro", "turning": "micro", "ratio": "macro", "self_res": "micro"}
+AGGREGATE = {"de00": "macro", "turning": "micro", "ratio": "macro", "self_res": "micro",
+             "geom": "macro", "geom_far": "macro", "turning_gap": "macro", "ratio_gap": "macro"}
 #: The relative rise each gated axis may show at its one-sided 95 % upper bound. Chosen on
 #: the replay of the 0.2.4 decisions through this rule (REPORT of agent w2-gate,
 #: 2026-10-02): at 2 % every recorded 0.2.4 change passes at every condition, while at 1 %
@@ -135,14 +181,72 @@ AGGREGATE = {"de00": "macro", "turning": "micro", "ratio": "macro", "self_res": 
 #: stays at 2 %), and asked that the gate never answer "inconclusive": gate_stats.decide
 #: floors each margin at the comparison's minimum detectable effect (about 4 % for a broad
 #: edit at 512 px), so the strict margin holds wherever the set can test it.
-MARGINS = {"de00": 0.01, "turning": 0.02, "ratio": 0.03}
+#:
+#: Turning and parameters are gated as distances from the artist's file (`turning_gap`,
+#: `ratio_gap`, see `with_gaps`), not as raw values, since 2026-10-10: lower is not better
+#: where the artist's own file turns more or holds more numbers than the trace (lucide,
+#: material-icons and simple-icons traces turn less than their artists do; noto-emoji on
+#: `web` writes fewer numbers), and a trace moving toward the artist must not read as a
+#: regression. The raw values stay reported. Same margins as the raw axes had.
+MARGINS = {"de00": 0.01, "turning_gap": 0.02, "ratio_gap": 0.03, "geom": 0.02}
 GATED_AXES = tuple(MARGINS)
 #: The Ladder's step (gate_stats.decide): a "better" verdict, the only one that moves a
 #: baseline, needs its one-sided upper bound below -0.1 %. Comparing the Linux and Windows
 #: builds of v0.2.4 read "better" on fast-512ss dE00 at -0.00 % (two icons, both a hair
 #: lower) without it.
 LADDER_STEP = 0.001
-REPORTED_AXES = GATED_AXES + ("self_res",)
+REPORTED_AXES = GATED_AXES + ("turning", "ratio", "self_res", "geom_far")
+
+#: Side of each committed raster tier, in px (every screen raster is square:
+#: `tests/test_ci_gate.py` checks it). An opaque tier `<base>op` has its base tier's side.
+TIER_PX = {"128ss": 128, "512ss": 512, "web": 400}
+
+
+def canvas_side(svg: str) -> float | None:
+    """The longer side of an SVG's canvas, in its own user units: the viewBox's, else the
+    root's width and height. The harness fits the longer side to the raster
+    (`inkvec_bench.render.fit_viewbox`), so a turning per user unit times this side is a
+    turning per raster side, the same in the artist's units and in the trace's px."""
+    head = svg[:svg.find(">", svg.find("<svg")) + 1] if "<svg" in svg else ""
+    m = re.search(r'viewBox\s*=\s*"\s*[-\d.eE+]+[\s,]+[-\d.eE+]+[\s,]+([\d.eE+]+)[\s,]+([\d.eE+]+)', head)
+    if m:
+        return max(float(m.group(1)), float(m.group(2))) or None
+    dims = [re.search(rf'\s{a}\s*=\s*"\s*([\d.]+)', head) for a in ("width", "height")]
+    vals = [float(d.group(1)) for d in dims if d]
+    return max(vals) if vals and max(vals) > 0 else None
+
+
+@functools.cache
+def artist_turning(key: str) -> float | None:
+    """The artist's file's turning per canvas side (`inkvec_bench/turning.py` times
+    `canvas_side`) for icon `family/stem`, or None when its file is missing or has no canvas
+    size. Read as written: a scale in a `transform` is not applied (none of the screen set's
+    files scales a group)."""
+    from inkvec_bench.turning import turning
+    corpus, stem = key.split("/", 1)
+    path = ROOT / "bench" / "data" / "corpus_svg" / corpus / f"{stem}.svg"
+    if not path.exists():
+        return None
+    svg = path.read_text(encoding="utf-8")
+    side = canvas_side(svg)
+    return turning(svg) * side if side else None
+
+
+def with_gaps(rows: dict, cond: Condition) -> dict:
+    """Add the two distances from the artist's file to each row, in place, and return rows:
+
+    * `turning_gap` = |turning × raster side − the artist's turning per canvas side|, in
+      radians of control-polygon turning per canvas side (scale-free; an icon without an
+      artist reading measures from 0);
+    * `ratio_gap` = |ln(parameters / the artist's)|, so twice and half the artist's count
+      are equally far.
+    """
+    px = TIER_PX[svgeval.base_tier(cond.tier)]
+    for k, r in rows.items():
+        a = artist_turning(k)
+        r["turning_gap"] = abs(r["turning"] * px - (a if a is not None else 0.0))
+        r["ratio_gap"] = abs(math.log(max(r["ratio"], 1e-9)))
+    return rows
 
 
 # --------------------------------------------------------------------------- provenance
@@ -186,24 +290,44 @@ def in_ci() -> bool:
 
 
 # --------------------------------------------------------------------------- scoring
-def score_condition(exe: Path, cond: Condition, items: list[dict], workers: int) -> tuple[dict, list[str]]:
+def score_condition(exe: Path, cond: Condition, items: list[dict], workers: int,
+                    base_rows: dict | None = None, pool=None) -> tuple[dict, list[str]]:
     """Trace and score every icon under one condition.
 
-    Returns ({"family/stem": {"corpus", "de00", "turning", "ratio", "self_res", "sha256"}},
+    Returns ({"family/stem": {"corpus", *ROW_AXES, "sha256", "reused", "human", "cpu"}},
     failures). The score cache is off: the gate must measure this build, not remember one.
+    An icon whose SVG is byte-identical to `base_rows`' is traced but not scored again: it
+    takes the baseline's numbers, which `compare_condition` would substitute anyway.
     """
     svgeval.set_tier(cond.tier)
     work = ROOT / "bench" / "data" / "_gate" / cond.name
+    known = {k: (r["sha256"][:SHA_CHARS], {ax: r[ax] for ax in ROW_AXES})
+             for k, r in (base_rows or {}).items() if r.get("sha256")}
     t0 = time.time()
     ss = svgeval.score_set(exe, cond.name, items, work, extra_args=cond.args,
-                           workers=workers, use_cache=False)
+                           workers=workers, use_cache=False, known=known, human=True, pool=pool)
     rows = {f"{i.corpus}/{i.stem}": {"corpus": i.corpus, "de00": i.de00, "turning": i.turning,
                                      "ratio": i.ratio, "self_res": i.self_res,
-                                     "sha256": i.sha256[:SHA_CHARS]}
+                                     "geom": i.geom, "geom_far": i.geom_far,
+                                     "sha256": i.sha256[:SHA_CHARS], "reused": i.reused,
+                                     "human": i.human, "cpu": i.cpu}
             for i in ss.images}
     print(f"  {cond.name}: {len(rows)} icons in {time.time() - t0:.0f} s"
-          + (f", {len(ss.failures)} failed" if ss.failures else ""), flush=True)
+          + (f", {len(ss.failures)} failed" if ss.failures else "") + "; " + cpu_line(rows),
+          flush=True)
     return rows, ss.failures
+
+
+def cpu_line(rows: dict) -> str:
+    """Where one condition's CPU time went, per icon: the tracer, the gate's signals, the
+    design battery; and how many icons were byte-identical to the baseline (not re-scored)."""
+    n = max(1, len(rows))
+    tot = {k: sum(r.get("cpu", {}).get(k, 0.0) for r in rows.values()) / n
+           for k in ("trace", "score", "human")}
+    reused = sum(bool(r.get("reused")) for r in rows.values())
+    return (f"CPU {sum(tot.values()):.2f} s/icon (trace {tot['trace']:.2f}, scoring "
+            f"{tot['score']:.2f}, design battery {tot['human']:.3f}); {reused} byte-identical "
+            "to the baseline, not re-scored")
 
 
 def summarise(rows: dict) -> dict:
@@ -227,17 +351,21 @@ SHA_CHARS = 16
 DIGITS = 9
 
 
+#: The scores of a per-icon row in the baseline file, in order; the row ends with the SVG's
+#: hash.
+ROW_AXES = ("de00", "turning", "ratio", "self_res", "geom", "geom_far")
+
+
 def pack_rows(rows: dict) -> dict:
-    """Per-icon rows as compact lists, [de00, turning, ratio, self_res, sha256], for the file."""
+    """Per-icon rows as compact lists, [*ROW_AXES, sha256], for the file."""
     rnd = lambda x: float(f"{x:.{DIGITS}g}")  # noqa: E731
-    return {k: [rnd(r["de00"]), rnd(r["turning"]), rnd(r["ratio"]), rnd(r["self_res"]),
-                r["sha256"][:SHA_CHARS]]
+    return {k: [rnd(r[ax]) for ax in ROW_AXES] + [r["sha256"][:SHA_CHARS]]
             for k, r in sorted(rows.items())}
 
 
 def unpack_rows(packed: dict) -> dict:
-    return {k: {"corpus": k.split("/", 1)[0], "de00": v[0], "turning": v[1], "ratio": v[2],
-                "self_res": v[3], "sha256": v[4]} for k, v in packed.items()}
+    return {k: {"corpus": k.split("/", 1)[0], **dict(zip(ROW_AXES, v[:-1])), "sha256": v[-1]}
+            for k, v in packed.items()}
 
 
 def baseline_document(exe: Path, results: dict) -> dict:
@@ -338,7 +466,7 @@ def fmt_row(cond: str, ax: str, c: gate_stats.Comparison, v: gate_stats.Verdict)
     margin = f"{v.margin * 100:.0f}%" if gated else "-"
     if gated and v.effective == v.effective and v.effective > v.margin:
         margin = f"{v.effective * 100:.1f}%*"  # floored at the MDE: the set cannot resolve the margin
-    return (f"  {cond:16s} {ax:9s} {c.base:9.5f} -> {c.cur:9.5f}  {c.rel * 100:+7.2f}%  "
+    return (f"  {cond:16s} {ax:11s} {c.base:9.5f} -> {c.cur:9.5f}  {c.rel * 100:+7.2f}%  "
             f"95% CI [{c.p025 * 100:+6.2f}, {c.p975 * 100:+6.2f}]  upper {c.p95 * 100:+6.2f}% "
             f"vs {margin:>3s}  MDE {c.mde * 100:5.2f}%  "
             f"changed {c.changed:3d} (better {c.better}, worse {c.worse})  "
@@ -422,6 +550,9 @@ def main() -> int:
                          "never a verdict to merge on; cannot write a baseline)")
     ap.add_argument("--bypass-gate", type=str, default=None, metavar="JUSTIFICATION",
                     help="Bypass a failing gate if the user agreed and gives a strong justification")
+    ap.add_argument("--rescore", action="store_true",
+                    help="score every icon, also those byte-identical to the baseline's (their "
+                         "verdict is the same either way; this checks the scorer itself)")
     a = ap.parse_args()
     if a.sample is not None and a.write_baseline:
         ap.error("--sample cannot write a baseline: a baseline holds the whole set")
@@ -463,17 +594,25 @@ def main() -> int:
              f"baseline {shown(bfile)}"
              if base_doc else f"legacy mode ({shown(BASELINE)})"), flush=True)
     results, failures = {}, []
-    for name in names:
-        rows, fails = score_condition(exe, BY_NAME[name], items, a.workers)
-        results[name] = rows
-        if len(rows) < len(items) - 2:
-            failures.append(f"{name}: only {len(rows)} of {len(items)} icons scored "
-                            f"({'; '.join(fails[:3])})")
+    with contextlib.ExitStack() as stack:
+        pool = stack.enter_context(svgeval.scoring_pool(a.workers)) if a.workers > 1 else None
+        for name in names:
+            cond_base = (base_doc or {}).get("conditions", {}).get(name)
+            base_rows = unpack_rows(cond_base["icons"]) if cond_base and not a.rescore else None
+            rows, fails = score_condition(exe, BY_NAME[name], items, a.workers, base_rows, pool)
+            results[name] = with_gaps(rows, BY_NAME[name])
+            if len(rows) < len(items) - 2:
+                failures.append(f"{name}: only {len(rows)} of {len(items)} icons scored "
+                                f"({'; '.join(fails[:3])})")
 
     doc = baseline_document(exe, results)
+    human = human_stats.document(results)
     if a.artifact_dir:
         write_json(a.artifact_dir / f"{tag}.json", doc)
         print(f"wrote this run as {a.artifact_dir / (tag + '.json')}")
+        (a.artifact_dir / f"human-{tag}.json").write_text(json.dumps(human), encoding="utf-8",
+                                                           newline="\n")
+    human_stats.print_summary(human)
     if failures:
         print("\nregression gate FAILED: icons failed to trace or score\n")
         for f in failures:
@@ -515,7 +654,7 @@ def main() -> int:
             if cond_base is None:
                 print(f"  {name}: not in the baseline, informational only")
                 continue
-            base_rows = unpack_rows(cond_base["icons"])
+            base_rows = with_gaps(unpack_rows(cond_base["icons"]), BY_NAME[name])
             missing = sorted(set(base_rows) - set(rows))
             if len(missing) > 2 and a.sample is None:
                 gate_fail.append(f"{name}: {len(missing)} baseline icons were not scored")
@@ -531,7 +670,11 @@ def main() -> int:
     if a.report_json:
         write_json(a.report_json, {"platform": tag, "legacy": legacy, "failures": gate_fail,
                                    "summaries": {n: d["summary"] for n, d in doc["conditions"].items()},
-                                   "verdicts": verdict_json(verdicts)})
+                                   "verdicts": verdict_json(verdicts),
+                                   "per_icon": {n: {k: {ax: r[ax] for ax in REPORTED_AXES}
+                                                 for k, r in sorted(rows.items())}
+                                             for n, rows in results.items()},
+                                   "human": human})
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
             fh.write(markdown_summary(verdicts, legacy) if verdicts else levels_markdown(doc, gate_fail))

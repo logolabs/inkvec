@@ -367,12 +367,23 @@ fn a_lone_small_shape_on_a_near_empty_canvas_is_drawn() {
 /// load for one with it, so both builds take the same path.
 fn no_restorer(mode: inkvec_restore::Mode) -> Args {
     Args {
-        restore: mode,
+        restore: Some(mode),
         // Below any residual, so `auto` always decides to restore.
         restore_threshold: -1.0,
         restore_weights: Some("no-such-dir/restorer.onnx".into()),
+        // A lossy container: the sign of compression `auto` needs besides the residual.
+        lossy: inkvec_sr::Mode::On,
         ..Args::default()
     }
+}
+
+/// The plain trace of `square()` from a lossy container, which `auto`'s fallbacks match.
+fn lossy_direct() -> String {
+    let args = Args {
+        lossy: inkvec_sr::Mode::On,
+        ..Args::default()
+    };
+    trace_image(square(), &args).expect("trace succeeds").svg
 }
 
 /// `--restore auto` asks for the restorer only where it helps, so a binary that cannot
@@ -388,8 +399,59 @@ fn restore_auto_without_a_restorer_traces_directly() {
         .expect("a restore line");
     assert!(note.contains("no restorer is available"), "{note}");
     assert!(note.contains("traced directly"), "{note}");
+    assert_eq!(t.svg, lossy_direct(), "the fallback is the plain trace");
+}
+
+/// `--restore auto` restores only an input the file or the pixels say was compressed: the
+/// residual alone reads smooth shading in clean art as damage. A clean input whose residual
+/// fires (the threshold below any residual) is traced as it is, and the stats say why.
+#[test]
+fn restore_auto_needs_a_sign_of_compression() {
+    let args = Args {
+        lossy: inkvec_sr::Mode::Off,
+        ..no_restorer(inkvec_restore::Mode::Auto)
+    };
+    let t = trace_image(square(), &args).expect("auto traces directly");
+    let note = t
+        .stats
+        .iter()
+        .find(|l| l.starts_with("restore"))
+        .expect("a restore line");
+    assert!(note.contains("no sign of compression"), "{note}");
     let direct = trace_image(square(), &Args::default()).expect("trace succeeds");
-    assert_eq!(t.svg, direct.svg, "the fallback is the plain trace");
+    assert_eq!(t.svg, direct.svg, "the plain trace");
+    // The kept probe reports what the plain trace reports, apart from the restore line.
+    let rest: Vec<&String> = t
+        .stats
+        .iter()
+        .filter(|l| !l.starts_with("restore"))
+        .collect();
+    assert_eq!(rest, direct.stats.iter().collect::<Vec<_>>());
+    assert_eq!(t.lambda, direct.lambda);
+}
+
+/// `--sr auto` likewise cleans only an input that shows resampling or compression.
+#[test]
+fn sr_auto_needs_a_sign_of_resampling_or_compression() {
+    let args = Args {
+        lossy: inkvec_sr::Mode::Off,
+        ..no_upscaler(inkvec_sr::Mode::Auto)
+    };
+    let t = trace_image(square(), &args).expect("auto traces directly");
+    let note = t
+        .stats
+        .iter()
+        .find(|l| l.starts_with("sr "))
+        .expect("an sr line");
+    assert!(
+        note.contains("no sign of resampling or compression"),
+        "{note}"
+    );
+    let direct = trace_image(square(), &Args::default()).expect("trace succeeds");
+    assert_eq!(t.svg, direct.svg, "the plain trace");
+    let rest: Vec<&String> = t.stats.iter().filter(|l| !l.starts_with("sr ")).collect();
+    assert_eq!(rest, direct.stats.iter().collect::<Vec<_>>());
+    assert_eq!(t.lambda, direct.lambda);
 }
 
 /// Upscaler flags that cannot give an upscaler: an empty `--sr-command`, the same failure a
@@ -400,6 +462,8 @@ fn no_upscaler(mode: inkvec_sr::Mode) -> Args {
         // Below any residual, so `auto` always decides to clean.
         sr_threshold: -1.0,
         sr_command: Some(String::new()),
+        // A lossy container: the sign of damage `auto` needs besides the residual.
+        lossy: inkvec_sr::Mode::On,
         ..Args::default()
     }
 }
@@ -418,8 +482,7 @@ fn sr_auto_without_an_upscaler_traces_directly() {
         .expect("an sr line");
     assert!(note.contains("no upscaler is available"), "{note}");
     assert!(note.contains("traced directly"), "{note}");
-    let direct = trace_image(square(), &Args::default()).expect("trace succeeds");
-    assert_eq!(t.svg, direct.svg, "the fallback is the plain trace");
+    assert_eq!(t.svg, lossy_direct(), "the fallback is the plain trace");
     // Monochrome: the probe is a colour trace, so the fallback traces again as asked.
     let mono = Args {
         monochrome: true,
@@ -432,6 +495,7 @@ fn sr_auto_without_an_upscaler_traces_directly() {
         .any(|l| l.contains("no upscaler is available")));
     let plain_mono = Args {
         monochrome: true,
+        lossy: inkvec_sr::Mode::On,
         ..Args::default()
     };
     assert_eq!(
@@ -496,6 +560,45 @@ fn pipeline_with_detect_strokes_and_use_symbols() {
     assert!(!t.svg.is_empty());
 }
 
+/// A black ring of width 10 round a white middle, on a white page: anti-aliased by 4x4
+/// supersampling.
+fn ring_on_white() -> Rgba {
+    image(128, 128, |x, y| {
+        let mut ink = 0.0;
+        for sy in 0..4 {
+            for sx in 0..4 {
+                let (px, py) = (
+                    x as f32 + (sx as f32 + 0.5) / 4.0,
+                    y as f32 + (sy as f32 + 0.5) / 4.0,
+                );
+                let r = ((px - 64.0).powi(2) + (py - 64.0).powi(2)).sqrt();
+                if (r - 36.0).abs() <= 5.0 {
+                    ink += 1.0 / 16.0;
+                }
+            }
+        }
+        let v = 1.0 - ink;
+        [v, v, v, 1.0]
+    })
+}
+
+#[test]
+fn a_ring_on_white_becomes_one_stroke_and_its_middle_leaves_with_it() {
+    let args = Args {
+        detect_strokes: true,
+        ..Args::default()
+    };
+    let svg = traced_svg(ring_on_white(), &args);
+    assert!(
+        svg.contains("stroke=\"#000000\"") || svg.contains("stroke=\"#000\""),
+        "{svg}"
+    );
+    // The page and the stroke: the white middle is the page showing through, not a white
+    // disc painted over a black one.
+    assert_eq!(svg.matches("fill=\"#fff").count(), 1, "{svg}");
+    assert_eq!(shapes(&svg), 2, "{svg}");
+}
+
 #[test]
 fn pipeline_with_layers() {
     let img = image(64, 64, |x, y| {
@@ -533,7 +636,7 @@ fn pipeline_with_select_hypotheses() {
 #[test]
 fn pipeline_with_restore_auto() {
     let args = Args {
-        restore: inkvec_restore::Mode::Auto,
+        restore: Some(inkvec_restore::Mode::Auto),
         ..Args::default()
     };
     let t = trace_image(square(), &args).expect("trace succeeds");

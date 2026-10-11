@@ -1,7 +1,8 @@
-//! `--detect-strokes` (`Options::detect_strokes`; off by default): faces that were drawn
-//! as strokes, written as strokes -- centrelines with one `stroke-width`, round or butt
-//! caps, round or miter joins -- instead of as filled outlines. Off, nothing here runs and
-//! the output is byte-identical to the pipeline without the stage.
+//! Stroke detection (`Options::detect_strokes`, on by default in Quality mode;
+//! `--no-detect-strokes` turns it off): faces that were drawn as strokes, written as
+//! strokes -- centrelines with one `stroke-width`, round or butt caps, round or miter
+//! joins -- instead of as filled outlines. Off, nothing here runs and the output is
+//! byte-identical to the pipeline without the stage.
 //!
 //! **Where it runs.** In the colour pipeline after every boundary is fitted, repaired and
 //! mirrored and every face's fill and transparency are settled, before the document is
@@ -47,7 +48,7 @@
 //! error against its number of curves; ours uses that trade to choose between strokes and
 //! fills per face, with the error measured on the painted outline.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use inkvec_core::Polyline;
 use inkvec_fit::primitives::PrimitiveFit;
@@ -61,11 +62,12 @@ use crate::pathdata::fmt_fitted;
 use crate::primitive::stroke_element;
 use crate::rings;
 
-/// Whether the stage runs: `--detect-strokes` (`Options::detect_strokes`), or the
-/// variable `INKVEC_RIBBONS=1`, which the benchmark scripts use to switch the opt-in stage
-/// on for a build they cannot pass flags to (the gate's fixed conditions).
+/// Whether the stage runs: `Options::detect_strokes` (on unless `--no-detect-strokes`),
+/// overridden by the variable `INKVEC_RIBBONS` (`0` off, anything else on), which the
+/// benchmark scripts use to switch the stage for a build they cannot pass flags to (the
+/// gate's fixed conditions).
 pub(crate) fn on(args: &crate::args::Args) -> bool {
-    args.detect_strokes || inkvec_core::env::flag("INKVEC_RIBBONS")
+    inkvec_core::env::switch("INKVEC_RIBBONS", args.detect_strokes)
 }
 
 /// The stage as the colour pipeline calls it, on the colour document `doc` before its
@@ -102,6 +104,7 @@ pub(crate) fn stage(
         h: map.height,
         cfg: &cfg_r,
         decimals: crate::pathdata::emit_decimals(args.precision),
+        editable: args.editability,
     });
     if let Some(line) = &out.line {
         crate::diag::stage(args.quiet, || line.clone());
@@ -140,6 +143,9 @@ pub(crate) struct Inputs<'a> {
     pub(crate) cfg: &'a FitConfig,
     /// Decimals per written coordinate.
     pub(crate) decimals: usize,
+    /// `--editability`: a centreline's circular arcs are written as cubics cut at their
+    /// extrema (`crate::editable::arcs_as_cubics`), as the fill outlines' are.
+    pub(crate) editable: bool,
 }
 
 /// What the stage decided: per face written as strokes, its element text, and a report
@@ -148,8 +154,40 @@ pub(crate) struct Inputs<'a> {
 pub(crate) struct Ribbons {
     /// Face -> the stroke element(s) that replace it, in face order.
     pub(crate) elements: BTreeMap<usize, String>,
+    /// Faces that leave with a face written as strokes: each enclosed by that face alone
+    /// and the colour of what is painted beneath it ([`absorbed_by`]).
+    pub(crate) absorbed: BTreeSet<usize>,
     /// One report line (`None` when the stage did not run).
     pub(crate) line: Option<String>,
+    /// Face -> the geometry its strokes paint, for the faces beneath them to be completed
+    /// under ([`crate::layers`]).
+    pub(crate) shapes: BTreeMap<usize, crate::layers::StrokeShape>,
+}
+
+/// The geometry a ribbon's strokes paint: centrelines (a primitive centreline as its
+/// primitive), width, cap and join.
+fn stroke_shape(r: &Ribbon) -> crate::layers::StrokeShape {
+    use crate::layers::{EndCap, JoinKind};
+    let (mut lines, mut prims) = (Vec::new(), Vec::new());
+    for c in &r.lines {
+        match c.prim {
+            Some(p) => prims.push(p.kind),
+            None => lines.push(c.path.clone()),
+        }
+    }
+    crate::layers::StrokeShape {
+        lines,
+        prims,
+        width: r.width,
+        cap: match r.cap {
+            ribbon::Cap::Round => EndCap::Round,
+            ribbon::Cap::Butt => EndCap::Butt,
+        },
+        join: match r.join {
+            ribbon::Join::Round => JoinKind::Round,
+            ribbon::Join::Miter => JoinKind::Other,
+        },
+    }
 }
 
 /// One candidate's outcome, for the decision and the debug line.
@@ -192,16 +230,23 @@ pub(crate) fn choose(inp: &Inputs) -> Ribbons {
             if area < 16.0 || area > 0.5 * image_area {
                 return None;
             }
-            let k_vanish = vanishing_params(inp, &nest, &drawers, f);
+            let k_vanish = vanishing_params(inp, &nest, &drawers, f)
+                + absorbed_by(inp, &nest, f)
+                    .iter()
+                    .map(|&g| outline_params(inp, &nest, g))
+                    .sum::<f64>();
             // Nothing to save: no stroke description can beat writing nothing more.
             if k_vanish < 4.0 {
                 return None;
             }
-            let fit = ribbon::fit_face(&face_rings(inp, f), &mask, inp.cfg, k_vanish);
+            let chi2_outline = outline_chi2(inp, f);
+            // The fidelity half of [`decide`], for the solve's merges to stay within.
+            let cap = |n: usize| chi2_outline + FIT_MARGIN_SD * (2.0 * n as f64).sqrt();
+            let fit = ribbon::fit_face(&face_rings(inp, f), &mask, inp.cfg, k_vanish, &cap);
             Some(Outcome {
                 face: f,
                 fit,
-                chi2_outline: outline_chi2(inp, f),
+                chi2_outline,
                 k_vanish,
             })
         })
@@ -221,8 +266,16 @@ pub(crate) fn choose(inp: &Inputs) -> Ribbons {
             let hex = inkvec_trace::color::to_hex(*c);
             out.elements.insert(
                 o.face,
-                element(r, &hex, inp.decimals, &format!("stroke-{}", o.face)),
+                element(
+                    r,
+                    &hex,
+                    inp.decimals,
+                    &format!("stroke-{}", o.face),
+                    inp.editable,
+                ),
             );
+            out.shapes.insert(o.face, stroke_shape(r));
+            out.absorbed.extend(absorbed_by(inp, &nest, o.face));
             saved += o.k_vanish - r.params();
         }
     }
@@ -332,7 +385,7 @@ fn face_rings(inp: &Inputs, f: usize) -> Vec<Polyline> {
 /// its rings once, against its own fitted curve, by exact nearest distance
 /// ([`ribbon::path_chi2`], the same measure as the strokes' score).
 fn outline_chi2(inp: &Inputs, f: usize) -> f64 {
-    let mut seen = std::collections::BTreeSet::new();
+    let mut seen = BTreeSet::new();
     let mut chi2 = 0.0;
     for ring in &inp.order[f] {
         for &(k, _) in ring {
@@ -404,6 +457,74 @@ fn vanishing_params(inp: &Inputs, nest: &rings::Nesting, drawers: &[Vec<usize>],
     total
 }
 
+/// The faces that leave the document with face `f` when it is written as strokes: its
+/// children in the nesting that `f` alone encloses (every edge of their outline has `f`
+/// on its other side) and that are painted exactly the colour of the face `f` sits in --
+/// flat, opaque, not transparent, the same `#rrggbb`. In a stacked document `f`'s parent
+/// is painted across all of `f`'s area, so once `f` is not, such a child paints what
+/// already shows: the white inside a black ring on a white page. The emitter drops them
+/// only where that still holds after its own stacking ([`crate::emit`]).
+///
+/// This is the stacking the artist would have written: a ring drawn as one stroke over the
+/// page, not a black disc with a white disc on top. Not from the literature.
+pub(crate) fn absorbed_by(inp: &Inputs, nest: &rings::Nesting, f: usize) -> Vec<usize> {
+    let hex = |i: usize| -> Option<String> {
+        let painted = !inp.clear.get(i).copied().unwrap_or(false)
+            && inp.opacity.get(i).copied().unwrap_or(1.0) >= 1.0;
+        match inp.fills.get(i).map(|x| &x.model) {
+            Some(gradient::FillModel::Flat(c)) if painted => Some(inkvec_trace::color::to_hex(*c)),
+            _ => None,
+        }
+    };
+    let Some(under) = nest.parent.get(f).copied().flatten().and_then(hex) else {
+        return Vec::new();
+    };
+    (0..inp.order.len())
+        .filter(|&g| {
+            g != f
+                && nest.parent[g] == Some(f)
+                && !nest.outer[g].is_empty()
+                && hex(g).as_deref() == Some(under.as_str())
+                && nest.outer[g].iter().all(|&r| {
+                    inp.order[g][r].iter().all(|&(k, _)| {
+                        let e = &inp.map.edges[k];
+                        let other = if e.left as usize == g {
+                            e.right
+                        } else {
+                            e.left
+                        };
+                        other as usize == f
+                    })
+                })
+        })
+        .collect()
+}
+
+/// The parameters face `g`'s outline rings write: each ring's segments and move-to, or
+/// its primitive's count when the ring is one.
+fn outline_params(inp: &Inputs, nest: &rings::Nesting, g: usize) -> f64 {
+    nest.outer[g]
+        .iter()
+        .map(|&r| match inp.order[g][r].as_slice() {
+            [(k, _)] if inp.prims.get(*k).is_some_and(Option::is_some) => {
+                inp.prims[*k].as_ref().map_or(0.0, |p| p.params)
+            }
+            ring => {
+                2.0 + ring
+                    .iter()
+                    .map(|&(k, _)| {
+                        inp.fitted[k]
+                            .segments
+                            .iter()
+                            .map(|s| s.params())
+                            .sum::<f64>()
+                    })
+                    .sum::<f64>()
+            }
+        })
+        .sum()
+}
+
 /// The SVG for a face written as strokes: each centreline its own element, as stroke icon
 /// sets draw them (lucide writes one `<path>` per stroke), stroked `hex` at the ribbon's
 /// width with its caps and joins (SVG's default miter limit) -- a path per centreline that
@@ -416,7 +537,7 @@ fn vanishing_params(inp: &Inputs, nest: &rings::Nesting, drawers: &[Vec<usize>],
 /// the gate's `turning` signal does -- does not read the pen lifts between strokes as
 /// turns (lucide at 128 px: 0.0303 -> 0.0389 with one compound path per face, 0.0303 ->
 /// 0.0306 with the move-tos taken as breaks).
-fn element(r: &Ribbon, hex: &str, decimals: usize, id: &str) -> String {
+fn element(r: &Ribbon, hex: &str, decimals: usize, id: &str, editable: bool) -> String {
     let style = format!(
         "fill=\"none\" stroke=\"{hex}\" stroke-width=\"{w:.decimals$}\" stroke-linecap=\"{c}\" stroke-linejoin=\"{j}\"",
         w = r.width,
@@ -438,7 +559,12 @@ fn element(r: &Ribbon, hex: &str, decimals: usize, id: &str) -> String {
             }
             None => {
                 let mut d = String::new();
-                fmt_fitted(&line.path, line.path.closed, decimals, &mut d);
+                if editable {
+                    let path = crate::editable::arcs_as_cubics(&line.path);
+                    fmt_fitted(&path, path.closed, decimals, &mut d);
+                } else {
+                    fmt_fitted(&line.path, line.path.closed, decimals, &mut d);
+                }
                 parts.push(format!("<path id=\"{id}-{k}\" d=\"{d}\"/>"));
             }
         }
@@ -524,17 +650,17 @@ mod tests {
 
     #[test]
     fn element_writes_one_stroked_path_with_its_join() {
-        let el = element(&ribbon(1.0, Join::Miter), "#000000", 2, "stroke-3");
+        let el = element(&ribbon(1.0, Join::Miter), "#000000", 2, "stroke-3", false);
         assert_eq!(
             el,
             "<path id=\"stroke-3\" d=\"M1.00,2.00L11.00,2.00\" fill=\"none\" stroke=\"#000000\" stroke-width=\"4.00\" stroke-linecap=\"round\" stroke-linejoin=\"miter\"/>"
         );
-        assert!(element(&ribbon(1.0, Join::Round), "#123456", 2, "s")
+        assert!(element(&ribbon(1.0, Join::Round), "#123456", 2, "s", false)
             .contains("stroke-linejoin=\"round\""));
         // Two centrelines: one path each, under a group that carries the style.
         let mut two = ribbon(1.0, Join::Round);
         two.lines.push(two.lines[0].clone());
-        let el = element(&two, "#000000", 2, "s");
+        let el = element(&two, "#000000", 2, "s", false);
         assert_eq!(
             el,
             "<g id=\"s\" fill=\"none\" stroke=\"#000000\" stroke-width=\"4.00\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path id=\"s-0\" d=\"M1.00,2.00L11.00,2.00\"/><path id=\"s-1\" d=\"M1.00,2.00L11.00,2.00\"/></g>"

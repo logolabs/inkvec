@@ -7,11 +7,11 @@
 `emit/winding.rs` (ring direction), `crates/inkvec-cli/src/pathdata.rs` (path data),
 `primitive.rs` (circle, ellipse and rectangle elements), `rings.rs` (nesting),
 `crates/inkvec-cli/src/post.rs` (output options), and `inkvec_svgmin::compact` for `--minify`.
-**Entry points:** `emit_color()` (`crates/inkvec-cli/src/emit.rs:163`); post-processing via
+**Entry points:** `emit_color()` (`crates/inkvec-cli/src/emit.rs:164`); post-processing via
 `post_process()` (`crates/inkvec-cli/src/post.rs:451`).
 **Pipeline position:** after fill assignment (stage mark `"fills"`,
 `crates/inkvec-cli/src/pipeline.rs:396`), through the stage mark `"emit"`
-(`crates/inkvec-cli/src/pipeline.rs:446`); `post_process` then runs separately, outside the
+(`crates/inkvec-cli/src/pipeline.rs:445`); `post_process` then runs separately, outside the
 timed pipeline, just before the file is written.
 
 Crate header, `crates/inkvec-cli/src/lib.rs:6-21`, gives the whole pipeline shape:
@@ -47,15 +47,15 @@ header (`emit.rs:30-47`) names the two things that make that more than a neutral
 
 ## Inputs and outputs
 
-`emit_color` takes a `ColorDoc` (`emit.rs:76-115`): the rings of each face as walks over
+`emit_color` takes a `ColorDoc` (`emit.rs:76-116`): the rings of each face as walks over
 shared edges, every fitted edge and whole-edge primitive, every face's fill model, the
 palette and per-face colour index, per-face clear/opacity, alpha ramps and native fades,
 optional recovered layers, the matte, and the raster size; and an `EmitOptions`
-(`emit.rs:126-143`): `--cutout`, native transparency, `--no-background`, `--precision`, and
+(`emit.rs:127-144`): `--cutout`, native transparency, `--no-background`, `--precision`, and
 the harmonize settings. Output is a `String` — the complete `<svg>...</svg>` document, viewBox
 `-0.5 -0.5 w h`, before `post_process`. The colour pipeline calls it once per candidate
 document (flat, and with translucent layers when there are any); the bilevel pipeline calls
-`emit_bilevel` (`emit.rs:1354`).
+`emit_bilevel` (`emit.rs:1365`).
 
 ## How it works
 
@@ -64,6 +64,84 @@ nesting (`rings::nesting`), stacking (`stack_faces`), harmonizing, paint (`face_
 order and names (`paint_tree`, `face_ids`), strokes (`annulus_strokes`), writing (`Writer`,
 with same-coloured siblings merged into one compound path), seams (`seam_overrides`), and
 layers (`write_layers`).
+
+### Before the writer: `--editability` (`crates/inkvec-cli/src/editable.rs`)
+
+With `--editability`, `finish_color` (`pipeline.rs`) hands every fitted edge to
+`editable::edit_all` after repair, mirrors and fills and before `emit_color`, so nothing the
+writer does can re-break what it locked. Every pass is held to one test: sample the edited
+ring at 8 points per segment and require each sample to lie within `3·σ_j + EDIT_SLACK`
+(0.5 px) of some measured point (`MIRROR_SLACK`, 1.5 px, for a mirror lock), one-sided. A
+change that fails it is undone, one join, node or ring at a time. The passes, in the order
+`edit_all` runs them:
+
+1. **Arcs as cubics** (`editable/curves.rs`, `pass_arcs`). Every circular arc is written as the
+   cubics a drawing tool writes: cut at each angle that is a whole quarter turn inside it, so
+   every cut is an x or y extremum with both handles exactly on an axis, each piece the
+   standard approximation with handles `4/3·tan(Δ/4)·r` long (0.5523·r for a quarter; Riškus
+   2006, *Information Technology and Control* 35(4), whose largest radial error with that
+   constant is 2.73e-4·r). A cut within `ARC_CUT_GAP_PX` (1 px, along the arc) of the arc's
+   end is not made: the end is then all but at the extremum, and the sliver the cut would
+   leave has handles too short for two decimals to point (a 0.4 px piece on
+   `material-icons/dining`). The piece beside it then turns by up to 112.5° (the gap is
+   capped at 22.5°), with a radial error under 1.1e-3·r. The fit writes arcs as `A` (19 % of
+   the trace's segments at 512 px on white, against the artists' 4 %; the artists write 67 %
+   cubics); an editor shows an `A` as two nodes with no handles, wherever on the circle they
+   fall. A stroke's centreline gets the same conversion when it is written (`ribbons.rs`,
+   `arcs_as_cubics`); at 1.1e-3·r it needs no guard.
+2. **Runs re-noded at extrema** (`pass_extrema`): `inkvec_fit::extrema::anchor_extrema`
+   (stage 11, *Nodes at extrema*) with `EDIT_PREFERENCE`: 3 parameters credited per anchored
+   node instead of the fit's 1, and the written count free to change, so a segment that spans
+   an extremum gains a node there. Kept only if the ring still guards. These two rewrite
+   segments, so they run before anything that reads a node or a handle.
+3. **Mirror lock, then node alignment** (`pass_mirror`, `pass_nodes`): the passes that move
+   nodes, before any handle is pointed. A node that alignment moves now carries its handles,
+   as in an editor; left behind, a handle a pixel long turned by up to 15° for a 0.3 px move
+   and a smooth node became a kink (`material-icons/dining`: kinked 0 → 0.18 from this pass
+   alone).
+4. **Collinear lines merged** (`pass_collinear`). Node alignment lines nodes up on shared
+   coordinates and mirror lock splits a line where its axis crosses it; both leave a node in
+   the middle of a straight run, which artists do not draw (the battery's `collinear` was
+   15 % further from the artist's file under `--editability` than without it). Two lines
+   meeting at a turn of at most `COLLINEAR_DEG` (0.5°, the battery's own threshold) are
+   written as one, the closing join of a closed ring included. Only the merged line is
+   judged, against the two it replaces (it may stray no further than they did, or than
+   `EDIT_SLACK`): judged on the whole ring, a mirror-locked ring, held to the wider
+   `MIRROR_SLACK`, never lost the node its lock had put on the axis.
+5. **G1 within a ring** (`pass_g1`). Every join that turns by at most `KINK_DEG` (30°) is
+   made smooth: between two cubics both handles turn onto the bisector, and next to a line
+   the cubic's handle turns onto the line's direction. 30° is where the artists' own joins
+   between curves separate: smooth (within 3°) or a corner of more than 30°, with only
+   8.6 % between (R3.1 of `docs/theory/chain-representation.md`). The pass used to stop at
+   `G1_SNAP_DEG` (3°), which only made exact what was already smooth to the eye, and never
+   looked at a join next to a line. It also turned the wrong handle, since it was written:
+   the incoming cubic's first control point, at its far end, instead of the one at the join,
+   so a join it "smoothed" kept its kink and the far end gained one (`material-icons/dining`:
+   kinked 0.18 → 0.45 from this pass, 0 now).
+6. **Handle snaps** (`pass_handles`), per node: onto an axis within 2.5°, else onto the 45°
+   diagonal within 1.5°. A smooth node's two handles snap together or not at all; snapping
+   them one at a time turned one handle of a pair whose direction sat on either side of the
+   window's edge and left a kink where there was none (the battery's `kinked` was 3.9 %
+   further under `--editability`). A handle that leaves a line smoothly is not snapped, since
+   the line fixes its direction.
+7. **Equal handle lengths** (`pass_equalize`), as before.
+The per-ring passes (4 to 7) see a boundary with no junction on it as closed. The planar
+map hands such a boundary over as one open edge that ends where it starts, at a point of its
+own choosing, so its closing join was a join no pass ever looked at: neither these, which
+treat an open ring's ends as ends, nor the junction pass, which needs two edges.
+`isolated_loops` finds the edges that end where they start at a point no other edge ends at;
+they are flagged closed for passes 4 to 7 and the flag is put back after them.
+
+8. **Joins at junctions** (`editable/junctions.rs`, `pass_junctions`), last. The other passes
+   see one edge at a time, between two junctions, so they never see the join where a face's
+   outline passes from one edge to the next. That is where layered art shows: a shape painted
+   over another leaves the lower one's visible outline with a T-junction on each side, and the
+   upper one's outline runs smoothly through both, but its two edges were fitted apart and
+   meet at a kink. The pass walks each face's rings and turns the handles either side of every
+   join between two edges that turns by at most `JUNCTION_G1_DEG` (30°) onto one direction:
+   a line's own direction when one side is a line; else the side that the handle pass left
+   exactly on an axis, when the other is not, so the snap survives; else the bisector. No
+   node moves, so the junction stays shared and no seam opens; both edges must still guard.
 
 ### The path grammar actually emitted
 
@@ -214,7 +292,7 @@ that happens to come out smooth for any reason gets the short form.
 
 ### Compound paths, wound by nesting depth
 
-`Writer::emit_level` (`emit.rs:1076-1087`) writes the faces of one nesting level:
+`Writer::emit_level` (`emit.rs:1087-1098`) writes the faces of one nesting level:
 
 > "Siblings are disjoint by construction -- every pixel belongs to one face -- so all the
 > siblings of one flat colour can be one compound path under even-odd, which is how an artist
@@ -239,7 +317,7 @@ drawables before API 24 — such a hole fills back in; on the 246-icon screen se
 (30%) rendered differently under `nonzero` (`emit/winding.rs:6-13`).
 
 Now every path is passed through `winding::for_nonzero` (`emit/winding.rs:104-119`) when it is
-written (`Writer::path_element`, `emit.rs:1061-1073`). The method (`emit/winding.rs:15-34`):
+written (`Writer::path_element`, `emit.rs:1072-1084`). The method (`emit/winding.rs:15-34`):
 for rings that do not cross each other, a point inside `k` nested rings is crossed once by
 each, so if the ring at depth `d` runs the way `(−1)^d` says, the winding number is
 `1 − 1 + 1 − …` over `k` terms — 1 for odd `k`, 0 for even, the even-odd answer at every
@@ -265,7 +343,7 @@ where the opposite would reverse 2,152. Per compound path (`emit/winding.rs:36-5
 The same pass winds the recovered `--layers` paths (`write_layers`), the harmonized symbols
 (`harmonize.rs:133`) and the `--monochrome` and bilevel documents (`mono.rs:540`); a `<use>`
 of a harmonized symbol carries no `fill-rule`, since the symbol itself was wound
-(`emit.rs:1019-1020`).
+(`emit.rs:1030-1031`).
 
 Measured (`emit/winding.rs:66-80`; the 246-icon screen set at 512 px, against v0.2.4 rendered
 under `evenodd`): with `evenodd` forced back on, the wound files render identically in resvg,
@@ -302,18 +380,18 @@ bound of a paired bootstrap, which is a change-detection gate, not an absolute c
 
 ### Gradient and fill emission
 
-Each face's fill attribute comes from `face_fill` (`emit.rs:711-775`), in order of precedence:
+Each face's fill attribute comes from `face_fill` (`emit.rs:722-786`), in order of precedence:
 under a recovered layer, the ground colour; a fade traced natively, written by
 `gradient::fade_to_svg` (id `f{i}`); an alpha ramp, written as the gradient an editor would
 use — one colour, two `stop-opacity` values, along the axis the fade was measured to run (id
-`a{i}`, endpoints at two decimals and opacities at three, `emit.rs:745`); its fill model,
+`a{i}`, endpoints at two decimals and opacities at three, `emit.rs:756`); its fill model,
 delegated to `gradient::fill_to_svg` (`crates/inkvec-trace/src/gradient/svg.rs:74`); and with
 no fill model, its palette ink, else black. A translucent face's flat colour is "un-matted"
 before writing, since it was measured over the compositing matte. `fill_to_svg` returns a
 `(defs fragment, fill attribute)` pair: `FillModel::Flat` needs no defs;
 `FillModel::Linear`/`Radial` write a `<linearGradient>`/`<radialGradient>` with
 `gradientUnits="userSpaceOnUse"`. No empty `<defs>` block is written when there is nothing to
-put in it (`emit.rs:248-252`).
+put in it (`emit.rs:259-263`).
 
 Which gradients reach this point is decided in the `fills` mark (below): a gradient whose
 stops a viewer could not tell apart is painted flat first.
@@ -348,12 +426,12 @@ is degenerate", with "See also" He & Chao 2015.
 
 ### Stage 9: the recovered layers, back to front
 
-With `--layers`, `write_layers` (`emit.rs:1307-1349`) paints each recovered translucent layer
+With `--layers`, `write_layers` (`emit.rs:1318-1360`) paints each recovered translucent layer
 over everything as one compound path: the union of its faces, from the rings they had before
 the ground under them was merged, wound by depth so the default rule paints exactly the union,
 and one path rather than one per face so the translucent paint is composited once and no seam
 appears where two pieces met. The layers are written **back to front**
-(`emit.rs:1316-1323`): the decomposition's list is in peel order, frontmost first, because a
+(`emit.rs:1327-1334`): the decomposition's list is in peel order, frontmost first, because a
 layer can only be taken off once nothing lies over it. Written in that order the frontmost
 layer went down first and every layer behind it was composited over it: on
 `synthetic/stack_overlap` the blue disc came out on top of the green one that covers it, dE00
@@ -477,8 +555,8 @@ let pays = pl < pf && bl <= bf;  // fewer shapes AND not more bytes
 | arc rotation precision | `pathdata.rs:114`, `:258`, `:338` | 3 decimals (fixed) | arc `phi` formatting | no stated derivation |
 | rounded-rect radius floor | `primitive.rs:76`, `:281` | `1e-4` | below this, written as a plain rect | no stated derivation |
 | ellipse rotation floor | `primitive.rs:258` | `1e-3` | below this, no `transform` written | no stated derivation |
-| alpha-ramp endpoint precision | `emit.rs:745` | 2 decimals (fixed) | independent of `EMIT_DECIMALS` | no stated derivation |
-| opacity precision | `emit.rs:745`, `:787`, `:793` | 3 decimals | `fill-opacity`/`stop-opacity` | no stated derivation |
+| alpha-ramp endpoint precision | `emit.rs:756` | 2 decimals (fixed) | independent of `EMIT_DECIMALS` | no stated derivation |
+| opacity precision | `emit.rs:756`, `:787`, `:793` | 3 decimals | `fill-opacity`/`stop-opacity` | no stated derivation |
 | `INKVEC_EMIT_DECIMALS` | `pathdata.rs:50` | env override | overrides `EMIT_DECIMALS` | the mechanism used to isolate rounding from the segment price in the 7.2% measurement |
 | `EVENODD` | `emit/winding.rs:102` | ` fill-rule="evenodd"` | written only on a `d` the winding pass cannot read | the old output as a fallback |
 | `CANVAS_TOL` | `post.rs:186` | 0.25 px | `--no-background` rect match | motivated (a fitted canvas rect lands 0.01-0.02 px off) |
@@ -503,20 +581,20 @@ let pays = pl < pf && bl <= bf;  // fewer shapes AND not more bytes
 - **Parity means punching a transparent face out of its painted ancestors only up to the first
   transparent one.** A second ring inside an already-punched hole flips it back solid — the
   counter of a heart inside a page inside a book cover came out solid black, dE00 0.19 -> 3.33
-  on `lucide/book-heart` (`emit.rs:283-290`).
+  on `lucide/book-heart` (`emit.rs:294-301`).
 - **Containment for cutting must be certain, not merely likely.** `ring_inside`'s majority vote
   is right for paint-order stacking and wrong for deciding what to punch — a black wedge beside
-  the head on `noto-emoji/emoji_u1f3cb_200d_2642`, dE00 0.58 -> 1.78 (`emit.rs:333-341`). A
+  the head on `noto-emoji/emoji_u1f3cb_200d_2642`, dE00 0.58 -> 1.78 (`emit.rs:344-352`). A
   punch needs every probe inside (`strictly_inside`).
 - **`fill-opacity` in a stacked document blends against whatever painted underneath it, not
   the page** — the film frames on `noto-emoji/emoji_u1f39e`, dE00 0.46 -> 1.43
-  (`emit.rs:503-514`).
+  (`emit.rs:514-525`).
 - **A primitive element cannot carry a hole.** A face that must show a hole through it is
-  written as a path even when its outline would otherwise fit a circle (`emit.rs:1040-1041`).
+  written as a path even when its outline would otherwise fit a circle (`emit.rs:1051-1052`).
 - **Drawing every face's own holes (making paths self-contained so any face could drop
   freely) was tried and reverted** — parameters rose (the arrow 166 to 248) and DISTS regressed
   on three of six probes, "because a ring contained inside another of the same face is not
-  reliably a hole, and punching it makes one anyway" (`emit.rs:169-174`).
+  reliably a hole, and punching it makes one anyway" (`emit.rs:170-175`).
 - **Two rings of one path that overlap by a sliver** paint the overlap under `nonzero` where
   `evenodd` cut it out; no ring direction can make the two rules agree there (9 of 246 screen
   icons at 512 px, 170 px in all; see the winding section).
@@ -532,7 +610,7 @@ Since the settings cleanup (CHANGELOG, 0.2.0, *Changed*) the engine reads its en
 | variable | effect |
 |---|---|
 | `INKVEC_EMIT_DECIMALS` | overrides `EMIT_DECIMALS` (coordinate decimal places); `--no-background`'s path match follows it |
-| `INKVEC_ALPHADBG` | per-face emit debug dump (rings, areas, outer/clear/parent/drop, holes; `emit.rs:625`) |
+| `INKVEC_ALPHADBG` | per-face emit debug dump (rings, areas, outer/clear/parent/drop, holes; `emit.rs:636`) |
 | `INKVEC_TIMING` | enables the `Stopwatch` printout that surfaces the `fills`/`emit` marks |
 
 ## Open questions

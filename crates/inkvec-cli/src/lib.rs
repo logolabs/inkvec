@@ -47,12 +47,14 @@
 mod alpha;
 mod args;
 mod border;
+mod damage;
 mod diag;
 mod editable;
 mod emit;
 mod faces;
 mod fast;
 mod harmonize;
+mod layers;
 mod mirror_fit;
 mod mono;
 mod naming;
@@ -72,7 +74,7 @@ mod units;
 #[cfg(test)]
 mod lib_tests;
 
-use alpha::{alpha_source, pixel_grid};
+use alpha::pixel_grid;
 use args::{parse_args, usage};
 pub use args::{parse_color_groups, Args, TraceMode};
 pub use fast::fast_ignored;
@@ -543,7 +545,7 @@ pub fn trace_prepared(prepared: Intake) -> Result<Traced, Box<dyn std::error::Er
 /// In order: the restorer pre-pass ([`restore_prepass`]), soft intake forced on for a
 /// restored image, the SR pre-pass (with `auto` deciding from a probe trace, which is kept
 /// as the result when the input measures clean or no upscaler is available), the alpha
-/// matte ([`alpha_source`]), the
+/// matte ([`alpha::alpha_source_owned`]), the
 /// fit configuration, and then one pipeline -- strokes when asked for and the drawing is
 /// line art, else bilevel or colour. The SVG is retargeted to the presentation size
 /// whenever anything resampled the raster.
@@ -572,8 +574,9 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
         probe = None;
     }
     if args.sr == inkvec_sr::Mode::Off {
-        // `auto` kept the input, and nothing else is going to look at it: the probe is the trace.
-        if let Some(svg) = probe.take() {
+        // `auto` kept the input, and nothing else is going to look at it: the probe is the
+        // trace, stage log and lambda included, as the plain path reports them.
+        if let Some((svg, stats, lambda)) = probe.take() {
             let svg = if normalised || (img.width, img.height) != (display_w, display_h) {
                 present(&svg, display_w, display_h, stretch)
             } else {
@@ -581,10 +584,10 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
             };
             return Ok(Traced {
                 svg,
-                stats: restore_note.into_iter().collect(),
+                stats: restore_note.into_iter().chain(stats).collect(),
                 width: img.width,
                 height: img.height,
-                lambda: None,
+                lambda: Some(lambda),
             });
         }
     }
@@ -593,9 +596,10 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
     // validated in. It has to be forced: a restored image can look clean enough that the
     // edge-width and ringing detectors no longer open soft intake by themselves.
     let lossy_args;
-    let args = if restored && args.lossy != inkvec_sr::Mode::On {
+    let args = if restored {
         lossy_args = Args {
             lossy: inkvec_sr::Mode::On,
+            restored: true,
             ..args.clone()
         };
         &lossy_args
@@ -614,16 +618,24 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
             Some(p) => p,
             None => trace_once(&img, args)?,
         };
-        // `Some(stats line)` when `auto` traces the input as it is instead of cleaning it.
-        let direct = match inkvec_sr::decide(&img, &probe, args.sr_threshold) {
-            inkvec_sr::Decision::Keep { residual } => Some(match residual {
+        // `Some(stats line)` when `auto` traces the input as it is instead of cleaning it. As
+        // for `--restore auto`: the residual alone reads clean shading as damage, so cleaning
+        // also needs a sign of resampling or compression (see `damage`), and that cheaper
+        // half is asked first.
+        let decision = damage::soft(&img, args.lossy)
+            .map(|_| inkvec_sr::decide(&img, &probe.0, args.sr_threshold));
+        let direct = match decision {
+            None => {
+                Some("sr            no sign of resampling or compression; traced directly".into())
+            }
+            Some(inkvec_sr::Decision::Keep { residual }) => Some(match residual {
                 Some(r) => format!(
                     "sr            residual {r:.3} <= {:.3}, traced directly",
                     args.sr_threshold
                 ),
                 None => "sr            could not measure the fit; traced directly".into(),
             }),
-            inkvec_sr::Decision::Clean { residual } => {
+            Some(inkvec_sr::Decision::Clean { residual }) => {
                 let measured =
                     residual.map(|r| format!("residual {r:.3} > {:.3}", args.sr_threshold));
                 match build_upscaler(args) {
@@ -651,20 +663,22 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
                 sr_note = Some(note);
                 sr_on = false;
             } else {
+                let (svg, stats, lambda) = probe;
                 let svg = if normalised || (img.width, img.height) != (display_w, display_h) {
-                    present(&probe, display_w, display_h, stretch)
+                    present(&svg, display_w, display_h, stretch)
                 } else {
-                    probe
+                    svg
                 };
                 return Ok(Traced {
                     svg,
                     stats: restore_note
                         .into_iter()
                         .chain(std::iter::once(note))
+                        .chain(stats)
                         .collect(),
                     width: img.width,
                     height: img.height,
-                    lambda: None,
+                    lambda: Some(lambda),
                 });
             }
         }
@@ -998,9 +1012,9 @@ struct RestorePass {
     img: inkvec_trace::Rgba,
     /// One line for the stats, when the pass ran or measured anything.
     note: Option<String>,
-    /// The probe trace `--restore auto` made of an input it kept, for SR's `auto` to reuse or,
-    /// with SR off, to return as the trace.
-    probe: Option<String>,
+    /// The probe trace `--restore auto` made of an input it kept (SVG, stage log, lambda), for
+    /// SR's `auto` to reuse or, with SR off, to return as the trace.
+    probe: Option<select::Trace>,
     /// Whether the image was restored, which forces soft intake for the trace that follows.
     restored: bool,
 }
@@ -1017,26 +1031,39 @@ fn restore_prepass(
         probe: None,
         restored: false,
     };
-    if args.restore == inkvec_restore::Mode::Off {
+    let mode = args.restore_mode();
+    if mode == inkvec_restore::Mode::Off {
         return Ok(pass);
     }
     let mut auto_probe = None;
-    if args.restore == inkvec_restore::Mode::Auto {
+    if mode == inkvec_restore::Mode::Auto {
+        // The residual alone reads smooth shading in clean art as damage, so `auto` also
+        // needs the file or the pixels to say the input was compressed (see `damage`). That
+        // evidence is asked first: it is the cheap half (a flag, or the ringing score), while
+        // the residual needs a probe trace rendered at full size. Without it there is nothing
+        // to decide, so no probe is made and the input takes the plain path: a clean input
+        // pays the evidence alone, and its trace is the plain one by construction. Fast mode
+        // reads the container only (`damage::compressed`).
+        let pixels = args.mode != TraceMode::Fast;
+        let Some(why) = damage::compressed(&pass.img, args.lossy, pixels) else {
+            pass.note = Some("restore       no sign of compression; traced directly".into());
+            return Ok(pass);
+        };
         inkvec_core::progress::note(|| {
             "a first trace, to see whether the denoiser is needed".into()
         });
         let probe = trace_once(&pass.img, args)?;
         let decision = inkvec_restore::decide(
             &pass.img,
-            &probe,
+            &probe.0,
             inkvec_restore::Options {
                 residual_threshold: args.restore_threshold,
             },
         );
         match decision {
             inkvec_restore::Decision::Restore { residual } => {
-                pass.note =
-                    residual.map(|r| format!("residual {r:.3} > {:.3}", args.restore_threshold));
+                pass.note = residual
+                    .map(|r| format!("residual {r:.3} > {:.3}, {why}", args.restore_threshold));
                 auto_probe = Some(probe);
             }
             inkvec_restore::Decision::Keep { residual } => {
@@ -1138,7 +1165,18 @@ fn build_restorer(
 /// Always in colour: `auto` compares the probe with the input, and a monochrome drawing
 /// disagrees with a colour input everywhere it is not black or white, which would read as
 /// damage on every image. A monochrome trace discards the probe and traces again.
-fn trace_once(img: &inkvec_trace::Rgba, args: &Args) -> Result<String, Stop> {
+///
+/// Otherwise the probe is the trace the plain path makes (`trace_bordered`, through the
+/// border pad, and through `--hypotheses` when it applies), so a probe `auto` keeps is byte
+/// for byte what `--restore off` / `--sr off` returns. It used to skip the border pad, and
+/// on the gate's transparent 128 px tier a third of the probes `--restore auto` kept differed
+/// from the plain trace (81 of 246). The stage log and lambda come with it, so a kept probe
+/// reports what the plain trace reports; they used to be dropped, leaving only the `restore`
+/// or `sr` line.
+fn trace_once(
+    img: &inkvec_trace::Rgba,
+    args: &Args,
+) -> Result<select::Trace, Box<dyn std::error::Error>> {
     let colour_args;
     let args = if args.monochrome {
         colour_args = Args {
@@ -1149,19 +1187,13 @@ fn trace_once(img: &inkvec_trace::Rgba, args: &Args) -> Result<String, Stop> {
     } else {
         args
     };
-    let cfg = fit_config(img, args);
-    if args.bilevel {
-        Ok(run_bilevel(img, args, &cfg).0)
+    let traced = if args.hypotheses && hypotheses_apply(args) {
+        let base = trace_bordered(img.clone(), args)?;
+        select::choose(img, args, base, |a| trace_bordered(img.clone(), a))?
     } else {
-        // The probe sees what the real trace will see, matte and all.
-        match alpha_source(img, true, args.cutout, args.native_alpha) {
-            Some(src) => {
-                let args = alpha::cutout_args(args, Some(&src));
-                Ok(run_color(&src.flat, &args, &cfg, Some(&src))?.0)
-            }
-            None => Ok(run_color(img, args, &cfg, None)?.0),
-        }
-    }
+        trace_bordered(img.clone(), args)?
+    };
+    Ok(traced)
 }
 
 /// Apply the output options ([`post_process`]), write the SVG to `--output` (default: the

@@ -5,7 +5,7 @@
 
 **Source:** the whole tree; this page indexes it.
 **Entry points:** `inkvec_trace::trace_color_full_with_alpha` (`crates/inkvec-trace/src/lib.rs:299`,
-called via `trace_color_full` at `lib.rs:263`) for the raster-to-planar-map half;
+called via `trace_color_full` at `lib.rs:265`) for the raster-to-planar-map half;
 `inkvec_cli::trace_image` (`crates/inkvec-cli/src/lib.rs:198`) for the whole command, intake
 through SVG text.
 **Pipeline position:** none — this is the front door. Every numbered stage document assumes
@@ -103,22 +103,22 @@ each timed by the `Stopwatch` (`crates/inkvec-trace/src/lib.rs:1228`, `mark` at 
 | `saddles` | `crates/inkvec-trace/src/lib.rs:1102` (`merge_saddle_faces` :1091) | saddle join | resolve the one ambiguity labels cannot: four pixels meeting diagonally at one corner |
 | `build_map` | `crates/inkvec-trace/src/lib.rs:1106` (`planar::build` :1105) | planar map | shared edges between exactly two faces, from the exact integer label grid, read off its row runs (`planar/cracks.rs`, `planar/runs.rs`) |
 | `symmetry_detect` | `crates/inkvec-trace/src/lib.rs:1121` | refinement setup | since 2026-09-30 this mark times only the setup of the refinement's inputs (each face's fill model and opacity); `symmetry::detect` itself runs inside the next mark |
-| `refine_subpix` | `crates/inkvec-trace/src/lib.rs:1156` (`symmetry::detect` beside `planar::measure_subpixel`, `lib.rs:1150-1154`; `Refined::apply`, `:1155`) | symmetry detect + sub-pixel | find mirror pairs on the label lattice, where the comparison is exact, and, at the same time, measure where each boundary point sits along its local normal (the 0.5-coverage level); both only read the lattice map, so they run side by side under `rayon::join`, and the measured points are written back afterwards |
+| `refine_subpix` | `crates/inkvec-trace/src/lib.rs:1156` (`symmetry::detect` beside `planar::measure_subpixel`, `lib.rs:1125-1129`; `Refined::apply`, `:1155`) | symmetry detect + sub-pixel | find mirror pairs on the label lattice, where the comparison is exact, and, at the same time, measure where each boundary point sits along its local normal (the 0.5-coverage level); both only read the lattice map, so they run side by side under `rayon::join`, and the measured points are written back afterwards |
 | `refine_junc` | `crates/inkvec-trace/src/lib.rs:1159` (`planar::refine_junctions` :1158) | junctions | settle shared endpoints |
 | `boundary_opt` | `crates/inkvec-trace/src/lib.rs:1167` (`boundary_opt::optimise_for` :1166) | boundary solve | move every boundary point at once so the *rendered* partition matches the image; not run when its band tables would pass a memory budget (`boundary_opt/band.rs`) |
 | `decode` | `crates/inkvec-trace/src/lib.rs:1189` (`decode::decode_faces` :1178) | decode | order-first colour/geometry fix for faces too thin to own a fully-covered pixel; off unless `INKVEC_DECODE` (*research build*) is set |
 | `symmetry` | `crates/inkvec-trace/src/lib.rs:1199` (`symmetry::enforce` :1197) | symmetry enforce | put back the exactness every upstream tie-break quietly broke |
 | — | `crates/inkvec-cli/src/pipeline.rs:255` (`trace_total`) | — | end of the `inkvec_trace` half |
-| — | `crates/inkvec-cli/src/pipeline.rs:495` (`fit_dp`) | curve fit | one global DP per boundary over lines, cubics and arcs, MDL cost; a whole-boundary primitive is offered beside it and taken when it costs less (`inkvec_fit::choice`) |
-| — | `crates/inkvec-cli/src/pipeline.rs:504` (`repair`) | repair | close self-crossing rings the independent per-edge fits can produce |
+| — | `crates/inkvec-cli/src/pipeline.rs:494` (`fit_dp`) | curve fit | one global DP per boundary over lines, cubics and arcs, MDL cost; a whole-boundary primitive is offered beside it and taken when it costs less (`inkvec_fit::choice`) |
+| — | `crates/inkvec-cli/src/pipeline.rs:503` (`repair`) | repair | close self-crossing rings the independent per-edge fits can produce |
 | — | `crates/inkvec-cli/src/pipeline.rs:396` (`fills`) | fills | per-face fill model already chosen upstream; a gradient whose every stop lies within a just-noticeable difference of every other is painted flat (`pipeline/demote.rs`) |
-| — | `crates/inkvec-cli/src/pipeline.rs:446` (`emit`) | emit | fitted geometry to SVG text, each ring wound by nesting depth so no `fill-rule` is needed; layers vs. flat form costed against each other |
+| — | `crates/inkvec-cli/src/pipeline.rs:445` (`emit`) | emit | fitted geometry to SVG text, each ring wound by nesting depth so no `fill-rule` is needed; layers vs. flat form costed against each other |
 | — | `crates/inkvec-cli/src/post.rs` | post | viewBox retarget, background knock-out, margin, minify |
 
 Fast mode (`--mode fast`) takes another route through the same table. Its front end
 (`crates/inkvec-trace/src/fast/front.rs`) replaces the marks from `palette` to `split` with
 its own `palette`, `slivers`, `despeckle`, `split` and `ramps`; it shares `build_map`,
-`refine_subpix`, `refine_junc` and `symmetry`, and skips `decode` (`lib.rs:1177`) and
+`refine_subpix`, `refine_junc` and `symmetry`, and skips `decode` (`lib.rs:1152`) and
 `boundary_opt`, which runs in Fast only when `--mode balanced` caps it by iterations
 (`boundary_opt.rs:605`). Under `fit_dp` it runs a Potrace-class fitter instead of the DP,
 and it skips `repair` and shape harmonization (`repair_fits` and `emit_options` in
@@ -164,7 +164,7 @@ edge to move.
 `Edge.sigma` is the per-point positional uncertainty from the coverage inversion, carried
 all the way to the curve fitter; `Edge.left` / `Edge.right` are face ids, `u16::MAX` when an
 edge has been merged into the interior of a layer and no longer belongs to any ring
-(`merge_map`, `crates/inkvec-cli/src/pipeline.rs:1111-1126`).
+(`merge_map`, `crates/inkvec-cli/src/pipeline.rs:1110-1125`).
 
 ## Reading order
 
@@ -173,7 +173,8 @@ the SR pre-pass, resolution-invariant tolerances, alpha matting. Stages 02 onwar
 per the pipeline table above) go module by module through `inkvec-trace` and `inkvec-fit`.
 `14-fast-mode.md` then covers Fast mode: which of those stages it replaces, which it shares,
 and how each of its own stages works. `15-strokes.md` covers the optional stroke stage
-(`--detect-strokes`, off by default), which writes faces drawn as strokes as stroked paths.
+(on by default in Quality mode, `--no-detect-strokes` to switch it off), which writes faces
+drawn as strokes as stroked paths.
 `constants.md` collects every named constant across the tree in one table.
 
 ## `docs/DESIGN.md` against the code as it stands
@@ -217,7 +218,7 @@ disagreements are where the real design lives:
   descriptions costs less under the shared MDL cost (`choice::choose`,
   `crates/inkvec-fit/src/choice.rs:211-226`). That is model *selection between* two fits,
   not primitives as states inside one DP. `choice::describe` (called per boundary from
-  `fit_boundaries`, `crates/inkvec-cli/src/pipeline.rs:720`) also orders the work: for
+  `fit_boundaries`, `crates/inkvec-cli/src/pipeline.rs:719`) also orders the work: for
   the image frame it tries the rectangle first and skips the dynamic program when the
   rectangle is below a lower bound on any fitted path (`choice::cost_floor`); for every
   other boundary it runs the program and the primitive search side by side under
@@ -230,7 +231,7 @@ disagreements are where the real design lives:
 * **S5, structured refinement with topology not frozen.** DESIGN.md §S5 explicitly reverses
   an earlier decision to freeze topology during polish, arguing for a structured move set
   searched to convergence. The code has gone the other way again: `repair_fits`
-  (`crates/inkvec-cli/src/pipeline.rs:852-920`) records that both `polish` (per-cubic control-point refinement against the coverage
+  (`crates/inkvec-cli/src/pipeline.rs:851-919`) records that both `polish` (per-cubic control-point refinement against the coverage
   field) and the "adjudication" re-scoring stage were *removed*, with a measured result —
   "removing them takes the objective from 0.5477 to 0.4960 and dE00 from 0.2503 to 0.2146...
   Polish alone made 197 of 246 better by not running." The stated reason is that
@@ -244,7 +245,7 @@ disagreements are where the real design lives:
   geometry moves: it runs beside the sub-pixel refinement's measuring phase, which writes
   nothing to the map until detection has returned), and enforces it twice more downstream —
   once on the map (`symmetry::enforce`, `trace/lib.rs:1197`) and once on the fitted curves, by reflecting one boundary's fit onto
-  its mirror rather than re-solving both (`apply_mirrors`, `crates/inkvec-cli/src/pipeline.rs:947`). That is "detect once,
+  its mirror rather than re-solving both (`apply_mirrors`, `crates/inkvec-cli/src/pipeline.rs:946`). That is "detect once,
   then copy," which is cheaper and exact by construction, but it is a different design from
   "enforced as a constraint during re-optimisation."
 * **§0 governing directive ("best algorithm at every stage, even substantially slower").**
@@ -272,6 +273,6 @@ disagreements are where the real design lives:
   `crates/inkvec-fit/examples/primitives_demo.rs`, `crates/inkvec-fit/tests/multimodel.rs`,
   `crates/inkvec-fit/tests/primitives.rs` — that exercise the line-then-cubic fit directly.
   The CLI pipeline instead calls `multimodel::optimal_multimodel`
-  (`crates/inkvec-cli/src/pipeline.rs:729`, and `optimal_multimodel_without_structural` at
+  (`crates/inkvec-cli/src/pipeline.rs:728`, and `optimal_multimodel_without_structural` at
   `:766` for the research baseline) directly. `fit_path` exists for
   examples and tests, not as part of the shipped trace.

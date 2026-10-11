@@ -133,6 +133,12 @@ fn concurrent_calls_are_independent() {
 /// configuration from the one raw pixels get -- and on an input with the kind of ringing a
 /// restorer leaves behind, a visibly different trace. If this ever stops differing, the
 /// forcing has stopped reaching the pipeline.
+///
+/// The ripple is strong enough for the palette to see it: unforced, its crests are traced as
+/// specks; forced, the soft intake's noise guard absorbs them. At 9 levels both configurations
+/// trace a clean disc, and the two SVGs used to differ only because the sub-pixel reading
+/// put the centre 0.01 px off on one of them; reading boundaries from exact column sums
+/// (`planar/strip.rs`) puts both on the true centre.
 #[test]
 fn restored_pixels_are_traced_with_soft_intake() {
     let size = 96;
@@ -141,7 +147,7 @@ fn restored_pixels_are_traced_with_soft_intake() {
     for y in 0..size {
         for x in 0..size {
             let i = ((y * size + x) * 4) as usize;
-            let ripple = ((x as f64 * 0.7).sin() * (y as f64 * 0.7).cos() * 9.0) as i16;
+            let ripple = ((x as f64 * 0.7).sin() * (y as f64 * 0.7).cos() * 12.0) as i16;
             for c in 0..3 {
                 px[i + c] = (px[i + c] as i16 + ripple).clamp(0, 255) as u8;
             }

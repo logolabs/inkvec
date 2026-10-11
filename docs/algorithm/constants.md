@@ -29,7 +29,7 @@ stage's own reference document — this table only summarizes. Paths are relativ
 | `REF_EXTENT` | 128.0 px | `inkvec-cli/src/units.rs:17-31` | intake size every pixel-denominated constant was tuned at; above it `price_in_raster_units` scales `--min-area` and lambda | measured (3.54x/6.02x/11.62x the artist's parameters at 128/256/512 px, `units.rs:17-26`; the guard: 128ss objective 0.4005 -> 0.4112 without it, `inkvec-cli/src/lib.rs:470-476`) |
 | `INTAKE_SCALE_FLOOR` | 1.5 | `inkvec-cli/src/lib.rs:121-123` | below this, `--intake-scale` leaves the input alone | measured (every corpus image reads 1.00) |
 | `INTAKE_SCALE_CAP` | 8.0 | `inkvec-cli/src/lib.rs:124-126` | ceiling on how much `--intake-scale` discards | motivated |
-| `--max-dim` default | 2048 px | `inkvec-cli/src/args.rs:253, 358-362` | ceiling on traced (not emitted) size, applied at decode and again in `intake` | motivated |
+| `--max-dim` default | 2048 px | `inkvec-cli/src/args.rs:254, 358-362` | ceiling on traced (not emitted) size, applied at decode and again in `intake` | motivated |
 | `--time-budget` split | 0.6 merge / 0.25 boundary-solve | `inkvec-cli/src/pipeline.rs:145-153` | advisory wall-clock split between the two stages that read a clock | none |
 | boundary-solve budget floor | 50 ms | `inkvec-cli/src/pipeline.rs:152` | least wall-clock budget the boundary solve gets under any `--time-budget` | none |
 | `MIN_SOURCE` (`pixel_grid`) | 16 px | `inkvec-cli/src/alpha/unblock.rs:102-110` | least source size the unblock keeps on the short axis | measured motive (the old 64 px floor on both sides undid 4x wordmarks only 2x) |
@@ -60,7 +60,7 @@ stage's own reference document — this table only summarizes. Paths are relativ
 | `SOFT_SHARE` | 0.05 | `inkvec-cli/src/alpha.rs:439` | glow share that keeps white without the candidate ladder | none |
 | `FLAT_ALPHA` | 0.02 | `inkvec-cli/src/alpha.rs:440` | neighbour-alpha spread counted as "flat" translucency | none |
 | `DEGRADED_RESIDUAL` / `--sr-threshold` | 0.5 | `inkvec-sr/src/detect.rs:13-36` | interior-residual threshold above which `--sr auto` cleans | measured (30 icons, 5 conditions) |
-| `--sr-scale` default | 2 | `inkvec-cli/src/args.rs:277` | output scale of the SR pre-pass | none |
+| `--sr-scale` default | 2 | `inkvec-cli/src/args.rs:278` | output scale of the SR pre-pass | none |
 | interior-residual normalisation | `sum / 9n` | `inkvec-sr/src/detect.rs:103-110` | matches the reference Python implementation | derived (deliberate match, not a bug) |
 
 ## 02 — Coverage ([02-coverage.md](02-coverage.md))
@@ -130,7 +130,7 @@ stage's own reference document — this table only summarizes. Paths are relativ
 
 | name | value | file:line | controls | basis |
 |---|---|---|---|---|
-| `min_region` shipped default | 2 px | `inkvec-cli/src/args.rs:250`, `inkvec-cli/src/pipeline.rs:180`, `inkvec-trace/src/lib.rs:214` | smallest component kept by despeckle; `min_region.max(2)` is the carve's minimum feature size (`inkvec-trace/src/lib.rs:676`); scaled by the oversampling factor squared above `REF_EXTENT` (`inkvec-cli/src/lib.rs:381-395`) | measured (a 9 px colour-mode floor was tried and measured worse, `inkvec-cli/src/pipeline.rs:173-178`) |
+| `min_region` shipped default | 2 px | `inkvec-cli/src/args.rs:251`, `inkvec-cli/src/pipeline.rs:180`, `inkvec-trace/src/lib.rs:214` | smallest component kept by despeckle; `min_region.max(2)` is the carve's minimum feature size (`inkvec-trace/src/lib.rs:676`); scaled by the oversampling factor squared above `REF_EXTENT` (`inkvec-cli/src/lib.rs:381-395`) | measured (a 9 px colour-mode floor was tried and measured worse, `inkvec-cli/src/pipeline.rs:173-178`) |
 | `SADDLE_SIGMAS` | 3.0 | `inkvec-trace/src/regions.rs:40-44` | sigma a corner's coverage must clear 0.5 by before a saddle resolves (research build only) | motivated (a standard "three sigma" bar, not swept) |
 | `MAX_FACES` | 65,535 (`u16::MAX`) | `inkvec-trace/src/regions.rs:205-208` | most faces a face map can number; past it `cap_components` merges the smallest components into their neighbours (`inkvec-trace/src/regions.rs:293-416`) | derived (`u16` face ids, `u16::MAX` reserved for the outside of the image) |
 | absorption rounds | 2 | `inkvec-trace/src/regions.rs:768-769, 792` | rounds of whole-sliver absorption | motivated (one dissolved sliver can leave a neighbour thinner) |
@@ -178,6 +178,8 @@ stage's own reference document — this table only summarizes. Paths are relativ
 | `SMOOTH_FRACTION` | 0.5 | `inkvec-trace/src/gradient/regions.rs:36-38` | fraction of a seam's pixel pairs that must be smooth steps | none |
 | `CARVE_RESIDUAL` | 0.06 | `inkvec-trace/src/gradient/carve.rs:16-20` | floor on the carve candidate threshold `max(8*sigma_noise, 0.06)` | motivated |
 | `CARVE_MAX` | 64 | `inkvec-trace/src/gradient/carve.rs:21-22` | most features carved from one image | motivated |
+| `CODEC_VARIANT_LEVELS` | 8 levels | `inkvec-trace/src/fast/codec.rs` | on a lossy intake, how close (luma-weighted YCbCr) an ink may lie to a heavier one and be the codec's variant of it | measured as part of the codec clean-up (`quality-web`); the value itself not swept |
+| `CODEC_BAND` | 2 px | `inkvec-trace/src/gradient/carve.rs` | on a lossy intake, how far inside its region a pixel must lie to be carved | measured (`quality-web`, 1/2/3 px: 2 px is the one reach no gated axis reads worse at) |
 | `CARVED_PAINT_ALPHA` | 0.5 | `inkvec-trace/src/native.rs:691-700` | mean opacity at or above which a carved feature named by the clear ink is renamed to the nearest visible ink (native-alpha path, `name_carved_paint`) | measured (residue 0.14-0.36, painting it cost dE00 on 5 of 8 icons; paint 0.80-1.00) |
 | `bic_lambda(n)` | 0.5 * ln(n) | `inkvec-trace/src/gradient.rs:320-327` | fill-selection lambda | derived (Bayesian information criterion) |
 | `IRLS_ROUNDS` | 2 | `inkvec-trace/src/gradient/stops.rs:68-69` | Huber reweighting rounds when a stop profile is fitted | none |
@@ -199,14 +201,18 @@ to the upstream saddle merge; the two sizes after it choose only speed, never th
 
 | name | value | file:line | controls | basis |
 |---|---|---|---|---|
-| `MIN_UNMIX_CONTRAST` | 0.02 | `inkvec-trace/src/planar.rs:414` | floor on unmixing contrast below which a point does not move | none |
-| `CORNER_COS` | 0.5 (60 deg) | `inkvec-trace/src/planar.rs:424` | turning angle above which the tangent window narrows to 1 point | motivated (geometric bound) |
-| `PAR_VERTICES` | 64 | `inkvec-trace/src/planar.rs:506` | fewest points before an edge's vertices are refined in parallel; smallest chunk one thread takes | motivated (a task of ~30 µs at 0.44 µs per vertex against rayon's few-µs split cost); schedule only, output identical |
-| `PAR_MAP_VERTICES` | 512 | `inkvec-trace/src/planar.rs:520` | fewest boundary vertices in the map for the refinement, and symmetry detection beside it, to use threads | measured (per-icon serial/parallel timings by vertex count, `planar.rs:512-519`); schedule only, output identical |
-| `SUBPX_WIN` (was `INKVEC_SUBPX_WIN`, *removed*) | 1 (the variable allowed 1..=8) | `inkvec-trace/src/planar.rs:416-419` (measurement at `:854-864`) | width of the tangent-estimation window | measured (two points each side improved dE00 on a 620-icon subset but cost DISTS and caused a face-order regression on one icon; left at 1, LOG-43) |
+| `MIN_UNMIX_CONTRAST` | 0.02 | `inkvec-trace/src/planar.rs:417` | floor on unmixing contrast below which a point does not move | none |
+| `CORNER_COS` | 0.5 (60 deg) | `inkvec-trace/src/planar/chord.rs:15` | turning angle above which the tangent window narrows to 1 point | motivated (geometric bound) |
+| `PAR_VERTICES` | 64 | `inkvec-trace/src/planar.rs:499` | fewest points before an edge's vertices are refined in parallel; smallest chunk one thread takes | motivated (a task of ~30 µs at 0.44 µs per vertex against rayon's few-µs split cost); schedule only, output identical |
+| `PAR_MAP_VERTICES` | 512 | `inkvec-trace/src/planar.rs:513` | fewest boundary vertices in the map for the refinement, and symmetry detection beside it, to use threads | measured (per-icon serial/parallel timings by vertex count, `planar.rs:505-512`); schedule only, output identical |
+| `SUBPX_WIN` (was `INKVEC_SUBPX_WIN`, *removed*) | 1 (the variable allowed 1..=8) | `inkvec-trace/src/planar/chord.rs:7-10` (measurement at `:47-58`) | width of the tangent-estimation window | measured (two points each side improved dE00 on a 620-icon subset but cost DISTS and caused a face-order regression on one icon; left at 1, LOG-43) |
+| `REACH` (strip reading) | 3 px | `inkvec-trace/src/planar/strip.rs:41` | how far along a column the window's flanks are searched, from the inner neighbour's mean | motivated (geometric: a boundary within 45 deg of the column's normal crosses at most two of its pixels) |
+| `SATURATED` (strip reading) | 0.06 | `inkvec-trace/src/planar/strip.rs:44` | unmixed coverage within this of 0 or 1 makes a pixel a window's flank | none (the flanks' own values are summed, so the sum stays unbiased: `strip_unbiased`) |
+| `SIDE_TOL` (strip reading) | 0.05 px | `inkvec-trace/src/planar/strip.rs:52` | the corner test: largest disagreement at the vertex's border between the central and the one-sided cubics | derived (every cubic passes exactly, `side_stencil_cubic`; noise gain 0.7 per difference) |
+| `MAX_STEP` (strip reading) | 1.5 px | `inkvec-trace/src/planar/strip.rs:56` | largest difference between adjacent column means, about 56 deg | none |
 | `DEFAULT_SIGMA_MODEL` | 0.05 px | `inkvec-trace/src/coverage.rs:81` | see 02-coverage.md | measured |
-| `CONTRAST_REF` | 0.25 | `inkvec-trace/src/planar.rs:1246` | reference contrast for `simplify_faint`'s inflation | none |
-| `MAX_INFLATION` | 4.0 | `inkvec-trace/src/planar.rs:1247` | cap on `simplify_faint`'s sigma multiplier | none |
+| `CONTRAST_REF` | 0.25 | `inkvec-trace/src/planar.rs:1207` | reference contrast for `simplify_faint`'s inflation | none |
+| `MAX_INFLATION` | 4.0 | `inkvec-trace/src/planar.rs:1208` | cap on `simplify_faint`'s sigma multiplier | none |
 | `JUNCTION_MAX_MOVE` | 1.5 px | `inkvec-trace/src/planar/junctions.rs:73` | rejects an intersection solution beyond this move | none (the doc comment says only what it bounds; the 0.5 px trial 07-subpixel.md cites is not in the code) |
 | `JUNCTION_MIN_CONDITION` | 0.02 | `inkvec-trace/src/planar/junctions.rs:78` | minimum eigenvalue ratio admitted for a junction intersection | derived (equivalent to rejecting crossings below ~16 degrees) |
 | `junction_fit_points()` | 6 | `inkvec-trace/src/planar/junctions.rs:36` | interior points for near-junction extrapolation | none |
@@ -341,6 +347,16 @@ half-integer lattice points (`inkvec-trace/src/symmetry.rs:19-21,176-186,220,243
 | `SHARPEN_MAX_CHORD` | 2.5 | `inkvec-fit/src/merge.rs:569` | chamfer-cubic chord ceiling | motivated (chamfer ~1px/side) |
 | `SHARPEN_MAX_EDGE` | 8.0 | `inkvec-fit/src/merge.rs:574` | short-edge-with-chamfers ceiling | none |
 | `SHARPEN_MIN_TURN` | `CORNER_TURN_MIN` | `inkvec-fit/src/merge.rs:580` | corner-vs-smooth threshold | shared with `CORNER_TURN_MIN` by design since 2026-09-08 |
+| `FIT.credit` | 1.0 | `inkvec-fit/src/extrema.rs:78` | parameters credited per node whose direction the extremum convention fixes | derived (the one coordinate it does not write, R0.2); measured: 2.0 also passed the 30 % sample, with the written count free |
+| `FIT.same_count` | true | `inkvec-fit/src/extrema.rs:79` | a re-segmentation must write as many numbers as the run it replaces | measured (free: ratio_gap +0.11 % at quality-128ss, 4 icons closer and 9 further, where the trace already writes fewer numbers than noto's and twemoji's artists) |
+| `RUN_BREAK_DEGREES` | 30.0 | `inkvec-fit/src/extrema.rs:99` | a join turning this much ends a smooth run | motivated (the artists' joins between curves are smooth or turn by more, R3.1); not swept |
+| `WIGGLE_PX` | 0.5 px | `inkvec-fit/src/extrema.rs:102` | two extrema of one axis this close in value are a wiggle and get no node | none |
+| `END_GAP_PX` | 1.0 px | `inkvec-fit/src/extrema.rs:104` | no node for an extremum this close (arc length) to a run's end | none |
+| `DEDUP_PX` | 0.25 px | `inkvec-fit/src/extrema.rs:107` | two extrema of one axis this close (arc length) are one | none |
+| `MIN_INTERIOR` | 2 | `inkvec-fit/src/extrema.rs:109` | fewest measured points inside a span | motivated (the arms need points to fit) |
+| `MAX_REACH` | 8 | `inkvec-fit/src/extrema.rs:111` | candidates one span may reach in the search | motivated (bounds the search); not swept |
+| `FAR_PX` | 3.0 px | `inkvec-fit/src/extrema.rs:114` | a path node with no measured point this close leaves the path alone | none |
+| `REFINE_ROUNDS`, `REFINE_STEPS` | 3; 0.5 … 0.03 px | `inkvec-fit/src/extrema.rs:116`, `:118` | the node refinement's compass search | none |
 | `PARAMS_AXIS_LINE` (research) | 1.0 | `inkvec-fit/src/merge/snap.rs:17` | axis-snapped line cost | derived |
 | `MAX_AXIS_DEV_SIGMA` (research) | 3.0 | `inkvec-fit/src/merge/snap.rs:22` | per-sample axis-snap deviation cap | none |
 | `PARAMS_SMOOTH_CUBIC` (research) | 4.0 | `inkvec-fit/src/merge/snap.rs:204` | `S`-shorthand cost | derived |
@@ -378,11 +394,11 @@ half-integer lattice points (`inkvec-trace/src/symmetry.rs:19-21,176-186,220,243
 | arc rotation precision | 3 decimals | `inkvec-cli/src/pathdata.rs:114,258,338` | arc `phi` formatting | none |
 | rounded-rect radius floor | 1e-4 | `inkvec-cli/src/primitive.rs:76,281` | below this, written as a plain rect | none |
 | ellipse rotation floor | 1e-3 | `inkvec-cli/src/primitive.rs:258` | below this, no `transform` written | none |
-| alpha-ramp endpoint precision | 2 decimals | `inkvec-cli/src/emit.rs:745` | independent of `EMIT_DECIMALS` | none |
+| alpha-ramp endpoint precision | 2 decimals | `inkvec-cli/src/emit.rs:756` | independent of `EMIT_DECIMALS` | none |
 | `RAMP_MIN_INTERIOR` | 64 px | `inkvec-cli/src/alpha.rs:94` | fewest interior pixels before a plane is fitted to a face's alpha; `face_alpha` skips smaller faces without calling the fit | none (the fit's own first test, now named) |
 | `RAMP_MIN_FADE` | 0.15 (opacity) | `inkvec-cli/src/alpha.rs:88` | least opacity change across a face for it to count as a fade | none |
 | `RAMP_MAX_RESIDUAL` | 0.06 (opacity) | `inkvec-cli/src/alpha.rs:91` | largest RMS residual of the alpha plane | none |
-| opacity precision | 3 decimals | `inkvec-cli/src/emit.rs:745,787,793` | `fill-opacity`/`stop-opacity` | none |
+| opacity precision | 3 decimals | `inkvec-cli/src/emit.rs:756,787,793` | `fill-opacity`/`stop-opacity` | none |
 | `INKVEC_EMIT_DECIMALS` (env) | overrides `EMIT_DECIMALS` | `inkvec-cli/src/pathdata.rs:50` | the mechanism used to isolate rounding from segment price in the 7.2% measurement | measured |
 | `EVENODD` | ` fill-rule="evenodd"` | `inkvec-cli/src/emit/winding.rs:102` | written only on a path the winding pass cannot read; every other path is wound by nesting depth and carries no `fill-rule` | derived (the old output as a safe fallback) |
 | `JND` (gradient demotion) | 0.02 (OKLab) | `inkvec-cli/src/pipeline/demote.rs:41` | a gradient whose every pair of stops is closer than this is painted flat | none ("a conservative multiple of a just-noticeable difference") |
@@ -391,6 +407,27 @@ half-integer lattice points (`inkvec-trace/src/symmetry.rs:19-21,176-186,220,243
 | `CANVAS_TOL` | 0.25 px | `inkvec-cli/src/post.rs:186` | `--no-background` match of a fitted canvas `<rect>` | measured (a fitted canvas rect lands 0.01-0.02 px off; the path match uses `EMIT_DECIMALS`) |
 | margin viewBox precision | 2 decimals | `inkvec-cli/src/post.rs:393` | `--margin` growth | none |
 | `ci_gate.py` ratio margin | 3% relative at the one-sided 95% upper bound (dE00 1%, turning 2%) | `bench/ci_gate.py:138` `MARGINS` | regression gate on parameter count vs. artist | measured (project's compactness regression budget) |
+
+### Editability mode (`--editability`, `cli/editable.rs`, `cli/editable/`)
+
+| name | value | file:line | controls | basis |
+|---|---|---|---|---|
+| `AXIS_SNAP` | 2.5° | `inkvec-cli/src/editable.rs:77` | a handle this close to an axis snaps onto it | motivated (the artists' axis spike: 29 % of 313k handles within 0.05°); the window not swept |
+| `DIAG_SNAP` | 1.5° | `inkvec-cli/src/editable.rs:80` | a handle this close to 45° snaps onto it | motivated (a 5× lift at 45° in the artists' handles); the window not swept |
+| `G1_SNAP_DEG` | 3° | `inkvec-cli/src/editable.rs:82` | a join within a ring this close to smooth counts as smooth: its handles are snapped together | motivated (the artists' G1 lift); not swept |
+| `KINK_DEG` | 30° | `inkvec-cli/src/editable.rs:87` | a join within a ring turning at most this much is made smooth (`pass_g1`), if the ring still guards | motivated (the artists' joins between curves are smooth or turn by more than 30°: 8.6 % of them in 3-30°, against 25.0 % of the trace's; R3.1) |
+| `COLLINEAR_DEG` | 0.5° | `inkvec-cli/src/editable.rs:90` | two lines meeting at most this far from straight are written as one (`pass_collinear`) | derived (the battery's `collinear` threshold, `AXIS_DEG` in `bench/inkvec_bench/design.py`) |
+| `LEN_MATCH` | 0.10 | `inkvec-cli/src/editable.rs:92` | handle lengths within this ratio are equalised | motivated (the artists' handle-length lift); not swept |
+| `NODE_ALIGN` | 0.30 px | `inkvec-cli/src/editable.rs:94` | node coordinates this close share one value | motivated (98 % of the artists' nodes share a coordinate with another); not swept |
+| `MIRROR_KEEP` | 0.95 | `inkvec-cli/src/editable.rs:96` | share of points whose reflection must find a partner for a mirror lock | none |
+| `EDIT_SLACK` | 0.5 px | `inkvec-cli/src/editable.rs:100` | absolute slack on top of `3σ` in every pass's guard | measured (the deviation the artists' own handles carry from the pixel-optimal fit) |
+| `MIRROR_SLACK` | 1.5 px | `inkvec-cli/src/editable.rs:104` | a mirror lock's guard | motivated (traced halves differ by 1-3 px) |
+| `EMIT_GRID` | 0.01 px | `inkvec-cli/src/editable.rs:111` | the mirror axis snaps to the emitter's step | derived (`EMIT_DECIMALS`) |
+| `AXIS_NODE` | 1.0 px | `inkvec-cli/src/editable.rs:115` | a node this close to the mirror axis is the crossing | none |
+| `EDIT_PREFERENCE` | credit 3.0, written count free | `inkvec-cli/src/editable/curves.rs:25` | the extremum re-segmentation's preference in this mode | none (more than the fit's 1.0; held to `EDIT_SLACK`) |
+| arc handle length | `4/3·tan(Δ/4)·r` | `inkvec-cli/src/editable/curves.rs` (`arc_as_cubics`) | the cubic standing for a piece of circle of `Δ ≤ 112.5°` | derived (Riškus 2006: 0.5523·r for a quarter, radial error ≤ 2.73e-4·r; 1.04e-3·r at 112.5°, computed) |
+| `ARC_CUT_GAP_PX` | 1.0 px (and at most 22.5°) | `inkvec-cli/src/editable/curves.rs:68` | no cut at an extremum this close to an arc's end, along the arc | motivated (a 0.4 px sliver's handles are too short for two decimals to point; the fit's `END_GAP_PX`); not swept |
+| `JUNCTION_G1_DEG` | 30° | `inkvec-cli/src/editable/junctions.rs:30` | a join between two edges turning at most this much is made smooth, if both still guard | motivated (the artists' kinked band, 3-30°: 8.6 % of their curve joins, 25.0 % of the trace's) |
 
 ## 14 — Fast mode ([14-fast-mode.md](14-fast-mode.md))
 
@@ -419,6 +456,12 @@ those say so, and none of them can change the output. The fitter round of 2026-0
 | `F32_COUNT_LIMIT` | 2^24 | `inkvec-trace/src/fast/palette.rs:1379` | where the old f32 running count of ones stopped growing, reproduced in `ink_shares` | derived |
 | `BLEND_TOL` | 0.04 (sRGB and opacity) | `inkvec-trace/src/fast/faces.rs:157` | largest distance from a pixel to the line between two inks for it to count as their blend | none |
 | `SAME_ALPHA` | 0.02 | `inkvec-trace/src/fast/faces.rs:198` | largest opacity difference between two inks that can be one ink | none |
+| `HALO_REACH` | 2 px | `inkvec-trace/src/fast/faces/halos.rs` | lossy intake only: a component with no pixel whose 5 x 5 window is all its own label is thin (a codec halo can be one; the thin-variant merge of `merge_same_inks` uses the same radius) | measured (`docs/theory/noise.md`: the codec's luma error 4.5 / 3.1 / 2.3 levels under 1 / 1-2 / 2-3 px from an edge, 0.2 in the interiors) |
+| `HALO_OVERSHOOT` | 0.2 | `inkvec-trace/src/fast/faces/halos.rs` | how far beyond either ink, as a share of their difference, a halo's channel may lie | motivated (ringing overshoots its step; the dark halo of `twemoji/1f1fa` sits 5 % beyond the blue in luma) |
+| `HALO_SLACK` | 0.02 (YCbCr, about 5 levels) | `inkvec-trace/src/fast/faces/halos.rs` | absolute slack on each channel of the halo hull, for channels in which the two inks barely differ | motivated |
+| `STRIP_REACH` | 1 px | `inkvec-trace/src/fast/faces/halos.rs` | a thin component of an ink that has a thick component elsewhere must be a strip at this radius to be a halo | measured (`twemoji/1faa3`: its real 4 px rim taken at radius 2, dE00 0.212 -> 0.344; kept at 1) |
+| `HALO_LINE_TOL` | 0.04 (weighted YCbCr) | `inkvec-trace/src/fast/faces/halos.rs` | how far from the segment between its two inks a strip of an ink with an area elsewhere may lie and be their halo | measured (codec halos 0.009-0.035 from theirs on `twemoji/1f1fa` and `openmoji/1F1FF-1F1F2`; `twemoji/1faa3`'s real rim 0.054) |
+| `CHROMA_WEIGHT` | 0.25 | `inkvec-trace/src/fast/faces/halos.rs` | weight of each chroma channel against luma's, on squared differences, in a halo pixel's coverage and a halo's distance from its segment | motivated (4:2:0 stores chroma at half resolution, so where luma and chroma disagree on an edge the luma is the better reading of coverage) |
 | `SCAN_LANES` | 8 labels | `inkvec-trace/src/fast/faces/runs.rs:126` | labels compared per step while a run is scanned (one 128-bit vector of u16) | motivated; speed only |
 | face-id limit (`write_faces`) | 65,534 faces (`u16::MAX - 1`) | `inkvec-trace/src/fast/faces/runs.rs:513`; the same count as `CAPPED` in `inkvec-trace/src/fast/bands.rs:200` | most faces Fast numbers; past it the smallest components are merged into their neighbours (`regions::cap_components`, as Quality's `split_components` does past `MAX_FACES`) until this many remain, and at this count or more the ramp pass's palette precheck steps aside | motivated (face ids are u16 and `u16::MAX` is the outside of the planar map; the source does not say why Fast stops one below Quality's `MAX_FACES` = 65,535) |
 | `SPECKLE_PER_512` / `SPECKLE_MAX` | 4.0 px per 512 x 512 / 16.0 px | `inkvec-trace/src/fast/front.rs:32-34` | the speckle floor grows with image area, from `min_region` up to VTracer's 4 x 4 patch | measured (20 brand logos at 2048 px: 14% fewer coordinates, dE00 0.0729 -> 0.0725; masthead 19% at +0.01) |

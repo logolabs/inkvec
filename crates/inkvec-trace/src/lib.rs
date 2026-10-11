@@ -81,6 +81,7 @@ pub mod coverage;
 #[cfg(feature = "research")]
 pub mod decode;
 pub mod diag;
+pub mod evidence;
 pub mod fast;
 pub mod gradient;
 #[cfg(feature = "research")]
@@ -92,8 +93,8 @@ pub mod planar;
 pub mod regions;
 pub mod regroup;
 pub mod regularize;
-// Stroke-drawn faces as centrelines plus one width, behind `--detect-strokes`
-// (`Options::detect_strokes`) in the CLI's colour pipeline.
+// Stroke-drawn faces as centrelines plus one width, in the CLI's colour pipeline
+// (`Options::detect_strokes`, on by default).
 pub mod ribbon;
 pub mod softness;
 pub mod symmetry;
@@ -183,6 +184,9 @@ pub struct ColorOptions {
     /// The intake came out of a lossy codec, so the palette's noise guard must run even
     /// though the edges are sharp. See [`lossy_container`].
     pub lossy_intake: bool,
+    /// The image came out of the restorer, which took the codec's damage out: Quality's codec
+    /// clean-up (`fast::codec`) does not run, though the intake stays lossy for the palette.
+    pub restored: bool,
     /// Carry transparency natively: inks with opacity, the clear ground as an ink, and
     /// alpha as a fourth channel wherever the tracer unmixes. See [`native`]. Only an image
     /// with transparency takes this path; an opaque one traces as it always has.
@@ -215,6 +219,7 @@ impl Default for ColorOptions {
             deadline: None,
             boundary_ms: None,
             lossy_intake: false,
+            restored: false,
             min_region: 4,
             fast: false,
             absorb_blends: true,
@@ -258,6 +263,8 @@ pub struct ColorTrace {
     /// Per face, when transparency was traced natively and the face is a fade: one colour
     /// at an opacity that varies across it. Empty on the classic path.
     pub face_fade: Vec<Option<native::Fade>>,
+    /// The intake's noise at its edges, on a soft colour-path intake (`evidence::with_noise`).
+    pub noise: inkvec_core::noise::NoiseModel,
 }
 
 /// Full colour front end, with alpha assumed opaque. See [`trace_color_full_with_alpha`].
@@ -280,7 +287,7 @@ pub fn trace_color_full(img: &Rgba, opts: &ColorOptions) -> ColorTrace {
 ///   counterpart when `opts.fast`);
 /// * otherwise `opts.fast`: the Fast engine's front end ([`fast`]);
 /// * otherwise the Quality pipeline below, stages 1–9 of the crate overview, then
-///   `finish_color_trace` for the geometry.
+///   `finish_color_trace_alpha` for the geometry.
 ///
 /// # Inputs and outputs
 ///
@@ -544,6 +551,9 @@ pub fn trace_color_full_with_alpha(
     progress::begin("despeckle");
 
     despeckle(&mut labels, img.width, img.height, min_region);
+    if opts.lossy_intake && !opts.restored {
+        fast::clean_lossy_labels(&mut labels, img, &rgb, &pal, source_alpha);
+    }
     sw.mark("despeckle");
     progress::begin("blend_absorb");
 
@@ -676,6 +686,7 @@ pub fn trace_color_full_with_alpha(
             gradient::bic_lambda(img.width * img.height),
             min_region.max(2),
             (opts.lossy_intake && research_lossy_regularize()).then_some(detail_sigma),
+            codec_band(opts),
         );
         if carved > 0 && inkvec_core::env::flag("INKVEC_TIMING") {
             eprintln!("  [t] carved {carved} residual feature(s) into regions");
@@ -738,7 +749,7 @@ pub fn trace_color_full_with_alpha(
     );
     crate::diag!("fills", "snapped to their ink's colour: {snapped}");
 
-    finish_color_trace(
+    let ct = finish_color_trace_alpha(
         img,
         opts,
         &rgb,
@@ -748,8 +759,12 @@ pub fn trace_color_full_with_alpha(
         face_color,
         n_faces,
         sigma_noise,
+        soft_intake,
         &mut sw,
-    )
+        None,
+        None,
+    );
+    evidence::with_noise(ct, &rgb, soft_intake, opts.lossy_intake, &mut sw)
 }
 
 /// Research entry: run the colour tracer from a caller-supplied label map.
@@ -776,7 +791,7 @@ pub fn trace_color_full_with_alpha(
 ///    per-face fit would re-shatter a gradient the merge stage had just reassembled;
 /// 5. `split_components`, then `face_fill` / `face_color` read off `fills_by_label` /
 ///    `label_ink` exactly as above;
-/// 6. `finish_color_trace`: saddles, planar map, sub-pixel and junction refinement, the
+/// 6. `finish_color_trace_alpha`: saddles, planar map, sub-pixel and junction refinement, the
 ///    global boundary solve, decoding and symmetry.
 ///
 /// What is *not* run: palette extraction (`extract_palette_mdl`), `label_image`, alpha-ink
@@ -953,6 +968,7 @@ pub fn trace_color_from_labels(
             lambda,
             opts.min_region.max(2),
             None,
+            codec_band(opts),
         );
         if carved > 0 && inkvec_core::env::flag("INKVEC_TIMING") {
             eprintln!("  [t] carved {carved} residual feature(s) into regions");
@@ -992,7 +1008,7 @@ pub fn trace_color_from_labels(
         .map(|&l| label_ink.get(l).copied().unwrap_or(l))
         .collect();
 
-    finish_color_trace(
+    finish_color_trace_alpha(
         img,
         opts,
         &rgb,
@@ -1002,49 +1018,20 @@ pub fn trace_color_from_labels(
         face_color,
         n_faces,
         sigma_noise,
+        opts.lossy_intake,
         &mut sw,
+        None,
+        None,
     )
 }
 
 /// Everything from saddle disambiguation onwards: the geometry stages, which do not care
-/// how the labels were arrived at.
-///
-/// Shared by [`trace_color_full_with_alpha`] and [`trace_color_from_labels`] so the
-/// research entry cannot drift away from the shipped one. The opaque form of
-/// [`finish_color_trace_alpha`], which documents the arguments.
-#[allow(clippy::too_many_arguments)]
-fn finish_color_trace(
-    img: &Rgba,
-    opts: &ColorOptions,
-    rgb: &[[f32; 3]],
-    pal: Palette,
-    labels: Vec<u16>,
-    face_fill: Vec<gradient::FillFit>,
-    face_color: Vec<usize>,
-    n_faces: usize,
-    sigma_noise: f64,
-    sw: &mut Stopwatch,
-) -> ColorTrace {
-    finish_color_trace_alpha(
-        img,
-        opts,
-        rgb,
-        pal,
-        labels,
-        face_fill,
-        face_color,
-        n_faces,
-        sigma_noise,
-        sw,
-        None,
-        None,
-    )
-}
-
-/// [`finish_color_trace`], told the source's alpha. The sub-pixel refinement and the
-/// boundary solve then unmix in four channels, each face at its palette entry's opacity, so
-/// an edge between white paint and the clear ground is found although over white it has no
-/// contrast at all. With `None` this is exactly the classic function.
+/// how the labels were arrived at. Shared by [`trace_color_full_with_alpha`],
+/// [`trace_color_from_labels`] and [`native::trace_color`], so no entry can drift from
+/// another. Told the source's alpha, the sub-pixel refinement and the boundary solve unmix in
+/// four channels, each face at its palette entry's opacity, so an edge between white paint
+/// and the clear ground is found although over white it has no contrast at all; the opaque
+/// entries pass `None` twice.
 ///
 /// # Stages
 ///
@@ -1063,6 +1050,7 @@ fn finish_color_trace(
 /// * `face_fill`, `face_color`: per face, its fitted fill and its palette index;
 /// * `sigma_noise`: per-channel noise in sRGB units, which sets how far the sub-pixel
 ///   refinement trusts each pixel;
+/// * `soft_intake`: the intake is soft or lossy (`planar::measure_subpixel`);
 /// * `sw`: the caller's stopwatch, so stage timings continue in one sequence;
 /// * `source_alpha`: the source's alpha per pixel, or `None` on the opaque path;
 /// * `face_alpha_override`: per face, the opacity at which it meets the ground (the
@@ -1081,6 +1069,7 @@ pub(crate) fn finish_color_trace_alpha(
     face_color: Vec<usize>,
     n_faces: usize,
     sigma_noise: f64,
+    soft_intake: bool,
     sw: &mut Stopwatch,
     source_alpha: Option<&[f32]>,
     face_alpha_override: Option<Vec<f32>>,
@@ -1143,6 +1132,7 @@ pub(crate) fn finish_color_trace_alpha(
             &face_model,
             sigma_noise,
             opts.simplify_faint,
+            soft_intake,
             alpha_pair,
         )
     };
@@ -1212,6 +1202,17 @@ pub(crate) fn finish_color_trace_alpha(
         face_rgb,
         sigma_noise,
         face_fade: Vec::new(),
+        noise: inkvec_core::noise::NoiseModel::clean(),
+    }
+}
+
+/// How far from a region's edge the carve stage ignores residual: the codec's band on a
+/// lossy intake (`gradient::carve::CODEC_BAND`), nothing on a clean one.
+pub(crate) fn codec_band(opts: &ColorOptions) -> usize {
+    if opts.lossy_intake {
+        gradient::carve::CODEC_BAND
+    } else {
+        0
     }
 }
 

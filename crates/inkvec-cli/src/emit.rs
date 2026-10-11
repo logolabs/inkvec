@@ -47,7 +47,7 @@
 //!   instead, and 30% of the screen set's files filled their holes back in for any
 //!   consumer that ignored it.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use inkvec_core::Point;
 use inkvec_fit::{
@@ -65,6 +65,8 @@ use crate::primitive::{annulus_stroke, primitive_d, primitive_element, stroke_el
 use crate::rings::{self, point_in_ring, ring_area, Nesting};
 use crate::seams;
 
+mod completion;
+mod holes;
 mod winding;
 pub(crate) use winding::for_nonzero;
 
@@ -104,10 +106,11 @@ pub(crate) struct ColorDoc<'a> {
     pub layers: Option<Layers<'a>>,
     /// The colour transparent pixels were composited onto before tracing, sRGB 0..1.
     pub matte: [f32; 3],
-    /// `--detect-strokes`: faces written as strokes instead of fills, face ->
-    /// finished element text ([`crate::ribbons`]). Empty unless the switch is on, and an
-    /// empty map changes nothing below.
-    pub ribbons: &'a BTreeMap<usize, String>,
+    /// Stroke detection ([`crate::ribbons`]): the faces written as strokes instead of
+    /// fills (face -> finished element text), and the faces that leave with them where the
+    /// face beneath is still painted their colour ([`crate::ribbons::absorbed_by`]). Empty
+    /// when the stage does not run, and empty changes nothing below.
+    pub ribbons: &'a crate::ribbons::Ribbons,
     /// Width of the traced raster, px.
     pub w: usize,
     /// Height of the traced raster, px.
@@ -117,7 +120,7 @@ pub(crate) struct ColorDoc<'a> {
 impl<'a> ColorDoc<'a> {
     /// The same document with `ribbons` as the faces written as strokes
     /// ([`crate::ribbons`]).
-    pub(crate) fn with_ribbons(self, ribbons: &'a BTreeMap<usize, String>) -> ColorDoc<'a> {
+    pub(crate) fn with_ribbons(self, ribbons: &'a crate::ribbons::Ribbons) -> ColorDoc<'a> {
         ColorDoc { ribbons, ..self }
     }
 }
@@ -139,6 +142,8 @@ pub(crate) struct EmitOptions {
     pub harmonize_threshold: f64,
     /// Write harmonized shapes as `<use>` of one shared definition.
     pub use_symbols: bool,
+    /// Complete each face behind what is painted over it ([`crate::layers`]).
+    pub layers: bool,
 }
 
 /// Emit the map as a **stacked** document: faces painted back to front, each drawing only
@@ -177,9 +182,19 @@ pub(crate) fn emit_color(doc: &ColorDoc, opts: &EmitOptions) -> String {
     let mut stack = stack_faces(doc, opts, &nest);
     // Faces written as strokes are not painted as fills: their children paint at the
     // nearest painted ancestor's level, and the strokes go on top ([`write_ribbons`]).
-    for &f in doc.ribbons.keys() {
+    for &f in doc.ribbons.elements.keys() {
         if let Some(d) = stack.dropped.get_mut(f) {
             *d = true;
+        }
+    }
+    // And the faces that leave with them, where what now paints beneath is their colour
+    // and nothing is punched out of them.
+    for &g in &doc.ribbons.absorbed {
+        let under = surviving_parent(&nest.parent, &stack.dropped, g);
+        let hex = |i: usize| flat_colour(doc, i).map(inkvec_trace::color::to_hex);
+        let same = under.is_some_and(|a| hex(a).is_some() && hex(a) == hex(g));
+        if same && stack.holes.get(g).is_some_and(Vec::is_empty) {
+            stack.dropped[g] = true;
         }
     }
     debug_dump(doc, &nest, &stack);
@@ -210,6 +225,7 @@ pub(crate) fn emit_color(doc: &ColorDoc, opts: &EmitOptions) -> String {
     let paint = face_paint(doc, &stack, &mut defs);
     let (roots, children) = paint_tree(doc, &nest, &stack, paint.fills.len());
     let ids = face_ids(doc);
+    let no_completions = HashMap::new();
     let strokes = if opts.native {
         annulus_strokes(doc, drawn, &stack, &paint, &harmonized, decimals)
     } else {
@@ -230,16 +246,34 @@ pub(crate) fn emit_color(doc: &ColorDoc, opts: &EmitOptions) -> String {
         harmonized_d: &harmonized.d,
         symbol_use: &harmonized.symbols,
         strokes: &strokes,
+        completed: &no_completions,
     };
     let mut painted = Vec::new();
     let mut body = writer.body(&roots, &seams::Overrides::new(), &mut painted);
     write_ribbons(doc, &mut body, &mut painted);
 
+    // Each face completed behind what is painted over it (see `crate::layers`), in the paint
+    // ranks the first pass settled. The second pass writes completed faces in the same
+    // places, so every rank a completion relied on still holds.
+    let completed = if opts.layers {
+        completion::complete_layers(doc, &nest, &stack, &paint, &writer, &painted, decimals)
+    } else {
+        HashMap::new()
+    };
+    let writer = Writer {
+        completed: &completed,
+        ..writer
+    };
+
     // Side-by-side faces: the lower reaches under the upper so no ground shows through
-    // their shared edge (see `crate::seams`). The first pass settled the paint order; the
-    // second writes the moved outlines, and is skipped when nothing moves.
+    // their shared edge (see `crate::seams`); a completed face already does. The first pass
+    // settled the paint order; the second writes the moved and completed outlines, and is
+    // skipped when nothing changes.
     if let Some(moved) = seam_overrides(doc, &nest, &stack, &paint, &writer, &painted) {
         body = writer.body(&roots, &moved, &mut Vec::new());
+        write_ribbons(doc, &mut body, &mut Vec::new());
+    } else if !completed.is_empty() {
+        body = writer.body(&roots, &seams::Overrides::new(), &mut Vec::new());
         write_ribbons(doc, &mut body, &mut Vec::new());
     }
 
@@ -291,8 +325,8 @@ struct Stacking {
 ///
 /// In order: the canvas background under `--no-background` ([`canvas_background`]) and
 /// the faces of its colour that are holes in a glyph ([`punch_background_coloured`]);
-/// clear and translucent faces ([`punch_transparent`]); then the hole lists are made
-/// parity-safe ([`dedupe_holes`]).
+/// clear and translucent faces ([`punch_transparent`]); counters cut out of their glyph
+/// ([`holes::cut_ground_holes`]); then the hole lists are made parity-safe ([`dedupe_holes`]).
 fn stack_faces(doc: &ColorDoc, opts: &EmitOptions, nest: &Nesting) -> Stacking {
     let n = doc.order.len();
     let mut stack = Stacking {
@@ -319,6 +353,7 @@ fn stack_faces(doc: &ColorDoc, opts: &EmitOptions, nest: &Nesting) -> Stacking {
         }
     }
     punch_transparent(doc, opts, nest, &mut stack);
+    holes::cut_ground_holes(doc, nest, &mut stack);
     dedupe_holes(&nest.parent, &mut stack.holes);
     stack
 }
@@ -922,6 +957,7 @@ enum Element {
 
 /// Stage 7: the element writer. Holds every per-face decision made so far and writes the
 /// paint tree as SVG elements.
+#[derive(Clone, Copy)]
 struct Writer<'a> {
     /// The rings of each face.
     order: &'a [FaceRings],
@@ -949,6 +985,8 @@ struct Writer<'a> {
     symbol_use: &'a HashMap<usize, (String, String)>,
     /// Faces written as one stroked primitive ([`annulus_strokes`]).
     strokes: &'a HashMap<usize, String>,
+    /// Faces completed behind what is painted over them ([`crate::layers`]).
+    completed: &'a HashMap<usize, crate::layers::Completion>,
 }
 
 impl Writer<'_> {
@@ -972,6 +1010,15 @@ impl Writer<'_> {
     fn face_d(&self, i: usize, under: &seams::Overrides) -> String {
         if let Some(h_d) = self.harmonized_d.get(&i) {
             return h_d.clone();
+        }
+        match self.completed.get(&i).map(|c| &c.shape) {
+            Some(crate::layers::Shape::Path(d)) => return d.clone(),
+            Some(crate::layers::Shape::Prim(k)) => {
+                if let Some(d) = primitive_d(k, self.decimals) {
+                    return d;
+                }
+            }
+            None => {}
         }
         let (order, fitted, decimals) = (self.order, self.fitted, self.decimals);
         let mut d = String::new();
@@ -1037,6 +1084,20 @@ impl Writer<'_> {
             }
             return Some((Element::Ready(el), true));
         }
+        // A face completed behind its cover: its primitive, or its path.
+        if let Some(c) = self.completed.get(&i) {
+            match &c.shape {
+                crate::layers::Shape::Prim(kind) => {
+                    if let Some(mut el) = primitive_element(kind, fill, alpha, self.decimals) {
+                        if let Some(sp) = el.find(' ') {
+                            el.insert_str(sp, &format!(" id=\"{id}\""));
+                        }
+                        return Some((Element::Ready(el), true));
+                    }
+                }
+                crate::layers::Shape::Path(d) => return Some((Element::Path(d.clone()), false)),
+            }
+        }
         // A primitive element cannot carry a hole, so a face that has to show one through
         // is written as a path even when its outline would have fitted a circle.
         let drawn = &self.drawn[i];
@@ -1056,6 +1117,39 @@ impl Writer<'_> {
             return None;
         }
         Some((Element::Path(d), false))
+    }
+
+    /// Whether face `i` is written as an element of its own, not merged into a compound path
+    /// with its same-coloured siblings, *before* any completion: a symbol's `<use>`, a
+    /// stroke, or a primitive outline with nothing punched out of it -- but a square-cornered
+    /// rectangle, which a path writes in the same six numbers, joins its siblings' compound
+    /// path ([`holes::plain_rect`]). Grouping is decided on this, so a completion never moves
+    /// a face to another place in the paint order.
+    fn stands_alone(&self, i: usize) -> bool {
+        if self.symbol_use.contains_key(&i) || self.strokes.contains_key(&i) {
+            return true;
+        }
+        let drawn = &self.drawn[i];
+        drawn.len() == 1
+            && self.order[i][drawn[0]].len() == 1
+            && self.holes[i].is_empty()
+            && self
+                .prims
+                .get(self.order[i][drawn[0]][0].0)
+                .and_then(|p| p.as_ref())
+                .is_some_and(|pf| {
+                    !holes::plain_rect(&pf.kind)
+                        && primitive_element(&pf.kind, "", "", self.decimals).is_some()
+                })
+    }
+
+    /// Whether face `i` is completed as a primitive element of its own: any but a
+    /// square-cornered rectangle, which a path writes as cheaply ([`holes::plain_rect`]).
+    fn completed_prim(&self, i: usize) -> bool {
+        matches!(
+            self.completed.get(&i).map(|c| &c.shape),
+            Some(crate::layers::Shape::Prim(k)) if !holes::plain_rect(k)
+        )
     }
 
     /// The `<path>` of face `i` -- its id, fill and opacity -- drawing `d`, a compound path
@@ -1080,10 +1174,10 @@ impl Writer<'_> {
     /// which is how an artist draws them: a whole word is one `<path>`, not one per
     /// letter. Before this the tracer wrote one element per connected face and came
     /// back with 3.5x the artist's path count on a detailed wordmark at the same
-    /// colour error. Primitives stay their own element and gradient faces each own a
-    /// gradient, so neither merges; nor does a harmonized `<use>`. The merged path takes
-    /// the first member's place in the paint order and its id; every member's children
-    /// follow it.
+    /// colour error. Primitives other than a square-cornered rectangle stay their own
+    /// element and gradient faces each own a gradient, so neither merges; nor does a
+    /// harmonized `<use>`. The merged path takes the first member's place in the paint
+    /// order and its id; every member's children follow it.
     fn emit_level(
         &self,
         members: &[usize],
@@ -1099,11 +1193,11 @@ impl Writer<'_> {
             }
             done[a] = true;
             let i = members[a];
-            let Some((element, is_prim)) = self.face_element(i, under) else {
+            if self.face_element(i, under).is_none() {
                 continue;
-            };
+            }
             let mut group = vec![i];
-            if !is_prim && fills[i].starts_with('#') && !self.symbol_use.contains_key(&i) {
+            if !self.stands_alone(i) && fills[i].starts_with('#') {
                 for b in a + 1..members.len() {
                     if done[b]
                         || fills[members[b]] != fills[i]
@@ -1113,30 +1207,43 @@ impl Writer<'_> {
                         continue;
                     }
                     let j = members[b];
-                    let Some((_, prim_b)) = self.face_element(j, under) else {
+                    if self.face_element(j, under).is_none() {
                         done[b] = true;
                         continue;
-                    };
-                    if prim_b {
+                    }
+                    if self.stands_alone(j) {
                         continue;
                     }
                     done[b] = true;
                     group.push(j);
                 }
             }
-            let element = match element {
-                Element::Ready(el) => el,
-                Element::Path(d) if group.len() == 1 => self.path_element(i, &d),
-                Element::Path(_) => {
-                    let mut d = String::new();
-                    for &j in &group {
-                        d.push_str(&self.face_d(j, under));
+            // Members completed as primitives are written as elements of their own, in the
+            // group's place; the rest as one path, wound as a whole: a member's depth is
+            // counted among every ring of the merged element, not only its own.
+            let (alone, merged): (Vec<usize>, Vec<usize>) =
+                group.iter().partition(|&&j| self.completed_prim(j));
+            let mut element = String::new();
+            if let Some(&lead) = merged.first() {
+                match self.face_element(lead, under) {
+                    Some((Element::Ready(el), _)) if merged.len() == 1 => element.push_str(&el),
+                    Some((Element::Path(d), _)) if merged.len() == 1 => {
+                        element.push_str(&self.path_element(lead, &d))
                     }
-                    // Wound as one path: a member's depth is counted among every ring of
-                    // the merged element, not only its own.
-                    self.path_element(i, &d)
+                    _ => {
+                        let mut d = String::new();
+                        for &j in &merged {
+                            d.push_str(&self.face_d(j, under));
+                        }
+                        element.push_str(&self.path_element(lead, &d));
+                    }
                 }
-            };
+            }
+            for &j in &alone {
+                if let Some((Element::Ready(el), _)) = self.face_element(j, under) {
+                    element.push_str(&el);
+                }
+            }
             // One element is one paint: its members share a rank, so none of them reaches
             // under another -- inside one compound path an overlap would cancel to a hole
             // (or, wound for nonzero, count twice), and a shared edge inside one path cannot
@@ -1222,7 +1329,8 @@ fn seam_overrides(
                 && !writer.harmonized_d.contains_key(&i)
                 && !writer.symbol_use.contains_key(&i)
                 && !writer.strokes.contains_key(&i)
-                && !doc.ribbons.contains_key(&i)
+                && !writer.completed.contains_key(&i)
+                && !doc.ribbons.elements.contains_key(&i)
         })
         .collect();
     let upper_ok: Vec<bool> = (0..n)
@@ -1297,7 +1405,7 @@ fn seam_overrides(
 /// else (the stage accepts a face only when the strokes' outline matches the face's
 /// boundary), and faces of a planar map do not overlap.
 fn write_ribbons(doc: &ColorDoc, body: &mut String, painted: &mut Vec<(usize, usize)>) {
-    for (&f, el) in doc.ribbons {
+    for (&f, el) in &doc.ribbons.elements {
         body.push_str(el);
         let rank = painted.last().map_or(0, |&(_, r)| r + 1);
         painted.push((f, rank));

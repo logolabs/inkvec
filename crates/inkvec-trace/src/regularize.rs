@@ -125,10 +125,27 @@ pub fn residual_incoherence(
 /// Returns the larger of the two, in sRGB units, clamped to `[NOISE_FLOOR, 8/255]`.
 /// Images under 3x3 return the floor.
 pub fn residual_sigma(rgb: &[[f32; 3]], labels: &[u16], w: usize, h: usize, pal: &Palette) -> f64 {
+    let (interior, edge) = residual_sigmas(rgb, labels, w, h, pal);
+    interior.max(edge)
+}
+
+/// [`residual_sigma`]'s two populations apart: `(interior, edge)`, each clamped to
+/// `[NOISE_FLOOR, 8/255]`. Compression noise is not stationary: on the gate's `web` tier
+/// (`bench/theory/noise_profile.py`) the JPEG's error is 4.5 levels within a pixel of an
+/// edge and 0.2 eight pixels from one, so a decision about interiors and a decision about
+/// edges each want their own.
+pub fn residual_sigmas(
+    rgb: &[[f32; 3]],
+    labels: &[u16],
+    w: usize,
+    h: usize,
+    pal: &Palette,
+) -> (f64, f64) {
     let mut errors = Vec::new();
     let mut edge_errors = Vec::new();
+    let clamp = |v: f64| v.clamp(crate::coverage::NOISE_FLOOR, 8.0 / 255.0);
     if w < 3 || h < 3 {
-        return crate::coverage::NOISE_FLOOR;
+        return (crate::coverage::NOISE_FLOOR, crate::coverage::NOISE_FLOOR);
     }
     for y in 1..h - 1 {
         for x in 1..w - 1 {
@@ -189,9 +206,7 @@ pub fn residual_sigma(rgb: &[[f32; 3]], labels: &[u16], w: usize, h: usize, pal:
     } else {
         crate::coverage::NOISE_FLOOR
     };
-    interior
-        .max(edge)
-        .clamp(crate::coverage::NOISE_FLOOR, 8.0 / 255.0)
+    (clamp(interior), clamp(edge))
 }
 
 /// Deterministic four-neighbour Potts descent. Every change strictly lowers energy.
@@ -472,6 +487,42 @@ mod tests {
             residual_sigma(&vec![[0.5; 3]; 100], &[0; 100], 10, 10, &p),
             crate::coverage::NOISE_FLOOR
         );
+    }
+    #[test]
+    fn interior_and_edge_noise_are_read_apart() {
+        // Two inks split down the middle of a 16 x 24 image (44 edge pixels off the frame,
+        // over the 32 a median needs); the edge columns carry a colour off the line between
+        // the inks (compression damage), the interiors a small wobble.
+        let p = palette(vec![[0.2; 3], [0.8; 3]]);
+        let (w, h) = (16usize, 24usize);
+        let mut rgb = vec![[0.0f32; 3]; w * h];
+        let mut labels = vec![0u16; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                let i = y * w + x;
+                labels[i] = u16::from(x >= w / 2);
+                let ink = p.rgb[labels[i] as usize];
+                let wobble = if (x + y) % 2 == 0 { 2.0 } else { -2.0 } / 255.0;
+                let damage = if x == w / 2 - 1 || x == w / 2 {
+                    10.0 / 255.0
+                } else {
+                    0.0
+                };
+                rgb[i] = [
+                    ink[0] + wobble + damage,
+                    ink[1] + wobble - damage,
+                    ink[2] + wobble,
+                ];
+            }
+        }
+        let (interior, edge) = residual_sigmas(&rgb, &labels, w, h, &p);
+        assert!(edge > 3.0 * interior, "edge {edge} interior {interior}");
+        assert!(
+            (interior * 255.0 - 2.0).abs() < 0.01,
+            "interior {}",
+            interior * 255.0
+        );
+        assert_eq!(residual_sigma(&rgb, &labels, w, h, &p), interior.max(edge));
     }
     #[test]
     fn label_changes_reduce_the_stated_global_energy() {

@@ -211,6 +211,18 @@
         The rough candidates also share most of their arithmetic, which is now done once and
         reused. Neither change alters a single number in the output; the drawing is the same
         to the last bit, it just arrives sooner.</p>
+      <p>A third pass moves the joins between curves to where a designer would put them. Type
+        designers and icon artists place a curve's points at its top, bottom, left and right,
+        where the curve runs exactly horizontal or vertical, so that every handle an editor
+        shows there points straight along an axis; Adobe's specification for its fonts has
+        asked for this since 1990. The fitter had no reason to: it puts a join wherever a
+        measured point happens to lie, and moving a join along a smooth curve hardly changes
+        the drawing. The pass offers, for every smooth stretch, the same stretch with its joins
+        at those extreme points and every join smooth, and keeps it only where the fitter's
+        own measure of fit and economy prefers it. A join at an extreme point is credited for
+        the one number it no longer has to write: its direction. On the 246 test icons this
+        moved the trace closer to the artists' files on the gate's own measures (see the
+        reference document), without writing a single number more or fewer.</p>
       <p>Two more exist in the code but are built only into research versions of the program,
         never into a release. One would snap a line to be perfectly horizontal or vertical
         when the measurement genuinely cannot tell it apart from one — real drawings do this

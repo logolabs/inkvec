@@ -424,6 +424,9 @@ fn post_fit_passes(
     if lim.is_free() {
         crate::merge::merge_free_cubics(&mut fit.path, shifted, &fit.vertices, cfg);
         crate::merge::sharpen_corners(&mut fit.path);
+        // Nodes at the extrema, joins smooth, where the same objective prefers it. See
+        // `crate::extrema`.
+        crate::extrema::anchor_extrema(&mut fit.path, shifted, cfg, crate::extrema::FIT);
         #[cfg(feature = "research")]
         {
             // A line the measurement cannot tell from axis-aligned has one degree of
@@ -867,7 +870,7 @@ pub fn segment_cost_direct(
 /// 12 iterations or when the relative gain falls under 1e-9. Arms are kept in
 /// `[1e-3, 1.5]` throughout. Returns the arms and their `χ²`.
 #[allow(clippy::too_many_arguments)]
-fn polish_arms(
+pub(crate) fn polish_arms(
     pts: &[Point],
     sigma: &[f64],
     s: &[f64],

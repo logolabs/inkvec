@@ -39,6 +39,7 @@ use std::collections::HashMap;
 
 use inkvec_core::Point;
 use inkvec_fit::curves::{arc_ellipse_center, Segment};
+use inkvec_fit::structural::eval_segment;
 use inkvec_fit::FittedPath;
 
 use crate::faces::FaceRings;
@@ -65,6 +66,11 @@ const TAPER: f64 = 12.0;
 /// their mean colour below which the seam between them is not worth mending: a quarter of
 /// it, the most a seam can show, is then under 3% of full scale.
 const FAINT_SEAM: f32 = 0.12;
+
+/// The lower face's outline, for the test that a move does not cut into it, is flattened
+/// with chords within this distance of its curves (px), and a point counts as inside only
+/// when it is more than twice this far inside.
+const FLAT_TOL: f64 = 0.01;
 
 /// The reach, overridable (`INKVEC_UNDERLAP`, 0 to switch it off) for A/B measurement.
 pub(crate) fn underlap_width() -> f64 {
@@ -131,6 +137,82 @@ fn oriented(fitted: &[FittedPath], (k, rev): (usize, bool)) -> FittedPath {
     } else {
         fitted[k].clone()
     }
+}
+
+/// A ring as a polygon within [`FLAT_TOL`] of its curves: each segment cut into as many
+/// equal steps of its parameter as that takes.
+///
+/// The nesting's own polygon for the ring ([`crate::rings::ring_points`]) has four points
+/// per curve, and its chords stray from a long curve that turns far by more than the reach
+/// itself: 0.55 px on a cubic turning 74 degrees over 78 px (`noto-emoji/emoji_u1f3c4_1f3fe`,
+/// a cubic between two extrema). Where the curve bulges into the lower face, its middle lies
+/// that far inside the polygon, so a span moved the full half pixel outward still read as
+/// cutting into the lower face, and the whole run went unmended.
+fn fine_ring(ring: &[(usize, bool)], fitted: &[FittedPath]) -> Vec<Point> {
+    let mut out = Vec::new();
+    for &e in ring {
+        let path = oriented(fitted, e);
+        let mut at = path.start;
+        if out.is_empty() {
+            out.push(at);
+        }
+        for s in &path.segments {
+            let n = flat_steps(at, s);
+            out.extend((1..=n).map(|i| eval_segment(s, at, i as f64 / n as f64)));
+            at = s.end();
+        }
+    }
+    out
+}
+
+/// Steps of its parameter that keep a segment's chords within [`FLAT_TOL`] of it. A chord
+/// over a parameter step `h` strays at most `max|B''|·h²/8`; a cubic's `|B''|` is at most
+/// six times its larger second difference of control points, and a circular arc's is
+/// `r·Δ²` over its whole sweep `Δ`. At most 1024.
+fn flat_steps(a: Point, s: &Segment) -> usize {
+    let curvature = match *s {
+        Segment::Line(_) => return 1,
+        Segment::Cubic(c1, c2, p) => {
+            let d1 = sub(add(a, c2), scale(c1, 2.0));
+            let d2 = sub(add(c1, p), scale(c2, 2.0));
+            6.0 * d1.x.hypot(d1.y).max(d2.x.hypot(d2.y))
+        }
+        Segment::Arc {
+            rx,
+            ry,
+            phi,
+            large_arc,
+            sweep,
+            end,
+        } => {
+            let f = arc_ellipse_center(a, rx, ry, phi, large_arc, sweep, end);
+            f.rx.max(f.ry) * f.delta * f.delta
+        }
+    };
+    let n = (curvature / (8.0 * FLAT_TOL)).sqrt().ceil();
+    if n.is_finite() {
+        (n as usize).clamp(1, 1024)
+    } else {
+        1
+    }
+}
+
+/// The distance from `q` to the closed polygon `r`, px.
+fn ring_distance(q: Point, r: &[Point]) -> f64 {
+    let n = r.len();
+    (0..n)
+        .map(|k| {
+            let (a, b) = (r[k], r[(k + 1) % n]);
+            let ab = sub(b, a);
+            let l2 = dot(ab, ab);
+            let t = if l2 > 0.0 {
+                (dot(sub(q, a), ab) / l2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            q.dist(add(a, scale(ab, t)))
+        })
+        .fold(f64::INFINITY, f64::min)
 }
 
 /// The signed shoelace area of a closed polygon, px²: `Σ_k (x_k·y_(k+1) - x_(k+1)·y_k) / 2`.
@@ -670,6 +752,9 @@ pub(crate) fn underlap(f: &Faces, under: &dyn Fn(usize, usize) -> bool, delta: f
             if area.abs() < 1.0 {
                 continue;
             }
+            // The lower face itself, not the nesting's coarse polygon of it ([`fine_ring`]);
+            // a point on its outline is not inside.
+            let fine_v = fine_ring(ring, f.fitted);
             // The upper face across each edge, where that edge needs mending.
             let need: Vec<Option<usize>> = ring
                 .iter()
@@ -706,7 +791,9 @@ pub(crate) fn underlap(f: &Faces, under: &dyn Fn(usize, usize) -> bool, delta: f
                 }
                 let inside_u =
                     |q: Point| f.outer[u].iter().any(|&ko| point_in_ring(q, &f.pts[u][ko]));
-                let inside_v = |q: Point| point_in_ring(q, &f.pts[v][k]);
+                let inside_v = |q: Point| {
+                    point_in_ring(q, &fine_v) && ring_distance(q, &fine_v) > 2.0 * FLAT_TOL
+                };
                 // An arc's ends first move with the run; where that cannot be done
                 // safely anywhere in it, the run is tried again with them pinned.
                 for (d, arcs_move) in [
@@ -869,5 +956,39 @@ mod tests {
         let (m1, _) = midpoint(a, &b).unwrap();
         assert!((m1.y - m0.y - 0.5).abs() < 1e-9 && (m1.x - m0.x).abs() < 1e-9);
         assert_eq!(b.end(), Point::new(30.0, 0.0));
+    }
+
+    /// The lower face's polygon follows a long, far-turning cubic to within `FLAT_TOL`, where
+    /// the nesting's four points per curve leave its middle half a pixel off.
+    #[test]
+    fn the_lower_face_is_flattened_close_to_its_curves() {
+        // The cubic of `noto-emoji/emoji_u1f3c4_1f3fe` between two extrema, closed by a line.
+        let a = Point::new(183.43, 207.42);
+        let cubic = Segment::Cubic(
+            Point::new(187.34, 194.13),
+            Point::new(198.76, 163.49),
+            Point::new(239.90, 163.49),
+        );
+        let path = FittedPath {
+            start: a,
+            segments: vec![cubic.clone(), Segment::Line(a)],
+            closed: true,
+        };
+        let fine = fine_ring(&[(0, false)], std::slice::from_ref(&path));
+        let mid = eval_segment(&cubic, a, 0.5);
+        assert!(
+            ring_distance(mid, &fine) <= FLAT_TOL,
+            "{}",
+            ring_distance(mid, &fine)
+        );
+        let coarse = crate::rings::ring_points(&vec![(0, false)], std::slice::from_ref(&path));
+        assert!(
+            ring_distance(mid, &coarse) > 0.3,
+            "{}",
+            ring_distance(mid, &coarse)
+        );
+        // A point on the outline is not inside it; one well inside is.
+        assert!(!(point_in_ring(mid, &fine) && ring_distance(mid, &fine) > 2.0 * FLAT_TOL));
+        assert!(point_in_ring(Point::new(200.0, 190.0), &fine));
     }
 }

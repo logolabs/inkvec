@@ -679,6 +679,7 @@ pub fn trace_color_full_with_alpha(
             gradient::bic_lambda(img.width * img.height),
             min_region.max(2),
             (opts.lossy_intake && research_lossy_regularize()).then_some(detail_sigma),
+            codec_band(opts),
         );
         if carved > 0 && inkvec_core::env::flag("INKVEC_TIMING") {
             eprintln!("  [t] carved {carved} residual feature(s) into regions");
@@ -751,6 +752,7 @@ pub fn trace_color_full_with_alpha(
         face_color,
         n_faces,
         sigma_noise,
+        soft_intake,
         &mut sw,
         None,
         None,
@@ -959,6 +961,7 @@ pub fn trace_color_from_labels(
             lambda,
             opts.min_region.max(2),
             None,
+            codec_band(opts),
         );
         if carved > 0 && inkvec_core::env::flag("INKVEC_TIMING") {
             eprintln!("  [t] carved {carved} residual feature(s) into regions");
@@ -1008,6 +1011,7 @@ pub fn trace_color_from_labels(
         face_color,
         n_faces,
         sigma_noise,
+        opts.lossy_intake,
         &mut sw,
         None,
         None,
@@ -1039,6 +1043,7 @@ pub fn trace_color_from_labels(
 /// * `face_fill`, `face_color`: per face, its fitted fill and its palette index;
 /// * `sigma_noise`: per-channel noise in sRGB units, which sets how far the sub-pixel
 ///   refinement trusts each pixel;
+/// * `soft_intake`: the intake is soft or lossy (`planar::measure_subpixel`);
 /// * `sw`: the caller's stopwatch, so stage timings continue in one sequence;
 /// * `source_alpha`: the source's alpha per pixel, or `None` on the opaque path;
 /// * `face_alpha_override`: per face, the opacity at which it meets the ground (the
@@ -1057,6 +1062,7 @@ pub(crate) fn finish_color_trace_alpha(
     face_color: Vec<usize>,
     n_faces: usize,
     sigma_noise: f64,
+    soft_intake: bool,
     sw: &mut Stopwatch,
     source_alpha: Option<&[f32]>,
     face_alpha_override: Option<Vec<f32>>,
@@ -1119,6 +1125,7 @@ pub(crate) fn finish_color_trace_alpha(
             &face_model,
             sigma_noise,
             opts.simplify_faint,
+            soft_intake,
             alpha_pair,
         )
     };
@@ -1189,6 +1196,16 @@ pub(crate) fn finish_color_trace_alpha(
         sigma_noise,
         face_fade: Vec::new(),
         noise: inkvec_core::noise::NoiseModel::clean(),
+    }
+}
+
+/// How far from a region's edge the carve stage ignores residual: the codec's band on a
+/// lossy intake (`gradient::carve::CODEC_BAND`), nothing on a clean one.
+pub(crate) fn codec_band(opts: &ColorOptions) -> usize {
+    if opts.lossy_intake {
+        gradient::carve::CODEC_BAND
+    } else {
+        0
     }
 }
 

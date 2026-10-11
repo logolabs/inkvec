@@ -1008,6 +1008,7 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
             gradient::bic_lambda(w * h),
             min_region.max(2),
             None,
+            crate::codec_band(opts),
         );
         name_carved_paint(&labels, &rgb, alpha, &pal, &mut label_ink, carved_from);
     }
@@ -1097,6 +1098,7 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
         face_color,
         n_faces,
         sigma_noise,
+        soft_intake,
         &mut sw,
         Some(alpha),
         Some(face_alpha),

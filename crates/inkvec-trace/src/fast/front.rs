@@ -163,7 +163,10 @@ fn trace(
             .collect()
     });
     // No noise measurement: the fast fitter reads no per-point uncertainty, and the
-    // refinement only needs a floor under its contrast test.
+    // refinement only needs a floor under its contrast test. For the same reason the strip
+    // reading's side test is not scaled with noise here (`soft_intake` false): with only the
+    // floor to scale by, it would move the threshold on faint edges by a constant rather than
+    // by anything measured (on `fast-web` it changed 12 icons, dE00 and geom no better).
     crate::finish_color_trace_alpha(
         img,
         opts,
@@ -174,6 +177,7 @@ fn trace(
         face_color,
         n_faces,
         coverage::NOISE_FLOOR,
+        false,
         &mut sw,
         native,
         face_alpha,

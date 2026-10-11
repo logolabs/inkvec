@@ -466,7 +466,16 @@ pub fn refine_subpixel_alpha(
     simplify_faint: bool,
     src_alpha: Option<(&[f32], &[f32])>,
 ) {
-    measure_subpixel(map, rgb, face_fill, sigma_noise, simplify_faint, src_alpha).apply(map);
+    measure_subpixel(
+        map,
+        rgb,
+        face_fill,
+        sigma_noise,
+        simplify_faint,
+        false,
+        src_alpha,
+    )
+    .apply(map);
 }
 
 /// The refined geometry of every edge of a map, measured but not yet written back: what
@@ -519,7 +528,9 @@ pub(crate) fn refine_in_parallel(map: &PlanarMap) -> bool {
 }
 
 /// Measure the sub-pixel position and sigma of every vertex of `map` (the arguments are
-/// [`refine_subpixel_alpha`]'s), without changing `map`.
+/// [`refine_subpixel_alpha`]'s), without changing `map`. `soft` says the front end found the
+/// intake soft or lossy (wide edges, ringing, or a lossy container): the strip reading's side
+/// test then scales with the intake's noise (`strip::SIDE_Z`); on a clean intake it does not.
 ///
 /// # Schedule
 ///
@@ -564,6 +575,7 @@ pub(crate) fn measure_subpixel(
     face_fill: &[FillModel],
     sigma_noise: f64,
     simplify_faint: bool,
+    soft: bool,
     src_alpha: Option<(&[f32], &[f32])>,
 ) -> Refined {
     use rayon::prelude::*;
@@ -578,6 +590,7 @@ pub(crate) fn measure_subpixel(
         sigma_noise,
         min_contrast: (3.0 * sigma_noise).max(MIN_UNMIX_CONTRAST),
         simplify_faint,
+        soft,
         debug: inkvec_core::env::flag("INKVEC_SUBPXDBG"),
         dump: inkvec_core::env::path("INKVEC_DUMP_CONTOUR"),
     };
@@ -681,6 +694,8 @@ struct RefineCtx<'a> {
     /// Below this colour separation a vertex is not unmixed: `max(3·sigma_noise, 0.02)`.
     min_contrast: f64,
     simplify_faint: bool,
+    /// The front end found the intake soft or lossy; see [`measure_subpixel`].
+    soft: bool,
     /// `INKVEC_SUBPXDBG`: print every vertex's probes to stderr.
     debug: bool,
     /// `INKVEC_DUMP_CONTOUR`: the file every refined edge is appended to.

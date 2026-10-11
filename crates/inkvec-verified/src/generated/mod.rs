@@ -4,4 +4,6 @@
 #[rustfmt::skip]
 pub mod strip;
 #[rustfmt::skip]
+pub mod design;
+#[rustfmt::skip]
 pub mod evidence;

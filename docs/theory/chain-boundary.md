@@ -1124,20 +1124,42 @@ divides by. With today's fitter, honest uncertainties buy simpler fits at a cost
 +1.7 %). So the fold waits for the representation chain's fitter to read it with its robust
 loss.
 
-### `strip.rs`: a statistical side test, measured and withheld
+### `strip.rs`: a statistical side test on soft intakes
 
 The one-sided corner test is the fourth difference of six column means over 12
-(`fourthDiff_side`), so its noise is `√(70 V)/12` for column means of variance `V`. Declining
-a vertex only beyond `max(SIDE_TOL, 3·√(70 V)/12)` lets the noise set the threshold on a noisy
-intake. The certificate (`CERT_TOL`, the shift lands on the cubic) would be unchanged.
+(`fourthDiff_side`), so its noise is `√(70 V)/12` for column means of variance `V`. On a soft
+intake a vertex is now declined only beyond `max(SIDE_TOL, 3·√(70 V)/12)`, so the noise, not
+the constant, sets the threshold there. `V` is `widest · σ² / |d|²`, from the trace's measured
+per-channel `σ` (raised by `regularize::residual_sigma` on a soft intake), the widest column
+window and the two faces' colour separation. The certificate (`CERT_TOL`, the shift lands on
+the cubic) is unchanged.
 
-With `V` from the trace's per-channel `σ` (`widest · σ² / |d|²`) the term is about 0.007 px on
-a typical clean edge, below `SIDE_TOL` (0.05). On a low-contrast edge, though, `|d|²` is small
-and the term passes `SIDE_TOL`. On the gate's inputs that changed 4 of 246 icons at
-`quality-128ss` and 14 at `fast-128ss`, mostly noto-emoji's shading. A clean intake must keep
-its bytes. The planar refinement does not yet know whether the intake is soft, because the
-noise is measured after it. So the change is withheld until the soft-intake decision reaches
-the planar context and can gate it.
+**Why soft intakes only.** On a clean render a low-contrast edge (shading) also makes
+`σ/|d|` large, and there the term passed `SIDE_TOL`: ungated, it changed 4 of 246 icons at
+`quality-128ss` and 14 at `fast-128ss`. So the front end's own soft-intake decision now
+reaches the refinement as `RefineCtx::soft` (`planar::measure_subpixel`'s `soft` argument).
+That is the decision that opens the palette guard and the noise measurement: wide edges,
+ringing or a lossy container, read from the pixels. On a clean intake the test is `SIDE_TOL`
+by construction.
+
+**Fast is not scaled.** Fast measures no noise and refines against `NOISE_FLOOR`, so a
+scaled test there would move the threshold by a constant. On `fast-web` it changed 12 icons,
+with dE00 and geom no better, so Fast passes `false`.
+
+**Measured against the session head (d8a5646), per icon, with the same build otherwise:**
+
+* All six clean conditions are byte-identical (246 of 246 icons each), as is `fast-web`.
+  Clean run times match: Quality +0.1 to +1.0 %, Fast −6.2 to −0.0 %, interleaved on a
+  shared machine.
+* `quality-web` changes 111 icons, and every gated axis improves at its point estimate.
+  The bound is the one-sided 95 % upper bound.
+
+| `quality-web` axis | base | this change | change | upper bound | verdict |
+|---|---|---|---|---|---|
+| dE00 | 0.20191 | 0.20163 | −0.14 % | +0.04 % | non-inferior |
+| `turning_gap` | 3.67939 | 3.67848 | −0.02 % | +0.77 % | non-inferior |
+| `ratio_gap` | 0.61128 | 0.61109 | −0.03 % | +0.35 % | non-inferior |
+| geom | 0.34712 | 0.34700 | −0.03 % | +0.15 % | non-inferior |
 
 ### The adapter (`EdgeScorer`, agreed with the representation chain)
 

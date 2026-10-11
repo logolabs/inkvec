@@ -470,6 +470,8 @@ fn test_restore_auto_kept_probe_with_normalisation() {
         restore_threshold: 1000.0, // High threshold -> Decision::Keep
         max_dim: 32,               // Forces normalised = true
         sr: inkvec_sr::Mode::Off,
+        // A sign of compression, without which `auto` makes no probe to keep.
+        lossy: inkvec_sr::Mode::On,
         ..Args::default()
     };
     let res = trace_image(img, &args);

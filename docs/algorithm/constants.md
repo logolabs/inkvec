@@ -178,6 +178,7 @@ stage's own reference document — this table only summarizes. Paths are relativ
 | `SMOOTH_FRACTION` | 0.5 | `inkvec-trace/src/gradient/regions.rs:36-38` | fraction of a seam's pixel pairs that must be smooth steps | none |
 | `CARVE_RESIDUAL` | 0.06 | `inkvec-trace/src/gradient/carve.rs:16-20` | floor on the carve candidate threshold `max(8*sigma_noise, 0.06)` | motivated |
 | `CARVE_MAX` | 64 | `inkvec-trace/src/gradient/carve.rs:21-22` | most features carved from one image | motivated |
+| `CODEC_BAND` | 2 px | `inkvec-trace/src/gradient/carve.rs` | on a lossy intake, how far inside its region a pixel must lie to be carved | measured (`quality-web`, 1/2/3 px: 2 px is the one reach no gated axis reads worse at) |
 | `CARVED_PAINT_ALPHA` | 0.5 | `inkvec-trace/src/native.rs:691-700` | mean opacity at or above which a carved feature named by the clear ink is renamed to the nearest visible ink (native-alpha path, `name_carved_paint`) | measured (residue 0.14-0.36, painting it cost dE00 on 5 of 8 icons; paint 0.80-1.00) |
 | `bic_lambda(n)` | 0.5 * ln(n) | `inkvec-trace/src/gradient.rs:320-327` | fill-selection lambda | derived (Bayesian information criterion) |
 | `IRLS_ROUNDS` | 2 | `inkvec-trace/src/gradient/stops.rs:68-69` | Huber reweighting rounds when a stop profile is fitted | none |

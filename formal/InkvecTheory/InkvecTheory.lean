@@ -16,6 +16,9 @@ import InkvecTheory.Naturality
 import InkvecTheory.Gen.Expr
 import InkvecTheory.Gen.Rust
 import InkvecTheory.Gen.Strip
+import InkvecTheory.Design.Layers
+import InkvecTheory.Design.Noise
+import InkvecTheory.Gen.Design
 import InkvecTheory.Windows
 import InkvecTheory.Gen.Evidence
 

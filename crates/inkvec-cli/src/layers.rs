@@ -246,7 +246,12 @@ fn stroke_cover(strokes: &[StrokeShape]) -> Region {
                 segments: pts[1..].iter().map(|&q| Segment::Line(q)).collect(),
                 closed: true,
             };
-            band = band.union(&shape::stroke_band(&[path], s.width, s.cap, JoinKind::Round));
+            band = band.union(&shape::stroke_band(
+                &[path],
+                s.width,
+                s.cap,
+                JoinKind::Round,
+            ));
         }
         all = all.union(&band);
     }
@@ -307,13 +312,16 @@ pub(crate) fn complete_report(inp: &Input) -> (HashMap<usize, Completion>, Vec<u
     let n = inp.order.len();
     let mut out = HashMap::new();
     let mut tried = Vec::new();
-    let mut painted: Vec<usize> = (0..n).filter(|&f| inp.rank.get(f).copied().flatten().is_some()).collect();
+    let mut painted: Vec<usize> = (0..n)
+        .filter(|&f| inp.rank.get(f).copied().flatten().is_some())
+        .collect();
     if painted.is_empty() {
         return (out, tried);
     }
     // From the top down, with the running union of everything above.
     painted.sort_by_key(|&f| std::cmp::Reverse(inp.rank[f]));
-    let regions: HashMap<usize, Region> = painted.iter().map(|&f| (f, face_region(inp, f))).collect();
+    let regions: HashMap<usize, Region> =
+        painted.iter().map(|&f| (f, face_region(inp, f))).collect();
     let mut above = stroke_cover(inp.strokes);
     // What the faces above cover in the map, as against what they paint (`above`): where
     // the two differ next to a face, its underlap painted the gap, and so must its completion.
@@ -374,9 +382,17 @@ fn complete_face(
     // underlap paints it today. As the underlap does, the reach into the seam tapers off
     // towards any other face over [`TAPER`]: at a junction of three paints, nothing.
     let crop = (x0 - PAD, y0 - PAD, x1 + PAD, y1 + PAD);
-    let seam = map_above.crop(crop.0, crop.1, crop.2, crop.3).minus(&u).minus(e_now);
+    let seam = map_above
+        .crop(crop.0, crop.1, crop.2, crop.3)
+        .minus(&u)
+        .minus(e_now);
     let others = all_faces
-        .crop(crop.0 - TAPER, crop.1 - TAPER, crop.2 + TAPER, crop.3 + TAPER)
+        .crop(
+            crop.0 - TAPER,
+            crop.1 - TAPER,
+            crop.2 + TAPER,
+            crop.3 + TAPER,
+        )
         .minus(e_now)
         .minus(map_above);
     let v0 = e_now.minus(&u);
@@ -389,7 +405,12 @@ fn complete_face(
         }
     }
     if trace() && !gap.is_empty() {
-        eprintln!("layers face {f}: seam gap area {:.3} box {:?}; others empty {}", gap.area(), gap.bbox(), others.is_empty());
+        eprintln!(
+            "layers face {f}: seam gap area {:.3} box {:?}; others empty {}",
+            gap.area(),
+            gap.bbox(),
+            others.is_empty()
+        );
     }
     let v = v0.union(&gap);
     if v.area() < 1.0 {
@@ -493,7 +514,12 @@ fn complete_face(
         let Some((bx0, by0, bx1, by1)) = b else {
             continue;
         };
-        let snapped = (snap(bx0, |q| q.x), snap(by0, |q| q.y), snap(bx1, |q| q.x), snap(by1, |q| q.y));
+        let snapped = (
+            snap(bx0, |q| q.x),
+            snap(by0, |q| q.y),
+            snap(bx1, |q| q.x),
+            snap(by1, |q| q.y),
+        );
         for (vx0, vy0, vx1, vy1) in [snapped, (bx0, by0, bx1, by1)] {
             for &e in grow {
                 let kind = PrimitiveKind::RoundRect {
@@ -515,8 +541,16 @@ fn complete_face(
         consider(Shape::Path(d.clone()), kinds, gate_count(d), *allow, reg);
     }
     if inkvec_core::env::number("INKVEC_COMPLETION_DUMP").is_some_and(|x| x as usize == f) {
-        dump(f, &[(&u, [90, 90, 200]), (&v, [200, 200, 90]), (&l.minus(&v), [90, 200, 90])],
-             simplified.as_ref().map(|s| &s.1), (x0 - PAD, y0 - PAD, x1 + PAD, y1 + PAD));
+        dump(
+            f,
+            &[
+                (&u, [90, 90, 200]),
+                (&v, [200, 200, 90]),
+                (&l.minus(&v), [90, 200, 90]),
+            ],
+            simplified.as_ref().map(|s| &s.1),
+            (x0 - PAD, y0 - PAD, x1 + PAD, y1 + PAD),
+        );
     }
     Some(best)
 }
@@ -525,7 +559,10 @@ fn complete_face(
 /// red, eight pixels per pixel, written to `layers-<face>.ppm` in the working directory.
 fn dump(f: usize, layers: &[(&Region, [u8; 3])], cand: Option<&Region>, b: (f64, f64, f64, f64)) {
     const S: f64 = 8.0;
-    let (w, h) = (((b.2 - b.0) * S) as usize + 1, ((b.3 - b.1) * S) as usize + 1);
+    let (w, h) = (
+        ((b.2 - b.0) * S) as usize + 1,
+        ((b.3 - b.1) * S) as usize + 1,
+    );
     if w * h > 40_000_000 {
         return;
     }
@@ -688,7 +725,11 @@ fn simplified_rings(
         let covered = (0..segs.len())
             .map(|i| segment_covered(verts[i], &segs[i], e_now, u))
             .collect();
-        cyc.push(CycRing { verts, segs, covered });
+        cyc.push(CycRing {
+            verts,
+            segs,
+            covered,
+        });
     }
     let region_of = |cyc: &[CycRing]| -> Option<Region> {
         let polys: Vec<Vec<Point>> = cyc.iter().map(CycRing::polygon).collect();
@@ -723,7 +764,9 @@ fn simplified_rings(
                 let Some(reg) = region_of(&trial) else {
                     continue;
                 };
-                let Some((wx0, wy0, wx1, wy1)) = reg.minus(&current).union(&current.minus(&reg)).bbox() else {
+                let Some((wx0, wy0, wx1, wy1)) =
+                    reg.minus(&current).union(&current.minus(&reg)).bbox()
+                else {
                     continue;
                 };
                 let w = WINDOW;
@@ -779,7 +822,12 @@ fn run_band(c: &CycRing, a: usize, b: usize) -> Region {
         segments: pts[1..].iter().map(|&p| Segment::Line(p)).collect(),
         closed: false,
     };
-    shape::stroke_band(&[path], 2.0 * (UNDER + region::DY), EndCap::Butt, JoinKind::Round)
+    shape::stroke_band(
+        &[path],
+        2.0 * (UNDER + region::DY),
+        EndCap::Butt,
+        JoinKind::Round,
+    )
 }
 
 /// Run `a ..= b` moved [`UNDER`] under its cover, its ends kept: every interior vertex along
@@ -847,7 +895,10 @@ fn segment_covered(a: Point, seg: &Segment, e_now: &Region, u: &Region) -> bool 
             return false;
         }
         let n = Point::new(-d.y / l * 0.35, d.x / l * 0.35);
-        let (p1, p2) = (Point::new(p.x + n.x, p.y + n.y), Point::new(p.x - n.x, p.y - n.y));
+        let (p1, p2) = (
+            Point::new(p.x + n.x, p.y + n.y),
+            Point::new(p.x - n.x, p.y - n.y),
+        );
         let (in1, in2) = (e_now.contains(p1), e_now.contains(p2));
         match (in1, in2) {
             (true, false) => u.contains(p2),
@@ -1028,8 +1079,16 @@ fn replacements(c: &CycRing, a: usize, b: usize, e_now: &Region) -> Vec<Option3>
     //    second number is the allowance it spends).
     if run_len == 1 && is_line(a) {
         let len = va.dist(vb);
-        if let (Some(dir), Some(nrm)) = (unit(Point::new(vb.x - va.x, vb.y - va.y)), outward_normal(va, vb, e_now)) {
-            let at = |t: f64| Point::new(va.x + t * dir.x + UNDER * nrm.x, va.y + t * dir.y + UNDER * nrm.y);
+        if let (Some(dir), Some(nrm)) = (
+            unit(Point::new(vb.x - va.x, vb.y - va.y)),
+            outward_normal(va, vb, e_now),
+        ) {
+            let at = |t: f64| {
+                Point::new(
+                    va.x + t * dir.x + UNDER * nrm.x,
+                    va.y + t * dir.y + UNDER * nrm.y,
+                )
+            };
             out.push((splice(va, &[at(0.5 * len)], vb), 2.0, "bulge"));
             let t = TAPER.min(len / 3.0);
             if len > 2.0 * t {
@@ -1103,13 +1162,18 @@ fn bridges(c: &CycRing, a: usize, b: usize) -> Vec<Option3> {
         return Vec::new();
     }
     // The turn between the two tangents, and the circular arc's arm for it.
-    let turn = (ta.x * tb.y - ta.y * tb.x).atan2(ta.x * tb.x + ta.y * tb.y).abs();
+    let turn = (ta.x * tb.y - ta.y * tb.x)
+        .atan2(ta.x * tb.x + ta.y * tb.y)
+        .abs();
     let arm = if turn < 1e-6 {
         chord / 3.0
     } else {
         chord * (2.0 / 3.0) * (turn / 4.0).tan() / (turn / 2.0).sin()
     };
-    let mut arms: Vec<(f64, f64)> = [1.0, 1.25, 0.8, 1.5].iter().map(|k| (k * arm, k * arm)).collect();
+    let mut arms: Vec<(f64, f64)> = [1.0, 1.25, 0.8, 1.5]
+        .iter()
+        .map(|k| (k * arm, k * arm))
+        .collect();
     // The cubics with the run's own area and first moment.
     let mut pts = vec![va];
     let mut i = a;
@@ -1126,7 +1190,12 @@ fn bridges(c: &CycRing, a: usize, b: usize) -> Vec<Option3> {
     }
     let mut out = Vec::new();
     for (d0, d1) in arms {
-        if !(d0.is_finite() && d1.is_finite()) || d0 <= 0.0 || d1 <= 0.0 || d0 > 2.0 * chord || d1 > 2.0 * chord {
+        if !(d0.is_finite() && d1.is_finite())
+            || d0 <= 0.0
+            || d1 <= 0.0
+            || d0 > 2.0 * chord
+            || d1 > 2.0 * chord
+        {
             continue;
         }
         let c1 = Point::new(va.x + d0 * ta.x, va.y + d0 * ta.y);
@@ -1148,7 +1217,15 @@ fn bridges(c: &CycRing, a: usize, b: usize) -> Vec<Option3> {
         verts.push(va);
         segs.push(Segment::Cubic(c1, c2, vb));
         covered.push(false);
-        out.push((CycRing { verts, segs, covered }, 0.0, "bridge"));
+        out.push((
+            CycRing {
+                verts,
+                segs,
+                covered,
+            },
+            0.0,
+            "bridge",
+        ));
     }
     out
 }

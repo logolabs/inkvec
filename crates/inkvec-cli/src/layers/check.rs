@@ -97,7 +97,10 @@ pub(crate) fn propose_cover(inner: &Region, outer: &Region, slack: f64) -> Cover
                 .line(k)
                 .iter()
                 .map(|&(a0, a1)| {
-                    let first = outs.iter().rposition(|&(b0, _)| b0 <= a0 + slack).unwrap_or(0);
+                    let first = outs
+                        .iter()
+                        .rposition(|&(b0, _)| b0 <= a0 + slack)
+                        .unwrap_or(0);
                     let last = (first..outs.len())
                         .find(|&j| outs[j].1 >= a1 - slack)
                         .unwrap_or(first);
@@ -193,7 +196,14 @@ pub(crate) fn gate_count(d: &str) -> f64 {
                 'L' => (2, 2.0),
                 'T' => (2, 4.0),
                 'H' | 'V' => (1, 2.0),
-                'Q' | 'S' => (4, if c.to_ascii_uppercase() == 'Q' { 4.0 } else { 6.0 }),
+                'Q' | 'S' => (
+                    4,
+                    if c.to_ascii_uppercase() == 'Q' {
+                        4.0
+                    } else {
+                        6.0
+                    },
+                ),
                 'C' => (6, 6.0),
                 'A' => (7, 7.0),
                 'M' => (2, 2.0),
@@ -301,19 +311,39 @@ mod tests {
         assert!(!check_cover(&inner, &outer, SPAN_SLACK, &short));
         // Out by more than the slack at one end.
         let wide = spans(&[(0, 1.0, 3.12)]);
-        assert!(!check_cover(&wide, &outer, SPAN_SLACK, &propose_cover(&wide, &outer, SPAN_SLACK)));
+        assert!(!check_cover(
+            &wide,
+            &outer,
+            SPAN_SLACK,
+            &propose_cover(&wide, &outer, SPAN_SLACK)
+        ));
         let near = spans(&[(0, 1.0, 3.08)]);
-        assert!(check_cover(&near, &outer, SPAN_SLACK, &propose_cover(&near, &outer, SPAN_SLACK)));
+        assert!(check_cover(
+            &near,
+            &outer,
+            SPAN_SLACK,
+            &propose_cover(&near, &outer, SPAN_SLACK)
+        ));
         // A span bridging a gap of the outer region is refused, even when the certificate
         // claims the chain across it ...
         let bridge = spans(&[(0, 2.0, 5.5)]);
-        assert!(!check_cover(&bridge, &outer, SPAN_SLACK, &propose_cover(&bridge, &outer, SPAN_SLACK)));
+        assert!(!check_cover(
+            &bridge,
+            &outer,
+            SPAN_SLACK,
+            &propose_cover(&bridge, &outer, SPAN_SLACK)
+        ));
         let mut claim = propose_cover(&bridge, &outer, SPAN_SLACK);
         claim.rows[0][0] = (0, 1);
         assert!(!check_cover(&bridge, &outer, SPAN_SLACK, &claim));
         // ... and accepted across a crack narrower than twice the slack.
         let cracked = spans(&[(0, 0.0, 3.0), (0, 3.15, 7.0)]);
         let across = spans(&[(0, 2.0, 5.5)]);
-        assert!(check_cover(&across, &cracked, SPAN_SLACK, &propose_cover(&across, &cracked, SPAN_SLACK)));
+        assert!(check_cover(
+            &across,
+            &cracked,
+            SPAN_SLACK,
+            &propose_cover(&across, &cracked, SPAN_SLACK)
+        ));
     }
 }

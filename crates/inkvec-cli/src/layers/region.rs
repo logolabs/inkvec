@@ -168,7 +168,11 @@ impl Region {
         let Some(first) = first else {
             return Self::empty();
         };
-        let last = self.rows.iter().rposition(|r| !r.is_empty()).unwrap_or(first);
+        let last = self
+            .rows
+            .iter()
+            .rposition(|r| !r.is_empty())
+            .unwrap_or(first);
         self.rows.truncate(last + 1);
         self.rows.drain(..first);
         self.k0 += first as i32;
@@ -176,7 +180,11 @@ impl Region {
     }
 
     /// Applies `f` line by line over the union of both regions' line ranges.
-    fn combine(&self, other: &Self, f: impl Fn(&[(f64, f64)], &[(f64, f64)]) -> Vec<(f64, f64)>) -> Self {
+    fn combine(
+        &self,
+        other: &Self,
+        f: impl Fn(&[(f64, f64)], &[(f64, f64)]) -> Vec<(f64, f64)>,
+    ) -> Self {
         let lo = self.lines().start.min(other.lines().start);
         let hi = self.lines().end.max(other.lines().end);
         if hi <= lo {
@@ -279,12 +287,7 @@ impl Region {
 
     /// Area, px²: each line's span length times the line spacing.
     pub(crate) fn area(&self) -> f64 {
-        self.rows
-            .iter()
-            .flatten()
-            .map(|&(a, b)| b - a)
-            .sum::<f64>()
-            * DY
+        self.rows.iter().flatten().map(|&(a, b)| b - a).sum::<f64>() * DY
     }
 
     /// The longest total span length on any one line, px: how far a boundary is out at

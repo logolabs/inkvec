@@ -8,7 +8,10 @@ fn p(x: f64, y: f64) -> Point {
 
 /// A closed polygon as one fitted edge of lines.
 fn polygon(pts: &[(f64, f64)]) -> FittedPath {
-    let mut segs: Vec<Segment> = pts[1..].iter().map(|&(x, y)| Segment::Line(p(x, y))).collect();
+    let mut segs: Vec<Segment> = pts[1..]
+        .iter()
+        .map(|&(x, y)| Segment::Line(p(x, y)))
+        .collect();
     segs.push(Segment::Line(p(pts[0].0, pts[0].1)));
     FittedPath {
         start: p(pts[0].0, pts[0].1),
@@ -144,9 +147,23 @@ fn a_face_under_a_stroke_reaches_under_it() {
 
 #[test]
 fn the_check_refuses_a_shape_that_loses_what_the_face_shows() {
-    let v = Region::from_polygons(&[vec![p(0.0, 0.0), p(10.0, 0.0), p(10.0, 10.0), p(0.0, 10.0)]], Rule::EvenOdd);
-    let small = Region::from_polygons(&[vec![p(0.0, 0.0), p(9.0, 0.0), p(9.0, 10.0), p(0.0, 10.0)]], Rule::EvenOdd);
-    let big = Region::from_polygons(&[vec![p(-1.0, -1.0), p(11.0, -1.0), p(11.0, 11.0), p(-1.0, 11.0)]], Rule::EvenOdd);
+    let v = Region::from_polygons(
+        &[vec![p(0.0, 0.0), p(10.0, 0.0), p(10.0, 10.0), p(0.0, 10.0)]],
+        Rule::EvenOdd,
+    );
+    let small = Region::from_polygons(
+        &[vec![p(0.0, 0.0), p(9.0, 0.0), p(9.0, 10.0), p(0.0, 10.0)]],
+        Rule::EvenOdd,
+    );
+    let big = Region::from_polygons(
+        &[vec![
+            p(-1.0, -1.0),
+            p(11.0, -1.0),
+            p(11.0, 11.0),
+            p(-1.0, 11.0),
+        ]],
+        Rule::EvenOdd,
+    );
     assert!(!check::certify_completion(&v, &small, &big));
     assert!(check::certify_completion(&v, &v, &big));
     assert!(!check::certify_completion(&v, &big, &v));
@@ -158,7 +175,13 @@ fn a_corner_a_blur_cut_off_under_the_cover_is_restored() {
     // corners sit in the frame's inner corners. A blur took the tips: the fit wrote each as a
     // chamfer along the frame's inner edge. Under the frame nobody sees the tips, so the
     // completion extends the triangle's sides to meet again.
-    let tri = vec![(31.0, 11.0), (1.6, 1.2), (0.5, 0.9), (0.5, 21.1), (1.6, 20.8)];
+    let tri = vec![
+        (31.0, 11.0),
+        (1.6, 1.2),
+        (0.5, 0.9),
+        (0.5, 21.1),
+        (1.6, 20.8),
+    ];
     let frame = vec![
         (-4.0, -4.0),
         (40.0, -4.0),

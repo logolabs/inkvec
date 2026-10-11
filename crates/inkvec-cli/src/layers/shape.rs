@@ -42,7 +42,8 @@ pub(crate) fn flatten_segment(from: Point, seg: &Segment, out: &mut Vec<Point>) 
             sweep,
             end,
         } => {
-            let f = inkvec_fit::curves::arc_ellipse_center(from, rx, ry, phi, large_arc, sweep, end);
+            let f =
+                inkvec_fit::curves::arc_ellipse_center(from, rx, ry, phi, large_arc, sweep, end);
             let n = pieces(rx.max(ry) * f.delta.abs(), f.delta);
             for i in 1..=n {
                 out.push(f.at(f.theta1 + f.delta * i as f64 / n as f64));
@@ -80,7 +81,10 @@ pub(crate) fn flatten_primitive(kind: &PrimitiveKind) -> Vec<Point> {
                     Point::new(x, y + h),
                 ];
             }
-            let n = pieces(rx * std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2);
+            let n = pieces(
+                rx * std::f64::consts::FRAC_PI_2,
+                std::f64::consts::FRAC_PI_2,
+            );
             let mut out = Vec::new();
             let corners = [
                 (x + w - rx, y + rx, -std::f64::consts::FRAC_PI_2),
@@ -229,7 +233,10 @@ fn rect_spans(a: Point, b: Point, r: f64, out: &mut Vec<(i32, f64, f64)>) {
         Point::new(a.x - nx * r, a.y - ny * r),
     ];
     let ymin = corners.iter().map(|p| p.y).fold(f64::INFINITY, f64::min);
-    let ymax = corners.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max);
+    let ymax = corners
+        .iter()
+        .map(|p| p.y)
+        .fold(f64::NEG_INFINITY, f64::max);
     let ka = ((ymin + 0.5) / DY - 0.5).ceil() as i32;
     let kb = ((ymax + 0.5) / DY - 0.5).floor() as i32;
     for k in ka..=kb {
@@ -292,7 +299,11 @@ mod tests {
         };
         let band = stroke_band(&[line.clone()], 4.0, EndCap::Round, JoinKind::Round);
         let want = 20.0 * 4.0 + std::f64::consts::PI * 4.0;
-        assert!((band.area() - want).abs() < 0.6, "{} vs {want}", band.area());
+        assert!(
+            (band.area() - want).abs() < 0.6,
+            "{} vs {want}",
+            band.area()
+        );
         let butt = stroke_band(&[line], 4.0, EndCap::Butt, JoinKind::Round);
         assert!((butt.area() - 80.0).abs() < 0.6, "{}", butt.area());
     }

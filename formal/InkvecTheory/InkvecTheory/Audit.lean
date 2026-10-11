@@ -66,6 +66,8 @@ open Inkvec
 #print axioms Inkvec.Design.seam_of_exact_outline
 #print axioms Inkvec.Design.no_seam_of_completion
 #print axioms Inkvec.Design.junction_residue
+#print axioms Inkvec.Design.cut_hole
+#print axioms Inkvec.Design.cut_hole_pixel
 #print axioms Inkvec.Design.accept_monotone
 #print axioms Inkvec.Design.huber_eq_sq
 #print axioms Inkvec.Design.inlier_of_le

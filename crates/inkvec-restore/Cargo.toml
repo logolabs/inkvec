@@ -39,11 +39,11 @@ sha2 = "0.11"
 ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "download-binaries", "tls-native", "copy-dylibs", "api-27"], optional = true }
 # Default features stay on: with them off, Burn's CPU backends silently build single-threaded
 # and without SIMD.
-burn = { version = "0.21", optional = true }
+burn = { version = "0.22", optional = true }
 burn-store = { version = "0.21", default-features = false, features = ["std", "burnpack", "memmap"], optional = true }
 
 [build-dependencies]
-burn-onnx = { version = "0.21", optional = true }
+burn-onnx = { version = "0.22", optional = true }
 
 [features]
 default = []

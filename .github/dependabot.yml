@@ -17,6 +17,12 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    ignore:
+      # `dtolnay/rust-toolchain@1.98.0` is not an action version: the tag names the Rust
+      # toolchain the job installs (the workspace's, kept in step with the MSRV job's own
+      # pin). A bump to `@1.120.0` asks for a toolchain that does not exist and fails every
+      # job; the toolchain moves by hand, with the code that needs it.
+      - dependency-name: "dtolnay/rust-toolchain"
     groups:
       github-actions:
         patterns:

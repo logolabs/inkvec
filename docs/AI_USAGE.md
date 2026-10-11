@@ -55,7 +55,7 @@ During the development of Inkvec, agentic AI assistants were deployed for specif
 ### 2.2 Human Oversight, Review & Safety Guardrails
 To prevent code rot, security vulnerabilities, or algorithmic hallucinations:
 - **No Downgrading Quality Thresholds:** A strict policy is enforced preventing agents from artificially loosening regression limits. The gates require that $dE_{00}$ error and anchor turning metric rise by at most $1.0\%$, and parameter ratio rises by at most $5.0\%$.
-- **Compilation & Verification Gates:** All generated Rust code must compile under the workspace Minimum Supported Rust Version (MSRV 1.88) without warnings, pass all native unit tests, pass cross-platform builds across Linux, Windows, and macOS, and pass WebAssembly compilation (`wasm32-unknown-unknown`).
+- **Compilation & Verification Gates:** All generated Rust code must compile under the workspace Minimum Supported Rust Version (MSRV 1.89) without warnings, pass all native unit tests, pass cross-platform builds across Linux, Windows, and macOS, and pass WebAssembly compilation (`wasm32-unknown-unknown`).
 - **Citation Auditing:** All academic literature cited in technical documentation is verified against primary indexers (arXiv, IEEE, ACM, CVPR, ECCV) to eliminate hallucinated titles or non-existent paper references.
 
 ---

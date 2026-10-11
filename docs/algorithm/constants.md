@@ -406,6 +406,27 @@ half-integer lattice points (`inkvec-trace/src/symmetry.rs:19-21,176-186,220,243
 | margin viewBox precision | 2 decimals | `inkvec-cli/src/post.rs:393` | `--margin` growth | none |
 | `ci_gate.py` ratio margin | 3% relative at the one-sided 95% upper bound (dE00 1%, turning 2%) | `bench/ci_gate.py:138` `MARGINS` | regression gate on parameter count vs. artist | measured (project's compactness regression budget) |
 
+### Editability mode (`--editability`, `cli/editable.rs`, `cli/editable/`)
+
+| name | value | file:line | controls | basis |
+|---|---|---|---|---|
+| `AXIS_SNAP` | 2.5° | `inkvec-cli/src/editable.rs:77` | a handle this close to an axis snaps onto it | motivated (the artists' axis spike: 29 % of 313k handles within 0.05°); the window not swept |
+| `DIAG_SNAP` | 1.5° | `inkvec-cli/src/editable.rs:80` | a handle this close to 45° snaps onto it | motivated (a 5× lift at 45° in the artists' handles); the window not swept |
+| `G1_SNAP_DEG` | 3° | `inkvec-cli/src/editable.rs:82` | a join within a ring this close to smooth counts as smooth: its handles are snapped together | motivated (the artists' G1 lift); not swept |
+| `KINK_DEG` | 30° | `inkvec-cli/src/editable.rs:87` | a join within a ring turning at most this much is made smooth (`pass_g1`), if the ring still guards | motivated (the artists' joins between curves are smooth or turn by more than 30°: 8.6 % of them in 3-30°, against 25.0 % of the trace's; R3.1) |
+| `COLLINEAR_DEG` | 0.5° | `inkvec-cli/src/editable.rs:90` | two lines meeting at most this far from straight are written as one (`pass_collinear`) | derived (the battery's `collinear` threshold, `AXIS_DEG` in `bench/inkvec_bench/design.py`) |
+| `LEN_MATCH` | 0.10 | `inkvec-cli/src/editable.rs:92` | handle lengths within this ratio are equalised | motivated (the artists' handle-length lift); not swept |
+| `NODE_ALIGN` | 0.30 px | `inkvec-cli/src/editable.rs:94` | node coordinates this close share one value | motivated (98 % of the artists' nodes share a coordinate with another); not swept |
+| `MIRROR_KEEP` | 0.95 | `inkvec-cli/src/editable.rs:96` | share of points whose reflection must find a partner for a mirror lock | none |
+| `EDIT_SLACK` | 0.5 px | `inkvec-cli/src/editable.rs:100` | absolute slack on top of `3σ` in every pass's guard | measured (the deviation the artists' own handles carry from the pixel-optimal fit) |
+| `MIRROR_SLACK` | 1.5 px | `inkvec-cli/src/editable.rs:104` | a mirror lock's guard | motivated (traced halves differ by 1-3 px) |
+| `EMIT_GRID` | 0.01 px | `inkvec-cli/src/editable.rs:111` | the mirror axis snaps to the emitter's step | derived (`EMIT_DECIMALS`) |
+| `AXIS_NODE` | 1.0 px | `inkvec-cli/src/editable.rs:115` | a node this close to the mirror axis is the crossing | none |
+| `EDIT_PREFERENCE` | credit 3.0, written count free | `inkvec-cli/src/editable/curves.rs:25` | the extremum re-segmentation's preference in this mode | none (more than the fit's 1.0; held to `EDIT_SLACK`) |
+| arc handle length | `4/3·tan(Δ/4)·r` | `inkvec-cli/src/editable/curves.rs` (`arc_as_cubics`) | the cubic standing for a piece of circle of `Δ ≤ 112.5°` | derived (Riškus 2006: 0.5523·r for a quarter, radial error ≤ 2.73e-4·r; 1.04e-3·r at 112.5°, computed) |
+| `ARC_CUT_GAP_PX` | 1.0 px (and at most 22.5°) | `inkvec-cli/src/editable/curves.rs:68` | no cut at an extremum this close to an arc's end, along the arc | motivated (a 0.4 px sliver's handles are too short for two decimals to point; the fit's `END_GAP_PX`); not swept |
+| `JUNCTION_G1_DEG` | 30° | `inkvec-cli/src/editable/junctions.rs:30` | a join between two edges turning at most this much is made smooth, if both still guard | motivated (the artists' kinked band, 3-30°: 8.6 % of their curve joins, 25.0 % of the trace's) |
+
 ## 14 — Fast mode ([14-fast-mode.md](14-fast-mode.md))
 
 Fast mode's own stages, under `inkvec-trace/src/fast/`. Several rows only choose a

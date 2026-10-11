@@ -65,6 +65,84 @@ order and names (`paint_tree`, `face_ids`), strokes (`annulus_strokes`), writing
 with same-coloured siblings merged into one compound path), seams (`seam_overrides`), and
 layers (`write_layers`).
 
+### Before the writer: `--editability` (`crates/inkvec-cli/src/editable.rs`)
+
+With `--editability`, `finish_color` (`pipeline.rs`) hands every fitted edge to
+`editable::edit_all` after repair, mirrors and fills and before `emit_color`, so nothing the
+writer does can re-break what it locked. Every pass is held to one test: sample the edited
+ring at 8 points per segment and require each sample to lie within `3·σ_j + EDIT_SLACK`
+(0.5 px) of some measured point (`MIRROR_SLACK`, 1.5 px, for a mirror lock), one-sided. A
+change that fails it is undone, one join, node or ring at a time. The passes, in the order
+`edit_all` runs them:
+
+1. **Arcs as cubics** (`editable/curves.rs`, `pass_arcs`). Every circular arc is written as the
+   cubics a drawing tool writes: cut at each angle that is a whole quarter turn inside it, so
+   every cut is an x or y extremum with both handles exactly on an axis, each piece the
+   standard approximation with handles `4/3·tan(Δ/4)·r` long (0.5523·r for a quarter; Riškus
+   2006, *Information Technology and Control* 35(4), whose largest radial error with that
+   constant is 2.73e-4·r). A cut within `ARC_CUT_GAP_PX` (1 px, along the arc) of the arc's
+   end is not made: the end is then all but at the extremum, and the sliver the cut would
+   leave has handles too short for two decimals to point (a 0.4 px piece on
+   `material-icons/dining`). The piece beside it then turns by up to 112.5° (the gap is
+   capped at 22.5°), with a radial error under 1.1e-3·r. The fit writes arcs as `A` (19 % of
+   the trace's segments at 512 px on white, against the artists' 4 %; the artists write 67 %
+   cubics); an editor shows an `A` as two nodes with no handles, wherever on the circle they
+   fall. A stroke's centreline gets the same conversion when it is written (`ribbons.rs`,
+   `arcs_as_cubics`); at 1.1e-3·r it needs no guard.
+2. **Runs re-noded at extrema** (`pass_extrema`): `inkvec_fit::extrema::anchor_extrema`
+   (stage 11, *Nodes at extrema*) with `EDIT_PREFERENCE`: 3 parameters credited per anchored
+   node instead of the fit's 1, and the written count free to change, so a segment that spans
+   an extremum gains a node there. Kept only if the ring still guards. These two rewrite
+   segments, so they run before anything that reads a node or a handle.
+3. **Mirror lock, then node alignment** (`pass_mirror`, `pass_nodes`): the passes that move
+   nodes, before any handle is pointed. A node that alignment moves now carries its handles,
+   as in an editor; left behind, a handle a pixel long turned by up to 15° for a 0.3 px move
+   and a smooth node became a kink (`material-icons/dining`: kinked 0 → 0.18 from this pass
+   alone).
+4. **Collinear lines merged** (`pass_collinear`). Node alignment lines nodes up on shared
+   coordinates and mirror lock splits a line where its axis crosses it; both leave a node in
+   the middle of a straight run, which artists do not draw (the battery's `collinear` was
+   15 % further from the artist's file under `--editability` than without it). Two lines
+   meeting at a turn of at most `COLLINEAR_DEG` (0.5°, the battery's own threshold) are
+   written as one, the closing join of a closed ring included. Only the merged line is
+   judged, against the two it replaces (it may stray no further than they did, or than
+   `EDIT_SLACK`): judged on the whole ring, a mirror-locked ring, held to the wider
+   `MIRROR_SLACK`, never lost the node its lock had put on the axis.
+5. **G1 within a ring** (`pass_g1`). Every join that turns by at most `KINK_DEG` (30°) is
+   made smooth: between two cubics both handles turn onto the bisector, and next to a line
+   the cubic's handle turns onto the line's direction. 30° is where the artists' own joins
+   between curves separate: smooth (within 3°) or a corner of more than 30°, with only
+   8.6 % between (R3.1 of `docs/theory/chain-representation.md`). The pass used to stop at
+   `G1_SNAP_DEG` (3°), which only made exact what was already smooth to the eye, and never
+   looked at a join next to a line. It also turned the wrong handle, since it was written:
+   the incoming cubic's first control point, at its far end, instead of the one at the join,
+   so a join it "smoothed" kept its kink and the far end gained one (`material-icons/dining`:
+   kinked 0.18 → 0.45 from this pass, 0 now).
+6. **Handle snaps** (`pass_handles`), per node: onto an axis within 2.5°, else onto the 45°
+   diagonal within 1.5°. A smooth node's two handles snap together or not at all; snapping
+   them one at a time turned one handle of a pair whose direction sat on either side of the
+   window's edge and left a kink where there was none (the battery's `kinked` was 3.9 %
+   further under `--editability`). A handle that leaves a line smoothly is not snapped, since
+   the line fixes its direction.
+7. **Equal handle lengths** (`pass_equalize`), as before.
+The per-ring passes (4 to 7) see a boundary with no junction on it as closed. The planar
+map hands such a boundary over as one open edge that ends where it starts, at a point of its
+own choosing, so its closing join was a join no pass ever looked at: neither these, which
+treat an open ring's ends as ends, nor the junction pass, which needs two edges.
+`isolated_loops` finds the edges that end where they start at a point no other edge ends at;
+they are flagged closed for passes 4 to 7 and the flag is put back after them.
+
+8. **Joins at junctions** (`editable/junctions.rs`, `pass_junctions`), last. The other passes
+   see one edge at a time, between two junctions, so they never see the join where a face's
+   outline passes from one edge to the next. That is where layered art shows: a shape painted
+   over another leaves the lower one's visible outline with a T-junction on each side, and the
+   upper one's outline runs smoothly through both, but its two edges were fitted apart and
+   meet at a kink. The pass walks each face's rings and turns the handles either side of every
+   join between two edges that turns by at most `JUNCTION_G1_DEG` (30°) onto one direction:
+   a line's own direction when one side is a line; else the side that the handle pass left
+   exactly on an axis, when the other is not, so the snap survives; else the bisector. No
+   node moves, so the junction stays shared and no seam opens; both edges must still guard.
+
 ### The path grammar actually emitted
 
 Four serialisers exist:

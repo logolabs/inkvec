@@ -104,6 +104,7 @@ pub(crate) fn stage(
         h: map.height,
         cfg: &cfg_r,
         decimals: crate::pathdata::emit_decimals(args.precision),
+        editable: args.editability,
     });
     if let Some(line) = &out.line {
         crate::diag::stage(args.quiet, || line.clone());
@@ -142,6 +143,9 @@ pub(crate) struct Inputs<'a> {
     pub(crate) cfg: &'a FitConfig,
     /// Decimals per written coordinate.
     pub(crate) decimals: usize,
+    /// `--editability`: a centreline's circular arcs are written as cubics cut at their
+    /// extrema (`crate::editable::arcs_as_cubics`), as the fill outlines' are.
+    pub(crate) editable: bool,
 }
 
 /// What the stage decided: per face written as strokes, its element text, and a report
@@ -233,7 +237,13 @@ pub(crate) fn choose(inp: &Inputs) -> Ribbons {
             let hex = inkvec_trace::color::to_hex(*c);
             out.elements.insert(
                 o.face,
-                element(r, &hex, inp.decimals, &format!("stroke-{}", o.face)),
+                element(
+                    r,
+                    &hex,
+                    inp.decimals,
+                    &format!("stroke-{}", o.face),
+                    inp.editable,
+                ),
             );
             out.absorbed.extend(absorbed_by(inp, &nest, o.face));
             saved += o.k_vanish - r.params();
@@ -497,7 +507,7 @@ fn outline_params(inp: &Inputs, nest: &rings::Nesting, g: usize) -> f64 {
 /// the gate's `turning` signal does -- does not read the pen lifts between strokes as
 /// turns (lucide at 128 px: 0.0303 -> 0.0389 with one compound path per face, 0.0303 ->
 /// 0.0306 with the move-tos taken as breaks).
-fn element(r: &Ribbon, hex: &str, decimals: usize, id: &str) -> String {
+fn element(r: &Ribbon, hex: &str, decimals: usize, id: &str, editable: bool) -> String {
     let style = format!(
         "fill=\"none\" stroke=\"{hex}\" stroke-width=\"{w:.decimals$}\" stroke-linecap=\"{c}\" stroke-linejoin=\"{j}\"",
         w = r.width,
@@ -519,7 +529,12 @@ fn element(r: &Ribbon, hex: &str, decimals: usize, id: &str) -> String {
             }
             None => {
                 let mut d = String::new();
-                fmt_fitted(&line.path, line.path.closed, decimals, &mut d);
+                if editable {
+                    let path = crate::editable::arcs_as_cubics(&line.path);
+                    fmt_fitted(&path, path.closed, decimals, &mut d);
+                } else {
+                    fmt_fitted(&line.path, line.path.closed, decimals, &mut d);
+                }
                 parts.push(format!("<path id=\"{id}-{k}\" d=\"{d}\"/>"));
             }
         }
@@ -605,17 +620,17 @@ mod tests {
 
     #[test]
     fn element_writes_one_stroked_path_with_its_join() {
-        let el = element(&ribbon(1.0, Join::Miter), "#000000", 2, "stroke-3");
+        let el = element(&ribbon(1.0, Join::Miter), "#000000", 2, "stroke-3", false);
         assert_eq!(
             el,
             "<path id=\"stroke-3\" d=\"M1.00,2.00L11.00,2.00\" fill=\"none\" stroke=\"#000000\" stroke-width=\"4.00\" stroke-linecap=\"round\" stroke-linejoin=\"miter\"/>"
         );
-        assert!(element(&ribbon(1.0, Join::Round), "#123456", 2, "s")
+        assert!(element(&ribbon(1.0, Join::Round), "#123456", 2, "s", false)
             .contains("stroke-linejoin=\"round\""));
         // Two centrelines: one path each, under a group that carries the style.
         let mut two = ribbon(1.0, Join::Round);
         two.lines.push(two.lines[0].clone());
-        let el = element(&two, "#000000", 2, "s");
+        let el = element(&two, "#000000", 2, "s", false);
         assert_eq!(
             el,
             "<g id=\"s\" fill=\"none\" stroke=\"#000000\" stroke-width=\"4.00\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path id=\"s-0\" d=\"M1.00,2.00L11.00,2.00\"/><path id=\"s-1\" d=\"M1.00,2.00L11.00,2.00\"/></g>"

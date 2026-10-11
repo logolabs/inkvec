@@ -67,7 +67,21 @@ edit at 512 px), a change passes as "within-noise" unless its upper bound reache
 smallest rise the set would detect (Card et al. 2020), and the report marks those passes.
 
 Icons whose SVG bytes match the baseline's (SHA-256) take the baseline's numbers exactly,
-so a byte-identical build is "identical" on every axis whatever platform scores it.
+so a byte-identical build is "identical" on every axis whatever platform scores it. They are
+not even scored: each SVG is hashed as soon as it is traced, and a match skips the renders
+(`svgeval.score_one`; `--rescore` scores every icon, to check the scorer). What the artist's
+file contributes (its reference render, its side of `geom`, its design profile) is cached in
+`bench/data/_cache` by the file's hash; each condition's line says where the CPU went.
+
+Human statistics
+----------------
+Every traced icon also gets the design battery (`inkvec_bench/design.py`): statistics of how
+the file is drawn (segment kinds, lines and handles on the axes, smooth joins at the extrema,
+corner angles, the design grid, repeated values, primitives, layers, ...), each as a
+divergence from the artist's file. They are reported, not gated: a table of family-macro
+means per condition on the console, every icon's values in `--report-json` (`human`) and in
+`--artifact-dir` (`human-<platform>.json`); `bench/human_stats.py` reads them per family,
+lists the oddities and compares two builds or flag sets.
 
 Baselines
 ---------
@@ -101,6 +115,7 @@ checkout; only generated output (the `_gate` work folder, the cache) is ignored.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import functools
 import hashlib
 import json
@@ -118,6 +133,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "bench"))
 
 import gate_stats  # noqa: E402
+import human_stats
 import svgeval  # noqa: E402
 
 BASELINE = ROOT / "bench" / "gate" / "baseline.json"      # legacy scalar baseline (09-19)
@@ -274,25 +290,44 @@ def in_ci() -> bool:
 
 
 # --------------------------------------------------------------------------- scoring
-def score_condition(exe: Path, cond: Condition, items: list[dict], workers: int) -> tuple[dict, list[str]]:
+def score_condition(exe: Path, cond: Condition, items: list[dict], workers: int,
+                    base_rows: dict | None = None, pool=None) -> tuple[dict, list[str]]:
     """Trace and score every icon under one condition.
 
-    Returns ({"family/stem": {"corpus", "de00", "turning", "ratio", "self_res", "sha256"}},
+    Returns ({"family/stem": {"corpus", *ROW_AXES, "sha256", "reused", "human", "cpu"}},
     failures). The score cache is off: the gate must measure this build, not remember one.
+    An icon whose SVG is byte-identical to `base_rows`' is traced but not scored again: it
+    takes the baseline's numbers, which `compare_condition` would substitute anyway.
     """
     svgeval.set_tier(cond.tier)
     work = ROOT / "bench" / "data" / "_gate" / cond.name
+    known = {k: (r["sha256"][:SHA_CHARS], {ax: r[ax] for ax in ROW_AXES})
+             for k, r in (base_rows or {}).items() if r.get("sha256")}
     t0 = time.time()
     ss = svgeval.score_set(exe, cond.name, items, work, extra_args=cond.args,
-                           workers=workers, use_cache=False)
+                           workers=workers, use_cache=False, known=known, human=True, pool=pool)
     rows = {f"{i.corpus}/{i.stem}": {"corpus": i.corpus, "de00": i.de00, "turning": i.turning,
                                      "ratio": i.ratio, "self_res": i.self_res,
                                      "geom": i.geom, "geom_far": i.geom_far,
-                                     "sha256": i.sha256[:SHA_CHARS]}
+                                     "sha256": i.sha256[:SHA_CHARS], "reused": i.reused,
+                                     "human": i.human, "cpu": i.cpu}
             for i in ss.images}
     print(f"  {cond.name}: {len(rows)} icons in {time.time() - t0:.0f} s"
-          + (f", {len(ss.failures)} failed" if ss.failures else ""), flush=True)
+          + (f", {len(ss.failures)} failed" if ss.failures else "") + "; " + cpu_line(rows),
+          flush=True)
     return rows, ss.failures
+
+
+def cpu_line(rows: dict) -> str:
+    """Where one condition's CPU time went, per icon: the tracer, the gate's signals, the
+    design battery; and how many icons were byte-identical to the baseline (not re-scored)."""
+    n = max(1, len(rows))
+    tot = {k: sum(r.get("cpu", {}).get(k, 0.0) for r in rows.values()) / n
+           for k in ("trace", "score", "human")}
+    reused = sum(bool(r.get("reused")) for r in rows.values())
+    return (f"CPU {sum(tot.values()):.2f} s/icon (trace {tot['trace']:.2f}, scoring "
+            f"{tot['score']:.2f}, design battery {tot['human']:.3f}); {reused} byte-identical "
+            "to the baseline, not re-scored")
 
 
 def summarise(rows: dict) -> dict:
@@ -515,6 +550,9 @@ def main() -> int:
                          "never a verdict to merge on; cannot write a baseline)")
     ap.add_argument("--bypass-gate", type=str, default=None, metavar="JUSTIFICATION",
                     help="Bypass a failing gate if the user agreed and gives a strong justification")
+    ap.add_argument("--rescore", action="store_true",
+                    help="score every icon, also those byte-identical to the baseline's (their "
+                         "verdict is the same either way; this checks the scorer itself)")
     a = ap.parse_args()
     if a.sample is not None and a.write_baseline:
         ap.error("--sample cannot write a baseline: a baseline holds the whole set")
@@ -556,17 +594,25 @@ def main() -> int:
              f"baseline {shown(bfile)}"
              if base_doc else f"legacy mode ({shown(BASELINE)})"), flush=True)
     results, failures = {}, []
-    for name in names:
-        rows, fails = score_condition(exe, BY_NAME[name], items, a.workers)
-        results[name] = with_gaps(rows, BY_NAME[name])
-        if len(rows) < len(items) - 2:
-            failures.append(f"{name}: only {len(rows)} of {len(items)} icons scored "
-                            f"({'; '.join(fails[:3])})")
+    with contextlib.ExitStack() as stack:
+        pool = stack.enter_context(svgeval.scoring_pool(a.workers)) if a.workers > 1 else None
+        for name in names:
+            cond_base = (base_doc or {}).get("conditions", {}).get(name)
+            base_rows = unpack_rows(cond_base["icons"]) if cond_base and not a.rescore else None
+            rows, fails = score_condition(exe, BY_NAME[name], items, a.workers, base_rows, pool)
+            results[name] = with_gaps(rows, BY_NAME[name])
+            if len(rows) < len(items) - 2:
+                failures.append(f"{name}: only {len(rows)} of {len(items)} icons scored "
+                                f"({'; '.join(fails[:3])})")
 
     doc = baseline_document(exe, results)
+    human = human_stats.document(results)
     if a.artifact_dir:
         write_json(a.artifact_dir / f"{tag}.json", doc)
         print(f"wrote this run as {a.artifact_dir / (tag + '.json')}")
+        (a.artifact_dir / f"human-{tag}.json").write_text(json.dumps(human), encoding="utf-8",
+                                                           newline="\n")
+    human_stats.print_summary(human)
     if failures:
         print("\nregression gate FAILED: icons failed to trace or score\n")
         for f in failures:
@@ -624,7 +670,11 @@ def main() -> int:
     if a.report_json:
         write_json(a.report_json, {"platform": tag, "legacy": legacy, "failures": gate_fail,
                                    "summaries": {n: d["summary"] for n, d in doc["conditions"].items()},
-                                   "verdicts": verdict_json(verdicts)})
+                                   "verdicts": verdict_json(verdicts),
+                                   "per_icon": {n: {k: {ax: r[ax] for ax in REPORTED_AXES}
+                                                 for k, r in sorted(rows.items())}
+                                             for n, rows in results.items()},
+                                   "human": human})
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
             fh.write(markdown_summary(verdicts, legacy) if verdicts else levels_markdown(doc, gate_fail))

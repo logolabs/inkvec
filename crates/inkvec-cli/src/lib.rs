@@ -1031,11 +1031,12 @@ fn restore_prepass(
         probe: None,
         restored: false,
     };
-    if args.restore == inkvec_restore::Mode::Off {
+    let mode = args.restore_mode();
+    if mode == inkvec_restore::Mode::Off {
         return Ok(pass);
     }
     let mut auto_probe = None;
-    if args.restore == inkvec_restore::Mode::Auto {
+    if mode == inkvec_restore::Mode::Auto {
         // The residual alone reads smooth shading in clean art as damage, so `auto` also
         // needs the file or the pixels to say the input was compressed (see `damage`). That
         // evidence is asked first: it is the cheap half (a flag, or the ringing score), while

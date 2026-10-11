@@ -367,7 +367,7 @@ fn a_lone_small_shape_on_a_near_empty_canvas_is_drawn() {
 /// load for one with it, so both builds take the same path.
 fn no_restorer(mode: inkvec_restore::Mode) -> Args {
     Args {
-        restore: mode,
+        restore: Some(mode),
         // Below any residual, so `auto` always decides to restore.
         restore_threshold: -1.0,
         restore_weights: Some("no-such-dir/restorer.onnx".into()),
@@ -636,7 +636,7 @@ fn pipeline_with_select_hypotheses() {
 #[test]
 fn pipeline_with_restore_auto() {
     let args = Args {
-        restore: inkvec_restore::Mode::Auto,
+        restore: Some(inkvec_restore::Mode::Auto),
         ..Args::default()
     };
     let t = trace_image(square(), &args).expect("trace succeeds");

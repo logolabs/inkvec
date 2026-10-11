@@ -59,7 +59,7 @@ Inkvec implements a dual-tier neural pre-processing architecture. These two neur
 | **Extreme Clamping / Snapping** | **`SNAP_LEVELS = 6`** (`crates/inkvec-restore/src/lib.rs:101`) | Channel-wise affine **`clean::match_flats`** (`crates/inkvec-sr/src/clean.rs:206`) |
 | **Stochastic Routing Fix** | N/A (deterministic feed-forward CNN) | **Pinned Seed `ROUTING_SEED = 0x5641_4331`** ("VAC1", `tools/inkvec_sr/model.py:40`) |
 | **Damage Gating** | `inkvec_restore::decide` (`crates/inkvec-restore/src/lib.rs:568`) | `inkvec_sr::decide` (`crates/inkvec-sr/src/lib.rs:171`) |
-| **CLI Flag** | `inkvec --restore <auto\|on\|off>` (default: `off`) | `inkvec --sr <auto\|on\|off>` (default: `off`) |
+| **CLI Flag** | `inkvec --restore <auto\|on\|off>` (default: `auto` in Quality mode when the build can restore, else `off`) | `inkvec --sr <auto\|on\|off>` (default: `off`) |
 | **Tracer Intake Interaction** | Forces tracer **`--lossy on`** (soft intake) when restoration triggers | Runs before intake normalization; downsampled to target scale |
 
 > **Critical Architectural Clarification (The Arrhenius Attribution):**

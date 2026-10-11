@@ -302,7 +302,7 @@ impl Settings {
             bilevel: black_and_white,
             monochrome,
             native_alpha: trace_transparency,
-            restore: clean_up_damage.restore(),
+            restore: Some(clean_up_damage.restore()),
             harmonize: match_repeated_shapes,
             harmonize_threshold: match_threshold,
             content_units: fewer_paths,

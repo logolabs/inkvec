@@ -237,7 +237,7 @@ fn test_sr_and_restore_error_recovery_paths() {
 
     // Restore Auto with threshold -1.0 forcing Restore decision; since tools/inkvec_restore does not exist, recovers gracefully
     let args_restore = Args {
-        restore: inkvec_restore::Mode::Auto,
+        restore: Some(inkvec_restore::Mode::Auto),
         restore_threshold: -1.0,
         // A lossy container, the sign of compression `auto` needs besides the residual.
         lossy: inkvec_sr::Mode::On,
@@ -398,7 +398,7 @@ fn test_sr_prepass_execution() {
 fn test_restore_prepass_execution() {
     let img = make_square();
     let args_res = Args {
-        restore: inkvec_restore::Mode::On,
+        restore: Some(inkvec_restore::Mode::On),
         restore_command: Some(IDENTITY_RESTORER.into()),
         quiet: false,
         ..Args::default()
@@ -466,7 +466,7 @@ fn test_cli_main_from_valid_args() {
 fn test_restore_auto_kept_probe_with_normalisation() {
     let img = make_square();
     let args = Args {
-        restore: inkvec_restore::Mode::Auto,
+        restore: Some(inkvec_restore::Mode::Auto),
         restore_threshold: 1000.0, // High threshold -> Decision::Keep
         max_dim: 32,               // Forces normalised = true
         sr: inkvec_sr::Mode::Off,

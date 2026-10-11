@@ -22,10 +22,12 @@ allow = [
     "Unicode-3.0", "Unicode-DFS-2016", "Unlicense", "CC0-1.0", "BSL-1.0",
     "Apache-2.0 WITH LLVM-exception", "CDLA-Permissive-2.0",
 ]
-# Weak copyleft, file-level, reached only through the optional Burn restorer's build
-# dependency (`burn-onnx`, feature `model`): never in the default build, and listed in
-# docs/THIRD_PARTY.md. Named per crate so a new MPL dependency is still a decision.
+# Weak copyleft, file-level, reached only through the optional Burn restorer (`burn-onnx`, and
+# since Burn 0.22 `buildid`, which CubeCL's runtime reads the binary's build id with; feature
+# `model`): never in the default build, and listed in docs/THIRD_PARTY.md. Named per crate so
+# a new MPL dependency is still a decision.
 exceptions = [
+    { allow = ["MPL-2.0"], crate = "buildid" },
     { allow = ["MPL-2.0"], crate = "colored" },
     { allow = ["MPL-2.0"], crate = "option-ext" },
 ]

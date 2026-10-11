@@ -130,6 +130,23 @@
     </section>
 
     <section>
+      <h2>Asking for a file to edit, not just to look at</h2>
+      <p>With <code>--editability</code>, a set of passes runs just before the file is written
+        and spends a few numbers on structure a designer can work with, each change kept only
+        if the outline stays within a fraction of a pixel of what was measured. Curves that
+        the tracer wrote as circular arcs are rewritten the way drawing tools write circles:
+        as curves cut at their top, bottom, left and right, every handle there pointing
+        straight along an axis, to within three ten-thousandths of the radius. Smooth stretches
+        get their joins at those same extreme points. A join that bends by less than thirty
+        degrees is made smooth, since artists draw a join either smooth or as a clear corner
+        and almost never in between; two straight pieces that meet in a straight line become
+        one. And where one shape's outline passes
+        from one boundary piece to the next at a junction with a third colour (what a shape
+        painted over another leaves behind), the slight kink the separate fits left there is
+        turned smooth, because the artist's outline ran straight through it.</p>
+    </section>
+
+    <section>
       <h2>The last few knobs: minifying, dropping the background, resizing the canvas</h2>
       <p>A few finishing options are entirely optional and change only how the file is
         written, never the picture itself. One strips every internal label and every trailing

@@ -411,7 +411,7 @@ fn finish_color(
     // Editability mode: post-fit structure passes, every one guarded to the ring's own
     // tolerance. Runs after repair and harmonization so nothing re-breaks what was locked.
     if args.editability {
-        let stats = editable::edit_all(&polys, &mut fitted, &prims);
+        let stats = editable::edit_all(&polys, &mut fitted, &prims, &order, cfg);
         diag::stage(args.quiet, || stats.summary());
     }
     let doc = ColorDoc {

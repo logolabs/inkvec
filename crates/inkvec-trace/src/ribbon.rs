@@ -708,7 +708,7 @@ pub fn path_chi2(points: &[Point], sigma: &[f64], path: &FittedPath) -> f64 {
 /// caps with a notch between them. The last segment's end is moved onto the start; the
 /// stroke solve then refits the geometry round it.
 fn fit_chain(poly: &Polyline, cfg: &FitConfig) -> Centreline {
-    let mut curve = multimodel::optimal_multimodel(poly, cfg);
+    let mut curve = inkvec_fit::extrema::without(|| multimodel::optimal_multimodel(poly, cfg));
     if poly.closed {
         curve.closed = true;
         let start = curve.start;

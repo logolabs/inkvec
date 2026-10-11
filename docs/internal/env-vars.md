@@ -81,7 +81,7 @@ No name from an unmerged research branch is listed: only what the code in this t
 | `INKVEC_DUMP_CONTOUR` | path | unset | crates/inkvec-trace/src/planar.rs:582 | docs/algorithm/07-subpixel.md, docs/algorithm/14-fast-mode.md | appends refined boundary points and sigmas. |
 | `INKVEC_DUMP_LABELS` | path | unset | crates/inkvec-trace/src/lib.rs:586 | docs/algorithm/04-regions.md | writes the label image as PPM. |
 | `INKVEC_DUMP_MAP` | path | unset | crates/inkvec-cli/src/pipeline.rs:580 | nothing | writes the planar map (neural label generation). |
-| `INKVEC_EDIT_DEBUG` | flag | off | crates/inkvec-cli/src/editable.rs:677 | nothing | editability mirror pass. |
+| `INKVEC_EDIT_DEBUG` | flag | off | crates/inkvec-cli/src/editable.rs:908, crates/inkvec-cli/src/editable/junctions.rs:196 | nothing | editability mirror pass, and the joins at junctions. |
 | `INKVEC_EMIT_DECIMALS` | count | `EMIT_DECIMALS` (2) | crates/inkvec-cli/src/pathdata.rs:50 | CHANGELOG.md, bench/perceptual_probe.py, docs/algorithm/13-emit.md, docs/algorithm/constants.md | coordinate decimals; bench/perceptual_probe.py isolates rounding with it. |
 | `INKVEC_EVDBG` | flag | off | crates/inkvec-trace/src/gradient.rs:895, crates/inkvec-trace/src/gradient.rs:1024, crates/inkvec-trace/src/gradient/carve.rs:390 (+1) | docs/algorithm/05-gradients.md | fill-evidence and gradient-refusal trace. |
 | `INKVEC_FAB_TIMING` | flag | off | crates/inkvec-fab/src/lib.rs:92, crates/inkvec-fab/src/lines.rs:293 | nothing | inkvec-fab timings. |
@@ -123,7 +123,7 @@ No name from an unmerged research branch is listed: only what the code in this t
 | `INKVEC_DECODE_SHARE` | flag | off | crates/inkvec-trace/src/decode.rs:834 | docs/algorithm/09-decode.md | decode ribbon width pooling. |
 | `INKVEC_DECODE_THIN` | number (px) | `THIN_PX` 2.5 | crates/inkvec-trace/src/decode.rs:680, crates/inkvec-trace/src/decode/ribbon.rs:91 | docs/algorithm/09-decode.md | decode width gate. |
 | `INKVEC_EDGE_INK_DE00` | number | 4.0 | crates/inkvec-trace/src/ink_ideas.rs:874 | nothing | ink_ideas rule 5. |
-| `INKVEC_EDIT_PASSES` | text list | all | crates/inkvec-cli/src/editable.rs:962 | nothing | run only the named editability passes, to price each. |
+| `INKVEC_EDIT_PASSES` | text list | all | crates/inkvec-cli/src/editable.rs:1286 | nothing | run only the named editability passes, to price each. |
 | `INKVEC_FREE_CUBIC` | flag | off | crates/inkvec-fit/src/candidates.rs:85 | crates/inkvec-fit/Cargo.toml, docs/algorithm/11-fitting.md | free-tangent cubic candidate (does not pay; see candidates.rs). |
 | `INKVEC_G1` | flag | off | crates/inkvec-fit/src/multimodel.rs:259 | crates/inkvec-fit/Cargo.toml, docs/algorithm/11-fitting.md, docs/algorithm/13-emit.md, tools/quality_audit/REPORT-2026-09-26.md | `merge::snap_smooth_joins`. |
 | `INKVEC_G1DBG` | flag | off | crates/inkvec-fit/src/merge/snap.rs:250 | docs/algorithm/11-fitting.md | snap_smooth_joins trace. |

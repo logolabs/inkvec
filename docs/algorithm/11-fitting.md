@@ -17,7 +17,7 @@ for every boundary of the colour path from `fit_boundaries`
 (stage 12). Stage mark `"fit_dp"` (`crates/inkvec-cli/src/pipeline.rs:494`, in
 `fit_and_repair`).
 
-The crate's own overview (`crates/inkvec-fit/src/lib.rs:1-58`) lists the seven steps of the
+The crate's own overview (`crates/inkvec-fit/src/lib.rs:1-58`) lists the eight steps of the
 shipping fit in order; this page follows them and adds what the code comments measured.
 
 ## What problem this solves
@@ -516,6 +516,7 @@ polyline the fit was computed against:
 if max_span == usize::MAX {
     crate::merge::merge_free_cubics(&mut fit.path, shifted, &fit.vertices, cfg);
     crate::merge::sharpen_corners(&mut fit.path);
+    crate::extrema::anchor_extrema(&mut fit.path, shifted, cfg, crate::extrema::FIT);
     #[cfg(feature = "research")]
     {
         if research::axis() { crate::merge::snap_axis_aligned(/* ... */); }
@@ -529,6 +530,7 @@ if max_span == usize::MAX {
 |---|---|---|
 | `merge_free_cubics` | **on** | every uncapped fit (`max_span == usize::MAX`) |
 | `sharpen_corners` | **on** | same |
+| `anchor_extrema` (`extrema.rs`) | **on** | same; see *Nodes at extrema* below |
 | `snap_axis_aligned` | **off** | compiled only with `--features research` (`merge.rs:811-816`), and then only with `INKVEC_AXIS` set |
 | `snap_smooth_joins` | **off** | research builds only, with `INKVEC_G1` set |
 | structural simplifier | **off** | research builds only, with `INKVEC_STRUCTURAL` set |
@@ -655,6 +657,114 @@ recognised: a cubic that *is* the chamfer (chord ≤ `SHARPEN_MAX_CHORD = 2.5`),
 straight edge with a chamfer cubic at each end (chord ≤ `SHARPEN_MAX_EDGE = 8.0`)
 (`merge.rs:565-574`). `SHARPEN_MIN_TURN` *is* `crate::CORNER_TURN_MIN` (`merge.rs:575-580`):
 "They were independent copies of `PI / 6.0` until 2026-09-08."
+
+### Nodes at extrema: `extrema.rs`
+
+`anchor_extrema` (`extrema.rs`) runs after `sharpen_corners` on every uncapped fit, on the
+same centred polyline. It re-segments each smooth run of the fitted path so that its nodes sit
+where the curve is horizontal or vertical and its joins are smooth, wherever the fit's own
+objective prefers that.
+
+**The convention.** Type designers and icon artists put a curve's on-curve points at its x and
+y extrema. Adobe's *Type 1 Font Format* (1990), §4.1 "Points at Extremes": an endpoint "should
+be placed at most horizontal or vertical extremes. This implies that most curves should not
+include more than 90 degrees of arc"; §4.2 "Tangent Continuity": at a smooth transition the
+node and the control points either side "should all be collinear. This is especially important
+at horizontal and vertical extremes". Font editors check for it (FontLab's "nodes at extremes",
+with a 1° tolerance). At a smooth node the handles lie along the tangent, and the tangent is
+horizontal or vertical exactly where the curve has a y or an x extremum, so nodes at extrema and
+axis-aligned handles are one convention. Measured with the human battery
+(`bench/human_stats.py`, definitions in `bench/inkvec_bench/design.py`) on the 246-icon screen
+set at 512 px on white, family-macro means:
+
+| battery statistic | artists' files | trace before | trace now | `--editability` before | `--editability` now |
+|---|---|---|---|---|---|
+| `handle_axis`: cubic handles within 0.5° of an axis | 0.380 | 0.061 | 0.075 | 0.104 | 0.329 |
+| `extremum`: smooth joins whose tangent is within 1° of an axis | 0.650 | 0.458 | 0.464 | 0.425 | 0.544 |
+| `smooth`: joins with a curve on one side turning at most 3° | 0.781 | 0.595 | 0.601 | 0.600 | 0.692 |
+| `kinked`: joins between two curves turning 3–30° | 0.035 | 0.142 | 0.135 | 0.144 | 0.072 |
+
+By family the artists' `extremum` runs from 0.95 in material-icons and 0.74 in lucide to 0.33
+in noto-emoji: a convention of the drawing tools, strong where the art is constructed and weak
+in exported emoji. Nothing here forces it; the objective chooses it per run, which is why the
+default trace moves only a little (`handle_axis` divergence from the artist −3.3 %, 39 icons
+closer and 4 further; `kinked` −6.1 %, 19 closer and 1 further; `smooth` −3.1 %, 51 and 3, all
+with 95 % intervals clear of zero) and `--editability`, which prefers it three times as
+strongly, a lot (see `13-emit.md`).
+
+**Why the program never proposed it.** The dynamic program's cubic takes its end directions
+from the tangent estimator at measured points, so it can put a node only where a measured
+point is, with the estimated direction. A node at an extremum, with an axis direction, is a
+different model, and sliding a node along a smooth curve barely changes the drawing: it is in
+the likelihood's null space, so nothing pulls the node there. Yet the convention is cheaper.
+With both end directions fixed a cubic has four free numbers (its end point and two arm
+lengths), against five for a G1 one and six for a free one: at a node where the convention
+fixes the direction, the direction is not written (the price of one coordinate,
+`docs/theory/chain-representation.md` R0.2). The fit's preference, `extrema::FIT`, credits one
+parameter, `λ` nats, per anchored node.
+
+**How.**
+
+1. *Runs.* Maximal sequences of cubics and circular arcs whose joins turn by less than
+   `RUN_BREAK_DEGREES` (30°, the artists' own corner class, R3.1). A line, an elliptical arc, a
+   corner or an open path's end ends a run; a closed path of curves with no corner is one cyclic
+   run.
+2. *Nodes and measured points.* Each node of the path is mapped to the nearest measured point,
+   walking forward along the boundary (`node_indices`); a path whose nodes cannot all be mapped
+   within `FAR_PX` (3 px) is left alone. (The program's own vertex list no longer matches the
+   path after the merge, which does not report the vertices it absorbs.)
+3. *Extrema.* Where a coordinate of the tangent vanishes inside a segment (a quadratic per
+   coordinate for a cubic; angles that are whole quarter turns on a circle), and at old nodes
+   where a tangent component changes sign. Two of one axis within `DEDUP_PX` (0.25 px) are one;
+   a pair of one axis whose extreme values differ by less than `WIGGLE_PX` (0.5 px) is a wiggle
+   on a flat stretch and both are dropped; none within `END_GAP_PX` (1 px) of an open run's
+   ends.
+4. *Candidates, and the cheapest chain through them.* The run's old interior nodes, each made
+   G1 on the bisector of its two directions (this is what removes a kink), and the extrema,
+   each with its axis direction. A shortest path from the run's start to its end over these
+   candidates chooses the nodes: a span is the cubic with both end directions fixed, its arms
+   by area and moment (`best_cubic`, Levien's quartic, the program's own fitter, on a
+   subsample), priced as the program prices a cubic (`½χ² + λ·params_cubic + wobble`), less
+   `λ·credit` at an anchored node. A span reaches at most `MAX_REACH` (8) candidates
+   ahead; a cyclic run starts and ends on its first anchored candidate.
+5. *Refinement.* Each chosen interior node is moved where its two spans fit best: a compass
+   search over its position, and over its direction when the convention does not fix it
+   (`REFINE_STEPS` 0.5 to 0.03 px, `REFINE_ROUNDS` 3). Each span's arms are then polished on
+   every point (`polish_arms`).
+6. *A line at a kink.* Where a run meets a line at a join turning under 30°, the chain is also
+   proposed leaving (or arriving) along the line, which makes that join smooth; the cheaper of
+   the two is the proposal.
+7. *Acceptance.* The proposal's exact `χ²` (each point's nearest distance to the chain: a
+   circular arc through its centre, a cubic by kurbo's nearest-point solver) plus its prices,
+   against the run's own, which also pays the break cost (`tangents::break_cost`) of every
+   kinked join it has. It replaces the run when it is cheaper, and only when it writes exactly
+   as many numbers as the run (6 per cubic, 7 per arc, the gate's count): a run with an arc in
+   it therefore keeps it, and a run of cubics keeps its count.
+
+**Where it does not run.** A capped or pinned fit (the crossing repair's refits) skips it:
+the pinned refit keeps the merge and the sharpening, but its pins are what keep a crossing
+closed, and a re-segmentation would move them. So does a stroke's centreline (`inkvec_trace::ribbon::fit_chain` fits it
+inside `extrema::without`): the stroke decision weighs the centreline's fit against the
+fill's, and re-noding only one side of that comparison flipped the decision on
+`openmoji/1F938-1F3FB` (parameter ratio against the artist 1.96 → 2.18; `ratio_gap` +0.10 %
+at quality-512ssop). Under `--editability` a centreline's arcs are written as cubics at the
+writer instead (`13-emit.md`).
+
+**What was tried and dropped** (gate samples at 30 % of the screen set unless said):
+
+- Every extremum a node, no search: dE00 +0.10 % at quality-512ssop, geom +0.03 % at
+  quality-128ss.
+- A `χ²` guard (the proposal may not fit worse): it refuses nearly every anchoring, because
+  fixing a direction removes a degree of freedom (`simple-icons/elixir`: a run's `χ²` 30.1
+  free, 61.9 anchored, 41.1 after the refinement). The credit is the honest price instead.
+- Lines inside runs: dE00 +0.30 %, geom +0.14 % and `ratio_gap` +0.48 % at quality-128ss.
+- The written count free to fall (credit 1): `ratio_gap` +0.11 % at quality-128ss, 4 icons
+  closer and 9 further, arcs traded for cubics where the trace already writes fewer numbers
+  than noto-emoji's and twemoji's artists; credit 2: −0.01 % there but `turning_gap` +0.08 % at
+  quality-512ssop. Fidelity was better in both (dE00 −0.14 % and geom −0.32 % at
+  quality-512ssop, dE00 −0.37 % at quality-128ss), so the count guard is the binding one.
+- Arcs written as cubics in the default trace: `ratio_gap` +9.76 % at quality-512ssop (0.4375 →
+  0.4802), further from the artist in most families. Arcs stay arcs unless `--editability`.
 
 **The research snaps** (`merge/snap.rs`, compiled only with `--features research`):
 
@@ -838,6 +948,16 @@ are marked **none**. Paths are under `crates/inkvec-fit/src/`.
 | `SHARPEN_MAX_CHORD` | `merge.rs:569` | 2.5 | chamfer-cubic chord ceiling | semi-derived (chamfer ~1 px per side) |
 | `SHARPEN_MAX_EDGE` | `merge.rs:574` | 8.0 | short-edge-with-chamfers ceiling | none |
 | `SHARPEN_MIN_TURN` | `merge.rs:580` | `CORNER_TURN_MIN` | corner-vs-smooth threshold | shared with `CORNER_TURN_MIN` by design |
+| `FIT.credit` | `extrema.rs:76` | 1.0 | parameters credited per node whose direction the extremum convention fixes | derived (the one coordinate it does not write, R0.2); measured: 2.0 also passed the 30 % sample, with the written count free |
+| `FIT.same_count` | `extrema.rs:77` | true | a re-segmentation must write as many numbers as the run it replaces | measured (free: ratio_gap +0.11 % at quality-128ss, 4 icons closer and 9 further, where the trace already writes fewer numbers than noto's and twemoji's artists) |
+| `RUN_BREAK_DEGREES` | `extrema.rs:82` | 30.0 | a join turning this much ends a smooth run | motivated (the artists' joins between curves are smooth or turn by more, R3.1); not swept |
+| `WIGGLE_PX` | `extrema.rs:85` | 0.5 px | two extrema of one axis this close in value are a wiggle and get no node | none |
+| `END_GAP_PX` | `extrema.rs:87` | 1.0 px | no node for an extremum this close (arc length) to a run's end | none |
+| `DEDUP_PX` | `extrema.rs:90` | 0.25 px | two extrema of one axis this close (arc length) are one | none |
+| `MIN_INTERIOR` | `extrema.rs:92` | 2 | fewest measured points inside a span | motivated (the arms need points to fit) |
+| `MAX_REACH` | `extrema.rs:94` | 8 | candidates one span may reach in the search | motivated (bounds the search); not swept |
+| `FAR_PX` | `extrema.rs:97` | 3.0 px | a path node with no measured point this close leaves the path alone | none |
+| `REFINE_ROUNDS`, `REFINE_STEPS` | `extrema.rs:99`, `:101` | 3; 0.5 … 0.03 px | the node refinement's compass search | none |
 | `PARAMS_AXIS_LINE` (research) | `merge/snap.rs:17` | 1.0 | axis-snapped line cost | derived |
 | `MAX_AXIS_DEV_SIGMA` (research) | `merge/snap.rs:22` | 3.0 | per-sample axis-snap deviation cap | none |
 | `PARAMS_SMOOTH_CUBIC` (research) | `merge/snap.rs:204` | 4.0 | `S`-shorthand cost | derived |

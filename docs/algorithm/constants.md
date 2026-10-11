@@ -345,6 +345,16 @@ half-integer lattice points (`inkvec-trace/src/symmetry.rs:19-21,176-186,220,243
 | `SHARPEN_MAX_CHORD` | 2.5 | `inkvec-fit/src/merge.rs:569` | chamfer-cubic chord ceiling | motivated (chamfer ~1px/side) |
 | `SHARPEN_MAX_EDGE` | 8.0 | `inkvec-fit/src/merge.rs:574` | short-edge-with-chamfers ceiling | none |
 | `SHARPEN_MIN_TURN` | `CORNER_TURN_MIN` | `inkvec-fit/src/merge.rs:580` | corner-vs-smooth threshold | shared with `CORNER_TURN_MIN` by design since 2026-09-08 |
+| `FIT.credit` | 1.0 | `inkvec-fit/src/extrema.rs:78` | parameters credited per node whose direction the extremum convention fixes | derived (the one coordinate it does not write, R0.2); measured: 2.0 also passed the 30 % sample, with the written count free |
+| `FIT.same_count` | true | `inkvec-fit/src/extrema.rs:79` | a re-segmentation must write as many numbers as the run it replaces | measured (free: ratio_gap +0.11 % at quality-128ss, 4 icons closer and 9 further, where the trace already writes fewer numbers than noto's and twemoji's artists) |
+| `RUN_BREAK_DEGREES` | 30.0 | `inkvec-fit/src/extrema.rs:99` | a join turning this much ends a smooth run | motivated (the artists' joins between curves are smooth or turn by more, R3.1); not swept |
+| `WIGGLE_PX` | 0.5 px | `inkvec-fit/src/extrema.rs:102` | two extrema of one axis this close in value are a wiggle and get no node | none |
+| `END_GAP_PX` | 1.0 px | `inkvec-fit/src/extrema.rs:104` | no node for an extremum this close (arc length) to a run's end | none |
+| `DEDUP_PX` | 0.25 px | `inkvec-fit/src/extrema.rs:107` | two extrema of one axis this close (arc length) are one | none |
+| `MIN_INTERIOR` | 2 | `inkvec-fit/src/extrema.rs:109` | fewest measured points inside a span | motivated (the arms need points to fit) |
+| `MAX_REACH` | 8 | `inkvec-fit/src/extrema.rs:111` | candidates one span may reach in the search | motivated (bounds the search); not swept |
+| `FAR_PX` | 3.0 px | `inkvec-fit/src/extrema.rs:114` | a path node with no measured point this close leaves the path alone | none |
+| `REFINE_ROUNDS`, `REFINE_STEPS` | 3; 0.5 … 0.03 px | `inkvec-fit/src/extrema.rs:116`, `:118` | the node refinement's compass search | none |
 | `PARAMS_AXIS_LINE` (research) | 1.0 | `inkvec-fit/src/merge/snap.rs:17` | axis-snapped line cost | derived |
 | `MAX_AXIS_DEV_SIGMA` (research) | 3.0 | `inkvec-fit/src/merge/snap.rs:22` | per-sample axis-snap deviation cap | none |
 | `PARAMS_SMOOTH_CUBIC` (research) | 4.0 | `inkvec-fit/src/merge/snap.rs:204` | `S`-shorthand cost | derived |

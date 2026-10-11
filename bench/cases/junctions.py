@@ -16,10 +16,11 @@ can account for.
 from __future__ import annotations
 
 import math
+import re
 
 import numpy as np
 
-from _common import Case, Check, dist_to_polygon, poly_attr, svg_doc
+from _common import INK_TOL, Case, Check, poly_attr, render, svg_doc
 
 A, B, C = "#204080", "#c04030", "#3f8f4f"
 SIZE = 128
@@ -50,14 +51,6 @@ def _seam_checks(seam_len: float):
     return measure
 
 
-def _shape_area(s) -> float:
-    tot = 0.0
-    for r in s.rings:
-        x, y = r[:, 0], r[:, 1]
-        tot += abs(float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))) / 2
-    return tot
-
-
 def _abut(name, what, body, seam_len):
     measure = _seam_checks(seam_len)
 
@@ -79,9 +72,8 @@ def _junction(name, what, body, seam_len):
     def check(t):
         gap, bleed = measure(t)
         # Every region that meets at the junction owns a corner there. The one whose
-        # boundary strays furthest is the one that moved the junction.
-        big = [s for s in t.out_shapes if _shape_area(s) >= 200.0]
-        worst = _junction_error(t, big)
+        # visible corner strays furthest is the one that moved the junction.
+        worst = _junction_error(_window(t.truth_svg), _window(t.out_svg))
         return [
             Check("junction_err_px", worst, 0.2, "<",
                   "0.2 px = 2x the output coordinate grid; beyond it the corner is visibly cut"),
@@ -94,15 +86,79 @@ def _junction(name, what, body, seam_len):
     return Case(name=name, what=what, svg=svg_doc(SIZE, body), check=check)
 
 
-def _junction_error(t, big) -> float:
-    """The furthest any large region's boundary sits from the true junction point."""
-    if not big:
-        return float("nan")
-    q = np.asarray([[JX, JY]], dtype=float)
+# The junction is read from a render of the four source pixels about it, at 64 samples
+# per pixel: on the whole image at SCALE the nearest sample inside a 120-degree corner can
+# sit 0.2 px from its apex, the size of the limit itself.
+WIN, WIN_RES = 2.0, 64
+
+
+def _window(svg: str) -> np.ndarray:
+    """The square of side 2*WIN about the true junction, rendered at WIN_RES per pixel.
+
+    The document is nested, as drawn on the image's pixel grid, in one whose viewBox is
+    the window, so the two frames (the truth's grid, inkvec's pixel centres) stay the
+    document's own business.
+    """
+    n = int(2 * WIN * WIN_RES)
+    svg = re.sub(r"<\?xml[^>]*\?>", "", svg).strip()
+    m = re.search(r"<svg\b[^>]*>", svg)
+    if m is None:  # no output: no region reaches the junction
+        return np.zeros((n, n, 4), dtype=np.float32)
+    tag = re.sub(r'\s(?:x|y|width|height)="[^"]*"', "", m.group(0))
+    tag = tag[:-1] + f' x="0" y="0" width="{SIZE}" height="{SIZE}">'
+    outer = (f'<svg xmlns="http://www.w3.org/2000/svg" width="{n}" height="{n}" '
+             f'viewBox="{JX - WIN} {JY - WIN} {2 * WIN} {2 * WIN}">'
+             f'{svg[:m.start()]}{tag}{svg[m.end():]}</svg>')
+    return render.render(outer, n, n)
+
+
+def _regions(rgba: np.ndarray) -> list[tuple[int, np.ndarray]]:
+    """Each ink's 4-connected areas of its own colour, a quarter pixel or more: (ink, mask).
+
+    Read from a render, not from the paths, because a path is not what shows. A face drawn
+    whole beneath the faces painted over it (its covered part completed) has no corner at
+    the junction of its own; its visible corner is where its covers' edges meet. Blended
+    pixels match no ink, so two areas of one colour meeting only at a point stay apart.
+    """
+    from scipy import ndimage
+
+    out = []
+    for k, ink in enumerate((A, B, C)):
+        rgb = np.asarray([int(ink[i:i + 2], 16) / 255.0 for i in (1, 3, 5)], dtype=np.float32)
+        near = (np.abs(rgba[..., :3] - rgb).max(-1) <= INK_TOL) & (rgba[..., 3] >= 0.99)
+        lab, n = ndimage.label(near)
+        for i in range(1, n + 1):
+            m = lab == i
+            if m.sum() >= 0.25 * WIN_RES * WIN_RES:
+                out.append((k, m))
+    return out
+
+
+def _reach(mask: np.ndarray) -> float:
+    """How near, in source px, a region's samples come to the true junction."""
+    ys, xs = np.nonzero(mask)
+    d2 = ((xs + 0.5) / WIN_RES - WIN) ** 2 + ((ys + 0.5) / WIN_RES - WIN) ** 2
+    return float(np.sqrt(d2.min()))
+
+
+def _junction_error(truth: np.ndarray, out: np.ndarray) -> float:
+    """The furthest any of the artist's regions, as traced, sits from the true junction.
+
+    Each region of the artist's is matched to the traced area of its ink that overlaps it
+    most, and the truth's own reach (its blended samples about the junction, 0.01-0.03
+    px) is taken off. A junction moved by d leaves none of the corners further than d
+    away, and one of three 120-degree corners at least 0.87 d away, or one of four right
+    angles d away, so this reads the displacement itself: 0.05, 0.1, 0.2 and 0.5 px moves
+    of the true geometry read 0.06, 0.11, 0.20 and 0.43-0.50.
+    """
+    traced = _regions(out)
     worst = 0.0
-    for s in big:
-        d = min((float(dist_to_polygon(q, r)[0]) for r in s.rings), default=float("inf"))
-        worst = max(worst, d)
+    for k, m in _regions(truth):
+        mine = [o for j, o in traced if j == k]
+        best = max(mine, key=lambda o: int((o & m).sum()), default=None)
+        if best is None or not (best & m).any():
+            return float("inf")
+        worst = max(worst, _reach(best) - _reach(m))
     return worst
 
 

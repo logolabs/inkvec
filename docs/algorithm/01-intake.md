@@ -589,7 +589,14 @@ above it, then the source checkout the binary was built from. The pass prints on
 (`lib.rs:667`).
 
 **The restorer comes first.** `trace_prepared_priced` runs the restorer pre-pass
-(`--restore`, off by default, `args.rs:281`; `restore_prepass`, `lib.rs:984-1069`) before SR.
+(`--restore`; `restore_prepass`, `lib.rs:984-1069`) before SR. Its default is the mode's
+(`Args::restore_mode`, 2026-10-11): `auto` in Quality mode when the build can restore (the
+network compiled in, or `--restore-command`), `off` in Fast and balanced, where a restore's
+seconds would undo the point of the mode, and `off` in a build with nothing to restore with,
+which then traces exactly as `--restore off` does, stats included. A given `--restore` value
+always wins. On a clean input `auto` asks for a sign of compression first and makes no probe
+without one (below), so the default costs a clean PNG the ringing score alone, about 2.7 ms
+at 512 px.
 Its `auto` mode works exactly like SR's — one probe trace, kept when the input measures
 clean, and "handed on so the two pre-passes never trace the same image twice"
 (`lib.rs:984-985`); with SR off, a kept probe is returned as the trace (`lib.rs:556-572`), and

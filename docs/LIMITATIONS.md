@@ -80,7 +80,7 @@ This document outlines Inkvec's known limitations, failure modes, performance tr
 ### 5.1 Restorer Deblocking (`restorer.onnx`)
 - **Inductive Bias:** The denoiser was trained on synthetic degradation kernels representing discrete cosine transform (DCT) artifacts, WebP compression, and VAE decode haze.
 - **Limitation:** It is an image-to-image convolutional regression model. When presented with intentional high-frequency patterns—such as fine halftone dots, comic-book stippling, dithering, or paper textures—it may misclassify them as compression noise and smooth them out.
-- **Mitigation:** The restorer is disabled by default (`--restore off`) and must be explicitly enabled when processing damaged assets.
+- **Mitigation:** The restorer runs only where it can help: by default only in Quality mode and only in a build that carries it (`--restore auto`), and then only on input that shows compression and that its own trace disagrees with; Fast and balanced keep it off unless asked, and `--restore off` always turns it off.
 
 ### 5.2 Geometric Graph Neural Network (`TraceRefineGNN20M` — Research Stage)
 - **Inductive Bias:** The experimental GNN post-processor predicts continuous coordinate offsets ($\Delta \mathbf{x}$) and CAD regularity constraints (parallelism, perpendicularity, tangency) based on learned geometric priors.

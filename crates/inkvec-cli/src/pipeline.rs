@@ -160,6 +160,7 @@ pub(crate) fn color_options(args: &Args, width: usize, height: usize) -> ColorOp
         // `Auto` should already have been resolved by `resolve_lossy`; if a caller skipped
         // that, treating it as "not known to be lossy" keeps a clean intake untouched.
         lossy_intake: args.lossy == inkvec_sr::Mode::On,
+        restored: args.restored,
         alpha_inks: args.cutout,
         native_alpha: args.native_alpha,
         simplify_faint: args.simplify_faint,

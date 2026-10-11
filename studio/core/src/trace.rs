@@ -1095,7 +1095,7 @@ fn trace_pipeline(
                 drop(kept);
                 let size = Some((source.width as usize, source.height as usize));
                 let out = match external_denoiser() {
-                    Some(denoise) if args.restore != inkvec_restore::Mode::Off => {
+                    Some(denoise) if args.restore_mode() != inkvec_restore::Mode::Off => {
                         trace_denoised(img, args, size, denoise)?
                     }
                     _ => inkvec_cli::trace_image_sized(img, args, size)?,
@@ -1186,8 +1186,8 @@ fn trace_denoised(
     denoise: ExternalDenoiser,
 ) -> Result<inkvec_cli::Traced, Box<dyn std::error::Error>> {
     let mut intake = inkvec_cli::intake(img, args, size);
-    let mode = intake.args.restore;
-    intake.args.restore = inkvec_restore::Mode::Off;
+    let mode = intake.args.restore_mode();
+    intake.args.restore = Some(inkvec_restore::Mode::Off);
     let mut note = String::new();
     if mode == inkvec_restore::Mode::Auto {
         let mut probe = inkvec_cli::trace_prepared(intake.clone())?;

@@ -117,6 +117,7 @@
 //!   faces, which are bound by memory bandwidth rather than by one core.
 
 mod halos;
+pub(crate) use halos::ycc as halos_ycc;
 mod runs;
 
 use runs::Run;

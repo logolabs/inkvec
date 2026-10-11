@@ -117,7 +117,7 @@ Per-case coordinate count over the same 21 cases, from the same script and data 
 
 ### Damaged input: JPEG, WebP, AI-decoder output
 
-Inkvec ships an optional trained restorer that removes compression and decode damage before tracing. It is **off by default** (`--restore off`; `--restore auto` enables it only when the input looks damaged). The weights that ship — `restorer.onnx` from [`Logolabs/inkvec-denoiser-001`](https://huggingface.co/Logolabs/inkvec-denoiser-001), pulled on first use or via `tools/pull_model.py` — have **no published benchmark in this repository**, and no LPIPS or ablation figure for them is reported anywhere here. The figures that previously appeared in this section were measured during development on a different checkpoint and are not reproduced for the shipped weights; the VectorArk and StarVector numbers were those projects' own published results, measured under their protocols, not here.
+Inkvec ships an optional trained restorer that removes compression and decode damage before tracing. In Quality mode it is **`auto` by default** in a build that carries it (`--restore auto`: it restores only when the input shows compression and its trace disagrees with it; a clean PNG pays the ringing score alone); Fast and balanced keep it off unless `--restore auto` or `on` is given, and a build without it traces as `--restore off`. The weights that ship — `restorer.onnx` from [`Logolabs/inkvec-denoiser-001`](https://huggingface.co/Logolabs/inkvec-denoiser-001), pulled on first use or via `tools/pull_model.py` — have **no published benchmark in this repository**, and no LPIPS or ablation figure for them is reported anywhere here. The figures that previously appeared in this section were measured during development on a different checkpoint and are not reproduced for the shipped weights; the VectorArk and StarVector numbers were those projects' own published results, measured under their protocols, not here.
 
 The same pre-pass runs **in the browser**, on the same `restorer.onnx`: see [In the browser](#in-the-browser).
 
@@ -194,7 +194,7 @@ inkvec <input> [-o <output.svg>] [OPTIONS]
 | Flag | Default | What it does |
 |---|---|---|
 | `--mode <quality\|fast\|balanced>` | quality | `quality` is the full engine: best fidelity, fewest parameters. `fast` is a Potrace-class fit on the same planar map, with flat fills: several times faster, a little less faithful (see [Speed](#speed-quality-and-fast)). `balanced` is `fast` plus eight iterations of Quality's boundary solve and a fit a quarter finer, on inputs up to 1024 px on the longer side (larger ones trace as `fast`). Options that only steer Quality stages are ignored in Fast and Balanced, and the report names them. |
-| `--restore <auto\|on\|off>` | off | Trained-network cleanup for JPEG/WebP/AI-decoder damage. `auto` only restores if it looks damaged, and traces directly when no restorer is available (`on` is an error then). |
+| `--restore <auto\|on\|off>` | auto in Quality mode when the build can restore, else off | Trained-network cleanup for JPEG/WebP/AI-decoder damage. `auto` only restores if it looks damaged, and traces directly when no restorer is available (`on` is an error then). |
 | `--sr <auto\|on\|off>` | off | Super-resolution pre-pass (2-4× upscale), complementary to `--restore`. |
 | `--lossy <auto\|on\|off>` | auto | Whether to trust the file as clean or trace with noise-aware intake. |
 | `--max-dim <px>` | 2048 | Cap on the longer side; SVG is written at the original size. |

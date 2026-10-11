@@ -596,9 +596,10 @@ fn trace_prepared_priced(prepared: Intake) -> Result<Traced, Box<dyn std::error:
     // validated in. It has to be forced: a restored image can look clean enough that the
     // edge-width and ringing detectors no longer open soft intake by themselves.
     let lossy_args;
-    let args = if restored && args.lossy != inkvec_sr::Mode::On {
+    let args = if restored {
         lossy_args = Args {
             lossy: inkvec_sr::Mode::On,
+            restored: true,
             ..args.clone()
         };
         &lossy_args
@@ -1030,11 +1031,12 @@ fn restore_prepass(
         probe: None,
         restored: false,
     };
-    if args.restore == inkvec_restore::Mode::Off {
+    let mode = args.restore_mode();
+    if mode == inkvec_restore::Mode::Off {
         return Ok(pass);
     }
     let mut auto_probe = None;
-    if args.restore == inkvec_restore::Mode::Auto {
+    if mode == inkvec_restore::Mode::Auto {
         // The residual alone reads smooth shading in clean art as damage, so `auto` also
         // needs the file or the pixels to say the input was compressed (see `damage`). That
         // evidence is asked first: it is the cheap half (a flag, or the ringing score), while

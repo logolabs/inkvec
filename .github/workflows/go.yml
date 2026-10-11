@@ -53,8 +53,8 @@ jobs:
     name: build and test (linux)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.120.0
         with:
           targets: wasm32-wasip1
       - uses: Swatinem/rust-cache@v2
@@ -64,11 +64,11 @@ jobs:
         run: |
           curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN}/binaryen-version_${BINARYEN}-x86_64-linux.tar.gz" | tar xz
           echo "INKVEC_WASM_OPT=$PWD/binaryen-version_${BINARYEN}/bin/wasm-opt" >> "$GITHUB_ENV"
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: packages/go/go.mod
           cache-dependency-path: packages/go/go.sum
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - run: bash tools/build_go_wasm.sh
@@ -81,7 +81,7 @@ jobs:
           test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
           go vet ./...
           go test -race -count=1 ./...
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: inkvec-wasm
           path: packages/go/inkvec.wasm
@@ -96,12 +96,12 @@ jobs:
       matrix:
         os: [windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: inkvec-wasm
           path: packages/go
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: packages/go/go.mod
           cache-dependency-path: packages/go/go.sum
@@ -117,8 +117,8 @@ jobs:
     env:
       DEPLOY_KEY: ${{ secrets.GO_MIRROR_DEPLOY_KEY }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: inkvec-wasm
           path: packages/go

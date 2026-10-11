@@ -27,7 +27,7 @@ jobs:
       run:
         working-directory: formal/InkvecTheory
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install elan
         run: |
           curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \

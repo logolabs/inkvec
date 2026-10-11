@@ -59,7 +59,7 @@ jobs:
       - name: gate's own tests
         run: >-
           python -m unittest bench/tests/test_gate_stats.py bench/tests/test_ci_gate.py
-          bench/tests/test_gate_scoring.py bench/tests/test_gt_diff.py
+          bench/tests/test_gate_scoring.py bench/tests/test_gt_diff.py bench/tests/test_design.py
           bench/tests/test_cases_ratchet.py
       - name: hard cases, Quality
         run: python bench/cases.py --exe target/release/inkvec --ratchet quality

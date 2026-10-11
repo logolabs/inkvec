@@ -38,7 +38,11 @@ between a vector truth and a vector trace.
 
 from __future__ import annotations
 
+import hashlib
+import os
 import re
+from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
@@ -72,13 +76,25 @@ def _flat(svg: str, size: int) -> np.ndarray:
 
 def _codes(rgba: np.ndarray, opaque: bool) -> np.ndarray:
     """Per pixel, its 8-bit RGBA packed in one integer (over white, opaque, when the
-    input was flattened onto a white page)."""
-    u = rgba.astype(np.uint32)
+    input was flattened onto a white page).
+
+    Over white, each channel is `(c a + 255 (255 - a) + 127) // 255`. That is `c` itself
+    where `a` is 255 and 255 where `a` is 0, so only the partly covered pixels (few, in a
+    render without anti-aliasing) are computed; the packing reads the four bytes as one
+    big-endian word. Both give the same integers as the arithmetic on every pixel."""
+    u = np.ascontiguousarray(rgba, dtype=np.uint8)
     if opaque:
-        a = u[..., 3:4]
-        u[..., :3] = (u[..., :3] * a + 255 * (255 - a) + 127) // 255
+        a = u[..., 3]
+        part = (a != 0) & (a != 255)
+        u = u.copy()
+        u[a == 0] = 255
+        if part.any():
+            p = u[part].astype(np.uint32)
+            pa = p[:, 3:4]
+            p[:, :3] = (p[:, :3] * pa + 255 * (255 - pa) + 127) // 255
+            u[part] = p.astype(np.uint8)
         u[..., 3] = 255
-    return (u[..., 0] << 24) | (u[..., 1] << 16) | (u[..., 2] << 8) | u[..., 3]
+    return u.view(">u4")[..., 0].astype(np.uint32)
 
 
 def _features(codes: np.ndarray) -> np.ndarray:
@@ -111,10 +127,22 @@ def _palette(feat: np.ndarray, counts: np.ndarray) -> np.ndarray:
 
 
 def _labels(codes: np.ndarray, palette: np.ndarray) -> np.ndarray:
-    """Index of the nearest palette colour per pixel."""
-    uniq, inv = np.unique(codes.reshape(-1), return_inverse=True)
+    """Index of the nearest palette colour per pixel.
+
+    Read run by run along the rows: a flat render is long runs of one colour, so the
+    distinct colours and their nearest palette entries are found from the runs' values
+    (a few thousand, not millions) and spread back over the runs. The same distinct colours
+    in the same sorted order as `np.unique` of every pixel, so the same labels."""
+    flat = codes.reshape(-1)
+    if flat.size == 0:
+        return np.zeros(codes.shape, dtype=np.intp)
+    starts = np.flatnonzero(flat[1:] != flat[:-1]) + 1
+    starts = np.concatenate(([0], starts))
+    uniq, inv = np.unique(flat[starts], return_inverse=True)
     d = ((_features(uniq)[:, None, :] - palette[None, :, :]) ** 2).sum(-1)
-    return d.argmin(1)[inv.reshape(-1)].reshape(codes.shape)
+    per_run = d.argmin(1)[inv.reshape(-1)]
+    runs = np.diff(np.append(starts, flat.size))
+    return np.repeat(per_run, runs).reshape(codes.shape)
 
 
 def boundary_length(lab: np.ndarray) -> float:
@@ -126,31 +154,97 @@ def boundary_length(lab: np.ndarray) -> float:
     return float(np.pi / 8.0 * (n_h + n_v + (n_d + n_a) / np.sqrt(2.0)))
 
 
-def geomatch(ours: str, artist: str, src_px: int, opaque: bool = False) -> dict:
-    """`geom` and `geom_far` (module documentation) of the trace `ours` against `artist`,
-    both SVG text, for an input raster `src_px` pixels across."""
+@dataclass(frozen=True)
+class ArtistSide:
+    """Everything `geomatch` reads from the artist's file at one size: a function of the
+    file's bytes, the size and the page (over white or not), so kept between runs."""
+
+    labels: np.ndarray    # nearest-palette index per render pixel
+    palette: np.ndarray   # the artist's colours (`_palette`), one row each
+    length: float         # boundary length of `labels`, render px (`boundary_length`)
+    near: np.ndarray      # within one source pixel (city-block, RES render px) of an edge
+
+
+#: Where `artist_side` keeps its results between runs (None: recomputed every time).
+#: `svgeval` points it at its cache. Entries are keyed by everything that changes them.
+CACHE_DIR: Path | None = None
+#: Bumped whenever an entry's meaning changes.
+CACHE_FORMAT = 1
+
+
+def _cache_key(artist: str, size: int, opaque: bool) -> str:
+    """Hash of the artist's bytes and everything else an `ArtistSide` depends on: the size,
+    the page, this module's constants, the renderer and the libraries that do the
+    arithmetic."""
+    import importlib.metadata as md
+
+    import skimage
+    try:
+        resvg = md.version("resvg_py")
+    except md.PackageNotFoundError:
+        resvg = "?"
+    h = hashlib.sha256(artist.encode("utf-8"))
+    h.update(f"|{size}|{int(opaque)}|{RES}|{MAX_COLOURS}|{ALPHA_WEIGHT}|{CACHE_FORMAT}"
+             f"|resvg {resvg}|numpy {np.__version__}|skimage {skimage.__version__}".encode())
+    return h.hexdigest()[:32]
+
+
+def _compute_artist_side(artist: str, size: int, opaque: bool) -> ArtistSide:
     from scipy import ndimage
-    size = RES * src_px
     ca = _codes(_flat(artist, size), opaque)
-    cb = _codes(_flat(ours, size), opaque)
     uniq, counts = np.unique(ca.reshape(-1), return_counts=True)
     pal = _palette(_features(uniq), counts)
-    la, lb = _labels(ca, pal), _labels(cb, pal)
-    length = boundary_length(la)
-    scale = src_px / size                       # source px per render px
-    if length <= 0:
-        return {"geom": 0.0, "geom_far": 0.0}
-    miss = la != lb
-    area = float(np.count_nonzero(miss))
-    edges = np.zeros_like(miss)
+    la = _labels(ca, pal)
+    edges = np.zeros(la.shape, dtype=bool)
     edges[:, 1:] |= la[:, 1:] != la[:, :-1]
     edges[1:, :] |= la[1:, :] != la[:-1, :]
     # Within one source pixel of an artist edge (city-block distance): RES steps.
     near = ndimage.binary_dilation(edges, iterations=RES)
-    far = float(np.count_nonzero(miss & ~near))
+    return ArtistSide(la.astype(np.uint8), pal, boundary_length(la), near)
+
+
+def artist_side(artist: str, size: int, opaque: bool) -> ArtistSide:
+    """The artist's side of `geomatch` at `size` px, from `CACHE_DIR` when it holds it.
+
+    An entry stores the labels and the near-edge mask losslessly (the labels fit a byte:
+    `MAX_COLOURS` < 256) and the palette as float64, so a hit gives the same numbers as
+    computing it. The write is atomic: pool workers may miss on the same file at once."""
+    path = CACHE_DIR / f"{_cache_key(artist, size, opaque)}.npz" if CACHE_DIR else None
+    if path is not None and path.exists():
+        try:
+            with np.load(path) as z:
+                near = np.unpackbits(z["near"], count=size * size).reshape(size, size)
+                return ArtistSide(z["labels"], z["palette"], float(z["length"]), near.astype(bool))
+        except Exception:  # noqa: BLE001 - a damaged entry is recomputed and replaced
+            path.unlink(missing_ok=True)
+    side = _compute_artist_side(artist, size, opaque)
+    if path is not None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f"{path.stem}.{os.getpid()}.tmp.npz")
+        np.savez_compressed(tmp, labels=side.labels, palette=side.palette,
+                            length=np.float64(side.length), near=np.packbits(side.near))
+        try:
+            os.replace(tmp, path)
+        except OSError:
+            tmp.unlink(missing_ok=True)
+    return side
+
+
+def geomatch(ours: str, artist: str, src_px: int, opaque: bool = False) -> dict:
+    """`geom` and `geom_far` (module documentation) of the trace `ours` against `artist`,
+    both SVG text, for an input raster `src_px` pixels across."""
+    size = RES * src_px
+    art = artist_side(artist, size, opaque)
+    if art.length <= 0:
+        return {"geom": 0.0, "geom_far": 0.0}
+    lb = _labels(_codes(_flat(ours, size), opaque), art.palette)
+    scale = src_px / size                       # source px per render px
+    miss = art.labels != lb
+    area = float(np.count_nonzero(miss))
+    far = float(np.count_nonzero(miss & ~art.near))
     # Area in source px² over length in source px: source px.
-    return {"geom": area * scale * scale / (length * scale),
-            "geom_far": far * scale * scale / (length * scale)}
+    return {"geom": area * scale * scale / (art.length * scale),
+            "geom_far": far * scale * scale / (art.length * scale)}
 
 
 def _self_check() -> None:

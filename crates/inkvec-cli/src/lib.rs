@@ -54,6 +54,7 @@ mod emit;
 mod faces;
 mod fast;
 mod harmonize;
+mod layers;
 mod mirror_fit;
 mod mono;
 mod naming;

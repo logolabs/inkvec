@@ -11,6 +11,8 @@ actually notices.
 """
 from __future__ import annotations
 
+from functools import lru_cache
+
 import numpy as np
 from skimage.color import deltaE_ciede2000, rgb2lab
 
@@ -21,8 +23,21 @@ from skimage.color import deltaE_ciede2000, rgb2lab
 MAX_DELTA_E_SAMPLES = 250_000
 
 
+@lru_cache(maxsize=4)
+def _sample(n: int, k: int) -> np.ndarray:
+    """The `k` of `n` pixels `delta_e00` reads: always the same ones for the same `n`."""
+    idx = np.random.default_rng(0).choice(n, k, replace=False)
+    idx.flags.writeable = False
+    return idx
+
+
 def delta_e00(a_rgb: np.ndarray, b_rgb: np.ndarray, mask: np.ndarray | None = None) -> dict[str, float]:
-    """CIEDE2000 between two RGB images in [0, 1], optionally restricted to a mask."""
+    """CIEDE2000 between two RGB images in [0, 1], optionally restricted to a mask.
+
+    Only the sampled pixels whose colours differ are converted and compared: a pixel the
+    same in both images has a CIEDE2000 of exactly 0 (the formula's every term is a
+    difference of equal numbers), and the conversion is per pixel, so the array of
+    differences, and every statistic of it, is the one the whole sample would give."""
     a = np.clip(a_rgb, 0, 1).reshape(-1, 3)
     b = np.clip(b_rgb, 0, 1).reshape(-1, 3)
     if mask is not None:
@@ -31,12 +46,17 @@ def delta_e00(a_rgb: np.ndarray, b_rgb: np.ndarray, mask: np.ndarray | None = No
     if a.shape[0] == 0:
         return {"de00_mean": float("nan"), "de00_p95": float("nan"), "de00_max": float("nan")}
     if a.shape[0] > MAX_DELTA_E_SAMPLES:
-        idx = np.random.default_rng(0).choice(a.shape[0], MAX_DELTA_E_SAMPLES, replace=False)
+        idx = _sample(a.shape[0], MAX_DELTA_E_SAMPLES)
         a, b = a[idx], b[idx]
 
-    lab_a = rgb2lab(a.reshape(-1, 1, 3))
-    lab_b = rgb2lab(b.reshape(-1, 1, 3))
-    de = deltaE_ciede2000(lab_a, lab_b).reshape(-1)
+    diff = np.flatnonzero((a != b).any(axis=1))
+    # The dtype the whole sample's differences would have (skimage keeps float32 as float32).
+    probe = deltaE_ciede2000(rgb2lab(a[:1].reshape(-1, 1, 3)), rgb2lab(b[:1].reshape(-1, 1, 3)))
+    de = np.zeros(a.shape[0], dtype=probe.dtype)
+    if diff.size:
+        lab_a = rgb2lab(a[diff].reshape(-1, 1, 3))
+        lab_b = rgb2lab(b[diff].reshape(-1, 1, 3))
+        de[diff] = deltaE_ciede2000(lab_a, lab_b).reshape(-1)
     de = de[np.isfinite(de)]
     if de.size == 0:
         return {"de00_mean": float("nan"), "de00_p95": float("nan"), "de00_max": float("nan")}

@@ -1098,6 +1098,7 @@ pub fn trace_color(img: &Rgba, opts: &ColorOptions, alpha: &[f32]) -> ColorTrace
         face_color,
         n_faces,
         sigma_noise,
+        soft_intake,
         &mut sw,
         Some(alpha),
         Some(face_alpha),

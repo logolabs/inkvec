@@ -46,7 +46,7 @@ class Run:
 
     def __call__(self, *args: str) -> tuple[int, str]:
         buf = io.StringIO()
-        fake = lambda exe, cond, items, workers: (self.scores[cond.name], [])  # noqa: E731
+        fake = lambda exe, cond, items, workers, *a, **k: (self.scores[cond.name], [])  # noqa: E731
         with patch.object(ci_gate, "score_condition", side_effect=fake), \
                 patch.object(ci_gate.svgeval, "load_sets", return_value={"screen": ITEMS}), \
                 patch.object(ci_gate, "BASELINE", self.tmp / "legacy.json"), \

@@ -434,6 +434,15 @@ class ImageScore:
     # SHA-256 of the emitted SVG's bytes. Two builds that emit the same bytes for an icon
     # score it identically, so the gate can tell "unchanged" from "changed by a tie".
     sha256: str = ""
+    # True when the SVG's bytes matched the ones a baseline scored (`Job.known`), so the
+    # scores above are the baseline's, not recomputed; `mirror` and `dists` are then NaN.
+    reused: bool = False
+    # The design battery (`inkvec_bench/design.py`) when asked for (`Job.human`):
+    # {"trace": {statistic: value}, "div": {statistic: distance from the artist's file}}.
+    human: dict = field(default_factory=dict)
+    # CPU seconds this icon cost in its worker: the tracer ("trace"), the gate's signals
+    # ("score", 0 when reused) and the design battery ("human").
+    cpu: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -721,68 +730,187 @@ def structure_signals(svg: str, src_png: Path) -> dict:
     return out
 
 
+def is_opaque(src_png: Path) -> bool:
+    """Whether an icon is compared over white: an opaque tier (flattened onto white) or a
+    file with no alpha at all (a JPEG), as it was made. A transparent tier's icon stays
+    transparent even where its pixels happen to be all opaque, so its numbers stay
+    comparable with its baseline."""
+    from PIL import Image
+    with Image.open(src_png) as im:
+        return base_tier(tier()) != tier() or "A" not in im.getbands()
+
+
 def geometric_match(svg: str, gt: Path, src_png: Path) -> dict:
     """`geom` and `geom_far` of our SVG against the artist's file (`inkvec_bench/geomatch.py`),
-    at the input raster's size; over white when the input is opaque."""
+    at the input raster's size; over white when the input is opaque. The artist's side is
+    kept in the cache (`geomatch.artist_side`): it depends on the artist's bytes, the size
+    and the page only."""
     from PIL import Image
-    from inkvec_bench.geomatch import geomatch
-    im = Image.open(src_png)
-    w = im.size[0]
-    # An opaque tier (flattened onto white) or a file with no alpha at all (a JPEG): compared
-    # over white, as it was made. A transparent tier's icon stays transparent even where its
-    # pixels happen to be all opaque, so its numbers stay comparable with its baseline.
-    opaque = base_tier(tier()) != tier() or "A" not in im.getbands()
-    return geomatch(svg, gt.read_text(encoding="utf-8"), w, opaque)
+    from inkvec_bench import geomatch as gm
+    gm.CACHE_DIR = CACHE / "geomatch"
+    with Image.open(src_png) as im:
+        w = im.size[0]
+    return gm.geomatch(svg, gt.read_text(encoding="utf-8"), w, is_opaque(src_png))
 
 
-def score_one(args: tuple) -> dict:
-    """Trace + render + colour error for one icon. Top-level so a process pool can
-    pickle it. DISTS is *not* computed here: it needs torch and a VGG, which would put
-    ~1 GB and a slice of the GPU into every worker; the parent scores it from the saved
-    render instead (`score_set`)."""
-    exe, it, out_dir, extra_args, keep_svg = args
+def artist_design(gt: Path, raster_px: int) -> dict:
+    """The design battery's profile of the artist's file (`inkvec_bench/design.py`) for a
+    `raster_px` raster, kept in the cache by the file's hash, the raster size and the
+    battery's version: it is the same in every run."""
+    from inkvec_bench import design
+    text = gt.read_text(encoding="utf-8")
+    key = hashlib.sha256(f"{design.VERSION}|{raster_px}|{text}".encode()).hexdigest()[:32]
+    cp = CACHE / "design" / f"{key}.json"
+    if cp.exists():
+        try:
+            return json.loads(cp.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+    prof = design.profile(text, raster_px=raster_px)
+    cp.parent.mkdir(parents=True, exist_ok=True)
+    tmp = cp.with_name(f"{cp.stem}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(prof), encoding="utf-8")
+    try:
+        os.replace(tmp, cp)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+    return prof
+
+
+def human_stats(svg: str, gt: Path, raster_px: int) -> dict:
+    """{"trace": {statistic: one number}, "artist": {statistic: one number}, "div":
+    {statistic: distance from the artist's file}} of one trace (`inkvec_bench/design.py`);
+    empty if the trace cannot be read."""
+    from inkvec_bench import design
+    try:
+        art_text = gt.read_text(encoding="utf-8")
+        c = design.compare(svg, art_text, raster_px, artist_design(gt, raster_px))
+    except Exception:  # noqa: BLE001 - a statistic must never fail a score
+        return {}
+    return {side: {k: design.summary_value(k, c[side][k]) for k in design.STATS}
+            for side in ("trace", "artist")} | {"div": c["div"]}
+
+
+@dataclass(frozen=True)
+class Job:
+    """One icon to trace and score; picklable, so it is what the pool's workers receive.
+
+    `tier` is set in the worker, so one pool serves every condition. `known` is a
+    baseline's (SHA-256 prefix, {axis: value}) for the icon: when the new SVG's bytes have
+    that hash, the icon is not scored again and takes those values (`ImageScore.reused`).
+    `human` asks for the design battery."""
+
+    exe: Path
+    it: dict
+    out_dir: Path
+    extra_args: tuple = ()
+    keep_svg: bool = False
+    tier: str = ""
+    known: tuple | None = None
+    human: bool = False
+
+
+def _trace(job: Job) -> tuple[dict | None, Path, float, subprocess.CompletedProcess | None]:
+    """Run the tracer on one icon: (failure or None, output path, seconds, result)."""
+    it = job.it
+    out = Path(job.out_dir) / f"{it['corpus']}__{it['stem']}.svg"
+    t0 = time.time()
+    try:
+        r = subprocess.run([str(job.exe), str(item_paths(it)[0]), "-o", str(out), "--quiet",
+                            *job.extra_args], capture_output=True, timeout=TRACE_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return {"fail": f"{it['stem']}: timeout after {TRACE_TIMEOUT}s"}, out, 0.0, None
+    dt = time.time() - t0
+    if r.returncode != 0:
+        return ({"fail": f"{it['stem']}: exit {r.returncode}: "
+                         f"{r.stderr.decode('utf-8', 'replace')[-300:]}"}, out, dt, r)
+    return None, out, dt, r
+
+
+def score_svg(svg: str, it: dict, png: Path, gt: Path, render_path: Path | None = None) -> dict:
+    """Every gate signal of one SVG against the artist's file: the scorer itself, a pure
+    function of the two files (and the input raster, for `self_res`). Returns the signals,
+    or {"fail": reason}. `render_path`, when given, receives the 1024 px render as a PNG
+    (for DISTS, scored in the parent)."""
     from PIL import Image
     from inkvec_bench import render, svgmodel
     from inkvec_bench.metrics import color as mcolor
-    png, gt = item_paths(it)
-    if not png.exists() or not gt.exists():
-        return {"fail": f"{it['stem']}: missing input"}
-    out = Path(out_dir) / f"{it['corpus']}__{it['stem']}.svg"
-    t0 = time.time()
-    try:
-        r = subprocess.run([str(exe), str(png), "-o", str(out), "--quiet", *extra_args],
-                           capture_output=True, timeout=TRACE_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        return {"fail": f"{it['stem']}: timeout after {TRACE_TIMEOUT}s"}
-    dt = time.time() - t0
-    if r.returncode != 0:
-        return {"fail": f"{it['stem']}: exit {r.returncode}: "
-                        f"{r.stderr.decode('utf-8', 'replace')[-300:]}"}
-    raw = out.read_bytes()                  # hashed as written ...
-    svg = out.read_text(encoding="utf-8")   # ... and scored as before (newline-translated)
     try:
         b = render.composite(render.render(svg, JUDGE_SIZE, JUDGE_SIZE))
     except BaseException as e:  # resvg raises odd things on malformed output
         return {"fail": f"{it['stem']}: render {type(e).__name__}"}
     ref = gt_render(gt, it["corpus"], it["stem"])
-    rp = Path(out_dir) / f"{it['corpus']}__{it['stem']}.render.png"
-    Image.fromarray((np.clip(b, 0, 1) * 255 + 0.5).astype(np.uint8)).save(rp, optimize=False)
+    if render_path is not None:
+        Image.fromarray((np.clip(b, 0, 1) * 255 + 0.5).astype(np.uint8)).save(render_path, optimize=False)
     sig = structure_signals(svg, png)
     try:
         sig.update(geometric_match(svg, gt, png))
     except BaseException as e:  # resvg raises odd things on malformed output
         return {"fail": f"{it['stem']}: geometric match {type(e).__name__}"}
-    res = dict(stem=it["stem"], corpus=it["corpus"], **sig,
-               de00=float(mcolor.delta_e00(ref, b)["de00_mean"]),
-               dists=0.0,
-               ratio=svgmodel.parse(svg).n_params / max(1, it["gt_params"]),
-               seconds=dt, svg=svg if keep_svg else "",
-               sha256=hashlib.sha256(raw).hexdigest())
-    res["_render"] = str(rp)
-    res["_gt"] = str(CACHE / f"gt{JUDGE_SIZE}" / it["corpus"] / f"{it['stem']}.png")
-    if not keep_svg:
+    return dict(**sig, de00=float(mcolor.delta_e00(ref, b)["de00_mean"]),
+                ratio=svgmodel.parse(svg).n_params / max(1, it["gt_params"]))
+
+
+def score_one(job: Job) -> dict:
+    """Trace + render + colour error for one icon. Top-level so a process pool can
+    pickle it. DISTS is *not* computed here: it needs torch and a VGG, which would put
+    ~1 GB and a slice of the GPU into every worker; the parent scores it from the saved
+    render instead (`score_set`), unless `INKVEC_SKIP_DISTS=1` (the gate), when no render
+    is saved at all.
+
+    An icon whose SVG bytes match `job.known`'s hash is not scored: its scores are the
+    known ones, exactly what scoring the same bytes again would give (the scorer is a pure
+    function of the files), at the cost of the trace alone."""
+    if job.tier:
+        set_tier(job.tier)
+    it = job.it
+    png, gt = item_paths(it)
+    if not png.exists() or not gt.exists():
+        return {"fail": f"{it['stem']}: missing input"}
+    c0 = _children_cpu()
+    fail, out, dt, _ = _trace(job)
+    if fail:
+        return fail
+    cpu = {"trace": _children_cpu() - c0}
+    c0 = time.process_time()
+    raw = out.read_bytes()                  # hashed as written ...
+    svg = out.read_text(encoding="utf-8")   # ... and scored as before (newline-translated)
+    sha = hashlib.sha256(raw).hexdigest()
+    res = {"stem": it["stem"], "corpus": it["corpus"], "seconds": dt,
+           "svg": svg if job.keep_svg else "", "sha256": sha}
+    if job.known and job.known[0] and sha.startswith(job.known[0]):
+        res.update(job.known[1], dists=float("nan"), mirror=float("nan"), reused=True)
+    else:
+        want_dists = os.environ.get("INKVEC_SKIP_DISTS") != "1"
+        rp = Path(job.out_dir) / f"{it['corpus']}__{it['stem']}.render.png" if want_dists else None
+        sig = score_svg(svg, it, png, gt, rp)
+        if "fail" in sig:
+            return sig
+        res.update(sig, dists=0.0)
+        if rp is not None:
+            res["_render"] = str(rp)
+            res["_gt"] = str(CACHE / f"gt{JUDGE_SIZE}" / it["corpus"] / f"{it['stem']}.png")
+    cpu["score"] = time.process_time() - c0
+    if job.human:
+        from PIL import Image
+        c0 = time.process_time()
+        with Image.open(png) as im:
+            res["human"] = human_stats(svg, gt, im.size[0])
+        cpu["human"] = time.process_time() - c0
+    res["cpu"] = cpu
+    if not job.keep_svg:
         out.unlink(missing_ok=True)
     return res
+
+
+def _children_cpu() -> float:
+    """CPU seconds of every child process this one has waited for (the tracer)."""
+    try:
+        import resource
+    except ImportError:  # Windows: no rusage; the breakdown reads 0 there
+        return 0.0
+    r = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return r.ru_utime + r.ru_stime
 
 
 def _dists_in_parent(results: list[dict]) -> None:
@@ -793,7 +921,7 @@ def _dists_in_parent(results: list[dict]) -> None:
     if not skip:
         from inkvec_bench.metrics import raster
     for res in results:
-        if "fail" in res:
+        if "fail" in res or "_render" not in res:
             continue
         rp, gp = Path(res.pop("_render")), Path(res.pop("_gt"))
         if not skip:
@@ -803,8 +931,38 @@ def _dists_in_parent(results: list[dict]) -> None:
         rp.unlink(missing_ok=True)
 
 
+@contextmanager
+def scoring_pool(workers: int):
+    """A process pool of `workers` scoring workers, one core each, for `score_set(pool=...)`:
+    one pool for every condition of a run, so each worker imports the scorer once.
+
+    BLAS and rayon threads are pinned in the *parent* environment for the pool's life:
+    children inherit it and numpy reads it at import, which happens before any initializer
+    runs. Setting it only in the initializer is too late; each worker then starts a
+    full-width OpenBLAS pool, and 12 workers x 16 threads took a 4-minute scoring pass to
+    three hours (measured 2026-09-02)."""
+    saved = {k: os.environ.get(k) for k in PIN_VARS}
+    for k in PIN_VARS:
+        os.environ[k] = "1"
+    pool = ProcessPoolExecutor(max_workers=max(1, workers), initializer=_init_worker)
+    try:
+        yield pool
+    finally:
+        pool.shutdown()
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
 def score_set(exe: Path, name: str, items: list[dict], out_dir: Path, extra_args=(),
-              keep_svgs: bool = False, workers: int = 1, use_cache: bool = True) -> SetScore:
+              keep_svgs: bool = False, workers: int = 1, use_cache: bool = True,
+              known: dict | None = None, human: bool = False, pool=None) -> SetScore:
+    """Trace and score `items`. `known` maps `family/stem` to a baseline's (SHA-256 prefix,
+    {axis: value}): those icons are scored only if their SVG bytes changed (`score_one`).
+    `human` adds the design battery to every icon. `pool` is a `scoring_pool` to run in
+    (else one is made for this set when `workers` > 1)."""
     out_dir.mkdir(parents=True, exist_ok=True)
     ss = SetScore(name)
     # Anything already scored for this exact build comes off disk; only the rest is traced.
@@ -822,38 +980,25 @@ def score_set(exe: Path, name: str, items: list[dict], out_dir: Path, extra_args
         if cached:
             print(f"{name}: {len(cached)} of {len(items)} from cache", flush=True)
         items = todo
-    jobs = [(exe, it, out_dir, tuple(extra_args), keep_svgs) for it in items]
-    if workers <= 1 or len(jobs) < 2:
+    known = known or {}
+    jobs = [Job(exe, it, out_dir, tuple(extra_args), keep_svgs, tier(),
+                known.get(f"{it['corpus']}/{it['stem']}"), human) for it in items]
+    if pool is not None and jobs:
+        results = list(pool.map(score_one, jobs, chunksize=1))
+    elif workers <= 1 or len(jobs) < 2:
         # Serial = the tracer runs the way a user runs it, with its own rayon pool on
         # every core. That is the wall time the sub-5 s rule is about (the canary);
         # single-threaded times are 5-10x longer and would trip the gate on nothing.
         results = list(map(score_one, jobs))
     else:
-        # Pin BLAS/rayon threads in the *parent* environment before the pool spawns:
-        # children inherit it and numpy reads it at import, which happens before any
-        # initializer runs. Setting it only in the initializer is too late — each
-        # worker then starts a full-width OpenBLAS pool, and 12 workers x 16 threads
-        # took a 4-minute scoring pass to three hours (measured 2026-09-02).
-        saved = {k: os.environ.get(k) for k in PIN_VARS}
-        for k in PIN_VARS:
-            os.environ[k] = "1"
-        try:
-            pool = ProcessPoolExecutor(max_workers=min(workers, len(jobs)),
-                                       initializer=_init_worker)
-            results = list(pool.map(score_one, jobs, chunksize=1))
-            pool.shutdown()
-        finally:
-            for k, v in saved.items():
-                if v is None:
-                    os.environ.pop(k, None)
-                else:
-                    os.environ[k] = v
+        with scoring_pool(min(workers, len(jobs))) as p:
+            results = list(p.map(score_one, jobs, chunksize=1))
     _dists_in_parent(results)
     if cached or (use_cache and not keep_svgs
                   and os.environ.get("INKVEC_NO_SCORE_CACHE") != "1"):
         fresh = {
             f"{r['corpus']}/{r['stem']}": {k: r[k] for k in CACHE_FIELDS}
-            for r in results if "fail" not in r
+            for r in results if "fail" not in r and not r.get("reused")
         }
         if fresh:
             cache_save(exe, tuple(extra_args), fresh)

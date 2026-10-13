@@ -559,7 +559,13 @@ fn element(r: &Ribbon, hex: &str, decimals: usize, id: &str, editable: bool) -> 
             }
             None => {
                 let mut d = String::new();
-                if editable {
+                // Under MDL-priced editing (`editable::price`, the default) a stroke's arcs
+                // are kept: this unpriced rewrite was all of that mode's parameter-count
+                // regression (ratio_gap +7.6 %, lucide alone, whose artists draw arcs) and
+                // moved the design battery away from the artists. The fixed budget
+                // (`INKVEC_EDIT_PRICE=off`) rewrites them as before.
+                if editable && crate::editable::price::bonus(crate::editable::price::ARCS).is_none()
+                {
                     let path = crate::editable::arcs_as_cubics(&line.path);
                     fmt_fitted(&path, path.closed, decimals, &mut d);
                 } else {

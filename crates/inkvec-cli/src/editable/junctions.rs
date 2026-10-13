@@ -234,16 +234,33 @@ fn smooth_join(a: Side, b: Side, fps: &mut [FittedPath], polys: &[Polyline], st:
         },
     };
     let saved = (fps[a.edge].clone(), fps[b.edge].clone());
-    let ok = a.turn_to(fps, target)
-        && b.turn_to(fps, target)
-        && [a.edge, b.edge].iter().all(|&e| {
-            guarded(
-                &fps[e].segments,
-                &chain_starts(&fps[e]),
-                &polys[e].points,
-                &polys[e].sigma,
-            )
-        });
+    let ok = a.turn_to(fps, target) && b.turn_to(fps, target) && {
+        let (na, nb) = (fps[a.edge].clone(), fps[b.edge].clone());
+        let mut rings = vec![super::Touched {
+            pts: &polys[a.edge].points,
+            sigma: &polys[a.edge].sigma,
+            before: (saved.0.start, &saved.0.segments),
+            after: (na.start, &na.segments),
+        }];
+        if b.edge != a.edge {
+            rings.push(super::Touched {
+                pts: &polys[b.edge].points,
+                sigma: &polys[b.edge].sigma,
+                before: (saved.1.start, &saved.1.segments),
+                after: (nb.start, &nb.segments),
+            });
+        }
+        super::priced(super::price::SMOOTH, &rings, 1.0).unwrap_or_else(|| {
+            [a.edge, b.edge].iter().all(|&e| {
+                guarded(
+                    &fps[e].segments,
+                    &chain_starts(&fps[e]),
+                    &polys[e].points,
+                    &polys[e].sigma,
+                )
+            })
+        })
+    };
     if ok {
         st.junction_g1 += 1;
     } else {

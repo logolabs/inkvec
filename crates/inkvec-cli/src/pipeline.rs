@@ -408,10 +408,9 @@ fn finish_color(
         &traced.face_fade,
     );
 
-    // Editability mode: post-fit structure passes, every one guarded to the ring's own
-    // tolerance. Runs after repair and harmonization so nothing re-breaks what was locked.
+    // Editability mode: post-fit structure passes, each edit priced by MDL (editable::price).
     if args.editability {
-        let stats = editable::edit_all(&polys, &mut fitted, &prims, &order, cfg);
+        let stats = editable::edit_all(&polys, &mut fitted, &prims, &order, cfg, w.max(h));
         diag::stage(args.quiet, || stats.summary());
     }
     let doc = ColorDoc {

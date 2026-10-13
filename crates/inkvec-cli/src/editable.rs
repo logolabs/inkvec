@@ -2,15 +2,15 @@
 //! structure an artist can edit — circular arcs written as cubics with their nodes at the
 //! extrema, smooth runs re-noded at their extrema ([`curves`]), G1-smooth joins within a
 //! ring and across the planar map's junctions ([`junctions`]), axis-aligned and
-//! equal-length handles, aligned nodes, and self-symmetric rings locked into exact mirrors.
+//! equal-length handles, and self-symmetric rings locked into exact mirrors.
 //!
-//! Every change is accepted the same way: the whole ring is re-sampled and the
-//! change kept only while every sample sits within `3×` the source point's own
-//! sigma plus a small absolute slack (the deviation artists' own handles carry,
-//! measured as the GT lift). Fidelity is never traded beyond that budget; structure
-//! is gained, and parameters move either direction (mirror lock and G1 usually
-//! *reduce* them; handle snapping can add a little). Acceptance is greedy and
-//! per-item: one handle whose snap busts the budget does not veto its neighbours.
+//! Every change is accepted the same way, priced by MDL ([`price`]): it is kept when half
+//! its change in `χ²` against the evidence (both ways, by exact distances) is at most `λ`
+//! times the numbers it saves plus a learned bonus for its kind, what the artists' own
+//! files show they pay for that structure. Acceptance is greedy and per-item: one handle
+//! whose snap does not pay does not veto its neighbours. Node alignment across rings does
+//! not run ([`on`]). `INKVEC_EDIT_PRICE=off` restores the earlier fixed budget, described
+//! below.
 //!
 //! The targets are measured, not assumed: the axis spike (29% of artist handles sit
 //! within 0.05° of an axis), the 45° bump (5x lift) and the dead 10–30° trough come
@@ -34,7 +34,7 @@
 //! down, which none of the passes care about: the axis, diagonal and mirror tests are all
 //! symmetric under that flip.
 //!
-//! The acceptance test, used by every pass: sample the edited ring at 8 points per segment
+//! The fixed budget (`INKVEC_EDIT_PRICE=off`): sample the edited ring at 8 points per segment
 //! and require every sample `s` to have some source point `q_j` with
 //! `|s − q_j| ≤ 3·σ_j + slack`, where `σ_j` is that point's positional sigma and `slack` is
 //! [`EDIT_SLACK`] (or [`MIRROR_SLACK`] for mirror lock). It is one-sided on purpose: it asks
@@ -52,6 +52,9 @@ use crate::faces::FaceRings;
 
 mod curves;
 mod junctions;
+pub(crate) mod price;
+
+pub(crate) use price::{accept_ring, priced, Touched};
 
 /// `path` with every circular arc written as cubics cut at its x and y extrema
 /// ([`curves::arc_as_cubics`]), for a stroke's centreline under `--editability`: exact to
@@ -249,8 +252,7 @@ fn keep_if_guarded(
     sigma: &[f64],
     count: &mut usize,
 ) -> bool {
-    let starts = chain_starts(fp);
-    if guarded(&fp.segments, &starts, pts, sigma) {
+    if accept_ring(price::SMOOTH, (fp.start, before), fp, pts, sigma, 1.0) {
         *count += 1;
         true
     } else {
@@ -505,8 +507,8 @@ fn snap_group(
             }
         }
     }
-    let starts = chain_starts(fp);
-    if guarded(&fp.segments, &starts, pts, sigma) {
+    let kind = if axis { price::AXIS } else { price::DIAG };
+    if accept_ring(kind, (fp.start, &before), fp, pts, sigma, 0.0) {
         let k = group.len();
         if axis {
             st.axis_snaps += k;
@@ -567,21 +569,30 @@ fn pass_collinear(fp: &mut FittedPath, pts: &[Point], sigma: &[f64], st: &mut Ed
             sigma,
         );
         let new = stray(&[Segment::Line(b)], &[starts[i]], pts, sigma);
-        if new > old.max(EDIT_SLACK) {
+        let mut merged = fp.clone();
+        if j == 0 {
+            // The ring's own start is the middle node: start at the next one instead.
+            merged.start = merged.segments[0].end();
+            merged.segments.remove(0);
+            let last = merged.segments.len() - 1;
+            merged.segments[last] = Segment::Line(merged.start);
+        } else {
+            merged.segments[i] = Segment::Line(b);
+            merged.segments.remove(j);
+        }
+        let ring = Touched {
+            pts,
+            sigma,
+            before: (fp.start, &fp.segments),
+            after: (merged.start, &merged.segments),
+        };
+        let ok = priced(price::COLLINEAR, &[ring], 0.0).unwrap_or(new <= old.max(EDIT_SLACK));
+        if !ok {
             st.reverted += 1;
             i += 1;
             continue;
         }
-        if j == 0 {
-            // The ring's own start is the middle node: start at the next one instead.
-            fp.start = fp.segments[0].end();
-            fp.segments.remove(0);
-            let last = fp.segments.len() - 1;
-            fp.segments[last] = Segment::Line(fp.start);
-        } else {
-            fp.segments[i] = Segment::Line(b);
-            fp.segments.remove(j);
-        }
+        *fp = merged;
         st.collinear_merged += 1;
     }
 }
@@ -632,8 +643,7 @@ fn pass_equalize(
             *a = nc1;
             *b = nc2;
         }
-        let starts = chain_starts(fp);
-        if guarded(&fp.segments, &starts, pts, sigma) {
+        if accept_ring(price::EQUAL, (fp.start, &before), fp, pts, sigma, 0.0) {
             st.len_sym += 1;
         } else {
             fp.segments = before;
@@ -971,7 +981,15 @@ locked ring strays {stray:.3} px (budget {MIRROR_SLACK})",
     let chain: Vec<Point> = std::iter::once(start)
         .chain(out.iter().map(|s| s.end()))
         .collect();
-    if guarded_slack(&out, &chain, pts, sigma, MIRROR_SLACK) {
+    let ring = Touched {
+        pts,
+        sigma,
+        before: (fp.start, &fp.segments),
+        after: (start, &out),
+    };
+    let ok = priced(price::MIRROR, &[ring], 0.0)
+        .unwrap_or_else(|| guarded_slack(&out, &chain, pts, sigma, MIRROR_SLACK));
+    if ok {
         st.mirror_rings += 1;
         fp.segments = out;
         fp.start = start;
@@ -1142,8 +1160,15 @@ fn pass_nodes(
             move_node(fp, node, Point::new(x, y));
         }
         let poly = &polys[fi];
-        let starts = chain_starts(fp);
-        if guarded(&fp.segments, &starts, &poly.points, &poly.sigma) {
+        let ok = accept_ring(
+            price::NODES,
+            (before.start, &before.segments),
+            fp,
+            &poly.points,
+            &poly.sigma,
+            0.0,
+        );
+        if ok {
             st.nodes_aligned += edits.len();
         } else {
             *fp = before;
@@ -1173,11 +1198,16 @@ pub(crate) fn edit_all(
     prims: &[Option<PrimitiveFit>],
     order: &[FaceRings],
     cfg: &inkvec_fit::FitConfig,
+    side_px: usize,
 ) -> EditStats {
     let mut st = EditStats {
         rings: fps.len(),
         ..Default::default()
     };
+    // The prices the passes charge on this thread: a number's (λ), and the raster's longer
+    // side, which scales the smooth bonus (`price::scaled`).
+    price::set_lambda(cfg.lambda);
+    price::set_side(side_px as f64);
     let free: Vec<usize> = (0..fps.len()).filter(|&i| prims[i].is_none()).collect();
     // First the curves themselves: arcs written as the cubics a drawing tool writes, cut at
     // their extrema, then each smooth run re-segmented at its extrema where the stronger
@@ -1276,17 +1306,18 @@ fn isolated_loops(fps: &[FittedPath], free: &[usize]) -> Vec<usize> {
         .collect()
 }
 
-/// Whether a pass runs. In a `research` build `INKVEC_EDIT_PASSES` names the ones to keep,
-/// comma separated, so each can be priced on its own against the corpus; unset (and every
-/// release build) runs all of them, which is what the flag means.
+/// Whether a pass runs. Every pass but `nodes`: node alignment across rings, under MDL
+/// pricing ([`price`]), alone moved the gate's turning_gap +3.8 % on the screen set and
+/// brought the design battery no closer to the artists (2026-10-13). In a `research` build
+/// `INKVEC_EDIT_PASSES` names the ones to keep, comma separated, so each can be priced on
+/// its own against the corpus.
 fn on(pass: &str) -> bool {
-    if !cfg!(feature = "research") {
-        return true;
+    if cfg!(feature = "research") {
+        if let Some(v) = inkvec_core::env::text("INKVEC_EDIT_PASSES") {
+            return v.split(',').any(|p| p.trim() == pass);
+        }
     }
-    match inkvec_core::env::text("INKVEC_EDIT_PASSES") {
-        Some(v) => v.split(',').any(|p| p.trim() == pass),
-        None => true,
-    }
+    pass != "nodes"
 }
 
 #[cfg(test)]

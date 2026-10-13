@@ -602,12 +602,29 @@ pub(crate) fn optimise_for(
     opts: &crate::ColorOptions,
     alpha: Option<(&[f32], &[f32])>,
 ) -> Option<Report> {
-    let wanted = !opts.fast || opts.boundary_iters.is_some();
-    if !wanted || !inkvec_core::env::switch("INKVEC_BOPT", true) {
+    if !solve_wanted(opts, inkvec_core::env::switch("INKVEC_BOPT_LOSSY", false))
+        || !inkvec_core::env::switch("INKVEC_BOPT", true)
+    {
         return None;
     }
     let (budget, cap) = (opts.boundary_ms, opts.boundary_iters);
     optimise_alpha_capped(map, rgb, face, budget, alpha, cap)
+}
+
+/// Whether the trace's options ask for the solve: always in Quality, in Fast only when
+/// `opts.boundary_iters` caps it (`balanced`), and not on a lossy intake that was not
+/// restored, unless `lossy_anyway` (`INKVEC_BOPT_LOSSY=1`).
+///
+/// On a lossy intake the solve fits sub-pixel edges to the codec's ringing and blocking.
+/// Measured on the gate's resized quality-80 JPEG tier, 246 icons, against the artist's
+/// files: with the solve off, edge placement (geomatch's mismatch within a source pixel of
+/// an artist edge) 0.1785 -> 0.1653 px, better in every family (simple-icons -36 %), area
+/// correct +0.091 percentage points, dE00 -5.6 %; on clean input the solve is worth keeping
+/// (off: area -0.023 pp, geom +3.5 %). A restored image (`--restore`) is clean again, so it
+/// keeps the solve.
+pub(crate) fn solve_wanted(opts: &crate::ColorOptions, lossy_anyway: bool) -> bool {
+    let wanted = !opts.fast || opts.boundary_iters.is_some();
+    wanted && (!opts.lossy_intake || opts.restored || lossy_anyway)
 }
 
 /// [`optimise_alpha`] with the descent stopped after at most `max_iters` iterations per

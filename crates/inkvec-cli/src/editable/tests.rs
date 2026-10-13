@@ -250,6 +250,7 @@ fn test_edit_all_on_diamond() {
         &prims,
         &[],
         &inkvec_fit::FitConfig::default(),
+        512,
     );
     assert!(st.rings > 0);
     let summary = st.summary();
@@ -340,6 +341,7 @@ fn the_closing_join_of_a_loop_edge_is_edited() {
         &[None],
         &[],
         &inkvec_fit::FitConfig::default(),
+        512,
     );
     assert_eq!(st.collinear_merged, 1);
     assert_eq!(fps[0].segments.len(), 4);
@@ -537,4 +539,40 @@ fn test_pass_mirror_on_diamond() {
     let starts = chain_starts(&fp);
     pass_mirror(&mut fp, &starts, &poly.points, &poly.sigma, &mut st);
     assert!(st.mirror_rings >= 1);
+}
+
+/// Under MDL pricing (`price`, what `edit_all` runs) a G1 snap that moves the curve off its
+/// own evidence is kept only when what it saves, one implied direction and the smooth
+/// bonus, is worth the misfit at the fit's price of a number: refused when numbers are
+/// nearly free, kept when they are dear.
+#[test]
+fn a_priced_snap_is_kept_only_when_it_pays_at_the_price_of_a_number() {
+    if inkvec_core::env::text("INKVEC_EDIT_PRICE").is_some() {
+        return;
+    }
+    let a = 10f64.to_radians();
+    let kinked = || FittedPath {
+        start: pt(0.0, 0.0),
+        segments: vec![
+            Segment::Cubic(pt(15.0, 0.0), pt(35.0, 0.0), pt(50.0, 0.0)),
+            Segment::Cubic(
+                pt(50.0 + 15.0 * a.cos(), 15.0 * a.sin()),
+                pt(85.0, 6.0),
+                pt(100.0, 8.0),
+            ),
+        ],
+        closed: false,
+    };
+    let poly = poly_of(&kinked(), 48);
+    let mut joins = Vec::new();
+    for lambda in [1e-6, 1e6] {
+        price::set_lambda(lambda);
+        let mut fp = kinked();
+        let mut st = EditStats::default();
+        let starts = chain_starts(&fp);
+        pass_g1(&mut fp, &starts, &poly.points, &poly.sigma, &mut st);
+        joins.push(st.g1_joins);
+    }
+    price::set_lambda(f64::NAN);
+    assert_eq!(joins, vec![0, 1]);
 }

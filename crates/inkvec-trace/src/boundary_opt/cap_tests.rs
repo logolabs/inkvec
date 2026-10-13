@@ -115,3 +115,20 @@ impl Report {
         }
     }
 }
+
+/// The solve skips a lossy intake that was not restored (its edges are the codec's), runs on
+/// a restored one and wherever else Quality runs it, and runs on a lossy intake when asked.
+#[test]
+fn the_solve_skips_an_unrestored_lossy_intake() {
+    let opts = |lossy: bool, restored: bool, fast: bool| crate::ColorOptions {
+        lossy_intake: lossy,
+        restored,
+        fast,
+        ..Default::default()
+    };
+    assert!(solve_wanted(&opts(false, false, false), false));
+    assert!(!solve_wanted(&opts(true, false, false), false));
+    assert!(solve_wanted(&opts(true, false, false), true));
+    assert!(solve_wanted(&opts(true, true, false), false));
+    assert!(!solve_wanted(&opts(false, false, true), false));
+}

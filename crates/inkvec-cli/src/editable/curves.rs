@@ -15,7 +15,7 @@ use inkvec_fit::curves::{arc_ellipse_center, Segment};
 use inkvec_fit::extrema::Preference;
 use inkvec_fit::{FitConfig, FittedPath};
 
-use super::{chain_starts, guarded, EditStats};
+use super::EditStats;
 
 /// How `--editability` prefers nodes at extrema: three parameters credited per anchored
 /// node against the fit's one (`inkvec_fit::extrema::FIT`), and the written count free to
@@ -27,37 +27,61 @@ pub(super) const EDIT_PREFERENCE: Preference = Preference {
     same_count: false,
 };
 
-/// Write every circular arc of the ring as cubics cut at its x and y extrema
-/// ([`arc_as_cubics`]). The pieces are within `1.1e-3` of the radius of the arc, so the
-/// guard holds wherever the radius is under a few thousand pixels; it is checked anyway.
+/// Write each circular arc of the ring as cubics cut at its x and y extrema
+/// ([`arc_as_cubics`]), one arc at a time. The pieces are within `1.1e-3` of the radius of
+/// the arc. Each rewrite is priced on its own ([`super::price`]), as `arcs` up to a quarter
+/// turn and `arcs_wide` beyond, with bonuses of their own: a whole-ring rewrite would pay
+/// one bonus for every arc of the ring at once, and an artist's choice between an arc and
+/// its cubics depends on how far it turns. Under the fixed budget each is guarded. From the
+/// last segment back, so the indices of the ones not yet visited do not move.
 pub(super) fn pass_arcs(fp: &mut FittedPath, poly: &Polyline, st: &mut EditStats) {
-    if !fp
-        .segments
-        .iter()
-        .any(|s| matches!(s, Segment::Arc { .. }) && s.is_circular())
-    {
-        return;
-    }
-    let before = fp.segments.clone();
-    let mut out = Vec::with_capacity(before.len() + 4);
-    let mut cur = fp.start;
-    let mut arcs = 0;
-    for s in &before {
-        match arc_as_cubics(s, cur) {
-            Some(pieces) => {
-                out.extend(pieces);
-                arcs += 1;
-            }
-            None => out.push(s.clone()),
+    for i in (0..fp.segments.len()).rev() {
+        let seg = fp.segments[i].clone();
+        if !(matches!(seg, Segment::Arc { .. }) && seg.is_circular()) {
+            continue;
         }
-        cur = s.end();
-    }
-    fp.segments = out;
-    if guarded(&fp.segments, &chain_starts(fp), &poly.points, &poly.sigma) {
-        st.arcs_split += arcs;
-    } else {
-        fp.segments = before;
-        st.reverted += 1;
+        let start = if i == 0 {
+            fp.start
+        } else {
+            fp.segments[i - 1].end()
+        };
+        let Some(pieces) = arc_as_cubics(&seg, start) else {
+            continue;
+        };
+        let Segment::Arc {
+            rx,
+            ry,
+            phi,
+            large_arc,
+            sweep,
+            end,
+        } = seg
+        else {
+            continue;
+        };
+        let turn = arc_ellipse_center(start, rx, ry, phi, large_arc, sweep, end)
+            .delta
+            .abs();
+        let kind = if turn > std::f64::consts::FRAC_PI_2 + 1e-9 {
+            super::price::ARCS_WIDE
+        } else {
+            super::price::ARCS
+        };
+        let before = fp.segments.clone();
+        fp.segments.splice(i..=i, pieces);
+        if super::accept_ring(
+            kind,
+            (fp.start, &before),
+            fp,
+            &poly.points,
+            &poly.sigma,
+            0.0,
+        ) {
+            st.arcs_split += 1;
+        } else {
+            fp.segments = before;
+            st.reverted += 1;
+        }
     }
 }
 
@@ -162,7 +186,14 @@ pub(super) fn pass_extrema(
     if runs == 0 {
         return;
     }
-    if guarded(&fp.segments, &chain_starts(fp), &poly.points, &poly.sigma) {
+    if super::accept_ring(
+        super::price::EXTREMA,
+        (before.start, &before.segments),
+        fp,
+        &poly.points,
+        &poly.sigma,
+        0.0,
+    ) {
         st.extrema_runs += runs;
     } else {
         *fp = before;

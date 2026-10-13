@@ -4077,7 +4077,7 @@ checksum = "a257582fdcde896fd96463bf2d40eefea0580021c0712a0e2b028b60b47a837a"
 
 [[package]]
 name = "inkvec"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "image",
  "inkvec-cli",
@@ -4093,7 +4093,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-cli"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "inkvec-core",
  "inkvec-fit",
@@ -4107,7 +4107,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "robust",
  "web-time",
@@ -4115,7 +4115,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-fab"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "i_overlay",
  "inkvec-core",
@@ -4128,7 +4128,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-ffi"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "inkvec",
  "serde_json",
@@ -4137,7 +4137,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-fit"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "inkvec-core",
  "kurbo",
@@ -4146,7 +4146,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-py"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "inkvec",
  "pyo3",
@@ -4154,7 +4154,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-restore"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "burn",
  "burn-onnx",
@@ -4168,7 +4168,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-server"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "axum",
  "form_urlencoded",
@@ -4186,7 +4186,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-sr"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "image",
  "inkvec-core",
@@ -4196,7 +4196,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-svgmin"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "inkvec-core",
  "inkvec-fit",
@@ -4207,7 +4207,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-trace"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "image",
  "inkvec-core",
@@ -4219,11 +4219,11 @@ dependencies = [
 
 [[package]]
 name = "inkvec-verified"
-version = "0.3.0"
+version = "0.3.1"
 
 [[package]]
 name = "inkvec-wasm"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "console_error_panic_hook",
  "inkvec",

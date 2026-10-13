@@ -7,6 +7,8 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-13
+
 ### Changed
 
 - **`--editability` prices every edit by MDL, with bonuses learned from the artists' files.** Each pass used to keep an edit while every sample stayed within `3·σ + slack` of the evidence; each edit passed on its own and hundreds of them added up, so the mode cost +33 % dE00 and +15.6 % geometric distance from the artists' files on the screen set. Now an edit of kind `k` is kept when `½·Δχ² ≤ λ·(numbers saved + credit + b_k)` (`editable/price.rs`): `χ²` both ways between the curve and the evidence by exact distances (the fit's sampled `curves::chi2` has a floor of about two units per point, so 0.1 px moves looked free), `λ` the fit's price of a number, credit one number for a G1 join's implied direction, and `b_k` a bonus learned by inverse optimisation against the artists' files (Maximum Margin Planning; the structured perceptron's update), with the gate's geometric distance and turning held to their margins. Nine kinds were learned and pruned to three: an arc written as cubics cut at its extrema, now one arc at a time (23.9 up to a quarter turn, 40 beyond), a node at an extremum (11.85) and a smooth join (11.2, scaled by the raster's longer side over 512 px, since a smaller raster has less evidence per curve). Node alignment across rings no longer runs (it alone moved turning_gap +3.8 % for no gain), and a stroke's arcs are kept as arcs (that rewrite was the mode's whole parameter-count regression, on lucide). `INKVEC_EDIT_PRICE=off` restores the fixed budget.

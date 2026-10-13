@@ -209,9 +209,11 @@ html.framed .top{box-shadow:0 -6px 0 var(--void),inset 0 1px 0 rgba(201,117,74,.
 </section>
 
 <section class="sec" id="new">
-  <h2>What's new in 0.3.0</h2>
-  <p class="lede">Traces come out closer to what the artist drew, and much closer on the resized JPEGs and screenshots logos usually arrive as. Against 0.2.7 on the 246 icons of the regression gate, every gated measure is better or level, in every mode and condition.</p>
+  <h2>What's new in 0.3.1</h2>
+  <p class="lede">With editability on, a trace is drawn more the way artists draw, and on a JPEG the edges land closer to the artist's. 0.3.0 brought traces closer to what the artist drew in every mode and condition, and much closer on the resized JPEGs and screenshots logos usually arrive as.</p>
   <div class="newgrid">
+    <div class="new"><span class="tag">Editing</span><h3>Every edit has to pay for itself</h3><p>With editability on, a smooth join, a node at an extreme or an arc rewritten as cubics is kept only when the numbers it saves outweigh the fit it costs. The bonus each kind of edit receives was learned from the artists' own files. Against the plain trace, edge placement improves by up to 0.9%, and the drawing is 8 to 9% closer to the artists' by a battery of 28 drawing statistics.</p></div>
+    <div class="new"><span class="tag">Noisy input</span><h3>Edges on a JPEG</h3><p>The boundary solve fitted edges to the codec's ringing. On a lossy image that is not restored it is now skipped. On icons resized and saved at quality 80, edges sit 7% closer to the artist's and Quality's dE00 is 5.6% lower.</p></div>
     <div class="new"><span class="tag">Fidelity</span><h3>Closer to the artist's file</h3><p>Quality's colour difference from the artist's own file (dE00) is 12.5% lower at 128 px, 12.1% at 512 px and 15.2% at 512 px on an opaque ground; Fast's is 9 to 12% lower. Quality also writes fewer parameters: 1.32 per artist parameter at 512 px opaque, down from 1.96.</p></div>
     <div class="new"><span class="tag">Noisy input</span><h3>JPEGs and screenshots</h3><p>A JPEG's colour bleeds two or three pixels across every edge. Those halos now go back to the inks they lie between instead of becoming shapes of their own. On icons resized and saved at quality 80, Quality's dE00 is 10.4% lower and Fast writes 4.13 parameters per artist parameter, down from 7.29.</p></div>
     <div class="new"><span class="tag">Shapes</span><h3>Whole shapes, under what covers them</h3><p>A shape partly hidden by another used to come back as the sliver that shows. Quality now draws it whole: the simplest shape that leaves every visible pixel as it was. A letter's counter is cut out of its glyph instead of painted over it, and each fill is one compound path.</p></div>

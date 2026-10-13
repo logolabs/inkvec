@@ -2095,7 +2095,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-cli"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "inkvec-core",
  "inkvec-fit",
@@ -2109,7 +2109,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "robust",
  "web-time",
@@ -2117,7 +2117,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-fab"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "i_overlay",
  "inkvec-core",
@@ -2129,7 +2129,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-fit"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "inkvec-core",
  "kurbo",
@@ -2138,7 +2138,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-restore"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "image",
  "inkvec-sr",
@@ -2149,7 +2149,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-sr"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "image",
  "inkvec-core",
@@ -2159,7 +2159,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-studio"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "dirs",
  "image",
@@ -2183,7 +2183,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-studio-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "image",
  "inkvec-cli",
@@ -2203,7 +2203,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-studio-wasm"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "console_error_panic_hook",
  "inkvec-fab",
@@ -2219,7 +2219,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-svgmin"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "inkvec-core",
  "inkvec-fit",
@@ -2230,7 +2230,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-trace"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "image",
  "inkvec-core",
@@ -2242,7 +2242,7 @@ dependencies = [
 
 [[package]]
 name = "inkvec-verified"
-version = "0.3.0"
+version = "0.3.1"
 
 [[package]]
 name = "ipnet"

@@ -7,6 +7,11 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`--editability` is fast again.** 0.3.1 prices every candidate edit with an exact `χ²` both ways between the curve and the evidence, and both nearest-point searches scanned every piece: an arc enters the point-to-curve term as chords every 0.02 px, so a ring of arcs was thousands of pieces measured against each of its points, twice per candidate edit. `lucide/bug` took 53 s where 0.3.0 took 1.05 s. Both searches now walk bounding boxes over runs of consecutive pieces, nearer first, and skip a run whose box is already further than the best piece found (`inkvec_fit::nearest`, the branch-and-bound search of Friedman, Bentley & Finkel, ACM TOMS 1977). The boxes are grown and the bounds shrunk past rounding, so a skipped piece can never have been the minimum, and the minimum of a set of floats does not depend on the order it is taken in: the output is byte-identical to 0.3.1 (65 screen icons at 512 px opaque, Quality with and without `--editability`, 65/65 each).
+  - With `--editability`, on those 65 icons: median 1.15 → 0.43 s, mean 3.14 → 0.51 s, slowest 53.0 → 1.25 s (`lucide/bug`; `twemoji/1f42b` 17.3 → 0.68 s, `lucide/bath` 13.7 → 0.61 s). In a separate run, 0.3.0 took 0.39 s median and 0.47 s mean, this build 0.51 s and 0.60 s. Plain Quality is unchanged (0.34 s median both ways).
+
 ## [0.3.1] - 2026-10-13
 
 ### Changed

@@ -50,6 +50,7 @@ use std::sync::OnceLock;
 
 use inkvec_core::{Point, Polyline};
 use inkvec_fit::curves::Segment;
+use inkvec_fit::nearest::{BoxTree, Piece};
 use inkvec_fit::structural::eval_segment;
 use inkvec_fit::FittedPath;
 
@@ -224,6 +225,11 @@ pub(crate) fn accept_ring(
 /// points' mean spacing, so a run of curve counts as much as the points that cover it: the
 /// symmetric (chamfer) form of the same Gaussian residual. Infinite for an empty chain or
 /// fewer than two points.
+///
+/// Both nearest searches go through bounding boxes ([`inkvec_fit::nearest`]) and return the
+/// bits a scan of every segment returns. The source segments' boxes are weighted by one
+/// over the larger sigma at their ends: the sigma interpolated along a segment is never
+/// larger, so the weighted squared distance to the box bounds the term from below.
 pub(crate) fn two_sided_chi2(pts: &[Point], sigma: &[f64], start: Point, segs: &[Segment]) -> f64 {
     if segs.is_empty() || pts.len() < 2 || sigma.is_empty() {
         return f64::INFINITY;
@@ -245,6 +251,11 @@ pub(crate) fn two_sided_chi2(pts: &[Point], sigma: &[f64], start: Point, segs: &
     }
     let poly_len: f64 = pts.windows(2).map(|w| w[0].dist(w[1])).sum();
     let spacing = (poly_len / (pts.len() - 1) as f64).max(1e-6);
+    let source = BoxTree::new(
+        (0..pts.len() - 1)
+            .map(|j| Piece::around(&pts[j..j + 2], 1.0 / sg(j).max(sg(j + 1)).powi(2)))
+            .collect(),
+    );
     let mut rev = 0.0;
     let mut cur = start;
     for seg in segs {
@@ -255,8 +266,7 @@ pub(crate) fn two_sided_chi2(pts: &[Point], sigma: &[f64], start: Point, segs: &
             let s = eval_segment(seg, cur, k as f64 / n as f64);
             let step = prev.dist(s);
             prev = s;
-            let mut best = f64::INFINITY;
-            for j in 0..pts.len() - 1 {
+            let best = source.min_by(s, |j| {
                 let (a, b) = (pts[j], pts[j + 1]);
                 let (dx, dy) = (b.x - a.x, b.y - a.y);
                 let l2 = dx * dx + dy * dy;
@@ -267,8 +277,8 @@ pub(crate) fn two_sided_chi2(pts: &[Point], sigma: &[f64], start: Point, segs: &
                 };
                 let q = Point::new(a.x + t * dx, a.y + t * dy);
                 let sig = sg(j) * (1.0 - t) + sg(j + 1) * t;
-                best = best.min((s.dist(q) / sig).powi(2));
-            }
+                (s.dist(q) / sig).powi(2)
+            });
             rev += best * step / spacing;
         }
         cur = end;

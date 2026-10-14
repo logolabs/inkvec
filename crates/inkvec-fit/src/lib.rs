@@ -109,6 +109,7 @@ pub mod extrema;
 pub mod harmonize;
 pub mod merge;
 pub mod multimodel;
+pub mod nearest;
 pub mod pareto;
 pub mod primitives;
 pub mod simple;

@@ -113,13 +113,13 @@ pub use crate::candidates::{
     fit_cubic_moments, free_cubic_fit, params_cubic, MAX_ARM, MAX_RESIDUAL_SAMPLES,
 };
 use crate::curves::Segment;
+use crate::nearest::PathPieces;
 pub(crate) use crate::tangents::{arc_lengths, g1_break_radians, symmetric_tangent, turn_angle};
 pub use crate::tangents::{
     break_cost, estimate_tangents, vertex_cost, Tangents, G1_BREAK_DEGREES, TANGENT_WINDOW_MAX,
 };
 use crate::{adjust_vertices_at, FitConfig, FittedPath, Segmentation, PARAMS_LINE};
 use inkvec_core::{Point, Polyline, Vec2};
-use kurbo::{CubicBez, Line as KLine, ParamCurveNearest, Point as KPoint};
 
 mod limits;
 mod scan;
@@ -1413,84 +1413,30 @@ fn solve_closed(poly: &Polyline, cfg: &FitConfig, lim: &Limits) -> MultimodelFit
 /// This is the evaluator used to compare fitters. It is deliberately not the sampled
 /// distance of `curves::chi2`, whose 0.25px sample spacing puts a floor of roughly two
 /// units of chi-squared per point at `sigma = 0.05` — larger than the residual of a good
-/// fit, and enough to drown the comparison.
+/// fit, and enough to drown the comparison. The closest segment is found through the
+/// segments' bounding boxes ([`crate::nearest`]), with the same value a scan of every
+/// segment gives.
 pub fn path_chi2(poly: &Polyline, path: &FittedPath) -> f64 {
-    let Some(segs) = kurbo_segments(path) else {
+    let Some(segs) = PathPieces::new(path) else {
         return f64::INFINITY;
     };
     poly.points
         .iter()
         .zip(&poly.sigma)
-        .map(|(p, sg)| nearest_dist2(&segs, *p) / (sg * sg))
+        .map(|(p, sg)| segs.dist2(*p) / (sg * sg))
         .sum()
 }
 
 /// Largest distance (px) from any measured point to the path, by the same exact nearest
 /// distance as [`path_chi2`]. Infinite for a path with no segments.
 pub fn path_max_deviation(poly: &Polyline, path: &FittedPath) -> f64 {
-    let Some(segs) = kurbo_segments(path) else {
+    let Some(segs) = PathPieces::new(path) else {
         return f64::INFINITY;
     };
     poly.points
         .iter()
-        .map(|p| nearest_dist2(&segs, *p).sqrt())
+        .map(|p| segs.dist2(*p).sqrt())
         .fold(0.0, f64::max)
-}
-
-/// A path segment in kurbo's types, for its exact nearest-point queries.
-enum KSeg {
-    /// A straight segment.
-    L(KLine),
-    /// A cubic Bézier.
-    C(CubicBez),
-}
-
-/// `path` as kurbo segments, arcs replaced by fine chords (0.02 px spacing). `None` for a
-/// path with no segments.
-fn kurbo_segments(path: &FittedPath) -> Option<Vec<KSeg>> {
-    if path.segments.is_empty() {
-        return None;
-    }
-    let kp = |p: Point| KPoint::new(p.x, p.y);
-    let mut segs = Vec::with_capacity(path.segments.len());
-    let mut cur = path.start;
-    for s in &path.segments {
-        match *s {
-            Segment::Line(p) => {
-                segs.push(KSeg::L(KLine::new(kp(cur), kp(p))));
-                cur = p;
-            }
-            Segment::Cubic(a, b, p) => {
-                segs.push(KSeg::C(CubicBez::new(kp(cur), kp(a), kp(b), kp(p))));
-                cur = p;
-            }
-            // Sampled finely, not chorded. The chord over-states an arc's distance by its
-            // own sagitta — which is the entire reason for drawing one — and that was
-            // tolerable only while arcs came from elsewhere. Now the program emits them, so
-            // scoring one as its chord would report a clean circle as millions of units of
-            // cost and hide whatever it is being compared against.
-            Segment::Arc { end, .. } => {
-                let pts = crate::curves::sample_run(cur, std::slice::from_ref(s), 0.02);
-                for w in pts.windows(2) {
-                    segs.push(KSeg::L(KLine::new(kp(w[0]), kp(w[1]))));
-                }
-                cur = end;
-            }
-        }
-    }
-    Some(segs)
-}
-
-/// Squared distance (px²) from `p` to the nearest of `segs`, using kurbo's nearest-point
-/// solvers (accuracy 1e-9 on lines, 1e-6 on cubics). Infinite for an empty list.
-fn nearest_dist2(segs: &[KSeg], p: Point) -> f64 {
-    let q = KPoint::new(p.x, p.y);
-    segs.iter()
-        .map(|s| match s {
-            KSeg::L(l) => l.nearest(q, 1e-9).distance_sq,
-            KSeg::C(c) => c.nearest(q, 1e-6).distance_sq,
-        })
-        .fold(f64::INFINITY, f64::min)
 }
 
 /// The MDL objective of a fitted path: `0.5·chi² + λ·params`, parameters counted per

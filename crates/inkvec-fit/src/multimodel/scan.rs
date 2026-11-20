@@ -365,6 +365,10 @@ pub(super) struct SpanScorer<'a> {
     sigma: &'a [f64],
     /// Tangents estimated at every point.
     tan: &'a Tangents,
+    incoming: Vec<Direction>,
+    outgoing: Vec<Direction>,
+    break_radians: f64,
+    full_corner_cosine: f64,
     /// Line, moment and arc-length prefix sums of the same points.
     pre: &'a Prefix,
     cfg: &'a FitConfig,
@@ -384,6 +388,21 @@ pub(super) struct SpanScorer<'a> {
     bounds: bool,
 }
 
+/// Measurements of one vertex tangent, reused by every span that ends or starts there.
+struct Direction {
+    length: f64,
+    angle: f64,
+}
+
+impl Direction {
+    fn new(v: Vec2) -> Self {
+        Self {
+            length: v.norm(),
+            angle: v.angle(),
+        }
+    }
+}
+
 impl<'a> SpanScorer<'a> {
     /// A scorer for one opened polyline; builds the circle moment sums, O(n).
     pub(super) fn new(
@@ -395,10 +414,16 @@ impl<'a> SpanScorer<'a> {
         joins_at_ends: bool,
     ) -> Self {
         let debug = dp_debug();
+        let break_radians = g1_break_radians();
         SpanScorer {
             pts,
             sigma,
             tan,
+            incoming: tan.incoming.iter().copied().map(Direction::new).collect(),
+            outgoing: tan.outgoing.iter().copied().map(Direction::new).collect(),
+            break_radians,
+            // Leave the threshold's rounding neighbourhood to the original angle formula.
+            full_corner_cosine: break_radians.cos() - 1e-12,
             pre,
             cfg,
             joins_at_ends,
@@ -429,6 +454,33 @@ impl<'a> SpanScorer<'a> {
         } else {
             Bound::NONE
         }
+    }
+
+    /// The line's price with one chord length and the precomputed tangent lengths.
+    #[inline]
+    fn line_cost(&self, i: usize, j: usize, chi2: f64) -> f64 {
+        let lambda = self.cfg.lambda;
+        let chord = self.pts[j] - self.pts[i];
+        let length = chord.norm();
+        let corner = |a, b, na, nb| {
+            let cosine = crate::tangents::turn_cosine(a, b, na, nb);
+            if cosine.is_some_and(|c| c < self.full_corner_cosine)
+                && self.break_radians > 0.0
+                && self.break_radians <= std::f64::consts::PI
+            {
+                return lambda;
+            }
+            let fraction = cosine.map_or(0.0, f64::acos) / self.break_radians;
+            lambda * (fraction * fraction).min(1.0)
+        };
+        let mut breaks = 0.0;
+        if i > 0 || self.joins_at_ends {
+            breaks += corner(self.tan.outgoing[i], chord, self.outgoing[i].length, length);
+        }
+        if j + 1 < self.pts.len() || self.joins_at_ends {
+            breaks += corner(chord, self.tan.incoming[j], length, self.incoming[j].length);
+        }
+        0.5 * chi2 + lambda * PARAMS_LINE + breaks
     }
 
     /// An ellipse is asked about only where a circle has not already described the span
@@ -472,7 +524,7 @@ impl<'a> SpanScorer<'a> {
         let (pts, tan, pre, cfg) = (self.pts, self.tan, self.pre, self.cfg);
         let cubic_floor = self.cubic_floor;
         let chi2_l = pre.chi2_line(i, j);
-        let line_plain = line_cost_terms(pts, tan, i, j, chi2_l, cfg, self.joins_at_ends);
+        let line_plain = self.line_cost(i, j, chi2_l);
         // The circle is asked for first, because what it finds is evidence about the
         // line: see `bow_penalty`. It is O(1) from the moment sums, so asking costs
         // nothing but the guards.
@@ -569,7 +621,18 @@ impl<'a> SpanScorer<'a> {
         };
         let (t0, tj) = (tan.outgoing[i], tan.incoming[j]);
         let raw = pre.raw_moments(i, j);
-        match best_cubic_bounded(pts, sigma, &pre.s, i, j, t0, tj, raw, &ab) {
+        match best_cubic_bounded(
+            pts,
+            sigma,
+            &pre.s,
+            i,
+            j,
+            t0,
+            tj,
+            [self.outgoing[i].angle, self.incoming[j].angle],
+            raw,
+            &ab,
+        ) {
             G1Fit::Untried => {}
             G1Fit::Exact(chi2, d0, d1) => {
                 out.chi2_c = chi2;
@@ -622,6 +685,7 @@ impl<'a> SpanScorer<'a> {
             j,
             self.tan.outgoing[i],
             self.tan.incoming[j],
+            [self.outgoing[i].angle, self.incoming[j].angle],
             self.pre.raw_moments(i, j),
             &Abandon::over_only(floor),
         ) {
@@ -1069,6 +1133,38 @@ mod tests {
         }
         let n = pts.len();
         Polyline::new(pts, vec![0.35; n], false)
+    }
+
+    #[test]
+    fn cached_line_prices_match_direct_prices_bit_for_bit() {
+        let pts = [
+            Point::new(0.0, 0.0),
+            Point::new(0.0, 0.0),
+            Point::new(1.0, 0.0),
+            Point::new(1.0, 1.0),
+        ];
+        let sigma = [0.5; 4];
+        let cfg = FitConfig::default();
+        let pre = Prefix::new(&pts, &sigma);
+        let degrees = G1_BREAK_DEGREES;
+        let directions = [degrees - 1e-10, degrees, degrees + 1e-10, 180.0].map(|deg| Vec2 {
+            x: deg.to_radians().cos(),
+            y: deg.to_radians().sin(),
+        });
+        let tan = Tangents {
+            incoming: directions.to_vec(),
+            outgoing: directions.to_vec(),
+        };
+        for closed in [false, true] {
+            let scoring = SpanScorer::new(&pts, &sigma, &tan, &pre, &cfg, closed);
+            for j in 1..pts.len() {
+                for i in 0..j {
+                    let chi2 = pre.chi2_line(i, j);
+                    let direct = line_cost_terms(&pts, &tan, i, j, chi2, &cfg, closed);
+                    assert_eq!(scoring.line_cost(i, j, chi2).to_bits(), direct.to_bits());
+                }
+            }
+        }
     }
 
     /// A deterministic pseudo-random stream in `[0, 1)`.

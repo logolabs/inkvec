@@ -305,15 +305,17 @@ pub fn estimate_tangents(poly: &Polyline, cfg: &FitConfig) -> Tangents {
 /// Unsigned angle between two directions, in radians, in `[0, π]`: `acos(a·b / (|a||b|))`.
 /// A zero vector has no direction and gives 0.
 pub(crate) fn turn_angle(a: Vec2, b: Vec2) -> f64 {
-    let (na, nb) = (a.norm(), b.norm());
+    turn_cosine(a, b, a.norm(), b.norm()).map_or(0.0, f64::acos)
+}
+
+/// Cosine of the turn using the original lengths, when both directions are defined.
+#[inline]
+pub(crate) fn turn_cosine(a: Vec2, b: Vec2, na: f64, nb: f64) -> Option<f64> {
     if !na.is_finite() || !nb.is_finite() || na < 1e-12 || nb < 1e-12 {
-        return 0.0;
+        return None;
     }
-    let cos_theta = (a.dot(b) / (na * nb)).clamp(-1.0, 1.0);
-    if !cos_theta.is_finite() {
-        return 0.0;
-    }
-    cos_theta.acos()
+    let cosine = (a.dot(b) / (na * nb)).clamp(-1.0, 1.0);
+    cosine.is_finite().then_some(cosine)
 }
 
 /// Cost of a tangent break between directions `a` and `b`, in nats.

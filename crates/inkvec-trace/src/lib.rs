@@ -589,7 +589,19 @@ pub fn trace_color_full_with_alpha(
             sigma_noise,
         );
         if absorbed > 0 || moved > 0 {
-            despeckle(&mut labels, img.width, img.height, min_region);
+            if opts.lossy_intake {
+                // Codec artefacts make the pixel colours unreliable near the edge.
+                despeckle(&mut labels, img.width, img.height, min_region);
+            } else {
+                regions::despeckle_after_blend(
+                    &mut labels,
+                    img.width,
+                    img.height,
+                    min_region,
+                    &rgb,
+                    &pal,
+                );
+            }
         }
     }
     sw.mark("blend_absorb");

@@ -1381,7 +1381,42 @@ fn solve_closed(poly: &Polyline, cfg: &FitConfig, lim: &Limits) -> MultimodelFit
             .unwrap_or(0)
     };
 
-    let run = |cut: usize| -> MultimodelFit { run_limited(cut, lim) };
+    // A cut competes on its discrete cost. Refinement changes the path, but
+    // neither that cost nor the vertex indices used to choose the other cut.
+    struct CutFit {
+        cut: usize,
+        opened: Polyline,
+        tangents: Tangents,
+        prefix: Prefix,
+        solution: Solution,
+        cost: f64,
+        elapsed: std::time::Duration,
+    }
+    let run = |cut| {
+        let (opened, tangents) = open_at(poly, &tan, cut);
+        let start = inkvec_core::clock::Instant::now();
+        let prefix = Prefix::new(&opened.points, &opened.sigma);
+        let solution = solve_open(
+            &opened.points,
+            &opened.sigma,
+            &tangents,
+            &prefix,
+            cfg,
+            true,
+            lim,
+        );
+        let elapsed = start.elapsed();
+        let cost = solution.cost + vertex_cost(&tan, cut, cfg);
+        CutFit {
+            cut,
+            opened,
+            tangents,
+            prefix,
+            solution,
+            cost,
+            elapsed,
+        }
+    };
 
     let first = run(cut1);
     let circ = |a: usize, b: usize| -> usize {
@@ -1389,19 +1424,51 @@ fn solve_closed(poly: &Polyline, cfg: &FitConfig, lim: &Limits) -> MultimodelFit
         d.min(n - d)
     };
     let cut2 = first
+        .solution
         .vertices
         .iter()
-        .copied()
+        .map(|&i| (cut1 + i) % n)
         .max_by_key(|&v| circ(v, cut1))
         .unwrap_or(cut1);
-    if cut2 == cut1 {
-        return first;
-    }
-    let second = run(cut2);
-    if second.cost < first.cost {
-        second
-    } else {
+    let chosen = if cut2 == cut1 {
         first
+    } else {
+        let second = run(cut2);
+        if second.cost < first.cost {
+            second
+        } else {
+            first
+        }
+    };
+    let start = inkvec_core::clock::Instant::now();
+    let path = refine(
+        &chosen.opened,
+        &chosen.tangents,
+        &chosen.prefix,
+        &chosen.solution,
+        cfg,
+    );
+    if !lim.is_free() && inkvec_core::env::flag("INKVEC_TIMING") {
+        eprintln!(
+            "  [t]   capped fit n={} span={} forced={} segs={}: solve {:.1} ms, refine {:.1} ms",
+            chosen.opened.len(),
+            lim.max_span,
+            lim.forced.len(),
+            chosen.solution.vertices.len().saturating_sub(1),
+            chosen.elapsed.as_secs_f64() * 1e3,
+            start.elapsed().as_secs_f64() * 1e3
+        );
+    }
+    MultimodelFit {
+        path,
+        vertices: chosen
+            .solution
+            .vertices
+            .iter()
+            .map(|&i| (chosen.cut + i) % n)
+            .collect(),
+        kinds: chosen.solution.kinds,
+        cost: chosen.cost,
     }
 }
 

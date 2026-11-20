@@ -105,6 +105,7 @@ pub(crate) fn stage(
         cfg: &cfg_r,
         decimals: crate::pathdata::emit_decimals(args.precision),
         editable: args.editability,
+        lossy_intake: args.lossy == inkvec_sr::Mode::On,
     });
     if let Some(line) = &out.line {
         crate::diag::stage(args.quiet, || line.clone());
@@ -146,6 +147,8 @@ pub(crate) struct Inputs<'a> {
     /// `--editability`: a centreline's circular arcs are written as cubics cut at their
     /// extrema (`crate::editable::arcs_as_cubics`), as the fill outlines' are.
     pub(crate) editable: bool,
+    /// Whether codec damage can skew the absolute boundary residual.
+    pub(crate) lossy_intake: bool,
 }
 
 /// What the stage decided: per face written as strokes, its element text, and a report
@@ -200,6 +203,8 @@ struct Outcome {
     chi2_outline: f64,
     /// Parameters that leave the document with the face.
     k_vanish: f64,
+    /// Keep the relative fit rule for measurements marked as lossy.
+    lossy_intake: bool,
 }
 
 /// Run the stage over every candidate face and decide each by [`decide`].
@@ -240,6 +245,11 @@ pub(crate) fn choose(inp: &Inputs) -> Ribbons {
                 return None;
             }
             let chi2_outline = outline_chi2(inp, f);
+            // The final comparison requires a finite description-length difference.
+            // With no finite outline score, no fitted stroke can pass it.
+            if !chi2_outline.is_finite() {
+                return None;
+            }
             // The fidelity half of [`decide`], for the solve's merges to stay within.
             let cap = |n: usize| chi2_outline + FIT_MARGIN_SD * (2.0 * n as f64).sqrt();
             let fit = ribbon::fit_face(&face_rings(inp, f), &mask, inp.cfg, k_vanish, &cap);
@@ -248,6 +258,7 @@ pub(crate) fn choose(inp: &Inputs) -> Ribbons {
                 fit,
                 chi2_outline,
                 k_vanish,
+                lossy_intake: inp.lossy_intake,
             })
         })
         .collect();
@@ -296,6 +307,16 @@ pub(crate) fn choose(inp: &Inputs) -> Ribbons {
 /// module documentation for `ΔL`), `None` otherwise.
 fn decide(o: &Outcome, lambda: f64) -> Option<f64> {
     let r = o.fit.as_ref().ok()?;
+    // A poor outline can make a stroke win on relative error even when it misses
+    // over half a pixel on a substantial part of the boundary and over one pixel
+    // at the worst point. In miter joins those errors can make visible cuts and spikes.
+    if !o.lossy_intake
+        && r.join == ribbon::Join::Miter
+        && r.score.worst > 1.0
+        && r.score.outliers > r.points / 20
+    {
+        return None;
+    }
     let k = r.params();
     let dl = 0.5 * (r.score.chi2 - o.chi2_outline) + lambda * (k - o.k_vanish);
     let as_good = r.score.chi2 - o.chi2_outline <= FIT_MARGIN_SD * (2.0 * r.points as f64).sqrt();
@@ -631,6 +652,7 @@ mod tests {
             fit,
             chi2_outline,
             k_vanish,
+            lossy_intake: false,
         }
     }
 
@@ -652,6 +674,21 @@ mod tests {
         assert!(decide(&outcome(Ok(r), f64::INFINITY, 20.0), 7.0).is_none());
         // A declined face is never written as strokes.
         assert!(decide(&outcome(Err(ribbon::Decline::NoCentreline), 0.0, 20.0), 7.0).is_none());
+    }
+
+    #[test]
+    fn a_cheaper_miter_still_needs_to_follow_the_boundary() {
+        let mut r = ribbon(20.0, Join::Miter);
+        r.score.worst = 1.2;
+        r.score.outliers = 5;
+        assert!(decide(&outcome(Ok(r.clone()), 300.0, 20.0), 7.0).is_some());
+        r.score.outliers += 1;
+        assert!(decide(&outcome(Ok(r.clone()), 300.0, 20.0), 7.0).is_none());
+        let mut lossy = outcome(Ok(r.clone()), 300.0, 20.0);
+        lossy.lossy_intake = true;
+        assert!(decide(&lossy, 7.0).is_some());
+        r.join = Join::Round;
+        assert!(decide(&outcome(Ok(r), 300.0, 20.0), 7.0).is_some());
     }
 
     #[test]

@@ -7,6 +7,21 @@ API in particular should be treated as unstable release to release).
 
 ## [Unreleased]
 
+### Changed
+
+- In opaque Quality traces of lossless inputs, the cleanup after blend absorption
+  uses pixel colour and boundary contrast to place small regions along ink edges.
+- Stroke detection skips faces whose outline has no finite fitting score.
+- Stroke fitting screens poor initial matches with little room left to split.
+- Stroke fitting reuses identical centreline fits and skips the chordal retry when
+  both raster readings were screened as poor matches with little room left to split.
+- A miter retry after two screened raster readings requires at least half the
+  boundary to pair at the estimated width.
+- Closed curve fits refine only the cut chosen by the dynamic program.
+- The curve fitter reuses tangent lengths and angles when pricing candidate spans.
+- On lossless inputs, keep the outline when a miter stroke misses too much of
+  the measured boundary.
+
 ## [0.3.1] - 2026-10-13
 
 ### Changed

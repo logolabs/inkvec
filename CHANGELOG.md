@@ -19,6 +19,8 @@ API in particular should be treated as unstable release to release).
   boundary to pair at the estimated width.
 - Closed curve fits refine only the cut chosen by the dynamic program.
 - The curve fitter reuses tangent lengths and angles when pricing candidate spans.
+- On lossless inputs, keep the outline when a miter stroke misses too much of
+  the measured boundary.
 
 ## [0.3.1] - 2026-10-13
 

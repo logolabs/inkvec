@@ -1034,6 +1034,98 @@ pub fn reassign_blend_pixels(
 /// component with no neighbour at all (the whole image one label) is left alone.
 /// `min_size <= 1` is a no-op.
 pub fn despeckle(labels: &mut [u16], w: usize, h: usize, min_size: usize) {
+    despeckle_by(labels, w, h, min_size, |group, id, comp, labels| {
+        commonest_neighbour(group, id, comp, labels, w, h)
+    });
+}
+
+/// Clean up small regions left by blend absorption on the opaque Quality path.
+/// Colour evidence is used here, after the first cleanup and blend reassignment have
+/// established which labels represent the inks. The initial cleanup still uses contact count.
+pub(crate) fn despeckle_after_blend(
+    labels: &mut [u16],
+    w: usize,
+    h: usize,
+    min_size: usize,
+    rgb: &[[f32; 3]],
+    palette: &Palette,
+) {
+    const CONTACT_WEIGHT: f64 = 8.0;
+    const SHARP_CONTACT_WEIGHT: f64 = 2.0;
+    // The two winners must differ by at least 0.5 in Euclidean sRGB before
+    // trusting the narrower kernel. Similar shades retain the broader vote.
+    const MIN_CONTRAST_SQUARED: f64 = 0.25;
+    despeckle_by(labels, w, h, min_size, |group, id, comp, labels| {
+        let mut edges = boundary_edges(group, id, comp, w, h);
+        let (_, first) = edges.next()?;
+        let only_ink = labels[first];
+        if edges.all(|(_, q)| labels[q] == only_ink) {
+            return Some(only_ink);
+        }
+
+        let mut contacts = Vec::<(u16, [f64; 2])>::new();
+        for (p, q) in boundary_edges(group, id, comp, w, h) {
+            let label = labels[q];
+            let weight = (-rgb_distance_squared(rgb[p], rgb[q])).exp();
+            let sharp = weight * weight;
+            if let Some(entry) = contacts.iter_mut().find(|entry| entry.0 == label) {
+                entry.1[0] += weight;
+                entry.1[1] += sharp;
+            } else {
+                contacts.push((label, [weight, sharp]));
+            }
+        }
+
+        let mut best = [(f64::INFINITY, u16::MAX); 2];
+        for (label, [contact, sharp]) in contacts {
+            let Some(&ink) = palette.rgb.get(usize::from(label)) else {
+                continue;
+            };
+            let error: f64 = group
+                .iter()
+                .map(|&p| rgb_distance_squared(rgb[p], ink))
+                .sum();
+            for (winner, cost) in best.iter_mut().zip([
+                error - CONTACT_WEIGHT * contact,
+                error - SHARP_CONTACT_WEIGHT * sharp,
+            ]) {
+                if cost.total_cmp(&winner.0).then(label.cmp(&winner.1)).is_lt() {
+                    *winner = (cost, label);
+                }
+            }
+        }
+        let broad = best[0].1;
+        let sharp = best[1].1;
+        if let (Some(&base), Some(&alternative)) = (
+            palette.rgb.get(usize::from(broad)),
+            palette.rgb.get(usize::from(sharp)),
+        ) {
+            return Some(
+                if rgb_distance_squared(base, alternative) >= MIN_CONTRAST_SQUARED {
+                    sharp
+                } else {
+                    broad
+                },
+            );
+        }
+        commonest_neighbour(group, id, comp, labels, w, h)
+    })
+}
+
+fn rgb_distance_squared(a: [f32; 3], b: [f32; 3]) -> f64 {
+    a.into_iter()
+        .zip(b)
+        .map(|(a, b)| (f64::from(a) - f64::from(b)).powi(2))
+        .sum()
+}
+
+fn despeckle_by(
+    labels: &mut [u16],
+    w: usize,
+    h: usize,
+    min_size: usize,
+    mut choose: impl FnMut(&[usize], u32, &[u32], &[u16]) -> Option<u16>,
+) {
     if min_size <= 1 {
         return;
     }
@@ -1044,12 +1136,34 @@ pub fn despeckle(labels: &mut [u16], w: usize, h: usize, min_size: usize) {
         if group.is_empty() {
             continue;
         }
-        if let Some(best) = commonest_neighbour(group, id as u32, &comps.comp, labels, w, h) {
+        if let Some(best) = choose(group, id as u32, &comps.comp, labels) {
             for &p in group {
                 labels[p] = best;
             }
         }
     }
+}
+
+fn boundary_edges<'a>(
+    group: &'a [usize],
+    id: u32,
+    comp: &'a [u32],
+    w: usize,
+    h: usize,
+) -> impl Iterator<Item = (usize, usize)> + 'a {
+    group.iter().flat_map(move |&p| {
+        let (x, y) = (p % w, p / w);
+        [
+            (x > 0).then(|| p - 1),
+            (x + 1 < w).then(|| p + 1),
+            (y > 0).then(|| p - w),
+            (y + 1 < h).then(|| p + w),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(move |&q| comp[q] != id)
+        .map(move |q| (p, q))
+    })
 }
 
 /// The label sharing the most pixel edges with component `id` (pixels `group`), read from
@@ -1063,24 +1177,11 @@ fn commonest_neighbour(
     h: usize,
 ) -> Option<u16> {
     let mut tally: Vec<(u16, usize)> = Vec::new();
-    for &p in group {
-        let (x, y) = (p % w, p / w);
-        for q in [
-            (x > 0).then(|| p - 1),
-            (x + 1 < w).then(|| p + 1),
-            (y > 0).then(|| p - w),
-            (y + 1 < h).then(|| p + w),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            if comp[q] != id {
-                let l = labels[q];
-                match tally.iter_mut().find(|e| e.0 == l) {
-                    Some(e) => e.1 += 1,
-                    None => tally.push((l, 1)),
-                }
-            }
+    for (_, q) in boundary_edges(group, id, comp, w, h) {
+        let label = labels[q];
+        match tally.iter_mut().find(|entry| entry.0 == label) {
+            Some(entry) => entry.1 += 1,
+            None => tally.push((label, 1)),
         }
     }
     tally
@@ -1119,6 +1220,60 @@ mod tests {
         let (comp, face_color) = split_components(&labels, w, h);
         assert_eq!(face_color.len(), 3);
         assert_ne!(comp[0], comp[3]);
+    }
+
+    #[test]
+    fn post_blend_speckle_follows_a_colour_edge() {
+        let mut labels = vec![0; 15];
+        labels[6..9].copy_from_slice(&[2, 1, 1]);
+        let mut rgb = vec![[1.0; 3]; 15];
+        rgb[6..9].fill([0.05, 0.10, 0.15]);
+        let palette = Palette {
+            colors: vec![],
+            rgb: vec![[1.0; 3], [0.05, 0.10, 0.15], [0.06, 0.11, 0.16]],
+            weight: vec![1.0; 3],
+            alpha: vec![1.0; 3],
+        };
+
+        let mut contact_only = labels.clone();
+        despeckle(&mut contact_only, 5, 3, 2);
+        assert_eq!(contact_only[6], 0);
+
+        let mut expected = labels.clone();
+        expected[6] = 1;
+        despeckle_after_blend(&mut labels, 5, 3, 2, &rgb, &palette);
+        assert_eq!(labels, expected);
+    }
+
+    #[test]
+    fn post_blend_speckle_uses_the_narrow_vote_across_a_high_contrast_edge() {
+        let mut labels = vec![0; 15];
+        labels[6..9].copy_from_slice(&[2, 1, 1]);
+        let mut rgb = vec![[1.0; 3]; 15];
+        rgb[6] = [0.4; 3];
+        rgb[7..9].fill([0.0; 3]);
+        let palette = Palette {
+            colors: vec![],
+            rgb: vec![[1.0; 3], [0.0; 3], [0.4; 3]],
+            weight: vec![1.0; 3],
+            alpha: vec![1.0; 3],
+        };
+        despeckle_after_blend(&mut labels, 5, 3, 2, &rgb, &palette);
+        assert_eq!(labels[6], 1);
+    }
+
+    #[test]
+    fn post_blend_speckle_uses_the_broad_vote_between_similar_inks() {
+        let mut labels = [0, 0, 1, 0, 2, 1, 0, 1, 1];
+        let rgb = labels.map(|label| if label == 1 { [0.17; 3] } else { [0.15; 3] });
+        let palette = Palette {
+            colors: vec![],
+            rgb: vec![[0.22; 3], [0.14; 3], [0.15; 3]],
+            weight: vec![1.0; 3],
+            alpha: vec![1.0; 3],
+        };
+        despeckle_after_blend(&mut labels, 3, 3, 2, &rgb, &palette);
+        assert_eq!(labels[4], 0);
     }
 
     #[test]

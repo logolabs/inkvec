@@ -240,6 +240,11 @@ pub(crate) fn choose(inp: &Inputs) -> Ribbons {
                 return None;
             }
             let chi2_outline = outline_chi2(inp, f);
+            // The final comparison requires a finite description-length difference.
+            // With no finite outline score, no fitted stroke can pass it.
+            if !chi2_outline.is_finite() {
+                return None;
+            }
             // The fidelity half of [`decide`], for the solve's merges to stay within.
             let cap = |n: usize| chi2_outline + FIT_MARGIN_SD * (2.0 * n as f64).sqrt();
             let fit = ribbon::fit_face(&face_rings(inp, f), &mask, inp.cfg, k_vanish, &cap);

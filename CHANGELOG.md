@@ -18,6 +18,7 @@ API in particular should be treated as unstable release to release).
 - A miter retry after two screened raster readings requires at least half the
   boundary to pair at the estimated width.
 - Closed curve fits refine only the cut chosen by the dynamic program.
+- The curve fitter reuses tangent lengths and angles when pricing candidate spans.
 
 ## [0.3.1] - 2026-10-13
 

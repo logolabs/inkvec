@@ -191,6 +191,7 @@ pub(crate) fn best_cubic_bounded(
     j: usize,
     t0: Vec2,
     t1: Vec2,
+    angles: [f64; 2],
     raw: (f64, f64, f64),
     ab: &Abandon,
 ) -> G1Fit {
@@ -198,7 +199,7 @@ pub(crate) fn best_cubic_bounded(
         Some((c, d0, d1)) => G1Fit::Exact(c, d0, d1),
         None => G1Fit::Untried,
     };
-    let Some(fr) = g1_frame(pts[i], pts[j], t0, t1, raw) else {
+    let Some(fr) = g1_frame(pts[i], pts[j], angles[0], angles[1], raw) else {
         return G1Fit::Untried;
     };
     let Some(plan) = CubicSamples::new(pts, sigma, s, i, j) else {
@@ -300,7 +301,18 @@ mod tests {
         for (pts, sigma, s, i, j, t0, t1) in random_spans() {
             let raw = raw_moments_direct(&pts, i, j);
             let want = best_cubic(&pts, &sigma, &s, i, j, t0, t1, raw, true);
-            let got = best_cubic_bounded(&pts, &sigma, &s, i, j, t0, t1, raw, &Abandon::NONE);
+            let got = best_cubic_bounded(
+                &pts,
+                &sigma,
+                &s,
+                i,
+                j,
+                t0,
+                t1,
+                [t0.angle(), t1.angle()],
+                raw,
+                &Abandon::NONE,
+            );
             match (want, got) {
                 (None, G1Fit::Untried) => {}
                 (Some((c, d0, d1)), G1Fit::Exact(c2, e0, e1)) => {
@@ -326,7 +338,18 @@ mod tests {
                     for gate in [0.0, 2.0 * (lambda + 1e-9 * (best.abs() + lambda))] {
                         for over_floor in [f64::NEG_INFINITY, 0.25 * c, 0.5 * c, 2.0 * c] {
                             let ab = Abandon::new(base, best, cubic_floor, gate, over_floor);
-                            match best_cubic_bounded(&pts, &sigma, &s, i, j, t0, t1, raw, &ab) {
+                            match best_cubic_bounded(
+                                &pts,
+                                &sigma,
+                                &s,
+                                i,
+                                j,
+                                t0,
+                                t1,
+                                [t0.angle(), t1.angle()],
+                                raw,
+                                &ab,
+                            ) {
                                 G1Fit::Exact(c2, e0, e1) => {
                                     assert_eq!(
                                         (c.to_bits(), d0.to_bits(), d1.to_bits()),
@@ -351,7 +374,18 @@ mod tests {
             // Only the cut-off's answer.
             for over_floor in [0.1 * c, 0.5 * c, 0.49999 * c, 3.0 * c] {
                 let ab = Abandon::over_only(over_floor);
-                let over = match best_cubic_bounded(&pts, &sigma, &s, i, j, t0, t1, raw, &ab) {
+                let over = match best_cubic_bounded(
+                    &pts,
+                    &sigma,
+                    &s,
+                    i,
+                    j,
+                    t0,
+                    t1,
+                    [t0.angle(), t1.angle()],
+                    raw,
+                    &ab,
+                ) {
                     G1Fit::Exact(c2, ..) => 0.5 * c2 > over_floor,
                     G1Fit::Dead { over } => over,
                     G1Fit::Untried => panic!("admissible arms went missing"),

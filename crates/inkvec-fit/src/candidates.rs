@@ -201,17 +201,17 @@ struct G1Frame {
 ///    extra `|d|` from step 3 makes `M / |d|⁴`.
 ///
 /// `(area, mx)` are then the two numbers `kurbo::fit::cubic_fit` consumes, in its own sign
-/// convention. `None` for a zero-length or non-finite chord. The tangents need not be
-/// unit length; only their angles are used.
-fn g1_frame(p0: Point, p1: Point, t0: Vec2, t1: Vec2, raw: (f64, f64, f64)) -> Option<G1Frame> {
+/// convention. `None` for a zero-length or non-finite chord.
+/// The tangent angles are measured with the same axes as the chord.
+fn g1_frame(p0: Point, p1: Point, a0: f64, a1: f64, raw: (f64, f64, f64)) -> Option<G1Frame> {
     let d = p1 - p0;
     let chord2 = d.dot(d);
     if chord2 < 1e-18 || !chord2.is_finite() {
         return None;
     }
     let th = d.angle();
-    let th0 = mod_2pi(t0.angle() - th);
-    let th1 = mod_2pi(th - t1.angle());
+    let th0 = mod_2pi(a0 - th);
+    let th1 = mod_2pi(th - a1);
 
     let (mut area, mut x, mut y) = raw;
     let (x0, y0) = (p0.x, p0.y);
@@ -870,7 +870,7 @@ pub(crate) fn best_cubic(
     raw: (f64, f64, f64),
     subsample: bool,
 ) -> Option<(f64, f64, f64)> {
-    let fr = g1_frame(pts[i], pts[j], t0, t1, raw)?;
+    let fr = g1_frame(pts[i], pts[j], t0.angle(), t1.angle(), raw)?;
     let plan = subsample
         .then(|| CubicSamples::new(pts, sigma, s, i, j))
         .flatten();
@@ -899,7 +899,7 @@ pub fn fit_cubic_moments(pts: &[Point], t0: Vec2, t1: Vec2) -> Vec<(Point, Point
         return Vec::new();
     }
     let raw = raw_moments_direct(pts, 0, pts.len() - 1);
-    let Some(fr) = g1_frame(pts[0], pts[pts.len() - 1], t0, t1, raw) else {
+    let Some(fr) = g1_frame(pts[0], pts[pts.len() - 1], t0.angle(), t1.angle(), raw) else {
         return Vec::new();
     };
     arms_from_moments(fr.th0, fr.th1, fr.area, fr.mx)

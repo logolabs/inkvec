@@ -81,6 +81,8 @@ mod skyline;
 pub use join::{Cap, Join, Style};
 pub use score::Score;
 
+use std::collections::HashMap;
+
 use inkvec_core::{Point, Polyline};
 use inkvec_fit::curves::Segment;
 use inkvec_fit::primitives::{fit_primitive_or_arcs, PrimitiveFit};
@@ -351,7 +353,8 @@ pub fn fit_face(
         share,
         chi2_cap: chi2_cap(b.len()),
     };
-    let round = hypothesis(&face, cfg, budget, Join::Round.into());
+    let mut fits = ChainFits::new(cfg);
+    let round = hypothesis(&face, budget, Join::Round.into(), &mut fits);
     // A round fit that leaves a boundary point more than a quarter pixel out is also tried
     // with miter joins: sharp corners are what round joins cannot draw.
     let try_miter = round
@@ -360,7 +363,7 @@ pub fn fit_face(
     if !try_miter {
         return round;
     }
-    let miter = hypothesis(&face, cfg, budget, Join::Miter.into());
+    let miter = hypothesis(&face, budget, Join::Miter.into(), &mut fits);
     let best = cheaper(round, miter, cfg.lambda);
     // A reading with free ends that leaves a boundary point more than a tenth of the width
     // out is also tried with butt caps: a stroke that stops square, fitted with round
@@ -374,12 +377,12 @@ pub fn fit_face(
     let join = best.as_ref().map_or(Join::Round, |r| r.join);
     let butt = hypothesis(
         &face,
-        cfg,
         budget,
         Style {
             join,
             cap: Cap::Butt,
         },
+        &mut fits,
     );
     cheaper(best, butt, cfg.lambda)
 }
@@ -478,7 +481,12 @@ struct Face<'a> {
 /// One hypothesis of a face's strokes: topology read with `join`'s rules
 /// ([`graph::TopoOptions`]), every chain fitted ([`fit_chain`]), the stroke solve with
 /// splits ([`refine::solve_adaptive`]), and the score under that join.
-fn hypothesis(face: &Face, cfg: &FitConfig, budget: f64, style: Style) -> Result<Ribbon, Decline> {
+fn hypothesis(
+    face: &Face,
+    budget: f64,
+    style: Style,
+    fits: &mut ChainFits,
+) -> Result<Ribbon, Decline> {
     let w0 = face.w0;
     // Topology readings tried in turn: round joins first without rebuilt corners (most
     // tight turns in round line art are arcs of about the half-width), then with them,
@@ -497,10 +505,11 @@ fn hypothesis(face: &Face, cfg: &FitConfig, budget: f64, style: Style) -> Result
     for r in &mut readings {
         r.butt = style.cap == Cap::Butt;
     }
+    let reading_count = readings.len();
     let mut last = Err(Decline::NoCentreline);
-    for (i, &opts) in readings.iter().enumerate() {
-        last = reading(face, cfg, budget, style, opts);
-        let retry = matches!(last, Err(Decline::Misfit { .. })) && i + 1 < readings.len();
+    for (i, opts) in readings.into_iter().enumerate() {
+        last = reading(face, budget, style, opts, fits);
+        let retry = matches!(last, Err(Decline::Misfit { .. })) && i + 1 < reading_count;
         if !retry {
             break;
         }
@@ -512,10 +521,10 @@ fn hypothesis(face: &Face, cfg: &FitConfig, budget: f64, style: Style) -> Result
 /// the module documentation.
 fn reading(
     face: &Face,
-    cfg: &FitConfig,
     budget: f64,
     style: Style,
     opts: graph::TopoOptions,
+    fits: &mut ChainFits,
 ) -> Result<Ribbon, Decline> {
     let (b, mask, w0, share) = (face.b, face.mask, face.w0, face.share);
     let topo = graph::centrelines(&face.medial, b, mask, w0, opts);
@@ -539,27 +548,16 @@ fn reading(
     let stride = ((w0 / CHAIN_SAMPLES_PER_WIDTH).floor() as usize).max(1);
     // A coarse fit first: a reading whose centrelines cost well over the budget even at
     // an eighth of the samples is declined without the full fit ([`COARSE_DECLINE`]).
-    let coarse: f64 = topo
-        .chains
-        .par_iter()
-        .map(|c| decimate(c, COARSE_STRIDE * stride))
-        .filter(|c| c.points.len() >= 2)
-        .map(|c| fit_chain(&c, cfg))
-        .filter(|c| !c.path.segments.is_empty())
-        .map(|c| c.params())
+    let coarse: f64 = fits
+        .fit(&topo.chains, COARSE_STRIDE * stride)
+        .iter()
+        .map(Centreline::params)
         .sum::<f64>()
         + 1.0;
     if coarse >= COARSE_DECLINE * budget {
         return Err(Decline::NoGain { params: coarse });
     }
-    let lines: Vec<Centreline> = topo
-        .chains
-        .par_iter()
-        .map(|c| decimate(c, stride))
-        .filter(|c| c.points.len() >= 2)
-        .map(|c| fit_chain(&c, cfg))
-        .filter(|c| !c.path.segments.is_empty())
-        .collect();
+    let lines = fits.fit(&topo.chains, stride);
     if lines.is_empty() {
         return Err(Decline::NoCentreline);
     }
@@ -578,7 +576,7 @@ fn reading(
             &lines,
             0.5 * w0,
             b,
-            cfg.lambda,
+            fits.cfg.lambda,
             style,
             budget,
             face.chi2_cap,
@@ -610,6 +608,52 @@ fn reading(
         caps: topo.caps,
         dropped: topo.dropped,
     })
+}
+
+/// The same measured chains can survive several topology readings of one face.
+struct ChainFits<'a> {
+    cfg: &'a FitConfig,
+    seen: HashMap<Vec<u64>, Centreline>,
+}
+
+impl<'a> ChainFits<'a> {
+    fn new(cfg: &'a FitConfig) -> Self {
+        Self {
+            cfg,
+            seen: HashMap::new(),
+        }
+    }
+
+    fn fit(&mut self, chains: &[graph::Chain], stride: usize) -> Vec<Centreline> {
+        let batch: Vec<_> = chains
+            .par_iter()
+            .map(|chain| decimate(chain, stride))
+            .filter(|polyline| polyline.points.len() >= 2)
+            .map(|polyline| {
+                // The fit sees positions, uncertainties and whether the path closes.
+                // Use exact bits so reuse cannot round or reorder that evidence.
+                let mut key = Vec::with_capacity(1 + 3 * polyline.points.len());
+                key.push(u64::from(polyline.closed));
+                for (point, sigma) in polyline.points.iter().zip(&polyline.sigma) {
+                    key.extend([point.x.to_bits(), point.y.to_bits(), sigma.to_bits()]);
+                }
+                if let Some(line) = self.seen.get(&key) {
+                    (None, line.clone())
+                } else {
+                    (Some(key), fit_chain(&polyline, self.cfg))
+                }
+            })
+            .collect();
+        batch
+            .into_iter()
+            .filter_map(|(key, line)| {
+                if let Some(key) = key {
+                    self.seen.insert(key, line.clone());
+                }
+                (!line.path.segments.is_empty()).then_some(line)
+            })
+            .collect()
+    }
 }
 
 /// Centre samples kept per stroke width for the curve fitter ([`decimate`]).
@@ -719,12 +763,10 @@ fn fit_chain(poly: &Polyline, cfg: &FitConfig) -> Centreline {
                 }
             }
         }
-        let path_cost = 0.5
-            * inkvec_fit::curves::chi2(&poly.points, &poly.sigma, curve.start, &curve.segments)
-            + cfg.lambda * curve.params();
         if let Some((segs, prim, cost)) =
             fit_primitive_or_arcs(&poly.points, &poly.sigma, true, cfg)
         {
+            let path_cost = inkvec_fit::choice::boundary_cost(poly, &curve, cfg);
             if cost < path_cost {
                 return Centreline {
                     path: FittedPath {

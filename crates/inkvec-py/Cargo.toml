@@ -22,7 +22,7 @@ crate-type = ["cdylib"]
 inkvec = { workspace = true }
 # Optional so that `cargo build --workspace` needs no Python: maturin turns it on
 # (`python` and `pyo3/extension-module`, see pyproject.toml). Without it this crate is empty.
-pyo3 = { version = "0.29", features = ["abi3-py39"], optional = true }
+pyo3 = { version = "0.30", features = ["abi3-py39"], optional = true }
 
 [features]
 default = []
